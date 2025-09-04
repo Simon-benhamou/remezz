@@ -1,0 +1,26 @@
+{
+  "name": "trading-agent-ia-frontend",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --port 5173"
+  },
+  "dependencies": {
+    "antd": "^5.20.3",
+    "axios": "^1.7.2",
+    "lightweight-charts": "^4.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "typescript": "^5.4.5",
+    "vite": "^5.4.0",
+    "@vitejs/plugin-react": "^4.3.1"
+  }
+}

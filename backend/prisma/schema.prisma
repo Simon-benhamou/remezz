@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AgentSession {
+  id              String   @id @default(cuid())
+  symbol          String
+  mode            String   // 'paper' | 'live'
+  startedAt       DateTime @default(now())
+  stoppedAt       DateTime?
+  startBalanceUsd Float?
+
+  strategies Strategy[]
+  orders     Order[]
+  fills      Fill[]                // ⇐ back-rel vers Fill.session
+  positions  Position[]
+  kpi        SessionKpi?
+  triggers   TriggerLog[]
+  sentiments SentimentSnapshot[]   // ⇐ back-rel vers SentimentSnapshot.session
+}
+
+model Strategy {
+  id           String   @id
+  session      AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId    String?
+  symbol       String
+  bias         String
+  confidence   Float?
+  entryJson    Json
+  riskJson     Json
+  validityFrom DateTime?
+  validityTo   DateTime?
+  rationale    String?
+  rawPrompt    String?
+  rawResponse  Json?
+  trigger      String
+  createdAt    DateTime @default(now())
+
+  // ⇐ back-rel manquant pour Order.strategy
+  orders       Order[]
+}
+
+model Order {
+  id              String   @id @default(cuid())
+  clientOrderId   String   @unique
+  exchangeOrderId String?
+  session         AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId       String?
+  strategy        Strategy? @relation(fields: [strategyId], references: [id])
+  strategyId      String?
+  symbol          String
+  side            String
+  type            String
+  tif             String?
+  qty             Float
+  price           Float?
+  sl              Float?
+  tp              Float?
+  leverage        Float?
+  source          String   @default("agent")
+  status          String?
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  fills           Fill[]
+}
+
+model Fill {
+  id           String  @id @default(cuid())
+  order        Order   @relation(fields: [orderId], references: [id])
+  orderId      String
+  tradeId      String?
+  price        Float
+  qty          Float
+  fee          Float?
+  side         String
+  realizedPnl  Float?
+  ts           DateTime @default(now())
+
+  // ⇐ AJOUT : pour supporter AgentSession.fills
+  session      AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId    String?
+}
+
+model Position {
+  id            String   @id @default(cuid())
+  session       AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId     String?
+  symbol        String
+  side          String
+  entryPrice    Float?
+  qty           Float?
+  markPrice     Float?
+  unrealizedPnl Float?
+  leverage      Float?
+  openedAt      DateTime? @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model SessionKpi {
+  session          AgentSession @relation(fields: [sessionId], references: [id])
+  sessionId        String @id
+  realizedPnlUsd   Float  @default(0)
+  unrealizedPnlUsd Float  @default(0)
+  roiPct           Float  @default(0)
+  winRate          Float  @default(0)
+  expectancy       Float  @default(0)
+  maxDrawdownPct   Float  @default(0)
+  avgHoldingMin    Float  @default(0)
+  lastUpdated      DateTime @default(now())
+}
+
+model SentimentSnapshot {
+  id             String   @id @default(cuid())
+  session        AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId      String?
+  ts             DateTime @default(now())
+  fearGreed      Int?
+  twitterBullish Float?
+  newsScore      Float?
+  summary        String?
+}
+
+model TriggerLog {
+  id        String   @id @default(cuid())
+  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId String?
+  symbol    String
+  kind      String   // support-touch | resistance-touch | sudden-move | volume-spike | news-spike
+  payload   Json
+  createdAt DateTime @default(now())
+}
