@@ -2,6 +2,7 @@ import { StrategyZ, StrategyJson } from "./schema.js";
 import { rankingPrompt, strategyPrompt } from "./prompts.js";
 import { llmJSON } from "./llm.js";
 import { buildTechSnapshot } from './tech.js';
+import { randomUUID } from "crypto";
 
 function safeParseJSON<T=any>(s: string): T {
   try { return JSON.parse(s) as T; } catch { throw new Error("LLM returned non-JSON"); }
@@ -83,7 +84,7 @@ export async function generateStrategy(symbol: string, trigger: string): Promise
     // 2.2 Parse & validate
     const draft = safeParseJSON<StrategyJson>(raw);
     // patch fields minimum
-    if (!draft.strategyId) draft.strategyId = `${today}:${symbol}:${trigger}:${Date.now()}`;
+    if (!draft.strategyId) draft.strategyId = `${today}:${symbol}:${trigger}:${Date.now()}:${randomUUID()}`; // <-- make unique
     if (!draft.symbol) draft.symbol = symbol;
     if (!draft.trigger) draft.trigger = trigger;
     if (!draft.validity) draft.validity = { from: new Date().toISOString(), to: null as any };
@@ -107,7 +108,7 @@ export async function generateStrategy(symbol: string, trigger: string): Promise
     const targetPct = 3.5;
 
     const draft: StrategyJson = {
-      strategyId: `${new Date().toISOString().slice(0,10)}:${symbol}:${trigger}:${Date.now()}`,
+      strategyId: `${new Date().toISOString().slice(0,10)}:${symbol}:${trigger}:${Date.now()}:${randomUUID()}`, // <-- make unique
       symbol,
       bias: bias as any,
       confidence: 0.6,
