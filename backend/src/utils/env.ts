@@ -26,9 +26,11 @@ export function getConfig(): Cfg {
     API_SECRET: e.API_SECRET || "",
     API_PASSWORD: e.API_PASSWORD || "",
     PORT: Number(e.PORT || "4000"),
-    POLL_MS: Number(e.POLL_MS || "2000"),
+    // Polling every 5s by default to reduce CCXT rate-limit pressure
+    POLL_MS: Number(e.POLL_MS || "5000"),
     CORS_ORIGIN: e.CORS_ORIGIN || "http://localhost:5173",
-    REQUIRE_API_KEY: false,
+    // Respect env flag; default off for dev
+    REQUIRE_API_KEY: (e.REQUIRE_API_KEY || "false") === "true",
     APP_API_KEY: e.APP_API_KEY || "change-me",
     DEFAULT_RISK_PCT: Number(e.DEFAULT_RISK_PCT || "1.0"),
     DEFAULT_MAX_LEVERAGE: Number(e.DEFAULT_MAX_LEVERAGE || "10"),

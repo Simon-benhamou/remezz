@@ -7,21 +7,29 @@ router.post("/generate", async (req, res) => {
   const symbol = String(req.body?.symbol || "BTCUSDT");
   const trigger = String(req.body?.trigger || "manual");
   const s = await generateStrategy(symbol, trigger);
-  const saved = await prisma.strategy.create({
-    data: {
-      id: s.strategyId,
-      symbol: s.symbol,
-      bias: s.bias,
-      confidence: s.confidence,
-      entryJson: s.entry,
-      riskJson: s.risk,
-      validityFrom: s.validity?.from ? new Date(s.validity.from) : undefined,
-      validityTo: s.validity?.to ? new Date(s.validity.to) : undefined,
-      rationale: s.rationale,
-      trigger,
-    },
-  });
-  res.json(saved);
+  try {
+    const saved = await prisma.strategy.create({
+      data: {
+        id: s.strategyId,
+        symbol: s.symbol,
+        bias: s.bias,
+        confidence: s.confidence,
+        entryJson: s.entry,
+        riskJson: s.risk,
+        validityFrom: s.validity?.from ? new Date(s.validity.from) : undefined,
+        validityTo: s.validity?.to ? new Date(s.validity.to) : undefined,
+        rationale: s.rationale,
+        trigger,
+      },
+    });
+    res.json(saved);
+  } catch (e: any) {
+    if (e?.code === 'P2002') {
+      const existing = await prisma.strategy.findUnique({ where: { id: s.strategyId } });
+      if (existing) return res.json(existing);
+    }
+    throw e;
+  }
 });
 router.get("/today", async (req, res) => {
   const symbol = String(req.query?.symbol || "BTCUSDT");

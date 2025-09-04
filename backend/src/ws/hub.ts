@@ -86,6 +86,26 @@ export function startWSHub(wss: WebSocketServer) {
             const side = strat.bias === 'long' ? 'buy' : 'sell';
             lvls = calcLevels(entryPrice, side as any, strat.risk.stop as any, strat.risk.target as any);
           }
+          // persist strategy (ignore duplicate id)
+          try {
+            await prisma.strategy.create({
+              data: {
+                id: strat.strategyId,
+                sessionId: s?.id,
+                symbol: strat.symbol,
+                bias: strat.bias,
+                confidence: strat.confidence,
+                entryJson: strat.entry,
+                riskJson: strat.risk,
+                validityFrom: strat.validity?.from ? new Date(strat.validity.from) : undefined,
+                validityTo: strat.validity?.to ? new Date(strat.validity.to) : undefined,
+                rationale: strat.rationale,
+                trigger: msg.trigger || 'manual',
+              }
+            });
+          } catch (e: any) {
+            if (e?.code !== 'P2002') throw e;
+          }
           broadcast('strategy', { ...strat, levels: lvls }, symbol);
           return;
         }

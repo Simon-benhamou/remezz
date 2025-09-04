@@ -1,12 +1,13 @@
 import axios from "axios";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
-const API_KEY = import.meta.env.VITE_APP_API_KEY || "shira1704";
+const API_KEY = import.meta.env.VITE_APP_API_KEY || "";
 
 export const client = axios.create({
   baseURL: API_BASE,
-  headers: { "x-api-key": "shira1704" },
+  headers: { "x-api-key": API_KEY },
 });
 export const api = {
+  client,
   status: async () => (await client.get("/api/status")).data,
   strategyToday: async (symbol: string) =>
     (await client.get("/api/strategy/today", { params: { symbol } })).data,

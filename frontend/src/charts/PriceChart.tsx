@@ -23,12 +23,12 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     plR1.current = seriesRef.current.createPriceLine({ price: 0, title: 'R1', lineWidth: 1 });
   }, []);
   React.useEffect(()=> {
-    const piv = (strategy as any)?.pivots || (status as any)?.pivots;
+    const piv = (strategy as any)?.pivots;
     if (!piv) return;
     plP.current?.applyOptions({ price: piv.P });
     plS1.current?.applyOptions({ price: piv.S1 });
     plR1.current?.applyOptions({ price: piv.R1 });
-  }, [strategy /* ou status */]);
+  }, [strategy]);
   React.useEffect(()=> {
     if (!ref.current) return;
     const chart = createChart(ref.current, {

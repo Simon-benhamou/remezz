@@ -32,13 +32,17 @@ router.post('/start', async (req,res)=>{
     const side = strat.bias === 'long' ? 'buy' : 'sell';
     lvls = calcLevels(entryPrice, side as any, strat.risk.stop as any, strat.risk.target as any);
   }
-  await prisma.strategy.create({ data: {
-    id: strat.strategyId, sessionId: s.id, symbol: strat.symbol, bias: strat.bias,
-    confidence: strat.confidence, entryJson: strat.entry, riskJson: strat.risk,
-    validityFrom: strat.validity?.from ? new Date(strat.validity.from) : undefined,
-    validityTo: strat.validity?.to ? new Date(strat.validity.to) : undefined,
-    rationale: strat.rationale, trigger: 'activation'
-  }});
+  try {
+    await prisma.strategy.create({ data: {
+      id: strat.strategyId, sessionId: s.id, symbol: strat.symbol, bias: strat.bias,
+      confidence: strat.confidence, entryJson: strat.entry, riskJson: strat.risk,
+      validityFrom: strat.validity?.from ? new Date(strat.validity.from) : undefined,
+      validityTo: strat.validity?.to ? new Date(strat.validity.to) : undefined,
+      rationale: strat.rationale, trigger: 'activation'
+    }});
+  } catch (e: any) {
+    if (e?.code !== 'P2002') throw e;
+  }
 
   // Push session + strategy + analysis
   broadcast('session', s, s.symbol);
