@@ -1,0 +1,56 @@
+import { prisma } from '../db/client.js';
+import { getConfig } from '../utils/env.js';
+
+export type RiskContext = {
+  sessionId: string;
+  dateKey: string; // YYYY-MM-DD
+  realizedPnlPctToday: number; // percent of start balance
+  consecutiveStops: number;
+  tradesToday: number;
+};
+
+export type RiskLimits = {
+  riskPctPerTrade: { min: number; max: number };
+  dailyLossLimitPct: number; // kill switch
+  maxLeverage: number;
+  maxTradesPerDay: number;
+  maxConsecutiveStops: number;
+};
+
+export const defaultLimits = (): RiskLimits => ({
+  riskPctPerTrade: { min: 1, max: 2 },
+  dailyLossLimitPct: Math.min(5, Math.max(1, getConfig().DAILY_LOSS_LIMIT_PCT)),
+  maxLeverage: 5,
+  maxTradesPerDay: 3,
+  maxConsecutiveStops: 3,
+});
+
+export type RiskDecision = {
+  ok: boolean;
+  reason?: string;
+  action?: 'halt'|'cooldown'|'warn';
+};
+
+export async function assessRisk(ctx: RiskContext, limits = defaultLimits()): Promise<RiskDecision> {
+  if (ctx.realizedPnlPctToday <= -limits.dailyLossLimitPct) return { ok: false, reason: 'daily_loss_limit', action: 'halt' };
+  if (ctx.tradesToday >= limits.maxTradesPerDay) return { ok: false, reason: 'trades_cap', action: 'cooldown' };
+  if (ctx.consecutiveStops >= limits.maxConsecutiveStops) return { ok: false, reason: 'consecutive_stops', action: 'cooldown' };
+  return { ok: true };
+}
+
+export type SizingInput = {
+  balanceUsd: number;
+  riskPct: number; // 1..2
+  stopDistanceAbs: number;
+  entryPrice: number;
+  maxLev: number;
+};
+
+export function computeQtyNotional({ balanceUsd, riskPct, stopDistanceAbs, entryPrice, maxLev }: SizingInput) {
+  const riskDollar = balanceUsd * (riskPct/100);
+  const stopPct = (stopDistanceAbs/entryPrice)*100;
+  const notional = stopPct > 0 ? (riskDollar / (stopPct/100)) : 0;
+  const maxNotional = balanceUsd * maxLev;
+  return Math.max(0, Math.min(notional, maxNotional));
+}
+

@@ -5,6 +5,8 @@ import { generateStrategy, selectBestPerp } from '../ai/orchestrator.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
+import { Agent } from '../agent/state.js';
+import { PlanZ } from '../agent/planSchema.js';
 
 export const router = Router();
 
@@ -12,19 +14,29 @@ router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
 router.post('/start', async (req,res)=>{
   const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
-  const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[] };
+  const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number };
   let symbol = body.symbol as string;
 
-  // Ranking UNIQUEMENT si pas de symbole fourni
+  // Optional: ranking only if no symbol provided and RANK_ON_START=true
   if (!symbol && process.env.RANK_ON_START === 'true') {
     const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
-    const ranked = await selectBestPerp(list);     // 1 appel IA ici
+    const ranked = await selectBestPerp(list);     // may call LLM once
     symbol = ranked[0]?.symbol || 'BTC/USDT';
   }
   
   const s = await startSession(symbol, mode, startBalanceUsd);
+  // Activate the new agent state machine (profile freeze)
+  await Agent.activate({
+    symbol,
+    mode,
+    maxLeverage: Math.min(5, Math.max(1, body.maxLeverage ?? 4)),
+    riskPerTradePct: Math.min(2, Math.max(1, body.riskPerTradePct ?? 1.5)),
+    dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
+    timestamp: new Date().toISOString(),
+    startBalanceUsd: startBalanceUsd,
+  }).catch(()=>{});
 
-  // Stratégie immédiate
+  // Classic strategy generation for preview (optional)
   const strat = await generateStrategy(symbol, 'activation');
   const entryPrice = strat.entry.price ?? ((strat.entry.zone?.min ?? 0) + (strat.entry.zone?.max ?? 0)) / 2;
   let lvls: any = undefined;
@@ -60,10 +72,11 @@ router.post('/stop', async (_req,res)=>{
   const s = await activeSession(); if(!s) return res.status(400).json({error:'no active session'});
   await stopSession(s.id);
   broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol);
+  Agent.halt();
   res.json({ok:true});
 });
 
-// Changer le symbole de la session
+// Change the active session symbol
 router.post('/set-symbol', async (req,res)=>{
   const { symbol } = req.body as { symbol: string };
   const s = await activeSession();
@@ -78,4 +91,20 @@ router.get('/triggers', async (_req,res)=>{
   const s = await activeSession(); if(!s) return res.json([]);
   const logs = await prisma.triggerLog.findMany({ where:{ sessionId: s.id }, orderBy: { createdAt: 'desc' }, take: 100 });
   res.json(logs);
+});
+
+// New: pass a LLM JSON plan to the agent (validates + arms)
+router.post('/propose', async (req,res) => {
+  try {
+    const plan = PlanZ.parse(req.body);
+    await Agent.propose(plan as any);
+    await Agent.validateAndArm();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: String(e?.message || e) });
+  }
+});
+
+router.get('/state', async (_req,res)=>{
+  res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos });
 });

@@ -8,11 +8,11 @@ function safeParseJSON<T=any>(s: string): T {
   try { return JSON.parse(s) as T; } catch { throw new Error("LLM returned non-JSON"); }
 }
 
-// --- 1) Ranking multi-perps --- //
+// --- 1) Multi-perp ranking --- //
 export async function selectBestPerp(
   perps: string[]
 ): Promise<{ symbol: string; score: number; reasons: string[] }[]> {
-  // Build compact features per symbol (en //)
+  // Build compact features per symbol (in parallel)
   const snapshots = await Promise.all(perps.map(async (symbol) => {
     try {
       const f = await buildTechSnapshot(symbol);
@@ -25,7 +25,7 @@ export async function selectBestPerp(
 
   const usable = snapshots.filter(s => s.ok) as any[];
   if (usable.length === 0) {
-    // Fallback total si ccxt HS : random (mais stable trié)
+    // Ultimate fallback if market snapshot fails: randomized ranking
     return perps.map(s => ({ symbol: s, score: Math.random(), reasons: ["fallback-random"] }))
                 .sort((a,b)=>b.score-a.score);
   }
@@ -48,13 +48,13 @@ export async function selectBestPerp(
     const j = safeParseJSON<{ items: { symbol:string; score:number; reasons:string[] }[] }>(out);
     items = (j.items || []).filter(x => perps.includes(x.symbol));
   } catch {
-    // Fallback heuristique: trend>0, RSI 45-65, nearSupport => +score
+    // Heuristic fallback: trend>0, RSI 45-65, nearSupport => +score
     items = usable.map((u:any) => {
       let score = 0.5;
       if (u.trend > 0) score += 0.2;
       if (u.rsi14 >= 45 && u.rsi14 <= 65) score += 0.15;
       if (u.srBias === "nearSupport") score += 0.1;
-      score -= Math.max(0, u.atrPct - 2) * 0.02; // pénalise trop de vol
+      score -= Math.max(0, u.atrPct - 2) * 0.02; // penalize excessive volatility
       return { symbol: u.symbol, score: Math.max(0, Math.min(1, score)), reasons: ["fallback-tech"] };
     });
   }
@@ -65,12 +65,12 @@ export async function selectBestPerp(
   return items;
 }
 
-// --- 2) Génération de stratégie journalière --- //
+// --- 2) Daily strategy generation (legacy classic) --- //
 export async function generateStrategy(symbol: string, trigger: string): Promise<StrategyJson> {
   const feats = await buildTechSnapshot(symbol);
   const today = new Date().toISOString().slice(0,10);
 
-  // 2.1 Demande LLM (JSON)
+  // 2.1 Ask LLM (JSON)
   try {
     const raw = await llmJSON(strategyPrompt({
       symbol, trigger,
@@ -95,7 +95,7 @@ export async function generateStrategy(symbol: string, trigger: string): Promise
     const isLong = feats.srBias !== 'nearResistance' && feats.trend > 0;
     const bias = isLong ? 'long' : 'short';
 
-    // entrée: zone autour d’un niveau pertinent
+    // Entry: zone around a pertinent level
     const refLevel = isLong
       ? (feats.supports[0]?.price ?? feats.support)
       : (feats.resistances[0]?.price ?? feats.resistance);

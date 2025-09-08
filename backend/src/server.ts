@@ -11,6 +11,7 @@ import { router as agentRouter } from "./routes/agent.js";
 import { router as ordersRouter } from "./routes/orders.js";
 import { router as perfRouter } from "./routes/perf.js";
 import { router as analysisRouter } from "./routes/analysis.js";
+import { router as simRouter } from "./routes/sim.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 
@@ -30,6 +31,7 @@ app.use("/api/agent", agentRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/perf", perfRouter);
 app.use("/api/analysis", analysisRouter);
+app.use("/api/sim", simRouter);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });

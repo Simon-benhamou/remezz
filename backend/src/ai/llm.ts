@@ -20,7 +20,7 @@ export async function llmJSON(prompt: string): Promise<string> {
 async function callOpenAI(prompt: string): Promise<string> {
   const client = new OpenAI({ apiKey: getConfig().OPENAI_API_KEY });
   const resp = await client.chat.completions.create({
-    model: "gpt-4o-mini", // rapide/éco ; passe en gpt-4o si tu veux
+    model: "gpt-4o-mini", // efficient; switch to gpt-4o if needed
     temperature: 0.2,
     response_format: { type: "json_object" },
     messages: [

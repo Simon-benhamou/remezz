@@ -17,11 +17,11 @@ model AgentSession {
 
   strategies Strategy[]
   orders     Order[]
-  fills      Fill[]                // ⇐ back-rel vers Fill.session
+  fills      Fill[]                // back-rel from Fill.session
   positions  Position[]
   kpi        SessionKpi?
   triggers   TriggerLog[]
-  sentiments SentimentSnapshot[]   // ⇐ back-rel vers SentimentSnapshot.session
+  sentiments SentimentSnapshot[]   // back-rel from SentimentSnapshot.session
 }
 
 model Strategy {
@@ -42,6 +42,7 @@ model Strategy {
   createdAt    DateTime @default(now())
 
   // ⇐ back-rel manquant pour Order.strategy
+  // back-rel for Order.strategy
   orders       Order[]
 }
 
@@ -83,7 +84,7 @@ model Fill {
   realizedPnl  Float?
   ts           DateTime @default(now())
 
-  // ⇐ AJOUT : pour supporter AgentSession.fills
+  // Support AgentSession.fills relation
   session      AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId    String?
 }

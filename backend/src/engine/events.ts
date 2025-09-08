@@ -3,14 +3,16 @@ import { getConfig } from '../utils/env.js';
 import { prisma } from '../db/client.js';
 import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
 import { generateStrategy } from '../ai/orchestrator.js';
+import { proposePlan } from '../ai/planOrchestrator.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
+import { Agent } from '../agent/state.js';
 
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
 const NEAR_PIVOT_PCT = Number(process.env.NEAR_PIVOT_PCT || 0.25); // 0.25%
 
-// Mémoire locale pour limiter les appels IA
+// Local throttling to limit LLM calls
 let lastStrategyAt: number | null = null;
 let lastStrategyZone: { min?: number | null; max?: number | null } | null = null;
 let lastTick = { symbol: '', price: 0, ts: 0 };
@@ -33,18 +35,18 @@ function nearestLevel(price:number, levels:{price:number}[]) {
 async function tickOnce(sessionId: string|undefined, sym: string){
   const tech = await buildTechSnapshot(sym);
 
-  // primaire (déjà calculé par buildTechSnapshot)
+  // Primary support/resistance
   const support = tech.support;
   const resistance = tech.resistance;
 
-  // niveau swing le plus proche (support ou resistance)
+  // Nearest swing levels (support/resistance)
   const ns = nearestLevel(tech.last, tech.supports);
   const nr = nearestLevel(tech.last, tech.resistances);
 
-  // pivots
+  // Daily pivots
   const piv = tech.pivots;
 
-  // broadcast complet: rétro-compatible (support/resistance) + enrichi (supports[], resistances[], pivots)
+  // Broadcast a rich tick payload (supports/resistances/pivots)
   broadcast('tick', {
     ts: Date.now(),
     symbol: sym,
@@ -56,7 +58,7 @@ async function tickOnce(sessionId: string|undefined, sym: string){
     pivots: tech.pivots
   }, sym);
 
-  // triggers
+  // Triggers: touch support/resistance or pivots
   let trigger: string | null = null;
   if (near(tech.last, support, NEAR_SR_PCT)) trigger = 'support-touch';
   if (near(tech.last, resistance, NEAR_SR_PCT)) trigger = 'resistance-touch';
@@ -72,15 +74,15 @@ async function tickOnce(sessionId: string|undefined, sym: string){
       sessionId, symbol: sym, kind: trigger,
       payload: { price: tech.last, support, resistance, pivots: piv }
     }});
-    await maybeGenerateStrategy(sym, trigger, tech.last, sessionId); // inchangé
+    await maybeGenerateStrategy(sym, trigger, tech.last, sessionId);
   }
 
   return tech;
 }
 /**
- * Génère (peut-être) une nouvelle stratégie selon :
- *  - rate-limit (STRATEGY_MIN_INTERVAL_MIN)
- *  - OU sortie de la zone de la stratégie précédente (entry.zone)
+ * Possibly generate a new classic strategy and PlanZ based on:
+ *  - rate limit (STRATEGY_MIN_INTERVAL_MIN)
+ *  - leaving the previous strategy entry zone
  */
 async function maybeGenerateStrategy(sym: string, trigger: string, price: number, sessionId: string) {
   const minIntervalMin = Number(process.env.STRATEGY_MIN_INTERVAL_MIN || 60);
@@ -89,13 +91,13 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
   const canByTime = !lastStrategyAt || (now - lastStrategyAt) > minIntervalMin * 60 * 1000;
   const canByZone = leftZone(price, lastStrategyZone);
 
-  if (!canByTime && !canByZone) return; // on évite l'appel IA
+  if (!canByTime && !canByZone) return; // avoid excessive LLM calls
 
-  const strat = await generateStrategy(sym, trigger); // 1 appel IA ici
+  const strat = await generateStrategy(sym, trigger); // may call LLM once
   lastStrategyAt = now;
   lastStrategyZone = strat.entry?.zone || null;
 
-  // Calcul des niveaux (SL/TP) à afficher (dans strategy.levels)
+  // Compute SL/TP preview for the classic strategy
   const entryMid =
     strat.entry?.price ??
     (
@@ -108,7 +110,7 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     lvls = calcLevels(entryMid as number, side as any, strat.risk.stop as any, strat.risk.target as any);
   }
 
-  // Persist stratégie (tolère doublon d'id)
+  // Persist strategy (tolerate duplicate IDs)
   try {
     await prisma.strategy.create({
       data: {
@@ -129,16 +131,20 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     if (e?.code !== 'P2002') throw e;
   }
 
-  // Push WS
+  // Push WS (classic strategy preview)
   broadcast('strategy', { ...strat, levels: lvls }, sym);
+
+  // Also request a PlanZ from the LLM and pass it to the new agent pipeline
+  try {
+    const plan = await proposePlan(sym);
+    await Agent.propose(plan);
+    await Agent.validateAndArm();
+  } catch {}
 }
 
 /**
- * Boucle temps réel (tick) :
- *  - lit la session active → symbole de vérité
- *  - calcule un snapshot technique (prix, S/R…)
- *  - déclenche des triggers (support/resistance/move)
- *  - broadcast tick (avec S/R) et génère stratégie si besoin (maybeGenerateStrategy)
+ * Realtime loop: read active session symbol, compute technical snapshot,
+ * trigger events (S/R/pivots), broadcast tick and maybe generate strategies.
  */
 
 
@@ -152,6 +158,8 @@ export async function startEventEngine(){
       const sym = s?.symbol || cfg.SYMBOL;
       const tech = await tickOnce(s?.id, sym);
       lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
+      // Let the agent evaluate triggers and manage positions
+      await Agent.onTick().catch(()=>{});
     } catch (e) { /* log optionnel */ }
     finally { setTimeout(loop, pollMs); }
   }

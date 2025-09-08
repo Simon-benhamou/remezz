@@ -1,9 +1,9 @@
 import React from 'react';
 import { createChart, ColorType, IChartApi } from 'lightweight-charts';
 
-type Props = { symbol?: string; price?: number; support?: number; resistance?: number; strategy?: any };
+type Props = { symbol?: string; price?: number; support?: number; resistance?: number; strategy?: any; agentPlan?: any; agentPos?: any; pivots?: any };
 
-export default function PriceChart({ symbol, price, support, resistance, strategy }: Props){
+export default function PriceChart({ symbol, price, support, resistance, strategy, agentPlan, agentPos, pivots }: Props){
   const ref = React.useRef<HTMLDivElement>(null);
   const seriesRef = React.useRef<any>(null);
   const chartRef = React.useRef<IChartApi|null>(null);
@@ -23,12 +23,11 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     plR1.current = seriesRef.current.createPriceLine({ price: 0, title: 'R1', lineWidth: 1 });
   }, []);
   React.useEffect(()=> {
-    const piv = (strategy as any)?.pivots;
-    if (!piv) return;
-    plP.current?.applyOptions({ price: piv.P });
-    plS1.current?.applyOptions({ price: piv.S1 });
-    plR1.current?.applyOptions({ price: piv.R1 });
-  }, [strategy]);
+    if (!pivots) return;
+    plP.current?.applyOptions({ price: pivots.P });
+    plS1.current?.applyOptions({ price: pivots.S1 });
+    plR1.current?.applyOptions({ price: pivots.R1 });
+  }, [pivots]);
   React.useEffect(()=> {
     if (!ref.current) return;
     const chart = createChart(ref.current, {
@@ -60,17 +59,28 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
   }, [support, resistance]);
 
   React.useEffect(()=> {
-    // zone d’entrée et SL/TP depuis la stratégie + levels
+    // Primary from classic strategy
     const zmin = strategy?.entry?.zone?.min;
     const zmax = strategy?.entry?.zone?.max;
     const sl = strategy?.levels?.stopPrice;
     const tp = strategy?.levels?.takeProfitPrice;
-
     if (zmin && plEntryMin.current) plEntryMin.current.applyOptions({ price: zmin });
     if (zmax && plEntryMax.current) plEntryMax.current.applyOptions({ price: zmax });
     if (sl && plSL.current) plSL.current.applyOptions({ price: sl });
     if (tp && plTP.current) plTP.current.applyOptions({ price: tp });
   }, [strategy]);
+
+  React.useEffect(()=> {
+    // Agent validated plan overlays
+    const zmin = agentPlan?.zone?.from;
+    const zmax = agentPlan?.zone?.to;
+    const sl = agentPos?.stop || (agentPlan?.bias==='long' ? (agentPlan?.zone?.mid - agentPlan?.stopDistance) : (agentPlan?.zone?.mid + agentPlan?.stopDistance));
+    const tp = agentPlan?.rPrices?.[0]?.price;
+    if (zmin && plEntryMin.current) plEntryMin.current.applyOptions({ price: zmin });
+    if (zmax && plEntryMax.current) plEntryMax.current.applyOptions({ price: zmax });
+    if (sl && plSL.current) plSL.current.applyOptions({ price: sl });
+    if (tp && plTP.current) plTP.current.applyOptions({ price: tp });
+  }, [agentPlan, agentPos]);
 
   return <div style={{ border:'1px solid #eee', borderRadius:8, padding:8 }}>
     <div style={{ fontWeight:600, marginBottom:8 }}>{symbol} — Live</div>

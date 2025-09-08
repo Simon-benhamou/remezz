@@ -51,7 +51,7 @@ export function startWSHub(wss: WebSocketServer) {
         if (msg.type === 'sub') {
           state.symbol = msg.symbol;
           send(ws, { type: 'sub_ok', data: { symbol: state.symbol } });
-          // push analysis immediately so UI can fill tabs
+          // Push analysis immediately so UI can fill tabs
           try {
             const a = await fullAnalysis(state.symbol!);
             send(ws, { type: 'analysis', data: a });
@@ -64,7 +64,7 @@ export function startWSHub(wss: WebSocketServer) {
           return;
         }
 
-        // Optionnel: changer le symbole de la session active depuis le WS
+        // Optional: change active session symbol via WS
         if (msg.type === 'set_symbol') {
           const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
           if (!s) return send(ws, { type: 'error', data: 'no_active_session' });
@@ -74,7 +74,7 @@ export function startWSHub(wss: WebSocketServer) {
           return;
         }
 
-        // Demandes de snapshot en push (sans REST)
+        // Request instantaneous snapshot push (without REST)
         if (msg.type === 'fetch_now') {
           const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
           const symbol = s?.symbol || state.symbol || cfg.SYMBOL;
@@ -85,7 +85,7 @@ export function startWSHub(wss: WebSocketServer) {
           return;
         }
 
-        // (ex: déclenche une nouvelle stratégie manuelle par WS)
+        // Example: request a new classic strategy via WS
         if (msg.type === 'gen_strategy') {
           const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
           const symbol = msg.symbol || s?.symbol || state.symbol || cfg.SYMBOL;

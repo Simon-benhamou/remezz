@@ -17,7 +17,7 @@ export async function exchange() {
     enableRateLimit: true,
   });
 
-  // Optionnel : type par défaut (swap pour perp)
+  // Default market type (spot | swap)
   const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
   // @ts-ignore
   cached.options = cached.options || {};
@@ -29,19 +29,19 @@ export async function exchange() {
   return cached;
 }
 
-/** Essaie de résoudre un symbole quelconque vers un symbole ccxt unifié supporté par l'exchange. */
+/** Resolve a requested symbol to a valid ccxt unified market symbol for the configured exchange. */
 export async function resolveSymbol(requested: string): Promise<string> {
   const ex = await exchange();
   if (!marketsLoaded) await ex.loadMarkets();
 
   const s = requested.toUpperCase();
 
-  // 1) Si déjà valide, retourne-le
+  // 1) If already valid, return it
   if (ex.markets && ex.markets[s]) return s;
 
   const candidates: string[] = [];
 
-  // 2) Essais courants (spot + perp)
+  // 2) Try common forms (spot + perp)
   if (!s.includes('/')) {
     // ex: BTCUSDT -> BTC/USDT
     if (s.endsWith('USDT')) {
@@ -57,16 +57,16 @@ export async function resolveSymbol(requested: string): Promise<string> {
     candidates.push(`${base}/${quote}:USDT`, `${base}/${quote}:USD`);
   }
 
-  // 3) Ajoute des fallback génériques sur base USDT
+  // 3) Add generic USDT fallbacks
   const baseGuess = s.replace('/','').replace(':USDT','').replace('USDT','');
   candidates.push(`${baseGuess}/USDT`, `${baseGuess}/USDT:USDT`);
 
-  // 4) Garde uniquement celles reconnues
+  // 4) Keep only recognized markets
   for (const c of candidates) {
     if (ex.markets && ex.markets[c]) return c;
   }
 
-  // 5) Dernier recours : trouve la première market USDT du même base
+  // 5) Last resort: first USDT market for the same base
   const marketKeys = Object.keys(ex.markets || {});
   const match = marketKeys.find((k) => {
     const m = ex.markets[k];
@@ -74,6 +74,6 @@ export async function resolveSymbol(requested: string): Promise<string> {
   });
   if (match) return match;
 
-  // 6) Rien trouvé
+  // 6) Not found
   throw new Error(`${ex.id} does not have market symbol matching "${requested}"`);
 }

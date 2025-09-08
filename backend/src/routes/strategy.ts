@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { prisma } from "../db/client.js";
 import { generateStrategy, selectBestPerp } from "../ai/orchestrator.js";
+import { proposePlan } from "../ai/planOrchestrator.js";
+import { PlanZ } from "../agent/planSchema.js";
 import { activeSession } from "../session/session.js";
 export const router = Router();
 router.post("/generate", async (req, res) => {
@@ -39,6 +41,17 @@ router.get("/today", async (req, res) => {
     orderBy: { createdAt: "desc" },
   });
   res.json(s);
+});
+// New: Ask LLM for rebound/rejection plan JSON (PlanZ)
+router.post('/propose-plan', async (req, res) => {
+  const symbol = String(req.body?.symbol || 'BTCUSDT');
+  try {
+    const plan = await proposePlan(symbol);
+    // Respond with validated plan (schema enforced)
+    res.json(PlanZ.parse(plan));
+  } catch (e: any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
 });
 router.post('/rank', async (req,res)=>{
   const s = await activeSession();

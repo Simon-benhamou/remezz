@@ -1,6 +1,6 @@
 // backend/src/ai/tech.ts
 import { getOHLCV } from '../data/market.js';
-import { ema, rsi, atr } from '../data/indicators.js';
+import { ema, rsi, atr, adx } from '../data/indicators.js';
 
 export type TechnicalSnapshot = {
   symbol: string;
@@ -10,8 +10,10 @@ export type TechnicalSnapshot = {
   rsi14: number;
   atr14: number;
   atrPct: number;
-  support: number;          // primaire (le plus pertinent/près)
-  resistance: number;       // primaire
+  adx14: number;
+  ema20Slope: number;
+  support: number;          // primary support (closest/best)
+  resistance: number;       // primary resistance
   supports: { price: number; label: string; touches: number; strength: number }[];
   resistances: { price: number; label: string; touches: number; strength: number }[];
   pivots: null | { P: number; S1: number; S2: number; R1: number; R2: number; refDay: string };
@@ -20,9 +22,7 @@ export type TechnicalSnapshot = {
   meta: { tf: string; windowBars: number; recentBarsFor24h: number };
 };
 
-/**
- * Utilitaires
- */
+// Utilities
 function last<T>(arr: T[]): T {
   return arr[arr.length - 1];
 }
@@ -33,24 +33,22 @@ function near(a: number, b: number, pPct: number) {
   return Math.abs(a - b) <= Math.abs(b) * (pPct / 100);
 }
 
-/**
- * Calcule les points pivots journaliers à partir des OHLCV (timeframe 1h ou 15m).
- * On prend le jour civil précédent (UTC) : High/Low/Close de la veille.
- */
+// Compute daily pivots from OHLCV (prefer 1h or 15m).
+// Uses previous UTC day High/Low/Close.
 function dailyPivotsFromOHLCV(ohlcv: number[][]) {
   // ohlcv: [ ts(ms), open, high, low, close, volume ]
   if (!ohlcv?.length) return null;
 
-  // Grouper par jour (UTC)
+  // Group by day (UTC)
   const byDay: Record<string, { high: number; low: number; close: number }> = {};
   for (const [ts, , , , close, ] of ohlcv) {
     const d = new Date(ts);
     const key = d.toISOString().slice(0, 10); // YYYY-MM-DD
     if (!byDay[key]) byDay[key] = { high: -Infinity, low: Infinity, close };
     const o = byDay[key];
-    // on met à jour high/low/close par itération  — mais on a besoin de high/low ! Il faut lire ohlcv[i][2]/[3]
+    // Update high/low/close per iteration
   }
-  // On doit re-parcourir avec high/low
+  // Second pass to record highs/lows precisely
   for (const [ts, , high, low, close] of ohlcv) {
     const key = new Date(ts).toISOString().slice(0, 10);
     const o = byDay[key];
@@ -60,7 +58,7 @@ function dailyPivotsFromOHLCV(ohlcv: number[][]) {
     o.close = close; // last close of that day
   }
 
-  // jours triés
+  // Sorted days
   const days = Object.keys(byDay).sort();
   if (days.length < 2) return null; // pas de "veille"
   const prev = byDay[days[days.length - 2]];
@@ -74,11 +72,7 @@ function dailyPivotsFromOHLCV(ohlcv: number[][]) {
   return { P, R1, R2, S1, S2, refDay: days[days.length - 2] };
 }
 
-/**
- * Détection de swings (fractal highs/lows).
- * Un swing high au point i si high[i] > high[i-k..i-1] et > high[i+1..i+k]
- * On compte aussi les "touches" proches par tolérance (tolerancePct).
- */
+// Swing detection (fractal highs/lows) with clustering tolerance.
 function swingLevels(
   highs: number[], lows: number[], closes: number[], lookback = 2, tolerancePct = 0.15
 ) {
@@ -104,7 +98,7 @@ function swingLevels(
     if (isLow) swingLows.push({ price: l, touches: 1, strength: 1, idx: i });
   }
 
-  // regrouper les niveaux proches (tolerancePct)
+  // Cluster nearby levels within tolerancePct
   function cluster(levels: Lvl[]): Lvl[] {
     const out: Lvl[] = [];
     for (const lvl of levels) {
@@ -126,22 +120,20 @@ function swingLevels(
   const clusteredLows = cluster(swingLows)
     .sort((a, b) => b.touches - a.touches || a.price - b.price);
 
-  // convertir en tableau de prix + meta
+  // Convert to enriched arrays
   return {
     resistances: clusteredHighs.map(l => ({ price: l.price, touches: l.touches, strength: l.strength })),
     supports: clusteredLows.map(l => ({ price: l.price, touches: l.touches, strength: l.strength })),
   };
 }
 
-/**
- * Snapshot technique complet pour un symbole :
- * - EMA20/50, RSI14, ATR14 & ATR%
- * - S/R 24h (min/max) + S/R par swings (multi-touch)
- * - Pivots journaliers (P, S1, S2, R1, R2)
- * - srBias: nearSupport | nearResistance | neutral (fenêtre 0.6%)
- */
+// Full technical snapshot for a symbol:
+// - EMA20/50, RSI14, ATR14 & ATR%
+// - 24h S/R + swing S/R
+// - Daily pivots (P, S1, S2, R1, R2)
+// - srBias: nearSupport | nearResistance | neutral (~0.6% window)
 export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapshot>{
-  // 15m pour réactivité (2 jours ≈ 192 bougies), et 1h pour pivots/journalier
+  // 15m window for reactivity (~2 days), 1h for pivots/daily
   const o15 = await getOHLCV(symbol, '15m', 300); // [ts, o, h, l, c, v]
   if (!o15 || o15.length < 100) throw new Error('Not enough data (15m)');
 
@@ -150,18 +142,21 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const lows15   = o15.map(r => r[3]);
   const lastPrice:any = last(closes15);
 
-  // Indicateurs
+  // Indicators
   const ema20Arr = ema(closes15, 20);
   const ema50Arr = ema(closes15, 50);
   const ema20v = last(ema20Arr);
   const ema50v = last(ema50Arr);
+  const ema20Slope = ema20Arr.length >= 2 ? ema20Arr.at(-1)! - ema20Arr.at(-2)! : 0;
   const rsi14Arr = rsi(closes15, 14);
   const rsi14v = rsi14Arr[rsi14Arr.length - 1] ?? 50;
   const atr14Arr = atr(o15, 14);
   const atr14v = atr14Arr[atr14Arr.length - 1] ?? 0;
   const atrPct = (atr14v / lastPrice) * 100;
+  const adx14Arr = adx(o15, 14);
+  const adx14v = adx14Arr[adx14Arr.length - 1] ?? 0;
 
-  // S/R simples 24h (≈ 24h = 96 bougies 15m)
+  // Simple 24h S/R (~96 bars of 15m)
   const recent = closes15.length >= 96 ? o15.slice(-96) : o15;
   const support24h = Math.min(...recent.map(r => r[3]));
   const resistance24h = Math.max(...recent.map(r => r[2]));
@@ -178,11 +173,11 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     ...swings.resistances.slice(0, 5).map(s => ({ price: s.price, label: 'swing', touches: s.touches, strength: s.strength })),
   ].sort((a, b) => Math.abs(lastPrice - a.price) - Math.abs(lastPrice - b.price));
 
-  // Pivots journaliers depuis 1h (ou 15m si tu préfères)
+  // Daily pivots from 1h (fallback to 15m if needed)
   const o1h = await getOHLCV(symbol, '1h', 600); // ~25 jours
   const pivots = dailyPivotsFromOHLCV(o1h || o15);
 
-  // Choix d’un support/résistance "primaire" (le plus proche du prix actuel)
+  // Select primary support/resistance (closest to last price)
   const primarySupport = supports[0]?.price ?? support24h;
   const primaryResistance = resistances[0]?.price ?? resistance24h;
 
@@ -202,9 +197,11 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     rsi14: rsi14v,
     atr14: atr14v,
     atrPct,
+    adx14: adx14v,
+    ema20Slope,
     support: primarySupport,
     resistance: primaryResistance,
-    supports,       // [{ price, label, touches, strength }, ...] trié par proximité
+    supports,       // [{ price, label, touches, strength }, ...] sorted by proximity
     resistances,    // idem
     pivots,         // { P,S1,S2,R1,R2,refDay } | null
     trend,

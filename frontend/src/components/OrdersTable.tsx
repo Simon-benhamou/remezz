@@ -22,7 +22,7 @@ export default function OrdersTable({ rows = [] }: any) {
     { title: "Status", dataIndex: "status" },
   ];
   return (
-    <Card title="Orders (journal)">
+    <Card title="Orders">
       <Table rowKey="id" dataSource={rows} columns={cols} size="small" />
     </Card>
   );

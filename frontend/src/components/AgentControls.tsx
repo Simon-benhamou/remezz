@@ -4,14 +4,17 @@ import { api } from "../api";
 export default function AgentControls({ session, symbol, onChange }: any) {
   const [mode, setMode] = React.useState<"paper" | "live">("paper");
   const [startBal, setStartBal] = React.useState<number | undefined>(undefined);
+  const [riskPct, setRiskPct] = React.useState<number>(1.5);
+  const [maxLev, setMaxLev] = React.useState<number>(4);
+  const [dailyLoss, setDailyLoss] = React.useState<number>(3.5);
   const start = async () => {
-    await api.startSession(symbol || "BTCUSDT", mode, startBal);
-    message.success("Session démarrée");
+    await api.client.post('/api/agent/start', { symbol: symbol || 'BTCUSDT', mode, startBalanceUsd: startBal, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss });
+    message.success("Session started");
     onChange?.();
   };
   const stop = async () => {
     await api.stopSession();
-    message.info("Session arrêtée");
+    message.info("Session stopped");
     onChange?.();
   };
   return (
@@ -26,12 +29,17 @@ export default function AgentControls({ session, symbol, onChange }: any) {
           />
         </div>
         <div>
-          Start balance USD (optionnel):{" "}
+          Start balance USD (optional):{" "}
           <InputNumber
             value={startBal}
             onChange={setStartBal as any}
             style={{ width: 160 }}
           />
+        </div>
+        <div>
+          Risk %/trade: <InputNumber min={1} max={2} step={0.1} value={riskPct} onChange={setRiskPct as any} style={{ width: 100 }} />
+          &nbsp; Max Lev: <InputNumber min={1} max={5} step={1} value={maxLev} onChange={setMaxLev as any} style={{ width: 80 }} />
+          &nbsp; Daily loss %: <InputNumber min={3} max={4} step={0.1} value={dailyLoss} onChange={setDailyLoss as any} style={{ width: 120 }} />
         </div>
         <Space>
           <Button type="primary" onClick={start} disabled={!!session}>
@@ -42,7 +50,7 @@ export default function AgentControls({ session, symbol, onChange }: any) {
           </Button>
         </Space>
         <div style={{ fontSize: 12, color: "#888" }}>
-          La session mesure la performance depuis l'activation.
+          The session measures performance since activation.
         </div>
       </Space>
     </Card>

@@ -4,12 +4,12 @@ export default function PerfPanel({ kpi, session }: any) {
   if (!session)
     return (
       <Card title="Performance">
-        <Empty description="Aucune session active" />
+        <Empty description="No active session" />
       </Card>
     );
   return (
     <Card
-      title={`Performance — depuis ${new Date(
+      title={`Performance — since ${new Date(
         session.startedAt
       ).toLocaleString()}`}
     >

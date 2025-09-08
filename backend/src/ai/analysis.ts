@@ -5,14 +5,14 @@ import { llmJSON } from './llm.js';
 const ANALYSIS_CACHE = new Map<string,{ ts:number, data:any }>();
 const ANALYSIS_TTL = Number(process.env.ANALYSIS_TTL_MIN || 360) * 60 * 1000;
 export async function fullAnalysis(symbol: string) {
-  // technique
+  // technical snapshot
   const technical = await buildTechSnapshot(symbol);
   const hit = ANALYSIS_CACHE.get(symbol);
   const now = Date.now();
   if (hit && now - hit.ts < ANALYSIS_TTL) return hit.data;
 
 
-  // indicateurs (ex: timeframes différents si besoin)
+  // extra indicators (different timeframes if needed)
   const o = await getOHLCV(symbol, '1h', 200);
   const c = o.map(r => r[4]);
   const indicators = {
@@ -22,7 +22,7 @@ export async function fullAnalysis(symbol: string) {
     atr14: atr(o,14).at(-1),
   };
 
-  // sentiment + news via LLM (tu peux enrichir avec des sources externes si tu veux)
+  // sentiment + news via LLM (can be enriched with external sources)
   const base = {
     symbol,
     last: technical.last,
@@ -34,20 +34,18 @@ export async function fullAnalysis(symbol: string) {
 
   let sentiment:any = null, news:any = null;
   try {
-    const s = await llmJSON(`
-You are a crypto market sentiment analyzer. Given the context, estimate sentiment for ${symbol} now (bullish/bearish/neutral) and give a 0..1 score + 3 bullets.
-Return JSON: {"label":"bullish|bearish|neutral","score":0.0-1.0,"bullets":["...","...","..."]}
-
-Context: ${JSON.stringify(base)}
-    `.trim());
+    const s = await llmJSON(
+      `You are a crypto market sentiment analyzer. Given the context, estimate sentiment for ${symbol} now (bullish/bearish/neutral) and give a 0..1 score + 3 bullets. Return JSON: {"label":"bullish|bearish|neutral","score":0.0-1.0,"bullets":["...","...","..."]}\nContext: ${JSON.stringify(base)}`
+      .trim()
+    );
     sentiment = JSON.parse(s);
   } catch {}
 
   try {
-    const n = await llmJSON(`
-You are a crypto news summarizer. Summarize top potential narratives affecting ${symbol} in the last 24-48h (macro, ETF, exchange events, dev updates). If unknown, state uncertainty.
-Return JSON: {"summary":"...","bullets":["...","...","..."]}
-    `.trim());
+    const n = await llmJSON(
+      `You are a crypto news summarizer. Summarize top potential narratives affecting ${symbol} in the last 24-48h (macro, ETF, exchange events, dev updates). If unknown, state uncertainty. Return JSON: {"summary":"...","bullets":["...","...","..."]}`
+      .trim()
+    );
     news = JSON.parse(n);
   } catch {}
   const out = { symbol, technical, indicators, sentiment, news };

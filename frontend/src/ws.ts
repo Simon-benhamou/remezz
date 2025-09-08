@@ -6,7 +6,7 @@ export function openWS(apiBase: string, apiKey: string, symbol: string, on: Hand
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'hello', apiKey }));
-    // après hello_ok, on s’abonne
+    // After hello_ok, subscribe to symbol
     setTimeout(()=> ws.send(JSON.stringify({ type: 'sub', symbol })), 100);
   };
 

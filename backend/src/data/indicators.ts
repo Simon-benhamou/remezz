@@ -45,3 +45,69 @@ export function atr(ohlcv: number[][], period = 14) {
   }
   return out;
 }
+
+// Wilder's ADX (Average Directional Index)
+export function adx(ohlcv: number[][], period = 14) {
+  const n = ohlcv.length;
+  if (n < period + 2) return [];
+
+  const trs: number[] = [];
+  const plusDM: number[] = [];
+  const minusDM: number[] = [];
+  for (let i = 1; i < n; i++) {
+    const [, , high, low] = ohlcv[i];
+    const [, , prevHigh, prevLow, prevClose] = ohlcv[i - 1];
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    trs.push(tr);
+  }
+
+  // Wilder's smoothing
+  function smooth(arr: number[]) {
+    const out: number[] = [];
+    let sum = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (i < period) {
+        sum += arr[i];
+        if (i === period - 1) out.push(sum);
+      } else {
+        const prev = out[out.length - 1];
+        out.push(prev - prev / period + arr[i]);
+      }
+    }
+    return out;
+  }
+
+  const trN = smooth(trs);
+  const plusDMN = smooth(plusDM);
+  const minusDMN = smooth(minusDM);
+  const out: number[] = new Array(period).fill(NaN);
+
+  for (let i = 0; i < trN.length; i++) {
+    const trVal = trN[i];
+    const pdi = 100 * (plusDMN[i] / (trVal || 1e-12));
+    const mdi = 100 * (minusDMN[i] / (trVal || 1e-12));
+    const dx = 100 * (Math.abs(pdi - mdi) / (pdi + mdi || 1e-12));
+    out.push(dx);
+  }
+
+  // Smooth DX to ADX
+  const adxArr: number[] = [];
+  const start = out.findIndex((v) => !Number.isNaN(v));
+  if (start === -1) return [];
+  let avg = 0;
+  for (let i = start; i < out.length; i++) {
+    if (i === start + period - 1) {
+      const seed = out.slice(start, start + period).reduce((a, b) => a + b, 0) / period;
+      avg = seed;
+      adxArr.push(seed);
+    } else if (i > start + period - 1) {
+      avg = ((avg * (period - 1)) + out[i]) / period;
+      adxArr.push(avg);
+    }
+  }
+  return adxArr;
+}

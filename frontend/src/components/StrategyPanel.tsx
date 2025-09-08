@@ -3,21 +3,21 @@ import { Card, Descriptions, Empty } from "antd";
 export default function StrategyPanel({ strategy }: any) {
   if (!strategy)
     return (
-      <Card title="Stratégie IA">
-        <Empty description="Aucune stratégie" />
+      <Card title="Strategy (classic)">
+        <Empty description="No strategy" />
       </Card>
     );
   const s = strategy;
   return (
-    <Card title="Stratégie IA (active)">
+    <Card title="Strategy (active)">
       <Descriptions column={1} size="small" bordered>
         <Descriptions.Item label="ID">{s.id || s.strategyId}</Descriptions.Item>
         <Descriptions.Item label="Symbol">{s.symbol}</Descriptions.Item>
         <Descriptions.Item label="Bias">{s.bias}</Descriptions.Item>
-        <Descriptions.Item label="Confiance">
+        <Descriptions.Item label="Confidence">
           {s.confidence ?? "-"}
         </Descriptions.Item>
-        <Descriptions.Item label="Entrée">
+        <Descriptions.Item label="Entry">
           {s.entry?.price ??
             `${s.entry?.zone?.min ?? "-"} → ${s.entry?.zone?.max ?? "-"}`}
         </Descriptions.Item>
@@ -29,10 +29,10 @@ export default function StrategyPanel({ strategy }: any) {
           {s.risk?.target?.value}
           {s.risk?.target?.type === "percent" ? "%" : ""}
         </Descriptions.Item>
-        <Descriptions.Item label="Levier max">
+        <Descriptions.Item label="Max leverage">
           {s.risk?.max_leverage}
         </Descriptions.Item>
-        <Descriptions.Item label="Validité">
+        <Descriptions.Item label="Validity">
           {s.validity?.from || "-"} → {s.validity?.to || "-"}
         </Descriptions.Item>
         <Descriptions.Item label="Trigger">
@@ -41,7 +41,7 @@ export default function StrategyPanel({ strategy }: any) {
       </Descriptions>
       {strategy?.levels && (
         <div style={{ marginTop: 8 }}>
-          <b>Objectifs IA:</b>&nbsp; Entry mid:{" "}
+          <b>Targets:</b>&nbsp; Entry mid:{" "}
           {strategy.entry?.price ??
             (
               (strategy.entry?.zone?.min ||
