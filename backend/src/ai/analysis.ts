@@ -1,5 +1,5 @@
 import { buildTechSnapshot } from './tech.js';
-import { getOHLCV } from '../data/market.js';
+import { getOHLCV, getTicker } from '../data/market.js';
 import { ema, rsi, atr } from '../data/indicators.js';
 import { llmJSON } from './llm.js';
 const ANALYSIS_CACHE = new Map<string,{ ts:number, data:any }>();
@@ -48,7 +48,12 @@ export async function fullAnalysis(symbol: string) {
     );
     news = JSON.parse(n);
   } catch {}
-  const out = { symbol, technical, indicators, sentiment, news };
+  let ticker: any = null;
+  try {
+    const t = await getTicker(symbol);
+    ticker = { last: t?.last, percentage: t?.percentage, baseVolume: t?.baseVolume };
+  } catch {}
+  const out = { symbol, technical, indicators, sentiment, news, ticker };
   ANALYSIS_CACHE.set(symbol, { ts: now, data: out });
   return out;
 }

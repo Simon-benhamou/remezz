@@ -15,8 +15,6 @@ export const api = {
     (await client.post("/api/strategy/generate", { symbol, trigger })).data,
   proposePlan: async (symbol: string) =>
     (await client.post("/api/strategy/propose-plan", { symbol })).data,
-  rankPerps: async (perps: string[]) =>
-    (await client.post("/api/strategy/rank", { perps })).data,
   startSession: async (
     symbol: string,
     mode: "paper" | "live",

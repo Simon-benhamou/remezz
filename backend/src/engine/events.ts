@@ -70,10 +70,12 @@ async function tickOnce(sessionId: string|undefined, sym: string){
   }
 
   if (trigger && sessionId) {
-    await prisma.triggerLog.create({ data:{
+    const created = await prisma.triggerLog.create({ data:{
       sessionId, symbol: sym, kind: trigger,
       payload: { price: tech.last, support, resistance, pivots: piv }
     }});
+    // Broadcast this trigger so UI can update live
+    broadcast('trigger', created, sym);
     await maybeGenerateStrategy(sym, trigger, tech.last, sessionId);
   }
 

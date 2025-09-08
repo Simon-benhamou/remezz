@@ -1,5 +1,6 @@
 import React from 'react';
 import { Card, Space, Segmented, InputNumber, Button, Select, Typography, message } from 'antd';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 
 type Props = {
@@ -54,9 +55,11 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
             <InputNumber min={3} max={4} step={0.1} value={dailyLoss} onChange={setDailyLoss as any} />
           </div>
         </Space>
-        <Button type='primary' onClick={start}>Activate</Button>
+        <Space>
+          <Button type='primary' onClick={start}>Activate</Button>
+          <Link to='/test'>Go to Testing</Link>
+        </Space>
       </Space>
     </Card>
   );
 }
-

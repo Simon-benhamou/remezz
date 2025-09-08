@@ -7,6 +7,7 @@ import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.j
 import { buildTechSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
 import { recordEnter, recordExit } from './persistence.js';
+import { getAICallsCount } from '../metrics/aiCalls.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -84,7 +85,7 @@ export class ReboundRejectionAgent {
       return;
     }
     this.state = 'ARMED';
-    broadcast('agent_state', { state: this.state, plan: this.plan }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, plan: this.plan, aiCalls: getAICallsCount() }, this.profile.symbol);
   }
 
   // On new candles/ticks, check trigger and possibly enter
@@ -120,7 +121,7 @@ export class ReboundRejectionAgent {
     await recordEnter({ symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
     this.state = 'MANAGE';
     this.tradesToday += 1;
-    broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: getAICallsCount() }, this.profile.symbol);
   }
 
   async manage(price: number, snap: { ema20: number; atr14: number }) {
@@ -175,14 +176,14 @@ export class ReboundRejectionAgent {
     this.consecutiveStops = reason === 'sl' ? (this.consecutiveStops + 1) : 0;
     await recordExit({ symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: this.pos.qty, realizedPnl: pnl }).catch(()=>{});
     this.state = 'EXIT';
-    broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct } }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct, ts: Date.now() }, aiCalls: getAICallsCount() }, this.profile.symbol);
     this.pos = null;
     this.state = 'REPORT';
-    broadcast('agent_state', { state: this.state }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, aiCalls: getAICallsCount() }, this.profile.symbol);
     // back to SCAN unless guardrails trip
     const guard = await assessRisk({ sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10), realizedPnlPctToday: this.realizedPnlTodayPct, consecutiveStops: this.consecutiveStops, tradesToday: this.tradesToday });
     this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'COOLDOWN');
-    broadcast('agent_state', { state: this.state }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, aiCalls: getAICallsCount() }, this.profile.symbol);
   }
 
   halt() { this.state = 'HALT'; }

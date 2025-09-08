@@ -7,6 +7,7 @@ import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { Agent } from '../agent/state.js';
 import { PlanZ } from '../agent/planSchema.js';
+import { getAICallsCount, setActiveSession } from '../metrics/aiCalls.js';
 
 export const router = Router();
 
@@ -25,6 +26,7 @@ router.post('/start', async (req,res)=>{
   }
   
   const s = await startSession(symbol, mode, startBalanceUsd);
+  setActiveSession(s.id);
   // Activate the new agent state machine (profile freeze)
   await Agent.activate({
     symbol,
@@ -73,6 +75,7 @@ router.post('/stop', async (_req,res)=>{
   await stopSession(s.id);
   broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol);
   Agent.halt();
+  setActiveSession(null);
   res.json({ok:true});
 });
 
@@ -91,6 +94,12 @@ router.get('/triggers', async (_req,res)=>{
   const s = await activeSession(); if(!s) return res.json([]);
   const logs = await prisma.triggerLog.findMany({ where:{ sessionId: s.id }, orderBy: { createdAt: 'desc' }, take: 100 });
   res.json(logs);
+});
+
+// AI calls count for current session
+router.get('/ai-calls', async (_req,res)=>{
+  const s = await activeSession().catch(()=>null);
+  res.json({ count: getAICallsCount(s?.id || undefined) });
 });
 
 // New: pass a LLM JSON plan to the agent (validates + arms)

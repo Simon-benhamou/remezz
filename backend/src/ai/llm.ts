@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { getConfig } from "../utils/env.js";
+import { incAICall } from "../metrics/aiCalls.js";
 
 export type LLMChoice = "openai" | "grok" | "none";
 
@@ -12,6 +13,7 @@ function pickLLM(): LLMChoice {
 
 export async function llmJSON(prompt: string): Promise<string> {
   const which = pickLLM();
+  incAICall();
   if (which === "openai") return callOpenAI(prompt);
   if (which === "grok") return callGrok(prompt);
   throw new Error("No LLM configured (OPENAI_API_KEY or GROK_API_KEY missing).");

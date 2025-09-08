@@ -15,7 +15,7 @@ export default function TriggersPanel({ rows = [] }: any) {
     { title: "Time", dataIndex: "createdAt", render: (v: any) => new Date(v).toLocaleString() },
     { title: "Kind", dataIndex: "kind", render: (v:string)=> <Tag color={v.includes('support')? 'green': v.includes('resistance')? 'red': 'blue'}>{v}</Tag> },
     { title: "Symbol", dataIndex: "symbol" },
-    { title: "Price", dataIndex: ["payload","price"], render: (v:any)=> v?.toFixed?.(2) ?? '-' },
+    { title: "Price", dataIndex: ["payload","price"], render: (v:any)=> v?.toFixed?.(4) ?? '-' },
     { title: "Level", render: (_:any, row:any)=> levelInfo(row.kind, row.payload).level },
     { title: "Level Value", render: (_:any, row:any)=> levelInfo(row.kind, row.payload).value },
   ];

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layout, Typography, Space, Button, Select, message, Row, Col } from 'antd';
+import { Layout, Typography, Space, message, Row, Col, Tag } from 'antd';
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from './api';
 import { openWS, wsSend } from './ws';
@@ -24,7 +24,6 @@ function AppInner(){
   const [orders, setOrders] = React.useState<any[]>([]);
   const [kpi, setKpi] = React.useState<any>(null);
   const [triggers, setTriggers] = React.useState<any[]>([]);
-  const [ranking, setRanking] = React.useState<any[]>([]);
   const [analysis, setAnalysis] = React.useState<any>(null);
   const [agent, setAgent] = React.useState<any>(null);
   const wsRef = React.useRef<WebSocket|null>(null);
@@ -42,9 +41,10 @@ function AppInner(){
       }
       if (msg.type === 'strategy') setStrategy(msg.data);
       if (msg.type === 'analysis') setAnalysis(msg.data);
-      if (msg.type === 'agent_state') setAgent(msg.data);
+      if (msg.type === 'agent_state') setAgent((prev:any)=> ({ ...prev, ...msg.data }));
       if (msg.type === 'session') setStatus((s:any)=>({ ...s, session: msg.data, symbol: msg.data.symbol || s.symbol }));
       if (msg.type === 'orders') setOrders(msg.data);
+      if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
     });
     wsRef.current = ws;
 
@@ -57,7 +57,6 @@ function AppInner(){
         setOrders(await api.getOrders());
         if (s.session?.id) setKpi(await api.getPerf(s.session.id));
         setTriggers(await api.getTriggers());
-        setRanking(await api.rankPerps(['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT']));
         try { setAgent(await api.getAgentState()); } catch {}
         try { setAnalysis(await api.analysis(s?.symbol || symbol)); } catch {}
       } catch {}
@@ -73,34 +72,25 @@ function AppInner(){
     }
   }, [symbol]);
 
-  // On symbol change => WS sub + optionally set-symbol if session active
-  const changeSymbol = async (sym:string) => {
-    setSymbol(sym);
-    if (wsRef.current) wsSend(wsRef.current, { type: 'sub', symbol: sym });
-    if (status?.session?.id) await api.client.post('/api/agent/set-symbol', { symbol: sym });
-    try { setAnalysis(await api.analysis(sym)); } catch {}
-    message.success(`Symbol set to ${sym}`);
-  };
-
-  const genStrategy = () => {
-    if (wsRef.current) wsSend(wsRef.current, { type: 'gen_strategy', symbol, trigger: 'manual' });
-  };
 
   const hasSession = !!status?.session;
 
   return (
     <Layout style={{ minHeight:'100vh' }}>
       <Header style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <Title level={4} style={{ color:'white', margin:0 }}><Link to='/' style={{ color:'inherit' }}>Trading Agent v3</Link></Title>
-        <Space>
-          <Link to='/start'>Start</Link>
-          <Link to='/monitor' style={{ pointerEvents: hasSession? 'auto':'none', opacity: hasSession? 1: 0.5 }}>Monitor</Link>
-          <Link to='/test'>Test</Link>
-          {hasSession && (
+        <Space style={{ color: 'white' }}>
+          <Link to='/start' style={{ color:'white' }}>Start</Link>
+          <Link to='/monitor' style={{ color:'white', pointerEvents: hasSession? 'auto':'none', opacity: hasSession? 1: 0.5 }}>Monitor</Link>
+          <Link to='/test' style={{ color:'white' }}>Test</Link>
+          {analysis?.ticker && (
             <>
-              <Select value={symbol} onChange={changeSymbol} style={{ width:180 }}
-                options={[{value:'BTC/USDT'},{value:'ETH/USDT'},{value:'SOL/USDT'},{value:'XRP/USDT'},{value:'AVAX/USDT'}]} />
-              <Button onClick={genStrategy}>Generate strategy</Button>
+              <span style={{ color:'#ddd' }}>{status?.symbol}</span>
+              <Tag color={(analysis?.ticker?.percentage ?? 0) >= 0 ? 'green' : 'red'}>24h {(analysis?.ticker?.percentage ?? 0).toFixed(2)}%</Tag>
+              {((agent?.plan?.bias) || (strategy?.bias)) && (
+                <Tag color={(agent?.plan?.bias || strategy?.bias)==='long' ? 'green' : ((agent?.plan?.bias || strategy?.bias)==='short' ? 'red' : 'default')}>
+                  {(agent?.plan?.bias || strategy?.bias || '').toUpperCase()}
+                </Tag>
+              )}
             </>
           )}
         </Space>
@@ -125,6 +115,7 @@ function AppInner(){
                   agentPlan={agent?.plan}
                   agentPos={agent?.pos}
                   pivots={status?.pivots}
+                  agentExit={agent?.exit}
                 />
               </Col>
               <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
