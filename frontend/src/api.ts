@@ -28,4 +28,6 @@ export const api = {
   getOrders: async () => (await client.get("/api/orders")).data,
   getPerf: async (sessionId: string) =>
     (await client.get("/api/perf", { params: { sessionId } })).data,
+  analysis: async (symbol: string) =>
+    (await client.get("/api/analysis", { params: { symbol } })).data,
 };

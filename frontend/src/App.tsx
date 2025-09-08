@@ -42,7 +42,7 @@ export default function App(){
     });
     wsRef.current = ws;
 
-    // bootstrap côté REST pour tables & perf
+    // bootstrap côté REST pour tables & perf + analysis
     (async ()=>{
       try {
         const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s }));
@@ -50,6 +50,7 @@ export default function App(){
         if (s.session?.id) setKpi(await api.getPerf(s.session.id));
         setTriggers(await api.getTriggers());
         setRanking(await api.rankPerps(['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT']));
+        try { setAnalysis(await api.analysis(s?.symbol || symbol)); } catch {}
       } catch {}
     })();
 
@@ -61,6 +62,7 @@ export default function App(){
     setSymbol(sym);
     if (wsRef.current) wsSend(wsRef.current, { type: 'sub', symbol: sym });
     if (status?.session?.id) await api.client.post('/api/agent/set-symbol', { symbol: sym });
+    try { setAnalysis(await api.analysis(sym)); } catch {}
     message.success(`Symbole défini sur ${sym}`);
   };
 

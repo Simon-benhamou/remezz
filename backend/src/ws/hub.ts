@@ -2,6 +2,7 @@ import type { WebSocketServer, WebSocket } from 'ws';
 import { prisma } from '../db/client.js';
 import { getConfig } from '../utils/env.js';
 import { buildTechSnapshot } from '../ai/tech.js';
+import { fullAnalysis } from '../ai/analysis.js';
 import { generateStrategy } from '../ai/orchestrator.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 
@@ -50,6 +51,16 @@ export function startWSHub(wss: WebSocketServer) {
         if (msg.type === 'sub') {
           state.symbol = msg.symbol;
           send(ws, { type: 'sub_ok', data: { symbol: state.symbol } });
+          // push analysis immediately so UI can fill tabs
+          try {
+            const a = await fullAnalysis(state.symbol!);
+            send(ws, { type: 'analysis', data: a });
+          } catch {
+            try {
+              const snap = await buildTechSnapshot(state.symbol!);
+              send(ws, { type: 'analysis', data: { symbol: state.symbol, technical: snap } });
+            } catch {}
+          }
           return;
         }
 
@@ -107,6 +118,11 @@ export function startWSHub(wss: WebSocketServer) {
             if (e?.code !== 'P2002') throw e;
           }
           broadcast('strategy', { ...strat, levels: lvls }, symbol);
+          // also broadcast updated analysis
+          try {
+            const a = await fullAnalysis(symbol);
+            broadcast('analysis', a, symbol);
+          } catch {}
           return;
         }
 
