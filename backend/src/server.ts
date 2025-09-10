@@ -15,11 +15,26 @@ import { router as analysisRouter } from "./routes/analysis.js";
 import { router as simRouter } from "./routes/sim.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
-
+const allowedOrigins = [
+  "https://tai-cli.up.railway.app",
+  "https://trading-agent-ia-v3-fronend-production.up.railway.app",
+  "http://localhost:5173"
+];
 const cfg = getConfig();
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: cfg.CORS_ORIGIN }));
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    return allowedOrigins.includes(origin)
+      ? cb(null, true)
+      : cb(new Error("Not allowed by CORS: " + origin));
+  },
+  credentials: true, // indispensable si cookies; OK aussi avec Bearer
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
 
 // Public routes (no API key required)
 app.use("/api/auth", authRouter);
