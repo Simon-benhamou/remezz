@@ -3,14 +3,16 @@
   "version": "3.0.0",
   "private": true,
   "type": "module",
-  "scripts": {
+  "scripts1": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start1": "node dist/server.js",
-    "start": "node server.js" ,
+    "start": "node dist/server.js",
     "prisma:gen": "prisma generate",
     "db:push": "prisma db push",
     "migrate": "prisma migrate deploy"
+  },
+  "scripts": {
+    "start": "node server.js"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",
