@@ -1,15 +1,41 @@
-import axios from "axios";
+import axios, { AxiosHeaders } from "axios";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 
 let TOKEN: string = localStorage.getItem('apiKey') || '';
-export function setApiKey(tok: string){ TOKEN = tok || ''; localStorage.setItem('apiKey', TOKEN); client.defaults.headers.common['x-api-key'] = TOKEN; }
+export function setApiKey(tok: string){
+  TOKEN = tok || '';
+  localStorage.setItem('apiKey', TOKEN);
+  const h = client.defaults.headers as unknown as AxiosHeaders;
+  h.set('x-api-key', TOKEN);
+}
 export function getApiKey(){ return TOKEN || localStorage.getItem('apiKey') || ''; }
-export function clearApiKey(){ TOKEN=''; localStorage.removeItem('apiKey'); delete client.defaults.headers.common['x-api-key']; }
+export function clearApiKey(){
+  TOKEN='';
+  localStorage.removeItem('apiKey');
+  const h = client.defaults.headers as unknown as AxiosHeaders;
+  h.delete('x-api-key');
+}
 
 export const client = axios.create({ baseURL: API_BASE });
+// Initialize default x-api-key from env if present
+if (import.meta.env.VITE_APP_API_KEY) {
+  const h = client.defaults.headers as unknown as AxiosHeaders;
+  h.set('x-api-key', import.meta.env.VITE_APP_API_KEY);
+}
 client.interceptors.request.use((cfg)=>{
   const k = getApiKey();
-  if (k) cfg.headers = { ...(cfg.headers||{}), 'x-api-key': k };
+  if (k) {
+    if (cfg.headers) {
+      if (cfg.headers instanceof AxiosHeaders) {
+        cfg.headers.set('x-api-key', k);
+      } else {
+        // Fallback for plain object headers
+        (cfg.headers as any)['x-api-key'] = k;
+      }
+    } else {
+      cfg.headers = new AxiosHeaders({ 'x-api-key': k });
+    }
+  }
   return cfg;
 });
 export const api = {
