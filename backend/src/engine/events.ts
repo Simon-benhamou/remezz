@@ -2,10 +2,8 @@
 import { getConfig } from '../utils/env.js';
 import { prisma } from '../db/client.js';
 import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
-import { generateStrategy } from '../ai/orchestrator.js';
-import { proposePlan } from '../ai/planOrchestrator.js';
+import { requestStrategy, shouldEngineRegenerate } from '../ai/strategyManager.js';
 import { broadcast } from '../ws/hub.js';
-import { levels as calcLevels } from '../risk/brackets.js';
 import { Agent } from '../agent/state.js';
 
 let running = false;
@@ -91,57 +89,18 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
   const now = Date.now();
 
   const canByTime = !lastStrategyAt || (now - lastStrategyAt) > minIntervalMin * 60 * 1000;
-  const canByZone = leftZone(price, lastStrategyZone);
+  const canByZone = shouldEngineRegenerate(sym, price);
 
   if (!canByTime && !canByZone) return; // avoid excessive LLM calls
 
-  const strat = await generateStrategy(sym, trigger); // may call LLM once
-  lastStrategyAt = now;
-  lastStrategyZone = strat.entry?.zone || null;
-
-  // Compute SL/TP preview for the classic strategy
-  const entryMid =
-    strat.entry?.price ??
-    (
-      ((strat.entry?.zone?.min ?? 0) + (strat.entry?.zone?.max ?? 0)) / 2 || undefined
-    );
-
-  let lvls: any = undefined;
-  if (entryMid && Number.isFinite(entryMid)) {
-    const side = strat.bias === 'long' ? 'buy' : 'sell';
-    lvls = calcLevels(entryMid as number, side as any, strat.risk.stop as any, strat.risk.target as any);
-  }
-
-  // Persist strategy (tolerate duplicate IDs)
-  try {
-    await prisma.strategy.create({
-      data: {
-        id: strat.strategyId,
-        sessionId,
-        symbol: strat.symbol,
-        bias: strat.bias,
-        confidence: strat.confidence,
-        entryJson: strat.entry,
-        riskJson: strat.risk,
-        validityFrom: strat.validity?.from ? new Date(strat.validity.from) : undefined,
-        validityTo: strat.validity?.to ? new Date(strat.validity.to) : undefined,
-        rationale: strat.rationale,
-        trigger,
-      },
-    });
-  } catch (e: any) {
-    if (e?.code !== 'P2002') throw e;
+  const { strategy: strat, levels: lvls, reused } = await requestStrategy({ symbol: sym, trigger, sessionId, priceHint: price });
+  if (!reused) {
+    lastStrategyAt = now;
+    lastStrategyZone = (strat as any)?.entry?.zone || null;
   }
 
   // Push WS (classic strategy preview)
-  broadcast('strategy', { ...strat, levels: lvls }, sym);
-
-  // Also request a PlanZ from the LLM and pass it to the new agent pipeline
-  try {
-    const plan = await proposePlan(sym);
-    await Agent.propose(plan);
-    await Agent.validateAndArm();
-  } catch {}
+  broadcast('strategy', { ...(strat as any), levels: lvls }, sym);
 }
 
 /**

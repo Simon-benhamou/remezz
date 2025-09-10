@@ -3,8 +3,7 @@ import { prisma } from '../db/client.js';
 import { getConfig } from '../utils/env.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { fullAnalysis } from '../ai/analysis.js';
-import { generateStrategy } from '../ai/orchestrator.js';
-import { levels as calcLevels } from '../risk/brackets.js';
+import { requestStrategy } from '../ai/strategyManager.js';
 
 type ClientState = {
   ws: WebSocket;
@@ -91,40 +90,8 @@ export function startWSHub(wss: WebSocketServer) {
         if (msg.type === 'gen_strategy') {
           const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
           const symbol = msg.symbol || s?.symbol || state.symbol || cfg.SYMBOL;
-          const strat = await generateStrategy(symbol, msg.trigger || 'manual');
-          // calc levels from mid price if needed
-          const entryPrice = strat.entry.price ?? ((strat.entry.zone?.min ?? 0) + (strat.entry.zone?.max ?? 0)) / 2;
-          let lvls: any = undefined;
-          if (entryPrice && isFinite(entryPrice)) {
-            const side = strat.bias === 'long' ? 'buy' : 'sell';
-            lvls = calcLevels(entryPrice, side as any, strat.risk.stop as any, strat.risk.target as any);
-          }
-          // persist strategy (ignore duplicate id)
-          try {
-            await prisma.strategy.create({
-              data: {
-                id: strat.strategyId,
-                sessionId: s?.id,
-                symbol: strat.symbol,
-                bias: strat.bias,
-                confidence: strat.confidence,
-                entryJson: strat.entry,
-                riskJson: strat.risk,
-                validityFrom: strat.validity?.from ? new Date(strat.validity.from) : undefined,
-                validityTo: strat.validity?.to ? new Date(strat.validity.to) : undefined,
-                rationale: strat.rationale,
-                trigger: msg.trigger || 'manual',
-              }
-            });
-          } catch (e: any) {
-            if (e?.code !== 'P2002') throw e;
-          }
-          broadcast('strategy', { ...strat, levels: lvls }, symbol);
-          // also broadcast updated analysis
-          try {
-            const a = await fullAnalysis(symbol);
-            broadcast('analysis', a, symbol);
-          } catch {}
+          const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: msg.trigger || 'manual', sessionId: s?.id });
+          broadcast('strategy', { ...(strat as any), levels: lvls }, symbol);
           return;
         }
 

@@ -41,6 +41,7 @@ export class ReboundRejectionAgent {
   broker: Broker | null = null;
   pos: ActivePosition | null = null;
   extendedOnce = false;
+  private entering = false;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -71,6 +72,12 @@ export class ReboundRejectionAgent {
 
   async validateAndArm() {
     if (!this.profile || !this.plan) throw new Error('no plan');
+    // If a position already exists, don't re-arm — keep managing
+    if (this.pos) {
+      this.state = 'MANAGE';
+      broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol);
+      return;
+    }
     const limits = defaultLimits();
     const decision = await assessRisk({
       sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10),
@@ -118,6 +125,8 @@ export class ReboundRejectionAgent {
     const { from, to, mid } = this.plan.zone;
 
     if (this.state === 'ARMED') {
+      // Safety: if a position is somehow set, switch to MANAGE
+      if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol); return; }
       const inZone = price >= Math.min(from,to) && price <= Math.max(from,to);
       // simple confirmation: bias-aligned close beyond zone mid
       const confirm = this.plan.plan.entry_rule.confirm_close && ((this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid));
@@ -129,11 +138,16 @@ export class ReboundRejectionAgent {
 
   async enter(mktPrice: number) {
     if (!this.broker || !this.plan || !this.profile) return;
+    // Prevent duplicate entries
+    if (this.pos || this.entering) return;
+    this.entering = true;
     const bal = await this.broker.balance();
     const side = this.plan.bias === 'long' ? 'buy' : 'sell';
     const entry = mktPrice;
-    const stop = this.plan.bias === 'long' ? entry - this.plan.stopDistance : entry + this.plan.stopDistance;
-    const tp = this.plan.rPrices.map(x => x.price);
+    const round4 = (n:number)=> Math.round(n*1e4)/1e4;
+    const stopRaw = this.plan.bias === 'long' ? entry - this.plan.stopDistance : entry + this.plan.stopDistance;
+    const stop = round4(stopRaw);
+    const tp = this.plan.rPrices.map(x => round4(x.price));
     const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
     const usableBalance = Math.max(0, Math.min(bal.freeUsd, bal.freeUsd * budgetFrac));
     const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: this.profile.riskPerTradePct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
@@ -143,6 +157,7 @@ export class ReboundRejectionAgent {
       // Not enough margin/free capacity — go to cooldown briefly
       this.state = 'COOLDOWN';
       broadcast('agent_state', { state: this.state, reason: 'placement_rejected' }, this.profile.symbol);
+      this.entering = false;
       return;
     }
     this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false };
@@ -151,6 +166,7 @@ export class ReboundRejectionAgent {
     this.state = 'MANAGE';
     this.tradesToday += 1;
     broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: getAICallsCount() }, this.profile.symbol);
+    this.entering = false;
   }
 
   async manage(price: number, snap: { ema20: number; atr14: number }) {

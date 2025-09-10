@@ -63,6 +63,7 @@ model Order {
   sl              Float?
   tp              Float?
   leverage        Float?
+  pctChange       Float?
   source          String   @default("agent")
   status          String?
   error           String?

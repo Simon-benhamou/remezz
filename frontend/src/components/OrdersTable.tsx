@@ -20,8 +20,8 @@ export default function OrdersTable({ rows = [] }: any) {
       render: (v: any) => <Tag color={v === "buy" ? "green" : "red"}>{v}</Tag>,
     },
     { title: "Type", dataIndex: "type" },
-    { title: "Qty", dataIndex: "qty" },
-    { title: "Price", dataIndex: "price" },
+  { title: "Qty", dataIndex: "qty", render: (v:any)=> Number(v||0).toFixed(4) },
+  { title: "Price", dataIndex: "price", render: (v:any)=> v!=null ? Number(v).toFixed(4) : '-' },
     {
       title: "Notional (USD)",
       render: (_: any, r: any) => {
@@ -34,8 +34,13 @@ export default function OrdersTable({ rows = [] }: any) {
       dataIndex: "leverage",
       render: (v: any) => (v ? `x${v}` : '-'),
     },
-    { title: "SL", dataIndex: "sl" },
-    { title: "TP", dataIndex: "tp" },
+    { title: "SL", dataIndex: "sl", render: (v:any)=> v!=null ? Number(v).toFixed(4) : '-' },
+    { title: "TP", dataIndex: "tp", render: (v:any)=> v!=null ? Number(v).toFixed(4) : '-' },
+    {
+      title: "% Change",
+      dataIndex: "pctChange",
+      render: (v:any)=> v!=null ? `${Number(v).toFixed(2)}%` : '-',
+    },
     { title: "Status", dataIndex: "status" },
   ];
   return (

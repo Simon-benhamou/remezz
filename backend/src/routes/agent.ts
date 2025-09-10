@@ -2,13 +2,14 @@ import { Router } from 'express';
 import { startSession, stopSession, activeSession } from '../session/session.js';
 import { exchange } from '../exchange/ccxtClient.js';
 import { prisma } from '../db/client.js';
-import { generateStrategy, selectBestPerp } from '../ai/orchestrator.js';
+import { selectBestPerp } from '../ai/orchestrator.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { Agent } from '../agent/state.js';
 import { PlanZ } from '../agent/planSchema.js';
 import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
+import { requestStrategy } from '../ai/strategyManager.js';
 
 export const router = Router();
 
@@ -52,29 +53,11 @@ router.post('/start', async (req,res)=>{
     budgetFraction,
   }).catch(()=>{});
 
-  // Classic strategy generation for preview (optional)
-  const strat = await generateStrategy(symbol, 'activation');
-  const entryPrice = strat.entry.price ?? ((strat.entry.zone?.min ?? 0) + (strat.entry.zone?.max ?? 0)) / 2;
-  let lvls: any = undefined;
-  if (entryPrice && isFinite(entryPrice)) {
-    const side = strat.bias === 'long' ? 'buy' : 'sell';
-    lvls = calcLevels(entryPrice, side as any, strat.risk.stop as any, strat.risk.target as any);
-  }
-  try {
-    await prisma.strategy.create({ data: {
-      id: strat.strategyId, sessionId: s.id, symbol: strat.symbol, bias: strat.bias,
-      confidence: strat.confidence, entryJson: strat.entry, riskJson: strat.risk,
-      validityFrom: strat.validity?.from ? new Date(strat.validity.from) : undefined,
-      validityTo: strat.validity?.to ? new Date(strat.validity.to) : undefined,
-      rationale: strat.rationale, trigger: 'activation'
-    }});
-  } catch (e: any) {
-    if (e?.code !== 'P2002') throw e;
-  }
-
+  // Classic strategy generation for preview (optional) via manager (throttled)
+  const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id });
   // Push session + strategy + analysis
   broadcast('session', s, s.symbol);
-  broadcast('strategy', { ...strat, levels: lvls }, s.symbol);
+  broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol);
 
   try {
     const tech = await buildTechSnapshot(s.symbol);
@@ -131,5 +114,17 @@ router.post('/propose', async (req,res) => {
 router.get('/state', async (_req,res)=>{
   let balance: any = null;
   try { balance = await (Agent as any).broker?.balance?.(); } catch {}
+  // Enhance with live unrealized PnL if we have a position
+  try {
+    if (Agent.pos && Agent.profile) {
+      const snap = await buildTechSnapshot(Agent.profile.symbol);
+      const last = snap.last;
+      const dir = Agent.pos.side === 'buy' ? 1 : -1;
+      const upnlUsd = dir * (last - Agent.pos.entry) * Agent.pos.qty;
+      const equityLive = Number(balance?.equityUsd ?? 0) + upnlUsd;
+      const upnlPct = Agent.pos.entry ? (dir * (last - Agent.pos.entry) / Agent.pos.entry) * 100 : 0;
+      balance = { ...(balance||{}), equityUsd: equityLive, upnlUsd, upnlPct };
+    }
+  } catch {}
   res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos, balance, aiMetrics: getAIMetrics() });
 });

@@ -13,5 +13,6 @@ export function levels(entryPrice: number, side: Side, stop: Ref, target: Ref) {
         ? entryPrice * (1 + target.value / 100)
         : entryPrice * (1 - target.value / 100)
       : target.value;
-  return { stopPrice: s, takeProfitPrice: t };
+  const r4 = (n:number)=> Math.round(n*1e4)/1e4;
+  return { stopPrice: r4(s), takeProfitPrice: r4(t) };
 }

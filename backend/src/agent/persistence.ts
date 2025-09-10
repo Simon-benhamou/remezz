@@ -17,6 +17,8 @@ export async function recordEnter(params: {
   const session = await getActiveSession();
   if (!session) return;
   const clientOrderId = `${session.id}.${params.symbol}.${Date.now()}`;
+  const round4 = (n:number|undefined)=> (typeof n==='number' ? Math.round(n*1e4)/1e4 : undefined);
+  const pctChange = 0; // at entry, 0% change baseline
   const order = await prisma.order.create({
     data: {
       clientOrderId,
@@ -25,10 +27,11 @@ export async function recordEnter(params: {
       side: params.side,
       type: 'market',
       qty: params.qty,
-      price: params.entryPrice,
-      sl: params.stop,
-      tp: params.tp?.[0],
+      price: round4(params.entryPrice)!,
+      sl: round4(params.stop),
+      tp: round4(params.tp?.[0]),
       leverage: params.leverage,
+      pctChange,
       status: 'filled',
       source: 'agent',
     }
@@ -36,7 +39,7 @@ export async function recordEnter(params: {
   await prisma.fill.create({
     data: {
       orderId: order.id,
-      price: params.entryPrice,
+      price: round4(params.entryPrice)!,
       qty: params.qty,
       side: params.side,
       fee: 0,
@@ -68,8 +71,12 @@ export async function recordExit(params: {
 }) {
   const session = await getActiveSession();
   if (!session) return;
+  const round4 = (n:number)=> Math.round(n*1e4)/1e4;
   // Fetch last position to carry leverage info to the exit order
   const lastPos = await prisma.position.findFirst({ where: { sessionId: session.id, symbol: params.symbol }, orderBy: { openedAt: 'desc' } });
+  const base = lastPos?.entryPrice || params.exitPrice;
+  const dir = (params.side === 'buy') ? 1 : -1; // side is the side closing? in recordExit we flip for order, but original side indicates held position
+  const pctChange = base ? (dir * (params.exitPrice - (lastPos?.entryPrice || params.exitPrice)) / (lastPos?.entryPrice || params.exitPrice)) * 100 : 0;
   // Create a closing fill for journaling
   const clientOrderId = `${session.id}.${params.symbol}.${Date.now()}.exit`;
   const order = await prisma.order.create({
@@ -80,8 +87,9 @@ export async function recordExit(params: {
       side: params.side === 'buy' ? 'sell' : 'buy',
       type: 'market',
       qty: params.qty,
-      price: params.exitPrice,
+      price: round4(params.exitPrice),
       leverage: lastPos?.leverage,
+      pctChange,
       status: 'filled',
       source: 'agent',
     }
@@ -89,7 +97,7 @@ export async function recordExit(params: {
   await prisma.fill.create({
     data: {
       orderId: order.id,
-      price: params.exitPrice,
+      price: round4(params.exitPrice),
       qty: params.qty,
       side: order.side,
       realizedPnl: params.realizedPnl,
