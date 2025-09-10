@@ -15,26 +15,49 @@ import { router as analysisRouter } from "./routes/analysis.js";
 import { router as simRouter } from "./routes/sim.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
-const allowedOrigins = [
-  "https://tai-cli.up.railway.app",
-  "https://trading-agent-ia-v3-fronend-production.up.railway.app",
-  "http://localhost:5173"
-];
 const cfg = getConfig();
+// Build allowed origins from env (comma-separated) plus safe defaults
+const allowedFromEnv = (cfg.CORS_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set<string>([
+  ...allowedFromEnv,
+  "http://localhost:5173",
+  // Known deployment frontends (fixing earlier typo 'fronend')
+  "https://tai-cli.up.railway.app",
+  // Keep both to be safe if the deployed URL contains a typo
+  "https://trading-agent-ia-v3-frontend-production.up.railway.app",
+  "https://trading-agent-ia-v3-fronend-production.up.railway.app",
+]);
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: cfg.CORS_ORIGIN }));
-app.use(cors({
+// CORS: allow only known origins and those provided via env; include x-api-key header
+const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    return allowedOrigins.includes(origin)
-      ? cb(null, true)
-      : cb(new Error("Not allowed by CORS: " + origin));
+    if (!origin) return cb(null, true); // allow server-to-server/no-origin
+    try {
+      const u = new URL(origin);
+      const normalized = `${u.protocol}//${u.host}`;
+      if (allowedOrigins.has(normalized)) return cb(null, true);
+    } catch {
+      // fall through
+    }
+    return cb(new Error("Not allowed by CORS: " + origin));
   },
-  credentials: true, // indispensable si cookies; OK aussi avec Bearer
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"]
-}));
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-api-key",
+    "X-API-Key",
+    "Accept",
+  ],
+};
+app.use(cors(corsOptions));
+// Ensure preflight requests are handled
+app.options("*", cors(corsOptions));
 
 // Public routes (no API key required)
 app.use("/api/auth", authRouter);
