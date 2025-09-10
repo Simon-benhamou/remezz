@@ -4,6 +4,6 @@ export default defineConfig({
   plugins: [react()],
   server: { host: true},
    preview: {
-    allowedHosts: ['*']
-    }
+     allowedHosts: ['tai-cli.up.railway.app']
+   }
 });
