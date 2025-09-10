@@ -4,14 +4,13 @@ WORKDIR /app
 # Install dependencies
 COPY package*.json ./
 RUN npm ci
-
+# IMPORTANT: déclarer l'ARG pour l'injecter au build
+ARG VITE_API_BASE
+ENV VITE_API_BASE=${VITE_API_BASE}
 # Copy source and build
 COPY . .
 RUN npm run build
 
-# IMPORTANT: déclarer l'ARG pour l'injecter au build
-ARG VITE_API_BASE
-ENV VITE_API_BASE=${VITE_API_BASE}
 
 # Serve the built app
 

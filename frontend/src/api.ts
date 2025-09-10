@@ -19,15 +19,17 @@ export function clearApiKey(){
 export const client = axios.create({ baseURL: API_BASE });
 // Initialize default x-api-key from env if present
 if (import.meta.env.VITE_APP_API_KEY) {
-  const h = client.defaults.headers as unknown as AxiosHeaders;
-  h.set('x-api-key', import.meta.env.VITE_APP_API_KEY);
+  const h = client.defaults.headers;
+  if (h) {
+    (h as any)['x-api-key'] = import.meta.env.VITE_APP_API_KEY;
+  }
 }
 client.interceptors.request.use((cfg)=>{
   const k = getApiKey();
   if (k) {
     if (cfg.headers) {
       if (cfg.headers instanceof AxiosHeaders) {
-        cfg.headers.set('x-api-key', k);
+        cfg.headers?.set('x-api-key', k);
       } else {
         // Fallback for plain object headers
         (cfg.headers as any)['x-api-key'] = k;

@@ -14,7 +14,7 @@ export default function LoginPage(){
     setLoading(true);
     try {
       // backend accepts either { username,password } or { code }; we use code-only here
-      const out = (await api.client.post('/api/auth/login', { username:"simon", code })).data;
+      const out = (await api.client.post('/api/auth/login', {  code })).data;
       if (out?.token) setApiKey(out.token);
       message.success('Logged in');
       nav('/start', { replace: true });
