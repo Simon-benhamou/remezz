@@ -26,5 +26,8 @@ export interface Broker {
   balance(): Promise<{ freeUsd: number; equityUsd: number; committedUsd: number }>;
   place(o: NewOrder): Promise<PlacedOrder>;
   cancel(id: string): Promise<void>;
+  // optional: paper-specific reserve release
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  releaseCommitted?(usd: number): void;
 }
-

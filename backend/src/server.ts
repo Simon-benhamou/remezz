@@ -5,6 +5,7 @@ import cors from "cors";
 import { WebSocketServer } from "ws";
 import { getConfig } from "./utils/env.js";
 import { authMiddleware } from "./utils/security.js";
+import { router as authRouter } from "./routes/auth.js";
 import { router as statusRouter } from "./routes/status.js";
 import { router as strategyRouter } from "./routes/strategy.js";
 import { router as agentRouter } from "./routes/agent.js";
@@ -19,6 +20,11 @@ const cfg = getConfig();
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: cfg.CORS_ORIGIN }));
+
+// Public routes (no API key required)
+app.use("/api/auth", authRouter);
+
+// Protected routes (API key required)
 app.use(authMiddleware);
 
 app.get("/api/health", (_req, res) =>

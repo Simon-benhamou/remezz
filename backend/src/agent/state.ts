@@ -1,12 +1,13 @@
 import { PlanJson } from './planSchema.js';
 import { validatePlan, ValidatedPlan } from './validator.js';
 import { PaperBroker } from '../broker/paper.js';
-import { LiveBroker } from '../broker/live.js';
+import { LiveBroker, inspectExposure } from '../broker/live.js';
 import { Broker } from '../broker/types.js';
 import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
-import { recordEnter, recordExit } from './persistence.js';
+import { recordEnter, recordExit, getActiveSession } from './persistence.js';
+import { recomputeKpi } from '../metrics/kpi.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
 
 export type AgentMode = 'paper'|'live';
@@ -20,6 +21,7 @@ export type ActivationProfile = {
   dailyLossLimitPct: number; // 3..4
   timestamp: string; // ISO, acts as a signed "freeze"
   startBalanceUsd?: number;
+  budgetFraction?: number; // 0..1 fraction of free balance usable by the agent
 };
 
 export type ActivePosition = {
@@ -85,7 +87,26 @@ export class ReboundRejectionAgent {
       return;
     }
     this.state = 'ARMED';
+    const metrics = getAICallsCount() as any; // keep existing field
     broadcast('agent_state', { state: this.state, plan: this.plan, aiCalls: getAICallsCount() }, this.profile.symbol);
+
+    // Live exposure inspection: if in live mode and a position already exists, adopt it and switch to MANAGE
+    if (this.profile.mode === 'live' && !this.pos) {
+      try {
+        const expo = await inspectExposure(this.profile.symbol);
+        if (expo && expo.qty > 0) {
+          const side = expo.side;
+          const entry = expo.entry || (await buildTechSnapshot(this.profile.symbol)).last;
+          const stop = side === 'buy' ? (entry - this.plan.stopDistance) : (entry + this.plan.stopDistance);
+          // Rebase TP ladder from entry using R multiples
+          const dir = side === 'buy' ? 1 : -1;
+          const tp = (this.plan.rPrices || []).map(x => entry + dir * x.r * this.plan!.stopDistance);
+          this.pos = { side, entry, qty: expo.qty, stop, tp, openedAt: Date.now(), extended: false };
+          this.state = 'MANAGE';
+          broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol);
+        }
+      } catch {}
+    }
   }
 
   // On new candles/ticks, check trigger and possibly enter
@@ -113,9 +134,17 @@ export class ReboundRejectionAgent {
     const entry = mktPrice;
     const stop = this.plan.bias === 'long' ? entry - this.plan.stopDistance : entry + this.plan.stopDistance;
     const tp = this.plan.rPrices.map(x => x.price);
-    const notional = computeQtyNotional({ balanceUsd: bal.equityUsd, riskPct: this.profile.riskPerTradePct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
+    const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
+    const usableBalance = Math.max(0, Math.min(bal.freeUsd, bal.freeUsd * budgetFrac));
+    const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: this.profile.riskPerTradePct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
     const qty = notional / entry;
-    const placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, takeProfit: tp[0], stopLoss: stop });
+    const placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: this.profile.maxLeverage, takeProfit: tp[0], stopLoss: stop });
+    if (placed.status === 'rejected') {
+      // Not enough margin/free capacity — go to cooldown briefly
+      this.state = 'COOLDOWN';
+      broadcast('agent_state', { state: this.state, reason: 'placement_rejected' }, this.profile.symbol);
+      return;
+    }
     this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false };
     // Persist order/fill/position
     await recordEnter({ symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
@@ -175,6 +204,10 @@ export class ReboundRejectionAgent {
     this.realizedPnlTodayPct += pnlPct;
     this.consecutiveStops = reason === 'sl' ? (this.consecutiveStops + 1) : 0;
     await recordExit({ symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: this.pos.qty, realizedPnl: pnl }).catch(()=>{});
+    // Update session KPIs (ROI%, realized/unrealized)
+    try { const s = await getActiveSession(); if (s?.id) await recomputeKpi(s.id); } catch {}
+    // Release reserved notional capacity in paper broker
+    try { (this.broker as any).releaseCommitted?.(Math.abs(price * this.pos.qty)); } catch {}
     this.state = 'EXIT';
     broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct, ts: Date.now() }, aiCalls: getAICallsCount() }, this.profile.symbol);
     this.pos = null;

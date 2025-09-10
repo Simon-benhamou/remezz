@@ -44,7 +44,8 @@ export async function selectBestPerp(
         lastPrice: u.last
       })),
     });
-    const out = await llmJSON(prompt);
+    const day = new Date().toISOString().slice(0,10);
+    const out = await llmJSON(prompt, { cacheKey: `rank:${day}:${JSON.stringify((usable||[]).map((u:any)=>u.symbol).sort())}`, ttlMin: 60 });
     const j = safeParseJSON<{ items: { symbol:string; score:number; reasons:string[] }[] }>(out);
     items = (j.items || []).filter(x => perps.includes(x.symbol));
   } catch {
@@ -80,7 +81,7 @@ export async function generateStrategy(symbol: string, trigger: string): Promise
         last: feats.last, support: feats.support, resistance: feats.resistance, trend: feats.trend,
         pivots: feats.pivots, srBias: feats.srBias
       }
-    }));
+    }), { cacheKey: `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`, ttlMin: 90 });
     // 2.2 Parse & validate
     const draft = safeParseJSON<StrategyJson>(raw);
     // patch fields minimum

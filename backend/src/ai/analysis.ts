@@ -36,7 +36,7 @@ export async function fullAnalysis(symbol: string) {
   try {
     const s = await llmJSON(
       `You are a crypto market sentiment analyzer. Given the context, estimate sentiment for ${symbol} now (bullish/bearish/neutral) and give a 0..1 score + 3 bullets. Return JSON: {"label":"bullish|bearish|neutral","score":0.0-1.0,"bullets":["...","...","..."]}\nContext: ${JSON.stringify(base)}`
-      .trim()
+      .trim(), { cacheKey: `sentiment:${symbol}`, ttlMin: Number(process.env.ANALYSIS_TTL_MIN || 360) }
     );
     sentiment = JSON.parse(s);
   } catch {}
@@ -44,7 +44,7 @@ export async function fullAnalysis(symbol: string) {
   try {
     const n = await llmJSON(
       `You are a crypto news summarizer. Summarize top potential narratives affecting ${symbol} in the last 24-48h (macro, ETF, exchange events, dev updates). If unknown, state uncertainty. Return JSON: {"summary":"...","bullets":["...","...","..."]}`
-      .trim()
+      .trim(), { cacheKey: `news:${symbol}`, ttlMin: Number(process.env.ANALYSIS_TTL_MIN || 360) }
     );
     news = JSON.parse(n);
   } catch {}

@@ -15,10 +15,17 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
   const [riskPct, setRiskPct] = React.useState<number>(1.5);
   const [maxLev, setMaxLev] = React.useState<number>(4);
   const [dailyLoss, setDailyLoss] = React.useState<number>(3.5);
+  const [budgetPct, setBudgetPct] = React.useState<number>(100);
+  const [loading, setLoading] = React.useState(false);
   const start = async () => {
-    await api.client.post('/api/agent/start', { symbol, mode, startBalanceUsd: mode==='paper'? startBal: undefined, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss });
-    message.success('Agent activated');
-    onStarted?.();
+    setLoading(true);
+    try {
+      await api.client.post('/api/agent/start', { symbol, mode, startBalanceUsd: mode==='paper'? startBal: undefined, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss, budgetPct });
+      message.success('Agent activated');
+      onStarted?.();
+    } catch (e:any) {
+      message.error(String(e?.message || e));
+    } finally { setLoading(false); }
   };
   return (
     <Card title="Activate Agent" style={{ maxWidth: 800, margin: '0 auto' }}>
@@ -54,9 +61,13 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
             <div style={{ fontSize:12, color:'#888' }}>Daily loss %</div>
             <InputNumber min={3} max={4} step={0.1} value={dailyLoss} onChange={setDailyLoss as any} />
           </div>
+          <div>
+            <div style={{ fontSize:12, color:'#888' }}>Agent budget (% of free)</div>
+            <InputNumber min={10} max={100} step={5} value={budgetPct} onChange={setBudgetPct as any} />
+          </div>
         </Space>
         <Space>
-          <Button type='primary' onClick={start}>Activate</Button>
+          <Button type='primary' onClick={start} loading={loading} disabled={loading}>Activate</Button>
           <Link to='/test'>Go to Testing</Link>
         </Space>
       </Space>

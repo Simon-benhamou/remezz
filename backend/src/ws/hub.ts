@@ -40,11 +40,13 @@ export function startWSHub(wss: WebSocketServer) {
           const ok = !cfg.REQUIRE_API_KEY || msg.apiKey === cfg.APP_API_KEY;
           state.authed = ok;
           send(ws, { type: ok ? 'hello_ok' : 'hello_ko' });
+          if (!ok) { try { ws.close(); } catch {} }
           return;
         }
 
         if (!state.authed) {
-          send(ws, { type: 'error', data: 'unauthorized' });
+          try { send(ws, { type: 'error', data: 'unauthorized' }); } catch {}
+          try { ws.close(); } catch {}
           return;
         }
 

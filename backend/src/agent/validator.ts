@@ -2,6 +2,7 @@ import { PlanJson } from './planSchema.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { sizeUsd } from '../risk/sizing.js';
 import { getTicker } from '../data/market.js';
+import { getConfig } from '../utils/env.js';
 
 export type ValidatedPlan = {
   plan: PlanJson;
@@ -41,14 +42,26 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   const to   = plan.zone.type === 'support' ? ref + half : ref + half;
   const mid  = (from + to) / 2;
 
-  // ATR from snapshot (14 on 15m window), fallback if needed
-  const atrAbs = snap.atr14;
+  // ATR: prefer 1h ATR when plan timeframe is 1h, else 15m
+  const atrAbs = (tf === '1h' && (snap as any).atr14_1h) ? (snap as any).atr14_1h as number : snap.atr14;
   const atrPct = snap.atrPct;
-  const stopDistance = plan.risk.stop.mult * atrAbs;
+  // Enforce a minimum stop distance in % of price to avoid micro moves
+  const cfg = getConfig();
+  const minStopAbs = mid * (Math.max(0, cfg.MIN_STOP_PCT) / 100);
+  const rawStop = plan.risk.stop.mult * atrAbs;
+  const stopDistance = Math.max(rawStop, minStopAbs);
 
   // R ladder prices
   const side = plan.bias === 'long' ? 1 : -1;
-  const rPrices = plan.risk.tp.map(tp => ({ r: tp.value, price: mid + side * tp.value * stopDistance }));
+  const firstR = plan.risk.tp?.[0]?.value ?? 1.0;
+  const minTpAbs = mid * (Math.max(0, cfg.MIN_TP_PCT) / 100);
+  const minRFromPct = stopDistance > 0 ? (minTpAbs / stopDistance) : firstR;
+  const minFirstR = Math.max(cfg.MIN_FIRST_R, minRFromPct);
+  const shift = Math.max(0, minFirstR - firstR);
+  const rPrices = plan.risk.tp.map(tp => {
+    const rEff = tp.value + shift;
+    return { r: rEff, price: mid + side * rEff * stopDistance };
+  });
 
   // Sizing (riskFraction 1–2% of balance): use session balance on UI; here we only prepare rules
   // We approximate balance from DB later; here just return notional normalized by risk
@@ -80,4 +93,3 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
     guards: { spreadOk, leverageOk, volumeOk: null },
   };
 }
-

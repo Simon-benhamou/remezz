@@ -49,3 +49,37 @@ export class LiveBroker implements Broker {
   }
 }
 
+// Inspect current live exposure for a symbol.
+// Returns null if no position or exchange doesn't support positions for current market type.
+export async function inspectExposure(symbol: string): Promise<{ side: 'buy'|'sell'; qty: number; entry?: number } | null> {
+  const ex = await exchange();
+  const s = await resolveSymbol(symbol);
+  try {
+    // Try unified positions API (perps/swaps)
+    if (typeof (ex as any).fetchPositions === 'function') {
+      const positions = await (ex as any).fetchPositions([s]).catch(()=>[]);
+      const p = Array.isArray(positions) ? positions.find((x:any)=> (x?.symbol === s) && Math.abs(Number(x?.contracts || x?.size || x?.positionAmt || 0)) > 0) : null;
+      if (p) {
+        const rawSize = Number(p.contracts || p.size || p.positionAmt || 0);
+        const qty = Math.abs(rawSize);
+        if (qty > 0) {
+          const side: 'buy'|'sell' = rawSize > 0 ? 'buy' : 'sell';
+          const entry = Number(p.entryPrice || p.avgEntryPrice || p.average || p.markPrice || 0) || undefined;
+          return { side, qty, entry };
+        }
+      }
+    }
+  } catch {}
+
+  // Fallback (spot): infer from balances if holding base asset
+  try {
+    if (ex.markets && ex.markets[s]) {
+      const base = ex.markets[s].base;
+      const b = await ex.fetchBalance();
+      const held = Number((b?.total?.[base] ?? b?.free?.[base] ?? 0));
+      if (held > 0) return { side: 'buy', qty: held };
+    }
+  } catch {}
+
+  return null;
+}

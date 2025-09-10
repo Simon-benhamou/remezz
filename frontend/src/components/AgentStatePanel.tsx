@@ -11,6 +11,7 @@ type Props = {
 
 export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan }: Props){
   const [llmPlan, setLlmPlan] = React.useState<any>(null);
+  const balance = agent?.balance;
 
   const propose = async () => {
     const p = await api.proposePlan(symbol);
@@ -38,6 +39,8 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan }: Pr
   const confirmNow = !!(agent?.plan?.bias === 'long' ? (lastPrice! > (z?.mid ?? Infinity)) : (lastPrice! < (z?.mid ?? -Infinity)));
   const spreadOk = agent?.plan?.guards?.spreadOk ?? true;
   const levOk = agent?.plan?.guards?.leverageOk ?? true;
+  const ai = agent?.aiMetrics || {};
+  const aiByModel = ai?.byModel || {};
 
   return (
     <Card title={<span>Agent State {agent?.state && <Tag color={agent.state==='MANAGE'?'green':agent.state==='ARMED'?'blue':agent.state==='HALT'?'red':'default'}>{agent.state}</Tag>}</span>}>
@@ -48,6 +51,13 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan }: Pr
           <Descriptions.Item label='Risk/Trade %'>{agent?.profile?.riskPerTradePct}</Descriptions.Item>
           <Descriptions.Item label='Max Lev'>{agent?.profile?.maxLeverage}</Descriptions.Item>
           <Descriptions.Item label='Daily Loss %'>{agent?.profile?.dailyLossLimitPct}</Descriptions.Item>
+          {balance && (
+            <>
+              <Descriptions.Item label='Equity (USD)'>{Number(balance?.equityUsd||0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label='Free (USD)'>{Number(balance?.freeUsd||0).toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label='Committed (USD)'>{Number(balance?.committedUsd||0).toFixed(2)}</Descriptions.Item>
+            </>
+          )}
         </Descriptions>
 
         <Space>
@@ -69,6 +79,14 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan }: Pr
             <div>{check(spreadOk)} Spread OK</div>
             <div>{check(levOk)} Leverage OK (≤ configured max)</div>
             <div>Status: <Tag color={agent?.state==='ARMED'?'blue': agent?.state==='MANAGE'?'green': agent?.state==='HALT'?'red':'default'}>{agent?.state || 'IDLE'}</Tag></div>
+            <div style={{ fontSize:12, color:'#666' }}>
+              LLM usage — total: <b>{ai?.total ?? 0}</b>, calls/h: <b>{(ai?.callsPerHour ?? 0).toFixed?.(2)}</b>, cost: <b>${(ai?.costUsd ?? 0).toFixed?.(4)}</b>
+              {Object.keys(aiByModel).length>0 && (
+                <>
+                  <br />by model: {Object.entries(aiByModel).map(([m,c]:any)=> (<span key={m} style={{ marginRight:8 }}><Tag>{m}</Tag>×{c}</span>))}
+                </>
+              )}
+            </div>
           </Space>
         </Card>
 

@@ -40,6 +40,7 @@ export async function recordEnter(params: {
       qty: params.qty,
       side: params.side,
       fee: 0,
+      sessionId: session.id,
     }
   });
   await prisma.position.create({
@@ -67,6 +68,8 @@ export async function recordExit(params: {
 }) {
   const session = await getActiveSession();
   if (!session) return;
+  // Fetch last position to carry leverage info to the exit order
+  const lastPos = await prisma.position.findFirst({ where: { sessionId: session.id, symbol: params.symbol }, orderBy: { openedAt: 'desc' } });
   // Create a closing fill for journaling
   const clientOrderId = `${session.id}.${params.symbol}.${Date.now()}.exit`;
   const order = await prisma.order.create({
@@ -78,6 +81,7 @@ export async function recordExit(params: {
       type: 'market',
       qty: params.qty,
       price: params.exitPrice,
+      leverage: lastPos?.leverage,
       status: 'filled',
       source: 'agent',
     }
@@ -89,13 +93,12 @@ export async function recordExit(params: {
       qty: params.qty,
       side: order.side,
       realizedPnl: params.realizedPnl,
+      sessionId: session.id,
     }
   });
   // Mark position as closed (qty to 0)
-  const pos = await prisma.position.findFirst({ where: { sessionId: session.id, symbol: params.symbol }, orderBy: { openedAt: 'desc' } });
-  if (pos) await prisma.position.update({ where: { id: pos.id }, data: { qty: 0, updatedAt: new Date() } });
+  if (lastPos) await prisma.position.update({ where: { id: lastPos.id }, data: { qty: 0, updatedAt: new Date() } });
 
   const rows = await prisma.order.findMany({ orderBy: { createdAt: 'desc' }, take: 200 });
   broadcast('orders', rows, params.symbol);
 }
-

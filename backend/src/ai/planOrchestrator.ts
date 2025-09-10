@@ -29,7 +29,8 @@ export async function proposePlan(symbol: string): Promise<PlanJson> {
     news: news?.summary ? news.summary.slice(0, 280) : undefined,
   };
   try {
-    const out = await llmJSON(`${sys}\nContext: ${JSON.stringify(user)}`);
+    const day = new Date().toISOString().slice(0,10);
+    const out = await llmJSON(`${sys}\nContext: ${JSON.stringify(user)}`, { cacheKey: `plan:${day}:${symbol}`, ttlMin: 120 });
     const j = safeParse(out);
     const plan = PlanZ.parse(j);
     return plan;

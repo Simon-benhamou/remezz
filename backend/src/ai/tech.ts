@@ -9,6 +9,7 @@ export type TechnicalSnapshot = {
   ema50: number;
   rsi14: number;
   atr14: number;
+  atr14_1h?: number;
   atrPct: number;
   adx14: number;
   ema20Slope: number;
@@ -173,8 +174,10 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     ...swings.resistances.slice(0, 5).map(s => ({ price: s.price, label: 'swing', touches: s.touches, strength: s.strength })),
   ].sort((a, b) => Math.abs(lastPrice - a.price) - Math.abs(lastPrice - b.price));
 
-  // Daily pivots from 1h (fallback to 15m if needed)
+  // Daily pivots from 1h (fallback to 15m if needed) and 1h ATR for sturdier risk sizing
   const o1h = await getOHLCV(symbol, '1h', 600); // ~25 jours
+  const atr1hArr = atr(o1h || o15, 14);
+  const atr1h = atr1hArr[atr1hArr.length - 1] ?? undefined;
   const pivots = dailyPivotsFromOHLCV(o1h || o15);
 
   // Select primary support/resistance (closest to last price)
@@ -196,6 +199,7 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     ema50: ema50v,
     rsi14: rsi14v,
     atr14: atr14v,
+    atr14_1h: atr1h,
     atrPct,
     adx14: adx14v,
     ema20Slope,

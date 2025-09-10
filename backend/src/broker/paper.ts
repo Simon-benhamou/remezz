@@ -29,7 +29,16 @@ export class PaperBroker implements Broker {
     const notional = px * o.qty;
     const fee = (this.feesBps / 10000) * notional;
 
-    this.committedUsd += notional; // reserve as if real
+    // Margin capacity check: allow at most balanceUsd * leverage minus already committed
+    const lev = Math.max(1, Math.min(10, o.leverage || 1));
+    const maxNotional = this.balanceUsd * lev;
+    const freeCapacity = Math.max(0, maxNotional - this.committedUsd);
+    if (notional > freeCapacity) {
+      const id = `paper_rejected_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+      return { ...o, id, status: 'rejected', ts: Date.now() } as PlacedOrder;
+    }
+
+    this.committedUsd += notional; // reserve margin capacity
 
     const id = `paper_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
     const out: PlacedOrder = {
@@ -46,5 +55,10 @@ export class PaperBroker implements Broker {
   }
 
   async cancel(_id: string) { /* no-op for filled instantly */ }
-}
 
+  // Release reserved notional on position close (approximate)
+  releaseCommitted(usd: number) {
+    if (!Number.isFinite(usd)) return;
+    this.committedUsd = Math.max(0, this.committedUsd - Math.max(0, usd));
+  }
+}

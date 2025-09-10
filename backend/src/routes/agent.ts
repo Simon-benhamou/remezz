@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { startSession, stopSession, activeSession } from '../session/session.js';
+import { exchange } from '../exchange/ccxtClient.js';
 import { prisma } from '../db/client.js';
 import { generateStrategy, selectBestPerp } from '../ai/orchestrator.js';
 import { broadcast } from '../ws/hub.js';
@@ -7,7 +8,7 @@ import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { Agent } from '../agent/state.js';
 import { PlanZ } from '../agent/planSchema.js';
-import { getAICallsCount, setActiveSession } from '../metrics/aiCalls.js';
+import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
 
 export const router = Router();
 
@@ -15,7 +16,7 @@ router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
 router.post('/start', async (req,res)=>{
   const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
-  const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number };
+  const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number };
   let symbol = body.symbol as string;
 
   // Optional: ranking only if no symbol provided and RANK_ON_START=true
@@ -25,9 +26,21 @@ router.post('/start', async (req,res)=>{
     symbol = ranked[0]?.symbol || 'BTC/USDT';
   }
   
-  const s = await startSession(symbol, mode, startBalanceUsd);
+  let startBal = startBalanceUsd;
+  if (mode === 'live' && (!startBal || startBal <= 0)) {
+    try {
+      const ex = await exchange();
+      const b = await ex.fetchBalance();
+      const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
+      startBal = totalUsd > 0 ? totalUsd : undefined;
+    } catch {}
+  }
+  const s = await startSession(symbol, mode, startBal);
   setActiveSession(s.id);
   // Activate the new agent state machine (profile freeze)
+  let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
+  if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
+  budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
   await Agent.activate({
     symbol,
     mode,
@@ -36,6 +49,7 @@ router.post('/start', async (req,res)=>{
     dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
     timestamp: new Date().toISOString(),
     startBalanceUsd: startBalanceUsd,
+    budgetFraction,
   }).catch(()=>{});
 
   // Classic strategy generation for preview (optional)
@@ -115,5 +129,7 @@ router.post('/propose', async (req,res) => {
 });
 
 router.get('/state', async (_req,res)=>{
-  res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos });
+  let balance: any = null;
+  try { balance = await (Agent as any).broker?.balance?.(); } catch {}
+  res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos, balance, aiMetrics: getAIMetrics() });
 });

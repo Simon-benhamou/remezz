@@ -1,13 +1,26 @@
 import axios from "axios";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
-const API_KEY = import.meta.env.VITE_APP_API_KEY || "";
 
-export const client = axios.create({
-  baseURL: API_BASE,
-  headers: { "x-api-key": API_KEY },
+let TOKEN: string = localStorage.getItem('apiKey') || '';
+export function setApiKey(tok: string){ TOKEN = tok || ''; localStorage.setItem('apiKey', TOKEN); client.defaults.headers.common['x-api-key'] = TOKEN; }
+export function getApiKey(){ return TOKEN || localStorage.getItem('apiKey') || ''; }
+export function clearApiKey(){ TOKEN=''; localStorage.removeItem('apiKey'); delete client.defaults.headers.common['x-api-key']; }
+
+export const client = axios.create({ baseURL: API_BASE });
+client.interceptors.request.use((cfg)=>{
+  const k = getApiKey();
+  if (k) cfg.headers = { ...(cfg.headers||{}), 'x-api-key': k };
+  return cfg;
 });
 export const api = {
   client,
+  auth: {
+    login: async (username: string, password: string) => {
+      const out = (await client.post('/api/auth/login', { username, password })).data;
+      if (out?.token) setApiKey(out.token);
+      return out;
+    }
+  },
   status: async () => (await client.get("/api/status")).data,
   strategyToday: async (symbol: string) =>
     (await client.get("/api/strategy/today", { params: { symbol } })).data,
