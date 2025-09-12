@@ -18,7 +18,7 @@ export default function MonitorPage(){
   const { sessionId } = useParams();
   const navigate = useNavigate();
 
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(true);
   const [wsConnected, setWsConnected] = React.useState(false);
   const wsRef = React.useRef<WebSocket|null>(null);
 
