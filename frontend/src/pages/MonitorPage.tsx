@@ -97,7 +97,8 @@ export default function MonitorPage(){
 
   if (!sessionId) return <Navigate to='/sessions' replace />;
   const hasSession = !!status?.session?.id;
-  if (!hasSession) return <Navigate to='/sessions' replace />;
+  // Do not redirect while loading bootstrap; only redirect if definitively no session
+  if (!loading && !hasSession) return <Navigate to='/sessions' replace />;
 
   return (
     <>

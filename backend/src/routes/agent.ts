@@ -170,6 +170,31 @@ router.get('/overview', async (_req,res)=>{
   const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : (
     actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.roiPct || 0), 0) / actives.length) : 0
   );
+  // Global exchange balance (live account)
+  let exchangeBalance: any = null;
+  try {
+    const ex = await exchange();
+    const b = await ex.fetchBalance();
+    const totalUsd = Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0);
+    const freeUsd = Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0);
+    const usedUsd = totalUsd - freeUsd;
+    exchangeBalance = { totalUsd, freeUsd, usedUsd };
+  } catch {}
+
+  // Aggregate paper balances across active paper agents only (avoid double-counting live)
+  let paperBalance = { equityUsd: 0, freeUsd: 0, committedUsd: 0 };
+  try {
+    for (const s of actives) {
+      if (s.mode !== 'paper') continue;
+      const a = AgentHub.get(s.id) as any;
+      const bal = await a?.broker?.balance?.();
+      if (bal) {
+        paperBalance.equityUsd += Number(bal.equityUsd || 0);
+        paperBalance.freeUsd += Number(bal.freeUsd || 0);
+        paperBalance.committedUsd += Number(bal.committedUsd || 0);
+      }
+    }
+  } catch {}
   const bySession = actives.map(a => ({
     id: a.id,
     symbol: a.symbol,
@@ -186,6 +211,8 @@ router.get('/overview', async (_req,res)=>{
     capitalStartUsd,
     roiPct,
     aiCallsTotal,
+    exchangeBalance,
+    paperBalance,
     sessions: bySession,
   });
 });

@@ -7,14 +7,12 @@ import LoginPage from './pages/LoginPage';
 import MonitorPage from './pages/MonitorPage';
 import SessionsPage from './pages/SessionsPage';
 import TestingPage from './pages/TestingPage';
-import { openWS, wsSend } from './ws';
 
   const { Header, Content, Footer } = Layout; const { Title } = Typography;
 
 function AppInner(){
   const [overview, setOverview] = React.useState<any>(null);
   const navigate = useNavigate();
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
   const location = useLocation();
 
   // Note: global WS removed; MonitorPage owns its own session-scoped WS now.
@@ -71,6 +69,20 @@ function AppInner(){
             <Tag color={(Number(overview?.pnlUsd||0) >= 0) ? 'green' : 'red'}>${Number(overview?.pnlUsd||0).toFixed(2)}</Tag>
             <span style={{ color:'#ccc' }}>AI:</span>
             <Tag>{Number(overview?.aiCallsTotal||0)}</Tag>
+            {overview?.exchangeBalance && (
+              <>
+                <span style={{ color:'#ccc' }}>Exchange</span>
+                <Tag color='cyan'>Free ${Number(overview.exchangeBalance.freeUsd||0).toFixed(2)}</Tag>
+                <Tag color='geekblue'>Equity ${Number(overview.exchangeBalance.totalUsd||0).toFixed(2)}</Tag>
+              </>
+            )}
+            {(overview?.paperBalance && (Number(overview.paperBalance.equityUsd||0) > 0)) && (
+              <>
+                <span style={{ color:'#ccc' }}>Paper</span>
+                <Tag color='cyan'>Free ${Number(overview.paperBalance.freeUsd||0).toFixed(2)}</Tag>
+                <Tag color='purple'>Equity ${Number(overview.paperBalance.equityUsd||0).toFixed(2)}</Tag>
+              </>
+            )}
             <a onClick={()=> { clearApiKey(); navigate('/login'); }} style={{ color:'#ddd', textDecoration:'underline' }}>Logout</a>
           </Space>
         </Header>
