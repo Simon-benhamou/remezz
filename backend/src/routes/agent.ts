@@ -11,6 +11,7 @@ import { AgentHub } from '../agent/hub.js';
 import { PlanZ } from '../agent/planSchema.js';
 import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
+import { proposePlan } from '../ai/planOrchestrator.js';
 
 export const router = Router();
 
@@ -59,6 +60,16 @@ router.post('/start', async (req,res)=>{
     startBalanceUsd: startBalanceUsd,
     budgetFraction,
   } as any).catch(()=>{});
+
+  // Auto-propose and arm an agent plan on activation (fully automated flow)
+  try {
+    const plan = await proposePlan(symbol);
+    const a = AgentHub.get(s.id);
+    if (a) {
+      await a.propose(plan as any);
+      await a.validateAndArm();
+    }
+  } catch {}
 
   // Classic strategy generation for preview (optional) via manager (throttled)
   const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id });
