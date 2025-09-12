@@ -160,6 +160,36 @@ router.get('/sessions', async (_req,res)=>{
   res.json(out);
 });
 
+// Aggregated view across active sessions for multi-agent header
+router.get('/overview', async (_req,res)=>{
+  const actives = await prisma.agentSession.findMany({ where: { stoppedAt: null }, include: { kpi: true } });
+  const symbols = actives.map(a => a.symbol);
+  const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.kpi?.aiCallsTotal || 0), 0);
+  const pnlUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
+  const capitalStartUsd = actives.reduce((sum, a)=> sum + Number(a.startBalanceUsd || 0), 0);
+  const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : (
+    actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.roiPct || 0), 0) / actives.length) : 0
+  );
+  const bySession = actives.map(a => ({
+    id: a.id,
+    symbol: a.symbol,
+    mode: a.mode,
+    startedAt: a.startedAt,
+    pnlUsd: Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0),
+    roiPct: Number(a.kpi?.roiPct || 0),
+    aiCalls: Number(a.kpi?.aiCallsTotal || 0),
+  }));
+  res.json({
+    activeCount: actives.length,
+    symbols,
+    pnlUsd,
+    capitalStartUsd,
+    roiPct,
+    aiCallsTotal,
+    sessions: bySession,
+  });
+});
+
 // Overview: active agents count, average ROI, sessions count
 router.get('/overview', async (_req,res)=>{
   const sessions = await prisma.agentSession.findMany({ include: { kpi: true } });
