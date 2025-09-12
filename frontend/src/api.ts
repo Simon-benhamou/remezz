@@ -48,7 +48,7 @@ export const api = {
       return out;
     }
   },
-  status: async () => (await client.get("/api/status")).data,
+  status: async (sessionId?: string) => (await client.get("/api/status", { params: { sessionId } })).data,
   strategyToday: async (symbol: string) =>
     (await client.get("/api/strategy/today", { params: { symbol } })).data,
   generateStrategy: async (symbol: string, trigger = "manual") =>
@@ -62,15 +62,15 @@ export const api = {
   ) =>
     (await client.post("/api/agent/start", { symbol, mode, startBalanceUsd }))
       .data,
-  stopSession: async (closePosition?: boolean) => (await client.post("/api/agent/stop", closePosition!=null ? { closePosition } : {})).data,
+  stopSession: async (sessionId: string, closePosition?: boolean) => (await client.post("/api/agent/stop", { sessionId, closePosition })).data,
   getSession: async () => (await client.get("/api/agent/session")).data,
   listSessions: async () => (await client.get("/api/agent/sessions")).data,
   deleteSession: async (id: string) => (await client.delete(`/api/agent/sessions/${id}`)).data,
   overview: async () => (await client.get("/api/agent/overview")).data,
-  setSessionSymbol: async (symbol: string) => (await client.post('/api/agent/set-symbol', { symbol })).data,
-  getAgentState: async () => (await client.get("/api/agent/state")).data,
-  proposeAgentPlan: async (plan: any) => (await client.post("/api/agent/propose", plan)).data,
-  getTriggers: async () => (await client.get("/api/agent/triggers")).data,
+  setSessionSymbol: async (sessionId: string, symbol: string) => (await client.post('/api/agent/set-symbol', { sessionId, symbol })).data,
+  getAgentState: async (sessionId: string) => (await client.get("/api/agent/state", { params: { sessionId } })).data,
+  proposeAgentPlan: async (sessionId: string, plan: any) => (await client.post("/api/agent/propose", { sessionId, ...plan })).data,
+  getTriggers: async (sessionId: string) => (await client.get("/api/agent/triggers", { params: { sessionId } })).data,
   getOrders: async (sessionId?: string) => (await client.get("/api/orders", { params: { sessionId } })).data,
   getPerf: async (sessionId: string) =>
     (await client.get("/api/perf", { params: { sessionId } })).data,

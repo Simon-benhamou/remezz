@@ -1,11 +1,8 @@
 import { prisma } from '../db/client.js';
 import { broadcast } from '../ws/hub.js';
 
-export async function getActiveSession() {
-  return prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
-}
-
 export async function recordEnter(params: {
+  sessionId: string;
   symbol: string;
   side: 'buy'|'sell';
   qty: number;
@@ -14,15 +11,13 @@ export async function recordEnter(params: {
   tp?: number[];
   leverage?: number;
 }) {
-  const session = await getActiveSession();
-  if (!session) return;
-  const clientOrderId = `${session.id}.${params.symbol}.${Date.now()}`;
+  const clientOrderId = `${params.sessionId}.${params.symbol}.${Date.now()}`;
   const round4 = (n:number|undefined)=> (typeof n==='number' ? Math.round(n*1e4)/1e4 : undefined);
   const pctChange = 0; // at entry, 0% change baseline
   const order = await prisma.order.create({
     data: {
       clientOrderId,
-      sessionId: session.id,
+      sessionId: params.sessionId,
       symbol: params.symbol,
       side: params.side,
       type: 'market',
@@ -43,12 +38,12 @@ export async function recordEnter(params: {
       qty: params.qty,
       side: params.side,
       fee: 0,
-      sessionId: session.id,
+      sessionId: params.sessionId,
     }
   });
   await prisma.position.create({
     data: {
-      sessionId: session.id,
+      sessionId: params.sessionId,
       symbol: params.symbol,
       side: params.side,
       entryPrice: params.entryPrice,
@@ -58,31 +53,30 @@ export async function recordEnter(params: {
     }
   });
   // Broadcast latest orders for this session only
-  const rows = await prisma.order.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'desc' }, take: 200 });
-  broadcast('orders', rows, params.symbol);
+  const rows = await prisma.order.findMany({ where: { sessionId: params.sessionId }, orderBy: { createdAt: 'desc' }, take: 200 });
+  broadcast('orders', rows, params.symbol, params.sessionId);
 }
 
 export async function recordExit(params: {
+  sessionId: string;
   symbol: string;
   side: 'buy'|'sell';
   exitPrice: number;
   qty: number;
   realizedPnl?: number;
 }) {
-  const session = await getActiveSession();
-  if (!session) return;
   const round4 = (n:number)=> Math.round(n*1e4)/1e4;
   // Fetch last position to carry leverage info to the exit order
-  const lastPos = await prisma.position.findFirst({ where: { sessionId: session.id, symbol: params.symbol }, orderBy: { openedAt: 'desc' } });
+  const lastPos = await prisma.position.findFirst({ where: { sessionId: params.sessionId, symbol: params.symbol }, orderBy: { openedAt: 'desc' } });
   const base = lastPos?.entryPrice || params.exitPrice;
   const dir = (params.side === 'buy') ? 1 : -1; // side is the side closing? in recordExit we flip for order, but original side indicates held position
   const pctChange = base ? (dir * (params.exitPrice - (lastPos?.entryPrice || params.exitPrice)) / (lastPos?.entryPrice || params.exitPrice)) * 100 : 0;
   // Create a closing fill for journaling
-  const clientOrderId = `${session.id}.${params.symbol}.${Date.now()}.exit`;
+  const clientOrderId = `${params.sessionId}.${params.symbol}.${Date.now()}.exit`;
   const order = await prisma.order.create({
     data: {
       clientOrderId,
-      sessionId: session.id,
+      sessionId: params.sessionId,
       symbol: params.symbol,
       side: params.side === 'buy' ? 'sell' : 'buy',
       type: 'market',
@@ -101,12 +95,15 @@ export async function recordExit(params: {
       qty: params.qty,
       side: order.side,
       realizedPnl: params.realizedPnl,
-      sessionId: session.id,
+      sessionId: params.sessionId,
     }
   });
-  // Mark position as closed (qty to 0)
-  if (lastPos) await prisma.position.update({ where: { id: lastPos.id }, data: { qty: 0, updatedAt: new Date() } });
+  // Adjust remaining position qty (supports partial exits)
+  if (lastPos) {
+    const newQty = Math.max(0, (Number(lastPos.qty || 0) - Number(params.qty || 0)));
+    await prisma.position.update({ where: { id: lastPos.id }, data: { qty: newQty, updatedAt: new Date() } });
+  }
 
-  const rows = await prisma.order.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'desc' }, take: 200 });
-  broadcast('orders', rows, params.symbol);
+  const rows = await prisma.order.findMany({ where: { sessionId: params.sessionId }, orderBy: { createdAt: 'desc' }, take: 200 });
+  broadcast('orders', rows, params.symbol, params.sessionId);
 }

@@ -6,10 +6,13 @@ import { prisma } from "../db/client.js";
 import { buildTechSnapshot } from "../ai/tech.js";
 
 export const router = Router();
-router.get('/', async (_req, res) => {
+router.get('/', async (req, res) => {
   const cfg = getConfig();
   const ex = await exchange();
-  const s = await prisma.agentSession.findFirst({ where:{ stoppedAt:null }, orderBy:{ startedAt:'desc' } });
+  const sessionId = String(req.query.sessionId || '');
+  const s = sessionId
+    ? await prisma.agentSession.findUnique({ where: { id: sessionId } })
+    : await prisma.agentSession.findFirst({ where:{ stoppedAt:null }, orderBy:{ startedAt:'desc' } });
 
   const symbol = s?.symbol || cfg.SYMBOL;
   const [balance, orders, indic] = await Promise.all([

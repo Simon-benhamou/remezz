@@ -6,7 +6,8 @@ import { selectBestPerp } from '../ai/orchestrator.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
-import { Agent } from '../agent/state.js';
+// import { Agent } from '../agent/state.js';
+import { AgentHub } from '../agent/hub.js';
 import { PlanZ } from '../agent/planSchema.js';
 import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
@@ -19,10 +20,6 @@ router.post('/start', async (req,res)=>{
   const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
   const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number };
   let symbol = body.symbol as string;
-
-  // Enforce single active session
-  const existing = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
-  if (existing) return res.status(400).json({ error: 'active_session_exists', session: existing });
 
   // Optional: ranking only if no symbol provided and RANK_ON_START=true
   if (!symbol && process.env.RANK_ON_START === 'true') {
@@ -52,7 +49,7 @@ router.post('/start', async (req,res)=>{
   let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
   if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
   budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
-  await Agent.activate({
+  await AgentHub.activate(s.id, {
     symbol,
     mode,
     maxLeverage: Math.min(5, Math.max(1, body.maxLeverage ?? 4)),
@@ -61,85 +58,90 @@ router.post('/start', async (req,res)=>{
     timestamp: new Date().toISOString(),
     startBalanceUsd: startBalanceUsd,
     budgetFraction,
-  }).catch(()=>{});
+  } as any).catch(()=>{});
 
   // Classic strategy generation for preview (optional) via manager (throttled)
   const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id });
   // Push session + strategy + analysis
-  broadcast('session', s, s.symbol);
-  broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol);
+  broadcast('session', s, s.symbol, s.id);
+  broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);
 
   try {
     const tech = await buildTechSnapshot(s.symbol);
-    broadcast('analysis', { symbol: s.symbol, technical: tech }, s.symbol);
+    broadcast('analysis', { symbol: s.symbol, technical: tech }, s.symbol, s.id);
   } catch {}
 
   res.json(s);
 });
 
 router.post('/stop', async (req,res)=>{
-  const s = await activeSession(); if(!s) return res.status(400).json({error:'no active session'});
-  const { closePosition } = (req.body || {}) as { closePosition?: boolean };
-  // Optionally close current position first
-  try { if (closePosition) await Agent.closeNow(); } catch {}
+  const { sessionId, closePosition } = (req.body || {}) as { sessionId?: string, closePosition?: boolean };
+  const s = sessionId ? await prisma.agentSession.findUnique({ where: { id: sessionId } }) : await activeSession();
+  if (!s) return res.status(400).json({ error: 'no_active_session' });
+  try { if (closePosition) await AgentHub.closeNow(s.id); } catch {}
   await stopSession(s.id);
-  broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol);
-  Agent.halt();
-  setActiveSession(null);
+  broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol, s.id);
+  await AgentHub.halt(s.id);
   res.json({ok:true});
 });
 
 // Change the active session symbol
 router.post('/set-symbol', async (req,res)=>{
-  const { symbol } = req.body as { symbol: string };
-  const s = await activeSession();
-  if (!s) return res.status(400).json({ error: 'no active session' });
+  const { symbol, sessionId } = req.body as { symbol: string, sessionId: string };
+  const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  if (!s) return res.status(400).json({ error: 'no_session' });
   const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
-  broadcast('session', upd, upd.symbol);
+  broadcast('session', upd, upd.symbol, upd.id);
   res.json(upd);
 });
 
 // Triggers log
-router.get('/triggers', async (_req,res)=>{
-  const s = await activeSession(); if(!s) return res.json([]);
-  const logs = await prisma.triggerLog.findMany({ where:{ sessionId: s.id }, orderBy: { createdAt: 'desc' }, take: 100 });
+router.get('/triggers', async (req,res)=>{
+  const sessionId = String(req.query.sessionId || '');
+  if (!sessionId) return res.json([]);
+  const logs = await prisma.triggerLog.findMany({ where:{ sessionId }, orderBy: { createdAt: 'desc' }, take: 100 });
   res.json(logs);
 });
 
 // AI calls count for current session
-router.get('/ai-calls', async (_req,res)=>{
-  const s = await activeSession().catch(()=>null);
-  res.json({ count: await getAICallsCount(s?.id || undefined) });
+router.get('/ai-calls', async (req,res)=>{
+  const sessionId = String(req.query.sessionId || '');
+  res.json({ count: await getAICallsCount(sessionId || undefined) });
 });
 
 // New: pass a LLM JSON plan to the agent (validates + arms)
 router.post('/propose', async (req,res) => {
   try {
-    const plan = PlanZ.parse(req.body);
-    await Agent.propose(plan as any);
-    await Agent.validateAndArm();
+    const { sessionId, ...rest } = req.body || {};
+    const plan = PlanZ.parse(rest);
+    const a = AgentHub.get(sessionId);
+    if (!a) return res.status(400).json({ error: 'no_agent' });
+    await a.propose(plan as any);
+    await a.validateAndArm();
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: String(e?.message || e) });
   }
 });
 
-router.get('/state', async (_req,res)=>{
+router.get('/state', async (req,res)=>{
+  const sessionId = String(req.query.sessionId || '');
+  const a = sessionId ? AgentHub.get(sessionId) : null;
   let balance: any = null;
-  try { balance = await (Agent as any).broker?.balance?.(); } catch {}
+  try { balance = await (a as any)?.broker?.balance?.(); } catch {}
   // Enhance with live unrealized PnL if we have a position
   try {
-    if (Agent.pos && Agent.profile) {
-      const snap = await buildTechSnapshot(Agent.profile.symbol);
+    if (a?.pos && a?.profile) {
+      const snap = await buildTechSnapshot(a.profile.symbol);
       const last = snap.last;
-      const dir = Agent.pos.side === 'buy' ? 1 : -1;
-      const upnlUsd = dir * (last - Agent.pos.entry) * Agent.pos.qty;
+      const dir = a.pos.side === 'buy' ? 1 : -1;
+      const upnlUsd = dir * (last - a.pos.entry) * a.pos.qty;
       const equityLive = Number(balance?.equityUsd ?? 0) + upnlUsd;
-      const upnlPct = Agent.pos.entry ? (dir * (last - Agent.pos.entry) / Agent.pos.entry) * 100 : 0;
+      const upnlPct = a.pos.entry ? (dir * (last - a.pos.entry) / a.pos.entry) * 100 : 0;
       balance = { ...(balance||{}), equityUsd: equityLive, upnlUsd, upnlPct };
     }
   } catch {}
-  res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos, balance, aiMetrics: await getAIMetrics() });
+  res.json({ state: a?.state, profile: a?.profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics() });
 });
 
 // List recent sessions (active first), with open position count

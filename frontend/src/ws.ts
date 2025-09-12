@@ -8,12 +8,14 @@ export function openWS(
   on: Handler,
   onConn?: (ok: boolean) => void,
   onReplace?: (next: WebSocket) => void,
+  sessionId?: string,
 ): WebSocket {
   const url = apiBase.replace('http', 'ws') + '/ws';
   let attempt = 0;
   let curKey = apiKey;
   let curSymbol = symbol;
   let ws: WebSocket | null = null;
+  let curSessionId: string | undefined = sessionId;
 
   const connect = () => {
     const next = new WebSocket(url);
@@ -24,7 +26,7 @@ export function openWS(
       onConn?.(true);
       try { next.send(JSON.stringify({ type: 'hello', apiKey: curKey })); } catch {}
       // After hello_ok, subscribe to symbol (little delay to sequence nicely)
-      setTimeout(() => { try { next.send(JSON.stringify({ type: 'sub', symbol: curSymbol })); } catch {} }, 100);
+      setTimeout(() => { try { next.send(JSON.stringify({ type: 'sub', symbol: curSymbol, sessionId: curSessionId })); } catch {} }, 100);
     };
 
     next.onmessage = (ev) => {
@@ -52,4 +54,9 @@ export function openWS(
 
 export function wsSend(ws: WebSocket, msg: any) {
   if (ws && (ws as any).readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+// Optional helpers for session-aware clients
+export function setWsSession(ws: WebSocket | null, sessionId?: string) {
+  try { (ws as any).sessionId = sessionId; } catch {}
 }

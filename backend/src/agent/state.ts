@@ -6,7 +6,7 @@ import { Broker } from '../broker/types.js';
 import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
-import { recordEnter, recordExit, getActiveSession } from './persistence.js';
+import { recordEnter, recordExit } from './persistence.js';
 import { recomputeKpi } from '../metrics/kpi.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
@@ -33,6 +33,7 @@ export type ActivePosition = {
   tp: number[];
   openedAt: number;
   extended: boolean;
+  partialTaken?: boolean;
 };
 
 export class ReboundRejectionAgent {
@@ -43,6 +44,7 @@ export class ReboundRejectionAgent {
   pos: ActivePosition | null = null;
   extendedOnce = false;
   private entering = false;
+  sessionId: string | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -76,7 +78,7 @@ export class ReboundRejectionAgent {
     // If a position already exists, don't re-arm — keep managing
     if (this.pos) {
       this.state = 'MANAGE';
-      broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol);
+      broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
       return;
     }
     const limits = defaultLimits();
@@ -95,8 +97,8 @@ export class ReboundRejectionAgent {
       return;
     }
     this.state = 'ARMED';
-    const metrics = getAICallsCount() as any; // keep existing field
-    broadcast('agent_state', { state: this.state, plan: this.plan, aiCalls: getAICallsCount() }, this.profile.symbol);
+    const aiCalls = await getAICallsCount();
+    broadcast('agent_state', { state: this.state, plan: this.plan, aiCalls }, this.profile.symbol, this.sessionId || undefined);
 
     // Live exposure inspection: if in live mode and a position already exists, adopt it and switch to MANAGE
     if (this.profile.mode === 'live' && !this.pos) {
@@ -111,7 +113,7 @@ export class ReboundRejectionAgent {
           const tp = (this.plan.rPrices || []).map(x => entry + dir * x.r * this.plan!.stopDistance);
           this.pos = { side, entry, qty: expo.qty, stop, tp, openedAt: Date.now(), extended: false };
           this.state = 'MANAGE';
-          broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol);
+          broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
         }
       } catch {}
     }
@@ -127,7 +129,7 @@ export class ReboundRejectionAgent {
 
     if (this.state === 'ARMED') {
       // Safety: if a position is somehow set, switch to MANAGE
-      if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol); return; }
+      if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); return; }
       const inZone = price >= Math.min(from,to) && price <= Math.max(from,to);
       // simple confirmation: bias-aligned close beyond zone mid
       const confirm = this.plan.plan.entry_rule.confirm_close && ((this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid));
@@ -157,16 +159,25 @@ export class ReboundRejectionAgent {
     if (placed.status === 'rejected') {
       // Not enough margin/free capacity — go to cooldown briefly
       this.state = 'COOLDOWN';
-      broadcast('agent_state', { state: this.state, reason: 'placement_rejected' }, this.profile.symbol);
+      broadcast('agent_state', { state: this.state, reason: 'placement_rejected' }, this.profile.symbol, this.sessionId || undefined);
       this.entering = false;
       return;
     }
     this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false };
+    // Ensure at least two TP levels (for partial then runner)
+    if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
+      const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 2)) : (this.pos.entry - (this.plan.stopDistance * 2));
+      this.pos.tp = [baseTp];
+    }
+    if (this.pos.tp.length === 1) {
+      const runnerTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 3)) : (this.pos.entry - (this.plan.stopDistance * 3));
+      this.pos.tp.push(runnerTp);
+    }
     // Persist order/fill/position
-    await recordEnter({ symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
+    await recordEnter({ sessionId: this.sessionId!, symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
     this.state = 'MANAGE';
     this.tradesToday += 1;
-    broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: getAICallsCount() }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
     this.entering = false;
   }
 
@@ -182,9 +193,11 @@ export class ReboundRejectionAgent {
       else this.pos.stop = Math.min(this.pos.stop, trailCandidate);
     }
 
-    // TP hit
+    // TP handling: partial at TP1, full at TP2 (if any), otherwise trailing/SL/time
     const firstTp = this.pos.tp[0];
-    const tpHit = this.pos.side === 'buy' ? price >= firstTp : price <= firstTp;
+    const secondTp = this.pos.tp[1];
+    const tp1Hit = this.pos.side === 'buy' ? price >= firstTp : price <= firstTp;
+    const tp2Hit = secondTp != null ? (this.pos.side === 'buy' ? price >= secondTp : price <= secondTp) : false;
     const stopHit = this.pos.side === 'buy' ? price <= this.pos.stop : price >= this.pos.stop;
 
     let maxHoldMs = (this.plan.plan.risk.max_hold_hours || 36) * 3600 * 1000;
@@ -204,8 +217,33 @@ export class ReboundRejectionAgent {
       else this.pos.stop = Math.min(this.pos.stop, trailCandidate);
     }
 
-    if (tpHit || stopHit || age > maxHoldMs) {
-      await this.exit(price, tpHit ? 'tp' : (stopHit ? 'sl' : 'time'));
+    // Partial: on TP1 if not already taken
+    if (tp1Hit && !this.pos.partialTaken) {
+      try {
+        const closeQty = Math.max(0, Math.min(this.pos.qty, Number((this.pos.qty * 0.5).toFixed(8))));
+        if (closeQty > 0 && this.broker) {
+          // Place market close for partial
+          await this.broker.place({ symbol: this.profile.symbol, side: this.pos.side === 'buy' ? 'sell' : 'buy', type: 'market', qty: closeQty, leverage: this.profile.maxLeverage });
+          await recordExit({ sessionId: this.sessionId!, symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: closeQty, realizedPnl: (dir * (price - this.pos.entry) * closeQty) }).catch(()=>{});
+          // Reduce local pos.qty and mark partial
+          this.pos.qty = Math.max(0, this.pos.qty - closeQty);
+          this.pos.partialTaken = true;
+          // Tighten stop to break-even after partial
+          const be = this.pos.entry;
+          if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, be);
+          else this.pos.stop = Math.min(this.pos.stop, be);
+          // Shift TP ladder to next target if any
+          if (this.pos.tp.length > 1) this.pos.tp = this.pos.tp.slice(1);
+          broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
+        }
+      } catch {}
+      return; // wait next tick after partial
+    }
+
+    // Full exit on TP2 (if defined) or on stop/time
+    const tpHitFinal = tp2Hit || (tp1Hit && this.pos.partialTaken && this.pos.tp.length === 1);
+    if (tpHitFinal || stopHit || age > maxHoldMs) {
+      await this.exit(price, tpHitFinal ? 'tp' : (stopHit ? 'sl' : 'time'));
       return;
     }
   }
@@ -242,25 +280,25 @@ export class ReboundRejectionAgent {
       });
     } catch {}
 
-    await recordExit({ symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: this.pos.qty, realizedPnl: pnl }).catch(()=>{});
+    await recordExit({ sessionId: this.sessionId!, symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: this.pos.qty, realizedPnl: pnl }).catch(()=>{});
     // Update session KPIs (ROI%, realized/unrealized)
-    try { const s = await getActiveSession(); if (s?.id) await recomputeKpi(s.id); } catch {}
+    try { if (this.sessionId) await recomputeKpi(this.sessionId); } catch {}
     // Release reserved notional capacity in paper broker
     try { (this.broker as any).releaseCommitted?.(Math.abs(price * this.pos.qty)); } catch {}
     this.state = 'EXIT';
-    broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct, ts: Date.now() }, aiCalls: getAICallsCount() }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct, ts: Date.now() }, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
     this.pos = null;
     this.state = 'REPORT';
-    broadcast('agent_state', { state: this.state, aiCalls: getAICallsCount() }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
     // back to SCAN unless guardrails trip
     const guard = await assessRisk({ sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10), realizedPnlPctToday: this.realizedPnlTodayPct, consecutiveStops: this.consecutiveStops, tradesToday: this.tradesToday });
     this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'COOLDOWN');
-    broadcast('agent_state', { state: this.state, aiCalls: getAICallsCount() }, this.profile.symbol);
+    broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
 
     // Immediately request a fresh strategy after an exit (force to bypass cool-down)
     try {
       const s = await getActiveSession();
-      await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: s?.id, priceHint: price, force: true });
+      await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price, force: true });
     } catch {}
   }
 

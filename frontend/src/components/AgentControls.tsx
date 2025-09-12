@@ -29,7 +29,7 @@ export default function AgentControls({ session, symbol, onChange, showStart = f
       cancelText: 'Cancel',
       onOk: async () => {
         try {
-          await api.stopSession(closePos);
+          await api.stopSession(session?.id, closePos);
           message.info(closePos ? "Session stopped and position closed" : "Session stopped (position left open)");
           onChange?.();
         } catch {}

@@ -9,6 +9,7 @@ type ClientState = {
   ws: WebSocket;
   authed: boolean;
   symbol?: string;
+  sessionId?: string;
 };
 
 const clients = new Set<ClientState>();
@@ -17,9 +18,10 @@ function send(ws: WebSocket, msg: any) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
-export function broadcast(type: string, payload: any, symbol?: string) {
+export function broadcast(type: string, payload: any, symbol?: string, sessionId?: string) {
   for (const c of clients) {
     if (!c.authed) continue;
+    if (sessionId && c.sessionId && c.sessionId !== sessionId) continue;
     if (symbol && c.symbol && c.symbol !== symbol) continue;
     send(c.ws, { type, data: payload });
   }
@@ -75,6 +77,7 @@ export function startWSHub(wss: WebSocketServer) {
 
         if (msg.type === 'sub') {
           state.symbol = msg.symbol;
+          state.sessionId = msg.sessionId;
           send(ws, { type: 'sub_ok', data: { symbol: state.symbol } });
           // Push analysis immediately so UI can fill tabs
           try {
@@ -91,18 +94,19 @@ export function startWSHub(wss: WebSocketServer) {
 
         // Optional: change active session symbol via WS
         if (msg.type === 'set_symbol') {
-          const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
-          if (!s) return send(ws, { type: 'error', data: 'no_active_session' });
-          const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol: msg.symbol } });
-          state.symbol = upd.symbol;
-          broadcast('session', upd, upd.symbol);
+          const { sessionId, symbol } = msg;
+          if (!sessionId) return send(ws, { type: 'error', data: 'sessionId_required' });
+          const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+          if (!s) return send(ws, { type: 'error', data: 'no_session' });
+          const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
+          state.symbol = upd.symbol; state.sessionId = upd.id;
+          broadcast('session', upd, upd.symbol, upd.id);
           return;
         }
 
         // Request instantaneous snapshot push (without REST)
         if (msg.type === 'fetch_now') {
-          const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
-          const symbol = s?.symbol || state.symbol || cfg.SYMBOL;
+          const symbol = state.symbol || cfg.SYMBOL;
           try {
             const snap = await buildTechSnapshot(symbol);
             send(ws, { type: 'analysis', data: { symbol, technical: snap } });
@@ -112,10 +116,9 @@ export function startWSHub(wss: WebSocketServer) {
 
         // Example: request a new classic strategy via WS
         if (msg.type === 'gen_strategy') {
-          const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
-          const symbol = msg.symbol || s?.symbol || state.symbol || cfg.SYMBOL;
-          const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: msg.trigger || 'manual', sessionId: s?.id });
-          broadcast('strategy', { ...(strat as any), levels: lvls }, symbol);
+          const symbol = msg.symbol || state.symbol || cfg.SYMBOL;
+          const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: msg.trigger || 'manual', sessionId: state.sessionId });
+          broadcast('strategy', { ...(strat as any), levels: lvls }, symbol, state.sessionId);
           return;
         }
 

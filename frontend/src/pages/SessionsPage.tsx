@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, Segmented, InputNumber, Typography } from 'antd';
+import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, Segmented, InputNumber, Typography, Select } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 
@@ -8,6 +8,7 @@ export default function SessionsPage(){
   const [open, setOpen] = React.useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
+  const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
   const load = async ()=>{ try { setRows(await api.listSessions()); } catch {} };
   React.useEffect(()=>{ load(); }, []);
   const stop = async (id:string)=>{
@@ -36,7 +37,7 @@ export default function SessionsPage(){
         </Space>
       }>
         <Table rowKey="id" dataSource={rows.filter(r=> !r.stoppedAt)} pagination={false}
-          onRow={(r)=> ({ onClick: async ()=> { try { await api.setSessionSymbol(r.symbol); } catch {}; navigate('/monitor'); } })}
+          onRow={(r)=> ({ onClick: async ()=> { navigate(`/monitor/${r.id}`); } })}
           columns={[
             { title:'Symbol', dataIndex:'symbol' },
             { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
@@ -49,7 +50,7 @@ export default function SessionsPage(){
 
       <Card title="All sessions">
       <Table rowKey="id" dataSource={rows} pagination={{ pageSize: 10 }}
-        onRow={(r)=> ({ onClick: async ()=> { if (!r.stoppedAt) { try { await api.setSessionSymbol(r.symbol); } catch {}; navigate('/monitor'); } } })}
+        onRow={(r)=> ({ onClick: async ()=> { if (!r.stoppedAt) { navigate(`/monitor/${r.id}`); } } })}
         columns={[
           { title:'Symbol', dataIndex:'symbol' },
           { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
@@ -78,7 +79,10 @@ export default function SessionsPage(){
             message.success('Session started');
             setOpen(false);
             await load();
-            navigate('/monitor');
+            // Find latest active session and go to monitor
+            const list = await api.listSessions();
+            const active = list.find((r:any)=> !r.stoppedAt);
+            if (active) navigate(`/monitor/${active.id}`);
           } catch (e: any) {
             const msg = String(e?.response?.data?.error || e?.message || e);
             if (msg.includes('active_session_exists')) message.warning('Stop the active session first.');
@@ -87,7 +91,12 @@ export default function SessionsPage(){
         }}>
         <Form layout='vertical' form={form} initialValues={{ mode:'paper', riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }}>
           <Form.Item label='Symbol' name='symbol' rules={[{ required:true }]}>
-            <Input placeholder='e.g. BTC/USDT' />
+            <Select
+              showSearch
+              placeholder='Select symbol'
+              options={commonSymbols.map(s=>({ value: s, label: s }))}
+              filterOption={(input, option)=> (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item label='Mode' name='mode'>
             <Segmented options={['paper','live']} />

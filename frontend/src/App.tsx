@@ -37,6 +37,12 @@ function AppInner(){
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
+  const location = useLocation();
+  const sessionParam = React.useMemo(()=>{
+    const m = (location.pathname||'').match(/^\/monitor\/(.+)$/);
+    return m ? decodeURIComponent(m[1]) : undefined;
+  }, [location.pathname]);
+
   React.useEffect(()=> {
     // Require login (API key) before bootstrapping app
     if (!getApiKey()) { navigate('/login', { replace: true }); return; }
@@ -51,7 +57,7 @@ function AppInner(){
       if (msg.type === 'agent_state') {
         setAgent((prev:any)=> ({ ...prev, ...msg.data }));
         // Refresh balance snapshot
-        try { setAgent(await api.getAgentState()); } catch {}
+        try { if (sessionParam) setAgent(await api.getAgentState(sessionParam)); } catch {}
         // If exit happened, refresh KPI
         if (msg?.data?.exit) {
           try { const s = await api.getSession(); if (s?.id) setKpi(await api.getPerf(s.id)); } catch {}
@@ -69,24 +75,24 @@ function AppInner(){
       if (msg.type === 'orders') {
         setOrders(msg.data);
         // Refresh balance after order book change
-        try { setAgent(await api.getAgentState()); } catch {}
+        try { if (sessionParam) setAgent(await api.getAgentState(sessionParam)); } catch {}
       }
       if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
-    }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; });
+    }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; }, sessionParam);
     wsRef.current = ws;
 
     // Bootstrap via REST for tables, perf and analysis
     (async ()=>{
       try {
         setLoadingMonitor(true);
-        const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s }));
+        const s = await api.status(sessionParam); setStatus((prev:any)=>({ ...prev, ...s }));
         const sym = s?.session?.symbol || s?.symbol || symbol;
         if (s?.session?.symbol) setSymbol(s.session.symbol);
-        navigate(s?.session ? '/monitor' : '/dashboard', { replace: true });
+        if (sessionParam) navigate(`/monitor/${sessionParam}`, { replace: true });
         if (s.session?.id) setOrders(await api.getOrders(s.session.id)); else setOrders([]);
         if (s.session?.id) setKpi(await api.getPerf(s.session.id));
-        setTriggers(await api.getTriggers());
-        try { setAgent(await api.getAgentState()); } catch {}
+        if (s.session?.id) setTriggers(await api.getTriggers(s.session.id));
+        try { if (s.session?.id) setAgent(await api.getAgentState(s.session.id)); } catch {}
         try { setAnalysis(await api.analysis(sym)); } catch {}
         try { setStrategy(await api.strategyToday(sym)); } catch {}
       } catch {}
@@ -94,7 +100,7 @@ function AppInner(){
     })();
 
     return ()=> { ws.close(); wsRef.current = null; };
-  }, []);
+  }, [sessionParam]);
 
   // Re-subscribe WS when symbol changes or once session available
   React.useEffect(()=>{
@@ -173,7 +179,7 @@ function AppInner(){
             <Route path='/' element={<Navigate to='/dashboard' replace />} />
             <Route path='/dashboard' element={<DashboardPage />} />
             {/* Start route removed; starting is done from Sessions modal */}
-            <Route path='/monitor' element={hasSession ? (
+            <Route path='/monitor/:sessionId' element={hasSession ? (
               <>
               {loadingMonitor && (<div style={{ position:'fixed', inset:0, background:'rgba(255,255,255,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
                 <div style={{ padding:12, background:'#fff', border:'1px solid #eee', borderRadius:8 }}>Loading monitor…</div>
@@ -195,7 +201,7 @@ function AppInner(){
                 <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
                 <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
                 <Col xs={24} lg={8}><AgentControls session={status?.session} symbol={status?.symbol} showStart={false} onChange={async ()=>{
-                const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s })); if (!s?.session) navigate('/sessions'); else { if (s.session.symbol) setSymbol(s.session.symbol); }
+                const s = await api.status(status?.session?.id); setStatus((prev:any)=>({ ...prev, ...s })); if (!s?.session) navigate('/sessions'); else { if (s.session.symbol) setSymbol(s.session.symbol); }
                 }} /></Col>
                 <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} onPlan={()=>{}} /></Col>
                 <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>

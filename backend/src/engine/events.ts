@@ -4,7 +4,7 @@ import { prisma } from '../db/client.js';
 import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
 import { requestStrategy, shouldEngineRegenerate } from '../ai/strategyManager.js';
 import { broadcast } from '../ws/hub.js';
-import { Agent } from '../agent/state.js';
+import { AgentHub } from '../agent/hub.js';
 
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
@@ -34,7 +34,7 @@ function nearestLevel(price:number, levels:{price:number}[]) {
   return levels.reduce((best,cur)=> !best || Math.abs(cur.price-price) < Math.abs(best.price-price) ? cur : best, null as any);
 }
 
-async function tickOnce(sessionId: string|undefined, sym: string){
+async function tickOnce(sessionId: string, sym: string){
   const tech = await buildTechSnapshot(sym);
 
   // Primary support/resistance
@@ -58,7 +58,7 @@ async function tickOnce(sessionId: string|undefined, sym: string){
     supports: tech.supports,
     resistances: tech.resistances,
     pivots: tech.pivots
-  }, sym);
+  }, sym, sessionId);
 
   // Triggers: touch support/resistance or pivots
   let trigger: string | null = null;
@@ -82,7 +82,7 @@ async function tickOnce(sessionId: string|undefined, sym: string){
       }
     }
     // Broadcast this trigger so UI can update live
-    broadcast('trigger', created, sym);
+    broadcast('trigger', created, sym, sessionId);
     await maybeGenerateStrategy(sym, trigger, tech.last, sessionId);
   }
 
@@ -118,7 +118,7 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
   }
 
   // Push WS (classic strategy preview)
-  broadcast('strategy', { ...(strat as any), levels: lvls }, sym);
+  broadcast('strategy', { ...(strat as any), levels: lvls }, sym, sessionId);
 }
 
 /**
@@ -130,15 +130,37 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
 export async function startEventEngine(){
   if (running) return; running = true;
   const cfg = getConfig(); const pollMs = Number(cfg.POLL_MS || 2000);
+  let booted = false;
 
   async function loop(){
     try {
-      const s = await prisma.agentSession.findFirst({ where:{ stoppedAt:null }, orderBy:{ startedAt:'desc' } });
-      const sym = s?.symbol || cfg.SYMBOL;
-      const tech = await tickOnce(s?.id, sym);
-      lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
-      // Let the agent evaluate triggers and manage positions
-      await Agent.onTick().catch(()=>{});
+      if (!booted) {
+        booted = true;
+        try {
+          const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null } });
+          for (const s of sessions) {
+            const p:any = (s as any).profileJson || {};
+            const profile = {
+              symbol: s.symbol,
+              mode: s.mode as any,
+              maxLeverage: Math.min(5, Math.max(1, p.maxLeverage ?? 4)),
+              riskPerTradePct: Math.min(2, Math.max(1, p.riskPerTradePct ?? 1.5)),
+              dailyLossLimitPct: Math.min(4, Math.max(3, p.dailyLossLimitPct ?? 3.5)),
+              timestamp: new Date().toISOString(),
+              startBalanceUsd: p.startBalanceUsd,
+              budgetFraction: (()=>{ let bf = typeof p.budgetPct==='number'? p.budgetPct:1; if (bf>1) bf/=100; return Math.min(1, Math.max(0.1, bf)); })(),
+            };
+            try { await (await import('../agent/hub.js')).AgentHub.activate(s.id, profile as any); } catch {}
+          }
+        } catch {}
+      }
+      const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null }, orderBy:{ startedAt:'asc' } });
+      for (const s of sessions) {
+        const sym = s.symbol || cfg.SYMBOL;
+        const tech = await tickOnce(s.id, sym);
+        lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
+        try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
+      }
     } catch (e) { /* log optionnel */ }
     finally { setTimeout(loop, pollMs); }
   }
