@@ -297,7 +297,6 @@ export class ReboundRejectionAgent {
 
     // Immediately request a fresh strategy after an exit (force to bypass cool-down)
     try {
-      const s = await getActiveSession();
       await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price, force: true });
     } catch {}
   }

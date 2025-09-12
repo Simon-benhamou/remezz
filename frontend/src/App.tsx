@@ -127,7 +127,6 @@ function AppInner(){
     );
   }
 
-  const location = useLocation();
   const menuItems = [
     { key: '/dashboard', label: 'Dashboard' },
     { key: '/sessions', label: 'Sessions' },
@@ -203,7 +202,7 @@ function AppInner(){
                 <Col xs={24} lg={8}><AgentControls session={status?.session} symbol={status?.symbol} showStart={false} onChange={async ()=>{
                 const s = await api.status(status?.session?.id); setStatus((prev:any)=>({ ...prev, ...s })); if (!s?.session) navigate('/sessions'); else { if (s.session.symbol) setSymbol(s.session.symbol); }
                 }} /></Col>
-                <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} onPlan={()=>{}} /></Col>
+                <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} /></Col>
                 <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
                 <Col xs={24} lg={8}><PerfPanel kpi={kpi} session={status?.session} /></Col>
                 <Col xs={24}><TriggersPanel rows={triggers} /></Col>

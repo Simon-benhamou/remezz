@@ -7,9 +7,10 @@ type Props = {
   symbol: string;
   lastPrice?: number;
   onPlan?: (plan:any)=>void; // emits LLM plan JSON
+  sessionId?: string;
 };
 
-export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan }: Props){
+export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sessionId }: Props){
   const [llmPlan, setLlmPlan] = React.useState<any>(null);
   const balance = agent?.balance;
 
@@ -20,7 +21,8 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan }: Pr
   };
   const arm = async () => {
     if (!llmPlan) return message.error('No plan');
-    await api.proposeAgentPlan(llmPlan);
+    if (!sessionId) return message.error('No active session');
+    await api.proposeAgentPlan(sessionId, llmPlan);
     message.success('Plan validated/ARMED (if risk checks pass)');
   };
 
