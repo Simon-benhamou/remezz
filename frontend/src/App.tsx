@@ -14,6 +14,7 @@ import TriggersPanel from './components/TriggersPanel';
 import AnalysisTabs from './components/AnalysisTabs';
 import SimulatorPanel from './components/SimulatorPanel';
 import HelpPanel from './components/HelpPanel';
+import MonitorPage from './pages/MonitorPage';
 import LoginPage from './pages/LoginPage';
 import SessionsPage from './pages/SessionsPage';
 import DashboardPage from './pages/DashboardPage';
@@ -194,40 +195,8 @@ function AppInner(){
           <Routes>
             <Route path='/' element={<Navigate to='/dashboard' replace />} />
             <Route path='/dashboard' element={<DashboardPage />} />
-            {/* Start route removed; starting is done from Sessions modal */}
-            <Route path='/monitor/:sessionId' element={hasSession ? (
-              <>
-              {loadingMonitor && (<div style={{ position:'fixed', inset:0, background:'rgba(255,255,255,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-                <div style={{ padding:12, background:'#fff', border:'1px solid #eee', borderRadius:8 }}>Loading monitor…</div>
-              </div>)}
-              <Row gutter={[12,12]}>
-                <Col xs={24} lg={16}>
-                  <PriceChart
-                    symbol={status?.symbol}
-                    price={status?.price}
-                    support={status?.sr?.support}
-                    resistance={status?.sr?.resistance}
-                    strategy={strategy}
-                    agentPlan={agent?.plan}
-                    agentPos={agent?.pos}
-                    pivots={status?.pivots}
-                    agentExit={agent?.exit}
-                  />
-                </Col>
-                <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
-                <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
-                <Col xs={24} lg={8}><AgentControls session={status?.session} symbol={status?.symbol} showStart={false} onChange={async ()=>{
-                const s = await api.status(status?.session?.id); setStatus((prev:any)=>({ ...prev, ...s })); if (!s?.session) navigate('/sessions'); else { if (s.session.symbol) setSymbol(s.session.symbol); }
-                }} /></Col>
-                <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} /></Col>
-                <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
-                <Col xs={24} lg={8}><PerfPanel kpi={kpi} session={status?.session} /></Col>
-                <Col xs={24}><TriggersPanel rows={triggers} /></Col>
-                <Col xs={24}><OrdersTable rows={orders} /></Col>
-                <Col xs={24}><HelpPanel /></Col>
-              </Row>
-              </>
-            ) : <Navigate to='/sessions' replace /> } />
+            {/* Dedicated monitor page fully driven by :sessionId */}
+            <Route path='/monitor/:sessionId' element={<MonitorPage />} />
             <Route path='/sessions' element={<SessionsPage />} />
             <Route path='/testing' element={<TestingPage />} />
             <Route path='*' element={<Navigate to='/dashboard' replace />} />
