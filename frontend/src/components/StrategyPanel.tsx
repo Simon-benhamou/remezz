@@ -49,12 +49,14 @@ export default function StrategyPanel({ strategy }: any) {
       {strategy?.levels && (
         <div style={{ marginTop: 8 }}>
           <b>Targets:</b>&nbsp; Entry mid:{" "}
-          {strategy.entry?.price ??
-            (
-              (strategy.entry?.zone?.min ||
-                0 + strategy.entry?.zone?.max ||
-                0) / 2
-            ).toFixed?.(4)}{" "}
+          {strategy.entry?.price ?? (
+            (() => {
+              const mn = Number(strategy.entry?.zone?.min ?? 0);
+              const mx = Number(strategy.entry?.zone?.max ?? 0);
+              const mid = (mn + mx) / 2;
+              return isFinite(mid) && mid > 0 ? mid.toFixed(4) : '-';
+            })()
+          )}{" "}
           &nbsp;|&nbsp; SL: {strategy.levels?.stopPrice?.toFixed?.(4)}{" "}
           &nbsp;|&nbsp; TP: {strategy.levels?.takeProfitPrice?.toFixed?.(4)}
         </div>

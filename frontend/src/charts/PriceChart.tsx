@@ -33,18 +33,15 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
   React.useEffect(()=> {
     if (!ref.current) return;
     const chart = createChart(ref.current, {
-      height: 360, layout:{ textColor:'#222', background:{ type: ColorType.Solid, color: 'white' } }
+      height: 360,
+      layout:{ textColor:'#222', background:{ type: ColorType.Solid, color: 'white' } },
+      rightPriceScale: { borderVisible: false },
+      timeScale: { borderVisible: false }
     });
     const line = chart.addLineSeries({ priceFormat: { type: 'price', precision: 4, minMove: 0.0001 } });
     seriesRef.current = line; chartRef.current = chart;
 
-    // price lines
-    plSupport.current = line.createPriceLine({ price: 0, title: 'Support', lineWidth: 1 });
-    plResistance.current = line.createPriceLine({ price: 0, title: 'Resistance', lineWidth: 1 });
-    plEntryMin.current = line.createPriceLine({ price: 0, title: 'Entry Min', lineWidth: 1 });
-    plEntryMax.current = line.createPriceLine({ price: 0, title: 'Entry Max', lineWidth: 1 });
-    plSL.current = line.createPriceLine({ price: 0, title: 'Stop', lineWidth: 1 });
-    plTP.current = line.createPriceLine({ price: 0, title: 'Target', lineWidth: 1 });
+    // price lines are created on-demand below
 
     // Add zone overlay div
     const overlay = document.createElement('div');
@@ -62,14 +59,23 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
   }, []);
 
   React.useEffect(()=> {
-    if (price && seriesRef.current) {
+    if (typeof price === 'number' && isFinite(price) && seriesRef.current) {
       seriesRef.current.update({ time: Math.floor(Date.now()/1000), value: price });
     }
   }, [price]);
 
   React.useEffect(()=> {
-    if (support && plSupport.current) plSupport.current.applyOptions({ price: support });
-    if (resistance && plResistance.current) plResistance.current.applyOptions({ price: resistance });
+    const ensure = (ref: any, title: string) => {
+      if (!ref.current && seriesRef.current) ref.current = seriesRef.current.createPriceLine({ price: 0, title, lineWidth: 1 });
+      return ref.current;
+    };
+    const remove = (ref: any) => {
+      if (ref.current && seriesRef.current) { try { seriesRef.current.removePriceLine(ref.current); } catch {} ref.current = null; }
+    };
+    if (typeof support === 'number' && isFinite(support)) ensure(plSupport, 'Support')?.applyOptions({ price: support });
+    else remove(plSupport);
+    if (typeof resistance === 'number' && isFinite(resistance)) ensure(plResistance, 'Resistance')?.applyOptions({ price: resistance });
+    else remove(plResistance);
   }, [support, resistance]);
 
   React.useEffect(()=> {
@@ -78,26 +84,42 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     const zmax = strategy?.entry?.zone?.max;
     const sl = strategy?.levels?.stopPrice;
     const tp = strategy?.levels?.takeProfitPrice;
-    if (zmin && plEntryMin.current) plEntryMin.current.applyOptions({ price: zmin });
-    if (zmax && plEntryMax.current) plEntryMax.current.applyOptions({ price: zmax });
-    if (sl && plSL.current) plSL.current.applyOptions({ price: sl });
-    if (tp && plTP.current) plTP.current.applyOptions({ price: tp });
+    const ensure = (ref: any, title: string) => {
+      if (!ref.current && seriesRef.current) ref.current = seriesRef.current.createPriceLine({ price: 0, title, lineWidth: 1 });
+      return ref.current;
+    };
+    const remove = (ref: any) => { if (ref.current && seriesRef.current) { try { seriesRef.current.removePriceLine(ref.current); } catch {} ref.current = null; } };
+    if (typeof zmin === 'number' && isFinite(zmin)) ensure(plEntryMin, 'Entry Min')?.applyOptions({ price: zmin }); else remove(plEntryMin);
+    if (typeof zmax === 'number' && isFinite(zmax)) ensure(plEntryMax, 'Entry Max')?.applyOptions({ price: zmax }); else remove(plEntryMax);
+    if (typeof sl === 'number' && isFinite(sl)) ensure(plSL, 'Stop')?.applyOptions({ price: sl }); else remove(plSL);
+    if (typeof tp === 'number' && isFinite(tp)) ensure(plTP, 'Target')?.applyOptions({ price: tp }); else remove(plTP);
   }, [strategy]);
 
   React.useEffect(()=> {
     // Agent validated plan overlays
     const zmin = agentPlan?.zone?.from;
     const zmax = agentPlan?.zone?.to;
-    const sl = agentPos?.stop || (agentPlan?.bias==='long' ? (agentPlan?.zone?.mid - agentPlan?.stopDistance) : (agentPlan?.zone?.mid + agentPlan?.stopDistance));
+    const mid = agentPlan?.zone?.mid;
+    const sd = agentPlan?.stopDistance;
+    const sl = typeof agentPos?.stop === 'number' ? agentPos?.stop : (
+      typeof mid === 'number' && typeof sd === 'number'
+        ? (agentPlan?.bias==='long' ? (mid - sd) : (mid + sd))
+        : undefined
+    );
     const tp = agentPlan?.rPrices?.[0]?.price;
-    if (zmin && plEntryMin.current) plEntryMin.current.applyOptions({ price: zmin });
-    if (zmax && plEntryMax.current) plEntryMax.current.applyOptions({ price: zmax });
-    if (sl && plSL.current) plSL.current.applyOptions({ price: sl });
-    if (tp && plTP.current) plTP.current.applyOptions({ price: tp });
+    const ensure = (ref: any, title: string) => {
+      if (!ref.current && seriesRef.current) ref.current = seriesRef.current.createPriceLine({ price: 0, title, lineWidth: 1 });
+      return ref.current;
+    };
+    const remove = (ref: any) => { if (ref.current && seriesRef.current) { try { seriesRef.current.removePriceLine(ref.current); } catch {} ref.current = null; } };
+    if (typeof zmin === 'number' && isFinite(zmin)) ensure(plEntryMin, 'Entry Min')?.applyOptions({ price: zmin }); else remove(plEntryMin);
+    if (typeof zmax === 'number' && isFinite(zmax)) ensure(plEntryMax, 'Entry Max')?.applyOptions({ price: zmax }); else remove(plEntryMax);
+    if (typeof sl === 'number' && isFinite(sl)) ensure(plSL, 'Stop')?.applyOptions({ price: sl }); else remove(plSL);
+    if (typeof tp === 'number' && isFinite(tp)) ensure(plTP, 'Target')?.applyOptions({ price: tp }); else remove(plTP);
 
     // Zone shading overlay (approximate)
     try {
-      if (zoneRef.current && seriesRef.current && zmin && zmax) {
+      if (zoneRef.current && seriesRef.current && typeof zmin === 'number' && typeof zmax === 'number' && isFinite(zmin) && isFinite(zmax)) {
         const y1 = seriesRef.current.priceToCoordinate(zmin);
         const y2 = seriesRef.current.priceToCoordinate(zmax);
         if (y1 != null && y2 != null) {

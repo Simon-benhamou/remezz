@@ -61,7 +61,7 @@ export default function AnalysisTabs({ analysis }: any){
                 <div><b>Label:</b> {sentiment.label} &nbsp; <b>Score:</b> {sentiment.score}</div>
                 <ul>{(sentiment.bullets||[]).map((b:string, i:number)=><li key={i}>{b}</li>)}</ul>
               </div>
-            ) : <>No data</>
+            ) : <>No data (LLM disabled or unavailable — using technicals only)</>
           },
           {
             key: 'news',
@@ -71,7 +71,7 @@ export default function AnalysisTabs({ analysis }: any){
                 <div>{news.summary}</div>
                 <ul>{(news.bullets||[]).map((b:string, i:number)=><li key={i}>{b}</li>)}</ul>
               </div>
-            ) : <>No data</>
+            ) : <>No data (LLM disabled or unavailable)</>
           },
         ]}
       />

@@ -74,22 +74,26 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
           </Space>
         )}
 
-        <Card size='small' title={<span>Readiness &nbsp; {typeof agent?.aiCalls==='number' && (<span style={{ fontSize:12, color:'#888' }}>AI calls: {agent.aiCalls}</span>)}</span>} style={{ marginTop: 8 }}>
-          <Space direction='vertical'>
-            <div>{check(inZoneNow)} In entry zone</div>
-            <div>{check(!confirmNeeded || confirmNow)} Confirmation {confirmNeeded ? '(close beyond mid)' : '(not required)'}</div>
-            <div>{check(spreadOk)} Spread OK</div>
-            <div>{check(levOk)} Leverage OK (≤ configured max)</div>
-            <div>Status: <Tag color={agent?.state==='ARMED'?'blue': agent?.state==='MANAGE'?'green': agent?.state==='HALT'?'red':'default'}>{agent?.state || 'IDLE'}</Tag></div>
-            <div style={{ fontSize:12, color:'#666' }}>
-              LLM usage — total: <b>{ai?.total ?? 0}</b>, calls/h: <b>{(ai?.callsPerHour ?? 0).toFixed?.(2)}</b>, cost: <b>${(ai?.costUsd ?? 0).toFixed?.(4)}</b>
-              {Object.keys(aiByModel).length>0 && (
-                <>
-                  <br />by model: {Object.entries(aiByModel).map(([m,c]:any)=> (<span key={m} style={{ marginRight:8 }}><Tag>{m}</Tag>×{c}</span>))}
-                </>
-              )}
-            </div>
-          </Space>
+        <Card size='small' title={<span>Readiness &nbsp; {typeof ai?.total==='number' && (<span style={{ fontSize:12, color:'#888' }}>AI calls: {ai.total}</span>)}</span>} style={{ marginTop: 8 }}>
+          {agent?.plan ? (
+            <Space direction='vertical'>
+              <div>{check(inZoneNow)} In entry zone</div>
+              <div>{check(!confirmNeeded || confirmNow)} Confirmation {confirmNeeded ? '(close beyond mid)' : '(not required)'}</div>
+              <div>{check(spreadOk)} Spread OK</div>
+              <div>{check(levOk)} Leverage OK (≤ configured max)</div>
+              <div>Status: <Tag color={agent?.state==='ARMED'?'blue': agent?.state==='MANAGE'?'green': agent?.state==='HALT'?'red':'default'}>{agent?.state || 'IDLE'}</Tag></div>
+              <div style={{ fontSize:12, color:'#666' }}>
+                LLM usage — total: <b>{ai?.total ?? 0}</b>, calls/h: <b>{(ai?.callsPerHour ?? 0).toFixed?.(2)}</b>, cost: <b>${(ai?.costUsd ?? 0).toFixed?.(4)}</b>
+                {Object.keys(aiByModel).length>0 && (
+                  <>
+                    <br />by model: {Object.entries(aiByModel).map(([m,c]:any)=> (<span key={m} style={{ marginRight:8 }}><Tag>{m}</Tag>×{c}</span>))}
+                  </>
+                )}
+              </div>
+            </Space>
+          ) : (
+            <div style={{ color:'#666' }}>No plan armed yet. Propose a plan to enable readiness checks.</div>
+          )}
         </Card>
 
         {llmPlan && (

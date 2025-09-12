@@ -67,6 +67,8 @@ function AppInner(){
         setStatus((s:any)=>({ ...s, session: msg.data, symbol: msg.data.symbol || s.symbol }));
         const sym = msg.data?.symbol || symbol;
         if (msg.data?.symbol) setSymbol(msg.data.symbol);
+        // Ensure WS subscription follows the active session + symbol
+        try { if (wsRef.current) wsSend(wsRef.current, { type: 'sub', symbol: sym, sessionId: msg.data?.id }); } catch {}
         try { setStrategy(await api.strategyToday(sym)); } catch {}
         try { setAnalysis(await api.analysis(sym)); } catch {}
         try { setKpi(await api.getPerf(msg.data.id)); } catch {}
@@ -113,6 +115,13 @@ function AppInner(){
       })();
     }
   }, [symbol]);
+
+  // Keep WS subscription in sync on symbol/session changes or reconnects
+  React.useEffect(()=>{
+    const sym = status?.session?.symbol || status?.symbol || symbol;
+    const sid = status?.session?.id || sessionParam;
+    try { if (wsRef.current && wsConnected) wsSend(wsRef.current, { type: 'sub', symbol: sym, sessionId: sid }); } catch {}
+  }, [status?.symbol, status?.session?.id, wsConnected]);
 
 
   const hasSession = !!status?.session;

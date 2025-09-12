@@ -48,6 +48,41 @@ export async function fullAnalysis(symbol: string) {
     );
     news = JSON.parse(n);
   } catch {}
+
+  // Fallbacks when LLM is disabled/unavailable
+  if (!sentiment) {
+    try {
+      const rsi = Number(technical.rsi14 || 50);
+      const tr = Number(technical.ema20 - technical.ema50);
+      const bullish = rsi >= 60 && tr > 0;
+      const bearish = rsi <= 40 && tr < 0;
+      const label = bullish ? 'bullish' : bearish ? 'bearish' : 'neutral';
+      const score = bullish ? Math.min(1, 0.55 + Math.min(0.25, Math.abs(tr)/(technical.last||1)))
+                   : bearish ? Math.min(1, 0.55 + Math.min(0.25, Math.abs(tr)/(technical.last||1)))
+                   : 0.5;
+      sentiment = {
+        label,
+        score: Number(score.toFixed(2)),
+        bullets: [
+          `RSI14 at ${rsi.toFixed(1)} suggests ${rsi>=50?'momentum':'weakness'}`,
+          `EMA20-EMA50 ${tr>=0?'positive':'negative'} (${tr.toFixed(2)})`,
+          `ATR% ${Number(technical.atrPct||0).toFixed(2)} — volatility context`
+        ]
+      };
+    } catch {}
+  }
+  if (!news) {
+    try {
+      news = {
+        summary: `No curated news available. Falling back to technical context for ${symbol}. Consider exchange updates and macro catalysts; verify with external sources.`,
+        bullets: [
+          `24h momentum proxy: ${Number(technical.trend || (technical.ema20-technical.ema50)).toFixed?.(2)}`,
+          `S/R bias: ${technical.srBias}`,
+          `ATR%: ${Number(technical.atrPct||0).toFixed(2)} (volatility)`
+        ]
+      };
+    } catch {}
+  }
   let ticker: any = null;
   try {
     const t = await getTicker(symbol);

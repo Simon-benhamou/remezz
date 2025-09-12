@@ -5,6 +5,7 @@ import { proposePlan } from "../ai/planOrchestrator.js";
 import { PlanZ } from "../agent/planSchema.js";
 import { activeSession } from "../session/session.js";
 import { requestStrategy } from "../ai/strategyManager.js";
+import { levels as calcLevels } from "../risk/brackets.js";
 export const router = Router();
 router.post("/generate", async (req, res) => {
   const symbol = String(req.body?.symbol || "BTCUSDT");
@@ -19,7 +20,36 @@ router.get("/today", async (req, res) => {
     where: { symbol, id: { startsWith: `${today}:` } },
     orderBy: { createdAt: "desc" },
   });
-  res.json(s);
+  if (!s) return res.json(null);
+  try {
+    const entry: any = (s as any).entryJson || null;
+    const risk: any = (s as any).riskJson || null;
+    const bias: any = (s as any).bias || 'none';
+    const side = bias === 'long' ? 'buy' : 'sell';
+    const entryMid = entry?.price ?? (
+      typeof entry?.zone?.min === 'number' && typeof entry?.zone?.max === 'number'
+        ? (entry.zone.min + entry.zone.max) / 2
+        : undefined
+    );
+    let levels: any = undefined;
+    if (typeof entryMid === 'number' && Number.isFinite(entryMid) && entryMid > 0 && risk?.stop && risk?.target) {
+      levels = calcLevels(entryMid, side as any, risk.stop, risk.target);
+    }
+    res.json({
+      id: s.id,
+      symbol: s.symbol,
+      bias: s.bias,
+      confidence: s.confidence,
+      entry,
+      risk,
+      validity: { from: s.validityFrom, to: s.validityTo },
+      rationale: s.rationale,
+      trigger: s.trigger,
+      levels,
+    });
+  } catch {
+    res.json(s);
+  }
 });
 // New: Ask LLM for rebound/rejection plan JSON (PlanZ)
 router.post('/propose-plan', async (req, res) => {
