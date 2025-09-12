@@ -34,6 +34,7 @@ function AppInner(){
   const wsRef = React.useRef<WebSocket|null>(null);
   const [wsConnected, setWsConnected] = React.useState<boolean>(false);
   const navigate = useNavigate();
+  const sessionRef = React.useRef<string|undefined>(undefined);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
@@ -43,10 +44,17 @@ function AppInner(){
     return m ? decodeURIComponent(m[1]) : undefined;
   }, [location.pathname]);
 
+  React.useEffect(()=>{
+    sessionRef.current = status?.session?.id || sessionParam;
+  }, [status?.session?.id, sessionParam]);
+
   React.useEffect(()=> {
     // Require login (API key) before bootstrapping app
     if (!getApiKey()) { navigate('/login', { replace: true }); return; }
     const ws = openWS(API_BASE, getApiKey(), symbol, async (msg) => {
+      // Ignore messages not matching current session (when provided)
+      const curSid = sessionRef.current;
+      if (msg?.sessionId && curSid && msg.sessionId !== curSid) return;
       if (msg.type === 'hello_ok') return;
       if (msg.type === 'sub_ok') { try { wsSend(ws, { type: 'fetch_now' }); } catch {} return; }
       if (msg.type === 'tick') {
@@ -57,7 +65,7 @@ function AppInner(){
       if (msg.type === 'agent_state') {
         setAgent((prev:any)=> ({ ...prev, ...msg.data }));
         // Refresh balance snapshot
-        try { if (sessionParam) setAgent(await api.getAgentState(sessionParam)); } catch {}
+        try { const sid = sessionRef.current; if (sid) setAgent(await api.getAgentState(sid)); } catch {}
         // If exit happened, refresh KPI
         if (msg?.data?.exit) {
           try { const s = await api.getSession(); if (s?.id) setKpi(await api.getPerf(s.id)); } catch {}
@@ -77,7 +85,7 @@ function AppInner(){
       if (msg.type === 'orders') {
         setOrders(msg.data);
         // Refresh balance after order book change
-        try { if (sessionParam) setAgent(await api.getAgentState(sessionParam)); } catch {}
+        try { const sid = sessionRef.current; if (sid) setAgent(await api.getAgentState(sid)); } catch {}
       }
       if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
     }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; }, sessionParam);

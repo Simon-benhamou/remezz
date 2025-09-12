@@ -23,7 +23,7 @@ export function broadcast(type: string, payload: any, symbol?: string, sessionId
     if (!c.authed) continue;
     if (sessionId && c.sessionId && c.sessionId !== sessionId) continue;
     if (symbol && c.symbol && c.symbol !== symbol) continue;
-    send(c.ws, { type, data: payload });
+    send(c.ws, { type, symbol, sessionId, data: payload });
   }
 }
 
@@ -78,15 +78,15 @@ export function startWSHub(wss: WebSocketServer) {
         if (msg.type === 'sub') {
           state.symbol = msg.symbol;
           state.sessionId = msg.sessionId;
-          send(ws, { type: 'sub_ok', data: { symbol: state.symbol } });
+          send(ws, { type: 'sub_ok', symbol: state.symbol, sessionId: state.sessionId, data: { symbol: state.symbol, sessionId: state.sessionId } });
           // Push analysis immediately so UI can fill tabs
           try {
             const a = await fullAnalysis(state.symbol!);
-            send(ws, { type: 'analysis', data: a });
+            send(ws, { type: 'analysis', symbol: state.symbol, sessionId: state.sessionId, data: a });
           } catch {
             try {
               const snap = await buildTechSnapshot(state.symbol!);
-              send(ws, { type: 'analysis', data: { symbol: state.symbol, technical: snap } });
+              send(ws, { type: 'analysis', symbol: state.symbol, sessionId: state.sessionId, data: { symbol: state.symbol, technical: snap } });
             } catch {}
           }
           return;
@@ -109,7 +109,7 @@ export function startWSHub(wss: WebSocketServer) {
           const symbol = state.symbol || cfg.SYMBOL;
           try {
             const snap = await buildTechSnapshot(symbol);
-            send(ws, { type: 'analysis', data: { symbol, technical: snap } });
+            send(ws, { type: 'analysis', symbol: state.symbol, sessionId: state.sessionId, data: { symbol, technical: snap } });
           } catch {}
           return;
         }
