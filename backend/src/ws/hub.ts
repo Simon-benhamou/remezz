@@ -28,9 +28,33 @@ export function broadcast(type: string, payload: any, symbol?: string) {
 export function startWSHub(wss: WebSocketServer) {
   const cfg = getConfig();
 
+  // Heartbeat ping/pong to clean up dead connections
+  const HEARTBEAT_MS = 30_000;
+  const hb = setInterval(() => {
+    try {
+      // @ts-ignore
+      const all = (wss as any).clients as Set<WebSocket>;
+      for (const ws of all) {
+        // @ts-ignore
+        if (!(ws as any).isAlive) {
+          try { ws.terminate(); } catch {}
+          continue;
+        }
+        // @ts-ignore
+        (ws as any).isAlive = false;
+        try { ws.ping(); } catch {}
+      }
+    } catch {}
+  }, HEARTBEAT_MS);
+
   wss.on('connection', (ws) => {
     const state: ClientState = { ws, authed: !cfg.REQUIRE_API_KEY };
     clients.add(state);
+
+    // mark alive on connect and on pong
+    // @ts-ignore
+    (ws as any).isAlive = true;
+    ws.on('pong', () => { try { /* @ts-ignore */ (ws as any).isAlive = true; } catch {} });
 
     ws.on('message', async (raw) => {
       try {
@@ -102,4 +126,8 @@ export function startWSHub(wss: WebSocketServer) {
 
     ws.on('close', () => { clients.delete(state); });
   });
+
+  // Ensure timer is cleared on server close
+  // @ts-ignore
+  wss.on('close', () => { try { clearInterval(hb); } catch {} });
 }

@@ -72,7 +72,7 @@ function AppInner(){
         try { setAgent(await api.getAgentState()); } catch {}
       }
       if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
-    }, (ok)=> setWsConnected(ok));
+    }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; });
     wsRef.current = ws;
 
     // Bootstrap via REST for tables, perf and analysis

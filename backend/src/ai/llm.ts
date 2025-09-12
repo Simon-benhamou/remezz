@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { getConfig } from "../utils/env.js";
-import { incAICall, recordAICall } from "../metrics/aiCalls.js";
+import { recordAICall } from "../metrics/aiCalls.js";
 import { createHash } from 'crypto';
 
 export type LLMChoice = "openai" | "grok" | "none";
@@ -45,7 +45,6 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   lastCallAt = now;
 
   const which = pickLLM();
-  incAICall();
   const p = (async () => {
     try {
       let out: string;
@@ -63,8 +62,9 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
 }
 
 async function callOpenAI(prompt: string): Promise<string> {
-  const client = new OpenAI({ apiKey: getConfig().OPENAI_API_KEY });
-  const model = "gpt-5-mini";
+  const cfg = getConfig();
+  const client = new OpenAI({ apiKey: cfg.OPENAI_API_KEY });
+  const model = cfg.OPENAI_MODEL || "gpt-4o-mini";
   const resp = await client.chat.completions.create({
     model,
     temperature: 0.2,

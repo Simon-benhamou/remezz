@@ -1,3 +1,5 @@
+import { prisma } from '../db/client.js';
+
 let currentSessionId: string | null = null;
 
 type AICounters = {
@@ -7,30 +9,43 @@ type AICounters = {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
-  startedAt: number; // when session was set active
+  startedAt: number; // ms since epoch
   firstCallAt?: number;
   lastCallAt?: number;
 };
 
 const store = new Map<string, AICounters>();
 
-export function setActiveSession(sessionId: string | null) {
+export async function setActiveSession(sessionId: string | null) {
   currentSessionId = sessionId;
   if (!sessionId) return;
-  if (!store.has(sessionId)) {
-    store.set(sessionId, { sessionId, total: 0, byModel: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, startedAt: Date.now() });
+  // Initialize store from DB so metrics persist across restarts
+  try {
+    const [sess, kpi] = await Promise.all([
+      prisma.agentSession.findUnique({ where: { id: sessionId } }),
+      prisma.sessionKpi.findUnique({ where: { sessionId } }),
+    ]);
+    const byModel = (kpi?.aiByModel as any) || {};
+    const startedAt = sess?.startedAt ? new Date(sess.startedAt).getTime() : Date.now();
+    store.set(sessionId, {
+      sessionId,
+      total: Number(kpi?.aiCallsTotal || 0),
+      byModel,
+      inputTokens: Number(kpi?.aiInputTokens || 0),
+      outputTokens: Number(kpi?.aiOutputTokens || 0),
+      costUsd: Number(kpi?.aiCostUsd || 0),
+      startedAt,
+      firstCallAt: undefined,
+      lastCallAt: undefined,
+    });
+  } catch {
+    if (!store.has(sessionId)) {
+      store.set(sessionId, { sessionId, total: 0, byModel: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, startedAt: Date.now() });
+    }
   }
 }
 
-export function incAICall() {
-  if (!currentSessionId) return;
-  const s = ensure(currentSessionId);
-  s.total += 1;
-  s.lastCallAt = Date.now();
-  if (!s.firstCallAt) s.firstCallAt = s.lastCallAt;
-}
-
-export function recordAICall(params: { model: string; inputTokens?: number; outputTokens?: number; costUsd?: number }) {
+export async function recordAICall(params: { model: string; inputTokens?: number; outputTokens?: number; costUsd?: number }) {
   if (!currentSessionId) return;
   const s = ensure(currentSessionId);
   s.total += 1;
@@ -40,26 +55,82 @@ export function recordAICall(params: { model: string; inputTokens?: number; outp
   s.costUsd += Math.max(0, params.costUsd || 0);
   s.lastCallAt = Date.now();
   if (!s.firstCallAt) s.firstCallAt = s.lastCallAt;
+
+  // Persist increments to DB SessionKpi
+  try {
+    const existing = await prisma.sessionKpi.findUnique({ where: { sessionId: currentSessionId } });
+    const curByModel: Record<string, number> = ((existing?.aiByModel as any) || {}) as Record<string, number>;
+    curByModel[params.model] = (curByModel[params.model] || 0) + 1;
+    await prisma.sessionKpi.update({
+      where: { sessionId: currentSessionId },
+      data: {
+        aiCallsTotal: { increment: 1 },
+        aiInputTokens: { increment: Math.max(0, params.inputTokens || 0) },
+        aiOutputTokens: { increment: Math.max(0, params.outputTokens || 0) },
+        aiCostUsd: { increment: Math.max(0, params.costUsd || 0) },
+        aiByModel: curByModel as any,
+        lastUpdated: new Date(),
+      },
+    });
+  } catch {
+    // ignore persistence errors to avoid breaking hot path
+  }
 }
 
-export function getAICallsCount(sessionId?: string): number {
+export async function getAICallsCount(sessionId?: string): Promise<number> {
   const id = sessionId || currentSessionId || '';
-  return store.get(id)?.total || 0;
+  const mem = store.get(id)?.total;
+  if (typeof mem === 'number') return mem;
+  try {
+    const kpi = await prisma.sessionKpi.findUnique({ where: { sessionId: id } });
+    return Number(kpi?.aiCallsTotal || 0);
+  } catch { return 0; }
 }
 
-export function getAIMetrics(sessionId?: string) {
+export async function getAIMetrics(sessionId?: string) {
   const id = sessionId || currentSessionId || '';
-  const s = store.get(id);
-  if (!s) return { total: 0, byModel: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, startedAt: null as any, firstCallAt: null as any, lastCallAt: null as any, callsPerHour: 0 };
+  let s = store.get(id);
+  if (!s) {
+    try {
+      const [sess, kpi] = await Promise.all([
+        prisma.agentSession.findUnique({ where: { id } }),
+        prisma.sessionKpi.findUnique({ where: { sessionId: id } }),
+      ]);
+      s = {
+        sessionId: id,
+        total: Number(kpi?.aiCallsTotal || 0),
+        byModel: (kpi?.aiByModel as any) || {},
+        inputTokens: Number(kpi?.aiInputTokens || 0),
+        outputTokens: Number(kpi?.aiOutputTokens || 0),
+        costUsd: Number(kpi?.aiCostUsd || 0),
+        startedAt: sess?.startedAt ? new Date(sess.startedAt).getTime() : Date.now(),
+      };
+    } catch {
+      s = { sessionId: id, total: 0, byModel: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, startedAt: Date.now() };
+    }
+  }
   const now = Date.now();
-  const base = s.firstCallAt || s.startedAt || now;
-  const hours = Math.max(0.25, (now - base) / 3600000); // smooth early spikes: min 15 min window
+  // Use actual session startedAt if available to compute rate since creation
+  const hours = Math.max(0.25, (now - (s.startedAt || now)) / 3_600_000);
   const callsPerHour = s.total / hours;
-  return { total: s.total, byModel: s.byModel, inputTokens: s.inputTokens, outputTokens: s.outputTokens, costUsd: s.costUsd, startedAt: s.startedAt, firstCallAt: s.firstCallAt, lastCallAt: s.lastCallAt, callsPerHour };
+  return {
+    total: s.total,
+    byModel: s.byModel,
+    inputTokens: s.inputTokens,
+    outputTokens: s.outputTokens,
+    costUsd: s.costUsd,
+    startedAt: s.startedAt,
+    firstCallAt: s.firstCallAt || null,
+    lastCallAt: s.lastCallAt || null,
+    callsPerHour,
+  };
 }
 
 function ensure(sessionId: string): AICounters {
   let s = store.get(sessionId);
-  if (!s) { s = { sessionId, total: 0, byModel: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, startedAt: Date.now() }; store.set(sessionId, s); }
+  if (!s) {
+    s = { sessionId, total: 0, byModel: {}, inputTokens: 0, outputTokens: 0, costUsd: 0, startedAt: Date.now() };
+    store.set(sessionId, s);
+  }
   return s;
 }

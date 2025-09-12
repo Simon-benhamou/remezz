@@ -1,6 +1,5 @@
 import axios, { AxiosHeaders } from "axios";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
-console.log(import.meta.env.VITE_API_BASE)
 let TOKEN: string = localStorage.getItem('apiKey') || '';
 export function setApiKey(tok: string){
   TOKEN = tok || '';

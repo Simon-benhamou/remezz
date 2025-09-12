@@ -47,7 +47,7 @@ router.post('/start', async (req,res)=>{
     budgetPct: body.budgetPct,
     startBalanceUsd: startBal,
   });
-  setActiveSession(s.id);
+  await setActiveSession(s.id);
   // Activate the new agent state machine (profile freeze)
   let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
   if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
@@ -109,7 +109,7 @@ router.get('/triggers', async (_req,res)=>{
 // AI calls count for current session
 router.get('/ai-calls', async (_req,res)=>{
   const s = await activeSession().catch(()=>null);
-  res.json({ count: getAICallsCount(s?.id || undefined) });
+  res.json({ count: await getAICallsCount(s?.id || undefined) });
 });
 
 // New: pass a LLM JSON plan to the agent (validates + arms)
@@ -139,7 +139,7 @@ router.get('/state', async (_req,res)=>{
       balance = { ...(balance||{}), equityUsd: equityLive, upnlUsd, upnlPct };
     }
   } catch {}
-  res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos, balance, aiMetrics: getAIMetrics() });
+  res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos, balance, aiMetrics: await getAIMetrics() });
 });
 
 // List recent sessions (active first), with open position count

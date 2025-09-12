@@ -3,8 +3,7 @@ import { getConfig } from '../utils/env.js';
 
 export const router = Router();
 
-// Simple login for demo/testing: single user
-// username: simon, password: shira1704
+// Simple login for demo/testing: single user (username/password or single access code)
 router.post('/login', async (req, res) => {
   const { username, password, code } = req.body || {};
   const cfg = getConfig();

@@ -23,6 +23,8 @@ model AgentSession {
   kpi        SessionKpi?
   triggers   TriggerLog[]
   sentiments SentimentSnapshot[]   // back-rel from SentimentSnapshot.session
+
+  @@index([stoppedAt, startedAt])
 }
 
 model Strategy {
@@ -45,6 +47,9 @@ model Strategy {
   // ⇐ back-rel manquant pour Order.strategy
   // back-rel for Order.strategy
   orders       Order[]
+
+  @@index([sessionId])
+  @@index([symbol, createdAt])
 }
 
 model Order {
@@ -72,6 +77,9 @@ model Order {
   updatedAt       DateTime @updatedAt
 
   fills           Fill[]
+
+  @@index([sessionId, createdAt])
+  @@index([sessionId, status])
 }
 
 model Fill {
@@ -89,6 +97,9 @@ model Fill {
   // Support AgentSession.fills relation
   session      AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId    String?
+
+  @@index([sessionId])
+  @@index([orderId])
 }
 
 model Position {
@@ -104,6 +115,8 @@ model Position {
   leverage      Float?
   openedAt      DateTime? @default(now())
   updatedAt     DateTime  @updatedAt
+
+  @@index([sessionId])
 }
 
 model SessionKpi {
@@ -117,6 +130,13 @@ model SessionKpi {
   maxDrawdownPct   Float  @default(0)
   avgHoldingMin    Float  @default(0)
   lastUpdated      DateTime @default(now())
+
+  // AI usage metrics (persisted so they survive restarts)
+  aiCallsTotal     Int    @default(0)
+  aiInputTokens    Int    @default(0)
+  aiOutputTokens   Int    @default(0)
+  aiCostUsd        Float  @default(0)
+  aiByModel        Json?
 }
 
 model SentimentSnapshot {
@@ -128,6 +148,8 @@ model SentimentSnapshot {
   twitterBullish Float?
   newsScore      Float?
   summary        String?
+
+  @@index([sessionId])
 }
 
 model TriggerLog {
@@ -138,4 +160,7 @@ model TriggerLog {
   kind      String   // support-touch | resistance-touch | sudden-move | volume-spike | news-spike
   payload   Json
   createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([createdAt])
 }

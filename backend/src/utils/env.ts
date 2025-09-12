@@ -19,6 +19,7 @@ export type Cfg = {
   USE_GROK: boolean;
   GROK_API_KEY?: string;
   OPENAI_API_KEY?: string;
+  OPENAI_MODEL?: string;      // e.g. gpt-4o-mini
   DATABASE_URL?: string;
   // LLM cost settings (per 1K tokens). Set to 0 to disable cost estimation.
   OPENAI_COST_IN_PER_1K: number;
@@ -58,13 +59,14 @@ export function getConfig(): Cfg {
     USE_GROK: (e.USE_GROK || "true") === "true",
     GROK_API_KEY: e.GROK_API_KEY || "",
     OPENAI_API_KEY: e.OPENAI_API_KEY || "",
+    OPENAI_MODEL: e.OPENAI_MODEL || "gpt-4o-mini",
     DATABASE_URL: e.DATABASE_URL || "",
     OPENAI_COST_IN_PER_1K: Number(e.OPENAI_COST_IN_PER_1K || "0"),
     OPENAI_COST_OUT_PER_1K: Number(e.OPENAI_COST_OUT_PER_1K || "0"),
     GROK_COST_IN_PER_1K: Number(e.GROK_COST_IN_PER_1K || "0"),
     GROK_COST_OUT_PER_1K: Number(e.GROK_COST_OUT_PER_1K || "0"),
-    AUTH_USER: e.AUTH_USER || "simon",
-    AUTH_PASS: e.AUTH_PASS || "shira1704",
+    AUTH_USER: e.AUTH_USER || "",
+    AUTH_PASS: e.AUTH_PASS || "",
     ACCESS_CODE: e.ACCESS_CODE || "",
     LLM_DISABLE: (e.LLM_DISABLE || "false") === "true",
     LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "5000"),

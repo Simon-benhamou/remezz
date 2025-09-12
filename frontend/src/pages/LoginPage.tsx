@@ -8,7 +8,7 @@ export default function LoginPage(){
   const [loading, setLoading] = React.useState(false);
   const nav = useNavigate();
 
-  React.useEffect(()=>{ if (getApiKey()) nav('/start', { replace: true }); }, []);
+  React.useEffect(()=>{ if (getApiKey()) nav('/dashboard', { replace: true }); }, []);
 
   const submit = async () => {
     setLoading(true);
@@ -17,7 +17,7 @@ export default function LoginPage(){
       const out = (await api.client.post('/api/auth/login', {  code })).data;
       if (out?.token) setApiKey(out.token);
       message.success('Logged in');
-      nav('/start', { replace: true });
+      nav('/dashboard', { replace: true });
     } catch (e:any) {
       message.error('Invalid credentials');
     } finally { setLoading(false); }
