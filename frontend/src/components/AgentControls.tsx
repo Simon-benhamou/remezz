@@ -1,7 +1,7 @@
 import React from "react";
 import { Card, Space, Button, Segmented, InputNumber, message, Modal, Switch } from "antd";
 import { api } from "../api";
-export default function AgentControls({ session, symbol, onChange }: any) {
+export default function AgentControls({ session, symbol, onChange, showStart = false }: any) {
   const [mode, setMode] = React.useState<"paper" | "live">("paper");
   const [startBal, setStartBal] = React.useState<number | undefined>(undefined);
   const [riskPct, setRiskPct] = React.useState<number>(1.5);
@@ -61,9 +61,11 @@ export default function AgentControls({ session, symbol, onChange }: any) {
           &nbsp; Daily loss %: <InputNumber min={3} max={4} step={0.1} value={dailyLoss} onChange={setDailyLoss as any} style={{ width: 120 }} />
         </div>
         <Space>
-          <Button type="primary" onClick={start} disabled={!!session}>
-            Start
-          </Button>
+          {showStart && (
+            <Button type="primary" onClick={start} disabled={!!session}>
+              Start
+            </Button>
+          )}
           <Button danger onClick={stop} disabled={!session}>
             Stop
           </Button>

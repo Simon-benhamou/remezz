@@ -68,10 +68,11 @@ export const api = {
   listSessions: async () => (await client.get("/api/agent/sessions")).data,
   deleteSession: async (id: string) => (await client.delete(`/api/agent/sessions/${id}`)).data,
   overview: async () => (await client.get("/api/agent/overview")).data,
+  setSessionSymbol: async (symbol: string) => (await client.post('/api/agent/set-symbol', { symbol })).data,
   getAgentState: async () => (await client.get("/api/agent/state")).data,
   proposeAgentPlan: async (plan: any) => (await client.post("/api/agent/propose", plan)).data,
   getTriggers: async () => (await client.get("/api/agent/triggers")).data,
-  getOrders: async () => (await client.get("/api/orders")).data,
+  getOrders: async (sessionId?: string) => (await client.get("/api/orders", { params: { sessionId } })).data,
   getPerf: async (sessionId: string) =>
     (await client.get("/api/perf", { params: { sessionId } })).data,
   analysis: async (symbol: string) =>

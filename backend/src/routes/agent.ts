@@ -20,6 +20,10 @@ router.post('/start', async (req,res)=>{
   const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number };
   let symbol = body.symbol as string;
 
+  // Enforce single active session
+  const existing = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
+  if (existing) return res.status(400).json({ error: 'active_session_exists', session: existing });
+
   // Optional: ranking only if no symbol provided and RANK_ON_START=true
   if (!symbol && process.env.RANK_ON_START === 'true') {
     const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];

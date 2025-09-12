@@ -57,8 +57,8 @@ export async function recordEnter(params: {
       openedAt: new Date(),
     }
   });
-  // Broadcast latest orders snapshot
-  const rows = await prisma.order.findMany({ orderBy: { createdAt: 'desc' }, take: 200 });
+  // Broadcast latest orders for this session only
+  const rows = await prisma.order.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'desc' }, take: 200 });
   broadcast('orders', rows, params.symbol);
 }
 
@@ -107,6 +107,6 @@ export async function recordExit(params: {
   // Mark position as closed (qty to 0)
   if (lastPos) await prisma.position.update({ where: { id: lastPos.id }, data: { qty: 0, updatedAt: new Date() } });
 
-  const rows = await prisma.order.findMany({ orderBy: { createdAt: 'desc' }, take: 200 });
+  const rows = await prisma.order.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: 'desc' }, take: 200 });
   broadcast('orders', rows, params.symbol);
 }

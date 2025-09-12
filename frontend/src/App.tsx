@@ -13,7 +13,6 @@ import PerfPanel from './components/PerfPanel';
 import TriggersPanel from './components/TriggersPanel';
 import AnalysisTabs from './components/AnalysisTabs';
 import SimulatorPanel from './components/SimulatorPanel';
-import ActivationPanel from './components/ActivationPanel';
 import HelpPanel from './components/HelpPanel';
 import LoginPage from './pages/LoginPage';
 import SessionsPage from './pages/SessionsPage';
@@ -61,9 +60,11 @@ function AppInner(){
       if (msg.type === 'session') {
         setStatus((s:any)=>({ ...s, session: msg.data, symbol: msg.data.symbol || s.symbol }));
         const sym = msg.data?.symbol || symbol;
+        if (msg.data?.symbol) setSymbol(msg.data.symbol);
         try { setStrategy(await api.strategyToday(sym)); } catch {}
         try { setAnalysis(await api.analysis(sym)); } catch {}
         try { setKpi(await api.getPerf(msg.data.id)); } catch {}
+        try { setOrders(await api.getOrders(msg.data.id)); } catch {}
       }
       if (msg.type === 'orders') {
         setOrders(msg.data);
@@ -82,7 +83,7 @@ function AppInner(){
         const sym = s?.session?.symbol || s?.symbol || symbol;
         if (s?.session?.symbol) setSymbol(s.session.symbol);
         navigate(s?.session ? '/monitor' : '/dashboard', { replace: true });
-        setOrders(await api.getOrders());
+        if (s.session?.id) setOrders(await api.getOrders(s.session.id)); else setOrders([]);
         if (s.session?.id) setKpi(await api.getPerf(s.session.id));
         setTriggers(await api.getTriggers());
         try { setAgent(await api.getAgentState()); } catch {}
@@ -171,9 +172,7 @@ function AppInner(){
           <Routes>
             <Route path='/' element={<Navigate to='/dashboard' replace />} />
             <Route path='/dashboard' element={<DashboardPage />} />
-            <Route path='/start' element={<ActivationPanel defaultSymbol={symbol} onStarted={async ()=>{
-              const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s })); if (s?.session?.symbol) { setSymbol(s.session.symbol); try { setAnalysis(await api.analysis(s.session.symbol)); } catch {} } navigate('/monitor');
-            }} />} />
+            {/* Start route removed; starting is done from Sessions modal */}
             <Route path='/monitor' element={hasSession ? (
               <>
               {loadingMonitor && (<div style={{ position:'fixed', inset:0, background:'rgba(255,255,255,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
@@ -195,8 +194,8 @@ function AppInner(){
                 </Col>
                 <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
                 <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
-                <Col xs={24} lg={8}><AgentControls session={status?.session} symbol={status?.symbol} onChange={async ()=>{
-                const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s })); if (!s?.session) navigate('/start'); else { if (s.session.symbol) setSymbol(s.session.symbol); }
+                <Col xs={24} lg={8}><AgentControls session={status?.session} symbol={status?.symbol} showStart={false} onChange={async ()=>{
+                const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s })); if (!s?.session) navigate('/sessions'); else { if (s.session.symbol) setSymbol(s.session.symbol); }
                 }} /></Col>
                 <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} onPlan={()=>{}} /></Col>
                 <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
@@ -206,7 +205,7 @@ function AppInner(){
                 <Col xs={24}><HelpPanel /></Col>
               </Row>
               </>
-            ) : <ActivationPanel defaultSymbol={symbol} onStarted={async ()=>{ const s = await api.status(); setStatus((p:any)=>({...p,...s})); navigate('/monitor'); }} /> } />
+            ) : <Navigate to='/sessions' replace /> } />
             <Route path='/sessions' element={<SessionsPage />} />
             <Route path='/testing' element={<TestingPage />} />
             <Route path='*' element={<Navigate to='/dashboard' replace />} />

@@ -36,7 +36,7 @@ export default function SessionsPage(){
         </Space>
       }>
         <Table rowKey="id" dataSource={rows.filter(r=> !r.stoppedAt)} pagination={false}
-          onRow={(r)=> ({ onClick: ()=> { navigate('/monitor'); } })}
+          onRow={(r)=> ({ onClick: async ()=> { try { await api.setSessionSymbol(r.symbol); } catch {}; navigate('/monitor'); } })}
           columns={[
             { title:'Symbol', dataIndex:'symbol' },
             { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
@@ -49,7 +49,7 @@ export default function SessionsPage(){
 
       <Card title="All sessions">
       <Table rowKey="id" dataSource={rows} pagination={{ pageSize: 10 }}
-        onRow={(r)=> ({ onClick: ()=> { if (!r.stoppedAt) navigate('/monitor'); } })}
+        onRow={(r)=> ({ onClick: async ()=> { if (!r.stoppedAt) { try { await api.setSessionSymbol(r.symbol); } catch {}; navigate('/monitor'); } } })}
         columns={[
           { title:'Symbol', dataIndex:'symbol' },
           { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
@@ -79,7 +79,11 @@ export default function SessionsPage(){
             setOpen(false);
             await load();
             navigate('/monitor');
-          } catch {}
+          } catch (e: any) {
+            const msg = String(e?.response?.data?.error || e?.message || e);
+            if (msg.includes('active_session_exists')) message.warning('Stop the active session first.');
+            else message.error('Failed to start session');
+          }
         }}>
         <Form layout='vertical' form={form} initialValues={{ mode:'paper', riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }}>
           <Form.Item label='Symbol' name='symbol' rules={[{ required:true }]}>
