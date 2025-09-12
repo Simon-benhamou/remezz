@@ -2,10 +2,11 @@ import { prisma } from "../db/client.js";
 export async function startSession(
   symbol: string,
   mode: "paper" | "live",
-  startBalanceUsd?: number
+  startBalanceUsd?: number,
+  profile?: any
 ) {
   const s = await prisma.agentSession.create({
-    data: { symbol, mode, startBalanceUsd },
+    data: { symbol, mode, startBalanceUsd, profileJson: profile || undefined },
   });
   await prisma.sessionKpi.create({ data: { sessionId: s.id } });
   return s;

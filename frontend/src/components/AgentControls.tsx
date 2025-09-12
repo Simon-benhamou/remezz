@@ -14,29 +14,27 @@ export default function AgentControls({ session, symbol, onChange }: any) {
   };
   const stop = async () => {
     let closePos = true;
-    await new Promise<void>((resolve) => {
-      Modal.confirm({
-        title: 'Stop session',
-        content: (
-          <div>
-            Close any open position now?
-            <div style={{ marginTop: 8 }}>
-              <Switch checked={closePos} onChange={(v)=> (closePos = v)} />
-              <span style={{ marginLeft: 8 }}>{closePos ? 'Close position on stop' : 'Leave position open'}</span>
-            </div>
+    Modal.confirm({
+      title: 'Stop session',
+      content: (
+        <div>
+          Close any open position now?
+          <div style={{ marginTop: 8 }}>
+            <Switch checked={closePos} onChange={(v)=> (closePos = v)} />
+            <span style={{ marginLeft: 8 }}>{closePos ? 'Close position on stop' : 'Leave position open'}</span>
           </div>
-        ),
-        okText: 'Stop',
-        cancelText: 'Cancel',
-        onOk: () => resolve(),
-        onCancel: () => { resolve(); throw new Error('cancel'); }
-      });
-    }).catch(()=>{});
-    try {
-      await api.stopSession(closePos);
-      message.info(closePos ? "Session stopped and position closed" : "Session stopped (position left open)");
-      onChange?.();
-    } catch {}
+        </div>
+      ),
+      okText: 'Stop',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await api.stopSession(closePos);
+          message.info(closePos ? "Session stopped and position closed" : "Session stopped (position left open)");
+          onChange?.();
+        } catch {}
+      }
+    });
   };
   return (
     <Card title="Agent Controls">

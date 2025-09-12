@@ -1,26 +1,111 @@
 import React from 'react';
-import { Card, Table, Tag, Button, Space, message } from 'antd';
+import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, Segmented, InputNumber, Typography } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
+  const [open, setOpen] = React.useState(false);
+  const [form] = Form.useForm();
+  const navigate = useNavigate();
   const load = async ()=>{ try { setRows(await api.listSessions()); } catch {} };
   React.useEffect(()=>{ load(); }, []);
   const stop = async (id:string)=>{
     // Only current active session can be stopped via main control; here we just hint
     message.info('Use Monitor > Stop to end the active session');
   };
+  const relaunch = async (r:any)=>{
+    const p = r.profile || {};
+    form.setFieldsValue({
+      symbol: r.symbol,
+      mode: r.mode,
+      startBalanceUsd: r.startBalanceUsd,
+      riskPerTradePct: p.riskPerTradePct ?? 1.5,
+      maxLeverage: p.maxLeverage ?? 4,
+      dailyLossLimitPct: p.dailyLossLimitPct ?? 3.5,
+      budgetPct: p.budgetPct ?? 100,
+    });
+    setOpen(true);
+  };
   return (
-    <Card title="Sessions">
+    <Space direction='vertical' style={{ width:'100%' }}>
+      <Card title={
+        <Space>
+          Active sessions
+          <Button type='primary' onClick={()=>{ form.setFieldsValue({ symbol:'BTC/USDT', mode:'paper', riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }); setOpen(true); }}>+ New Agent</Button>
+        </Space>
+      }>
+        <Table rowKey="id" dataSource={rows.filter(r=> !r.stoppedAt)} pagination={false}
+          onRow={(r)=> ({ onClick: ()=> { navigate('/monitor'); } })}
+          columns={[
+            { title:'Symbol', dataIndex:'symbol' },
+            { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
+            { title:'Started', dataIndex:'startedAt', render:(v)=> new Date(v).toLocaleString() },
+            { title:'Open pos', dataIndex:'openPositions' },
+            { title:'', render:(_,r)=> (<Space><Button danger onClick={(e)=> { e.stopPropagation(); stop(r.id); }}>Stop</Button></Space>) }
+          ]}
+        />
+      </Card>
+
+      <Card title="All sessions">
       <Table rowKey="id" dataSource={rows} pagination={{ pageSize: 10 }}
+        onRow={(r)=> ({ onClick: ()=> { if (!r.stoppedAt) navigate('/monitor'); } })}
         columns={[
           { title:'Symbol', dataIndex:'symbol' },
           { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
           { title:'Started', dataIndex:'startedAt', render:(v)=> new Date(v).toLocaleString() },
           { title:'Stopped', dataIndex:'stoppedAt', render:(v)=> v ? new Date(v).toLocaleString() : <Tag color='green'>ACTIVE</Tag> },
           { title:'Open pos', dataIndex:'openPositions' },
-          { title:'', render:(_,r)=> !r.stoppedAt ? (<Space><Button danger onClick={()=> stop(r.id)}>Stop</Button></Space>) : null }
+          { title:'', render:(_,r)=> !r.stoppedAt ? (
+            <Space><Button danger onClick={()=> stop(r.id)}>Stop</Button></Space>
+          ) : (
+            <Space>
+              <Button onClick={()=> relaunch(r)}>Restart</Button>
+              <Button danger onClick={async ()=>{
+                Modal.confirm({ title:'Delete session?', content:'This will permanently delete session and all associated data (orders, fills, positions, KPI, triggers).', okText:'Delete', okButtonProps:{ danger:true }, onOk: async ()=>{
+                  try { await api.deleteSession(r.id); message.success('Deleted'); await load(); } catch { message.error('Delete failed'); }
+                } });
+              }}>Delete</Button>
+            </Space>
+          ) }
         ]} />
+
+      <Modal open={open} title='Activate new agent' okText='Start' cancelText='Cancel' onCancel={()=> setOpen(false)}
+        onOk={async ()=>{
+          try {
+            const v = await form.validateFields();
+            await api.client.post('/api/agent/start', v);
+            message.success('Session started');
+            setOpen(false);
+            await load();
+            navigate('/monitor');
+          } catch {}
+        }}>
+        <Form layout='vertical' form={form} initialValues={{ mode:'paper', riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }}>
+          <Form.Item label='Symbol' name='symbol' rules={[{ required:true }]}>
+            <Input placeholder='e.g. BTC/USDT' />
+          </Form.Item>
+          <Form.Item label='Mode' name='mode'>
+            <Segmented options={['paper','live']} />
+          </Form.Item>
+          <Form.Item label='Start balance USD (optional)' name='startBalanceUsd'>
+            <InputNumber style={{ width: '100%' }} min={0} />
+          </Form.Item>
+          <Form.Item label='Risk % per trade' name='riskPerTradePct' rules={[{ type:'number', min:1, max:2 }]}>
+            <InputNumber style={{ width: '100%' }} min={1} max={2} step={0.1} />
+          </Form.Item>
+          <Form.Item label='Max leverage' name='maxLeverage' rules={[{ type:'number', min:1, max:5 }]}>
+            <InputNumber style={{ width: '100%' }} min={1} max={5} step={1} />
+          </Form.Item>
+          <Form.Item label='Daily loss limit %' name='dailyLossLimitPct' rules={[{ type:'number', min:3, max:4 }]}>
+            <InputNumber style={{ width: '100%' }} min={3} max={4} step={0.1} />
+          </Form.Item>
+          <Form.Item label='Budget % of balance (0-100)' name='budgetPct' rules={[{ type:'number', min:10, max:100 }]}>
+            <InputNumber style={{ width: '100%' }} min={10} max={100} step={5} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Card>
+    </Space>
   );
 }

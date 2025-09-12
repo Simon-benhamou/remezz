@@ -17,6 +17,8 @@ import ActivationPanel from './components/ActivationPanel';
 import HelpPanel from './components/HelpPanel';
 import LoginPage from './pages/LoginPage';
 import SessionsPage from './pages/SessionsPage';
+import DashboardPage from './pages/DashboardPage';
+import TestingPage from './pages/TestingPage';
 
   const { Header, Content, Footer } = Layout; const { Title } = Typography;
 
@@ -79,7 +81,7 @@ function AppInner(){
         const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s }));
         const sym = s?.session?.symbol || s?.symbol || symbol;
         if (s?.session?.symbol) setSymbol(s.session.symbol);
-        navigate(s?.session ? '/monitor' : '/start', { replace: true });
+        navigate(s?.session ? '/monitor' : '/dashboard', { replace: true });
         setOrders(await api.getOrders());
         if (s.session?.id) setKpi(await api.getPerf(s.session.id));
         setTriggers(await api.getTriggers());
@@ -120,9 +122,9 @@ function AppInner(){
 
   const location = useLocation();
   const menuItems = [
-    { key: '/start', label: 'Start' },
-    { key: '/monitor', label: 'Monitor' },
-    { key: '/test', label: 'Test' },
+    { key: '/dashboard', label: 'Dashboard' },
+    { key: '/sessions', label: 'Sessions' },
+    { key: '/testing', label: 'Testing' },
   ];
 
   return (
@@ -160,14 +162,15 @@ function AppInner(){
                 <Tag color={(Number(kpi?.roiPct||0) >= 0) ? 'green' : 'red'}>{Number(kpi?.roiPct||0).toFixed(2)}%</Tag>
               </>
             )}
-            <Link to='/sessions' style={{ color:'#ddd', textDecoration:'underline' }}>Sessions</Link>
+            {/* Navigation via left menu */}
             <a onClick={()=> wsRef.current && wsSend(wsRef.current, { type:'fetch_now' })} style={{ color:'#ddd', textDecoration:'underline' }}>Refresh now</a>
             <a onClick={()=> { clearApiKey(); navigate('/login'); }} style={{ color:'#ddd', textDecoration:'underline' }}>Logout</a>
           </Space>
         </Header>
         <Content style={{ padding: 12 , overflow:'auto', background:'#fff' }}>
           <Routes>
-            <Route path='/' element={<Navigate to='/start' replace />} />
+            <Route path='/' element={<Navigate to='/dashboard' replace />} />
+            <Route path='/dashboard' element={<DashboardPage />} />
             <Route path='/start' element={<ActivationPanel defaultSymbol={symbol} onStarted={async ()=>{
               const s = await api.status(); setStatus((prev:any)=>({ ...prev, ...s })); if (s?.session?.symbol) { setSymbol(s.session.symbol); try { setAnalysis(await api.analysis(s.session.symbol)); } catch {} } navigate('/monitor');
             }} />} />
@@ -205,8 +208,8 @@ function AppInner(){
               </>
             ) : <ActivationPanel defaultSymbol={symbol} onStarted={async ()=>{ const s = await api.status(); setStatus((p:any)=>({...p,...s})); navigate('/monitor'); }} /> } />
             <Route path='/sessions' element={<SessionsPage />} />
-            <Route path='/test' element={<Row gutter={[12,12]}><Col xs={24}><SimulatorPanel symbol={status?.symbol} /></Col></Row>} />
-            <Route path='*' element={<Navigate to='/start' replace />} />
+            <Route path='/testing' element={<TestingPage />} />
+            <Route path='*' element={<Navigate to='/dashboard' replace />} />
           </Routes>
         </Content>
         <Footer style={{ textAlign:'center' }}>Realtime WS • Continuous strategy • Multiple analyses • SL/TP overlays</Footer>

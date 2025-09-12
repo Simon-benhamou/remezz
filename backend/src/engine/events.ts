@@ -10,6 +10,9 @@ let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
 const NEAR_PIVOT_PCT = Number(process.env.NEAR_PIVOT_PCT || 0.25); // 0.25%
 const LOG_TRIGGERS = (process.env.LOG_TRIGGERS || 'true') === 'true';
+const TRIGGER_SAMPLE_RATE = Math.max(0, Math.min(1, Number(process.env.TRIGGER_SAMPLE_RATE || '1')));
+const TRIGGER_RETENTION_DAYS = Math.max(0, Number(process.env.TRIGGER_RETENTION_DAYS || '7'));
+let lastPurgeAt = 0;
 
 // Local throttling to limit LLM calls
 let lastStrategyAt: number | null = null;
@@ -71,13 +74,25 @@ async function tickOnce(sessionId: string|undefined, sym: string){
   if (trigger && sessionId) {
     let created: any = { sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv }, createdAt: new Date() };
     if (LOG_TRIGGERS) {
-      try {
-        created = await prisma.triggerLog.create({ data:{ sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv } }});
-      } catch {}
+      const keep = Math.random() < TRIGGER_SAMPLE_RATE;
+      if (keep) {
+        try {
+          created = await prisma.triggerLog.create({ data:{ sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv } }});
+        } catch {}
+      }
     }
     // Broadcast this trigger so UI can update live
     broadcast('trigger', created, sym);
     await maybeGenerateStrategy(sym, trigger, tech.last, sessionId);
+  }
+
+  // Periodic retention purge (hourly)
+  if (TRIGGER_RETENTION_DAYS > 0 && Date.now() - lastPurgeAt > 60*60*1000) {
+    lastPurgeAt = Date.now();
+    try {
+      const cutoff = new Date(Date.now() - TRIGGER_RETENTION_DAYS * 24 * 3600 * 1000);
+      await prisma.triggerLog.deleteMany({ where: { createdAt: { lt: cutoff } } });
+    } catch {}
   }
 
   return tech;

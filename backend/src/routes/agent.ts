@@ -36,7 +36,13 @@ router.post('/start', async (req,res)=>{
       startBal = totalUsd > 0 ? totalUsd : undefined;
     } catch {}
   }
-  const s = await startSession(symbol, mode, startBal);
+  const s = await startSession(symbol, mode, startBal, {
+    riskPerTradePct: body.riskPerTradePct,
+    maxLeverage: body.maxLeverage,
+    dailyLossLimitPct: body.dailyLossLimitPct,
+    budgetPct: body.budgetPct,
+    startBalanceUsd: startBal,
+  });
   setActiveSession(s.id);
   // Activate the new agent state machine (profile freeze)
   let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
@@ -143,6 +149,34 @@ router.get('/sessions', async (_req,res)=>{
     stoppedAt: r.stoppedAt,
     startBalanceUsd: r.startBalanceUsd,
     openPositions: (r.positions || []).filter(p => (p.qty ?? 0) > 0).length,
+    profile: (r as any).profileJson || null,
   }));
   res.json(out);
+});
+
+// Overview: active agents count, average ROI, sessions count
+router.get('/overview', async (_req,res)=>{
+  const sessions = await prisma.agentSession.findMany({ include: { kpi: true } });
+  const activeCount = sessions.filter(s => !s.stoppedAt).length;
+  const withKpi = sessions.filter(s => s.kpi != null);
+  const avgRoiPct = withKpi.length ? (withKpi.reduce((acc, s)=> acc + (Number(s.kpi?.roiPct || 0)), 0) / withKpi.length) : 0;
+  const avgWinRate = withKpi.length ? (withKpi.reduce((acc, s)=> acc + (Number(s.kpi?.winRate || 0)), 0) / withKpi.length) : 0;
+  res.json({ activeCount, sessionsCount: sessions.length, avgRoiPct, avgWinRate });
+});
+
+// Delete a session and all associated records (requires session to be stopped)
+router.delete('/sessions/:id', async (req,res)=>{
+  const { id } = req.params as { id: string };
+  const active = await activeSession();
+  if (active?.id === id) return res.status(400).json({ error: 'stop_active_session_first' });
+  // Hard delete children then session
+  await prisma.fill.deleteMany({ where: { sessionId: id } });
+  await prisma.order.deleteMany({ where: { sessionId: id } });
+  await prisma.position.deleteMany({ where: { sessionId: id } });
+  await prisma.strategy.deleteMany({ where: { sessionId: id } });
+  await prisma.triggerLog.deleteMany({ where: { sessionId: id } });
+  await prisma.sentimentSnapshot.deleteMany({ where: { sessionId: id } });
+  await prisma.sessionKpi.deleteMany({ where: { sessionId: id } });
+  await prisma.agentSession.delete({ where: { id } });
+  res.json({ ok: true });
 });
