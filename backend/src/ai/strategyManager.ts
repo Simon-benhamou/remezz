@@ -3,6 +3,7 @@ import { prisma } from '../db/client.js';
 import { generateStrategy } from './orchestrator.js';
 import { markStrategyLLM, shouldAllowStrategyLLM, updateZoneState, zoneExitDebounced } from './guard.js';
 import { levels as calcLevels } from '../risk/brackets.js';
+import { setActiveSession } from '../metrics/aiCalls.js';
 
 const COOL_MIN = Number(process.env.LLM_STRATEGY_COOLDOWN_MIN || 10); // minutes
 const MAX_PER_HOUR = Number(process.env.LLM_STRATEGY_MAX_PER_HOUR || 6);
@@ -28,6 +29,8 @@ export async function requestStrategy(req: Requested) {
     return { strategy: last, levels: undefined as any, reused: true };
   }
 
+  // Ensure AI usage is attributed to the triggering session when present
+  try { if (req.sessionId) await setActiveSession(req.sessionId); } catch {}
   const strat = await generateStrategy(req.symbol, req.trigger);
   updateZoneState(key, strat.entry?.zone || null);
   markStrategyLLM(key);

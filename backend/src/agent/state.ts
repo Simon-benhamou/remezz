@@ -10,6 +10,7 @@ import { recordEnter, recordExit } from './persistence.js';
 import { recomputeKpi } from '../metrics/kpi.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
+import { proposePlan } from '../ai/planOrchestrator.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -97,7 +98,7 @@ export class ReboundRejectionAgent {
       return;
     }
     this.state = 'ARMED';
-    const aiCalls = await getAICallsCount();
+    const aiCalls = await getAICallsCount(this.sessionId || undefined);
     broadcast('agent_state', { state: this.state, plan: this.plan, aiCalls }, this.profile.symbol, this.sessionId || undefined);
 
     // Live exposure inspection: if in live mode and a position already exists, adopt it and switch to MANAGE
@@ -177,7 +178,7 @@ export class ReboundRejectionAgent {
     await recordEnter({ sessionId: this.sessionId!, symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
     this.state = 'MANAGE';
     this.tradesToday += 1;
-    broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
+    broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     this.entering = false;
   }
 
@@ -286,18 +287,27 @@ export class ReboundRejectionAgent {
     // Release reserved notional capacity in paper broker
     try { (this.broker as any).releaseCommitted?.(Math.abs(price * this.pos.qty)); } catch {}
     this.state = 'EXIT';
-    broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct, ts: Date.now() }, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
+    broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct, ts: Date.now() }, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     this.pos = null;
     this.state = 'REPORT';
-    broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
+    broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     // back to SCAN unless guardrails trip
     const guard = await assessRisk({ sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10), realizedPnlPctToday: this.realizedPnlTodayPct, consecutiveStops: this.consecutiveStops, tradesToday: this.tradesToday });
     this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'COOLDOWN');
-    broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount() }, this.profile.symbol, this.sessionId || undefined);
+    broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
 
     // Immediately request a fresh strategy after an exit (force to bypass cool-down)
     try {
       await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price, force: true });
+    } catch {}
+
+    // Auto-propose and arm a new plan once back to SCAN
+    try {
+      if (this.state === 'SCAN' && this.profile) {
+        const plan = await proposePlan(this.profile.symbol);
+        await this.propose(plan as any);
+        await this.validateAndArm();
+      }
     } catch {}
   }
 

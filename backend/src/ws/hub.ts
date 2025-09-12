@@ -4,6 +4,7 @@ import { getConfig } from '../utils/env.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { fullAnalysis } from '../ai/analysis.js';
 import { requestStrategy } from '../ai/strategyManager.js';
+import { setActiveSession } from '../metrics/aiCalls.js';
 
 type ClientState = {
   ws: WebSocket;
@@ -78,6 +79,7 @@ export function startWSHub(wss: WebSocketServer) {
         if (msg.type === 'sub') {
           state.symbol = msg.symbol;
           state.sessionId = msg.sessionId;
+          try { if (state.sessionId) await setActiveSession(state.sessionId); } catch {}
           send(ws, { type: 'sub_ok', symbol: state.symbol, sessionId: state.sessionId, data: { symbol: state.symbol, sessionId: state.sessionId } });
           // Push analysis immediately so UI can fill tabs
           try {

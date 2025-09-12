@@ -152,7 +152,7 @@ router.get('/state', async (req,res)=>{
       balance = { ...(balance||{}), equityUsd: equityLive, upnlUsd, upnlPct };
     }
   } catch {}
-  res.json({ state: a?.state, profile: a?.profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics() });
+  res.json({ state: a?.state, profile: a?.profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics(sessionId || undefined) });
 });
 
 // List recent sessions (active first), with open position count
@@ -229,14 +229,7 @@ router.get('/overview', async (_req,res)=>{
 });
 
 // Overview: active agents count, average ROI, sessions count
-router.get('/overview', async (_req,res)=>{
-  const sessions = await prisma.agentSession.findMany({ include: { kpi: true } });
-  const activeCount = sessions.filter(s => !s.stoppedAt).length;
-  const withKpi = sessions.filter(s => s.kpi != null);
-  const avgRoiPct = withKpi.length ? (withKpi.reduce((acc, s)=> acc + (Number(s.kpi?.roiPct || 0)), 0) / withKpi.length) : 0;
-  const avgWinRate = withKpi.length ? (withKpi.reduce((acc, s)=> acc + (Number(s.kpi?.winRate || 0)), 0) / withKpi.length) : 0;
-  res.json({ activeCount, sessionsCount: sessions.length, avgRoiPct, avgWinRate });
-});
+// (removed duplicate /overview route)
 
 // Delete a session and all associated records (requires session to be stopped)
 router.delete('/sessions/:id', async (req,res)=>{
