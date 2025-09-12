@@ -36,11 +36,19 @@ export default function TestingPage(){
   ];
 
   const runBatch = async ()=>{
-    const scenarios = presets;
     const out: any[] = [];
-    for (const sc of scenarios as any[]) {
+    for (const sc of presets as any[]) {
+      // Build scenario-specific options without mutating state
+      let o:any = { ...opts };
+      if (sc.key === 'trend_up') {
+        o = { ...o, tf:'15m', adxMin:20, rsiFilter:{ longMax: undefined, shortMin: undefined }, exitPolicy:'trend', targetR:1.5 };
+      } else if (sc.key === 'range') {
+        o = { ...o, tf:'5m', adxMin:10, exitPolicy:'time', trailingATRmult:0.8, targetR:1.0 };
+      } else if (sc.key === 'high_vol') {
+        o = { ...o, tf:'5m', adxMin: undefined, trailingATRmult:1.2, targetMode:'percent', targetPercent:4 };
+      }
       try {
-        const res = await (api as any).client.post('/api/sim/quicktest', { symbol, hours, opts: (sc.apply(), opts) }).then((r:any)=> r.data);
+        const res = await (api as any).client.post('/api/sim/quicktest', { symbol, hours, opts: o }).then((r:any)=> r.data);
         out.push({ key: sc.key, label: sc.label, stats: res?.stats });
       } catch { out.push({ key: sc.key, label: sc.label, error: true }); }
     }

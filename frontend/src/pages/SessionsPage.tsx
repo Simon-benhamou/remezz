@@ -75,14 +75,17 @@ export default function SessionsPage(){
         onOk={async ()=>{
           try {
             const v = await form.validateFields();
-            await api.client.post('/api/agent/start', v);
+            const res = await api.client.post('/api/agent/start', v);
             message.success('Session started');
             setOpen(false);
             await load();
-            // Find latest active session and go to monitor
-            const list = await api.listSessions();
-            const active = list.find((r:any)=> !r.stoppedAt);
-            if (active) navigate(`/monitor/${active.id}`);
+            // Navigate to the created session (preferred), fallback to first active
+            const sid = (res as any)?.data?.id;
+            if (sid) navigate(`/monitor/${sid}`); else {
+              const list = await api.listSessions();
+              const active = list.find((r:any)=> !r.stoppedAt);
+              if (active) navigate(`/monitor/${active.id}`);
+            }
           } catch (e: any) {
             const msg = String(e?.response?.data?.error || e?.message || e);
             if (msg.includes('active_session_exists')) message.warning('Stop the active session first.');

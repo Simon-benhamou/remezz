@@ -57,7 +57,7 @@ export default function MonitorPage(){
 
   // WS subscription dedicated to this monitor
   React.useEffect(()=>{
-    if (!sessionId) return;
+    if (!sessionId || !symbol) return; // wait until symbol known to subscribe correctly
     const ws = openWS(API_BASE, getApiKey(), symbol, async (msg)=>{
       if (msg?.sessionId && msg.sessionId !== sessionId) return; // strict filter
       if (msg.type === 'hello_ok') return;
