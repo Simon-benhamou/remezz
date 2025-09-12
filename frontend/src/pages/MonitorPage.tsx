@@ -41,7 +41,7 @@ export default function MonitorPage(){
       setLoading(true);
       try {
         const s = await api.status(sessionId);
-        if (!s?.session?.id) { navigate('/sessions'); return; }
+        if (!sessionId) { navigate('/sessions'); return; }
         setStatus(s);
         const sym = s?.session?.symbol || s?.symbol || symbol;
         if (sym) setSymbol(sym);
