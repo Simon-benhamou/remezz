@@ -9,6 +9,7 @@ import { Agent } from '../agent/state.js';
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
 const NEAR_PIVOT_PCT = Number(process.env.NEAR_PIVOT_PCT || 0.25); // 0.25%
+const LOG_TRIGGERS = (process.env.LOG_TRIGGERS || 'true') === 'true';
 
 // Local throttling to limit LLM calls
 let lastStrategyAt: number | null = null;
@@ -68,10 +69,12 @@ async function tickOnce(sessionId: string|undefined, sym: string){
   }
 
   if (trigger && sessionId) {
-    const created = await prisma.triggerLog.create({ data:{
-      sessionId, symbol: sym, kind: trigger,
-      payload: { price: tech.last, support, resistance, pivots: piv }
-    }});
+    let created: any = { sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv }, createdAt: new Date() };
+    if (LOG_TRIGGERS) {
+      try {
+        created = await prisma.triggerLog.create({ data:{ sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv } }});
+      } catch {}
+    }
     // Broadcast this trigger so UI can update live
     broadcast('trigger', created, sym);
     await maybeGenerateStrategy(sym, trigger, tech.last, sessionId);

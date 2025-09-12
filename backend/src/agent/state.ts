@@ -9,6 +9,7 @@ import { broadcast } from '../ws/hub.js';
 import { recordEnter, recordExit, getActiveSession } from './persistence.js';
 import { recomputeKpi } from '../metrics/kpi.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
+import { requestStrategy } from '../ai/strategyManager.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -209,6 +210,15 @@ export class ReboundRejectionAgent {
     }
   }
 
+  // Force close current position at market using latest price snapshot
+  async closeNow() {
+    if (!this.profile || !this.broker || !this.pos) return;
+    try {
+      const snap = await buildTechSnapshot(this.profile.symbol);
+      await this.exit(snap.last, 'time');
+    } catch {}
+  }
+
   async exit(price: number, reason: 'tp'|'sl'|'time') {
     if (!this.pos || !this.broker || !this.profile) return;
     const dir = this.pos.side === 'buy' ? 1 : -1;
@@ -219,6 +229,19 @@ export class ReboundRejectionAgent {
     const pnlPct = (pnl / Math.max(1, startEquity)) * 100;
     this.realizedPnlTodayPct += pnlPct;
     this.consecutiveStops = reason === 'sl' ? (this.consecutiveStops + 1) : 0;
+    // Place actual closing order (market) with opposite side
+    try {
+      // In paper mode, free up committed capacity first to avoid margin check on the close
+      try { (this.broker as any).releaseCommitted?.(Math.abs(price * this.pos.qty)); } catch {}
+      await this.broker.place({
+        symbol: this.profile.symbol,
+        side: this.pos.side === 'buy' ? 'sell' : 'buy',
+        type: 'market',
+        qty: this.pos.qty,
+        leverage: this.profile.maxLeverage,
+      });
+    } catch {}
+
     await recordExit({ symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: this.pos.qty, realizedPnl: pnl }).catch(()=>{});
     // Update session KPIs (ROI%, realized/unrealized)
     try { const s = await getActiveSession(); if (s?.id) await recomputeKpi(s.id); } catch {}
@@ -233,6 +256,12 @@ export class ReboundRejectionAgent {
     const guard = await assessRisk({ sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10), realizedPnlPctToday: this.realizedPnlTodayPct, consecutiveStops: this.consecutiveStops, tradesToday: this.tradesToday });
     this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'COOLDOWN');
     broadcast('agent_state', { state: this.state, aiCalls: getAICallsCount() }, this.profile.symbol);
+
+    // Immediately request a fresh strategy after an exit (force to bypass cool-down)
+    try {
+      const s = await getActiveSession();
+      await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: s?.id, priceHint: price, force: true });
+    } catch {}
   }
 
   halt() { this.state = 'HALT'; }

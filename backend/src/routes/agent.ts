@@ -67,8 +67,11 @@ router.post('/start', async (req,res)=>{
   res.json(s);
 });
 
-router.post('/stop', async (_req,res)=>{
+router.post('/stop', async (req,res)=>{
   const s = await activeSession(); if(!s) return res.status(400).json({error:'no active session'});
+  const { closePosition } = (req.body || {}) as { closePosition?: boolean };
+  // Optionally close current position first
+  try { if (closePosition) await Agent.closeNow(); } catch {}
   await stopSession(s.id);
   broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol);
   Agent.halt();
@@ -127,4 +130,19 @@ router.get('/state', async (_req,res)=>{
     }
   } catch {}
   res.json({ state: Agent.state, profile: Agent.profile, plan: Agent.plan, pos: Agent.pos, balance, aiMetrics: getAIMetrics() });
+});
+
+// List recent sessions (active first), with open position count
+router.get('/sessions', async (_req,res)=>{
+  const rows = await prisma.agentSession.findMany({ orderBy: { startedAt: 'desc' }, take: 100, include: { positions: true } });
+  const out = rows.map(r => ({
+    id: r.id,
+    symbol: r.symbol,
+    mode: r.mode,
+    startedAt: r.startedAt,
+    stoppedAt: r.stoppedAt,
+    startBalanceUsd: r.startBalanceUsd,
+    openPositions: (r.positions || []).filter(p => (p.qty ?? 0) > 0).length,
+  }));
+  res.json(out);
 });

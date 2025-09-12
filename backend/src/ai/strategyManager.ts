@@ -14,13 +14,14 @@ export type Requested = {
   trigger: string;
   sessionId?: string;
   priceHint?: number;
+  force?: boolean; // bypass throttling for critical events (eg. position-exit)
 };
 
 export async function requestStrategy(req: Requested) {
   const key = req.symbol;
 
-  // Throttle global
-  const allowed = shouldAllowStrategyLLM(key, { cooldownMin: COOL_MIN, maxPerHour: MAX_PER_HOUR });
+  // Throttle global unless forced
+  const allowed = req.force ? true : shouldAllowStrategyLLM(key, { cooldownMin: COOL_MIN, maxPerHour: MAX_PER_HOUR });
   if (!allowed) {
     // reuse last known strategy if available
     const last = await prisma.strategy.findFirst({ where: { symbol: req.symbol }, orderBy: { createdAt: 'desc' } });

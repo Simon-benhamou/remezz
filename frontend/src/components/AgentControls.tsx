@@ -1,5 +1,5 @@
 import React from "react";
-import { Card, Space, Button, Segmented, InputNumber, message } from "antd";
+import { Card, Space, Button, Segmented, InputNumber, message, Modal, Switch } from "antd";
 import { api } from "../api";
 export default function AgentControls({ session, symbol, onChange }: any) {
   const [mode, setMode] = React.useState<"paper" | "live">("paper");
@@ -13,9 +13,30 @@ export default function AgentControls({ session, symbol, onChange }: any) {
     onChange?.();
   };
   const stop = async () => {
-    await api.stopSession();
-    message.info("Session stopped");
-    onChange?.();
+    let closePos = true;
+    await new Promise<void>((resolve) => {
+      Modal.confirm({
+        title: 'Stop session',
+        content: (
+          <div>
+            Close any open position now?
+            <div style={{ marginTop: 8 }}>
+              <Switch checked={closePos} onChange={(v)=> (closePos = v)} />
+              <span style={{ marginLeft: 8 }}>{closePos ? 'Close position on stop' : 'Leave position open'}</span>
+            </div>
+          </div>
+        ),
+        okText: 'Stop',
+        cancelText: 'Cancel',
+        onOk: () => resolve(),
+        onCancel: () => { resolve(); throw new Error('cancel'); }
+      });
+    }).catch(()=>{});
+    try {
+      await api.stopSession(closePos);
+      message.info(closePos ? "Session stopped and position closed" : "Session stopped (position left open)");
+      onChange?.();
+    } catch {}
   };
   return (
     <Card title="Agent Controls">

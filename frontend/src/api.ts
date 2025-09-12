@@ -63,8 +63,9 @@ export const api = {
   ) =>
     (await client.post("/api/agent/start", { symbol, mode, startBalanceUsd }))
       .data,
-  stopSession: async () => (await client.post("/api/agent/stop")).data,
+  stopSession: async (closePosition?: boolean) => (await client.post("/api/agent/stop", closePosition!=null ? { closePosition } : {})).data,
   getSession: async () => (await client.get("/api/agent/session")).data,
+  listSessions: async () => (await client.get("/api/agent/sessions")).data,
   getAgentState: async () => (await client.get("/api/agent/state")).data,
   proposeAgentPlan: async (plan: any) => (await client.post("/api/agent/propose", plan)).data,
   getTriggers: async () => (await client.get("/api/agent/triggers")).data,

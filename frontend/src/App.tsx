@@ -16,6 +16,7 @@ import SimulatorPanel from './components/SimulatorPanel';
 import ActivationPanel from './components/ActivationPanel';
 import HelpPanel from './components/HelpPanel';
 import LoginPage from './pages/LoginPage';
+import SessionsPage from './pages/SessionsPage';
 
   const { Header, Content, Footer } = Layout; const { Title } = Typography;
 
@@ -159,6 +160,7 @@ function AppInner(){
                 <Tag color={(Number(kpi?.roiPct||0) >= 0) ? 'green' : 'red'}>{Number(kpi?.roiPct||0).toFixed(2)}%</Tag>
               </>
             )}
+            <Link to='/sessions' style={{ color:'#ddd', textDecoration:'underline' }}>Sessions</Link>
             <a onClick={()=> wsRef.current && wsSend(wsRef.current, { type:'fetch_now' })} style={{ color:'#ddd', textDecoration:'underline' }}>Refresh now</a>
             <a onClick={()=> { clearApiKey(); navigate('/login'); }} style={{ color:'#ddd', textDecoration:'underline' }}>Logout</a>
           </Space>
@@ -202,6 +204,7 @@ function AppInner(){
               </Row>
               </>
             ) : <ActivationPanel defaultSymbol={symbol} onStarted={async ()=>{ const s = await api.status(); setStatus((p:any)=>({...p,...s})); navigate('/monitor'); }} /> } />
+            <Route path='/sessions' element={<SessionsPage />} />
             <Route path='/test' element={<Row gutter={[12,12]}><Col xs={24}><SimulatorPanel symbol={status?.symbol} /></Col></Row>} />
             <Route path='*' element={<Navigate to='/start' replace />} />
           </Routes>
