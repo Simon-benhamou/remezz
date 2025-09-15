@@ -30,12 +30,19 @@ router.post('/start', async (req,res)=>{
   }
   
   let startBal = startBalanceUsd;
-  if (mode === 'live' && (!startBal || startBal <= 0)) {
+  if (mode === 'live') {
     try {
       const ex = await exchange();
       const b = await ex.fetchBalance();
       const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
-      startBal = totalUsd > 0 ? totalUsd : undefined;
+      const freeUsd = (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
+      if (!startBal || startBal <= 0) {
+        // default to total equity if provided, else free; we track usage via budgetFraction anyway
+        startBal = totalUsd > 0 ? totalUsd : (freeUsd > 0 ? freeUsd : undefined);
+      } else {
+        // Cap provided start balance to available equity
+        if (totalUsd > 0) startBal = Math.min(startBal, totalUsd);
+      }
     } catch {}
   }
   const s = await startSession(symbol, mode, startBal, {

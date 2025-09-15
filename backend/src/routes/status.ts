@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getConfig } from "../utils/env.js";
-import { exchange } from "../exchange/ccxtClient.js";
+import { exchange, resolveSymbol } from "../exchange/ccxtClient.js";
 import { computeCoreIndicators } from "../data/market.js";
 import { prisma } from "../db/client.js";
 import { buildTechSnapshot } from "../ai/tech.js";
@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
   const symbol = s?.symbol || cfg.SYMBOL;
   const [balance, orders, indic] = await Promise.all([
     ex.fetchBalance().catch(()=>null),
-    ex.fetchOpenOrders(symbol).catch(()=>[]),
+    (async ()=>{ try { const s = await resolveSymbol(symbol); return await ex.fetchOpenOrders(s); } catch { return []; } })(),
     computeCoreIndicators(symbol).catch(()=>null),
   ]);
 

@@ -8,6 +8,7 @@ import { buildTechSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
 import { recordEnter, recordExit } from './persistence.js';
 import { recomputeKpi } from '../metrics/kpi.js';
+import { getConfig } from '../utils/env.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
@@ -46,6 +47,7 @@ export class ReboundRejectionAgent {
   extendedOnce = false;
   private entering = false;
   sessionId: string | null = null;
+  private breakoutTicks = 0; // consecutive ticks confirming breakout
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -132,6 +134,15 @@ export class ReboundRejectionAgent {
       // Safety: if a position is somehow set, switch to MANAGE
       if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); return; }
       const inZone = price >= Math.min(from,to) && price <= Math.max(from,to);
+      // Entry filters: basic RSI/ADX gates to avoid weak/contrarian entries
+      const cfg = getConfig();
+      if (this.plan.bias === 'short') {
+        if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_SHORT_MIN_ADX) return;
+        if ((snap as any).rsi14 != null && (snap as any).rsi14 < cfg.ENTRY_SHORT_MIN_RSI) return;
+      } else if (this.plan.bias === 'long') {
+        if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_LONG_MIN_ADX) return;
+        if ((snap as any).rsi14 != null && (snap as any).rsi14 > cfg.ENTRY_LONG_MAX_RSI) return;
+      }
       // simple confirmation: bias-aligned close beyond zone mid
       const confirm = this.plan.plan.entry_rule.confirm_close && ((this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid));
       if (inZone && confirm) await this.enter(price);
@@ -151,7 +162,8 @@ export class ReboundRejectionAgent {
     const round4 = (n:number)=> Math.round(n*1e4)/1e4;
     const stopRaw = this.plan.bias === 'long' ? entry - this.plan.stopDistance : entry + this.plan.stopDistance;
     const stop = round4(stopRaw);
-    const tp = this.plan.rPrices.map(x => round4(x.price));
+    const dir0 = side === 'buy' ? 1 : -1;
+    const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
     const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
     const usableBalance = Math.max(0, Math.min(bal.freeUsd, bal.freeUsd * budgetFrac));
     const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: this.profile.riskPerTradePct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
@@ -187,11 +199,28 @@ export class ReboundRejectionAgent {
     const dir = this.pos.side === 'buy' ? 1 : -1;
     const upR = (dir * (price - this.pos.entry)) / this.plan.stopDistance; // current R
 
-    // Trailing if > 1R: min(EMA20, price – 1*ATR)
+    // Trailing if > 1R
     if (upR > 1) {
-      const trailCandidate = Math.min(snap.ema20, price - (this.plan.atr));
-      if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, trailCandidate);
-      else this.pos.stop = Math.min(this.pos.stop, trailCandidate);
+      // ATR/EMA candidate
+      let candAtr: number;
+      if (this.pos.side === 'buy') {
+        candAtr = Math.min(snap.ema20, price - (this.plan.atr)); // below price
+      } else {
+        candAtr = Math.max(snap.ema20, price + (this.plan.atr)); // above price
+      }
+      // Optional fixed percentage candidate
+      let candPct = candAtr;
+      try {
+        const { TRAIL_PCT } = (await import('../utils/env.js')).getConfig();
+        const pct = Math.max(0, Number(TRAIL_PCT || 0));
+        if (pct > 0) {
+          const ratio = pct / 100; // percent to fraction
+          candPct = this.pos.side === 'buy' ? (price * (1 - ratio)) : (price * (1 + ratio));
+        }
+      } catch {}
+      const cand = this.pos.side === 'buy' ? Math.max(candAtr, candPct) : Math.min(candAtr, candPct);
+      if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, cand);
+      else this.pos.stop = Math.min(this.pos.stop, cand);
     }
 
     // TP handling: partial at TP1, full at TP2 (if any), otherwise trailing/SL/time
@@ -240,6 +269,31 @@ export class ReboundRejectionAgent {
       } catch {}
       return; // wait next tick after partial
     }
+
+    // Breakout invalidation: if price moves beyond the original zone against the position with hysteresis for N ticks
+    try {
+      const { BREAKOUT_HYSTERESIS_PCT, BREAKOUT_CONFIRM_TICKS, REVERSE_ON_BREAKOUT } = (await import('../utils/env.js')).getConfig();
+      const from = Math.min(this.plan.zone.from, this.plan.zone.to);
+      const to = Math.max(this.plan.zone.from, this.plan.zone.to);
+      const above = price > to * (1 + (BREAKOUT_HYSTERESIS_PCT/100));
+      const below = price < from * (1 - (BREAKOUT_HYSTERESIS_PCT/100));
+      const invalidShort = (this.pos.side === 'sell') && above;
+      const invalidLong = (this.pos.side === 'buy') && below;
+      const invalid = invalidShort || invalidLong;
+      if (invalid) this.breakoutTicks += 1; else this.breakoutTicks = 0;
+      if (invalid && this.breakoutTicks >= Math.max(1, BREAKOUT_CONFIRM_TICKS)) {
+        // Exit immediately on confirmed breakout
+        await this.exit(price, 'sl');
+        // Optional immediate reversal
+        if (REVERSE_ON_BREAKOUT && this.state === 'SCAN' && this.profile && this.broker) {
+          const side: 'buy'|'sell' = (invalidShort ? 'buy' : 'sell');
+          try {
+            await this.enterWithSide(price, side);
+          } catch {}
+        }
+        return;
+      }
+    } catch {}
 
     // Full exit on TP2 (if defined) or on stop/time
     const tpHitFinal = tp2Hit || (tp1Hit && this.pos.partialTaken && this.pos.tp.length === 1);
@@ -312,6 +366,37 @@ export class ReboundRejectionAgent {
   }
 
   halt() { this.state = 'HALT'; }
+
+  // Internal helper: place an entry with an explicit side at a given market price (used for breakout reversal)
+  private async enterWithSide(mktPrice: number, side: 'buy'|'sell') {
+    if (!this.broker || !this.plan || !this.profile) return;
+    if (this.pos || this.entering) return;
+    this.entering = true;
+    const bal = await this.broker.balance();
+    const entry = mktPrice;
+    const round4 = (n:number)=> Math.round(n*1e4)/1e4;
+    const stopRaw = side === 'buy' ? entry - this.plan.stopDistance : entry + this.plan.stopDistance;
+    const stop = round4(stopRaw);
+    const dir = side === 'buy' ? 1 : -1;
+    const tp = this.plan.rPrices.map(x => round4(entry + dir * x.r * this.plan!.stopDistance));
+    const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
+    const usableBalance = Math.max(0, Math.min(bal.freeUsd, bal.freeUsd * budgetFrac));
+    const { computeQtyNotional } = await import('../risk/manager.js');
+    const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: this.profile.riskPerTradePct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
+    const qty = notional / entry;
+    const placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: this.profile.maxLeverage, takeProfit: tp[0], stopLoss: stop });
+    if (placed.status === 'rejected') {
+      this.state = 'COOLDOWN';
+      this.entering = false;
+      return;
+    }
+    this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false };
+    await (await import('./persistence.js')).recordEnter({ sessionId: this.sessionId!, symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
+    this.state = 'MANAGE';
+    this.tradesToday += 1;
+    await (await import('../ws/hub.js')).broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await (await import('../metrics/aiCalls.js')).getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
+    this.entering = false;
+  }
 }
 
 // Singleton agent instance to be used by routes/engine

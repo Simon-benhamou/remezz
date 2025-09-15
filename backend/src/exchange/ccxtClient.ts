@@ -36,8 +36,11 @@ export async function resolveSymbol(requested: string): Promise<string> {
 
   const s = requested.toUpperCase();
 
-  // 1) If already valid, return it
-  if (ex.markets && ex.markets[s]) return s;
+  // Helper: ensure market is perpetual/swap
+  const isPerp = (m:any) => !!(m && (m.swap === true || m.type === 'swap' || m.perpetual === true || (m.contract === true && m.future !== true)));
+
+  // 1) If already valid and a perp/swap, return it
+  if (ex.markets && ex.markets[s] && isPerp(ex.markets[s])) return s;
 
   const candidates: string[] = [];
 
@@ -61,16 +64,16 @@ export async function resolveSymbol(requested: string): Promise<string> {
   const baseGuess = s.replace('/','').replace(':USDT','').replace('USDT','');
   candidates.push(`${baseGuess}/USDT`, `${baseGuess}/USDT:USDT`);
 
-  // 4) Keep only recognized markets
+  // 4) Keep only recognized perp/swap markets
   for (const c of candidates) {
-    if (ex.markets && ex.markets[c]) return c;
+    if (ex.markets && ex.markets[c] && isPerp(ex.markets[c])) return c;
   }
 
   // 5) Last resort: first USDT market for the same base
   const marketKeys = Object.keys(ex.markets || {});
   const match = marketKeys.find((k) => {
     const m = ex.markets[k];
-    return m?.base?.toUpperCase() === baseGuess && (m?.quote?.toUpperCase() === 'USDT' || k.includes(':USDT'));
+    return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (m?.quote?.toUpperCase() === 'USDT' || k.includes(':USDT'));
   });
   if (match) return match;
 

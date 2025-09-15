@@ -72,8 +72,11 @@ export const api = {
   proposeAgentPlan: async (sessionId: string, plan: any) => (await client.post("/api/agent/propose", { sessionId, ...plan })).data,
   getTriggers: async (sessionId: string) => (await client.get("/api/agent/triggers", { params: { sessionId } })).data,
   getOrders: async (sessionId?: string) => (await client.get("/api/orders", { params: { sessionId } })).data,
+  getTrades: async (sessionId?: string) => (await client.get("/api/orders/trades", { params: { sessionId } })).data,
   getPerf: async (sessionId: string) =>
     (await client.get("/api/perf", { params: { sessionId } })).data,
+  getPerfBreakdown: async (sessionId: string) =>
+    (await client.get("/api/perf/breakdown", { params: { sessionId } })).data,
   analysis: async (symbol: string) =>
     (await client.get("/api/analysis", { params: { symbol } })).data,
   quicktest: async (symbol: string, hours: number, plan?: any) =>

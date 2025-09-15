@@ -8,8 +8,10 @@ import AgentControls from '../components/AgentControls';
 import AgentStatePanel from '../components/AgentStatePanel';
 import IndicatorsPanel from '../components/IndicatorsPanel';
 import PerfPanel from '../components/PerfPanel';
+import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
 import TriggersPanel from '../components/TriggersPanel';
 import OrdersTable from '../components/OrdersTable';
+import TradesTable from '../components/TradesTable';
 import HelpPanel from '../components/HelpPanel';
 import { api, getApiKey } from '../api';
 import { openWS, wsSend } from '../ws';
@@ -30,6 +32,7 @@ export default function MonitorPage(){
   const [agent, setAgent] = React.useState<any>(null);
   const [kpi, setKpi] = React.useState<any>(null);
   const [orders, setOrders] = React.useState<any[]>([]);
+  const [trades, setTrades] = React.useState<any[]>([]);
   const [triggers, setTriggers] = React.useState<any[]>([]);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
@@ -49,6 +52,7 @@ export default function MonitorPage(){
         try { setAnalysis(await api.analysis(sym)); } catch {}
         try { if (s.session?.id) setKpi(await api.getPerf(s.session.id)); } catch {}
         try { if (s.session?.id) setOrders(await api.getOrders(s.session.id)); } catch {}
+        try { if (s.session?.id) setTrades(await api.getTrades(s.session.id)); } catch {}
         try { if (s.session?.id) setTriggers(await api.getTriggers(s.session.id)); } catch {}
         try { if (s.session?.id) setAgent(await api.getAgentState(s.session.id)); } catch {}
       } finally { setLoading(false); }
@@ -87,6 +91,7 @@ export default function MonitorPage(){
       }
       if (msg.type === 'orders') {
         setOrders(msg.data);
+        try { if (sessionId) setTrades(await api.getTrades(sessionId)); } catch {}
         try { setAgent(await api.getAgentState(sessionId)); } catch {}
       }
       if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
@@ -131,8 +136,10 @@ export default function MonitorPage(){
         <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} /></Col>
         <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
         <Col xs={24} lg={8}><PerfPanel kpi={kpi} session={status?.session} /></Col>
+        <Col xs={24} lg={16}><PerfBreakdownPanel sessionId={status?.session?.id} api={api} /></Col>
         <Col xs={24}><TriggersPanel rows={triggers} /></Col>
         <Col xs={24}><OrdersTable rows={orders} /></Col>
+        <Col xs={24}><TradesTable rows={trades} /></Col>
         <Col xs={24}><HelpPanel /></Col>
       </Row>
     </>

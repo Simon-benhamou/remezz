@@ -34,6 +34,16 @@ export type Cfg = {
   LLM_DISABLE: boolean;         // disable LLM calls (use heuristic fallbacks)
   LLM_MIN_INTERVAL_MS: number;  // min spacing between LLM calls (global)
   LLM_CACHE_TTL_MIN: number;    // default cache TTL for identical prompts
+  // Agent invalidation & trailing
+  BREAKOUT_CONFIRM_TICKS: number; // number of consecutive ticks outside zone to confirm breakout
+  BREAKOUT_HYSTERESIS_PCT: number; // percent beyond zone to consider breakout (e.g. 0.15)
+  REVERSE_ON_BREAKOUT: boolean;    // immediately reverse after confirmed breakout
+  TRAIL_PCT: number;               // optional trailing stop distance in percent (e.g., 0.4 for 0.4%)
+  // Entry filters (optional)
+  ENTRY_SHORT_MIN_ADX: number;
+  ENTRY_SHORT_MIN_RSI: number;
+  ENTRY_LONG_MIN_ADX: number;
+  ENTRY_LONG_MAX_RSI: number;
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -60,7 +70,7 @@ export function getConfig(): Cfg {
     GROK_API_KEY: e.GROK_API_KEY || "",
     OPENAI_API_KEY: e.OPENAI_API_KEY || "",
     // Use a valid default OpenAI model
-    OPENAI_MODEL: e.OPENAI_MODEL || "gpt-4o-mini",
+    OPENAI_MODEL: e.OPENAI_MODEL || "gpt-5-mini",
     DATABASE_URL: e.DATABASE_URL || "",
     OPENAI_COST_IN_PER_1K: Number(e.OPENAI_COST_IN_PER_1K || "0"),
     OPENAI_COST_OUT_PER_1K: Number(e.OPENAI_COST_OUT_PER_1K || "0"),
@@ -72,5 +82,13 @@ export function getConfig(): Cfg {
     LLM_DISABLE: (e.LLM_DISABLE || "false") === "true",
     LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "5000"),
     LLM_CACHE_TTL_MIN: Number(e.LLM_CACHE_TTL_MIN || "60"),
+    BREAKOUT_CONFIRM_TICKS: Number(e.BREAKOUT_CONFIRM_TICKS || "2"),
+    BREAKOUT_HYSTERESIS_PCT: Number(e.BREAKOUT_HYSTERESIS_PCT || "0.15"),
+    REVERSE_ON_BREAKOUT: (e.REVERSE_ON_BREAKOUT || "false") === "true",
+    TRAIL_PCT: Number(e.TRAIL_PCT || "0"),
+    ENTRY_SHORT_MIN_ADX: Number(e.ENTRY_SHORT_MIN_ADX || "18"),
+    ENTRY_SHORT_MIN_RSI: Number(e.ENTRY_SHORT_MIN_RSI || "45"),
+    ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "14"),
+    ENTRY_LONG_MAX_RSI: Number(e.ENTRY_LONG_MAX_RSI || "65"),
   };
 }
