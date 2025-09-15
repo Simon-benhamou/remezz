@@ -32,7 +32,7 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean }): P
   try {
     const cfg = getConfig();
     const day = new Date().toISOString().slice(0,10);
-    const out = await llmJSON(`${sys}\nContext: ${JSON.stringify(user)}`, { cacheKey: opts?.fresh ? undefined : `plan:${day}:${symbol}`, ttlMin: 120, bypassRate: !!opts?.fresh, noCache: !!opts?.fresh, provider: cfg.USE_GROK_FOR_PLAN ? 'grok' : undefined });
+    const out = await llmJSON(`${sys}\nContext: ${JSON.stringify(user)}`, { cacheKey: opts?.fresh ? undefined : `plan:${day}:${symbol}`, ttlMin: 120, bypassRate: !!opts?.fresh, noCache: !!opts?.fresh, provider: cfg.USE_GROK_FOR_PLAN ? 'grok' : 'openai' });
     const j = safeParse(out);
     const plan = PlanZ.parse(j);
     return plan;

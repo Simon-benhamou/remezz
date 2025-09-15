@@ -188,7 +188,11 @@ router.get('/sessions', async (_req,res)=>{
 
 // Aggregated view across active sessions for multi-agent header
 router.get('/overview', async (_req,res)=>{
-  const actives = await prisma.agentSession.findMany({ where: { stoppedAt: null }, include: { kpi: true } });
+  const [actives, totalSessions, recentAlerts] = await Promise.all([
+    prisma.agentSession.findMany({ where: { stoppedAt: null }, include: { kpi: true, positions: true } }),
+    prisma.agentSession.count(),
+    (async ()=>{ try { return await (prisma as any).alert.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }); } catch { return []; } })(),
+  ]);
   const symbols = actives.map(a => a.symbol);
   const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.kpi?.aiCallsTotal || 0), 0);
   const pnlUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
@@ -196,6 +200,7 @@ router.get('/overview', async (_req,res)=>{
   const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : (
     actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.roiPct || 0), 0) / actives.length) : 0
   );
+  const avgWinRate = actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.winRate || 0), 0) / actives.length) : 0;
   // Global exchange balance (live account)
   let exchangeBalance: any = null;
   try {
@@ -221,25 +226,45 @@ router.get('/overview', async (_req,res)=>{
       }
     }
   } catch {}
-  const bySession = actives.map(a => ({
-    id: a.id,
-    symbol: a.symbol,
-    mode: a.mode,
-    startedAt: a.startedAt,
-    pnlUsd: Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0),
-    roiPct: Number(a.kpi?.roiPct || 0),
-    aiCalls: Number(a.kpi?.aiCallsTotal || 0),
+  const bySession = await Promise.all(actives.map(async a => {
+    const agent = AgentHub.get(a.id) as any;
+    const state = agent?.state || 'IDLE';
+    const bias = agent?.plan?.bias || null;
+    const pos = agent?.pos || null;
+    const openQty = Array.isArray((a as any).positions) ? (a as any).positions.reduce((s:number,p:any)=> s + Number(p?.qty||0), 0) : 0;
+    return {
+      id: a.id,
+      symbol: a.symbol,
+      mode: a.mode,
+      startedAt: a.startedAt,
+      pnlUsd: Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0),
+      roiPct: Number(a.kpi?.roiPct || 0),
+      aiCalls: Number(a.kpi?.aiCallsTotal || 0),
+      state,
+      bias,
+      openQty,
+      hasPos: !!pos,
+      posSide: pos?.side || null,
+      posQty: pos?.qty || null,
+    };
   }));
+  // Alerts summary
+  const severityCounts = (recentAlerts as any[]).reduce((m:any,a:any)=>{ m[a.severity] = (m[a.severity]||0)+1; return m; }, { high:0, med:0, low:0 });
+  const alertsSlim = (recentAlerts as any[]).map(a => ({ id:a.id, sessionId:a.sessionId, symbol:a.symbol, kind:a.kind, severity:a.severity, createdAt:a.createdAt }));
   res.json({
     activeCount: actives.length,
+    sessionsCount: totalSessions,
     symbols,
     pnlUsd,
     capitalStartUsd,
     roiPct,
+    avgRoiPct: roiPct,
+    avgWinRate,
     aiCallsTotal,
     exchangeBalance,
     paperBalance,
     sessions: bySession,
+    alerts: { severityCounts, recent: alertsSlim },
   });
 });
 

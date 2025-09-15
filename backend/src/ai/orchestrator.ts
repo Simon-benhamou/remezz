@@ -83,7 +83,7 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: {
         last: feats.last, support: feats.support, resistance: feats.resistance, trend: feats.trend,
         pivots: feats.pivots, srBias: feats.srBias
       }
-    }), { cacheKey: opts?.fresh ? undefined : `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`, ttlMin: 90, bypassRate: !!opts?.fresh, noCache: !!opts?.fresh, provider: cfg.USE_GROK_FOR_STRATEGY ? 'grok' : undefined });
+    }), { cacheKey: opts?.fresh ? undefined : `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`, ttlMin: 90, bypassRate: !!opts?.fresh, noCache: !!opts?.fresh, provider: cfg.USE_GROK_FOR_STRATEGY ? 'grok' : 'openai' });
     // 2.2 Parse & validate
     const draft = safeParseJSON<StrategyJson>(raw);
     // patch fields minimum

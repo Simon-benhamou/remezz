@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Space, Alert, Input, InputNumber, Button, Table, Tag, message } from 'antd';
+import { Card, Space, Alert, Input, InputNumber, Button, Table, Tag, message, Select, Divider } from 'antd';
 import { api } from '../api';
 
 export default function TestingPage(){
@@ -9,6 +9,8 @@ export default function TestingPage(){
   const [result, setResult] = React.useState<any>(null);
   const [opts, setOpts] = React.useState<any>({ tf:'15m', confirmMode:'close', adxMin: undefined, rsiFilter: undefined, targetR: 1.0, targetMode:'R', targetPercent: 3, trailingATRmult: 1.0, exitPolicy:'time', maxHoldHours: 36 });
   const [batch, setBatch] = React.useState<any[]>([]);
+  const [multiSymbols, setMultiSymbols] = React.useState<string[]>(['BTC/USDT','ETH/USDT','SOL/USDT']);
+  const common = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT','BNB/USDT'];
 
   const load = async ()=>{ try { setRows(await api.listSessions()); } catch {} };
   React.useEffect(()=>{ load(); }, []);
@@ -55,6 +57,34 @@ export default function TestingPage(){
     setBatch(out);
   };
 
+  const runMulti = async ()=>{
+    const out: any[] = [];
+    for (const sym of multiSymbols) {
+      try {
+        const res = await (api as any).client.post('/api/sim/quicktest', { symbol: sym, hours, opts }).then((r:any)=> r.data);
+        out.push({ symbol: sym, stats: res?.stats });
+      } catch { out.push({ symbol: sym, error: true }); }
+    }
+    setBatch(out);
+  };
+
+  const runMultiPresets = async ()=>{
+    const out: any[] = [];
+    for (const sym of multiSymbols) {
+      for (const sc of presets as any[]) {
+        let o = { ...opts } as any;
+        if (sc.key === 'trend_up') o = { ...o, tf:'15m', adxMin:20, exitPolicy:'trend', targetR:1.5 };
+        if (sc.key === 'range') o = { ...o, tf:'5m', adxMin:10, exitPolicy:'time', trailingATRmult:0.8, targetR:1.0 };
+        if (sc.key === 'high_vol') o = { ...o, tf:'5m', trailingATRmult:1.2, targetMode:'percent', targetPercent:4 };
+        try {
+          const res = await (api as any).client.post('/api/sim/quicktest', { symbol: sym, hours, opts: o }).then((r:any)=> r.data);
+          out.push({ symbol: sym, preset: sc.label, stats: res?.stats });
+        } catch { out.push({ symbol: sym, preset: sc.label, error: true }); }
+      }
+    }
+    setBatch(out);
+  };
+
   return (
     <Space direction='vertical' style={{ width:'100%' }}>
       <Card title='Coherence checks'>
@@ -82,6 +112,16 @@ export default function TestingPage(){
             <Button onClick={runBatch}>Run presets batch</Button>
           </Space>
         </div>
+        <Divider />
+        <Space direction='vertical' style={{ width:'100%' }}>
+          <div>Multi-symbol tests (select perps, then run):</div>
+          <Select mode='multiple' style={{ minWidth: 300 }} value={multiSymbols} onChange={setMultiSymbols}
+            options={common.map(s=> ({ value:s, label:s }))} />
+          <Space>
+            <Button onClick={runMulti}>Run multi (default options)</Button>
+            <Button onClick={runMultiPresets}>Run multi + presets</Button>
+          </Space>
+        </Space>
         {result && (
           <div style={{ marginTop: 12 }}>
             <pre style={{ whiteSpace:'pre-wrap' }}>{JSON.stringify(result, null, 2)}</pre>
@@ -90,7 +130,18 @@ export default function TestingPage(){
         {batch.length>0 && (
           <div style={{ marginTop: 12 }}>
             <b>Batch summary:</b>
-            <pre style={{ whiteSpace:'pre-wrap' }}>{JSON.stringify(batch, null, 2)}</pre>
+            <Table size='small' pagination={{ pageSize: 10 }}
+              dataSource={batch.map((b:any,idx:number)=> ({ key: idx, symbol: b.symbol||'-', preset: b.preset||'-',
+                count: b.stats?.count||0, winrate: b.stats? Number(b.stats.winrate||0).toFixed(1):'-',
+                avgR: b.stats? Number(b.stats.avgR||0).toFixed(2):'-' }))}
+              columns={[
+                { title:'Symbol', dataIndex:'symbol' },
+                { title:'Preset', dataIndex:'preset' },
+                { title:'Trades', dataIndex:'count' },
+                { title:'WinRate %', dataIndex:'winrate' },
+                { title:'Avg R', dataIndex:'avgR' },
+              ]}
+            />
           </div>
         )}
       </Card>

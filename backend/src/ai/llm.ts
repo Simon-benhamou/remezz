@@ -45,6 +45,7 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   lastCallAt = now;
 
   const which = opts?.provider ?? pickLLM();
+  try { if (process.env.DEBUG_LLM === 'true') console.log(`[llm] provider=${which} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} key=${(opts?.cacheKey||'auto')}`); } catch {}
   const p = (async () => {
     try {
       let out: string;
