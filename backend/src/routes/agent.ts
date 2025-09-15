@@ -18,48 +18,51 @@ export const router = Router();
 router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
 router.post('/start', async (req,res)=>{
-  const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
-  const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number };
-  let symbol = body.symbol as string;
+  try {
+    const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
+    const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number };
+    let symbol = body.symbol as string;
 
   // Optional: ranking only if no symbol provided and RANK_ON_START=true
-  if (!symbol && process.env.RANK_ON_START === 'true') {
-    const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
-    const ranked = await selectBestPerp(list);     // may call LLM once
-    symbol = ranked[0]?.symbol || 'BTC/USDT';
-  }
+    if (!symbol && process.env.RANK_ON_START === 'true') {
+      const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
+      const ranked = await selectBestPerp(list);     // may call LLM once
+      symbol = ranked[0]?.symbol || 'BTC/USDT';
+    }
+    // Ensure we resolve a perpetual market symbol; return descriptive error if not available
+    try { const s = await (await import('../exchange/ccxtClient.js')).resolveSymbol(symbol); symbol = s; } catch (e:any) { return res.status(400).json({ error: 'symbol_not_found_perp', details: String(e?.message || e) }); }
   
-  let startBal = startBalanceUsd;
-  if (mode === 'live') {
-    try {
-      const ex = await exchange();
-      const b = await ex.fetchBalance();
-      const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
-      const freeUsd = (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
-      if (!startBal || startBal <= 0) {
-        // default to total equity if provided, else free; we track usage via budgetFraction anyway
-        startBal = totalUsd > 0 ? totalUsd : (freeUsd > 0 ? freeUsd : undefined);
-      } else {
-        // Cap provided start balance to available equity
-        if (totalUsd > 0) startBal = Math.min(startBal, totalUsd);
+    let startBal = startBalanceUsd;
+    if (mode === 'live') {
+      try {
+        const ex = await exchange();
+        const b = await ex.fetchBalance();
+        const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
+        const freeUsd = (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
+        if (!startBal || startBal <= 0) {
+          startBal = totalUsd > 0 ? totalUsd : (freeUsd > 0 ? freeUsd : undefined);
+        } else {
+          if (totalUsd > 0) startBal = Math.min(startBal, totalUsd);
+        }
+      } catch (e:any) {
+        return res.status(502).json({ error: 'exchange_balance_failed', details: String(e?.message || e) });
       }
-    } catch {}
-  }
-  const s = await startSession(symbol, mode, startBal, {
-    riskPerTradePct: body.riskPerTradePct,
-    maxLeverage: body.maxLeverage,
-    dailyLossLimitPct: body.dailyLossLimitPct,
-    budgetPct: body.budgetPct,
-    startBalanceUsd: startBal,
-  });
-  await setActiveSession(s.id);
+    }
+    const s = await startSession(symbol, mode, startBal, {
+      riskPerTradePct: body.riskPerTradePct,
+      maxLeverage: body.maxLeverage,
+      dailyLossLimitPct: body.dailyLossLimitPct,
+      budgetPct: body.budgetPct,
+      startBalanceUsd: startBal,
+    });
+    await setActiveSession(s.id);
   // Activate the new agent state machine (profile freeze)
   let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
   if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
   budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
-  await AgentHub.activate(s.id, {
-    symbol,
-    mode,
+    await AgentHub.activate(s.id, {
+      symbol,
+      mode,
     maxLeverage: Math.min(5, Math.max(1, body.maxLeverage ?? 4)),
     riskPerTradePct: Math.min(2, Math.max(1, body.riskPerTradePct ?? 1.5)),
     dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
@@ -68,18 +71,20 @@ router.post('/start', async (req,res)=>{
     budgetFraction,
   } as any).catch(()=>{});
 
-  // Auto-propose and arm an agent plan on activation (fully automated flow)
-  try {
-    const plan = await proposePlan(symbol);
-    const a = AgentHub.get(s.id);
-    if (a) {
-      await a.propose(plan as any);
-      await a.validateAndArm();
+    // Auto-propose and arm an agent plan on activation (fully automated flow)
+    try {
+      const plan = await proposePlan(symbol);
+      const a = AgentHub.get(s.id);
+      if (a) {
+        await a.propose(plan as any);
+        await a.validateAndArm();
+      }
+    } catch (e:any) {
+      // Non-blocking; just continue
     }
-  } catch {}
 
   // Classic strategy generation for preview (optional) via manager (throttled)
-  const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id });
+    const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id });
   // Push session + strategy + analysis
   broadcast('session', s, s.symbol, s.id);
   broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);
@@ -89,7 +94,10 @@ router.post('/start', async (req,res)=>{
     broadcast('analysis', { symbol: s.symbol, technical: tech }, s.symbol, s.id);
   } catch {}
 
-  res.json(s);
+    res.json(s);
+  } catch (e:any) {
+    res.status(500).json({ error: 'agent_start_failed', details: String(e?.message || e) });
+  }
 });
 
 router.post('/stop', async (req,res)=>{
