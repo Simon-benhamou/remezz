@@ -49,6 +49,8 @@ export type Cfg = {
   USE_GROK_FOR_ANALYSIS: boolean;
   USE_GROK_FOR_STRATEGY: boolean;
   USE_GROK_FOR_PLAN: boolean;
+  GROK_ANALYSIS_DAILY_MAX: number;   // max grok analysis calls per symbol/day
+  GROK_REVERSAL_PCT_THRESHOLD: number; // absolute % change to treat as major reversal
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -99,5 +101,7 @@ export function getConfig(): Cfg {
     USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
     USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
     USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",
+    GROK_ANALYSIS_DAILY_MAX: Number(e.GROK_ANALYSIS_DAILY_MAX || "1"),
+    GROK_REVERSAL_PCT_THRESHOLD: Number(e.GROK_REVERSAL_PCT_THRESHOLD || "3.5"),
   };
 }
