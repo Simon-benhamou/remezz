@@ -1,0 +1,66 @@
+{
+  "$schema": "vscode://schemas/launch",
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: Node (ESM)",
+      "type": "pwa-node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/backend",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--inspect=9229",
+        "--loader",
+        "ts-node/esm",
+        "--experimental-specifier-resolution=node",
+        "src/server.ts"
+      ],
+      "console": "integratedTerminal",
+      "autoAttachChildProcesses": true,
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "Backend: Node (ts-node-dev)",
+      "type": "pwa-node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/backend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:debug"],
+      "console": "integratedTerminal",
+      "restart": true,
+      "autoAttachChildProcesses": true,
+      "env": {
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "Backend: Attach (9229)",
+      "type": "pwa-node",
+      "request": "attach",
+      "port": 9229,
+      "restart": true,
+      "cwd": "${workspaceFolder}/backend",
+      "autoAttachChildProcesses": true
+    },
+    {
+      "name": "Frontend: Chrome (Vite)",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/frontend",
+      "preLaunchTask": "Frontend: Vite dev",
+      "postDebugTask": "Frontend: Stop Vite"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Dev: Backend + Frontend",
+      "configurations": [
+        "Backend: Node (ESM)",
+        "Frontend: Chrome (Vite)"
+      ]
+    }
+  ]
+}

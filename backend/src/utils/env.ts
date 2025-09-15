@@ -59,6 +59,7 @@ export function getConfig(): Cfg {
     USE_GROK: (e.USE_GROK || "true") === "true",
     GROK_API_KEY: e.GROK_API_KEY || "",
     OPENAI_API_KEY: e.OPENAI_API_KEY || "",
+    // Use a valid default OpenAI model
     OPENAI_MODEL: e.OPENAI_MODEL || "gpt-4o-mini",
     DATABASE_URL: e.DATABASE_URL || "",
     OPENAI_COST_IN_PER_1K: Number(e.OPENAI_COST_IN_PER_1K || "0"),

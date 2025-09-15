@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev:debug": "ts-node-dev --respawn --transpile-only --inspect=9229 src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
     "prisma:gen": "prisma generate",
