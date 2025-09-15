@@ -164,3 +164,29 @@ model TriggerLog {
   @@index([sessionId, createdAt])
   @@index([createdAt])
 }
+
+model Alert {
+  id        String   @id @default(cuid())
+  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId String?
+  symbol    String?
+  kind      String   // late_invalidation_exit | missed_partial | overtrading | ...
+  severity  String   // low | med | high
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+model DailyReport {
+  id        String   @id @default(cuid())
+  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId String?
+  day       String   // YYYY-MM-DD
+  stats     Json?
+  llm       Json?
+  createdAt DateTime @default(now())
+
+  @@unique([sessionId, day])
+  @@index([sessionId, day])
+}

@@ -13,6 +13,8 @@ import TriggersPanel from '../components/TriggersPanel';
 import OrdersTable from '../components/OrdersTable';
 import TradesTable from '../components/TradesTable';
 import HelpPanel from '../components/HelpPanel';
+import DailyReviewPanel from '../components/DailyReviewPanel';
+import AlertPanel from '../components/AlertPanel';
 import { api, getApiKey } from '../api';
 import { openWS, wsSend } from '../ws';
 
@@ -34,6 +36,7 @@ export default function MonitorPage(){
   const [orders, setOrders] = React.useState<any[]>([]);
   const [trades, setTrades] = React.useState<any[]>([]);
   const [triggers, setTriggers] = React.useState<any[]>([]);
+  const [alerts, setAlerts] = React.useState<any[]>([]);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
@@ -95,6 +98,7 @@ export default function MonitorPage(){
         try { setAgent(await api.getAgentState(sessionId)); } catch {}
       }
       if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
+      if (msg.type === 'alert') setAlerts((prev:any[])=> [msg.data, ...prev].slice(0,50));
     }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; }, sessionId);
     wsRef.current = ws;
     return ()=> { try { wsRef.current?.close?.(); } catch {} };
@@ -137,9 +141,11 @@ export default function MonitorPage(){
         <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
         <Col xs={24} lg={8}><PerfPanel kpi={kpi} session={status?.session} /></Col>
         <Col xs={24} lg={16}><PerfBreakdownPanel sessionId={status?.session?.id} api={api} /></Col>
+        <Col xs={24}><DailyReviewPanel sessionId={status?.session?.id} /></Col>
         <Col xs={24}><TriggersPanel rows={triggers} /></Col>
         <Col xs={24}><OrdersTable rows={orders} /></Col>
         <Col xs={24}><TradesTable rows={trades} /></Col>
+        <Col xs={24} lg={8}><AlertPanel sessionId={status?.session?.id} /></Col>
         <Col xs={24}><HelpPanel /></Col>
       </Row>
     </>

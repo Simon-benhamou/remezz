@@ -2,6 +2,7 @@ import { buildTechSnapshot } from './tech.js';
 import { getOHLCV, getTicker } from '../data/market.js';
 import { ema, rsi, atr } from '../data/indicators.js';
 import { llmJSON } from './llm.js';
+import { getConfig } from '../utils/env.js';
 const ANALYSIS_CACHE = new Map<string,{ ts:number, data:any }>();
 const ANALYSIS_TTL = Number(process.env.ANALYSIS_TTL_MIN || 360) * 60 * 1000;
 export async function fullAnalysis(symbol: string) {
@@ -33,10 +34,11 @@ export async function fullAnalysis(symbol: string) {
   };
 
   let sentiment:any = null, news:any = null;
+  const cfg = getConfig();
   try {
     const s = await llmJSON(
       `You are a crypto market sentiment analyzer. Given the context, estimate sentiment for ${symbol} now (bullish/bearish/neutral) and give a 0..1 score + 3 bullets. Return JSON: {"label":"bullish|bearish|neutral","score":0.0-1.0,"bullets":["...","...","..."]}\nContext: ${JSON.stringify(base)}`
-      .trim(), { cacheKey: `sentiment:${symbol}`, ttlMin: Number(process.env.ANALYSIS_TTL_MIN || 360) }
+      .trim(), { cacheKey: `sentiment:${symbol}`, ttlMin: Number(process.env.ANALYSIS_TTL_MIN || 360), provider: cfg.USE_GROK_FOR_ANALYSIS ? 'grok' : undefined }
     );
     sentiment = JSON.parse(s);
   } catch {}
@@ -44,7 +46,7 @@ export async function fullAnalysis(symbol: string) {
   try {
     const n = await llmJSON(
       `You are a crypto news summarizer. Summarize top potential narratives affecting ${symbol} in the last 24-48h (macro, ETF, exchange events, dev updates). If unknown, state uncertainty. Return JSON: {"summary":"...","bullets":["...","...","..."]}`
-      .trim(), { cacheKey: `news:${symbol}`, ttlMin: Number(process.env.ANALYSIS_TTL_MIN || 360) }
+      .trim(), { cacheKey: `news:${symbol}`, ttlMin: Number(process.env.ANALYSIS_TTL_MIN || 360), provider: cfg.USE_GROK_FOR_ANALYSIS ? 'grok' : undefined }
     );
     news = JSON.parse(n);
   } catch {}

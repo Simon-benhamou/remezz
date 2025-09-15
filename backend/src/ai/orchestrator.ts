@@ -2,6 +2,7 @@ import { StrategyZ, StrategyJson } from "./schema.js";
 import { rankingPrompt, strategyPrompt } from "./prompts.js";
 import { llmJSON } from "./llm.js";
 import { buildTechSnapshot } from './tech.js';
+import { getConfig } from '../utils/env.js';
 import { randomUUID } from "crypto";
 
 function safeParseJSON<T=any>(s: string): T {
@@ -67,12 +68,13 @@ export async function selectBestPerp(
 }
 
 // --- 2) Daily strategy generation (legacy classic) --- //
-export async function generateStrategy(symbol: string, trigger: string): Promise<StrategyJson> {
+export async function generateStrategy(symbol: string, trigger: string, opts?: { fresh?: boolean }): Promise<StrategyJson> {
   const feats = await buildTechSnapshot(symbol);
   const today = new Date().toISOString().slice(0,10);
 
   // 2.1 Ask LLM (JSON)
   try {
+    const cfg = getConfig();
     const raw = await llmJSON(strategyPrompt({
       symbol, trigger,
       features: {
@@ -81,7 +83,7 @@ export async function generateStrategy(symbol: string, trigger: string): Promise
         last: feats.last, support: feats.support, resistance: feats.resistance, trend: feats.trend,
         pivots: feats.pivots, srBias: feats.srBias
       }
-    }), { cacheKey: `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`, ttlMin: 90 });
+    }), { cacheKey: opts?.fresh ? undefined : `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`, ttlMin: 90, bypassRate: !!opts?.fresh, noCache: !!opts?.fresh, provider: cfg.USE_GROK_FOR_STRATEGY ? 'grok' : undefined });
     // 2.2 Parse & validate
     const draft = safeParseJSON<StrategyJson>(raw);
     // patch fields minimum

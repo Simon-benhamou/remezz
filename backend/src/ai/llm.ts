@@ -4,7 +4,7 @@ import { recordAICall } from "../metrics/aiCalls.js";
 import { createHash } from 'crypto';
 
 export type LLMChoice = "openai" | "grok" | "none";
-type LLMOpts = { cacheKey?: string; ttlMin?: number };
+type LLMOpts = { cacheKey?: string; ttlMin?: number; bypassRate?: boolean; noCache?: boolean; provider?: Exclude<LLMChoice, 'none'> };
 
 function pickLLM(): LLMChoice {
   const cfg = getConfig();
@@ -31,40 +31,40 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   // Cache hit
   const key = keyOf(prompt, opts);
   const ttl = Math.max(1, (opts?.ttlMin ?? cfg.LLM_CACHE_TTL_MIN)) * 60_000;
-  const hit = cache.get(key);
+  const hit = opts?.noCache ? undefined : cache.get(key);
   const now = Date.now();
   if (hit && (now - hit.ts) < ttl) return hit.data;
 
   // Single-flight
-  const inF = inFlight.get(key);
+  const inF = opts?.noCache ? undefined : inFlight.get(key);
   if (inF) return inF;
 
   // Rate limit: simple min-interval gate
   const delta = now - lastCallAt;
-  if (delta < cfg.LLM_MIN_INTERVAL_MS) throw new Error('LLM rate-limited');
+  if (!opts?.bypassRate && delta < cfg.LLM_MIN_INTERVAL_MS) throw new Error('LLM rate-limited');
   lastCallAt = now;
 
-  const which = pickLLM();
+  const which = opts?.provider ?? pickLLM();
   const p = (async () => {
     try {
       let out: string;
       if (which === 'openai') out = await callOpenAI(prompt);
       else if (which === 'grok') out = await callGrok(prompt);
       else throw new Error('No LLM configured (OPENAI_API_KEY or GROK_API_KEY missing).');
-      cache.set(key, { ts: Date.now(), data: out });
+      if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: out });
       return out;
     } finally {
-      inFlight.delete(key);
+      if (!opts?.noCache) inFlight.delete(key);
     }
   })();
-  inFlight.set(key, p);
+  if (!opts?.noCache) inFlight.set(key, p);
   return p;
 }
 
 async function callOpenAI(prompt: string): Promise<string> {
   const cfg = getConfig();
   const client = new OpenAI({ apiKey: cfg.OPENAI_API_KEY });
-  const model = cfg.OPENAI_MODEL || "gpt-5-mini";
+  const model = cfg.OPENAI_MODEL || "gpt-4o-mini";
   const resp = await client.chat.completions.create({
     model,
     temperature: 0.2,
@@ -89,8 +89,8 @@ async function callOpenAI(prompt: string): Promise<string> {
 // NB: Grok: on passe par HTTP générique. Ajuste GROK endpoint si besoin.
 // Par défaut, beaucoup utilisent `https://api.x.ai/v1/chat/completions`.
 async function callGrok(prompt: string): Promise<string> {
-  const { GROK_API_KEY } = getConfig();
-  const endpoint = process.env.GROK_BASE_URL || "https://api.x.ai/v1/chat/completions";
+  const { GROK_API_KEY, GROK_BASE_URL } = getConfig();
+  const endpoint = GROK_BASE_URL || "https://api.x.ai/v1/chat/completions";
   const r = await fetch(endpoint, {
     method: "POST",
     headers: {

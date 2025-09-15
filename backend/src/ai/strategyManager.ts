@@ -18,7 +18,7 @@ export type Requested = {
   force?: boolean; // bypass throttling for critical events (eg. position-exit)
 };
 
-export async function requestStrategy(req: Requested) {
+export async function requestStrategy(req: Requested & { fresh?: boolean }) {
   const key = req.symbol;
 
   // Throttle global unless forced
@@ -31,7 +31,7 @@ export async function requestStrategy(req: Requested) {
 
   // Ensure AI usage is attributed to the triggering session when present
   try { if (req.sessionId) await setActiveSession(req.sessionId); } catch {}
-  const strat = await generateStrategy(req.symbol, req.trigger);
+  const strat = await generateStrategy(req.symbol, req.trigger, { fresh: !!req.fresh || !!req.force });
   updateZoneState(key, strat.entry?.zone || null);
   markStrategyLLM(key);
 

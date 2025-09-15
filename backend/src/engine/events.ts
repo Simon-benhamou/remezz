@@ -60,6 +60,9 @@ async function tickOnce(sessionId: string, sym: string){
     pivots: tech.pivots
   }, sym, sessionId);
 
+  // Policy audit: check conformance (late invalidation, missed partial, overtrading)
+  try { (await import('../monitor/policy.js')).auditTick(sessionId, sym, tech.last); } catch {}
+
   // Triggers: touch support/resistance or pivots
   let trigger: string | null = null;
   if (near(tech.last, support, NEAR_SR_PCT)) trigger = 'support-touch';

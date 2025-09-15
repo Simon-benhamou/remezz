@@ -77,6 +77,12 @@ export const api = {
     (await client.get("/api/perf", { params: { sessionId } })).data,
   getPerfBreakdown: async (sessionId: string) =>
     (await client.get("/api/perf/breakdown", { params: { sessionId } })).data,
+  getAlerts: async (sessionId: string) =>
+    (await client.get('/api/monitor/alerts', { params: { sessionId } })).data,
+  getDailyReport: async (sessionId: string, date?: string) =>
+    (await client.get('/api/monitor/reports/daily', { params: { sessionId, date } })).data,
+  saveDailyReport: async (sessionId: string, date: string, report: any) =>
+    (await client.post('/api/monitor/reports/daily', { sessionId, date, stats: report?.stats, llm: report?.llm })).data,
   analysis: async (symbol: string) =>
     (await client.get("/api/analysis", { params: { symbol } })).data,
   quicktest: async (symbol: string, hours: number, plan?: any) =>

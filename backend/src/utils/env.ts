@@ -18,6 +18,7 @@ export type Cfg = {
   MIN_FIRST_R: number;     // minimum R for first TP
   USE_GROK: boolean;
   GROK_API_KEY?: string;
+  GROK_BASE_URL?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;      // e.g. gpt-4o-mini
   DATABASE_URL?: string;
@@ -44,6 +45,10 @@ export type Cfg = {
   ENTRY_SHORT_MIN_RSI: number;
   ENTRY_LONG_MIN_ADX: number;
   ENTRY_LONG_MAX_RSI: number;
+  // Provider routing
+  USE_GROK_FOR_ANALYSIS: boolean;
+  USE_GROK_FOR_STRATEGY: boolean;
+  USE_GROK_FOR_PLAN: boolean;
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -68,9 +73,10 @@ export function getConfig(): Cfg {
     MIN_FIRST_R: Number(e.MIN_FIRST_R || "1.5"),
     USE_GROK: (e.USE_GROK || "true") === "true",
     GROK_API_KEY: e.GROK_API_KEY || "",
+    GROK_BASE_URL: e.GROK_BASE_URL || "https://api.x.ai/v1/chat/completions",
     OPENAI_API_KEY: e.OPENAI_API_KEY || "",
     // Use a valid default OpenAI model
-    OPENAI_MODEL: e.OPENAI_MODEL || "gpt-5-mini",
+    OPENAI_MODEL: e.OPENAI_MODEL || "gpt-4o-mini",
     DATABASE_URL: e.DATABASE_URL || "",
     OPENAI_COST_IN_PER_1K: Number(e.OPENAI_COST_IN_PER_1K || "0"),
     OPENAI_COST_OUT_PER_1K: Number(e.OPENAI_COST_OUT_PER_1K || "0"),
@@ -90,5 +96,8 @@ export function getConfig(): Cfg {
     ENTRY_SHORT_MIN_RSI: Number(e.ENTRY_SHORT_MIN_RSI || "45"),
     ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "14"),
     ENTRY_LONG_MAX_RSI: Number(e.ENTRY_LONG_MAX_RSI || "65"),
+    USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
+    USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
+    USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",
   };
 }

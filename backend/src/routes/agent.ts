@@ -73,7 +73,7 @@ router.post('/start', async (req,res)=>{
 
     // Auto-propose and arm an agent plan on activation (fully automated flow)
     try {
-      const plan = await proposePlan(symbol);
+      const plan = await proposePlan(symbol, { fresh: true });
       const a = AgentHub.get(s.id);
       if (a) {
         await a.propose(plan as any);
@@ -84,7 +84,7 @@ router.post('/start', async (req,res)=>{
     }
 
   // Classic strategy generation for preview (optional) via manager (throttled)
-    const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id });
+    const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id, fresh: true, force: true });
   // Push session + strategy + analysis
   broadcast('session', s, s.symbol, s.id);
   broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);

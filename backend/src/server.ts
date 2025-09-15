@@ -13,6 +13,7 @@ import { router as ordersRouter } from "./routes/orders.js";
 import { router as perfRouter } from "./routes/perf.js";
 import { router as analysisRouter } from "./routes/analysis.js";
 import { router as simRouter } from "./routes/sim.js";
+import { router as monitorRouter } from "./routes/monitor.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 const cfg = getConfig();
@@ -76,6 +77,7 @@ app.use("/api/orders", ordersRouter);
 app.use("/api/perf", perfRouter);
 app.use("/api/analysis", analysisRouter);
 app.use("/api/sim", simRouter);
+app.use("/api/monitor", monitorRouter);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
