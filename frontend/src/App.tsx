@@ -90,7 +90,6 @@ function AppInner(){
           <Routes>
             <Route path='/' element={<Navigate to='/dashboard' replace />} />
             <Route path='/dashboard' element={<DashboardPage />} />
-            {/* Dedicated monitor page fully driven by :sessionId */}
             <Route path='/monitor/:sessionId' element={<MonitorPage />} />
             <Route path='/sessions' element={<SessionsPage />} />
             <Route path='/testing' element={<TestingPage />} />

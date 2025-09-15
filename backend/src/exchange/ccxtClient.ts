@@ -50,14 +50,19 @@ export async function resolveSymbol(requested: string): Promise<string> {
     if (s.endsWith('USDT')) {
       const base = s.replace('USDT', '');
       candidates.push(`${base}/USDT`, `${base}/USDT:USDT`, `${base}-USDT`, `${base}USDT`);
+      // Also try USD perp variants
+      candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}USD-PERP`, `${base}USD`);
     } else if (s.endsWith('USD')) {
       const base = s.replace('USD', '');
       candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}-USD`, `${base}USD`);
+      candidates.push(`${base}USD-PERP`);
     }
   } else {
     // ex: BTC/USDT -> BTC/USDT:USDT
     const [base, quote] = s.split('/');
     candidates.push(`${base}/${quote}:USDT`, `${base}/${quote}:USD`);
+    // Also try USD-margined perp for same base regardless of quote
+    candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}USD-PERP`, `${base}USD`);
   }
 
   // 3) Add generic USDT fallbacks
@@ -73,7 +78,8 @@ export async function resolveSymbol(requested: string): Promise<string> {
   const marketKeys = Object.keys(ex.markets || {});
   const match = marketKeys.find((k) => {
     const m = ex.markets[k];
-    return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (m?.quote?.toUpperCase() === 'USDT' || k.includes(':USDT'));
+    const q = (m?.quote || '').toUpperCase();
+    return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (q === 'USDT' || q === 'USD' || k.includes(':USDT') || k.includes(':USD') || k.includes('-PERP'));
   });
   if (match) return match;
 

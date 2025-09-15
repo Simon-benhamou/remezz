@@ -8,9 +8,15 @@ export default function SessionsPage(){
   const [open, setOpen] = React.useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
+  const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
+  const modeVal = Form.useWatch?.('mode', form);
   const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
   const load = async ()=>{ try { setRows(await api.listSessions()); } catch {} };
   React.useEffect(()=>{ load(); }, []);
+  React.useEffect(()=>{
+    let t:any; const pull = async ()=>{ try { const o = await api.overview(); setExBal(o?.exchangeBalance || null); } catch{} };
+    pull(); t = setInterval(pull, 15000); return ()=> clearInterval(t);
+  }, []);
   const stop = async (id:string)=>{
     // Only current active session can be stopped via main control; here we just hint
     message.info('Use Monitor > Stop to end the active session');
@@ -75,6 +81,10 @@ export default function SessionsPage(){
         onOk={async ()=>{
           try {
             const v = await form.validateFields();
+            // Front guard: cap startBalanceUsd to exchange equity when live
+            if (String(v.mode) === 'live' && exBal?.totalUsd != null && v.startBalanceUsd != null) {
+              v.startBalanceUsd = Math.min(Number(v.startBalanceUsd||0), Number(exBal.totalUsd||0));
+            }
             const res = await api.client.post('/api/agent/start', v);
             message.success('Session started');
             setOpen(false);
@@ -102,11 +112,13 @@ export default function SessionsPage(){
             />
           </Form.Item>
           <Form.Item label='Mode' name='mode'>
-            <Segmented options={['paper','live']} />
+            <Segmented options={['paper','live']} onChange={()=>{ /* re-render to update max */ }} />
           </Form.Item>
-          <Form.Item label='Start balance USD (optional)' name='startBalanceUsd'>
-            <InputNumber style={{ width: '100%' }} min={0} />
-          </Form.Item>
+          {String(modeVal||'paper') !== 'live' && (
+            <Form.Item label='Start balance USD (optional)' name='startBalanceUsd' tooltip={exBal? `Exchange: Free $${Number(exBal.freeUsd||0).toFixed(2)} • Equity $${Number(exBal.totalUsd||0).toFixed(2)}`: undefined}>
+              <InputNumber style={{ width: '100%' }} min={0} max={exBal?.totalUsd ?? undefined} />
+            </Form.Item>
+          )}
           <Form.Item label='Risk % per trade' name='riskPerTradePct' rules={[{ type:'number', min:1, max:2 }]}>
             <InputNumber style={{ width: '100%' }} min={1} max={2} step={0.1} />
           </Form.Item>
