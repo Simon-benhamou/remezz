@@ -48,7 +48,7 @@ export default function AgentControls({ session, symbol, onChange, showStart = f
     });
   };
   return (
-    <Card title="Agent Controls">
+    <Card title="QuantAI Controls">
       <Space direction="vertical" style={{ width: "100%" }}>
         <div>
           Mode:{" "}

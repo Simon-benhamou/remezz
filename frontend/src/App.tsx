@@ -50,7 +50,7 @@ function AppInner(){
   return (
     <Layout style={{ minHeight:'100vh' }}>
       <Layout.Sider breakpoint='lg' collapsedWidth={60} theme='dark'>
-        <div style={{ color:'#fff', padding:12, fontWeight:600 }}>Agent</div>
+        <div style={{ color:'#fff', padding:12, fontWeight:700, letterSpacing:0.3 }}>QuantAI</div>
         <Menu theme='dark' mode='inline' selectedKeys={[location.pathname]} items={menuItems}
           onClick={({ key })=> navigate(String(key))} />
       </Layout.Sider>

@@ -45,7 +45,7 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
   const aiByModel = ai?.byModel || {};
 
   return (
-    <Card title={<span>Agent State {agent?.state && <Tag color={agent.state==='MANAGE'?'green':agent.state==='ARMED'?'blue':agent.state==='HALT'?'red':'default'}>{agent.state}</Tag>}</span>}>
+    <Card title={<span>QuantAI Agent {agent?.state && <Tag color={agent.state==='MANAGE'?'green':agent.state==='ARMED'?'blue':agent.state==='HALT'?'red':'default'}>{agent.state}</Tag>}</span>}>
       <Space direction='vertical' style={{ width:'100%' }}>
         <Descriptions column={1} size='small' bordered>
           <Descriptions.Item label='Symbol'>{agent?.profile?.symbol || symbol}</Descriptions.Item>

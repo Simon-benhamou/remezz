@@ -21,14 +21,14 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
     setLoading(true);
     try {
       await api.client.post('/api/agent/start', { symbol, mode, startBalanceUsd: mode==='paper'? startBal: undefined, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss, budgetPct });
-      message.success('Agent activated');
+      message.success('QuantAI agent activated');
       onStarted?.();
     } catch (e:any) {
       message.error(String(e?.message || e));
     } finally { setLoading(false); }
   };
   return (
-    <Card title="Activate Agent" style={{ maxWidth: 800, margin: '0 auto' }}>
+    <Card title="Activate QuantAI Agent" style={{ maxWidth: 800, margin: '0 auto' }}>
       <Space direction='vertical' size='large' style={{ width:'100%' }}>
         <Typography.Paragraph>
           Choose mode and symbol. In paper mode, you may set a starting balance. Risk per trade, max leverage and daily loss guardrails are enforced by the agent.

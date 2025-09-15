@@ -26,7 +26,7 @@ const allowedOrigins = new Set<string>([
   ...allowedFromEnv,
   "http://localhost:5173",
   // Known deployment frontends (fixing earlier typo 'fronend')
-  "https://tai-cli.up.railway.app",
+  "https://quantai.up.railway.app",
   // Keep both to be safe if the deployed URL contains a typo
   "https://trading-agent-ia-v3-frontend-production.up.railway.app",
   "https://trading-agent-ia-v3-fronend-production.up.railway.app",
