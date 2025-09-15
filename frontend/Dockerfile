@@ -1,9 +1,11 @@
-FROM node:20-slim
+ARG NODE_IMAGE=node:20-bookworm-slim
+FROM ${NODE_IMAGE}
 WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci
+# Use flags to reduce external calls and speed up CI
+RUN npm ci --no-audit --no-fund
 # IMPORTANT: déclarer l'ARG pour l'injecter au build
 ARG VITE_API_BASE
 ENV VITE_API_BASE=${VITE_API_BASE}
