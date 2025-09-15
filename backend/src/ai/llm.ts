@@ -65,7 +65,7 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
 async function callOpenAI(prompt: string): Promise<string> {
   const cfg = getConfig();
   const client = new OpenAI({ apiKey: cfg.OPENAI_API_KEY });
-  const primaryModel = cfg.OPENAI_MODEL || "gpt-5-mini";
+  const primaryModel = cfg.OPENAI_MODEL || "gpt-5-mini-2025-08-07";
 
   async function invoke(model: string) {
     const resp = await client.chat.completions.create({
@@ -95,8 +95,8 @@ async function callOpenAI(prompt: string): Promise<string> {
     const status = (e as any)?.status || (e as any)?.code;
     const modelInvalid = /model/i.test(msg) || status === 404;
     // Retry once with a safe default if the configured model is invalid
-    if (modelInvalid && primaryModel !== 'gpt-5-mini') {
-      try { return await invoke('gpt-5-mini'); } catch {}
+    if (modelInvalid && primaryModel !== 'gpt-5-mini-2025-08-07') {
+      try { return await invoke('gpt-5-mini-2025-08-07'); } catch {}
     }
     throw e;
   }
@@ -114,7 +114,7 @@ async function callGrok(prompt: string): Promise<string> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-4",
+      model: "grok-3",
       temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
