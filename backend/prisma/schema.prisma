@@ -23,6 +23,8 @@ model AgentSession {
   kpi        SessionKpi?
   triggers   TriggerLog[]
   sentiments SentimentSnapshot[]   // back-rel from SentimentSnapshot.session
+  alerts     Alert[]               // back-rel from Alert.session
+  reports    DailyReport[]         // back-rel from DailyReport.session
 
   @@index([stoppedAt, startedAt])
 }
