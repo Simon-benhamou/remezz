@@ -65,26 +65,41 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
 async function callOpenAI(prompt: string): Promise<string> {
   const cfg = getConfig();
   const client = new OpenAI({ apiKey: cfg.OPENAI_API_KEY });
-  const model = cfg.OPENAI_MODEL || "gpt-4o-mini";
-  const resp = await client.chat.completions.create({
-    model,
-    temperature: 0.2,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: "You are a trading strategy assistant. Output strictly valid JSON." },
-      { role: "user", content: prompt },
-    ],
-  });
-  const msg = resp.choices[0]?.message?.content?.trim() || "{}";
+  const primaryModel = cfg.OPENAI_MODEL || "gpt-5-mini";
+
+  async function invoke(model: string) {
+    const resp = await client.chat.completions.create({
+      model,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "You are a trading strategy assistant. Output strictly valid JSON." },
+        { role: "user", content: prompt },
+      ],
+    });
+    const msg = resp.choices[0]?.message?.content?.trim() || "{}";
+    try {
+      const usage: any = (resp as any).usage || {};
+      const inTok = Number(usage?.prompt_tokens || 0);
+      const outTok = Number(usage?.completion_tokens || 0);
+      const cost = (inTok/1000)*cfg.OPENAI_COST_IN_PER_1K + (outTok/1000)*cfg.OPENAI_COST_OUT_PER_1K;
+      recordAICall({ model: `openai:${model}`, inputTokens: inTok, outputTokens: outTok, costUsd: isFinite(cost) ? cost : 0 });
+    } catch {}
+    return msg;
+  }
+
   try {
-    const usage: any = (resp as any).usage || {};
-    const inTok = Number(usage?.prompt_tokens || 0);
-    const outTok = Number(usage?.completion_tokens || 0);
-    const cfg = getConfig();
-    const cost = (inTok/1000)*cfg.OPENAI_COST_IN_PER_1K + (outTok/1000)*cfg.OPENAI_COST_OUT_PER_1K;
-    recordAICall({ model: `openai:${model}`, inputTokens: inTok, outputTokens: outTok, costUsd: isFinite(cost) ? cost : 0 });
-  } catch {}
-  return msg;
+    return await invoke(primaryModel);
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    const status = (e as any)?.status || (e as any)?.code;
+    const modelInvalid = /model/i.test(msg) || status === 404;
+    // Retry once with a safe default if the configured model is invalid
+    if (modelInvalid && primaryModel !== 'gpt-5-mini') {
+      try { return await invoke('gpt-5-mini'); } catch {}
+    }
+    throw e;
+  }
 }
 
 // NB: Grok: on passe par HTTP générique. Ajuste GROK endpoint si besoin.

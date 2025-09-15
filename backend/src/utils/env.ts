@@ -20,7 +20,7 @@ export type Cfg = {
   GROK_API_KEY?: string;
   GROK_BASE_URL?: string;
   OPENAI_API_KEY?: string;
-  OPENAI_MODEL?: string;      // e.g. gpt-4o-mini
+  OPENAI_MODEL?: string;      // e.g. gpt-5-mini
   DATABASE_URL?: string;
   // LLM cost settings (per 1K tokens). Set to 0 to disable cost estimation.
   OPENAI_COST_IN_PER_1K: number;
@@ -78,7 +78,7 @@ export function getConfig(): Cfg {
     GROK_BASE_URL: e.GROK_BASE_URL || "https://api.x.ai/v1/chat/completions",
     OPENAI_API_KEY: e.OPENAI_API_KEY || "",
     // Use a valid default OpenAI model
-    OPENAI_MODEL: e.OPENAI_MODEL || "gpt-4o-mini",
+    OPENAI_MODEL: e.OPENAI_MODEL || "gpt-5-mini",
     DATABASE_URL: e.DATABASE_URL || "",
     OPENAI_COST_IN_PER_1K: Number(e.OPENAI_COST_IN_PER_1K || "0"),
     OPENAI_COST_OUT_PER_1K: Number(e.OPENAI_COST_OUT_PER_1K || "0"),
