@@ -68,7 +68,6 @@ export default function AgentControls({ session, symbol, onChange, showStart = f
                   onChange={setStartBal as any}
                   style={{ width: 200 }}
                   min={0}
-                  max={mode==='live' ? (exBal?.totalUsd ?? undefined) : undefined}
                 />
               </Tooltip>
             </div>
