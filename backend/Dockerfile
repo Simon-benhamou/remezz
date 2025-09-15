@@ -1,4 +1,5 @@
-FROM node:20-slim
+ARG BASE_IMAGE=node:20-bookworm-slim
+FROM ${BASE_IMAGE}
 WORKDIR /app
 
 # 🔐 OpenSSL pour Prisma (avant prisma:gen)
@@ -7,7 +8,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 # Install deps
 COPY package*.json ./
-RUN npm install
+RUN npm ci --no-audit --no-fund
 
 # Prisma
 COPY prisma ./prisma
