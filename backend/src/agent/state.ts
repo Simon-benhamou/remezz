@@ -358,7 +358,7 @@ export class ReboundRejectionAgent {
     // Auto-propose and arm a new plan once back to SCAN
     try {
       if (this.state === 'SCAN' && this.profile) {
-        const plan = await proposePlan(this.profile.symbol);
+        const plan = await proposePlan(this.profile.symbol, { sessionId: this.sessionId || undefined });
         await this.propose(plan as any);
         await this.validateAndArm();
       }

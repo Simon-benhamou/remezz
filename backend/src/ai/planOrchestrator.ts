@@ -1,12 +1,13 @@
 import { PlanZ, PlanJson } from '../agent/planSchema.js';
 import { buildTechSnapshot } from './tech.js';
 import { llmJSON } from './llm.js';
+import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
 import { fullAnalysis } from './analysis.js';
 
 function safeParse<T=any>(s: string): T { try { return JSON.parse(s) as T; } catch { throw new Error('LLM returned non-JSON'); } }
 
-export async function proposePlan(symbol: string, opts?: { fresh?: boolean }): Promise<PlanJson> {
+export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sessionId?: string }): Promise<PlanJson> {
   const snap = await buildTechSnapshot(symbol);
   // Fetch sentiment/news (cached) to gently influence the plan bias
   let sent: { label?: string; score?: number } | null = null;
@@ -36,7 +37,8 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean }): P
     const j = safeParse(out);
     const plan = PlanZ.parse(j);
     return plan;
-  } catch {
+  } catch (e:any) {
+    try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'plan', error: String(e?.message || e) } }); } catch {}
     // Fallback rule-based
     const isLong = snap.srBias !== 'nearResistance' && (snap.ema20 >= snap.ema50);
     const plan: PlanJson = {

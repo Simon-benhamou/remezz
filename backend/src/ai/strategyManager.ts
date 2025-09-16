@@ -31,7 +31,7 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
 
   // Ensure AI usage is attributed to the triggering session when present
   try { if (req.sessionId) await setActiveSession(req.sessionId); } catch {}
-  const strat = await generateStrategy(req.symbol, req.trigger, { fresh: !!req.fresh || !!req.force });
+  const strat = await generateStrategy(req.symbol, req.trigger, { fresh: !!req.fresh || !!req.force, sessionId: req.sessionId });
   updateZoneState(key, strat.entry?.zone || null);
   markStrategyLLM(key);
 

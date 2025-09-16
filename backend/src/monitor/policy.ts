@@ -9,7 +9,8 @@ export type PolicyAlert = {
   kind:
     | 'late_invalidation_exit'
     | 'missed_partial'
-    | 'overtrading';
+    | 'overtrading'
+    | 'llm_invalid';
   severity: 'low'|'med'|'high';
   details?: any;
   ts: number;
@@ -32,6 +33,19 @@ async function pushAlert(a: PolicyAlert){
 export function recentAlerts(sessionId?: string) {
   const slice = alerts.slice(-200).reverse();
   return sessionId ? slice.filter(a => a.sessionId === sessionId) : slice;
+}
+
+export async function emitAlert(params: { sessionId?: string; symbol?: string; kind: PolicyAlert['kind']; severity: PolicyAlert['severity']; details?: any }){
+  const a: PolicyAlert = {
+    id: `alert_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+    sessionId: params.sessionId,
+    symbol: params.symbol,
+    kind: params.kind,
+    severity: params.severity,
+    details: params.details,
+    ts: Date.now(),
+  };
+  await pushAlert(a);
 }
 
 export async function auditTick(sessionId: string, symbol: string, price: number){

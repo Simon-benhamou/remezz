@@ -3,6 +3,7 @@ import { rankingPrompt, strategyPrompt } from "./prompts.js";
 import { llmJSON } from "./llm.js";
 import { buildTechSnapshot } from './tech.js';
 import { getConfig } from '../utils/env.js';
+import { emitAlert } from '../monitor/policy.js';
 import { randomUUID } from "crypto";
 
 function safeParseJSON<T=any>(s: string): T {
@@ -68,7 +69,7 @@ export async function selectBestPerp(
 }
 
 // --- 2) Daily strategy generation (legacy classic) --- //
-export async function generateStrategy(symbol: string, trigger: string, opts?: { fresh?: boolean }): Promise<StrategyJson> {
+export async function generateStrategy(symbol: string, trigger: string, opts?: { fresh?: boolean; sessionId?: string }): Promise<StrategyJson> {
   const feats = await buildTechSnapshot(symbol);
   const today = new Date().toISOString().slice(0,10);
 
@@ -94,6 +95,7 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: {
     const parsed = StrategyZ.parse(draft);
     return parsed;
   } catch (e) {
+    try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'strategy', trigger, error: String((e as any)?.message || e) } }); } catch {}
     // 2.3 Fallback rule-based
     const isLong = feats.srBias !== 'nearResistance' && feats.trend > 0;
     const bias = isLong ? 'long' : 'short';

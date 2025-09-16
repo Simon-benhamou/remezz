@@ -73,7 +73,7 @@ router.post('/start', async (req,res)=>{
 
     // Auto-propose and arm an agent plan on activation (fully automated flow)
     try {
-      const plan = await proposePlan(symbol, { fresh: true });
+      const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
       const a = AgentHub.get(s.id);
       if (a) {
         await a.propose(plan as any);
