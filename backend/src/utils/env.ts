@@ -51,6 +51,12 @@ export type Cfg = {
   USE_GROK_FOR_PLAN: boolean;
   GROK_ANALYSIS_DAILY_MAX: number;   // max grok analysis calls per symbol/day
   GROK_REVERSAL_PCT_THRESHOLD: number; // absolute % change to treat as major reversal
+  // Monitoring
+  STALE_TICK_SEC: number;             // alert if no tick per session beyond this threshold
+  // Order reliability
+  ORDER_FILL_TIMEOUT_SEC: number;     // max seconds to wait for a live order to fill
+  ORDER_FILL_POLL_MS: number;         // polling interval for fetchOrder
+  ORDER_RETRY_MAX: number;            // how many times to retry a market order if not filled
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -103,5 +109,9 @@ export function getConfig(): Cfg {
     USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",
     GROK_ANALYSIS_DAILY_MAX: Number(e.GROK_ANALYSIS_DAILY_MAX || "1"),
     GROK_REVERSAL_PCT_THRESHOLD: Number(e.GROK_REVERSAL_PCT_THRESHOLD || "3.5"),
+    STALE_TICK_SEC: Number(e.STALE_TICK_SEC || "120"),
+    ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
+    ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
+    ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
   };
 }

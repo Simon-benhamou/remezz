@@ -1,5 +1,7 @@
 import { Broker, NewOrder, PlacedOrder } from './types.js';
 import { exchange, resolveSymbol } from '../exchange/ccxtClient.js';
+import { emitAlert } from '../monitor/policy.js';
+import { getConfig } from '../utils/env.js';
 
 // Minimal ccxt-backed live broker (spot or swap per env config)
 export class LiveBroker implements Broker {
@@ -25,6 +27,24 @@ export class LiveBroker implements Broker {
     let order: any;
     const params: any = {};
     const tif = o.type === 'limit' ? 'GTC' : undefined;
+    if (o.reduceOnly) params.reduceOnly = true;
+    const cfg = getConfig();
+    const deadline = Date.now() + Math.max(1000, cfg.ORDER_FILL_TIMEOUT_SEC * 1000);
+    const pollMs = Math.max(100, cfg.ORDER_FILL_POLL_MS);
+    const maxRetry = Math.max(0, cfg.ORDER_RETRY_MAX);
+
+    async function waitForFill(ordId: string) {
+      while (Date.now() < deadline) {
+        try {
+          const fo = await ex.fetchOrder(ordId, symbol).catch(()=>null);
+          const st = String(fo?.status || '').toLowerCase();
+          if (st.includes('closed') || st.includes('filled')) return { filledQty: Number(fo?.filled||0), avgPrice: Number(fo?.average||fo?.price||0), status: 'filled' };
+          if (st.includes('canceled') || st.includes('rejected')) return { filledQty: Number(fo?.filled||0), avgPrice: Number(fo?.average||fo?.price||0), status: 'rejected' };
+        } catch {}
+        await new Promise(r=> setTimeout(r, pollMs));
+      }
+      return { filledQty: undefined, avgPrice: undefined, status: 'open' } as any;
+    }
     try {
       if (o.type === 'market') {
         order = await ex.createOrder(symbol, 'market', o.side, o.qty, undefined, params);
@@ -32,6 +52,7 @@ export class LiveBroker implements Broker {
         order = await ex.createOrder(symbol, 'limit', o.side, o.qty, o.price, { timeInForce: tif, ...params });
       }
     } catch (e: any) {
+      try { await emitAlert({ kind:'capacity_breach' as any, severity:'med', details: { error: String(e?.message||e), symbol, side:o.side, qty:o.qty }, }); } catch {}
       return { ...o, id: 'rejected', status: 'rejected', ts: Date.now() };
     }
 
@@ -40,7 +61,62 @@ export class LiveBroker implements Broker {
     const status: PlacedOrder['status'] = (order?.status === 'closed' || order?.status === 'filled') ? 'filled'
       : (order?.status === 'canceled' ? 'canceled' : 'open');
 
-    return { ...o, id: String(order?.id || order?.clientOrderId || ''), status, filledQty, avgPrice, ts: Date.now() };
+    const id = String(order?.id || order?.clientOrderId || '');
+    let placed: PlacedOrder = { ...o, id, status, filledQty, avgPrice, ts: Date.now() };
+
+    // Ensure fill: poll and retry if needed
+    if (placed.status !== 'filled') {
+      const res = await waitForFill(id);
+      if (res.status === 'filled') {
+        placed = { ...placed, status: 'filled', filledQty: res.filledQty, avgPrice: res.avgPrice };
+      } else if (res.status !== 'rejected') {
+        try { await ex.cancelOrder(id, symbol).catch(()=>{}); } catch {}
+        let retry = 0;
+        while (retry < maxRetry) {
+          retry++;
+          try {
+            const re = await ex.createOrder(symbol, 'market', o.side, o.qty, undefined, params);
+            const rid = String(re?.id || re?.clientOrderId || '');
+            const rr = await waitForFill(rid);
+            if (rr.status === 'filled') { placed = { ...placed, id: rid, status:'filled', filledQty: rr.filledQty, avgPrice: rr.avgPrice }; break; }
+          } catch {}
+        }
+        if (placed.status !== 'filled') {
+          try { await emitAlert({ kind:'order_unfilled' as any, severity:'high', details:{ symbol, side:o.side, qty:o.qty } }); } catch {}
+          placed.status = 'rejected';
+        }
+      } else {
+        placed.status = 'rejected';
+      }
+    }
+
+    // Best-effort: create protective SL/TP orders if provided
+    try {
+      if (placed.status==='filled' && placed.filledQty && placed.avgPrice && (o.stopLoss || o.takeProfit)) {
+        const reduceSide = o.side === 'buy' ? 'sell' : 'buy';
+        // Stop-loss as stop-market
+        if (o.stopLoss) {
+          try {
+            const slParams: any = { reduceOnly: true, stopPrice: o.stopLoss, triggerPrice: o.stopLoss };
+            // Vendor-guard for Crypto.com swaps: hint stop type when supported
+            if (String(ex.id).toLowerCase() === 'cryptocom') slParams.type = 'stop_market';
+            const slo = await ex.createOrder(symbol, 'market', reduceSide, placed.filledQty, undefined, slParams);
+            placed.slOrderId = String(slo?.id || slo?.clientOrderId || '');
+          } catch {}
+        }
+        // Take-profit as limit reduce-only
+        if (o.takeProfit) {
+          try {
+            const tpParams: any = { reduceOnly: true, takeProfitPrice: o.takeProfit };
+            if (String(ex.id).toLowerCase() === 'cryptocom') tpParams.type = 'take_profit_limit';
+            const tpo = await ex.createOrder(symbol, 'limit', reduceSide, placed.filledQty, o.takeProfit, tpParams);
+            placed.tpOrderId = String(tpo?.id || tpo?.clientOrderId || '');
+          } catch {}
+        }
+      }
+    } catch {}
+
+    return placed;
   }
 
   async cancel(id: string) {

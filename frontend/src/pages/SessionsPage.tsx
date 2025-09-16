@@ -19,8 +19,18 @@ export default function SessionsPage(){
     pull(); t = setInterval(pull, 15000); return ()=> clearInterval(t);
   }, []);
   const stop = async (id:string)=>{
-    // Only current active session can be stopped via main control; here we just hint
-    message.info('Use Monitor > Stop to end the active session');
+    Modal.confirm({
+      title: 'Stop session?',
+      content: 'This will stop the agent. Close any open position now?',
+      okText: 'Stop', cancelText: 'Cancel', okButtonProps:{ danger:true },
+      onOk: async ()=>{
+        try {
+          await api.stopSession(id, true);
+          message.success('Session stopped');
+          await load();
+        } catch { message.error('Stop failed'); }
+      }
+    });
   };
   const relaunch = async (r:any)=>{
     const p = r.profile || {};
@@ -50,6 +60,8 @@ export default function SessionsPage(){
             { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
             { title:'Started', dataIndex:'startedAt', render:(v)=> new Date(v).toLocaleString() },
             { title:'Open pos', dataIndex:'openPositions' },
+            { title:'PnL (USD)', dataIndex:'pnlUsd', render:(v:any)=> Number(v||0).toFixed(2) },
+            { title:'ROI %', dataIndex:'roiPct', render:(v:any)=> Number(v||0).toFixed(2) },
             { title:'', render:(_,r)=> (<Space><Button danger onClick={(e)=> { e.stopPropagation(); stop(r.id); }}>Stop</Button></Space>) }
           ]}
         />
@@ -64,6 +76,8 @@ export default function SessionsPage(){
           { title:'Started', dataIndex:'startedAt', render:(v)=> new Date(v).toLocaleString() },
           { title:'Stopped', dataIndex:'stoppedAt', render:(v)=> v ? new Date(v).toLocaleString() : <Tag color='green'>ACTIVE</Tag> },
           { title:'Open pos', dataIndex:'openPositions' },
+          { title:'PnL (USD)', dataIndex:'pnlUsd', render:(v:any)=> Number(v||0).toFixed(2) },
+          { title:'ROI %', dataIndex:'roiPct', render:(v:any)=> Number(v||0).toFixed(2) },
           { title:'', render:(_,r)=> !r.stoppedAt ? (
             <Space><Button danger onClick={()=> stop(r.id)}>Stop</Button></Space>
           ) : (

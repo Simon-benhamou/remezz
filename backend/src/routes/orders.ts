@@ -9,7 +9,13 @@ router.get("/", async (req, res) => {
     const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
     if (s?.id) where.sessionId = s.id;
   }
-  const rows = await prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { fills: true } });
+  const [rows, sess] = await Promise.all([
+    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { fills: true } }),
+    sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
+  ]);
+  const budgetPct = Number(((sess as any)?.profileJson?.budgetPct) ?? 100);
+  const equity = Number((sess as any)?.startBalanceUsd || 0);
+  const equityAlloc = equity * (budgetPct > 1 ? (budgetPct/100) : (budgetPct||1));
   const out = rows.map((o:any)=>{
     const isExit = (o.clientOrderId || '').endsWith('.exit');
     const positionSide = isExit
@@ -17,8 +23,10 @@ router.get("/", async (req, res) => {
       : (o.side === 'buy' ? 'long' : 'short');
     const realizedPnlUsd = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0;
     const roePct = isExit && o.leverage && o.pctChange != null ? Number(o.pctChange) * Number(o.leverage) : null;
+    const notional = (Number(o.qty||0) * Number(o.price||0));
+    const estLev = equityAlloc > 0 ? (notional / equityAlloc) : null;
     const { fills, ...rest } = o;
-    return { ...rest, positionSide, realizedPnlUsd, roePct };
+    return { ...rest, positionSide, realizedPnlUsd, roePct, estLev };
   });
   res.json(out);
 });
@@ -28,7 +36,13 @@ router.get('/trades', async (req, res) => {
   const sessionId = String(req.query.sessionId || "");
   let where: any = { clientOrderId: { endsWith: '.exit' } };
   if (sessionId) where.sessionId = sessionId;
-  const rows = await prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { fills: true } });
+  const [rows, sess] = await Promise.all([
+    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { fills: true } }),
+    sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
+  ]);
+  const budgetPct = Number(((sess as any)?.profileJson?.budgetPct) ?? 100);
+  const equity = Number((sess as any)?.startBalanceUsd || 0);
+  const equityAlloc = equity * (budgetPct > 1 ? (budgetPct/100) : (budgetPct||1));
   function posDirFromExitSide(side: string) { return side === 'buy' ? 'short' : 'long'; }
   const out = rows.map((o:any)=>{
     const positionSide = posDirFromExitSide(o.side || '');
@@ -38,6 +52,8 @@ router.get('/trades', async (req, res) => {
     const realized = (Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0);
     const entryPrice = (qty>0 && exitPrice>0) ? (exitPrice - (realized / (dir * qty))) : null;
     const roePct = (o.pctChange != null && o.leverage) ? (Number(o.pctChange) * Number(o.leverage)) : null;
+    const notional = qty * exitPrice;
+    const estLev = equityAlloc > 0 ? (notional / equityAlloc) : null;
     return {
       id: o.id,
       createdAt: o.createdAt,
@@ -48,6 +64,7 @@ router.get('/trades', async (req, res) => {
       exitPrice,
       pctChange: o.pctChange,
       roePct,
+      estLev,
       leverage: o.leverage,
       realizedPnlUsd: realized,
       status: o.status,

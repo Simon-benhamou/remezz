@@ -4,7 +4,6 @@ import { Row, Col, Space, Tag } from 'antd';
 import PriceChart from '../charts/PriceChart';
 import StrategyPanel from '../components/StrategyPanel';
 import AnalysisTabs from '../components/AnalysisTabs';
-import AgentControls from '../components/AgentControls';
 import AgentStatePanel from '../components/AgentStatePanel';
 import IndicatorsPanel from '../components/IndicatorsPanel';
 import PerfPanel from '../components/PerfPanel';
@@ -132,11 +131,7 @@ export default function MonitorPage(){
         </Col>
         <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
         <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
-        <Col xs={24} lg={8}><AgentControls session={status?.session} symbol={status?.symbol} showStart={false} onChange={async ()=>{
-          const s = await api.status(sessionId!);
-          setStatus((prev:any)=>({ ...prev, ...s }));
-          if (!s?.session) navigate('/sessions'); else { if (s.session.symbol) setSymbol(s.session.symbol); }
-        }} /></Col>
+        {/* Session control is handled in Sessions page; remove Monitor controls for a cleaner view */}
         <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} /></Col>
         <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
         <Col xs={24} lg={8}><PerfPanel kpi={kpi} session={status?.session} /></Col>

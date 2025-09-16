@@ -17,6 +17,9 @@ export default function AlertPanel({ sessionId }: { sessionId?: string }){
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
               <Tag color={it.severity==='high'?'red': it.severity==='med'?'orange':'blue'}>{it.kind}</Tag>
               <span>{new Date(it.ts).toLocaleTimeString()} — {it.symbol}</span>
+              {it.details?.error && (
+                <span style={{ color:'#999' }} title={String(it.details.error)}> • {String(it.details.error).slice(0,80)}…</span>
+              )}
             </div>
           </List.Item>
         )}
@@ -24,4 +27,3 @@ export default function AlertPanel({ sessionId }: { sessionId?: string }){
     </Card>
   );
 }
-

@@ -36,6 +36,8 @@ export type ActivePosition = {
   openedAt: number;
   extended: boolean;
   partialTaken?: boolean;
+  slOrderId?: string;
+  tpOrderId?: string;
 };
 
 export class ReboundRejectionAgent {
@@ -176,7 +178,7 @@ export class ReboundRejectionAgent {
       this.entering = false;
       return;
     }
-    this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false };
+    this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false, slOrderId: (placed as any).slOrderId, tpOrderId: (placed as any).tpOrderId };
     // Ensure at least two TP levels (for partial then runner)
     if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
       const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 2)) : (this.pos.entry - (this.plan.stopDistance * 2));
@@ -199,28 +201,30 @@ export class ReboundRejectionAgent {
     const dir = this.pos.side === 'buy' ? 1 : -1;
     const upR = (dir * (price - this.pos.entry)) / this.plan.stopDistance; // current R
 
-    // Trailing if > 1R
-    if (upR > 1) {
-      // ATR/EMA candidate
-      let candAtr: number;
-      if (this.pos.side === 'buy') {
-        candAtr = Math.min(snap.ema20, price - (this.plan.atr)); // below price
-      } else {
-        candAtr = Math.max(snap.ema20, price + (this.plan.atr)); // above price
+    // Stepwise + combo trailing
+    if (upR > 0.5 && this.pos) {
+      const be = this.pos.entry;
+      let trailStep = this.pos.stop;
+      if (upR > 1.0) trailStep = this.pos.side==='buy' ? Math.max(trailStep, be) : Math.min(trailStep, be);
+      if (upR > 1.5) {
+        const lock = this.pos.entry + (this.pos.side==='buy' ? 0.3 : -0.3) * this.plan.stopDistance;
+        trailStep = this.pos.side==='buy' ? Math.max(trailStep, lock) : Math.min(trailStep, lock);
       }
-      // Optional fixed percentage candidate
+      if (upR > 2.0) {
+        const lock = this.pos.entry + (this.pos.side==='buy' ? 0.7 : -0.7) * this.plan.stopDistance;
+        trailStep = this.pos.side==='buy' ? Math.max(trailStep, lock) : Math.min(trailStep, lock);
+      }
+      // ATR/EMA and optional percent trailing
+      let candAtr: number;
+      if (this.pos.side==='buy') candAtr = Math.min(snap.ema20, price - (this.plan.atr)); else candAtr = Math.max(snap.ema20, price + (this.plan.atr));
       let candPct = candAtr;
       try {
         const { TRAIL_PCT } = (await import('../utils/env.js')).getConfig();
         const pct = Math.max(0, Number(TRAIL_PCT || 0));
-        if (pct > 0) {
-          const ratio = pct / 100; // percent to fraction
-          candPct = this.pos.side === 'buy' ? (price * (1 - ratio)) : (price * (1 + ratio));
-        }
+        if (pct > 0) candPct = this.pos.side==='buy' ? (price * (1 - pct/100)) : (price * (1 + pct/100));
       } catch {}
-      const cand = this.pos.side === 'buy' ? Math.max(candAtr, candPct) : Math.min(candAtr, candPct);
-      if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, cand);
-      else this.pos.stop = Math.min(this.pos.stop, cand);
+      const combo = this.pos.side==='buy' ? Math.max(trailStep, Math.max(candAtr, candPct)) : Math.min(trailStep, Math.min(candAtr, candPct));
+      if (this.pos.side==='buy') this.pos.stop = Math.max(this.pos.stop, combo); else this.pos.stop = Math.min(this.pos.stop, combo);
     }
 
     // TP handling: partial at TP1, full at TP2 (if any), otherwise trailing/SL/time
@@ -253,7 +257,7 @@ export class ReboundRejectionAgent {
         const closeQty = Math.max(0, Math.min(this.pos.qty, Number((this.pos.qty * 0.5).toFixed(8))));
         if (closeQty > 0 && this.broker) {
           // Place market close for partial
-          await this.broker.place({ symbol: this.profile.symbol, side: this.pos.side === 'buy' ? 'sell' : 'buy', type: 'market', qty: closeQty, leverage: this.profile.maxLeverage });
+          await this.broker.place({ symbol: this.profile.symbol, side: this.pos.side === 'buy' ? 'sell' : 'buy', type: 'market', qty: closeQty, leverage: this.profile.maxLeverage, reduceOnly: true });
           await recordExit({ sessionId: this.sessionId!, symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: closeQty, realizedPnl: (dir * (price - this.pos.entry) * closeQty) }).catch(()=>{});
           // Reduce local pos.qty and mark partial
           this.pos.qty = Math.max(0, this.pos.qty - closeQty);
@@ -262,6 +266,21 @@ export class ReboundRejectionAgent {
           const be = this.pos.entry;
           if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, be);
           else this.pos.stop = Math.min(this.pos.stop, be);
+          // Update exchange protective orders to reflect new qty/stop (live best-effort)
+          if (this.profile.mode === 'live' && this.broker) {
+            try { if (this.pos.slOrderId) await this.broker.cancel(this.pos.slOrderId); } catch {}
+            try { if (this.pos.tpOrderId) await this.broker.cancel(this.pos.tpOrderId); } catch {}
+            try {
+              const reduceSide = this.pos.side === 'buy' ? 'sell' : 'buy';
+              const slo = await this.broker.place({ symbol: this.profile.symbol, side: reduceSide, type: 'market', qty: this.pos.qty, leverage: this.profile.maxLeverage, reduceOnly: true, stopLoss: this.pos.stop });
+              if ((slo as any)?.slOrderId) this.pos.slOrderId = (slo as any).slOrderId;
+              const nextTp = this.pos.tp[0];
+              if (nextTp) {
+                const tpo = await this.broker.place({ symbol: this.profile.symbol, side: reduceSide, type: 'limit', qty: this.pos.qty, leverage: this.profile.maxLeverage, reduceOnly: true, price: nextTp });
+                if ((tpo as any)?.tpOrderId) this.pos.tpOrderId = (tpo as any).tpOrderId;
+              }
+            } catch {}
+          }
           // Shift TP ladder to next target if any
           if (this.pos.tp.length > 1) this.pos.tp = this.pos.tp.slice(1);
           broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
@@ -332,6 +351,7 @@ export class ReboundRejectionAgent {
         type: 'market',
         qty: this.pos.qty,
         leverage: this.profile.maxLeverage,
+        reduceOnly: true,
       });
     } catch {}
 

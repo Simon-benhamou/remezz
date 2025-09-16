@@ -15,6 +15,7 @@ model AgentSession {
   stoppedAt       DateTime?
   startBalanceUsd Float?
   profileJson     Json?
+  planJson        Json?
 
   strategies Strategy[]
   orders     Order[]

@@ -7,7 +7,7 @@ export default function OrdersTable({ rows = [] }: any) {
       dataIndex: "createdAt",
       render: (v: any) => new Date(v).toLocaleString(),
     },
-    { title: "ClientID", dataIndex: "clientOrderId" },
+    { title: "ClientID", dataIndex: "clientOrderId" , style:{maxWidth: '150px'} },
     { title: "Symbol", dataIndex: "symbol" },
     {
       title: "Kind",
@@ -33,6 +33,11 @@ export default function OrdersTable({ rows = [] }: any) {
         const v = (Number(r.qty) || 0) * (Number(r.price) || 0);
         return v ? `$${v.toFixed(2)}` : '-';
       },
+    },
+    {
+      title: "Est Lev",
+      dataIndex: "estLev",
+      render: (v:any)=> v!=null ? `x${Number(v).toFixed(2)}` : '-',
     },
     {
       title: "Lev",

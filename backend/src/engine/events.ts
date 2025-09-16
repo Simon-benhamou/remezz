@@ -18,6 +18,7 @@ let lastPurgeAt = 0;
 let lastStrategyAt: number | null = null;
 let lastStrategyZone: { min?: number | null; max?: number | null } | null = null;
 let lastTick = { symbol: '', price: 0, ts: 0 };
+const lastTickBySession = new Map<string, number>();
 
 function pctDiff(a: number, b: number) {
   if (!a || !b) return 0;
@@ -59,6 +60,26 @@ async function tickOnce(sessionId: string, sym: string){
     resistances: tech.resistances,
     pivots: tech.pivots
   }, sym, sessionId);
+  try { lastTickBySession.set(sessionId, Date.now()); } catch {}
+
+  // Broadcast a lightweight overview update for this session (live ROI/PnL)
+  try {
+    const s = await prisma.agentSession.findUnique({ where:{ id: sessionId }, include: { kpi: true } });
+    if (s) {
+      const a = AgentHub.get(sessionId) as any;
+      let upnlUsd = 0;
+      if (a?.pos) {
+        const dir = a.pos.side === 'buy' ? 1 : -1;
+        upnlUsd = dir * (tech.last - a.pos.entry) * a.pos.qty;
+      }
+      const realized = Number((s as any)?.kpi?.realizedPnlUsd || 0);
+      const unrealized = Number((s as any)?.kpi?.unrealizedPnlUsd || 0);
+      const pnlUsd = realized + unrealized + upnlUsd;
+      const capital = Number(s.startBalanceUsd || 0);
+      const roiPct = capital > 0 ? (pnlUsd / capital) * 100 : Number((s as any)?.kpi?.roiPct || 0);
+      broadcast('overview_session', { id: s.id, symbol: s.symbol, price: tech.last, pnlUsd, roiPct, ts: Date.now() });
+    }
+  } catch {}
 
   // Policy audit: check conformance (late invalidation, missed partial, overtrading)
   try { (await import('../monitor/policy.js')).auditTick(sessionId, sym, tech.last); } catch {}
@@ -154,6 +175,15 @@ export async function startEventEngine(){
               budgetFraction: (()=>{ let bf = typeof p.budgetPct==='number'? p.budgetPct:1; if (bf>1) bf/=100; return Math.min(1, Math.max(0.1, bf)); })(),
             };
             try { await (await import('../agent/hub.js')).AgentHub.activate(s.id, profile as any); } catch {}
+            // If a persisted plan exists, re-arm the agent automatically without calling LLM again
+            try {
+              const a = (await import('../agent/hub.js')).AgentHub.get(s.id) as any;
+              const planJson = (s as any).planJson;
+              if (a && planJson) {
+                await a.propose(planJson);
+                await a.validateAndArm();
+              }
+            } catch {}
           }
         } catch {}
       }
@@ -164,6 +194,21 @@ export async function startEventEngine(){
         lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
         try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
       }
+      // Stale data monitoring
+      try {
+        const { STALE_TICK_SEC } = getConfig();
+        const now = Date.now();
+        for (const s of await prisma.agentSession.findMany({ where:{ stoppedAt:null }, select:{ id:true, symbol:true } })) {
+          const ts = lastTickBySession.get(s.id) || 0;
+          if (ts > 0 && (now - ts) > STALE_TICK_SEC * 1000) {
+            try {
+              const { emitAlert } = await import('../monitor/policy.js');
+              await emitAlert({ sessionId: s.id, symbol: s.symbol, kind:'stale_data', severity:'med', details:{ lastTickSec: Math.round((now-ts)/1000) } });
+              lastTickBySession.set(s.id, now); // avoid spamming; emit at most once per window
+            } catch {}
+          }
+        }
+      } catch {}
     } catch (e) { /* log optionnel */ }
     finally { setTimeout(loop, pollMs); }
   }

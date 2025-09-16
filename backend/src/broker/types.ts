@@ -11,6 +11,7 @@ export type NewOrder = {
   clientOrderId?: string;
   takeProfit?: number;
   stopLoss?: number;
+  reduceOnly?: boolean;
 };
 
 export type PlacedOrder = NewOrder & {
@@ -19,6 +20,9 @@ export type PlacedOrder = NewOrder & {
   avgPrice?: number;
   filledQty?: number;
   ts: number;
+  // Optional protective orders identifiers (live broker)
+  slOrderId?: string;
+  tpOrderId?: string;
 };
 
 export interface Broker {

@@ -10,6 +10,9 @@ export type PolicyAlert = {
     | 'late_invalidation_exit'
     | 'missed_partial'
     | 'overtrading'
+    | 'capacity_breach'
+    | 'order_unfilled'
+    | 'stale_data'
     | 'llm_invalid';
   severity: 'low'|'med'|'high';
   details?: any;

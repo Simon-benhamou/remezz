@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, Row, Col, Statistic, Space, Button, Table, Tag, List } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { openWS } from '../ws';
 
 export default function DashboardPage(){
   const [ov, setOv] = React.useState<any>({});
@@ -21,10 +22,29 @@ export default function DashboardPage(){
     const t = setInterval(async ()=>{
       try { const data = await api.overview(); setOv(data); } catch {}
     }, 15000);
-    return ()=> clearInterval(t);
+    // WS live updates for overview_session events
+    const API_BASE = (import.meta as any).env.VITE_API_BASE || 'http://localhost:4000';
+    const key = (localStorage.getItem('apiKey') || '');
+    const ws = openWS(API_BASE, key, '', (msg:any)=>{
+      if (msg?.type === 'overview_session') {
+        setOv((prev:any)=>{
+          const cur = prev || {};
+          const sessions = Array.isArray(cur.sessions) ? cur.sessions.slice() : [];
+          const idx = sessions.findIndex((s:any)=> s.id === msg.data.id);
+          if (idx>=0) {
+            sessions[idx] = { ...sessions[idx], pnlUsd: msg.data.pnlUsd, roiPct: msg.data.roiPct };
+          }
+          return { ...cur, sessions, updatedAt: new Date().toISOString() };
+        });
+      }
+    });
+    return ()=> { try { clearInterval(t); } catch {}; try { ws?.close?.(); } catch {} };
   }, []);
   return (
     <Space direction='vertical' style={{ width:'100%' }}>
+      {ov?.updatedAt && (
+        <div style={{ textAlign:'right', color:'#666', fontSize:12 }}>Last updated: {new Date(ov.updatedAt).toLocaleTimeString()}</div>
+      )}
       <Row gutter={[12,12]}>
         <Col xs={24} md={4}><Card loading={loading}><Statistic title='Active agents' value={ov?.activeCount || 0} /></Card></Col>
         <Col xs={24} md={4}><Card loading={loading}><Statistic title='Total sessions' value={ov?.sessionsCount || 0} /></Card></Col>
@@ -32,6 +52,9 @@ export default function DashboardPage(){
         <Col xs={24} md={4}><Card loading={loading}><Statistic title='Agg PnL (USD)' precision={2} value={Number(ov?.pnlUsd||0)} /></Card></Col>
         <Col xs={24} md={4}><Card loading={loading}><Statistic title='AI calls' value={Number(ov?.aiCallsTotal||0)} /></Card></Col>
         <Col xs={24} md={4}><Card loading={loading}><Statistic title='Avg Win Rate %' precision={2} value={Number(ov?.avgWinRate||0)} /></Card></Col>
+      </Row>
+      <Row gutter={[12,12]}>
+        <Col xs={24} md={8}><Card loading={loading}><Statistic title='Total open risk (USD)' precision={2} value={Number(ov?.totalOpenRiskUsd||0)} /></Card></Col>
       </Row>
       <Row gutter={[12,12]}>
         <Col xs={24} md={12}>
@@ -93,6 +116,13 @@ export default function DashboardPage(){
             { title:'PnL (USD)', dataIndex:'pnlUsd', render:(v:any)=> Number(v||0).toFixed(2) },
             { title:'AI', dataIndex:'aiCalls' },
             { title:'Open qty', dataIndex:'openQty', render:(v:any)=> Number(v||0).toFixed(6) },
+            { title:'Health', render: (_:any,r:any)=>{
+                const rec = (ov?.alerts?.recent||[]).find((a:any)=> a.sessionId===r.id);
+                if (!rec) return <Tag color='green'>OK</Tag>;
+                const c = rec.severity==='high'?'red':rec.severity==='med'?'orange':'blue';
+                return <Tag color={c}>{rec.kind}</Tag>;
+              }
+            },
             { title:'Started', dataIndex:'startedAt', render:(v:any)=> new Date(v).toLocaleString() },
             { title:'', render:(_:any,r:any)=> <Button onClick={()=> navigate(`/monitor/${r.id}`)}>Open</Button> },
           ]}

@@ -86,7 +86,7 @@ function AppInner(){
             <a onClick={()=> { clearApiKey(); navigate('/login'); }} style={{ color:'#ddd', textDecoration:'underline' }}>Logout</a>
           </Space>
         </Header>
-        <Content style={{ padding: 12 , overflow:'auto', background:'#fff' }}>
+        <Content style={{ padding: 12 , overflow:'auto', background:'#fff' , maxHeight:"calc(100vh - 64px - 48px - 24px)" }}>
           <Routes>
             <Route path='/' element={<Navigate to='/dashboard' replace />} />
             <Route path='/dashboard' element={<DashboardPage />} />

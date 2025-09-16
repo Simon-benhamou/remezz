@@ -79,6 +79,8 @@ router.post('/start', async (req,res)=>{
       try {
         // Plan + arm
         const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
+        // Persist LLM plan JSON on the session so we can re-arm after a reboot without re-calling LLM
+        try { await prisma.agentSession.update({ where: { id: s.id }, data: { planJson: plan as any } }); } catch {}
         const a = AgentHub.get(s.id);
         if (a) {
           await a.propose(plan as any);
@@ -144,6 +146,8 @@ router.post('/propose', async (req,res) => {
     const plan = PlanZ.parse(rest);
     const a = AgentHub.get(sessionId);
     if (!a) return res.status(400).json({ error: 'no_agent' });
+    // Persist the proposed plan on session
+    try { await prisma.agentSession.update({ where: { id: sessionId }, data: { planJson: plan as any } }); } catch {}
     await a.propose(plan as any);
     await a.validateAndArm();
     res.json({ ok: true });
@@ -174,17 +178,25 @@ router.get('/state', async (req,res)=>{
 
 // List recent sessions (active first), with open position count
 router.get('/sessions', async (_req,res)=>{
-  const rows = await prisma.agentSession.findMany({ orderBy: { startedAt: 'desc' }, take: 100, include: { positions: true } });
-  const out = rows.map(r => ({
-    id: r.id,
-    symbol: r.symbol,
-    mode: r.mode,
-    startedAt: r.startedAt,
-    stoppedAt: r.stoppedAt,
-    startBalanceUsd: r.startBalanceUsd,
-    openPositions: (r.positions || []).filter(p => (p.qty ?? 0) > 0).length,
-    profile: (r as any).profileJson || null,
-  }));
+  const rows = await prisma.agentSession.findMany({ orderBy: { startedAt: 'desc' }, take: 100, include: { positions: true, kpi: true } });
+  const out = rows.map(r => {
+    const realized = Number(r.kpi?.realizedPnlUsd || 0);
+    const unrealized = Number(r.kpi?.unrealizedPnlUsd || 0);
+    const pnlUsd = realized + unrealized;
+    const roiPct = Number(r.kpi?.roiPct || 0);
+    return {
+      id: r.id,
+      symbol: r.symbol,
+      mode: r.mode,
+      startedAt: r.startedAt,
+      stoppedAt: r.stoppedAt,
+      startBalanceUsd: r.startBalanceUsd,
+      openPositions: (r.positions || []).filter(p => (p.qty ?? 0) > 0).length,
+      profile: (r as any).profileJson || null,
+      pnlUsd,
+      roiPct,
+    };
+  });
   res.json(out);
 });
 
@@ -250,6 +262,17 @@ router.get('/overview', async (_req,res)=>{
       posQty: pos?.qty || null,
     };
   }));
+  // Total open risk (approx): sum of |qty * last| across active positions
+  let totalOpenRiskUsd = 0;
+  try {
+    for (const s of actives) {
+      const agent = AgentHub.get(s.id) as any;
+      if (agent?.pos && agent?.profile?.symbol) {
+        const snap = await buildTechSnapshot(agent.profile.symbol);
+        totalOpenRiskUsd += Math.abs((agent.pos.qty||0) * (snap.last||0));
+      }
+    }
+  } catch {}
   // Alerts summary
   const severityCounts = (recentAlerts as any[]).reduce((m:any,a:any)=>{ m[a.severity] = (m[a.severity]||0)+1; return m; }, { high:0, med:0, low:0 });
   const alertsSlim = (recentAlerts as any[]).map(a => ({ id:a.id, sessionId:a.sessionId, symbol:a.symbol, kind:a.kind, severity:a.severity, createdAt:a.createdAt }));
@@ -267,6 +290,8 @@ router.get('/overview', async (_req,res)=>{
     paperBalance,
     sessions: bySession,
     alerts: { severityCounts, recent: alertsSlim },
+    updatedAt: new Date().toISOString(),
+    totalOpenRiskUsd,
   });
 });
 
