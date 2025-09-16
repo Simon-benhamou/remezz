@@ -93,21 +93,7 @@ export class ReboundRejectionAgent {
       await this.syncProtectiveOrders('startup');
       return;
     }
-    const limits = defaultLimits();
-    const decision = await assessRisk({
-      sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10),
-      realizedPnlPctToday: this.realizedPnlTodayPct,
-      consecutiveStops: this.consecutiveStops,
-      tradesToday: this.tradesToday,
-    }, limits);
-    if (!decision.ok) {
-      this.state = decision.action === 'halt' ? 'HALT' : 'COOLDOWN';
-      return;
-    }
-    if (!this.plan.guards.spreadOk || !this.plan.guards.leverageOk) {
-      this.state = 'COOLDOWN';
-      return;
-    }
+    // Bypass risk / spread / leverage gating per user request
     this.state = 'ARMED';
     const aiCalls = await getAICallsCount(this.sessionId || undefined);
     broadcast('agent_state', { state: this.state, plan: this.plan, aiCalls }, this.profile.symbol, this.sessionId || undefined);
@@ -513,7 +499,8 @@ export class ReboundRejectionAgent {
     broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     // back to SCAN unless guardrails trip
     const guard = await assessRisk({ sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10), realizedPnlPctToday: this.realizedPnlTodayPct, consecutiveStops: this.consecutiveStops, tradesToday: this.tradesToday });
-    this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'COOLDOWN');
+  // After removal of entry limiting logic, still respect catastrophic halt, otherwise go to SCAN
+  this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'SCAN');
     broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
 
     // Immediately request a fresh strategy after an exit (force to bypass cool-down)
