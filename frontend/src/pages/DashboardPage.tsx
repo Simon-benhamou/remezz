@@ -5,12 +5,24 @@ import { api } from '../api';
 
 export default function DashboardPage(){
   const [ov, setOv] = React.useState<any>({});
-  const [loading, setLoading] = React.useState<boolean>(false);
+  const [loading, setLoading] = React.useState<boolean>(true);
+  const loadedRef = React.useRef(false);
   const navigate = useNavigate();
   const load = async ()=>{
-    try { setLoading(true); setOv(await api.overview()); } finally { setLoading(false); }
+    try {
+      const data = await api.overview();
+      setOv(data);
+    } finally {
+      if (!loadedRef.current) { setLoading(false); loadedRef.current = true; }
+    }
   };
-  React.useEffect(()=>{ load(); const t = setInterval(load, 15000); return ()=> clearInterval(t); }, []);
+  React.useEffect(()=>{
+    load();
+    const t = setInterval(async ()=>{
+      try { const data = await api.overview(); setOv(data); } catch {}
+    }, 15000);
+    return ()=> clearInterval(t);
+  }, []);
   return (
     <Space direction='vertical' style={{ width:'100%' }}>
       <Row gutter={[12,12]}>

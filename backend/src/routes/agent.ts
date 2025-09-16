@@ -56,45 +56,47 @@ router.post('/start', async (req,res)=>{
       startBalanceUsd: startBal,
     });
     await setActiveSession(s.id);
-  // Activate the new agent state machine (profile freeze)
-  let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
-  if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
-  budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
+    // Activate the new agent state machine (profile freeze)
+    let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
+    if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
+    budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
     await AgentHub.activate(s.id, {
       symbol,
       mode,
-    maxLeverage: Math.min(5, Math.max(1, body.maxLeverage ?? 4)),
-    riskPerTradePct: Math.min(2, Math.max(1, body.riskPerTradePct ?? 1.5)),
-    dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
-    timestamp: new Date().toISOString(),
-    startBalanceUsd: startBalanceUsd,
-    budgetFraction,
-  } as any).catch(()=>{});
+      maxLeverage: Math.min(5, Math.max(1, body.maxLeverage ?? 4)),
+      riskPerTradePct: Math.min(2, Math.max(1, body.riskPerTradePct ?? 1.5)),
+      dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
+      timestamp: new Date().toISOString(),
+      startBalanceUsd: startBalanceUsd,
+      budgetFraction,
+    } as any).catch(()=>{});
 
-    // Auto-propose and arm an agent plan on activation (fully automated flow)
-    try {
-      const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
-      const a = AgentHub.get(s.id);
-      if (a) {
-        await a.propose(plan as any);
-        await a.validateAndArm();
-      }
-    } catch (e:any) {
-      // Non-blocking; just continue
-    }
-
-  // Classic strategy generation for preview (optional) via manager (throttled)
-    const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id, fresh: true, force: true });
-  // Push session + strategy + analysis
-  broadcast('session', s, s.symbol, s.id);
-  broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);
-
-  try {
-    const tech = await buildTechSnapshot(s.symbol);
-    broadcast('analysis', { symbol: s.symbol, technical: tech }, s.symbol, s.id);
-  } catch {}
-
+    // Respond immediately to keep the UI smooth
     res.json(s);
+
+    // Continue heavy work in background without blocking response
+    setTimeout(async () => {
+      try {
+        // Plan + arm
+        const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
+        const a = AgentHub.get(s.id);
+        if (a) {
+          await a.propose(plan as any);
+          await a.validateAndArm();
+        }
+      } catch {}
+      try {
+        // Strategy preview
+        const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id, fresh: true, force: true });
+        broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);
+      } catch {}
+      try {
+        const tech = await buildTechSnapshot(s.symbol);
+        broadcast('analysis', { symbol: s.symbol, technical: tech }, s.symbol, s.id);
+      } catch {}
+      // Ensure session broadcast after activation
+      try { broadcast('session', s, s.symbol, s.id); } catch {}
+    }, 0);
   } catch (e:any) {
     res.status(500).json({ error: 'agent_start_failed', details: String(e?.message || e) });
   }

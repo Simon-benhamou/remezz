@@ -6,6 +6,7 @@ import { api } from '../api';
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
   const [open, setOpen] = React.useState(false);
+  const [starting, setStarting] = React.useState(false);
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
@@ -77,9 +78,10 @@ export default function SessionsPage(){
           ) }
         ]} />
 
-      <Modal open={open} title='Activate new agent' okText='Start' cancelText='Cancel' onCancel={()=> setOpen(false)}
+      <Modal open={open} title='Activate new agent' okText='Start' cancelText='Cancel' onCancel={()=> setOpen(false)} confirmLoading={starting}
         onOk={async ()=>{
           try {
+            setStarting(true);
             const v = await form.validateFields();
             // Front guard: cap startBalanceUsd to exchange equity when live
             if (String(v.mode) === 'live' && exBal?.totalUsd != null && v.startBalanceUsd != null) {
@@ -100,6 +102,8 @@ export default function SessionsPage(){
             const msg = String(e?.response?.data?.error || e?.message || e);
             if (msg.includes('active_session_exists')) message.warning('Stop the active session first.');
             else message.error('Failed to start session');
+          } finally {
+            setStarting(false);
           }
         }}>
         <Form layout='vertical' form={form} initialValues={{ mode:'paper', riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }}>
