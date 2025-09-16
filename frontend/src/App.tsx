@@ -147,62 +147,61 @@ function AppInner(){
 
 export default function App(){
  const brandTheme: ThemeConfig = {
-  algorithm: [theme.darkAlgorithm, theme.compactAlgorithm],
+  algorithm: [theme.defaultAlgorithm, theme.compactAlgorithm],
   token: {
-    // Core brand
-    colorPrimary: "#22d3ee", // electric cyan
-    colorInfo: "#60a5fa",    // soft blue for info/links
-    colorSuccess: "#22c55e", // profit/positive
-    colorWarning: "#f59e0b",
-    colorError: "#ef4444",   // loss/negative
+    // Core brand (light, frais)
+    colorPrimary: "#06b6d4", // teal/cyan
+    colorInfo: "#2563eb",
+    colorSuccess: "#16a34a",
+    colorWarning: "#d97706",
+    colorError: "#dc2626",
 
-    // Dark surfaces & text
-    colorBgBase: "#0a0f1c",
-    colorBgContainer: "#0f172a",
-    colorBgElevated: "#111827",
-    colorTextBase: "#e5e7eb",
-    colorText: "#cbd5e1",
-    colorTextSecondary: "#94a3b8",
-    colorBorder: "#1f2937",
-    colorSplit: "#182131",
+    // Surfaces & texte (LIGHT)
+    colorBgBase: "#f8fafc",        // app background
+    colorBgContainer: "#ffffff",   // cartes/composants
+    colorBgElevated: "#ffffff",
+    colorTextBase: "#0f172a",
+    colorText: "#1f2937",
+    colorTextSecondary: "#475569",
+    colorBorder: "#e5e7eb",
+    colorSplit: "#f1f5f9",
 
-    // Shape & controls
+    // Contrôles & formes
     borderRadius: 10,
     borderRadiusLG: 14,
     borderRadiusSM: 8,
     controlHeight: 36,
     controlHeightLG: 44,
     controlHeightSM: 28,
-    controlOutline: "rgba(34, 211, 238, 0.25)", // focus glow
-    controlItemBgActive: "rgba(34, 211, 238, 0.10)",
-    colorLink: "#60a5fa",
-    colorLinkHover: "#93c5fd",
-    colorLinkActive: "#3b82f6",
+    controlOutline: "rgba(6,182,212,0.30)", // focus glow
+    controlItemBgActive: "rgba(6,182,212,0.08)",
+    colorLink: "#2563eb",
+    colorLinkHover: "#3b82f6",
+    colorLinkActive: "#1d4ed8",
 
-    // Optional: subtle chart/grid helpers
-    colorFillSecondary: "rgba(148,163,184,0.10)", // panel glows
-    colorFillTertiary: "rgba(148,163,184,0.06)",
+    // Aides discrètes (grilles/hover)
+    colorFillSecondary: "rgba(2,6,23,0.03)",
+    colorFillTertiary: "rgba(2,6,23,0.02)",
   },
 
-  // Component-level refinements for a crisp trading UI
   components: {
     Layout: {
-      headerBg: "#0e1526",
-      siderBg: "#0b1220",
-      bodyBg: "#0a0f1c",
+      headerBg: "#ffffff",
+      siderBg: "#f8fafc",
+      bodyBg: "#f8fafc",
       headerPadding: "0 16px",
-      triggerBg: "rgba(255,255,255,0.06)",
-      triggerColor: "#cbd5e1",
+      triggerBg: "rgba(15,23,42,0.05)",
+      triggerColor: "#334155",
     },
 
     Menu: {
-      itemColor: "#94a3b8",
-      itemHoverColor: "#e5e7eb",
+      itemColor: "#475569",
+      itemHoverColor: "#0f172a",
       itemBg: "transparent",
-      itemHoverBg: "rgba(148,163,184,0.06)",
-      itemSelectedBg: "rgba(34,211,238,0.18)",
-      itemSelectedColor: "#f8fafc",
-      itemActiveBg: "rgba(34,211,238,0.10)",
+      itemHoverBg: "rgba(2,6,23,0.03)",
+      itemSelectedBg: "rgba(6,182,212,0.12)",
+      itemSelectedColor: "#0f172a",
+      itemActiveBg: "rgba(6,182,212,0.08)",
       itemBorderRadius: 8,
       activeBarBorderWidth: 0,
       groupTitleColor: "#64748b",
@@ -212,126 +211,121 @@ export default function App(){
       controlHeight: 36,
       paddingInline: 14,
       borderRadius: 10,
-      colorPrimary: "#22d3ee",
-      colorPrimaryHover: "#67e8f9",
-      colorPrimaryActive: "#06b6d4",
-      defaultBg: "rgba(148,163,184,0.08)",
-      defaultHoverBg: "rgba(148,163,184,0.12)",
-      defaultActiveBg: "rgba(148,163,184,0.18)",
-      defaultColor: "#e5e7eb",
+      colorPrimary: "#06b6d4",
+      colorPrimaryHover: "#22d3ee",
+      colorPrimaryActive: "#0891b2",
+      defaultBg: "#f8fafc",
+      defaultHoverBg: "#f1f5f9",
+      defaultActiveBg: "#e5e7eb",
+      defaultColor: "#0f172a",
       ghostBg: "transparent",
-      primaryShadow: "0 0 0 3px rgba(34,211,238,0.15)",
+      primaryShadow: "0 0 0 3px rgba(6,182,212,0.20)",
     },
-
 
     Card: {
       borderRadiusLG: 14,
       paddingLG: 20,
-      headerBg: "#0f172a",
-      colorBgContainer: "#0f172a",
-      boxShadowTertiary: "0 6px 30px rgba(2,6,23,0.35)",
+      headerBg: "#ffffff",
+      colorBgContainer: "#ffffff",
+      boxShadowTertiary: "0 10px 30px rgba(2,6,23,0.06)",
     },
 
     Table: {
-      headerBg: "#0f172a",
-      headerColor: "#cbd5e1",
-      rowHoverBg: "rgba(148,163,184,0.06)",
-      rowSelectedBg: "rgba(34,211,238,0.10)",
-      borderColor: "#1f2937",
-      stickyScrollBarBg: "rgba(148,163,184,0.35)",
+      headerBg: "#f8fafc",
+      headerColor: "#334155",
+      rowHoverBg: "rgba(2,6,23,0.03)",
+      rowSelectedBg: "rgba(6,182,212,0.10)",
+      borderColor: "#e5e7eb",
+      stickyScrollBarBg: "rgba(2,6,23,0.25)",
       stickyScrollBarBorderRadius: 4,
     },
 
     Tabs: {
-      itemColor: "#94a3b8",
-      itemSelectedColor: "#e5e7eb",
-      itemHoverColor: "#e5e7eb",
-      inkBarColor: "#22d3ee",
-      cardBg: "#0f172a",
+      itemColor: "#475569",
+      itemSelectedColor: "#0f172a",
+      itemHoverColor: "#0f172a",
+      inkBarColor: "#06b6d4",
+      cardBg: "#ffffff",
       titleFontSize: 14,
     },
 
     Input: {
       borderRadius: 10,
-      activeBorderColor: "#22d3ee",
-      hoverBorderColor: "#60a5fa",
+      activeBorderColor: "#06b6d4",
+      hoverBorderColor: "#3b82f6",
       paddingBlock: 8,
       paddingInline: 12,
-      colorBgContainer: "#0f172a",
-      colorTextPlaceholder: "#64748b",
-      addonBg: "#0a0f1c",
+      colorBgContainer: "#ffffff",
+      colorTextPlaceholder: "#94a3b8",
+      addonBg: "#f8fafc",
     },
 
     Select: {
-      optionSelectedBg: "rgba(34,211,238,0.14)",
-      optionActiveBg: "rgba(148,163,184,0.10)",
-      colorBgContainer: "#0f172a",
+      optionSelectedBg: "rgba(6,182,212,0.12)",
+      optionActiveBg: "rgba(2,6,23,0.03)",
+      colorBgContainer: "#ffffff",
       borderRadius: 10,
-      controlOutline: "rgba(34,211,238,0.25)",
+      controlOutline: "rgba(6,182,212,0.30)",
     },
 
     Dropdown: {
-      colorBgElevated: "#0f172a",
-      controlItemBgActive: "rgba(34,211,238,0.10)",
+      colorBgElevated: "#ffffff",
+      controlItemBgActive: "rgba(6,182,212,0.08)",
     },
 
     Tooltip: {
-      colorBgSpotlight: "#111827",
+      colorBgSpotlight: "#0f172a",
       colorTextLightSolid: "#e5e7eb",
       borderRadius: 8,
     },
 
     Modal: {
-      colorBgElevated: "#0f172a",
-      headerBg: "#0f172a",
-      titleColor: "#e5e7eb",
+      colorBgElevated: "#ffffff",
+      headerBg: "#ffffff",
+      titleColor: "#0f172a",
       borderRadiusLG: 14,
     },
 
     Drawer: {
-      colorBgElevated: "#0f172a",
+      colorBgElevated: "#ffffff",
       borderRadiusLG: 16,
     },
 
     Badge: {
-      colorBgContainer: "#0b1220",
+      colorBgContainer: "#0f172a",
     },
 
-
-
     Progress: {
-      remainingColor: "rgba(148,163,184,0.16)",
+      remainingColor: "rgba(2,6,23,0.08)",
     },
 
     Segmented: {
-      itemSelectedBg: "rgba(34,211,238,0.16)",
-      itemHoverBg: "rgba(148,163,184,0.10)",
-      trackBg: "rgba(148,163,184,0.08)",
+      itemSelectedBg: "rgba(6,182,212,0.14)",
+      itemHoverBg: "#f1f5f9",
+      trackBg: "#f1f5f9",
       borderRadius: 12,
     },
 
     Switch: {
-      colorPrimaryHover: "#67e8f9",
-      colorPrimary: "#22d3ee",
-      handleBg: "#0b1220",
+      colorPrimaryHover: "#22d3ee",
+      colorPrimary: "#06b6d4",
+      handleBg: "#ffffff",
       trackHeight: 22,
     },
 
     Slider: {
-      railBg: "rgba(148,163,184,0.18)",
-      trackBg: "#22d3ee",
+      railBg: "#e5e7eb",
+      trackBg: "#06b6d4",
       handleSize: 12,
     },
 
 
-
     Steps: {
-      colorTextDescription: "#94a3b8",
-      colorText: "#cbd5e1",
-      colorPrimary: "#22d3ee",
+      colorTextDescription: "#64748b",
+      colorText: "#334155",
+      colorPrimary: "#06b6d4",
     },
   },
-
 
 };
   return (

@@ -240,14 +240,6 @@ export class ReboundRejectionAgent {
         stop: this.pos.stop,
         tp: this.pos.tp,
         leverage: this.profile.maxLeverage,
-        requestedPrice: entry,
-        latencyMs: telemetry.latencyMs,
-        slippageBps: telemetry.slippageBps,
-        fillRatio: telemetry.fillRatio,
-        cancelCount: telemetry.cancelCount,
-        attempts: telemetry.attempts,
-        slOrderId: this.pos.slOrderId,
-        tpOrderId: this.pos.tpOrderId,
       });
     } catch {}
     this.state = 'MANAGE';
@@ -294,21 +286,17 @@ export class ReboundRejectionAgent {
     try {
       const row = await loadActivePosition(this.sessionId);
       if (row && Number(row.qty || 0) > 0) {
-        const tpRaw = Array.isArray(row.takeProfit) ? row.takeProfit : (row.takeProfit ? [row.takeProfit] : []);
-        const tp = Array.isArray(tpRaw) ? tpRaw.map((x:any)=> Number(x)).filter((x)=> Number.isFinite(x)) : [];
         this.pos = {
           side: (row.side as any) || 'buy',
           entry: Number(row.entryPrice || 0),
           qty: Number(row.qty || 0),
-          stop: row.stopPrice ?? Number(row.entryPrice || 0),
-          tp,
+          stop: Number(row.entryPrice || 0),
+          tp: [],
           openedAt: row.openedAt ? new Date(row.openedAt).getTime() : Date.now(),
           extended: false,
           partialTaken: false,
-          slOrderId: row.slOrderId ?? undefined,
-          tpOrderId: row.tpOrderId ?? undefined,
-          trail: row.stopPrice ? [{ ts: Date.now(), price: row.stopPrice }] : [],
-          breakeven: row.stopPrice ?? undefined,
+          trail: [],
+          breakeven: Number(row.entryPrice || 0),
           partialInfo: null,
         } as any;
         this.state = 'MANAGE';
@@ -335,36 +323,12 @@ export class ReboundRejectionAgent {
         }) as any;
         if (res?.slOrderId !== undefined) this.pos.slOrderId = res.slOrderId || undefined;
         if (res?.tpOrderId !== undefined) this.pos.tpOrderId = res.tpOrderId || undefined;
-        await updateProtectiveSnapshot({
-          sessionId: this.sessionId,
-          symbol: this.profile.symbol,
-          stopPrice: stopLoss,
-          takeProfit: this.pos.tp,
-          slOrderId: this.pos.slOrderId ?? null,
-          tpOrderId: this.pos.tpOrderId ?? null,
-          status: 'synced'
-        });
+        // protective snapshot disabled (fields not in schema)
       } else {
-        await updateProtectiveSnapshot({
-          sessionId: this.sessionId,
-          symbol: this.profile.symbol,
-          stopPrice: stopLoss,
-          takeProfit: this.pos.tp,
-          slOrderId: this.pos.slOrderId ?? null,
-          tpOrderId: this.pos.tpOrderId ?? null,
-          status: reason === 'startup' ? 'restored' : 'paper'
-        });
+        // protective snapshot disabled
       }
     } catch (e) {
-      await updateProtectiveSnapshot({
-        sessionId: this.sessionId,
-        symbol: this.profile.symbol,
-        stopPrice: stopLoss,
-        takeProfit: this.pos.tp,
-        slOrderId: this.pos.slOrderId ?? null,
-        tpOrderId: this.pos.tpOrderId ?? null,
-        status: `error:${String((e as any)?.message || e)}`.slice(0, 120)
-      });
+      // protective snapshot disabled
     }
   }
 

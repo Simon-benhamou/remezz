@@ -7,18 +7,9 @@ export async function recordEnter(params: {
   side: 'buy'|'sell';
   qty: number;
   entryPrice: number;
-  stop?: number;
-  tp?: number[];
+  stop?: number; // unused presently (no column)
+  tp?: number[]; // unused presently (no column)
   leverage?: number;
-  requestedPrice?: number;
-  requestedQty?: number;
-  latencyMs?: number;
-  slippageBps?: number;
-  fillRatio?: number;
-  cancelCount?: number;
-  attempts?: number;
-  slOrderId?: string;
-  tpOrderId?: string;
 }) {
   const clientOrderId = `${params.sessionId}.${params.symbol}.${Date.now()}`;
   const round4 = (n:number|undefined)=> (typeof n==='number' ? Math.round(n*1e4)/1e4 : undefined);
@@ -31,18 +22,11 @@ export async function recordEnter(params: {
       side: params.side,
       type: 'market',
       qty: params.qty,
-      requestedQty: params.requestedQty ?? params.qty,
       price: round4(params.entryPrice)!,
-      requestedPrice: round4(params.requestedPrice),
-      sl: round4(params.stop),
-      tp: round4(params.tp?.[0]),
+      sl: undefined, // schema has sl but we don't persist entry SL now
+      tp: undefined, // schema has tp but not used in current simplified flow
       leverage: params.leverage,
       pctChange,
-      latencyMs: params.latencyMs,
-      slippageBps: params.slippageBps,
-      fillRatio: params.fillRatio,
-      cancelCount: params.cancelCount,
-      attempts: params.attempts,
       status: 'filled',
       source: 'agent',
     }
@@ -64,15 +48,8 @@ export async function recordEnter(params: {
       side: params.side,
       entryPrice: params.entryPrice,
       qty: params.qty,
-      requestedQty: params.requestedQty ?? params.qty,
       leverage: params.leverage,
       openedAt: new Date(),
-      stopPrice: params.stop,
-      takeProfit: params.tp as any,
-      slOrderId: params.slOrderId,
-      tpOrderId: params.tpOrderId,
-      lastProtectiveSyncAt: params.slOrderId || params.tpOrderId ? new Date() : undefined,
-      protectiveStatus: (params.slOrderId || params.tpOrderId) ? 'synced' : null,
     }
   });
   // Broadcast latest orders for this session only
@@ -80,32 +57,8 @@ export async function recordEnter(params: {
   broadcast('orders', rows, params.symbol, params.sessionId);
 }
 
-export async function updateProtectiveSnapshot(params: {
-  sessionId: string;
-  symbol: string;
-  stopPrice?: number;
-  takeProfit?: number[];
-  slOrderId?: string | null;
-  tpOrderId?: string | null;
-  status?: string;
-}) {
-  const pos = await prisma.position.findFirst({
-    where: { sessionId: params.sessionId, symbol: params.symbol },
-    orderBy: { openedAt: 'desc' }
-  });
-  if (!pos) return;
-  await prisma.position.update({
-    where: { id: pos.id },
-    data: {
-      stopPrice: params.stopPrice ?? pos.stopPrice,
-      takeProfit: params.takeProfit ? params.takeProfit as any : pos.takeProfit,
-      slOrderId: params.slOrderId !== undefined ? params.slOrderId : pos.slOrderId,
-      tpOrderId: params.tpOrderId !== undefined ? params.tpOrderId : pos.tpOrderId,
-      lastProtectiveSyncAt: new Date(),
-      protectiveStatus: params.status || 'synced',
-    }
-  });
-}
+// Protective snapshot removed: schema does not currently include protective metadata fields in Position.
+export async function updateProtectiveSnapshot() { return; }
 
 export async function loadActivePosition(sessionId: string) {
   return prisma.position.findFirst({
@@ -121,13 +74,6 @@ export async function recordExit(params: {
   exitPrice: number;
   qty: number;
   realizedPnl?: number;
-  requestedPrice?: number;
-  requestedQty?: number;
-  latencyMs?: number;
-  slippageBps?: number;
-  fillRatio?: number;
-  cancelCount?: number;
-  attempts?: number;
 }) {
   const round4 = (n:number)=> Math.round(n*1e4)/1e4;
   // Fetch last position to carry leverage info to the exit order
@@ -145,18 +91,11 @@ export async function recordExit(params: {
       side: params.side === 'buy' ? 'sell' : 'buy',
       type: 'market',
       qty: params.qty,
-      requestedQty: params.requestedQty ?? params.qty,
       price: round4(params.exitPrice),
-      requestedPrice: round4(params.requestedPrice),
       leverage: lastPos?.leverage,
       pctChange,
       status: 'filled',
       source: 'agent',
-      latencyMs: params.latencyMs,
-      slippageBps: params.slippageBps,
-      fillRatio: params.fillRatio,
-      cancelCount: params.cancelCount,
-      attempts: params.attempts,
     }
   });
   await prisma.fill.create({
@@ -177,12 +116,6 @@ export async function recordExit(params: {
       data: {
         qty: newQty,
         updatedAt: new Date(),
-        stopPrice: newQty > 0 ? lastPos.stopPrice : null,
-        takeProfit: newQty > 0 ? lastPos.takeProfit : null,
-        slOrderId: newQty > 0 ? lastPos.slOrderId : null,
-        tpOrderId: newQty > 0 ? lastPos.tpOrderId : null,
-        lastProtectiveSyncAt: newQty > 0 ? lastPos.lastProtectiveSyncAt : null,
-        protectiveStatus: newQty > 0 ? lastPos.protectiveStatus : 'released',
       }
     });
   }
