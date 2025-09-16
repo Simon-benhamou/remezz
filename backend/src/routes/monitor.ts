@@ -1,20 +1,35 @@
 import { Router } from 'express';
-import { recentAlerts } from '../monitor/policy.js';
+import { recentAlerts, clearAlertsMemory } from '../monitor/policy.js';
 import { prisma } from '../db/client.js';
 import { llmJSON } from '../ai/llm.js';
 
 export const router = Router();
 
 // Recent policy alerts (in-memory)
+// source param controls where alerts are fetched: 'db' | 'mem' | 'auto'
 router.get('/alerts', async (req,res)=>{
   const sessionId = String(req.query.sessionId || '');
+  const source = String(req.query.source || 'auto');
+  if (source === 'mem') return res.json(recentAlerts(sessionId || undefined));
+  if (source === 'db') {
+    try {
+      const where: any = sessionId ? { sessionId } : {};
+      const rows = await prisma.alert.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 });
+      return res.json(rows.map(r => ({ id: r.id, sessionId: r.sessionId, symbol: r.symbol, kind: r.kind, severity: r.severity, details: r.details, ts: new Date(r.createdAt).getTime() })));
+    } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }); }
+  }
+  // auto: prefer DB, fallback to memory only if DB errors out
   try {
     const where: any = sessionId ? { sessionId } : {};
     const rows = await prisma.alert.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 });
-    if (rows && rows.length) return res.json(rows.map(r => ({ id: r.id, sessionId: r.sessionId, symbol: r.symbol, kind: r.kind, severity: r.severity, details: r.details, ts: new Date(r.createdAt).getTime() })));
+    return res.json(rows.map(r => ({ id: r.id, sessionId: r.sessionId, symbol: r.symbol, kind: r.kind, severity: r.severity, details: r.details, ts: new Date(r.createdAt).getTime() })));
   } catch {}
-  // fallback to in-memory
   res.json(recentAlerts(sessionId || undefined));
+});
+
+// Administrative: purge in-memory alerts buffer (does not touch DB)
+router.post('/alerts/purge', async (_req,res)=>{
+  try { clearAlertsMemory(); res.json({ ok: true }); } catch (e:any) { res.status(500).json({ error: String(e?.message||e) }); }
 });
 
 // Daily report with LLM analysis (no persistence for now)

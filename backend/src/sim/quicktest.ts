@@ -16,6 +16,10 @@ type Trade = {
   exitPrice?: number;
   reason?: 'tp'|'sl'|'time'|'trend_break';
   rMultiple?: number;
+  // Added metrics for more realistic evaluation
+  netR?: number;   // rMultiple net of fees/slippage
+  maeR?: number;   // max adverse excursion in R
+  mfeR?: number;   // max favorable excursion in R
 };
 
 export async function runQuickTest(symbol: string, hours = 72, plan?: PlanJson, opts?: {
@@ -124,11 +128,11 @@ export async function runQuickTest(symbol: string, hours = 72, plan?: PlanJson, 
         mfeR = Math.max(mfeR, favorable / stopDist);
         if (hitTP) {
           tr.exitIndex = j; tr.exitTime = ht; tr.exitPrice = tr.tpPrice; tr.reason = 'tp';
-          tr.rMultiple = 1; results.push(tr); break;
+          tr.rMultiple = 1; tr.maeR = maeR; tr.mfeR = mfeR; results.push(tr); break;
         }
         if (hitSL) {
           tr.exitIndex = j; tr.exitTime = ht; tr.exitPrice = stop; tr.reason = 'sl';
-          tr.rMultiple = -1; results.push(tr); break;
+          tr.rMultiple = -1; tr.maeR = maeR; tr.mfeR = mfeR; results.push(tr); break;
         }
         // Trailing stop on every step using ATR and EMA20
         const atrVal = atr14[Math.min(atr14.length - 1, j)] || stopDist;
@@ -151,7 +155,7 @@ export async function runQuickTest(symbol: string, hours = 72, plan?: PlanJson, 
         }
         j++;
       }
-      if (!tr.exitIndex) { tr.exitIndex = j-1; tr.exitTime = o[j-1][0]; const exec = side==='long' ? (closes[j-1] * (1 - slip)) : (closes[j-1] * (1 + slip)); tr.exitPrice = exec; tr.reason = 'time'; tr.rMultiple = (dir * (exec - tr.entryPrice)) / stopDist; results.push(tr); }
+      if (!tr.exitIndex) { tr.exitIndex = j-1; tr.exitTime = o[j-1][0]; const exec = side==='long' ? (closes[j-1] * (1 - slip)) : (closes[j-1] * (1 + slip)); tr.exitPrice = exec; tr.reason = 'time'; tr.rMultiple = (dir * (exec - tr.entryPrice)) / stopDist; tr.maeR = maeR; tr.mfeR = mfeR; results.push(tr); }
       // continue after exit
       i = Math.max(i + 5, tr.exitIndex! + 1);
       continue;

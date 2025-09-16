@@ -51,6 +51,11 @@ export async function emitAlert(params: { sessionId?: string; symbol?: string; k
   await pushAlert(a);
 }
 
+// Administrative utility: clear in-memory alerts (does not touch DB)
+export function clearAlertsMemory() {
+  alerts.splice(0, alerts.length);
+}
+
 export async function auditTick(sessionId: string, symbol: string, price: number){
   const a = AgentHub.get(sessionId) as any;
   if (!a || !a.plan) return;
