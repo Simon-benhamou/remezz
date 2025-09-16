@@ -16,6 +16,7 @@ import DailyReviewPanel from '../components/DailyReviewPanel';
 import AlertPanel from '../components/AlertPanel';
 import { api, getApiKey } from '../api';
 import { openWS, wsSend } from '../ws';
+import PositionStatsBlock from '../components/PositionStatsBlock';
 
 export default function MonitorPage(){
   const { sessionId } = useParams();
@@ -130,6 +131,7 @@ export default function MonitorPage(){
           />
         </Col>
         <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
+        <Col xs={24}><PositionStatsBlock agent={agent} price={status?.price} /></Col>
         <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
         {/* Session control is handled in Sessions page; remove Monitor controls for a cleaner view */}
         <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} /></Col>

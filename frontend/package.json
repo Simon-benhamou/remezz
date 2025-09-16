@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "antd": "^5.20.3",
+    "@ant-design/icons": "^5.3.7",
     "axios": "^1.7.2",
     "lightweight-charts": "^4.2.1",
     "react": "^18.3.1",

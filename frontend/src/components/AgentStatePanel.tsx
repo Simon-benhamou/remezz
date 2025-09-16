@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Descriptions, Tag, Space, Button, message, Statistic, Tooltip } from 'antd';
+import { Card, Descriptions, Tag, Space, Button, message } from 'antd';
 import { api } from '../api';
 
 type Props = {
@@ -27,12 +27,6 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
   };
 
   const vp = agent?.plan; // validated plan from backend with numeric zone
-  const inZone = !!(vp && lastPrice && vp.zone && lastPrice >= Math.min(vp.zone.from || 0, vp.zone.to || 0) && lastPrice <= Math.max(vp.zone.from || 0, vp.zone.to || 0));
-  const pos = agent?.pos;
-  const dir = pos?.side === 'buy' ? 1 : -1;
-  const rNow = (pos && vp && lastPrice) ? (dir * (lastPrice - pos.entry)) / (vp.stopDistance || 1) : 0;
-  const pnlPct = (pos && lastPrice) ? (dir * (lastPrice - pos.entry) / pos.entry) * 100 : 0;
-  const pnlColor = (pnlPct >= 0) ? '#1f8f1f' : '#c0392b';
 
   const check = (ok:boolean) => <span style={{ color: ok ? '#1f8f1f' : '#c0392b' }}>{ok ? '✓' : '✗'}</span>;
   const z = agent?.plan?.zone;
@@ -66,13 +60,6 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
           <Button onClick={propose}>Propose plan (LLM)</Button>
           <Button type='primary' onClick={arm} disabled={!llmPlan}>Arm</Button>
         </Space>
-
-        {pos && (
-          <Space size='large' wrap>
-            <Statistic title={<Tooltip title="Open profit/loss in percent relative to entry">Unrealized PnL %</Tooltip>} value={pnlPct} precision={2} valueStyle={{ color: pnlColor }} />
-            <Statistic title={<Tooltip title="Distance from entry measured in units of stop size (1R means price moved one stop distance in favor)">R multiple</Tooltip>} value={rNow} precision={2} />
-          </Space>
-        )}
 
         <Card size='small' title={<span>Readiness &nbsp; {typeof ai?.total==='number' && (<span style={{ fontSize:12, color:'#888' }}>AI calls: {ai.total}</span>)}</span>} style={{ marginTop: 8 }}>
           {agent?.plan ? (

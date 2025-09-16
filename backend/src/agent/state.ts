@@ -38,6 +38,11 @@ export type ActivePosition = {
   partialTaken?: boolean;
   slOrderId?: string;
   tpOrderId?: string;
+  trail?: { ts: number; price: number }[];
+  maeR?: number;
+  mfeR?: number;
+  breakeven?: number;
+  partialInfo?: { ts: number; price: number } | null;
 };
 
 export class ReboundRejectionAgent {
@@ -116,7 +121,8 @@ export class ReboundRejectionAgent {
           // Rebase TP ladder from entry using R multiples
           const dir = side === 'buy' ? 1 : -1;
           const tp = (this.plan.rPrices || []).map(x => entry + dir * x.r * this.plan!.stopDistance);
-          this.pos = { side, entry, qty: expo.qty, stop, tp, openedAt: Date.now(), extended: false };
+          const now = Date.now();
+          this.pos = { side, entry, qty: expo.qty, stop, tp, openedAt: now, extended: false, trail: [{ ts: now, price: stop }], maeR: 0, mfeR: 0, breakeven: entry, partialInfo: null };
           this.state = 'MANAGE';
           broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
         }
@@ -178,7 +184,23 @@ export class ReboundRejectionAgent {
       this.entering = false;
       return;
     }
-    this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false, slOrderId: (placed as any).slOrderId, tpOrderId: (placed as any).tpOrderId };
+    const now = Date.now();
+    this.pos = {
+      side,
+      entry: placed.avgPrice!,
+      qty: placed.filledQty!,
+      stop,
+      tp,
+      openedAt: now,
+      extended: false,
+      slOrderId: (placed as any).slOrderId,
+      tpOrderId: (placed as any).tpOrderId,
+      trail: [{ ts: now, price: stop }],
+      maeR: 0,
+      mfeR: 0,
+      breakeven: placed.avgPrice!,
+      partialInfo: null,
+    };
     // Ensure at least two TP levels (for partial then runner)
     if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
       const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 2)) : (this.pos.entry - (this.plan.stopDistance * 2));
@@ -196,10 +218,27 @@ export class ReboundRejectionAgent {
     this.entering = false;
   }
 
+  private noteTrail(price: number) {
+    if (!this.pos) return;
+    const now = Date.now();
+    if (!this.pos.trail) this.pos.trail = [];
+    const last = this.pos.trail[this.pos.trail.length - 1];
+    if (!last || Math.abs(last.price - price) > 1e-6) {
+      this.pos.trail.push({ ts: now, price });
+      if (this.pos.trail.length > 200) this.pos.trail = this.pos.trail.slice(-200);
+    } else {
+      last.ts = now;
+    }
+  }
+
   async manage(price: number, snap: { ema20: number; atr14: number }) {
     if (!this.pos || !this.plan || !this.profile) return;
     const dir = this.pos.side === 'buy' ? 1 : -1;
     const upR = (dir * (price - this.pos.entry)) / this.plan.stopDistance; // current R
+    this.pos.mfeR = this.pos.mfeR != null ? Math.max(this.pos.mfeR, upR) : upR;
+    this.pos.maeR = this.pos.maeR != null ? Math.min(this.pos.maeR, upR) : upR;
+
+    const prevStop = this.pos.stop;
 
     // Stepwise + combo trailing
     if (upR > 0.5 && this.pos) {
@@ -227,6 +266,8 @@ export class ReboundRejectionAgent {
       if (this.pos.side==='buy') this.pos.stop = Math.max(this.pos.stop, combo); else this.pos.stop = Math.min(this.pos.stop, combo);
     }
 
+    if (this.pos.stop !== prevStop) this.noteTrail(this.pos.stop);
+
     // TP handling: partial at TP1, full at TP2 (if any), otherwise trailing/SL/time
     const firstTp = this.pos.tp[0];
     const secondTp = this.pos.tp[1];
@@ -249,6 +290,7 @@ export class ReboundRejectionAgent {
       const trailCandidate = this.pos.side === 'buy' ? (price - (this.plan.atr * 0.8)) : (price + (this.plan.atr * 0.8));
       if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, trailCandidate);
       else this.pos.stop = Math.min(this.pos.stop, trailCandidate);
+      this.noteTrail(this.pos.stop);
     }
 
     // Partial: on TP1 if not already taken
@@ -262,10 +304,13 @@ export class ReboundRejectionAgent {
           // Reduce local pos.qty and mark partial
           this.pos.qty = Math.max(0, this.pos.qty - closeQty);
           this.pos.partialTaken = true;
+          this.pos.partialInfo = { ts: Date.now(), price };
           // Tighten stop to break-even after partial
           const be = this.pos.entry;
           if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, be);
           else this.pos.stop = Math.min(this.pos.stop, be);
+          this.pos.breakeven = be;
+          this.noteTrail(this.pos.stop);
           // Update exchange protective orders to reflect new qty/stop (live best-effort)
           if (this.profile.mode === 'live' && this.broker) {
             try { if (this.pos.slOrderId) await this.broker.cancel(this.pos.slOrderId); } catch {}
@@ -410,7 +455,8 @@ export class ReboundRejectionAgent {
       this.entering = false;
       return;
     }
-    this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: Date.now(), extended: false };
+    const now = Date.now();
+    this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: now, extended: false, trail: [{ ts: now, price: stop }], maeR: 0, mfeR: 0, breakeven: placed.avgPrice!, partialInfo: null };
     await (await import('./persistence.js')).recordEnter({ sessionId: this.sessionId!, symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
     this.state = 'MANAGE';
     this.tradesToday += 1;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { createChart, ColorType, IChartApi } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, LineStyle } from 'lightweight-charts';
 
 type Props = { symbol?: string; price?: number; support?: number; resistance?: number; strategy?: any; agentPlan?: any; agentPos?: any; pivots?: any; agentExit?: any };
 
@@ -17,12 +17,16 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
   const plP = React.useRef<any>(null);
   const plS1 = React.useRef<any>(null);
   const plR1 = React.useRef<any>(null);
+  const plBE = React.useRef<any>(null);
+  const trailSeriesRef = React.useRef<any>(null);
+  const pnlRef = React.useRef<HTMLDivElement|null>(null);
   const markersRef = React.useRef<any[]>([]);
   React.useEffect(()=> {
     if (!chartRef.current || !seriesRef.current) return;
     plP.current  = seriesRef.current.createPriceLine({ price: 0, title: 'Pivot P', lineWidth: 1 });
     plS1.current = seriesRef.current.createPriceLine({ price: 0, title: 'S1', lineWidth: 1 });
     plR1.current = seriesRef.current.createPriceLine({ price: 0, title: 'R1', lineWidth: 1 });
+    plBE.current = seriesRef.current.createPriceLine({ price: 0, title: 'Break-even', lineWidth: 1, color: '#888' });
   }, []);
   React.useEffect(()=> {
     if (!pivots) return;
@@ -30,6 +34,19 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     plS1.current?.applyOptions({ price: pivots.S1 });
     plR1.current?.applyOptions({ price: pivots.R1 });
   }, [pivots]);
+
+  React.useEffect(()=> {
+    const be = agentPos?.breakeven;
+    if (typeof be === 'number' && isFinite(be)) {
+      if (!plBE.current && seriesRef.current) {
+        plBE.current = seriesRef.current.createPriceLine({ price: be, title: 'Break-even', lineWidth: 1, color: '#888' });
+      }
+      plBE.current?.applyOptions({ price: be });
+    } else if (plBE.current && seriesRef.current) {
+      try { seriesRef.current.removePriceLine(plBE.current); } catch {}
+      plBE.current = null;
+    }
+  }, [agentPos?.breakeven]);
   React.useEffect(()=> {
     if (!ref.current) return;
     const chart = createChart(ref.current, {
@@ -39,9 +56,26 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
       timeScale: { borderVisible: false }
     });
     const line = chart.addLineSeries({ priceFormat: { type: 'price', precision: 4, minMove: 0.0001 } });
-    seriesRef.current = line; chartRef.current = chart;
+    const trailSeries = chart.addLineSeries({
+      priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
+      color: '#c0392b',
+      lineStyle: LineStyle.Dashed,
+      lineWidth: 1,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    seriesRef.current = line; chartRef.current = chart; trailSeriesRef.current = trailSeries;
 
     // price lines are created on-demand below
+
+    const pnlOverlay = document.createElement('div');
+    pnlOverlay.style.position = 'absolute';
+    pnlOverlay.style.left = '0';
+    pnlOverlay.style.right = '0';
+    pnlOverlay.style.pointerEvents = 'none';
+    pnlOverlay.style.display = 'none';
+    pnlOverlay.style.background = 'rgba(39, 174, 96, 0.10)';
+    pnlOverlay.style.zIndex = '1';
 
     // Add zone overlay div
     const overlay = document.createElement('div');
@@ -51,11 +85,26 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     overlay.style.pointerEvents = 'none';
     overlay.style.background = 'rgba(30,144,255,0.06)';
     overlay.style.display = 'none';
+    overlay.style.zIndex = '2';
     ref.current.style.position = 'relative';
+    ref.current.appendChild(pnlOverlay);
     ref.current.appendChild(overlay);
     zoneRef.current = overlay;
+    pnlRef.current = pnlOverlay;
 
-    return ()=> { chart.remove(); chartRef.current = null; zoneRef.current?.remove(); zoneRef.current = null; };
+    return ()=> {
+      chart.remove();
+      chartRef.current = null;
+      trailSeriesRef.current = null;
+      zoneRef.current?.remove();
+      zoneRef.current = null;
+      pnlRef.current?.remove();
+      pnlRef.current = null;
+      plP.current = null;
+      plS1.current = null;
+      plR1.current = null;
+      plBE.current = null;
+    };
   }, []);
 
   React.useEffect(()=> {
@@ -63,6 +112,20 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
       seriesRef.current.update({ time: Math.floor(Date.now()/1000), value: price });
     }
   }, [price]);
+
+  React.useEffect(()=> {
+    if (!trailSeriesRef.current) return;
+    const hist = Array.isArray(agentPos?.trail) ? agentPos?.trail || [] : [];
+    if (!hist || hist.length === 0) {
+      trailSeriesRef.current.setData([]);
+      return;
+    }
+    const data = hist.map((p:any)=> ({ time: Math.floor(p.ts / 1000), value: p.price }));
+    if (typeof agentPos?.stop === 'number' && isFinite(agentPos.stop)) {
+      data.push({ time: Math.floor(Date.now() / 1000), value: agentPos.stop });
+    }
+    trailSeriesRef.current.setData(data);
+  }, [agentPos?.trail, agentPos?.stop]);
 
   React.useEffect(()=> {
     const ensure = (ref: any, title: string) => {
@@ -138,6 +201,32 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     } catch {}
   }, [agentPlan, agentPos]);
 
+  React.useEffect(()=> {
+    if (!pnlRef.current || !seriesRef.current) return;
+    const entry = agentPos?.entry;
+    if (typeof entry !== 'number' || !isFinite(entry) || typeof price !== 'number' || !isFinite(price)) {
+      pnlRef.current.style.display = 'none';
+      return;
+    }
+    try {
+      const yEntry = seriesRef.current.priceToCoordinate(entry);
+      const yPrice = seriesRef.current.priceToCoordinate(price);
+      if (yEntry == null || yPrice == null) {
+        pnlRef.current.style.display = 'none';
+        return;
+      }
+      const top = Math.min(yEntry, yPrice);
+      const height = Math.abs(yEntry - yPrice);
+      pnlRef.current.style.top = `${top}px`;
+      pnlRef.current.style.height = `${Math.max(1, height)}px`;
+      pnlRef.current.style.display = height < 1 ? 'none' : 'block';
+      const favorable = agentPos?.side === 'buy' ? price >= entry : price <= entry;
+      pnlRef.current.style.background = favorable ? 'rgba(39, 174, 96, 0.12)' : 'rgba(231, 76, 60, 0.12)';
+    } catch {
+      pnlRef.current.style.display = 'none';
+    }
+  }, [price, agentPos?.entry, agentPos?.side]);
+
   // Markers for entries/exits
   React.useEffect(()=>{
     if (!seriesRef.current) return;
@@ -150,6 +239,13 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
         marks.push({ time: t, position: 'belowBar', color: '#1f8f1f', shape: 'arrowUp', text: `Entry ${agentPos.entry.toFixed(4)}` });
       }
     }
+    if (agentPos?.partialInfo?.ts && agentPos?.partialInfo?.price) {
+      const t = Math.floor(agentPos.partialInfo.ts/1000);
+      const exists = marks.some(m=> m.time === t && m.text?.startsWith('Partial'));
+      if (!exists) {
+        marks.push({ time: t, position: 'aboveBar', color: '#2980b9', shape: 'circle', text: `Partial ${agentPos.partialInfo.price.toFixed?.(4)}` });
+      }
+    }
     // Add last exit marker
     if (agentExit?.ts && agentExit?.price) {
       const t = Math.floor((agentExit.ts)/1000);
@@ -160,7 +256,7 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     }
     markersRef.current = marks.slice(-50);
     seriesRef.current.setMarkers(markersRef.current);
-  }, [agentPos?.openedAt, agentExit?.ts]);
+  }, [agentPos?.openedAt, agentPos?.partialInfo?.ts, agentExit?.ts]);
 
   return <div style={{ border:'1px solid #eee', borderRadius:8, padding:8 }}>
     <div style={{ fontWeight:600, marginBottom:8 }}>{symbol} — Live</div>
