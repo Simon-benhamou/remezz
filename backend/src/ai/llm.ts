@@ -70,7 +70,6 @@ async function callOpenAI(prompt: string): Promise<string> {
   async function invoke(model: string) {
     const resp = await client.chat.completions.create({
       model,
-      temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: "You are a trading strategy assistant. Output strictly valid JSON." },
