@@ -7,9 +7,18 @@ export async function recordEnter(params: {
   side: 'buy'|'sell';
   qty: number;
   entryPrice: number;
-  stop?: number; // unused presently (no column)
-  tp?: number[]; // unused presently (no column)
+  stop?: number;
+  tp?: number[];
   leverage?: number;
+  requestedPrice?: number;
+  requestedQty?: number;
+  latencyMs?: number;
+  slippageBps?: number;
+  fillRatio?: number;
+  cancelCount?: number;
+  attempts?: number;
+  slOrderId?: string;
+  tpOrderId?: string;
 }) {
   const clientOrderId = `${params.sessionId}.${params.symbol}.${Date.now()}`;
   const round4 = (n:number|undefined)=> (typeof n==='number' ? Math.round(n*1e4)/1e4 : undefined);
@@ -22,11 +31,18 @@ export async function recordEnter(params: {
       side: params.side,
       type: 'market',
       qty: params.qty,
+      requestedQty: params.requestedQty ?? params.qty,
       price: round4(params.entryPrice)!,
-      sl: undefined, // schema has sl but we don't persist entry SL now
-      tp: undefined, // schema has tp but not used in current simplified flow
+      requestedPrice: round4(params.requestedPrice),
+      sl: round4(params.stop),
+      tp: round4(params.tp?.[0]),
       leverage: params.leverage,
       pctChange,
+      latencyMs: params.latencyMs != null ? Math.round(params.latencyMs) : undefined,
+      slippageBps: params.slippageBps,
+      fillRatio: params.fillRatio,
+      cancelCount: params.cancelCount,
+      attempts: params.attempts,
       status: 'filled',
       source: 'agent',
     }
@@ -50,6 +66,12 @@ export async function recordEnter(params: {
       qty: params.qty,
       leverage: params.leverage,
       openedAt: new Date(),
+      stopPrice: params.stop,
+      takeProfit: params.tp ? params.tp as any : undefined,
+      slOrderId: params.slOrderId,
+      tpOrderId: params.tpOrderId,
+      lastProtectiveSyncAt: (params.stop || (params.tp && params.tp.length)) ? new Date() : undefined,
+      protectiveStatus: (params.stop || (params.tp && params.tp.length)) ? 'synced' : undefined,
     }
   });
   // Broadcast latest orders for this session only
@@ -57,8 +79,31 @@ export async function recordEnter(params: {
   broadcast('orders', rows, params.symbol, params.sessionId);
 }
 
-// Protective snapshot removed: schema does not currently include protective metadata fields in Position.
-export async function updateProtectiveSnapshot() { return; }
+export async function updateProtectiveSnapshot(params: {
+  sessionId: string;
+  symbol: string;
+  stopPrice?: number | null;
+  takeProfit?: number[] | null;
+  slOrderId?: string | null;
+  tpOrderId?: string | null;
+  status?: string;
+}) {
+  try {
+    const pos = await prisma.position.findFirst({ where: { sessionId: params.sessionId, symbol: params.symbol, qty: { gt: 0 } }, orderBy: { openedAt: 'desc' } });
+    if (!pos) return;
+    await prisma.position.update({
+      where: { id: pos.id },
+      data: {
+        stopPrice: params.stopPrice !== undefined ? params.stopPrice : pos.stopPrice,
+        takeProfit: params.takeProfit ? params.takeProfit as any : (params.takeProfit === null ? undefined : pos.takeProfit),
+        slOrderId: params.slOrderId !== undefined ? params.slOrderId || null : pos.slOrderId,
+        tpOrderId: params.tpOrderId !== undefined ? params.tpOrderId || null : pos.tpOrderId,
+        lastProtectiveSyncAt: new Date(),
+        protectiveStatus: params.status || 'synced',
+      }
+    });
+  } catch {}
+}
 
 export async function loadActivePosition(sessionId: string) {
   return prisma.position.findFirst({
@@ -74,6 +119,13 @@ export async function recordExit(params: {
   exitPrice: number;
   qty: number;
   realizedPnl?: number;
+  requestedPrice?: number;
+  requestedQty?: number;
+  latencyMs?: number;
+  slippageBps?: number;
+  fillRatio?: number;
+  cancelCount?: number;
+  attempts?: number;
 }) {
   const round4 = (n:number)=> Math.round(n*1e4)/1e4;
   // Fetch last position to carry leverage info to the exit order
@@ -91,9 +143,16 @@ export async function recordExit(params: {
       side: params.side === 'buy' ? 'sell' : 'buy',
       type: 'market',
       qty: params.qty,
+      requestedQty: params.requestedQty ?? params.qty,
       price: round4(params.exitPrice),
+      requestedPrice: typeof params.requestedPrice === 'number' ? round4(params.requestedPrice) : undefined,
       leverage: lastPos?.leverage,
       pctChange,
+      latencyMs: params.latencyMs != null ? Math.round(params.latencyMs) : undefined,
+      slippageBps: params.slippageBps,
+      fillRatio: params.fillRatio,
+      cancelCount: params.cancelCount,
+      attempts: params.attempts,
       status: 'filled',
       source: 'agent',
     }

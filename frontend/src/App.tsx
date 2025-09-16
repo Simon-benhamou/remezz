@@ -59,7 +59,7 @@ function AppInner(){
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          color: '#E0F2FE',
+          color: '#262626',
           padding: '16px 12px',
           fontWeight: 700,
           letterSpacing: 0.5,
@@ -93,18 +93,18 @@ function AppInner(){
           justifyContent:'space-between',
           alignItems:'center',
         }}>
-          <Space style={{ color: '#e2e8f0', fontWeight:500 }}>
-            <span style={{ color:'#ddd' }}>Active:</span>
+          <Space style={{ color: '#262626', fontWeight:500 }}>
+            <span style={{ color:'#262626' }}>Active:</span>
             <Tag color='blue'>{overview?.activeCount ?? 0}</Tag>
             {(overview?.symbols || []).slice(0,5).map((sym:string)=>(<Tag key={sym}>{sym}</Tag>))}
             {Array.isArray(overview?.symbols) && overview.symbols.length>5 && (<Tag>+{overview.symbols.length-5}</Tag>)}
           </Space>
-          <Space style={{ color: '#e2e8f0', fontWeight:500 }}>
-            <span style={{ color:'#bfdbfe' }}>ROI (agg):</span>
+          <Space style={{ color: '#262626', fontWeight:500 }}>
+            <span style={{ color:'#262626' }}>ROI (agg):</span>
             <Tag color={(Number(overview?.roiPct||0) >= 0) ? 'green' : 'red'}>{Number(overview?.roiPct||0).toFixed(2)}%</Tag>
-            <span style={{ color:'#bfdbfe' }}>PnL:</span>
+            <span style={{ color:'#262626' }}>PnL:</span>
             <Tag color={(Number(overview?.pnlUsd||0) >= 0) ? 'green' : 'red'}>${Number(overview?.pnlUsd||0).toFixed(2)}</Tag>
-            <span style={{ color:'#bfdbfe' }}>AI:</span>
+            <span style={{ color:'#262626' }}>AI:</span>
             <Tag color='cyan'>{Number(overview?.aiCallsTotal||0)}</Tag>
             {overview?.exchangeBalance && (
               <>
@@ -137,7 +137,7 @@ function AppInner(){
             <Route path='*' element={<Navigate to='/dashboard' replace />} />
           </Routes>
         </Content>
-        <Footer style={{ textAlign:'center', background:'#020617', color:'#64748b' }}>
+        <Footer style={{ textAlign:'center' }}>
           Realtime AI Trade Engine · Adaptive Risk Governance · Storyboarded Insights
         </Footer>
       </Layout>
@@ -150,7 +150,7 @@ export default function App(){
   algorithm: [theme.defaultAlgorithm, theme.compactAlgorithm],
   token: {
     // Core brand (light, frais)
-    colorPrimary: "#06b6d4", // teal/cyan
+    colorPrimary: "#1f2937", // teal/cyan
     colorInfo: "#2563eb",
     colorSuccess: "#16a34a",
     colorWarning: "#d97706",
@@ -209,9 +209,9 @@ export default function App(){
 
     Button: {
       controlHeight: 36,
-      paddingInline: 14,
-      borderRadius: 10,
-      colorPrimary: "#06b6d4",
+      paddingInline: 10,
+      borderRadius: 8,
+      colorPrimary: "#1f2937",
       colorPrimaryHover: "#22d3ee",
       colorPrimaryActive: "#0891b2",
       defaultBg: "#f8fafc",
@@ -244,14 +244,14 @@ export default function App(){
       itemColor: "#475569",
       itemSelectedColor: "#0f172a",
       itemHoverColor: "#0f172a",
-      inkBarColor: "#06b6d4",
+      inkBarColor: "#1f2937",
       cardBg: "#ffffff",
       titleFontSize: 14,
     },
 
     Input: {
       borderRadius: 10,
-      activeBorderColor: "#06b6d4",
+      activeBorderColor: "#1f2937",
       hoverBorderColor: "#3b82f6",
       paddingBlock: 8,
       paddingInline: 12,
@@ -308,14 +308,14 @@ export default function App(){
 
     Switch: {
       colorPrimaryHover: "#22d3ee",
-      colorPrimary: "#06b6d4",
+      colorPrimary: "#1f2937",
       handleBg: "#ffffff",
       trackHeight: 22,
     },
 
     Slider: {
       railBg: "#e5e7eb",
-      trackBg: "#06b6d4",
+      trackBg: "#1f2937",
       handleSize: 12,
     },
 
@@ -323,7 +323,7 @@ export default function App(){
     Steps: {
       colorTextDescription: "#64748b",
       colorText: "#334155",
-      colorPrimary: "#06b6d4",
+      colorPrimary: "#1f2937",
     },
   },
 
