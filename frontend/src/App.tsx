@@ -52,7 +52,7 @@ function AppInner(){
       <Layout.Sider
         breakpoint='lg'
         collapsedWidth={60}
-        theme='dark'
+        theme='light'
         
       >
         <div style={{
@@ -70,7 +70,7 @@ function AppInner(){
           <span style={{ fontSize: 11, color: '#22d3ee' }}>Alpha</span>
         </div>
         <Menu
-          theme='dark'
+          theme='light'
           mode='inline'
           selectedKeys={[location.pathname]}
           items={menuItems}
