@@ -23,6 +23,13 @@ export type PlacedOrder = NewOrder & {
   // Optional protective orders identifiers (live broker)
   slOrderId?: string;
   tpOrderId?: string;
+  attempts?: number;
+  cancelCount?: number;
+  latencyMs?: number;
+  slippageBps?: number;
+  fillRatio?: number;
+  requestedQty?: number;
+  requestedPrice?: number;
 };
 
 export interface Broker {
@@ -34,4 +41,5 @@ export interface Broker {
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
   releaseCommitted?(usd: number): void;
+  syncProtective?(params: { symbol: string; side: OrderSide; qty: number; stopLoss?: number; takeProfit?: number; slOrderId?: string|null; tpOrderId?: string|null }): Promise<{ slOrderId?: string; tpOrderId?: string } | void>;
 }

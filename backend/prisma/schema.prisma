@@ -68,11 +68,18 @@ model Order {
   type            String
   tif             String?
   qty             Float
+  requestedQty    Float?
   price           Float?
+  requestedPrice  Float?
   sl              Float?
   tp              Float?
   leverage        Float?
   pctChange       Float?
+  latencyMs       Int?
+  slippageBps     Float?
+  fillRatio       Float?
+  cancelCount     Int?     @default(0)
+  attempts        Int?
   source          String   @default("agent")
   status          String?
   error           String?
@@ -118,6 +125,12 @@ model Position {
   leverage      Float?
   openedAt      DateTime? @default(now())
   updatedAt     DateTime  @updatedAt
+  stopPrice     Float?
+  takeProfit    Json?
+  slOrderId     String?
+  tpOrderId     String?
+  lastProtectiveSyncAt DateTime?
+  protectiveStatus     String?
 
   @@index([sessionId])
 }

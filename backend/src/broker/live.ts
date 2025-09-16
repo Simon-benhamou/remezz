@@ -18,6 +18,7 @@ export class LiveBroker implements Broker {
   async place(o: NewOrder): Promise<PlacedOrder> {
     const ex = await exchange();
     const symbol = await resolveSymbol(o.symbol);
+    const startTs = Date.now();
 
     // Try set leverage if available and provided
     if (o.leverage && typeof (ex as any).setLeverage === 'function') {
@@ -32,6 +33,8 @@ export class LiveBroker implements Broker {
     const deadline = Date.now() + Math.max(1000, cfg.ORDER_FILL_TIMEOUT_SEC * 1000);
     const pollMs = Math.max(100, cfg.ORDER_FILL_POLL_MS);
     const maxRetry = Math.max(0, cfg.ORDER_RETRY_MAX);
+    let attempts = 1;
+    let cancelCount = 0;
 
     async function waitForFill(ordId: string) {
       while (Date.now() < deadline) {
@@ -70,10 +73,11 @@ export class LiveBroker implements Broker {
       if (res.status === 'filled') {
         placed = { ...placed, status: 'filled', filledQty: res.filledQty, avgPrice: res.avgPrice };
       } else if (res.status !== 'rejected') {
-        try { await ex.cancelOrder(id, symbol).catch(()=>{}); } catch {}
+        try { await ex.cancelOrder(id, symbol).catch(()=>{}); cancelCount += 1; } catch {}
         let retry = 0;
         while (retry < maxRetry) {
           retry++;
+          attempts = retry + 1;
           try {
             const re = await ex.createOrder(symbol, 'market', o.side, o.qty, undefined, params);
             const rid = String(re?.id || re?.clientOrderId || '');
@@ -89,6 +93,12 @@ export class LiveBroker implements Broker {
         placed.status = 'rejected';
       }
     }
+
+    placed.latencyMs = Math.max(0, Date.now() - startTs);
+    placed.attempts = attempts;
+    placed.cancelCount = cancelCount;
+    placed.requestedQty = o.qty;
+    placed.requestedPrice = o.type === 'limit' ? o.price : undefined;
 
     // Best-effort: create protective SL/TP orders if provided
     try {
@@ -122,6 +132,36 @@ export class LiveBroker implements Broker {
   async cancel(id: string) {
     const ex = await exchange();
     try { await ex.cancelOrder(id); } catch {}
+  }
+
+  async syncProtective(params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number; slOrderId?: string|null; tpOrderId?: string|null }) {
+    const ex = await exchange();
+    const symbol = await resolveSymbol(params.symbol);
+    const reduceSide = params.side === 'buy' ? 'sell' : 'buy';
+    const result: { slOrderId?: string; tpOrderId?: string } = {};
+    if (params.slOrderId) {
+      try { await ex.cancelOrder(params.slOrderId, symbol).catch(()=>{}); } catch {}
+    }
+    if (params.tpOrderId) {
+      try { await ex.cancelOrder(params.tpOrderId, symbol).catch(()=>{}); } catch {}
+    }
+    if (params.stopLoss) {
+      try {
+        const slParams: any = { reduceOnly: true, stopPrice: params.stopLoss, triggerPrice: params.stopLoss };
+        if (String(ex.id).toLowerCase() === 'cryptocom') slParams.type = 'stop_market';
+        const slo = await ex.createOrder(symbol, 'market', reduceSide, params.qty, undefined, slParams);
+        result.slOrderId = String(slo?.id || slo?.clientOrderId || '');
+      } catch {}
+    }
+    if (params.takeProfit) {
+      try {
+        const tpParams: any = { reduceOnly: true, takeProfitPrice: params.takeProfit };
+        if (String(ex.id).toLowerCase() === 'cryptocom') tpParams.type = 'take_profit_limit';
+        const tpo = await ex.createOrder(symbol, 'limit', reduceSide, params.qty, params.takeProfit, tpParams);
+        result.tpOrderId = String(tpo?.id || tpo?.clientOrderId || '');
+      } catch {}
+    }
+    return result;
   }
 }
 

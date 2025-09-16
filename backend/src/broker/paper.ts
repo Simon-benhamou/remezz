@@ -18,6 +18,7 @@ export class PaperBroker implements Broker {
   }
 
   async place(o: NewOrder): Promise<PlacedOrder> {
+    const startTs = Date.now();
     const t = await getTicker(o.symbol).catch(()=>null as any);
     const mid = t && t.last ? t.last : (o.price || 0);
     const bid = t?.bid ?? mid * 0.999;
@@ -47,6 +48,10 @@ export class PaperBroker implements Broker {
       avgPrice: px,
       filledQty: o.qty,
       ts: Date.now(),
+      latencyMs: Math.max(0, Date.now() - startTs),
+      requestedQty: o.qty,
+      requestedPrice: o.type === 'limit' ? o.price : undefined,
+      fillRatio: 1,
     };
 
     // Simplified PnL handling will be done by agent engine on exit
@@ -60,5 +65,9 @@ export class PaperBroker implements Broker {
   releaseCommitted(usd: number) {
     if (!Number.isFinite(usd)) return;
     this.committedUsd = Math.max(0, this.committedUsd - Math.max(0, usd));
+  }
+
+  async syncProtective(_params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number }) {
+    return {};
   }
 }

@@ -6,7 +6,7 @@ import { Broker } from '../broker/types.js';
 import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
-import { recordEnter, recordExit } from './persistence.js';
+import { recordEnter, recordExit, updateProtectiveSnapshot, loadActivePosition } from './persistence.js';
 import { recomputeKpi } from '../metrics/kpi.js';
 import { getConfig } from '../utils/env.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
@@ -85,10 +85,12 @@ export class ReboundRejectionAgent {
 
   async validateAndArm() {
     if (!this.profile || !this.plan) throw new Error('no plan');
+    await this.restorePersistedPosition();
     // If a position already exists, don't re-arm — keep managing
     if (this.pos) {
       this.state = 'MANAGE';
       broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
+      await this.syncProtectiveOrders('startup');
       return;
     }
     const limits = defaultLimits();
@@ -122,9 +124,24 @@ export class ReboundRejectionAgent {
           const dir = side === 'buy' ? 1 : -1;
           const tp = (this.plan.rPrices || []).map(x => entry + dir * x.r * this.plan!.stopDistance);
           const now = Date.now();
-          this.pos = { side, entry, qty: expo.qty, stop, tp, openedAt: now, extended: false, trail: [{ ts: now, price: stop }], maeR: 0, mfeR: 0, breakeven: entry, partialInfo: null };
+          this.pos = {
+            side,
+            entry,
+            qty: expo.qty,
+            stop,
+            tp,
+            openedAt: now,
+            extended: false,
+            partialTaken: false,
+            slOrderId: undefined,
+            tpOrderId: undefined,
+            trail: [{ ts: now, price: stop }],
+            breakeven: entry,
+            partialInfo: null,
+          } as any;
           this.state = 'MANAGE';
           broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
+          await this.syncProtectiveOrders('adopt');
         }
       } catch {}
     }
@@ -176,6 +193,7 @@ export class ReboundRejectionAgent {
     const usableBalance = Math.max(0, Math.min(bal.freeUsd, bal.freeUsd * budgetFrac));
     const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: this.profile.riskPerTradePct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
     const qty = notional / entry;
+    const startTs = Date.now();
     const placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: this.profile.maxLeverage, takeProfit: tp[0], stopLoss: stop });
     if (placed.status === 'rejected') {
       // Not enough margin/free capacity — go to cooldown briefly
@@ -184,6 +202,7 @@ export class ReboundRejectionAgent {
       this.entering = false;
       return;
     }
+    const telemetry = this.computeTelemetry(startTs, placed, { expectedPrice: entry, requestedQty: qty, side });
     const now = Date.now();
     this.pos = {
       side,
@@ -211,10 +230,30 @@ export class ReboundRejectionAgent {
       this.pos.tp.push(runnerTp);
     }
     // Persist order/fill/position
-    await recordEnter({ sessionId: this.sessionId!, symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
+    try {
+      await recordEnter({
+        sessionId: this.sessionId!,
+        symbol: this.profile.symbol,
+        side,
+        qty: this.pos.qty,
+        entryPrice: this.pos.entry,
+        stop: this.pos.stop,
+        tp: this.pos.tp,
+        leverage: this.profile.maxLeverage,
+        requestedPrice: entry,
+        latencyMs: telemetry.latencyMs,
+        slippageBps: telemetry.slippageBps,
+        fillRatio: telemetry.fillRatio,
+        cancelCount: telemetry.cancelCount,
+        attempts: telemetry.attempts,
+        slOrderId: this.pos.slOrderId,
+        tpOrderId: this.pos.tpOrderId,
+      });
+    } catch {}
     this.state = 'MANAGE';
     this.tradesToday += 1;
     broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
+    await this.syncProtectiveOrders('entry');
     this.entering = false;
   }
 
@@ -228,6 +267,104 @@ export class ReboundRejectionAgent {
       if (this.pos.trail.length > 200) this.pos.trail = this.pos.trail.slice(-200);
     } else {
       last.ts = now;
+    }
+  }
+
+  private computeTelemetry(startedAt: number, placed: any, opts: { expectedPrice?: number; requestedQty: number; side: 'buy'|'sell' }) {
+    const latencyMs = Math.max(0, (placed?.ts ?? Date.now()) - startedAt);
+    const filledQty = typeof placed?.filledQty === 'number' ? placed.filledQty : opts.requestedQty;
+    const fillRatio = opts.requestedQty > 0 ? Math.min(1, Math.max(0, filledQty / opts.requestedQty)) : undefined;
+    let slippageBps: number|undefined;
+    if (opts.expectedPrice && placed?.avgPrice) {
+      const raw = ((placed.avgPrice - opts.expectedPrice) / opts.expectedPrice) * 10000;
+      slippageBps = opts.side === 'buy' ? raw : -raw;
+    }
+    return {
+      latencyMs,
+      slippageBps,
+      fillRatio,
+      cancelCount: placed?.cancelCount ?? 0,
+      attempts: placed?.attempts ?? 1,
+      requestedPrice: opts.expectedPrice,
+    };
+  }
+
+  private async restorePersistedPosition() {
+    if (!this.sessionId || this.pos) return;
+    try {
+      const row = await loadActivePosition(this.sessionId);
+      if (row && Number(row.qty || 0) > 0) {
+        const tpRaw = Array.isArray(row.takeProfit) ? row.takeProfit : (row.takeProfit ? [row.takeProfit] : []);
+        const tp = Array.isArray(tpRaw) ? tpRaw.map((x:any)=> Number(x)).filter((x)=> Number.isFinite(x)) : [];
+        this.pos = {
+          side: (row.side as any) || 'buy',
+          entry: Number(row.entryPrice || 0),
+          qty: Number(row.qty || 0),
+          stop: row.stopPrice ?? Number(row.entryPrice || 0),
+          tp,
+          openedAt: row.openedAt ? new Date(row.openedAt).getTime() : Date.now(),
+          extended: false,
+          partialTaken: false,
+          slOrderId: row.slOrderId ?? undefined,
+          tpOrderId: row.tpOrderId ?? undefined,
+          trail: row.stopPrice ? [{ ts: Date.now(), price: row.stopPrice }] : [],
+          breakeven: row.stopPrice ?? undefined,
+          partialInfo: null,
+        } as any;
+        this.state = 'MANAGE';
+      }
+    } catch {}
+  }
+
+  private async syncProtectiveOrders(reason: 'entry'|'partial'|'trail'|'startup'|'adopt') {
+    if (!this.profile || !this.sessionId || !this.pos || !this.broker) return;
+    const qty = Number(this.pos.qty || 0);
+    if (!(qty > 0)) return;
+    const stopLoss = typeof this.pos.stop === 'number' ? this.pos.stop : undefined;
+    const takeProfit = Array.isArray(this.pos.tp) && this.pos.tp.length > 0 ? this.pos.tp[0] : undefined;
+    try {
+      if (typeof this.broker.syncProtective === 'function') {
+        const res = await this.broker.syncProtective({
+          symbol: this.profile.symbol,
+          side: this.pos.side,
+          qty,
+          stopLoss,
+          takeProfit,
+          slOrderId: this.pos.slOrderId,
+          tpOrderId: this.pos.tpOrderId,
+        }) as any;
+        if (res?.slOrderId !== undefined) this.pos.slOrderId = res.slOrderId || undefined;
+        if (res?.tpOrderId !== undefined) this.pos.tpOrderId = res.tpOrderId || undefined;
+        await updateProtectiveSnapshot({
+          sessionId: this.sessionId,
+          symbol: this.profile.symbol,
+          stopPrice: stopLoss,
+          takeProfit: this.pos.tp,
+          slOrderId: this.pos.slOrderId ?? null,
+          tpOrderId: this.pos.tpOrderId ?? null,
+          status: 'synced'
+        });
+      } else {
+        await updateProtectiveSnapshot({
+          sessionId: this.sessionId,
+          symbol: this.profile.symbol,
+          stopPrice: stopLoss,
+          takeProfit: this.pos.tp,
+          slOrderId: this.pos.slOrderId ?? null,
+          tpOrderId: this.pos.tpOrderId ?? null,
+          status: reason === 'startup' ? 'restored' : 'paper'
+        });
+      }
+    } catch (e) {
+      await updateProtectiveSnapshot({
+        sessionId: this.sessionId,
+        symbol: this.profile.symbol,
+        stopPrice: stopLoss,
+        takeProfit: this.pos.tp,
+        slOrderId: this.pos.slOrderId ?? null,
+        tpOrderId: this.pos.tpOrderId ?? null,
+        status: `error:${String((e as any)?.message || e)}`.slice(0, 120)
+      });
     }
   }
 
