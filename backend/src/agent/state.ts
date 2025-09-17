@@ -5,7 +5,7 @@ import { LiveBroker, inspectExposure } from '../broker/live.js';
 import { Broker } from '../broker/types.js';
 import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.js';
 import { computeAdaptiveRisk, AdaptiveRiskResult } from '../risk/adaptive.js';
-import { buildTechSnapshot } from '../ai/tech.js';
+import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
 import { recordEnter, recordExit, updateProtectiveSnapshot, loadActivePosition } from './persistence.js';
 import { recomputeKpi } from '../metrics/kpi.js';
@@ -15,6 +15,9 @@ import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { recordOpsEvent } from '../monitor/ops.js';
 import type { RegimeProfile } from '../ai/regime.js';
+import { getTicker } from '../data/market.js';
+import type { PlacedOrder } from '../broker/types.js';
+import { prisma } from '../db/client.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -60,6 +63,7 @@ export class ReboundRejectionAgent {
   private breakoutTicks = 0; // consecutive ticks confirming breakout
   regime: RegimeProfile | null = null;
   private adaptiveRisk: AdaptiveRiskResult | null = null;
+  private protectiveErrorCount = 0;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -182,21 +186,20 @@ export class ReboundRejectionAgent {
         const lower = Math.min(from, to);
         const breakoutLong = this.plan.bias === 'long' && price > upper;
         const breakoutShort = this.plan.bias === 'short' && price < lower;
-        if (breakoutLong || breakoutShort) await this.enter(price);
+        if (breakoutLong || breakoutShort) await this.enter(price, snap);
       } else {
         // simple confirmation: bias-aligned close beyond zone mid
         const confirm = this.plan.plan.entry_rule.confirm_close && ((this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid));
-        if (inZone && confirm) await this.enter(price);
+        if (inZone && confirm) await this.enter(price, snap);
       }
     } else if (this.state === 'MANAGE') {
       await this.manage(price, snap);
     }
   }
 
-  async enter(mktPrice: number) {
+  async enter(mktPrice: number, _snap?: TechnicalSnapshot) {
     if (!this.broker || !this.plan || !this.profile) return;
     if (this.regime && !this.regime.shouldTrade) return;
-    // Prevent duplicate entries
     if (this.pos || this.entering) return;
     this.entering = true;
     const bal = await this.broker.balance();
@@ -224,23 +227,62 @@ export class ReboundRejectionAgent {
         });
       }
     } catch {}
+    dynamicRiskPct = await this.applyDailyRoiThrottle(dynamicRiskPct);
+    if (this.adaptiveRisk) this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
     const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
-    const qty = notional / entry;
-    const startTs = Date.now();
-    const placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: this.profile.maxLeverage, takeProfit: tp[0], stopLoss: stop });
-    if (placed.status === 'rejected') {
-      // Not enough margin/free capacity — go to cooldown briefly
-      this.state = 'COOLDOWN';
-      broadcast('agent_state', { state: this.state, reason: 'placement_rejected' }, this.profile.symbol, this.sessionId || undefined);
+    const qty = notional / Math.max(entry, 1e-8);
+    if (!(qty > 0)) {
       this.entering = false;
       return;
     }
+
+    const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
+    let spreadPct = 0;
+    if (ticker?.bid && ticker?.ask) spreadPct = ((ticker.ask - ticker.bid) / ((ticker.ask + ticker.bid) / 2)) * 100;
+    const playbook = this.plan.plan.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const limitSpreadThresh = 0.12;
+    const twapSpreadThresh = 0.2;
+    let executionMode: 'market'|'limit'|'twap' = 'market';
+    if (ticker && playbook !== 'momentum_breakout') {
+      if (spreadPct >= twapSpreadThresh && qty * entry > 5000) executionMode = 'twap';
+      else if (spreadPct >= limitSpreadThresh) executionMode = 'limit';
+    }
+    const startTs = Date.now();
+
+    if (executionMode !== 'market') {
+      recordOpsEvent({
+        level: 'info',
+        source: 'execution',
+        message: `adaptive_${executionMode}`,
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { spreadPct, qty, playbook },
+      });
+    }
+
+    let placed: PlacedOrder;
+    if (executionMode === 'limit') {
+      const limitPrice = this.computePassivePrice(side, entry, ticker);
+      placed = await this.placeLimitAdaptive({ side, qty, limitPrice, stop, tp, entry });
+    } else if (executionMode === 'twap') {
+      placed = await this.executeTwapOrder({ side, totalQty: qty, slices: 3, intervalMs: 250, stop, tp, entry });
+    } else {
+      placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: this.profile.maxLeverage, takeProfit: tp[0], stopLoss: stop });
+    }
+
+    if (placed.status === 'rejected' || !placed.filledQty || placed.filledQty <= 0) {
+      this.state = 'COOLDOWN';
+      broadcast('agent_state', { state: this.state, reason: 'execution_failed' }, this.profile.symbol, this.sessionId || undefined);
+      this.entering = false;
+      return;
+    }
+
     const telemetry = this.computeTelemetry(startTs, placed, { expectedPrice: entry, requestedQty: qty, side });
     const now = Date.now();
     this.pos = {
       side,
-      entry: placed.avgPrice!,
-      qty: placed.filledQty!,
+      entry: placed.avgPrice ?? entry,
+      qty: placed.filledQty,
       stop,
       tp,
       openedAt: now,
@@ -250,10 +292,9 @@ export class ReboundRejectionAgent {
       trail: [{ ts: now, price: stop }],
       maeR: 0,
       mfeR: 0,
-      breakeven: placed.avgPrice!,
+      breakeven: placed.avgPrice ?? entry,
       partialInfo: null,
     };
-    // Ensure at least two TP levels (for partial then runner)
     if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
       const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 2)) : (this.pos.entry - (this.plan.stopDistance * 2));
       this.pos.tp = [baseTp];
@@ -262,7 +303,7 @@ export class ReboundRejectionAgent {
       const runnerTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 3)) : (this.pos.entry - (this.plan.stopDistance * 3));
       this.pos.tp.push(runnerTp);
     }
-    // Persist order/fill/position
+
     try {
       await recordEnter({
         sessionId: this.sessionId!,
@@ -284,6 +325,7 @@ export class ReboundRejectionAgent {
         tpOrderId: this.pos.tpOrderId,
       });
     } catch {}
+
     this.state = 'MANAGE';
     this.tradesToday += 1;
     broadcast('agent_state', { state: this.state, pos: this.pos, regime: this.regime, adaptiveRisk: this.adaptiveRisk, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
@@ -301,6 +343,150 @@ export class ReboundRejectionAgent {
       if (this.pos.trail.length > 200) this.pos.trail = this.pos.trail.slice(-200);
     } else {
       last.ts = now;
+    }
+  }
+
+  private computePassivePrice(side: 'buy'|'sell', reference: number, ticker?: { bid?: number; ask?: number }) {
+    const tolerance = 0.0005;
+    if (!ticker) return reference;
+    if (side === 'buy') {
+      const bid = ticker.bid ?? reference;
+      return Math.max(0, Math.min(reference, bid * (1 - tolerance)));
+    }
+    const ask = ticker.ask ?? reference;
+    return Math.max(reference, ask * (1 + tolerance));
+  }
+
+  private async placeLimitAdaptive(params: { side: 'buy'|'sell'; qty: number; limitPrice: number; stop: number; tp: number[]; entry: number }): Promise<PlacedOrder> {
+    const order = await this.broker!.place({
+      symbol: this.profile!.symbol,
+      side: params.side,
+      type: 'limit',
+      qty: params.qty,
+      price: params.limitPrice,
+      leverage: this.profile!.maxLeverage,
+      postOnly: true,
+      timeInForce: 'GTC',
+    });
+    if (order.status === 'filled' && order.filledQty) return order;
+    try { await this.broker!.cancel(order.id).catch(()=>{}); } catch {}
+    const fallback = await this.broker!.place({
+      symbol: this.profile!.symbol,
+      side: params.side,
+      type: 'market',
+      qty: params.qty,
+      leverage: this.profile!.maxLeverage,
+    });
+    fallback.attempts = (order.attempts || 1) + (fallback.attempts || 1);
+    fallback.cancelCount = (order.cancelCount || 0) + (fallback.cancelCount || 0) + 1;
+    return fallback;
+  }
+
+  private async executeTwapOrder(params: { side: 'buy'|'sell'; totalQty: number; slices: number; intervalMs: number; stop: number; tp: number[]; entry: number }): Promise<PlacedOrder> {
+    const slices = Math.max(2, Math.min(5, params.slices));
+    const remainingTarget = Math.max(params.totalQty, 0);
+    let filled = 0;
+    let cost = 0;
+    let attempts = 0;
+    const start = Date.now();
+    for (let i = 0; i < slices; i++) {
+      const remaining = remainingTarget - filled;
+      if (remaining <= 0) break;
+      const sliceQty = i === slices - 1 ? remaining : Math.max(remaining / (slices - i), remainingTarget * 0.15);
+      attempts += 1;
+      const order = await this.broker!.place({
+        symbol: this.profile!.symbol,
+        side: params.side,
+        type: 'market',
+        qty: sliceQty,
+        leverage: this.profile!.maxLeverage,
+      });
+      if ((order.status === 'filled' || order.status === 'partially_filled') && order.filledQty && order.avgPrice) {
+        const fill = order.filledQty;
+        filled += fill;
+        cost += fill * order.avgPrice;
+      }
+      if (i < slices - 1) await new Promise(r => setTimeout(r, params.intervalMs));
+    }
+    if (filled <= 0) {
+      const fallback = await this.broker!.place({
+        symbol: this.profile!.symbol,
+        side: params.side,
+        type: 'market',
+        qty: params.totalQty,
+        leverage: this.profile!.maxLeverage,
+      });
+      fallback.attempts = (fallback.attempts || 1) + attempts;
+      return fallback;
+    }
+    const avgPrice = cost / filled;
+    return {
+      symbol: this.profile!.symbol,
+      side: params.side,
+      type: 'market',
+      qty: params.totalQty,
+      leverage: this.profile!.maxLeverage,
+      id: `twap_${Date.now()}`,
+      status: 'filled',
+      filledQty: filled,
+      avgPrice,
+      ts: Date.now(),
+      attempts,
+      cancelCount: 0,
+      requestedQty: params.totalQty,
+      requestedPrice: params.entry,
+      stopLoss: params.stop,
+      takeProfit: params.tp?.[0],
+    } as PlacedOrder;
+  }
+
+  private async applyDailyRoiThrottle(baseRiskPct: number): Promise<number> {
+    if (!this.sessionId) return baseRiskPct;
+    try {
+      const reports = await prisma.dailyReport.findMany({
+        where: { sessionId: this.sessionId },
+        orderBy: { day: 'desc' },
+        take: 5,
+      });
+      if (!reports.length) return baseRiskPct;
+      const rois: number[] = [];
+      for (const report of reports) {
+        const stats = report.stats as any;
+        let roi = stats?.roiPct ?? stats?.roi;
+        if (roi == null && stats?.pnlUsd != null && this.profile?.startBalanceUsd) {
+          roi = (Number(stats.pnlUsd) / this.profile.startBalanceUsd) * 100;
+        }
+        if (roi != null && Number.isFinite(Number(roi))) rois.push(Number(roi));
+      }
+      if (!rois.length) return baseRiskPct;
+      const avgRoi = rois.reduce((a, b) => a + b, 0) / rois.length;
+      let negativeStreak = 0;
+      for (const roi of rois) {
+        if (roi < -0.5) negativeStreak += 1;
+        else break;
+      }
+      let adjusted = baseRiskPct;
+      if (negativeStreak >= 3 || avgRoi < -1.5) {
+        adjusted = Math.max(0.3, baseRiskPct * 0.5);
+      } else if (negativeStreak >= 2 || avgRoi < -0.8) {
+        adjusted = Math.max(0.35, baseRiskPct * 0.7);
+      } else if (avgRoi > 1.4 && negativeStreak === 0) {
+        adjusted = Math.min(2, baseRiskPct * 1.05);
+      }
+      adjusted = Math.max(0.3, Math.min(2, adjusted));
+      if (Math.abs(adjusted - baseRiskPct) > 0.01) {
+        recordOpsEvent({
+          level: adjusted < baseRiskPct ? 'warn' : 'info',
+          source: 'roi_throttle',
+          message: 'daily_roi_adjust',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { avgRoi, negativeStreak, from: baseRiskPct, to: adjusted },
+        });
+      }
+      return adjusted;
+    } catch {
+      return baseRiskPct;
     }
   }
 
@@ -404,6 +590,7 @@ export class ReboundRejectionAgent {
     }
 
     if (status === 'error') {
+      this.protectiveErrorCount += 1;
       recordOpsEvent({
         level: 'warn',
         source: 'protective_sync',
@@ -415,8 +602,14 @@ export class ReboundRejectionAgent {
           takeProfit: takeProfitArr,
           slOrderId: this.pos.slOrderId,
           tpOrderId: this.pos.tpOrderId,
+          consecutiveErrors: this.protectiveErrorCount,
         },
       });
+      if (this.protectiveErrorCount >= 3) {
+        this.engageKillSwitch('protective_sync_failure', { consecutiveErrors: this.protectiveErrorCount });
+      }
+    } else if (status === 'synced') {
+      this.protectiveErrorCount = 0;
     }
 
     // Persist latest protective snapshot regardless of live/paper mode outcome
@@ -683,6 +876,15 @@ export class ReboundRejectionAgent {
         await this.validateAndArm();
       }
     } catch {}
+  }
+
+  private engageKillSwitch(reason: string, details?: any) {
+    if (this.state === 'HALT') return;
+    this.state = 'HALT';
+    try {
+      recordOpsEvent({ level: 'error', source: 'kill_switch', message: reason, sessionId: this.sessionId || undefined, symbol: this.profile?.symbol, details });
+    } catch {}
+    broadcast('agent_state', { state: this.state, killSwitch: reason }, this.profile?.symbol, this.sessionId || undefined);
   }
 
   halt() { this.state = 'HALT'; }

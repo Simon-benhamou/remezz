@@ -21,7 +21,8 @@ export type PolicyAlert = {
 };
 
 const alerts: PolicyAlert[] = [];
-const state = new Map<string, { invalidTicks: number; partialTicks: number; prevStop?: number; beTicks: number; trailBackTicks: number }>();
+const state = new Map<string, { invalidTicks: number; partialTicks: number; prevStop?: number; beTicks: number; trailBackTicks: number; missedPartialAlerts: number; killEngaged?: boolean }>();
+const MISSED_PARTIAL_KILL = Number(process.env.MISSED_PARTIAL_KILL || 3);
 
 async function pushAlert(a: PolicyAlert){
   alerts.push(a);
@@ -71,7 +72,7 @@ export async function auditTick(sessionId: string, symbol: string, price: number
   const a = AgentHub.get(sessionId) as any;
   if (!a || !a.plan) return;
   const key = sessionId;
-  const s = state.get(key) || { invalidTicks: 0, partialTicks: 0, prevStop: undefined, beTicks: 0, trailBackTicks: 0 };
+  const s = state.get(key) || { invalidTicks: 0, partialTicks: 0, prevStop: undefined, beTicks: 0, trailBackTicks: 0, missedPartialAlerts: 0 };
   const cfg = getConfig();
   // Overtrading
   try {
@@ -109,9 +110,18 @@ export async function auditTick(sessionId: string, symbol: string, price: number
         if (s.partialTicks >= 3) {
           await pushAlert({ id: `alert_${Date.now()}_${Math.random().toString(36).slice(2,8)}`, sessionId, symbol, kind: 'missed_partial', severity: 'med', details: { entry: a.pos.entry, tp1R: firstR }, ts: Date.now() });
           s.partialTicks = 0;
+          s.missedPartialAlerts = (s.missedPartialAlerts || 0) + 1;
+          if (!s.killEngaged && MISSED_PARTIAL_KILL > 0 && s.missedPartialAlerts >= MISSED_PARTIAL_KILL) {
+            s.killEngaged = true;
+            try { AgentHub.halt(sessionId); } catch {}
+            recordOpsEvent({ level: 'error', source: 'kill_switch', message: 'missed_partial_threshold', sessionId, symbol, details: { missedPartialAlerts: s.missedPartialAlerts } });
+            const agent = AgentHub.get(sessionId) as any;
+            broadcast('agent_state', { state: 'HALT', killSwitch: 'missed_partial' }, symbol, sessionId);
+          }
         }
       } else {
         s.partialTicks = 0;
+        if (a.pos?.partialTaken) s.missedPartialAlerts = 0;
       }
     } else {
       s.partialTicks = 0;

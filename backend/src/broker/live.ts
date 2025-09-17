@@ -27,8 +27,10 @@ export class LiveBroker implements Broker {
 
     let order: any;
     const params: any = {};
-    const tif = o.type === 'limit' ? 'GTC' : undefined;
+    const tif = o.type === 'limit' ? (o.timeInForce || 'GTC') : o.timeInForce;
     if (o.reduceOnly) params.reduceOnly = true;
+    if (o.postOnly) params.postOnly = true;
+    if (o.timeInForce) params.timeInForce = o.timeInForce;
     const cfg = getConfig();
     const deadline = Date.now() + Math.max(1000, cfg.ORDER_FILL_TIMEOUT_SEC * 1000);
     const pollMs = Math.max(100, cfg.ORDER_FILL_POLL_MS);
@@ -52,7 +54,9 @@ export class LiveBroker implements Broker {
       if (o.type === 'market') {
         order = await ex.createOrder(symbol, 'market', o.side, o.qty, undefined, params);
       } else {
-        order = await ex.createOrder(symbol, 'limit', o.side, o.qty, o.price, { timeInForce: tif, ...params });
+        const limitParams: any = { ...params };
+        if (tif) limitParams.timeInForce = tif;
+        order = await ex.createOrder(symbol, 'limit', o.side, o.qty, o.price, limitParams);
       }
     } catch (e: any) {
       try { await emitAlert({ kind:'capacity_breach' as any, severity:'med', details: { error: String(e?.message||e), symbol, side:o.side, qty:o.qty }, }); } catch {}

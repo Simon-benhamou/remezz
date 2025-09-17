@@ -12,6 +12,8 @@ export type NewOrder = {
   takeProfit?: number;
   stopLoss?: number;
   reduceOnly?: boolean;
+  timeInForce?: string;
+  postOnly?: boolean;
 };
 
 export type PlacedOrder = NewOrder & {

@@ -146,6 +146,7 @@ model SessionKpi {
   maxDrawdownPct   Float  @default(0)
   avgHoldingMin    Float  @default(0)
   lastUpdated      DateTime @default(now())
+  stats            Json?
 
   // AI usage metrics (persisted so they survive restarts)
   aiCallsTotal     Int    @default(0)
