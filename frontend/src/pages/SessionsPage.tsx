@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, Segmented, InputNumber, Typography, Select } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useMode } from '../contexts/ModeContext';
 
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
@@ -10,14 +11,16 @@ export default function SessionsPage(){
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
+  const { mode } = useMode();
   const modeVal = Form.useWatch?.('mode', form);
   const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
-  const load = async ()=>{ try { setRows(await api.listSessions()); } catch {} };
-  React.useEffect(()=>{ load(); }, []);
+  const load = React.useCallback(async ()=>{ try { setRows(await api.listSessions(mode)); } catch {} }, [mode]);
+  React.useEffect(()=>{ load(); }, [load]);
+  React.useEffect(()=>{ form.setFieldsValue({ mode }); }, [mode, form]);
   React.useEffect(()=>{
-    let t:any; const pull = async ()=>{ try { const o = await api.overview(); setExBal(o?.exchangeBalance || null); } catch{} };
+    let t:any; const pull = async ()=>{ try { const o = await api.overview(mode); setExBal(o?.exchangeBalance || null); } catch{} };
     pull(); t = setInterval(pull, 15000); return ()=> clearInterval(t);
-  }, []);
+  }, [mode]);
   const stop = async (id:string)=>{
     Modal.confirm({
       title: 'Stop session?',
@@ -50,7 +53,7 @@ export default function SessionsPage(){
       <Card title={
         <Space>
           Active sessions
-          <Button type='primary' onClick={()=>{ form.setFieldsValue({ symbol:'BTC/USDT', mode:'paper', riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }); setOpen(true); }}>+ New Agent</Button>
+          <Button type='primary' onClick={()=>{ form.setFieldsValue({ symbol:'BTC/USDT', mode, riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }); setOpen(true); }}>+ New Agent</Button>
         </Space>
       }>
         <Table rowKey="id" dataSource={rows.filter(r=> !r.stoppedAt)} pagination={false}
@@ -109,7 +112,7 @@ export default function SessionsPage(){
             // Navigate to the created session (preferred), fallback to first active
             const sid = (res as any)?.data?.id;
             if (sid) navigate(`/monitor/${sid}`); else {
-              const list = await api.listSessions();
+              const list = await api.listSessions(mode);
               const active = list.find((r:any)=> !r.stoppedAt);
               if (active) navigate(`/monitor/${active.id}`);
             }
@@ -121,7 +124,7 @@ export default function SessionsPage(){
             setStarting(false);
           }
         }}>
-        <Form layout='vertical' form={form} initialValues={{ mode:'paper', riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }}>
+        <Form layout='vertical' form={form} initialValues={{ mode, riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }}>
           <Form.Item label='Symbol' name='symbol' rules={[{ required:true }]}>
             <Select
               showSearch

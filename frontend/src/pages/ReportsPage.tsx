@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, Table, Select, Space, Button, DatePicker, Drawer, Typography, Statistic, List, Descriptions, Tag, message, Tooltip } from 'antd';
 import dayjs, { Dayjs } from 'dayjs';
 import { api } from '../api';
+import { useMode } from '../contexts/ModeContext';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -20,18 +21,19 @@ export default function ReportsPage() {
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [customDate, setCustomDate] = React.useState<Dayjs | null>(dayjs());
+  const { mode } = useMode();
 
   React.useEffect(() => {
     (async () => {
       try {
-        const rows = await api.listSessions();
+        const rows = await api.listSessions(mode);
         setSessions(rows);
         const active = rows.find((r: any) => !r.stoppedAt);
         const first = active || rows[0];
-        if (first?.id) setSessionId(first.id);
+        setSessionId(first?.id || '');
       } catch {}
     })();
-  }, []);
+  }, [mode]);
 
   const loadReports = React.useCallback(async (sid: string) => {
     if (!sid) return;

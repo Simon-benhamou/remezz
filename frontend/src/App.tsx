@@ -1,4 +1,4 @@
-import { ConfigProvider, Layout, Menu, Space, Tag, theme, ThemeConfig } from 'antd';
+import { ConfigProvider, Layout, Menu, Space, Tag, theme, ThemeConfig, Segmented } from 'antd';
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearApiKey, getApiKey } from './api';
@@ -9,14 +9,16 @@ import SessionsPage from './pages/SessionsPage';
 import TestingPage from './pages/TestingPage';
 import ReportsPage from './pages/ReportsPage';
 import TradesJournalPage from './pages/TradesJournalPage';
-import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
 import BacklogPage from './pages/BacklogPage';
+import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
+import { useMode } from './contexts/ModeContext';
   const { Header, Content, Footer } = Layout;
 
 function AppInner(){
   const [overview, setOverview] = React.useState<any>(null);
   const navigate = useNavigate();
   const location = useLocation();
+  const { mode, setMode } = useMode();
 
   // Note: global WS removed; MonitorPage owns its own session-scoped WS now.
 
@@ -25,12 +27,12 @@ function AppInner(){
   React.useEffect(()=>{
     let timer: any;
     const load = async ()=>{
-      try { setOverview(await api.overview()); } catch {}
+      try { setOverview(await api.overview(mode)); } catch {}
     };
     load();
     timer = setInterval(load, 15000);
-    return ()=> { clearInterval(timer); };
-  }, []);
+    return ()=> { if (timer) clearInterval(timer); };
+  }, [mode]);
 
   const hasSession = true; // routing no longer depends on a single active session
 
@@ -106,20 +108,24 @@ function AppInner(){
             {Array.isArray(overview?.symbols) && overview.symbols.length>5 && (<Tag>+{overview.symbols.length-5}</Tag>)}
           </Space>
           <Space style={{ color: '#262626', fontWeight:500 }}>
+            <Segmented size='small' value={mode} options={[
+              { label: 'Live', value: 'live' },
+              { label: 'Paper', value: 'paper' },
+            ]} onChange={(val)=> setMode((val as 'live'|'paper'))} />
             <span style={{ color:'#262626' }}>ROI (agg):</span>
             <Tag color={(Number(overview?.roiPct||0) >= 0) ? 'green' : 'red'}>{Number(overview?.roiPct||0).toFixed(2)}%</Tag>
             <span style={{ color:'#262626' }}>PnL:</span>
             <Tag color={(Number(overview?.pnlUsd||0) >= 0) ? 'green' : 'red'}>${Number(overview?.pnlUsd||0).toFixed(2)}</Tag>
             <span style={{ color:'#262626' }}>AI:</span>
             <Tag color='cyan'>{Number(overview?.aiCallsTotal||0)}</Tag>
-            {overview?.exchangeBalance && (
+            {mode === 'live' && overview?.exchangeBalance && (
               <>
                 <span style={{ color:'#bae6fd' }}>Exchange</span>
                 <Tag color='cyan'>Free ${Number(overview.exchangeBalance.freeUsd||0).toFixed(2)}</Tag>
                 <Tag color='geekblue'>Equity ${Number(overview.exchangeBalance.totalUsd||0).toFixed(2)}</Tag>
               </>
             )}
-            {(overview?.paperBalance && (Number(overview.paperBalance.equityUsd||0) > 0)) && (
+            {mode === 'paper' && overview?.paperBalance && (
               <>
                 <span style={{ color:'#bae6fd' }}>Paper</span>
                 <Tag color='cyan'>Free ${Number(overview.paperBalance.freeUsd||0).toFixed(2)}</Tag>

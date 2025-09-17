@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, Space, Alert, Input, InputNumber, Button, Table, Tag, message, Select, Divider } from 'antd';
 import { api } from '../api';
+import { useMode } from '../contexts/ModeContext';
 
 export default function TestingPage(){
   const [rows, setRows] = React.useState<any[]>([]);
@@ -11,9 +12,10 @@ export default function TestingPage(){
   const [batch, setBatch] = React.useState<any[]>([]);
   const [multiSymbols, setMultiSymbols] = React.useState<string[]>(['BTC/USDT','ETH/USDT','SOL/USDT']);
   const common = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT','BNB/USDT'];
+  const { mode } = useMode();
 
-  const load = async ()=>{ try { setRows(await api.listSessions()); } catch {} };
-  React.useEffect(()=>{ load(); }, []);
+  const load = React.useCallback(async ()=>{ try { setRows(await api.listSessions(mode)); } catch {} }, [mode]);
+  React.useEffect(()=>{ load(); }, [load]);
 
   // Logic checks adapted for multi-agent
   const coherence = React.useMemo(()=>{

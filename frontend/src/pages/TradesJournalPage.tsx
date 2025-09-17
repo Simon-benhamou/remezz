@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, Table, Select, Space, DatePicker, Segmented, Button, Statistic, Tag, message, InputNumber } from 'antd';
 import dayjs, { Dayjs } from 'dayjs';
 import { api } from '../api';
+import { useMode } from '../contexts/ModeContext';
 
 const { RangePicker } = DatePicker;
 
@@ -42,18 +43,19 @@ export default function TradesJournalPage() {
   const [filterOutcome, setFilterOutcome] = React.useState<'all' | Outcome>('all');
   const [range, setRange] = React.useState<[Dayjs | null, Dayjs | null]>([dayjs().subtract(14, 'day'), dayjs()]);
   const [limit, setLimit] = React.useState<number>(200);
+  const { mode } = useMode();
 
   React.useEffect(() => {
     (async () => {
       try {
-        const list = await api.listSessions();
+        const list = await api.listSessions(mode);
         setSessions(list);
         const active = list.find((s: any) => !s.stoppedAt);
         const first = active || list[0];
-        if (first?.id) setSessionId(first.id);
+        setSessionId(first?.id || '');
       } catch {}
     })();
-  }, []);
+  }, [mode]);
 
   const loadTrades = React.useCallback(async () => {
     if (!sessionId) return;

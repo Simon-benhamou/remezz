@@ -177,8 +177,15 @@ router.get('/state', async (req,res)=>{
 });
 
 // List recent sessions (active first), with open position count
-router.get('/sessions', async (_req,res)=>{
-  const rows = await prisma.agentSession.findMany({ orderBy: { startedAt: 'desc' }, take: 100, include: { positions: true, kpi: true } });
+router.get('/sessions', async (req,res)=>{
+  const modeRaw = String(req.query.mode || '').toLowerCase();
+  const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
+  const rows = await prisma.agentSession.findMany({
+    where: modeFilter ? { mode: modeFilter } : undefined,
+    orderBy: { startedAt: 'desc' },
+    take: 100,
+    include: { positions: true, kpi: true },
+  });
   const out = rows.map(r => {
     const realized = Number(r.kpi?.realizedPnlUsd || 0);
     const unrealized = Number(r.kpi?.unrealizedPnlUsd || 0);
@@ -201,10 +208,14 @@ router.get('/sessions', async (_req,res)=>{
 });
 
 // Aggregated view across active sessions for multi-agent header
-router.get('/overview', async (_req,res)=>{
+router.get('/overview', async (req,res)=>{
+  const modeRaw = String(req.query.mode || '').toLowerCase();
+  const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
+  const sessionWhere: any = { stoppedAt: null };
+  if (modeFilter) sessionWhere.mode = modeFilter;
   const [actives, totalSessions, recentAlerts] = await Promise.all([
-    prisma.agentSession.findMany({ where: { stoppedAt: null }, include: { kpi: true, positions: true } }),
-    prisma.agentSession.count(),
+    prisma.agentSession.findMany({ where: sessionWhere, include: { kpi: true, positions: true } }),
+    prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
     (async ()=>{ try { return await (prisma as any).alert.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }); } catch { return []; } })(),
   ]);
   const symbols = actives.map(a => a.symbol);
@@ -217,29 +228,39 @@ router.get('/overview', async (_req,res)=>{
   const avgWinRate = actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.winRate || 0), 0) / actives.length) : 0;
   // Global exchange balance (live account)
   let exchangeBalance: any = null;
-  try {
-    const ex = await exchange();
-    const b = await ex.fetchBalance();
-    const totalUsd = Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0);
-    const freeUsd = Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0);
-    const usedUsd = totalUsd - freeUsd;
-    exchangeBalance = { totalUsd, freeUsd, usedUsd };
-  } catch {}
+  if (!modeFilter || modeFilter === 'live') {
+    try {
+      const ex = await exchange();
+      const b = await ex.fetchBalance();
+      const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
+      const num = (v:any)=>{ const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+      const equityUsd = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value) ?? (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
+      const freeUsd = num(raw?.total_available_balance) ?? (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
+      const committedUsd = num(raw?.total_position_cost) ?? (Number.isFinite(equityUsd) && Number.isFinite(freeUsd) ? Math.max(0, (equityUsd ?? 0) - (freeUsd ?? 0)) : 0);
+      exchangeBalance = {
+        totalUsd: Number.isFinite(equityUsd) ? equityUsd : 0,
+        freeUsd: Number.isFinite(freeUsd) ? freeUsd : 0,
+        usedUsd: Number.isFinite(committedUsd) ? committedUsd : 0,
+      };
+    } catch {}
+  }
 
   // Aggregate paper balances across active paper agents only (avoid double-counting live)
   let paperBalance = { equityUsd: 0, freeUsd: 0, committedUsd: 0 };
-  try {
-    for (const s of actives) {
-      if (s.mode !== 'paper') continue;
-      const a = AgentHub.get(s.id) as any;
-      const bal = await a?.broker?.balance?.();
-      if (bal) {
-        paperBalance.equityUsd += Number(bal.equityUsd || 0);
-        paperBalance.freeUsd += Number(bal.freeUsd || 0);
-        paperBalance.committedUsd += Number(bal.committedUsd || 0);
+  if (!modeFilter || modeFilter === 'paper') {
+    try {
+      for (const s of actives) {
+        if (s.mode !== 'paper') continue;
+        const a = AgentHub.get(s.id) as any;
+        const bal = await a?.broker?.balance?.();
+        if (bal) {
+          paperBalance.equityUsd += Number(bal.equityUsd || 0);
+          paperBalance.freeUsd += Number(bal.freeUsd || 0);
+          paperBalance.committedUsd += Number(bal.committedUsd || 0);
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
   const bySession = await Promise.all(actives.map(async a => {
     const agent = AgentHub.get(a.id) as any;
     const state = agent?.state || 'IDLE';
@@ -274,8 +295,14 @@ router.get('/overview', async (_req,res)=>{
     }
   } catch {}
   // Alerts summary
-  const severityCounts = (recentAlerts as any[]).reduce((m:any,a:any)=>{ m[a.severity] = (m[a.severity]||0)+1; return m; }, { high:0, med:0, low:0 });
-  const alertsSlim = (recentAlerts as any[]).map(a => ({ id:a.id, sessionId:a.sessionId, symbol:a.symbol, kind:a.kind, severity:a.severity, createdAt:a.createdAt }));
+  const activeIds = new Set(actives.map(a => a.id));
+  const alertsFiltered = (recentAlerts as any[]).filter((a:any) => {
+    if (!modeFilter) return true;
+    if (!a.sessionId) return true;
+    return activeIds.has(a.sessionId);
+  });
+  const severityCounts = (alertsFiltered as any[]).reduce((m:any,a:any)=>{ m[a.severity] = (m[a.severity]||0)+1; return m; }, { high:0, med:0, low:0 });
+  const alertsSlim = alertsFiltered.map(a => ({ id:a.id, sessionId:a.sessionId, symbol:a.symbol, kind:a.kind, severity:a.severity, createdAt:a.createdAt }));
   res.json({
     activeCount: actives.length,
     sessionsCount: totalSessions,

@@ -6,6 +6,7 @@ import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
 import OpsEventsList from '../components/OpsEventsList';
 import OpsLLMPanel from '../components/OpsLLMPanel';
+import { useMode } from '../contexts/ModeContext';
 
 export default function DashboardPage(){
   const [ov, setOv] = React.useState<any>({});
@@ -16,9 +17,10 @@ export default function DashboardPage(){
   const [opsLoading, setOpsLoading] = React.useState<boolean>(true);
   const loadedRef = React.useRef(false);
   const navigate = useNavigate();
+  const { mode } = useMode();
   const load = async ()=>{
     try {
-      const data = await api.overview();
+      const data = await api.overview(mode);
       setOv(data);
     } finally {
       if (!loadedRef.current) { setLoading(false); loadedRef.current = true; }
@@ -43,7 +45,7 @@ export default function DashboardPage(){
     load();
     loadOps();
     const t = setInterval(async ()=>{
-      try { const data = await api.overview(); setOv(data); } catch {}
+      try { const data = await api.overview(mode); setOv(data); } catch {}
     }, 15000);
     const opsTimer = setInterval(()=>{ loadOps(); }, 30000);
     // WS live updates for overview_session events
@@ -63,7 +65,7 @@ export default function DashboardPage(){
       }
     });
     return ()=> { try { clearInterval(t); } catch {}; try { clearInterval(opsTimer); } catch {}; try { ws?.close?.(); } catch {} };
-  }, [loadOps]);
+  }, [mode, loadOps]);
   return (
     <Space direction='vertical' style={{ width:'100%' }}>
       {ov?.updatedAt && (
@@ -117,24 +119,28 @@ export default function DashboardPage(){
         </Col>
       </Row>
       <Row gutter={[12,12]}>
-        <Col xs={24} md={12}>
-          <Card loading={loading} title='Exchange (Live)'>
-            <Space size='large' wrap>
-              <Statistic title='Equity (USD)' value={Number(ov?.exchangeBalance?.totalUsd||0)} precision={2} />
-              <Statistic title='Free (USD)' value={Number(ov?.exchangeBalance?.freeUsd||0)} precision={2} />
-              <Statistic title='Used (USD)' value={Number(ov?.exchangeBalance?.usedUsd||0)} precision={2} />
-            </Space>
-          </Card>
-        </Col>
-        <Col xs={24} md={12}>
-          <Card loading={loading} title='Paper (Active)'>
-            <Space size='large' wrap>
-              <Statistic title='Equity (USD)' value={Number(ov?.paperBalance?.equityUsd||0)} precision={2} />
-              <Statistic title='Free (USD)' value={Number(ov?.paperBalance?.freeUsd||0)} precision={2} />
-              <Statistic title='Committed (USD)' value={Number(ov?.paperBalance?.committedUsd||0)} precision={2} />
-            </Space>
-          </Card>
-        </Col>
+        {mode === 'live' && (
+          <Col xs={24} md={12}>
+            <Card loading={loading} title='Exchange (Live)'>
+              <Space size='large' wrap>
+                <Statistic title='Equity (USD)' value={Number(ov?.exchangeBalance?.totalUsd||0)} precision={2} />
+                <Statistic title='Free (USD)' value={Number(ov?.exchangeBalance?.freeUsd||0)} precision={2} />
+                <Statistic title='Used (USD)' value={Number(ov?.exchangeBalance?.usedUsd||0)} precision={2} />
+              </Space>
+            </Card>
+          </Col>
+        )}
+        {mode === 'paper' && (
+          <Col xs={24} md={12}>
+            <Card loading={loading} title='Paper (Active)'>
+              <Space size='large' wrap>
+                <Statistic title='Equity (USD)' value={Number(ov?.paperBalance?.equityUsd||0)} precision={2} />
+                <Statistic title='Free (USD)' value={Number(ov?.paperBalance?.freeUsd||0)} precision={2} />
+                <Statistic title='Committed (USD)' value={Number(ov?.paperBalance?.committedUsd||0)} precision={2} />
+              </Space>
+            </Card>
+          </Col>
+        )}
       </Row>
       <Card title='Active sessions' extra={<Button size='small' onClick={load}>Refresh</Button>}>
         <Table rowKey='id' size='small' dataSource={ov?.sessions||[]} pagination={{ pageSize: 8 }}
