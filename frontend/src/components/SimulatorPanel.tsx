@@ -27,7 +27,7 @@ export default function SimulatorPanel({ symbol }: { symbol: string }){
     setLoading(true);
     try {
       let p = null as any;
-      if (useLLMPlan) p = await api.proposePlan(symbolSel);
+      if (useLLMPlan) p = await api.proposePlan(symbolSel, { fresh: true });
       else if (planText?.trim()) { try { p = JSON.parse(planText); } catch { message.error('Invalid plan JSON'); }
       }
       setPlan(p);

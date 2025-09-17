@@ -12,9 +12,10 @@ function safeParse<T=any>(s: string): T { try { return JSON.parse(s) as T; } cat
 const PLAN_CACHE_TTL_MS = Number(process.env.PLAN_CACHE_TTL_MS || 30 * 60 * 1000);
 const planCache = new Map<string, { ts: number; plan: PlanJson }>();
 
-function cacheKeyForPlan(symbol: string, regime?: RegimeProfile | null, trigger?: string) {
+function cacheKeyForPlan(symbol: string, regime?: RegimeProfile | null, trigger?: string, killReason?: string) {
   const playbook = regime?.playbook || 'unknown';
-  return `${symbol}:${playbook}:${trigger || 'auto'}`;
+  const kill = killReason ? `:${killReason}` : '';
+  return `${symbol}:${playbook}:${trigger || 'auto'}${kill}`;
 }
 
 function clonePlan(plan: PlanJson): PlanJson {
@@ -25,11 +26,12 @@ function cachePlan(key: string, plan: PlanJson) {
   planCache.set(key, { ts: Date.now(), plan: clonePlan(plan) });
 }
 
-export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sessionId?: string }): Promise<PlanJson> {
+export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sessionId?: string; context?: { killReason?: string; killDetails?: any } }): Promise<PlanJson> {
   const snap = await buildTechSnapshot(symbol);
   const regime = snap.regime;
-  const cacheKey = cacheKeyForPlan(symbol, regime, opts?.sessionId);
-  if (!opts?.fresh) {
+  const allowCache = !opts?.fresh && !opts?.context;
+  const cacheKey = cacheKeyForPlan(symbol, regime, opts?.sessionId, opts?.context?.killReason);
+  if (allowCache) {
     const cached = planCache.get(cacheKey);
     if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {
       try { recordOpsEvent({ level: 'info', source: 'plan_cache', message: 'reuse_cached_plan', sessionId: opts?.sessionId, symbol, details: { playbook: regime?.playbook } }); } catch {}
@@ -47,7 +49,19 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
   const regimeContext = regime
     ? `Regime assessment: trend=${regime.trend}, volatility=${regime.volatility}, playbook=${regime.playbook}. ${regime.shouldTrade ? 'Risk-on' : 'Prefer standby.'}`
     : 'Regime assessment unavailable.';
+  let killSwitchNote = '';
+  if (opts?.context?.killReason) {
+    let detailStr = '';
+    try {
+      detailStr = JSON.stringify(opts.context.killDetails ?? {});
+    } catch {
+      detailStr = String(opts.context.killDetails ?? '');
+    }
+    if (detailStr.length > 400) detailStr = `${detailStr.slice(0, 400)}…`;
+    killSwitchNote = `Kill switch reason previously triggered: ${opts.context.killReason}. Details: ${detailStr}. Address the underlying risk before proposing entries.`;
+  }
   const sys = `You are a market analyst. You receive a clean technical snapshot (price, RSI, ATR, S/R), optional sentiment/news, and a regime classification. Output ONLY a JSON matching this schema: {"name","symbol","timeframe","bias","zone":{"type","price":null,"from":"auto_detect"},"entry_rule":{"type":"rebound|rejection","confirm_close":true,"max_distance_pct":0.4},"risk":{"stop":{"type":"atr","mult":0.9},"tp":[{"type":"R","value":1.0}],"max_hold_hours":36},"position":{"risk_fraction":0.015,"max_leverage":4},"notes":"..."}. Do NOT invent any prices. If unsure, return bias:"none".\n${regimeContext}\nIf playbook=momentum_breakout favor entries aligned with the trend bias and allow confirm_close=false with tighter distance; if playbook=standby bias:"none".`;
+  const enrichedSys = killSwitchNote ? `${sys}\n${killSwitchNote}` : sys;
   const user = {
     symbol, timeframe: '1h',
     technical: {
@@ -61,15 +75,16 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
     },
     sentiment: sent,
     news: news?.summary ? news.summary.slice(0, 280) : undefined,
+    killSwitch: opts?.context ?? undefined,
   };
   try {
     const cfg = getConfig();
     const day = new Date().toISOString().slice(0,10);
-    const out = await llmJSON(`${sys}\nContext: ${JSON.stringify(user)}`, {
-      cacheKey: opts?.fresh ? undefined : `plan:${day}:${symbol}`,
+    const out = await llmJSON(`${enrichedSys}\nContext: ${JSON.stringify(user)}`, {
+      cacheKey: allowCache ? `plan:${day}:${symbol}` : undefined,
       ttlMin: 120,
-      bypassRate: !!opts?.fresh,
-      noCache: !!opts?.fresh,
+      bypassRate: !!opts?.fresh || !!opts?.context,
+      noCache: !!opts?.fresh || !!opts?.context,
       provider: cfg.USE_GROK_FOR_PLAN ? 'grok' : 'openai',
       context: { sessionId: opts?.sessionId, symbol, kind: 'plan' },
     });
@@ -77,18 +92,18 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
     let plan = PlanZ.parse(j);
     plan = applyRegimePlaybook(plan, regime, snap);
     ensurePlanConsistency(plan, regime, snap);
-    cachePlan(cacheKey, plan);
+    if (allowCache) cachePlan(cacheKey, plan);
     return clonePlan(plan);
   } catch (e:any) {
     try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'plan', error: String(e?.message || e) } }); } catch {}
     try { recordOpsEvent({ level: 'warn', source: 'plan_fallback', message: 'llm_plan_failure', sessionId: opts?.sessionId, symbol, details: { error: String(e?.message || e) } }); } catch {}
-    const cached = !opts?.fresh ? planCache.get(cacheKey) : undefined;
+    const cached = allowCache ? planCache.get(cacheKey) : undefined;
     if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {
       try { recordOpsEvent({ level: 'warn', source: 'plan_cache', message: 'reuse_cached_plan_after_failure', sessionId: opts?.sessionId, symbol, details: { playbook: regime?.playbook } }); } catch {}
       return clonePlan(cached.plan);
     }
     const fallback = buildFallbackPlan(symbol, snap, regime);
-    cachePlan(cacheKey, fallback);
+    if (allowCache) cachePlan(cacheKey, fallback);
     return fallback;
   }
 }

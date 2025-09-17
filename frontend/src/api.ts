@@ -53,8 +53,8 @@ export const api = {
     (await client.get("/api/strategy/today", { params: { symbol } })).data,
   generateStrategy: async (symbol: string, trigger = "manual") =>
     (await client.post("/api/strategy/generate", { symbol, trigger })).data,
-  proposePlan: async (symbol: string) =>
-    (await client.post("/api/strategy/propose-plan", { symbol })).data,
+  proposePlan: async (symbol: string, opts?: { sessionId?: string; fresh?: boolean }) =>
+    (await client.post("/api/strategy/propose-plan", { symbol, sessionId: opts?.sessionId, fresh: opts?.fresh })).data,
   startSession: async (
     symbol: string,
     mode: "paper" | "live",

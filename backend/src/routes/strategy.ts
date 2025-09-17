@@ -4,6 +4,7 @@ import { selectBestPerp } from "../ai/orchestrator.js";
 import { proposePlan } from "../ai/planOrchestrator.js";
 import { PlanZ } from "../agent/planSchema.js";
 import { activeSession } from "../session/session.js";
+import { AgentHub } from "../agent/hub.js";
 import { requestStrategy } from "../ai/strategyManager.js";
 import { levels as calcLevels } from "../risk/brackets.js";
 export const router = Router();
@@ -54,8 +55,17 @@ router.get("/today", async (req, res) => {
 // New: Ask LLM for rebound/rejection plan JSON (PlanZ)
 router.post('/propose-plan', async (req, res) => {
   const symbol = String(req.body?.symbol || 'BTCUSDT');
+  const sessionId = req.body?.sessionId ? String(req.body.sessionId) : undefined;
+  const fresh = String(req.body?.fresh || '').toLowerCase() === 'true' || req.body?.fresh === true;
   try {
-    const plan = await proposePlan(symbol);
+    if (sessionId) {
+      const agent = AgentHub.get(sessionId);
+      if (agent) {
+        const plan = await agent.nextPlan({ fresh });
+        return res.json(PlanZ.parse(plan));
+      }
+    }
+    const plan = await proposePlan(symbol, { fresh, sessionId });
     // Respond with validated plan (schema enforced)
     res.json(PlanZ.parse(plan));
   } catch (e: any) {

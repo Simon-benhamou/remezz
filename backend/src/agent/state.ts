@@ -64,6 +64,7 @@ export class ReboundRejectionAgent {
   regime: RegimeProfile | null = null;
   private adaptiveRisk: AdaptiveRiskResult | null = null;
   private protectiveErrorCount = 0;
+  private killSwitchContext: { reason: string; details?: any } | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -606,7 +607,7 @@ export class ReboundRejectionAgent {
         },
       });
       if (this.protectiveErrorCount >= 3) {
-        this.engageKillSwitch('protective_sync_failure', { consecutiveErrors: this.protectiveErrorCount });
+        await this.engageKillSwitch('protective_sync_failure', { consecutiveErrors: this.protectiveErrorCount });
       }
     } else if (status === 'synced') {
       this.protectiveErrorCount = 0;
@@ -788,7 +789,7 @@ export class ReboundRejectionAgent {
     } catch {}
   }
 
-  async exit(price: number, reason: 'tp'|'sl'|'time') {
+  async exit(price: number, reason: 'tp'|'sl'|'time', opts?: { suppressRearm?: boolean }) {
     if (!this.pos || !this.broker || !this.profile) return;
     const dir = this.pos.side === 'buy' ? 1 : -1;
     const pnl = dir * (price - this.pos.entry) * this.pos.qty;
@@ -859,27 +860,40 @@ export class ReboundRejectionAgent {
     broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     // back to SCAN unless guardrails trip
     const guard = await assessRisk({ sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10), realizedPnlPctToday: this.realizedPnlTodayPct, consecutiveStops: this.consecutiveStops, tradesToday: this.tradesToday });
-  // After removal of entry limiting logic, still respect catastrophic halt, otherwise go to SCAN
-  this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'SCAN');
+    if (!guard.ok && guard.action === 'halt') {
+      await this.engageKillSwitch(guard.reason || 'risk_guard', { guard });
+      return;
+    }
+    // After removal of entry limiting logic, still respect catastrophic halt, otherwise go to SCAN
+    this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'SCAN');
     broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
 
-    // Immediately request a fresh strategy after an exit (force to bypass cool-down)
-    try {
-      await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price, force: true });
-    } catch {}
+    if (!opts?.suppressRearm) {
+      // Immediately request a fresh strategy after an exit (force to bypass cool-down)
+      try {
+        await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price, force: true });
+      } catch {}
 
-    // Auto-propose and arm a new plan once back to SCAN
-    try {
-      if (this.state === 'SCAN' && this.profile) {
-        const plan = await proposePlan(this.profile.symbol, { sessionId: this.sessionId || undefined });
-        await this.propose(plan as any);
-        await this.validateAndArm();
-      }
-    } catch {}
+      // Auto-propose and arm a new plan once back to SCAN
+      try {
+        if (this.state === 'SCAN' && this.profile) {
+          const plan = await this.buildPlan();
+          await this.propose(plan as any);
+          await this.validateAndArm();
+        }
+      } catch {}
+    }
   }
 
-  private engageKillSwitch(reason: string, details?: any) {
+  private async engageKillSwitch(reason: string, details?: any) {
     if (this.state === 'HALT') return;
+    this.killSwitchContext = { reason, details };
+    if (this.pos && this.profile) {
+      try {
+        const snap = await buildTechSnapshot(this.profile.symbol);
+        await this.exit(snap.last, 'sl', { suppressRearm: true });
+      } catch {}
+    }
     this.state = 'HALT';
     try {
       recordOpsEvent({ level: 'error', source: 'kill_switch', message: reason, sessionId: this.sessionId || undefined, symbol: this.profile?.symbol, details });
@@ -888,6 +902,21 @@ export class ReboundRejectionAgent {
   }
 
   halt() { this.state = 'HALT'; }
+
+  private async buildPlan(opts?: { fresh?: boolean }) {
+    if (!this.profile) throw new Error('no profile');
+    const plan = await proposePlan(this.profile.symbol, {
+      sessionId: this.sessionId || undefined,
+      fresh: opts?.fresh,
+      context: this.killSwitchContext ? { killReason: this.killSwitchContext.reason, killDetails: this.killSwitchContext.details } : undefined,
+    });
+    this.killSwitchContext = null;
+    return plan;
+  }
+
+  async nextPlan(opts?: { fresh?: boolean }): Promise<PlanJson> {
+    return this.buildPlan(opts);
+  }
 
   // Internal helper: place an entry with an explicit side at a given market price (used for breakout reversal)
   private async enterWithSide(mktPrice: number, side: 'buy'|'sell') {

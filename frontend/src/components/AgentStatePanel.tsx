@@ -15,7 +15,7 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
   const balance = agent?.balance;
 
   const propose = async () => {
-    const p = await api.proposePlan(symbol);
+    const p = await api.proposePlan(symbol, { sessionId, fresh: true });
     setLlmPlan(p);
     onPlan?.(p);
   };
