@@ -5,12 +5,37 @@ import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
 import { fullAnalysis } from './analysis.js';
 import type { RegimeProfile } from './regime.js';
+import { recordOpsEvent } from '../monitor/ops.js';
 
 function safeParse<T=any>(s: string): T { try { return JSON.parse(s) as T; } catch { throw new Error('LLM returned non-JSON'); } }
+
+const PLAN_CACHE_TTL_MS = Number(process.env.PLAN_CACHE_TTL_MS || 30 * 60 * 1000);
+const planCache = new Map<string, { ts: number; plan: PlanJson }>();
+
+function cacheKeyForPlan(symbol: string, regime?: RegimeProfile | null, trigger?: string) {
+  const playbook = regime?.playbook || 'unknown';
+  return `${symbol}:${playbook}:${trigger || 'auto'}`;
+}
+
+function clonePlan(plan: PlanJson): PlanJson {
+  return JSON.parse(JSON.stringify(plan));
+}
+
+function cachePlan(key: string, plan: PlanJson) {
+  planCache.set(key, { ts: Date.now(), plan: clonePlan(plan) });
+}
 
 export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sessionId?: string }): Promise<PlanJson> {
   const snap = await buildTechSnapshot(symbol);
   const regime = snap.regime;
+  const cacheKey = cacheKeyForPlan(symbol, regime, opts?.sessionId);
+  if (!opts?.fresh) {
+    const cached = planCache.get(cacheKey);
+    if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {
+      try { recordOpsEvent({ level: 'info', source: 'plan_cache', message: 'reuse_cached_plan', sessionId: opts?.sessionId, symbol, details: { playbook: regime?.playbook } }); } catch {}
+      return clonePlan(cached.plan);
+    }
+  }
   // Fetch sentiment/news (cached) to gently influence the plan bias
   let sent: { label?: string; score?: number } | null = null;
   let news: { summary?: string } | null = null;
@@ -40,28 +65,31 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
   try {
     const cfg = getConfig();
     const day = new Date().toISOString().slice(0,10);
-    const out = await llmJSON(`${sys}\nContext: ${JSON.stringify(user)}`, { cacheKey: opts?.fresh ? undefined : `plan:${day}:${symbol}`, ttlMin: 120, bypassRate: !!opts?.fresh, noCache: !!opts?.fresh, provider: cfg.USE_GROK_FOR_PLAN ? 'grok' : 'openai' });
+    const out = await llmJSON(`${sys}\nContext: ${JSON.stringify(user)}`, {
+      cacheKey: opts?.fresh ? undefined : `plan:${day}:${symbol}`,
+      ttlMin: 120,
+      bypassRate: !!opts?.fresh,
+      noCache: !!opts?.fresh,
+      provider: cfg.USE_GROK_FOR_PLAN ? 'grok' : 'openai',
+      context: { sessionId: opts?.sessionId, symbol, kind: 'plan' },
+    });
     const j = safeParse(out);
     let plan = PlanZ.parse(j);
     plan = applyRegimePlaybook(plan, regime, snap);
-    return plan;
+    ensurePlanConsistency(plan, regime, snap);
+    cachePlan(cacheKey, plan);
+    return clonePlan(plan);
   } catch (e:any) {
     try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'plan', error: String(e?.message || e) } }); } catch {}
-    // Fallback rule-based
-    const isLong = snap.srBias !== 'nearResistance' && (snap.ema20 >= snap.ema50);
-    let plan: PlanJson = {
-      name: isLong ? 'Support_Rebound_v1' : 'Resistance_Rejection_v1',
-      symbol,
-      timeframe: '1h',
-      bias: isLong ? 'long' : 'short',
-      zone: { type: isLong ? 'support' : 'resistance', price: null, from: 'auto_detect' },
-      entry_rule: { type: isLong ? 'rebound' : 'rejection', confirm_close: true, max_distance_pct: 0.4 },
-      risk: { stop: { type: 'atr', mult: 0.9 }, tp: [{ type: 'R', value: 1.0 }, { type: 'R', value: 2.0 }], max_hold_hours: 36 },
-      position: { risk_fraction: 0.015, max_leverage: 4 },
-      notes: 'Auto plan based on EMA slope and S/R bias.'
-    };
-    plan = applyRegimePlaybook(plan, regime, snap);
-    return PlanZ.parse(plan);
+    try { recordOpsEvent({ level: 'warn', source: 'plan_fallback', message: 'llm_plan_failure', sessionId: opts?.sessionId, symbol, details: { error: String(e?.message || e) } }); } catch {}
+    const cached = !opts?.fresh ? planCache.get(cacheKey) : undefined;
+    if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {
+      try { recordOpsEvent({ level: 'warn', source: 'plan_cache', message: 'reuse_cached_plan_after_failure', sessionId: opts?.sessionId, symbol, details: { playbook: regime?.playbook } }); } catch {}
+      return clonePlan(cached.plan);
+    }
+    const fallback = buildFallbackPlan(symbol, snap, regime);
+    cachePlan(cacheKey, fallback);
+    return fallback;
   }
 }
 
@@ -113,4 +141,53 @@ function applyRegimePlaybook(plan: PlanJson, regime: RegimeProfile | undefined, 
   }
 
   return clone;
+}
+
+function ensurePlanConsistency(plan: PlanJson, regime: RegimeProfile | undefined, snap: TechnicalSnapshot) {
+  const issues: string[] = [];
+  if (regime?.playbook === 'momentum_breakout') {
+    const expectedBias = regime.trend === 'downtrend' ? 'short' : 'long';
+    if (plan.bias !== expectedBias) issues.push(`bias_mismatch:${plan.bias}->${expectedBias}`);
+    const expectedZone = expectedBias === 'long' ? 'resistance' : 'support';
+    if (plan.zone.type !== expectedZone) issues.push(`zone_mismatch:${plan.zone.type}->${expectedZone}`);
+  }
+  if (plan.bias === 'long' && plan.zone.type === 'resistance') issues.push('long_zone_resistance');
+  if (plan.bias === 'short' && plan.zone.type === 'support') issues.push('short_zone_support');
+  if (plan.risk.stop.mult < 0.4 || plan.risk.stop.mult > 3.5) issues.push('stop_mult_out_of_bounds');
+  if (!plan.risk.tp.length || plan.risk.tp.some(tp => tp.value <= 0)) issues.push('tp_invalid');
+  if (plan.position.risk_fraction <= 0 || plan.position.risk_fraction > 0.05) issues.push('risk_fraction_out_of_bounds');
+  if (issues.length) throw new Error(`plan_inconsistent:${issues.join(',')}`);
+}
+
+function buildFallbackPlan(symbol: string, snap: TechnicalSnapshot, regime: RegimeProfile | undefined): PlanJson {
+  const momentum = regime?.playbook === 'momentum_breakout';
+  const standby = regime?.playbook === 'standby';
+  const trendUp = regime?.trend !== 'downtrend';
+  const baselineLong = snap.srBias !== 'nearResistance' && snap.trend >= 0;
+  const bias = standby ? 'none' : momentum ? (trendUp ? 'long' : 'short') : (baselineLong ? 'long' : 'short');
+  const zoneType = bias === 'long' ? 'support' : bias === 'short' ? 'resistance' : (trendUp ? 'support' : 'resistance');
+  const refLevel = zoneType === 'support'
+    ? (snap.supports[0]?.price ?? snap.support)
+    : (snap.resistances[0]?.price ?? snap.resistance);
+  const zonePct = Math.min(0.8, Math.max(0.25, snap.atrPct * 0.5));
+  const half = Math.abs(refLevel) * (zonePct / 100);
+  const from = refLevel - half;
+  const to = refLevel + half;
+  const stopMult = Math.min(Math.max(momentum ? 0.7 : 0.9, snap.atrPct * 0.6), 2.5);
+  const tpValues = momentum ? [1.6, 3.2] : [1.2, 2.4];
+  const basePlan: PlanJson = {
+    name: momentum ? 'Breakout_Fallback' : 'Reversion_Fallback',
+    symbol,
+    timeframe: '1h',
+    bias: bias as any,
+    zone: { type: zoneType as any, price: null, from: 'auto_detect' },
+    entry_rule: { type: zoneType === 'support' ? 'rebound' : 'rejection', confirm_close: !momentum, max_distance_pct: momentum ? 0.35 : 0.45 },
+    risk: { stop: { type: 'atr', mult: stopMult }, tp: tpValues.map(v => ({ type: 'R', value: v })), max_hold_hours: momentum ? 30 : 36 },
+    position: { risk_fraction: 0.015, max_leverage: 4 },
+    notes: `Fallback plan (${momentum ? 'momentum breakout' : 'mean reversion'}) around ${zoneType}`,
+    meta: { playbook: regime?.playbook || (momentum ? 'momentum_breakout' : 'mean_reversion'), regime: regime?.trend || (snap.trend >= 0 ? 'uptrend' : 'downtrend'), volatility: regime?.volatility },
+  };
+  const adjusted = applyRegimePlaybook(basePlan, regime, snap);
+  ensurePlanConsistency(adjusted, regime, snap);
+  return PlanZ.parse(clonePlan(adjusted));
 }

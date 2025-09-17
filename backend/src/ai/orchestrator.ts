@@ -47,7 +47,11 @@ export async function selectBestPerp(
       })),
     });
     const day = new Date().toISOString().slice(0,10);
-    const out = await llmJSON(prompt, { cacheKey: `rank:${day}:${JSON.stringify((usable||[]).map((u:any)=>u.symbol).sort())}`, ttlMin: 60 });
+    const out = await llmJSON(prompt, {
+      cacheKey: `rank:${day}:${JSON.stringify((usable||[]).map((u:any)=>u.symbol).sort())}`,
+      ttlMin: 60,
+      context: { kind: 'perp_ranking' },
+    });
     const j = safeParseJSON<{ items: { symbol:string; score:number; reasons:string[] }[] }>(out);
     items = (j.items || []).filter(x => perps.includes(x.symbol));
   } catch {
@@ -84,7 +88,14 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: {
         last: feats.last, support: feats.support, resistance: feats.resistance, trend: feats.trend,
         pivots: feats.pivots, srBias: feats.srBias
       }
-    }), { cacheKey: opts?.fresh ? undefined : `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`, ttlMin: 90, bypassRate: !!opts?.fresh, noCache: !!opts?.fresh, provider: cfg.USE_GROK_FOR_STRATEGY ? 'grok' : 'openai' });
+    }), {
+      cacheKey: opts?.fresh ? undefined : `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`,
+      ttlMin: 90,
+      bypassRate: !!opts?.fresh,
+      noCache: !!opts?.fresh,
+      provider: cfg.USE_GROK_FOR_STRATEGY ? 'grok' : 'openai',
+      context: { sessionId: opts?.sessionId, symbol, kind: 'strategy' },
+    });
     // 2.2 Parse & validate
     const draft = safeParseJSON<StrategyJson>(raw);
     // patch fields minimum

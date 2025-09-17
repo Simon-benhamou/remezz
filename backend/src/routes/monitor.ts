@@ -109,7 +109,11 @@ router.get('/reports/daily', async (req,res)=>{
     let llm: any = null;
     try {
       const prompt = `You are a trading auditor AI. Given the daily stats and alerts, produce a concise JSON audit with keys: {summary, what_went_well:[...], issues:[...], suggestions:[...]}. Keep it actionable.\nStats: ${JSON.stringify({ symbol: sess?.symbol, date, trades: P.length, winRate, avgWin, avgLoss, expectancy, pnlUsd, alertCounts })}`;
-      const raw = await llmJSON(prompt, { cacheKey: `audit:${sessionId}:${date}`, ttlMin: 120 });
+      const raw = await llmJSON(prompt, {
+        cacheKey: `audit:${sessionId}:${date}`,
+        ttlMin: 120,
+        context: { sessionId, symbol: sess?.symbol ?? undefined, kind: 'daily_audit' },
+      });
       llm = JSON.parse(raw);
     } catch {}
 

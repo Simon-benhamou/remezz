@@ -21,8 +21,9 @@ export type PolicyAlert = {
 };
 
 const alerts: PolicyAlert[] = [];
-const state = new Map<string, { invalidTicks: number; partialTicks: number; prevStop?: number; beTicks: number; trailBackTicks: number; missedPartialAlerts: number; killEngaged?: boolean }>();
+const state = new Map<string, { invalidTicks: number; partialTicks: number; prevStop?: number; beTicks: number; trailBackTicks: number; missedPartialAlerts: number; killEngaged?: boolean; lastMissedPartialTs?: number }>();
 const MISSED_PARTIAL_KILL = Number(process.env.MISSED_PARTIAL_KILL || 3);
+const MISSED_PARTIAL_ALERT_COOLDOWN_MS = Math.max(10_000, Number(process.env.MISSED_PARTIAL_ALERT_COOLDOWN_MS || 45_000));
 
 async function pushAlert(a: PolicyAlert){
   alerts.push(a);
@@ -108,20 +109,26 @@ export async function auditTick(sessionId: string, symbol: string, price: number
       if (needPartial && !a.pos.partialTaken) {
         s.partialTicks += 1;
         if (s.partialTicks >= 3) {
-          await pushAlert({ id: `alert_${Date.now()}_${Math.random().toString(36).slice(2,8)}`, sessionId, symbol, kind: 'missed_partial', severity: 'med', details: { entry: a.pos.entry, tp1R: firstR }, ts: Date.now() });
-          s.partialTicks = 0;
-          s.missedPartialAlerts = (s.missedPartialAlerts || 0) + 1;
-          if (!s.killEngaged && MISSED_PARTIAL_KILL > 0 && s.missedPartialAlerts >= MISSED_PARTIAL_KILL) {
-            s.killEngaged = true;
-            try { AgentHub.halt(sessionId); } catch {}
-            recordOpsEvent({ level: 'error', source: 'kill_switch', message: 'missed_partial_threshold', sessionId, symbol, details: { missedPartialAlerts: s.missedPartialAlerts } });
-            const agent = AgentHub.get(sessionId) as any;
-            broadcast('agent_state', { state: 'HALT', killSwitch: 'missed_partial' }, symbol, sessionId);
+          const now = Date.now();
+          if (!s.lastMissedPartialTs || (now - s.lastMissedPartialTs) > MISSED_PARTIAL_ALERT_COOLDOWN_MS) {
+            await pushAlert({ id: `alert_${now}_${Math.random().toString(36).slice(2,8)}`, sessionId, symbol, kind: 'missed_partial', severity: 'med', details: { entry: a.pos.entry, tp1R: firstR }, ts: now });
+            s.lastMissedPartialTs = now;
+            s.missedPartialAlerts = (s.missedPartialAlerts || 0) + 1;
+            if (!s.killEngaged && MISSED_PARTIAL_KILL > 0 && s.missedPartialAlerts >= MISSED_PARTIAL_KILL) {
+              s.killEngaged = true;
+              try { AgentHub.halt(sessionId); } catch {}
+              recordOpsEvent({ level: 'error', source: 'kill_switch', message: 'missed_partial_threshold', sessionId, symbol, details: { missedPartialAlerts: s.missedPartialAlerts } });
+              broadcast('agent_state', { state: 'HALT', killSwitch: 'missed_partial' }, symbol, sessionId);
+            }
           }
+          s.partialTicks = 0;
         }
       } else {
         s.partialTicks = 0;
-        if (a.pos?.partialTaken) s.missedPartialAlerts = 0;
+        if (a.pos?.partialTaken) {
+          s.missedPartialAlerts = 0;
+          s.lastMissedPartialTs = undefined;
+        }
       }
     } else {
       s.partialTicks = 0;

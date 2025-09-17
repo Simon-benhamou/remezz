@@ -26,6 +26,7 @@ model AgentSession {
   sentiments SentimentSnapshot[]   // back-rel from SentimentSnapshot.session
   alerts     Alert[]               // back-rel from Alert.session
   reports    DailyReport[]         // back-rel from DailyReport.session
+  prompts    AiPromptLog[]
 
   @@index([stoppedAt, startedAt])
 }
@@ -206,4 +207,24 @@ model DailyReport {
 
   @@unique([sessionId, day])
   @@index([sessionId, day])
+}
+
+model AiPromptLog {
+  id        String   @id @default(cuid())
+  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  sessionId String?
+  symbol    String?
+  kind      String?
+  provider  String
+  model     String?
+  prompt    String
+  response  Json?
+  cached    Boolean  @default(false)
+  tokensIn  Int?
+  tokensOut Int?
+  costUsd   Float?
+  error     String?
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
 }
