@@ -17,6 +17,8 @@ import AlertPanel from '../components/AlertPanel';
 import { api, getApiKey } from '../api';
 import { openWS, wsSend } from '../ws';
 import PositionStatsBlock from '../components/PositionStatsBlock';
+import MonitorHealthBanner from '../components/MonitorHealthBanner';
+import MonitorMiniPanels from '../components/MonitorMiniPanels';
 
 export default function MonitorPage(){
   const { sessionId } = useParams();
@@ -37,6 +39,7 @@ export default function MonitorPage(){
   const [trades, setTrades] = React.useState<any[]>([]);
   const [triggers, setTriggers] = React.useState<any[]>([]);
   const [alerts, setAlerts] = React.useState<any[]>([]);
+  const [analytics, setAnalytics] = React.useState<any>(null);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
@@ -58,9 +61,22 @@ export default function MonitorPage(){
         try { if (s.session?.id) setTrades(await api.getTrades(s.session.id)); } catch {}
         try { if (s.session?.id) setTriggers(await api.getTriggers(s.session.id)); } catch {}
         try { if (s.session?.id) setAgent(await api.getAgentState(s.session.id)); } catch {}
+        try { if (s.session?.id) setAnalytics(await api.getMonitorAnalytics(s.session.id)); } catch {}
       } finally { setLoading(false); }
     })();
   }, [sessionId]);
+
+  const loadAnalytics = React.useCallback(async () => {
+    if (!sessionId) return;
+    try { setAnalytics(await api.getMonitorAnalytics(sessionId)); } catch {}
+  }, [sessionId]);
+
+  React.useEffect(() => {
+    if (!sessionId) return;
+    loadAnalytics();
+    const timer = setInterval(() => { loadAnalytics(); }, 20000);
+    return () => { clearInterval(timer); };
+  }, [sessionId, loadAnalytics]);
 
   // WS subscription dedicated to this monitor
   React.useEffect(()=>{
@@ -81,6 +97,7 @@ export default function MonitorPage(){
         if (msg?.data?.exit) {
           try { setKpi(await api.getPerf(sessionId)); } catch {}
         }
+        loadAnalytics();
       }
       if (msg.type === 'session') {
         setStatus((s:any)=> ({ ...s, session: msg.data, symbol: msg.data.symbol || s.symbol }));
@@ -91,18 +108,23 @@ export default function MonitorPage(){
         try { setAnalysis(await api.analysis(sym)); } catch {}
         try { setKpi(await api.getPerf(sessionId)); } catch {}
         try { setOrders(await api.getOrders(sessionId)); } catch {}
+        loadAnalytics();
       }
       if (msg.type === 'orders') {
         setOrders(msg.data);
         try { if (sessionId) setTrades(await api.getTrades(sessionId)); } catch {}
         try { setAgent(await api.getAgentState(sessionId)); } catch {}
+        loadAnalytics();
       }
       if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
-      if (msg.type === 'alert') setAlerts((prev:any[])=> [msg.data, ...prev].slice(0,50));
+      if (msg.type === 'alert') {
+        setAlerts((prev:any[])=> [msg.data, ...prev].slice(0,50));
+        loadAnalytics();
+      }
     }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; }, sessionId);
     wsRef.current = ws;
     return ()=> { try { wsRef.current?.close?.(); } catch {} };
-  }, [API_BASE, sessionId, symbol]);
+  }, [API_BASE, sessionId, symbol, loadAnalytics]);
 
   if (!sessionId) return <Navigate to='/sessions' replace />;
   const hasSession = !!status?.session?.id;
@@ -117,6 +139,8 @@ export default function MonitorPage(){
         </div>
       )}
       <Row gutter={[12,12]}>
+        <Col xs={24}><MonitorHealthBanner health={analytics?.health} updatedAt={analytics?.updatedAt} /></Col>
+        <Col xs={24}><MonitorMiniPanels panels={analytics?.panels} /></Col>
         <Col xs={24} lg={16}>
           <PriceChart
             symbol={status?.symbol}

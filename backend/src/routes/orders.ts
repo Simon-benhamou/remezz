@@ -34,10 +34,26 @@ router.get("/", async (req, res) => {
 // Aggregated trades: one row per exit (partial or full), with reconstructed entry price from realized PnL
 router.get('/trades', async (req, res) => {
   const sessionId = String(req.query.sessionId || "");
-  let where: any = { clientOrderId: { endsWith: '.exit' } };
+  const limitRaw = Number(req.query.limit ?? 200);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 200;
+  const fromStr = String(req.query.from || '').trim();
+  const toStr = String(req.query.to || '').trim();
+  const createdAt: any = {};
+  if (fromStr) {
+    const from = new Date(fromStr);
+    if (!Number.isNaN(from.getTime())) createdAt.gte = from;
+  }
+  if (toStr) {
+    const to = new Date(toStr);
+    if (!Number.isNaN(to.getTime())) createdAt.lt = to;
+  }
+
+  const where: any = { clientOrderId: { endsWith: '.exit' } };
   if (sessionId) where.sessionId = sessionId;
+  if (Object.keys(createdAt).length > 0) where.createdAt = createdAt;
+
   const [rows, sess] = await Promise.all([
-    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { fills: true } }),
+    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: limit, include: { fills: true } }),
     sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
   ]);
   const budgetPct = Number(((sess as any)?.profileJson?.budgetPct) ?? 100);

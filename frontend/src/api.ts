@@ -72,19 +72,30 @@ export const api = {
   proposeAgentPlan: async (sessionId: string, plan: any) => (await client.post("/api/agent/propose", { sessionId, ...plan })).data,
   getTriggers: async (sessionId: string) => (await client.get("/api/agent/triggers", { params: { sessionId } })).data,
   getOrders: async (sessionId?: string) => (await client.get("/api/orders", { params: { sessionId } })).data,
-  getTrades: async (sessionId?: string) => (await client.get("/api/orders/trades", { params: { sessionId } })).data,
+  getTrades: async (
+    sessionId?: string,
+    opts?: { from?: string; to?: string; limit?: number }
+  ) => (await client.get("/api/orders/trades", { params: { sessionId, ...opts } })).data,
   getPerf: async (sessionId: string) =>
     (await client.get("/api/perf", { params: { sessionId } })).data,
   getPerfBreakdown: async (sessionId: string) =>
     (await client.get("/api/perf/breakdown", { params: { sessionId } })).data,
   getAlerts: async (sessionId: string) =>
     (await client.get('/api/monitor/alerts', { params: { sessionId } })).data,
-  getDailyReport: async (sessionId: string, date?: string) =>
-    (await client.get('/api/monitor/reports/daily', { params: { sessionId, date } })).data,
+  getMonitorAnalytics: async (sessionId: string) =>
+    (await client.get('/api/monitor/analytics', { params: { sessionId } })).data,
+  getDailyReport: async (sessionId: string, date?: string, opts?: { refresh?: boolean }) =>
+    (await client.get('/api/monitor/reports/daily', { params: { sessionId, date, refresh: opts?.refresh ? 'true' : undefined } })).data,
+  listDailyReports: async (sessionId: string, limit = 30) =>
+    (await client.get('/api/monitor/reports/daily/list', { params: { sessionId, limit } })).data,
   saveDailyReport: async (sessionId: string, date: string, report: any) =>
     (await client.post('/api/monitor/reports/daily', { sessionId, date, stats: report?.stats, llm: report?.llm })).data,
   analysis: async (symbol: string) =>
     (await client.get("/api/analysis", { params: { symbol } })).data,
   quicktest: async (symbol: string, hours: number, plan?: any) =>
     (await client.post('/api/sim/quicktest', { symbol, hours, plan })).data,
+  getOpsMetrics: async () =>
+    (await client.get('/api/ops/metrics')).data,
+  getOpsEvents: async (limit = 50) =>
+    (await client.get('/api/ops/events', { params: { limit } })).data,
 };

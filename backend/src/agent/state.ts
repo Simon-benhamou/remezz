@@ -12,6 +12,7 @@ import { getConfig } from '../utils/env.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
+import { recordOpsEvent } from '../monitor/ops.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -226,6 +227,15 @@ export class ReboundRejectionAgent {
         stop: this.pos.stop,
         tp: this.pos.tp,
         leverage: this.profile.maxLeverage,
+        requestedPrice: telemetry.requestedPrice,
+        requestedQty: qty,
+        latencyMs: telemetry.latencyMs,
+        slippageBps: telemetry.slippageBps,
+        fillRatio: telemetry.fillRatio,
+        cancelCount: telemetry.cancelCount,
+        attempts: telemetry.attempts,
+        slOrderId: this.pos.slOrderId,
+        tpOrderId: this.pos.tpOrderId,
       });
     } catch {}
     this.state = 'MANAGE';
@@ -272,18 +282,31 @@ export class ReboundRejectionAgent {
     try {
       const row = await loadActivePosition(this.sessionId);
       if (row && Number(row.qty || 0) > 0) {
+        const entry = Number(row.entryPrice || 0);
+        const stop = row.stopPrice != null ? Number(row.stopPrice) : entry;
+        let tp: number[] = [];
+        try {
+          if (Array.isArray(row.takeProfit)) {
+            tp = (row.takeProfit as unknown as number[]).map((x) => Number(x)).filter((x) => Number.isFinite(x));
+          } else if (typeof row.takeProfit === 'number') {
+            tp = [Number(row.takeProfit)];
+          }
+        } catch {}
+        const partialTaken = typeof row.protectiveStatus === 'string' && row.protectiveStatus.includes('partial');
         this.pos = {
           side: (row.side as any) || 'buy',
-          entry: Number(row.entryPrice || 0),
+          entry,
           qty: Number(row.qty || 0),
-          stop: Number(row.entryPrice || 0),
-          tp: [],
+          stop,
+          tp,
           openedAt: row.openedAt ? new Date(row.openedAt).getTime() : Date.now(),
           extended: false,
-          partialTaken: false,
+          partialTaken,
           trail: [],
-          breakeven: Number(row.entryPrice || 0),
+          breakeven: partialTaken ? entry : stop,
           partialInfo: null,
+          slOrderId: row.slOrderId || undefined,
+          tpOrderId: row.tpOrderId || undefined,
         } as any;
         this.state = 'MANAGE';
       }
@@ -291,31 +314,78 @@ export class ReboundRejectionAgent {
   }
 
   private async syncProtectiveOrders(reason: 'entry'|'partial'|'trail'|'startup'|'adopt') {
-    if (!this.profile || !this.sessionId || !this.pos || !this.broker) return;
+    if (!this.profile || !this.sessionId || !this.pos) return;
     const qty = Number(this.pos.qty || 0);
-    if (!(qty > 0)) return;
-    const stopLoss = typeof this.pos.stop === 'number' ? this.pos.stop : undefined;
-    const takeProfit = Array.isArray(this.pos.tp) && this.pos.tp.length > 0 ? this.pos.tp[0] : undefined;
-    try {
-      if (typeof this.broker.syncProtective === 'function') {
+    const stopLoss = typeof this.pos.stop === 'number' ? this.pos.stop : null;
+    const takeProfitArr = Array.isArray(this.pos.tp) && this.pos.tp.length > 0
+      ? this.pos.tp.map((x) => Number(x))
+      : null;
+
+    // If position effectively closed (qty <= 0), clear snapshot and exit early
+    if (!(qty > 0)) {
+      try {
+        await updateProtectiveSnapshot({
+          sessionId: this.sessionId,
+          symbol: this.profile.symbol,
+          stopPrice: null,
+          takeProfit: null,
+          slOrderId: null,
+          tpOrderId: null,
+          status: 'closed',
+        });
+      } catch {}
+      return;
+    }
+
+    let status: 'synced'|'skipped'|'error' = 'skipped';
+    if (this.broker && typeof this.broker.syncProtective === 'function') {
+      try {
         const res = await this.broker.syncProtective({
           symbol: this.profile.symbol,
           side: this.pos.side,
           qty,
-          stopLoss,
-          takeProfit,
+          stopLoss: stopLoss ?? undefined,
+          takeProfit: takeProfitArr ? takeProfitArr[0] : undefined,
           slOrderId: this.pos.slOrderId,
           tpOrderId: this.pos.tpOrderId,
         }) as any;
+        status = 'synced';
         if (res?.slOrderId !== undefined) this.pos.slOrderId = res.slOrderId || undefined;
         if (res?.tpOrderId !== undefined) this.pos.tpOrderId = res.tpOrderId || undefined;
-        // protective snapshot disabled (fields not in schema)
-      } else {
-        // protective snapshot disabled
+      } catch {
+        status = 'error';
       }
-    } catch (e) {
-      // protective snapshot disabled
     }
+
+    if (status === 'error') {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'protective_sync',
+        message: `Sync failure (${reason})`,
+        sessionId: this.sessionId,
+        symbol: this.profile.symbol,
+        details: {
+          stopLoss,
+          takeProfit: takeProfitArr,
+          slOrderId: this.pos.slOrderId,
+          tpOrderId: this.pos.tpOrderId,
+        },
+      });
+    }
+
+    // Persist latest protective snapshot regardless of live/paper mode outcome
+    try {
+      const statusTag = status === 'synced' ? `synced_${reason}` : status;
+      await updateProtectiveSnapshot({
+        sessionId: this.sessionId,
+        symbol: this.profile.symbol,
+        stopPrice: stopLoss,
+        takeProfit: takeProfitArr,
+        slOrderId: this.pos.slOrderId ?? null,
+        tpOrderId: this.pos.tpOrderId ?? null,
+        status: statusTag,
+      });
+    } catch {}
   }
 
   async manage(price: number, snap: { ema20: number; atr14: number }) {
@@ -353,7 +423,11 @@ export class ReboundRejectionAgent {
       if (this.pos.side==='buy') this.pos.stop = Math.max(this.pos.stop, combo); else this.pos.stop = Math.min(this.pos.stop, combo);
     }
 
-    if (this.pos.stop !== prevStop) this.noteTrail(this.pos.stop);
+    const stopChanged = this.pos.stop !== prevStop;
+    if (stopChanged) {
+      this.noteTrail(this.pos.stop);
+      await this.syncProtectiveOrders('trail');
+    }
 
     // TP handling: partial at TP1, full at TP2 (if any), otherwise trailing/SL/time
     const firstTp = this.pos.tp[0];
@@ -385,37 +459,49 @@ export class ReboundRejectionAgent {
       try {
         const closeQty = Math.max(0, Math.min(this.pos.qty, Number((this.pos.qty * 0.5).toFixed(8))));
         if (closeQty > 0 && this.broker) {
-          // Place market close for partial
-          await this.broker.place({ symbol: this.profile.symbol, side: this.pos.side === 'buy' ? 'sell' : 'buy', type: 'market', qty: closeQty, leverage: this.profile.maxLeverage, reduceOnly: true });
-          await recordExit({ sessionId: this.sessionId!, symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: closeQty, realizedPnl: (dir * (price - this.pos.entry) * closeQty) }).catch(()=>{});
-          // Reduce local pos.qty and mark partial
-          this.pos.qty = Math.max(0, this.pos.qty - closeQty);
-          this.pos.partialTaken = true;
-          this.pos.partialInfo = { ts: Date.now(), price };
-          // Tighten stop to break-even after partial
-          const be = this.pos.entry;
-          if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, be);
-          else this.pos.stop = Math.min(this.pos.stop, be);
-          this.pos.breakeven = be;
-          this.noteTrail(this.pos.stop);
-          // Update exchange protective orders to reflect new qty/stop (live best-effort)
-          if (this.profile.mode === 'live' && this.broker) {
-            try { if (this.pos.slOrderId) await this.broker.cancel(this.pos.slOrderId); } catch {}
-            try { if (this.pos.tpOrderId) await this.broker.cancel(this.pos.tpOrderId); } catch {}
-            try {
-              const reduceSide = this.pos.side === 'buy' ? 'sell' : 'buy';
-              const slo = await this.broker.place({ symbol: this.profile.symbol, side: reduceSide, type: 'market', qty: this.pos.qty, leverage: this.profile.maxLeverage, reduceOnly: true, stopLoss: this.pos.stop });
-              if ((slo as any)?.slOrderId) this.pos.slOrderId = (slo as any).slOrderId;
-              const nextTp = this.pos.tp[0];
-              if (nextTp) {
-                const tpo = await this.broker.place({ symbol: this.profile.symbol, side: reduceSide, type: 'limit', qty: this.pos.qty, leverage: this.profile.maxLeverage, reduceOnly: true, price: nextTp });
-                if ((tpo as any)?.tpOrderId) this.pos.tpOrderId = (tpo as any).tpOrderId;
-              }
-            } catch {}
+          const closeSide = this.pos.side === 'buy' ? 'sell' : 'buy';
+          const startedAt = Date.now();
+          const placed = await this.broker.place({
+            symbol: this.profile.symbol,
+            side: closeSide,
+            type: 'market',
+            qty: closeQty,
+            leverage: this.profile.maxLeverage,
+            reduceOnly: true,
+          });
+          const telemetry = this.computeTelemetry(startedAt, placed, { expectedPrice: price, requestedQty: closeQty, side: closeSide });
+          const rawFilled = (placed && typeof placed.filledQty === 'number') ? placed.filledQty : undefined;
+          const filledQty = rawFilled != null && rawFilled > 0 ? rawFilled : (placed.status !== 'rejected' ? closeQty : 0);
+          if (placed.status !== 'rejected' && filledQty > 0) {
+            await recordExit({
+              sessionId: this.sessionId!,
+              symbol: this.profile.symbol,
+              side: this.pos.side,
+              exitPrice: price,
+              qty: filledQty,
+              realizedPnl: (dir * (price - this.pos.entry) * filledQty),
+              requestedQty: closeQty,
+              latencyMs: telemetry.latencyMs,
+              slippageBps: telemetry.slippageBps,
+              fillRatio: telemetry.fillRatio,
+              cancelCount: telemetry.cancelCount,
+              attempts: telemetry.attempts,
+            }).catch(()=>{});
+            // Reduce local pos.qty based on actual fill and mark partial
+            this.pos.qty = Math.max(0, this.pos.qty - filledQty);
+            this.pos.partialTaken = true;
+            this.pos.partialInfo = { ts: Date.now(), price };
+            // Tighten stop to break-even after partial
+            const be = this.pos.entry;
+            if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, be);
+            else this.pos.stop = Math.min(this.pos.stop, be);
+            this.pos.breakeven = be;
+            this.noteTrail(this.pos.stop);
+            // Shift TP ladder to next target if any
+            if (this.pos.tp.length > 1) this.pos.tp = this.pos.tp.slice(1);
+            await this.syncProtectiveOrders('partial');
+            broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
           }
-          // Shift TP ladder to next target if any
-          if (this.pos.tp.length > 1) this.pos.tp = this.pos.tp.slice(1);
-          broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
         }
       } catch {}
       return; // wait next tick after partial
@@ -474,26 +560,61 @@ export class ReboundRejectionAgent {
     this.realizedPnlTodayPct += pnlPct;
     this.consecutiveStops = reason === 'sl' ? (this.consecutiveStops + 1) : 0;
     // Place actual closing order (market) with opposite side
+    const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
+    const requestQty = this.pos.qty;
+    let placed: any;
+    const startedAt = Date.now();
     try {
       // In paper mode, free up committed capacity first to avoid margin check on the close
-      try { (this.broker as any).releaseCommitted?.(Math.abs(price * this.pos.qty)); } catch {}
-      await this.broker.place({
+      try { (this.broker as any).releaseCommitted?.(Math.abs(price * requestQty)); } catch {}
+      placed = await this.broker.place({
         symbol: this.profile.symbol,
-        side: this.pos.side === 'buy' ? 'sell' : 'buy',
+        side: exitSide,
         type: 'market',
-        qty: this.pos.qty,
+        qty: requestQty,
         leverage: this.profile.maxLeverage,
         reduceOnly: true,
       });
-    } catch {}
+    } catch {
+      placed = null;
+    }
 
-    await recordExit({ sessionId: this.sessionId!, symbol: this.profile.symbol, side: this.pos.side, exitPrice: price, qty: this.pos.qty, realizedPnl: pnl }).catch(()=>{});
+    const telemetry = placed ? this.computeTelemetry(startedAt, placed, { expectedPrice: price, requestedQty: requestQty, side: exitSide }) : null;
+    const filledQty = placed && typeof placed.filledQty === 'number' && placed.filledQty > 0 ? placed.filledQty : requestQty;
+
+    await recordExit({
+      sessionId: this.sessionId!,
+      symbol: this.profile.symbol,
+      side: this.pos.side,
+      exitPrice: price,
+      qty: filledQty,
+      realizedPnl: pnl,
+      requestedQty: requestQty,
+      latencyMs: telemetry?.latencyMs,
+      slippageBps: telemetry?.slippageBps,
+      fillRatio: telemetry?.fillRatio,
+      cancelCount: telemetry?.cancelCount,
+      attempts: telemetry?.attempts,
+    }).catch(()=>{});
     // Update session KPIs (ROI%, realized/unrealized)
     try { if (this.sessionId) await recomputeKpi(this.sessionId); } catch {}
     // Release reserved notional capacity in paper broker
-    try { (this.broker as any).releaseCommitted?.(Math.abs(price * this.pos.qty)); } catch {}
+    try { (this.broker as any).releaseCommitted?.(Math.abs(price * requestQty)); } catch {}
     this.state = 'EXIT';
     broadcast('agent_state', { state: this.state, exit: { price, reason, pnl, pnlPct, ts: Date.now() }, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
+    try {
+      if (this.sessionId && this.profile) {
+        await updateProtectiveSnapshot({
+          sessionId: this.sessionId,
+          symbol: this.profile.symbol,
+          stopPrice: null,
+          takeProfit: null,
+          slOrderId: null,
+          tpOrderId: null,
+          status: 'closed',
+        });
+      }
+    } catch {}
     this.pos = null;
     this.state = 'REPORT';
     broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);

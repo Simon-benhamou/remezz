@@ -3,10 +3,15 @@ import { Card, Row, Col, Statistic, Space, Button, Table, Tag, List } from 'antd
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { openWS } from '../ws';
+import OpsMetricsPanel from '../components/OpsMetricsPanel';
+import OpsEventsList from '../components/OpsEventsList';
 
 export default function DashboardPage(){
   const [ov, setOv] = React.useState<any>({});
   const [loading, setLoading] = React.useState<boolean>(true);
+  const [opsMetrics, setOpsMetrics] = React.useState<any>(null);
+  const [opsEvents, setOpsEvents] = React.useState<any[]>([]);
+  const [opsLoading, setOpsLoading] = React.useState<boolean>(true);
   const loadedRef = React.useRef(false);
   const navigate = useNavigate();
   const load = async ()=>{
@@ -17,11 +22,26 @@ export default function DashboardPage(){
       if (!loadedRef.current) { setLoading(false); loadedRef.current = true; }
     }
   };
+  const loadOps = React.useCallback(async ()=>{
+    try {
+      setOpsLoading(true);
+      const [metrics, events] = await Promise.all([
+        api.getOpsMetrics().catch(()=>null),
+        api.getOpsEvents().catch(()=>[]),
+      ]);
+      if (metrics) setOpsMetrics(metrics);
+      if (events) setOpsEvents(events);
+    } finally {
+      setOpsLoading(false);
+    }
+  }, []);
   React.useEffect(()=>{
     load();
+    loadOps();
     const t = setInterval(async ()=>{
       try { const data = await api.overview(); setOv(data); } catch {}
     }, 15000);
+    const opsTimer = setInterval(()=>{ loadOps(); }, 30000);
     // WS live updates for overview_session events
     const API_BASE = (import.meta as any).env.VITE_API_BASE || 'http://localhost:4000';
     const key = (localStorage.getItem('apiKey') || '');
@@ -38,8 +58,8 @@ export default function DashboardPage(){
         });
       }
     });
-    return ()=> { try { clearInterval(t); } catch {}; try { ws?.close?.(); } catch {} };
-  }, []);
+    return ()=> { try { clearInterval(t); } catch {}; try { clearInterval(opsTimer); } catch {}; try { ws?.close?.(); } catch {} };
+  }, [loadOps]);
   return (
     <Space direction='vertical' style={{ width:'100%' }}>
       {ov?.updatedAt && (
@@ -55,6 +75,10 @@ export default function DashboardPage(){
       </Row>
       <Row gutter={[12,12]}>
         <Col xs={24} md={8}><Card loading={loading}><Statistic title='Total open risk (USD)' precision={2} value={Number(ov?.totalOpenRiskUsd||0)} /></Card></Col>
+      </Row>
+      <Row gutter={[12,12]}>
+        <Col xs={24} lg={16}><OpsMetricsPanel metrics={opsMetrics} loading={opsLoading} /></Col>
+        <Col xs={24} lg={8}><OpsEventsList events={opsEvents} loading={opsLoading} onRefresh={loadOps} /></Col>
       </Row>
       <Row gutter={[12,12]}>
         <Col xs={24} md={12}>

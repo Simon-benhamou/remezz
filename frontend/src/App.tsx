@@ -7,7 +7,9 @@ import LoginPage from './pages/LoginPage';
 import MonitorPage from './pages/MonitorPage';
 import SessionsPage from './pages/SessionsPage';
 import TestingPage from './pages/TestingPage';
-import { AreaChartOutlined, ControlOutlined, BulbOutlined } from '@ant-design/icons';
+import ReportsPage from './pages/ReportsPage';
+import TradesJournalPage from './pages/TradesJournalPage';
+import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined } from '@ant-design/icons';
   const { Header, Content, Footer } = Layout;
 
 function AppInner(){
@@ -44,6 +46,8 @@ function AppInner(){
   const menuItems = [
     { key: '/dashboard', label: 'Dashboard', icon: <AreaChartOutlined /> },
     { key: '/sessions', label: 'Sessions', icon: <ControlOutlined /> },
+    { key: '/reports', label: 'Reports', icon: <FileTextOutlined /> },
+    { key: '/journal', label: 'Journal', icon: <ReadOutlined /> },
     { key: '/testing', label: 'Testing', icon: <BulbOutlined /> },
   ];
 
@@ -133,6 +137,8 @@ function AppInner(){
             <Route path='/dashboard' element={<DashboardPage />} />
             <Route path='/monitor/:sessionId' element={<MonitorPage />} />
             <Route path='/sessions' element={<SessionsPage />} />
+            <Route path='/reports' element={<ReportsPage />} />
+            <Route path='/journal' element={<TradesJournalPage />} />
             <Route path='/testing' element={<TestingPage />} />
             <Route path='*' element={<Navigate to='/dashboard' replace />} />
           </Routes>

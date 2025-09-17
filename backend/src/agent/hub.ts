@@ -29,7 +29,16 @@ export class AgentsHub {
   }
 
   listActiveIds() { return Array.from(this.agents.keys()); }
+
+  snapshot() {
+    return Array.from(this.agents.entries()).map(([sessionId, agent]) => ({
+      sessionId,
+      state: agent.state,
+      mode: agent.profile?.mode,
+      symbol: agent.profile?.symbol,
+      hasPosition: !!agent.pos,
+    }));
+  }
 }
 
 export const AgentHub = new AgentsHub();
-

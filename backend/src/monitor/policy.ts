@@ -1,6 +1,7 @@
 import { broadcast } from '../ws/hub.js';
 import { AgentHub } from '../agent/hub.js';
 import { getConfig } from '../utils/env.js';
+import { recordOpsEvent } from './ops.js';
 
 export type PolicyAlert = {
   id: string;
@@ -48,6 +49,16 @@ export async function emitAlert(params: { sessionId?: string; symbol?: string; k
     details: params.details,
     ts: Date.now(),
   };
+  if (params.severity === 'high') {
+    recordOpsEvent({
+      level: 'error',
+      source: 'alert',
+      message: params.kind,
+      sessionId: params.sessionId,
+      symbol: params.symbol,
+      details: params.details,
+    });
+  }
   await pushAlert(a);
 }
 

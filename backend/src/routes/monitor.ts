@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { recentAlerts, clearAlertsMemory } from '../monitor/policy.js';
+import { computeMonitorAnalytics } from '../monitor/analytics.js';
 import { prisma } from '../db/client.js';
 import { llmJSON } from '../ai/llm.js';
 
@@ -25,6 +26,43 @@ router.get('/alerts', async (req,res)=>{
     return res.json(rows.map(r => ({ id: r.id, sessionId: r.sessionId, symbol: r.symbol, kind: r.kind, severity: r.severity, details: r.details, ts: new Date(r.createdAt).getTime() })));
   } catch {}
   res.json(recentAlerts(sessionId || undefined));
+});
+
+// Aggregated analytics for monitor mini-panels & health banner
+router.get('/analytics', async (req,res)=>{
+  const sessionId = String(req.query.sessionId || '');
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  try {
+    const data = await computeMonitorAnalytics(sessionId);
+    res.json(data);
+  } catch (e:any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+router.get('/reports/daily/list', async (req,res)=>{
+  const sessionId = String(req.query.sessionId || '');
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  const limitRaw = Number(req.query.limit ?? 30);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(120, limitRaw)) : 30;
+  try {
+    const rows = await prisma.dailyReport.findMany({
+      where: { sessionId },
+      orderBy: { day: 'desc' },
+      take: limit,
+    });
+    const out = rows.map((r) => ({
+      day: r.day,
+      sessionId: r.sessionId,
+      stats: r.stats,
+      llm: r.llm,
+      createdAt: r.createdAt,
+      persisted: true,
+    }));
+    res.json(out);
+  } catch (e:any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
 });
 
 // Administrative: purge in-memory alerts buffer (does not touch DB)
@@ -63,6 +101,8 @@ router.get('/reports/daily', async (req,res)=>{
     const winRate = P.length ? wins/P.length : 0;
     const expectancy = (winRate * avgWin) + ((1-winRate) * (avgLoss||0));
     const pnlUsd = (fills||[]).reduce((s,f)=> s + Number(f.realizedPnl||0), 0);
+    const baseEquity = Number(sess?.startBalanceUsd || 0);
+    const roiPct = baseEquity > 0 ? (pnlUsd / baseEquity) * 100 : undefined;
     const alertCounts = alerts.reduce((m:any,a)=> (m[a.kind]=(m[a.kind]||0)+1, m), {} as Record<string,number>);
 
     // LLM audit prompt
@@ -75,7 +115,7 @@ router.get('/reports/daily', async (req,res)=>{
 
     const payload = {
       date, sessionId, symbol: sess?.symbol,
-      stats: { trades: P.length, winRate, avgWin, avgLoss, expectancy, pnlUsd },
+      stats: { trades: P.length, winRate, avgWin, avgLoss, expectancy, pnlUsd, roiPct },
       alerts: { counts: alertCounts, recent: alerts.slice(0,20) },
       llm: llm || {
         summary: 'Daily audit generated without LLM.',

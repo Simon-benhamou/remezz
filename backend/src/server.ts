@@ -15,6 +15,7 @@ import { router as analysisRouter } from "./routes/analysis.js";
 import { router as simRouter } from "./routes/sim.js";
 import { router as monitorRouter } from "./routes/monitor.js";
 import { router as llmTestRouter } from "./routes/llmTest.js";
+import { router as opsRouter } from "./routes/ops.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 const cfg = getConfig();
@@ -80,6 +81,7 @@ app.use("/api/analysis", analysisRouter);
 app.use("/api/sim", simRouter);
 app.use("/api/monitor", monitorRouter);
 app.use("/api/llm", llmTestRouter);
+app.use("/api/ops", opsRouter);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
