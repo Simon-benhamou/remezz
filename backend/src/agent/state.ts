@@ -3,7 +3,7 @@ import { validatePlan, ValidatedPlan } from './validator.js';
 import { PaperBroker } from '../broker/paper.js';
 import { LiveBroker, inspectExposure, getCapacityPressure } from '../broker/live.js';
 import { Broker } from '../broker/types.js';
-import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.js';
+import { assessRisk, computeQtyNotional, defaultLimits, RiskDecision } from '../risk/manager.js';
 import { computeAdaptiveRisk, AdaptiveRiskResult } from '../risk/adaptive.js';
 import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
@@ -68,6 +68,8 @@ export class ReboundRejectionAgent {
   private killSwitchContext: { reason: string; details?: any } | null = null;
   private haltAckRequired = false;
   private recoveryTimer: NodeJS.Timeout | null = null;
+  private cooldownTimer: NodeJS.Timeout | null = null;
+  private cooldownContext: { reason: string; guard?: RiskDecision; triggeredAt: number } | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -80,6 +82,8 @@ export class ReboundRejectionAgent {
     this.profile = profile;
     this.haltAckRequired = false;
     if (this.recoveryTimer) { try { clearTimeout(this.recoveryTimer); } catch {} this.recoveryTimer = null; }
+    if (this.cooldownTimer) { try { clearTimeout(this.cooldownTimer); } catch {} this.cooldownTimer = null; }
+    this.cooldownContext = null;
     if (profile.maxLeverage > 5) throw new Error('maxLeverage>5 not allowed');
     if (profile.riskPerTradePct < 1 || profile.riskPerTradePct > 2) throw new Error('risk/trade must be 1-2%');
     if (profile.dailyLossLimitPct < 3 || profile.dailyLossLimitPct > 4) throw new Error('daily loss must be 3-4%');
@@ -973,15 +977,32 @@ export class ReboundRejectionAgent {
     broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     // back to SCAN unless guardrails trip
     const guard = await assessRisk({ sessionId: 'n/a', dateKey: new Date().toISOString().slice(0,10), realizedPnlPctToday: this.realizedPnlTodayPct, consecutiveStops: this.consecutiveStops, tradesToday: this.tradesToday });
-    if (!guard.ok && guard.action === 'halt') {
-      await this.engageKillSwitch(guard.reason || 'risk_guard', { guard });
-      return;
+    if (!guard.ok) {
+      if (guard.action === 'halt') {
+        await this.engageKillSwitch(guard.reason || 'risk_guard', { guard });
+        return;
+      }
+      if (guard.action === 'cooldown') {
+        this.enterRiskCooldown(guard);
+        return;
+      }
+      if (guard.action === 'warn') {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'risk_guard',
+          message: guard.reason || 'risk_guard_warn',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: guard,
+        });
+      }
     }
-    // After removal of entry limiting logic, still respect catastrophic halt, otherwise go to SCAN
-    this.state = guard.ok ? 'SCAN' : (guard.action === 'halt' ? 'HALT' : 'SCAN');
+
+    this.state = 'SCAN';
     broadcast('agent_state', { state: this.state, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
 
-    if (!opts?.suppressRearm) {
+    const canRearm = guard.ok || guard.action === 'warn';
+    if (!opts?.suppressRearm && canRearm) {
       // Immediately request a fresh strategy after an exit (force to bypass cool-down)
       try {
         await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price, force: true });
@@ -998,8 +1019,199 @@ export class ReboundRejectionAgent {
     }
   }
 
+  private enterRiskCooldown(guard: RiskDecision) {
+    recordOpsEvent({
+      level: 'warn',
+      source: 'risk_guard',
+      message: guard.reason || 'risk_guard_cooldown',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: guard,
+    });
+    this.stopCooldownWatcher();
+    this.state = 'COOLDOWN';
+    this.cooldownContext = { reason: guard.reason || 'risk_guard', guard, triggeredAt: Date.now() };
+    broadcast('agent_state', { state: this.state, reason: guard.reason || 'risk_guard', guard }, this.profile?.symbol, this.sessionId || undefined);
+    this.startCooldownWatcher();
+  }
+
+  private startCooldownWatcher(delayMs?: number) {
+    if (!this.profile) return;
+    if (this.cooldownTimer) { try { clearTimeout(this.cooldownTimer); } catch {} }
+    const interval = Math.max(60_000, Number(process.env.AGENT_COOLDOWN_RECHECK_MS || 180_000));
+    const wait = Math.max(15_000, delayMs ?? interval);
+    this.cooldownTimer = setTimeout(() => {
+      this.cooldownTimer = null;
+      this.evaluateCooldownReactivation().catch(()=>{});
+    }, wait);
+  }
+
+  private stopCooldownWatcher() {
+    if (this.cooldownTimer) {
+      try { clearTimeout(this.cooldownTimer); } catch {}
+      this.cooldownTimer = null;
+    }
+  }
+
+  private async evaluateCooldownReactivation() {
+    if (!this.profile || this.state !== 'COOLDOWN') return;
+    const interval = Math.max(60_000, Number(process.env.AGENT_COOLDOWN_RECHECK_MS || 180_000));
+    try {
+      const candidate = await this.computeCooldownCandidate();
+      const minConfidence = this.getCooldownConfidenceThreshold();
+      if (candidate && candidate.confidence >= minConfidence) {
+        await this.exitCooldownWithPlan(candidate);
+        return;
+      }
+    } catch (err) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'risk_guard',
+        message: 'cooldown_reactivate_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { error: String((err as any)?.message || err) },
+      });
+    }
+    this.startCooldownWatcher(interval);
+  }
+
+  private getCooldownConfidenceThreshold() {
+    const raw = Number(process.env.AGENT_COOLDOWN_CONFIDENCE_MIN ?? '');
+    if (Number.isFinite(raw) && raw > 0 && raw < 1) return raw;
+    return 0.65;
+  }
+
+  private async exitCooldownWithPlan(candidate: { plan: PlanJson; confidence: number; components: { planScore: number; momentumScore: number; quickTest?: any; momentum?: any } }): Promise<void> {
+    if (!this.profile) return;
+    this.stopCooldownWatcher();
+    const prev = this.cooldownContext;
+    this.cooldownContext = null;
+    if (prev?.reason === 'consecutive_stops') this.consecutiveStops = 0;
+    if (prev?.reason === 'trades_cap') this.tradesToday = Math.max(0, this.tradesToday - 1);
+    recordOpsEvent({
+      level: 'info',
+      source: 'risk_guard',
+      message: 'cooldown_reactivate',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile.symbol,
+      details: { confidence: candidate.confidence, components: candidate.components, prev },
+    });
+    this.state = 'SCAN';
+    broadcast('agent_state', { state: this.state, reason: 'cooldown_reactivate', confidence: candidate.confidence, components: candidate.components }, this.profile.symbol, this.sessionId || undefined);
+    try {
+      await this.propose(candidate.plan as any);
+      await this.validateAndArm();
+    } catch (err) {
+      recordOpsEvent({
+        level: 'error',
+        source: 'risk_guard',
+        message: 'cooldown_rearm_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { error: String((err as any)?.message || err), confidence: candidate.confidence },
+      });
+      this.startCooldownWatcher();
+    }
+  }
+
+  private async computeCooldownCandidate(): Promise<{ plan: PlanJson; confidence: number; components: { planScore: number; momentumScore: number; quickTest?: any; momentum?: any } } | null> {
+    if (!this.profile) return null;
+    let plan: PlanJson;
+    try {
+      plan = await this.buildPlan({ fresh: true });
+    } catch (err) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'risk_guard',
+        message: 'cooldown_plan_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { error: String((err as any)?.message || err) },
+      });
+      return null;
+    }
+    if (!plan || (plan as any).bias === 'none') return null;
+    const snap = await buildTechSnapshot(this.profile.symbol);
+    const planQuality = this.scorePlanQuality(plan);
+    const momentum = this.scoreMomentum(plan, snap);
+    const confidence = Math.min(1, planQuality.score + momentum.score);
+    return { plan, confidence, components: { planScore: planQuality.score, momentumScore: momentum.score, quickTest: planQuality.quickTest, momentum: momentum.details } };
+  }
+
+  private scorePlanQuality(plan: PlanJson): { score: number; quickTest?: any } {
+    let score = 0;
+    const planMeta: any = (plan as any)?.meta || (plan as any)?.plan?.meta || {};
+    const quickTest = planMeta?.quickTest;
+    if (quickTest) {
+      const count = Number(quickTest.count ?? 0);
+      const winrate = Number(quickTest.winrate ?? 0);
+      const avgR = Number(quickTest.avgR ?? 0);
+      const avgMAE = Number(quickTest.avgMAE_R ?? 0);
+      const avgMFE = Number(quickTest.avgMFE_R ?? 0);
+      if (count >= 6) score += 0.2;
+      if (winrate >= 45) score += 0.2;
+      if (winrate >= 55) score += 0.05;
+      if (avgR >= 0.4) score += 0.2;
+      if (avgR >= 0.7) score += 0.05;
+      if (avgMAE > -1.1) score += 0.025;
+      if (avgMFE >= 1.2) score += 0.025;
+    } else {
+      score += 0.1;
+    }
+    const riskFraction = Number((plan as any)?.position?.risk_fraction ?? 0);
+    if (riskFraction > 0 && riskFraction <= 0.02) score += 0.05;
+    if (riskFraction > 0 && riskFraction <= 0.015) score += 0.05;
+    return { score: Math.min(score, 0.5), quickTest };
+  }
+
+  private scoreMomentum(plan: PlanJson, snap: TechnicalSnapshot): { score: number; details: { adx: number; slopePct: number; priceVsEmaPct: number; atrPct: number; realizedVol: number; trendStrength: number; srBias: any; reason?: string } } {
+    let score = 0;
+    const bias: 'long'|'short'|'none' = (plan as any)?.bias || 'none';
+    const srBiasEarly = (snap as any)?.srBias;
+    if (bias === 'none') return { score: 0, details: { adx: 0, slopePct: 0, priceVsEmaPct: 0, atrPct: 0, realizedVol: 0, trendStrength: 0, srBias: srBiasEarly, reason: 'no_bias' } };
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    if (adx >= 18) score += 0.18;
+    if (adx >= 24) score += 0.07;
+    const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+    const ema = Number((snap as any)?.ema20 ?? snap.last || 1);
+    const slopePct = ema !== 0 ? (emaSlope / Math.abs(ema)) * 100 : 0;
+    const slopeAligned = bias === 'long' ? slopePct > 0.02 : slopePct < -0.02;
+    const slopeStrong = bias === 'long' ? slopePct > 0.06 : slopePct < -0.06;
+    if (slopeAligned) score += 0.12;
+    if (slopeStrong) score += 0.08;
+    const priceVsEmaPct = ema !== 0 ? ((snap.last - ema) / Math.abs(ema)) * 100 : 0;
+    const priceAligned = bias === 'long' ? priceVsEmaPct > 0.15 : priceVsEmaPct < -0.15;
+    if (priceAligned) score += 0.07;
+    const atrPct = Number((snap as any)?.atrPct ?? 0);
+    if (atrPct >= 1.2) score += 0.05;
+    else if (atrPct >= 0.8) score += 0.03;
+    const realizedVol = Number((snap as any)?.realizedVol ?? 0);
+    if (realizedVol >= 18) score += 0.05;
+    else if (realizedVol >= 12) score += 0.03;
+    const trendStrength = Number((snap as any)?.trendStrength ?? 0);
+    if ((bias === 'long' && trendStrength > 0.2) || (bias === 'short' && trendStrength < -0.2)) score += 0.05;
+    const srBias = srBiasEarly;
+    if (bias === 'long' && srBias === 'nearSupport') score += 0.02;
+    if (bias === 'short' && srBias === 'nearResistance') score += 0.02;
+    return {
+      score: Math.min(score, 0.5),
+      details: {
+        adx,
+        slopePct,
+        priceVsEmaPct,
+        atrPct,
+        realizedVol,
+        trendStrength,
+        srBias,
+      },
+    };
+  }
+
   private async engageKillSwitch(reason: string, details?: any) {
     if (this.state === 'HALT') return;
+    this.stopCooldownWatcher();
+    this.cooldownContext = null;
     this.killSwitchContext = { reason, details };
     if (this.pos && this.profile) {
       try {
@@ -1028,7 +1240,11 @@ export class ReboundRejectionAgent {
     this.scheduleRecovery(reason, details);
   }
 
-  halt() { this.state = 'HALT'; }
+  halt() {
+    this.state = 'HALT';
+    this.stopCooldownWatcher();
+    this.cooldownContext = null;
+  }
 
   private async buildPlan(opts?: { fresh?: boolean; bypassAck?: boolean }) {
     if (this.haltAckRequired && !opts?.bypassAck) {
