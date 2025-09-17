@@ -14,6 +14,7 @@ import { getAICallsCount } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { recordOpsEvent } from '../monitor/ops.js';
+import { logImprovementAuto } from '../monitor/backlog.js';
 import type { RegimeProfile } from '../ai/regime.js';
 import { getTicker } from '../data/market.js';
 import type { PlacedOrder } from '../broker/types.js';
@@ -898,6 +899,17 @@ export class ReboundRejectionAgent {
     try {
       recordOpsEvent({ level: 'error', source: 'kill_switch', message: reason, sessionId: this.sessionId || undefined, symbol: this.profile?.symbol, details });
     } catch {}
+    await logImprovementAuto({
+      title: `Kill switch triggered: ${reason}`,
+      description: `Agent halted on symbol ${this.profile?.symbol || 'unknown'} due to ${reason}.`,
+      severity: 'high',
+      tags: ['risk', 'halt'],
+      context: {
+        sessionId: this.sessionId,
+        symbol: this.profile?.symbol,
+        details,
+      },
+    });
     broadcast('agent_state', { state: this.state, killSwitch: reason }, this.profile?.symbol, this.sessionId || undefined);
   }
 

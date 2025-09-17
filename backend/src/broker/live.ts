@@ -2,6 +2,7 @@ import { Broker, NewOrder, PlacedOrder } from './types.js';
 import { exchange, resolveSymbol } from '../exchange/ccxtClient.js';
 import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
+import { logImprovementAuto } from '../monitor/backlog.js';
 
 // Minimal ccxt-backed live broker (spot or swap per env config)
 export class LiveBroker implements Broker {
@@ -83,7 +84,15 @@ export class LiveBroker implements Broker {
         order = await ex.createOrder(symbol, 'limit', o.side, o.qty, o.price, limitParams);
       }
     } catch (e: any) {
-      try { await emitAlert({ kind:'capacity_breach' as any, severity:'med', details: { error: String(e?.message||e), symbol, side:o.side, qty:o.qty }, }); } catch {}
+      const details = { error: String(e?.message||e), symbol, side: o.side, qty: o.qty };
+      try { await emitAlert({ kind:'capacity_breach' as any, severity:'med', details }); } catch {}
+      await logImprovementAuto({
+        title: 'Capacity breach when placing order',
+        description: `Exchange rejected order ${o.side} ${o.qty} ${symbol}.`,
+        severity: 'high',
+        tags: ['execution', 'capacity'],
+        context: details,
+      });
       return { ...o, id: 'rejected', status: 'rejected', ts: Date.now() };
     }
 
