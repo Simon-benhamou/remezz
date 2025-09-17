@@ -800,6 +800,13 @@ export class ReboundRejectionAgent {
     const pnlPct = (pnl / Math.max(1, startEquity)) * 100;
     this.realizedPnlTodayPct += pnlPct;
     this.consecutiveStops = reason === 'sl' ? (this.consecutiveStops + 1) : 0;
+    // Cancel protective orders before exiting to avoid stray reduce-only orders on the exchange
+    try {
+      if (this.pos.slOrderId) await this.broker.cancel(this.pos.slOrderId).catch(()=>{});
+      if (this.pos.tpOrderId) await this.broker.cancel(this.pos.tpOrderId).catch(()=>{});
+    } catch {}
+    this.pos.slOrderId = undefined;
+    this.pos.tpOrderId = undefined;
     // Place actual closing order (market) with opposite side
     const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
     const requestQty = this.pos.qty;
