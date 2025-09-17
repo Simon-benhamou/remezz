@@ -9,7 +9,8 @@ import SessionsPage from './pages/SessionsPage';
 import TestingPage from './pages/TestingPage';
 import ReportsPage from './pages/ReportsPage';
 import TradesJournalPage from './pages/TradesJournalPage';
-import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined } from '@ant-design/icons';
+import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
+import BacklogPage from './pages/BacklogPage';
   const { Header, Content, Footer } = Layout;
 
 function AppInner(){
@@ -49,6 +50,7 @@ function AppInner(){
     { key: '/reports', label: 'Reports', icon: <FileTextOutlined /> },
     { key: '/journal', label: 'Journal', icon: <ReadOutlined /> },
     { key: '/testing', label: 'Testing', icon: <BulbOutlined /> },
+    { key: '/backlog', label: 'Backlog', icon: <WarningOutlined /> },
   ];
 
   return (
@@ -140,6 +142,7 @@ function AppInner(){
             <Route path='/reports' element={<ReportsPage />} />
             <Route path='/journal' element={<TradesJournalPage />} />
             <Route path='/testing' element={<TestingPage />} />
+            <Route path='/backlog' element={<BacklogPage />} />
             <Route path='*' element={<Navigate to='/dashboard' replace />} />
           </Routes>
         </Content>

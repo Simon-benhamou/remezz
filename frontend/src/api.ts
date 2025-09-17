@@ -100,4 +100,12 @@ export const api = {
     (await client.get('/api/ops/events', { params: { limit } })).data,
   getOpsLlmLogs: async (limit = 25) =>
     (await client.get('/api/ops/llm/logs', { params: { limit } })).data,
+  listImprovements: async (status?: string) =>
+    (await client.get('/api/improvements', { params: { status } })).data,
+  createImprovement: async (payload: any) =>
+    (await client.post('/api/improvements', payload)).data,
+  updateImprovement: async (id: string, payload: any) =>
+    (await client.put(`/api/improvements/${id}`, payload)).data,
+  deleteImprovement: async (id: string) =>
+    (await client.delete(`/api/improvements/${id}`)).data,
 };
