@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, List, Space, Tag } from 'antd';
+import { Alert, List, Space, Tag, Tooltip } from 'antd';
 
 type Health = {
   level: 'ok' | 'warn' | 'alert';
@@ -40,12 +40,7 @@ export default function MonitorHealthBanner({ health, updatedAt }: Props) {
     <Alert
       type={alertType[health.level]}
       showIcon
-      message={(
-        <Space size='small'>
-          <span style={{ fontWeight: 600 }}>{health.headline}</span>
-          <Tag color='blue' style={{ marginLeft: 8 }}>Updated {formatAgo(updatedAt)}</Tag>
-        </Space>
-      )}
+      message={<Tooltip title="Synthèse de l'état du bot (risques, anomalies, santé des positions)"><Space size='small'><span style={{ fontWeight: 600 }}>{health.headline}</span><Tag color='blue' style={{ marginLeft: 8 }}>Updated {formatAgo(updatedAt)}</Tag></Space></Tooltip>}
       description={(
         <List
           size='small'

@@ -29,24 +29,24 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
   const alerts = metrics.alerts || {};
   const agents = metrics.agents || {};
   return (
-    <Card title='Ops metrics' loading={loading} style={{ borderRadius: 12 }}>
+    <Card title={<Tooltip title="Santé opérationnelle : infrastructure & agents">Ops metrics</Tooltip>} loading={loading} style={{ borderRadius: 12 }}>
       <Row gutter={[12, 12]}>
-        <Col xs={12} md={6}><Statistic title='Uptime' value={formatUptime(metrics.uptimeSec)} /></Col>
-        <Col xs={12} md={6}><Statistic title='Load (1m)' value={Number(metrics.loadAvg || 0).toFixed(2)} /></Col>
-        <Col xs={12} md={6}><Statistic title='Memory RSS' value={formatBytes(mem.rss)} /></Col>
-        <Col xs={12} md={6}><Statistic title='Heap used' value={formatBytes(mem.heapUsed)} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Temps écoulé depuis le démarrage du backend">Uptime</Tooltip>} value={formatUptime(metrics.uptimeSec)} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Charge CPU moyenne sur la dernière minute">Load (1m)</Tooltip>} value={Number(metrics.loadAvg || 0).toFixed(2)} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Mémoire totale occupée par le processus Node.js">Memory RSS</Tooltip>} value={formatBytes(mem.rss)} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Mémoire JavaScript active (heap)">Heap used</Tooltip>} value={formatBytes(mem.heapUsed)} /></Col>
       </Row>
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-        <Col xs={12} md={6}><Statistic title='Active sessions' value={sessions.active || 0} /></Col>
-        <Col xs={12} md={6}><Statistic title='Managing agents' value={sessions.managing || 0} /></Col>
-        <Col xs={12} md={6}><Statistic title='Halted agents' value={sessions.halted || 0} valueStyle={{ color: sessions.halted ? '#b91c1c' : undefined }} /></Col>
-        <Col xs={12} md={6}><Statistic title='Agents total' value={agents.total || 0} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Nombre d'agents actifs (sessions en cours)">Active sessions</Tooltip>} value={sessions.active || 0} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Agents actuellement en gestion de position">Managing agents</Tooltip>} value={sessions.managing || 0} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Agents stoppés par un kill switch ou arrêt manuel">Halted agents</Tooltip>} value={sessions.halted || 0} valueStyle={{ color: sessions.halted ? '#b91c1c' : undefined }} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Nombre total d'agents suivis">Agents total</Tooltip>} value={agents.total || 0} /></Col>
       </Row>
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-        <Col xs={12} md={6}><Statistic title='Open positions' value={positions.open || 0} /></Col>
+        <Col xs={12} md={6}><Statistic title={<Tooltip title="Positions actuellement ouvertes">Open positions</Tooltip>} value={positions.open || 0} /></Col>
         <Col xs={12} md={6}>
           <Statistic
-            title='Protective issues'
+            title={<Tooltip title="Positions dont les ordres stop/TP sont en anomalie">Protective issues</Tooltip>}
             value={positions.protectiveIssues || 0}
             valueStyle={{ color: (positions.protectiveIssues || 0) > 0 ? '#d97706' : undefined }}
           />

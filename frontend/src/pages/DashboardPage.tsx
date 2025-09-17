@@ -5,12 +5,14 @@ import { api } from '../api';
 import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
 import OpsEventsList from '../components/OpsEventsList';
+import OpsLLMPanel from '../components/OpsLLMPanel';
 
 export default function DashboardPage(){
   const [ov, setOv] = React.useState<any>({});
   const [loading, setLoading] = React.useState<boolean>(true);
   const [opsMetrics, setOpsMetrics] = React.useState<any>(null);
   const [opsEvents, setOpsEvents] = React.useState<any[]>([]);
+  const [opsLlmLogs, setOpsLlmLogs] = React.useState<any[]>([]);
   const [opsLoading, setOpsLoading] = React.useState<boolean>(true);
   const loadedRef = React.useRef(false);
   const navigate = useNavigate();
@@ -25,12 +27,14 @@ export default function DashboardPage(){
   const loadOps = React.useCallback(async ()=>{
     try {
       setOpsLoading(true);
-      const [metrics, events] = await Promise.all([
+      const [metrics, events, llmLogs] = await Promise.all([
         api.getOpsMetrics().catch(()=>null),
         api.getOpsEvents().catch(()=>[]),
+        api.getOpsLlmLogs().catch(()=>[]),
       ]);
       if (metrics) setOpsMetrics(metrics);
       if (events) setOpsEvents(events);
+      if (llmLogs) setOpsLlmLogs(llmLogs);
     } finally {
       setOpsLoading(false);
     }
@@ -77,8 +81,11 @@ export default function DashboardPage(){
         <Col xs={24} md={8}><Card loading={loading}><Statistic title='Total open risk (USD)' precision={2} value={Number(ov?.totalOpenRiskUsd||0)} /></Card></Col>
       </Row>
       <Row gutter={[12,12]}>
-        <Col xs={24} lg={16}><OpsMetricsPanel metrics={opsMetrics} loading={opsLoading} /></Col>
-        <Col xs={24} lg={8}><OpsEventsList events={opsEvents} loading={opsLoading} onRefresh={loadOps} /></Col>
+        <Col xs={24} lg={12}><OpsMetricsPanel metrics={opsMetrics} loading={opsLoading} /></Col>
+        <Col xs={24} lg={12}><OpsEventsList events={opsEvents} loading={opsLoading} onRefresh={loadOps} /></Col>
+      </Row>
+      <Row gutter={[12,12]}>
+        <Col xs={24}><OpsLLMPanel rows={opsLlmLogs} loading={opsLoading} onRefresh={loadOps} /></Col>
       </Row>
       <Row gutter={[12,12]}>
         <Col xs={24} md={12}>

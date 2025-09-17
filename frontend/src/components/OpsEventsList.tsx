@@ -17,7 +17,7 @@ type Props = {
 export default function OpsEventsList({ events = [], loading, onRefresh }: Props) {
   return (
     <Card
-      title='Ops events'
+      title={<Tooltip title="Événements opérationnels générés par l'agent (kill switch, erreurs, etc.)">Ops events</Tooltip>}
       loading={loading}
       style={{ borderRadius: 12 }}
       extra={onRefresh ? <a onClick={onRefresh}>Refresh</a> : null}

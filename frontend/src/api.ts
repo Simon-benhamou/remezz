@@ -98,4 +98,6 @@ export const api = {
     (await client.get('/api/ops/metrics')).data,
   getOpsEvents: async (limit = 50) =>
     (await client.get('/api/ops/events', { params: { limit } })).data,
+  getOpsLlmLogs: async (limit = 25) =>
+    (await client.get('/api/ops/llm/logs', { params: { limit } })).data,
 };
