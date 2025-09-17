@@ -1,5 +1,6 @@
 import { PlanJson } from './planSchema.js';
 import { buildTechSnapshot } from '../ai/tech.js';
+import type { RegimeProfile } from '../ai/regime.js';
 import { sizeUsd } from '../risk/sizing.js';
 import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
@@ -25,6 +26,7 @@ export type ValidatedPlan = {
     leverageOk: boolean;
     volumeOk: boolean | null; // null if unknown
   };
+  regime?: RegimeProfile;
 };
 
 export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
@@ -78,6 +80,11 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   }
   const leverageOk = plan.position.max_leverage <= 5;
 
+  const regime = snap.regime;
+  if (regime) {
+    plan.meta = { ...(plan.meta || {}), playbook: regime.playbook, regime: regime.trend, volatility: regime.volatility };
+  }
+
   return {
     plan,
     symbol: plan.symbol,
@@ -91,5 +98,6 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
     entryOkNow: false,
     sizing: { riskPct, maxLev: plan.position.max_leverage, notionalUsd },
     guards: { spreadOk, leverageOk, volumeOk: null },
+    regime,
   };
 }

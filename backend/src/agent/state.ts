@@ -4,6 +4,7 @@ import { PaperBroker } from '../broker/paper.js';
 import { LiveBroker, inspectExposure } from '../broker/live.js';
 import { Broker } from '../broker/types.js';
 import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.js';
+import { computeAdaptiveRisk, AdaptiveRiskResult } from '../risk/adaptive.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
 import { recordEnter, recordExit, updateProtectiveSnapshot, loadActivePosition } from './persistence.js';
@@ -13,6 +14,7 @@ import { getAICallsCount } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { recordOpsEvent } from '../monitor/ops.js';
+import type { RegimeProfile } from '../ai/regime.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -56,6 +58,8 @@ export class ReboundRejectionAgent {
   private entering = false;
   sessionId: string | null = null;
   private breakoutTicks = 0; // consecutive ticks confirming breakout
+  regime: RegimeProfile | null = null;
+  private adaptiveRisk: AdaptiveRiskResult | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -81,12 +85,20 @@ export class ReboundRejectionAgent {
     if (this.state !== 'SCAN' && this.state !== 'PROPOSE') return;
     this.state = 'PROPOSE';
     this.plan = await validatePlan(plan);
+    this.regime = this.plan.regime ?? null;
     this.state = 'VALIDATE';
   }
 
   async validateAndArm() {
     if (!this.profile || !this.plan) throw new Error('no plan');
     await this.restorePersistedPosition();
+    this.regime = this.plan.regime ?? null;
+    if (this.regime && this.regime.playbook === 'standby') {
+      this.state = 'COOLDOWN';
+      broadcast('agent_state', { state: this.state, plan: this.plan, reason: 'regime_standby' }, this.profile.symbol, this.sessionId || undefined);
+      recordOpsEvent({ level: 'info', source: 'regime', message: 'Standby regime detected - pausing entries', sessionId: this.sessionId || undefined, symbol: this.profile.symbol, details: this.regime });
+      return;
+    }
     // If a position already exists, don't re-arm — keep managing
     if (this.pos) {
       this.state = 'MANAGE';
@@ -97,7 +109,7 @@ export class ReboundRejectionAgent {
     // Bypass risk / spread / leverage gating per user request
     this.state = 'ARMED';
     const aiCalls = await getAICallsCount(this.sessionId || undefined);
-    broadcast('agent_state', { state: this.state, plan: this.plan, aiCalls }, this.profile.symbol, this.sessionId || undefined);
+    broadcast('agent_state', { state: this.state, plan: this.plan, regime: this.regime, aiCalls }, this.profile.symbol, this.sessionId || undefined);
 
     // Live exposure inspection: if in live mode and a position already exists, adopt it and switch to MANAGE
     if (this.profile.mode === 'live' && !this.pos) {
@@ -139,12 +151,22 @@ export class ReboundRejectionAgent {
     if (!this.profile || !this.plan) return;
     if (this.state !== 'ARMED' && this.state !== 'MANAGE') return;
     const snap = await buildTechSnapshot(this.profile.symbol);
+    if (snap.regime) this.regime = snap.regime;
+    if (this.regime && !this.regime.shouldTrade) {
+      if (this.state === 'ARMED') {
+        this.state = 'COOLDOWN';
+        broadcast('agent_state', { state: this.state, plan: this.plan, reason: 'regime_standby' }, this.profile.symbol, this.sessionId || undefined);
+      }
+      return;
+    }
     const price = snap.last;
     const { from, to, mid } = this.plan.zone;
+    const playbook = this.plan.plan.meta?.playbook || this.regime?.playbook || 'mean_reversion';
 
     if (this.state === 'ARMED') {
       // Safety: if a position is somehow set, switch to MANAGE
       if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); return; }
+      if (this.plan.bias === 'none') return;
       const inZone = price >= Math.min(from,to) && price <= Math.max(from,to);
       // Entry filters: basic RSI/ADX gates to avoid weak/contrarian entries
       const cfg = getConfig();
@@ -155,9 +177,17 @@ export class ReboundRejectionAgent {
         if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_LONG_MIN_ADX) return;
         if ((snap as any).rsi14 != null && (snap as any).rsi14 > cfg.ENTRY_LONG_MAX_RSI) return;
       }
-      // simple confirmation: bias-aligned close beyond zone mid
-      const confirm = this.plan.plan.entry_rule.confirm_close && ((this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid));
-      if (inZone && confirm) await this.enter(price);
+      if (playbook === 'momentum_breakout') {
+        const upper = Math.max(from, to);
+        const lower = Math.min(from, to);
+        const breakoutLong = this.plan.bias === 'long' && price > upper;
+        const breakoutShort = this.plan.bias === 'short' && price < lower;
+        if (breakoutLong || breakoutShort) await this.enter(price);
+      } else {
+        // simple confirmation: bias-aligned close beyond zone mid
+        const confirm = this.plan.plan.entry_rule.confirm_close && ((this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid));
+        if (inZone && confirm) await this.enter(price);
+      }
     } else if (this.state === 'MANAGE') {
       await this.manage(price, snap);
     }
@@ -165,6 +195,7 @@ export class ReboundRejectionAgent {
 
   async enter(mktPrice: number) {
     if (!this.broker || !this.plan || !this.profile) return;
+    if (this.regime && !this.regime.shouldTrade) return;
     // Prevent duplicate entries
     if (this.pos || this.entering) return;
     this.entering = true;
@@ -178,7 +209,22 @@ export class ReboundRejectionAgent {
     const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
     const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
     const usableBalance = Math.max(0, Math.min(bal.freeUsd, bal.freeUsd * budgetFrac));
-    const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: this.profile.riskPerTradePct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
+    let dynamicRiskPct = this.profile.riskPerTradePct;
+    try {
+      this.adaptiveRisk = await computeAdaptiveRisk(this.sessionId, this.profile.riskPerTradePct);
+      dynamicRiskPct = this.adaptiveRisk.riskPct;
+      if (this.adaptiveRisk.riskPct < this.profile.riskPerTradePct * 0.75) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'risk_engine',
+          message: 'Adaptive risk reduced',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: this.adaptiveRisk,
+        });
+      }
+    } catch {}
+    const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
     const qty = notional / entry;
     const startTs = Date.now();
     const placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: this.profile.maxLeverage, takeProfit: tp[0], stopLoss: stop });
@@ -240,7 +286,7 @@ export class ReboundRejectionAgent {
     } catch {}
     this.state = 'MANAGE';
     this.tradesToday += 1;
-    broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
+    broadcast('agent_state', { state: this.state, pos: this.pos, regime: this.regime, adaptiveRisk: this.adaptiveRisk, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     await this.syncProtectiveOrders('entry');
     this.entering = false;
   }

@@ -1,6 +1,7 @@
 // backend/src/ai/tech.ts
 import { getOHLCV } from '../data/market.js';
 import { ema, rsi, atr, adx } from '../data/indicators.js';
+import { classifyRegime, RegimeProfile } from './regime.js';
 
 export type TechnicalSnapshot = {
   symbol: string;
@@ -21,6 +22,11 @@ export type TechnicalSnapshot = {
   trend: number;
   srBias: 'nearSupport'|'nearResistance'|'neutral';
   meta: { tf: string; windowBars: number; recentBarsFor24h: number };
+  realizedVol: number;
+  hurst: number;
+  adxSlope: number;
+  trendStrength: number;
+  regime?: RegimeProfile;
 };
 
 // Utilities
@@ -32,6 +38,39 @@ function pct(a: number, b: number) {
 }
 function near(a: number, b: number, pPct: number) {
   return Math.abs(a - b) <= Math.abs(b) * (pPct / 100);
+}
+
+function realizedVolatility(logReturns: number[]) {
+  if (!logReturns.length) return 0;
+  const mean = logReturns.reduce((a, b) => a + b, 0) / logReturns.length;
+  const variance = logReturns.reduce((acc, r) => acc + Math.pow(r - mean, 2), 0) / logReturns.length;
+  const stdev = Math.sqrt(variance);
+  // 15m bars → 96 periods per day. Return expressed in %.
+  return stdev * Math.sqrt(96) * 100;
+}
+
+function hurstExponent(values: number[]) {
+  const n = values.length;
+  if (n < 32) return 0.5;
+  const mean = values.reduce((a, b) => a + b, 0) / n;
+  let cumulative = 0;
+  let maxAccum = -Infinity;
+  let minAccum = Infinity;
+  let varianceAccumulator = 0;
+  for (let i = 0; i < n; i++) {
+    const dev = values[i] - mean;
+    cumulative += dev;
+    if (cumulative > maxAccum) maxAccum = cumulative;
+    if (cumulative < minAccum) minAccum = cumulative;
+    varianceAccumulator += dev * dev;
+  }
+  const range = maxAccum - minAccum;
+  const variance = varianceAccumulator / n;
+  const std = Math.sqrt(Math.max(variance, 1e-12));
+  if (std === 0 || range === 0) return 0.5;
+  const rs = range / std;
+  const hurst = Math.log(rs) / Math.log(n);
+  return Math.max(0, Math.min(1, hurst));
 }
 
 // Compute daily pivots from OHLCV (prefer 1h or 15m).
@@ -191,8 +230,19 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
 
   // Trend proxy
   const trend = ema20v - ema50v;
+  const trendStrength = Math.abs(trend) / (lastPrice || 1) * 100;
+  const logReturns: number[] = [];
+  for (let i = 1; i < closes15.length; i++) {
+    const prev = closes15[i - 1];
+    const cur = closes15[i];
+    if (prev > 0 && cur > 0) logReturns.push(Math.log(cur / prev));
+  }
+  const realizedVol = realizedVolatility(logReturns);
+  const hurst = hurstExponent(closes15.slice(-256));
+  const adxPrev = adx14Arr.length >= 2 ? adx14Arr[adx14Arr.length - 2] : adx14v;
+  const adxSlope = adx14v - (adxPrev ?? adx14v);
 
-  return {
+  const snapshot: TechnicalSnapshot = {
     symbol,
     last: lastPrice,
     ema20: ema20v,
@@ -215,5 +265,13 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
       windowBars: o15.length,
       recentBarsFor24h: recent.length,
     },
-  } as TechnicalSnapshot;
+    realizedVol,
+    hurst,
+    adxSlope,
+    trendStrength,
+  };
+
+  snapshot.regime = classifyRegime(snapshot);
+
+  return snapshot;
 }

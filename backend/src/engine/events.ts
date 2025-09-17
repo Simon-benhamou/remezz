@@ -5,6 +5,8 @@ import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
 import { requestStrategy, shouldEngineRegenerate } from '../ai/strategyManager.js';
 import { broadcast } from '../ws/hub.js';
 import { AgentHub } from '../agent/hub.js';
+import { recordOpsEvent } from '../monitor/ops.js';
+import { inspectExposure } from '../broker/live.js';
 
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
@@ -121,6 +123,42 @@ async function tickOnce(sessionId: string, sym: string){
 
   return tech;
 }
+
+async function reconcileExposure(sessionId: string, symbol: string, mode: string) {
+  if (mode !== 'live') return;
+  const agent = AgentHub.get(sessionId) as any;
+  try {
+    const exposure = await inspectExposure(symbol);
+    const remoteQty = exposure?.qty || 0;
+    const remoteSide = exposure?.side || null;
+    const localQty = agent?.pos?.qty || 0;
+    const localSide = agent?.pos?.side || null;
+    const diff = Math.abs(remoteQty - localQty);
+    const tolerance = Math.max(1e-6, localQty * 0.1);
+    if (diff > tolerance || (remoteQty > 0 && localQty > 0 && remoteSide !== localSide)) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'reconciliation',
+        message: 'Exposure mismatch',
+        sessionId,
+        symbol,
+        details: { remoteQty, localQty, remoteSide, localSide },
+      });
+    }
+    if (remoteQty > 0 && !localQty) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'reconciliation',
+        message: 'Exchange shows open position but agent is flat',
+        sessionId,
+        symbol,
+        details: { remoteQty, remoteSide },
+      });
+    }
+  } catch (e) {
+    recordOpsEvent({ level: 'error', source: 'reconciliation', message: 'inspectExposure failed', sessionId, symbol, details: { error: String((e as any)?.message || e) } });
+  }
+}
 /**
  * Possibly generate a new classic strategy and PlanZ based on:
  *  - rate limit (STRATEGY_MIN_INTERVAL_MIN)
@@ -190,9 +228,21 @@ export async function startEventEngine(){
       const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null }, orderBy:{ startedAt:'asc' } });
       for (const s of sessions) {
         const sym = s.symbol || cfg.SYMBOL;
-        const tech = await tickOnce(s.id, sym);
-        lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
-        try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
+        try {
+          const tech = await tickOnce(s.id, sym);
+          lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
+          try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
+          await reconcileExposure(s.id, sym, s.mode as string);
+        } catch (err) {
+          recordOpsEvent({
+            level: 'error',
+            source: 'heartbeat',
+            message: 'Tick processing failed',
+            sessionId: s.id,
+            symbol: sym,
+            details: { error: String((err as any)?.message || err) },
+          });
+        }
       }
       // Stale data monitoring
       try {
@@ -204,6 +254,7 @@ export async function startEventEngine(){
             try {
               const { emitAlert } = await import('../monitor/policy.js');
               await emitAlert({ sessionId: s.id, symbol: s.symbol, kind:'stale_data', severity:'med', details:{ lastTickSec: Math.round((now-ts)/1000) } });
+              recordOpsEvent({ level: 'warn', source: 'heartbeat', message: 'Stale data detected', sessionId: s.id, symbol: s.symbol, details: { staleSec: Math.round((now - ts)/1000) } });
               lastTickBySession.set(s.id, now); // avoid spamming; emit at most once per window
             } catch {}
           }

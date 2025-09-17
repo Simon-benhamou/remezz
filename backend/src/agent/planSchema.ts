@@ -26,6 +26,11 @@ export const PlanZ = z.object({
     max_leverage: z.number().min(1).max(5),
   }),
   notes: z.string().optional(),
+  meta: z.object({
+    playbook: z.enum(['mean_reversion','momentum_breakout','standby']).optional(),
+    regime: z.enum(['uptrend','downtrend','range']).optional(),
+    volatility: z.enum(['low','medium','high']).optional(),
+  }).partial().optional(),
 });
 
 export type PlanJson = z.infer<typeof PlanZ>;
