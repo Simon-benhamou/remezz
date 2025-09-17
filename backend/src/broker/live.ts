@@ -191,9 +191,12 @@ export async function inspectExposure(symbol: string): Promise<{ side: 'buy'|'se
     }
   } catch {}
 
-  // Fallback (spot): infer from balances if holding base asset
+  // Fallback (spot): only infer from balances when explicitly trading spot pairs.
+  // For swaps/perps the exchange may not report positions, but using spot balances would
+  // create "ghost" exposures when residual tokens sit in the wallet. Guard with market type.
   try {
-    if (ex.markets && ex.markets[s]) {
+    const marketType = String(process.env.MARKET_TYPE || 'spot').toLowerCase();
+    if (marketType === 'spot' && ex.markets && ex.markets[s]) {
       const base = ex.markets[s].base;
       const b = await ex.fetchBalance();
       const held = Number((b?.total?.[base] ?? b?.free?.[base] ?? 0));
