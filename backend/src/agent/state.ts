@@ -93,6 +93,11 @@ export class ReboundRejectionAgent {
       ? new LiveBroker()
       : new PaperBroker(profile.startBalanceUsd);
     this.state = 'SCAN';
+    this.logMovement('Agent activated', `Mode=${profile.mode}, symbol=${profile.symbol}`, {
+      tags: ['agent', 'activation'],
+      context: { profile },
+      severity: 'low',
+    }).catch(()=>{});
   }
 
   async propose(plan: PlanJson) {
@@ -376,6 +381,23 @@ export class ReboundRejectionAgent {
         tpOrderId: this.pos.tpOrderId,
       });
     } catch {}
+
+    this.logMovement('Position entered', `${side.toUpperCase()} ${this.profile.symbol} qty=${this.pos.qty.toFixed(6)} @ ${this.formatPrice(this.pos.entry)}`, {
+      tags: ['movement', 'entry'],
+      context: {
+        sessionId: this.sessionId,
+        symbol: this.profile.symbol,
+        side,
+        qty: this.pos.qty,
+        entry: this.pos.entry,
+        stop,
+        tp,
+        executionMode,
+        telemetry,
+        adaptiveRisk: this.adaptiveRisk,
+      },
+      severity: 'medium',
+    }).catch(()=>{});
 
     this.state = 'MANAGE';
     this.tradesToday += 1;
@@ -851,6 +873,21 @@ export class ReboundRejectionAgent {
             if (this.pos.tp.length > 1) this.pos.tp = this.pos.tp.slice(1);
             await this.syncProtectiveOrders('partial');
             broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
+            this.logMovement('Partial profit taken', `${this.pos.side.toUpperCase()} ${this.profile.symbol} partial qty=${filledQty.toFixed(6)} @ ${this.formatPrice(price)}`, {
+              tags: ['movement', 'partial'],
+              context: {
+                sessionId: this.sessionId,
+                symbol: this.profile.symbol,
+                side: this.pos.side,
+                filledQty,
+                price,
+                telemetry,
+                remainingQty: this.pos.qty,
+                stop: this.pos.stop,
+                tp: this.pos.tp,
+              },
+              severity: 'low',
+            }).catch(()=>{});
           }
         }
       } catch {}
@@ -953,6 +990,23 @@ export class ReboundRejectionAgent {
       cancelCount: telemetry?.cancelCount,
       attempts: telemetry?.attempts,
     }).catch(()=>{});
+    this.logMovement('Position closed', `${this.pos.side.toUpperCase()} ${this.profile.symbol} exit reason=${reason} qty=${filledQty.toFixed(6)} @ ${this.formatPrice(price)}, pnl=${pnl.toFixed(2)}`, {
+      tags: ['movement', 'exit'],
+      context: {
+        sessionId: this.sessionId,
+        symbol: this.profile.symbol,
+        side: this.pos.side,
+        qty: filledQty,
+        price,
+        reason,
+        pnl,
+        pnlPct,
+        telemetry,
+        tradesToday: this.tradesToday,
+        realizedPnlTodayPct: this.realizedPnlTodayPct,
+      },
+      severity: reason === 'sl' ? 'high' : 'medium',
+    }).catch(()=>{});
     // Update session KPIs (ROI%, realized/unrealized)
     try { if (this.sessionId) await recomputeKpi(this.sessionId); } catch {}
     // Release reserved notional capacity in paper broker
@@ -1033,6 +1087,15 @@ export class ReboundRejectionAgent {
     this.cooldownContext = { reason: guard.reason || 'risk_guard', guard, triggeredAt: Date.now() };
     broadcast('agent_state', { state: this.state, reason: guard.reason || 'risk_guard', guard }, this.profile?.symbol, this.sessionId || undefined);
     this.startCooldownWatcher();
+    this.logMovement('Cooldown engaged', `Reason=${guard.reason || 'risk_guard'} on ${this.profile?.symbol}`, {
+      tags: ['movement', 'cooldown'],
+      context: {
+        sessionId: this.sessionId,
+        symbol: this.profile?.symbol,
+        guard,
+      },
+      severity: guard.action === 'halt' ? 'high' : 'medium',
+    }).catch(()=>{});
   }
 
   private startCooldownWatcher(delayMs?: number) {
@@ -1100,6 +1163,16 @@ export class ReboundRejectionAgent {
     this.state = 'SCAN';
     broadcast('agent_state', { state: this.state, reason: 'cooldown_reactivate', confidence: candidate.confidence, components: candidate.components }, this.profile.symbol, this.sessionId || undefined);
     try {
+      this.logMovement('Cooldown cleared', `Confidence=${candidate.confidence.toFixed(2)} -> rearming ${this.profile.symbol}`, {
+        tags: ['movement', 'cooldown', 'reactivate'],
+        context: {
+          sessionId: this.sessionId,
+          symbol: this.profile.symbol,
+          confidence: candidate.confidence,
+          components: candidate.components,
+        },
+        severity: 'medium',
+      }).catch(()=>{});
       await this.propose(candidate.plan as any);
       await this.validateAndArm();
     } catch (err) {
@@ -1111,6 +1184,16 @@ export class ReboundRejectionAgent {
         symbol: this.profile.symbol,
         details: { error: String((err as any)?.message || err), confidence: candidate.confidence },
       });
+      this.logMovement('Cooldown rearm failed', `Failed to rearm ${this.profile.symbol}: ${(err as any)?.message || err}`, {
+        tags: ['movement', 'cooldown', 'error'],
+        context: {
+          sessionId: this.sessionId,
+          symbol: this.profile.symbol,
+          error: String((err as any)?.message || err),
+          confidence: candidate.confidence,
+        },
+        severity: 'high',
+      }).catch(()=>{});
       this.startCooldownWatcher();
     }
   }
@@ -1174,7 +1257,8 @@ export class ReboundRejectionAgent {
     if (adx >= 18) score += 0.18;
     if (adx >= 24) score += 0.07;
     const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
-    const ema = Number((snap as any)?.ema20 ?? snap.last || 1);
+    const emaRaw = (snap as any)?.ema20 ?? snap.last ?? 1;
+    const ema = typeof emaRaw === 'number' && Number.isFinite(emaRaw) ? emaRaw : 1;
     const slopePct = ema !== 0 ? (emaSlope / Math.abs(ema)) * 100 : 0;
     const slopeAligned = bias === 'long' ? slopePct > 0.02 : slopePct < -0.02;
     const slopeStrong = bias === 'long' ? slopePct > 0.06 : slopePct < -0.06;
@@ -1208,6 +1292,30 @@ export class ReboundRejectionAgent {
     };
   }
 
+  private formatPrice(value: number | null | undefined) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return value;
+    return Math.round(value * 1e4) / 1e4;
+  }
+
+  private async logMovement(title: string, description: string, opts?: { severity?: 'low'|'medium'|'high'|'critical'; tags?: string[]; context?: any }) {
+    try {
+      const context = {
+        sessionId: this.sessionId,
+        symbol: this.profile?.symbol,
+        state: this.state,
+        ...(opts?.context || {}),
+      };
+      await logImprovementAuto({
+        title,
+        description,
+        severity: opts?.severity,
+        tags: opts?.tags,
+        reporter: 'agent',
+        context,
+      });
+    } catch {}
+  }
+
   private async engageKillSwitch(reason: string, details?: any) {
     if (this.state === 'HALT') return;
     this.stopCooldownWatcher();
@@ -1238,12 +1346,29 @@ export class ReboundRejectionAgent {
     });
     broadcast('agent_state', { state: this.state, killSwitch: reason }, this.profile?.symbol, this.sessionId || undefined);
     this.scheduleRecovery(reason, details);
+    this.logMovement('Kill switch engaged', reason, {
+      tags: ['movement', 'halt', 'risk'],
+      context: {
+        sessionId: this.sessionId,
+        symbol: this.profile?.symbol,
+        details,
+      },
+      severity: 'high',
+    }).catch(()=>{});
   }
 
   halt() {
     this.state = 'HALT';
     this.stopCooldownWatcher();
     this.cooldownContext = null;
+    this.logMovement('Agent halted', `Manual halt on ${this.profile?.symbol || 'unknown'}`, {
+      tags: ['movement', 'halt'],
+      context: {
+        sessionId: this.sessionId,
+        symbol: this.profile?.symbol,
+      },
+      severity: 'medium',
+    }).catch(()=>{});
   }
 
   private async buildPlan(opts?: { fresh?: boolean; bypassAck?: boolean }) {
@@ -1389,6 +1514,20 @@ export class ReboundRejectionAgent {
     const now = Date.now();
     this.pos = { side, entry: placed.avgPrice!, qty: placed.filledQty!, stop, tp, openedAt: now, extended: false, trail: [{ ts: now, price: stop }], maeR: 0, mfeR: 0, breakeven: placed.avgPrice!, partialInfo: null };
     await (await import('./persistence.js')).recordEnter({ sessionId: this.sessionId!, symbol: this.profile.symbol, side, qty: this.pos.qty, entryPrice: this.pos.entry, stop: this.pos.stop, tp: this.pos.tp, leverage: this.profile.maxLeverage }).catch(()=>{});
+    this.logMovement('Position entered', `${side.toUpperCase()} ${this.profile.symbol} qty=${this.pos.qty.toFixed(6)} @ ${this.formatPrice(this.pos.entry)}`, {
+      tags: ['movement', 'entry'],
+      context: {
+        sessionId: this.sessionId,
+        symbol: this.profile.symbol,
+        side,
+        qty: this.pos.qty,
+        entry: this.pos.entry,
+        stop: this.pos.stop,
+        tp: this.pos.tp,
+        mode: 'manual_side',
+      },
+      severity: 'medium',
+    }).catch(()=>{});
     this.state = 'MANAGE';
     this.tradesToday += 1;
     await (await import('../ws/hub.js')).broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await (await import('../metrics/aiCalls.js')).getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
