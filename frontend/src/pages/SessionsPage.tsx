@@ -79,11 +79,12 @@ export default function SessionsPage(){
           { title:'PnL (USD)', dataIndex:'pnlUsd', render:(v:any)=> Number(v||0).toFixed(2) },
           { title:'ROI %', dataIndex:'roiPct', render:(v:any)=> Number(v||0).toFixed(2) },
           { title:'', render:(_,r)=> !r.stoppedAt ? (
-            <Space><Button danger onClick={()=> stop(r.id)}>Stop</Button></Space>
+            <Space><Button danger onClick={(e)=>{ e.stopPropagation(); stop(r.id); }}>Stop</Button></Space>
           ) : (
             <Space>
-              <Button onClick={()=> relaunch(r)}>Restart</Button>
-              <Button danger onClick={async ()=>{
+              <Button onClick={(e)=>{ e.stopPropagation(); relaunch(r); }}>Restart</Button>
+              <Button danger onClick={(e)=>{
+                e.stopPropagation();
                 Modal.confirm({ title:'Delete session?', content:'This will permanently delete session and all associated data (orders, fills, positions, KPI, triggers).', okText:'Delete', okButtonProps:{ danger:true }, onOk: async ()=>{
                   try { await api.deleteSession(r.id); message.success('Deleted'); await load(); } catch { message.error('Delete failed'); }
                 } });

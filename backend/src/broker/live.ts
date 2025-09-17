@@ -10,9 +10,33 @@ export class LiveBroker implements Broker {
   async balance() {
     const ex = await exchange();
     const b = await ex.fetchBalance();
-    const totalUsd = (b?.total?.USDT ?? 0) + (b?.total?.USD ?? 0);
-    const freeUsd = (b?.free?.USDT ?? 0) + (b?.free?.USD ?? 0);
-    return { freeUsd, equityUsd: totalUsd, committedUsd: 0 };
+    const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
+
+    const num = (v: any) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+
+    const avail = num(raw?.total_available_balance);
+    const marginBal = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value);
+    const positionCost = num(raw?.total_position_cost);
+
+    // Fallbacks to legacy spot fields if derivatives-specific fields are absent.
+    const fallbackTotal = (b?.total?.USDT ?? 0) + (b?.total?.USD ?? 0);
+    const fallbackFree = (b?.free?.USDT ?? 0) + (b?.free?.USD ?? 0);
+
+    const equityUsd = marginBal ?? fallbackTotal;
+    const freeUsd = avail ?? fallbackFree;
+    let committedUsd = positionCost ?? (Number.isFinite(equityUsd) && Number.isFinite(freeUsd)
+      ? Math.max(0, equityUsd - freeUsd)
+      : 0);
+    if (!Number.isFinite(committedUsd)) committedUsd = 0;
+
+    return {
+      freeUsd: Number.isFinite(freeUsd) ? freeUsd : 0,
+      equityUsd: Number.isFinite(equityUsd) ? equityUsd : 0,
+      committedUsd,
+    };
   }
 
   async place(o: NewOrder): Promise<PlacedOrder> {
