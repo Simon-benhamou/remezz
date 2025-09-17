@@ -33,6 +33,10 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   const snap = await buildTechSnapshot(plan.symbol);
   const tf = plan.timeframe || '1h';
 
+  if (plan.position.risk_fraction_range?.recommended != null) {
+    plan.position.risk_fraction = plan.position.risk_fraction_range.recommended;
+  }
+
   // Auto-detect zone from S/R if price is null
   const near = plan.zone.type === 'support' ? snap.support : snap.resistance;
   const ref = Number.isFinite(near) ? near : (plan.zone.type === 'support' ? Math.min(...snap.supports.map(s=>s.price)) : Math.max(...snap.resistances.map(r=>r.price)));

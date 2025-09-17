@@ -83,6 +83,22 @@ export default function DashboardPage(){
         <Col xs={24} md={8}><Card loading={loading}><Statistic title='Total open risk (USD)' precision={2} value={Number(ov?.totalOpenRiskUsd||0)} /></Card></Col>
       </Row>
       <Row gutter={[12,12]}>
+        <Col xs={24} md={8}>
+          <Card loading={loading}>
+            <Statistic
+              title={`Budget remaining (${mode === 'live' ? 'Live' : 'Paper'})`}
+              precision={2}
+              value={Number(mode === 'live' ? (ov?.budget?.liveRemainingUsd || 0) : (ov?.budget?.paperRemainingUsd || 0))}
+            />
+            <div style={{ color:'#64748b', fontSize:12, marginTop:8 }}>
+              {mode === 'live'
+                ? `Committed $${Number(ov?.budget?.liveCommittedUsd || 0).toFixed(2)} / Total $${Number(ov?.budget?.liveTotalUsd || 0).toFixed(2)}`
+                : `Committed $${Number(ov?.budget?.paperCommittedUsd || 0).toFixed(2)} / Total $${Number(ov?.budget?.paperTotalUsd || 0).toFixed(2)}`}
+            </div>
+          </Card>
+        </Col>
+      </Row>
+      <Row gutter={[12,12]}>
         <Col xs={24} lg={12}><OpsMetricsPanel metrics={opsMetrics} loading={opsLoading} /></Col>
         <Col xs={24} lg={12}><OpsEventsList events={opsEvents} loading={opsLoading} onRefresh={loadOps} /></Col>
       </Row>

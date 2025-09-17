@@ -39,6 +39,7 @@ export interface Broker {
   balance(): Promise<{ freeUsd: number; equityUsd: number; committedUsd: number }>;
   place(o: NewOrder): Promise<PlacedOrder>;
   cancel(id: string): Promise<void>;
+  estimateFillableQty?(params: { symbol: string; side: OrderSide; desiredQty: number; maxImpactPct?: number }): Promise<{ fillableQty: number; impactPct?: number; minQty?: number }>;
   // optional: paper-specific reserve release
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore

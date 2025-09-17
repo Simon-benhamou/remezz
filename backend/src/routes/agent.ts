@@ -176,6 +176,19 @@ router.get('/state', async (req,res)=>{
   res.json({ state: a?.state, profile: a?.profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics(sessionId || undefined) });
 });
 
+router.post('/ack-halt', async (req,res)=>{
+  const { sessionId } = req.body as { sessionId?: string };
+  if (!sessionId) return res.status(400).json({ error: 'session_required' });
+  const agent = AgentHub.get(sessionId) as any;
+  if (!agent) return res.status(404).json({ error: 'no_agent' });
+  try {
+    if (typeof agent.acknowledgeHalt === 'function') agent.acknowledgeHalt();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 // List recent sessions (active first), with open position count
 router.get('/sessions', async (req,res)=>{
   const modeRaw = String(req.query.mode || '').toLowerCase();
@@ -245,22 +258,39 @@ router.get('/overview', async (req,res)=>{
     } catch {}
   }
 
-  // Aggregate paper balances across active paper agents only (avoid double-counting live)
+  // Aggregate paper balances and per-mode budgets
   let paperBalance = { equityUsd: 0, freeUsd: 0, committedUsd: 0 };
-  if (!modeFilter || modeFilter === 'paper') {
-    try {
-      for (const s of actives) {
-        if (s.mode !== 'paper') continue;
-        const a = AgentHub.get(s.id) as any;
-        const bal = await a?.broker?.balance?.();
+  let liveBudgetTotal = 0;
+  let liveCommittedTotal = 0;
+  let paperBudgetTotal = 0;
+  let paperCommittedTotal = 0;
+  try {
+    for (const s of actives) {
+      const agent = AgentHub.get(s.id) as any;
+      const profile = agent?.profile;
+      const cfgBudget = (() => {
+        const raw = (s as any).profileJson?.budgetPct;
+        if (typeof raw === 'number') return raw > 1 ? raw / 100 : raw;
+        return undefined;
+      })();
+      const budgetFraction = profile?.budgetFraction ?? Math.max(0.1, Math.min(1, cfgBudget ?? 1));
+      const startBal = Number(s.startBalanceUsd || 0);
+      const budgetUsd = startBal > 0 ? startBal * budgetFraction : undefined;
+      const bal = await agent?.broker?.balance?.();
+      if (s.mode === 'paper') {
+        if (budgetUsd != null) paperBudgetTotal += budgetUsd;
         if (bal) {
           paperBalance.equityUsd += Number(bal.equityUsd || 0);
           paperBalance.freeUsd += Number(bal.freeUsd || 0);
           paperBalance.committedUsd += Number(bal.committedUsd || 0);
+          paperCommittedTotal += Number(bal.committedUsd || 0);
         }
+      } else {
+        if (budgetUsd != null) liveBudgetTotal += budgetUsd;
+        if (bal) liveCommittedTotal += Number(bal.committedUsd || 0);
       }
-    } catch {}
-  }
+    }
+  } catch {}
   const bySession = await Promise.all(actives.map(async a => {
     const agent = AgentHub.get(a.id) as any;
     const state = agent?.state || 'IDLE';
@@ -315,6 +345,14 @@ router.get('/overview', async (req,res)=>{
     aiCallsTotal,
     exchangeBalance,
     paperBalance,
+    budget: {
+      liveTotalUsd: liveBudgetTotal,
+      liveCommittedUsd: liveCommittedTotal,
+      liveRemainingUsd: Math.max(0, liveBudgetTotal - liveCommittedTotal),
+      paperTotalUsd: paperBudgetTotal,
+      paperCommittedUsd: paperCommittedTotal,
+      paperRemainingUsd: Math.max(0, paperBudgetTotal - paperCommittedTotal),
+    },
     sessions: bySession,
     alerts: { severityCounts, recent: alertsSlim },
     updatedAt: new Date().toISOString(),

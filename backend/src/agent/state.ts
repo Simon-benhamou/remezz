@@ -1,7 +1,7 @@
 import { PlanJson } from './planSchema.js';
 import { validatePlan, ValidatedPlan } from './validator.js';
 import { PaperBroker } from '../broker/paper.js';
-import { LiveBroker, inspectExposure } from '../broker/live.js';
+import { LiveBroker, inspectExposure, getCapacityPressure } from '../broker/live.js';
 import { Broker } from '../broker/types.js';
 import { assessRisk, computeQtyNotional, defaultLimits } from '../risk/manager.js';
 import { computeAdaptiveRisk, AdaptiveRiskResult } from '../risk/adaptive.js';
@@ -66,6 +66,8 @@ export class ReboundRejectionAgent {
   private adaptiveRisk: AdaptiveRiskResult | null = null;
   private protectiveErrorCount = 0;
   private killSwitchContext: { reason: string; details?: any } | null = null;
+  private haltAckRequired = false;
+  private recoveryTimer: NodeJS.Timeout | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -76,6 +78,8 @@ export class ReboundRejectionAgent {
     // PREFLIGHT
     this.state = 'PREFLIGHT';
     this.profile = profile;
+    this.haltAckRequired = false;
+    if (this.recoveryTimer) { try { clearTimeout(this.recoveryTimer); } catch {} this.recoveryTimer = null; }
     if (profile.maxLeverage > 5) throw new Error('maxLeverage>5 not allowed');
     if (profile.riskPerTradePct < 1 || profile.riskPerTradePct > 2) throw new Error('risk/trade must be 1-2%');
     if (profile.dailyLossLimitPct < 3 || profile.dailyLossLimitPct > 4) throw new Error('daily loss must be 3-4%');
@@ -213,8 +217,23 @@ export class ReboundRejectionAgent {
     const dir0 = side === 'buy' ? 1 : -1;
     const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
     const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
-    const usableBalance = Math.max(0, Math.min(bal.freeUsd, bal.freeUsd * budgetFrac));
-    let dynamicRiskPct = this.profile.riskPerTradePct;
+    const availableMargin = Math.max(0, bal.equityUsd - bal.committedUsd);
+    const usableBalance = Math.max(0, Math.min(bal.freeUsd, availableMargin) * budgetFrac);
+    const planPosition: any = this.plan.plan?.position || {};
+    let planRiskMinPct: number | undefined;
+    let planRiskMaxPct: number | undefined;
+    let planRiskRecommendedPct: number | undefined;
+    if (typeof planPosition?.risk_fraction === 'number') {
+      planRiskRecommendedPct = planPosition.risk_fraction * 100;
+    }
+    if (planPosition?.risk_fraction_range) {
+      const range = planPosition.risk_fraction_range;
+      if (typeof range.min === 'number') planRiskMinPct = range.min * 100;
+      if (typeof range.max === 'number') planRiskMaxPct = range.max * 100;
+      if (typeof range.recommended === 'number') planRiskRecommendedPct = range.recommended * 100;
+    }
+    let dynamicRiskPct = planRiskRecommendedPct ?? this.profile.riskPerTradePct;
+    if (!(dynamicRiskPct > 0)) dynamicRiskPct = this.profile.riskPerTradePct;
     try {
       this.adaptiveRisk = await computeAdaptiveRisk(this.sessionId, this.profile.riskPerTradePct);
       dynamicRiskPct = this.adaptiveRisk.riskPct;
@@ -230,9 +249,35 @@ export class ReboundRejectionAgent {
       }
     } catch {}
     dynamicRiskPct = await this.applyDailyRoiThrottle(dynamicRiskPct);
+    if (this.profile.mode === 'live') {
+      const pressure = getCapacityPressure(this.profile.symbol);
+      if (pressure > 0) {
+        const reduction = Math.min(0.5, 0.2 * pressure);
+        dynamicRiskPct *= (1 - reduction);
+      }
+    }
+    if (planRiskMinPct != null) dynamicRiskPct = Math.max(planRiskMinPct, dynamicRiskPct);
+    if (planRiskMaxPct != null) dynamicRiskPct = Math.min(planRiskMaxPct, dynamicRiskPct);
     if (this.adaptiveRisk) this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
     const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
-    const qty = notional / Math.max(entry, 1e-8);
+    let qty = notional / Math.max(entry, 1e-8);
+    if (this.profile.mode === 'live' && typeof (this.broker as any)?.estimateFillableQty === 'function') {
+      try {
+        const estimate = await (this.broker as any).estimateFillableQty({ symbol: this.profile.symbol, side, desiredQty: qty, maxImpactPct: Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35') });
+        if (estimate?.fillableQty != null) {
+          if (estimate.fillableQty < qty) {
+            const reductionNote = `Liquidity limit reduced qty from ${qty.toFixed(6)} to ${estimate.fillableQty.toFixed(6)} (impact ${(estimate.impactPct ?? 0).toFixed(2)}%).`;
+            const planJson = this.plan.plan;
+            planJson.notes = planJson.notes ? `${planJson.notes}\n${reductionNote}` : reductionNote;
+          }
+          qty = estimate.fillableQty;
+          if (estimate.minQty != null && qty < estimate.minQty) {
+            this.entering = false;
+            return;
+          }
+        }
+      } catch {}
+    }
     if (!(qty > 0)) {
       this.entering = false;
       return;
@@ -359,6 +404,50 @@ export class ReboundRejectionAgent {
     return Math.max(reference, ask * (1 + tolerance));
   }
 
+  private computeDynamicTrail(price: number, snap: { atr14?: number; ema20?: number; ema20Slope?: number; realizedVol?: number }, upR: number, elapsedMs: number): number | null {
+    if (!this.pos || !this.plan) return null;
+    const side = this.pos.side;
+    const dir = side === 'buy' ? 1 : -1;
+    const planMeta: any = (this.plan.plan as any)?.meta || {};
+    const playbook = planMeta.trailingTemplate || planMeta.playbook || this.regime?.playbook || 'mean_reversion';
+    const stopDistance = this.plan.stopDistance || Math.max(1e-8, Math.abs(this.pos.entry * 0.005));
+    const atrVal = Math.max(stopDistance * 0.6, snap.atr14 || stopDistance);
+    const slope = snap.ema20Slope || 0;
+    const realizedVol = snap.realizedVol || 0;
+    let multiplier = playbook === 'momentum_breakout' ? 0.65 : playbook === 'mean_reversion' ? 1.05 : 0.85;
+    if (upR > 1.5) multiplier *= 0.85;
+    if (upR > 2.5) multiplier *= 0.75;
+    if (playbook === 'momentum_breakout') {
+      if (slope * dir > 0) multiplier *= 0.9;
+      else multiplier *= 1.15;
+    }
+    if (realizedVol > 80) multiplier *= 0.85;
+    const atrTrail = price - dir * (atrVal * multiplier);
+    let candidate = atrTrail;
+
+    if (snap.ema20) {
+      const emaBuffer = snap.ema20 - dir * (atrVal * 0.3);
+      candidate = side === 'buy' ? Math.max(candidate, emaBuffer) : Math.min(candidate, emaBuffer);
+    }
+
+    const entry = this.pos.entry;
+    if (elapsedMs > 30 * 60 * 1000) {
+      const tighten = entry + dir * (stopDistance * Math.min(0.5, Math.max(0.2, upR * 0.3)));
+      candidate = side === 'buy' ? Math.max(candidate, tighten) : Math.min(candidate, tighten);
+    }
+    if (elapsedMs > 90 * 60 * 1000) {
+      const deepTighten = entry + dir * (stopDistance * Math.min(1, upR));
+      candidate = side === 'buy' ? Math.max(candidate, deepTighten) : Math.min(candidate, deepTighten);
+    }
+
+    if (upR > 1) {
+      const lock = entry + dir * stopDistance * Math.min(1.5, upR);
+      candidate = side === 'buy' ? Math.max(candidate, lock) : Math.min(candidate, lock);
+    }
+
+    return candidate;
+  }
+
   private async placeLimitAdaptive(params: { side: 'buy'|'sell'; qty: number; limitPrice: number; stop: number; tp: number[]; entry: number }): Promise<PlacedOrder> {
     const order = await this.broker!.place({
       symbol: this.profile!.symbol,
@@ -394,7 +483,14 @@ export class ReboundRejectionAgent {
     for (let i = 0; i < slices; i++) {
       const remaining = remainingTarget - filled;
       if (remaining <= 0) break;
-      const sliceQty = i === slices - 1 ? remaining : Math.max(remaining / (slices - i), remainingTarget * 0.15);
+      let sliceQty = i === slices - 1 ? remaining : Math.max(remaining / (slices - i), remainingTarget * 0.15);
+      if (this.profile?.mode === 'live' && typeof (this.broker as any)?.estimateFillableQty === 'function') {
+        try {
+          const estimate = await (this.broker as any).estimateFillableQty({ symbol: this.profile.symbol, side: params.side, desiredQty: sliceQty, maxImpactPct: Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35') });
+          if (estimate?.fillableQty != null && estimate.fillableQty > 0) sliceQty = estimate.fillableQty;
+        } catch {}
+      }
+      if (!(sliceQty > 0)) continue;
       attempts += 1;
       const order = await this.broker!.place({
         symbol: this.profile!.symbol,
@@ -664,6 +760,15 @@ export class ReboundRejectionAgent {
       if (this.pos.side==='buy') this.pos.stop = Math.max(this.pos.stop, combo); else this.pos.stop = Math.min(this.pos.stop, combo);
     }
 
+    if (this.pos) {
+      const elapsedMs = Date.now() - this.pos.openedAt;
+      const dynamic = this.computeDynamicTrail(price, snap as any, upR, elapsedMs);
+      if (dynamic != null) {
+        if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, dynamic);
+        else this.pos.stop = Math.min(this.pos.stop, dynamic);
+      }
+    }
+
     const stopChanged = this.pos.stop !== prevStop;
     if (stopChanged) {
       this.noteTrail(this.pos.stop);
@@ -903,8 +1008,9 @@ export class ReboundRejectionAgent {
       } catch {}
     }
     this.state = 'HALT';
+    this.haltAckRequired = true;
     try {
-      recordOpsEvent({ level: 'error', source: 'kill_switch', message: reason, sessionId: this.sessionId || undefined, symbol: this.profile?.symbol, details });
+      recordOpsEvent({ level: 'error', source: 'kill_switch', message: reason, sessionId: this.sessionId || undefined, symbol: this.profile?.symbol, details: { ...(details || {}), mode: this.profile?.mode } });
     } catch {}
     await logImprovementAuto({
       title: `Kill switch triggered: ${reason}`,
@@ -914,15 +1020,20 @@ export class ReboundRejectionAgent {
       context: {
         sessionId: this.sessionId,
         symbol: this.profile?.symbol,
+        mode: this.profile?.mode,
         details,
       },
     });
     broadcast('agent_state', { state: this.state, killSwitch: reason }, this.profile?.symbol, this.sessionId || undefined);
+    this.scheduleRecovery(reason, details);
   }
 
   halt() { this.state = 'HALT'; }
 
-  private async buildPlan(opts?: { fresh?: boolean }) {
+  private async buildPlan(opts?: { fresh?: boolean; bypassAck?: boolean }) {
+    if (this.haltAckRequired && !opts?.bypassAck) {
+      throw new Error('halt_ack_required');
+    }
     if (!this.profile) throw new Error('no profile');
     const plan = await proposePlan(this.profile.symbol, {
       sessionId: this.sessionId || undefined,
@@ -930,11 +1041,110 @@ export class ReboundRejectionAgent {
       context: this.killSwitchContext ? { killReason: this.killSwitchContext.reason, killDetails: this.killSwitchContext.details } : undefined,
     });
     this.killSwitchContext = null;
+    const syncRiskRange = () => {
+      const pos: any = plan.position;
+      const base = typeof pos.risk_fraction === 'number' ? pos.risk_fraction : 0.015;
+      const minDefault = Math.max(0.005, base * 0.8);
+      const maxDefault = Math.min(0.03, base * 1.2);
+      let min = minDefault;
+      let max = maxDefault;
+      let recommended = base;
+      if (pos.risk_fraction_range) {
+        const range = pos.risk_fraction_range;
+        if (typeof range.min === 'number') min = Math.max(0.005, Math.min(range.min, 0.03));
+        if (typeof range.max === 'number') max = Math.max(min + 0.001, Math.min(range.max, 0.03));
+        if (typeof range.recommended === 'number') recommended = range.recommended;
+      }
+      min = Math.min(min, max);
+      max = Math.max(max, min + 0.001);
+      recommended = Math.min(max, Math.max(min, recommended));
+      pos.risk_fraction_range = { min, max, recommended };
+      pos.risk_fraction = recommended;
+    };
+    syncRiskRange();
+    if (plan.bias !== 'none') {
+      try {
+        const mod = await import('../sim/quicktest.js');
+        const runQuickTest = mod?.runQuickTest;
+        if (typeof runQuickTest === 'function') {
+          const sim = await runQuickTest(this.profile.symbol, 72, plan as any, {
+            tf: '15m',
+            trailingATRmult: 1.0,
+            exitPolicy: plan.risk?.max_hold_hours && plan.risk.max_hold_hours > 36 ? 'trend' : 'time',
+            maxHoldHours: plan.risk?.max_hold_hours || 36,
+            feesBps: this.profile.mode === 'live' ? 8 : 0,
+            slippagePct: this.profile.mode === 'live' ? 0.02 : 0,
+          });
+          const stats = sim?.stats;
+          if (stats) {
+            const meta:any = plan.meta || {};
+            meta.quickTest = {
+              winrate: stats.winrate,
+              avgR: stats.avgR,
+              count: stats.count,
+              avgMAE_R: stats.avgMAE_R,
+              avgMFE_R: stats.avgMFE_R,
+            };
+            plan.meta = meta;
+            if (stats.count >= 8 && (stats.winrate < 30 || stats.avgR < 0)) {
+              const original = plan.position.risk_fraction;
+              plan.position.risk_fraction = Math.max(0.01, Math.min(0.02, original * 0.7));
+              const note = 'QuickTest indicated weak edge (winrate ' + stats.winrate.toFixed(1) + '%, avgR ' + stats.avgR.toFixed(2) + '). Risk fraction trimmed.';
+              plan.notes = plan.notes ? `${plan.notes}\n${note}` : note;
+              syncRiskRange();
+            }
+          }
+        }
+      } catch (err) {
+        try {
+          await logImprovementAuto({
+            title: 'QuickTest failed during plan build',
+            description: `Unable to evaluate plan for ${this.profile.symbol}.`,
+            severity: 'medium',
+            tags: ['plan', 'simulation'],
+            context: { error: String((err as any)?.message || err), symbol: this.profile.symbol },
+          });
+        } catch {}
+      }
+    }
     return plan;
   }
 
   async nextPlan(opts?: { fresh?: boolean }): Promise<PlanJson> {
     return this.buildPlan(opts);
+  }
+
+  acknowledgeHalt() {
+    this.haltAckRequired = false;
+    if (this.recoveryTimer) { try { clearTimeout(this.recoveryTimer); } catch {} this.recoveryTimer = null; }
+  }
+
+  private scheduleRecovery(reason: string, details?: any) {
+    if (this.recoveryTimer) { try { clearTimeout(this.recoveryTimer); } catch {} }
+    const delay = Number(process.env.HALT_RECOVERY_DELAY_MS || 5 * 60 * 1000);
+    if (!this.profile) return;
+    const symbol = this.profile.symbol;
+    const sessionId = this.sessionId;
+    this.recoveryTimer = setTimeout(async () => {
+      try {
+        const plan = await proposePlan(symbol, { fresh: true, sessionId: sessionId || undefined, context: { killReason: reason, killDetails: details } });
+        await logImprovementAuto({
+          title: `Post-mortem plan generated (${reason})`,
+          description: `Recovery plan bias=${plan.bias}, risk=${(plan.position.risk_fraction * 100).toFixed(2)}%.`,
+          severity: 'medium',
+          tags: ['halt', 'recovery'],
+          context: { sessionId, symbol, mode: this.profile?.mode, plan },
+        });
+      } catch (err) {
+        await logImprovementAuto({
+          title: 'Post-mortem plan generation failed',
+          description: `Unable to generate recovery plan for ${symbol}.`,
+          severity: 'medium',
+          tags: ['halt', 'recovery'],
+          context: { sessionId, symbol, mode: this.profile?.mode, error: String((err as any)?.message || err) },
+        });
+      }
+    }, Math.max(60_000, delay));
   }
 
   // Internal helper: place an entry with an explicit side at a given market price (used for breakout reversal)

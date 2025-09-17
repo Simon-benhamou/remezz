@@ -12,10 +12,11 @@ function safeParse<T=any>(s: string): T { try { return JSON.parse(s) as T; } cat
 const PLAN_CACHE_TTL_MS = Number(process.env.PLAN_CACHE_TTL_MS || 30 * 60 * 1000);
 const planCache = new Map<string, { ts: number; plan: PlanJson }>();
 
-function cacheKeyForPlan(symbol: string, regime?: RegimeProfile | null, trigger?: string, killReason?: string) {
+function cacheKeyForPlan(symbol: string, regime?: RegimeProfile | null, trigger?: string, killReason?: string, signature?: string) {
   const playbook = regime?.playbook || 'unknown';
   const kill = killReason ? `:${killReason}` : '';
-  return `${symbol}:${playbook}:${trigger || 'auto'}${kill}`;
+  const sig = signature ? `:${signature}` : '';
+  return `${symbol}:${playbook}:${trigger || 'auto'}${kill}${sig}`;
 }
 
 function clonePlan(plan: PlanJson): PlanJson {
@@ -26,11 +27,32 @@ function cachePlan(key: string, plan: PlanJson) {
   planCache.set(key, { ts: Date.now(), plan: clonePlan(plan) });
 }
 
+function normalizeRiskRange(position: PlanJson['position']) {
+  const base = typeof position.risk_fraction === 'number' ? position.risk_fraction : 0.015;
+  const minDefault = Math.max(0.005, base * 0.8);
+  const maxDefault = Math.min(0.03, base * 1.2);
+  let min = minDefault;
+  let max = maxDefault;
+  let recommended = base;
+  if (position.risk_fraction_range) {
+    const range = position.risk_fraction_range;
+    if (typeof range.min === 'number') min = Math.max(0.005, Math.min(range.min, 0.03));
+    if (typeof range.max === 'number') max = Math.max(min + 0.001, Math.min(range.max, 0.03));
+    if (typeof range.recommended === 'number') recommended = range.recommended;
+  }
+  min = Math.min(min, max);
+  max = Math.max(max, min + 0.001);
+  recommended = Math.min(max, Math.max(min, recommended));
+  position.risk_fraction_range = { min, max, recommended };
+  position.risk_fraction = recommended;
+}
+
 export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sessionId?: string; context?: { killReason?: string; killDetails?: any } }): Promise<PlanJson> {
   const snap = await buildTechSnapshot(symbol);
   const regime = snap.regime;
+  const signature = `${regime?.playbook || 'na'}:${Math.round((snap.trendStrength ?? 0)*100)}:${Math.round((snap.atrPct ?? 0)*100)}:${Math.round((snap.realizedVol ?? 0)*10)}:${Math.round((snap.adxSlope ?? 0)*100)}`;
   const allowCache = !opts?.fresh && !opts?.context;
-  const cacheKey = cacheKeyForPlan(symbol, regime, opts?.sessionId, opts?.context?.killReason);
+  const cacheKey = cacheKeyForPlan(symbol, regime, opts?.sessionId, opts?.context?.killReason, allowCache ? signature : undefined);
   if (allowCache) {
     const cached = planCache.get(cacheKey);
     if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {
@@ -60,8 +82,12 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
     if (detailStr.length > 400) detailStr = `${detailStr.slice(0, 400)}…`;
     killSwitchNote = `Kill switch reason previously triggered: ${opts.context.killReason}. Details: ${detailStr}. Address the underlying risk before proposing entries.`;
   }
-  const sys = `You are a market analyst. You receive a clean technical snapshot (price, RSI, ATR, S/R), optional sentiment/news, and a regime classification. Output ONLY a JSON matching this schema: {"name","symbol","timeframe","bias","zone":{"type","price":null,"from":"auto_detect"},"entry_rule":{"type":"rebound|rejection","confirm_close":true,"max_distance_pct":0.4},"risk":{"stop":{"type":"atr","mult":0.9},"tp":[{"type":"R","value":1.0}],"max_hold_hours":36},"position":{"risk_fraction":0.015,"max_leverage":4},"notes":"..."}. Do NOT invent any prices. If unsure, return bias:"none".\n${regimeContext}\nIf playbook=momentum_breakout favor entries aligned with the trend bias and allow confirm_close=false with tighter distance; if playbook=standby bias:"none".`;
-  const enrichedSys = killSwitchNote ? `${sys}\n${killSwitchNote}` : sys;
+  const nowUtc = new Date();
+  const sys = `You are a market analyst. You receive an enriched technical snapshot (price, RSI, ATR, S/R, volatility, volume) plus sentiment/news and risk constraints. Output ONLY a JSON matching this schema: {"name","symbol","timeframe","bias","zone":{"type","price":null,"from":"auto_detect"},"entry_rule":{"type":"rebound|rejection","confirm_close":true,"max_distance_pct":0.4},"risk":{"stop":{"type":"atr","mult":0.9},"tp":[{"type":"R","value":1.0}],"max_hold_hours":36},"position":{"risk_fraction":0.015,"risk_fraction_range":{"min":0.01,"max":0.02,"recommended":0.015},"max_leverage":4},"notes":"..."}. Do NOT invent any prices. If unsure, return bias:"none".\n${regimeContext}\nIf playbook=momentum_breakout favor entries aligned with the trend and confirm_close may be false with tighter distance; if playbook=standby bias:"none". Provide risk_fraction_range tuned to the conviction level. Recommended should usually sit within 0.8x–1.2x of the base risk_fraction.`;
+  const marketContext = `ATR% ${Number(snap.atrPct).toFixed(2)}, realizedVol ${Number(snap.realizedVol || 0).toFixed(2)}, adxSlope ${Number(snap.adxSlope || 0).toFixed(3)}, volume24h ${Math.round(snap.volume24h || 0)}, volumeChange ${Number(snap.volume24hChangePct || 0).toFixed(2)}%, hurst ${Number(snap.hurst || 0).toFixed(2)}, trendStrength ${Number(snap.trendStrength || 0).toFixed(2)}`;
+  const timingContext = `UTC hour ${nowUtc.getUTCHours()}, weekday ${nowUtc.getUTCDay()}, snapshotSignature ${signature}`;
+  const guidance = `When volatility is elevated or conviction is low, tighten risk_fraction_range (e.g., 0.008-0.012). When trend is strong and supportive, you may widen to max 0.022 but never exceed the configured risk guard.`;
+  const enrichedSys = [sys, killSwitchNote, `Market context: ${marketContext}.`, timingContext, guidance].filter(Boolean).join('\n');
   const user = {
     symbol, timeframe: '1h',
     technical: {
@@ -72,10 +98,15 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
       srBias: snap.srBias,
       trendStrength: snap.trendStrength,
       realizedVol: snap.realizedVol,
+      volume24h: snap.volume24h,
+      volumeChangePct: snap.volume24hChangePct,
+      hurst: snap.hurst,
+      adxSlope: snap.adxSlope,
     },
     sentiment: sent,
     news: news?.summary ? news.summary.slice(0, 280) : undefined,
     killSwitch: opts?.context ?? undefined,
+    meta: { hourUTC: nowUtc.getUTCHours(), weekdayUTC: nowUtc.getUTCDay(), signature },
   };
   try {
     const cfg = getConfig();
@@ -92,6 +123,7 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
     let plan = PlanZ.parse(j);
     plan = applyRegimePlaybook(plan, regime, snap);
     ensurePlanConsistency(plan, regime, snap);
+    normalizeRiskRange(plan.position);
     if (allowCache) cachePlan(cacheKey, plan);
     return clonePlan(plan);
   } catch (e:any) {
@@ -142,6 +174,7 @@ function applyRegimePlaybook(plan: PlanJson, regime: RegimeProfile | undefined, 
     clone.risk.stop.mult = Math.min(2.2, Math.max(0.6, clone.risk.stop.mult * 0.9));
     clone.risk.tp = [{ type: 'R', value: 1.5 }, { type: 'R', value: 3 }];
     clone.notes = `${clone.notes || ''} Momentum breakout playbook (${regime.trend}).`.trim();
+    clone.position.risk_fraction = Math.min(0.025, Math.max(0.008, clone.position.risk_fraction * 1.1));
   } else {
     // mean reversion adjustments: ensure bias aligns with local SR bias if none provided
     if (clone.bias === 'none') {
@@ -155,6 +188,7 @@ function applyRegimePlaybook(plan: PlanJson, regime: RegimeProfile | undefined, 
     clone.notes = `${clone.notes || ''} Mean reversion playbook.`.trim();
   }
 
+  normalizeRiskRange(clone.position);
   return clone;
 }
 
@@ -204,5 +238,6 @@ function buildFallbackPlan(symbol: string, snap: TechnicalSnapshot, regime: Regi
   };
   const adjusted = applyRegimePlaybook(basePlan, regime, snap);
   ensurePlanConsistency(adjusted, regime, snap);
+  normalizeRiskRange(adjusted.position);
   return PlanZ.parse(clonePlan(adjusted));
 }

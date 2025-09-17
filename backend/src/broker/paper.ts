@@ -70,4 +70,8 @@ export class PaperBroker implements Broker {
   async syncProtective(_params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number }) {
     return {};
   }
+
+  async estimateFillableQty(params: { desiredQty: number }) {
+    return { fillableQty: params.desiredQty };
+  }
 }

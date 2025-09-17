@@ -4,6 +4,26 @@ import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
 import { logImprovementAuto } from '../monitor/backlog.js';
 
+const CAPACITY_LOG = new Map<string, number[]>();
+const BREACH_WINDOW_MS = 60 * 60 * 1000;
+const LIMIT_SLIP_PCT = Number(process.env.ORDER_LIMIT_SLIP_PCT || '0.15'); // percent
+
+function recordCapacityBreach(symbol: string) {
+  const key = symbol.toUpperCase();
+  const arr = CAPACITY_LOG.get(key) || [];
+  const now = Date.now();
+  arr.push(now);
+  while (arr.length && now - arr[0] > BREACH_WINDOW_MS) arr.shift();
+  CAPACITY_LOG.set(key, arr);
+}
+
+export function getCapacityPressure(symbol: string, windowMs = BREACH_WINDOW_MS) {
+  const arr = CAPACITY_LOG.get(symbol.toUpperCase());
+  if (!arr?.length) return 0;
+  const now = Date.now();
+  return arr.filter(ts => now - ts <= windowMs).length;
+}
+
 // Minimal ccxt-backed live broker (spot or swap per env config)
 export class LiveBroker implements Broker {
   mode: 'paper'|'live' = 'live';
@@ -86,12 +106,13 @@ export class LiveBroker implements Broker {
     } catch (e: any) {
       const details = { error: String(e?.message||e), symbol, side: o.side, qty: o.qty };
       try { await emitAlert({ kind:'capacity_breach' as any, severity:'med', details }); } catch {}
+      recordCapacityBreach(symbol);
       await logImprovementAuto({
         title: 'Capacity breach when placing order',
         description: `Exchange rejected order ${o.side} ${o.qty} ${symbol}.`,
         severity: 'high',
         tags: ['execution', 'capacity'],
-        context: details,
+        context: { ...details, mode: 'live' },
       });
       return { ...o, id: 'rejected', status: 'rejected', ts: Date.now() };
     }
@@ -106,7 +127,7 @@ export class LiveBroker implements Broker {
 
     // Ensure fill: poll and retry if needed
     if (placed.status !== 'filled') {
-      const res = await waitForFill(id);
+    const res = await waitForFill(id);
       if (res.status === 'filled') {
         placed = { ...placed, status: 'filled', filledQty: res.filledQty, avgPrice: res.avgPrice };
       } else if (res.status !== 'rejected') {
@@ -116,7 +137,21 @@ export class LiveBroker implements Broker {
           retry++;
           attempts = retry + 1;
           try {
-            const re = await ex.createOrder(symbol, 'market', o.side, o.qty, undefined, params);
+            let re:any;
+            if (LIMIT_SLIP_PCT > 0) {
+              try {
+                const book = await ex.fetchOrderBook(symbol, 10).catch(()=>null as any);
+                const best = o.side === 'buy' ? book?.asks?.[0]?.[0] : book?.bids?.[0]?.[0];
+                if (best) {
+                  const slip = LIMIT_SLIP_PCT / 100;
+                  const limitPx = o.side === 'buy' ? best * (1 + slip) : best * (1 - slip);
+                  re = await ex.createOrder(symbol, 'limit', o.side, o.qty, limitPx, { ...params, timeInForce: 'IOC' });
+                }
+              } catch {}
+            }
+            if (!re) {
+              re = await ex.createOrder(symbol, 'market', o.side, o.qty, undefined, params);
+            }
             const rid = String(re?.id || re?.clientOrderId || '');
             const rr = await waitForFill(rid);
             if (rr.status === 'filled') { placed = { ...placed, id: rid, status:'filled', filledQty: rr.filledQty, avgPrice: rr.avgPrice }; break; }
@@ -169,6 +204,44 @@ export class LiveBroker implements Broker {
   async cancel(id: string) {
     const ex = await exchange();
     try { await ex.cancelOrder(id); } catch {}
+  }
+
+  async estimateFillableQty(params: { symbol: string; side: 'buy'|'sell'; desiredQty: number; maxImpactPct?: number }) {
+    const ex = await exchange();
+    const symbol = await resolveSymbol(params.symbol);
+    const maxImpactPct = params.maxImpactPct ?? Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35');
+    let market: any;
+    try {
+      if (!ex.markets) { await ex.loadMarkets(); }
+      market = ex.market ? ex.market(symbol) : ex.markets?.[symbol];
+    } catch {}
+    const book = await ex.fetchOrderBook(symbol, 40).catch(()=>null as any);
+    const levels = params.side === 'buy' ? book?.asks : book?.bids;
+    let cumQty = 0;
+    let bestPrice = levels?.[0]?.[0];
+    let worstPrice = bestPrice;
+    if (Array.isArray(levels)) {
+      for (const [price, qty] of levels) {
+        if (typeof price !== 'number' || typeof qty !== 'number') continue;
+        if (cumQty === 0 && !bestPrice) bestPrice = price;
+        cumQty += qty;
+        worstPrice = price;
+        if (cumQty >= params.desiredQty) break;
+      }
+    }
+    const impactPct = bestPrice && worstPrice
+      ? Math.abs((worstPrice - bestPrice) / bestPrice) * 100
+      : 0;
+    const fillableQty = cumQty > 0 ? Math.min(params.desiredQty, cumQty) : params.desiredQty;
+    let minQty: number | undefined;
+    try {
+      minQty = Number(market?.limits?.amount?.min);
+    } catch {}
+    if (impactPct > maxImpactPct && cumQty >= params.desiredQty) {
+      const scaled = Math.max(minQty ?? 0, params.desiredQty * (maxImpactPct / Math.max(0.0001, impactPct)));
+      return { fillableQty: scaled, impactPct, minQty };
+    }
+    return { fillableQty, impactPct, minQty };
   }
 
   async syncProtective(params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number; slOrderId?: string|null; tpOrderId?: string|null }) {

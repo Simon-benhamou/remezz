@@ -27,6 +27,9 @@ export type TechnicalSnapshot = {
   adxSlope: number;
   trendStrength: number;
   regime?: RegimeProfile;
+  volumeAvg?: number;
+  volume24h?: number;
+  volume24hChangePct?: number;
 };
 
 // Utilities
@@ -180,6 +183,7 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const closes15 = o15.map(r => r[4]);
   const highs15  = o15.map(r => r[2]);
   const lows15   = o15.map(r => r[3]);
+  const volumes15 = o15.map(r => Number(r[5] || 0));
   const lastPrice:any = last(closes15);
 
   // Indicators
@@ -198,6 +202,11 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
 
   // Simple 24h S/R (~96 bars of 15m)
   const recent = closes15.length >= 96 ? o15.slice(-96) : o15;
+  const recentVolume = recent.reduce((sum, row) => sum + Number(row[5] || 0), 0);
+  const prevWindow = o15.length >= 192 ? o15.slice(-192, -96) : [];
+  const prevVolume = prevWindow.reduce((sum, row) => sum + Number(row[5] || 0), 0);
+  const avgVolume = volumes15.reduce((sum, v) => sum + v, 0) / Math.max(1, volumes15.length);
+  const volumeChangePct = prevVolume > 0 ? ((recentVolume - prevVolume) / prevVolume) * 100 : 0;
   const support24h = Math.min(...recent.map(r => r[3]));
   const resistance24h = Math.max(...recent.map(r => r[2]));
 
@@ -269,6 +278,9 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     hurst,
     adxSlope,
     trendStrength,
+    volumeAvg: avgVolume,
+    volume24h: recentVolume,
+    volume24hChangePct: volumeChangePct,
   };
 
   snapshot.regime = classifyRegime(snapshot);
