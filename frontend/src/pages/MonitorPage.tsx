@@ -1,6 +1,6 @@
 import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import { Row, Col, Space, Tag } from 'antd';
+import { Row, Col, Space, Tag, Tabs } from 'antd';
 import PriceChart from '../charts/PriceChart';
 import StrategyPanel from '../components/StrategyPanel';
 import AnalysisTabs from '../components/AnalysisTabs';
@@ -141,7 +141,8 @@ export default function MonitorPage(){
       <Row gutter={[12,12]}>
         <Col xs={24}><MonitorHealthBanner health={analytics?.health} updatedAt={analytics?.updatedAt} /></Col>
         <Col xs={24}><MonitorMiniPanels panels={analytics?.panels} /></Col>
-        <Col xs={24} lg={16}>
+        {/* Primary fold: Chart + Agent details + Orders/Trades (no scroll on desktop) */}
+        <Col xs={24} lg={14}>
           <PriceChart
             symbol={status?.symbol}
             price={status?.price}
@@ -154,19 +155,28 @@ export default function MonitorPage(){
             agentExit={agent?.exit}
           />
         </Col>
-        <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
+        <Col xs={24} lg={10}>
+          <Space direction='vertical' style={{ width:'100%' }} size={12}>
+            <AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} />
+            <Tabs defaultActiveKey='orders' items={[
+              { key:'orders', label:'Orders', children: <OrdersTable rows={orders} /> },
+              { key:'trades', label:'Trades', children: <TradesTable rows={trades} /> },
+            ]} />
+          </Space>
+        </Col>
+
+        {/* Secondary fold: quick stats + strategy + indicators */}
         <Col xs={24}><PositionStatsBlock agent={agent} price={status?.price} /></Col>
-        <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
-        {/* Session control is handled in Sessions page; remove Monitor controls for a cleaner view */}
-        <Col xs={24} lg={8}><AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} /></Col>
-        <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
         <Col xs={24} lg={8}><PerfPanel kpi={kpi} session={status?.session} /></Col>
+        <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
+        <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
+
+        {/* Tertiary fold: deep analysis & history */}
+        <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
         <Col xs={24} lg={16}><PerfBreakdownPanel sessionId={status?.session?.id} api={api} /></Col>
-        <Col xs={24}><DailyReviewPanel sessionId={status?.session?.id} /></Col>
         <Col xs={24}><TriggersPanel rows={triggers} /></Col>
-        <Col xs={24}><OrdersTable rows={orders} /></Col>
-        <Col xs={24}><TradesTable rows={trades} /></Col>
         <Col xs={24} lg={8}><AlertPanel sessionId={status?.session?.id} /></Col>
+        <Col xs={24}><DailyReviewPanel sessionId={status?.session?.id} /></Col>
         <Col xs={24}><HelpPanel /></Col>
       </Row>
     </>

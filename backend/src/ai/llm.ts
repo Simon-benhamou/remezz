@@ -72,10 +72,13 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   const inF = opts?.noCache ? undefined : inFlight.get(key);
   if (inF) return inF;
 
-  // Rate limit: simple min-interval gate
+  // Rate limit: enforce min spacing by waiting instead of throwing
   const delta = now - lastCallAt;
-  if (!opts?.bypassRate && delta < cfg.LLM_MIN_INTERVAL_MS) throw new Error('LLM rate-limited');
-  lastCallAt = now;
+  if (!opts?.bypassRate && delta < cfg.LLM_MIN_INTERVAL_MS) {
+    const waitMs = Math.max(0, cfg.LLM_MIN_INTERVAL_MS - delta);
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+  lastCallAt = Date.now();
 
   const which = opts?.provider ?? pickLLM();
   try { if (process.env.DEBUG_LLM === 'true') console.log(`[llm] provider=${which} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} key=${(opts?.cacheKey||'auto')}`); } catch {}
