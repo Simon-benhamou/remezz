@@ -205,8 +205,8 @@ export async function startEventEngine(){
             const profile = {
               symbol: s.symbol,
               mode: s.mode as any,
-              maxLeverage: Math.min(5, Math.max(1, p.maxLeverage ?? 4)),
-              riskPerTradePct: Math.min(2, Math.max(1, p.riskPerTradePct ?? 1.5)),
+              maxLeverage: Math.min(10, Math.max(1, p.maxLeverage ?? 4)),
+              riskPerTradePct: Math.min(5, Math.max(0.5, p.riskPerTradePct ?? 1.5)),
               dailyLossLimitPct: Math.min(4, Math.max(3, p.dailyLossLimitPct ?? 3.5)),
               timestamp: new Date().toISOString(),
               startBalanceUsd: p.startBalanceUsd,

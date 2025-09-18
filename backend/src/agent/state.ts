@@ -26,8 +26,8 @@ export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|
 export type ActivationProfile = {
   symbol: string;
   mode: AgentMode;
-  maxLeverage: number; // <= 5
-  riskPerTradePct: number; // 1..2
+  maxLeverage: number; // <= 10
+  riskPerTradePct: number; // 0.5..5
   dailyLossLimitPct: number; // 3..4
   timestamp: string; // ISO, acts as a signed "freeze"
   startBalanceUsd?: number;
@@ -84,8 +84,8 @@ export class ReboundRejectionAgent {
     if (this.recoveryTimer) { try { clearTimeout(this.recoveryTimer); } catch {} this.recoveryTimer = null; }
     if (this.cooldownTimer) { try { clearTimeout(this.cooldownTimer); } catch {} this.cooldownTimer = null; }
     this.cooldownContext = null;
-    if (profile.maxLeverage > 5) throw new Error('maxLeverage>5 not allowed');
-    if (profile.riskPerTradePct < 1 || profile.riskPerTradePct > 2) throw new Error('risk/trade must be 1-2%');
+    if (profile.maxLeverage > 10) throw new Error('maxLeverage>10 not allowed');
+    if (profile.riskPerTradePct < 0.5 || profile.riskPerTradePct > 5) throw new Error('risk/trade must be 0.5-5%');
     if (profile.dailyLossLimitPct < 3 || profile.dailyLossLimitPct > 4) throw new Error('daily loss must be 3-4%');
 
     // init broker (paper only for now)
@@ -262,7 +262,10 @@ export class ReboundRejectionAgent {
       if (typeof range.max === 'number') planRiskMaxPct = range.max * 100;
       if (typeof range.recommended === 'number') planRiskRecommendedPct = range.recommended * 100;
     }
-    let dynamicRiskPct = planRiskRecommendedPct ?? this.profile.riskPerTradePct;
+    if (planRiskMinPct != null) planRiskMinPct = Math.min(planRiskMinPct, this.profile.riskPerTradePct);
+    if (planRiskMaxPct != null) planRiskMaxPct = Math.max(planRiskMaxPct, this.profile.riskPerTradePct);
+    let dynamicRiskPct = this.profile.riskPerTradePct;
+    if (!(dynamicRiskPct > 0) && planRiskRecommendedPct != null) dynamicRiskPct = planRiskRecommendedPct;
     if (!(dynamicRiskPct > 0)) dynamicRiskPct = this.profile.riskPerTradePct;
     try {
       this.adaptiveRisk = await computeAdaptiveRisk(this.sessionId, this.profile.riskPerTradePct);

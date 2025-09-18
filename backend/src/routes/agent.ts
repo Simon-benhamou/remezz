@@ -63,8 +63,8 @@ router.post('/start', async (req,res)=>{
     await AgentHub.activate(s.id, {
       symbol,
       mode,
-      maxLeverage: Math.min(5, Math.max(1, body.maxLeverage ?? 4)),
-      riskPerTradePct: Math.min(2, Math.max(1, body.riskPerTradePct ?? 1.5)),
+      maxLeverage: Math.min(10, Math.max(1, body.maxLeverage ?? 4)),
+      riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
       dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
       timestamp: new Date().toISOString(),
       startBalanceUsd: startBalanceUsd,

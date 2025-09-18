@@ -22,13 +22,13 @@ export const PlanZ = z.object({
     max_hold_hours: z.number().min(1).max(72).default(36),
   }),
   position: z.object({
-    risk_fraction: z.number().min(0.005).max(0.03).default(0.015),
+    risk_fraction: z.number().min(0.005).max(0.05).default(0.015),
     risk_fraction_range: z.object({
-      min: z.number().min(0.005).max(0.03),
-      max: z.number().min(0.005).max(0.03),
-      recommended: z.number().min(0.005).max(0.03),
+      min: z.number().min(0.005).max(0.05),
+      max: z.number().min(0.005).max(0.05),
+      recommended: z.number().min(0.005).max(0.05),
     }).partial().optional(),
-    max_leverage: z.number().min(1).max(5),
+    max_leverage: z.number().min(1).max(10),
   }).superRefine((val, ctx) => {
     if (val.risk_fraction_range) {
       const { min, max, recommended } = val.risk_fraction_range;

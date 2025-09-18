@@ -57,7 +57,7 @@ function normalizePlanOutput(raw: any, symbol: string): any {
   const position = out.position || {};
   const stopMultRaw = Number(risk?.stop?.mult ?? risk?.stop?.value ?? entryRaw?.stop?.mult ?? 1);
   const riskFractionRaw = Number(position.risk_fraction ?? position.size_fraction ?? 0.015);
-  const riskFraction = clamp(Number.isFinite(riskFractionRaw) ? riskFractionRaw : 0.015, 0.005, 0.03);
+  const riskFraction = clamp(Number.isFinite(riskFractionRaw) ? riskFractionRaw : 0.015, 0.005, 0.05);
 
   const tpRaw = Array.isArray(risk.tp) ? risk.tp : Array.isArray(out.tp) ? out.tp : [];
   const tpValues = tpRaw
@@ -80,14 +80,14 @@ function normalizePlanOutput(raw: any, symbol: string): any {
   const stopMult = clamp(Number.isFinite(stopMultRaw) ? stopMultRaw : 1, 0.4, 3);
   const maxHold = clamp(Number(risk.max_hold_hours ?? risk.maxHoldHours ?? 36) || 36, 6, 72);
   const maxLevRaw = Number(position.max_leverage ?? position.leverage ?? 4);
-  const maxLeverage = clamp(Number.isFinite(maxLevRaw) ? maxLevRaw : 4, 1, 5);
+  const maxLeverage = clamp(Number.isFinite(maxLevRaw) ? maxLevRaw : 4, 1, 10);
 
   const confirmClose = entryRaw.confirm_close != null ? Boolean(entryRaw.confirm_close) : (entryType === 'rebound');
   const maxDistPct = clamp(Number(entryRaw.max_distance_pct ?? entryRaw.maxDistancePct ?? 0.4) || 0.4, 0.1, 5);
 
   const exposureRange = position.risk_fraction_range || {};
-  const rangeMin = clamp(Number(exposureRange.min ?? riskFraction * 0.8), 0.005, 0.03);
-  const rangeMax = clamp(Number(exposureRange.max ?? riskFraction * 1.2), Math.max(rangeMin + 0.001, 0.006), 0.03);
+  const rangeMin = clamp(Number(exposureRange.min ?? riskFraction * 0.8), 0.005, 0.05);
+  const rangeMax = clamp(Number(exposureRange.max ?? riskFraction * 1.2), Math.max(rangeMin + 0.001, 0.006), 0.05);
   const rangeRec = clamp(Number(exposureRange.recommended ?? riskFraction), rangeMin, rangeMax);
 
   const plan: any = {
@@ -135,8 +135,14 @@ function alignPlanForConsistency(plan: PlanJson): PlanJson {
     meta: plan.meta ? { ...plan.meta } : plan.meta,
   };
 
-  if (clone.bias === 'long' && clone.zone.type !== 'support') clone.zone.type = 'support';
-  if (clone.bias === 'short' && clone.zone.type !== 'resistance') clone.zone.type = 'resistance';
+  const playbook = (clone.meta as any)?.playbook;
+  if (playbook === 'momentum_breakout') {
+    const expectedZone = clone.bias === 'long' ? 'resistance' : clone.bias === 'short' ? 'support' : clone.zone.type;
+    if (expectedZone) clone.zone.type = expectedZone as any;
+  } else {
+    if (clone.bias === 'long' && clone.zone.type !== 'support') clone.zone.type = 'support';
+    if (clone.bias === 'short' && clone.zone.type !== 'resistance') clone.zone.type = 'resistance';
+  }
   if (clone.bias === 'long' && clone.entry_rule.type === 'rejection') clone.entry_rule.type = 'rebound';
   if (clone.bias === 'short' && clone.entry_rule.type === 'rebound') clone.entry_rule.type = 'rejection';
   if (clone.bias === 'none' && clone.zone.type !== 'support' && clone.zone.type !== 'resistance') {
@@ -144,12 +150,12 @@ function alignPlanForConsistency(plan: PlanJson): PlanJson {
   }
   clone.risk.stop.mult = clamp(clone.risk.stop.mult, 0.4, 3);
   clone.risk.tp = clone.risk.tp.map(tp => ({ type: 'R', value: clamp(tp.value, 0.5, 5) }));
-  clone.position.risk_fraction = clamp(clone.position.risk_fraction, 0.005, 0.03);
-  clone.position.max_leverage = clamp(clone.position.max_leverage, 1, 5);
+  clone.position.risk_fraction = clamp(clone.position.risk_fraction, 0.005, 0.05);
+  clone.position.max_leverage = clamp(clone.position.max_leverage, 1, 10);
   if (clone.position.risk_fraction_range) {
     const { min, max, recommended } = clone.position.risk_fraction_range;
-    const newMin = clamp(min ?? clone.position.risk_fraction * 0.8, 0.005, 0.03);
-    const newMax = clamp(max ?? clone.position.risk_fraction * 1.2, newMin + 0.001, 0.03);
+    const newMin = clamp(min ?? clone.position.risk_fraction * 0.8, 0.005, 0.05);
+    const newMax = clamp(max ?? clone.position.risk_fraction * 1.2, newMin + 0.001, 0.05);
     const newRec = clamp(recommended ?? clone.position.risk_fraction, newMin, newMax);
     clone.position.risk_fraction_range = { min: newMin, max: newMax, recommended: newRec };
   }
@@ -179,14 +185,14 @@ function cachePlan(key: string, plan: PlanJson) {
 function normalizeRiskRange(position: PlanJson['position']) {
   const base = typeof position.risk_fraction === 'number' ? position.risk_fraction : 0.015;
   const minDefault = Math.max(0.005, base * 0.8);
-  const maxDefault = Math.min(0.03, base * 1.2);
+  const maxDefault = Math.min(0.05, base * 1.2);
   let min = minDefault;
   let max = maxDefault;
   let recommended = base;
   if (position.risk_fraction_range) {
     const range = position.risk_fraction_range;
-    if (typeof range.min === 'number') min = Math.max(0.005, Math.min(range.min, 0.03));
-    if (typeof range.max === 'number') max = Math.max(min + 0.001, Math.min(range.max, 0.03));
+    if (typeof range.min === 'number') min = Math.max(0.005, Math.min(range.min, 0.05));
+    if (typeof range.max === 'number') max = Math.max(min + 0.001, Math.min(range.max, 0.05));
     if (typeof range.recommended === 'number') recommended = range.recommended;
   }
   min = Math.min(min, max);

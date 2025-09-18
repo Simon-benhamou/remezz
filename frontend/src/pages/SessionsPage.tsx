@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, Segmented, InputNumber, Typography, Select } from 'antd';
+import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -39,10 +39,10 @@ export default function SessionsPage(){
     const p = r.profile || {};
     form.setFieldsValue({
       symbol: r.symbol,
-      mode: r.mode,
+      mode,
       startBalanceUsd: r.startBalanceUsd,
-      riskPerTradePct: p.riskPerTradePct ?? 1.5,
-      maxLeverage: p.maxLeverage ?? 4,
+      riskPerTradePct: Math.min(5, Math.max(0.5, p.riskPerTradePct ?? 1.5)),
+      maxLeverage: Math.min(10, Math.max(1, p.maxLeverage ?? 4)),
       dailyLossLimitPct: p.dailyLossLimitPct ?? 3.5,
       budgetPct: p.budgetPct ?? 100,
     });
@@ -133,19 +133,22 @@ export default function SessionsPage(){
               filterOption={(input, option)=> (option?.label as string).toLowerCase().includes(input.toLowerCase())}
             />
           </Form.Item>
-          <Form.Item label='Mode' name='mode'>
-            <Segmented options={['paper','live']} onChange={()=>{ /* re-render to update max */ }} />
+          <Form.Item label='Mode'>
+            <Tag color={String(modeVal ?? mode).toLowerCase()==='live' ? 'gold' : 'blue'}>{String(modeVal ?? mode).toUpperCase()}</Tag>
+            <Form.Item name='mode' hidden>
+              <Input type='hidden' />
+            </Form.Item>
           </Form.Item>
           {String(modeVal||'paper') !== 'live' && (
             <Form.Item label='Start balance USD (optional)' name='startBalanceUsd' tooltip={exBal? `Exchange: Free $${Number(exBal.freeUsd||0).toFixed(2)} • Equity $${Number(exBal.totalUsd||0).toFixed(2)}`: undefined}>
               <InputNumber style={{ width: '100%' }} min={0} max={exBal?.totalUsd ?? undefined} />
             </Form.Item>
           )}
-          <Form.Item label='Risk % per trade' name='riskPerTradePct' rules={[{ type:'number', min:1, max:2 }]}>
-            <InputNumber style={{ width: '100%' }} min={1} max={2} step={0.1} />
+          <Form.Item label='Risk % per trade' name='riskPerTradePct' rules={[{ type:'number', min:0.5, max:5 }]}>
+            <InputNumber style={{ width: '100%' }} min={0.5} max={5} step={0.1} />
           </Form.Item>
-          <Form.Item label='Max leverage' name='maxLeverage' rules={[{ type:'number', min:1, max:5 }]}>
-            <InputNumber style={{ width: '100%' }} min={1} max={5} step={1} />
+          <Form.Item label='Max leverage' name='maxLeverage' rules={[{ type:'number', min:1, max:10 }]}>
+            <InputNumber style={{ width: '100%' }} min={1} max={10} step={1} />
           </Form.Item>
           <Form.Item label='Daily loss limit %' name='dailyLossLimitPct' rules={[{ type:'number', min:3, max:4 }]}>
             <InputNumber style={{ width: '100%' }} min={3} max={4} step={0.1} />

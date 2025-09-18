@@ -18,9 +18,9 @@ export type RiskLimits = {
 };
 
 export const defaultLimits = (): RiskLimits => ({
-  riskPctPerTrade: { min: 1, max: 2 },
+  riskPctPerTrade: { min: 0.5, max: 5 },
   dailyLossLimitPct: Math.min(5, Math.max(1, getConfig().DAILY_LOSS_LIMIT_PCT)),
-  maxLeverage: 5,
+  maxLeverage: 10,
   maxTradesPerDay: 3,
   maxConsecutiveStops: 3,
 });
@@ -40,7 +40,7 @@ export async function assessRisk(ctx: RiskContext, limits = defaultLimits()): Pr
 
 export type SizingInput = {
   balanceUsd: number;
-  riskPct: number; // 1..2
+  riskPct: number; // 0.5..5
   stopDistanceAbs: number;
   entryPrice: number;
   maxLev: number;
@@ -53,4 +53,3 @@ export function computeQtyNotional({ balanceUsd, riskPct, stopDistanceAbs, entry
   const maxNotional = balanceUsd * maxLev;
   return Math.max(0, Math.min(notional, maxNotional));
 }
-
