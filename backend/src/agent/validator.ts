@@ -82,7 +82,7 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
     // reject if spread > 0.15%
     spreadOk = spreadPct <= 0.15;
   }
-  const leverageOk = plan.position.max_leverage <= 5;
+  const leverageOk = plan.position.max_leverage <= 10;
 
   const regime = snap.regime;
   if (regime) {
