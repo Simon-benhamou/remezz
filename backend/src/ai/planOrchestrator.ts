@@ -382,9 +382,11 @@ function ensurePlanConsistency(plan: PlanJson, regime: RegimeProfile | undefined
     if (plan.bias !== expectedBias) issues.push(`bias_mismatch:${plan.bias}->${expectedBias}`);
     const expectedZone = expectedBias === 'long' ? 'resistance' : 'support';
     if (plan.zone.type !== expectedZone) issues.push(`zone_mismatch:${plan.zone.type}->${expectedZone}`);
+  } else {
+    // Mean reversion or other playbooks: enforce classic alignment
+    if (plan.bias === 'long' && plan.zone.type === 'resistance') issues.push('long_zone_resistance');
+    if (plan.bias === 'short' && plan.zone.type === 'support') issues.push('short_zone_support');
   }
-  if (plan.bias === 'long' && plan.zone.type === 'resistance') issues.push('long_zone_resistance');
-  if (plan.bias === 'short' && plan.zone.type === 'support') issues.push('short_zone_support');
   if (plan.risk.stop.mult < 0.4 || plan.risk.stop.mult > 3.5) issues.push('stop_mult_out_of_bounds');
   if (!plan.risk.tp.length || plan.risk.tp.some(tp => tp.value <= 0)) issues.push('tp_invalid');
   if (plan.position.risk_fraction <= 0 || plan.position.risk_fraction > 0.05) issues.push('risk_fraction_out_of_bounds');
