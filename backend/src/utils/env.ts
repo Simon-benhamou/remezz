@@ -57,6 +57,13 @@ export type Cfg = {
   ORDER_FILL_TIMEOUT_SEC: number;     // max seconds to wait for a live order to fill
   ORDER_FILL_POLL_MS: number;         // polling interval for fetchOrder
   ORDER_RETRY_MAX: number;            // how many times to retry a market order if not filled
+  // Plan LLM limits
+  PLAN_LLM_COOLDOWN_MIN: number;
+  PLAN_LLM_MAX_PER_HOUR: number;
+  COOLDOWN_CONFIDENCE_MIN: number;
+  COOLDOWN_MOMENTUM_THRESHOLD: number;
+  ENTRY_MIN_ATR_PCT: number;
+  ENTRY_MIN_SLOPE_ABS_PCT: number;
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -113,5 +120,11 @@ export function getConfig(): Cfg {
     ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
+    PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "15"),
+    PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "3"),
+    COOLDOWN_CONFIDENCE_MIN: Number(e.COOLDOWN_CONFIDENCE_MIN || "0.6"),
+    COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
+    ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "1.0"),
+    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
   };
 }

@@ -2,7 +2,7 @@
 // Global throttling and debounce utilities for LLM-heavy operations
 
 export type Key = string; // typically the symbol
-export type Kind = 'strategy';
+export type Kind = 'strategy' | 'plan';
 
 type KindState = {
   lastAt: number;
@@ -13,14 +13,11 @@ type KindState = {
   lastWasOutside: boolean;
 };
 
-const state: Record<Kind, Record<Key, KindState>> = { strategy: {} };
+const state: Record<Kind, Record<Key, KindState>> = { strategy: {}, plan: {} };
 const NOW = () => Date.now();
 
-export function shouldAllowStrategyLLM(key: Key, opts: {
-  cooldownMin: number;
-  maxPerHour: number;
-}): boolean {
-  const s = (state.strategy[key] ||= {
+function ensureState(kind: Kind, key: Key): KindState {
+  return (state[kind][key] ||= {
     lastAt: 0,
     countHour: 0,
     windowStart: NOW(),
@@ -28,6 +25,13 @@ export function shouldAllowStrategyLLM(key: Key, opts: {
     lastWasOutside: false,
     lastZone: null,
   });
+}
+
+export function shouldAllowLLM(kind: Kind, key: Key, opts: {
+  cooldownMin: number;
+  maxPerHour: number;
+}): boolean {
+  const s = ensureState(kind, key);
   const now = NOW();
 
   // reset hourly window
@@ -45,28 +49,30 @@ export function shouldAllowStrategyLLM(key: Key, opts: {
   return true;
 }
 
-export function markStrategyLLM(key: Key) {
-  const s = (state.strategy[key] ||= {
-    lastAt: 0,
-    countHour: 0,
-    windowStart: NOW(),
-    outsideTicks: 0,
-    lastWasOutside: false,
-    lastZone: null,
-  });
+export function markLLM(kind: Kind, key: Key) {
+  const s = ensureState(kind, key);
   s.lastAt = NOW();
   s.countHour += 1;
 }
 
+export function shouldAllowStrategyLLM(key: Key, opts: { cooldownMin: number; maxPerHour: number }): boolean {
+  return shouldAllowLLM('strategy', key, opts);
+}
+
+export function markStrategyLLM(key: Key) {
+  markLLM('strategy', key);
+}
+
+export function shouldAllowPlanLLM(key: Key, opts: { cooldownMin: number; maxPerHour: number }): boolean {
+  return shouldAllowLLM('plan', key, opts);
+}
+
+export function markPlanLLM(key: Key) {
+  markLLM('plan', key);
+}
+
 export function updateZoneState(key: Key, zone: { min?: number | null; max?: number | null } | null) {
-  const s = (state.strategy[key] ||= {
-    lastAt: 0,
-    countHour: 0,
-    windowStart: NOW(),
-    outsideTicks: 0,
-    lastWasOutside: false,
-    lastZone: null,
-  });
+  const s = ensureState('strategy', key);
   s.lastZone = zone;
 }
 
@@ -77,14 +83,7 @@ export function zoneExitDebounced(
   hysteresisPct: number,
   requiredTicks: number
 ): boolean {
-  const s = (state.strategy[key] ||= {
-    lastAt: 0,
-    countHour: 0,
-    windowStart: NOW(),
-    outsideTicks: 0,
-    lastWasOutside: false,
-    lastZone: null,
-  });
+  const s = ensureState('strategy', key);
   const z = s.lastZone;
   if (!z || z.min == null || z.max == null) {
     s.outsideTicks = 0;

@@ -6,8 +6,157 @@ import { getConfig } from '../utils/env.js';
 import { fullAnalysis } from './analysis.js';
 import type { RegimeProfile } from './regime.js';
 import { recordOpsEvent } from '../monitor/ops.js';
+import { markPlanLLM, shouldAllowPlanLLM } from './guard.js';
 
 function safeParse<T=any>(s: string): T { try { return JSON.parse(s) as T; } catch { throw new Error('LLM returned non-JSON'); } }
+
+const biasMap: Record<string, 'long'|'short'|'none'> = {
+  long: 'long', buy: 'long', bullish: 'long', uptrend: 'long', up: 'long',
+  short: 'short', sell: 'short', bearish: 'short', downtrend: 'short', down: 'short',
+  none: 'none', neutral: 'none', standby: 'none', flat: 'none', sidelined: 'none',
+};
+
+const zoneMap: Record<string, 'support'|'resistance'> = {
+  support: 'support', demand: 'support', floor: 'support', base: 'support',
+  resistance: 'resistance', supply: 'resistance', ceiling: 'resistance', cap: 'resistance',
+};
+
+const entryTypeMap: Record<string, 'rebound'|'rejection'> = {
+  rebound: 'rebound', bounce: 'rebound', pullback: 'rebound', retrace: 'rebound', mean_reversion: 'rebound',
+  rejection: 'rejection', breakout: 'rejection', fade: 'rejection', breakdown: 'rejection',
+};
+
+function clamp(num: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, num));
+}
+
+function normalizePlanOutput(raw: any, symbol: string): any {
+  const out = typeof raw === 'object' && raw ? { ...raw } : {};
+  const biasKey = String(out.bias ?? '').toLowerCase().trim();
+  let bias = biasMap[biasKey] ?? 'none';
+
+  const zoneRaw = out.zone || {};
+  const zoneKey = String(zoneRaw.type ?? '').toLowerCase().trim();
+  let zoneType = zoneMap[zoneKey];
+  if (!zoneType) zoneType = bias === 'short' ? 'resistance' : 'support';
+  if (bias === 'long' && zoneType !== 'support') zoneType = 'support';
+  if (bias === 'short' && zoneType !== 'resistance') zoneType = 'resistance';
+
+  const entryRaw = out.entry_rule || {};
+  const entryKey = String(entryRaw.type ?? '').toLowerCase().trim();
+  let entryType = entryTypeMap[entryKey];
+  if (!entryType) entryType = zoneType === 'support' ? 'rebound' : 'rejection';
+  if (bias === 'long' && entryType === 'rejection') entryType = 'rebound';
+  if (bias === 'short' && entryType === 'rebound') entryType = 'rejection';
+
+  const timeframeRaw = String(out.timeframe || '').toLowerCase();
+  const allowedTf = ['15m', '1h', '4h', '1d'];
+  const timeframe = allowedTf.includes(timeframeRaw) ? timeframeRaw : '1h';
+
+  const risk = out.risk || {};
+  const position = out.position || {};
+  const stopMultRaw = Number(risk?.stop?.mult ?? risk?.stop?.value ?? entryRaw?.stop?.mult ?? 1);
+  const riskFractionRaw = Number(position.risk_fraction ?? position.size_fraction ?? 0.015);
+  const riskFraction = clamp(Number.isFinite(riskFractionRaw) ? riskFractionRaw : 0.015, 0.005, 0.03);
+
+  const tpRaw = Array.isArray(risk.tp) ? risk.tp : Array.isArray(out.tp) ? out.tp : [];
+  const tpValues = tpRaw
+    .map((item: any) => {
+      if (item == null) return null;
+      if (typeof item === 'number') return item;
+      if (typeof item === 'string') {
+        const num = Number(item.replace(/[^0-9.\-]/g, ''));
+        return Number.isFinite(num) ? num : null;
+      }
+      if (typeof item === 'object') {
+        const v = Number(item.value ?? item.r ?? item.tp);
+        return Number.isFinite(v) ? v : null;
+      }
+      return null;
+    })
+    .filter((v: number | null): v is number => Number.isFinite(v) && v != null && v > 0);
+  if (!tpValues.length) tpValues.push(1.6, 2.8);
+
+  const stopMult = clamp(Number.isFinite(stopMultRaw) ? stopMultRaw : 1, 0.4, 3);
+  const maxHold = clamp(Number(risk.max_hold_hours ?? risk.maxHoldHours ?? 36) || 36, 6, 72);
+  const maxLevRaw = Number(position.max_leverage ?? position.leverage ?? 4);
+  const maxLeverage = clamp(Number.isFinite(maxLevRaw) ? maxLevRaw : 4, 1, 5);
+
+  const confirmClose = entryRaw.confirm_close != null ? Boolean(entryRaw.confirm_close) : (entryType === 'rebound');
+  const maxDistPct = clamp(Number(entryRaw.max_distance_pct ?? entryRaw.maxDistancePct ?? 0.4) || 0.4, 0.1, 5);
+
+  const exposureRange = position.risk_fraction_range || {};
+  const rangeMin = clamp(Number(exposureRange.min ?? riskFraction * 0.8), 0.005, 0.03);
+  const rangeMax = clamp(Number(exposureRange.max ?? riskFraction * 1.2), Math.max(rangeMin + 0.001, 0.006), 0.03);
+  const rangeRec = clamp(Number(exposureRange.recommended ?? riskFraction), rangeMin, rangeMax);
+
+  const plan: any = {
+    name: typeof out.name === 'string' && out.name.trim() ? out.name.trim() : `LLM_${symbol}`,
+    symbol: typeof out.symbol === 'string' && out.symbol.trim() ? out.symbol.trim() : symbol,
+    timeframe,
+    bias,
+    zone: {
+      type: zoneType,
+      price: Number.isFinite(Number(zoneRaw.price)) ? Number(zoneRaw.price) : null,
+      from: 'auto_detect',
+    },
+    entry_rule: {
+      type: entryType,
+      confirm_close: confirmClose,
+      max_distance_pct: maxDistPct,
+    },
+    risk: {
+      stop: { type: 'atr', mult: stopMult },
+      tp: tpValues.map((value) => ({ type: 'R' as const, value: clamp(value, 0.5, 5) })),
+      max_hold_hours: maxHold,
+    },
+    position: {
+      risk_fraction: riskFraction,
+      risk_fraction_range: { min: rangeMin, max: rangeMax, recommended: rangeRec },
+      max_leverage: maxLeverage,
+    },
+    notes: typeof out.notes === 'string' ? out.notes : undefined,
+  };
+
+  if (out.meta && typeof out.meta === 'object') {
+    plan.meta = { ...out.meta };
+  }
+
+  return plan;
+}
+
+function alignPlanForConsistency(plan: PlanJson): PlanJson {
+  const clone: PlanJson = {
+    ...plan,
+    zone: { ...plan.zone },
+    entry_rule: { ...plan.entry_rule },
+    risk: { ...plan.risk, stop: { ...plan.risk.stop }, tp: plan.risk.tp.map(tp => ({ ...tp })) },
+    position: { ...plan.position },
+    meta: plan.meta ? { ...plan.meta } : plan.meta,
+  };
+
+  if (clone.bias === 'long' && clone.zone.type !== 'support') clone.zone.type = 'support';
+  if (clone.bias === 'short' && clone.zone.type !== 'resistance') clone.zone.type = 'resistance';
+  if (clone.bias === 'long' && clone.entry_rule.type === 'rejection') clone.entry_rule.type = 'rebound';
+  if (clone.bias === 'short' && clone.entry_rule.type === 'rebound') clone.entry_rule.type = 'rejection';
+  if (clone.bias === 'none' && clone.zone.type !== 'support' && clone.zone.type !== 'resistance') {
+    clone.zone.type = 'support';
+  }
+  clone.risk.stop.mult = clamp(clone.risk.stop.mult, 0.4, 3);
+  clone.risk.tp = clone.risk.tp.map(tp => ({ type: 'R', value: clamp(tp.value, 0.5, 5) }));
+  clone.position.risk_fraction = clamp(clone.position.risk_fraction, 0.005, 0.03);
+  clone.position.max_leverage = clamp(clone.position.max_leverage, 1, 5);
+  if (clone.position.risk_fraction_range) {
+    const { min, max, recommended } = clone.position.risk_fraction_range;
+    const newMin = clamp(min ?? clone.position.risk_fraction * 0.8, 0.005, 0.03);
+    const newMax = clamp(max ?? clone.position.risk_fraction * 1.2, newMin + 0.001, 0.03);
+    const newRec = clamp(recommended ?? clone.position.risk_fraction, newMin, newMax);
+    clone.position.risk_fraction_range = { min: newMin, max: newMax, recommended: newRec };
+  }
+  clone.entry_rule.max_distance_pct = clamp(clone.entry_rule.max_distance_pct, 0.1, 5);
+  clone.risk.max_hold_hours = clamp(clone.risk.max_hold_hours, 6, 72);
+  return clone;
+}
 
 const PLAN_CACHE_TTL_MS = Number(process.env.PLAN_CACHE_TTL_MS || 30 * 60 * 1000);
 const planCache = new Map<string, { ts: number; plan: PlanJson }>();
@@ -111,6 +260,23 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
   try {
     const cfg = getConfig();
     const day = new Date().toISOString().slice(0,10);
+    const planCooldownMin = Number(process.env.PLAN_LLM_COOLDOWN_MIN || cfg.PLAN_LLM_COOLDOWN_MIN || 15);
+    const planMaxPerHour = Number(process.env.PLAN_LLM_MAX_PER_HOUR || cfg.PLAN_LLM_MAX_PER_HOUR || 3);
+    const allowPlanCall = opts?.fresh || opts?.context ? true : shouldAllowPlanLLM(symbol, { cooldownMin: planCooldownMin, maxPerHour: planMaxPerHour });
+
+    if (!allowPlanCall) {
+      if (allowCache) {
+        const cached = planCache.get(cacheKey);
+        if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {
+          return clonePlan(cached.plan);
+        }
+      }
+      recordOpsEvent({ level: 'info', source: 'plan_guard', message: 'llm_skipped_due_to_rate', sessionId: opts?.sessionId, symbol, details: { cooldownMin: planCooldownMin, maxPerHour: planMaxPerHour } });
+      const fallback = buildFallbackPlan(symbol, snap, regime);
+      if (allowCache) cachePlan(cacheKey, fallback);
+      return fallback;
+    }
+
     const out = await llmJSON(`${enrichedSys}\nContext: ${JSON.stringify(user)}`, {
       cacheKey: allowCache ? `plan:${day}:${symbol}` : undefined,
       ttlMin: 120,
@@ -119,19 +285,30 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
       provider: cfg.USE_GROK_FOR_PLAN ? 'grok' : 'openai',
       context: { sessionId: opts?.sessionId, symbol, kind: 'plan' },
     });
+    markPlanLLM(symbol);
     const j = safeParse(out);
-    let plan = PlanZ.parse(j);
+    const normalized = alignPlanForConsistency(normalizePlanOutput(j, symbol));
+    const parsed = PlanZ.safeParse(normalized);
+    if (!parsed.success) {
+      const issue = parsed.error.issues?.map(i => i.message).join(';') || 'unknown';
+      throw new Error(`plan_schema_invalid:${issue}`);
+    }
+    let plan = alignPlanForConsistency(parsed.data);
     plan = applyRegimePlaybook(plan, regime, snap);
+    plan = alignPlanForConsistency(plan);
     ensurePlanConsistency(plan, regime, snap);
     normalizeRiskRange(plan.position);
     if (allowCache) cachePlan(cacheKey, plan);
     return clonePlan(plan);
   } catch (e:any) {
-    try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'plan', error: String(e?.message || e) } }); } catch {}
-    try { recordOpsEvent({ level: 'warn', source: 'plan_fallback', message: 'llm_plan_failure', sessionId: opts?.sessionId, symbol, details: { error: String(e?.message || e) } }); } catch {}
+    const errMsg = String(e?.message || e);
+    if (/plan_schema_invalid|LLM returned non-JSON|plan_inconsistent/.test(errMsg)) {
+      try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'plan', error: errMsg } }); } catch {}
+    }
+    recordOpsEvent({ level: 'warn', source: 'plan_fallback', message: 'llm_plan_failure', sessionId: opts?.sessionId, symbol, details: { error: errMsg } });
     const cached = allowCache ? planCache.get(cacheKey) : undefined;
     if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {
-      try { recordOpsEvent({ level: 'warn', source: 'plan_cache', message: 'reuse_cached_plan_after_failure', sessionId: opts?.sessionId, symbol, details: { playbook: regime?.playbook } }); } catch {}
+      recordOpsEvent({ level: 'warn', source: 'plan_cache', message: 'reuse_cached_plan_after_failure', sessionId: opts?.sessionId, symbol, details: { playbook: regime?.playbook } });
       return clonePlan(cached.plan);
     }
     const fallback = buildFallbackPlan(symbol, snap, regime);

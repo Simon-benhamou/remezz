@@ -217,6 +217,27 @@ export class ReboundRejectionAgent {
     if (this.regime && !this.regime.shouldTrade) return;
     if (this.pos || this.entering) return;
     this.entering = true;
+    let snap = _snap;
+    if (!snap) {
+      try {
+        snap = await buildTechSnapshot(this.profile.symbol);
+      } catch (err) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'entry_gate',
+          message: 'snapshot_failed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: { error: String((err as any)?.message || err) },
+        });
+        this.entering = false;
+        return;
+      }
+    }
+    if (!snap || !this.passesEntryMomentumGates(snap, 'enter')) {
+      this.entering = false;
+      return;
+    }
     const bal = await this.broker.balance();
     const side = this.plan.bias === 'long' ? 'buy' : 'sell';
     const entry = mktPrice;
@@ -472,6 +493,37 @@ export class ReboundRejectionAgent {
     }
 
     return candidate;
+  }
+
+  private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {
+    const cfg = getConfig();
+    const atrPct = Number((snap as any)?.atrPct ?? 0);
+    if (atrPct < cfg.ENTRY_MIN_ATR_PCT) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_gate',
+        message: 'atr_pct_too_low',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { atrPct, min: cfg.ENTRY_MIN_ATR_PCT, reason: reasonHint },
+      });
+      return false;
+    }
+    const emaVal = Number((snap as any)?.ema20 ?? snap.last ?? 0);
+    const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+    const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
+    if (slopePctAbs < cfg.ENTRY_MIN_SLOPE_ABS_PCT) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_gate',
+        message: 'slope_too_flat',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { slopePctAbs, min: cfg.ENTRY_MIN_SLOPE_ABS_PCT, reason: reasonHint },
+      });
+      return false;
+    }
+    return true;
   }
 
   private async placeLimitAdaptive(params: { side: 'buy'|'sell'; qty: number; limitPrice: number; stop: number; tp: number[]; entry: number }): Promise<PlacedOrder> {
@@ -1059,7 +1111,7 @@ export class ReboundRejectionAgent {
     if (!opts?.suppressRearm && canRearm) {
       // Immediately request a fresh strategy after an exit (force to bypass cool-down)
       try {
-        await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price, force: true });
+        await requestStrategy({ symbol: this.profile.symbol, trigger: 'position-exit', sessionId: this.sessionId || undefined, priceHint: price });
       } catch {}
 
       // Auto-propose and arm a new plan once back to SCAN
@@ -1101,7 +1153,7 @@ export class ReboundRejectionAgent {
   private startCooldownWatcher(delayMs?: number) {
     if (!this.profile) return;
     if (this.cooldownTimer) { try { clearTimeout(this.cooldownTimer); } catch {} }
-    const interval = Math.max(60_000, Number(process.env.AGENT_COOLDOWN_RECHECK_MS || 180_000));
+    const interval = Math.max(120_000, Number(process.env.AGENT_COOLDOWN_RECHECK_MS || 600_000));
     const wait = Math.max(15_000, delayMs ?? interval);
     this.cooldownTimer = setTimeout(() => {
       this.cooldownTimer = null;
@@ -1118,9 +1170,16 @@ export class ReboundRejectionAgent {
 
   private async evaluateCooldownReactivation() {
     if (!this.profile || this.state !== 'COOLDOWN') return;
-    const interval = Math.max(60_000, Number(process.env.AGENT_COOLDOWN_RECHECK_MS || 180_000));
+    const interval = Math.max(120_000, Number(process.env.AGENT_COOLDOWN_RECHECK_MS || 600_000));
     try {
-      const candidate = await this.computeCooldownCandidate();
+      const snap = await buildTechSnapshot(this.profile.symbol);
+      const momentum = this.computeMomentumSnapshot(snap);
+      const momentumThresh = this.getCooldownMomentumThreshold();
+      if (momentum.score < momentumThresh) {
+        this.startCooldownWatcher(interval);
+        return;
+      }
+      const candidate = await this.computeCooldownCandidate({ snap, momentumScore: momentum.score });
       const minConfidence = this.getCooldownConfidenceThreshold();
       if (candidate && candidate.confidence >= minConfidence) {
         await this.exitCooldownWithPlan(candidate);
@@ -1140,9 +1199,17 @@ export class ReboundRejectionAgent {
   }
 
   private getCooldownConfidenceThreshold() {
-    const raw = Number(process.env.AGENT_COOLDOWN_CONFIDENCE_MIN ?? '');
-    if (Number.isFinite(raw) && raw > 0 && raw < 1) return raw;
-    return 0.65;
+    const cfg = getConfig();
+    const raw = Number(process.env.AGENT_COOLDOWN_CONFIDENCE_MIN ?? cfg.COOLDOWN_CONFIDENCE_MIN ?? '');
+    if (Number.isFinite(raw) && raw > 0 && raw <= 1) return raw;
+    return 0.6;
+  }
+
+  private getCooldownMomentumThreshold() {
+    const cfg = getConfig();
+    const raw = Number(process.env.COOLDOWN_MOMENTUM_THRESHOLD ?? cfg.COOLDOWN_MOMENTUM_THRESHOLD ?? '');
+    if (Number.isFinite(raw) && raw >= 0 && raw <= 1) return raw;
+    return 0.3;
   }
 
   private async exitCooldownWithPlan(candidate: { plan: PlanJson; confidence: number; components: { planScore: number; momentumScore: number; quickTest?: any; momentum?: any } }): Promise<void> {
@@ -1198,11 +1265,11 @@ export class ReboundRejectionAgent {
     }
   }
 
-  private async computeCooldownCandidate(): Promise<{ plan: PlanJson; confidence: number; components: { planScore: number; momentumScore: number; quickTest?: any; momentum?: any } } | null> {
+  private async computeCooldownCandidate(opts?: { snap?: TechnicalSnapshot; momentumScore?: number }): Promise<{ plan: PlanJson; confidence: number; components: { planScore: number; momentumScore: number; quickTest?: any; momentum?: any } } | null> {
     if (!this.profile) return null;
     let plan: PlanJson;
     try {
-      plan = await this.buildPlan({ fresh: true });
+      plan = await this.buildPlan({ fresh: false });
     } catch (err) {
       recordOpsEvent({
         level: 'warn',
@@ -1215,11 +1282,12 @@ export class ReboundRejectionAgent {
       return null;
     }
     if (!plan || (plan as any).bias === 'none') return null;
-    const snap = await buildTechSnapshot(this.profile.symbol);
+    const snap = opts?.snap ?? await buildTechSnapshot(this.profile.symbol);
     const planQuality = this.scorePlanQuality(plan);
     const momentum = this.scoreMomentum(plan, snap);
-    const confidence = Math.min(1, planQuality.score + momentum.score);
-    return { plan, confidence, components: { planScore: planQuality.score, momentumScore: momentum.score, quickTest: planQuality.quickTest, momentum: momentum.details } };
+    const combinedMomentum = Math.max(momentum.score, opts?.momentumScore ?? 0);
+    const confidence = Math.min(1, planQuality.score + combinedMomentum);
+    return { plan, confidence, components: { planScore: planQuality.score, momentumScore: combinedMomentum, quickTest: planQuality.quickTest, momentum: momentum.details } };
   }
 
   private scorePlanQuality(plan: PlanJson): { score: number; quickTest?: any } {
@@ -1289,6 +1357,43 @@ export class ReboundRejectionAgent {
         trendStrength,
         srBias,
       },
+    };
+  }
+
+  private computeMomentumSnapshot(snap: TechnicalSnapshot): { score: number; bias: 'long'|'short'; details: { adx: number; slopePct: number; priceVsEmaPct: number; atrPct: number; realizedVol: number; trendStrength: number; srBias: any } } {
+    const trend = Number((snap as any)?.trendStrength ?? 0);
+    const bias: 'long'|'short' = trend >= 0 ? 'long' : 'short';
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const atrPct = Number((snap as any)?.atrPct ?? 0);
+    const ema = Number((snap as any)?.ema20 ?? snap.last ?? 1);
+    const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+    const slopePct = ema !== 0 ? (emaSlope / Math.abs(ema)) * 100 : 0;
+    const priceVsEmaPct = ema !== 0 ? ((snap.last - ema) / Math.abs(ema)) * 100 : 0;
+    const realizedVol = Number((snap as any)?.realizedVol ?? 0);
+    const trendStrength = Number((snap as any)?.trendStrength ?? 0);
+    const srBias = (snap as any)?.srBias;
+
+    let score = 0;
+    if (adx >= 18) score += 0.18;
+    if (adx >= 24) score += 0.07;
+    const slopeAligned = bias === 'long' ? slopePct > 0.02 : slopePct < -0.02;
+    const slopeStrong = bias === 'long' ? slopePct > 0.06 : slopePct < -0.06;
+    if (slopeAligned) score += 0.12;
+    if (slopeStrong) score += 0.08;
+    const priceAligned = bias === 'long' ? priceVsEmaPct > 0.15 : priceVsEmaPct < -0.15;
+    if (priceAligned) score += 0.07;
+    if (atrPct >= 1.2) score += 0.05;
+    else if (atrPct >= 0.8) score += 0.03;
+    if (realizedVol >= 18) score += 0.05;
+    else if (realizedVol >= 12) score += 0.03;
+    if ((bias === 'long' && trendStrength > 0.2) || (bias === 'short' && trendStrength < -0.2)) score += 0.05;
+    if (bias === 'long' && srBias === 'nearSupport') score += 0.02;
+    if (bias === 'short' && srBias === 'nearResistance') score += 0.02;
+
+    return {
+      score: Math.min(score, 0.5),
+      bias,
+      details: { adx, slopePct, priceVsEmaPct, atrPct, realizedVol, trendStrength, srBias },
     };
   }
 
@@ -1493,6 +1598,23 @@ export class ReboundRejectionAgent {
     if (!this.broker || !this.plan || !this.profile) return;
     if (this.pos || this.entering) return;
     this.entering = true;
+    let snap: TechnicalSnapshot | null = null;
+    try {
+      snap = await buildTechSnapshot(this.profile.symbol);
+    } catch (err) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'entry_gate',
+        message: 'snapshot_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { error: String((err as any)?.message || err), reason: 'reverse' },
+      });
+    }
+    if (!snap || !this.passesEntryMomentumGates(snap, 'reverse')) {
+      this.entering = false;
+      return;
+    }
     const bal = await this.broker.balance();
     const entry = mktPrice;
     const round4 = (n:number)=> Math.round(n*1e4)/1e4;
