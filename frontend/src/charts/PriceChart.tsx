@@ -76,6 +76,8 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     pnlOverlay.style.display = 'none';
     pnlOverlay.style.background = 'rgba(39, 174, 96, 0.10)';
     pnlOverlay.style.zIndex = '1';
+    pnlOverlay.style.overflow = 'hidden'; // Prevent overflow
+    pnlOverlay.style.maxHeight = '360px'; // Match chart height
 
     // Add zone overlay div
     const overlay = document.createElement('div');
@@ -86,7 +88,10 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     overlay.style.background = 'rgba(30,144,255,0.06)';
     overlay.style.display = 'none';
     overlay.style.zIndex = '2';
+    overlay.style.overflow = 'hidden'; // Prevent overflow
+    overlay.style.maxHeight = '360px'; // Match chart height
     ref.current.style.position = 'relative';
+    ref.current.style.overflow = 'hidden'; // Prevent any child overflow
     ref.current.appendChild(pnlOverlay);
     ref.current.appendChild(overlay);
     zoneRef.current = overlay;
@@ -186,10 +191,25 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
         const y1 = seriesRef.current.priceToCoordinate(zmin);
         const y2 = seriesRef.current.priceToCoordinate(zmax);
         if (y1 != null && y2 != null) {
-          const top = Math.min(y1, y2);
-          const height = Math.abs(y1 - y2);
+          // Constrain coordinates to chart bounds
+          const chartHeight = 360;
+          const constrainedY1 = Math.max(0, Math.min(chartHeight, y1));
+          const constrainedY2 = Math.max(0, Math.min(chartHeight, y2));
+          
+          const top = Math.min(constrainedY1, constrainedY2);
+          const height = Math.abs(constrainedY1 - constrainedY2);
+          
+          // Additional safety check
+          const maxHeight = chartHeight - top;
+          const finalHeight = Math.min(height, maxHeight);
+          
+          if (finalHeight < 1 || top < 0 || top >= chartHeight) {
+            zoneRef.current.style.display = 'none';
+            return;
+          }
+          
           zoneRef.current.style.top = `${top}px`;
-          zoneRef.current.style.height = `${height}px`;
+          zoneRef.current.style.height = `${finalHeight}px`;
           zoneRef.current.style.display = 'block';
           zoneRef.current.style.background = agentPlan?.bias==='long' ? 'rgba(46, 204, 113, 0.10)' : 'rgba(231, 76, 60, 0.10)';
         } else {
@@ -215,11 +235,27 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
         pnlRef.current.style.display = 'none';
         return;
       }
-      const top = Math.min(yEntry, yPrice);
-      const height = Math.abs(yEntry - yPrice);
+      
+      // Constrain coordinates to chart bounds to prevent overflow
+      const chartHeight = 360; // Chart height from createChart config
+      const constrainedYEntry = Math.max(0, Math.min(chartHeight, yEntry));
+      const constrainedYPrice = Math.max(0, Math.min(chartHeight, yPrice));
+      
+      const top = Math.min(constrainedYEntry, constrainedYPrice);
+      const height = Math.abs(constrainedYEntry - constrainedYPrice);
+      
+      // Additional safety check to prevent overflow
+      const maxHeight = chartHeight - top;
+      const finalHeight = Math.min(height, maxHeight);
+      
+      if (finalHeight < 1 || top < 0 || top >= chartHeight) {
+        pnlRef.current.style.display = 'none';
+        return;
+      }
+      
       pnlRef.current.style.top = `${top}px`;
-      pnlRef.current.style.height = `${Math.max(1, height)}px`;
-      pnlRef.current.style.display = height < 1 ? 'none' : 'block';
+      pnlRef.current.style.height = `${finalHeight}px`;
+      pnlRef.current.style.display = 'block';
       const favorable = agentPos?.side === 'buy' ? price >= entry : price <= entry;
       pnlRef.current.style.background = favorable ? 'rgba(39, 174, 96, 0.12)' : 'rgba(231, 76, 60, 0.12)';
     } catch {
