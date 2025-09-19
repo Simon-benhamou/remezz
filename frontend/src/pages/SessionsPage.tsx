@@ -62,8 +62,17 @@ export default function SessionsPage(){
           columns={[
             { title:'Symbol', dataIndex:'symbol' },
             { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
+            { title:'Aggressiveness', dataIndex:'aggressiveness', render:(a)=> {
+              const colors = { conservative: 'blue', reactive: 'orange', aggressive: 'red' };
+              return <Tag color={colors[a as keyof typeof colors] || 'default'}>{String(a || 'conservative').toUpperCase()}</Tag>;
+            }},
             { title:'Started', dataIndex:'startedAt', render:(v)=> new Date(v).toLocaleString() },
             { title:'Open pos', dataIndex:'openPositions' },
+            { title:'Win Rate %', dataIndex:'winRate', render:(v:any)=> {
+              const rate = Number(v||0);
+              const color = rate >= 60 ? 'green' : rate >= 50 ? 'orange' : 'red';
+              return <Tag color={color}>{rate.toFixed(1)}%</Tag>;
+            }},
             { title:'PnL (USD)', dataIndex:'pnlUsd', render:(v:any)=> Number(v||0).toFixed(2) },
             { title:'ROI %', dataIndex:'roiPct', render:(v:any)=> Number(v||0).toFixed(2) },
             { title:'', render:(_,r)=> (<Space><Button danger onClick={(e)=> { e.stopPropagation(); stop(r.id); }}>Stop</Button></Space>) }
@@ -77,9 +86,18 @@ export default function SessionsPage(){
         columns={[
           { title:'Symbol', dataIndex:'symbol' },
           { title:'Mode', dataIndex:'mode', render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
+          { title:'Aggressiveness', dataIndex:'aggressiveness', render:(a)=> {
+            const colors = { conservative: 'blue', reactive: 'orange', aggressive: 'red' };
+            return <Tag color={colors[a as keyof typeof colors] || 'default'}>{String(a || 'conservative').toUpperCase()}</Tag>;
+          }},
           { title:'Started', dataIndex:'startedAt', render:(v)=> new Date(v).toLocaleString() },
           { title:'Stopped', dataIndex:'stoppedAt', render:(v)=> v ? new Date(v).toLocaleString() : <Tag color='green'>ACTIVE</Tag> },
           { title:'Open pos', dataIndex:'openPositions' },
+          { title:'Win Rate %', dataIndex:'winRate', render:(v:any)=> {
+            const rate = Number(v||0);
+            const color = rate >= 60 ? 'green' : rate >= 50 ? 'orange' : 'red';
+            return <Tag color={color}>{rate.toFixed(1)}%</Tag>;
+          }},
           { title:'PnL (USD)', dataIndex:'pnlUsd', render:(v:any)=> Number(v||0).toFixed(2) },
           { title:'ROI %', dataIndex:'roiPct', render:(v:any)=> Number(v||0).toFixed(2) },
           { title:'', render:(_,r)=> !r.stoppedAt ? (

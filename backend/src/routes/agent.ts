@@ -228,6 +228,9 @@ router.get('/sessions', async (req,res)=>{
     const unrealized = Number(r.kpi?.unrealizedPnlUsd || 0);
     const pnlUsd = realized + unrealized;
     const roiPct = Number(r.kpi?.roiPct || 0);
+    const winRate = Number(r.kpi?.winRate || 0);
+    const profile = (r as any).profileJson || {};
+    const aggressiveness = profile?.aggressiveness || 'conservative';
     return {
       id: r.id,
       symbol: r.symbol,
@@ -236,7 +239,9 @@ router.get('/sessions', async (req,res)=>{
       stoppedAt: r.stoppedAt,
       startBalanceUsd: r.startBalanceUsd,
       openPositions: (r.positions || []).filter(p => (p.qty ?? 0) > 0).length,
-      profile: (r as any).profileJson || null,
+      profile: profile,
+      aggressiveness,
+      winRate,
       pnlUsd,
       roiPct,
     };
@@ -321,6 +326,9 @@ router.get('/overview', async (req,res)=>{
     const bias = agent?.plan?.bias || null;
     const pos = agent?.pos || null;
     const openQty = Array.isArray((a as any).positions) ? (a as any).positions.reduce((s:number,p:any)=> s + Number(p?.qty||0), 0) : 0;
+    const profile = (a as any).profileJson || {};
+    const aggressiveness = profile?.aggressiveness || 'conservative';
+    const winRate = Number(a.kpi?.winRate || 0);
     return {
       id: a.id,
       symbol: a.symbol,
@@ -329,6 +337,8 @@ router.get('/overview', async (req,res)=>{
       pnlUsd: Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0),
       roiPct: Number(a.kpi?.roiPct || 0),
       aiCalls: Number(a.kpi?.aiCallsTotal || 0),
+      aggressiveness,
+      winRate,
       state,
       bias,
       openQty,

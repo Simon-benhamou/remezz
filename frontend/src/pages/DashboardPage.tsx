@@ -163,8 +163,19 @@ export default function DashboardPage(){
           columns={[
             { title:'Symbol', dataIndex:'symbol' },
             { title:'Mode', dataIndex:'mode', render:(m:any)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag> },
+            { title:'Aggressiveness', dataIndex:'aggressiveness', render:(v:any)=> {
+                const colorMap: {[key: string]: string} = { conservative: 'blue', reactive: 'orange', aggressive: 'red' };
+                return <Tag color={colorMap[v] || 'default'}>{v || 'N/A'}</Tag>;
+              }
+            },
             { title:'State', dataIndex:'state' },
             { title:'Bias', dataIndex:'bias', render:(v:any)=> v? <Tag color={v==='long'?'green':'red'}>{v}</Tag> : '-' },
+            { title:'Win Rate %', dataIndex:'winRate', render:(v:any)=> {
+                const rate = Number(v || 0);
+                const color = rate >= 60 ? 'green' : rate >= 40 ? 'orange' : 'red';
+                return <Tag color={color}>{rate.toFixed(1)}%</Tag>;
+              }
+            },
             { title:'ROI %', dataIndex:'roiPct', render:(v:any)=> Number(v||0).toFixed(2) },
             { title:'PnL (USD)', dataIndex:'pnlUsd', render:(v:any)=> Number(v||0).toFixed(2) },
             { title:'AI', dataIndex:'aiCalls' },
