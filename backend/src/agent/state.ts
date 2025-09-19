@@ -2307,8 +2307,25 @@ export class ReboundRejectionAgent {
     }
 
     let snap: TechnicalSnapshot | null = null;
+    let realtimePrice: number | null = null;
+    
     try {
-      snap = await buildTechSnapshot(this.profile.symbol);
+      // Get both technical snapshot and real-time price
+      const [techSnapshot, ticker] = await Promise.all([
+        buildTechSnapshot(this.profile.symbol),
+        (async () => {
+          try {
+            const { getTicker } = await import('../data/market.js');
+            const tickerData = await getTicker(this.profile!.symbol);
+            return tickerData?.last || null;
+          } catch {
+            return null;
+          }
+        })()
+      ]);
+      
+      snap = techSnapshot;
+      realtimePrice = ticker;
     } catch (err) {
       return {
         canTrade: false,
@@ -2325,7 +2342,8 @@ export class ReboundRejectionAgent {
       };
     }
 
-    const price = snap.last;
+    // Use real-time price if available, fallback to snapshot price
+    const price = realtimePrice ?? snap.last;
     const bias = this.plan.bias;
     const checks: any = {};
 
@@ -2467,30 +2485,39 @@ export class ReboundRejectionAgent {
     };
 
     // Volatility check with detailed info
+    // Use dynamic ATR thresholds based on aggressiveness level
+    const thresholds = this.effectiveEntryThresholds();
+    const minAtrPct = thresholds.ENTRY_MIN_ATR_PCT;
+    const goodAtrPct = Math.max(minAtrPct * 1.5, 1.0); // Scale thresholds or keep traditional good level
+    const excellentAtrPct = Math.max(minAtrPct * 2.0, 1.5); // Scale thresholds or keep traditional excellent level
+    
     let volPoints = 0;
     let volDetails = '';
     
-    if (atrPct >= 1.5) {
+    if (atrPct >= excellentAtrPct) {
       volPoints = 15;
       volDetails = `ATR ${atrPct.toFixed(2)}% (excellent volatility)`;
-    } else if (atrPct >= 1.0) {
+    } else if (atrPct >= goodAtrPct) {
       volPoints = 10;
-      volDetails = `ATR ${atrPct.toFixed(2)}% (good, need 1.5% for max points)`;
+      volDetails = `ATR ${atrPct.toFixed(2)}% (good, need ${excellentAtrPct.toFixed(2)}% for max points)`;
+    } else if (atrPct >= minAtrPct) {
+      volPoints = 5;
+      volDetails = `ATR ${atrPct.toFixed(2)}% (acceptable, need ${goodAtrPct.toFixed(2)}% for good)`;
     } else {
-      volDetails = `ATR ${atrPct.toFixed(2)}% (too low, need 1.0% minimum)`;
+      volDetails = `ATR ${atrPct.toFixed(2)}% (too low, need ${minAtrPct.toFixed(2)}% minimum)`;
     }
     
     checks.qualityFilters.volatility = {
-      status: atrPct >= 1.0 ? 'PASS' : 'FAIL',
+      status: atrPct >= minAtrPct ? 'PASS' : 'FAIL',
       reason: volDetails,
       value: atrPct,
       points: volPoints,
       details: {
         currentATR: atrPct,
         thresholds: {
-          minimum: 1.0,
-          good: 1.0,
-          excellent: 1.5
+          minimum: minAtrPct,
+          good: goodAtrPct,
+          excellent: excellentAtrPct
         }
       }
     };
