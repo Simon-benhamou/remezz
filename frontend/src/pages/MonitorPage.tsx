@@ -97,16 +97,25 @@ export default function MonitorPage(){
     }
   };
 
-  // Progressive loading system
+  // Progressive loading system with timeout
   React.useEffect(() => {
     if (!sessionId) return;
     
     const loadData = async () => {
+      // Set a maximum loading timeout
+      const loadingTimeout = setTimeout(() => {
+        updateProgress(LoadingPhase.COMPLETE, 100, 'Load timeout - continuing with available data', 'Loading timeout after 15 seconds');
+      }, 15000); // 15 second timeout
+      
       try {
         // Phase 1: Core data (session, symbol, basic status)
         updateProgress(LoadingPhase.CORE_DATA, 10, 'Loading session data...');
         
-        const s = await api.status(sessionId);
+        const s = await Promise.race([
+          api.status(sessionId),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Status timeout')), 5000))
+        ]);
+        
         if (!s?.session?.id) {
           navigate('/sessions');
           return;
@@ -118,10 +127,16 @@ export default function MonitorPage(){
         
         updateProgress(LoadingPhase.CORE_DATA, 30, 'Loading agent state...');
         
-        // Load core data in parallel
+        // Load core data in parallel with timeout
         const [agentData, tickerData] = await Promise.allSettled([
-          api.getAgentState(s.session.id),
-          sym ? api.getTicker(sym) : Promise.resolve(null)
+          Promise.race([
+            api.getAgentState(s.session.id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 3000))
+          ]),
+          sym ? Promise.race([
+            api.getTicker(sym),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Ticker timeout')), 3000))
+          ]) : Promise.resolve(null)
         ]);
         
         if (agentData.status === 'fulfilled') setAgent(agentData.value);
@@ -131,35 +146,38 @@ export default function MonitorPage(){
         
         // Phase 2: Trading data (orders, trades, strategy, analysis)
         const [strategyData, analysisData, kpiData, ordersData, tradesData] = await Promise.allSettled([
-          sym ? api.strategyToday(sym) : Promise.resolve(null),
-          sym ? api.analysis(sym) : Promise.resolve(null),
-          api.getPerf(s.session.id),
-          api.getOrders(s.session.id),
-          api.getTrades(s.session.id)
+          sym ? api.strategyToday(sym).catch(e => { console.warn('Strategy failed:', e); return null; }) : Promise.resolve(null),
+          sym ? api.analysis(sym).catch(e => { console.warn('Analysis failed:', e); return null; }) : Promise.resolve(null),
+          api.getPerf(s.session.id).catch(e => { console.warn('Perf failed:', e); return null; }),
+          api.getOrders(s.session.id).catch(e => { console.warn('Orders failed:', e); return []; }),
+          api.getTrades(s.session.id).catch(e => { console.warn('Trades failed:', e); return []; })
         ]);
         
         if (strategyData.status === 'fulfilled' && strategyData.value) setStrategy(strategyData.value);
         if (analysisData.status === 'fulfilled' && analysisData.value) setAnalysis(analysisData.value);
         if (kpiData.status === 'fulfilled') setKpi(kpiData.value);
-        if (ordersData.status === 'fulfilled') setOrders(ordersData.value);
-        if (tradesData.status === 'fulfilled') setTrades(tradesData.value);
+        if (ordersData.status === 'fulfilled') setOrders(ordersData.value || []);
+        if (tradesData.status === 'fulfilled') setTrades(tradesData.value || []);
         
         updateProgress(LoadingPhase.SECONDARY_DATA, 80, 'Loading monitoring data...');
         
-        // Phase 3: Monitoring data (analytics, health, triggers)
+        // Phase 3: Monitoring data (analytics, health, triggers) - non-critical
         const [analyticsData, healthData, triggersData] = await Promise.allSettled([
-          api.getMonitorAnalytics(s.session.id),
-          api.getHealth(s.session.id),
-          api.getTriggers(s.session.id)
+          api.getMonitorAnalytics(s.session.id).catch(e => { console.warn('Analytics failed:', e); return null; }),
+          api.getHealth(s.session.id).catch(e => { console.warn('Health failed:', e); return null; }),
+          api.getTriggers(s.session.id).catch(e => { console.warn('Triggers failed:', e); return []; })
         ]);
         
         if (analyticsData.status === 'fulfilled') setAnalytics(analyticsData.value);
         if (healthData.status === 'fulfilled') setHealth(healthData.value);
-        if (triggersData.status === 'fulfilled') setTriggers(triggersData.value);
+        if (triggersData.status === 'fulfilled') setTriggers(triggersData.value || []);
         
+        clearTimeout(loadingTimeout);
         updateProgress(LoadingPhase.COMPLETE, 100, 'Monitor ready!');
         
       } catch (error) {
+        clearTimeout(loadingTimeout);
+        console.error('Loading error:', error);
         updateProgress(LoadingPhase.COMPLETE, 100, 'Load completed with errors', String(error));
       }
     };
@@ -245,21 +263,25 @@ export default function MonitorPage(){
   // Don't redirect while loading; only redirect if definitively no session
   if (!isLoading && !hasSession) return <Navigate to='/sessions' replace />;
 
-  // Modern Loading UI
+  // Modern Loading UI that doesn't block sidebar
   const LoadingOverlay = () => (
     <div style={{ 
-      position: 'fixed', 
-      inset: 0, 
+      position: 'absolute', 
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
       background: 'rgba(255,255,255,0.95)', 
       display: 'flex', 
       alignItems: 'center', 
       justifyContent: 'center', 
-      zIndex: 1000,
-      backdropFilter: 'blur(4px)'
+      zIndex: 100, // Lower z-index to not block sidebar
+      backdropFilter: 'blur(4px)',
+      pointerEvents: isLoading ? 'auto' : 'none' // Only block when actually loading
     }}>
-      <Card style={{ minWidth: 400, textAlign: 'center' }}>
+      <Card style={{ minWidth: 350, textAlign: 'center', maxWidth: '90vw' }}>
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <Title level={4}>Loading Trading Monitor</Title>
+          <Title level={4} style={{ margin: 0 }}>Loading Trading Monitor</Title>
           
           <Progress 
             percent={loadingState.progress} 
@@ -268,9 +290,10 @@ export default function MonitorPage(){
               '100%': '#87d068',
             }}
             trailColor="#f0f0f0"
+            showInfo={true}
           />
           
-          <div style={{ color: '#666' }}>
+          <div style={{ color: '#666', fontSize: 14 }}>
             {loadingState.message}
           </div>
           
@@ -278,18 +301,36 @@ export default function MonitorPage(){
             <Alert
               type="warning" 
               message="Some data failed to load"
-              description={`${loadingState.errors.length} errors occurred`}
+              description={`${loadingState.errors.length} errors occurred - continuing with available data`}
               showIcon
               style={{ textAlign: 'left' }}
+              action={
+                <Button 
+                  size="small" 
+                  type="primary"
+                  onClick={() => window.location.reload()}
+                >
+                  Retry
+                </Button>
+              }
             />
           )}
+          
+          <Button 
+            type="text" 
+            onClick={() => {
+              setLoadingState(prev => ({ ...prev, phase: LoadingPhase.COMPLETE }));
+            }}
+          >
+            Continue with available data
+          </Button>
         </Space>
       </Card>
     </div>
   );
 
   return (
-    <>
+    <div style={{ position: 'relative', minHeight: '100vh' }}>
       {isLoading && <LoadingOverlay />}
       
       {/* Hero Section */}
@@ -552,6 +593,6 @@ export default function MonitorPage(){
           </Row>
         </>
       )}
-    </>
+    </div>
   );
 }
