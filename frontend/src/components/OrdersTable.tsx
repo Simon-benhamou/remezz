@@ -160,7 +160,13 @@ export default function OrdersTable({ rows = [] }: any) {
         const lev = record.leverage || record.estLev;
         if (!lev) return <span style={{ color: '#9ca3af' }}>-</span>;
         return (
-          <Tag color="cyan" style={{ margin: 0, fontSize: 11 }}>
+          <Tag style={{ 
+            margin: 0, 
+            fontSize: 11,
+            background: '#f9fafb',
+            color: '#6b7280',
+            border: '1px solid #e5e7eb'
+          }}>
             {Number(lev).toFixed(1)}x
           </Tag>
         );
@@ -182,7 +188,7 @@ export default function OrdersTable({ rows = [] }: any) {
         return (
           <Space direction="vertical" size={1} style={{ alignItems: 'flex-end' }}>
             <span style={{ 
-              color: isProfit ? '#10b981' : '#ef4444',
+              color: isProfit ? '#059669' : '#dc2626', // Ultra-discret
               fontSize: 12,
               fontWeight: 600,
               fontFamily: 'Monaco, monospace'
@@ -190,7 +196,7 @@ export default function OrdersTable({ rows = [] }: any) {
               ${pnl.toFixed(2)}
             </span>
             <span style={{ 
-              color: isProfit ? '#10b981' : '#ef4444',
+              color: isProfit ? '#059669' : '#dc2626', // Ultra-discret
               fontSize: 10,
               fontWeight: 500
             }}>

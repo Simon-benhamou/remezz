@@ -604,6 +604,7 @@ export class ReboundRejectionAgent {
     const thresholds = this.effectiveEntryThresholds();
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
+    
     // Per-symbol tweak: ETH tends to have lower ATR% → allow a lower floor
     try {
       const sym = this.profile?.symbol || '';
@@ -612,26 +613,68 @@ export class ReboundRejectionAgent {
         minAtr = Math.max(0, minAtr - 0.15);
       }
     } catch {}
+    
     const atrPct = Number((snap as any)?.atrPct ?? 0);
+    
+    // QUALITY OVERRIDE: If quality score is high, be more flexible with ATR requirements
     if (atrPct < minAtr) {
-      recordOpsEvent({
-        level: 'info',
-        source: 'entry_gate',
-        message: 'atr_pct_too_low',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { atrPct, min: minAtr, reason: reasonHint },
-      });
-      // Momentum override: if ADX strong and slope strong & aligned, allow slight ATR misses
+      // Calculate a quick quality score to see if we should be more flexible
       const adx = Number((snap as any)?.adx14 ?? 0);
-      const emaValForOv = Number((snap as any)?.ema20 ?? snap.last ?? 0) || 1;
-      const emaSlopeForOv = Number((snap as any)?.ema20Slope ?? 0);
-      const slopePctAbsForOv = Math.abs((emaSlopeForOv / Math.abs(emaValForOv)) * 100);
+      const rsi = Number((snap as any)?.rsi14 ?? 50);
+      const ema20 = Number((snap as any)?.ema20 ?? snap.last);
+      const ema50 = Number((snap as any)?.ema50 ?? snap.last);
       const bias: 'long'|'short' = (this.plan as any)?.bias || 'long';
-      const slopeDirOk = bias === 'long' ? emaSlopeForOv > 0 : emaSlopeForOv < 0;
-      const nearMiss = (minAtr - atrPct) <= 0.15; // allow within 0.15% ATR of threshold
-      const allowOverride = adx >= 24 && slopeDirOk && slopePctAbsForOv >= (minSlopeAbsPct * 1.1) && nearMiss;
-      if (!allowOverride) return false;
+      
+      // Quick quality assessment
+      const emaSpread = ((ema20 - ema50) / ema50) * 100;
+      const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.5 : ema20 < ema50 && emaSpread < -0.5;
+      const strongAdx = adx >= 25;
+      const moderateAdx = adx >= 20;
+      const rsiOptimal = bias === 'long' ? (rsi >= 45 && rsi <= 70) : (rsi >= 30 && rsi <= 55);
+      
+      let quickQualityScore = 0;
+      if (trendAligned) quickQualityScore += 25;
+      if (strongAdx) quickQualityScore += 30;
+      else if (moderateAdx) quickQualityScore += 20;
+      if (rsiOptimal) quickQualityScore += 15;
+      if (atrPct >= 1.0) quickQualityScore += 10; // Some volatility points
+      
+      // If quality score is high (≥60), be more flexible with ATR
+      const qualityFlexibility = quickQualityScore >= 60;
+      const atrDeficit = minAtr - atrPct;
+      
+      if (qualityFlexibility && atrDeficit <= 0.25) {
+        // Allow ATR to be up to 0.25% below threshold if quality is high
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_gate',
+          message: 'atr_relaxed_for_quality',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { atrPct, min: minAtr, qualityScore: quickQualityScore, reason: reasonHint },
+        });
+        // Continue to slope check
+      } else {
+        // Standard momentum override for near misses
+        const emaValForOv = Number((snap as any)?.ema20 ?? snap.last ?? 0) || 1;
+        const emaSlopeForOv = Number((snap as any)?.ema20Slope ?? 0);
+        const slopePctAbsForOv = Math.abs((emaSlopeForOv / Math.abs(emaValForOv)) * 100);
+        const slopeDirOk = bias === 'long' ? emaSlopeForOv > 0 : emaSlopeForOv < 0;
+        const nearMiss = atrDeficit <= 0.15; // allow within 0.15% ATR of threshold
+        const allowOverride = adx >= 24 && slopeDirOk && slopePctAbsForOv >= (minSlopeAbsPct * 1.1) && nearMiss;
+        
+        if (!allowOverride) {
+          recordOpsEvent({
+            level: 'info',
+            source: 'entry_gate',
+            message: 'atr_pct_too_low',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile?.symbol,
+            details: { atrPct, min: minAtr, qualityScore: quickQualityScore, reason: reasonHint },
+          });
+          return false;
+        }
+      }
     }
     const emaVal = Number((snap as any)?.ema20 ?? snap.last ?? 0);
     const emaSlope = Number((snap as any)?.ema20Slope ?? 0);

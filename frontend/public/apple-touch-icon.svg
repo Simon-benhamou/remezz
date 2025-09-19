@@ -10,6 +10,6 @@
   <!-- Rounded rectangle background -->
   <rect width="180" height="180" rx="36" ry="36" fill="url(#grad1)"/>
   
-  <!-- Letter Q with perfect centering -->
-  <text x="90" y="110" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="90" font-weight="600" text-anchor="middle" dominant-baseline="middle" fill="white">Q</text>
+  <!-- Letter Q perfectly centered -->
+  <text x="90" y="125" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="85" font-weight="700" text-anchor="middle" fill="white">Q</text>
 </svg>

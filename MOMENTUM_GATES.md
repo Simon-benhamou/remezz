@@ -1,6 +1,51 @@
-# 📊 Momentum Gates - Système de Filtrage des Entrées
+# 📊 Momentum Gates - Correction Double Vérification ATR
 
-## 🎯 **Qu'est-ce que les Momentum Gates ?**
+## 🔍 **Problème identifié - 19 Septembre 2025**
+L'agent rejetait des trades même avec un bon score de qualité global à cause d'une **double vérification ATR** :
+
+1. **Momentum Gates** : Vérification stricte ATR% ≥ seuil minimum
+2. **Quality Filters** : ATR% contribue au score de qualité global
+
+Résultat : Un trade avec 65% de score de qualité pouvait être rejeté uniquement à cause d'un ATR% légèrement insuffisant.
+
+## ⚙️ **Logique problématique**
+```typescript
+// AVANT : Double blocage
+if (!this.passesEntryMomentumGates(snap, 'enter') || !this.passesQualityFilters(snap)) {
+  return; // Rejeté même si qualité globale bonne
+}
+```
+
+### Exemple concret
+- **Quality Score** : 65% (trend aligné + ADX fort + RSI optimal)
+- **ATR%** : 0.6% (seuil : 0.8%)
+- **Résultat** : ❌ **REJETÉ** par momentum gates malgré la bonne qualité
+
+## ✅ **Solution implémentée**
+
+### 1. **Quality Override System**
+Nouveau système dans `passesEntryMomentumGates()` :
+
+```typescript
+// Calcul rapide du score de qualité
+const quickQualityScore = calculateQuickQuality(snap);
+
+// Si score ≥ 60% : Flexibilité ATR jusqu'à -0.25%
+if (qualityFlexibility && atrDeficit <= 0.25) {
+  // Autoriser ATR légèrement en dessous du seuil
+  recordOpsEvent({ message: 'atr_relaxed_for_quality' });
+  // Continuer vers vérification slope
+}
+```
+
+### 2. **Niveaux de flexibilité**
+- **Score < 60%** : Seuil ATR strict (comme avant)
+- **Score ≥ 60%** : ATR peut être jusqu'à **0.25%** en dessous du seuil
+- **Momentum Override** : Reste disponible pour cas spéciaux (ADX fort + slope alignée)
+
+---
+
+## 🎯 **Qu'est-ce que les Momentum Gates ? (Documentation originale)**
 
 Les **Momentum Gates** sont un système de filtres techniques avancés qui empêchent l'agent de trading d'entrer en position dans des conditions de marché défavorables. Ils agissent comme des "portes" qui ne s'ouvrent que lorsque le momentum du marché est suffisant pour justifier une entrée.
 

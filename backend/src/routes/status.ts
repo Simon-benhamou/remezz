@@ -28,7 +28,15 @@ router.get('/', async (req, res) => {
     serverTime: new Date().toISOString(),
     exchangeId: ex.id,
     symbol,
-    balance, orders, indicators: indic,
+    balance, orders, 
+    // Merge indicators with tech snapshot for complete data
+    indicators: indic ? {
+      ...indic,
+      atrPct: tech?.atrPct ?? 0,  // Add missing atrPct
+      adx14: tech?.adx14 ?? 0,    // Add missing adx
+      ema20Slope: tech?.ema20Slope ?? 0, // Add missing slope
+      price: tech?.last ?? 0,     // Add current price
+    } : null,
     session: s,
     sr: tech ? { support: tech.support, resistance: tech.resistance } : null,
     // champs riches pour le front:

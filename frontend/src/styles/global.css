@@ -1,4 +1,4 @@
-/* Global Modern Styles for QuantAI Trading Platform */
+/* Global Ultra-Minimalist Styles for QuantAI Trading Platform */
 
 /* Reset and base styles */
 * {
@@ -19,6 +19,15 @@ body {
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ultra-minimalist color overrides */
+.ultra-minimal {
+  /* Force neutral colors globally */
+  --success-color: #059669 !important;
+  --error-color: #dc2626 !important;
+  --neutral-color: #6b7280 !important;
+  --primary-color: #2563eb !important;
 }
 
 /* Enhanced scrollbars */
@@ -42,11 +51,12 @@ body {
   background: #9ca3af;
 }
 
-/* Modern Card Enhancements */
+/* Modern Card Enhancements - Ultra Clean */
 .ant-card {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid #f3f4f6;
   background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
 .ant-card:hover {
@@ -567,6 +577,73 @@ a:focus-visible {
   color: white;
   font-weight: 500;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Ultra-Minimalist Table Styles */
+.ant-table {
+  background: #ffffff;
+}
+
+.ant-table-thead > tr > th {
+  background: #f9fafb !important;
+  border-bottom: 1px solid #f3f4f6 !important;
+  color: #374151 !important;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid #f9fafb !important;
+  padding: 12px 16px;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: #f9fafb !important;
+}
+
+/* Ultra-Neutral Tags */
+.ant-tag {
+  background: #f9fafb !important;
+  color: #6b7280 !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/* Minimal Badges */
+.ant-badge .ant-badge-status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* Clean Progress Bars */
+.ant-progress .ant-progress-bg {
+  border-radius: 2px;
+}
+
+/* Subtle Shadows */
+.ant-card:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+}
+
+/* Ultra-Clean Buttons */
+.ant-btn {
+  border-radius: 6px;
+  font-weight: 500;
+  border: 1px solid #e5e7eb;
+}
+
+.ant-btn-primary {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.ant-btn-primary:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
 }
 
 /* Responsive adjustments for new components */

@@ -9,27 +9,27 @@ export default function TradesTable({ rows = [] }: any) {
     const isBigWin = roi > 10;
     
     if (isBigWin) {
-      return <Badge status="success" text={<Space size={2}><TrophyOutlined style={{ color: '#10b981' }} /><span style={{ color: '#10b981', fontWeight: 600 }}>Big Win</span></Space>} />;
+      return <Badge status="default" text={<Space size={2}><TrophyOutlined style={{ color: '#6b7280' }} /><span style={{ color: '#374151', fontWeight: 600 }}>Big Win</span></Space>} />;
     } else if (isWin && isSignificant) {
-      return <Badge status="success" text={<Space size={2}><ThunderboltOutlined style={{ color: '#10b981' }} /><span style={{ color: '#10b981', fontWeight: 500 }}>Win</span></Space>} />;
+      return <Badge status="default" text={<Space size={2}><ThunderboltOutlined style={{ color: '#6b7280' }} /><span style={{ color: '#374151', fontWeight: 500 }}>Win</span></Space>} />;
     } else if (isWin) {
-      return <Badge status="success" text={<span style={{ color: '#10b981', fontWeight: 500 }}>Small Win</span>} />;
+      return <Badge status="default" text={<span style={{ color: '#6b7280', fontWeight: 500 }}>Small Win</span>} />;
     } else if (isSignificant) {
-      return <Badge status="error" text={<Space size={2}><FireOutlined style={{ color: '#ef4444' }} /><span style={{ color: '#ef4444', fontWeight: 600 }}>Big Loss</span></Space>} />;
+      return <Badge status="default" text={<Space size={2}><FireOutlined style={{ color: '#6b7280' }} /><span style={{ color: '#6b7280', fontWeight: 600 }}>Big Loss</span></Space>} />;
     } else {
-      return <Badge status="error" text={<span style={{ color: '#ef4444', fontWeight: 500 }}>Loss</span>} />;
+      return <Badge status="default" text={<span style={{ color: '#6b7280', fontWeight: 500 }}>Loss</span>} />;
     }
   };
 
   const getDurationBadge = (duration: number) => {
     if (duration < 300) { // < 5 min
-      return <Tag color="red" style={{ fontSize: 10 }}>Scalp</Tag>;
+      return <Tag style={{ fontSize: 10, background: '#f9fafb', color: '#6b7280', border: '1px solid #e5e7eb' }}>Scalp</Tag>;
     } else if (duration < 3600) { // < 1h
-      return <Tag color="orange" style={{ fontSize: 10 }}>Quick</Tag>;
+      return <Tag style={{ fontSize: 10, background: '#f9fafb', color: '#6b7280', border: '1px solid #e5e7eb' }}>Quick</Tag>;
     } else if (duration < 86400) { // < 1 day
-      return <Tag color="blue" style={{ fontSize: 10 }}>Intraday</Tag>;
+      return <Tag style={{ fontSize: 10, background: '#f9fafb', color: '#6b7280', border: '1px solid #e5e7eb' }}>Intraday</Tag>;
     } else {
-      return <Tag color="purple" style={{ fontSize: 10 }}>Swing</Tag>;
+      return <Tag style={{ fontSize: 10, background: '#f9fafb', color: '#6b7280', border: '1px solid #e5e7eb' }}>Swing</Tag>;
     }
   };
 
@@ -140,7 +140,7 @@ export default function TradesTable({ rows = [] }: any) {
             }}>
               ${notional.toFixed(2)}
             </span>
-            <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>
+            <Tag style={{ margin: 0, fontSize: 10, background: '#f9fafb', color: '#6b7280', border: '1px solid #e5e7eb' }}>
               {Number(leverage).toFixed(1)}x
             </Tag>
           </Space>
@@ -160,7 +160,7 @@ export default function TradesTable({ rows = [] }: any) {
         return (
           <Space direction="vertical" size={2} style={{ alignItems: 'flex-end' }}>
             <span style={{ 
-              color: isProfit ? '#10b981' : '#ef4444',
+              color: isProfit ? '#059669' : '#dc2626', // Ultra-discret
               fontSize: 14,
               fontWeight: 700,
               fontFamily: 'Monaco, monospace'
@@ -168,7 +168,7 @@ export default function TradesTable({ rows = [] }: any) {
               ${pnl.toFixed(2)}
             </span>
             <span style={{ 
-              color: isProfit ? '#10b981' : '#ef4444',
+              color: isProfit ? '#059669' : '#dc2626', // Ultra-discret
               fontSize: 12,
               fontWeight: 600
             }}>
@@ -176,7 +176,7 @@ export default function TradesTable({ rows = [] }: any) {
             </span>
             <Progress 
               percent={Math.min(Math.abs(roi), 100)} 
-              strokeColor={isProfit ? '#10b981' : '#ef4444'}
+              strokeColor={isProfit ? '#059669' : '#dc2626'} // Ultra-discret
               showInfo={false}
               size="small"
               style={{ width: 60 }}
@@ -217,7 +217,7 @@ export default function TradesTable({ rows = [] }: any) {
               <span style={{ fontWeight: 600 }}>{totalTrades}</span> trades
             </span>
             <span style={{ fontSize: 12, color: '#374151' }}>
-              <span style={{ fontWeight: 600, color: winningTrades > totalTrades / 2 ? '#10b981' : '#ef4444' }}>
+              <span style={{ fontWeight: 600, color: winningTrades > totalTrades / 2 ? '#059669' : '#dc2626' }}> {/* Ultra-discret */}
                 {winRate}%
               </span> win rate
             </span>

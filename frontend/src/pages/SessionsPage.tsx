@@ -361,7 +361,12 @@ export default function SessionsPage(){
               title:'Mode', 
               dataIndex:'mode', 
               width: 80,
-              render:(m)=> <Tag color={m==='live'?'gold':'blue'}>{String(m).toUpperCase()}</Tag>,
+              render:(m)=> <Tag style={{ 
+                background: '#f9fafb', 
+                color: '#374151', 
+                border: '1px solid #e5e7eb',
+                fontWeight: 600 
+              }}>{String(m).toUpperCase()}</Tag>,
               sorter: (a, b) => a.mode.localeCompare(b.mode)
             },
             { 
@@ -369,9 +374,14 @@ export default function SessionsPage(){
               dataIndex:'aggressiveness',
               width: 130,
               render:(a)=> {
-                const colors = { conservative: 'blue', reactive: 'orange', aggressive: 'red' };
+                // Tous les tags aggressiveness en style neutre
                 const level = a || 'conservative';
-                return <Tag color={colors[level as keyof typeof colors]}>{level.toUpperCase()}</Tag>;
+                return <Tag style={{ 
+                  background: '#f9fafb', 
+                  color: '#6b7280', 
+                  border: '1px solid #e5e7eb',
+                  fontWeight: 500 
+                }}>{level.toUpperCase()}</Tag>;
               },
               sorter: (a, b) => (a.aggressiveness || 'conservative').localeCompare(b.aggressiveness || 'conservative')
             },
@@ -421,8 +431,12 @@ export default function SessionsPage(){
               width: 100,
               render:(v:any)=> {
                 const rate = Number(v||0);
-                const color = rate >= 60 ? 'green' : rate >= 50 ? 'orange' : 'red';
-                return <Tag color={color}>{rate.toFixed(1)}%</Tag>;
+                // Win rate sans couleur - texte simple
+                return <span style={{ 
+                  fontWeight: 600, 
+                  fontFamily: 'Monaco, monospace',
+                  color: '#374151'
+                }}>{rate.toFixed(1)}%</span>;
               },
               sorter: (a, b) => (a.winRate || 0) - (b.winRate || 0)
             },
@@ -452,7 +466,11 @@ export default function SessionsPage(){
               width: 80,
               render:(v:any)=> {
                 const roi = Number(v||0);
-                return <span style={{ color: roi >= 0 ? '#52c41a' : '#ff4d4f' }}>
+                return <span style={{ 
+                  color: roi >= 0 ? '#059669' : '#dc2626', // Ultra-discret
+                  fontWeight: 600,
+                  fontFamily: 'Monaco, monospace'
+                }}>
                   {roi.toFixed(2)}%
                 </span>;
               },
@@ -467,12 +485,17 @@ export default function SessionsPage(){
                   const pos = r.currentPosition;
                   return (
                     <Space direction="vertical" size="small">
-                      <Tag color={pos.side === 'buy' ? 'green' : 'red'}>
+                      <Tag style={{
+                        background: '#f9fafb',
+                        color: '#6b7280',
+                        border: '1px solid #e5e7eb',
+                        margin: 0
+                      }}>
                         {pos.side?.toUpperCase()} {pos.size?.toFixed(4)}
                       </Tag>
                       <span style={{ 
-                        fontSize: '11px',
-                        color: (pos.unrealizedPnl || 0) >= 0 ? '#52c41a' : '#ff4d4f'
+                        fontSize: 11,
+                        color: (pos.unrealizedPnl || 0) >= 0 ? '#059669' : '#dc2626' // Discret
                       }}>
                         ${(pos.unrealizedPnl || 0).toFixed(2)}
                       </span>
@@ -484,7 +507,7 @@ export default function SessionsPage(){
                 title:'Max DD', 
                 width: 80,
                 render:(_:any,r:any)=> (
-                  <span style={{ color: '#ff4d4f' }}>
+                  <span style={{ color: '#dc2626', fontSize: 12 }}>
                     {(r.maxDrawdown || 0).toFixed(2)}%
                   </span>
                 ),
@@ -596,7 +619,12 @@ export default function SessionsPage(){
             />
           </Form.Item>
           <Form.Item label='Mode'>
-            <Tag color={String(modeVal ?? mode).toLowerCase()==='live' ? 'gold' : 'blue'}>{String(modeVal ?? mode).toUpperCase()}</Tag>
+            <Tag style={{ 
+              background: '#f9fafb', 
+              color: '#374151', 
+              border: '1px solid #e5e7eb',
+              fontWeight: 600 
+            }}>{String(modeVal ?? mode).toUpperCase()}</Tag>
             <Form.Item name='mode' hidden>
               <Input type='hidden' />
             </Form.Item>

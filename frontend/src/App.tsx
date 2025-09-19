@@ -264,391 +264,68 @@ function AppInner(){
 }
 
 export default function App(){
- const brandTheme: ThemeConfig = {
-  algorithm: [theme.defaultAlgorithm],
+ const minimalistTheme: ThemeConfig = {
+  algorithm: theme.defaultAlgorithm,
   token: {
-    // Modern Color Palette - Light & Fresh
-    colorPrimary: "#2563eb", // Clean blue primary
-    colorInfo: "#06b6d4", // Cyan for information
-    colorSuccess: "#10b981", // Fresh green
-    colorWarning: "#f59e0b", // Warm amber
-    colorError: "#ef4444", // Clean red
-
-    // Clean Background System
-    colorBgBase: "#ffffff",        // Pure white background
-    colorBgContainer: "#ffffff",   // Cards and containers
-    colorBgElevated: "#ffffff",    // Elevated surfaces
-    colorBgLayout: "#fafafa",      // Layout background
+    // Couleurs principales ultra-réduites
+    colorPrimary: '#2563eb',      // Bleu principal uniquement
+    colorSuccess: '#059669',      // Vert très discret
+    colorError: '#dc2626',        // Rouge minimal
     
-    // Typography - Refined Hierarchy
-    colorTextBase: "#111827",      // Primary text
-    colorText: "#374151",          // Secondary text
-    colorTextSecondary: "#6b7280", // Muted text
-    colorTextTertiary: "#9ca3af",  // Subtle text
-    colorTextQuaternary: "#d1d5db", // Very subtle
+    // Tout le reste en gris neutres
+    colorBgContainer: '#ffffff',
+    colorBgElevated: '#ffffff',
+    colorBgLayout: '#fafafa',
+    colorBorder: '#e5e7eb',
+    colorBorderSecondary: '#f3f4f6',
     
-    // Clean Borders & Dividers
-    colorBorder: "#e5e7eb",        // Standard borders
-    colorBorderSecondary: "#f3f4f6", // Subtle borders
-    colorSplit: "#f9fafb",         // Section dividers
+    // Textes en niveaux de gris
+    colorText: '#111827',
+    colorTextSecondary: '#6b7280',
+    colorTextTertiary: '#9ca3af',
+    colorTextQuaternary: '#d1d5db',
     
-    // Modern Shape Language
-    borderRadius: 8,               // Standard radius
-    borderRadiusLG: 12,            // Large radius
-    borderRadiusSM: 6,             // Small radius
-    borderRadiusXS: 4,             // Extra small
-    // Modern Control Sizes
-    controlHeight: 40,              // Standard height
-    controlHeightLG: 48,            // Large controls
-    controlHeightSM: 32,            // Small controls
-    controlHeightXS: 24,            // Extra small
+    // Suppression des couleurs secondaires
+    colorInfo: '#6b7280',         // Gris au lieu de bleu
+    colorWarning: '#9ca3af',      // Gris au lieu d'orange
     
-    // Enhanced Focus & Interaction
-    controlOutline: "rgba(37, 99, 235, 0.2)", // Blue focus ring
-    controlItemBgActive: "rgba(37, 99, 235, 0.06)",
-    controlItemBgHover: "rgba(17, 24, 39, 0.04)",
-    
-    // Modern Link Styles
-    colorLink: "#2563eb",
-    colorLinkHover: "#1d4ed8",
-    colorLinkActive: "#1e40af",
-    
-    // Subtle Fill Colors
-    colorFillSecondary: "rgba(17, 24, 39, 0.02)",
-    colorFillTertiary: "rgba(17, 24, 39, 0.01)",
-    colorFillQuaternary: "rgba(17, 24, 39, 0.005)",
-    
-    // Refined Spacing
-    padding: 16,
-    paddingLG: 24,
-    paddingSM: 12,
-    paddingXS: 8,
-    margin: 16,
-    marginLG: 24,
-    marginSM: 12,
-    marginXS: 8,
-    
-    // Typography Scale
-    fontSize: 14,
-    fontSizeLG: 16,
-    fontSizeSM: 12,
-    fontSizeXL: 20,
-    lineHeight: 1.6,
-    lineHeightLG: 1.5,
+    // Espacement et bordures plus généreux
+    borderRadius: 8,
+    lineWidth: 1,
+    wireframe: false,
   },
-
   components: {
-    Layout: {
-      headerBg: "#ffffff",
-      siderBg: "#ffffff",
-      bodyBg: "#fafafa",
-      footerBg: "#ffffff",
-      headerPadding: "0 24px",
-      footerPadding: "24px",
-      triggerBg: "rgba(17, 24, 39, 0.05)",
-      triggerColor: "#6b7280",
+    // Tags ultra-neutres
+    Tag: {
+      defaultBg: '#f9fafb',
+      defaultColor: '#6b7280',
+      colorBorder: '#e5e7eb',
     },
-
-    Menu: {
-      itemColor: "#6b7280",
-      itemHoverColor: "#111827",
-      itemSelectedColor: "#2563eb",
-      itemActiveBg: "rgba(37, 99, 235, 0.08)",
-      itemSelectedBg: "rgba(37, 99, 235, 0.1)",
-      itemHoverBg: "rgba(17, 24, 39, 0.04)",
-      itemBg: "transparent",
-      itemBorderRadius: 8,
-      itemMarginBlock: 4,
-      itemMarginInline: 8,
-      subMenuItemBg: "transparent",
-      activeBarBorderWidth: 0,
-      activeBarHeight: 0,
-      groupTitleColor: "#9ca3af",
-      groupTitleFontSize: 12,
-      iconSize: 16,
-      collapsedIconSize: 16,
-    },
-
-    Button: {
-      controlHeight: 40,
-      controlHeightLG: 48,
-      controlHeightSM: 32,
-      fontSize: 14,
-      borderRadius: 8,
-      borderRadiusLG: 10,
-      borderRadiusSM: 6,
-      paddingInline: 16,
-      paddingInlineLG: 20,
-      paddingInlineSM: 12,
-      
-      // Primary Button
-      colorPrimary: "#2563eb",
-      colorPrimaryHover: "#1d4ed8",
-      colorPrimaryActive: "#1e40af",
-      colorPrimaryTextHover: "#ffffff",
-      colorPrimaryBg: "#2563eb",
-      colorPrimaryBgHover: "#1d4ed8",
-      primaryShadow: "0 0 0 2px rgba(37, 99, 235, 0.2)",
-      
-      // Default Button
-      defaultBg: "#ffffff",
-      defaultColor: "#374151",
-      defaultBorderColor: "#d1d5db",
-      defaultHoverBg: "#f9fafb",
-      defaultHoverColor: "#111827",
-      defaultHoverBorderColor: "#9ca3af",
-      defaultActiveBg: "#f3f4f6",
-      defaultActiveBorderColor: "#6b7280",
-      
-      // Ghost Button
-      ghostBg: "transparent",
-      colorBgTextHover: "rgba(17, 24, 39, 0.04)",
-      colorBgTextActive: "rgba(17, 24, 39, 0.08)",
-    },
-
-    Card: {
-      borderRadiusLG: 12,
-      borderRadius: 8,
-      paddingLG: 24,
-      padding: 20,
-      paddingSM: 16,
-      headerBg: "#ffffff",
-      headerHeight: 56,
-      headerHeightSM: 48,
-      actionsBg: "#fafafa",
-      tabsMarginBottom: 16,
-      colorBgContainer: "#ffffff",
-      colorBorderSecondary: "#f3f4f6",
-      boxShadowTertiary: "0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06)",
-      boxShadow: "0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06)",
-    },
-
+    // Tables épurées
     Table: {
-      headerBg: "#fafafa",
-      headerColor: "#374151",
-      headerSortActiveBg: "#f3f4f6",
-      headerSortHoverBg: "#f9fafb",
-      bodySortBg: "rgba(37, 99, 235, 0.02)",
-      rowHoverBg: "#fafafa",
-      rowSelectedBg: "rgba(37, 99, 235, 0.06)",
-      rowSelectedHoverBg: "rgba(37, 99, 235, 0.08)",
-      rowExpandedBg: "#fafafa",
-      borderColor: "#f3f4f6",
-      headerBorderRadius: 8,
-      headerSplitColor: "#e5e7eb",
-      fixedHeaderSortActiveBg: "#f3f4f6",
-      headerFilterHoverBg: "#f9fafb",
-      filterDropdownBg: "#ffffff",
-      expandIconBg: "#ffffff",
-      selectionColumnWidth: 60,
-      stickyScrollBarBg: "rgba(0, 0, 0, 0.15)",
+      headerBg: '#f9fafb',
+      headerColor: '#374151',
+      borderColor: '#f3f4f6',
+      rowHoverBg: '#f9fafb',
     },
-
-    Tabs: {
-      itemColor: "#6b7280",
-      itemSelectedColor: "#2563eb",
-      itemHoverColor: "#374151",
-      itemActiveColor: "#2563eb",
-      inkBarColor: "#2563eb",
-      titleFontSize: 14,
-      titleFontSizeLG: 16,
-      titleFontSizeSM: 12,
-      cardBg: "#ffffff",
-      cardHeight: 48,
-      cardPadding: "8px 16px",
-      cardPaddingSM: "6px 12px",
-      cardPaddingLG: "10px 20px",
-      horizontalMargin: "0 0 0 32px",
-      horizontalItemGutter: 32,
-      verticalItemMargin: "8px 0",
-      verticalItemPadding: "8px 16px",
+    // Cards minimalistes
+    Card: {
+      headerBg: '#ffffff',
+      bodyPadding: 20,
+      actionsBg: '#fafafa',
     },
-
-    Input: {
-      borderRadius: 8,
-      controlHeight: 40,
-      controlHeightLG: 48,
-      controlHeightSM: 32,
-      fontSize: 14,
-      paddingBlock: 10,
-      paddingInline: 12,
-      paddingBlockLG: 12,
-      paddingInlineLG: 16,
-      paddingBlockSM: 6,
-      paddingInlineSM: 8,
-      colorBgContainer: "#ffffff",
-      colorBorder: "#d1d5db",
-      hoverBorderColor: "#9ca3af",
-      activeBorderColor: "#2563eb",
-      activeBg: "#ffffff",
-      hoverBg: "#ffffff",
-      colorTextPlaceholder: "#9ca3af",
-      addonBg: "#f9fafb",
-      activeShadow: "0 0 0 2px rgba(37, 99, 235, 0.2)",
-    },
-
-    Select: {
-      borderRadius: 8,
-      controlHeight: 40,
-      controlHeightLG: 48,
-      controlHeightSM: 32,
-      fontSize: 14,
-      optionSelectedBg: "rgba(37, 99, 235, 0.1)",
-      optionActiveBg: "rgba(17, 24, 39, 0.04)",
-      optionSelectedColor: "#2563eb",
-      optionSelectedFontWeight: 500,
-      selectorBg: "#ffffff",
-      clearBg: "#ffffff",
-      multipleItemBg: "#f3f4f6",
-      multipleItemBorderColor: "#e5e7eb",
-      multipleItemHeight: 24,
-      optionHeight: 32,
-      optionPadding: "6px 12px",
-      showArrowPaddingInlineEnd: 24,
-      controlOutline: "rgba(37, 99, 235, 0.2)",
-    },
-
-    Dropdown: {
-      colorBgElevated: "#ffffff",
-      controlItemBgActive: "rgba(37, 99, 235, 0.08)",
-      controlItemBgHover: "rgba(17, 24, 39, 0.04)",
-      borderRadiusOuter: 8,
-      borderRadiusLG: 10,
-      paddingBlock: 8,
-      fontSize: 14,
-      lineHeight: 1.5,
-    },
-
-    Tooltip: {
-      colorBgSpotlight: "#374151",
-      colorTextLightSolid: "#ffffff",
-      borderRadius: 6,
-      borderRadiusOuter: 6,
-    },
-
-    Modal: {
-      colorBgElevated: "#ffffff",
-      headerBg: "#ffffff",
-      titleColor: "#111827",
-      titleFontSize: 18,
-      borderRadiusLG: 12,
-      borderRadius: 8,
-      paddingMD: 24,
-      paddingLG: 32,
-      marginLG: 24,
-      marginMD: 16,
-    },
-
-    Drawer: {
-      colorBgElevated: "#ffffff",
-      borderRadiusLG: 0,
-      paddingLG: 24,
-      colorIcon: "#6b7280",
-      colorIconHover: "#374151",
-    },
-
-    Badge: {
-      colorBgContainer: "#2563eb",
-      colorError: "#ef4444",
-      textFontSize: 12,
-      textFontSizeSM: 10,
-      indicatorHeight: 6,
-      indicatorHeightSM: 4,
-      dotSize: 6,
-    },
-
-    Progress: {
-      remainingColor: "rgba(17, 24, 39, 0.06)",
-      defaultColor: "#2563eb",
-      circleTextColor: "#111827",
-      lineBorderRadius: 100,
-    },
-
-    Segmented: {
-      borderRadius: 8,
-      borderRadiusLG: 10,
-      borderRadiusSM: 6,
-      trackBg: "#f3f4f6",
-      trackPadding: 2,
-      itemColor: "#6b7280",
-      itemHoverColor: "#374151",
-      itemHoverBg: "rgba(17, 24, 39, 0.04)",
-      itemSelectedBg: "#ffffff",
-      itemSelectedColor: "#2563eb",
-      itemActiveBg: "#ffffff",
-    },
-
-    Switch: {
-      colorPrimary: "#2563eb",
-      colorPrimaryHover: "#1d4ed8",
-      colorPrimaryBorder: "#2563eb",
-      handleBg: "#ffffff",
-      handleShadow: "0 2px 4px rgba(0, 0, 0, 0.18)",
-      trackHeight: 22,
-      trackMinWidth: 44,
-      trackPadding: 2,
-      handleSize: 18,
-      handleSizeSM: 14,
-      innerMinMargin: 3,
-      innerMaxMargin: 24,
-    },
-
-    Slider: {
-      railBg: "#f1f5f9",
-      railHoverBg: "#e2e8f0",
-      trackBg: "#2563eb",
-      trackHoverBg: "#1d4ed8",
-      handleColor: "#2563eb",
-      handleSize: 14,
-      handleSizeHover: 16,
-      handleLineWidth: 2,
-      handleLineWidthHover: 4,
-      dotBorderColor: "#ffffff",
-      dotActiveBorderColor: "#2563eb",
-      trackBgDisabled: "#f1f5f9",
-    },
-
-    Steps: {
-      borderRadius: 6,
-      colorText: "#374151",
-      colorTextDescription: "#6b7280",
-      colorTextDisabled: "#d1d5db",
-      colorPrimary: "#2563eb",
-      colorSuccess: "#10b981",
-      colorError: "#ef4444",
-      iconTop: 0,
-      iconSize: 32,
-      iconSizeSM: 24,
-      dotSize: 8,
-      dotCurrentSize: 10,
-      navArrowColor: "#9ca3af",
-      titleLineHeight: 1.5,
-      customIconTop: 0,
-      customIconSize: 24,
-      descriptionMaxWidth: 140,
-    },
-
-    Alert: {
-      borderRadiusLG: 8,
-      borderRadius: 6,
-      paddingContentHorizontalLG: 24,
-      withDescriptionIconSize: 24,
-      withDescriptionPadding: "12px 16px",
-      defaultPadding: "8px 12px",
-    },
-
-    Notification: {
-      borderRadiusLG: 8,
-      borderRadius: 6,
-      fontSizeLG: 16,
-      lineHeight: 1.5,
-    },
-  },
-
+    // Menu sidebar épuré
+    Menu: {
+      itemSelectedBg: '#f1f5f9',
+      itemSelectedColor: '#2563eb',
+      itemHoverBg: '#f8fafc',
+      itemColor: '#64748b',
+    }
+  }
 };
   return (
     <BrowserRouter>
-      <ConfigProvider theme={brandTheme}>
+      <ConfigProvider theme={minimalistTheme}>
         <AppInner />
       </ConfigProvider>
     </BrowserRouter>

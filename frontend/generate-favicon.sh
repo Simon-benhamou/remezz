@@ -3,7 +3,7 @@
 # Script to generate favicon.ico from SVG
 # This script requires imagemagick (brew install imagemagick)
 
-echo "🎨 Generating QuantAI favicon from SVG..."
+echo "🎨 Generating QuantAI favicon from centered SVG..."
 
 # Check if ImageMagick is installed
 if ! command -v convert &> /dev/null; then
