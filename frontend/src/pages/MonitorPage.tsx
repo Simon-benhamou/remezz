@@ -1,6 +1,7 @@
 import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import { Row, Col, Space, Tag, Tabs } from 'antd';
+import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography } from 'antd';
+import { ReloadOutlined, ExpandOutlined, CompressOutlined } from '@ant-design/icons';
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
@@ -21,30 +22,69 @@ import PositionStatsBlock from '../components/PositionStatsBlock';
 import MonitorHealthBanner from '../components/MonitorHealthBanner';
 import MonitorMiniPanels from '../components/MonitorMiniPanels';
 
+const { Title } = Typography;
+
+// Loading phases for progressive loading
+enum LoadingPhase {
+  INITIALIZING = 'initializing',
+  CORE_DATA = 'core_data', 
+  SECONDARY_DATA = 'secondary_data',
+  COMPLETE = 'complete'
+}
+
+type LoadingState = {
+  phase: LoadingPhase;
+  progress: number;
+  message: string;
+  errors: string[];
+};
+
 export default function MonitorPage(){
   const { sessionId } = useParams();
   const navigate = useNavigate();
 
-  const [loading, setLoading] = React.useState(true);
+  // Loading state management
+  const [loadingState, setLoadingState] = React.useState<LoadingState>({
+    phase: LoadingPhase.INITIALIZING,
+    progress: 0,
+    message: 'Initializing monitor...',
+    errors: []
+  });
+  
   const [wsConnected, setWsConnected] = React.useState(false);
+  const [expandedView, setExpandedView] = React.useState(false);
   const wsRef = React.useRef<WebSocket|null>(null);
 
-  // Local data strictly scoped to this sessionId
+  // Core data states (Phase 1)
   const [symbol, setSymbol] = React.useState<string>("");
   const [status, setStatus] = React.useState<any>({});
+  const [agent, setAgent] = React.useState<any>(null);
+  const [ticker, setTicker] = React.useState<any>(null);
+  
+  // Secondary data states (Phase 2)
   const [strategy, setStrategy] = React.useState<any>(null);
   const [analysis, setAnalysis] = React.useState<any>(null);
-  const [agent, setAgent] = React.useState<any>(null);
   const [kpi, setKpi] = React.useState<any>(null);
   const [orders, setOrders] = React.useState<any[]>([]);
   const [trades, setTrades] = React.useState<any[]>([]);
+  
+  // Tertiary data states (Phase 3)
   const [triggers, setTriggers] = React.useState<any[]>([]);
   const [alerts, setAlerts] = React.useState<any[]>([]);
   const [analytics, setAnalytics] = React.useState<any>(null);
   const [health, setHealth] = React.useState<any>(null);
-  const [ticker, setTicker] = React.useState<any>(null);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+
+  // Update loading progress
+  const updateProgress = (phase: LoadingPhase, progress: number, message: string, error?: string) => {
+    setLoadingState(prev => ({
+      phase,
+      progress,
+      message,
+      errors: error ? [...prev.errors, error] : prev.errors
+    }));
+  };
 
   // Load ticker data for the symbol
   const loadTicker = async (sym: string) => {
@@ -57,34 +97,74 @@ export default function MonitorPage(){
     }
   };
 
-  // Bootstrap strictly from sessionId
-  React.useEffect(()=>{
+  // Progressive loading system
+  React.useEffect(() => {
     if (!sessionId) return;
-    (async ()=>{
-      setLoading(true);
+    
+    const loadData = async () => {
       try {
+        // Phase 1: Core data (session, symbol, basic status)
+        updateProgress(LoadingPhase.CORE_DATA, 10, 'Loading session data...');
+        
         const s = await api.status(sessionId);
-        if (!sessionId) { navigate('/sessions'); return; }
+        if (!s?.session?.id) {
+          navigate('/sessions');
+          return;
+        }
+        
         setStatus(s);
         const sym = s?.session?.symbol || s?.symbol || symbol;
         if (sym) setSymbol(sym);
-        try { setStrategy(await api.strategyToday(sym)); } catch {}
-        try { setAnalysis(await api.analysis(sym)); } catch {}
-        try { if (s.session?.id) setKpi(await api.getPerf(s.session.id)); } catch {}
-        try { if (s.session?.id) setOrders(await api.getOrders(s.session.id)); } catch {}
-        try { if (s.session?.id) setTrades(await api.getTrades(s.session.id)); } catch {}
-        try { if (s.session?.id) setTriggers(await api.getTriggers(s.session.id)); } catch {}
-        try { if (s.session?.id) setAgent(await api.getAgentState(s.session.id)); } catch {}
-        try {
-          if (s.session?.id) {
-            setAnalytics(await api.getMonitorAnalytics(s.session.id));
-            setHealth(await api.getHealth(s.session.id));
-          }
-        } catch {}
-        // Load ticker data for the symbol
-        if (sym) loadTicker(sym);
-      } finally { setLoading(false); }
-    })();
+        
+        updateProgress(LoadingPhase.CORE_DATA, 30, 'Loading agent state...');
+        
+        // Load core data in parallel
+        const [agentData, tickerData] = await Promise.allSettled([
+          api.getAgentState(s.session.id),
+          sym ? api.getTicker(sym) : Promise.resolve(null)
+        ]);
+        
+        if (agentData.status === 'fulfilled') setAgent(agentData.value);
+        if (tickerData.status === 'fulfilled' && tickerData.value) setTicker(tickerData.value);
+        
+        updateProgress(LoadingPhase.SECONDARY_DATA, 50, 'Loading trading data...');
+        
+        // Phase 2: Trading data (orders, trades, strategy, analysis)
+        const [strategyData, analysisData, kpiData, ordersData, tradesData] = await Promise.allSettled([
+          sym ? api.strategyToday(sym) : Promise.resolve(null),
+          sym ? api.analysis(sym) : Promise.resolve(null),
+          api.getPerf(s.session.id),
+          api.getOrders(s.session.id),
+          api.getTrades(s.session.id)
+        ]);
+        
+        if (strategyData.status === 'fulfilled' && strategyData.value) setStrategy(strategyData.value);
+        if (analysisData.status === 'fulfilled' && analysisData.value) setAnalysis(analysisData.value);
+        if (kpiData.status === 'fulfilled') setKpi(kpiData.value);
+        if (ordersData.status === 'fulfilled') setOrders(ordersData.value);
+        if (tradesData.status === 'fulfilled') setTrades(tradesData.value);
+        
+        updateProgress(LoadingPhase.SECONDARY_DATA, 80, 'Loading monitoring data...');
+        
+        // Phase 3: Monitoring data (analytics, health, triggers)
+        const [analyticsData, healthData, triggersData] = await Promise.allSettled([
+          api.getMonitorAnalytics(s.session.id),
+          api.getHealth(s.session.id),
+          api.getTriggers(s.session.id)
+        ]);
+        
+        if (analyticsData.status === 'fulfilled') setAnalytics(analyticsData.value);
+        if (healthData.status === 'fulfilled') setHealth(healthData.value);
+        if (triggersData.status === 'fulfilled') setTriggers(triggersData.value);
+        
+        updateProgress(LoadingPhase.COMPLETE, 100, 'Monitor ready!');
+        
+      } catch (error) {
+        updateProgress(LoadingPhase.COMPLETE, 100, 'Load completed with errors', String(error));
+      }
+    };
+    
+    loadData();
   }, [sessionId]);
 
   const loadAnalytics = React.useCallback(async () => {
@@ -160,63 +240,318 @@ export default function MonitorPage(){
 
   if (!sessionId) return <Navigate to='/sessions' replace />;
   const hasSession = !!status?.session?.id;
-  // Do not redirect while loading bootstrap; only redirect if definitively no session
-  if (!loading && !hasSession) return <Navigate to='/sessions' replace />;
+  const isLoading = loadingState.phase !== LoadingPhase.COMPLETE;
+  
+  // Don't redirect while loading; only redirect if definitively no session
+  if (!isLoading && !hasSession) return <Navigate to='/sessions' replace />;
+
+  // Modern Loading UI
+  const LoadingOverlay = () => (
+    <div style={{ 
+      position: 'fixed', 
+      inset: 0, 
+      background: 'rgba(255,255,255,0.95)', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center', 
+      zIndex: 1000,
+      backdropFilter: 'blur(4px)'
+    }}>
+      <Card style={{ minWidth: 400, textAlign: 'center' }}>
+        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          <Title level={4}>Loading Trading Monitor</Title>
+          
+          <Progress 
+            percent={loadingState.progress} 
+            strokeColor={{
+              '0%': '#108ee9',
+              '100%': '#87d068',
+            }}
+            trailColor="#f0f0f0"
+          />
+          
+          <div style={{ color: '#666' }}>
+            {loadingState.message}
+          </div>
+          
+          {loadingState.errors.length > 0 && (
+            <Alert
+              type="warning" 
+              message="Some data failed to load"
+              description={`${loadingState.errors.length} errors occurred`}
+              showIcon
+              style={{ textAlign: 'left' }}
+            />
+          )}
+        </Space>
+      </Card>
+    </div>
+  );
 
   return (
     <>
-      {loading && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(255,255,255,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-          <div style={{ padding:12, background:'#fff', border:'1px solid #eee', borderRadius:8 }}>Loading monitor…</div>
-        </div>
-      )}
-      <Row gutter={[12,12]}>
-  <Col xs={24}><MonitorHealthBanner health={analytics?.health || health} updatedAt={analytics?.updatedAt || health?.ts} /></Col>
-  <Col xs={24}><MonitorMiniPanels panels={analytics?.panels} /></Col>
-        {/* Primary fold: Chart + Agent details + Orders/Trades (no scroll on desktop) */}
-        <Col xs={24} lg={14}>
-          <LiveMetrics 
-            symbol={status?.symbol} 
-            price={status?.price} 
-            ticker={ticker}
-            lastUpdate={ticker?.lastUpdate}
-          />
-          <PriceChart
-            symbol={status?.symbol}
-            price={status?.price}
-            support={status?.sr?.support}
-            resistance={status?.sr?.resistance}
-            strategy={strategy}
-            agentPlan={agent?.plan}
-            agentPos={agent?.pos}
-            pivots={status?.pivots}
-            agentExit={agent?.exit}
-          />
+      {isLoading && <LoadingOverlay />}
+      
+      {/* Hero Section */}
+      <Card style={{ 
+        marginBottom: 24, 
+        background: 'linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)',
+        color: 'white',
+        border: 'none'
+      }}>
+        <Row justify="space-between" align="middle">
+          <Col>
+            <Space direction="vertical" size="small">
+              <Title level={3} style={{ color: 'white', margin: 0 }}>
+                {symbol || 'Trading Monitor'}
+              </Title>
+              <Space>
+                <Tag color={status?.session?.mode === 'live' ? 'gold' : 'blue'}>
+                  {(status?.session?.mode || 'paper').toUpperCase()}
+                </Tag>
+                <Tag color={wsConnected ? 'green' : 'red'}>
+                  {wsConnected ? 'LIVE' : 'DISCONNECTED'}
+                </Tag>
+                {agent?.state && (
+                  <Tag color={agent.state === 'ARMED' ? 'green' : agent.state === 'MANAGE' ? 'blue' : 'default'}>
+                    {agent.state}
+                  </Tag>
+                )}
+              </Space>
+            </Space>
+          </Col>
+          <Col>
+            <Space>
+              <Button 
+                type="primary" 
+                style={{ background: 'rgba(255,255,255,0.2)', border: 'none' }}
+                icon={<ReloadOutlined />}
+                onClick={() => window.location.reload()}
+              >
+                Refresh
+              </Button>
+              <Button 
+                type="primary"
+                style={{ background: 'rgba(255,255,255,0.2)', border: 'none' }}
+                icon={expandedView ? <CompressOutlined /> : <ExpandOutlined />}
+                onClick={() => setExpandedView(!expandedView)}
+              >
+                {expandedView ? 'Compact' : 'Expand'}
+              </Button>
+            </Space>
+          </Col>
+        </Row>
+      </Card>
+      
+      {/* Health Banner */}
+      <Row gutter={[24, 24]}>
+        <Col xs={24}>
+          {analytics?.health || health ? (
+            <MonitorHealthBanner health={analytics?.health || health} updatedAt={analytics?.updatedAt || health?.ts} />
+          ) : (
+            <Skeleton.Button active style={{ width: '100%', height: 60 }} />
+          )}
         </Col>
-        <Col xs={24} lg={10}>
-          <Space direction='vertical' style={{ width:'100%' }} size={12}>
-            <AgentStatePanel agent={agent} symbol={status?.symbol} lastPrice={status?.price} sessionId={status?.session?.id} onPlan={()=>{}} />
-            <Tabs defaultActiveKey='orders' items={[
-              { key:'orders', label:'Orders', children: <OrdersTable rows={orders} /> },
-              { key:'trades', label:'Trades', children: <TradesTable rows={trades} /> },
-            ]} />
+        
+        <Col xs={24}>
+          {analytics?.panels ? (
+            <MonitorMiniPanels panels={analytics?.panels} />
+          ) : (
+            <Row gutter={16}>
+              {[1,2,3,4].map(i => (
+                <Col xs={6} key={i}>
+                  <Skeleton.Button active style={{ width: '100%', height: 80 }} />
+                </Col>
+              ))}
+            </Row>
+          )}
+        </Col>
+      </Row>
+
+      {/* Primary Section: Chart + Live Data */}
+      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+        <Col xs={24} lg={16}>
+          <Space direction="vertical" style={{ width: '100%' }} size="large">
+            {/* Live Metrics */}
+            {loadingState.phase >= LoadingPhase.CORE_DATA ? (
+              <LiveMetrics 
+                symbol={status?.symbol} 
+                price={status?.price} 
+                ticker={ticker}
+                lastUpdate={ticker?.lastUpdate}
+              />
+            ) : (
+              <Skeleton active paragraph={{ rows: 2 }} />
+            )}
+            
+            {/* Price Chart */}
+            {loadingState.phase >= LoadingPhase.CORE_DATA ? (
+              <PriceChart
+                symbol={status?.symbol}
+                price={status?.price}
+                support={status?.sr?.support}
+                resistance={status?.sr?.resistance}
+                strategy={strategy}
+                agentPlan={agent?.plan}
+                agentPos={agent?.pos}
+                pivots={status?.pivots}
+                agentExit={agent?.exit}
+              />
+            ) : (
+              <Card>
+                <Skeleton active paragraph={{ rows: 8 }} />
+              </Card>
+            )}
           </Space>
         </Col>
-
-        {/* Secondary fold: quick stats + strategy + indicators */}
-        <Col xs={24}><PositionStatsBlock agent={agent} price={status?.price} /></Col>
-        <Col xs={24} lg={8}><PerfPanel kpi={kpi} session={status?.session} /></Col>
-        <Col xs={24} lg={8}><StrategyPanel strategy={strategy} /></Col>
-        <Col xs={24} lg={8}><IndicatorsPanel indicators={analysis?.indicators || status?.indicators} /></Col>
-
-        {/* Tertiary fold: deep analysis & history */}
-        <Col xs={24}><AnalysisTabs analysis={analysis} /></Col>
-        <Col xs={24} lg={16}><PerfBreakdownPanel sessionId={status?.session?.id} api={api} /></Col>
-        <Col xs={24}><TriggersPanel rows={triggers} /></Col>
-        <Col xs={24} lg={8}><AlertPanel sessionId={status?.session?.id} /></Col>
-        <Col xs={24}><DailyReviewPanel sessionId={status?.session?.id} /></Col>
-        <Col xs={24}><HelpPanel /></Col>
+        
+        <Col xs={24} lg={8}>
+          <Space direction="vertical" style={{ width: '100%' }} size="large">
+            {/* Agent State */}
+            {loadingState.phase >= LoadingPhase.CORE_DATA && agent ? (
+              <AgentStatePanel 
+                agent={agent} 
+                symbol={status?.symbol} 
+                lastPrice={status?.price} 
+                sessionId={status?.session?.id} 
+                onPlan={() => {}} 
+              />
+            ) : (
+              <Card title="Agent State">
+                <Skeleton active paragraph={{ rows: 4 }} />
+              </Card>
+            )}
+            
+            {/* Orders & Trades */}
+            {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+              <Tabs defaultActiveKey="orders" items={[
+                { 
+                  key: 'orders', 
+                  label: `Orders (${orders.length})`, 
+                  children: <OrdersTable rows={orders} /> 
+                },
+                { 
+                  key: 'trades', 
+                  label: `Trades (${trades.length})`, 
+                  children: <TradesTable rows={trades} /> 
+                },
+              ]} />
+            ) : (
+              <Card>
+                <Skeleton active paragraph={{ rows: 6 }} />
+              </Card>
+            )}
+          </Space>
+        </Col>
       </Row>
+
+      {/* Secondary Section: Performance & Strategy */}
+      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+        <Col xs={24}>
+          {loadingState.phase >= LoadingPhase.CORE_DATA && agent ? (
+            <PositionStatsBlock agent={agent} price={status?.price} />
+          ) : (
+            <Skeleton.Button active style={{ width: '100%', height: 120 }} />
+          )}
+        </Col>
+        
+        <Col xs={24} lg={8}>
+          {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+            <PerfPanel kpi={kpi} session={status?.session} />
+          ) : (
+            <Card title="Performance">
+              <Skeleton active paragraph={{ rows: 4 }} />
+            </Card>
+          )}
+        </Col>
+        
+        <Col xs={24} lg={8}>
+          {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+            <StrategyPanel strategy={strategy} />
+          ) : (
+            <Card title="Strategy">
+              <Skeleton active paragraph={{ rows: 4 }} />
+            </Card>
+          )}
+        </Col>
+        
+        <Col xs={24} lg={8}>
+          {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+            <IndicatorsPanel indicators={analysis?.indicators || status?.indicators} />
+          ) : (
+            <Card title="Indicators">
+              <Skeleton active paragraph={{ rows: 4 }} />
+            </Card>
+          )}
+        </Col>
+      </Row>
+
+      {/* Expandable Advanced Sections */}
+      {expandedView && (
+        <>
+          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+            <Col xs={24}>
+              {loadingState.phase === LoadingPhase.COMPLETE ? (
+                <AnalysisTabs analysis={analysis} />
+              ) : (
+                <Card title="Market Analysis">
+                  <Skeleton active paragraph={{ rows: 6 }} />
+                </Card>
+              )}
+            </Col>
+          </Row>
+          
+          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+            <Col xs={24} lg={16}>
+              {loadingState.phase === LoadingPhase.COMPLETE ? (
+                <PerfBreakdownPanel sessionId={status?.session?.id} api={api} />
+              ) : (
+                <Card title="Performance Breakdown">
+                  <Skeleton active paragraph={{ rows: 8 }} />
+                </Card>
+              )}
+            </Col>
+            
+            <Col xs={24} lg={8}>
+              {loadingState.phase === LoadingPhase.COMPLETE ? (
+                <AlertPanel sessionId={status?.session?.id} />
+              ) : (
+                <Card title="Alerts">
+                  <Skeleton active paragraph={{ rows: 6 }} />
+                </Card>
+              )}
+            </Col>
+          </Row>
+          
+          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+            <Col xs={24}>
+              {loadingState.phase === LoadingPhase.COMPLETE ? (
+                <TriggersPanel rows={triggers} />
+              ) : (
+                <Card title="Trading Triggers">
+                  <Skeleton active paragraph={{ rows: 4 }} />
+                </Card>
+              )}
+            </Col>
+          </Row>
+          
+          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+            <Col xs={24} lg={12}>
+              {loadingState.phase === LoadingPhase.COMPLETE ? (
+                <DailyReviewPanel sessionId={status?.session?.id} />
+              ) : (
+                <Card title="Daily Review">
+                  <Skeleton active paragraph={{ rows: 6 }} />
+                </Card>
+              )}
+            </Col>
+            
+            <Col xs={24} lg={12}>
+              <HelpPanel />
+            </Col>
+          </Row>
+        </>
+      )}
     </>
   );
 }
