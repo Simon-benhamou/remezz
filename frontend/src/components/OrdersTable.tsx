@@ -1,82 +1,227 @@
 import React from "react";
-import { Card, Table, Tag, Tooltip } from "antd";
+import { Table, Tag, Tooltip, Space, Badge } from "antd";
+import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined } from "@ant-design/icons";
+
 export default function OrdersTable({ rows = [] }: any) {
+  const getStatusBadge = (status: string) => {
+    const statusMap: Record<string, { color: string; icon: any; text: string }> = {
+      'filled': { color: 'success', icon: <CheckCircleOutlined />, text: 'Filled' },
+      'partial': { color: 'processing', icon: <ClockCircleOutlined />, text: 'Partial' },
+      'pending': { color: 'warning', icon: <ClockCircleOutlined />, text: 'Pending' },
+      'canceled': { color: 'error', icon: <CloseCircleOutlined />, text: 'Canceled' },
+      'rejected': { color: 'error', icon: <CloseCircleOutlined />, text: 'Rejected' },
+    };
+    const config = statusMap[status?.toLowerCase()] || { color: 'default', icon: null, text: status };
+    return (
+      <Badge 
+        status={config.color as any} 
+        text={
+          <Space size={4}>
+            {config.icon}
+            <span style={{ fontSize: 12, fontWeight: 500 }}>{config.text}</span>
+          </Space>
+        } 
+      />
+    );
+  };
+
   const cols: any = [
     {
-      title: <Tooltip title="Horodatage d'exécution de l'ordre (heure locale)">Time</Tooltip>,
+      title: "Time",
       dataIndex: "createdAt",
-      render: (v: any) => new Date(v).toLocaleString(),
-    },
-    { title: <Tooltip title="Identifiant interne de l'ordre envoyé par l'agent">ClientID</Tooltip>, dataIndex: "clientOrderId" , style:{maxWidth: '150px'} },
-    { title: <Tooltip title="Marché traité (base/quote)">Symbol</Tooltip>, dataIndex: "symbol" },
-    {
-      title: <Tooltip title="Type d'ordre : entrée ou sortie">Kind</Tooltip>,
-      dataIndex: "clientOrderId",
-      render: (v: string) => (v && v.endsWith('.exit') ? <Tag>exit</Tag> : <Tag color="blue">entry</Tag>),
-    },
-    {
-      title: <Tooltip title="Sens de l'opération (achat = long, vente = short)">Side</Tooltip>,
-      dataIndex: "side",
-      render: (v: any) => <Tag color={v === "buy" ? "green" : "red"}>{v}</Tag>,
+      width: 140,
+      render: (v: any) => (
+        <div style={{ fontSize: 12 }}>
+          <div style={{ fontWeight: 500, color: '#374151' }}>
+            {new Date(v).toLocaleDateString()}
+          </div>
+          <div style={{ color: '#6b7280' }}>
+            {new Date(v).toLocaleTimeString()}
+          </div>
+        </div>
+      ),
     },
     {
-      title: <Tooltip title="Direction de position après exécution (long ou short)">Direction</Tooltip>,
-      dataIndex: "positionSide",
-      render: (v: any) => v ? <Tag color={v === 'long' ? 'green' : 'red'}>{v}</Tag> : '-',
-    },
-    { title: <Tooltip title="Nature de l'ordre envoyé à l'échange (market, limit, etc.)">Type</Tooltip>, dataIndex: "type" },
-  { title: <Tooltip title="Quantité d'actif traitée">Qty</Tooltip>, dataIndex: "qty", render: (v:any)=> Number(v||0).toFixed(4) },
-  { title: <Tooltip title="Prix d'exécution de l'ordre">Price</Tooltip>, dataIndex: "price", render: (v:any)=> v!=null ? Number(v).toFixed(4) : '-' },
-    {
-      title: <Tooltip title="Valeur notionnelle = quantité × prix, exprimée en USD">Notional (USD)</Tooltip>,
-      render: (_: any, r: any) => {
-        const v = (Number(r.qty) || 0) * (Number(r.price) || 0);
-        return v ? `$${v.toFixed(2)}` : '-';
+      title: "Order",
+      width: 120,
+      render: (_: any, record: any) => {
+        const isExit = record.clientOrderId?.endsWith?.('.exit');
+        return (
+          <Space direction="vertical" size={2}>
+            <Tag 
+              color={isExit ? 'orange' : 'blue'} 
+              style={{ margin: 0, fontSize: 11, fontWeight: 500 }}
+            >
+              {isExit ? 'EXIT' : 'ENTRY'}
+            </Tag>
+            <Tooltip title={record.clientOrderId}>
+              <code style={{ 
+                fontSize: 10, 
+                color: '#6b7280',
+                background: '#f9fafb',
+                padding: '1px 4px',
+                borderRadius: 3
+              }}>
+                {record.clientOrderId?.slice(-8) || 'N/A'}
+              </code>
+            </Tooltip>
+          </Space>
+        );
       },
     },
     {
-      title: <Tooltip title="Levier estimé, compte tenu du budget autorisé">Est Lev</Tooltip>,
-      dataIndex: "estLev",
-      render: (v:any)=> v!=null ? `x${Number(v).toFixed(2)}` : '-',
+      title: "Side",
+      dataIndex: "side",
+      width: 80,
+      render: (v: any) => (
+        <Tag 
+          color={v === "buy" ? "success" : "error"} 
+          style={{ 
+            margin: 0, 
+            fontSize: 12, 
+            fontWeight: 600,
+            textTransform: 'uppercase'
+          }}
+        >
+          {v}
+        </Tag>
+      ),
     },
     {
-      title: <Tooltip title="Levier demandé à l'échange pour cet ordre">Lev</Tooltip>,
-      dataIndex: "leverage",
-      render: (v: any) => (v ? `x${v}` : '-'),
-    },
-    { title: <Tooltip title="Prix de stop-loss transmis à l'échange">SL</Tooltip>, dataIndex: "sl", render: (v:any)=> v!=null ? Number(v).toFixed(4) : '-' },
-    { title: <Tooltip title="Prix de take-profit transmis à l'échange">TP</Tooltip>, dataIndex: "tp", render: (v:any)=> v!=null ? Number(v).toFixed(4) : '-' },
-    {
-      title: <Tooltip title="Variation en pourcentage entre l'entrée et la sortie">% Change</Tooltip>,
-      dataIndex: "pctChange",
-      render: (v:any)=> v!=null ? `${Number(v).toFixed(2)}%` : '-',
-    },
-    {
-      title: <Tooltip title="Retour sur investissement estimé, en tenant compte du levier">ROI est. (%)</Tooltip>,
-      dataIndex: "roePct",
-      render: (v:any, r:any)=>{
-        if (!r.clientOrderId?.endsWith?.('.exit')) return '-';
-        if (v==null) return '-';
-        const val = Number(v||0);
-        const color = val>=0? '#1f8f1f':'#c0392b';
-        return <span style={{ color }}>{val.toFixed(2)}%</span>;
-      }
+      title: "Type",
+      dataIndex: "type",
+      width: 80,
+      render: (v: any) => (
+        <span style={{ 
+          fontSize: 12, 
+          color: '#374151',
+          textTransform: 'capitalize',
+          fontWeight: 500
+        }}>
+          {v}
+        </span>
+      ),
     },
     {
-      title: <Tooltip title="Profit ou perte réellement cristallisé lors de cette sortie">Realized PnL (USD)</Tooltip>,
-      dataIndex: "realizedPnlUsd",
-      render: (v:any, r:any)=>{
-        const val = Number(v||0);
-        if (!r.clientOrderId?.endsWith?.('.exit')) return '-';
-        const color = val>=0? '#1f8f1f':'#c0392b';
-        return <span style={{ color }}>${val.toFixed(2)}</span>;
-      }
+      title: "Quantity",
+      dataIndex: "qty",
+      width: 100,
+      align: 'right',
+      render: (v: any) => (
+        <span style={{ 
+          fontSize: 12, 
+          fontWeight: 600, 
+          color: '#111827',
+          fontFamily: 'Monaco, monospace'
+        }}>
+          {Number(v || 0).toFixed(4)}
+        </span>
+      )
     },
-    { title: <Tooltip title="Statut rapporté par l'échange (filled, canceled, etc.)">Status</Tooltip>, dataIndex: "status" },
+    {
+      title: "Price",
+      dataIndex: "price",
+      width: 100,
+      align: 'right',
+      render: (v: any) => (
+        <span style={{ 
+          fontSize: 12, 
+          fontWeight: 600, 
+          color: '#111827',
+          fontFamily: 'Monaco, monospace'
+        }}>
+          {v != null ? `$${Number(v).toFixed(4)}` : '-'}
+        </span>
+      )
+    },
+    {
+      title: "Notional",
+      width: 100,
+      align: 'right',
+      render: (_: any, record: any) => {
+        const notional = (Number(record.qty) || 0) * (Number(record.price) || 0);
+        return (
+          <span style={{ 
+            fontSize: 12, 
+            fontWeight: 600, 
+            color: '#2563eb',
+            fontFamily: 'Monaco, monospace'
+          }}>
+            {notional ? `$${notional.toFixed(2)}` : '-'}
+          </span>
+        );
+      },
+    },
+    {
+      title: "Leverage",
+      width: 80,
+      align: 'center',
+      render: (_: any, record: any) => {
+        const lev = record.leverage || record.estLev;
+        if (!lev) return <span style={{ color: '#9ca3af' }}>-</span>;
+        return (
+          <Tag color="cyan" style={{ margin: 0, fontSize: 11 }}>
+            {Number(lev).toFixed(1)}x
+          </Tag>
+        );
+      },
+    },
+    {
+      title: "PnL",
+      width: 100,
+      align: 'right',
+      render: (_: any, record: any) => {
+        if (!record.clientOrderId?.endsWith?.('.exit')) {
+          return <span style={{ color: '#9ca3af', fontSize: 12 }}>-</span>;
+        }
+        
+        const pnl = Number(record.realizedPnlUsd || 0);
+        const roi = Number(record.roePct || 0);
+        const isProfit = pnl >= 0;
+        
+        return (
+          <Space direction="vertical" size={1} style={{ alignItems: 'flex-end' }}>
+            <span style={{ 
+              color: isProfit ? '#10b981' : '#ef4444',
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: 'Monaco, monospace'
+            }}>
+              ${pnl.toFixed(2)}
+            </span>
+            <span style={{ 
+              color: isProfit ? '#10b981' : '#ef4444',
+              fontSize: 10,
+              fontWeight: 500
+            }}>
+              {roi >= 0 ? '+' : ''}{roi.toFixed(1)}%
+            </span>
+          </Space>
+        );
+      },
+    },
+    {
+      title: "Status",
+      dataIndex: "status",
+      width: 100,
+      render: (status: string) => getStatusBadge(status),
+    },
   ];
+
   return (
-    <Card title="Orders">
-      <Table rowKey="id" dataSource={rows} columns={cols} size="small" />
-    </Card>
+    <Table 
+      rowKey="id" 
+      dataSource={rows} 
+      columns={cols} 
+      size="small" 
+      pagination={{
+        pageSize: 10,
+        showSizeChanger: false,
+        showQuickJumper: false,
+        showTotal: (total) => `${total} orders`
+      }}
+      scroll={{ x: 900 }}
+      className="enhanced-orders-table"
+    />
   );
 }

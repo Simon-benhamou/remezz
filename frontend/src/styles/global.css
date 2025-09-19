@@ -342,3 +342,79 @@ a:focus-visible {
   transform: translateY(-2px);
   box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
 }
+
+/* Enhanced Tables for Orders and Trades */
+.enhanced-orders-table .ant-table-thead > tr > th,
+.enhanced-trades-table .ant-table-thead > tr > th {
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  background: #fafafa;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.enhanced-orders-table .ant-table-tbody > tr > td,
+.enhanced-trades-table .ant-table-tbody > tr > td {
+  font-size: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f9fafb;
+}
+
+.enhanced-orders-table .ant-table-tbody > tr:hover > td,
+.enhanced-trades-table .ant-table-tbody > tr:hover > td {
+  background-color: #fafafa;
+}
+
+.enhanced-orders-table .ant-table-tbody > tr > td .ant-tag,
+.enhanced-trades-table .ant-table-tbody > tr > td .ant-tag {
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  line-height: 1.4;
+}
+
+.enhanced-orders-table .ant-badge,
+.enhanced-trades-table .ant-badge {
+  font-size: 11px;
+}
+
+.enhanced-orders-table .ant-progress-line,
+.enhanced-trades-table .ant-progress-line {
+  margin: 0;
+}
+
+.enhanced-orders-table .ant-progress-bg,
+.enhanced-trades-table .ant-progress-bg {
+  border-radius: 2px;
+}
+
+/* Momentum Gates Card Styling */
+.momentum-gates-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.momentum-gates-card .ant-card-head {
+  border-bottom: 1px solid #f3f4f6;
+  padding: 12px 16px;
+}
+
+.momentum-gates-card .ant-card-body {
+  padding: 16px;
+}
+
+/* Performance metrics enhancement */
+.performance-metric {
+  padding: 12px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #ffffff 0%, #fafafa 100%);
+  border: 1px solid #f3f4f6;
+  transition: all 0.2s ease;
+}
+
+.performance-metric:hover {
+  border-color: #e5e7eb;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}

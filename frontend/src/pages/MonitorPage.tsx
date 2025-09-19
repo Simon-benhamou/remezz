@@ -1,7 +1,7 @@
 import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography } from 'antd';
-import { ReloadOutlined, ExpandOutlined, CompressOutlined } from '@ant-design/icons';
+import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography, Tooltip } from 'antd';
+import { ReloadOutlined, ExpandOutlined, CompressOutlined, SyncOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
@@ -22,7 +22,7 @@ import PositionStatsBlock from '../components/PositionStatsBlock';
 import MonitorHealthBanner from '../components/MonitorHealthBanner';
 import MonitorMiniPanels from '../components/MonitorMiniPanels';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 // Loading phases for progressive loading
 enum LoadingPhase {
@@ -494,7 +494,7 @@ export default function MonitorPage(){
         </Col>
       </Row>
 
-      {/* Primary Section: Chart + Live Data */}
+      {/* Primary Section: Chart + Performance + Tables */}
       <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
         <Col xs={24} lg={16}>
           <Space direction="vertical" style={{ width: '100%' }} size="large">
@@ -528,6 +528,86 @@ export default function MonitorPage(){
                 <Skeleton active paragraph={{ rows: 8 }} />
               </Card>
             )}
+            
+            {/* Performance Metrics Row */}
+            {shouldShowContent(LoadingPhase.CORE_DATA) && (
+              <Row gutter={[16, 16]}>
+                <Col xs={24} sm={8}>
+                  {agent ? (
+                    <PositionStatsBlock agent={agent} price={status?.price} />
+                  ) : (
+                    <Skeleton.Button active style={{ width: '100%', height: 120 }} />
+                  )}
+                </Col>
+                <Col xs={24} sm={8}>
+                  {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                    <PerfPanel kpi={kpi} session={status?.session} />
+                  ) : (
+                    <Card title="Performance">
+                      <Skeleton active paragraph={{ rows: 4 }} />
+                    </Card>
+                  )}
+                </Col>
+                <Col xs={24} sm={8}>
+                  {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                    <IndicatorsPanel indicators={analysis?.indicators || status?.indicators} />
+                  ) : (
+                    <Card title="Indicators">
+                      <Skeleton active paragraph={{ rows: 4 }} />
+                    </Card>
+                  )}
+                </Col>
+              </Row>
+            )}
+            
+            {/* Enhanced Orders & Trades Tables */}
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+              <Row gutter={[16, 16]}>
+                <Col xs={24} md={12}>
+                  <Card 
+                    title={`Orders (${orders.length})`}
+                    size="small"
+                    extra={
+                      <Space>
+                        <Button size="small" icon={<SyncOutlined />} onClick={() => window.location.reload()}>
+                          Refresh
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <OrdersTable rows={orders} />
+                  </Card>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Card 
+                    title={`Trades (${trades.length})`}
+                    size="small"
+                    extra={
+                      <Space>
+                        <Button size="small" icon={<SyncOutlined />} onClick={() => window.location.reload()}>
+                          Refresh
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <TradesTable rows={trades} />
+                  </Card>
+                </Col>
+              </Row>
+            ) : (
+              <Row gutter={[16, 16]}>
+                <Col xs={24} md={12}>
+                  <Card title="Orders">
+                    <Skeleton active paragraph={{ rows: 4 }} />
+                  </Card>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Card title="Trades">
+                    <Skeleton active paragraph={{ rows: 4 }} />
+                  </Card>
+                </Col>
+              </Row>
+            )}
           </Space>
         </Col>
         
@@ -548,67 +628,52 @@ export default function MonitorPage(){
               </Card>
             )}
             
-            {/* Orders & Trades */}
+            {/* Strategy Panel */}
             {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <Tabs defaultActiveKey="orders" items={[
-                { 
-                  key: 'orders', 
-                  label: `Orders (${orders.length})`, 
-                  children: <OrdersTable rows={orders} /> 
-                },
-                { 
-                  key: 'trades', 
-                  label: `Trades (${trades.length})`, 
-                  children: <TradesTable rows={trades} /> 
-                },
-              ]} />
+              <StrategyPanel strategy={strategy} />
             ) : (
-              <Card>
-                <Skeleton active paragraph={{ rows: 6 }} />
+              <Card title="Strategy">
+                <Skeleton active paragraph={{ rows: 4 }} />
+              </Card>
+            )}
+            
+            {/* Momentum Gates Explanation */}
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (
+              <Card 
+                title="Momentum Gates" 
+                size="small"
+                extra={
+                  <Tooltip title="Technical filters that prevent trades in unfavorable conditions">
+                    <InfoCircleOutlined style={{ color: '#2563eb' }} />
+                  </Tooltip>
+                }
+              >
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  <Text strong style={{ fontSize: 13, color: '#374151' }}>Entry Requirements:</Text>
+                  <div style={{ padding: '8px 12px', background: '#f9fafb', borderRadius: 6, fontSize: 12 }}>
+                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                      <div><span style={{ color: '#6b7280' }}>• ATR%:</span> <code style={{ background: '#f3f4f6', padding: '2px 4px', borderRadius: 4 }}>≥ 0.8%</code> <span style={{ color: '#6b7280' }}>(volatility)</span></div>
+                      <div><span style={{ color: '#6b7280' }}>• EMA Slope:</span> <code style={{ background: '#f3f4f6', padding: '2px 4px', borderRadius: 4 }}>≥ 0.15%</code> <span style={{ color: '#6b7280' }}>(momentum)</span></div>
+                      <div><span style={{ color: '#6b7280' }}>• Direction:</span> <span style={{ color: '#6b7280' }}>Aligned with bias</span></div>
+                    </Space>
+                  </div>
+                  <Text strong style={{ fontSize: 13, color: '#374151' }}>Fail Conditions:</Text>
+                  <div style={{ padding: '8px 12px', background: '#fef2f2', borderRadius: 6, fontSize: 12 }}>
+                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                      <div>❌ <span style={{ color: '#6b7280' }}>Low volatility (ATR% &lt; 0.8%)</span></div>
+                      <div>❌ <span style={{ color: '#6b7280' }}>Flat trend (Slope &lt; 0.15%)</span></div>
+                      <div>❌ <span style={{ color: '#6b7280' }}>Wrong direction (against bias)</span></div>
+                    </Space>
+                  </div>
+                  <Alert 
+                    type="info" 
+                    message="Override possible with strong ADX (≥24) + aligned slope"
+                    showIcon
+                  />
+                </Space>
               </Card>
             )}
           </Space>
-        </Col>
-      </Row>
-
-      {/* Secondary Section: Performance & Strategy */}
-      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-        <Col xs={24}>
-          {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
-            <PositionStatsBlock agent={agent} price={status?.price} />
-          ) : (
-            <Skeleton.Button active style={{ width: '100%', height: 120 }} />
-          )}
-        </Col>
-        
-        <Col xs={24} lg={8}>
-          {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-            <PerfPanel kpi={kpi} session={status?.session} />
-          ) : (
-            <Card title="Performance">
-              <Skeleton active paragraph={{ rows: 4 }} />
-            </Card>
-          )}
-        </Col>
-        
-        <Col xs={24} lg={8}>
-          {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-            <StrategyPanel strategy={strategy} />
-          ) : (
-            <Card title="Strategy">
-              <Skeleton active paragraph={{ rows: 4 }} />
-            </Card>
-          )}
-        </Col>
-        
-        <Col xs={24} lg={8}>
-          {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-            <IndicatorsPanel indicators={analysis?.indicators || status?.indicators} />
-          ) : (
-            <Card title="Indicators">
-              <Skeleton active paragraph={{ rows: 4 }} />
-            </Card>
-          )}
         </Col>
       </Row>
 
