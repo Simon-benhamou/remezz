@@ -524,9 +524,28 @@ export class ReboundRejectionAgent {
     const atrVal = Math.max(stopDistance * 0.6, snap.atr14 || stopDistance);
     const slope = snap.ema20Slope || 0;
     const realizedVol = snap.realizedVol || 0;
+    
+    // Special logic for normal 2-3% moves - optimize timing
+    const unrealizedPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
+    const isNormalMove = unrealizedPct >= 1.5 && unrealizedPct <= 4.0;
+    
     let multiplier = playbook === 'momentum_breakout' ? 0.65 : playbook === 'mean_reversion' ? 1.05 : 0.85;
     if (upR > 1.5) multiplier *= 0.85;
     if (upR > 2.5) multiplier *= 0.75;
+    
+    // Tighten trailing for normal moves to secure profits around 2-3%
+    if (isNormalMove && upR >= 1.5) {
+      multiplier *= 0.7; // More aggressive trailing to lock profits
+      recordOpsEvent({
+        level: 'info',
+        source: 'trail_optimizer',
+        message: 'Tightened trailing for normal market movement',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { unrealizedPct: unrealizedPct.toFixed(2), upR: upR.toFixed(2), newMultiplier: multiplier.toFixed(3) },
+      });
+    }
+    
     if (playbook === 'momentum_breakout') {
       if (slope * dir > 0) multiplier *= 0.9;
       else multiplier *= 1.15;
@@ -657,8 +676,8 @@ export class ReboundRejectionAgent {
     if (trendAligned) {
       qualityScore += 25;
       reasons.push('trend_aligned');
-    } else if (Math.abs(emaSpread) < 0.2) {
-      // Reject sideways/choppy conditions
+    } else if (Math.abs(emaSpread) < 0.1) {
+      // Reject only very flat sideways conditions (was 0.2%)
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -677,8 +696,8 @@ export class ReboundRejectionAgent {
     } else if (adx >= 20) {
       qualityScore += 20;
       reasons.push('moderate_adx');
-    } else if (adx < 15) {
-      // Reject weak momentum
+    } else if (adx < 12) {
+      // Reject only very weak momentum (was 15)
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -736,8 +755,8 @@ export class ReboundRejectionAgent {
     } else if (volumeRatio >= 1.1) {
       qualityScore += 10;
       reasons.push('elevated_volume');
-    } else if (volumeRatio < 0.7) {
-      // Reject low volume breakouts
+    } else if (volumeRatio < 0.5) {
+      // Reject only very low volume breakouts (was 0.7)
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -782,13 +801,31 @@ export class ReboundRejectionAgent {
 
     // Required minimum quality score based on aggressiveness + dynamic adjustment
     const level = this.profile?.aggressiveness || 'conservative';
-    let minScore = 70; // Conservative: high quality only
-    if (level === 'reactive') minScore = 60;
-    if (level === 'aggressive') minScore = 50;
+    let minScore = 55; // Conservative: still selective but more realistic
+    if (level === 'reactive') minScore = 45; // More opportunities
+    if (level === 'aggressive') minScore = 35; // Most opportunities
+    
+    // Special logic for normal market movements (2-3% potential)
+    // Encourage learning on standard setups if agent has low experience
+    const potentialMove = Math.abs((snap.last - ema20) / ema20) * 100;
+    const hasLowExperience = this.recentTrades.length < 20;
+    
+    if (potentialMove >= 1.5 && potentialMove <= 4.0 && hasLowExperience) {
+      // Lower threshold for learning on normal 2-3% moves
+      minScore = Math.max(25, minScore - 15);
+      recordOpsEvent({
+        level: 'info',
+        source: 'learning_mode',
+        message: 'Reduced threshold for normal market movement learning',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { potentialMove: potentialMove.toFixed(2), originalMinScore: minScore + 15, adjustedMinScore: minScore },
+      });
+    }
     
     // Apply dynamic adjustment based on recent performance
     minScore += this.qualityThresholdAdjustment;
-    minScore = Math.max(40, Math.min(85, minScore)); // Bounds: 40-85
+    minScore = Math.max(30, Math.min(75, minScore)); // Bounds: 30-75 (more reasonable)
 
     const passed = qualityScore >= minScore;
     
@@ -938,9 +975,9 @@ export class ReboundRejectionAgent {
     const avgPnlPct = this.recentTrades.reduce((sum, t) => sum + t.pnlPct, 0) / this.recentTrades.length;
     
     const level = this.profile?.aggressiveness || 'conservative';
-    let targetWinRate = 0.7; // Conservative target
-    if (level === 'reactive') targetWinRate = 0.6;
-    if (level === 'aggressive') targetWinRate = 0.55;
+    let targetWinRate = 0.65; // Conservative: realistic for normal trading (was 0.7)
+    if (level === 'reactive') targetWinRate = 0.58; // Reactive: more trades, good win rate (was 0.6)
+    if (level === 'aggressive') targetWinRate = 0.52; // Aggressive: active trading, decent rate (was 0.55)
     
     // Adjust thresholds based on performance vs target
     const performanceDelta = recentWinRate - targetWinRate;
