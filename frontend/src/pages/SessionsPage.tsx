@@ -391,13 +391,13 @@ export default function SessionsPage(){
                     {r.alertCount > 0 && <Badge count={r.alertCount} size="small" />}
                   </Space>
                 ),
-                sorter: (a, b) => (a.healthScore || 0) - (b.healthScore || 0)
+                sorter: (a: any, b: any) => (a.healthScore || 0) - (b.healthScore || 0)
               },
               { 
                 title:'Uptime', 
                 width: 80,
                 render:(_:any,r:any)=> r.stoppedAt ? '-' : formatDuration(r.uptime || 0),
-                sorter: (a, b) => (a.uptime || 0) - (b.uptime || 0)
+                sorter: (a: any, b: any) => (a.uptime || 0) - (b.uptime || 0)
               },
               { 
                 title:'Trades', 
@@ -412,7 +412,7 @@ export default function SessionsPage(){
                     </span>
                   </Space>
                 ),
-                sorter: (a, b) => (a.totalTrades || 0) - (b.totalTrades || 0)
+                sorter: (a: any, b: any) => (a.totalTrades || 0) - (b.totalTrades || 0)
               }
             ]),
             { 
@@ -488,7 +488,7 @@ export default function SessionsPage(){
                     {(r.maxDrawdown || 0).toFixed(2)}%
                   </span>
                 ),
-                sorter: (a, b) => (a.maxDrawdown || 0) - (b.maxDrawdown || 0)
+                sorter: (a: any, b: any) => (a.maxDrawdown || 0) - (b.maxDrawdown || 0)
               }
             ]),
             { 
