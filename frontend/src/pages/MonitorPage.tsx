@@ -263,6 +263,35 @@ export default function MonitorPage(){
   // Don't redirect while loading; only redirect if definitively no session
   if (!isLoading && !hasSession) return <Navigate to='/sessions' replace />;
 
+  // Debug: log current loading state
+  React.useEffect(() => {
+    console.log('Loading state:', {
+      phase: loadingState.phase,
+      progress: loadingState.progress,
+      message: loadingState.message,
+      isLoading,
+      hasSession,
+      symbol,
+      agentLoaded: !!agent,
+      tickerLoaded: !!ticker
+    });
+  }, [loadingState, isLoading, hasSession, symbol, agent, ticker]);
+
+  // Helper to check if we should show content vs skeleton
+  const shouldShowContent = (requiredPhase: LoadingPhase) => {
+    const phaseOrder = {
+      [LoadingPhase.INITIALIZING]: 0,
+      [LoadingPhase.CORE_DATA]: 1,
+      [LoadingPhase.SECONDARY_DATA]: 2,
+      [LoadingPhase.COMPLETE]: 3
+    };
+    
+    const currentOrder = phaseOrder[loadingState.phase];
+    const requiredOrder = phaseOrder[requiredPhase];
+    
+    return currentOrder >= requiredOrder;
+  };
+
   // Modern Loading UI that doesn't block sidebar
   const LoadingOverlay = () => (
     <div style={{ 
@@ -387,7 +416,7 @@ export default function MonitorPage(){
       {/* Health Banner */}
       <Row gutter={[24, 24]}>
         <Col xs={24}>
-          {analytics?.health || health ? (
+          {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (analytics?.health || health) ? (
             <MonitorHealthBanner health={analytics?.health || health} updatedAt={analytics?.updatedAt || health?.ts} />
           ) : (
             <Skeleton.Button active style={{ width: '100%', height: 60 }} />
@@ -395,7 +424,7 @@ export default function MonitorPage(){
         </Col>
         
         <Col xs={24}>
-          {analytics?.panels ? (
+          {shouldShowContent(LoadingPhase.SECONDARY_DATA) && analytics?.panels ? (
             <MonitorMiniPanels panels={analytics?.panels} />
           ) : (
             <Row gutter={16}>
@@ -414,7 +443,7 @@ export default function MonitorPage(){
         <Col xs={24} lg={16}>
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             {/* Live Metrics */}
-            {loadingState.phase >= LoadingPhase.CORE_DATA ? (
+            {shouldShowContent(LoadingPhase.CORE_DATA) ? (
               <LiveMetrics 
                 symbol={status?.symbol} 
                 price={status?.price} 
@@ -426,7 +455,7 @@ export default function MonitorPage(){
             )}
             
             {/* Price Chart */}
-            {loadingState.phase >= LoadingPhase.CORE_DATA ? (
+            {shouldShowContent(LoadingPhase.CORE_DATA) ? (
               <PriceChart
                 symbol={status?.symbol}
                 price={status?.price}
@@ -449,7 +478,7 @@ export default function MonitorPage(){
         <Col xs={24} lg={8}>
           <Space direction="vertical" style={{ width: '100%' }} size="large">
             {/* Agent State */}
-            {loadingState.phase >= LoadingPhase.CORE_DATA && agent ? (
+            {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
               <AgentStatePanel 
                 agent={agent} 
                 symbol={status?.symbol} 
@@ -464,7 +493,7 @@ export default function MonitorPage(){
             )}
             
             {/* Orders & Trades */}
-            {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
               <Tabs defaultActiveKey="orders" items={[
                 { 
                   key: 'orders', 
