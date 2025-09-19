@@ -98,6 +98,8 @@ export const api = {
     (await client.post('/api/agent/aggressiveness', { sessionId, level })).data,
   getDiagnostics: async (sessionId: string) =>
     (await client.get(`/api/agent/sessions/${sessionId}/diagnostics`)).data,
+  getTicker: async (symbol: string) =>
+    (await client.get(`/api/market/ticker/${symbol}`)).data,
   quicktest: async (symbol: string, hours: number, plan?: any) =>
     (await client.post('/api/sim/quicktest', { symbol, hours, plan })).data,
   getOpsMetrics: async () =>

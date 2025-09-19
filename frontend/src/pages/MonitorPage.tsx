@@ -2,6 +2,7 @@ import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
 import { Row, Col, Space, Tag, Tabs } from 'antd';
 import PriceChart from '../charts/PriceChart';
+import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
 import AnalysisTabs from '../components/AnalysisTabs';
 import AgentStatePanel from '../components/AgentStatePanel';
@@ -41,8 +42,20 @@ export default function MonitorPage(){
   const [alerts, setAlerts] = React.useState<any[]>([]);
   const [analytics, setAnalytics] = React.useState<any>(null);
   const [health, setHealth] = React.useState<any>(null);
+  const [ticker, setTicker] = React.useState<any>(null);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+
+  // Load ticker data for the symbol
+  const loadTicker = async (sym: string) => {
+    if (!sym) return;
+    try {
+      const tickerData = await api.getTicker(sym);
+      setTicker(tickerData);
+    } catch (err) {
+      console.error('Failed to load ticker:', err);
+    }
+  };
 
   // Bootstrap strictly from sessionId
   React.useEffect(()=>{
@@ -68,6 +81,8 @@ export default function MonitorPage(){
             setHealth(await api.getHealth(s.session.id));
           }
         } catch {}
+        // Load ticker data for the symbol
+        if (sym) loadTicker(sym);
       } finally { setLoading(false); }
     })();
   }, [sessionId]);
@@ -86,6 +101,14 @@ export default function MonitorPage(){
     const timer = setInterval(() => { loadAnalytics(); }, 20000);
     return () => { clearInterval(timer); };
   }, [sessionId, loadAnalytics]);
+
+  // Periodic ticker refresh
+  React.useEffect(() => {
+    if (!symbol) return;
+    loadTicker(symbol);
+    const tickerTimer = setInterval(() => { loadTicker(symbol); }, 30000); // 30s refresh
+    return () => { clearInterval(tickerTimer); };
+  }, [symbol]);
 
   // WS subscription dedicated to this monitor
   React.useEffect(()=>{
@@ -152,6 +175,12 @@ export default function MonitorPage(){
   <Col xs={24}><MonitorMiniPanels panels={analytics?.panels} /></Col>
         {/* Primary fold: Chart + Agent details + Orders/Trades (no scroll on desktop) */}
         <Col xs={24} lg={14}>
+          <LiveMetrics 
+            symbol={status?.symbol} 
+            price={status?.price} 
+            ticker={ticker}
+            lastUpdate={ticker?.lastUpdate}
+          />
           <PriceChart
             symbol={status?.symbol}
             price={status?.price}

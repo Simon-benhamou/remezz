@@ -1,10 +1,46 @@
 import { exchange, resolveSymbol } from '../exchange/ccxtClient.js';
 import { ema, rsi, atr } from './indicators.js';
 
+// Simple cache to reduce API calls
+const tickerCache = new Map<string, { data: any; timestamp: number }>();
+const TICKER_CACHE_TTL = 10000; // 10 seconds cache
+
 export async function getTicker(symbol: string) {
-  const ex = await exchange();
-  const s = await resolveSymbol(symbol);
-  return ex.fetchTicker(s);
+  const cacheKey = symbol;
+  const cached = tickerCache.get(cacheKey);
+  const now = Date.now();
+  
+  // Return cached data if still fresh
+  if (cached && (now - cached.timestamp) < TICKER_CACHE_TTL) {
+    return cached.data;
+  }
+  
+  try {
+    const ex = await exchange();
+    const s = await resolveSymbol(symbol);
+    const ticker = await ex.fetchTicker(s);
+    
+    // Cache the result
+    tickerCache.set(cacheKey, { data: ticker, timestamp: now });
+    
+    // Clean old cache entries periodically
+    if (tickerCache.size > 20) {
+      for (const [key, entry] of tickerCache.entries()) {
+        if ((now - entry.timestamp) > TICKER_CACHE_TTL * 2) {
+          tickerCache.delete(key);
+        }
+      }
+    }
+    
+    return ticker;
+  } catch (error) {
+    // If we have stale cached data, return it as fallback
+    if (cached) {
+      console.warn(`getTicker(${symbol}) failed, using stale cache:`, error);
+      return cached.data;
+    }
+    throw error;
+  }
 }
 
 export async function getOHLCV(symbol: string, tf = '1h', limit = 300) {

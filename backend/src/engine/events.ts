@@ -236,9 +236,15 @@ export async function startEventEngine(){
         } catch {}
       }
       const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null }, orderBy:{ startedAt:'asc' } });
-      for (const s of sessions) {
+      for (let i = 0; i < sessions.length; i++) {
+        const s = sessions[i];
         const sym = s.symbol || cfg.SYMBOL;
         try {
+          // Add progressive delay between sessions to spread API load
+          if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay between sessions
+          }
+          
           const tech = await tickOnce(s.id, sym);
           lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
           try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
