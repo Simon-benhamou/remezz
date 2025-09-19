@@ -577,6 +577,48 @@ export class ReboundRejectionAgent {
     return candidate;
   }
 
+  // Helper function to check if price is near key support/resistance levels
+  private checkNearKeyLevel(price: number, snap: TechnicalSnapshot): boolean {
+    try {
+      const threshold = 0.008; // 0.8% threshold for "near"
+      
+      // Check support levels
+      if (snap.supports) {
+        for (const support of snap.supports.slice(0, 3)) { // Check top 3 supports
+          if (support && support.price) {
+            const distance = Math.abs((price - support.price) / price);
+            if (distance <= threshold) return true;
+          }
+        }
+      }
+      
+      // Check resistance levels  
+      if (snap.resistances) {
+        for (const resistance of snap.resistances.slice(0, 3)) { // Check top 3 resistances
+          if (resistance && resistance.price) {
+            const distance = Math.abs((price - resistance.price) / price);
+            if (distance <= threshold) return true;
+          }
+        }
+      }
+      
+      // Check pivot levels
+      if (snap.pivots) {
+        const pivotLevels = [snap.pivots.P, snap.pivots.S1, snap.pivots.S2, snap.pivots.R1, snap.pivots.R2];
+        for (const level of pivotLevels) {
+          if (level && typeof level === 'number') {
+            const distance = Math.abs((price - level) / price);
+            if (distance <= threshold) return true;
+          }
+        }
+      }
+      
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   private effectiveEntryThresholds() {
     const cfg = getConfig();
     const level = this.profile?.aggressiveness || 'conservative';
@@ -589,13 +631,13 @@ export class ReboundRejectionAgent {
     if (level === 'reactive') {
       ENTRY_SHORT_MIN_ADX = Math.max(10, ENTRY_SHORT_MIN_ADX - 2);
       ENTRY_LONG_MIN_ADX = Math.max(8, ENTRY_LONG_MIN_ADX - 2);
-      ENTRY_MIN_ATR_PCT = Math.max(0.3, ENTRY_MIN_ATR_PCT * 0.8);
-      ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.01, ENTRY_MIN_SLOPE_ABS_PCT * 0.67);
+      ENTRY_MIN_ATR_PCT = Math.max(0.25, ENTRY_MIN_ATR_PCT * 0.75); // Plus flexible: 0.7 → 0.52%
+      ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.008, ENTRY_MIN_SLOPE_ABS_PCT * 0.67);
     } else if (level === 'aggressive') {
       ENTRY_SHORT_MIN_ADX = Math.max(8, ENTRY_SHORT_MIN_ADX - 4);
       ENTRY_LONG_MIN_ADX = Math.max(6, ENTRY_LONG_MIN_ADX - 4);
-      ENTRY_MIN_ATR_PCT = Math.max(0.2, ENTRY_MIN_ATR_PCT * 0.6);
-      ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.008, ENTRY_MIN_SLOPE_ABS_PCT * 0.5);
+      ENTRY_MIN_ATR_PCT = Math.max(0.15, ENTRY_MIN_ATR_PCT * 0.5); // Très flexible: 0.7 → 0.35%
+      ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.006, ENTRY_MIN_SLOPE_ABS_PCT * 0.5);
     }
     return { ENTRY_SHORT_MIN_ADX, ENTRY_LONG_MIN_ADX, ENTRY_SHORT_MIN_RSI, ENTRY_LONG_MAX_RSI, ENTRY_MIN_ATR_PCT, ENTRY_MIN_SLOPE_ABS_PCT };
   }
@@ -639,21 +681,50 @@ export class ReboundRejectionAgent {
       if (rsiOptimal) quickQualityScore += 15;
       if (atrPct >= 1.0) quickQualityScore += 10; // Some volatility points
       
-      // If quality score is high (≥60), be more flexible with ATR
-      const qualityFlexibility = quickQualityScore >= 60;
-      const atrDeficit = minAtr - atrPct;
+      // CONSOLIDATION DETECTION: Special handling for low volatility periods
+      const isConsolidation = atrPct < 0.5 && adx < 20;
+      const nearKeyLevel = this.checkNearKeyLevel(snap.last, snap);
       
-      if (qualityFlexibility && atrDeficit <= 0.25) {
-        // Allow ATR to be up to 0.25% below threshold if quality is high
+      // Adaptive threshold based on market conditions
+      let adaptiveMinAtr = minAtr;
+      if (isConsolidation) {
+        adaptiveMinAtr *= 0.6; // 40% reduction in consolidation
+        recordOpsEvent({
+          level: 'info', source: 'entry_gate', message: 'consolidation_detected',
+          sessionId: this.sessionId || undefined, symbol: this.profile?.symbol,
+          details: { atrPct, originalThreshold: minAtr, adaptiveThreshold: adaptiveMinAtr }
+        });
+      }
+      if (nearKeyLevel) {
+        adaptiveMinAtr *= 0.8; // 20% reduction near key levels
+      }
+      
+      const atrDeficit = adaptiveMinAtr - atrPct;
+      
+      // If quality score is high (≥50), be more flexible with ATR
+      const qualityFlexibility = quickQualityScore >= 50; // Lowered from 60
+      
+      if (qualityFlexibility && atrDeficit <= 0.35) { // Increased from 0.25
+        // Allow ATR to be up to 0.35% below threshold if quality is high
         recordOpsEvent({
           level: 'info',
           source: 'entry_gate',
           message: 'atr_relaxed_for_quality',
           sessionId: this.sessionId || undefined,
           symbol: this.profile?.symbol,
-          details: { atrPct, min: minAtr, qualityScore: quickQualityScore, reason: reasonHint },
+          details: { atrPct, min: adaptiveMinAtr, qualityScore: quickQualityScore, reason: reasonHint },
         });
         // Continue to slope check
+      } else if (atrDeficit <= 0) {
+        // ATR meets adaptive threshold
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_gate', 
+          message: 'atr_adaptive_threshold_met',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { atrPct, adaptiveThreshold: adaptiveMinAtr, originalThreshold: minAtr }
+        });
       } else {
         // Standard momentum override for near misses
         const emaValForOv = Number((snap as any)?.ema20 ?? snap.last ?? 0) || 1;
@@ -670,7 +741,7 @@ export class ReboundRejectionAgent {
             message: 'atr_pct_too_low',
             sessionId: this.sessionId || undefined,
             symbol: this.profile?.symbol,
-            details: { atrPct, min: minAtr, qualityScore: quickQualityScore, reason: reasonHint },
+            details: { atrPct, min: adaptiveMinAtr, qualityScore: quickQualityScore, isConsolidation, nearKeyLevel, reason: reasonHint },
           });
           return false;
         }
