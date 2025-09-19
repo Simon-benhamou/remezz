@@ -21,6 +21,10 @@ import { openWS, wsSend } from '../ws';
 import PositionStatsBlock from '../components/PositionStatsBlock';
 import MonitorHealthBanner from '../components/MonitorHealthBanner';
 import MonitorMiniPanels from '../components/MonitorMiniPanels';
+import MarketTriggersCard from '../components/MarketTriggersCard';
+import KeyMetricsCard from '../components/KeyMetricsCard';
+import SRVisualizationCard from '../components/SRVisualizationCard';
+import AIInsightsCard from '../components/AIInsightsCard';
 
 const { Title, Text } = Typography;
 
@@ -628,49 +632,67 @@ export default function MonitorPage(){
               </Card>
             )}
             
-            {/* Strategy Panel */}
+            {/* Market Triggers - New Modern Component */}
             {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <StrategyPanel strategy={strategy} />
+              <MarketTriggersCard 
+                triggers={triggers.map(t => ({
+                  id: t.id || String(Math.random()),
+                  name: t.name || 'Unknown Trigger',
+                  description: t.description || 'No description available',
+                  active: Boolean(t.active),
+                  strength: t.strength || 'weak',
+                  confidence: t.confidence || 50,
+                  timeframe: t.timeframe,
+                  value: t.value,
+                  threshold: t.threshold
+                }))}
+              />
             ) : (
-              <Card title="Strategy">
-                <Skeleton active paragraph={{ rows: 4 }} />
+              <Card title="Market Triggers">
+                <Skeleton active paragraph={{ rows: 3 }} />
               </Card>
             )}
             
-            {/* Momentum Gates Explanation */}
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (
-              <Card 
-                title="Momentum Gates" 
-                size="small"
-                extra={
-                  <Tooltip title="Technical filters that prevent trades in unfavorable conditions">
-                    <InfoCircleOutlined style={{ color: '#2563eb' }} />
-                  </Tooltip>
-                }
-              >
-                <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                  <Text strong style={{ fontSize: 13, color: '#374151' }}>Entry Requirements:</Text>
-                  <div style={{ padding: '8px 12px', background: '#f9fafb', borderRadius: 6, fontSize: 12 }}>
-                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                      <div><span style={{ color: '#6b7280' }}>• ATR%:</span> <code style={{ background: '#f3f4f6', padding: '2px 4px', borderRadius: 4 }}>≥ 0.8%</code> <span style={{ color: '#6b7280' }}>(volatility)</span></div>
-                      <div><span style={{ color: '#6b7280' }}>• EMA Slope:</span> <code style={{ background: '#f3f4f6', padding: '2px 4px', borderRadius: 4 }}>≥ 0.15%</code> <span style={{ color: '#6b7280' }}>(momentum)</span></div>
-                      <div><span style={{ color: '#6b7280' }}>• Direction:</span> <span style={{ color: '#6b7280' }}>Aligned with bias</span></div>
-                    </Space>
-                  </div>
-                  <Text strong style={{ fontSize: 13, color: '#374151' }}>Fail Conditions:</Text>
-                  <div style={{ padding: '8px 12px', background: '#fef2f2', borderRadius: 6, fontSize: 12 }}>
-                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                      <div>❌ <span style={{ color: '#6b7280' }}>Low volatility (ATR% &lt; 0.8%)</span></div>
-                      <div>❌ <span style={{ color: '#6b7280' }}>Flat trend (Slope &lt; 0.15%)</span></div>
-                      <div>❌ <span style={{ color: '#6b7280' }}>Wrong direction (against bias)</span></div>
-                    </Space>
-                  </div>
-                  <Alert 
-                    type="info" 
-                    message="Override possible with strong ADX (≥24) + aligned slope"
-                    showIcon
-                  />
-                </Space>
+            {/* Key Metrics - New Component */}
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+              <KeyMetricsCard 
+                indicators={{
+                  atrPct: Number(analysis?.indicators?.atrPct || status?.indicators?.atrPct || 0),
+                  adx: Number(analysis?.indicators?.adx14 || status?.indicators?.adx14 || 0),
+                  rsi: Number(analysis?.indicators?.rsi14 || status?.indicators?.rsi14 || 50),
+                  ema20: Number(analysis?.indicators?.ema20 || status?.indicators?.ema20 || 0),
+                  ema50: Number(analysis?.indicators?.ema50 || status?.indicators?.ema50 || 0),
+                  ema20Slope: Number(analysis?.indicators?.ema20Slope || 0),
+                  volume: Number(analysis?.indicators?.volume || 0),
+                  price: Number(status?.price || 0)
+                }}
+              />
+            ) : (
+              <Card title="Key Metrics">
+                <Skeleton active paragraph={{ rows: 3 }} />
+              </Card>
+            )}
+            
+            {/* Support/Resistance Visualization */}
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+              <SRVisualizationCard 
+                currentPrice={Number(status?.price || 0)}
+                support={status?.sr?.support ? {
+                  price: status.sr.support,
+                  strength: 75,
+                  touches: 3
+                } : undefined}
+                resistance={status?.sr?.resistance ? {
+                  price: status.sr.resistance,
+                  strength: 80,
+                  touches: 2
+                } : undefined}
+                pivots={status?.pivots}
+                symbol={status?.symbol}
+              />
+            ) : (
+              <Card title="Support/Resistance">
+                <Skeleton active paragraph={{ rows: 3 }} />
               </Card>
             )}
           </Space>
@@ -680,12 +702,44 @@ export default function MonitorPage(){
       {/* Expandable Advanced Sections */}
       {expandedView && (
         <>
+          {/* AI Insights Section */}
+          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+            <Col xs={24} lg={16}>
+              {loadingState.phase === LoadingPhase.COMPLETE ? (
+                <AIInsightsCard 
+                  sentiment={analysis?.sentiment ? {
+                    score: analysis.sentiment.score || 0,
+                    label: analysis.sentiment.label || 'neutral',
+                    confidence: analysis.sentiment.confidence || 50,
+                    factors: analysis.sentiment.factors || []
+                  } : undefined}
+                  news={analysis?.news || []}
+                  dailyReview={analysis?.dailyReview}
+                />
+              ) : (
+                <Card title="AI Insights">
+                  <Skeleton active paragraph={{ rows: 6 }} />
+                </Card>
+              )}
+            </Col>
+            
+            <Col xs={24} lg={8}>
+              {loadingState.phase === LoadingPhase.COMPLETE ? (
+                <StrategyPanel strategy={strategy} />
+              ) : (
+                <Card title="Strategy Details">
+                  <Skeleton active paragraph={{ rows: 6 }} />
+                </Card>
+              )}
+            </Col>
+          </Row>
+          
           <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
             <Col xs={24}>
               {loadingState.phase === LoadingPhase.COMPLETE ? (
                 <AnalysisTabs analysis={analysis} />
               ) : (
-                <Card title="Market Analysis">
+                <Card title="Technical Analysis">
                   <Skeleton active paragraph={{ rows: 6 }} />
                 </Card>
               )}

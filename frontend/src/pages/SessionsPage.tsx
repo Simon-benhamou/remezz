@@ -22,7 +22,7 @@ export default function SessionsPage(){
   const [symbolFilter, setSymbolFilter] = React.useState<string>('all');
   const [aggressivenessFilter, setAggressivenessFilter] = React.useState<string>('all');
   const [searchText, setSearchText] = React.useState<string>('');
-  const [compactView, setCompactView] = React.useState<boolean>(false);
+  const [compactView, setCompactView] = React.useState<boolean>(true);
   
   const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
   
