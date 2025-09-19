@@ -38,16 +38,17 @@ export default function SRVisualizationCard({
   style 
 }: SRVisualizationProps) {
   
-  // Calculate visualization bounds
-  const supportPrice = support?.price || 0;
-  const resistancePrice = resistance?.price || 0;
+  // Safely convert to numbers with defaults
+  const safeCurrentPrice = Number(currentPrice) || 0;
+  const supportPrice = Number(support?.price) || 0;
+  const resistancePrice = Number(resistance?.price) || 0;
   
   // Create range for visualization (use wider range if pivots available)
   const allLevels = [
     supportPrice,
     resistancePrice,
-    currentPrice,
-    ...Object.values(pivots).filter(p => p && p > 0)
+    safeCurrentPrice,
+    ...Object.values(pivots).filter(p => p && Number(p) > 0).map(p => Number(p))
   ].filter(p => p > 0);
   
   const minPrice = Math.min(...allLevels) * 0.999;
@@ -64,11 +65,12 @@ export default function SRVisualizationCard({
   };
 
   const formatPrice = (price: number) => {
-    return price.toFixed(4);
+    const safePrice = Number(price) || 0;
+    return safePrice.toFixed(4);
   };
 
-  const supportDistance = supportPrice ? getDistancePercent(currentPrice, supportPrice) : 0;
-  const resistanceDistance = resistancePrice ? getDistancePercent(currentPrice, resistancePrice) : 0;
+  const supportDistance = supportPrice ? getDistancePercent(safeCurrentPrice, supportPrice) : 0;
+  const resistanceDistance = resistancePrice ? getDistancePercent(safeCurrentPrice, resistancePrice) : 0;
   
   const isNearSupport = supportDistance < 0.5;
   const isNearResistance = resistanceDistance < 0.5;

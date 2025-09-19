@@ -48,10 +48,18 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
     price = 0
   } = indicators;
 
-  // Calculate derived metrics
-  const emaSpread = ema20 && ema50 ? ((ema20 - ema50) / ema50) * 100 : 0;
-  const slopePercentage = ema20 ? (ema20Slope / ema20) * 100 : 0;
-  const priceVsEma = ema20 ? ((price - ema20) / ema20) * 100 : 0;
+  // Safely convert to numbers and calculate derived metrics
+  const safeAtrPct = Number(atrPct) || 0;
+  const safeAdx = Number(adx) || 0;
+  const safeRsi = Number(rsi) || 50;
+  const safeEma20 = Number(ema20) || 0;
+  const safeEma50 = Number(ema50) || 0;
+  const safeEma20Slope = Number(ema20Slope) || 0;
+  const safePrice = Number(price) || 0;
+  
+  const emaSpread = safeEma20 && safeEma50 ? ((safeEma20 - safeEma50) / safeEma50) * 100 : 0;
+  const slopePercentage = safeEma20 ? (safeEma20Slope / safeEma20) * 100 : 0;
+  const priceVsEma = safeEma20 ? ((safePrice - safeEma20) / safeEma20) * 100 : 0;
 
   const getMetricStatus = (value: number, threshold: number, good: 'above' | 'below' = 'above') => {
     const isGood = good === 'above' ? value >= threshold : value <= threshold;
@@ -76,9 +84,9 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
     return { strength: 'weak', color: '#ef4444', icon: <BarChartOutlined /> };
   };
 
-  const atrStatus = getMetricStatus(atrPct, 0.8);
-  const adxStatus = getMetricStatus(adx, 25);
-  const rsiStatus = getRSIStatus(rsi);
+  const atrStatus = getMetricStatus(safeAtrPct, 0.8);
+  const adxStatus = getMetricStatus(safeAdx, 25);
+  const rsiStatus = getRSIStatus(safeRsi);
   const trendStatus = getTrendStatus();
 
   return (
@@ -117,7 +125,7 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
                     color: atrStatus.color,
                     fontFamily: 'Monaco, monospace'
                   }}>
-                    {atrPct.toFixed(2)}%
+                    {safeAtrPct.toFixed(2)}%
                   </div>
                   <div style={{ fontSize: 9, color: '#9ca3af' }}>
                     Target: ≥0.8%
@@ -128,7 +136,7 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
                 </div>
               </Space>
               <Progress 
-                percent={Math.min((atrPct / 1.5) * 100, 100)}
+                percent={Math.min((safeAtrPct / 1.5) * 100, 100)}
                 strokeColor={atrStatus.color}
                 showInfo={false}
                 size="small"
@@ -155,7 +163,7 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
                     color: adxStatus.color,
                     fontFamily: 'Monaco, monospace'
                   }}>
-                    {adx.toFixed(1)}
+                    {safeAdx.toFixed(1)}
                   </div>
                   <div style={{ fontSize: 9, color: '#9ca3af' }}>
                     Target: ≥25
@@ -166,7 +174,7 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
                 </div>
               </Space>
               <Progress 
-                percent={Math.min((adx / 50) * 100, 100)}
+                percent={Math.min((safeAdx / 50) * 100, 100)}
                 strokeColor={adxStatus.color}
                 showInfo={false}
                 size="small"
@@ -195,7 +203,7 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
                 color: rsiStatus.color,
                 fontFamily: 'Monaco, monospace'
               }}>
-                {rsi.toFixed(0)}
+                {safeRsi.toFixed(0)}
               </div>
               <Tag 
                 color={rsiStatus.level === 'good' ? 'success' : rsiStatus.level === 'medium' ? 'warning' : 'error'}

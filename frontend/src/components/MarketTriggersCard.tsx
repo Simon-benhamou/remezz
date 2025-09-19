@@ -180,13 +180,13 @@ export default function MarketTriggersCard({ triggers = [], style }: MarketTrigg
                       {trigger.value && trigger.threshold && (
                         <div style={{ marginTop: 2 }}>
                           <Progress 
-                            percent={Math.min((trigger.value / trigger.threshold) * 100, 100)}
+                            percent={Math.min((Number(trigger.value) / Number(trigger.threshold)) * 100, 100)}
                             size="small"
                             strokeColor={getStrengthColor(trigger.strength)}
                             showInfo={false}
                           />
                           <span style={{ fontSize: 9, color: '#9ca3af' }}>
-                            {trigger.value.toFixed(2)} / {trigger.threshold.toFixed(2)}
+                            {Number(trigger.value).toFixed(2)} / {Number(trigger.threshold).toFixed(2)}
                           </span>
                         </div>
                       )}
