@@ -21,8 +21,8 @@ export const defaultLimits = (): RiskLimits => ({
   riskPctPerTrade: { min: 0.5, max: 5 },
   dailyLossLimitPct: Math.min(5, Math.max(1, getConfig().DAILY_LOSS_LIMIT_PCT)),
   maxLeverage: 10,
-  maxTradesPerDay: 3,
-  maxConsecutiveStops: 3,
+  maxTradesPerDay: 8, // Increased from 3 to allow more quality setups
+  maxConsecutiveStops: 2, // Reduced from 3 to be more protective
 });
 
 export type RiskDecision = {

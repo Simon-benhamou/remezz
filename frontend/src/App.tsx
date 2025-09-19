@@ -138,7 +138,7 @@ function AppInner(){
         <Content style={{
           padding: 18,
           overflow:'auto',
-          maxHeight:"calc(100vh - 64px - 48px - 24px)"
+          maxHeight:"calc(100vh - 136px)"
         }}>
           <Routes>
             <Route path='/' element={<Navigate to='/dashboard' replace />} />

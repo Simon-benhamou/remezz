@@ -76,6 +76,10 @@ export class ReboundRejectionAgent {
   consecutiveStops = 0;
   tradesToday = 0;
   realizedPnlTodayPct = 0;
+  
+  // Real-time performance tracking
+  private recentTrades: { win: boolean; pnlPct: number; timestamp: number }[] = [];
+  private qualityThresholdAdjustment = 0; // Dynamic adjustment to quality thresholds
 
   async activate(profile: ActivationProfile) {
     // PREFLIGHT
@@ -204,9 +208,43 @@ export class ReboundRejectionAgent {
         const breakoutShort = this.plan.bias === 'short' && price < lower;
         if (breakoutLong || breakoutShort) await this.enter(price, snap);
       } else {
-        // simple confirmation: bias-aligned close beyond zone mid
-        const confirm = this.plan.plan.entry_rule.confirm_close && ((this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid));
-        if (inZone && confirm) await this.enter(price, snap);
+    // Enhanced confirmation logic for better win rate with market regime detection
+        const confirmRequired = this.plan.plan.entry_rule.confirm_close;
+        const marketRegime = this.detectMarketRegime(snap);
+        
+        // Adapt confirmation requirements based on market regime
+        let confirmationNeeded = confirmRequired;
+        if (marketRegime === 'trending_strong') {
+          // In strong trends, allow faster entries
+          confirmationNeeded = false;
+        } else if (marketRegime === 'choppy' || marketRegime === 'ranging') {
+          // In choppy markets, require strict confirmation
+          confirmationNeeded = true;
+        }
+        
+        if (confirmationNeeded) {
+          const confirm = (this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid);
+          if (!confirm) return; // No entry without confirmation
+        }
+        
+        // Additional quality check: price should be near zone edge for better R:R
+        const zoneWidth = Math.abs(to - from);
+        const distanceFromEntry = this.plan.bias === 'long' ? 
+          (price - Math.min(from, to)) / zoneWidth : 
+          (Math.max(from, to) - price) / zoneWidth;
+          
+        // Entry positioning based on market regime
+        let maxDistanceAllowed = 0.4;
+        if (marketRegime === 'trending_strong') {
+          maxDistanceAllowed = 0.6; // Allow deeper entries in strong trends
+        } else if (marketRegime === 'volatile') {
+          maxDistanceAllowed = 0.3; // Require better entries in volatile markets
+        }
+          
+        // Enter only in the optimal part of the zone
+        if (inZone && distanceFromEntry <= maxDistanceAllowed) {
+          await this.enter(price, snap);
+        }
       }
     } else if (this.state === 'MANAGE') {
       await this.manage(price, snap);
@@ -235,7 +273,8 @@ export class ReboundRejectionAgent {
         return;
       }
     }
-    if (!snap || !this.passesEntryMomentumGates(snap, 'enter')) {
+    // Enhanced quality filters for 60%+ win rate
+    if (!snap || !this.passesEntryMomentumGates(snap, 'enter') || !this.passesQualityFilters(snap)) {
       this.entering = false;
       return;
     }
@@ -268,9 +307,29 @@ export class ReboundRejectionAgent {
     let dynamicRiskPct = this.profile.riskPerTradePct;
     if (!(dynamicRiskPct > 0) && planRiskRecommendedPct != null) dynamicRiskPct = planRiskRecommendedPct;
     if (!(dynamicRiskPct > 0)) dynamicRiskPct = this.profile.riskPerTradePct;
+    
+    // Apply quality-based position sizing
+    try {
+      const qualityAdjustment = this.computeQualityBasedSizing(snap!);
+      dynamicRiskPct *= qualityAdjustment;
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'quality_adjustment_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { 
+          baseRisk: this.profile.riskPerTradePct, 
+          qualityMultiplier: qualityAdjustment, 
+          finalRisk: dynamicRiskPct,
+          aggressiveness: this.profile.aggressiveness 
+        },
+      });
+    } catch {}
+    
     try {
       this.adaptiveRisk = await computeAdaptiveRisk(this.sessionId, this.profile.riskPerTradePct);
-      dynamicRiskPct = this.adaptiveRisk.riskPct;
+      dynamicRiskPct = Math.min(dynamicRiskPct, this.adaptiveRisk.riskPct); // Take the more conservative value
       if (this.adaptiveRisk.riskPct < this.profile.riskPerTradePct * 0.75) {
         recordOpsEvent({
           level: 'warn',
@@ -570,6 +629,355 @@ export class ReboundRejectionAgent {
       return false;
     }
     return true;
+  }
+
+  // Advanced quality filters to achieve 60%+ win rate
+  private passesQualityFilters(snap: TechnicalSnapshot): boolean {
+    if (!this.plan) return false;
+    const price = snap.last;
+    const bias = this.plan.bias;
+    if (bias === 'none') return false;
+
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const rsi = Number((snap as any)?.rsi14 ?? 50);
+    const ema20 = Number((snap as any)?.ema20 ?? price);
+    const ema50 = Number((snap as any)?.ema50 ?? price);
+    const ema20Slope = Number((snap as any)?.ema20Slope ?? 0);
+    const atrPct = Number((snap as any)?.atrPct ?? 0);
+    const volume = Number((snap as any)?.volume ?? 0);
+    const volumeMA = Number((snap as any)?.volumeMA ?? volume);
+    const trendStrength = Number((snap as any)?.trendStrength ?? 0);
+
+    let qualityScore = 0;
+    const reasons: string[] = [];
+
+    // 1. Trend Alignment (25% du score)
+    const emaSpread = ((ema20 - ema50) / ema50) * 100;
+    const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.5 : ema20 < ema50 && emaSpread < -0.5;
+    if (trendAligned) {
+      qualityScore += 25;
+      reasons.push('trend_aligned');
+    } else if (Math.abs(emaSpread) < 0.2) {
+      // Reject sideways/choppy conditions
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'sideways_market_rejected',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { emaSpread, bias },
+      });
+      return false;
+    }
+
+    // 2. Momentum Strength (30% du score)
+    if (adx >= 25) {
+      qualityScore += 30;
+      reasons.push('strong_adx');
+    } else if (adx >= 20) {
+      qualityScore += 20;
+      reasons.push('moderate_adx');
+    } else if (adx < 15) {
+      // Reject weak momentum
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'weak_momentum_rejected',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { adx, bias },
+      });
+      return false;
+    }
+
+    // 3. RSI Position (15% du score)
+    const rsiOptimal = bias === 'long' ? (rsi >= 45 && rsi <= 70) : (rsi >= 30 && rsi <= 55);
+    if (rsiOptimal) {
+      qualityScore += 15;
+      reasons.push('rsi_optimal');
+    } else if (bias === 'long' && rsi > 75) {
+      // Reject overbought longs
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'overbought_long_rejected',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { rsi, bias },
+      });
+      return false;
+    } else if (bias === 'short' && rsi < 25) {
+      // Reject oversold shorts
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'oversold_short_rejected',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { rsi, bias },
+      });
+      return false;
+    }
+
+    // 4. Volatility Context (15% du score)
+    if (atrPct >= 1.5) {
+      qualityScore += 15;
+      reasons.push('high_volatility');
+    } else if (atrPct >= 1.0) {
+      qualityScore += 10;
+      reasons.push('moderate_volatility');
+    }
+
+    // 5. Volume Confirmation (15% du score)
+    const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
+    if (volumeRatio >= 1.3) {
+      qualityScore += 15;
+      reasons.push('high_volume');
+    } else if (volumeRatio >= 1.1) {
+      qualityScore += 10;
+      reasons.push('elevated_volume');
+    } else if (volumeRatio < 0.7) {
+      // Reject low volume breakouts
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'low_volume_rejected',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { volumeRatio, bias },
+      });
+      return false;
+    }
+
+    // 6. Setup Quality Based on Plan Meta
+    try {
+      const quickTest = (this.plan.plan as any)?.meta?.quickTest;
+      if (quickTest) {
+        const winrate = Number(quickTest.winrate || 0);
+        const avgR = Number(quickTest.avgR || 0);
+        const count = Number(quickTest.count || 0);
+        
+        if (count >= 5) {
+          if (winrate >= 65 && avgR >= 0.5) {
+            qualityScore += 10;
+            reasons.push('excellent_backtest');
+          } else if (winrate >= 55 && avgR >= 0.3) {
+            qualityScore += 5;
+            reasons.push('good_backtest');
+          } else if (winrate < 40 || avgR < 0) {
+            // Reject poor historical performance
+            recordOpsEvent({
+              level: 'info',
+              source: 'quality_filter',
+              message: 'poor_backtest_rejected',
+              sessionId: this.sessionId || undefined,
+              symbol: this.profile?.symbol,
+              details: { winrate, avgR, count, bias },
+            });
+            return false;
+          }
+        }
+      }
+    } catch {}
+
+    // Required minimum quality score based on aggressiveness + dynamic adjustment
+    const level = this.profile?.aggressiveness || 'conservative';
+    let minScore = 70; // Conservative: high quality only
+    if (level === 'reactive') minScore = 60;
+    if (level === 'aggressive') minScore = 50;
+    
+    // Apply dynamic adjustment based on recent performance
+    minScore += this.qualityThresholdAdjustment;
+    minScore = Math.max(40, Math.min(85, minScore)); // Bounds: 40-85
+
+    const passed = qualityScore >= minScore;
+    
+    recordOpsEvent({
+      level: passed ? 'info' : 'warn',
+      source: 'quality_filter',
+      message: passed ? 'quality_filter_passed' : 'quality_filter_rejected',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: { 
+        qualityScore, 
+        minScore, 
+        reasons, 
+        bias,
+        aggressiveness: level,
+        adx,
+        rsi,
+        atrPct,
+        volumeRatio,
+        emaSpread
+      },
+    });
+
+    return passed;
+  }
+
+  // Dynamic position sizing based on setup quality and market conditions
+  private computeQualityBasedSizing(snap: TechnicalSnapshot): number {
+    if (!this.plan) return 1.0;
+    
+    const price = snap.last;
+    const bias = this.plan.bias;
+    if (bias === 'none') return 0.5; // Minimal size for uncertain setups
+
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const rsi = Number((snap as any)?.rsi14 ?? 50);
+    const atrPct = Number((snap as any)?.atrPct ?? 0);
+    const volume = Number((snap as any)?.volume ?? 0);
+    const volumeMA = Number((snap as any)?.volumeMA ?? volume);
+    const ema20 = Number((snap as any)?.ema20 ?? price);
+    const ema50 = Number((snap as any)?.ema50 ?? price);
+    
+    let sizeMultiplier = 1.0;
+    const level = this.profile?.aggressiveness || 'conservative';
+    
+    // Base multiplier by aggressiveness
+    const baseMultipliers = {
+      'conservative': 0.8,  // More cautious sizing
+      'reactive': 1.0,      // Standard sizing
+      'aggressive': 1.2     // Larger positions on good setups
+    };
+    sizeMultiplier = baseMultipliers[level] || 1.0;
+    
+    // ADX strength bonus (up to +30%)
+    if (adx >= 30) sizeMultiplier *= 1.3;
+    else if (adx >= 25) sizeMultiplier *= 1.2;
+    else if (adx >= 20) sizeMultiplier *= 1.1;
+    else if (adx < 15) sizeMultiplier *= 0.7; // Reduce size in weak trends
+    
+    // Trend alignment bonus (up to +20%)
+    const emaSpread = ((ema20 - ema50) / ema50) * 100;
+    const trendAligned = bias === 'long' ? emaSpread > 0.5 : emaSpread < -0.5;
+    if (trendAligned) {
+      if (Math.abs(emaSpread) > 2.0) sizeMultiplier *= 1.2; // Strong trend
+      else if (Math.abs(emaSpread) > 1.0) sizeMultiplier *= 1.1; // Moderate trend
+    } else if (Math.abs(emaSpread) < 0.2) {
+      sizeMultiplier *= 0.6; // Reduce size in sideways markets
+    }
+    
+    // Volume confirmation bonus (up to +15%)
+    const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
+    if (volumeRatio >= 1.5) sizeMultiplier *= 1.15;
+    else if (volumeRatio >= 1.2) sizeMultiplier *= 1.1;
+    else if (volumeRatio < 0.8) sizeMultiplier *= 0.8;
+    
+    // Volatility adjustment
+    if (atrPct > 2.0) sizeMultiplier *= 0.9; // Reduce size in high volatility
+    else if (atrPct < 0.5) sizeMultiplier *= 0.8; // Reduce size in low volatility
+    
+    // RSI position adjustment (avoid extremes)
+    if (bias === 'long' && rsi > 70) sizeMultiplier *= 0.8;
+    else if (bias === 'short' && rsi < 30) sizeMultiplier *= 0.8;
+    
+    // Backtest quality bonus
+    try {
+      const quickTest = (this.plan.plan as any)?.meta?.quickTest;
+      if (quickTest) {
+        const winrate = Number(quickTest.winrate || 0);
+        const avgR = Number(quickTest.avgR || 0);
+        const count = Number(quickTest.count || 0);
+        
+        if (count >= 10) {
+          if (winrate >= 70 && avgR >= 0.8) sizeMultiplier *= 1.25; // Excellent backtest
+          else if (winrate >= 60 && avgR >= 0.5) sizeMultiplier *= 1.15; // Good backtest
+          else if (winrate < 45 || avgR < 0.2) sizeMultiplier *= 0.7; // Poor backtest
+        }
+      }
+    } catch {}
+    
+    // Apply bounds (0.5x to 1.5x of base risk)
+    sizeMultiplier = Math.max(0.5, Math.min(1.5, sizeMultiplier));
+    
+    return sizeMultiplier;
+  }
+
+  // Market regime detection for adaptive strategy
+  private detectMarketRegime(snap: TechnicalSnapshot): 'trending_strong' | 'trending_weak' | 'ranging' | 'choppy' | 'volatile' {
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const atrPct = Number((snap as any)?.atrPct ?? 0);
+    const ema20 = Number((snap as any)?.ema20 ?? snap.last);
+    const ema50 = Number((snap as any)?.ema50 ?? snap.last);
+    const ema20Slope = Number((snap as any)?.ema20Slope ?? 0);
+    const realizedVol = Number((snap as any)?.realizedVol ?? 0);
+    
+    const emaSpread = Math.abs((ema20 - ema50) / ema50) * 100;
+    const slopeStrength = Math.abs(ema20Slope / ema20) * 100;
+    
+    // High volatility regime
+    if (atrPct > 2.5 || realizedVol > 80) {
+      return 'volatile';
+    }
+    
+    // Strong trending regime
+    if (adx >= 25 && emaSpread > 1.0 && slopeStrength > 0.05) {
+      return 'trending_strong';
+    }
+    
+    // Weak trending regime  
+    if (adx >= 18 && (emaSpread > 0.5 || slopeStrength > 0.03)) {
+      return 'trending_weak';
+    }
+    
+    // Ranging regime (sideways with structure)
+    if (adx < 18 && emaSpread < 0.3 && atrPct > 0.8) {
+      return 'ranging';
+    }
+    
+    // Choppy regime (low volatility, no clear direction)
+    return 'choppy';
+  }
+
+  // Dynamic threshold adjustment based on recent performance
+  private adjustQualityThresholds(): void {
+    if (this.recentTrades.length < 10) return; // Need sufficient data
+    
+    const recentWinRate = this.recentTrades.filter(t => t.win).length / this.recentTrades.length;
+    const avgPnlPct = this.recentTrades.reduce((sum, t) => sum + t.pnlPct, 0) / this.recentTrades.length;
+    
+    const level = this.profile?.aggressiveness || 'conservative';
+    let targetWinRate = 0.7; // Conservative target
+    if (level === 'reactive') targetWinRate = 0.6;
+    if (level === 'aggressive') targetWinRate = 0.55;
+    
+    // Adjust thresholds based on performance vs target
+    const performanceDelta = recentWinRate - targetWinRate;
+    
+    if (recentWinRate < targetWinRate - 0.1 && avgPnlPct < 0) {
+      // Performance below target, increase selectivity
+      this.qualityThresholdAdjustment = Math.min(15, this.qualityThresholdAdjustment + 5);
+      recordOpsEvent({
+        level: 'warn',
+        source: 'performance_optimizer',
+        message: 'Increasing selectivity due to poor performance',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { 
+          recentWinRate: recentWinRate.toFixed(3), 
+          targetWinRate: targetWinRate.toFixed(3),
+          avgPnlPct: avgPnlPct.toFixed(3),
+          adjustment: this.qualityThresholdAdjustment 
+        },
+      });
+    } else if (recentWinRate > targetWinRate + 0.1 && avgPnlPct > 0.5) {
+      // Performance above target, can be less selective
+      this.qualityThresholdAdjustment = Math.max(-10, this.qualityThresholdAdjustment - 3);
+      recordOpsEvent({
+        level: 'info',
+        source: 'performance_optimizer',
+        message: 'Decreasing selectivity due to good performance',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { 
+          recentWinRate: recentWinRate.toFixed(3), 
+          targetWinRate: targetWinRate.toFixed(3),
+          avgPnlPct: avgPnlPct.toFixed(3),
+          adjustment: this.qualityThresholdAdjustment 
+        },
+      });
+    }
   }
 
   private async placeLimitAdaptive(params: { side: 'buy'|'sell'; qty: number; limitPrice: number; stop: number; tp: number[]; entry: number }): Promise<PlacedOrder> {
@@ -1044,6 +1452,22 @@ export class ReboundRejectionAgent {
     const pnlPct = (pnl / Math.max(1, startEquity)) * 100;
     this.realizedPnlTodayPct += pnlPct;
     this.consecutiveStops = reason === 'sl' ? (this.consecutiveStops + 1) : 0;
+    
+    // Track trade performance for dynamic adjustment
+    const isWin = pnl > 0;
+    this.recentTrades.push({ 
+      win: isWin, 
+      pnlPct, 
+      timestamp: Date.now() 
+    });
+    
+    // Keep only last 20 trades for rolling performance
+    if (this.recentTrades.length > 20) {
+      this.recentTrades = this.recentTrades.slice(-20);
+    }
+    
+    // Dynamic threshold adjustment based on recent performance
+    this.adjustQualityThresholds();
     // Cancel protective orders before exiting to avoid stray reduce-only orders on the exchange
     try {
       if (this.pos.slOrderId) await this.broker.cancel(this.pos.slOrderId).catch(()=>{});
