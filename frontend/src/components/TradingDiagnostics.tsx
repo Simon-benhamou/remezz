@@ -18,7 +18,7 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
     if (!sessionId) return;
     setLoading(true);
     try {
-      const result = await fetch(`/api/agent/sessions/${sessionId}/diagnostics`).then(r => r.json());
+      const result = await api.getDiagnostics(sessionId);
       setDiagnostics(result);
     } catch (err) {
       console.error('Failed to load diagnostics:', err);
