@@ -104,8 +104,8 @@ export default function MonitorPage(){
     const loadData = async () => {
       // Set a maximum loading timeout
       const loadingTimeout = setTimeout(() => {
-        updateProgress(LoadingPhase.COMPLETE, 100, 'Load timeout - continuing with available data', 'Loading timeout after 15 seconds');
-      }, 15000); // 15 second timeout
+        updateProgress(LoadingPhase.COMPLETE, 100, 'Load timeout - continuing with available data', 'Loading timeout after 8 seconds');
+      }, 8000); // Reduced to 8 seconds from 15
       
       try {
         // Phase 1: Core data (session, symbol, basic status)
@@ -174,6 +174,11 @@ export default function MonitorPage(){
         
         clearTimeout(loadingTimeout);
         updateProgress(LoadingPhase.COMPLETE, 100, 'Monitor ready!');
+        
+        // Additional timeout to ensure skeleton disappears
+        setTimeout(() => {
+          updateProgress(LoadingPhase.COMPLETE, 100, 'Monitor ready!');
+        }, 500);
         
       } catch (error) {
         clearTimeout(loadingTimeout);
@@ -263,19 +268,27 @@ export default function MonitorPage(){
   // Don't redirect while loading; only redirect if definitively no session
   if (!isLoading && !hasSession) return <Navigate to='/sessions' replace />;
 
-  // Debug: log current loading state
+  // Hide loading on user interaction
   React.useEffect(() => {
-    console.log('Loading state:', {
-      phase: loadingState.phase,
-      progress: loadingState.progress,
-      message: loadingState.message,
-      isLoading,
-      hasSession,
-      symbol,
-      agentLoaded: !!agent,
-      tickerLoaded: !!ticker
+    if (!isLoading) return;
+    
+    const handleUserInteraction = () => {
+      if (loadingState.progress > 50) { // Only if we're already past core loading
+        setLoadingState(prev => ({ ...prev, phase: LoadingPhase.COMPLETE }));
+      }
+    };
+    
+    const events = ['click', 'keydown', 'scroll'];
+    events.forEach(event => {
+      document.addEventListener(event, handleUserInteraction, { once: true });
     });
-  }, [loadingState, isLoading, hasSession, symbol, agent, ticker]);
+    
+    return () => {
+      events.forEach(event => {
+        document.removeEventListener(event, handleUserInteraction);
+      });
+    };
+  }, [isLoading, loadingState.progress]);
 
   // Helper to check if we should show content vs skeleton
   const shouldShowContent = (requiredPhase: LoadingPhase) => {
@@ -292,71 +305,114 @@ export default function MonitorPage(){
     return currentOrder >= requiredOrder;
   };
 
-  // Modern Loading UI that doesn't block sidebar
-  const LoadingOverlay = () => (
-    <div style={{ 
-      position: 'absolute', 
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(255,255,255,0.95)', 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center', 
-      zIndex: 100, // Lower z-index to not block sidebar
-      backdropFilter: 'blur(4px)',
-      pointerEvents: isLoading ? 'auto' : 'none' // Only block when actually loading
-    }}>
-      <Card style={{ minWidth: 350, textAlign: 'center', maxWidth: '90vw' }}>
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <Title level={4} style={{ margin: 0 }}>Loading Trading Monitor</Title>
-          
-          <Progress 
-            percent={loadingState.progress} 
-            strokeColor={{
-              '0%': '#108ee9',
-              '100%': '#87d068',
-            }}
-            trailColor="#f0f0f0"
-            showInfo={true}
-          />
-          
-          <div style={{ color: '#666', fontSize: 14 }}>
-            {loadingState.message}
-          </div>
-          
-          {loadingState.errors.length > 0 && (
-            <Alert
-              type="warning" 
-              message="Some data failed to load"
-              description={`${loadingState.errors.length} errors occurred - continuing with available data`}
-              showIcon
-              style={{ textAlign: 'left' }}
-              action={
-                <Button 
-                  size="small" 
-                  type="primary"
-                  onClick={() => window.location.reload()}
-                >
-                  Retry
-                </Button>
-              }
+  // Modern Loading UI that respects sidebar on desktop, full screen on mobile
+  const LoadingOverlay = () => {
+    const [windowWidth, setWindowWidth] = React.useState(window.innerWidth);
+    
+    React.useEffect(() => {
+      const handleResize = () => setWindowWidth(window.innerWidth);
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+    }, []);
+    
+    // On mobile (<768px), cover full screen. On desktop, leave space for sidebar.
+    const isMobile = windowWidth < 768;
+    const leftOffset = isMobile ? 0 : '200px';
+    
+    return (
+      <div style={{ 
+        position: 'fixed',
+        top: 0,
+        left: leftOffset,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(255,255,255,0.95)', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        zIndex: isMobile ? 1001 : 100, // Higher z-index on mobile to cover mobile menu
+        backdropFilter: 'blur(4px)',
+        pointerEvents: isLoading ? 'auto' : 'none'
+      }}>
+        <Card style={{ 
+          minWidth: 350, 
+          textAlign: 'center', 
+          maxWidth: '90%',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+          borderRadius: 12,
+          border: '1px solid rgba(0,0,0,0.08)'
+        }}>
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+              <div style={{
+                width: 40,
+                height: 40,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <span style={{ color: 'white', fontSize: 18 }}>📊</span>
+              </div>
+              <Title level={4} style={{ margin: 0 }}>Loading Trading Monitor</Title>
+            </div>
+            
+            <Progress 
+              percent={loadingState.progress} 
+              strokeColor={{
+                '0%': '#108ee9',
+                '100%': '#87d068',
+              }}
+              trailColor="#f0f0f0"
+              showInfo={true}
+              strokeWidth={8}
             />
-          )}
-          
-          <Button 
-            type="text" 
-            onClick={() => {
-              setLoadingState(prev => ({ ...prev, phase: LoadingPhase.COMPLETE }));
-            }}
-          >
-            Continue with available data
-          </Button>
-        </Space>
-      </Card>
-    </div>
-  );
+            
+            <div style={{ color: '#666', fontSize: 14 }}>
+              {loadingState.message}
+            </div>
+            
+            {loadingState.errors.length > 0 && (
+              <Alert
+                type="warning" 
+                message="Some data failed to load"
+                description={`${loadingState.errors.length} errors occurred - continuing with available data`}
+                showIcon
+                style={{ textAlign: 'left' }}
+                action={
+                  <Button 
+                    size="small" 
+                    type="primary"
+                    onClick={() => window.location.reload()}
+                  >
+                    Retry
+                  </Button>
+                }
+              />
+            )}
+            
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <Button 
+                type="text" 
+                onClick={() => {
+                  setLoadingState(prev => ({ ...prev, phase: LoadingPhase.COMPLETE }));
+                }}
+              >
+                Continue with available data
+              </Button>
+              <Button 
+                type="default"
+                onClick={() => navigate('/sessions')}
+              >
+                ← Back to Sessions
+              </Button>
+            </div>
+          </Space>
+        </Card>
+      </div>
+    );
+  };
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh' }}>
@@ -518,7 +574,7 @@ export default function MonitorPage(){
       {/* Secondary Section: Performance & Strategy */}
       <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
         <Col xs={24}>
-          {loadingState.phase >= LoadingPhase.CORE_DATA && agent ? (
+          {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
             <PositionStatsBlock agent={agent} price={status?.price} />
           ) : (
             <Skeleton.Button active style={{ width: '100%', height: 120 }} />
@@ -526,7 +582,7 @@ export default function MonitorPage(){
         </Col>
         
         <Col xs={24} lg={8}>
-          {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+          {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
             <PerfPanel kpi={kpi} session={status?.session} />
           ) : (
             <Card title="Performance">
@@ -536,7 +592,7 @@ export default function MonitorPage(){
         </Col>
         
         <Col xs={24} lg={8}>
-          {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+          {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
             <StrategyPanel strategy={strategy} />
           ) : (
             <Card title="Strategy">
@@ -546,7 +602,7 @@ export default function MonitorPage(){
         </Col>
         
         <Col xs={24} lg={8}>
-          {loadingState.phase >= LoadingPhase.SECONDARY_DATA ? (
+          {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
             <IndicatorsPanel indicators={analysis?.indicators || status?.indicators} />
           ) : (
             <Card title="Indicators">
