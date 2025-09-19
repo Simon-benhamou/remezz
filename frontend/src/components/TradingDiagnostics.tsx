@@ -130,11 +130,22 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
                 {getStatusIcon(check?.status)}
                 <span style={{ fontSize: 13 }}>{label}</span>
               </Space>
-              <Tooltip title={check?.reason}>
-                <Tag color={getStatusColor(check?.status)}>
-                  {check?.status}
-                </Tag>
-              </Tooltip>
+              <Space size="small">
+                <Tooltip title={
+                  <div>
+                    <div>{check?.reason}</div>
+                    {check?.details && (
+                      <div style={{ marginTop: 4, fontSize: 11, opacity: 0.8 }}>
+                        {JSON.stringify(check.details, null, 2)}
+                      </div>
+                    )}
+                  </div>
+                }>
+                  <Tag color={getStatusColor(check?.status)}>
+                    {check?.status}
+                  </Tag>
+                </Tooltip>
+              </Space>
             </div>
           ))}
         </Space>
@@ -176,7 +187,32 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
                         </Space>
                         <Space size="small">
                           <Text style={{ fontSize: 11 }}>+{check?.points || 0}</Text>
-                          <Tooltip title={check?.reason}>
+                          <Tooltip title={
+                            <div>
+                              <div>{check?.reason}</div>
+                              {check?.details && (
+                                <div style={{ marginTop: 8, fontSize: 11 }}>
+                                  <div><strong>Current:</strong> {check.details.currentVolume !== undefined ? 
+                                    `${(check.details.currentVolume / 1000).toFixed(0)}K` : 
+                                    check.details.currentATR !== undefined ? 
+                                    `${check.details.currentATR}%` :
+                                    check.details.currentADX !== undefined ?
+                                    check.details.currentADX :
+                                    check.value}</div>
+                                  {check.details.thresholds && (
+                                    <div style={{ marginTop: 4 }}>
+                                      <strong>Thresholds:</strong>
+                                      <div>• Min: {check.details.thresholds.minimum}</div>
+                                      {check.details.thresholds.good && <div>• Good: {check.details.thresholds.good}</div>}
+                                      {check.details.thresholds.excellent && <div>• Excellent: {check.details.thresholds.excellent}</div>}
+                                      {check.details.thresholds.moderate && <div>• Moderate: {check.details.thresholds.moderate}</div>}
+                                      {check.details.thresholds.strong && <div>• Strong: {check.details.thresholds.strong}</div>}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          }>
                             <Tag color={getStatusColor(check?.status)}>
                               {check?.status}
                             </Tag>

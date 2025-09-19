@@ -2243,15 +2243,36 @@ export class ReboundRejectionAgent {
       reason: `${this.consecutiveStops}/${limits.maxConsecutiveStops} consecutive stops`
     };
 
-    // Entry zone check
+    // Entry zone check with detailed info
     const entryZone = this.plan.zone;
     let inZone = false;
+    let zoneDetails = '';
     if (entryZone && typeof entryZone.from === 'number' && typeof entryZone.to === 'number') {
-      inZone = price >= Math.min(entryZone.from, entryZone.to) && price <= Math.max(entryZone.from, entryZone.to);
+      const zoneMin = Math.min(entryZone.from, entryZone.to);
+      const zoneMax = Math.max(entryZone.from, entryZone.to);
+      inZone = price >= zoneMin && price <= zoneMax;
+      
+      if (inZone) {
+        zoneDetails = `Price ${price.toFixed(4)} in zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}]`;
+      } else {
+        const distanceToZone = price < zoneMin ? 
+          ((zoneMin - price) / price * 100).toFixed(3) + '% below' :
+          ((price - zoneMax) / price * 100).toFixed(3) + '% above';
+        zoneDetails = `Price ${price.toFixed(4)} outside zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}] (${distanceToZone})`;
+      }
+    } else {
+      zoneDetails = 'No entry zone defined';
     }
+    
     checks.inEntryZone = {
       status: inZone ? 'PASS' : 'FAIL',
-      reason: inZone ? 'Price in entry zone' : `Price ${price.toFixed(4)} outside zone [${entryZone?.from?.toFixed(4)}, ${entryZone?.to?.toFixed(4)}]`
+      reason: zoneDetails,
+      details: {
+        currentPrice: price,
+        zoneFrom: entryZone?.from,
+        zoneTo: entryZone?.to,
+        inZone
+      }
     };
 
     // Momentum gates
@@ -2283,18 +2304,39 @@ export class ReboundRejectionAgent {
       points: trendAligned ? 25 : 0
     };
 
-    // ADX check
+    // ADX check with detailed thresholds
     let adxStatus = 'FAIL';
     let adxPoints = 0;
-    if (adx >= 25) { adxStatus = 'PASS'; adxPoints = 30; }
-    else if (adx >= 20) { adxStatus = 'PARTIAL'; adxPoints = 20; }
-    else if (adx < 12) { adxStatus = 'REJECT'; }
+    let adxDetails = '';
+    
+    if (adx >= 25) { 
+      adxStatus = 'PASS'; 
+      adxPoints = 30; 
+      adxDetails = `ADX ${adx.toFixed(1)} (strong momentum)`;
+    } else if (adx >= 20) { 
+      adxStatus = 'PARTIAL'; 
+      adxPoints = 20; 
+      adxDetails = `ADX ${adx.toFixed(1)} (moderate momentum, need 25+ for max points)`;
+    } else if (adx < 12) { 
+      adxStatus = 'REJECT'; 
+      adxDetails = `ADX ${adx.toFixed(1)} (too weak, minimum 12)`;
+    } else {
+      adxDetails = `ADX ${adx.toFixed(1)} (weak momentum, need 20+ for points)`;
+    }
     
     checks.qualityFilters.momentum = {
       status: adxStatus,
-      reason: `ADX: ${adx.toFixed(1)} (need ≥25 for max points, ≥12 minimum)`,
+      reason: adxDetails,
       value: adx,
-      points: adxPoints
+      points: adxPoints,
+      details: {
+        currentADX: adx,
+        thresholds: {
+          minimum: 12,
+          moderate: 20,
+          strong: 25
+        }
+      }
     };
 
     // RSI check
@@ -2310,30 +2352,70 @@ export class ReboundRejectionAgent {
       points: rsiOptimal ? 15 : 0
     };
 
-    // Volatility check
+    // Volatility check with detailed info
     let volPoints = 0;
-    if (atrPct >= 1.5) volPoints = 15;
-    else if (atrPct >= 1.0) volPoints = 10;
+    let volDetails = '';
+    
+    if (atrPct >= 1.5) {
+      volPoints = 15;
+      volDetails = `ATR ${atrPct.toFixed(2)}% (excellent volatility)`;
+    } else if (atrPct >= 1.0) {
+      volPoints = 10;
+      volDetails = `ATR ${atrPct.toFixed(2)}% (good, need 1.5% for max points)`;
+    } else {
+      volDetails = `ATR ${atrPct.toFixed(2)}% (too low, need 1.0% minimum)`;
+    }
     
     checks.qualityFilters.volatility = {
       status: atrPct >= 1.0 ? 'PASS' : 'FAIL',
-      reason: `ATR: ${atrPct.toFixed(2)}% (need ≥1.5% for max points)`,
+      reason: volDetails,
       value: atrPct,
-      points: volPoints
+      points: volPoints,
+      details: {
+        currentATR: atrPct,
+        thresholds: {
+          minimum: 1.0,
+          good: 1.0,
+          excellent: 1.5
+        }
+      }
     };
 
-    // Volume check
+    // Volume check with detailed thresholds
     let volumeStatus = 'FAIL';
     let volumePoints = 0;
-    if (volumeRatio >= 1.3) { volumeStatus = 'PASS'; volumePoints = 15; }
-    else if (volumeRatio >= 1.1) { volumeStatus = 'PARTIAL'; volumePoints = 10; }
-    else if (volumeRatio < 0.5) { volumeStatus = 'REJECT'; }
+    let volumeDetails = '';
+    
+    if (volumeRatio >= 1.3) { 
+      volumeStatus = 'PASS'; 
+      volumePoints = 15; 
+      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (excellent)`;
+    } else if (volumeRatio >= 1.1) { 
+      volumeStatus = 'PARTIAL'; 
+      volumePoints = 10; 
+      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (good, need 1.3x for max points)`;
+    } else if (volumeRatio < 0.5) { 
+      volumeStatus = 'REJECT'; 
+      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (too low, minimum 0.5x)`;
+    } else {
+      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (insufficient, need 1.1x minimum)`;
+    }
     
     checks.qualityFilters.volume = {
       status: volumeStatus,
-      reason: `Volume ratio: ${volumeRatio.toFixed(2)} (need ≥1.3 for max points, ≥0.5 minimum)`,
+      reason: volumeDetails,
       value: volumeRatio,
-      points: volumePoints
+      points: volumePoints,
+      details: {
+        currentVolume: volume,
+        averageVolume: volumeMA,
+        ratio: volumeRatio,
+        thresholds: {
+          minimum: 0.5,
+          good: 1.1,
+          excellent: 1.3
+        }
+      }
     };
 
     // Calculate total quality score
