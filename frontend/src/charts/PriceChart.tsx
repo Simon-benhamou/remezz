@@ -1,5 +1,6 @@
 import React from 'react';
 import { createChart, ColorType, IChartApi, LineStyle } from 'lightweight-charts';
+import { api } from '../api';
 
 type Props = { symbol?: string; price?: number; support?: number; resistance?: number; strategy?: any; agentPlan?: any; agentPos?: any; pivots?: any; agentExit?: any };
 
@@ -21,6 +22,10 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
   const trailSeriesRef = React.useRef<any>(null);
   const pnlRef = React.useRef<HTMLDivElement|null>(null);
   const markersRef = React.useRef<any[]>([]);
+  
+  // State to track historical + live data
+  const [chartData, setChartData] = React.useState<Array<{time: number, value: number}>>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = React.useState(true);
   React.useEffect(()=> {
     if (!chartRef.current || !seriesRef.current) return;
     plP.current  = seriesRef.current.createPriceLine({ price: 0, title: 'Pivot P', lineWidth: 1 });
@@ -53,9 +58,16 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
       height: 360,
       layout:{ textColor:'#222', background:{ type: ColorType.Solid, color: 'white' } },
       rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false }
+      timeScale: { 
+        borderVisible: false,
+        rightOffset: 12, // Add space on the right for live updates
+        barSpacing: 6,   // Adjust bar spacing for better live visualization
+      }
     });
-    const line = chart.addLineSeries({ priceFormat: { type: 'price', precision: 4, minMove: 0.0001 } });
+    const line = chart.addLineSeries({ 
+      priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
+      lineWidth: 2, // Make line thicker for better visibility
+    });
     const trailSeries = chart.addLineSeries({
       priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
       color: '#c0392b',
@@ -109,14 +121,65 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
       plS1.current = null;
       plR1.current = null;
       plBE.current = null;
+      // Reset chart data on unmount
+      setChartData([]);
+      setIsLoadingHistory(true);
     };
   }, []);
 
-  React.useEffect(()=> {
-    if (typeof price === 'number' && isFinite(price) && seriesRef.current) {
-      seriesRef.current.update({ time: Math.floor(Date.now()/1000), value: price });
+  // Load 24h historical data on mount
+  React.useEffect(() => {
+    if (!symbol || !seriesRef.current) return;
+    
+    const loadHistory = async () => {
+      try {
+        setIsLoadingHistory(true);
+        const historyResult = await api.getHistory(symbol);
+        
+        if (historyResult?.data && Array.isArray(historyResult.data)) {
+          const historicalData = historyResult.data;
+          setChartData(historicalData);
+          
+          // Set initial data on chart
+          if (seriesRef.current && historicalData.length > 0) {
+            seriesRef.current.setData(historicalData);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load historical data:', err);
+        // Continue with empty chart if history fails
+        setChartData([]);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+    
+    loadHistory();
+  }, [symbol]);
+
+  // Handle live price updates
+  React.useEffect(() => {
+    if (typeof price === 'number' && isFinite(price) && seriesRef.current && !isLoadingHistory) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const newPoint = { time: timestamp, value: price };
+      
+      setChartData(prev => {
+        // Avoid duplicate timestamps
+        const filtered = prev.filter(p => p.time < timestamp);
+        const updated = [...filtered, newPoint];
+        
+        // Keep last 2000 points for performance
+        const trimmed = updated.slice(-2000);
+        
+        // Update chart with complete dataset
+        if (seriesRef.current) {
+          seriesRef.current.setData(trimmed);
+        }
+        
+        return trimmed;
+      });
     }
-  }, [price]);
+  }, [price, isLoadingHistory]);
 
   React.useEffect(()=> {
     if (!trailSeriesRef.current) return;
@@ -295,7 +358,13 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
   }, [agentPos?.openedAt, agentPos?.partialInfo?.ts, agentExit?.ts]);
 
   return <div style={{ border:'1px solid #eee', borderRadius:8, padding:8 }}>
-    <div style={{ fontWeight:600, marginBottom:8 }}>{symbol} — Live</div>
+    <div style={{ fontWeight:600, marginBottom:8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <span>{symbol} — Historical + Live</span>
+      <span style={{ fontSize: '12px', color: '#666' }}>
+        {isLoadingHistory ? 'Loading history...' : 
+         chartData.length > 0 ? `${chartData.length} data points` : 'No data'}
+      </span>
+    </div>
     <div ref={ref} />
   </div>;
 }
