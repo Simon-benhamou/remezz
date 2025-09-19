@@ -1,40 +1,52 @@
 {
-  "$schema": "vscode://schemas/tasks",
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "Frontend: Vite dev",
-      "type": "npm",
-      "script": "dev",
-      "path": "frontend",
-      "group": "build",
-      "isBackground": true,
-      "problemMatcher": {
-        "owner": "custom",
-        "fileLocation": "absolute",
-        "pattern": {
-          "regexp": ".*"
-        },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": "^",
-          "endsPattern": "Local:\\shttp://.*:5173"
-        }
-      }
-    },
-    {
-      "label": "Frontend: Stop Vite",
-      "command": "bash",
-      "args": ["-lc", "pkill -f 'vite --host' || true"],
-      "problemMatcher": []
-    },
-    {
-      "label": "Backend: dev:debug",
-      "type": "npm",
-      "script": "dev:debug",
-      "path": "backend",
-      "group": "build"
-    }
-  ]
+	"$schema": "vscode://schemas/tasks",
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Frontend: Vite dev",
+			"type": "npm",
+			"script": "dev",
+			"path": "frontend",
+			"group": "build",
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"fileLocation": "absolute",
+				"pattern": {
+					"regexp": ".*"
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "^",
+					"endsPattern": "Local:\\shttp://.*:5173"
+				}
+			}
+		},
+		{
+			"label": "Frontend: Stop Vite",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"pkill -f 'vite --host' || true"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Backend: dev:debug",
+			"type": "npm",
+			"script": "dev:debug",
+			"path": "backend",
+			"group": "build"
+		},
+		{
+			"label": "Build backend & frontend",
+			"type": "shell",
+			"command": "npm -w backend run -s build && npm -w frontend run -s build",
+			"problemMatcher": [
+				"$tsc",
+				"$eslint - stylish"
+			],
+			"group": "build"
+		}
+	]
 }
-

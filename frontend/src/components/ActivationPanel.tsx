@@ -16,11 +16,12 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
   const [maxLev, setMaxLev] = React.useState<number>(4);
   const [dailyLoss, setDailyLoss] = React.useState<number>(3.5);
   const [budgetPct, setBudgetPct] = React.useState<number>(100);
+  const [aggressiveness, setAggressiveness] = React.useState<'conservative'|'reactive'|'aggressive'>('conservative');
   const [loading, setLoading] = React.useState(false);
   const start = async () => {
     setLoading(true);
     try {
-      await api.client.post('/api/agent/start', { symbol, mode, startBalanceUsd: mode==='paper'? startBal: undefined, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss, budgetPct });
+      await api.client.post('/api/agent/start', { symbol, mode, startBalanceUsd: mode==='paper'? startBal: undefined, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss, budgetPct, aggressiveness });
       message.success('QuantAI agent activated');
       onStarted?.();
     } catch (e:any) {
@@ -64,6 +65,18 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
           <div>
             <div style={{ fontSize:12, color:'#888' }}>Agent budget (% of free)</div>
             <InputNumber min={10} max={100} step={5} value={budgetPct} onChange={setBudgetPct as any} />
+          </div>
+          <div>
+            <div style={{ fontSize:12, color:'#888' }}>Aggressiveness</div>
+            <Segmented
+              options={[
+                { label: 'Conservative', value: 'conservative' },
+                { label: 'Reactive', value: 'reactive' },
+                { label: 'Aggressive', value: 'aggressive' },
+              ]}
+              value={aggressiveness}
+              onChange={(v)=> setAggressiveness(v as any)}
+            />
           </div>
         </Space>
         <Space>

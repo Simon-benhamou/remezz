@@ -523,30 +523,49 @@ export class ReboundRejectionAgent {
   }
 
   private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {
-    const cfg = getConfig();
+    const thresholds = this.effectiveEntryThresholds();
+    let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
+    let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
+    // Per-symbol tweak: ETH tends to have lower ATR% → allow a lower floor
+    try {
+      const sym = this.profile?.symbol || '';
+      if (sym.toUpperCase().startsWith('ETH/')) {
+        // Lower the ATR threshold slightly for ETH
+        minAtr = Math.max(0, minAtr - 0.15);
+      }
+    } catch {}
     const atrPct = Number((snap as any)?.atrPct ?? 0);
-    if (atrPct < cfg.ENTRY_MIN_ATR_PCT) {
+    if (atrPct < minAtr) {
       recordOpsEvent({
         level: 'info',
         source: 'entry_gate',
         message: 'atr_pct_too_low',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
-        details: { atrPct, min: cfg.ENTRY_MIN_ATR_PCT, reason: reasonHint },
+        details: { atrPct, min: minAtr, reason: reasonHint },
       });
-      return false;
+      // Momentum override: if ADX strong and slope strong & aligned, allow slight ATR misses
+      const adx = Number((snap as any)?.adx14 ?? 0);
+      const emaValForOv = Number((snap as any)?.ema20 ?? snap.last ?? 0) || 1;
+      const emaSlopeForOv = Number((snap as any)?.ema20Slope ?? 0);
+      const slopePctAbsForOv = Math.abs((emaSlopeForOv / Math.abs(emaValForOv)) * 100);
+      const bias: 'long'|'short' = (this.plan as any)?.bias || 'long';
+      const slopeDirOk = bias === 'long' ? emaSlopeForOv > 0 : emaSlopeForOv < 0;
+      const nearMiss = (minAtr - atrPct) <= 0.15; // allow within 0.15% ATR of threshold
+      const allowOverride = adx >= 24 && slopeDirOk && slopePctAbsForOv >= (minSlopeAbsPct * 1.1) && nearMiss;
+      if (!allowOverride) return false;
     }
     const emaVal = Number((snap as any)?.ema20 ?? snap.last ?? 0);
     const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
     const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
-    if (slopePctAbs < cfg.ENTRY_MIN_SLOPE_ABS_PCT) {
+    if (slopePctAbs < minSlopeAbsPct) {
       recordOpsEvent({
         level: 'info',
         source: 'entry_gate',
         message: 'slope_too_flat',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
-        details: { slopePctAbs, min: cfg.ENTRY_MIN_SLOPE_ABS_PCT, reason: reasonHint },
+        details: { slopePctAbs, min: minSlopeAbsPct, reason: reasonHint },
       });
       return false;
     }
@@ -1203,7 +1222,14 @@ export class ReboundRejectionAgent {
       const momentum = this.computeMomentumSnapshot(snap);
       const momentumThresh = this.getCooldownMomentumThreshold();
       if (momentum.score < momentumThresh) {
-        this.startCooldownWatcher(interval);
+        // If momentum is decent but below threshold, shorten the next check based on aggressiveness
+        const level = this.profile.aggressiveness || 'conservative';
+        let next = interval;
+        if (momentum.score > 0.5) {
+          if (level === 'reactive') next = Math.max(60_000, Math.floor(interval * 0.5));
+          if (level === 'aggressive') next = Math.max(30_000, Math.floor(interval * 0.33));
+        }
+        this.startCooldownWatcher(next);
         return;
       }
       const candidate = await this.computeCooldownCandidate({ snap, momentumScore: momentum.score });
@@ -1227,16 +1253,28 @@ export class ReboundRejectionAgent {
 
   private getCooldownConfidenceThreshold() {
     const cfg = getConfig();
-    const raw = Number(process.env.AGENT_COOLDOWN_CONFIDENCE_MIN ?? cfg.COOLDOWN_CONFIDENCE_MIN ?? '');
-    if (Number.isFinite(raw) && raw > 0 && raw <= 1) return raw;
-    return 0.6;
+    const base = (() => {
+      const raw = Number(process.env.AGENT_COOLDOWN_CONFIDENCE_MIN ?? cfg.COOLDOWN_CONFIDENCE_MIN ?? '');
+      if (Number.isFinite(raw) && raw > 0 && raw <= 1) return raw;
+      return 0.6;
+    })();
+    const level = this.profile?.aggressiveness || 'conservative';
+    if (level === 'reactive') return Math.max(0.45, base - 0.05);
+    if (level === 'aggressive') return Math.max(0.4, base - 0.08);
+    return base;
   }
 
   private getCooldownMomentumThreshold() {
     const cfg = getConfig();
-    const raw = Number(process.env.COOLDOWN_MOMENTUM_THRESHOLD ?? cfg.COOLDOWN_MOMENTUM_THRESHOLD ?? '');
-    if (Number.isFinite(raw) && raw >= 0 && raw <= 1) return raw;
-    return 0.3;
+    const base = (() => {
+      const raw = Number(process.env.COOLDOWN_MOMENTUM_THRESHOLD ?? cfg.COOLDOWN_MOMENTUM_THRESHOLD ?? '');
+      if (Number.isFinite(raw) && raw >= 0 && raw <= 1) return raw;
+      return 0.3;
+    })();
+    const level = this.profile?.aggressiveness || 'conservative';
+    if (level === 'reactive') return Math.max(0.15, base - 0.05);
+    if (level === 'aggressive') return Math.max(0.1, base - 0.08);
+    return base;
   }
 
   private async exitCooldownWithPlan(candidate: { plan: PlanJson; confidence: number; components: { planScore: number; momentumScore: number; quickTest?: any; momentum?: any } }): Promise<void> {

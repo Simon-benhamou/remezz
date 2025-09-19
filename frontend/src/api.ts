@@ -84,6 +84,8 @@ export const api = {
     (await client.get('/api/monitor/alerts', { params: { sessionId } })).data,
   getMonitorAnalytics: async (sessionId: string) =>
     (await client.get('/api/monitor/analytics', { params: { sessionId } })).data,
+  getHealth: async (sessionId?: string) =>
+    (await client.get('/api/monitor/health', { params: { sessionId } })).data,
   getDailyReport: async (sessionId: string, date?: string, opts?: { refresh?: boolean }) =>
     (await client.get('/api/monitor/reports/daily', { params: { sessionId, date, refresh: opts?.refresh ? 'true' : undefined } })).data,
   listDailyReports: async (sessionId: string, limit = 30) =>

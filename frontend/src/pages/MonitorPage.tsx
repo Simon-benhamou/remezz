@@ -40,6 +40,7 @@ export default function MonitorPage(){
   const [triggers, setTriggers] = React.useState<any[]>([]);
   const [alerts, setAlerts] = React.useState<any[]>([]);
   const [analytics, setAnalytics] = React.useState<any>(null);
+  const [health, setHealth] = React.useState<any>(null);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
@@ -61,14 +62,22 @@ export default function MonitorPage(){
         try { if (s.session?.id) setTrades(await api.getTrades(s.session.id)); } catch {}
         try { if (s.session?.id) setTriggers(await api.getTriggers(s.session.id)); } catch {}
         try { if (s.session?.id) setAgent(await api.getAgentState(s.session.id)); } catch {}
-        try { if (s.session?.id) setAnalytics(await api.getMonitorAnalytics(s.session.id)); } catch {}
+        try {
+          if (s.session?.id) {
+            setAnalytics(await api.getMonitorAnalytics(s.session.id));
+            setHealth(await api.getHealth(s.session.id));
+          }
+        } catch {}
       } finally { setLoading(false); }
     })();
   }, [sessionId]);
 
   const loadAnalytics = React.useCallback(async () => {
     if (!sessionId) return;
-    try { setAnalytics(await api.getMonitorAnalytics(sessionId)); } catch {}
+    try {
+      setAnalytics(await api.getMonitorAnalytics(sessionId));
+      setHealth(await api.getHealth(sessionId));
+    } catch {}
   }, [sessionId]);
 
   React.useEffect(() => {
@@ -139,8 +148,8 @@ export default function MonitorPage(){
         </div>
       )}
       <Row gutter={[12,12]}>
-        <Col xs={24}><MonitorHealthBanner health={analytics?.health} updatedAt={analytics?.updatedAt} /></Col>
-        <Col xs={24}><MonitorMiniPanels panels={analytics?.panels} /></Col>
+  <Col xs={24}><MonitorHealthBanner health={analytics?.health || health} updatedAt={analytics?.updatedAt || health?.ts} /></Col>
+  <Col xs={24}><MonitorMiniPanels panels={analytics?.panels} /></Col>
         {/* Primary fold: Chart + Agent details + Orders/Trades (no scroll on desktop) */}
         <Col xs={24} lg={14}>
           <PriceChart

@@ -15,6 +15,11 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
   const balance = agent?.balance;
   const [agg, setAgg] = React.useState<string>(agent?.profile?.aggressiveness || 'conservative');
 
+  React.useEffect(()=>{
+    const next = agent?.profile?.aggressiveness || 'conservative';
+    setAgg(next);
+  }, [agent?.profile?.aggressiveness]);
+
   const propose = async () => {
     const p = await api.proposePlan(symbol, { sessionId, fresh: true });
     setLlmPlan(p);
@@ -28,6 +33,16 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
   };
 
   const vp = agent?.plan; // validated plan from backend with numeric zone
+  const onChangeAgg = async (val: any) => {
+    try {
+      if (!sessionId) { message.error('No active session'); return; }
+      setAgg(val);
+      await api.setAggressiveness(sessionId, val);
+      message.success('Aggressiveness updated');
+    } catch {
+      message.error('Failed to update aggressiveness');
+    }
+  };
 
   const check = (ok:boolean) => <span style={{ color: ok ? '#1f8f1f' : '#c0392b' }}>{ok ? '✓' : '✗'}</span>;
   const z = agent?.plan?.zone;
@@ -113,13 +128,4 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
     </Card>
   );
 }
-  const onChangeAgg = async (val: any) => {
-    try {
-      if (!sessionId) { message.error('No active session'); return; }
-      setAgg(val);
-      await api.setAggressiveness(sessionId, val);
-      message.success('Aggressiveness updated');
-    } catch {
-      message.error('Failed to update aggressiveness');
-    }
-  };
+ 

@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { recentAlerts, clearAlertsMemory } from '../monitor/policy.js';
-import { computeMonitorAnalytics } from '../monitor/analytics.js';
 import { prisma } from '../db/client.js';
+import { getLastTickAgeSec } from '../engine/events.js';
+import { getConfig } from '../utils/env.js';
+import { getAIMetrics } from '../metrics/aiCalls.js';
+import { computeMonitorAnalytics } from '../monitor/analytics.js';
 import { llmJSON } from '../ai/llm.js';
 
 export const router = Router();
@@ -20,12 +23,40 @@ router.get('/alerts', async (req,res)=>{
     } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }); }
   }
   // auto: prefer DB, fallback to memory only if DB errors out
+
   try {
     const where: any = sessionId ? { sessionId } : {};
     const rows = await prisma.alert.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 });
     return res.json(rows.map(r => ({ id: r.id, sessionId: r.sessionId, symbol: r.symbol, kind: r.kind, severity: r.severity, details: r.details, ts: new Date(r.createdAt).getTime() })));
   } catch {}
   res.json(recentAlerts(sessionId || undefined));
+});
+
+// Health snapshot across active sessions (staleness, AI, basic status)
+router.get('/health', async (req,res)=>{
+  try {
+    const sessionId = String(req.query.sessionId || '');
+    const cfg = getConfig();
+    const list = await prisma.agentSession.findMany({ where: { stoppedAt: null }, orderBy: { startedAt: 'asc' } });
+    const sessions = (await Promise.all(list.map(async s => {
+      const age = getLastTickAgeSec(s.id);
+      const stale = typeof age === 'number' && age > cfg.STALE_TICK_SEC;
+      const ai = await getAIMetrics(s.id).catch(()=>null);
+      return {
+        id: s.id,
+        symbol: s.symbol,
+        mode: s.mode,
+        lastTickSec: age,
+        stale,
+        ai: ai ? { total: ai.total, callsPerHour: ai.callsPerHour, costUsd: ai.costUsd } : null,
+        startedAt: s.startedAt,
+      };
+    }))).filter(x => !sessionId || x.id === sessionId);
+    const anyStale = sessions.some(s => s.stale);
+    res.json({ ok: true, anyStale, staleCount: sessions.filter(s=>s.stale).length, sessions, ts: new Date().toISOString() });
+  } catch (e:any) {
+    res.status(500).json({ error: 'health_failed', details: String(e?.message || e) });
+  }
 });
 
 // Aggregated analytics for monitor mini-panels & health banner

@@ -22,6 +22,15 @@ let lastStrategyZone: { min?: number | null; max?: number | null } | null = null
 let lastTick = { symbol: '', price: 0, ts: 0 };
 const lastTickBySession = new Map<string, number>();
 
+// Expose last tick info for health checks
+export function getLastTickAgeSec(sessionId: string): number | null {
+  try {
+    const ts = lastTickBySession.get(sessionId) || 0;
+    if (!ts) return null;
+    return Math.round((Date.now() - ts) / 1000);
+  } catch { return null; }
+}
+
 function pctDiff(a: number, b: number) {
   if (!a || !b) return 0;
   return Math.abs(a - b) / Math.abs(b);
