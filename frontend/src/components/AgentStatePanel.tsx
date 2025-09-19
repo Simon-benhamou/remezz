@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, Descriptions, Tag, Space, Button, message, Segmented } from 'antd';
 import { api } from '../api';
+import TradingDiagnostics from './TradingDiagnostics';
 
 type Props = {
   agent: any; // includes validated plan when ARMED/MANAGE
@@ -88,27 +89,24 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
           <Button type='primary' onClick={arm} disabled={!llmPlan}>Arm</Button>
         </Space>
 
-        <Card size='small' title={<span>Readiness &nbsp; {typeof ai?.total==='number' && (<span style={{ fontSize:12, color:'#888' }}>AI calls: {ai.total}</span>)}</span>} style={{ marginTop: 8 }}>
-          {agent?.plan ? (
-            <Space direction='vertical'>
-              <div>{check(inZoneNow)} In entry zone</div>
-              <div>{check(!confirmNeeded || confirmNow)} Confirmation {confirmNeeded ? '(close beyond mid)' : '(not required)'}</div>
-              <div>{check(spreadOk)} Spread OK</div>
-              <div>{check(levOk)} Leverage OK (≤ configured max)</div>
-              <div>Status: <Tag color={agent?.state==='ARMED'?'blue': agent?.state==='MANAGE'?'green': agent?.state==='HALT'?'red':'default'}>{agent?.state || 'IDLE'}</Tag></div>
-              <div style={{ fontSize:12, color:'#666' }}>
-                LLM usage — total: <b>{ai?.total ?? 0}</b>, calls/h: <b>{(ai?.callsPerHour ?? 0).toFixed?.(2)}</b>, cost: <b>${(ai?.costUsd ?? 0).toFixed?.(4)}</b>
-                {Object.keys(aiByModel).length>0 && (
-                  <>
-                    <br />by model: {Object.entries(aiByModel).map(([m,c]:any)=> (<span key={m} style={{ marginRight:8 }}><Tag>{m}</Tag>×{c}</span>))}
-                  </>
-                )}
-              </div>
-            </Space>
-          ) : (
-            <div style={{ color:'#666' }}>No plan armed yet. Propose a plan to enable readiness checks.</div>
-          )}
-        </Card>
+        {/* Detailed Trading Diagnostics */}
+        <TradingDiagnostics sessionId={sessionId} refreshTrigger={agent?.state} />
+
+        {/* LLM Usage Info */}
+        {typeof ai?.total === 'number' && (
+          <Card size="small" title="LLM Usage" style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: '#666' }}>
+              Total: <b>{ai?.total ?? 0}</b>, calls/h: <b>{(ai?.callsPerHour ?? 0).toFixed?.(2)}</b>, cost: <b>${(ai?.costUsd ?? 0).toFixed?.(4)}</b>
+              {Object.keys(aiByModel).length > 0 && (
+                <>
+                  <br />by model: {Object.entries(aiByModel).map(([m, c]: any) => (
+                    <span key={m} style={{ marginRight: 8 }}><Tag>{m}</Tag>×{c}</span>
+                  ))}
+                </>
+              )}
+            </div>
+          </Card>
+        )}
 
         {llmPlan && (
           <Descriptions column={1} size='small' bordered title='Plan (LLM)'>

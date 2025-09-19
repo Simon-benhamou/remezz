@@ -2181,6 +2181,228 @@ export class ReboundRejectionAgent {
     await (await import('../ws/hub.js')).broadcast('agent_state', { state: this.state, pos: this.pos, aiCalls: await (await import('../metrics/aiCalls.js')).getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     this.entering = false;
   }
+
+  // Public diagnostic method to check why agent is not trading
+  async getDiagnostics(): Promise<any> {
+    if (!this.plan || !this.profile) {
+      return {
+        canTrade: false,
+        reason: 'No plan or profile configured',
+        checks: {}
+      };
+    }
+
+    let snap: TechnicalSnapshot | null = null;
+    try {
+      snap = await buildTechSnapshot(this.profile.symbol);
+    } catch (err) {
+      return {
+        canTrade: false,
+        reason: 'Failed to get market snapshot',
+        checks: { snapshotError: String((err as any)?.message || err) }
+      };
+    }
+
+    if (!snap) {
+      return {
+        canTrade: false,
+        reason: 'No market data available',
+        checks: {}
+      };
+    }
+
+    const price = snap.last;
+    const bias = this.plan.bias;
+    const checks: any = {};
+
+    // Basic state checks
+    checks.hasPosition = {
+      status: !this.pos ? 'PASS' : 'FAIL',
+      reason: this.pos ? 'Already in position' : 'No position'
+    };
+
+    checks.isArmed = {
+      status: this.state === 'ARMED' ? 'PASS' : 'FAIL',
+      reason: `State is ${this.state}`
+    };
+
+    checks.isEntering = {
+      status: !this.entering ? 'PASS' : 'FAIL',
+      reason: this.entering ? 'Already entering position' : 'Not entering'
+    };
+
+    // Risk limits
+    const limits = defaultLimits();
+    checks.dailyTradeLimit = {
+      status: this.tradesToday < limits.maxTradesPerDay ? 'PASS' : 'FAIL',
+      reason: `${this.tradesToday}/${limits.maxTradesPerDay} trades today`
+    };
+
+    checks.consecutiveStopsLimit = {
+      status: this.consecutiveStops < limits.maxConsecutiveStops ? 'PASS' : 'FAIL',
+      reason: `${this.consecutiveStops}/${limits.maxConsecutiveStops} consecutive stops`
+    };
+
+    // Entry zone check
+    const entryZone = this.plan.zone;
+    let inZone = false;
+    if (entryZone && typeof entryZone.from === 'number' && typeof entryZone.to === 'number') {
+      inZone = price >= Math.min(entryZone.from, entryZone.to) && price <= Math.max(entryZone.from, entryZone.to);
+    }
+    checks.inEntryZone = {
+      status: inZone ? 'PASS' : 'FAIL',
+      reason: inZone ? 'Price in entry zone' : `Price ${price.toFixed(4)} outside zone [${entryZone?.from?.toFixed(4)}, ${entryZone?.to?.toFixed(4)}]`
+    };
+
+    // Momentum gates
+    checks.momentumGates = {
+      status: this.passesEntryMomentumGates(snap, 'enter') ? 'PASS' : 'FAIL',
+      reason: this.passesEntryMomentumGates(snap, 'enter') ? 'Momentum requirements met' : 'Momentum requirements not met'
+    };
+
+    // Quality filters detailed breakdown
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const rsi = Number((snap as any)?.rsi14 ?? 50);
+    const ema20 = Number((snap as any)?.ema20 ?? price);
+    const ema50 = Number((snap as any)?.ema50 ?? price);
+    const atrPct = Number((snap as any)?.atrPct ?? 0);
+    const volume = Number((snap as any)?.volume ?? 0);
+    const volumeMA = Number((snap as any)?.volumeMA ?? volume);
+    const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
+    const emaSpread = ((ema20 - ema50) / ema50) * 100;
+
+    // Individual quality filter checks
+    checks.qualityFilters = {};
+
+    // Trend alignment
+    const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.5 : ema20 < ema50 && emaSpread < -0.5;
+    checks.qualityFilters.trendAlignment = {
+      status: trendAligned ? 'PASS' : Math.abs(emaSpread) < 0.1 ? 'REJECT' : 'PARTIAL',
+      reason: `EMA spread: ${emaSpread.toFixed(3)}%, need ${bias === 'long' ? '>0.5%' : '<-0.5%'}`,
+      value: emaSpread,
+      points: trendAligned ? 25 : 0
+    };
+
+    // ADX check
+    let adxStatus = 'FAIL';
+    let adxPoints = 0;
+    if (adx >= 25) { adxStatus = 'PASS'; adxPoints = 30; }
+    else if (adx >= 20) { adxStatus = 'PARTIAL'; adxPoints = 20; }
+    else if (adx < 12) { adxStatus = 'REJECT'; }
+    
+    checks.qualityFilters.momentum = {
+      status: adxStatus,
+      reason: `ADX: ${adx.toFixed(1)} (need ≥25 for max points, ≥12 minimum)`,
+      value: adx,
+      points: adxPoints
+    };
+
+    // RSI check
+    const rsiOptimal = bias === 'long' ? (rsi >= 45 && rsi <= 70) : (rsi >= 30 && rsi <= 55);
+    let rsiStatus = 'FAIL';
+    if (rsiOptimal) rsiStatus = 'PASS';
+    else if ((bias === 'long' && rsi > 75) || (bias === 'short' && rsi < 25)) rsiStatus = 'REJECT';
+    
+    checks.qualityFilters.rsiPosition = {
+      status: rsiStatus,
+      reason: `RSI: ${rsi.toFixed(1)} (${bias} optimal: ${bias === 'long' ? '45-70' : '30-55'})`,
+      value: rsi,
+      points: rsiOptimal ? 15 : 0
+    };
+
+    // Volatility check
+    let volPoints = 0;
+    if (atrPct >= 1.5) volPoints = 15;
+    else if (atrPct >= 1.0) volPoints = 10;
+    
+    checks.qualityFilters.volatility = {
+      status: atrPct >= 1.0 ? 'PASS' : 'FAIL',
+      reason: `ATR: ${atrPct.toFixed(2)}% (need ≥1.5% for max points)`,
+      value: atrPct,
+      points: volPoints
+    };
+
+    // Volume check
+    let volumeStatus = 'FAIL';
+    let volumePoints = 0;
+    if (volumeRatio >= 1.3) { volumeStatus = 'PASS'; volumePoints = 15; }
+    else if (volumeRatio >= 1.1) { volumeStatus = 'PARTIAL'; volumePoints = 10; }
+    else if (volumeRatio < 0.5) { volumeStatus = 'REJECT'; }
+    
+    checks.qualityFilters.volume = {
+      status: volumeStatus,
+      reason: `Volume ratio: ${volumeRatio.toFixed(2)} (need ≥1.3 for max points, ≥0.5 minimum)`,
+      value: volumeRatio,
+      points: volumePoints
+    };
+
+    // Calculate total quality score
+    const totalQualityScore = (checks.qualityFilters.trendAlignment?.points || 0) + 
+                             (checks.qualityFilters.momentum?.points || 0) + 
+                             (checks.qualityFilters.rsiPosition?.points || 0) + 
+                             (checks.qualityFilters.volatility?.points || 0) + 
+                             (checks.qualityFilters.volume?.points || 0);
+
+    // Required score based on aggressiveness
+    const level = this.profile?.aggressiveness || 'conservative';
+    let minScore = 55; // Conservative
+    if (level === 'reactive') minScore = 45;
+    if (level === 'aggressive') minScore = 35;
+    
+    // Learning mode adjustment
+    const potentialMove = Math.abs((price - ema20) / ema20) * 100;
+    const hasLowExperience = this.recentTrades.length < 20;
+    let adjustedMinScore = minScore;
+    
+    if (potentialMove >= 1.5 && potentialMove <= 4.0 && hasLowExperience) {
+      adjustedMinScore = Math.max(25, minScore - 15);
+    }
+    
+    adjustedMinScore += this.qualityThresholdAdjustment;
+    adjustedMinScore = Math.max(30, Math.min(75, adjustedMinScore));
+
+    checks.qualityScore = {
+      status: totalQualityScore >= adjustedMinScore ? 'PASS' : 'FAIL',
+      reason: `Score: ${totalQualityScore}/${adjustedMinScore} required (${level} mode)`,
+      current: totalQualityScore,
+      required: adjustedMinScore,
+      breakdown: {
+        baseRequired: minScore,
+        learningAdjustment: hasLowExperience && potentialMove >= 1.5 && potentialMove <= 4.0 ? -15 : 0,
+        performanceAdjustment: this.qualityThresholdAdjustment,
+        final: adjustedMinScore
+      }
+    };
+
+    // Overall assessment
+    const allChecks = [
+      checks.hasPosition,
+      checks.isArmed,
+      checks.isEntering,
+      checks.dailyTradeLimit,
+      checks.consecutiveStopsLimit,
+      checks.inEntryZone,
+      checks.momentumGates,
+      checks.qualityScore
+    ];
+
+    const rejectChecks = Object.values(checks.qualityFilters).filter((c: any) => c.status === 'REJECT');
+    const failedChecks = allChecks.filter(c => c.status !== 'PASS');
+    
+    const canTrade = failedChecks.length === 0 && rejectChecks.length === 0;
+
+    return {
+      canTrade,
+      reason: canTrade ? 'All checks passed' : `${failedChecks.length} failed checks, ${rejectChecks.length} reject conditions`,
+      checks,
+      summary: {
+        totalChecks: allChecks.length,
+        passed: allChecks.length - failedChecks.length,
+        failed: failedChecks.length,
+        rejected: rejectChecks.length
+      }
+    };
+  }
 }
 
 // Singleton agent instance to be used by routes/engine

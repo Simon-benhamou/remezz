@@ -413,3 +413,21 @@ router.delete('/sessions/:id', async (req,res)=>{
   await prisma.agentSession.delete({ where: { id } });
   res.json({ ok: true });
 });
+
+// Get trading diagnostics for a session - shows why agent is not trading
+router.get('/sessions/:id/diagnostics', async (req, res) => {
+  try {
+    const { id } = req.params as { id: string };
+    const agent = AgentHub.get(id);
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found or not active' });
+    }
+    
+    const diagnostics = await (agent as any).getDiagnostics();
+    res.json(diagnostics);
+  } catch (err) {
+    console.error('Diagnostics error:', err);
+    res.status(500).json({ error: 'Failed to get diagnostics', details: String((err as any)?.message || err) });
+  }
+});
