@@ -1,5 +1,12 @@
+# Use multiple fallback base images for reliability
 ARG BASE_IMAGE=node:20-bookworm-slim
 FROM ${BASE_IMAGE}
+
+# Alternative base images if the main registry fails:
+# FROM node:20-alpine (smaller, faster)
+# FROM registry.hub.docker.com/library/node:20-bookworm-slim
+# FROM ghcr.io/library/node:20-bookworm-slim
+
 WORKDIR /app
 
 # 🔐 OpenSSL pour Prisma (avant prisma:gen)
