@@ -211,6 +211,7 @@ export async function startEventEngine(){
               timestamp: new Date().toISOString(),
               startBalanceUsd: p.startBalanceUsd,
               budgetFraction: (()=>{ let bf = typeof p.budgetPct==='number'? p.budgetPct:1; if (bf>1) bf/=100; return Math.min(1, Math.max(0.1, bf)); })(),
+              aggressiveness: (p.aggressiveness === 'reactive' || p.aggressiveness === 'aggressive') ? p.aggressiveness : 'conservative',
             };
             try { await (await import('../agent/hub.js')).AgentHub.activate(s.id, profile as any); } catch {}
             // If a persisted plan exists, re-arm the agent automatically without calling LLM again

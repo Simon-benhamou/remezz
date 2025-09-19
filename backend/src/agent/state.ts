@@ -32,6 +32,7 @@ export type ActivationProfile = {
   timestamp: string; // ISO, acts as a signed "freeze"
   startBalanceUsd?: number;
   budgetFraction?: number; // 0..1 fraction of free balance usable by the agent
+  aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
 };
 
 export type ActivePosition = {
@@ -187,8 +188,8 @@ export class ReboundRejectionAgent {
       if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); return; }
       if (this.plan.bias === 'none') return;
       const inZone = price >= Math.min(from,to) && price <= Math.max(from,to);
-      // Entry filters: basic RSI/ADX gates to avoid weak/contrarian entries
-      const cfg = getConfig();
+      // Entry filters: basic RSI/ADX gates to avoid weak/contrarian entries (aggressiveness-adjusted)
+      const cfg = this.effectiveEntryThresholds();
       if (this.plan.bias === 'short') {
         if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_SHORT_MIN_ADX) return;
         if ((snap as any).rsi14 != null && (snap as any).rsi14 < cfg.ENTRY_SHORT_MIN_RSI) return;
@@ -496,6 +497,29 @@ export class ReboundRejectionAgent {
     }
 
     return candidate;
+  }
+
+  private effectiveEntryThresholds() {
+    const cfg = getConfig();
+    const level = this.profile?.aggressiveness || 'conservative';
+    let ENTRY_SHORT_MIN_ADX = cfg.ENTRY_SHORT_MIN_ADX;
+    let ENTRY_LONG_MIN_ADX = cfg.ENTRY_LONG_MIN_ADX;
+    let ENTRY_SHORT_MIN_RSI = cfg.ENTRY_SHORT_MIN_RSI;
+    let ENTRY_LONG_MAX_RSI = cfg.ENTRY_LONG_MAX_RSI;
+    let ENTRY_MIN_ATR_PCT = cfg.ENTRY_MIN_ATR_PCT;
+    let ENTRY_MIN_SLOPE_ABS_PCT = cfg.ENTRY_MIN_SLOPE_ABS_PCT;
+    if (level === 'reactive') {
+      ENTRY_SHORT_MIN_ADX = Math.max(10, ENTRY_SHORT_MIN_ADX - 2);
+      ENTRY_LONG_MIN_ADX = Math.max(8, ENTRY_LONG_MIN_ADX - 2);
+      ENTRY_MIN_ATR_PCT = Math.max(0.3, ENTRY_MIN_ATR_PCT * 0.8);
+      ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.01, ENTRY_MIN_SLOPE_ABS_PCT * 0.67);
+    } else if (level === 'aggressive') {
+      ENTRY_SHORT_MIN_ADX = Math.max(8, ENTRY_SHORT_MIN_ADX - 4);
+      ENTRY_LONG_MIN_ADX = Math.max(6, ENTRY_LONG_MIN_ADX - 4);
+      ENTRY_MIN_ATR_PCT = Math.max(0.2, ENTRY_MIN_ATR_PCT * 0.6);
+      ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.008, ENTRY_MIN_SLOPE_ABS_PCT * 0.5);
+    }
+    return { ENTRY_SHORT_MIN_ADX, ENTRY_LONG_MIN_ADX, ENTRY_SHORT_MIN_RSI, ENTRY_LONG_MAX_RSI, ENTRY_MIN_ATR_PCT, ENTRY_MIN_SLOPE_ABS_PCT };
   }
 
   private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {

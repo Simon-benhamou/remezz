@@ -20,7 +20,7 @@ router.get('/session', async (_req,res)=> res.json(await activeSession()));
 router.post('/start', async (req,res)=>{
   try {
     const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
-    const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number };
+    const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number, aggressiveness?: 'conservative'|'reactive'|'aggressive' };
     let symbol = body.symbol as string;
 
   // Optional: ranking only if no symbol provided and RANK_ON_START=true
@@ -53,6 +53,7 @@ router.post('/start', async (req,res)=>{
       maxLeverage: body.maxLeverage,
       dailyLossLimitPct: body.dailyLossLimitPct,
       budgetPct: body.budgetPct,
+      aggressiveness: body.aggressiveness || 'conservative',
       startBalanceUsd: startBal,
     });
     await setActiveSession(s.id);
@@ -69,6 +70,7 @@ router.post('/start', async (req,res)=>{
       timestamp: new Date().toISOString(),
       startBalanceUsd: startBalanceUsd,
       budgetFraction,
+      aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'conservative',
     } as any).catch(()=>{});
 
     // Respond immediately to keep the UI smooth
@@ -174,6 +176,28 @@ router.get('/state', async (req,res)=>{
     }
   } catch {}
   res.json({ state: a?.state, profile: a?.profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics(sessionId || undefined) });
+});
+
+// Update aggressiveness level on the fly
+router.post('/aggressiveness', async (req, res) => {
+  const { sessionId, level } = (req.body || {}) as { sessionId?: string; level?: string };
+  if (!sessionId) return res.status(400).json({ error: 'session_required' });
+  const a = AgentHub.get(sessionId) as any;
+  if (!a) return res.status(404).json({ error: 'no_agent' });
+  const val = String(level || '').toLowerCase();
+  if (!['conservative','reactive','aggressive'].includes(val)) return res.status(400).json({ error: 'invalid_level' });
+  try {
+    a.profile = { ...(a.profile || {}), aggressiveness: val };
+    // broadcast new profile snapshot to UI
+    const sym = a.profile?.symbol;
+    const { broadcast } = await import('../ws/hub.js');
+    try { broadcast('agent_state', { state: a.state, profile: a.profile }, sym, sessionId); } catch {}
+    // persist hint on session profileJson for restarts
+    try { await (await import('../db/client.js')).prisma.agentSession.update({ where: { id: sessionId }, data: { profileJson: a.profile as any } }); } catch {}
+    res.json({ ok: true, aggressiveness: val });
+  } catch (e:any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
 });
 
 router.post('/ack-halt', async (req,res)=>{

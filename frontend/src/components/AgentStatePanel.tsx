@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Descriptions, Tag, Space, Button, message } from 'antd';
+import { Card, Descriptions, Tag, Space, Button, message, Segmented } from 'antd';
 import { api } from '../api';
 
 type Props = {
@@ -13,6 +13,7 @@ type Props = {
 export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sessionId }: Props){
   const [llmPlan, setLlmPlan] = React.useState<any>(null);
   const balance = agent?.balance;
+  const [agg, setAgg] = React.useState<string>(agent?.profile?.aggressiveness || 'conservative');
 
   const propose = async () => {
     const p = await api.proposePlan(symbol, { sessionId, fresh: true });
@@ -47,6 +48,17 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
           <Descriptions.Item label='Risk/Trade %'>{agent?.profile?.riskPerTradePct}</Descriptions.Item>
           <Descriptions.Item label='Max Lev'>{agent?.profile?.maxLeverage}</Descriptions.Item>
           <Descriptions.Item label='Daily Loss %'>{agent?.profile?.dailyLossLimitPct}</Descriptions.Item>
+          <Descriptions.Item label='Aggressiveness'>
+            <Segmented
+              value={agg}
+              onChange={onChangeAgg}
+              options={[
+                { label:'Conservative', value:'conservative' },
+                { label:'Reactive', value:'reactive' },
+                { label:'Aggressive', value:'aggressive' },
+              ]}
+            />
+          </Descriptions.Item>
           {balance && (
             <>
               <Descriptions.Item label='Equity (USD)'>{Number(balance?.equityUsd||0).toFixed(2)}</Descriptions.Item>
@@ -101,3 +113,13 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
     </Card>
   );
 }
+  const onChangeAgg = async (val: any) => {
+    try {
+      if (!sessionId) { message.error('No active session'); return; }
+      setAgg(val);
+      await api.setAggressiveness(sessionId, val);
+      message.success('Aggressiveness updated');
+    } catch {
+      message.error('Failed to update aggressiveness');
+    }
+  };

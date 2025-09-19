@@ -45,6 +45,7 @@ export default function SessionsPage(){
       maxLeverage: Math.min(10, Math.max(1, p.maxLeverage ?? 4)),
       dailyLossLimitPct: p.dailyLossLimitPct ?? 3.5,
       budgetPct: p.budgetPct ?? 100,
+      aggressiveness: p.aggressiveness || 'conservative',
     });
     setOpen(true);
   };
@@ -124,7 +125,7 @@ export default function SessionsPage(){
             setStarting(false);
           }
         }}>
-        <Form layout='vertical' form={form} initialValues={{ mode, riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100 }}>
+        <Form layout='vertical' form={form} initialValues={{ mode, riskPerTradePct:1.5, maxLeverage:4, dailyLossLimitPct:3.5, budgetPct:100, aggressiveness:'conservative' }}>
           <Form.Item label='Symbol' name='symbol' rules={[{ required:true }]}>
             <Select
               showSearch
@@ -155,6 +156,15 @@ export default function SessionsPage(){
           </Form.Item>
           <Form.Item label='Budget % of balance (0-100)' name='budgetPct' rules={[{ type:'number', min:10, max:100 }]}>
             <InputNumber style={{ width: '100%' }} min={10} max={100} step={5} />
+          </Form.Item>
+          <Form.Item label='Aggressiveness' name='aggressiveness'>
+            <Select
+              options={[
+                { value:'conservative', label:'Conservative (default)' },
+                { value:'reactive', label:'Reactive' },
+                { value:'aggressive', label:'Aggressive (controlled)' }
+              ]}
+            />
           </Form.Item>
         </Form>
       </Modal>

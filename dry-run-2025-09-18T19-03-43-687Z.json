@@ -1,0 +1,26 @@
+{
+  "startedAt": "2025-09-18T18:33:42.777Z",
+  "api": "http://localhost:4000",
+  "symbols": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "minutes": 30,
+  "sessions": [],
+  "events": [
+    {
+      "id": "ops_1758221580788_7xfkoi",
+      "ts": 1758221580788,
+      "level": "error",
+      "source": "heartbeat",
+      "message": "Tick processing failed",
+      "sessionId": "cmfprak670016rr0818cnvohs",
+      "symbol": "SOL/USD:USD",
+      "details": {
+        "error": "cryptocom GET https://api.crypto.com/exchange/v1/public/get-candlestick?instrument_name=SOLUSD-PERP&timeframe=1h&count=300&end_ts=1758221570771000 request timed out (10000 ms)"
+      }
+    }
+  ],
+  "improvements": []
+}
