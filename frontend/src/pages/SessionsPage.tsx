@@ -5,6 +5,7 @@ import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import TradingDiagnosticsOverview from '../components/TradingDiagnosticsOverview';
+import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
@@ -256,6 +257,16 @@ export default function SessionsPage(){
       <Space direction='vertical' style={{ width:'100%' }} size="large">
         {/* Trading Diagnostics Overview */}
         <TradingDiagnosticsOverview activeSessions={filteredRows.filter(r => !r.stoppedAt)} />
+        
+        {/* API Key Status Warning */}
+        <ApiKeyStatusBanner 
+          mode={mode as 'live' | 'paper'}
+          onConfigureKeys={() => {
+            // Open user settings modal - you'll need to implement this
+            console.log('Open user settings for API keys');
+          }}
+          showTitle={false}
+        />
         
         <Card 
           style={{
@@ -946,6 +957,23 @@ export default function SessionsPage(){
             try {
               setStarting(true);
               const v = await form.validateFields();
+              
+              // Check API keys for live mode
+              if (String(v.mode) === 'live') {
+                try {
+                  const apiStatus = await api.client.get('/api/user/api-keys/status');
+                  if (!apiStatus.data.canUseLive) {
+                    message.error('Live trading requires valid API keys. Please configure your Crypto.com API keys first.');
+                    setStarting(false);
+                    return;
+                  }
+                } catch (error) {
+                  message.error('Unable to verify API keys. Please check your configuration.');
+                  setStarting(false);
+                  return;
+                }
+              }
+              
               // Front guard: cap startBalanceUsd to exchange equity when live
               if (String(v.mode) === 'live' && exBal?.totalUsd != null && v.startBalanceUsd != null) {
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd||0), Number(exBal.totalUsd||0));

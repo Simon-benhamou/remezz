@@ -4,16 +4,17 @@ import { getConfig } from '../utils/env.js';
 let cached: any = null;
 let marketsLoaded = false;
 
+// User-specific exchange instances for authenticated operations
+const userExchanges: Map<string, any> = new Map();
+
 export async function exchange() {
   if (cached) return cached;
-  const { EXCHANGE_ID, API_KEY, API_SECRET, API_PASSWORD } = getConfig();
+  const { EXCHANGE_ID, API_PASSWORD } = getConfig();
   const Klass: any = (ccxt as any)[EXCHANGE_ID];
   if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
 
+  // Create unauthenticated exchange for public data only
   cached = new Klass({
-    apiKey: API_KEY,
-    secret: API_SECRET,
-    password: API_PASSWORD || undefined,
     enableRateLimit: true,
   });
 
@@ -27,6 +28,61 @@ export async function exchange() {
   await cached.loadMarkets();
   marketsLoaded = true;
   return cached;
+}
+
+// New function for user-specific authenticated exchange
+export async function getUserExchange(userId: string, credentials: { apiKey: string; apiSecret: string; passphrase?: string }) {
+  const cacheKey = `${userId}`;
+  
+  if (userExchanges.has(cacheKey)) {
+    return userExchanges.get(cacheKey);
+  }
+
+  const { EXCHANGE_ID, API_PASSWORD } = getConfig();
+  const Klass: any = (ccxt as any)[EXCHANGE_ID];
+  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
+
+  const userExchange = new Klass({
+    apiKey: credentials.apiKey,
+    secret: credentials.apiSecret,
+    password: credentials.passphrase || API_PASSWORD || undefined,
+    enableRateLimit: true,
+  });
+
+  // Default market type (spot | swap)
+  const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
+  // @ts-ignore
+  userExchange.options = userExchange.options || {};
+  // @ts-ignore
+  userExchange.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
+
+  await userExchange.loadMarkets();
+  userExchanges.set(cacheKey, userExchange);
+  
+  return userExchange;
+}
+
+// Function to validate user credentials by testing API connection
+export async function validateUserCredentials(credentials: { apiKey: string; apiSecret: string; passphrase?: string }): Promise<boolean> {
+  try {
+    const { EXCHANGE_ID, API_PASSWORD } = getConfig();
+    const Klass: any = (ccxt as any)[EXCHANGE_ID];
+    if (!Klass) return false;
+
+    const testExchange = new Klass({
+      apiKey: credentials.apiKey,
+      secret: credentials.apiSecret,
+      password: credentials.passphrase || API_PASSWORD || undefined,
+      enableRateLimit: true,
+    });
+
+    // Test by fetching balance (minimal API call that requires authentication)
+    await testExchange.fetchBalance();
+    return true;
+  } catch (error) {
+    console.error('Credential validation failed:', error);
+    return false;
+  }
 }
 
 /** Resolve a requested symbol to a valid ccxt unified market symbol for the configured exchange. */

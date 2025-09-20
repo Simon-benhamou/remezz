@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 import { prisma } from '../db/client.js';
 import { encryptApiKey, decryptApiKey } from '../utils/crypto.js';
+import { validateUserCredentials } from '../exchange/ccxtClient.js';
+import { getUserCredentials } from '../services/userCredentials.js';
 
 export const router = Router();
 
@@ -226,6 +228,51 @@ router.get('/api-keys/:exchange/credentials', async (req: AuthenticatedRequest, 
     res.json({ credentials });
   } catch (error) {
     console.error('Get credentials error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Check API keys status and validate them
+router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.json({ 
+        hasApiKeys: false, 
+        isValid: false, 
+        canUseLive: false,
+        message: 'Legacy users cannot configure API keys. Please register a new account.' 
+      });
+    }
+
+    const credentials = await getUserCredentials(req.user!.id, 'crypto.com');
+    
+    if (!credentials) {
+      return res.json({ 
+        hasApiKeys: false, 
+        isValid: false, 
+        canUseLive: false,
+        message: 'No API keys configured. Please add your Crypto.com API keys to enable live trading.' 
+      });
+    }
+
+    // Validate credentials by testing API connection
+    let isValid = false;
+    try {
+      isValid = await validateUserCredentials(credentials);
+    } catch (error) {
+      console.error('API key validation failed:', error);
+    }
+
+    res.json({
+      hasApiKeys: true,
+      isValid,
+      canUseLive: isValid,
+      message: isValid 
+        ? 'API keys are configured and valid' 
+        : 'API keys are configured but invalid. Please check your keys and IP whitelist (208.77.244.15)'
+    });
+  } catch (error) {
+    console.error('API keys status check error:', error);
     res.status(500).json({ error: 'server_error' });
   }
 });

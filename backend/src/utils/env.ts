@@ -1,8 +1,7 @@
 export type Cfg = {
   EXCHANGE_ID: string;
   SYMBOL: string;
-  API_KEY: string;
-  API_SECRET: string;
+  // REMOVED: API_KEY and API_SECRET - now using user-specific keys from database
   API_PASSWORD?: string;
   PORT: number;
   POLL_MS: number;
@@ -80,8 +79,7 @@ export function getConfig(): Cfg {
   return {
     EXCHANGE_ID: e.EXCHANGE_ID || "cryptocom",
     SYMBOL: e.SYMBOL || "BTCUSDT",
-    API_KEY: e.API_KEY || "",
-    API_SECRET: e.API_SECRET || "",
+    // REMOVED: API_KEY and API_SECRET - now using user-specific keys from database
     API_PASSWORD: e.API_PASSWORD || "",
     PORT: Number(e.PORT || "4000"),
     // Polling every 5s by default to reduce CCXT rate-limit pressure
