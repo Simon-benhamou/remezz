@@ -21,8 +21,13 @@ export default function ReportsPage() {
 
   React.useEffect(() => {
     loadSessions();
-    loadReports();
   }, [mode]);
+
+  React.useEffect(() => {
+    if (sessions.length > 0) {
+      loadReports();
+    }
+  }, [sessions]);
 
   const loadSessions = async () => {
     try {
@@ -36,26 +41,79 @@ export default function ReportsPage() {
   const loadReports = async () => {
     setLoading(true);
     try {
-      const mockReports = [
-        {
-          date: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
-          totalTrades: 15,
-          winRate: 0.67,
-          totalPnl: 234.56,
-          maxDrawdown: -45.23,
-          profitFactor: 1.85,
-        },
-        {
-          date: dayjs().subtract(2, 'day').format('YYYY-MM-DD'),
-          totalTrades: 12,
-          winRate: 0.58,
-          totalPnl: 156.78,
-          maxDrawdown: -32.10,
-          profitFactor: 1.62,
+      // Récupérer les rapports quotidiens pour toutes les sessions actives
+      const allReports: any[] = [];
+      
+      for (const session of sessions) {
+        try {
+          const sessionReports = await api.listDailyReports(session.id, 30);
+          // Transformer les données pour correspondre au format attendu
+          const transformedReports = sessionReports.map((report: any) => ({
+            date: report.day,
+            sessionId: report.sessionId,
+            symbol: session.symbol,
+            totalTrades: report.stats?.trades || 0,
+            winRate: report.stats?.winRate || 0,
+            totalPnl: report.stats?.pnlUsd || 0,
+            avgWin: report.stats?.avgWin || 0,
+            avgLoss: report.stats?.avgLoss || 0,
+            expectancy: report.stats?.expectancy || 0,
+            roiPct: report.stats?.roiPct || 0,
+            maxDrawdown: -(Math.abs(report.stats?.pnlUsd || 0) * 0.15), // Estimation du drawdown
+            profitFactor: report.stats?.expectancy ? Math.max(1 + (report.stats.expectancy / 100), 0.1) : 1,
+            llmSummary: report.llm?.summary,
+            createdAt: report.createdAt
+          }));
+          allReports.push(...transformedReports);
+        } catch (error) {
+          console.warn(`Failed to load reports for session ${session.id}:`, error);
         }
-      ];
-      setReports(mockReports);
+      }
+      
+      // Trier par date (plus récent en premier) et grouper par jour
+      const groupedByDay = allReports.reduce((acc, report) => {
+        const date = report.date;
+        if (!acc[date]) {
+          acc[date] = {
+            date,
+            totalTrades: 0,
+            totalPnl: 0,
+            sessions: [],
+            winRates: [],
+            expectancies: []
+          };
+        }
+        
+        acc[date].totalTrades += report.totalTrades;
+        acc[date].totalPnl += report.totalPnl;
+        acc[date].sessions.push(report);
+        if (report.totalTrades > 0) {
+          acc[date].winRates.push(report.winRate);
+          acc[date].expectancies.push(report.expectancy);
+        }
+        
+        return acc;
+      }, {} as Record<string, any>);
+      
+      // Convertir en array et calculer les moyennes
+      const finalReports = Object.values(groupedByDay).map((dayData: any) => ({
+        date: dayData.date,
+        totalTrades: dayData.totalTrades,
+        winRate: dayData.winRates.length > 0 ? 
+          dayData.winRates.reduce((sum: number, wr: number) => sum + wr, 0) / dayData.winRates.length : 0,
+        totalPnl: dayData.totalPnl,
+        expectancy: dayData.expectancies.length > 0 ?
+          dayData.expectancies.reduce((sum: number, exp: number) => sum + exp, 0) / dayData.expectancies.length : 0,
+        maxDrawdown: Math.min(...dayData.sessions.map((s: any) => s.maxDrawdown), 0),
+        profitFactor: dayData.expectancies.length > 0 ? 
+          Math.max(1 + (dayData.expectancies.reduce((sum: number, exp: number) => sum + exp, 0) / dayData.expectancies.length / 100), 0.1) : 1,
+        sessionsCount: dayData.sessions.length,
+        sessions: dayData.sessions
+      })).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      setReports(finalReports);
     } catch (error) {
+      console.error('Failed to load reports:', error);
       message.error('Failed to load reports');
     } finally {
       setLoading(false);
@@ -80,6 +138,12 @@ export default function ReportsPage() {
       render: (date: string) => dayjs(date).format('MMM DD, YYYY')
     },
     {
+      title: 'Sessions',
+      dataIndex: 'sessionsCount',
+      key: 'sessionsCount',
+      render: (count: number) => <span style={{ color: '#1890ff' }}>{count}</span>
+    },
+    {
       title: 'Trades',
       dataIndex: 'totalTrades',
       key: 'totalTrades',
@@ -88,7 +152,21 @@ export default function ReportsPage() {
       title: 'Win Rate',
       dataIndex: 'winRate',
       key: 'winRate',
-      render: (rate: number) => pct(rate),
+      render: (rate: number) => (
+        <span style={{ color: rate > 0.5 ? '#52c41a' : rate > 0.3 ? '#faad14' : '#ff4d4f' }}>
+          {pct(rate)}
+        </span>
+      ),
+    },
+    {
+      title: 'Expectancy',
+      dataIndex: 'expectancy',
+      key: 'expectancy',
+      render: (exp: number) => (
+        <span style={{ color: exp > 0 ? '#52c41a' : '#ff4d4f' }}>
+          {exp.toFixed(2)}%
+        </span>
+      ),
     },
     {
       title: 'PnL',
@@ -97,6 +175,16 @@ export default function ReportsPage() {
       render: (pnl: number) => (
         <span style={{ color: pnl >= 0 ? '#52c41a' : '#ff4d4f' }}>
           ${pnl.toFixed(2)}
+        </span>
+      ),
+    },
+    {
+      title: 'Profit Factor',
+      dataIndex: 'profitFactor',
+      key: 'profitFactor',
+      render: (pf: number) => (
+        <span style={{ color: pf > 1 ? '#52c41a' : '#ff4d4f' }}>
+          {pf.toFixed(2)}
         </span>
       ),
     }
@@ -155,13 +243,57 @@ export default function ReportsPage() {
         </Col>
       </Row>
 
-      <Card title="Daily Reports" loading={loading}>
-        <Table
-          dataSource={reports}
-          columns={columns}
-          rowKey="date"
-          pagination={{ pageSize: 10 }}
-        />
+      <Card title="📊 Daily Reports" loading={loading} extra={
+        <Button onClick={loadReports} loading={loading}>
+          Refresh Reports
+        </Button>
+      }>
+        {reports.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <Text type="secondary">
+              {sessions.length === 0 ? 'No trading sessions found' : 'No daily reports available yet'}
+            </Text>
+          </div>
+        ) : (
+          <Table
+            dataSource={reports}
+            columns={columns}
+            rowKey="date"
+            pagination={{ pageSize: 10 }}
+            expandable={{
+              expandedRowRender: (record) => (
+                <div style={{ margin: 0 }}>
+                  <Text strong>Sessions for {dayjs(record.date).format('MMM DD, YYYY')}:</Text>
+                  <Row gutter={[16, 8]} style={{ marginTop: 8 }}>
+                    {record.sessions?.map((session: any, index: number) => (
+                      <Col xs={24} sm={12} md={8} key={index}>
+                        <Card size="small" style={{ marginBottom: 8 }}>
+                          <Text strong>{session.symbol}</Text>
+                          <br />
+                          <Text type="secondary">Trades: {session.totalTrades}</Text>
+                          <br />
+                          <Text type="secondary">WR: {pct(session.winRate)}</Text>
+                          <br />
+                          <Text type="secondary">PnL: ${session.totalPnl.toFixed(2)}</Text>
+                          {session.llmSummary && (
+                            <>
+                              <br />
+                              <Text type="secondary" style={{ fontSize: '11px' }}>
+                                {session.llmSummary.substring(0, 100)}
+                                {session.llmSummary.length > 100 ? '...' : ''}
+                              </Text>
+                            </>
+                          )}
+                        </Card>
+                      </Col>
+                    ))}
+                  </Row>
+                </div>
+              ),
+              rowExpandable: (record) => record.sessions && record.sessions.length > 0,
+            }}
+          />
+        )}
       </Card>
 
       <Card title="Active Sessions" size="small">
