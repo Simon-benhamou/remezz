@@ -328,8 +328,15 @@ export class ReboundRejectionAgent {
     if (planRiskMinPct != null) planRiskMinPct = Math.min(planRiskMinPct, this.profile.riskPerTradePct);
     if (planRiskMaxPct != null) planRiskMaxPct = Math.max(planRiskMaxPct, this.profile.riskPerTradePct);
     let dynamicRiskPct = this.profile.riskPerTradePct;
-    if (!(dynamicRiskPct > 0) && planRiskRecommendedPct != null) dynamicRiskPct = planRiskRecommendedPct;
-    if (!(dynamicRiskPct > 0)) dynamicRiskPct = this.profile.riskPerTradePct;
+    
+    // Use plan recommended risk if current risk is invalid and plan has recommendation
+    if (!(dynamicRiskPct > 0) && planRiskRecommendedPct != null) {
+      dynamicRiskPct = planRiskRecommendedPct;
+    }
+    // Fallback to profile risk if still invalid
+    if (!(dynamicRiskPct > 0)) {
+      dynamicRiskPct = this.profile.riskPerTradePct;
+    }
     
     // Apply quality-based position sizing
     try {
@@ -2262,7 +2269,7 @@ export class ReboundRejectionAgent {
             if (stats.count >= 8 && (stats.winrate < 30 || stats.avgR < 0)) {
               const original = plan.position.risk_fraction;
               plan.position.risk_fraction = Math.max(0.01, Math.min(0.02, original * 0.7));
-              const note = 'QuickTest indicated weak edge (winrate ' + stats.winrate.toFixed(1) + '%, avgR ' + stats.avgR.toFixed(2) + '). Risk fraction trimmed.';
+              const note = 'QuickTest indicated weak edge (winrate ' + (stats.winrate || 0).toFixed(1) + '%, avgR ' + (stats.avgR || 0).toFixed(2) + '). Risk fraction trimmed.';
               plan.notes = plan.notes ? `${plan.notes}\n${note}` : note;
               syncRiskRange();
             }

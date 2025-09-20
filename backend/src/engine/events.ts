@@ -32,7 +32,7 @@ export function getLastTickAgeSec(sessionId: string): number | null {
 }
 
 function pctDiff(a: number, b: number) {
-  if (!a || !b) return 0;
+  if (!a || !b || b === 0) return 0; // Protection contre division par zéro
   return Math.abs(a - b) / Math.abs(b);
 }
 function near(a:number,b:number,p:number){ return Math.abs(a-b) <= Math.abs(b)*(p/100); }

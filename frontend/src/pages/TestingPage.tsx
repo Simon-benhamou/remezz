@@ -201,7 +201,7 @@ export default function TestingPage() {
       title: 'Avg R',
       dataIndex: 'avgR',
       key: 'avgR',
-      render: (val: number) => val.toFixed(2),
+      render: (val: number) => (val || 0).toFixed(2),
       sorter: (a: any, b: any) => a.avgR - b.avgR,
     },
     {

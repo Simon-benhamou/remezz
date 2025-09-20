@@ -37,6 +37,7 @@ function last<T>(arr: T[]): T {
   return arr[arr.length - 1];
 }
 function pct(a: number, b: number) {
+  if (b === 0) return 0; // Éviter division par zéro
   return (a - b) / b * 100;
 }
 function near(a: number, b: number, pPct: number) {
@@ -54,12 +55,14 @@ function realizedVolatility(logReturns: number[]) {
 
 function hurstExponent(values: number[]) {
   const n = values.length;
-  if (n < 32) return 0.5;
+  if (n < 10) return 0.5; // Réduction du seuil minimal de 32 à 10
+  
   const mean = values.reduce((a, b) => a + b, 0) / n;
   let cumulative = 0;
   let maxAccum = -Infinity;
   let minAccum = Infinity;
   let varianceAccumulator = 0;
+  
   for (let i = 0; i < n; i++) {
     const dev = values[i] - mean;
     cumulative += dev;
@@ -67,12 +70,18 @@ function hurstExponent(values: number[]) {
     if (cumulative < minAccum) minAccum = cumulative;
     varianceAccumulator += dev * dev;
   }
+  
   const range = maxAccum - minAccum;
   const variance = varianceAccumulator / n;
   const std = Math.sqrt(Math.max(variance, 1e-12));
-  if (std === 0 || range === 0) return 0.5;
+  
+  // Si range ou std sont nuls/très petits, retourner 0.5 (marche aléatoire)
+  if (std <= 1e-12 || range <= 1e-12) return 0.5;
+  
   const rs = range / std;
   const hurst = Math.log(rs) / Math.log(n);
+  
+  // Clamp between 0 and 1
   return Math.max(0, Math.min(1, hurst));
 }
 
