@@ -6,6 +6,7 @@ import { useMode } from '../contexts/ModeContext';
 import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import TradingDiagnosticsOverview from '../components/TradingDiagnosticsOverview';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
+import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
 
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
@@ -267,6 +268,9 @@ export default function SessionsPage(){
           }}
           showTitle={false}
         />
+
+        {/* Debug Tool for API Keys */}
+        <ApiKeyDiagnostics />
         
         <Card 
           style={{
