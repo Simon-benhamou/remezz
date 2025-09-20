@@ -1,34 +1,8 @@
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 
-let cached: any = null;
-let marketsLoaded = false;
-
 // User-specific exchange instances for authenticated operations
 const userExchanges: Map<string, any> = new Map();
-
-export async function exchange() {
-  if (cached) return cached;
-  const { EXCHANGE_ID, API_PASSWORD } = getConfig();
-  const Klass: any = (ccxt as any)[EXCHANGE_ID];
-  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
-
-  // Create unauthenticated exchange for public data only
-  cached = new Klass({
-    enableRateLimit: true,
-  });
-
-  // Default market type (spot | swap)
-  const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
-  // @ts-ignore
-  cached.options = cached.options || {};
-  // @ts-ignore
-  cached.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
-
-  await cached.loadMarkets();
-  marketsLoaded = true;
-  return cached;
-}
 
 // New function for user-specific authenticated exchange
 export async function getUserExchange(userId: string, credentials: { apiKey: string; apiSecret: string; passphrase?: string }) {
@@ -86,9 +60,20 @@ export async function validateUserCredentials(credentials: { apiKey: string; api
 }
 
 /** Resolve a requested symbol to a valid ccxt unified market symbol for the configured exchange. */
-export async function resolveSymbol(requested: string): Promise<string> {
-  const ex = await exchange();
-  if (!marketsLoaded) await ex.loadMarkets();
+export async function resolveSymbol(requested: string, userId?: string): Promise<string> {
+  // For symbol resolution, we create a temporary unauthenticated exchange since it's just market data
+  const { EXCHANGE_ID } = getConfig();
+  const Klass: any = (ccxt as any)[EXCHANGE_ID];
+  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
+  
+  const ex = new Klass({ enableRateLimit: true });
+  const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
+  // @ts-ignore
+  ex.options = ex.options || {};
+  // @ts-ignore
+  ex.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
+  
+  await ex.loadMarkets();
 
   const s = requested.toUpperCase();
 

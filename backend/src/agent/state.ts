@@ -33,6 +33,7 @@ export type ActivationProfile = {
   startBalanceUsd?: number;
   budgetFraction?: number; // 0..1 fraction of free balance usable by the agent
   aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+  userId?: string; // User ID for authenticated exchange access
 };
 
 export type ActivePosition = {
@@ -95,7 +96,7 @@ export class ReboundRejectionAgent {
 
     // init broker (paper only for now)
     this.broker = profile.mode === 'live'
-      ? new LiveBroker()
+      ? new LiveBroker(profile.userId || '')
       : new PaperBroker(profile.startBalanceUsd);
     this.state = 'SCAN';
     this.logMovement('Agent activated', `Mode=${profile.mode}, symbol=${profile.symbol}`, {
@@ -138,7 +139,7 @@ export class ReboundRejectionAgent {
     // Live exposure inspection: if in live mode and a position already exists, adopt it and switch to MANAGE
     if (this.profile.mode === 'live' && !this.pos) {
       try {
-        const expo = await inspectExposure(this.profile.symbol);
+        const expo = await inspectExposure(this.profile.symbol, this.profile.userId);
         if (expo && expo.qty > 0) {
           const side = expo.side;
           const entry = expo.entry || (await buildTechSnapshot(this.profile.symbol)).last;

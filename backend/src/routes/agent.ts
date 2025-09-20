@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { startSession, stopSession, activeSession } from '../session/session.js';
-import { exchange } from '../exchange/ccxtClient.js';
+import { getUserExchange } from '../exchange/ccxtClient.js';
+import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
+import { getUserCredentials } from '../services/userCredentials.js';
 import { prisma } from '../db/client.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
 import { broadcast } from '../ws/hub.js';
@@ -17,7 +19,7 @@ export const router = Router();
 
 router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
-router.post('/start', async (req,res)=>{
+router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>{
   try {
     const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
     const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number, aggressiveness?: 'conservative'|'reactive'|'aggressive' };
@@ -34,8 +36,16 @@ router.post('/start', async (req,res)=>{
   
     let startBal = startBalanceUsd;
     if (mode === 'live') {
+      if (!req.user?.id) {
+        return res.status(401).json({ error: 'authentication_required_for_live_trading' });
+      }
+      
       try {
-        const ex = await exchange();
+        const userCredentials = await getUserCredentials(req.user.id);
+        if (!userCredentials) {
+          return res.status(400).json({ error: 'api_keys_required_for_live_trading' });
+        }
+        const ex = await getUserExchange(req.user.id, userCredentials);
         const b = await ex.fetchBalance();
         const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
         const freeUsd = (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
@@ -71,6 +81,7 @@ router.post('/start', async (req,res)=>{
       startBalanceUsd: startBalanceUsd,
       budgetFraction,
       aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'conservative',
+      userId: req.user!.id,
     } as any).catch(()=>{});
 
     // Respond immediately to keep the UI smooth
@@ -250,11 +261,16 @@ router.get('/sessions', async (req,res)=>{
 });
 
 // Aggregated view across active sessions for multi-agent header
-router.get('/overview', async (req,res)=>{
+router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)=>{
   const modeRaw = String(req.query.mode || '').toLowerCase();
   const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
+  
+  // Filter sessions by user if not legacy
   const sessionWhere: any = { stoppedAt: null };
   if (modeFilter) sessionWhere.mode = modeFilter;
+  if (!req.user?.isLegacy && req.user?.id) {
+    sessionWhere.userId = req.user.id;
+  }
   const [actives, totalSessions, recentAlerts] = await Promise.all([
     prisma.agentSession.findMany({ where: sessionWhere, include: { kpi: true, positions: true } }),
     prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
@@ -268,23 +284,32 @@ router.get('/overview', async (req,res)=>{
     actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.roiPct || 0), 0) / actives.length) : 0
   );
   const avgWinRate = actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.winRate || 0), 0) / actives.length) : 0;
-  // Global exchange balance (live account)
+  // Global exchange balance (live account) - use user's API keys
   let exchangeBalance: any = null;
   if (!modeFilter || modeFilter === 'live') {
     try {
-      const ex = await exchange();
-      const b = await ex.fetchBalance();
-      const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
-      const num = (v:any)=>{ const n = Number(v); return Number.isFinite(n) ? n : undefined; };
-      const equityUsd = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value) ?? (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
-      const freeUsd = num(raw?.total_available_balance) ?? (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
-      const committedUsd = num(raw?.total_position_cost) ?? (Number.isFinite(equityUsd) && Number.isFinite(freeUsd) ? Math.max(0, (equityUsd ?? 0) - (freeUsd ?? 0)) : 0);
-      exchangeBalance = {
-        totalUsd: Number.isFinite(equityUsd) ? equityUsd : 0,
-        freeUsd: Number.isFinite(freeUsd) ? freeUsd : 0,
-        usedUsd: Number.isFinite(committedUsd) ? committedUsd : 0,
-      };
-    } catch {}
+      // Try to get user's credentials for live balance
+      if (!req.user?.isLegacy && req.user?.id) {
+        const credentials = await getUserCredentials(req.user.id, 'crypto.com');
+        if (credentials) {
+          const ex = await getUserExchange(req.user.id, credentials);
+          const b = await ex.fetchBalance();
+          const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
+          const num = (v:any)=>{ const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+          const equityUsd = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value) ?? (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
+          const freeUsd = num(raw?.total_available_balance) ?? (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
+          const committedUsd = num(raw?.total_position_cost) ?? (Number.isFinite(equityUsd) && Number.isFinite(freeUsd) ? Math.max(0, (equityUsd ?? 0) - (freeUsd ?? 0)) : 0);
+          exchangeBalance = {
+            totalUsd: Number.isFinite(equityUsd) ? equityUsd : 0,
+            freeUsd: Number.isFinite(freeUsd) ? freeUsd : 0,
+            usedUsd: Number.isFinite(committedUsd) ? committedUsd : 0,
+          };
+        }
+      }
+      // Note: Users without API keys configured will have null exchangeBalance
+    } catch (error) {
+      console.error('Exchange balance fetch error:', error);
+    }
   }
 
   // Aggregate paper balances and per-mode budgets

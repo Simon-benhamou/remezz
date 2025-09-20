@@ -59,16 +59,38 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
       console.error('Balance fetch error:', balanceError);
     }
 
-    // Test 3: Try different API calls
-    let status = null;
-    let statusError = '';
+    // Test 3: Try to get markets info (simplified)
+    let markets: any = null;
+    let marketsError = '';
     try {
-      const exchange = await getUserExchange(req.user!.id, credentials);
-      status = await exchange.fetchStatus();
-      console.log('Exchange status:', status);
+      // Use a temporary exchange for public markets data (doesn't need auth)
+      const { getConfig } = await import('../utils/env.js');
+      const ccxt = await import('ccxt');
+      
+      const { EXCHANGE_ID } = getConfig();
+      const Klass: any = (ccxt as any)[EXCHANGE_ID];
+      if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
+      
+      const ex = new Klass({ enableRateLimit: true });
+      await ex.loadMarkets();
+      
+      const btcMarket = ex.markets['BTC/USDT'] || ex.markets['BTC/USD'] || null;
+      markets = {
+        totalMarkets: Object.keys(ex.markets).length,
+        hasBTCUSDT: !!btcMarket,
+        btcMarketInfo: btcMarket ? {
+          symbol: btcMarket.symbol,
+          type: btcMarket.type,
+          spot: btcMarket.spot,
+          swap: btcMarket.swap,
+          future: btcMarket.future
+        } : null,
+        sampleMarkets: Object.keys(ex.markets).slice(0, 5)
+      };
+      console.log('Markets info:', markets);
     } catch (error: any) {
-      statusError = error.message || String(error);
-      console.error('Status fetch error:', statusError);
+      marketsError = error.message || String(error);
+      console.error('Markets fetch error:', marketsError);
     }
 
     res.json({
@@ -83,10 +105,10 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
           data: balance,
           error: balanceError
         },
-        status: {
-          success: !!status,
-          data: status,
-          error: statusError
+        markets: {
+          success: !!markets,
+          data: markets,
+          error: marketsError
         }
       },
       credentials: {

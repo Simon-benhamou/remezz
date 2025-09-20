@@ -1,5 +1,6 @@
 import { prisma } from "../db/client.js";
-import { exchange } from "../exchange/ccxtClient.js";
+import { getUserExchange } from "../exchange/ccxtClient.js";
+import { getUserCredentials } from '../services/userCredentials.js';
 import { levels } from "../risk/brackets.js";
 export type PlaceArgs = {
   sessionId: string;
@@ -12,9 +13,14 @@ export type PlaceArgs = {
   leverage?: number;
   stop?: { type: "percent" | "price"; value: number };
   target?: { type: "percent" | "price"; value: number };
+  userId: string; // Required for authenticated exchange access
 };
 export async function placeBracketOrder(a: PlaceArgs) {
-  const ex = await exchange();
+  const userCredentials = await getUserCredentials(a.userId);
+  if (!userCredentials) {
+    throw new Error('User API credentials not found');
+  }
+  const ex = await getUserExchange(a.userId, userCredentials);
   const clientOrderId = `${a.sessionId}.${a.symbol}.${Date.now()}`;
   const rec = await prisma.order.create({
     data: {

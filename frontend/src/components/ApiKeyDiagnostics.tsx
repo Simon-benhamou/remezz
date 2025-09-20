@@ -80,6 +80,17 @@ export default function ApiKeyDiagnostics() {
               />
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                {/* Success Summary */}
+                {results.tests?.validation?.success && results.tests?.balance?.success && (
+                  <Alert
+                    message="🎉 API Keys Working Perfectly!"
+                    description="Your Crypto.com API keys are properly configured and can access your account. You can now use live trading features."
+                    type="success"
+                    showIcon
+                    style={{ marginBottom: '16px' }}
+                  />
+                )}
+
                 {/* Credentials Info */}
                 <Card size="small" title="Credentials Info">
                   <Space wrap>
@@ -171,37 +182,46 @@ export default function ApiKeyDiagnostics() {
                   <Panel 
                     header={
                       <Space>
-                        {getStatusIcon(results.tests?.status?.success)}
-                        <Text strong>Exchange Status</Text>
-                        <Tag color={getStatusColor(results.tests?.status?.success)}>
-                          {results.tests?.status?.success ? 'PASS' : 'FAIL'}
+                        {getStatusIcon(results.tests?.markets?.success)}
+                        <Text strong>Markets Access</Text>
+                        <Tag color={getStatusColor(results.tests?.markets?.success)}>
+                          {results.tests?.markets?.success ? 'PASS' : 'FAIL'}
                         </Tag>
                       </Space>
                     }
-                    key="status"
+                    key="markets"
                   >
-                    {results.tests?.status?.success ? (
+                    {results.tests?.markets?.success ? (
                       <div>
                         <Alert
-                          message="Exchange Status Retrieved"
+                          message="Markets Data Retrieved"
+                          description="Your API keys can access market data successfully"
                           type="success"
                           style={{ margin: '8px 0' }}
                         />
-                        {results.tests.status.data && (
-                          <pre style={{ 
-                            background: '#f5f5f5', 
-                            padding: '12px', 
-                            borderRadius: '4px',
-                            fontSize: '12px'
-                          }}>
-                            {JSON.stringify(results.tests.status.data, null, 2)}
-                          </pre>
+                        {results.tests.markets.data && (
+                          <div style={{ marginTop: '16px' }}>
+                            <Space wrap>
+                              <Tag color="blue">
+                                Markets: {results.tests.markets.data.totalMarkets}
+                              </Tag>
+                              <Tag color={results.tests.markets.data.hasBTCUSDT ? 'green' : 'orange'}>
+                                BTC/USDT: {results.tests.markets.data.hasBTCUSDT ? 'Available' : 'Not Found'}
+                              </Tag>
+                            </Space>
+                            <div style={{ marginTop: '8px' }}>
+                              <Text strong>Sample Markets: </Text>
+                              {results.tests.markets.data.sampleMarkets?.map((market: string) => (
+                                <Tag key={market} style={{ margin: '2px' }}>{market}</Tag>
+                              ))}
+                            </div>
+                          </div>
                         )}
                       </div>
                     ) : (
                       <Alert
-                        message="Status Fetch Failed"
-                        description={results.tests?.status?.error || 'Unknown error'}
+                        message="Markets Access Failed"
+                        description={results.tests?.markets?.error || 'Unknown error'}
                         type="error"
                         style={{ margin: '8px 0' }}
                       />

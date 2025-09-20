@@ -1,9 +1,27 @@
-import { exchange, resolveSymbol } from '../exchange/ccxtClient.js';
+import { resolveSymbol } from '../exchange/ccxtClient.js';
 import { ema, rsi, atr } from './indicators.js';
+import ccxt from 'ccxt';
+import { getConfig } from '../utils/env.js';
 
 // Simple cache to reduce API calls
 const tickerCache = new Map<string, { data: any; timestamp: number }>();
 const TICKER_CACHE_TTL = 10000; // 10 seconds cache
+
+// Create a temporary unauthenticated exchange for public market data
+function createPublicExchange() {
+  const { EXCHANGE_ID } = getConfig();
+  const Klass: any = (ccxt as any)[EXCHANGE_ID];
+  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
+  
+  const ex = new Klass({ enableRateLimit: true });
+  const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
+  // @ts-ignore
+  ex.options = ex.options || {};
+  // @ts-ignore
+  ex.options.defaultType = MARKET_TYPE;
+  
+  return ex;
+}
 
 export async function getTicker(symbol: string) {
   const cacheKey = symbol;
@@ -16,7 +34,8 @@ export async function getTicker(symbol: string) {
   }
   
   try {
-    const ex = await exchange();
+    const ex = createPublicExchange();
+    await ex.loadMarkets();
     const s = await resolveSymbol(symbol);
     const ticker = await ex.fetchTicker(s);
     
@@ -44,7 +63,8 @@ export async function getTicker(symbol: string) {
 }
 
 export async function getOHLCV(symbol: string, tf = '1h', limit = 300) {
-  const ex = await exchange();
+  const ex = createPublicExchange();
+  await ex.loadMarkets();
   const s = await resolveSymbol(symbol);
   return ex.fetchOHLCV(s, tf, undefined, limit);
 }

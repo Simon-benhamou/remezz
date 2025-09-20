@@ -1,8 +1,9 @@
 import { Broker, NewOrder, PlacedOrder } from './types.js';
-import { exchange, resolveSymbol } from '../exchange/ccxtClient.js';
+import { getUserExchange, resolveSymbol } from '../exchange/ccxtClient.js';
 import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
 import { logImprovementAuto } from '../monitor/backlog.js';
+import { getUserCredentials } from '../services/userCredentials.js';
 
 const CAPACITY_LOG = new Map<string, number[]>();
 const BREACH_WINDOW_MS = 60 * 60 * 1000;
@@ -27,9 +28,22 @@ export function getCapacityPressure(symbol: string, windowMs = BREACH_WINDOW_MS)
 // Minimal ccxt-backed live broker (spot or swap per env config)
 export class LiveBroker implements Broker {
   mode: 'paper'|'live' = 'live';
+  private userId: string;
+
+  constructor(userId: string) {
+    this.userId = userId;
+  }
+
+  private async getExchange() {
+    const userCredentials = await getUserCredentials(this.userId);
+    if (!userCredentials) {
+      throw new Error('User API credentials not found');
+    }
+    return await getUserExchange(this.userId, userCredentials);
+  }
 
   async balance() {
-    const ex = await exchange();
+    const ex = await this.getExchange();
     const b = await ex.fetchBalance();
     const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
 
@@ -61,7 +75,7 @@ export class LiveBroker implements Broker {
   }
 
   async place(o: NewOrder): Promise<PlacedOrder> {
-    const ex = await exchange();
+    const ex = await this.getExchange();
     const symbol = await resolveSymbol(o.symbol);
     const startTs = Date.now();
 
@@ -202,12 +216,12 @@ export class LiveBroker implements Broker {
   }
 
   async cancel(id: string) {
-    const ex = await exchange();
+    const ex = await this.getExchange();
     try { await ex.cancelOrder(id); } catch {}
   }
 
   async estimateFillableQty(params: { symbol: string; side: 'buy'|'sell'; desiredQty: number; maxImpactPct?: number }) {
-    const ex = await exchange();
+    const ex = await this.getExchange();
     const symbol = await resolveSymbol(params.symbol);
     const maxImpactPct = params.maxImpactPct ?? Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35');
     let market: any;
@@ -245,7 +259,7 @@ export class LiveBroker implements Broker {
   }
 
   async syncProtective(params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number; slOrderId?: string|null; tpOrderId?: string|null }) {
-    const ex = await exchange();
+    const ex = await this.getExchange();
     const symbol = await resolveSymbol(params.symbol);
     const reduceSide = params.side === 'buy' ? 'sell' : 'buy';
     const result: { slOrderId?: string; tpOrderId?: string } = {};
@@ -277,8 +291,17 @@ export class LiveBroker implements Broker {
 
 // Inspect current live exposure for a symbol.
 // Returns null if no position or exchange doesn't support positions for current market type.
-export async function inspectExposure(symbol: string): Promise<{ side: 'buy'|'sell'; qty: number; entry?: number } | null> {
-  const ex = await exchange();
+export async function inspectExposure(symbol: string, userId?: string): Promise<{ side: 'buy'|'sell'; qty: number; entry?: number } | null> {
+  if (!userId) {
+    return null; // No user specified, cannot access authenticated exchange
+  }
+  
+  const userCredentials = await getUserCredentials(userId);
+  if (!userCredentials) {
+    return null;
+  }
+  
+  const ex = await getUserExchange(userId, userCredentials);
   const s = await resolveSymbol(symbol);
   try {
     // Try unified positions API (perps/swaps)

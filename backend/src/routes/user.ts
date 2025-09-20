@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 import { prisma } from '../db/client.js';
 import { encryptApiKey, decryptApiKey } from '../utils/crypto.js';
-import { validateUserCredentials } from '../exchange/ccxtClient.js';
+import { getUserExchange, validateUserCredentials } from '../exchange/ccxtClient.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 
 export const router = Router();
@@ -255,12 +255,17 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Validate credentials by testing API connection
+    // Validate credentials by testing API connection (simple version)
     let isValid = false;
     try {
-      isValid = await validateUserCredentials(credentials);
+      // Simple test: try to get user exchange instance
+      const exchange = await getUserExchange(req.user!.id, credentials);
+      if (exchange) {
+        isValid = true;
+      }
     } catch (error) {
       console.error('API key validation failed:', error);
+      isValid = false;
     }
 
     res.json({
