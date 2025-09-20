@@ -47,31 +47,59 @@ function nearestLevel(price:number, levels:{price:number}[]) {
 }
 
 async function tickOnce(sessionId: string, sym: string){
-  const tech = await buildTechSnapshot(sym);
+  let tech: any = null;
+  let support: any = null;
+  let resistance: any = null;
+  let ns: any = null;
+  let nr: any = null;
+  let piv: any = null;
+  
+  try {
+    // Update timestamp BEFORE processing to avoid stale_data alerts
+    lastTickBySession.set(sessionId, Date.now());
+    
+    // Add timeout to buildTechSnapshot to prevent hanging
+    tech = await Promise.race([
+      buildTechSnapshot(sym),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Tech snapshot timeout')), 30000))
+    ]) as any;
 
-  // Primary support/resistance
-  const support = tech.support;
-  const resistance = tech.resistance;
+    // Primary support/resistance
+    support = tech.support;
+    resistance = tech.resistance;
 
-  // Nearest swing levels (support/resistance)
-  const ns = nearestLevel(tech.last, tech.supports);
-  const nr = nearestLevel(tech.last, tech.resistances);
+    // Nearest swing levels (support/resistance)
+    ns = nearestLevel(tech.last, tech.supports);
+    nr = nearestLevel(tech.last, tech.resistances);
 
-  // Daily pivots
-  const piv = tech.pivots;
+    // Daily pivots
+    piv = tech.pivots;
 
-  // Broadcast a rich tick payload (supports/resistances/pivots)
-  broadcast('tick', {
-    ts: Date.now(),
-    symbol: sym,
-    price: tech.last,
-    support,
-    resistance,
-    supports: tech.supports,
-    resistances: tech.resistances,
-    pivots: tech.pivots
-  }, sym, sessionId);
-  try { lastTickBySession.set(sessionId, Date.now()); } catch {}
+    // Broadcast a rich tick payload (supports/resistances/pivots)
+    broadcast('tick', {
+      ts: Date.now(),
+      symbol: sym,
+      price: tech.last,
+      support,
+      resistance,
+      supports: tech.supports,
+      resistances: tech.resistances,
+      pivots: tech.pivots
+    }, sym, sessionId);
+    
+  } catch (error) {
+    // Even on error, update timestamp to prevent stale_data cascade
+    lastTickBySession.set(sessionId, Date.now());
+    recordOpsEvent({
+      level: 'error',
+      source: 'tickOnce',
+      message: 'Failed to build tech snapshot',
+      sessionId,
+      symbol: sym,
+      details: { error: String((error as any)?.message || error) }
+    });
+    throw error;
+  }
 
   // Broadcast a lightweight overview update for this session (live ROI/PnL)
   try {

@@ -149,7 +149,13 @@ function alignPlanForConsistency(plan: PlanJson): PlanJson {
     clone.zone.type = 'support';
   }
   clone.risk.stop.mult = clamp(clone.risk.stop.mult, 0.4, 3);
-  clone.risk.tp = clone.risk.tp.map(tp => ({ type: 'R', value: clamp(tp.value, 0.5, 5) }));
+  // Clamp TPs for crypto: minimum 1.5R, max 5R
+  clone.risk.tp = clone.risk.tp.map(tp => ({ type: 'R', value: clamp(tp.value, 1.5, 5) }));
+  
+  // Crypto-specific TP optimization: boost TPs if too conservative
+  if (clone.risk.tp.length > 0 && clone.risk.tp[0].value < 2.0) {
+    clone.risk.tp[0].value = Math.max(clone.risk.tp[0].value * 1.5, 2.0);
+  }
   clone.position.risk_fraction = clamp(clone.position.risk_fraction, 0.005, 0.05);
   clone.position.max_leverage = clamp(clone.position.max_leverage, 1, 10);
   if (clone.position.risk_fraction_range) {
@@ -355,7 +361,8 @@ function applyRegimePlaybook(plan: PlanJson, regime: RegimeProfile | undefined, 
     clone.entry_rule.confirm_close = false;
     clone.entry_rule.max_distance_pct = Math.min(0.6, Math.max(0.2, clone.entry_rule.max_distance_pct));
     clone.risk.stop.mult = Math.min(2.2, Math.max(0.6, clone.risk.stop.mult * 0.9));
-    clone.risk.tp = [{ type: 'R', value: 1.5 }, { type: 'R', value: 3 }];
+    // Crypto-optimized defaults: higher TP targets
+    clone.risk.tp = [{ type: 'R', value: 2.0 }, { type: 'R', value: 4.0 }];
     clone.notes = `${clone.notes || ''} Momentum breakout playbook (${regime.trend}).`.trim();
     clone.position.risk_fraction = Math.min(0.025, Math.max(0.008, clone.position.risk_fraction * 1.1));
   } else {
@@ -367,7 +374,7 @@ function applyRegimePlaybook(plan: PlanJson, regime: RegimeProfile | undefined, 
     clone.entry_rule.confirm_close = true;
     clone.entry_rule.max_distance_pct = Math.max(clone.entry_rule.max_distance_pct, 0.4);
     clone.risk.stop.mult = Math.max(clone.risk.stop.mult, 0.9);
-    if (clone.risk.tp.length === 1) clone.risk.tp.push({ type: 'R', value: 2.0 });
+    if (clone.risk.tp.length === 1) clone.risk.tp.push({ type: 'R', value: 3.0 });
     clone.notes = `${clone.notes || ''} Mean reversion playbook.`.trim();
   }
 

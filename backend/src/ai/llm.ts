@@ -153,7 +153,7 @@ async function callGrok(prompt: string): Promise<LLMCallResult> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "grok-3-mini",
+      model: "grok-4-fast-reasoning",
       temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
@@ -175,7 +175,7 @@ async function callGrok(prompt: string): Promise<LLMCallResult> {
     outTok = Number(usage?.completion_tokens || 0);
     const cfg = getConfig();
     cost = (inTok/1000)*cfg.GROK_COST_IN_PER_1K + (outTok/1000)*cfg.GROK_COST_OUT_PER_1K;
-    recordAICall({ model: `grok-3-mini`, inputTokens: inTok, outputTokens: outTok, costUsd: isFinite(cost) ? cost : 0 });
+    recordAICall({ model: `grok-4-fast-reasoning`, inputTokens: inTok, outputTokens: outTok, costUsd: isFinite(cost) ? cost : 0 });
   } catch {}
-  return { text: content, modelUsed: 'grok-3-mini', tokensIn: inTok, tokensOut: outTok, costUsd: cost };
+  return { text: content, modelUsed: 'grok-4-fast-reasoning', tokensIn: inTok, tokensOut: outTok, costUsd: cost };
 }

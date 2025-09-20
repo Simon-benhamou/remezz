@@ -64,6 +64,15 @@ export type Cfg = {
   COOLDOWN_MOMENTUM_THRESHOLD: number;
   ENTRY_MIN_ATR_PCT: number;
   ENTRY_MIN_SLOPE_ABS_PCT: number;
+  // Crypto-specific optimizations
+  MIN_PROFIT_PCT: number;
+  CRYPTO_VOLATILITY_MIN: number;
+  // Crypto Moonshot Strategy
+  CRYPTO_BREAKOUT_THRESHOLD: number;
+  CRYPTO_MOONSHOT_THRESHOLD: number;
+  CRYPTO_BREAKOUT_TRAILING: number;
+  CRYPTO_MOONSHOT_TRAILING: number;
+  CRYPTO_VOLUME_SURGE_MIN: number;
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -116,15 +125,24 @@ export function getConfig(): Cfg {
     USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",
     GROK_ANALYSIS_DAILY_MAX: Number(e.GROK_ANALYSIS_DAILY_MAX || "1"),
     GROK_REVERSAL_PCT_THRESHOLD: Number(e.GROK_REVERSAL_PCT_THRESHOLD || "3.5"),
-    STALE_TICK_SEC: Number(e.STALE_TICK_SEC || "120"),
+    STALE_TICK_SEC: Number(e.STALE_TICK_SEC || "300"),  // 5 min instead of 2 min for crypto
     ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
+    // Crypto-specific optimizations
+    MIN_PROFIT_PCT: Number(e.MIN_PROFIT_PCT || "0.3"),
+    CRYPTO_VOLATILITY_MIN: Number(e.CRYPTO_VOLATILITY_MIN || "0.5"),
+    // Crypto Moonshot Strategy
+    CRYPTO_BREAKOUT_THRESHOLD: Number(e.CRYPTO_BREAKOUT_THRESHOLD || "5.0"),
+    CRYPTO_MOONSHOT_THRESHOLD: Number(e.CRYPTO_MOONSHOT_THRESHOLD || "15.0"),
+    CRYPTO_BREAKOUT_TRAILING: Number(e.CRYPTO_BREAKOUT_TRAILING || "2.0"),
+    CRYPTO_MOONSHOT_TRAILING: Number(e.CRYPTO_MOONSHOT_TRAILING || "3.0"),
+    CRYPTO_VOLUME_SURGE_MIN: Number(e.CRYPTO_VOLUME_SURGE_MIN || "2.0"),
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
     PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "15"),
     PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "3"),
     COOLDOWN_CONFIDENCE_MIN: Number(e.COOLDOWN_CONFIDENCE_MIN || "0.6"),
     COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
-    ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.7"),
-    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.025"),
+    ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "1.0"),  // Revert to higher minimum for crypto
+    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
   };
 }

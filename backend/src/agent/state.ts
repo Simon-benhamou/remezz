@@ -286,6 +286,29 @@ export class ReboundRejectionAgent {
     const stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
     const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
+    
+    // CRYPTO PROFIT FILTER: Minimum profit threshold
+    const cfg = getConfig();
+    const minProfitPct = cfg.MIN_PROFIT_PCT;
+    const firstTpProfitPct = Math.abs((tp[0] - entry) / entry) * 100;
+    
+    if (firstTpProfitPct < minProfitPct) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'profit_filter',
+        message: 'Trade rejected - insufficient profit potential',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { 
+          expectedProfitPct: firstTpProfitPct, 
+          minRequired: minProfitPct,
+          tp1: tp[0],
+          entry
+        },
+      });
+      this.entering = false;
+      return;
+    }
     const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
     const availableMargin = Math.max(0, bal.equityUsd - bal.committedUsd);
     const usableBalance = Math.max(0, Math.min(bal.freeUsd, availableMargin) * budgetFrac);
@@ -530,6 +553,34 @@ export class ReboundRejectionAgent {
     const isNormalMove = unrealizedPct >= 1.5 && unrealizedPct <= 4.0;
     
     let multiplier = playbook === 'momentum_breakout' ? 0.65 : playbook === 'mean_reversion' ? 1.05 : 0.85;
+    
+    // CRYPTO MOONSHOT: Adaptive trailing based on profit level
+    const currentProfitPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
+    const cfg = getConfig();
+    const isBreakoutMode = currentProfitPct >= (cfg.CRYPTO_BREAKOUT_THRESHOLD || 5.0);
+    const isMoonshotMode = currentProfitPct >= (cfg.CRYPTO_MOONSHOT_THRESHOLD || 15.0);
+    
+    if (isMoonshotMode) {
+      multiplier *= (cfg.CRYPTO_MOONSHOT_TRAILING || 3.0);
+      recordOpsEvent({
+        level: 'info',
+        source: 'crypto_moonshot',
+        message: 'MOONSHOT mode - ultra loose trailing',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { currentProfitPct, multiplier, mode: 'moonshot' },
+      });
+    } else if (isBreakoutMode) {
+      multiplier *= (cfg.CRYPTO_BREAKOUT_TRAILING || 2.0);
+      recordOpsEvent({
+        level: 'info',
+        source: 'crypto_breakout',
+        message: 'BREAKOUT mode - loose trailing',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { currentProfitPct, multiplier, mode: 'breakout' },
+      });
+    }
     if (upR > 1.5) multiplier *= 0.85;
     if (upR > 2.5) multiplier *= 0.75;
     
@@ -1483,8 +1534,13 @@ export class ReboundRejectionAgent {
       this.noteTrail(this.pos.stop);
     }
 
-    // Partial: on TP1 if not already taken
-    if (tp1Hit && !this.pos.partialTaken) {
+    // MOONSHOT: Skip TP1 if in breakout mode to let winners run
+    const currentProfitPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
+    const cfg = getConfig();
+    const isBreakoutMode = currentProfitPct >= (cfg.CRYPTO_BREAKOUT_THRESHOLD || 5.0);
+    
+    // Partial: on TP1 if not already taken, UNLESS in breakout mode
+    if (tp1Hit && !this.pos.partialTaken && !isBreakoutMode) {
       try {
         const closeQty = Math.max(0, Math.min(this.pos.qty, Number((this.pos.qty * 0.5).toFixed(8))));
         if (closeQty > 0 && this.broker) {
@@ -1549,6 +1605,37 @@ export class ReboundRejectionAgent {
         }
       } catch {}
       return; // wait next tick after partial
+    } else if (tp1Hit && !this.pos.partialTaken && isBreakoutMode) {
+      // MOONSHOT: Log TP1 skip and move to breakeven
+      recordOpsEvent({
+        level: 'info',
+        source: 'crypto_moonshot',
+        message: 'TP1 SKIPPED - letting moonshot run',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { 
+          currentProfitPct, 
+          tp1: firstTp, 
+          mode: currentProfitPct >= 15 ? 'moonshot' : 'breakout'
+        },
+      });
+      
+      // Mark as partial to avoid re-triggering
+      this.pos.partialTaken = true;
+      this.pos.partialInfo = { ts: Date.now(), price };
+      
+      // Move to breakeven for safety
+      const be = this.pos.entry;
+      if (this.pos.side === 'buy') this.pos.stop = Math.max(this.pos.stop, be);
+      else this.pos.stop = Math.min(this.pos.stop, be);
+      this.pos.breakeven = be;
+      this.noteTrail(this.pos.stop);
+      
+      // Remove TP1 and continue to TP2
+      if (this.pos.tp.length > 1) this.pos.tp = this.pos.tp.slice(1);
+      await this.syncProtectiveOrders('partial');
+      broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
+      return; // wait next tick after TP1 skip
     }
 
     // Breakout invalidation: if price moves beyond the original zone against the position with hysteresis for N ticks
