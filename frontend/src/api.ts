@@ -29,12 +29,17 @@ client.interceptors.request.use((cfg)=>{
     if (cfg.headers) {
       if (cfg.headers instanceof AxiosHeaders) {
         cfg.headers?.set('x-api-key', k);
+        cfg.headers?.set('Authorization', `Bearer ${k}`);
       } else {
         // Fallback for plain object headers
         (cfg.headers as any)['x-api-key'] = k;
+        (cfg.headers as any)['Authorization'] = `Bearer ${k}`;
       }
     } else {
-      cfg.headers = new AxiosHeaders({ 'x-api-key': k });
+      cfg.headers = new AxiosHeaders({ 
+        'x-api-key': k,
+        'Authorization': `Bearer ${k}`
+      });
     }
   }
   return cfg;

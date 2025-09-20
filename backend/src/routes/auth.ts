@@ -3,6 +3,7 @@ import { getConfig } from '../utils/env.js';
 import { prisma } from '../db/client.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 
 export const router = Router();
 
@@ -186,6 +187,95 @@ router.get('/me', async (req, res) => {
     return res.status(401).json({ error: 'invalid_token' });
   } catch (error) {
     console.error('Get user error:', error);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Update user profile
+router.put('/profile', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.status(403).json({ error: 'legacy_users_cannot_update_profile' });
+    }
+
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'email_required' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'invalid_email_format' });
+    }
+
+    // Check if email is already taken by another user
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        email: email.toLowerCase(),
+        id: { not: req.user!.id }
+      }
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'email_already_exists' });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user!.id },
+      data: { email: email.toLowerCase() }
+    });
+
+    res.json({
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        createdAt: updatedUser.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Change password
+router.put('/password', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.status(403).json({ error: 'legacy_users_cannot_change_password' });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'missing_required_fields' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'password_must_be_at_least_6_chars' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id }
+    });
+
+    if (!user || !await bcrypt.compare(currentPassword, user.passwordHash)) {
+      return res.status(400).json({ error: 'current_password_incorrect' });
+    }
+
+    const newPasswordHash = await bcrypt.hash(newPassword, 12);
+
+    await prisma.user.update({
+      where: { id: req.user!.id },
+      data: { passwordHash: newPasswordHash }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Change password error:', error);
     return res.status(500).json({ error: 'server_error' });
   }
 });

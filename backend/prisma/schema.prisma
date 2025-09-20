@@ -19,12 +19,56 @@ model User {
   updatedAt    DateTime @updatedAt
   lastLoginAt  DateTime?
 
+  // API Keys and settings
+  apiKeys      UserApiKey[]
+  settings     UserSetting[]
+
+  // User's trading sessions and activities
+  sessions     AgentSession[]
+  alerts       Alert[]
+  reports      DailyReport[]
+  improvements ImprovementItem[]
+
   @@index([username])
   @@index([email])
 }
 
+// User API Keys for exchanges
+model UserApiKey {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  exchange  String   // 'crypto.com', 'binance', 'coinbase', etc.
+  keyName   String?  // optional alias for the key
+  apiKey    String   // encrypted
+  apiSecret String   // encrypted
+  passphrase String? // encrypted (for some exchanges)
+  testnet   Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, exchange, testnet])
+  @@index([userId])
+}
+
+// User Settings
+model UserSetting {
+  id       String @id @default(cuid())
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId   String
+  key      String
+  value    String
+  category String @default("general") // 'trading', 'ui', 'notifications', etc.
+
+  @@unique([userId, key])
+  @@index([userId, category])
+}
+
 model AgentSession {
   id              String   @id @default(cuid())
+  user            User?    @relation(fields: [userId], references: [id])
+  userId          String?
   symbol          String
   mode            String   // 'paper' | 'live'
   startedAt       DateTime @default(now())
@@ -44,6 +88,7 @@ model AgentSession {
   reports    DailyReport[]         // back-rel from DailyReport.session
   prompts    AiPromptLog[]
 
+  @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
 }
 
@@ -201,6 +246,8 @@ model TriggerLog {
 
 model Alert {
   id        String   @id @default(cuid())
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
   session   AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId String?
   symbol    String?
@@ -209,11 +256,14 @@ model Alert {
   details   Json?
   createdAt DateTime @default(now())
 
+  @@index([userId, createdAt])
   @@index([sessionId, createdAt])
 }
 
 model DailyReport {
   id        String   @id @default(cuid())
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
   session   AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId String?
   day       String   // YYYY-MM-DD
@@ -222,6 +272,7 @@ model DailyReport {
   createdAt DateTime @default(now())
 
   @@unique([sessionId, day])
+  @@index([userId, day])
   @@index([sessionId, day])
 }
 
@@ -247,6 +298,8 @@ model AiPromptLog {
 
 model ImprovementItem {
   id          String   @id @default(cuid())
+  user        User?    @relation(fields: [userId], references: [id])
+  userId      String?
   title       String
   description String
   severity    String   @default("medium")
@@ -257,6 +310,7 @@ model ImprovementItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  @@index([userId, status])
   @@index([status])
   @@index([severity])
 }

@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { getConfig } from "./utils/env.js";
 import { authMiddleware } from "./utils/security.js";
 import { router as authRouter } from "./routes/auth.js";
+import { router as userRouter } from "./routes/user.js";
 import { router as statusRouter } from "./routes/status.js";
 import { router as strategyRouter } from "./routes/strategy.js";
 import { router as agentRouter } from "./routes/agent.js";
@@ -75,6 +76,7 @@ app.get("/api/health", (_req, res) =>
 );
 
 app.use("/api/status", statusRouter);
+app.use("/api/user", userRouter);
 app.use("/api/strategy", strategyRouter);
 app.use("/api/agent", agentRouter);
 app.use("/api/orders", ordersRouter);

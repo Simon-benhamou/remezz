@@ -13,6 +13,7 @@ import TradesJournalPage from './pages/TradesJournalPage';
 import BacklogPage from './pages/BacklogPage';
 import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
 import { useMode } from './contexts/ModeContext';
+import UserDropdown from './components/UserDropdown';
   const { Header, Content, Footer } = Layout;
 
 function AppInner(){
@@ -206,30 +207,7 @@ function AppInner(){
                 <Tag color='purple' style={{ borderRadius: 6, fontSize: 12 }}>Equity ${Number(overview.paperBalance.equityUsd||0).toFixed(2)}</Tag>
               </>
             )}
-            <a 
-              onClick={()=> { clearApiKey(); navigate('/login'); }} 
-              style={{ 
-                color:'#ef4444', 
-                textDecoration:'none',
-                fontWeight: 500,
-                fontSize: 13,
-                padding: '4px 8px',
-                borderRadius: 6,
-                border: '1px solid #fca5a5',
-                background: '#fef2f2',
-                transition: 'all 0.2s ease'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#fee2e2';
-                e.currentTarget.style.borderColor = '#f87171';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#fef2f2';
-                e.currentTarget.style.borderColor = '#fca5a5';
-              }}
-            >
-              Logout
-            </a>
+            <UserDropdown />
           </Space>
         </Header>
         <Content style={{

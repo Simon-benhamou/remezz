@@ -25,7 +25,11 @@ export default function RegisterPage() {
       if (result.data.token) {
         setApiKey(result.data.token);
         message.success(`Welcome to Quantum Trading, ${result.data.user.username}!`);
-        navigate('/dashboard', { replace: true });
+        
+        // Force reload to ensure clean state
+        setTimeout(() => {
+          window.location.href = '/dashboard';
+        }, 500);
       }
     } catch (error: any) {
       const errorMessage = error?.response?.data?.error || 'Registration failed';
@@ -110,7 +114,7 @@ export default function RegisterPage() {
             label="Registration Code"
             rules={[
               { required: true, message: 'Registration code is required!' },
-              { len: 9, message: 'Registration code must be exactly 9 characters' }
+              { len: 8, message: 'Registration code must be exactly 8 characters' }
             ]}
           >
             <Input

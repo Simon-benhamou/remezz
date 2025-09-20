@@ -658,7 +658,7 @@ export default function SessionsPage(){
                   return (
                     <span style={{ 
                       fontWeight: '700', 
-                      fontFamily: 'Monaco, "SF Mono", monospace',
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                       color: rate > 60 ? '#059669' : rate > 40 ? '#0ea5e9' : '#64748b',
                       fontSize: '14px'
                     }}>
