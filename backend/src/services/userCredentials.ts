@@ -24,12 +24,18 @@ export async function getUserCredentials(userId: string, exchange: string = 'cry
       return null;
     }
 
-    return {
-      apiKey: decryptApiKey(apiKey.apiKey),
-      apiSecret: decryptApiKey(apiKey.apiSecret),
-      passphrase: apiKey.passphrase ? decryptApiKey(apiKey.passphrase) : undefined,
-      testnet: apiKey.testnet
-    };
+    try {
+      return {
+        apiKey: decryptApiKey(apiKey.apiKey),
+        apiSecret: decryptApiKey(apiKey.apiSecret),
+        passphrase: apiKey.passphrase ? decryptApiKey(apiKey.passphrase) : undefined,
+        testnet: apiKey.testnet
+      };
+    } catch (decryptError) {
+      console.error('Failed to decrypt API keys for user:', userId, decryptError);
+      // API key exists but cannot be decrypted - probably due to encryption algorithm change
+      return null;
+    }
   } catch (error) {
     console.error('Failed to get user credentials:', error);
     return null;

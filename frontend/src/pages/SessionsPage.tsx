@@ -7,6 +7,7 @@ import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingO
 import TradingDiagnosticsOverview from '../components/TradingDiagnosticsOverview';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
+import ApiKeyMigrationTool from '../components/ApiKeyMigrationTool';
 
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
@@ -271,6 +272,9 @@ export default function SessionsPage(){
 
         {/* Debug Tool for API Keys */}
         <ApiKeyDiagnostics />
+
+        {/* Migration Tool for Broken Keys */}
+        <ApiKeyMigrationTool />
         
         <Card 
           style={{

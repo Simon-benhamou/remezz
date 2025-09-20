@@ -138,3 +138,108 @@ router.get('/exchange-info', async (req: AuthenticatedRequest, res) => {
     });
   }
 });
+
+// Check raw API keys in database
+router.get('/raw-keys', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.json({ hasKeys: false, message: 'Legacy user' });
+    }
+
+    // Query database directly
+    const rawKeys = await prisma.userApiKey.findMany({
+      where: { userId: req.user!.id },
+      select: {
+        id: true,
+        exchange: true,
+        keyName: true,
+        apiKey: true, // This is encrypted
+        apiSecret: true, // This is encrypted
+        testnet: true,
+        isActive: true,
+        createdAt: true
+      }
+    });
+
+    const decryptionResults = [];
+    for (const key of rawKeys) {
+      try {
+        const decryptedKey = decryptApiKey(key.apiKey);
+        const decryptedSecret = decryptApiKey(key.apiSecret);
+        decryptionResults.push({
+          id: key.id,
+          exchange: key.exchange,
+          keyName: key.keyName,
+          keyLength: decryptedKey.length,
+          secretLength: decryptedSecret.length,
+          testnet: key.testnet,
+          isActive: key.isActive,
+          createdAt: key.createdAt,
+          decryptionSuccess: true
+        });
+      } catch (error) {
+        decryptionResults.push({
+          id: key.id,
+          exchange: key.exchange,
+          keyName: key.keyName,
+          testnet: key.testnet,
+          isActive: key.isActive,
+          createdAt: key.createdAt,
+          decryptionSuccess: false,
+          decryptionError: error.message || String(error)
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      totalKeys: rawKeys.length,
+      keys: decryptionResults
+    });
+  } catch (error: any) {
+    console.error('Raw keys check error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
+
+// Migration route to fix encrypted keys
+router.post('/migrate-keys', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.status(403).json({ error: 'legacy_users_no_migration' });
+    }
+
+    const { keyId, newApiKey, newApiSecret } = req.body;
+
+    if (!keyId || !newApiKey || !newApiSecret) {
+      return res.status(400).json({ error: 'missing_fields' });
+    }
+
+    // Update the key with new encryption
+    const updatedKey = await prisma.userApiKey.update({
+      where: {
+        id: keyId,
+        userId: req.user!.id // Ensure user owns the key
+      },
+      data: {
+        apiKey: encryptApiKey(newApiKey),
+        apiSecret: encryptApiKey(newApiSecret)
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'API key updated successfully',
+      keyId: updatedKey.id
+    });
+  } catch (error: any) {
+    console.error('Migration error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
