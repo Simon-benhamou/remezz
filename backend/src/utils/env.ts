@@ -31,6 +31,7 @@ export type Cfg = {
   AUTH_USER: string;        // single user (for demo/testing)
   AUTH_PASS: string;        // password
   ACCESS_CODE?: string;     // optional single access code alternative
+  JWT_SECRET: string;       // JWT secret for user authentication
   // LLM governance
   LLM_DISABLE: boolean;         // disable LLM calls (use heuristic fallbacks)
   LLM_MIN_INTERVAL_MS: number;  // min spacing between LLM calls (global)
@@ -109,6 +110,7 @@ export function getConfig(): Cfg {
     AUTH_USER: e.AUTH_USER || "",
     AUTH_PASS: e.AUTH_PASS || "",
     ACCESS_CODE: e.ACCESS_CODE || "",
+    JWT_SECRET: e.JWT_SECRET || e.APP_API_KEY || "change-me-jwt-secret",
     LLM_DISABLE: (e.LLM_DISABLE || "false") === "true",
     LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "5000"),
     LLM_CACHE_TTL_MIN: Number(e.LLM_CACHE_TTL_MIN || "60"),

@@ -527,7 +527,7 @@ export default function SessionsPage(){
                     fontWeight: '600',
                     fontSize: '14px',
                     color: '#1e293b',
-                    fontFamily: 'Monaco, "SF Mono", monospace'
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                   }}>
                     {symbol}
                   </span>
@@ -617,7 +617,7 @@ export default function SessionsPage(){
                     <span style={{
                       fontSize: '12px',
                       color: '#64748b',
-                      fontFamily: 'Monaco, "SF Mono", monospace'
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                     }}>
                       {r.stoppedAt ? '-' : formatDuration(r.uptime || 0)}
                     </span>
@@ -633,14 +633,14 @@ export default function SessionsPage(){
                         fontSize: '13px', 
                         color: '#1e293b',
                         fontWeight: '600',
-                        fontFamily: 'Monaco, "SF Mono", monospace'
+                        fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
                       }}>
                         Total: {r.totalTrades || 0}
                       </span>
                       <span style={{ 
                         fontSize: '11px', 
                         color: '#64748b',
-                        fontFamily: 'Monaco, "SF Mono", monospace'
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                       }}>
                         Today: {r.todayTrades || 0}
                       </span>
@@ -674,10 +674,10 @@ export default function SessionsPage(){
                 render:(_:any,r:any)=> (
                   <Space direction="vertical" size="small">
                     <span style={{ 
-                      color: (r.pnlUsd || 0) >= 0 ? '#059669' : '#dc2626',
+                      color: (r.pnlUsd || 0) >= 0 ? '#10b981' : '#dc2626',
                       fontWeight: '700',
                       fontSize: '14px',
-                      fontFamily: 'Monaco, "SF Mono", monospace'
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
                     }}>
                       ${(r.pnlUsd || 0).toFixed(2)}
                     </span>
@@ -685,7 +685,7 @@ export default function SessionsPage(){
                       <span style={{ 
                         fontSize: '11px', 
                         color: '#64748b',
-                        fontFamily: 'Monaco, "SF Mono", monospace'
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
                       }}>
                         24h: ${(r.pnl24h || 0).toFixed(2)}
                       </span>
@@ -702,9 +702,9 @@ export default function SessionsPage(){
                   const roi = Number(v||0);
                   return (
                     <span style={{ 
-                      color: roi >= 0 ? '#059669' : '#dc2626',
+                      color: roi >= 0 ? '#10b981' : '#dc2626',
                       fontWeight: '700',
-                      fontFamily: 'Monaco, "SF Mono", monospace',
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                       fontSize: '14px'
                     }}>
                       {roi.toFixed(2)}%
@@ -741,7 +741,7 @@ export default function SessionsPage(){
                           fontSize: '11px',
                           color: (pos.unrealizedPnl || 0) >= 0 ? '#059669' : '#dc2626',
                           fontWeight: '600',
-                          fontFamily: 'Monaco, "SF Mono", monospace'
+                          fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                         }}>
                           ${(pos.unrealizedPnl || 0).toFixed(2)}
                         </span>
@@ -819,7 +819,7 @@ export default function SessionsPage(){
                       color: '#dc2626', 
                       fontSize: '12px',
                       fontWeight: '600',
-                      fontFamily: 'Monaco, "SF Mono", monospace'
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                     }}>
                       {(r.maxDrawdown || 0).toFixed(2)}%
                     </span>
@@ -835,7 +835,7 @@ export default function SessionsPage(){
                   <span style={{
                     fontSize: '12px',
                     color: '#64748b',
-                    fontFamily: 'Monaco, "SF Mono", monospace'
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                   }}>
                     {new Date(v).toLocaleString('en-US', { 
                       month: 'short', 

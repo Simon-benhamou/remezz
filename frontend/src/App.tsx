@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from
 import { api, clearApiKey, getApiKey } from './api';
 import DashboardPage from './pages/DashboardPage';
 import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
 import MonitorPage from './pages/MonitorPage';
 import SessionsPage from './pages/SessionsPage';
 import TestingPage from './pages/TestingPage';
@@ -41,6 +42,7 @@ function AppInner(){
     return (
       <Routes>
         <Route path='/login' element={<LoginPage />} />
+        <Route path='/register' element={<RegisterPage />} />
         <Route path='*' element={<Navigate to='/login' replace />} />
       </Routes>
     );
