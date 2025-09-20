@@ -1,231 +1,199 @@
 import React from 'react';
-import { Card, Table, Button, Space, Tag, Form, Input, Select, message, Modal, Tooltip, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { Card, Space, Typography, Row, Col, Select, Timeline, Tag, message } from 'antd';
+import { InfoCircleOutlined, WarningOutlined, ExclamationCircleOutlined, BugOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import { api } from '../api';
+import { useMode } from '../contexts/ModeContext';
 
-const { TextArea } = Input;
-const { Text } = Typography;
+const { Text, Title } = Typography;
 
-const severityColors: Record<string, string> = {
-  low: 'default',
-  medium: 'blue',
-  high: 'orange',
-  critical: 'red',
+const logColors: Record<string, string> = {
+  info: 'blue',
+  warn: 'orange', 
+  error: 'red',
+  debug: 'purple',
 };
 
-const statusColors: Record<string, string> = {
-  open: 'red',
-  in_progress: 'gold',
-  resolved: 'green',
+const logIcons: Record<string, React.ReactNode> = {
+  info: <InfoCircleOutlined />,
+  warn: <WarningOutlined />,
+  error: <ExclamationCircleOutlined />,
+  debug: <BugOutlined />,
 };
 
-export default function BacklogPage(){
-  const [items, setItems] = React.useState<any[]>([]);
+export default function BacklogPage() {
+  const [logs, setLogs] = React.useState<any[]>([]);
+  const [sessions, setSessions] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(false);
-  const [filterStatus, setFilterStatus] = React.useState<string|undefined>();
-  const [form] = Form.useForm();
+  const [selectedSymbol, setSelectedSymbol] = React.useState<string>('all');
+  const { mode } = useMode();
 
-  const load = React.useCallback(async (status?: string)=>{
+  React.useEffect(() => {
+    const loadSessions = async () => {
+      try {
+        const sessionData = await api.listSessions(mode);
+        setSessions(sessionData);
+      } catch (error) {
+        console.error('Failed to load sessions:', error);
+      }
+    };
+    loadSessions();
+  }, [mode]);
+
+  const loadLogs = React.useCallback(async () => {
+    if (selectedSymbol === 'all') return;
+    
     setLoading(true);
     try {
-      const data = await api.listImprovements(status);
-      setItems(data || []);
-    } catch {
-      message.error('Failed to load backlog');
+      // Mock data
+      const mockLogs = [
+        {
+          id: '1',
+          timestamp: dayjs().subtract(2, 'minute').toISOString(),
+          level: 'info',
+          source: 'crypto_moonshot',
+          message: 'MOONSHOT mode activated - ultra loose trailing',
+          details: { profit: 12.5, mode: 'moonshot' }
+        },
+        {
+          id: '2',
+          timestamp: dayjs().subtract(8, 'minute').toISOString(),
+          level: 'warn',
+          source: 'profit_filter',
+          message: 'Trade rejected - insufficient profit potential',
+          details: { expected: 0.25, required: 0.3 }
+        },
+        {
+          id: '3',
+          timestamp: dayjs().subtract(15, 'minute').toISOString(),
+          level: 'error',
+          source: 'market_data',
+          message: 'Data timeout detected - using fallback',
+          details: { timeout: '30s' }
+        }
+      ];
+      setLogs(mockLogs);
+    } catch (error) {
+      message.error('Failed to load logs');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedSymbol]);
 
-  React.useEffect(()=>{ load(filterStatus); }, [filterStatus, load]);
-
-  const createItem = async () => {
-    try {
-      const values = await form.validateFields();
-      let contextObj: any = undefined;
-      if (values.context) {
-        try {
-          contextObj = JSON.parse(values.context);
-        } catch {
-          message.error('Context must be valid JSON');
-          return;
-        }
-      }
-      const payload: any = {
-        title: values.title,
-        description: values.description,
-        severity: values.severity || 'medium',
-        tags: values.tags || [],
-        reporter: values.reporter,
-      };
-      if (contextObj !== undefined) payload.context = contextObj;
-      await api.createImprovement(payload);
-      message.success('Improvement logged');
-      form.resetFields();
-      await load(filterStatus);
-    } catch (e: any) {
-      if (e?.errorFields) return; // validation handled inline
-      message.error('Unable to save improvement');
+  React.useEffect(() => {
+    if (selectedSymbol !== 'all') {
+      loadLogs();
     }
-  };
+  }, [selectedSymbol, loadLogs]);
 
-  const updateStatus = async (id: string, status: string) => {
-    try {
-      await api.updateImprovement(id, { status });
-      await load(filterStatus);
-    } catch {
-      message.error('Failed to update status');
-    }
-  };
-
-  const deleteItem = (id: string) => {
-    Modal.confirm({
-      title: 'Delete improvement?',
-      content: 'This will remove the entry from the backlog.',
-      okText: 'Delete',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        try {
-          await api.deleteImprovement(id);
-          await load(filterStatus);
-        } catch {
-          message.error('Delete failed');
-        }
-      },
-    });
-  };
-
-  const columns: ColumnsType<any> = [
-    {
-      title: 'Title',
-      dataIndex: 'title',
-      key: 'title',
-      render: (text: string, record: any) => (
-        <Space direction='vertical' size={0}>
-          <Text strong>{text}</Text>
-          <Text type='secondary' style={{ maxWidth: 460 }}>{record.description}</Text>
-          {record.context && (
-            <Tooltip title={JSON.stringify(record.context, null, 2)}>
-              <Tag color='purple'>context</Tag>
-            </Tooltip>
-          )}
-          {(record.tags || []).map((tag: string)=> (<Tag key={tag}>{tag}</Tag>))}
-        </Space>
-      ),
-    },
-    {
-      title: 'Severity',
-      dataIndex: 'severity',
-      key: 'severity',
-      render: (sev: string) => <Tag color={severityColors[sev] || 'default'} style={{ textTransform:'capitalize' }}>{sev}</Tag>,
-      filters: [
-        { text: 'Critical', value: 'critical' },
-        { text: 'High', value: 'high' },
-        { text: 'Medium', value: 'medium' },
-        { text: 'Low', value: 'low' },
-      ],
-      onFilter: (value, record) => record.severity === value,
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (_status: string, record: any) => (
-        <Select
-          size='small'
-          value={record.status}
-          style={{ width: 150 }}
-          onChange={(val)=> updateStatus(record.id, val)}
-          options={[
-            { value: 'open', label: 'Open' },
-            { value: 'in_progress', label: 'In progress' },
-            { value: 'resolved', label: 'Resolved' },
-          ]}
-        />
-      ),
-    },
-    {
-      title: 'Reporter',
-      dataIndex: 'reporter',
-      key: 'reporter',
-      render: (t: string) => t || '—',
-    },
-    {
-      title: 'Created',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-      render: (ts: string) => new Date(ts).toLocaleString(),
-    },
-    {
-      title: '',
-      key: 'actions',
-      render: (_: any, record: any) => (
-        <Button danger size='small' onClick={()=> deleteItem(record.id)}>Delete</Button>
-      ),
-    },
-  ];
+  const sessionOptions = sessions.map((s: any) => ({
+    value: s.symbol,
+    label: s.symbol + (s.stoppedAt ? ' (Stopped)' : ' (Active)'),
+  }));
 
   return (
-    <Space direction='vertical' style={{ width: '100%' }} size='large'>
-      <Card title='Log improvement opportunity'>
-        <Form layout='vertical' form={form} initialValues={{ severity: 'medium', tags: [] }}>
-          <Form.Item label='Title' name='title' rules={[{ required:true, message:'Please add a title' }]}>
-            <Input placeholder='Short summary (e.g. Halt should auto-exit position) '/>
-          </Form.Item>
-          <Form.Item label='Description' name='description' rules={[{ required:true, message:'Describe the behaviour' }]}>
-            <TextArea rows={3} placeholder='What happened, expected behaviour, impact, reproduction steps…' />
-          </Form.Item>
-          <Form.Item label='Severity' name='severity'>
-            <Select
-              options={[
-                { value: 'low', label: 'Low' },
-                { value: 'medium', label: 'Medium' },
-                { value: 'high', label: 'High' },
-                { value: 'critical', label: 'Critical' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label='Tags' name='tags' tooltip='Optional labels to group similar issues'>
-            <Select mode='tags' placeholder='Execution, Risk, UX…' />
-          </Form.Item>
-          <Form.Item label='Reporter' name='reporter'>
-            <Input placeholder='Your name or initials' />
-          </Form.Item>
-          <Form.Item label='Context (JSON)' name='context' tooltip='Optional structured payload (e.g. sessionId, alert, symbols).'>
-            <TextArea rows={2} placeholder='{"sessionId":"...","alert":"capacity_breach"}' />
-          </Form.Item>
-          <Form.Item>
-            <Space>
-              <Button type='primary' onClick={createItem}>Add</Button>
-              <Button onClick={()=> form.resetFields()}>Clear</Button>
-            </Space>
-          </Form.Item>
-        </Form>
+    <Space direction="vertical" style={{ width: '100%' }} size="large">
+      <Card>
+        <Title level={3}>📋 Agent Activity & Decision Logs</Title>
+        <Text type="secondary">
+          Real-time monitoring of agent decision-making and system events
+        </Text>
       </Card>
 
-      <Card title='Improvement backlog'
-        extra={
-          <Select
-            allowClear
-            placeholder='Filter by status'
-            style={{ width: 180 }}
-            value={filterStatus}
-            onChange={(val)=> setFilterStatus((val as string) || undefined)}
-            options={[
-              { value: 'open', label: 'Open' },
-              { value: 'in_progress', label: 'In progress' },
-              { value: 'resolved', label: 'Resolved' },
-            ]}
+      <Card title="Controls">
+        <Row gutter={16}>
+          <Col span={8}>
+            <Text strong>Trading Session</Text>
+            <Select
+              value={selectedSymbol}
+              onChange={setSelectedSymbol}
+              style={{ width: '100%', marginTop: 8 }}
+              placeholder="Select session"
+              options={[
+                { label: 'All Sessions', value: 'all' },
+                ...sessionOptions
+              ]}
+            />
+          </Col>
+        </Row>
+      </Card>
+
+      <Card title="Live Agent Activity" loading={loading}>
+        {selectedSymbol === 'all' ? (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <Text type="secondary">Please select a trading session to view logs</Text>
+          </div>
+        ) : logs.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <Text type="secondary">No logs found</Text>
+          </div>
+        ) : (
+          <Timeline
+            items={logs.map((log) => ({
+              color: logColors[log.level] || 'blue',
+              dot: logIcons[log.level],
+              children: (
+                <div key={log.id}>
+                  <div style={{ marginBottom: '8px' }}>
+                    <Tag color={logColors[log.level]}>
+                      {log.level.toUpperCase()}
+                    </Tag>
+                    <Tag color="purple">{log.source}</Tag>
+                    <Text type="secondary" style={{ fontSize: '12px', marginLeft: 8 }}>
+                      {dayjs(log.timestamp).format('HH:mm:ss')}
+                    </Text>
+                  </div>
+                  <Text strong>{log.message}</Text>
+                  {log.details && (
+                    <div style={{ 
+                      background: '#f5f5f5', 
+                      padding: '8px', 
+                      borderRadius: '4px',
+                      marginTop: '8px',
+                      fontSize: '12px',
+                      fontFamily: 'monospace'
+                    }}>
+                      {JSON.stringify(log.details, null, 2)}
+                    </div>
+                  )}
+                </div>
+              ),
+            }))}
           />
-        }
-      >
-        <Table
-          rowKey='id'
-          columns={columns}
-          dataSource={items}
-          loading={loading}
-          pagination={{ pageSize: 8 }}
-        />
+        )}
+      </Card>
+
+      <Card title="Active Sessions" size="small">
+        <Row gutter={16}>
+          {sessions.filter((s: any) => !s.stoppedAt).map((session: any) => (
+            <Col xs={24} sm={12} md={8} key={session.id}>
+              <Card 
+                size="small" 
+                style={{ 
+                  border: selectedSymbol === session.symbol ? '2px solid #1890ff' : undefined 
+                }}
+              >
+                <div>
+                  <Text strong>{session.symbol}</Text>
+                  <Tag color="green" style={{ marginLeft: 8 }}>ACTIVE</Tag>
+                </div>
+                <Text type="secondary">
+                  Started: {dayjs(session.startedAt).format('MM-DD HH:mm')}
+                </Text>
+                <br />
+                <Text type="secondary">
+                  Mode: {session.mode?.toUpperCase()}
+                </Text>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+        
+        {sessions.filter((s: any) => !s.stoppedAt).length === 0 && (
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <Text type="secondary">No active trading sessions</Text>
+          </div>
+        )}
       </Card>
     </Space>
   );
