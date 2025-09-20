@@ -87,7 +87,7 @@ export default function ApiKeyMigrationTool() {
     {
       title: 'Action',
       key: 'action',
-      render: (_, record: any) => !record.decryptionSuccess ? (
+      render: (_: any, record: any) => !record.decryptionSuccess ? (
         <Button 
           size="small" 
           type="primary"

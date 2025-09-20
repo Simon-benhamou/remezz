@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { getUserExchange, validateUserCredentials } from '../exchange/ccxtClient.js';
+import { prisma } from '../db/client.js';
+import { encryptApiKey, decryptApiKey } from '../utils/crypto.js';
 
 export const router = Router();
 
@@ -161,7 +163,7 @@ router.get('/raw-keys', async (req: AuthenticatedRequest, res) => {
       }
     });
 
-    const decryptionResults = [];
+    const decryptionResults: any[] = [];
     for (const key of rawKeys) {
       try {
         const decryptedKey = decryptApiKey(key.apiKey);
@@ -177,7 +179,7 @@ router.get('/raw-keys', async (req: AuthenticatedRequest, res) => {
           createdAt: key.createdAt,
           decryptionSuccess: true
         });
-      } catch (error) {
+      } catch (error: any) {
         decryptionResults.push({
           id: key.id,
           exchange: key.exchange,
@@ -186,7 +188,7 @@ router.get('/raw-keys', async (req: AuthenticatedRequest, res) => {
           isActive: key.isActive,
           createdAt: key.createdAt,
           decryptionSuccess: false,
-          decryptionError: error.message || String(error)
+          decryptionError: error?.message || String(error)
         });
       }
     }
