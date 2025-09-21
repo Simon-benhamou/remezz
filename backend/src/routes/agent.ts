@@ -101,17 +101,24 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         momentumThreshold: 0.5
       };
       
-      await (prisma.agentSession as any).update({
-        where: { id: s.id },
-        data: {
-          isSmartAgent: true,
-          smartConfig: body.smartConfig || defaultSmartConfig
-        }
-      });
-      
-      // Update the session object we return to frontend
-      (s as any).isSmartAgent = true;
-      (s as any).smartConfig = body.smartConfig || defaultSmartConfig;
+      try {
+        console.log(`🎯 Marking session ${s.id} as Smart Agent...`);
+        await (prisma.agentSession as any).update({
+          where: { id: s.id },
+          data: {
+            isSmartAgent: true,
+            smartConfig: body.smartConfig || defaultSmartConfig
+          }
+        });
+        console.log(`✅ Session ${s.id} marked as Smart Agent successfully`);
+        
+        // Update the session object we return to frontend
+        (s as any).isSmartAgent = true;
+        (s as any).smartConfig = body.smartConfig || defaultSmartConfig;
+      } catch (error) {
+        console.error(`❌ Failed to mark session ${s.id} as Smart Agent:`, error);
+        // Continue anyway, the intelligent agent init will still work
+      }
     }
     await setActiveSession(s.id);
     // Activate the new agent state machine (profile freeze)
