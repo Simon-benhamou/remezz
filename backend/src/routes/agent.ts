@@ -318,6 +318,8 @@ router.get('/sessions', async (req,res)=>{
       winRate,
       pnlUsd,
       roiPct,
+      isSmartAgent: (r as any).isSmartAgent || false, // Include Smart Agent flag
+      smartConfig: (r as any).smartConfig, // Include Smart Config if available
     };
   });
   res.json(out);

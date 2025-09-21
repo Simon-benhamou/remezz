@@ -241,6 +241,132 @@ router.post('/test-credentials', async (req, res) => {
   }
 });
 
+// Debug ATR thresholds for a specific symbol (public endpoint for debugging)
+router.get('/atr-thresholds/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { ReboundRejectionAgent } = await import('../agent/state.js');
+    const { getConfig } = await import('../utils/env.js');
+    
+    const config = getConfig();
+    const baseThreshold = config.ENTRY_MIN_ATR_PCT || 1.0;
+    
+    // Create a temporary agent instance to test thresholds
+    const agent = new ReboundRejectionAgent();
+    
+    // Test different aggressiveness levels
+    const results = {
+      symbol,
+      baseThreshold,
+      adaptiveThresholds: {
+        conservative: agent.testAdaptiveATRThreshold(symbol, baseThreshold),
+        moderate: agent.testAdaptiveATRThreshold(symbol, baseThreshold * 0.75),
+        aggressive: agent.testAdaptiveATRThreshold(symbol, baseThreshold * 0.5)
+      },
+      cryptoClassification: symbol.split('/')[0]?.toUpperCase(),
+      cacheStats: ReboundRejectionAgent.getATRCacheStats()
+    };
+    
+    res.json({
+      success: true,
+      results,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
+
+// Test dynamic entry zone calculation (public endpoint for debugging)
+router.get('/test-dynamic-zone/:symbol/:price/:bias', async (req, res) => {
+  try {
+    const { symbol, price, bias } = req.params;
+    const currentPrice = parseFloat(price);
+    
+    if (isNaN(currentPrice) || currentPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid price parameter'
+      });
+    }
+    
+    if (!['long', 'short', 'none'].includes(bias)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid bias parameter (must be long, short, or none)'
+      });
+    }
+    
+    // Create a mock technical snapshot for testing
+    const mockSnap = {
+      last: currentPrice,
+      atrPct: 2.5, // Mock ATR
+      supports: [
+        { price: currentPrice * 0.95, strength: 3 },
+        { price: currentPrice * 0.90, strength: 2 }
+      ],
+      resistances: [
+        { price: currentPrice * 1.05, strength: 3 },
+        { price: currentPrice * 1.10, strength: 2 }
+      ],
+      ema20: currentPrice * 0.98,
+      ema50: currentPrice * 0.96
+    };
+    
+    const { ReboundRejectionAgent } = await import('../agent/state.js');
+    const agent = new ReboundRejectionAgent();
+    
+    // Test the dynamic zone calculation
+    const dynamicZone = await agent.testCalculateDynamicEntryZone(mockSnap as any, currentPrice, bias as any);
+    
+    // Calculate original static zone for comparison (5% range)
+    const staticRange = currentPrice * 0.025;
+    const staticZone = {
+      from: currentPrice - staticRange,
+      to: currentPrice + staticRange,
+      mid: currentPrice
+    };
+    
+    const results = {
+      symbol,
+      currentPrice,
+      bias,
+      zones: {
+        static: staticZone,
+        dynamic: dynamicZone
+      },
+      analysis: {
+        dynamicRange: Math.abs(dynamicZone.to - dynamicZone.from),
+        staticRange: Math.abs(staticZone.to - staticZone.from),
+        dynamicTarget: dynamicZone.mid,
+        distanceToTarget: Math.abs(currentPrice - dynamicZone.mid) / currentPrice * 100,
+        zoneWidth: Math.abs(dynamicZone.to - dynamicZone.from) / dynamicZone.mid * 100
+      },
+      mockData: {
+        atrPct: mockSnap.atrPct,
+        nearestSupport: mockSnap.supports[0]?.price,
+        nearestResistance: mockSnap.resistances[0]?.price,
+        ema20: mockSnap.ema20,
+        ema50: mockSnap.ema50
+      }
+    };
+    
+    res.json({
+      success: true,
+      results,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
+
 // Apply authentication middleware to protected routes
 router.use(authenticateUser);
 

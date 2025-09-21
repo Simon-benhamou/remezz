@@ -777,6 +777,116 @@ export class ReboundRejectionAgent {
   }
 
   /**
+   * Calculate dynamic entry zone based on current market conditions and bias
+   */
+  private async calculateDynamicEntryZone(snap: TechnicalSnapshot, currentPrice: number, bias: 'long' | 'short' | 'none'): Promise<{ from: number; to: number; mid: number }> {
+    if (bias === 'none') {
+      // No bias, create a small zone around current price
+      const range = currentPrice * 0.005; // 0.5% range
+      return {
+        from: currentPrice - range,
+        to: currentPrice + range,
+        mid: currentPrice
+      };
+    }
+    
+    // Get current support and resistance levels
+    const supports = snap.supports || [];
+    const resistances = snap.resistances || [];
+    const atrPct = Number((snap as any)?.atrPct ?? 1.0);
+    
+    // Calculate dynamic zone based on bias and proximity to key levels
+    if (bias === 'long') {
+      // For long positions, look for pullbacks to support or recent swing lows
+      const nearestSupport = supports
+        .filter(s => s.price < currentPrice)
+        .sort((a, b) => Math.abs(currentPrice - b.price) - Math.abs(currentPrice - a.price))[0];
+      
+      let targetLevel = nearestSupport?.price;
+      
+      // If no nearby support or too far, use technical levels
+      if (!targetLevel || Math.abs(currentPrice - targetLevel) / currentPrice > 0.10) {
+        // Use EMA levels or recent swing areas
+        const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
+        const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
+        
+        // If price above EMA20, use EMA20 as support
+        if (currentPrice > ema20 && ema20 > 0) {
+          targetLevel = ema20;
+        } else if (currentPrice > ema50 && ema50 > 0) {
+          targetLevel = ema50;
+        } else {
+          // Use 2-3% pullback from current price
+          targetLevel = currentPrice * 0.97;
+        }
+      }
+      
+      // Create zone around target level with ATR-based width
+      const zoneWidth = Math.max(targetLevel * 0.008, targetLevel * (atrPct / 100) * 0.5); // 0.8% or half ATR
+      return {
+        from: targetLevel - zoneWidth,
+        to: targetLevel + zoneWidth,
+        mid: targetLevel
+      };
+      
+    } else if (bias === 'short') {
+      // For short positions, look for bounces to resistance or recent swing highs
+      const nearestResistance = resistances
+        .filter(r => r.price > currentPrice)
+        .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price))[0];
+      
+      let targetLevel = nearestResistance?.price;
+      
+      // If no nearby resistance or too far, use technical levels
+      if (!targetLevel || Math.abs(currentPrice - targetLevel) / currentPrice > 0.10) {
+        // Use EMA levels or recent swing areas
+        const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
+        const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
+        
+        // If price below EMA20, use EMA20 as resistance
+        if (currentPrice < ema20 && ema20 > 0) {
+          targetLevel = ema20;
+        } else if (currentPrice < ema50 && ema50 > 0) {
+          targetLevel = ema50;
+        } else {
+          // Use 2-3% bounce from current price
+          targetLevel = currentPrice * 1.03;
+        }
+      }
+      
+      // Create zone around target level with ATR-based width
+      const zoneWidth = Math.max(targetLevel * 0.008, targetLevel * (atrPct / 100) * 0.5); // 0.8% or half ATR
+      return {
+        from: targetLevel - zoneWidth,
+        to: targetLevel + zoneWidth,
+        mid: targetLevel
+      };
+    }
+    
+    // Fallback: small zone around current price
+    const range = currentPrice * 0.01; // 1% range
+    return {
+      from: currentPrice - range,
+      to: currentPrice + range,
+      mid: currentPrice
+    };
+  }
+
+  /**
+   * Public method to test ATR thresholds for debugging
+   */
+  public testAdaptiveATRThreshold(symbol: string, baseThreshold: number): number {
+    return this.getAdaptiveATRThresholdSync(symbol, baseThreshold);
+  }
+
+  /**
+   * Public method to test dynamic entry zone calculation for debugging
+   */
+  public async testCalculateDynamicEntryZone(snap: TechnicalSnapshot, currentPrice: number, bias: 'long' | 'short' | 'none'): Promise<{ from: number; to: number; mid: number }> {
+    return this.calculateDynamicEntryZone(snap, currentPrice, bias);
+  }
+
+  /**
    * Synchronous version that uses cached values (for momentum gates and quality filters)
    */
   private getAdaptiveATRThresholdSync(symbol: string, baseThreshold: number): number {
@@ -2743,37 +2853,60 @@ export class ReboundRejectionAgent {
       reason: `${this.consecutiveStops}/${limits.maxConsecutiveStops} consecutive stops`
     };
 
-    // Entry zone check with detailed info
+    // Entry zone check with intelligent dynamic recalculation
     const entryZone = this.plan.zone;
     let inZone = false;
     let zoneDetails = '';
+    let dynamicZone = entryZone;
+    
     if (entryZone && typeof entryZone.from === 'number' && typeof entryZone.to === 'number') {
-      const zoneMin = Math.min(entryZone.from, entryZone.to);
-      const zoneMax = Math.max(entryZone.from, entryZone.to);
+      const originalZoneMin = Math.min(entryZone.from, entryZone.to);
+      const originalZoneMax = Math.max(entryZone.from, entryZone.to);
+      
+      // Check if current price is too far from original zone (>15% deviation)
+      const distanceToZone = price < originalZoneMin ? 
+        ((originalZoneMin - price) / price * 100) :
+        price > originalZoneMax ? ((price - originalZoneMax) / price * 100) : 0;
+      
+      const needsDynamicRecalc = distanceToZone > 15;
+      
+      if (needsDynamicRecalc) {
+        // Recalculate zone dynamically based on current market conditions
+        dynamicZone = await this.calculateDynamicEntryZone(snap, price, this.plan.bias);
+        console.log(`🎯 Dynamic zone recalculation: Original [${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}] → Dynamic [${dynamicZone.from.toFixed(4)}, ${dynamicZone.to.toFixed(4)}] (price: ${price.toFixed(4)})`);
+      }
+      
+      const zoneMin = Math.min(dynamicZone.from, dynamicZone.to);
+      const zoneMax = Math.max(dynamicZone.from, dynamicZone.to);
       inZone = price >= zoneMin && price <= zoneMax;
       
       if (inZone) {
-        zoneDetails = `Price ${price.toFixed(4)} in zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}]`;
+        zoneDetails = `Price ${price.toFixed(4)} in ${needsDynamicRecalc ? 'dynamic' : 'original'} zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}]`;
       } else {
-        const distanceToZone = price < zoneMin ? 
+        const distanceDesc = price < zoneMin ? 
           ((zoneMin - price) / price * 100).toFixed(3) + '% below' :
           ((price - zoneMax) / price * 100).toFixed(3) + '% above';
-        zoneDetails = `Price ${price.toFixed(4)} outside zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}] (${distanceToZone})`;
+        zoneDetails = `Price ${price.toFixed(4)} outside ${needsDynamicRecalc ? 'dynamic' : 'original'} zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}] (${distanceDesc})`;
+        
+        if (needsDynamicRecalc) {
+          zoneDetails += ` - Zone auto-updated from original [${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}]`;
+        }
       }
     } else {
       zoneDetails = 'No entry zone defined';
     }
     
-    checks.inEntryZone = {
-      status: inZone ? 'PASS' : 'FAIL',
-      reason: zoneDetails,
-      details: {
-        currentPrice: price,
-        zoneFrom: entryZone?.from,
-        zoneTo: entryZone?.to,
-        inZone
-      }
-    };
+      checks.inEntryZone = {
+        status: inZone ? 'PASS' : 'FAIL',
+        reason: zoneDetails,
+        details: {
+          currentPrice: price,
+          zoneFrom: dynamicZone?.from,
+          zoneTo: dynamicZone?.to,
+          inZone,
+          isDynamic: dynamicZone !== entryZone
+        }
+      };
 
     // Momentum gates
     checks.momentumGates = {
