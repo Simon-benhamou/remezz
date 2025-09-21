@@ -1,21 +1,58 @@
 import { Router } from 'express';
 import { startSession, stopSession, activeSession } from '../session/session.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
-import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
+import { authenticateU// Smart Agent status
+router.get('/sessions/:id/smart-status', async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const status = await getIntelligentAgentStatus(sessionId);
+    
+    if (!status) {
+      return res.json({ isSmartAgent: false });
+    }
+    
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting smart agent status:', error);
+    res.status(500).json({ error: 'Failed to get smart agent status' });
+  }
+});
+
+// Get all intelligent opportunities
+router.get('/intelligent-opportunities', async (req, res) => {
+  try {
+    console.log('🧠 API: Fetching intelligent opportunities...');
+    const opportunities = await getAllIntelligentOpportunities();
+    
+    res.json({
+      success: true,
+      count: opportunities.length,
+      data: opportunities,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Error fetching intelligent opportunities:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch intelligent opportunities',
+      data: []
+    });
+  }
+});edRequest } from '../middleware/auth.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { prisma } from '../db/client.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
-import { initializeSmartAgent } from '../services/smartAgent.js';
+import { initializeIntelligentSmartAgent, getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgentV2.js';
+import { initializeIntelligentAgent } from '../services/intelligentAgent.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
-// import { Agent } from '../agent/state.js';
 import { AgentHub } from '../agent/hub.js';
 import { PlanZ } from '../agent/planSchema.js';
 import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
-import { getSmartAgentStatus } from '../services/smartAgent.js';
 
 export const router = Router();
 
@@ -126,17 +163,13 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       try {
         // Initialize Smart Agent if enabled
         if (body.isSmartAgent && body.smartConfig) {
-          console.log(`🤖 Initializing Smart Agent for session ${s.id}`);
-          const bestSymbol = await initializeSmartAgent(s.id, body.smartConfig);
-          if (bestSymbol) {
-            // Update the agent hub with the new symbol
-            const a = AgentHub.get(s.id);
-            if (a) {
-              (a as any).profile.symbol = bestSymbol;
-              console.log(`✅ Smart Agent ${s.id} switched to ${bestSymbol}`);
-            }
+          console.log(`� Initializing Intelligent Smart Agent for session ${s.id}`);
+          const success = await initializeIntelligentSmartAgent(parseInt(s.id));
+          if (success) {
+            console.log(`✅ Intelligent Smart Agent ${s.id} initialized successfully`);
+            // The intelligent agent handles symbol selection internally
           } else {
-            console.warn(`⚠️ Smart Agent ${s.id} initialization failed, using default symbol`);
+            console.warn(`⚠️ Intelligent Smart Agent ${s.id} initialization failed`);
           }
         }
 
@@ -206,7 +239,7 @@ router.get('/ai-calls', async (req,res)=>{
 router.get('/sessions/:id/smart-status', async (req, res) => {
   try {
     const sessionId = req.params.id;
-    const status = await getSmartAgentStatus(sessionId);
+    const status = await getIntelligentAgentStatus(sessionId);
     
     if (!status) {
       return res.json({ isSmartAgent: false });

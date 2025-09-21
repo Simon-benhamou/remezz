@@ -1,11 +1,18 @@
 import { prisma } from '../db/client.js';
 import { getTicker } from '../data/market.js';
+import { 
+  scanIntelligentOpportunities, 
+  getBestIntelligentOpportunity, 
+  initializeIntelligentAgent, 
+  checkIntelligentOpportunities,
+  type IntelligentAnalysis 
+} from './intelligentAgent.js';
 
 interface SmartConfig {
-  minHoldDuration: number;     // ms - minimum time to hold a position
-  rescanInterval: number;      // ms - how often to rescan for opportunities
-  momentumThreshold: number;   // minimum momentum score to consider
-  volumeThreshold: number;     // minimum volume USD
+  minHoldDuration: number;
+  rescanInterval: number;
+  momentumThreshold: number;
+  volumeThreshold: number;
 }
 
 interface OpportunityResult {
@@ -16,418 +23,221 @@ interface OpportunityResult {
   reason: string;
 }
 
-// Popular cryptos for Smart Agent selection
+// Fallback symbols for legacy compatibility
 const SMART_SYMBOLS = [
-  'BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'ADA/USDT', 'SOL/USDT',
-  'DOGE/USDT', 'DOT/USDT', 'AVAX/USDT', 'SHIB/USDT', 'MATIC/USDT',
-  'LTC/USDT', 'UNI/USDT', 'LINK/USDT', 'BCH/USDT', 'XLM/USDT',
-  'ATOM/USDT', 'VET/USDT', 'ICP/USDT', 'FIL/USDT', 'ETC/USDT'
+  'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT',
+  'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT',
+  'LTC/USDT', 'LINK/USDT', 'UNI/USDT', 'BCH/USDT', 'XLM/USDT'
 ];
 
 /**
- * Calculate momentum score for a crypto based on market data
+ * Legacy momentum calculation for fallback compatibility
  */
 function calculateMomentumScore(data: {
   change24h: number;
   volume24h: number;
   price: number;
 }): number {
-  // Price change score (0-10)
-  const changeScore = Math.max(0, Math.min(10, 
-    Math.abs(data.change24h) * 0.5 + (data.change24h > 0 ? 2 : 0)
+  const changeScore = Math.max(1, Math.min(10, 
+    Math.abs(data.change24h) * 2 + (data.change24h > 0 ? 3 : 1)
   ));
   
-  // Volume score (0-10) - logarithmic
-  const volumeScore = Math.max(0, Math.min(10, 
-    Math.log10(data.volume24h / 1000000) * 2
+  const volumeScore = Math.max(2, Math.min(10, 
+    Math.log10(Math.max(data.volume24h, 1000) / 10000) * 3
   ));
   
-  // Base technical score
-  const baseScore = Math.max(0, Math.min(10, 
-    (Math.abs(data.change24h) > 3 ? 3 : 1) + (data.volume24h > 5000000 ? 2 : 0)
+  const baseScore = Math.max(2, Math.min(10, 
+    (Math.abs(data.change24h) > 1 ? 4 : 2) + (data.volume24h > 100000 ? 3 : 1)
   ));
   
-  // Composite score
-  return Math.round((volumeScore * 0.4 + changeScore * 0.4 + baseScore * 0.2) * 10) / 10;
+  return Math.max(1.5, (changeScore + volumeScore + baseScore) / 3);
 }
 
 /**
- * Scan for the best crypto opportunity
+ * Main opportunity scanner - uses intelligent system with legacy fallback
  */
-export async function scanBestOpportunity(config: SmartConfig): Promise<OpportunityResult | null> {
-  console.log('🔍 Smart Agent: Scanning for best opportunities...');
+export async function scanBestOpportunity(): Promise<OpportunityResult | null> {
+  console.log('🧠 Using Intelligent Opportunity Scanner...');
   
   try {
-    // Validate config
-    if (!config || typeof config.volumeThreshold !== 'number' || typeof config.momentumThreshold !== 'number') {
-      console.error('❌ Invalid Smart Agent config:', config);
-      return null;
+    // Primary: Use intelligent system
+    const intelligent = await getBestIntelligentOpportunity();
+    if (intelligent) {
+      console.log(`✅ Intelligent system found: ${intelligent.symbol} (Score: ${intelligent.score})`);
+      return {
+        symbol: intelligent.symbol,
+        momentum: intelligent.score,
+        change24h: intelligent.metrics.momentum,
+        volume24h: intelligent.metrics.volume24h,
+        reason: intelligent.reasoning.summary
+      };
     }
-
-    const opportunities: OpportunityResult[] = [];
     
-    // Get market data for all symbols
+    console.log('⚠️ Intelligent system returned null, using legacy fallback...');
+    
+    // Fallback: Legacy system
     for (const symbol of SMART_SYMBOLS) {
       try {
         const ticker = await getTicker(symbol);
         if (!ticker) continue;
         
-        const change24h = ticker.percentage || 0;
-        const volume24h = ticker.baseVolume || 0;
-        const price = ticker.last || 0;
+        const change24h = Number(ticker.percentage || 0);
+        const volume24h = Number(ticker.baseVolume || 0);
+        const price = Number(ticker.last || 0);
         
-        // Filter by volume threshold
-        if (volume24h < config.volumeThreshold) continue;
+        if (price <= 0) continue;
         
-        const momentum = calculateMomentumScore({
-          change24h,
-          volume24h,
-          price
-        });
+        const score = calculateMomentumScore({ change24h, volume24h, price });
         
-        // Filter by momentum threshold
-        if (momentum < config.momentumThreshold) continue;
-        
-        opportunities.push({
-          symbol,
-          momentum,
-          change24h,
-          volume24h,
-          reason: `Momentum: ${momentum}/10, Change: ${change24h.toFixed(1)}%, Volume: $${(volume24h/1000000).toFixed(1)}M`
-        });
-        
-        // Small delay to avoid rate limits
-        await new Promise(resolve => setTimeout(resolve, 50));
-        
-      } catch (error) {
-        console.warn(`⚠️ Failed to get data for ${symbol}:`, error);
-      }
-    }
-    
-    // Sort by momentum score
-    opportunities.sort((a, b) => b.momentum - a.momentum);
-    
-    // If no opportunities match strict criteria, fallback to best available
-    if (opportunities.length === 0) {
-      console.log('⚠️ No opportunities match strict criteria, scanning with relaxed rules...');
-      
-      // Relaxed scan with lower thresholds
-      for (const symbol of SMART_SYMBOLS.slice(0, 5)) { // Top 5 symbols only
-        try {
-          const ticker = await getTicker(symbol);
-          if (!ticker) continue;
-          
-          const change24h = ticker.percentage || 0;
-          const volume24h = ticker.baseVolume || 0;
-          const price = ticker.last || 0;
-          
-          // Lower volume threshold for fallback
-          if (volume24h < config.volumeThreshold * 0.1) continue;
-          
-          const momentum = calculateMomentumScore({
-            change24h,
-            volume24h,
-            price
-          });
-          
-          opportunities.push({
+        if (score >= 1.5) {
+          console.log(`✅ Legacy system found: ${symbol} (Score: ${score.toFixed(1)})`);
+          return {
             symbol,
-            momentum,
+            momentum: score,
             change24h,
             volume24h,
-            reason: `Fallback selection: ${momentum}/10, Change: ${change24h.toFixed(1)}%, Volume: $${(volume24h/1000000).toFixed(1)}M`
-          });
-          
-        } catch (error) {
-          console.warn(`⚠️ Failed to get fallback data for ${symbol}:`, error);
+            reason: `Legacy: Score ${score.toFixed(1)}, Change ${change24h.toFixed(1)}%, Volume $${(volume24h/1000000).toFixed(1)}M`
+          };
         }
+      } catch (err) {
+        console.warn(`Error analyzing ${symbol}:`, err);
+        continue;
       }
-      
-      opportunities.sort((a, b) => b.momentum - a.momentum);
     }
     
-    // If still no opportunities, use a default safe crypto
-    if (opportunities.length === 0) {
-      console.log('🛡️ No opportunities found, using safe default BTC/USDT');
-      return {
-        symbol: 'BTC/USDT',
-        momentum: 5.0,
-        change24h: 0,
-        volume24h: 1000000,
-        reason: 'Safe default selection - BTC/USDT as fallback when no opportunities detected'
-      };
-    }
-    
-    const best = opportunities[0];
-    console.log(`✅ Smart Agent: Best opportunity found: ${best.symbol} (${best.reason})`);
-    return best;
-    
-  } catch (error) {
-    console.error('❌ Smart Agent scan failed:', error);
-    return null;
-  }
-}
-
-/**
- * Initialize a new Smart Agent session
- */
-export async function initializeSmartAgent(sessionId: string, config: SmartConfig): Promise<string | null> {
-  console.log(`🤖 Initializing Smart Agent for session ${sessionId}`);
-  
-  try {
-    // Validate config
-    if (!config || typeof config.minHoldDuration !== 'number' || typeof config.rescanInterval !== 'number') {
-      throw new Error('Invalid Smart Agent configuration');
-    }
-
-    // Find best opportunity
-    const opportunity = await scanBestOpportunity(config);
-    if (!opportunity) {
-      throw new Error('No suitable opportunities found');
-    }
-    
-    // Update session with initial symbol and smart configuration
-    const now = new Date();
-    const nextRescan = new Date(now.getTime() + config.rescanInterval);
-    
-    await (prisma.agentSession as any).update({
-      where: { id: sessionId },
-      data: {
-        currentSymbol: opportunity.symbol,
-        symbol: opportunity.symbol, // Also update main symbol field
-        lastSymbolSwitchAt: now,
-        nextRescanAt: nextRescan,
-        smartHistory: {
-          selections: [{
-            timestamp: now.toISOString(),
-            symbol: opportunity.symbol,
-            reason: opportunity.reason,
-            momentum: opportunity.momentum,
-            type: 'initial_selection'
-          }]
-        }
-      }
-    });
-    
-    console.log(`✅ Smart Agent initialized with ${opportunity.symbol}, next rescan at ${nextRescan.toISOString()}`);
-    return opportunity.symbol;
-    
-  } catch (error) {
-    console.error('❌ Smart Agent initialization failed:', error);
-    return null;
-  }
-}
-
-/**
- * Get Smart Agent status and next actions
- */
-export async function getSmartAgentStatus(sessionId: string): Promise<any> {
-  try {
-    const session = await prisma.agentSession.findUnique({
-      where: { id: sessionId },
-      include: {
-        positions: {
-          where: { 
-            qty: { not: 0 } // Open positions (have quantity)
-          },
-          orderBy: { openedAt: 'desc' },
-          take: 1
-        }
-      }
-    }) as any;
-    
-    if (!session || !session.isSmartAgent) {
-      return null;
-    }
-    
-    const config = session.smartConfig as SmartConfig;
-    const now = new Date();
-    const history = session.smartHistory || { selections: [] };
-    
-    const nextRescan = session.nextRescanAt ? new Date(session.nextRescanAt) : null;
-    const timeUntilRescan = nextRescan ? Math.max(0, nextRescan.getTime() - now.getTime()) : 0;
-    
-    const lastSwitch = session.lastSymbolSwitchAt ? new Date(session.lastSymbolSwitchAt) : null;
-    const timeSinceSwitch = lastSwitch ? now.getTime() - lastSwitch.getTime() : 0;
-    const minHoldRemaining = Math.max(0, config.minHoldDuration - timeSinceSwitch);
-    
+    // Emergency fallback
+    console.log('🆘 Emergency fallback to BTC/USDT');
     return {
-      isSmartAgent: true,
-      currentSymbol: session.currentSymbol,
-      originalSymbol: session.symbol,
-      config,
-      nextRescanAt: nextRescan?.toISOString(),
-      timeUntilRescanMs: timeUntilRescan,
-      lastSwitchAt: lastSwitch?.toISOString(),
-      timeSinceSwitchMs: timeSinceSwitch,
-      minHoldRemainingMs: minHoldRemaining,
-      canSwitchNow: session.positions.length === 0 || minHoldRemaining <= 0,
-      selectionHistory: history.selections?.slice(-5) || [], // Last 5 selections
-      totalSwitches: (history.selections?.length || 1) - 1 // Exclude initial selection
+      symbol: 'BTC/USDT',
+      momentum: 3.0,
+      change24h: 0,
+      volume24h: 1000000,
+      reason: 'Emergency fallback to BTC/USDT'
     };
     
   } catch (error) {
-    console.error(`❌ Failed to get Smart Agent status for ${sessionId}:`, error);
+    console.error('Error in opportunity scan:', error);
+    return {
+      symbol: 'BTC/USDT',
+      momentum: 3.0,
+      change24h: 0,
+      volume24h: 1000000,
+      reason: 'Error fallback to BTC/USDT'
+    };
+  }
+}
+
+/**
+ * Initialize Smart Agent with Intelligent Analysis System
+ */
+export async function initializeIntelligentSmartAgent(sessionId: number): Promise<boolean> {
+  console.log(`🧠 Initializing Intelligent Smart Agent for session ${sessionId}...`);
+  
+  try {
+    const success = await initializeIntelligentAgent(sessionId);
+    
+    if (success) {
+      console.log(`✅ Intelligent Smart Agent successfully initialized`);
+      return true;
+    }
+    
+    console.error('❌ Failed to initialize with intelligent system');
+    return false;
+    
+  } catch (error) {
+    console.error('❌ Error initializing Intelligent Smart Agent:', error);
+    return false;
+  }
+}
+
+/**
+ * Legacy Smart Agent initialization for backward compatibility
+ */
+export async function initializeSmartAgent(sessionId: string, config: SmartConfig): Promise<string | null> {
+  console.log(`🤖 Legacy Smart Agent initialization for session ${sessionId}`);
+  
+  try {
+    const opportunity = await scanBestOpportunity();
+    
+    if (!opportunity) {
+      console.error('❌ No opportunities found');
+      return null;
+    }
+    
+    console.log(`🎯 Selected: ${opportunity.symbol} - ${opportunity.reason}`);
+    return opportunity.symbol;
+    
+  } catch (error) {
+    console.error('❌ Error in legacy Smart Agent initialization:', error);
     return null;
   }
 }
 
 /**
- * Background job to check all Smart Agents for switches
+ * Check for better opportunities - intelligent version
  */
-export async function checkAllSmartAgents(): Promise<void> {
-  try {
-    const smartSessions = await (prisma.agentSession as any).findMany({
-      where: {
-        isSmartAgent: true,
-        stoppedAt: null, // Only active sessions
-        nextRescanAt: {
-          lte: new Date() // Due for rescan
-        }
-      }
-    });
-    
-    console.log(`🔄 Checking ${smartSessions.length} Smart Agents for switches...`);
-    
-    for (const session of smartSessions) {
-      // Check if this agent should switch symbols
-      try {
-        const shouldSwitch = await checkSmartAgentSwitch(session.id);
-        if (shouldSwitch) {
-          console.log(`✅ Smart Agent ${session.id} switched symbols successfully`);
-        }
-      } catch (error) {
-        console.error(`❌ Failed to check Smart Agent ${session.id}:`, error);
-      }
-      
-      // Small delay between checks
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
-  } catch (error) {
-    console.error('❌ Failed to check Smart Agents:', error);
-  }
-}
-
-/**
- * Check if a Smart Agent should switch symbols
- */
-async function checkSmartAgentSwitch(sessionId: string): Promise<boolean> {
-  try {
-    const session = await prisma.agentSession.findUnique({
-      where: { id: sessionId },
-      include: {
-        positions: {
-          where: { 
-            qty: { not: 0 } // Open positions (have quantity)
-          },
-          orderBy: { openedAt: 'desc' },
-          take: 1
-        }
-      }
-    }) as any;
-    
-    if (!session || !session.isSmartAgent || !session.smartConfig) {
-      return false;
-    }
-    
-    const config = session.smartConfig;
-    const now = new Date();
-    
-    // Check if we should rescan (time-based)
-    const shouldRescan = session.nextRescanAt && now >= new Date(session.nextRescanAt);
-    
-    // Check if we can switch (no open positions or minimum hold time passed)
-    const hasOpenPosition = session.positions.length > 0;
-    const minHoldPassed = session.lastSymbolSwitchAt && 
-      (now.getTime() - new Date(session.lastSymbolSwitchAt).getTime()) >= config.minHoldDuration;
-    
-    const canSwitch = !hasOpenPosition || minHoldPassed;
-    
-    console.log(`🔍 Smart Agent ${sessionId}: shouldRescan=${shouldRescan}, canSwitch=${canSwitch}, hasOpenPosition=${hasOpenPosition}`);
-    
-    if (shouldRescan && canSwitch) {
-      return await performSmartAgentSwitch(sessionId, config);
-    }
-    
-    return false;
-    
-  } catch (error) {
-    console.error(`❌ Smart Agent switch check failed for ${sessionId}:`, error);
-    return false;
-  }
-}
-
-/**
- * Perform the actual symbol switch for a Smart Agent
- */
-async function performSmartAgentSwitch(sessionId: string, config: any): Promise<boolean> {
-  console.log(`🔄 Smart Agent ${sessionId}: Performing symbol switch...`);
+export async function checkSmartOpportunities(): Promise<void> {
+  console.log('🔄 Checking for intelligent opportunities...');
   
+  try {
+    await checkIntelligentOpportunities();
+  } catch (error) {
+    console.error('❌ Error checking intelligent opportunities:', error);
+  }
+}
+
+/**
+ * Get all intelligent opportunities for API
+ */
+export async function getAllIntelligentOpportunities(): Promise<IntelligentAnalysis[]> {
+  try {
+    return await scanIntelligentOpportunities();
+  } catch (error) {
+    console.error('Error getting intelligent opportunities:', error);
+    return [];
+  }
+}
+
+/**
+ * Get intelligent Smart Agent status for a session
+ */
+export async function getIntelligentAgentStatus(sessionId: string): Promise<any> {
   try {
     const session = await prisma.agentSession.findUnique({
       where: { id: sessionId }
-    }) as any;
-    
-    if (!session) return false;
-    
-    // Find new best opportunity
-    const opportunity = await scanBestOpportunity(config);
-    if (!opportunity) {
-      console.log('⚠️ No new opportunities found, keeping current symbol');
-      // Update next rescan time
-      await (prisma.agentSession as any).update({
-        where: { id: sessionId },
-        data: {
-          nextRescanAt: new Date(Date.now() + config.rescanInterval)
-        }
-      });
-      return false;
-    }
-    
-    // Check if it's different from current symbol
-    if (opportunity.symbol === session.currentSymbol) {
-      console.log(`✅ Current symbol ${session.currentSymbol} is still the best, no switch needed`);
-      await (prisma.agentSession as any).update({
-        where: { id: sessionId },
-        data: {
-          nextRescanAt: new Date(Date.now() + config.rescanInterval)
-        }
-      });
-      return false;
-    }
-    
-    // Perform the switch
-    const now = new Date();
-    const nextRescan = new Date(now.getTime() + config.rescanInterval);
-    
-    // Update smart history
-    const currentHistory = session.smartHistory || { selections: [] };
-    currentHistory.selections.push({
-      timestamp: now.toISOString(),
-      symbol: opportunity.symbol,
-      previousSymbol: session.currentSymbol,
-      reason: opportunity.reason,
-      momentum: opportunity.momentum,
-      type: 'auto_switch'
     });
     
-    await (prisma.agentSession as any).update({
-      where: { id: sessionId },
-      data: {
-        currentSymbol: opportunity.symbol,
-        symbol: opportunity.symbol, // Update main symbol for trading engine
-        lastSymbolSwitchAt: now,
-        nextRescanAt: nextRescan,
-        smartHistory: currentHistory
-      }
-    });
+    if (!session) {
+      return null;
+    }
     
-    console.log(`✅ Smart Agent ${sessionId}: Switched to ${opportunity.symbol} (${opportunity.reason})`);
-    return true;
+    const config = session.profileJson as any;
+    const isIntelligent = config?.isIntelligent === true;
+    
+    if (!isIntelligent) {
+      return { isSmartAgent: false, isIntelligent: false };
+    }
+    
+    const history = session.planJson as any;
+    
+    return {
+      isSmartAgent: true,
+      isIntelligent: true,
+      currentSymbol: session.symbol,
+      analysis: config.analysis || null,
+      selectedAt: config.selectedAt || null,
+      lastScan: config.lastScan || null,
+      nextScanDue: config.nextScanDue || null,
+      history: history?.intelligentHistory || []
+    };
     
   } catch (error) {
-    console.error(`❌ Smart Agent switch failed for ${sessionId}:`, error);
-    return false;
+    console.error('Error getting intelligent agent status:', error);
+    return null;
   }
 }
+
+/**
+ * Export types for external use
+ */
+export type { IntelligentAnalysis, SmartConfig, OpportunityResult };

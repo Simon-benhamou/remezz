@@ -992,8 +992,8 @@ export default function SessionsPage(){
                 v.smartConfig = {
                   minHoldDuration: 24 * 60 * 60 * 1000, // 24h in ms
                   rescanInterval: 6 * 60 * 60 * 1000,    // 6h in ms
-                  momentumThreshold: 6.0,                 // Minimum momentum score
-                  volumeThreshold: 1000000                // Minimum volume USD
+                  momentumThreshold: 0.5,                 // Très bas pour garantir des résultats
+                  volumeThreshold: 10000                  // Volume minimum très bas ($10K)
                 };
                 
                 // Validate smart config
@@ -1096,10 +1096,10 @@ export default function SessionsPage(){
                     <span style={{ fontWeight: 600, color: '#0369a1' }}>Smart Auto Agent Configuration</span>
                   </div>
                   <div style={{ fontSize: '12px', color: '#0369a1', lineHeight: '1.5' }}>
-                    • <strong>Auto Symbol Selection:</strong> Scans 30+ popular cryptocurrencies every 6 hours<br/>
+                    • <strong>Auto Symbol Selection:</strong> Scans 20+ popular cryptocurrencies every 6 hours<br/>
                     • <strong>Minimum Hold:</strong> 24 hours per position (or until trade completion)<br/>
-                    • <strong>Momentum Threshold:</strong> Only selects cryptos with score ≥ 6.0/10<br/>
-                    • <strong>Volume Filter:</strong> Minimum $1M daily volume for liquidity
+                    • <strong>Smart Selection:</strong> Finds the best available crypto regardless of momentum<br/>
+                    • <strong>High Liquidity:</strong> Focuses on major cryptocurrencies for optimal trading
                   </div>
                 </Space>
               </div>

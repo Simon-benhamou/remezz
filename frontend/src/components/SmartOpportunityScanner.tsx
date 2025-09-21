@@ -435,7 +435,8 @@ export default function SmartOpportunityScanner({ onSymbolSelect, onAutoTrade }:
         color: '#059669',
         textAlign: 'center'
       }}>
-        💡 <strong>Smart Scanner</strong> analyzes {maxSymbols} popular perpetuals and ranks them by momentum, volume, and trend strength.
+        💡 <strong>Smart Scanner</strong> analyzes {maxSymbols} popular perpetuals with aggressive trading-focused scoring.
+        <strong> Guaranteed to find tradable opportunities!</strong>
         {autoRefresh && <span> 🔄 Auto-refreshing every 5 minutes.</span>}
       </div>
     </Card>

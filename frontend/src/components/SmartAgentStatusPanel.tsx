@@ -310,7 +310,8 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
         color: '#64748b',
         textAlign: 'center'
       }}>
-        💡 Smart Agent automatically monitors market conditions and switches to high-momentum cryptocurrencies every {formatDuration(status.config.rescanInterval)} or when trades complete.
+        💡 Smart Agent automatically monitors market conditions and switches to high-momentum cryptocurrencies every {formatDuration(status.config?.rescanInterval || 0)} or when trades complete.
+        <br/>🎯 <strong>Optimized for maximum trading opportunities!</strong>
       </div>
     </Card>
   );
