@@ -7,6 +7,29 @@ import { encryptApiKey, decryptApiKey } from '../utils/crypto.js';
 
 export const router = Router();
 
+// Get server IP address (for whitelist setup)
+router.get('/server-ip', async (req, res) => {
+  try {
+    // Your server's fixed IP
+    const fixedIP = '208.77.244.15';
+    
+    res.json({
+      success: true,
+      serverIP: fixedIP,
+      method: 'fixed_configuration',
+      message: `Your fixed server IP is ${fixedIP}. This should already be whitelisted in your Crypto.com API.`,
+      status: 'configured',
+      note: 'IP should be already configured in Crypto.com API whitelist'
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error),
+      fallback: '208.77.244.15'
+    });
+  }
+});
+
 // Test exchange connectivity (public endpoint)
 router.get('/test-exchange', async (req, res) => {
   try {
@@ -77,10 +100,17 @@ router.post('/test-credentials', async (req, res) => {
       });
     }
 
+    console.log('🔍 Starting API credential test...');
+    console.log('API Key (first 8 chars):', apiKey.substring(0, 8) + '...');
+    console.log('API Secret (first 8 chars):', apiSecret.substring(0, 8) + '...');
+    console.log('Server IP: 208.77.244.15');
+
     const { getConfig } = await import('../utils/env.js');
     const ccxt = await import('ccxt');
     
     const { EXCHANGE_ID } = getConfig();
+    console.log('Exchange ID:', EXCHANGE_ID);
+    
     const Klass: any = (ccxt as any)[EXCHANGE_ID];
     
     if (!Klass) {
@@ -93,6 +123,7 @@ router.post('/test-credentials', async (req, res) => {
     // Check required credentials
     const tempExchange = new Klass();
     const requiredCreds = tempExchange.requiredCredentials || {};
+    console.log('Required credentials:', requiredCreds);
     
     const config: any = {
       apiKey,
@@ -103,18 +134,19 @@ router.post('/test-credentials', async (req, res) => {
     // Only add password if required
     if (requiredCreds.password && passphrase) {
       config.password = passphrase;
+      console.log('Added passphrase to config');
     }
 
-    console.log('Testing credentials with config:', {
-      ...config,
-      apiKey: apiKey.substring(0, 8) + '...',
-      secret: apiSecret.substring(0, 8) + '...'
-    });
-
+    console.log('Creating exchange instance...');
     const exchange = new Klass(config);
 
-    // Test balance fetch
+    console.log('🚀 Testing balance fetch...');
+    
+    // Test balance fetch with detailed logging
     const balance = await exchange.fetchBalance();
+    
+    console.log('✅ Balance fetch successful!');
+    console.log('Balance keys:', Object.keys(balance || {}));
     
     res.json({
       success: true,
@@ -126,21 +158,66 @@ router.post('/test-credentials', async (req, res) => {
         hasUsed: !!balance.used,
         hasTotal: !!balance.total,
         sampleCurrencies: Object.keys(balance || {}).slice(0, 5)
-      }
+      },
+      timestamp: new Date().toISOString()
     });
 
   } catch (error: any) {
-    console.error('Credential test failed:', error);
+    console.error('❌ Credential test failed with detailed error:');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    console.error('Error status:', error.status);
+    console.error('Full error object:', JSON.stringify(error, null, 2));
+    
+    // Extract detailed error information
+    const errorDetails = {
+      name: error.name || 'Unknown',
+      message: error.message || String(error),
+      code: error.code || null,
+      status: error.status || null,
+      statusText: error.statusText || null,
+      url: error.url || null,
+      headers: error.headers || null,
+      stack: error.stack ? error.stack.split('\n').slice(0, 5).join('\n') : null
+    };
+
+    // Check for common Crypto.com API errors
+    const troubleshooting: string[] = [];
+    
+    if (error.message?.includes('IP') || error.message?.includes('whitelist') || error.status === 403) {
+      troubleshooting.push('❌ IP not whitelisted: Your IP 208.77.244.15 might not be in Crypto.com whitelist');
+      troubleshooting.push('🔧 Double-check that 208.77.244.15 is added to your API key whitelist');
+    }
+    
+    if (error.message?.includes('Invalid API key') || error.message?.includes('authentication') || error.status === 401) {
+      troubleshooting.push('❌ Invalid credentials: Check your API key and secret are correct');
+      troubleshooting.push('🔧 Verify you copied the full API key and secret without spaces');
+    }
+    
+    if (error.message?.includes('permissions') || error.message?.includes('scope')) {
+      troubleshooting.push('❌ Insufficient permissions: Your API key needs trading permissions');
+      troubleshooting.push('🔧 Enable "Trade" permission on your Crypto.com API key');
+    }
+    
+    if (error.message?.includes('rate') || error.message?.includes('limit')) {
+      troubleshooting.push('⏰ Rate limit exceeded: Too many requests');
+      troubleshooting.push('🔧 Wait a few minutes before testing again');
+    }
+
+    if (troubleshooting.length === 0) {
+      troubleshooting.push('🔍 Check Crypto.com API status and your account settings');
+      troubleshooting.push('📞 Contact Crypto.com support if the issue persists');
+    }
     
     res.json({
       success: false,
       error: 'Credential test failed',
-      message: error.message || String(error),
-      details: {
-        name: error.name,
-        code: error.code,
-        status: error.status
-      }
+      errorDetails,
+      troubleshooting,
+      serverIP: '208.77.244.15',
+      timestamp: new Date().toISOString(),
+      note: 'Check the backend logs for detailed error information'
     });
   }
 });
@@ -391,6 +468,84 @@ router.post('/clear-cache', async (req: AuthenticatedRequest, res) => {
     });
   } catch (error: any) {
     console.error('Clear cache error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
+
+// Fix API keys for current user (temporary endpoint)
+router.post('/fix-my-keys', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.status(403).json({ error: 'legacy_users_no_migration' });
+    }
+
+    // Fixed working credentials
+    const workingApiKey = 'tsedD1bHXcZ1ArVzoYPnFQ';
+    const workingApiSecret = 'cxakp_wtnSWAsaRuoorSXjP6fR2V';
+
+    console.log('🔧 Fixing API keys for user:', req.user!.id);
+
+    // Find existing key
+    const existingKey = await prisma.userApiKey.findFirst({
+      where: { 
+        userId: req.user!.id,
+        exchange: 'crypto.com'
+      }
+    });
+
+    if (existingKey) {
+      // Update existing key
+      const updatedKey = await prisma.userApiKey.update({
+        where: {
+          id: existingKey.id
+        },
+        data: {
+          apiKey: encryptApiKey(workingApiKey),
+          apiSecret: encryptApiKey(workingApiSecret),
+          isActive: true
+        }
+      });
+
+      console.log('✅ Updated existing API key');
+      
+      // Clear cache to force refresh
+      clearUserExchangeCache(req.user!.id);
+
+      res.json({
+        success: true,
+        message: 'API keys updated successfully',
+        keyId: updatedKey.id,
+        action: 'updated'
+      });
+    } else {
+      // Create new key
+      const newKey = await prisma.userApiKey.create({
+        data: {
+          userId: req.user!.id,
+          exchange: 'crypto.com',
+          keyName: 'Fixed Working Key',
+          apiKey: encryptApiKey(workingApiKey),
+          apiSecret: encryptApiKey(workingApiSecret),
+          testnet: false,
+          isActive: true
+        }
+      });
+
+      console.log('✅ Created new API key');
+
+      res.json({
+        success: true,
+        message: 'API keys created successfully',
+        keyId: newKey.id,
+        action: 'created'
+      });
+    }
+
+  } catch (error: any) {
+    console.error('Fix keys error:', error);
     res.status(500).json({
       success: false,
       error: error.message || String(error)
