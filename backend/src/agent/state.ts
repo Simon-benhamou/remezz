@@ -2789,12 +2789,14 @@ export class ReboundRejectionAgent {
     
     try {
       // Get both technical snapshot and real-time price
+      console.log(`🔍 getDiagnostics: Building tech snapshot for symbol: ${this.profile.symbol}`);
       const [techSnapshot, ticker] = await Promise.all([
         buildTechSnapshot(this.profile.symbol),
         (async () => {
           try {
             const { getTicker } = await import('../data/market.js');
             const tickerData = await getTicker(this.profile!.symbol);
+            console.log(`🔍 getDiagnostics: Ticker data for ${this.profile!.symbol}: last=${tickerData?.last}`);
             return tickerData?.last || null;
           } catch {
             return null;
@@ -2804,6 +2806,7 @@ export class ReboundRejectionAgent {
       
       snap = techSnapshot;
       realtimePrice = ticker;
+      console.log(`🔍 getDiagnostics: Tech snapshot received - last=${snap?.last}, symbol in snapshot: ${(snap as any)?.symbol || 'undefined'}`);
     } catch (err) {
       return {
         canTrade: false,
@@ -2872,6 +2875,7 @@ export class ReboundRejectionAgent {
       
       if (needsDynamicRecalc) {
         // Recalculate zone dynamically based on current market conditions
+        console.log(`🔍 Dynamic zone recalc for ${this.profile?.symbol}: price=${price}, snap.last=${snap?.last}, bias=${this.plan.bias}`);
         dynamicZone = await this.calculateDynamicEntryZone(snap, price, this.plan.bias);
         console.log(`🎯 Dynamic zone recalculation: Original [${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}] → Dynamic [${dynamicZone.from.toFixed(4)}, ${dynamicZone.to.toFixed(4)}] (price: ${price.toFixed(4)})`);
       }
