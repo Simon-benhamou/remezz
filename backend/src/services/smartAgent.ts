@@ -105,25 +105,13 @@ export async function scanBestOpportunity(): Promise<OpportunityResult | null> {
       }
     }
     
-    // Emergency fallback
-    console.log('🆘 Emergency fallback to BTC/USDT');
-    return {
-      symbol: 'BTC/USDT',
-      momentum: 3.0,
-      change24h: 0,
-      volume24h: 1000000,
-      reason: 'Emergency fallback to BTC/USDT'
-    };
+    // Emergency fallback - return null instead of Bitcoin
+    console.log('🚨 Emergency: No opportunities found, returning null');
+    return null; // Let calling code handle no opportunities
     
   } catch (error) {
     console.error('Error in opportunity scan:', error);
-    return {
-      symbol: 'BTC/USDT',
-      momentum: 3.0,
-      change24h: 0,
-      volume24h: 1000000,
-      reason: 'Error fallback to BTC/USDT'
-    };
+    return null; // Let calling code handle errors
   }
 }
 

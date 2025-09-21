@@ -173,20 +173,20 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
  * Top cryptos by volume/market cap - focus on liquid markets only
  */
 function getTopCryptos(): string[] {
-  // Top 20 most liquid perpetuals - high volume, tight spreads
+  // Top 20 most liquid perpetuals - reordered to avoid Bitcoin bias
   return [
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT',
-    'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT',
-    'LTC/USDT', 'LINK/USDT', 'UNI/USDT', 'BCH/USDT', 'XLM/USDT',
-    'ATOM/USDT', 'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT'
+    'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 
+    'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
+    'LINK/USDT', 'UNI/USDT', 'BCH/USDT', 'XLM/USDT', 'ATOM/USDT', 
+    'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'BTC/USDT'
   ];
 }
 
 /**
- * Emergency fallback symbols (top 5 only)
+ * Emergency fallback symbols - Bitcoin moved to last position
  */
 function getFallbackSymbols(): string[] {
-  return ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT'];
+  return ['ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 'BTC/USDT'];
 }
 
 /**

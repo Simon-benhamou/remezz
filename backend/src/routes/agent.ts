@@ -44,8 +44,8 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     
     if (isSmartAgent) {
       console.log('🎯 Creating Auto-Select Agent - scanning for best opportunity...');
-      // We'll set a temporary symbol and replace it after session creation
-      symbol = 'BTC/USDT'; // Temporary default
+      // Auto-Select agents will get their symbol after intelligent selection
+      symbol = 'TEMP/AUTO-SELECT'; // Temporary placeholder for Auto-Select
     } else {
       // Ensure symbol is provided for non-smart agents
       if (!symbol && process.env.RANK_ON_START === 'true') {
