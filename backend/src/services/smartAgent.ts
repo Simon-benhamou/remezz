@@ -1,5 +1,5 @@
-import { prisma } from '../db/client';
-import { getTicker } from '../data/market';
+import { prisma } from '../db/client.js';
+import { getTicker } from '../data/market.js';
 
 interface SmartConfig {
   minHoldDuration: number;     // ms - minimum time to hold a position
@@ -58,6 +58,12 @@ export async function scanBestOpportunity(config: SmartConfig): Promise<Opportun
   console.log('🔍 Smart Agent: Scanning for best opportunities...');
   
   try {
+    // Validate config
+    if (!config || typeof config.volumeThreshold !== 'number' || typeof config.momentumThreshold !== 'number') {
+      console.error('❌ Invalid Smart Agent config:', config);
+      return null;
+    }
+
     const opportunities: OpportunityResult[] = [];
     
     // Get market data for all symbols
@@ -101,14 +107,60 @@ export async function scanBestOpportunity(config: SmartConfig): Promise<Opportun
     // Sort by momentum score
     opportunities.sort((a, b) => b.momentum - a.momentum);
     
-    const best = opportunities[0];
-    if (best) {
-      console.log(`✅ Smart Agent: Best opportunity found: ${best.symbol} (${best.reason})`);
-      return best;
+    // If no opportunities match strict criteria, fallback to best available
+    if (opportunities.length === 0) {
+      console.log('⚠️ No opportunities match strict criteria, scanning with relaxed rules...');
+      
+      // Relaxed scan with lower thresholds
+      for (const symbol of SMART_SYMBOLS.slice(0, 5)) { // Top 5 symbols only
+        try {
+          const ticker = await getTicker(symbol);
+          if (!ticker) continue;
+          
+          const change24h = ticker.percentage || 0;
+          const volume24h = ticker.baseVolume || 0;
+          const price = ticker.last || 0;
+          
+          // Lower volume threshold for fallback
+          if (volume24h < config.volumeThreshold * 0.1) continue;
+          
+          const momentum = calculateMomentumScore({
+            change24h,
+            volume24h,
+            price
+          });
+          
+          opportunities.push({
+            symbol,
+            momentum,
+            change24h,
+            volume24h,
+            reason: `Fallback selection: ${momentum}/10, Change: ${change24h.toFixed(1)}%, Volume: $${(volume24h/1000000).toFixed(1)}M`
+          });
+          
+        } catch (error) {
+          console.warn(`⚠️ Failed to get fallback data for ${symbol}:`, error);
+        }
+      }
+      
+      opportunities.sort((a, b) => b.momentum - a.momentum);
     }
     
-    console.log('⚠️ Smart Agent: No opportunities found matching criteria');
-    return null;
+    // If still no opportunities, use a default safe crypto
+    if (opportunities.length === 0) {
+      console.log('🛡️ No opportunities found, using safe default BTC/USDT');
+      return {
+        symbol: 'BTC/USDT',
+        momentum: 5.0,
+        change24h: 0,
+        volume24h: 1000000,
+        reason: 'Safe default selection - BTC/USDT as fallback when no opportunities detected'
+      };
+    }
+    
+    const best = opportunities[0];
+    console.log(`✅ Smart Agent: Best opportunity found: ${best.symbol} (${best.reason})`);
+    return best;
     
   } catch (error) {
     console.error('❌ Smart Agent scan failed:', error);
@@ -123,6 +175,11 @@ export async function initializeSmartAgent(sessionId: string, config: SmartConfi
   console.log(`🤖 Initializing Smart Agent for session ${sessionId}`);
   
   try {
+    // Validate config
+    if (!config || typeof config.minHoldDuration !== 'number' || typeof config.rescanInterval !== 'number') {
+      throw new Error('Invalid Smart Agent configuration');
+    }
+
     // Find best opportunity
     const opportunity = await scanBestOpportunity(config);
     if (!opportunity) {

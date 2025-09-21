@@ -45,11 +45,13 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       // We'll set a temporary symbol and replace it after session creation
       symbol = 'BTC/USDT'; // Temporary default
     } else {
-      // Optional: ranking only if no symbol provided and RANK_ON_START=true
+      // Ensure symbol is provided for non-smart agents
       if (!symbol && process.env.RANK_ON_START === 'true') {
         const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
         const ranked = await selectBestPerp(list);     // may call LLM once
         symbol = ranked[0]?.symbol || 'BTC/USDT';
+      } else if (!symbol) {
+        return res.status(400).json({ error: 'symbol_required', message: 'Trading symbol is required for non-smart agents' });
       }
     }
     // Ensure we resolve a perpetual market symbol; return descriptive error if not available
@@ -133,6 +135,8 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
               (a as any).profile.symbol = bestSymbol;
               console.log(`✅ Smart Agent ${s.id} switched to ${bestSymbol}`);
             }
+          } else {
+            console.warn(`⚠️ Smart Agent ${s.id} initialization failed, using default symbol`);
           }
         }
 

@@ -45,8 +45,13 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
     try {
       setLoading(true);
       const response = await api.client.get(`/api/agent/sessions/${sessionId}/smart-status`);
-      setStatus(response.data);
-      setLastUpdate(new Date());
+      
+      if (response.data && response.data.isSmartAgent !== false) {
+        setStatus(response.data);
+        setLastUpdate(new Date());
+      } else {
+        setStatus(null); // Not a smart agent
+      }
     } catch (error) {
       console.error('Failed to load Smart Agent status:', error);
       setStatus(null);
@@ -64,6 +69,8 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
   }, [loadStatus]);
 
   const formatDuration = (ms: number): string => {
+    if (!ms || ms <= 0) return '0m';
+    
     const hours = Math.floor(ms / (1000 * 60 * 60));
     const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
     
@@ -74,7 +81,7 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
   };
 
   const formatTimeLeft = (ms: number): string => {
-    if (ms <= 0) return 'Now';
+    if (!ms || ms <= 0) return 'Now';
     
     const hours = Math.floor(ms / (1000 * 60 * 60));
     const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
@@ -99,11 +106,13 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
   }
 
   const holdProgress = Math.min(100, Math.max(0, 
-    ((status.timeSinceSwitchMs) / status.config.minHoldDuration) * 100
+    status.config?.minHoldDuration ? 
+      ((status.timeSinceSwitchMs || 0) / status.config.minHoldDuration) * 100 : 0
   ));
 
   const rescanProgress = Math.min(100, Math.max(0, 
-    ((status.config.rescanInterval - status.timeUntilRescanMs) / status.config.rescanInterval) * 100
+    status.config?.rescanInterval ? 
+      (((status.config.rescanInterval - (status.timeUntilRescanMs || 0)) / status.config.rescanInterval) * 100) : 0
   ));
 
   return (

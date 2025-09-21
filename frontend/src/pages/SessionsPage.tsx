@@ -995,6 +995,13 @@ export default function SessionsPage(){
                   momentumThreshold: 6.0,                 // Minimum momentum score
                   volumeThreshold: 1000000                // Minimum volume USD
                 };
+                
+                // Validate smart config
+                if (!v.smartConfig.minHoldDuration || !v.smartConfig.rescanInterval) {
+                  message.error('Smart Agent configuration is invalid. Please try again.');
+                  setStarting(false);
+                  return;
+                }
               }
               
               // Check API keys for live mode
@@ -1100,7 +1107,7 @@ export default function SessionsPage(){
 
             {/* Traditional Symbol Selection - Hidden in Smart Mode */}
             {!smartAutoMode && (
-              <Form.Item label='Trading Symbol' name='symbol' rules={[{ required:true }]}>
+              <Form.Item label='Trading Symbol' name='symbol' rules={[{ required: !smartAutoMode }]}>
                 <Select
                   showSearch
                   placeholder='Select trading symbol'
