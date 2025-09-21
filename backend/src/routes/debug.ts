@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 import { getUserCredentials } from '../services/userCredentials.js';
-import { getUserExchange, validateUserCredentials } from '../exchange/ccxtClient.js';
+import { getUserExchange, validateUserCredentials, clearUserExchangeCache } from '../exchange/ccxtClient.js';
 import { prisma } from '../db/client.js';
 import { encryptApiKey, decryptApiKey } from '../utils/crypto.js';
 
@@ -33,6 +33,9 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
     console.log('Testing API keys for user:', req.user!.id);
     console.log('API Key (first 8 chars):', credentials.apiKey.substring(0, 8) + '...');
     console.log('API Secret (first 8 chars):', credentials.apiSecret.substring(0, 8) + '...');
+
+    // Clear any cached exchange instances for fresh test
+    clearUserExchangeCache(req.user!.id);
 
     // Test 1: Validate credentials
     let isValid = false;
@@ -222,6 +225,32 @@ router.get('/raw-keys', async (req: AuthenticatedRequest, res) => {
     });
   } catch (error: any) {
     console.error('Raw keys check error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
+
+// Clear exchange cache for user (useful when API keys are updated)
+router.post('/clear-cache', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.status(403).json({ 
+        error: 'legacy_users_no_cache',
+        message: 'Legacy users have no exchange cache'
+      });
+    }
+
+    clearUserExchangeCache(req.user!.id);
+
+    res.json({
+      success: true,
+      message: 'Exchange cache cleared successfully',
+      userId: req.user!.id
+    });
+  } catch (error: any) {
+    console.error('Clear cache error:', error);
     res.status(500).json({
       success: false,
       error: error.message || String(error)

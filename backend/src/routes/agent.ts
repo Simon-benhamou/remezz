@@ -305,3 +305,102 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     updatedAt: new Date().toISOString(),
   });
 });
+
+// Triggers log
+router.get('/triggers', async (req,res)=>{
+  const sessionId = String(req.query.sessionId || '');
+  if (!sessionId) return res.json([]);
+  const logs = await prisma.triggerLog.findMany({ 
+    where:{ sessionId }, 
+    orderBy: { createdAt: 'desc' }, 
+    take: 100 
+  });
+  res.json(logs);
+});
+
+// Get trading diagnostics for a session - shows why agent is not trading
+router.get('/sessions/:id/diagnostics', async (req, res) => {
+  try {
+    const { id } = req.params as { id: string };
+    const agent = AgentHub.get(id);
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found or not active' });
+    }
+    
+    const diagnostics = await (agent as any).getDiagnostics();
+    res.json(diagnostics);
+  } catch (err) {
+    console.error('Diagnostics error:', err);
+    res.status(500).json({ 
+      error: 'Failed to get diagnostics', 
+      details: String((err as any)?.message || err) 
+    });
+  }
+});
+
+// New: pass a LLM JSON plan to the agent (validates + arms)
+router.post('/propose', async (req,res) => {
+  try {
+    const { sessionId, ...rest } = req.body || {};
+    const plan = PlanZ.parse(rest);
+    const a = AgentHub.get(sessionId);
+    if (!a) return res.status(400).json({ error: 'no_agent' });
+    // Persist the proposed plan on session
+    try { 
+      await prisma.agentSession.update({ 
+        where: { id: sessionId }, 
+        data: { planJson: plan as any } 
+      }); 
+    } catch {}
+    await a.propose(plan as any);
+    await a.validateAndArm();
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: String(e?.message || e) });
+  }
+});
+
+// Update aggressiveness level on the fly
+router.post('/aggressiveness', async (req, res) => {
+  const { sessionId, level } = (req.body || {}) as { sessionId?: string; level?: string };
+  if (!sessionId) return res.status(400).json({ error: 'session_required' });
+  const a = AgentHub.get(sessionId) as any;
+  if (!a) return res.status(404).json({ error: 'no_agent' });
+  const val = String(level || '').toLowerCase();
+  if (!['conservative','reactive','aggressive'].includes(val)) return res.status(400).json({ error: 'invalid_level' });
+  try {
+    a.profile = { ...(a.profile || {}), aggressiveness: val };
+    // broadcast new profile snapshot to UI
+    const sym = a.profile?.symbol;
+    const { broadcast } = await import('../ws/hub.js');
+    try { broadcast('agent_state', { state: a.state, profile: a.profile }, sym, sessionId); } catch {}
+    // persist hint on session profileJson for restarts
+    try { 
+      await (await import('../db/client.js')).prisma.agentSession.update({ 
+        where: { id: sessionId }, 
+        data: { profileJson: a.profile as any } 
+      }); 
+    } catch {}
+    res.json({ ok: true, aggressiveness: val });
+  } catch (e:any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// Delete a session and all associated records (requires session to be stopped)
+router.delete('/sessions/:id', async (req,res)=>{
+  const { id } = req.params as { id: string };
+  const active = await activeSession();
+  if (active?.id === id) return res.status(400).json({ error: 'stop_active_session_first' });
+  // Hard delete children then session
+  await prisma.fill.deleteMany({ where: { sessionId: id } });
+  await prisma.order.deleteMany({ where: { sessionId: id } });
+  await prisma.position.deleteMany({ where: { sessionId: id } });
+  await prisma.strategy.deleteMany({ where: { sessionId: id } });
+  await prisma.triggerLog.deleteMany({ where: { sessionId: id } });
+  await prisma.sentimentSnapshot.deleteMany({ where: { sessionId: id } });
+  await prisma.sessionKpi.deleteMany({ where: { sessionId: id } });
+  await prisma.agentSession.delete({ where: { id } });
+  res.json({ ok: true });
+});

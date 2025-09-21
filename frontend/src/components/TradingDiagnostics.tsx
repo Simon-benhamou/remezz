@@ -75,23 +75,27 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
     );
   }
 
-  const { canTrade, reason, checks, summary } = diagnostics;
+  // Safe access to diagnostics properties with fallbacks
+  const canTrade = diagnostics.canTrade || false;
+  const reason = diagnostics.reason || 'Unknown reason';
+  const checks = diagnostics.checks || {};
+  const summary = diagnostics.summary || {};
 
   const basicChecks = [
-    { key: 'hasPosition', label: 'No Position', check: checks.hasPosition },
-    { key: 'isArmed', label: 'Agent Armed', check: checks.isArmed },
-    { key: 'isEntering', label: 'Not Entering', check: checks.isEntering },
-    { key: 'dailyTradeLimit', label: 'Daily Trade Limit', check: checks.dailyTradeLimit },
-    { key: 'consecutiveStopsLimit', label: 'Consecutive Stops', check: checks.consecutiveStopsLimit },
-    { key: 'inEntryZone', label: 'In Entry Zone', check: checks.inEntryZone },
-    { key: 'momentumGates', label: 'Momentum Gates', check: checks.momentumGates },
+    { key: 'hasPosition', label: 'No Position', check: checks.hasPosition || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'isArmed', label: 'Agent Armed', check: checks.isArmed || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'isEntering', label: 'Not Entering', check: checks.isEntering || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'dailyTradeLimit', label: 'Daily Trade Limit', check: checks.dailyTradeLimit || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'consecutiveStopsLimit', label: 'Consecutive Stops', check: checks.consecutiveStopsLimit || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'inEntryZone', label: 'In Entry Zone', check: checks.inEntryZone || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'momentumGates', label: 'Momentum Gates', check: checks.momentumGates || { status: 'UNKNOWN', message: 'No data' } },
   ];
 
   const qualityFilters = checks.qualityFilters ? [
-    { key: 'trendAlignment', label: 'Trend Alignment', check: checks.qualityFilters.trendAlignment },
-    { key: 'momentum', label: 'ADX Momentum', check: checks.qualityFilters.momentum },
-    { key: 'rsiPosition', label: 'RSI Position', check: checks.qualityFilters.rsiPosition },
-    { key: 'volatility', label: 'Volatility (ATR)', check: checks.qualityFilters.volatility },
+    { key: 'trendAlignment', label: 'Trend Alignment', check: checks.qualityFilters.trendAlignment || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'momentum', label: 'ADX Momentum', check: checks.qualityFilters.momentum || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'rsiPosition', label: 'RSI Position', check: checks.qualityFilters.rsiPosition || { status: 'UNKNOWN', message: 'No data' } },
+    { key: 'volatility', label: 'Volatility (ATR)', check: checks.qualityFilters.volatility || { status: 'UNKNOWN', message: 'No data' } },
     { key: 'volume', label: 'Volume Confirmation', check: checks.qualityFilters.volume },
   ] : [];
 

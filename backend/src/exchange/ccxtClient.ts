@@ -4,12 +4,32 @@ import { getConfig } from '../utils/env.js';
 // User-specific exchange instances for authenticated operations
 const userExchanges: Map<string, any> = new Map();
 
+// Function to clear user exchange cache (useful when API keys are updated)
+export function clearUserExchangeCache(userId: string): void {
+  const cacheKey = `${userId}`;
+  userExchanges.delete(cacheKey);
+  console.log(`Cleared exchange cache for user: ${userId}`);
+}
+
 // New function for user-specific authenticated exchange
 export async function getUserExchange(userId: string, credentials: { apiKey: string; apiSecret: string; passphrase?: string }) {
-  const cacheKey = `${userId}`;
+  // Include credentials hash in cache key to handle key updates
+  const credentialsHash = require('crypto')
+    .createHash('md5')
+    .update(credentials.apiKey + credentials.apiSecret)
+    .digest('hex')
+    .substring(0, 8);
+  const cacheKey = `${userId}_${credentialsHash}`;
   
   if (userExchanges.has(cacheKey)) {
     return userExchanges.get(cacheKey);
+  }
+
+  // Clear any old cache entries for this user
+  for (const [key] of userExchanges) {
+    if (key.startsWith(`${userId}_`)) {
+      userExchanges.delete(key);
+    }
   }
 
   const { EXCHANGE_ID, API_PASSWORD } = getConfig();
