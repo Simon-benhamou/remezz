@@ -22,6 +22,14 @@ export default function SessionsPage(){
   const smartAutoMode = Form.useWatch?.('smartAutoMode', form);
   const [apiKeyHealth, setApiKeyHealth] = React.useState<any>(null);
   
+  // Clear symbol field when Auto-Select Mode is enabled
+  React.useEffect(() => {
+    if (smartAutoMode) {
+      form.setFieldValue('symbol', undefined);
+      console.log('🔄 Cleared symbol field for Auto-Select mode');
+    }
+  }, [smartAutoMode, form]);
+  
   // Filter states
   const [statusFilter, setStatusFilter] = React.useState<string>('all');
   const [modeFilter, setModeFilter] = React.useState<string>('all');
@@ -1054,12 +1062,15 @@ export default function SessionsPage(){
               const v = await form.validateFields();
               
               // Debug: Log form values
-              console.log('🔍 Form values:', v);
+              console.log('🔍 Form values BEFORE processing:', v);
               console.log('🎯 Auto-Select Mode:', v.smartAutoMode);
               
               // If Auto-Select Mode is enabled, remove symbol requirement and add smart mode flags
               if (v.smartAutoMode) {
+                console.log('🔄 Processing Auto-Select mode...');
+                console.log('📋 Symbol before delete:', v.symbol);
                 delete v.symbol; // Remove symbol requirement
+                console.log('📋 Symbol after delete:', v.symbol);
                 v.isSmartAgent = true; // Flag for backend
                 v.smartConfig = {
                   minHoldDuration: 24 * 60 * 60 * 1000, // 24h in ms
@@ -1067,6 +1078,8 @@ export default function SessionsPage(){
                   momentumThreshold: 0.5,                 // Très bas pour garantir des résultats
                   volumeThreshold: 10000                  // Volume minimum très bas ($10K)
                 };
+                
+                console.log('✅ Auto-Select payload ready:', v);
                 
                 // Validate smart config
                 if (!v.smartConfig.minHoldDuration || !v.smartConfig.rescanInterval) {
