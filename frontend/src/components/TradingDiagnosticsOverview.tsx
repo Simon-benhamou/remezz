@@ -43,13 +43,15 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
       
       for (const symbol of watchList) {
         try {
-          // Use the new cache endpoint
+          // Use the new POST API endpoint
           const endpoint = forceRefresh 
-            ? `/api/cache/trading-diagnostics/${symbol}/refresh`
-            : `/api/cache/trading-diagnostics/${symbol}`;
+            ? `/api/cache/trading-diagnostics/refresh`
+            : `/api/cache/trading-diagnostics`;
           
-          const method = forceRefresh ? 'POST' : 'GET';
-          const response = await api.client[method.toLowerCase() as 'get' | 'post'](endpoint);
+          const response = await api.client.post(endpoint, {
+            symbol,
+            force: forceRefresh
+          });
           
           const { data, cached, timestamp, dailyCallsUsed: calls } = response.data;
           
