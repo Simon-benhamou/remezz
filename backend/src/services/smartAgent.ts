@@ -131,13 +131,13 @@ export async function scanBestOpportunity(): Promise<OpportunityResult | null> {
  * Initialize Smart Agent with Intelligent Analysis System
  */
 export async function initializeIntelligentSmartAgent(sessionId: string): Promise<boolean> {
-  console.log(`🧠 Initializing Intelligent Smart Agent for session ${sessionId}...`);
+  console.log(`🎯 Initializing Auto-Select Agent for session ${sessionId}...`);
   
   try {
     const success = await initializeIntelligentAgent(sessionId);
     
     if (success) {
-      console.log(`✅ Intelligent Smart Agent successfully initialized`);
+      console.log(`✅ Auto-Select Agent successfully initialized`);
       return true;
     }
     
@@ -195,7 +195,7 @@ async function scheduleSmartAgentRetry(sessionId: string): Promise<void> {
  * Retry intelligent agent initialization
  */
 async function retryIntelligentAgentInitialization(sessionId: string): Promise<void> {
-  console.log(`🔄 Retrying Intelligent Smart Agent initialization for session ${sessionId}...`);
+  console.log(`🔄 Retrying Auto-Select Agent initialization for session ${sessionId}...`);
   
   const success = await initializeIntelligentAgent(sessionId);
   
@@ -215,7 +215,7 @@ async function retryIntelligentAgentInitialization(sessionId: string): Promise<v
     //   }
     // });
   } else {
-    console.log(`❌ Smart Agent retry failed for session ${sessionId} - scheduling another retry`);
+    console.log(`❌ Auto-Select Agent retry failed for session ${sessionId} - scheduling another retry`);
     await scheduleSmartAgentRetry(sessionId);
   }
 }

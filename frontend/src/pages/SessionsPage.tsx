@@ -566,7 +566,8 @@ export default function SessionsPage(){
                 dataIndex:'symbol',
                 width: 120,
                 render: (symbol, record) => {
-                  const isSmartAgent = record.profileJson?.isIntelligent;
+                  // Check both isSmartAgent field and profileJson.isIntelligent
+                  const isSmartAgent = record.isSmartAgent || record.profileJson?.isIntelligent;
                   return (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {isSmartAgent && (
@@ -593,7 +594,7 @@ export default function SessionsPage(){
                       </span>
                       {isSmartAgent && (
                         <Tag color="purple" style={{ fontSize: '10px', lineHeight: '14px', padding: '0 4px' }}>
-                          SMART
+                          AUTO
                         </Tag>
                       )}
                     </div>
@@ -621,6 +622,44 @@ export default function SessionsPage(){
                   </Tag>
                 ),
                 sorter: (a, b) => a.mode.localeCompare(b.mode)
+              },
+              { 
+                title:'Type', 
+                dataIndex:'isSmartAgent',
+                width: 90,
+                render:(_, record)=> {
+                  const isSmartAgent = record.isSmartAgent || record.profileJson?.isIntelligent;
+                  return isSmartAgent ? (
+                    <Tag style={{ 
+                      background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', 
+                      color: 'white', 
+                      border: 'none',
+                      fontWeight: '600',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
+                    }}>
+                      🎯 AUTO
+                    </Tag>
+                  ) : (
+                    <Tag style={{ 
+                      background: 'rgba(248, 250, 252, 0.8)', 
+                      color: '#64748b', 
+                      border: '1px solid #e2e8f0',
+                      fontWeight: '500',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
+                    }}>
+                      MANUAL
+                    </Tag>
+                  );
+                },
+                sorter: (a, b) => {
+                  const aIsSmartAgent = a.isSmartAgent || a.profileJson?.isIntelligent;
+                  const bIsSmartAgent = b.isSmartAgent || b.profileJson?.isIntelligent;
+                  return (bIsSmartAgent ? 1 : 0) - (aIsSmartAgent ? 1 : 0);
+                }
               },
               { 
                 title:'Aggressiveness', 
@@ -1014,7 +1053,11 @@ export default function SessionsPage(){
               setStarting(true);
               const v = await form.validateFields();
               
-              // If Smart Auto Mode is enabled, remove symbol requirement and add smart mode flags
+              // Debug: Log form values
+              console.log('🔍 Form values:', v);
+              console.log('🎯 Auto-Select Mode:', v.smartAutoMode);
+              
+              // If Auto-Select Mode is enabled, remove symbol requirement and add smart mode flags
               if (v.smartAutoMode) {
                 delete v.symbol; // Remove symbol requirement
                 v.isSmartAgent = true; // Flag for backend
@@ -1054,7 +1097,7 @@ export default function SessionsPage(){
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd||0), Number(exBal.totalUsd||0));
               }
               const res = await api.client.post('/api/agent/start', v);
-              message.success(v.smartAutoMode ? 'Smart Auto Agent started! Scanning for best opportunities...' : 'Session started successfully!');
+              message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
               setOpen(false);
               await load();
               // Navigate to the created session (preferred), fallback to first active
@@ -1089,20 +1132,20 @@ export default function SessionsPage(){
               fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
             }}
           >
-            {/* Smart Auto Mode Toggle */}
+            {/* Auto-Select Mode Toggle */}
             <Form.Item 
               label={
                 <Space>
                   <RocketOutlined style={{ color: '#722ed1' }} />
-                  <span style={{ fontWeight: 600 }}>Smart Auto Mode</span>
+                  <span style={{ fontWeight: 600 }}>Auto-Select Mode</span>
                 </Space>
               } 
               name='smartAutoMode' 
               valuePropName="checked"
-              tooltip="Automatically scans and selects the best performing cryptocurrencies. Agent will switch to new opportunities every 24h or when trades complete."
+              tooltip="Automatically analyzes 50+ cryptocurrencies and selects the best performing one. Uses the same advanced trading logic, but switches to new opportunities when they arise."
             >
               <Switch 
-                checkedChildren="🤖 Smart" 
+                checkedChildren="🎯 Auto" 
                 unCheckedChildren="Manual" 
                 style={{
                   background: smartAutoMode ? 'linear-gradient(135deg, #722ed1, #9254de)' : undefined
@@ -1122,13 +1165,13 @@ export default function SessionsPage(){
                 <Space direction="vertical" size="small" style={{ width: '100%' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <ThunderboltOutlined style={{ color: '#0ea5e9', fontSize: '16px' }} />
-                    <span style={{ fontWeight: 600, color: '#0369a1' }}>Smart Auto Agent Configuration</span>
+                    <span style={{ fontWeight: 600, color: '#0369a1' }}>Auto-Select Agent Configuration</span>
                   </div>
                   <div style={{ fontSize: '12px', color: '#0369a1', lineHeight: '1.5' }}>
-                    • <strong>Auto Symbol Selection:</strong> Scans 20+ popular cryptocurrencies every 6 hours<br/>
-                    • <strong>Minimum Hold:</strong> 24 hours per position (or until trade completion)<br/>
-                    • <strong>Smart Selection:</strong> Finds the best available crypto regardless of momentum<br/>
-                    • <strong>High Liquidity:</strong> Focuses on major cryptocurrencies for optimal trading
+                    • <strong>Crypto Selection:</strong> Analyzes 50+ cryptocurrencies and selects the best performer<br/>
+                    • <strong>Same Trading Logic:</strong> Uses identical strategies and risk management as manual mode<br/>
+                    • <strong>Automatic Switching:</strong> Changes to new opportunities when better ones are found<br/>
+                    • <strong>High Liquidity Focus:</strong> Only trades cryptocurrencies with sufficient volume
                   </div>
                 </Space>
               </div>

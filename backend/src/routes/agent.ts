@@ -33,13 +33,17 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       budgetPct?: number, 
       aggressiveness?: 'conservative'|'reactive'|'aggressive',
       isSmartAgent?: boolean,
+      smartAutoMode?: boolean,  // Add support for frontend field name
       smartConfig?: any
     };
     let symbol = body.symbol as string;
 
     // Smart Agent mode - auto-select best symbol
-    if (body.isSmartAgent && body.smartConfig) {
-      console.log('🧠 Creating Intelligent Agent - scanning for best opportunity...');
+    const isSmartAgent = body.isSmartAgent || body.smartAutoMode;
+    console.log('🔍 Debug: isSmartAgent =', body.isSmartAgent, 'smartAutoMode =', body.smartAutoMode, 'final =', isSmartAgent);
+    
+    if (isSmartAgent) {
+      console.log('🎯 Creating Auto-Select Agent - scanning for best opportunity...');
       // We'll set a temporary symbol and replace it after session creation
       symbol = 'BTC/USDT'; // Temporary default
     } else {
@@ -89,14 +93,25 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     }, req.user!.id);
 
     // Mark as Smart Agent if requested
-    if (body.isSmartAgent && body.smartConfig) {
+    if (isSmartAgent) {
+      const defaultSmartConfig = {
+        rescanInterval: 21600000, // 6h
+        minHoldDuration: 86400000, // 24h
+        volumeThreshold: 10000,
+        momentumThreshold: 0.5
+      };
+      
       await (prisma.agentSession as any).update({
         where: { id: s.id },
         data: {
           isSmartAgent: true,
-          smartConfig: body.smartConfig
+          smartConfig: body.smartConfig || defaultSmartConfig
         }
       });
+      
+      // Update the session object we return to frontend
+      (s as any).isSmartAgent = true;
+      (s as any).smartConfig = body.smartConfig || defaultSmartConfig;
     }
     await setActiveSession(s.id);
     // Activate the new agent state machine (profile freeze)
@@ -123,11 +138,11 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     setTimeout(async () => {
       try {
         // Initialize Intelligent Agent if enabled
-        if (body.isSmartAgent && body.smartConfig) {
-          console.log(`🧠 Initializing Intelligent Smart Agent for session ${s.id}`);
+        if (isSmartAgent) {
+          console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
           const success = await initializeIntelligentSmartAgent(s.id);
           if (success) {
-            console.log(`✅ Intelligent Smart Agent ${s.id} initialized successfully`);
+            console.log(`✅ Auto-Select Agent ${s.id} initialized successfully`);
             
             // CRITICAL: Update symbol variable to the one selected by Smart Agent
             const updatedSession = await prisma.agentSession.findUnique({ where: { id: s.id } });
@@ -136,7 +151,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
               console.log(`🔄 Updated symbol for background processes: ${symbol}`);
             }
           } else {
-            console.warn(`⚠️ Intelligent Smart Agent ${s.id} initialization failed - keeping temporary symbol ${symbol}`);
+            console.warn(`⚠️ Auto-Select Agent ${s.id} initialization failed - keeping temporary symbol ${symbol}`);
           }
         }
 
