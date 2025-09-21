@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getAllIntelligentOpportunities } from '../services/smartAgentV2.js';
+import { getAllIntelligentOpportunities } from '../services/smartAgent.js';
 
 export const router = Router();
 

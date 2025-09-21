@@ -1,50 +1,11 @@
 import { Router } from 'express';
 import { startSession, stopSession, activeSession } from '../session/session.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
-import { authenticateU// Smart Agent status
-router.get('/sessions/:id/smart-status', async (req, res) => {
-  try {
-    const sessionId = req.params.id;
-    const status = await getIntelligentAgentStatus(sessionId);
-    
-    if (!status) {
-      return res.json({ isSmartAgent: false });
-    }
-    
-    res.json(status);
-  } catch (error) {
-    console.error('Error getting smart agent status:', error);
-    res.status(500).json({ error: 'Failed to get smart agent status' });
-  }
-});
-
-// Get all intelligent opportunities
-router.get('/intelligent-opportunities', async (req, res) => {
-  try {
-    console.log('🧠 API: Fetching intelligent opportunities...');
-    const opportunities = await getAllIntelligentOpportunities();
-    
-    res.json({
-      success: true,
-      count: opportunities.length,
-      data: opportunities,
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    console.error('Error fetching intelligent opportunities:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch intelligent opportunities',
-      data: []
-    });
-  }
-});edRequest } from '../middleware/auth.js';
+import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { prisma } from '../db/client.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
-import { initializeIntelligentSmartAgent, getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgentV2.js';
-import { initializeIntelligentAgent } from '../services/intelligentAgent.js';
+import { initializeIntelligentSmartAgent, getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgent.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
@@ -78,7 +39,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
 
     // Smart Agent mode - auto-select best symbol
     if (body.isSmartAgent && body.smartConfig) {
-      console.log('🤖 Creating Smart Agent - scanning for best opportunity...');
+      console.log('🧠 Creating Intelligent Agent - scanning for best opportunity...');
       // We'll set a temporary symbol and replace it after session creation
       symbol = 'BTC/USDT'; // Temporary default
     } else {
@@ -161,13 +122,12 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     // Continue heavy work in background without blocking response
     setTimeout(async () => {
       try {
-        // Initialize Smart Agent if enabled
+        // Initialize Intelligent Agent if enabled
         if (body.isSmartAgent && body.smartConfig) {
-          console.log(`� Initializing Intelligent Smart Agent for session ${s.id}`);
+          console.log(`🧠 Initializing Intelligent Smart Agent for session ${s.id}`);
           const success = await initializeIntelligentSmartAgent(parseInt(s.id));
           if (success) {
             console.log(`✅ Intelligent Smart Agent ${s.id} initialized successfully`);
-            // The intelligent agent handles symbol selection internally
           } else {
             console.warn(`⚠️ Intelligent Smart Agent ${s.id} initialization failed`);
           }
@@ -211,31 +171,7 @@ router.post('/stop', async (req,res)=>{
   res.json({ok:true});
 });
 
-// Change the active session symbol
-router.post('/set-symbol', async (req,res)=>{
-  const { symbol, sessionId } = req.body as { symbol: string, sessionId: string };
-  const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
-  if (!s) return res.status(400).json({ error: 'no_session' });
-  const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
-  broadcast('session', upd, upd.symbol, upd.id);
-  res.json(upd);
-});
-
-// Triggers log
-router.get('/triggers', async (req,res)=>{
-  const sessionId = String(req.query.sessionId || '');
-  if (!sessionId) return res.json([]);
-  const logs = await prisma.triggerLog.findMany({ where:{ sessionId }, orderBy: { createdAt: 'desc' }, take: 100 });
-  res.json(logs);
-});
-
-// AI calls count for current session
-router.get('/ai-calls', async (req,res)=>{
-  const sessionId = String(req.query.sessionId || '');
-  res.json({ count: await getAICallsCount(sessionId || undefined) });
-});
-
-// Smart Agent status
+// Intelligent Agent status
 router.get('/sessions/:id/smart-status', async (req, res) => {
   try {
     const sessionId = req.params.id;
@@ -247,84 +183,60 @@ router.get('/sessions/:id/smart-status', async (req, res) => {
     
     res.json(status);
   } catch (error) {
-    console.error('❌ Failed to get Smart Agent status:', error);
-    res.status(500).json({ error: 'Failed to get Smart Agent status' });
+    console.error('Error getting intelligent agent status:', error);
+    res.status(500).json({ error: 'Failed to get intelligent agent status' });
   }
 });
 
-// New: pass a LLM JSON plan to the agent (validates + arms)
-router.post('/propose', async (req,res) => {
+// Get all intelligent opportunities
+router.get('/intelligent-opportunities', async (req, res) => {
   try {
-    const { sessionId, ...rest } = req.body || {};
-    const plan = PlanZ.parse(rest);
-    const a = AgentHub.get(sessionId);
-    if (!a) return res.status(400).json({ error: 'no_agent' });
-    // Persist the proposed plan on session
-    try { await prisma.agentSession.update({ where: { id: sessionId }, data: { planJson: plan as any } }); } catch {}
-    await a.propose(plan as any);
-    await a.validateAndArm();
-    res.json({ ok: true });
-  } catch (e: any) {
-    res.status(400).json({ error: String(e?.message || e) });
+    console.log('🧠 API: Fetching intelligent opportunities...');
+    const opportunities = await getAllIntelligentOpportunities();
+    
+    res.json({
+      success: true,
+      count: opportunities.length,
+      data: opportunities,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Error fetching intelligent opportunities:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch intelligent opportunities',
+      data: []
+    });
   }
 });
 
+// Change the active session symbol
+router.post('/set-symbol', async (req,res)=>{
+  const { symbol, sessionId } = req.body as { symbol: string, sessionId: string };
+  const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  if (!s) return res.status(400).json({ error: 'no_session' });
+  const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
+  broadcast('session', upd, upd.symbol, upd.id);
+  res.json(upd);
+});
+
+// AI calls count for current session
+router.get('/ai-calls', async (req,res)=>{
+  const sessionId = String(req.query.sessionId || '');
+  res.json({ count: await getAICallsCount(sessionId || undefined) });
+});
+
+// Basic status endpoint
 router.get('/state', async (req,res)=>{
   const sessionId = String(req.query.sessionId || '');
   const a = sessionId ? AgentHub.get(sessionId) : null;
   let balance: any = null;
   try { balance = await (a as any)?.broker?.balance?.(); } catch {}
-  // Enhance with live unrealized PnL if we have a position
-  try {
-    if (a?.pos && a?.profile) {
-      const snap = await buildTechSnapshot(a.profile.symbol);
-      const last = snap.last;
-      const dir = a.pos.side === 'buy' ? 1 : -1;
-      const upnlUsd = dir * (last - a.pos.entry) * a.pos.qty;
-      const equityLive = Number(balance?.equityUsd ?? 0) + upnlUsd;
-      const upnlPct = a.pos.entry ? (dir * (last - a.pos.entry) / a.pos.entry) * 100 : 0;
-      balance = { ...(balance||{}), equityUsd: equityLive, upnlUsd, upnlPct };
-    }
-  } catch {}
   res.json({ state: a?.state, profile: a?.profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics(sessionId || undefined) });
 });
 
-// Update aggressiveness level on the fly
-router.post('/aggressiveness', async (req, res) => {
-  const { sessionId, level } = (req.body || {}) as { sessionId?: string; level?: string };
-  if (!sessionId) return res.status(400).json({ error: 'session_required' });
-  const a = AgentHub.get(sessionId) as any;
-  if (!a) return res.status(404).json({ error: 'no_agent' });
-  const val = String(level || '').toLowerCase();
-  if (!['conservative','reactive','aggressive'].includes(val)) return res.status(400).json({ error: 'invalid_level' });
-  try {
-    a.profile = { ...(a.profile || {}), aggressiveness: val };
-    // broadcast new profile snapshot to UI
-    const sym = a.profile?.symbol;
-    const { broadcast } = await import('../ws/hub.js');
-    try { broadcast('agent_state', { state: a.state, profile: a.profile }, sym, sessionId); } catch {}
-    // persist hint on session profileJson for restarts
-    try { await (await import('../db/client.js')).prisma.agentSession.update({ where: { id: sessionId }, data: { profileJson: a.profile as any } }); } catch {}
-    res.json({ ok: true, aggressiveness: val });
-  } catch (e:any) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
-
-router.post('/ack-halt', async (req,res)=>{
-  const { sessionId } = req.body as { sessionId?: string };
-  if (!sessionId) return res.status(400).json({ error: 'session_required' });
-  const agent = AgentHub.get(sessionId) as any;
-  if (!agent) return res.status(404).json({ error: 'no_agent' });
-  try {
-    if (typeof agent.acknowledgeHalt === 'function') agent.acknowledgeHalt();
-    res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
-
-// List recent sessions (active first), with open position count
+// Sessions list
 router.get('/sessions', async (req,res)=>{
   const modeRaw = String(req.query.mode || '').toLowerCase();
   const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
@@ -360,138 +272,27 @@ router.get('/sessions', async (req,res)=>{
   res.json(out);
 });
 
-// Aggregated view across active sessions for multi-agent header
+// Overview endpoint
 router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)=>{
   const modeRaw = String(req.query.mode || '').toLowerCase();
   const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
   
-  // Filter sessions by user if not legacy
   const sessionWhere: any = { stoppedAt: null };
   if (modeFilter) sessionWhere.mode = modeFilter;
   if (!req.user?.isLegacy && req.user?.id) {
     sessionWhere.userId = req.user.id;
   }
-  const [actives, totalSessions, recentAlerts] = await Promise.all([
+  const [actives, totalSessions] = await Promise.all([
     prisma.agentSession.findMany({ where: sessionWhere, include: { kpi: true, positions: true } }),
     prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
-    (async ()=>{ try { return await (prisma as any).alert.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }); } catch { return []; } })(),
   ]);
   const symbols = actives.map(a => a.symbol);
   const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.kpi?.aiCallsTotal || 0), 0);
   const pnlUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
   const capitalStartUsd = actives.reduce((sum, a)=> sum + Number(a.startBalanceUsd || 0), 0);
-  const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : (
-    actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.roiPct || 0), 0) / actives.length) : 0
-  );
+  const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : 0;
   const avgWinRate = actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.winRate || 0), 0) / actives.length) : 0;
-  // Global exchange balance (live account) - use user's API keys
-  let exchangeBalance: any = null;
-  if (!modeFilter || modeFilter === 'live') {
-    try {
-      // Try to get user's credentials for live balance
-      if (!req.user?.isLegacy && req.user?.id) {
-        const credentials = await getUserCredentials(req.user.id, 'crypto.com');
-        if (credentials) {
-          const ex = await getUserExchange(req.user.id, credentials);
-          const b = await ex.fetchBalance();
-          const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
-          const num = (v:any)=>{ const n = Number(v); return Number.isFinite(n) ? n : undefined; };
-          const equityUsd = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value) ?? (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
-          const freeUsd = num(raw?.total_available_balance) ?? (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
-          const committedUsd = num(raw?.total_position_cost) ?? (Number.isFinite(equityUsd) && Number.isFinite(freeUsd) ? Math.max(0, (equityUsd ?? 0) - (freeUsd ?? 0)) : 0);
-          exchangeBalance = {
-            totalUsd: Number.isFinite(equityUsd) ? equityUsd : 0,
-            freeUsd: Number.isFinite(freeUsd) ? freeUsd : 0,
-            usedUsd: Number.isFinite(committedUsd) ? committedUsd : 0,
-          };
-        }
-      }
-      // Note: Users without API keys configured will have null exchangeBalance
-    } catch (error) {
-      console.error('Exchange balance fetch error:', error);
-    }
-  }
 
-  // Aggregate paper balances and per-mode budgets
-  let paperBalance = { equityUsd: 0, freeUsd: 0, committedUsd: 0 };
-  let liveBudgetTotal = 0;
-  let liveCommittedTotal = 0;
-  let paperBudgetTotal = 0;
-  let paperCommittedTotal = 0;
-  try {
-    for (const s of actives) {
-      const agent = AgentHub.get(s.id) as any;
-      const profile = agent?.profile;
-      const cfgBudget = (() => {
-        const raw = (s as any).profileJson?.budgetPct;
-        if (typeof raw === 'number') return raw > 1 ? raw / 100 : raw;
-        return undefined;
-      })();
-      const budgetFraction = profile?.budgetFraction ?? Math.max(0.1, Math.min(1, cfgBudget ?? 1));
-      const startBal = Number(s.startBalanceUsd || 0);
-      const budgetUsd = startBal > 0 ? startBal * budgetFraction : undefined;
-      const bal = await agent?.broker?.balance?.();
-      if (s.mode === 'paper') {
-        if (budgetUsd != null) paperBudgetTotal += budgetUsd;
-        if (bal) {
-          paperBalance.equityUsd += Number(bal.equityUsd || 0);
-          paperBalance.freeUsd += Number(bal.freeUsd || 0);
-          paperBalance.committedUsd += Number(bal.committedUsd || 0);
-          paperCommittedTotal += Number(bal.committedUsd || 0);
-        }
-      } else {
-        if (budgetUsd != null) liveBudgetTotal += budgetUsd;
-        if (bal) liveCommittedTotal += Number(bal.committedUsd || 0);
-      }
-    }
-  } catch {}
-  const bySession = await Promise.all(actives.map(async a => {
-    const agent = AgentHub.get(a.id) as any;
-    const state = agent?.state || 'IDLE';
-    const bias = agent?.plan?.bias || null;
-    const pos = agent?.pos || null;
-    const openQty = Array.isArray((a as any).positions) ? (a as any).positions.reduce((s:number,p:any)=> s + Number(p?.qty||0), 0) : 0;
-    const profile = (a as any).profileJson || {};
-    const aggressiveness = profile?.aggressiveness || 'conservative';
-    const winRate = Number(a.kpi?.winRate || 0);
-    return {
-      id: a.id,
-      symbol: a.symbol,
-      mode: a.mode,
-      startedAt: a.startedAt,
-      pnlUsd: Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0),
-      roiPct: Number(a.kpi?.roiPct || 0),
-      aiCalls: Number(a.kpi?.aiCallsTotal || 0),
-      aggressiveness,
-      winRate,
-      state,
-      bias,
-      openQty,
-      hasPos: !!pos,
-      posSide: pos?.side || null,
-      posQty: pos?.qty || null,
-    };
-  }));
-  // Total open risk (approx): sum of |qty * last| across active positions
-  let totalOpenRiskUsd = 0;
-  try {
-    for (const s of actives) {
-      const agent = AgentHub.get(s.id) as any;
-      if (agent?.pos && agent?.profile?.symbol) {
-        const snap = await buildTechSnapshot(agent.profile.symbol);
-        totalOpenRiskUsd += Math.abs((agent.pos.qty||0) * (snap.last||0));
-      }
-    }
-  } catch {}
-  // Alerts summary
-  const activeIds = new Set(actives.map(a => a.id));
-  const alertsFiltered = (recentAlerts as any[]).filter((a:any) => {
-    if (!modeFilter) return true;
-    if (!a.sessionId) return true;
-    return activeIds.has(a.sessionId);
-  });
-  const severityCounts = (alertsFiltered as any[]).reduce((m:any,a:any)=>{ m[a.severity] = (m[a.severity]||0)+1; return m; }, { high:0, med:0, low:0 });
-  const alertsSlim = alertsFiltered.map(a => ({ id:a.id, sessionId:a.sessionId, symbol:a.symbol, kind:a.kind, severity:a.severity, createdAt:a.createdAt }));
   res.json({
     activeCount: actives.length,
     sessionsCount: totalSessions,
@@ -499,60 +300,8 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     pnlUsd,
     capitalStartUsd,
     roiPct,
-    avgRoiPct: roiPct,
     avgWinRate,
     aiCallsTotal,
-    exchangeBalance,
-    paperBalance,
-    budget: {
-      liveTotalUsd: liveBudgetTotal,
-      liveCommittedUsd: liveCommittedTotal,
-      liveRemainingUsd: Math.max(0, liveBudgetTotal - liveCommittedTotal),
-      paperTotalUsd: paperBudgetTotal,
-      paperCommittedUsd: paperCommittedTotal,
-      paperRemainingUsd: Math.max(0, paperBudgetTotal - paperCommittedTotal),
-    },
-    sessions: bySession,
-    alerts: { severityCounts, recent: alertsSlim },
     updatedAt: new Date().toISOString(),
-    totalOpenRiskUsd,
   });
-});
-
-// Overview: active agents count, average ROI, sessions count
-// (removed duplicate /overview route)
-
-// Delete a session and all associated records (requires session to be stopped)
-router.delete('/sessions/:id', async (req,res)=>{
-  const { id } = req.params as { id: string };
-  const active = await activeSession();
-  if (active?.id === id) return res.status(400).json({ error: 'stop_active_session_first' });
-  // Hard delete children then session
-  await prisma.fill.deleteMany({ where: { sessionId: id } });
-  await prisma.order.deleteMany({ where: { sessionId: id } });
-  await prisma.position.deleteMany({ where: { sessionId: id } });
-  await prisma.strategy.deleteMany({ where: { sessionId: id } });
-  await prisma.triggerLog.deleteMany({ where: { sessionId: id } });
-  await prisma.sentimentSnapshot.deleteMany({ where: { sessionId: id } });
-  await prisma.sessionKpi.deleteMany({ where: { sessionId: id } });
-  await prisma.agentSession.delete({ where: { id } });
-  res.json({ ok: true });
-});
-
-// Get trading diagnostics for a session - shows why agent is not trading
-router.get('/sessions/:id/diagnostics', async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const agent = AgentHub.get(id);
-    
-    if (!agent) {
-      return res.status(404).json({ error: 'Agent not found or not active' });
-    }
-    
-    const diagnostics = await (agent as any).getDiagnostics();
-    res.json(diagnostics);
-  } catch (err) {
-    console.error('Diagnostics error:', err);
-    res.status(500).json({ error: 'Failed to get diagnostics', details: String((err as any)?.message || err) });
-  }
 });

@@ -24,7 +24,7 @@ import { router as cacheRouter } from "./routes/cache.js";
 import { batchRouter } from "./routes/batch.js";
 import { scannerRouter } from "./routes/scanner.js";
 import { router as intelligentRouter } from "./routes/intelligent.js";
-import { checkAllSmartAgents } from "./services/smartAgent.js";
+import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 const cfg = getConfig();
@@ -109,7 +109,7 @@ startEventEngine();
 console.log('🤖 Starting Smart Agent background checker...');
 setInterval(async () => {
   try {
-    await checkAllSmartAgents();
+    await checkSmartOpportunities();
   } catch (error) {
     console.error('❌ Smart Agent background job failed:', error);
   }
