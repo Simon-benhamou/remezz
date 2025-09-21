@@ -18,12 +18,32 @@ import UserDropdown from './components/UserDropdown';
 
 function AppInner(){
   const [overview, setOverview] = React.useState<any>(null);
+  const [authChecked, setAuthChecked] = React.useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { mode, setMode } = useMode();
 
-  // Note: global WS removed; MonitorPage owns its own session-scoped WS now.
-
+  // Vérification d'authentification au démarrage
+  React.useEffect(() => {
+    const checkAuth = async () => {
+      const apiKey = getApiKey();
+      if (apiKey) {
+        try {
+          // Valider le token avec le serveur
+          await api.client.get('/api/auth/me');
+          setAuthChecked(true);
+        } catch (error) {
+          // Token invalide, nettoyer et rediriger
+          clearApiKey();
+          window.location.href = '/login';
+          return;
+        }
+      } else {
+        setAuthChecked(true);
+      }
+    };
+    checkAuth();
+  }, []);
 
   // Lightweight polling for multi-agent overview (no WS in App anymore)
   React.useEffect(()=>{
@@ -31,12 +51,19 @@ function AppInner(){
     const load = async ()=>{
       try { setOverview(await api.overview(mode)); } catch {}
     };
-    load();
-    timer = setInterval(load, 15000);
+    if (authChecked && getApiKey()) {
+      load();
+      timer = setInterval(load, 15000);
+    }
     return ()=> { if (timer) clearInterval(timer); };
-  }, [mode]);
+  }, [mode, authChecked]);
 
   const hasSession = true; // routing no longer depends on a single active session
+
+  // Attendre la vérification d'auth avant de rendre
+  if (!authChecked) {
+    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>Loading...</div>;
+  }
 
   const authed = !!getApiKey();
   if (!authed) {

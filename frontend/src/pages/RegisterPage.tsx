@@ -29,7 +29,7 @@ export default function RegisterPage() {
         // Force reload to ensure clean state
         setTimeout(() => {
           window.location.href = '/dashboard';
-        }, 500);
+        }, 100);
       }
     } catch (error: any) {
       const errorMessage = error?.response?.data?.error || 'Registration failed';

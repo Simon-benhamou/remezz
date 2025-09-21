@@ -38,8 +38,26 @@ export default function UserDropdown() {
   };
 
   const handleLogout = () => {
-    clearApiKey();
-    navigate('/login');
+    try {
+      // Nettoyer toutes les données stockées
+      clearApiKey();
+      
+      // Nettoyer le localStorage pour tout l'état de l'app
+      const keysToKeep = ['appMode']; // Garder le mode de trading
+      const allKeys = Object.keys(localStorage);
+      allKeys.forEach(key => {
+        if (!keysToKeep.includes(key)) {
+          localStorage.removeItem(key);
+        }
+      });
+      
+      // Force une redirection complète pour assurer un état propre
+      window.location.href = '/login';
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Fallback en cas d'erreur
+      window.location.href = '/login';
+    }
   };
 
   const items: MenuProps['items'] = [

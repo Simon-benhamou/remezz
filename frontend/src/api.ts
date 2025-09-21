@@ -11,8 +11,16 @@ export function getApiKey(){ return TOKEN || localStorage.getItem('apiKey') || '
 export function clearApiKey(){
   TOKEN='';
   localStorage.removeItem('apiKey');
+  
+  // Nettoyer les headers d'authentification
   const h = client.defaults.headers as unknown as AxiosHeaders;
   h.delete('x-api-key');
+  h.delete('Authorization');
+  
+  // Nettoyer les cookies de session si existants
+  document.cookie.split(";").forEach(function(c) { 
+    document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+  });
 }
 
 export const client = axios.create({ baseURL: API_BASE });

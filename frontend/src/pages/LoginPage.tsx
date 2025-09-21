@@ -12,7 +12,9 @@ export default function LoginPage() {
   const navigate = useNavigate();
 
   React.useEffect(() => {
-    if (getApiKey()) navigate('/dashboard', { replace: true });
+    if (getApiKey()) {
+      navigate('/dashboard', { replace: true });
+    }
   }, [navigate]);
 
   const onFinish = async (values: any) => {
@@ -22,7 +24,11 @@ export default function LoginPage() {
       if (result.token) {
         setApiKey(result.token);
         message.success(`Welcome back, ${result.user.username}!`);
-        navigate('/dashboard', { replace: true });
+        
+        // Force une navigation complète pour assurer un état propre
+        setTimeout(() => {
+          window.location.href = '/dashboard';
+        }, 100);
       }
     } catch (error: any) {
       const errorMessage = error?.response?.data?.error || 'Login failed';
@@ -49,7 +55,11 @@ export default function LoginPage() {
       if (out?.token) {
         setApiKey(out.token);
         message.success('Logged in');
-        navigate('/dashboard', { replace: true });
+        
+        // Force une navigation complète pour assurer un état propre
+        setTimeout(() => {
+          window.location.href = '/dashboard';
+        }, 100);
       }
     } catch (e: any) {
       message.error('Invalid access code');
