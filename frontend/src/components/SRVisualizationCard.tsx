@@ -48,7 +48,7 @@ export default function SRVisualizationCard({
     supportPrice,
     resistancePrice,
     safeCurrentPrice,
-    ...Object.values(pivots).filter(p => p && Number(p) > 0).map(p => Number(p))
+    ...Object.values(pivots || {}).filter(p => p && Number(p) > 0).map(p => Number(p))
   ].filter(p => p > 0);
   
   const minPrice = Math.min(...allLevels) * 0.999;
@@ -272,7 +272,7 @@ export default function SRVisualizationCard({
         )}
 
         {/* Pivot Levels (if available) */}
-        {Object.keys(pivots).length > 0 && (
+        {Object.keys(pivots || {}).length > 0 && (
           <details style={{ fontSize: 11 }}>
             <summary style={{ 
               color: '#6b7280', 
@@ -280,11 +280,11 @@ export default function SRVisualizationCard({
               userSelect: 'none',
               fontWeight: 500
             }}>
-              Pivot Levels ({Object.keys(pivots).length})
+              Pivot Levels ({Object.keys(pivots || {}).length})
             </summary>
             <div style={{ marginTop: 4 }}>
               <Row gutter={[4, 4]}>
-                {Object.entries(pivots).map(([key, value]) => {
+                {Object.entries(pivots || {}).map(([key, value]) => {
                   if (!value || value <= 0) return null;
                   const distance = getDistancePercent(currentPrice, value);
                   const isAbove = value > currentPrice;

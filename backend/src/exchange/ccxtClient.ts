@@ -32,16 +32,33 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     }
   }
 
-  const { EXCHANGE_ID, API_PASSWORD } = getConfig();
+  const { EXCHANGE_ID } = getConfig();
   const Klass: any = (ccxt as any)[EXCHANGE_ID];
   if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
 
-  const userExchange = new Klass({
+  // Check exchange required credentials
+  const tempExchange = new Klass();
+  const requiredCreds = tempExchange.requiredCredentials || {};
+
+  console.log('Creating exchange instance for user:', userId);
+  console.log('Exchange ID:', EXCHANGE_ID);
+  console.log('Required credentials:', requiredCreds);
+  console.log('API Key length:', credentials.apiKey?.length);
+  console.log('API Secret length:', credentials.apiSecret?.length);
+
+  const config: any = {
     apiKey: credentials.apiKey,
     secret: credentials.apiSecret,
-    password: credentials.passphrase || API_PASSWORD || undefined,
     enableRateLimit: true,
-  });
+  };
+
+  // Only add password if the exchange requires it
+  if (requiredCreds.password && credentials.passphrase) {
+    config.password = credentials.passphrase;
+    console.log('Using passphrase for exchange that requires it');
+  }
+
+  const userExchange = new Klass(config);
 
   // Default market type (spot | swap)
   const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
@@ -50,7 +67,10 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
   // @ts-ignore
   userExchange.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
 
+  console.log('Loading markets for exchange...');
   await userExchange.loadMarkets();
+  console.log('Markets loaded successfully, total:', Object.keys(userExchange.markets || {}).length);
+  
   userExchanges.set(cacheKey, userExchange);
   
   return userExchange;
@@ -59,22 +79,43 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
 // Function to validate user credentials by testing API connection
 export async function validateUserCredentials(credentials: { apiKey: string; apiSecret: string; passphrase?: string }): Promise<boolean> {
   try {
-    const { EXCHANGE_ID, API_PASSWORD } = getConfig();
+    const { EXCHANGE_ID } = getConfig();
     const Klass: any = (ccxt as any)[EXCHANGE_ID];
     if (!Klass) return false;
 
-    const testExchange = new Klass({
+    // Check exchange required credentials
+    const tempExchange = new Klass();
+    const requiredCreds = tempExchange.requiredCredentials || {};
+    
+    console.log('Exchange required credentials:', requiredCreds);
+
+    const config: any = {
       apiKey: credentials.apiKey,
       secret: credentials.apiSecret,
-      password: credentials.passphrase || API_PASSWORD || undefined,
       enableRateLimit: true,
-    });
+    };
+
+    // Only add password if the exchange requires it
+    if (requiredCreds.password && credentials.passphrase) {
+      config.password = credentials.passphrase;
+    }
+
+    const testExchange = new Klass(config);
+
+    console.log('Testing credentials with exchange:', EXCHANGE_ID);
+    console.log('Config keys:', Object.keys(config));
 
     // Test by fetching balance (minimal API call that requires authentication)
-    await testExchange.fetchBalance();
+    const balance = await testExchange.fetchBalance();
+    console.log('Credential validation successful, balance keys:', Object.keys(balance || {}));
     return true;
-  } catch (error) {
-    console.error('Credential validation failed:', error);
+  } catch (error: any) {
+    console.error('Credential validation failed:', error?.message || error);
+    console.error('Error details:', {
+      name: error?.name,
+      code: error?.code,
+      status: error?.status
+    });
     return false;
   }
 }

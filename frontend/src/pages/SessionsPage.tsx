@@ -178,6 +178,11 @@ export default function SessionsPage(){
       'Stopped': r.stoppedAt ? new Date(r.stoppedAt).toISOString() : ''
     }));
     
+    if (csvData.length === 0) {
+      message.warning('No data to export');
+      return;
+    }
+    
     const csv = [
       Object.keys(csvData[0]).join(','),
       ...csvData.map(row => Object.values(row).join(','))
