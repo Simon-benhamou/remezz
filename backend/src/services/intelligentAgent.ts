@@ -712,14 +712,14 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
     
     console.log(`🔄 Updating session ${sessionId} with symbol: ${bestOpportunity.symbol}`);
     
-    // Try direct SQL to update currentSymbol
+    // Try direct SQL to update both symbol and currentSymbol
     try {
       await prisma.$executeRaw`
         UPDATE "AgentSession" 
-        SET "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
+        SET "symbol" = ${bestOpportunity.symbol}, "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
         WHERE id = ${sessionId}
       `;
-      console.log(`✅ currentSymbol updated via SQL`);
+      console.log(`✅ symbol and currentSymbol updated via SQL to: ${bestOpportunity.symbol}`);
     } catch (error) {
       console.error(`❌ SQL update failed:`, error);
     }
@@ -849,10 +849,10 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       try {
         await prisma.$executeRaw`
           UPDATE "AgentSession" 
-          SET "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
+          SET "symbol" = ${bestOpportunity.symbol}, "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
           WHERE id = ${session.id}
         `;
-        console.log(`✅ currentSymbol updated to ${bestOpportunity.symbol} via SQL`);
+        console.log(`✅ symbol and currentSymbol updated to ${bestOpportunity.symbol} via SQL`);
       } catch (error) {
         console.error(`❌ SQL update failed:`, error);
       }
@@ -967,14 +967,14 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         trades: recentTrades
       }];
       
-      // Update currentSymbol via SQL
+      // Update both symbol and currentSymbol via SQL
       try {
         await prisma.$executeRaw`
           UPDATE "AgentSession" 
-          SET "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
+          SET "symbol" = ${bestOpportunity.symbol}, "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
           WHERE id = ${session.id}
         `;
-        console.log(`✅ currentSymbol updated to ${bestOpportunity.symbol} via SQL`);
+        console.log(`✅ symbol and currentSymbol updated to ${bestOpportunity.symbol} via SQL`);
       } catch (error) {
         console.error(`❌ SQL update failed:`, error);
       }
