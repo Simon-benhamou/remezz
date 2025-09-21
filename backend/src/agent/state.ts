@@ -2878,6 +2878,14 @@ export class ReboundRejectionAgent {
         console.log(`🔍 Dynamic zone recalc for ${this.profile?.symbol}: price=${price}, snap.last=${snap?.last}, bias=${this.plan.bias}`);
         dynamicZone = await this.calculateDynamicEntryZone(snap, price, this.plan.bias);
         console.log(`🎯 Dynamic zone recalculation: Original [${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}] → Dynamic [${dynamicZone.from.toFixed(4)}, ${dynamicZone.to.toFixed(4)}] (price: ${price.toFixed(4)})`);
+        
+        // Update the plan with dynamic zones for chart display
+        this.plan.zone = {
+          from: dynamicZone.from,
+          to: dynamicZone.to,
+          mid: dynamicZone.mid
+        };
+        console.log(`📊 Updated plan.zone for chart display: [${dynamicZone.from.toFixed(4)}, ${dynamicZone.to.toFixed(4)}]`);
       }
       
       const zoneMin = Math.min(dynamicZone.from, dynamicZone.to);

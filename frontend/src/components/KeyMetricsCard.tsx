@@ -84,8 +84,9 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
     return { strength: 'weak', color: '#ef4444', icon: <BarChartOutlined /> };
   };
 
-  const atrStatus = getMetricStatus(safeAtrPct, 0.8);
-  const adxStatus = getMetricStatus(safeAdx, 25);
+  // More realistic thresholds aligned with agent's adaptive logic
+  const atrStatus = getMetricStatus(safeAtrPct, 0.5);  // Reduced from 0.8 to 0.5
+  const adxStatus = getMetricStatus(safeAdx, 15);      // Reduced from 25 to 15
   const rsiStatus = getRSIStatus(safeRsi);
   const trendStatus = getTrendStatus();
 
@@ -128,7 +129,7 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
                     {safeAtrPct.toFixed(2)}%
                   </div>
                   <div style={{ fontSize: 9, color: '#9ca3af' }}>
-                    Target: ≥0.8%
+                    Target: ≥0.5%
                   </div>
                 </div>
                 <div style={{ color: atrStatus.color, fontSize: 16 }}>
@@ -166,7 +167,7 @@ export default function KeyMetricsCard({ indicators = {}, style }: KeyMetricsCar
                     {safeAdx.toFixed(1)}
                   </div>
                   <div style={{ fontSize: 9, color: '#9ca3af' }}>
-                    Target: ≥25
+                    Target: ≥15
                   </div>
                 </div>
                 <div style={{ color: adxStatus.color, fontSize: 16 }}>

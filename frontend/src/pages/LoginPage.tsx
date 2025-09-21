@@ -20,15 +20,38 @@ export default function LoginPage() {
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
+      console.log('🔐 Starting login request...');
       const result = await api.auth.login(values.username, values.password);
+      console.log('✅ Login API response:', result);
+      
       if (result.token) {
+        console.log('🎯 Token received, setting API key...');
         setApiKey(result.token);
-        message.success(`Welcome back, ${result.user.username}!`);
+        console.log('✅ API key set successfully');
         
-        // Navigation immédiate avec React Router
-        navigate('/dashboard', { replace: true });
+        message.success(`Welcome back, ${result.user.username}!`);
+        console.log('🚀 Navigating to dashboard...');
+        
+        // Small delay to ensure message is shown, then navigate
+        setTimeout(() => {
+          try {
+            navigate('/dashboard', { replace: true });
+            console.log('✅ Navigation initiated');
+          } catch (navError) {
+            console.error('❌ Navigation error:', navError);
+            // Fallback: force page reload to dashboard
+            window.location.href = '/dashboard';
+          }
+        }, 100);
+      } else {
+        console.error('❌ No token in response:', result);
+        throw new Error('No token received from server');
       }
     } catch (error: any) {
+      console.error('❌ Login error:', error);
+      console.error('❌ Error response:', error?.response);
+      console.error('❌ Error data:', error?.response?.data);
+      
       const errorMessage = error?.response?.data?.error || 'Login failed';
       const errorMessages: { [key: string]: string } = {
         'invalid_credentials': 'Invalid username or password',
