@@ -125,7 +125,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         // Initialize Intelligent Agent if enabled
         if (body.isSmartAgent && body.smartConfig) {
           console.log(`🧠 Initializing Intelligent Smart Agent for session ${s.id}`);
-          const success = await initializeIntelligentSmartAgent(parseInt(s.id));
+          const success = await initializeIntelligentSmartAgent(s.id);
           if (success) {
             console.log(`✅ Intelligent Smart Agent ${s.id} initialized successfully`);
             

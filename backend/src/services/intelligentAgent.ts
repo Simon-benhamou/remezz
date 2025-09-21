@@ -642,7 +642,7 @@ async function updateSessionNextCheck(sessionId: string, nextCheck: Date): Promi
 /**
  * Initialize intelligent agent for a session
  */
-export async function initializeIntelligentAgent(sessionId: number): Promise<boolean> {
+export async function initializeIntelligentAgent(sessionId: string): Promise<boolean> {
   try {
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
