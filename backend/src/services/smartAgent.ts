@@ -141,12 +141,82 @@ export async function initializeIntelligentSmartAgent(sessionId: number): Promis
       return true;
     }
     
-    console.error('❌ Failed to initialize with intelligent system');
+    console.error('❌ Failed to initialize with intelligent system - scheduling retry in 2-3h');
+    
+    // Schedule retry in 2-3h if no opportunities found
+    await scheduleSmartAgentRetry(sessionId);
     return false;
     
   } catch (error) {
     console.error('❌ Error initializing Intelligent Smart Agent:', error);
     return false;
+  }
+}
+
+/**
+ * Schedule Smart Agent retry when no opportunities are found
+ */
+async function scheduleSmartAgentRetry(sessionId: number): Promise<void> {
+  try {
+    const retryDelayMs = (2.5 + Math.random()) * 60 * 60 * 1000; // 2-3.5h random
+    const nextRetry = new Date(Date.now() + retryDelayMs);
+    
+    console.log(`⏰ Scheduling Smart Agent retry for session ${sessionId} at ${nextRetry.toISOString()}`);
+    
+    // Save retry schedule in session
+    await prisma.agentSession.update({
+      where: { id: String(sessionId) },
+      data: {
+        nextRescanAt: nextRetry,
+        smartHistory: {
+          ...{}, // Empty base object
+          lastFailedScan: new Date().toISOString(),
+          nextRetryAt: nextRetry.toISOString(),
+          reason: 'No qualifying opportunities found - will retry in 2-3h'
+        }
+      }
+    });
+    
+    // Schedule the actual retry (in real system this would be handled by a background job)
+    setTimeout(async () => {
+      try {
+        console.log(`🔄 Smart Agent retry triggered for session ${sessionId}`);
+        await retryIntelligentAgentInitialization(sessionId);
+      } catch (error) {
+        console.error(`❌ Smart Agent retry failed for session ${sessionId}:`, error);
+      }
+    }, retryDelayMs);
+    
+  } catch (error) {
+    console.error('Error scheduling Smart Agent retry:', error);
+  }
+}
+
+/**
+ * Retry intelligent agent initialization
+ */
+async function retryIntelligentAgentInitialization(sessionId: number): Promise<void> {
+  console.log(`🔄 Retrying Intelligent Smart Agent initialization for session ${sessionId}...`);
+  
+  const success = await initializeIntelligentAgent(sessionId);
+  
+  if (success) {
+    console.log(`✅ Smart Agent retry successful for session ${sessionId}`);
+    
+    // Update session to clear retry schedule
+    await prisma.agentSession.update({
+      where: { id: String(sessionId) },
+      data: {
+        nextRescanAt: null,
+        smartHistory: {
+          retrySuccessful: true,
+          retriedAt: new Date().toISOString()
+        }
+      }
+    });
+  } else {
+    console.log(`❌ Smart Agent retry failed for session ${sessionId} - scheduling another retry`);
+    await scheduleSmartAgentRetry(sessionId);
   }
 }
 
@@ -219,17 +289,41 @@ export async function getIntelligentAgentStatus(sessionId: string): Promise<any>
     }
     
     const history = session.planJson as any;
+    const smartHistory = (session as any).smartHistory || {};
     
-    return {
+    // Get current analysis if available
+    let currentAnalysis: any = null;
+    if (session.symbol && config?.analysis) {
+      currentAnalysis = config.analysis;
+    }
+    
+    // Create smart agent status with enhanced info
+    const status = {
       isSmartAgent: true,
       isIntelligent: true,
       currentSymbol: session.symbol,
-      analysis: config.analysis || null,
+      analysis: currentAnalysis,
       selectedAt: config.selectedAt || null,
       lastScan: config.lastScan || null,
-      nextScanDue: config.nextScanDue || null,
-      history: history?.intelligentHistory || []
+      nextScanDue: (session as any).nextRescanAt || config.nextScanDue || null,
+      history: history?.intelligentHistory || [],
+      
+      // Enhanced monitoring info
+      status: currentAnalysis ? 'active' : 'waiting',
+      waitingReason: !currentAnalysis ? (smartHistory?.reason || 'Waiting for opportunities') : null,
+      nextRetryAt: smartHistory?.nextRetryAt || null,
+      conclusion: currentAnalysis ? {
+        summary: currentAnalysis.reasoning?.summary || 'No summary available',
+        recommendation: currentAnalysis.opportunity?.direction || 'neutral',
+        confidence: currentAnalysis.confidence || 0,
+        expectedReturn: currentAnalysis.opportunity?.expectedReturn || 0,
+        riskLevel: currentAnalysis.opportunity?.riskLevel || 'medium',
+        technicalFactors: currentAnalysis.reasoning?.technical || [],
+        riskFactors: currentAnalysis.reasoning?.risk || []
+      } : null
     };
+    
+    return status;
     
   } catch (error) {
     console.error('Error getting intelligent agent status:', error);

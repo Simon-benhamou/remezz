@@ -13,6 +13,9 @@ interface SmartAgentStatus {
   isSmartAgent: boolean;
   isIntelligent: boolean;
   currentSymbol: string;
+  status?: 'active' | 'waiting';
+  waitingReason?: string;
+  nextRetryAt?: string;
   analysis: {
     symbol: string;
     score: number;
@@ -30,6 +33,15 @@ interface SmartAgentStatus {
       expectedReturn: number;
       riskLevel: string;
     };
+  } | null;
+  conclusion?: {
+    summary: string;
+    recommendation: string;
+    confidence: number;
+    expectedReturn: number;
+    riskLevel: string;
+    technicalFactors: string[];
+    riskFactors: string[];
   } | null;
   selectedAt: string | null;
   lastScan: string | null;
@@ -200,6 +212,58 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
               <Tag color="orange">{status.analysis.opportunity.riskLevel} risk</Tag>
               <Tag color="purple">+{status.analysis.opportunity.expectedReturn.toFixed(1)}% target</Tag>
             </div>
+          </div>
+        )}
+
+        {/* Smart Agent Conclusion */}
+        {status.conclusion && (
+          <div style={{ 
+            marginTop: '16px', 
+            padding: '12px', 
+            background: 'linear-gradient(135deg, #fff7ed 0%, #fed7aa 20%)',
+            borderRadius: '8px',
+            border: '1px solid #fdba74'
+          }}>
+            <Text strong style={{ color: '#ea580c', fontSize: '13px' }}>🎯 Smart Agent Conclusion</Text>
+            <div style={{ marginTop: '8px', fontSize: '12px', color: '#9a3412' }}>
+              <strong>Recommendation:</strong> {status.conclusion.recommendation.toUpperCase()} bias 
+              ({status.conclusion.confidence.toFixed(0)}% confidence)
+            </div>
+            <div style={{ marginTop: '4px', fontSize: '12px', color: '#9a3412' }}>
+              <strong>Expected Return:</strong> {status.conclusion.expectedReturn.toFixed(1)}% 
+              ({status.conclusion.riskLevel} risk)
+            </div>
+            {status.conclusion.technicalFactors.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <Text style={{ fontSize: '11px', color: '#7c2d12' }}>Key Factors:</Text>
+                <div style={{ marginLeft: '8px', fontSize: '11px', color: '#a16207' }}>
+                  {status.conclusion.technicalFactors.slice(0, 2).map((factor, i) => (
+                    <div key={i}>• {factor}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Waiting State */}
+        {status.status === 'waiting' && (
+          <div style={{ 
+            marginTop: '16px', 
+            padding: '12px', 
+            background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 20%)',
+            borderRadius: '8px',
+            border: '1px solid #f59e0b'
+          }}>
+            <Text strong style={{ color: '#d97706', fontSize: '13px' }}>⏳ Waiting for Opportunities</Text>
+            <div style={{ marginTop: '8px', fontSize: '12px', color: '#92400e' }}>
+              {status.waitingReason || 'Scanning for new opportunities...'}
+            </div>
+            {status.nextRetryAt && (
+              <div style={{ marginTop: '4px', fontSize: '11px', color: '#78350f' }}>
+                Next scan: {new Date(status.nextRetryAt).toLocaleString()}
+              </div>
+            )}
           </div>
         )}
 

@@ -565,16 +565,40 @@ export default function SessionsPage(){
                 title:'Symbol', 
                 dataIndex:'symbol',
                 width: 120,
-                render: (symbol) => (
-                  <span style={{
-                    fontWeight: '600',
-                    fontSize: '14px',
-                    color: '#1e293b',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                  }}>
-                    {symbol}
-                  </span>
-                ),
+                render: (symbol, record) => {
+                  const isSmartAgent = record.profileJson?.isIntelligent;
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {isSmartAgent && (
+                        <span style={{ 
+                          fontSize: '14px',
+                          background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                          borderRadius: '50%',
+                          width: '16px',
+                          height: '16px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}>
+                          🧠
+                        </span>
+                      )}
+                      <span style={{
+                        fontWeight: '600',
+                        fontSize: '14px',
+                        color: isSmartAgent ? '#7c3aed' : '#1e293b',
+                        fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
+                      }}>
+                        {symbol}
+                      </span>
+                      {isSmartAgent && (
+                        <Tag color="purple" style={{ fontSize: '10px', lineHeight: '14px', padding: '0 4px' }}>
+                          SMART
+                        </Tag>
+                      )}
+                    </div>
+                  );
+                },
                 sorter: (a, b) => a.symbol.localeCompare(b.symbol)
               },
               { 
