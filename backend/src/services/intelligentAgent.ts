@@ -37,15 +37,17 @@ export interface IntelligentAnalysis {
 }
 
 /**
- * Get optimized list of top cryptos for analysis (max 20)
+ * Get optimized list of top performing cryptos for analysis (max 20)
  */
 async function getOptimizedCryptoList(): Promise<string[]> {
   try {
+    console.log('📊 Fetching top performing cryptos from last 24h...');
+    
     const { EXCHANGE_ID } = getConfig();
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
     
     if (!ExchangeClass) {
-      console.log('📊 Exchange not available, using top 20 cryptos list');
+      console.log('📊 Exchange not available, using static top 20 cryptos list');
       return getTopCryptos();
     }
 
@@ -56,18 +58,113 @@ async function getOptimizedCryptoList(): Promise<string[]> {
 
     await exchange.loadMarkets();
     
-    // Get our curated top 20 list and verify they exist on exchange
-    const topCryptos = getTopCryptos();
-    const availableCryptos = topCryptos.filter(symbol => {
-      const market = exchange.markets[symbol];
-      return market && market.swap === true && market.active === true;
+    // Get all markets and filter for USD-settled perpetuals (Crypto.com format)
+    const allMarkets = Object.keys(exchange.markets || {});
+    console.log(`📊 Found ${allMarkets.length} total markets`);
+    
+    const perpetualMarkets = allMarkets.filter(symbol => {
+      try {
+        if (!symbol || typeof symbol !== 'string') return false;
+        
+        const market = exchange.markets[symbol];
+        if (!market) return false;
+        
+        // Crypto.com uses USD-settled perpetuals in format: SYMBOL/USD:USD
+        return market.swap === true && 
+               market.active === true &&
+               market.settle === 'USD' && // USD-settled perpetuals
+               symbol.includes('/USD:USD'); // Perpetual format on Crypto.com
+      } catch (error) {
+        return false;
+      }
     });
+    
+    console.log(`� Found ${perpetualMarkets.length} perpetual markets, fetching tickers...`);
+    
+    if (perpetualMarkets.length === 0) {
+      console.log('📊 No perpetual markets found, falling back to static list');
+      return getTopCryptos();
+    }
 
-    console.log(`📈 Using ${availableCryptos.length}/20 top cryptos for analysis`);
-    return availableCryptos.length > 0 ? availableCryptos : getFallbackSymbols();
+    // Fetch MORE tickers to get better selection (increased from 10 to 50)
+    const sampleSize = Math.min(perpetualMarkets.length, 50); // Analyze more markets for better selection
+    const sampleMarkets = perpetualMarkets.slice(0, sampleSize);
+    
+    // Fetch tickers one by one (Crypto.com limitation)
+    const tickers = {};
+    console.log(`📊 Fetching performance data for ${sampleMarkets.length} perpetual markets...`);
+    
+    for (let i = 0; i < sampleMarkets.length; i++) { // Analyze ALL sample markets, not just 10
+      try {
+        const symbol = sampleMarkets[i];
+        console.log(`📈 Fetching ticker ${i+1}/${sampleMarkets.length}: ${symbol}...`);
+        const ticker = await exchange.fetchTicker(symbol);
+        tickers[symbol] = ticker;
+        console.log(`✅ ${symbol}: ${ticker.percentage?.toFixed(2) || 0}% change, volume: $${((ticker.quoteVolume || 0) / 1000000).toFixed(2)}M`);
+      } catch (error) {
+        console.log(`⚠️ Failed to fetch ticker for ${sampleMarkets[i]}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+    
+    console.log(`📊 Successfully fetched ${Object.keys(tickers).length} tickers`);
+    
+    // Convert to array and calculate performance metrics
+    const cryptoPerformance = Object.entries(tickers).map(([symbol, ticker]) => {
+      const tickerData = ticker as any;
+      const change24h = Number(tickerData.percentage || 0);
+      const volume24h = Number(tickerData.baseVolume || 0);
+      const quoteVolume24h = Number(tickerData.quoteVolume || 0);
+      
+      // Improved scoring: Performance weighted more for volatility detection
+      const volumeScore = Math.min(10, Math.log10(Math.max(1, quoteVolume24h))); // Capped at 10
+      const performanceScore = Math.abs(change24h); // Direct percentage
+      const combinedScore = (performanceScore * 0.7) + (volumeScore * 0.3); // Favor performance more
+      
+      return {
+        symbol,
+        change24h,
+        volume24h,
+        quoteVolume24h,
+        combinedScore,
+        absChange: Math.abs(change24h),
+        volumeScore,
+        performanceScore
+      };
+    }).filter(crypto => 
+      crypto.quoteVolume24h > 10000 && // Lowered from 50K to 10K for more opportunities
+      crypto.absChange > 0.01 // Lowered from 0.05% to 0.01% for more opportunities
+    );
+
+    // Sort by combined score descending
+    cryptoPerformance.sort((a, b) => b.combinedScore - a.combinedScore);
+    
+    console.log(`🎯 Performance analysis complete:`);
+    console.log(`   📊 Total analyzed: ${Object.keys(tickers).length} perpetuals`);
+    console.log(`   ✅ Qualifying cryptos: ${cryptoPerformance.length}`);
+    console.log(`   🏆 Top 5 performers by score:`);
+    cryptoPerformance.slice(0, 5).forEach((crypto, i) => {
+      console.log(`      ${i+1}. ${crypto.symbol}: ${crypto.change24h.toFixed(3)}% change, $${(crypto.quoteVolume24h/1000000).toFixed(2)}M vol, score: ${crypto.combinedScore.toFixed(2)}`);
+    });
+    
+    // Take top 20 and convert to spot trading format for analysis
+    const topPerformers = cryptoPerformance.slice(0, 20).map(crypto => {
+      // Convert from SYMBOL/USD:USD to SYMBOL/USDT for analysis
+      const base = crypto.symbol.split('/')[0];
+      return `${base}/USDT`;
+    });
+    
+    if (topPerformers.length > 0) {
+      console.log(`✅ Selected ${topPerformers.length} top performing cryptos from ${Object.keys(tickers).length} perpetuals`);
+      console.log('🏆 Top 5 selected:', topPerformers.slice(0, 5));
+      return topPerformers;
+    } else {
+      console.log('⚠️ No qualifying perpetuals found, using static high-volume cryptos list');
+      return getTopCryptos();
+    }
     
   } catch (error) {
-    console.error('Error getting crypto list:', error);
+    console.error('Error getting dynamic crypto list:', error);
+    console.log('📊 Falling back to static top cryptos list');
     return getTopCryptos(); // Fallback to our curated list
   }
 }
