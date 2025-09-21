@@ -114,7 +114,7 @@ export default function RegisterPage() {
             label="Registration Code"
             rules={[
               { required: true, message: 'Registration code is required!' },
-              { len: 8, message: 'Registration code must be exactly 8 characters' }
+              { len: 9, message: 'Registration code must be exactly 9 characters' }
             ]}
           >
             <Input
