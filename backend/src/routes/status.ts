@@ -29,15 +29,38 @@ router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
 
   const symbol = s?.symbol || cfg.SYMBOL;
   
-  // Only fetch balance and orders if user has configured exchange
+  // Quick mode: only fetch heavy data if explicitly requested
+  const includeBalance = req.query.includeBalance === 'true';
+  const includeTech = req.query.includeTech === 'true';
+  
+  // Parallel fetch with timeout for heavy operations
   const [balance, orders, indic] = await Promise.all([
-    ex ? ex.fetchBalance().catch(()=>null) : null,
-    ex ? (async ()=>{ try { const s = await resolveSymbol(symbol); return await ex.fetchOpenOrders(s); } catch { return []; } })() : [],
+    ex && includeBalance ? 
+      Promise.race([
+        ex.fetchBalance(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Balance timeout')), 8000))
+      ]).catch(()=>null) : null,
+    ex ? (async ()=>{ 
+      try { 
+        const s = await resolveSymbol(symbol); 
+        return await Promise.race([
+          ex.fetchOpenOrders(s),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Orders timeout')), 5000))
+        ]);
+      } catch { return []; } 
+    })() : [],
     computeCoreIndicators(symbol).catch(()=>null),
   ]);
 
   let tech:any = null;
-  try { tech = await buildTechSnapshot(symbol); } catch {}
+  if (includeTech) {
+    try { 
+      tech = await Promise.race([
+        buildTechSnapshot(symbol),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Tech timeout')), 10000))
+      ]);
+    } catch {}
+  }
 
   res.json({
     serverTime: new Date().toISOString(),

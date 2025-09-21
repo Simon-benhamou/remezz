@@ -116,8 +116,8 @@ export default function MonitorPage(){
         updateProgress(LoadingPhase.CORE_DATA, 10, 'Loading session data...');
         
         const s = await Promise.race([
-          api.status(sessionId),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Status timeout')), 5000))
+          api.status(sessionId, { includeBalance: false, includeTech: false }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Status timeout')), 15000)) // augmenté à 15s
         ]);
         
         if (!s?.session?.id) {
@@ -135,11 +135,11 @@ export default function MonitorPage(){
         const [agentData, tickerData] = await Promise.allSettled([
           Promise.race([
             api.getAgentState(s.session.id),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 3000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 10000)) // augmenté à 10s
           ]),
           sym ? Promise.race([
             api.getTicker(sym),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Ticker timeout')), 3000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Ticker timeout')), 10000)) // augmenté à 10s
           ]) : Promise.resolve(null)
         ]);
         

@@ -53,7 +53,12 @@ export const api = {
       return out;
     }
   },
-  status: async (sessionId?: string) => (await client.get("/api/status", { params: { sessionId } })).data,
+  status: async (sessionId?: string, options?: { includeBalance?: boolean; includeTech?: boolean }) => {
+    const params: any = { sessionId };
+    if (options?.includeBalance) params.includeBalance = 'true';
+    if (options?.includeTech) params.includeTech = 'true';
+    return (await client.get("/api/status", { params })).data;
+  },
   strategyToday: async (symbol: string) =>
     (await client.get("/api/strategy/today", { params: { symbol } })).data,
   generateStrategy: async (symbol: string, trigger = "manual") =>
