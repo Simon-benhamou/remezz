@@ -5,8 +5,8 @@ import { markStrategyLLM, shouldAllowStrategyLLM, updateZoneState, zoneExitDebou
 import { levels as calcLevels } from '../risk/brackets.js';
 import { setActiveSession } from '../metrics/aiCalls.js';
 
-const COOL_MIN = Number(process.env.LLM_STRATEGY_COOLDOWN_MIN || 10); // minutes
-const MAX_PER_HOUR = Number(process.env.LLM_STRATEGY_MAX_PER_HOUR || 6);
+const COOL_MIN = Number(process.env.LLM_STRATEGY_COOLDOWN_MIN || 3); // minutes - réduit pour réactivité
+const MAX_PER_HOUR = Number(process.env.LLM_STRATEGY_MAX_PER_HOUR || 15); // augmenté pour plus de flexibilité
 const ZONE_HYST_PCT = Number(process.env.ZONE_HYSTERESIS_PCT || 0.15);
 const ZONE_REQUIRED_TICKS = Number(process.env.ZONE_EXIT_REQUIRED_TICKS || 3);
 

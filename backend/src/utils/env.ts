@@ -110,8 +110,8 @@ export function getConfig(): Cfg {
     ACCESS_CODE: e.ACCESS_CODE || "",
     JWT_SECRET: e.JWT_SECRET || e.APP_API_KEY || "change-me-jwt-secret",
     LLM_DISABLE: (e.LLM_DISABLE || "false") === "true",
-    LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "5000"),
-    LLM_CACHE_TTL_MIN: Number(e.LLM_CACHE_TTL_MIN || "60"),
+    LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "1000"), // réduit à 1s pour plus de réactivité
+    LLM_CACHE_TTL_MIN: Number(e.LLM_CACHE_TTL_MIN || "30"), // réduit de 60 à 30 min
     BREAKOUT_CONFIRM_TICKS: Number(e.BREAKOUT_CONFIRM_TICKS || "2"),
     BREAKOUT_HYSTERESIS_PCT: Number(e.BREAKOUT_HYSTERESIS_PCT || "0.15"),
     REVERSE_ON_BREAKOUT: (e.REVERSE_ON_BREAKOUT || "false") === "true",
@@ -123,7 +123,7 @@ export function getConfig(): Cfg {
     USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
     USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
     USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",
-    GROK_ANALYSIS_DAILY_MAX: Number(e.GROK_ANALYSIS_DAILY_MAX || "1"),
+    GROK_ANALYSIS_DAILY_MAX: Number(e.GROK_ANALYSIS_DAILY_MAX || "10"), // augmenté pour plus d'analyses
     GROK_REVERSAL_PCT_THRESHOLD: Number(e.GROK_REVERSAL_PCT_THRESHOLD || "3.5"),
     STALE_TICK_SEC: Number(e.STALE_TICK_SEC || "300"),  // 5 min instead of 2 min for crypto
     ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
@@ -138,8 +138,8 @@ export function getConfig(): Cfg {
     CRYPTO_VOLUME_SURGE_MIN: Number(e.CRYPTO_VOLUME_SURGE_MIN || "2.0"),
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
-    PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "15"),
-    PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "3"),
+    PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "5"), // réduit de 15 à 5 min
+    PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "10"), // augmenté de 3 à 10
     COOLDOWN_CONFIDENCE_MIN: Number(e.COOLDOWN_CONFIDENCE_MIN || "0.6"),
     COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
     ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "1.0"),  // Revert to higher minimum for crypto
