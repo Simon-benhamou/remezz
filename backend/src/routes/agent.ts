@@ -128,8 +128,15 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
           const success = await initializeIntelligentSmartAgent(parseInt(s.id));
           if (success) {
             console.log(`✅ Intelligent Smart Agent ${s.id} initialized successfully`);
+            
+            // CRITICAL: Update symbol variable to the one selected by Smart Agent
+            const updatedSession = await prisma.agentSession.findUnique({ where: { id: s.id } });
+            if (updatedSession?.symbol) {
+              symbol = updatedSession.symbol;
+              console.log(`🔄 Updated symbol for background processes: ${symbol}`);
+            }
           } else {
-            console.warn(`⚠️ Intelligent Smart Agent ${s.id} initialization failed`);
+            console.warn(`⚠️ Intelligent Smart Agent ${s.id} initialization failed - keeping temporary symbol ${symbol}`);
           }
         }
 

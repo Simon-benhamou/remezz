@@ -84,6 +84,9 @@ app.get("/api/health", (_req, res) =>
 app.use("/api/status", statusRouter);
 app.use("/api/user", userRouter);
 app.use("/api/debug", debugRouter);
+// Debug selection endpoint
+import { router as debugSelectionRouter } from './routes/debug-selection.js';
+app.use("/api/debug-selection", debugSelectionRouter);
 app.use("/api/strategy", strategyRouter);
 app.use("/api/agent", agentRouter);
 app.use("/api/orders", ordersRouter);

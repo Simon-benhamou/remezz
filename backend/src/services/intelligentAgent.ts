@@ -39,7 +39,7 @@ export interface IntelligentAnalysis {
 /**
  * Get optimized list of top performing cryptos for analysis (max 20)
  */
-async function getOptimizedCryptoList(): Promise<string[]> {
+export async function getOptimizedCryptoList(): Promise<string[]> {
   try {
     console.log('📊 Fetching top performing cryptos from last 24h...');
     
