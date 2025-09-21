@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { prisma } from '../db/client.js';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 
 export const router = Router();
@@ -41,14 +42,63 @@ router.get('/trading-diagnostics/:symbol(*)', authenticateUser, async (req: Auth
       });
     }
     
-    // For now, generate analysis without cache until Prisma is fixed
+    // Check if we have recent cached data (within 12 hours)
+    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    
+    try {
+      const cached = await prisma.diagnosticsCache.findFirst({
+        where: {
+          userId,
+          symbol,
+          createdAt: { gte: twelveHoursAgo }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+      
+      if (cached) {
+        return res.json({
+          data: cached.data,
+          cached: true,
+          timestamp: cached.createdAt,
+          dailyCallsUsed: await getDailyCallsCount(userId)
+        });
+      }
+    } catch (cacheError) {
+      console.warn('Cache lookup failed, proceeding without cache:', cacheError);
+    }
+    
+    // Check daily limit (5 calls per day)
+    const todayCalls = await getDailyCallsCount(userId);
+    
+    if (todayCalls >= 5) {
+      return res.status(429).json({ 
+        error: 'daily_limit_exceeded',
+        message: 'You have reached the daily limit of 5 diagnostics calls. Use cached data or wait until tomorrow.',
+        dailyCallsUsed: todayCalls
+      });
+    }
+    
+    // Generate new analysis
     const analysisData = await generateTradingDiagnostics(symbol, userId);
+    
+    // Try to cache the result (non-blocking)
+    try {
+      await prisma.diagnosticsCache.create({
+        data: {
+          userId,
+          symbol,
+          data: analysisData as any,
+        }
+      });
+    } catch (cacheError) {
+      console.warn('Failed to cache analysis:', cacheError);
+    }
     
     res.json({
       data: analysisData,
       cached: false,
       timestamp: new Date(),
-      message: 'Cache temporarily disabled - generating fresh analysis'
+      dailyCallsUsed: todayCalls + 1
     });
     
   } catch (error) {
@@ -73,14 +123,38 @@ router.post('/trading-diagnostics/:symbol(*)/refresh', authenticateUser, async (
       return res.status(400).json({ error: 'invalid_symbol_format' });
     }
     
+    // Check daily limit
+    const todayCalls = await getDailyCallsCount(userId);
+    
+    if (todayCalls >= 5) {
+      return res.status(429).json({ 
+        error: 'daily_limit_exceeded',
+        message: 'You have reached the daily limit of 5 diagnostics calls.',
+        dailyCallsUsed: todayCalls
+      });
+    }
+    
     // Generate fresh analysis
     const analysisData = await generateTradingDiagnostics(symbol, userId);
+    
+    // Try to cache the result (non-blocking)
+    try {
+      await prisma.diagnosticsCache.create({
+        data: {
+          userId,
+          symbol,
+          data: analysisData as any,
+        }
+      });
+    } catch (cacheError) {
+      console.warn('Failed to cache analysis:', cacheError);
+    }
     
     res.json({
       data: analysisData,
       cached: false,
       timestamp: new Date(),
-      message: 'Fresh analysis generated'
+      dailyCallsUsed: todayCalls + 1
     });
     
   } catch (error) {
@@ -89,6 +163,23 @@ router.post('/trading-diagnostics/:symbol(*)/refresh', authenticateUser, async (
     res.status(500).json({ error: 'internal_error', details: errorMessage });
   }
 });
+
+async function getDailyCallsCount(userId: string): Promise<number> {
+  try {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    
+    return await prisma.diagnosticsCache.count({
+      where: {
+        userId,
+        createdAt: { gte: todayStart }
+      }
+    });
+  } catch (error) {
+    console.warn('Failed to get daily calls count:', error);
+    return 0; // Fallback to 0 if cache is unavailable
+  }
+}
 
 async function generateTradingDiagnostics(symbol: string, userId: string) {
   // Import the existing trading analysis logic
