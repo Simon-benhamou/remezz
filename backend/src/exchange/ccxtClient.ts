@@ -1,4 +1,5 @@
 import ccxt from 'ccxt';
+import { createHash } from 'crypto';
 import { getConfig } from '../utils/env.js';
 
 // User-specific exchange instances for authenticated operations
@@ -14,8 +15,7 @@ export function clearUserExchangeCache(userId: string): void {
 // New function for user-specific authenticated exchange
 export async function getUserExchange(userId: string, credentials: { apiKey: string; apiSecret: string; passphrase?: string }) {
   // Include credentials hash in cache key to handle key updates
-  const credentialsHash = require('crypto')
-    .createHash('md5')
+  const credentialsHash = createHash('md5')
     .update(credentials.apiKey + credentials.apiSecret)
     .digest('hex')
     .substring(0, 8);
