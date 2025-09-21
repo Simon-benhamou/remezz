@@ -376,6 +376,32 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     }
   }
 
+  // Get paper balance from active paper sessions
+  let paperBalance: any = null;
+  if (modeFilter === 'paper' || !modeFilter) {
+    const paperSessions = actives.filter(session => session.mode === 'paper');
+    if (paperSessions.length > 0) {
+      try {
+        // Get balance from the first active paper session's agent
+        const firstPaperSession = paperSessions[0];
+        const agent = AgentHub.get(firstPaperSession.id);
+        if (agent && (agent as any).broker) {
+          const balance = await (agent as any).broker.balance();
+          paperBalance = {
+            equityUsd: Number(balance?.equityUsd || 0),
+            freeUsd: Number(balance?.freeUsd || 0), 
+            committedUsd: Number(balance?.committedUsd || 0),
+            lastUpdated: new Date().toISOString()
+          };
+          console.log(`📊 Paper balance: $${paperBalance.equityUsd.toFixed(2)} USD (free: $${paperBalance.freeUsd.toFixed(2)})`);
+        }
+      } catch (error) {
+        console.error('Failed to fetch paper balance:', error);
+        // Don't fail the entire request, just log the error
+      }
+    }
+  }
+
   res.json({
     activeCount: actives.length,
     sessionsCount: totalSessions,
@@ -386,6 +412,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     avgWinRate,
     aiCallsTotal,
     exchangeBalance,
+    paperBalance,
     updatedAt: new Date().toISOString(),
   });
 });
