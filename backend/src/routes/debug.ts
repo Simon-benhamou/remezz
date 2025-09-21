@@ -30,6 +30,25 @@ router.get('/server-ip', async (req, res) => {
   }
 });
 
+// Get ATR cache statistics  
+router.get('/atr-cache-stats', async (req, res) => {
+  try {
+    // Import dynamically to avoid circular dependency
+    const { ReboundRejectionAgent } = await import('../agent/state.js');
+    const stats = ReboundRejectionAgent.getATRCacheStats();
+    res.json({
+      success: true,
+      atrCacheStats: stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error.message || String(error)
+    });
+  }
+});
+
 // Test exchange connectivity (public endpoint)
 router.get('/test-exchange', async (req, res) => {
   try {

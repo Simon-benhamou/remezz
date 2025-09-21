@@ -104,6 +104,13 @@ export class ReboundRejectionAgent {
       context: { profile },
       severity: 'low',
     }).catch(()=>{});
+    
+    // Initialize adaptive ATR cache for this symbol
+    if (profile.symbol) {
+      this.updateAdaptiveATRCache(profile.symbol, 1.0).catch(err => 
+        console.warn('Initial ATR cache update failed:', err)
+      );
+    }
   }
 
   async propose(plan: PlanJson) {
@@ -701,19 +708,285 @@ export class ReboundRejectionAgent {
     return { ENTRY_SHORT_MIN_ADX, ENTRY_LONG_MIN_ADX, ENTRY_SHORT_MIN_RSI, ENTRY_LONG_MAX_RSI, ENTRY_MIN_ATR_PCT, ENTRY_MIN_SLOPE_ABS_PCT };
   }
 
+  private static readonly adaptiveATRCache = new Map<string, { threshold: number; lastUpdated: number; baselineATR: number }>();
+  private static readonly volatilityProfileCache = new Map<string, 'LOW_VOLATILITY' | 'MODERATE_VOLATILITY' | 'HIGH_VOLATILITY' | 'EXTREME_VOLATILITY'>();
+  private static readonly MAX_CACHE_SIZE = 200; // Limit cache size to prevent memory issues
+  private static readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h cache validity
+  private static readonly VOLATILITY_CHANGE_THRESHOLD = 0.5; // 50% change triggers update
+  private static cacheStats = { hits: 0, misses: 0, updates: 0 };
+
+  /*
+   * Clear cache if it gets too large (maintenance)
+   */
+  /*
+  private static clearCacheIfNeeded(): void {
+    if (ReboundRejectionAgent.adaptiveATRCache.size > ReboundRejectionAgent.MAX_CACHE_SIZE) {
+      console.log(`🧹 Clearing ATR cache (${ReboundRejectionAgent.adaptiveATRCache.size} entries) - Stats: ${ReboundRejectionAgent.cacheStats.hits} hits, ${ReboundRejectionAgent.cacheStats.misses} misses`);
+      ReboundRejectionAgent.adaptiveATRCache.clear();
+      ReboundRejectionAgent.cacheStats = { hits: 0, misses: 0 }; // Reset stats
+    }
+    if (ReboundRejectionAgent.volatilityProfileCache.size > ReboundRejectionAgent.MAX_CACHE_SIZE) {
+      console.log(`🧹 Clearing volatility profile cache (${ReboundRejectionAgent.volatilityProfileCache.size} entries)`);
+      ReboundRejectionAgent.volatilityProfileCache.clear();
+    }
+  }
+  */
+
+  /**
+   * Check if cache needs update based on current market volatility vs cached baseline
+   */
+  private async shouldUpdateATRCache(symbol: string): Promise<{ needsUpdate: boolean; currentATR: number }> {
+    const cached = ReboundRejectionAgent.adaptiveATRCache.get(symbol);
+    
+    // Get current market ATR for comparison
+    let currentATR = 0;
+    try {
+      if (this.profile?.symbol) {
+        const snapshot = await buildTechSnapshot(this.profile.symbol);
+        currentATR = Number((snapshot as any)?.atrPct ?? 0);
+      }
+    } catch (error) {
+      console.warn(`Failed to get current ATR for ${symbol}:`, error);
+      // If we can't get current data, use cache if available
+      if (cached) {
+        return { needsUpdate: false, currentATR: cached.baselineATR };
+      }
+    }
+    
+    if (!cached) return { needsUpdate: true, currentATR }; // No cache = needs update
+    
+    const now = Date.now();
+    const ageMs = now - cached.lastUpdated;
+    
+    // Force update if cache is too old (24h)
+    if (ageMs > ReboundRejectionAgent.CACHE_TTL_MS) {
+      console.log(`🕐 Cache expired for ${symbol} (${(ageMs / (1000 * 60 * 60)).toFixed(1)}h old)`);
+      return { needsUpdate: true, currentATR };
+    }
+    
+    // Update if volatility changed significantly
+    if (cached.baselineATR > 0 && currentATR > 0) {
+      const volatilityChange = Math.abs(currentATR - cached.baselineATR) / cached.baselineATR;
+      if (volatilityChange > ReboundRejectionAgent.VOLATILITY_CHANGE_THRESHOLD) {
+        console.log(`📈 Volatility changed significantly for ${symbol}: ${cached.baselineATR.toFixed(3)}% → ${currentATR.toFixed(3)}% (${(volatilityChange * 100).toFixed(1)}% change)`);
+        return { needsUpdate: true, currentATR };
+      }
+    }
+    
+    return { needsUpdate: false, currentATR };
+  }
+
+  /**
+   * Synchronous version that uses cached values (for momentum gates and quality filters)
+   */
+  private getAdaptiveATRThresholdSync(symbol: string, baseThreshold: number): number {
+    if (!symbol) return baseThreshold;
+    
+    const baseCrypto = symbol.split('/')[0]?.toUpperCase();
+    if (!baseCrypto) return baseThreshold;
+    
+    // Check cache first
+    const cached = ReboundRejectionAgent.adaptiveATRCache.get(symbol);
+    if (cached) {
+      const now = Date.now();
+      const ageMs = now - cached.lastUpdated;
+      
+      // Use cache if not too old (prefer slightly stale data over blocking)
+      if (ageMs < ReboundRejectionAgent.CACHE_TTL_MS * 2) { // 48h tolerance for sync calls
+        ReboundRejectionAgent.cacheStats.hits++;
+        return cached.threshold;
+      }
+    }
+    
+    // Fallback to static classification if no cache
+    switch (baseCrypto) {
+      case 'CRO':
+      case 'ADA': 
+      case 'XRP':
+      case 'TRX':
+      case 'MATIC':
+      case 'DOT':
+        return Math.max(0.15, baseThreshold * 0.3); // Low volatility
+        
+      case 'ETH':
+      case 'SOL':
+      case 'LINK':
+      case 'UNI':
+      case 'AVAX':
+        return Math.max(0.25, baseThreshold * 0.5); // Moderate volatility
+        
+      case 'DOGE':
+      case 'SHIB':
+      case 'PEPE':
+      case 'AVNT':
+      case 'WIF':
+        return Math.max(0.4, baseThreshold * 0.7); // High volatility
+        
+      case 'BTC':
+      case 'BCH':
+        return baseThreshold; // Bitcoin family
+        
+      default:
+        return Math.max(0.25, baseThreshold * 0.5); // Unknown cryptos
+    }
+  }
+
+  /**
+   * Async version for cache updates (called periodically or on demand)
+   */
+  async updateAdaptiveATRCache(symbol: string, baseThreshold: number): Promise<void> {
+    if (!symbol) return;
+    
+    const baseCrypto = symbol.split('/')[0]?.toUpperCase();
+    if (!baseCrypto) return;
+    
+    // Check if we need to update cache
+    const { needsUpdate, currentATR } = await this.shouldUpdateATRCache(symbol);
+    const cached = ReboundRejectionAgent.adaptiveATRCache.get(symbol);
+    
+    if (cached && !needsUpdate) {
+      return; // No update needed
+    }
+    
+    // Calculate new adaptive threshold (same logic as sync version)
+    let adaptiveThreshold = this.getAdaptiveATRThresholdSync(symbol, baseThreshold);
+    
+    // Dynamic adjustment based on recent market conditions
+    if (currentATR > 0) {
+      // If current volatility is very high, be more permissive
+      if (currentATR > 3.0) {
+        adaptiveThreshold *= 1.2; // 20% higher threshold in extreme volatility
+      }
+      // If current volatility is very low, be more strict
+      else if (currentATR < 0.5) {
+        adaptiveThreshold *= 0.8; // 20% lower threshold in low volatility
+      }
+    }
+    
+    // Update cache with new data
+    ReboundRejectionAgent.adaptiveATRCache.set(symbol, {
+      threshold: adaptiveThreshold,
+      lastUpdated: Date.now(),
+      baselineATR: currentATR
+    });
+    
+    ReboundRejectionAgent.cacheStats.misses++;
+    if (needsUpdate && cached) {
+      ReboundRejectionAgent.cacheStats.updates++;
+      console.log(`🔄 Updated ATR threshold for ${symbol}: ${cached.threshold.toFixed(3)}% → ${adaptiveThreshold.toFixed(3)}%`);
+    }
+    
+    // Clear cache if it gets too large
+    if (ReboundRejectionAgent.adaptiveATRCache.size > ReboundRejectionAgent.MAX_CACHE_SIZE) {
+      this.clearOldCacheEntries();
+    }
+  }
+
+  /**
+   * Clear old cache entries based on LRU and age
+   */
+  private clearOldCacheEntries(): void {
+    const now = Date.now();
+    const entries = Array.from(ReboundRejectionAgent.adaptiveATRCache.entries());
+    
+    // Sort by age (oldest first)
+    entries.sort((a, b) => a[1].lastUpdated - b[1].lastUpdated);
+    
+    // Remove oldest 25% of entries
+    const toRemove = Math.floor(entries.length * 0.25);
+    for (let i = 0; i < toRemove; i++) {
+      ReboundRejectionAgent.adaptiveATRCache.delete(entries[i][0]);
+    }
+    
+    console.log(`🧹 Cleared ${toRemove} old ATR cache entries (${ReboundRejectionAgent.adaptiveATRCache.size} remaining)`);
+  }
+
+  /**
+   * Get cache statistics for monitoring
+   */
+  static getATRCacheStats() {
+    const cacheSize = ReboundRejectionAgent.adaptiveATRCache.size;
+    const hitRate = ReboundRejectionAgent.cacheStats.hits + ReboundRejectionAgent.cacheStats.misses > 0 
+      ? (ReboundRejectionAgent.cacheStats.hits / (ReboundRejectionAgent.cacheStats.hits + ReboundRejectionAgent.cacheStats.misses) * 100)
+      : 0;
+    
+    return {
+      cacheSize,
+      hits: ReboundRejectionAgent.cacheStats.hits,
+      misses: ReboundRejectionAgent.cacheStats.misses,
+      updates: ReboundRejectionAgent.cacheStats.updates,
+      hitRate: hitRate.toFixed(1) + '%',
+      maxSize: ReboundRejectionAgent.MAX_CACHE_SIZE
+    };
+  }
+
+  /*
+   * AI-powered crypto volatility classification (cached for performance)
+   */
+  /*
+  private classifyCryptoVolatility(baseCrypto: string): 'LOW_VOLATILITY' | 'MODERATE_VOLATILITY' | 'HIGH_VOLATILITY' | 'EXTREME_VOLATILITY' {
+    // Check cache first - these classifications are static
+    if (ReboundRejectionAgent.volatilityProfileCache.has(baseCrypto)) {
+      return ReboundRejectionAgent.volatilityProfileCache.get(baseCrypto)!;
+    }
+    
+    // Simplified robust classification without complex Sets
+    const crypto = baseCrypto.toUpperCase();
+    let profile: 'LOW_VOLATILITY' | 'MODERATE_VOLATILITY' | 'HIGH_VOLATILITY' | 'EXTREME_VOLATILITY';
+    
+    // Low volatility - stablecoins and large caps
+    if (crypto === 'CRO' || crypto === 'BNB' || crypto === 'ADA' || crypto === 'XRP' || 
+        crypto === 'TRX' || crypto === 'MATIC' || crypto === 'DOT' || crypto === 'ALGO' ||
+        crypto === 'ATOM' || crypto === 'XLM' || crypto === 'LTC' || crypto === 'AVAX') {
+      profile = 'LOW_VOLATILITY';
+    }
+    // Moderate volatility - established protocols  
+    else if (crypto === 'ETH' || crypto === 'SOL' || crypto === 'LINK' || crypto === 'UNI' ||
+        crypto === 'AAVE' || crypto === 'COMP' || crypto === 'ARB' || crypto === 'OP' ||
+        crypto === 'APT' || crypto === 'SUI' || crypto === 'NEAR' || crypto === 'ICP') {
+      profile = 'MODERATE_VOLATILITY';
+    }
+    // High volatility - meme coins and smaller caps
+    else if (crypto === 'DOGE' || crypto === 'SHIB' || crypto === 'PEPE' || crypto === 'BONK' ||
+        crypto === 'AVNT' || crypto === 'GMX' || crypto === 'INJ' || crypto === 'WIF') {
+      profile = 'HIGH_VOLATILITY';
+    }
+    // Extreme volatility - Bitcoin and very speculative
+    else if (crypto === 'BTC' || crypto === 'BCH' || crypto === 'BSV') {
+      profile = 'EXTREME_VOLATILITY';
+    }
+    // Default for unknown cryptos
+    else {
+      profile = 'MODERATE_VOLATILITY';
+    }
+    
+    // Cache the result for future use
+    ReboundRejectionAgent.volatilityProfileCache.set(baseCrypto, profile);
+    
+    return profile;
+  }
+  */
+
   private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {
     const thresholds = this.effectiveEntryThresholds();
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
     
-    // Per-symbol tweak: ETH tends to have lower ATR% → allow a lower floor
+    // Intelligent per-crypto ATR threshold adaptation
     try {
       const sym = this.profile?.symbol || '';
-      if (sym.toUpperCase().startsWith('ETH/')) {
-        // Lower the ATR threshold slightly for ETH
-        minAtr = Math.max(0, minAtr - 0.15);
+      const adaptedMinAtr = this.getAdaptiveATRThresholdSync(sym, minAtr);
+      if (adaptedMinAtr !== minAtr) {
+        console.log(`🎯 Adaptive ATR for ${sym}: ${minAtr.toFixed(3)}% → ${adaptedMinAtr.toFixed(3)}%`);
+        minAtr = adaptedMinAtr;
       }
-    } catch {}
+      // Trigger async cache update in background (don't await)
+      this.updateAdaptiveATRCache(sym, minAtr).catch(err => 
+        console.warn('Background ATR cache update failed:', err)
+      );
+    } catch (error) {
+      console.error('Error in adaptive ATR calculation:', error);
+    }
     
     const atrPct = Number((snap as any)?.atrPct ?? 0);
     
@@ -2579,12 +2852,23 @@ export class ReboundRejectionAgent {
       points: rsiOptimal ? 15 : 0
     };
 
-    // Volatility check with detailed info
-    // Use dynamic ATR thresholds based on aggressiveness level
+    // Volatility check with intelligent adaptive ATR thresholds
     const thresholds = this.effectiveEntryThresholds();
-    const minAtrPct = thresholds.ENTRY_MIN_ATR_PCT;
-    const goodAtrPct = Math.max(minAtrPct * 1.5, 1.0); // Scale thresholds or keep traditional good level
-    const excellentAtrPct = Math.max(minAtrPct * 2.0, 1.5); // Scale thresholds or keep traditional excellent level
+    let minAtrPct = thresholds.ENTRY_MIN_ATR_PCT;
+    
+    // Apply intelligent ATR adaptation for quality filters too
+    try {
+      const sym = this.profile?.symbol || '';
+      const adaptedMinAtr = this.getAdaptiveATRThresholdSync(sym, minAtrPct);
+      if (adaptedMinAtr !== minAtrPct) {
+        minAtrPct = adaptedMinAtr;
+      }
+    } catch (error) {
+      console.error('Error in adaptive ATR for quality filters:', error);
+    }
+    
+    const goodAtrPct = Math.max(minAtrPct * 1.5, minAtrPct + 0.3); // Relative scaling
+    const excellentAtrPct = Math.max(minAtrPct * 2.0, minAtrPct + 0.6); // Relative scaling
     
     let volPoints = 0;
     let volDetails = '';
