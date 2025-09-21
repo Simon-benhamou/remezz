@@ -1,22 +1,30 @@
 import React from 'react';
-import { Card, Row, Col, Badge, Progress, Space, Tooltip, Button, Tag, Typography } from 'antd';
-import { RiseOutlined, FallOutlined, ThunderboltOutlined, ExclamationCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Badge, Button, Typography, Spin } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
 
 const { Text, Title } = Typography;
 
 interface CryptoSignal {
   symbol: string;
-  signal: 'bullish' | 'bearish' | 'strong_buy' | 'strong_sell' | 'neutral' | 'caution';
-  strength: number; // 0-100
+  signal: string;
+  strength: number;
   triggers: string[];
   price: number;
   change24h: number;
-  volume24h: number;
-  atr: number;
-  rsi: number;
-  trend: number;
-  lastUpdated: string;
+  error?: string;
+}
+
+interface BatchResponse {
+  success: boolean;
+  data: CryptoSignal[];
+  metadata: {
+    totalSymbols: number;
+    successCount: number;
+    errorCount: number;
+    apiCallsUsed: number;
+    processingTimeMs: number;
+  };
 }
 
 interface TradingDiagnosticsOverviewProps {
@@ -27,207 +35,85 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
   const [signals, setSignals] = React.useState<CryptoSignal[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [lastRefresh, setLastRefresh] = React.useState<Date | null>(null);
-  const [dailyCallsUsed, setDailyCallsUsed] = React.useState(0);
-  const [cacheInfo, setCacheInfo] = React.useState<any>(null);
+  const [metadata, setMetadata] = React.useState<BatchResponse['metadata'] | null>(null);
 
-  // Liste des cryptos populaires à surveiller
   const watchList = [
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT',
-    'DOGE/USDT', 'AVAX/USDT', 'MATIC/USDT', 'DOT/USDT', 'BNB/USDT', 'LINK/USDT'
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'BNB/USDT',
+    'DOGE/USDT', 'AVAX/USDT', 'MATIC/USDT', 'DOT/USDT', 'LINK/USDT'
   ];
 
   const loadTradingSignals = React.useCallback(async (forceRefresh = false) => {
     setLoading(true);
     try {
-      const newSignals: CryptoSignal[] = [];
+      console.log('🚀 Loading batch trading diagnostics...');
       
-      for (const symbol of watchList) {
-        try {
-          // Use the new POST API endpoint
-          const endpoint = forceRefresh 
-            ? `/api/cache/trading-diagnostics/refresh`
-            : `/api/cache/trading-diagnostics`;
-          
-          const response = await api.client.post(endpoint, {
-            symbol,
-            force: forceRefresh
-          });
-          
-          const { data, cached, timestamp, dailyCallsUsed: calls } = response.data;
-          
-          if (calls !== undefined) {
-            setDailyCallsUsed(calls);
-          }
-          
-          if (data) {
-            const signal: CryptoSignal = {
-              symbol,
-              signal: data.technical?.trend > 0.6 ? 'bullish' : 
-                     data.technical?.trend < -0.6 ? 'bearish' : 'neutral',
-              strength: Math.abs(data.technical?.trend || 0) * 100,
-              triggers: [
-                data.technical?.atrPct > 2 ? 'High volatility' : 'Normal volatility',
-                data.technical?.rsi14 > 70 ? 'Overbought' : 
-                data.technical?.rsi14 < 30 ? 'Oversold' : 'Neutral RSI',
-                data.strategy ? 'AI Strategy available' : 'Market analysis'
-              ].filter(Boolean),
-              price: data.technical?.last || 0,
-              change24h: ((data.technical?.last || 1) - (data.technical?.prevClose || 1)) / (data.technical?.prevClose || 1) * 100,
-              volume24h: data.technical?.volume24h || 0,
-              atr: data.technical?.atr14 || 0,
-              rsi: data.technical?.rsi14 || 50,
-              trend: data.technical?.trend || 0,
-              lastUpdated: timestamp
-            };
-            
-            newSignals.push(signal);
-            
-            if (!cached && timestamp) {
-              setCacheInfo({ 
-                lastFresh: timestamp, 
-                cached, 
-                dailyCallsUsed: calls 
-              });
-            }
-          }
-        } catch (error: any) {
-          console.warn(`Failed to load diagnostics for ${symbol}:`, error.message);
-          
-          // If daily limit exceeded, show fallback
-          if (error.response?.status === 429) {
-            const fallbackSignal: CryptoSignal = {
-              symbol,
-              signal: 'neutral',
-              strength: 0,
-              triggers: ['Daily limit reached - showing cached data'],
-              price: 0,
-              change24h: 0,
-              volume24h: 0,
-              atr: 0,
-              rsi: 50,
-              trend: 0,
-              lastUpdated: new Date().toISOString()
-            };
-            newSignals.push(fallbackSignal);
-          }
-        }
-      }
+      const response = await api.client.post<BatchResponse>('/api/batch/trading-diagnostics', {
+        symbols: watchList,
+        includeStrategy: true,
+        includeSentiment: false,
+        includeNews: false,
+        forceRefresh
+      });
 
-      // Trier par force du signal (plus forts en premier)
-      const sortedSignals = newSignals.sort((a, b) => b.strength - a.strength);
-      setSignals(sortedSignals);
-      setLastRefresh(new Date());
-    } catch (error) {
-      console.error('Failed to load trading signals:', error);
+      if (response.data.success) {
+        setSignals(response.data.data);
+        setMetadata(response.data.metadata);
+        setLastRefresh(new Date());
+        
+        console.log('✅ Batch analysis completed:', {
+          symbols: response.data.metadata.totalSymbols,
+          successful: response.data.metadata.successCount,
+          apiCalls: response.data.metadata.apiCallsUsed,
+          processingTime: response.data.metadata.processingTimeMs + 'ms'
+        });
+      }
+    } catch (error: any) {
+      console.error('❌ Failed to load batch trading signals:', error);
+      
+      const fallbackSignals: CryptoSignal[] = watchList.map(symbol => ({
+        symbol,
+        signal: 'neutral',
+        strength: 0,
+        triggers: ['Analysis unavailable'],
+        price: 0,
+        change24h: 0,
+        error: error.message
+      }));
+      
+      setSignals(fallbackSignals);
     } finally {
       setLoading(false);
     }
-  }, [watchList]);
+  }, []);
 
   React.useEffect(() => {
-    loadTradingSignals(false); // Use cache on initial load
-    // Refresh automatique toutes les 30 minutes (au lieu de 5)
+    loadTradingSignals(false);
     const interval = setInterval(() => loadTradingSignals(false), 30 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadTradingSignals]);
 
-  const getSignalIcon = (signal: string) => {
-    switch (signal) {
-      case 'strong_buy':
-      case 'bullish':
-        return <RiseOutlined style={{ color: '#10b981' }} />;
-      case 'strong_sell':
-      case 'bearish':
-        return <FallOutlined style={{ color: '#ef4444' }} />;
-      case 'caution':
-        return <ExclamationCircleOutlined style={{ color: '#f59e0b' }} />;
-      default:
-        return <ThunderboltOutlined style={{ color: '#64748b' }} />;
-    }
-  };
-
-  const getSignalColor = (signal: string) => {
-    switch (signal) {
-      case 'strong_buy': return '#059669';
-      case 'bullish': return '#10b981';
-      case 'strong_sell': return '#dc2626';
-      case 'bearish': return '#ef4444';
-      case 'caution': return '#f59e0b';
-      default: return '#64748b';
-    }
-  };
-
-  const getStrengthColor = (strength: number) => {
-    if (strength >= 80) return '#059669';
-    if (strength >= 60) return '#10b981';
-    if (strength >= 40) return '#f59e0b';
-    if (strength >= 20) return '#ef4444';
-    return '#64748b';
-  };
-
-  // Filtrer les signaux les plus intéressants
-  const hotSignals = signals.filter(s => s.strength > 60 && s.signal !== 'neutral');
-  const activeSymbols = new Set(activeSessions.map(s => s.symbol));
+  const hotSignals = signals.filter(s => s.strength > 60 && s.signal !== 'neutral' && !s.error);
 
   return (
     <Card
-      style={{
-        borderRadius: '16px',
-        border: '1px solid #e2e8f0',
-        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
-        background: 'white'
-      }}
       title={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{
-              fontSize: '20px',
-              fontWeight: '700',
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif'
-            }}>
-              🎯 Trading Diagnostics Overview
-            </span>
-            {hotSignals.length > 0 && (
-              <Badge 
-                count={hotSignals.length} 
-                style={{ 
-                  background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-                  fontSize: '10px',
-                  fontWeight: '600'
-                }} 
-                title={`${hotSignals.length} hot signals detected`}
-              />
-            )}
+            <span>🎯 Trading Diagnostics Overview</span>
+            {hotSignals.length > 0 && <Badge count={hotSignals.length} />}
+            {loading && <Spin size="small" />}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {/* Cache and API calls status */}
-            <Space size="small">
-              <Text style={{ fontSize: '12px', color: '#64748b' }}>
-                Daily calls: {dailyCallsUsed}/5
-              </Text>
-              {cacheInfo?.cached && (
-                <Tag color="blue" style={{ fontSize: '10px' }}>
-                  Cached
-                </Tag>
-              )}
-            </Space>
             {lastRefresh && (
               <Text style={{ fontSize: '12px', color: '#64748b' }}>
                 Last: {lastRefresh.toLocaleTimeString()}
               </Text>
             )}
-            <Button 
+            <Button
               icon={<ReloadOutlined />}
-              onClick={() => loadTradingSignals(true)}
+              onClick={() => loadTradingSignals(false)}
               loading={loading}
               size="small"
-              style={{
-                borderRadius: '8px',
-                border: '1px solid #e2e8f0'
-              }}
             >
               Refresh
             </Button>
@@ -235,163 +121,103 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
         </div>
       }
     >
-      {/* Top Signals Row */}
-      <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
-        {hotSignals.slice(0, 4).map((signal) => (
-          <Col xs={24} sm={12} lg={6} key={signal.symbol}>
-            <div style={{
-              background: activeSymbols.has(signal.symbol) 
-                ? 'linear-gradient(135deg, #f0f9ff, #e0f2fe)'
-                : 'linear-gradient(135deg, #f9fafb, #f3f4f6)',
-              border: activeSymbols.has(signal.symbol)
-                ? '2px solid #0ea5e9'
-                : '1px solid #e2e8f0',
-              borderRadius: '12px',
-              padding: '16px',
-              position: 'relative'
-            }}>
-              {activeSymbols.has(signal.symbol) && (
-                <div style={{
-                  position: 'absolute',
-                  top: '8px',
-                  right: '8px',
-                  background: '#0ea5e9',
-                  color: 'white',
-                  padding: '2px 6px',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  fontWeight: '600'
-                }}>
-                  ACTIVE
-                </div>
-              )}
-              
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <Text strong style={{ fontSize: '14px', fontFamily: 'Monaco, "SF Mono", monospace' }}>
-                  {signal.symbol}
-                </Text>
-                {getSignalIcon(signal.signal)}
+      {metadata && (
+        <div style={{ marginBottom: '16px', padding: '12px', background: '#f0f9ff', borderRadius: '8px' }}>
+          <Row gutter={16}>
+            <Col span={6}>
+              <Text style={{ fontSize: '12px', color: '#0369a1' }}>Symbols</Text>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: '#0284c7' }}>
+                {metadata.successCount}/{metadata.totalSymbols}
               </div>
-              
-              <div style={{ marginBottom: '8px' }}>
-                <Tag 
-                  style={{
-                    background: `${getSignalColor(signal.signal)}20`,
-                    border: `1px solid ${getSignalColor(signal.signal)}40`,
-                    color: getSignalColor(signal.signal),
-                    fontSize: '10px',
-                    fontWeight: '600',
-                    margin: 0
-                  }}
-                >
-                  {signal.signal.replace('_', ' ').toUpperCase()}
-                </Tag>
+            </Col>
+            <Col span={6}>
+              <Text style={{ fontSize: '12px', color: '#0369a1' }}>API Calls</Text>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: '#0284c7' }}>
+                {metadata.apiCallsUsed}
               </div>
-              
-              <div style={{ marginBottom: '8px' }}>
-                <Text style={{ fontSize: '11px', color: '#64748b' }}>Strength:</Text>
-                <Progress 
-                  percent={signal.strength} 
-                  size="small"
-                  strokeColor={getStrengthColor(signal.strength)}
-                  format={() => `${signal.strength.toFixed(0)}%`}
-                  style={{ fontSize: '10px' }}
-                />
+            </Col>
+            <Col span={6}>
+              <Text style={{ fontSize: '12px', color: '#0369a1' }}>Time</Text>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: '#0284c7' }}>
+                {metadata.processingTimeMs}ms
               </div>
-              
-              <div>
-                <Text style={{ fontSize: '10px', color: '#64748b' }}>Triggers:</Text>
-                <div style={{ marginTop: '4px' }}>
-                  {signal.triggers.slice(0, 2).map((trigger, idx) => (
-                    <div key={idx} style={{ 
-                      fontSize: '10px', 
-                      color: '#374151',
-                      marginBottom: '2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}>
-                      <div style={{ 
-                        width: '4px', 
-                        height: '4px', 
-                        borderRadius: '50%', 
-                        background: getSignalColor(signal.signal) 
-                      }} />
-                      {trigger}
-                    </div>
-                  ))}
-                </div>
+            </Col>
+            <Col span={6}>
+              <Text style={{ fontSize: '12px', color: '#0369a1' }}>Hot Signals</Text>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: '#ef4444' }}>
+                {hotSignals.length}
               </div>
-            </div>
-          </Col>
-        ))}
-      </Row>
+            </Col>
+          </Row>
+        </div>
+      )}
 
-      {/* All Signals Grid */}
-      <div style={{
-        background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-        borderRadius: '12px',
-        padding: '16px'
-      }}>
+      <div style={{ background: '#f8fafc', borderRadius: '12px', padding: '16px' }}>
         <Title level={5} style={{ margin: '0 0 16px 0', color: '#374151' }}>
-          All Monitored Symbols
+          All Monitored Symbols ({signals.length})
         </Title>
+        
         <Row gutter={[12, 12]}>
-          {signals.map((signal) => (
+          {signals.map(signal => (
             <Col xs={24} sm={12} md={8} lg={6} key={signal.symbol}>
               <div style={{
                 background: 'white',
-                border: activeSymbols.has(signal.symbol) 
-                  ? '2px solid #0ea5e9' 
-                  : '1px solid #e2e8f0',
+                border: '1px solid #e2e8f0',
                 borderRadius: '8px',
                 padding: '12px',
-                fontSize: '12px',
-                position: 'relative'
+                fontSize: '12px'
               }}>
-                {activeSymbols.has(signal.symbol) && (
-                  <div style={{
-                    position: 'absolute',
-                    top: '-8px',
-                    right: '8px',
-                    background: '#0ea5e9',
-                    color: 'white',
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                    fontSize: '9px',
-                    fontWeight: '600'
-                  }}>
-                    TRADING
-                  </div>
-                )}
-                
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <Text strong style={{ fontSize: '12px' }}>{signal.symbol}</Text>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    {getSignalIcon(signal.signal)}
-                    <span style={{ 
-                      fontSize: '10px', 
-                      color: getSignalColor(signal.signal),
-                      fontWeight: '600'
-                    }}>
-                      {signal.strength.toFixed(0)}%
-                    </span>
-                  </div>
+                  <span style={{ fontSize: '10px', fontWeight: '600' }}>
+                    {signal.strength}%
+                  </span>
                 </div>
                 
                 {signal.change24h !== 0 && (
-                  <div style={{ 
+                  <div style={{
                     fontSize: '11px',
                     color: signal.change24h >= 0 ? '#059669' : '#dc2626',
-                    fontFamily: 'Monaco, "SF Mono", monospace'
+                    fontFamily: 'Monaco, monospace'
                   }}>
                     {signal.change24h >= 0 ? '+' : ''}{signal.change24h.toFixed(2)}%
+                  </div>
+                )}
+
+                {signal.price > 0 && (
+                  <div style={{
+                    fontSize: '11px',
+                    color: '#374151',
+                    fontFamily: 'Monaco, monospace'
+                  }}>
+                    ${signal.price.toFixed(signal.price > 100 ? 2 : 4)}
+                  </div>
+                )}
+
+                {signal.error && (
+                  <div style={{ fontSize: '9px', color: '#dc2626', marginTop: '4px' }}>
+                    ⚠ {signal.error}
                   </div>
                 )}
               </div>
             </Col>
           ))}
         </Row>
+
+        <div style={{ 
+          marginTop: '12px', 
+          padding: '8px', 
+          background: '#ecfdf5', 
+          borderRadius: '6px',
+          fontSize: '11px',
+          color: '#059669',
+          textAlign: 'center'
+        }}>
+          ✨ <strong>Single API call</strong> analyzed {watchList.length} symbols!
+          {metadata && (
+            <span> • Processed in {metadata.processingTimeMs}ms • Used {metadata.apiCallsUsed} API calls</span>
+          )}
+        </div>
       </div>
     </Card>
   );
