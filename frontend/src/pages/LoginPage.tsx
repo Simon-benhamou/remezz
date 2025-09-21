@@ -25,10 +25,8 @@ export default function LoginPage() {
         setApiKey(result.token);
         message.success(`Welcome back, ${result.user.username}!`);
         
-        // Force une navigation complète pour assurer un état propre
-        setTimeout(() => {
-          window.location.href = '/dashboard';
-        }, 100);
+        // Navigation immédiate avec React Router
+        navigate('/dashboard', { replace: true });
       }
     } catch (error: any) {
       const errorMessage = error?.response?.data?.error || 'Login failed';
@@ -56,10 +54,8 @@ export default function LoginPage() {
         setApiKey(out.token);
         message.success('Logged in');
         
-        // Force une navigation complète pour assurer un état propre
-        setTimeout(() => {
-          window.location.href = '/dashboard';
-        }, 100);
+        // Navigation immédiate avec React Router
+        navigate('/dashboard', { replace: true });
       }
     } catch (e: any) {
       message.error('Invalid access code');

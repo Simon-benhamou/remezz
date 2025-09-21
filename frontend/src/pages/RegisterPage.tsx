@@ -26,10 +26,8 @@ export default function RegisterPage() {
         setApiKey(result.data.token);
         message.success(`Welcome to Quantum Trading, ${result.data.user.username}!`);
         
-        // Force reload to ensure clean state
-        setTimeout(() => {
-          window.location.href = '/dashboard';
-        }, 100);
+        // Navigation immédiate avec React Router
+        navigate('/dashboard', { replace: true });
       }
     } catch (error: any) {
       const errorMessage = error?.response?.data?.error || 'Registration failed';

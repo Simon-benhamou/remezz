@@ -97,13 +97,18 @@ function getFallbackSymbols(): string[] {
  */
 async function calculateIntelligentScore(symbol: string): Promise<IntelligentAnalysis | null> {
   try {
+    console.log(`🔍 Analyzing ${symbol}...`);
+    
     // Get technical snapshot first (no IA cost)
     const technical = await buildTechSnapshot(symbol);
     const ticker = await getTicker(symbol);
     
     if (!technical || !ticker) {
+      console.log(`❌ ${symbol}: Missing data - technical:${!!technical}, ticker:${!!ticker}`);
       return null;
     }
+
+    console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${ticker.baseVolume}, Change=${ticker.percentage}%`);
 
     // Only use full analysis (with IA) for top performers or significant moves
     let sentiment: any = null;
@@ -112,6 +117,7 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
     
     if (shouldUseAI) {
       try {
+        console.log(`🤖 ${symbol}: Using AI analysis (${change24h}% move)`);
         const fullAnalysisResult = await fullAnalysis(symbol);
         sentiment = fullAnalysisResult.sentiment;
       } catch {
@@ -164,9 +170,12 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
       volatilityScore, volumeScore, regimeScore
     );
 
+    const finalScore = Math.round(compositeScore * 100) / 100;
+    console.log(`🎯 ${symbol}: Final Score=${finalScore} (M:${momentumScore.toFixed(1)}, T:${trendScore.toFixed(1)}, V:${volatilityScore.toFixed(1)}, Vol:${volumeScore.toFixed(1)})`);
+
     return {
       symbol,
-      score: Math.round(compositeScore * 100) / 100,
+      score: finalScore,
       rank: 0, // Will be set after ranking all symbols
       confidence: Math.round(confidence * 100) / 100,
       reasoning,
@@ -182,52 +191,53 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
 }
 
 /**
- * Momentum component scoring
+ * Momentum component scoring - More permissive for real market conditions
  */
 function calculateMomentumComponent(metrics: any): number {
   const { momentum, rsi } = metrics;
   
-  // Strong momentum signals
-  if (Math.abs(momentum) > 5 && ((momentum > 0 && rsi > 60) || (momentum < 0 && rsi < 40))) {
-    return 9.0; // Excellent momentum with RSI confirmation
+  // Strong momentum signals (lowered thresholds)
+  if (Math.abs(momentum) > 3 && ((momentum > 0 && rsi > 55) || (momentum < 0 && rsi < 45))) {
+    return 8.5; // Excellent momentum with RSI confirmation
   }
   
-  // Good momentum
-  if (Math.abs(momentum) > 3) {
-    return 7.0 + Math.min(2.0, Math.abs(momentum) / 10);
+  // Good momentum (lowered from 3 to 2)
+  if (Math.abs(momentum) > 2) {
+    return 7.0 + Math.min(1.5, Math.abs(momentum) / 10);
   }
   
-  // Moderate momentum
-  if (Math.abs(momentum) > 1) {
-    return 5.0 + Math.abs(momentum);
+  // Moderate momentum (lowered from 1 to 0.5)
+  if (Math.abs(momentum) > 0.5) {
+    return 5.5 + Math.abs(momentum);
   }
   
-  // Low momentum
-  return 3.0 + Math.abs(momentum);
+  // Even small movements can be valid (base score increased)
+  return 4.0 + Math.abs(momentum);
 }
 
 /**
- * Trend component scoring
+ * Trend component scoring - More permissive for real market conditions
  */
 function calculateTrendComponent(metrics: any, technical: any): number {
   const { trend, trendStrength, adx } = metrics;
   
-  // Strong trending market
-  if (adx > 25 && trendStrength > 2) {
-    return 8.5 + Math.min(1.5, trendStrength / 5);
+  // Strong trending market (lowered thresholds)
+  if (adx > 20 && trendStrength > 1.5) {
+    return 8.0 + Math.min(1.0, trendStrength / 5);
   }
   
-  // Moderate trend
-  if (adx > 15 && trendStrength > 1) {
-    return 6.0 + Math.min(2.0, adx / 15);
+  // Moderate trend (lowered thresholds)
+  if (adx > 12 && trendStrength > 0.8) {
+    return 6.5 + Math.min(1.5, adx / 15);
   }
   
-  // Weak trend but some direction
-  if (Math.abs(trend) > 0) {
-    return 4.0 + Math.min(2.0, Math.abs(trend) / (technical.last || 1) * 100);
+  // Weak trend but some direction (more generous)
+  if (Math.abs(trend) > 0 || adx > 8) {
+    return 5.0 + Math.min(1.5, Math.abs(trend) / (technical.last || 1) * 100);
   }
   
-  return 3.0;
+  // Even consolidation periods can be valid (increased base)
+  return 4.5;
 }
 
 /**
@@ -251,37 +261,37 @@ function calculateSentimentComponent(sentiment: any): number {
 }
 
 /**
- * Volatility component scoring
+ * Volatility component scoring - More permissive for crypto markets
  */
 function calculateVolatilityComponent(metrics: any): number {
   const { volatility, hurst } = metrics;
   
-  // Optimal volatility range (2-8%)
-  if (volatility >= 2 && volatility <= 8) {
-    const base = 7.0;
-    const persistency = hurst > 0.6 ? 1.5 : hurst < 0.4 ? 1.0 : 1.2;
+  // Optimal volatility range for crypto (broader range)
+  if (volatility >= 1.5 && volatility <= 12) {
+    const base = 7.5;
+    const persistency = hurst > 0.6 ? 1.0 : hurst < 0.4 ? 0.8 : 0.9;
     return base + persistency;
   }
   
-  // High volatility (risky but opportunity)
-  if (volatility > 8) {
-    return 6.0 + Math.min(2.0, 10 / volatility);
+  // High volatility (opportunity in crypto)
+  if (volatility > 12) {
+    return 6.5 + Math.min(1.5, 15 / volatility);
   }
   
-  // Low volatility
-  return 4.0 + Math.min(2.0, volatility);
+  // Low volatility (still tradeable in crypto)
+  return 5.0 + Math.min(2.0, volatility);
 }
 
 /**
- * Volume component scoring
+ * Volume component scoring - Lower thresholds for realistic crypto volumes
  */
 function calculateVolumeComponent(volume: number): number {
-  if (volume > 10000000) return 9.0; // Very high volume
-  if (volume > 5000000) return 8.0;  // High volume
-  if (volume > 1000000) return 7.0;  // Good volume
-  if (volume > 500000) return 6.0;   // Moderate volume
-  if (volume > 100000) return 5.0;   // Low volume
-  return 3.0; // Very low volume
+  if (volume > 5000000) return 8.5; // High volume (lowered threshold)
+  if (volume > 1000000) return 7.5;  // Good volume (lowered threshold)
+  if (volume > 500000) return 6.5;   // Moderate volume (lowered threshold)
+  if (volume > 100000) return 5.5;   // Low but tradeable volume (more generous)
+  if (volume > 50000) return 4.5;    // Very low but still valid (new tier)
+  return 3.5; // Minimal volume (increased base score)
 }
 
 /**
@@ -501,8 +511,8 @@ export async function getBestIntelligentOpportunity(): Promise<IntelligentAnalys
   const opportunities = await scanIntelligentOpportunities();
   
   if (opportunities.length === 0) {
-    console.log('⚠️ No opportunities found, falling back to BTC/USDT');
-    return await calculateIntelligentScore('BTC/USDT');
+    console.log('⚠️ No opportunities found - all cryptos failed analysis criteria');
+    return null;
   }
   
   const best = opportunities[0];
