@@ -475,16 +475,21 @@ router.post('/clear-cache', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// Fix API keys for current user (temporary endpoint)
+// Fix API keys for current user (endpoint for manual key update)
 router.post('/fix-my-keys', async (req: AuthenticatedRequest, res) => {
   try {
     if (req.user?.isLegacy) {
       return res.status(403).json({ error: 'legacy_users_no_migration' });
     }
 
-    // Fixed working credentials
-    const workingApiKey = 'tsedD1bHXcZ1ArVzoYPnFQ';
-    const workingApiSecret = 'cxakp_wtnSWAsaRuoorSXjP6fR2V';
+    const { newApiKey, newApiSecret } = req.body;
+
+    if (!newApiKey || !newApiSecret) {
+      return res.status(400).json({ 
+        error: 'missing_fields',
+        message: 'Provide newApiKey and newApiSecret in request body'
+      });
+    }
 
     console.log('🔧 Fixing API keys for user:', req.user!.id);
 
@@ -503,8 +508,8 @@ router.post('/fix-my-keys', async (req: AuthenticatedRequest, res) => {
           id: existingKey.id
         },
         data: {
-          apiKey: encryptApiKey(workingApiKey),
-          apiSecret: encryptApiKey(workingApiSecret),
+          apiKey: encryptApiKey(newApiKey),
+          apiSecret: encryptApiKey(newApiSecret),
           isActive: true
         }
       });
@@ -527,8 +532,8 @@ router.post('/fix-my-keys', async (req: AuthenticatedRequest, res) => {
           userId: req.user!.id,
           exchange: 'crypto.com',
           keyName: 'Fixed Working Key',
-          apiKey: encryptApiKey(workingApiKey),
-          apiSecret: encryptApiKey(workingApiSecret),
+          apiKey: encryptApiKey(newApiKey),
+          apiSecret: encryptApiKey(newApiSecret),
           testnet: false,
           isActive: true
         }
