@@ -19,6 +19,7 @@ export default function SessionsPage(){
   const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
   const { mode } = useMode();
   const modeVal = Form.useWatch?.('mode', form);
+  const [apiKeyHealth, setApiKeyHealth] = React.useState<any>(null);
   
   // Filter states
   const [statusFilter, setStatusFilter] = React.useState<string>('all');
@@ -133,6 +134,19 @@ export default function SessionsPage(){
     let t:any; const pull = async ()=>{ try { const o = await api.overview(mode); setExBal(o?.exchangeBalance || null); } catch{} };
     pull(); t = setInterval(pull, 15000); return ()=> clearInterval(t);
   }, [mode]);
+  
+  // Load API key health status
+  React.useEffect(() => {
+    const loadApiKeyHealth = async () => {
+      try {
+        const health = await api.client.get('/api/user/api-keys/health');
+        setApiKeyHealth(health.data);
+      } catch (error) {
+        console.error('Failed to load API key health:', error);
+      }
+    };
+    loadApiKeyHealth();
+  }, []);
   
   // Helper functions
   const formatDuration = (ms: number) => {
@@ -270,11 +284,15 @@ export default function SessionsPage(){
           showTitle={false}
         />
 
-        {/* Debug Tool for API Keys */}
-        <ApiKeyDiagnostics />
+        {/* Debug Tool for API Keys - Only show if there are issues */}
+        {apiKeyHealth?.needsDiagnostics && (
+          <ApiKeyDiagnostics />
+        )}
 
-        {/* Migration Tool for Broken Keys */}
-        <ApiKeyMigrationTool />
+        {/* Migration Tool for Broken Keys - Only show if migration needed */}
+        {apiKeyHealth?.needsMigration && (
+          <ApiKeyMigrationTool />
+        )}
         
         <Card 
           style={{

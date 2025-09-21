@@ -3,10 +3,11 @@ export async function startSession(
   symbol: string,
   mode: "paper" | "live",
   startBalanceUsd?: number,
-  profile?: any
+  profile?: any,
+  userId?: string
 ) {
   const s = await prisma.agentSession.create({
-    data: { symbol, mode, startBalanceUsd, profileJson: profile || undefined },
+    data: { symbol, mode, startBalanceUsd, profileJson: profile || undefined, userId },
   });
   await prisma.sessionKpi.create({ data: { sessionId: s.id } });
   return s;

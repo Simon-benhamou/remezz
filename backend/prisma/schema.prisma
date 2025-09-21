@@ -28,6 +28,7 @@ model User {
   alerts       Alert[]
   reports      DailyReport[]
   improvements ImprovementItem[]
+  diagnosticsCache DiagnosticsCache[]
 
   @@index([username])
   @@index([email])
@@ -313,4 +314,16 @@ model ImprovementItem {
   @@index([userId, status])
   @@index([status])
   @@index([severity])
+}
+
+model DiagnosticsCache {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  symbol    String
+  data      Json
+  createdAt DateTime @default(now())
+
+  @@index([userId, symbol, createdAt])
+  @@index([userId, createdAt])
 }

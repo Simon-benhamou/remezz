@@ -195,6 +195,87 @@ router.put('/settings/:key', async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// Check overall API key health status
+router.get('/api-keys/health', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.json({ 
+        hasKeys: false, 
+        needsDiagnostics: true, 
+        needsMigration: true,
+        status: 'legacy_user' 
+      });
+    }
+
+    const apiKeys = await prisma.userApiKey.findMany({
+      where: {
+        userId: req.user!.id
+      }
+    });
+
+    if (apiKeys.length === 0) {
+      return res.json({ 
+        hasKeys: false, 
+        needsDiagnostics: true, 
+        needsMigration: false,
+        status: 'no_keys' 
+      });
+    }
+
+    // Test the primary exchange (crypto.com)
+    const primaryKey = apiKeys.find(k => k.exchange === 'crypto.com' || k.exchange === 'cryptocom');
+    if (!primaryKey) {
+      return res.json({ 
+        hasKeys: true, 
+        needsDiagnostics: true, 
+        needsMigration: false,
+        status: 'missing_primary_exchange' 
+      });
+    }
+
+    // Quick validation test
+    try {
+      const userCredentials = await getUserCredentials(req.user!.id);
+      if (userCredentials) {
+        const isValid = await validateUserCredentials(userCredentials);
+        if (isValid) {
+          return res.json({ 
+            hasKeys: true, 
+            needsDiagnostics: false, 
+            needsMigration: false,
+            status: 'healthy' 
+          });
+        } else {
+          return res.json({ 
+            hasKeys: true, 
+            needsDiagnostics: true, 
+            needsMigration: false,
+            status: 'invalid_credentials' 
+          });
+        }
+      } else {
+        return res.json({ 
+          hasKeys: true, 
+          needsDiagnostics: true, 
+          needsMigration: false,
+          status: 'no_credentials_found' 
+        });
+      }
+    } catch (error) {
+      return res.json({ 
+        hasKeys: true, 
+        needsDiagnostics: true, 
+        needsMigration: false,
+        status: 'validation_error' 
+      });
+    }
+
+  } catch (error) {
+    console.error('API key health check error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
 // Get decrypted API key for trading (internal use)
 router.get('/api-keys/:exchange/credentials', async (req: AuthenticatedRequest, res) => {
   try {

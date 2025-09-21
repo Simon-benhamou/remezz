@@ -65,7 +65,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       budgetPct: body.budgetPct,
       aggressiveness: body.aggressiveness || 'conservative',
       startBalanceUsd: startBal,
-    });
+    }, req.user!.id);
     await setActiveSession(s.id);
     // Activate the new agent state machine (profile freeze)
     let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;

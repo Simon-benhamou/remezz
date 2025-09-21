@@ -27,6 +27,8 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
   const [signals, setSignals] = React.useState<CryptoSignal[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [lastRefresh, setLastRefresh] = React.useState<Date | null>(null);
+  const [dailyCallsUsed, setDailyCallsUsed] = React.useState(0);
+  const [cacheInfo, setCacheInfo] = React.useState<any>(null);
 
   // Liste des cryptos populaires à surveiller
   const watchList = [
@@ -34,47 +36,68 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
     'DOGE/USDT', 'AVAX/USDT', 'MATIC/USDT', 'DOT/USDT', 'BNB/USDT', 'LINK/USDT'
   ];
 
-  const loadTradingSignals = React.useCallback(async () => {
+  const loadTradingSignals = React.useCallback(async (forceRefresh = false) => {
     setLoading(true);
     try {
-      // Simuler des données pour le moment - à remplacer par de vraies API calls
-      const mockSignals: CryptoSignal[] = await Promise.all(
-        watchList.map(async (symbol) => {
-          try {
-            // Essayer de récupérer des données réelles via l'analyse
-            const analysis = await api.analysis(symbol).catch(() => null);
-            const ticker = await api.getTicker(symbol).catch(() => null);
-            
-            // Mock data avec quelques vraies données si disponibles
-            const baseStrength = Math.random() * 100;
-            const signals = ['bullish', 'bearish', 'strong_buy', 'strong_sell', 'neutral', 'caution'] as const;
-            const randomSignal = signals[Math.floor(Math.random() * signals.length)];
-            
-            return {
+      const newSignals: CryptoSignal[] = [];
+      
+      for (const symbol of watchList) {
+        try {
+          // Use the new cache endpoint
+          const endpoint = forceRefresh 
+            ? `/api/cache/trading-diagnostics/${symbol}/refresh`
+            : `/api/cache/trading-diagnostics/${symbol}`;
+          
+          const method = forceRefresh ? 'POST' : 'GET';
+          const response = await api.client[method.toLowerCase() as 'get' | 'post'](endpoint);
+          
+          const { data, cached, timestamp, dailyCallsUsed: calls } = response.data;
+          
+          if (calls !== undefined) {
+            setDailyCallsUsed(calls);
+          }
+          
+          if (data) {
+            const signal: CryptoSignal = {
               symbol,
-              signal: analysis?.signal || randomSignal,
-              strength: analysis?.strength || baseStrength,
-              triggers: analysis?.triggers || [
-                baseStrength > 70 ? 'Strong momentum' : 'Low volatility',
-                baseStrength > 60 ? 'Volume surge' : 'Consolidation',
-                'RSI oversold'
-              ].slice(0, Math.floor(Math.random() * 3) + 1),
-              price: ticker?.price || (50000 + Math.random() * 20000),
-              change24h: analysis?.change24h || (Math.random() - 0.5) * 10,
-              volume24h: ticker?.volume24h || Math.random() * 1000000,
-              atr: analysis?.atr || Math.random() * 5,
-              rsi: analysis?.rsi || Math.random() * 100,
-              trend: analysis?.trend || (Math.random() - 0.5) * 2,
-              lastUpdated: new Date().toISOString()
+              signal: data.technical?.trend > 0.6 ? 'bullish' : 
+                     data.technical?.trend < -0.6 ? 'bearish' : 'neutral',
+              strength: Math.abs(data.technical?.trend || 0) * 100,
+              triggers: [
+                data.technical?.atrPct > 2 ? 'High volatility' : 'Normal volatility',
+                data.technical?.rsi14 > 70 ? 'Overbought' : 
+                data.technical?.rsi14 < 30 ? 'Oversold' : 'Neutral RSI',
+                data.strategy ? 'AI Strategy available' : 'Market analysis'
+              ].filter(Boolean),
+              price: data.technical?.last || 0,
+              change24h: ((data.technical?.last || 1) - (data.technical?.prevClose || 1)) / (data.technical?.prevClose || 1) * 100,
+              volume24h: data.technical?.volume24h || 0,
+              atr: data.technical?.atr14 || 0,
+              rsi: data.technical?.rsi14 || 50,
+              trend: data.technical?.trend || 0,
+              lastUpdated: timestamp
             };
-          } catch {
-            // Fallback avec données mock
-            const baseStrength = Math.random() * 100;
-            return {
+            
+            newSignals.push(signal);
+            
+            if (!cached && timestamp) {
+              setCacheInfo({ 
+                lastFresh: timestamp, 
+                cached, 
+                dailyCallsUsed: calls 
+              });
+            }
+          }
+        } catch (error: any) {
+          console.warn(`Failed to load diagnostics for ${symbol}:`, error.message);
+          
+          // If daily limit exceeded, show fallback
+          if (error.response?.status === 429) {
+            const fallbackSignal: CryptoSignal = {
               symbol,
-              signal: 'neutral' as const,
-              strength: baseStrength,
-              triggers: ['No data available'],
+              signal: 'neutral',
+              strength: 0,
+              triggers: ['Daily limit reached - showing cached data'],
               price: 0,
               change24h: 0,
               volume24h: 0,
@@ -83,12 +106,13 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
               trend: 0,
               lastUpdated: new Date().toISOString()
             };
+            newSignals.push(fallbackSignal);
           }
-        })
-      );
+        }
+      }
 
       // Trier par force du signal (plus forts en premier)
-      const sortedSignals = mockSignals.sort((a, b) => b.strength - a.strength);
+      const sortedSignals = newSignals.sort((a, b) => b.strength - a.strength);
       setSignals(sortedSignals);
       setLastRefresh(new Date());
     } catch (error) {
@@ -96,12 +120,12 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [watchList]);
 
   React.useEffect(() => {
-    loadTradingSignals();
-    // Refresh automatique toutes les 5 minutes
-    const interval = setInterval(loadTradingSignals, 5 * 60 * 1000);
+    loadTradingSignals(false); // Use cache on initial load
+    // Refresh automatique toutes les 30 minutes (au lieu de 5)
+    const interval = setInterval(() => loadTradingSignals(false), 30 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadTradingSignals]);
 
@@ -177,6 +201,17 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* Cache and API calls status */}
+            <Space size="small">
+              <Text style={{ fontSize: '12px', color: '#64748b' }}>
+                Daily calls: {dailyCallsUsed}/5
+              </Text>
+              {cacheInfo?.cached && (
+                <Tag color="blue" style={{ fontSize: '10px' }}>
+                  Cached
+                </Tag>
+              )}
+            </Space>
             {lastRefresh && (
               <Text style={{ fontSize: '12px', color: '#64748b' }}>
                 Last: {lastRefresh.toLocaleTimeString()}
@@ -184,7 +219,7 @@ export default function TradingDiagnosticsOverview({ activeSessions = [] }: Trad
             )}
             <Button 
               icon={<ReloadOutlined />}
-              onClick={loadTradingSignals}
+              onClick={() => loadTradingSignals(true)}
               loading={loading}
               size="small"
               style={{
