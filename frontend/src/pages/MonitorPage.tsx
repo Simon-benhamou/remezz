@@ -663,14 +663,14 @@ export default function MonitorPage(){
             {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
               <KeyMetricsCard 
                 indicators={{
-                  atrPct: Number(analysis?.indicators?.atrPct || status?.indicators?.atrPct || 0),
-                  adx: Number(analysis?.indicators?.adx14 || status?.indicators?.adx14 || 0),
-                  rsi: Number(analysis?.indicators?.rsi14 || status?.indicators?.rsi14 || 50),
-                  ema20: Number(analysis?.indicators?.ema20 || status?.indicators?.ema20 || 0),
-                  ema50: Number(analysis?.indicators?.ema50 || status?.indicators?.ema50 || 0),
-                  ema20Slope: Number(analysis?.indicators?.ema20Slope || 0),
-                  volume: Number(analysis?.indicators?.volume || 0),
-                  price: Number(status?.price || 0)
+                  atrPct: Number(analysis?.technical?.atrPct || status?.indicators?.atrPct || 0),
+                  adx: Number(analysis?.technical?.adx14 || status?.indicators?.adx14 || 0),
+                  rsi: Number(analysis?.technical?.rsi14 || status?.indicators?.rsi14 || 50),
+                  ema20: Number(analysis?.technical?.ema20 || status?.indicators?.ema20 || 0),
+                  ema50: Number(analysis?.technical?.ema50 || status?.indicators?.ema50 || 0),
+                  ema20Slope: Number(analysis?.technical?.ema20Slope || 0),
+                  volume: Number(analysis?.technical?.volume24h || 0),
+                  price: Number(analysis?.technical?.last || status?.price || 0)
                 }}
               />
             ) : (
