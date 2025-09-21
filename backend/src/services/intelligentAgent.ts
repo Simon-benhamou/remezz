@@ -673,10 +673,23 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
       reasoning: bestOpportunity.reasoning.summary,
     }];
     
-    await prisma.agentSession.update({
-      where: { id: String(sessionId) }, // Convert to string
+    console.log(`🔄 Updating session ${sessionId} with symbol: ${bestOpportunity.symbol}`);
+    
+    // Try direct SQL to update currentSymbol
+    try {
+      await prisma.$executeRaw`
+        UPDATE "AgentSession" 
+        SET "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
+        WHERE id = ${sessionId}
+      `;
+      console.log(`✅ currentSymbol updated via SQL`);
+    } catch (error) {
+      console.error(`❌ SQL update failed:`, error);
+    }
+    
+    await (prisma.agentSession as any).update({
+      where: { id: sessionId },
       data: {
-        symbol: bestOpportunity.symbol,
         profileJson: {
           ...intelligentConfig,
           originalSymbol: bestOpportunity.symbol
@@ -686,6 +699,8 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
         } as any
       }
     });
+    
+    console.log(`✅ Session ${sessionId} updated successfully with currentSymbol: ${bestOpportunity.symbol}`);
     
     console.log(`✅ Intelligent Agent initialized with ${bestOpportunity.symbol}`);
     console.log(`🎯 Score: ${bestOpportunity.score}, Confidence: ${bestOpportunity.confidence}`);

@@ -266,7 +266,8 @@ export async function startEventEngine(){
       const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null }, orderBy:{ startedAt:'asc' } });
       for (let i = 0; i < sessions.length; i++) {
         const s = sessions[i];
-        const sym = s.symbol || cfg.SYMBOL;
+        // Use currentSymbol for Smart Agents, fallback to original symbol
+        const sym = (s as any).currentSymbol || s.symbol || cfg.SYMBOL;
         try {
           // Add progressive delay between sessions to spread API load
           if (i > 0) {
