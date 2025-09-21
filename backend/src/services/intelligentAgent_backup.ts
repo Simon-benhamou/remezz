@@ -726,3 +726,76 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     console.error(`❌ Error checking opportunities for session ${session.id}:`, error);
   }
 }
+    
+    console.log(`🔍 Scanning for better opportunities for session ${session.id} (${session.symbol})`);
+    
+    // Get current best opportunity
+    const bestOpportunity = await getBestIntelligentOpportunity();
+    
+    if (!bestOpportunity) {
+      console.log(`⚠️ No opportunities found for session ${session.id}`);
+      return;
+    }
+    
+    // Check if we should switch (better score + confidence, different symbol)
+    const currentAnalysis = config?.analysis;
+    const shouldSwitch = bestOpportunity.symbol !== session.symbol &&
+                        bestOpportunity.score > (currentAnalysis?.score || 0) + 0.5 &&
+                        bestOpportunity.confidence > 0.7;
+    
+    if (shouldSwitch) {
+      console.log(`🔄 Switching session ${session.id} from ${session.symbol} to ${bestOpportunity.symbol}`);
+      console.log(`📊 Score improvement: ${currentAnalysis?.score || 0} → ${bestOpportunity.score}`);
+      
+      // Update session with new data
+      const updatedConfig = {
+        ...config,
+        analysis: bestOpportunity,
+        lastScan: now.toISOString(),
+        nextScanDue: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      };
+      
+      const existingHistory = session.planJson?.intelligentHistory || [];
+      const newHistory = [...existingHistory, {
+        timestamp: now.toISOString(),
+        action: 'intelligent_switch',
+        fromSymbol: session.symbol,
+        toSymbol: bestOpportunity.symbol,
+        score: bestOpportunity.score,
+        confidence: bestOpportunity.confidence,
+        reasoning: bestOpportunity.reasoning.summary,
+      }];
+      
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: {
+          symbol: bestOpportunity.symbol,
+          profileJson: updatedConfig as any,
+          planJson: {
+            intelligentHistory: newHistory
+          } as any
+        }
+      });
+      
+    } else {
+      // Just update scan times
+      const updatedConfig = {
+        ...config,
+        lastScan: now.toISOString(),
+        nextScanDue: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      };
+      
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: {
+          profileJson: updatedConfig as any
+        }
+      });
+      
+      console.log(`✅ No switch needed for session ${session.id} (${session.symbol})`);
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error checking opportunities for session ${session.id}:`, error);
+  }
+}
