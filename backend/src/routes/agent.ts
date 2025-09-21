@@ -293,6 +293,36 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
   const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : 0;
   const avgWinRate = actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.winRate || 0), 0) / actives.length) : 0;
 
+  // Get live exchange balance for authenticated users
+  let exchangeBalance: any = null;
+  if (!req.user?.isLegacy && req.user?.id && (modeFilter === 'live' || !modeFilter)) {
+    try {
+      const userCredentials = await getUserCredentials(req.user.id);
+      if (userCredentials) {
+        const exchange = await getUserExchange(req.user.id, userCredentials);
+        const balance = await exchange.fetchBalance();
+        
+        // Extract USD balances (compatible with Crypto.com response)
+        const totalUsd = Number(balance?.total?.USD || 0);
+        const freeUsd = Number(balance?.free?.USD || 0);
+        const usedUsd = Number(balance?.used?.USD || 0);
+        
+        exchangeBalance = {
+          totalUsd,
+          freeUsd,
+          usedUsd: usedUsd || Math.max(0, totalUsd - freeUsd),
+          currencies: Object.keys(balance?.total || {}),
+          lastUpdated: new Date().toISOString()
+        };
+        
+        console.log(`📊 Live balance for user ${req.user.id}: $${totalUsd.toFixed(2)} USD`);
+      }
+    } catch (error) {
+      console.error('Failed to fetch live exchange balance:', error);
+      // Don't fail the entire request, just log the error
+    }
+  }
+
   res.json({
     activeCount: actives.length,
     sessionsCount: totalSessions,
@@ -302,6 +332,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     roiPct,
     avgWinRate,
     aiCallsTotal,
+    exchangeBalance,
     updatedAt: new Date().toISOString(),
   });
 });
