@@ -131,13 +131,35 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       userId: req.user!.id,
     } as any).catch(()=>{});
 
-    // Respond immediately to keep the UI smooth
+    // Initialize Auto-Select Agent BEFORE responding (for better UX)
+    if (isSmartAgent) {
+      console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
+      try {
+        const success = await initializeIntelligentSmartAgent(s.id);
+        if (success) {
+          console.log(`✅ Auto-Select Agent ${s.id} initialized successfully`);
+          
+          // Update the session object with the selected symbol
+          const updatedSession = await prisma.agentSession.findUnique({ where: { id: s.id } });
+          if ((updatedSession as any)?.currentSymbol) {
+            (s as any).symbol = (updatedSession as any).currentSymbol;
+            (s as any).currentSymbol = (updatedSession as any).currentSymbol;
+            console.log(`🔄 Updated response symbol to: ${(updatedSession as any).currentSymbol}`);
+          }
+        } else {
+          console.warn(`⚠️ Auto-Select Agent ${s.id} initialization failed - keeping temporary symbol ${symbol}`);
+        }
+      } catch (error) {
+        console.error(`❌ Auto-Select Agent ${s.id} initialization error:`, error);
+      }
+    }
+
+    // Respond with the session (now with selected symbol if Auto-Select succeeded)
     res.json(s);
 
-    // Continue heavy work in background without blocking response
+    // Continue lighter background work
     setTimeout(async () => {
       try {
-        // Initialize Intelligent Agent if enabled
         if (isSmartAgent) {
           console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
           const success = await initializeIntelligentSmartAgent(s.id);

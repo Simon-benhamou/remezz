@@ -649,8 +649,44 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
     const bestOpportunity = await getBestIntelligentOpportunity();
     
     if (!bestOpportunity) {
-      console.error('❌ Failed to find any opportunities for Intelligent Agent');
-      return false;
+      console.log('💤 No valid opportunities found - creating session in sleep mode for 3h');
+      
+      // Create session in sleep mode with 3h scan interval instead of fallback to Bitcoin
+      const sleepConfig = {
+        isIntelligent: true,
+        selectedAt: new Date().toISOString(),
+        analysis: null,
+        lastScan: new Date().toISOString(),
+        nextScanDue: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(), // 3h sleep mode
+        minHoldHours: 0, // No minimum in sleep mode
+        strategy: 'sleep_mode_3h',
+        sleepMode: true,
+        sleepReason: 'No qualifying opportunities found'
+      };
+      
+      const sleepHistory = [{
+        timestamp: new Date().toISOString(),
+        action: 'intelligent_sleep',
+        reason: 'No qualifying opportunities found',
+        nextScan: sleepConfig.nextScanDue,
+        scanInterval: '3h'
+      }];
+      
+      console.log(`💤 Setting session ${sessionId} to sleep mode - next scan in 3h`);
+      
+      await (prisma.agentSession as any).update({
+        where: { id: sessionId },
+        data: {
+          profileJson: sleepConfig as any,
+          planJson: {
+            intelligentHistory: sleepHistory
+          } as any
+          // No currentSymbol set - session stays without symbol
+        }
+      });
+      
+      console.log(`✅ Session ${sessionId} set to sleep mode for 3h`);
+      return true; // Still successful, but in sleep mode
     }
     
     // Update session with the selected symbol using profileJson for metadata
@@ -661,7 +697,8 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
       lastScan: new Date().toISOString(),
       nextScanDue: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(), // 12h minimum
       minHoldHours: 12,
-      strategy: 'optimized_cost_efficient'
+      strategy: 'optimized_cost_efficient',
+      sleepMode: false
     };
     
     const intelligentHistory = [{
@@ -755,12 +792,84 @@ export async function checkIntelligentOpportunities(): Promise<void> {
 }
 
 /**
- * Optimized session check: 12h minimum + trade activity condition
+ * Optimized session check: 12h minimum + trade activity condition + sleep mode handling
  */
 async function checkSessionForBetterOpportunityOptimized(session: any): Promise<void> {
   try {
     const config = session.profileJson as any;
     const now = new Date();
+    
+    // Check if session is in sleep mode
+    if (config?.sleepMode) {
+      const nextScanDue = new Date(config?.nextScanDue || now);
+      
+      if (now < nextScanDue) {
+        console.log(`💤 Session ${session.id}: Still in sleep mode until ${nextScanDue.toISOString()}`);
+        return;
+      }
+      
+      console.log(`⏰ Session ${session.id}: Waking up from sleep mode - scanning for opportunities`);
+      
+      // Try to find opportunities after sleep
+      const bestOpportunity = await getBestIntelligentOpportunity();
+      
+      if (!bestOpportunity) {
+        console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 3h`);
+        const nextCheck = new Date(now.getTime() + 3 * 60 * 60 * 1000); // 3h sleep extension
+        await updateSessionNextCheck(session.id, nextCheck);
+        return;
+      }
+      
+      // Found opportunity - wake up session
+      console.log(`🌅 Session ${session.id}: Waking up with opportunity ${bestOpportunity.symbol}`);
+      
+      const wakeUpConfig = {
+        ...config,
+        analysis: bestOpportunity,
+        selectedAt: now.toISOString(),
+        lastScan: now.toISOString(),
+        nextScanDue: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(),
+        minHoldHours: 12,
+        strategy: 'optimized_cost_efficient',
+        sleepMode: false
+      };
+      
+      const existingHistory = session.planJson?.intelligentHistory || [];
+      const newHistory = [...existingHistory, {
+        timestamp: now.toISOString(),
+        action: 'intelligent_wakeup',
+        symbol: bestOpportunity.symbol,
+        score: bestOpportunity.score,
+        confidence: bestOpportunity.confidence,
+        reasoning: bestOpportunity.reasoning.summary,
+        sleepDuration: Math.round((now.getTime() - new Date(config?.selectedAt || now).getTime()) / (1000 * 60 * 60)) + 'h'
+      }];
+      
+      // Update session with selected symbol and wake up
+      try {
+        await prisma.$executeRaw`
+          UPDATE "AgentSession" 
+          SET "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
+          WHERE id = ${session.id}
+        `;
+        console.log(`✅ currentSymbol updated to ${bestOpportunity.symbol} via SQL`);
+      } catch (error) {
+        console.error(`❌ SQL update failed:`, error);
+      }
+      
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: {
+          profileJson: wakeUpConfig as any,
+          planJson: { intelligentHistory: newHistory } as any
+        }
+      });
+      
+      console.log(`✅ Session ${session.id} woken up with ${bestOpportunity.symbol}`);
+      return;
+    }
+    
+    // Normal session logic (not in sleep mode)
     const selectedAt = new Date(config?.selectedAt || now);
     const hoursSinceSelection = (now.getTime() - selectedAt.getTime()) / (1000 * 60 * 60);
     
@@ -788,9 +897,38 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     const bestOpportunity = await getBestIntelligentOpportunity();
     
     if (!bestOpportunity) {
-      console.log(`⚠️ No opportunities found for session ${session.id} - extending hold`);
-      const nextCheck = new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6h retry
-      await updateSessionNextCheck(session.id, nextCheck);
+      console.log(`💤 Session ${session.id}: No opportunities found - switching to sleep mode for 3h`);
+      
+      // Switch to sleep mode instead of extending hold
+      const sleepConfig = {
+        ...config,
+        analysis: null,
+        lastScan: now.toISOString(),
+        nextScanDue: new Date(now.getTime() + 3 * 60 * 60 * 1000).toISOString(), // 3h sleep
+        sleepMode: true,
+        sleepReason: 'No qualifying opportunities in market scan'
+      };
+      
+      const existingHistory = session.planJson?.intelligentHistory || [];
+      const newHistory = [...existingHistory, {
+        timestamp: now.toISOString(),
+        action: 'intelligent_enter_sleep',
+        reason: 'No qualifying opportunities found',
+        previousSymbol: session.symbol,
+        hoursHeld: hoursSinceSelection.toFixed(1),
+        nextScan: sleepConfig.nextScanDue
+      }];
+      
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: {
+          profileJson: sleepConfig as any,
+          planJson: { intelligentHistory: newHistory } as any
+          // Keep currentSymbol for now - will be cleared if needed
+        }
+      });
+      
+      console.log(`💤 Session ${session.id} entered sleep mode for 3h`);
       return;
     }
     
@@ -812,7 +950,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         selectedAt: now.toISOString(),
         lastScan: now.toISOString(),
         nextScanDue: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(), // 12h minimum
-        switchReason: `No trades + ${scoreImprovement.toFixed(1)} score improvement`
+        switchReason: `No trades + ${scoreImprovement.toFixed(1)} score improvement`,
+        sleepMode: false
       };
       
       const existingHistory = session.planJson?.intelligentHistory || [];
@@ -828,10 +967,21 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         trades: recentTrades
       }];
       
+      // Update currentSymbol via SQL
+      try {
+        await prisma.$executeRaw`
+          UPDATE "AgentSession" 
+          SET "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
+          WHERE id = ${session.id}
+        `;
+        console.log(`✅ currentSymbol updated to ${bestOpportunity.symbol} via SQL`);
+      } catch (error) {
+        console.error(`❌ SQL update failed:`, error);
+      }
+      
       await prisma.agentSession.update({
         where: { id: session.id },
         data: {
-          symbol: bestOpportunity.symbol,
           profileJson: updatedConfig as any,
           planJson: { intelligentHistory: newHistory } as any
         }
