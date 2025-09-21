@@ -3,7 +3,7 @@ import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumb
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
-import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
+import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined, RocketOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import TradingDiagnosticsOverview from '../components/TradingDiagnosticsOverview';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
@@ -19,6 +19,7 @@ export default function SessionsPage(){
   const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
   const { mode } = useMode();
   const modeVal = Form.useWatch?.('mode', form);
+  const smartAutoMode = Form.useWatch?.('smartAutoMode', form);
   const [apiKeyHealth, setApiKeyHealth] = React.useState<any>(null);
   
   // Filter states
@@ -984,6 +985,18 @@ export default function SessionsPage(){
               setStarting(true);
               const v = await form.validateFields();
               
+              // If Smart Auto Mode is enabled, remove symbol requirement and add smart mode flags
+              if (v.smartAutoMode) {
+                delete v.symbol; // Remove symbol requirement
+                v.isSmartAgent = true; // Flag for backend
+                v.smartConfig = {
+                  minHoldDuration: 24 * 60 * 60 * 1000, // 24h in ms
+                  rescanInterval: 6 * 60 * 60 * 1000,    // 6h in ms
+                  momentumThreshold: 6.0,                 // Minimum momentum score
+                  volumeThreshold: 1000000                // Minimum volume USD
+                };
+              }
+              
               // Check API keys for live mode
               if (String(v.mode) === 'live') {
                 try {
@@ -1005,7 +1018,7 @@ export default function SessionsPage(){
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd||0), Number(exBal.totalUsd||0));
               }
               const res = await api.client.post('/api/agent/start', v);
-              message.success('Session started successfully!');
+              message.success(v.smartAutoMode ? 'Smart Auto Agent started! Scanning for best opportunities...' : 'Session started successfully!');
               setOpen(false);
               await load();
               // Navigate to the created session (preferred), fallback to first active
@@ -1033,23 +1046,93 @@ export default function SessionsPage(){
               maxLeverage:4, 
               dailyLossLimitPct:3.5, 
               budgetPct:100, 
-              aggressiveness:'conservative' 
+              aggressiveness:'conservative',
+              smartAutoMode: false
             }}
             style={{
               fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
             }}
           >
-            <Form.Item label='Trading Symbol' name='symbol' rules={[{ required:true }]}>
-              <Select
-                showSearch
-                placeholder='Select trading symbol'
-                options={commonSymbols.map(s=>({ value: s, label: s }))}
-                filterOption={(input, option)=> (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+            {/* Smart Auto Mode Toggle */}
+            <Form.Item 
+              label={
+                <Space>
+                  <RocketOutlined style={{ color: '#722ed1' }} />
+                  <span style={{ fontWeight: 600 }}>Smart Auto Mode</span>
+                </Space>
+              } 
+              name='smartAutoMode' 
+              valuePropName="checked"
+              tooltip="Automatically scans and selects the best performing cryptocurrencies. Agent will switch to new opportunities every 24h or when trades complete."
+            >
+              <Switch 
+                checkedChildren="🤖 Smart" 
+                unCheckedChildren="Manual" 
                 style={{
-                  fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
+                  background: smartAutoMode ? 'linear-gradient(135deg, #722ed1, #9254de)' : undefined
                 }}
               />
             </Form.Item>
+
+            {/* Smart Mode Info Banner */}
+            {smartAutoMode && (
+              <div style={{
+                background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+                border: '1px solid #0ea5e9',
+                borderRadius: '10px',
+                padding: '16px',
+                marginBottom: '16px'
+              }}>
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <ThunderboltOutlined style={{ color: '#0ea5e9', fontSize: '16px' }} />
+                    <span style={{ fontWeight: 600, color: '#0369a1' }}>Smart Auto Agent Configuration</span>
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#0369a1', lineHeight: '1.5' }}>
+                    • <strong>Auto Symbol Selection:</strong> Scans 30+ popular cryptocurrencies every 6 hours<br/>
+                    • <strong>Minimum Hold:</strong> 24 hours per position (or until trade completion)<br/>
+                    • <strong>Momentum Threshold:</strong> Only selects cryptos with score ≥ 6.0/10<br/>
+                    • <strong>Volume Filter:</strong> Minimum $1M daily volume for liquidity
+                  </div>
+                </Space>
+              </div>
+            )}
+
+            {/* Traditional Symbol Selection - Hidden in Smart Mode */}
+            {!smartAutoMode && (
+              <Form.Item label='Trading Symbol' name='symbol' rules={[{ required:true }]}>
+                <Select
+                  showSearch
+                  placeholder='Select trading symbol'
+                  options={commonSymbols.map(s=>({ value: s, label: s }))}
+                  filterOption={(input, option)=> (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+                  style={{
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
+                  }}
+                />
+              </Form.Item>
+            )}
+
+            {/* Current Symbol Display for Smart Mode */}
+            {smartAutoMode && (
+              <div style={{
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                padding: '12px',
+                marginBottom: '16px'
+              }}>
+                <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>
+                  Trading Symbol
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <RocketOutlined style={{ color: '#722ed1' }} />
+                  <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                    Will be auto-selected from best opportunities
+                  </span>
+                </div>
+              </div>
+            )}
             <Form.Item label='Trading Mode'>
               <Tag style={{ 
                 background: modeVal === 'live' 

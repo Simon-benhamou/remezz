@@ -5,6 +5,7 @@ import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { prisma } from '../db/client.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
+import { initializeSmartAgent } from '../services/smartAgent.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
@@ -14,6 +15,7 @@ import { PlanZ } from '../agent/planSchema.js';
 import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
+import { getSmartAgentStatus } from '../services/smartAgent.js';
 
 export const router = Router();
 
@@ -22,14 +24,33 @@ router.get('/session', async (_req,res)=> res.json(await activeSession()));
 router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>{
   try {
     const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
-    const body = req.body as { symbol?: string, mode:'paper'|'live', startBalanceUsd?:number, perps?: string[], riskPerTradePct?: number, maxLeverage?: number, dailyLossLimitPct?: number, budgetPct?: number, aggressiveness?: 'conservative'|'reactive'|'aggressive' };
+    const body = req.body as { 
+      symbol?: string, 
+      mode:'paper'|'live', 
+      startBalanceUsd?:number, 
+      perps?: string[], 
+      riskPerTradePct?: number, 
+      maxLeverage?: number, 
+      dailyLossLimitPct?: number, 
+      budgetPct?: number, 
+      aggressiveness?: 'conservative'|'reactive'|'aggressive',
+      isSmartAgent?: boolean,
+      smartConfig?: any
+    };
     let symbol = body.symbol as string;
 
-  // Optional: ranking only if no symbol provided and RANK_ON_START=true
-    if (!symbol && process.env.RANK_ON_START === 'true') {
-      const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
-      const ranked = await selectBestPerp(list);     // may call LLM once
-      symbol = ranked[0]?.symbol || 'BTC/USDT';
+    // Smart Agent mode - auto-select best symbol
+    if (body.isSmartAgent && body.smartConfig) {
+      console.log('🤖 Creating Smart Agent - scanning for best opportunity...');
+      // We'll set a temporary symbol and replace it after session creation
+      symbol = 'BTC/USDT'; // Temporary default
+    } else {
+      // Optional: ranking only if no symbol provided and RANK_ON_START=true
+      if (!symbol && process.env.RANK_ON_START === 'true') {
+        const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
+        const ranked = await selectBestPerp(list);     // may call LLM once
+        symbol = ranked[0]?.symbol || 'BTC/USDT';
+      }
     }
     // Ensure we resolve a perpetual market symbol; return descriptive error if not available
     try { const s = await (await import('../exchange/ccxtClient.js')).resolveSymbol(symbol); symbol = s; } catch (e:any) { return res.status(400).json({ error: 'symbol_not_found_perp', details: String(e?.message || e) }); }
@@ -66,6 +87,17 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       aggressiveness: body.aggressiveness || 'conservative',
       startBalanceUsd: startBal,
     }, req.user!.id);
+
+    // Mark as Smart Agent if requested
+    if (body.isSmartAgent && body.smartConfig) {
+      await (prisma.agentSession as any).update({
+        where: { id: s.id },
+        data: {
+          isSmartAgent: true,
+          smartConfig: body.smartConfig
+        }
+      });
+    }
     await setActiveSession(s.id);
     // Activate the new agent state machine (profile freeze)
     let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
@@ -90,6 +122,20 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     // Continue heavy work in background without blocking response
     setTimeout(async () => {
       try {
+        // Initialize Smart Agent if enabled
+        if (body.isSmartAgent && body.smartConfig) {
+          console.log(`🤖 Initializing Smart Agent for session ${s.id}`);
+          const bestSymbol = await initializeSmartAgent(s.id, body.smartConfig);
+          if (bestSymbol) {
+            // Update the agent hub with the new symbol
+            const a = AgentHub.get(s.id);
+            if (a) {
+              (a as any).profile.symbol = bestSymbol;
+              console.log(`✅ Smart Agent ${s.id} switched to ${bestSymbol}`);
+            }
+          }
+        }
+
         // Plan + arm
         const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
         // Persist LLM plan JSON on the session so we can re-arm after a reboot without re-calling LLM
@@ -150,6 +196,23 @@ router.get('/triggers', async (req,res)=>{
 router.get('/ai-calls', async (req,res)=>{
   const sessionId = String(req.query.sessionId || '');
   res.json({ count: await getAICallsCount(sessionId || undefined) });
+});
+
+// Smart Agent status
+router.get('/sessions/:id/smart-status', async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const status = await getSmartAgentStatus(sessionId);
+    
+    if (!status) {
+      return res.json({ isSmartAgent: false });
+    }
+    
+    res.json(status);
+  } catch (error) {
+    console.error('❌ Failed to get Smart Agent status:', error);
+    res.status(500).json({ error: 'Failed to get Smart Agent status' });
+  }
 });
 
 // New: pass a LLM JSON plan to the agent (validates + arms)

@@ -25,6 +25,7 @@ import MarketTriggersCard from '../components/MarketTriggersCard';
 import KeyMetricsCard from '../components/KeyMetricsCard';
 import SRVisualizationCard from '../components/SRVisualizationCard';
 import AIInsightsCard from '../components/AIInsightsCard';
+import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
 
 const { Title, Text } = Typography;
 
@@ -617,6 +618,11 @@ export default function MonitorPage(){
         
         <Col xs={24} lg={8}>
           <Space direction="vertical" style={{ width: '100%' }} size="large">
+            {/* Smart Agent Status - Show first if applicable */}
+            {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id && (
+              <SmartAgentStatusPanel sessionId={status.session.id} />
+            )}
+
             {/* Agent State */}
             {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
               <AgentStatePanel 

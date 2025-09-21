@@ -22,6 +22,8 @@ import { router as improvementsRouter } from "./routes/improvements.js";
 import { router as marketRouter } from "./routes/market.js";
 import { router as cacheRouter } from "./routes/cache.js";
 import { batchRouter } from "./routes/batch.js";
+import { scannerRouter } from "./routes/scanner.js";
+import { checkAllSmartAgents } from "./services/smartAgent.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 const cfg = getConfig();
@@ -91,6 +93,7 @@ app.use("/api/monitor", monitorRouter);
 app.use("/api/market", marketRouter);
 app.use("/api/cache", cacheRouter);
 app.use("/api/batch", batchRouter);
+app.use("/api/scanner", scannerRouter);
 app.use("/api/llm", llmTestRouter);
 app.use("/api/ops", opsRouter);
 app.use("/api/improvements", improvementsRouter);
@@ -99,5 +102,15 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 startWSHub(wss);
 startEventEngine();
+
+// Start Smart Agent background job
+console.log('🤖 Starting Smart Agent background checker...');
+setInterval(async () => {
+  try {
+    await checkAllSmartAgents();
+  } catch (error) {
+    console.error('❌ Smart Agent background job failed:', error);
+  }
+}, 5 * 60 * 1000); // Check every 5 minutes
 
 server.listen(cfg.PORT, () => console.log(`[api] listening on :${cfg.PORT}`));

@@ -6,6 +6,7 @@ import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
 import OpsEventsList from '../components/OpsEventsList';
 import OpsLLMPanel from '../components/OpsLLMPanel';
+import SmartOpportunityScanner from '../components/SmartOpportunityScanner';
 import { useMode } from '../contexts/ModeContext';
 import { 
   ArrowUpOutlined, 
@@ -21,7 +22,8 @@ import {
   EyeOutlined,
   SettingOutlined,
   BulbOutlined,
-  FireOutlined
+  FireOutlined,
+  RocketOutlined
 } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
@@ -33,6 +35,7 @@ export default function DashboardPage(){
   const [opsEvents, setOpsEvents] = React.useState<any[]>([]);
   const [opsLlmLogs, setOpsLlmLogs] = React.useState<any[]>([]);
   const [opsLoading, setOpsLoading] = React.useState<boolean>(true);
+  const [showSmartScanner, setShowSmartScanner] = React.useState(false);
   const loadedRef = React.useRef(false);
   const navigate = useNavigate();
   const { mode } = useMode();
@@ -65,6 +68,12 @@ export default function DashboardPage(){
   
   // Quick actions menu
   const quickActions: MenuProps['items'] = [
+    {
+      key: 'smart-scanner',
+      label: 'Smart Opportunity Scanner',
+      icon: <RocketOutlined />,
+      onClick: () => setShowSmartScanner(!showSmartScanner)
+    },
     {
       key: 'new-btc',
       label: 'New BTC Agent',
@@ -191,6 +200,24 @@ export default function DashboardPage(){
           </Col>
         </Row>
       </Card>
+
+      {/* Smart Opportunity Scanner */}
+      {showSmartScanner && (
+        <div style={{ marginBottom: 24 }}>
+          <SmartOpportunityScanner 
+            onSymbolSelect={(symbol) => {
+              console.log('Selected symbol:', symbol);
+              // Navigate to create new session with selected symbol
+              navigate(`/sessions?symbol=${symbol}`);
+            }}
+            onAutoTrade={(symbol) => {
+              console.log('Auto trade selected for:', symbol);
+              // Implement auto-trade logic - create session and start immediately
+              navigate(`/sessions?symbol=${symbol}&autoStart=true`);
+            }}
+          />
+        </div>
+      )}
 
       {/* Main KPIs */}
       <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>

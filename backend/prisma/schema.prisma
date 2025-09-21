@@ -78,6 +78,14 @@ model AgentSession {
   profileJson     Json?
   planJson        Json?
 
+  // Smart Auto Mode fields
+  isSmartAgent         Boolean @default(false)
+  smartConfig          Json?   // Configuration for smart mode
+  currentSymbol        String? // Current active symbol (can differ from original symbol)
+  lastSymbolSwitchAt   DateTime?
+  nextRescanAt         DateTime?
+  smartHistory         Json?   // History of symbol switches and reasons
+
   strategies Strategy[]
   orders     Order[]
   fills      Fill[]                // back-rel from Fill.session
@@ -91,6 +99,7 @@ model AgentSession {
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
+  @@index([isSmartAgent, nextRescanAt])
 }
 
 model Strategy {
