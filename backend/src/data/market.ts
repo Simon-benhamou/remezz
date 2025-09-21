@@ -63,10 +63,18 @@ export async function getTicker(symbol: string) {
 }
 
 export async function getOHLCV(symbol: string, tf = '1h', limit = 300) {
+  console.log(`🔍 DEBUG getOHLCV - Input symbol: "${symbol}", timeframe: ${tf}, limit: ${limit}`);
   const ex = createPublicExchange();
   await ex.loadMarkets();
   const s = await resolveSymbol(symbol);
-  return ex.fetchOHLCV(s, tf, undefined, limit);
+  console.log(`🔍 DEBUG getOHLCV - Resolved symbol: "${s}" for input "${symbol}"`);
+  const ohlcv = await ex.fetchOHLCV(s, tf, undefined, limit);
+  console.log(`🔍 DEBUG getOHLCV - Fetched ${ohlcv?.length || 0} bars for "${s}"`);
+  if (ohlcv && ohlcv.length > 0) {
+    const lastPrice = ohlcv[ohlcv.length - 1][4];
+    console.log(`🔍 DEBUG getOHLCV - Last price for "${s}": ${lastPrice}`);
+  }
+  return ohlcv;
 }
 
 export async function computeCoreIndicators(symbol: string) {
