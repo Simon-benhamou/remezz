@@ -3429,9 +3429,17 @@ export class ReboundRejectionAgent {
       };
       
       const range = priceRanges[base];
-      if (range && (currentPrice < range.min || currentPrice > range.max)) {
-        console.log(`🚨 Symbol/price mismatch: ${base} price $${currentPrice.toFixed(4)} outside realistic range [$${range.min}, $${range.max}]`);
-        return true;
+      if (range) {
+        // Check current price range
+        const priceOutOfRange = currentPrice < range.min || currentPrice > range.max;
+        
+        // Check if zone is also out of range (this is the bug fix!)
+        const zoneOutOfRange = zoneMin > range.max || zoneMax > range.max || zoneMin < range.min || zoneMax < range.min;
+        
+        if (priceOutOfRange || zoneOutOfRange) {
+          console.log(`🚨 Symbol/price mismatch: ${base} price $${currentPrice.toFixed(4)} or zone [$${zoneMin.toFixed(4)}, $${zoneMax.toFixed(4)}] outside realistic range [$${range.min}, $${range.max}]`);
+          return true;
+        }
       }
     }
     
