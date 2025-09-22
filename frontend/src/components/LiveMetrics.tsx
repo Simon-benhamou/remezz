@@ -69,7 +69,7 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate }: Props
         <Col xs={12} sm={6} md={4}>
           <Statistic
             title="24h Change"
-            value={Math.abs(percentage24h)}
+            value={percentage24h}
             precision={2}
             suffix="%"
             valueStyle={{ color: changeColor, fontSize: 16 }}

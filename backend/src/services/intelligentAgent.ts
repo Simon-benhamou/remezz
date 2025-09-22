@@ -115,10 +115,17 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
       const volume24h = Number(tickerData.baseVolume || 0);
       const quoteVolume24h = Number(tickerData.quoteVolume || 0);
       
-      // Improved scoring: Performance weighted more for volatility detection
-      const volumeScore = Math.min(10, Math.log10(Math.max(1, quoteVolume24h))); // Capped at 10
+      // SÉCURITÉ: Scoring strict avec validation volume
+      const volumeScore = calculateVolumeComponent(quoteVolume24h); // Utilise fonction sécurisée
       const performanceScore = Math.abs(change24h); // Direct percentage
-      const combinedScore = (performanceScore * 0.7) + (volumeScore * 0.3); // Favor performance more
+      
+      // Rejet automatique si volume insuffisant
+      let combinedScore = 0;
+      if (volumeScore >= 6.0) { // Seuil minimum strict
+        combinedScore = (performanceScore * 0.6) + (volumeScore * 0.4); // Plus de poids au volume
+      } else {
+        console.log(`🚫 Score volume ${volumeScore} insuffisant pour ${symbol}`);
+      }
       
       return {
         symbol,
@@ -130,10 +137,23 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
         volumeScore,
         performanceScore
       };
-    }).filter(crypto => 
-      crypto.quoteVolume24h > 10000 && // Lowered from 50K to 10K for more opportunities
-      crypto.absChange > 0.01 // Lowered from 0.05% to 0.01% for more opportunities
-    );
+    }).filter(crypto => {
+      // SÉCURITÉ CRITIQUE: Volume minimum très strict pour éviter les micro-cryptos
+      if (crypto.quoteVolume24h < 500000) return false; // $500K minimum au lieu de $10K
+      
+      // Change minimum pour éviter stagnation
+      if (crypto.absChange < 0.5) return false; // 0.5% minimum au lieu de 0.01%
+      
+      // Blacklist des tokens problématiques connus
+      const problematicTokens = ["BOME", "WIF", "PEPE", "SHIB", "DOGE", "FLOKI"];
+      const base = crypto.symbol.split("/")[0];
+      if (problematicTokens.includes(base)) {
+        console.log(`🚫 Token ${base} blacklisté - rejeté de la sélection AUTO`);
+        return false;
+      }
+      
+      return true;
+    });
 
     // Sort by combined score descending
     cryptoPerformance.sort((a, b) => b.combinedScore - a.combinedScore);
@@ -383,12 +403,18 @@ function calculateVolatilityComponent(metrics: any): number {
  * Volume component scoring - Lower thresholds for realistic crypto volumes
  */
 function calculateVolumeComponent(volume: number): number {
-  if (volume > 5000000) return 8.5; // High volume (lowered threshold)
-  if (volume > 1000000) return 7.5;  // Good volume (lowered threshold)
-  if (volume > 500000) return 6.5;   // Moderate volume (lowered threshold)
-  if (volume > 100000) return 5.5;   // Low but tradeable volume (more generous)
-  if (volume > 50000) return 4.5;    // Very low but still valid (new tier)
-  return 3.5; // Minimal volume (increased base score)
+  // SÉCURITÉ: Rejet automatique pour volumes insuffisants
+  if (volume < 500000) {
+    console.log(`🚫 Volume ${volume} insuffisant pour trading AUTO (minimum $500K)`);
+    return 0; // REJET AUTOMATIQUE
+  }
+  
+  // Scores pour volumes acceptables
+  if (volume > 10000000) return 9.5; // $10M+ = Excellent
+  if (volume > 5000000) return 8.5;  // $5M+ = High volume 
+  if (volume > 2000000) return 7.5;  // $2M+ = Good volume
+  if (volume > 1000000) return 7.0;  // $1M+ = Acceptable volume
+  return 6.0; // $500K-$1M = Minimum acceptable
 }
 
 /**
@@ -996,5 +1022,124 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     
   } catch (error) {
     console.error(`❌ Error checking opportunities for session ${session.id}:`, error);
+  }
+}
+
+/**
+ * Trigger manual re-selection for Smart Agent
+ * Forces immediate crypto re-evaluation regardless of timing constraints
+ */
+export async function triggerIntelligentReselection(sessionId: string): Promise<{
+  success: boolean;
+  oldSymbol?: string;
+  newSymbol?: string;
+  currentSymbol?: string;
+  reason: string;
+}> {
+  try {
+    console.log(`🔄 Manual re-selection triggered for session ${sessionId}`);
+    
+    // Get current session
+    const session = await prisma.agentSession.findUnique({
+      where: { id: sessionId }
+    });
+    
+    if (!session) {
+      return { success: false, reason: 'Session not found' };
+    }
+    
+    const isSmartAgent = (session as any).isSmartAgent || false;
+    if (!isSmartAgent) {
+      return { success: false, reason: 'Not a Smart Agent' };
+    }
+    
+    const currentSymbol = session.symbol;
+    console.log(`📊 Current symbol: ${currentSymbol}`);
+    
+    // Get optimized crypto list (same logic as automatic selection)
+    const optimizedCryptos = await getOptimizedCryptoList();
+    
+    if (!optimizedCryptos || optimizedCryptos.length === 0) {
+      return { 
+        success: false, 
+        currentSymbol,
+        reason: 'No suitable cryptocurrencies found' 
+      };
+    }
+    
+    // Find best opportunity
+    const bestOpportunity = optimizedCryptos[0]; // Already sorted by score
+    
+    console.log(`🎯 Best opportunity found: ${bestOpportunity} (current: ${currentSymbol})`);
+    
+    // Check if it's different from current
+    if (bestOpportunity === currentSymbol) {
+      return {
+        success: false,
+        currentSymbol,
+        reason: `${currentSymbol} is already the best option`
+      };
+    }
+    
+    // Force symbol switch regardless of timing
+    console.log(`🔄 Forcing switch: ${currentSymbol} → ${bestOpportunity}`);
+    
+    const now = new Date();
+    const sessionPlan = session.planJson as any || {};
+    const config = sessionPlan.intelligentConfig || {};
+    
+    // Update session with forced re-selection
+    const updatedConfig = {
+      ...config,
+      selectedAt: now.toISOString(),
+      lastScan: now.toISOString(),
+      nextScanDue: new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString(), // 6h next scan
+      switchReason: 'Manual re-selection triggered',
+      sleepMode: false
+    };
+    
+    const existingHistory = sessionPlan.intelligentHistory || [];
+    const newHistory = [...existingHistory, {
+      timestamp: now.toISOString(),
+      action: 'manual_reselection',
+      fromSymbol: currentSymbol,
+      toSymbol: bestOpportunity,
+      reasoning: 'User-triggered manual re-selection',
+      forced: true
+    }];
+    
+    // Update database
+    await prisma.$executeRaw`
+      UPDATE "AgentSession" 
+      SET "symbol" = ${bestOpportunity}, "currentSymbol" = ${bestOpportunity}, "lastSymbolSwitchAt" = NOW()
+      WHERE "id" = ${sessionId}
+    `;
+    
+    await prisma.agentSession.update({
+      where: { id: sessionId },
+      data: {
+        planJson: {
+          ...sessionPlan,
+          intelligentConfig: updatedConfig,
+          intelligentHistory: newHistory
+        }
+      }
+    });
+    
+    console.log(`✅ Manual re-selection completed: ${currentSymbol} → ${bestOpportunity}`);
+    
+    return {
+      success: true,
+      oldSymbol: currentSymbol,
+      newSymbol: bestOpportunity,
+      reason: 'Manual re-selection successful'
+    };
+    
+  } catch (error) {
+    console.error(`❌ Manual re-selection error:`, error);
+    return {
+      success: false,
+      reason: `Re-selection failed: ${error instanceof Error ? error.message : String(error)}`
+    };
   }
 }

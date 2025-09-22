@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Tag, Progress, Space, Typography, Divider, Timeline, Button, Tooltip, Badge } from 'antd';
+import { Card, Tag, Progress, Space, Typography, Divider, Timeline, Button, Tooltip, Badge, message } from 'antd';
 import { RocketOutlined, ClockCircleOutlined, ThunderboltOutlined, HistoryOutlined, ReloadOutlined, SwapOutlined } from '@ant-design/icons';
 import { api } from '../api';
 
@@ -284,6 +284,46 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
                 {getTimeUntilNextScan()}
               </Text>
             </div>
+          </div>
+
+          {/* Manual Re-selection Button */}
+          <div style={{ flex: 1 }}>
+            <Button 
+              type="primary" 
+              size="small"
+              icon={<ReloadOutlined />}
+              style={{
+                background: 'linear-gradient(135deg, #722ed1, #9254de)',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: '600',
+                width: '100%'
+              }}
+              onClick={async () => {
+                try {
+                  // Forcer une nouvelle sélection immédiate
+                  const response = await fetch(`/api/agent/smart/${sessionId}/reselect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                  });
+                  
+                  if (response.ok) {
+                    message.success('🎯 Re-sélection lancée! Analyse en cours...');
+                    // Recharger le status après 2 secondes
+                    setTimeout(() => {
+                      loadStatus();
+                    }, 2000);
+                  } else {
+                    message.error('Erreur lors de la re-sélection');
+                  }
+                } catch (error) {
+                  message.error('Impossible de relancer la sélection');
+                }
+              }}
+            >
+              🔄 Rechercher
+            </Button>
           </div>
         </div>
       </div>

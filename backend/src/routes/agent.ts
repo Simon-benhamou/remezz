@@ -559,3 +559,58 @@ router.delete('/sessions/:id', async (req,res)=>{
   await prisma.agentSession.delete({ where: { id } });
   res.json({ ok: true });
 });
+
+// Force re-selection for Smart AUTO agents
+router.post('/smart/:sessionId/reselect', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    // Vérifier que c'est bien un agent AUTO/Smart
+    const session = await prisma.agentSession.findUnique({
+      where: { id: sessionId }
+    });
+    
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    
+    const isSmartAgent = (session as any).isSmartAgent || false;
+    if (!isSmartAgent) {
+      return res.status(400).json({ error: 'Not a Smart Agent session' });
+    }
+    
+    console.log(`🔄 Manual re-selection triggered for Smart Agent ${sessionId}`);
+    
+    // Importer la fonction de re-sélection intelligente
+    const { triggerIntelligentReselection } = await import('../services/intelligentAgent.js');
+    
+    // Déclencher la re-sélection
+    const result = await triggerIntelligentReselection(sessionId);
+    
+    if (result.success) {
+      console.log(`✅ Re-selection successful: ${result.oldSymbol} → ${result.newSymbol}`);
+      res.json({
+        success: true,
+        oldSymbol: result.oldSymbol,
+        newSymbol: result.newSymbol,
+        reason: result.reason,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      console.log(`⚠️ Re-selection skipped: ${result.reason}`);
+      res.json({
+        success: false,
+        reason: result.reason,
+        currentSymbol: result.currentSymbol,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Smart Agent re-selection error:', error);
+    res.status(500).json({ 
+      error: 'Re-selection failed',
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
