@@ -23,7 +23,7 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate }: Props
   // Extract data from ticker or use fallback values
   const currentPrice = price || ticker?.last || 0;
   const change24h = ticker?.change || 0;
-  const percentage24h = ticker?.percentage || 0;
+  const percentage24h = (ticker?.percentage || 0) * 100; // Convert to percentage (0.07 → 7)
   const high24h = ticker?.high || 0;
   const low24h = ticker?.low || 0;
   const volume24h = ticker?.baseVolume || 0;
