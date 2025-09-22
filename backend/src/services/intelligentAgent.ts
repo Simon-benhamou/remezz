@@ -5,6 +5,38 @@ import { buildTechSnapshot } from '../ai/tech.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 
+/**
+ * Get list of symbols currently being traded by active agents
+ * Normalizes different symbol formats for comparison
+ */
+async function getActiveAgentSymbols(): Promise<string[]> {
+  try {
+    const activeSessions = await prisma.agentSession.findMany({
+      where: { stoppedAt: null },
+      select: { symbol: true }
+    });
+    
+    return activeSessions
+      .map(session => session.symbol)
+      .filter(symbol => symbol) // Remove null/undefined
+      .map(symbol => {
+        // Normalize symbol formats for comparison
+        // Convert ETH/USD:USD → ETH/USDT
+        // Convert BTC/USD:USD → BTC/USDT
+        // Keep DOGE/USDT as is
+        if (symbol.includes('/USD:USD')) {
+          const base = symbol.split('/')[0];
+          return `${base}/USDT`;
+        }
+        return symbol;
+      })
+      .filter((symbol, index, arr) => arr.indexOf(symbol) === index); // Remove duplicates
+  } catch (error) {
+    console.error('Error fetching active agent symbols:', error);
+    return [];
+  }
+}
+
 export interface IntelligentAnalysis {
   symbol: string;
   score: number;
@@ -43,12 +75,18 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
   try {
     console.log('📊 Fetching top performing cryptos from last 24h...');
     
+    // 🚫 ÉVITER LES CONFLITS: Récupérer les cryptos déjà actives
+    const activeSymbols = await getActiveAgentSymbols();
+    if (activeSymbols.length > 0) {
+      console.log(`🚫 Symbols already active: ${activeSymbols.join(', ')}`);
+    }
+    
     const { EXCHANGE_ID } = getConfig();
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
     
     if (!ExchangeClass) {
       console.log('📊 Exchange not available, using static top 20 cryptos list');
-      return getTopCryptos();
+      return await getTopCryptos();
     }
 
     const exchange = new ExchangeClass({
@@ -83,7 +121,7 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
     
     if (perpetualMarkets.length === 0) {
       console.log('📊 No perpetual markets found, falling back to static list');
-      return getTopCryptos();
+      return await getTopCryptos();
     }
 
     // Fetch MORE tickers to get better selection (increased from 10 to 50)
@@ -173,33 +211,62 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
       return `${base}/USDT`;
     });
     
-    if (topPerformers.length > 0) {
-      console.log(`✅ Selected ${topPerformers.length} top performing cryptos from ${Object.keys(tickers).length} perpetuals`);
-      console.log('🏆 Top 5 selected:', topPerformers.slice(0, 5));
-      return topPerformers;
+    // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives
+    const availablePerformers = topPerformers.filter(symbol => {
+      const isActive = activeSymbols.includes(symbol);
+      if (isActive) {
+        console.log(`🚫 Skipping ${symbol} - already active in another agent`);
+      }
+      return !isActive;
+    });
+    
+    if (availablePerformers.length > 0) {
+      console.log(`✅ Selected ${availablePerformers.length} available performers (${topPerformers.length - availablePerformers.length} filtered out due to conflicts)`);
+      console.log('🏆 Top 5 available:', availablePerformers.slice(0, 5));
+      console.log('🚫 Filtered (active):', activeSymbols);
+      return availablePerformers;
     } else {
-      console.log('⚠️ No qualifying perpetuals found, using static high-volume cryptos list');
-      return getTopCryptos();
+      console.log('⚠️ All top performers are already active - falling back to static list without active ones');
+      const staticFallback = await getTopCryptos();
+      return staticFallback.length > 0 ? staticFallback : await getTopCryptos(); // Dernière chance
     }
     
   } catch (error) {
     console.error('Error getting dynamic crypto list:', error);
     console.log('📊 Falling back to static top cryptos list');
-    return getTopCryptos(); // Fallback to our curated list
+    return await getTopCryptos(); // Fallback to our curated list
   }
 }
 
 /**
  * Top cryptos by volume/market cap - focus on liquid markets only
+ * Filters out symbols already active in other agents
  */
-function getTopCryptos(): string[] {
+async function getTopCryptos(): Promise<string[]> {
   // Top 20 most liquid perpetuals - reordered to avoid Bitcoin bias
-  return [
+  const staticList = [
     'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 
     'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
     'LINK/USDT', 'UNI/USDT', 'BCH/USDT', 'XLM/USDT', 'ATOM/USDT', 
     'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'BTC/USDT'
   ];
+  
+  // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives
+  try {
+    const activeSymbols = await getActiveAgentSymbols();
+    const availableSymbols = staticList.filter(symbol => !activeSymbols.includes(symbol));
+    
+    if (availableSymbols.length > 0) {
+      console.log(`📊 Static list: ${availableSymbols.length} available, ${staticList.length - availableSymbols.length} filtered out`);
+      return availableSymbols;
+    } else {
+      console.log('⚠️ All static symbols are active - returning full list as last resort');
+      return staticList;
+    }
+  } catch (error) {
+    console.error('Error filtering static list:', error);
+    return staticList;
+  }
 }
 
 /**

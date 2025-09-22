@@ -3335,6 +3335,46 @@ export class ReboundRejectionAgent {
     this.entering = false;
   }
 
+  /**
+   * Detect if current price scale suggests a different crypto than the one used for zone calculation
+   * Prevents ETH zones ($4000+) being used for DOGE prices ($0.24)
+   * Also validates price realism for specific symbols
+   */
+  private detectSymbolMismatch(currentPrice: number, zoneMin: number, zoneMax: number): boolean {
+    // Check 1: Major scale difference (>50x) indicates different crypto
+    const zoneAvg = (zoneMin + zoneMax) / 2;
+    const scaleRatio = Math.max(currentPrice, zoneAvg) / Math.min(currentPrice, zoneAvg);
+    
+    if (scaleRatio > 50) {
+      console.log(`🚨 Price scale mismatch detected: price=${currentPrice.toFixed(4)}, zone avg=${zoneAvg.toFixed(4)}, ratio=${scaleRatio.toFixed(0)}x`);
+      return true;
+    }
+    
+    // Check 2: Symbol-specific price realism validation
+    if (this.profile?.symbol) {
+      const symbol = this.profile.symbol;
+      const base = symbol.split('/')[0].toUpperCase();
+      
+      // Known problematic combinations
+      const priceRanges = {
+        'DOGE': { min: 0.01, max: 10 },      // DOGE realistic range
+        'BTC': { min: 1000, max: 200000 },   // BTC range
+        'ETH': { min: 100, max: 20000 },     // ETH range
+        'SOL': { min: 1, max: 1000 },        // SOL range
+        'XRP': { min: 0.1, max: 10 },        // XRP range
+        'ADA': { min: 0.01, max: 10 },       // ADA range
+      };
+      
+      const range = priceRanges[base];
+      if (range && (currentPrice < range.min || currentPrice > range.max)) {
+        console.log(`🚨 Symbol/price mismatch: ${base} price $${currentPrice.toFixed(4)} outside realistic range [$${range.min}, $${range.max}]`);
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
   // Public diagnostic method to check why agent is not trading
   async getDiagnostics(): Promise<any> {
     if (!this.plan || !this.profile) {
@@ -3432,11 +3472,15 @@ export class ReboundRejectionAgent {
         ((originalZoneMin - price) / price * 100) :
         price > originalZoneMax ? ((price - originalZoneMax) / price * 100) : 0;
       
-      const needsDynamicRecalc = distanceToZone > 15;
+      // 🚨 DETECT SYMBOL MISMATCH: Force recalc if price scale suggests different crypto
+      const priceScaleMismatch = this.detectSymbolMismatch(price, originalZoneMin, originalZoneMax);
+      
+      const needsDynamicRecalc = distanceToZone > 15 || priceScaleMismatch;
       
       if (needsDynamicRecalc) {
-        // Recalculate zone dynamically based on current market conditions
-        console.log(`🔍 Dynamic zone recalc for ${this.profile?.symbol}: price=${price}, snap.last=${snap?.last}, original bias=${this.plan.bias}`);
+        const recalcReason = priceScaleMismatch ? 'Symbol mismatch detected' : `Distance ${distanceToZone.toFixed(1)}% > 15%`;
+        console.log(`🔍 Dynamic zone recalc for ${this.profile?.symbol}: ${recalcReason}`);
+        console.log(`   Price=${price}, Zone=[${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}]`);
         
         // Use contextual bias instead of fixed plan bias for more intelligent entry zones
         const contextualBias = this.determineContextualBias(snap, price);
