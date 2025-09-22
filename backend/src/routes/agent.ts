@@ -402,6 +402,29 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     }
   }
 
+  // Format sessions data for frontend
+  const sessionsData = actives.map(session => {
+    // Get runtime state from AgentHub if available
+    const agent = AgentHub.get(session.id);
+    const agentState = (agent as any)?.state || {};
+    
+    return {
+      id: session.id,
+      symbol: session.symbol,
+      mode: session.mode,
+      state: agentState.phase || 'UNKNOWN',
+      bias: agentState.bias || 'none',
+      aggressiveness: session.profileJson ? (session.profileJson as any)?.aggressiveness : 'conservative',
+      pnlUsd: Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0),
+      roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ? 
+        ((Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0)) / Number(session.startBalanceUsd)) * 100 : 0,
+      winRate: Number(session.kpi?.winRate || 0),
+      trades: Number((session.kpi?.stats as any)?.tradesTotal || 0),
+      createdAt: session.startedAt,
+      lastActivity: new Date().toISOString()
+    };
+  });
+
   res.json({
     activeCount: actives.length,
     sessionsCount: totalSessions,
@@ -413,6 +436,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     aiCallsTotal,
     exchangeBalance,
     paperBalance,
+    sessions: sessionsData, // ✅ Ajout des sessions dans la réponse
     updatedAt: new Date().toISOString(),
   });
 });
