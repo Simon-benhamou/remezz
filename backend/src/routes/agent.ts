@@ -376,27 +376,46 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     }
   }
 
-  // Get paper balance from active paper sessions
+  // Get aggregated paper balance from ALL active paper sessions
   let paperBalance: any = null;
   if (modeFilter === 'paper' || !modeFilter) {
     const paperSessions = actives.filter(session => session.mode === 'paper');
     if (paperSessions.length > 0) {
       try {
-        // Get balance from the first active paper session's agent
-        const firstPaperSession = paperSessions[0];
-        const agent = AgentHub.get(firstPaperSession.id);
-        if (agent && (agent as any).broker) {
-          const balance = await (agent as any).broker.balance();
+        // Aggregate balances from ALL paper agents
+        let totalEquityUsd = 0;
+        let totalFreeUsd = 0;
+        let totalCommittedUsd = 0;
+        let successfulAgents = 0;
+        
+        for (const paperSession of paperSessions) {
+          try {
+            const agent = AgentHub.get(paperSession.id);
+            if (agent && (agent as any).broker) {
+              const balance = await (agent as any).broker.balance();
+              totalEquityUsd += Number(balance?.equityUsd || 0);
+              totalFreeUsd += Number(balance?.freeUsd || 0);
+              totalCommittedUsd += Number(balance?.committedUsd || 0);
+              successfulAgents++;
+              console.log(`📊 Agent ${paperSession.symbol}: $${Number(balance?.equityUsd || 0).toFixed(2)} USD`);
+            }
+          } catch (agentError) {
+            console.error(`Failed to fetch balance for agent ${paperSession.symbol}:`, agentError);
+          }
+        }
+        
+        if (successfulAgents > 0) {
           paperBalance = {
-            equityUsd: Number(balance?.equityUsd || 0),
-            freeUsd: Number(balance?.freeUsd || 0), 
-            committedUsd: Number(balance?.committedUsd || 0),
+            equityUsd: totalEquityUsd,
+            freeUsd: totalFreeUsd,
+            committedUsd: totalCommittedUsd,
+            agentsCount: successfulAgents,
             lastUpdated: new Date().toISOString()
           };
-          console.log(`📊 Paper balance: $${paperBalance.equityUsd.toFixed(2)} USD (free: $${paperBalance.freeUsd.toFixed(2)})`);
+          console.log(`📊 Total Paper Balance: $${totalEquityUsd.toFixed(2)} USD from ${successfulAgents} agents`);
         }
       } catch (error) {
-        console.error('Failed to fetch paper balance:', error);
+        console.error('Failed to fetch aggregated paper balance:', error);
         // Don't fail the entire request, just log the error
       }
     }
@@ -406,14 +425,15 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
   const sessionsData = actives.map(session => {
     // Get runtime state from AgentHub if available
     const agent = AgentHub.get(session.id);
-    const agentState = (agent as any)?.state || {};
+    const agentState = (agent as any)?.state || 'UNKNOWN'; // Fix: use .state not .phase
+    const agentBias = (agent as any)?.bias || 'none';
     
     return {
       id: session.id,
       symbol: session.symbol,
       mode: session.mode,
-      state: agentState.phase || 'UNKNOWN',
-      bias: agentState.bias || 'none',
+      state: agentState, // ✅ Now using correct state property
+      bias: agentBias,
       aggressiveness: session.profileJson ? (session.profileJson as any)?.aggressiveness : 'conservative',
       pnlUsd: Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0),
       roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ? 

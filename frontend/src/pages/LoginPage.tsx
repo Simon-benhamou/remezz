@@ -24,7 +24,7 @@ export default function LoginPage() {
       const result = await api.auth.login(values.username, values.password);
       console.log('✅ Login API response:', result);
       
-      if (result.token) {
+      if (result?.token) {
         console.log('🎯 Token received, setting API key...');
         setApiKey(result.token);
         console.log('✅ API key set successfully');
@@ -32,34 +32,40 @@ export default function LoginPage() {
         message.success(`Welcome back, ${result.user.username}!`);
         console.log('🚀 Navigating to dashboard...');
         
-        // Small delay to ensure message is shown, then navigate
+        // Force immediate navigation - no delay
+        navigate('/dashboard', { replace: true });
+        
+        // Backup: if React Router fails, force browser navigation
         setTimeout(() => {
-          try {
-            navigate('/dashboard', { replace: true });
-            console.log('✅ Navigation initiated');
-          } catch (navError) {
-            console.error('❌ Navigation error:', navError);
-            // Fallback: force page reload to dashboard
+          if (window.location.pathname !== '/dashboard') {
+            console.log('🔄 React Router failed, forcing browser navigation...');
             window.location.href = '/dashboard';
           }
-        }, 100);
+        }, 500);
       } else {
-        console.error('❌ No token in response:', result);
-        throw new Error('No token received from server');
+        console.error('❌ Invalid login response format:', result);
+        throw new Error('Invalid response from server');
       }
     } catch (error: any) {
       console.error('❌ Login error:', error);
       console.error('❌ Error response:', error?.response);
       console.error('❌ Error data:', error?.response?.data);
       
-      const errorMessage = error?.response?.data?.error || 'Login failed';
-      const errorMessages: { [key: string]: string } = {
-        'invalid_credentials': 'Invalid username or password',
-        'server_error': 'Server error, please try again later'
-      };
-      const friendlyMessage = errorMessages[errorMessage] || errorMessage;
+      // More robust error handling
+      let errorMessage = 'Login failed';
+      if (error?.response?.data?.error) {
+        const serverError = error.response.data.error;
+        const errorMessages: { [key: string]: string } = {
+          'invalid_credentials': 'Invalid username or password',
+          'server_error': 'Server error, please try again later',
+          'invalid_token': 'Authentication failed, please try again'
+        };
+        errorMessage = errorMessages[serverError] || serverError;
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
       
-      message.error(friendlyMessage);
+      message.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -72,16 +78,27 @@ export default function LoginPage() {
     
     setLoading(true);
     try {
-      const out = (await api.client.post('/api/auth/login', { code })).data;
+      const response = await api.client.post('/api/auth/login', { code });
+      const out = response.data;
       if (out?.token) {
         setApiKey(out.token);
-        message.success('Logged in');
+        message.success('Logged in successfully');
         
-        // Navigation immédiate avec React Router
+        // Force immediate navigation
         navigate('/dashboard', { replace: true });
+        
+        // Backup navigation if React Router fails
+        setTimeout(() => {
+          if (window.location.pathname !== '/dashboard') {
+            window.location.href = '/dashboard';
+          }
+        }, 500);
+      } else {
+        throw new Error('Invalid response from server');
       }
     } catch (e: any) {
-      message.error('Invalid access code');
+      console.error('Legacy login error:', e);
+      message.error('Invalid access code or server error');
     } finally {
       setLoading(false);
     }
