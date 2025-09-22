@@ -780,8 +780,8 @@ export class ReboundRejectionAgent {
    * Calculate dynamic entry zone based on current market conditions and bias
    */
   /**
-   * Determine optimal bias based on current market context and key levels
-   * This creates scenario-based trading: support bounces (long) vs resistance rejections (short)
+   * Determine optimal bias based on current market context, trend strength, and key levels
+   * Enhanced logic for trend continuation scenarios (rebounds on resistance, rejections on support)
    */
   private determineContextualBias(snap: TechnicalSnapshot, currentPrice: number): 'long' | 'short' | 'none' {
     const supports = snap.supports || [];
@@ -799,56 +799,105 @@ export class ReboundRejectionAgent {
     const supportDistance = nearestSupport ? Math.abs(currentPrice - nearestSupport.price) / currentPrice : 1;
     const resistanceDistance = nearestResistance ? Math.abs(currentPrice - nearestResistance.price) / currentPrice : 1;
     
-    // Get technical indicators for trend context
+    // Enhanced technical analysis with trend strength evaluation
     const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
     const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
     const rsi = Number((snap as any)?.rsi14 ?? 50);
     const adx = Number((snap as any)?.adx14 ?? 0);
+    const ema20Slope = Number((snap as any)?.ema20Slope ?? 0);
+    const atrPct = Number((snap as any)?.atrPct ?? 1.0);
     
+    // Calculate trend metrics
+    const emaSpread = Math.abs((ema20 - ema50) / ema50) * 100;
     const trendUp = ema20 > ema50;
-    const strongTrend = adx > 20;
+    const strongTrend = adx > 25 && emaSpread > 1.0; // Both ADX and EMA spread confirm trend
+    const moderateTrend = adx > 15 && emaSpread > 0.5;
+    const trendStrength = strongTrend ? 'strong' : moderateTrend ? 'moderate' : 'weak';
     
-    // SCENARIO 1: Near Support (< 3% away) - Potential Long Setup
-    if (supportDistance < 0.03 && nearestSupport) {
+    // Slope direction confirmation (trend acceleration/deceleration)
+    const slopeAligned = trendUp ? ema20Slope > 0 : ema20Slope < 0;
+    const slopeMagnitude = Math.abs(ema20Slope / ema20) * 100; // Slope as percentage
+    
+    console.log(`🧠 TREND ANALYSIS: ${trendUp ? 'UP' : 'DOWN'} trend (${trendStrength}), ADX: ${adx.toFixed(1)}, EMA spread: ${emaSpread.toFixed(2)}%, Slope: ${slopeMagnitude.toFixed(3)}%`);
+    
+    // SCENARIO 1: Near Support - Context-dependent behavior
+    if (supportDistance < 0.04 && nearestSupport) { // Increased to 4% for more opportunities
       const supportStrength = nearestSupport.touches || 1;
-      const rsiOversold = rsi < 40;
+      const rsiOversold = rsi < 35;
+      const rsiNeutral = rsi >= 35 && rsi <= 65;
       
-      // Strong support + oversold conditions = Long bias
-      if (supportStrength >= 2 || rsiOversold || trendUp) {
-        console.log(`📈 CONTEXTUAL BIAS: LONG - Near strong support ${nearestSupport.price.toFixed(4)} (${(supportDistance*100).toFixed(1)}% away)`);
+      if (strongTrend && trendUp && slopeAligned) {
+        // STRONG UPTREND: High probability support bounce
+        console.log(`📈 SCENARIO: STRONG UPTREND + Support (${(supportDistance*100).toFixed(1)}%) → LONG (trend continuation bounce)`);
+        return 'long';
+      } else if (strongTrend && !trendUp && !slopeAligned) {
+        // STRONG DOWNTREND: Support likely to break (rejection scenario)
+        console.log(`📉 SCENARIO: STRONG DOWNTREND + Support (${(supportDistance*100).toFixed(1)}%) → SHORT (support break continuation)`);
+        return 'short';
+      } else if (supportStrength >= 2 && (rsiOversold || (rsiNeutral && moderateTrend && trendUp))) {
+        // MODERATE CONDITIONS: Traditional support bounce
+        console.log(`📈 SCENARIO: Support bounce (strength: ${supportStrength}, RSI: ${rsi.toFixed(1)}) → LONG`);
         return 'long';
       }
     }
     
-    // SCENARIO 2: Near Resistance (< 3% away) - Potential Short Setup  
-    if (resistanceDistance < 0.03 && nearestResistance) {
+    // SCENARIO 2: Near Resistance - Enhanced with trend continuation logic
+    if (resistanceDistance < 0.04 && nearestResistance) { // Increased to 4%
       const resistanceStrength = nearestResistance.touches || 1;
-      const rsiOverbought = rsi > 60;
+      const rsiOverbought = rsi > 65;
+      const rsiNeutral = rsi >= 35 && rsi <= 65;
       
-      // Strong resistance + overbought conditions = Short bias
-      if (resistanceStrength >= 2 || rsiOverbought || !trendUp) {
-        console.log(`📉 CONTEXTUAL BIAS: SHORT - Near strong resistance ${nearestResistance.price.toFixed(4)} (${(resistanceDistance*100).toFixed(1)}% away)`);
-        return 'short';
-      }
-    }
-    
-    // SCENARIO 3: Trend Following in Middle Zone
-    if (strongTrend) {
-      if (trendUp && rsi < 65) {
-        console.log(`📈 CONTEXTUAL BIAS: LONG - Strong uptrend continuation`);
+      if (strongTrend && trendUp && slopeAligned) {
+        // STRONG UPTREND: Resistance break scenario (continuation)
+        console.log(`📈 SCENARIO: STRONG UPTREND + Resistance (${(resistanceDistance*100).toFixed(1)}%) → LONG (resistance break continuation)`);
         return 'long';
-      } else if (!trendUp && rsi > 35) {
-        console.log(`📉 CONTEXTUAL BIAS: SHORT - Strong downtrend continuation`);  
+      } else if (strongTrend && !trendUp && !slopeAligned) {
+        // STRONG DOWNTREND: High probability resistance rejection
+        console.log(`📉 SCENARIO: STRONG DOWNTREND + Resistance (${(resistanceDistance*100).toFixed(1)}%) → SHORT (trend continuation rejection)`);
+        return 'short';
+      } else if (resistanceStrength >= 2 && (rsiOverbought || (rsiNeutral && moderateTrend && !trendUp))) {
+        // MODERATE CONDITIONS: Traditional resistance rejection
+        console.log(`📉 SCENARIO: Resistance rejection (strength: ${resistanceStrength}, RSI: ${rsi.toFixed(1)}) → SHORT`);
         return 'short';
       }
     }
     
-    // SCENARIO 4: Consolidation/Neutral
-    console.log(`🔄 CONTEXTUAL BIAS: NONE - Market in consolidation, waiting for clear direction`);
+    // SCENARIO 3: Trend Following in Middle Zone (enhanced)
+    if (strongTrend && slopeAligned) {
+      if (trendUp && rsi < 70 && emaSpread > 1.5) {
+        console.log(`📈 SCENARIO: STRONG UPTREND continuation (ADX: ${adx.toFixed(1)}, spread: ${emaSpread.toFixed(1)}%) → LONG`);
+        return 'long';
+      } else if (!trendUp && rsi > 30 && emaSpread > 1.5) {
+        console.log(`📉 SCENARIO: STRONG DOWNTREND continuation (ADX: ${adx.toFixed(1)}, spread: ${emaSpread.toFixed(1)}%) → SHORT`);
+        return 'short';
+      }
+    }
+    
+    // SCENARIO 4: Momentum-based entries (when trend is developing)
+    if (moderateTrend && slopeMagnitude > 0.05) { // Accelerating trend
+      if (trendUp && rsi >= 45 && rsi <= 65) {
+        console.log(`📈 SCENARIO: Developing uptrend momentum → LONG`);
+        return 'long';
+      } else if (!trendUp && rsi >= 35 && rsi <= 55) {
+        console.log(`📉 SCENARIO: Developing downtrend momentum → SHORT`);
+        return 'short';
+      }
+    }
+    
+    // SCENARIO 5: High volatility mean reversion (when no clear trend)
+    if (atrPct > 3.0 && trendStrength === 'weak' && Math.abs(rsi - 50) > 15) {
+      if (rsi < 35 && supportDistance < 0.06) {
+        console.log(`� SCENARIO: High volatility oversold bounce → LONG`);
+        return 'long';
+      } else if (rsi > 65 && resistanceDistance < 0.06) {
+        console.log(`📉 SCENARIO: High volatility overbought rejection → SHORT`);
+        return 'short';
+      }
+    }
+    
+    console.log(`🔄 SCENARIO: CONSOLIDATION/NEUTRAL - No clear directional edge (trend: ${trendStrength}, RSI: ${rsi.toFixed(1)})`);
     return 'none';
-  }
-
-  private async calculateDynamicEntryZone(snap: TechnicalSnapshot, currentPrice: number, bias: 'long' | 'short' | 'none'): Promise<{ from: number; to: number; mid: number }> {
+  }  private async calculateDynamicEntryZone(snap: TechnicalSnapshot, currentPrice: number, bias: 'long' | 'short' | 'none'): Promise<{ from: number; to: number; mid: number }> {
     if (bias === 'none') {
       // No bias, create a small zone around current price
       const range = currentPrice * 0.005; // 0.5% range
