@@ -323,8 +323,28 @@ export class ReboundRejectionAgent {
     
     // CRYPTO PROFIT FILTER: Minimum profit threshold
     const cfg = getConfig();
-    const minProfitPct = cfg.MIN_PROFIT_PCT;
+    const minProfitPct = cfg.MIN_TRADE_PROFIT_PCT; // Use new stricter threshold (1.5%)
     const firstTpProfitPct = Math.abs((tp[0] - entry) / entry) * 100;
+    
+    // Additional filter: Check if expected price movement is significant enough
+    const expectedMovement = Math.abs(tp[0] - entry) / entry * 100;
+    if (expectedMovement < cfg.MIN_PRICE_MOVEMENT_PCT) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'movement_filter',
+        message: 'Trade rejected - price movement too small',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { 
+          expectedMovementPct: expectedMovement, 
+          minRequired: cfg.MIN_PRICE_MOVEMENT_PCT,
+          tp1: tp[0],
+          entry
+        },
+      });
+      this.entering = false;
+      return;
+    }
     
     if (firstTpProfitPct < minProfitPct) {
       recordOpsEvent({

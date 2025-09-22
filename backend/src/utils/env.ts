@@ -77,6 +77,9 @@ export type Cfg = {
   MIN_HOLD_TIME_MS: number;         // Minimum hold time before any exit (except critical SL)
   TRADE_COOLDOWN_MS: number;        // Cooldown between trades to prevent over-trading
   CRITICAL_LOSS_PCT: number;        // Loss threshold for immediate exit (bypass min hold)
+  // Trade quality filters
+  MIN_TRADE_PROFIT_PCT: number;     // Minimum expected profit to enter a trade (1-2%)
+  MIN_PRICE_MOVEMENT_PCT: number;   // Minimum price movement to consider significant
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -144,6 +147,9 @@ export function getConfig(): Cfg {
     MIN_HOLD_TIME_MS: Number(e.MIN_HOLD_TIME_MS || "300000"), // 5 minutes minimum
     TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "120000"), // 2 minutes cooldown
     CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "2.0"), // 2% loss = immediate exit
+    // Trade quality filters
+    MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "1.5"), // 1.5% minimum expected profit
+    MIN_PRICE_MOVEMENT_PCT: Number(e.MIN_PRICE_MOVEMENT_PCT || "1.0"), // 1% minimum movement to be significant
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
     PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "5"), // réduit de 15 à 5 min
