@@ -1221,6 +1221,91 @@ export class ReboundRejectionAgent {
   }
   */
 
+  /**
+   * Get adaptive RSI zones based on crypto volatility profile
+   */
+  private getAdaptiveRSIZones(symbol: string, bias: 'long' | 'short'): { min: number; max: number } {
+    const volatilityProfile = this.getCryptoVolatilityProfile(symbol);
+    
+    if (bias === 'long') {
+      switch (volatilityProfile) {
+        case 'HIGH_VOLATILITY': // AVNT, DOGE, meme coins
+          return { min: 35, max: 75 }; // Plus large pour cryptos volatiles
+        case 'MODERATE': // ETH, BNB
+          return { min: 40, max: 70 }; // Standard
+        case 'LOW_VOLATILITY': // BTC, majors
+          return { min: 45, max: 65 }; // Plus serré pour stables
+        default:
+          return { min: 40, max: 70 };
+      }
+    } else { // short bias
+      switch (volatilityProfile) {
+        case 'HIGH_VOLATILITY':
+          return { min: 25, max: 65 }; // Plus large pour volatiles
+        case 'MODERATE':
+          return { min: 30, max: 60 }; // Standard
+        case 'LOW_VOLATILITY':
+          return { min: 35, max: 55 }; // Plus serré
+        default:
+          return { min: 30, max: 60 };
+      }
+    }
+  }
+
+  /**
+   * Get adaptive ADX thresholds based on crypto characteristics
+   */
+  private getAdaptiveADXThresholds(symbol: string): { minimum: number; moderate: number; strong: number } {
+    const profile = this.getCryptoVolatilityProfile(symbol);
+    
+    switch (profile) {
+      case 'HIGH_VOLATILITY': // AVNT, volatiles
+        return { minimum: 10, moderate: 16, strong: 22 }; // Plus bas pour volatiles
+      case 'MODERATE': // ETH, standards
+        return { minimum: 12, moderate: 18, strong: 25 }; // Valeurs standard
+      case 'LOW_VOLATILITY': // BTC, majors
+        return { minimum: 15, moderate: 20, strong: 28 }; // Plus haut pour stables
+      default:
+        return { minimum: 12, moderate: 18, strong: 25 };
+    }
+  }
+
+  /**
+   * Get adaptive EMA spread requirement based on volatility
+   */
+  private getAdaptiveEMASpread(symbol: string): number {
+    const volatilityProfile = this.getCryptoVolatilityProfile(symbol);
+    const baseSpread = 0.5; // 0.5% de base
+    
+    switch (volatilityProfile) {
+      case 'HIGH_VOLATILITY': // AVNT
+        return baseSpread * 1.5; // 0.75% pour les volatiles
+      case 'MODERATE': // ETH
+        return baseSpread; // 0.5% standard
+      case 'LOW_VOLATILITY': // BTC
+        return baseSpread * 0.7; // 0.35% pour les stables
+      default:
+        return baseSpread;
+    }
+  }
+
+  /**
+   * Helper method to get crypto volatility profile (reusing existing logic)
+   */
+  private getCryptoVolatilityProfile(symbol: string): 'HIGH_VOLATILITY' | 'MODERATE' | 'LOW_VOLATILITY' {
+    const baseCrypto = symbol.split('/')[0]?.toUpperCase();
+    if (!baseCrypto) return 'MODERATE';
+    
+    // Reuse existing volatility classification logic
+    if (['AVNT', 'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK'].includes(baseCrypto)) {
+      return 'HIGH_VOLATILITY';
+    }
+    if (['BTC', 'USDC', 'USDT', 'DAI'].includes(baseCrypto)) {
+      return 'LOW_VOLATILITY';
+    }
+    return 'MODERATE'; // ETH, BNB, ADA, etc.
+  }
+
   private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {
     const thresholds = this.effectiveEntryThresholds();
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
@@ -3092,33 +3177,44 @@ export class ReboundRejectionAgent {
     // Individual quality filter checks
     checks.qualityFilters = {};
 
-    // Trend alignment
-    const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.5 : ema20 < ema50 && emaSpread < -0.5;
+    // Trend alignment with adaptive EMA spread requirements
+    const adaptiveEMASpread = this.getAdaptiveEMASpread(this.profile?.symbol || '');
+    const effectiveBiasForEMA: 'long' | 'short' = bias === 'none' ? 'long' : bias;
+    const trendAligned = effectiveBiasForEMA === 'long' 
+      ? ema20 > ema50 && emaSpread > adaptiveEMASpread 
+      : ema20 < ema50 && emaSpread < -adaptiveEMASpread;
+      
     checks.qualityFilters.trendAlignment = {
       status: trendAligned ? 'PASS' : Math.abs(emaSpread) < 0.1 ? 'REJECT' : 'PARTIAL',
-      reason: `EMA spread: ${emaSpread.toFixed(3)}%, need ${bias === 'long' ? '>0.5%' : '<-0.5%'}`,
+      reason: `EMA spread: ${emaSpread.toFixed(3)}%, need ${effectiveBiasForEMA === 'long' ? '>' + adaptiveEMASpread.toFixed(1) + '%' : '<-' + adaptiveEMASpread.toFixed(1) + '%'} for this crypto`,
       value: emaSpread,
-      points: trendAligned ? 25 : 0
+      points: trendAligned ? 25 : 0,
+      details: {
+        currentSpread: emaSpread,
+        requiredSpread: adaptiveEMASpread,
+        cryptoProfile: this.getCryptoVolatilityProfile(this.profile?.symbol || '')
+      }
     };
 
-    // ADX check with detailed thresholds
+    // ADX check with adaptive thresholds based on crypto characteristics
+    const adaptiveADXThresholds = this.getAdaptiveADXThresholds(this.profile?.symbol || '');
     let adxStatus = 'FAIL';
     let adxPoints = 0;
     let adxDetails = '';
     
-    if (adx >= 25) { 
+    if (adx >= adaptiveADXThresholds.strong) { 
       adxStatus = 'PASS'; 
       adxPoints = 30; 
-      adxDetails = `ADX ${adx.toFixed(1)} (strong momentum)`;
-    } else if (adx >= 20) { 
+      adxDetails = `ADX ${adx.toFixed(1)} (strong momentum for this crypto)`;
+    } else if (adx >= adaptiveADXThresholds.moderate) { 
       adxStatus = 'PARTIAL'; 
       adxPoints = 20; 
-      adxDetails = `ADX ${adx.toFixed(1)} (moderate momentum, need 25+ for max points)`;
-    } else if (adx < 12) { 
+      adxDetails = `ADX ${adx.toFixed(1)} (moderate momentum, need ${adaptiveADXThresholds.strong}+ for max points)`;
+    } else if (adx < adaptiveADXThresholds.minimum) { 
       adxStatus = 'REJECT'; 
-      adxDetails = `ADX ${adx.toFixed(1)} (too weak, minimum 12)`;
+      adxDetails = `ADX ${adx.toFixed(1)} (too weak for this crypto, minimum ${adaptiveADXThresholds.minimum})`;
     } else {
-      adxDetails = `ADX ${adx.toFixed(1)} (weak momentum, need 20+ for points)`;
+      adxDetails = `ADX ${adx.toFixed(1)} (weak momentum, need ${adaptiveADXThresholds.moderate}+ for points)`;
     }
     
     checks.qualityFilters.momentum = {
@@ -3128,25 +3224,30 @@ export class ReboundRejectionAgent {
       points: adxPoints,
       details: {
         currentADX: adx,
-        thresholds: {
-          minimum: 12,
-          moderate: 20,
-          strong: 25
-        }
+        adaptiveThresholds: adaptiveADXThresholds,
+        cryptoProfile: this.getCryptoVolatilityProfile(this.profile?.symbol || '')
       }
     };
 
-    // RSI check
-    const rsiOptimal = bias === 'long' ? (rsi >= 45 && rsi <= 70) : (rsi >= 30 && rsi <= 55);
+    // RSI check with adaptive zones based on crypto volatility
+    const effectiveBias: 'long' | 'short' = bias === 'none' ? 'long' : bias; // Default to long for none bias
+    const adaptiveRSIZones = this.getAdaptiveRSIZones(this.profile?.symbol || '', effectiveBias);
+    const rsiOptimal = rsi >= adaptiveRSIZones.min && rsi <= adaptiveRSIZones.max;
+    
     let rsiStatus = 'FAIL';
     if (rsiOptimal) rsiStatus = 'PASS';
-    else if ((bias === 'long' && rsi > 75) || (bias === 'short' && rsi < 25)) rsiStatus = 'REJECT';
+    else if ((effectiveBias === 'long' && rsi > adaptiveRSIZones.max + 5) || (effectiveBias === 'short' && rsi < adaptiveRSIZones.min - 5)) rsiStatus = 'REJECT';
     
     checks.qualityFilters.rsiPosition = {
       status: rsiStatus,
-      reason: `RSI: ${rsi.toFixed(1)} (${bias} optimal: ${bias === 'long' ? '45-70' : '30-55'})`,
+      reason: `RSI: ${rsi.toFixed(1)} (${effectiveBias} adaptive range: ${adaptiveRSIZones.min}-${adaptiveRSIZones.max})`,
       value: rsi,
-      points: rsiOptimal ? 15 : 0
+      points: rsiOptimal ? 15 : 0,
+      details: {
+        currentRSI: rsi,
+        adaptiveZone: adaptiveRSIZones,
+        cryptoProfile: this.getCryptoVolatilityProfile(this.profile?.symbol || '')
+      }
     };
 
     // Volatility check with intelligent adaptive ATR thresholds
