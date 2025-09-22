@@ -256,9 +256,12 @@ export default function LoginPage() {
           <Alert
             message="Demo Access"
             description={
-              <div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <Text style={{ fontSize: '12px', color: '#64748b' }}>
-                  For testing: admin / admin
+                  <strong>Admin:</strong> admin / password123
+                </Text>
+                <Text style={{ fontSize: '12px', color: '#64748b' }}>
+                  <strong>Demo:</strong> demo / demo123
                 </Text>
               </div>
             }
