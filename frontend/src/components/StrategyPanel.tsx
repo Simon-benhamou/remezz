@@ -11,7 +11,62 @@ export default function StrategyPanel({ strategy }: any) {
   const bias = String(s.bias || '').toLowerCase();
   const color = bias==='long'? 'green' : bias==='short'? 'red' : 'default';
   return (
-    <Card title={<span>Strategy (active) &nbsp; <span style={{ display:'inline-block', padding:'2px 8px', borderRadius:12, background: color==='green'? '#e6ffed' : color==='red'? '#ffeaea' : '#f0f0f0', color: color==='green'? '#1f8f1f' : color==='red'? '#c0392b' : '#555' }}>{(s.bias || '-').toUpperCase()}</span></span>}>
+    <Card title={
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <span>Strategy (active)</span>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '6px 12px',
+          borderRadius: '8px',
+          background: color === 'green' 
+            ? 'linear-gradient(135deg, #f6ffed 0%, #d9f7be 100%)' 
+            : color === 'red' 
+              ? 'linear-gradient(135deg, #fff2e8 0%, #ffbb96 100%)'
+              : '#f0f0f0',
+          border: `2px solid ${color === 'green' ? '#52c41a' : color === 'red' ? '#ff7875' : '#d9d9d9'}`,
+          fontSize: '14px',
+          fontWeight: 'bold'
+        }}>
+          <span style={{
+            fontSize: '16px'
+          }}>
+            {bias === 'long' ? '📈' : bias === 'short' ? '📉' : '⚖️'}
+          </span>
+          <span style={{
+            color: color === 'green' ? '#389e0d' : color === 'red' ? '#cf1322' : '#666'
+          }}>
+            {(s.bias || 'NEUTRAL').toUpperCase()}
+          </span>
+        </div>
+      </div>
+    }>
+      
+      {/* Strategy Bias Explanation */}
+      {s.bias && (
+        <div style={{
+          background: color === 'green' 
+            ? 'rgba(82, 196, 26, 0.1)' 
+            : color === 'red' 
+              ? 'rgba(255, 77, 79, 0.1)'
+              : 'rgba(0,0,0,0.05)',
+          padding: '8px 12px',
+          borderRadius: '6px',
+          marginBottom: '16px',
+          fontSize: '12px',
+          fontStyle: 'italic',
+          color: '#666'
+        }}>
+          {bias === 'long' 
+            ? '🎯 Agent recherche des opportunités d\'ACHAT (rebonds sur support, breakouts haussiers)'
+            : bias === 'short'
+              ? '🎯 Agent recherche des opportunités de VENTE (rejections sur résistance, breakouts baissiers)'
+              : '🎯 Agent en attente de signal directionnel clair'
+          }
+        </div>
+      )}
+      
       <Descriptions column={1} size="small" bordered>
         <Descriptions.Item label={<Tooltip title="Strategy identifier">ID</Tooltip>}>{s.id || s.strategyId}</Descriptions.Item>
         <Descriptions.Item label={<Tooltip title="Trading pair">Symbol</Tooltip>}>{s.symbol}</Descriptions.Item>

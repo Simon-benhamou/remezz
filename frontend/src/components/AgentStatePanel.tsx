@@ -58,6 +58,48 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
   return (
     <Card title={<span>QuantAI Agent {agent?.state && <Tag color={agent.state==='MANAGE'?'green':agent.state==='ARMED'?'blue':agent.state==='HALT'?'red':'default'}>{agent.state}</Tag>}</span>}>
       <Space direction='vertical' style={{ width:'100%' }}>
+        
+        {/* Agent Bias Display - Prominent placement */}
+        {agent?.plan?.bias && (
+          <div style={{
+            background: agent.plan.bias === 'long' 
+              ? 'linear-gradient(135deg, #f6ffed 0%, #d9f7be 100%)' 
+              : 'linear-gradient(135deg, #fff2e8 0%, #ffbb96 100%)',
+            border: `2px solid ${agent.plan.bias === 'long' ? '#52c41a' : '#ff7875'}`,
+            borderRadius: '8px',
+            padding: '12px',
+            textAlign: 'center',
+            marginBottom: '16px'
+          }}>
+            <div style={{
+              fontSize: '16px',
+              fontWeight: 'bold',
+              color: agent.plan.bias === 'long' ? '#389e0d' : '#cf1322',
+              marginBottom: '4px'
+            }}>
+              🎯 AGENT BIAS: {agent.plan.bias.toUpperCase()}
+            </div>
+            <div style={{
+              fontSize: '12px',
+              color: agent.plan.bias === 'long' ? '#52c41a' : '#ff4d4f'
+            }}>
+              {agent.plan.bias === 'long' 
+                ? '📈 Cherche opportunities ACHAT (rebond/breakout up)'
+                : '📉 Cherche opportunities VENTE (rejection/breakout down)'
+              }
+            </div>
+            {agent.state === 'ARMED' && (
+              <div style={{
+                fontSize: '11px',
+                color: '#666',
+                marginTop: '4px'
+              }}>
+                ⚡ Entry zone: ${z?.from?.toFixed(4)} - ${z?.to?.toFixed(4)}
+              </div>
+            )}
+          </div>
+        )}
+        
         <Descriptions column={1} size='small' bordered>
           <Descriptions.Item label='Symbol'>{agent?.profile?.symbol || symbol}</Descriptions.Item>
           <Descriptions.Item label='Mode'>{agent?.profile?.mode}</Descriptions.Item>
