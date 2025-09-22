@@ -975,7 +975,7 @@ export class ReboundRejectionAgent {
         const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
         const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
         
-        // Priority: EMA20 > EMA50 > calculated pullback
+        // Priority: EMA20 > EMA50 > calculated pullback (ensure levels are BELOW current price for LONG)
         if (currentPrice > ema20 && ema20 > 0 && (currentPrice - ema20) / currentPrice < 0.05) {
           targetLevel = ema20;
           zoneLabel = 'EMA20 support';
@@ -983,13 +983,21 @@ export class ReboundRejectionAgent {
           targetLevel = ema50;
           zoneLabel = 'EMA50 support';
         } else {
-          // Calculate optimal pullback level (2-4% based on volatility)
+          // Calculate optimal pullback level (2-4% based on volatility) - BELOW current price
           const pullbackPct = Math.max(0.02, Math.min(0.04, atrPct / 100));
           targetLevel = currentPrice * (1 - pullbackPct);
           zoneLabel = `${(pullbackPct*100).toFixed(1)}% pullback`;
         }
       } else {
         zoneLabel = 'support bounce';
+      }
+      
+      // Validation: Ensure LONG targetLevel is BELOW current price
+      if (targetLevel >= currentPrice) {
+        console.warn(`⚠️ LONG bias inconsistency: targetLevel ${targetLevel.toFixed(4)} >= currentPrice ${currentPrice.toFixed(4)}, forcing pullback below`);
+        const fallbackPullbackPct = 0.025; // 2.5% below
+        targetLevel = currentPrice * (1 - fallbackPullbackPct);
+        zoneLabel = 'fallback pullback (corrected)';
       }
       
       // Create zone around target level with adaptive width
@@ -1021,7 +1029,7 @@ export class ReboundRejectionAgent {
         const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
         const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
         
-        // Priority: EMA20 > EMA50 > calculated bounce
+        // Priority: EMA20 > EMA50 > calculated bounce (ensure levels are ABOVE current price for SHORT)
         if (currentPrice < ema20 && ema20 > 0 && (ema20 - currentPrice) / currentPrice < 0.05) {
           targetLevel = ema20;
           zoneLabel = 'EMA20 resistance';
@@ -1029,13 +1037,21 @@ export class ReboundRejectionAgent {
           targetLevel = ema50;
           zoneLabel = 'EMA50 resistance';
         } else {
-          // Calculate optimal bounce level (2-4% based on volatility)
+          // Calculate optimal bounce level (2-4% based on volatility) - ABOVE current price
           const bouncePct = Math.max(0.02, Math.min(0.04, atrPct / 100));
           targetLevel = currentPrice * (1 + bouncePct);
           zoneLabel = `${(bouncePct*100).toFixed(1)}% bounce`;
         }
       } else {
         zoneLabel = 'resistance rejection';
+      }
+      
+      // Validation: Ensure SHORT targetLevel is ABOVE current price
+      if (targetLevel <= currentPrice) {
+        console.warn(`⚠️ SHORT bias inconsistency: targetLevel ${targetLevel.toFixed(4)} <= currentPrice ${currentPrice.toFixed(4)}, forcing bounce above`);
+        const fallbackBouncePct = 0.025; // 2.5% above
+        targetLevel = currentPrice * (1 + fallbackBouncePct);
+        zoneLabel = 'fallback bounce (corrected)';
       }
       
       // Create zone around target level with adaptive width

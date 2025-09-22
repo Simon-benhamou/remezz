@@ -144,8 +144,8 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
       // Change minimum pour éviter stagnation
       if (crypto.absChange < 0.5) return false; // 0.5% minimum au lieu de 0.01%
       
-      // Blacklist des tokens problématiques connus
-      const problematicTokens = ["BOME", "WIF", "PEPE", "SHIB", "DOGE", "FLOKI"];
+      // Blacklist des tokens problématiques connus (micro-caps dangereux)
+      const problematicTokens = ["BOME", "WIF", "PEPE", "SHIB", "FLOKI"]; // DOGE retiré (top 10 établi)
       const base = crypto.symbol.split("/")[0];
       if (problematicTokens.includes(base)) {
         console.log(`🚫 Token ${base} blacklisté - rejeté de la sélection AUTO`);
