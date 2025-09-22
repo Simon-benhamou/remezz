@@ -779,6 +779,75 @@ export class ReboundRejectionAgent {
   /**
    * Calculate dynamic entry zone based on current market conditions and bias
    */
+  /**
+   * Determine optimal bias based on current market context and key levels
+   * This creates scenario-based trading: support bounces (long) vs resistance rejections (short)
+   */
+  private determineContextualBias(snap: TechnicalSnapshot, currentPrice: number): 'long' | 'short' | 'none' {
+    const supports = snap.supports || [];
+    const resistances = snap.resistances || [];
+    
+    // Find nearest support and resistance
+    const nearestSupport = supports
+      .filter(s => s.price < currentPrice)
+      .sort((a, b) => Math.abs(currentPrice - b.price) - Math.abs(currentPrice - a.price))[0];
+      
+    const nearestResistance = resistances
+      .filter(r => r.price > currentPrice)
+      .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price))[0];
+    
+    const supportDistance = nearestSupport ? Math.abs(currentPrice - nearestSupport.price) / currentPrice : 1;
+    const resistanceDistance = nearestResistance ? Math.abs(currentPrice - nearestResistance.price) / currentPrice : 1;
+    
+    // Get technical indicators for trend context
+    const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
+    const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
+    const rsi = Number((snap as any)?.rsi14 ?? 50);
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    
+    const trendUp = ema20 > ema50;
+    const strongTrend = adx > 20;
+    
+    // SCENARIO 1: Near Support (< 3% away) - Potential Long Setup
+    if (supportDistance < 0.03 && nearestSupport) {
+      const supportStrength = nearestSupport.touches || 1;
+      const rsiOversold = rsi < 40;
+      
+      // Strong support + oversold conditions = Long bias
+      if (supportStrength >= 2 || rsiOversold || trendUp) {
+        console.log(`📈 CONTEXTUAL BIAS: LONG - Near strong support ${nearestSupport.price.toFixed(4)} (${(supportDistance*100).toFixed(1)}% away)`);
+        return 'long';
+      }
+    }
+    
+    // SCENARIO 2: Near Resistance (< 3% away) - Potential Short Setup  
+    if (resistanceDistance < 0.03 && nearestResistance) {
+      const resistanceStrength = nearestResistance.touches || 1;
+      const rsiOverbought = rsi > 60;
+      
+      // Strong resistance + overbought conditions = Short bias
+      if (resistanceStrength >= 2 || rsiOverbought || !trendUp) {
+        console.log(`📉 CONTEXTUAL BIAS: SHORT - Near strong resistance ${nearestResistance.price.toFixed(4)} (${(resistanceDistance*100).toFixed(1)}% away)`);
+        return 'short';
+      }
+    }
+    
+    // SCENARIO 3: Trend Following in Middle Zone
+    if (strongTrend) {
+      if (trendUp && rsi < 65) {
+        console.log(`📈 CONTEXTUAL BIAS: LONG - Strong uptrend continuation`);
+        return 'long';
+      } else if (!trendUp && rsi > 35) {
+        console.log(`📉 CONTEXTUAL BIAS: SHORT - Strong downtrend continuation`);  
+        return 'short';
+      }
+    }
+    
+    // SCENARIO 4: Consolidation/Neutral
+    console.log(`🔄 CONTEXTUAL BIAS: NONE - Market in consolidation, waiting for clear direction`);
+    return 'none';
+  }
+
   private async calculateDynamicEntryZone(snap: TechnicalSnapshot, currentPrice: number, bias: 'long' | 'short' | 'none'): Promise<{ from: number; to: number; mid: number }> {
     if (bias === 'none') {
       // No bias, create a small zone around current price
@@ -797,32 +866,45 @@ export class ReboundRejectionAgent {
     
     // Calculate dynamic zone based on bias and proximity to key levels
     if (bias === 'long') {
-      // For long positions, look for pullbacks to support or recent swing lows
+      // LONG SCENARIO: Target support areas for bounce entries
       const nearestSupport = supports
         .filter(s => s.price < currentPrice)
         .sort((a, b) => Math.abs(currentPrice - b.price) - Math.abs(currentPrice - a.price))[0];
       
       let targetLevel = nearestSupport?.price;
+      let zoneLabel = 'pullback';
       
       // If no nearby support or too far, use technical levels
-      if (!targetLevel || Math.abs(currentPrice - targetLevel) / currentPrice > 0.10) {
-        // Use EMA levels or recent swing areas
+      if (!targetLevel || Math.abs(currentPrice - targetLevel) / currentPrice > 0.08) {
+        // Use EMA levels as dynamic support
         const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
         const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
         
-        // If price above EMA20, use EMA20 as support
-        if (currentPrice > ema20 && ema20 > 0) {
+        // Priority: EMA20 > EMA50 > calculated pullback
+        if (currentPrice > ema20 && ema20 > 0 && (currentPrice - ema20) / currentPrice < 0.05) {
           targetLevel = ema20;
-        } else if (currentPrice > ema50 && ema50 > 0) {
+          zoneLabel = 'EMA20 support';
+        } else if (currentPrice > ema50 && ema50 > 0 && (currentPrice - ema50) / currentPrice < 0.08) {
           targetLevel = ema50;
+          zoneLabel = 'EMA50 support';
         } else {
-          // Use 2-3% pullback from current price
-          targetLevel = currentPrice * 0.97;
+          // Calculate optimal pullback level (2-4% based on volatility)
+          const pullbackPct = Math.max(0.02, Math.min(0.04, atrPct / 100));
+          targetLevel = currentPrice * (1 - pullbackPct);
+          zoneLabel = `${(pullbackPct*100).toFixed(1)}% pullback`;
         }
+      } else {
+        zoneLabel = 'support bounce';
       }
       
-      // Create zone around target level with ATR-based width
-      const zoneWidth = Math.max(targetLevel * 0.008, targetLevel * (atrPct / 100) * 0.5); // 0.8% or half ATR
+      // Create zone around target level with adaptive width
+      const baseWidth = Math.max(targetLevel * 0.005, targetLevel * (atrPct / 100) * 0.3); // Min 0.5% or 30% of ATR
+      const supportStrength = nearestSupport?.touches || 1;
+      const strengthMultiplier = Math.min(1.5, 1 + (supportStrength - 1) * 0.2); // Stronger support = wider zone
+      const zoneWidth = baseWidth * strengthMultiplier;
+      
+      console.log(`📈 LONG entry zone: ${zoneLabel} at ${targetLevel.toFixed(4)} ±${zoneWidth.toFixed(4)}`);
+      
       return {
         from: targetLevel - zoneWidth,
         to: targetLevel + zoneWidth,
@@ -830,32 +912,45 @@ export class ReboundRejectionAgent {
       };
       
     } else if (bias === 'short') {
-      // For short positions, look for bounces to resistance or recent swing highs
+      // SHORT SCENARIO: Target resistance areas for rejection entries
       const nearestResistance = resistances
         .filter(r => r.price > currentPrice)
         .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price))[0];
       
       let targetLevel = nearestResistance?.price;
+      let zoneLabel = 'bounce';
       
       // If no nearby resistance or too far, use technical levels
-      if (!targetLevel || Math.abs(currentPrice - targetLevel) / currentPrice > 0.10) {
-        // Use EMA levels or recent swing areas
+      if (!targetLevel || Math.abs(currentPrice - targetLevel) / currentPrice > 0.08) {
+        // Use EMA levels as dynamic resistance
         const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
         const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
         
-        // If price below EMA20, use EMA20 as resistance
-        if (currentPrice < ema20 && ema20 > 0) {
+        // Priority: EMA20 > EMA50 > calculated bounce
+        if (currentPrice < ema20 && ema20 > 0 && (ema20 - currentPrice) / currentPrice < 0.05) {
           targetLevel = ema20;
-        } else if (currentPrice < ema50 && ema50 > 0) {
+          zoneLabel = 'EMA20 resistance';
+        } else if (currentPrice < ema50 && ema50 > 0 && (ema50 - currentPrice) / currentPrice < 0.08) {
           targetLevel = ema50;
+          zoneLabel = 'EMA50 resistance';
         } else {
-          // Use 2-3% bounce from current price
-          targetLevel = currentPrice * 1.03;
+          // Calculate optimal bounce level (2-4% based on volatility)
+          const bouncePct = Math.max(0.02, Math.min(0.04, atrPct / 100));
+          targetLevel = currentPrice * (1 + bouncePct);
+          zoneLabel = `${(bouncePct*100).toFixed(1)}% bounce`;
         }
+      } else {
+        zoneLabel = 'resistance rejection';
       }
       
-      // Create zone around target level with ATR-based width
-      const zoneWidth = Math.max(targetLevel * 0.008, targetLevel * (atrPct / 100) * 0.5); // 0.8% or half ATR
+      // Create zone around target level with adaptive width
+      const baseWidth = Math.max(targetLevel * 0.005, targetLevel * (atrPct / 100) * 0.3); // Min 0.5% or 30% of ATR
+      const resistanceStrength = nearestResistance?.touches || 1;
+      const strengthMultiplier = Math.min(1.5, 1 + (resistanceStrength - 1) * 0.2); // Stronger resistance = wider zone
+      const zoneWidth = baseWidth * strengthMultiplier;
+      
+      console.log(`📉 SHORT entry zone: ${zoneLabel} at ${targetLevel.toFixed(4)} ±${zoneWidth.toFixed(4)}`);
+      
       return {
         from: targetLevel - zoneWidth,
         to: targetLevel + zoneWidth,
@@ -2875,8 +2970,13 @@ export class ReboundRejectionAgent {
       
       if (needsDynamicRecalc) {
         // Recalculate zone dynamically based on current market conditions
-        console.log(`🔍 Dynamic zone recalc for ${this.profile?.symbol}: price=${price}, snap.last=${snap?.last}, bias=${this.plan.bias}`);
-        dynamicZone = await this.calculateDynamicEntryZone(snap, price, this.plan.bias);
+        console.log(`🔍 Dynamic zone recalc for ${this.profile?.symbol}: price=${price}, snap.last=${snap?.last}, original bias=${this.plan.bias}`);
+        
+        // Use contextual bias instead of fixed plan bias for more intelligent entry zones
+        const contextualBias = this.determineContextualBias(snap, price);
+        console.log(`🧠 Using contextual bias: ${contextualBias} (was: ${this.plan.bias})`);
+        
+        dynamicZone = await this.calculateDynamicEntryZone(snap, price, contextualBias);
         console.log(`🎯 Dynamic zone recalculation: Original [${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}] → Dynamic [${dynamicZone.from.toFixed(4)}, ${dynamicZone.to.toFixed(4)}] (price: ${price.toFixed(4)})`);
         
         // Update the plan with dynamic zones for chart display
@@ -2885,7 +2985,10 @@ export class ReboundRejectionAgent {
           to: dynamicZone.to,
           mid: dynamicZone.mid
         };
-        console.log(`📊 Updated plan.zone for chart display: [${dynamicZone.from.toFixed(4)}, ${dynamicZone.to.toFixed(4)}]`);
+        
+        // Also update the bias in the plan for consistency
+        this.plan.bias = contextualBias;
+        console.log(`📊 Updated plan with contextual bias: ${contextualBias} and zones: [${dynamicZone.from.toFixed(4)}, ${dynamicZone.to.toFixed(4)}]`);
       }
       
       const zoneMin = Math.min(dynamicZone.from, dynamicZone.to);
