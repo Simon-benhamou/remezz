@@ -291,20 +291,62 @@ router.get('/state', async (req,res)=>{
 router.get('/sessions', async (req,res)=>{
   const modeRaw = String(req.query.mode || '').toLowerCase();
   const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
-  const rows = await prisma.agentSession.findMany({
+  const includeStats = req.query.includeStats === 'true';
+  
+  // Base query without heavy includes for better performance
+  const baseQuery = {
     where: modeFilter ? { mode: modeFilter } : undefined,
-    orderBy: { startedAt: 'desc' },
+    orderBy: { startedAt: 'desc' as const },
     take: 100,
-    include: { positions: true, kpi: true },
-  });
+    select: {
+      id: true,
+      symbol: true,
+      mode: true,
+      startedAt: true,
+      stoppedAt: true,
+      startBalanceUsd: true,
+      profileJson: true,
+      // Only include heavy data if requested
+      ...(includeStats ? {
+        kpi: {
+          select: {
+            realizedPnlUsd: true,
+            unrealizedPnlUsd: true,
+            roiPct: true,
+            winRate: true
+          }
+        },
+        positions: {
+          select: {
+            qty: true
+          },
+          where: {
+            qty: { gt: 0 }
+          }
+        }
+      } : {})
+    }
+  };
+
+  const rows = await prisma.agentSession.findMany(baseQuery);
+  
   const out = rows.map(r => {
-    const realized = Number(r.kpi?.realizedPnlUsd || 0);
-    const unrealized = Number(r.kpi?.unrealizedPnlUsd || 0);
-    const pnlUsd = realized + unrealized;
-    const roiPct = Number(r.kpi?.roiPct || 0);
-    const winRate = Number(r.kpi?.winRate || 0);
     const profile = (r as any).profileJson || {};
     const aggressiveness = profile?.aggressiveness || 'conservative';
+    
+    // Only calculate stats if included
+    let stats = {};
+    if (includeStats && (r as any).kpi) {
+      const realized = Number((r as any).kpi?.realizedPnlUsd || 0);
+      const unrealized = Number((r as any).kpi?.unrealizedPnlUsd || 0);
+      stats = {
+        pnlUsd: realized + unrealized,
+        roiPct: Number((r as any).kpi?.roiPct || 0),
+        winRate: Number((r as any).kpi?.winRate || 0),
+        openPositions: ((r as any).positions || []).length
+      };
+    }
+    
     return {
       id: r.id,
       symbol: r.symbol,
@@ -312,14 +354,10 @@ router.get('/sessions', async (req,res)=>{
       startedAt: r.startedAt,
       stoppedAt: r.stoppedAt,
       startBalanceUsd: r.startBalanceUsd,
-      openPositions: (r.positions || []).filter(p => (p.qty ?? 0) > 0).length,
-      profile: profile,
       aggressiveness,
-      winRate,
-      pnlUsd,
-      roiPct,
-      isSmartAgent: (r as any).isSmartAgent || false, // Include Smart Agent flag
-      smartConfig: (r as any).smartConfig, // Include Smart Config if available
+      isSmartAgent: (r as any).profileJson?.isSmartAgent || profile?.isIntelligent || false,
+      smartConfig: (r as any).profileJson?.smartConfig,
+      ...stats
     };
   });
   res.json(out);

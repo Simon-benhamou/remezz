@@ -82,7 +82,12 @@ export const api = {
       .data,
   stopSession: async (sessionId: string, closePosition?: boolean) => (await client.post("/api/agent/stop", { sessionId, closePosition })).data,
   getSession: async () => (await client.get("/api/agent/session")).data,
-  listSessions: async (mode?: string) => (await client.get("/api/agent/sessions", { params: mode ? { mode } : undefined })).data,
+  listSessions: async (mode?: string, includeStats?: boolean) => {
+    const params: any = {};
+    if (mode) params.mode = mode;
+    if (includeStats) params.includeStats = 'true';
+    return (await client.get("/api/agent/sessions", { params })).data;
+  },
   deleteSession: async (id: string) => (await client.delete(`/api/agent/sessions/${id}`)).data,
   overview: async (mode?: string) => (await client.get("/api/agent/overview", { params: mode ? { mode } : undefined })).data,
   setSessionSymbol: async (sessionId: string, symbol: string) => (await client.post('/api/agent/set-symbol', { sessionId, symbol })).data,

@@ -5,6 +5,7 @@ import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined, RocketOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import TradingDiagnosticsOverview from '../components/TradingDiagnosticsOverview';
+import TradingDiagnosticsCollapsible from '../components/TradingDiagnosticsCollapsible';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
 import ApiKeyMigrationTool from '../components/ApiKeyMigrationTool';
@@ -42,24 +43,24 @@ export default function SessionsPage(){
   
   const load = React.useCallback(async ()=>{ 
     try { 
-      const sessions = await api.listSessions(mode);
-      // Enrich sessions with additional data
+      // Load sessions without heavy includes for better performance
+      const sessions = await api.listSessions(mode, false); // Don't include stats by default
+      
+      // Only enrich with basic data, no heavy diagnostics
       const enrichedSessions = await Promise.all(sessions.map(async (session: any) => {
         try {
-          // Get additional metrics
-          const perf = session.id ? await api.getPerf(session.id).catch(() => null) : null;
+          // Only get basic metrics for active sessions
+          const perf = session.id && !session.stoppedAt ? await api.getPerf(session.id).catch(() => null) : null;
           const health = session.id && !session.stoppedAt ? await api.getHealth(session.id).catch(() => null) : null;
           const agentState = session.id && !session.stoppedAt ? await api.getAgentState(session.id).catch(() => null) : null;
           
-          // Get pending orders
+          // Get pending orders (lightweight)
           const orders = session.id ? await api.getOrders(session.id).catch(() => []) : [];
           const pendingOrders = orders.filter((o: any) => 
             ['new', 'open', 'partially_filled'].includes(o.status)
           );
           
-          // Get trading diagnostics for active sessions
-          const diagnostics = session.id && !session.stoppedAt ? 
-            await api.getDiagnostics(session.id).catch(() => null) : null;
+          // Remove automatic diagnostics loading - will be loaded on-demand via collapse
           
           return {
             ...session,
@@ -78,11 +79,6 @@ export default function SessionsPage(){
             // Orders info
             pendingOrders: pendingOrders,
             pendingOrdersCount: pendingOrders.length,
-            
-            // Trading diagnostics
-            tradeVibes: diagnostics?.tradeVibes || null,
-            marketTriggers: diagnostics?.marketTriggers || null,
-            tradingSignal: diagnostics?.tradingSignal || 'neutral',
             
             // Health status
             healthStatus: health?.status || 'unknown',
@@ -892,35 +888,28 @@ export default function SessionsPage(){
                   }
                 },
                 { 
-                  title:'Trade Signal', 
-                  width: 100,
+                  title:'Diagnostics', 
+                  width: 120,
                   render:(_:any,r:any)=> {
-                    if (!r.tradingSignal || r.tradingSignal === 'neutral') return (
-                      <span style={{ color: '#94a3b8', fontSize: '12px' }}>Neutral</span>
-                    );
-                    
-                    const signalColors = {
-                      bullish: '#10b981',
-                      bearish: '#ef4444',
-                      strong_buy: '#059669',
-                      strong_sell: '#dc2626',
-                      caution: '#f59e0b'
-                    };
-                    
-                    const color = signalColors[r.tradingSignal as keyof typeof signalColors] || '#64748b';
+                    if (r.stoppedAt) {
+                      return (
+                        <span style={{ color: '#94a3b8', fontSize: '12px' }}>Inactive</span>
+                      );
+                    }
                     
                     return (
                       <div style={{
-                        padding: '2px 8px',
+                        padding: '4px 8px',
                         borderRadius: '8px',
-                        background: `${color}20`,
-                        border: `1px solid ${color}40`,
-                        color: color,
+                        background: '#3b82f6',
+                        border: '1px solid #2563eb',
+                        color: 'white',
                         fontSize: '11px',
                         fontWeight: '600',
-                        textAlign: 'center'
+                        textAlign: 'center',
+                        cursor: 'pointer'
                       }}>
-                        {r.tradingSignal.replace('_', ' ').toUpperCase()}
+                        Click to View
                       </div>
                     );
                   }
@@ -1033,6 +1022,12 @@ export default function SessionsPage(){
                 }
               }
             ]}
+            expandedRowRender={(record) => (
+              <TradingDiagnosticsCollapsible 
+                sessionId={record.id} 
+                isActive={!record.stoppedAt} 
+              />
+            )}
           />
         </Card>
 
