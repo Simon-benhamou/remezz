@@ -1,5 +1,5 @@
 // Test et correction du bug bias/entry zone pour DOGE
-import { buildTechSnapshot } from './dist/ai/tech.js';
+import { buildTechSnapshot } from '../dist/ai/tech.js';
 
 console.log('🐞 Diagnostic BIAS/ENTRY ZONE BUG pour DOGE\n');
 

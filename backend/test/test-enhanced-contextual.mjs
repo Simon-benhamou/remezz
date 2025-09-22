@@ -1,5 +1,5 @@
 // Test the enhanced contextual bias logic with different scenarios
-import { buildTechSnapshot } from './dist/ai/tech.js';
+import { buildTechSnapshot } from '../dist/ai/tech.js';
 
 console.log('🧪 Testing Enhanced Contextual Bias Logic...\n');
 

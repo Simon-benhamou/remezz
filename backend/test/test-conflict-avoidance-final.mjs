@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { initializeIntelligentAgent, getActiveAgentSymbols } from './dist/services/intelligentAgent.js';
+import { initializeIntelligentAgent, getActiveAgentSymbols } from '../dist/services/intelligentAgent.js';
 
 const prisma = new PrismaClient();
 

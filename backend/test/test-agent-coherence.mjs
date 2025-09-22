@@ -5,8 +5,8 @@ console.log('🧠 Testing Agent Diagnostic Analysis Coherence...\n');
 async function testAgentCoherence() {
   try {
     // Import des modules nécessaires
-    const { buildTechSnapshot } = await import('./dist/ai/tech.js');
-    const { AgentHub } = await import('./dist/agent/hub.js');
+    const { buildTechSnapshot } = await import('../dist/ai/tech.js');
+    const { AgentHub } = await import('../dist/agent/hub.js');
     
     console.log('🔍 Analyzing active agents and their market decisions...\n');
     

@@ -5,8 +5,8 @@
  * when creating new smart agents.
  */
 
-import { prisma } from './dist/db/client.js';
-import { getActiveAgentSymbols, getBestIntelligentOpportunity, getOptimizedCryptoList } from './dist/services/intelligentAgent.js';
+import { prisma } from '../dist/db/client.js';
+import { getActiveAgentSymbols, getBestIntelligentOpportunity, getOptimizedCryptoList } from '../dist/services/intelligentAgent.js';
 
 async function testConflictAvoidance() {
   console.log('🧪 Testing Conflict Avoidance Logic...\n');

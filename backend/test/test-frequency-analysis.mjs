@@ -3,7 +3,7 @@ console.log('🔬 Testing Crypto Adaptability & Trading Frequency Analysis...\n'
 
 async function testTradingFrequency() {
   try {
-    const { buildTechSnapshot } = await import('./dist/ai/tech.js');
+    const { buildTechSnapshot } = await import('../dist/ai/tech.js');
     
     const cryptoPortfolio = [
       { symbol: 'BTC/USDT', type: 'LARGE_CAP' },

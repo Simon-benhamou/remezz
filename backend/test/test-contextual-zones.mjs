@@ -1,5 +1,5 @@
 // Test the new contextual bias and entry zone logic
-import { buildTechSnapshot } from './dist/ai/tech.js';
+import { buildTechSnapshot } from '../dist/ai/tech.js';
 
 console.log('🧪 Testing Contextual Entry Zones for AVNT/USDT...\n');
 

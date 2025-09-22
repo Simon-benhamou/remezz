@@ -1,5 +1,5 @@
 // Test rapide pour débugger la confusion de symboles
-import { buildTechSnapshot } from './dist/ai/tech.js';
+import { buildTechSnapshot } from '../dist/ai/tech.js';
 
 console.log('🧪 Test AVNT/USDT symbol resolution...');
 

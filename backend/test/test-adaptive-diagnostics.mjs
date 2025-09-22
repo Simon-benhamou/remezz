@@ -1,5 +1,5 @@
 // Test des nouveaux seuils adaptatifs intelligents avec IA
-import { buildTechSnapshot } from './dist/ai/tech.js';
+import { buildTechSnapshot } from '../dist/ai/tech.js';
 
 console.log('🧪 Testing AI-Powered Adaptive Diagnostics for AVNT/USDT...\n');
 

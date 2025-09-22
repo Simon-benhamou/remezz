@@ -1,5 +1,5 @@
 // Test de la logique d'évitement de conflits entre agents
-import { prisma } from './dist/db/client.js';
+import { prisma } from '../dist/db/client.js';
 
 console.log('🚫 TEST ÉVITEMENT CONFLITS AGENTS\n');
 

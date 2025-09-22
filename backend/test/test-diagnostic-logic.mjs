@@ -5,7 +5,7 @@ console.log('🧠 Testing Agent Diagnostic Logic with Simulated Scenarios...\n')
 async function testDiagnosticLogic() {
   try {
     // Import des modules nécessaires
-    const { buildTechSnapshot } = await import('./dist/ai/tech.js');
+    const { buildTechSnapshot } = await import('../dist/ai/tech.js');
     
     // Symboles de test populaires
     const testSymbols = ['BTC/USDT', 'ETH/USDT', 'AVNT/USDT', 'SOL/USDT'];
