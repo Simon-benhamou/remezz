@@ -61,6 +61,7 @@ export class ReboundRejectionAgent {
   broker: Broker | null = null;
   pos: ActivePosition | null = null;
   extendedOnce = false;
+  private lastExitTime = 0; // Track last exit time for cooldown
   private entering = false;
   sessionId: string | null = null;
   private breakoutTicks = 0; // consecutive ticks confirming breakout
@@ -277,6 +278,17 @@ export class ReboundRejectionAgent {
     if (!this.broker || !this.plan || !this.profile) return;
     if (this.regime && !this.regime.shouldTrade) return;
     if (this.pos || this.entering) return;
+    
+    // 🚨 COOLDOWN CHECK: Prevent entries too soon after last exit
+    const { TRADE_COOLDOWN_MS } = (await import('../utils/env.js')).getConfig();
+    const timeSinceLastExit = Date.now() - this.lastExitTime;
+    
+    if (this.lastExitTime > 0 && timeSinceLastExit < TRADE_COOLDOWN_MS) {
+      const cooldownRemaining = (TRADE_COOLDOWN_MS - timeSinceLastExit) / 1000;
+      console.log(`⏳ Trade cooldown: ${cooldownRemaining.toFixed(0)}s remaining - skipping entry`);
+      return;
+    }
+    
     this.entering = true;
     let snap = _snap;
     if (!snap) {
@@ -2468,8 +2480,26 @@ export class ReboundRejectionAgent {
     const tp2Hit = secondTp != null ? (this.pos.side === 'buy' ? price >= secondTp : price <= secondTp) : false;
     const stopHit = this.pos.side === 'buy' ? price <= this.pos.stop : price >= this.pos.stop;
 
+    // Get config for timing controls
+    const { MIN_HOLD_TIME_MS, CRITICAL_LOSS_PCT } = (await import('../utils/env.js')).getConfig();
+    
     let maxHoldMs = (this.plan.plan.risk.max_hold_hours || 36) * 3600 * 1000;
     const age = Date.now() - this.pos.openedAt;
+    
+    // 🚨 MINIMUM HOLD TIME: Prevent exits within first 5 minutes unless critical loss
+    const minHoldElapsed = age >= MIN_HOLD_TIME_MS;
+    const currentLossPct = this.pos.side === 'buy' 
+      ? Math.max(0, (this.pos.entry - price) / this.pos.entry * 100)
+      : Math.max(0, (price - this.pos.entry) / this.pos.entry * 100);
+    const criticalLoss = currentLossPct >= CRITICAL_LOSS_PCT;
+    
+    // Override exit conditions: only allow early exit on critical loss or actual SL hit
+    const allowEarlyExit = criticalLoss || stopHit;
+    
+    // Log timing info for debugging
+    if (!minHoldElapsed && !allowEarlyExit) {
+      console.log(`⏰ Position hold: ${(age/1000/60).toFixed(1)}m/${(MIN_HOLD_TIME_MS/1000/60).toFixed(1)}m, loss: ${currentLossPct.toFixed(2)}%/${CRITICAL_LOSS_PCT}% - continuing...`);
+    }
 
     // Extension rule: once, near end of max_hold, extend by +12–24h if strong trend and PnL>0
     // Conditions: ADX>20 and EMA20 slope aligned with direction, no blocking anomalies
@@ -2615,10 +2645,19 @@ export class ReboundRejectionAgent {
       }
     } catch {}
 
-    // Full exit on TP2 (if defined) or on stop/time
+    // Full exit on TP2 (if defined) or on stop/time - but respect minimum hold time
     const tpHitFinal = tp2Hit || (tp1Hit && this.pos.partialTaken && this.pos.tp.length === 1);
-    if (tpHitFinal || stopHit || age > maxHoldMs) {
-      await this.exit(price, tpHitFinal ? 'tp' : (stopHit ? 'sl' : 'time'));
+    const timeBasedExit = age > maxHoldMs;
+    
+    // Apply minimum hold time: only exit early on critical conditions
+    const shouldExit = (tpHitFinal && minHoldElapsed) || 
+                      (stopHit && allowEarlyExit) || 
+                      (timeBasedExit && minHoldElapsed);
+    
+    if (shouldExit) {
+      const exitReason = tpHitFinal ? 'tp' : (stopHit ? 'sl' : 'time');
+      console.log(`🚪 Exiting position: reason=${exitReason}, hold=${(age/1000/60).toFixed(1)}m, minHold=${minHoldElapsed}`);
+      await this.exit(price, exitReason);
       return;
     }
   }
@@ -2634,6 +2673,10 @@ export class ReboundRejectionAgent {
 
   async exit(price: number, reason: 'tp'|'sl'|'time', opts?: { suppressRearm?: boolean }) {
     if (!this.pos || !this.broker || !this.profile) return;
+    
+    // Record exit time for cooldown tracking
+    this.lastExitTime = Date.now();
+    
     const dir = this.pos.side === 'buy' ? 1 : -1;
     const pnl = dir * (price - this.pos.entry) * this.pos.qty;
     const bal = await this.broker.balance();

@@ -73,6 +73,10 @@ export type Cfg = {
   CRYPTO_BREAKOUT_TRAILING: number;
   CRYPTO_MOONSHOT_TRAILING: number;
   CRYPTO_VOLUME_SURGE_MIN: number;
+  // Trading timing controls
+  MIN_HOLD_TIME_MS: number;         // Minimum hold time before any exit (except critical SL)
+  TRADE_COOLDOWN_MS: number;        // Cooldown between trades to prevent over-trading
+  CRITICAL_LOSS_PCT: number;        // Loss threshold for immediate exit (bypass min hold)
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -136,6 +140,10 @@ export function getConfig(): Cfg {
     CRYPTO_BREAKOUT_TRAILING: Number(e.CRYPTO_BREAKOUT_TRAILING || "2.0"),
     CRYPTO_MOONSHOT_TRAILING: Number(e.CRYPTO_MOONSHOT_TRAILING || "3.0"),
     CRYPTO_VOLUME_SURGE_MIN: Number(e.CRYPTO_VOLUME_SURGE_MIN || "2.0"),
+    // Trading timing controls to prevent over-trading
+    MIN_HOLD_TIME_MS: Number(e.MIN_HOLD_TIME_MS || "300000"), // 5 minutes minimum
+    TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "120000"), // 2 minutes cooldown
+    CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "2.0"), // 2% loss = immediate exit
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
     PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "5"), // réduit de 15 à 5 min
