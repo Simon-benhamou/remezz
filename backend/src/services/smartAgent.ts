@@ -122,6 +122,7 @@ export async function initializeIntelligentSmartAgent(sessionId: string): Promis
   console.log(`🎯 Initializing Auto-Select Agent for session ${sessionId}...`);
   
   try {
+    // Pass sessionId as excludeSessionId to avoid self-conflict
     const success = await initializeIntelligentAgent(sessionId);
     
     if (success) {
@@ -185,6 +186,7 @@ async function scheduleSmartAgentRetry(sessionId: string): Promise<void> {
 async function retryIntelligentAgentInitialization(sessionId: string): Promise<void> {
   console.log(`🔄 Retrying Auto-Select Agent initialization for session ${sessionId}...`);
   
+  // Pass sessionId as excludeSessionId for retry logic too
   const success = await initializeIntelligentAgent(sessionId);
   
   if (success) {

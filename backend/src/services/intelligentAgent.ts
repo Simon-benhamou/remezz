@@ -9,10 +9,18 @@ import { getConfig } from '../utils/env.js';
  * Get list of symbols currently being traded by active agents
  * Normalizes different symbol formats for comparison
  */
-async function getActiveAgentSymbols(): Promise<string[]> {
+export async function getActiveAgentSymbols(excludeSessionId?: string): Promise<string[]> {
   try {
+    const whereClause: any = { stoppedAt: null };
+    
+    // Exclude current session being created to avoid self-conflict
+    if (excludeSessionId) {
+      whereClause.id = { not: excludeSessionId };
+      console.log(`🚫 Excluding session ${excludeSessionId.substring(0, 8)}... from conflict detection`);
+    }
+    
     const activeSessions = await prisma.agentSession.findMany({
-      where: { stoppedAt: null },
+      where: whereClause,
       select: { symbol: true }
     });
     
@@ -71,12 +79,12 @@ export interface IntelligentAnalysis {
 /**
  * Get optimized list of top performing cryptos for analysis (max 20)
  */
-export async function getOptimizedCryptoList(): Promise<string[]> {
+export async function getOptimizedCryptoList(excludeSessionId?: string): Promise<string[]> {
   try {
     console.log('📊 Fetching top performing cryptos from last 24h...');
     
-    // 🚫 ÉVITER LES CONFLITS: Récupérer les cryptos déjà actives
-    const activeSymbols = await getActiveAgentSymbols();
+    // 🚫 ÉVITER LES CONFLITS: Récupérer les cryptos déjà actives (excluding current session)
+    const activeSymbols = await getActiveAgentSymbols(excludeSessionId);
     if (activeSymbols.length > 0) {
       console.log(`🚫 Symbols already active: ${activeSymbols.join(', ')}`);
     }
@@ -86,7 +94,7 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
     
     if (!ExchangeClass) {
       console.log('📊 Exchange not available, using static top 20 cryptos list');
-      return await getTopCryptos();
+      return await getTopCryptos(excludeSessionId);
     }
 
     const exchange = new ExchangeClass({
@@ -121,7 +129,7 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
     
     if (perpetualMarkets.length === 0) {
       console.log('📊 No perpetual markets found, falling back to static list');
-      return await getTopCryptos();
+      return await getTopCryptos(excludeSessionId);
     }
 
     // Fetch MORE tickers to get better selection (increased from 10 to 50)
@@ -227,14 +235,14 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
       return availablePerformers;
     } else {
       console.log('⚠️ All top performers are already active - falling back to static list without active ones');
-      const staticFallback = await getTopCryptos();
-      return staticFallback.length > 0 ? staticFallback : await getTopCryptos(); // Dernière chance
+      const staticFallback = await getTopCryptos(excludeSessionId);
+      return staticFallback.length > 0 ? staticFallback : await getTopCryptos(excludeSessionId); // Dernière chance
     }
     
   } catch (error) {
     console.error('Error getting dynamic crypto list:', error);
     console.log('📊 Falling back to static top cryptos list');
-    return await getTopCryptos(); // Fallback to our curated list
+    return await getTopCryptos(excludeSessionId); // Fallback to our curated list
   }
 }
 
@@ -242,7 +250,7 @@ export async function getOptimizedCryptoList(): Promise<string[]> {
  * Top cryptos by volume/market cap - focus on liquid markets only
  * Filters out symbols already active in other agents
  */
-async function getTopCryptos(): Promise<string[]> {
+async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
   // Top 20 most liquid perpetuals - reordered to avoid Bitcoin bias
   const staticList = [
     'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 
@@ -251,9 +259,9 @@ async function getTopCryptos(): Promise<string[]> {
     'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'BTC/USDT'
   ];
   
-  // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives
+  // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives (excluding current session)
   try {
-    const activeSymbols = await getActiveAgentSymbols();
+    const activeSymbols = await getActiveAgentSymbols(excludeSessionId);
     const availableSymbols = staticList.filter(symbol => !activeSymbols.includes(symbol));
     
     if (availableSymbols.length > 0) {
@@ -659,11 +667,11 @@ function calculateConfidence(...scores: number[]): number {
 /**
  * Optimized scan focusing on top 10-20 cryptos only
  */
-export async function scanIntelligentOpportunities(): Promise<IntelligentAnalysis[]> {
+export async function scanIntelligentOpportunities(excludeSessionId?: string): Promise<IntelligentAnalysis[]> {
   console.log('🔍 Starting optimized opportunity scan (top cryptos only)...');
   
-  // Get top 10-20 cryptos instead of all perpetuals
-  const symbols = await getOptimizedCryptoList();
+  // Get top 10-20 cryptos instead of all perpetuals, excluding current session
+  const symbols = await getOptimizedCryptoList(excludeSessionId);
   console.log(`📊 Analyzing ${symbols.length} top cryptos (cost-optimized)...`);
   
   // Analyze in smaller batches for better performance
@@ -697,8 +705,9 @@ export async function scanIntelligentOpportunities(): Promise<IntelligentAnalysi
 /**
  * Get the best opportunity with detailed explanation
  */
-export async function getBestIntelligentOpportunity(): Promise<IntelligentAnalysis | null> {
-  const opportunities = await scanIntelligentOpportunities();
+export async function getBestIntelligentOpportunity(excludeSessionId?: string): Promise<IntelligentAnalysis | null> {
+  // Pass excludeSessionId through the selection chain
+  const opportunities = await scanIntelligentOpportunities(excludeSessionId);
   
   if (opportunities.length === 0) {
     console.log('⚠️ No opportunities found - all cryptos failed analysis criteria');
@@ -739,7 +748,8 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
   try {
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
-    const bestOpportunity = await getBestIntelligentOpportunity();
+    // Pass sessionId as excludeSessionId to avoid self-conflict
+    const bestOpportunity = await getBestIntelligentOpportunity(sessionId);
     
     if (!bestOpportunity) {
       console.log('💤 No valid opportunities found - creating session in sleep mode for 3h');
@@ -903,8 +913,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       
       console.log(`⏰ Session ${session.id}: Waking up from sleep mode - scanning for opportunities`);
       
-      // Try to find opportunities after sleep
-      const bestOpportunity = await getBestIntelligentOpportunity();
+      // Try to find opportunities after sleep (exclude current session)
+      const bestOpportunity = await getBestIntelligentOpportunity(session.id);
       
       if (!bestOpportunity) {
         console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 3h`);
@@ -986,8 +996,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     
     console.log(`🔍 Session ${session.id}: No trades in 12h+ - evaluating switch from ${session.symbol}`);
     
-    // Get current best opportunity (cost-optimized scan)
-    const bestOpportunity = await getBestIntelligentOpportunity();
+    // Get current best opportunity (cost-optimized scan, exclude current session)
+    const bestOpportunity = await getBestIntelligentOpportunity(session.id);
     
     if (!bestOpportunity) {
       console.log(`💤 Session ${session.id}: No opportunities found - switching to sleep mode for 3h`);
@@ -1123,8 +1133,8 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
     const currentSymbol = session.symbol;
     console.log(`📊 Current symbol: ${currentSymbol}`);
     
-    // Get optimized crypto list (same logic as automatic selection)
-    const optimizedCryptos = await getOptimizedCryptoList();
+    // Get optimized crypto list (same logic as automatic selection, exclude current session)
+    const optimizedCryptos = await getOptimizedCryptoList(sessionId);
     
     if (!optimizedCryptos || optimizedCryptos.length === 0) {
       return { 
