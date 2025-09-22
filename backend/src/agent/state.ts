@@ -249,8 +249,22 @@ export class ReboundRejectionAgent {
           maxDistanceAllowed = 0.3; // Require better entries in volatile markets
         }
           
-        // Enter only in the optimal part of the zone
-        if (inZone && distanceFromEntry <= maxDistanceAllowed) {
+        // Enhanced entry logic: support both mean reversion AND breakout entries
+        const shouldEnterMeanReversion = inZone && distanceFromEntry <= maxDistanceAllowed;
+        
+        // Allow breakout entries slightly above/below zone for better opportunity capture
+        const zoneMax = Math.max(from, to);
+        const zoneMin = Math.min(from, to);
+        const breakoutThreshold = 0.02; // 2% maximum distance from zone edge
+        
+        const shouldEnterBreakout = (
+          (this.plan.bias === 'long' && price > zoneMax && 
+           (price - zoneMax) / price < breakoutThreshold) ||
+          (this.plan.bias === 'short' && price < zoneMin && 
+           (zoneMin - price) / price < breakoutThreshold)
+        );
+        
+        if (shouldEnterMeanReversion || shouldEnterBreakout) {
           await this.enter(price, snap);
         }
       }

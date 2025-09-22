@@ -3,9 +3,9 @@ import { ema, rsi, atr } from './indicators.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 
-// Simple cache to reduce API calls
+// Simple cache to reduce API calls - OPTIMIZED for faster real-time response
 const tickerCache = new Map<string, { data: any; timestamp: number }>();
-const TICKER_CACHE_TTL = 10000; // 10 seconds cache
+const TICKER_CACHE_TTL = 2000; // 2 seconds cache (reduced from 10s for better reactivity)
 
 // Create a temporary unauthenticated exchange for public market data
 function createPublicExchange() {
@@ -23,13 +23,13 @@ function createPublicExchange() {
   return ex;
 }
 
-export async function getTicker(symbol: string) {
+export async function getTicker(symbol: string, options?: { forceRefresh?: boolean }) {
   const cacheKey = symbol;
   const cached = tickerCache.get(cacheKey);
   const now = Date.now();
   
-  // Return cached data if still fresh
-  if (cached && (now - cached.timestamp) < TICKER_CACHE_TTL) {
+  // Skip cache if forceRefresh is requested or cache is stale
+  if (!options?.forceRefresh && cached && (now - cached.timestamp) < TICKER_CACHE_TTL) {
     return cached.data;
   }
   

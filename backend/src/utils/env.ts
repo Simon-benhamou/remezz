@@ -82,8 +82,8 @@ export function getConfig(): Cfg {
     // REMOVED: API_KEY and API_SECRET - now using user-specific keys from database
     API_PASSWORD: e.API_PASSWORD || "",
     PORT: Number(e.PORT || "4000"),
-    // Polling every 5s by default to reduce CCXT rate-limit pressure
-    POLL_MS: Number(e.POLL_MS || "5000"),
+    // Polling every 2s by default for better real-time response (reduced from 5s)
+    POLL_MS: Number(e.POLL_MS || "2000"),
     CORS_ORIGIN: e.CORS_ORIGIN || "http://localhost:5173",
     // Respect env flag; default off for dev
     REQUIRE_API_KEY: (e.REQUIRE_API_KEY || "false") === "true",
