@@ -795,12 +795,12 @@ async function updateSessionNextCheck(sessionId: string, nextCheck: Date): Promi
 /**
  * Initialize intelligent agent for a session
  */
-export async function initializeIntelligentAgent(sessionId: string): Promise<boolean> {
+export async function initializeIntelligentAgent(sessionId: string, preset?: IntelligentAnalysis | null): Promise<boolean> {
   try {
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
     // Pass sessionId as excludeSessionId to avoid self-conflict
-    const bestOpportunity = await getBestIntelligentOpportunity(sessionId);
+    const bestOpportunity = preset ?? await getBestIntelligentOpportunity(sessionId);
     
     if (!bestOpportunity) {
       console.log('💤 No valid opportunities found - creating session in sleep mode for 3h');

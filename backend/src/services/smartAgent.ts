@@ -119,12 +119,12 @@ export async function scanBestOpportunity(): Promise<OpportunityResult | null> {
 /**
  * Initialize Smart Agent with Intelligent Analysis System
  */
-export async function initializeIntelligentSmartAgent(sessionId: string): Promise<boolean> {
+export async function initializeIntelligentSmartAgent(sessionId: string, preset?: IntelligentAnalysis | null): Promise<boolean> {
   console.log(`🎯 Initializing Auto-Select Agent for session ${sessionId}...`);
   
   try {
     // Pass sessionId as excludeSessionId to avoid self-conflict
-    const success = await initializeIntelligentAgent(sessionId);
+    const success = await initializeIntelligentAgent(sessionId, preset);
     
     if (success) {
       console.log(`✅ Auto-Select Agent successfully initialized`);

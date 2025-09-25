@@ -6,13 +6,20 @@ import { api } from '../api';
 interface TradingDiagnosticsCollapsibleProps {
   sessionId: string;
   isActive: boolean;
+  initialDiagnostics?: any;
 }
 
-export default function TradingDiagnosticsCollapsible({ sessionId, isActive }: TradingDiagnosticsCollapsibleProps) {
-  const [diagnostics, setDiagnostics] = React.useState<any>(null);
+export default function TradingDiagnosticsCollapsible({ sessionId, isActive, initialDiagnostics }: TradingDiagnosticsCollapsibleProps) {
+  const [diagnostics, setDiagnostics] = React.useState<any>(initialDiagnostics || null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState(false);
+
+  React.useEffect(() => {
+    if (initialDiagnostics) {
+      setDiagnostics(initialDiagnostics);
+    }
+  }, [initialDiagnostics]);
 
   const loadDiagnostics = async () => {
     if (!isActive) return;

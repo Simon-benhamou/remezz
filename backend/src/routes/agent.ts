@@ -6,6 +6,8 @@ import { getUserCredentials } from '../services/userCredentials.js';
 import { prisma } from '../db/client.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
 import { initializeIntelligentSmartAgent, getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgent.js';
+import { getBestIntelligentOpportunity } from '../services/intelligentAgent.js';
+import type { IntelligentAnalysis } from '../services/intelligentAgent.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { buildTechSnapshot } from '../ai/tech.js';
@@ -43,10 +45,22 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     const isSmartAgent = body.isSmartAgent || body.smartAutoMode;
     console.log('🔍 Debug: isSmartAgent =', body.isSmartAgent, 'smartAutoMode =', body.smartAutoMode, 'final =', isSmartAgent);
     
+    let prefetchedOpportunity: IntelligentAnalysis | null = null;
+    let smartInitPromise: Promise<boolean> | null = null;
     if (isSmartAgent) {
       console.log('🎯 Creating Auto-Select Agent - scanning for best opportunity...');
-      // Auto-Select agents use ETH as temporary symbol (will be replaced after intelligent selection)
-      symbol = 'ETH/USDT'; // Valid temporary symbol for Auto-Select
+      try {
+        prefetchedOpportunity = await getBestIntelligentOpportunity();
+        if (prefetchedOpportunity?.symbol) {
+          symbol = prefetchedOpportunity.symbol;
+          console.log(`✅ Prefetched best symbol: ${symbol}`);
+        }
+      } catch (error) {
+        console.warn('⚠️ Prefetch intelligent opportunity failed:', error);
+      }
+      if (!symbol) {
+        symbol = 'ETH/USDT'; // Fallback temporary symbol
+      }
     } else {
       // Ensure symbol is provided for non-smart agents
       if (!symbol && process.env.RANK_ON_START === 'true') {
@@ -143,23 +157,23 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     if (isSmartAgent) {
       console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
       try {
-        const success = await initializeIntelligentSmartAgent(s.id);
-        if (success) {
-          console.log(`✅ Auto-Select Agent ${s.id} initialized successfully`);
-          
-          // Update the session object with the selected symbol
-          const updatedSession = await prisma.agentSession.findUnique({ where: { id: s.id } });
-          if ((updatedSession as any)?.currentSymbol) {
-            (s as any).symbol = (updatedSession as any).currentSymbol;
-            (s as any).currentSymbol = (updatedSession as any).currentSymbol;
-            console.log(`🔄 Updated response symbol to: ${(updatedSession as any).currentSymbol}`);
-          }
-        } else {
-          console.warn(`⚠️ Auto-Select Agent ${s.id} initialization failed - keeping temporary symbol ${symbol}`);
-        }
+        smartInitPromise = initializeIntelligentSmartAgent(s.id, prefetchedOpportunity)
+          .then((success) => {
+            if (success) {
+              console.log(`✅ Auto-Select Agent ${s.id} initialized successfully (async)`);
+            } else {
+              console.warn(`⚠️ Auto-Select Agent ${s.id} initialization returned false`);
+            }
+            return success;
+          })
+          .catch((error) => {
+            console.error(`❌ Auto-Select Agent ${s.id} initialization error:`, error);
+            return false;
+          });
       } catch (error) {
-        console.error(`❌ Auto-Select Agent ${s.id} initialization error:`, error);
+        console.error(`❌ Auto-Select Agent ${s.id} initialization scheduling error:`, error);
       }
+      prefetchedOpportunity = null;
     }
 
     // Respond with the session (now with selected symbol if Auto-Select succeeded)
@@ -169,19 +183,25 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     setTimeout(async () => {
       try {
         if (isSmartAgent) {
-          console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
-          const success = await initializeIntelligentSmartAgent(s.id);
+          let success = false;
+          if (smartInitPromise) {
+            success = await smartInitPromise;
+          }
+          if (!success) {
+            console.log(`🔁 Retrying Auto-Select Agent initialization for ${s.id}`);
+            success = await initializeIntelligentSmartAgent(s.id).catch((err) => {
+              console.error(`❌ Auto-Select retry failed for ${s.id}:`, err);
+              return false;
+            }) as boolean;
+          }
           if (success) {
-            console.log(`✅ Auto-Select Agent ${s.id} initialized successfully`);
-            
-            // CRITICAL: Update symbol variable to the one selected by Smart Agent
             const updatedSession = await prisma.agentSession.findUnique({ where: { id: s.id } });
             if (updatedSession?.symbol) {
               symbol = updatedSession.symbol;
               console.log(`🔄 Updated symbol for background processes: ${symbol}`);
             }
           } else {
-            console.warn(`⚠️ Auto-Select Agent ${s.id} initialization failed - keeping temporary symbol ${symbol}`);
+            console.warn(`⚠️ Auto-Select Agent ${s.id} initialization still pending errors`);
           }
         }
 

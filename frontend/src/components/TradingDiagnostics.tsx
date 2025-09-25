@@ -121,7 +121,9 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
           {summary && (
             <div style={{ marginTop: 4, fontSize: 12, color: '#666' }}>
               {summary.passed}/{summary.totalChecks} checks passed
-              {summary.rejected > 0 && <span style={{ color: '#ff7a00' }}>, {summary.rejected} rejected</span>}
+              {(summary.failed ?? 0) > 0 && <span style={{ color: '#dc2626' }}> • {summary.failed} failed</span>}
+              {(summary.partial ?? 0) > 0 && <span style={{ color: '#0ea5e9' }}> • {summary.partial} near</span>}
+              {(summary.rejected ?? 0) > 0 && <span style={{ color: '#ff7a00' }}> • {summary.rejected} rejected</span>}
             </div>
           )}
         </div>

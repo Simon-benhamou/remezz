@@ -3596,6 +3596,8 @@ export class ReboundRejectionAgent {
     let zoneDetails = '';
     let dynamicZone = entryZone;
     
+    let zoneStatus: 'PASS' | 'FAIL' | 'PARTIAL' = 'FAIL';
+
     if (entryZone && typeof entryZone.from === 'number' && typeof entryZone.to === 'number') {
       const originalZoneMin = Math.min(entryZone.from, entryZone.to);
       const originalZoneMax = Math.max(entryZone.from, entryZone.to);
@@ -3638,16 +3640,22 @@ export class ReboundRejectionAgent {
       const zoneMax = Math.max(dynamicZone.from, dynamicZone.to);
       inZone = price >= zoneMin && price <= zoneMax;
       
+      const zoneDistancePct = inZone ? 0 : (price < zoneMin ? ((zoneMin - price) / price * 100) : ((price - zoneMax) / price * 100));
+      const nearThreshold = 0.75; // within 0.75% of the zone is considered near
       if (inZone) {
+        zoneStatus = 'PASS';
         zoneDetails = `Price ${price.toFixed(4)} in ${needsDynamicRecalc ? 'dynamic' : 'original'} zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}]`;
       } else {
-        const distanceDesc = price < zoneMin ? 
-          ((zoneMin - price) / price * 100).toFixed(3) + '% below' :
-          ((price - zoneMax) / price * 100).toFixed(3) + '% above';
+        const distanceDesc = `${zoneDistancePct.toFixed(3)}% ${price < zoneMin ? 'below' : 'above'}`;
+        zoneStatus = zoneDistancePct <= nearThreshold ? 'PARTIAL' : 'FAIL';
         zoneDetails = `Price ${price.toFixed(4)} outside ${needsDynamicRecalc ? 'dynamic' : 'original'} zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}] (${distanceDesc})`;
-        
+
+        if (zoneStatus === 'PARTIAL') {
+          zoneDetails += ' • Near entry zone';
+        }
+
         if (needsDynamicRecalc) {
-          zoneDetails += ` - Zone auto-updated from original [${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}]`;
+          zoneDetails += ` • Zone auto-updated from original [${originalZoneMin.toFixed(4)}, ${originalZoneMax.toFixed(4)}]`;
         }
       }
     } else {
@@ -3655,7 +3663,7 @@ export class ReboundRejectionAgent {
     }
     
       checks.inEntryZone = {
-        status: inZone ? 'PASS' : 'FAIL',
+        status: zoneStatus,
         reason: zoneDetails,
         details: {
           currentPrice: price,
@@ -3870,9 +3878,43 @@ export class ReboundRejectionAgent {
     adjustedMinScore += this.qualityThresholdAdjustment;
     adjustedMinScore = Math.max(30, Math.min(75, adjustedMinScore));
 
+    const filterLabels: Record<string, string> = {
+      trendAlignment: 'Trend alignment',
+      momentum: 'Momentum',
+      rsiPosition: 'RSI position',
+      volatility: 'Volatility',
+      volume: 'Volume confirmation',
+    };
+
+    const qualityFiltersRecord: Record<string, any> = checks.qualityFilters || {};
+    const qualityEntries = Object.entries(qualityFiltersRecord);
+    const rejectFilters = qualityEntries.filter(([, value]) => value?.status === 'REJECT');
+    const failFilters = qualityEntries.filter(([, value]) => value?.status === 'FAIL');
+    const partialFilters = qualityEntries.filter(([, value]) => value?.status === 'PARTIAL');
+
+    let qualityStatus: 'PASS' | 'FAIL' | 'REJECT' | 'PARTIAL' = 'PASS';
+    if (rejectFilters.length > 0) {
+      qualityStatus = 'REJECT';
+    } else if (failFilters.length > 0) {
+      qualityStatus = 'FAIL';
+    } else if (partialFilters.length > 0 || totalQualityScore < adjustedMinScore) {
+      qualityStatus = totalQualityScore >= adjustedMinScore ? 'PARTIAL' : 'FAIL';
+    }
+
+    const issues: string[] = [];
+    if (rejectFilters.length > 0) {
+      issues.push(...rejectFilters.map(([k]) => filterLabels[k] || k));
+    } else if (failFilters.length > 0) {
+      issues.push(...failFilters.map(([k]) => filterLabels[k] || k));
+    } else if (partialFilters.length > 0) {
+      issues.push(...partialFilters.map(([k]) => filterLabels[k] || k));
+    }
+
+    const issueText = issues.length ? ` • Issues: ${issues.join(', ')}` : '';
+
     checks.qualityScore = {
-      status: totalQualityScore >= adjustedMinScore ? 'PASS' : 'FAIL',
-      reason: `Score: ${totalQualityScore}/${adjustedMinScore} required (${level} mode)`,
+      status: qualityStatus,
+      reason: `Score: ${totalQualityScore}/${adjustedMinScore} required (${level} mode)${issueText}`,
       current: totalQualityScore,
       required: adjustedMinScore,
       breakdown: {
@@ -3896,18 +3938,20 @@ export class ReboundRejectionAgent {
     ];
 
     const rejectChecks = Object.values(checks.qualityFilters).filter((c: any) => c.status === 'REJECT');
-    const failedChecks = allChecks.filter(c => c.status !== 'PASS');
-    
-    const canTrade = failedChecks.length === 0 && rejectChecks.length === 0;
+    const failedChecks = allChecks.filter(c => c.status === 'FAIL' || c.status === 'REJECT');
+    const partialChecks = allChecks.filter(c => c.status === 'PARTIAL');
+
+    const canTrade = failedChecks.length === 0 && rejectChecks.length === 0 && partialChecks.length === 0;
 
     return {
       canTrade,
-      reason: canTrade ? 'All checks passed' : `${failedChecks.length} failed checks, ${rejectChecks.length} reject conditions`,
+      reason: canTrade ? 'All checks passed' : `${failedChecks.length} failed, ${partialChecks.length} partial, ${rejectChecks.length} reject conditions`,
       checks,
       summary: {
         totalChecks: allChecks.length,
-        passed: allChecks.length - failedChecks.length,
+        passed: allChecks.length - failedChecks.length - partialChecks.length,
         failed: failedChecks.length,
+        partial: partialChecks.length,
         rejected: rejectChecks.length
       }
     };

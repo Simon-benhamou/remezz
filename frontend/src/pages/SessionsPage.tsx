@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined, RocketOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import TradingDiagnosticsOverview from '../components/TradingDiagnosticsOverview';
 import TradingDiagnosticsCollapsible from '../components/TradingDiagnosticsCollapsible';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
@@ -45,15 +44,16 @@ export default function SessionsPage(){
     try { 
       // Load sessions without heavy includes for better performance
       const sessions = await api.listSessions(mode, false); // Don't include stats by default
-      
-      // Only enrich with basic data, no heavy diagnostics
+
+      // Enrich rows with lightweight metrics
       const enrichedSessions = await Promise.all(sessions.map(async (session: any) => {
         try {
-          // Only get basic metrics for active sessions
-          const perf = session.id && !session.stoppedAt ? await api.getPerf(session.id).catch(() => null) : null;
+          // Pull KPI metrics for all sessions (cheap lookup)
+          const perf = session.id ? await api.getPerf(session.id).catch(() => null) : null;
           const health = session.id && !session.stoppedAt ? await api.getHealth(session.id).catch(() => null) : null;
           const agentState = session.id && !session.stoppedAt ? await api.getAgentState(session.id).catch(() => null) : null;
-          
+          const diagnostics = session.id && !session.stoppedAt ? await api.getDiagnostics(session.id).catch(() => null) : null;
+
           // Get pending orders (lightweight)
           const orders = session.id ? await api.getOrders(session.id).catch(() => []) : [];
           const pendingOrders = orders.filter((o: any) => 
@@ -61,9 +61,19 @@ export default function SessionsPage(){
           );
           
           // Remove automatic diagnostics loading - will be loaded on-demand via collapse
-          
+        
+          const rawWinRate = Number(perf?.winRate ?? 0);
+          const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
+          const roiPct = Number(perf?.roiPct ?? 0);
+
           return {
             ...session,
+            // PnL & ROI metrics
+            realizedPnl: Number(perf?.realizedPnlUsd ?? 0),
+            unrealizedPnl: Number(perf?.unrealizedPnlUsd ?? 0),
+            pnlUsd: Number(perf?.realizedPnlUsd ?? 0) + Number(perf?.unrealizedPnlUsd ?? 0),
+            roiPct,
+            winRate: normalizedWinRate,
             // Performance metrics
             totalTrades: perf?.totalTrades || 0,
             todayTrades: perf?.todayTrades || 0,
@@ -79,11 +89,27 @@ export default function SessionsPage(){
             // Orders info
             pendingOrders: pendingOrders,
             pendingOrdersCount: pendingOrders.length,
-            
+
             // Health status
             healthStatus: health?.status || 'unknown',
             healthScore: health?.score || 0,
             alertCount: health?.alerts?.length || 0,
+
+            // Trading diagnostics snapshot for quick gauge
+            tradingReadiness: diagnostics ? {
+              canTrade: !!diagnostics.canTrade,
+              reason: diagnostics.reason,
+              summary: diagnostics.summary,
+              qualityScore: diagnostics.checks?.qualityScore,
+              percent: (() => {
+                const qs = diagnostics.checks?.qualityScore;
+                if (qs && Number(qs.required)) {
+                  return Math.round(Math.max(0, Math.min(100, (qs.current / qs.required) * 100)));
+                }
+                return diagnostics.canTrade ? 100 : 0;
+              })(),
+            } : null,
+            diagnosticsInitial: diagnostics || null,
           };
         } catch {
           return session;
@@ -177,6 +203,7 @@ export default function SessionsPage(){
       'Win Rate %': (r.winRate || 0).toFixed(1),
       'PnL USD': (r.pnlUsd || 0).toFixed(2),
       'ROI %': (r.roiPct || 0).toFixed(2),
+      'Readiness %': (r.tradingReadiness?.percent || 0).toFixed(0),
       'Total Trades': r.totalTrades || 0,
       'Started': new Date(r.startedAt).toISOString(),
       'Stopped': r.stoppedAt ? new Date(r.stoppedAt).toISOString() : ''
@@ -281,9 +308,6 @@ export default function SessionsPage(){
       fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif'
     }}>
       <Space direction='vertical' style={{ width:'100%' }} size="large">
-        {/* Trading Diagnostics Overview */}
-        <TradingDiagnosticsOverview activeSessions={filteredRows.filter(r => !r.stoppedAt)} />
-        
         {/* API Key Status Warning */}
         <ApiKeyStatusBanner 
           mode={mode as 'live' | 'paper'}
@@ -805,11 +829,51 @@ export default function SessionsPage(){
                 sorter: (a, b) => (a.pnlUsd || 0) - (b.pnlUsd || 0)
               },
               { 
+                title:'Readiness', 
+                width: 120,
+                render:(_:any,r:any)=> {
+                  if (r.stoppedAt) {
+                    return <Tag color="#94a3b8">STOPPED</Tag>;
+                  }
+                  const readiness = r.tradingReadiness;
+                  if (!readiness) {
+                    return <Tag color="#d9d9d9">NO DATA</Tag>;
+                  }
+                  const color = readiness.canTrade ? '#16a34a' : '#dc2626';
+                  const percent = readiness.percent ?? 0;
+                  return (
+                    <Tooltip
+                      title={
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{readiness.reason}</div>
+                          {readiness.qualityScore && (
+                            <div style={{ marginTop: 4 }}>
+                              Quality: {readiness.qualityScore.current}/{readiness.qualityScore.required}
+                            </div>
+                          )}
+                        </div>
+                      }
+                    >
+                      <Space direction="vertical" size={4} align="center">
+                        <Progress
+                          type="circle"
+                          percent={Math.max(0, Math.min(100, percent))}
+                          width={52}
+                          strokeColor={color}
+                          format={() => `${Math.round(Math.max(0, Math.min(100, percent)))}%`}
+                        />
+                        <Tag color={readiness.canTrade ? 'green' : 'red'}>{readiness.canTrade ? 'READY' : 'BLOCKED'}</Tag>
+                      </Space>
+                    </Tooltip>
+                  );
+                },
+                sorter: (a, b) => (a.tradingReadiness?.percent || 0) - (b.tradingReadiness?.percent || 0)
+              },
+              { 
                 title:'ROI %', 
                 dataIndex:'roiPct',
                 width: 80,
                 render:(v:any)=> {
-                  console.log('ROI value:', v);
                   const roi = Number(v||0);
                   return (
                     <span style={{ 
@@ -1023,10 +1087,11 @@ export default function SessionsPage(){
                 }
               }
             ]}
-            expandedRowRender={(record) => (
+          expandedRowRender={(record) => (
               <TradingDiagnosticsCollapsible 
                 sessionId={record.id} 
                 isActive={!record.stoppedAt} 
+                initialDiagnostics={record.diagnosticsInitial}
               />
             )}
           />
@@ -1105,9 +1170,12 @@ export default function SessionsPage(){
               if (String(v.mode) === 'live' && exBal?.totalUsd != null && v.startBalanceUsd != null) {
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd||0), Number(exBal.totalUsd||0));
               }
-              const res = await api.client.post('/api/agent/start', v);
-              message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
+              let hide: (() => void) | null = null;
+              hide = message.loading('Starting agent...', 0);
               setOpen(false);
+              const res = await api.client.post('/api/agent/start', v);
+              if (hide) hide();
+              message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
               await load();
               // Navigate to the created session (preferred), fallback to first active
               const sid = (res as any)?.data?.id;
@@ -1117,6 +1185,7 @@ export default function SessionsPage(){
                 if (active) navigate(`/monitor/${active.id}`);
               }
             } catch (e: any) {
+              if (typeof hide === 'function') hide();
               const msg = String(e?.response?.data?.error || e?.message || e);
               if (msg.includes('active_session_exists')) message.warning('Stop the active session first.');
               else message.error('Failed to start session');
