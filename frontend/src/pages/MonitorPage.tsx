@@ -23,6 +23,7 @@ import MonitorHealthBanner from '../components/MonitorHealthBanner';
 import MonitorMiniPanels from '../components/MonitorMiniPanels';
 import MarketTriggersCard from '../components/MarketTriggersCard';
 import KeyMetricsCard from '../components/KeyMetricsCard';
+import RangeProjectionCard from '../components/RangeProjectionCard';
 import SRVisualizationCard from '../components/SRVisualizationCard';
 import AIInsightsCard from '../components/AIInsightsCard';
 import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
@@ -676,6 +677,19 @@ export default function MonitorPage(){
             ) : (
               <Card title="Key Metrics">
                 <Skeleton active paragraph={{ rows: 3 }} />
+              </Card>
+            )}
+
+            {/* 24h Range Forecast */}
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+              <RangeProjectionCard
+                projection={analysis?.projection}
+                symbol={status?.symbol}
+                price={Number(status?.price ?? analysis?.technical?.last ?? 0)}
+              />
+            ) : (
+              <Card title="24h Range Forecast">
+                <Skeleton active paragraph={{ rows: 4 }} />
               </Card>
             )}
             

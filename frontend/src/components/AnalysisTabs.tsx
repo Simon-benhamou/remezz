@@ -1,11 +1,12 @@
 import React from 'react';
-import { Card, Tabs, Space, Statistic, Tag, Descriptions, Tooltip } from 'antd';
+import { Card, Tabs, Space, Statistic, Tag, Descriptions, Tooltip, Progress } from 'antd';
 
 export default function AnalysisTabs({ analysis }: any){
   const technical = analysis?.technical;
   const sentiment = analysis?.sentiment;
   const indicators = analysis?.indicators;
   const news = analysis?.news;
+  const projection = analysis?.projection;
 
   const techItems = (
     <Space size='large' wrap>
@@ -39,6 +40,46 @@ export default function AnalysisTabs({ analysis }: any){
       <Descriptions.Item label={<Tooltip title="Second resistance above the pivot">R2</Tooltip>}>{piv?.R2?.toFixed?.(4) ?? '-'}</Descriptions.Item>
     </Descriptions>
   );
+  const biasColorMap: Record<string, string> = {
+    bullish: '#16a34a',
+    neutral: '#3b82f6',
+    bearish: '#ef4444',
+  };
+  const projectionContent = projection ? (
+    <Space direction='vertical' size='large' style={{ width: '100%' }}>
+      <Space size='large' wrap>
+        <Statistic title="Upside potential (24h)" value={projection?.rangeUpPct} suffix="%" precision={2} valueStyle={{ color: '#15803d' }} />
+        <Statistic title="Downside potential (24h)" value={projection?.rangeDownPct} suffix="%" precision={2} valueStyle={{ color: '#b91c1c' }} />
+        <Statistic title="Envelope half-range" value={(projection?.rangePct ?? 0) / 2} suffix="%" precision={2} />
+        <Statistic title="Confidence" value={Math.round((projection?.confidence ?? 0) * 100)} suffix="%" precision={0} />
+      </Space>
+      <Space size='large' wrap>
+        <Tag color={biasColorMap[projection?.biasDirection] || 'default'}>
+          Bias: {projection?.biasDirection ?? 'neutral'} (score {projection?.biasScore?.toFixed?.(2) ?? 0})
+        </Tag>
+        <Tag color='cyan'>Upside target ≈ {projection?.rangeUpPrice?.toFixed?.(4) ?? '-'}</Tag>
+        <Tag color='purple'>Downside target ≈ {projection?.rangeDownPrice?.toFixed?.(4) ?? '-'}</Tag>
+      </Space>
+      <div style={{ maxWidth: 360 }}>
+        <Progress
+          percent={Math.round((projection?.confidence ?? 0) * 100)}
+          strokeColor={biasColorMap[projection?.biasDirection] || '#3b82f6'}
+          showInfo
+        />
+      </div>
+      {projection?.components && (
+        <div>
+          <b>Confidence components:</b>
+          <ul>
+            {Object.entries(projection.components).map(([key, val]) => (
+              <li key={key}>{key}: {(Number(val) * 100).toFixed(0)}%</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <details><summary>Raw JSON</summary><pre style={{ margin:0 }}>{JSON.stringify(projection, null, 2)}</pre></details>
+    </Space>
+  ) : <>No projection data available.</>;
   return (
     <Card>
       <Tabs
@@ -52,6 +93,11 @@ export default function AnalysisTabs({ analysis }: any){
               {pivotItems}
               <details><summary>Raw JSON</summary><pre style={{ margin:0 }}>{JSON.stringify(technical, null, 2)}</pre></details>
             </div>
+          },
+          {
+            key: 'projection',
+            label: 'Outlook (24h)',
+            children: projectionContent
           },
           {
             key: 'sent',

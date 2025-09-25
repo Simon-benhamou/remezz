@@ -136,7 +136,9 @@ export async function fullAnalysis(symbol: string) {
       ticker = { last: t?.last, percentage: t?.percentage, baseVolume: t?.baseVolume };
     }
   } catch {}
-  const out = { symbol, technical, indicators, sentiment, news, ticker, sentimentSources };
+  const price = Number(technical?.last ?? ticker?.last ?? 0);
+  const projection = computeProjection(technical, sentiment, price);
+  const out = { symbol, technical, indicators, sentiment, news, ticker, sentimentSources, projection };
   ANALYSIS_CACHE.set(symbol, { ts: now, data: out });
   try {
     if (useGrok) {
@@ -212,4 +214,93 @@ function buildHybridBullets(hybrid: any): string[] {
   }
   bullets.push(`Hybrid score ${(hybrid?.score ?? 0.5).toFixed(2)} (${hybrid?.label || 'neutral'})`);
   return bullets;
+}
+
+function clamp(n: number, min: number, max: number) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function computeProjection(technical: any, sentiment: any, price: number) {
+  if (!technical || !Number.isFinite(price) || price <= 0) return null;
+
+  const atrPct = Number(technical.atrPct ?? 0);
+  const realizedVol = Number(technical.realizedVol ?? 0);
+  let rangePct = Math.max(
+    atrPct > 0 ? atrPct * Math.sqrt(24) : 0,
+    realizedVol > 0 ? realizedVol : 0,
+    atrPct > 0 ? atrPct * 3 : 0
+  );
+  if (!Number.isFinite(rangePct) || rangePct <= 0) rangePct = atrPct > 0 ? atrPct * 2 : 1;
+  rangePct = clamp(rangePct, 0.5, 25);
+
+  const ema20 = Number(technical.ema20 ?? price);
+  const ema50 = Number(technical.ema50 ?? price);
+  const emaSpreadPct = Number.isFinite(ema50) && Math.abs(ema50) > 1e-6
+    ? ((ema20 - ema50) / Math.abs(ema50)) * 100
+    : 0;
+  const emaSlope = Number(technical.ema20Slope ?? 0);
+  const emaSlopePct = Math.abs(ema20) > 1e-6 ? (emaSlope / Math.abs(ema20)) * 100 : 0;
+  const srBias = technical.srBias;
+  const adx = Number(technical.adx14 ?? 0);
+
+  let biasScore = 0;
+  if (emaSpreadPct > 0.5) biasScore += 0.35;
+  if (emaSpreadPct < -0.5) biasScore -= 0.35;
+  if (emaSlopePct > 0.03) biasScore += 0.2;
+  if (emaSlopePct < -0.03) biasScore -= 0.2;
+  if (srBias === 'nearSupport') biasScore += 0.1;
+  if (srBias === 'nearResistance') biasScore -= 0.1;
+  if (technical?.trendStrength != null) {
+    const trendStrength = Number(technical.trendStrength);
+    biasScore += clamp(trendStrength / 10, -0.25, 0.25);
+  }
+  if (sentiment?.score != null) {
+    const sentimentDelta = clamp((Number(sentiment.score) - 0.5) * 1.2, -0.7, 0.7);
+    biasScore += sentimentDelta;
+  }
+  biasScore = clamp(biasScore, -1, 1);
+
+  const biasDirection = biasScore > 0.2 ? 'bullish' : biasScore < -0.2 ? 'bearish' : 'neutral';
+
+  const adxComponent = clamp(adx / 40, 0, 1);
+  const slopeComponent = clamp(Math.abs(emaSlopePct) / 0.08, 0, 1);
+  const spreadComponent = clamp(Math.abs(emaSpreadPct) / 2.0, 0, 1);
+  const sentimentComponent = clamp(Math.abs((Number(sentiment?.score ?? 0.5)) - 0.5) * 2, 0, 1);
+  const biasComponent = clamp(Math.abs(biasScore), 0, 1);
+
+  const confidence = Number(clamp(
+    (biasComponent * 0.35) +
+    (adxComponent * 0.25) +
+    (slopeComponent * 0.15) +
+    (sentimentComponent * 0.15) +
+    (spreadComponent * 0.10),
+    0.15,
+    0.95
+  ).toFixed(3));
+
+  const baseHalfRangePct = rangePct / 2;
+  const upPct = Number((baseHalfRangePct * (1 + Math.max(0, biasScore))).toFixed(2));
+  const downPct = Number((baseHalfRangePct * (1 + Math.max(0, -biasScore))).toFixed(2));
+  const rangeUpPrice = Number((price * (1 + upPct / 100)).toFixed(price >= 2 ? 4 : 6));
+  const rangeDownPriceRaw = price * (1 - downPct / 100);
+  const rangeDownPrice = Number(Math.max(rangeDownPriceRaw, 0).toFixed(price >= 2 ? 4 : 6));
+
+  return {
+    rangePct: Number(rangePct.toFixed(2)),
+    rangeUpPct: upPct,
+    rangeDownPct: downPct,
+    rangeUpPrice,
+    rangeDownPrice,
+    biasDirection,
+    biasScore: Number(biasScore.toFixed(3)),
+    confidence,
+    components: {
+      adx: Number(adxComponent.toFixed(3)),
+      slope: Number(slopeComponent.toFixed(3)),
+      spread: Number(spreadComponent.toFixed(3)),
+      sentiment: Number(sentimentComponent.toFixed(3)),
+      bias: Number(biasComponent.toFixed(3)),
+    }
+  };
 }
