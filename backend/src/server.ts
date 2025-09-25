@@ -26,6 +26,7 @@ import { scannerRouter } from "./routes/scanner.js";
 import { router as intelligentRouter } from "./routes/intelligent.js";
 import { router as arbitrageRouter } from "./routes/arbitrage.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
+import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 const cfg = getConfig();
@@ -109,6 +110,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 startWSHub(wss);
 startEventEngine();
+startArbitrageMonitor();
 
 // Start Smart Agent background job
 console.log('🤖 Starting Smart Agent background checker...');
