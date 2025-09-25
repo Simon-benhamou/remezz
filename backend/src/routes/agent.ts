@@ -88,7 +88,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       maxLeverage: body.maxLeverage,
       dailyLossLimitPct: body.dailyLossLimitPct,
       budgetPct: body.budgetPct,
-      aggressiveness: body.aggressiveness || 'conservative',
+      aggressiveness: body.aggressiveness || 'reactive',
       startBalanceUsd: startBal,
     }, req.user!.id);
 
@@ -134,7 +134,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       timestamp: new Date().toISOString(),
       startBalanceUsd: startBalanceUsd,
       budgetFraction,
-      aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'conservative',
+      aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'reactive',
       userId: req.user!.id,
     } as any).catch(()=>{});
 

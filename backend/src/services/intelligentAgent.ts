@@ -931,8 +931,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         analysis: bestOpportunity,
         selectedAt: now.toISOString(),
         lastScan: now.toISOString(),
-        nextScanDue: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(),
-        minHoldHours: 12,
+        nextScanDue: new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString(),
+        minHoldHours: 8,
         strategy: 'optimized_cost_efficient',
         sleepMode: false
       };
@@ -975,21 +975,32 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     // Normal session logic (not in sleep mode)
     const selectedAt = new Date(config?.selectedAt || now);
     const hoursSinceSelection = (now.getTime() - selectedAt.getTime()) / (1000 * 60 * 60);
+    const minHoldHours = Math.max(2, Number((config as any)?.minHoldHours ?? 12));
     
-    // RULE 1: Minimum 12h hold period
-    if (hoursSinceSelection < 12) {
-      console.log(`⏱️ Session ${session.id}: Only ${hoursSinceSelection.toFixed(1)}h since selection (12h minimum)`);
+    // RULE 1: Minimum hold period (configurable)
+    if (hoursSinceSelection < minHoldHours) {
+      console.log(`⏱️ Session ${session.id}: Only ${hoursSinceSelection.toFixed(1)}h since selection (${minHoldHours}h minimum)`);
       return;
     }
     
-    // RULE 2: Check if there were any trades in the last 12h
-    const recentTrades = session.positions?.length || 0;
+    // RULE 2: Check if there were any trades (fills) in the last 12h ONLY
+    let recentTrades = 0;
+    try {
+      const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      recentTrades = await prisma.fill.count({
+        where: { sessionId: session.id, ts: { gte: twelveHoursAgo } }
+      });
+    } catch (err) {
+      console.warn(`⚠️ Failed to count recent fills for session ${session.id}:`, err);
+      // fallback: do not block rotation on error
+      recentTrades = 0;
+    }
     const hasRecentActivity = recentTrades > 0;
     
     if (hasRecentActivity) {
-      console.log(`📈 Session ${session.id}: Has ${recentTrades} recent trades - keeping current symbol ${session.symbol}`);
-      // Update next check to 24h if there's trading activity
-      const nextCheck = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      console.log(`📈 Session ${session.id}: ${recentTrades} fills in last 12h — keep ${session.symbol}`);
+      // Update next check to 12h (was 24h): be more responsive to market rotation
+      const nextCheck = new Date(now.getTime() + 12 * 60 * 60 * 1000);
       await updateSessionNextCheck(session.id, nextCheck);
       return;
     }

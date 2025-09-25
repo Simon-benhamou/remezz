@@ -1784,17 +1784,37 @@ export class ReboundRejectionAgent {
     }
     const emaVal = Number((snap as any)?.ema20 ?? snap.last ?? 0);
     const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+    const ema50Val = Number((snap as any)?.ema50 ?? snap.last ?? 0);
     const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
     if (slopePctAbs < minSlopeAbsPct) {
-      recordOpsEvent({
-        level: 'info',
-        source: 'entry_gate',
-        message: 'slope_too_flat',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { slopePctAbs, min: minSlopeAbsPct, reason: reasonHint },
-      });
-      return false;
+      const adx = Number((snap as any)?.adx14 ?? 0);
+      const emaSpreadPct = ema50Val !== 0 ? Math.abs((emaVal - ema50Val) / ema50Val) * 100 : 0;
+      const bias: 'long'|'short' = (this.plan as any)?.bias || 'long';
+      const slopeDirOk = bias === 'long' ? emaSlope > 0 : emaSlope < 0;
+      const allowSlopeOverride = slopeDirOk && (
+        (adx >= 24 && slopePctAbs >= minSlopeAbsPct * 0.6) ||
+        (emaSpreadPct >= Math.max(0.3, minSlopeAbsPct * 2) && slopePctAbs >= minSlopeAbsPct * 0.5)
+      );
+      if (allowSlopeOverride) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_gate',
+          message: 'slope_relaxed_for_strong_trend',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { slopePctAbs, min: minSlopeAbsPct, adx, emaSpreadPct, reason: reasonHint },
+        });
+      } else {
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_gate',
+          message: 'slope_too_flat',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { slopePctAbs, min: minSlopeAbsPct, adx, emaSpreadPct, reason: reasonHint },
+        });
+        return false;
+      }
     }
     return true;
   }
@@ -1805,6 +1825,14 @@ export class ReboundRejectionAgent {
     const price = snap.last;
     const bias = this.plan.bias;
     if (bias === 'none') return false;
+
+    const cfg = getConfig();
+    const thresholds = this.effectiveEntryThresholds();
+    const baseMinScores: Record<string, number> = {
+      conservative: cfg.QUALITY_MIN_SCORE_CONSERVATIVE,
+      reactive: cfg.QUALITY_MIN_SCORE_REACTIVE,
+      aggressive: cfg.QUALITY_MIN_SCORE_AGGRESSIVE,
+    };
 
     const adx = Number((snap as any)?.adx14 ?? 0);
     const rsi = Number((snap as any)?.rsi14 ?? 50);
@@ -1950,10 +1978,18 @@ export class ReboundRejectionAgent {
 
     // Required minimum quality score based on aggressiveness + dynamic adjustment
     const level = this.profile?.aggressiveness || 'conservative';
-    let minScore = 55; // Conservative: still selective but more realistic
-    if (level === 'reactive') minScore = 45; // More opportunities
-    if (level === 'aggressive') minScore = 35; // Most opportunities
-    
+    let minScore = baseMinScores[level] ?? cfg.QUALITY_MIN_SCORE_CONSERVATIVE;
+
+    // Optional relief when ATR close to threshold (helps moderate-volatility markets)
+    if (cfg.QUALITY_SCORE_RELIEF_ATR_BONUS) {
+      const atrThreshold = thresholds.ENTRY_MIN_ATR_PCT ?? cfg.ENTRY_MIN_ATR_PCT;
+      if (atrPct >= atrThreshold * 0.85 && atrPct < atrThreshold) {
+        minScore -= 4;
+      } else if (atrPct >= atrThreshold) {
+        minScore -= 2;
+      }
+    }
+
     // Special logic for normal market movements (2-3% potential)
     // Encourage learning on standard setups if agent has low experience
     const potentialMove = Math.abs((snap.last - ema20) / ema20) * 100;
@@ -1974,7 +2010,7 @@ export class ReboundRejectionAgent {
     
     // Apply dynamic adjustment based on recent performance
     minScore += this.qualityThresholdAdjustment;
-    minScore = Math.max(30, Math.min(75, minScore)); // Bounds: 30-75 (more reasonable)
+    minScore = Math.max(25, Math.min(70, minScore)); // Wider lower bound to allow more trades
 
     const passed = qualityScore >= minScore;
     

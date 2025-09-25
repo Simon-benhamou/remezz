@@ -80,6 +80,10 @@ export type Cfg = {
   // Trade quality filters
   MIN_TRADE_PROFIT_PCT: number;     // Minimum expected profit to enter a trade (1-2%)
   MIN_PRICE_MOVEMENT_PCT: number;   // Minimum price movement to consider significant
+  QUALITY_MIN_SCORE_CONSERVATIVE: number;
+  QUALITY_MIN_SCORE_REACTIVE: number;
+  QUALITY_MIN_SCORE_AGGRESSIVE: number;
+  QUALITY_SCORE_RELIEF_ATR_BONUS: boolean;
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -150,6 +154,10 @@ export function getConfig(): Cfg {
     // Trade quality filters
     MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "1.5"), // 1.5% minimum expected profit
     MIN_PRICE_MOVEMENT_PCT: Number(e.MIN_PRICE_MOVEMENT_PCT || "1.0"), // 1% minimum movement to be significant
+    QUALITY_MIN_SCORE_CONSERVATIVE: Number(e.QUALITY_MIN_SCORE_CONSERVATIVE || "48"),
+    QUALITY_MIN_SCORE_REACTIVE: Number(e.QUALITY_MIN_SCORE_REACTIVE || "38"),
+    QUALITY_MIN_SCORE_AGGRESSIVE: Number(e.QUALITY_MIN_SCORE_AGGRESSIVE || "30"),
+    QUALITY_SCORE_RELIEF_ATR_BONUS: (e.QUALITY_SCORE_RELIEF_ATR_BONUS || "false") === "true",
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
     PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "5"), // réduit de 15 à 5 min
