@@ -587,12 +587,24 @@ router.post('/aggressiveness', async (req, res) => {
     const { broadcast } = await import('../ws/hub.js');
     try { broadcast('agent_state', { state: a.state, profile: a.profile }, sym, sessionId); } catch {}
     // persist hint on session profileJson for restarts
-    try { 
-      await (await import('../db/client.js')).prisma.agentSession.update({ 
-        where: { id: sessionId }, 
-        data: { profileJson: a.profile as any } 
-      }); 
-    } catch {}
+    try {
+      const prismaClient = (await import('../db/client.js')).prisma;
+      const existing = await prismaClient.agentSession.findUnique({
+        where: { id: sessionId },
+        select: { profileJson: true }
+      });
+      const existingProfile = (existing?.profileJson as any) || {};
+      const mergedProfile = {
+        ...existingProfile,
+        aggressiveness: val,
+      };
+      await prismaClient.agentSession.update({
+        where: { id: sessionId },
+        data: { profileJson: mergedProfile as any }
+      });
+    } catch (err) {
+      console.error('Failed to persist aggressiveness change:', err);
+    }
     res.json({ ok: true, aggressiveness: val });
   } catch (e:any) {
     res.status(500).json({ error: String(e?.message || e) });
