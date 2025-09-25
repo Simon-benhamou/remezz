@@ -70,7 +70,7 @@ export default function SessionsPage(){
             ...session,
             // PnL & ROI metrics
             realizedPnl: Number(perf?.realizedPnlUsd ?? 0),
-            unrealizedPnl: Number(perf?.unrealizedPnlUsd ?? 0),
+            portfolioUnrealizedPnl: Number(perf?.unrealizedPnlUsd ?? 0),
             pnlUsd: Number(perf?.realizedPnlUsd ?? 0) + Number(perf?.unrealizedPnlUsd ?? 0),
             roiPct,
             winRate: normalizedWinRate,
@@ -84,7 +84,6 @@ export default function SessionsPage(){
             
             // Position info
             currentPosition: agentState?.position || null,
-            unrealizedPnl: agentState?.position?.unrealizedPnl || 0,
             
             // Orders info
             pendingOrders: pendingOrders,
@@ -1118,6 +1117,7 @@ export default function SessionsPage(){
             fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
           }}
           onOk={async ()=>{
+            let hide: (() => void) | null = null;
             try {
               setStarting(true);
               const v = await form.validateFields();
@@ -1170,7 +1170,6 @@ export default function SessionsPage(){
               if (String(v.mode) === 'live' && exBal?.totalUsd != null && v.startBalanceUsd != null) {
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd||0), Number(exBal.totalUsd||0));
               }
-              let hide: (() => void) | null = null;
               hide = message.loading('Starting agent...', 0);
               setOpen(false);
               const res = await api.client.post('/api/agent/start', v);
