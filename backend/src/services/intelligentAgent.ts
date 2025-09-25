@@ -9,6 +9,7 @@ import { requestStrategy } from '../ai/strategyManager.js';
 import { AgentHub } from '../agent/hub.js';
 import { broadcast } from '../ws/hub.js';
 import { mergePlanContainer, savePlan, normalizePlanContainer } from './planStore.js';
+import type { ActivationProfile } from '../agent/state.js';
 
 /**
  * Get list of symbols currently being traded by active agents
@@ -92,12 +93,16 @@ function clampHistory(history: any[] = []): any[] {
 async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason: string) {
   try {
     console.log(`🧠 Refreshing plan for ${sessionId} on ${symbol} (${reason})`);
+    const agent = AgentHub.get(sessionId) as any;
+    if (agent && agent.profile) {
+      const newProfile: ActivationProfile = { ...agent.profile, symbol };
+      agent.profile = newProfile;
+    }
     const plan = await proposePlan(symbol, { fresh: true, sessionId });
     await savePlan(sessionId, plan as any, {
       planMeta: { reason, source: 'intelligent_agent' },
     });
 
-    const agent = AgentHub.get(sessionId);
     if (agent) {
       await agent.propose(plan as any);
       await agent.validateAndArm();
