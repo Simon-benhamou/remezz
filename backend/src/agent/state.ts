@@ -1843,6 +1843,32 @@ export class ReboundRejectionAgent {
     const volume = Number((snap as any)?.volume ?? 0);
     const volumeMA = Number((snap as any)?.volumeMA ?? volume);
     const trendStrength = Number((snap as any)?.trendStrength ?? 0);
+    const trendBias = (snap as any)?.trendBias ?? 'neutral';
+
+    if (cfg.TREND_FILTER_ENABLED) {
+      if (bias === 'long' && trendBias === 'bearish') {
+        recordOpsEvent({
+          level: 'info',
+          source: 'trend_filter',
+          message: 'global_trend_blocks_long',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { trendBias, bias },
+        });
+        return false;
+      }
+      if (bias === 'short' && trendBias === 'bullish') {
+        recordOpsEvent({
+          level: 'info',
+          source: 'trend_filter',
+          message: 'global_trend_blocks_short',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { trendBias, bias },
+        });
+        return false;
+      }
+    }
 
     let qualityScore = 0;
     const reasons: string[] = [];

@@ -3,6 +3,7 @@ import { getOHLCV, getTicker } from '../data/market.js';
 import { ema, rsi, atr } from '../data/indicators.js';
 import { llmJSON } from './llm.js';
 import { getConfig } from '../utils/env.js';
+import { getHybridSentiment } from '../sentiment/index.js';
 // Track per-symbol daily Grok usage (in-memory)
 const GROK_DAILY: Map<string, number> = new Map();
 const ANALYSIS_CACHE = new Map<string,{ ts:number, data:any }>();
@@ -36,6 +37,24 @@ export async function fullAnalysis(symbol: string) {
   };
 
   let sentiment:any = null, news:any = null;
+  const sentimentSources:any[] = [];
+  let hybridSentiment: any = null;
+  try {
+    hybridSentiment = await getHybridSentiment(symbol);
+    if (hybridSentiment) {
+      sentimentSources.push({
+        source: 'hybrid',
+        score: hybridSentiment.score,
+        label: hybridSentiment.label,
+        confidence: hybridSentiment.confidence,
+        fetchedAt: hybridSentiment.fetchedAt,
+        providers: hybridSentiment.sources,
+      });
+    }
+  } catch (error) {
+    console.warn('Hybrid sentiment failed:', error);
+  }
+
   const cfg = getConfig();
   // decide whether to use Grok today (once/day) or if major reversal
   let useGrok = false;
@@ -57,6 +76,7 @@ export async function fullAnalysis(symbol: string) {
       .trim(), { cacheKey: `sentiment:${symbol}`, ttlMin: Number(process.env.ANALYSIS_TTL_MIN || 360), provider: useGrok ? 'grok' : undefined, context: { symbol, kind: 'analysis_sentiment' } }
     );
     sentiment = JSON.parse(s);
+    sentimentSources.push({ source: 'llm', ...sentiment });
   } catch {}
 
   try {
@@ -89,6 +109,13 @@ export async function fullAnalysis(symbol: string) {
       };
     } catch {}
   }
+
+  if (hybridSentiment || sentiment) {
+    const combined = combineSentiments(hybridSentiment, sentiment);
+    sentiment = combined.sentiment;
+    if (combined.extra) sentimentSources.push(...combined.extra);
+  }
+
   if (!news) {
     try {
       news = {
@@ -109,7 +136,7 @@ export async function fullAnalysis(symbol: string) {
       ticker = { last: t?.last, percentage: t?.percentage, baseVolume: t?.baseVolume };
     }
   } catch {}
-  const out = { symbol, technical, indicators, sentiment, news, ticker };
+  const out = { symbol, technical, indicators, sentiment, news, ticker, sentimentSources };
   ANALYSIS_CACHE.set(symbol, { ts: now, data: out });
   try {
     if (useGrok) {
@@ -120,4 +147,69 @@ export async function fullAnalysis(symbol: string) {
     }
   } catch {}
   return out;
+}
+
+function combineSentiments(hybrid: any, llm: any) {
+  if (!hybrid && !llm) return { sentiment: null, extra: [] };
+  if (hybrid && !llm) {
+    return {
+      sentiment: {
+        label: hybrid.label,
+        score: hybrid.score,
+        confidence: hybrid.confidence,
+        bullets: buildHybridBullets(hybrid),
+      },
+      extra: [],
+    };
+  }
+  if (!hybrid && llm) {
+    return { sentiment: llm, extra: [] };
+  }
+
+  const sources: any[] = [];
+  if (hybrid) sources.push({ source: 'hybrid', score: hybrid.score, label: hybrid.label, confidence: hybrid.confidence });
+  if (llm) sources.push({ source: 'llm', score: llm.score, label: llm.label });
+
+  const avgScore = (Number(hybrid?.score ?? 0.5) + Number(llm?.score ?? 0.5)) / 2;
+  let label: 'bullish' | 'bearish' | 'neutral' = 'neutral';
+  const votes = [hybrid?.label, llm?.label].filter(Boolean);
+  const bulls = votes.filter((x) => x === 'bullish').length;
+  const bears = votes.filter((x) => x === 'bearish').length;
+  if (bulls > bears) label = 'bullish';
+  else if (bears > bulls) label = 'bearish';
+  else if (avgScore > 0.55) label = 'bullish';
+  else if (avgScore < 0.45) label = 'bearish';
+
+  const bullets: string[] = [];
+  if (Array.isArray(llm?.bullets)) bullets.push(...llm.bullets.slice(0, 2));
+  if (hybrid) {
+    bullets.push(...buildHybridBullets(hybrid).slice(0, 2));
+  }
+
+  const sentiment = {
+    label,
+    score: Number(avgScore.toFixed(3)),
+    confidence: hybrid?.confidence ?? undefined,
+    bullets,
+  };
+
+  return { sentiment, extra: sources };
+}
+
+function buildHybridBullets(hybrid: any): string[] {
+  const bullets: string[] = [];
+  if (hybrid?.sources?.length) {
+    const provider = hybrid.sources[0];
+    if (provider?.mentions != null) {
+      bullets.push(`Mentions: ${provider.mentions}`);
+    }
+    if (provider?.velocity != null) {
+      bullets.push(`Sentiment velocity: ${(provider.velocity * 100).toFixed(1)}%`);
+    }
+    if (Array.isArray(provider?.keywords) && provider.keywords.length) {
+      bullets.push(`Hot keywords: ${provider.keywords.slice(0, 3).join(', ')}`);
+    }
+  }
+  bullets.push(`Hybrid score ${(hybrid?.score ?? 0.5).toFixed(2)} (${hybrid?.label || 'neutral'})`);
+  return bullets;
 }

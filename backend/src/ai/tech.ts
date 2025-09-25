@@ -2,12 +2,15 @@
 import { getOHLCV } from '../data/market.js';
 import { ema, rsi, atr, adx } from '../data/indicators.js';
 import { classifyRegime, RegimeProfile } from './regime.js';
+import { getConfig } from '../utils/env.js';
 
 export type TechnicalSnapshot = {
   symbol: string;
   last: number;
   ema20: number;
   ema50: number;
+  ema100: number;
+  ema200: number;
   rsi14: number;
   atr14: number;
   atr14_1h?: number;
@@ -26,6 +29,7 @@ export type TechnicalSnapshot = {
   hurst: number;
   adxSlope: number;
   trendStrength: number;
+  trendBias: 'bullish' | 'bearish' | 'neutral';
   regime?: RegimeProfile;
   volumeAvg?: number;
   volume24h?: number;
@@ -83,6 +87,17 @@ function hurstExponent(values: number[]) {
   
   // Clamp between 0 and 1
   return Math.max(0, Math.min(1, hurst));
+}
+
+function computeTrendBias(ema100: number, ema200: number, neutralBandBps: number): 'bullish' | 'bearish' | 'neutral' {
+  if (!isFinite(ema100) || !isFinite(ema200) || ema100 === 0 || ema200 === 0) {
+    return 'neutral';
+  }
+  const diffPct = ((ema100 - ema200) / ema200) * 100;
+  const band = Math.abs(neutralBandBps) / 10000 * 100; // convert bps to percent
+  if (diffPct > band) return 'bullish';
+  if (diffPct < -band) return 'bearish';
+  return 'neutral';
 }
 
 // Compute daily pivots from OHLCV (prefer 1h or 15m).
@@ -198,8 +213,12 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   // Indicators
   const ema20Arr = ema(closes15, 20);
   const ema50Arr = ema(closes15, 50);
+  const ema100Arr = ema(closes15, 100);
+  const ema200Arr = ema(closes15, 200);
   const ema20v = last(ema20Arr);
   const ema50v = last(ema50Arr);
+  const ema100v = ema100Arr.length ? ema100Arr.at(-1)! : ema20v;
+  const ema200v = ema200Arr.length ? ema200Arr.at(-1)! : ema50v;
   const ema20Slope = ema20Arr.length >= 2 ? ema20Arr.at(-1)! - ema20Arr.at(-2)! : 0;
   const rsi14Arr = rsi(closes15, 14);
   const rsi14v = rsi14Arr[rsi14Arr.length - 1] ?? 50;
@@ -259,12 +278,16 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const hurst = hurstExponent(closes15.slice(-256));
   const adxPrev = adx14Arr.length >= 2 ? adx14Arr[adx14Arr.length - 2] : adx14v;
   const adxSlope = adx14v - (adxPrev ?? adx14v);
+  const { TREND_FILTER_NEUTRAL_BAND_BPS } = getConfig();
+  const trendBias = computeTrendBias(ema100v, ema200v, TREND_FILTER_NEUTRAL_BAND_BPS);
 
   const snapshot: TechnicalSnapshot = {
     symbol,
     last: lastPrice,
     ema20: ema20v,
     ema50: ema50v,
+    ema100: ema100v,
+    ema200: ema200v,
     rsi14: rsi14v,
     atr14: atr14v,
     atr14_1h: atr1h,
@@ -287,6 +310,7 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     hurst,
     adxSlope,
     trendStrength,
+    trendBias,
     volumeAvg: avgVolume,
     volume24h: recentVolume,
     volume24hChangePct: volumeChangePct,
