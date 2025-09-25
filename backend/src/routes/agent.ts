@@ -14,6 +14,7 @@ import { PlanZ } from '../agent/planSchema.js';
 import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
+import { savePlan } from '../services/planStore.js';
 
 export const router = Router();
 
@@ -187,7 +188,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         // Plan + arm
         const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
         // Persist LLM plan JSON on the session so we can re-arm after a reboot without re-calling LLM
-        try { await prisma.agentSession.update({ where: { id: s.id }, data: { planJson: plan as any } }); } catch {}
+        try { await savePlan(s.id, plan as any); } catch (err) { console.warn('Failed to persist plan', err); }
         const a = AgentHub.get(s.id);
         if (a) {
           await a.propose(plan as any);
@@ -541,10 +542,7 @@ router.post('/propose', async (req,res) => {
     if (!a) return res.status(400).json({ error: 'no_agent' });
     // Persist the proposed plan on session
     try { 
-      await prisma.agentSession.update({ 
-        where: { id: sessionId }, 
-        data: { planJson: plan as any } 
-      }); 
+      await savePlan(sessionId, plan as any); 
     } catch {}
     await a.propose(plan as any);
     await a.validateAndArm();

@@ -4,6 +4,11 @@ import { fullAnalysis } from '../ai/analysis.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
+import { proposePlan } from '../ai/planOrchestrator.js';
+import { requestStrategy } from '../ai/strategyManager.js';
+import { AgentHub } from '../agent/hub.js';
+import { broadcast } from '../ws/hub.js';
+import { mergePlanContainer, savePlan, normalizePlanContainer } from './planStore.js';
 
 /**
  * Get list of symbols currently being traded by active agents
@@ -74,6 +79,47 @@ export interface IntelligentAnalysis {
     riskLevel: 'low' | 'medium' | 'high';
   };
   regime: string;
+}
+
+const MAX_HISTORY_ENTRIES = 40;
+
+function clampHistory(history: any[] = []): any[] {
+  if (!Array.isArray(history)) return [];
+  if (history.length <= MAX_HISTORY_ENTRIES) return history;
+  return history.slice(-MAX_HISTORY_ENTRIES);
+}
+
+async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason: string) {
+  try {
+    console.log(`🧠 Refreshing plan for ${sessionId} on ${symbol} (${reason})`);
+    const plan = await proposePlan(symbol, { fresh: true, sessionId });
+    await savePlan(sessionId, plan as any, {
+      planMeta: { reason, source: 'intelligent_agent' },
+    });
+
+    const agent = AgentHub.get(sessionId);
+    if (agent) {
+      await agent.propose(plan as any);
+      await agent.validateAndArm();
+    }
+
+    try {
+      const { strategy: strat, levels: lvls } = await requestStrategy({
+        symbol,
+        trigger: reason,
+        sessionId,
+        fresh: true,
+        force: true,
+      });
+      broadcast('strategy', { ...(strat as any), levels: lvls }, symbol, sessionId);
+    } catch (err) {
+      console.warn(`Strategy refresh failed for ${sessionId}:`, err);
+    }
+
+    broadcast('plan_refreshed', { symbol, reason, plan }, symbol, sessionId);
+  } catch (error) {
+    console.error(`❌ Failed to refresh plan for ${sessionId}:`, error);
+  }
 }
 
 /**
@@ -777,16 +823,13 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
       
       console.log(`💤 Setting session ${sessionId} to sleep mode - next scan in 3h`);
       
-      await (prisma.agentSession as any).update({
+      await prisma.agentSession.update({
         where: { id: sessionId },
         data: {
           profileJson: sleepConfig as any,
-          planJson: {
-            intelligentHistory: sleepHistory
-          } as any
-          // No currentSymbol set - session stays without symbol
         }
       });
+      await mergePlanContainer(sessionId, { intelligentHistory: clampHistory(sleepHistory) });
       
       console.log(`✅ Session ${sessionId} set to sleep mode for 3h`);
       return true; // Still successful, but in sleep mode
@@ -827,23 +870,23 @@ export async function initializeIntelligentAgent(sessionId: string): Promise<boo
       console.error(`❌ SQL update failed:`, error);
     }
     
-    await (prisma.agentSession as any).update({
+    await prisma.agentSession.update({
       where: { id: sessionId },
       data: {
         profileJson: {
           ...intelligentConfig,
           originalSymbol: bestOpportunity.symbol
         } as any,
-        planJson: {
-          intelligentHistory
-        } as any
       }
     });
-    
+    await mergePlanContainer(sessionId, { intelligentHistory: clampHistory(intelligentHistory) });
+
     console.log(`✅ Session ${sessionId} updated successfully with currentSymbol: ${bestOpportunity.symbol}`);
-    
+
     console.log(`✅ Intelligent Agent initialized with ${bestOpportunity.symbol}`);
     console.log(`🎯 Score: ${bestOpportunity.score}, Confidence: ${bestOpportunity.confidence}`);
+
+    await refreshPlanAndStrategy(sessionId, bestOpportunity.symbol, 'intelligent_init');
     console.log(`📋 Opportunity: ${bestOpportunity.opportunity.type} ${bestOpportunity.opportunity.direction}`);
     
     return true;
@@ -937,7 +980,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         sleepMode: false
       };
       
-      const existingHistory = session.planJson?.intelligentHistory || [];
+      const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];
       const newHistory = [...existingHistory, {
         timestamp: now.toISOString(),
         action: 'intelligent_wakeup',
@@ -964,9 +1007,10 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         where: { id: session.id },
         data: {
           profileJson: wakeUpConfig as any,
-          planJson: { intelligentHistory: newHistory } as any
         }
       });
+      await mergePlanContainer(session.id, { intelligentHistory: clampHistory(newHistory) });
+      await refreshPlanAndStrategy(session.id, bestOpportunity.symbol, 'intelligent_wakeup');
       
       console.log(`✅ Session ${session.id} woken up with ${bestOpportunity.symbol}`);
       return;
@@ -1023,7 +1067,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         sleepReason: 'No qualifying opportunities in market scan'
       };
       
-      const existingHistory = session.planJson?.intelligentHistory || [];
+      const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];
       const newHistory = [...existingHistory, {
         timestamp: now.toISOString(),
         action: 'intelligent_enter_sleep',
@@ -1037,10 +1081,10 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         where: { id: session.id },
         data: {
           profileJson: sleepConfig as any,
-          planJson: { intelligentHistory: newHistory } as any
           // Keep currentSymbol for now - will be cleared if needed
         }
       });
+      await mergePlanContainer(session.id, { intelligentHistory: clampHistory(newHistory) });
       
       console.log(`💤 Session ${session.id} entered sleep mode for 3h`);
       return;
@@ -1068,7 +1112,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         sleepMode: false
       };
       
-      const existingHistory = session.planJson?.intelligentHistory || [];
+      const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];
       const newHistory = [...existingHistory, {
         timestamp: now.toISOString(),
         action: 'intelligent_switch_12h',
@@ -1097,10 +1141,11 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         where: { id: session.id },
         data: {
           profileJson: updatedConfig as any,
-          planJson: { intelligentHistory: newHistory } as any
         }
       });
-      
+      await mergePlanContainer(session.id, { intelligentHistory: clampHistory(newHistory) });
+      await refreshPlanAndStrategy(session.id, bestOpportunity.symbol, 'intelligent_switch');
+
     } else {
       // Keep current symbol, extend hold period
       console.log(`✅ Session ${session.id} keeping ${session.symbol} (insufficient improvement: ${scoreImprovement.toFixed(1)})`);
@@ -1173,7 +1218,7 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
     console.log(`🔄 Forcing switch: ${currentSymbol} → ${bestOpportunity}`);
     
     const now = new Date();
-    const sessionPlan = session.planJson as any || {};
+    const sessionPlan = normalizePlanContainer(session.planJson);
     const config = sessionPlan.intelligentConfig || {};
     
     // Update session with forced re-selection
@@ -1187,14 +1232,14 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
     };
     
     const existingHistory = sessionPlan.intelligentHistory || [];
-    const newHistory = [...existingHistory, {
+    const newHistory = clampHistory([...existingHistory, {
       timestamp: now.toISOString(),
       action: 'manual_reselection',
       fromSymbol: currentSymbol,
       toSymbol: bestOpportunity,
       reasoning: 'User-triggered manual re-selection',
       forced: true
-    }];
+    }]);
     
     // Update database
     await prisma.$executeRaw`
@@ -1203,16 +1248,11 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
       WHERE "id" = ${sessionId}
     `;
     
-    await prisma.agentSession.update({
-      where: { id: sessionId },
-      data: {
-        planJson: {
-          ...sessionPlan,
-          intelligentConfig: updatedConfig,
-          intelligentHistory: newHistory
-        }
-      }
+    await mergePlanContainer(sessionId, {
+      intelligentConfig: updatedConfig,
+      intelligentHistory: newHistory,
     });
+    await refreshPlanAndStrategy(sessionId, bestOpportunity, 'manual_reselection');
     
     console.log(`✅ Manual re-selection completed: ${currentSymbol} → ${bestOpportunity}`);
     

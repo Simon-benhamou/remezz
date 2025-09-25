@@ -7,6 +7,7 @@ import { broadcast } from '../ws/hub.js';
 import { AgentHub } from '../agent/hub.js';
 import { recordOpsEvent } from '../monitor/ops.js';
 import { inspectExposure } from '../broker/live.js';
+import { extractPersistedPlan } from '../services/planStore.js';
 
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
@@ -254,9 +255,9 @@ export async function startEventEngine(){
             // If a persisted plan exists, re-arm the agent automatically without calling LLM again
             try {
               const a = (await import('../agent/hub.js')).AgentHub.get(s.id) as any;
-              const planJson = (s as any).planJson;
-              if (a && planJson) {
-                await a.propose(planJson);
+              const plan = extractPersistedPlan((s as any).planJson);
+              if (a && plan) {
+                await a.propose(plan);
                 await a.validateAndArm();
               }
             } catch {}

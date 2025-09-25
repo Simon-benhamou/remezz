@@ -809,6 +809,7 @@ export default function SessionsPage(){
                 dataIndex:'roiPct',
                 width: 80,
                 render:(v:any)=> {
+                  console.log('ROI value:', v);
                   const roi = Number(v||0);
                   return (
                     <span style={{ 

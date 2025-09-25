@@ -7,6 +7,7 @@ import {
   checkIntelligentOpportunities,
   type IntelligentAnalysis 
 } from './intelligentAgent.js';
+import { normalizePlanContainer } from './planStore.js';
 
 interface SmartConfig {
   minHoldDuration: number;
@@ -278,7 +279,8 @@ export async function getIntelligentAgentStatus(sessionId: string): Promise<any>
       return { isSmartAgent: false, isIntelligent: false };
     }
     
-    const history = session.planJson as any;
+    const historyContainer = normalizePlanContainer(session.planJson);
+    const history = historyContainer?.intelligentHistory;
     const smartHistory = (session as any).smartHistory || {};
     
     // Get current analysis if available
@@ -296,7 +298,7 @@ export async function getIntelligentAgentStatus(sessionId: string): Promise<any>
       selectedAt: config.selectedAt || null,
       lastScan: config.lastScan || null,
       nextScanDue: (session as any).nextRescanAt || config.nextScanDue || null,
-      history: history?.intelligentHistory || [],
+      history: history || [],
       
       // Enhanced monitoring info
       status: currentAnalysis ? 'active' : 'waiting',
