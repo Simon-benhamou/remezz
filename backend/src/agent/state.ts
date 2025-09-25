@@ -3687,8 +3687,9 @@ export class ReboundRejectionAgent {
     const ema50 = Number((snap as any)?.ema50 ?? price);
     const atrPct = Number((snap as any)?.atrPct ?? 0);
     const volume = Number((snap as any)?.volume ?? 0);
-    const volumeMA = Number((snap as any)?.volumeMA ?? volume);
-    const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
+    const volumeMA = Number((snap as any)?.volumeMA ?? 0);
+    const hasVolumeData = volumeMA > 0 && volume >= 0;
+    const volumeRatio = hasVolumeData ? volume / volumeMA : null;
     const emaSpread = ((ema20 - ema50) / ema50) * 100;
 
     // Individual quality filter checks
@@ -3817,23 +3818,26 @@ export class ReboundRejectionAgent {
     };
 
     // Volume check with detailed thresholds
-    let volumeStatus = 'FAIL';
+    let volumeStatus: 'PASS' | 'FAIL' | 'PARTIAL' | 'REJECT' | 'UNKNOWN' = hasVolumeData ? 'FAIL' : 'UNKNOWN';
     let volumePoints = 0;
-    let volumeDetails = '';
+    let volumeDetails = hasVolumeData ? '' : 'Volume data unavailable (ignored)';
     
-    if (volumeRatio >= 1.3) { 
+    const ratioToFixed = (digits = 2) => volumeRatio != null ? volumeRatio.toFixed(digits) : 'n/a';
+
+    if (hasVolumeData && volumeRatio! >= 1.3) { 
       volumeStatus = 'PASS'; 
       volumePoints = 15; 
-      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (excellent)`;
-    } else if (volumeRatio >= 1.1) { 
+      volumeDetails = `Volume ${ratioToFixed()}x average (excellent)`;
+    } else if (hasVolumeData && volumeRatio! >= 1.1) { 
       volumeStatus = 'PARTIAL'; 
       volumePoints = 10; 
-      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (good, need 1.3x for max points)`;
-    } else if (volumeRatio < 0.5) { 
+      volumeDetails = `Volume ${ratioToFixed()}x average (good, need 1.3x for max points)`;
+    } else if (hasVolumeData && volumeRatio! < 0.5) { 
       volumeStatus = 'REJECT'; 
-      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (too low, minimum 0.5x)`;
-    } else {
-      volumeDetails = `Volume ${volumeRatio.toFixed(2)}x average (insufficient, need 1.1x minimum)`;
+      volumeDetails = `Volume ${ratioToFixed()}x average (too low, minimum 0.5x)`;
+    } else if (hasVolumeData) {
+      volumeStatus = 'FAIL';
+      volumeDetails = `Volume ${ratioToFixed()}x average (insufficient, need 1.1x minimum)`;
     }
     
     checks.qualityFilters.volume = {

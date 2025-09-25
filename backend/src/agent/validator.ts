@@ -38,15 +38,51 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   }
 
   // Auto-detect zone from S/R if price is null
-  const near = plan.zone.type === 'support' ? snap.support : snap.resistance;
-  const ref = Number.isFinite(near) ? near : (plan.zone.type === 'support' ? Math.min(...snap.supports.map(s=>s.price)) : Math.max(...snap.resistances.map(r=>r.price)));
+  const price = snap.last;
+  const supports = snap.supports || [];
+  const resistances = snap.resistances || [];
 
-  // Make a narrow zone around ref using max_distance_pct
+  const near = plan.zone.type === 'support' ? snap.support : snap.resistance;
+  const fallbackSupport = supports.length ? Math.min(...supports.map(s => s.price)) : price * 0.97;
+  const fallbackResistance = resistances.length ? Math.max(...resistances.map(r => r.price)) : price * 1.03;
+  let center = Number.isFinite(near) ? near : (plan.zone.type === 'support' ? fallbackSupport : fallbackResistance);
+
+  // Make a narrow zone around center using max_distance_pct
   const maxDistPct = Math.max(0.1, Math.min(5, plan.entry_rule.max_distance_pct || 0.4));
-  const half = ref * (maxDistPct/100);
-  const from = plan.zone.type === 'support' ? ref - half : ref - half; // symmetric small band
-  const to   = plan.zone.type === 'support' ? ref + half : ref + half;
-  const mid  = (from + to) / 2;
+  let half = Math.max(center * (maxDistPct / 100), price * 0.001);
+
+  // Ensure zone is on the correct side of the current price
+  const buffer = price * 0.0005; // 0.05%
+  if (plan.bias === 'long') {
+    if (center >= price) {
+      center = price - Math.max(buffer, price * (maxDistPct / 400));
+    }
+    if (center + half >= price - buffer) {
+      const shift = (center + half) - (price - buffer);
+      center -= shift;
+    }
+  } else if (plan.bias === 'short') {
+    if (center <= price) {
+      center = price + Math.max(buffer, price * (maxDistPct / 400));
+    }
+    if (center - half <= price + buffer) {
+      const shift = (price + buffer) - (center - half);
+      center += shift;
+    }
+  }
+
+  let from = center - half;
+  let to = center + half;
+  if (from < 0) {
+    const shift = -from;
+    from += shift;
+    to += shift;
+    center += shift;
+  }
+  if (to <= from) {
+    to = from + Math.max(buffer, price * 0.0001);
+  }
+  const mid = (from + to) / 2;
 
   // ATR: prefer 1h ATR when plan timeframe is 1h, else 15m
   const atrAbs = (tf === '1h' && (snap as any).atr14_1h) ? (snap as any).atr14_1h as number : snap.atr14;
