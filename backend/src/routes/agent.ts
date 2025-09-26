@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { startSession, stopSession, activeSession } from '../session/session.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
@@ -6,7 +6,7 @@ import { getUserCredentials } from '../services/userCredentials.js';
 import { prisma } from '../db/client.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
 import { initializeIntelligentSmartAgent, getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgent.js';
-import { getBestIntelligentOpportunity } from '../services/intelligentAgent.js';
+import { getBestIntelligentOpportunity, triggerIntelligentReselection } from '../services/intelligentAgent.js';
 import type { IntelligentAnalysis } from '../services/intelligentAgent.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
@@ -19,6 +19,54 @@ import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan } from '../services/planStore.js';
 
 export const router = Router();
+
+export async function handleSmartReselect(req: AuthenticatedRequest, res: Response) {
+  try {
+    const { sessionId } = req.params;
+
+    const session = await prisma.agentSession.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const isSmartAgent = (session as any).isSmartAgent || false;
+    if (!isSmartAgent) {
+      return res.status(400).json({ error: 'Not a Smart Agent session' });
+    }
+
+    console.log(`🔄 Manual re-selection triggered for Smart Agent ${sessionId}`);
+
+    const result = await triggerIntelligentReselection(sessionId);
+
+    if (result.success) {
+      console.log(`✅ Re-selection successful: ${result.oldSymbol} → ${result.newSymbol}`);
+      return res.json({
+        success: true,
+        oldSymbol: result.oldSymbol,
+        newSymbol: result.newSymbol,
+        reason: result.reason,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    console.log(`⚠️ Re-selection skipped: ${result.reason}`);
+    return res.json({
+      success: false,
+      reason: result.reason,
+      currentSymbol: result.currentSymbol,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Smart Agent re-selection error:', error);
+    return res.status(500).json({
+      error: 'Re-selection failed',
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
 
 router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
@@ -629,56 +677,4 @@ router.delete('/sessions/:id', async (req,res)=>{
 });
 
 // Force re-selection for Smart AUTO agents
-router.post('/smart/:sessionId/reselect', authenticateUser, async (req: AuthenticatedRequest, res) => {
-  try {
-    const { sessionId } = req.params;
-    
-    // Vérifier que c'est bien un agent AUTO/Smart
-    const session = await prisma.agentSession.findUnique({
-      where: { id: sessionId }
-    });
-    
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
-    
-    const isSmartAgent = (session as any).isSmartAgent || false;
-    if (!isSmartAgent) {
-      return res.status(400).json({ error: 'Not a Smart Agent session' });
-    }
-    
-    console.log(`🔄 Manual re-selection triggered for Smart Agent ${sessionId}`);
-    
-    // Importer la fonction de re-sélection intelligente
-    const { triggerIntelligentReselection } = await import('../services/intelligentAgent.js');
-    
-    // Déclencher la re-sélection
-    const result = await triggerIntelligentReselection(sessionId);
-    
-    if (result.success) {
-      console.log(`✅ Re-selection successful: ${result.oldSymbol} → ${result.newSymbol}`);
-      res.json({
-        success: true,
-        oldSymbol: result.oldSymbol,
-        newSymbol: result.newSymbol,
-        reason: result.reason,
-        timestamp: new Date().toISOString()
-      });
-    } else {
-      console.log(`⚠️ Re-selection skipped: ${result.reason}`);
-      res.json({
-        success: false,
-        reason: result.reason,
-        currentSymbol: result.currentSymbol,
-        timestamp: new Date().toISOString()
-      });
-    }
-    
-  } catch (error) {
-    console.error('❌ Smart Agent re-selection error:', error);
-    res.status(500).json({ 
-      error: 'Re-selection failed',
-      details: error instanceof Error ? error.message : String(error)
-    });
-  }
-});
+router.post('/smart/:sessionId/reselect', authenticateUser, handleSmartReselect);
