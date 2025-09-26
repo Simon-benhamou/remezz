@@ -128,6 +128,27 @@ async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason:
   }
 }
 
+/** Check if a symbol is already used by another active session */
+async function isSymbolInUse(symbol: string, excludeSessionId?: string): Promise<boolean> {
+  try {
+    const conflict = await prisma.agentSession.findFirst({
+      where: {
+        stoppedAt: null,
+        id: excludeSessionId ? { not: excludeSessionId } : undefined,
+        OR: [
+          { symbol },
+          { currentSymbol: symbol },
+        ],
+      },
+      select: { id: true },
+    });
+    return !!conflict;
+  } catch (err) {
+    console.warn('isSymbolInUse check failed:', err);
+    return false;
+  }
+}
+
 /**
  * Get optimized list of top performing cryptos for analysis (max 20)
  */
@@ -887,7 +908,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
     // Pass sessionId as excludeSessionId to avoid self-conflict
-    const bestOpportunity = preset ?? await getBestIntelligentOpportunity(sessionId);
+    let bestOpportunity = preset ?? await getBestIntelligentOpportunity(sessionId);
     
     if (!bestOpportunity) {
       console.log('💤 No valid opportunities found - creating session in sleep mode for 2h');
@@ -927,6 +948,33 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       return true; // Still successful, but in sleep mode
     }
     
+    // Last-minute conflict check to avoid duplicate allocation (race-safe)
+    if (await isSymbolInUse(bestOpportunity.symbol, sessionId)) {
+      console.log(`🚫 Conflict: ${bestOpportunity.symbol} already in use — re-evaluating alternatives`);
+      const retry = await getBestIntelligentOpportunity(sessionId);
+      if (!retry || retry.symbol === bestOpportunity.symbol) {
+        // Enter short sleep and retry later to avoid churn
+        const sleepConfig = {
+          isIntelligent: true,
+          selectedAt: new Date().toISOString(),
+          analysis: null,
+          lastScan: new Date().toISOString(),
+          nextScanDue: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2h sleep
+          minHoldHours: 0,
+          strategy: 'sleep_mode_conflict',
+          sleepMode: true,
+          sleepReason: 'symbol_conflict'
+        };
+        await prisma.agentSession.update({ where: { id: sessionId }, data: { profileJson: sleepConfig as any } });
+        await mergePlanContainer(sessionId, { intelligentHistory: clampHistory([{ timestamp: new Date().toISOString(), action: 'intelligent_enter_sleep', reason: 'symbol_conflict', nextScan: sleepConfig.nextScanDue }]) });
+        console.log(`💤 ${sessionId} sleeping 2h due to symbol conflict`);
+        return true;
+      }
+      // Use alternative
+      bestOpportunity = retry;
+      console.log(`🔄 Switching allocation to alternative ${bestOpportunity.symbol}`);
+    }
+
     // Update session with the selected symbol using profileJson for metadata
     const intelligentConfig = {
       isIntelligent: true,
@@ -1278,6 +1326,13 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
                         bestOpportunity.confidence > 0.75; // Higher confidence required
     
     if (shouldSwitch) {
+      // Avoid duplicate allocation if another agent already took it
+      if (await isSymbolInUse(bestOpportunity.symbol, session.id)) {
+        console.log(`🚫 Allocation conflict on ${bestOpportunity.symbol} — skipping switch`);
+        const nextCheck = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+        await updateSessionNextCheck(session.id, nextCheck);
+        return;
+      }
       console.log(`🔄 SWITCH: ${session.id} from ${session.symbol} to ${bestOpportunity.symbol}`);
       console.log(`📈 Score improvement: ${scoreImprovement.toFixed(1)} points (confidence: ${bestOpportunity.confidence})`);
       
@@ -1424,6 +1479,14 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
       };
     }
     
+    // Ensure target symbol is not already in use
+    if (await isSymbolInUse(best.symbol, sessionId)) {
+      return {
+        success: false,
+        currentSymbol,
+        reason: `Conflict: ${best.symbol} already in use by another agent`
+      };
+    }
     // Force symbol switch regardless of timing
     console.log(`🔄 Forcing switch: ${currentSymbol} → ${best.symbol}`);
     
