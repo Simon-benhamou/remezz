@@ -301,30 +301,95 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
  * Top cryptos by volume/market cap - focus on liquid markets only
  * Filters out symbols already active in other agents
  */
+const FALLBACK_STATIC_SYMBOLS = [
+  'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT',
+  'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
+  'LINK/USDT', 'UNI/USDT', 'BCH/USDT', 'XLM/USDT', 'ATOM/USDT',
+  'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'BTC/USDT'
+];
+
 async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
-  // Top 20 most liquid perpetuals - reordered to avoid Bitcoin bias
-  const staticList = [
-    'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 'ADA/USDT', 
-    'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
-    'LINK/USDT', 'UNI/USDT', 'BCH/USDT', 'XLM/USDT', 'ATOM/USDT', 
-    'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'BTC/USDT'
-  ];
-  
-  // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives (excluding current session)
+  try {
+    const { EXCHANGE_ID } = getConfig();
+    const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
+    if (!ExchangeClass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
+
+    const exchange = new ExchangeClass({
+      enableRateLimit: true,
+      options: { defaultType: 'swap' }
+    });
+
+    await exchange.loadMarkets();
+    const markets = Object.values(exchange.markets || {});
+
+    const usdPerps = markets.filter((market: any) => {
+      if (!market) return false;
+      const isSwap = market.swap === true || market.type === 'swap';
+      if (!isSwap) return false;
+      if (market.active === false) return false;
+      const settle = (market.settle || market.quote || '').toUpperCase();
+      return settle === 'USD' || settle === 'USDT';
+    });
+
+    if (usdPerps.length === 0) {
+      console.warn('⚠️ No USD-settled perpetuals detected on exchange, using static fallback');
+      return applyActiveFilter(FALLBACK_STATIC_SYMBOLS, excludeSessionId);
+    }
+
+    const volumeScore = (market: any) => {
+      const info = market?.info || {};
+      const candidates = [
+        info.volumeUsd24h,
+        info.turnover24h,
+        info.volume24h,
+        info.volume,
+        market?.baseVolume,
+        market?.quoteVolume
+      ];
+      for (const value of candidates) {
+        const num = Number(value);
+        if (!Number.isNaN(num) && num > 0) return num;
+      }
+      return 0;
+    };
+
+    usdPerps.sort((a, b) => volumeScore(b) - volumeScore(a));
+
+    const normalized = usdPerps.map((market: any) => {
+      const base = (market.base || '').toUpperCase();
+      const symbol = market.symbol || '';
+      if (symbol.includes('/USDT')) return `${base}/USDT`;
+      if (symbol.includes('/USD:USD')) return `${base}/USDT`;
+      if (symbol.includes('/USD')) return `${base}/USDT`;
+      return `${base}/USDT`;
+    });
+
+    const uniqueSymbols = normalized.filter((symbol: string, idx: number, arr: string[]) => symbol && arr.indexOf(symbol) === idx);
+    const topSymbols = uniqueSymbols.slice(0, 40);
+
+    console.log(`📊 Derived ${topSymbols.length} fallback symbols directly from ${EXCHANGE_ID} markets`);
+    return applyActiveFilter(topSymbols, excludeSessionId);
+  } catch (error) {
+    console.error('Error generating dynamic fallback list:', error);
+    return applyActiveFilter(FALLBACK_STATIC_SYMBOLS, excludeSessionId);
+  }
+}
+
+async function applyActiveFilter(symbols: string[], excludeSessionId?: string): Promise<string[]> {
   try {
     const activeSymbols = await getActiveAgentSymbols(excludeSessionId);
-    const availableSymbols = staticList.filter(symbol => !activeSymbols.includes(symbol));
-    
-    if (availableSymbols.length > 0) {
-      console.log(`📊 Static list: ${availableSymbols.length} available, ${staticList.length - availableSymbols.length} filtered out`);
-      return availableSymbols;
-    } else {
-      console.log('⚠️ All static symbols are active - returning full list as last resort');
-      return staticList;
+    const available = symbols.filter(symbol => !activeSymbols.includes(symbol));
+
+    if (available.length > 0) {
+      console.log(`📊 Fallback list after conflict filter: ${available.length} available (${symbols.length - available.length} filtered)`);
+      return available;
     }
+
+    console.log('⚠️ All fallback symbols currently active - returning original list');
+    return symbols;
   } catch (error) {
-    console.error('Error filtering static list:', error);
-    return staticList;
+    console.error('Error filtering fallback symbols:', error);
+    return symbols;
   }
 }
 
