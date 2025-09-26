@@ -853,7 +853,7 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string): P
 /**
  * Get the best opportunity with detailed explanation
  */
-export async function getBestIntelligentOpportunity(excludeSessionId?: string): Promise<IntelligentAnalysis | null> {
+export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number }): Promise<IntelligentAnalysis | null> {
   // Pass excludeSessionId through the selection chain
   const opportunities = await scanIntelligentOpportunities(excludeSessionId);
 
@@ -865,12 +865,22 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string): 
   // Enforce a minimum confidence threshold for selection
   const { COOLDOWN_CONFIDENCE_MIN } = getConfig();
   const minConf = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || COOLDOWN_CONFIDENCE_MIN || 0.6)));
+  const baseMinProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
+  const relaxSteps = Math.max(0, Number(opts?.relaxSteps || 0));
 
-  const minProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
-  const confident = opportunities.filter(o => (o?.confidence ?? 0) >= minConf && ((o as any).projectionConfidence ?? 0) >= minProj);
+  // Regime-aware + adaptive relaxation per candidate
+  const confident = opportunities.filter(o => {
+    const proj = (o as any).projectionConfidence ?? 0;
+    const adx = o.metrics?.adx ?? 0;
+    // In trending markets (ADX>20) require full threshold, else allow 0.05 lower
+    const regimeAdj = adx > 20 ? 0 : 0.05;
+    const relaxed = Math.min(0.95, Math.max(0.4, baseMinProj - regimeAdj - relaxSteps * 0.05));
+    const ok = (o?.confidence ?? 0) >= minConf && proj >= relaxed;
+    return ok;
+  });
   if (confident.length === 0) {
     const top = opportunities[0];
-    console.log(`⚠️ All candidates below thresholds (analysis>=${minConf}, projection>=${minProj}). Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}. Returning null.`);
+    console.log(`⚠️ All candidates below thresholds (analysis>=${minConf}, projection>=${baseMinProj}, relaxSteps=${relaxSteps}). Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}. Returning null.`);
     return null;
   }
 
@@ -1173,12 +1183,20 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       
       console.log(`⏰ Session ${session.id}: Waking up from sleep mode - scanning for opportunities`);
       
-      // Try to find opportunities after sleep (exclude current session)
-      const bestOpportunity = await getBestIntelligentOpportunity(session.id);
+      // Adaptive relaxation after missed scans
+      const miss = Math.max(0, Number((config?.sleepMisses ?? 0)));
+      // Try to find opportunities after sleep (exclude current session) with relax
+      const bestOpportunity = await getBestIntelligentOpportunity(session.id, { relaxSteps: miss >= 2 ? 1 : 0 });
       
       if (!bestOpportunity) {
-        console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 2h`);
         const nextCheck = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 2h sleep extension
+        const newMiss = miss + 1;
+        console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 2h (miss=${newMiss})`);
+        // Persist sleepMisses to allow auto-relax after two misses
+        try {
+          const sleepCfg = { ...(config || {}), nextScanDue: nextCheck.toISOString(), lastScan: now.toISOString(), sleepMisses: newMiss };
+          await prisma.agentSession.update({ where: { id: session.id }, data: { profileJson: sleepCfg as any } });
+        } catch {}
         await updateSessionNextCheck(session.id, nextCheck);
         return;
       }
@@ -1194,7 +1212,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         nextScanDue: new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString(),
         minHoldHours: 8,
         strategy: 'optimized_cost_efficient',
-        sleepMode: false
+        sleepMode: false,
+        sleepMisses: 0
       };
       
       const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];

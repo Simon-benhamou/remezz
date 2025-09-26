@@ -464,7 +464,8 @@ router.get('/sessions', async (req,res)=>{
       stoppedAt: r.stoppedAt,
       startBalanceUsd: r.startBalanceUsd,
       aggressiveness,
-      isSmartAgent: (r as any).profileJson?.isSmartAgent || profile?.isIntelligent || false,
+      // Detect Smart Agent from either top-level flag or profileJson
+      isSmartAgent: (r as any).isSmartAgent || (r as any).profileJson?.isSmartAgent || profile?.isIntelligent || false,
       smartConfig: (r as any).profileJson?.smartConfig,
       ...stats
     };
