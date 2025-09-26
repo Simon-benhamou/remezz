@@ -20,9 +20,11 @@ import { savePlan } from '../services/planStore.js';
 
 export const router = Router();
 
-export async function handleSmartReselect(req: AuthenticatedRequest, res: Response) {
+async function processSmartReselect(sessionId: string, res: Response) {
   try {
-    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'session_id_required' });
+    }
 
     const session = await prisma.agentSession.findUnique({
       where: { id: sessionId }
@@ -677,4 +679,12 @@ router.delete('/sessions/:id', async (req,res)=>{
 });
 
 // Force re-selection for Smart AUTO agents
-router.post('/smart/:sessionId/reselect', authenticateUser, handleSmartReselect);
+router.post('/reselect', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  const sessionId = (req.body?.sessionId || req.query?.sessionId || '').toString().trim();
+  return processSmartReselect(sessionId, res);
+});
+
+// Backwards compatibility for legacy path
+router.post('/smart/:sessionId/reselect', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  return processSmartReselect(req.params.sessionId, res);
+});

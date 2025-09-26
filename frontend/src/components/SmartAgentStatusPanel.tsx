@@ -303,21 +303,14 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
               onClick={async () => {
                 try {
                   // Forcer une nouvelle sélection immédiate
-                  const response = await fetch(`/api/agent/smart/${sessionId}/reselect`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                  });
-                  
-                  if (response.ok) {
-                    message.success('🎯 Re-sélection lancée! Analyse en cours...');
-                    // Recharger le status après 2 secondes
-                    setTimeout(() => {
-                      loadStatus();
-                    }, 2000);
-                  } else {
-                    message.error('Erreur lors de la re-sélection');
-                  }
+                  await api.client.post('/api/agent/reselect', { sessionId });
+                  message.success('🎯 Re-sélection lancée! Analyse en cours...');
+                  // Recharger le status après 2 secondes
+                  setTimeout(() => {
+                    loadStatus();
+                  }, 2000);
                 } catch (error) {
+                  console.error('Smart re-selection trigger error:', error);
                   message.error('Impossible de relancer la sélection');
                 }
               }}
