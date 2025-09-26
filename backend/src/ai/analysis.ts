@@ -221,7 +221,7 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-function computeProjection(technical: any, sentiment: any, price: number) {
+export function computeProjection(technical: any, sentiment: any, price: number) {
   if (!technical || !Number.isFinite(price) || price <= 0) return null;
 
   const atrPct = Number(technical.atrPct ?? 0);

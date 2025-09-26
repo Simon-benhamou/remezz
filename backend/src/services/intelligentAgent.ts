@@ -1,6 +1,6 @@
 import { prisma } from '../db/client.js';
 import { getTicker } from '../data/market.js';
-import { fullAnalysis } from '../ai/analysis.js';
+import { fullAnalysis, computeProjection } from '../ai/analysis.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
@@ -56,6 +56,7 @@ export interface IntelligentAnalysis {
   score: number;
   rank: number;
   confidence: number;
+  projectionConfidence?: number;
   reasoning: {
     summary: string;
     technical: string[];
@@ -456,6 +457,15 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
     // Sentiment score (only if IA was used)
     const sentimentScore = sentiment ? calculateSentimentComponent(sentiment) : 6.0; // Neutral default
 
+    // Projection confidence (range forecast) derived from technicals without requiring LLM
+    let projectionConfidence = 0;
+    try {
+      const proj = computeProjection(technical as any, sentiment, Number(ticker?.last ?? metrics.momentum));
+      if (proj && typeof (proj as any).confidence === 'number') {
+        projectionConfidence = Number((proj as any).confidence) || 0;
+      }
+    } catch {}
+
     // Reweighted composite score - technical analysis priority
     const compositeScore = (
       momentumScore * 0.30 +      // 30% momentum (increased)
@@ -486,6 +496,7 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
       score: finalScore,
       rank: 0, // Will be set after ranking all symbols
       confidence: Math.round(confidence * 100) / 100,
+      projectionConfidence: Math.round(projectionConfidence * 1000) / 1000,
       reasoning,
       metrics,
       opportunity,
@@ -834,10 +845,11 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string): 
   const { COOLDOWN_CONFIDENCE_MIN } = getConfig();
   const minConf = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || COOLDOWN_CONFIDENCE_MIN || 0.6)));
 
-  const confident = opportunities.filter(o => (o?.confidence ?? 0) >= minConf);
+  const minProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
+  const confident = opportunities.filter(o => (o?.confidence ?? 0) >= minConf && ((o as any).projectionConfidence ?? 0) >= minProj);
   if (confident.length === 0) {
     const top = opportunities[0];
-    console.log(`⚠️ All candidates below confidence threshold (${minConf}). Top=${top.symbol} conf=${top.confidence}. Returning null.`);
+    console.log(`⚠️ All candidates below thresholds (analysis>=${minConf}, projection>=${minProj}). Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}. Returning null.`);
     return null;
   }
 
@@ -878,7 +890,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     const bestOpportunity = preset ?? await getBestIntelligentOpportunity(sessionId);
     
     if (!bestOpportunity) {
-      console.log('💤 No valid opportunities found - creating session in sleep mode for 3h');
+      console.log('💤 No valid opportunities found - creating session in sleep mode for 2h');
       
       // Create session in sleep mode with 3h scan interval instead of fallback to Bitcoin
       const sleepConfig = {
@@ -886,7 +898,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
         selectedAt: new Date().toISOString(),
         analysis: null,
         lastScan: new Date().toISOString(),
-        nextScanDue: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(), // 3h sleep mode
+        nextScanDue: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2h sleep mode
         minHoldHours: 0, // No minimum in sleep mode
         strategy: 'sleep_mode_3h',
         sleepMode: true,
@@ -898,10 +910,10 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
         action: 'intelligent_sleep',
         reason: 'No qualifying opportunities found',
         nextScan: sleepConfig.nextScanDue,
-        scanInterval: '3h'
+        scanInterval: '2h'
       }];
       
-      console.log(`💤 Setting session ${sessionId} to sleep mode - next scan in 3h`);
+      console.log(`💤 Setting session ${sessionId} to sleep mode - next scan in 2h`);
       
       await prisma.agentSession.update({
         where: { id: sessionId },
@@ -911,7 +923,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       });
       await mergePlanContainer(sessionId, { intelligentHistory: clampHistory(sleepHistory) });
       
-      console.log(`✅ Session ${sessionId} set to sleep mode for 3h`);
+      console.log(`✅ Session ${sessionId} set to sleep mode for 2h`);
       return true; // Still successful, but in sleep mode
     }
     
@@ -1117,8 +1129,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       const bestOpportunity = await getBestIntelligentOpportunity(session.id);
       
       if (!bestOpportunity) {
-        console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 3h`);
-        const nextCheck = new Date(now.getTime() + 3 * 60 * 60 * 1000); // 3h sleep extension
+        console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 2h`);
+        const nextCheck = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 2h sleep extension
         await updateSessionNextCheck(session.id, nextCheck);
         return;
       }
@@ -1224,14 +1236,14 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     const currentScore = refreshedCurrent?.score ?? currentAnalysis?.score ?? 0;
     
     if (!bestOpportunity) {
-      console.log(`💤 Session ${session.id}: No opportunities found - switching to sleep mode for 3h`);
+      console.log(`💤 Session ${session.id}: No opportunities found - switching to sleep mode for 2h`);
       
       // Switch to sleep mode instead of extending hold
       const sleepConfig = {
         ...config,
         analysis: null,
         lastScan: now.toISOString(),
-        nextScanDue: new Date(now.getTime() + 3 * 60 * 60 * 1000).toISOString(), // 3h sleep
+        nextScanDue: new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString(), // 2h sleep
         sleepMode: true,
         sleepReason: 'No qualifying opportunities in market scan'
       };
@@ -1255,7 +1267,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       });
       await mergePlanContainer(session.id, { intelligentHistory: clampHistory(newHistory) });
       
-      console.log(`💤 Session ${session.id} entered sleep mode for 3h`);
+      console.log(`💤 Session ${session.id} entered sleep mode for 2h`);
       return;
     }
     

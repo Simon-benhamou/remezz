@@ -97,6 +97,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     
     let prefetchedOpportunity: IntelligentAnalysis | null = null;
     let smartInitPromise: Promise<boolean> | null = null;
+    let shouldActivate = true;
     if (isSmartAgent) {
       console.log('🎯 Creating Auto-Select Agent - scanning for best opportunity...');
       try {
@@ -104,12 +105,17 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         if (prefetchedOpportunity?.symbol) {
           symbol = prefetchedOpportunity.symbol;
           console.log(`✅ Prefetched best symbol: ${symbol}`);
+        } else {
+          // No confident symbol right now: do NOT fall back to ETH trading
+          // We still need a placeholder symbol for DB schema; keep requested symbol if provided, otherwise use ETH/USDT
+          symbol = symbol || 'ETH/USDT';
+          shouldActivate = false; // defer activation; session will start in sleep mode via intelligent initializer
         }
       } catch (error) {
         console.warn('⚠️ Prefetch intelligent opportunity failed:', error);
-      }
-      if (!symbol) {
-        symbol = 'ETH/USDT'; // Fallback temporary symbol
+        // As above, set a placeholder symbol but defer activation
+        symbol = symbol || 'ETH/USDT';
+        shouldActivate = false;
       }
     } else {
       // Ensure symbol is provided for non-smart agents
@@ -190,7 +196,8 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
     if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
     budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
-    await AgentHub.activate(s.id, {
+    if (shouldActivate) {
+      await AgentHub.activate(s.id, {
       symbol,
       mode,
       maxLeverage: Math.min(10, Math.max(1, body.maxLeverage ?? 4)),
@@ -201,7 +208,10 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       budgetFraction,
       aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'reactive',
       userId: req.user!.id,
-    } as any).catch(()=>{});
+      } as any).catch(()=>{});
+    } else {
+      console.log(`⏸️ Deferring agent activation for ${s.id} (smart sleep startup)`);
+    }
 
     // Initialize Auto-Select Agent BEFORE responding (for better UX)
     if (isSmartAgent) {
@@ -211,6 +221,26 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
           .then((success) => {
             if (success) {
               console.log(`✅ Auto-Select Agent ${s.id} initialized successfully (async)`);
+              // If we deferred activation and we found an opportunity, activate now with the selected symbol
+              if (!shouldActivate) {
+                prisma.agentSession.findUnique({ where: { id: s.id } }).then(async (updated) => {
+                  const sym = updated?.symbol;
+                  if (sym) {
+                    await AgentHub.activate(s.id, {
+                      symbol: sym,
+                      mode,
+                      maxLeverage: Math.min(10, Math.max(1, body.maxLeverage ?? 4)),
+                      riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
+                      dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
+                      timestamp: new Date().toISOString(),
+                      startBalanceUsd: startBalanceUsd,
+                      budgetFraction,
+                      aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'reactive',
+                      userId: req.user!.id,
+                    } as any).catch(()=>{});
+                  }
+                }).catch(()=>{});
+              }
             } else {
               console.warn(`⚠️ Auto-Select Agent ${s.id} initialization returned false`);
             }
