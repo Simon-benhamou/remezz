@@ -153,6 +153,11 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       } catch (e:any) {
         return res.status(502).json({ error: 'exchange_balance_failed', details: String(e?.message || e) });
       }
+    } else {
+      // PAPER DEFAULT: if not provided, default to 1000 USD per agent
+      if (!startBal || startBal <= 0) {
+        startBal = Number(process.env.DEFAULT_PAPER_BALANCE_USD || 1000);
+      }
     }
     const s = await startSession(symbol, mode, startBal, {
       riskPerTradePct: body.riskPerTradePct,
@@ -204,7 +209,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
       dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
       timestamp: new Date().toISOString(),
-      startBalanceUsd: startBalanceUsd,
+      startBalanceUsd: startBal,
       budgetFraction,
       aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'reactive',
       userId: req.user!.id,
@@ -233,7 +238,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
                       riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
                       dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
                       timestamp: new Date().toISOString(),
-                      startBalanceUsd: startBalanceUsd,
+                      startBalanceUsd: startBal,
                       budgetFraction,
                       aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'reactive',
                       userId: req.user!.id,
