@@ -106,15 +106,15 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
           symbol = prefetchedOpportunity.symbol;
           console.log(`✅ Prefetched best symbol: ${symbol}`);
         } else {
-          // No confident symbol right now: do NOT fall back to ETH trading
-          // We still need a placeholder symbol for DB schema; keep requested symbol if provided, otherwise use ETH/USDT
-          symbol = symbol || 'ETH/USDT';
+          // No confident symbol right now: do NOT fall back to trading
+          // Use a placeholder symbol for DB visibility; skip activation
+          symbol = symbol || 'SMART/SLEEP';
           shouldActivate = false; // defer activation; session will start in sleep mode via intelligent initializer
         }
       } catch (error) {
         console.warn('⚠️ Prefetch intelligent opportunity failed:', error);
         // As above, set a placeholder symbol but defer activation
-        symbol = symbol || 'ETH/USDT';
+        symbol = symbol || 'SMART/SLEEP';
         shouldActivate = false;
       }
     } else {
@@ -128,7 +128,10 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       }
     }
     // Ensure we resolve a perpetual market symbol; return descriptive error if not available
-    try { const s = await (await import('../exchange/ccxtClient.js')).resolveSymbol(symbol); symbol = s; } catch (e:any) { return res.status(400).json({ error: 'symbol_not_found_perp', details: String(e?.message || e) }); }
+    // Skip resolution when Smart agent is starting in sleep mode (placeholder symbol)
+    if (!(isSmartAgent && !shouldActivate)) {
+      try { const s = await (await import('../exchange/ccxtClient.js')).resolveSymbol(symbol); symbol = s; } catch (e:any) { return res.status(400).json({ error: 'symbol_not_found_perp', details: String(e?.message || e) }); }
+    }
   
     let startBal = startBalanceUsd;
     if (mode === 'live') {
