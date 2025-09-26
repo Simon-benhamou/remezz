@@ -824,16 +824,26 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string): P
 export async function getBestIntelligentOpportunity(excludeSessionId?: string): Promise<IntelligentAnalysis | null> {
   // Pass excludeSessionId through the selection chain
   const opportunities = await scanIntelligentOpportunities(excludeSessionId);
-  
+
   if (opportunities.length === 0) {
     console.log('⚠️ No opportunities found - all cryptos failed analysis criteria');
     return null;
   }
-  
-  const best = opportunities[0];
-  console.log(`🎯 Best opportunity: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence})`);
+
+  // Enforce a minimum confidence threshold for selection
+  const { COOLDOWN_CONFIDENCE_MIN } = getConfig();
+  const minConf = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || COOLDOWN_CONFIDENCE_MIN || 0.6)));
+
+  const confident = opportunities.filter(o => (o?.confidence ?? 0) >= minConf);
+  if (confident.length === 0) {
+    const top = opportunities[0];
+    console.log(`⚠️ All candidates below confidence threshold (${minConf}). Top=${top.symbol} conf=${top.confidence}. Returning null.`);
+    return null;
+  }
+
+  const best = confident[0];
+  console.log(`🎯 Best opportunity: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence} ≥ ${minConf})`);
   console.log(`📝 Reasoning: ${best.reasoning.summary}`);
-  
   return best;
 }
 
@@ -1014,6 +1024,83 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
   try {
     const config = session.profileJson as any;
     const now = new Date();
+    
+    // Fast guard: if we suffered a cluster of losses recently, trigger an immediate re-evaluation
+    try {
+      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+      const recentLossExits = await prisma.order.count({
+        where: {
+          sessionId: session.id,
+          status: 'filled',
+          source: 'agent',
+          createdAt: { gte: oneHourAgo },
+          // Exit orders produced by the agent include ".exit" in the clientOrderId
+          clientOrderId: { contains: '.exit' }
+        }
+      });
+      if (recentLossExits >= 3) {
+        console.log(`🚨 Loss cluster detected for ${session.id} (${recentLossExits} exits < 60m) — forcing re-evaluation`);
+        const best = await getBestIntelligentOpportunity(session.id);
+        if (best && best.symbol && best.symbol !== session.symbol) {
+          const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];
+          const history = [...existingHistory, {
+            timestamp: now.toISOString(),
+            action: 'intelligent_switch_loss_cluster',
+            fromSymbol: session.symbol,
+            toSymbol: best.symbol,
+            score: best.score,
+            confidence: best.confidence,
+            reasoning: best.reasoning.summary,
+            recentLossExits
+          }];
+          try {
+            await prisma.$executeRaw`
+              UPDATE "AgentSession"
+              SET "symbol" = ${best.symbol}, "currentSymbol" = ${best.symbol}, "lastSymbolSwitchAt" = NOW()
+              WHERE id = ${session.id}
+            `;
+          } catch (err) {
+            console.warn('Loss-cluster switch SQL update failed:', err);
+          }
+          const updated = {
+            ...(config || {}),
+            analysis: best,
+            selectedAt: now.toISOString(),
+            lastScan: now.toISOString(),
+            nextScanDue: new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString(),
+            switchReason: `loss_cluster_${recentLossExits}`,
+            sleepMode: false
+          };
+          await prisma.agentSession.update({ where: { id: session.id }, data: { profileJson: updated as any } });
+          await mergePlanContainer(session.id, { intelligentHistory: clampHistory(history) });
+          await refreshPlanAndStrategy(session.id, best.symbol, 'intelligent_switch_loss_cluster');
+          return; // handled
+        } else {
+          // No better symbol found — enter short sleep to avoid churn
+          const sleepConfig = {
+            ...(config || {}),
+            analysis: null,
+            lastScan: now.toISOString(),
+            nextScanDue: new Date(now.getTime() + 60 * 60 * 1000).toISOString(), // 1h sleep
+            sleepMode: true,
+            sleepReason: `loss_cluster_${recentLossExits}`
+          };
+          const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];
+          const history = [...existingHistory, {
+            timestamp: now.toISOString(),
+            action: 'intelligent_enter_sleep',
+            reason: `loss_cluster_${recentLossExits}`,
+            previousSymbol: session.symbol,
+            nextScan: sleepConfig.nextScanDue
+          }];
+          await prisma.agentSession.update({ where: { id: session.id }, data: { profileJson: sleepConfig as any } });
+          await mergePlanContainer(session.id, { intelligentHistory: clampHistory(history) });
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn(`Loss-cluster evaluation failed for ${session.id}:`, err);
+    }
     
     // Check if session is in sleep mode
     if (config?.sleepMode) {
@@ -1303,24 +1390,21 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
     const currentSymbol = session.symbol;
     console.log(`📊 Current symbol: ${currentSymbol}`);
     
-    // Get optimized crypto list (same logic as automatic selection, exclude current session)
-    const optimizedCryptos = await getOptimizedCryptoList(sessionId);
-    
-    if (!optimizedCryptos || optimizedCryptos.length === 0) {
-      return { 
-        success: false, 
+    // Compute best opportunity with confidence filter (exclude current session)
+    const best = await getBestIntelligentOpportunity(sessionId);
+
+    if (!best) {
+      return {
+        success: false,
         currentSymbol,
-        reason: 'No suitable cryptocurrencies found' 
+        reason: 'No confident opportunity (below threshold)'
       };
     }
-    
-    // Find best opportunity
-    const bestOpportunity = optimizedCryptos[0]; // Already sorted by score
-    
-    console.log(`🎯 Best opportunity found: ${bestOpportunity} (current: ${currentSymbol})`);
-    
+
+    console.log(`🎯 Best opportunity found: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence})`);
+
     // Check if it's different from current
-    if (bestOpportunity === currentSymbol) {
+    if (best.symbol === currentSymbol) {
       return {
         success: false,
         currentSymbol,
@@ -1329,7 +1413,7 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
     }
     
     // Force symbol switch regardless of timing
-    console.log(`🔄 Forcing switch: ${currentSymbol} → ${bestOpportunity}`);
+    console.log(`🔄 Forcing switch: ${currentSymbol} → ${best.symbol}`);
     
     const now = new Date();
     const sessionPlan = normalizePlanContainer(session.planJson);
@@ -1350,7 +1434,7 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
       timestamp: now.toISOString(),
       action: 'manual_reselection',
       fromSymbol: currentSymbol,
-      toSymbol: bestOpportunity,
+      toSymbol: best.symbol,
       reasoning: 'User-triggered manual re-selection',
       forced: true
     }]);
@@ -1358,7 +1442,7 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
     // Update database
     await prisma.$executeRaw`
       UPDATE "AgentSession" 
-      SET "symbol" = ${bestOpportunity}, "currentSymbol" = ${bestOpportunity}, "lastSymbolSwitchAt" = NOW()
+      SET "symbol" = ${best.symbol}, "currentSymbol" = ${best.symbol}, "lastSymbolSwitchAt" = NOW()
       WHERE "id" = ${sessionId}
     `;
     
@@ -1366,14 +1450,14 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
       intelligentConfig: updatedConfig,
       intelligentHistory: newHistory,
     });
-    await refreshPlanAndStrategy(sessionId, bestOpportunity, 'manual_reselection');
+    await refreshPlanAndStrategy(sessionId, best.symbol, 'manual_reselection');
     
-    console.log(`✅ Manual re-selection completed: ${currentSymbol} → ${bestOpportunity}`);
+    console.log(`✅ Manual re-selection completed: ${currentSymbol} → ${best.symbol}`);
     
     return {
       success: true,
       oldSymbol: currentSymbol,
-      newSymbol: bestOpportunity,
+      newSymbol: best.symbol,
       reason: 'Manual re-selection successful'
     };
     
