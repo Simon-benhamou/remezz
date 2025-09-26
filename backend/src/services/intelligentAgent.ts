@@ -1055,9 +1055,21 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     }
     
     console.log(`🔍 Session ${session.id}: No trades in 12h+ - evaluating switch from ${session.symbol}`);
+
+    // Refresh current symbol analysis so we compare against latest data
+    let refreshedCurrent: IntelligentAnalysis | null = null;
+    if (session.symbol) {
+      try {
+        refreshedCurrent = await calculateIntelligentScore(session.symbol);
+      } catch (err) {
+        console.warn(`⚠️ Failed to refresh analysis for current symbol ${session.symbol}:`, err);
+      }
+    }
     
     // Get current best opportunity (cost-optimized scan, exclude current session)
     const bestOpportunity = await getBestIntelligentOpportunity(session.id);
+    const currentAnalysis = config?.analysis;
+    const currentScore = refreshedCurrent?.score ?? currentAnalysis?.score ?? 0;
     
     if (!bestOpportunity) {
       console.log(`💤 Session ${session.id}: No opportunities found - switching to sleep mode for 3h`);
@@ -1096,8 +1108,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     }
     
     // Check if we should switch (significant improvement + different symbol)
-    const currentAnalysis = config?.analysis;
-    const scoreImprovement = bestOpportunity.score - (currentAnalysis?.score || 0);
+    const scoreImprovement = bestOpportunity.score - currentScore;
     const shouldSwitch = bestOpportunity.symbol !== session.symbol &&
                         scoreImprovement > 1.0 && // Higher threshold for switches
                         bestOpportunity.confidence > 0.75; // Higher confidence required
@@ -1155,6 +1166,39 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       // Keep current symbol, extend hold period
       console.log(`✅ Session ${session.id} keeping ${session.symbol} (insufficient improvement: ${scoreImprovement.toFixed(1)})`);
       const nextCheck = new Date(now.getTime() + 12 * 60 * 60 * 1000); // 12h retry
+
+      const keepAnalysis = bestOpportunity.symbol === session.symbol
+        ? bestOpportunity
+        : (refreshedCurrent ?? currentAnalysis ?? bestOpportunity);
+
+      const updatedConfig = {
+        ...config,
+        analysis: keepAnalysis,
+        lastScan: now.toISOString(),
+        nextScanDue: nextCheck.toISOString(),
+        sleepMode: false
+      };
+
+      const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];
+      const newHistory = [...existingHistory, {
+        timestamp: now.toISOString(),
+        action: 'intelligent_keep_refresh',
+        symbol: session.symbol,
+        score: keepAnalysis?.score,
+        confidence: keepAnalysis?.confidence,
+        reasoning: keepAnalysis?.reasoning?.summary,
+        improvement: scoreImprovement,
+        hoursHeld: hoursSinceSelection.toFixed(1),
+        trades: recentTrades
+      }];
+
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: {
+          profileJson: updatedConfig as any,
+        }
+      });
+      await mergePlanContainer(session.id, { intelligentHistory: clampHistory(newHistory) });
       await updateSessionNextCheck(session.id, nextCheck);
     }
     
