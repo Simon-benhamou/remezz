@@ -3675,9 +3675,10 @@ export class ReboundRejectionAgent {
       };
 
     // Momentum gates
+    const momentumOk = this.passesEntryMomentumGates(snap, 'enter');
     checks.momentumGates = {
-      status: this.passesEntryMomentumGates(snap, 'enter') ? 'PASS' : 'FAIL',
-      reason: this.passesEntryMomentumGates(snap, 'enter') ? 'Momentum requirements met' : 'Momentum requirements not met'
+      status: momentumOk ? 'PASS' : 'FAIL',
+      reason: momentumOk ? 'Momentum requirements met' : 'Momentum requirements not met'
     };
 
     // Quality filters detailed breakdown
@@ -3929,7 +3930,111 @@ export class ReboundRejectionAgent {
       }
     };
 
-    // Overall assessment
+    // --- Trigger/phase analysis (why no trade) ---
+    const phase = this.state;
+    const playbook = this.plan.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const zoneMin = Math.min(dynamicZone.from, dynamicZone.to);
+    const zoneMax = Math.max(dynamicZone.from, dynamicZone.to);
+    const mid = this.plan.zone?.mid ?? (zoneMin + zoneMax) / 2;
+    const biasNow = this.plan.bias;
+
+    // Confirmation logic aligned with onTick
+    const confirmRequiredCfg = !!this.plan.plan?.entry_rule?.confirm_close;
+    const marketRegime = this.detectMarketRegime(snap);
+    let confirmationNeeded = confirmRequiredCfg;
+    if (marketRegime === 'trending_strong') confirmationNeeded = false;
+    if (marketRegime === 'choppy' || marketRegime === 'ranging') confirmationNeeded = true;
+    const confirmationOk = biasNow === 'long' ? price > mid : biasNow === 'short' ? price < mid : false;
+
+    // Trigger conditions aligned with onTick
+    const inZoneNow = price >= zoneMin && price <= zoneMax;
+    const zoneWidth = Math.max(1e-9, Math.abs(zoneMax - zoneMin));
+    const distanceFromEdge = biasNow === 'long' ? (price - zoneMin) / zoneWidth : (zoneMax - price) / zoneWidth;
+    let maxDistanceAllowed = 0.4;
+    if (marketRegime === 'trending_strong') maxDistanceAllowed = 0.6;
+    if (marketRegime === 'volatile') maxDistanceAllowed = 0.3;
+    const shouldEnterMeanReversion = inZoneNow && distanceFromEdge <= maxDistanceAllowed;
+    const breakoutWindowPct = 0.02; // keep in sync with onTick for now
+    const breakoutAbovePct = (price - zoneMax) / Math.max(price, 1e-9);
+    const breakoutBelowPct = (zoneMin - price) / Math.max(price, 1e-9);
+    const shouldEnterBreakout = (
+      (biasNow === 'long' && price > zoneMax && breakoutAbovePct < breakoutWindowPct) ||
+      (biasNow === 'short' && price < zoneMin && breakoutBelowPct < breakoutWindowPct)
+    );
+
+    // Profit/movement filters preview (aligned with enter())
+    const { getConfig } = await import('../utils/env.js');
+    const cfgDiag = getConfig();
+    const dir0 = biasNow === 'long' ? 1 : -1;
+    const firstTp = Array.isArray(this.plan.rPrices) && this.plan.rPrices.length > 0
+      ? price + dir0 * this.plan.rPrices[0].r * this.plan.stopDistance
+      : price;
+    const firstTpProfitPct = Math.abs((firstTp - price) / price) * 100;
+    const expectedMovementPct = firstTpProfitPct; // same notion as enter() uses
+    const profitOk = firstTpProfitPct >= cfgDiag.MIN_TRADE_PROFIT_PCT;
+    const movementOk = expectedMovementPct >= cfgDiag.MIN_PRICE_MOVEMENT_PCT;
+
+    const cooldownMs = cfgDiag.TRADE_COOLDOWN_MS;
+    const sinceExit = Date.now() - this.lastExitTime;
+    const onCooldown = this.lastExitTime > 0 && sinceExit < cooldownMs;
+    const cooldownRemainingSec = onCooldown ? Math.ceil((cooldownMs - sinceExit) / 1000) : 0;
+
+    const triggerReady = (
+      phase === 'ARMED' &&
+      this.regime?.shouldTrade !== false &&
+      (playbook === 'momentum_breakout' ? shouldEnterBreakout : (confirmationNeeded ? confirmationOk : true) && shouldEnterMeanReversion) &&
+      momentumOk &&
+      this.passesQualityFilters(snap) &&
+      profitOk &&
+      movementOk &&
+      !onCooldown
+    );
+
+    const distancePctToZone = inZoneNow ? 0 : (price < zoneMin ? ((zoneMin - price) / price * 100) : ((price - zoneMax) / price * 100));
+
+    const trigger = {
+      phase,
+      playbook,
+      bias: biasNow,
+      inZone: inZoneNow,
+      distancePctToZone: Number(distancePctToZone.toFixed(3)),
+      confirmation: {
+        needed: confirmationNeeded,
+        ok: confirmationOk
+      },
+      breakoutWindowPct,
+      shouldEnter: {
+        meanReversion: shouldEnterMeanReversion,
+        breakout: shouldEnterBreakout
+      },
+      momentumOk,
+      qualityOk: this.passesQualityFilters(snap),
+      profitOk,
+      movementOk,
+      expectedMovementPct: Number(expectedMovementPct.toFixed(2)),
+      tp1ProfitPct: Number(firstTpProfitPct.toFixed(2)),
+      cooldown: {
+        active: onCooldown,
+        remainingSec: cooldownRemainingSec
+      },
+      entryReady: triggerReady,
+      message: triggerReady
+        ? 'Trigger satisfied — entry would proceed'
+        : (!inZoneNow && !shouldEnterBreakout)
+          ? `Trigger not armed: price ${distancePctToZone.toFixed(2)}% away from zone`
+          : (!momentumOk)
+            ? 'Trigger held: momentum gates not met'
+            : (!this.passesQualityFilters(snap))
+              ? 'Trigger held: quality filters not met'
+              : (confirmationNeeded && !confirmationOk)
+                ? 'Trigger held: confirmation not met'
+                : (onCooldown)
+                  ? `Trigger held: cooldown ${cooldownRemainingSec}s`
+                  : (!profitOk || !movementOk)
+                    ? 'Trigger held: insufficient expected move/profit'
+                    : 'Trigger waiting for conditions'
+    };
+
     const allChecks = [
       checks.hasPosition,
       checks.isArmed,
@@ -3951,6 +4056,7 @@ export class ReboundRejectionAgent {
       canTrade,
       reason: canTrade ? 'All checks passed' : `${failedChecks.length} failed, ${partialChecks.length} partial, ${rejectChecks.length} reject conditions`,
       checks,
+      trigger,
       summary: {
         totalChecks: allChecks.length,
         passed: allChecks.length - failedChecks.length - partialChecks.length,

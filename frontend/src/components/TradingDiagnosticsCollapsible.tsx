@@ -59,7 +59,9 @@ export default function TradingDiagnosticsCollapsible({ sessionId, isActive, ini
 
   const getDiagnosticsStatus = () => {
     if (!diagnostics) return 'unknown';
-    
+    // If the trigger stack says entry is ready, prefer a trading status
+    if (diagnostics.trigger?.entryReady) return 'trading';
+
     const signal = diagnostics.tradingSignal || 'neutral';
     const marketCondition = diagnostics.marketTriggers?.overall || 'neutral';
     const tradeVibes = diagnostics.tradeVibes?.overall || 'neutral';
@@ -129,6 +131,67 @@ export default function TradingDiagnosticsCollapsible({ sessionId, isActive, ini
         {diagnostics && !loading && (
           <div>
             <Space direction="vertical" style={{ width: '100%' }} size="middle">
+              {/* Trigger Status */}
+              {diagnostics.trigger && (
+                <Card size="small" title="Trigger Status">
+                  <Space wrap>
+                    <Tag color={diagnostics.trigger.entryReady ? 'green' : 'orange'}>
+                      {diagnostics.trigger.entryReady ? 'ENTRY READY' : 'WAITING'}
+                    </Tag>
+                    <Tag>{diagnostics.trigger.phase || 'UNKNOWN'}</Tag>
+                    <Tag color={diagnostics.trigger.bias === 'long' ? 'green' : diagnostics.trigger.bias === 'short' ? 'red' : 'default'}>
+                      {String(diagnostics.trigger.bias || 'none').toUpperCase()}
+                    </Tag>
+                  </Space>
+                  {diagnostics.trigger.message && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+                      {diagnostics.trigger.message}
+                    </div>
+                  )}
+                  <Descriptions size="small" column={2} style={{ marginTop: 8 }}>
+                    <Descriptions.Item label="In Zone">
+                      <Tag color={diagnostics.trigger.inZone ? 'green' : 'default'}>
+                        {diagnostics.trigger.inZone ? 'YES' : 'NO'}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Dist. to Zone">
+                      {typeof diagnostics.trigger.distancePctToZone === 'number' 
+                        ? `${diagnostics.trigger.distancePctToZone.toFixed(2)}%`
+                        : 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Momentum">
+                      <Tag color={diagnostics.trigger.momentumOk ? 'green' : 'default'}>
+                        {diagnostics.trigger.momentumOk ? 'OK' : 'HOLD'}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Quality">
+                      <Tag color={diagnostics.trigger.qualityOk ? 'green' : 'default'}>
+                        {diagnostics.trigger.qualityOk ? 'OK' : 'HOLD'}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Expected Move">
+                      {typeof diagnostics.trigger.expectedMovementPct === 'number' 
+                        ? `${diagnostics.trigger.expectedMovementPct.toFixed(2)}%`
+                        : 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="TP1 Profit">
+                      {typeof diagnostics.trigger.tp1ProfitPct === 'number' 
+                        ? `${diagnostics.trigger.tp1ProfitPct.toFixed(2)}%`
+                        : 'N/A'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Confirmation">
+                      {diagnostics.trigger.confirmation?.needed
+                        ? (diagnostics.trigger.confirmation.ok ? 'MET' : 'WAITING')
+                        : 'NOT NEEDED'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Cooldown">
+                      {diagnostics.trigger.cooldown?.active
+                        ? `${diagnostics.trigger.cooldown.remainingSec}s`
+                        : 'NO'}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Card>
+              )}
               {/* Trading Signal */}
               <Card size="small" title="Trading Signal">
                 <Tag 
