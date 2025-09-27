@@ -198,7 +198,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       }
     });
     
-    console.log(`� Found ${perpetualMarkets.length} perpetual markets, fetching tickers...`);
+    console.log(`📊 Found ${perpetualMarkets.length} perpetual markets, fetching tickers...`);
     
     if (perpetualMarkets.length === 0) {
       console.log('📊 No perpetual markets found, falling back to static list');
@@ -862,32 +862,41 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
     return null;
   }
 
-  // Enforce a minimum confidence threshold for selection
+  // Enforce a minimum confidence threshold for selection, with adaptive relaxation
   const { COOLDOWN_CONFIDENCE_MIN } = getConfig();
-  const minConf = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || COOLDOWN_CONFIDENCE_MIN || 0.6)));
+  const minConfBase = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || COOLDOWN_CONFIDENCE_MIN || 0.6)));
   const baseMinProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
-  const relaxSteps = Math.max(0, Number(opts?.relaxSteps || 0));
+  let relaxSteps = Math.max(0, Number(opts?.relaxSteps || 0));
 
-  // Regime-aware + adaptive relaxation per candidate
-  const confident = opportunities.filter(o => {
-    const proj = (o as any).projectionConfidence ?? 0;
-    const adx = o.metrics?.adx ?? 0;
-    // In trending markets (ADX>20) require full threshold, else allow 0.05 lower
-    const regimeAdj = adx > 20 ? 0 : 0.05;
-    const relaxed = Math.min(0.95, Math.max(0.4, baseMinProj - regimeAdj - relaxSteps * 0.05));
-    const ok = (o?.confidence ?? 0) >= minConf && proj >= relaxed;
-    return ok;
-  });
-  if (confident.length === 0) {
-    const top = opportunities[0];
-    console.log(`⚠️ All candidates below thresholds (analysis>=${minConf}, projection>=${baseMinProj}, relaxSteps=${relaxSteps}). Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}. Returning null.`);
-    return null;
+  // Try progressively more permissive filters up to 3 steps
+  for (; relaxSteps <= 3; relaxSteps++) {
+    const minConf = Math.max(0.15, minConfBase - relaxSteps * 0.05);
+    const confident = opportunities.filter(o => {
+      const proj = (o as any).projectionConfidence ?? 0;
+      const adx = o.metrics?.adx ?? 0;
+      // In trending markets (ADX>20) require full proj threshold, else allow 0.05 lower
+      const regimeAdj = adx > 20 ? 0 : 0.05;
+      const relaxedProj = Math.min(0.95, Math.max(0.35, baseMinProj - regimeAdj - relaxSteps * 0.05));
+      return (o?.confidence ?? 0) >= minConf && proj >= relaxedProj;
+    });
+    if (confident.length > 0) {
+      const best = confident[0];
+      console.log(`🎯 Best opportunity: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence} ≥ ${minConf}, relaxSteps=${relaxSteps})`);
+      console.log(`📝 Reasoning: ${best.reasoning.summary}`);
+      return best;
+    }
   }
 
-  const best = confident[0];
-  console.log(`🎯 Best opportunity: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence} ≥ ${minConf})`);
-  console.log(`📝 Reasoning: ${best.reasoning.summary}`);
-  return best;
+  // Still nothing: pick top by score as a fallback if confidence/projection are close to thresholds
+  const top = opportunities[0];
+  const nearEnough = ((top.confidence ?? 0) >= (minConfBase - 0.1)) && (((top as any).projectionConfidence ?? 0) >= (baseMinProj - 0.15));
+  if (nearEnough) {
+    console.log(`⚠️ Relaxed Fallback: picking top by score due to near-threshold metrics (conf=${top.confidence}, proj=${(top as any).projectionConfidence})`);
+    return top;
+  }
+
+  console.log(`⚠️ All candidates below thresholds even after relaxation. Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}.`);
+  return top; // final fallback to avoid sleep mode
 }
 
 /**
