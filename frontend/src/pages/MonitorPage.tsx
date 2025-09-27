@@ -27,6 +27,7 @@ import RangeProjectionCard from '../components/RangeProjectionCard';
 import SRVisualizationCard from '../components/SRVisualizationCard';
 import AIInsightsCard from '../components/AIInsightsCard';
 import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
+import PerformanceBanner from '../components/PerformanceBanner';
 
 const { Title, Text } = Typography;
 // Memoized heavy components to avoid needless re-renders
@@ -512,6 +513,31 @@ export default function MonitorPage(){
                   { value: 'aggressive', label: 'Aggressive' },
                 ]}
               />
+              {/* Moved actions here: Propose Plan + Rescan Smart Agent */}
+              {status?.session?.id && (
+                <>
+                  <Button 
+                    onClick={async()=>{
+                      try {
+                        await api.proposePlan(status?.symbol, { sessionId: status?.session?.id, fresh: true });
+                        message.success('Plan proposed (LLM)');
+                      } catch(e){ message.error('Failed to propose plan'); }
+                    }}
+                  >
+                    Propose Plan (LLM)
+                  </Button>
+                  <Button 
+                    onClick={async()=>{
+                      try {
+                        await api.client.post('/api/agent/reselect', { sessionId: status?.session?.id });
+                        message.success('Smart Agent reselection requested');
+                      } catch(e){ message.error('Reselect failed'); }
+                    }}
+                  >
+                    Rescan Smart Agent
+                  </Button>
+                </>
+              )}
               <Button 
                 type="primary" 
                 style={{ background: 'rgba(255,255,255,0.2)', border: 'none' }}
@@ -532,6 +558,13 @@ export default function MonitorPage(){
           </Col>
         </Row>
       </Card>
+
+      {/* Performance Banner */}
+      {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (
+        <div style={{ marginTop: -8, marginBottom: 16 }}>
+          <PerformanceBanner kpi={kpi} session={status?.session} />
+        </div>
+      )}
 
       {/* Compact Scoreboard */}
       <Row style={{ marginTop: -16, marginBottom: 16 }}>
@@ -612,25 +645,7 @@ export default function MonitorPage(){
               <Row gutter={[16, 16]}>
                 <Col xs={24} sm={8}>
                   {agent ? (
-                    <>
-                      <PositionStatsBlock agent={agent} price={status?.price} />
-                      {!agent?.pos && status?.session?.id && (
-                        <Space style={{ marginTop: 8 }}>
-                          <Button size="small" type="primary" ghost onClick={async()=>{
-                            try {
-                              await api.proposePlan(status?.symbol, { sessionId: status?.session?.id, fresh: true });
-                              message.success('Plan proposed (LLM)');
-                            } catch(e){ message.error('Failed to propose plan'); }
-                          }}>Propose Plan (LLM)</Button>
-                          <Button size="small" onClick={async()=>{
-                            try {
-                              await api.client.post('/api/agent/reselect', { sessionId: status?.session?.id });
-                              message.success('Smart Agent reselection requested');
-                            } catch(e){ message.error('Reselect failed'); }
-                          }}>Rescan Smart Agent</Button>
-                        </Space>
-                      )}
-                    </>
+                    <PositionStatsBlock agent={agent} price={status?.price} />
                   ) : (
                     <Skeleton.Button active style={{ width: '100%', height: 120 }} />
                   )}
