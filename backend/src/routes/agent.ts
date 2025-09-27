@@ -95,10 +95,16 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     const isSmartAgent = body.isSmartAgent || body.smartAutoMode;
     console.log('🔍 Debug: isSmartAgent =', body.isSmartAgent, 'smartAutoMode =', body.smartAutoMode, 'final =', isSmartAgent);
     
+    // UNIT TEST MODE: skip heavy prefetch/ccxt resolution
+    if (process.env.UNIT_TEST_MODE === 'true') {
+      console.log('🧪 UNIT_TEST_MODE enabled: skipping intelligent prefetch and symbol resolution');
+      symbol = symbol || 'BTC/USDT';
+    }
+
     let prefetchedOpportunity: IntelligentAnalysis | null = null;
     let smartInitPromise: Promise<boolean> | null = null;
     let shouldActivate = true;
-    if (isSmartAgent) {
+    if (isSmartAgent && process.env.UNIT_TEST_MODE !== 'true') {
       console.log('🎯 Creating Auto-Select Agent - scanning for best opportunity...');
       try {
         prefetchedOpportunity = await getBestIntelligentOpportunity();
@@ -129,7 +135,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     }
     // Ensure we resolve a perpetual market symbol; return descriptive error if not available
     // Skip resolution when Smart agent is starting in sleep mode (placeholder symbol)
-    if (!(isSmartAgent && !shouldActivate)) {
+    if (!(isSmartAgent && !shouldActivate) && process.env.UNIT_TEST_MODE !== 'true') {
       try { const s = await (await import('../exchange/ccxtClient.js')).resolveSymbol(symbol); symbol = s; } catch (e:any) { return res.status(400).json({ error: 'symbol_not_found_perp', details: String(e?.message || e) }); }
     }
   
