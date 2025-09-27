@@ -101,6 +101,9 @@ export type Cfg = {
   TREND_FILTER_LOOKBACK_MIN: number;
   // Intelligent selection
   AUTO_MIN_USD_VOLUME: number;
+  AUTO_MIN_USD_VOLUME_CONSERVATIVE: number;
+  AUTO_MIN_USD_VOLUME_REACTIVE: number;
+  AUTO_MIN_USD_VOLUME_AGGRESSIVE: number;
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -204,5 +207,8 @@ export function getConfig(): Cfg {
     ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
     // Intelligent selection
     AUTO_MIN_USD_VOLUME: Number(e.AUTO_MIN_USD_VOLUME || "500000"),
+    AUTO_MIN_USD_VOLUME_CONSERVATIVE: Number(e.AUTO_MIN_USD_VOLUME_CONSERVATIVE || e.AUTO_MIN_USD_VOLUME || "1000000"),
+    AUTO_MIN_USD_VOLUME_REACTIVE: Number(e.AUTO_MIN_USD_VOLUME_REACTIVE || e.AUTO_MIN_USD_VOLUME || "500000"),
+    AUTO_MIN_USD_VOLUME_AGGRESSIVE: Number(e.AUTO_MIN_USD_VOLUME_AGGRESSIVE || Math.min(Number(e.AUTO_MIN_USD_VOLUME || 500000), 300000)),
   };
 }

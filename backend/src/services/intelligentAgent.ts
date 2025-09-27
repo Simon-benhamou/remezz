@@ -1597,11 +1597,13 @@ export function volumeUsdFromTicker(ticker: any): number {
 // Smart eligibility criteria (dynamic, not static):
 // - Must pass a minimum USD volume
 // - Stricter thresholds for sub-penny and complex/long symbols
-export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }): { ok: boolean; reason?: string } {
-  const { AUTO_MIN_USD_VOLUME } = getConfig();
+export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string } {
+  const cfg = getConfig();
+  const level = opts?.aggressiveness || 'reactive';
+  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE : level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE : cfg.AUTO_MIN_USD_VOLUME_REACTIVE;
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
-  if (vol < AUTO_MIN_USD_VOLUME) return { ok: false, reason: 'min_usd_volume' };
+  if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume' };
   // Sub-penny tokens must have substantial volume
   if (px > 0 && px < 0.01 && vol < 5_000_000) return { ok: false, reason: 'subpenny_low_volume' };
   // Complex/long symbols (often micro-caps) must have higher volume

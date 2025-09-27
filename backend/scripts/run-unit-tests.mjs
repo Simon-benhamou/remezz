@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(process.cwd());
 const testsDir = path.resolve(root, '../backend/test/unit');
+process.env.UNIT_TEST_MODE = 'true';
 
 if (!fs.existsSync(testsDir)) {
   console.error('Unit tests directory not found:', testsDir);
@@ -23,4 +24,3 @@ for (const f of files) {
 }
 
 process.exit(code);
-

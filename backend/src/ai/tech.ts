@@ -200,6 +200,13 @@ function swingLevels(
 // - Daily pivots (P, S1, S2, R1, R2)
 // - srBias: nearSupport | nearResistance | neutral (~0.6% window)
 export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapshot>{
+  try {
+    const key = cacheKey(symbol);
+    const cached = snapCache.get(key);
+    if (cached && (Date.now() - cached.ts) < SNAP_TTL_MS) {
+      return { ...(cached.data) };
+    }
+  } catch {}
   // 15m window for reactivity (~2 days), 1h for pivots/daily
   const o15 = await getOHLCV(symbol, '15m', 300); // [ts, o, h, l, c, v]
   if (!o15 || o15.length < 100) throw new Error('Not enough data (15m)');
@@ -318,5 +325,10 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
 
   snapshot.regime = classifyRegime(snapshot);
 
+  try { snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); } catch {}
   return snapshot;
 }
+// Lightweight LRU cache for snapshots (improves dashboard responsiveness)
+const SNAP_TTL_MS = 3000; // 3s is enough for UI refreshes
+const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
+function cacheKey(symbol: string) { return `${symbol}`; }

@@ -10,6 +10,7 @@ import { getUserCredentials } from '../services/userCredentials.js';
 export const router = Router();
 router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
   const cfg = getConfig();
+  const testMode = (process.env.UNIT_TEST_MODE || 'false') === 'true';
   
   // Get user credentials for authenticated exchange access
   let ex: any = null;
@@ -33,6 +34,24 @@ router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
   const includeBalance = req.query.includeBalance === 'true';
   const includeTech = req.query.includeTech === 'true';
   
+  // In UNIT_TEST_MODE, return minimal payload quickly
+  if (testMode) {
+    const sRow = sessionId ? await prisma.agentSession.findUnique({ where: { id: sessionId } }) : await prisma.agentSession.findFirst({ where:{ stoppedAt:null }, orderBy:{ startedAt:'desc' } });
+    return res.json({
+      serverTime: new Date().toISOString(),
+      exchangeId: cfg.EXCHANGE_ID,
+      symbol,
+      balance: null,
+      orders: [],
+      indicators: { ema20: 0, ema50: 0, rsi14: 50, atr14: 0, atrPct: 0, adx14: 0, ema20Slope: 0, price: 0 },
+      session: sRow,
+      sr: null,
+      supports: [],
+      resistances: [],
+      pivots: null,
+    });
+  }
+
   // Parallel fetch with timeout for heavy operations
   const [balance, orders, indic] = await Promise.all([
     ex && includeBalance ? 

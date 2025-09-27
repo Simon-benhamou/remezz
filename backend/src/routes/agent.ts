@@ -275,6 +275,8 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
 
     // Continue lighter background work
     setTimeout(async () => {
+      // In UNIT_TEST_MODE, skip network/LLM heavy background tasks to keep tests fast and silent
+      if (process.env.UNIT_TEST_MODE === 'true') return;
       try {
         if (isSmartAgent) {
           let success = false;
@@ -447,7 +449,14 @@ router.get('/sessions', async (req,res)=>{
   
   const out = rows.map(r => {
     const profile = (r as any).profileJson || {};
-    const aggressiveness = profile?.aggressiveness || 'conservative';
+    // Prefer runtime aggressiveness from AgentHub when available
+    let aggressiveness: any = 'reactive';
+    try {
+      const rt = AgentHub.get(r.id) as any;
+      aggressiveness = rt?.profile?.aggressiveness || profile?.aggressiveness || 'reactive';
+    } catch {
+      aggressiveness = profile?.aggressiveness || 'reactive';
+    }
     
     // Only calculate stats if included
     let stats = {};
@@ -605,6 +614,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     symbols,
     pnlUsd,
     capitalStartUsd,
+    equityUsd: Number(capitalStartUsd) + Number(pnlUsd),
     roiPct,
     avgWinRate,
     aiCallsTotal,
