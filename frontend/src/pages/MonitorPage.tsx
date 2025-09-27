@@ -66,6 +66,8 @@ export default function MonitorPage(){
   const [expandedView, setExpandedView] = React.useState(false);
   const wsRef = React.useRef<WebSocket|null>(null);
   const [savingAgg, setSavingAgg] = React.useState(false);
+  const [activeRightTab, setActiveRightTab] = React.useState<string>('agent');
+  const rightTabsRef = React.useRef<HTMLDivElement|null>(null);
 
   // Core data states (Phase 1)
   const [symbol, setSymbol] = React.useState<string>("");
@@ -105,6 +107,25 @@ export default function MonitorPage(){
     } finally {
       setSavingAgg(false);
     }
+  };
+
+  // Scoreboard metrics (compact chips under hero)
+  const metricPrice = Number(status?.price ?? analysis?.technical?.last ?? 0);
+  const metricAtr = Number(analysis?.technical?.atrPct ?? status?.indicators?.atrPct ?? 0);
+  const metricRsi = Number(analysis?.technical?.rsi14 ?? status?.indicators?.rsi14 ?? 0);
+  const metricAdx = Number(analysis?.technical?.adx14 ?? status?.indicators?.adx14 ?? 0);
+  const metricVol = Number(analysis?.technical?.volume24h ?? ticker?.quoteVolume ?? ticker?.baseVolume ?? 0);
+  const spreadPct = React.useMemo(()=>{
+    const bid = Number((ticker as any)?.bid ?? 0);
+    const ask = Number((ticker as any)?.ask ?? 0);
+    if (!bid || !ask) return 0;
+    const mid = (bid + ask) / 2;
+    return mid ? ((ask - bid) / mid) * 100 : 0;
+  }, [ticker]);
+
+  const openMarketTab = () => {
+    setActiveRightTab('market');
+    try { rightTabsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
   };
 
   // Update loading progress
@@ -463,14 +484,14 @@ export default function MonitorPage(){
                 {symbol || 'Trading Monitor'}
               </Title>
               <Space>
-                <Tag color={status?.session?.mode === 'live' ? 'gold' : 'blue'}>
+                <Tag color={status?.session?.mode === 'live' ? 'gold' : 'blue'} style={{ borderRadius: 8, padding: '0 8px', fontWeight: 600 }}>
                   {(status?.session?.mode || 'paper').toUpperCase()}
                 </Tag>
-                <Tag color={wsConnected ? 'green' : 'red'}>
+                <Tag color={wsConnected ? 'green' : 'red'} style={{ borderRadius: 8, padding: '0 8px', fontWeight: 600 }}>
                   {wsConnected ? 'LIVE' : 'DISCONNECTED'}
                 </Tag>
                 {agent?.state && (
-                  <Tag color={agent.state === 'ARMED' ? 'green' : agent.state === 'MANAGE' ? 'blue' : 'default'}>
+                  <Tag color={agent.state === 'ARMED' ? 'green' : agent.state === 'MANAGE' ? 'blue' : 'default'} style={{ borderRadius: 8, padding: '0 8px', fontWeight: 600 }}>
                     {agent.state}
                   </Tag>
                 )}
@@ -511,6 +532,20 @@ export default function MonitorPage(){
           </Col>
         </Row>
       </Card>
+
+      {/* Compact Scoreboard */}
+      <Row style={{ marginTop: -16, marginBottom: 16 }}>
+        <Col xs={24}>
+          <Space wrap size={[8,8]}>
+            <Button size="small" onClick={openMarketTab}>Price: ${metricPrice ? metricPrice.toFixed(metricPrice >= 1 ? 4 : 6) : '—'}</Button>
+            <Button size="small" onClick={openMarketTab}>ATR%: {metricAtr ? metricAtr.toFixed(2) : '—'}</Button>
+            <Button size="small" onClick={openMarketTab}>RSI: {metricRsi ? metricRsi.toFixed(1) : '—'}</Button>
+            <Button size="small" onClick={openMarketTab}>ADX: {metricAdx ? metricAdx.toFixed(1) : '—'}</Button>
+            <Button size="small" onClick={openMarketTab}>Vol 24h: {metricVol ? (metricVol/1_000_000).toFixed(2)+'M' : '—'}</Button>
+            <Button size="small" onClick={openMarketTab}>Spread: {spreadPct ? spreadPct.toFixed(2)+'%' : '—'}</Button>
+          </Space>
+        </Col>
+      </Row>
       
       {/* Health Banner */}
       <Row gutter={[24, 24]}>
@@ -577,7 +612,25 @@ export default function MonitorPage(){
               <Row gutter={[16, 16]}>
                 <Col xs={24} sm={8}>
                   {agent ? (
-                    <PositionStatsBlock agent={agent} price={status?.price} />
+                    <>
+                      <PositionStatsBlock agent={agent} price={status?.price} />
+                      {!agent?.pos && status?.session?.id && (
+                        <Space style={{ marginTop: 8 }}>
+                          <Button size="small" type="primary" ghost onClick={async()=>{
+                            try {
+                              await api.proposePlan(status?.symbol, { sessionId: status?.session?.id, fresh: true });
+                              message.success('Plan proposed (LLM)');
+                            } catch(e){ message.error('Failed to propose plan'); }
+                          }}>Propose Plan (LLM)</Button>
+                          <Button size="small" onClick={async()=>{
+                            try {
+                              await api.client.post('/api/agent/reselect', { sessionId: status?.session?.id });
+                              message.success('Smart Agent reselection requested');
+                            } catch(e){ message.error('Reselect failed'); }
+                          }}>Rescan Smart Agent</Button>
+                        </Space>
+                      )}
+                    </>
                   ) : (
                     <Skeleton.Button active style={{ width: '100%', height: 120 }} />
                   )}
@@ -656,9 +709,10 @@ export default function MonitorPage(){
         
         <Col xs={24} lg={8}>
           <div style={{ position: 'sticky', top: 76, alignSelf: 'flex-start' }}>
-            <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 12 }}>
+            <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 12 }} ref={rightTabsRef}>
               <Tabs
-                defaultActiveKey="agent"
+                activeKey={activeRightTab}
+                onChange={key=> setActiveRightTab(key)}
                 items={[
                   {
                     key: 'agent',
