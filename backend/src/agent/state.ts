@@ -3601,6 +3601,8 @@ export class ReboundRejectionAgent {
     
     let zoneStatus: 'PASS' | 'FAIL' | 'PARTIAL' = 'FAIL';
 
+    let nearThresholdVal: number | null = null;
+    let zoneDistancePctVal: number | null = null;
     if (entryZone && typeof entryZone.from === 'number' && typeof entryZone.to === 'number') {
       const originalZoneMin = Math.min(entryZone.from, entryZone.to);
       const originalZoneMax = Math.max(entryZone.from, entryZone.to);
@@ -3644,17 +3646,30 @@ export class ReboundRejectionAgent {
       inZone = price >= zoneMin && price <= zoneMax;
       
       const zoneDistancePct = inZone ? 0 : (price < zoneMin ? ((zoneMin - price) / price * 100) : ((price - zoneMax) / price * 100));
-      const nearThreshold = 0.75; // within 0.75% of the zone is considered near
+      zoneDistancePctVal = zoneDistancePct;
+      // Dynamic "near zone" threshold tuned to volatility and zone width.
+      // Goal: avoid constant PARTIALs; only mark near when truly hugging the boundary.
+      try {
+        const atrPctVal = Number((snap as any)?.atrPct ?? 0);
+        const zoneWidthPct = Math.abs((zoneMax - zoneMin) / Math.max(1e-12, price)) * 100;
+        const nearAtr = Math.min(0.05, Math.max(0.02, atrPctVal * 0.2)); // 2–5 bps of price, scaled by ATR
+        const nearWidth = Math.min(0.12, Math.max(0.03, zoneWidthPct * 0.15)); // 3–12 bps, 15% of zone width
+        nearThresholdVal = Math.max(0.02, Math.min(0.12, Math.min(nearAtr, nearWidth)));
+        // If ATR missing, fall back to stricter default
+        if (!isFinite(nearThresholdVal as number)) nearThresholdVal = 0.05;
+      } catch {
+        nearThresholdVal = 0.05;
+      }
       if (inZone) {
         zoneStatus = 'PASS';
         zoneDetails = `Price ${price.toFixed(4)} in ${needsDynamicRecalc ? 'dynamic' : 'original'} zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}]`;
       } else {
         const distanceDesc = `${zoneDistancePct.toFixed(3)}% ${price < zoneMin ? 'below' : 'above'}`;
-        zoneStatus = zoneDistancePct <= nearThreshold ? 'PARTIAL' : 'FAIL';
+        zoneStatus = zoneDistancePct <= (nearThresholdVal as number) ? 'PARTIAL' : 'FAIL';
         zoneDetails = `Price ${price.toFixed(4)} outside ${needsDynamicRecalc ? 'dynamic' : 'original'} zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}] (${distanceDesc})`;
 
         if (zoneStatus === 'PARTIAL') {
-          zoneDetails += ' • Near entry zone';
+          zoneDetails += ` • Near entry zone (≤ ${(nearThresholdVal as number).toFixed(3)}%)`;
         }
 
         if (needsDynamicRecalc) {
@@ -3665,16 +3680,21 @@ export class ReboundRejectionAgent {
       zoneDetails = 'No entry zone defined';
     }
     
+      const zoneExtra: any = {
+        currentPrice: price,
+        zoneFrom: dynamicZone?.from,
+        zoneTo: dynamicZone?.to,
+        inZone,
+        isDynamic: dynamicZone !== entryZone,
+      };
+      try {
+        if (typeof nearThresholdVal === 'number') zoneExtra.nearThresholdPct = Number(nearThresholdVal.toFixed(3));
+        if (typeof zoneDistancePctVal === 'number') zoneExtra.distancePct = Number(zoneDistancePctVal.toFixed(3));
+      } catch {}
       checks.inEntryZone = {
         status: zoneStatus,
         reason: zoneDetails,
-        details: {
-          currentPrice: price,
-          zoneFrom: dynamicZone?.from,
-          zoneTo: dynamicZone?.to,
-          inZone,
-          isDynamic: dynamicZone !== entryZone
-        }
+        details: zoneExtra
       };
 
     // Momentum gates

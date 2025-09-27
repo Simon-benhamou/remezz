@@ -7,8 +7,7 @@ import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
 import AnalysisTabs from '../components/AnalysisTabs';
 import AgentStatePanel from '../components/AgentStatePanel';
-import IndicatorsPanel from '../components/IndicatorsPanel';
-import PerfPanel from '../components/PerfPanel';
+// Removed old PerfPanel/IndicatorsPanel row in favor of banners
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
 import TriggersPanel from '../components/TriggersPanel';
 import OrdersTable from '../components/OrdersTable';
@@ -18,7 +17,6 @@ import DailyReviewPanel from '../components/DailyReviewPanel';
 import AlertPanel from '../components/AlertPanel';
 import { api, getApiKey } from '../api';
 import { openWS, wsSend } from '../ws';
-import PositionStatsBlock from '../components/PositionStatsBlock';
 import MonitorHealthBanner from '../components/MonitorHealthBanner';
 import MonitorMiniPanels from '../components/MonitorMiniPanels';
 import MarketTriggersCard from '../components/MarketTriggersCard';
@@ -28,11 +26,12 @@ import SRVisualizationCard from '../components/SRVisualizationCard';
 import AIInsightsCard from '../components/AIInsightsCard';
 import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
 import PerformanceBanner from '../components/PerformanceBanner';
+import PositionBanner from '../components/PositionBanner';
 
 const { Title, Text } = Typography;
 // Memoized heavy components to avoid needless re-renders
-const MemoIndicatorsPanel = React.memo(IndicatorsPanel) as React.FC<any>;
-const MemoPerfPanel = React.memo(PerfPanel as any) as React.FC<any>;
+// const MemoIndicatorsPanel = React.memo(IndicatorsPanel) as React.FC<any>;
+// const MemoPerfPanel = React.memo(PerfPanel as any) as React.FC<any>;
 const MemoOrdersTable = React.memo(OrdersTable as any) as React.FC<any>;
 const MemoTradesTable = React.memo(TradesTable as any) as React.FC<any>;
 
@@ -640,35 +639,9 @@ export default function MonitorPage(){
               </Card>
             )}
             
-            {/* Performance Metrics Row */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) && (
-              <Row gutter={[16, 16]}>
-                <Col xs={24} sm={8}>
-                  {agent ? (
-                    <PositionStatsBlock agent={agent} price={status?.price} />
-                  ) : (
-                    <Skeleton.Button active style={{ width: '100%', height: 120 }} />
-                  )}
-                </Col>
-                <Col xs={24} sm={8}>
-                  {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                    <MemoPerfPanel kpi={kpi} session={status?.session} />
-                  ) : (
-                    <Card title="Performance">
-                      <Skeleton active paragraph={{ rows: 4 }} />
-                    </Card>
-                  )}
-                </Col>
-                <Col xs={24} sm={8}>
-                  {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                    <MemoIndicatorsPanel indicators={analysis?.indicators || status?.indicators} />
-                  ) : (
-                    <Card title="Indicators">
-                      <Skeleton active paragraph={{ rows: 4 }} />
-                    </Card>
-                  )}
-                </Col>
-              </Row>
+            {/* Position banner — only if position exists OR there is historical activity */}
+            {shouldShowContent(LoadingPhase.CORE_DATA) && ((agent?.pos) || (orders?.length || 0) > 0 || (trades?.length || 0) > 0) && (
+              <PositionBanner agent={agent} price={status?.price} orders={orders} trades={trades} />
             )}
             
             {/* Orders/Trades Full Width Tabs */}
