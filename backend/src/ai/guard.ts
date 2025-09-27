@@ -94,6 +94,7 @@ export function zoneExitDebounced(
   const below = price < (z.min as number) * (1 - hysteresisPct / 100);
   const above = price > (z.max as number) * (1 + hysteresisPct / 100);
   const isOutside = below || above;
+  const wasOutside = s.lastWasOutside;
 
   if (isOutside) {
     s.outsideTicks += 1;
@@ -101,7 +102,8 @@ export function zoneExitDebounced(
     s.outsideTicks = 0;
   }
 
-  const crossed = isOutside && s.outsideTicks >= requiredTicks && !s.lastWasOutside;
+  // Trigger once when reaching the required number of consecutive outside ticks.
+  const crossed = isOutside && s.outsideTicks >= requiredTicks && (!wasOutside || s.outsideTicks === requiredTicks);
   s.lastWasOutside = isOutside;
   return crossed;
 }

@@ -231,8 +231,8 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
     const cryptoPerformance = Object.entries(tickers).map(([symbol, ticker]) => {
       const tickerData = ticker as any;
       const change24h = Number(tickerData.percentage || 0);
-      const volume24h = Number(tickerData.baseVolume || 0);
-      const quoteVolume24h = Number(tickerData.quoteVolume || 0);
+      const quoteVolume24h = volumeUsdFromTicker(tickerData);
+      const volume24h = quoteVolume24h; // keep naming compatibility
       
       // SÉCURITÉ: Scoring strict avec validation volume
       const volumeScore = calculateVolumeComponent(quoteVolume24h); // Utilise fonction sécurisée
@@ -257,19 +257,16 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
         performanceScore
       };
     }).filter(crypto => {
-      // SÉCURITÉ CRITIQUE: Volume minimum très strict pour éviter les micro-cryptos
-      if (crypto.quoteVolume24h < 500000) return false; // $500K minimum au lieu de $10K
+      // Smart eligibility (dynamic)
+      const base = crypto.symbol.split("/")[0];
+      const elig = isSymbolEligibleForAuto(base, { last: Number((tickers as any)[`${crypto.symbol.replace('/USDT','/USD:USD')}`]?.last || 0), volumeUsd: crypto.quoteVolume24h });
+      if (!elig.ok) {
+        console.log(`🚫 ${crypto.symbol} rejected: ${elig.reason} (volUsd=$${(crypto.quoteVolume24h/1_000_000).toFixed(2)}M)`);
+        return false;
+      }
       
       // Change minimum pour éviter stagnation – slightly more permissive
       if (crypto.absChange < 0.2) return false; // 0.2% minimum
-      
-      // Blacklist des tokens problématiques connus (micro-caps dangereux)
-      const problematicTokens = ["BOME", "WIF", "PEPE", "SHIB", "FLOKI"]; // DOGE retiré (top 10 établi)
-      const base = crypto.symbol.split("/")[0];
-      if (problematicTokens.includes(base)) {
-        console.log(`🚫 Token ${base} blacklisté - rejeté de la sélection AUTO`);
-        return false;
-      }
       
       return true;
     });
@@ -438,7 +435,12 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
       return null;
     }
 
-    console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${ticker.baseVolume}, Change=${ticker.percentage}%`);
+    // Normalize volume for logs: prefer USD when available
+    const volBaseLog = Number((ticker as any)?.baseVolume || 0);
+    const lastPxLog = Number((ticker as any)?.last || 0);
+    const volUsdLog = Number((ticker as any)?.quoteVolume || 0) || (volBaseLog > 0 && lastPxLog > 0 ? volBaseLog * lastPxLog : 0);
+    const volLog = volUsdLog ? `$${(volUsdLog/1_000_000).toFixed(2)}M` : String(volBaseLog);
+    console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${volLog}, Change=${ticker.percentage}%`);
 
     // Only use full analysis (with IA) for top performers or significant moves
     let sentiment: any = null;
@@ -457,11 +459,14 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
     }
 
     // Core metrics
+    const volBase = Number((ticker as any)?.baseVolume || 0);
+    const lastPx = Number((ticker as any)?.last || 0);
+    const volumeUsd = Number((ticker as any)?.quoteVolume || 0) || (volBase > 0 && lastPx > 0 ? volBase * lastPx : 0);
     const metrics = {
       momentum: Number(ticker.percentage || 0),
       trend: technical.trend || 0,
       volatility: technical.realizedVol || 0,
-      volume24h: Number(ticker.baseVolume || 0),
+      volume24h: volumeUsd,
       rsi: technical.rsi14 || 50,
       trendStrength: technical.trendStrength || 0,
       hurst: technical.hurst || 0.5,
@@ -853,9 +858,9 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string): P
 /**
  * Get the best opportunity with detailed explanation
  */
-export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number }): Promise<IntelligentAnalysis | null> {
-  // Pass excludeSessionId through the selection chain
-  const opportunities = await scanIntelligentOpportunities(excludeSessionId);
+export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number; candidatesOverride?: IntelligentAnalysis[] }): Promise<IntelligentAnalysis | null> {
+  // Pass excludeSessionId through the selection chain (allow override for tests)
+  const opportunities = opts?.candidatesOverride ?? await scanIntelligentOpportunities(excludeSessionId);
 
   if (opportunities.length === 0) {
     console.log('⚠️ No opportunities found - all cryptos failed analysis criteria');
@@ -922,12 +927,17 @@ async function updateSessionNextCheck(sessionId: string, nextCheck: Date): Promi
 /**
  * Initialize intelligent agent for a session
  */
-export async function initializeIntelligentAgent(sessionId: string, preset?: IntelligentAnalysis | null): Promise<boolean> {
+export async function initializeIntelligentAgent(sessionId: string, preset?: IntelligentAnalysis | null, opts?: { candidatesOverride?: IntelligentAnalysis[]; testMode?: boolean }): Promise<boolean> {
   try {
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
     // Pass sessionId as excludeSessionId to avoid self-conflict
-    let bestOpportunity = preset ?? await getBestIntelligentOpportunity(sessionId);
+    let bestOpportunity = preset ?? await getBestIntelligentOpportunity(sessionId, { candidatesOverride: opts?.candidatesOverride });
+    const testMode = !!opts?.testMode || (process.env.UNIT_TEST_MODE === 'true');
+    if (testMode) {
+      // In test mode, only return selection decision (true if selected, false if none)
+      return !!bestOpportunity;
+    }
     
     if (!bestOpportunity) {
       console.log('💤 No valid opportunities found - creating session in sleep mode for 2h');
@@ -1571,4 +1581,34 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
       reason: `Re-selection failed: ${error instanceof Error ? error.message : String(error)}`
     };
   }
+}
+// Compute normalized USD volume from ccxt ticker
+export function volumeUsdFromTicker(ticker: any): number {
+  try {
+    const qv = Number(ticker?.quoteVolume || 0);
+    if (qv && Number.isFinite(qv)) return qv;
+    const bv = Number(ticker?.baseVolume || 0);
+    const last = Number(ticker?.last || 0);
+    if (bv > 0 && last > 0) return bv * last;
+  } catch {}
+  return 0;
+}
+
+// Smart eligibility criteria (dynamic, not static):
+// - Must pass a minimum USD volume
+// - Stricter thresholds for sub-penny and complex/long symbols
+export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }): { ok: boolean; reason?: string } {
+  const { AUTO_MIN_USD_VOLUME } = getConfig();
+  const vol = Number(params.volumeUsd || 0);
+  const px = Number(params.last || 0);
+  if (vol < AUTO_MIN_USD_VOLUME) return { ok: false, reason: 'min_usd_volume' };
+  // Sub-penny tokens must have substantial volume
+  if (px > 0 && px < 0.01 && vol < 5_000_000) return { ok: false, reason: 'subpenny_low_volume' };
+  // Complex/long symbols (often micro-caps) must have higher volume
+  const isComplex = base.length >= 6 || /[0-9]/.test(base);
+  if (isComplex && vol < 3_000_000) return { ok: false, reason: 'complex_symbol_low_volume' };
+  // Meme-like names must have strong liquidity
+  const memeLike = ['BOME', 'WIF', 'PEPE', 'SHIB', 'FLOKI', 'BONK'];
+  if (memeLike.includes(base.toUpperCase()) && vol < 10_000_000) return { ok: false, reason: 'meme_low_volume' };
+  return { ok: true };
 }

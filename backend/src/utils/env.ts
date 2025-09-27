@@ -99,6 +99,8 @@ export type Cfg = {
   TREND_FILTER_ENABLED: boolean;
   TREND_FILTER_NEUTRAL_BAND_BPS: number;
   TREND_FILTER_LOOKBACK_MIN: number;
+  // Intelligent selection
+  AUTO_MIN_USD_VOLUME: number;
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -200,5 +202,7 @@ export function getConfig(): Cfg {
     // ATR % threshold relaxed to 0.7 by default; adaptive logic still enforces safety per symbol
     ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.7"),
     ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
+    // Intelligent selection
+    AUTO_MIN_USD_VOLUME: Number(e.AUTO_MIN_USD_VOLUME || "500000"),
   };
 }

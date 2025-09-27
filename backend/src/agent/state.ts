@@ -3535,17 +3535,8 @@ export class ReboundRejectionAgent {
       // Get both technical snapshot and real-time price
       console.log(`🔍 getDiagnostics: Building tech snapshot for symbol: ${this.profile.symbol}`);
       const [techSnapshot, ticker] = await Promise.all([
-        buildTechSnapshot(this.profile.symbol),
-        (async () => {
-          try {
-            const { getTicker } = await import('../data/market.js');
-            const tickerData = await getTicker(this.profile!.symbol);
-            console.log(`🔍 getDiagnostics: Ticker data for ${this.profile!.symbol}: last=${tickerData?.last}`);
-            return tickerData?.last || null;
-          } catch {
-            return null;
-          }
-        })()
+        this.getDiagnosticSnapshot(),
+        this.getDiagnosticTickerLast(),
       ]);
       
       snap = techSnapshot;
@@ -4079,6 +4070,20 @@ export class ReboundRejectionAgent {
         rejected: rejectChecks.length
       }
     };
+  }
+
+  // --- Testability hooks ---
+  // Allows tests to inject a predetermined snapshot without touching network/ccxt
+  async getDiagnosticSnapshot(): Promise<TechnicalSnapshot> {
+    return await buildTechSnapshot(this.profile!.symbol);
+  }
+  async getDiagnosticTickerLast(): Promise<number | null> {
+    try {
+      const t = await getTicker(this.profile!.symbol);
+      return t?.last ?? null;
+    } catch {
+      return null;
+    }
   }
 }
 

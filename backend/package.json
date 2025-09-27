@@ -8,6 +8,7 @@
     "dev:debug": "node --loader ts-node/esm --inspect=9229 --watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "test:unit": "node ./scripts/run-unit-tests.mjs",
     "prisma:gen": "prisma generate",
     "db:push": "prisma db push",
     "migrate": "prisma migrate deploy",
