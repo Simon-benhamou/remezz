@@ -656,60 +656,42 @@ export default function MonitorPage(){
               </Row>
             )}
             
-            {/* Enhanced Orders & Trades Tables */}
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12}>
-                  <Card 
-                    title={`Orders (${orders.length})`}
-                    size="small"
-                    extra={
-                      <Space>
-                        <Button size="small" icon={<SyncOutlined />} onClick={() => window.location.reload()}>
-                          Refresh
-                        </Button>
-                      </Space>
+            {/* Orders/Trades Full Width Tabs */}
+            <Card size="small" style={{ marginTop: 8 }}>
+              {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                <Tabs
+                  defaultActiveKey="orders"
+                  items={[
+                    {
+                      key: 'orders',
+                      label: `Orders (${orders.length})`,
+                      children: (
+                        <div style={{ marginTop: 8 }}>
+                          <MemoOrdersTable rows={orders} />
+                        </div>
+                      )
+                    },
+                    {
+                      key: 'trades',
+                      label: `Trades (${trades.length})`,
+                      children: (
+                        <div style={{ marginTop: 8 }}>
+                          <MemoTradesTable rows={trades} />
+                        </div>
+                      )
                     }
-                  >
-                    <MemoOrdersTable rows={orders} />
-                  </Card>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Card 
-                    title={`Trades (${trades.length})`}
-                    size="small"
-                    extra={
-                      <Space>
-                        <Button size="small" icon={<SyncOutlined />} onClick={() => window.location.reload()}>
-                          Refresh
-                        </Button>
-                      </Space>
-                    }
-                  >
-                    <MemoTradesTable rows={trades} />
-                  </Card>
-                </Col>
-              </Row>
-            ) : (
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12}>
-                  <Card title="Orders">
-                    <Skeleton active paragraph={{ rows: 4 }} />
-                  </Card>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Card title="Trades">
-                    <Skeleton active paragraph={{ rows: 4 }} />
-                  </Card>
-                </Col>
-              </Row>
-            )}
+                  ]}
+                />
+              ) : (
+                <Skeleton active paragraph={{ rows: 6 }} />
+              )}
+            </Card>
           </Space>
         </Col>
         
         <Col xs={24} lg={8}>
           <div style={{ position: 'sticky', top: 76, alignSelf: 'flex-start' }}>
-            <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 12 }} ref={rightTabsRef}>
+            <Card bodyStyle={{ padding: 4 }} style={{ borderRadius: 12 }} ref={rightTabsRef}>
               <Tabs
                 activeKey={activeRightTab}
                 onChange={key=> setActiveRightTab(key)}

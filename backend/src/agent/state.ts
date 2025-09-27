@@ -1831,7 +1831,8 @@ export class ReboundRejectionAgent {
     const ema20Slope = Number((snap as any)?.ema20Slope ?? 0);
     const atrPct = Number((snap as any)?.atrPct ?? 0);
     const volume = Number((snap as any)?.volume ?? 0);
-    const volumeMA = Number((snap as any)?.volumeMA ?? volume);
+    // Prefer volumeMA from snapshot; fallback to volumeAvg; finally fallback to current volume
+    const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
     const trendStrength = Number((snap as any)?.trendStrength ?? 0);
     const trendBias = (snap as any)?.trendBias ?? 'neutral';
 
@@ -2085,7 +2086,8 @@ export class ReboundRejectionAgent {
     const rsi = Number((snap as any)?.rsi14 ?? 50);
     const atrPct = Number((snap as any)?.atrPct ?? 0);
     const volume = Number((snap as any)?.volume ?? 0);
-    const volumeMA = Number((snap as any)?.volumeMA ?? volume);
+    // Prefer volumeMA from snapshot; fallback to volumeAvg; finally fallback to current volume
+    const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
     const ema20 = Number((snap as any)?.ema20 ?? price);
     const ema50 = Number((snap as any)?.ema50 ?? price);
     
@@ -3689,7 +3691,8 @@ export class ReboundRejectionAgent {
     const ema50 = Number((snap as any)?.ema50 ?? price);
     const atrPct = Number((snap as any)?.atrPct ?? 0);
     const volume = Number((snap as any)?.volume ?? 0);
-    const volumeMA = Number((snap as any)?.volumeMA ?? 0);
+    // Robust fallback: volumeMA -> volumeAvg -> 0
+    const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? 0);
     const hasVolumeData = volumeMA > 0 && volume >= 0;
     const volumeRatio = hasVolumeData ? volume / volumeMA : null;
     const emaSpread = ((ema20 - ema50) / ema50) * 100;

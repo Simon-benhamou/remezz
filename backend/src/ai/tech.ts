@@ -31,6 +31,9 @@ export type TechnicalSnapshot = {
   trendStrength: number;
   trendBias: 'bullish' | 'bearish' | 'neutral';
   regime?: RegimeProfile;
+  // Volume snapshot for diagnostics
+  volume?: number;      // latest 15m bar volume
+  volumeMA?: number;    // smoothed (EMA20) volume baseline
   volumeAvg?: number;
   volume24h?: number;
   volume24hChangePct?: number;
@@ -234,6 +237,10 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const atrPct = (atr14v / lastPrice) * 100;
   const adx14Arr = adx(o15, 14);
   const adx14v = adx14Arr[adx14Arr.length - 1] ?? 0;
+  // Volume baseline: use EMA20 of 15m volumes for responsiveness
+  const volEma20 = ema(volumes15, 20);
+  const latestVol = volumes15.length ? volumes15[volumes15.length - 1] : 0;
+  const volMA = volEma20.length ? volEma20[volEma20.length - 1] : 0;
 
   // Simple 24h S/R (~96 bars of 15m)
   const recent = closes15.length >= 96 ? o15.slice(-96) : o15;
@@ -318,6 +325,9 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     adxSlope,
     trendStrength,
     trendBias,
+    // Provide both instantaneous and smoothed volume for diagnostics
+    volume: latestVol,
+    volumeMA: volMA || avgVolume,
     volumeAvg: avgVolume,
     volume24h: recentVolume,
     volume24hChangePct: volumeChangePct,

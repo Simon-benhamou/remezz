@@ -353,52 +353,61 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
         </div>
       </div>
 
-      {/* Selection History */}
-      {status.history && status.history.length > 0 && (
+      {/* Selection History (Recent Activity) */}
+      {status.history && status.history.length > 0 && (() => {
+        // Always newest first
+        const sorted = [...status.history].sort((a:any,b:any)=>{
+          const ta = new Date(a.timestamp || a.ts || 0).getTime();
+          const tb = new Date(b.timestamp || b.ts || 0).getTime();
+          return tb - ta;
+        });
+        const items = sorted.map((item:any)=>({
+          color: item.action === 'intelligent_init' ? '#52c41a' : item.action?.includes('switch') ? '#1890ff' : '#faad14',
+          children: (
+            <div style={{ fontSize: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text strong style={{ fontSize: '13px' }}>
+                  {item.action === 'intelligent_init' ? (
+                    <span><strong style={{ color: '#52c41a' }}>{item.symbol}</strong> (Initial)</span>
+                  ) : item.fromSymbol && item.toSymbol ? (
+                    <span>{item.fromSymbol} → <strong style={{ color: '#1890ff' }}>{item.toSymbol}</strong></span>
+                  ) : (
+                    <span><strong>{item.symbol || 'Unknown'}</strong></span>
+                  )}
+                </Text>
+                <Space>
+                  {item.score != null && <Tag color="blue">{Number(item.score).toFixed(1)}</Tag>}
+                  {item.confidence != null && <Tag color="green">{(Number(item.confidence) * 100).toFixed(0)}%</Tag>}
+                  {item.hoursHeld && <Tag color="orange">{item.hoursHeld}h held</Tag>}
+                </Space>
+              </div>
+              {item.reasoning && (
+                <div style={{ marginTop: '4px', color: '#666' }}>
+                  {item.reasoning}
+                </div>
+              )}
+              <div style={{ marginTop: '2px', fontSize: '11px', color: '#999' }}>
+                {new Date(item.timestamp || item.ts).toLocaleString()}
+              </div>
+            </div>
+          )
+        }));
+        const needsScroll = sorted.length > 5;
+        return (
         <>
           <Divider />
           <div>
             <Title level={5} style={{ margin: 0, marginBottom: '12px', fontSize: '14px' }}>
               <HistoryOutlined style={{ marginRight: '6px', color: '#722ed1' }} />
-              Recent Activity ({status.history.length})
+              Recent Activity ({sorted.length})
             </Title>
-            <Timeline
-              items={status.history.slice(0, 5).map((item, index) => ({
-                color: item.action === 'intelligent_init' ? '#52c41a' : 
-                       item.action?.includes('switch') ? '#1890ff' : '#faad14',
-                children: (
-                  <div style={{ fontSize: '12px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text strong style={{ fontSize: '13px' }}>
-                        {item.action === 'intelligent_init' ? (
-                          <span><strong style={{ color: '#52c41a' }}>{item.symbol}</strong> (Initial)</span>
-                        ) : item.fromSymbol && item.toSymbol ? (
-                          <span>{item.fromSymbol} → <strong style={{ color: '#1890ff' }}>{item.toSymbol}</strong></span>
-                        ) : (
-                          <span><strong>{item.symbol || 'Unknown'}</strong></span>
-                        )}
-                      </Text>
-                      <Space>
-                        {item.score && <Tag color="blue">{item.score.toFixed(1)}</Tag>}
-                        {item.confidence && <Tag color="green">{(item.confidence * 100).toFixed(0)}%</Tag>}
-                        {item.hoursHeld && <Tag color="orange">{item.hoursHeld}h held</Tag>}
-                      </Space>
-                    </div>
-                    {item.reasoning && (
-                      <div style={{ marginTop: '4px', color: '#666' }}>
-                        {item.reasoning}
-                      </div>
-                    )}
-                    <div style={{ marginTop: '2px', fontSize: '11px', color: '#999' }}>
-                      {new Date(item.timestamp).toLocaleString()}
-                    </div>
-                  </div>
-                )
-              }))}
-            />
+            <div style={{ maxHeight: needsScroll ? 240 : 'auto', overflowY: needsScroll ? 'auto' : 'visible', paddingRight: needsScroll ? 6 : 0 }}>
+              <Timeline items={items} />
+            </div>
           </div>
         </>
-      )}
+        );
+      })()}
 
       {/* Footer */}
       <div style={{

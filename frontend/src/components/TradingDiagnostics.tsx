@@ -100,6 +100,11 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
   ] : [];
 
   const totalQualityPoints = qualityFilters.reduce((sum, f) => sum + (f.check?.points || 0), 0);
+  // Guard against server/client mismatch: if current>=required, treat as PASS
+  const qs = checks.qualityScore || { current: 0, required: 999, status: 'UNKNOWN', reason: '' };
+  const derivedQualityPass = Number(qs.current || 0) >= Number(qs.required || 0);
+  const qualityStatus = derivedQualityPass ? 'PASS' : (qs.status || 'FAIL');
+  const qualityProgress = Math.min(100, (Number(qs.current || 0) / Math.max(1, Number(qs.required || 1))) * 100);
 
   return (
     <Card 
@@ -162,23 +167,23 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
             <Space direction="vertical" style={{ width: '100%' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Space size="small">
-                  {getStatusIcon(checks.qualityScore.status)}
+                  {getStatusIcon(qualityStatus)}
                   <Text strong>Quality Score</Text>
                 </Space>
-                <Tag color={getStatusColor(checks.qualityScore.status)}>
-                  {checks.qualityScore.current}/{checks.qualityScore.required}
+                <Tag color={getStatusColor(qualityStatus)}>
+                  {qs.current}/{qs.required}
                 </Tag>
               </div>
               
               <Progress 
-                percent={Math.min(100, (checks.qualityScore.current / checks.qualityScore.required) * 100)}
+                percent={qualityProgress}
                 size="small"
-                status={checks.qualityScore.status === 'PASS' ? 'success' : 'exception'}
+                status={qualityStatus === 'PASS' ? 'success' : 'exception'}
                 showInfo={false}
               />
               
               <Text type="secondary" style={{ fontSize: 11 }}>
-                {checks.qualityScore.reason}
+                {qs.reason}
               </Text>
 
               {/* Quality Breakdown */}
