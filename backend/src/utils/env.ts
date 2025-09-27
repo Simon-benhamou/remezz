@@ -104,6 +104,12 @@ export type Cfg = {
   AUTO_MIN_USD_VOLUME_CONSERVATIVE: number;
   AUTO_MIN_USD_VOLUME_REACTIVE: number;
   AUTO_MIN_USD_VOLUME_AGGRESSIVE: number;
+  // Entry near-zone tuning (diagnostics and gating)
+  ENTRY_NEAR_ATR_FACTOR: number;        // scales ATR% → near window
+  ENTRY_NEAR_WIDTH_FACTOR: number;      // scales zone width% → near window
+  ENTRY_NEAR_MIN_BPS: number;           // min bps of price for near window (e.g., 2 => 0.02%)
+  ENTRY_NEAR_MAX_BPS: number;           // max bps of price for near window (e.g., 12 => 0.12%)
+  ENTRY_NEAR_SPREAD_WEIGHT: number;     // multiply spread% by this and take max with computed window
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -210,5 +216,11 @@ export function getConfig(): Cfg {
     AUTO_MIN_USD_VOLUME_CONSERVATIVE: Number(e.AUTO_MIN_USD_VOLUME_CONSERVATIVE || e.AUTO_MIN_USD_VOLUME || "1000000"),
     AUTO_MIN_USD_VOLUME_REACTIVE: Number(e.AUTO_MIN_USD_VOLUME_REACTIVE || e.AUTO_MIN_USD_VOLUME || "500000"),
     AUTO_MIN_USD_VOLUME_AGGRESSIVE: Number(e.AUTO_MIN_USD_VOLUME_AGGRESSIVE || Math.min(Number(e.AUTO_MIN_USD_VOLUME || 500000), 300000)),
+    // Entry near-zone tuning
+    ENTRY_NEAR_ATR_FACTOR: Number(e.ENTRY_NEAR_ATR_FACTOR || "0.2"),
+    ENTRY_NEAR_WIDTH_FACTOR: Number(e.ENTRY_NEAR_WIDTH_FACTOR || "0.15"),
+    ENTRY_NEAR_MIN_BPS: Number(e.ENTRY_NEAR_MIN_BPS || "2"),
+    ENTRY_NEAR_MAX_BPS: Number(e.ENTRY_NEAR_MAX_BPS || "12"),
+    ENTRY_NEAR_SPREAD_WEIGHT: Number(e.ENTRY_NEAR_SPREAD_WEIGHT || "0.5"),
   };
 }

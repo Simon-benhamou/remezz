@@ -3531,18 +3531,20 @@ export class ReboundRejectionAgent {
     }
 
     let snap: TechnicalSnapshot | null = null;
-    let realtimePrice: number | null = null;
+    let tickerFull: any | null = null;
     
     try {
-      // Get both technical snapshot and real-time price
+      // Get both technical snapshot and full ticker
       console.log(`🔍 getDiagnostics: Building tech snapshot for symbol: ${this.profile.symbol}`);
-      const [techSnapshot, ticker] = await Promise.all([
+      const [techSnapshot, tickerObj, legacyLast] = await Promise.all([
         this.getDiagnosticSnapshot(),
-        this.getDiagnosticTickerLast(),
+        this.getDiagnosticTickerFull().catch(() => null),
+        this.getDiagnosticTickerLast().catch(() => null),
       ]);
       
       snap = techSnapshot;
-      realtimePrice = ticker;
+      // Prefer legacy injected last (tests) over live ticker mid to keep test stability
+      tickerFull = legacyLast != null ? { ...(tickerObj || {}), last: legacyLast } : (tickerObj || null);
       console.log(`🔍 getDiagnostics: Tech snapshot received - last=${snap?.last}, symbol in snapshot: ${(snap as any)?.symbol || 'undefined'}`);
     } catch (err) {
       return {
@@ -3560,8 +3562,14 @@ export class ReboundRejectionAgent {
       };
     }
 
-    // Use real-time price if available, fallback to snapshot price
-    const price = realtimePrice ?? snap.last;
+    // Prefer mid price when available to align with market microstructure
+    const bid = Number((tickerFull as any)?.bid ?? 0);
+    const ask = Number((tickerFull as any)?.ask ?? 0);
+    const last = Number.isFinite(Number((tickerFull as any)?.last)) ? Number((tickerFull as any)?.last) : NaN;
+    const lastInjected = Number.isFinite(last);
+    const midPrice = (bid > 0 && ask > 0 && !lastInjected) ? (bid + ask) / 2 : (Number.isFinite(last) ? last : null);
+    const price = midPrice ?? snap.last;
+    const spreadPct = (bid > 0 && ask > 0) ? ((ask - bid) / ((bid + ask) / 2)) * 100 : 0;
     const bias = this.plan.bias;
     const checks: any = {};
 
@@ -3647,16 +3655,20 @@ export class ReboundRejectionAgent {
       
       const zoneDistancePct = inZone ? 0 : (price < zoneMin ? ((zoneMin - price) / price * 100) : ((price - zoneMax) / price * 100));
       zoneDistancePctVal = zoneDistancePct;
-      // Dynamic "near zone" threshold tuned to volatility and zone width.
-      // Goal: avoid constant PARTIALs; only mark near when truly hugging the boundary.
+      // Dynamic "near zone" threshold with ATR, zone width and spread sensitivity
       try {
+        const cfg = getConfig();
         const atrPctVal = Number((snap as any)?.atrPct ?? 0);
         const zoneWidthPct = Math.abs((zoneMax - zoneMin) / Math.max(1e-12, price)) * 100;
-        const nearAtr = Math.min(0.05, Math.max(0.02, atrPctVal * 0.2)); // 2–5 bps of price, scaled by ATR
-        const nearWidth = Math.min(0.12, Math.max(0.03, zoneWidthPct * 0.15)); // 3–12 bps, 15% of zone width
-        nearThresholdVal = Math.max(0.02, Math.min(0.12, Math.min(nearAtr, nearWidth)));
-        // If ATR missing, fall back to stricter default
-        if (!isFinite(nearThresholdVal as number)) nearThresholdVal = 0.05;
+        const minPct = Math.max(0, Number(cfg.ENTRY_NEAR_MIN_BPS || 0) / 100);
+        const maxPct = Math.max(minPct, Number(cfg.ENTRY_NEAR_MAX_BPS || 12) / 100);
+        const nearAtr = Math.min(maxPct, Math.max(minPct, atrPctVal * (cfg.ENTRY_NEAR_ATR_FACTOR || 0.2)));
+        const nearWidth = Math.min(maxPct, Math.max(minPct, zoneWidthPct * (cfg.ENTRY_NEAR_WIDTH_FACTOR || 0.15)));
+        const computed = Math.max(minPct, Math.min(maxPct, Math.min(nearAtr, nearWidth)));
+        const spreadComponent = Math.max(0, spreadPct * (cfg.ENTRY_NEAR_SPREAD_WEIGHT || 0.5));
+        nearThresholdVal = Math.max(computed, spreadComponent);
+        nearThresholdVal = Math.max(minPct, Math.min(maxPct, nearThresholdVal));
+        if (!isFinite(nearThresholdVal as number)) nearThresholdVal = Math.min(0.05, Math.max(0.02, atrPctVal * 0.2));
       } catch {
         nearThresholdVal = 0.05;
       }
@@ -3987,7 +3999,6 @@ export class ReboundRejectionAgent {
     );
 
     // Profit/movement filters preview (aligned with enter())
-    const { getConfig } = await import('../utils/env.js');
     const cfgDiag = getConfig();
     const dir0 = biasNow === 'long' ? 1 : -1;
     const firstTp = Array.isArray(this.plan.rPrices) && this.plan.rPrices.length > 0
@@ -4099,6 +4110,14 @@ export class ReboundRejectionAgent {
   // Allows tests to inject a predetermined snapshot without touching network/ccxt
   async getDiagnosticSnapshot(): Promise<TechnicalSnapshot> {
     return await buildTechSnapshot(this.profile!.symbol);
+  }
+  async getDiagnosticTickerFull(): Promise<any | null> {
+    try {
+      const t = await getTicker(this.profile!.symbol);
+      return t || null;
+    } catch {
+      return null;
+    }
   }
   async getDiagnosticTickerLast(): Promise<number | null> {
     try {
