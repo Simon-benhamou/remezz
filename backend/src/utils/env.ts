@@ -142,9 +142,10 @@ export function getConfig(): Cfg {
     BREAKOUT_HYSTERESIS_PCT: Number(e.BREAKOUT_HYSTERESIS_PCT || "0.15"),
     REVERSE_ON_BREAKOUT: (e.REVERSE_ON_BREAKOUT || "false") === "true",
     TRAIL_PCT: Number(e.TRAIL_PCT || "0"),
-    ENTRY_SHORT_MIN_ADX: Number(e.ENTRY_SHORT_MIN_ADX || "18"),
+    // Slightly more permissive by default to avoid idle agents on moderate-trend days
+    ENTRY_SHORT_MIN_ADX: Number(e.ENTRY_SHORT_MIN_ADX || "15"),
     ENTRY_SHORT_MIN_RSI: Number(e.ENTRY_SHORT_MIN_RSI || "45"),
-    ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "14"),
+    ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "12"),
     ENTRY_LONG_MAX_RSI: Number(e.ENTRY_LONG_MAX_RSI || "65"),
     USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
     USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
@@ -167,11 +168,13 @@ export function getConfig(): Cfg {
     TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "120000"), // 2 minutes cooldown
     CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "2.0"), // 2% loss = immediate exit
     // Trade quality filters
-    MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "1.5"), // 1.5% minimum expected profit
-    MIN_PRICE_MOVEMENT_PCT: Number(e.MIN_PRICE_MOVEMENT_PCT || "1.0"), // 1% minimum movement to be significant
-    QUALITY_MIN_SCORE_CONSERVATIVE: Number(e.QUALITY_MIN_SCORE_CONSERVATIVE || "48"),
-    QUALITY_MIN_SCORE_REACTIVE: Number(e.QUALITY_MIN_SCORE_REACTIVE || "38"),
-    QUALITY_MIN_SCORE_AGGRESSIVE: Number(e.QUALITY_MIN_SCORE_AGGRESSIVE || "30"),
+    // Lowered to trigger more realistic crypto trades while keeping quality
+    MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "1.0"), // 1.0% minimum expected profit
+    MIN_PRICE_MOVEMENT_PCT: Number(e.MIN_PRICE_MOVEMENT_PCT || "0.6"), // 0.6% movement significant
+    // Slightly reduced base quality thresholds (dynamic adjustments still apply)
+    QUALITY_MIN_SCORE_CONSERVATIVE: Number(e.QUALITY_MIN_SCORE_CONSERVATIVE || "42"),
+    QUALITY_MIN_SCORE_REACTIVE: Number(e.QUALITY_MIN_SCORE_REACTIVE || "32"),
+    QUALITY_MIN_SCORE_AGGRESSIVE: Number(e.QUALITY_MIN_SCORE_AGGRESSIVE || "26"),
     QUALITY_SCORE_RELIEF_ATR_BONUS: (e.QUALITY_SCORE_RELIEF_ATR_BONUS || "false") === "true",
     SENTIMENT_ENABLED: (e.SENTIMENT_ENABLED || "false") === "true",
     SENTIMENT_API_URL: e.SENTIMENT_API_URL || undefined,
@@ -194,7 +197,8 @@ export function getConfig(): Cfg {
     PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "10"), // augmenté de 3 à 10
     COOLDOWN_CONFIDENCE_MIN: Number(e.COOLDOWN_CONFIDENCE_MIN || "0.6"),
     COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
-    ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "1.0"),  // Revert to higher minimum for crypto
+    // ATR % threshold relaxed to 0.7 by default; adaptive logic still enforces safety per symbol
+    ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.7"),
     ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
   };
 }

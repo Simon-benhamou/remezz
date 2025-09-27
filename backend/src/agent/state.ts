@@ -323,29 +323,13 @@ export class ReboundRejectionAgent {
     
     // CRYPTO PROFIT FILTER: Minimum profit threshold
     const cfg = getConfig();
-    const minProfitPct = cfg.MIN_TRADE_PROFIT_PCT; // Use new stricter threshold (1.5%)
+    // Aggressiveness-aware min profitability
+    let minProfitPct = cfg.MIN_TRADE_PROFIT_PCT;
+    const levelProfit = this.profile?.aggressiveness || 'conservative';
+    if (levelProfit === 'reactive') minProfitPct = Math.max(0.6, minProfitPct - 0.2);
+    if (levelProfit === 'aggressive') minProfitPct = Math.max(0.5, minProfitPct - 0.3);
     const firstTpProfitPct = Math.abs((tp[0] - entry) / entry) * 100;
-    
-    // Additional filter: Check if expected price movement is significant enough
-    const expectedMovement = Math.abs(tp[0] - entry) / entry * 100;
-    if (expectedMovement < cfg.MIN_PRICE_MOVEMENT_PCT) {
-      recordOpsEvent({
-        level: 'info',
-        source: 'movement_filter',
-        message: 'Trade rejected - price movement too small',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile.symbol,
-        details: { 
-          expectedMovementPct: expectedMovement, 
-          minRequired: cfg.MIN_PRICE_MOVEMENT_PCT,
-          tp1: tp[0],
-          entry
-        },
-      });
-      this.entering = false;
-      return;
-    }
-    
+    // Single profitability gate is enough; movement check duplicates the same quantity
     if (firstTpProfitPct < minProfitPct) {
       recordOpsEvent({
         level: 'info',
@@ -354,7 +338,7 @@ export class ReboundRejectionAgent {
         sessionId: this.sessionId || undefined,
         symbol: this.profile.symbol,
         details: { 
-          expectedProfitPct: firstTpProfitPct, 
+          expectedProfitPct: firstTpProfitPct,
           minRequired: minProfitPct,
           tp1: tp[0],
           entry
@@ -745,11 +729,17 @@ export class ReboundRejectionAgent {
       ENTRY_LONG_MIN_ADX = Math.max(8, ENTRY_LONG_MIN_ADX - 2);
       ENTRY_MIN_ATR_PCT = Math.max(0.25, ENTRY_MIN_ATR_PCT * 0.75); // Plus flexible: 0.7 → 0.52%
       ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.008, ENTRY_MIN_SLOPE_ABS_PCT * 0.67);
+      // Wider RSI bands for crypto on reactive mode
+      ENTRY_SHORT_MIN_RSI = Math.max(35, ENTRY_SHORT_MIN_RSI - 5);
+      ENTRY_LONG_MAX_RSI = Math.min(75, ENTRY_LONG_MAX_RSI + 5);
     } else if (level === 'aggressive') {
       ENTRY_SHORT_MIN_ADX = Math.max(8, ENTRY_SHORT_MIN_ADX - 4);
       ENTRY_LONG_MIN_ADX = Math.max(6, ENTRY_LONG_MIN_ADX - 4);
       ENTRY_MIN_ATR_PCT = Math.max(0.15, ENTRY_MIN_ATR_PCT * 0.5); // Très flexible: 0.7 → 0.35%
       ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.006, ENTRY_MIN_SLOPE_ABS_PCT * 0.5);
+      // Claude-style RSI flexibility for aggressive mode
+      ENTRY_SHORT_MIN_RSI = Math.max(30, ENTRY_SHORT_MIN_RSI - 10);
+      ENTRY_LONG_MAX_RSI = Math.min(80, ENTRY_LONG_MAX_RSI + 10);
     }
     return { ENTRY_SHORT_MIN_ADX, ENTRY_LONG_MIN_ADX, ENTRY_SHORT_MIN_RSI, ENTRY_LONG_MAX_RSI, ENTRY_MIN_ATR_PCT, ENTRY_MIN_SLOPE_ABS_PCT };
   }
@@ -2034,6 +2024,26 @@ export class ReboundRejectionAgent {
       });
     }
     
+    // Light inactivity relief: if the agent has been armed for many hours with no trades,
+    // slightly lower the threshold to avoid prolonged idle periods in quiet markets.
+    try {
+      const ts = Date.parse(this.profile?.timestamp || '');
+      const hoursActive = isFinite(ts) ? (Date.now() - ts) / 3.6e6 : 0;
+      const longIdle = !this.pos && this.tradesToday === 0 && hoursActive >= 6;
+      if (longIdle) {
+        const before = minScore;
+        minScore = Math.max(25, minScore - 6);
+        recordOpsEvent({
+          level: 'info',
+          source: 'inactivity_relief',
+          message: 'Lowering quality threshold due to inactivity',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { hoursActive: Number(hoursActive.toFixed(2)), before, after: minScore }
+        });
+      }
+    } catch {}
+
     // Apply dynamic adjustment based on recent performance
     minScore += this.qualityThresholdAdjustment;
     minScore = Math.max(25, Math.min(70, minScore)); // Wider lower bound to allow more trades
@@ -3971,7 +3981,12 @@ export class ReboundRejectionAgent {
       : price;
     const firstTpProfitPct = Math.abs((firstTp - price) / price) * 100;
     const expectedMovementPct = firstTpProfitPct; // same notion as enter() uses
-    const profitOk = firstTpProfitPct >= cfgDiag.MIN_TRADE_PROFIT_PCT;
+    // Use the same aggressiveness-aware threshold as enter()
+    let minProfitDiag = cfgDiag.MIN_TRADE_PROFIT_PCT;
+    const levelDiagAgg = this.profile?.aggressiveness || 'conservative';
+    if (levelDiagAgg === 'reactive') minProfitDiag = Math.max(0.6, minProfitDiag - 0.2);
+    if (levelDiagAgg === 'aggressive') minProfitDiag = Math.max(0.5, minProfitDiag - 0.3);
+    const profitOk = firstTpProfitPct >= minProfitDiag;
     const movementOk = expectedMovementPct >= cfgDiag.MIN_PRICE_MOVEMENT_PCT;
 
     const cooldownMs = cfgDiag.TRADE_COOLDOWN_MS;
@@ -3986,7 +4001,6 @@ export class ReboundRejectionAgent {
       momentumOk &&
       this.passesQualityFilters(snap) &&
       profitOk &&
-      movementOk &&
       !onCooldown
     );
 

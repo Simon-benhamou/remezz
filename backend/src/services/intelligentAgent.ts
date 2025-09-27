@@ -205,8 +205,8 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       return await getTopCryptos(excludeSessionId);
     }
 
-    // Fetch MORE tickers to get better selection (increased from 10 to 50)
-    const sampleSize = Math.min(perpetualMarkets.length, 50); // Analyze more markets for better selection
+    // Fetch MORE tickers to get better selection (increase to 100 when available)
+    const sampleSize = Math.min(perpetualMarkets.length, 100); // Analyze more markets for better selection
     const sampleMarkets = perpetualMarkets.slice(0, sampleSize);
     
     // Fetch tickers one by one (Crypto.com limitation)
@@ -260,8 +260,8 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       // SÉCURITÉ CRITIQUE: Volume minimum très strict pour éviter les micro-cryptos
       if (crypto.quoteVolume24h < 500000) return false; // $500K minimum au lieu de $10K
       
-      // Change minimum pour éviter stagnation
-      if (crypto.absChange < 0.5) return false; // 0.5% minimum au lieu de 0.01%
+      // Change minimum pour éviter stagnation – slightly more permissive
+      if (crypto.absChange < 0.2) return false; // 0.2% minimum
       
       // Blacklist des tokens problématiques connus (micro-caps dangereux)
       const problematicTokens = ["BOME", "WIF", "PEPE", "SHIB", "FLOKI"]; // DOGE retiré (top 10 établi)
