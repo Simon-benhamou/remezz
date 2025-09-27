@@ -252,28 +252,7 @@ export default function LoginPage() {
           </Button>
         </div>
 
-        <div style={{ textAlign: 'center' }}>
-          <Alert
-            message="Demo Access"
-            description={
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <Text style={{ fontSize: '12px', color: '#64748b' }}>
-                  <strong>Admin:</strong> admin / password123
-                </Text>
-                <Text style={{ fontSize: '12px', color: '#64748b' }}>
-                  <strong>Demo:</strong> demo / demo123
-                </Text>
-              </div>
-            }
-            type="info"
-            showIcon={false}
-            style={{
-              background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
-              border: '1px solid #bae6fd',
-              borderRadius: '8px'
-            }}
-          />
-        </div>
+        
       </Card>
     </div>
   );

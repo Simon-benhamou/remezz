@@ -30,10 +30,10 @@ import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
 
 const { Title, Text } = Typography;
 // Memoized heavy components to avoid needless re-renders
-const MemoIndicatorsPanel = React.memo(IndicatorsPanel);
-const MemoPerfPanel = React.memo(PerfPanel as any);
-const MemoOrdersTable = React.memo(OrdersTable as any);
-const MemoTradesTable = React.memo(TradesTable as any);
+const MemoIndicatorsPanel = React.memo(IndicatorsPanel) as React.FC<any>;
+const MemoPerfPanel = React.memo(PerfPanel as any) as React.FC<any>;
+const MemoOrdersTable = React.memo(OrdersTable as any) as React.FC<any>;
+const MemoTradesTable = React.memo(TradesTable as any) as React.FC<any>;
 
 // Loading phases for progressive loading
 enum LoadingPhase {
