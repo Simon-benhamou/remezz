@@ -1,6 +1,6 @@
 import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography, Tooltip } from 'antd';
+import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography, Tooltip, Select, message } from 'antd';
 import { ReloadOutlined, ExpandOutlined, CompressOutlined, SyncOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
@@ -29,6 +29,11 @@ import AIInsightsCard from '../components/AIInsightsCard';
 import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
 
 const { Title, Text } = Typography;
+// Memoized heavy components to avoid needless re-renders
+const MemoIndicatorsPanel = React.memo(IndicatorsPanel);
+const MemoPerfPanel = React.memo(PerfPanel as any);
+const MemoOrdersTable = React.memo(OrdersTable as any);
+const MemoTradesTable = React.memo(TradesTable as any);
 
 // Loading phases for progressive loading
 enum LoadingPhase {
@@ -60,6 +65,7 @@ export default function MonitorPage(){
   const [wsConnected, setWsConnected] = React.useState(false);
   const [expandedView, setExpandedView] = React.useState(false);
   const wsRef = React.useRef<WebSocket|null>(null);
+  const [savingAgg, setSavingAgg] = React.useState(false);
 
   // Core data states (Phase 1)
   const [symbol, setSymbol] = React.useState<string>("");
@@ -81,6 +87,25 @@ export default function MonitorPage(){
   const [health, setHealth] = React.useState<any>(null);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+  const currentAggressiveness = React.useMemo(() => {
+    const runtime = (agent as any)?.profile?.aggressiveness;
+    const persisted = (status?.session as any)?.profileJson?.aggressiveness;
+    return (runtime || persisted || 'reactive') as 'conservative'|'reactive'|'aggressive';
+  }, [agent, status]);
+
+  const handleAggressivenessChange = async (val: 'conservative'|'reactive'|'aggressive') => {
+    if (!status?.session?.id) return;
+    try {
+      setSavingAgg(true);
+      await api.setAggressiveness(status.session.id, val);
+      message.success(`Aggressiveness set to ${val}`);
+    } catch (e) {
+      console.error('Failed to set aggressiveness:', e);
+      message.error('Failed to update aggressiveness');
+    } finally {
+      setSavingAgg(false);
+    }
+  };
 
   // Update loading progress
   const updateProgress = (phase: LoadingPhase, progress: number, message: string, error?: string) => {
@@ -454,6 +479,18 @@ export default function MonitorPage(){
           </Col>
           <Col>
             <Space>
+              <Select
+                size="middle"
+                value={currentAggressiveness}
+                loading={savingAgg}
+                onChange={(v)=> handleAggressivenessChange(v as any)}
+                style={{ minWidth: 160 }}
+                options={[
+                  { value: 'conservative', label: 'Conservative' },
+                  { value: 'reactive', label: 'Reactive' },
+                  { value: 'aggressive', label: 'Aggressive' },
+                ]}
+              />
               <Button 
                 type="primary" 
                 style={{ background: 'rgba(255,255,255,0.2)', border: 'none' }}
@@ -547,7 +584,7 @@ export default function MonitorPage(){
                 </Col>
                 <Col xs={24} sm={8}>
                   {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                    <PerfPanel kpi={kpi} session={status?.session} />
+                    <MemoPerfPanel kpi={kpi} session={status?.session} />
                   ) : (
                     <Card title="Performance">
                       <Skeleton active paragraph={{ rows: 4 }} />
@@ -556,7 +593,7 @@ export default function MonitorPage(){
                 </Col>
                 <Col xs={24} sm={8}>
                   {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                    <IndicatorsPanel indicators={analysis?.indicators || status?.indicators} />
+                    <MemoIndicatorsPanel indicators={analysis?.indicators || status?.indicators} />
                   ) : (
                     <Card title="Indicators">
                       <Skeleton active paragraph={{ rows: 4 }} />
@@ -581,7 +618,7 @@ export default function MonitorPage(){
                       </Space>
                     }
                   >
-                    <OrdersTable rows={orders} />
+                    <MemoOrdersTable rows={orders} />
                   </Card>
                 </Col>
                 <Col xs={24} md={12}>
@@ -596,7 +633,7 @@ export default function MonitorPage(){
                       </Space>
                     }
                   >
-                    <TradesTable rows={trades} />
+                    <MemoTradesTable rows={trades} />
                   </Card>
                 </Col>
               </Row>
@@ -618,104 +655,116 @@ export default function MonitorPage(){
         </Col>
         
         <Col xs={24} lg={8}>
-          <Space direction="vertical" style={{ width: '100%' }} size="large">
-            {/* Smart Agent Status - Show first if applicable */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id && (
-              <SmartAgentStatusPanel sessionId={status.session.id} />
-            )}
-
-            {/* Agent State */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
-              <AgentStatePanel 
-                agent={agent} 
-                symbol={status?.symbol} 
-                lastPrice={status?.price} 
-                sessionId={status?.session?.id} 
-                onPlan={() => {}} 
+          <div style={{ position: 'sticky', top: 76, alignSelf: 'flex-start' }}>
+            <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 12 }}>
+              <Tabs
+                defaultActiveKey="agent"
+                items={[
+                  {
+                    key: 'agent',
+                    label: 'Agent',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%', padding: 12 }} size="middle">
+                        {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
+                          <SmartAgentStatusPanel sessionId={status.session.id} />
+                        ) : (
+                          <Card title="Smart Agent"><Skeleton active paragraph={{ rows: 3 }} /></Card>
+                        )}
+                        {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
+                          <AgentStatePanel 
+                            agent={agent} 
+                            symbol={status?.symbol} 
+                            lastPrice={status?.price} 
+                            sessionId={status?.session?.id} 
+                            onPlan={() => {}} 
+                          />
+                        ) : (
+                          <Card title="Agent State"><Skeleton active paragraph={{ rows: 4 }} /></Card>
+                        )}
+                      </Space>
+                    )
+                  },
+                  {
+                    key: 'market',
+                    label: 'Market',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%', padding: 12 }} size="middle">
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                          <MarketTriggersCard 
+                            triggers={triggers.map(t => ({
+                              id: t.id || String(Math.random()),
+                              name: t.name || 'Unknown Trigger',
+                              description: t.description || 'No description available',
+                              active: Boolean(t.active),
+                              strength: t.strength || 'weak',
+                              confidence: t.confidence || 50,
+                              timeframe: t.timeframe,
+                              value: t.value,
+                              threshold: t.threshold
+                            }))}
+                          />
+                        ) : (
+                          <Card title="Market Triggers"><Skeleton active paragraph={{ rows: 3 }} /></Card>
+                        )}
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                          <KeyMetricsCard 
+                            indicators={{
+                              atrPct: Number(analysis?.technical?.atrPct || status?.indicators?.atrPct || 0),
+                              adx: Number(analysis?.technical?.adx14 || status?.indicators?.adx14 || 0),
+                              rsi: Number(analysis?.technical?.rsi14 || status?.indicators?.rsi14 || 50),
+                              ema20: Number(analysis?.technical?.ema20 || status?.indicators?.ema20 || 0),
+                              ema50: Number(analysis?.technical?.ema50 || status?.indicators?.ema50 || 0),
+                              ema20Slope: Number(analysis?.technical?.ema20Slope || 0),
+                              volume: Number(analysis?.technical?.volume24h || 0),
+                              price: Number(analysis?.technical?.last || status?.price || 0)
+                            }}
+                          />
+                        ) : (
+                          <Card title="Key Metrics"><Skeleton active paragraph={{ rows: 3 }} /></Card>
+                        )}
+                      </Space>
+                    )
+                  },
+                  {
+                    key: 'projections',
+                    label: 'Projections',
+                    children: (
+                      <div style={{ padding: 12 }}>
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                          <RangeProjectionCard
+                            projection={analysis?.projection}
+                            symbol={status?.symbol}
+                            price={Number(status?.price ?? analysis?.technical?.last ?? 0)}
+                          />
+                        ) : (
+                          <Card title="24h Range Forecast"><Skeleton active paragraph={{ rows: 4 }} /></Card>
+                        )}
+                      </div>
+                    )
+                  },
+                  {
+                    key: 'levels',
+                    label: 'S/R Levels',
+                    children: (
+                      <div style={{ padding: 12 }}>
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                          <SRVisualizationCard 
+                            currentPrice={Number(status?.price || 0)}
+                            support={status?.sr?.support ? { price: status.sr.support, strength: 75, touches: 3 } : undefined}
+                            resistance={status?.sr?.resistance ? { price: status.sr.resistance, strength: 80, touches: 2 } : undefined}
+                            pivots={status?.pivots}
+                            symbol={status?.symbol}
+                          />
+                        ) : (
+                          <Card title="Support/Resistance"><Skeleton active paragraph={{ rows: 3 }} /></Card>
+                        )}
+                      </div>
+                    )
+                  }
+                ]}
               />
-            ) : (
-              <Card title="Agent State">
-                <Skeleton active paragraph={{ rows: 4 }} />
-              </Card>
-            )}
-            
-            {/* Market Triggers - New Modern Component */}
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <MarketTriggersCard 
-                triggers={triggers.map(t => ({
-                  id: t.id || String(Math.random()),
-                  name: t.name || 'Unknown Trigger',
-                  description: t.description || 'No description available',
-                  active: Boolean(t.active),
-                  strength: t.strength || 'weak',
-                  confidence: t.confidence || 50,
-                  timeframe: t.timeframe,
-                  value: t.value,
-                  threshold: t.threshold
-                }))}
-              />
-            ) : (
-              <Card title="Market Triggers">
-                <Skeleton active paragraph={{ rows: 3 }} />
-              </Card>
-            )}
-            
-            {/* Key Metrics - New Component */}
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <KeyMetricsCard 
-                indicators={{
-                  atrPct: Number(analysis?.technical?.atrPct || status?.indicators?.atrPct || 0),
-                  adx: Number(analysis?.technical?.adx14 || status?.indicators?.adx14 || 0),
-                  rsi: Number(analysis?.technical?.rsi14 || status?.indicators?.rsi14 || 50),
-                  ema20: Number(analysis?.technical?.ema20 || status?.indicators?.ema20 || 0),
-                  ema50: Number(analysis?.technical?.ema50 || status?.indicators?.ema50 || 0),
-                  ema20Slope: Number(analysis?.technical?.ema20Slope || 0),
-                  volume: Number(analysis?.technical?.volume24h || 0),
-                  price: Number(analysis?.technical?.last || status?.price || 0)
-                }}
-              />
-            ) : (
-              <Card title="Key Metrics">
-                <Skeleton active paragraph={{ rows: 3 }} />
-              </Card>
-            )}
-
-            {/* 24h Range Forecast */}
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <RangeProjectionCard
-                projection={analysis?.projection}
-                symbol={status?.symbol}
-                price={Number(status?.price ?? analysis?.technical?.last ?? 0)}
-              />
-            ) : (
-              <Card title="24h Range Forecast">
-                <Skeleton active paragraph={{ rows: 4 }} />
-              </Card>
-            )}
-            
-            {/* Support/Resistance Visualization */}
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <SRVisualizationCard 
-                currentPrice={Number(status?.price || 0)}
-                support={status?.sr?.support ? {
-                  price: status.sr.support,
-                  strength: 75,
-                  touches: 3
-                } : undefined}
-                resistance={status?.sr?.resistance ? {
-                  price: status.sr.resistance,
-                  strength: 80,
-                  touches: 2
-                } : undefined}
-                pivots={status?.pivots}
-                symbol={status?.symbol}
-              />
-            ) : (
-              <Card title="Support/Resistance">
-                <Skeleton active paragraph={{ rows: 3 }} />
-              </Card>
-            )}
-          </Space>
+            </Card>
+          </div>
         </Col>
       </Row>
 

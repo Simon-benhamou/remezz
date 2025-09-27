@@ -8,6 +8,9 @@ import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 
 export const router = Router();
+// Lightweight cache for /status when not asking heavy data
+const STATUS_TTL_MS = 3000;
+const statusCache = new Map<string, { ts: number; data: any }>();
 router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
   const cfg = getConfig();
   const testMode = (process.env.UNIT_TEST_MODE || 'false') === 'true';
@@ -33,6 +36,17 @@ router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
   // Quick mode: only fetch heavy data if explicitly requested
   const includeBalance = req.query.includeBalance === 'true';
   const includeTech = req.query.includeTech === 'true';
+  
+  // Serve from cache when allowed
+  try {
+    if (!testMode && !includeBalance && !includeTech) {
+      const cacheKey = `${req.user?.id || 'legacy'}:${s?.id || 'no_session'}:${symbol}`;
+      const cached = statusCache.get(cacheKey);
+      if (cached && (Date.now() - cached.ts) < STATUS_TTL_MS) {
+        return res.json(cached.data);
+      }
+    }
+  } catch {}
   
   // In UNIT_TEST_MODE, return minimal payload quickly
   if (testMode) {
@@ -81,7 +95,7 @@ router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
     } catch {}
   }
 
-  res.json({
+  const payload = {
     serverTime: new Date().toISOString(),
     exchangeId: ex?.id || cfg.EXCHANGE_ID,
     symbol,
@@ -100,5 +114,12 @@ router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
     supports: tech?.supports || [],
     resistances: tech?.resistances || [],
     pivots: tech?.pivots || null,
-  });
+  };
+  try {
+    if (!testMode && !includeBalance && !includeTech) {
+      const cacheKey = `${req.user?.id || 'legacy'}:${s?.id || 'no_session'}:${symbol}`;
+      statusCache.set(cacheKey, { ts: Date.now(), data: payload });
+    }
+  } catch {}
+  res.json(payload);
 });

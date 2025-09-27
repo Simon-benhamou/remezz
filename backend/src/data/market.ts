@@ -7,7 +7,7 @@ const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
 // Simple cache to reduce API calls - OPTIMIZED for faster real-time response
 const tickerCache = new Map<string, { data: any; timestamp: number }>();
-const TICKER_CACHE_TTL = 2000; // 2 seconds cache (reduced from 10s for better reactivity)
+const TICKER_CACHE_TTL = 4000; // 4 seconds cache to reduce network churn
 
 // Create a temporary unauthenticated exchange for public market data
 const exchangeCache = new Map<string, any>();

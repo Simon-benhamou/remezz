@@ -20,6 +20,10 @@ import { savePlan } from '../services/planStore.js';
 
 export const router = Router();
 
+// Lightweight cache for /overview to improve dashboard/header refresh
+const OVERVIEW_TTL_MS = 3000;
+const overviewCache = new Map<string, { ts: number; data: any }>();
+
 async function processSmartReselect(sessionId: string, res: Response) {
   try {
     if (!sessionId) {
@@ -492,6 +496,13 @@ router.get('/sessions', async (req,res)=>{
 router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)=>{
   const modeRaw = String(req.query.mode || '').toLowerCase();
   const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
+  const cacheKey = `${req.user?.id || 'legacy'}:${modeFilter || 'all'}`;
+  try {
+    const c = overviewCache.get(cacheKey);
+    if (c && (Date.now() - c.ts) < OVERVIEW_TTL_MS) {
+      return res.json(c.data);
+    }
+  } catch {}
   
   const sessionWhere: any = { stoppedAt: null };
   if (modeFilter) sessionWhere.mode = modeFilter;
@@ -539,48 +550,22 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     }
   }
 
-  // Get aggregated paper balance from ALL active paper sessions
+  // Get aggregated paper balance from ALL active paper sessions (derived from session KPIs)
   let paperBalance: any = null;
   if (modeFilter === 'paper' || !modeFilter) {
     const paperSessions = actives.filter(session => session.mode === 'paper');
     if (paperSessions.length > 0) {
-      try {
-        // Aggregate balances from ALL paper agents
-        let totalEquityUsd = 0;
-        let totalFreeUsd = 0;
-        let totalCommittedUsd = 0;
-        let successfulAgents = 0;
-        
-        for (const paperSession of paperSessions) {
-          try {
-            const agent = AgentHub.get(paperSession.id);
-            if (agent && (agent as any).broker) {
-              const balance = await (agent as any).broker.balance();
-              totalEquityUsd += Number(balance?.equityUsd || 0);
-              totalFreeUsd += Number(balance?.freeUsd || 0);
-              totalCommittedUsd += Number(balance?.committedUsd || 0);
-              successfulAgents++;
-              console.log(`📊 Agent ${paperSession.symbol}: $${Number(balance?.equityUsd || 0).toFixed(2)} USD`);
-            }
-          } catch (agentError) {
-            console.error(`Failed to fetch balance for agent ${paperSession.symbol}:`, agentError);
-          }
-        }
-        
-        if (successfulAgents > 0) {
-          paperBalance = {
-            equityUsd: totalEquityUsd,
-            freeUsd: totalFreeUsd,
-            committedUsd: totalCommittedUsd,
-            agentsCount: successfulAgents,
-            lastUpdated: new Date().toISOString()
-          };
-          console.log(`📊 Total Paper Balance: $${totalEquityUsd.toFixed(2)} USD from ${successfulAgents} agents`);
-        }
-      } catch (error) {
-        console.error('Failed to fetch aggregated paper balance:', error);
-        // Don't fail the entire request, just log the error
-      }
+      const startSum = paperSessions.reduce((s, ps)=> s + Number(ps.startBalanceUsd || 0), 0);
+      const pnlSum = paperSessions.reduce((s, ps)=> s + Number(ps.kpi?.realizedPnlUsd || 0) + Number(ps.kpi?.unrealizedPnlUsd || 0), 0);
+      const eq = startSum + pnlSum;
+      paperBalance = {
+        equityUsd: eq,
+        freeUsd: eq,          // paper accounts are unconstrained; no reserved margin stored here
+        committedUsd: 0,
+        agentsCount: paperSessions.length,
+        lastUpdated: new Date().toISOString()
+      };
+      console.log(`📊 Total Paper Balance (derived): $${eq.toFixed(2)} USD from ${paperSessions.length} agents`);
     }
   }
 
@@ -608,7 +593,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     };
   });
 
-  res.json({
+  const payload = {
     activeCount: actives.length,
     sessionsCount: totalSessions,
     symbols,
@@ -622,7 +607,9 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     paperBalance,
     sessions: sessionsData, // ✅ Ajout des sessions dans la réponse
     updatedAt: new Date().toISOString(),
-  });
+  };
+  try { overviewCache.set(cacheKey, { ts: Date.now(), data: payload }); } catch {}
+  res.json(payload);
 });
 
 // Triggers log
