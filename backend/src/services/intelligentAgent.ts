@@ -1625,8 +1625,14 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
 // Compute normalized USD volume from ccxt ticker
 export function volumeUsdFromTicker(ticker: any): number {
   try {
+    // Prioritize info.volumeUsd24h for exchanges that provide it (e.g., Crypto.com)
+    const infoVol = Number(ticker?.info?.volumeUsd24h || ticker?.info?.volume24h || 0);
+    if (infoVol && Number.isFinite(infoVol)) return infoVol;
+    
+    // Fallback to standard CCXT fields
     const qv = Number(ticker?.quoteVolume || 0);
     if (qv && Number.isFinite(qv)) return qv;
+    
     const bv = Number(ticker?.baseVolume || 0);
     const last = Number(ticker?.last || 0);
     if (bv > 0 && last > 0) return bv * last;
