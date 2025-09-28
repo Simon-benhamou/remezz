@@ -1671,16 +1671,19 @@ export class ReboundRejectionAgent {
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
     // Confidence tightening: after a few failures, require stronger momentum
     try {
-      const lossStreak = this.getLossStreak(3);
+      const cfg = getConfig();
+      const window = Math.max(1, Number(cfg.STREAK_WINDOW || 3));
+      const lossStreak = this.getLossStreak(window);
       if (lossStreak >= 1) {
-        const mult = 1 + 0.15 * lossStreak; // +15% ATR & slope per loss in streak
+        const mult = 1 + (cfg.LOSS_STREAK_ATR_BOOST || 0.15) * lossStreak;
         minAtr *= mult;
         minSlopeAbsPct *= mult;
       }
       // Confidence relaxation: after wins, allow slightly more entries (but keep floor)
-      const winStreak = this.getWinStreak(3);
+      const winStreak = this.getWinStreak(window);
       if (winStreak >= 1) {
-        const relax = Math.max(0.8, 1 - 0.12 * winStreak); // down to -24% at 2 wins, -36% capped to 0.8
+        const floor = Math.max(0.5, Number(cfg.MOMENTUM_RELAX_FLOOR || 0.8));
+        const relax = Math.max(floor, 1 - (cfg.WIN_STREAK_ATR_RELAX || 0.12) * winStreak);
         minAtr *= relax;
         minSlopeAbsPct *= relax;
       }
@@ -2070,13 +2073,15 @@ export class ReboundRejectionAgent {
     minScore += this.qualityThresholdAdjustment;
     // Immediate confidence bump on local loss streak to avoid over-trading after failures
     try {
-      const streak = this.getLossStreak(3);
-      if (streak >= 1) minScore += (streak * 4); // +4 points per consecutive loss (last 3 trades window)
+      const cfg = getConfig();
+      const window = Math.max(1, Number(cfg.STREAK_WINDOW || 3));
+      const streak = this.getLossStreak(window);
+      if (streak >= 1) minScore += (streak * (cfg.LOSS_STREAK_SCORE_BONUS || 4));
       const last5 = this.getRecentPerformance(5);
       if (last5.trades >= 3 && last5.winRate < 0.34) minScore += 3; // additional tightening on poor short-run winrate
       // Symmetric relaxation on win streaks and good short-run performance
-      const wstreak = this.getWinStreak(3);
-      if (wstreak >= 1) minScore -= (wstreak * 3); // -3 per consecutive win
+      const wstreak = this.getWinStreak(window);
+      if (wstreak >= 1) minScore -= (wstreak * (cfg.WIN_STREAK_SCORE_BONUS || 3));
       if (last5.trades >= 3 && last5.winRate > 0.66 && last5.avgPnlPct > 0.3) minScore -= 2;
     } catch {}
     minScore = Math.max(25, Math.min(70, minScore)); // Wider lower bound to allow more trades
@@ -2182,15 +2187,17 @@ export class ReboundRejectionAgent {
     
     // Reduce size further on short-term loss streaks (confidence tightening)
     try {
-      const streak = this.getLossStreak(3);
+      const cfg = getConfig();
+      const window = Math.max(1, Number(cfg.STREAK_WINDOW || 3));
+      const streak = this.getLossStreak(window);
       if (streak >= 1) {
-        const penalty = Math.min(0.7, 0.15 * streak); // up to -30%
+        const penalty = Math.min(0.7, (cfg.LOSS_STREAK_SIZE_PENALTY || 0.15) * streak);
         sizeMultiplier *= (1 - penalty);
       }
       // Increase size modestly on win streaks (confidence relaxation)
-      const winstreak = this.getWinStreak(3);
+      const winstreak = this.getWinStreak(window);
       if (winstreak >= 1) {
-        const bonus = Math.min(0.3, 0.1 * winstreak); // up to +30%
+        const bonus = Math.min(0.3, (cfg.WIN_STREAK_SIZE_BONUS || 0.10) * winstreak);
         sizeMultiplier *= (1 + bonus);
       }
     } catch {}

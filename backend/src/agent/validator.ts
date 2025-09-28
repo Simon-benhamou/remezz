@@ -29,6 +29,34 @@ export type ValidatedPlan = {
   regime?: RegimeProfile;
 };
 
+function classifyVolatility(symbol: string): 'HIGH'|'MODERATE'|'LOW' {
+  const base = (symbol || '').split('/')[0]?.toUpperCase();
+  if (!base) return 'MODERATE';
+  if (['DOGE','SHIB','PEPE','AVNT','WIF','BONK'].includes(base)) return 'HIGH';
+  if (['BTC','BCH','USDT','USDC','DAI'].includes(base)) return 'LOW';
+  return 'MODERATE';
+}
+
+function adjustedStopsPct(cfg: ReturnType<typeof getConfig>, symbol: string) {
+  const prof = classifyVolatility(symbol);
+  // Base env minima
+  let minStopPct = Math.max(0, cfg.MIN_STOP_PCT);
+  let minTpPct = Math.max(0, cfg.MIN_TP_PCT);
+  // Raise floors per volatility class
+  if (prof === 'HIGH') {
+    minStopPct = Math.max(minStopPct, 0.6);
+    minTpPct = Math.max(minTpPct, 1.2);
+  } else if (prof === 'MODERATE') {
+    minStopPct = Math.max(minStopPct, 0.4);
+    minTpPct = Math.max(minTpPct, 0.8);
+  } else {
+    // LOW
+    minStopPct = Math.max(minStopPct, 0.3);
+    minTpPct = Math.max(minTpPct, 0.6);
+  }
+  return { minStopPct, minTpPct };
+}
+
 export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   const snap = await buildTechSnapshot(plan.symbol);
   const tf = plan.timeframe || '1h';
@@ -89,14 +117,15 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   const atrPct = snap.atrPct;
   // Enforce a minimum stop distance in % of price to avoid micro moves
   const cfg = getConfig();
-  const minStopAbs = mid * (Math.max(0, cfg.MIN_STOP_PCT) / 100);
+  const { minStopPct, minTpPct } = adjustedStopsPct(cfg, plan.symbol);
+  const minStopAbs = mid * (minStopPct / 100);
   const rawStop = plan.risk.stop.mult * atrAbs;
   const stopDistance = Math.max(rawStop, minStopAbs);
 
   // R ladder prices
   const side = plan.bias === 'long' ? 1 : -1;
   const firstR = plan.risk.tp?.[0]?.value ?? 1.0;
-  const minTpAbs = mid * (Math.max(0, cfg.MIN_TP_PCT) / 100);
+  const minTpAbs = mid * (minTpPct / 100);
   const minRFromPct = stopDistance > 0 ? (minTpAbs / stopDistance) : firstR;
   const minFirstR = Math.max(cfg.MIN_FIRST_R, minRFromPct);
   const shift = Math.max(0, minFirstR - firstR);

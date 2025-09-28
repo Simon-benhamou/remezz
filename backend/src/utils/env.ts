@@ -64,6 +64,15 @@ export type Cfg = {
   COOLDOWN_MOMENTUM_THRESHOLD: number;
   ENTRY_MIN_ATR_PCT: number;
   ENTRY_MIN_SLOPE_ABS_PCT: number;
+  // Adaptive performance tuning (streak-based)
+  STREAK_WINDOW: number;                 // trades to consider for win/loss streaks
+  LOSS_STREAK_ATR_BOOST: number;         // +x per loss (e.g., 0.15 => +15%)
+  WIN_STREAK_ATR_RELAX: number;          // -x per win (e.g., 0.12 => -12%)
+  MOMENTUM_RELAX_FLOOR: number;          // floor multiplier for relax (e.g., 0.8)
+  LOSS_STREAK_SCORE_BONUS: number;       // +score per loss
+  WIN_STREAK_SCORE_BONUS: number;        // -score per win (applied as subtraction)
+  LOSS_STREAK_SIZE_PENALTY: number;      // -size fraction per loss (e.g., 0.15)
+  WIN_STREAK_SIZE_BONUS: number;         // +size fraction per win (e.g., 0.10)
   // Crypto-specific optimizations
   MIN_PROFIT_PCT: number;
   CRYPTO_VOLATILITY_MIN: number;
@@ -211,6 +220,15 @@ export function getConfig(): Cfg {
     // ATR % threshold relaxed to 0.7 by default; adaptive logic still enforces safety per symbol
     ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.7"),
     ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
+    // Adaptive performance tuning (streak-based)
+    STREAK_WINDOW: Number(e.STREAK_WINDOW || "3"),
+    LOSS_STREAK_ATR_BOOST: Number(e.LOSS_STREAK_ATR_BOOST || "0.15"),
+    WIN_STREAK_ATR_RELAX: Number(e.WIN_STREAK_ATR_RELAX || "0.12"),
+    MOMENTUM_RELAX_FLOOR: Number(e.MOMENTUM_RELAX_FLOOR || "0.8"),
+    LOSS_STREAK_SCORE_BONUS: Number(e.LOSS_STREAK_SCORE_BONUS || "4"),
+    WIN_STREAK_SCORE_BONUS: Number(e.WIN_STREAK_SCORE_BONUS || "3"),
+    LOSS_STREAK_SIZE_PENALTY: Number(e.LOSS_STREAK_SIZE_PENALTY || "0.15"),
+    WIN_STREAK_SIZE_BONUS: Number(e.WIN_STREAK_SIZE_BONUS || "0.10"),
     // Intelligent selection
     AUTO_MIN_USD_VOLUME: Number(e.AUTO_MIN_USD_VOLUME || "500000"),
     AUTO_MIN_USD_VOLUME_CONSERVATIVE: Number(e.AUTO_MIN_USD_VOLUME_CONSERVATIVE || e.AUTO_MIN_USD_VOLUME || "1000000"),
