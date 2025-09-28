@@ -16,7 +16,12 @@
     "migrate": "prisma migrate deploy",
     "lint": "eslint 'src/**/*.{ts,tsx}'",
     "format": "prettier --check .",
-    "format:write": "prettier --write ."
+    "format:write": "prettier --write .",
+    "analyze:performance": "tsx scripts/agent-performance-analyzer.ts",
+    "monitor:start": "tsx scripts/agent-performance-monitor.ts start",
+    "monitor:once": "tsx scripts/agent-performance-monitor.ts once",
+    "monitor:stop": "tsx scripts/agent-performance-monitor.ts stop",
+    "monitor:integrated": "tsx scripts/integrated-performance-monitor.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",

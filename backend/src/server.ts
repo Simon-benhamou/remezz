@@ -26,9 +26,10 @@ import { scannerRouter } from "./routes/scanner.js";
 import { router as intelligentRouter } from "./routes/intelligent.js";
 import { router as arbitrageRouter } from "./routes/arbitrage.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
-import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
+import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
+import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -111,6 +112,7 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 startWSHub(wss);
 startEventEngine();
 startArbitrageMonitor();
+startIntegratedMonitoring();
 
 // Start Smart Agent background job
 console.log('🤖 Starting Smart Agent background checker...');
