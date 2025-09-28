@@ -4,23 +4,28 @@ import { getUserExchange, resolveSymbol } from "../exchange/ccxtClient.js";
 import { computeCoreIndicators } from "../data/market.js";
 import { prisma } from "../db/client.js";
 import { buildTechSnapshot } from "../ai/tech.js";
-import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
+// Make /status usable without strict JWT when API key auth is disabled
+// We keep optional user context when available, but do not enforce it here.
+import type { AuthenticatedRequest } from '../middleware/auth.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 
 export const router = Router();
 // Lightweight cache for /status when not asking heavy data
 const STATUS_TTL_MS = 3000;
 const statusCache = new Map<string, { ts: number; data: any }>();
-router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
+router.get('/', async (req: AuthenticatedRequest, res) => {
   const cfg = getConfig();
   const testMode = (process.env.UNIT_TEST_MODE || 'false') === 'true';
   
   // Get user credentials for authenticated exchange access
   let ex: any = null;
   try {
-    const userCredentials = await getUserCredentials(req.user!.id);
-    if (userCredentials) {
-      ex = await getUserExchange(req.user!.id, userCredentials);
+    const userId = (req as any)?.user?.id;
+    if (userId) {
+      const userCredentials = await getUserCredentials(userId);
+      if (userCredentials) {
+        ex = await getUserExchange(userId, userCredentials);
+      }
     }
   } catch (error) {
     console.error('Failed to get user exchange for status:', error);
@@ -40,7 +45,7 @@ router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
   // Serve from cache when allowed
   try {
     if (!testMode && !includeBalance && !includeTech) {
-      const cacheKey = `${req.user?.id || 'legacy'}:${s?.id || 'no_session'}:${symbol}`;
+      const cacheKey = `${(req as any)?.user?.id || 'legacy'}:${s?.id || 'no_session'}:${symbol}`;
       const cached = statusCache.get(cacheKey);
       if (cached && (Date.now() - cached.ts) < STATUS_TTL_MS) {
         return res.json(cached.data);
@@ -117,7 +122,7 @@ router.get('/', authenticateUser, async (req: AuthenticatedRequest, res) => {
   };
   try {
     if (!testMode && !includeBalance && !includeTech) {
-      const cacheKey = `${req.user?.id || 'legacy'}:${s?.id || 'no_session'}:${symbol}`;
+      const cacheKey = `${(req as any)?.user?.id || 'legacy'}:${s?.id || 'no_session'}:${symbol}`;
       statusCache.set(cacheKey, { ts: Date.now(), data: payload });
     }
   } catch {}

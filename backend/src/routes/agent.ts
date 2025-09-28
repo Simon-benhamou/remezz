@@ -167,10 +167,8 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         return res.status(502).json({ error: 'exchange_balance_failed', details: String(e?.message || e) });
       }
     } else {
-      // PAPER DEFAULT: if not provided, default to 1000 USD per agent
-      if (!startBal || startBal <= 0) {
-        startBal = Number(process.env.DEFAULT_PAPER_BALANCE_USD || 1000);
-      }
+      // PAPER DEFAULT: force 1000 USD per agent for crypto trading
+      startBal = 1000;
     }
     const s = await startSession(symbol, mode, startBal, {
       riskPerTradePct: body.riskPerTradePct,

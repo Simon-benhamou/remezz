@@ -509,11 +509,13 @@ export class ReboundRejectionAgent {
       partialInfo: null,
     };
     if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
-      const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 2)) : (this.pos.entry - (this.plan.stopDistance * 2));
+      // CRYPTO ADAPTATION: Use 4-5R targets minimum for crypto volatility
+      const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 4)) : (this.pos.entry - (this.plan.stopDistance * 4));
       this.pos.tp = [baseTp];
     }
     if (this.pos.tp.length === 1) {
-      const runnerTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 3)) : (this.pos.entry - (this.plan.stopDistance * 3));
+      // Runner TP at 5R for crypto
+      const runnerTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 5)) : (this.pos.entry - (this.plan.stopDistance * 5));
       this.pos.tp.push(runnerTp);
     }
 
@@ -2673,12 +2675,18 @@ export class ReboundRejectionAgent {
       : Math.max(0, (price - this.pos.entry) / this.pos.entry * 100);
     const criticalLoss = currentLossPct >= CRITICAL_LOSS_PCT;
     
-    // Override exit conditions: only allow early exit on critical loss or actual SL hit
-    const allowEarlyExit = criticalLoss || stopHit;
+    // 🚨 MINIMUM MOVEMENT CHECK: Require significant movement before allowing early exit on loss
+    // This prevents premature exits on micro-movements that are just noise
+    const movementSinceEntry = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
+    const minMovementForEarlyExit = 1.0; // Require at least 1% movement before allowing early exit
+    const significantMovement = movementSinceEntry >= minMovementForEarlyExit;
+    
+    // Override exit conditions: only allow early exit on critical loss AND significant movement, or actual SL hit
+    const allowEarlyExit = (criticalLoss && significantMovement) || stopHit;
     
     // Log timing info for debugging
     if (!minHoldElapsed && !allowEarlyExit) {
-      console.log(`⏰ Position hold: ${(age/1000/60).toFixed(1)}m/${(MIN_HOLD_TIME_MS/1000/60).toFixed(1)}m, loss: ${currentLossPct.toFixed(2)}%/${CRITICAL_LOSS_PCT}% - continuing...`);
+      console.log(`⏰ Position hold: ${(age/1000/60).toFixed(1)}m/${(MIN_HOLD_TIME_MS/1000/60).toFixed(1)}m, loss: ${currentLossPct.toFixed(2)}%/${CRITICAL_LOSS_PCT}%, movement: ${movementSinceEntry.toFixed(2)}%/${minMovementForEarlyExit}% - continuing...`);
     }
 
     // Extension rule: once, near end of max_hold, extend by +12–24h if strong trend and PnL>0

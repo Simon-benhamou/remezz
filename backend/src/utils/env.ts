@@ -163,9 +163,9 @@ export function getConfig(): Cfg {
     REVERSE_ON_BREAKOUT: (e.REVERSE_ON_BREAKOUT || "false") === "true",
     TRAIL_PCT: Number(e.TRAIL_PCT || "0"),
     // Slightly more permissive by default to avoid idle agents on moderate-trend days
-    ENTRY_SHORT_MIN_ADX: Number(e.ENTRY_SHORT_MIN_ADX || "15"),
+    ENTRY_SHORT_MIN_ADX: Number(e.ENTRY_SHORT_MIN_ADX || "6"),
     ENTRY_SHORT_MIN_RSI: Number(e.ENTRY_SHORT_MIN_RSI || "45"),
-    ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "12"),
+    ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "4"),
     ENTRY_LONG_MAX_RSI: Number(e.ENTRY_LONG_MAX_RSI || "65"),
     USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
     USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
@@ -184,12 +184,12 @@ export function getConfig(): Cfg {
     CRYPTO_MOONSHOT_TRAILING: Number(e.CRYPTO_MOONSHOT_TRAILING || "3.0"),
     CRYPTO_VOLUME_SURGE_MIN: Number(e.CRYPTO_VOLUME_SURGE_MIN || "2.0"),
     // Trading timing controls to prevent over-trading
-    MIN_HOLD_TIME_MS: Number(e.MIN_HOLD_TIME_MS || "300000"), // 5 minutes minimum
-    TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "120000"), // 2 minutes cooldown
-    CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "2.0"), // 2% loss = immediate exit
+    MIN_HOLD_TIME_MS: Number(e.MIN_HOLD_TIME_MS || "1800000"), // 30 minutes minimum for crypto
+    TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "600000"), // 10 minutes cooldown for crypto
+    CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "3.0"), // 3% loss = immediate exit (increased for crypto)
     // Trade quality filters
     // Lowered to trigger more realistic crypto trades while keeping quality
-    MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "1.0"), // 1.0% minimum expected profit
+    MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "0.5"), // 0.5% minimum expected profit for crypto
     MIN_PRICE_MOVEMENT_PCT: Number(e.MIN_PRICE_MOVEMENT_PCT || "0.6"), // 0.6% movement significant
     // Slightly reduced base quality thresholds (dynamic adjustments still apply)
     QUALITY_MIN_SCORE_CONSERVATIVE: Number(e.QUALITY_MIN_SCORE_CONSERVATIVE || "42"),
@@ -217,8 +217,8 @@ export function getConfig(): Cfg {
     PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "10"), // augmenté de 3 à 10
     COOLDOWN_CONFIDENCE_MIN: Number(e.COOLDOWN_CONFIDENCE_MIN || "0.6"),
     COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
-    // ATR % threshold relaxed to 0.7 by default; adaptive logic still enforces safety per symbol
-    ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.7"),
+    // ATR % threshold relaxed to 0.3 by default; adaptive logic still enforces safety per symbol
+    ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.3"),
     ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
     // Adaptive performance tuning (streak-based)
     STREAK_WINDOW: Number(e.STREAK_WINDOW || "3"),
