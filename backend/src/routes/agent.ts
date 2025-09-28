@@ -224,7 +224,9 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       timestamp: new Date().toISOString(),
       startBalanceUsd: startBal,
       budgetFraction,
-      aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'reactive',
+      aggressiveness: (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
+        ? (body.aggressiveness as any)
+        : 'reactive',
       userId: req.user!.id,
       } as any).catch(()=>{});
     } else {
@@ -253,7 +255,9 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
                       timestamp: new Date().toISOString(),
                       startBalanceUsd: startBal,
                       budgetFraction,
-                      aggressiveness: (body.aggressiveness === 'reactive' || body.aggressiveness === 'aggressive') ? body.aggressiveness : 'reactive',
+                      aggressiveness: (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
+                        ? (body.aggressiveness as any)
+                        : 'reactive',
                       userId: req.user!.id,
                     } as any).catch(()=>{});
                   }

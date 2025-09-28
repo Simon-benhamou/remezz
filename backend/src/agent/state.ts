@@ -349,7 +349,12 @@ export class ReboundRejectionAgent {
     }
     const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
     const availableMargin = Math.max(0, bal.equityUsd - bal.committedUsd);
-    const usableBalance = Math.max(0, Math.min(bal.freeUsd, availableMargin) * budgetFrac);
+    // Hard budget cap: limit balance used for sizing to startBalanceUsd * budget%
+    const startBudget = (this.profile.startBalanceUsd && this.profile.startBalanceUsd > 0)
+      ? this.profile.startBalanceUsd
+      : bal.freeUsd;
+    const capBalance = Math.max(0, startBudget * budgetFrac);
+    const usableBalance = Math.max(0, Math.min(bal.freeUsd, availableMargin, capBalance));
     const planPosition: any = this.plan.plan?.position || {};
     let planRiskMinPct: number | undefined;
     let planRiskMaxPct: number | undefined;
@@ -1664,6 +1669,22 @@ export class ReboundRejectionAgent {
     const thresholds = this.effectiveEntryThresholds();
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
+    // Confidence tightening: after a few failures, require stronger momentum
+    try {
+      const lossStreak = this.getLossStreak(3);
+      if (lossStreak >= 1) {
+        const mult = 1 + 0.15 * lossStreak; // +15% ATR & slope per loss in streak
+        minAtr *= mult;
+        minSlopeAbsPct *= mult;
+      }
+      // Confidence relaxation: after wins, allow slightly more entries (but keep floor)
+      const winStreak = this.getWinStreak(3);
+      if (winStreak >= 1) {
+        const relax = Math.max(0.8, 1 - 0.12 * winStreak); // down to -24% at 2 wins, -36% capped to 0.8
+        minAtr *= relax;
+        minSlopeAbsPct *= relax;
+      }
+    } catch {}
     
     // Intelligent per-crypto ATR threshold adaptation
     try {
@@ -2047,6 +2068,17 @@ export class ReboundRejectionAgent {
 
     // Apply dynamic adjustment based on recent performance
     minScore += this.qualityThresholdAdjustment;
+    // Immediate confidence bump on local loss streak to avoid over-trading after failures
+    try {
+      const streak = this.getLossStreak(3);
+      if (streak >= 1) minScore += (streak * 4); // +4 points per consecutive loss (last 3 trades window)
+      const last5 = this.getRecentPerformance(5);
+      if (last5.trades >= 3 && last5.winRate < 0.34) minScore += 3; // additional tightening on poor short-run winrate
+      // Symmetric relaxation on win streaks and good short-run performance
+      const wstreak = this.getWinStreak(3);
+      if (wstreak >= 1) minScore -= (wstreak * 3); // -3 per consecutive win
+      if (last5.trades >= 3 && last5.winRate > 0.66 && last5.avgPnlPct > 0.3) minScore -= 2;
+    } catch {}
     minScore = Math.max(25, Math.min(70, minScore)); // Wider lower bound to allow more trades
 
     const passed = qualityScore >= minScore;
@@ -2148,10 +2180,57 @@ export class ReboundRejectionAgent {
       }
     } catch {}
     
+    // Reduce size further on short-term loss streaks (confidence tightening)
+    try {
+      const streak = this.getLossStreak(3);
+      if (streak >= 1) {
+        const penalty = Math.min(0.7, 0.15 * streak); // up to -30%
+        sizeMultiplier *= (1 - penalty);
+      }
+      // Increase size modestly on win streaks (confidence relaxation)
+      const winstreak = this.getWinStreak(3);
+      if (winstreak >= 1) {
+        const bonus = Math.min(0.3, 0.1 * winstreak); // up to +30%
+        sizeMultiplier *= (1 + bonus);
+      }
+    } catch {}
     // Apply bounds (0.5x to 1.5x of base risk)
     sizeMultiplier = Math.max(0.5, Math.min(1.5, sizeMultiplier));
     
     return sizeMultiplier;
+  }
+
+  // Return consecutive losses in the last N trades (default 3)
+  private getLossStreak(window: number = 3): number {
+    if (!this.recentTrades.length) return 0;
+    const slice = this.recentTrades.slice(-window);
+    let streak = 0;
+    for (let i = slice.length - 1; i >= 0; i--) {
+      if (!slice[i].win) streak += 1; else break;
+    }
+    return streak;
+  }
+
+  // Return consecutive wins in the last N trades (default 3)
+  private getWinStreak(window: number = 3): number {
+    if (!this.recentTrades.length) return 0;
+    const slice = this.recentTrades.slice(-window);
+    let streak = 0;
+    for (let i = slice.length - 1; i >= 0; i--) {
+      if (slice[i].win) streak += 1; else break;
+    }
+    return streak;
+  }
+
+  // Snapshot of short-run performance over last N trades
+  private getRecentPerformance(n: number = 5): { trades: number; winRate: number; avgPnlPct: number } {
+    const slice = this.recentTrades.slice(-n);
+    const trades = slice.length;
+    if (trades === 0) return { trades: 0, winRate: 0, avgPnlPct: 0 };
+    const wins = slice.filter(t => t.win).length;
+    const winRate = wins / trades;
+    const avgPnlPct = slice.reduce((s, t) => s + t.pnlPct, 0) / trades;
+    return { trades, winRate, avgPnlPct };
   }
 
   // Market regime detection for adaptive strategy

@@ -140,15 +140,24 @@ export default function OrdersTable({ rows = [] }: any) {
       align: 'right',
       render: (_: any, record: any) => {
         const notional = (Number(record.qty) || 0) * (Number(record.price) || 0);
+        const cap = Number(record.notionalCapUsd || 0);
+        const ratio = cap > 0 && notional > 0 ? Math.min(999, (notional / cap) * 100) : null;
         return (
-          <span style={{ 
-            fontSize: 12, 
-            fontWeight: 600, 
-            color: '#2563eb',
-            fontFamily: 'Monaco, monospace'
-          }}>
-            {notional ? `$${notional.toFixed(2)}` : '-'}
-          </span>
+          <div style={{ textAlign:'right' }}>
+            <div style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#2563eb',
+              fontFamily: 'Monaco, monospace'
+            }}>
+              {notional ? `$${notional.toFixed(2)}` : '-'}
+            </div>
+            {cap > 0 && (
+              <div style={{ fontSize: 10, color: '#6b7280' }}>
+                cap ${cap.toFixed(0)}{ratio != null ? ` · ${ratio.toFixed(0)}%` : ''}
+              </div>
+            )}
+          </div>
         );
       },
     },

@@ -25,8 +25,11 @@ router.get("/", async (req, res) => {
     const roePct = isExit && o.leverage && o.pctChange != null ? Number(o.pctChange) * Number(o.leverage) : null;
     const notional = (Number(o.qty||0) * Number(o.price||0));
     const estLev = equityAlloc > 0 ? (notional / equityAlloc) : null;
+    // Notional cap = allocated equity * configured leverage for the order
+    const lev = Number(o.leverage || 0) || null;
+    const notionalCapUsd = (equityAlloc > 0 && lev) ? (equityAlloc * lev) : null;
     const { fills, ...rest } = o;
-    return { ...rest, positionSide, realizedPnlUsd, roePct, estLev };
+    return { ...rest, positionSide, realizedPnlUsd, roePct, estLev, notionalCapUsd };
   });
   res.json(out);
 });
