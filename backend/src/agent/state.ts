@@ -2453,7 +2453,27 @@ export class ReboundRejectionAgent {
   }
 
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
-    // Stub - manage existing position
+    // Check if position is still open on the exchange
+    if (this.pos && this.profile?.mode === 'live') {
+      try {
+        const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
+        if (!exposure || exposure.qty <= 0) {
+          // Position closed on exchange, clear local state and exit
+          console.log(`Position closed on exchange for ${this.profile.symbol}, clearing local state`);
+          this.pos = null;
+          this.state = 'EXIT';
+          this.lastExitTime = Date.now();
+          broadcast('agent_state', { state: this.state, reason: 'position_closed_on_exchange' }, this.profile.symbol, this.sessionId || undefined);
+          // Note: Not calling recordExit since we don't have exit details for external close
+          return;
+        }
+      } catch (error) {
+        console.warn(`Failed to check exposure for ${this.profile.symbol}:`, error);
+      }
+    }
+
+    // Position still open, continue managing
+    // TODO: Implement trailing stops, partial exits, etc.
     console.log(`Managing position at price ${price} (stub)`);
   }
 

@@ -387,10 +387,52 @@ async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
     const topSymbols = uniqueSymbols.slice(0, 40);
 
     console.log(`📊 Derived ${topSymbols.length} fallback symbols directly from ${EXCHANGE_ID} markets`);
-    return applyActiveFilter(topSymbols, excludeSessionId);
+    
+    // Apply volume filtering to fallback symbols
+    const filteredSymbols: string[] = [];
+    for (const symbol of topSymbols) {
+      try {
+        const ticker = await getTicker(symbol);
+        if (ticker) {
+          const volumeUsd = volumeUsdFromTicker(ticker);
+          const last = Number(ticker.last || 0);
+          const eligibility = isSymbolEligibleForAuto(symbol.split('/')[0], { last, volumeUsd });
+          if (eligibility.ok) {
+            filteredSymbols.push(symbol);
+          } else {
+            console.log(`🚫 Fallback symbol ${symbol} rejected: ${eligibility.reason} (vol: $${(volumeUsd/1000).toFixed(0)}K, required: $${(eligibility.minRequired!/1000).toFixed(0)}K)`);
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️ Failed to check volume for fallback symbol ${symbol}:`, error);
+      }
+    }
+    
+    console.log(`📊 After volume filtering: ${filteredSymbols.length} eligible fallback symbols`);
+    return applyActiveFilter(filteredSymbols, excludeSessionId);
   } catch (error) {
     console.error('Error generating dynamic fallback list:', error);
-    return applyActiveFilter(FALLBACK_STATIC_SYMBOLS, excludeSessionId);
+    // Apply volume filtering to static fallback symbols
+    const filteredStatic: string[] = [];
+    for (const symbol of FALLBACK_STATIC_SYMBOLS) {
+      try {
+        const ticker = await getTicker(symbol);
+        if (ticker) {
+          const volumeUsd = volumeUsdFromTicker(ticker);
+          const last = Number(ticker.last || 0);
+          const eligibility = isSymbolEligibleForAuto(symbol.split('/')[0], { last, volumeUsd });
+          if (eligibility.ok) {
+            filteredStatic.push(symbol);
+          } else {
+            console.log(`🚫 Static fallback symbol ${symbol} rejected: ${eligibility.reason} (vol: $${(volumeUsd/1000).toFixed(0)}K, required: $${(eligibility.minRequired!/1000).toFixed(0)}K)`);
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️ Failed to check volume for static fallback symbol ${symbol}:`, error);
+      }
+    }
+    console.log(`📊 After volume filtering: ${filteredStatic.length} eligible static fallback symbols`);
+    return applyActiveFilter(filteredStatic, excludeSessionId);
   }
 }
 
@@ -1626,17 +1668,30 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
 export function volumeUsdFromTicker(ticker: any): number {
   try {
     // Prioritize info.volumeUsd24h for exchanges that provide it (e.g., Crypto.com)
-    const infoVol = Number(ticker?.info?.volumeUsd24h || ticker?.info?.volume24h || 0);
-    if (infoVol && Number.isFinite(infoVol)) return infoVol;
+    const infoVol = Number(ticker?.info?.volumeUsd24h || ticker?.info?.volume24h || ticker?.info?.volume || 0);
+    if (infoVol && Number.isFinite(infoVol)) {
+      console.log(`📊 Volume from info: ${infoVol} for ${ticker?.symbol}`);
+      return infoVol;
+    }
     
     // Fallback to standard CCXT fields
     const qv = Number(ticker?.quoteVolume || 0);
-    if (qv && Number.isFinite(qv)) return qv;
+    if (qv && Number.isFinite(qv)) {
+      console.log(`📊 Volume from quoteVolume: ${qv} for ${ticker?.symbol}`);
+      return qv;
+    }
     
     const bv = Number(ticker?.baseVolume || 0);
     const last = Number(ticker?.last || 0);
-    if (bv > 0 && last > 0) return bv * last;
-  } catch {}
+    const calcVol = bv > 0 && last > 0 ? bv * last : 0;
+    if (calcVol > 0) {
+      console.log(`📊 Volume calculated: ${calcVol} (${bv} * ${last}) for ${ticker?.symbol}`);
+      return calcVol;
+    }
+  } catch (e) {
+    console.log(`❌ Error calculating volume for ${ticker?.symbol}:`, e);
+  }
+  console.log(`📊 Volume: 0 for ${ticker?.symbol}`);
   return 0;
 }
 
