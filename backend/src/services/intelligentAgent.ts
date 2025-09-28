@@ -422,7 +422,7 @@ function getFallbackSymbols(): string[] {
 /**
  * Optimized scoring algorithm - technical analysis first, minimal IA usage
  */
-async function calculateIntelligentScore(symbol: string): Promise<IntelligentAnalysis | null> {
+async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis | null> {
   try {
     console.log(`🔍 Analyzing ${symbol}...`);
     
@@ -442,14 +442,15 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
     const volLog = volUsdLog ? `$${(volUsdLog/1_000_000).toFixed(2)}M` : String(volBaseLog);
     console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${volLog}, Change=${ticker.percentage}%`);
 
-    // Only use full analysis (with IA) for top performers or significant moves
+    // Use full analysis (with IA) for ALL symbols to get sentiment data
+    // Previously only used for >3% moves, now expanded for all trades
     let sentiment: any = null;
     const change24h = Number(ticker.percentage || 0);
-    const shouldUseAI = Math.abs(change24h) > 3; // Only if >3% move
+    const shouldUseAI = true; // Always use AI for sentiment analysis
     
     if (shouldUseAI) {
       try {
-        console.log(`🤖 ${symbol}: Using AI analysis (${change24h}% move)`);
+        console.log(`🤖 ${symbol}: Using AI analysis for sentiment (${change24h}% move)`);
         const fullAnalysisResult = await fullAnalysis(symbol);
         sentiment = fullAnalysisResult.sentiment;
       } catch {
@@ -473,11 +474,15 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
       adx: technical.adx14 || 0,
     };
 
-    // Optimized scoring - technical analysis focused
-    const momentumScore = calculateMomentumComponent(metrics);
-    const trendScore = calculateTrendComponent(metrics, technical);
-    const volatilityScore = calculateVolatilityComponent(metrics);
-    const volumeScore = calculateVolumeComponent(metrics.volume24h);
+    // Get aggressiveness level for scoring adjustments
+    const aggressiveness = opts?.aggressiveness || 'reactive';
+    const aggressiveMultiplier = aggressiveness === 'conservative' ? 0.8 : aggressiveness === 'aggressive' ? 1.2 : 1.0;
+
+    // Optimized scoring - technical analysis focused with aggressiveness adjustments
+    const momentumScore = calculateMomentumComponent(metrics, aggressiveMultiplier);
+    const trendScore = calculateTrendComponent(metrics, technical, aggressiveMultiplier);
+    const volatilityScore = calculateVolatilityComponent(metrics, aggressiveMultiplier);
+    const volumeScore = calculateVolumeComponent(metrics.volume24h, aggressiveMultiplier);
     const regimeScore = calculateRegimeComponent(technical.regime);
     
     // Sentiment score (only if IA was used)
@@ -492,7 +497,7 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
       }
     } catch {}
 
-    // Reweighted composite score - technical analysis priority
+    // Reweighted composite score - technical analysis priority with aggressiveness adjustments
     const compositeScore = (
       momentumScore * 0.30 +      // 30% momentum (increased)
       trendScore * 0.25 +         // 25% trend (increased)
@@ -515,7 +520,7 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
     );
 
     const finalScore = Math.round(compositeScore * 100) / 100;
-    console.log(`🎯 ${symbol}: Final Score=${finalScore} (M:${momentumScore.toFixed(1)}, T:${trendScore.toFixed(1)}, V:${volatilityScore.toFixed(1)}, Vol:${volumeScore.toFixed(1)})`);
+    console.log(`🎯 ${symbol}: Final Score=${finalScore} (M:${momentumScore.toFixed(1)}, T:${trendScore.toFixed(1)}, V:${volatilityScore.toFixed(1)}, Vol:${volumeScore.toFixed(1)}) [${aggressiveness}]`);
 
     return {
       symbol,
@@ -536,23 +541,28 @@ async function calculateIntelligentScore(symbol: string): Promise<IntelligentAna
 }
 
 /**
- * Momentum component scoring - More permissive for real market conditions
+ * Momentum component scoring - More permissive for real market conditions with aggressiveness adjustment
  */
-function calculateMomentumComponent(metrics: any): number {
+function calculateMomentumComponent(metrics: any, aggressiveMultiplier: number = 1.0): number {
   const { momentum, rsi } = metrics;
   
-  // Strong momentum signals (lowered thresholds)
-  if (Math.abs(momentum) > 3 && ((momentum > 0 && rsi > 55) || (momentum < 0 && rsi < 45))) {
+  // Adjust thresholds based on aggressiveness (lower thresholds = more permissive for aggressive mode)
+  const strongMomentumThreshold = 3 * aggressiveMultiplier;
+  const goodMomentumThreshold = 2 * aggressiveMultiplier;
+  const moderateMomentumThreshold = 0.5 * aggressiveMultiplier;
+  
+  // Strong momentum signals (lowered thresholds for aggressive mode)
+  if (Math.abs(momentum) > strongMomentumThreshold && ((momentum > 0 && rsi > 55) || (momentum < 0 && rsi < 45))) {
     return 8.5; // Excellent momentum with RSI confirmation
   }
   
   // Good momentum (lowered from 3 to 2)
-  if (Math.abs(momentum) > 2) {
+  if (Math.abs(momentum) > goodMomentumThreshold) {
     return 7.0 + Math.min(1.5, Math.abs(momentum) / 10);
   }
   
   // Moderate momentum (lowered from 1 to 0.5)
-  if (Math.abs(momentum) > 0.5) {
+  if (Math.abs(momentum) > moderateMomentumThreshold) {
     return 5.5 + Math.abs(momentum);
   }
   
@@ -561,23 +571,30 @@ function calculateMomentumComponent(metrics: any): number {
 }
 
 /**
- * Trend component scoring - More permissive for real market conditions
+ * Trend component scoring - More permissive for real market conditions with aggressiveness adjustment
  */
-function calculateTrendComponent(metrics: any, technical: any): number {
+function calculateTrendComponent(metrics: any, technical: any, aggressiveMultiplier: number = 1.0): number {
   const { trend, trendStrength, adx } = metrics;
   
-  // Strong trending market (lowered thresholds)
-  if (adx > 20 && trendStrength > 1.5) {
+  // Adjust thresholds based on aggressiveness (lower thresholds = more permissive for aggressive mode)
+  const strongAdxThreshold = 20 / aggressiveMultiplier;
+  const strongTrendStrengthThreshold = 1.5 / aggressiveMultiplier;
+  const moderateAdxThreshold = 12 / aggressiveMultiplier;
+  const moderateTrendStrengthThreshold = 0.8 / aggressiveMultiplier;
+  const weakAdxThreshold = 8 / aggressiveMultiplier;
+  
+  // Strong trending market (lowered thresholds for aggressive mode)
+  if (adx > strongAdxThreshold && trendStrength > strongTrendStrengthThreshold) {
     return 8.0 + Math.min(1.0, trendStrength / 5);
   }
   
   // Moderate trend (lowered thresholds)
-  if (adx > 12 && trendStrength > 0.8) {
+  if (adx > moderateAdxThreshold && trendStrength > moderateTrendStrengthThreshold) {
     return 6.5 + Math.min(1.5, adx / 15);
   }
   
   // Weak trend but some direction (more generous)
-  if (Math.abs(trend) > 0 || adx > 8) {
+  if (Math.abs(trend) > 0 || adx > weakAdxThreshold) {
     return 5.0 + Math.min(1.5, Math.abs(trend) / (technical.last || 1) * 100);
   }
   
@@ -606,20 +623,25 @@ function calculateSentimentComponent(sentiment: any): number {
 }
 
 /**
- * Volatility component scoring - More permissive for crypto markets
+ * Volatility component scoring - More permissive for crypto markets with aggressiveness adjustment
  */
-function calculateVolatilityComponent(metrics: any): number {
+function calculateVolatilityComponent(metrics: any, aggressiveMultiplier: number = 1.0): number {
   const { volatility, hurst } = metrics;
   
-  // Optimal volatility range for crypto (broader range)
-  if (volatility >= 1.5 && volatility <= 12) {
+  // Adjust volatility range based on aggressiveness (broader range for aggressive mode)
+  const optimalVolMin = 1.5 / aggressiveMultiplier;
+  const optimalVolMax = 12 * aggressiveMultiplier;
+  const highVolThreshold = 12 * aggressiveMultiplier;
+  
+  // Optimal volatility range for crypto (broader range for aggressive mode)
+  if (volatility >= optimalVolMin && volatility <= optimalVolMax) {
     const base = 7.5;
     const persistency = hurst > 0.6 ? 1.0 : hurst < 0.4 ? 0.8 : 0.9;
     return base + persistency;
   }
   
-  // High volatility (opportunity in crypto)
-  if (volatility > 12) {
+  // High volatility (opportunity in crypto, more permissive for aggressive mode)
+  if (volatility > highVolThreshold) {
     return 6.5 + Math.min(1.5, 15 / volatility);
   }
   
@@ -628,21 +650,24 @@ function calculateVolatilityComponent(metrics: any): number {
 }
 
 /**
- * Volume component scoring - Lower thresholds for realistic crypto volumes
+ * Volume component scoring - Lower thresholds for realistic crypto volumes with aggressiveness adjustment
  */
-function calculateVolumeComponent(volume: number): number {
-  // SÉCURITÉ: Rejet automatique pour volumes insuffisants
-  if (volume < 500000) {
-    console.log(`🚫 Volume ${volume} insuffisant pour trading AUTO (minimum $500K)`);
+function calculateVolumeComponent(volume: number, aggressiveMultiplier: number = 1.0): number {
+  // Adjust minimum volume threshold based on aggressiveness (lower threshold for aggressive mode)
+  const minVolumeThreshold = 200000 / aggressiveMultiplier; // More permissive for aggressive mode
+  
+  // SÉCURITÉ: Rejet automatique pour volumes insuffisants (relâché selon agressivité)
+  if (volume < minVolumeThreshold) {
+    console.log(`🚫 Volume ${volume} insuffisant pour trading AUTO (minimum $${(minVolumeThreshold/1000).toFixed(0)}K)`);
     return 0; // REJET AUTOMATIQUE
   }
   
-  // Scores pour volumes acceptables
+  // Scores pour volumes acceptables (seuils ajustés selon agressivité)
   if (volume > 10000000) return 9.5; // $10M+ = Excellent
   if (volume > 5000000) return 8.5;  // $5M+ = High volume 
   if (volume > 2000000) return 7.5;  // $2M+ = Good volume
   if (volume > 1000000) return 7.0;  // $1M+ = Acceptable volume
-  return 6.0; // $500K-$1M = Minimum acceptable
+  return 6.0; // $200K-$1M = Minimum acceptable (relâché)
 }
 
 /**
@@ -820,7 +845,7 @@ function calculateConfidence(...scores: number[]): number {
 /**
  * Optimized scan focusing on top 10-20 cryptos only
  */
-export async function scanIntelligentOpportunities(excludeSessionId?: string): Promise<IntelligentAnalysis[]> {
+export async function scanIntelligentOpportunities(excludeSessionId?: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis[]> {
   console.log('🔍 Starting optimized opportunity scan (top cryptos only)...');
   
   // Get top 10-20 cryptos instead of all perpetuals, excluding current session
@@ -833,7 +858,7 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string): P
   
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
-    const batchPromises = batch.map(symbol => calculateIntelligentScore(symbol));
+    const batchPromises = batch.map(symbol => calculateIntelligentScore(symbol, opts));
     const batchResults = await Promise.all(batchPromises);
     
     // Filter out null results and add to analyses
@@ -858,9 +883,9 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string): P
 /**
  * Get the best opportunity with detailed explanation
  */
-export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number; candidatesOverride?: IntelligentAnalysis[] }): Promise<IntelligentAnalysis | null> {
+export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number; candidatesOverride?: IntelligentAnalysis[]; aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis | null> {
   // Pass excludeSessionId through the selection chain (allow override for tests)
-  const opportunities = opts?.candidatesOverride ?? await scanIntelligentOpportunities(excludeSessionId);
+  const opportunities = opts?.candidatesOverride ?? await scanIntelligentOpportunities(excludeSessionId, opts);
 
   if (opportunities.length === 0) {
     console.log('⚠️ No opportunities found - all cryptos failed analysis criteria');
@@ -1610,22 +1635,24 @@ export function volumeUsdFromTicker(ticker: any): number {
 }
 
 // Smart eligibility criteria (dynamic, not static):
-// - Must pass a minimum USD volume
+// - Must pass a minimum USD volume (relâché de $500K à $200K)
 // - Stricter thresholds for sub-penny and complex/long symbols
 export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string } {
   const cfg = getConfig();
   const level = opts?.aggressiveness || 'reactive';
-  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE : level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE : cfg.AUTO_MIN_USD_VOLUME_REACTIVE;
+  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 300000 : 
+                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 150000 : 
+                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 200000; // Relâché à $200K par défaut
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
   if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume' };
-  // Sub-penny tokens must have substantial volume
-  if (px > 0 && px < 0.01 && vol < 5_000_000) return { ok: false, reason: 'subpenny_low_volume' };
-  // Complex/long symbols (often micro-caps) must have higher volume
+  // Sub-penny tokens must have substantial volume (relâché)
+  if (px > 0 && px < 0.01 && vol < 2_000_000) return { ok: false, reason: 'subpenny_low_volume' };
+  // Complex/long symbols (often micro-caps) must have higher volume (relâché)
   const isComplex = base.length >= 6 || /[0-9]/.test(base);
-  if (isComplex && vol < 3_000_000) return { ok: false, reason: 'complex_symbol_low_volume' };
-  // Meme-like names must have strong liquidity
+  if (isComplex && vol < 1_000_000) return { ok: false, reason: 'complex_symbol_low_volume' };
+  // Meme-like names must have strong liquidity (relâché)
   const memeLike = ['BOME', 'WIF', 'PEPE', 'SHIB', 'FLOKI', 'BONK'];
-  if (memeLike.includes(base.toUpperCase()) && vol < 10_000_000) return { ok: false, reason: 'meme_low_volume' };
+  if (memeLike.includes(base.toUpperCase()) && vol < 5_000_000) return { ok: false, reason: 'meme_low_volume' };
   return { ok: true };
 }

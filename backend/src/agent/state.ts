@@ -2297,14 +2297,15 @@ export class ReboundRejectionAgent {
     // Simplified quality filters (binary pass/fail for essential indicators)
     checks.qualityFilters = this.getQualityFiltersDiagnostics(snap);
 
-    // Calculate overall quality score based on points (0-100)
+    // Calculate overall quality score based on points (0-100) - allow trading with 80+ points (4/5 filters)
     const qualityPoints = Object.values(checks.qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
     const maxPoints = 100; // 5 filters × 20 points each
+    const minTradingPoints = 80; // Require at least 4/5 filters (80 points) to trade
     checks.qualityScore = {
       current: qualityPoints,
-      required: maxPoints,
-      status: qualityPoints >= maxPoints ? 'PASS' : 'FAIL',
-      reason: `Quality score: ${qualityPoints}/${maxPoints} points (${Object.values(checks.qualityFilters).filter((f: any) => f.points > 0).length}/5 filters passed)`
+      required: minTradingPoints, // Changed from maxPoints to minTradingPoints
+      status: qualityPoints >= minTradingPoints ? 'PASS' : 'FAIL',
+      reason: `Quality score: ${qualityPoints}/${maxPoints} points (${Object.values(checks.qualityFilters).filter((f: any) => f.points > 0).length}/5 filters passed) - ${qualityPoints >= minTradingPoints ? 'Ready to trade' : 'Insufficient quality'}`
     };
 
     return checks;

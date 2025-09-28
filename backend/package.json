@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --loader ts-node/esm --watch src/server.ts",
-    "dev:debug": "node --loader ts-node/esm --inspect=9229 --watch src/server.ts",
+    "dev": "tsx watch src/server.ts",
+    "dev:debug": "tsx watch --inspect=9229 src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
     "test:unit": "node ./scripts/run-unit-tests.mjs",
@@ -46,6 +46,7 @@
     "prettier": "^3.3.3",
     "prisma": "^5.16.1",
     "ts-node-dev": "^2.0.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.4.5"
   }
 }
