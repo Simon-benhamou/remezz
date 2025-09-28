@@ -7,7 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "dev:debug": "tsx watch --inspect=9229 src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "test:unit": "node ./scripts/run-unit-tests.mjs",
     "test:integration": "node ./scripts/run-integration-tests.mjs",
     "test": "npm run -s build && npm run -s test:unit && npm run -s test:integration",
