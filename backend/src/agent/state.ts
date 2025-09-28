@@ -3006,6 +3006,36 @@ export class ReboundRejectionAgent {
         }
       } catch {}
     }
+
+    // Optional: trigger Smart-Agent reselection on exit under certain conditions
+    // Controlled by env SMART_RESELECT_ON_EXIT:
+    //  - 'true' => always reselect on any exit
+    //  - 'sl'   => only on stop-loss exits
+    //  - 'loss' => any negative PnL
+    //  - default/absent => disabled
+    try {
+      const mode = String(process.env.SMART_RESELECT_ON_EXIT || '').toLowerCase();
+      let trigger = false;
+      if (mode === 'true') trigger = true;
+      else if (mode === 'sl') trigger = (reason === 'sl');
+      else if (mode === 'loss') trigger = (reason !== 'tp');
+      else if (mode === 'sl_or_streak') trigger = (reason === 'sl') || (this.consecutiveStops >= 2);
+
+      if (trigger && this.sessionId) {
+        // Ensure session is Smart Agent before triggering
+        const s = await prisma.agentSession.findUnique({ where: { id: this.sessionId }, select: { isSmartAgent: true, profileJson: true } });
+        const isSmart = !!(s?.isSmartAgent || (s as any)?.profileJson?.isIntelligent);
+        if (isSmart) {
+          // Fire-and-forget to avoid blocking the exit flow
+          void (async () => {
+            try {
+              const { triggerIntelligentReselection } = await import('../services/intelligentAgent.js');
+              await triggerIntelligentReselection(this.sessionId!);
+            } catch {}
+          })();
+        }
+      }
+    } catch {}
   }
 
   private enterRiskCooldown(guard: RiskDecision) {

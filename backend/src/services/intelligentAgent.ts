@@ -1113,6 +1113,19 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
   try {
     const config = session.profileJson as any;
     const now = new Date();
+    // Configurable recent-activity window (hours). Default 3h (was 12h).
+    const activityWindowHours = Math.max(1, Number(process.env.SMART_RECENT_ACTIVITY_HOURS || '3'));
+    
+    // Dynamic min-hold based on last known ADX (from stored analysis). Fallback to 12h.
+    // - strong trend (ADX>=25): 10h
+    // - moderate trend (20<=ADX<25): 8h
+    // - neutral (15<=ADX<20): 6h
+    // - choppy (ADX<15): 3h
+    const lastAdx = Number(config?.analysis?.metrics?.adx ?? 0);
+    const dynamicMinHold = lastAdx >= 25 ? 10
+                         : lastAdx >= 20 ? 8
+                         : lastAdx >= 15 ? 6
+                         : 3;
     
     // Fast guard: if we suffered a cluster of losses recently, trigger an immediate re-evaluation
     try {
@@ -1229,7 +1242,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         selectedAt: now.toISOString(),
         lastScan: now.toISOString(),
         nextScanDue: new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString(),
-        minHoldHours: 8,
+        // Seed minHoldHours based on current trend if not provided
+        minHoldHours: Number((config as any)?.minHoldHours ?? (lastAdx >= 25 ? 10 : lastAdx >= 20 ? 8 : lastAdx >= 15 ? 6 : 3)),
         strategy: 'optimized_cost_efficient',
         sleepMode: false,
         sleepMisses: 0
@@ -1274,7 +1288,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     // Normal session logic (not in sleep mode)
     const selectedAt = new Date(config?.selectedAt || now);
     const hoursSinceSelection = (now.getTime() - selectedAt.getTime()) / (1000 * 60 * 60);
-    const minHoldHours = Math.max(2, Number((config as any)?.minHoldHours ?? 12));
+    // Prefer explicit config, else dynamic based on ADX
+    const minHoldHours = Math.max(2, Number((config as any)?.minHoldHours ?? dynamicMinHold));
     
     // RULE 1: Minimum hold period (configurable)
     if (hoursSinceSelection < minHoldHours) {
@@ -1282,12 +1297,12 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       return;
     }
     
-    // RULE 2: Check if there were any trades (fills) in the last 12h ONLY
+    // RULE 2: Check if there were any trades (fills) in the last X hours ONLY (default 3h)
     let recentTrades = 0;
     try {
-      const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      const windowStart = new Date(now.getTime() - activityWindowHours * 60 * 60 * 1000);
       recentTrades = await prisma.fill.count({
-        where: { sessionId: session.id, ts: { gte: twelveHoursAgo } }
+        where: { sessionId: session.id, ts: { gte: windowStart } }
       });
     } catch (err) {
       console.warn(`⚠️ Failed to count recent fills for session ${session.id}:`, err);
@@ -1297,14 +1312,14 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     const hasRecentActivity = recentTrades > 0;
     
     if (hasRecentActivity) {
-      console.log(`📈 Session ${session.id}: ${recentTrades} fills in last 12h — keep ${session.symbol}`);
+      console.log(`📈 Session ${session.id}: ${recentTrades} fills in last ${activityWindowHours}h — keep ${session.symbol}`);
       // Update next check to 12h (was 24h): be more responsive to market rotation
       const nextCheck = new Date(now.getTime() + 12 * 60 * 60 * 1000);
       await updateSessionNextCheck(session.id, nextCheck);
       return;
     }
     
-    console.log(`🔍 Session ${session.id}: No trades in 12h+ - evaluating switch from ${session.symbol}`);
+    console.log(`🔍 Session ${session.id}: No trades in ${activityWindowHours}h+ - evaluating switch from ${session.symbol}`);
 
     // Refresh current symbol analysis so we compare against latest data
     let refreshedCurrent: IntelligentAnalysis | null = null;
