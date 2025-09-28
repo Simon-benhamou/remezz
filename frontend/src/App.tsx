@@ -12,60 +12,41 @@ import ReportsPage from './pages/ReportsPage';
 import TradesJournalPage from './pages/TradesJournalPage';
 import BacklogPage from './pages/BacklogPage';
 import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
-import { useMode } from './contexts/ModeContext';
+import { useAuth } from './hooks/useAuth';
+import { useDashboard } from './hooks/useDashboard';
+import { useAppStore } from './store';
 import UserDropdown from './components/UserDropdown';
   const { Header, Content, Footer } = Layout;
 
 function AppInner(){
-  const [overview, setOverview] = React.useState<any>(null);
-  const [authChecked, setAuthChecked] = React.useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { mode, setMode } = useMode();
 
-  // Vérification d'authentification au démarrage
+  // Use Zustand stores
+  const { isAuthenticated, isLoading: authLoading, signOut } = useAuth();
+  const { mode, setMode, setInitialized, isInitialized } = useAppStore();
+  const { overview } = useDashboard();
+
+  // Initialize app
   React.useEffect(() => {
-    const checkAuth = async () => {
-      const apiKey = getApiKey();
-      if (apiKey) {
-        try {
-          // Valider le token avec le serveur
-          await api.client.get('/api/auth/me');
-          setAuthChecked(true);
-        } catch (error) {
-          // Token invalide, nettoyer et rediriger
-          clearApiKey();
-          window.location.href = '/login';
-          return;
-        }
-      } else {
-        setAuthChecked(true);
-      }
-    };
-    checkAuth();
-  }, []);
-
-  // Lightweight polling for multi-agent overview (no WS in App anymore)
-  React.useEffect(()=>{
-    let timer: any;
-    const load = async ()=>{
-      try { setOverview(await api.overview(mode)); } catch {}
-    };
-    if (authChecked && getApiKey()) {
-      load();
-      timer = setInterval(load, 15000);
+    if (!isInitialized) {
+      setInitialized(true);
     }
-    return ()=> { if (timer) clearInterval(timer); };
-  }, [mode, authChecked]);
+  }, [isInitialized, setInitialized]);
 
-  const hasSession = true; // routing no longer depends on a single active session
+  // Logout handler
+  const handleLogout = () => {
+    signOut();
+    clearApiKey();
+    window.location.href = '/login';
+  };
 
-  // Attendre la vérification d'auth avant de rendre
-  if (!authChecked) {
+  // Attendre l'initialisation
+  if (authLoading || !isInitialized) {
     return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>Loading...</div>;
   }
 
-  const authed = !!getApiKey();
+  const authed = isAuthenticated;
   if (!authed) {
     return (
       <Routes>
@@ -194,25 +175,25 @@ function AppInner(){
             )}
           </Space>
           <Space style={{ color: '#374151', fontWeight:500, fontSize: 14 }}>
-            <Segmented 
-              size='small' 
-              value={mode} 
+            <Segmented
+              size='small'
+              value={mode}
               options={[
                 { label: 'Live', value: 'live' },
                 { label: 'Paper', value: 'paper' },
-              ]} 
+              ]}
               onChange={(val)=> setMode((val as 'live'|'paper'))}
               style={{ background: '#f9fafb' }}
             />
             <span style={{ color:'#6b7280' }}>ROI:</span>
-            <Tag 
+            <Tag
               color={(Number(overview?.roiPct||0) >= 0) ? 'success' : 'error'}
               style={{ borderRadius: 6, fontSize: 12 }}
             >
               {Number(overview?.roiPct||0).toFixed(2)}%
             </Tag>
             <span style={{ color:'#6b7280' }}>PnL:</span>
-            <Tag 
+            <Tag
               color={(Number(overview?.pnlUsd||0) >= 0) ? 'success' : 'error'}
               style={{ borderRadius: 6, fontSize: 12 }}
             >
