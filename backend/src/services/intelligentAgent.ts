@@ -261,7 +261,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       const base = crypto.symbol.split("/")[0];
       const elig = isSymbolEligibleForAuto(base, { last: Number((tickers as any)[`${crypto.symbol.replace('/USDT','/USD:USD')}`]?.last || 0), volumeUsd: crypto.quoteVolume24h });
       if (!elig.ok) {
-        console.log(`🚫 ${crypto.symbol} rejected: ${elig.reason} (volUsd=$${(crypto.quoteVolume24h/1_000_000).toFixed(2)}M)`);
+        console.log(`🚫 ${crypto.symbol} rejected: ${elig.reason} (volUsd=$${(crypto.quoteVolume24h/1_000_000).toFixed(2)}M, required: $${(elig.minRequired || 0)/1_000_000}M)`);
         return false;
       }
       
@@ -1637,7 +1637,7 @@ export function volumeUsdFromTicker(ticker: any): number {
 // Smart eligibility criteria (dynamic, not static):
 // - Must pass a minimum USD volume (relâché de $500K à $200K)
 // - Stricter thresholds for sub-penny and complex/long symbols
-export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string } {
+export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string; minRequired?: number } {
   const cfg = getConfig();
   const level = opts?.aggressiveness || 'reactive';
   const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 300000 : 
@@ -1645,14 +1645,14 @@ export function isSymbolEligibleForAuto(base: string, params: { last: number; vo
                      cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 200000; // Relâché à $200K par défaut
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
-  if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume' };
+  if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume', minRequired: minByLevel };
   // Sub-penny tokens must have substantial volume (relâché)
-  if (px > 0 && px < 0.01 && vol < 2_000_000) return { ok: false, reason: 'subpenny_low_volume' };
+  if (px > 0 && px < 0.01 && vol < 2_000_000) return { ok: false, reason: 'subpenny_low_volume', minRequired: 2_000_000 };
   // Complex/long symbols (often micro-caps) must have higher volume (relâché)
   const isComplex = base.length >= 6 || /[0-9]/.test(base);
-  if (isComplex && vol < 1_000_000) return { ok: false, reason: 'complex_symbol_low_volume' };
+  if (isComplex && vol < 1_000_000) return { ok: false, reason: 'complex_symbol_low_volume', minRequired: 1_000_000 };
   // Meme-like names must have strong liquidity (relâché)
   const memeLike = ['BOME', 'WIF', 'PEPE', 'SHIB', 'FLOKI', 'BONK'];
-  if (memeLike.includes(base.toUpperCase()) && vol < 5_000_000) return { ok: false, reason: 'meme_low_volume' };
+  if (memeLike.includes(base.toUpperCase()) && vol < 5_000_000) return { ok: false, reason: 'meme_low_volume', minRequired: 5_000_000 };
   return { ok: true };
 }

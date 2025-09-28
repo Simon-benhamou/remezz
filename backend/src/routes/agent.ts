@@ -17,6 +17,8 @@ import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCa
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan } from '../services/planStore.js';
+import { getTicker } from '../data/market.js';
+import { getConfig } from '../utils/env.js';
 
 export const router = Router();
 
@@ -390,6 +392,35 @@ router.post('/set-symbol', async (req,res)=>{
   const { symbol, sessionId } = req.body as { symbol: string, sessionId: string };
   const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
   if (!s) return res.status(400).json({ error: 'no_session' });
+  
+  // For smart agents, validate that the symbol meets volume requirements
+  const isSmartAgent = (s as any).isSmartAgent || (s as any).profileJson?.isIntelligent || false;
+  if (isSmartAgent) {
+    try {
+      const ticker = await getTicker(symbol);
+      const volumeUsd = Number(ticker?.quoteVolume || 0) || (Number(ticker?.baseVolume || 0) * Number(ticker?.last || 0));
+      
+      const cfg = getConfig();
+      const aggressiveness = (s as any).profileJson?.aggressiveness || 'reactive';
+      const minVolume = aggressiveness === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE :
+                        aggressiveness === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE :
+                        cfg.AUTO_MIN_USD_VOLUME_REACTIVE;
+      
+      if (volumeUsd < minVolume) {
+        return res.status(400).json({ 
+          error: 'insufficient_volume_for_smart_agent', 
+          message: `Symbol ${symbol} has insufficient volume ($${volumeUsd.toLocaleString()}) for smart agent. Minimum required: $${minVolume.toLocaleString()}`,
+          currentVolume: volumeUsd,
+          requiredVolume: minVolume
+        });
+      }
+      
+      console.log(`✅ Smart agent symbol validation passed for ${symbol}: $${volumeUsd.toLocaleString()} >= $${minVolume.toLocaleString()}`);
+    } catch (error) {
+      console.warn(`⚠️ Could not validate volume for ${symbol}, proceeding anyway:`, error);
+    }
+  }
+  
   const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
   broadcast('session', upd, upd.symbol, upd.id);
   res.json(upd);
