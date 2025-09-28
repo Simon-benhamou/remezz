@@ -155,6 +155,8 @@ export async function recomputeKpi(sessionId: string) {
     partialCount,
     partialWinRate,
     trades: tradeCount,
+    wins,
+    losses,
     returnsSample: returnsPct.length,
     medianHoldMin: medianHold,
     p75HoldMin: p75Hold,

@@ -1,5 +1,6 @@
 import { prisma } from '../db/client.js';
 import { broadcast } from '../ws/hub.js';
+import { recomputeKpi } from '../metrics/kpi.js';
 
 export async function recordEnter(params: {
   sessionId: string;
@@ -77,6 +78,13 @@ export async function recordEnter(params: {
   // Broadcast latest orders for this session only
   const rows = await prisma.order.findMany({ where: { sessionId: params.sessionId }, orderBy: { createdAt: 'desc' }, take: 200 });
   broadcast('orders', rows, params.symbol, params.sessionId);
+  
+  // Recompute KPIs after position entry
+  try {
+    await recomputeKpi(params.sessionId);
+  } catch (error) {
+    console.error('Failed to recompute KPI after entry:', error);
+  }
 }
 
 export async function updateProtectiveSnapshot(params: {
@@ -181,4 +189,11 @@ export async function recordExit(params: {
 
   const rows = await prisma.order.findMany({ where: { sessionId: params.sessionId }, orderBy: { createdAt: 'desc' }, take: 200 });
   broadcast('orders', rows, params.symbol, params.sessionId);
+  
+  // Recompute KPIs after position exit
+  try {
+    await recomputeKpi(params.sessionId);
+  } catch (error) {
+    console.error('Failed to recompute KPI after exit:', error);
+  }
 }

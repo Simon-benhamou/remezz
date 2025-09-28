@@ -551,7 +551,11 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
   const pnlUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
   const capitalStartUsd = actives.reduce((sum, a)=> sum + Number(a.startBalanceUsd || 0), 0);
   const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : 0;
-  const avgWinRate = actives.length > 0 ? (actives.reduce((s,a)=> s + Number(a.kpi?.winRate || 0), 0) / actives.length) : 0;
+  
+  // Calculate global win rate across all agents (not average of individual win rates)
+  const totalWins = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.wins || 0), 0);
+  const totalTrades = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.trades || 0), 0);
+  const avgWinRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
 
   // Get live exchange balance for authenticated users
   let exchangeBalance: any = null;
