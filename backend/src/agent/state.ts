@@ -2242,27 +2242,36 @@ export class ReboundRejectionAgent {
     // Basic state checks
     checks.hasPosition = {
       status: !this.pos ? 'PASS' : 'FAIL',
+      reason: !this.pos ? 'No active position - ready for new entry' : 'Position already exists - cannot enter new trade',
       message: !this.pos ? 'No active position' : 'Position already exists'
     };
 
     checks.isArmed = {
       status: this.state === 'ARMED' ? 'PASS' : 'FAIL',
+      reason: this.state === 'ARMED' ? 'Agent is armed and ready to trade' : `Agent is in ${this.state} state - must be ARMED to trade`,
       message: this.state === 'ARMED' ? 'Agent is armed' : `Agent state: ${this.state}`
     };
 
     checks.isEntering = {
       status: !this.entering ? 'PASS' : 'FAIL',
+      reason: !this.entering ? 'Not currently entering a position' : 'Entry process already in progress - wait for completion',
       message: !this.entering ? 'Not currently entering' : 'Entry in progress'
     };
 
     // Risk management checks
     checks.dailyTradeLimit = {
-      status: (this.tradesToday || 0) < 10 ? 'PASS' : 'FAIL', // Arbitrary limit
+      status: (this.tradesToday || 0) < 10 ? 'PASS' : 'FAIL',
+      reason: (this.tradesToday || 0) < 10 
+        ? `Daily trades: ${this.tradesToday || 0}/10 - within limit`
+        : `Daily trades: ${this.tradesToday || 0}/10 - limit exceeded for risk management`,
       message: `Trades today: ${this.tradesToday || 0}`
     };
 
     checks.consecutiveStopsLimit = {
       status: (this.consecutiveStops || 0) < 3 ? 'PASS' : 'FAIL',
+      reason: (this.consecutiveStops || 0) < 3
+        ? `Consecutive stops: ${this.consecutiveStops || 0}/3 - acceptable loss streak`
+        : `Consecutive stops: ${this.consecutiveStops || 0}/3 - circuit breaker activated`,
       message: `Consecutive stops: ${this.consecutiveStops || 0}`
     };
 
@@ -2271,24 +2280,31 @@ export class ReboundRejectionAgent {
     const { from, to } = this.plan?.zone || { from: 0, to: 0 };
     checks.inEntryZone = {
       status: (price >= Math.min(from, to) && price <= Math.max(from, to)) ? 'PASS' : 'FAIL',
+      reason: (price >= Math.min(from, to) && price <= Math.max(from, to))
+        ? `Price ${price.toFixed(4)} is within entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`
+        : `Price ${price.toFixed(4)} is outside entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`,
       message: `Price: ${price?.toFixed(4)}, Zone: ${Math.min(from, to).toFixed(4)} - ${Math.max(from, to).toFixed(4)}`
     };
 
     checks.momentumGates = {
       status: this.passesEntryMomentumGates(snap, 'enter') ? 'PASS' : 'FAIL',
+      reason: this.passesEntryMomentumGates(snap, 'enter') 
+        ? 'All momentum requirements met (ATR, slope, trend alignment)'
+        : 'Failed momentum gates - insufficient volatility or trend strength',
       message: 'Momentum gates check'
     };
 
     // Simplified quality filters (binary pass/fail for essential indicators)
     checks.qualityFilters = this.getQualityFiltersDiagnostics(snap);
 
-    // Calculate overall quality score (simplified)
-    const qualityPassed = Object.values(checks.qualityFilters).every((f: any) => f.status === 'PASS');
+    // Calculate overall quality score based on points (0-100)
+    const qualityPoints = Object.values(checks.qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
+    const maxPoints = 100; // 5 filters × 20 points each
     checks.qualityScore = {
-      current: qualityPassed ? 100 : 0,
-      required: 100,
-      status: qualityPassed ? 'PASS' : 'FAIL',
-      reason: qualityPassed ? 'All essential indicators passed' : 'Some essential indicators failed'
+      current: qualityPoints,
+      required: maxPoints,
+      status: qualityPoints >= maxPoints ? 'PASS' : 'FAIL',
+      reason: `Quality score: ${qualityPoints}/${maxPoints} points (${Object.values(checks.qualityFilters).filter((f: any) => f.points > 0).length}/5 filters passed)`
     };
 
     return checks;
@@ -2310,7 +2326,10 @@ export class ReboundRejectionAgent {
     return {
       trendAlignment: {
         status: this.checkTrendAlignment(ema20, ema50, bias) ? 'PASS' : 'FAIL',
-        reason: `EMA trend alignment for ${bias} bias`,
+        reason: bias === 'long' 
+          ? `EMA20 (${ema20.toFixed(4)}) should be above EMA50 (${ema50.toFixed(4)}) with >0.5% spread for long bias`
+          : `EMA20 (${ema20.toFixed(4)}) should be below EMA50 (${ema50.toFixed(4)}) with <-0.5% spread for short bias`,
+        points: this.checkTrendAlignment(ema20, ema50, bias) ? 20 : 0,
         details: {
           ema20: ema20.toFixed(4),
           ema50: ema50.toFixed(4),
@@ -2319,7 +2338,8 @@ export class ReboundRejectionAgent {
       },
       momentum: {
         status: adx >= 20 ? 'PASS' : 'FAIL',
-        reason: `ADX strength: ${adx.toFixed(1)} >= 20`,
+        reason: `ADX (${adx.toFixed(1)}) must be >= 20 to confirm trend strength`,
+        points: adx >= 20 ? 20 : 0,
         details: {
           currentADX: adx,
           threshold: 20
@@ -2327,7 +2347,10 @@ export class ReboundRejectionAgent {
       },
       rsiPosition: {
         status: this.checkRSIPosition(rsi, bias) ? 'PASS' : 'FAIL',
-        reason: `RSI position for ${bias} bias`,
+        reason: bias === 'long' 
+          ? `RSI (${rsi.toFixed(1)}) should be between 40-75 for long entries (avoiding overbought)`
+          : `RSI (${rsi.toFixed(1)}) should be between 25-60 for short entries (avoiding oversold)`,
+        points: this.checkRSIPosition(rsi, bias) ? 20 : 0,
         details: {
           currentRSI: rsi,
           bias
@@ -2335,7 +2358,8 @@ export class ReboundRejectionAgent {
       },
       volatility: {
         status: atrPct >= 0.5 ? 'PASS' : 'FAIL',
-        reason: `ATR volatility: ${atrPct.toFixed(2)}% >= 0.5%`,
+        reason: `ATR (${atrPct.toFixed(2)}%) must be >= 0.5% to ensure sufficient volatility for profitable moves`,
+        points: atrPct >= 0.5 ? 20 : 0,
         details: {
           currentATR: atrPct,
           threshold: 0.5
@@ -2343,7 +2367,8 @@ export class ReboundRejectionAgent {
       },
       volume: {
         status: this.checkVolumeConfirmation(volume, volumeMA) ? 'PASS' : 'FAIL',
-        reason: 'Volume confirmation vs moving average',
+        reason: `Current volume (${volume.toFixed(0)}) should be >= 80% of MA volume (${volumeMA.toFixed(0)}) for confirmation`,
+        points: this.checkVolumeConfirmation(volume, volumeMA) ? 20 : 0,
         details: {
           currentVolume: volume,
           volumeMA: volumeMA,
