@@ -968,7 +968,7 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
   }
 
   console.log(`⚠️ All candidates below thresholds even after relaxation. Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}.`);
-  return top; // final fallback to avoid sleep mode
+  return null; // Return null to trigger sleep mode when no opportunities meet criteria
 }
 
 /**
@@ -1140,14 +1140,15 @@ export async function checkIntelligentOpportunities(): Promise<void> {
   try {
     console.log('🔄 Checking intelligent opportunities (12h+ hold strategy)...');
     
-    // Get all sessions with intelligent configuration using profileJson
+    // Get all sessions with intelligent configuration using profileJson OR top-level isSmartAgent flag
     const sessions = await prisma.agentSession.findMany({
       where: {
         stoppedAt: null, // Active sessions
-        profileJson: {
-          path: ['isIntelligent'],
-          equals: true
-        }
+        OR: [
+          { isSmartAgent: true }, // Top-level flag
+          { profileJson: { path: ['isIntelligent'], equals: true } }, // Profile flag
+          { profileJson: { path: ['isSmartAgent'], equals: true } } // Alternative profile flag
+        ]
       },
       include: {
         positions: {
