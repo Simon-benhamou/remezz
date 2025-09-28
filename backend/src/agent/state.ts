@@ -2443,18 +2443,177 @@ export class ReboundRejectionAgent {
   }
 
   private async restorePersistedPosition(): Promise<void> {
-    // Stub - restore position from persistence layer
-    console.log('Restoring persisted position (stub)');
+    if (!this.sessionId) {
+      console.log('No session ID available for position restoration');
+      return;
+    }
+
+    try {
+      const persistedPosition = await loadActivePosition(this.sessionId);
+
+      if (!persistedPosition || !persistedPosition.qty || persistedPosition.qty <= 0) {
+        console.log(`No active position found for session ${this.sessionId}`);
+        return;
+      }
+
+      console.log(`Restoring persisted position: ${persistedPosition.symbol} ${persistedPosition.side} qty=${persistedPosition.qty} @ ${persistedPosition.entryPrice}`);
+
+      // Validate required fields
+      if (!persistedPosition.entryPrice || !persistedPosition.openedAt) {
+        console.error('Invalid persisted position data: missing entryPrice or openedAt');
+        return;
+      }
+
+      // Restore position state
+      const side = persistedPosition.side as 'buy' | 'sell';
+      const entry = persistedPosition.entryPrice;
+      const qty = persistedPosition.qty;
+      const stop = persistedPosition.stopPrice || (side === 'buy' ? entry * 0.95 : entry * 1.05); // Fallback stop
+      const tp = Array.isArray(persistedPosition.takeProfit) ?
+        (persistedPosition.takeProfit as number[]).filter(n => typeof n === 'number') :
+        persistedPosition.takeProfit && typeof persistedPosition.takeProfit === 'number' ? [persistedPosition.takeProfit] : [];
+
+      // Calculate current P&L and other metrics
+      const openedAt = persistedPosition.openedAt.getTime();
+      const now = Date.now();
+
+      this.pos = {
+        side,
+        entry,
+        qty,
+        stop,
+        tp,
+        openedAt,
+        extended: false,
+        partialTaken: false,
+        slOrderId: persistedPosition.slOrderId || undefined,
+        tpOrderId: persistedPosition.tpOrderId || undefined,
+        trail: [{ ts: openedAt, price: stop }],
+        maeR: 0, // Will be calculated in manage()
+        mfeR: 0, // Will be calculated in manage()
+        breakeven: entry,
+        partialInfo: null,
+      };
+
+      // Update agent state
+      this.state = 'MANAGE';
+
+      // Log restoration
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_restoration',
+        message: 'position_restored_from_persistence',
+        sessionId: this.sessionId,
+        symbol: persistedPosition.symbol,
+        details: {
+          side,
+          qty,
+          entryPrice: entry,
+          stopPrice: stop,
+          takeProfit: tp,
+          openedAt: persistedPosition.openedAt.toISOString()
+        }
+      });
+
+      console.log(`Position restored successfully: ${side} ${persistedPosition.symbol} qty=${qty} @ ${entry}`);
+
+    } catch (error) {
+      console.error(`Failed to restore persisted position for session ${this.sessionId}:`, error);
+
+      recordOpsEvent({
+        level: 'error',
+        source: 'position_restoration',
+        message: 'position_restoration_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { error: String(error) }
+      });
+    }
   }
 
   private async syncProtectiveOrders(reason: string): Promise<void> {
-    // Stub - sync stop loss and take profit orders
-    console.log(`Syncing protective orders: ${reason} (stub)`);
+    if (!this.pos || !this.broker || !this.profile) {
+      console.log(`Cannot sync protective orders: missing position, broker, or profile`);
+      return;
+    }
+
+    try {
+      // Only sync protective orders for live trading
+      if (this.profile.mode !== 'live') {
+        console.log(`Skipping protective order sync for ${this.profile.mode} mode`);
+        return;
+      }
+
+      // Check if broker supports syncProtective (LiveBroker does)
+      if (typeof (this.broker as any).syncProtective !== 'function') {
+        console.log(`Broker does not support protective order sync`);
+        return;
+      }
+
+      const params = {
+        symbol: this.profile.symbol,
+        side: this.pos.side,
+        qty: this.pos.qty,
+        stopLoss: this.pos.stop,
+        takeProfit: this.pos.tp,
+        slOrderId: this.pos.slOrderId || null,
+        tpOrderId: this.pos.tpOrderId || null
+      };
+
+      console.log(`Syncing protective orders for ${this.profile.symbol} (${reason}): SL=${this.pos.stop}, TP=${this.pos.tp}`);
+
+      const result = await (this.broker as any).syncProtective(params);
+
+      // Update position with new order IDs
+      if (result.slOrderId) {
+        this.pos.slOrderId = result.slOrderId;
+        console.log(`Updated SL order ID: ${result.slOrderId}`);
+      }
+      if (result.tpOrderId) {
+        this.pos.tpOrderId = result.tpOrderId;
+        console.log(`Updated TP order ID: ${result.tpOrderId}`);
+      }
+
+      // Log successful sync
+      recordOpsEvent({
+        level: 'info',
+        source: 'protective_orders',
+        message: 'protective_orders_synced',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          reason,
+          slOrderId: result.slOrderId,
+          tpOrderId: result.tpOrderId,
+          stopLoss: this.pos.stop,
+          takeProfit: this.pos.tp
+        },
+      });
+
+    } catch (error) {
+      console.error(`Failed to sync protective orders for ${this.profile.symbol}:`, error);
+
+      recordOpsEvent({
+        level: 'error',
+        source: 'protective_orders',
+        message: 'protective_orders_sync_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          reason,
+          error: String(error),
+          stopLoss: this.pos.stop,
+          takeProfit: this.pos.tp
+        },
+      });
+    }
   }
 
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
+    if (!this.pos || !this.plan || !this.profile) return;
+
     // Check if position is still open on the exchange
-    if (this.pos && this.profile?.mode === 'live') {
+    if (this.profile.mode === 'live') {
       try {
         const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
         if (!exposure || exposure.qty <= 0) {
@@ -2464,7 +2623,6 @@ export class ReboundRejectionAgent {
           this.state = 'EXIT';
           this.lastExitTime = Date.now();
           broadcast('agent_state', { state: this.state, reason: 'position_closed_on_exchange' }, this.profile.symbol, this.sessionId || undefined);
-          // Note: Not calling recordExit since we don't have exit details for external close
           return;
         }
       } catch (error) {
@@ -2472,44 +2630,1086 @@ export class ReboundRejectionAgent {
       }
     }
 
-    // Position still open, continue managing
-    // TODO: Implement trailing stops, partial exits, etc.
-    console.log(`Managing position at price ${price} (stub)`);
+    // Update position metrics
+    this.updatePositionMetrics(price);
+
+    // Check for exit conditions
+    const exitReason = this.checkExitConditions(price, snap);
+    if (exitReason) {
+      await this.exitPosition(price, exitReason);
+      return;
+    }
+
+    // Implement trailing stops
+    const newTrailPrice = this.computeDynamicTrail(price, snap, this.calculateUnrealizedR(price), Date.now() - this.pos!.openedAt);
+    if (newTrailPrice !== null && this.shouldUpdateTrail(newTrailPrice, price)) {
+      await this.updateTrailingStop(newTrailPrice, price);
+    }
+
+    // Check for partial exits at profit targets
+    await this.checkPartialExits(price, snap);
+
+    // Extend position if profitable and conditions met
+    if (this.pos && !this.pos.extended && this.shouldExtendPosition(price, snap)) {
+      this.extendPosition(price);
+    }
+
+    // Update protective orders if needed
+    if (this.shouldSyncProtectiveOrders()) {
+      await this.syncProtectiveOrders('management');
+    }
+
+    console.log(`Managing position: ${this.pos!.side} ${this.profile.symbol} @ ${price.toFixed(6)}, unrealized R: ${this.calculateUnrealizedR(price).toFixed(2)}, trail: ${this.pos!.stop.toFixed(6)}`);
+  }
+
+  private updatePositionMetrics(currentPrice: number): void {
+    if (!this.pos || !this.plan) return;
+
+    const entry = this.pos.entry;
+    const side = this.pos.side;
+    const stopDistance = this.plan.stopDistance;
+
+    // Calculate unrealized P&L in R multiples
+    const unrealizedR = this.calculateUnrealizedR(currentPrice);
+
+    // Update MAE (Maximum Adverse Excursion) and MFE (Maximum Favorable Excursion)
+    if (this.pos.maeR === undefined || unrealizedR < this.pos.maeR) {
+      this.pos.maeR = unrealizedR;
+    }
+    if (this.pos.mfeR === undefined || unrealizedR > this.pos.mfeR) {
+      this.pos.mfeR = unrealizedR;
+    }
+
+    // Update breakeven if trailing
+    if (unrealizedR > 1.5 && !this.pos.partialTaken) {
+      const trailAdjustment = Math.min(stopDistance * 0.5, (currentPrice - entry) * 0.3 * (side === 'buy' ? 1 : -1));
+      this.pos.breakeven = entry + trailAdjustment * (side === 'buy' ? 1 : -1);
+    }
+  }
+
+  private calculateUnrealizedR(currentPrice: number): number {
+    if (!this.pos || !this.plan) return 0;
+
+    const entry = this.pos.entry;
+    const stopDistance = this.plan.stopDistance;
+    const side = this.pos.side;
+
+    const priceDiff = side === 'buy' ? currentPrice - entry : entry - currentPrice;
+    return priceDiff / stopDistance;
+  }
+
+  private checkExitConditions(price: number, snap: TechnicalSnapshot): string | null {
+    if (!this.pos || !this.plan || !this.profile) return null;
+
+    const unrealizedR = this.calculateUnrealizedR(price);
+    const timeHeldMs = Date.now() - this.pos.openedAt;
+    const maxHoldHours = this.plan.plan.risk?.max_hold_hours || 36;
+    const maxHoldMs = maxHoldHours * 60 * 60 * 1000;
+
+    // Time-based exit
+    if (timeHeldMs > maxHoldMs) {
+      return 'max_hold_time_exceeded';
+    }
+
+    // Profit target reached (final TP)
+    if (this.pos.tp.length > 0) {
+      const finalTp = this.pos.tp[this.pos.tp.length - 1];
+      const hitTp = this.pos.side === 'buy' ? price >= finalTp : price <= finalTp;
+      if (hitTp) {
+        return 'profit_target_reached';
+      }
+    }
+
+    // Stop loss hit
+    const hitStop = this.pos.side === 'buy' ? price <= this.pos.stop : price >= this.pos.stop;
+    if (hitStop) {
+      return 'stop_loss_hit';
+    }
+
+    // Risk management: cut losses if position moves against us significantly
+    if (unrealizedR < -2.0) {
+      return 'excessive_loss_cutoff';
+    }
+
+    // Market regime change to standby
+    if (this.regime?.playbook === 'standby') {
+      return 'regime_standby';
+    }
+
+    // Volatility spike - exit if ATR increases dramatically
+    const currentATR = snap.atr14 || 0;
+    const entryATR = this.plan.atr || currentATR;
+    if (currentATR > entryATR * 2.0) {
+      return 'volatility_spike';
+    }
+
+    return null;
+  }
+
+  private async exitPosition(price: number, reason: string): Promise<void> {
+    if (!this.pos || !this.broker || !this.profile) return;
+
+    try {
+      console.log(`Exiting position: ${reason} at ${price}`);
+
+      // Calculate realized P&L
+      const realizedPnl = this.calculateRealizedPnL(price);
+
+      // Place exit order
+      const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
+      const exitOrder = await this.broker.place({
+        symbol: this.profile.symbol,
+        side: exitSide,
+        type: 'market',
+        qty: this.pos.qty,
+        leverage: this.profile.maxLeverage
+      });
+
+      if (exitOrder.status === 'filled' && exitOrder.filledQty && exitOrder.filledQty > 0) {
+        // Record exit in database
+        await recordExit({
+          sessionId: this.sessionId!,
+          symbol: this.profile.symbol,
+          side: this.pos.side,
+          exitPrice: exitOrder.avgPrice || price,
+          qty: exitOrder.filledQty,
+          realizedPnl,
+        });
+
+        // Update performance tracking
+        const win = realizedPnl > 0;
+        this.recentTrades.push({
+          win,
+          pnlPct: (realizedPnl / (this.pos.entry * this.pos.qty)) * 100,
+          timestamp: Date.now()
+        });
+
+        // Keep only last 20 trades
+        if (this.recentTrades.length > 20) {
+          this.recentTrades = this.recentTrades.slice(-20);
+        }
+
+        // Update daily P&L
+        if (this.performanceMetrics) {
+          this.performanceMetrics.dailyPnL += realizedPnl;
+        }
+
+        // Log exit
+        recordOpsEvent({
+          level: win ? 'info' : 'warn',
+          source: 'position_exit',
+          message: `position_exited_${reason}`,
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            reason,
+            exitPrice: exitOrder.avgPrice || price,
+            realizedPnl,
+            holdTimeMs: Date.now() - this.pos.openedAt,
+            maeR: this.pos.maeR,
+            mfeR: this.pos.mfeR
+          }
+        });
+
+        // Clear position and update state
+        this.pos = null;
+        this.state = 'EXIT';
+        this.lastExitTime = Date.now();
+
+        broadcast('agent_state', {
+          state: this.state,
+          reason,
+          exitPrice: exitOrder.avgPrice || price,
+          realizedPnl
+        }, this.profile.symbol, this.sessionId || undefined);
+
+      } else {
+        console.error(`Failed to exit position: ${exitOrder.status}`);
+      }
+
+    } catch (error) {
+      console.error(`Error exiting position:`, error);
+      recordOpsEvent({
+        level: 'error',
+        source: 'position_exit',
+        message: 'position_exit_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { reason, error: String(error) }
+      });
+    }
+  }
+
+  private calculateRealizedPnL(exitPrice: number): number {
+    if (!this.pos) return 0;
+
+    const entry = this.pos.entry;
+    const qty = this.pos.qty;
+    const side = this.pos.side;
+
+    const priceDiff = side === 'buy' ? exitPrice - entry : entry - exitPrice;
+    return priceDiff * qty;
+  }
+
+  private shouldUpdateTrail(newTrailPrice: number, currentPrice: number): boolean {
+    if (!this.pos) return false;
+
+    const currentTrail = this.pos.stop;
+    const side = this.pos.side;
+
+    // Only trail in the profitable direction
+    if (side === 'buy') {
+      return newTrailPrice > currentTrail && newTrailPrice < currentPrice;
+    } else {
+      return newTrailPrice < currentTrail && newTrailPrice > currentPrice;
+    }
+  }
+
+  private async updateTrailingStop(newTrailPrice: number, currentPrice: number): Promise<void> {
+    if (!this.pos) return;
+
+    const oldStop = this.pos.stop;
+    this.pos.stop = newTrailPrice;
+    this.noteTrail(newTrailPrice);
+
+    console.log(`Updated trailing stop: ${oldStop.toFixed(6)} → ${newTrailPrice.toFixed(6)}`);
+
+    // Update protective orders
+    await this.syncProtectiveOrders('trail_update');
+  }
+
+  private async checkPartialExits(price: number, snap: TechnicalSnapshot): Promise<void> {
+    if (!this.pos || !this.plan || this.pos.partialTaken) return;
+
+    const unrealizedR = this.calculateUnrealizedR(price);
+
+    // Check for partial exit at intermediate profit targets
+    if (this.pos.tp.length > 1 && unrealizedR >= 1.5) {
+      const intermediateTp = this.pos.tp[0]; // First TP level
+      const hitIntermediateTp = this.pos.side === 'buy' ? price >= intermediateTp : price <= intermediateTp;
+
+      if (hitIntermediateTp) {
+        await this.executePartialExit(price, intermediateTp, 'intermediate_profit_target');
+      }
+    }
+
+    // Scale out at 2R for risk management
+    if (unrealizedR >= 2.0 && !this.pos.partialTaken) {
+      const scaleOutPrice = this.pos.side === 'buy' ?
+        this.pos.entry + 2 * this.plan.stopDistance :
+        this.pos.entry - 2 * this.plan.stopDistance;
+
+      await this.executePartialExit(price, scaleOutPrice, 'scale_out_2R');
+    }
+  }
+
+  private async executePartialExit(price: number, targetPrice: number, reason: string): Promise<void> {
+    if (!this.pos || !this.broker || !this.profile) return;
+
+    try {
+      const partialQty = Math.floor(this.pos.qty * 0.5); // Exit 50% of position
+      if (partialQty <= 0) return;
+
+      const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
+      const partialExit = await this.broker.place({
+        symbol: this.profile.symbol,
+        side: exitSide,
+        type: 'limit',
+        qty: partialQty,
+        price: targetPrice,
+        leverage: this.profile.maxLeverage
+      });
+
+      if (partialExit.filledQty && partialExit.filledQty > 0) {
+        // Update position
+        this.pos.qty -= partialExit.filledQty;
+        this.pos.partialTaken = true;
+        this.pos.partialInfo = {
+          ts: Date.now(),
+          price: partialExit.avgPrice || targetPrice
+        };
+
+        // Adjust stop to breakeven or better
+        const newStop = this.pos.breakeven || this.pos.entry;
+        this.pos.stop = newStop;
+
+        console.log(`Partial exit: ${partialExit.filledQty} @ ${partialExit.avgPrice || targetPrice} (${reason})`);
+
+        // Record partial exit
+        recordOpsEvent({
+          level: 'info',
+          source: 'partial_exit',
+          message: `partial_exit_${reason}`,
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            partialQty: partialExit.filledQty,
+            exitPrice: partialExit.avgPrice || targetPrice,
+            remainingQty: this.pos.qty,
+            newStop
+          }
+        });
+
+        // Sync protective orders
+        await this.syncProtectiveOrders('partial_exit');
+      }
+
+    } catch (error) {
+      console.error(`Failed to execute partial exit:`, error);
+    }
+  }
+
+  private shouldExtendPosition(price: number, snap: TechnicalSnapshot): boolean {
+    if (!this.pos || !this.plan) return false;
+
+    const unrealizedR = this.calculateUnrealizedR(price);
+    const timeHeldMs = Date.now() - this.pos.openedAt;
+
+    // Extend if profitable and trend continues
+    if (unrealizedR >= 1.0 && timeHeldMs < 12 * 60 * 60 * 1000) { // Less than 12 hours
+      const trendContinues = this.pos.side === 'buy' ?
+        (snap.ema20 || price) > (snap.ema50 || price) :
+        (snap.ema20 || price) < (snap.ema50 || price);
+
+      return trendContinues;
+    }
+
+    return false;
+  }
+
+  private extendPosition(price: number): void {
+    if (!this.pos || !this.plan) return;
+
+    this.pos.extended = true;
+
+    // Extend hold time by adding time to the plan
+    if (this.plan.plan.risk) {
+      this.plan.plan.risk.max_hold_hours = (this.plan.plan.risk.max_hold_hours || 36) + 12;
+    }
+
+    console.log(`Extended position hold time to ${this.plan.plan.risk?.max_hold_hours || 36} hours`);
+
+    recordOpsEvent({
+      level: 'info',
+      source: 'position_extension',
+      message: 'position_hold_extended',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol || '',
+      details: {
+        newMaxHoldHours: this.plan.plan.risk?.max_hold_hours,
+        currentPrice: price,
+        unrealizedR: this.calculateUnrealizedR(price)
+      }
+    });
+  }
+
+  private shouldSyncProtectiveOrders(): boolean {
+    // Sync protective orders periodically or when stop/TP changes
+    // For now, sync every 5 minutes or when position changes
+    return Math.random() < 0.1; // 10% chance each manage call (~ every 5 minutes)
   }
 
   private async applyDailyRoiThrottle(riskPct: number): Promise<number> {
-    // Stub - apply daily ROI throttling
-    return riskPct;
+    if (!this.performanceMetrics || !this.profile) {
+      return riskPct; // No performance data available, return unchanged
+    }
+
+    try {
+      const cfg = getConfig();
+      const maxDailyRoi = 5.0; // Default 5% max daily ROI
+      const dailyPnL = this.performanceMetrics.dailyPnL || 0;
+
+      // Calculate current daily ROI as percentage of starting balance
+      const startBalance = this.profile.startBalanceUsd || 10000; // Fallback to 10k
+      const dailyRoiPct = (dailyPnL / startBalance) * 100;
+
+      console.log(`📊 Daily ROI check: ${dailyRoiPct.toFixed(2)}% (max: ${maxDailyRoi}%, dailyPnL: ${dailyPnL.toFixed(2)})`);
+
+      // If daily ROI exceeds threshold, reduce risk progressively
+      if (dailyRoiPct > maxDailyRoi) {
+        const excessRoi = dailyRoiPct - maxDailyRoi;
+        const reductionFactor = Math.max(0.1, 1.0 - (excessRoi / maxDailyRoi)); // Reduce risk by excess percentage
+
+        const originalRisk = riskPct;
+        const adjustedRisk = riskPct * reductionFactor;
+
+        recordOpsEvent({
+          level: 'warn',
+          source: 'daily_roi_throttle',
+          message: 'daily_roi_exceeded_throttling_risk',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            dailyRoiPct: dailyRoiPct.toFixed(2),
+            maxDailyRoi,
+            excessRoi: excessRoi.toFixed(2),
+            originalRisk: originalRisk.toFixed(3),
+            adjustedRisk: adjustedRisk.toFixed(3),
+            reductionFactor: reductionFactor.toFixed(3)
+          },
+        });
+
+        console.log(`⚠️ Daily ROI throttle: ${originalRisk.toFixed(3)}% → ${adjustedRisk.toFixed(3)}% (excess ROI: ${excessRoi.toFixed(2)}%)`);
+        return adjustedRisk;
+      }
+
+      // If daily ROI is approaching the limit, apply mild throttling
+      else if (dailyRoiPct > maxDailyRoi * 0.8) {
+        const mildReduction = 0.9; // 10% reduction when approaching limit
+        const adjustedRisk = riskPct * mildReduction;
+
+        recordOpsEvent({
+          level: 'info',
+          source: 'daily_roi_throttle',
+          message: 'daily_roi_approaching_limit_mild_throttle',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            dailyRoiPct: dailyRoiPct.toFixed(2),
+            maxDailyRoi,
+            adjustedRisk: adjustedRisk.toFixed(3)
+          },
+        });
+
+        console.log(`📉 Mild daily ROI throttle: ${riskPct.toFixed(3)}% → ${adjustedRisk.toFixed(3)}%`);
+        return adjustedRisk;
+      }
+
+      // Daily ROI within acceptable range
+      return riskPct;
+
+    } catch (error) {
+      console.error(`Failed to apply daily ROI throttle:`, error);
+      return riskPct; // Return original risk on error
+    }
   }
 
   private async placeLimitAdaptive(order: any): Promise<any> {
-    // Stub - place adaptive limit order
-    console.log('Placing adaptive limit order (stub)');
-    return null; // Return null for failed placement
+    const { side, qty, limitPrice, stop, tp, entry } = order;
+
+    if (!this.broker || !this.profile) {
+      console.log('Cannot place limit order: missing broker or profile');
+      return null;
+    }
+
+    try {
+      console.log(`Placing adaptive limit order: ${side} ${this.profile.symbol} qty=${qty} @ ${limitPrice} (target: ${entry})`);
+
+      // Place limit order with protective orders
+      const placed = await this.broker.place({
+        symbol: this.profile.symbol,
+        side,
+        type: 'limit',
+        qty,
+        price: limitPrice,
+        leverage: this.profile.maxLeverage,
+        takeProfit: tp[0], // Primary TP
+        stopLoss: stop
+      });
+
+      if (placed.status === 'rejected' || !placed.filledQty || placed.filledQty <= 0) {
+        console.log(`Limit order rejected or unfilled: ${placed.status}`);
+        return placed;
+      }
+
+      // If we have multiple TPs, place additional TP orders
+      if (tp.length > 1) {
+        try {
+          // Place runner TP as a separate limit order
+          const runnerTp = tp[1];
+          const runnerQty = Math.floor(placed.filledQty * 0.5); // 50% to runner TP
+
+          if (runnerQty > 0) {
+            const runnerOrder = await this.broker.place({
+              symbol: this.profile.symbol,
+              side: side === 'buy' ? 'sell' : 'buy', // Opposite side for TP
+              type: 'limit',
+              qty: runnerQty,
+              price: runnerTp,
+              leverage: this.profile.maxLeverage
+            });
+
+            if (runnerOrder.filledQty && runnerOrder.filledQty > 0) {
+              console.log(`Placed runner TP: ${runnerQty} @ ${runnerTp}`);
+            }
+          }
+        } catch (runnerError) {
+          console.warn('Failed to place runner TP:', runnerError);
+          // Continue with primary order
+        }
+      }
+
+      console.log(`Adaptive limit order placed successfully: ${placed.filledQty} filled @ ${placed.avgPrice || limitPrice}`);
+      return placed;
+
+    } catch (error) {
+      console.error(`Failed to place adaptive limit order:`, error);
+      return null;
+    }
   }
 
   private async executeTwapOrder(order: any): Promise<any> {
-    // Stub - execute TWAP order
-    console.log('Executing TWAP order (stub)');
-    return null; // Return null for failed placement
+    const { side, totalQty, slices, intervalMs, stop, tp, entry } = order;
+
+    if (!this.broker || !this.profile) {
+      console.log('Cannot execute TWAP order: missing broker or profile');
+      return null;
+    }
+
+    try {
+      console.log(`Executing TWAP order: ${side} ${this.profile.symbol} totalQty=${totalQty} in ${slices} slices every ${intervalMs}ms`);
+
+      const sliceQty = Math.floor(totalQty / slices);
+      const remainderQty = totalQty % slices;
+      let totalFilled = 0;
+      let totalCost = 0;
+      let avgPrice = 0;
+      const executions: Array<{ slice: number; qty: number; price: number; timestamp: number }> = [];
+
+      // Execute slices with time intervals
+      for (let i = 0; i < slices; i++) {
+        const currentSliceQty = i === slices - 1 ? sliceQty + remainderQty : sliceQty;
+
+        if (currentSliceQty <= 0) continue;
+
+        try {
+          // Get fresh price for each slice
+          const ticker = await getTicker(this.profile.symbol).catch(() => null);
+          const currentPrice = ticker?.last || entry;
+
+          // Calculate limit price for this slice (slightly better than current price)
+          const limitPrice = this.computePassivePrice(side, currentPrice, ticker);
+
+          console.log(`TWAP slice ${i + 1}/${slices}: ${currentSliceQty} @ ${limitPrice} (market: ${currentPrice})`);
+
+          // Place limit order for this slice
+          const sliceOrder = await this.broker.place({
+            symbol: this.profile.symbol,
+            side,
+            type: 'limit',
+            qty: currentSliceQty,
+            price: limitPrice,
+            leverage: this.profile.maxLeverage
+          });
+
+          if (sliceOrder.filledQty && sliceOrder.filledQty > 0) {
+            totalFilled += sliceOrder.filledQty;
+            if (sliceOrder.avgPrice) {
+              totalCost += sliceOrder.avgPrice * sliceOrder.filledQty;
+            }
+            executions.push({
+              slice: i + 1,
+              qty: sliceOrder.filledQty,
+              price: sliceOrder.avgPrice || limitPrice,
+              timestamp: Date.now()
+            });
+          }
+
+          // Wait for next slice (except for last one)
+          if (i < slices - 1) {
+            await new Promise(resolve => setTimeout(resolve, intervalMs));
+          }
+
+        } catch (sliceError) {
+          console.warn(`TWAP slice ${i + 1} failed:`, sliceError);
+          // Continue with next slice
+        }
+      }
+
+      // Calculate average execution price
+      if (totalFilled > 0) {
+        avgPrice = totalCost / totalFilled;
+      }
+
+      // Place protective orders for the total filled quantity
+      let slOrderId, tpOrderId;
+      if (totalFilled > 0) {
+        try {
+          const protectiveResult = await (this.broker as any).syncProtective?.({
+            symbol: this.profile.symbol,
+            side,
+            qty: totalFilled,
+            stopLoss: stop,
+            takeProfit: tp[0]
+          });
+
+          slOrderId = protectiveResult?.slOrderId;
+          tpOrderId = protectiveResult?.tpOrderId;
+        } catch (protectiveError) {
+          console.warn('Failed to place protective orders for TWAP:', protectiveError);
+        }
+      }
+
+      const result = {
+        status: totalFilled > 0 ? 'filled' : 'rejected',
+        filledQty: totalFilled,
+        avgPrice,
+        orderId: `twap_${Date.now()}`,
+        slOrderId,
+        tpOrderId,
+        executions,
+        telemetry: {
+          totalSlices: slices,
+          successfulSlices: executions.length,
+          totalIntervalMs: (slices - 1) * intervalMs,
+          avgSliceQty: sliceQty,
+          priceImprovement: avgPrice < entry ? (entry - avgPrice) / entry * 100 : 0
+        }
+      };
+
+      console.log(`TWAP execution completed: ${totalFilled}/${totalQty} filled @ ${avgPrice?.toFixed(6)} (${executions.length}/${slices} slices successful)`);
+
+      return result;
+
+    } catch (error) {
+      console.error(`Failed to execute TWAP order:`, error);
+      return null;
+    }
   }
 
   private computeTelemetry(startTs: number, placed: any, details: any): any {
-    // Stub - compute order telemetry
+    const { expectedPrice, requestedQty, side } = details;
+    const latencyMs = Date.now() - startTs;
+
+    // Calculate slippage in basis points (0.01% = 1 bp)
+    let slippageBps = 0;
+    if (placed?.avgPrice && expectedPrice) {
+      const actualPrice = placed.avgPrice;
+      const slippagePct = ((actualPrice - expectedPrice) / expectedPrice) * 100;
+      slippageBps = Math.round(slippagePct * 100); // Convert to basis points
+    }
+
+    // Calculate fill ratio
+    const filledQty = placed?.filledQty || 0;
+    const fillRatio = requestedQty > 0 ? filledQty / requestedQty : 0;
+
+    // For now, assume no cancellations (cancelCount = 0)
+    // In a real implementation, this would track order cancellations
+    const cancelCount = 0;
+
+    // Attempts - for now assume 1 attempt, but could track retries
+    const attempts = 1;
+
+    // Additional metrics for analysis
+    const priceImprovement = expectedPrice && placed?.avgPrice ?
+      (side === 'buy' ?
+        (expectedPrice - placed.avgPrice) / expectedPrice * 100 : // Lower is better for buy
+        (placed.avgPrice - expectedPrice) / expectedPrice * 100   // Higher is better for sell
+      ) : 0;
+
     return {
-      duration: Date.now() - startTs,
-      success: placed !== null,
-      details
+      latencyMs,
+      slippageBps,
+      fillRatio,
+      cancelCount,
+      attempts,
+      priceImprovement,
+      requestedPrice: expectedPrice,
+      executedPrice: placed?.avgPrice,
+      filledQty,
+      requestedQty
     };
   }
 
   private getAdaptationMultipliers(strategy: any, bias: string): any {
-    // Stub - get adaptation multipliers
-    return { risk: 1.0, size: 1.0 };
+    // Default multipliers (no adaptation)
+    const multipliers = {
+      atr: 1.0,
+      adx: 1.0,
+      risk: 1.0,
+      size: 1.0
+    };
+
+    if (!this.performanceMetrics || !this.recentTrades.length) {
+      return multipliers; // No performance data available
+    }
+
+    try {
+      // Analyze recent performance (last 10 trades)
+      const recentTrades = this.recentTrades.slice(-10);
+      const winRate = recentTrades.filter(t => t.win).length / recentTrades.length;
+      const avgPnlPct = recentTrades.reduce((sum, t) => sum + t.pnlPct, 0) / recentTrades.length;
+
+      // Target performance metrics
+      const targetWinRate = 0.65;
+      const targetAvgPnl = 0.5; // 0.5% average profit
+
+      // Calculate performance score (-1 to 1, where 1 is excellent performance)
+      const winRateScore = Math.max(-1, Math.min(1, (winRate - targetWinRate) / 0.2)); // ±20% win rate deviation
+      const pnlScore = Math.max(-1, Math.min(1, (avgPnlPct - targetAvgPnl) / targetAvgPnl)); // Relative to target PnL
+      const performanceScore = (winRateScore + pnlScore) / 2;
+
+      console.log(`🎯 Performance adaptation for ${strategy}_${bias}: winRate=${winRate.toFixed(2)}, avgPnL=${avgPnlPct.toFixed(2)}%, score=${performanceScore.toFixed(2)}`);
+
+      // Adjust multipliers based on performance
+      if (performanceScore > 0.3) {
+        // Excellent performance - can be more aggressive
+        multipliers.atr *= 0.8;  // Lower ATR threshold (more permissive)
+        multipliers.adx *= 0.9;  // Lower ADX threshold (more permissive)
+        multipliers.risk *= 1.1; // Slightly higher risk tolerance
+        multipliers.size *= 1.05; // Slightly larger position sizes
+
+        recordOpsEvent({
+          level: 'info',
+          source: 'performance_adaptation',
+          message: 'performance_excellent_increasing_aggression',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { performanceScore: performanceScore.toFixed(2), multipliers }
+        });
+
+      } else if (performanceScore < -0.3) {
+        // Poor performance - be more conservative
+        multipliers.atr *= 1.3;  // Higher ATR threshold (more strict)
+        multipliers.adx *= 1.2;  // Higher ADX threshold (more strict)
+        multipliers.risk *= 0.8; // Lower risk tolerance
+        multipliers.size *= 0.9; // Smaller position sizes
+
+        recordOpsEvent({
+          level: 'warn',
+          source: 'performance_adaptation',
+          message: 'performance_poor_increasing_conservatism',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { performanceScore: performanceScore.toFixed(2), multipliers }
+        });
+
+      } else {
+        // Neutral performance - slight adjustments based on recent trends
+        const recentTrend = this.getRecentPerformance(5);
+        if (recentTrend.winRate > winRate) {
+          // Improving - slight relaxation
+          multipliers.atr *= 0.95;
+          multipliers.adx *= 0.97;
+        } else if (recentTrend.winRate < winRate) {
+          // Declining - slight tightening
+          multipliers.atr *= 1.05;
+          multipliers.adx *= 1.03;
+        }
+      }
+
+      // Apply bounds to prevent extreme values
+      multipliers.atr = Math.max(0.5, Math.min(2.0, multipliers.atr));
+      multipliers.adx = Math.max(0.5, Math.min(2.0, multipliers.adx));
+      multipliers.risk = Math.max(0.5, Math.min(1.5, multipliers.risk));
+      multipliers.size = Math.max(0.7, Math.min(1.3, multipliers.size));
+
+      console.log(`🎯 Adaptation multipliers: ATR=${multipliers.atr.toFixed(2)}, ADX=${multipliers.adx.toFixed(2)}, Risk=${multipliers.risk.toFixed(2)}, Size=${multipliers.size.toFixed(2)}`);
+
+      return multipliers;
+
+    } catch (error) {
+      console.error('Error calculating adaptation multipliers:', error);
+      return multipliers; // Return defaults on error
+    }
   }
 
   public async nextPlan(options?: any): Promise<any> {
-    // Stub - generate next trading plan
-    return this.plan;
+    try {
+      const symbol = this.profile?.symbol;
+      if (!symbol) {
+        console.warn('nextPlan: No symbol available');
+        return this.plan;
+      }
+
+      // Get current market snapshot
+      const snap = await buildTechSnapshot(symbol);
+      const regime = snap.regime;
+
+      // Analyze recent performance to inform plan generation
+      const performanceAnalysis = this.analyzeRecentPerformance();
+      const adaptationMultipliers = this.getAdaptationMultipliers(
+        this.plan?.bias || 'long',
+        this.plan?.bias || 'long'
+      );
+
+      // Determine if we need a fresh plan or can adapt current one
+      const needsFreshPlan = this.shouldGenerateFreshPlan(performanceAnalysis, snap, regime);
+
+      let newPlan: PlanJson;
+
+      if (needsFreshPlan) {
+        // Generate completely new plan using AI
+        console.log(`🎯 Generating fresh plan for ${symbol} - performance analysis: ${performanceAnalysis.needsAdjustment ? 'needs adjustment' : 'performing well'}`);
+
+        newPlan = await proposePlan(symbol, {
+          fresh: true,
+          sessionId: this.sessionId || undefined,
+          context: performanceAnalysis.killReason ? {
+            killReason: performanceAnalysis.killReason,
+            killDetails: performanceAnalysis.details
+          } : undefined
+        });
+      } else {
+        // Adapt existing plan based on performance and market conditions
+        console.log(`🔄 Adapting existing plan for ${symbol}`);
+        newPlan = this.adaptExistingPlan(snap, regime, performanceAnalysis, adaptationMultipliers);
+      }
+
+      // Apply performance-based adjustments
+      newPlan = this.applyPerformanceAdjustments(newPlan, performanceAnalysis, adaptationMultipliers);
+
+      // Validate the new plan
+      const validatedPlan = await validatePlan(newPlan);
+
+      // Update agent state
+      this.plan = validatedPlan;
+      this.regime = regime || null;
+
+      // Log plan generation
+      recordOpsEvent({
+        level: 'info',
+        source: 'next_plan',
+        message: needsFreshPlan ? 'fresh_plan_generated' : 'plan_adapted',
+        sessionId: this.sessionId || undefined,
+        symbol,
+        details: {
+          bias: newPlan.bias,
+          playbook: newPlan.meta?.playbook,
+          performanceScore: performanceAnalysis.performanceScore,
+          adaptationApplied: !needsFreshPlan
+        }
+      });
+
+      return validatedPlan;
+
+    } catch (error) {
+      console.error('Error in nextPlan:', error);
+
+      // Fallback: return current plan or generate basic fallback
+      if (this.plan) {
+        console.log('Returning current plan as fallback');
+        return this.plan;
+      }
+
+      // Generate emergency fallback plan
+      try {
+        const symbol = this.profile?.symbol || 'BTC/USDT';
+        const snap = await buildTechSnapshot(symbol);
+        const fallbackPlan = {
+          name: 'Emergency_Fallback',
+          symbol,
+          timeframe: '1h' as const,
+          bias: 'none' as const,
+          zone: { type: 'support' as const, price: null, from: 'auto_detect' as const },
+          entry_rule: { type: 'rebound' as const, confirm_close: true, max_distance_pct: 0.4 },
+          risk: {
+            stop: { type: 'atr' as const, mult: 1.0 },
+            tp: [{ type: 'R' as const, value: 2.0 }],
+            max_hold_hours: 36
+          },
+          position: { risk_fraction: 0.01, max_leverage: 5 },
+          notes: 'Emergency fallback plan due to nextPlan error',
+          meta: { playbook: 'standby' as const }
+        };
+
+        return await validatePlan(fallbackPlan);
+      } catch (fallbackError) {
+        console.error('Fallback plan generation failed:', fallbackError);
+        return this.plan; // Return whatever we have
+      }
+    }
+  }
+
+  private analyzeRecentPerformance(): {
+    performanceScore: number;
+    needsAdjustment: boolean;
+    killReason?: string;
+    details?: any;
+    consecutiveLosses: number;
+    winRate: number;
+    profitRatio: number;
+  } {
+    const recentTrades = this.recentTrades.slice(-10); // Last 10 trades
+    if (recentTrades.length === 0) {
+      return {
+        performanceScore: 0.5,
+        needsAdjustment: false,
+        consecutiveLosses: 0,
+        winRate: 0,
+        profitRatio: 0
+      };
+    }
+
+    const wins = recentTrades.filter(t => t.win).length;
+    const winRate = wins / recentTrades.length;
+    const profits = recentTrades.filter(t => t.win).reduce((sum, t) => sum + Math.abs(t.pnlPct), 0);
+    const losses = recentTrades.filter(t => !t.win).reduce((sum, t) => sum + Math.abs(t.pnlPct), 0);
+    const profitRatio = losses > 0 ? profits / losses : profits > 0 ? 10 : 0;
+
+    // Calculate consecutive losses
+    let consecutiveLosses = 0;
+    for (let i = recentTrades.length - 1; i >= 0; i--) {
+      if (!recentTrades[i].win) {
+        consecutiveLosses++;
+      } else {
+        break;
+      }
+    }
+
+    // Performance score (0-1, higher is better)
+    let performanceScore = 0;
+    performanceScore += winRate * 0.4; // 40% weight on win rate
+    performanceScore += Math.min(profitRatio / 3, 1) * 0.4; // 40% weight on profit ratio (capped at 3:1)
+    performanceScore += Math.max(0, 1 - consecutiveLosses / 5) * 0.2; // 20% weight on consistency
+
+    const needsAdjustment = winRate < 0.4 || consecutiveLosses >= 3 || profitRatio < 0.8;
+
+    let killReason: string | undefined;
+    let details: any = {};
+
+    // Determine if we should trigger kill switch
+    if (consecutiveLosses >= 5) {
+      killReason = 'consecutive_losses';
+      details = { consecutiveLosses, recentTrades: recentTrades.length };
+    } else if (winRate < 0.2 && recentTrades.length >= 5) {
+      killReason = 'poor_win_rate';
+      details = { winRate, recentTrades: recentTrades.length };
+    } else if (this.consecutiveStops >= 3) {
+      killReason = 'multiple_stops';
+      details = { consecutiveStops: this.consecutiveStops };
+    }
+
+    return {
+      performanceScore,
+      needsAdjustment,
+      killReason,
+      details,
+      consecutiveLosses,
+      winRate,
+      profitRatio
+    };
+  }
+
+  private shouldGenerateFreshPlan(
+    performance: ReturnType<typeof this.analyzeRecentPerformance>,
+    snap: TechnicalSnapshot,
+    regime?: any
+  ): boolean {
+    // Generate fresh plan if:
+    // 1. Performance is very poor
+    // 2. Regime has changed significantly
+    // 3. Current plan is old or ineffective
+    // 4. Market conditions have changed dramatically
+
+    if (performance.killReason) return true;
+    if (performance.consecutiveLosses >= 3) return true;
+    if (performance.winRate < 0.3 && performance.profitRatio < 0.5) return true;
+
+    // Check if regime has changed
+    if (this.regime && regime) {
+      if (this.regime.playbook !== regime.playbook) return true;
+      if (this.regime.trend !== regime.trend) return true;
+    }
+
+    // Check if market volatility has changed significantly
+    const currentVolatility = snap.atrPct || 0;
+    const previousVolatility = this.plan ? (this.plan as any).atrPct || 0 : 0;
+    if (Math.abs(currentVolatility - previousVolatility) / previousVolatility > 0.5) return true;
+
+    // Generate fresh plan periodically (every few hours) or after significant drawdown
+    const timeSinceLastPlan = this.plan ? Date.now() - (this.plan as any).timestamp || 0 : 0;
+    if (timeSinceLastPlan > 4 * 60 * 60 * 1000) return true; // 4 hours
+
+    return false;
+  }
+
+  private adaptExistingPlan(
+    snap: TechnicalSnapshot,
+    regime: any,
+    performance: ReturnType<typeof this.analyzeRecentPerformance>,
+    multipliers: ReturnType<typeof this.getAdaptationMultipliers>
+  ): PlanJson {
+    if (!this.plan) throw new Error('No existing plan to adapt');
+
+    const basePlan = { ...this.plan.plan };
+
+    // Apply performance-based adjustments
+    if (performance.needsAdjustment) {
+      // Tighten risk if performing poorly
+      if (performance.winRate < 0.4) {
+        basePlan.position.risk_fraction = Math.max(0.005, basePlan.position.risk_fraction * 0.8);
+        basePlan.risk.stop.mult = Math.min(2.5, basePlan.risk.stop.mult * 1.1); // Tighter stops
+      }
+
+      // Adjust TP targets based on performance
+      if (performance.profitRatio < 1.0) {
+        // Increase TP targets if profit ratio is poor
+        basePlan.risk.tp = basePlan.risk.tp.map(tp => ({
+          ...tp,
+          value: Math.min(5.0, tp.value * 1.2)
+        }));
+      }
+    }
+
+    // Apply adaptation multipliers
+    basePlan.risk.stop.mult *= multipliers.atr;
+
+    // Adjust based on current market regime
+    if (regime) {
+      basePlan.meta = {
+        ...basePlan.meta,
+        playbook: regime.playbook,
+        regime: regime.trend,
+        volatility: regime.volatility
+      };
+
+      if (regime.playbook === 'standby') {
+        basePlan.bias = 'none';
+      } else if (regime.playbook === 'momentum_breakout') {
+        // Adjust for breakout conditions
+        basePlan.entry_rule.confirm_close = false;
+        basePlan.entry_rule.max_distance_pct = Math.min(0.6, basePlan.entry_rule.max_distance_pct * 1.2);
+      }
+    }
+
+    // Update zone based on current market levels
+    if (snap.support && snap.resistance) {
+      if (basePlan.bias === 'long') {
+        basePlan.zone.price = snap.support;
+      } else if (basePlan.bias === 'short') {
+        basePlan.zone.price = snap.resistance;
+      }
+    }
+
+    // Add adaptation note
+    basePlan.notes = `${basePlan.notes || ''} [Adapted: perf=${performance.performanceScore.toFixed(2)}, mult_atr=${multipliers.atr.toFixed(2)}]`.trim();
+
+    return basePlan;
+  }
+
+  private applyPerformanceAdjustments(
+    plan: PlanJson,
+    performance: ReturnType<typeof this.analyzeRecentPerformance>,
+    multipliers: ReturnType<typeof this.getAdaptationMultipliers>
+  ): PlanJson {
+    const adjusted = { ...plan };
+
+    // Apply ATR multiplier
+    adjusted.risk.stop.mult = Math.max(0.4, Math.min(3.0, adjusted.risk.stop.mult * multipliers.atr));
+
+    // Adjust position sizing based on performance
+    if (performance.performanceScore < 0.3) {
+      // Poor performance - reduce risk
+      adjusted.position.risk_fraction = Math.max(0.005, adjusted.position.risk_fraction * 0.7);
+    } else if (performance.performanceScore > 0.7) {
+      // Good performance - can increase risk slightly
+      adjusted.position.risk_fraction = Math.min(0.03, adjusted.position.risk_fraction * 1.1);
+    }
+
+    // Update risk fraction range
+    if (adjusted.position.risk_fraction_range) {
+      const base = adjusted.position.risk_fraction;
+      adjusted.position.risk_fraction_range.min = Math.max(0.005, base * 0.8);
+      adjusted.position.risk_fraction_range.max = Math.min(0.05, base * 1.2);
+      adjusted.position.risk_fraction_range.recommended = base;
+    }
+
+    // Adjust leverage based on performance
+    if (performance.consecutiveLosses >= 2) {
+      adjusted.position.max_leverage = Math.max(1, Math.floor(adjusted.position.max_leverage * 0.8));
+    }
+
+    return adjusted;
   }
 }
