@@ -238,10 +238,14 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       const volumeScore = calculateVolumeComponent(quoteVolume24h); // Utilise fonction sécurisée
       const performanceScore = Math.abs(change24h); // Direct percentage
       
+      // Calcul du score de mouvement (Phase 3)
+      const movementScore = calculatePriceMovementComponent(change24h);
+      
       // Rejet automatique si volume insuffisant
       let combinedScore = 0;
       if (volumeScore >= 6.0) { // Seuil minimum strict
-        combinedScore = (performanceScore * 0.6) + (volumeScore * 0.4); // Plus de poids au volume
+        // Nouveau système de scoring avec composant de mouvement (Phase 3)
+        combinedScore = (performanceScore * 0.4) + (volumeScore * 0.35) + (movementScore * 0.25);
       } else {
         console.log(`🚫 Score volume ${volumeScore} insuffisant pour ${symbol}`);
       }
@@ -289,34 +293,59 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       return `${base}/USDT`;
     });
     
-    // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives
-    // EXCEPTION: Permettre agents multiples sur cryptos avec forte hausse (>2%)
-    const availablePerformers = topPerformers.filter(symbol => {
-      const isActive = activeSymbols.includes(symbol);
-      if (isActive) {
-        // Vérifier si ce symbole a une forte performance pour permettre un agent supplémentaire
-        const base = symbol.split('/')[0];
-        const performance = cryptoPerformance.find(p => p.symbol.startsWith(base + '/'));
-        const strongUptrend = performance && Math.abs(performance.change24h) > 2.0; // > 2% mouvement
-        
-        if (strongUptrend) {
-          console.log(`🎯 Allowing additional agent on ${symbol} due to strong movement (${performance.change24h > 0 ? '+' : ''}${performance.change24h.toFixed(2)}%)`);
-          return true; // Permettre un agent supplémentaire
-        }
-        
-        console.log(`🚫 Skipping ${symbol} - already active in another agent`);
-        return false;
-      }
-      return true;
-    });
+    // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives avec gestion intelligente
+    // PRIORISATION: Mouvement >3% = priorité absolue, >2% = agent supplémentaire autorisé
+    const availablePerformers: string[] = [];
+    const prioritySymbols: string[] = [];
     
-    if (availablePerformers.length > 0) {
-      console.log(`✅ Selected ${availablePerformers.length} available performers (${topPerformers.length - availablePerformers.length} filtered out due to conflicts)`);
-      console.log('🏆 Top 5 available:', availablePerformers.slice(0, 5));
-      console.log('🚫 Filtered (active):', activeSymbols);
-      return availablePerformers;
+    for (const symbol of topPerformers) {
+      const isActive = activeSymbols.includes(symbol);
+      const base = symbol.split('/')[0];
+      const performance = cryptoPerformance.find(p => p.symbol.startsWith(base + '/'));
+      const absChange = performance ? Math.abs(performance.change24h) : 0;
+      
+      // 🎯 PRIORITÉ ABSOLUE: Mouvement >3% (même si agents actifs)
+      if (absChange > 3.0 && performance) {
+        const activeCount = await getActiveAgentCountForSymbol(symbol);
+        if (activeCount < 2) { // Max 2 agents par symbole
+          prioritySymbols.push(symbol);
+          console.log(`🔥 PRIORITY symbol ${symbol}: ${performance.change24h > 0 ? '+' : ''}${performance.change24h.toFixed(2)}% (${activeCount} agents active)`);
+        }
+        continue;
+      }
+      
+      // 🎯 AGENT SUPPLÉMENTAIRE: Mouvement >2%
+      if (isActive && absChange > 2.0 && performance) {
+        const activeCount = await getActiveAgentCountForSymbol(symbol);
+        if (activeCount < 2) {
+          availablePerformers.push(symbol);
+          console.log(`🎯 Additional agent on ${symbol}: ${performance.change24h > 0 ? '+' : ''}${performance.change24h.toFixed(2)}% (${activeCount} active)`);
+        } else {
+          console.log(`🚫 Max agents reached for ${symbol} (${activeCount} active)`);
+        }
+        continue;
+      }
+      
+      // 📊 SÉLECTION NORMALE: Pas d'agents actifs
+      if (!isActive) {
+        availablePerformers.push(symbol);
+      } else {
+        console.log(`🚫 Skipping ${symbol} - already active, insufficient movement`);
+      }
+    }
+    
+    // Combiner les priorités et les performers normaux
+    const finalPerformers = [...prioritySymbols, ...availablePerformers];
+    
+    if (finalPerformers.length > 0) {
+      console.log(`✅ Selected ${finalPerformers.length} performers (${prioritySymbols.length} priority + ${availablePerformers.length} normal)`);
+      if (prioritySymbols.length > 0) {
+        console.log('🔥 Priority symbols (>3%):', prioritySymbols.slice(0, 3));
+      }
+      console.log('🏆 Top available:', finalPerformers.slice(0, 5));
+      return finalPerformers;
     } else {
-      console.log('⚠️ All top performers are already active - falling back to static list without active ones');
+      console.log('⚠️ All top performers at capacity - falling back to static list without active ones');
       const staticFallback = await getTopCryptos(excludeSessionId);
       return staticFallback.length > 0 ? staticFallback : await getTopCryptos(excludeSessionId); // Dernière chance
     }
@@ -704,24 +733,63 @@ function calculateVolatilityComponent(metrics: any, aggressiveMultiplier: number
 }
 
 /**
- * Volume component scoring - Lower thresholds for realistic crypto volumes with aggressiveness adjustment
+ * Volume component scoring avec intelligence adaptative
  */
-function calculateVolumeComponent(volume: number, aggressiveMultiplier: number = 1.0): number {
-  // Adjust minimum volume threshold based on aggressiveness (lower threshold for aggressive mode)
-  const minVolumeThreshold = 200000 / aggressiveMultiplier; // More permissive for aggressive mode
+function calculateVolumeComponent(volume: number, aggressiveMultiplier: number = 1.0, isHighVolatility: boolean = false): number {
+  // Ajustement intelligent des seuils selon volatilité et agressivité
+  let minVolumeThreshold = 100000; // Nouveau seuil de base réduit
   
-  // SÉCURITÉ: Rejet automatique pour volumes insuffisants (relâché selon agressivité)
+  if (isHighVolatility) {
+    minVolumeThreshold = 50000; // Seuil encore plus bas en haute volatilité
+  }
+  
+  minVolumeThreshold = minVolumeThreshold / aggressiveMultiplier;
+  
+  // SÉCURITÉ: Rejet automatique pour volumes insuffisants
   if (volume < minVolumeThreshold) {
     console.log(`🚫 Volume ${volume} insuffisant pour trading AUTO (minimum $${(minVolumeThreshold/1000).toFixed(0)}K)`);
     return 0; // REJET AUTOMATIQUE
   }
   
-  // Scores pour volumes acceptables (seuils ajustés selon agressivité)
-  if (volume > 10000000) return 9.5; // $10M+ = Excellent
-  if (volume > 5000000) return 8.5;  // $5M+ = High volume 
-  if (volume > 2000000) return 7.5;  // $2M+ = Good volume
-  if (volume > 1000000) return 7.0;  // $1M+ = Acceptable volume
-  return 6.0; // $200K-$1M = Minimum acceptable (relâché)
+  // Scores progressifs avec bonus haute volatilité
+  const volatilityBonus = isHighVolatility ? 0.5 : 0;
+  
+  if (volume > 10000000) return Math.min(10.0, 9.5 + volatilityBonus); // $10M+ = Excellent
+  if (volume > 5000000) return Math.min(10.0, 8.5 + volatilityBonus);  // $5M+ = High volume 
+  if (volume > 2000000) return Math.min(10.0, 7.5 + volatilityBonus);  // $2M+ = Good volume
+  if (volume > 1000000) return Math.min(10.0, 7.0 + volatilityBonus);  // $1M+ = Acceptable volume
+  if (volume > 500000) return Math.min(10.0, 6.5 + volatilityBonus);   // $500K+ = Decent
+  return Math.min(10.0, 6.0 + volatilityBonus); // $100K-$500K = Minimum acceptable
+}
+
+/**
+ * Nouveau scoring de mouvement de prix avec pondération améliorée
+ */
+function calculatePriceMovementComponent(change24h: number, isHighVolatility: boolean = false): number {
+  const absChange = Math.abs(change24h);
+  
+  // Bonus significatif pour les forts mouvements
+  let movementScore = 5.0; // Score de base
+  
+  // Échelle exponentielle pour les mouvements forts
+  if (absChange > 5.0) {
+    movementScore = 10.0; // Mouvement exceptionnel >5%
+  } else if (absChange > 3.0) {
+    movementScore = 9.0;  // Fort mouvement >3%
+  } else if (absChange > 2.0) {
+    movementScore = 8.0;  // Bon mouvement >2%
+  } else if (absChange > 1.0) {
+    movementScore = 7.0;  // Mouvement modéré >1%
+  } else if (absChange > 0.5) {
+    movementScore = 6.0;  // Petit mouvement >0.5%
+  }
+  
+  // Bonus en haute volatilité pour favoriser l'action
+  if (isHighVolatility && absChange > 1.0) {
+    movementScore += 1.0;
+  }
+  
+  return Math.min(10.0, movementScore);
 }
 
 /**
@@ -937,7 +1005,77 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
 /**
  * Get the best opportunity with detailed explanation
  */
+/**
+ * Détecte si le marché est en mode haute volatilité
+ * Critères: plusieurs cryptos majeures avec mouvements >2%, volume élevé
+ */
+export async function detectHighVolatilityMode(): Promise<boolean> {
+  try {
+    const majorCryptos = ['BTC/USD:USD', 'ETH/USD:USD', 'XRP/USD:USD', 'SOL/USD:USD'];
+    let strongMovements = 0;
+    let totalVolume = 0;
+    
+    for (const symbol of majorCryptos) {
+      try {
+        const ticker = await getTicker(symbol.replace('/USD:USD', '/USDT'));
+        if (ticker) {
+          const change = Math.abs(ticker.percentage || 0);
+          const volume = ticker.quoteVolume || 0;
+          
+          if (change > 2.0) strongMovements++;
+          totalVolume += volume;
+        }
+      } catch (e) {
+        // Ignore errors for individual tickers
+      }
+    }
+    
+    // Mode haute volatilité si: 2+ cryptos majeures >2% ET volume total >$2B
+    const isHighVolatility = strongMovements >= 2 && totalVolume > 2_000_000_000;
+    
+    if (isHighVolatility) {
+      console.log(`🔥 HIGH VOLATILITY MODE detected: ${strongMovements} major cryptos >2%, total volume $${(totalVolume/1000000000).toFixed(1)}B`);
+    }
+    
+    return isHighVolatility;
+  } catch (error) {
+    console.error('Error detecting volatility mode:', error);
+    return false;
+  }
+}
+
+/**
+ * Compte le nombre d'agents actifs sur un symbole spécifique
+ */
+export async function getActiveAgentCountForSymbol(symbol: string, excludeSessionId?: string): Promise<number> {
+  try {
+    const whereClause: any = { 
+      stoppedAt: null,
+      symbol: symbol
+    };
+    
+    if (excludeSessionId) {
+      whereClause.id = { not: excludeSessionId };
+    }
+    
+    const count = await prisma.agentSession.count({
+      where: whereClause
+    });
+    
+    return count;
+  } catch (error) {
+    console.error('Error counting active agents for symbol:', error);
+    return 0;
+  }
+}
+
 export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number; candidatesOverride?: IntelligentAnalysis[]; aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis | null> {
+  // Detect high volatility mode for enhanced selection criteria (Phase 2)
+  const highVolatilityMode = await detectHighVolatilityMode();
+  if (highVolatilityMode) {
+    console.log('🔥 HIGH VOLATILITY MODE DETECTED - Enhanced opportunity selection active');
+  }
+  
   // Pass excludeSessionId through the selection chain (allow override for tests)
   const opportunities = opts?.candidatesOverride ?? await scanIntelligentOpportunities(excludeSessionId, opts);
 
@@ -952,6 +1090,17 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
   const baseMinProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
   let relaxSteps = Math.max(0, Number(opts?.relaxSteps || 0));
 
+  // Phase 2: Priority system for strong movements (>3% momentum)
+  const strongMovers = opportunities.filter(o => Math.abs(o.metrics.momentum) > 3.0);
+  if (strongMovers.length > 0) {
+    // Relaxed criteria for strong movements
+    const priorityCandidate = strongMovers.find(o => (o.confidence ?? 0) >= 0.4);
+    if (priorityCandidate) {
+      console.log(`🚀 PRIORITY: Strong mover ${priorityCandidate.symbol} selected (momentum: ${priorityCandidate.metrics.momentum.toFixed(2)}%)`);
+      return priorityCandidate;
+    }
+  }
+  
   // Try progressively more permissive filters up to 3 steps
   for (; relaxSteps <= 3; relaxSteps++) {
     const minConf = Math.max(0.15, minConfBase - relaxSteps * 0.05);
@@ -1056,9 +1205,12 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       return true; // Still successful, but in sleep mode
     }
     
-    // Last-minute conflict check to avoid duplicate allocation (race-safe)
-    if (await isSymbolInUse(bestOpportunity.symbol, sessionId)) {
-      console.log(`🚫 Conflict: ${bestOpportunity.symbol} already in use — re-evaluating alternatives`);
+    // Enhanced conflict check with multi-agent support (Phase 2)
+    const currentAgentCount = await getActiveAgentCountForSymbol(bestOpportunity.symbol, sessionId);
+    const strongMomentum = Math.abs(bestOpportunity.metrics.momentum) > 2.0; // Strong movement exception
+    
+    if (currentAgentCount > 0 && (!strongMomentum || currentAgentCount >= 2)) {
+      console.log(`🚫 Agent limit exceeded for ${bestOpportunity.symbol} (${currentAgentCount} active, momentum: ${bestOpportunity.metrics.momentum.toFixed(2)})`);
       const retry = await getBestIntelligentOpportunity(sessionId);
       if (!retry || retry.symbol === bestOpportunity.symbol) {
         // Enter short sleep and retry later to avoid churn
