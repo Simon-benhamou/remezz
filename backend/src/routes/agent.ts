@@ -80,7 +80,7 @@ router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
 router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>{
   try {
-    const {  mode, startBalanceUsd } = req.body as {symbol:string, mode:'paper'|'live', startBalanceUsd?:number};
+    const { mode, startBalanceUsd } = req.body as { mode:'paper'|'live', startBalanceUsd?:number };
     const body = req.body as { 
       symbol?: string, 
       mode:'paper'|'live', 
@@ -95,7 +95,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       smartAutoMode?: boolean,  // Add support for frontend field name
       smartConfig?: any
     };
-    let symbol = body.symbol as string;
+    let symbol = body.symbol;
 
     // Smart Agent mode - auto-select best symbol
     const isSmartAgent = body.isSmartAgent || body.smartAutoMode;
@@ -309,20 +309,28 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
           }
         }
 
-        // Plan + arm
-        const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
-        // Persist LLM plan JSON on the session so we can re-arm after a reboot without re-calling LLM
-        try { await savePlan(s.id, plan as any); } catch (err) { console.warn('Failed to persist plan', err); }
-        const a = AgentHub.get(s.id);
-        if (a) {
-          await a.propose(plan as any);
-          await a.validateAndArm();
+        // Plan + arm (only if symbol is defined)
+        if (symbol) {
+          const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
+          // Persist LLM plan JSON on the session so we can re-arm after a reboot without re-calling LLM
+          try { await savePlan(s.id, plan as any); } catch (err) { console.warn('Failed to persist plan', err); }
+          const a = AgentHub.get(s.id);
+          if (a) {
+            await a.propose(plan as any);
+            await a.validateAndArm();
+          }
+        } else {
+          console.log(`⏳ Skipping plan generation - symbol not yet determined for Smart Agent ${s.id}`);
         }
       } catch {}
       try {
-        // Strategy preview
-        const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id, fresh: true, force: true });
-        broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);
+        // Strategy preview (only if symbol is defined)
+        if (symbol) {
+          const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id, fresh: true, force: true });
+          broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);
+        } else {
+          console.log(`⏳ Skipping strategy generation - symbol not yet determined for Smart Agent ${s.id}`);
+        }
       } catch {}
       try {
         const tech = await buildTechSnapshot(s.symbol);

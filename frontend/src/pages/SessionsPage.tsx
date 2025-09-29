@@ -209,7 +209,7 @@ export default function SessionsPage(){
 
     // Configurer l'auto-refresh pour ce mode
     setupAutoRefresh(mode as any, false);
-  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch, notifyCacheHit]);
+  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch]);
 
   React.useEffect(()=>{ 
     form.setFieldsValue({ mode }); 
