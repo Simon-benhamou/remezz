@@ -290,12 +290,24 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
     });
     
     // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives
+    // EXCEPTION: Permettre agents multiples sur cryptos avec forte hausse (>2%)
     const availablePerformers = topPerformers.filter(symbol => {
       const isActive = activeSymbols.includes(symbol);
       if (isActive) {
+        // Vérifier si ce symbole a une forte performance pour permettre un agent supplémentaire
+        const base = symbol.split('/')[0];
+        const performance = cryptoPerformance.find(p => p.symbol.startsWith(base + '/'));
+        const strongUptrend = performance && Math.abs(performance.change24h) > 2.0; // > 2% mouvement
+        
+        if (strongUptrend) {
+          console.log(`🎯 Allowing additional agent on ${symbol} due to strong movement (${performance.change24h > 0 ? '+' : ''}${performance.change24h.toFixed(2)}%)`);
+          return true; // Permettre un agent supplémentaire
+        }
+        
         console.log(`🚫 Skipping ${symbol} - already active in another agent`);
+        return false;
       }
-      return !isActive;
+      return true;
     });
     
     if (availablePerformers.length > 0) {
@@ -1702,9 +1714,9 @@ export function volumeUsdFromTicker(ticker: any): number {
 export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string; minRequired?: number } {
   const cfg = getConfig();
   const level = opts?.aggressiveness || 'reactive';
-  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 300000 : 
-                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 150000 : 
-                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 200000; // Relâché à $200K par défaut
+  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 200000 : 
+                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 75000 : 
+                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 100000; // Réduit à $100K pour plus d'opportunités
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
   if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume', minRequired: minByLevel };
