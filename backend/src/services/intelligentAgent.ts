@@ -928,7 +928,7 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
       symbol,
       score: finalScore,
       rank: 0, // Will be set after ranking all symbols
-      confidence: Math.round(confidence * 100) / 100,
+      confidence: Math.round(autoBias.confidence), // 🎯 Utilise la confidence ML du bias au lieu de la confidence technique
       projectionConfidence: Math.round(projectionConfidence * 1000) / 1000,
       autoBias, // 🎯 Bias automatiquement déterminé
       reasoning: {
