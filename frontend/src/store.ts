@@ -26,11 +26,14 @@ export interface AppState {
 }
 
 export interface DashboardData {
-  overview: any;
+  // Cache par mode pour éviter les conflits LIVE/PAPER
+  overviewCache: Partial<Record<AppMode, { data: any; timestamp: number; }>>;
+  currentOverview: any; // Overview actuel selon le mode sélectionné
   opsMetrics: any;
   opsEvents: any[];
   opsLlmLogs: any[];
   lastFetched: number | null;
+  cacheValidityMs: number; // TTL pour le cache
 }
 
 // Auth Store
@@ -125,11 +128,15 @@ export const useAppStore = create<AppStore>()(
 
 // Dashboard Store
 interface DashboardStore extends DashboardData {
-  setOverview: (overview: any) => void;
+  setOverview: (overview: any, mode: AppMode) => void;
   setOpsMetrics: (metrics: any) => void;
   setOpsEvents: (events: any[]) => void;
   setOpsLlmLogs: (logs: any[]) => void;
   updateLastFetched: () => void;
+  switchMode: (newMode: AppMode) => void;
+  isCacheValid: (mode: AppMode) => boolean;
+  getCachedOverview: (mode: AppMode) => any | null;
+  invalidateCache: (mode?: AppMode) => void;
   reset: () => void;
 }
 
@@ -137,20 +144,75 @@ export const useDashboardStore = create<DashboardStore>()(
   persist(
     (set, get) => ({
       // Initial state
-      overview: {},
+      overviewCache: {},
+      currentOverview: {},
       opsMetrics: null,
       opsEvents: [],
       opsLlmLogs: [],
       lastFetched: null,
+      cacheValidityMs: 10000, // 10 seconds TTL
 
       // Actions
-      setOverview: (overview) => set({ overview }),
+      setOverview: (overview, mode) => {
+        const cache = get().overviewCache;
+        const newCache = {
+          ...cache,
+          [mode]: { data: overview, timestamp: Date.now() }
+        };
+        set({ 
+          overviewCache: newCache,
+          currentOverview: overview,
+          lastFetched: Date.now()
+        });
+      },
+
+      switchMode: (newMode) => {
+        const cache = get().overviewCache;
+        const cachedData = cache[newMode];
+        if (cachedData && get().isCacheValid(newMode)) {
+          set({ currentOverview: cachedData.data });
+          console.log(`🎯 Using cached overview for ${newMode} mode`);
+        } else {
+          // Si pas de cache valide, on reset l'overview actuel
+          set({ currentOverview: {} });
+          console.log(`📦 No valid cache for ${newMode} mode, will refresh`);
+        }
+      },
+
+      isCacheValid: (mode) => {
+        const cache = get().overviewCache;
+        const cachedData = cache[mode];
+        if (!cachedData) return false;
+        return (Date.now() - cachedData.timestamp) < get().cacheValidityMs;
+      },
+
+      getCachedOverview: (mode) => {
+        if (get().isCacheValid(mode)) {
+          return get().overviewCache[mode]?.data;
+        }
+        return null;
+      },
+
+      invalidateCache: (mode) => {
+        if (mode) {
+          const cache = get().overviewCache;
+          const newCache = { ...cache };
+          delete newCache[mode];
+          set({ overviewCache: newCache });
+          console.log(`🗑️ Invalidated cache for ${mode} mode`);
+        } else {
+          set({ overviewCache: {} });
+          console.log('🗑️ Invalidated all cache');
+        }
+      },
+
       setOpsMetrics: (opsMetrics) => set({ opsMetrics }),
       setOpsEvents: (opsEvents) => set({ opsEvents }),
       setOpsLlmLogs: (opsLlmLogs) => set({ opsLlmLogs }),
       updateLastFetched: () => set({ lastFetched: Date.now() }),
       reset: () => set({
-        overview: {},
+        overviewCache: {},
+        currentOverview: {},
         opsMetrics: null,
         opsEvents: [],
         opsLlmLogs: [],
@@ -185,9 +247,12 @@ export const useApp = () => useAppStore((state) => ({
 }));
 
 export const useDashboard = () => useDashboardStore((state) => ({
-  overview: state.overview,
+  overview: state.currentOverview,
   opsMetrics: state.opsMetrics,
   opsEvents: state.opsEvents,
   opsLlmLogs: state.opsLlmLogs,
   lastFetched: state.lastFetched,
+  overviewCache: state.overviewCache,
+  isCacheValid: state.isCacheValid,
+  getCachedOverview: state.getCachedOverview,
 }));

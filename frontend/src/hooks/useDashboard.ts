@@ -9,24 +9,53 @@ export function useDashboard() {
     opsEvents,
     opsLlmLogs,
     lastFetched,
+    overviewCache,
+    isCacheValid,
+    getCachedOverview,
+  } = useDashboardStore((state) => ({
+    overview: state.currentOverview,
+    opsMetrics: state.opsMetrics,
+    opsEvents: state.opsEvents,
+    opsLlmLogs: state.opsLlmLogs,
+    lastFetched: state.lastFetched,
+    overviewCache: state.overviewCache,
+    isCacheValid: state.isCacheValid,
+    getCachedOverview: state.getCachedOverview,
+  }));
+
+  const {
     setOverview,
     setOpsMetrics,
     setOpsEvents,
     setOpsLlmLogs,
     updateLastFetched,
+    switchMode,
+    invalidateCache,
   } = useDashboardStore();
 
   const { mode } = useAppStore();
 
-  const loadOverview = useCallback(async () => {
+  const loadOverview = useCallback(async (forceRefresh = false) => {
     try {
+      // Vérifier le cache d'abord si pas de force refresh
+      if (!forceRefresh) {
+        const cached = getCachedOverview(mode);
+        if (cached) {
+          console.log(`🎯 Using cached overview for ${mode} mode`);
+          return cached;
+        }
+      }
+
+      console.log(`🔄 Fetching fresh overview for ${mode} mode`);
       const data = await api.overview(mode);
-      setOverview(data);
+      setOverview(data, mode);
       updateLastFetched();
+      return data;
     } catch (error) {
       console.error('Failed to load overview:', error);
+      throw error;
     }
-  }, [mode, setOverview, updateLastFetched]);
+  }, [mode, setOverview, updateLastFetched, getCachedOverview]);
 
   const loadOpsMetrics = useCallback(async () => {
     try {
@@ -64,28 +93,46 @@ export function useDashboard() {
     ]);
   }, [loadOverview, loadOpsMetrics, loadOpsEvents, loadOpsLlmLogs]);
 
-  // Auto-refresh overview every 15 seconds
+  // Gestion intelligente du changement de mode
   useEffect(() => {
-    loadOverview(); // Initial load
+    console.log(`📋 Mode changed to: ${mode}`);
+    
+    // Switch vers les données cachées du nouveau mode
+    switchMode(mode);
+    
+    // Si pas de cache valide pour ce mode, charger immédiatement
+    if (!isCacheValid(mode)) {
+      console.log(`⚡ No valid cache for ${mode}, loading immediately`);
+      loadOverview(true); // Force refresh pour le nouveau mode
+    }
+  }, [mode, switchMode, isCacheValid, loadOverview]);
 
+  // Auto-refresh overview every 15 seconds (pour le mode actuel seulement)
+  useEffect(() => {
     const interval = setInterval(() => {
-      loadOverview();
+      // Refresh seulement si nécessaire (cache expiré)
+      if (!isCacheValid(mode)) {
+        console.log(`⏰ Auto-refresh triggered for ${mode} mode`);
+        loadOverview(true);
+      }
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [loadOverview]);
+  }, [mode, loadOverview, isCacheValid]);
 
-  // Load other data on mount
+  // Load other data on mount (une seule fois)
   useEffect(() => {
     loadOpsMetrics();
-    loadOpsEvents();
+    loadOpsEvents();  
     loadOpsLlmLogs();
   }, [loadOpsMetrics, loadOpsEvents, loadOpsLlmLogs]);
 
-  // Reload when mode changes
+  // Initial load pour le mode courant
   useEffect(() => {
-    loadAllData();
-  }, [mode, loadAllData]);
+    if (!isCacheValid(mode)) {
+      loadOverview();
+    }
+  }, []);
 
   return {
     overview,
@@ -93,10 +140,13 @@ export function useDashboard() {
     opsEvents,
     opsLlmLogs,
     lastFetched,
+    overviewCache,
+    isCacheValid: (mode: string) => isCacheValid(mode as any),
     loadOverview,
     loadOpsMetrics,
     loadOpsEvents,
     loadOpsLlmLogs,
     loadAllData,
+    invalidateCache,
   };
 }

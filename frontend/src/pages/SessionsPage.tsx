@@ -3,6 +3,9 @@ import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumb
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { useSessionsCache } from '../hooks/useSessionsCache';
+import { useCacheNotifications } from '../hooks/useCacheNotifications';
+import { useSmartCacheInvalidation } from '../hooks/useSmartCacheInvalidation';
 import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined, RocketOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import TradingDiagnosticsCollapsible from '../components/TradingDiagnosticsCollapsible';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
@@ -22,6 +25,22 @@ export default function SessionsPage(){
   const smartAutoMode = Form.useWatch?.('smartAutoMode', form);
   const [apiKeyHealth, setApiKeyHealth] = React.useState<any>(null);
   
+  // Cache intelligent pour les sessions
+  const {
+    loading: sessionsLoading,
+    loadSessions,
+    getCachedSessions,
+    invalidateCache,
+    setupAutoRefresh,
+    isCacheValid,
+  } = useSessionsCache();
+
+  // Notifications de cache
+  const { notifyModeSwitch, notifyCacheRefresh, notifyCacheHit, notifyError } = useCacheNotifications();
+  
+  // Invalidation intelligente du cache
+  const { invalidateSmartly } = useSmartCacheInvalidation();
+  
   // Clear symbol field when Auto-Select Mode is enabled
   React.useEffect(() => {
     if (smartAutoMode) {
@@ -40,86 +59,94 @@ export default function SessionsPage(){
   
   const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
   
-  const load = React.useCallback(async ()=>{ 
-    try { 
-      // Load sessions without heavy includes for better performance
-      const sessions = await api.listSessions(mode, false); // Don't include stats by default
+  const enrichSessionData = async (sessions: any[]) => {
+    return Promise.all(sessions.map(async (session: any) => {
+      try {
+        // Pull KPI metrics for all sessions (cheap lookup)
+        const perf = session.id ? await api.getPerf(session.id).catch(() => null) : null;
+        const health = session.id && !session.stoppedAt ? await api.getHealth(session.id).catch(() => null) : null;
+        const agentState = session.id && !session.stoppedAt ? await api.getAgentState(session.id).catch(() => null) : null;
+        const diagnostics = session.id && !session.stoppedAt ? await api.getDiagnostics(session.id).catch(() => null) : null;
 
-      // Enrich rows with lightweight metrics
-      const enrichedSessions = await Promise.all(sessions.map(async (session: any) => {
-        try {
-          // Pull KPI metrics for all sessions (cheap lookup)
-          const perf = session.id ? await api.getPerf(session.id).catch(() => null) : null;
-          const health = session.id && !session.stoppedAt ? await api.getHealth(session.id).catch(() => null) : null;
-          const agentState = session.id && !session.stoppedAt ? await api.getAgentState(session.id).catch(() => null) : null;
-          const diagnostics = session.id && !session.stoppedAt ? await api.getDiagnostics(session.id).catch(() => null) : null;
-
-          // Get pending orders (lightweight)
-          const orders = session.id ? await api.getOrders(session.id).catch(() => []) : [];
-          const pendingOrders = orders.filter((o: any) => 
-            ['new', 'open', 'partially_filled'].includes(o.status)
-          );
-          
-          // Remove automatic diagnostics loading - will be loaded on-demand via collapse
+        // Get pending orders (lightweight)
+        const orders = session.id ? await api.getOrders(session.id).catch(() => []) : [];
+        const pendingOrders = orders.filter((o: any) => 
+          ['new', 'open', 'partially_filled'].includes(o.status)
+        );
         
-          const rawWinRate = Number(perf?.winRate ?? 0);
-          const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
-          const roiPct = Number(perf?.roiPct ?? 0);
+        const rawWinRate = Number(perf?.winRate ?? 0);
+        const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
+        const roiPct = Number(perf?.roiPct ?? 0);
 
-          return {
-            ...session,
-            // PnL & ROI metrics
-            realizedPnl: Number(perf?.realizedPnlUsd ?? 0),
-            portfolioUnrealizedPnl: Number(perf?.unrealizedPnlUsd ?? 0),
-            pnlUsd: Number(perf?.realizedPnlUsd ?? 0) + Number(perf?.unrealizedPnlUsd ?? 0),
-            roiPct,
-            winRate: normalizedWinRate,
-            // Performance metrics
-            totalTrades: perf?.totalTrades || 0,
-            todayTrades: perf?.todayTrades || 0,
-            pnl24h: perf?.pnl24h || 0,
-            maxDrawdown: perf?.maxDrawdown || 0,
-            uptime: session.startedAt ? Date.now() - new Date(session.startedAt).getTime() : 0,
-            lastActivity: perf?.lastTradeAt || session.startedAt,
-            
-            // Position info
-            currentPosition: agentState?.position || null,
-            
-            // Orders info
-            pendingOrders: pendingOrders,
-            pendingOrdersCount: pendingOrders.length,
+        return {
+          ...session,
+          // PnL & ROI metrics
+          realizedPnl: Number(perf?.realizedPnlUsd ?? 0),
+          portfolioUnrealizedPnl: Number(perf?.unrealizedPnlUsd ?? 0),
+          pnlUsd: Number(perf?.realizedPnlUsd ?? 0) + Number(perf?.unrealizedPnlUsd ?? 0),
+          roiPct,
+          winRate: normalizedWinRate,
+          // Performance metrics
+          totalTrades: perf?.totalTrades || 0,
+          todayTrades: perf?.todayTrades || 0,
+          pnl24h: perf?.pnl24h || 0,
+          maxDrawdown: perf?.maxDrawdown || 0,
+          uptime: session.startedAt ? Date.now() - new Date(session.startedAt).getTime() : 0,
+          lastActivity: perf?.lastTradeAt || session.startedAt,
+          
+          // Position info
+          currentPosition: agentState?.position || null,
+          
+          // Orders info
+          pendingOrders: pendingOrders,
+          pendingOrdersCount: pendingOrders.length,
 
-            // Health status
-            healthStatus: health?.status || 'unknown',
-            healthScore: health?.score || 0,
-            alertCount: health?.alerts?.length || 0,
+          // Health status
+          healthStatus: health?.status || 'unknown',
+          healthScore: health?.score || 0,
+          alertCount: health?.alerts?.length || 0,
 
-            // Trading diagnostics snapshot for quick gauge
-            tradingReadiness: diagnostics ? {
-              canTrade: !!diagnostics.canTrade,
-              reason: diagnostics.reason,
-              summary: diagnostics.summary,
-              qualityScore: diagnostics.checks?.qualityScore,
-              percent: (() => {
-                const qs = diagnostics.checks?.qualityScore;
-                if (qs && Number(qs.required)) {
-                  return Math.round(Math.max(0, Math.min(100, (qs.current / qs.required) * 100)));
-                }
-                return diagnostics.canTrade ? 100 : 0;
-              })(),
-            } : null,
-            diagnosticsInitial: diagnostics || null,
-          };
-        } catch {
-          return session;
-        }
-      }));
+          // Trading diagnostics snapshot for quick gauge
+          tradingReadiness: diagnostics ? {
+            canTrade: !!diagnostics.canTrade,
+            reason: diagnostics.reason,
+            summary: diagnostics.summary,
+            qualityScore: diagnostics.checks?.qualityScore,
+            percent: (() => {
+              const qs = diagnostics.checks?.qualityScore;
+              if (qs && Number(qs.required)) {
+                return Math.round(Math.max(0, Math.min(100, (qs.current / qs.required) * 100)));
+              }
+              return diagnostics.canTrade ? 100 : 0;
+            })(),
+          } : null,
+          diagnosticsInitial: diagnostics || null,
+        };
+      } catch {
+        return session;
+      }
+    }));
+  };
+
+  const load = React.useCallback(async (forceRefresh = false) => { 
+    try {
+      console.log(`🔄 Loading sessions for mode: ${mode} ${forceRefresh ? '(force refresh)' : ''}`);
       
+      // Utiliser le cache intelligent
+      const sessions = await loadSessions(mode as any, false, forceRefresh);
+      const enrichedSessions = await enrichSessionData(sessions);
       setRows(enrichedSessions);
+      
+      if (forceRefresh) {
+        notifyCacheRefresh(mode as any, enrichedSessions.length);
+      }
+      
+      console.log(`✅ Loaded ${enrichedSessions.length} sessions for ${mode} mode`);
     } catch(e) {
       console.error('Failed to load sessions:', e);
+      notifyError(`Failed to load ${mode} sessions`);
     } 
-  }, [mode]);
+  }, [mode, loadSessions, notifyCacheRefresh, notifyError]);
   
   // Apply filters
   React.useEffect(() => {
@@ -158,8 +185,36 @@ export default function SessionsPage(){
     setFilteredRows(filtered);
   }, [rows, statusFilter, modeFilter, symbolFilter, aggressivenessFilter, searchText]);
 
-  React.useEffect(()=>{ load(); }, [load]);
-  React.useEffect(()=>{ form.setFieldsValue({ mode }); }, [mode, form]);
+  // Chargement initial et gestion du changement de mode
+  React.useEffect(() => {
+    console.log(`📋 Mode changed to: ${mode}`);
+    
+    // Vérifier si on a des données cachées valides
+    const hasCachedData = getCachedSessions(mode as any, false);
+    const hasValidCache = !!hasCachedData;
+    
+    // Notifier le changement de mode
+    notifyModeSwitch(mode as any, hasValidCache);
+    
+    if (hasCachedData) {
+      console.log(`🎯 Using cached sessions for ${mode} mode`);
+      // Charger depuis le cache et enrichir les données
+      enrichSessionData(hasCachedData).then(setRows);
+      notifyCacheHit(mode as any);
+    } else {
+      // Pas de cache valide, charger depuis l'API
+      console.log(`⚡ No cached data for ${mode}, loading fresh`);
+      load(true);
+    }
+
+    // Configurer l'auto-refresh pour ce mode
+    setupAutoRefresh(mode as any, false);
+  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch, notifyCacheHit]);
+
+  React.useEffect(()=>{ 
+    form.setFieldsValue({ mode }); 
+  }, [mode, form]);
+  
   React.useEffect(()=>{
     let t:any; const pull = async ()=>{ try { const o = await api.overview(mode); setExBal(o?.exchangeBalance || null); } catch{} };
     pull(); t = setInterval(pull, 15000); return ()=> clearInterval(t);
@@ -237,8 +292,10 @@ export default function SessionsPage(){
       onOk: async ()=>{
         try {
           await api.stopSession(id, true);
+          // Invalider le cache après l'arrêt de la session
+          invalidateSmartly('session_stopped', { mode: mode as any });
           message.success('Session stopped');
-          await load();
+          await load(true); // Force refresh after cache invalidation
         } catch { 
           message.error('Stop failed'); 
         }
@@ -266,6 +323,8 @@ export default function SessionsPage(){
             for (const session of activeSessions) {
               try {
                 await api.stopSession(session.id, true);
+                // Invalider le cache pour chaque session arrêtée
+                invalidateSmartly('session_stopped', { mode: session.mode as any });
               } catch (e) {
                 console.error(`Failed to stop session ${session.id}:`, e);
               }
@@ -392,6 +451,27 @@ export default function SessionsPage(){
                         boxShadow: compactView ? '0 2px 8px rgba(102, 126, 234, 0.3)' : undefined
                       }}
                     />
+                  </Tooltip>
+                  <Tooltip title={`Refresh (Cache: ${isCacheValid(mode as any, false) ? '✅ Valid' : '❌ Expired'})`}>
+                    <Button 
+                      icon={<ReloadOutlined />}
+                      loading={sessionsLoading}
+                      onClick={() => {
+                        console.log('🔄 Manual refresh triggered');
+                        load(true); // Force refresh
+                      }}
+                      style={{
+                        borderRadius: '10px',
+                        fontWeight: '500',
+                        border: `1px solid ${isCacheValid(mode as any, false) ? '#10b981' : '#ef4444'}`,
+                        background: 'white',
+                        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+                        height: '40px',
+                        color: isCacheValid(mode as any, false) ? '#10b981' : '#ef4444'
+                      }}
+                    >
+                      {isCacheValid(mode as any, false) ? 'Cached' : 'Refresh'}
+                    </Button>
                   </Tooltip>
                   <Dropdown menu={{ items: bulkActions }} placement="bottomRight">
                     <Button 
@@ -1174,8 +1254,10 @@ export default function SessionsPage(){
               setOpen(false);
               const res = await api.client.post('/api/agent/start', v);
               if (hide) hide();
+              // Invalider le cache après la création de la session
+              invalidateSmartly('session_created', { mode: v.mode as any });
               message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
-              await load();
+              await load(true); // Force refresh after cache invalidation
               // Navigate to the created session (preferred), fallback to first active
               const sid = (res as any)?.data?.id;
               if (sid) navigate(`/monitor/${sid}`); else {
