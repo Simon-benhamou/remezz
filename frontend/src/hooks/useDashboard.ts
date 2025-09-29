@@ -105,7 +105,7 @@ export function useDashboard() {
       console.log(`⚡ No valid cache for ${mode}, loading immediately`);
       loadOverview(true); // Force refresh pour le nouveau mode
     }
-  }, [mode, switchMode, isCacheValid, loadOverview]);
+  }, [mode]); // Suppression des dépendances functions pour éviter boucles
 
   // Auto-refresh overview every 15 seconds (pour le mode actuel seulement)
   useEffect(() => {
@@ -118,7 +118,7 @@ export function useDashboard() {
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [mode, loadOverview, isCacheValid]);
+  }, [mode]); // Suppression des dépendances functions pour éviter boucles
 
   // Load other data on mount (une seule fois)
   useEffect(() => {
