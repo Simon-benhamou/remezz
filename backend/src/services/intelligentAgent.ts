@@ -466,21 +466,21 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
         return false;
       }
       
-      // DYNAMIC FILTERING based on volume (not static lists)
+      // DYNAMIC FILTERING based on volume (RÉDUITS pour plus d'opportunités)
       const volumeUsd = crypto.quoteVolume24h;
       const isHighVolumeAsset = volumeUsd >= 50_000_000; // $50M+ = established
-      const isMediumVolumeAsset = volumeUsd >= 5_000_000; // $5M+ = emerging
-      const isLowVolumeAsset = volumeUsd >= 500_000; // $500K+ = speculative
+      const isMediumVolumeAsset = volumeUsd >= 1_000_000; // $1M+ = emerging (réduit de $5M)
+      const isLowVolumeAsset = volumeUsd >= 100_000; // $100K+ = speculative (réduit de $500K)
       
       if (isHighVolumeAsset) {
         // High volume: accept tiny movements (very safe)
         if (crypto.absChange < 0.005) return false; // 0.005% minimum
       } else if (isMediumVolumeAsset) {
         // Medium volume: moderate movements (balanced)
-        if (crypto.absChange < 0.05) return false; // 0.05% minimum
+        if (crypto.absChange < 0.02) return false; // 0.02% minimum (réduit de 0.05%)
       } else if (isLowVolumeAsset) {
         // Lower volume: require significant movements (higher risk/reward)
-        if (crypto.absChange < 0.15) return false; // 0.15% minimum
+        if (crypto.absChange < 0.05) return false; // 0.05% minimum (réduit de 0.15%)
       } else {
         // Very low volume: reject (too risky)
         return false;
@@ -902,20 +902,26 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const minConfidenceThreshold = 30; // Uniformisé : 30% minimum pour tous les modes
     console.log(`🔍 DEBUG ${symbol}: excludeSessionId=${opts?.excludeSessionId}, isSmartAgent=${isSmartAgentScan}, threshold=${minConfidenceThreshold}, confidence=${autoBias.confidence}`);
     
-    // Convert NONE bias with sufficient confidence to LONG bias FIRST
-    if (autoBias.bias === 'none' && autoBias.confidence >= minConfidenceThreshold) {
+    // NEW RANKING SYSTEM: Never reject, just give low scores to poor quality cryptos
+    
+    // Convert NONE bias to LONG for neutral markets
+    if (autoBias.bias === 'none') {
       console.log(`🔄 ${symbol}: Converting NONE bias (${autoBias.confidence}%) to LONG for neutral market trading`);
       autoBias.bias = 'long';
       autoBias.reasoning = `Neutral market → LONG bias (${autoBias.confidence}% confidence)`;
     }
     
-    // THEN check if we have a valid bias and confidence
-    if (autoBias.bias === 'none' || autoBias.confidence < minConfidenceThreshold) {
-      console.log(`🚫 ${symbol} skipped: ${autoBias.reasoning} (need ≥${minConfidenceThreshold}%)`);
-      return null;
+    // Apply confidence penalty to score instead of rejecting
+    let confidencePenalty = 1.0;
+    if (autoBias.confidence < minConfidenceThreshold) {
+      confidencePenalty = Math.max(0.1, autoBias.confidence / minConfidenceThreshold); // Scale down score based on low confidence
+      console.log(`⚠️ ${symbol}: Low confidence ${autoBias.confidence}% → applying ${(confidencePenalty * 100).toFixed(0)}% score penalty`);
     }
+    
+    // Apply confidence penalty to final score
+    const penalizedScore = compositeScore * confidencePenalty;
 
-    const finalScore = Math.round(compositeScore * 100) / 100;
+    const finalScore = Math.round(penalizedScore * 100) / 100;
     console.log(`🎯 ${symbol}: Final Score=${finalScore} (M:${momentumScore.toFixed(1)}, T:${trendScore.toFixed(1)}, V:${volatilityScore.toFixed(1)}, Vol:${volumeScore.toFixed(1)}) [${aggressiveness}]`);
 
     return {
@@ -1053,11 +1059,11 @@ function calculateVolatilityComponent(metrics: any, aggressiveMultiplier: number
  * Volume component scoring avec intelligence adaptative
  */
 function calculateVolumeComponent(volume: number, aggressiveMultiplier: number = 1.0, isHighVolatility: boolean = false): number {
-  // Ajustement intelligent des seuils selon volatilité et agressivité
-  let minVolumeThreshold = 100000; // Nouveau seuil de base réduit
+  // Ajustement intelligent des seuils selon volatilité et agressivité (RÉDUITS pour plus d'opportunités)
+  let minVolumeThreshold = 25000; // Seuil de base très réduit ($25K)
   
   if (isHighVolatility) {
-    minVolumeThreshold = 50000; // Seuil encore plus bas en haute volatilité
+    minVolumeThreshold = 10000; // Seuil très bas en haute volatilité ($10K)
   }
   
   minVolumeThreshold = minVolumeThreshold / aggressiveMultiplier;
@@ -1309,14 +1315,20 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
   
   // Sort by score (descending) and assign ranks
   analyses.sort((a, b) => b.score - a.score);
-  analyses.forEach((analysis, index) => {
+  
+  // Filter by minimum score threshold to remove poor quality cryptos
+  const minScoreThreshold = 2.0; // Minimum score to be considered tradeable
+  const qualifiedAnalyses = analyses.filter(a => a.score >= minScoreThreshold);
+  
+  // Assign ranks to qualified analyses only
+  qualifiedAnalyses.forEach((analysis, index) => {
     analysis.rank = index + 1;
   });
   
-  console.log(`✅ Intelligent scan complete. Found ${analyses.length} analyzed opportunities.`);
-  console.log(`🏆 Top 3: ${analyses.slice(0, 3).map(a => `${a.symbol}(${a.score})`).join(', ')}`);
+  console.log(`✅ Intelligent scan complete. Found ${analyses.length} total analyses, ${qualifiedAnalyses.length} above threshold (score ≥ ${minScoreThreshold}).`);
+  console.log(`🏆 Top qualified: ${qualifiedAnalyses.slice(0, 5).map(a => `${a.symbol}(${a.score.toFixed(1)})`).join(', ')}`);
   
-  return analyses;
+  return qualifiedAnalyses;
 }
 
 /**
@@ -1387,109 +1399,49 @@ export async function getActiveAgentCountForSymbol(symbol: string, excludeSessio
 }
 
 export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number; candidatesOverride?: IntelligentAnalysis[]; aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis | null> {
-  // Detect high volatility mode for enhanced selection criteria (Phase 2)
-  const highVolatilityMode = await detectHighVolatilityMode();
-  if (highVolatilityMode) {
-    console.log('🔥 HIGH VOLATILITY MODE DETECTED - Enhanced opportunity selection active');
-  }
+  console.log('🎯 Smart Agent Selection: Finding best available opportunity from ranked list...');
   
-  // NEW APPROACH: Scan ALL opportunities first, then select first available
-  let opportunities: IntelligentAnalysis[];
+  // Get the complete ranked list of qualified opportunities
+  const opportunities = opts?.candidatesOverride ?? await scanIntelligentOpportunities(undefined, opts);
   
-  if (opts?.candidatesOverride) {
-    opportunities = opts.candidatesOverride;
-  } else {
-    // Scan ALL cryptos without filtering active symbols first
-    console.log('🎯 Scanning ALL cryptos then selecting first available...');
-    opportunities = await scanIntelligentOpportunities(undefined, opts); // No excludeSessionId = scan everything
-    
-    // Get list of active symbols for availability check
-    const activeSymbols = excludeSessionId ? await getActiveAgentSymbols(excludeSessionId) : [];
-    if (activeSymbols.length > 0) {
-      console.log(`🚫 Active symbols to avoid: ${activeSymbols.join(', ')}`);
-    }
-    
-    // Mark availability but keep all opportunities in ranking
-    opportunities.forEach(opp => {
-      (opp as any).isAvailable = !activeSymbols.includes(opp.symbol);
-    });
-    
-    console.log(`📊 Ranked opportunities: ${opportunities.length} total, ${opportunities.filter(o => (o as any).isAvailable).length} available`);
-  }
-
   if (opportunities.length === 0) {
-    console.log('⚠️ No opportunities found - all cryptos failed analysis criteria');
+    console.log('� No qualified opportunities found (all below minimum score threshold) → SLEEP mode');
     return null;
   }
-
-  // Enforce a minimum confidence threshold for selection, with adaptive relaxation
-  const { COOLDOWN_CONFIDENCE_MIN } = getConfig();
-  // Smart Agent mode: réduit seuil à 20% pour permettre plus d'opportunités
-  const smartAgentMode = !excludeSessionId; // Smart Agent création = pas de sessionId à exclure
-  const defaultMinConf = smartAgentMode ? 0.20 : (COOLDOWN_CONFIDENCE_MIN || 0.6);
-  const minConfBase = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || defaultMinConf)));
-  const baseMinProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
-  let relaxSteps = Math.max(0, Number(opts?.relaxSteps || 0));
-
-  // Phase 2: Priority system for strong movements (>3% momentum) - prefer available symbols
-  const strongMovers = opportunities.filter(o => Math.abs(o.metrics.momentum) > 3.0);
-  if (strongMovers.length > 0) {
-    // First try available strong movers
-    const availableStrongMovers = strongMovers.filter(o => (o as any).isAvailable !== false);
-    const priorityCandidate = availableStrongMovers.find(o => (o.confidence ?? 0) >= 0.4) || 
-                             strongMovers.find(o => (o.confidence ?? 0) >= 0.4); // Fallback to any strong mover
-    
-    if (priorityCandidate) {
-      const isAvailable = (priorityCandidate as any).isAvailable !== false;
-      console.log(`🚀 PRIORITY: Strong mover ${priorityCandidate.symbol} selected (momentum: ${priorityCandidate.metrics.momentum.toFixed(2)}%) ${isAvailable ? '🟢 AVAILABLE' : '🟡 OCCUPIED'}`);
-      return priorityCandidate;
-    }
+  
+  console.log(`📊 Found ${opportunities.length} qualified opportunities. Selecting by availability...`);
+  
+  // Get usage count for each symbol (how many agents are already active on it)
+  const symbolUsageMap = new Map<string, number>();
+  for (const opp of opportunities) {
+    const count = await getActiveAgentCountForSymbol(opp.symbol, excludeSessionId);
+    symbolUsageMap.set(opp.symbol, count);
   }
   
-  // Try progressively more permissive filters up to 3 steps - prefer available symbols
-  for (; relaxSteps <= 3; relaxSteps++) {
-    const minConf = Math.max(0.15, minConfBase - relaxSteps * 0.05);
-    const confident = opportunities.filter(o => {
-      const proj = (o as any).projectionConfidence ?? 0;
-      const adx = o.metrics?.adx ?? 0;
-      // In trending markets (ADX>20) require full proj threshold, else allow 0.05 lower
-      const regimeAdj = adx > 20 ? 0 : 0.05;
-      const relaxedProj = Math.min(0.95, Math.max(0.35, baseMinProj - regimeAdj - relaxSteps * 0.05));
-      return (o?.confidence ?? 0) >= minConf && proj >= relaxedProj;
-    });
+  // Selection strategy: 
+  // 1. Try symbols with 0 active agents first
+  // 2. If none available, try symbols with 1 active agent
+  // 3. Never allow 2+ agents on same symbol (avoid conflicts)
+  
+  for (let maxUsage = 0; maxUsage <= 1; maxUsage++) {
+    console.log(`� Pass ${maxUsage + 1}: Looking for symbols with ${maxUsage} active agent(s)...`);
     
-    if (confident.length > 0) {
-      // NEW: Prefer available symbols, but allow occupied ones as fallback
-      const availableConfident = confident.filter(o => (o as any).isAvailable !== false);
-      const best = availableConfident.length > 0 ? availableConfident[0] : confident[0];
+    for (const opportunity of opportunities) {
+      const currentUsage = symbolUsageMap.get(opportunity.symbol) || 0;
       
-      const isAvailable = (best as any).isAvailable !== false;
-      console.log(`🎯 Best opportunity: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence} ≥ ${minConf}, relaxSteps=${relaxSteps}) ${isAvailable ? '🟢 AVAILABLE' : '🟡 OCCUPIED'}`);
-      console.log(`📝 Reasoning: ${best.reasoning.summary}`);
-      return best;
+      if (currentUsage === maxUsage) {
+        console.log(`✅ SELECTED: ${opportunity.symbol} (Score: ${opportunity.score.toFixed(1)}, Rank: ${opportunity.rank}, Usage: ${currentUsage}/2)`);
+        console.log(`📝 Reasoning: ${opportunity.reasoning.summary}`);
+        return opportunity;
+      } else {
+        console.log(`⏭️  Skip: ${opportunity.symbol} (Usage: ${currentUsage}, looking for ${maxUsage})`);
+      }
     }
   }
-
-  // Still nothing: pick top available by score as a fallback if confidence/projection are close to thresholds
-  const availableOpportunities = opportunities.filter(o => (o as any).isAvailable !== false);
-  const top = availableOpportunities.length > 0 ? availableOpportunities[0] : opportunities[0];
   
-  const nearEnough = ((top.confidence ?? 0) >= (minConfBase - 0.1)) && (((top as any).projectionConfidence ?? 0) >= (baseMinProj - 0.15));
-  if (nearEnough) {
-    const isAvailable = (top as any).isAvailable !== false;
-    console.log(`⚠️ Relaxed Fallback: picking top ${isAvailable ? 'available' : 'occupied'} by score due to near-threshold metrics (conf=${top.confidence}, proj=${(top as any).projectionConfidence})`);
-    return top;
-  }
-
-  // Last resort: return top available symbol even if below thresholds (avoid SMART/SLEEP)
-  if (availableOpportunities.length > 0) {
-    const topAvailable = availableOpportunities[0];
-    console.log(`🆘 Last Resort: Selecting top available ${topAvailable.symbol} (conf=${topAvailable.confidence}) to avoid SMART/SLEEP`);
-    return topAvailable;
-  }
-
-  console.log(`⚠️ All candidates below thresholds even after relaxation. Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}.`);
-  return null; // Return null to trigger sleep mode when no opportunities meet criteria
+  // If we get here, all qualified symbols are already used 2+ times
+  console.log(`😴 All ${opportunities.length} qualified opportunities already have 2+ active agents → SLEEP mode`);
+  return null;
 }
 
 /**
@@ -2226,9 +2178,9 @@ export function volumeUsdFromTicker(ticker: any): number {
 export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string; minRequired?: number } {
   const cfg = getConfig();
   const level = opts?.aggressiveness || 'reactive';
-  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 100000 : 
-                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 30000 : 
-                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 50000; // Plus accessible: $50K pour plus d'opportunités
+  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 50000 : 
+                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 10000 : 
+                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 25000; // Très accessible: $25K pour plus d'opportunités
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
   if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume', minRequired: minByLevel };
