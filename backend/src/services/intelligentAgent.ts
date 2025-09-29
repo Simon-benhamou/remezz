@@ -86,7 +86,7 @@ function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 's
   }
   
   // CRYPTO MAJORS: Bonus pour cryptos connus
-  const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'AVNT/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT'];
+  const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'AVNT/USDT', 'SOL/USDT', 'SUI/USDT', 'XRP/USDT', 'ADA/USDT'];
   if (majorCryptos.includes(symbol)) {
     const majorBonus = 10;
     if (bullScore > bearScore) bullScore += majorBonus;
@@ -140,7 +140,7 @@ function predictWithLocalML(symbol: string, rsi: number, adx: number, momentum: 
   }
   
   // Pattern 5: Crypto-specific (majors bonus)
-  const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'];
+  const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'SUI/USDT'];
   if (majorCryptos.includes(symbol)) {
     confidence += 10;
     signals.push('Major crypto');
@@ -360,27 +360,46 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
     // Fetch MORE tickers to get better selection - PRIORITIZE major cryptos
     const sampleSize = Math.min(perpetualMarkets.length, 100); // Analyze more markets for better selection
     
-    // PRIORITIZE major cryptos (BTC, ETH, etc.) instead of alphabetical order
-    const majorCryptos = ['BTC/USD:USD', 'ETH/USD:USD', 'BNB/USD:USD', 'ADA/USD:USD', 'XRP/USD:USD', 'SOL/USD:USD', 'DOGE/USD:USD', 'AVAX/USD:USD', 'DOT/USD:USD', 'MATIC/USD:USD'];
-    const majorAvailable = perpetualMarkets.filter(symbol => majorCryptos.includes(symbol));
-    const otherMarkets = perpetualMarkets.filter(symbol => !majorCryptos.includes(symbol));
+    // DYNAMIC DISCOVERY: Sort all markets by volume for intelligent prioritization
+    console.log('🔍 Performing dynamic market discovery based on real-time volumes...');
     
-    // Take major cryptos first, then fill with others
-    const sampleMarkets = [...majorAvailable, ...otherMarkets].slice(0, sampleSize);
+    // Fetch ALL tickers first to get real volumes
+    const allTickers = {};
+    console.log('📊 Fetching volumes for dynamic ranking...');
     
-    // Fetch tickers one by one (Crypto.com limitation)
-    const tickers = {};
-    console.log(`📊 Fetching performance data for ${sampleMarkets.length} perpetual markets...`);
-    
-    for (let i = 0; i < sampleMarkets.length; i++) { // Analyze ALL sample markets, not just 10
+    for (let i = 0; i < Math.min(perpetualMarkets.length, 150); i++) { // Analyze more for better discovery
       try {
-        const symbol = sampleMarkets[i];
-        console.log(`📈 Fetching ticker ${i+1}/${sampleMarkets.length}: ${symbol}...`);
+        const symbol = perpetualMarkets[i];
         const ticker = await exchange.fetchTicker(symbol);
-        tickers[symbol] = ticker;
-        console.log(`✅ ${symbol}: ${ticker.percentage?.toFixed(2) || 0}% change, volume: $${((ticker.quoteVolume || 0) / 1000000).toFixed(2)}M`);
+        allTickers[symbol] = ticker;
       } catch (error) {
-        console.log(`⚠️ Failed to fetch ticker for ${sampleMarkets[i]}: ${error instanceof Error ? error.message : error}`);
+        // Skip failed tickers
+      }
+    }
+    
+    // Sort by volume DESC to prioritize high-activity cryptos
+    const volumeSortedMarkets = Object.entries(allTickers)
+      .map(([symbol, ticker]) => ({
+        symbol,
+        volume: Number((ticker as any).quoteVolume || 0),
+        ticker
+      }))
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, sampleSize)
+      .map(item => item.symbol);
+    
+    const sampleMarkets = volumeSortedMarkets;
+    console.log(`🎯 Dynamic discovery selected top ${sampleMarkets.length} cryptos by volume`);
+    
+    // Use already fetched tickers from dynamic discovery
+    const tickers = {};
+    console.log(`📊 Using dynamically discovered ${sampleMarkets.length} top-volume perpetual markets...`);
+    
+    for (const symbol of sampleMarkets) {
+      if (allTickers[symbol]) {
+        tickers[symbol] = allTickers[symbol];
+        const ticker = allTickers[symbol] as any;
+        console.log(`✅ ${symbol}: ${ticker.percentage?.toFixed(2) || 0}% change, volume: $${((ticker.quoteVolume || 0) / 1000000).toFixed(2)}M`);
       }
     }
     
@@ -403,14 +422,27 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       const volumeScore = calculateVolumeComponent(quoteVolume24h); // Utilise fonction sécurisée
       const performanceScore = Math.abs(change24h); // Direct percentage
       
-      // Calcul du score de mouvement (Phase 3)
+      // Calcul du score de mouvement (Phase 3)  
       const movementScore = calculatePriceMovementComponent(change24h);
       
-      // Rejet automatique si volume insuffisant
+      // DYNAMIC SCORING: Découverte intelligente des nouvelles opportunités
       let combinedScore = 0;
-      if (volumeScore >= 6.0) { // Seuil minimum strict
-        // Nouveau système de scoring avec composant de mouvement (Phase 3)
-        combinedScore = (performanceScore * 0.4) + (volumeScore * 0.35) + (movementScore * 0.25);
+      let discoveryBonus = 0;
+      
+      // Bonus pour découverte de nouvelles pépites
+      if (quoteVolume24h >= 1_000_000 && quoteVolume24h <= 50_000_000) {
+        // Sweet spot: volume suffisant mais pas encore mainstream
+        discoveryBonus = 0.5;
+      }
+      
+      // Bonus pour mouvement significatif sur crypto émergent
+      if (Math.abs(change24h) >= 2.0 && quoteVolume24h >= 500_000) {
+        discoveryBonus += 0.3; // Détection mouvement important
+      }
+      
+      if (volumeScore >= 5.0) { // Seuil plus flexible pour découvrir nouvelles opportunités
+        // Système de scoring avec bonus découverte
+        combinedScore = (performanceScore * 0.3) + (volumeScore * 0.3) + (movementScore * 0.25) + (discoveryBonus * 0.15);
       } else {
         console.log(`🚫 Score volume ${volumeScore} insuffisant pour ${symbol}`);
       }
@@ -434,15 +466,24 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
         return false;
       }
       
-      // SMART movement filtering - prioritize major cryptos even with small moves
-      const isMajorCrypto = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT'].includes(base);
+      // DYNAMIC FILTERING based on volume (not static lists)
+      const volumeUsd = crypto.quoteVolume24h;
+      const isHighVolumeAsset = volumeUsd >= 50_000_000; // $50M+ = established
+      const isMediumVolumeAsset = volumeUsd >= 5_000_000; // $5M+ = emerging
+      const isLowVolumeAsset = volumeUsd >= 500_000; // $500K+ = speculative
       
-      if (isMajorCrypto) {
-        // Major cryptos: accept smaller movements (more conservative/safe)
-        if (crypto.absChange < 0.01) return false; // 0.01% minimum for majors
+      if (isHighVolumeAsset) {
+        // High volume: accept tiny movements (very safe)
+        if (crypto.absChange < 0.005) return false; // 0.005% minimum
+      } else if (isMediumVolumeAsset) {
+        // Medium volume: moderate movements (balanced)
+        if (crypto.absChange < 0.05) return false; // 0.05% minimum
+      } else if (isLowVolumeAsset) {
+        // Lower volume: require significant movements (higher risk/reward)
+        if (crypto.absChange < 0.15) return false; // 0.15% minimum
       } else {
-        // Alt cryptos: require larger movements (higher risk/reward)
-        if (crypto.absChange < 0.2) return false; // 0.2% minimum for alts
+        // Very low volume: reject (too risky)
+        return false;
       }
       
       return true;
@@ -706,7 +747,7 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     // OPTIMISATION IA: Utilise l'IA intelligemment pour économiser les coûts
     let sentiment: any = null;
     const change24h = realChange24h;
-    const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT'];
+    const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'SUI/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT'];
     
     // HYBRID INTELLIGENT: ML d'abord, IA seulement si nécessaire
     const currentVolumeUsd = Number((ticker as any)?.quoteVolume || 0);
@@ -1275,7 +1316,7 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
  */
 export async function detectHighVolatilityMode(): Promise<boolean> {
   try {
-    const majorCryptos = ['BTC/USD:USD', 'ETH/USD:USD', 'XRP/USD:USD', 'SOL/USD:USD'];
+    const majorCryptos = ['BTC/USD:USD', 'ETH/USD:USD', 'XRP/USD:USD', 'SOL/USD:USD', 'SUI/USD:USD'];
     let strongMovements = 0;
     let totalVolume = 0;
     
