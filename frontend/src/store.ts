@@ -223,7 +223,8 @@ export const useDashboardStore = create<DashboardStore>()(
       name: 'dashboard-storage',
       storage: createJSONStorage(() => sessionStorage), // Use sessionStorage for dashboard data
       partialize: (state) => ({
-        overview: state.overview,
+        overviewCache: state.overviewCache,
+        currentOverview: state.currentOverview,
         lastFetched: state.lastFetched,
       }),
     }
