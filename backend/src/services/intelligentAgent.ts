@@ -357,9 +357,16 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       return await getTopCryptos(excludeSessionId);
     }
 
-    // Fetch MORE tickers to get better selection (increase to 100 when available)
+    // Fetch MORE tickers to get better selection - PRIORITIZE major cryptos
     const sampleSize = Math.min(perpetualMarkets.length, 100); // Analyze more markets for better selection
-    const sampleMarkets = perpetualMarkets.slice(0, sampleSize);
+    
+    // PRIORITIZE major cryptos (BTC, ETH, etc.) instead of alphabetical order
+    const majorCryptos = ['BTC/USD:USD', 'ETH/USD:USD', 'BNB/USD:USD', 'ADA/USD:USD', 'XRP/USD:USD', 'SOL/USD:USD', 'DOGE/USD:USD', 'AVAX/USD:USD', 'DOT/USD:USD', 'MATIC/USD:USD'];
+    const majorAvailable = perpetualMarkets.filter(symbol => majorCryptos.includes(symbol));
+    const otherMarkets = perpetualMarkets.filter(symbol => !majorCryptos.includes(symbol));
+    
+    // Take major cryptos first, then fill with others
+    const sampleMarkets = [...majorAvailable, ...otherMarkets].slice(0, sampleSize);
     
     // Fetch tickers one by one (Crypto.com limitation)
     const tickers = {};
@@ -427,8 +434,16 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
         return false;
       }
       
-      // Change minimum pour éviter stagnation – slightly more permissive
-      if (crypto.absChange < 0.2) return false; // 0.2% minimum
+      // SMART movement filtering - prioritize major cryptos even with small moves
+      const isMajorCrypto = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT'].includes(base);
+      
+      if (isMajorCrypto) {
+        // Major cryptos: accept smaller movements (more conservative/safe)
+        if (crypto.absChange < 0.01) return false; // 0.01% minimum for majors
+      } else {
+        // Alt cryptos: require larger movements (higher risk/reward)
+        if (crypto.absChange < 0.2) return false; // 0.2% minimum for alts
+      }
       
       return true;
     });
