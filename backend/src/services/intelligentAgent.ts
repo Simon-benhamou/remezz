@@ -1384,8 +1384,29 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
     console.log('🔥 HIGH VOLATILITY MODE DETECTED - Enhanced opportunity selection active');
   }
   
-  // Pass excludeSessionId through the selection chain (allow override for tests)
-  const opportunities = opts?.candidatesOverride ?? await scanIntelligentOpportunities(excludeSessionId, opts);
+  // NEW APPROACH: Scan ALL opportunities first, then select first available
+  let opportunities: IntelligentAnalysis[];
+  
+  if (opts?.candidatesOverride) {
+    opportunities = opts.candidatesOverride;
+  } else {
+    // Scan ALL cryptos without filtering active symbols first
+    console.log('🎯 Scanning ALL cryptos then selecting first available...');
+    opportunities = await scanIntelligentOpportunities(undefined, opts); // No excludeSessionId = scan everything
+    
+    // Get list of active symbols for availability check
+    const activeSymbols = excludeSessionId ? await getActiveAgentSymbols(excludeSessionId) : [];
+    if (activeSymbols.length > 0) {
+      console.log(`🚫 Active symbols to avoid: ${activeSymbols.join(', ')}`);
+    }
+    
+    // Mark availability but keep all opportunities in ranking
+    opportunities.forEach(opp => {
+      (opp as any).isAvailable = !activeSymbols.includes(opp.symbol);
+    });
+    
+    console.log(`📊 Ranked opportunities: ${opportunities.length} total, ${opportunities.filter(o => (o as any).isAvailable).length} available`);
+  }
 
   if (opportunities.length === 0) {
     console.log('⚠️ No opportunities found - all cryptos failed analysis criteria');
@@ -1401,18 +1422,22 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
   const baseMinProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
   let relaxSteps = Math.max(0, Number(opts?.relaxSteps || 0));
 
-  // Phase 2: Priority system for strong movements (>3% momentum)
+  // Phase 2: Priority system for strong movements (>3% momentum) - prefer available symbols
   const strongMovers = opportunities.filter(o => Math.abs(o.metrics.momentum) > 3.0);
   if (strongMovers.length > 0) {
-    // Relaxed criteria for strong movements
-    const priorityCandidate = strongMovers.find(o => (o.confidence ?? 0) >= 0.4);
+    // First try available strong movers
+    const availableStrongMovers = strongMovers.filter(o => (o as any).isAvailable !== false);
+    const priorityCandidate = availableStrongMovers.find(o => (o.confidence ?? 0) >= 0.4) || 
+                             strongMovers.find(o => (o.confidence ?? 0) >= 0.4); // Fallback to any strong mover
+    
     if (priorityCandidate) {
-      console.log(`🚀 PRIORITY: Strong mover ${priorityCandidate.symbol} selected (momentum: ${priorityCandidate.metrics.momentum.toFixed(2)}%)`);
+      const isAvailable = (priorityCandidate as any).isAvailable !== false;
+      console.log(`🚀 PRIORITY: Strong mover ${priorityCandidate.symbol} selected (momentum: ${priorityCandidate.metrics.momentum.toFixed(2)}%) ${isAvailable ? '🟢 AVAILABLE' : '🟡 OCCUPIED'}`);
       return priorityCandidate;
     }
   }
   
-  // Try progressively more permissive filters up to 3 steps
+  // Try progressively more permissive filters up to 3 steps - prefer available symbols
   for (; relaxSteps <= 3; relaxSteps++) {
     const minConf = Math.max(0.15, minConfBase - relaxSteps * 0.05);
     const confident = opportunities.filter(o => {
@@ -1423,20 +1448,35 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
       const relaxedProj = Math.min(0.95, Math.max(0.35, baseMinProj - regimeAdj - relaxSteps * 0.05));
       return (o?.confidence ?? 0) >= minConf && proj >= relaxedProj;
     });
+    
     if (confident.length > 0) {
-      const best = confident[0];
-      console.log(`🎯 Best opportunity: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence} ≥ ${minConf}, relaxSteps=${relaxSteps})`);
+      // NEW: Prefer available symbols, but allow occupied ones as fallback
+      const availableConfident = confident.filter(o => (o as any).isAvailable !== false);
+      const best = availableConfident.length > 0 ? availableConfident[0] : confident[0];
+      
+      const isAvailable = (best as any).isAvailable !== false;
+      console.log(`🎯 Best opportunity: ${best.symbol} (Score: ${best.score}, Confidence: ${best.confidence} ≥ ${minConf}, relaxSteps=${relaxSteps}) ${isAvailable ? '🟢 AVAILABLE' : '🟡 OCCUPIED'}`);
       console.log(`📝 Reasoning: ${best.reasoning.summary}`);
       return best;
     }
   }
 
-  // Still nothing: pick top by score as a fallback if confidence/projection are close to thresholds
-  const top = opportunities[0];
+  // Still nothing: pick top available by score as a fallback if confidence/projection are close to thresholds
+  const availableOpportunities = opportunities.filter(o => (o as any).isAvailable !== false);
+  const top = availableOpportunities.length > 0 ? availableOpportunities[0] : opportunities[0];
+  
   const nearEnough = ((top.confidence ?? 0) >= (minConfBase - 0.1)) && (((top as any).projectionConfidence ?? 0) >= (baseMinProj - 0.15));
   if (nearEnough) {
-    console.log(`⚠️ Relaxed Fallback: picking top by score due to near-threshold metrics (conf=${top.confidence}, proj=${(top as any).projectionConfidence})`);
+    const isAvailable = (top as any).isAvailable !== false;
+    console.log(`⚠️ Relaxed Fallback: picking top ${isAvailable ? 'available' : 'occupied'} by score due to near-threshold metrics (conf=${top.confidence}, proj=${(top as any).projectionConfidence})`);
     return top;
+  }
+
+  // Last resort: return top available symbol even if below thresholds (avoid SMART/SLEEP)
+  if (availableOpportunities.length > 0) {
+    const topAvailable = availableOpportunities[0];
+    console.log(`🆘 Last Resort: Selecting top available ${topAvailable.symbol} (conf=${topAvailable.confidence}) to avoid SMART/SLEEP`);
+    return topAvailable;
   }
 
   console.log(`⚠️ All candidates below thresholds even after relaxation. Top=${top.symbol} conf=${top.confidence} proj=${(top as any).projectionConfidence}.`);
