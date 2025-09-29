@@ -200,7 +200,7 @@ export default function SessionsPage(){
       console.log(`🎯 Using cached sessions for ${mode} mode`);
       // Charger depuis le cache et enrichir les données
       enrichSessionData(hasCachedData).then(setRows);
-      notifyCacheHit(mode as any);
+      // Notification de cache hit supprimée pour éviter le spam
     } else {
       // Pas de cache valide, charger depuis l'API
       console.log(`⚡ No cached data for ${mode}, loading fresh`);
