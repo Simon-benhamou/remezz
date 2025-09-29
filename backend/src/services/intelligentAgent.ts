@@ -901,6 +901,15 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const isSmartAgentScan = !opts?.excludeSessionId; // Smart Agent mode si pas de session à exclure  
     const minConfidenceThreshold = 30; // Uniformisé : 30% minimum pour tous les modes
     console.log(`🔍 DEBUG ${symbol}: excludeSessionId=${opts?.excludeSessionId}, isSmartAgent=${isSmartAgentScan}, threshold=${minConfidenceThreshold}, confidence=${autoBias.confidence}`);
+    
+    // Convert NONE bias with sufficient confidence to LONG bias FIRST
+    if (autoBias.bias === 'none' && autoBias.confidence >= minConfidenceThreshold) {
+      console.log(`🔄 ${symbol}: Converting NONE bias (${autoBias.confidence}%) to LONG for neutral market trading`);
+      autoBias.bias = 'long';
+      autoBias.reasoning = `Neutral market → LONG bias (${autoBias.confidence}% confidence)`;
+    }
+    
+    // THEN check if we have a valid bias and confidence
     if (autoBias.bias === 'none' || autoBias.confidence < minConfidenceThreshold) {
       console.log(`🚫 ${symbol} skipped: ${autoBias.reasoning} (need ≥${minConfidenceThreshold}%)`);
       return null;
