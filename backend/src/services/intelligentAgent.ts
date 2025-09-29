@@ -4,6 +4,12 @@ import { fullAnalysis, computeProjection } from '../ai/analysis.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
+
+// Cache IA pour réduire les coûts
+const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
+const volatilityCache = new Map<string, boolean>();
+const CACHE_DURATION_AI = 10 * 60 * 1000; // 10min cache IA
+const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { AgentHub } from '../agent/hub.js';
@@ -525,32 +531,55 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const volLog = volUsdLog ? `$${(volUsdLog/1_000_000).toFixed(2)}M` : String(volBaseLog);
     console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${volLog}, Change=${ticker.percentage}%`);
 
-    // Use full analysis (with IA) for ALL symbols to get sentiment data
-    // Previously only used for >3% moves, now expanded for all trades
+    // OPTIMISATION IA: Utilise l'IA intelligemment pour économiser les coûts
     let sentiment: any = null;
     const change24h = Number(ticker.percentage || 0);
-    const shouldUseAI = true; // Always use AI for sentiment analysis
+    const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT'];
+    
+    // Conditions pour utiliser l'IA (économie 80% des coûts)
+    const currentVolumeUsd = Number((ticker as any)?.quoteVolume || 0);
+    const shouldUseAI = majorCryptos.includes(symbol) || // Majors toujours
+                       currentVolumeUsd > 100_000_000 || // Volume >$100M
+                       Math.abs(change24h) > 1.5; // Mouvement >1.5%
     
     if (shouldUseAI) {
       try {
-        console.log(`🤖 ${symbol}: Using AI analysis for sentiment (${change24h}% move)`);
-        const fullAnalysisResult = await fullAnalysis(symbol);
-        sentiment = fullAnalysisResult.sentiment;
+        // Cache IA pour économiser les coûts
+        const cacheKey = `ai_${symbol}_${Math.floor(Date.now() / CACHE_DURATION_AI)}`;
+        let analysisResult = aiAnalysisCache.get(cacheKey);
+        
+        if (!analysisResult) {
+          console.log(`🤖 ${symbol}: Using AI analysis for sentiment (${change24h}% move) - FRESH`);
+          const fullAnalysisResult = await fullAnalysis(symbol);
+          analysisResult = { result: fullAnalysisResult, timestamp: Date.now() };
+          aiAnalysisCache.set(cacheKey, analysisResult);
+          
+          // Nettoyage cache (garde seulement les 50 dernières entrées)
+          if (aiAnalysisCache.size > 50) {
+            const oldestKey = Array.from(aiAnalysisCache.keys())[0];
+            aiAnalysisCache.delete(oldestKey);
+          }
+        } else {
+          console.log(`💾 ${symbol}: Using CACHED AI analysis (${change24h}% move)`);
+        }
+        
+        sentiment = analysisResult.result.sentiment;
       } catch {
-        // If IA fails, continue with technical-only analysis
         console.log(`⚡ Skipping IA for ${symbol} - using technical analysis only`);
       }
+    } else {
+      console.log(`⚡ ${symbol}: Skipped AI (volume: $${(currentVolumeUsd/1000000).toFixed(1)}M, move: ${change24h.toFixed(2)}%) - COST OPTIMIZED`);
     }
 
     // Core metrics
     const volBase = Number((ticker as any)?.baseVolume || 0);
     const lastPx = Number((ticker as any)?.last || 0);
-    const volumeUsd = Number((ticker as any)?.quoteVolume || 0) || (volBase > 0 && lastPx > 0 ? volBase * lastPx : 0);
+    const finalVolumeUsd = Number((ticker as any)?.quoteVolume || 0) || (volBase > 0 && lastPx > 0 ? volBase * lastPx : 0);
     const metrics = {
       momentum: Number(ticker.percentage || 0),
       trend: technical.trend || 0,
       volatility: technical.realizedVol || 0,
-      volume24h: volumeUsd,
+      volume24h: finalVolumeUsd,
       rsi: technical.rsi14 || 50,
       trendStrength: technical.trendStrength || 0,
       hurst: technical.hurst || 0.5,
