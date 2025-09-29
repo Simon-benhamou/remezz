@@ -5,11 +5,152 @@ import { buildTechSnapshot } from '../ai/tech.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 
-// Cache IA pour réduire les coûts
+// HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
 const volatilityCache = new Map<string, boolean>();
-const CACHE_DURATION_AI = 10 * 60 * 1000; // 10min cache IA
+const mlPredictionCache = new Map<string, { confidence: number; prediction: string; reasoning: string; timestamp: number }>();
+const CACHE_DURATION_AI = 30 * 60 * 1000; // 30min cache IA (plus long)
 const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
+const CACHE_DURATION_ML = 15 * 60 * 1000; // 15min cache ML
+
+// AUTO-DIRECTIONAL: Détection automatique du bias optimal (VERSION AGRESSIVE)
+function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 'short' | 'none'; confidence: number; reasoning: string } {
+  const { rsi, adx, momentum, trendStrength, volume24h } = metrics;
+  
+  let bullScore = 0;
+  let bearScore = 0;
+  const signals: string[] = [];
+  
+  // 🔥 CRYPTO EXTREME MOVES: Bonus pour gros mouvements (AVNT -21% = opportunité!)
+  const extremeMove = Math.abs(momentum);
+  if (extremeMove > 10) { // >10% mouvement = opportunité extrême
+    if (momentum < -5) {
+      bullScore += 40; // Oversold extreme = rebond possible
+      signals.push(`Extreme dump -${extremeMove.toFixed(1)}% (oversold bounce)`);
+    } else if (momentum > 5) {
+      bearScore += 40; // Overbought extreme = correction possible
+      signals.push(`Extreme pump +${extremeMove.toFixed(1)}% (overbought correction)`);
+    }
+  } else if (extremeMove > 5) { // >5% mouvement = opportunité forte
+    if (momentum < -2) {
+      bullScore += 25;
+      signals.push(`Strong selloff -${extremeMove.toFixed(1)}% (reversal chance)`);
+    } else if (momentum > 2) {
+      bearScore += 25;
+      signals.push(`Strong pump +${extremeMove.toFixed(1)}% (pullback chance)`);
+    }
+  }
+  
+  // Analyse RSI (plus permissif)
+  if (rsi < 40) { // Élargi de 35 à 40
+    bullScore += rsi < 25 ? 35 : 25; // Bonus si très oversold
+    signals.push(`RSI ${rsi.toFixed(0)} oversold`);
+  } else if (rsi > 60) { // Élargi de 65 à 60
+    bearScore += rsi > 75 ? 35 : 25; // Bonus si très overbought
+    signals.push(`RSI ${rsi.toFixed(0)} overbought`);
+  }
+  
+  // Analyse ADX (trend strength)
+  if (adx > 25) {
+    const adxBonus = Math.min(20, adx - 15); // Bonus progressif
+    if (momentum < 0) {
+      // Trend baissier fort = soit continuation soit reversal imminent
+      if (rsi < 35) {
+        bullScore += adxBonus; // RSI oversold + trend fort = reversal
+        signals.push('Strong downtrend + oversold RSI (reversal setup)');
+      } else {
+        bearScore += adxBonus; // Continuation baissière
+        signals.push('Strong downtrend continuation');
+      }
+    } else {
+      // Trend haussier fort
+      if (rsi > 65) {
+        bearScore += adxBonus; // Trend haut + RSI overbought = correction
+        signals.push('Strong uptrend + overbought RSI (correction setup)');
+      } else {
+        bullScore += adxBonus; // Continuation haussière
+        signals.push('Strong uptrend continuation');
+      }
+    }
+  }
+  
+  // Volume confirmation (plus accessible)
+  if (volume24h > 100_000_000) { // Réduit de 500M à 100M
+    const volumeBonus = Math.min(15, (volume24h / 100_000_000) * 5);
+    if (extremeMove > 3) {
+      // Volume élevé + mouvement extrême = confirmation
+      if (momentum < 0) bullScore += volumeBonus;
+      else bearScore += volumeBonus;
+      signals.push('High volume + extreme move');
+    }
+  }
+  
+  // CRYPTO MAJORS: Bonus pour cryptos connus
+  const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'AVNT/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT'];
+  if (majorCryptos.includes(symbol)) {
+    const majorBonus = 10;
+    if (bullScore > bearScore) bullScore += majorBonus;
+    else bearScore += majorBonus;
+    signals.push('Major crypto');
+  }
+  
+  // Determine bias et confidence (seuil réduit)
+  const maxScore = Math.max(bullScore, bearScore);
+  const bias = maxScore < 35 ? 'none' : // Réduit de 50 à 35
+               bullScore > bearScore ? 'long' : 'short';
+  
+  const confidence = Math.min(maxScore, 100);
+  const reasoning = `${bias.toUpperCase()} bias (${confidence}%): ${signals.join(' + ')}`;
+  
+  console.log(`🎯 Auto-Bias for ${symbol}: ${reasoning}`);
+  return { bias, confidence, reasoning };
+}
+
+// Machine Learning Local - Prédiction sans coût API
+function predictWithLocalML(symbol: string, rsi: number, adx: number, momentum: number, volume: number): { confidence: number; prediction: string; reasoning: string } {
+  // Patterns basés sur l'expérience crypto
+  let confidence = 0;
+  let signals: string[] = [];
+  
+  // Pattern 1: RSI Extremes
+  if (rsi < 30) {
+    confidence += 25;
+    signals.push('RSI oversold');
+  } else if (rsi > 70) {
+    confidence += 20;
+    signals.push('RSI overbought');
+  }
+  
+  // Pattern 2: Trend Strength (ADX)
+  if (adx > 25) {
+    confidence += 20;
+    signals.push('Strong trend');
+  }
+  
+  // Pattern 3: Momentum Alignment
+  if (Math.abs(momentum) > 2) {
+    confidence += 15;
+    signals.push('Strong momentum');
+  }
+  
+  // Pattern 4: Volume Confirmation
+  if (volume > 100_000_000) {
+    confidence += 10;
+    signals.push('High volume');
+  }
+  
+  // Pattern 5: Crypto-specific (majors bonus)
+  const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'];
+  if (majorCryptos.includes(symbol)) {
+    confidence += 10;
+    signals.push('Major crypto');
+  }
+  
+  const prediction = momentum > 0 ? 'BULLISH' : 'BEARISH';
+  const reasoning = signals.join(' + ');
+  
+  return { confidence: Math.min(confidence, 100), prediction, reasoning };
+}
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { AgentHub } from '../agent/hub.js';
@@ -63,6 +204,11 @@ export interface IntelligentAnalysis {
   rank: number;
   confidence: number;
   projectionConfidence?: number;
+  autoBias?: { // 🆕 Bias auto-déterminé par l'agent
+    bias: 'long' | 'short' | 'none';
+    confidence: number;
+    reasoning: string;
+  };
   reasoning: {
     summary: string;
     technical: string[];
@@ -233,12 +379,18 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
     
     console.log(`📊 Successfully fetched ${Object.keys(tickers).length} tickers`);
     
-    // Convert to array and calculate performance metrics
+    // Convert to array et calcul VRAI changement 24h
     const cryptoPerformance = Object.entries(tickers).map(([symbol, ticker]) => {
       const tickerData = ticker as any;
-      const change24h = Number(tickerData.percentage || 0);
+      
+      // 🔥 CALCUL VRAI CHANGEMENT 24H (pour AVNT -21.9% au lieu de -0.22%)
+      const currentPrice = Number(tickerData.last || tickerData.close || 0);
+      const openPrice = Number(tickerData.open || currentPrice);
+      const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : Number(tickerData.percentage || 0);
+      
       const quoteVolume24h = volumeUsdFromTicker(tickerData);
       const volume24h = quoteVolume24h; // keep naming compatibility
+      const change24h = realChange24h; // 🔥 Utilise le vrai changement
       
       // SÉCURITÉ: Scoring strict avec validation volume
       const volumeScore = calculateVolumeComponent(quoteVolume24h); // Utilise fonction sécurisée
@@ -529,54 +681,103 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const lastPxLog = Number((ticker as any)?.last || 0);
     const volUsdLog = Number((ticker as any)?.quoteVolume || 0) || (volBaseLog > 0 && lastPxLog > 0 ? volBaseLog * lastPxLog : 0);
     const volLog = volUsdLog ? `$${(volUsdLog/1_000_000).toFixed(2)}M` : String(volBaseLog);
-    console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${volLog}, Change=${ticker.percentage}%`);
+    // 🔥 CALCUL VRAI CHANGEMENT 24H (AVNT -21.9% vs -0.22%)
+    const currentPrice = Number(ticker.last || ticker.close || 0);
+    const openPrice = Number(ticker.open || currentPrice);
+    const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : Number(ticker.percentage || 0);
+    
+    console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${volLog}, Change=${realChange24h.toFixed(2)}% (real 24h)`);
 
     // OPTIMISATION IA: Utilise l'IA intelligemment pour économiser les coûts
     let sentiment: any = null;
-    const change24h = Number(ticker.percentage || 0);
+    const change24h = realChange24h;
     const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT'];
     
-    // Conditions pour utiliser l'IA (économie 80% des coûts)
+    // HYBRID INTELLIGENT: ML d'abord, IA seulement si nécessaire
     const currentVolumeUsd = Number((ticker as any)?.quoteVolume || 0);
-    const shouldUseAI = majorCryptos.includes(symbol) || // Majors toujours
-                       currentVolumeUsd > 100_000_000 || // Volume >$100M
-                       Math.abs(change24h) > 1.5; // Mouvement >1.5%
+    
+    // Prédiction ML locale (GRATUITE)
+    const mlCacheKey = `ml_${symbol}_${Math.floor(Date.now() / CACHE_DURATION_ML)}`;
+    let mlResult = mlPredictionCache.get(mlCacheKey);
+    
+    if (!mlResult) {
+      const rsi = technical.rsi14 || 50;
+      const adx = technical.adx14 || 0;
+      const prediction = predictWithLocalML(symbol, rsi, adx, change24h, currentVolumeUsd);
+      mlResult = { ...prediction, timestamp: Date.now() };
+      mlPredictionCache.set(mlCacheKey, mlResult);
+      
+      // Nettoyage cache ML
+      if (mlPredictionCache.size > 100) {
+        const oldestKey = Array.from(mlPredictionCache.keys())[0];
+        mlPredictionCache.delete(oldestKey);
+      }
+    }
+    
+    // IA ULTRA-CONDITIONNELLE: Seulement si ML pas confiant ET enjeu important
+    if (!mlResult) {
+      const rsi = technical.rsi14 || 50;
+      const adx = technical.adx14 || 0;
+      const prediction = predictWithLocalML(symbol, rsi, adx, change24h, currentVolumeUsd);
+      mlResult = { ...prediction, timestamp: Date.now() };
+    }
+    
+    const isHighStakes = currentVolumeUsd > 1_000_000 && Math.abs(change24h) > 3.0;
+    const mlNotConfident = mlResult.confidence < 60;
+    const isCriticalMajor = majorCryptos.includes(symbol) && Math.abs(change24h) > 2.0;
+    
+    const shouldUseAI = (mlNotConfident && isHighStakes) || isCriticalMajor;
+    
+    // Utiliser ML comme sentiment par défaut
+    sentiment = {
+      overall: mlResult.prediction.toLowerCase(),
+      confidence: mlResult.confidence / 100,
+      reasoning: mlResult.reasoning,
+      source: 'local_ml'
+    };
     
     if (shouldUseAI) {
       try {
-        // Cache IA pour économiser les coûts
+        // Cache IA pour économiser les coûts (30min)
         const cacheKey = `ai_${symbol}_${Math.floor(Date.now() / CACHE_DURATION_AI)}`;
         let analysisResult = aiAnalysisCache.get(cacheKey);
         
         if (!analysisResult) {
-          console.log(`🤖 ${symbol}: Using AI analysis for sentiment (${change24h}% move) - FRESH`);
+          console.log(`� ${symbol}: ML confidence ${mlResult.confidence}% - Using AI confirmation (${change24h}% move)`);
           const fullAnalysisResult = await fullAnalysis(symbol);
           analysisResult = { result: fullAnalysisResult, timestamp: Date.now() };
           aiAnalysisCache.set(cacheKey, analysisResult);
           
-          // Nettoyage cache (garde seulement les 50 dernières entrées)
-          if (aiAnalysisCache.size > 50) {
+          // Nettoyage cache (garde seulement les 30 dernières entrées)
+          if (aiAnalysisCache.size > 30) {
             const oldestKey = Array.from(aiAnalysisCache.keys())[0];
             aiAnalysisCache.delete(oldestKey);
           }
         } else {
-          console.log(`💾 ${symbol}: Using CACHED AI analysis (${change24h}% move)`);
+          console.log(`💾 ${symbol}: Using CACHED AI confirmation (${change24h}% move)`);
         }
         
-        sentiment = analysisResult.result.sentiment;
+        // Combiner ML + IA pour meilleure précision
+        const aiSentiment = analysisResult.result.sentiment;
+        sentiment = {
+          overall: aiSentiment.overall,
+          confidence: (mlResult!.confidence / 100 + aiSentiment.confidence) / 2, // Moyenne
+          reasoning: `ML: ${mlResult!.reasoning} | AI: ${aiSentiment.reasoning}`,
+          source: 'hybrid_ml_ai'
+        };
       } catch {
-        console.log(`⚡ Skipping IA for ${symbol} - using technical analysis only`);
+        console.log(`⚡ AI failed for ${symbol} - using ML prediction only`);
       }
     } else {
-      console.log(`⚡ ${symbol}: Skipped AI (volume: $${(currentVolumeUsd/1000000).toFixed(1)}M, move: ${change24h.toFixed(2)}%) - COST OPTIMIZED`);
+      console.log(`🧠 ${symbol}: ML confidence ${mlResult!.confidence}% (volume: $${(currentVolumeUsd/1000000).toFixed(1)}M, move: ${change24h.toFixed(2)}%) - NO AI NEEDED`);
     }
 
-    // Core metrics
+    // Core metrics avec VRAI changement 24h
     const volBase = Number((ticker as any)?.baseVolume || 0);
     const lastPx = Number((ticker as any)?.last || 0);
     const finalVolumeUsd = Number((ticker as any)?.quoteVolume || 0) || (volBase > 0 && lastPx > 0 ? volBase * lastPx : 0);
     const metrics = {
-      momentum: Number(ticker.percentage || 0),
+      momentum: change24h, // 🔥 VRAI changement 24h au lieu de ticker.percentage
       trend: technical.trend || 0,
       volatility: technical.realizedVol || 0,
       volume24h: finalVolumeUsd,
@@ -631,6 +832,21 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
       volatilityScore, volumeScore, regimeScore
     );
 
+    // 🎯 AUTO-DIRECTIONAL: Déterminer automatiquement le bias optimal
+    const autoBias = determineOptimalBias(symbol, {
+      rsi: metrics.rsi,
+      adx: metrics.adx,
+      momentum: metrics.momentum,
+      trendStrength: metrics.trend,
+      volume24h: metrics.volume24h
+    });
+    
+    // Skip si pas de bias clair (confidence < 40% - plus permissif pour crypto extrêmes)
+    if (autoBias.bias === 'none' || autoBias.confidence < 40) {
+      console.log(`🚫 ${symbol} skipped: ${autoBias.reasoning}`);
+      return null;
+    }
+
     const finalScore = Math.round(compositeScore * 100) / 100;
     console.log(`🎯 ${symbol}: Final Score=${finalScore} (M:${momentumScore.toFixed(1)}, T:${trendScore.toFixed(1)}, V:${volatilityScore.toFixed(1)}, Vol:${volumeScore.toFixed(1)}) [${aggressiveness}]`);
 
@@ -640,7 +856,11 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
       rank: 0, // Will be set after ranking all symbols
       confidence: Math.round(confidence * 100) / 100,
       projectionConfidence: Math.round(projectionConfidence * 1000) / 1000,
-      reasoning,
+      autoBias, // 🎯 Bias automatiquement déterminé
+      reasoning: {
+        ...reasoning,
+        sentiment: [...(reasoning.sentiment || []), autoBias.reasoning] // Ajouter le bias reasoning
+      },
       metrics,
       opportunity,
       regime: (technical.regime as any)?.label || 'unknown'
