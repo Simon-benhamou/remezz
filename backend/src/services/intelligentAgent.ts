@@ -897,9 +897,9 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
       volume24h: metrics.volume24h
     });
     
-    // Skip si pas de bias clair (confidence < 30% pour Smart Agent, 40% sinon)
+    // Skip si pas de bias clair (confidence < 30% uniformisé pour tous les modes)
     const isSmartAgentScan = !opts?.excludeSessionId; // Smart Agent mode si pas de session à exclure  
-    const minConfidenceThreshold = isSmartAgentScan ? 30 : 40;
+    const minConfidenceThreshold = 30; // Uniformisé : 30% minimum pour tous les modes
     console.log(`🔍 DEBUG ${symbol}: excludeSessionId=${opts?.excludeSessionId}, isSmartAgent=${isSmartAgentScan}, threshold=${minConfidenceThreshold}, confidence=${autoBias.confidence}`);
     if (autoBias.bias === 'none' || autoBias.confidence < minConfidenceThreshold) {
       console.log(`🚫 ${symbol} skipped: ${autoBias.reasoning} (need ≥${minConfidenceThreshold}%)`);
@@ -2217,9 +2217,9 @@ export function volumeUsdFromTicker(ticker: any): number {
 export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string; minRequired?: number } {
   const cfg = getConfig();
   const level = opts?.aggressiveness || 'reactive';
-  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 200000 : 
-                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 75000 : 
-                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 100000; // Réduit à $100K pour plus d'opportunités
+  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 100000 : 
+                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 30000 : 
+                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 50000; // Plus accessible: $50K pour plus d'opportunités
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
   if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume', minRequired: minByLevel };
