@@ -719,7 +719,7 @@ function getFallbackSymbols(): string[] {
 /**
  * Optimized scoring algorithm - technical analysis first, minimal IA usage
  */
-async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis | null> {
+async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive'; excludeSessionId?: string }): Promise<IntelligentAnalysis | null> {
   try {
     console.log(`🔍 Analyzing ${symbol}...`);
     
@@ -897,9 +897,12 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
       volume24h: metrics.volume24h
     });
     
-    // Skip si pas de bias clair (confidence < 40% - plus permissif pour crypto extrêmes)
-    if (autoBias.bias === 'none' || autoBias.confidence < 40) {
-      console.log(`🚫 ${symbol} skipped: ${autoBias.reasoning}`);
+    // Skip si pas de bias clair (confidence < 30% pour Smart Agent, 40% sinon)
+    const isSmartAgentScan = !opts?.excludeSessionId; // Smart Agent mode si pas de session à exclure  
+    const minConfidenceThreshold = isSmartAgentScan ? 30 : 40;
+    console.log(`🔍 DEBUG ${symbol}: excludeSessionId=${opts?.excludeSessionId}, isSmartAgent=${isSmartAgentScan}, threshold=${minConfidenceThreshold}, confidence=${autoBias.confidence}`);
+    if (autoBias.bias === 'none' || autoBias.confidence < minConfidenceThreshold) {
+      console.log(`🚫 ${symbol} skipped: ${autoBias.reasoning} (need ≥${minConfidenceThreshold}%)`);
       return null;
     }
 
@@ -1285,7 +1288,7 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
   
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
-    const batchPromises = batch.map(symbol => calculateIntelligentScore(symbol, opts));
+    const batchPromises = batch.map(symbol => calculateIntelligentScore(symbol, { ...opts, excludeSessionId }));
     const batchResults = await Promise.all(batchPromises);
     
     // Filter out null results and add to analyses
@@ -1391,7 +1394,10 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
 
   // Enforce a minimum confidence threshold for selection, with adaptive relaxation
   const { COOLDOWN_CONFIDENCE_MIN } = getConfig();
-  const minConfBase = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || COOLDOWN_CONFIDENCE_MIN || 0.6)));
+  // Smart Agent mode: réduit seuil à 20% pour permettre plus d'opportunités
+  const smartAgentMode = !excludeSessionId; // Smart Agent création = pas de sessionId à exclure
+  const defaultMinConf = smartAgentMode ? 0.20 : (COOLDOWN_CONFIDENCE_MIN || 0.6);
+  const minConfBase = Math.max(0.1, Math.min(0.95, Number(process.env.SELECTION_MIN_CONFIDENCE || defaultMinConf)));
   const baseMinProj = Math.max(0, Math.min(0.95, Number(process.env.SELECTION_MIN_PROJECTION_CONFIDENCE || 0.5)));
   let relaxSteps = Math.max(0, Number(opts?.relaxSteps || 0));
 
