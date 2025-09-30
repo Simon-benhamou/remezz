@@ -70,7 +70,7 @@ function normalizeFeature(value: number): number {
   return Math.log10(abs + 1);
 }
 
-async function recomputeAdaptiveWeights(family: string) {
+export async function recomputeAdaptiveWeights(family: string) {
   const samples = await prisma.decisionMemory.findMany({
     where: {
       family,
@@ -148,6 +148,23 @@ async function recomputeAdaptiveWeights(family: string) {
   });
 
   refreshAdaptiveWeightsForFamily(family, true).catch(() => {});
+}
+
+export async function recomputeAdaptiveWeightsForFamilies(limit = 20) {
+  try {
+    const families = await prisma.decisionMemory.findMany({
+      distinct: ['family'],
+      select: { family: true },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    await Promise.all(families.map(async (row) => {
+      if (!row.family) return;
+      await recomputeAdaptiveWeights(row.family);
+    }));
+  } catch (error) {
+    console.warn('Failed to run adaptive weights training batch:', error);
+  }
 }
 
 export async function finalizeDecisionOutcome(sessionId: string, realizedPnl: number) {

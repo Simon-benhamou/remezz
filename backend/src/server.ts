@@ -27,6 +27,7 @@ import { router as intelligentRouter } from "./routes/intelligent.js";
 import { router as arbitrageRouter } from "./routes/arbitrage.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
+import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
@@ -113,6 +114,7 @@ startWSHub(wss);
 startEventEngine();
 startArbitrageMonitor();
 startIntegratedMonitoring();
+startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
 
 // Start Smart Agent background job
 console.log('🤖 Starting Smart Agent background checker...');

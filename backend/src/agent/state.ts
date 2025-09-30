@@ -477,6 +477,29 @@ export class ReboundRejectionAgent {
     if (this.adaptiveRisk) this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
     const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
     let qty = notional / Math.max(entry, 1e-8);
+
+    const equityCapNotional = Math.max(0, bal.equityUsd * (this.profile.maxLeverage || 1));
+    const budgetCapNotional = Math.max(0, capBalance * (this.profile.maxLeverage || 1));
+    const hardNotionalCap = Math.min(equityCapNotional || Infinity, budgetCapNotional || Infinity);
+    if (hardNotionalCap > 0 && notional > hardNotionalCap) {
+      const cappedQty = hardNotionalCap / Math.max(entry, 1e-8);
+      recordOpsEvent({
+        level: 'warn',
+        source: 'position_sizing',
+        message: 'leverage_cap_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          requestedNotional: notional,
+          cappedNotional: hardNotionalCap,
+          requestedQty: qty,
+          cappedQty,
+          equityUsd: bal.equityUsd,
+          maxLeverage: this.profile.maxLeverage,
+        },
+      });
+      qty = cappedQty;
+    }
     if (this.profile.mode === 'live' && typeof (this.broker as any)?.estimateFillableQty === 'function') {
       try {
         const estimate = await (this.broker as any).estimateFillableQty({ symbol: this.profile.symbol, side, desiredQty: qty, maxImpactPct: Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35') });
@@ -2710,6 +2733,16 @@ export class ReboundRejectionAgent {
 
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
     if (!this.pos || !this.plan || !this.profile) return;
+
+    try {
+      const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
+      if (ticker && typeof ticker.last === 'number' && Number.isFinite(ticker.last)) {
+        price = Number(ticker.last);
+        (snap as any).last = price;
+      }
+    } catch (error) {
+      console.warn(`Failed to refresh live price for ${this.profile.symbol}:`, error);
+    }
 
     // Check if position is still open on the exchange
     if (this.profile.mode === 'live') {
