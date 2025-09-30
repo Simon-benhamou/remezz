@@ -164,14 +164,13 @@ function AppInner(){
           padding: '0 24px',
           height: 64
         }}>
-          <Space style={{ color: '#374151', fontWeight:500, fontSize: 14 }}>
+          <Space size={16} style={{ color: '#374151', fontWeight:500, fontSize: 14 }}>
             <span style={{ color:'#6b7280' }}>Active:</span>
             <Tag color='blue' style={{ borderRadius: 6, fontSize: 12 }}>{overview?.activeCount ?? 0}</Tag>
-            {(overview?.symbols || []).slice(0,5).map((sym:string)=>(
-              <Tag key={sym} style={{ borderRadius: 6, fontSize: 11, background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb' }}>{sym}</Tag>
-            ))}
-            {Array.isArray(overview?.symbols) && overview.symbols.length>5 && (
-              <Tag style={{ borderRadius: 6, fontSize: 11, background: '#f3f4f6', color: '#6b7280', border: '1px solid #e5e7eb' }}>+{overview.symbols.length-5}</Tag>
+            {Array.isArray(overview?.symbols) && overview.symbols.length > 0 && (
+              <span style={{ color:'#9ca3af', fontSize:12 }}>
+                {overview.symbols.length} markets monitored
+              </span>
             )}
           </Space>
           <Space style={{ color: '#374151', fontWeight:500, fontSize: 14 }}>

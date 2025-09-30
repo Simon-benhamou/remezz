@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select, Row, Col, Tooltip, Progress, Badge, Switch, Dropdown, MenuProps } from 'antd';
+import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select, Row, Col, Tooltip, Progress, Badge, Switch, Dropdown, MenuProps, Slider } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -11,6 +11,26 @@ import TradingDiagnosticsCollapsible from '../components/TradingDiagnosticsColla
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
 import ApiKeyMigrationTool from '../components/ApiKeyMigrationTool';
+
+type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
+
+const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyLoss: number; note: string }> = {
+  conservative: {
+    risk: 1.0,
+    dailyLoss: 3.0,
+    note: 'Tight exposure for steady accumulation.',
+  },
+  reactive: {
+    risk: 1.5,
+    dailyLoss: 3.5,
+    note: 'Balanced profile with adaptive rotations.',
+  },
+  aggressive: {
+    risk: 2.2,
+    dailyLoss: 3.8,
+    note: 'Faster rotations and higher tolerance to drawdown swings.',
+  },
+};
 
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
@@ -24,6 +44,9 @@ export default function SessionsPage(){
   const { mode } = useMode();
   const modeVal = Form.useWatch?.('mode', form);
   const smartAutoMode = Form.useWatch?.('smartAutoMode', form);
+  const aggressivenessValue = (Form.useWatch?.('aggressiveness', form) as AggressivenessLevel | undefined) || 'conservative';
+  const leverageValue = Form.useWatch?.('maxLeverage', form) ?? 4;
+  const riskPreset = React.useMemo(() => AGGRESSIVENESS_PRESETS[aggressivenessValue], [aggressivenessValue]);
   const [apiKeyHealth, setApiKeyHealth] = React.useState<any>(null);
   
   // Cache intelligent pour les sessions
@@ -351,10 +374,7 @@ export default function SessionsPage(){
       symbol: r.symbol,
       mode: r.mode,
       startBalanceUsd: r.startBalanceUsd,
-      riskPerTradePct: Math.min(5, Math.max(0.5, p.riskPerTradePct ?? 1.5)),
       maxLeverage: Math.min(10, Math.max(1, p.maxLeverage ?? 4)),
-      dailyLossLimitPct: p.dailyLossLimitPct ?? 3.5,
-      budgetPct: p.budgetPct ?? 100,
       aggressiveness: p.aggressiveness || 'conservative',
       smartAutoMode: !!r.isSmartAgent,
     });
@@ -500,10 +520,7 @@ export default function SessionsPage(){
                         symbol:'BTC/USDT', 
                         mode, 
                         startBalanceUsd: undefined,
-                        riskPerTradePct:1.5, 
                         maxLeverage:4, 
-                        dailyLossLimitPct:3.5, 
-                        budgetPct:100,
                         aggressiveness:'conservative',
                         smartAutoMode: false
                       }); 
@@ -642,8 +659,10 @@ export default function SessionsPage(){
             size={compactView ? 'small' : 'middle'}
             style={{
               borderRadius: '12px',
-              border: '1px solid #e2e8f0',
-              overflow: 'hidden'
+              border: '1px solid #f1f5f9',
+              overflow: 'hidden',
+              background: '#ffffff',
+              boxShadow: '0 10px 24px -18px rgba(15, 23, 42, 0.35)'
             }}
             columns={[
               { 
@@ -913,6 +932,29 @@ export default function SessionsPage(){
                 ),
                 sorter: (a, b) => (a.pnlUsd || 0) - (b.pnlUsd || 0)
               },
+              {
+                title:'Activity',
+                width: 140,
+                render:(_:any,r:any)=> (
+                  <Space direction="vertical" size={2}>
+                    <span style={{
+                      fontWeight: 600,
+                      color: '#0f172a',
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
+                    }}>
+                      {r.pendingOrdersCount || 0} open orders
+                    </span>
+                    <span style={{
+                      fontSize: '11px',
+                      color: '#64748b',
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
+                    }}>
+                      {r.totalTrades || 0} trades · {r.todayTrades || 0} today
+                    </span>
+                  </Space>
+                ),
+                sorter: (a, b) => (a.pendingOrdersCount || 0) - (b.pendingOrdersCount || 0)
+              },
               { 
                 title:'Readiness', 
                 width: 120,
@@ -939,15 +981,31 @@ export default function SessionsPage(){
                         </div>
                       }
                     >
-                      <Space direction="vertical" size={4} align="center">
-                        <Progress
-                          type="circle"
-                          percent={Math.max(0, Math.min(100, percent))}
-                          width={52}
-                          strokeColor={color}
-                          format={() => `${Math.round(Math.max(0, Math.min(100, percent)))}%`}
-                        />
-                        <Tag color={readiness.canTrade ? 'green' : 'red'}>{readiness.canTrade ? 'READY' : 'BLOCKED'}</Tag>
+                      <Space direction="vertical" size={6}>
+                        <div
+                          style={{
+                            width: 118,
+                            height: 6,
+                            borderRadius: 999,
+                            background: '#e2e8f0',
+                            overflow: 'hidden'
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${Math.round(Math.max(4, Math.min(100, percent)))}%`,
+                              height: '100%',
+                              background: color,
+                              transition: 'width 0.3s ease'
+                            }}
+                          />
+                        </div>
+                        <Space size={6} align="center">
+                          <Badge status={readiness.canTrade ? 'success' : 'error'} text={readiness.canTrade ? 'Ready' : 'Blocked'} />
+                          <span style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>
+                            {Math.round(Math.max(0, Math.min(100, percent)))}%
+                          </span>
+                        </Space>
                       </Space>
                     </Tooltip>
                   );
@@ -1213,6 +1271,12 @@ export default function SessionsPage(){
               console.log('🔍 Form values BEFORE processing:', v);
               console.log('🎯 Auto-Select Mode:', v.smartAutoMode);
 
+              const level = (v.aggressiveness || 'conservative') as AggressivenessLevel;
+              const preset = AGGRESSIVENESS_PRESETS[level];
+              v.riskPerTradePct = preset.risk;
+              v.dailyLossLimitPct = preset.dailyLoss;
+              if (typeof v.budgetPct === 'undefined') v.budgetPct = 100;
+
               if (v.smartAutoMode && !isRestart) {
                 console.log('🔄 Processing Auto-Select mode...');
                 console.log('📋 Symbol before delete:', v.symbol);
@@ -1309,10 +1373,7 @@ export default function SessionsPage(){
             form={form} 
             initialValues={{ 
               mode, 
-              riskPerTradePct:1.5, 
               maxLeverage:4, 
-              dailyLossLimitPct:3.5, 
-              budgetPct:100, 
               aggressiveness:'conservative',
               smartAutoMode: false
             }}
@@ -1434,27 +1495,55 @@ export default function SessionsPage(){
                 />
               </Form.Item>
             )}
-            <Form.Item label='Risk % per trade' name='riskPerTradePct' rules={[{ type:'number', min:0.5, max:5 }]}>
-              <InputNumber style={{ width: '100%' }} min={0.5} max={5} step={0.1} />
-            </Form.Item>
-            <Form.Item label='Max leverage' name='maxLeverage' rules={[{ type:'number', min:1, max:10 }]}>
-              <InputNumber style={{ width: '100%' }} min={1} max={10} step={1} />
-            </Form.Item>
-            <Form.Item label='Daily loss limit %' name='dailyLossLimitPct' rules={[{ type:'number', min:3, max:4 }]}>
-              <InputNumber style={{ width: '100%' }} min={3} max={4} step={0.1} />
-            </Form.Item>
-            <Form.Item label='Budget % of balance (0-100)' name='budgetPct' rules={[{ type:'number', min:10, max:100 }]}>
-              <InputNumber style={{ width: '100%' }} min={10} max={100} step={5} />
+            <Form.Item label='Max leverage' name='maxLeverage' rules={[{ type:'number', min:1, max:10 }]}> 
+              <div style={{ padding: '0 4px' }}>
+                <Slider
+                  min={1}
+                  max={10}
+                  step={1}
+                  tooltip={{ formatter: (value?: number) => `${value}x` }}
+                  disabled={!!restartSessionId}
+                />
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '12px',
+                  color: '#475569',
+                  marginTop: 8
+                }}>
+                  <span>Leverage: <strong>{Number(leverageValue || 1)}x</strong></span>
+                  <span>Cap 10x</span>
+                </div>
+              </div>
             </Form.Item>
             <Form.Item label='Aggressiveness Level' name='aggressiveness'>
               <Select
                 options={[
-                  { value:'conservative', label:'Conservative (default)' },
+                  { value:'conservative', label:'Conservative' },
                   { value:'reactive', label:'Reactive' },
-                  { value:'aggressive', label:'Aggressive (controlled)' }
+                  { value:'aggressive', label:'Aggressive' }
                 ]}
               />
             </Form.Item>
+            <div style={{
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '10px',
+              padding: '12px 16px',
+              marginTop: -4,
+              marginBottom: 16
+            }}>
+              <Space direction="vertical" size={4}>
+                <span style={{ fontWeight: 600, color: '#1e293b' }}>Risk profile derived automatically</span>
+                <span style={{ color: '#475569' }}>
+                  Risk per trade: <strong>{riskPreset.risk.toFixed(1)}%</strong>
+                </span>
+                <span style={{ color: '#475569' }}>
+                  Daily loss cap: <strong>{riskPreset.dailyLoss.toFixed(1)}%</strong>
+                </span>
+                <span style={{ color: '#64748b', fontSize: 12 }}>{riskPreset.note}</span>
+              </Space>
+            </div>
           </Form>
         </Modal>
       </Space>

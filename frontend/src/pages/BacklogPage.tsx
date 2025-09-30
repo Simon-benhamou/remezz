@@ -1,200 +1,248 @@
 import React from 'react';
-import { Card, Space, Typography, Row, Col, Select, Timeline, Tag, message } from 'antd';
-import { InfoCircleOutlined, WarningOutlined, ExclamationCircleOutlined, BugOutlined } from '@ant-design/icons';
+import { Card, Space, Typography, List, Tag, message, Button, Badge, Empty } from 'antd';
+import { ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 
-const { Text, Title } = Typography;
+const { Title, Text } = Typography;
 
-const logColors: Record<string, string> = {
-  info: 'blue',
-  warn: 'orange', 
-  error: 'red',
-  debug: 'purple',
+type OpsEvent = {
+  id: string;
+  ts?: number;
+  level?: 'info' | 'warn' | 'error';
+  source?: string;
+  message?: string;
+  sessionId?: string;
+  symbol?: string;
+  details?: any;
 };
 
-const logIcons: Record<string, React.ReactNode> = {
-  info: <InfoCircleOutlined />,
-  warn: <WarningOutlined />,
-  error: <ExclamationCircleOutlined />,
-  debug: <BugOutlined />,
+const levelColors: Record<string, { color: string; label: string }> = {
+  info: { color: 'blue', label: 'Info' },
+  warn: { color: 'orange', label: 'Warning' },
+  error: { color: 'red', label: 'Issue' },
 };
+
+function formatTime(ts?: number) {
+  if (!ts) return '—';
+  return dayjs(ts).format('HH:mm:ss');
+}
+
+function renderDetails(details: any) {
+  if (!details) return null;
+  if (typeof details === 'string') return details;
+  try {
+    return JSON.stringify(details);
+  } catch {
+    return String(details);
+  }
+}
 
 export default function BacklogPage() {
-  const [logs, setLogs] = React.useState<any[]>([]);
-  const [sessions, setSessions] = React.useState<any[]>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [selectedSymbol, setSelectedSymbol] = React.useState<string>('all');
   const { mode } = useMode();
+  const [loading, setLoading] = React.useState(false);
+  const [events, setEvents] = React.useState<OpsEvent[]>([]);
+  const [activeSessions, setActiveSessions] = React.useState<any[]>([]);
 
-  React.useEffect(() => {
-    const loadSessions = async () => {
-      try {
-        const sessionData = await api.listSessions(mode);
-        setSessions(sessionData);
-      } catch (error) {
-        console.error('Failed to load sessions:', error);
-      }
-    };
-    loadSessions();
-  }, [mode]);
-
-  const loadLogs = React.useCallback(async () => {
-    if (selectedSymbol === 'all') return;
-    
+  const loadActivity = React.useCallback(async () => {
     setLoading(true);
     try {
-      // Mock data
-      const mockLogs = [
-        {
-          id: '1',
-          timestamp: dayjs().subtract(2, 'minute').toISOString(),
-          level: 'info',
-          source: 'crypto_moonshot',
-          message: 'MOONSHOT mode activated - ultra loose trailing',
-          details: { profit: 12.5, mode: 'moonshot' }
-        },
-        {
-          id: '2',
-          timestamp: dayjs().subtract(8, 'minute').toISOString(),
-          level: 'warn',
-          source: 'profit_filter',
-          message: 'Trade rejected - insufficient profit potential',
-          details: { expected: 0.25, required: 0.3 }
-        },
-        {
-          id: '3',
-          timestamp: dayjs().subtract(15, 'minute').toISOString(),
-          level: 'error',
-          source: 'market_data',
-          message: 'Data timeout detected - using fallback',
-          details: { timeout: '30s' }
-        }
-      ];
-      setLogs(mockLogs);
-    } catch (error) {
-      message.error('Failed to load logs');
+      const [sessionsResponse, opsResponse] = await Promise.all([
+        api.listSessions(mode).catch(() => []),
+        api.getOpsEvents(120).catch(() => []),
+      ]);
+      const activeOnly = Array.isArray(sessionsResponse)
+        ? sessionsResponse.filter((session: any) => !session.stoppedAt)
+        : [];
+      setActiveSessions(activeOnly);
+
+      const activeSet = new Set(activeOnly.map((session: any) => session.id));
+      const filtered = Array.isArray(opsResponse)
+        ? opsResponse.filter((evt: OpsEvent) => !evt.sessionId || activeSet.has(evt.sessionId))
+        : [];
+      const sorted = filtered.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 80);
+      setEvents(sorted);
+    } catch (err) {
+      console.error('Failed to load backlog activity', err);
+      message.error('Unable to refresh agent activity right now.');
     } finally {
       setLoading(false);
     }
-  }, [selectedSymbol]);
+  }, [mode]);
 
   React.useEffect(() => {
-    if (selectedSymbol !== 'all') {
-      loadLogs();
-    }
-  }, [selectedSymbol, loadLogs]);
+    loadActivity();
+    const timer = setInterval(loadActivity, 30000);
+    return () => clearInterval(timer);
+  }, [loadActivity]);
 
-  const sessionOptions = sessions.map((s: any) => ({
-    value: s.symbol,
-    label: s.symbol + (s.stoppedAt ? ' (Stopped)' : ' (Active)'),
-  }));
+  const eventsBySession = React.useMemo(() => {
+    const map = new Map<string, OpsEvent[]>();
+    activeSessions.forEach((session: any) => {
+      map.set(session.id, []);
+    });
+    events.forEach((evt) => {
+      if (!evt.sessionId) return;
+      const bucket = map.get(evt.sessionId);
+      if (bucket) bucket.push(evt);
+    });
+    return map;
+  }, [events, activeSessions]);
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size="large">
+    <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card>
-        <Title level={3}>📋 Agent Activity & Decision Logs</Title>
-        <Text type="secondary">
-          Real-time monitoring of agent decision-making and system events
-        </Text>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space align="center" size="middle">
+            <Badge count={activeSessions.length} size="small" color="#2563eb">
+              <AvatarIcon />
+            </Badge>
+            <div>
+              <Title level={3} style={{ margin: 0 }}>Agent Activity Feed</Title>
+              <Text type="secondary">
+                Live stream of operational signals for currently running agents.
+              </Text>
+            </div>
+          </Space>
+          <Space wrap size="small">
+            <Tag color="blue">{activeSessions.length} active agents</Tag>
+            <Tag color="cyan">{events.length} recent events</Tag>
+            <Button size="small" icon={<ReloadOutlined />} onClick={loadActivity} loading={loading}>
+              Refresh
+            </Button>
+          </Space>
+        </Space>
       </Card>
 
-      <Card title="Controls">
-        <Row gutter={16}>
-          <Col span={8}>
-            <Text strong>Trading Session</Text>
-            <Select
-              value={selectedSymbol}
-              onChange={setSelectedSymbol}
-              style={{ width: '100%', marginTop: 8 }}
-              placeholder="Select session"
-              options={[
-                { label: 'All Sessions', value: 'all' },
-                ...sessionOptions
-              ]}
-            />
-          </Col>
-        </Row>
-      </Card>
-
-      <Card title="Live Agent Activity" loading={loading}>
-        {selectedSymbol === 'all' ? (
-          <div style={{ textAlign: 'center', padding: '40px' }}>
-            <Text type="secondary">Please select a trading session to view logs</Text>
-          </div>
-        ) : logs.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px' }}>
-            <Text type="secondary">No logs found</Text>
-          </div>
+      <Card
+        title="Latest Activity"
+        loading={loading}
+        extra={
+          <Button type="link" icon={<ReloadOutlined />} onClick={loadActivity} disabled={loading}>
+            Refresh
+          </Button>
+        }
+      >
+        {events.length === 0 ? (
+          <Empty description="No recent activity for active agents" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
-          <Timeline
-            items={logs.map((log) => ({
-              color: logColors[log.level] || 'blue',
-              dot: logIcons[log.level],
-              children: (
-                <div key={log.id}>
-                  <div style={{ marginBottom: '8px' }}>
-                    <Tag color={logColors[log.level]}>
-                      {log.level.toUpperCase()}
-                    </Tag>
-                    <Tag color="purple">{log.source}</Tag>
-                    <Text type="secondary" style={{ fontSize: '12px', marginLeft: 8 }}>
-                      {dayjs(log.timestamp).format('HH:mm:ss')}
-                    </Text>
-                  </div>
-                  <Text strong>{log.message}</Text>
-                  {log.details && (
-                    <div style={{ 
-                      background: '#f5f5f5', 
-                      padding: '8px', 
-                      borderRadius: '4px',
-                      marginTop: '8px',
-                      fontSize: '12px',
-                      fontFamily: 'monospace'
-                    }}>
-                      {JSON.stringify(log.details, null, 2)}
-                    </div>
-                  )}
-                </div>
-              ),
-            }))}
+          <List
+            itemLayout="vertical"
+            dataSource={events.slice(0, 30)}
+            renderItem={(evt) => {
+              const meta = levelColors[evt.level || 'info'] || levelColors.info;
+              const session = evt.sessionId
+                ? activeSessions.find((s: any) => s.id === evt.sessionId)
+                : null;
+              return (
+                <List.Item key={evt.id} style={{ paddingLeft: 0, paddingRight: 0 }}>
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    <Space size="small" wrap>
+                      <Tag color={meta.color}>{meta.label}</Tag>
+                      {evt.symbol && <Tag>{evt.symbol}</Tag>}
+                      {session && (
+                        <Tag color="geekblue">
+                          {session.symbol} · {session.mode?.toUpperCase()}
+                        </Tag>
+                      )}
+                      <Text type="secondary">{formatTime(evt.ts)}</Text>
+                    </Space>
+                    <Text strong>{evt.message || 'No message'}</Text>
+                    {evt.details && (
+                      <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                        {renderDetails(evt.details)}
+                      </Text>
+                    )}
+                  </Space>
+                </List.Item>
+              );
+            }}
           />
         )}
       </Card>
 
-      <Card title="Active Sessions" size="small">
-        <Row gutter={16}>
-          {sessions.filter((s: any) => !s.stoppedAt).map((session: any) => (
-            <Col xs={24} sm={12} md={8} key={session.id}>
-              <Card 
-                size="small" 
-                style={{ 
-                  border: selectedSymbol === session.symbol ? '2px solid #1890ff' : undefined 
-                }}
-              >
-                <div>
-                  <Text strong>{session.symbol}</Text>
-                  <Tag color="green" style={{ marginLeft: 8 }}>ACTIVE</Tag>
-                </div>
-                <Text type="secondary">
-                  Started: {dayjs(session.startedAt).format('MM-DD HH:mm')}
-                </Text>
-                <br />
-                <Text type="secondary">
-                  Mode: {session.mode?.toUpperCase()}
-                </Text>
-              </Card>
-            </Col>
-          ))}
-        </Row>
-        
-        {sessions.filter((s: any) => !s.stoppedAt).length === 0 && (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Text type="secondary">No active trading sessions</Text>
-          </div>
+      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        {activeSessions.length === 0 && (
+          <Card>
+            <Empty description="No active agents" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          </Card>
         )}
-      </Card>
+        {activeSessions.map((session: any) => {
+          const sessionEvents = eventsBySession.get(session.id) || [];
+          return (
+            <Card
+              key={session.id}
+              title={
+                <Space>
+                  <Tag color="blue">{session.symbol}</Tag>
+                  <Text>{session.mode?.toUpperCase()}</Text>
+                </Space>
+              }
+              extra={<Text type="secondary">{sessionEvents.length} events today</Text>}
+            >
+              {sessionEvents.length === 0 ? (
+                <Empty
+                  description="No recent logs for this agent"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              ) : (
+                <List
+                  dataSource={sessionEvents.slice(0, 10)}
+                  renderItem={(evt) => {
+                    const meta = levelColors[evt.level || 'info'] || levelColors.info;
+                    return (
+                      <List.Item key={evt.id} style={{ border: 'none', paddingLeft: 0, paddingRight: 0 }}>
+                        <Space
+                          size="middle"
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <Space size="small" wrap>
+                            <Tag color={meta.color}>{meta.label}</Tag>
+                            <Text>{evt.source}</Text>
+                          </Space>
+                          <Text type="secondary">{formatTime(evt.ts)}</Text>
+                        </Space>
+                        <Text>{evt.message}</Text>
+                        {evt.details && (
+                          <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                            {renderDetails(evt.details)}
+                          </Text>
+                        )}
+                      </List.Item>
+                    );
+                  }}
+                />
+              )}
+            </Card>
+          );
+        })}
+      </Space>
     </Space>
+  );
+}
+
+function AvatarIcon() {
+  return (
+    <div
+      style={{
+        width: 48,
+        height: 48,
+        borderRadius: 12,
+        background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#fff',
+        fontSize: 22,
+      }}
+    >
+      <ThunderboltOutlined />
+    </div>
   );
 }

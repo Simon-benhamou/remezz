@@ -2,7 +2,6 @@ import OpenAI from "openai";
 import { getConfig } from "../utils/env.js";
 import { recordAICall } from "../metrics/aiCalls.js";
 import { createHash } from 'crypto';
-import { prisma } from '../db/client.js';
 
 export type LLMChoice = "openai" | "grok" | "none";
 type LLMContext = { sessionId?: string; symbol?: string; kind?: string };
@@ -28,32 +27,6 @@ function keyOf(prompt: string, opts?: LLMOpts) {
   return `prompt:${h}`;
 }
 
-async function logPrompt(entry: { prompt: string; response?: string | null; provider: string; model?: string; cached?: boolean; tokensIn?: number; tokensOut?: number; costUsd?: number; context?: LLMContext; error?: string }) {
-  try {
-    const trimmedPrompt = entry.prompt.length > 6000 ? `${entry.prompt.slice(0, 6000)}…` : entry.prompt;
-    const responsePayload = entry.response ? (() => {
-      if (entry.response.length > 6000) return { text: `${entry.response.slice(0, 6000)}…` };
-      try { return JSON.parse(entry.response); } catch { return { text: entry.response }; }
-    })() : null;
-    await prisma.aiPromptLog.create({
-      data: {
-        sessionId: entry.context?.sessionId,
-        symbol: entry.context?.symbol,
-        kind: entry.context?.kind,
-        provider: entry.provider,
-        model: entry.model,
-        prompt: trimmedPrompt,
-        response: responsePayload,
-        cached: !!entry.cached,
-        tokensIn: entry.tokensIn ?? undefined,
-        tokensOut: entry.tokensOut ?? undefined,
-        costUsd: entry.costUsd ?? undefined,
-        error: entry.error,
-      }
-    });
-  } catch {}
-}
-
 export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   const cfg = getConfig();
   if (cfg.LLM_DISABLE) throw new Error('LLM disabled');
@@ -64,7 +37,11 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   const hit = opts?.noCache ? undefined : cache.get(key);
   const now = Date.now();
   if (hit && (now - hit.ts) < ttl) {
-    logPrompt({ prompt, response: hit.data, provider: hit.provider, model: hit.model, cached: true, tokensIn: hit.tokensIn, tokensOut: hit.tokensOut, costUsd: hit.costUsd, context: opts?.context }).catch(()=>{});
+    if (process.env.DEBUG_LLM === 'true') {
+      try {
+        console.log(`[llm] cache hit provider=${hit.provider} model=${hit.model}`);
+      } catch {}
+    }
     return hit.data;
   }
 
@@ -89,7 +66,11 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
       else if (which === 'grok') result = await callGrok(prompt);
       else throw new Error('No LLM configured (OPENAI_API_KEY or GROK_API_KEY missing).');
       if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: result.text, provider: which, model: result.modelUsed, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd });
-      logPrompt({ prompt, response: result.text, provider: which, model: result.modelUsed, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd, context: opts?.context }).catch(()=>{});
+      if (process.env.DEBUG_LLM === 'true') {
+        try {
+          console.log(`[llm] call provider=${which} model=${result.modelUsed} tokens_in=${result.tokensIn || 0} tokens_out=${result.tokensOut || 0}`);
+        } catch {}
+      }
       return result.text;
     } finally {
       if (!opts?.noCache) inFlight.delete(key);

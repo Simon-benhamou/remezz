@@ -4,8 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
-import OpsEventsList from '../components/OpsEventsList';
-import OpsLLMPanel from '../components/OpsLLMPanel';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
 import SmartOpportunityScanner from '../components/SmartOpportunityScanner';
 import { useMode } from '../contexts/ModeContext';
@@ -33,8 +31,6 @@ export default function DashboardPage(){
   const [ov, setOv] = React.useState<any>({});
   const [loading, setLoading] = React.useState<boolean>(true);
   const [opsMetrics, setOpsMetrics] = React.useState<any>(null);
-  const [opsEvents, setOpsEvents] = React.useState<any[]>([]);
-  const [opsLlmLogs, setOpsLlmLogs] = React.useState<any[]>([]);
   const [opsLoading, setOpsLoading] = React.useState<boolean>(true);
   const [adaptiveData, setAdaptiveData] = React.useState<any>(null);
   const [adaptiveLoading, setAdaptiveLoading] = React.useState<boolean>(true);
@@ -113,15 +109,11 @@ export default function DashboardPage(){
     try {
       setOpsLoading(true);
       setAdaptiveLoading(true);
-      const [metrics, events, llmLogs, adaptive] = await Promise.all([
+      const [metrics, adaptive] = await Promise.all([
         api.getOpsMetrics().catch(()=>null),
-        api.getOpsEvents().catch(()=>[]),
-        api.getOpsLlmLogs().catch(()=>[]),
         api.getAdaptiveWeights().catch(()=>null),
       ]);
       if (metrics) setOpsMetrics(metrics);
-      if (events) setOpsEvents(events);
-      if (llmLogs) setOpsLlmLogs(llmLogs);
       if (adaptive) setAdaptiveData(adaptive);
     } finally {
       setOpsLoading(false);
@@ -554,24 +546,14 @@ export default function DashboardPage(){
 
       {/* Operations Monitoring */}
       <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
-        <Col xs={24} lg={12}>
+        <Col xs={24}>
           <OpsMetricsPanel metrics={opsMetrics} loading={opsLoading} />
-        </Col>
-        <Col xs={24} lg={12}>
-          <OpsEventsList events={opsEvents} loading={opsLoading} onRefresh={loadOps} />
         </Col>
       </Row>
 
       <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
         <Col xs={24}>
           <AdaptiveWeightsPanel data={adaptiveData} loading={adaptiveLoading} onRefresh={loadOps} />
-        </Col>
-      </Row>
-
-      {/* LLM Operations */}
-      <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
-        <Col xs={24}>
-          <OpsLLMPanel rows={opsLlmLogs} loading={opsLoading} onRefresh={loadOps} />
         </Col>
       </Row>
 

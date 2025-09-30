@@ -31,7 +31,6 @@ export interface DashboardData {
   currentOverview: any; // Overview actuel selon le mode sélectionné
   opsMetrics: any;
   opsEvents: any[];
-  opsLlmLogs: any[];
   lastFetched: number | null;
   cacheValidityMs: number; // TTL pour le cache
 }
@@ -131,7 +130,6 @@ interface DashboardStore extends DashboardData {
   setOverview: (overview: any, mode: AppMode) => void;
   setOpsMetrics: (metrics: any) => void;
   setOpsEvents: (events: any[]) => void;
-  setOpsLlmLogs: (logs: any[]) => void;
   updateLastFetched: () => void;
   switchMode: (newMode: AppMode) => void;
   isCacheValid: (mode: AppMode) => boolean;
@@ -148,7 +146,6 @@ export const useDashboardStore = create<DashboardStore>()(
       currentOverview: {},
       opsMetrics: null,
       opsEvents: [],
-      opsLlmLogs: [],
       lastFetched: null,
       cacheValidityMs: 10000, // 10 seconds TTL
 
@@ -208,14 +205,12 @@ export const useDashboardStore = create<DashboardStore>()(
 
       setOpsMetrics: (opsMetrics) => set({ opsMetrics }),
       setOpsEvents: (opsEvents) => set({ opsEvents }),
-      setOpsLlmLogs: (opsLlmLogs) => set({ opsLlmLogs }),
       updateLastFetched: () => set({ lastFetched: Date.now() }),
       reset: () => set({
         overviewCache: {},
         currentOverview: {},
         opsMetrics: null,
         opsEvents: [],
-        opsLlmLogs: [],
         lastFetched: null,
       }),
     }),
@@ -251,7 +246,6 @@ export const useDashboard = () => useDashboardStore((state) => ({
   overview: state.currentOverview,
   opsMetrics: state.opsMetrics,
   opsEvents: state.opsEvents,
-  opsLlmLogs: state.opsLlmLogs,
   lastFetched: state.lastFetched,
   overviewCache: state.overviewCache,
   isCacheValid: state.isCacheValid,

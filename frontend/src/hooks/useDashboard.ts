@@ -7,7 +7,6 @@ export function useDashboard() {
     overview,
     opsMetrics,
     opsEvents,
-    opsLlmLogs,
     lastFetched,
     overviewCache,
     isCacheValid,
@@ -16,7 +15,6 @@ export function useDashboard() {
     overview: state.currentOverview,
     opsMetrics: state.opsMetrics,
     opsEvents: state.opsEvents,
-    opsLlmLogs: state.opsLlmLogs,
     lastFetched: state.lastFetched,
     overviewCache: state.overviewCache,
     isCacheValid: state.isCacheValid,
@@ -27,7 +25,6 @@ export function useDashboard() {
     setOverview,
     setOpsMetrics,
     setOpsEvents,
-    setOpsLlmLogs,
     updateLastFetched,
     switchMode,
     invalidateCache,
@@ -75,23 +72,13 @@ export function useDashboard() {
     }
   }, [setOpsEvents]);
 
-  const loadOpsLlmLogs = useCallback(async () => {
-    try {
-      const data = await api.getOpsLlmLogs();
-      setOpsLlmLogs(data);
-    } catch (error) {
-      console.error('Failed to load ops LLM logs:', error);
-    }
-  }, [setOpsLlmLogs]);
-
   const loadAllData = useCallback(async () => {
     await Promise.all([
       loadOverview(),
       loadOpsMetrics(),
       loadOpsEvents(),
-      loadOpsLlmLogs(),
     ]);
-  }, [loadOverview, loadOpsMetrics, loadOpsEvents, loadOpsLlmLogs]);
+  }, [loadOverview, loadOpsMetrics, loadOpsEvents]);
 
   // Gestion intelligente du changement de mode
   useEffect(() => {
@@ -124,8 +111,7 @@ export function useDashboard() {
   useEffect(() => {
     loadOpsMetrics();
     loadOpsEvents();  
-    loadOpsLlmLogs();
-  }, [loadOpsMetrics, loadOpsEvents, loadOpsLlmLogs]);
+  }, [loadOpsMetrics, loadOpsEvents]);
 
   // Initial load pour le mode courant
   useEffect(() => {
@@ -138,14 +124,12 @@ export function useDashboard() {
     overview,
     opsMetrics,
     opsEvents,
-    opsLlmLogs,
     lastFetched,
     overviewCache,
     isCacheValid: (mode: string) => isCacheValid(mode as any),
     loadOverview,
     loadOpsMetrics,
     loadOpsEvents,
-    loadOpsLlmLogs,
     loadAllData,
     invalidateCache,
   };
