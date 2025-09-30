@@ -51,11 +51,16 @@ const fieldLabels: Record<string, string> = {
   bias: 'Bias',
   atrPct: 'ATR %',
   volumeRatio: 'Volume vs MA',
+  requiredVolumeRatio: 'Min Volume Ratio',
   adx: 'ADX',
   emaSpread: 'EMA Spread',
   liquidityScore: 'Liquidity',
   fundingRate: 'Funding Rate',
   winRate: 'Win Rate',
+  usdVolumeMA: 'Avg USD Volume',
+  level: 'Aggressiveness',
+  volumeBaseline: 'Symbol Volume Avg',
+  volumePressure: 'Volume Pressure',
 };
 
 function formatTime(ts?: number) {
@@ -321,6 +326,9 @@ function normalizeDetails(details: any): Record<string, any> {
 function formatDetailValue(key: string, value: any): string {
   if (value == null) return '';
   if (typeof value === 'number') {
+    if (key === 'usdVolumeMA') return formatUsdVolume(value);
+    if (key === 'volumeBaseline') return `${(value * 100).toFixed(1)}%`;
+    if (key === 'volumePressure') return `${(value * 100).toFixed(0)}%`;
     if (/ratio/i.test(key)) return `${(value * 100).toFixed(1)}%`;
     if (/pct|percentage/i.test(key)) return `${value.toFixed(2)}%`;
     if (/adx/i.test(key)) return value.toFixed(1);
@@ -328,11 +336,27 @@ function formatDetailValue(key: string, value: any): string {
     return Number.isInteger(value) ? String(value) : value.toFixed(3);
   }
   if (typeof value === 'string') {
-    return value.replace(/_/g, ' ');
+    const normalized = value.replace(/_/g, ' ');
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
   }
   try {
     return JSON.stringify(value);
   } catch {
     return String(value);
   }
+}
+
+function formatUsdVolume(raw: number): string {
+  if (!Number.isFinite(raw) || raw <= 0) return '—';
+  const units = [
+    { limit: 1_000_000_000, suffix: 'B' },
+    { limit: 1_000_000, suffix: 'M' },
+    { limit: 1_000, suffix: 'K' },
+  ];
+  for (const unit of units) {
+    if (raw >= unit.limit) {
+      return `$${(raw / unit.limit).toFixed(1)}${unit.suffix}`;
+    }
+  }
+  return `$${raw.toFixed(0)}`;
 }

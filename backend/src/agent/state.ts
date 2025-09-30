@@ -100,6 +100,14 @@ interface PerformanceMetrics {
   };
 }
 
+type VolumeContext = {
+  emaRatio: number;
+  emaUsd: number;
+  rejectionScore: number;
+  sampleCount: number;
+  lastUpdated: number;
+};
+
 export class ReboundRejectionAgent {
   state: AgentState = 'IDLE';
   profile: ActivationProfile | null = null;
@@ -855,6 +863,7 @@ export class ReboundRejectionAgent {
       trendStrength: number;
     };
   }>();
+  private static readonly volumeContextCache = new Map<string, VolumeContext>();
   
   private static readonly MAX_CACHE_SIZE = 200; // Limit cache size to prevent memory issues
   private static readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h cache validity
@@ -863,6 +872,50 @@ export class ReboundRejectionAgent {
   private static readonly VOLATILITY_CHANGE_THRESHOLD = 0.5; // 50% change triggers update
   private static cacheStats = { hits: 0, misses: 0, updates: 0 };
   private static intelligentCacheStats = { hits: 0, misses: 0, updates: 0, aiAnalysis: 0 };
+
+  private updateVolumeContext(symbol: string, ratio: number, usd: number, blocked: boolean): VolumeContext | undefined {
+    if (!symbol) return undefined;
+    const now = Date.now();
+    let ctx = ReboundRejectionAgent.volumeContextCache.get(symbol);
+    const validRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : undefined;
+    const validUsd = Number.isFinite(usd) && usd > 0 ? usd : undefined;
+
+    if (!ctx) {
+      ctx = {
+        emaRatio: validRatio ?? 0.6,
+        emaUsd: validUsd ?? 0,
+        rejectionScore: blocked ? 0.2 : 0.05,
+        sampleCount: 0,
+        lastUpdated: now,
+      };
+    }
+
+    const alpha = ctx.sampleCount >= 25 ? 0.08 : 0.18;
+    if (validRatio !== undefined) {
+      ctx.emaRatio = ctx.sampleCount ? ctx.emaRatio + alpha * (validRatio - ctx.emaRatio) : validRatio;
+    }
+    if (validUsd !== undefined) {
+      ctx.emaUsd = ctx.sampleCount ? ctx.emaUsd + alpha * (validUsd - ctx.emaUsd) : validUsd;
+    }
+    ctx.rejectionScore = Math.max(0, Math.min(1, ctx.rejectionScore * 0.85 + (blocked ? 0.15 : 0)));
+    ctx.sampleCount = Math.min(ctx.sampleCount + 1, 500);
+    ctx.lastUpdated = now;
+    ReboundRejectionAgent.volumeContextCache.set(symbol, ctx);
+
+    if (ReboundRejectionAgent.volumeContextCache.size > ReboundRejectionAgent.MAX_CACHE_SIZE) {
+      let oldestKey: string | null = null;
+      let oldestTs = Infinity;
+      for (const [key, val] of ReboundRejectionAgent.volumeContextCache.entries()) {
+        if (val.lastUpdated < oldestTs) {
+          oldestTs = val.lastUpdated;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey) ReboundRejectionAgent.volumeContextCache.delete(oldestKey);
+    }
+
+    return ctx;
+  }
 
   /*
    * Clear cache if it gets too large (maintenance)
@@ -1977,18 +2030,74 @@ export class ReboundRejectionAgent {
     }
 
     // 5. Volume Confirmation (required)
+    const level = this.profile?.aggressiveness || 'conservative';
+    const symbol = this.profile?.symbol || (this.plan as any)?.symbol || '';
     const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
-    if (volumeRatio < 0.6) {
+    const usdVolumeMA = volumeMA > 0 ? volumeMA * price : 0;
+    const baseRequired = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_BASE) ? cfg.QUALITY_VOLUME_RATIO_BASE : 0.6;
+    const floor = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_FLOOR) ? cfg.QUALITY_VOLUME_RATIO_FLOOR : 0.4;
+    const ceiling = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL) ? cfg.QUALITY_VOLUME_RATIO_CEIL : 0.78;
+
+    let requiredVolumeRatio = baseRequired;
+
+    // Aggressiveness-driven relaxation/tightening
+    if (level === 'reactive') requiredVolumeRatio -= 0.05;
+    else if (level === 'aggressive') requiredVolumeRatio -= 0.1;
+    else requiredVolumeRatio += 0.02; // conservative keeps tighter filter
+
+    // Absolute liquidity adjustments
+    if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_HIGH_USD) requiredVolumeRatio -= 0.08;
+    else if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_MEDIUM_USD) requiredVolumeRatio -= 0.05;
+    else if (usdVolumeMA <= cfg.QUALITY_VOLUME_RATIO_LOW_USD && usdVolumeMA > 0) requiredVolumeRatio += 0.07;
+
+    // Volatility context: quieter markets require more confirmation
+    if (atrPct >= 1.4) requiredVolumeRatio -= 0.03;
+    else if (atrPct <= 0.45) requiredVolumeRatio += 0.03;
+
+    const contextBefore = symbol ? ReboundRejectionAgent.volumeContextCache.get(symbol) : undefined;
+    if (contextBefore && contextBefore.sampleCount >= 6) {
+      const baseline = contextBefore.emaRatio;
+      const pressure = contextBefore.rejectionScore;
+      if (Number.isFinite(baseline) && baseline > 0) {
+        if (baseline < requiredVolumeRatio) {
+          const shortfall = requiredVolumeRatio - baseline;
+          const relax = shortfall * Math.min(0.5, 0.35 + pressure * 0.4);
+          requiredVolumeRatio -= relax;
+        } else if (baseline > requiredVolumeRatio + 0.06 && pressure < 0.2) {
+          const tighten = (baseline - requiredVolumeRatio) * 0.3;
+          requiredVolumeRatio += tighten;
+        }
+      }
+      if (Number.isFinite(contextBefore.emaUsd) && contextBefore.emaUsd > 0) {
+        if (contextBefore.emaUsd > cfg.QUALITY_VOLUME_RATIO_HIGH_USD * 1.4) requiredVolumeRatio -= 0.02;
+        else if (contextBefore.emaUsd < cfg.QUALITY_VOLUME_RATIO_LOW_USD * 0.7) requiredVolumeRatio += 0.04;
+      }
+    }
+
+    requiredVolumeRatio = Math.max(floor, Math.min(ceiling, requiredVolumeRatio));
+
+    if (volumeRatio < requiredVolumeRatio) {
+      const contextAfter = this.updateVolumeContext(symbol, volumeRatio, usdVolumeMA, true);
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
         message: 'volume_too_low',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
-        details: { volumeRatio, bias },
+        details: {
+          volumeRatio,
+          requiredVolumeRatio,
+          usdVolumeMA,
+          bias,
+          level,
+          volumeBaseline: contextAfter?.emaRatio,
+          volumePressure: contextAfter?.rejectionScore,
+        },
       });
       return false;
     }
+
+    const contextAfter = this.updateVolumeContext(symbol, volumeRatio, usdVolumeMA, false);
 
     // All essential filters passed
     recordOpsEvent({
@@ -2003,6 +2112,10 @@ export class ReboundRejectionAgent {
         rsi,
         atrPct,
         volumeRatio,
+        requiredVolumeRatio,
+        usdVolumeMA,
+        volumeBaseline: contextAfter?.emaRatio,
+        volumePressure: contextAfter?.rejectionScore,
         emaSpread
       },
     });
