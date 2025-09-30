@@ -1,5 +1,6 @@
 import { Broker, NewOrder, PlacedOrder } from './types.js';
-import { getTicker } from '../data/market.js';
+import { getTicker, getOHLCV } from '../data/market.js';
+import { getConfig } from '../utils/env.js';
 
 // Simple paper broker with committed balance and slippage modelling.
 export class PaperBroker implements Broker {
@@ -27,7 +28,23 @@ export class PaperBroker implements Broker {
     const slip = this.slippageToSpread * spread;
 
     const px = o.type === 'market' ? (o.side === 'buy' ? ask + slip : bid - slip) : (o.price!);
-    const notional = px * o.qty;
+    // Optionally simulate liquidity and scale qty to respect max impact
+    let qty = o.qty;
+    try {
+      const { PAPER_LIQ_SIM_ENABLED, PAPER_MAX_IMPACT_PCT, MIN_ORDER_NOTIONAL_USD } = getConfig();
+      if (PAPER_LIQ_SIM_ENABLED && typeof qty === 'number' && qty > 0 && mid > 0) {
+        const est = await this.estimateFillableQty({ symbol: o.symbol, desiredQty: qty, maxImpactPct: PAPER_MAX_IMPACT_PCT as any });
+        if (est && typeof (est as any).fillableQty === 'number') {
+          qty = (est as any).fillableQty;
+        }
+        if (qty * mid < MIN_ORDER_NOTIONAL_USD) {
+          const id = `paper_rejected_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+          return { ...o, id, status: 'rejected', ts: Date.now() } as PlacedOrder;
+        }
+      }
+    } catch {}
+
+    const notional = px * qty;
     const fee = (this.feesBps / 10000) * notional;
 
     // Margin capacity check: allow at most balanceUsd * leverage minus already committed
@@ -46,7 +63,7 @@ export class PaperBroker implements Broker {
       ...o, id,
       status: 'filled',
       avgPrice: px,
-      filledQty: o.qty,
+      filledQty: qty,
       ts: Date.now(),
       latencyMs: Math.max(0, Date.now() - startTs),
       requestedQty: o.qty,
@@ -71,7 +88,42 @@ export class PaperBroker implements Broker {
     return {};
   }
 
-  async estimateFillableQty(params: { desiredQty: number }) {
-    return { fillableQty: params.desiredQty };
+  async estimateFillableQty(params: { symbol: string; desiredQty: number; maxImpactPct?: number }) {
+    const cfg = getConfig();
+    const symbol = params.symbol;
+    const maxImpactPct = Math.max(0, Number(params.maxImpactPct ?? cfg.PAPER_MAX_IMPACT_PCT));
+    try {
+      const t = await getTicker(symbol).catch(()=>null as any);
+      const price = Number(t?.last || t?.close || t?.ask || t?.bid || 0);
+      const o15 = await getOHLCV(symbol, '15m', 30).catch(()=>null as any);
+      let volBase = 0;
+      if (Array.isArray(o15) && o15.length) {
+        const last = o15[o15.length - 1];
+        volBase = Number(last?.[5] || 0);
+      }
+      const volUsd15m = price > 0 ? volBase * price : 0;
+      const desiredQty = Math.max(0, params.desiredQty || 0);
+      if (!(desiredQty > 0) || !(price > 0)) return { fillableQty: desiredQty, impactPct: 0 } as any;
+
+      // If extremely low recent volume, scale down aggressively
+      if (volUsd15m > 0 && volUsd15m < cfg.LIQUIDITY_MIN_15M_USD) {
+        const scale = Math.max(0, volUsd15m / cfg.LIQUIDITY_MIN_15M_USD);
+        const scaledQty = desiredQty * Math.max(0.1, Math.min(1, scale));
+        return { fillableQty: scaledQty, impactPct: 2.5 } as any;
+      }
+
+      // Simple impact model: impactPct ≈ k * (orderNotional / 15mVolUsd) * 100
+      const k = 0.2; // 0.2% impact per 1% of 15m flow consumed
+      const orderNotional = desiredQty * price;
+      const flowShare = volUsd15m > 0 ? orderNotional / volUsd15m : 0;
+      const impactPct = Math.max(0, Math.min(5, k * flowShare * 100));
+      if (impactPct <= maxImpactPct) return { fillableQty: desiredQty, impactPct } as any;
+      // Scale down to fit max impact
+      const scale = maxImpactPct > 0 ? (maxImpactPct / Math.max(0.0001, impactPct)) : 0;
+      const fillableQty = desiredQty * Math.max(0, Math.min(1, scale));
+      return { fillableQty, impactPct } as any;
+    } catch {
+      return { fillableQty: params.desiredQty } as any;
+    }
   }
 }

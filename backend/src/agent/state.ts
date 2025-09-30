@@ -383,7 +383,7 @@ export class ReboundRejectionAgent {
       }
     }
     // Enhanced quality filters for 60%+ win rate
-    if (!snap || !this.passesEntryMomentumGates(snap, 'enter') || !this.passesQualityFilters(snap)) {
+    if (!snap || !this.passesEntryMomentumGates(snap, 'enter') || !this.passesQualityFilters(snap) || !this.passesAntiWhaleFilters(snap)) {
       this.entering = false;
       return;
     }
@@ -535,14 +535,24 @@ export class ReboundRejectionAgent {
       });
       qty = cappedQty;
     }
-    if (this.profile.mode === 'live' && typeof (this.broker as any)?.estimateFillableQty === 'function') {
+    if (typeof (this.broker as any)?.estimateFillableQty === 'function') {
       try {
-        const estimate = await (this.broker as any).estimateFillableQty({ symbol: this.profile.symbol, side, desiredQty: qty, maxImpactPct: Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35') });
+        const cfg = getConfig();
+        const maxImpact = this.profile.mode === 'live' ? cfg.ORDER_MAX_IMPACT_PCT : cfg.PAPER_MAX_IMPACT_PCT;
+        const estimate = await (this.broker as any).estimateFillableQty({ symbol: this.profile.symbol, side, desiredQty: qty, maxImpactPct: maxImpact });
         if (estimate?.fillableQty != null) {
           if (estimate.fillableQty < qty) {
             const reductionNote = `Liquidity limit reduced qty from ${qty.toFixed(6)} to ${estimate.fillableQty.toFixed(6)} (impact ${(estimate.impactPct ?? 0).toFixed(2)}%).`;
             const planJson = this.plan.plan;
             planJson.notes = planJson.notes ? `${planJson.notes}\n${reductionNote}` : reductionNote;
+            recordOpsEvent({
+              level: 'info',
+              source: 'liquidity_guard',
+              message: 'qty_reduced_due_to_impact',
+              sessionId: this.sessionId || undefined,
+              symbol: this.profile.symbol,
+              details: { requestedQty: qty, fillableQty: estimate.fillableQty, impactPct: estimate.impactPct }
+            });
           }
           qty = estimate.fillableQty;
           if (estimate.minQty != null && qty < estimate.minQty) {
@@ -552,7 +562,8 @@ export class ReboundRejectionAgent {
         }
       } catch {}
     }
-    if (!(qty > 0)) {
+    const minNotional = getConfig().MIN_ORDER_NOTIONAL_USD || 0;
+    if (!(qty > 0) || (qty * entry) < minNotional) {
       this.entering = false;
       return;
     }
@@ -2145,6 +2156,41 @@ export class ReboundRejectionAgent {
     });
 
     return true;
+  }
+
+  // Anti-whale / manipulation guard: blocks entries on abnormal volume spikes in extreme volatility without strong trend
+  private passesAntiWhaleFilters(snap: TechnicalSnapshot): boolean {
+    try {
+      const cfg = getConfig();
+      if (!cfg.ANTI_WHALE_ENABLED) return true;
+      const price = Number((snap as any)?.last ?? 0);
+      const vol = Number((snap as any)?.volume ?? 0);
+      const volMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? 0);
+      const atrPct = Number((snap as any)?.atrPct ?? 0);
+      const adx = Number((snap as any)?.adx14 ?? 0);
+
+      if (!(volMA > 0) || !(price > 0)) return true; // nothing to check
+      const spikeRatio = vol / volMA;
+      const spikeThreshold = Math.max(1.2, cfg.ANTI_WHALE_VOL_SPIKE_MULT);
+      const extremeVol = atrPct >= Math.max(0.8, cfg.ANTI_WHALE_ATR_PCT);
+      const weakTrend = adx < Math.max(10, cfg.ANTI_WHALE_MIN_ADX);
+
+      if (spikeRatio >= spikeThreshold && extremeVol && weakTrend) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'anti_whale',
+          message: 'blocked_due_to_volume_spike_in_extreme_vol',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { spikeRatio, vol, volMA, atrPct, adx, spikeThreshold }
+        });
+        return false;
+      }
+
+      return true;
+    } catch {
+      return true;
+    }
   }
 
   // Dynamic position sizing based on setup quality and market conditions

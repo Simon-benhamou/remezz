@@ -57,6 +57,18 @@ export type Cfg = {
   ORDER_FILL_TIMEOUT_SEC: number;     // max seconds to wait for a live order to fill
   ORDER_FILL_POLL_MS: number;         // polling interval for fetchOrder
   ORDER_RETRY_MAX: number;            // how many times to retry a market order if not filled
+  // Liquidity/impact controls
+  ORDER_MAX_IMPACT_PCT: number;       // max acceptable market impact for sizing/gating
+  MIN_ORDER_NOTIONAL_USD: number;     // minimum order notional to execute
+  PAPER_LIQ_SIM_ENABLED: boolean;     // enable liquidity/slippage simulation in paper mode
+  PAPER_MAX_IMPACT_PCT: number;       // max impact allowed for paper estimate
+  LIQUIDITY_MIN_15M_USD: number;      // minimum 15m USD volume to allow trading
+  
+  // Anti-whale / manipulation filters
+  ANTI_WHALE_ENABLED: boolean;        // enable anti-whale entry filters
+  ANTI_WHALE_VOL_SPIKE_MULT: number;  // reject if latest volume > X * EMA20 volume
+  ANTI_WHALE_ATR_PCT: number;         // apply stricter rules when ATR% above this
+  ANTI_WHALE_MIN_ADX: number;         // require at least this ADX under spike conditions
   // Plan LLM limits
   PLAN_LLM_COOLDOWN_MIN: number;
   PLAN_LLM_MAX_PER_HOUR: number;
@@ -221,8 +233,19 @@ export function getConfig(): Cfg {
     TREND_FILTER_ENABLED: (e.TREND_FILTER_ENABLED || "false") === "true",
     TREND_FILTER_NEUTRAL_BAND_BPS: Number(e.TREND_FILTER_NEUTRAL_BAND_BPS || "15"),
     TREND_FILTER_LOOKBACK_MIN: Number(e.TREND_FILTER_LOOKBACK_MIN || "240"),
-    ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
-    ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
+  ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
+  ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
+  // Liquidity/impact controls
+  ORDER_MAX_IMPACT_PCT: Number(e.ORDER_MAX_IMPACT_PCT || "0.35"),
+  MIN_ORDER_NOTIONAL_USD: Number(e.MIN_ORDER_NOTIONAL_USD || "40"),
+  PAPER_LIQ_SIM_ENABLED: (e.PAPER_LIQ_SIM_ENABLED || "true") === "true",
+  PAPER_MAX_IMPACT_PCT: Number(e.PAPER_MAX_IMPACT_PCT || e.ORDER_MAX_IMPACT_PCT || "0.35"),
+  LIQUIDITY_MIN_15M_USD: Number(e.LIQUIDITY_MIN_15M_USD || "100000"),
+  // Anti-whale / manipulation filters
+  ANTI_WHALE_ENABLED: (e.ANTI_WHALE_ENABLED || "true") === "true",
+  ANTI_WHALE_VOL_SPIKE_MULT: Number(e.ANTI_WHALE_VOL_SPIKE_MULT || "2.2"),
+  ANTI_WHALE_ATR_PCT: Number(e.ANTI_WHALE_ATR_PCT || "2.0"),
+  ANTI_WHALE_MIN_ADX: Number(e.ANTI_WHALE_MIN_ADX || "18"),
     PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "5"), // réduit de 15 à 5 min
     PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "10"), // augmenté de 3 à 10
     COOLDOWN_CONFIDENCE_MIN: Number(e.COOLDOWN_CONFIDENCE_MIN || "0.6"),
