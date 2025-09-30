@@ -63,7 +63,7 @@ function AppInner(){
     { key: '/reports', label: 'Reports', icon: <FileTextOutlined /> },
     { key: '/journal', label: 'Journal', icon: <ReadOutlined /> },
     { key: '/testing', label: 'Testing', icon: <BulbOutlined /> },
-    { key: '/backlog', label: 'Backlog', icon: <WarningOutlined /> },
+    { key: '/backlog', label: 'Agent Activity Feed', icon: <WarningOutlined /> },
   ];
 
   return (

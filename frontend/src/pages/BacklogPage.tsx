@@ -1,6 +1,6 @@
 import React from 'react';
-import { Card, Space, Typography, List, Tag, message, Button, Badge, Empty } from 'antd';
-import { ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Card, Space, Typography, List, Tag, message, Button, Badge, Empty, Tooltip } from 'antd';
+import { ThunderboltOutlined, ReloadOutlined, InfoCircleOutlined, WarningOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -18,25 +18,49 @@ type OpsEvent = {
   details?: any;
 };
 
-const levelColors: Record<string, { color: string; label: string }> = {
-  info: { color: 'blue', label: 'Info' },
-  warn: { color: 'orange', label: 'Warning' },
-  error: { color: 'red', label: 'Issue' },
+const levelMeta: Record<string, { color: string; label: string; icon: React.ReactNode }> = {
+  info: { color: 'blue', label: 'Info', icon: <InfoCircleOutlined /> },
+  warn: { color: 'gold', label: 'Watch', icon: <WarningOutlined /> },
+  error: { color: 'red', label: 'Action', icon: <ExclamationCircleOutlined /> },
+};
+
+const messageCatalog: Record<string, { title: string; description?: string }> = {
+  volume_too_low: {
+    title: 'Volume unchanged – skipping entry',
+    description: 'Spot + derivatives volume is under the 0.60× requirement, so the strategy waits for healthier liquidity.',
+  },
+  atr_too_low: {
+    title: 'Volatility filter blocked the trade',
+    description: 'ATR is below the minimum threshold for crypto entries; momentum is too muted right now.',
+  },
+  adx_not_ready: {
+    title: 'Trend strength too weak',
+    description: 'ADX needs to firm up before we engage. The agent will keep scanning.',
+  },
+  quality_filter_passed: {
+    title: 'Setup cleared all quality gates',
+    description: 'All momentum, volume and volatility checks passed — waiting on execution signals.',
+  },
+  bias_conflict: {
+    title: 'Signal rejected due to conflicting bias',
+    description: 'Directional consensus isn’t aligned across timeframes, so the agent stands down.',
+  },
+};
+
+const fieldLabels: Record<string, string> = {
+  bias: 'Bias',
+  atrPct: 'ATR %',
+  volumeRatio: 'Volume vs MA',
+  adx: 'ADX',
+  emaSpread: 'EMA Spread',
+  liquidityScore: 'Liquidity',
+  fundingRate: 'Funding Rate',
+  winRate: 'Win Rate',
 };
 
 function formatTime(ts?: number) {
   if (!ts) return '—';
   return dayjs(ts).format('HH:mm:ss');
-}
-
-function renderDetails(details: any) {
-  if (!details) return null;
-  if (typeof details === 'string') return details;
-  try {
-    return JSON.stringify(details);
-  } catch {
-    return String(details);
-  }
 }
 
 export default function BacklogPage() {
@@ -90,6 +114,20 @@ export default function BacklogPage() {
     return map;
   }, [events, activeSessions]);
 
+  const decorateEvent = (evt: OpsEvent) => {
+    const meta = levelMeta[evt.level || 'info'] || levelMeta.info;
+    const catalog = messageCatalog[evt.message || ''] || null;
+    const title = catalog?.title || (evt.message ? evt.message.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase()) : 'Agent update');
+    const description = catalog?.description;
+    const detailsObject = normalizeDetails(evt.details);
+    const detailEntries = Object.entries(detailsObject).map(([key, value]) => ({
+      key,
+      label: fieldLabels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase()),
+      value: formatDetailValue(key, value),
+    })).filter((entry) => entry.value !== undefined && entry.value !== null && entry.value !== '');
+    return { meta, title, description, detailEntries };
+  };
+
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card>
@@ -131,7 +169,8 @@ export default function BacklogPage() {
             itemLayout="vertical"
             dataSource={events.slice(0, 30)}
             renderItem={(evt) => {
-              const meta = levelColors[evt.level || 'info'] || levelColors.info;
+              const decorated = decorateEvent(evt);
+              const meta = decorated.meta;
               const session = evt.sessionId
                 ? activeSessions.find((s: any) => s.id === evt.sessionId)
                 : null;
@@ -139,7 +178,7 @@ export default function BacklogPage() {
                 <List.Item key={evt.id} style={{ paddingLeft: 0, paddingRight: 0 }}>
                   <Space direction="vertical" size={4} style={{ width: '100%' }}>
                     <Space size="small" wrap>
-                      <Tag color={meta.color}>{meta.label}</Tag>
+                      <Tag color={meta.color} icon={meta.icon}>{meta.label}</Tag>
                       {evt.symbol && <Tag>{evt.symbol}</Tag>}
                       {session && (
                         <Tag color="geekblue">
@@ -148,11 +187,21 @@ export default function BacklogPage() {
                       )}
                       <Text type="secondary">{formatTime(evt.ts)}</Text>
                     </Space>
-                    <Text strong>{evt.message || 'No message'}</Text>
-                    {evt.details && (
-                      <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                        {renderDetails(evt.details)}
-                      </Text>
+                    <Text strong>{decorated.title}</Text>
+                    {decorated.description && (
+                      <Text type="secondary">{decorated.description}</Text>
+                    )}
+                    {decorated.detailEntries.length > 0 && (
+                      <Space wrap size={6} style={{ marginTop: 4 }}>
+                        {decorated.detailEntries.map((entry) => (
+                          <Tooltip key={entry.key} title={entry.label}>
+                            <Tag bordered={false} style={{ background: '#f8fafc', color: '#0f172a' }}>
+                              <strong>{entry.value}</strong>
+                              {entry.label ? <span style={{ marginLeft: 6, color: '#64748b', fontWeight: 500 }}>{entry.label}</span> : null}
+                            </Tag>
+                          </Tooltip>
+                        ))}
+                      </Space>
                     )}
                   </Space>
                 </List.Item>
@@ -190,7 +239,8 @@ export default function BacklogPage() {
                 <List
                   dataSource={sessionEvents.slice(0, 10)}
                   renderItem={(evt) => {
-                    const meta = levelColors[evt.level || 'info'] || levelColors.info;
+                    const decorated = decorateEvent(evt);
+                    const meta = decorated.meta;
                     return (
                       <List.Item key={evt.id} style={{ border: 'none', paddingLeft: 0, paddingRight: 0 }}>
                         <Space
@@ -203,16 +253,24 @@ export default function BacklogPage() {
                           }}
                         >
                           <Space size="small" wrap>
-                            <Tag color={meta.color}>{meta.label}</Tag>
+                            <Tag color={meta.color} icon={meta.icon}>{meta.label}</Tag>
                             <Text>{evt.source}</Text>
                           </Space>
                           <Text type="secondary">{formatTime(evt.ts)}</Text>
                         </Space>
-                        <Text>{evt.message}</Text>
-                        {evt.details && (
-                          <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                            {renderDetails(evt.details)}
-                          </Text>
+                        <Text strong>{decorated.title}</Text>
+                        {decorated.description && (
+                          <Text type="secondary">{decorated.description}</Text>
+                        )}
+                        {decorated.detailEntries.length > 0 && (
+                          <Space wrap size={6} style={{ marginTop: 4 }}>
+                            {decorated.detailEntries.map((entry) => (
+                              <Tag key={entry.key} bordered={false} style={{ background: '#f1f5f9', color: '#0f172a' }}>
+                                <strong>{entry.value}</strong>
+                                {entry.label ? <span style={{ marginLeft: 6, color: '#64748b', fontWeight: 500 }}>{entry.label}</span> : null}
+                              </Tag>
+                            ))}
+                          </Space>
                         )}
                       </List.Item>
                     );
@@ -245,4 +303,36 @@ function AvatarIcon() {
       <ThunderboltOutlined />
     </div>
   );
+}
+
+function normalizeDetails(details: any): Record<string, any> {
+  if (!details) return {};
+  if (typeof details === 'string') {
+    try {
+      return JSON.parse(details);
+    } catch {
+      return { note: details };
+    }
+  }
+  if (typeof details === 'object') return details as Record<string, any>;
+  return { value: details };
+}
+
+function formatDetailValue(key: string, value: any): string {
+  if (value == null) return '';
+  if (typeof value === 'number') {
+    if (/ratio/i.test(key)) return `${(value * 100).toFixed(1)}%`;
+    if (/pct|percentage/i.test(key)) return `${value.toFixed(2)}%`;
+    if (/adx/i.test(key)) return value.toFixed(1);
+    if (/score/i.test(key)) return value.toFixed(2);
+    return Number.isInteger(value) ? String(value) : value.toFixed(3);
+  }
+  if (typeof value === 'string') {
+    return value.replace(/_/g, ' ');
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
