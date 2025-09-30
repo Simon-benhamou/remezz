@@ -55,6 +55,8 @@ export async function recordDecisionSnapshot(params: {
       },
       select: { id: true },
     });
+    pruneDecisionMemory(family).catch((error) => console.warn('Decision memory prune failed:', error));
+    pruneDecisionMemory().catch((error) => console.warn('Global decision memory prune failed:', error));
     return record.id;
   } catch (error) {
     console.warn('Failed to record decision snapshot:', error);
@@ -210,4 +212,26 @@ export async function markDecisionCancelled(sessionId: string) {
   } catch (error) {
     console.warn('Failed to mark decision cancelled:', error);
   }
+}
+
+const MAX_PER_FAMILY = 1200;
+const MAX_TOTAL = 10000;
+
+async function pruneDecisionMemory(family?: string) {
+  const where = family ? { family } : {};
+  const total = await prisma.decisionMemory.count({ where });
+  const limit = family ? MAX_PER_FAMILY : MAX_TOTAL;
+  if (total <= limit) return;
+
+  const excess = total - limit;
+  const toDelete = await prisma.decisionMemory.findMany({
+    where,
+    orderBy: { createdAt: 'asc' },
+    take: excess,
+    select: { id: true },
+  });
+  if (!toDelete.length) return;
+  await prisma.decisionMemory.deleteMany({
+    where: { id: { in: toDelete.map((d) => d.id) } },
+  });
 }

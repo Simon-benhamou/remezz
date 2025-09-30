@@ -1862,7 +1862,7 @@ export class ReboundRejectionAgent {
     const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
     const bias = this.plan?.bias || 'none';
 
-    const adjustedSlopeRequirement = Math.max(minSlopeAbsPct * 0.75, minSlopeAbsPct - 0.05);
+    const adjustedSlopeRequirement = Math.max(0.05, Math.min(minSlopeAbsPct * 0.6, Math.max(minSlopeAbsPct - 0.05, 0.05)));
 
     if (slopePctAbs < adjustedSlopeRequirement) {
       recordOpsEvent({
@@ -2202,16 +2202,21 @@ export class ReboundRejectionAgent {
    */
   public async getDiagnostics(): Promise<any> {
     try {
-      const snap = await buildTechSnapshot(this.profile?.symbol || '');
+      const snapshotFetcher = typeof (this as any).getDiagnosticSnapshot === 'function'
+        ? (this as any).getDiagnosticSnapshot.bind(this)
+        : async () => buildTechSnapshot(this.profile?.symbol || '');
+      const snap = await snapshotFetcher();
       const canTrade = this.canTradeNow(snap);
       const checks = this.getDiagnosticChecks(snap);
       const summary = this.getDiagnosticSummary(checks);
+      const trigger = this.getDiagnosticTrigger(snap, checks);
 
       return {
         canTrade,
         reason: this.getTradingReadinessReason(checks),
         checks,
         summary,
+        trigger,
         timestamp: Date.now()
       };
     } catch (error) {
@@ -2323,6 +2328,66 @@ export class ReboundRejectionAgent {
     };
 
     return checks;
+  }
+
+  private getDiagnosticTrigger(snap: TechnicalSnapshot, checks: any) {
+    const bias = this.plan?.bias || 'none';
+    const zone = this.plan?.zone;
+    const price = snap.last;
+    const cfg = getConfig();
+    const dir = bias === 'short' ? -1 : 1;
+
+    const zoneMin = zone ? Math.min(zone.from, zone.to) : Number.NEGATIVE_INFINITY;
+    const zoneMax = zone ? Math.max(zone.from, zone.to) : Number.POSITIVE_INFINITY;
+    const mid = zone?.mid ?? (zone ? (zone.from + zone.to) / 2 : price);
+    const inZone = zone ? price >= zoneMin && price <= zoneMax : false;
+
+    const confirmRequired = !!this.plan?.plan?.entry_rule?.confirm_close;
+    const confirmationOk = !confirmRequired || (bias === 'long' ? price > mid : price < mid);
+
+    const momentumOk =
+      checks?.momentumGates?.status === 'PASS' ||
+      checks?.qualityFilters?.momentum?.status === 'PASS' ||
+      this.passesEntryMomentumGates(snap, 'enter');
+    const qualityOk = checks?.qualityScore?.status === 'PASS' || this.passesQualityFilters(snap);
+
+    const levelProfit = this.profile?.aggressiveness || 'reactive';
+    let minProfitPct = cfg.MIN_TRADE_PROFIT_PCT;
+    if (levelProfit === 'reactive') minProfitPct = Math.max(0.6, minProfitPct - 0.2);
+    if (levelProfit === 'aggressive') minProfitPct = Math.max(0.5, minProfitPct - 0.3);
+
+    const firstR = this.plan?.rPrices?.[0]?.r ?? 0;
+    const tp1ProfitPct = price > 0 ? Math.abs((firstR * (this.plan?.stopDistance ?? 0)) / price) * 100 : 0;
+    const profitOk = tp1ProfitPct >= minProfitPct;
+
+    const readyPrechecks = this.state === 'ARMED' && !this.pos && !this.entering;
+    const entryReady = readyPrechecks && inZone && confirmationOk && momentumOk && qualityOk && profitOk;
+
+    let phase: string;
+    if (entryReady) phase = 'entry_ready';
+    else if (!readyPrechecks) phase = 'inactive';
+    else if (!inZone) phase = 'out_of_zone';
+    else if (!confirmationOk) phase = 'awaiting_confirmation';
+    else if (!momentumOk) phase = 'awaiting_momentum';
+    else if (!qualityOk) phase = 'awaiting_quality';
+    else if (!profitOk) phase = 'awaiting_profit';
+    else phase = 'scanning';
+
+    return {
+      entryReady,
+      phase,
+      bias,
+      price,
+      zone: zone ? { ...zone } : null,
+      inZone,
+      confirmationOk,
+      momentumOk,
+      qualityOk,
+      profitOk,
+      tp1ProfitPct,
+      minProfitPct,
+      dir,
+    };
   }
 
   private getQualityFiltersDiagnostics(snap: TechnicalSnapshot): any {

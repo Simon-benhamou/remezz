@@ -71,6 +71,81 @@ router.get('/analytics', async (req,res)=>{
   }
 });
 
+router.get('/adaptive-weights', async (req, res) => {
+  try {
+    const family = req.query.family ? String(req.query.family) : undefined;
+    const limitRaw = Number(req.query.limit ?? 50);
+    const decisionLimitRaw = Number(req.query.decisionsLimit ?? 25);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+    const decisionsLimit = Number.isFinite(decisionLimitRaw) ? Math.max(1, Math.min(200, decisionLimitRaw)) : 25;
+
+    const weights = await prisma.adaptiveThreshold.findMany({
+      where: family ? { family } : undefined,
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+    });
+
+    const recentDecisions = await prisma.decisionMemory.findMany({
+      where: family ? { family } : undefined,
+      orderBy: { createdAt: 'desc' },
+      take: decisionsLimit,
+      select: {
+        id: true,
+        sessionId: true,
+        symbol: true,
+        family: true,
+        score: true,
+        confidence: true,
+        biasConfidence: true,
+        outcome: true,
+        realizedPnl: true,
+        createdAt: true,
+        features: true,
+      },
+    });
+
+    const familyStats = await prisma.decisionMemory.groupBy({
+      by: ['family'],
+      _count: { _all: true },
+      _avg: {
+        score: true,
+        confidence: true,
+        realizedPnl: true,
+      },
+    }).catch(() => []);
+
+    res.json({
+      weights: weights.map((w) => ({
+        family: w.family,
+        momentumWeight: w.momentumWeight,
+        volumeWeight: w.volumeWeight,
+        volatilityWeight: w.volatilityWeight,
+        confidence: w.confidence,
+        sampleSize: w.sampleSize,
+        lastWinRate: w.lastWinRate,
+        updatedAt: w.updatedAt,
+        createdAt: w.createdAt,
+      })),
+      recentDecisions: recentDecisions.map((d) => ({
+        id: d.id,
+        sessionId: d.sessionId,
+        symbol: d.symbol,
+        family: d.family,
+        score: d.score,
+        confidence: d.confidence,
+        biasConfidence: d.biasConfidence,
+        outcome: d.outcome,
+        realizedPnl: d.realizedPnl,
+        createdAt: d.createdAt,
+        features: d.features,
+      })),
+      familyStats,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
 router.get('/reports/daily/list', async (req,res)=>{
   const sessionId = String(req.query.sessionId || '');
   if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
