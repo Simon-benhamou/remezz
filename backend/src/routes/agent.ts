@@ -394,9 +394,11 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
     budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
     const storedBudgetPct = Math.round(budgetFraction * 100);
 
-    const aggressiveness = (['conservative', 'reactive', 'aggressive'] as const).includes(String(body.aggressiveness))
-      ? (body.aggressiveness as 'conservative' | 'reactive' | 'aggressive')
-      : (currentProfile.aggressiveness || 'reactive');
+    const requestedAggressiveness = body.aggressiveness ?? currentProfile.aggressiveness;
+    const aggressiveness: 'conservative' | 'reactive' | 'aggressive' =
+      requestedAggressiveness === 'conservative' || requestedAggressiveness === 'reactive' || requestedAggressiveness === 'aggressive'
+        ? requestedAggressiveness
+        : (currentProfile.aggressiveness ?? 'reactive');
 
     const startBal = typeof body.startBalanceUsd === 'number' && body.startBalanceUsd > 0
       ? body.startBalanceUsd

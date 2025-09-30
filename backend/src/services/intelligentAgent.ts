@@ -4,6 +4,9 @@ import { fullAnalysis, computeProjection } from '../ai/analysis.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
+import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
+import { getAdaptiveWeightsForSymbol } from '../learning/adaptiveWeights.js';
+import { recordDecisionSnapshot, markDecisionCancelled } from '../learning/decisionMemory.js';
 
 // HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
@@ -209,6 +212,7 @@ export interface IntelligentAnalysis {
     confidence: number;
     reasoning: string;
   };
+  multiTimeframe?: MultiTimeframeDiagnostics;
   reasoning: {
     summary: string;
     technical: string[];
@@ -231,6 +235,8 @@ export interface IntelligentAnalysis {
     timeframe: 'short' | 'medium' | 'long';
     expectedReturn: number;
     riskLevel: 'low' | 'medium' | 'high';
+    playbook?: string;
+    targetR?: number;
   };
   regime: string;
 }
@@ -722,6 +728,7 @@ function getFallbackSymbols(): string[] {
 async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive'; excludeSessionId?: string }): Promise<IntelligentAnalysis | null> {
   try {
     console.log(`🔍 Analyzing ${symbol}...`);
+    let multiTimeframe: MultiTimeframeDiagnostics | null = null;
     
     // Get technical snapshot first (no IA cost)
     const technical = await buildTechSnapshot(symbol);
@@ -781,8 +788,21 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const isHighStakes = currentVolumeUsd > 1_000_000 && Math.abs(change24h) > 3.0;
     const mlNotConfident = mlResult.confidence < 60;
     const isCriticalMajor = majorCryptos.includes(symbol) && Math.abs(change24h) > 2.0;
-    
-    const shouldUseAI = (mlNotConfident && isHighStakes) || isCriticalMajor;
+    if (!multiTimeframe) {
+      try {
+        multiTimeframe = await computeMultiTimeframeDiagnostics(symbol);
+      } catch (error) {
+        console.warn(`Failed to build multi-timeframe diagnostics for ${symbol}:`, error);
+      }
+    }
+
+    const shortTermMomentum = Math.abs(multiTimeframe?.timeframes?.['5m']?.momentumPct ?? 0);
+    const divergenceScore = multiTimeframe?.divergenceScore ?? 0;
+    const agreementScore = multiTimeframe?.agreementScore ?? 0;
+    const multiTfSuggestsEscalation = divergenceScore >= 1 && shortTermMomentum > 0.3;
+
+    const shouldUseAI = (mlNotConfident && (isHighStakes || multiTfSuggestsEscalation)) ||
+                        (isCriticalMajor && multiTfSuggestsEscalation);
     
     // Utiliser ML comme sentiment par défaut
     sentiment = {
@@ -866,27 +886,62 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
       }
     } catch {}
 
-    // Reweighted composite score - technical analysis priority with aggressiveness adjustments
-    const compositeScore = (
-      momentumScore * 0.30 +      // 30% momentum (increased)
-      trendScore * 0.25 +         // 25% trend (increased)
-      volatilityScore * 0.20 +    // 20% volatility (increased)
-      volumeScore * 0.15 +        // 15% volume
-      regimeScore * 0.05 +        // 5% regime (reduced)
-      sentimentScore * 0.05       // 5% sentiment (reduced, optional)
-    );
+    const adaptiveWeights = await getAdaptiveWeightsForSymbol(symbol).catch(() => ({
+      momentumWeight: 1,
+      volumeWeight: 1,
+      volatilityWeight: 1,
+      confidence: 0,
+      sampleSize: 0,
+    }));
+
+    const weightedMomentum = momentumScore * 0.30 * adaptiveWeights.momentumWeight;
+    const weightedTrend = trendScore * 0.25;
+    const weightedVolatility = volatilityScore * 0.20 * adaptiveWeights.volatilityWeight;
+    const weightedVolume = volumeScore * 0.15 * adaptiveWeights.volumeWeight;
+    const weightedRegime = regimeScore * 0.05;
+    const weightedSentiment = sentimentScore * 0.05;
+
+    const adaptiveTotal =
+      0.30 * adaptiveWeights.momentumWeight +
+      0.20 * adaptiveWeights.volatilityWeight +
+      0.15 * adaptiveWeights.volumeWeight +
+      0.25 +
+      0.05 +
+      0.05;
+
+    const compositeScoreRaw =
+      weightedMomentum +
+      weightedTrend +
+      weightedVolatility +
+      weightedVolume +
+      weightedRegime +
+      weightedSentiment;
+
+    const compositeScore = adaptiveTotal > 0
+      ? compositeScoreRaw * (1 / adaptiveTotal)
+      : compositeScoreRaw;
 
     // Determine opportunity type and direction
-    const opportunity = determineOpportunity(metrics, technical, sentiment);
+    const opportunity = determineOpportunity(metrics, technical, sentiment, multiTimeframe || undefined);
 
     // Generate detailed reasoning
     const reasoning = generateReasoning(metrics, technical, sentiment, opportunity);
+    if (multiTimeframe) {
+      reasoning.technical = reasoning.technical ?? [];
+      reasoning.technical.push(
+        `Multi-TF consensus ${agreementScore}/3 (divergence ${divergenceScore})`
+      );
+    }
 
     // Calculate confidence based on convergence of signals
-    const confidence = calculateConfidence(
+    let aggregatedConfidence = calculateConfidence(
       momentumScore, trendScore, sentimentScore, 
       volatilityScore, volumeScore, regimeScore
     );
+    if (multiTimeframe) {
+      if (agreementScore >= 2) aggregatedConfidence = Math.min(1, aggregatedConfidence + 0.05);
+      if (divergenceScore >= 2) aggregatedConfidence = Math.max(0, aggregatedConfidence - 0.05);
+    }
 
     // 🎯 AUTO-DIRECTIONAL: Déterminer automatiquement le bias optimal
     const autoBias = determineOptimalBias(symbol, {
@@ -922,13 +977,14 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const penalizedScore = compositeScore * confidencePenalty;
 
     const finalScore = Math.round(penalizedScore * 100) / 100;
+    const combinedConfidence = Math.round((autoBias.confidence + aggregatedConfidence * 100) / 2);
     console.log(`🎯 ${symbol}: Final Score=${finalScore} (M:${momentumScore.toFixed(1)}, T:${trendScore.toFixed(1)}, V:${volatilityScore.toFixed(1)}, Vol:${volumeScore.toFixed(1)}) [${aggressiveness}]`);
 
     return {
       symbol,
       score: finalScore,
       rank: 0, // Will be set after ranking all symbols
-      confidence: Math.round(autoBias.confidence), // 🎯 Utilise la confidence ML du bias au lieu de la confidence technique
+      confidence: Math.round(autoBias.confidence),
       projectionConfidence: Math.round(projectionConfidence * 1000) / 1000,
       autoBias, // 🎯 Bias automatiquement déterminé
       reasoning: {
@@ -937,7 +993,8 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
       },
       metrics,
       opportunity,
-      regime: (technical.regime as any)?.label || 'unknown'
+      regime: (technical.regime as any)?.label || 'unknown',
+      multiTimeframe: multiTimeframe || undefined
     };
 
   } catch (error) {
@@ -1140,8 +1197,45 @@ function calculateRegimeComponent(regime: any): number {
 /**
  * Determine opportunity type and characteristics
  */
-function determineOpportunity(metrics: any, technical: any, sentiment: any): any {
+function determineOpportunity(metrics: any, technical: any, sentiment: any, multiTimeframe?: MultiTimeframeDiagnostics): any {
   const { momentum, rsi, adx, trendStrength } = metrics;
+  const movementAbs = Math.abs(momentum);
+  const hasVolumeData = technical?.volume != null && technical?.volumeMA != null;
+  const volumeBurst = hasVolumeData ? Number(technical.volume) > Number(technical.volumeMA) * 10 : false;
+  const oneHourBias = multiTimeframe?.timeframes?.['1h']?.bias;
+  const fifteenBias = multiTimeframe?.timeframes?.['15m']?.bias;
+  const fiveBias = multiTimeframe?.timeframes?.['5m']?.bias;
+  const dominantBias = (() => {
+    if (oneHourBias && oneHourBias !== 'neutral') return oneHourBias;
+    if (fifteenBias && fifteenBias !== 'neutral') return fifteenBias;
+    return fiveBias || 'neutral';
+  })();
+
+  if (movementAbs > 5 && volumeBurst) {
+    const dir = momentum > 0 ? 'bullish' : 'bearish';
+    return {
+      type: 'breakout',
+      direction: dir,
+      timeframe: 'short',
+      expectedReturn: 12,
+      riskLevel: 'high',
+      playbook: 'momentum_breakout',
+      targetR: 10,
+    };
+  }
+  
+  if (rsi < 25 || rsi > 75) {
+    const dir = rsi < 25 ? 'bullish' : 'bearish';
+    return {
+      type: 'reversal',
+      direction: dir,
+      timeframe: 'short',
+      expectedReturn: 5,
+      riskLevel: 'medium',
+      playbook: 'mean_reversion',
+      targetR: 4,
+    };
+  }
   
   // Breakout opportunity
   if (adx > 20 && Math.abs(momentum) > 3 && 
@@ -1162,7 +1256,9 @@ function determineOpportunity(metrics: any, technical: any, sentiment: any): any
       direction: technical.trend > 0 ? 'bullish' : 'bearish',
       timeframe: 'medium',
       expectedReturn: Math.min(12, trendStrength * 3),
-      riskLevel: 'medium'
+      riskLevel: 'medium',
+      playbook: 'trend_following',
+      targetR: 6,
     };
   }
   
@@ -1173,7 +1269,9 @@ function determineOpportunity(metrics: any, technical: any, sentiment: any): any
       direction: rsi > 80 ? 'bearish' : 'bullish',
       timeframe: 'short',
       expectedReturn: Math.min(10, Math.abs(momentum) * 1.5),
-      riskLevel: 'high'
+      riskLevel: 'high',
+      playbook: 'mean_reversion',
+      targetR: 4,
     };
   }
   
@@ -1186,17 +1284,22 @@ function determineOpportunity(metrics: any, technical: any, sentiment: any): any
       direction: momentum > 0 ? 'bullish' : 'bearish',
       timeframe: sentimentAligned ? 'medium' : 'short',
       expectedReturn: Math.min(8, Math.abs(momentum) * 1.2),
-      riskLevel: sentimentAligned ? 'medium' : 'high'
+      riskLevel: sentimentAligned ? 'medium' : 'high',
+      playbook: sentimentAligned ? 'momentum_breakout' : 'momentum_scalp',
+      targetR: sentimentAligned ? 7 : 5,
     };
   }
   
   // Default - volatility play
+  const defaultDirection = dominantBias === 'bullish' ? 'bullish' : dominantBias === 'bearish' ? 'bearish' : 'neutral';
   return {
     type: 'volatility',
-    direction: 'neutral',
+    direction: defaultDirection,
     timeframe: 'short',
     expectedReturn: 5,
-    riskLevel: 'medium'
+    riskLevel: 'medium',
+    playbook: 'volatility',
+    targetR: 3,
   };
 }
 
@@ -1515,6 +1618,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       
       console.log(`💤 Setting session ${sessionId} to sleep mode - next scan in 2h`);
       
+      try { await markDecisionCancelled(sessionId); } catch (error) { console.warn('sleep_mode cancel decision failed:', error); }
       await prisma.agentSession.update({
         where: { id: sessionId },
         data: {
@@ -1547,6 +1651,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
           sleepMode: true,
           sleepReason: 'symbol_conflict'
         };
+        try { await markDecisionCancelled(sessionId); } catch (error) { console.warn('conflict cancel decision failed:', error); }
         await prisma.agentSession.update({ where: { id: sessionId }, data: { profileJson: sleepConfig as any } });
         await mergePlanContainer(sessionId, { intelligentHistory: clampHistory([{ timestamp: new Date().toISOString(), action: 'intelligent_enter_sleep', reason: 'symbol_conflict', nextScan: sleepConfig.nextScanDue }]) });
         console.log(`💤 ${sessionId} sleeping 2h due to symbol conflict`);
@@ -1557,6 +1662,33 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       console.log(`🔄 Switching allocation to alternative ${bestOpportunity.symbol}`);
     }
 
+    let currentDecisionId: string | null = null;
+    try {
+      currentDecisionId = await recordDecisionSnapshot({
+        sessionId,
+        symbol: bestOpportunity.symbol,
+        analysis: bestOpportunity,
+        aggressiveness: 'reactive',
+      });
+    } catch (error) {
+      console.warn(`Unable to record decision snapshot for ${sessionId}:`, error);
+    }
+
+    const regimeLabel = bestOpportunity.regime || '';
+    let minHoldHours = 12;
+    if (/bull/i.test(regimeLabel)) {
+      minHoldHours = Math.round(minHoldHours * 1.5);
+    } else if (/bear/i.test(regimeLabel)) {
+      minHoldHours = Math.max(6, Math.round(minHoldHours * 0.7));
+    }
+    if (bestOpportunity.opportunity.playbook === 'momentum_breakout') {
+      minHoldHours = Math.max(6, Math.round(minHoldHours * 0.75));
+    }
+    const strategyTag = bestOpportunity.opportunity.playbook || 'optimized_cost_efficient';
+    const targetsMultiplier = /bear/i.test(regimeLabel) ? 0.7 : /bull/i.test(regimeLabel) ? 1.5 : 1;
+    const targetR = bestOpportunity.opportunity.targetR ?? 4;
+    const biasPreference = /bear/i.test(regimeLabel) ? 'short' : /bull/i.test(regimeLabel) ? 'long' : bestOpportunity.autoBias?.bias || 'neutral';
+
     // Update session with the selected symbol using profileJson for metadata
     const intelligentConfig = {
       isIntelligent: true,
@@ -1564,9 +1696,13 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       analysis: bestOpportunity,
       lastScan: new Date().toISOString(),
       nextScanDue: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(), // 12h minimum
-      minHoldHours: 12,
-      strategy: 'optimized_cost_efficient',
-      sleepMode: false
+      minHoldHours,
+      strategy: strategyTag,
+      targetsMultiplier,
+      targetR,
+      biasPreference,
+      sleepMode: false,
+      currentDecisionId
     };
     
     const intelligentHistory = [{
@@ -1576,6 +1712,11 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       score: bestOpportunity.score,
       confidence: bestOpportunity.confidence,
       reasoning: bestOpportunity.reasoning.summary,
+      strategy: strategyTag,
+      targetR,
+      targetsMultiplier,
+      biasPreference,
+      decisionId: currentDecisionId || undefined,
     }];
     
     console.log(`🔄 Updating session ${sessionId} with symbol: ${bestOpportunity.symbol}`);

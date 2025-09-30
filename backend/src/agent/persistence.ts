@@ -1,6 +1,7 @@
 import { prisma } from '../db/client.js';
 import { broadcast } from '../ws/hub.js';
 import { recomputeKpi } from '../metrics/kpi.js';
+import { finalizeDecisionOutcome } from '../learning/decisionMemory.js';
 
 export async function recordEnter(params: {
   sessionId: string;
@@ -195,5 +196,11 @@ export async function recordExit(params: {
     await recomputeKpi(params.sessionId);
   } catch (error) {
     console.error('Failed to recompute KPI after exit:', error);
+  }
+
+  try {
+    await finalizeDecisionOutcome(params.sessionId, params.realizedPnl ?? 0);
+  } catch (error) {
+    console.warn('Failed to finalize decision outcome:', error);
   }
 }

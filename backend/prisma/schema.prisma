@@ -336,3 +336,37 @@ model DiagnosticsCache {
   @@index([userId, symbol, createdAt])
   @@index([userId, createdAt])
 }
+
+model DecisionMemory {
+  id             String   @id @default(cuid())
+  sessionId      String?
+  symbol         String
+  family         String
+  timeframe      String   @default("15m")
+  bias           String?
+  score          Float?
+  confidence     Float?
+  biasConfidence Float?
+  features       Json
+  outcome        String?
+  realizedPnl    Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([symbol, createdAt])
+  @@index([family, createdAt])
+  @@index([sessionId, createdAt])
+}
+
+model AdaptiveThreshold {
+  id               String   @id @default(cuid())
+  family           String   @unique
+  momentumWeight   Float    @default(1)
+  volumeWeight     Float    @default(1)
+  volatilityWeight Float    @default(1)
+  confidence       Float    @default(0)
+  sampleSize       Int      @default(0)
+  lastWinRate      Float    @default(0)
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+}
