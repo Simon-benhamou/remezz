@@ -1577,6 +1577,22 @@ async function updateSessionNextCheck(sessionId: string, nextCheck: Date): Promi
   }
 }
 
+async function mergeSessionProfileJson(sessionId: string, patch: Record<string, any>) {
+  const session = await prisma.agentSession.findUnique({
+    where: { id: sessionId },
+    select: { profileJson: true, startBalanceUsd: true },
+  });
+  const base = ((session?.profileJson as any) || {}) as Record<string, any>;
+  const merged = { ...base, ...patch } as Record<string, any>;
+  if (session?.startBalanceUsd != null && merged.startBalanceUsd == null) {
+    merged.startBalanceUsd = Number(session.startBalanceUsd);
+  }
+  return prisma.agentSession.update({
+    where: { id: sessionId },
+    data: { profileJson: merged as any },
+  });
+}
+
 /**
  * Initialize intelligent agent for a session
  */
@@ -1619,12 +1635,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       console.log(`💤 Setting session ${sessionId} to sleep mode - next scan in 2h`);
       
       try { await markDecisionCancelled(sessionId); } catch (error) { console.warn('sleep_mode cancel decision failed:', error); }
-      await prisma.agentSession.update({
-        where: { id: sessionId },
-        data: {
-          profileJson: sleepConfig as any,
-        }
-      });
+      await mergeSessionProfileJson(sessionId, sleepConfig);
       await mergePlanContainer(sessionId, { intelligentHistory: clampHistory(sleepHistory) });
       
       console.log(`✅ Session ${sessionId} set to sleep mode for 2h`);
@@ -1652,7 +1663,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
           sleepReason: 'symbol_conflict'
         };
         try { await markDecisionCancelled(sessionId); } catch (error) { console.warn('conflict cancel decision failed:', error); }
-        await prisma.agentSession.update({ where: { id: sessionId }, data: { profileJson: sleepConfig as any } });
+        await mergeSessionProfileJson(sessionId, sleepConfig);
         await mergePlanContainer(sessionId, { intelligentHistory: clampHistory([{ timestamp: new Date().toISOString(), action: 'intelligent_enter_sleep', reason: 'symbol_conflict', nextScan: sleepConfig.nextScanDue }]) });
         console.log(`💤 ${sessionId} sleeping 2h due to symbol conflict`);
         return true;
@@ -1733,14 +1744,9 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       console.error(`❌ SQL update failed:`, error);
     }
     
-    await prisma.agentSession.update({
-      where: { id: sessionId },
-      data: {
-        profileJson: {
-          ...intelligentConfig,
-          originalSymbol: bestOpportunity.symbol
-        } as any,
-      }
+    await mergeSessionProfileJson(sessionId, {
+      ...intelligentConfig,
+      originalSymbol: bestOpportunity.symbol,
     });
     await mergePlanContainer(sessionId, { intelligentHistory: clampHistory(intelligentHistory) });
 
@@ -1890,7 +1896,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
             previousSymbol: session.symbol,
             nextScan: sleepConfig.nextScanDue
           }];
-          await prisma.agentSession.update({ where: { id: session.id }, data: { profileJson: sleepConfig as any } });
+        await mergeSessionProfileJson(session.id, sleepConfig);
           await mergePlanContainer(session.id, { intelligentHistory: clampHistory(history) });
           return;
         }
@@ -1922,7 +1928,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         // Persist sleepMisses to allow auto-relax after two misses
         try {
           const sleepCfg = { ...(config || {}), nextScanDue: nextCheck.toISOString(), lastScan: now.toISOString(), sleepMisses: newMiss };
-          await prisma.agentSession.update({ where: { id: session.id }, data: { profileJson: sleepCfg as any } });
+        await mergeSessionProfileJson(session.id, sleepCfg);
         } catch {}
         await updateSessionNextCheck(session.id, nextCheck);
         return;
@@ -2054,13 +2060,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         nextScan: sleepConfig.nextScanDue
       }];
       
-      await prisma.agentSession.update({
-        where: { id: session.id },
-        data: {
-          profileJson: sleepConfig as any,
-          // Keep currentSymbol for now - will be cleared if needed
-        }
-      });
+      await mergeSessionProfileJson(session.id, sleepConfig);
       await mergePlanContainer(session.id, { intelligentHistory: clampHistory(newHistory) });
       
       console.log(`💤 Session ${session.id} entered sleep mode for 2h`);

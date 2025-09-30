@@ -144,7 +144,7 @@ export default function BacklogPage() {
             <div>
               <Title level={3} style={{ margin: 0 }}>Agent Activity Feed</Title>
               <Text type="secondary">
-                Live stream of operational signals for currently running agents.
+                Live operational timeline for the active crypto agents.
               </Text>
             </div>
           </Space>
@@ -180,35 +180,35 @@ export default function BacklogPage() {
                 ? activeSessions.find((s: any) => s.id === evt.sessionId)
                 : null;
               return (
-                <List.Item key={evt.id} style={{ paddingLeft: 0, paddingRight: 0 }}>
-                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                    <Space size="small" wrap>
+                <List.Item key={evt.id} style={{ padding: '12px 8px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
                       <Tag color={meta.color} icon={meta.icon}>{meta.label}</Tag>
-                      {evt.symbol && <Tag>{evt.symbol}</Tag>}
+                      {evt.symbol && (
+                        <Tag bordered={false} style={{ background: '#eef2ff', color: '#312e81' }}>{evt.symbol}</Tag>
+                      )}
                       {session && (
-                        <Tag color="geekblue">
-                          {session.symbol} · {session.mode?.toUpperCase()}
-                        </Tag>
+                        <Text type="secondary">{session.mode?.toUpperCase()}</Text>
                       )}
                       <Text type="secondary">{formatTime(evt.ts)}</Text>
-                    </Space>
-                    <Text strong>{decorated.title}</Text>
+                    </div>
+                    <Text strong style={{ fontSize: 14 }}>{decorated.title}</Text>
                     {decorated.description && (
-                      <Text type="secondary">{decorated.description}</Text>
+                      <Text type="secondary" style={{ fontSize: 13 }}>{decorated.description}</Text>
                     )}
                     {decorated.detailEntries.length > 0 && (
-                      <Space wrap size={6} style={{ marginTop: 4 }}>
+                      <Space wrap size={8} style={{ marginTop: 4 }}>
                         {decorated.detailEntries.map((entry) => (
                           <Tooltip key={entry.key} title={entry.label}>
-                            <Tag bordered={false} style={{ background: '#f8fafc', color: '#0f172a' }}>
-                              <strong>{entry.value}</strong>
-                              {entry.label ? <span style={{ marginLeft: 6, color: '#64748b', fontWeight: 500 }}>{entry.label}</span> : null}
+                            <Tag bordered={false} style={{ background: '#f4f4f5', color: '#111827', borderRadius: 12 }}>
+                              <span style={{ fontWeight: 600 }}>{entry.value}</span>
+                              {entry.label ? <span style={{ marginLeft: 6, color: '#6b7280', fontWeight: 500 }}>{entry.label}</span> : null}
                             </Tag>
                           </Tooltip>
                         ))}
                       </Space>
                     )}
-                  </Space>
+                  </div>
                 </List.Item>
               );
             }}
@@ -247,36 +247,28 @@ export default function BacklogPage() {
                     const decorated = decorateEvent(evt);
                     const meta = decorated.meta;
                     return (
-                      <List.Item key={evt.id} style={{ border: 'none', paddingLeft: 0, paddingRight: 0 }}>
-                        <Space
-                          size="middle"
-                          style={{
-                            width: '100%',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
-                          }}
-                        >
-                          <Space size="small" wrap>
+                      <List.Item key={evt.id} style={{ padding: '10px 6px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                             <Tag color={meta.color} icon={meta.icon}>{meta.label}</Tag>
                             <Text>{evt.source}</Text>
-                          </Space>
-                          <Text type="secondary">{formatTime(evt.ts)}</Text>
-                        </Space>
-                        <Text strong>{decorated.title}</Text>
-                        {decorated.description && (
-                          <Text type="secondary">{decorated.description}</Text>
-                        )}
-                        {decorated.detailEntries.length > 0 && (
-                          <Space wrap size={6} style={{ marginTop: 4 }}>
-                            {decorated.detailEntries.map((entry) => (
-                              <Tag key={entry.key} bordered={false} style={{ background: '#f1f5f9', color: '#0f172a' }}>
-                                <strong>{entry.value}</strong>
-                                {entry.label ? <span style={{ marginLeft: 6, color: '#64748b', fontWeight: 500 }}>{entry.label}</span> : null}
-                              </Tag>
-                            ))}
-                          </Space>
-                        )}
+                            <Text type="secondary">{formatTime(evt.ts)}</Text>
+                          </div>
+                          <Text strong style={{ fontSize: 13 }}>{decorated.title}</Text>
+                          {decorated.description && (
+                            <Text type="secondary" style={{ fontSize: 12 }}>{decorated.description}</Text>
+                          )}
+                          {decorated.detailEntries.length > 0 && (
+                            <Space wrap size={8}>
+                              {decorated.detailEntries.map((entry) => (
+                                <Tag key={entry.key} bordered={false} style={{ background: '#eef2ff', color: '#1e293b', borderRadius: 12 }}>
+                                  <span style={{ fontWeight: 600 }}>{entry.value}</span>
+                                  {entry.label ? <span style={{ marginLeft: 6, color: '#475569', fontWeight: 500 }}>{entry.label}</span> : null}
+                                </Tag>
+                              ))}
+                            </Space>
+                          )}
+                        </div>
                       </List.Item>
                     );
                   }}

@@ -128,6 +128,7 @@ export class ReboundRejectionAgent {
   private cooldownTimer: NodeJS.Timeout | null = null;
   private cooldownContext: { reason: string; guard?: RiskDecision; triggeredAt: number } | null = null;
   private lastExitCooldownMs = 0;
+  private maxNotionalCapUsd = Infinity;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -158,6 +159,19 @@ export class ReboundRejectionAgent {
     this.broker = profile.mode === 'live'
       ? new LiveBroker(profile.userId || '')
       : new PaperBroker(profile.startBalanceUsd);
+
+    const budgetFractionRaw = typeof profile.budgetFraction === 'number'
+      ? profile.budgetFraction
+      : (typeof (profile as any).budgetPct === 'number' ? ((profile as any).budgetPct > 1 ? (profile as any).budgetPct / 100 : (profile as any).budgetPct) : 1);
+    const safeBudgetFraction = Math.min(1, Math.max(0.1, budgetFractionRaw || 1));
+    const leverageCap = Math.max(1, Math.min(10, profile.maxLeverage || 1));
+    const baselineBalance = typeof profile.startBalanceUsd === 'number' && profile.startBalanceUsd > 0
+      ? profile.startBalanceUsd
+      : undefined;
+    this.maxNotionalCapUsd = baselineBalance != null
+      ? Math.max(0, baselineBalance * leverageCap * safeBudgetFraction)
+      : Infinity;
+
     this.state = 'SCAN';
     this.logMovement('Agent activated', `Mode=${profile.mode}, symbol=${profile.symbol}`, {
       tags: ['agent', 'activation'],
@@ -492,8 +506,16 @@ export class ReboundRejectionAgent {
     const equityCapNotional = Math.max(0, bal.equityUsd * (this.profile.maxLeverage || 1));
     const budgetCapNotional = Math.max(0, capBalance * (this.profile.maxLeverage || 1));
     const hardNotionalCap = Math.min(equityCapNotional || Infinity, budgetCapNotional || Infinity);
-    if (hardNotionalCap > 0 && notional > hardNotionalCap) {
-      const cappedQty = hardNotionalCap / Math.max(entry, 1e-8);
+    const configuredCapNotional = Number.isFinite(this.maxNotionalCapUsd) && this.maxNotionalCapUsd > 0
+      ? this.maxNotionalCapUsd
+      : Infinity;
+    const effectiveNotionalCap = Math.min(
+      hardNotionalCap > 0 ? hardNotionalCap : Infinity,
+      configuredCapNotional > 0 ? configuredCapNotional : Infinity,
+    );
+
+    if (Number.isFinite(effectiveNotionalCap) && effectiveNotionalCap > 0 && notional > effectiveNotionalCap) {
+      const cappedQty = effectiveNotionalCap / Math.max(entry, 1e-8);
       recordOpsEvent({
         level: 'warn',
         source: 'position_sizing',
@@ -502,11 +524,13 @@ export class ReboundRejectionAgent {
         symbol: this.profile.symbol,
         details: {
           requestedNotional: notional,
-          cappedNotional: hardNotionalCap,
+          cappedNotional: effectiveNotionalCap,
           requestedQty: qty,
           cappedQty,
           equityUsd: bal.equityUsd,
           maxLeverage: this.profile.maxLeverage,
+          startBalanceUsd: this.profile.startBalanceUsd,
+          configuredCapNotional,
         },
       });
       qty = cappedQty;
@@ -2211,9 +2235,9 @@ export class ReboundRejectionAgent {
         sizeMultiplier *= (1 + bonus);
       }
     } catch {}
-    // Apply bounds (0.5x to 1.5x of base risk)
-    sizeMultiplier = Math.max(0.5, Math.min(1.5, sizeMultiplier));
-    
+    // Apply bounds (keep between 0.35x and 1.8x of base risk)
+    sizeMultiplier = Math.max(0.35, Math.min(1.8, sizeMultiplier));
+
     return sizeMultiplier;
   }
 

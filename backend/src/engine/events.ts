@@ -247,9 +247,12 @@ export async function startEventEngine(){
               riskPerTradePct: Math.min(5, Math.max(0.5, p.riskPerTradePct ?? 1.5)),
               dailyLossLimitPct: Math.min(4, Math.max(3, p.dailyLossLimitPct ?? 3.5)),
               timestamp: new Date().toISOString(),
-              startBalanceUsd: p.startBalanceUsd,
+              startBalanceUsd: (typeof p.startBalanceUsd === 'number' && p.startBalanceUsd > 0)
+                ? p.startBalanceUsd
+                : (typeof s.startBalanceUsd === 'number' && s.startBalanceUsd > 0 ? Number(s.startBalanceUsd) : undefined),
               budgetFraction: (()=>{ let bf = typeof p.budgetPct==='number'? p.budgetPct:1; if (bf>1) bf/=100; return Math.min(1, Math.max(0.1, bf)); })(),
               aggressiveness: (p.aggressiveness === 'reactive' || p.aggressiveness === 'aggressive') ? p.aggressiveness : 'conservative',
+              userId: s.userId ?? undefined,
             };
             try { await (await import('../agent/hub.js')).AgentHub.activate(s.id, profile as any); } catch {}
             // If a persisted plan exists, re-arm the agent automatically without calling LLM again
