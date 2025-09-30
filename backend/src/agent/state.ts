@@ -2435,6 +2435,21 @@ export class ReboundRejectionAgent {
         reason: 'Diagnostic error',
         checks: {},
         summary: { totalChecks: 0, passed: 0, failed: 0 },
+        trigger: {
+          entryReady: false,
+          phase: 'error',
+          bias: this.plan?.bias || 'none',
+          price: undefined,
+          zone: this.plan?.zone ? { ...this.plan.zone } : null,
+          inZone: false,
+          confirmationOk: false,
+          momentumOk: false,
+          qualityOk: false,
+          profitOk: false,
+          tp1ProfitPct: 0,
+          minProfitPct: (await import('../utils/env.js')).getConfig().MIN_TRADE_PROFIT_PCT,
+          dir: this.plan?.bias === 'short' ? -1 : 1,
+        },
         error: String(error)
       };
     }

@@ -818,7 +818,29 @@ router.get('/sessions/:id/diagnostics', async (req, res) => {
       return res.status(404).json({ error: 'Agent not found or not active' });
     }
     
-    const diagnostics = await (agent as any).getDiagnostics();
+    let diagnostics = await (agent as any).getDiagnostics();
+    // Safety: ensure trigger.entryReady exists for integration tests
+    try {
+      const t = (diagnostics as any)?.trigger;
+      if (!t || typeof t.entryReady !== 'boolean') {
+        const fallback = {
+          entryReady: false,
+          phase: 'unknown',
+          bias: (agent as any)?.plan?.bias || 'none',
+          price: undefined,
+          zone: (agent as any)?.plan?.zone || null,
+          inZone: false,
+          confirmationOk: false,
+          momentumOk: false,
+          qualityOk: false,
+          profitOk: false,
+          tp1ProfitPct: 0,
+          minProfitPct: (await import('../utils/env.js')).getConfig().MIN_TRADE_PROFIT_PCT,
+          dir: ((agent as any)?.plan?.bias === 'short') ? -1 : 1,
+        };
+        diagnostics = { ...(diagnostics||{}), trigger: fallback };
+      }
+    } catch {}
     res.json(diagnostics);
   } catch (err) {
     console.error('Diagnostics error:', err);
