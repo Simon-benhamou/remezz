@@ -17,6 +17,7 @@ export default function SessionsPage(){
   const [filteredRows, setFilteredRows] = React.useState<any[]>([]);
   const [open, setOpen] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
+  const [restartSessionId, setRestartSessionId] = React.useState<string | null>(null);
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
@@ -345,15 +346,17 @@ export default function SessionsPage(){
 
   const relaunch = async (r:any)=>{
     const p = r.profile || {};
+    setRestartSessionId(r.id);
     form.setFieldsValue({
       symbol: r.symbol,
-      mode,
+      mode: r.mode,
       startBalanceUsd: r.startBalanceUsd,
       riskPerTradePct: Math.min(5, Math.max(0.5, p.riskPerTradePct ?? 1.5)),
       maxLeverage: Math.min(10, Math.max(1, p.maxLeverage ?? 4)),
       dailyLossLimitPct: p.dailyLossLimitPct ?? 3.5,
       budgetPct: p.budgetPct ?? 100,
       aggressiveness: p.aggressiveness || 'conservative',
+      smartAutoMode: !!r.isSmartAgent,
     });
     setOpen(true);
   };
@@ -492,14 +495,17 @@ export default function SessionsPage(){
                     type='primary' 
                     icon={<PlayCircleOutlined />}
                     onClick={()=>{ 
+                      setRestartSessionId(null);
                       form.setFieldsValue({ 
                         symbol:'BTC/USDT', 
                         mode, 
+                        startBalanceUsd: undefined,
                         riskPerTradePct:1.5, 
                         maxLeverage:4, 
                         dailyLossLimitPct:3.5, 
                         budgetPct:100,
-                        aggressiveness:'conservative'
+                        aggressiveness:'conservative',
+                        smartAutoMode: false
                       }); 
                       setOpen(true); 
                     }}
@@ -1186,51 +1192,54 @@ export default function SessionsPage(){
               color: '#1e293b',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
             }}>
-              🚀 Activate New Agent
+              {restartSessionId ? '🔄 Restart Agent' : '🚀 Activate New Agent'}
             </span>
           }
-          okText='Start Agent' 
+          okText={restartSessionId ? 'Restart Agent' : 'Start Agent'} 
           cancelText='Cancel' 
-          onCancel={()=> setOpen(false)} 
+          onCancel={()=> { setOpen(false); setRestartSessionId(null); }} 
           confirmLoading={starting}
           style={{
             fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
           }}
           onOk={async ()=>{
             let hide: (() => void) | null = null;
+            const sessionIdForRestart = restartSessionId;
+            const isRestart = Boolean(sessionIdForRestart);
             try {
               setStarting(true);
               const v = await form.validateFields();
-              
-              // Debug: Log form values
+
               console.log('🔍 Form values BEFORE processing:', v);
               console.log('🎯 Auto-Select Mode:', v.smartAutoMode);
-              
-              // If Auto-Select Mode is enabled, remove symbol requirement and add smart mode flags
-              if (v.smartAutoMode) {
+
+              if (v.smartAutoMode && !isRestart) {
                 console.log('🔄 Processing Auto-Select mode...');
                 console.log('📋 Symbol before delete:', v.symbol);
-                delete v.symbol; // Remove symbol requirement
+                delete v.symbol;
                 console.log('📋 Symbol after delete:', v.symbol);
-                v.isSmartAgent = true; // Flag for backend
+                v.isSmartAgent = true;
                 v.smartConfig = {
-                  minHoldDuration: 24 * 60 * 60 * 1000, // 24h in ms
-                  rescanInterval: 6 * 60 * 60 * 1000,    // 6h in ms
-                  momentumThreshold: 0.5,                 // Très bas pour garantir des résultats
-                  volumeThreshold: 10000                  // Volume minimum très bas ($10K)
+                  minHoldDuration: 24 * 60 * 60 * 1000,
+                  rescanInterval: 6 * 60 * 60 * 1000,
+                  momentumThreshold: 0.5,
+                  volumeThreshold: 10000
                 };
-                
-                console.log('✅ Auto-Select payload ready:', v);
-                
-                // Validate smart config
+
                 if (!v.smartConfig.minHoldDuration || !v.smartConfig.rescanInterval) {
                   message.error('Smart Agent configuration is invalid. Please try again.');
                   setStarting(false);
                   return;
                 }
+              } else if (isRestart) {
+                delete v.smartAutoMode;
+                delete v.smartConfig;
               }
-              
-              // Check API keys for live mode
+
+              if (isRestart && sessionIdForRestart) {
+                v.sessionId = sessionIdForRestart;
+              }
+
               if (String(v.mode) === 'live') {
                 try {
                   const apiStatus = await api.client.get('/api/user/api-keys/status');
@@ -1245,33 +1254,53 @@ export default function SessionsPage(){
                   return;
                 }
               }
-              
-              // Front guard: cap startBalanceUsd to exchange equity when live
+
               if (String(v.mode) === 'live' && exBal?.totalUsd != null && v.startBalanceUsd != null) {
-                v.startBalanceUsd = Math.min(Number(v.startBalanceUsd||0), Number(exBal.totalUsd||0));
+                v.startBalanceUsd = Math.min(Number(v.startBalanceUsd || 0), Number(exBal.totalUsd || 0));
               }
-              hide = message.loading('Starting agent...', 0);
+
+              hide = message.loading(isRestart ? 'Restarting agent...' : 'Starting agent...', 0);
               setOpen(false);
-              const res = await api.client.post('/api/agent/start', v);
+
+              const res = await (isRestart
+                ? api.client.post('/api/agent/restart', v)
+                : api.client.post('/api/agent/start', v));
+
               if (hide) hide();
-              // Invalider le cache après la création de la session
-              invalidateSmartly('session_created', { mode: v.mode as any });
-              message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
-              await load(true); // Force refresh after cache invalidation
-              // Navigate to the created session (preferred), fallback to first active
-              const sid = (res as any)?.data?.id;
-              if (sid) navigate(`/monitor/${sid}`); else {
-                const list = await api.listSessions(mode);
-                const active = list.find((r:any)=> !r.stoppedAt);
-                if (active) navigate(`/monitor/${active.id}`);
+
+              const cacheEvent = isRestart ? 'settings_changed' : 'session_created';
+              const sessionIdentifier = sessionIdForRestart || (res as any)?.data?.id;
+              invalidateSmartly(cacheEvent, { mode: v.mode as any, sessionId: sessionIdentifier });
+
+              if (isRestart) {
+                message.success('Agent restarted successfully!');
+              } else {
+                message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
+              }
+
+              await load(true);
+
+              if (isRestart && sessionIdForRestart) {
+                navigate(`/monitor/${sessionIdForRestart}`);
+              } else {
+                const sid = (res as any)?.data?.id;
+                if (sid) navigate(`/monitor/${sid}`); else {
+                  const list = await api.listSessions(mode);
+                  const active = list.find((r:any)=> !r.stoppedAt);
+                  if (active) navigate(`/monitor/${active.id}`);
+                }
               }
             } catch (e: any) {
               if (typeof hide === 'function') hide();
               const msg = String(e?.response?.data?.error || e?.message || e);
-              if (msg.includes('active_session_exists')) message.warning('Stop the active session first.');
-              else message.error('Failed to start session');
+              if (!isRestart && msg.includes('active_session_exists')) {
+                message.warning('Stop the active session first.');
+              } else {
+                message.error(isRestart ? 'Failed to restart session' : 'Failed to start session');
+              }
             } finally {
               setStarting(false);
+              setRestartSessionId(null);
             }
           }}
         >
@@ -1309,6 +1338,7 @@ export default function SessionsPage(){
                 style={{
                   background: smartAutoMode ? 'linear-gradient(135deg, #722ed1, #9254de)' : undefined
                 }}
+                disabled={!!restartSessionId}
               />
             </Form.Item>
 
@@ -1347,6 +1377,7 @@ export default function SessionsPage(){
                   style={{
                     fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
                   }}
+                  disabled={!!restartSessionId}
                 />
               </Form.Item>
             )}

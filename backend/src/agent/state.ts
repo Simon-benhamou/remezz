@@ -1795,7 +1795,15 @@ export class ReboundRejectionAgent {
     // 🔄 BIAS SWITCHING CHECK: Ensure plan bias matches performance-recommended bias
     const planBias = this.plan?.bias;
     const recommendedBias = this.performanceMetrics?.biasSwitching?.currentBias;
-    if (planBias && recommendedBias && planBias !== recommendedBias && planBias !== 'none') return false;
+    if (
+      planBias &&
+      planBias !== 'none' &&
+      recommendedBias &&
+      recommendedBias !== 'standby' &&
+      planBias !== recommendedBias
+    ) {
+      console.log(`⚖️ Bias divergence detected (plan=${planBias}, perf=${recommendedBias}) but proceeding with entry gates due to market opportunity`);
+    }
 
     // Intelligent per-crypto ATR threshold adaptation
     try {
@@ -1827,9 +1835,13 @@ export class ReboundRejectionAgent {
       const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.5 : ema20 < ema50 && emaSpread < -0.5;
       const strongAdx = adx >= 25;
       const atrDeficit = minAtr - atrPct;
+      const momentumPct = Math.abs(Number((snap as any)?.momentumPct ?? 0));
 
-      // Allow ATR flexibility only for high-quality setups
-      const allowFlexibility = trendAligned && strongAdx && atrDeficit <= 0.5;
+      const allowFlexibility = (
+        trendAligned &&
+        (strongAdx || momentumPct >= 1.0) &&
+        atrDeficit <= 0.8
+      );
 
       if (!allowFlexibility) {
         recordOpsEvent({
@@ -1850,14 +1862,16 @@ export class ReboundRejectionAgent {
     const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
     const bias = this.plan?.bias || 'none';
 
-    if (slopePctAbs < minSlopeAbsPct) {
+    const adjustedSlopeRequirement = Math.max(minSlopeAbsPct * 0.75, minSlopeAbsPct - 0.05);
+
+    if (slopePctAbs < adjustedSlopeRequirement) {
       recordOpsEvent({
         level: 'info',
         source: 'entry_gate',
         message: 'slope_too_flat',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
-        details: { slopePctAbs, min: minSlopeAbsPct, reason: reasonHint },
+        details: { slopePctAbs, min: adjustedSlopeRequirement, reason: reasonHint },
       });
       return false;
     }
@@ -1883,7 +1897,7 @@ export class ReboundRejectionAgent {
 
     // 1. EMA Trend Alignment (required)
     const emaSpread = ((ema20 - ema50) / ema50) * 100;
-    const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.5 : ema20 < ema50 && emaSpread < -0.5;
+    const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.25 : ema20 < ema50 && emaSpread < -0.25;
     if (!trendAligned) {
       recordOpsEvent({
         level: 'info',
@@ -1897,7 +1911,7 @@ export class ReboundRejectionAgent {
     }
 
     // 2. ADX Trend Strength (required) - Using realistic threshold
-    if (adx < 15) {
+    if (adx < 12) {
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -1910,7 +1924,7 @@ export class ReboundRejectionAgent {
     }
 
     // 3. RSI Position (required) - Using realistic thresholds
-    const rsiOptimal = bias === 'long' ? (rsi >= 30 && rsi <= 80) : (rsi >= 20 && rsi <= 70);
+    const rsiOptimal = bias === 'long' ? (rsi >= 25 && rsi <= 85) : (rsi >= 15 && rsi <= 75);
     if (!rsiOptimal) {
       recordOpsEvent({
         level: 'info',
@@ -1924,7 +1938,7 @@ export class ReboundRejectionAgent {
     }
 
     // 4. ATR Volatility (required)
-    if (atrPct < 0.5) {
+    if (atrPct < 0.35) {
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -1938,7 +1952,7 @@ export class ReboundRejectionAgent {
 
     // 5. Volume Confirmation (required)
     const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
-    if (volumeRatio < 0.8) {
+    if (volumeRatio < 0.6) {
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -2643,6 +2657,7 @@ export class ReboundRejectionAgent {
           this.state = 'EXIT';
           this.lastExitTime = Date.now();
           broadcast('agent_state', { state: this.state, reason: 'position_closed_on_exchange' }, this.profile.symbol, this.sessionId || undefined);
+          this.scheduleReactivation('position_closed_on_exchange');
           return;
         }
       } catch (error) {
@@ -2843,6 +2858,8 @@ export class ReboundRejectionAgent {
           realizedPnl
         }, this.profile.symbol, this.sessionId || undefined);
 
+        this.scheduleReactivation('position_exit_completed');
+
       } else {
         console.error(`Failed to exit position: ${exitOrder.status}`);
       }
@@ -2869,6 +2886,37 @@ export class ReboundRejectionAgent {
 
     const priceDiff = side === 'buy' ? exitPrice - entry : entry - exitPrice;
     return priceDiff * qty;
+  }
+
+  private scheduleReactivation(reason: string, delayOverrideMs?: number): void {
+    if (!this.profile || !this.plan) return;
+
+    const { TRADE_COOLDOWN_MS } = getConfig();
+    const delay = typeof delayOverrideMs === 'number'
+      ? Math.max(1000, delayOverrideMs)
+      : Math.min(Math.max(4000, Math.floor(TRADE_COOLDOWN_MS * 0.25)), 30000);
+
+    if (this.cooldownTimer) {
+      try { clearTimeout(this.cooldownTimer); } catch {}
+      this.cooldownTimer = null;
+    }
+
+    this.cooldownContext = { reason, triggeredAt: Date.now() };
+    this.state = 'COOLDOWN';
+    const cooldownReason = reason.startsWith('cooldown_') ? reason : `cooldown_${reason}`;
+    broadcast('agent_state', { state: this.state, reason: cooldownReason, cooldownMs: delay }, this.profile.symbol, this.sessionId || undefined);
+
+    this.cooldownTimer = setTimeout(async () => {
+      this.cooldownTimer = null;
+      this.cooldownContext = null;
+      if (!this.profile || !this.plan) return;
+      if (this.state === 'HALT') return;
+      try {
+        await this.validateAndArm();
+      } catch (error) {
+        console.warn('Failed to re-arm agent after cooldown:', error);
+      }
+    }, delay);
   }
 
   private shouldUpdateTrail(newTrailPrice: number, currentPrice: number): boolean {

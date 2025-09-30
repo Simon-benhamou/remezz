@@ -69,6 +69,8 @@ export const api = {
   ) =>
     (await client.post("/api/agent/start", { symbol, mode, startBalanceUsd }))
       .data,
+  restartSession: async (sessionId: string, payload: Record<string, any>) =>
+    (await client.post('/api/agent/restart', { sessionId, ...payload })).data,
   stopSession: async (sessionId: string, closePosition?: boolean) => (await client.post("/api/agent/stop", { sessionId, closePosition })).data,
   getSession: async () => (await client.get("/api/agent/session")).data,
   listSessions: async (mode?: string, includeStats?: boolean) => {

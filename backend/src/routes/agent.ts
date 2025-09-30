@@ -16,7 +16,7 @@ import { PlanZ } from '../agent/planSchema.js';
 import { getAICallsCount, getAIMetrics, setActiveSession } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
-import { savePlan } from '../services/planStore.js';
+import { savePlan, extractPersistedPlan } from '../services/planStore.js';
 import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
 
@@ -353,6 +353,143 @@ router.post('/stop', async (req,res)=>{
   broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol, s.id);
   await AgentHub.halt(s.id);
   res.json({ok:true});
+});
+
+router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const body = req.body as {
+      sessionId?: string;
+      riskPerTradePct?: number;
+      maxLeverage?: number;
+      dailyLossLimitPct?: number;
+      budgetPct?: number;
+      aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+      startBalanceUsd?: number;
+    };
+
+    const sessionId = body.sessionId;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'session_id_required' });
+    }
+
+    const existing = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+    if (!existing) {
+      return res.status(404).json({ error: 'session_not_found' });
+    }
+
+    if (!existing.stoppedAt) {
+      return res.status(400).json({ error: 'session_already_active' });
+    }
+
+    const currentProfile = ((existing as any).profileJson || {}) as Record<string, any>;
+
+    const safeRiskPct = Math.min(5, Math.max(0.5, Number(body.riskPerTradePct ?? currentProfile.riskPerTradePct ?? 1.5)));
+    const safeMaxLev = Math.min(10, Math.max(1, Number(body.maxLeverage ?? currentProfile.maxLeverage ?? 4)));
+    const safeDailyLoss = Math.min(4, Math.max(3, Number(body.dailyLossLimitPct ?? currentProfile.dailyLossLimitPct ?? 3.5)));
+
+    let budgetPctValue = Number(body.budgetPct ?? currentProfile.budgetPct ?? 100);
+    if (!Number.isFinite(budgetPctValue) || budgetPctValue <= 0) budgetPctValue = 100;
+    let budgetFraction = budgetPctValue;
+    if (budgetFraction > 1) budgetFraction = budgetFraction / 100;
+    budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
+    const storedBudgetPct = Math.round(budgetFraction * 100);
+
+    const aggressiveness = (['conservative', 'reactive', 'aggressive'] as const).includes(String(body.aggressiveness))
+      ? (body.aggressiveness as 'conservative' | 'reactive' | 'aggressive')
+      : (currentProfile.aggressiveness || 'reactive');
+
+    const startBal = typeof body.startBalanceUsd === 'number' && body.startBalanceUsd > 0
+      ? body.startBalanceUsd
+      : Number(existing.startBalanceUsd ?? currentProfile.startBalanceUsd ?? 0) || undefined;
+
+    const updatedProfileJson = {
+      ...currentProfile,
+      riskPerTradePct: safeRiskPct,
+      maxLeverage: safeMaxLev,
+      dailyLossLimitPct: safeDailyLoss,
+      budgetPct: storedBudgetPct,
+      aggressiveness,
+      startBalanceUsd: startBal,
+      timestamp: new Date().toISOString()
+    };
+
+    const updateData: any = {
+      stoppedAt: null,
+      profileJson: updatedProfileJson as any,
+    };
+    if (typeof startBal === 'number') updateData.startBalanceUsd = startBal;
+
+    const updated = await prisma.agentSession.update({
+      where: { id: sessionId },
+      data: updateData,
+    });
+
+    await setActiveSession(sessionId);
+
+    const ownerUserId = updated.userId || req.user?.id || undefined;
+    const agentProfile = {
+      symbol: updated.symbol,
+      mode: updated.mode as 'paper' | 'live',
+      maxLeverage: safeMaxLev,
+      riskPerTradePct: safeRiskPct,
+      dailyLossLimitPct: safeDailyLoss,
+      timestamp: new Date().toISOString(),
+      startBalanceUsd: startBal,
+      budgetFraction,
+      aggressiveness,
+      userId: ownerUserId,
+    } as any;
+
+    await AgentHub.activate(sessionId, agentProfile).catch((err) => {
+      console.error(`Failed to activate agent ${sessionId} on restart:`, err);
+    });
+
+    const agent = AgentHub.get(sessionId);
+    let plan = extractPersistedPlan((updated as any).planJson);
+    if (!plan && updated.symbol) {
+      try {
+        plan = await proposePlan(updated.symbol, { sessionId, fresh: true });
+        if (plan) {
+          await savePlan(sessionId, plan as any, { planMeta: { reason: 'restart' } });
+        }
+      } catch (error) {
+        console.warn(`Failed to generate plan during restart for ${sessionId}:`, error);
+      }
+    }
+
+    if (agent && plan) {
+      try {
+        await agent.propose(plan as any);
+        await agent.validateAndArm();
+      } catch (error) {
+        console.warn(`Failed to re-arm agent ${sessionId} with persisted plan:`, error);
+      }
+    }
+
+    if (updated.symbol) {
+      try {
+        const { strategy: strat, levels: lvls } = await requestStrategy({
+          symbol: updated.symbol,
+          trigger: 'restart',
+          sessionId,
+          fresh: true,
+          force: true,
+        });
+        broadcast('strategy', { ...(strat as any), levels: lvls }, updated.symbol, sessionId);
+      } catch (error) {
+        console.warn(`Strategy refresh failed during restart for ${sessionId}:`, error);
+      }
+    }
+
+    broadcast('session', { ...updated, stoppedAt: null }, updated.symbol, sessionId);
+    res.json({ ...updated, stoppedAt: null });
+  } catch (error) {
+    console.error('agent_restart_failed:', error);
+    res.status(500).json({
+      error: 'agent_restart_failed',
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 // Intelligent Agent status

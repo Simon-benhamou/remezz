@@ -1439,6 +1439,16 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
     }
   }
   
+  // Final aggressive pass: allow a second slot on high-momentum assets (>= 4% move) even if already used twice
+  for (const opportunity of opportunities) {
+    const currentUsage = symbolUsageMap.get(opportunity.symbol) || 0;
+    const momentum = Math.abs(opportunity.metrics?.momentum ?? 0);
+    if (currentUsage <= 2 && momentum >= 4) {
+      console.log(`⚡ High-momentum override: ${opportunity.symbol} selected despite usage ${currentUsage} (|Δ24h|=${momentum.toFixed(2)}%)`);
+      return opportunity;
+    }
+  }
+
   // If we get here, all qualified symbols are already used 2+ times
   console.log(`😴 All ${opportunities.length} qualified opportunities already have 2+ active agents → SLEEP mode`);
   return null;
@@ -1521,7 +1531,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     const currentAgentCount = await getActiveAgentCountForSymbol(bestOpportunity.symbol, sessionId);
     const strongMomentum = Math.abs(bestOpportunity.metrics.momentum) > 2.0; // Strong movement exception
     
-    if (currentAgentCount > 0 && (!strongMomentum || currentAgentCount >= 2)) {
+    if (currentAgentCount > 1 && !strongMomentum) {
       console.log(`🚫 Agent limit exceeded for ${bestOpportunity.symbol} (${currentAgentCount} active, momentum: ${bestOpportunity.metrics.momentum.toFixed(2)})`);
       const retry = await getBestIntelligentOpportunity(sessionId);
       if (!retry || retry.symbol === bestOpportunity.symbol) {
