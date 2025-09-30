@@ -119,6 +119,7 @@ export class ReboundRejectionAgent {
   private recoveryTimer: NodeJS.Timeout | null = null;
   private cooldownTimer: NodeJS.Timeout | null = null;
   private cooldownContext: { reason: string; guard?: RiskDecision; triggeredAt: number } | null = null;
+  private lastExitCooldownMs = 0;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -330,14 +331,16 @@ export class ReboundRejectionAgent {
     if (this.pos || this.entering) return;
     
     // 🚨 COOLDOWN CHECK: Prevent entries too soon after last exit
-    const { TRADE_COOLDOWN_MS } = (await import('../utils/env.js')).getConfig();
+    const cfg = (await import('../utils/env.js')).getConfig();
+    const cooldownMs = this.lastExitCooldownMs > 0 ? this.lastExitCooldownMs : cfg.TRADE_COOLDOWN_MS;
     const timeSinceLastExit = Date.now() - this.lastExitTime;
-    
-    if (this.lastExitTime > 0 && timeSinceLastExit < TRADE_COOLDOWN_MS) {
-      const cooldownRemaining = (TRADE_COOLDOWN_MS - timeSinceLastExit) / 1000;
+
+    if (this.lastExitTime > 0 && timeSinceLastExit < cooldownMs) {
+      const cooldownRemaining = (cooldownMs - timeSinceLastExit) / 1000;
       console.log(`⏳ Trade cooldown: ${cooldownRemaining.toFixed(0)}s remaining - skipping entry`);
       return;
     }
+    this.lastExitCooldownMs = 0;
     
     this.entering = true;
     let snap = _snap;
@@ -372,9 +375,9 @@ export class ReboundRejectionAgent {
     const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
     
     // CRYPTO PROFIT FILTER: Minimum profit threshold
-    const cfg = getConfig();
+    const cfgProfit = getConfig();
     // Aggressiveness-aware min profitability
-    let minProfitPct = cfg.MIN_TRADE_PROFIT_PCT;
+    let minProfitPct = cfgProfit.MIN_TRADE_PROFIT_PCT;
     const levelProfit = this.profile?.aggressiveness || 'conservative';
     if (levelProfit === 'reactive') minProfitPct = Math.max(0.6, minProfitPct - 0.2);
     if (levelProfit === 'aggressive') minProfitPct = Math.max(0.5, minProfitPct - 0.3);
@@ -2956,7 +2959,13 @@ export class ReboundRejectionAgent {
           realizedPnl
         }, this.profile.symbol, this.sessionId || undefined);
 
-        this.scheduleReactivation('position_exit_completed');
+        const cooldownCfg = getConfig();
+        const winCooldown = cooldownCfg.TRADE_COOLDOWN_WIN_MS || (cooldownCfg.TRADE_COOLDOWN_MS * 0.2);
+        const lossCooldown = cooldownCfg.TRADE_COOLDOWN_LOSS_MS || cooldownCfg.TRADE_COOLDOWN_MS;
+        const exitCooldown = realizedPnl > 0 ? winCooldown : lossCooldown;
+        this.lastExitCooldownMs = exitCooldown;
+
+        this.scheduleReactivation('position_exit_completed', exitCooldown);
 
       } else {
         console.error(`Failed to exit position: ${exitOrder.status}`);
@@ -2989,10 +2998,11 @@ export class ReboundRejectionAgent {
   private scheduleReactivation(reason: string, delayOverrideMs?: number): void {
     if (!this.profile || !this.plan) return;
 
-    const { TRADE_COOLDOWN_MS } = getConfig();
+    const cfg = getConfig();
+    const baseCooldown = this.lastExitCooldownMs || cfg.TRADE_COOLDOWN_MS;
     const delay = typeof delayOverrideMs === 'number'
       ? Math.max(1000, delayOverrideMs)
-      : Math.min(Math.max(4000, Math.floor(TRADE_COOLDOWN_MS * 0.25)), 30000);
+      : Math.min(Math.max(4000, Math.floor(baseCooldown * 0.25)), Math.max(4000, Math.min(baseCooldown, 30000)));
 
     if (this.cooldownTimer) {
       try { clearTimeout(this.cooldownTimer); } catch {}
@@ -3047,25 +3057,16 @@ export class ReboundRejectionAgent {
   private async checkPartialExits(price: number, snap: TechnicalSnapshot): Promise<void> {
     if (!this.pos || !this.plan || this.pos.partialTaken) return;
 
-    const unrealizedR = this.calculateUnrealizedR(price);
+    const firstTarget = this.pos.tp[0] ?? (
+      this.pos.side === 'buy'
+        ? this.pos.entry + this.plan.stopDistance
+        : this.pos.entry - this.plan.stopDistance
+    );
 
-    // Check for partial exit at intermediate profit targets
-    if (this.pos.tp.length > 1 && unrealizedR >= 1.5) {
-      const intermediateTp = this.pos.tp[0]; // First TP level
-      const hitIntermediateTp = this.pos.side === 'buy' ? price >= intermediateTp : price <= intermediateTp;
+    const hitFirstTarget = this.pos.side === 'buy' ? price >= firstTarget : price <= firstTarget;
 
-      if (hitIntermediateTp) {
-        await this.executePartialExit(price, intermediateTp, 'intermediate_profit_target');
-      }
-    }
-
-    // Scale out at 2R for risk management
-    if (unrealizedR >= 2.0 && !this.pos.partialTaken) {
-      const scaleOutPrice = this.pos.side === 'buy' ?
-        this.pos.entry + 2 * this.plan.stopDistance :
-        this.pos.entry - 2 * this.plan.stopDistance;
-
-      await this.executePartialExit(price, scaleOutPrice, 'scale_out_2R');
+    if (hitFirstTarget) {
+      await this.executePartialExit(price, firstTarget, 'first_target');
     }
   }
 
@@ -3073,16 +3074,16 @@ export class ReboundRejectionAgent {
     if (!this.pos || !this.broker || !this.profile) return;
 
     try {
-      const partialQty = Math.floor(this.pos.qty * 0.5); // Exit 50% of position
-      if (partialQty <= 0) return;
+      const rawQty = this.pos.qty * 0.5;
+      const partialQty = Number(rawQty.toFixed(8));
+      if (!(partialQty > 0 && partialQty < this.pos.qty)) return;
 
       const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
       const partialExit = await this.broker.place({
         symbol: this.profile.symbol,
         side: exitSide,
-        type: 'limit',
+        type: 'market',
         qty: partialQty,
-        price: targetPrice,
         leverage: this.profile.maxLeverage
       });
 
@@ -3099,7 +3100,8 @@ export class ReboundRejectionAgent {
         const newStop = this.pos.breakeven || this.pos.entry;
         this.pos.stop = newStop;
 
-        console.log(`Partial exit: ${partialExit.filledQty} @ ${partialExit.avgPrice || targetPrice} (${reason})`);
+        const fillPrice = partialExit.avgPrice || price;
+        console.log(`Partial exit: ${partialExit.filledQty} @ ${fillPrice} (${reason})`);
 
         // Record partial exit
         recordOpsEvent({
@@ -3110,7 +3112,7 @@ export class ReboundRejectionAgent {
           symbol: this.profile.symbol,
           details: {
             partialQty: partialExit.filledQty,
-            exitPrice: partialExit.avgPrice || targetPrice,
+            exitPrice: fillPrice,
             remainingQty: this.pos.qty,
             newStop
           }

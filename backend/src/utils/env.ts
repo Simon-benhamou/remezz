@@ -85,6 +85,8 @@ export type Cfg = {
   // Trading timing controls
   MIN_HOLD_TIME_MS: number;         // Minimum hold time before any exit (except critical SL)
   TRADE_COOLDOWN_MS: number;        // Cooldown between trades to prevent over-trading
+  TRADE_COOLDOWN_WIN_MS: number;
+  TRADE_COOLDOWN_LOSS_MS: number;
   CRITICAL_LOSS_PCT: number;        // Loss threshold for immediate exit (bypass min hold)
   // Trade quality filters
   MIN_TRADE_PROFIT_PCT: number;     // Minimum expected profit to enter a trade (1-2%)
@@ -186,6 +188,8 @@ export function getConfig(): Cfg {
     // Trading timing controls to prevent over-trading
     MIN_HOLD_TIME_MS: Number(e.MIN_HOLD_TIME_MS || "1800000"), // 30 minutes minimum for crypto
     TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "600000"), // 10 minutes cooldown for crypto
+    TRADE_COOLDOWN_WIN_MS: Number(e.TRADE_COOLDOWN_WIN_MS || Math.min(Number(e.TRADE_COOLDOWN_MS || 600000), 90000)),
+    TRADE_COOLDOWN_LOSS_MS: Number(e.TRADE_COOLDOWN_LOSS_MS || Number(e.TRADE_COOLDOWN_MS || 600000)),
     CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "3.0"), // 3% loss = immediate exit (increased for crypto)
     // Trade quality filters
     // Lowered to trigger more realistic crypto trades while keeping quality
