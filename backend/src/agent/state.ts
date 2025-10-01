@@ -9,7 +9,7 @@ import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
 import { broadcast } from '../ws/hub.js';
 import { recordEnter, recordExit, updateProtectiveSnapshot, loadActivePosition } from './persistence.js';
 import { recomputeKpi } from '../metrics/kpi.js';
-import { getConfig } from '../utils/env.js';
+import { getConfig, getModeParams } from '../utils/env.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
@@ -886,16 +886,18 @@ export class ReboundRejectionAgent {
   private effectiveEntryThresholds() {
     const cfg = getConfig();
     const level = this.profile?.aggressiveness || 'conservative';
+    const modeParams = getModeParams(level);
+    
     let ENTRY_SHORT_MIN_ADX = cfg.ENTRY_SHORT_MIN_ADX;
     let ENTRY_LONG_MIN_ADX = cfg.ENTRY_LONG_MIN_ADX;
     let ENTRY_SHORT_MIN_RSI = cfg.ENTRY_SHORT_MIN_RSI;
     let ENTRY_LONG_MAX_RSI = cfg.ENTRY_LONG_MAX_RSI;
-    let ENTRY_MIN_ATR_PCT = cfg.ENTRY_MIN_ATR_PCT;
+    let ENTRY_MIN_ATR_PCT = modeParams.minAtrPct; // Use mode-specific ATR threshold
     let ENTRY_MIN_SLOPE_ABS_PCT = cfg.ENTRY_MIN_SLOPE_ABS_PCT;
+    
     if (level === 'reactive') {
       ENTRY_SHORT_MIN_ADX = Math.max(10, ENTRY_SHORT_MIN_ADX - 2);
       ENTRY_LONG_MIN_ADX = Math.max(8, ENTRY_LONG_MIN_ADX - 2);
-      ENTRY_MIN_ATR_PCT = Math.max(0.25, ENTRY_MIN_ATR_PCT * 0.75); // Plus flexible: 0.7 → 0.52%
       ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.008, ENTRY_MIN_SLOPE_ABS_PCT * 0.67);
       // Wider RSI bands for crypto on reactive mode
       ENTRY_SHORT_MIN_RSI = Math.max(35, ENTRY_SHORT_MIN_RSI - 5);
@@ -903,7 +905,6 @@ export class ReboundRejectionAgent {
     } else if (level === 'aggressive') {
       ENTRY_SHORT_MIN_ADX = Math.max(8, ENTRY_SHORT_MIN_ADX - 4);
       ENTRY_LONG_MIN_ADX = Math.max(6, ENTRY_LONG_MIN_ADX - 4);
-      ENTRY_MIN_ATR_PCT = Math.max(0.15, ENTRY_MIN_ATR_PCT * 0.5); // Très flexible: 0.7 → 0.35%
       ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.006, ENTRY_MIN_SLOPE_ABS_PCT * 0.5);
       // Claude-style RSI flexibility for aggressive mode
       ENTRY_SHORT_MIN_RSI = Math.max(30, ENTRY_SHORT_MIN_RSI - 10);
@@ -2545,20 +2546,24 @@ export class ReboundRejectionAgent {
       message: !this.entering ? 'Not currently entering' : 'Entry in progress'
     };
 
-    // Risk management checks
+    // Risk management checks (mode-adaptive limits)
+    const limits = defaultLimits(this.profile?.aggressiveness);
+    const maxDailyTrades = limits.maxTradesPerDay;
+    const maxConsecStops = limits.maxConsecutiveStops;
+    
     checks.dailyTradeLimit = {
-      status: (this.tradesToday || 0) < 10 ? 'PASS' : 'FAIL',
-      reason: (this.tradesToday || 0) < 10 
-        ? `Daily trades: ${this.tradesToday || 0}/10 - within limit`
-        : `Daily trades: ${this.tradesToday || 0}/10 - limit exceeded for risk management`,
+      status: (this.tradesToday || 0) < maxDailyTrades ? 'PASS' : 'FAIL',
+      reason: (this.tradesToday || 0) < maxDailyTrades 
+        ? `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - within limit (${this.profile?.aggressiveness || 'reactive'} mode)`
+        : `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - limit exceeded for risk management`,
       message: `Trades today: ${this.tradesToday || 0}`
     };
 
     checks.consecutiveStopsLimit = {
-      status: (this.consecutiveStops || 0) < 3 ? 'PASS' : 'FAIL',
-      reason: (this.consecutiveStops || 0) < 3
-        ? `Consecutive stops: ${this.consecutiveStops || 0}/3 - acceptable loss streak`
-        : `Consecutive stops: ${this.consecutiveStops || 0}/3 - circuit breaker activated`,
+      status: (this.consecutiveStops || 0) < maxConsecStops ? 'PASS' : 'FAIL',
+      reason: (this.consecutiveStops || 0) < maxConsecStops
+        ? `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - acceptable loss streak (${this.profile?.aggressiveness || 'reactive'} mode)`
+        : `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - circuit breaker activated`,
       message: `Consecutive stops: ${this.consecutiveStops || 0}`
     };
 
@@ -3968,16 +3973,19 @@ export class ReboundRejectionAgent {
     let killReason: string | undefined;
     let details: any = {};
 
-    // Determine if we should trigger kill switch
+    // Determine if we should trigger kill switch (mode-adaptive)
+    const limits = defaultLimits(this.profile?.aggressiveness);
+    const maxConsecStops = limits.maxConsecutiveStops;
+    
     if (consecutiveLosses >= 5) {
       killReason = 'consecutive_losses';
       details = { consecutiveLosses, recentTrades: recentTrades.length };
     } else if (winRate < 0.2 && recentTrades.length >= 5) {
       killReason = 'poor_win_rate';
       details = { winRate, recentTrades: recentTrades.length };
-    } else if (this.consecutiveStops >= 3) {
+    } else if (this.consecutiveStops >= maxConsecStops) {
       killReason = 'multiple_stops';
-      details = { consecutiveStops: this.consecutiveStops };
+      details = { consecutiveStops: this.consecutiveStops, maxAllowed: maxConsecStops, mode: this.profile?.aggressiveness };
     }
 
     return {

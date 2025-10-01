@@ -1,5 +1,5 @@
 import { prisma } from '../db/client.js';
-import { getConfig } from '../utils/env.js';
+import { getConfig, getModeParams, type AgentAggressiveness } from '../utils/env.js';
 
 export type RiskContext = {
   sessionId: string;
@@ -7,6 +7,7 @@ export type RiskContext = {
   realizedPnlPctToday: number; // percent of start balance
   consecutiveStops: number;
   tradesToday: number;
+  aggressiveness?: AgentAggressiveness; // Agent mode for adaptive limits
 };
 
 export type RiskLimits = {
@@ -17,17 +18,19 @@ export type RiskLimits = {
   maxConsecutiveStops: number;
 };
 
-export const defaultLimits = (): RiskLimits => {
+export const defaultLimits = (aggressiveness: AgentAggressiveness = 'reactive'): RiskLimits => {
   const cfg = getConfig();
+  const modeParams = getModeParams(aggressiveness);
+  
   return {
     riskPctPerTrade: { 
       min: 0.5, 
-      max: cfg.AGGRESSIVE_MODE_ENABLED ? cfg.AGGRESSIVE_MAX_RISK_PCT : 2.5 
+      max: modeParams.riskPct 
     },
-    dailyLossLimitPct: Math.min(5.5, Math.max(1, cfg.DAILY_LOSS_LIMIT_PCT)),
+    dailyLossLimitPct: modeParams.dailyLossLimitPct,
     maxLeverage: 10,
-    maxTradesPerDay: cfg.MAX_TRADES_PER_DAY,
-    maxConsecutiveStops: cfg.MAX_CONSECUTIVE_STOPS,
+    maxTradesPerDay: modeParams.maxTradesPerDay,
+    maxConsecutiveStops: modeParams.maxConsecutiveStops,
   };
 };
 
@@ -37,10 +40,13 @@ export type RiskDecision = {
   action?: 'halt'|'cooldown'|'warn';
 };
 
-export async function assessRisk(ctx: RiskContext, limits = defaultLimits()): Promise<RiskDecision> {
-  if (ctx.realizedPnlPctToday <= -limits.dailyLossLimitPct) return { ok: false, reason: 'daily_loss_limit', action: 'halt' };
-  if (ctx.tradesToday >= limits.maxTradesPerDay) return { ok: false, reason: 'trades_cap', action: 'cooldown' };
-  if (ctx.consecutiveStops >= limits.maxConsecutiveStops) return { ok: false, reason: 'consecutive_stops', action: 'cooldown' };
+export async function assessRisk(ctx: RiskContext, limits?: RiskLimits): Promise<RiskDecision> {
+  // Use mode-specific limits if not provided
+  const effectiveLimits = limits || defaultLimits(ctx.aggressiveness);
+  
+  if (ctx.realizedPnlPctToday <= -effectiveLimits.dailyLossLimitPct) return { ok: false, reason: 'daily_loss_limit', action: 'halt' };
+  if (ctx.tradesToday >= effectiveLimits.maxTradesPerDay) return { ok: false, reason: 'trades_cap', action: 'cooldown' };
+  if (ctx.consecutiveStops >= effectiveLimits.maxConsecutiveStops) return { ok: false, reason: 'consecutive_stops', action: 'cooldown' };
   return { ok: true };
 }
 

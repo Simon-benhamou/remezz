@@ -139,12 +139,74 @@ export type Cfg = {
   ENTRY_NEAR_MIN_BPS: number;           // min bps of price for near window (e.g., 2 => 0.02%)
   ENTRY_NEAR_MAX_BPS: number;           // max bps of price for near window (e.g., 12 => 0.12%)
   ENTRY_NEAR_SPREAD_WEIGHT: number;     // multiply spread% by this and take max with computed window
-  // Aggressive mode controls (Phase 1-3 optimization)
-  AGGRESSIVE_MODE_ENABLED: boolean;     // Enable aggressive trading mode with OR logic and scoring
-  AGGRESSIVE_MAX_RISK_PCT: number;      // Maximum risk per trade in aggressive mode (e.g., 3.5%)
-  MAX_TRADES_PER_DAY: number;           // Maximum number of trades allowed per day
-  MAX_CONSECUTIVE_STOPS: number;        // Maximum consecutive stop-loss trades before pause
+  // Mode-based adaptive parameters (Conservative/Reactive/Aggressive)
+  CONSERVATIVE_RISK_PCT: number;
+  CONSERVATIVE_MIN_ATR_PCT: number;
+  CONSERVATIVE_MAX_TRADES_PER_DAY: number;
+  CONSERVATIVE_MAX_CONSECUTIVE_STOPS: number;
+  CONSERVATIVE_DAILY_LOSS_LIMIT_PCT: number;
+  CONSERVATIVE_TRADE_COOLDOWN_MS: number;
+  REACTIVE_RISK_PCT: number;
+  REACTIVE_MIN_ATR_PCT: number;
+  REACTIVE_MAX_TRADES_PER_DAY: number;
+  REACTIVE_MAX_CONSECUTIVE_STOPS: number;
+  REACTIVE_DAILY_LOSS_LIMIT_PCT: number;
+  REACTIVE_TRADE_COOLDOWN_MS: number;
+  AGGRESSIVE_RISK_PCT: number;
+  AGGRESSIVE_MIN_ATR_PCT: number;
+  AGGRESSIVE_MAX_TRADES_PER_DAY: number;
+  AGGRESSIVE_MAX_CONSECUTIVE_STOPS: number;
+  AGGRESSIVE_DAILY_LOSS_LIMIT_PCT: number;
+  AGGRESSIVE_TRADE_COOLDOWN_MS: number;
+  TRADE_COOLDOWN_WIN_MULTIPLIER: number;
+  TRADE_COOLDOWN_LOSS_MULTIPLIER: number;
 };
+export type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
+
+export interface ModeParams {
+  riskPct: number;
+  minAtrPct: number;
+  maxTradesPerDay: number;
+  maxConsecutiveStops: number;
+  dailyLossLimitPct: number;
+  tradeCooldownMs: number;
+}
+
+export function getModeParams(mode: AgentAggressiveness = 'reactive'): ModeParams {
+  const cfg = getConfig();
+  
+  switch (mode) {
+    case 'conservative':
+      return {
+        riskPct: cfg.CONSERVATIVE_RISK_PCT,
+        minAtrPct: cfg.CONSERVATIVE_MIN_ATR_PCT,
+        maxTradesPerDay: cfg.CONSERVATIVE_MAX_TRADES_PER_DAY,
+        maxConsecutiveStops: cfg.CONSERVATIVE_MAX_CONSECUTIVE_STOPS,
+        dailyLossLimitPct: cfg.CONSERVATIVE_DAILY_LOSS_LIMIT_PCT,
+        tradeCooldownMs: cfg.CONSERVATIVE_TRADE_COOLDOWN_MS,
+      };
+    case 'aggressive':
+      return {
+        riskPct: cfg.AGGRESSIVE_RISK_PCT,
+        minAtrPct: cfg.AGGRESSIVE_MIN_ATR_PCT,
+        maxTradesPerDay: cfg.AGGRESSIVE_MAX_TRADES_PER_DAY,
+        maxConsecutiveStops: cfg.AGGRESSIVE_MAX_CONSECUTIVE_STOPS,
+        dailyLossLimitPct: cfg.AGGRESSIVE_DAILY_LOSS_LIMIT_PCT,
+        tradeCooldownMs: cfg.AGGRESSIVE_TRADE_COOLDOWN_MS,
+      };
+    case 'reactive':
+    default:
+      return {
+        riskPct: cfg.REACTIVE_RISK_PCT,
+        minAtrPct: cfg.REACTIVE_MIN_ATR_PCT,
+        maxTradesPerDay: cfg.REACTIVE_MAX_TRADES_PER_DAY,
+        maxConsecutiveStops: cfg.REACTIVE_MAX_CONSECUTIVE_STOPS,
+        dailyLossLimitPct: cfg.REACTIVE_DAILY_LOSS_LIMIT_PCT,
+        tradeCooldownMs: cfg.REACTIVE_TRADE_COOLDOWN_MS,
+      };
+  }
+}
+
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
   return {
@@ -284,10 +346,26 @@ export function getConfig(): Cfg {
     ENTRY_NEAR_MIN_BPS: Number(e.ENTRY_NEAR_MIN_BPS || "2"),
     ENTRY_NEAR_MAX_BPS: Number(e.ENTRY_NEAR_MAX_BPS || "12"),
     ENTRY_NEAR_SPREAD_WEIGHT: Number(e.ENTRY_NEAR_SPREAD_WEIGHT || "0.5"),
-    // Aggressive mode controls (Phase 1-3 optimization)
-    AGGRESSIVE_MODE_ENABLED: (e.AGGRESSIVE_MODE_ENABLED || "false") === "true",
-    AGGRESSIVE_MAX_RISK_PCT: Number(e.AGGRESSIVE_MAX_RISK_PCT || "3.5"),
-    MAX_TRADES_PER_DAY: Number(e.MAX_TRADES_PER_DAY || "10"),
-    MAX_CONSECUTIVE_STOPS: Number(e.MAX_CONSECUTIVE_STOPS || "3"),
+    // Mode-based adaptive parameters
+    CONSERVATIVE_RISK_PCT: Number(e.CONSERVATIVE_RISK_PCT || "1.0"),
+    CONSERVATIVE_MIN_ATR_PCT: Number(e.CONSERVATIVE_MIN_ATR_PCT || "0.30"),
+    CONSERVATIVE_MAX_TRADES_PER_DAY: Number(e.CONSERVATIVE_MAX_TRADES_PER_DAY || "6"),
+    CONSERVATIVE_MAX_CONSECUTIVE_STOPS: Number(e.CONSERVATIVE_MAX_CONSECUTIVE_STOPS || "2"),
+    CONSERVATIVE_DAILY_LOSS_LIMIT_PCT: Number(e.CONSERVATIVE_DAILY_LOSS_LIMIT_PCT || "4.0"),
+    CONSERVATIVE_TRADE_COOLDOWN_MS: Number(e.CONSERVATIVE_TRADE_COOLDOWN_MS || "30000"),
+    REACTIVE_RISK_PCT: Number(e.REACTIVE_RISK_PCT || "1.5"),
+    REACTIVE_MIN_ATR_PCT: Number(e.REACTIVE_MIN_ATR_PCT || "0.25"),
+    REACTIVE_MAX_TRADES_PER_DAY: Number(e.REACTIVE_MAX_TRADES_PER_DAY || "10"),
+    REACTIVE_MAX_CONSECUTIVE_STOPS: Number(e.REACTIVE_MAX_CONSECUTIVE_STOPS || "3"),
+    REACTIVE_DAILY_LOSS_LIMIT_PCT: Number(e.REACTIVE_DAILY_LOSS_LIMIT_PCT || "5.5"),
+    REACTIVE_TRADE_COOLDOWN_MS: Number(e.REACTIVE_TRADE_COOLDOWN_MS || "20000"),
+    AGGRESSIVE_RISK_PCT: Number(e.AGGRESSIVE_RISK_PCT || "2.5"),
+    AGGRESSIVE_MIN_ATR_PCT: Number(e.AGGRESSIVE_MIN_ATR_PCT || "0.15"),
+    AGGRESSIVE_MAX_TRADES_PER_DAY: Number(e.AGGRESSIVE_MAX_TRADES_PER_DAY || "15"),
+    AGGRESSIVE_MAX_CONSECUTIVE_STOPS: Number(e.AGGRESSIVE_MAX_CONSECUTIVE_STOPS || "4"),
+    AGGRESSIVE_DAILY_LOSS_LIMIT_PCT: Number(e.AGGRESSIVE_DAILY_LOSS_LIMIT_PCT || "7.0"),
+    AGGRESSIVE_TRADE_COOLDOWN_MS: Number(e.AGGRESSIVE_TRADE_COOLDOWN_MS || "10000"),
+    TRADE_COOLDOWN_WIN_MULTIPLIER: Number(e.TRADE_COOLDOWN_WIN_MULTIPLIER || "0.5"),
+    TRADE_COOLDOWN_LOSS_MULTIPLIER: Number(e.TRADE_COOLDOWN_LOSS_MULTIPLIER || "1.5"),
   };
 }
