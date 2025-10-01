@@ -2054,6 +2054,19 @@ export class ReboundRejectionAgent {
     const volume = Number((snap as any)?.volume ?? 0);
     const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
 
+    // CRITICAL: Block if volume is 0 (no data or illiquid symbol)
+    if (volume === 0) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'quality_filter',
+        message: 'volume_zero_critical_block',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { volume, volumeMA, reason: 'No volume data available - possible data issue or illiquid symbol' },
+      });
+      return false;
+    }
+
     // 1. EMA Trend Alignment (required)
     const emaSpread = ((ema20 - ema50) / ema50) * 100;
     const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.25 : ema20 < ema50 && emaSpread < -0.25;

@@ -220,6 +220,17 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const volumes15 = o15.map(r => Number(r[5] || 0));
   const lastPrice:any = last(closes15);
 
+  // DEBUG: Log volume data for troubleshooting
+  const latestVolRaw = o15[o15.length - 1]?.[5];
+  if (latestVolRaw === undefined || latestVolRaw === null || latestVolRaw === 0) {
+    console.warn(`[VOLUME DEBUG] ${symbol}: Latest volume is ${latestVolRaw}. Sample OHLCV:`, {
+      latestBar: o15[o15.length - 1],
+      prev5Bars: o15.slice(-6, -1).map(r => ({ ts: r[0], close: r[4], vol: r[5] })),
+      allVolumesZero: volumes15.every(v => v === 0),
+      volumesNonZero: volumes15.filter(v => v > 0).length,
+    });
+  }
+
   // Indicators
   const ema20Arr = ema(closes15, 20);
   const ema50Arr = ema(closes15, 50);
