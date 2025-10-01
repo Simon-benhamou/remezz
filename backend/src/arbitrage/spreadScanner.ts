@@ -13,17 +13,57 @@ export type ArbitrageSpread = {
   timestamp: string;
 };
 
-const exchangeCache = new Map<string, any>();
+const exchangeCache = new Map<string, { instance: any; loadedAt: number; marketsLoaded: boolean; rateLimitedUntil?: number }>();
 let cachedSpreads: { expires: number; data: ArbitrageSpread[] } | null = null;
 
 async function getExchange(id: string) {
-  if (exchangeCache.has(id)) return exchangeCache.get(id);
+  const cached = exchangeCache.get(id);
+  const now = Date.now();
+
+  // Check if exchange is rate limited
+  if (cached?.rateLimitedUntil && now < cached.rateLimitedUntil) {
+    throw new Error(`${id} is rate limited until ${new Date(cached.rateLimitedUntil).toISOString()}`);
+  }
+
+  // Return cached instance if markets are already loaded and not too old (24h)
+  if (cached && cached.marketsLoaded && (now - cached.loadedAt) < 24 * 60 * 60 * 1000) {
+    return cached.instance;
+  }
+
   const ExchangeClass = (ccxt as any)[id];
   if (!ExchangeClass) throw new Error(`Exchange ${id} not supported by ccxt`);
+
   const instance = new ExchangeClass({ enableRateLimit: true });
-  await instance.loadMarkets();
-  exchangeCache.set(id, instance);
+
+  // Only load markets if not already loaded or cache expired
+  if (!cached || !cached.marketsLoaded || (now - cached.loadedAt) > 24 * 60 * 60 * 1000) {
+    console.log(`🔄 Loading markets for ${id}...`);
+    await instance.loadMarkets();
+    exchangeCache.set(id, { instance, loadedAt: now, marketsLoaded: true });
+  } else {
+    // Reuse existing instance
+    exchangeCache.set(id, { ...cached, loadedAt: now });
+  }
+
   return instance;
+}
+
+// Preload exchanges to avoid repeated loadMarkets calls
+export async function preloadArbitrageExchanges() {
+  const cfg = getConfig();
+  if (!cfg.ARBITRAGE_ENABLED) return;
+
+  const exchanges = cfg.ARBITRAGE_EXCHANGES;
+  console.log(`🔄 Preloading ${exchanges.length} arbitrage exchanges...`);
+
+  for (const exchangeId of exchanges) {
+    try {
+      await getExchange(exchangeId);
+      console.log(`✅ Preloaded ${exchangeId}`);
+    } catch (error) {
+      console.warn(`❌ Failed to preload ${exchangeId}:`, error);
+    }
+  }
 }
 
 function calcSpread(buy: any, sell: any) {
@@ -63,8 +103,20 @@ export async function getArbitrageSpreads(options?: { forceRefresh?: boolean }):
         if (!exchange.markets?.[symbol]) continue;
         const ticker = await exchange.fetchTicker(symbol);
         tickers.push({ exchange: exchangeId, ticker });
-      } catch (error) {
-        console.warn(`Arbitrage fetch failed for ${exchangeId} ${symbol}:`, error);
+      } catch (error: any) {
+        const errorMessage = error?.message || String(error);
+        console.warn(`Arbitrage fetch failed for ${exchangeId} ${symbol}:`, errorMessage);
+
+        // Handle rate limiting (418 = DDoS protection, 429 = too many requests)
+        if (errorMessage.includes('418') || errorMessage.includes('429') || errorMessage.includes('rate limited')) {
+          const banDuration = errorMessage.includes('1759307635076') ? 24 * 60 * 60 * 1000 : 15 * 60 * 1000; // 24h for long ban, 15min for others
+          const cached = exchangeCache.get(exchangeId);
+          if (cached) {
+            cached.rateLimitedUntil = Date.now() + banDuration;
+            exchangeCache.set(exchangeId, cached);
+            console.warn(`🚫 ${exchangeId} rate limited until ${new Date(cached.rateLimitedUntil).toISOString()}`);
+          }
+        }
       }
     }
 
@@ -107,4 +159,23 @@ export async function getArbitrageSpreads(options?: { forceRefresh?: boolean }):
 
 export function clearArbitrageCache() {
   cachedSpreads = null;
+}
+
+export function clearExchangeCache() {
+  exchangeCache.clear();
+}
+
+export function getExchangeStatus() {
+  const now = Date.now();
+  const status: Record<string, { available: boolean; rateLimitedUntil?: number; loadedAt?: number }> = {};
+
+  for (const [id, cached] of exchangeCache.entries()) {
+    status[id] = {
+      available: !cached.rateLimitedUntil || now >= cached.rateLimitedUntil,
+      rateLimitedUntil: cached.rateLimitedUntil,
+      loadedAt: cached.loadedAt,
+    };
+  }
+
+  return status;
 }

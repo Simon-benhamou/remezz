@@ -1,12 +1,20 @@
-import { getArbitrageSpreads } from '../arbitrage/spreadScanner.js';
+import { getArbitrageSpreads, preloadArbitrageExchanges } from '../arbitrage/spreadScanner.js';
 import { broadcast } from '../ws/hub.js';
 import { getConfig } from '../utils/env.js';
 
 let timer: NodeJS.Timeout | null = null;
 let lastPayload: any = null;
 
-export function startArbitrageMonitor() {
+export async function startArbitrageMonitor() {
   stopArbitrageMonitor();
+
+  // Preload exchanges to avoid repeated loadMarkets calls
+  try {
+    await preloadArbitrageExchanges();
+  } catch (error) {
+    console.warn('Failed to preload arbitrage exchanges:', error);
+  }
+
   runOnce().finally(() => schedule());
 }
 
