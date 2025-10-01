@@ -103,99 +103,62 @@ function computeTrendBias(ema100: number, ema200: number, neutralBandBps: number
   return 'neutral';
 }
 
-// Compute daily pivots from OHLCV (prefer 1h or 15m).
-// Uses previous UTC day High/Low/Close.
-function dailyPivotsFromOHLCV(ohlcv: number[][]) {
-  // ohlcv: [ ts(ms), open, high, low, close, volume ]
-  if (!ohlcv?.length) return null;
+function swingLevels(highs: number[], lows: number[], closes: number[], period: number, tolerancePct: number) {
+  const supports: { price: number; touches: number; strength: number }[] = [];
+  const resistances: { price: number; touches: number; strength: number }[] = [];
 
-  // Group by day (UTC)
-  const byDay: Record<string, { high: number; low: number; close: number }> = {};
-  for (const [ts, , , , close, ] of ohlcv) {
-    const d = new Date(ts);
-    const key = d.toISOString().slice(0, 10); // YYYY-MM-DD
-    if (!byDay[key]) byDay[key] = { high: -Infinity, low: Infinity, close };
-    const o = byDay[key];
-    // Update high/low/close per iteration
-  }
-  // Second pass to record highs/lows precisely
-  for (const [ts, , high, low, close] of ohlcv) {
-    const key = new Date(ts).toISOString().slice(0, 10);
-    const o = byDay[key];
-    if (!o) continue;
-    if (high > o.high) o.high = high;
-    if (low < o.low) o.low = low;
-    o.close = close; // last close of that day
-  }
+  for (let i = period; i < highs.length - period; i++) {
+    const isHigh = highs[i] > Math.max(...highs.slice(i - period, i), ...highs.slice(i + 1, i + 1 + period));
+    const isLow = lows[i] < Math.min(...lows.slice(i - period, i), ...lows.slice(i + 1, i + 1 + period));
 
-  // Sorted days
-  const days = Object.keys(byDay).sort();
-  if (days.length < 2) return null; // pas de "veille"
-  const prev = byDay[days[days.length - 2]];
-  const H = prev.high, L = prev.low, C = prev.close;
-  const P = (H + L + C) / 3;
-  const R1 = 2 * P - L;
-  const S1 = 2 * P - H;
-  const R2 = P + (H - L);
-  const S2 = P - (H - L);
-
-  return { P, R1, R2, S1, S2, refDay: days[days.length - 2] };
-}
-
-// Swing detection (fractal highs/lows) with clustering tolerance.
-function swingLevels(
-  highs: number[], lows: number[], closes: number[], lookback = 2, tolerancePct = 0.15
-) {
-  type Lvl = { price: number; touches: number; strength: number; idx: number };
-  const swingHighs: Lvl[] = [];
-  const swingLows: Lvl[] = [];
-
-  const n = highs.length;
-  for (let i = lookback; i < n - lookback; i++) {
-    const h = highs[i], l = lows[i];
-    // swing high
-    let isHigh = true;
-    for (let k = 1; k <= lookback; k++) {
-      if (!(h > highs[i - k] && h > highs[i + k])) { isHigh = false; break; }
-    }
-    if (isHigh) swingHighs.push({ price: h, touches: 1, strength: 1, idx: i });
-
-    // swing low
-    let isLow = true;
-    for (let k = 1; k <= lookback; k++) {
-      if (!(l < lows[i - k] && l < lows[i + k])) { isLow = false; break; }
-    }
-    if (isLow) swingLows.push({ price: l, touches: 1, strength: 1, idx: i });
-  }
-
-  // Cluster nearby levels within tolerancePct
-  function cluster(levels: Lvl[]): Lvl[] {
-    const out: Lvl[] = [];
-    for (const lvl of levels) {
-      const found = out.find(x => near(x.price, lvl.price, tolerancePct));
-      if (!found) out.push({ ...lvl });
-      else {
-        // fusion simple: moyenne pondérée
-        found.price = (found.price * found.touches + lvl.price) / (found.touches + 1);
-        found.touches += 1;
-        found.strength += 1;
-        found.idx = Math.max(found.idx, lvl.idx);
+    if (isHigh) {
+      const price = highs[i];
+      let merged = false;
+      for (const r of resistances) {
+        if (near(price, r.price, tolerancePct)) {
+          r.price = (r.price * r.touches + price) / (r.touches + 1);
+          r.touches++;
+          r.strength = Math.min(5, r.touches);
+          merged = true;
+          break;
+        }
       }
+      if (!merged) resistances.push({ price, touches: 1, strength: 1 });
     }
-    return out;
+
+    if (isLow) {
+      const price = lows[i];
+      let merged = false;
+      for (const s of supports) {
+        if (near(price, s.price, tolerancePct)) {
+          s.price = (s.price * s.touches + price) / (s.touches + 1);
+          s.touches++;
+          s.strength = Math.min(5, s.touches);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) supports.push({ price, touches: 1, strength: 1 });
+    }
   }
-
-  const clusteredHighs = cluster(swingHighs)
-    .sort((a, b) => b.touches - a.touches || b.price - a.price);
-  const clusteredLows = cluster(swingLows)
-    .sort((a, b) => b.touches - a.touches || a.price - b.price);
-
-  // Convert to enriched arrays
-  return {
-    resistances: clusteredHighs.map(l => ({ price: l.price, touches: l.touches, strength: l.strength })),
-    supports: clusteredLows.map(l => ({ price: l.price, touches: l.touches, strength: l.strength })),
-  };
+  return { supports, resistances };
 }
+
+function dailyPivotsFromOHLCV(ohlcv: number[][]) {
+  if (!ohlcv || ohlcv.length < 2) return null;
+  const yesterday = ohlcv[ohlcv.length - 2];
+  const [ts, o, h, l, c] = yesterday;
+  const P = (h + l + c) / 3;
+  const R1 = (2 * P) - l;
+  const S1 = (2 * P) - h;
+  const R2 = P + (h - l);
+  const S2 = P - (h - l);
+  return { P, S1, S2, R1, R2, refDay: new Date(ts).toISOString().slice(0, 10) };
+}
+
+const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
+const SNAP_TTL_MS = 1000 * 15; // 15s
+const cacheKey = (symbol: string) => `snap_${symbol}`;
 
 // Full technical snapshot for a symbol:
 // - EMA20/50, RSI14, ATR14 & ATR%
@@ -252,6 +215,32 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const volEma20 = ema(volumes15, 20);
   const latestVol = volumes15.length ? volumes15[volumes15.length - 1] : 0;
   const volMA = volEma20.length ? volEma20[volEma20.length - 1] : 0;
+
+  // Enhanced volume logging for clarity when the last 15m bar volume is very low vs MA
+  try {
+    if (volMA > 0 && latestVol <= volMA / 10) {
+      const last5Vols = o15.slice(-5).map(r => ({ vol: r[5], ts: new Date(r[0]).toISOString() }));
+      console.warn(`[VOLUME CLARITY] ${symbol}: Low last 15m volume vs MA`, {
+        last15mVolume: latestVol,
+        volumeMA20: volMA,
+        ratioPct: Number(((latestVol / volMA) * 100).toFixed(1)),
+        last5Volumes: last5Vols,
+        note: 'Entry confirmation compares the last closed 15m volume to its EMA20. Low ratio often indicates consolidation despite high 24h volume.'
+      });
+    }
+  } catch {}
+
+  // Enhanced volume logging for clarity
+  if (latestVolRaw === undefined || latestVolRaw === null || latestVolRaw <= (volMA / 10)) {
+    const last5Vols = o15.slice(-5).map(r => ({ vol: r[5], ts: new Date(r[0]).toISOString() }));
+    console.warn(`[VOLUME CLARITY] ${symbol}: Low volume detected for entry confirmation.`, {
+      'Last 15m Candle Volume': latestVol,
+      'Volume MA (20 periods)': volMA,
+      'Ratio (Current/MA)': volMA > 0 ? `${((latestVol / volMA) * 100).toFixed(1)}%` : 'N/A',
+      'Reason': 'This check compares the last closed 15m candle volume to its 20-period moving average. A low ratio can indicate a pause or consolidation, even if 24h volume is high.',
+      'Last 5 Raw Volumes (15m candles)': last5Vols,
+    });
+  }
 
   // Simple 24h S/R (~96 bars of 15m)
   const recent = closes15.length >= 96 ? o15.slice(-96) : o15;
@@ -349,7 +338,4 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   try { snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); } catch {}
   return snapshot;
 }
-// Lightweight LRU cache for snapshots (improves dashboard responsiveness)
-const SNAP_TTL_MS = 3000; // 3s is enough for UI refreshes
-const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
-function cacheKey(symbol: string) { return `${symbol}`; }
+

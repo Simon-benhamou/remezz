@@ -2122,7 +2122,7 @@ export class ReboundRejectionAgent {
       return false;
     }
 
-    // 5. Volume Confirmation (required)
+  // 5. Volume Confirmation (required)
     const level = this.profile?.aggressiveness || 'conservative';
     const symbol = this.profile?.symbol || (this.plan as any)?.symbol || '';
     const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
@@ -2146,6 +2146,42 @@ export class ReboundRejectionAgent {
     // Volatility context: quieter markets require more confirmation
     if (atrPct >= 1.4) requiredVolumeRatio -= 0.03;
     else if (atrPct <= 0.45) requiredVolumeRatio += 0.03;
+
+    // Breakout/Reversal context: relax volume confirmation to avoid missing strong moves
+    // Heuristics only – we still require minimal liquidity via usdVolumeMA and trend/RSI/ADX signals
+  // Use existing thresholds where possible; fallback to sane constants
+  const breakoutAdx = Math.max(18, Number(cfg.ENTRY_LONG_MIN_ADX || 22));
+  const breakoutAtr = Math.max(0.6, Number(cfg.ENTRY_MIN_ATR_PCT || 0.8));
+    const isTrendAligned = this.checkTrendAlignment(ema20, ema50, bias);
+    const isBreakoutContext = (adx >= breakoutAdx && atrPct >= breakoutAtr && isTrendAligned);
+  const isReversalContext = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(cfg.ANTI_WHALE_MIN_ADX || 18)));
+
+    if (isBreakoutContext || isReversalContext) {
+      // Extra relaxation with floors by aggressiveness
+  const extraRelax = Number((cfg as any).QUALITY_VOLUME_BREAKOUT_RELAX ?? 0.25); // subtract up to 0.25 from requirement
+      const floorBreakout = level === 'aggressive' ? 0.20 : level === 'reactive' ? 0.28 : 0.35;
+      const before = requiredVolumeRatio;
+      requiredVolumeRatio = Math.max(floorBreakout, requiredVolumeRatio - extraRelax);
+
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'volume_requirement_relaxed_for_breakout',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          context: isBreakoutContext ? 'breakout' : 'reversal',
+          before,
+          after: requiredVolumeRatio,
+          level,
+          adx,
+          rsi,
+          atrPct,
+          isTrendAligned,
+          usdVolumeMA,
+        },
+      });
+    }
 
     const contextBefore = symbol ? ReboundRejectionAgent.volumeContextCache.get(symbol) : undefined;
     if (contextBefore && contextBefore.sampleCount >= 6) {

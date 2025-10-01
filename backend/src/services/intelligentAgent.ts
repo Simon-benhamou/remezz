@@ -1667,6 +1667,57 @@ async function updateSessionNextCheck(sessionId: string, nextCheck: Date): Promi
   }
 }
 
+/**
+ * Helper: Return top-N cryptos by 24h USD volume from dynamic discovery
+ * Falls back to getOptimizedCryptoList and enriches each with ticker info.
+ */
+export async function getTopCryptosByVolume(limit: number = 50): Promise<Array<{ symbol: string; volumeUsd: number; change24h: number; price: number }>> {
+  const symbols = await getOptimizedCryptoList();
+  const enriched: Array<{ symbol: string; volumeUsd: number; change24h: number; price: number }> = [];
+  for (const symbol of symbols) {
+    try {
+      const ticker = await getTicker(symbol);
+      if (!ticker) continue;
+      const last = Number(ticker.last || ticker.close || 0);
+      const baseVol = Number((ticker as any).baseVolume || 0);
+      const quoteVol = Number((ticker as any).quoteVolume || 0) || (baseVol > 0 && last > 0 ? baseVol * last : 0);
+      const open = Number((ticker as any).open || last);
+      const change = open > 0 ? ((last - open) / open) * 100 : Number((ticker as any).percentage || 0);
+      enriched.push({ symbol, volumeUsd: quoteVol, change24h: change, price: last });
+    } catch {}
+  }
+  enriched.sort((a, b) => b.volumeUsd - a.volumeUsd);
+  return enriched.slice(0, Math.max(1, limit));
+}
+
+/**
+ * Helper: Rank a provided list of cryptos with our hybrid ML/IA scoring
+ * Returns lightweight summary suitable for test output (aiScore, opportunity, reasoning)
+ */
+export async function rankCryptosWithAI(list: Array<{ symbol: string } | { symbol: string; volumeUsd?: number; change24h?: number; price?: number }>): Promise<Array<{ symbol: string; aiScore: number; opportunity?: string; reasoning?: string; risk?: string; volumeUsd?: number; change24h?: number }>> {
+  const results: Array<{ symbol: string; aiScore: number; opportunity?: string; reasoning?: string; risk?: string; volumeUsd?: number; change24h?: number }> = [];
+  // Analyze in small parallel batches to avoid rate limits
+  const batchSize = 5;
+  for (let i = 0; i < list.length; i += batchSize) {
+    const batch = list.slice(i, i + batchSize);
+    const analyses = await Promise.all(batch.map(async (item) => {
+      const symbol = (item as any).symbol;
+      const analysis = await calculateIntelligentScore(symbol).catch(() => null);
+      if (!analysis) return null;
+      return {
+        symbol,
+        aiScore: Number((analysis.score || 0).toFixed(2)),
+        opportunity: analysis.opportunity?.type,
+        reasoning: analysis.reasoning?.summary,
+        risk: analysis.opportunity?.riskLevel,
+      } as any;
+    }));
+    for (const a of analyses) if (a) results.push(a);
+  }
+  results.sort((a, b) => b.aiScore - a.aiScore);
+  return results;
+}
+
 async function mergeSessionProfileJson(sessionId: string, patch: Record<string, any>) {
   const session = await prisma.agentSession.findUnique({
     where: { id: sessionId },
