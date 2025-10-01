@@ -12,7 +12,7 @@ export class Predictor {
   private cache = new Map<string, { result: PredictionResult; ttl: number }>();
 
   async predictMove(symbol: string, currentPrice: number, indicators: any): Promise<PredictionResult | null> {
-    const cacheKey = `${symbol}-${Math.floor(Date.now() / 120000)}`; // Cache 2 minutes (120s)
+    const cacheKey = `${symbol}-${Math.floor(Date.now() / 300000)}`; // Cache 5 minutes (300s)
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() < cached.ttl) {
       return cached.result;
@@ -24,12 +24,12 @@ export class Predictor {
     const adx = indicators.adx14 || 0;
     const rsi = indicators.rsi14 || 50;
 
-    // Seuils optimisés pour crypto: ATR > 0.3%, volume > 1.2x moyenne, ADX > 15 (trend), RSI pas extrême
+    // Seuils optimisés pour crypto: ATR > 0.5%, volume > 2x moyenne, ADX > 20 (trend), RSI pas extrême
     const shouldPredict = (
-      atrPct > 0.3 && // Marché avec volatilité suffisante
-      volumeRatio > 1.2 && // Volume au-dessus de la moyenne
-      adx > 15 && // Trend en cours
-      rsi > 25 && rsi < 75 // Pas en zone extrême
+      atrPct > 0.5 && // Marché avec plus de volatilité suffisante
+      volumeRatio > 2.0 && // Volume beaucoup plus élevé
+      adx > 20 && // Trend plus fort
+      rsi > 30 && rsi < 70 // RSI plus restrictif
     );
 
     if (!shouldPredict) {
@@ -55,14 +55,14 @@ Provide a JSON response with:
 
 Focus on momentum, volume, and technical signals for crypto markets.`;
 
-      const response = await llmJSON(prompt, { provider: 'grok', ttlMin: 2 }); // Cache 2 min
+      const response = await llmJSON(prompt, { provider: 'grok', ttlMin: 5 }); // Cache 5 min
 
       // Parse JSON response
       const result = JSON.parse(response) as PredictionResult;
       result.timestamp = Date.now();
 
-      // Cache for 2 minutes
-      this.cache.set(cacheKey, { result, ttl: Date.now() + 120000 });
+      // Cache for 5 minutes
+      this.cache.set(cacheKey, { result, ttl: Date.now() + 300000 });
 
       return result;
     } catch (error) {

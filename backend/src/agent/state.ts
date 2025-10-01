@@ -4137,7 +4137,7 @@ export class ReboundRejectionAgent {
 
       // 2. Vérifier volatilité récente élevée (ATR > seuil)
       const atrPct = Number((snap as any)?.atrPct ?? 0);
-      if (atrPct > 2.0) { // Plus de 2% ATR = marché volatile
+      if (atrPct > 3.0) { // Plus de 3% ATR = marché très volatile
         console.log(`🧠 AI call triggered: High volatility (ATR: ${atrPct.toFixed(2)}%)`);
         return true;
       }
@@ -4151,7 +4151,7 @@ export class ReboundRejectionAgent {
         const lastPrice = (this as any).lastAIPredictionPrice || currentPrice;
         const priceChangePct = Math.abs((currentPrice - lastPrice) / lastPrice) * 100;
         
-        if (priceChangePct > 1.0) { // Plus de 1% changement = appel IA
+        if (priceChangePct > 2.0) { // Plus de 2% changement = appel IA
           console.log(`🧠 AI call triggered: Significant price change (${priceChangePct.toFixed(2)}%)`);
           return true;
         }
@@ -4160,13 +4160,13 @@ export class ReboundRejectionAgent {
       // 4. Vérifier conditions de momentum (slope élevée)
       const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
       const slopePct = Math.abs(emaSlope / currentPrice) * 100;
-      if (slopePct > 0.15) { // Slope > 0.15% = momentum fort
+      if (slopePct > 0.25) { // Slope > 0.25% = momentum très fort
         console.log(`🧠 AI call triggered: Strong momentum (slope: ${slopePct.toFixed(3)}%)`);
         return true;
       }
 
-      // 5. Appel périodique (toutes les 2 heures minimum)
-      if (timeSinceLastPrediction > 2 * 60 * 60 * 1000) {
+      // 5. Appel périodique (toutes les 4 heures minimum)
+      if (timeSinceLastPrediction > 4 * 60 * 60 * 1000) {
         console.log(`🧠 AI call triggered: Periodic check (${Math.floor(timeSinceLastPrediction / (60 * 1000))}min since last)`);
         return true;
       }
