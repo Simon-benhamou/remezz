@@ -19,6 +19,7 @@ import type { RegimeProfile } from '../ai/regime.js';
 import { getTicker } from '../data/market.js';
 import type { PlacedOrder } from '../broker/types.js';
 import { prisma } from '../db/client.js';
+import { predictor } from '../ai/predictor.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -274,6 +275,49 @@ export class ReboundRejectionAgent {
       if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); return; }
       if (this.plan.bias === 'none') return;
       const inZone = price >= Math.min(from,to) && price <= Math.max(from,to);
+
+      // 🧠 AI Prediction for short-term moves (optimisé)
+      let aiPrediction: any = null;
+      let originalBias = this.plan.bias; // Sauvegarder le bias original
+
+      // Conditions pour appeler l'IA (optimisation coût)
+      const shouldCallAI = this.shouldCallAIPrediction(snap, price);
+      
+      if (shouldCallAI) {
+        try {
+          aiPrediction = await predictor.predictMove(this.profile.symbol, price, snap);
+          
+          // Mettre à jour le suivi des prédictions IA
+          (this as any).lastAIPredictionTime = Date.now();
+          (this as any).lastAIPredictionPrice = price;
+          
+          if (aiPrediction && aiPrediction.confidence >= 0.75 && aiPrediction.direction !== 'neutral') {
+            console.log(`🧠 AI Prediction: ${aiPrediction.direction} (${(aiPrediction.confidence * 100).toFixed(1)}% confidence) - ${aiPrediction.reasoning}`);
+
+            // Override plan bias seulement si IA très confiante et direction claire
+            if (aiPrediction.direction === 'up' && this.plan.bias !== 'long') {
+              console.log(`🧠 AI overriding to LONG bias for better opportunity capture`);
+              this.plan.bias = 'long';
+            } else if (aiPrediction.direction === 'down' && this.plan.bias !== 'short') {
+              console.log(`🧠 AI overriding to SHORT bias for better opportunity capture`);
+              this.plan.bias = 'short';
+            }
+          } else if (aiPrediction && aiPrediction.direction === 'neutral') {
+            console.log(`🧠 AI: Neutral conditions - keeping original bias`);
+          }
+        } catch (error) {
+          console.warn('AI prediction failed:', error);
+        }
+      } else {
+        console.log(`🧠 Skipping AI prediction - conditions not met (cost optimization)`);
+      }
+
+      // Restaurer le bias original si nécessaire (après traitement de la prédiction)
+      if (this.plan.bias !== originalBias) {
+        console.log(`🧠 Restoring original bias: ${originalBias}`);
+        this.plan.bias = originalBias;
+      }
+
       // Entry filters: basic RSI/ADX gates to avoid weak/contrarian entries (aggressiveness-adjusted)
       const cfg = this.effectiveEntryThresholds();
       if (this.plan.bias === 'short') {
@@ -4077,5 +4121,61 @@ export class ReboundRejectionAgent {
     }
 
     return adjusted;
+  }
+
+  /**
+   * Détermine si on devrait appeler l'IA pour une prédiction (optimisation coût)
+   */
+  private shouldCallAIPrediction(snap: TechnicalSnapshot, currentPrice: number): boolean {
+    try {
+      // 1. Vérifier proximité d'un niveau clé (support/résistance)
+      const nearKeyLevel = this.checkNearKeyLevel(currentPrice, snap);
+      if (nearKeyLevel) {
+        console.log(`🧠 AI call triggered: Near key level`);
+        return true;
+      }
+
+      // 2. Vérifier volatilité récente élevée (ATR > seuil)
+      const atrPct = Number((snap as any)?.atrPct ?? 0);
+      if (atrPct > 2.0) { // Plus de 2% ATR = marché volatile
+        console.log(`🧠 AI call triggered: High volatility (ATR: ${atrPct.toFixed(2)}%)`);
+        return true;
+      }
+
+      // 3. Vérifier changement de prix significatif depuis dernière prédiction
+      const lastPredictionTime = (this as any).lastAIPredictionTime || 0;
+      const timeSinceLastPrediction = Date.now() - lastPredictionTime;
+      
+      // Si plus de 30 minutes depuis dernière prédiction, vérifier changement de prix
+      if (timeSinceLastPrediction > 30 * 60 * 1000) {
+        const lastPrice = (this as any).lastAIPredictionPrice || currentPrice;
+        const priceChangePct = Math.abs((currentPrice - lastPrice) / lastPrice) * 100;
+        
+        if (priceChangePct > 1.0) { // Plus de 1% changement = appel IA
+          console.log(`🧠 AI call triggered: Significant price change (${priceChangePct.toFixed(2)}%)`);
+          return true;
+        }
+      }
+
+      // 4. Vérifier conditions de momentum (slope élevée)
+      const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+      const slopePct = Math.abs(emaSlope / currentPrice) * 100;
+      if (slopePct > 0.15) { // Slope > 0.15% = momentum fort
+        console.log(`🧠 AI call triggered: Strong momentum (slope: ${slopePct.toFixed(3)}%)`);
+        return true;
+      }
+
+      // 5. Appel périodique (toutes les 2 heures minimum)
+      if (timeSinceLastPrediction > 2 * 60 * 60 * 1000) {
+        console.log(`🧠 AI call triggered: Periodic check (${Math.floor(timeSinceLastPrediction / (60 * 1000))}min since last)`);
+        return true;
+      }
+
+      return false; // Pas d'appel IA nécessaire
+
+    } catch (error) {
+      console.warn('Error checking AI prediction conditions:', error);
+      return false; // En cas d'erreur, pas d'appel IA
+    }
   }
 }
