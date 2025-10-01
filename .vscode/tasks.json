@@ -47,6 +47,22 @@
 				"$eslint - stylish"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Build backend & run selection test",
+			"type": "shell",
+			"command": "npm -w backend run -s build && node backend/test-ai-crypto-selection.mjs",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build backend only",
+			"type": "shell",
+			"command": "npm -w backend run -s build",
+			"group": "build"
 		}
 	]
 }
