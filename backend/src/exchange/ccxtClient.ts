@@ -127,14 +127,31 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
   const Klass: any = (ccxt as any)[EXCHANGE_ID];
   if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
   
-  const ex = new Klass({ enableRateLimit: true });
-  const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
-  // @ts-ignore
-  ex.options = ex.options || {};
-  // @ts-ignore
-  ex.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
-  
-  await ex.loadMarkets();
+  // Helper to build and load an exchange for a specific market type
+  async function buildExchange(type: 'spot' | 'swap') {
+    const inst = new Klass({ enableRateLimit: true });
+    // @ts-ignore
+    inst.options = inst.options || {};
+    // @ts-ignore
+    inst.options.defaultType = type;
+    await inst.loadMarkets();
+    return inst;
+  }
+
+  // Try preferred type inferred from symbol first, then fallback to the other
+  const sReq = requested.toUpperCase();
+  const preferSwap = sReq.includes(':USDT') || sReq.includes(':USD') || sReq.includes('-PERP') || /PERP$/.test(sReq);
+  const types: Array<'spot' | 'swap'> = preferSwap
+    ? ['swap', ((process.env.MARKET_TYPE || 'spot').toLowerCase() as any) || 'spot']
+    : [((process.env.MARKET_TYPE || 'spot').toLowerCase() as any) || 'spot', 'swap'];
+
+  // Build both exchanges lazily
+  const exchanges: Record<string, any> = {};
+  for (const t of types) {
+    if (!exchanges[t]) exchanges[t] = await buildExchange(t);
+  }
+
+  let ex = exchanges[types[0]];
 
   const s = requested.toUpperCase();
 
@@ -185,6 +202,26 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
   });
   if (match) return match;
 
-  // 6) Not found
-  throw new Error(`${ex.id} does not have market symbol matching "${requested}"`);
+  // 6) If not found, try the other market type if available
+  const altType = types[1];
+  if (altType && exchanges[altType]) {
+    ex = exchanges[altType];
+    // 1) direct match
+    if (ex.markets && ex.markets[s] && isPerp(ex.markets[s])) return s;
+    // 4) candidates again on alt
+    for (const c of candidates) {
+      if (ex.markets && ex.markets[c] && isPerp(ex.markets[c])) return c;
+    }
+    // 5) last resort on alt
+    const marketKeys2 = Object.keys(ex.markets || {});
+    const match2 = marketKeys2.find((k) => {
+      const m = ex.markets[k];
+      const q = (m?.quote || '').toUpperCase();
+      return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (q === 'USDT' || q === 'USD' || k.includes(':USDT') || k.includes(':USD') || k.includes('-PERP'));
+    });
+    if (match2) return match2;
+  }
+
+  // 7) Not found across types
+  throw new Error(`${EXCHANGE_ID} does not have a swap/perp market matching "${requested}"`);
 }

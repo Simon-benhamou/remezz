@@ -11,18 +11,29 @@ const TICKER_CACHE_TTL = 4000; // 4 seconds cache to reduce network churn
 
 // Create a temporary unauthenticated exchange for public market data
 const exchangeCache = new Map<string, any>();
-function createPublicExchange() {
+
+// Heuristic: infer market type from unified symbol
+// - Perpetual/swap symbols usually contain a colon suffix (e.g., BTC/USDT:USDT, SOL/USD:USD)
+// - Also consider -PERP and USD/USDT with colon as swap
+function inferMarketType(symbol?: string): 'spot' | 'swap' {
+  const s = (symbol || '').toUpperCase();
+  if (!s) return ((process.env.MARKET_TYPE || 'spot').toLowerCase() as any) || 'spot';
+  if (s.includes(':USDT') || s.includes(':USD') || s.includes('-PERP') || /PERP$/.test(s)) return 'swap';
+  return 'spot';
+}
+
+function createPublicExchange(forSymbol?: string) {
   const { EXCHANGE_ID } = getConfig();
   const Klass: any = (ccxt as any)[EXCHANGE_ID];
   if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
-  const marketType = (process.env.MARKET_TYPE || 'spot').toLowerCase();
-  const key = `${EXCHANGE_ID}:${marketType}`;
+  const desiredType = inferMarketType(forSymbol);
+  const key = `${EXCHANGE_ID}:${desiredType}`;
   if (exchangeCache.has(key)) return exchangeCache.get(key);
   const ex = new Klass({ enableRateLimit: true });
   // @ts-ignore
   ex.options = ex.options || {};
   // @ts-ignore
-  ex.options.defaultType = marketType;
+  ex.options.defaultType = desiredType;
   exchangeCache.set(key, ex);
   return ex;
 }
@@ -41,7 +52,7 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
   }
   
   try {
-    const ex = createPublicExchange();
+    const ex = createPublicExchange(symbol);
     await ex.loadMarkets();
     const s = await resolveSymbol(symbol);
     const ticker = await ex.fetchTicker(s);
@@ -86,10 +97,22 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300) {
     }
     return out;
   }
-  const ex = createPublicExchange();
+  const ex = createPublicExchange(symbol);
   await ex.loadMarkets();
   const s = await resolveSymbol(symbol);
-  return ex.fetchOHLCV(s, tf, undefined, limit);
+  try {
+    return await ex.fetchOHLCV(s, tf, undefined, limit);
+  } catch (err) {
+    // Fallback: if timeframe unsupported, try a nearby timeframe
+    // Crypto.com should support 15m/1h, but add a defensive fallback
+    try {
+      const altTf = tf === '15m' ? '5m' : tf === '1h' ? '30m' : tf;
+      if (altTf !== tf) {
+        return await ex.fetchOHLCV(s, altTf, undefined, limit);
+      }
+    } catch {}
+    throw err;
+  }
 }
 
 export async function computeCoreIndicators(symbol: string) {

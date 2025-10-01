@@ -1023,8 +1023,9 @@ export class ReboundRejectionAgent {
     // Get current market ATR for comparison
     let currentATR = 0;
     try {
-      if (this.profile?.symbol) {
-        const snapshot = await buildTechSnapshot(this.profile.symbol);
+      const target = symbol || this.profile?.symbol || '';
+      if (target) {
+        const snapshot = await buildTechSnapshot(target);
         currentATR = Number((snapshot as any)?.atrPct ?? 0);
       }
     } catch (error) {
@@ -2051,10 +2052,32 @@ export class ReboundRejectionAgent {
     const ema20 = Number((snap as any)?.ema20 ?? price);
     const ema50 = Number((snap as any)?.ema50 ?? price);
     const atrPct = Number((snap as any)?.atrPct ?? 0);
-    const volume = Number((snap as any)?.volume ?? 0);
+    let volume = Number((snap as any)?.volume ?? 0);
     const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
 
-    // CRITICAL: Block if volume is 0 (no data or illiquid symbol)
+    // Detect breakout/reversal context early to avoid false blocks on data glitches
+  const earlyBreakoutAdx = Math.max(18, Number(getConfig().ENTRY_LONG_MIN_ADX || 22));
+  const earlyBreakoutAtr = Math.max(0.6, Number(getConfig().ENTRY_MIN_ATR_PCT || 0.8));
+  const isTrendAlignedEarly = this.checkTrendAlignment(ema20, ema50, bias);
+  const isBreakoutContextEarly = (adx >= earlyBreakoutAdx && atrPct >= earlyBreakoutAtr && isTrendAlignedEarly);
+    const isReversalContextEarly = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(getConfig().ANTI_WHALE_MIN_ADX || 18)));
+    const allowVolumeFallback = (isBreakoutContextEarly || isReversalContextEarly) && volumeMA > 0;
+
+    // If last candle volume is zero but context is strong, use a conservative fallback
+    if (volume === 0 && allowVolumeFallback) {
+      const fallback = Math.max(volumeMA * 0.25, 1e-8); // 25% of baseline to remain conservative
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'volume_zero_fallback_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { prevVolume: 0, fallback, volumeMA, context: isBreakoutContextEarly ? 'breakout' : 'reversal' },
+      });
+      volume = fallback;
+    }
+
+    // CRITICAL: Block if volume is 0 (no data or illiquid symbol) and no strong context
     if (volume === 0) {
       recordOpsEvent({
         level: 'warn',
