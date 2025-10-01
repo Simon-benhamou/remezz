@@ -139,6 +139,11 @@ export type Cfg = {
   ENTRY_NEAR_MIN_BPS: number;           // min bps of price for near window (e.g., 2 => 0.02%)
   ENTRY_NEAR_MAX_BPS: number;           // max bps of price for near window (e.g., 12 => 0.12%)
   ENTRY_NEAR_SPREAD_WEIGHT: number;     // multiply spread% by this and take max with computed window
+  // Aggressive mode controls (Phase 1-3 optimization)
+  AGGRESSIVE_MODE_ENABLED: boolean;     // Enable aggressive trading mode with OR logic and scoring
+  AGGRESSIVE_MAX_RISK_PCT: number;      // Maximum risk per trade in aggressive mode (e.g., 3.5%)
+  MAX_TRADES_PER_DAY: number;           // Maximum number of trades allowed per day
+  MAX_CONSECUTIVE_STOPS: number;        // Maximum consecutive stop-loss trades before pause
 };
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
@@ -279,5 +284,10 @@ export function getConfig(): Cfg {
     ENTRY_NEAR_MIN_BPS: Number(e.ENTRY_NEAR_MIN_BPS || "2"),
     ENTRY_NEAR_MAX_BPS: Number(e.ENTRY_NEAR_MAX_BPS || "12"),
     ENTRY_NEAR_SPREAD_WEIGHT: Number(e.ENTRY_NEAR_SPREAD_WEIGHT || "0.5"),
+    // Aggressive mode controls (Phase 1-3 optimization)
+    AGGRESSIVE_MODE_ENABLED: (e.AGGRESSIVE_MODE_ENABLED || "false") === "true",
+    AGGRESSIVE_MAX_RISK_PCT: Number(e.AGGRESSIVE_MAX_RISK_PCT || "3.5"),
+    MAX_TRADES_PER_DAY: Number(e.MAX_TRADES_PER_DAY || "10"),
+    MAX_CONSECUTIVE_STOPS: Number(e.MAX_CONSECUTIVE_STOPS || "3"),
   };
 }

@@ -17,13 +17,19 @@ export type RiskLimits = {
   maxConsecutiveStops: number;
 };
 
-export const defaultLimits = (): RiskLimits => ({
-  riskPctPerTrade: { min: 0.5, max: 5 },
-  dailyLossLimitPct: Math.min(5, Math.max(1, getConfig().DAILY_LOSS_LIMIT_PCT)),
-  maxLeverage: 10,
-  maxTradesPerDay: 8, // Increased from 3 to allow more quality setups
-  maxConsecutiveStops: 2, // Reduced from 3 to be more protective
-});
+export const defaultLimits = (): RiskLimits => {
+  const cfg = getConfig();
+  return {
+    riskPctPerTrade: { 
+      min: 0.5, 
+      max: cfg.AGGRESSIVE_MODE_ENABLED ? cfg.AGGRESSIVE_MAX_RISK_PCT : 2.5 
+    },
+    dailyLossLimitPct: Math.min(5.5, Math.max(1, cfg.DAILY_LOSS_LIMIT_PCT)),
+    maxLeverage: 10,
+    maxTradesPerDay: cfg.MAX_TRADES_PER_DAY,
+    maxConsecutiveStops: cfg.MAX_CONSECUTIVE_STOPS,
+  };
+};
 
 export type RiskDecision = {
   ok: boolean;
