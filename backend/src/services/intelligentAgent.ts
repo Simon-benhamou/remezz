@@ -2,6 +2,7 @@ import { prisma } from '../db/client.js';
 import { getTicker } from '../data/market.js';
 import { fullAnalysis, computeProjection } from '../ai/analysis.js';
 import { buildTechSnapshot } from '../ai/tech.js';
+import { getAIRankedOpportunities, type RankedOpportunity } from '../ai/cryptoRanking.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
@@ -1391,14 +1392,103 @@ function calculateConfidence(...scores: number[]): number {
 }
 
 /**
- * Optimized scan focusing on top 10-20 cryptos only
+ * NEW: AI-powered scan using 2-step pipeline
+ * 1. Filter by volume → Top 50
+ * 2. AI ranking → Best opportunities for 24h
  */
 export async function scanIntelligentOpportunities(excludeSessionId?: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis[]> {
-  console.log('🔍 Starting optimized opportunity scan (top cryptos only)...');
+  console.log('🔍 Starting AI-powered opportunity scan (2-step pipeline)...');
+  
+  try {
+    // Use NEW AI ranking pipeline
+    const aiRanked = await getAIRankedOpportunities({ 
+      useCache: true, 
+      excludeSessionId 
+    });
+    
+    if (aiRanked.length === 0) {
+      console.log('⚠️ AI ranking returned no opportunities');
+      return [];
+    }
+    
+    console.log(`🤖 AI ranked ${aiRanked.length} opportunities`);
+    
+    // Convert AI ranking to IntelligentAnalysis format
+    const analyses: IntelligentAnalysis[] = aiRanked.map((ranked, index) => {
+      // Auto-bias based on AI direction
+      const autoBias = {
+        bias: ranked.opportunity.direction as 'long' | 'short' | 'none',
+        confidence: Math.round(ranked.opportunity.confidence * 100),
+        reasoning: ranked.aiReasoning.join(' | ')
+      };
+      
+      // Determine opportunity details
+      const opportunityType = ranked.opportunity.type === 'range' ? 'volatility' : ranked.opportunity.type;
+      const opportunity = {
+        type: opportunityType as 'breakout' | 'reversal' | 'trend' | 'momentum' | 'volatility',
+        direction: ranked.opportunity.direction === 'long' ? 'bullish' : 
+                  ranked.opportunity.direction === 'short' ? 'bearish' : 'neutral' as 'bullish' | 'bearish' | 'neutral',
+        timeframe: 'short' as const,
+        expectedReturn: Math.abs(ranked.change24h) * 1.5, // Estimate based on momentum
+        riskLevel: ranked.technical.atrPct > 1.5 ? 'high' : 
+                   ranked.technical.atrPct > 0.8 ? 'medium' : 'low' as 'low' | 'medium' | 'high',
+        playbook: opportunityType === 'breakout' ? 'momentum_breakout' :
+                 opportunityType === 'trend' ? 'trend_following' :
+                 opportunityType === 'reversal' ? 'mean_reversion' : 'volatility',
+        targetR: opportunityType === 'breakout' ? 10 : 
+                opportunityType === 'trend' ? 6 : 4
+      };
+      
+      return {
+        symbol: ranked.symbol,
+        score: ranked.score * 10, // Convert 0-1 to 0-10 scale
+        rank: ranked.rank,
+        confidence: Math.round(ranked.opportunity.confidence * 100),
+        projectionConfidence: ranked.opportunity.confidence,
+        autoBias,
+        reasoning: {
+          summary: ranked.aiReasoning[0] || 'AI-selected opportunity',
+          technical: ranked.aiReasoning.slice(0, 3),
+          sentiment: [],
+          risk: ranked.technical.atrPct > 1.5 ? ['High volatility - increased risk'] : []
+        },
+        metrics: {
+          momentum: ranked.change24h,
+          trend: ranked.technical.ema20 - ranked.technical.ema50,
+          volatility: ranked.technical.atrPct,
+          volume24h: ranked.volumeUsd24h,
+          rsi: ranked.technical.rsi,
+          trendStrength: Math.abs(ranked.technical.ema20 - ranked.technical.ema50) / ranked.technical.ema50 * 100,
+          hurst: 0.5, // Default
+          adx: ranked.technical.adx
+        },
+        opportunity,
+        regime: ranked.technical.trend
+      };
+    });
+    
+    console.log(`✅ AI scan complete. ${analyses.length} opportunities converted.`);
+    console.log(`🏆 Top 5: ${analyses.slice(0, 5).map(a => `${a.symbol}(${a.score.toFixed(1)})`).join(', ')}`);
+    
+    return analyses;
+    
+  } catch (error) {
+    console.error('❌ AI ranking failed, falling back to legacy system:', error);
+    
+    // FALLBACK: Use legacy system if AI fails
+    return await scanIntelligentOpportunitiesLegacy(excludeSessionId, opts);
+  }
+}
+
+/**
+ * LEGACY: Original scan (backup if AI fails)
+ */
+async function scanIntelligentOpportunitiesLegacy(excludeSessionId?: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis[]> {
+  console.log('🔍 Using LEGACY opportunity scan...');
   
   // Get top 10-20 cryptos instead of all perpetuals, excluding current session
   const symbols = await getOptimizedCryptoList(excludeSessionId);
-  console.log(`📊 Analyzing ${symbols.length} top cryptos (cost-optimized)...`);
+  console.log(`📊 Analyzing ${symbols.length} top cryptos (legacy mode)...`);
   
   // Analyze in smaller batches for better performance
   const analyses: IntelligentAnalysis[] = [];
@@ -1428,7 +1518,7 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
     analysis.rank = index + 1;
   });
   
-  console.log(`✅ Intelligent scan complete. Found ${analyses.length} total analyses, ${qualifiedAnalyses.length} above threshold (score ≥ ${minScoreThreshold}).`);
+  console.log(`✅ Legacy scan complete. Found ${analyses.length} total analyses, ${qualifiedAnalyses.length} above threshold (score ≥ ${minScoreThreshold}).`);
   console.log(`🏆 Top qualified: ${qualifiedAnalyses.slice(0, 5).map(a => `${a.symbol}(${a.score.toFixed(1)})`).join(', ')}`);
   
   return qualifiedAnalyses;
