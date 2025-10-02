@@ -145,6 +145,12 @@ export class ReboundRejectionAgent {
   // Real-time performance tracking
   private recentTrades: { win: boolean; pnlPct: number; timestamp: number }[] = [];
   private qualityThresholdAdjustment = 0; // Dynamic adjustment to quality thresholds
+  
+  // 🆕 Breakout mode tracking
+  private lastTradeWasWin = false;
+  private lastZoneRecalcTime = 0;
+  private lastZoneCheckTime = 0;
+  private breakoutModeActive = false;
 
   // Advanced performance tracking by strategy and bias
   private performanceMetrics: PerformanceMetrics | null = null;
@@ -277,6 +283,9 @@ export class ReboundRejectionAgent {
     const playbook = this.plan.plan.meta?.playbook || this.regime?.playbook || 'mean_reversion';
 
     if (this.state === 'ARMED') {
+      // 🆕 Recalculate entry zone periodically (every 30 min) to check breakout conditions
+      await this.maybeRecalculateEntryZone().catch(err => console.warn('Zone recalc failed:', err));
+      
       // Safety: if a position is somehow set, switch to MANAGE
       if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); return; }
       if (this.plan.bias === 'none') return;
@@ -1100,6 +1109,57 @@ export class ReboundRejectionAgent {
   }
 
   /**
+   * 🆕 Check if should switch to breakout mode (capture ongoing trends)
+   */
+  private shouldSwitchToBreakoutMode(snap: TechnicalSnapshot, currentPrice: number): boolean {
+    if (!this.plan?.zone) return false;
+    if (this.breakoutModeActive) return true; // Already in breakout
+    
+    const { from, to } = this.plan.zone;
+    const zoneMax = Math.max(from, to);
+    const priceAboveZonePct = ((currentPrice - zoneMax) / zoneMax) * 100;
+    
+    // Conditions strictes pour switch breakout
+    const farAboveZone = priceAboveZonePct > 3.0; // +3% au-dessus zone
+    const strongTrend = (snap.adx14 || 0) > 30;
+    const significantMove = Math.abs((snap as any).change24h || 0) > 4.0;
+    const lastTradeWin = this.lastTradeWasWin === true;
+    
+    // Durée hors zone (éviter switch trop rapide)
+    const now = Date.now();
+    if (this.lastZoneCheckTime === 0) this.lastZoneCheckTime = now;
+    const timeOutOfZone = now - this.lastZoneCheckTime;
+    const minDuration = 2 * 60 * 60 * 1000; // 2 heures
+    
+    const shouldSwitch = farAboveZone && strongTrend && significantMove && timeOutOfZone > minDuration;
+    
+    if (shouldSwitch && !lastTradeWin) {
+      console.log('⚠️ Breakout conditions met but last trade was LOSS - staying conservative');
+      return false;
+    }
+    
+    if (shouldSwitch) {
+      console.log('🚀 SWITCHING TO BREAKOUT MODE:');
+      console.log(`  Price ${currentPrice.toFixed(4)} > zone max ${zoneMax.toFixed(4)} (+${priceAboveZonePct.toFixed(1)}%)`);
+      console.log(`  ADX: ${(snap.adx14 || 0).toFixed(1)} > 30 ✅`);
+      console.log(`  Move 24h: ${Math.abs((snap as any).change24h || 0).toFixed(1)}% ✅`);
+      console.log(`  Time out of zone: ${(timeOutOfZone / 3600000).toFixed(1)}h ✅`);
+      this.breakoutModeActive = true;
+      
+      recordOpsEvent({
+        level: 'info',
+        source: 'breakout_mode',
+        message: 'Switched to breakout mode - capturing ongoing trend',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { priceAboveZonePct, adx: snap.adx14, move24h: (snap as any).change24h, timeOutOfZoneHours: timeOutOfZone / 3600000 },
+      });
+    }
+    
+    return shouldSwitch;
+  }
+  
+  /**
    * Calculate dynamic entry zone based on current market conditions and bias
    */
   /**
@@ -1221,6 +1281,22 @@ export class ReboundRejectionAgent {
     console.log(`🔄 SCENARIO: CONSOLIDATION/NEUTRAL - No clear directional edge (trend: ${trendStrength}, RSI: ${rsi.toFixed(1)})`);
     return 'none';
   }  private async calculateDynamicEntryZone(snap: TechnicalSnapshot, currentPrice: number, bias: 'long' | 'short' | 'none'): Promise<{ from: number; to: number; mid: number }> {
+    // 🆕 CHECK: Faut-il switcher en mode breakout ?
+    const useBreakoutMode = this.shouldSwitchToBreakoutMode(snap, currentPrice);
+    
+    if (useBreakoutMode && bias !== 'none') {
+      console.log('🚀 BREAKOUT MODE - Entry zone around current price');
+      
+      // Entry zone serrée autour du prix actuel pour entrée immédiate
+      const range = currentPrice * 0.003; // ±0.3% de chaque côté
+      
+      return {
+        from: currentPrice - range,
+        to: currentPrice + range,
+        mid: currentPrice
+      };
+    }
+    
     if (bias === 'none') {
       // No bias, create a small zone around current price
       const range = currentPrice * 0.005; // 0.5% range
@@ -3278,6 +3354,16 @@ export class ReboundRejectionAgent {
           pnlPct: (realizedPnl / (this.pos.entry * this.pos.qty)) * 100,
           timestamp: Date.now()
         });
+        
+        // 🆕 Track last trade result for breakout mode logic
+        this.lastTradeWasWin = win;
+        
+        // Reset breakout mode after trade exit
+        if (this.breakoutModeActive) {
+          console.log('🔄 Resetting breakout mode after trade exit');
+          this.breakoutModeActive = false;
+          this.lastZoneCheckTime = 0;
+        }
 
         // Keep only last 20 trades
         if (this.recentTrades.length > 20) {
@@ -3354,6 +3440,57 @@ export class ReboundRejectionAgent {
     return priceDiff * qty;
   }
 
+  /**
+   * 🆕 Recalculate entry zone periodically when ARMED (every 30 min)
+   * Allows switch to breakout mode if conditions are met
+   */
+  private async maybeRecalculateEntryZone(): Promise<void> {
+    if (this.state !== 'ARMED' || !this.plan || !this.profile) return;
+    
+    const now = Date.now();
+    const lastRecalc = this.lastZoneRecalcTime || 0;
+    const recalcInterval = 30 * 60 * 1000; // 30 minutes
+    
+    if (now - lastRecalc < recalcInterval) return;
+    
+    this.lastZoneRecalcTime = now;
+    
+    try {
+      // Recalculer zone avec conditions actuelles
+      const snap = await buildTechSnapshot(this.profile.symbol);
+      const newZone = await this.calculateDynamicEntryZone(snap, snap.last, this.plan.bias);
+      
+      // Vérifier si passage en breakout mode
+      const wasBreakout = this.breakoutModeActive;
+      const isBreakout = this.shouldSwitchToBreakoutMode(snap, snap.last);
+      
+      if (isBreakout && !wasBreakout) {
+        console.log('🔄 Entry zone mise à jour → Mode BREAKOUT');
+        this.plan.zone = newZone;
+        
+        // Broadcast pour UI
+        broadcast('zone_updated', { 
+          zone: newZone, 
+          mode: 'breakout',
+          reason: 'strong_trend_detected'
+        }, this.profile.symbol, this.sessionId || undefined);
+        
+        recordOpsEvent({
+          level: 'info',
+          source: 'zone_recalc',
+          message: 'Entry zone updated to breakout mode',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: { oldZone: this.plan.zone, newZone, mode: 'breakout' },
+        });
+      } else if (!isBreakout && this.lastZoneRecalcTime > 0) {
+        console.log('🔄 Entry zone recalculated (pullback mode maintained)');
+      }
+    } catch (error) {
+      console.warn('Failed to recalculate entry zone:', error);
+    }
+  }
+  
   private scheduleReactivation(reason: string, delayOverrideMs?: number): void {
     if (!this.profile || !this.plan) return;
 
