@@ -227,7 +227,11 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       aggressiveness: (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
         ? (body.aggressiveness as any)
         : 'reactive',
-      userId: req.user!.id,
+  userId: req.user!.id,
+  // Optional frontend-configurable sizing and leverage behavior
+  sizingMode: (body as any).sizingMode === 'budget' ? 'budget' : 'risk',
+  dynamicLeverage: (body as any).dynamicLeverage !== false,
+  minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
       } as any).catch(()=>{});
     } else {
       console.log(`⏸️ Deferring agent activation for ${s.id} (smart sleep startup)`);
@@ -259,6 +263,9 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
                         ? (body.aggressiveness as any)
                         : 'reactive',
                       userId: req.user!.id,
+                      sizingMode: (body as any).sizingMode === 'budget' ? 'budget' : 'risk',
+                      dynamicLeverage: (body as any).dynamicLeverage !== false,
+                      minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
                     } as any).catch(()=>{});
                   }
                 }).catch(()=>{});
@@ -365,6 +372,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       budgetPct?: number;
       aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
       startBalanceUsd?: number;
+      sizingMode?: 'risk'|'budget';
+      dynamicLeverage?: boolean;
+      minLeverage?: number;
     };
 
     const sessionId = body.sessionId;
@@ -412,6 +422,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       budgetPct: storedBudgetPct,
       aggressiveness,
       startBalanceUsd: startBal,
+      sizingMode: (body.sizingMode === 'budget' || body.sizingMode === 'risk') ? body.sizingMode : (currentProfile.sizingMode || 'risk'),
+      dynamicLeverage: body.dynamicLeverage !== undefined ? !!body.dynamicLeverage : (currentProfile.dynamicLeverage !== false),
+      minLeverage: (()=>{ const m = Number(body.minLeverage ?? currentProfile.minLeverage ?? 1); return Math.max(1, Math.min(m, safeMaxLev)); })(),
       timestamp: new Date().toISOString()
     };
 
@@ -440,6 +453,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       budgetFraction,
       aggressiveness,
       userId: ownerUserId,
+      sizingMode: updatedProfileJson.sizingMode,
+      dynamicLeverage: updatedProfileJson.dynamicLeverage,
+      minLeverage: updatedProfileJson.minLeverage,
     } as any;
 
     await AgentHub.activate(sessionId, agentProfile).catch((err) => {

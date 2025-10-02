@@ -35,6 +35,12 @@ export type ActivationProfile = {
   budgetFraction?: number; // 0..1 fraction of free balance usable by the agent
   aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
   userId?: string; // User ID for authenticated exchange access
+  // New: control how position size is computed and liquidity guard
+  sizingMode?: 'risk' | 'budget'; // default: 'risk' (risk-based, capped by budget); 'budget' uses budget * leverage
+  liquidityGuard?: boolean; // default: true; when false, skip impact-based qty reduction
+  // Risk-aware leverage controls (optional)
+  dynamicLeverage?: boolean; // default true: scale leverage based on setup quality and risk
+  minLeverage?: number; // optional floor, >=1 and <= maxLeverage
 };
 
 export type ActivePosition = {
@@ -544,11 +550,40 @@ export class ReboundRejectionAgent {
     if (planRiskMinPct != null) dynamicRiskPct = Math.max(planRiskMinPct, dynamicRiskPct);
     if (planRiskMaxPct != null) dynamicRiskPct = Math.min(planRiskMaxPct, dynamicRiskPct);
     if (this.adaptiveRisk) this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
-    const notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: this.profile.maxLeverage });
+    // Compute requested size
+    let notional = 0;
+    // Determine effective leverage for this trade (risk-aware if enabled)
+    const baseLev = Math.max(1, this.profile.maxLeverage || 1);
+    const dynLevEnabled = this.profile.dynamicLeverage !== false; // default true
+    const minLevCfg = Math.max(1, Math.min(baseLev, Number(this.profile.minLeverage || 1)));
+    let effectiveLev = baseLev;
+    if (dynLevEnabled) {
+      // Quality multiplier from sizing heuristic (0.35..1.8 roughly)
+      let qualityMultiplier = 1.0;
+      try { qualityMultiplier = Math.max(0.35, Math.min(1.8, this.computeQualityBasedSizing(snap!))); } catch {}
+      const minFactor = minLevCfg / baseLev; // floor as fraction of base
+      // Normalize quality to [0..1] where 0.35 -> 0 and 1.0 -> 1 (cap >1 to 1)
+      const qNorm = Math.max(0, Math.min(1, (qualityMultiplier - 0.35) / (1.0 - 0.35)));
+      const qualFactor = minFactor + (1 - minFactor) * qNorm;
+      // Stop distance impact: wider stops => more risk => reduce leverage
+      const stopPct = Math.abs(entry - stop) / Math.max(entry, 1e-8) * 100;
+      const stopFactor = stopPct > 2.5 ? Math.max(0.6, 1 - (stopPct - 2.5) / 7.5) : 1; // down to ~0.6 at ~10% stop
+      // Adaptive risk factor (if engine cut risk): reflect partly into leverage (floor 0.5)
+      const baseRisk = Math.max(1e-6, this.profile.riskPerTradePct);
+      const riskFactor = Math.max(0.5, Math.min(1, dynamicRiskPct / baseRisk));
+      effectiveLev = Math.max(minLevCfg, Math.min(baseLev, baseLev * qualFactor * stopFactor * riskFactor));
+    }
+    if ((this.profile.sizingMode || 'risk') === 'budget') {
+      // Budget-based sizing: use budget allocation times effective leverage
+      notional = Math.max(0, usableBalance * effectiveLev);
+    } else {
+      // Risk-based sizing: cap by effective leverage, not maximum
+      notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: effectiveLev });
+    }
     let qty = notional / Math.max(entry, 1e-8);
 
-    const equityCapNotional = Math.max(0, bal.equityUsd * (this.profile.maxLeverage || 1));
-    const budgetCapNotional = Math.max(0, capBalance * (this.profile.maxLeverage || 1));
+    const equityCapNotional = Math.max(0, bal.equityUsd * (effectiveLev || 1));
+    const budgetCapNotional = Math.max(0, capBalance * (effectiveLev || 1));
     const hardNotionalCap = Math.min(equityCapNotional || Infinity, budgetCapNotional || Infinity);
     const configuredCapNotional = Number.isFinite(this.maxNotionalCapUsd) && this.maxNotionalCapUsd > 0
       ? this.maxNotionalCapUsd
@@ -579,7 +614,9 @@ export class ReboundRejectionAgent {
       });
       qty = cappedQty;
     }
-    if (typeof (this.broker as any)?.estimateFillableQty === 'function') {
+    // Optionally estimate fillable quantity (liquidity guard)
+    const useLiqGuard = this.profile.liquidityGuard !== false; // default true
+    if (useLiqGuard && typeof (this.broker as any)?.estimateFillableQty === 'function') {
       try {
         const cfg = getConfig();
         const maxImpact = this.profile.mode === 'live' ? cfg.ORDER_MAX_IMPACT_PCT : cfg.PAPER_MAX_IMPACT_PCT;
@@ -639,11 +676,11 @@ export class ReboundRejectionAgent {
     let placed: PlacedOrder;
     if (executionMode === 'limit') {
       const limitPrice = this.computePassivePrice(side, entry, ticker);
-      placed = await this.placeLimitAdaptive({ side, qty, limitPrice, stop, tp, entry });
+      placed = await this.placeLimitAdaptive({ side, qty, limitPrice, stop, tp, entry, leverage: effectiveLev });
     } else if (executionMode === 'twap') {
-      placed = await this.executeTwapOrder({ side, totalQty: qty, slices: 3, intervalMs: 250, stop, tp, entry });
+      placed = await this.executeTwapOrder({ side, totalQty: qty, slices: 3, intervalMs: 250, stop, tp, entry, leverage: effectiveLev });
     } else {
-      placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: this.profile.maxLeverage, takeProfit: tp[0], stopLoss: stop });
+      placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: effectiveLev, takeProfit: tp[0], stopLoss: stop });
     }
 
     if (placed.status === 'rejected' || !placed.filledQty || placed.filledQty <= 0) {
@@ -691,7 +728,7 @@ export class ReboundRejectionAgent {
         entryPrice: this.pos.entry,
         stop: this.pos.stop,
         tp: this.pos.tp,
-        leverage: this.profile.maxLeverage,
+  leverage: effectiveLev,
         requestedPrice: telemetry.requestedPrice,
         requestedQty: qty,
         latencyMs: telemetry.latencyMs,
@@ -765,7 +802,8 @@ export class ReboundRejectionAgent {
     const unrealizedPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
     const isNormalMove = unrealizedPct >= 1.5 && unrealizedPct <= 4.0;
     
-    let multiplier = playbook === 'momentum_breakout' ? 0.65 : playbook === 'mean_reversion' ? 1.05 : 0.85;
+    // 🔧 AJUSTÉ : Multipliers plus généreux pour laisser respirer les positions
+    let multiplier = playbook === 'momentum_breakout' ? 0.85 : playbook === 'mean_reversion' ? 1.3 : 1.1;
     
     // CRYPTO MOONSHOT: Adaptive trailing based on profit level
     const currentProfitPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
@@ -794,16 +832,18 @@ export class ReboundRejectionAgent {
         details: { currentProfitPct, multiplier, mode: 'breakout' },
       });
     }
-    if (upR > 1.5) multiplier *= 0.85;
-    if (upR > 2.5) multiplier *= 0.75;
+    // 🔧 AJUSTÉ : Resserrer moins agressivement pour laisser se développer les gains
+    if (upR > 2.0) multiplier *= 0.90; // Seulement au-delà de +2R (au lieu de 1.5R)
+    if (upR > 3.5) multiplier *= 0.80; // Au-delà de +3.5R (au lieu de 2.5R)
     
-    // Tighten trailing for normal moves to secure profits around 2-3%
-    if (isNormalMove && upR >= 1.5) {
-      multiplier *= 0.7; // More aggressive trailing to lock profits
+    // 🔧 SUPPRIMÉ : Le resserrement sur mouvements normaux causait des sorties prématurées
+    // On laisse maintenant respirer la position jusqu'à +3% unrealized
+    if (unrealizedPct > 3.0 && upR >= 2.5) {
+      multiplier *= 0.85; // Resserrement léger uniquement après +3% unrealized
       recordOpsEvent({
         level: 'info',
         source: 'trail_optimizer',
-        message: 'Tightened trailing for normal market movement',
+        message: 'Trailing ajusté après +3% unrealized pour sécuriser gains',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
         details: { unrealizedPct: unrealizedPct.toFixed(2), upR: upR.toFixed(2), newMultiplier: multiplier.toFixed(3) },
@@ -3135,8 +3175,8 @@ export class ReboundRejectionAgent {
       this.pos.mfeR = unrealizedR;
     }
 
-    // Update breakeven if trailing
-    if (unrealizedR > 1.5 && !this.pos.partialTaken) {
+    // Update breakeven if trailing - 🔧 AJUSTÉ : Attendre +2.5R au lieu de +1.5R
+    if (unrealizedR > 2.5 && !this.pos.partialTaken) {
       const trailAdjustment = Math.min(stopDistance * 0.5, (currentPrice - entry) * 0.3 * (side === 'buy' ? 1 : -1));
       this.pos.breakeven = entry + trailAdjustment * (side === 'buy' ? 1 : -1);
     }
@@ -3572,7 +3612,7 @@ export class ReboundRejectionAgent {
   }
 
   private async placeLimitAdaptive(order: any): Promise<any> {
-    const { side, qty, limitPrice, stop, tp, entry } = order;
+    const { side, qty, limitPrice, stop, tp, entry, leverage } = order;
 
     if (!this.broker || !this.profile) {
       console.log('Cannot place limit order: missing broker or profile');
@@ -3589,7 +3629,7 @@ export class ReboundRejectionAgent {
         type: 'limit',
         qty,
         price: limitPrice,
-        leverage: this.profile.maxLeverage,
+        leverage: Math.max(1, Math.min(this.profile.maxLeverage || 1, leverage || (this.profile.dynamicLeverage !== false ? (this.profile.minLeverage || 1) : (this.profile.maxLeverage || 1)))) ,
         takeProfit: tp[0], // Primary TP
         stopLoss: stop
       });
@@ -3613,7 +3653,7 @@ export class ReboundRejectionAgent {
               type: 'limit',
               qty: runnerQty,
               price: runnerTp,
-              leverage: this.profile.maxLeverage
+              leverage: Math.max(1, Math.min(this.profile.maxLeverage || 1, leverage || (this.profile.dynamicLeverage !== false ? (this.profile.minLeverage || 1) : (this.profile.maxLeverage || 1))))
             });
 
             if (runnerOrder.filledQty && runnerOrder.filledQty > 0) {
@@ -3636,7 +3676,7 @@ export class ReboundRejectionAgent {
   }
 
   private async executeTwapOrder(order: any): Promise<any> {
-    const { side, totalQty, slices, intervalMs, stop, tp, entry } = order;
+    const { side, totalQty, slices, intervalMs, stop, tp, entry, leverage } = order;
 
     if (!this.broker || !this.profile) {
       console.log('Cannot execute TWAP order: missing broker or profile');
@@ -3676,7 +3716,7 @@ export class ReboundRejectionAgent {
             type: 'limit',
             qty: currentSliceQty,
             price: limitPrice,
-            leverage: this.profile.maxLeverage
+            leverage: Math.max(1, Math.min(this.profile.maxLeverage || 1, leverage || (this.profile.dynamicLeverage !== false ? (this.profile.minLeverage || 1) : (this.profile.maxLeverage || 1))))
           });
 
           if (sliceOrder.filledQty && sliceOrder.filledQty > 0) {

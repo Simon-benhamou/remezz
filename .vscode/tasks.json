@@ -63,6 +63,21 @@
 			"type": "shell",
 			"command": "npm -w backend run -s build",
 			"group": "build"
+		},
+		{
+			"label": "Typecheck backend",
+			"type": "shell",
+			"command": "npm -w backend run -s build",
+			"group": "build"
+		},
+		{
+			"label": "Temp build backend after leverage change",
+			"type": "shell",
+			"command": "npm -w backend run -s build",
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
 		}
 	]
 }

@@ -432,24 +432,31 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       // Calcul du score de mouvement (Phase 3)  
       const movementScore = calculatePriceMovementComponent(change24h);
       
-      // DYNAMIC SCORING: Découverte intelligente des nouvelles opportunités
+      // 🎯 TIER-BASED SCORING: Prioriser les cryptos de qualité
       let combinedScore = 0;
-      let discoveryBonus = 0;
+      const tierInfo = getCryptoTier(symbol, quoteVolume24h);
+      const tierBonus = tierInfo.bonus;
       
-      // Bonus pour découverte de nouvelles pépites
-      if (quoteVolume24h >= 1_000_000 && quoteVolume24h <= 50_000_000) {
-        // Sweet spot: volume suffisant mais pas encore mainstream
-        discoveryBonus = 0.5;
+      // 📊 Filtrage par mouvement minimum requis selon le tier
+      const absChange = Math.abs(change24h);
+      if (absChange < tierInfo.minMovement) {
+        console.log(`🚫 ${symbol} (${tierInfo.label}): Movement ${change24h.toFixed(2)}% below tier ${tierInfo.tier} threshold ${tierInfo.minMovement}%`);
+        return false; // Skip ce coin - mouvement insuffisant pour son tier
       }
       
-      // Bonus pour mouvement significatif sur crypto émergent
-      if (Math.abs(change24h) >= 2.0 && quoteVolume24h >= 500_000) {
-        discoveryBonus += 0.3; // Détection mouvement important
-      }
+      // Bonus qualité additionnel pour Tier 1 et 2 (cryptos établies)
+      let qualityBonus = 0;
+      if (tierInfo.tier === 1) qualityBonus = 1.0; // Blue chips: bonus supplémentaire
+      else if (tierInfo.tier === 2) qualityBonus = 0.5; // Majors: petit bonus
       
-      if (volumeScore >= 5.0) { // Seuil plus flexible pour découvrir nouvelles opportunités
-        // Système de scoring avec bonus découverte
-        combinedScore = (performanceScore * 0.3) + (volumeScore * 0.3) + (movementScore * 0.25) + (discoveryBonus * 0.15);
+      if (volumeScore >= 5.0) { // Seuil volume de base
+        // 🎯 NOUVEAU: Scoring basé sur QUALITÉ + Performance
+        // - Tier bonus remplace discovery bonus
+        // - Quality bonus favorise les établis
+        // - Les Tier 1/2 montent naturellement en haut du classement
+        combinedScore = (performanceScore * 0.25) + (volumeScore * 0.25) + (movementScore * 0.20) + tierBonus + qualityBonus;
+        
+        console.log(`✅ ${symbol} (${tierInfo.label}): Score=${combinedScore.toFixed(2)} (Tier bonus: ${tierBonus}, Quality: ${qualityBonus})`);
       } else {
         console.log(`🚫 Score volume ${volumeScore} insuffisant pour ${symbol}`);
       }
@@ -464,7 +471,18 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
         volumeScore,
         performanceScore
       };
-    }).filter(crypto => {
+    }).filter((crypto): crypto is {
+      symbol: string;
+      change24h: number;
+      volume24h: number;
+      quoteVolume24h: number;
+      combinedScore: number;
+      absChange: number;
+      volumeScore: number;
+      performanceScore: number;
+    } => {
+      if (!crypto) return false;
+      
       // Smart eligibility (dynamic)
       const base = crypto.symbol.split("/")[0];
       const elig = isSymbolEligibleForAuto(base, { last: Number((tickers as any)[`${crypto.symbol.replace('/USDT','/USD:USD')}`]?.last || 0), volumeUsd: crypto.quoteVolume24h });
@@ -2462,6 +2480,68 @@ export function volumeUsdFromTicker(ticker: any): number {
   }
   console.log(`📊 Volume: 0 for ${ticker?.symbol}`);
   return 0;
+}
+
+/**
+ * Get crypto tier classification for intelligent scoring
+ * TIER 1: Blue chips (BTC, ETH, SOL) - Highest quality, get +2.0 bonus
+ * TIER 2: Major established (XRP, BNB, ADA, etc.) - Good quality, get +1.0 bonus
+ * TIER 3: Promising alts (AVAX, LINK, UNI) - Moderate quality, get +0.3 bonus
+ * TIER 4: Small caps - High risk, get -1.0 penalty
+ * @public - Exported for testing
+ */
+export function getCryptoTier(symbol: string, volumeUsd: number, marketCap?: number): {
+  tier: 1 | 2 | 3 | 4;
+  bonus: number;
+  minMovement: number;
+  reputation: 'excellent' | 'good' | 'moderate' | 'unknown';
+  label: string;
+} {
+  const base = symbol.split('/')[0].toUpperCase();
+  
+  // TIER 1: Blue chips (BTC, ETH, SOL) - Accept even small moves (0.3%+)
+  if (['BTC', 'ETH', 'SOL'].includes(base) && volumeUsd >= 500_000_000) {
+    return { 
+      tier: 1, 
+      bonus: 2.0, 
+      minMovement: 0.3, 
+      reputation: 'excellent',
+      label: 'Blue Chip'
+    };
+  }
+  
+  // TIER 2: Major established cryptos - Good liquidity and reputation
+  const tier2Cryptos = ['XRP', 'BNB', 'ADA', 'DOGE', 'MATIC', 'TRX', 'LTC', 'DOT', 'SHIB', 'BCH', 'ATOM', 'XLM', 'FIL', 'ICP', 'CRO'];
+  if (tier2Cryptos.includes(base) && volumeUsd >= 50_000_000) {
+    return { 
+      tier: 2, 
+      bonus: 1.0, 
+      minMovement: 0.5, 
+      reputation: 'good',
+      label: 'Major Established'
+    };
+  }
+  
+  // TIER 3: Promising alts - Established projects with moderate risk
+  const tier3Cryptos = ['AVAX', 'LINK', 'UNI', 'NEAR', 'SUI', 'APT', 'ARB', 'OP', 'FTM', 'AAVE', 'COMP', 'MKR', 'SNX', 'GRT', 'LDO', 'RUNE', 'INJ', 'SEI', 'BLUR', 'PENDLE'];
+  if (tier3Cryptos.includes(base) && volumeUsd >= 10_000_000) {
+    return { 
+      tier: 3, 
+      bonus: 0.3, 
+      minMovement: 1.0, 
+      reputation: 'moderate',
+      label: 'Promising Alt'
+    };
+  }
+  
+  // TIER 4: Small caps - High risk, need exceptional setup (3%+ movement)
+  return { 
+    tier: 4, 
+    bonus: -1.0, 
+    minMovement: 3.0, 
+    reputation: 'unknown',
+    label: 'Small Cap (High Risk)'
+  };
 }
 
 // Smart eligibility criteria (dynamic, not static):

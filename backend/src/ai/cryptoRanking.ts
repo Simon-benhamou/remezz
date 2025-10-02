@@ -247,43 +247,90 @@ export async function rankCryptosWithAI(
       volumeRatio: s!.technical.volumeMA > 0 ? Number((s!.technical.volume / s!.technical.volumeMA).toFixed(2)) : 0
     }));
     
-    // AI Prompt for ranking
-    const prompt = `You are a crypto trading expert analyzing the top 50 cryptos by volume for the BEST opportunities in the next 24 hours.
+    // AI Prompt for ranking - TIER-BASED with quality focus
+    const prompt = `You are a PROFESSIONAL crypto trading expert. Your goal: find QUALITY opportunities, not just high movement coins.
 
-TASK: Rank these cryptos from BEST to WORST trading opportunity for the next 24h, considering:
-1. **Volume Quality**: Current volume vs MA (volumeRatio ≥ 0.8 is good)
-2. **Momentum**: Strong 24h change (>2% or <-2%) with RSI confirmation
-3. **Trend Strength**: ADX > 20 indicates strong trend
-4. **Volatility**: ATR% 0.5-2% is optimal (enough movement, not too risky)
-5. **Technical Setup**: Near support/resistance, RSI extremes (30-80 range)
+🎯 CRITICAL: Prioritize QUALITY and REPUTATION over raw movement percentage.
 
-CRYPTOS DATA (Top 50 by volume):
+📊 TIER SYSTEM (Quality-based classification):
+
+**TIER 1 - BLUE CHIPS** (Highest priority):
+- BTC, ETH, SOL
+- Characteristics: >$500M daily volume, highest liquidity, lowest risk
+- Accept movements: ≥0.3% (even small moves are significant)
+- Score adjustment: +2.0 bonus
+
+**TIER 2 - MAJOR ESTABLISHED** (High priority):
+- XRP, BNB, ADA, DOGE, MATIC, TRX, LTC, DOT, SHIB, etc.
+- Characteristics: >$50M daily volume, well-established, good liquidity
+- Accept movements: ≥0.5%
+- Score adjustment: +1.0 bonus
+
+**TIER 3 - PROMISING ALTS** (Moderate priority):
+- AVAX, LINK, UNI, NEAR, SUI, APT, ARB, OP, etc.
+- Characteristics: >$10M daily volume, established projects, moderate risk
+- Accept movements: ≥1.0%
+- Score adjustment: +0.3 bonus
+
+**TIER 4 - SMALL CAPS** (Lowest priority, high risk):
+- Unknown or new projects
+- Characteristics: <$10M volume, unproven, high risk
+- Accept ONLY if: ≥3% movement AND exceptional technicals AND score >8.5
+- Score adjustment: -1.0 penalty
+
+🎯 RANKING CRITERIA (weighted by importance):
+
+1. **Crypto Tier/Reputation** (40% weight) - MOST IMPORTANT
+   - Tier 1 coins are ALWAYS better than Tier 4, regardless of movement
+   - BTC at +0.5% >>> Unknown coin at +5%
+   - Quality beats quantity
+
+2. **Volume Quality** (25% weight)
+   - volumeRatio ≥ 0.8 is good
+   - Tier 1 requires >$500M/day
+   - Tier 2 requires >$50M/day
+   - Reject if volumeRatio < 0.6
+
+3. **Technical Setup** (20% weight)
+   - Trend confirmation (EMA alignment)
+   - RSI in tradeable range (30-80)
+   - ADX shows strength (>15 acceptable, >25 excellent)
+
+4. **Momentum** (15% weight)
+   - Tier 1: Accept ≥0.3% moves
+   - Tier 2: Accept ≥0.5% moves
+   - Tier 3: Accept ≥1.0% moves
+   - Tier 4: Require ≥3.0% moves
+
+📊 CRYPTOS DATA (Top 50 by volume):
 ${JSON.stringify(aiInput, null, 2)}
 
 RESPOND WITH STRICT JSON (array of top 20 opportunities):
 {
   "opportunities": [
     {
-      "symbol": "ETH/USDT",
-      "score": 0.85,
-      "type": "breakout|reversal|trend|momentum|range",
+      "symbol": "BTC/USDT",
+      "score": 0.90,
+      "type": "trend|breakout|reversal|momentum|range",
       "direction": "long|short|neutral",
       "confidence": 0.85,
       "reasons": [
-        "High volume ratio 1.2x MA confirms interest",
-        "Strong uptrend with ADX 35",
-        "RSI 65 - room for continuation"
+        "Tier 1 Blue Chip - Highest quality asset",
+        "Stable 0.8% move with $2B volume confirms solid demand",
+        "Strong technical setup with ADX 28",
+        "Low risk, high reliability"
       ]
     }
   ]
 }
 
-IMPORTANT:
-- Return TOP 20 opportunities only (best score first)
-- Score 0-1 (higher = better opportunity)
-- Confidence 0-1 (higher = more certain)
-- Reasons must be specific and data-driven
-- Reject low volume ratio (<0.5) or extreme RSI (>80 or <20) unless reversal setup`;
+⚠️ CRITICAL RULES:
+- BTC/ETH/SOL should ALWAYS rank in top 5 if they have ANY positive movement (>0.3%)
+- Tier 4 coins should be AVOIDED unless truly exceptional (score >8.5 AND volume >$20M)
+- Return TOP 20 opportunities ranked by QUALITY-ADJUSTED score
+- Score formula: baseScore + tierBonus - riskPenalty
+- Reasons must mention the TIER and why it matters
+- Quality > Movement: "Tier 1 at +0.5%" beats "Tier 4 at +5%"`;
 
     console.log('🤖 Sending to AI for ranking...');
     
