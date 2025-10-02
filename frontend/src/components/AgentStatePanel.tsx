@@ -45,19 +45,21 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
     }
   };
 
-  const check = (ok:boolean) => <span style={{ color: ok ? '#1f8f1f' : '#c0392b' }}>{ok ? '✓' : '✗'}</span>;
   const z = agent?.plan?.zone;
-  const inZoneNow = !!(z && lastPrice!=null && lastPrice >= Math.min(z.from, z.to) && lastPrice <= Math.max(z.from, z.to));
-  const confirmNeeded = !!agent?.plan?.plan?.entry_rule?.confirm_close;
-  const confirmNow = !!(agent?.plan?.bias === 'long' ? (lastPrice! > (z?.mid ?? Infinity)) : (lastPrice! < (z?.mid ?? -Infinity)));
-  const spreadOk = agent?.plan?.guards?.spreadOk ?? true;
-  const levOk = agent?.plan?.guards?.leverageOk ?? true;
   const ai = agent?.aiMetrics || {};
   const aiByModel = ai?.byModel || {};
+  
+  // ✅ Extraire diagnostics depuis agent (ajoutés par MonitorPage)
+  const diagnostics = agent?.diagnostics;
 
   return (
     <Card title={<span>QuantAI Agent {agent?.state && <Tag color={agent.state==='MANAGE'?'green':agent.state==='ARMED'?'blue':agent.state==='HALT'?'red':'default'}>{agent.state}</Tag>}</span>}>
       <Space direction='vertical' style={{ width:'100%' }}>
+        
+        {/* ✅ FIX: DIAGNOSTICS EN PREMIER - Pourquoi je ne trade pas ? */}
+        {!agent?.pos && diagnostics && (
+          <TradingDiagnostics sessionId={sessionId} refreshTrigger={agent?.state} />
+        )}
         
         {/* Agent Bias Display - Prominent placement */}
         {agent?.plan?.bias && (
@@ -130,9 +132,6 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
           <Button onClick={propose}>Propose plan (LLM)</Button>
           <Button type='primary' onClick={arm} disabled={!llmPlan}>Arm</Button>
         </Space>
-
-        {/* Detailed Trading Diagnostics */}
-        <TradingDiagnostics sessionId={sessionId} refreshTrigger={agent?.state} />
 
         {/* LLM Usage Info */}
         {typeof ai?.total === 'number' && (

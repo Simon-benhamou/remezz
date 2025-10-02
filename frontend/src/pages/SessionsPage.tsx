@@ -158,7 +158,12 @@ export default function SessionsPage(){
       
       // Utiliser le cache intelligent
       const sessions = await loadSessions(mode as any, false, forceRefresh);
-      const enrichedSessions = await enrichSessionData(sessions);
+      
+      // ✅ FIX: Forcer le filtre par mode côté client (défense en profondeur)
+      const filteredByMode = sessions.filter((s: any) => s.mode === mode);
+      console.log(`🔍 Filtered ${sessions.length} → ${filteredByMode.length} sessions for mode=${mode}`);
+      
+      const enrichedSessions = await enrichSessionData(filteredByMode);
       setRows(enrichedSessions);
       
       if (forceRefresh) {
@@ -213,27 +218,27 @@ export default function SessionsPage(){
   React.useEffect(() => {
     console.log(`📋 Mode changed to: ${mode}`);
     
-    // Vérifier si on a des données cachées valides
+    // ✅ FIX: Invalider le cache de l'AUTRE mode lors du switch
+    // Cela force un refresh propre des données
+    const otherMode = mode === 'live' ? 'paper' : 'live';
+    invalidateCache(otherMode as any, false);
+    console.log(`🗑️ Invalidated cache for ${otherMode} mode on switch`);
+    
+    // Vérifier si on a des données cachées valides pour le mode actuel
     const hasCachedData = getCachedSessions(mode as any, false);
     const hasValidCache = !!hasCachedData;
     
     // Notifier le changement de mode
     notifyModeSwitch(mode as any, hasValidCache);
     
-    if (hasCachedData) {
-      console.log(`🎯 Using cached sessions for ${mode} mode`);
-      // Charger depuis le cache et enrichir les données
-      enrichSessionData(hasCachedData).then(setRows);
-      // Notification de cache hit supprimée pour éviter le spam
-    } else {
-      // Pas de cache valide, charger depuis l'API
-      console.log(`⚡ No cached data for ${mode}, loading fresh`);
-      load(true);
-    }
+    // ✅ FIX: Toujours forcer un refresh lors du switch de mode
+    // Cela garantit que les données affichées correspondent au mode actuel
+    console.log(`⚡ Force refresh for mode=${mode}`);
+    load(true);
 
     // Configurer l'auto-refresh pour ce mode
     setupAutoRefresh(mode as any, false);
-  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch]);
+  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch, invalidateCache]);
 
   React.useEffect(()=>{ 
     form.setFieldsValue({ mode }); 

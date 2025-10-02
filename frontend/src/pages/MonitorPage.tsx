@@ -154,10 +154,10 @@ export default function MonitorPage(){
     if (!sessionId) return;
     
     const loadData = async () => {
-      // Set a maximum loading timeout
+      // ✅ FIX: Augmenter timeout à 20 secondes pour données complètes
       const loadingTimeout = setTimeout(() => {
-        updateProgress(LoadingPhase.COMPLETE, 100, 'Load timeout - continuing with available data', 'Loading timeout after 8 seconds');
-      }, 8000); // Reduced to 8 seconds from 15
+        updateProgress(LoadingPhase.COMPLETE, 100, 'Load timeout - continuing with available data', 'Loading timeout after 20 seconds');
+      }, 20000);
       
       try {
         // Phase 1: Core data (session, symbol, basic status)
@@ -177,22 +177,31 @@ export default function MonitorPage(){
         const sym = s?.session?.symbol || s?.symbol || symbol;
         if (sym) setSymbol(sym);
         
-        updateProgress(LoadingPhase.CORE_DATA, 30, 'Loading agent state...');
+        updateProgress(LoadingPhase.CORE_DATA, 30, 'Loading agent state & diagnostics...');
         
-        // Load core data in parallel with timeout
-        const [agentData, tickerData] = await Promise.allSettled([
+        // ✅ FIX: Load core data + diagnostics (CRITIQUE) in parallel with timeout
+        const [agentData, tickerData, diagnosticsData] = await Promise.allSettled([
           Promise.race([
             api.getAgentState(s.session.id),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 10000)) // augmenté à 10s
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 15000))
           ]),
           sym ? Promise.race([
             api.getTicker(sym),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Ticker timeout')), 10000)) // augmenté à 10s
-          ]) : Promise.resolve(null)
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Ticker timeout')), 15000))
+          ]) : Promise.resolve(null),
+          // ✅ NOUVEAU: Diagnostics en Phase 1 car CRITIQUE pour comprendre pourquoi agent ne trade pas
+          Promise.race([
+            api.getDiagnostics(s.session.id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Diagnostics timeout')), 15000))
+          ])
         ]);
         
         if (agentData.status === 'fulfilled') setAgent(agentData.value);
         if (tickerData.status === 'fulfilled' && tickerData.value) setTicker(tickerData.value);
+        if (diagnosticsData.status === 'fulfilled' && diagnosticsData.value) {
+          // Stocker diagnostics dans un state pour les utiliser dans AgentStatePanel
+          setAgent((prev: any) => ({ ...prev, diagnostics: diagnosticsData.value }));
+        }
         
         updateProgress(LoadingPhase.SECONDARY_DATA, 50, 'Loading trading data...');
         
@@ -281,6 +290,11 @@ export default function MonitorPage(){
         setAgent((prev:any)=> ({ ...prev, ...msg.data }));
         // refresh balance snapshot
         try { setAgent(await api.getAgentState(sessionId)); } catch {}
+        // ✅ FIX: Refresh diagnostics automatiquement quand agent state change
+        try { 
+          const diag = await api.getDiagnostics(sessionId);
+          setAgent((prev: any) => ({ ...prev, diagnostics: diag }));
+        } catch {}
         if (msg?.data?.exit) {
           try { setKpi(await api.getPerf(sessionId)); } catch {}
         }

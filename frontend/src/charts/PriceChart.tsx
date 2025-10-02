@@ -223,61 +223,104 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     trailSeriesRef.current.setData(data);
   }, [agentPos?.trail, agentPos?.stop]);
 
+  // ✅ FIX: Support/Resistance depuis status (backend calcule)
   React.useEffect(()=> {
-    const ensure = (ref: any, title: string) => {
-      if (!ref.current && seriesRef.current) ref.current = seriesRef.current.createPriceLine({ price: 0, title, lineWidth: 1 });
+    const ensure = (ref: any, title: string, color: string, lineStyle?: any) => {
+      if (!ref.current && seriesRef.current) {
+        ref.current = seriesRef.current.createPriceLine({ 
+          price: 0, 
+          title, 
+          lineWidth: 1, 
+          color,
+          lineStyle: lineStyle || LineStyle.Solid
+        });
+      }
       return ref.current;
     };
     const remove = (ref: any) => {
-      if (ref.current && seriesRef.current) { try { seriesRef.current.removePriceLine(ref.current); } catch {} ref.current = null; }
+      if (ref.current && seriesRef.current) { 
+        try { seriesRef.current.removePriceLine(ref.current); } catch {} 
+        ref.current = null; 
+      }
     };
-    if (typeof support === 'number' && isFinite(support)) ensure(plSupport, 'Support')?.applyOptions({ price: support });
-    else remove(plSupport);
-    if (typeof resistance === 'number' && isFinite(resistance)) ensure(plResistance, 'Resistance')?.applyOptions({ price: resistance });
-    else remove(plResistance);
+    
+    if (typeof support === 'number' && isFinite(support)) {
+      ensure(plSupport, 'Support', '#e74c3c', LineStyle.Dashed)?.applyOptions({ price: support });
+    } else {
+      remove(plSupport);
+    }
+    
+    if (typeof resistance === 'number' && isFinite(resistance)) {
+      ensure(plResistance, 'Resistance', '#3498db', LineStyle.Dashed)?.applyOptions({ price: resistance });
+    } else {
+      remove(plResistance);
+    }
   }, [support, resistance]);
 
+  // ✅ FIX: SOURCE UNIQUE = Agent State (plus de strategy obsolète)
   React.useEffect(()=> {
-    // Primary from classic strategy
-    const zmin = strategy?.entry?.zone?.min;
-    const zmax = strategy?.entry?.zone?.max;
-    const sl = strategy?.levels?.stopPrice;
-    const tp = strategy?.levels?.takeProfitPrice;
-    const ensure = (ref: any, title: string) => {
-      if (!ref.current && seriesRef.current) ref.current = seriesRef.current.createPriceLine({ price: 0, title, lineWidth: 1 });
+    // Helper functions
+    const ensure = (ref: any, title: string, color: string) => {
+      if (!ref.current && seriesRef.current) {
+        ref.current = seriesRef.current.createPriceLine({ 
+          price: 0, 
+          title, 
+          lineWidth: 2, 
+          color 
+        });
+      }
       return ref.current;
     };
-    const remove = (ref: any) => { if (ref.current && seriesRef.current) { try { seriesRef.current.removePriceLine(ref.current); } catch {} ref.current = null; } };
-    if (typeof zmin === 'number' && isFinite(zmin)) ensure(plEntryMin, 'Entry Min')?.applyOptions({ price: zmin }); else remove(plEntryMin);
-    if (typeof zmax === 'number' && isFinite(zmax)) ensure(plEntryMax, 'Entry Max')?.applyOptions({ price: zmax }); else remove(plEntryMax);
-    if (typeof sl === 'number' && isFinite(sl)) ensure(plSL, 'Stop')?.applyOptions({ price: sl }); else remove(plSL);
-    if (typeof tp === 'number' && isFinite(tp)) ensure(plTP, 'Target')?.applyOptions({ price: tp }); else remove(plTP);
-  }, [strategy]);
-
-  React.useEffect(()=> {
-    // Agent validated plan overlays
-    const zmin = agentPlan?.zone?.from;
-    const zmax = agentPlan?.zone?.to;
-    const mid = agentPlan?.zone?.mid;
-    const sd = agentPlan?.stopDistance;
-    const sl = typeof agentPos?.stop === 'number' ? agentPos?.stop : (
-      typeof mid === 'number' && typeof sd === 'number'
-        ? (agentPlan?.bias==='long' ? (mid - sd) : (mid + sd))
-        : undefined
-    );
-    const tp = agentPlan?.rPrices?.[0]?.price;
-    const ensure = (ref: any, title: string) => {
-      if (!ref.current && seriesRef.current) ref.current = seriesRef.current.createPriceLine({ price: 0, title, lineWidth: 1 });
-      return ref.current;
+    const remove = (ref: any) => {
+      if (ref.current && seriesRef.current) { 
+        try { seriesRef.current.removePriceLine(ref.current); } catch {} 
+        ref.current = null; 
+      }
     };
-    const remove = (ref: any) => { if (ref.current && seriesRef.current) { try { seriesRef.current.removePriceLine(ref.current); } catch {} ref.current = null; } };
-    if (typeof zmin === 'number' && isFinite(zmin)) ensure(plEntryMin, 'Entry Min')?.applyOptions({ price: zmin }); else remove(plEntryMin);
-    if (typeof zmax === 'number' && isFinite(zmax)) ensure(plEntryMax, 'Entry Max')?.applyOptions({ price: zmax }); else remove(plEntryMax);
-    if (typeof sl === 'number' && isFinite(sl)) ensure(plSL, 'Stop')?.applyOptions({ price: sl }); else remove(plSL);
-    if (typeof tp === 'number' && isFinite(tp)) ensure(plTP, 'Target')?.applyOptions({ price: tp }); else remove(plTP);
+    
+    // ✅ NETTOYER toutes les lines d'abord (éviter overlaps)
+    [plEntryMin, plEntryMax, plSL, plTP].forEach(ref => remove(ref));
+    
+    // ✅ RECRÉER depuis agent plan uniquement (source de vérité)
+    if (agentPlan) {
+      const zmin = agentPlan?.zone?.from;
+      const zmax = agentPlan?.zone?.to;
+      const mid = agentPlan?.zone?.mid;
+      const sd = agentPlan?.stopDistance;
+      
+      // Stop: utiliser agentPos.stop si existe, sinon calculer
+      const sl = typeof agentPos?.stop === 'number' ? agentPos.stop : (
+        typeof mid === 'number' && typeof sd === 'number'
+          ? (agentPlan?.bias==='long' ? (mid - sd) : (mid + sd))
+          : undefined
+      );
+      
+      // Target: premier R price
+      const tp = agentPlan?.rPrices?.[0]?.price;
+      
+      // Créer les price lines avec couleurs distinctes
+      if (typeof zmin === 'number' && isFinite(zmin)) {
+        ensure(plEntryMin, 'Entry Min', '#2ecc71')?.applyOptions({ price: zmin });
+      }
+      if (typeof zmax === 'number' && isFinite(zmax)) {
+        ensure(plEntryMax, 'Entry Max', '#27ae60')?.applyOptions({ price: zmax });
+      }
+      if (typeof sl === 'number' && isFinite(sl)) {
+        ensure(plSL, 'Stop', '#e74c3c')?.applyOptions({ price: sl });
+      }
+      if (typeof tp === 'number' && isFinite(tp)) {
+        ensure(plTP, 'Target', '#3498db')?.applyOptions({ price: tp });
+      }
+    } else {
+      // Pas de plan agent, nettoyer tout
+      [plEntryMin, plEntryMax, plSL, plTP].forEach(ref => remove(ref));
+    }
 
-    // Zone shading overlay (approximate)
-    try {
+    // ✅ Zone shading depuis agent plan
+    if (agentPlan) {
+      const zmin = agentPlan?.zone?.from;
+      const zmax = agentPlan?.zone?.to;
+      
       if (zoneRef.current && seriesRef.current && typeof zmin === 'number' && typeof zmax === 'number' && isFinite(zmin) && isFinite(zmax)) {
         const y1 = seriesRef.current.priceToCoordinate(zmin);
         const y2 = seriesRef.current.priceToCoordinate(zmax);
@@ -309,7 +352,7 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
       } else if (zoneRef.current) {
         zoneRef.current.style.display = 'none';
       }
-    } catch {}
+    }
   }, [agentPlan, agentPos]);
 
   React.useEffect(()=> {
