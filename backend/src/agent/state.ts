@@ -286,8 +286,17 @@ export class ReboundRejectionAgent {
       // 🆕 Recalculate entry zone periodically (every 30 min) to check breakout conditions
       await this.maybeRecalculateEntryZone().catch(err => console.warn('Zone recalc failed:', err));
       
-      // Safety: if a position is somehow set, switch to MANAGE
-      if (this.pos) { this.state = 'MANAGE'; broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); return; }
+      // ✅ Safety: MANAGE state only if position truly exists and valid
+      if (this.pos && this.pos.qty > 0) { 
+        this.state = 'MANAGE'; 
+        broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined); 
+        return; 
+      } else if (this.pos) {
+        // ✅ Position object exists but qty invalid
+        console.warn(`⚠️  Invalid position qty (${this.pos.qty}) for ${this.profile.symbol}, clearing`);
+        this.pos = null;
+        this.state = 'SCAN';
+      }
       if (this.plan.bias === 'none') return;
       const inZone = price >= Math.min(from,to) && price <= Math.max(from,to);
 
@@ -3194,7 +3203,32 @@ export class ReboundRejectionAgent {
   }
 
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
-    if (!this.pos || !this.plan || !this.profile) return;
+    // ✅ FIX: Validate position exists, reset state if missing (prevents stuck MANAGE state)
+    if (!this.pos || !this.plan || !this.profile) {
+      console.warn(`⚠️  Agent in MANAGE state but missing position/plan/profile - resetting to SCAN`);
+      
+      recordOpsEvent({
+        level: 'warn',
+        source: 'position_validation',
+        message: 'manage_without_position',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { 
+          hasPos: !!this.pos, 
+          hasPlan: !!this.plan, 
+          hasProfile: !!this.profile 
+        },
+      });
+      
+      // Reset to SCAN to allow new opportunities
+      this.state = 'SCAN';
+      broadcast('agent_state', { 
+        state: this.state, 
+        reason: 'no_position_in_manage_state' 
+      }, this.profile?.symbol, this.sessionId || undefined);
+      
+      return;
+    }
 
     try {
       const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
@@ -3206,7 +3240,7 @@ export class ReboundRejectionAgent {
       console.warn(`Failed to refresh live price for ${this.profile.symbol}:`, error);
     }
 
-    // Check if position is still open on the exchange
+    // Check if position is still open (both live and paper modes)
     if (this.profile.mode === 'live') {
       try {
         const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
@@ -3222,6 +3256,25 @@ export class ReboundRejectionAgent {
         }
       } catch (error) {
         console.warn(`Failed to check exposure for ${this.profile.symbol}:`, error);
+      }
+    } else if (this.profile.mode === 'paper') {
+      // ✅ NEW: Paper mode position validation (prevents stuck state)
+      try {
+        // Verify paper position still exists with valid quantity
+        if (!this.pos || this.pos.qty <= 0) {
+          console.log(`Paper position cleared for ${this.profile.symbol}, transitioning to EXIT`);
+          this.pos = null;
+          this.state = 'EXIT';
+          this.lastExitTime = Date.now();
+          broadcast('agent_state', { 
+            state: this.state, 
+            reason: 'paper_position_cleared' 
+          }, this.profile.symbol, this.sessionId || undefined);
+          this.scheduleReactivation('paper_position_cleared');
+          return;
+        }
+      } catch (error) {
+        console.warn(`Failed to validate paper position for ${this.profile.symbol}:`, error);
       }
     }
 
