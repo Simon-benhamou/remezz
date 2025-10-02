@@ -3553,10 +3553,14 @@ export class ReboundRejectionAgent {
   private async checkPartialExits(price: number, snap: TechnicalSnapshot): Promise<void> {
     if (!this.pos || !this.plan || this.pos.partialTaken) return;
 
+    // ✅ FIX: Use same logic as policy.ts monitoring
+    // Get firstR from plan (should be 2R typically)
+    const firstR = (this.plan?.plan?.risk?.tp?.[0]?.value || this.plan?.rPrices?.[0]?.r || 2.0) as number;
+    
     const firstTarget = this.pos.tp[0] ?? (
       this.pos.side === 'buy'
-        ? this.pos.entry + this.plan.stopDistance
-        : this.pos.entry - this.plan.stopDistance
+        ? this.pos.entry + (firstR * this.plan.stopDistance)  // ← FIX: Use firstR multiplier
+        : this.pos.entry - (firstR * this.plan.stopDistance)
     );
 
     const hitFirstTarget = this.pos.side === 'buy' ? price >= firstTarget : price <= firstTarget;
