@@ -589,6 +589,28 @@ export class ReboundRejectionAgent {
       // Risk-based sizing: cap by effective leverage, not maximum
       notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: effectiveLev });
     }
+    
+    // ✅ FIX: Enforce minimum notional (8% of balance) to ensure meaningful position sizes
+    // Position too small (<8%) don't justify trading costs and make gains insignificant
+    const minNotionalPct = bal.equityUsd * 0.08; // 8% of balance minimum
+    if (notional < minNotionalPct) {
+      const oldNotional = notional;
+      notional = Math.min(minNotionalPct, usableBalance * effectiveLev); // Cap by usable balance
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'minimum_notional_enforced',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          oldNotional,
+          minNotional: minNotionalPct,
+          newNotional: notional,
+          reason: 'Position size below 8% threshold'
+        },
+      });
+    }
+    
     let qty = notional / Math.max(entry, 1e-8);
 
     const equityCapNotional = Math.max(0, bal.equityUsd * (effectiveLev || 1));
@@ -2444,35 +2466,35 @@ export class ReboundRejectionAgent {
     let sizeMultiplier = 1.0;
     const level = this.profile?.aggressiveness || 'conservative';
     
-    // Base multiplier by aggressiveness
+    // Base multiplier by aggressiveness (REDUCED PENALTIES)
     const baseMultipliers = {
-      'conservative': 0.8,  // More cautious sizing
+      'conservative': 0.9,  // ✅ FIX: Was 0.8, now 0.9 (less penalty)
       'reactive': 1.0,      // Standard sizing
       'aggressive': 1.2     // Larger positions on good setups
     };
     sizeMultiplier = baseMultipliers[level] || 1.0;
     
-    // ADX strength bonus (up to +30%)
+    // ADX strength bonus (up to +30%) - REDUCED PENALTIES
     if (adx >= 30) sizeMultiplier *= 1.3;
     else if (adx >= 25) sizeMultiplier *= 1.2;
     else if (adx >= 20) sizeMultiplier *= 1.1;
-    else if (adx < 15) sizeMultiplier *= 0.7; // Reduce size in weak trends
+    else if (adx < 15) sizeMultiplier *= 0.85; // ✅ FIX: Was 0.7, now 0.85 (less penalty)
     
-    // Trend alignment bonus (up to +20%)
+    // Trend alignment bonus (up to +20%) - REDUCED SIDEWAYS PENALTY
     const emaSpread = ((snap as any)?.ema20 - (snap as any)?.ema50) / Math.abs((snap as any)?.ema50 || 1);
     const trendAligned = bias === 'long' ? emaSpread > 0.5 : emaSpread < -0.5;
     if (trendAligned) {
       if (Math.abs(emaSpread) > 0.02) sizeMultiplier *= 1.2; // Strong trend
       else if (Math.abs(emaSpread) > 0.01) sizeMultiplier *= 1.1; // Moderate trend
     } else if (Math.abs(emaSpread) < 0.002) {
-      sizeMultiplier *= 0.6; // Reduce size in sideways markets
+      sizeMultiplier *= 0.85; // ✅ FIX: Was 0.6, now 0.85 (less penalty for sideways)
     }
     
-    // Volume confirmation bonus (up to +15%)
+    // Volume confirmation bonus (up to +15%) - REDUCED LOW VOLUME PENALTY
     const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
     if (volumeRatio >= 1.5) sizeMultiplier *= 1.15;
     else if (volumeRatio >= 1.2) sizeMultiplier *= 1.1;
-    else if (volumeRatio < 0.8) sizeMultiplier *= 0.8;
+    else if (volumeRatio < 0.8) sizeMultiplier *= 0.9; // ✅ FIX: Was 0.8, now 0.9 (less penalty)
     
     // Volatility adjustment
     if (atrPct > 2.0) sizeMultiplier *= 0.9; // Reduce size in high volatility
@@ -2498,13 +2520,13 @@ export class ReboundRejectionAgent {
       }
     } catch {}
     
-    // Reduce size further on short-term loss streaks (confidence tightening)
+    // Reduce size further on short-term loss streaks (confidence tightening) - REDUCED PENALTY
     try {
       const cfg = getConfig();
       const window = Math.max(1, Number(cfg.STREAK_WINDOW || 3));
       const streak = this.getLossStreak(window);
       if (streak >= 1) {
-        const penalty = Math.min(0.7, (cfg.LOSS_STREAK_SIZE_PENALTY || 0.15) * streak);
+        const penalty = Math.min(0.7, (cfg.LOSS_STREAK_SIZE_PENALTY || 0.05) * streak); // ✅ FIX: Was 0.15, now 0.05 (less penalty per loss)
         sizeMultiplier *= (1 - penalty);
       }
       // Increase size modestly on win streaks (confidence relaxation)
@@ -2514,8 +2536,10 @@ export class ReboundRejectionAgent {
         sizeMultiplier *= (1 + bonus);
       }
     } catch {}
-    // Apply bounds (keep between 0.35x and 1.8x of base risk)
-    sizeMultiplier = Math.max(0.35, Math.min(1.8, sizeMultiplier));
+    
+    // ✅ FIX: Cap cumulative penalties - max 30% reduction (0.7 floor instead of 0.35)
+    // This prevents too many penalties from stacking and making positions too small
+    sizeMultiplier = Math.max(0.7, Math.min(1.8, sizeMultiplier));
 
     return sizeMultiplier;
   }

@@ -432,31 +432,33 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       // Calcul du score de mouvement (Phase 3)  
       const movementScore = calculatePriceMovementComponent(change24h);
       
-      // 🎯 TIER-BASED SCORING: Prioriser les cryptos de qualité
+      // 🎯 SMART QUALITY SCORING: Objective criteria based
       let combinedScore = 0;
-      const tierInfo = getCryptoTier(symbol, quoteVolume24h);
-      const tierBonus = tierInfo.bonus;
+      const smartQuality = applySmartQualityAdjustments({
+        symbol,
+        volumeUsd: quoteVolume24h,
+        movement: change24h,
+        avgVolatility: 2.0, // Default typical daily movement
+        setupQuality: volumeScore, // Use volume score as proxy for now
+      });
       
-      // 📊 Filtrage par mouvement minimum requis selon le tier
+      // 📊 Filtrage par mouvement minimum requis (based on liquidity, not name)
       const absChange = Math.abs(change24h);
-      if (absChange < tierInfo.minMovement) {
-        console.log(`🚫 ${symbol} (${tierInfo.label}): Movement ${change24h.toFixed(2)}% below tier ${tierInfo.tier} threshold ${tierInfo.minMovement}%`);
-        return false; // Skip ce coin - mouvement insuffisant pour son tier
+      if (absChange < smartQuality.minMovement) {
+        console.log(`🚫 ${symbol} (${smartQuality.label}): Movement ${change24h.toFixed(2)}% below threshold ${smartQuality.minMovement}% for this liquidity level`);
+        return false; // Skip - insufficient movement for liquidity profile
       }
       
-      // Bonus qualité additionnel pour Tier 1 et 2 (cryptos établies)
-      let qualityBonus = 0;
-      if (tierInfo.tier === 1) qualityBonus = 1.0; // Blue chips: bonus supplémentaire
-      else if (tierInfo.tier === 2) qualityBonus = 0.5; // Majors: petit bonus
-      
       if (volumeScore >= 5.0) { // Seuil volume de base
-        // 🎯 NOUVEAU: Scoring basé sur QUALITÉ + Performance
-        // - Tier bonus remplace discovery bonus
-        // - Quality bonus favorise les établis
-        // - Les Tier 1/2 montent naturellement en haut du classement
-        combinedScore = (performanceScore * 0.25) + (volumeScore * 0.25) + (movementScore * 0.20) + tierBonus + qualityBonus;
+        // 🎯 SMART QUALITY: Objective scoring without name bias
+        // - Liquidity adjustments (execution quality)
+        // - Spread adjustments (trading costs)
+        // - Volatility-adjusted movement (exceptional opportunities)
+        // - Technical setup quality
+        combinedScore = (performanceScore * 0.25) + (volumeScore * 0.25) + (movementScore * 0.20) + smartQuality.adjustments;
         
-        console.log(`✅ ${symbol} (${tierInfo.label}): Score=${combinedScore.toFixed(2)} (Tier bonus: ${tierBonus}, Quality: ${qualityBonus})`);
+        console.log(`✅ ${symbol} (${smartQuality.label}): Score=${combinedScore.toFixed(2)}`);
+        smartQuality.reasons.forEach(r => console.log(`   ${r}`));
       } else {
         console.log(`🚫 Score volume ${volumeScore} insuffisant pour ${symbol}`);
       }
@@ -2483,12 +2485,93 @@ export function volumeUsdFromTicker(ticker: any): number {
 }
 
 /**
- * Get crypto tier classification for intelligent scoring
- * TIER 1: Blue chips (BTC, ETH, SOL) - Highest quality, get +2.0 bonus
- * TIER 2: Major established (XRP, BNB, ADA, etc.) - Good quality, get +1.0 bonus
- * TIER 3: Promising alts (AVAX, LINK, UNI) - Moderate quality, get +0.3 bonus
- * TIER 4: Small caps - High risk, get -1.0 penalty
+ * SMART QUALITY SCORING - Objective criteria based scoring
+ * 
+ * Instead of arbitrary tier bonuses, we use measurable quality metrics:
+ * - Liquidity (volume) affects execution quality
+ * - Spread affects trading costs
+ * - Movement/volatility ratio indicates exceptional opportunities
+ * - Setup quality from technical analysis
+ * 
+ * Result: Captures best risk/reward regardless of crypto "name"
  * @public - Exported for testing
+ */
+export function applySmartQualityAdjustments(params: {
+  symbol: string;
+  volumeUsd: number;
+  spread?: number; // in percentage
+  movement: number; // percentage change
+  avgVolatility?: number; // typical daily movement
+  setupQuality?: number; // 0-10 from technical analysis
+}): {
+  adjustments: number;
+  reasons: string[];
+  minMovement: number;
+  label: string;
+} {
+  let adjustments = 0;
+  const reasons: string[] = [];
+  
+  // 1. LIQUIDITY ADJUSTMENT (objective execution quality)
+  if (params.volumeUsd < 50_000_000) {
+    adjustments -= 1.5;
+    reasons.push('Very low liquidity -1.5 (high slippage risk)');
+  } else if (params.volumeUsd < 200_000_000) {
+    adjustments -= 0.5;
+    reasons.push('Low liquidity -0.5 (some slippage expected)');
+  } else if (params.volumeUsd > 1_000_000_000) {
+    adjustments += 0.3;
+    reasons.push('Excellent liquidity +0.3 (minimal slippage)');
+  }
+  
+  // 2. SPREAD ADJUSTMENT (real trading cost)
+  const spread = params.spread || (params.volumeUsd < 100_000_000 ? 0.1 : 0.02); // Estimate if not provided
+  if (spread > 0.1) {
+    adjustments -= 1.0;
+    reasons.push('High spread -1.0 (expensive to trade)');
+  } else if (spread < 0.02) {
+    adjustments += 0.5;
+    reasons.push('Tight spread +0.5 (low cost)');
+  }
+  
+  // 3. EXCEPTIONAL MOVEMENT BONUS (volatility-adjusted)
+  const avgVol = params.avgVolatility || 2.0; // Default 2% typical daily movement
+  const volatilityRatio = Math.abs(params.movement) / avgVol;
+  if (volatilityRatio > 3.0) {
+    adjustments += 1.0;
+    reasons.push(`Exceptional movement +1.0 (${volatilityRatio.toFixed(1)}x typical)`);
+  } else if (volatilityRatio < 1.0) {
+    adjustments -= 0.5;
+    reasons.push('Normal movement -0.5 (not exceptional)');
+  }
+  
+  // 4. SETUP QUALITY BONUS (technical confirmation)
+  const setupQuality = params.setupQuality || 5.0;
+  if (setupQuality >= 8.0) {
+    adjustments += 0.5;
+    reasons.push('Clean setup +0.5 (strong technical confirmation)');
+  }
+  
+  // Determine minimum movement threshold (based on liquidity, not arbitrary names)
+  let minMovement = 0.5; // Default
+  if (params.volumeUsd < 50_000_000) minMovement = 3.0; // Need big moves to justify risk
+  else if (params.volumeUsd < 200_000_000) minMovement = 1.5; // Moderate threshold
+  else if (params.volumeUsd > 1_000_000_000) minMovement = 0.3; // Can trade small moves
+  
+  // Label based on actual characteristics, not name
+  let label = 'Unknown';
+  if (params.volumeUsd > 5_000_000_000) label = 'Mega Cap (Excellent)';
+  else if (params.volumeUsd > 1_000_000_000) label = 'Large Cap (Very Good)';
+  else if (params.volumeUsd > 200_000_000) label = 'Mid Cap (Good)';
+  else if (params.volumeUsd > 50_000_000) label = 'Small Cap (Risky)';
+  else label = 'Micro Cap (Very Risky)';
+  
+  return { adjustments, reasons, minMovement, label };
+}
+
+/**
+ * @deprecated Use applySmartQualityAdjustments instead
+ * Kept for backward compatibility during migration
  */
 export function getCryptoTier(symbol: string, volumeUsd: number, marketCap?: number): {
   tier: 1 | 2 | 3 | 4;
@@ -2497,50 +2580,25 @@ export function getCryptoTier(symbol: string, volumeUsd: number, marketCap?: num
   reputation: 'excellent' | 'good' | 'moderate' | 'unknown';
   label: string;
 } {
-  const base = symbol.split('/')[0].toUpperCase();
+  // Fallback to Smart Quality for backward compatibility
+  const smartQuality = applySmartQualityAdjustments({
+    symbol,
+    volumeUsd,
+    movement: 1.0, // Neutral movement for tier lookup
+  });
   
-  // TIER 1: Blue chips (BTC, ETH, SOL) - Accept even small moves (0.3%+)
-  if (['BTC', 'ETH', 'SOL'].includes(base) && volumeUsd >= 500_000_000) {
-    return { 
-      tier: 1, 
-      bonus: 2.0, 
-      minMovement: 0.3, 
-      reputation: 'excellent',
-      label: 'Blue Chip'
-    };
-  }
+  // Map to old tier structure
+  let tier: 1 | 2 | 3 | 4 = 4;
+  if (volumeUsd > 5_000_000_000) tier = 1;
+  else if (volumeUsd > 1_000_000_000) tier = 2;
+  else if (volumeUsd > 200_000_000) tier = 3;
   
-  // TIER 2: Major established cryptos - Good liquidity and reputation
-  const tier2Cryptos = ['XRP', 'BNB', 'ADA', 'DOGE', 'MATIC', 'TRX', 'LTC', 'DOT', 'SHIB', 'BCH', 'ATOM', 'XLM', 'FIL', 'ICP', 'CRO'];
-  if (tier2Cryptos.includes(base) && volumeUsd >= 50_000_000) {
-    return { 
-      tier: 2, 
-      bonus: 1.0, 
-      minMovement: 0.5, 
-      reputation: 'good',
-      label: 'Major Established'
-    };
-  }
-  
-  // TIER 3: Promising alts - Established projects with moderate risk
-  const tier3Cryptos = ['AVAX', 'LINK', 'UNI', 'NEAR', 'SUI', 'APT', 'ARB', 'OP', 'FTM', 'AAVE', 'COMP', 'MKR', 'SNX', 'GRT', 'LDO', 'RUNE', 'INJ', 'SEI', 'BLUR', 'PENDLE'];
-  if (tier3Cryptos.includes(base) && volumeUsd >= 10_000_000) {
-    return { 
-      tier: 3, 
-      bonus: 0.3, 
-      minMovement: 1.0, 
-      reputation: 'moderate',
-      label: 'Promising Alt'
-    };
-  }
-  
-  // TIER 4: Small caps - High risk, need exceptional setup (3%+ movement)
-  return { 
-    tier: 4, 
-    bonus: -1.0, 
-    minMovement: 3.0, 
-    reputation: 'unknown',
-    label: 'Small Cap (High Risk)'
+  return {
+    tier,
+    bonus: smartQuality.adjustments,
+    minMovement: smartQuality.minMovement,
+    reputation: tier === 1 ? 'excellent' : tier === 2 ? 'good' : tier === 3 ? 'moderate' : 'unknown',
+    label: smartQuality.label,
   };
 }
 
