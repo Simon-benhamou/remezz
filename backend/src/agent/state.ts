@@ -143,7 +143,28 @@ export class ReboundRejectionAgent {
   tradesToday = 0;
   realizedPnlTodayPct = 0;
   
-  // Real-time performance tracking
+  // ✅ ULTRA-INTELLIGENT: Performance tracking BY TIER (contextualized learning)
+  private recentTradesByTier: Map<string, { symbol: string; win: boolean; pnlPct: number; timestamp: number }[]> = new Map([
+    ['tier1', []],  // BTC, ETH, SOL - Ultra stable
+    ['tier2', []],  // Major alts - Stable
+    ['tier3', []]   // Volatile alts - High risk
+  ]);
+  
+  // ✅ Quality threshold adjustment BY TIER (independent learning per category)
+  private qualityAdjustmentByTier: Map<string, number> = new Map([
+    ['tier1', 0],
+    ['tier2', 0],
+    ['tier3', 0]
+  ]);
+  
+  // ✅ Cooldown tracking BY TIER (one tier paused doesn't affect others)
+  private cooldownByTier: Map<string, number> = new Map([
+    ['tier1', 0],
+    ['tier2', 0],
+    ['tier3', 0]
+  ]);
+  
+  // Legacy global tracking (deprecated, kept for compatibility)
   private recentTrades: { win: boolean; pnlPct: number; timestamp: number }[] = [];
   private qualityThresholdAdjustment = 0; // Dynamic adjustment to quality thresholds
   
@@ -1475,6 +1496,40 @@ export class ReboundRejectionAgent {
   }
 
   /**
+   * ✅ ULTRA-INTELLIGENT: Classify crypto by tier for contextualized learning
+   * Tier 1: Ultra stable majors (BTC, ETH, SOL) - 55% target win rate
+   * Tier 2: Established alts (ADA, XRP, AVAX, MATIC, etc.) - 50% target
+   * Tier 3: Volatile alts (ENA, EIGEN, AVNT, etc.) - 45% target
+   */
+  private getTierForSymbol(symbol: string): string {
+    const baseCrypto = symbol.split('/')[0].toUpperCase();
+    
+    // Tier 1: Ultra stable majors - Blue chip cryptos
+    const tier1 = ['BTC', 'ETH', 'SOL'];
+    if (tier1.includes(baseCrypto)) return 'tier1';
+    
+    // Tier 2: Established major alts - Good liquidity, proven track record
+    const tier2 = [
+      'XRP', 'BNB', 'ADA', 'AVAX', 'MATIC', 'DOT', 'LINK',
+      'UNI', 'ATOM', 'LTC', 'BCH', 'NEAR', 'APT', 'ARB',
+      'OP', 'FIL', 'ICP', 'VET', 'ALGO', 'AAVE', 'MKR'
+    ];
+    if (tier2.includes(baseCrypto)) return 'tier2';
+    
+    // Tier 3: Everything else - High volatility, lower liquidity
+    return 'tier3';
+  }
+  
+  /**
+   * ✅ Get target win rate for a tier (contextualized expectations)
+   */
+  private getTargetWinRateForTier(tier: string): number {
+    if (tier === 'tier1') return 0.55; // BTC/ETH/SOL: More predictable
+    if (tier === 'tier2') return 0.50; // Major alts: Medium volatility
+    return 0.45; // Volatile alts: Higher risk, lower expectations
+  }
+
+  /**
    * Public method to test ATR thresholds for debugging
    */
   public testAdaptiveATRThreshold(symbol: string, baseThreshold: number): number {
@@ -2650,53 +2705,83 @@ export class ReboundRejectionAgent {
     return 'choppy';
   }
 
-  // Dynamic threshold adjustment based on recent performance
+  /**
+   * ✅ ULTRA-INTELLIGENT: Adjust quality thresholds BY TIER (contextualized learning)
+   * Each tier learns independently: BTC losses don't affect ADA trading
+   */
   private adjustQualityThresholds(): void {
-    if (this.recentTrades.length < 10) return; // Need sufficient data
+    // Process each tier independently
+    for (const [tier, trades] of this.recentTradesByTier.entries()) {
+      if (trades.length < 10) continue; // Need sufficient data per tier
+      
+      const recentWinRate = trades.filter(t => t.win).length / trades.length;
+      const avgPnlPct = trades.reduce((sum, t) => sum + t.pnlPct, 0) / trades.length;
+      const targetWinRate = this.getTargetWinRateForTier(tier);
+      const currentAdj = this.qualityAdjustmentByTier.get(tier) || 0;
+      
+      // Poor performance on THIS tier → Increase selectivity for THIS tier only
+      if (recentWinRate < targetWinRate - 0.1 && avgPnlPct < 0) {
+        const newAdj = Math.min(20, currentAdj + 5);
+        this.qualityAdjustmentByTier.set(tier, newAdj);
+        
+        recordOpsEvent({
+          level: 'warn',
+          source: 'adaptive_learning_tier',
+          message: `${tier}: Increasing selectivity due to poor performance`,
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { 
+            tier,
+            recentWinRate: (recentWinRate * 100).toFixed(1) + '%',
+            targetWinRate: (targetWinRate * 100).toFixed(1) + '%',
+            avgPnlPct: avgPnlPct.toFixed(2) + '%',
+            adjustment: newAdj,
+            recentTrades: trades.slice(-5).map(t => `${t.symbol}: ${t.win ? 'WIN' : 'LOSS'} ${t.pnlPct.toFixed(2)}%`)
+          },
+        });
+        
+        console.log(`📊 ${tier.toUpperCase()}: Win rate ${(recentWinRate*100).toFixed(1)}% < ${(targetWinRate*100).toFixed(1)}% → Quality +5 (now ${newAdj})`);
+      }
+      
+      // Good performance on THIS tier → Relax selectivity for THIS tier only
+      else if (recentWinRate > targetWinRate + 0.1 && avgPnlPct > 0.5) {
+        const newAdj = Math.max(-10, currentAdj - 3);
+        this.qualityAdjustmentByTier.set(tier, newAdj);
+        
+        recordOpsEvent({
+          level: 'info',
+          source: 'adaptive_learning_tier',
+          message: `${tier}: Decreasing selectivity due to good performance`,
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { 
+            tier,
+            recentWinRate: (recentWinRate * 100).toFixed(1) + '%',
+            targetWinRate: (targetWinRate * 100).toFixed(1) + '%',
+            avgPnlPct: avgPnlPct.toFixed(2) + '%',
+            adjustment: newAdj,
+            recentTrades: trades.slice(-5).map(t => `${t.symbol}: ${t.win ? 'WIN' : 'LOSS'} ${t.pnlPct.toFixed(2)}%`)
+          },
+        });
+        
+        console.log(`📈 ${tier.toUpperCase()}: Win rate ${(recentWinRate*100).toFixed(1)}% > ${(targetWinRate*100).toFixed(1)}% → Quality -3 (now ${newAdj})`);
+      }
+    }
     
-    const recentWinRate = this.recentTrades.filter(t => t.win).length / this.recentTrades.length;
-    const avgPnlPct = this.recentTrades.reduce((sum, t) => sum + t.pnlPct, 0) / this.recentTrades.length;
-    
-    const level = this.profile?.aggressiveness || 'conservative';
-    let targetWinRate = 0.65; // Conservative: realistic for normal trading (was 0.7)
-    if (level === 'reactive') targetWinRate = 0.58; // Reactive: more trades, good win rate (was 0.6)
-    if (level === 'aggressive') targetWinRate = 0.52; // Aggressive: active trading, decent rate (was 0.55)
-    
-    // Adjust thresholds based on performance vs target
-    const performanceDelta = recentWinRate - targetWinRate;
-    
-    if (recentWinRate < targetWinRate - 0.1 && avgPnlPct < 0) {
-      // Performance below target, increase selectivity
-      this.qualityThresholdAdjustment = Math.min(15, this.qualityThresholdAdjustment + 5);
-      recordOpsEvent({
-        level: 'warn',
-        source: 'performance_optimizer',
-        message: 'Increasing selectivity due to poor performance',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { 
-          recentWinRate: recentWinRate.toFixed(3), 
-          targetWinRate: targetWinRate.toFixed(3),
-          avgPnlPct: avgPnlPct.toFixed(3),
-          adjustment: this.qualityThresholdAdjustment 
-        },
-      });
-    } else if (recentWinRate > targetWinRate + 0.1 && avgPnlPct > 0.5) {
-      // Performance above target, can be less selective
-      this.qualityThresholdAdjustment = Math.max(-10, this.qualityThresholdAdjustment - 3);
-      recordOpsEvent({
-        level: 'info',
-        source: 'performance_optimizer',
-        message: 'Decreasing selectivity due to good performance',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { 
-          recentWinRate: recentWinRate.toFixed(3), 
-          targetWinRate: targetWinRate.toFixed(3),
-          avgPnlPct: avgPnlPct.toFixed(3),
-          adjustment: this.qualityThresholdAdjustment 
-        },
-      });
+    // Legacy global adjustment (kept for compatibility)
+    if (this.recentTrades.length >= 10) {
+      const recentWinRate = this.recentTrades.filter(t => t.win).length / this.recentTrades.length;
+      const avgPnlPct = this.recentTrades.reduce((sum, t) => sum + t.pnlPct, 0) / this.recentTrades.length;
+      const level = this.profile?.aggressiveness || 'conservative';
+      let targetWinRate = 0.65;
+      if (level === 'reactive') targetWinRate = 0.58;
+      if (level === 'aggressive') targetWinRate = 0.52;
+      
+      if (recentWinRate < targetWinRate - 0.1 && avgPnlPct < 0) {
+        this.qualityThresholdAdjustment = Math.min(15, this.qualityThresholdAdjustment + 5);
+      } else if (recentWinRate > targetWinRate + 0.1 && avgPnlPct > 0.5) {
+        this.qualityThresholdAdjustment = Math.max(-10, this.qualityThresholdAdjustment - 3);
+      }
     }
   }
 
