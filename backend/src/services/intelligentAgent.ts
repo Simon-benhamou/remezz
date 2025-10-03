@@ -8,6 +8,7 @@ import { getConfig } from '../utils/env.js';
 import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
 import { getAdaptiveWeightsForSymbol } from '../learning/adaptiveWeights.js';
 import { recordDecisionSnapshot, markDecisionCancelled } from '../learning/decisionMemory.js';
+import { getHybridSentiment } from '../sentiment/index.js';
 
 // HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
@@ -780,7 +781,27 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     // HYBRID INTELLIGENT: ML d'abord, IA seulement si nécessaire
     const currentVolumeUsd = Number((ticker as any)?.quoteVolume || 0);
     
-    // Prédiction ML locale (GRATUITE)
+    // 🐦 GROK SENTIMENT FIRST: Twitter/X real-time sentiment (BEST for crypto)
+    try {
+      const grokSentiment = await getHybridSentiment(symbol);
+      if (grokSentiment && grokSentiment.confidence && grokSentiment.confidence > 0.5) {
+        sentiment = {
+          overall: grokSentiment.label, // 'bullish' | 'bearish' | 'neutral'
+          score: grokSentiment.score,   // 0-1
+          confidence: grokSentiment.confidence,
+          mentions: grokSentiment.mentions || 0,
+          velocity: grokSentiment.velocity,
+          keywords: grokSentiment.keywords,
+          reasoning: `Grok sentiment: ${grokSentiment.label} (${grokSentiment.mentions || 0} mentions on Twitter/X, confidence ${(grokSentiment.confidence * 100).toFixed(0)}%)`,
+          source: 'grok_twitter'
+        };
+        console.log(`🐦 ${symbol}: Grok sentiment ${grokSentiment.label} (score: ${grokSentiment.score.toFixed(2)}, mentions: ${grokSentiment.mentions || 0}, velocity: ${grokSentiment.velocity || 'N/A'})`);
+      }
+    } catch (error) {
+      console.warn(`⚠️ ${symbol}: Grok sentiment failed, falling back to ML:`, error);
+    }
+    
+    // Prédiction ML locale (GRATUITE) - Fallback si Grok indisponible
     const mlCacheKey = `ml_${symbol}_${Math.floor(Date.now() / CACHE_DURATION_ML)}`;
     let mlResult = mlPredictionCache.get(mlCacheKey);
     
@@ -825,13 +846,15 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const shouldUseAI = (mlNotConfident && (isHighStakes || multiTfSuggestsEscalation)) ||
                         (isCriticalMajor && multiTfSuggestsEscalation);
     
-    // Utiliser ML comme sentiment par défaut
-    sentiment = {
-      overall: mlResult.prediction.toLowerCase(),
-      confidence: mlResult.confidence / 100,
-      reasoning: mlResult.reasoning,
-      source: 'local_ml'
-    };
+    // Utiliser ML comme sentiment par défaut SEULEMENT si Grok n'a pas fourni de sentiment
+    if (!sentiment) {
+      sentiment = {
+        overall: mlResult.prediction.toLowerCase(),
+        confidence: mlResult.confidence / 100,
+        reasoning: mlResult.reasoning,
+        source: 'local_ml'
+      };
+    }
     
     if (shouldUseAI) {
       try {

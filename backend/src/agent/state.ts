@@ -1183,31 +1183,33 @@ export class ReboundRejectionAgent {
     const zoneMax = Math.max(from, to);
     const priceAboveZonePct = ((currentPrice - zoneMax) / zoneMax) * 100;
     
-    // Conditions strictes pour switch breakout
-    const farAboveZone = priceAboveZonePct > 3.0; // +3% au-dessus zone
-    const strongTrend = (snap.adx14 || 0) > 30;
-    const significantMove = Math.abs((snap as any).change24h || 0) > 4.0;
+    // ✅ FIX: Conditions assouplies pour capturer breakouts plus tôt
+    const farAboveZone = priceAboveZonePct > 1.5; // +1.5% au-dessus zone (était 3%)
+    const strongTrend = (snap.adx14 || 0) > 25; // ADX > 25 (était 30)
+    const significantMove = Math.abs((snap as any).change24h || 0) > 3.0; // +3% move 24h (était 4%)
     const lastTradeWin = this.lastTradeWasWin === true;
     
     // Durée hors zone (éviter switch trop rapide)
     const now = Date.now();
     if (this.lastZoneCheckTime === 0) this.lastZoneCheckTime = now;
     const timeOutOfZone = now - this.lastZoneCheckTime;
-    const minDuration = 2 * 60 * 60 * 1000; // 2 heures
+    const minDuration = 30 * 60 * 1000; // 30 minutes (était 2h)
     
     const shouldSwitch = farAboveZone && strongTrend && significantMove && timeOutOfZone > minDuration;
     
-    if (shouldSwitch && !lastTradeWin) {
-      console.log('⚠️ Breakout conditions met but last trade was LOSS - staying conservative');
+    // ✅ FIX: Ne plus bloquer sur last trade LOSS si le move est très fort (>8%)
+    const veryStrongMove = Math.abs((snap as any).change24h || 0) > 8.0;
+    if (shouldSwitch && !lastTradeWin && !veryStrongMove) {
+      console.log('⚠️ Breakout conditions met but last trade was LOSS - staying conservative (unless move >8%)');
       return false;
     }
     
     if (shouldSwitch) {
       console.log('🚀 SWITCHING TO BREAKOUT MODE:');
       console.log(`  Price ${currentPrice.toFixed(4)} > zone max ${zoneMax.toFixed(4)} (+${priceAboveZonePct.toFixed(1)}%)`);
-      console.log(`  ADX: ${(snap.adx14 || 0).toFixed(1)} > 30 ✅`);
+      console.log(`  ADX: ${(snap.adx14 || 0).toFixed(1)} > 25 ✅`);
       console.log(`  Move 24h: ${Math.abs((snap as any).change24h || 0).toFixed(1)}% ✅`);
-      console.log(`  Time out of zone: ${(timeOutOfZone / 3600000).toFixed(1)}h ✅`);
+      console.log(`  Time out of zone: ${(timeOutOfZone / 60000).toFixed(0)} min ✅`);
       this.breakoutModeActive = true;
       
       recordOpsEvent({
