@@ -126,6 +126,7 @@ export class ReboundRejectionAgent {
   private entering = false;
   sessionId: string | null = null;
   private breakoutTicks = 0; // consecutive ticks confirming breakout
+  private invalidationTicks = 0; // consecutive ticks price outside entry zone
   regime: RegimeProfile | null = null;
   private adaptiveRisk: AdaptiveRiskResult | null = null;
   private protectiveErrorCount = 0;
@@ -3370,6 +3371,11 @@ export class ReboundRejectionAgent {
       return 'trend_reversal_detected';
     }
 
+    // ✅ FIX: Late invalidation exit - price outside original entry zone
+    if (this.shouldExitOnLateInvalidation(price)) {
+      return 'late_invalidation_exit';
+    }
+
     // Time-based exit
     if (timeHeldMs > maxHoldMs) {
       return 'max_hold_time_exceeded';
@@ -3561,6 +3567,47 @@ export class ReboundRejectionAgent {
     if (adxWeak && unrealizedR < -0.3) {
       console.log(`🔴 Exit: Weak trend + losing (ADX: ${adx.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
       return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * ✅ FIX: Check if price has been outside entry zone for too long (late invalidation)
+   * Prevents positions from staying open when price breaks out of original zone
+   * This addresses the 238 "late_invalidation_exit" alerts issue
+   */
+  private shouldExitOnLateInvalidation(price: number): boolean {
+    if (!this.pos || !this.plan) return false;
+    
+    const cfg = getConfig();
+    const from = Math.min(this.plan.zone.from, this.plan.zone.to);
+    const to = Math.max(this.plan.zone.from, this.plan.zone.to);
+    const hysteresisPct = cfg.BREAKOUT_HYSTERESIS_PCT || 0.5;
+    
+    // Check if price is outside zone with hysteresis
+    const above = price > to * (1 + hysteresisPct / 100);
+    const below = price < from * (1 - hysteresisPct / 100);
+    
+    // For buy positions, invalid if price drops below zone
+    // For sell positions, invalid if price rises above zone
+    const invalid = (this.pos.side === 'sell') ? above : below;
+    
+    if (invalid) {
+      // Initialize counter if not exists
+      if (!this.invalidationTicks) this.invalidationTicks = 0;
+      this.invalidationTicks++;
+      
+      const confirmTicks = Math.max(3, cfg.BREAKOUT_CONFIRM_TICKS || 2);
+      
+      if (this.invalidationTicks >= confirmTicks) {
+        const direction = this.pos.side === 'buy' ? 'below' : 'above';
+        console.log(`🚨 Late Invalidation Exit: Price ${price.toFixed(4)} ${direction} zone [${from.toFixed(4)}, ${to.toFixed(4)}] for ${this.invalidationTicks} ticks`);
+        return true;
+      }
+    } else {
+      // Reset counter if price back in zone
+      this.invalidationTicks = 0;
     }
     
     return false;
