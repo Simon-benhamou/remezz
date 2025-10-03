@@ -2558,6 +2558,22 @@ export class ReboundRejectionAgent {
       }
     } catch {}
     
+    // ✅ ADAPTIVE LEARNING: Regime-based sizing adjustment
+    if (this.regime?.playbook) {
+      const playbook = this.regime.playbook;
+      const trendStrength = this.regime.trendStrength || 0;
+      
+      if (playbook === 'standby' || playbook === 'mean_reversion') {
+        // 🟡 Choppy/ranging market: reduce size significantly
+        sizeMultiplier *= 0.5; // -50%
+        console.log('🟡 Regime: Choppy market → Position size -50%');
+      } else if (playbook === 'momentum_breakout' && trendStrength > 0.7) {
+        // 🟢 Strong trending market: increase size moderately
+        sizeMultiplier *= 1.2; // +20%
+        console.log('🟢 Regime: Strong momentum → Position size +20%');
+      }
+    }
+    
     // ✅ FIX: Cap cumulative penalties - max 30% reduction (0.7 floor instead of 0.35)
     // This prevents too many penalties from stacking and making positions too small
     sizeMultiplier = Math.max(0.7, Math.min(1.8, sizeMultiplier));
@@ -2681,6 +2697,47 @@ export class ReboundRejectionAgent {
           adjustment: this.qualityThresholdAdjustment 
         },
       });
+    }
+  }
+
+  /**
+   * ✅ ADAPTIVE LEARNING: Detect losing streaks and adjust behavior
+   * After 2 consecutive losses: Increase selectivity significantly
+   * After 3 consecutive losses: Enter 1h cooldown (circuit breaker)
+   */
+  private detectLosingStreak(): void {
+    if (this.recentTrades.length < 2) return;
+    
+    // Check last 3 trades for consecutive losses
+    const last3 = this.recentTrades.slice(-3);
+    const consecutiveLosses = last3.every(t => !t.win) ? last3.length : 0;
+    
+    if (consecutiveLosses >= 2) {
+      // 🚨 2+ consecutive losses: Increase selectivity dramatically
+      const adjustment = consecutiveLosses === 2 ? 10 : 15;
+      this.qualityThresholdAdjustment = Math.min(20, this.qualityThresholdAdjustment + adjustment);
+      
+      recordOpsEvent({
+        level: 'warn',
+        source: 'adaptive_learning',
+        message: `Losing streak detected: ${consecutiveLosses} losses`,
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { 
+          consecutiveLosses,
+          adjustment: this.qualityThresholdAdjustment,
+          action: consecutiveLosses >= 3 ? 'entering_cooldown' : 'increased_selectivity'
+        },
+      });
+      
+      console.log(`🛑 Losing streak: ${consecutiveLosses} losses → Quality threshold +${adjustment} (now ${this.qualityThresholdAdjustment})`);
+    }
+    
+    if (consecutiveLosses >= 3) {
+      // 🔴 3 consecutive losses: HALT for 1 hour (circuit breaker)
+      const cooldownMs = 60 * 60 * 1000; // 1 hour
+      this.scheduleReactivation('losing_streak_circuit_breaker', cooldownMs);
+      console.log('🔴 CIRCUIT BREAKER: 3 consecutive losses → 1h trading pause');
     }
   }
 
@@ -3376,6 +3433,16 @@ export class ReboundRejectionAgent {
       return 'late_invalidation_exit';
     }
 
+    // ✅ ADAPTIVE LEARNING: Volume dump detection
+    if (this.shouldExitOnVolumeDump(snap)) {
+      return 'volume_dump_detected';
+    }
+
+    // ✅ ADAPTIVE LEARNING: Divergence detection
+    if (this.shouldExitOnDivergence(price, snap, unrealizedR)) {
+      return 'divergence_detected';
+    }
+
     // Time-based exit
     if (timeHeldMs > maxHoldMs) {
       return 'max_hold_time_exceeded';
@@ -3468,6 +3535,10 @@ export class ReboundRejectionAgent {
         if (this.recentTrades.length > 20) {
           this.recentTrades = this.recentTrades.slice(-20);
         }
+
+        // ✅ ADAPTIVE LEARNING: Adjust thresholds based on recent performance
+        this.adjustQualityThresholds();
+        this.detectLosingStreak();
 
         // Update daily P&L
         if (this.performanceMetrics) {
@@ -3608,6 +3679,73 @@ export class ReboundRejectionAgent {
     } else {
       // Reset counter if price back in zone
       this.invalidationTicks = 0;
+    }
+    
+    return false;
+  }
+
+  /**
+   * ✅ ADAPTIVE LEARNING: Detect volume dumps (massive sell-offs)
+   * Exit immediately if volume spike 2x+ average AND price moving against position
+   */
+  private shouldExitOnVolumeDump(snap: TechnicalSnapshot): boolean {
+    if (!this.pos || !this.plan) return false;
+    
+    // Calculate volume spike ratio
+    const avgVolume = snap.volumeMA || snap.volume24h || 1;
+    const currentVolume = snap.volume24h || 0;
+    if (currentVolume === 0 || avgVolume === 0) return false;
+    
+    const volumeSpike = currentVolume / avgVolume;
+    
+    // Check if price is moving against our position
+    const priceMovingAgainst = this.pos.side === 'buy'
+      ? snap.last < this.pos.entry * 0.99  // -1% or more for longs
+      : snap.last > this.pos.entry * 1.01; // +1% or more for shorts
+    
+    // Volume dump: 2x+ volume spike + price against position
+    if (volumeSpike >= 2.0 && priceMovingAgainst) {
+      const direction = this.pos.side === 'buy' ? 'down' : 'up';
+      console.log(`🚨 Volume dump detected: ${volumeSpike.toFixed(1)}x avg volume, price moving ${direction}`);
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * ✅ ADAPTIVE LEARNING: Detect RSI/Price divergences
+   * Bearish divergence (LONG): Price rises but RSI doesn't follow
+   * Bullish divergence (SHORT): Price falls but RSI doesn't follow
+   */
+  private shouldExitOnDivergence(price: number, snap: TechnicalSnapshot, unrealizedR: number): boolean {
+    if (!this.pos || !this.plan) return false;
+    
+    // Only check divergence if we're not winning significantly
+    if (unrealizedR > 0.5) return false;
+    
+    const rsi = snap.rsi14 || 50;
+    
+    // Bearish divergence for LONG positions
+    if (this.pos.side === 'buy') {
+      const priceHigher = price > this.pos.entry * 1.01; // Price up 1%+
+      const rsiWeak = rsi < 45; // But RSI weak (below neutral)
+      
+      if (priceHigher && rsiWeak) {
+        console.log(`🚨 Bearish divergence: Price +${((price / this.pos.entry - 1) * 100).toFixed(1)}% but RSI weak (${rsi.toFixed(1)})`);
+        return true;
+      }
+    }
+    
+    // Bullish divergence for SHORT positions
+    if (this.pos.side === 'sell') {
+      const priceLower = price < this.pos.entry * 0.99; // Price down 1%+
+      const rsiStrong = rsi > 55; // But RSI strong (above neutral)
+      
+      if (priceLower && rsiStrong) {
+        console.log(`🚨 Bullish divergence: Price ${((1 - price / this.pos.entry) * 100).toFixed(1)}% but RSI strong (${rsi.toFixed(1)})`);
+        return true;
+      }
     }
     
     return false;
