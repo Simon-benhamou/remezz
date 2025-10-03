@@ -845,6 +845,17 @@ export class ReboundRejectionAgent {
     // 🔧 AJUSTÉ : Multipliers plus généreux pour laisser respirer les positions
     let multiplier = playbook === 'momentum_breakout' ? 0.85 : playbook === 'mean_reversion' ? 1.3 : 1.1;
     
+    // ✅ FIX: Aggressive tightening when losing (prevents -1.27% ETH losses)
+    if (upR < 0) {
+      // 🚨 LOSING POSITION: Tighten immediately
+      multiplier = 0.7; // 70% of stop distance
+      
+      if (upR < -0.5) {
+        multiplier = 0.5; // 50% - very tight stop
+        console.log(`🔴 Aggressive trail: R=${upR.toFixed(2)}, mult=${multiplier} (tight stop)`);
+      }
+    }
+    
     // CRYPTO MOONSHOT: Adaptive trailing based on profit level
     const currentProfitPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
     const cfg = getConfig();
@@ -3354,6 +3365,11 @@ export class ReboundRejectionAgent {
     const maxHoldHours = this.plan.plan.risk?.max_hold_hours || 36;
     const maxHoldMs = maxHoldHours * 60 * 60 * 1000;
 
+    // ✅ FIX: Early exit on trend reversal (prevents ETH -2.47%, ADA -3.13% losses)
+    if (this.shouldExitOnTrendReversal(price, snap, unrealizedR)) {
+      return 'trend_reversal_detected';
+    }
+
     // Time-based exit
     if (timeHeldMs > maxHoldMs) {
       return 'max_hold_time_exceeded';
@@ -3504,6 +3520,50 @@ export class ReboundRejectionAgent {
         details: { reason, error: String(error) }
       });
     }
+  }
+
+  /**
+   * 🚨 CRITICAL: Detect trend reversal to exit losing positions early
+   * Prevents catastrophic losses like ETH -2.47% and ADA -3.13%
+   */
+  private shouldExitOnTrendReversal(price: number, snap: TechnicalSnapshot, unrealizedR: number): boolean {
+    if (!this.pos || !this.plan) return false;
+    
+    // 1. EMA Cross Reversal (bearish for long, bullish for short)
+    const emaSpread = ((snap.ema20 - snap.ema50) / snap.ema50) * 100;
+    const emaBearish = emaSpread < -0.5;
+    const emaBullish = emaSpread > 0.5;
+    
+    if (this.pos.side === 'buy' && emaBearish && unrealizedR < 0.5) {
+      console.log(`🔴 Exit: EMA bearish cross detected (spread: ${emaSpread.toFixed(2)}%, R: ${unrealizedR.toFixed(2)})`);
+      return true;
+    }
+    
+    if (this.pos.side === 'sell' && emaBullish && unrealizedR < 0.5) {
+      console.log(`🔴 Exit: EMA bullish cross detected (spread: ${emaSpread.toFixed(2)}%, R: ${unrealizedR.toFixed(2)})`);
+      return true;
+    }
+    
+    // 2. Momentum Loss (RSI extreme + losing position)
+    const rsi = snap.rsi14 || 50;
+    const momentumLoss = (this.pos.side === 'buy' && rsi < 35 && unrealizedR < 0) ||
+                         (this.pos.side === 'sell' && rsi > 65 && unrealizedR < 0);
+    
+    if (momentumLoss) {
+      console.log(`🔴 Exit: Momentum loss (RSI: ${rsi.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
+      return true;
+    }
+    
+    // 3. ADX Declining (trend weakening while losing)
+    const adx = snap.adx14 || 0;
+    const adxWeak = adx < 15;
+    
+    if (adxWeak && unrealizedR < -0.3) {
+      console.log(`🔴 Exit: Weak trend + losing (ADX: ${adx.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
+      return true;
+    }
+    
+    return false;
   }
 
   private calculateRealizedPnL(exitPrice: number): number {
