@@ -1770,15 +1770,15 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     }
     
     if (!bestOpportunity) {
-      console.log('💤 No valid opportunities found - creating session in sleep mode for 2h');
+      console.log('💤 No valid opportunities found - creating session in sleep mode for 1h');
       
-      // Create session in sleep mode with 3h scan interval instead of fallback to Bitcoin
+      // Create session in sleep mode with 1h scan interval (relaxed from 2h)
       const sleepConfig = {
         isIntelligent: true,
         selectedAt: new Date().toISOString(),
         analysis: null,
         lastScan: new Date().toISOString(),
-        nextScanDue: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2h sleep mode
+        nextScanDue: new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(), // 1h sleep mode (was 2h)
         minHoldHours: 0, // No minimum in sleep mode
         strategy: 'sleep_mode_3h',
         sleepMode: true,
@@ -1817,7 +1817,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
           selectedAt: new Date().toISOString(),
           analysis: null,
           lastScan: new Date().toISOString(),
-          nextScanDue: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2h sleep
+          nextScanDue: new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(), // 1h sleep (was 2h)
           minHoldHours: 0,
           strategy: 'sleep_mode_conflict',
           sleepMode: true,
@@ -1847,14 +1847,14 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     }
 
     const regimeLabel = bestOpportunity.regime || '';
-    let minHoldHours = 12;
+    let minHoldHours = 6; // Base 6h (was 12h)
     if (/bull/i.test(regimeLabel)) {
-      minHoldHours = Math.round(minHoldHours * 1.5);
+      minHoldHours = Math.round(minHoldHours * 1.5); // 9h in bull
     } else if (/bear/i.test(regimeLabel)) {
-      minHoldHours = Math.max(6, Math.round(minHoldHours * 0.7));
+      minHoldHours = Math.max(4, Math.round(minHoldHours * 0.7)); // ~4h in bear
     }
     if (bestOpportunity.opportunity.playbook === 'momentum_breakout') {
-      minHoldHours = Math.max(6, Math.round(minHoldHours * 0.75));
+      minHoldHours = Math.max(4, Math.round(minHoldHours * 0.75)); // ~4-5h for breakouts
     }
     const strategyTag = bestOpportunity.opportunity.playbook || 'optimized_cost_efficient';
     const targetsMultiplier = /bear/i.test(regimeLabel) ? 0.7 : /bull/i.test(regimeLabel) ? 1.5 : 1;
@@ -1867,7 +1867,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       selectedAt: new Date().toISOString(),
       analysis: bestOpportunity,
       lastScan: new Date().toISOString(),
-      nextScanDue: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(), // 12h minimum
+      nextScanDue: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(), // 6h minimum (was 12h)
       minHoldHours,
       strategy: strategyTag,
       targetsMultiplier,
@@ -2083,9 +2083,9 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       const bestOpportunity = await getBestIntelligentOpportunity(session.id, { relaxSteps: miss >= 2 ? 1 : 0 });
       
       if (!bestOpportunity) {
-        const nextCheck = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 2h sleep extension
+        const nextCheck = new Date(now.getTime() + 1 * 60 * 60 * 1000); // 1h sleep extension (was 2h)
         const newMiss = miss + 1;
-        console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 2h (miss=${newMiss})`);
+        console.log(`💤 Session ${session.id}: Still no opportunities - extending sleep for 1h (miss=${newMiss})`);
         // Persist sleepMisses to allow auto-relax after two misses
         try {
           const sleepCfg = { ...(config || {}), nextScanDue: nextCheck.toISOString(), lastScan: now.toISOString(), sleepMisses: newMiss };
@@ -2175,8 +2175,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     
     if (hasRecentActivity) {
       console.log(`📈 Session ${session.id}: ${recentTrades} fills in last ${activityWindowHours}h — keep ${session.symbol}`);
-      // Update next check to 12h (was 24h): be more responsive to market rotation
-      const nextCheck = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+      // Update next check to 6h (was 12h): be more responsive to market rotation
+      const nextCheck = new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6h (was 12h)
       await updateSessionNextCheck(session.id, nextCheck);
       return;
     }
@@ -2206,7 +2206,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         ...config,
         analysis: null,
         lastScan: now.toISOString(),
-        nextScanDue: new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString(), // 2h sleep
+        nextScanDue: new Date(now.getTime() + 1 * 60 * 60 * 1000).toISOString(), // 1h sleep (was 2h)
         sleepMode: true,
         sleepReason: 'No qualifying opportunities in market scan'
       };
@@ -2251,7 +2251,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         analysis: bestOpportunity,
         selectedAt: now.toISOString(),
         lastScan: now.toISOString(),
-        nextScanDue: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(), // 12h minimum
+        nextScanDue: new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString(), // 6h minimum (was 12h)
         switchReason: `No trades + ${scoreImprovement.toFixed(1)} score improvement`,
         sleepMode: false
       };
@@ -2293,7 +2293,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     } else {
       // Keep current symbol, extend hold period
       console.log(`✅ Session ${session.id} keeping ${session.symbol} (insufficient improvement: ${scoreImprovement.toFixed(1)})`);
-      const nextCheck = new Date(now.getTime() + 12 * 60 * 60 * 1000); // 12h retry
+      const nextCheck = new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6h retry (was 12h)
 
       const keepAnalysis = bestOpportunity.symbol === session.symbol
         ? bestOpportunity
