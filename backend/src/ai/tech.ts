@@ -17,6 +17,7 @@ export type TechnicalSnapshot = {
   atrPct: number;
   adx14: number;
   ema20Slope: number;
+  // Volume/flow
   support: number;          // primary support (closest/best)
   resistance: number;       // primary resistance
   supports: { price: number; label: string; touches: number; strength: number }[];
@@ -37,6 +38,8 @@ export type TechnicalSnapshot = {
   volumeAvg?: number;
   volume24h?: number;
   volume24hChangePct?: number;
+  // Chaikin Money Flow 20 (15m)
+  cmf20?: number;
 };
 
 // Utilities
@@ -58,6 +61,34 @@ function realizedVolatility(logReturns: number[]) {
   const stdev = Math.sqrt(variance);
   // 15m bars → 96 periods per day. Return expressed in %.
   return stdev * Math.sqrt(96) * 100;
+}
+
+// Chaikin Money Flow over `period` bars
+function chaikinMoneyFlow(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  volumes: number[],
+  period: number
+): number {
+  const n = Math.min(highs.length, lows.length, closes.length, volumes.length);
+  if (n === 0) return 0;
+  const look = Math.max(1, Math.min(period, n));
+  let mfvSum = 0;
+  let volSum = 0;
+  for (let i = n - look; i < n; i++) {
+    const high = highs[i];
+    const low = lows[i];
+    const close = closes[i];
+    const vol = Number(volumes[i] || 0);
+    const range = Math.max(1e-12, high - low);
+    const mfm = ((close - low) - (high - close)) / range; // (2*close - high - low)/(high-low)
+    const mfv = mfm * vol;
+    mfvSum += mfv;
+    volSum += vol;
+  }
+  if (volSum <= 0) return 0;
+  return mfvSum / volSum;
 }
 
 function hurstExponent(values: number[]) {
@@ -211,6 +242,8 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const atrPct = (atr14v / lastPrice) * 100;
   const adx14Arr = adx(o15, 14);
   const adx14v = adx14Arr[adx14Arr.length - 1] ?? 0;
+  // CMF20 (15m)
+  const cmf20v = chaikinMoneyFlow(highs15, lows15, closes15, volumes15, 20);
   // Volume baseline: use EMA20 of 15m volumes for responsiveness
   const volEma20 = ema(volumes15, 20);
   const latestVol = volumes15.length ? volumes15[volumes15.length - 1] : 0;
@@ -331,6 +364,7 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     volumeAvg: avgVolume,
     volume24h: recentVolume,
     volume24hChangePct: volumeChangePct,
+    cmf20: cmf20v,
   };
 
   snapshot.regime = classifyRegime(snapshot);
@@ -338,4 +372,3 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   try { snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); } catch {}
   return snapshot;
 }
-
