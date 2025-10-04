@@ -109,6 +109,11 @@ export type Cfg = {
   QUALITY_VOLUME_RATIO_HIGH_USD: number;
   QUALITY_VOLUME_RATIO_MEDIUM_USD: number;
   QUALITY_VOLUME_RATIO_LOW_USD: number;
+  // CMF-based volume modulation
+  VOLUME_CMF_STRONG: number;           // e.g., 0.15 → strong flow
+  VOLUME_CMF_RELAX: number;            // base relax to subtract when CMF aligns
+  VOLUME_CMF_RELAX_MAX: number;        // cap of relax
+  VOLUME_CMF_MIN_ADX: number;          // minimal ADX to trust CMF relaxation
   QUALITY_MIN_SCORE_CONSERVATIVE: number;
   QUALITY_MIN_SCORE_REACTIVE: number;
   QUALITY_MIN_SCORE_AGGRESSIVE: number;
@@ -356,6 +361,11 @@ export function getConfig(): Cfg {
     QUALITY_VOLUME_RATIO_HIGH_USD: Number(e.QUALITY_VOLUME_RATIO_HIGH_USD || "20000000"),
     QUALITY_VOLUME_RATIO_MEDIUM_USD: Number(e.QUALITY_VOLUME_RATIO_MEDIUM_USD || "8000000"),
     QUALITY_VOLUME_RATIO_LOW_USD: Number(e.QUALITY_VOLUME_RATIO_LOW_USD || "1500000"),
+    // CMF-based volume modulation (defaults tuned for crypto 15m)
+    VOLUME_CMF_STRONG: Number(e.VOLUME_CMF_STRONG || "0.15"),
+    VOLUME_CMF_RELAX: Number(e.VOLUME_CMF_RELAX || "0.15"),
+    VOLUME_CMF_RELAX_MAX: Number(e.VOLUME_CMF_RELAX_MAX || "0.20"),
+    VOLUME_CMF_MIN_ADX: Number(e.VOLUME_CMF_MIN_ADX || "15"),
     // Entry near-zone tuning
     ENTRY_NEAR_ATR_FACTOR: Number(e.ENTRY_NEAR_ATR_FACTOR || "0.2"),
     ENTRY_NEAR_WIDTH_FACTOR: Number(e.ENTRY_NEAR_WIDTH_FACTOR || "0.15"),

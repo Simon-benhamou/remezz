@@ -3329,6 +3329,31 @@ export class ReboundRejectionAgent {
       });
     }
 
+    // CMF20 directional flow modulation (relax when flow aligns with bias)
+    try {
+      const cmf20 = Number((snap as any)?.cmf20 ?? 0);
+      const cmfStrong = Number(cfg.VOLUME_CMF_STRONG || 0.15);
+      const cmfMinAdx = Number(cfg.VOLUME_CMF_MIN_ADX || 15);
+      const cmfAligned = (bias === 'long' && cmf20 >= cmfStrong) || (bias === 'short' && cmf20 <= -cmfStrong);
+      if (cmfAligned && adx >= cmfMinAdx) {
+        const relaxBase = Number(cfg.VOLUME_CMF_RELAX || 0.15);
+        const relaxCap = Number(cfg.VOLUME_CMF_RELAX_MAX || relaxBase);
+        const magnitude = Math.max(1, Math.abs(cmf20) / Math.max(1e-6, cmfStrong));
+        const relaxAmt = Math.min(relaxCap, relaxBase * magnitude);
+        const floorCmf = level === 'aggressive' ? 0.20 : level === 'reactive' ? 0.28 : 0.35;
+        const before = requiredVolumeRatio;
+        requiredVolumeRatio = Math.max(floorCmf, requiredVolumeRatio - relaxAmt);
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'volume_requirement_relaxed_cmf',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { before, after: requiredVolumeRatio, cmf20, adx, relaxAmt, floorCmf, level }
+        });
+      }
+    } catch {}
+
     const contextBefore = symbol ? ReboundRejectionAgent.volumeContextCache.get(symbol) : undefined;
     if (contextBefore && contextBefore.sampleCount >= 6) {
       const baseline = contextBefore.emaRatio;
@@ -4025,6 +4050,24 @@ export class ReboundRejectionAgent {
         else if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_MEDIUM_USD) required -= 0.05;
         else if (usdVolumeMA <= cfg.QUALITY_VOLUME_RATIO_LOW_USD && usdVolumeMA > 0) required += 0.07;
         if (atrPct >= 1.4) required -= 0.03; else if (atrPct <= 0.45) required += 0.03;
+        // CMF-based modulation for diagnostics (align with gating behavior)
+        try {
+          const cmf20 = Number((snap as any)?.cmf20 ?? 0);
+          const cmfStrong = Number(cfg.VOLUME_CMF_STRONG || 0.15);
+          const cmfMinAdx = Number(cfg.VOLUME_CMF_MIN_ADX || 15);
+          const adxVal = Number((snap as any)?.adx14 ?? 0);
+          const bias = this.plan?.bias || 'none';
+          const cmfAligned = (bias === 'long' && cmf20 >= cmfStrong) || (bias === 'short' && cmf20 <= -cmfStrong);
+          if (cmfAligned && adxVal >= cmfMinAdx) {
+            const relaxBase = Number(cfg.VOLUME_CMF_RELAX || 0.15);
+            const relaxCap = Number(cfg.VOLUME_CMF_RELAX_MAX || relaxBase);
+            const magnitude = Math.max(1, Math.abs(cmf20) / Math.max(1e-6, cmfStrong));
+            const relaxAmt = Math.min(relaxCap, relaxBase * magnitude);
+            const floorCmf = level === 'aggressive' ? 0.20 : level === 'reactive' ? 0.28 : 0.35;
+            required = Math.max(floorCmf, required - relaxAmt);
+          }
+        } catch {}
+
         required = Math.max(floor, Math.min(ceiling, required));
         const pass = volumeMA <= 0 ? volume > 0 : ratio >= required;
         return {
@@ -4036,7 +4079,8 @@ export class ReboundRejectionAgent {
             volumeMA,
             ratio: volumeMA > 0 ? ratio.toFixed(2) : 'N/A',
             required: required.toFixed(2),
-            usdVolumeMA: Math.round(usdVolumeMA)
+            usdVolumeMA: Math.round(usdVolumeMA),
+            cmf20: Number((snap as any)?.cmf20 ?? 0)
           }
         };
       })()
