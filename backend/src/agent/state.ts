@@ -959,21 +959,38 @@ export class ReboundRejectionAgent {
     
     // 🔧 AJUSTÉ : Multipliers plus généreux pour laisser respirer les positions
     let multiplier = playbook === 'momentum_breakout' ? 0.85 : playbook === 'mean_reversion' ? 1.3 : 1.1;
+
+    // 🟢 Early-grace window: rendre le trailing plus permissif en début de trade
+    const cfg = getConfig();
+    const earlyGraceMs = Math.min(12 * 60 * 1000, Math.max(5 * 60 * 1000, Math.floor((cfg.MIN_HOLD_TIME_MS || 30 * 60 * 1000) / 3)));
+    const earlyStage = elapsedMs < earlyGraceMs;
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const cmf20 = Number((snap as any)?.cmf20 ?? 0);
+    const cmfAligned = (side === 'buy' && cmf20 >= 0.1) || (side === 'sell' && cmf20 <= -0.1);
+    const trendAligned = (slope || 0) * dir > 0;
+    if (earlyStage) {
+      // Laisser plus de marge au démarrage pour éviter les sorties sur simple bruit
+      multiplier *= 1.2; // +20% d'espace par rapport au trailing standard
+    }
     
     // ✅ FIX: Aggressive tightening when losing (prevents -1.27% ETH losses)
     if (upR < 0) {
-      // 🚨 LOSING POSITION: Tighten immediately
-      multiplier = 0.7; // 70% of stop distance
-      
-      if (upR < -0.5) {
-        multiplier = 0.5; // 50% - very tight stop
-        console.log(`🔴 Aggressive trail: R=${upR.toFixed(2)}, mult=${multiplier} (tight stop)`);
+      // 🚨 LOSING POSITION
+      if (earlyStage && upR > -0.4) {
+        // Perdre légèrement au démarrage → on tolère la volatilité
+        multiplier = Math.max(multiplier, 1.15);
+      } else {
+        // Perte confirmée → resserrer
+        multiplier = 0.7; // 70% of stop distance
+        if (upR < -0.5) {
+          multiplier = 0.5; // 50% - very tight stop
+          console.log(`🔴 Aggressive trail: R=${upR.toFixed(2)}, mult=${multiplier} (tight stop)`);
+        }
       }
     }
     
     // CRYPTO MOONSHOT: Adaptive trailing based on profit level
     const currentProfitPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
-    const cfg = getConfig();
     const isBreakoutMode = currentProfitPct >= (cfg.CRYPTO_BREAKOUT_THRESHOLD || 5.0);
     const isMoonshotMode = currentProfitPct >= (cfg.CRYPTO_MOONSHOT_THRESHOLD || 15.0);
     
@@ -997,6 +1014,11 @@ export class ReboundRejectionAgent {
         symbol: this.profile?.symbol,
         details: { currentProfitPct, multiplier, mode: 'breakout' },
       });
+    }
+
+    // 📈 Confiance de tendance: ADX/CMF alignés → trailing plus lâche pour laisser courir
+    if (adx >= 22 && cmfAligned && trendAligned && upR >= 0) {
+      multiplier *= 1.12; // +12% d'espace
     }
     // 🔧 AJUSTÉ : Resserrer moins agressivement pour laisser se développer les gains
     if (upR > 2.0) multiplier *= 0.90; // Seulement au-delà de +2R (au lieu de 1.5R)
@@ -1039,7 +1061,9 @@ export class ReboundRejectionAgent {
       candidate = side === 'buy' ? Math.max(candidate, deepTighten) : Math.min(candidate, deepTighten);
     }
 
-    if (upR > 1) {
+    // 🔒 Verrouillage des gains seulement après un minimum de temps (évite BE trop tôt)
+    const minHoldForLock = Math.min((cfg.MIN_HOLD_TIME_MS || 30 * 60 * 1000) * 0.5, 15 * 60 * 1000);
+    if (elapsedMs > minHoldForLock && upR > 1) {
       const lock = entry + dir * stopDistance * Math.min(1.5, upR);
       candidate = side === 'buy' ? Math.max(candidate, lock) : Math.min(candidate, lock);
     }
