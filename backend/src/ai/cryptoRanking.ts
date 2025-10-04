@@ -312,19 +312,6 @@ export async function rankCryptosWithAI(
         entrySuggestedDirection: er.direction
       };
     });
-      symbol: s!.symbol,
-      volumeRank: s!.volumeRank,
-      volumeUsd24h: Math.round(s!.volumeUsd24h),
-      change24h: Number(s!.change24h.toFixed(2)),
-      rsi: Number(s!.technical.rsi.toFixed(1)),
-      adx: Number(s!.technical.adx.toFixed(1)),
-      atrPct: Number(s!.technical.atrPct.toFixed(2)),
-      ema20: Number(s!.technical.ema20.toFixed(2)),
-      ema50: Number(s!.technical.ema50.toFixed(2)),
-      trendPct: Number(s!.technical.trend.toFixed(2)),
-      srBias: s!.technical.srBias,
-      volumeRatio: s!.technical.volumeMA > 0 ? Number((s!.technical.volume / s!.technical.volumeMA).toFixed(2)) : 0
-    }));
     
     // AI Prompt for ranking - TIER-BASED with quality focus
     const prompt = `You are a PROFESSIONAL crypto trading selector. Your goal: return a ranked list of symbols that are LIQUID and NEAR ENTRY, balancing quality and opportunity.
