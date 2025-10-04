@@ -165,6 +165,8 @@ export type Cfg = {
   AGGRESSIVE_TRADE_COOLDOWN_MS: number;
   TRADE_COOLDOWN_WIN_MULTIPLIER: number;
   TRADE_COOLDOWN_LOSS_MULTIPLIER: number;
+  // Default sizing mode for agents: 'risk' | 'budget'
+  SIZING_DEFAULT_MODE: string;
 
   // Intelligent strategy refresh (indicator-driven, debounced)
   STRAT_REFRESH_ENABLED: boolean;
@@ -393,6 +395,7 @@ export function getConfig(): Cfg {
     AGGRESSIVE_TRADE_COOLDOWN_MS: Number(e.AGGRESSIVE_TRADE_COOLDOWN_MS || "10000"),
     TRADE_COOLDOWN_WIN_MULTIPLIER: Number(e.TRADE_COOLDOWN_WIN_MULTIPLIER || "0.5"),
     TRADE_COOLDOWN_LOSS_MULTIPLIER: Number(e.TRADE_COOLDOWN_LOSS_MULTIPLIER || "1.5"),
+    SIZING_DEFAULT_MODE: (e.SIZING_DEFAULT_MODE || "budget").toLowerCase() === 'risk' ? 'risk' : 'budget',
 
     // Intelligent strategy refresh (indicator-driven, debounced)
     STRAT_REFRESH_ENABLED: (e.STRAT_REFRESH_ENABLED || "true") === "true",

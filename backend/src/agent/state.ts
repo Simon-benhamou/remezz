@@ -701,12 +701,17 @@ export class ReboundRejectionAgent {
       const riskFactor = Math.max(0.5, Math.min(1, dynamicRiskPct / baseRisk));
       effectiveLev = Math.max(minLevCfg, Math.min(baseLev, baseLev * qualFactor * stopFactor * riskFactor));
     }
-    if ((this.profile.sizingMode || 'risk') === 'budget') {
+    {
+      const cfg = getConfig();
+      const defaultSizing = (cfg.SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget');
+      const mode = (this.profile.sizingMode || defaultSizing);
+      if (mode === 'budget') {
       // Budget-based sizing: use budget allocation times effective leverage
       notional = Math.max(0, usableBalance * effectiveLev);
-    } else {
+      } else {
       // Risk-based sizing: cap by effective leverage, not maximum
       notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: effectiveLev });
+      }
     }
     
     // ✅ FIX: Enforce minimum notional (8% of balance) to ensure meaningful position sizes

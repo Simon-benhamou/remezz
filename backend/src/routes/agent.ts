@@ -229,7 +229,9 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         : 'reactive',
   userId: req.user!.id,
   // Optional frontend-configurable sizing and leverage behavior
-  sizingMode: (body as any).sizingMode === 'budget' ? 'budget' : 'risk',
+  sizingMode: ((body as any).sizingMode === 'budget' || (body as any).sizingMode === 'risk')
+    ? (body as any).sizingMode
+    : (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget'),
   dynamicLeverage: (body as any).dynamicLeverage !== false,
   minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
       } as any).catch(()=>{});
@@ -263,7 +265,9 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
                         ? (body.aggressiveness as any)
                         : 'reactive',
                       userId: req.user!.id,
-                      sizingMode: (body as any).sizingMode === 'budget' ? 'budget' : 'risk',
+                      sizingMode: ((body as any).sizingMode === 'budget' || (body as any).sizingMode === 'risk')
+                        ? (body as any).sizingMode
+                        : (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget'),
                       dynamicLeverage: (body as any).dynamicLeverage !== false,
                       minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
                     } as any).catch(()=>{});
@@ -422,7 +426,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       budgetPct: storedBudgetPct,
       aggressiveness,
       startBalanceUsd: startBal,
-      sizingMode: (body.sizingMode === 'budget' || body.sizingMode === 'risk') ? body.sizingMode : (currentProfile.sizingMode || 'risk'),
+      sizingMode: (body.sizingMode === 'budget' || body.sizingMode === 'risk')
+        ? body.sizingMode
+        : (currentProfile.sizingMode || (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget')),
       dynamicLeverage: body.dynamicLeverage !== undefined ? !!body.dynamicLeverage : (currentProfile.dynamicLeverage !== false),
       minLeverage: (()=>{ const m = Number(body.minLeverage ?? currentProfile.minLeverage ?? 1); return Math.max(1, Math.min(m, safeMaxLev)); })(),
       timestamp: new Date().toISOString()
