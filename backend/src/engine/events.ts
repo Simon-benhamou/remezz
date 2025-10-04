@@ -25,6 +25,7 @@ const lastStrategyBias: Record<string, 'long' | 'short' | 'none' | null> = {};
 const lastRefreshAt: Record<string, number> = {};
 const divergenceTicks: Record<string, number> = {};
 const lastRsiBySym: Record<string, number> = {};
+const lastIndicatorSig: Record<string, { price: number; emaSpread: number; rsi: number; adx: number }> = {};
 let lastTick = { symbol: '', price: 0, ts: 0 };
 const lastTickBySession = new Map<string, number>();
 
@@ -343,9 +344,70 @@ async function maybeRefreshStrategyIndicators(sessionId: string, sym: string, te
   const ema50 = Number((tech as any).ema50 || 0);
   const ema20Slope = Number((tech as any).ema20Slope || 0);
   const rsi = Number((tech as any).rsi14 || 50);
+  const adx = Number((tech as any).adx14 || 0);
   const price = Number((tech as any).last || 0);
   const support = (tech as any).support;
   const resistance = (tech as any).resistance;
+
+  // Skip refresh if indicators haven't changed significantly since last signature
+  if (price > 0 && ema50 !== 0) {
+    const emaSpread = ((ema20 - ema50) / ema50) * 100; // percent
+    const prev = lastIndicatorSig[sym];
+    if (prev) {
+      // Base thresholds from env
+      let minPriceBps = Math.max(0, cfg.STRAT_REFRESH_MIN_PRICE_BPS || 10);
+      let minSpreadBps = Math.max(0, cfg.STRAT_REFRESH_MIN_EMA_SPREAD_BPS || 8);
+      let minRsi = Math.max(0, cfg.STRAT_REFRESH_MIN_RSI_DELTA || 2);
+      let minAdx = Math.max(0, cfg.STRAT_REFRESH_MIN_ADX_DELTA || 2);
+
+      // Adaptive tuning per symbol volatility/liquidity (optional)
+      if (cfg.STRAT_REFRESH_ADAPTIVE_ENABLED) {
+        const atrPct = Number((tech as any).atrPct || 0);
+        const realized = Number((tech as any).realizedVol || 0);
+        const volProfile = ((): 'LOW'|'MOD'|'HIGH'|'EXTREME' => {
+          if (atrPct > 4.0 || realized > 180) return 'EXTREME';
+          if (atrPct > 2.0 || realized > 120) return 'HIGH';
+          if (atrPct < 0.8 && realized < 60) return 'LOW';
+          return 'MOD';
+        })();
+        const base = (x:number)=>x;
+        const clamp = (v:number, lo:number, hi:number)=> Math.max(lo, Math.min(hi, v));
+        let volFactor = 1.0;
+        if (volProfile === 'LOW') volFactor = 0.75;
+        else if (volProfile === 'MOD') volFactor = 1.0;
+        else if (volProfile === 'HIGH') volFactor = 1.25;
+        else if (volProfile === 'EXTREME') volFactor = 1.5;
+
+        // Tier factor by symbol class
+        const baseSym = String((tech as any).symbol || sym).split('/')[0].toUpperCase();
+        const tier1 = ['BTC','ETH','SOL','XRP','BNB'];
+        const meme = ['DOGE','SHIB','PEPE','WIF','BONK','FLOKI'];
+        let tierFactor = 1.0;
+        if (tier1.includes(baseSym)) tierFactor = 0.9;     // more reactive for majors
+        else if (meme.includes(baseSym)) tierFactor = 1.2;  // more robust for memes
+
+        const factor = volFactor * tierFactor;
+        minPriceBps = clamp(minPriceBps * factor, 6, 40);
+        minSpreadBps = clamp(minSpreadBps * factor, 4, 30);
+        minRsi = clamp(minRsi * Math.max(0.8, Math.min(1.4, factor)), 1, 6);
+        minAdx = clamp(minAdx * Math.max(0.8, Math.min(1.4, factor)), 1, 6);
+      }
+
+      const priceBps = Math.abs((price - prev.price) / price) * 10000; // bps
+      const spreadBps = Math.abs(emaSpread - prev.emaSpread) * 100;    // percent->bps
+      const rsiDelta = Math.abs(rsi - prev.rsi);
+      const adxDelta = Math.abs(adx - prev.adx);
+
+      const significant = (priceBps >= minPriceBps) || (spreadBps >= minSpreadBps) || (rsiDelta >= minRsi) || (adxDelta >= minAdx);
+      if (!significant) {
+        // Update signature to latest anyway
+        lastIndicatorSig[sym] = { price, emaSpread, rsi, adx };
+        return; // no meaningful change → skip refresh
+      }
+    }
+    // Update signature prior to potential refresh
+    lastIndicatorSig[sym] = { price, emaSpread, rsi, adx };
+  }
 
   let shouldForce = false;
   let reason = '';

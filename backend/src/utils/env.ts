@@ -170,6 +170,12 @@ export type Cfg = {
   STRAT_REFRESH_RSI_CROSS_ENABLED: boolean;
   STRAT_REFRESH_RSI_OVERBOUGHT: number;      // e.g., 70
   STRAT_REFRESH_RSI_OVERSOLD: number;        // e.g., 30
+  STRAT_REFRESH_ADAPTIVE_ENABLED: boolean;   // adapt thresholds per symbol volatility/liquidity
+  // Indicator change thresholds to avoid redundant LLM calls
+  STRAT_REFRESH_MIN_PRICE_BPS: number;       // min price change (bps) to consider significant
+  STRAT_REFRESH_MIN_EMA_SPREAD_BPS: number;  // min EMA20/50 spread delta (bps)
+  STRAT_REFRESH_MIN_RSI_DELTA: number;       // min RSI delta (points)
+  STRAT_REFRESH_MIN_ADX_DELTA: number;       // min ADX delta (points)
 };
 export type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
 
@@ -387,5 +393,10 @@ export function getConfig(): Cfg {
     STRAT_REFRESH_RSI_CROSS_ENABLED: (e.STRAT_REFRESH_RSI_CROSS_ENABLED || "true") === "true",
     STRAT_REFRESH_RSI_OVERBOUGHT: Number(e.STRAT_REFRESH_RSI_OVERBOUGHT || "70"),
     STRAT_REFRESH_RSI_OVERSOLD: Number(e.STRAT_REFRESH_RSI_OVERSOLD || "30"),
+    STRAT_REFRESH_ADAPTIVE_ENABLED: (e.STRAT_REFRESH_ADAPTIVE_ENABLED || "true") === "true",
+    STRAT_REFRESH_MIN_PRICE_BPS: Number(e.STRAT_REFRESH_MIN_PRICE_BPS || "10"),
+    STRAT_REFRESH_MIN_EMA_SPREAD_BPS: Number(e.STRAT_REFRESH_MIN_EMA_SPREAD_BPS || "8"),
+    STRAT_REFRESH_MIN_RSI_DELTA: Number(e.STRAT_REFRESH_MIN_RSI_DELTA || "2"),
+    STRAT_REFRESH_MIN_ADX_DELTA: Number(e.STRAT_REFRESH_MIN_ADX_DELTA || "2"),
   };
 }
