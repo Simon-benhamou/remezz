@@ -47,6 +47,46 @@ export interface VolumeFilteredCrypto {
   volumeRank: number;
 }
 
+// Lightweight entry readiness using 15m snapshot only (no agent state)
+function entryReadinessLite(snap: any) {
+  try {
+    const ema20 = Number(snap.ema20 || 0);
+    const ema50 = Number(snap.ema50 || 0);
+    const adx = Number(snap.adx14 || 0);
+    const atrPct = Number(snap.atrPct || 0);
+    const cmf20 = Number(snap.cmf20 || 0);
+    const volumeRatio = (Number(snap.volumeMA || 0) > 0) ? (Number(snap.volume || 0) / Number(snap.volumeMA || 1)) : 0;
+    const srBias = String(snap.srBias || 'neutral');
+
+    // Direction guess: EMA alignment, fallbacks to srBias and CMF
+    let direction: 'long' | 'short' | 'none' = 'none';
+    if (ema20 > ema50) direction = 'long'; else if (ema20 < ema50) direction = 'short';
+    if (direction === 'none') {
+      if (srBias === 'nearSupport' && cmf20 > 0) direction = 'long';
+      else if (srBias === 'nearResistance' && cmf20 < 0) direction = 'short';
+    }
+
+    // Score: normalize 0..1 with simple weights
+    const emaAligned = (direction === 'long' && ema20 > ema50) || (direction === 'short' && ema20 < ema50);
+    const nearSR = (direction === 'long' && srBias === 'nearSupport') || (direction === 'short' && srBias === 'nearResistance');
+    const cmfAligned = (direction === 'long' && cmf20 > 0.08) || (direction === 'short' && cmf20 < -0.08);
+    const volOk = volumeRatio >= 0.55; // liquid enough
+    const momentumOk = adx >= 12 && atrPct >= 0.2;
+
+    const score = (
+      (emaAligned ? 0.35 : 0) +
+      (nearSR ? 0.20 : 0) +
+      (cmfAligned ? 0.20 : 0) +
+      (volOk ? 0.10 : 0) +
+      (momentumOk ? 0.15 : 0)
+    );
+
+    return { score: Number(score.toFixed(2)), direction };
+  } catch {
+    return { score: 0, direction: 'none' as const };
+  }
+}
+
 /**
  * ÉTAPE 1: Filtrage par volume
  * Récupère les top 50 cryptos par volume 24h en USD
@@ -215,10 +255,11 @@ export async function rankCryptosWithAI(
               atrPct: snap.atrPct,
               ema20: snap.ema20,
               ema50: snap.ema50,
-              trend: snap.ema20 > snap.ema50 ? (snap.ema20 - snap.ema50) / snap.ema50 * 100 : 0,
+              trend: snap.ema20 > snap.ema50 ? (snap.ema20 - snap.ema50) / snap.ema50 * 100 : (snap.ema20 < snap.ema50 ? (snap.ema20 - snap.ema50) / snap.ema50 * 100 : 0),
               srBias: snap.srBias,
               volume: snap.volume || 0,
-              volumeMA: snap.volumeMA || 0
+              volumeMA: snap.volumeMA || 0,
+              cmf20: snap.cmf20 ?? 0
             }
           };
         } catch (error) {
@@ -231,8 +272,46 @@ export async function rankCryptosWithAI(
     const validSnapshots = snapshots.filter(s => s !== null);
     console.log(`✅ Built ${validSnapshots.length} technical snapshots`);
     
+    // Lightweight prefilter (liquidity + minimal momentum)
+    const minimallyTradable = validSnapshots.filter(s => {
+      const vma = Number(s!.technical.volumeMA || 0);
+      const vr = vma > 0 ? Number((s!.technical.volume / vma)) : 0;
+      const adx = Number(s!.technical.adx || 0);
+      const atrPct = Number(s!.technical.atrPct || 0);
+      return vr >= 0.5 && adx >= 12 && atrPct >= 0.2; // keep only minimally tradable
+    });
+
     // Prepare data for AI prompt
-    const aiInput = validSnapshots.map(s => ({
+    const aiInput = minimallyTradable.map(s => {
+      const vr = s!.technical.volumeMA > 0 ? Number((s!.technical.volume / s!.technical.volumeMA)) : 0;
+      const er = entryReadinessLite({
+        ema20: s!.technical.ema20,
+        ema50: s!.technical.ema50,
+        adx14: s!.technical.adx,
+        atrPct: s!.technical.atrPct,
+        cmf20: s!.technical.cmf20,
+        volume: s!.technical.volume,
+        volumeMA: s!.technical.volumeMA,
+        srBias: s!.technical.srBias
+      });
+      return {
+        symbol: s!.symbol,
+        volumeRank: s!.volumeRank,
+        volumeUsd24h: Math.round(s!.volumeUsd24h),
+        change24h: Number(s!.change24h.toFixed(2)),
+        rsi: Number(s!.technical.rsi.toFixed(1)),
+        adx: Number(s!.technical.adx.toFixed(1)),
+        atrPct: Number(s!.technical.atrPct.toFixed(2)),
+        ema20: Number(s!.technical.ema20.toFixed(2)),
+        ema50: Number(s!.technical.ema50.toFixed(2)),
+        trendPct: Number(s!.technical.trend.toFixed(2)),
+        srBias: s!.technical.srBias,
+        volumeRatio: Number(vr.toFixed(2)),
+        cmf20: Number((s!.technical.cmf20||0).toFixed(3)),
+        entryReadinessScore: er.score,
+        entrySuggestedDirection: er.direction
+      };
+    });
       symbol: s!.symbol,
       volumeRank: s!.volumeRank,
       volumeUsd24h: Math.round(s!.volumeUsd24h),
@@ -248,7 +327,7 @@ export async function rankCryptosWithAI(
     }));
     
     // AI Prompt for ranking - TIER-BASED with quality focus
-    const prompt = `You are a PROFESSIONAL crypto trading expert. Your goal: find QUALITY opportunities, not just high movement coins.
+    const prompt = `You are a PROFESSIONAL crypto trading selector. Your goal: return a ranked list of symbols that are LIQUID and NEAR ENTRY, balancing quality and opportunity.
 
 🎯 CRITICAL: Prioritize QUALITY and REPUTATION over raw movement percentage.
 
@@ -291,18 +370,20 @@ export async function rankCryptosWithAI(
    - Tier 2 requires >$50M/day
    - Reject if volumeRatio < 0.6
 
-3. **Technical Setup** (20% weight)
+3. **Technical Setup + Entry Readiness** (35% weight)
    - Trend confirmation (EMA alignment)
    - RSI in tradeable range (30-80)
    - ADX shows strength (>15 acceptable, >25 excellent)
+   - EntryReadinessScore (0..1) and suggested direction must be considered heavily
+   - CMF20 alignment with direction is a strong positive
 
-4. **Momentum** (15% weight)
+4. **Momentum** (10% weight)
    - Tier 1: Accept ≥0.3% moves
    - Tier 2: Accept ≥0.5% moves
    - Tier 3: Accept ≥1.0% moves
    - Tier 4: Require ≥3.0% moves
 
-📊 CRYPTOS DATA (Top 50 by volume):
+📊 CRYPTOS DATA (Top candidates):
 ${JSON.stringify(aiInput, null, 2)}
 
 RESPOND WITH STRICT JSON (array of top 20 opportunities):
