@@ -20,6 +20,11 @@ let lastPurgeAt = 0;
 // Local throttling to limit LLM calls
 let lastStrategyAt: number | null = null;
 let lastStrategyZone: { min?: number | null; max?: number | null } | null = null;
+// Track last strategy bias per symbol and indicator refresh state
+const lastStrategyBias: Record<string, 'long' | 'short' | 'none' | null> = {};
+const lastRefreshAt: Record<string, number> = {};
+const divergenceTicks: Record<string, number> = {};
+const lastRsiBySym: Record<string, number> = {};
 let lastTick = { symbol: '', price: 0, ts: 0 };
 const lastTickBySession = new Map<string, number>();
 
@@ -135,6 +140,9 @@ async function tickOnce(sessionId: string, sym: string){
     else if (near(tech.last, piv.R1, NEAR_PIVOT_PCT)) trigger = 'pivot-R1-touch';
   }
 
+  // Intelligent indicator-based refresh (event-driven, debounced)
+  try { await maybeRefreshStrategyIndicators(sessionId, sym, tech); } catch {}
+
   if (trigger && sessionId) {
     let created: any = { sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv }, createdAt: new Date() };
     if (LOG_TRIGGERS) {
@@ -202,19 +210,20 @@ async function reconcileExposure(sessionId: string, symbol: string, mode: string
  *  - rate limit (STRATEGY_MIN_INTERVAL_MIN)
  *  - leaving the previous strategy entry zone
  */
-async function maybeGenerateStrategy(sym: string, trigger: string, price: number, sessionId: string) {
+async function maybeGenerateStrategy(sym: string, trigger: string, price: number, sessionId: string, force: boolean = false) {
   const minIntervalMin = Number(process.env.STRATEGY_MIN_INTERVAL_MIN || 60);
   const now = Date.now();
 
   const canByTime = !lastStrategyAt || (now - lastStrategyAt) > minIntervalMin * 60 * 1000;
   const canByZone = shouldEngineRegenerate(sym, price);
 
-  if (!canByTime && !canByZone) return; // avoid excessive LLM calls
+  if (!force && !canByTime && !canByZone) return; // avoid excessive LLM calls unless forced by indicators
 
-  const { strategy: strat, levels: lvls, reused } = await requestStrategy({ symbol: sym, trigger, sessionId, priceHint: price });
+  const { strategy: strat, levels: lvls, reused } = await requestStrategy({ symbol: sym, trigger, sessionId, priceHint: price, force });
   if (!reused) {
     lastStrategyAt = now;
     lastStrategyZone = (strat as any)?.entry?.zone || null;
+    try { lastStrategyBias[sym] = ((strat as any)?.bias as any) || null; } catch { lastStrategyBias[sym] = null; }
   }
 
   // Push WS (classic strategy preview)
@@ -262,6 +271,8 @@ export async function startEventEngine(){
               if (a && plan) {
                 await a.propose(plan);
                 await a.validateAndArm();
+                // Seed lastStrategyBias with persisted plan's bias to allow indicator refresh before next LLM call
+                try { lastStrategyBias[s.symbol] = (plan as any)?.bias || null; } catch { lastStrategyBias[s.symbol] = null; }
               }
             } catch {}
           }
@@ -313,4 +324,73 @@ export async function startEventEngine(){
     finally { setTimeout(loop, pollMs); }
   }
   loop();
+}
+
+// Indicator-driven refresh gate. Calls strategy refresh when signals contradict current bias.
+async function maybeRefreshStrategyIndicators(sessionId: string, sym: string, tech: TechnicalSnapshot) {
+  const cfg = getConfig();
+  if (!cfg.STRAT_REFRESH_ENABLED) return;
+
+  const now = Date.now();
+  const debounceMs = Math.max(0, (cfg.STRAT_REFRESH_DEBOUNCE_SEC || 60) * 1000);
+  const last = lastRefreshAt[sym] || 0;
+  if (last && now - last < debounceMs) return; // debounce per symbol
+
+  const bias = lastStrategyBias[sym] || null;
+  if (!bias || bias === 'none') return; // no basis to compare – skip
+
+  const ema20 = Number((tech as any).ema20 || 0);
+  const ema50 = Number((tech as any).ema50 || 0);
+  const ema20Slope = Number((tech as any).ema20Slope || 0);
+  const rsi = Number((tech as any).rsi14 || 50);
+  const price = Number((tech as any).last || 0);
+  const support = (tech as any).support;
+  const resistance = (tech as any).resistance;
+
+  let shouldForce = false;
+  let reason = '';
+
+  // 1) Bias divergence (EMA alignment + slope against bias) for N consecutive ticks
+  if (cfg.STRAT_REFRESH_BIAS_DIVERGENCE_ENABLED && ema20 > 0 && ema50 > 0) {
+    const slopePct = ema20 !== 0 ? (ema20Slope / ema20) * 100 : 0;
+    const trendMisaligned = bias === 'long' ? (ema20 <= ema50) : (ema20 >= ema50);
+    const slopeAgainst = bias === 'long' ? (slopePct < -0.03) : (slopePct > 0.03);
+    if (trendMisaligned && slopeAgainst) {
+      divergenceTicks[sym] = (divergenceTicks[sym] || 0) + 1;
+    } else {
+      divergenceTicks[sym] = 0;
+    }
+    if (divergenceTicks[sym] >= Math.max(1, cfg.STRAT_REFRESH_BIAS_DIVERGENCE_TICKS || 3)) {
+      shouldForce = true; reason = 'indicator-refresh:bias-divergence';
+    }
+  }
+
+  // 2) SR rejection against bias (near level + slope against bias)
+  if (!shouldForce && cfg.STRAT_REFRESH_SR_REJECTION_ENABLED && price > 0) {
+    const nearPct = Number(process.env.NEAR_SR_PCT || 0.4);
+    const nearLevel = (a:number,b:number,p:number)=> Math.abs(a-b) <= Math.abs(b)*(p/100);
+    const slopePct = ema20 !== 0 ? (ema20Slope / ema20) * 100 : 0;
+    const nearRes = (typeof resistance === 'number') && nearLevel(price, resistance as number, nearPct);
+    const nearSup = (typeof support === 'number') && nearLevel(price, support as number, nearPct);
+    if (bias === 'long' && nearRes && slopePct < -0.03) { shouldForce = true; reason = 'indicator-refresh:resistance-rejection'; }
+    if (bias === 'short' && nearSup && slopePct > 0.03) { shouldForce = true; reason = 'indicator-refresh:support-bounce'; }
+  }
+
+  // 3) RSI cross against bias
+  if (!shouldForce && cfg.STRAT_REFRESH_RSI_CROSS_ENABLED) {
+    const prev = lastRsiBySym[sym];
+    const ob = cfg.STRAT_REFRESH_RSI_OVERBOUGHT || 70;
+    const os = cfg.STRAT_REFRESH_RSI_OVERSOLD || 30;
+    if (prev != null) {
+      if (bias === 'long' && prev >= os && rsi < os) { shouldForce = true; reason = 'indicator-refresh:rsi-oversold-cross'; }
+      if (bias === 'short' && prev <= ob && rsi > ob) { shouldForce = true; reason = 'indicator-refresh:rsi-overbought-cross'; }
+    }
+    lastRsiBySym[sym] = rsi;
+  }
+
+  if (!shouldForce) return;
+  lastRefreshAt[sym] = now;
+  try {
+    await maybeGenerateStrategy(sym, reason, price, sessionId, true);
+  } catch {}
 }

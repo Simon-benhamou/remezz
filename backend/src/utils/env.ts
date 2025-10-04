@@ -160,6 +160,16 @@ export type Cfg = {
   AGGRESSIVE_TRADE_COOLDOWN_MS: number;
   TRADE_COOLDOWN_WIN_MULTIPLIER: number;
   TRADE_COOLDOWN_LOSS_MULTIPLIER: number;
+
+  // Intelligent strategy refresh (indicator-driven, debounced)
+  STRAT_REFRESH_ENABLED: boolean;
+  STRAT_REFRESH_DEBOUNCE_SEC: number;        // min seconds between forced refresh per symbol
+  STRAT_REFRESH_BIAS_DIVERGENCE_ENABLED: boolean;
+  STRAT_REFRESH_BIAS_DIVERGENCE_TICKS: number; // consecutive ticks with strong divergence before refresh
+  STRAT_REFRESH_SR_REJECTION_ENABLED: boolean;
+  STRAT_REFRESH_RSI_CROSS_ENABLED: boolean;
+  STRAT_REFRESH_RSI_OVERBOUGHT: number;      // e.g., 70
+  STRAT_REFRESH_RSI_OVERSOLD: number;        // e.g., 30
 };
 export type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
 
@@ -367,5 +377,15 @@ export function getConfig(): Cfg {
     AGGRESSIVE_TRADE_COOLDOWN_MS: Number(e.AGGRESSIVE_TRADE_COOLDOWN_MS || "10000"),
     TRADE_COOLDOWN_WIN_MULTIPLIER: Number(e.TRADE_COOLDOWN_WIN_MULTIPLIER || "0.5"),
     TRADE_COOLDOWN_LOSS_MULTIPLIER: Number(e.TRADE_COOLDOWN_LOSS_MULTIPLIER || "1.5"),
+
+    // Intelligent strategy refresh (indicator-driven, debounced)
+    STRAT_REFRESH_ENABLED: (e.STRAT_REFRESH_ENABLED || "true") === "true",
+    STRAT_REFRESH_DEBOUNCE_SEC: Number(e.STRAT_REFRESH_DEBOUNCE_SEC || "60"),
+    STRAT_REFRESH_BIAS_DIVERGENCE_ENABLED: (e.STRAT_REFRESH_BIAS_DIVERGENCE_ENABLED || "true") === "true",
+    STRAT_REFRESH_BIAS_DIVERGENCE_TICKS: Number(e.STRAT_REFRESH_BIAS_DIVERGENCE_TICKS || "3"),
+    STRAT_REFRESH_SR_REJECTION_ENABLED: (e.STRAT_REFRESH_SR_REJECTION_ENABLED || "true") === "true",
+    STRAT_REFRESH_RSI_CROSS_ENABLED: (e.STRAT_REFRESH_RSI_CROSS_ENABLED || "true") === "true",
+    STRAT_REFRESH_RSI_OVERBOUGHT: Number(e.STRAT_REFRESH_RSI_OVERBOUGHT || "70"),
+    STRAT_REFRESH_RSI_OVERSOLD: Number(e.STRAT_REFRESH_RSI_OVERSOLD || "30"),
   };
 }

@@ -528,8 +528,11 @@ export class ReboundRejectionAgent {
     this.gapEntryOverride = false;
     
     // �🚨 COOLDOWN CHECK: Prevent entries too soon after last exit
-    const cfg = (await import('../utils/env.js')).getConfig();
-    const cooldownMs = this.lastExitCooldownMs > 0 ? this.lastExitCooldownMs : cfg.TRADE_COOLDOWN_MS;
+    const envMod = await import('../utils/env.js');
+    const cfg = envMod.getConfig();
+    const modeParams = envMod.getModeParams(this.profile.aggressiveness || 'reactive');
+    const baseCooldownMs = modeParams?.tradeCooldownMs || cfg.TRADE_COOLDOWN_MS;
+    const cooldownMs = this.lastExitCooldownMs > 0 ? this.lastExitCooldownMs : baseCooldownMs;
     const timeSinceLastExit = Date.now() - this.lastExitTime;
 
     if (this.lastExitTime > 0 && timeSinceLastExit < cooldownMs) {
@@ -1449,12 +1452,15 @@ export class ReboundRejectionAgent {
     const consolidationCheck = this.isConsolidating(snap);
     if (consolidationCheck.consolidating) {
       console.warn(`🟡 ${consolidationCheck.reason} - Skipping setup (no edge in ranging market)`);
-      // Return narrow zone that's unlikely to trigger (will force scan mode)
-      return {
+      // Create a minimal but valid zone (ensure non-zero width) to avoid degenerate zones in diagnostics
+      let tmp = {
         from: currentPrice * 0.95,
         to: currentPrice * 0.95,
         mid: currentPrice * 0.95
       };
+      // Ensure at least a minimal width so the zone is reachable
+      tmp = this.ensureMinimumZoneWidth(tmp, snap);
+      return tmp;
     }
 
     // 🆕 CHECK: Faut-il switcher en mode breakout ?
@@ -3245,15 +3251,19 @@ export class ReboundRejectionAgent {
       return false;
     }
 
-    // 4. ATR Volatility (required)
-    if (atrPct < 0.35) {
+    // 4. ATR Volatility (required) — use per-crypto adaptive threshold (fallback: mode-based)
+    const baseMinAtr = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
+    const symForAtr = this.profile?.symbol || '';
+    let thr = baseMinAtr;
+    try { thr = this.getAdaptiveATRThresholdSync(symForAtr, baseMinAtr); } catch {}
+    if (atrPct < thr) {
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
         message: 'atr_too_low',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
-        details: { atrPct, bias },
+        details: { atrPct, min: thr, base: baseMinAtr, bias },
       });
       return false;
     }
@@ -3791,7 +3801,7 @@ export class ReboundRejectionAgent {
     // Basic zone check
     const price = snap.last;
     const { from, to } = this.plan.zone;
-    const inZone = price >= Math.min(from, to) && price <= Math.max(from, to);
+    const inZone = this.priceInZoneWithEpsilon(price, this.plan.zone);
     if (!inZone) return false;
 
     // Basic momentum gates
@@ -3844,9 +3854,10 @@ export class ReboundRejectionAgent {
     // Zone and momentum checks
     const price = snap.last;
     const { from, to } = this.plan?.zone || { from: 0, to: 0 };
+    const zoneCheck = this.plan?.zone ? this.priceInZoneWithEpsilon(price, this.plan.zone) : false;
     checks.inEntryZone = {
-      status: (price >= Math.min(from, to) && price <= Math.max(from, to)) ? 'PASS' : 'FAIL',
-      reason: (price >= Math.min(from, to) && price <= Math.max(from, to))
+      status: zoneCheck ? 'PASS' : 'FAIL',
+      reason: zoneCheck
         ? `Price ${price.toFixed(4)} is within entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`
         : `Price ${price.toFixed(4)} is outside entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`,
       message: `Price: ${price?.toFixed(4)}, Zone: ${Math.min(from, to).toFixed(4)} - ${Math.max(from, to).toFixed(4)}`
@@ -3866,7 +3877,9 @@ export class ReboundRejectionAgent {
     // Calculate overall quality score based on points (0-100) - allow trading with 80+ points (4/5 filters)
     const qualityPoints = Object.values(checks.qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
     const maxPoints = 100; // 5 filters × 20 points each
-    const minTradingPoints = 80; // Require at least 4/5 filters (80 points) to trade
+    // Mode-adaptive minimum quality score for diagnostics
+    const mode = this.profile?.aggressiveness || 'reactive';
+    const minTradingPoints = mode === 'aggressive' ? 50 : mode === 'reactive' ? 60 : 80;
     checks.qualityScore = {
       current: qualityPoints,
       required: minTradingPoints, // Changed from maxPoints to minTradingPoints
@@ -3887,7 +3900,7 @@ export class ReboundRejectionAgent {
     const zoneMin = zone ? Math.min(zone.from, zone.to) : Number.NEGATIVE_INFINITY;
     const zoneMax = zone ? Math.max(zone.from, zone.to) : Number.POSITIVE_INFINITY;
     const mid = zone?.mid ?? (zone ? (zone.from + zone.to) / 2 : price);
-    const inZone = zone ? price >= zoneMin && price <= zoneMax : false;
+    const inZone = zone ? this.priceInZoneWithEpsilon(price, zone) : false;
 
     const confirmRequired = !!this.plan?.plan?.entry_rule?.confirm_close;
     const confirmationOk = !confirmRequired || (bias === 'long' ? price > mid : price < mid);
@@ -3984,25 +3997,49 @@ export class ReboundRejectionAgent {
           threshold: bias === 'long' ? '30-80' : '20-70'
         }
       },
-      volatility: {
-        status: atrPct >= 0.5 ? 'PASS' : 'FAIL',
-        reason: `ATR (${atrPct.toFixed(2)}%) must be >= 0.5% to ensure sufficient volatility for profitable moves`,
-        points: atrPct >= 0.5 ? 20 : 0,
-        details: {
-          currentATR: atrPct,
-          threshold: 0.5
-        }
-      },
-      volume: {
-        status: this.checkVolumeConfirmation(volume, volumeMA) ? 'PASS' : 'FAIL',
-        reason: `Current volume (${volume.toFixed(0)}) should be >= 80% of MA volume (${volumeMA.toFixed(0)}) for confirmation`,
-        points: this.checkVolumeConfirmation(volume, volumeMA) ? 20 : 0,
-        details: {
-          currentVolume: volume,
-          volumeMA: volumeMA,
-          ratio: volumeMA > 0 ? (volume / volumeMA).toFixed(2) : 'N/A'
-        }
-      }
+      volatility: (() => {
+        const baseMinAtr = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
+        const symForAtr = this.profile?.symbol || '';
+        let thr = baseMinAtr;
+        try { thr = this.getAdaptiveATRThresholdSync(symForAtr, baseMinAtr); } catch {}
+        const pass = atrPct >= thr;
+        return {
+          status: pass ? 'PASS' : 'FAIL',
+          reason: `ATR (${atrPct.toFixed(2)}%) must be >= ${thr}% to ensure sufficient volatility (adaptive per symbol)`,
+          points: pass ? 20 : 0,
+          details: { currentATR: atrPct, threshold: thr, base: baseMinAtr }
+        };
+      })(),
+      volume: (() => {
+        // Diagnostics should mirror core filter behavior more closely
+        const cfg = getConfig();
+        const level = this.profile?.aggressiveness || 'conservative';
+        const ratio = volumeMA > 0 ? (volume / volumeMA) : 0;
+        const usdVolumeMA = volumeMA > 0 ? volumeMA * price : 0;
+        const baseRequired = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_BASE) ? cfg.QUALITY_VOLUME_RATIO_BASE : 0.6;
+        const floor = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_FLOOR) ? cfg.QUALITY_VOLUME_RATIO_FLOOR : 0.4;
+        const ceiling = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL) ? cfg.QUALITY_VOLUME_RATIO_CEIL : 0.78;
+        let required = baseRequired;
+        if (level === 'reactive') required -= 0.05; else if (level === 'aggressive') required -= 0.10; else required += 0.02;
+        if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_HIGH_USD) required -= 0.08;
+        else if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_MEDIUM_USD) required -= 0.05;
+        else if (usdVolumeMA <= cfg.QUALITY_VOLUME_RATIO_LOW_USD && usdVolumeMA > 0) required += 0.07;
+        if (atrPct >= 1.4) required -= 0.03; else if (atrPct <= 0.45) required += 0.03;
+        required = Math.max(floor, Math.min(ceiling, required));
+        const pass = volumeMA <= 0 ? volume > 0 : ratio >= required;
+        return {
+          status: pass ? 'PASS' : 'FAIL',
+          reason: `Volume ratio ${(ratio||0).toFixed(2)} should be >= ${required.toFixed(2)} (adj. by liquidity/volatility)` ,
+          points: pass ? 20 : 0,
+          details: {
+            currentVolume: volume,
+            volumeMA,
+            ratio: volumeMA > 0 ? ratio.toFixed(2) : 'N/A',
+            required: required.toFixed(2),
+            usdVolumeMA: Math.round(usdVolumeMA)
+          }
+        };
+      })()
     };
   }
 
