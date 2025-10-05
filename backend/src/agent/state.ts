@@ -1525,7 +1525,36 @@ export class ReboundRejectionAgent {
     
     // Calculate dynamic zone based on bias and proximity to key levels
     if (bias === 'long') {
-      // LONG SCENARIO: Target support areas for bounce entries
+      // 🚀 NEW: Detect MOMENTUM TREND and allow immediate entry at current price
+      const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
+      const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
+      const emaSpread = ema50 > 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
+      const priceTo20 = ema20 > 0 ? Math.abs(currentPrice - ema20) / ema20 : 1;
+      const adx = Number((snap as any)?.adx14 ?? 0);
+      
+      // Strong uptrend: EMA20 > EMA50 with >0.8% spread, price near EMA20, ADX > 25
+      const strongTrendUp = ema20 > ema50 && emaSpread > 0.8 && priceTo20 < 0.025 && adx > 25;
+      
+      // Moderate uptrend: EMA20 > EMA50 with >0.4% spread, price within 3% of EMA20
+      const moderateTrendUp = ema20 > ema50 && emaSpread > 0.4 && priceTo20 < 0.03;
+      
+      if (strongTrendUp || moderateTrendUp) {
+        const trendType = strongTrendUp ? 'STRONG' : 'MODERATE';
+        console.log(`🚀 ${trendType} MOMENTUM LONG TREND - Entry at current price`);
+        console.log(`   EMA20: ${ema20.toFixed(4)}, EMA50: ${ema50.toFixed(4)}, Spread: ${emaSpread.toFixed(2)}%`);
+        console.log(`   Price distance from EMA20: ${(priceTo20 * 100).toFixed(2)}%`);
+        
+        // Entry zone around current price for momentum entry
+        const range = strongTrendUp ? currentPrice * 0.008 : currentPrice * 0.012; // ±0.8% or ±1.2%
+        
+        return {
+          from: currentPrice - range,
+          to: currentPrice + range,
+          mid: currentPrice
+        };
+      }
+      
+      // LONG SCENARIO: Target support areas for bounce entries (traditional mean reversion)
       // 🔥 PHASE 1 FIX #5: Validate support strength (min 3 touches, max 7 days old)
       const validSupports = supports
         .filter(s => s.price < currentPrice)
@@ -1622,7 +1651,36 @@ export class ReboundRejectionAgent {
       return zone;
       
     } else if (bias === 'short') {
-      // SHORT SCENARIO: Target resistance areas for rejection entries
+      // 🚀 NEW: Detect MOMENTUM DOWNTREND and allow immediate entry at current price
+      const ema20 = Number((snap as any)?.ema20 ?? currentPrice);
+      const ema50 = Number((snap as any)?.ema50 ?? currentPrice);
+      const emaSpread = ema50 > 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
+      const priceTo20 = ema20 > 0 ? Math.abs(currentPrice - ema20) / ema20 : 1;
+      const adx = Number((snap as any)?.adx14 ?? 0);
+      
+      // Strong downtrend: EMA20 < EMA50 with <-0.8% spread, price near EMA20, ADX > 25
+      const strongTrendDown = ema20 < ema50 && emaSpread < -0.8 && priceTo20 < 0.025 && adx > 25;
+      
+      // Moderate downtrend: EMA20 < EMA50 with <-0.4% spread, price within 3% of EMA20
+      const moderateTrendDown = ema20 < ema50 && emaSpread < -0.4 && priceTo20 < 0.03;
+      
+      if (strongTrendDown || moderateTrendDown) {
+        const trendType = strongTrendDown ? 'STRONG' : 'MODERATE';
+        console.log(`🚀 ${trendType} MOMENTUM SHORT TREND - Entry at current price`);
+        console.log(`   EMA20: ${ema20.toFixed(4)}, EMA50: ${ema50.toFixed(4)}, Spread: ${emaSpread.toFixed(2)}%`);
+        console.log(`   Price distance from EMA20: ${(priceTo20 * 100).toFixed(2)}%`);
+        
+        // Entry zone around current price for momentum entry
+        const range = strongTrendDown ? currentPrice * 0.008 : currentPrice * 0.012; // ±0.8% or ±1.2%
+        
+        return {
+          from: currentPrice - range,
+          to: currentPrice + range,
+          mid: currentPrice
+        };
+      }
+      
+      // SHORT SCENARIO: Target resistance areas for rejection entries (traditional mean reversion)
       // 🔥 PHASE 1 FIX #5: Validate resistance strength (min 3 touches, max 7 days old)
       const validResistances = resistances
         .filter(r => r.price > currentPrice)
@@ -3928,12 +3986,12 @@ export class ReboundRejectionAgent {
     // Simplified quality filters (binary pass/fail for essential indicators)
     checks.qualityFilters = this.getQualityFiltersDiagnostics(snap);
 
-    // Calculate overall quality score based on points (0-100) - allow trading with 80+ points (4/5 filters)
+    // Calculate overall quality score based on points (0-100) - allow trading with 3/5 filters (60 points)
     const qualityPoints = Object.values(checks.qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
     const maxPoints = 100; // 5 filters × 20 points each
-    // Mode-adaptive minimum quality score for diagnostics
+    // Mode-adaptive minimum quality score for diagnostics (aligned with env.ts)
     const mode = this.profile?.aggressiveness || 'reactive';
-    const minTradingPoints = mode === 'aggressive' ? 50 : mode === 'reactive' ? 60 : 80;
+    const minTradingPoints = mode === 'aggressive' ? 40 : mode === 'reactive' ? 50 : 60;
     checks.qualityScore = {
       current: qualityPoints,
       required: minTradingPoints, // Changed from maxPoints to minTradingPoints
