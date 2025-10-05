@@ -44,7 +44,35 @@ export class LiveBroker implements Broker {
 
   async balance() {
     const ex = await this.getExchange();
-    const b = await ex.fetchBalance();
+    
+    // 🚀 WebSocket for Binance (0 weight)
+    let b: any;
+    const userCredentials = await getUserCredentials(this.userId);
+    if (userCredentials?.exchange === 'binance') {
+      try {
+        const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
+        await subscribeToUserData(this.userId, userCredentials.apiKey, userCredentials.apiSecret);
+        const wsBalance = await getBalanceFromWebSocket(this.userId, 'USDT');
+        if (wsBalance) {
+          b = {
+            total: { USDT: wsBalance.total },
+            free: { USDT: wsBalance.free },
+            used: { USDT: wsBalance.locked },
+            info: {}
+          };
+          console.log(`✅ [WebSocket] Balance fetched in broker - 0 weight`);
+        } else {
+          b = await ex.fetchBalance();
+          console.log(`⚠️ [REST] Balance fetched in broker - 40 weight`);
+        }
+      } catch (error) {
+        console.warn('⚠️ WebSocket balance failed in broker, using REST:', error);
+        b = await ex.fetchBalance();
+      }
+    } else {
+      b = await ex.fetchBalance();
+    }
+    
     const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
 
     const num = (v: any) => {
@@ -327,7 +355,26 @@ export async function inspectExposure(symbol: string, userId?: string): Promise<
     const marketType = String(process.env.MARKET_TYPE || 'spot').toLowerCase();
     if (marketType === 'spot' && ex.markets && ex.markets[s]) {
       const base = ex.markets[s].base;
-      const b = await ex.fetchBalance();
+      
+      // 🚀 WebSocket for Binance (0 weight)
+      let b: any;
+      if (userId && userCredentials?.exchange === 'binance' && base === 'USDT') {
+        try {
+          const { getBalanceFromWebSocket } = await import('../services/binanceWebSocket.js');
+          const wsBalance = await getBalanceFromWebSocket(userId, base);
+          if (wsBalance) {
+            b = { total: { [base]: wsBalance.total }, free: { [base]: wsBalance.free } };
+            console.log(`✅ [WebSocket] Balance for ghost exposure - 0 weight`);
+          } else {
+            b = await ex.fetchBalance();
+          }
+        } catch (error) {
+          b = await ex.fetchBalance();
+        }
+      } else {
+        b = await ex.fetchBalance();
+      }
+      
       const held = Number((b?.total?.[base] ?? b?.free?.[base] ?? 0));
       if (held > 0) return { side: 'buy', qty: held };
     }

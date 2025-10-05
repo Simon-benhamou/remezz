@@ -157,7 +157,33 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
           return res.status(400).json({ error: 'api_keys_required_for_live_trading' });
         }
         const ex = await getUserExchange(req.user.id, userCredentials);
-        const b = await ex.fetchBalance();
+        
+        // 🚀 WebSocket for Binance (0 weight)
+        let b: any;
+        if (userCredentials.exchange === 'binance') {
+          try {
+            const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
+            await subscribeToUserData(req.user.id, userCredentials.apiKey, userCredentials.apiSecret);
+            const wsBalance = await getBalanceFromWebSocket(req.user.id, 'USDT');
+            if (wsBalance) {
+              b = {
+                total: { USDT: wsBalance.total, USD: 0 },
+                free: { USDT: wsBalance.free, USD: 0 },
+                used: { USDT: wsBalance.locked, USD: 0 }
+              };
+              console.log(`✅ [WebSocket] Balance fetched - 0 weight`);
+            } else {
+              b = await ex.fetchBalance();
+              console.log(`⚠️ [REST] Balance fetched - 40 weight (WebSocket not ready)`);
+            }
+          } catch (error) {
+            console.warn('⚠️ WebSocket balance failed, using REST:', error);
+            b = await ex.fetchBalance();
+          }
+        } else {
+          b = await ex.fetchBalance();
+        }
+        
         const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
         const freeUsd = (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
         if (!startBal || startBal <= 0) {
@@ -733,11 +759,36 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       const userCredentials = await getUserCredentials(req.user.id);
       if (userCredentials) {
         const exchange = await getUserExchange(req.user.id, userCredentials);
-        const balance = await exchange.fetchBalance();
+        
+        // 🚀 WebSocket for Binance (0 weight)
+        let balance: any;
+        if (userCredentials.exchange === 'binance') {
+          try {
+            const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
+            await subscribeToUserData(req.user.id, userCredentials.apiKey, userCredentials.apiSecret);
+            const wsBalance = await getBalanceFromWebSocket(req.user.id, 'USDT');
+            if (wsBalance) {
+              balance = {
+                total: { USD: 0, USDT: wsBalance.total },
+                free: { USD: 0, USDT: wsBalance.free },
+                used: { USD: 0, USDT: wsBalance.locked }
+              };
+              console.log(`✅ [WebSocket] Balance fetched for dashboard - 0 weight`);
+            } else {
+              balance = await exchange.fetchBalance();
+              console.log(`⚠️ [REST] Balance fetched for dashboard - 40 weight`);
+            }
+          } catch (error) {
+            console.warn('⚠️ WebSocket balance failed for dashboard, using REST:', error);
+            balance = await exchange.fetchBalance();
+          }
+        } else {
+          balance = await exchange.fetchBalance();
+        }
         
         // Extract USD balances (compatible with Crypto.com response)
-        const totalUsd = Number(balance?.total?.USD || 0);
-        const freeUsd = Number(balance?.free?.USD || 0);
+        const totalUsd = Number(balance?.total?.USD || 0) + Number(balance?.total?.USDT || 0);
+        const freeUsd = Number(balance?.free?.USD || 0) + Number(balance?.free?.USDT || 0);
         const usedUsd = Number(balance?.used?.USD || 0);
         
         exchangeBalance = {

@@ -384,6 +384,8 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
         wsTickerMap = await getAllTickersFromWebSocket();
         if (!wsTickerMap) {
           console.warn('⚠️ Binance WebSocket tickers unavailable, using REST fallback.');
+        } else {
+          console.log(`✅ Using Binance WebSocket: ${wsTickerMap.size} tickers available (0 weight)`);
         }
       } catch (error) {
         console.warn('⚠️ Failed to load Binance WebSocket tickers, using REST fallback:', error);
@@ -403,6 +405,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
           }
         }
 
+        // Fallback REST only for non-Binance or WebSocket miss
         const ticker = await exchange.fetchTicker(symbol);
         allTickers[symbol] = ticker;
       } catch (error) {

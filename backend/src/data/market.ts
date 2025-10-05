@@ -184,7 +184,39 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       s = await resolveSymbol(symbol);
     }
     
-    const ticker = await ex.fetchTicker(s);
+    // 🚀 WebSocket for Binance (0 weight)
+    let ticker: any;
+    const exchangeId = String((ex as any)?.id || '').toLowerCase();
+    if (exchangeId.includes('binance')) {
+      try {
+        const { getTickerFromWebSocket } = await import('../services/binanceWebSocket.js');
+        const wsTicker = await getTickerFromWebSocket(s);
+        if (wsTicker) {
+          ticker = {
+            symbol: s,
+            last: wsTicker.last,
+            bid: wsTicker.bid,
+            ask: wsTicker.ask,
+            percentage: wsTicker.percentage,
+            baseVolume: wsTicker.baseVolume,
+            quoteVolume: wsTicker.quoteVolume,
+            high: wsTicker.high,
+            low: wsTicker.low,
+            open: wsTicker.open,
+            timestamp: wsTicker.timestamp
+          };
+          console.log(`✅ [WebSocket] getTicker(${s}) - 0 weight`);
+        } else {
+          ticker = await ex.fetchTicker(s);
+          console.log(`⚠️ [REST] getTicker(${s}) - 2 weight (WebSocket fallback)`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ WebSocket getTicker failed for ${s}, using REST:`, error);
+        ticker = await ex.fetchTicker(s);
+      }
+    } else {
+      ticker = await ex.fetchTicker(s);
+    }
     
     // Cache the result
     tickerCache.set(cacheKey, { data: ticker, timestamp: now });

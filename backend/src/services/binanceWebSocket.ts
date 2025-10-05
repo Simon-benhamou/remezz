@@ -38,6 +38,14 @@ export interface BinanceKlineData {
   volume: number;
 }
 
+export interface BinanceBalance {
+  asset: string;
+  free: number;
+  locked: number;
+  total: number;
+  timestamp: number;
+}
+
 export function toBinanceSymbolId(unified: string): string {
   const base = unified.split(':')[0] || unified;
   return base.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -73,11 +81,15 @@ class BinanceWebSocketManager {
   // Cache en mémoire pour les données temps réel
   private tickersCache = new Map<string, BinanceTickerData>();
   private klinesCache = new Map<string, BinanceKlineData[]>();
+  private balanceCache = new Map<string, BinanceBalance>();
   private lastUpdate = Date.now();
   
   // Callbacks pour notifier les consumers
   private tickerCallbacks: Array<(ticker: BinanceTickerData) => void> = [];
   private klineCallbacks: Array<(kline: BinanceKlineData) => void> = [];
+  
+  // User data stream management
+  private userDataStreams = new Map<string, { ws: WebSocket | null; listenKey: string; userId: string }>();
   
   private isConnecting = false;
   private isConnected = false;
@@ -468,6 +480,161 @@ class BinanceWebSocketManager {
 
     this.klinesCache.set(key, seeded);
   }
+
+  /**
+   * 💰 Subscribe to User Data Stream (Balance, Orders, Trades)
+   * 
+   * Uses listenKey endpoint (0 weight) to receive real-time balance updates.
+   * Automatically keeps listenKey alive every 30 minutes.
+   * 
+   * @param userId - User ID for multi-user support
+   * @param apiKey - Binance API key
+   * @param apiSecret - Binance API secret
+   */
+  async subscribeToUserData(userId: string, apiKey: string, apiSecret: string): Promise<void> {
+    try {
+      // Check if already subscribed
+      if (this.userDataStreams.has(userId)) {
+        console.log(`✅ User ${userId} already subscribed to user data stream`);
+        return;
+      }
+
+      // Step 1: Create listenKey (0 weight)
+      const timestamp = Date.now();
+      const queryString = `timestamp=${timestamp}`;
+      const signature = crypto
+        .createHmac('sha256', apiSecret)
+        .update(queryString)
+        .digest('hex');
+
+      const listenKeyUrl = `https://fapi.binance.com/fapi/v1/listenKey?${queryString}&signature=${signature}`;
+      const response = await fetch(listenKeyUrl, {
+        method: 'POST',
+        headers: { 'X-MBX-APIKEY': apiKey }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create listenKey: ${await response.text()}`);
+      }
+
+      const { listenKey } = await response.json();
+      console.log(`✅ Created listenKey for user ${userId}: ${listenKey.substring(0, 10)}...`);
+
+      // Step 2: Connect to user data stream
+      const wsUrl = `wss://fstream.binance.com/ws/${listenKey}`;
+      const userWs = new WebSocket(wsUrl);
+
+      userWs.on('open', () => {
+        console.log(`🔌 User data stream connected for user ${userId}`);
+      });
+
+      userWs.on('message', (data: Buffer) => {
+        try {
+          const msg = JSON.parse(data.toString());
+
+          // ACCOUNT_UPDATE event (balance changes)
+          if (msg.e === 'ACCOUNT_UPDATE') {
+            const balances = msg.a?.B || [];
+            for (const bal of balances) {
+              const asset = String(bal.a || '').toUpperCase();
+              const wb = parseFloat(bal.wb || '0'); // Wallet balance
+              const cw = parseFloat(bal.cw || '0'); // Cross wallet balance
+              
+              const balanceData: BinanceBalance = {
+                asset,
+                free: wb - cw, // Free = wallet - cross
+                locked: cw,
+                total: wb,
+                timestamp: Date.now()
+              };
+
+              const cacheKey = `${userId}_${asset}`;
+              this.balanceCache.set(cacheKey, balanceData);
+            }
+            console.log(`💰 Balance updated for user ${userId}: ${balances.length} assets`);
+          }
+
+          // ORDER_TRADE_UPDATE event (order updates)
+          if (msg.e === 'ORDER_TRADE_UPDATE') {
+            console.log(`📊 Order update for user ${userId}: ${msg.o?.s} ${msg.o?.S} ${msg.o?.X}`);
+          }
+
+        } catch (error) {
+          console.error(`❌ Failed to parse user data message for ${userId}:`, error);
+        }
+      });
+
+      userWs.on('error', (error) => {
+        console.error(`❌ User data stream error for ${userId}:`, error);
+      });
+
+      userWs.on('close', () => {
+        console.log(`🔌 User data stream closed for user ${userId}`);
+        this.userDataStreams.delete(userId);
+      });
+
+      // Store stream reference
+      this.userDataStreams.set(userId, { ws: userWs, listenKey, userId });
+
+      // Step 3: Keep listenKey alive (every 30 minutes)
+      const keepAliveInterval = setInterval(async () => {
+        try {
+          const keepAliveTimestamp = Date.now();
+          const keepAliveQuery = `timestamp=${keepAliveTimestamp}`;
+          const keepAliveSignature = crypto
+            .createHmac('sha256', apiSecret)
+            .update(keepAliveQuery)
+            .digest('hex');
+
+          const keepAliveUrl = `https://fapi.binance.com/fapi/v1/listenKey?${keepAliveQuery}&signature=${keepAliveSignature}`;
+          await fetch(keepAliveUrl, {
+            method: 'PUT',
+            headers: { 'X-MBX-APIKEY': apiKey }
+          });
+
+          console.log(`✅ ListenKey kept alive for user ${userId}`);
+        } catch (error) {
+          console.error(`❌ Failed to keep listenKey alive for ${userId}:`, error);
+        }
+      }, 30 * 60 * 1000); // 30 minutes
+
+      // Clean up on close
+      userWs.on('close', () => {
+        clearInterval(keepAliveInterval);
+      });
+
+    } catch (error) {
+      console.error(`❌ Failed to subscribe to user data for ${userId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * 💰 Get Balance from Cache (0 weight)
+   * 
+   * Returns cached balance from user data stream.
+   * Requires subscribeToUserData to be called first.
+   * 
+   * @param userId - User ID
+   * @param asset - Asset symbol (default: 'USDT')
+   * @returns Balance data or null if not available
+   */
+  getBalance(userId: string, asset: string = 'USDT'): BinanceBalance | null {
+    const cacheKey = `${userId}_${asset.toUpperCase()}`;
+    return this.balanceCache.get(cacheKey) || null;
+  }
+
+  /**
+   * 🔌 Unsubscribe from User Data Stream
+   */
+  unsubscribeFromUserData(userId: string): void {
+    const stream = this.userDataStreams.get(userId);
+    if (stream?.ws) {
+      stream.ws.close();
+      this.userDataStreams.delete(userId);
+      console.log(`🔌 Unsubscribed user ${userId} from user data stream`);
+    }
+  }
 }
 
 // Singleton instance
@@ -623,4 +790,34 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   const klines = ws.getKlines(symbol, interval);
   if (!klines?.length) return null;
   return klines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
+}
+
+/**
+ * 💰 Get Balance from WebSocket (0 weight)
+ * 
+ * Uses user data stream for real-time balance updates.
+ * Requires listenKey to be active.
+ * 
+ * @param userId - User ID for multi-user support
+ * @param asset - Asset symbol (default: 'USDT')
+ * @returns Balance data or null if not available
+ */
+export async function getBalanceFromWebSocket(userId: string, asset: string = 'USDT'): Promise<BinanceBalance | null> {
+  const ws = getBinanceWebSocket();
+  return ws.getBalance(userId, asset);
+}
+
+/**
+ * 🔌 Subscribe to User Data Stream (0 weight)
+ * 
+ * Subscribes to balance, orders, and trades updates.
+ * Uses listenKey for authentication (0 weight).
+ * 
+ * @param userId - User ID
+ * @param apiKey - Binance API key
+ * @param apiSecret - Binance API secret
+ */
+export async function subscribeToUserData(userId: string, apiKey: string, apiSecret: string): Promise<void> {
+  const ws = getBinanceWebSocket();
+  await ws.subscribeToUserData(userId, apiKey, apiSecret);
 }
