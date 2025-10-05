@@ -17,18 +17,25 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
   const cfg = getConfig();
   const testMode = (process.env.UNIT_TEST_MODE || 'false') === 'true';
   
-  // Get user credentials for authenticated exchange access
-  let ex: any = null;
-  try {
-    const userId = (req as any)?.user?.id;
-    if (userId) {
-      const userCredentials = await getUserCredentials(userId);
-      if (userCredentials) {
-        ex = await getUserExchange(userId, userCredentials);
-      }
+  const userId = (req as any)?.user?.id;
+  const userCredentials = userId ? await getUserCredentials(userId).catch((err) => {
+    console.error('Failed to load user credentials for status:', err);
+    return null;
+  }) : null;
+
+  const isBinanceUser = String(userCredentials?.exchange || '').toLowerCase() === 'binance';
+  let exchange: any = null;
+
+  async function ensureExchange(): Promise<any> {
+    if (!userId || !userCredentials) return null;
+    if (exchange) return exchange;
+    try {
+      exchange = await getUserExchange(userId, userCredentials);
+      return exchange;
+    } catch (error) {
+      console.error('Failed to instantiate user exchange for status:', error);
+      return null;
     }
-  } catch (error) {
-    console.error('Failed to get user exchange for status:', error);
   }
   
   const sessionId = String(req.query.sessionId || '');
@@ -73,13 +80,37 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
 
   // Parallel fetch with timeout for heavy operations
   const [balance, orders, indic] = await Promise.all([
-    ex && includeBalance ? 
-      Promise.race([
+    includeBalance && userCredentials ? (async () => {
+      if (isBinanceUser) {
+        if (!userId) return null;
+        try {
+          const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
+          await subscribeToUserData(userId, userCredentials.apiKey, userCredentials.apiSecret);
+          const wsBalance = await getBalanceFromWebSocket(userId, 'USDT');
+          if (wsBalance) {
+            console.log(`✅ [WebSocket] /status balance for user ${userId} - 0 weight`);
+            return {
+              total: { USDT: wsBalance.total, USD: 0 },
+              free: { USDT: wsBalance.free, USD: 0 },
+              used: { USDT: wsBalance.locked, USD: 0 }
+            };
+          }
+          console.log(`⚠️ [WebSocket] /status balance cache miss for user ${userId}`);
+        } catch (error) {
+          console.warn('⚠️ WebSocket balance failed on /status, falling back to REST:', error);
+        }
+      }
+      const ex = await ensureExchange();
+      if (!ex) return null;
+      return await Promise.race([
         ex.fetchBalance(),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Balance timeout')), 8000))
-      ]).catch(()=>null) : null,
-    ex ? (async ()=>{ 
+      ]).catch(()=>null);
+    })() : null,
+    userCredentials ? (async ()=>{ 
       try { 
+        const ex = await ensureExchange();
+        if (!ex) return [];
         const s = await resolveSymbol(symbol); 
         return await Promise.race([
           ex.fetchOpenOrders(s),
@@ -102,7 +133,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
 
   const payload = {
     serverTime: new Date().toISOString(),
-    exchangeId: ex?.id || cfg.EXCHANGE_ID,
+    exchangeId: exchange?.id || cfg.EXCHANGE_ID,
     symbol,
     balance, orders, 
     // Merge indicators with tech snapshot for complete data
