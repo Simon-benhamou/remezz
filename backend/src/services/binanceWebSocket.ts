@@ -520,6 +520,99 @@ export async function getAllTickersFromWebSocket(): Promise<Map<string, BinanceT
   return null;
 }
 
+/**
+ * 🔑 Validate Binance API Keys (0 weight)
+ * 
+ * Uses listenKey creation endpoint which:
+ * - Requires valid API key + signature
+ * - Returns 0 weight if successful
+ * - Returns error if invalid keys
+ * - No market data loaded
+ * 
+ * This is the ONLY safe way to validate Binance keys without consuming weight.
+ */
+export async function validateBinanceApiKey(apiKey: string, apiSecret: string): Promise<{ valid: boolean; error?: string }> {
+  try {
+    const timestamp = Date.now();
+    const crypto = await import('crypto');
+    
+    // Create signature for authenticated endpoint
+    const queryString = `timestamp=${timestamp}`;
+    const signature = crypto
+      .createHmac('sha256', apiSecret)
+      .update(queryString)
+      .digest('hex');
+    
+    // Test with listenKey creation (0 weight, requires valid signature)
+    const url = `https://fapi.binance.com/fapi/v1/listenKey?${queryString}&signature=${signature}`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'X-MBX-APIKEY': apiKey
+      }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('✅ Binance API key validation successful (0 weight used)');
+      return { valid: true };
+    } else {
+      const error = await response.text();
+      console.warn('❌ Binance API key validation failed:', error);
+      
+      // Parse error
+      try {
+        const errorJson = JSON.parse(error);
+        return { 
+          valid: false, 
+          error: errorJson.msg || 'Invalid API keys or signature' 
+        };
+      } catch {
+        return { 
+          valid: false, 
+          error: error.substring(0, 200) 
+        };
+      }
+    }
+  } catch (error: any) {
+    console.error('❌ Binance API key validation error:', error);
+    return { 
+      valid: false, 
+      error: error.message || 'Network error' 
+    };
+  }
+}
+
+/**
+ * 🔑 Validate Crypto.com API Keys (lightweight)
+ * 
+ * Crypto.com doesn't have IP bans like Binance.
+ * Can safely use minimal endpoint for validation.
+ */
+export async function validateCryptocomApiKey(apiKey: string, apiSecret: string): Promise<{ valid: boolean; error?: string }> {
+  try {
+    const ccxt = await import('ccxt');
+    const exchange = new ccxt.cryptocom({
+      apiKey,
+      secret: apiSecret,
+      enableRateLimit: true
+    });
+    
+    // Crypto.com: safe to use fetchBalance for validation (no aggressive bans)
+    await exchange.fetchBalance();
+    console.log('✅ Crypto.com API key validation successful');
+    return { valid: true };
+    
+  } catch (error: any) {
+    console.warn('❌ Crypto.com API key validation failed:', error.message);
+    return { 
+      valid: false, 
+      error: error.message || 'Invalid API keys' 
+    };
+  }
+}
+
 export function seedKlinesFromWebSocket(symbol: string, interval: string, ohlcv: number[][]): void {
   const ws = getBinanceWebSocket();
   ws.seedKlines(symbol, interval, ohlcv);

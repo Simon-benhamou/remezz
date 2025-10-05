@@ -394,20 +394,39 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Validate credentials by testing API connection (lightweight - no balance fetch to avoid rate limits)
+    // ✅ SAFE API KEY VALIDATION (0 weight for Binance)
     let isValid = false;
     let errorDetails = '';
+    
     try {
-      // Test: just create exchange instance (validates keys format, no API call)
-      const exchange = await getUserExchange(req.user!.id, credentials);
-      if (exchange) {
-        // Keys are valid if exchange instance created successfully
+      // Use exchange-specific lightweight validation
+      if (credentials.exchange === 'binance') {
+        // Binance: Use listenKey endpoint (0 weight) via WebSocket service
+        const { validateBinanceApiKey } = await import('../services/binanceWebSocket.js');
+        const result = await validateBinanceApiKey(credentials.apiKey, credentials.apiSecret);
+        isValid = result.valid;
+        if (!result.valid) {
+          errorDetails = result.error || 'Invalid API keys';
+        }
+      } else if (credentials.exchange === 'crypto.com') {
+        // Crypto.com: Safe to use fetchBalance (no aggressive bans)
+        const { validateCryptocomApiKey } = await import('../services/binanceWebSocket.js');
+        const result = await validateCryptocomApiKey(credentials.apiKey, credentials.apiSecret);
+        isValid = result.valid;
+        if (!result.valid) {
+          errorDetails = result.error || 'Invalid API keys';
+        }
+      } else {
+        // Unknown exchange: skip validation
         isValid = true;
-        console.log(`✅ API key validation SUCCESS for ${credentials.exchange} (credentials format valid)`);
+        console.log(`⚠️ Unknown exchange ${credentials.exchange}, validation skipped`);
       }
+      
+      console.log(`${isValid ? '✅' : '❌'} API key validation for ${credentials.exchange}: ${isValid ? 'SUCCESS' : errorDetails}`);
+      
     } catch (error: any) {
-      console.error('API key validation failed:', error);
-      errorDetails = error.message || 'Unknown error';
+      console.error('API key validation error:', error);
+      errorDetails = error.message || 'Validation failed';
       isValid = false;
     }
 
