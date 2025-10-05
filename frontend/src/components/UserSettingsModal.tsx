@@ -129,6 +129,7 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
 
   const exchangeOptions = [
     { label: 'Crypto.com', value: 'crypto.com' },
+    { label: 'Binance', value: 'binance' },
   ];
 
   const maskedApiKey = (key: string) => {

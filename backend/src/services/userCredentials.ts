@@ -7,6 +7,7 @@ export interface UserCredentials {
   apiSecret: string;
   passphrase?: string;
   testnet: boolean;
+  exchange: string;
 }
 
 export async function getUserCredentials(userId: string, exchange: string = 'crypto.com'): Promise<UserCredentials | null> {
@@ -29,7 +30,8 @@ export async function getUserCredentials(userId: string, exchange: string = 'cry
         apiKey: decryptApiKey(apiKey.apiKey),
         apiSecret: decryptApiKey(apiKey.apiSecret),
         passphrase: apiKey.passphrase ? decryptApiKey(apiKey.passphrase) : undefined,
-        testnet: apiKey.testnet
+        testnet: apiKey.testnet,
+        exchange: apiKey.exchange
       };
     } catch (decryptError) {
       console.error('Failed to decrypt API keys for user:', userId, decryptError);

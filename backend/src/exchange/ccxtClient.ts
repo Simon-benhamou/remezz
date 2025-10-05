@@ -13,13 +13,16 @@ export function clearUserExchangeCache(userId: string): void {
 }
 
 // New function for user-specific authenticated exchange
-export async function getUserExchange(userId: string, credentials: { apiKey: string; apiSecret: string; passphrase?: string }) {
+export async function getUserExchange(userId: string, credentials: { apiKey: string; apiSecret: string; passphrase?: string; exchange?: string }) {
   // Include credentials hash in cache key to handle key updates
   const credentialsHash = createHash('md5')
     .update(credentials.apiKey + credentials.apiSecret)
     .digest('hex')
     .substring(0, 8);
-  const cacheKey = `${userId}_${credentialsHash}`;
+  
+  // Determine exchange ID: from credentials, or fallback to env config
+  const exchangeId = credentials.exchange || getConfig().EXCHANGE_ID;
+  const cacheKey = `${userId}_${exchangeId}_${credentialsHash}`;
   
   if (userExchanges.has(cacheKey)) {
     return userExchanges.get(cacheKey);
@@ -32,16 +35,22 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     }
   }
 
-  const { EXCHANGE_ID } = getConfig();
-  const Klass: any = (ccxt as any)[EXCHANGE_ID];
-  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
+  // Map exchange names to CCXT IDs
+  const exchangeIdMap: Record<string, string> = {
+    'crypto.com': 'cryptocom',
+    'binance': 'binance'
+  };
+  
+  const ccxtExchangeId = exchangeIdMap[exchangeId] || exchangeId;
+  const Klass: any = (ccxt as any)[ccxtExchangeId];
+  if (!Klass) throw new Error('Unknown exchange ' + exchangeId);
 
   // Check exchange required credentials
   const tempExchange = new Klass();
   const requiredCreds = tempExchange.requiredCredentials || {};
 
   console.log('Creating exchange instance for user:', userId);
-  console.log('Exchange ID:', EXCHANGE_ID);
+  console.log('Exchange ID:', exchangeId, '(CCXT:', ccxtExchangeId, ')');
   console.log('Required credentials:', requiredCreds);
   console.log('API Key length:', credentials.apiKey?.length);
   console.log('API Secret length:', credentials.apiSecret?.length);

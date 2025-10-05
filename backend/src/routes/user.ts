@@ -53,9 +53,13 @@ router.post('/api-keys', async (req: AuthenticatedRequest, res) => {
       return res.status(400).json({ error: 'missing_required_fields' });
     }
 
-    // Only allow crypto.com for now
-    if (exchange !== 'crypto.com') {
-      return res.status(400).json({ error: 'only_crypto_com_supported' });
+    // Allow crypto.com and binance
+    const supportedExchanges = ['crypto.com', 'binance'];
+    if (!supportedExchanges.includes(exchange)) {
+      return res.status(400).json({ 
+        error: 'unsupported_exchange',
+        message: `Only ${supportedExchanges.join(', ')} are supported`
+      });
     }
 
     // Check if user already has an API key for this exchange
