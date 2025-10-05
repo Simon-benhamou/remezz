@@ -382,14 +382,15 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    const credentials = await getUserCredentials(req.user!.id, 'crypto.com');
+    // Get active API key (any exchange)
+    const credentials = await getUserCredentials(req.user!.id);
     
     if (!credentials) {
       return res.json({ 
         hasApiKeys: false, 
         isValid: false, 
         canUseLive: false,
-        message: 'No API keys configured. Please add your Crypto.com API keys to enable live trading.' 
+        message: 'No API keys configured. Please add your exchange API keys to enable live trading.' 
       });
     }
 
@@ -410,9 +411,10 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       hasApiKeys: true,
       isValid,
       canUseLive: isValid,
+      exchange: credentials.exchange, // Include active exchange
       message: isValid 
-        ? 'API keys are configured and valid' 
-        : 'API keys are configured but invalid. Please check your keys and IP whitelist (208.77.244.15)'
+        ? `API keys are configured and valid (${credentials.exchange.toUpperCase()})` 
+        : `API keys are configured but invalid (${credentials.exchange.toUpperCase()}). Please check your keys and IP whitelist (208.77.244.15)`
     });
   } catch (error) {
     console.error('API keys status check error:', error);
