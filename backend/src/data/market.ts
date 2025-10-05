@@ -27,14 +27,18 @@ function createPublicExchange(forSymbol?: string) {
   const Klass: any = (ccxt as any)[EXCHANGE_ID];
   if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
   const desiredType = inferMarketType(forSymbol);
-  const key = `${EXCHANGE_ID}:${desiredType}`;
-  if (exchangeCache.has(key)) return exchangeCache.get(key);
+  
+  // 🔧 FIX: Disable exchange cache to get fresh OHLCV data
+  // The cached exchange instance was keeping stale candle data
+  // const key = `${EXCHANGE_ID}:${desiredType}`;
+  // if (exchangeCache.has(key)) return exchangeCache.get(key);
+  
   const ex = new Klass({ enableRateLimit: true });
   // @ts-ignore
   ex.options = ex.options || {};
   // @ts-ignore
   ex.options.defaultType = desiredType;
-  exchangeCache.set(key, ex);
+  // exchangeCache.set(key, ex); // Disabled cache
   return ex;
 }
 
