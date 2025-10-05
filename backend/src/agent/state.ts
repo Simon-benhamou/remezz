@@ -561,7 +561,27 @@ export class ReboundRejectionAgent {
       }
     }
     // Enhanced quality filters for 60%+ win rate
-    if (!snap || !this.passesEntryMomentumGates(snap, 'enter') || !this.passesQualityFilters(snap) || !this.passesAntiWhaleFilters(snap)) {
+    // Use quality score system instead of binary pass/fail per filter
+    if (!snap || !this.passesEntryMomentumGates(snap, 'enter') || !this.passesAntiWhaleFilters(snap)) {
+      this.entering = false;
+      return;
+    }
+    
+    // Check quality score (allows trading with 2-3 filters passing instead of requiring all 5)
+    const qualityFilters = this.getQualityFiltersDiagnostics(snap);
+    const qualityPoints = Object.values(qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
+    const mode = this.profile?.aggressiveness || 'reactive';
+    const minTradingPoints = mode === 'aggressive' ? 40 : mode === 'reactive' ? 50 : 60;
+    
+    if (qualityPoints < minTradingPoints) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'quality_score_insufficient',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { qualityPoints, required: minTradingPoints, mode, filters: qualityFilters },
+      });
       this.entering = false;
       return;
     }
