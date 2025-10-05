@@ -156,10 +156,9 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         if (!userCredentials) {
           return res.status(400).json({ error: 'api_keys_required_for_live_trading' });
         }
-        const ex = await getUserExchange(req.user.id, userCredentials);
-        
         // 🚀 WebSocket for Binance (0 weight)
         let b: any;
+        let exchange: any = null;
         if (userCredentials.exchange === 'binance') {
           try {
             const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
@@ -173,15 +172,18 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
               };
               console.log(`✅ [WebSocket] Balance fetched - 0 weight`);
             } else {
-              b = await ex.fetchBalance();
+              exchange = await getUserExchange(req.user.id, userCredentials);
+              b = await exchange.fetchBalance();
               console.log(`⚠️ [REST] Balance fetched - 40 weight (WebSocket not ready)`);
             }
           } catch (error) {
             console.warn('⚠️ WebSocket balance failed, using REST:', error);
-            b = await ex.fetchBalance();
+            exchange = await getUserExchange(req.user.id, userCredentials);
+            b = await exchange.fetchBalance();
           }
         } else {
-          b = await ex.fetchBalance();
+          exchange = await getUserExchange(req.user.id, userCredentials);
+          b = await exchange.fetchBalance();
         }
         
         const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
@@ -758,10 +760,9 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     try {
       const userCredentials = await getUserCredentials(req.user.id);
       if (userCredentials) {
-        const exchange = await getUserExchange(req.user.id, userCredentials);
-        
         // 🚀 WebSocket for Binance (0 weight)
         let balance: any;
+        let exchange: any = null;
         if (userCredentials.exchange === 'binance') {
           try {
             const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
@@ -775,14 +776,17 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
               };
               console.log(`✅ [WebSocket] Balance fetched for dashboard - 0 weight`);
             } else {
+              exchange = await getUserExchange(req.user.id, userCredentials);
               balance = await exchange.fetchBalance();
               console.log(`⚠️ [REST] Balance fetched for dashboard - 40 weight`);
             }
           } catch (error) {
             console.warn('⚠️ WebSocket balance failed for dashboard, using REST:', error);
+            exchange = await getUserExchange(req.user.id, userCredentials);
             balance = await exchange.fetchBalance();
           }
         } else {
+          exchange = await getUserExchange(req.user.id, userCredentials);
           balance = await exchange.fetchBalance();
         }
         

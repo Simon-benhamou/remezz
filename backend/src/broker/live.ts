@@ -43,11 +43,10 @@ export class LiveBroker implements Broker {
   }
 
   async balance() {
-    const ex = await this.getExchange();
-    
     // 🚀 WebSocket for Binance (0 weight)
     let b: any;
     const userCredentials = await getUserCredentials(this.userId);
+
     if (userCredentials?.exchange === 'binance') {
       try {
         const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
@@ -62,14 +61,17 @@ export class LiveBroker implements Broker {
           };
           console.log(`✅ [WebSocket] Balance fetched in broker - 0 weight`);
         } else {
+          const ex = await this.getExchange();
           b = await ex.fetchBalance();
           console.log(`⚠️ [REST] Balance fetched in broker - 40 weight`);
         }
       } catch (error) {
         console.warn('⚠️ WebSocket balance failed in broker, using REST:', error);
+        const ex = await this.getExchange();
         b = await ex.fetchBalance();
       }
     } else {
+      const ex = await this.getExchange();
       b = await ex.fetchBalance();
     }
     
