@@ -1,33 +1,16 @@
 import React from 'react';
-
-type Mode = 'live' | 'paper';
+import { useAppStore, type AppMode } from '../store';
 
 type ModeContextValue = {
-  mode: Mode;
-  setMode: (mode: Mode) => void;
+  mode: AppMode;
+  setMode: (mode: AppMode) => void;
 };
 
 const ModeContext = React.createContext<ModeContextValue | undefined>(undefined);
 
-const STORAGE_KEY = 'appMode';
-
-function normalize(value: any): Mode {
-  return value === 'paper' ? 'paper' : 'live';
-}
-
 export function ModeProvider({ children }: { children: React.ReactNode }) {
-  const [mode, setModeState] = React.useState<Mode>(() => {
-    if (typeof window === 'undefined') return 'live';
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    return normalize(stored);
-  });
-
-  const setMode = React.useCallback((next: Mode) => {
-    setModeState(next);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY, next);
-    }
-  }, []);
+  const mode = useAppStore((state) => state.mode);
+  const setMode = useAppStore((state) => state.setMode);
 
   const value = React.useMemo(() => ({ mode, setMode }), [mode, setMode]);
   return <ModeContext.Provider value={value}>{children}</ModeContext.Provider>;
