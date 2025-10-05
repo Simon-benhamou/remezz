@@ -242,7 +242,7 @@ export default function SessionsPage(){
       if (enrichedCached && enrichedCached.length) {
         console.log(`🎯 Reusing enriched cache for ${currentMode} (${enrichedCached.length} sessions)`);
         setRows(enrichedCached);
-        notifyCacheHit(currentMode as any, enrichedCached.length);
+        notifyCacheHit(currentMode as any);
       } else {
         if (rawCachedInitial.length) {
           console.log(`💾 Hydrating ${rawCachedInitial.length} cached sessions for ${currentMode}`);
@@ -252,7 +252,7 @@ export default function SessionsPage(){
             if (!cancelled && (mode as AppMode) === currentMode) {
               enrichedCacheRef.current[currentMode] = enriched;
               setRows(enriched);
-              notifyCacheHit(currentMode as any, enriched.length);
+              notifyCacheHit(currentMode as any);
             }
           } catch (error) {
             console.warn(`⚠️ Failed to hydrate cached sessions for ${currentMode}:`, error);
