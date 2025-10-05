@@ -127,6 +127,16 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
     }));
   };
 
+  const handleToggleApiKey = async (keyId: string) => {
+    try {
+      await api.client.patch(`/api/user/api-keys/${keyId}/toggle`);
+      message.success('API key status updated');
+      loadApiKeys();
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || 'Failed to toggle API key');
+    }
+  };
+
   const exchangeOptions = [
     { label: 'Crypto.com', value: 'crypto.com' },
     { label: 'Binance', value: 'binance' },
@@ -378,7 +388,12 @@ export default function UserSettingsModal({ visible, onClose, userInfo, onUserUp
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <Space>
                             <Tag color="blue">{key.exchange}</Tag>
-                            {!key.isActive && <Tag color="red">Inactive</Tag>}
+                            <Switch
+                              checked={key.isActive}
+                              onChange={() => handleToggleApiKey(key.id)}
+                              checkedChildren="Active"
+                              unCheckedChildren="Inactive"
+                            />
                           </Space>
                           <Text type="secondary" style={{ fontSize: 12 }}>
                             Added {new Date(key.createdAt).toLocaleDateString()}

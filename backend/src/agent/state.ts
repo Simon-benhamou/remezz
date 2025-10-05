@@ -501,7 +501,7 @@ export class ReboundRejectionAgent {
     let snapForValidation = _snap;
     if (!snapForValidation) {
       const { buildTechSnapshot } = await import('../ai/tech.js');
-      snapForValidation = await buildTechSnapshot(this.profile.symbol);
+      snapForValidation = await buildTechSnapshot(this.profile.symbol, this.profile.userId);
     }
 
     // PHASE 2 FIX #6: Liquidity validation
@@ -558,7 +558,7 @@ export class ReboundRejectionAgent {
     let snap = _snap;
     if (!snap) {
       try {
-        snap = await buildTechSnapshot(this.profile.symbol);
+        snap = await buildTechSnapshot(this.profile.symbol, this.profile.userId);
       } catch (err) {
         recordOpsEvent({
           level: 'warn',
@@ -4966,7 +4966,7 @@ export class ReboundRejectionAgent {
     
     try {
       // Recalculer zone avec conditions actuelles
-      const snap = await buildTechSnapshot(this.profile.symbol);
+      const snap = await buildTechSnapshot(this.profile.symbol, this.profile.userId);
       const newZone = await this.calculateDynamicEntryZone(snap, snap.last, this.plan.bias);
       
       // Vérifier si passage en breakout mode

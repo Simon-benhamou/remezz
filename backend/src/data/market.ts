@@ -46,11 +46,11 @@ function createPublicExchange(forSymbol?: string) {
   return ex;
 }
 
-export async function getTicker(symbol: string, options?: { forceRefresh?: boolean }) {
+export async function getTicker(symbol: string, options?: { forceRefresh?: boolean; userId?: string }) {
   if (UNIT_TEST_MODE) {
     return { symbol, last: 100, percentage: 0, baseVolume: 0, quoteVolume: 0, bid: 99.9, ask: 100.1 } as any;
   }
-  const cacheKey = symbol;
+  const cacheKey = options?.userId ? `${symbol}_${options.userId}` : symbol;
   const cached = tickerCache.get(cacheKey);
   const now = Date.now();
   
@@ -60,9 +60,36 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
   }
   
   try {
-    const ex = createPublicExchange(symbol);
-    await ex.loadMarkets();
-    const s = await resolveSymbol(symbol);
+    // 🔧 If userId provided, use user's exchange (Binance or Crypto.com)
+    let ex: any;
+    let s: string;
+    
+    if (options?.userId) {
+      try {
+        const { getUserExchange } = await import('../exchange/ccxtClient.js');
+        const { getUserCredentials } = await import('../services/userCredentials.js');
+        
+        const credentials = await getUserCredentials(options.userId);
+        if (credentials) {
+          ex = await getUserExchange(options.userId, credentials);
+          s = await resolveSymbol(symbol);
+        } else {
+          ex = createPublicExchange(symbol);
+          await ex.loadMarkets();
+          s = await resolveSymbol(symbol);
+        }
+      } catch (error) {
+        console.warn(`Failed to get user exchange for ${options.userId}, using public:`, error);
+        ex = createPublicExchange(symbol);
+        await ex.loadMarkets();
+        s = await resolveSymbol(symbol);
+      }
+    } else {
+      ex = createPublicExchange(symbol);
+      await ex.loadMarkets();
+      s = await resolveSymbol(symbol);
+    }
+    
     const ticker = await ex.fetchTicker(s);
     
     // Cache the result
@@ -88,7 +115,7 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
   }
 }
 
-export async function getOHLCV(symbol: string, tf = '1h', limit = 300) {
+export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: string) {
   if (UNIT_TEST_MODE) {
     const now = Date.now();
     const out: number[][] = [];
@@ -105,9 +132,40 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300) {
     }
     return out;
   }
-  const ex = createPublicExchange(symbol);
-  await ex.loadMarkets();
-  const s = await resolveSymbol(symbol);
+  
+  // 🔧 If userId provided, use user's exchange (Binance or Crypto.com)
+  // Otherwise, fallback to public exchange from env config
+  let ex: any;
+  let s: string;
+  
+  if (userId) {
+    try {
+      const { getUserExchange } = await import('../exchange/ccxtClient.js');
+      const { getUserCredentials } = await import('../services/userCredentials.js');
+      
+      // Try to get user's credentials and use their exchange
+      const credentials = await getUserCredentials(userId);
+      if (credentials) {
+        ex = await getUserExchange(userId, credentials);
+        s = await resolveSymbol(symbol);
+      } else {
+        // Fallback to public exchange if no credentials
+        ex = createPublicExchange(symbol);
+        await ex.loadMarkets();
+        s = await resolveSymbol(symbol);
+      }
+    } catch (error) {
+      console.warn(`Failed to get user exchange for ${userId}, using public:`, error);
+      ex = createPublicExchange(symbol);
+      await ex.loadMarkets();
+      s = await resolveSymbol(symbol);
+    }
+  } else {
+    // No userId provided, use public exchange from env config
+    ex = createPublicExchange(symbol);
+    await ex.loadMarkets();
+    s = await resolveSymbol(symbol);
+  }
   try {
     const result = await ex.fetchOHLCV(s, tf, undefined, limit);
     

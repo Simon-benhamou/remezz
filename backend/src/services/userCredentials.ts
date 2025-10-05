@@ -10,14 +10,19 @@ export interface UserCredentials {
   exchange: string;
 }
 
-export async function getUserCredentials(userId: string, exchange: string = 'crypto.com'): Promise<UserCredentials | null> {
+export async function getUserCredentials(userId: string, exchange?: string): Promise<UserCredentials | null> {
   try {
+    // If exchange specified, get that specific one
+    // Otherwise, get the ACTIVE one (regardless of exchange)
     const apiKey = await prisma.userApiKey.findFirst({
       where: {
         userId,
-        exchange,
+        ...(exchange ? { exchange } : {}), // Optional filter by exchange
         testnet: false,
         isActive: true
+      },
+      orderBy: {
+        updatedAt: 'desc' // Most recently updated first
       }
     });
 

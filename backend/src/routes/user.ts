@@ -110,6 +110,59 @@ router.post('/api-keys', async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// Toggle API key active status
+router.patch('/api-keys/:keyId/toggle', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.isLegacy) {
+      return res.status(403).json({ error: 'legacy_users_cannot_toggle_api_keys' });
+    }
+
+    const { keyId } = req.params;
+
+    const apiKey = await prisma.userApiKey.findFirst({
+      where: {
+        id: keyId,
+        userId: req.user!.id
+      }
+    });
+
+    if (!apiKey) {
+      return res.status(404).json({ error: 'api_key_not_found' });
+    }
+
+    // If activating this key, deactivate all others for this user
+    if (!apiKey.isActive) {
+      await prisma.userApiKey.updateMany({
+        where: {
+          userId: req.user!.id,
+          id: { not: keyId }
+        },
+        data: { isActive: false }
+      });
+    }
+
+    // Toggle the status
+    const updated = await prisma.userApiKey.update({
+      where: { id: keyId },
+      data: { isActive: !apiKey.isActive }
+    });
+
+    res.json({
+      apiKey: {
+        id: updated.id,
+        exchange: updated.exchange,
+        keyName: updated.keyName,
+        testnet: updated.testnet,
+        isActive: updated.isActive,
+        createdAt: updated.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Toggle API key error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
 // Delete API key
 router.delete('/api-keys/:keyId', async (req: AuthenticatedRequest, res) => {
   try {

@@ -196,7 +196,7 @@ const cacheKey = (symbol: string) => `snap_${symbol}`;
 // - 24h S/R + swing S/R
 // - Daily pivots (P, S1, S2, R1, R2)
 // - srBias: nearSupport | nearResistance | neutral (~0.6% window)
-export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapshot>{
+export async function buildTechSnapshot(symbol: string, userId?: string): Promise<TechnicalSnapshot>{
   try {
     const key = cacheKey(symbol);
     const cached = snapCache.get(key);
@@ -205,7 +205,7 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     }
   } catch {}
   // 15m window for reactivity (~2 days), 1h for pivots/daily
-  const o15 = await getOHLCV(symbol, '15m', 300); // [ts, o, h, l, c, v]
+  const o15 = await getOHLCV(symbol, '15m', 300, userId); // [ts, o, h, l, c, v]
   if (!o15 || o15.length < 100) throw new Error('Not enough data (15m)');
 
   // 🔍 DEBUG RAW OHLCV: Compare avec API publique
@@ -311,7 +311,7 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   ].sort((a, b) => Math.abs(lastPrice - a.price) - Math.abs(lastPrice - b.price));
 
   // Daily pivots from 1h (fallback to 15m if needed) and 1h ATR for sturdier risk sizing
-  const o1h = await getOHLCV(symbol, '1h', 600); // ~25 jours
+  const o1h = await getOHLCV(symbol, '1h', 600, userId); // ~25 jours
   const atr1hArr = atr(o1h || o15, 14);
   const atr1h = atr1hArr[atr1hArr.length - 1] ?? undefined;
   const pivots = dailyPivotsFromOHLCV(o1h || o15);
