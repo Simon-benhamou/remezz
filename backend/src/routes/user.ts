@@ -394,16 +394,27 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Validate credentials by testing API connection (simple version)
+    // Validate credentials by testing API connection
     let isValid = false;
+    let errorDetails = '';
     try {
-      // Simple test: try to get user exchange instance
+      // Test: try to get user exchange instance and fetch balance
       const exchange = await getUserExchange(req.user!.id, credentials);
       if (exchange) {
-        isValid = true;
+        // Actually test the API by fetching balance
+        try {
+          await exchange.fetchBalance();
+          isValid = true;
+          console.log(`✅ API key validation SUCCESS for ${credentials.exchange}`);
+        } catch (apiError: any) {
+          console.error(`❌ API call failed for ${credentials.exchange}:`, apiError.message);
+          errorDetails = apiError.message || 'Unknown API error';
+          isValid = false;
+        }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('API key validation failed:', error);
+      errorDetails = error.message || 'Unknown error';
       isValid = false;
     }
 
@@ -414,7 +425,7 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       exchange: credentials.exchange, // Include active exchange
       message: isValid 
         ? `API keys are configured and valid (${credentials.exchange.toUpperCase()})` 
-        : `API keys are configured but invalid (${credentials.exchange.toUpperCase()}). Please check your keys and IP whitelist (208.77.244.15)`
+        : `API keys are configured but invalid (${credentials.exchange.toUpperCase()}). ${errorDetails ? `Error: ${errorDetails}` : 'Please check your keys and IP whitelist (208.77.244.15)'}`
     });
   } catch (error) {
     console.error('API keys status check error:', error);

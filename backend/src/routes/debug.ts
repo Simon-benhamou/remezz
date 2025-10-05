@@ -380,7 +380,7 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    const credentials = await getUserCredentials(req.user!.id, 'crypto.com');
+    const credentials = await getUserCredentials(req.user!.id);
     
     if (!credentials) {
       return res.json({
@@ -497,7 +497,7 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
 // Get detailed exchange info
 router.get('/exchange-info', async (req: AuthenticatedRequest, res) => {
   try {
-    const credentials = await getUserCredentials(req.user!.id, 'crypto.com');
+    const credentials = await getUserCredentials(req.user!.id);
     
     if (!credentials) {
       return res.status(400).json({ error: 'no_api_keys' });

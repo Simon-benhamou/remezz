@@ -26,7 +26,7 @@ export const requireLiveApiKeys = async (req: AuthenticatedRequest, res: Respons
       });
     }
 
-    const credentials = await getUserCredentials(req.user.id, 'crypto.com');
+    const credentials = await getUserCredentials(req.user.id);
     
     if (!credentials) {
       return res.status(400).json(createApiKeyRequiredError());
