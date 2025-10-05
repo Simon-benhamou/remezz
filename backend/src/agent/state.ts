@@ -507,8 +507,22 @@ export class ReboundRejectionAgent {
     }
 
     // PHASE 2 FIX #6: Liquidity validation
+    // Use realistic position size based on actual balance, not plan's placeholder 10k
     if (this.plan && this.plan.sizing) {
-      const liquidityCheck = this.hasAdequateLiquidity(snapForValidation, this.plan.sizing.notionalUsd);
+      const bal = await this.broker.balance();
+      const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
+      const startBudget = (this.profile.startBalanceUsd && this.profile.startBalanceUsd > 0)
+        ? this.profile.startBalanceUsd
+        : bal.freeUsd;
+      const usableBalance = Math.max(0, startBudget * budgetFrac);
+      
+      // Estimate realistic position size: balance × riskPct × leverage / stopPct
+      const riskPct = this.profile.riskPerTradePct || 1.5;
+      const leverage = Math.min(10, this.profile.maxLeverage || 10);
+      const stopPct = 0.5; // Conservative estimate
+      const estimatedNotional = (usableBalance * (riskPct / 100) * leverage) / (stopPct / 100);
+      
+      const liquidityCheck = this.hasAdequateLiquidity(snapForValidation, estimatedNotional);
       if (!liquidityCheck.adequate) {
         console.warn(`PHASE 2: ${liquidityCheck.reason} - Skipping entry to avoid slippage`);
         return;
