@@ -20,6 +20,7 @@ import { getTicker } from '../data/market.js';
 import type { PlacedOrder } from '../broker/types.js';
 import { prisma } from '../db/client.js';
 import { predictor } from '../ai/predictor.js';
+import { getUserCredentials } from '../services/userCredentials.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -3280,8 +3281,65 @@ export class ReboundRejectionAgent {
     return true;
   }
 
+  // Get exchange-specific volume thresholds (cached per agent)
+  private exchangeVolumeThresholds: { base: number; floor: number } | null = null;
+  private async getExchangeVolumeThresholds(): Promise<{ base: number; floor: number }> {
+    // Return cached if available
+    if (this.exchangeVolumeThresholds) {
+      return this.exchangeVolumeThresholds;
+    }
+
+    const cfg = getConfig();
+    let base = Number(cfg.QUALITY_VOLUME_RATIO_BASE || 0.25);
+    let floor = Number(cfg.QUALITY_VOLUME_RATIO_FLOOR || 0.15);
+
+    // Try to get user's active exchange
+    try {
+      if (this.profile?.userId) {
+        const credentials = await getUserCredentials(this.profile.userId);
+        if (credentials?.exchange) {
+          const exchange = credentials.exchange.toLowerCase();
+          
+          // Exchange-specific thresholds
+          if (exchange === 'binance') {
+            // Binance: High volumes, stricter thresholds for quality
+            base = 0.40;
+            floor = 0.25;
+          } else if (exchange === 'crypto.com' || exchange === 'cryptocom') {
+            // Crypto.com: Low volumes, relaxed thresholds
+            base = 0.20;
+            floor = 0.12;
+          }
+          
+          recordOpsEvent({
+            level: 'info',
+            source: 'quality_filter',
+            message: 'exchange_adaptive_thresholds_applied',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile?.symbol,
+            details: { exchange, base, floor },
+          });
+        }
+      }
+    } catch (error) {
+      // Fallback to config defaults on error
+      recordOpsEvent({
+        level: 'warn',
+        source: 'quality_filter',
+        message: 'failed_to_get_exchange_thresholds',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
+
+    // Cache the result
+    this.exchangeVolumeThresholds = { base, floor };
+    return this.exchangeVolumeThresholds;
+  }
+
   // Simplified quality filters - keep only essential indicators: EMA20/50, RSI, ATR, ADX, volume
-  private passesQualityFilters(snap: TechnicalSnapshot): boolean {
+  private async passesQualityFilters(snap: TechnicalSnapshot): Promise<boolean> {
     if (!this.plan) return false;
     const price = snap.last;
     const bias = this.plan.bias;
@@ -3395,8 +3453,11 @@ export class ReboundRejectionAgent {
     const symbol = this.profile?.symbol || (this.plan as any)?.symbol || '';
     const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
     const usdVolumeMA = volumeMA > 0 ? volumeMA * price : 0;
-    const baseRequired = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_BASE) ? cfg.QUALITY_VOLUME_RATIO_BASE : 0.6;
-    const floor = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_FLOOR) ? cfg.QUALITY_VOLUME_RATIO_FLOOR : 0.4;
+    
+    // Get exchange-adaptive thresholds
+    const exchangeThresholds = await this.getExchangeVolumeThresholds();
+    const baseRequired = exchangeThresholds.base;
+    const floor = exchangeThresholds.floor;
     const ceiling = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL) ? cfg.QUALITY_VOLUME_RATIO_CEIL : 0.78;
 
     let requiredVolumeRatio = baseRequired;
@@ -3894,7 +3955,7 @@ export class ReboundRejectionAgent {
       const canTrade = this.canTradeNow(snap);
       const checks = this.getDiagnosticChecks(snap);
       const summary = this.getDiagnosticSummary(checks);
-      const trigger = this.getDiagnosticTrigger(snap, checks);
+      const trigger = await this.getDiagnosticTrigger(snap, checks);
 
       return {
         canTrade,
@@ -4037,7 +4098,7 @@ export class ReboundRejectionAgent {
     return checks;
   }
 
-  private getDiagnosticTrigger(snap: TechnicalSnapshot, checks: any) {
+  private async getDiagnosticTrigger(snap: TechnicalSnapshot, checks: any) {
     const bias = this.plan?.bias || 'none';
     const zone = this.plan?.zone;
     const price = snap.last;
@@ -4056,7 +4117,7 @@ export class ReboundRejectionAgent {
       checks?.momentumGates?.status === 'PASS' ||
       checks?.qualityFilters?.momentum?.status === 'PASS' ||
       this.passesEntryMomentumGates(snap, 'enter');
-    const qualityOk = checks?.qualityScore?.status === 'PASS' || this.passesQualityFilters(snap);
+    const qualityOk = checks?.qualityScore?.status === 'PASS' || await this.passesQualityFilters(snap);
 
     const levelProfit = this.profile?.aggressiveness || 'reactive';
     let minProfitPct = cfg.MIN_TRADE_PROFIT_PCT;

@@ -394,29 +394,16 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
       });
     }
 
-    // Validate credentials by testing API connection
+    // Validate credentials by testing API connection (lightweight - no balance fetch to avoid rate limits)
     let isValid = false;
     let errorDetails = '';
     try {
-      // Test: try to get user exchange instance and fetch balance
+      // Test: just create exchange instance (validates keys format, no API call)
       const exchange = await getUserExchange(req.user!.id, credentials);
       if (exchange) {
-        // Actually test the API by fetching balance
-        try {
-          await exchange.fetchBalance();
-          isValid = true;
-          console.log(`✅ API key validation SUCCESS for ${credentials.exchange}`);
-        } catch (apiError: any) {
-          console.error(`❌ API call failed for ${credentials.exchange}:`, apiError.message);
-          errorDetails = apiError.message || 'Unknown API error';
-          
-          // Special handling for rate limit / IP ban
-          if (errorDetails.includes('banned') || errorDetails.includes('IP banned')) {
-            errorDetails = 'API temporarily unavailable (rate limit). Please wait a few minutes and try again.';
-          }
-          
-          isValid = false;
-        }
+        // Keys are valid if exchange instance created successfully
+        isValid = true;
+        console.log(`✅ API key validation SUCCESS for ${credentials.exchange} (credentials format valid)`);
       }
     } catch (error: any) {
       console.error('API key validation failed:', error);
