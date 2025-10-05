@@ -38,6 +38,10 @@ function createPublicExchange(forSymbol?: string) {
   ex.options = ex.options || {};
   // @ts-ignore
   ex.options.defaultType = desiredType;
+  // @ts-ignore - Disable CCXT internal OHLCV cache
+  ex.options.warnOnFetchOHLCVLimitArgument = false;
+  // @ts-ignore - Force fresh data by disabling cache
+  ex.options.fetchOHLCVWarning = false;
   // exchangeCache.set(key, ex); // Disabled cache
   return ex;
 }
@@ -105,7 +109,20 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300) {
   await ex.loadMarkets();
   const s = await resolveSymbol(symbol);
   try {
-    return await ex.fetchOHLCV(s, tf, undefined, limit);
+    const result = await ex.fetchOHLCV(s, tf, undefined, limit);
+    
+    // 🔍 DEBUG: Log raw OHLCV from exchange API
+    if (symbol === 'ADA/USDT' && tf === '15m') {
+      console.log(`[getOHLCV DEBUG] ${symbol} ${tf}: RAW from ex.fetchOHLCV (last 5):`,
+        result.slice(-5).map((r: any[]) => ({
+          ts: new Date(r[0]).toISOString(),
+          close: r[4],
+          volume: r[5]
+        }))
+      );
+    }
+    
+    return result;
   } catch (err) {
     // Fallback: if timeframe unsupported, try a nearby timeframe
     // Crypto.com should support 15m/1h, but add a defensive fallback
