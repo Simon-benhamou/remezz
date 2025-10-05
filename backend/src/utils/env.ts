@@ -63,6 +63,7 @@ export type Cfg = {
   PAPER_LIQ_SIM_ENABLED: boolean;     // enable liquidity/slippage simulation in paper mode
   PAPER_MAX_IMPACT_PCT: number;       // max impact allowed for paper estimate
   LIQUIDITY_MIN_15M_USD: number;      // minimum 15m USD volume to allow trading
+  LIQUIDITY_VOLUME_MULTIPLIER: number; // multiplier for volume24h vs position size (e.g., 50x)
   
   // Anti-whale / manipulation filters
   ANTI_WHALE_ENABLED: boolean;        // enable anti-whale entry filters
@@ -331,6 +332,7 @@ export function getConfig(): Cfg {
   PAPER_LIQ_SIM_ENABLED: (e.PAPER_LIQ_SIM_ENABLED || "true") === "true",
   PAPER_MAX_IMPACT_PCT: Number(e.PAPER_MAX_IMPACT_PCT || e.ORDER_MAX_IMPACT_PCT || "0.35"),
   LIQUIDITY_MIN_15M_USD: Number(e.LIQUIDITY_MIN_15M_USD || "100000"),
+  LIQUIDITY_VOLUME_MULTIPLIER: Number(e.LIQUIDITY_VOLUME_MULTIPLIER || "50"),
   // Anti-whale / manipulation filters
   ANTI_WHALE_ENABLED: (e.ANTI_WHALE_ENABLED || "true") === "true",
   ANTI_WHALE_VOL_SPIKE_MULT: Number(e.ANTI_WHALE_VOL_SPIKE_MULT || "2.2"),
