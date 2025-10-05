@@ -790,7 +790,7 @@ router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
     // Step 2: Try to decrypt credentials
     results.push({ step: 'decryption_check', message: 'Attempting to decrypt API keys...' });
     
-    const credentials = await getUserCredentials(userId, 'crypto.com');
+    const credentials = await getUserCredentials(userId);
     
     if (!credentials) {
       return res.json({
