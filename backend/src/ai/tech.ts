@@ -208,6 +208,16 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const o15 = await getOHLCV(symbol, '15m', 300); // [ts, o, h, l, c, v]
   if (!o15 || o15.length < 100) throw new Error('Not enough data (15m)');
 
+  // 🔍 DEBUG RAW OHLCV: Compare avec API publique
+  console.log(`[RAW OHLCV DEBUG] ${symbol}: Last 5 candles from getOHLCV:`, 
+    o15.slice(-5).map(r => ({
+      ts: new Date(r[0]).toISOString(),
+      close: r[4],
+      volume: r[5],
+      'row[5]': r[5]
+    }))
+  );
+
   const closes15 = o15.map(r => r[4]);
   const highs15  = o15.map(r => r[2]);
   const lows15   = o15.map(r => r[3]);

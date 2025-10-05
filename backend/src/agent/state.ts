@@ -405,13 +405,11 @@ export class ReboundRejectionAgent {
               this.plan.bias = 'short';
             }
           } else if (aiPrediction && aiPrediction.direction === 'neutral') {
-            console.log(`🧠 AI: Neutral conditions - keeping original bias`);
+            // Neutral = no change, skip log to reduce noise
           }
         } catch (error) {
           console.warn('AI prediction failed:', error);
         }
-      } else {
-        console.log(`🧠 Skipping AI prediction - conditions not met (cost optimization)`);
       }
 
       // Restaurer le bias original si nécessaire (après traitement de la prédiction)
@@ -5906,10 +5904,20 @@ export class ReboundRejectionAgent {
    */
   private shouldCallAIPrediction(snap: TechnicalSnapshot, currentPrice: number): boolean {
     try {
+      // 0. COOLDOWN GLOBAL: Minimum 5 minutes entre appels IA (économie de coûts)
+      const lastPredictionTime = (this as any).lastAIPredictionTime || 0;
+      const timeSinceLastPrediction = Date.now() - lastPredictionTime;
+      const minCooldownMs = 5 * 60 * 1000; // 5 minutes minimum
+      
+      if (timeSinceLastPrediction < minCooldownMs) {
+        // Trop tôt depuis dernier appel, skip silencieusement
+        return false;
+      }
+
       // 1. Vérifier proximité d'un niveau clé (support/résistance)
       const nearKeyLevel = this.checkNearKeyLevel(currentPrice, snap);
       if (nearKeyLevel) {
-        console.log(`🧠 AI call triggered: Near key level`);
+        console.log(`🧠 AI call triggered: Near key level (${Math.floor(timeSinceLastPrediction / 60000)}min since last)`);
         return true;
       }
 
@@ -5921,8 +5929,6 @@ export class ReboundRejectionAgent {
       }
 
       // 3. Vérifier changement de prix significatif depuis dernière prédiction
-      const lastPredictionTime = (this as any).lastAIPredictionTime || 0;
-      const timeSinceLastPrediction = Date.now() - lastPredictionTime;
       
       // Si plus de 30 minutes depuis dernière prédiction, vérifier changement de prix
       if (timeSinceLastPrediction > 30 * 60 * 1000) {
