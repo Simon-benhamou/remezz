@@ -282,6 +282,9 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
   const prevVolume = prevWindow.reduce((sum, row) => sum + Number(row[5] || 0), 0);
   const avgVolume = volumes15.reduce((sum, v) => sum + v, 0) / Math.max(1, volumes15.length);
   const volumeChangePct = prevVolume > 0 ? ((recentVolume - prevVolume) / prevVolume) * 100 : 0;
+  
+  // Convert volume from tokens to USD (recentVolume is in base currency, multiply by price)
+  const recentVolumeUSD = recentVolume * lastPrice;
   const support24h = Math.min(...recent.map(r => r[3]));
   const resistance24h = Math.max(...recent.map(r => r[2]));
 
@@ -362,7 +365,7 @@ export async function buildTechSnapshot(symbol: string): Promise<TechnicalSnapsh
     volume: latestVol,
     volumeMA: volMA || avgVolume,
     volumeAvg: avgVolume,
-    volume24h: recentVolume,
+    volume24h: recentVolumeUSD, // Volume in USD (tokens * price)
     volume24hChangePct: volumeChangePct,
     cmf20: cmf20v,
   };
