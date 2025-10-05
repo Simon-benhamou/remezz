@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select, Row, Col, Tooltip, Progress, Badge, Switch, Dropdown, MenuProps, Slider } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import type { AppMode } from '../store';
 import { useMode } from '../contexts/ModeContext';
 import { useSessionsCache } from '../hooks/useSessionsCache';
 import { useCacheNotifications } from '../hooks/useCacheNotifications';
@@ -54,7 +55,6 @@ export default function SessionsPage(){
     loading: sessionsLoading,
     loadSessions,
     getCachedSessions,
-    invalidateCache,
     setupAutoRefresh,
     isCacheValid,
   } = useSessionsCache();
@@ -82,8 +82,9 @@ export default function SessionsPage(){
   const [compactView, setCompactView] = React.useState<boolean>(true);
   
   const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
+  const enrichedCacheRef = React.useRef<Partial<Record<AppMode, any[]>>>({});
   
-  const enrichSessionData = async (sessions: any[]) => {
+  const enrichSessionData = React.useCallback(async (sessions: any[]) => {
     return Promise.all(sessions.map(async (session: any) => {
       try {
         // Pull KPI metrics for all sessions (cheap lookup)
@@ -150,32 +151,42 @@ export default function SessionsPage(){
         return session;
       }
     }));
-  };
+  }, []);
 
   const load = React.useCallback(async (forceRefresh = false) => { 
+    const currentMode = mode as AppMode;
     try {
-      console.log(`🔄 Loading sessions for mode: ${mode} ${forceRefresh ? '(force refresh)' : ''}`);
+      console.log(`🔄 Loading sessions for mode: ${currentMode} ${forceRefresh ? '(force refresh)' : ''}`);
       
       // Utiliser le cache intelligent
-      const sessions = await loadSessions(mode as any, false, forceRefresh);
+      const sessions = await loadSessions(currentMode as any, false, forceRefresh);
       
       // ✅ FIX: Forcer le filtre par mode côté client (défense en profondeur)
-      const filteredByMode = sessions.filter((s: any) => s.mode === mode);
-      console.log(`🔍 Filtered ${sessions.length} → ${filteredByMode.length} sessions for mode=${mode}`);
+      const filteredByMode = sessions.filter((s: any) => s.mode === currentMode);
+      console.log(`🔍 Filtered ${sessions.length} → ${filteredByMode.length} sessions for mode=${currentMode}`);
       
       const enrichedSessions = await enrichSessionData(filteredByMode);
+      // Guard against race conditions if mode changed while loading
+      if ((mode as AppMode) !== currentMode) {
+        console.log(`⚠️ Mode changed to ${mode} during load(${currentMode}), discarding results.`);
+        return;
+      }
+
+      enrichedCacheRef.current[currentMode] = enrichedSessions;
       setRows(enrichedSessions);
       
       if (forceRefresh) {
-        notifyCacheRefresh(mode as any, enrichedSessions.length);
+        notifyCacheRefresh(currentMode as any, enrichedSessions.length);
       }
       
-      console.log(`✅ Loaded ${enrichedSessions.length} sessions for ${mode} mode`);
+      console.log(`✅ Loaded ${enrichedSessions.length} sessions for ${currentMode} mode`);
     } catch(e) {
       console.error('Failed to load sessions:', e);
-      notifyError(`Failed to load ${mode} sessions`);
+      if ((mode as AppMode) === currentMode) {
+        notifyError(`Failed to load ${currentMode} sessions`);
+      }
     } 
-  }, [mode, loadSessions, notifyCacheRefresh, notifyError]);
+  }, [mode, loadSessions, notifyCacheRefresh, notifyError, enrichSessionData]);
   
   // Apply filters
   React.useEffect(() => {
@@ -217,28 +228,50 @@ export default function SessionsPage(){
   // Chargement initial et gestion du changement de mode
   React.useEffect(() => {
     console.log(`📋 Mode changed to: ${mode}`);
-    
-    // ✅ FIX: Invalider le cache de l'AUTRE mode lors du switch
-    // Cela force un refresh propre des données
-    const otherMode = mode === 'live' ? 'paper' : 'live';
-    invalidateCache(otherMode as any, false);
-    console.log(`🗑️ Invalidated cache for ${otherMode} mode on switch`);
-    
-    // Vérifier si on a des données cachées valides pour le mode actuel
-    const hasCachedData = getCachedSessions(mode as any, false);
-    const hasValidCache = !!hasCachedData;
-    
-    // Notifier le changement de mode
-    notifyModeSwitch(mode as any, hasValidCache);
-    
-    // ✅ FIX: Toujours forcer un refresh lors du switch de mode
-    // Cela garantit que les données affichées correspondent au mode actuel
-    console.log(`⚡ Force refresh for mode=${mode}`);
-    load(true);
 
-    // Configurer l'auto-refresh pour ce mode
-    setupAutoRefresh(mode as any, false);
-  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch, invalidateCache]);
+    const currentMode = mode as AppMode;
+    const rawCachedInitial = getCachedSessions(currentMode as any, false) || [];
+    const hasImmediateCache = (enrichedCacheRef.current[currentMode]?.length ?? 0) > 0 || rawCachedInitial.length > 0;
+    notifyModeSwitch(currentMode as any, hasImmediateCache);
+
+    let cancelled = false;
+    const hydrate = async () => {
+
+      // Attempt to reuse enriched cache first
+      const enrichedCached = enrichedCacheRef.current[currentMode];
+      if (enrichedCached && enrichedCached.length) {
+        console.log(`🎯 Reusing enriched cache for ${currentMode} (${enrichedCached.length} sessions)`);
+        setRows(enrichedCached);
+        notifyCacheHit(currentMode as any, enrichedCached.length);
+      } else {
+        if (rawCachedInitial.length) {
+          console.log(`💾 Hydrating ${rawCachedInitial.length} cached sessions for ${currentMode}`);
+          const filteredByMode = rawCachedInitial.filter((s: any) => s.mode === currentMode);
+          try {
+            const enriched = await enrichSessionData(filteredByMode);
+            if (!cancelled && (mode as AppMode) === currentMode) {
+              enrichedCacheRef.current[currentMode] = enriched;
+              setRows(enriched);
+              notifyCacheHit(currentMode as any, enriched.length);
+            }
+          } catch (error) {
+            console.warn(`⚠️ Failed to hydrate cached sessions for ${currentMode}:`, error);
+          }
+        }
+      }
+
+      // ✅ Force refresh to update data in background
+      console.log(`⚡ Force refresh for mode=${currentMode}`);
+      load(true);
+      setupAutoRefresh(currentMode as any, false);
+    };
+
+    hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch, notifyCacheHit, enrichSessionData]);
 
   React.useEffect(()=>{ 
     form.setFieldsValue({ mode }); 
