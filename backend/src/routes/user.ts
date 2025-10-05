@@ -409,6 +409,12 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
         } catch (apiError: any) {
           console.error(`❌ API call failed for ${credentials.exchange}:`, apiError.message);
           errorDetails = apiError.message || 'Unknown API error';
+          
+          // Special handling for rate limit / IP ban
+          if (errorDetails.includes('banned') || errorDetails.includes('IP banned')) {
+            errorDetails = 'API temporarily unavailable (rate limit). Please wait a few minutes and try again.';
+          }
+          
           isValid = false;
         }
       }
