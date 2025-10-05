@@ -2,6 +2,7 @@ import { resolveSymbol } from '../exchange/ccxtClient.js';
 import { ema, rsi, atr } from './indicators.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
+import { getBinanceWebSocket, getTickerFromWebSocket, seedKlinesFromWebSocket, getKlinesOhlcvFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
 
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
@@ -11,6 +12,44 @@ const TICKER_CACHE_TTL = 4000; // 4 seconds cache to reduce network churn
 
 // Create a temporary unauthenticated exchange for public market data
 const exchangeCache = new Map<string, any>();
+const binanceKlineSeeded = new Set<string>();
+const binanceKlineSeedPromises = new Map<string, Promise<number[][]>>();
+
+function isBinanceExchange(id?: string | null): boolean {
+  if (!id) return false;
+  const norm = id.toLowerCase();
+  return norm.includes('binance');
+}
+
+async function fetchUserCredentialsSafe(userId?: string) {
+  if (!userId) return { credentials: null, error: null } as const;
+  try {
+    const { getUserCredentials } = await import('../services/userCredentials.js');
+    const credentials = await getUserCredentials(userId);
+    return { credentials, error: null } as const;
+  } catch (error) {
+    console.warn(`Failed to load user credentials for ${userId}:`, error);
+    return { credentials: null, error } as const;
+  }
+}
+
+function binanceSeedKey(symbol: string, interval: string) {
+  return `${toBinanceSymbolId(symbol)}__${interval}`;
+}
+
+function maybeLogOhlcvDebug(symbol: string, tf: string, data: number[][]) {
+  if (symbol === 'ADA/USDT' && tf === '15m') {
+    try {
+      console.log(`[getOHLCV DEBUG] ${symbol} ${tf}: SOURCE (last 5):`,
+        data.slice(-5).map((r: any[]) => ({
+          ts: new Date(r[0]).toISOString(),
+          close: r[4],
+          volume: r[5]
+        }))
+      );
+    } catch {}
+  }
+}
 
 // Heuristic: infer market type from unified symbol
 // - Perpetual/swap symbols usually contain a colon suffix (e.g., BTC/USDT:USDT, SOL/USD:USD)
@@ -46,6 +85,46 @@ function createPublicExchange(forSymbol?: string) {
   return ex;
 }
 
+async function fetchOhlcvRest(symbol: string, tf: string, limit: number, userId?: string, userCredentials?: any): Promise<number[][]> {
+  let ex: any;
+  let resolvedSymbol: string;
+
+  if (userId) {
+    try {
+      const { getUserExchange } = await import('../exchange/ccxtClient.js');
+      if (userCredentials) {
+        ex = await getUserExchange(userId, userCredentials);
+        resolvedSymbol = await resolveSymbol(symbol);
+      } else {
+        ex = createPublicExchange(symbol);
+        await ex.loadMarkets();
+        resolvedSymbol = await resolveSymbol(symbol);
+      }
+    } catch (error) {
+      console.warn(`Failed to get user exchange for ${userId}, using public:`, error);
+      ex = createPublicExchange(symbol);
+      await ex.loadMarkets();
+      resolvedSymbol = await resolveSymbol(symbol);
+    }
+  } else {
+    ex = createPublicExchange(symbol);
+    await ex.loadMarkets();
+    resolvedSymbol = await resolveSymbol(symbol);
+  }
+
+  try {
+    return await ex.fetchOHLCV(resolvedSymbol, tf, undefined, limit);
+  } catch (err) {
+    try {
+      const altTf = tf === '15m' ? '5m' : tf === '1h' ? '30m' : tf;
+      if (altTf !== tf) {
+        return await ex.fetchOHLCV(resolvedSymbol, altTf, undefined, limit);
+      }
+    } catch {}
+    throw err;
+  }
+}
+
 export async function getTicker(symbol: string, options?: { forceRefresh?: boolean; userId?: string }) {
   if (UNIT_TEST_MODE) {
     return { symbol, last: 100, percentage: 0, baseVolume: 0, quoteVolume: 0, bid: 99.9, ask: 100.1 } as any;
@@ -58,6 +137,24 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
   if (!options?.forceRefresh && cached && (now - cached.timestamp) < TICKER_CACHE_TTL) {
     return cached.data;
   }
+
+  const cfg = getConfig();
+  const { credentials: userCredentials } = await fetchUserCredentialsSafe(options?.userId);
+  const exchangeHint = userCredentials?.exchange || cfg.EXCHANGE_ID;
+  const preferBinanceWs = isBinanceExchange(exchangeHint);
+
+  if (preferBinanceWs) {
+    try {
+      const wsTicker = await getTickerFromWebSocket(symbol);
+      if (wsTicker) {
+        const adapted = adaptBinanceTickerToCcxt(symbol, wsTicker);
+        tickerCache.set(cacheKey, { data: adapted, timestamp: now });
+        return adapted;
+      }
+    } catch (error) {
+      console.warn(`Binance WebSocket ticker fallback for ${symbol}:`, error);
+    }
+  }
   
   try {
     // 🔧 If userId provided, use user's exchange (Binance or Crypto.com)
@@ -67,11 +164,8 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
     if (options?.userId) {
       try {
         const { getUserExchange } = await import('../exchange/ccxtClient.js');
-        const { getUserCredentials } = await import('../services/userCredentials.js');
-        
-        const credentials = await getUserCredentials(options.userId);
-        if (credentials) {
-          ex = await getUserExchange(options.userId, credentials);
+        if (userCredentials) {
+          ex = await getUserExchange(options.userId, userCredentials);
           s = await resolveSymbol(symbol);
         } else {
           ex = createPublicExchange(symbol);
@@ -132,66 +226,59 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
     }
     return out;
   }
-  
-  // 🔧 If userId provided, use user's exchange (Binance or Crypto.com)
-  // Otherwise, fallback to public exchange from env config
-  let ex: any;
-  let s: string;
-  
-  if (userId) {
+  const normalizedLimit = Math.max(1, limit);
+  const cfg = getConfig();
+  const { credentials: userCredentials } = await fetchUserCredentialsSafe(userId);
+  const exchangeHint = userCredentials?.exchange || cfg.EXCHANGE_ID;
+  const preferBinanceWs = isBinanceExchange(exchangeHint);
+  const seedKey = binanceSeedKey(symbol, tf);
+  let seededViaRest: number[][] | null = null;
+
+  if (preferBinanceWs) {
     try {
-      const { getUserExchange } = await import('../exchange/ccxtClient.js');
-      const { getUserCredentials } = await import('../services/userCredentials.js');
-      
-      // Try to get user's credentials and use their exchange
-      const credentials = await getUserCredentials(userId);
-      if (credentials) {
-        ex = await getUserExchange(userId, credentials);
-        s = await resolveSymbol(symbol);
-      } else {
-        // Fallback to public exchange if no credentials
-        ex = createPublicExchange(symbol);
-        await ex.loadMarkets();
-        s = await resolveSymbol(symbol);
+      const ws = getBinanceWebSocket();
+      ws.subscribeToKline(symbol, tf);
+      let wsData = getKlinesOhlcvFromWebSocket(symbol, tf);
+
+      if ((!wsData || wsData.length < normalizedLimit) && !binanceKlineSeeded.has(seedKey)) {
+        let seedPromise = binanceKlineSeedPromises.get(seedKey);
+        if (!seedPromise) {
+          seedPromise = fetchOhlcvRest(symbol, tf, Math.max(normalizedLimit, 500), userId, userCredentials)
+            .finally(() => binanceKlineSeedPromises.delete(seedKey));
+          binanceKlineSeedPromises.set(seedKey, seedPromise);
+        }
+        try {
+          seededViaRest = await seedPromise;
+          if (seededViaRest && seededViaRest.length) {
+            seedKlinesFromWebSocket(symbol, tf, seededViaRest);
+            binanceKlineSeeded.add(seedKey);
+            wsData = getKlinesOhlcvFromWebSocket(symbol, tf);
+          }
+        } catch (error) {
+          console.warn(`Binance WebSocket seed failed for ${symbol} ${tf}:`, error);
+        }
+      }
+
+      if (wsData && wsData.length >= Math.min(normalizedLimit, 10)) {
+        const sorted = wsData.slice().sort((a, b) => Number(a[0]) - Number(b[0]));
+        const trimmed = sorted.slice(-normalizedLimit);
+        maybeLogOhlcvDebug(symbol, tf, trimmed);
+        return trimmed;
+      }
+
+      if (seededViaRest && seededViaRest.length) {
+        const trimmed = seededViaRest.slice(-normalizedLimit);
+        maybeLogOhlcvDebug(symbol, tf, trimmed);
+        return trimmed;
       }
     } catch (error) {
-      console.warn(`Failed to get user exchange for ${userId}, using public:`, error);
-      ex = createPublicExchange(symbol);
-      await ex.loadMarkets();
-      s = await resolveSymbol(symbol);
+      console.warn(`Binance WebSocket OHLCV fallback for ${symbol} ${tf}:`, error);
     }
-  } else {
-    // No userId provided, use public exchange from env config
-    ex = createPublicExchange(symbol);
-    await ex.loadMarkets();
-    s = await resolveSymbol(symbol);
   }
-  try {
-    const result = await ex.fetchOHLCV(s, tf, undefined, limit);
-    
-    // 🔍 DEBUG: Log raw OHLCV from exchange API
-    if (symbol === 'ADA/USDT' && tf === '15m') {
-      console.log(`[getOHLCV DEBUG] ${symbol} ${tf}: RAW from ex.fetchOHLCV (last 5):`,
-        result.slice(-5).map((r: any[]) => ({
-          ts: new Date(r[0]).toISOString(),
-          close: r[4],
-          volume: r[5]
-        }))
-      );
-    }
-    
-    return result;
-  } catch (err) {
-    // Fallback: if timeframe unsupported, try a nearby timeframe
-    // Crypto.com should support 15m/1h, but add a defensive fallback
-    try {
-      const altTf = tf === '15m' ? '5m' : tf === '1h' ? '30m' : tf;
-      if (altTf !== tf) {
-        return await ex.fetchOHLCV(s, altTf, undefined, limit);
-      }
-    } catch {}
-    throw err;
-  }
+
+  const restData = await fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials);
+  maybeLogOhlcvDebug(symbol, tf, restData);
+  return restData;
 }
 
 export async function computeCoreIndicators(symbol: string) {

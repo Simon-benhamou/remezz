@@ -9,6 +9,8 @@ import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDia
 import { getAdaptiveWeightsForSymbol } from '../learning/adaptiveWeights.js';
 import { recordDecisionSnapshot, markDecisionCancelled } from '../learning/decisionMemory.js';
 import { getHybridSentiment } from '../sentiment/index.js';
+import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 
 // HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
@@ -372,12 +374,35 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
     console.log('🔍 Performing dynamic market discovery based on real-time volumes...');
     
     // Fetch ALL tickers first to get real volumes
-    const allTickers = {};
+    const allTickers = {} as Record<string, any>;
     console.log('📊 Fetching volumes for dynamic ranking...');
-    
-    for (let i = 0; i < Math.min(perpetualMarkets.length, 150); i++) { // Analyze more for better discovery
+
+    const isBinanceExchange = String((exchange as any)?.id || '').toLowerCase().includes('binance');
+    let wsTickerMap: Map<string, BinanceTickerData> | null = null;
+    if (isBinanceExchange) {
       try {
-        const symbol = perpetualMarkets[i];
+        wsTickerMap = await getAllTickersFromWebSocket();
+        if (!wsTickerMap) {
+          console.warn('⚠️ Binance WebSocket tickers unavailable, using REST fallback.');
+        }
+      } catch (error) {
+        console.warn('⚠️ Failed to load Binance WebSocket tickers, using REST fallback:', error);
+        wsTickerMap = null;
+      }
+    }
+
+    for (let i = 0; i < Math.min(perpetualMarkets.length, 150); i++) { // Analyze more for better discovery
+      const symbol = perpetualMarkets[i];
+      try {
+        if (wsTickerMap) {
+          const wsSymbol = toBinanceSymbolId(symbol);
+          const wsTicker = wsTickerMap.get(wsSymbol);
+          if (wsTicker) {
+            allTickers[symbol] = adaptBinanceTickerToCcxt(symbol, wsTicker);
+            continue;
+          }
+        }
+
         const ticker = await exchange.fetchTicker(symbol);
         allTickers[symbol] = ticker;
       } catch (error) {

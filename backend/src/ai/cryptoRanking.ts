@@ -11,6 +11,8 @@ import { buildTechSnapshot } from './tech.js';
 import { llmJSON } from './llm.js';
 import { getConfig } from '../utils/env.js';
 import ccxt from 'ccxt';
+import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
 const RANKING_CACHE = new Map<string, { ts: number; data: RankedOpportunity[] }>();
@@ -138,34 +140,77 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
     }> = [];
     
     console.log(`📊 Fetching tickers for volume filtering...`);
-    
-    // Batch fetch tickers (faster)
-    const batchSize = 50;
-    for (let i = 0; i < Math.min(perpetualMarkets.length, 200); i += batchSize) {
-      const batch = perpetualMarkets.slice(i, i + batchSize);
-      const promises = batch.map(async (symbol) => {
-        try {
-          const ticker = await exchange.fetchTicker(symbol);
-          const volumeUsd = Number(ticker.quoteVolume || 0);
-          const currentPrice = Number(ticker.last || ticker.close || 0);
-          const openPrice = Number(ticker.open || currentPrice);
-          const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : 0;
-          
-          return {
-            symbol,
-            volumeUsd,
-            change24h: realChange24h,
-            price: currentPrice
-          };
-        } catch {
-          return null;
+
+    const maxScan = Math.min(perpetualMarkets.length, 200);
+    const scanSymbols = perpetualMarkets.slice(0, maxScan);
+    const isBinanceExchange = String((exchange as any)?.id || '').toLowerCase().includes('binance');
+    let wsTickerMap: Map<string, BinanceTickerData> | null = null;
+
+    if (isBinanceExchange) {
+      try {
+        wsTickerMap = await getAllTickersFromWebSocket();
+        if (!wsTickerMap) {
+          console.warn('⚠️ Binance WebSocket tickers unavailable for ranking, using REST fallback.');
         }
-      });
-      
-      const results = await Promise.all(promises);
-      volumeData.push(...results.filter(r => r !== null) as any[]);
-      
-      console.log(`📊 Progress: ${Math.min(i + batchSize, perpetualMarkets.length)}/${Math.min(perpetualMarkets.length, 200)}`);
+      } catch (error) {
+        console.warn('⚠️ Failed to load Binance WebSocket tickers for ranking:', error);
+        wsTickerMap = null;
+      }
+    }
+
+    const restCandidates: string[] = [];
+
+    if (wsTickerMap) {
+      for (const symbol of scanSymbols) {
+        const wsSymbol = toBinanceSymbolId(symbol);
+        const wsTicker = wsTickerMap.get(wsSymbol);
+        if (!wsTicker) {
+          restCandidates.push(symbol);
+          continue;
+        }
+        const adapted = adaptBinanceTickerToCcxt(symbol, wsTicker);
+        const volumeUsd = Number(adapted.quoteVolume || 0);
+        const currentPrice = Number(adapted.last || adapted.close || 0);
+        const openPrice = Number((adapted as any).open || currentPrice);
+        const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : 0;
+        volumeData.push({ symbol, volumeUsd, change24h: realChange24h, price: currentPrice });
+      }
+      if (restCandidates.length) {
+        console.log(`⚠️ WebSocket missing ${restCandidates.length} symbols, falling back to REST.`);
+      }
+    } else {
+      restCandidates.push(...scanSymbols);
+    }
+
+    // REST fallback for remaining symbols (or all if WS unavailable)
+    if (restCandidates.length) {
+      const batchSize = 50;
+      for (let i = 0; i < restCandidates.length; i += batchSize) {
+        const batch = restCandidates.slice(i, i + batchSize);
+        const promises = batch.map(async (symbol) => {
+          try {
+            const ticker = await exchange.fetchTicker(symbol);
+            const volumeUsd = Number(ticker.quoteVolume || 0);
+            const currentPrice = Number(ticker.last || ticker.close || 0);
+            const openPrice = Number(ticker.open || currentPrice);
+            const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : 0;
+
+            return {
+              symbol,
+              volumeUsd,
+              change24h: realChange24h,
+              price: currentPrice
+            };
+          } catch {
+            return null;
+          }
+        });
+
+        const results = await Promise.all(promises);
+        volumeData.push(...results.filter(r => r !== null) as any[]);
+
+        console.log(`📊 REST progress: ${Math.min(i + batchSize, restCandidates.length)}/${restCandidates.length}`);
+      }
     }
     
     // Filter by minimum volume ($100K USD)

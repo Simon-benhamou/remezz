@@ -38,6 +38,31 @@ export interface BinanceKlineData {
   volume: number;
 }
 
+export function toBinanceSymbolId(unified: string): string {
+  const base = unified.split(':')[0] || unified;
+  return base.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+
+export function adaptBinanceTickerToCcxt(symbol: string, ticker: BinanceTickerData) {
+  const ts = Number(ticker.timestamp) || Date.now();
+  return {
+    symbol,
+    timestamp: ts,
+    datetime: new Date(ts).toISOString(),
+    last: ticker.last,
+    bid: ticker.bid,
+    ask: ticker.ask,
+    open: ticker.open,
+    close: ticker.last,
+    high: ticker.high,
+    low: ticker.low,
+    percentage: ticker.percentage,
+    baseVolume: Number(ticker.baseVolume),
+    quoteVolume: Number(ticker.quoteVolume),
+    info: ticker,
+  };
+}
+
 class BinanceWebSocketManager {
   private ws: WebSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -59,9 +84,57 @@ class BinanceWebSocketManager {
   
   // Streams actifs
   private activeStreams = new Set<string>();
+  private desiredKlineStreams = new Map<string, { stream: string; symbol: string; interval: string }>();
 
   constructor() {
     console.log('📡 Initializing Binance WebSocket Manager...');
+  }
+
+  private normalizeStreamSymbol(symbol: string): string {
+    return toBinanceSymbolId(symbol).toLowerCase();
+  }
+
+  private normalizeCacheSymbol(symbol: string): string {
+    return toBinanceSymbolId(symbol);
+  }
+
+  private klineCacheKey(symbol: string, interval: string): string {
+    return `${this.normalizeCacheSymbol(symbol)}_${interval}`;
+  }
+
+  private enqueueKlineSubscription(symbol: string, interval: string): void {
+    const streamSymbol = this.normalizeStreamSymbol(symbol);
+    const stream = `${streamSymbol}@kline_${interval}`;
+    this.desiredKlineStreams.set(stream, { stream, symbol, interval });
+    if (this.isConnected) {
+      this.sendSubscription(stream);
+    }
+  }
+
+  private sendSubscription(stream: string): void {
+    if (!this.ws || !this.isConnected) return;
+    if (this.activeStreams.has(stream)) return;
+
+    const payload = {
+      method: 'SUBSCRIBE',
+      params: [stream],
+      id: Date.now(),
+    };
+
+    try {
+      this.ws.send(JSON.stringify(payload));
+      this.activeStreams.add(stream);
+      console.log(`📡 Subscribed to stream ${stream}`);
+    } catch (error) {
+      console.error(`❌ Failed to subscribe to ${stream}:`, error);
+    }
+  }
+
+  private resubscribeKlines(): void {
+    if (!this.ws || !this.isConnected) return;
+    for (const { stream } of this.desiredKlineStreams.values()) {
+      this.sendSubscription(stream);
+    }
   }
 
   /**
@@ -88,9 +161,11 @@ class BinanceWebSocketManager {
         this.isConnected = true;
         this.isConnecting = false;
         this.reconnectAttempts = 0;
+        this.activeStreams.clear();
         
         // Subscribe aux streams par défaut
         this.subscribeToAllTickers();
+        this.resubscribeKlines();
       });
 
       this.ws.on('message', (data: Buffer) => {
@@ -110,6 +185,7 @@ class BinanceWebSocketManager {
         console.log('🔌 Binance WebSocket closed');
         this.isConnected = false;
         this.isConnecting = false;
+        this.activeStreams.clear();
         this.scheduleReconnect();
       });
 
@@ -164,15 +240,8 @@ class BinanceWebSocketManager {
       return;
     }
 
-    const subscribeMessage = {
-      method: 'SUBSCRIBE',
-      params: [stream],
-      id: Date.now(),
-    };
-
     console.log(`📡 Subscribing to all tickers stream...`);
-    this.ws.send(JSON.stringify(subscribeMessage));
-    this.activeStreams.add(stream);
+    this.sendSubscription(stream);
   }
 
   /**
@@ -180,29 +249,13 @@ class BinanceWebSocketManager {
    * 0 weight - Remplace fetchOHLCV (2 weight × n appels)
    */
   subscribeToKline(symbol: string, interval: string = '15m'): void {
-    if (!this.ws || !this.isConnected) {
-      console.warn('⚠️ Cannot subscribe: WebSocket not connected');
-      // On stocke la demande pour après connexion
-      return;
+    const cacheSymbol = this.normalizeCacheSymbol(symbol);
+    const key = this.klineCacheKey(cacheSymbol, interval);
+    if (!this.klinesCache.has(key)) {
+      this.klinesCache.set(key, []);
     }
 
-    // Format Binance: btcusdt@kline_15m (lowercase, pas de slash)
-    const binanceSymbol = symbol.replace('/', '').toLowerCase();
-    const stream = `${binanceSymbol}@kline_${interval}`;
-    
-    if (this.activeStreams.has(stream)) {
-      return;
-    }
-
-    const subscribeMessage = {
-      method: 'SUBSCRIBE',
-      params: [stream],
-      id: Date.now(),
-    };
-
-    console.log(`📡 Subscribing to kline stream: ${stream}`);
-    this.ws.send(JSON.stringify(subscribeMessage));
-    this.activeStreams.add(stream);
+    this.enqueueKlineSubscription(symbol, interval);
   }
 
   /**
@@ -282,7 +335,7 @@ class BinanceWebSocketManager {
     const k = data.k;
     
     const klineData: BinanceKlineData = {
-      symbol: data.s,
+      symbol: this.normalizeCacheSymbol(data.s),
       timeframe: k.i,
       timestamp: k.t,
       open: parseFloat(k.o),
@@ -292,7 +345,7 @@ class BinanceWebSocketManager {
       volume: parseFloat(k.v),
     };
 
-    const key = `${data.s}_${k.i}`;
+    const key = this.klineCacheKey(klineData.symbol, klineData.timeframe);
     
     if (!this.klinesCache.has(key)) {
       this.klinesCache.set(key, []);
@@ -345,8 +398,7 @@ class BinanceWebSocketManager {
    * 0 weight vs fetchOHLCV (2 weight)
    */
   getKlines(symbol: string, interval: string = '15m'): BinanceKlineData[] | null {
-    const binanceSymbol = symbol.replace('/', '').toUpperCase();
-    const key = `${binanceSymbol}_${interval}`;
+    const key = this.klineCacheKey(symbol, interval);
     return this.klinesCache.get(key) || null;
   }
 
@@ -395,6 +447,26 @@ class BinanceWebSocketManager {
     this.activeStreams.clear();
     this.tickersCache.clear();
     this.klinesCache.clear();
+  }
+
+  seedKlines(symbol: string, interval: string, ohlcv: number[][]): void {
+    if (!Array.isArray(ohlcv) || !ohlcv.length) return;
+
+    const cacheSymbol = this.normalizeCacheSymbol(symbol);
+    const key = this.klineCacheKey(cacheSymbol, interval);
+    const limited = ohlcv.slice(-500);
+    const seeded = limited.map((row) => ({
+      symbol: cacheSymbol,
+      timeframe: interval,
+      timestamp: Number(row[0]),
+      open: Number(row[1]),
+      high: Number(row[2]),
+      low: Number(row[3]),
+      close: Number(row[4]),
+      volume: Number(row[5]),
+    } satisfies BinanceKlineData));
+
+    this.klinesCache.set(key, seeded);
   }
 }
 
@@ -446,4 +518,16 @@ export async function getAllTickersFromWebSocket(): Promise<Map<string, BinanceT
   
   console.warn('⚠️ WebSocket not healthy, will fallback to REST API');
   return null;
+}
+
+export function seedKlinesFromWebSocket(symbol: string, interval: string, ohlcv: number[][]): void {
+  const ws = getBinanceWebSocket();
+  ws.seedKlines(symbol, interval, ohlcv);
+}
+
+export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): number[][] | null {
+  const ws = getBinanceWebSocket();
+  const klines = ws.getKlines(symbol, interval);
+  if (!klines?.length) return null;
+  return klines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
 }
