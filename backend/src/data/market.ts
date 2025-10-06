@@ -97,18 +97,27 @@ async function fetchOhlcvRest(symbol: string, tf: string, limit: number, userId?
         resolvedSymbol = await resolveSymbol(symbol);
       } else {
         ex = createPublicExchange(symbol);
-        await ex.loadMarkets();
+        const isBinanceExchange = String((ex as any)?.id || '').toLowerCase().includes('binance');
+        if (!isBinanceExchange) {
+          await ex.loadMarkets();
+        }
         resolvedSymbol = await resolveSymbol(symbol);
       }
     } catch (error) {
       console.warn(`Failed to get user exchange for ${userId}, using public:`, error);
       ex = createPublicExchange(symbol);
-      await ex.loadMarkets();
+      const isBinanceExchange = String((ex as any)?.id || '').toLowerCase().includes('binance');
+      if (!isBinanceExchange) {
+        await ex.loadMarkets();
+      }
       resolvedSymbol = await resolveSymbol(symbol);
     }
   } else {
     ex = createPublicExchange(symbol);
-    await ex.loadMarkets();
+    const isBinanceExchange = String((ex as any)?.id || '').toLowerCase().includes('binance');
+    if (!isBinanceExchange) {
+      await ex.loadMarkets();
+    }
     resolvedSymbol = await resolveSymbol(symbol);
   }
 
@@ -169,18 +178,27 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
           s = await resolveSymbol(symbol);
         } else {
           ex = createPublicExchange(symbol);
-          await ex.loadMarkets();
+          const isBinanceExchange = String((ex as any)?.id || '').toLowerCase().includes('binance');
+          if (!isBinanceExchange) {
+            await ex.loadMarkets();
+          }
           s = await resolveSymbol(symbol);
         }
       } catch (error) {
         console.warn(`Failed to get user exchange for ${options.userId}, using public:`, error);
         ex = createPublicExchange(symbol);
-        await ex.loadMarkets();
+        const isBinanceExchange = String((ex as any)?.id || '').toLowerCase().includes('binance');
+        if (!isBinanceExchange) {
+          await ex.loadMarkets();
+        }
         s = await resolveSymbol(symbol);
       }
     } else {
       ex = createPublicExchange(symbol);
-      await ex.loadMarkets();
+      const isBinanceExchange = String((ex as any)?.id || '').toLowerCase().includes('binance');
+      if (!isBinanceExchange) {
+        await ex.loadMarkets();
+      }
       s = await resolveSymbol(symbol);
     }
     

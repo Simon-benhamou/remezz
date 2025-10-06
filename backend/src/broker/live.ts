@@ -273,7 +273,8 @@ export class LiveBroker implements Broker {
     const maxImpactPct = params.maxImpactPct ?? Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35');
     let market: any;
     try {
-      if (!ex.markets) { await ex.loadMarkets(); }
+      const isBinanceExchange = String((ex as any)?.id || '').toLowerCase().includes('binance');
+      if (!ex.markets && !isBinanceExchange) { await ex.loadMarkets(); }
       market = ex.market ? ex.market(symbol) : ex.markets?.[symbol];
     } catch {}
     const book = await ex.fetchOrderBook(symbol, 40).catch(()=>null as any);

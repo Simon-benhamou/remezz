@@ -337,10 +337,20 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       options: { defaultType: 'swap' }
     });
 
-    await exchange.loadMarkets();
-    
+    const isBinanceExchange = String((exchange as any)?.id || '').toLowerCase().includes('binance');
+    let markets: any = {};
+
+    if (isBinanceExchange) {
+      // For Binance, skip loadMarkets and initialize empty markets structure
+      console.log('📊 [WebSocket] Skipping loadMarkets for Binance (0 weight)');
+      markets = {}; // Empty markets structure to prevent errors
+    } else {
+      await exchange.loadMarkets();
+      markets = exchange.markets || {};
+    }
+
     // Get all markets and filter for USD-settled perpetuals (Crypto.com format)
-    const allMarkets = Object.keys(exchange.markets || {});
+    const allMarkets = Object.keys(markets || {});
     console.log(`📊 Found ${allMarkets.length} total markets`);
     
     const perpetualMarkets = allMarkets.filter(symbol => {
@@ -377,7 +387,6 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
     const allTickers = {} as Record<string, any>;
     console.log('📊 Fetching volumes for dynamic ranking...');
 
-    const isBinanceExchange = String((exchange as any)?.id || '').toLowerCase().includes('binance');
     let wsTickerMap: Map<string, BinanceTickerData> | null = null;
     if (isBinanceExchange) {
       try {
@@ -649,10 +658,19 @@ async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
       options: { defaultType: 'swap' }
     });
 
-    await exchange.loadMarkets();
-    const markets = Object.values(exchange.markets || {});
+    const isBinanceExchange = String((exchange as any)?.id || '').toLowerCase().includes('binance');
+    let markets: any = {};
 
-    const usdPerps = markets.filter((market: any) => {
+    if (isBinanceExchange) {
+      // For Binance, skip loadMarkets and initialize empty markets structure
+      console.log('📊 [WebSocket] Skipping loadMarkets for Binance (0 weight)');
+      markets = {}; // Empty markets structure to prevent errors
+    } else {
+      await exchange.loadMarkets();
+      markets = exchange.markets || {};
+    }
+
+    const usdPerps = Object.values(markets).filter((market: any) => {
       if (!market) return false;
       const isSwap = market.swap === true || market.type === 'swap';
       if (!isSwap) return false;

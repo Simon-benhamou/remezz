@@ -36,7 +36,19 @@ async function getPublicExchangeFor(ccxtExchangeId: string, type: 'spot'|'swap')
     inst.options = inst.options || {};
     // @ts-ignore
     inst.options.defaultType = type;
-    await inst.loadMarkets();
+    
+    // 🚨 CRITICAL: NEVER loadMarkets for Binance - use WebSocket only
+    if (ccxtExchangeId !== 'binance') {
+      await inst.loadMarkets();
+    } else {
+      console.log('⚠️ Skipping loadMarkets for Binance - using WebSocket streams only');
+      // Initialize empty markets structure to avoid errors
+      inst.markets = {};
+      inst.markets_by_id = {};
+      inst.symbols = [];
+      inst.currencies = {};
+    }
+    
     publicExchanges.set(key, inst);
     return inst;
   })();
@@ -148,8 +160,17 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
         console.log('Markets assigned from shared public exchange, total:', Object.keys(userExchange.markets || {}).length);
       }
     } catch (e) {
-      console.warn('Failed to seed markets from public exchange, falling back to loadMarkets once:', (e as any)?.message || e);
-      await userExchange.loadMarkets();
+      // 🚨 CRITICAL: NEVER loadMarkets for Binance - even in fallback
+      if (ccxtExchangeId === 'binance') {
+        console.warn('⚠️ Failed to seed markets for Binance, but skipping loadMarkets - using WebSocket only');
+        // Initialize empty markets structure to avoid errors
+        (userExchange as any).markets = {};
+        (userExchange as any).markets_by_id = {};
+        (userExchange as any).symbols = [];
+      } else {
+        console.warn('Failed to seed markets from public exchange, falling back to loadMarkets once:', (e as any)?.message || e);
+        await userExchange.loadMarkets();
+      }
     }
 
     userExchanges.set(cacheKey, userExchange);
