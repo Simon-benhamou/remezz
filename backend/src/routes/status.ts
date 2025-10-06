@@ -86,13 +86,29 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
         try {
           const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
           await subscribeToUserData(userId, userCredentials.apiKey, userCredentials.apiSecret);
-          const wsBalance = await getBalanceFromWebSocket(userId, 'USDT');
-          if (wsBalance) {
+          
+          // Try to get USDT balance from WebSocket
+          const wsBalanceUSDT = await getBalanceFromWebSocket(userId, 'USDT');
+          
+          // For USD fiat balance, we need to use REST API since WebSocket is for futures only
+          let usdBalance = 0;
+          try {
+            const ex = await ensureExchange();
+            if (ex) {
+              const fullBalance = await ex.fetchBalance();
+              usdBalance = Number(fullBalance?.total?.USD ?? 0);
+              console.log(`💵 Retrieved USD balance: $${usdBalance}`);
+            }
+          } catch (error) {
+            console.warn('⚠️ Failed to fetch USD balance:', error);
+          }
+          
+          if (wsBalanceUSDT) {
             console.log(`✅ [WebSocket] /status balance for user ${userId} - 0 weight`);
             return {
-              total: { USDT: wsBalance.total, USD: 0 },
-              free: { USDT: wsBalance.free, USD: 0 },
-              used: { USDT: wsBalance.locked, USD: 0 }
+              total: { USDT: wsBalanceUSDT.total, USD: usdBalance },
+              free: { USDT: wsBalanceUSDT.free, USD: usdBalance }, // USD fiat is usually fully available
+              used: { USDT: wsBalanceUSDT.locked, USD: 0 }
             };
           }
           console.log(`⚠️ [WebSocket] /status balance cache miss for user ${userId}`);
@@ -108,13 +124,21 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
             try {
               const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
               const balance: any = await runExclusiveBalanceFetch<any>(userId, 'USDT', () => ex.fetchBalance()) as any;
-              const total = Number(balance?.total?.USDT ?? 0);
-              const free = Number(balance?.free?.USDT ?? 0);
-              const locked = Number(balance?.used?.USDT ?? 0);
-              if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
-                seedBalanceCache(userId, 'USDT', { total, free, locked });
+              const totalUSDT = Number(balance?.total?.USDT ?? 0);
+              const freeUSDT = Number(balance?.free?.USDT ?? 0);
+              const lockedUSDT = Number(balance?.used?.USDT ?? 0);
+              const totalUSD = Number(balance?.total?.USD ?? 0);
+              
+              if (Number.isFinite(totalUSDT) || Number.isFinite(freeUSDT) || Number.isFinite(lockedUSDT)) {
+                seedBalanceCache(userId, 'USDT', { total: totalUSDT, free: freeUSDT, locked: lockedUSDT });
               }
-              return balance;
+              
+              // Return balance with both USDT and USD
+              return {
+                total: { USDT: totalUSDT, USD: totalUSD },
+                free: { USDT: freeUSDT, USD: totalUSD }, // USD fiat is usually fully available
+                used: { USDT: lockedUSDT, USD: 0 }
+              };
             } catch (error) {
               console.warn('⚠️ Failed exclusive balance fetch, falling back to direct REST:', error);
             }
@@ -123,15 +147,26 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
           if (isBinanceUser && userId) {
             try {
               const { seedBalanceCache } = await import('../services/binanceWebSocket.js');
-              const total = Number(direct?.total?.USDT ?? 0);
-              const free = Number(direct?.free?.USDT ?? 0);
-              const locked = Number(direct?.used?.USDT ?? 0);
-              if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
-                seedBalanceCache(userId, 'USDT', { total, free, locked });
+              const totalUSDT = Number(direct?.total?.USDT ?? 0);
+              const freeUSDT = Number(direct?.free?.USDT ?? 0);
+              const lockedUSDT = Number(direct?.used?.USDT ?? 0);
+              if (Number.isFinite(totalUSDT) || Number.isFinite(freeUSDT) || Number.isFinite(lockedUSDT)) {
+                seedBalanceCache(userId, 'USDT', { total: totalUSDT, free: freeUSDT, locked: lockedUSDT });
               }
             } catch {}
           }
-          return direct;
+          
+          // Return balance with both USDT and USD from direct fetch
+          const totalUSDT = Number(direct?.total?.USDT ?? 0);
+          const freeUSDT = Number(direct?.free?.USDT ?? 0);
+          const lockedUSDT = Number(direct?.used?.USDT ?? 0);
+          const totalUSD = Number(direct?.total?.USD ?? 0);
+          
+          return {
+            total: { USDT: totalUSDT, USD: totalUSD },
+            free: { USDT: freeUSDT, USD: totalUSD },
+            used: { USDT: lockedUSDT, USD: 0 }
+          };
         })(),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Balance timeout')), 8000))
       ]).catch(()=>null);

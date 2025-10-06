@@ -341,73 +341,92 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
     let markets: any = {};
 
     if (isBinanceExchange) {
-      // For Binance, fetch dynamic perpetual markets list (0 weight via public API)
-      console.log('📊 [WebSocket] Fetching dynamic perpetual markets from Binance public API (0 weight)');
+      // For Binance, fetch dynamic perpetual markets list with aggressive caching (24h) to avoid bans
+      console.log('📊 [WebSocket] Fetching dynamic perpetual markets from Binance public API (0 weight, 24h cache)');
       
-      try {
-        // Use Binance Futures API public endpoint (0 weight)
-        const response = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      // Aggressive caching: only call API once per day to avoid any ban risk
+      const CACHE_KEY = 'binance_perpetuals_cache';
+      const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+      
+      let cachedData = aiAnalysisCache.get(CACHE_KEY);
+      if (cachedData && (Date.now() - cachedData.timestamp) < CACHE_DURATION) {
+        console.log(`📊 Using cached Binance perpetual markets (${cachedData.result.count} markets, ${(Date.now() - cachedData.timestamp) / 1000 / 60}min old)`);
+        markets = cachedData.result.markets;
+      } else {
+        try {
+          // Use Binance Futures API public endpoint (0 weight)
+          const response = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          
+          const exchangeInfo = await response.json();
+          const symbols = exchangeInfo.symbols || [];
+          
+          // Filter for USDT perpetual futures only
+          const usdtPerpetuals = symbols.filter((symbolInfo: any) => {
+            return symbolInfo.contractType === 'PERPETUAL' && 
+                   symbolInfo.quoteAsset === 'USDT' && 
+                   symbolInfo.status === 'TRADING';
+          });
+          
+          console.log(`📊 Fetched ${usdtPerpetuals.length} USDT perpetual markets from Binance API`);
+          
+          // Create market objects for filtering
+          markets = {};
+          usdtPerpetuals.forEach((symbolInfo: any) => {
+            const symbol = symbolInfo.symbol;
+            markets[symbol] = {
+              symbol: symbol,
+              swap: true,
+              type: 'swap',
+              active: true,
+              settle: 'USDT',
+              base: symbolInfo.baseAsset,
+              quote: 'USDT'
+            };
+          });
+          
+          // Cache the result aggressively (24h)
+          aiAnalysisCache.set(CACHE_KEY, {
+            result: {
+              markets: markets,
+              count: usdtPerpetuals.length
+            },
+            timestamp: Date.now()
+          });
+          
+          if (usdtPerpetuals.length === 0) {
+            console.warn('⚠️ No USDT perpetuals found in Binance API response');
+          }
+          
+        } catch (error) {
+          console.error('❌ Failed to fetch Binance perpetual markets:', error);
+          console.log('📊 Falling back to static list due to API error');
+          
+          // Fallback to static list if API fails
+          const binancePerpetuals = [
+            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT', 'DOT/USDT', 'DOGE/USDT',
+            'AVAX/USDT', 'LTC/USDT', 'MATIC/USDT', 'ALGO/USDT', 'VET/USDT', 'ICP/USDT', 'FIL/USDT', 'TRX/USDT',
+            'ETC/USDT', 'XLM/USDT', 'THETA/USDT', 'FTM/USDT', 'HBAR/USDT', 'EGLD/USDT', 'NEAR/USDT', 'FLOW/USDT',
+            'MANA/USDT', 'SAND/USDT', 'AXS/USDT', 'CHZ/USDT', 'ENJ/USDT', 'BAT/USDT', 'LRC/USDT', 'STORJ/USDT',
+            'ANT/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT', 'BTG/USDT', 'ZRX/USDT',
+            'OMG/USDT', 'REP/USDT', 'WAVES/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT'
+          ];
+          
+          markets = {};
+          binancePerpetuals.forEach(symbol => {
+            markets[symbol] = {
+              symbol: symbol,
+              swap: true,
+              type: 'swap',
+              active: true,
+              settle: 'USDT',
+              base: symbol.split('/')[0],
+              quote: 'USDT'
+            };
+          });
         }
-        
-        const exchangeInfo = await response.json();
-        const symbols = exchangeInfo.symbols || [];
-        
-        // Filter for USDT perpetual futures only
-        const usdtPerpetuals = symbols.filter((symbolInfo: any) => {
-          return symbolInfo.contractType === 'PERPETUAL' && 
-                 symbolInfo.quoteAsset === 'USDT' && 
-                 symbolInfo.status === 'TRADING';
-        });
-        
-        console.log(`📊 Fetched ${usdtPerpetuals.length} USDT perpetual markets from Binance API`);
-        
-        // Create market objects for filtering
-        markets = {};
-        usdtPerpetuals.forEach((symbolInfo: any) => {
-          const symbol = symbolInfo.symbol;
-          markets[symbol] = {
-            symbol: symbol,
-            swap: true,
-            type: 'swap',
-            active: true,
-            settle: 'USDT',
-            base: symbolInfo.baseAsset,
-            quote: 'USDT'
-          };
-        });
-        
-        if (usdtPerpetuals.length === 0) {
-          console.warn('⚠️ No USDT perpetuals found in Binance API response');
-        }
-        
-      } catch (error) {
-        console.error('❌ Failed to fetch Binance perpetual markets:', error);
-        console.log('📊 Falling back to static list due to API error');
-        
-        // Fallback to static list if API fails
-        const binancePerpetuals = [
-          'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT', 'DOT/USDT', 'DOGE/USDT',
-          'AVAX/USDT', 'LTC/USDT', 'MATIC/USDT', 'ALGO/USDT', 'VET/USDT', 'ICP/USDT', 'FIL/USDT', 'TRX/USDT',
-          'ETC/USDT', 'XLM/USDT', 'THETA/USDT', 'FTM/USDT', 'HBAR/USDT', 'EGLD/USDT', 'NEAR/USDT', 'FLOW/USDT',
-          'MANA/USDT', 'SAND/USDT', 'AXS/USDT', 'CHZ/USDT', 'ENJ/USDT', 'BAT/USDT', 'LRC/USDT', 'STORJ/USDT',
-          'ANT/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT', 'BTG/USDT', 'ZRX/USDT',
-          'OMG/USDT', 'REP/USDT', 'WAVES/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT'
-        ];
-        
-        markets = {};
-        binancePerpetuals.forEach(symbol => {
-          markets[symbol] = {
-            symbol: symbol,
-            swap: true,
-            type: 'swap',
-            active: true,
-            settle: 'USDT',
-            base: symbol.split('/')[0],
-            quote: 'USDT'
-          };
-        });
       }
     } else {
       await exchange.loadMarkets();
@@ -734,73 +753,90 @@ async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
     let markets: any = {};
 
     if (isBinanceExchange) {
-      // For Binance, fetch dynamic perpetual markets list (0 weight via public API)
-      console.log('📊 [WebSocket] Fetching dynamic perpetual markets from Binance public API (0 weight)');
+      // Check aggressive 4h cache first to prevent API bans (reduced from 24h)
+      const cacheKey = 'binance_perpetuals_cache';
+      const cachedData = aiAnalysisCache.get(cacheKey);
+      const now = Date.now();
+      const CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours (reduced from 24h for freshness)
       
-      try {
-        // Use Binance Futures API public endpoint (0 weight)
-        const response = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      if (cachedData && (now - cachedData.timestamp) < CACHE_DURATION) {
+        console.log('📊 [WebSocket] Using cached Binance perpetual markets (4h cache)');
+        markets = cachedData.result.markets;
+      } else {
+        // For Binance, fetch dynamic perpetual markets list (0 weight via public API)
+        console.log('📊 [WebSocket] Fetching dynamic perpetual markets from Binance public API (0 weight)');
+        
+        try {
+          // Use Binance Futures API public endpoint (0 weight)
+          const response = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          
+          const exchangeInfo = await response.json();
+          const symbols = exchangeInfo.symbols || [];
+          
+          // Filter for USDT perpetual futures only
+          const usdtPerpetuals = symbols.filter((symbolInfo: any) => {
+            return symbolInfo.contractType === 'PERPETUAL' && 
+                   symbolInfo.quoteAsset === 'USDT' && 
+                   symbolInfo.status === 'TRADING';
+          });
+          
+          console.log(`📊 Fetched ${usdtPerpetuals.length} USDT perpetual markets from Binance API`);
+          
+          // Create market objects for filtering
+          markets = {};
+          usdtPerpetuals.forEach((symbolInfo: any) => {
+            const symbol = symbolInfo.symbol;
+            markets[symbol] = {
+              symbol: symbol,
+              swap: true,
+              type: 'swap',
+              active: true,
+              settle: 'USDT',
+              base: symbolInfo.baseAsset,
+              quote: 'USDT'
+            };
+          });
+          
+          // Cache the result aggressively for 4 hours (reduced from 24h for better freshness)
+          aiAnalysisCache.set(cacheKey, {
+            result: { markets: markets, count: usdtPerpetuals.length },
+            timestamp: now
+          });
+          
+          if (usdtPerpetuals.length === 0) {
+            console.warn('⚠️ No USDT perpetuals found in Binance API response');
+          }
+          
+        } catch (error) {
+          console.error('❌ Failed to fetch Binance perpetual markets:', error);
+          console.log('📊 Falling back to static list due to API error');
+          
+          // Fallback to static list if API fails
+          const binancePerpetuals = [
+            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT', 'DOT/USDT', 'DOGE/USDT',
+            'AVAX/USDT', 'LTC/USDT', 'MATIC/USDT', 'ALGO/USDT', 'VET/USDT', 'ICP/USDT', 'FIL/USDT', 'TRX/USDT',
+            'ETC/USDT', 'XLM/USDT', 'THETA/USDT', 'FTM/USDT', 'HBAR/USDT', 'EGLD/USDT', 'NEAR/USDT', 'FLOW/USDT',
+            'MANA/USDT', 'SAND/USDT', 'AXS/USDT', 'CHZ/USDT', 'ENJ/USDT', 'BAT/USDT', 'LRC/USDT', 'STORJ/USDT',
+            'ANT/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT', 'BTG/USDT', 'ZRX/USDT',
+            'OMG/USDT', 'REP/USDT', 'WAVES/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT'
+          ];
+          
+          markets = {};
+          binancePerpetuals.forEach(symbol => {
+            markets[symbol] = {
+              symbol: symbol,
+              swap: true,
+              type: 'swap',
+              active: true,
+              settle: 'USDT',
+              base: symbol.split('/')[0],
+              quote: 'USDT'
+            };
+          });
         }
-        
-        const exchangeInfo = await response.json();
-        const symbols = exchangeInfo.symbols || [];
-        
-        // Filter for USDT perpetual futures only
-        const usdtPerpetuals = symbols.filter((symbolInfo: any) => {
-          return symbolInfo.contractType === 'PERPETUAL' && 
-                 symbolInfo.quoteAsset === 'USDT' && 
-                 symbolInfo.status === 'TRADING';
-        });
-        
-        console.log(`📊 Fetched ${usdtPerpetuals.length} USDT perpetual markets from Binance API`);
-        
-        // Create market objects for filtering
-        markets = {};
-        usdtPerpetuals.forEach((symbolInfo: any) => {
-          const symbol = symbolInfo.symbol;
-          markets[symbol] = {
-            symbol: symbol,
-            swap: true,
-            type: 'swap',
-            active: true,
-            settle: 'USDT',
-            base: symbolInfo.baseAsset,
-            quote: 'USDT'
-          };
-        });
-        
-        if (usdtPerpetuals.length === 0) {
-          console.warn('⚠️ No USDT perpetuals found in Binance API response');
-        }
-        
-      } catch (error) {
-        console.error('❌ Failed to fetch Binance perpetual markets:', error);
-        console.log('📊 Falling back to static list due to API error');
-        
-        // Fallback to static list if API fails
-        const binancePerpetuals = [
-          'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT', 'DOT/USDT', 'DOGE/USDT',
-          'AVAX/USDT', 'LTC/USDT', 'MATIC/USDT', 'ALGO/USDT', 'VET/USDT', 'ICP/USDT', 'FIL/USDT', 'TRX/USDT',
-          'ETC/USDT', 'XLM/USDT', 'THETA/USDT', 'FTM/USDT', 'HBAR/USDT', 'EGLD/USDT', 'NEAR/USDT', 'FLOW/USDT',
-          'MANA/USDT', 'SAND/USDT', 'AXS/USDT', 'CHZ/USDT', 'ENJ/USDT', 'BAT/USDT', 'LRC/USDT', 'STORJ/USDT',
-          'ANT/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT', 'BTG/USDT', 'ZRX/USDT',
-          'OMG/USDT', 'REP/USDT', 'WAVES/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT'
-        ];
-        
-        markets = {};
-        binancePerpetuals.forEach(symbol => {
-          markets[symbol] = {
-            symbol: symbol,
-            swap: true,
-            type: 'swap',
-            active: true,
-            settle: 'USDT',
-            base: symbol.split('/')[0],
-            quote: 'USDT'
-          };
-        });
       }
     } else {
       await exchange.loadMarkets();
