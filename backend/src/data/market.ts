@@ -208,16 +208,22 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
     if (exchangeId.includes('binance')) {
       try {
         const { getTickerFromWebSocket, waitForWsHealthy } = await import('../services/binanceWebSocket.js');
-        // Give a short chance to WS to be ready before returning placeholders
-        await waitForWsHealthy(2000);
-        let wsTicker = await getTickerFromWebSocket(s);
-        if (!wsTicker) {
-          for (let i = 0; i < 6; i++) { // up to ~1.2s extra
+        let wsReady = false;
+        try {
+          wsReady = await waitForWsHealthy(2000);
+        } catch (err) {
+          console.warn(`⚠️ [WebSocket] waitForWsHealthy failed for ${s}:`, err);
+        }
+
+        let wsTicker = wsReady ? await getTickerFromWebSocket(s) : null;
+        if (!wsTicker && wsReady) {
+          for (let i = 0; i < 6; i++) {
             await new Promise(r => setTimeout(r, 200));
             wsTicker = await getTickerFromWebSocket(s);
             if (wsTicker) break;
           }
         }
+
         if (wsTicker) {
           ticker = {
             symbol: s,
@@ -234,13 +240,24 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
           };
           console.log(`✅ [WebSocket] getTicker(${s}) - 0 weight`);
         } else {
-          // STRICT NO-REST for Binance to avoid bans
-          console.warn(`⚠️ [WebSocket] getTicker(${s}) cache miss - returning minimal placeholder (no REST)`);
-          ticker = { symbol: s, last: 0, bid: 0, ask: 0, percentage: 0, baseVolume: 0, quoteVolume: 0 } as any;
+          console.warn(`⚠️ [WebSocket] getTicker(${s}) miss${wsReady ? '' : ' (WS not healthy)' } - falling back to REST`);
+          try {
+            ticker = await ex.fetchTicker(s);
+            console.log(`✅ [REST] getTicker(${s}) fallback used`);
+          } catch (restError) {
+            console.error(`❌ [REST] getTicker(${s}) fallback failed:`, restError);
+            ticker = { symbol: s, last: 0, bid: 0, ask: 0, percentage: 0, baseVolume: 0, quoteVolume: 0 } as any;
+          }
         }
       } catch (error) {
-        console.warn(`⚠️ [WebSocket] getTicker error for ${s} - returning minimal placeholder (no REST):`, error);
-        ticker = { symbol: s, last: 0, bid: 0, ask: 0, percentage: 0, baseVolume: 0, quoteVolume: 0 } as any;
+        console.warn(`⚠️ [WebSocket] getTicker error for ${s} - attempting REST fallback`, error);
+        try {
+          ticker = await ex.fetchTicker(s);
+          console.log(`✅ [REST] getTicker(${s}) fallback used after WS error`);
+        } catch (restError) {
+          console.error(`❌ [REST] getTicker(${s}) fallback failed after WS error:`, restError);
+          ticker = { symbol: s, last: 0, bid: 0, ask: 0, percentage: 0, baseVolume: 0, quoteVolume: 0 } as any;
+        }
       }
     } else {
       ticker = await ex.fetchTicker(s);
