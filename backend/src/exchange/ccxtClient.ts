@@ -7,6 +7,48 @@ const userExchanges: Map<string, any> = new Map();
 // Track in-flight exchange creations so parallel callers reuse the same loadMarkets()
 const userExchangePromises: Map<string, Promise<any>> = new Map();
 
+// Shared public exchanges per market type to avoid repeated loadMarkets()
+const publicExchanges: Map<string, any> = new Map();
+const publicExchangePromises: Map<string, Promise<any>> = new Map();
+
+// Cache symbol resolutions to avoid repeated market lookups
+const symbolResolutionCache: Map<string, string> = new Map();
+
+function mapExchangeId(exchangeId: string): string {
+  const exchangeIdMap: Record<string, string> = {
+    'crypto.com': 'cryptocom',
+    'binance': 'binance'
+  };
+  return exchangeIdMap[exchangeId] || exchangeId;
+}
+
+async function getPublicExchangeFor(ccxtExchangeId: string, type: 'spot'|'swap') {
+  const key = `${ccxtExchangeId}:${type}`;
+  if (publicExchanges.has(key)) return publicExchanges.get(key);
+  const inflight = publicExchangePromises.get(key);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    const Klass: any = (ccxt as any)[ccxtExchangeId];
+    if (!Klass) throw new Error('Unknown exchange ' + ccxtExchangeId);
+    const inst = new Klass({ enableRateLimit: true });
+    // @ts-ignore
+    inst.options = inst.options || {};
+    // @ts-ignore
+    inst.options.defaultType = type;
+    await inst.loadMarkets();
+    publicExchanges.set(key, inst);
+    return inst;
+  })();
+
+  publicExchangePromises.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    publicExchangePromises.delete(key);
+  }
+}
+
 // Function to clear user exchange cache (useful when API keys are updated)
 export function clearUserExchangeCache(userId: string): void {
   for (const [key] of userExchanges) {
@@ -56,13 +98,7 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     }
   }
 
-  // Map exchange names to CCXT IDs
-  const exchangeIdMap: Record<string, string> = {
-    'crypto.com': 'cryptocom',
-    'binance': 'binance'
-  };
-  
-  const ccxtExchangeId = exchangeIdMap[exchangeId] || exchangeId;
+  const ccxtExchangeId = mapExchangeId(exchangeId);
   const Klass: any = (ccxt as any)[ccxtExchangeId];
   if (!Klass) throw new Error('Unknown exchange ' + exchangeId);
 
@@ -92,15 +128,29 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     const userExchange = new Klass(config);
 
     // Default market type (spot | swap)
-    const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
+    const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase() as 'spot'|'swap';
     // @ts-ignore
     userExchange.options = userExchange.options || {};
     // @ts-ignore
     userExchange.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
 
-    console.log('Loading markets for exchange...');
-    await userExchange.loadMarkets();
-    console.log('Markets loaded successfully, total:', Object.keys(userExchange.markets || {}).length);
+    // Seed markets from shared public instance to avoid loadMarkets REST weight
+    try {
+      const pub = await getPublicExchangeFor(ccxtExchangeId, MARKET_TYPE);
+      if (typeof (userExchange as any).setMarkets === 'function') {
+        (userExchange as any).setMarkets(pub.markets, pub.currencies);
+        console.log('Markets seeded from shared public exchange, total:', Object.keys(userExchange.markets || {}).length);
+      } else {
+        // Fallback: assign primary structures
+        (userExchange as any).markets = pub.markets;
+        (userExchange as any).markets_by_id = pub.markets_by_id;
+        (userExchange as any).symbols = pub.symbols;
+        console.log('Markets assigned from shared public exchange, total:', Object.keys(userExchange.markets || {}).length);
+      }
+    } catch (e) {
+      console.warn('Failed to seed markets from public exchange, falling back to loadMarkets once:', (e as any)?.message || e);
+      await userExchange.loadMarkets();
+    }
 
     userExchanges.set(cacheKey, userExchange);
     return userExchange;
@@ -166,54 +216,42 @@ export async function validateUserCredentials(credentials: { apiKey: string; api
 
 /** Resolve a requested symbol to a valid ccxt unified market symbol for the configured exchange. */
 export async function resolveSymbol(requested: string, userId?: string): Promise<string> {
-  // For symbol resolution, we create a temporary unauthenticated exchange since it's just market data
   const { EXCHANGE_ID } = getConfig();
-  const Klass: any = (ccxt as any)[EXCHANGE_ID];
-  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
-  
-  // Helper to build and load an exchange for a specific market type
-  async function buildExchange(type: 'spot' | 'swap') {
-    const inst = new Klass({ enableRateLimit: true });
-    // @ts-ignore
-    inst.options = inst.options || {};
-    // @ts-ignore
-    inst.options.defaultType = type;
-    await inst.loadMarkets();
-    return inst;
-  }
-
-  // Try preferred type inferred from symbol first, then fallback to the other
+  const ccxtExchangeId = mapExchangeId(EXCHANGE_ID);
   const sReq = requested.toUpperCase();
+
+  // Try symbol cache first
+  const cacheKey = `${ccxtExchangeId}:${sReq}`;
+  const cached = symbolResolutionCache.get(cacheKey);
+  if (cached) return cached;
+
+  // Preferred types order
   const preferSwap = sReq.includes(':USDT') || sReq.includes(':USD') || sReq.includes('-PERP') || /PERP$/.test(sReq);
   const types: Array<'spot' | 'swap'> = preferSwap
     ? ['swap', ((process.env.MARKET_TYPE || 'spot').toLowerCase() as any) || 'spot']
     : [((process.env.MARKET_TYPE || 'spot').toLowerCase() as any) || 'spot', 'swap'];
 
-  // Build both exchanges lazily
-  const exchanges: Record<string, any> = {};
-  for (const t of types) {
-    if (!exchanges[t]) exchanges[t] = await buildExchange(t);
-  }
+  // Get shared public exchanges for both types
+  const exchanges: Record<'spot'|'swap', any> = {
+    spot: await getPublicExchangeFor(ccxtExchangeId, 'spot'),
+    swap: await getPublicExchangeFor(ccxtExchangeId, 'swap'),
+  };
 
   let ex = exchanges[types[0]];
-
-  const s = requested.toUpperCase();
-
-  // Helper: ensure market is perpetual/swap
+  const s = sReq;
   const isPerp = (m:any) => !!(m && (m.swap === true || m.type === 'swap' || m.perpetual === true || (m.contract === true && m.future !== true)));
 
   // 1) If already valid and a perp/swap, return it
-  if (ex.markets && ex.markets[s] && isPerp(ex.markets[s])) return s;
+  if (ex.markets && ex.markets[s] && isPerp(ex.markets[s])) {
+    symbolResolutionCache.set(cacheKey, s);
+    return s;
+  }
 
   const candidates: string[] = [];
-
-  // 2) Try common forms (spot + perp)
   if (!s.includes('/')) {
-    // ex: BTCUSDT -> BTC/USDT
     if (s.endsWith('USDT')) {
       const base = s.replace('USDT', '');
       candidates.push(`${base}/USDT`, `${base}/USDT:USDT`, `${base}-USDT`, `${base}USDT`);
-      // Also try USD perp variants
       candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}USD-PERP`, `${base}USD`);
     } else if (s.endsWith('USD')) {
       const base = s.replace('USD', '');
@@ -221,14 +259,10 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
       candidates.push(`${base}USD-PERP`);
     }
   } else {
-    // ex: BTC/USDT -> BTC/USDT:USDT
     const [base, quote] = s.split('/');
     candidates.push(`${base}/${quote}:USDT`, `${base}/${quote}:USD`);
-    // Also try USD-margined perp for same base regardless of quote
     candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}USD-PERP`, `${base}USD`);
   }
-
-  // 3) Add generic USDT fallbacks
   const baseGuess = s.replace('/','').replace(':USDT','').replace('USDT','');
   candidates.push(`${baseGuess}/USDT`, `${baseGuess}/USDT:USDT`);
 
