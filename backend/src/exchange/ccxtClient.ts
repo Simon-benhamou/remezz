@@ -14,10 +14,17 @@ const publicExchangePromises: Map<string, Promise<any>> = new Map();
 // Cache symbol resolutions to avoid repeated market lookups
 const symbolResolutionCache: Map<string, string> = new Map();
 
+// Function to clear symbol resolution cache
+export function clearSymbolResolutionCache(): void {
+  symbolResolutionCache.clear();
+  console.log('Symbol resolution cache cleared');
+}
+
 function mapExchangeId(exchangeId: string): string {
   const exchangeIdMap: Record<string, string> = {
     'crypto.com': 'cryptocom',
-    'binance': 'binance'
+    'binance': 'binance',
+    'binancecoinm': 'binancecoinm'
   };
   return exchangeIdMap[exchangeId] || exchangeId;
 }
@@ -241,10 +248,20 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
   const ccxtExchangeId = mapExchangeId(EXCHANGE_ID);
   const sReq = requested.toUpperCase();
 
-  // Try symbol cache first
   const cacheKey = `${ccxtExchangeId}:${sReq}`;
-  const cached = symbolResolutionCache.get(cacheKey);
-  if (cached) return cached;
+
+  // Special handling for Binance COIN-M Futures - prioritize _PERP format
+  if (ccxtExchangeId === 'binancecoinm') {
+    let base: string;
+    if (sReq.includes('/')) {
+      base = sReq.split('/')[0];
+    } else {
+      base = sReq.replace(/USDT|USD$/, '').replace('USD_PERP', '').replace('USDT', '').replace('_PERP', '');
+    }
+    const coinMSymbol = `${base}USD_PERP`;
+    symbolResolutionCache.set(cacheKey, coinMSymbol);
+    return coinMSymbol;
+  }
 
   // Preferred types order
   const preferSwap = sReq.includes(':USDT') || sReq.includes(':USD') || sReq.includes('-PERP') || /PERP$/.test(sReq);
@@ -274,15 +291,18 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
       const base = s.replace('USDT', '');
       candidates.push(`${base}/USDT`, `${base}/USDT:USDT`, `${base}-USDT`, `${base}USDT`);
       candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}USD-PERP`, `${base}USD`);
+      candidates.push(`${base}USD_PERP`); // COIN-M Futures format
     } else if (s.endsWith('USD')) {
       const base = s.replace('USD', '');
       candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}-USD`, `${base}USD`);
       candidates.push(`${base}USD-PERP`);
+      candidates.push(`${base}USD_PERP`); // COIN-M Futures format
     }
   } else {
     const [base, quote] = s.split('/');
     candidates.push(`${base}/${quote}:USDT`, `${base}/${quote}:USD`);
     candidates.push(`${base}/USD`, `${base}/USD:USD`, `${base}USD-PERP`, `${base}USD`);
+    candidates.push(`${base}USD_PERP`); // COIN-M Futures format
   }
   const baseGuess = s.replace('/','').replace(':USDT','').replace('USDT','');
   candidates.push(`${baseGuess}/USDT`, `${baseGuess}/USDT:USDT`);
@@ -297,7 +317,7 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
   const match = marketKeys.find((k) => {
     const m = ex.markets[k];
     const q = (m?.quote || '').toUpperCase();
-    return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (q === 'USDT' || q === 'USD' || k.includes(':USDT') || k.includes(':USD') || k.includes('-PERP'));
+    return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (q === 'USDT' || q === 'USD' || k.includes(':USDT') || k.includes(':USD') || k.includes('-PERP') || k.includes('_PERP'));
   });
   if (match) return match;
 
@@ -316,9 +336,35 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
     const match2 = marketKeys2.find((k) => {
       const m = ex.markets[k];
       const q = (m?.quote || '').toUpperCase();
-      return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (q === 'USDT' || q === 'USD' || k.includes(':USDT') || k.includes(':USD') || k.includes('-PERP'));
+      return isPerp(m) && m?.base?.toUpperCase() === baseGuess && (q === 'USDT' || q === 'USD' || k.includes(':USDT') || k.includes(':USD') || k.includes('-PERP') || k.includes('_PERP'));
     });
     if (match2) return match2;
+  }
+
+  // Special handling for Binance - assume USDT perpetuals are valid
+  if (ccxtExchangeId === 'binance' && (sReq.endsWith('USDT') || sReq.endsWith('/USDT'))) {
+    let base: string;
+    if (sReq.includes('/')) {
+      base = sReq.split('/')[0];
+    } else {
+      base = sReq.replace('USDT', '');
+    }
+    const futuresSymbol = `${base}/USDT:USDT`;
+    symbolResolutionCache.set(cacheKey, futuresSymbol);
+    return futuresSymbol;
+  }
+
+  // Special handling for Binance COIN-M Futures - prioritize _PERP format
+  if (ccxtExchangeId === 'binancecoinm') {
+    let base: string;
+    if (sReq.includes('/')) {
+      base = sReq.split('/')[0];
+    } else {
+      base = sReq.replace(/USDT|USD$/, '').replace('USD_PERP', '').replace('USDT', '').replace('_PERP', '');
+    }
+    const coinMSymbol = `${base}USD_PERP`;
+    symbolResolutionCache.set(cacheKey, coinMSymbol);
+    return coinMSymbol;
   }
 
   // 7) Not found across types

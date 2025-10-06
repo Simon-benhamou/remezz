@@ -656,12 +656,8 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       console.log(`      ${i+1}. ${crypto.symbol}: ${crypto.change24h.toFixed(3)}% change, $${(crypto.quoteVolume24h/1000000).toFixed(2)}M vol, score: ${crypto.combinedScore.toFixed(2)}`);
     });
     
-    // Take top 20 and convert to spot trading format for analysis
-    const topPerformers = cryptoPerformance.slice(0, 20).map(crypto => {
-      // Convert from SYMBOL/USD:USD to SYMBOL/USDT for analysis
-      const base = crypto.symbol.split('/')[0];
-      return `${base}/USDT`;
-    });
+    // Take top 20 and keep original symbol format for analysis
+    const topPerformers = cryptoPerformance.slice(0, 20).map(crypto => crypto.symbol);
     
     // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives avec gestion intelligente
     // PRIORISATION: Mouvement >3% = priorité absolue, >2% = agent supplémentaire autorisé
