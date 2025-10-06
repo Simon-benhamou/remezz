@@ -31,6 +31,7 @@ import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
+import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -115,6 +116,14 @@ startEventEngine();
 startArbitrageMonitor();
 startIntegratedMonitoring();
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
+
+// Prime Binance WS early so UI/API has data immediately
+try {
+  if (getConfig().EXCHANGE_ID.toLowerCase().includes('binance')) {
+    console.log('📡 Priming Binance WebSocket at server startup...');
+    getBinanceWebSocket();
+  }
+} catch (e) { console.warn('WS prime failed:', e); }
 
 // Start Smart Agent background job
 console.log('🤖 Starting Smart Agent background checker...');

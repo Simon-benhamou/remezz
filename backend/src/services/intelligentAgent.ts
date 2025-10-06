@@ -169,6 +169,22 @@ import type { ActivationProfile } from '../agent/state.js';
  * Get list of symbols currently being traded by active agents
  * Normalizes different symbol formats for comparison
  */
+function normalizeUnifiedSymbol(sym: string): string {
+  try {
+    if (!sym) return sym;
+    const s = String(sym);
+    if (s.includes('/USD:USD')) {
+      const base = s.split('/')[0];
+      return `${base}/USDT`;
+    }
+    if (s.includes('/USDT:USDT')) {
+      const base = s.split('/')[0];
+      return `${base}/USDT`;
+    }
+    return s;
+  } catch { return sym; }
+}
+
 export async function getActiveAgentSymbols(excludeSessionId?: string): Promise<string[]> {
   try {
     const whereClause: any = { stoppedAt: null };
@@ -188,15 +204,7 @@ export async function getActiveAgentSymbols(excludeSessionId?: string): Promise<
       .map(session => session.symbol)
       .filter(symbol => symbol) // Remove null/undefined
       .map(symbol => {
-        // Normalize symbol formats for comparison
-        // Convert ETH/USD:USD → ETH/USDT
-        // Convert BTC/USD:USD → BTC/USDT
-        // Keep DOGE/USDT as is
-        if (symbol.includes('/USD:USD')) {
-          const base = symbol.split('/')[0];
-          return `${base}/USDT`;
-        }
-        return symbol;
+        return normalizeUnifiedSymbol(symbol);
       })
       .filter((symbol, index, arr) => arr.indexOf(symbol) === index); // Remove duplicates
   } catch (error) {
@@ -1816,19 +1824,22 @@ export async function detectHighVolatilityMode(): Promise<boolean> {
  */
 export async function getActiveAgentCountForSymbol(symbol: string, excludeSessionId?: string): Promise<number> {
   try {
-    const whereClause: any = { 
+    const norm = normalizeUnifiedSymbol(symbol);
+    const base = norm.split('/')[0];
+    const forms = [
+      `${base}/USDT`,
+      `${base}/USDT:USDT`,
+      `${base}/USD:USD`
+    ];
+    const where: any = {
       stoppedAt: null,
-      symbol: symbol
+      OR: [
+        { symbol: { in: forms } },
+        { currentSymbol: { in: forms } },
+      ],
     };
-    
-    if (excludeSessionId) {
-      whereClause.id = { not: excludeSessionId };
-    }
-    
-    const count = await prisma.agentSession.count({
-      where: whereClause
-    });
-    
+    if (excludeSessionId) where.id = { not: excludeSessionId };
+    const count = await prisma.agentSession.count({ where });
     return count;
   } catch (error) {
     console.error('Error counting active agents for symbol:', error);
