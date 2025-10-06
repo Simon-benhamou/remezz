@@ -112,14 +112,17 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
     await exchange.loadMarkets();
     
     // Get all USDT-settled perpetual markets
+    // Support both Binance-style "BTC/USDT" and colon notation "BTC/USDT:USDT"
     const allMarkets = Object.keys(exchange.markets || {});
     const perpetualMarkets = allMarkets.filter(symbol => {
       try {
         const market = exchange.markets[symbol];
-        return market?.swap === true && 
-               market?.active === true &&
-               market?.settle === 'USDT' &&
-               symbol.includes('/USDT:USDT');
+        if (!market) return false;
+        const isSwap = market.swap === true || market.type === 'swap' || market.perpetual === true;
+        const isActive = market.active !== false;
+        const isUsdtSettled = String(market.settle || market.quote || '').toUpperCase() === 'USDT';
+        const symbolLooksUsdt = symbol.includes('/USDT') || symbol.includes('/USDT:USDT');
+        return isSwap && isActive && isUsdtSettled && symbolLooksUsdt;
       } catch {
         return false;
       }
