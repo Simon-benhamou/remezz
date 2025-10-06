@@ -165,8 +165,8 @@ router.post('/test-credentials', async (req, res) => {
     let balance: any;
     if ((exchange.id || '').toLowerCase() === 'binance') {
       const { runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
-      const keyUser = req.user?.id || 'manual_debug';
-      balance = await runExclusiveBalanceFetch(keyUser, 'USDT', () => exchange.fetchBalance());
+      const keyUser = (req as AuthenticatedRequest).user?.id || 'manual_debug';
+      balance = await runExclusiveBalanceFetch<any>(keyUser, 'USDT', () => exchange.fetchBalance()) as any;
     } else {
       balance = await exchange.fetchBalance();
     }
@@ -418,14 +418,14 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
     }
 
     // Test 2: Try to get exchange instance and fetch balance
-    let balance = null;
+    let balance: any = null;
     let balanceError = '';
     try {
       const exchange = await getUserExchange(req.user!.id, credentials);
       console.log('Exchange instance created successfully');
       if ((credentials.exchange || '').toLowerCase() === 'binance') {
         const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
-        balance = await runExclusiveBalanceFetch(req.user!.id, 'USDT', () => exchange.fetchBalance());
+        balance = await runExclusiveBalanceFetch<any>(req.user!.id, 'USDT', () => exchange.fetchBalance()) as any;
         try {
           const total = Number(balance?.total?.USDT ?? 0);
           const free = Number(balance?.free?.USDT ?? 0);
@@ -874,7 +874,7 @@ router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
       let balance: any;
       if ((credentials.exchange || '').toLowerCase() === 'binance') {
         const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
-        balance = await runExclusiveBalanceFetch(userId, 'USDT', () => exchange.fetchBalance());
+        balance = await runExclusiveBalanceFetch<any>(userId, 'USDT', () => exchange.fetchBalance()) as any;
         try {
           const total = Number(balance?.total?.USDT ?? 0);
           const free = Number(balance?.free?.USDT ?? 0);

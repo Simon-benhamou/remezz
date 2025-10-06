@@ -107,7 +107,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
           if (isBinanceUser && userId) {
             try {
               const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
-              const balance = await runExclusiveBalanceFetch(userId, 'USDT', () => ex.fetchBalance());
+              const balance: any = await runExclusiveBalanceFetch<any>(userId, 'USDT', () => ex.fetchBalance()) as any;
               const total = Number(balance?.total?.USDT ?? 0);
               const free = Number(balance?.free?.USDT ?? 0);
               const locked = Number(balance?.used?.USDT ?? 0);
@@ -119,7 +119,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
               console.warn('⚠️ Failed exclusive balance fetch, falling back to direct REST:', error);
             }
           }
-          const direct = await ex.fetchBalance();
+          const direct: any = await ex.fetchBalance();
           if (isBinanceUser && userId) {
             try {
               const { seedBalanceCache } = await import('../services/binanceWebSocket.js');
