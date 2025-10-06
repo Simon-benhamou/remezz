@@ -4,11 +4,21 @@ import { getConfig } from '../utils/env.js';
 
 // User-specific exchange instances for authenticated operations
 const userExchanges: Map<string, any> = new Map();
+// Track in-flight exchange creations so parallel callers reuse the same loadMarkets()
+const userExchangePromises: Map<string, Promise<any>> = new Map();
 
 // Function to clear user exchange cache (useful when API keys are updated)
 export function clearUserExchangeCache(userId: string): void {
-  const cacheKey = `${userId}`;
-  userExchanges.delete(cacheKey);
+  for (const [key] of userExchanges) {
+    if (key.startsWith(`${userId}_`)) {
+      userExchanges.delete(key);
+    }
+  }
+  for (const [key] of userExchangePromises) {
+    if (key.startsWith(`${userId}_`)) {
+      userExchangePromises.delete(key);
+    }
+  }
   console.log(`Cleared exchange cache for user: ${userId}`);
 }
 
@@ -28,10 +38,21 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     return userExchanges.get(cacheKey);
   }
 
+  // Share ongoing exchange instantiation if another request already started it
+  const existingPromise = userExchangePromises.get(cacheKey);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
   // Clear any old cache entries for this user
   for (const [key] of userExchanges) {
-    if (key.startsWith(`${userId}_`)) {
+    if (key.startsWith(`${userId}_`) && key !== cacheKey) {
       userExchanges.delete(key);
+    }
+  }
+  for (const [key] of userExchangePromises) {
+    if (key.startsWith(`${userId}_`) && key !== cacheKey) {
+      userExchangePromises.delete(key);
     }
   }
 
@@ -67,22 +88,34 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     console.log('Using passphrase for exchange that requires it');
   }
 
-  const userExchange = new Klass(config);
+  const loadPromise = (async () => {
+    const userExchange = new Klass(config);
 
-  // Default market type (spot | swap)
-  const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
-  // @ts-ignore
-  userExchange.options = userExchange.options || {};
-  // @ts-ignore
-  userExchange.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
+    // Default market type (spot | swap)
+    const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase();
+    // @ts-ignore
+    userExchange.options = userExchange.options || {};
+    // @ts-ignore
+    userExchange.options.defaultType = MARKET_TYPE; // 'spot' | 'swap'
 
-  console.log('Loading markets for exchange...');
-  await userExchange.loadMarkets();
-  console.log('Markets loaded successfully, total:', Object.keys(userExchange.markets || {}).length);
-  
-  userExchanges.set(cacheKey, userExchange);
-  
-  return userExchange;
+    console.log('Loading markets for exchange...');
+    await userExchange.loadMarkets();
+    console.log('Markets loaded successfully, total:', Object.keys(userExchange.markets || {}).length);
+
+    userExchanges.set(cacheKey, userExchange);
+    return userExchange;
+  })();
+
+  userExchangePromises.set(cacheKey, loadPromise);
+
+  try {
+    return await loadPromise;
+  } catch (error) {
+    userExchanges.delete(cacheKey);
+    throw error;
+  } finally {
+    userExchangePromises.delete(cacheKey);
+  }
 }
 
 // Function to validate user credentials by testing API connection

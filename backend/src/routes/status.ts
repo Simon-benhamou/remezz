@@ -103,7 +103,36 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
       const ex = await ensureExchange();
       if (!ex) return null;
       return await Promise.race([
-        ex.fetchBalance(),
+        (async () => {
+          if (isBinanceUser && userId) {
+            try {
+              const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
+              const balance = await runExclusiveBalanceFetch(userId, 'USDT', () => ex.fetchBalance());
+              const total = Number(balance?.total?.USDT ?? 0);
+              const free = Number(balance?.free?.USDT ?? 0);
+              const locked = Number(balance?.used?.USDT ?? 0);
+              if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+                seedBalanceCache(userId, 'USDT', { total, free, locked });
+              }
+              return balance;
+            } catch (error) {
+              console.warn('⚠️ Failed exclusive balance fetch, falling back to direct REST:', error);
+            }
+          }
+          const direct = await ex.fetchBalance();
+          if (isBinanceUser && userId) {
+            try {
+              const { seedBalanceCache } = await import('../services/binanceWebSocket.js');
+              const total = Number(direct?.total?.USDT ?? 0);
+              const free = Number(direct?.free?.USDT ?? 0);
+              const locked = Number(direct?.used?.USDT ?? 0);
+              if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+                seedBalanceCache(userId, 'USDT', { total, free, locked });
+              }
+            } catch {}
+          }
+          return direct;
+        })(),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Balance timeout')), 8000))
       ]).catch(()=>null);
     })() : null,

@@ -49,7 +49,7 @@ export class LiveBroker implements Broker {
 
     if (userCredentials?.exchange === 'binance') {
       try {
-        const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
+        const { getBalanceFromWebSocket, subscribeToUserData, seedBalanceCache, runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
         await subscribeToUserData(this.userId, userCredentials.apiKey, userCredentials.apiSecret);
         const wsBalance = await getBalanceFromWebSocket(this.userId, 'USDT');
         if (wsBalance) {
@@ -62,13 +62,30 @@ export class LiveBroker implements Broker {
           console.log(`✅ [WebSocket] Balance fetched in broker - 0 weight`);
         } else {
           const ex = await this.getExchange();
-          b = await ex.fetchBalance();
+          b = await runExclusiveBalanceFetch(this.userId, 'USDT', () => ex.fetchBalance());
           console.log(`⚠️ [REST] Balance fetched in broker - 40 weight`);
+          try {
+            const total = Number(b?.total?.USDT ?? 0);
+            const free = Number(b?.free?.USDT ?? 0);
+            const locked = Number(b?.used?.USDT ?? 0);
+            if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+              seedBalanceCache(this.userId, 'USDT', { total, free, locked });
+            }
+          } catch {}
         }
       } catch (error) {
         console.warn('⚠️ WebSocket balance failed in broker, using REST:', error);
         const ex = await this.getExchange();
-        b = await ex.fetchBalance();
+        const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
+        b = await runExclusiveBalanceFetch(this.userId, 'USDT', () => ex.fetchBalance());
+        try {
+          const total = Number(b?.total?.USDT ?? 0);
+          const free = Number(b?.free?.USDT ?? 0);
+          const locked = Number(b?.used?.USDT ?? 0);
+          if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+            seedBalanceCache(this.userId, 'USDT', { total, free, locked });
+          }
+        } catch {}
       }
     } else {
       const ex = await this.getExchange();
@@ -362,16 +379,33 @@ export async function inspectExposure(symbol: string, userId?: string): Promise<
       let b: any;
       if (userId && userCredentials?.exchange === 'binance' && base === 'USDT') {
         try {
-          const { getBalanceFromWebSocket } = await import('../services/binanceWebSocket.js');
+          const { getBalanceFromWebSocket, seedBalanceCache, runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
           const wsBalance = await getBalanceFromWebSocket(userId, base);
           if (wsBalance) {
             b = { total: { [base]: wsBalance.total }, free: { [base]: wsBalance.free } };
             console.log(`✅ [WebSocket] Balance for ghost exposure - 0 weight`);
           } else {
-            b = await ex.fetchBalance();
+            b = await runExclusiveBalanceFetch(userId, base, () => ex.fetchBalance());
+            try {
+              const total = Number(b?.total?.[base] ?? 0);
+              const free = Number(b?.free?.[base] ?? 0);
+              const locked = Number(b?.used?.[base] ?? 0);
+              if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+                seedBalanceCache(userId, base, { total, free, locked });
+              }
+            } catch {}
           }
         } catch (error) {
-          b = await ex.fetchBalance();
+          const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
+          b = await runExclusiveBalanceFetch(userId, base, () => ex.fetchBalance());
+          try {
+            const total = Number(b?.total?.[base] ?? 0);
+            const free = Number(b?.free?.[base] ?? 0);
+            const locked = Number(b?.used?.[base] ?? 0);
+            if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+              seedBalanceCache(userId, base, { total, free, locked });
+            }
+          } catch {}
         }
       } else {
         b = await ex.fetchBalance();

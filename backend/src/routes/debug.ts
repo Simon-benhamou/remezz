@@ -160,9 +160,16 @@ router.post('/test-credentials', async (req, res) => {
     const exchange = new Klass(config);
 
     console.log('🚀 Testing balance fetch...');
-    
+
     // Test balance fetch with detailed logging
-    const balance = await exchange.fetchBalance();
+    let balance: any;
+    if ((exchange.id || '').toLowerCase() === 'binance') {
+      const { runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
+      const keyUser = req.user?.id || 'manual_debug';
+      balance = await runExclusiveBalanceFetch(keyUser, 'USDT', () => exchange.fetchBalance());
+    } else {
+      balance = await exchange.fetchBalance();
+    }
     
     console.log('✅ Balance fetch successful!');
     console.log('Balance keys:', Object.keys(balance || {}));
@@ -416,8 +423,20 @@ router.get('/test-balance', async (req: AuthenticatedRequest, res) => {
     try {
       const exchange = await getUserExchange(req.user!.id, credentials);
       console.log('Exchange instance created successfully');
-      
-      balance = await exchange.fetchBalance();
+      if ((credentials.exchange || '').toLowerCase() === 'binance') {
+        const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
+        balance = await runExclusiveBalanceFetch(req.user!.id, 'USDT', () => exchange.fetchBalance());
+        try {
+          const total = Number(balance?.total?.USDT ?? 0);
+          const free = Number(balance?.free?.USDT ?? 0);
+          const locked = Number(balance?.used?.USDT ?? 0);
+          if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+            seedBalanceCache(req.user!.id, 'USDT', { total, free, locked });
+          }
+        } catch {}
+      } else {
+        balance = await exchange.fetchBalance();
+      }
       console.log('Balance fetched successfully:', JSON.stringify(balance, null, 2));
     } catch (error: any) {
       balanceError = error.message || String(error);
@@ -852,8 +871,22 @@ router.get('/diagnose-apikeys', async (req: AuthenticatedRequest, res) => {
     
     try {
       const exchange = await getUserExchange(userId, credentials);
-      const balance = await exchange.fetchBalance();
-      
+      let balance: any;
+      if ((credentials.exchange || '').toLowerCase() === 'binance') {
+        const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
+        balance = await runExclusiveBalanceFetch(userId, 'USDT', () => exchange.fetchBalance());
+        try {
+          const total = Number(balance?.total?.USDT ?? 0);
+          const free = Number(balance?.free?.USDT ?? 0);
+          const locked = Number(balance?.used?.USDT ?? 0);
+          if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+            seedBalanceCache(userId, 'USDT', { total, free, locked });
+          }
+        } catch {}
+      } else {
+        balance = await exchange.fetchBalance();
+      }
+
       results.push({ 
         step: 'balance_check', 
         success: true, 

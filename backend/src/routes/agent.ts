@@ -25,6 +25,7 @@ export const router = Router();
 // Lightweight cache for /overview to improve dashboard/header refresh
 const OVERVIEW_TTL_MS = 3000;
 const overviewCache = new Map<string, { ts: number; data: any }>();
+const overviewPending = new Map<string, Promise<any>>();
 
 async function processSmartReselect(sessionId: string, res: Response) {
   try {
@@ -161,7 +162,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         let exchange: any = null;
         if (userCredentials.exchange === 'binance') {
           try {
-            const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
+            const { getBalanceFromWebSocket, subscribeToUserData, seedBalanceCache, runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
             await subscribeToUserData(req.user.id, userCredentials.apiKey, userCredentials.apiSecret);
             const wsBalance = await getBalanceFromWebSocket(req.user.id, 'USDT');
             if (wsBalance) {
@@ -173,13 +174,30 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
               console.log(`✅ [WebSocket] Balance fetched - 0 weight`);
             } else {
               exchange = await getUserExchange(req.user.id, userCredentials);
-              b = await exchange.fetchBalance();
+              b = await runExclusiveBalanceFetch(req.user.id, 'USDT', () => exchange.fetchBalance());
               console.log(`⚠️ [REST] Balance fetched - 40 weight (WebSocket not ready)`);
+              try {
+                const total = Number(b?.total?.USDT ?? 0);
+                const free = Number(b?.free?.USDT ?? 0);
+                const locked = Number(b?.used?.USDT ?? 0);
+                if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+                  seedBalanceCache(req.user.id, 'USDT', { total, free, locked });
+                }
+              } catch {}
             }
           } catch (error) {
             console.warn('⚠️ WebSocket balance failed, using REST:', error);
             exchange = await getUserExchange(req.user.id, userCredentials);
-            b = await exchange.fetchBalance();
+            const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
+            b = await runExclusiveBalanceFetch(req.user.id, 'USDT', () => exchange.fetchBalance());
+            try {
+              const total = Number(b?.total?.USDT ?? 0);
+              const free = Number(b?.free?.USDT ?? 0);
+              const locked = Number(b?.used?.USDT ?? 0);
+              if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+                seedBalanceCache(req.user.id, 'USDT', { total, free, locked });
+              }
+            } catch {}
           }
         } else {
           exchange = await getUserExchange(req.user.id, userCredentials);
@@ -733,144 +751,181 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       return res.json(c.data);
     }
   } catch {}
-  
-  const sessionWhere: any = { stoppedAt: null };
-  if (modeFilter) sessionWhere.mode = modeFilter;
-  if (!req.user?.isLegacy && req.user?.id) {
-    sessionWhere.userId = req.user.id;
-  }
-  const [actives, totalSessions] = await Promise.all([
-    prisma.agentSession.findMany({ where: sessionWhere, include: { kpi: true, positions: true } }),
-    prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
-  ]);
-  const symbols = actives.map(a => a.symbol);
-  const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.kpi?.aiCallsTotal || 0), 0);
-  const pnlUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
-  const capitalStartUsd = actives.reduce((sum, a)=> sum + Number(a.startBalanceUsd || 0), 0);
-  const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : 0;
-  
-  // Calculate global win rate across all agents (not average of individual win rates)
-  const totalWins = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.wins || 0), 0);
-  const totalTrades = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.trades || 0), 0);
-  const avgWinRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
-
-  // Get live exchange balance for authenticated users
-  let exchangeBalance: any = null;
-  if (!req.user?.isLegacy && req.user?.id && (modeFilter === 'live' || !modeFilter)) {
+  const pending = overviewPending.get(cacheKey);
+  if (pending) {
     try {
-      const userCredentials = await getUserCredentials(req.user.id);
-      if (userCredentials) {
-        // 🚀 WebSocket for Binance (0 weight)
-        let balance: any;
-        let exchange: any = null;
-        if (userCredentials.exchange === 'binance') {
-          try {
-            const { getBalanceFromWebSocket, subscribeToUserData } = await import('../services/binanceWebSocket.js');
-            await subscribeToUserData(req.user.id, userCredentials.apiKey, userCredentials.apiSecret);
-            const wsBalance = await getBalanceFromWebSocket(req.user.id, 'USDT');
-            if (wsBalance) {
-              balance = {
-                total: { USD: 0, USDT: wsBalance.total },
-                free: { USD: 0, USDT: wsBalance.free },
-                used: { USD: 0, USDT: wsBalance.locked }
-              };
-              console.log(`✅ [WebSocket] Balance fetched for dashboard - 0 weight`);
-            } else {
+      const data = await pending;
+      return res.json(data);
+    } catch (error) {
+      overviewPending.delete(cacheKey);
+      throw error;
+    }
+  }
+  const buildPromise = (async () => {
+    const sessionWhere: any = { stoppedAt: null };
+    if (modeFilter) sessionWhere.mode = modeFilter;
+    if (!req.user?.isLegacy && req.user?.id) {
+      sessionWhere.userId = req.user.id;
+    }
+    const [actives, totalSessions] = await Promise.all([
+      prisma.agentSession.findMany({ where: sessionWhere, include: { kpi: true, positions: true } }),
+      prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
+    ]);
+    const symbols = actives.map(a => a.symbol);
+    const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.kpi?.aiCallsTotal || 0), 0);
+    const pnlUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
+    const capitalStartUsd = actives.reduce((sum, a)=> sum + Number(a.startBalanceUsd || 0), 0);
+    const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : 0;
+
+    // Calculate global win rate across all agents (not average of individual win rates)
+    const totalWins = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.wins || 0), 0);
+    const totalTrades = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.trades || 0), 0);
+    const avgWinRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
+
+    // Get live exchange balance for authenticated users
+    let exchangeBalance: any = null;
+    if (!req.user?.isLegacy && req.user?.id && (modeFilter === 'live' || !modeFilter)) {
+      try {
+        const userCredentials = await getUserCredentials(req.user.id);
+        if (userCredentials) {
+          // 🚀 WebSocket for Binance (0 weight)
+          let balance: any;
+          let exchange: any = null;
+          if (userCredentials.exchange === 'binance') {
+            try {
+              const { getBalanceFromWebSocket, subscribeToUserData, seedBalanceCache, runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
+              await subscribeToUserData(req.user.id, userCredentials.apiKey, userCredentials.apiSecret);
+              const wsBalance = await getBalanceFromWebSocket(req.user.id, 'USDT');
+              if (wsBalance) {
+                balance = {
+                  total: { USD: 0, USDT: wsBalance.total },
+                  free: { USD: 0, USDT: wsBalance.free },
+                  used: { USD: 0, USDT: wsBalance.locked }
+                };
+                console.log(`✅ [WebSocket] Balance fetched for dashboard - 0 weight`);
+              } else {
+                exchange = await getUserExchange(req.user.id, userCredentials);
+                balance = await runExclusiveBalanceFetch(req.user.id, 'USDT', () => exchange.fetchBalance());
+                console.log(`⚠️ [REST] Balance fetched for dashboard - 40 weight`);
+                try {
+                  const total = Number(balance?.total?.USDT ?? 0);
+                  const free = Number(balance?.free?.USDT ?? 0);
+                  const locked = Number(balance?.used?.USDT ?? 0);
+                  if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+                    seedBalanceCache(req.user.id, 'USDT', { total, free, locked });
+                  }
+                } catch {}
+              }
+            } catch (error) {
+              console.warn('⚠️ WebSocket balance failed for dashboard, using REST:', error);
               exchange = await getUserExchange(req.user.id, userCredentials);
-              balance = await exchange.fetchBalance();
-              console.log(`⚠️ [REST] Balance fetched for dashboard - 40 weight`);
+              const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
+              balance = await runExclusiveBalanceFetch(req.user.id, 'USDT', () => exchange.fetchBalance());
+              try {
+                const total = Number(balance?.total?.USDT ?? 0);
+                const free = Number(balance?.free?.USDT ?? 0);
+                const locked = Number(balance?.used?.USDT ?? 0);
+                if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
+                  seedBalanceCache(req.user.id, 'USDT', { total, free, locked });
+                }
+              } catch {}
             }
-          } catch (error) {
-            console.warn('⚠️ WebSocket balance failed for dashboard, using REST:', error);
+          } else {
             exchange = await getUserExchange(req.user.id, userCredentials);
             balance = await exchange.fetchBalance();
           }
-        } else {
-          exchange = await getUserExchange(req.user.id, userCredentials);
-          balance = await exchange.fetchBalance();
+
+          // Extract USD balances (compatible with Crypto.com response)
+          const totalUsd = Number(balance?.total?.USD || 0) + Number(balance?.total?.USDT || 0);
+          const freeUsd = Number(balance?.free?.USD || 0) + Number(balance?.free?.USDT || 0);
+          const usedUsd = Number(balance?.used?.USD || 0);
+
+          exchangeBalance = {
+            totalUsd,
+            freeUsd,
+            usedUsd: usedUsd || Math.max(0, totalUsd - freeUsd),
+            currencies: Object.keys(balance?.total || {}),
+            lastUpdated: new Date().toISOString()
+          };
+
+          console.log(`📊 Live balance for user ${req.user.id}: $${totalUsd.toFixed(2)} USD`);
         }
-        
-        // Extract USD balances (compatible with Crypto.com response)
-        const totalUsd = Number(balance?.total?.USD || 0) + Number(balance?.total?.USDT || 0);
-        const freeUsd = Number(balance?.free?.USD || 0) + Number(balance?.free?.USDT || 0);
-        const usedUsd = Number(balance?.used?.USD || 0);
-        
-        exchangeBalance = {
-          totalUsd,
-          freeUsd,
-          usedUsd: usedUsd || Math.max(0, totalUsd - freeUsd),
-          currencies: Object.keys(balance?.total || {}),
+      } catch (error) {
+        console.error('Failed to fetch live exchange balance:', error);
+        // Don't fail the entire request, just log the error
+      }
+    }
+
+    // Get aggregated paper balance from ALL active paper sessions (derived from session KPIs)
+    let paperBalance: any = null;
+    if (modeFilter === 'paper' || !modeFilter) {
+      const paperSessions = actives.filter(session => session.mode === 'paper');
+      if (paperSessions.length > 0) {
+        const startSum = paperSessions.reduce((s, ps)=> s + Number(ps.startBalanceUsd || 0), 0);
+        const pnlSum = paperSessions.reduce((s, ps)=> s + Number(ps.kpi?.realizedPnlUsd || 0) + Number(ps.kpi?.unrealizedPnlUsd || 0), 0);
+        const eq = startSum + pnlSum;
+        paperBalance = {
+          equityUsd: eq,
+          freeUsd: eq,          // paper accounts are unconstrained; no reserved margin stored here
+          committedUsd: 0,
+          agentsCount: paperSessions.length,
           lastUpdated: new Date().toISOString()
         };
-        
-        console.log(`📊 Live balance for user ${req.user.id}: $${totalUsd.toFixed(2)} USD`);
+        console.log(`📊 Total Paper Balance (derived): $${eq.toFixed(2)} USD from ${paperSessions.length} agents`);
       }
-    } catch (error) {
-      console.error('Failed to fetch live exchange balance:', error);
-      // Don't fail the entire request, just log the error
     }
-  }
 
-  // Get aggregated paper balance from ALL active paper sessions (derived from session KPIs)
-  let paperBalance: any = null;
-  if (modeFilter === 'paper' || !modeFilter) {
-    const paperSessions = actives.filter(session => session.mode === 'paper');
-    if (paperSessions.length > 0) {
-      const startSum = paperSessions.reduce((s, ps)=> s + Number(ps.startBalanceUsd || 0), 0);
-      const pnlSum = paperSessions.reduce((s, ps)=> s + Number(ps.kpi?.realizedPnlUsd || 0) + Number(ps.kpi?.unrealizedPnlUsd || 0), 0);
-      const eq = startSum + pnlSum;
-      paperBalance = {
-        equityUsd: eq,
-        freeUsd: eq,          // paper accounts are unconstrained; no reserved margin stored here
-        committedUsd: 0,
-        agentsCount: paperSessions.length,
-        lastUpdated: new Date().toISOString()
+    // Format sessions data for frontend
+    const sessionsData = actives.map(session => {
+      // Get runtime state from AgentHub if available
+      const agent = AgentHub.get(session.id);
+      const agentState = (agent as any)?.state || 'UNKNOWN'; // Fix: use .state not .phase
+      const agentBias = (agent as any)?.bias || 'none';
+
+      return {
+        id: session.id,
+        symbol: session.symbol,
+        mode: session.mode,
+        state: agentState, // ✅ Now using correct state property
+        bias: agentBias,
+        aggressiveness: session.profileJson ? (session.profileJson as any)?.aggressiveness : 'conservative',
+        pnlUsd: Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0),
+        roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ? 
+          ((Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0)) / Number(session.startBalanceUsd)) * 100 : 0,
+        winRate: Number(session.kpi?.winRate || 0),
+        trades: Number((session.kpi?.stats as any)?.tradesTotal || 0),
+        createdAt: session.startedAt,
+        lastActivity: new Date().toISOString()
       };
-      console.log(`📊 Total Paper Balance (derived): $${eq.toFixed(2)} USD from ${paperSessions.length} agents`);
-    }
-  }
+    });
 
-  // Format sessions data for frontend
-  const sessionsData = actives.map(session => {
-    // Get runtime state from AgentHub if available
-    const agent = AgentHub.get(session.id);
-    const agentState = (agent as any)?.state || 'UNKNOWN'; // Fix: use .state not .phase
-    const agentBias = (agent as any)?.bias || 'none';
-    
-    return {
-      id: session.id,
-      symbol: session.symbol,
-      mode: session.mode,
-      state: agentState, // ✅ Now using correct state property
-      bias: agentBias,
-      aggressiveness: session.profileJson ? (session.profileJson as any)?.aggressiveness : 'conservative',
-      pnlUsd: Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0),
-      roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ? 
-        ((Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0)) / Number(session.startBalanceUsd)) * 100 : 0,
-      winRate: Number(session.kpi?.winRate || 0),
-      trades: Number((session.kpi?.stats as any)?.tradesTotal || 0),
-      createdAt: session.startedAt,
-      lastActivity: new Date().toISOString()
+    const payload = {
+      activeCount: actives.length,
+      sessionsCount: totalSessions,
+      symbols,
+      pnlUsd,
+      capitalStartUsd,
+      equityUsd: Number(capitalStartUsd) + Number(pnlUsd),
+      roiPct,
+      avgWinRate,
+      aiCallsTotal,
+      exchangeBalance,
+      paperBalance,
+      sessions: sessionsData, // ✅ Ajout des sessions dans la réponse
+      updatedAt: new Date().toISOString(),
     };
-  });
+    return payload;
+  })();
 
-  const payload = {
-    activeCount: actives.length,
-    sessionsCount: totalSessions,
-    symbols,
-    pnlUsd,
-    capitalStartUsd,
-    equityUsd: Number(capitalStartUsd) + Number(pnlUsd),
-    roiPct,
-    avgWinRate,
-    aiCallsTotal,
-    exchangeBalance,
-    paperBalance,
-    sessions: sessionsData, // ✅ Ajout des sessions dans la réponse
-    updatedAt: new Date().toISOString(),
-  };
-  try { overviewCache.set(cacheKey, { ts: Date.now(), data: payload }); } catch {}
-  res.json(payload);
+  overviewPending.set(cacheKey, buildPromise);
+
+  try {
+    const payload = await buildPromise;
+    try { overviewCache.set(cacheKey, { ts: Date.now(), data: payload }); } catch {}
+    res.json(payload);
+  } finally {
+    overviewPending.delete(cacheKey);
+  }
 });
 
 // Triggers log
