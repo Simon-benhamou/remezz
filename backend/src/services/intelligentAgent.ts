@@ -19,6 +19,7 @@ const mlPredictionCache = new Map<string, { confidence: number; prediction: stri
 const CACHE_DURATION_AI = 30 * 60 * 1000; // 30min cache IA (plus long)
 const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
 const CACHE_DURATION_ML = 15 * 60 * 1000; // 15min cache ML
+const waitFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // AUTO-DIRECTIONAL: Détection automatique du bias optimal (VERSION AGRESSIVE)
 function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 'short' | 'none'; confidence: number; reasoning: string } {
@@ -1997,46 +1998,40 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
   try {
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
-    // Pass sessionId as excludeSessionId to avoid self-conflict
-    let bestOpportunity = preset ?? await getBestIntelligentOpportunity(sessionId, { candidatesOverride: opts?.candidatesOverride });
     const testMode = !!opts?.testMode || (process.env.UNIT_TEST_MODE === 'true');
+    const maxAttemptsEnv = Number(process.env.SMART_AGENT_INIT_MAX_ATTEMPTS || 4);
+    const baseDelayEnv = Number(process.env.SMART_AGENT_INIT_RETRY_BASE_MS || 1500);
+    const maxDelayEnv = Number(process.env.SMART_AGENT_INIT_RETRY_MAX_MS || 12000);
+    const configuredAttempts = preset ? 1 : Math.max(1, Number.isFinite(maxAttemptsEnv) ? Math.trunc(maxAttemptsEnv) : 4);
+    const maxAttempts = testMode ? 1 : configuredAttempts;
+    const baseDelayMs = Math.max(250, Number.isFinite(baseDelayEnv) ? baseDelayEnv : 1500);
+    const maxDelayMs = Math.max(baseDelayMs, Number.isFinite(maxDelayEnv) ? maxDelayEnv : 12000);
+
+    let bestOpportunity: IntelligentAnalysis | null | undefined = preset ?? null;
+    if (!bestOpportunity) {
+      for (let attempt = 1; attempt <= maxAttempts && !bestOpportunity; attempt++) {
+        try {
+          bestOpportunity = await getBestIntelligentOpportunity(sessionId, { candidatesOverride: opts?.candidatesOverride });
+        } catch (error) {
+          console.warn(`⚠️ Attempt ${attempt} failed to fetch intelligent opportunity:`, error);
+          bestOpportunity = null;
+        }
+
+        if (!bestOpportunity && attempt < maxAttempts) {
+          const waitMs = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+          console.log(`⏳ No intelligent opportunity yet (attempt ${attempt}/${maxAttempts}) — retrying in ${(waitMs / 1000).toFixed(1)}s`);
+          await waitFor(waitMs);
+        }
+      }
+    }
+
     if (testMode) {
       // In test mode, only return selection decision (true if selected, false if none)
       return !!bestOpportunity;
     }
-    
+
     if (!bestOpportunity) {
-      console.log('💤 No valid opportunities found - creating session in sleep mode for 1h');
-      
-      // Create session in sleep mode with 1h scan interval (relaxed from 2h)
-      const sleepConfig = {
-        isIntelligent: true,
-        selectedAt: new Date().toISOString(),
-        analysis: null,
-        lastScan: new Date().toISOString(),
-        nextScanDue: new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(), // 1h sleep mode (was 2h)
-        minHoldHours: 0, // No minimum in sleep mode
-        strategy: 'sleep_mode_3h',
-        sleepMode: true,
-        sleepReason: 'No qualifying opportunities found'
-      };
-      
-      const sleepHistory = [{
-        timestamp: new Date().toISOString(),
-        action: 'intelligent_sleep',
-        reason: 'No qualifying opportunities found',
-        nextScan: sleepConfig.nextScanDue,
-        scanInterval: '2h'
-      }];
-      
-      console.log(`💤 Setting session ${sessionId} to sleep mode - next scan in 2h`);
-      
-      try { await markDecisionCancelled(sessionId); } catch (error) { console.warn('sleep_mode cancel decision failed:', error); }
-      await mergeSessionProfileJson(sessionId, sleepConfig);
-      await mergePlanContainer(sessionId, { intelligentHistory: clampHistory(sleepHistory) });
-      
-      console.log(`✅ Session ${sessionId} set to sleep mode for 2h`);
-      return true; // Still successful, but in sleep mode
+      throw new Error(`No intelligent opportunity available after ${maxAttempts} attempts for session ${sessionId}`);
     }
     
     // Enhanced conflict check with multi-agent support (Phase 2)

@@ -402,8 +402,8 @@ class BinanceWebSocketManager {
    * 0 weight vs fetchTicker (2 weight)
    */
   getTicker(symbol: string): BinanceTickerData | null {
-    // Format Binance: BTCUSDT (pas de slash, uppercase)
-    const binanceSymbol = symbol.replace('/', '').toUpperCase();
+    // Format Binance: BTCUSDT (pas de slash, no suffix)
+    const binanceSymbol = this.normalizeCacheSymbol(symbol);
     return this.tickersCache.get(binanceSymbol) || null;
   }
 
