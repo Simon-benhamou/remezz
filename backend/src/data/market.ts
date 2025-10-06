@@ -225,12 +225,13 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
           };
           console.log(`✅ [WebSocket] getTicker(${s}) - 0 weight`);
         } else {
-          ticker = await ex.fetchTicker(s);
-          console.log(`⚠️ [REST] getTicker(${s}) - 2 weight (WebSocket fallback)`);
+          // STRICT NO-REST for Binance to avoid bans
+          console.warn(`⚠️ [WebSocket] getTicker(${s}) cache miss - returning minimal placeholder (no REST)`);
+          ticker = { symbol: s, last: 0, bid: 0, ask: 0, percentage: 0, baseVolume: 0, quoteVolume: 0 } as any;
         }
       } catch (error) {
-        console.warn(`⚠️ WebSocket getTicker failed for ${s}, using REST:`, error);
-        ticker = await ex.fetchTicker(s);
+        console.warn(`⚠️ [WebSocket] getTicker error for ${s} - returning minimal placeholder (no REST):`, error);
+        ticker = { symbol: s, last: 0, bid: 0, ask: 0, percentage: 0, baseVolume: 0, quoteVolume: 0 } as any;
       }
     } else {
       ticker = await ex.fetchTicker(s);
@@ -292,21 +293,9 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
 
       if ((!wsData || wsData.length < normalizedLimit) && !binanceKlineSeeded.has(seedKey)) {
         let seedPromise = binanceKlineSeedPromises.get(seedKey);
-        if (!seedPromise) {
-          seedPromise = fetchOhlcvRest(symbol, tf, Math.max(normalizedLimit, 500), userId, userCredentials)
-            .finally(() => binanceKlineSeedPromises.delete(seedKey));
-          binanceKlineSeedPromises.set(seedKey, seedPromise);
-        }
-        try {
-          seededViaRest = await seedPromise;
-          if (seededViaRest && seededViaRest.length) {
-            seedKlinesFromWebSocket(symbol, tf, seededViaRest);
-            binanceKlineSeeded.add(seedKey);
-            wsData = getKlinesOhlcvFromWebSocket(symbol, tf);
-          }
-        } catch (error) {
-          console.warn(`Binance WebSocket seed failed for ${symbol} ${tf}:`, error);
-        }
+        // REST seeding disabled for Binance to avoid 418 bans.
+        // Rely on live WebSocket accumulation only.
+        // If insufficient bars, we'll pad/synthesize below.
       }
 
       if (wsData && wsData.length >= Math.min(normalizedLimit, 10)) {
@@ -315,17 +304,45 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
         maybeLogOhlcvDebug(symbol, tf, trimmed);
         return trimmed;
       }
-
-      if (seededViaRest && seededViaRest.length) {
-        const trimmed = seededViaRest.slice(-normalizedLimit);
-        maybeLogOhlcvDebug(symbol, tf, trimmed);
-        return trimmed;
+      // If we have some WS data but not enough, pad from the first candle
+      if (wsData && wsData.length > 0) {
+        const sorted = wsData.slice().sort((a, b) => Number(a[0]) - Number(b[0]));
+        const first = sorted[0];
+        const padCount = Math.max(0, normalizedLimit - sorted.length);
+        const intervalMs = tf.endsWith('m') ? Number(tf.replace('m','')) * 60_000 : tf.endsWith('h') ? Number(tf.replace('h','')) * 3_600_000 : 900_000;
+        const padded: number[][] = [];
+        for (let i = padCount; i > 0; i--) {
+          const ts = Number(first[0]) - i * intervalMs;
+          // Flatline padding to avoid NaN indicators
+          padded.push([ts, first[4], first[4], first[4], first[4], 0]);
+        }
+        const combined = [...padded, ...sorted].slice(-normalizedLimit);
+        maybeLogOhlcvDebug(symbol, tf, combined);
+        return combined;
       }
     } catch (error) {
       console.warn(`Binance WebSocket OHLCV fallback for ${symbol} ${tf}:`, error);
     }
   }
-
+  // Final fallback for Binance: synthesize stable OHLCV using last known ticker
+  if (preferBinanceWs) {
+    try {
+      // Use ticker from WS (may be null); fallback to 0
+      const { getTickerFromWebSocket } = await import('../services/binanceWebSocket.js');
+      const wsTicker = await getTickerFromWebSocket(symbol);
+      const last = Number(wsTicker?.last || 0);
+      const now = Date.now();
+      const intervalMs = tf.endsWith('m') ? Number(tf.replace('m','')) * 60_000 : tf.endsWith('h') ? Number(tf.replace('h','')) * 3_600_000 : 900_000;
+      const out: number[][] = [];
+      for (let i = normalizedLimit; i > 0; i--) {
+        const ts = now - i * intervalMs;
+        out.push([ts, last, last, last, last, 0]);
+      }
+      maybeLogOhlcvDebug(symbol, tf, out);
+      return out;
+    } catch {}
+  }
+  // Non-Binance exchanges: safe to use REST
   const restData = await fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials);
   maybeLogOhlcvDebug(symbol, tf, restData);
   return restData;

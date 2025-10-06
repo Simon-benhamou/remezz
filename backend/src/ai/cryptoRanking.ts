@@ -98,6 +98,44 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
     console.log('📊 ÉTAPE 1: Filtrage par volume des perpetuals...');
     
     const { EXCHANGE_ID } = getConfig();
+    const _isBinance = String(EXCHANGE_ID || '').toLowerCase().includes('binance');
+
+    // Binance fast-path: avoid REST entirely, use WebSocket mini-tickers
+    if (_isBinance) {
+      try {
+        const wsMap = await getAllTickersFromWebSocket();
+        if (!wsMap || wsMap.size === 0) throw new Error('WebSocket tickers not ready');
+        const volumeData: Array<{ symbol: string; volumeUsd: number; change24h: number; price: number }>= [];
+        for (const t of wsMap.values()) {
+          if (!t.symbol.endsWith('USDT')) continue; // keep USDT margined only
+          const base = t.symbol.replace('USDT','');
+          const unified = `${base}/USDT`;
+          const volumeUsd = Number(t.quoteVolume || 0);
+          const currentPrice = Number(t.last || 0);
+          const openPrice = Number(t.open || currentPrice);
+          const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : 0;
+          if (currentPrice > 0) {
+            volumeData.push({ symbol: unified, volumeUsd, change24h: realChange24h, price: currentPrice });
+          }
+        }
+        const MIN_VOLUME_USD = 100_000;
+        const qualified = volumeData.filter(x => x.volumeUsd >= MIN_VOLUME_USD);
+        qualified.sort((a,b)=> b.volumeUsd - a.volumeUsd);
+        const top50 = qualified.slice(0, 50);
+        console.log(`✅ Binance WS volume filter: ${top50.length} symbols`);
+        return top50.map((crypto, index) => ({
+          symbol: crypto.symbol,
+          volumeUsd24h: crypto.volumeUsd,
+          change24h: crypto.change24h,
+          price: crypto.price,
+          volumeRank: index + 1
+        }));
+      } catch (error) {
+        console.warn('⚠️ Binance WS volume scan failed, fallback to majors list:', error);
+        const majors = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT','XRP/USDT'];
+        return majors.map((s, i) => ({ symbol: s, volumeUsd24h: 0, change24h: 0, price: 0, volumeRank: i+1 }));
+      }
+    }
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
     
     if (!ExchangeClass) {
@@ -321,13 +359,17 @@ export async function rankCryptosWithAI(
     console.log(`✅ Built ${validSnapshots.length} technical snapshots`);
     
     // Lightweight prefilter (liquidity + minimal momentum)
-    const minimallyTradable = validSnapshots.filter(s => {
+    let minimallyTradable = validSnapshots.filter(s => {
       const vma = Number(s!.technical.volumeMA || 0);
       const vr = vma > 0 ? Number((s!.technical.volume / vma)) : 0;
       const adx = Number(s!.technical.adx || 0);
       const atrPct = Number(s!.technical.atrPct || 0);
       return vr >= 0.5 && adx >= 12 && atrPct >= 0.2; // keep only minimally tradable
     });
+    if (minimallyTradable.length === 0) {
+      console.warn('⚠️ Prefilter removed all candidates; proceeding without prefilter to avoid empty ranking.');
+      minimallyTradable = validSnapshots as any;
+    }
 
     // Prepare data for AI prompt
     const aiInput = minimallyTradable.map(s => {

@@ -77,6 +77,8 @@ class BinanceWebSocketManager {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
   private reconnectDelay = 5000; // 5 secondes
+  private pingTimer: NodeJS.Timeout | null = null;
+  private shuttingDown = false;
   
   // Cache en mémoire pour les données temps réel
   private tickersCache = new Map<string, BinanceTickerData>();
@@ -173,6 +175,7 @@ class BinanceWebSocketManager {
         console.log('✅ Binance WebSocket connected');
         this.isConnected = true;
         this.isConnecting = false;
+        this.shuttingDown = false;
         this.reconnectAttempts = 0;
         this.activeStreams.clear();
         
@@ -199,13 +202,19 @@ class BinanceWebSocketManager {
         this.isConnected = false;
         this.isConnecting = false;
         this.activeStreams.clear();
-        this.scheduleReconnect();
+        if (this.pingTimer) {
+          clearInterval(this.pingTimer);
+          this.pingTimer = null;
+        }
+        if (!this.shuttingDown) {
+          this.scheduleReconnect();
+        }
       });
 
       // Ping/Pong pour garder la connexion alive
-      setInterval(() => {
+      this.pingTimer = setInterval(() => {
         if (this.ws && this.isConnected) {
-          this.ws.ping();
+          try { this.ws.ping(); } catch {}
         }
       }, 30000); // Ping toutes les 30 secondes
 
@@ -444,10 +453,15 @@ class BinanceWebSocketManager {
    */
   close(): void {
     console.log('🔌 Closing Binance WebSocket...');
+    this.shuttingDown = true;
     
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
 
     if (this.ws) {
@@ -460,6 +474,11 @@ class BinanceWebSocketManager {
     this.activeStreams.clear();
     this.tickersCache.clear();
     this.klinesCache.clear();
+    // Close any user data streams as well
+    for (const [userId, stream] of this.userDataStreams.entries()) {
+      try { stream.ws?.close(); } catch {}
+      this.userDataStreams.delete(userId);
+    }
   }
 
   seedKlines(symbol: string, interval: string, ohlcv: number[][]): void {
