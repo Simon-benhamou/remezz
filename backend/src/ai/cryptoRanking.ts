@@ -11,7 +11,7 @@ import { buildTechSnapshot } from './tech.js';
 import { llmJSON } from './llm.js';
 import { getConfig } from '../utils/env.js';
 import ccxt from 'ccxt';
-import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId, waitForWsHealthy } from '../services/binanceWebSocket.js';
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
@@ -103,6 +103,8 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
     // Binance fast-path: avoid REST entirely, use WebSocket mini-tickers
     if (_isBinance) {
       try {
+        // Stronger warm-up: wait up to 6s for !ticker@arr to fill
+        await waitForWsHealthy(6000);
         let wsMap = await getAllTickersFromWebSocket();
         // Small warm-up wait for WS cache
         if (!wsMap || wsMap.size === 0) {

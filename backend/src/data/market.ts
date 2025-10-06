@@ -207,8 +207,17 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
     const exchangeId = String((ex as any)?.id || '').toLowerCase();
     if (exchangeId.includes('binance')) {
       try {
-        const { getTickerFromWebSocket } = await import('../services/binanceWebSocket.js');
-        const wsTicker = await getTickerFromWebSocket(s);
+        const { getTickerFromWebSocket, waitForWsHealthy } = await import('../services/binanceWebSocket.js');
+        // Give a short chance to WS to be ready before returning placeholders
+        await waitForWsHealthy(2000);
+        let wsTicker = await getTickerFromWebSocket(s);
+        if (!wsTicker) {
+          for (let i = 0; i < 6; i++) { // up to ~1.2s extra
+            await new Promise(r => setTimeout(r, 200));
+            wsTicker = await getTickerFromWebSocket(s);
+            if (wsTicker) break;
+          }
+        }
         if (wsTicker) {
           ticker = {
             symbol: s,

@@ -112,24 +112,10 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     let smartInitPromise: Promise<boolean> | null = null;
     let shouldActivate = true;
     if (isSmartAgent && process.env.UNIT_TEST_MODE !== 'true') {
-      console.log('🎯 Creating Auto-Select Agent - scanning for best opportunity...');
-      try {
-        prefetchedOpportunity = await getBestIntelligentOpportunity();
-        if (prefetchedOpportunity?.symbol) {
-          symbol = prefetchedOpportunity.symbol;
-          console.log(`✅ Prefetched best symbol: ${symbol}`);
-        } else {
-          // No confident symbol right now: do NOT fall back to trading
-          // Use a placeholder symbol for DB visibility; skip activation
-          symbol = symbol || 'SMART/SLEEP';
-          shouldActivate = false; // defer activation; session will start in sleep mode via intelligent initializer
-        }
-      } catch (error) {
-        console.warn('⚠️ Prefetch intelligent opportunity failed:', error);
-        // As above, set a placeholder symbol but defer activation
-        symbol = symbol || 'SMART/SLEEP';
-        shouldActivate = false;
-      }
+      // Defer any symbol selection to the intelligent initializer (with WS warm-up)
+      // This avoids cold-start bias and majors fallback
+      symbol = symbol || 'SMART/SLEEP';
+      shouldActivate = false;
     } else {
       // Ensure symbol is provided for non-smart agents
       if (!symbol && process.env.RANK_ON_START === 'true') {
