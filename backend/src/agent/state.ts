@@ -3952,6 +3952,35 @@ export class ReboundRejectionAgent {
         ? (this as any).getDiagnosticSnapshot.bind(this)
         : async () => buildTechSnapshot(this.profile?.symbol || '');
       const snap = await snapshotFetcher();
+      // Guard: if market data is not ready (cold WS or synthetic), avoid incoherent diagnostics
+      const vol = Number((snap as any)?.volume || 0);
+      const volMA = Number((snap as any)?.volumeMA || 0);
+      const lastPx = Number((snap as any)?.last || 0);
+      const dataReady = lastPx > 0 && (vol > 0 || volMA > 0);
+      if (!dataReady) {
+        return {
+          canTrade: false,
+          reason: 'waiting_for_market_data',
+          checks: {},
+          summary: { totalChecks: 0, passed: 0, failed: 0, partial: 0, rejected: 0 },
+          trigger: {
+            entryReady: false,
+            phase: 'data_unavailable',
+            bias: this.plan?.bias || 'none',
+            price: lastPx,
+            zone: this.plan?.zone ? { ...this.plan.zone } : null,
+            inZone: false,
+            confirmationOk: false,
+            momentumOk: false,
+            qualityOk: false,
+            profitOk: false,
+            tp1ProfitPct: 0,
+            minProfitPct: (await import('../utils/env.js')).getConfig().MIN_TRADE_PROFIT_PCT,
+            dir: this.plan?.bias === 'short' ? -1 : 1,
+          },
+          timestamp: Date.now()
+        };
+      }
       const canTrade = this.canTradeNow(snap);
       const checks = this.getDiagnosticChecks(snap);
       const summary = this.getDiagnosticSummary(checks);

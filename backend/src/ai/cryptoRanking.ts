@@ -103,7 +103,15 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
     // Binance fast-path: avoid REST entirely, use WebSocket mini-tickers
     if (_isBinance) {
       try {
-        const wsMap = await getAllTickersFromWebSocket();
+        let wsMap = await getAllTickersFromWebSocket();
+        // Small warm-up wait for WS cache
+        if (!wsMap || wsMap.size === 0) {
+          for (let i = 0; i < 6; i++) { // up to ~3s
+            await new Promise(r => setTimeout(r, 500));
+            wsMap = await getAllTickersFromWebSocket();
+            if (wsMap && wsMap.size > 0) break;
+          }
+        }
         if (!wsMap || wsMap.size === 0) throw new Error('WebSocket tickers not ready');
         const volumeData: Array<{ symbol: string; volumeUsd: number; change24h: number; price: number }>= [];
         for (const t of wsMap.values()) {

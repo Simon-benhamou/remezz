@@ -703,6 +703,25 @@ export function getBinanceWebSocket(): BinanceWebSocketManager {
   return binanceWsManager;
 }
 
+/**
+ * Wait until the Binance WS cache is healthy (tickers available and recent)
+ * Returns true if healthy within timeout, false otherwise.
+ */
+export async function waitForWsHealthy(timeoutMs: number = 4000): Promise<boolean> {
+  const ws = getBinanceWebSocket();
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (ws.isHealthy()) {
+        const map = ws.getAllTickers();
+        if (map && map.size > 0) return true;
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return false;
+}
+
 export async function runExclusiveBalanceFetch<T>(userId: string, asset: string, fetcher: () => Promise<T>): Promise<T> {
   const key = `${userId}_${asset.toUpperCase()}`;
   const existing = balanceFetchPromises.get(key);

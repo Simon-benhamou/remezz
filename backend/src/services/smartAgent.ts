@@ -8,6 +8,7 @@ import {
   type IntelligentAnalysis 
 } from './intelligentAgent.js';
 import { normalizePlanContainer } from './planStore.js';
+import { waitForWsHealthy } from './binanceWebSocket.js';
 
 interface SmartConfig {
   minHoldDuration: number;
@@ -123,6 +124,11 @@ export async function initializeIntelligentSmartAgent(sessionId: string, preset?
   console.log(`🎯 Initializing Auto-Select Agent for session ${sessionId}...`);
   
   try {
+    // Warm-up: give WS a short time to populate tickers to avoid cold-start bias
+    try {
+      const ok = await waitForWsHealthy(4000);
+      if (!ok) console.warn('⚠️ WS warm-up timed out; continuing with best effort');
+    } catch {}
     // Pass sessionId as excludeSessionId to avoid self-conflict
     const success = await initializeIntelligentAgent(sessionId, preset);
     
