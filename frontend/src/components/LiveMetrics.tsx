@@ -20,16 +20,18 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate }: Props
     );
   }
 
-  // Extract data from ticker or use fallback values
-  const currentPrice = price || ticker?.last || 0;
-  const change24h = ticker?.change || 0;
-  const percentage24h = (ticker?.percentage || 0) * 100; // Convert to percentage (0.07 → 7)
-  const high24h = ticker?.high || 0;
-  const low24h = ticker?.low || 0;
-  const volume24h = ticker?.baseVolume || 0;
-  const quoteVolume24h = ticker?.quoteVolume || 0;
-  const bid = ticker?.bid || 0;
-  const ask = ticker?.ask || 0;
+  // Extract data from ticker or use fallback values (Binance WS: percentage is already in %)
+  const currentPrice = price || Number(ticker?.last || 0);
+  const openPrice = Number(ticker?.open || 0);
+  const computedChange = (currentPrice && openPrice) ? (currentPrice - openPrice) : 0;
+  const change24h = Number(ticker?.change ?? computedChange ?? 0);
+  const percentage24h = Number(ticker?.percentage ?? (openPrice ? ((currentPrice - openPrice) / openPrice) * 100 : 0));
+  const high24h = Number(ticker?.high || 0);
+  const low24h = Number(ticker?.low || 0);
+  const volume24h = Number(ticker?.baseVolume || 0);
+  const quoteVolume24h = Number(ticker?.quoteVolume || 0);
+  const bid = Number(ticker?.bid || 0);
+  const ask = Number(ticker?.ask || 0);
   const spread = bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : 0;
 
   // Format large numbers
@@ -50,9 +52,19 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate }: Props
   const changeColor = isPositive ? '#3f8600' : '#cf1322';
   const changeIcon = isPositive ? <ArrowUpOutlined /> : <ArrowDownOutlined />;
 
+  // If ticker is present but clearly a placeholder (WS warming), show a warm-up card instead of zeros
+  const isWarming = ticker && (currentPrice === 0 || (volume24h === 0 && quoteVolume24h === 0));
+
   return (
     <Card size="small" style={{ marginBottom: 16 }}>
       <Row gutter={16}>
+        {isWarming && (
+          <Col span={24}>
+            <div style={{ textAlign: 'center', color: '#999', padding: 4 }}>
+              Binance WebSocket warming up… live metrics will appear shortly.
+            </div>
+          </Col>
+        )}
         {/* Symbol & Price */}
         <Col xs={12} sm={6} md={4}>
           <div style={{ textAlign: 'center' }}>

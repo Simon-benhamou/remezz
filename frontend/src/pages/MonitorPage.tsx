@@ -144,6 +144,15 @@ export default function MonitorPage(){
     try {
       const tickerData = await api.getTicker(sym);
       setTicker(tickerData);
+      // Quick warm-up retry: if placeholder (last=0 and volumes=0), retry shortly
+      const last = Number((tickerData as any)?.last || 0);
+      const baseVol = Number((tickerData as any)?.baseVolume || 0);
+      const quoteVol = Number((tickerData as any)?.quoteVolume || 0);
+      if (last === 0 || (baseVol === 0 && quoteVol === 0)) {
+        setTimeout(async () => {
+          try { const t2 = await api.getTicker(sym); setTicker(t2); } catch {}
+        }, 1500);
+      }
     } catch (err) {
       console.error('Failed to load ticker:', err);
     }
