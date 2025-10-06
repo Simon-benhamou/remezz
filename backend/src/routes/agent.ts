@@ -835,10 +835,10 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
             balance = await exchange.fetchBalance();
           }
 
-          // Extract USD balances (compatible with Crypto.com response)
-          const totalUsd = Number(balance?.total?.USD || 0) + Number(balance?.total?.USDT || 0);
-          const freeUsd = Number(balance?.free?.USD || 0) + Number(balance?.free?.USDT || 0);
-          const usedUsd = Number(balance?.used?.USD || 0);
+          // Extract USD balances (compatible with Crypto.com response) - now includes USDC
+          const totalUsd = Number(balance?.total?.USD || 0) + Number(balance?.total?.USDT || 0) + Number(balance?.total?.USDC || 0);
+          const freeUsd = Number(balance?.free?.USD || 0) + Number(balance?.free?.USDT || 0) + Number(balance?.free?.USDC || 0);
+          const usedUsd = Number(balance?.used?.USD || 0) + Number(balance?.used?.USDT || 0) + Number(balance?.used?.USDC || 0);
 
           exchangeBalance = {
             totalUsd,
