@@ -9,11 +9,33 @@ const GROK_DAILY: Map<string, number> = new Map();
 const ANALYSIS_CACHE = new Map<string,{ ts:number, data:any }>();
 const ANALYSIS_TTL = Number(process.env.ANALYSIS_TTL_MIN || 360) * 60 * 1000;
 export async function fullAnalysis(symbol: string) {
-  // technical snapshot
+  // technical snapshot (15m)
   const technical = await buildTechSnapshot(symbol);
   const hit = ANALYSIS_CACHE.get(symbol);
   const now = Date.now();
   if (hit && now - hit.ts < ANALYSIS_TTL) return hit.data;
+
+  // Data readiness guard: avoid mixing invalid 15m with valid 1h and producing incoherent output
+  const vol = Number((technical as any)?.volume || 0);
+  const volMA = Number((technical as any)?.volumeMA || 0);
+  const lastPx = Number((technical as any)?.last || 0);
+  const dataReady = lastPx > 0 && (vol > 0 || volMA > 0);
+  if (!dataReady) {
+    const out = {
+      symbol,
+      technical,
+      indicators: null,
+      sentiment: null,
+      news: null,
+      ticker: null,
+      sentimentSources: [],
+      projection: null,
+      dataReady: false,
+      reason: 'waiting_for_market_data'
+    } as any;
+    ANALYSIS_CACHE.set(symbol, { ts: now, data: out });
+    return out;
+  }
 
 
   // extra indicators (different timeframes if needed)
