@@ -275,46 +275,69 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     if (isSmartAgent) {
       console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
       try {
-        smartInitPromise = initializeIntelligentSmartAgent(s.id, prefetchedOpportunity)
-          .then((success) => {
-            if (success) {
-              console.log(`✅ Auto-Select Agent ${s.id} initialized successfully (async)`);
-              // If we deferred activation and we found an opportunity, activate now with the selected symbol
+        const initTimeoutMs = Math.max(4000, Number(process.env.SMART_AGENT_INIT_RESPONSE_TIMEOUT_MS || 8000));
+        const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+        const runSmartInit = async () => {
+          const success = await initializeIntelligentSmartAgent(s.id, prefetchedOpportunity)
+            .catch((error) => {
+              console.error(`❌ Auto-Select Agent ${s.id} initialization error:`, error);
+              return false;
+            });
+          if (success) {
+            console.log(`✅ Auto-Select Agent ${s.id} initialized successfully`);
+            const updated = await prisma.agentSession.findUnique({ where: { id: s.id } }).catch(() => null);
+            if (updated?.symbol) {
+              symbol = updated.symbol;
               if (!shouldActivate) {
-                prisma.agentSession.findUnique({ where: { id: s.id } }).then(async (updated) => {
-                  const sym = updated?.symbol;
-                  if (sym) {
-                    await AgentHub.activate(s.id, {
-                      symbol: sym,
-                      mode,
-                      maxLeverage: Math.min(10, Math.max(1, body.maxLeverage ?? 4)),
-                      riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
-                      dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
-                      timestamp: new Date().toISOString(),
-                      startBalanceUsd: startBal,
-                      budgetFraction,
-                      aggressiveness: (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
-                        ? (body.aggressiveness as any)
-                        : 'reactive',
-                      userId: req.user!.id,
-                      sizingMode: ((body as any).sizingMode === 'budget' || (body as any).sizingMode === 'risk')
-                        ? (body as any).sizingMode
-                        : (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget'),
-                      dynamicLeverage: (body as any).dynamicLeverage !== false,
-                      minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
-                    } as any).catch(()=>{});
-                  }
-                }).catch(()=>{});
+                try {
+                  await AgentHub.activate(s.id, {
+                    symbol,
+                    mode,
+                    maxLeverage: Math.min(10, Math.max(1, body.maxLeverage ?? 4)),
+                    riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
+                    dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
+                    timestamp: new Date().toISOString(),
+                    startBalanceUsd: startBal,
+                    budgetFraction,
+                    aggressiveness: (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
+                      ? (body.aggressiveness as any)
+                      : 'reactive',
+                    userId: req.user!.id,
+                    sizingMode: ((body as any).sizingMode === 'budget' || (body as any).sizingMode === 'risk')
+                      ? (body as any).sizingMode
+                      : (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget'),
+                    dynamicLeverage: (body as any).dynamicLeverage !== false,
+                    minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
+                  } as any).catch(()=>{});
+                } catch (err) {
+                  console.warn(`⚠️ Auto-activation after smart init failed for ${s.id}:`, err);
+                }
               }
-            } else {
-              console.warn(`⚠️ Auto-Select Agent ${s.id} initialization returned false`);
             }
-            return success;
-          })
-          .catch((error) => {
-            console.error(`❌ Auto-Select Agent ${s.id} initialization error:`, error);
-            return false;
-          });
+          } else {
+            console.warn(`⚠️ Auto-Select Agent ${s.id} initialization returned false`);
+          }
+          return success;
+        };
+
+        smartInitPromise = runSmartInit();
+
+        const initResult = await Promise.race([
+          smartInitPromise,
+          sleep(initTimeoutMs).then(() => 'timeout')
+        ]);
+
+        if (initResult === 'timeout') {
+          console.log(`⌛ Auto-Select initialization for ${s.id} still running (timeout ${initTimeoutMs}ms)`);
+        } else if (initResult === false) {
+          console.warn(`⚠️ Auto-Select initialization failed for ${s.id}`);
+        } else {
+          const updated = await prisma.agentSession.findUnique({ where: { id: s.id } }).catch(() => null);
+          if (updated) {
+            Object.assign(s, updated);
+          }
+        }
       } catch (error) {
         console.error(`❌ Auto-Select Agent ${s.id} initialization scheduling error:`, error);
       }
@@ -322,7 +345,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     }
 
     // Respond with the session (now with selected symbol if Auto-Select succeeded)
-    res.json(s);
+    res.json(isSmartAgent ? { ...s, initPending: Boolean(s.symbol === 'SMART/SLEEP') } : s);
 
     // Continue lighter background work
     setTimeout(async () => {

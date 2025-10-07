@@ -311,6 +311,14 @@ async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason:
     } catch (err) {
       console.warn(`Market data priming failed for ${sessionId}:`, err);
     }
+
+    try {
+      if (agent && typeof agent.onTick === 'function') {
+        await agent.onTick();
+      }
+    } catch (err) {
+      console.warn(`Initial onTick priming failed for ${sessionId}:`, err);
+    }
   } catch (error) {
     console.error(`❌ Failed to refresh plan for ${sessionId}:`, error);
   }
