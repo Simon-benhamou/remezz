@@ -45,6 +45,9 @@ export type Cfg = {
   ENTRY_SHORT_MIN_RSI: number;
   ENTRY_LONG_MIN_ADX: number;
   ENTRY_LONG_MAX_RSI: number;
+  // Market data validation thresholds
+  WS_MAX_TIMESTAMP_DRIFT_MS: number;   // reject WS frames if |ts_recv - ts_frame| exceeds this
+  MARKET_STALE_THRESHOLD_MS: number;   // mark data stale when older than this
   // Provider routing
   USE_GROK_FOR_ANALYSIS: boolean;
   USE_GROK_FOR_STRATEGY: boolean;
@@ -278,6 +281,8 @@ export function getConfig(): Cfg {
     ENTRY_SHORT_MIN_RSI: Number(e.ENTRY_SHORT_MIN_RSI || "45"),
     ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "4"),
     ENTRY_LONG_MAX_RSI: Number(e.ENTRY_LONG_MAX_RSI || "65"),
+    WS_MAX_TIMESTAMP_DRIFT_MS: Number(e.WS_MAX_TIMESTAMP_DRIFT_MS || "5000"),
+    MARKET_STALE_THRESHOLD_MS: Number(e.MARKET_STALE_THRESHOLD_MS || "12000"),
     USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
     USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
     USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",

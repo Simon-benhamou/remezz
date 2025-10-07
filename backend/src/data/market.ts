@@ -3,7 +3,8 @@ import { ema, rsi, atr } from './indicators.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 import { getBinanceWebSocket, getTickerFromWebSocket, seedKlinesFromWebSocket, getKlinesOhlcvFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
-import { recordRestFallback, recordInvalidTicker } from '../monitor/marketMetrics.js';
+import { recordMarketFrame, recordRestFallback, setFallbackState } from '../monitor/marketMetrics.js';
+import { evaluateTickerFrame } from './tickerValidation.js';
 
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
@@ -43,20 +44,6 @@ async function populateBidAskFromOrderBook(ex: any, symbol: string, ticker: any)
   } catch (error) {
     console.warn(`Failed order book fallback for ${symbol}:`, error);
   }
-}
-
-function validateTicker(ticker: any): boolean {
-  if (!ticker) return false;
-  const hasLast = Number.isFinite(ticker.last) && ticker.last > 0;
-  const hasBid = Number.isFinite(ticker.bid) && ticker.bid > 0;
-  const hasAsk = Number.isFinite(ticker.ask) && ticker.ask > 0;
-  const withinBounds = Number.isFinite(ticker.low) && Number.isFinite(ticker.high)
-    ? ticker.last >= ticker.low && ticker.last <= ticker.high
-    : true;
-  const bidAskOrder = (!Number.isFinite(ticker.bid) || !Number.isFinite(ticker.ask)) || ticker.bid <= ticker.ask;
-  const volumeValid = (!Number.isFinite(ticker.baseVolume) || ticker.baseVolume >= 0) &&
-    (!Number.isFinite(ticker.quoteVolume) || ticker.quoteVolume >= 0);
-  return hasLast && hasBid && hasAsk && withinBounds && bidAskOrder && volumeValid;
 }
 
 function isBinanceExchange(id?: string | null): boolean {
@@ -205,11 +192,19 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       const wsTicker = await getTickerFromWebSocket(symbol);
       if (wsTicker) {
         const adapted = adaptBinanceTickerToCcxt(symbol, wsTicker);
-        if (validateTicker(adapted)) {
+        const validation = evaluateTickerFrame({
+          symbol,
+          frame: adapted,
+          source: 'WS',
+          receivedAt: now,
+          expectedSymbolId: toBinanceSymbolId(symbol),
+        });
+        if (validation.status === 'accepted') {
           tickerCache.set(cacheKey, { data: adapted, timestamp: now });
           return adapted;
         }
-        recordInvalidTicker(symbol, { source: adapted?.info?.symbol || adapted.symbol, bid: adapted.bid, ask: adapted.ask, last: adapted.last });
+        setFallbackState(symbol, true, `ws_validation_${validation.ruleId || 'failed'}`, { increment: false });
+        console.warn(`⚠️ WS ticker rejected post-adaptation for ${symbol}: ${validation.ruleId}`);
       }
     } catch (error) {
       console.warn(`Binance WebSocket ticker fallback for ${symbol}:`, error);
@@ -337,13 +332,42 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       ticker.open = toNumber(ticker.open) ?? pickFirstNumber(ticker.info?.open, ticker.info?.openPrice) ?? ticker.open;
       ticker.percentage = toNumber(ticker.percentage) ?? pickFirstNumber(ticker.info?.percentage, ticker.info?.priceChangePercent) ?? ticker.percentage;
 
-      if (!validateTicker(ticker)) {
-        recordInvalidTicker(s, { source: ticker?.info?.symbol || ticker.symbol, bid: ticker.bid, ask: ticker.ask, last: ticker.last });
-        if (cached?.data && validateTicker(cached.data)) {
-          console.warn(`⚠️ Returning cached ticker for ${symbol} due to invalid live frame`);
-          return cached.data;
+      const validation = evaluateTickerFrame({
+        symbol: s,
+        frame: ticker,
+        source: 'REST',
+        receivedAt: now,
+        expectedSymbolId: toBinanceSymbolId(s),
+      });
+
+      recordMarketFrame({
+        symbol: s,
+        displaySymbol: s,
+        source: 'REST',
+        status: validation.status,
+        ruleId: validation.ruleId,
+        receivedTs: now,
+        eventTs: validation.timestamp,
+        dataAgeMs: validation.dataAgeMs,
+        expectedSymbolId: validation.expectedSymbolId,
+        rawFrame: ticker,
+      });
+
+      if (validation.status !== 'accepted') {
+        if (cached?.data) {
+          const cachedValidation = evaluateTickerFrame({
+            symbol: symbol,
+            frame: cached.data,
+            source: 'REST',
+            receivedAt: now,
+            expectedSymbolId: toBinanceSymbolId(symbol),
+          });
+          if (cachedValidation.status === 'accepted') {
+            console.warn(`⚠️ Returning cached ticker for ${symbol} due to invalid REST frame (${validation.ruleId})`);
+            return cached.data;
+          }
         }
-        throw new Error(`invalid_ticker_${symbol}`);
+        throw new Error(`invalid_ticker_${symbol}_${validation.ruleId || 'unknown'}`);
       }
     }
 

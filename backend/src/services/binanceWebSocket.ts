@@ -12,7 +12,8 @@
 import WebSocket from 'ws';
 import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
-import { recordWsFrame, recordWsReconnect } from '../monitor/marketMetrics.js';
+import { evaluateTickerFrame } from '../data/tickerValidation.js';
+import { recordMarketFrame, recordWsReconnect, setFallbackState, updateWsConnectionState } from '../monitor/marketMetrics.js';
 
 export interface BinanceTickerData {
   symbol: string;
@@ -26,6 +27,9 @@ export interface BinanceTickerData {
   low: number;
   open: number;
   timestamp: number;
+  receivedAt?: number;
+  dataAgeMs?: number;
+  stale?: boolean;
 }
 
 export interface BinanceKlineData {
@@ -97,6 +101,7 @@ class BinanceWebSocketManager {
   
   private isConnecting = false;
   private isConnected = false;
+  private lastHealthy = false;
   
   // Streams actifs
   private activeStreams = new Set<string>();
@@ -180,6 +185,8 @@ class BinanceWebSocketManager {
         this.reconnectAttempts = 0;
         this.activeStreams.clear();
         recordWsReconnect('global');
+         this.lastHealthy = false;
+         updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
         
         // Subscribe aux streams par défaut
         this.subscribeToAllTickers();
@@ -197,6 +204,11 @@ class BinanceWebSocketManager {
 
       this.ws.on('error', (error) => {
         console.error('❌ Binance WebSocket error:', error.message);
+        updateWsConnectionState({
+          connected: this.isConnected,
+          healthy: false,
+          reason: `ws_error:${error.message}`,
+        });
       });
 
       this.ws.on('close', () => {
@@ -204,6 +216,8 @@ class BinanceWebSocketManager {
         this.isConnected = false;
         this.isConnecting = false;
         this.activeStreams.clear();
+        this.lastHealthy = false;
+        updateWsConnectionState({ connected: false, healthy: false, reason: 'ws_close' });
         if (this.pingTimer) {
           clearInterval(this.pingTimer);
           this.pingTimer = null;
@@ -223,6 +237,7 @@ class BinanceWebSocketManager {
     } catch (error) {
       console.error('❌ Failed to connect to Binance WebSocket:', error);
       this.isConnecting = false;
+      updateWsConnectionState({ connected: false, healthy: false, reason: 'ws_connect_error' });
       this.scheduleReconnect();
     }
   }
@@ -323,47 +338,85 @@ class BinanceWebSocketManager {
    * Update tous les tickers depuis le stream !ticker@arr
    */
   private handleAllTickersUpdate(tickers: any[]): void {
-    const now = Date.now();
-    
+    const receivedTs = Date.now();
+    let acceptedCount = 0;
+
     for (const ticker of tickers) {
-      // Format Binance miniTicker
+      const rawSymbol = String(ticker?.s || '').trim();
+      if (!rawSymbol) continue;
+
       const tickerData: BinanceTickerData = {
-        symbol: ticker.s, // e.g., "BTCUSDT"
-        last: parseFloat(ticker.c), // close price
-        bid: parseFloat(ticker.b), // best bid
-        ask: parseFloat(ticker.a), // best ask
-        percentage: parseFloat(ticker.P), // price change percent
-        baseVolume: parseFloat(ticker.v), // base volume
-        quoteVolume: parseFloat(ticker.q), // quote volume
-        high: parseFloat(ticker.h), // high price
-        low: parseFloat(ticker.l), // low price
-        open: parseFloat(ticker.o), // open price
-        timestamp: ticker.E, // event time
+        symbol: rawSymbol,
+        last: Number.parseFloat(ticker.c),
+        bid: Number.parseFloat(ticker.b),
+        ask: Number.parseFloat(ticker.a),
+        percentage: Number.parseFloat(ticker.P),
+        baseVolume: Number.parseFloat(ticker.v),
+        quoteVolume: Number.parseFloat(ticker.q),
+        high: Number.parseFloat(ticker.h),
+        low: Number.parseFloat(ticker.l),
+        open: Number.parseFloat(ticker.o),
+        timestamp: Number.isFinite(Number(ticker.E)) ? Number(ticker.E) : receivedTs,
       };
 
-      this.tickersCache.set(ticker.s, tickerData);
-      const isValid = Number.isFinite(tickerData.last)
-        && Number.isFinite(tickerData.bid)
-        && Number.isFinite(tickerData.ask)
-        && tickerData.bid > 0
-        && tickerData.ask > 0
-        && tickerData.ask >= tickerData.bid;
-      recordWsFrame(ticker.s, isValid);
-      
-      // Notify callbacks
-      this.tickerCallbacks.forEach(cb => {
+      const validation = evaluateTickerFrame({
+        symbol: rawSymbol,
+        frame: tickerData,
+        source: 'WS',
+        receivedAt: receivedTs,
+        expectedSymbolId: rawSymbol,
+      });
+
+      recordMarketFrame({
+        symbol: rawSymbol,
+        displaySymbol: rawSymbol,
+        source: 'WS',
+        status: validation.status,
+        ruleId: validation.ruleId,
+        receivedTs,
+        eventTs: validation.timestamp,
+        dataAgeMs: validation.dataAgeMs,
+        expectedSymbolId: validation.expectedSymbolId,
+        rawFrame: tickerData,
+      });
+
+      if (validation.status === 'rejected') {
+        this.tickersCache.delete(rawSymbol);
+        continue;
+      }
+
+      tickerData.receivedAt = receivedTs;
+      tickerData.dataAgeMs = validation.dataAgeMs;
+      tickerData.stale = validation.status === 'stale';
+      this.tickersCache.set(rawSymbol, tickerData);
+
+      if (validation.status !== 'accepted') {
+        continue;
+      }
+
+      acceptedCount += 1;
+      for (const cb of this.tickerCallbacks) {
         try {
           cb(tickerData);
         } catch (error) {
           console.error('Error in ticker callback:', error);
         }
-      });
+      }
     }
 
-    this.lastUpdate = now;
+    this.lastUpdate = receivedTs;
+    const isHealthy = acceptedCount > 0;
+    if (isHealthy !== this.lastHealthy) {
+      this.lastHealthy = isHealthy;
+      updateWsConnectionState({
+        connected: this.isConnected,
+        healthy: isHealthy,
+        reason: isHealthy ? 'ws_frames_accepted' : 'ws_frames_rejected',
+      });
+    }
     
     // Log stats périodiquement
-    if (now % 60000 < 5000) { // ~toutes les minutes
+    if (receivedTs % 60000 < 5000) { // ~toutes les minutes
       console.log(`📊 WebSocket cache: ${this.tickersCache.size} tickers, updated ${new Date(this.lastUpdate).toISOString()}`);
     }
   }
@@ -463,7 +516,7 @@ class BinanceWebSocketManager {
     if (!this.isConnected) return false;
     const cacheAge = Date.now() - this.lastUpdate;
     // Cache considéré frais si < 10 secondes
-    return cacheAge < 10000 && this.tickersCache.size > 0;
+    return cacheAge < 10000 && this.tickersCache.size > 0 && this.lastHealthy;
   }
 
   /**
@@ -764,18 +817,36 @@ export async function runExclusiveBalanceFetch<T>(userId: string, asset: string,
  */
 export async function getTickerFromWebSocket(symbol: string): Promise<BinanceTickerData | null> {
   const ws = getBinanceWebSocket();
-  
-  // Si le WebSocket est healthy, utilise le cache
-  if (ws.isHealthy()) {
-    const ticker = ws.getTicker(symbol);
-    if (ticker) {
-      return ticker;
-    }
+
+  if (!ws.isHealthy()) {
+    console.warn(`⚠️ WebSocket not healthy for ${symbol}, fallback required`);
+    setFallbackState(symbol, true, 'ws_unhealthy', { increment: false });
+    return null;
   }
-  
-  // Fallback: retourne null, le caller fera un fetchTicker REST
-  console.warn(`⚠️ WebSocket cache miss for ${symbol}, will fallback to REST API`);
-  return null;
+
+  const ticker = ws.getTicker(symbol);
+  if (!ticker) {
+    console.warn(`⚠️ WebSocket cache miss for ${symbol}, will fallback to REST API`);
+    setFallbackState(symbol, true, 'ws_cache_miss', { increment: false });
+    return null;
+  }
+
+  const cfg = getConfig();
+  const now = Date.now();
+  const timestamp = Number.isFinite(Number(ticker.timestamp)) ? Number(ticker.timestamp) : now;
+  const dataAgeMs = Math.max(0, now - timestamp);
+
+  if (ticker.stale || dataAgeMs > cfg.MARKET_STALE_THRESHOLD_MS) {
+    console.warn(`⚠️ WebSocket ticker stale for ${symbol} (age ${dataAgeMs}ms), fallback to REST`);
+    setFallbackState(symbol, true, 'ws_cache_stale', { increment: false });
+    return null;
+  }
+
+  ticker.dataAgeMs = dataAgeMs;
+  ticker.receivedAt = ticker.receivedAt ?? now;
+  ticker.stale = false;
+  setFallbackState(symbol, false);
+  return ticker;
 }
 
 /**
