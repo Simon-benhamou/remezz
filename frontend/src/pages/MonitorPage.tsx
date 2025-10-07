@@ -196,10 +196,26 @@ export default function MonitorPage(){
         // Phase 1: Core data (session, symbol, basic status)
         updateProgress(LoadingPhase.CORE_DATA, 10, 'Loading session data...');
         
-        const s = await Promise.race([
-          api.status(sessionId, { includeBalance: false, includeTech: false }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Status timeout')), 15000)) // augmenté à 15s
-        ]);
+        let s: any = null;
+        try {
+          s = await Promise.race([
+            api.status(sessionId, { includeBalance: false, includeTech: false }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Status timeout')), 15000))
+          ]);
+        } catch (statusError: any) {
+          clearTimeout(loadingTimeout);
+          const detail = statusError?.response?.data?.details
+            || statusError?.response?.data?.error
+            || statusError?.message
+            || String(statusError);
+          console.error('Status load failed:', statusError);
+          setStatus({ error: detail });
+          setTickerStatus('error');
+          setTickerError(detail);
+          updateProgress(LoadingPhase.COMPLETE, 100, 'Unable to load agent status', detail);
+          message.error(`Monitor unavailable: ${detail}`);
+          return;
+        }
         
         if (!s?.session?.id) {
           navigate('/sessions');
@@ -241,8 +257,15 @@ export default function MonitorPage(){
           setTickerStatus('error');
         }
         if (diagnosticsData.status === 'fulfilled' && diagnosticsData.value) {
-          // Stocker diagnostics dans un state pour les utiliser dans AgentStatePanel
           setAgent((prev: any) => ({ ...prev, diagnostics: diagnosticsData.value }));
+        } else if (diagnosticsData.status === 'rejected') {
+          const detail = (diagnosticsData.reason as any)?.response?.data?.details
+            || (diagnosticsData.reason as any)?.response?.data?.error
+            || (diagnosticsData.reason as any)?.message
+            || String(diagnosticsData.reason);
+          console.warn('Diagnostics unavailable:', detail);
+          updateProgress(LoadingPhase.CORE_DATA, 35, 'Diagnostics unavailable', detail);
+          setAgent((prev: any) => ({ ...prev, diagnosticsError: detail }));
         }
         
         updateProgress(LoadingPhase.SECONDARY_DATA, 50, 'Loading trading data...');

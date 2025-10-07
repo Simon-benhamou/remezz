@@ -1368,10 +1368,12 @@ export default function SessionsPage(){
                 ? api.client.post('/api/agent/restart', v)
                 : api.client.post('/api/agent/start', v));
 
+              const responseData = (res as any)?.data ?? res;
+
               if (hide) hide();
 
               const cacheEvent = isRestart ? 'settings_changed' : 'session_created';
-              const sessionIdentifier = sessionIdForRestart || (res as any)?.data?.id;
+              const sessionIdentifier = sessionIdForRestart || responseData?.id;
               invalidateSmartly(cacheEvent, { mode: v.mode as any, sessionId: sessionIdentifier });
 
               if (isRestart) {
@@ -1382,15 +1384,52 @@ export default function SessionsPage(){
 
               await load(true);
 
+              const navigateTargetId = sessionIdForRestart || responseData?.id || null;
+              let shouldNavigate = true;
+
+              if (!isRestart && v.smartAutoMode && navigateTargetId) {
+                let pending = Boolean(responseData?.initPending || responseData?.symbol === 'SMART/SLEEP');
+                const closeWaiting = message.loading('Analyzing market and selecting the best opportunity…', 0);
+                const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+                const POLL_TIMEOUT_MS = 120_000;
+                const POLL_INTERVAL_MS = 1500;
+                const deadline = Date.now() + POLL_TIMEOUT_MS;
+                try {
+                  while (pending && Date.now() < deadline) {
+                    await delay(POLL_INTERVAL_MS);
+                    try {
+                      const sessions = await api.listSessions(mode);
+                      const current = sessions.find((row: any) => row.id === navigateTargetId);
+                      if (current && current.symbol && current.symbol !== 'SMART/SLEEP') {
+                        pending = false;
+                        break;
+                      }
+                    } catch (pollError) {
+                      console.warn('⚠️ Smart agent polling failed:', pollError);
+                    }
+                  }
+                } finally {
+                  if (typeof closeWaiting === 'function') closeWaiting();
+                }
+
+                if (pending) {
+                  message.warning('Auto-selection is still running. You will be able to open the monitor once the symbol is assigned.');
+                  shouldNavigate = false;
+                }
+              }
+
+              if (!shouldNavigate) {
+                return;
+              }
+
               if (isRestart && sessionIdForRestart) {
                 navigate(`/monitor/${sessionIdForRestart}`);
+              } else if (navigateTargetId) {
+                navigate(`/monitor/${navigateTargetId}`);
               } else {
-                const sid = (res as any)?.data?.id;
-                if (sid) navigate(`/monitor/${sid}`); else {
-                  const list = await api.listSessions(mode);
-                  const active = list.find((r:any)=> !r.stoppedAt);
-                  if (active) navigate(`/monitor/${active.id}`);
-                }
+                const list = await api.listSessions(mode);
+                const active = list.find((r:any)=> !r.stoppedAt);
+                if (active) navigate(`/monitor/${active.id}`);
               }
             } catch (e: any) {
               if (typeof hide === 'function') hide();

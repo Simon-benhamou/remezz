@@ -54,7 +54,9 @@ function toNumber(value: any): number | undefined {
 
 function normalizeSymbolId(value?: string | null): string {
   if (!value) return '';
-  return String(value).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  const str = String(value);
+  const base = str.includes(':') ? str.split(':')[0] : str;
+  return base.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 }
 
 function stableStringify(value: any): string {
