@@ -20,16 +20,20 @@ export function clearSymbolResolutionCache(): void {
   console.log('Symbol resolution cache cleared');
 }
 
-function mapExchangeId(exchangeId: string): string {
+function mapExchangeId(exchangeId: string, type: 'spot'|'swap' = 'spot'): string {
+  if (exchangeId === 'binance') {
+    if (type === 'swap') return 'binanceusdm';
+    return 'binance';
+  }
   const exchangeIdMap: Record<string, string> = {
     'crypto.com': 'cryptocom',
-    'binance': 'binance',
     'binancecoinm': 'binancecoinm'
   };
   return exchangeIdMap[exchangeId] || exchangeId;
 }
 
-async function getPublicExchangeFor(ccxtExchangeId: string, type: 'spot'|'swap') {
+async function getPublicExchangeFor(exchangeId: string, type: 'spot'|'swap') {
+  const ccxtExchangeId = mapExchangeId(exchangeId, type);
   const key = `${ccxtExchangeId}:${type}`;
   if (publicExchanges.has(key)) return publicExchanges.get(key);
   const inflight = publicExchangePromises.get(key);
@@ -117,7 +121,9 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
     }
   }
 
-  const ccxtExchangeId = mapExchangeId(exchangeId);
+  // Default market type (spot | swap)
+  const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase() as 'spot'|'swap';
+  const ccxtExchangeId = mapExchangeId(exchangeId, MARKET_TYPE);
   const Klass: any = (ccxt as any)[ccxtExchangeId];
   if (!Klass) throw new Error('Unknown exchange ' + exchangeId);
 
@@ -146,8 +152,6 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
   const loadPromise = (async () => {
     const userExchange = new Klass(config);
 
-    // Default market type (spot | swap)
-    const MARKET_TYPE = (process.env.MARKET_TYPE || 'spot').toLowerCase() as 'spot'|'swap';
     // @ts-ignore
     userExchange.options = userExchange.options || {};
     // @ts-ignore
@@ -155,7 +159,7 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
 
     // Seed markets from shared public instance to avoid loadMarkets REST weight
     try {
-      const pub = await getPublicExchangeFor(ccxtExchangeId, MARKET_TYPE);
+      const pub = await getPublicExchangeFor(exchangeId, MARKET_TYPE);
       if (typeof (userExchange as any).setMarkets === 'function') {
         (userExchange as any).setMarkets(pub.markets, pub.currencies);
         console.log('Markets seeded from shared public exchange, total:', Object.keys(userExchange.markets || {}).length);
@@ -168,7 +172,7 @@ export async function getUserExchange(userId: string, credentials: { apiKey: str
       }
     } catch (e) {
       // 🚨 CRITICAL: NEVER loadMarkets for Binance - even in fallback
-      if (ccxtExchangeId === 'binance') {
+      if (exchangeId === 'binance' && MARKET_TYPE === 'spot') {
         console.warn('⚠️ Failed to seed markets for Binance, but skipping loadMarkets - using WebSocket only');
         // Initialize empty markets structure to avoid errors
         (userExchange as any).markets = {};
@@ -245,13 +249,13 @@ export async function validateUserCredentials(credentials: { apiKey: string; api
 /** Resolve a requested symbol to a valid ccxt unified market symbol for the configured exchange. */
 export async function resolveSymbol(requested: string, userId?: string): Promise<string> {
   const { EXCHANGE_ID } = getConfig();
-  const ccxtExchangeId = mapExchangeId(EXCHANGE_ID);
+  const exchangeId = EXCHANGE_ID;
   const sReq = requested.toUpperCase();
 
-  const cacheKey = `${ccxtExchangeId}:${sReq}`;
+  const cacheKey = `${exchangeId}:${sReq}`;
 
   // Special handling for Binance COIN-M Futures - prioritize _PERP format
-  if (ccxtExchangeId === 'binancecoinm') {
+  if (exchangeId === 'binancecoinm') {
     let base: string;
     if (sReq.includes('/')) {
       base = sReq.split('/')[0];
@@ -271,8 +275,8 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
 
   // Get shared public exchanges for both types
   const exchanges: Record<'spot'|'swap', any> = {
-    spot: await getPublicExchangeFor(ccxtExchangeId, 'spot'),
-    swap: await getPublicExchangeFor(ccxtExchangeId, 'swap'),
+    spot: await getPublicExchangeFor(exchangeId, 'spot'),
+    swap: await getPublicExchangeFor(exchangeId, 'swap'),
   };
 
   let ex = exchanges[types[0]];
@@ -342,7 +346,7 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
   }
 
   // Special handling for Binance - assume USDT perpetuals are valid
-  if (ccxtExchangeId === 'binance' && (sReq.endsWith('USDT') || sReq.endsWith('/USDT'))) {
+  if (exchangeId === 'binance' && (sReq.endsWith('USDT') || sReq.endsWith('/USDT'))) {
     let base: string;
     if (sReq.includes('/')) {
       base = sReq.split('/')[0];
@@ -355,7 +359,7 @@ export async function resolveSymbol(requested: string, userId?: string): Promise
   }
 
   // Special handling for Binance COIN-M Futures - prioritize _PERP format
-  if (ccxtExchangeId === 'binancecoinm') {
+  if (exchangeId === 'binancecoinm') {
     let base: string;
     if (sReq.includes('/')) {
       base = sReq.split('/')[0];
