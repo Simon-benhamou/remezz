@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { getConfig } from "../utils/env.js";
 import { getUserExchange, resolveSymbol } from "../exchange/ccxtClient.js";
-import { computeCoreIndicators } from "../data/market.js";
+import { computeCoreIndicators, getTicker } from "../data/market.js";
 import { prisma } from "../db/client.js";
 import { buildTechSnapshot } from "../ai/tech.js";
 // Make /status usable without strict JWT when API key auth is disabled
@@ -195,18 +195,42 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
     } catch {}
   }
 
+  let liveTicker: any = null;
+  try {
+    liveTicker = await getTicker(symbol, { forceRefresh: true, userId });
+  } catch (error) {
+    console.error('Status ticker validation failed:', error);
+    return res.status(502).json({
+      error: 'ticker_unavailable',
+      details: String((error as any)?.message || error)
+    });
+  }
+
   const payload = {
     serverTime: new Date().toISOString(),
     exchangeId: exchange?.id || cfg.EXCHANGE_ID,
     symbol,
-    balance, orders, 
+    balance,
+    orders,
     // Merge indicators with tech snapshot for complete data
     indicators: indic ? {
       ...indic,
       atrPct: tech?.atrPct ?? 0,  // Add missing atrPct
       adx14: tech?.adx14 ?? 0,    // Add missing adx
-      ema20Slope: tech?.ema20Slope ?? 0, // Add missing slope
-      price: tech?.last ?? 0,     // Add current price
+      ema20Slope: tech?.ema20Slope ?? 0,
+      price: liveTicker?.last,
+    } : null,
+    ticker: liveTicker ? {
+      symbol: liveTicker.symbol,
+      last: liveTicker.last,
+      bid: liveTicker.bid,
+      ask: liveTicker.ask,
+      percentage: liveTicker.percentage,
+      baseVolume: liveTicker.baseVolume,
+      quoteVolume: liveTicker.quoteVolume,
+      high: liveTicker.high,
+      low: liveTicker.low,
+      timestamp: liveTicker.timestamp,
     } : null,
     session: s,
     sr: tech ? { support: tech.support, resistance: tech.resistance } : null,

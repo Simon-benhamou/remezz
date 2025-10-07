@@ -74,6 +74,9 @@ export default function MonitorPage(){
   const [status, setStatus] = React.useState<any>({});
   const [agent, setAgent] = React.useState<any>(null);
   const [ticker, setTicker] = React.useState<any>(null);
+  const [tickerStatus, setTickerStatus] = React.useState<'loading'|'live'|'stale'|'error'>('loading');
+  const [tickerError, setTickerError] = React.useState<string | null>(null);
+  const lastTickerUpdateRef = React.useRef<number>(0);
   
   // Secondary data states (Phase 2)
   const [strategy, setStrategy] = React.useState<any>(null);
@@ -109,6 +112,18 @@ export default function MonitorPage(){
     }
   };
 
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      if (tickerStatus === 'live' && lastTickerUpdateRef.current) {
+        const age = Date.now() - lastTickerUpdateRef.current;
+        if (age > 15_000) {
+          setTickerStatus('stale');
+        }
+      }
+    }, 5_000);
+    return () => clearInterval(interval);
+  }, [tickerStatus]);
+
   // Scoreboard metrics (compact chips under hero)
   const metricPrice = Number(status?.price ?? analysis?.technical?.last ?? 0);
   const metricAtr = Number(analysis?.technical?.atrPct ?? status?.indicators?.atrPct ?? 0);
@@ -139,22 +154,31 @@ export default function MonitorPage(){
   };
 
   // Load ticker data for the symbol
-  const loadTicker = async (sym: string) => {
+  const loadTicker = async (sym: string, opts: { silent?: boolean } = {}) => {
     if (!sym) return;
+    if (!opts.silent) {
+      setTickerStatus(prev => (prev === 'live' ? prev : 'loading'));
+    }
     try {
       const tickerData = await api.getTicker(sym);
       setTicker(tickerData);
+      setTickerError(null);
+      setTickerStatus('live');
+      lastTickerUpdateRef.current = Date.now();
       // Quick warm-up retry: if placeholder (last=0 and volumes=0), retry shortly
       const last = Number((tickerData as any)?.last || 0);
       const baseVol = Number((tickerData as any)?.baseVolume || 0);
       const quoteVol = Number((tickerData as any)?.quoteVolume || 0);
       if (last === 0 || (baseVol === 0 && quoteVol === 0)) {
         setTimeout(async () => {
-          try { const t2 = await api.getTicker(sym); setTicker(t2); } catch {}
+          try { await loadTicker(sym, { silent: true }); } catch {}
         }, 1500);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load ticker:', err);
+      const detail = err?.response?.data?.details || err?.response?.data?.error || err?.message || String(err);
+      setTickerError(detail);
+      setTickerStatus('error');
     }
   };
 
@@ -206,7 +230,16 @@ export default function MonitorPage(){
         ]);
         
         if (agentData.status === 'fulfilled') setAgent(agentData.value);
-        if (tickerData.status === 'fulfilled' && tickerData.value) setTicker(tickerData.value);
+        if (tickerData.status === 'fulfilled' && tickerData.value) {
+          setTicker(tickerData.value);
+          setTickerStatus('live');
+          setTickerError(null);
+          lastTickerUpdateRef.current = Date.now();
+        } else if (tickerData.status === 'rejected') {
+          const detail = (tickerData.reason as any)?.response?.data?.details || (tickerData.reason as any)?.message || String(tickerData.reason);
+          setTickerError(detail);
+          setTickerStatus('error');
+        }
         if (diagnosticsData.status === 'fulfilled' && diagnosticsData.value) {
           // Stocker diagnostics dans un state pour les utiliser dans AgentStatePanel
           setAgent((prev: any) => ({ ...prev, diagnostics: diagnosticsData.value }));
@@ -278,8 +311,9 @@ export default function MonitorPage(){
   // Periodic ticker refresh
   React.useEffect(() => {
     if (!symbol) return;
+    setTickerStatus(prev => prev === 'live' ? prev : 'loading');
     loadTicker(symbol);
-    const tickerTimer = setInterval(() => { loadTicker(symbol); }, 30000); // 30s refresh
+    const tickerTimer = setInterval(() => { loadTicker(symbol, { silent: true }); }, 30000); // 30s refresh
     return () => { clearInterval(tickerTimer); };
   }, [symbol]);
 
@@ -637,7 +671,9 @@ export default function MonitorPage(){
                 symbol={status?.symbol} 
                 price={status?.price} 
                 ticker={ticker}
-                lastUpdate={ticker?.lastUpdate}
+                lastUpdate={ticker?.lastUpdate || (ticker?.timestamp ? new Date(ticker.timestamp).toISOString() : undefined)}
+                status={tickerStatus}
+                errorMessage={tickerError || undefined}
               />
             ) : (
               <Skeleton active paragraph={{ rows: 2 }} />

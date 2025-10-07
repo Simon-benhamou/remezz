@@ -13,6 +13,13 @@ router.post('/ticker', async (req, res) => {
     }
     
     const ticker = await getTicker(symbol);
+
+    if (!ticker || typeof ticker !== 'object') {
+      throw new Error('invalid_ticker_response');
+    }
+    if (ticker.bid === 0 || ticker.ask === 0 || ticker.last === 0) {
+      throw new Error('ticker_validation_failed');
+    }
     
     // Add timestamp for frontend caching
     const response = {
@@ -35,6 +42,10 @@ router.post('/ticker', async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error('Failed to get ticker:', err);
+    return res.status(502).json({
+      error: 'ticker_unavailable',
+      details: String((err as any)?.message || err)
+    });
     
     // Fallback with basic data to prevent UI from breaking
     const fallbackTicker = {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Tag, Space } from 'antd';
+import { Card, Row, Col, Statistic, Tag, Space, Alert } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined } from '@ant-design/icons';
 
 type Props = {
@@ -7,15 +7,30 @@ type Props = {
   price?: number;
   ticker?: any; // CCXT ticker data
   lastUpdate?: string;
+  status?: 'loading' | 'live' | 'stale' | 'error';
+  errorMessage?: string;
 };
 
-export default function LiveMetrics({ symbol, price, ticker, lastUpdate }: Props) {
-  if (!ticker && !price) {
+export default function LiveMetrics({ symbol, price, ticker, lastUpdate, status = 'loading', errorMessage }: Props) {
+  if (status === 'loading') {
     return (
       <Card size="small" style={{ marginBottom: 16 }}>
         <div style={{ textAlign: 'center', color: '#666' }}>
           Loading market data...
         </div>
+      </Card>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <Card size="small" style={{ marginBottom: 16 }}>
+        <Alert
+          type="error"
+          showIcon
+          message="Live ticker unavailable"
+          description={errorMessage || 'Ticker feed returned invalid data. Retrying automatically…'}
+        />
       </Card>
     );
   }
@@ -58,6 +73,16 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate }: Props
   return (
     <Card size="small" style={{ marginBottom: 16 }}>
       <Row gutter={16}>
+        {(status === 'stale') && (
+          <Col span={24}>
+            <Alert
+              type="warning"
+              showIcon
+              message="Market data marked stale"
+              description="Last live update exceeded freshness threshold. Waiting for reconnection…"
+            />
+          </Col>
+        )}
         {isWarming && (
           <Col span={24}>
             <div style={{ textAlign: 'center', color: '#999', padding: 4 }}>
