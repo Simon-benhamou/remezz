@@ -1790,15 +1790,20 @@ async function scanIntelligentOpportunitiesLegacy(excludeSessionId?: string, opt
   
   // Filter by minimum score threshold to remove poor quality cryptos
   const minScoreThreshold = 2.0; // Minimum score to be considered tradeable
-  const qualifiedAnalyses = analyses.filter(a => a.score >= minScoreThreshold);
+  let qualifiedAnalyses = analyses.filter(a => a.score >= minScoreThreshold);
   
-  // Assign ranks to qualified analyses only
+  if (!qualifiedAnalyses.length && analyses.length) {
+    console.warn(`⚠️ All analyses scored below ${minScoreThreshold}. Falling back to top-ranked candidate anyway.`);
+    const fallbackCount = Math.min(3, analyses.length);
+    qualifiedAnalyses = analyses.slice(0, fallbackCount);
+  }
+  
   qualifiedAnalyses.forEach((analysis, index) => {
     analysis.rank = index + 1;
   });
   
-  console.log(`✅ Legacy scan complete. Found ${analyses.length} total analyses, ${qualifiedAnalyses.length} above threshold (score ≥ ${minScoreThreshold}).`);
-  console.log(`🏆 Top qualified: ${qualifiedAnalyses.slice(0, 5).map(a => `${a.symbol}(${a.score.toFixed(1)})`).join(', ')}`);
+  console.log(`✅ Legacy scan complete. Found ${analyses.length} total analyses, ${qualifiedAnalyses.length} selected (score threshold ${minScoreThreshold}).`);
+  console.log(`🏆 Selected: ${qualifiedAnalyses.slice(0, 5).map(a => `${a.symbol}(${a.score.toFixed(1)})`).join(', ')}`);
   
   return qualifiedAnalyses;
 }
