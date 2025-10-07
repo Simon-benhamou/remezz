@@ -9,6 +9,42 @@ const CAPACITY_LOG = new Map<string, number[]>();
 const BREACH_WINDOW_MS = 60 * 60 * 1000;
 const LIMIT_SLIP_PCT = Number(process.env.ORDER_LIMIT_SLIP_PCT || '0.15'); // percent
 
+function parsePositiveNumber(value: any): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function extractFilledPrice(order: any, fallback?: number): number | undefined {
+  if (!order) return parsePositiveNumber(fallback);
+
+  const info = order?.info;
+  const candidates: any[] = [
+    order?.average,
+    order?.price,
+    info?.avgPrice,
+    info?.averagePrice,
+    info?.avgExecutionPrice,
+    info?.price,
+    info?.p,
+    info?.ap,
+    info?.lastFilledPrice,
+    fallback,
+  ];
+
+  for (const candidate of candidates) {
+    const price = parsePositiveNumber(candidate);
+    if (price !== undefined) return price;
+  }
+
+  const fills: any[] = Array.isArray(info?.fills) ? info.fills : Array.isArray(order?.trades) ? order.trades : [];
+  for (const fill of fills) {
+    const price = parsePositiveNumber(fill?.price);
+    if (price !== undefined) return price;
+  }
+
+  return undefined;
+}
+
 function recordCapacityBreach(symbol: string) {
   const key = symbol.toUpperCase();
   const arr = CAPACITY_LOG.get(key) || [];
@@ -149,8 +185,8 @@ export class LiveBroker implements Broker {
         try {
           const fo = await ex.fetchOrder(ordId, symbol).catch(()=>null);
           const st = String(fo?.status || '').toLowerCase();
-          if (st.includes('closed') || st.includes('filled')) return { filledQty: Number(fo?.filled||0), avgPrice: Number(fo?.average||fo?.price||0), status: 'filled' };
-          if (st.includes('canceled') || st.includes('rejected')) return { filledQty: Number(fo?.filled||0), avgPrice: Number(fo?.average||fo?.price||0), status: 'rejected' };
+          if (st.includes('closed') || st.includes('filled')) return { filledQty: Number(fo?.filled||0), avgPrice: extractFilledPrice(fo, o.price), status: 'filled' };
+          if (st.includes('canceled') || st.includes('rejected')) return { filledQty: Number(fo?.filled||0), avgPrice: extractFilledPrice(fo, o.price), status: 'rejected' };
         } catch {}
         await new Promise(r=> setTimeout(r, pollMs));
       }
@@ -179,7 +215,7 @@ export class LiveBroker implements Broker {
     }
 
     const filledQty = Number(order?.filled ?? 0) || undefined;
-    const avgPrice = Number(order?.average ?? order?.price ?? o.price) || undefined;
+    const avgPrice = extractFilledPrice(order, o.price);
     const status: PlacedOrder['status'] = (order?.status === 'closed' || order?.status === 'filled') ? 'filled'
       : (order?.status === 'canceled' ? 'canceled' : 'open');
 
@@ -188,7 +224,7 @@ export class LiveBroker implements Broker {
 
     // Ensure fill: poll and retry if needed
     if (placed.status !== 'filled') {
-    const res = await waitForFill(id);
+      const res = await waitForFill(id);
       if (res.status === 'filled') {
         placed = { ...placed, status: 'filled', filledQty: res.filledQty, avgPrice: res.avgPrice };
       } else if (res.status !== 'rejected') {

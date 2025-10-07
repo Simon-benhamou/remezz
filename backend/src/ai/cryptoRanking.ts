@@ -101,6 +101,7 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
     const _isBinance = String(EXCHANGE_ID || '').toLowerCase().includes('binance');
 
     // Binance fast-path: avoid REST entirely, use WebSocket mini-tickers
+    let wsTop: VolumeFilteredCrypto[] | null = null;
     if (_isBinance) {
       try {
         // Stronger warm-up: wait up to 6s for !ticker@arr to fill
@@ -133,7 +134,7 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
         qualified.sort((a,b)=> b.volumeUsd - a.volumeUsd);
         const top50 = qualified.slice(0, 50);
         console.log(`✅ Binance WS volume filter: ${top50.length} symbols`);
-        return top50.map((crypto, index) => ({
+        wsTop = top50.map((crypto, index) => ({
           symbol: crypto.symbol,
           volumeUsd24h: crypto.volumeUsd,
           change24h: crypto.change24h,
@@ -141,10 +142,11 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
           volumeRank: index + 1
         }));
       } catch (error) {
-        console.warn('⚠️ Binance WS volume scan failed, fallback to majors list:', error);
-        const majors = ['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT','XRP/USDT'];
-        return majors.map((s, i) => ({ symbol: s, volumeUsd24h: 0, change24h: 0, price: 0, volumeRank: i+1 }));
+        console.warn('⚠️ Binance WS volume scan failed, falling back to REST discovery:', error);
       }
+    }
+    if (wsTop && wsTop.length) {
+      return wsTop;
     }
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
     

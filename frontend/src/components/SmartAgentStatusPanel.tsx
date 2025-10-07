@@ -361,19 +361,40 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
           const tb = new Date(b.timestamp || b.ts || 0).getTime();
           return tb - ta;
         });
-        const items = sorted.map((item:any)=>({
+        const items = sorted.map((item:any)=>{
+          const title = (() => {
+            if (item.action === 'intelligent_init') {
+              return `${item.symbol || 'Unknown'} (Initial)`;
+            }
+            if (item.fromSymbol && item.toSymbol) {
+              return `${item.fromSymbol} → ${item.toSymbol}`;
+            }
+            if (item.previousSymbol && item.toSymbol) {
+              return `${item.previousSymbol} → ${item.toSymbol}`;
+            }
+            if (item.previousSymbol) {
+              return `${item.previousSymbol} (sleep)`;
+            }
+            if (item.symbol) {
+              return item.symbol;
+            }
+            return item.action?.replace(/^intelligent_/, '').replace(/_/g, ' ').toUpperCase() || 'Unknown';
+          })();
+          return {
           color: item.action === 'intelligent_init' ? '#52c41a' : item.action?.includes('switch') ? '#1890ff' : '#faad14',
           children: (
             <div style={{ fontSize: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text strong style={{ fontSize: '13px' }}>
-                  {item.action === 'intelligent_init' ? (
-                    <span><strong style={{ color: '#52c41a' }}>{item.symbol}</strong> (Initial)</span>
-                  ) : item.fromSymbol && item.toSymbol ? (
-                    <span>{item.fromSymbol} → <strong style={{ color: '#1890ff' }}>{item.toSymbol}</strong></span>
-                  ) : (
-                    <span><strong>{item.symbol || 'Unknown'}</strong></span>
-                  )}
+                  <span>
+                    {title.includes('→') ? (
+                      <>
+                        {title.split('→')[0].trim()} → <strong style={{ color: '#1890ff' }}>{title.split('→')[1].trim()}</strong>
+                      </>
+                    ) : (
+                      <strong>{title}</strong>
+                    )}
+                  </span>
                 </Text>
                 <Space>
                   {item.score != null && <Tag color="blue">{Number(item.score).toFixed(1)}</Tag>}
@@ -391,7 +412,7 @@ export default function SmartAgentStatusPanel({ sessionId }: SmartAgentStatusPro
               </div>
             </div>
           )
-        }));
+        }});
         const needsScroll = sorted.length > 5;
         return (
         <>

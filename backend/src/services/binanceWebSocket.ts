@@ -284,18 +284,27 @@ class BinanceWebSocketManager {
    * Handler pour les messages WebSocket
    */
   private handleMessage(message: any): void {
-    // All tickers stream (!ticker@arr)
+    if (!message) return;
+
+    // Some WS libraries forward the data payload directly (legacy behaviour)
     if (Array.isArray(message)) {
       this.handleAllTickersUpdate(message);
       return;
     }
 
-    // Individual stream data
-    if (message.stream && message.data) {
+    // Combined stream payloads (current Binance behaviour)
+    if (message.stream && message.data !== undefined) {
       const { stream, data } = message;
-      
-      // Kline stream
-      if (stream.includes('@kline_')) {
+
+      if (Array.isArray(data)) {
+        // Binance futures sends all-ticker updates on !ticker@arr (miniTicker format)
+        if (stream === '!ticker@arr' || stream === '!miniTicker@arr') {
+          this.handleAllTickersUpdate(data);
+          return;
+        }
+      }
+
+      if (typeof stream === 'string' && stream.includes('@kline_')) {
         this.handleKlineUpdate(stream, data);
         return;
       }
