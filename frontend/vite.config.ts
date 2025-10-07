@@ -5,5 +5,13 @@ export default defineConfig({
   server: { host: true},
    preview: {
      allowedHosts: ['quantai.up.railway.app']
-   }
+   },
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/setupTests.ts',
+    globals: true,
+    coverage: {
+      reporter: ['text', 'json'],
+    },
+  }
 });
