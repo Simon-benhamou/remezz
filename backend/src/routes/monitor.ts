@@ -5,6 +5,7 @@ import { getLastTickAgeSec } from '../engine/events.js';
 import { getConfig } from '../utils/env.js';
 import { getAIMetrics } from '../metrics/aiCalls.js';
 import { computeMonitorAnalytics } from '../monitor/analytics.js';
+import { getMarketMetrics } from '../monitor/marketMetrics.js';
 import { llmJSON } from '../ai/llm.js';
 
 export const router = Router();
@@ -53,7 +54,14 @@ router.get('/health', async (req,res)=>{
       };
     }))).filter(x => !sessionId || x.id === sessionId);
     const anyStale = sessions.some(s => s.stale);
-    res.json({ ok: true, anyStale, staleCount: sessions.filter(s=>s.stale).length, sessions, ts: new Date().toISOString() });
+    res.json({
+      ok: true,
+      anyStale,
+      staleCount: sessions.filter(s=>s.stale).length,
+      sessions,
+      marketMetrics: getMarketMetrics(),
+      ts: new Date().toISOString()
+    });
   } catch (e:any) {
     res.status(500).json({ error: 'health_failed', details: String(e?.message || e) });
   }

@@ -12,6 +12,7 @@
 import WebSocket from 'ws';
 import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
+import { recordWsFrame, recordWsReconnect } from '../monitor/marketMetrics.js';
 
 export interface BinanceTickerData {
   symbol: string;
@@ -178,6 +179,7 @@ class BinanceWebSocketManager {
         this.shuttingDown = false;
         this.reconnectAttempts = 0;
         this.activeStreams.clear();
+        recordWsReconnect('global');
         
         // Subscribe aux streams par défaut
         this.subscribeToAllTickers();
@@ -340,6 +342,13 @@ class BinanceWebSocketManager {
       };
 
       this.tickersCache.set(ticker.s, tickerData);
+      const isValid = Number.isFinite(tickerData.last)
+        && Number.isFinite(tickerData.bid)
+        && Number.isFinite(tickerData.ask)
+        && tickerData.bid > 0
+        && tickerData.ask > 0
+        && tickerData.ask >= tickerData.bid;
+      recordWsFrame(ticker.s, isValid);
       
       // Notify callbacks
       this.tickerCallbacks.forEach(cb => {

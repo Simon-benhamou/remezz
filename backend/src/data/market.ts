@@ -3,6 +3,7 @@ import { ema, rsi, atr } from './indicators.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 import { getBinanceWebSocket, getTickerFromWebSocket, seedKlinesFromWebSocket, getKlinesOhlcvFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import { recordRestFallback, recordInvalidTicker } from '../monitor/marketMetrics.js';
 
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
@@ -42,6 +43,20 @@ async function populateBidAskFromOrderBook(ex: any, symbol: string, ticker: any)
   } catch (error) {
     console.warn(`Failed order book fallback for ${symbol}:`, error);
   }
+}
+
+function validateTicker(ticker: any): boolean {
+  if (!ticker) return false;
+  const hasLast = Number.isFinite(ticker.last) && ticker.last > 0;
+  const hasBid = Number.isFinite(ticker.bid) && ticker.bid > 0;
+  const hasAsk = Number.isFinite(ticker.ask) && ticker.ask > 0;
+  const withinBounds = Number.isFinite(ticker.low) && Number.isFinite(ticker.high)
+    ? ticker.last >= ticker.low && ticker.last <= ticker.high
+    : true;
+  const bidAskOrder = (!Number.isFinite(ticker.bid) || !Number.isFinite(ticker.ask)) || ticker.bid <= ticker.ask;
+  const volumeValid = (!Number.isFinite(ticker.baseVolume) || ticker.baseVolume >= 0) &&
+    (!Number.isFinite(ticker.quoteVolume) || ticker.quoteVolume >= 0);
+  return hasLast && hasBid && hasAsk && withinBounds && bidAskOrder && volumeValid;
 }
 
 function isBinanceExchange(id?: string | null): boolean {
@@ -277,6 +292,7 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
           console.warn(`⚠️ [WebSocket] getTicker(${s}) miss${wsReady ? '' : ' (WS not healthy)' } - falling back to REST`);
           try {
             ticker = await ex.fetchTicker(s);
+            recordRestFallback(s, 'ws_cache_miss');
             console.log(`✅ [REST] getTicker(${s}) fallback used`);
           } catch (restError) {
             console.error(`❌ [REST] getTicker(${s}) fallback failed:`, restError);
@@ -287,6 +303,7 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
         console.warn(`⚠️ [WebSocket] getTicker error for ${s} - attempting REST fallback`, error);
         try {
           ticker = await ex.fetchTicker(s);
+          recordRestFallback(s, 'ws_error');
           console.log(`✅ [REST] getTicker(${s}) fallback used after WS error`);
         } catch (restError) {
           console.error(`❌ [REST] getTicker(${s}) fallback failed after WS error:`, restError);
@@ -316,6 +333,15 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       ticker.low = toNumber(ticker.low) ?? pickFirstNumber(ticker.info?.low, ticker.info?.lowPrice) ?? ticker.low;
       ticker.open = toNumber(ticker.open) ?? pickFirstNumber(ticker.info?.open, ticker.info?.openPrice) ?? ticker.open;
       ticker.percentage = toNumber(ticker.percentage) ?? pickFirstNumber(ticker.info?.percentage, ticker.info?.priceChangePercent) ?? ticker.percentage;
+
+      if (!validateTicker(ticker)) {
+        recordInvalidTicker(s, { source: ticker?.info?.symbol || ticker.symbol, bid: ticker.bid, ask: ticker.ask, last: ticker.last });
+        if (cached?.data && validateTicker(cached.data)) {
+          console.warn(`⚠️ Returning cached ticker for ${symbol} due to invalid live frame`);
+          return cached.data;
+        }
+        throw new Error(`invalid_ticker_${symbol}`);
+      }
     }
 
     // Cache the result
