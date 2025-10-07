@@ -18,7 +18,7 @@ export function useSessionsCache() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cacheRef = useRef<SessionsCache>({});
-  const intervalRef = useRef<number | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const generateCacheKey = (mode: AppMode, includeStats = false) => {
     return `${mode}:${includeStats}`;
