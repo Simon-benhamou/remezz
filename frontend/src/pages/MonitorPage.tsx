@@ -699,7 +699,7 @@ export default function MonitorPage(){
             )}
             
             {/* Position banner — only if position exists OR there is historical activity */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) && ((agent?.pos) || (orders?.length || 0) > 0 || (trades?.length || 0) > 0) && (
+            {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id && ((agent?.pos) || (orders?.length || 0) > 0 || (trades?.length || 0) > 0) && (
               <PositionBanner agent={agent} price={status?.price} orders={orders} trades={trades} />
             )}
             
