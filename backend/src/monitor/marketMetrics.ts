@@ -117,6 +117,9 @@ const totals = {
   restFallbacks: 0,
 };
 
+const LOG_THROTTLE_MS = Math.max(0, Number(process.env.MARKET_METRICS_LOG_THROTTLE_MS || 60000));
+const lastLogAtByKey = new Map<string, number>();
+
 function normalizeSymbolId(value: string): string {
   const trimmed = value?.trim();
   if (!trimmed) return 'UNKNOWN';
@@ -181,6 +184,15 @@ function activateFallback(entry: SymbolMetrics, reason?: string, increment = fal
 
 function logFrameEvent(event: MarketFrameEvent, entry: SymbolMetrics): string | undefined {
   if (event.status === 'accepted') return undefined;
+  if (LOG_THROTTLE_MS > 0) {
+    const throttleKey = `${entry.key}:${event.ruleId || event.status}:${event.source}`;
+    const now = Date.now();
+    const last = lastLogAtByKey.get(throttleKey) || 0;
+    if (now - last < LOG_THROTTLE_MS) {
+      return undefined;
+    }
+    lastLogAtByKey.set(throttleKey, now);
+  }
   const traceId = event.traceId || randomUUID();
   const payload: Record<string, unknown> = {
     level: event.status === 'rejected' ? 'error' : 'warn',
