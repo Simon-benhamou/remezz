@@ -111,10 +111,25 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     let prefetchedOpportunity: IntelligentAnalysis | null = null;
     let smartInitPromise: Promise<boolean> | null = null;
     let shouldActivate = true;
+    let smartInitSucceeded = true;
+    let smartInitFailureReason: string | null = null;
     if (isSmartAgent && process.env.UNIT_TEST_MODE !== 'true') {
-      // Defer any symbol selection to the intelligent initializer (with WS warm-up)
-      // This avoids cold-start bias and majors fallback
-      symbol = symbol || 'SMART/SLEEP';
+      const aggressiveness = (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
+        ? (body.aggressiveness as 'conservative'|'reactive'|'aggressive')
+        : 'reactive';
+      try {
+        prefetchedOpportunity = await getBestIntelligentOpportunity(undefined, { aggressiveness });
+      } catch (error) {
+        console.error('❌ Failed to prefetch intelligent opportunity:', error);
+        prefetchedOpportunity = null;
+      }
+      if (!prefetchedOpportunity) {
+        return res.status(503).json({
+          error: 'smart_agent_no_opportunity',
+          message: 'No qualifying opportunities available right now. Please try again in a few minutes.'
+        });
+      }
+      symbol = prefetchedOpportunity.symbol;
       shouldActivate = false;
     } else {
       // Ensure symbol is provided for non-smart agents
@@ -127,8 +142,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
       }
     }
     // Ensure we resolve a perpetual market symbol; return descriptive error if not available
-    // Skip resolution when Smart agent is starting in sleep mode (placeholder symbol)
-    if (!(isSmartAgent && !shouldActivate) && process.env.UNIT_TEST_MODE !== 'true') {
+    if (process.env.UNIT_TEST_MODE !== 'true') {
       try { const s = await (await import('../exchange/ccxtClient.js')).resolveSymbol(symbol); symbol = s; } catch (e:any) { return res.status(400).json({ error: 'symbol_not_found_perp', details: String(e?.message || e) }); }
     }
   
@@ -275,7 +289,7 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
     if (isSmartAgent) {
       console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
       try {
-        const initTimeoutMs = Math.max(4000, Number(process.env.SMART_AGENT_INIT_RESPONSE_TIMEOUT_MS || 8000));
+        const initTimeoutMs = Math.max(10000, Number(process.env.SMART_AGENT_INIT_RESPONSE_TIMEOUT_MS || 15000));
         const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
         const runSmartInit = async () => {
@@ -329,9 +343,13 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         ]);
 
         if (initResult === 'timeout') {
-          console.log(`⌛ Auto-Select initialization for ${s.id} still running (timeout ${initTimeoutMs}ms)`);
+          console.log(`⌛ Auto-Select initialization for ${s.id} timed out after ${initTimeoutMs}ms`);
+          smartInitSucceeded = false;
+          smartInitFailureReason = `Initialization timed out after ${initTimeoutMs}ms`;
         } else if (initResult === false) {
           console.warn(`⚠️ Auto-Select initialization failed for ${s.id}`);
+          smartInitSucceeded = false;
+          smartInitFailureReason = 'No qualifying opportunities were found during initialization.';
         } else {
           const updated = await prisma.agentSession.findUnique({ where: { id: s.id } }).catch(() => null);
           if (updated) {
@@ -340,8 +358,22 @@ router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>
         }
       } catch (error) {
         console.error(`❌ Auto-Select Agent ${s.id} initialization scheduling error:`, error);
+        smartInitSucceeded = false;
+        smartInitFailureReason = String((error as any)?.message || error);
       }
       prefetchedOpportunity = null;
+    }
+
+    if (isSmartAgent && !smartInitSucceeded) {
+      try {
+        await stopSession(s.id);
+      } catch (cleanupError) {
+        console.warn(`⚠️ Failed to mark smart session ${s.id} as stopped after init failure:`, cleanupError);
+      }
+      return res.status(503).json({
+        error: 'smart_agent_initialization_failed',
+        details: smartInitFailureReason || 'Auto-select initialization failed'
+      });
     }
 
     // Respond with the session (now with selected symbol if Auto-Select succeeded)
