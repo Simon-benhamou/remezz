@@ -15,6 +15,35 @@ const exchangeCache = new Map<string, any>();
 const binanceKlineSeeded = new Set<string>();
 const binanceKlineSeedPromises = new Map<string, Promise<number[][]>>();
 
+function toNumber(value: any): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function pickFirstNumber(...values: any[]): number | undefined {
+  for (const v of values) {
+    const n = toNumber(v);
+    if (n !== undefined) return n;
+  }
+  return undefined;
+}
+
+async function populateBidAskFromOrderBook(ex: any, symbol: string, ticker: any) {
+  if (!ex || typeof ex.fetchOrderBook !== 'function') return;
+  try {
+    const book = await ex.fetchOrderBook(symbol, 5);
+    const bestBid = pickFirstNumber(book?.bids?.[0]?.[0]);
+    const bestAsk = pickFirstNumber(book?.asks?.[0]?.[0]);
+    if (bestBid !== undefined) ticker.bid = bestBid;
+    if (bestAsk !== undefined) ticker.ask = bestAsk;
+    if (toNumber(ticker?.last) === undefined && bestBid !== undefined && bestAsk !== undefined) {
+      ticker.last = (bestBid + bestAsk) / 2;
+    }
+  } catch (error) {
+    console.warn(`Failed order book fallback for ${symbol}:`, error);
+  }
+}
+
 function isBinanceExchange(id?: string | null): boolean {
   if (!id) return false;
   const norm = id.toLowerCase();
@@ -63,9 +92,13 @@ function inferMarketType(symbol?: string): 'spot' | 'swap' {
 
 function createPublicExchange(forSymbol?: string) {
   const { EXCHANGE_ID } = getConfig();
-  const Klass: any = (ccxt as any)[EXCHANGE_ID];
-  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
   const desiredType = inferMarketType(forSymbol);
+  const mappedId =
+    EXCHANGE_ID === 'binance' && desiredType === 'swap'
+      ? 'binanceusdm'
+      : EXCHANGE_ID;
+  const Klass: any = (ccxt as any)[mappedId];
+  if (!Klass) throw new Error('Unknown exchange ' + EXCHANGE_ID);
   
   // 🔧 FIX: Disable exchange cache to get fresh OHLCV data
   // The cached exchange instance was keeping stale candle data
@@ -236,7 +269,8 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
             high: wsTicker.high,
             low: wsTicker.low,
             open: wsTicker.open,
-            timestamp: wsTicker.timestamp
+            timestamp: wsTicker.timestamp,
+            info: wsTicker
           };
           console.log(`✅ [WebSocket] getTicker(${s}) - 0 weight`);
         } else {
@@ -263,6 +297,27 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       ticker = await ex.fetchTicker(s);
     }
     
+    if (ticker) {
+      const bidFromInfo = pickFirstNumber(ticker.bid, ticker.info?.bid, ticker.info?.bestBid, ticker.info?.bidPrice, ticker.info?.bestBidPrice);
+      const askFromInfo = pickFirstNumber(ticker.ask, ticker.info?.ask, ticker.info?.bestAsk, ticker.info?.askPrice, ticker.info?.bestAskPrice);
+      const lastFromInfo = pickFirstNumber(ticker.last, ticker.close, ticker.info?.last, ticker.info?.lastPrice);
+      if (bidFromInfo !== undefined) ticker.bid = bidFromInfo;
+      if (askFromInfo !== undefined) ticker.ask = askFromInfo;
+      if (lastFromInfo !== undefined) ticker.last = lastFromInfo;
+      if ((toNumber(ticker.bid) === undefined || ticker.bid === 0) || (toNumber(ticker.ask) === undefined || ticker.ask === 0)) {
+        await populateBidAskFromOrderBook(ex, s, ticker);
+      }
+      ticker.bid = toNumber(ticker.bid) ?? 0;
+      ticker.ask = toNumber(ticker.ask) ?? 0;
+      ticker.last = toNumber(ticker.last) ?? 0;
+      ticker.baseVolume = toNumber(ticker.baseVolume) ?? pickFirstNumber(ticker.info?.baseVolume, ticker.info?.volume) ?? 0;
+      ticker.quoteVolume = toNumber(ticker.quoteVolume) ?? pickFirstNumber(ticker.info?.quoteVolume) ?? 0;
+      ticker.high = toNumber(ticker.high) ?? pickFirstNumber(ticker.info?.high, ticker.info?.highPrice) ?? ticker.high;
+      ticker.low = toNumber(ticker.low) ?? pickFirstNumber(ticker.info?.low, ticker.info?.lowPrice) ?? ticker.low;
+      ticker.open = toNumber(ticker.open) ?? pickFirstNumber(ticker.info?.open, ticker.info?.openPrice) ?? ticker.open;
+      ticker.percentage = toNumber(ticker.percentage) ?? pickFirstNumber(ticker.info?.percentage, ticker.info?.priceChangePercent) ?? ticker.percentage;
+    }
+
     // Cache the result
     tickerCache.set(cacheKey, { data: ticker, timestamp: now });
     

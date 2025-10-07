@@ -1,5 +1,5 @@
 import { prisma } from '../db/client.js';
-import { getTicker } from '../data/market.js';
+import { getTicker, getOHLCV } from '../data/market.js';
 import { fullAnalysis, computeProjection } from '../ai/analysis.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { getAIRankedOpportunities, type RankedOpportunity } from '../ai/cryptoRanking.js';
@@ -294,6 +294,23 @@ async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason:
     }
 
     broadcast('plan_refreshed', { symbol, reason, plan }, symbol, sessionId);
+
+    try {
+      const tech = await buildTechSnapshot(symbol);
+      broadcast('analysis', { symbol, technical: tech }, symbol, sessionId);
+    } catch (err) {
+      console.warn(`Tech snapshot priming failed for ${sessionId}:`, err);
+    }
+
+    try {
+      await getTicker(symbol, { forceRefresh: true });
+      await Promise.allSettled([
+        getOHLCV(symbol, '1h', 200),
+        getOHLCV(symbol, '15m', 200)
+      ]);
+    } catch (err) {
+      console.warn(`Market data priming failed for ${sessionId}:`, err);
+    }
   } catch (error) {
     console.error(`❌ Failed to refresh plan for ${sessionId}:`, error);
   }
