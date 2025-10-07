@@ -205,8 +205,11 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       const wsTicker = await getTickerFromWebSocket(symbol);
       if (wsTicker) {
         const adapted = adaptBinanceTickerToCcxt(symbol, wsTicker);
-        tickerCache.set(cacheKey, { data: adapted, timestamp: now });
-        return adapted;
+        if (validateTicker(adapted)) {
+          tickerCache.set(cacheKey, { data: adapted, timestamp: now });
+          return adapted;
+        }
+        recordInvalidTicker(symbol, { source: adapted?.info?.symbol || adapted.symbol, bid: adapted.bid, ask: adapted.ask, last: adapted.last });
       }
     } catch (error) {
       console.warn(`Binance WebSocket ticker fallback for ${symbol}:`, error);
