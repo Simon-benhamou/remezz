@@ -33,6 +33,8 @@ const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyL
   },
 };
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export default function SessionsPage(){
   const [rows, setRows] = React.useState<any[]>([]);
   const [filteredRows, setFilteredRows] = React.useState<any[]>([]);
@@ -151,6 +153,50 @@ export default function SessionsPage(){
         return session;
       }
     }));
+  }, []);
+
+  const pollAgentStartJob = React.useCallback(async (
+    jobId: string,
+    options?: { timeoutMs?: number; intervalMs?: number }
+  ) => {
+    const timeoutMs = options?.timeoutMs ?? 120_000;
+    const intervalMs = options?.intervalMs ?? 800;
+    const deadline = Date.now() + timeoutMs;
+    let lastPhase: string | null = null;
+    let snapshot: any = null;
+
+    while (Date.now() < deadline) {
+      try {
+        snapshot = await api.getAgentStartStatus(jobId);
+      } catch (error) {
+        console.warn('⚠️ Failed to fetch agent start status:', error);
+        await sleep(intervalMs);
+        continue;
+      }
+
+      if (snapshot?.phase && snapshot.phase !== lastPhase) {
+        console.log(`🚀 Agent start job ${jobId} entered phase ${snapshot.phase}`);
+        lastPhase = snapshot.phase;
+      }
+
+      if (snapshot?.status === 'completed') {
+        return snapshot;
+      }
+
+      if (snapshot?.status === 'failed') {
+        const errMessage = snapshot?.error?.message || snapshot?.error?.code || 'Agent start failed';
+        const err: any = new Error(errMessage);
+        err.code = snapshot?.error?.code;
+        err.details = snapshot?.error?.details;
+        throw err;
+      }
+
+      await sleep(intervalMs);
+    }
+
+    const timeoutError: any = new Error('Timed out waiting for agent start job to complete');
+    timeoutError.code = 'start.timeout';
+    throw timeoutError;
   }, []);
 
   const load = React.useCallback(async (forceRefresh = false) => { 
@@ -1364,44 +1410,70 @@ export default function SessionsPage(){
               hide = message.loading(isRestart ? 'Restarting agent...' : 'Starting agent...', 0);
               setOpen(false);
 
-              const res = await (isRestart
-                ? api.client.post('/api/agent/restart', v)
-                : api.client.post('/api/agent/start', v));
+              let responseData: any = null;
+              let jobSnapshot: any = null;
+              let sessionIdentifier: string | null = sessionIdForRestart || null;
+              let selectedSymbol: string | null = null;
+              let jobState: string | undefined;
 
-              const responseData = (res as any)?.data ?? res;
+              if (isRestart) {
+                responseData = (await api.client.post('/api/agent/restart', v)).data;
+              } else {
+                responseData = await api.startAgentJob(v);
+                if (responseData?.jobId) {
+                  jobSnapshot = await pollAgentStartJob(responseData.jobId, { timeoutMs: 180_000, intervalMs: 900 });
+                }
 
-              if (hide) hide();
+                if (jobSnapshot?.result) {
+                  sessionIdentifier = jobSnapshot.result.sessionId || null;
+                  selectedSymbol = jobSnapshot.result.symbol || null;
+                  jobState = jobSnapshot.result.state;
+                } else if (responseData?.id) {
+                  sessionIdentifier = responseData.id || null;
+                  selectedSymbol = responseData.symbol || null;
+                } else if (!sessionIdentifier) {
+                  sessionIdentifier = typeof responseData?.sessionId === 'string' ? responseData.sessionId : null;
+                  selectedSymbol = responseData?.symbol || null;
+                }
+              }
+
+              if (hide) { hide(); hide = null; }
 
               const cacheEvent = isRestart ? 'settings_changed' : 'session_created';
-              const sessionIdentifier = sessionIdForRestart || responseData?.id;
-              invalidateSmartly(cacheEvent, { mode: v.mode as any, sessionId: sessionIdentifier });
+              if (sessionIdentifier) {
+                invalidateSmartly(cacheEvent, { mode: v.mode as any, sessionId: sessionIdentifier });
+              } else {
+                invalidateSmartly(cacheEvent, { mode: v.mode as any });
+              }
 
               if (isRestart) {
                 message.success('Agent restarted successfully!');
+              } else if (selectedSymbol && selectedSymbol !== 'SMART/SLEEP') {
+                message.success(`Agent started on ${selectedSymbol}!`);
               } else {
                 message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
               }
 
               await load(true);
 
-              const navigateTargetId = sessionIdForRestart || responseData?.id || null;
+              const navigateTargetId = sessionIdForRestart || sessionIdentifier || null;
               let shouldNavigate = true;
 
               if (!isRestart && v.smartAutoMode && navigateTargetId) {
-                let pending = Boolean(responseData?.initPending || responseData?.symbol === 'SMART/SLEEP');
+                let pending = Boolean(jobState === 'warming' || !selectedSymbol || selectedSymbol === 'SMART/SLEEP');
                 const closeWaiting = message.loading('Analyzing market and selecting the best opportunity…', 0);
-                const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
                 const POLL_TIMEOUT_MS = 120_000;
                 const POLL_INTERVAL_MS = 1500;
                 const deadline = Date.now() + POLL_TIMEOUT_MS;
                 try {
                   while (pending && Date.now() < deadline) {
-                    await delay(POLL_INTERVAL_MS);
+                    await sleep(POLL_INTERVAL_MS);
                     try {
                       const sessions = await api.listSessions(mode);
                       const current = sessions.find((row: any) => row.id === navigateTargetId);
                       if (current && current.symbol && current.symbol !== 'SMART/SLEEP') {
                         pending = false;
+                        selectedSymbol = current.symbol;
                         break;
                       }
                     } catch (pollError) {
@@ -1436,6 +1508,10 @@ export default function SessionsPage(){
               const msg = String(e?.response?.data?.error || e?.message || e);
               if (!isRestart && msg.includes('active_session_exists')) {
                 message.warning('Stop the active session first.');
+              } else if (e?.code === 'start.universe_conflict') {
+                message.error('No unused futures market is currently available for a smart agent. Please stop an existing session or try again later.');
+              } else if (e?.code === 'start.timeout') {
+                message.error('Timed out while waiting for the agent to initialize. Please check the backend logs and try again.');
               } else {
                 message.error(isRestart ? 'Failed to restart session' : 'Failed to start session');
               }
