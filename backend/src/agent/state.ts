@@ -610,7 +610,10 @@ export class ReboundRejectionAgent {
     const qualityFilters = this.getQualityFiltersDiagnostics(snap);
     const qualityPoints = Object.values(qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
     const mode = this.profile?.aggressiveness || 'reactive';
-    const minTradingPoints = mode === 'aggressive' ? 40 : mode === 'reactive' ? 50 : 60;
+    const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
+    const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
+    const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
     
     if (qualityPoints < minTradingPoints) {
       recordOpsEvent({
@@ -930,7 +933,6 @@ export class ReboundRejectionAgent {
     const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
     let spreadPct = 0;
     if (ticker?.bid && ticker?.ask) spreadPct = ((ticker.ask - ticker.bid) / ((ticker.ask + ticker.bid) / 2)) * 100;
-    const playbook = this.plan.plan.meta?.playbook || this.regime?.playbook || 'mean_reversion';
     const limitSpreadThresh = 0.12;
     const twapSpreadThresh = 0.2;
     let executionMode: 'market'|'limit'|'twap' = 'market';
@@ -4272,7 +4274,10 @@ export class ReboundRejectionAgent {
     const maxPoints = 100; // 5 filters × 20 points each
     // Mode-adaptive minimum quality score for diagnostics (aligned with env.ts)
     const mode = this.profile?.aggressiveness || 'reactive';
-    const minTradingPoints = mode === 'aggressive' ? 40 : mode === 'reactive' ? 50 : 60;
+    const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
+    const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
+    const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
     checks.qualityScore = {
       current: qualityPoints,
       required: minTradingPoints, // Changed from maxPoints to minTradingPoints
@@ -4346,6 +4351,7 @@ export class ReboundRejectionAgent {
   private getQualityFiltersDiagnostics(snap: TechnicalSnapshot): any {
     if (!this.plan) return {};
 
+    const playbook = this.plan.plan.meta?.playbook || this.regime?.playbook || 'mean_reversion';
     const price = snap.last;
     const bias = this.plan.bias;
     const adx = Number((snap as any)?.adx14 ?? 0);
@@ -4356,102 +4362,208 @@ export class ReboundRejectionAgent {
     const volume = Number((snap as any)?.volume ?? 0);
     const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
 
+    const computeVolumeDiagnostics = (opts?: { relax?: number; floorBoost?: number }) => {
+      const cfg = getConfig();
+      const level = this.profile?.aggressiveness || 'conservative';
+      const ratio = volumeMA > 0 ? (volume / volumeMA) : 0;
+      const usdVolumeMA = volumeMA > 0 ? volumeMA * price : 0;
+      const baseRequired = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_BASE) ? cfg.QUALITY_VOLUME_RATIO_BASE : 0.6;
+      const floor = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_FLOOR) ? cfg.QUALITY_VOLUME_RATIO_FLOOR : 0.4;
+      const ceiling = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL) ? cfg.QUALITY_VOLUME_RATIO_CEIL : 0.78;
+      let required = baseRequired;
+      if (level === 'reactive') required -= 0.05; else if (level === 'aggressive') required -= 0.10; else required += 0.02;
+      if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_HIGH_USD) required -= 0.08;
+      else if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_MEDIUM_USD) required -= 0.05;
+      else if (usdVolumeMA <= cfg.QUALITY_VOLUME_RATIO_LOW_USD && usdVolumeMA > 0) required += 0.07;
+      if (atrPct >= 1.4) required -= 0.03; else if (atrPct <= 0.45) required += 0.03;
+      if (opts?.relax) required -= opts.relax;
+      if (opts?.floorBoost) required = Math.max(required, floor + opts.floorBoost);
+      // CMF-based modulation for diagnostics (align with gating behavior)
+      try {
+        const cmf20 = Number((snap as any)?.cmf20 ?? 0);
+        const cmfStrong = Number(cfg.VOLUME_CMF_STRONG || 0.15);
+        const cmfMinAdx = Number(cfg.VOLUME_CMF_MIN_ADX || 15);
+        const adxVal = Number((snap as any)?.adx14 ?? 0);
+        const planBias = this.plan?.bias || 'none';
+        const cmfAligned = (planBias === 'long' && cmf20 >= cmfStrong) || (planBias === 'short' && cmf20 <= -cmfStrong);
+        if (cmfAligned && adxVal >= cmfMinAdx) {
+          const relaxBase = Number(cfg.VOLUME_CMF_RELAX || 0.15);
+          const relaxCap = Number(cfg.VOLUME_CMF_RELAX_MAX || relaxBase);
+          const magnitude = Math.max(1, Math.abs(cmf20) / Math.max(1e-6, cmfStrong));
+          const relaxAmt = Math.min(relaxCap, relaxBase * magnitude);
+          const floorCmf = level === 'aggressive' ? 0.20 : level === 'reactive' ? 0.28 : 0.35;
+          required = Math.max(floorCmf, required - relaxAmt);
+        }
+      } catch {}
+
+      required = Math.max(floor, Math.min(ceiling, required));
+      const pass = volumeMA <= 0 ? volume > 0 : ratio >= required;
+      return {
+        status: pass ? 'PASS' : 'FAIL',
+        reason: `Volume ratio ${(ratio || 0).toFixed(2)} should be >= ${required.toFixed(2)} (adj. by liquidity/volatility)`,
+        points: pass ? 20 : 0,
+        details: {
+          currentVolume: volume,
+          volumeMA,
+          ratio: volumeMA > 0 ? ratio.toFixed(2) : 'N/A',
+          required: required.toFixed(2),
+          usdVolumeMA: Math.round(usdVolumeMA),
+          cmf20: Number((snap as any)?.cmf20 ?? 0)
+        }
+      };
+    };
+
+    const emaSpreadPct = ema50 !== 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
+
+    if (playbook === 'momentum_breakout') {
+      return {
+        trendAlignment: {
+          status: this.checkTrendAlignment(ema20, ema50, bias) ? 'PASS' : 'FAIL',
+          reason: bias === 'long'
+            ? `EMA20 (${ema20.toFixed(4)}) should be above EMA50 (${ema50.toFixed(4)}) with >0.5% spread for long bias`
+            : `EMA20 (${ema20.toFixed(4)}) should be below EMA50 (${ema50.toFixed(4)}) with <-0.5% spread for short bias`,
+          points: this.checkTrendAlignment(ema20, ema50, bias) ? 20 : 0,
+          details: {
+            ema20: ema20.toFixed(4),
+            ema50: ema50.toFixed(4),
+            spread: `${emaSpreadPct.toFixed(2)}%`
+          }
+        },
+        momentum: {
+          status: adx >= this.getRealisticADXThreshold() ? 'PASS' : 'FAIL',
+          reason: `ADX (${adx.toFixed(1)}) must be >= ${this.getRealisticADXThreshold()} to confirm trend strength (optimized threshold)`,
+          points: adx >= this.getRealisticADXThreshold() ? 20 : 0,
+          details: {
+            currentADX: adx,
+            threshold: this.getRealisticADXThreshold()
+          }
+        },
+        rsiPosition: {
+          status: this.checkRSIPosition(rsi, bias) ? 'PASS' : 'FAIL',
+          reason: bias === 'long'
+            ? `RSI (${rsi.toFixed(1)}) should be between 30-80 for long entries (realistic oversold detection)`
+            : `RSI (${rsi.toFixed(1)}) should be between 20-70 for short entries (realistic overbought detection)`,
+          points: this.checkRSIPosition(rsi, bias) ? 20 : 0,
+          details: {
+            currentRSI: rsi,
+            bias,
+            threshold: bias === 'long' ? '30-80' : '20-70'
+          }
+        },
+        volatility: (() => {
+          const baseMinAtr = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
+          const symForAtr = this.profile?.symbol || '';
+          let thr = baseMinAtr;
+          try { thr = this.getAdaptiveATRThresholdSync(symForAtr, baseMinAtr); } catch {}
+          const pass = atrPct >= thr;
+          return {
+            status: pass ? 'PASS' : 'FAIL',
+            reason: `ATR (${atrPct.toFixed(2)}%) must be >= ${thr}% to ensure sufficient volatility (adaptive per symbol)`,
+            points: pass ? 20 : 0,
+            details: { currentATR: atrPct, threshold: thr, base: baseMinAtr }
+          };
+        })(),
+        volume: computeVolumeDiagnostics(),
+      };
+    }
+
+    // Mean reversion or other range-focused playbooks
+    const srInfo = (() => {
+      const srBias = (snap as any)?.srBias;
+      const levels = bias === 'long' ? (snap.supports || []) : (snap.resistances || []);
+      let nearest: { price: number; touches?: number; strength?: number } | null = null;
+      let nearestDistancePct = Number.POSITIVE_INFINITY;
+      for (const level of levels) {
+        if (!level || typeof level.price !== 'number') continue;
+        const distancePct = Math.abs((price - level.price) / price) * 100;
+        if (distancePct < nearestDistancePct) {
+          nearestDistancePct = distancePct;
+          nearest = level;
+        }
+      }
+      const srAligned = (bias === 'long' && srBias === 'nearSupport') || (bias === 'short' && srBias === 'nearResistance');
+      const withinTolerance = nearestDistancePct <= 2.5;
+      return {
+        srAligned,
+        withinTolerance,
+        srBias,
+        nearestPrice: nearest?.price ?? null,
+        nearestTouches: nearest?.touches ?? null,
+        distancePct: Number.isFinite(nearestDistancePct) ? nearestDistancePct : null,
+      };
+    })();
+
+    const rsiExtremes = (() => {
+      if (bias === 'long') return {
+        pass: rsi <= 35,
+        severe: rsi <= 30,
+        lower: 28,
+        upper: 38,
+      };
+      if (bias === 'short') return {
+        pass: rsi >= 65,
+        severe: rsi >= 70,
+        lower: 62,
+        upper: 72,
+      };
+      return { pass: false, severe: false, lower: 0, upper: 0 };
+    })();
+
+    const moderateAtrBounds = (() => {
+      const baseMinAtr = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
+      const lower = Math.max(0, baseMinAtr - 0.15);
+      const upper = baseMinAtr + 1.2;
+      return { lower, upper, base: baseMinAtr };
+    })();
+
     return {
       trendAlignment: {
-        status: this.checkTrendAlignment(ema20, ema50, bias) ? 'PASS' : 'FAIL',
-        reason: bias === 'long' 
-          ? `EMA20 (${ema20.toFixed(4)}) should be above EMA50 (${ema50.toFixed(4)}) with >0.5% spread for long bias`
-          : `EMA20 (${ema20.toFixed(4)}) should be below EMA50 (${ema50.toFixed(4)}) with <-0.5% spread for short bias`,
-        points: this.checkTrendAlignment(ema20, ema50, bias) ? 20 : 0,
+        status: (Math.abs(emaSpreadPct) <= 1.0 && srInfo.srAligned && srInfo.withinTolerance) ? 'PASS' : 'FAIL',
+        reason: `Mean-reversion structure requires price to respect nearby ${bias === 'long' ? 'support' : 'resistance'} (≤2.5%) with EMA20/EMA50 flat (<±1%).`,
+        points: (Math.abs(emaSpreadPct) <= 1.0 && srInfo.srAligned && srInfo.withinTolerance) ? 20 : srInfo.srAligned ? 10 : 0,
         details: {
           ema20: ema20.toFixed(4),
           ema50: ema50.toFixed(4),
-          spread: (((ema20 - ema50) / ema50) * 100).toFixed(2) + '%'
+          emaSpreadPct: `${emaSpreadPct.toFixed(2)}%`,
+          srBias: srInfo.srBias,
+          nearestLevel: srInfo.nearestPrice,
+          distancePct: srInfo.distancePct != null ? `${srInfo.distancePct.toFixed(2)}%` : 'N/A',
         }
       },
       momentum: {
-        status: adx >= this.getRealisticADXThreshold() ? 'PASS' : 'FAIL',
-        reason: `ADX (${adx.toFixed(1)}) must be >= ${this.getRealisticADXThreshold()} to confirm trend strength (optimized threshold)`,
-        points: adx >= this.getRealisticADXThreshold() ? 20 : 0,
+        status: adx <= 22 ? 'PASS' : 'FAIL',
+        reason: `ADX (${adx.toFixed(1)}) should stay below ~22 to confirm a range-bound environment suitable for mean reversion.`,
+        points: adx <= 22 ? 20 : adx <= 25 ? 10 : 0,
         details: {
           currentADX: adx,
-          threshold: this.getRealisticADXThreshold()
+          tolerance: 22,
         }
       },
       rsiPosition: {
-        status: this.checkRSIPosition(rsi, bias) ? 'PASS' : 'FAIL',
-        reason: bias === 'long' 
-          ? `RSI (${rsi.toFixed(1)}) should be between 30-80 for long entries (realistic oversold detection)`
-          : `RSI (${rsi.toFixed(1)}) should be between 20-70 for short entries (realistic overbought detection)`,
-        points: this.checkRSIPosition(rsi, bias) ? 20 : 0,
+        status: rsiExtremes.pass && srInfo.srAligned ? 'PASS' : 'FAIL',
+        reason: bias === 'long'
+          ? `RSI (${rsi.toFixed(1)}) should show oversold divergence (≤${rsiExtremes.upper}) near support to justify a bounce.`
+          : `RSI (${rsi.toFixed(1)}) should show overbought divergence (≥${rsiExtremes.lower}) near resistance to justify a fade.`,
+        points: rsiExtremes.severe && srInfo.srAligned ? 20 : rsiExtremes.pass ? 15 : 0,
         details: {
           currentRSI: rsi,
           bias,
-          threshold: bias === 'long' ? '30-80' : '20-70'
+          severe: rsiExtremes.severe,
+          srBias: srInfo.srBias,
         }
       },
-      volatility: (() => {
-        const baseMinAtr = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
-        const symForAtr = this.profile?.symbol || '';
-        let thr = baseMinAtr;
-        try { thr = this.getAdaptiveATRThresholdSync(symForAtr, baseMinAtr); } catch {}
-        const pass = atrPct >= thr;
-        return {
-          status: pass ? 'PASS' : 'FAIL',
-          reason: `ATR (${atrPct.toFixed(2)}%) must be >= ${thr}% to ensure sufficient volatility (adaptive per symbol)`,
-          points: pass ? 20 : 0,
-          details: { currentATR: atrPct, threshold: thr, base: baseMinAtr }
-        };
-      })(),
-      volume: (() => {
-        // Diagnostics should mirror core filter behavior more closely
-        const cfg = getConfig();
-        const level = this.profile?.aggressiveness || 'conservative';
-        const ratio = volumeMA > 0 ? (volume / volumeMA) : 0;
-        const usdVolumeMA = volumeMA > 0 ? volumeMA * price : 0;
-        const baseRequired = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_BASE) ? cfg.QUALITY_VOLUME_RATIO_BASE : 0.6;
-        const floor = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_FLOOR) ? cfg.QUALITY_VOLUME_RATIO_FLOOR : 0.4;
-        const ceiling = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL) ? cfg.QUALITY_VOLUME_RATIO_CEIL : 0.78;
-        let required = baseRequired;
-        if (level === 'reactive') required -= 0.05; else if (level === 'aggressive') required -= 0.10; else required += 0.02;
-        if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_HIGH_USD) required -= 0.08;
-        else if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_MEDIUM_USD) required -= 0.05;
-        else if (usdVolumeMA <= cfg.QUALITY_VOLUME_RATIO_LOW_USD && usdVolumeMA > 0) required += 0.07;
-        if (atrPct >= 1.4) required -= 0.03; else if (atrPct <= 0.45) required += 0.03;
-        // CMF-based modulation for diagnostics (align with gating behavior)
-        try {
-          const cmf20 = Number((snap as any)?.cmf20 ?? 0);
-          const cmfStrong = Number(cfg.VOLUME_CMF_STRONG || 0.15);
-          const cmfMinAdx = Number(cfg.VOLUME_CMF_MIN_ADX || 15);
-          const adxVal = Number((snap as any)?.adx14 ?? 0);
-          const bias = this.plan?.bias || 'none';
-          const cmfAligned = (bias === 'long' && cmf20 >= cmfStrong) || (bias === 'short' && cmf20 <= -cmfStrong);
-          if (cmfAligned && adxVal >= cmfMinAdx) {
-            const relaxBase = Number(cfg.VOLUME_CMF_RELAX || 0.15);
-            const relaxCap = Number(cfg.VOLUME_CMF_RELAX_MAX || relaxBase);
-            const magnitude = Math.max(1, Math.abs(cmf20) / Math.max(1e-6, cmfStrong));
-            const relaxAmt = Math.min(relaxCap, relaxBase * magnitude);
-            const floorCmf = level === 'aggressive' ? 0.20 : level === 'reactive' ? 0.28 : 0.35;
-            required = Math.max(floorCmf, required - relaxAmt);
-          }
-        } catch {}
-
-        required = Math.max(floor, Math.min(ceiling, required));
-        const pass = volumeMA <= 0 ? volume > 0 : ratio >= required;
-        return {
-          status: pass ? 'PASS' : 'FAIL',
-          reason: `Volume ratio ${(ratio||0).toFixed(2)} should be >= ${required.toFixed(2)} (adj. by liquidity/volatility)` ,
-          points: pass ? 20 : 0,
-          details: {
-            currentVolume: volume,
-            volumeMA,
-            ratio: volumeMA > 0 ? ratio.toFixed(2) : 'N/A',
-            required: required.toFixed(2),
-            usdVolumeMA: Math.round(usdVolumeMA),
-            cmf20: Number((snap as any)?.cmf20 ?? 0)
-          }
-        };
-      })()
+      volatility: {
+        status: atrPct >= moderateAtrBounds.lower && atrPct <= moderateAtrBounds.upper ? 'PASS' : 'FAIL',
+        reason: `ATR (${atrPct.toFixed(2)}%) should be between ${moderateAtrBounds.lower.toFixed(2)}% and ${moderateAtrBounds.upper.toFixed(2)}% for controlled mean-reversion swings.`,
+        points: atrPct >= moderateAtrBounds.lower && atrPct <= moderateAtrBounds.upper ? 20 : atrPct >= moderateAtrBounds.lower ? 10 : 0,
+        details: {
+          currentATR: atrPct,
+          lower: moderateAtrBounds.lower,
+          upper: moderateAtrBounds.upper,
+          base: moderateAtrBounds.base,
+        }
+      },
+      volume: computeVolumeDiagnostics({ relax: 0.12, floorBoost: 0.05 }),
     };
   }
 
