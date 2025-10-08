@@ -3,24 +3,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 process.env.UNIT_TEST_MODE = 'true';
-const base = path.resolve(process.cwd(), '../backend/test/integration');
+const base = path.resolve(process.cwd(), 'test/integration');
 const enableRemote = (process.env.QA_ENABLE_REMOTE || 'false') === 'true';
 const files = [];
 
-const prismaClientPath = path.resolve(process.cwd(), '../backend/dist/db/client.js');
-if (fs.existsSync(prismaClientPath)) {
-  files.push(path.join(base, 'agent-a2z.mjs'), path.join(base, 'dashboard-coherence.mjs'));
+if (fs.existsSync(base)) {
+  const discovered = fs
+    .readdirSync(base)
+    .filter((f) => f.endsWith('.mjs'))
+    .map((f) => path.join(base, f))
+    .sort();
+  files.push(...discovered);
 } else {
-  console.warn('⚠️ Skipping agent-a2z/dashboard-coherence (dist/db/client.js missing)');
+  console.warn(`⚠️ Integration tests directory missing: ${base}`);
 }
 
 if (enableRemote) {
-  files.push(
+  const remoteFiles = [
     path.join(base, 'qa-agent-lifecycle.mjs'),
     path.join(base, 'qa-market-validation.mjs'),
-  );
+  ];
+  for (const remote of remoteFiles) {
+    if (fs.existsSync(remote)) {
+      files.push(remote);
+    } else {
+      console.warn(`⚠️ Remote integration test missing: ${remote}`);
+    }
+  }
 } else {
   console.log('ℹ️ QA remote integration tests skipped (set QA_ENABLE_REMOTE=true to enable)');
+}
+
+if (!files.length) {
+  console.log('ℹ️ No integration tests discovered.');
+  process.exit(0);
 }
 
 let code = 0;
