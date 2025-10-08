@@ -2088,9 +2088,7 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
   // Get the complete ranked list of qualified opportunities
   const opportunities =
     opts?.candidatesOverride ??
-    (testMode
-      ? await scanIntelligentOpportunitiesLegacy(excludeSessionId, opts)
-      : await scanIntelligentOpportunities(undefined, opts));
+    await scanIntelligentOpportunities(undefined, opts);
 
   if (opportunities.length === 0) {
     console.log('😴 No qualified opportunities found (all below minimum score threshold) → SLEEP mode');
