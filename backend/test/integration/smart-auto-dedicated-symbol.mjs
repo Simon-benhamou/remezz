@@ -12,30 +12,6 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForJobCompletion(getSnapshot, jobId, timeoutMs = 15000) {
-  const started = Date.now();
-  return new Promise((resolve, reject) => {
-    const timer = setInterval(() => {
-      const snapshot = getSnapshot(jobId);
-      if (!snapshot) return;
-      if (snapshot.status === 'completed') {
-        clearInterval(timer);
-        resolve(snapshot);
-      } else if (snapshot.status === 'failed') {
-        clearInterval(timer);
-        reject(
-          new Error(
-            `Agent start job failed: ${snapshot.error?.code || 'unknown'} - ${snapshot.error?.message || ''}`
-          )
-        );
-      } else if (Date.now() - started > timeoutMs) {
-        clearInterval(timer);
-        reject(new Error(`Timed out waiting for job ${jobId}`));
-      }
-    }, 50);
-  });
-}
-
 try {
   const { prisma } = await import('../../dist/src/db/client.js');
   if (typeof prisma.$reset === 'function') {
@@ -54,7 +30,7 @@ try {
     },
   });
 
-  const { enqueueAgentStartJob, getAgentStartJob } = await import('../../dist/src/services/agentStartJob.js');
+  const { startAgentCreation } = await import('../../dist/src/services/agentCreationFlow.js');
 
   const payload = {
     mode: 'paper',
@@ -68,14 +44,13 @@ try {
     budgetPct: 50,
   };
 
-  const { jobId } = enqueueAgentStartJob({ payload, userId: null });
-  const snapshot = await waitForJobCompletion(getAgentStartJob, jobId, 20000);
+  const result = await startAgentCreation(payload, null);
 
-  if (!snapshot?.result) {
-    throw new Error('Smart auto-select job did not return a result');
+  if (!result) {
+    throw new Error('Smart auto-select flow did not return a result');
   }
 
-  const { sessionId, symbol } = snapshot.result;
+  const { sessionId, symbol } = result;
   if (!sessionId) {
     throw new Error('Smart auto-select job missing session id');
   }

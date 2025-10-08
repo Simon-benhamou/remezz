@@ -32,7 +32,10 @@ import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
-import { getAgentStartJob, enqueueAgentStartJob } from "./services/agentStartJob.js";
+import {
+  startAgentCreation,
+  PhaseError,
+} from "./services/agentCreationFlow.js";
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -109,22 +112,26 @@ app.use("/api/arbitrage", arbitrageRouter);
 app.use("/api/llm", llmTestRouter);
 app.use("/api/ops", opsRouter);
 app.use("/api/improvements", improvementsRouter);
-app.post("/api/start-agent", (req, res) => {
-  const userId = typeof (req as any)?.user?.id === "string" ? (req as any).user.id : undefined;
-  const { jobId, agentTempId } = enqueueAgentStartJob({ payload: req.body ?? {}, userId });
-  res.status(202).json({ status: "accepted", jobId, agentTempId });
-});
-app.get("/api/agent-start-status", (req, res) => {
-  const jobIdParam = Array.isArray(req.query.jobId) ? req.query.jobId[0] : req.query.jobId;
-  const jobId = typeof jobIdParam === "string" ? jobIdParam : "";
-  if (!jobId) {
-    return res.status(400).json({ error: "job_id_required" });
+app.post("/api/start-agent", async (req, res) => {
+  try {
+    const userId = typeof (req as any)?.user?.id === "string" ? (req as any).user.id : undefined;
+    const result = await startAgentCreation(req.body ?? {}, userId);
+    res.status(201).json(result);
+  } catch (error) {
+    if (error instanceof PhaseError) {
+      const status =
+        error.code === "start.validation_failed"
+          ? 400
+          : error.code === "start.universe_conflict" || error.code === "start.universe_empty"
+          ? 409
+          : 500;
+      return res.status(status).json({ error: error.code, message: error.message, details: error.details });
+    }
+    res.status(500).json({
+      error: "start.unexpected_error",
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
-  const job = getAgentStartJob(jobId);
-  if (!job) {
-    return res.status(404).json({ error: "job_not_found" });
-  }
-  res.json(job);
 });
 
 const server = http.createServer(app);

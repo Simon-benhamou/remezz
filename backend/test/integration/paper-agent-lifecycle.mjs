@@ -11,33 +11,13 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForJobCompletion(getSnapshot, jobId, timeoutMs = 15000) {
-  const started = Date.now();
-  return new Promise((resolve, reject) => {
-    const timer = setInterval(() => {
-      const snapshot = getSnapshot(jobId);
-      if (!snapshot) return;
-      if (snapshot.status === 'completed') {
-        clearInterval(timer);
-        resolve(snapshot);
-      } else if (snapshot.status === 'failed') {
-        clearInterval(timer);
-        reject(new Error(`Agent start job failed: ${snapshot.error?.code || 'unknown'} - ${snapshot.error?.message || ''}`));
-      } else if (Date.now() - started > timeoutMs) {
-        clearInterval(timer);
-        reject(new Error(`Timed out waiting for job ${jobId}`));
-      }
-    }, 50);
-  });
-}
-
 try {
   const { prisma } = await import('../../dist/src/db/client.js');
   if (typeof prisma.$reset === 'function') {
     await prisma.$reset();
   }
 
-  const { enqueueAgentStartJob, getAgentStartJob } = await import('../../dist/src/services/agentStartJob.js');
+  const { startAgentCreation } = await import('../../dist/src/services/agentCreationFlow.js');
   const { AgentHub } = await import('../../dist/src/agent/hub.js');
   const { computeMonitorAnalytics } = await import('../../dist/src/monitor/analytics.js');
   const { buildTechSnapshot } = await import('../../dist/src/ai/tech.js');
@@ -55,15 +35,14 @@ try {
     perps: ['BTC/USDT:USDT', 'ETH/USDT:USDT'],
   };
 
-  console.log('📨 Enqueuing agent start job in paper mode...');
-  const { jobId } = enqueueAgentStartJob({ payload: startPayload, userId: null });
-  const snapshot = await waitForJobCompletion(getAgentStartJob, jobId);
+  console.log('📨 Starting agent creation flow in paper mode...');
+  const result = await startAgentCreation(startPayload, null);
 
-  if (!snapshot?.result || snapshot.result.state !== 'ready') {
-    throw new Error(`Unexpected job result state: ${snapshot?.result?.state}`);
+  if (!result || result.state !== 'ready') {
+    throw new Error(`Unexpected agent creation state: ${result?.state}`);
   }
 
-  const sessionId = snapshot.result.sessionId;
+  const sessionId = result.sessionId;
   console.log(`✅ Agent session created: ${sessionId}`);
 
   await wait(200);
