@@ -21,6 +21,57 @@ const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
 const CACHE_DURATION_ML = 15 * 60 * 1000; // 15min cache ML
 const waitFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+type AutoUniverseStatus = {
+  source: 'dynamic' | 'fallback_dynamic' | 'fallback_static';
+  attempt: number;
+  candidateCount: number;
+  ts: number;
+  reason?: string;
+  retryScheduledMs?: number;
+};
+
+const AUTO_UNIVERSE_MAX_ATTEMPTS = 3;
+const AUTO_UNIVERSE_RETRY_DEFAULT_MS = 60_000;
+
+let lastAutoUniverseStatus: AutoUniverseStatus = {
+  source: 'dynamic',
+  attempt: 0,
+  candidateCount: 0,
+  ts: 0,
+  reason: 'uninitialized',
+};
+let pendingUniverseRetry: NodeJS.Timeout | null = null;
+let pendingUniverseRetryDeadline = 0;
+
+function updateAutoUniverseStatus(status: AutoUniverseStatus) {
+  lastAutoUniverseStatus = { ...status, ts: Date.now() };
+}
+
+export function getAutoUniverseStatusSnapshot(): AutoUniverseStatus {
+  return { ...lastAutoUniverseStatus };
+}
+
+function scheduleAutoUniverseRetry(excludeSessionId: string | undefined, delayMs: number = AUTO_UNIVERSE_RETRY_DEFAULT_MS) {
+  const boundedDelay = Math.min(Math.max(delayMs, 30_000), 120_000);
+  if (pendingUniverseRetry && pendingUniverseRetryDeadline > Date.now()) {
+    return;
+  }
+  if (pendingUniverseRetry) {
+    clearTimeout(pendingUniverseRetry);
+    pendingUniverseRetry = null;
+  }
+  pendingUniverseRetryDeadline = Date.now() + boundedDelay;
+  pendingUniverseRetry = setTimeout(async () => {
+    pendingUniverseRetry = null;
+    pendingUniverseRetryDeadline = 0;
+    try {
+      await getOptimizedCryptoList(excludeSessionId, AUTO_UNIVERSE_MAX_ATTEMPTS);
+    } catch (error) {
+      console.warn('⚠️ Auto universe retry failed:', error);
+    }
+  }, boundedDelay);
+}
+
 // AUTO-DIRECTIONAL: Détection automatique du bias optimal (VERSION AGRESSIVE)
 function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 'short' | 'none'; confidence: number; reasoning: string } {
   const { rsi, adx, momentum, trendStrength, volume24h } = metrics;
@@ -348,7 +399,10 @@ async function isSymbolInUse(symbol: string, excludeSessionId?: string): Promise
 /**
  * Get optimized list of top performing cryptos for analysis (max 20)
  */
-export async function getOptimizedCryptoList(excludeSessionId?: string): Promise<string[]> {
+export async function getOptimizedCryptoList(excludeSessionId?: string, attempt: number = 1): Promise<string[]> {
+  const maxAttempts = AUTO_UNIVERSE_MAX_ATTEMPTS;
+  const retryDelayMs = 2000;
+  const attemptLabel = Math.max(1, attempt);
   try {
     console.log('📊 Fetching top performing cryptos from last 24h...');
     
@@ -560,7 +614,23 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       }
     }
     
-    console.log(`📊 Successfully fetched ${Object.keys(tickers).length} tickers`);
+    const tickerCount = Object.keys(tickers).length;
+    console.log(`📊 Successfully fetched ${tickerCount} tickers`);
+    if (tickerCount < 10) {
+      const reason = 'insufficient_tickers';
+      console.warn(JSON.stringify({ level: 'warn', event: 'auto_select_universe_fallback', reason, attempt: attemptLabel, ticker_count: tickerCount }));
+      updateAutoUniverseStatus({
+        source: 'fallback_dynamic',
+        attempt: attemptLabel,
+        candidateCount: tickerCount,
+        reason,
+        ts: Date.now(),
+      });
+      if (attemptLabel < maxAttempts) {
+        await waitFor(retryDelayMs * attemptLabel);
+        return getOptimizedCryptoList(excludeSessionId, attemptLabel + 1);
+      }
+    }
     
     // Convert to array et calcul VRAI changement 24h
     const cryptoPerformance = Object.entries(tickers).map(([symbol, ticker]) => {
@@ -666,6 +736,22 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
       return true;
     });
 
+    if (cryptoPerformance.length === 0) {
+      const reason = 'no_dynamic_candidates';
+      console.warn(JSON.stringify({ level: 'warn', event: 'auto_select_universe_fallback', reason, attempt: attemptLabel, ticker_count: tickerCount }));
+      updateAutoUniverseStatus({
+        source: 'fallback_dynamic',
+        attempt: attemptLabel,
+        candidateCount: 0,
+        reason,
+        ts: Date.now(),
+      });
+      if (attemptLabel < maxAttempts) {
+        await waitFor(retryDelayMs * attemptLabel);
+        return getOptimizedCryptoList(excludeSessionId, attemptLabel + 1);
+      }
+    }
+
     // Sort by combined score descending
     cryptoPerformance.sort((a, b) => b.combinedScore - a.combinedScore);
     
@@ -730,17 +816,46 @@ export async function getOptimizedCryptoList(excludeSessionId?: string): Promise
         console.log('🔥 Priority symbols (>3%):', prioritySymbols.slice(0, 3));
       }
       console.log('🏆 Top available:', finalPerformers.slice(0, 5));
+      updateAutoUniverseStatus({
+        source: 'dynamic',
+        attempt: attemptLabel,
+        candidateCount: finalPerformers.length,
+        reason: 'dynamic_ready',
+        ts: Date.now(),
+      });
       return finalPerformers;
     } else {
+      const reason = 'top_performers_conflict';
       console.log('⚠️ All top performers at capacity - falling back to static list without active ones');
+      console.warn(JSON.stringify({ level: 'warn', event: 'auto_select_universe_fallback', reason, attempt: attemptLabel, candidate_count: cryptoPerformance.length }));
       const staticFallback = await getTopCryptos(excludeSessionId);
-      return staticFallback.length > 0 ? staticFallback : await getTopCryptos(excludeSessionId); // Dernière chance
+      const fallbackList = staticFallback.length > 0 ? staticFallback : await getTopCryptos(excludeSessionId);
+      updateAutoUniverseStatus({
+        source: 'fallback_static',
+        attempt: attemptLabel,
+        candidateCount: fallbackList.length,
+        reason,
+        retryScheduledMs: AUTO_UNIVERSE_RETRY_DEFAULT_MS,
+        ts: Date.now(),
+      });
+      scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
+      return fallbackList;
     }
     
   } catch (error) {
     console.error('Error getting dynamic crypto list:', error);
     console.log('📊 Falling back to static top cryptos list');
-    return await getTopCryptos(excludeSessionId); // Fallback to our curated list
+    const fallbackList = await getTopCryptos(excludeSessionId);
+    updateAutoUniverseStatus({
+      source: 'fallback_static',
+      attempt: attemptLabel,
+      candidateCount: fallbackList.length,
+      reason: 'exception_fallback',
+      retryScheduledMs: AUTO_UNIVERSE_RETRY_DEFAULT_MS,
+      ts: Date.now(),
+    });
+    scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
+    return fallbackList; // Fallback to our curated list
   }
 }
 
@@ -2062,6 +2177,29 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
 
     if (!bestOpportunity) {
       throw new Error(`No intelligent opportunity available after ${maxAttempts} attempts for session ${sessionId}`);
+    }
+    
+    const universeStatus = getAutoUniverseStatusSnapshot();
+    if (universeStatus.source !== 'dynamic') {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        event: 'auto_select_universe_source',
+        source: universeStatus.source,
+        reason: universeStatus.reason,
+        attempt: universeStatus.attempt,
+        candidate_count: universeStatus.candidateCount,
+      }));
+    }
+    if (FALLBACK_STATIC_SYMBOLS.includes(bestOpportunity.symbol)) {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        event: 'auto_select_major_pick',
+        symbol: bestOpportunity.symbol,
+        universe_source: universeStatus.source,
+        reason: universeStatus.reason,
+        attempt: universeStatus.attempt,
+        score: bestOpportunity.score,
+      }));
     }
     
     // Enhanced conflict check with multi-agent support (Phase 2)

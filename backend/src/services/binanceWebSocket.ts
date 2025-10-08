@@ -56,6 +56,30 @@ export function toBinanceSymbolId(unified: string): string {
   return base.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 }
 
+const LAST_VALID_BID_ASK_TTL_MS = 20_000;
+const SNAPSHOT_MIN_INTERVAL_MS = 1_500;
+
+function parseTickerNumber(value: any): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  const text = String(value).trim();
+  if (!text) return undefined;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function hasPositive(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value > 0;
+}
+
+type BidAskSanitization = {
+  skip: boolean;
+  needsSnapshot: boolean;
+  extra?: Record<string, unknown>;
+};
+
 export function adaptBinanceTickerToCcxt(symbol: string, ticker: BinanceTickerData) {
   const ts = Number(ticker.timestamp) || Date.now();
   return {
@@ -102,6 +126,8 @@ class BinanceWebSocketManager {
   private isConnecting = false;
   private isConnected = false;
   private lastHealthy = false;
+  private lastValidBidAsk = new Map<string, { bid: number; ask: number; ts: number }>();
+  private snapshotCooldown = new Map<string, number>();
   
   // Streams actifs
   private activeStreams = new Set<string>();
@@ -345,19 +371,53 @@ class BinanceWebSocketManager {
       const rawSymbol = String(ticker?.s || '').trim();
       if (!rawSymbol) continue;
 
+      const bidRaw = parseTickerNumber(ticker.b ?? ticker.B ?? ticker.bidPrice ?? ticker.BidPrice);
+      const askRaw = parseTickerNumber(ticker.a ?? ticker.A ?? ticker.askPrice ?? ticker.AskPrice);
+      const lastRaw = parseTickerNumber(ticker.c ?? ticker.C ?? ticker.lastPrice ?? ticker.price);
+      const openRaw = parseTickerNumber(ticker.o ?? ticker.O ?? ticker.openPrice);
+      const highRaw = parseTickerNumber(ticker.h ?? ticker.H ?? ticker.highPrice);
+      const lowRaw = parseTickerNumber(ticker.l ?? ticker.L ?? ticker.lowPrice);
+      const baseVolumeRaw = parseTickerNumber(ticker.v ?? ticker.V ?? ticker.volume);
+      const quoteVolumeRaw = parseTickerNumber(ticker.q ?? ticker.Q ?? ticker.quoteVolume);
+      const percentageRaw = parseTickerNumber(ticker.P ?? ticker.p ?? ticker.priceChangePercent);
+      const timestampRaw = parseTickerNumber(ticker.E ?? ticker.eventTime ?? ticker.closeTime);
+
       const tickerData: BinanceTickerData = {
         symbol: rawSymbol,
-        last: Number.parseFloat(ticker.c),
-        bid: Number.parseFloat(ticker.b),
-        ask: Number.parseFloat(ticker.a),
-        percentage: Number.parseFloat(ticker.P),
-        baseVolume: Number.parseFloat(ticker.v),
-        quoteVolume: Number.parseFloat(ticker.q),
-        high: Number.parseFloat(ticker.h),
-        low: Number.parseFloat(ticker.l),
-        open: Number.parseFloat(ticker.o),
-        timestamp: Number.isFinite(Number(ticker.E)) ? Number(ticker.E) : receivedTs,
+        last: lastRaw ?? NaN,
+        bid: bidRaw ?? NaN,
+        ask: askRaw ?? NaN,
+        percentage: percentageRaw ?? NaN,
+        baseVolume: baseVolumeRaw ?? NaN,
+        quoteVolume: quoteVolumeRaw ?? NaN,
+        high: highRaw ?? NaN,
+        low: lowRaw ?? NaN,
+        open: openRaw ?? NaN,
+        timestamp: timestampRaw ?? receivedTs,
       };
+
+      const sanitization = this.sanitizeBidAsk(rawSymbol, tickerData, receivedTs);
+
+      if (sanitization.needsSnapshot) {
+        this.scheduleBookTickerRefresh(rawSymbol);
+      }
+
+      if (sanitization.skip) {
+        recordMarketFrame({
+          symbol: rawSymbol,
+          displaySymbol: rawSymbol,
+          source: 'WS',
+          status: 'stale',
+          ruleId: 'non_positive_bid',
+          receivedTs,
+          eventTs: receivedTs,
+          dataAgeMs: 0,
+          expectedSymbolId: rawSymbol,
+          rawFrame: tickerData,
+          extra: { recovery: 'snapshot_requested', ...sanitization.extra },
+        });
+        continue;
+      }
 
       const validation = evaluateTickerFrame({
         symbol: rawSymbol,
@@ -378,6 +438,7 @@ class BinanceWebSocketManager {
         dataAgeMs: validation.dataAgeMs,
         expectedSymbolId: validation.expectedSymbolId,
         rawFrame: tickerData,
+        extra: sanitization.extra,
       });
 
       if (validation.status === 'rejected') {
@@ -418,6 +479,150 @@ class BinanceWebSocketManager {
     // Log stats périodiquement
     if (receivedTs % 60000 < 5000) { // ~toutes les minutes
       console.log(`📊 WebSocket cache: ${this.tickersCache.size} tickers, updated ${new Date(this.lastUpdate).toISOString()}`);
+    }
+  }
+
+  private sanitizeBidAsk(symbol: string, ticker: BinanceTickerData, receivedTs: number): BidAskSanitization {
+    const extra: Record<string, unknown> = {};
+    let needsSnapshot = false;
+    let skip = false;
+    const prev = this.lastValidBidAsk.get(symbol);
+    const canReusePrev = prev && receivedTs - prev.ts <= LAST_VALID_BID_ASK_TTL_MS;
+
+    const lastPrice = hasPositive(ticker.last) ? ticker.last : undefined;
+    let bid = hasPositive(ticker.bid) ? ticker.bid : undefined;
+    let ask = hasPositive(ticker.ask) ? ticker.ask : undefined;
+
+    if (!bid && !ask && canReusePrev) {
+      bid = prev!.bid;
+      ask = prev!.ask;
+      extra.recoveredFrom = 'previous_bid_ask';
+    } else {
+      if (!bid && canReusePrev) {
+        bid = prev!.bid;
+        extra.bidFallback = 'previous';
+      }
+      if (!ask && canReusePrev) {
+        ask = prev!.ask;
+        extra.askFallback = 'previous';
+      }
+    }
+
+    const spreadHint = prev ? Math.max(prev.ask - prev.bid, (prev.bid + prev.ask) * 0.0004) : (lastPrice ? lastPrice * 0.001 : 0.0001);
+
+    if (!bid && lastPrice) {
+      const derived = ask ? Math.min(ask * 0.999, lastPrice) : lastPrice - spreadHint / 2;
+      if (derived > 0) {
+        bid = derived;
+        extra.bidFallback = extra.bidFallback || 'derived_from_last';
+      }
+    }
+    if (!ask && lastPrice) {
+      const derived = bid ? Math.max(bid * 1.001, lastPrice) : lastPrice + spreadHint / 2;
+      if (derived > 0) {
+        ask = derived;
+        extra.askFallback = extra.askFallback || 'derived_from_last';
+      }
+    }
+
+    if (bid && ask && bid > ask) {
+      const avg = lastPrice ?? (prev ? (prev.bid + prev.ask) / 2 : bid);
+      const spread = Math.max(spreadHint, avg * 0.0005);
+      bid = Math.max(1e-12, avg - spread / 2);
+      ask = avg + spread / 2;
+      extra.bidAskAdjusted = 'bid_gt_ask';
+    }
+
+    const bidValid = hasPositive(bid);
+    const askValid = hasPositive(ask);
+
+    if (bidValid && askValid) {
+      ticker.bid = bid!;
+      ticker.ask = ask!;
+      this.lastValidBidAsk.set(symbol, { bid: bid!, ask: ask!, ts: receivedTs });
+    } else {
+      needsSnapshot = true;
+      skip = true;
+      extra.sanitization_failed = {
+        hasBid: bidValid,
+        hasAsk: askValid,
+        hadPrev: Boolean(prev),
+        lastPrice,
+      };
+    }
+
+    return {
+      skip,
+      needsSnapshot,
+      extra: Object.keys(extra).length ? extra : undefined,
+    };
+  }
+
+  private scheduleBookTickerRefresh(symbol: string): void {
+    try {
+      const last = this.snapshotCooldown.get(symbol) || 0;
+      if (Date.now() - last < SNAPSHOT_MIN_INTERVAL_MS) return;
+      this.snapshotCooldown.set(symbol, Date.now());
+      void this.fetchBookTickerSnapshot(symbol);
+    } catch {}
+  }
+
+  private async fetchBookTickerSnapshot(symbol: string): Promise<void> {
+    try {
+      const response = await fetch(`https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol=${symbol}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload: any = await response.json();
+      const bid = parseTickerNumber(payload?.bidPrice);
+      const ask = parseTickerNumber(payload?.askPrice);
+      if (!hasPositive(bid) || !hasPositive(ask)) {
+        return;
+      }
+      const cacheSymbol = this.normalizeCacheSymbol(symbol);
+      const cached = this.tickersCache.get(cacheSymbol);
+      const now = Date.now();
+      if (cached) {
+        cached.bid = bid!;
+        cached.ask = ask!;
+        cached.timestamp = Number.isFinite(Number(payload?.time)) ? Number(payload.time) : now;
+        cached.receivedAt = now;
+        cached.stale = false;
+        this.tickersCache.set(cacheSymbol, cached);
+      } else {
+        this.tickersCache.set(cacheSymbol, {
+          symbol,
+          last: hasPositive(parseTickerNumber(payload?.lastPrice)) ? Number(payload.lastPrice) : bid!,
+          bid: bid!,
+          ask: ask!,
+          percentage: NaN,
+          baseVolume: NaN,
+          quoteVolume: NaN,
+          high: NaN,
+          low: NaN,
+          open: NaN,
+          timestamp: now,
+          receivedAt: now,
+          dataAgeMs: 0,
+          stale: false,
+        });
+      }
+      this.lastValidBidAsk.set(cacheSymbol, { bid: bid!, ask: ask!, ts: now });
+      recordMarketFrame({
+        symbol,
+        displaySymbol: symbol,
+        source: 'REST',
+        status: 'accepted',
+        ruleId: undefined,
+        receivedTs: now,
+        eventTs: now,
+        dataAgeMs: 0,
+        expectedSymbolId: symbol,
+        rawFrame: { bid, ask },
+        extra: { snapshot: 'bookTicker_recovery' },
+      });
+    } catch (error) {
+      console.warn(`⚠️ Failed to refresh bookTicker snapshot for ${symbol}:`, error);
     }
   }
 

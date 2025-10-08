@@ -138,6 +138,7 @@ export class ReboundRejectionAgent {
   private cooldownContext: { reason: string; guard?: RiskDecision; triggeredAt: number } | null = null;
   private lastExitCooldownMs = 0;
   private maxNotionalCapUsd = Infinity;
+  private orderAttemptLogCount = 0;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -194,6 +195,7 @@ export class ReboundRejectionAgent {
     if (this.recoveryTimer) { try { clearTimeout(this.recoveryTimer); } catch {} this.recoveryTimer = null; }
     if (this.cooldownTimer) { try { clearTimeout(this.cooldownTimer); } catch {} this.cooldownTimer = null; }
     this.cooldownContext = null;
+    this.orderAttemptLogCount = 0;
     if (profile.maxLeverage > 10) throw new Error('maxLeverage>10 not allowed');
     if (profile.riskPerTradePct < 0.5 || profile.riskPerTradePct > 5) throw new Error('risk/trade must be 0.5-5%');
     if (profile.dailyLossLimitPct < 3 || profile.dailyLossLimitPct > 4) throw new Error('daily loss must be 3-4%');
@@ -494,7 +496,10 @@ export class ReboundRejectionAgent {
 
   async enter(mktPrice: number, _snap?: TechnicalSnapshot) {
     if (!this.broker || !this.plan || !this.profile) return;
-    if (this.regime && !this.regime.shouldTrade) return;
+    if (this.regime && !this.regime.shouldTrade) {
+      this.noteSignalDrop('regime_guard_blocked', 'info', { regime: (this.regime as any)?.label || 'regime_disallows_trade' });
+      return;
+    }
     if (this.pos || this.entering) return;
     
     // � PHASE 1 FIX #1: Whipsaw protection - 3-stage confirmation
@@ -524,6 +529,10 @@ export class ReboundRejectionAgent {
       const liquidityCheck = this.hasAdequateLiquidity(snapForValidation, estimatedNotional);
       if (!liquidityCheck.adequate) {
         console.warn(`PHASE 2: ${liquidityCheck.reason} - Skipping entry to avoid slippage`);
+        this.noteSignalDrop('liquidity_guard_blocked', 'info', {
+          reason: liquidityCheck.reason,
+          estimatedNotional,
+        });
         return;
       }
     }
@@ -532,6 +541,7 @@ export class ReboundRejectionAgent {
       const confirmation = this.confirmEntrySignal(snapForValidation, mktPrice, this.plan.zone, this.plan.bias);
       if (!confirmation.confirmed) {
         console.log(`Entry not confirmed: ${confirmation.reason}`);
+        this.noteSignalDrop('bias_confirmation_failed', 'info', { reason: confirmation.reason });
         return; // Skip entry until all confirmations pass
       }
       console.log(`Entry confirmed: ${confirmation.reason}`);
@@ -551,6 +561,7 @@ export class ReboundRejectionAgent {
     if (this.lastExitTime > 0 && timeSinceLastExit < cooldownMs) {
       const cooldownRemaining = (cooldownMs - timeSinceLastExit) / 1000;
       console.log(`⏳ Trade cooldown: ${cooldownRemaining.toFixed(0)}s remaining - skipping entry`);
+      this.noteSignalDrop('cooldown_active', 'info', { cooldownRemainingSec: Number(cooldownRemaining.toFixed(0)) });
       return;
     }
     this.lastExitCooldownMs = 0;
@@ -575,7 +586,18 @@ export class ReboundRejectionAgent {
     }
     // Enhanced quality filters for 60%+ win rate
     // Use quality score system instead of binary pass/fail per filter
-    if (!snap || !this.passesEntryMomentumGates(snap, 'enter') || !this.passesAntiWhaleFilters(snap)) {
+    if (!snap) {
+      this.noteSignalDrop('snapshot_unavailable', 'warn');
+      this.entering = false;
+      return;
+    }
+    if (!this.passesEntryMomentumGates(snap, 'enter')) {
+      this.noteSignalDrop('momentum_gate_blocked', 'info');
+      this.entering = false;
+      return;
+    }
+    if (!this.passesAntiWhaleFilters(snap)) {
+      this.noteSignalDrop('anti_whale_filter_blocked', 'info');
       this.entering = false;
       return;
     }
@@ -825,6 +847,10 @@ export class ReboundRejectionAgent {
           }
           qty = estimate.fillableQty;
           if (estimate.minQty != null && qty < estimate.minQty) {
+            this.noteSignalDrop('liquidity_min_qty_block', 'info', {
+              requestedQty: qty,
+              minQty: estimate.minQty,
+            });
             this.entering = false;
             return;
           }
@@ -832,9 +858,33 @@ export class ReboundRejectionAgent {
       } catch {}
     }
     const minNotional = getConfig().MIN_ORDER_NOTIONAL_USD || 0;
-    if (!(qty > 0) || (qty * entry) < minNotional) {
+    if (!(qty > 0)) {
+      this.noteSignalDrop('position_size_non_positive', 'warn', { qty, entry, minNotional });
       this.entering = false;
       return;
+    }
+    const currentNotional = qty * entry;
+    if (currentNotional < minNotional) {
+      const adjustedQty = minNotional / Math.max(entry, 1e-8);
+      const maxAffordable = usableBalance * effectiveLev;
+      if (adjustedQty * entry <= maxAffordable * 1.01) {
+        this.noteSignalDrop('position_size_bumped_to_min_notional', 'info', {
+          previousQty: qty,
+          previousNotional: currentNotional,
+          minNotional,
+          adjustedQty,
+        });
+        qty = adjustedQty;
+        notional = qty * entry;
+      } else {
+        this.noteSignalDrop('min_notional_block', 'info', {
+          currentNotional,
+          minNotional,
+          maxAffordable,
+        });
+        this.entering = false;
+        return;
+      }
     }
 
     const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
@@ -861,17 +911,57 @@ export class ReboundRejectionAgent {
       });
     }
 
+    const attemptIndex = this.orderAttemptLogCount + 1;
+    const attemptDetails = {
+      attempt: attemptIndex,
+      executionMode,
+      side,
+      qty,
+      notional: qty * entry,
+      leverage: effectiveLev,
+      entry,
+      stop,
+      takeProfit: tp[0],
+    };
+    this.orderAttemptLogCount = attemptIndex;
+    if (attemptIndex <= 10) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'order_attempt',
+        message: 'order_attempt',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: attemptDetails,
+      });
+    }
+
     let placed: PlacedOrder;
-    if (executionMode === 'limit') {
-      const limitPrice = this.computePassivePrice(side, entry, ticker);
-      placed = await this.placeLimitAdaptive({ side, qty, limitPrice, stop, tp, entry, leverage: effectiveLev });
-    } else if (executionMode === 'twap') {
-      placed = await this.executeTwapOrder({ side, totalQty: qty, slices: 3, intervalMs: 250, stop, tp, entry, leverage: effectiveLev });
-    } else {
-      placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: effectiveLev, takeProfit: tp[0], stopLoss: stop });
+    try {
+      if (executionMode === 'limit') {
+        const limitPrice = this.computePassivePrice(side, entry, ticker);
+        placed = await this.placeLimitAdaptive({ side, qty, limitPrice, stop, tp, entry, leverage: effectiveLev });
+      } else if (executionMode === 'twap') {
+        placed = await this.executeTwapOrder({ side, totalQty: qty, slices: 3, intervalMs: 250, stop, tp, entry, leverage: effectiveLev });
+      } else {
+        placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: effectiveLev, takeProfit: tp[0], stopLoss: stop });
+      }
+    } catch (error) {
+      this.noteSignalDrop('order_attempt_failed', 'warn', {
+        executionMode,
+        qty,
+        error: String((error as any)?.message || error),
+        attempt: attemptIndex,
+      });
+      this.entering = false;
+      throw error;
     }
 
     if (placed.status === 'rejected' || !placed.filledQty || placed.filledQty <= 0) {
+      this.noteSignalDrop('order_rejected', 'warn', {
+        status: placed.status,
+        requestedQty: qty,
+        executionMode,
+      });
       this.state = 'COOLDOWN';
       broadcast('agent_state', { state: this.state, reason: 'execution_failed' }, this.profile.symbol, this.sessionId || undefined);
       this.entering = false;
@@ -4364,6 +4454,19 @@ export class ReboundRejectionAgent {
     }
 
     return `Blocked by: ${failedChecks.join(', ')}`;
+  }
+
+  private noteSignalDrop(message: string, level: 'info' | 'warn' = 'info', details?: Record<string, unknown>): void {
+    try {
+      recordOpsEvent({
+        level,
+        source: 'entry_gate',
+        message,
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details,
+      });
+    } catch {}
   }
 
   // Stub implementations for missing methods - to be implemented properly later
