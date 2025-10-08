@@ -363,7 +363,10 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
     console.warn('⚠️ Failed to fetch optimized crypto list:', error);
   }
 
-  const prefetchedOpportunity = await getBestIntelligentOpportunity(undefined, { aggressiveness: agg });
+  const prefetchedOpportunity = await getBestIntelligentOpportunity(undefined, {
+    aggressiveness: agg,
+    maxUsage: 0,
+  });
   if (prefetchedOpportunity && !candidateSymbols.includes(prefetchedOpportunity.symbol)) {
     candidateSymbols.unshift(prefetchedOpportunity.symbol);
   }
@@ -451,16 +454,16 @@ async function createSession(
       }
     }
 
-    if (!symbol && prefetched) {
-      symbol = prefetched.symbol;
-    }
   } else if (!symbol && config.perps && config.perps.length) {
     const ranked = await selectBestPerp(config.perps);
     symbol = ranked[0]?.symbol;
   }
 
   if (!symbol) {
-    throw new PhaseError('start.validation_failed', 'symbol_required', {});
+    const activeCount = await prisma.agentSession.count({ where: { stoppedAt: null } });
+    throw new PhaseError('start.universe_conflict', 'no_unused_symbol_available', {
+      activeAgents: activeCount,
+    });
   }
 
   if (process.env.UNIT_TEST_MODE !== 'true') {

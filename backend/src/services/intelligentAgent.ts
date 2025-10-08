@@ -1106,27 +1106,59 @@ async function applyActiveFilter(symbols: string[], excludeSessionId?: string): 
     const activeSymbols = await getActiveAgentSymbols(excludeSessionId);
     const activeSet = new Set(activeSymbols.map((s) => normalizeUnifiedSymbol(s)));
     const seen = new Set<string>();
-    const available = symbols.filter((symbol) => {
-      if (!symbol) return false;
+    const available: string[] = [];
+
+    for (const symbol of symbols) {
+      if (!symbol) continue;
       const unified = normalizeUnifiedSymbol(symbol);
       if (!unified || activeSet.has(unified) || seen.has(unified)) {
-        return false;
+        continue;
       }
       seen.add(unified);
-      return true;
-    });
+      available.push(symbol);
+    }
 
     if (available.length > 0) {
       console.log(`📊 Fallback list after conflict filter: ${available.length} available (${symbols.length - available.length} filtered)`);
       return available;
     }
 
-    console.log('⚠️ All fallback symbols currently active - returning original list');
-    return symbols;
+    console.log('⚠️ All candidates currently active - probing static fallback universe');
+    const fallbackSeen = new Set(seen);
+    const fallback: string[] = [];
+    for (const fallbackSymbol of getFallbackSymbols()) {
+      if (!fallbackSymbol) continue;
+      const preferred = ensurePreferredPerpSymbol(fallbackSymbol);
+      const unified = normalizeUnifiedSymbol(preferred);
+      if (!unified || activeSet.has(unified) || fallbackSeen.has(unified)) continue;
+      fallbackSeen.add(unified);
+      fallback.push(preferred);
+    }
+
+    if (fallback.length > 0) {
+      console.log(`✅ Static fallback supplied ${fallback.length} alternate symbols`);
+      return fallback;
+    }
+
+    console.log('🚫 No alternate symbols available after filtering');
+    return [];
   } catch (error) {
     console.error('Error filtering fallback symbols:', error);
     return symbols;
   }
+}
+
+function ensurePreferredPerpSymbol(symbol: string): string {
+  if (!symbol) return symbol;
+  if (symbol.includes(':')) return symbol;
+  const parts = symbol.split('/');
+  if (parts.length !== 2) return symbol;
+  const [base, quote] = parts;
+  if (!quote) return symbol;
+  if (quote.toUpperCase() === 'USDT') {
+    return `${base}/USDT`;
+  }
+  return symbol;
 }
 
 /**
@@ -2043,52 +2075,25 @@ export async function getActiveAgentCountForSymbol(symbol: string, excludeSessio
   }
 }
 
-export async function getBestIntelligentOpportunity(excludeSessionId?: string, opts?: { relaxSteps?: number; candidatesOverride?: IntelligentAnalysis[]; aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis | null> {
-  if (process.env.UNIT_TEST_MODE === 'true') {
-    const syntheticCandidates = await applyActiveFilter(
-      ['ETH/USDT:USDT', 'SOL/USDT:USDT', 'ADA/USDT:USDT'],
-      excludeSessionId
-    );
-    const symbol = syntheticCandidates[0];
-    if (!symbol) return null;
-    return {
-      symbol,
-      score: 82,
-      rank: 1,
-      confidence: 78,
-      reasoning: {
-        summary: 'Synthetic opportunity generated for test mode',
-        technical: ['EMA alignment favourable', 'Volume profile healthy'],
-        sentiment: ['Test environment confidence'],
-        risk: ['Volatility within thresholds'],
-      },
-      metrics: {
-        momentum: 1.4,
-        trend: 0.8,
-        volatility: 0.6,
-        volume24h: 1_500_000,
-        rsi: 55,
-        trendStrength: 0.7,
-        hurst: 0.52,
-        adx: 24,
-      },
-      opportunity: {
-        type: 'trend',
-        direction: 'bullish',
-        timeframe: 'short',
-        expectedReturn: 1.5,
-        riskLevel: 'medium',
-        targetR: 2.2,
-      },
-      regime: 'synthetic-test',
-    } satisfies IntelligentAnalysis;
+export async function getBestIntelligentOpportunity(
+  excludeSessionId?: string,
+  opts?: {
+    relaxSteps?: number;
+    candidatesOverride?: IntelligentAnalysis[];
+    aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+    maxUsage?: number;
   }
+): Promise<IntelligentAnalysis | null> {
+  const testMode = process.env.UNIT_TEST_MODE === 'true';
+
   console.log('🎯 Smart Agent Selection: Finding best available opportunity from ranked list...');
 
   // Get the complete ranked list of qualified opportunities
   const opportunities =
     opts?.candidatesOverride ??
-    await scanIntelligentOpportunities(undefined, opts);
+    (testMode
+      ? await scanIntelligentOpportunitiesLegacy(excludeSessionId, opts)
+      : await scanIntelligentOpportunities(undefined, opts));
 
   if (opportunities.length === 0) {
     console.log('😴 No qualified opportunities found (all below minimum score threshold) → SLEEP mode');
@@ -2104,34 +2109,38 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
     symbolUsageMap.set(opp.symbol, count);
   }
   
-  // Selection strategy: 
+  const maxUsage = Math.max(0, Math.min(2, Number.isFinite(opts?.maxUsage) ? Number(opts!.maxUsage) : 1));
+
+  // Selection strategy:
   // 1. Try symbols with 0 active agents first
-  // 2. If none available, try symbols with 1 active agent
-  // 3. Never allow 2+ agents on same symbol (avoid conflicts)
-  
-  for (let maxUsage = 0; maxUsage <= 1; maxUsage++) {
-    console.log(`🔄 Pass ${maxUsage + 1}: Looking for symbols with ${maxUsage} active agent(s)...`);
-    
+  // 2. Incrementally relax up to opts.maxUsage (default 1)
+  // 3. Never allow 2+ agents on same symbol unless explicitly permitted or during high-momentum override
+
+  for (let usageThreshold = 0; usageThreshold <= maxUsage; usageThreshold++) {
+    console.log(`🔄 Pass ${usageThreshold + 1}: Looking for symbols with ${usageThreshold} active agent(s)...`);
+
     for (const opportunity of opportunities) {
       const currentUsage = symbolUsageMap.get(opportunity.symbol) || 0;
-      
-      if (currentUsage === maxUsage) {
+
+      if (currentUsage === usageThreshold) {
         console.log(`✅ SELECTED: ${opportunity.symbol} (Score: ${opportunity.score.toFixed(1)}, Rank: ${opportunity.rank}, Usage: ${currentUsage}/2)`);
         console.log(`📝 Reasoning: ${opportunity.reasoning.summary}`);
         return opportunity;
       } else {
-        console.log(`⏭️  Skip: ${opportunity.symbol} (Usage: ${currentUsage}, looking for ${maxUsage})`);
+        console.log(`⏭️  Skip: ${opportunity.symbol} (Usage: ${currentUsage}, looking for ${usageThreshold})`);
       }
     }
   }
-  
-  // Final aggressive pass: allow a second slot on high-momentum assets (>= 4% move) even if already used twice
-  for (const opportunity of opportunities) {
-    const currentUsage = symbolUsageMap.get(opportunity.symbol) || 0;
-    const momentum = Math.abs(opportunity.metrics?.momentum ?? 0);
-    if (currentUsage <= 2 && momentum >= 4) {
-      console.log(`⚡ High-momentum override: ${opportunity.symbol} selected despite usage ${currentUsage} (|Δ24h|=${momentum.toFixed(2)}%)`);
-      return opportunity;
+
+  if (maxUsage >= 2) {
+    // Final aggressive pass: allow a second slot on high-momentum assets (>= 4% move)
+    for (const opportunity of opportunities) {
+      const currentUsage = symbolUsageMap.get(opportunity.symbol) || 0;
+      const momentum = Math.abs(opportunity.metrics?.momentum ?? 0);
+      if (currentUsage <= maxUsage && momentum >= 4) {
+        console.log(`⚡ High-momentum override: ${opportunity.symbol} selected despite usage ${currentUsage} (|Δ24h|=${momentum.toFixed(2)}%)`);
+        return opportunity;
+      }
     }
   }
 
