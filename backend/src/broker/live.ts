@@ -150,9 +150,19 @@ export class LiveBroker implements Broker {
       : 0);
     if (!Number.isFinite(committedUsd)) committedUsd = 0;
 
+    const normalizedFreeUsd = Number.isFinite(freeUsd) ? freeUsd : 0;
+    const normalizedEquityUsd = Number.isFinite(equityUsd) ? equityUsd : 0;
+
+    if (normalizedEquityUsd > 0 && normalizedFreeUsd <= 0) {
+      console.debug('[Risk] Free balance collapsed while equity positive', {
+        equityUsd: normalizedEquityUsd,
+        freeUsd: normalizedFreeUsd,
+      });
+    }
+
     return {
-      freeUsd: Number.isFinite(freeUsd) ? freeUsd : 0,
-      equityUsd: Number.isFinite(equityUsd) ? equityUsd : 0,
+      freeUsd: normalizedFreeUsd,
+      equityUsd: normalizedEquityUsd,
       committedUsd,
     };
   }

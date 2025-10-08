@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 .env
 test
+!test/
+!test/unit/
+!test/unit/*.mjs

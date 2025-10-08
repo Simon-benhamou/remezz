@@ -184,6 +184,8 @@ export class ReboundRejectionAgent {
   private lastZoneCheckTime = 0;
   private breakoutModeActive = false;
 
+  private trendReversalContext: { direction: 'bullish' | 'bearish'; count: number; lastSignal: number } | null = null;
+
   // Advanced performance tracking by strategy and bias
   private performanceMetrics: PerformanceMetrics | null = null;
   private strategyPerformance: Map<string, StrategyPerformance> = new Map();
@@ -376,6 +378,7 @@ export class ReboundRejectionAgent {
         // ✅ Position object exists but qty invalid
         console.warn(`⚠️  Invalid position qty (${this.pos.qty}) for ${this.profile.symbol}, clearing`);
         this.pos = null;
+        this.trendReversalContext = null;
         this.state = 'SCAN';
       }
       if (this.plan.bias === 'none') return;
@@ -4773,6 +4776,7 @@ export class ReboundRejectionAgent {
           // Position closed on exchange, clear local state and exit
           console.log(`Position closed on exchange for ${this.profile.symbol}, clearing local state`);
           this.pos = null;
+          this.trendReversalContext = null;
           this.state = 'EXIT';
           this.lastExitTime = Date.now();
           broadcast('agent_state', { state: this.state, reason: 'position_closed_on_exchange' }, this.profile.symbol, this.sessionId || undefined);
@@ -4789,6 +4793,7 @@ export class ReboundRejectionAgent {
         if (!this.pos || this.pos.qty <= 0) {
           console.log(`Paper position cleared for ${this.profile.symbol}, transitioning to EXIT`);
           this.pos = null;
+          this.trendReversalContext = null;
           this.state = 'EXIT';
           this.lastExitTime = Date.now();
           broadcast('agent_state', { 
@@ -5020,6 +5025,7 @@ export class ReboundRejectionAgent {
 
         // Clear position and update state
         this.pos = null;
+        this.trendReversalContext = null;
         this.state = 'EXIT';
         this.lastExitTime = Date.now();
 
@@ -5061,42 +5067,87 @@ export class ReboundRejectionAgent {
    */
   private shouldExitOnTrendReversal(price: number, snap: TechnicalSnapshot, unrealizedR: number): boolean {
     if (!this.pos || !this.plan) return false;
-    
+
+    const now = Date.now();
+    if (this.trendReversalContext && now - this.trendReversalContext.lastSignal > 8000) {
+      this.trendReversalContext = null;
+    }
+
     // 1. EMA Cross Reversal (bearish for long, bullish for short)
-    const emaSpread = ((snap.ema20 - snap.ema50) / snap.ema50) * 100;
+    const ema20 = typeof snap.ema20 === 'number' && Number.isFinite(snap.ema20) ? snap.ema20 : snap.last;
+    const ema50 = typeof snap.ema50 === 'number' && Number.isFinite(snap.ema50) ? snap.ema50 : ema20;
+    const emaSpread = ema50 ? ((ema20 - ema50) / ema50) * 100 : 0;
     const emaBearish = emaSpread < -0.5;
     const emaBullish = emaSpread > 0.5;
-    
-    if (this.pos.side === 'buy' && emaBearish && unrealizedR < 0.5) {
-      console.log(`🔴 Exit: EMA bearish cross detected (spread: ${emaSpread.toFixed(2)}%, R: ${unrealizedR.toFixed(2)})`);
-      return true;
+    const adverseMoveR = Math.max(0, -unrealizedR);
+    const minAdverseR = 0.35;
+    const bufferAdverseR = 0.25;
+    const confirmTicks = 3;
+
+    if (this.pos.side === 'buy') {
+      if (emaBearish && unrealizedR <= 0) {
+        const count = this.noteTrendReversalSignal('bearish', now);
+        if (adverseMoveR >= minAdverseR || (count >= confirmTicks && adverseMoveR >= bufferAdverseR)) {
+          this.trendReversalContext = null;
+          console.log(`🔴 Exit: EMA bearish cross confirmed (spread: ${emaSpread.toFixed(2)}%, adverseR: ${adverseMoveR.toFixed(2)})`);
+          return true;
+        }
+        if (count > 1) {
+          console.log(`⚪️ Buffering bearish reversal signal (${count}/${confirmTicks}, adverseR=${adverseMoveR.toFixed(2)})`);
+        }
+        return false;
+      }
+    } else if (this.pos.side === 'sell') {
+      if (emaBullish && unrealizedR <= 0) {
+        const count = this.noteTrendReversalSignal('bullish', now);
+        if (adverseMoveR >= minAdverseR || (count >= confirmTicks && adverseMoveR >= bufferAdverseR)) {
+          this.trendReversalContext = null;
+          console.log(`🔴 Exit: EMA bullish cross confirmed (spread: ${emaSpread.toFixed(2)}%, adverseR: ${adverseMoveR.toFixed(2)})`);
+          return true;
+        }
+        if (count > 1) {
+          console.log(`⚪️ Buffering bullish reversal signal (${count}/${confirmTicks}, adverseR=${adverseMoveR.toFixed(2)})`);
+        }
+        return false;
+      }
     }
-    
-    if (this.pos.side === 'sell' && emaBullish && unrealizedR < 0.5) {
-      console.log(`🔴 Exit: EMA bullish cross detected (spread: ${emaSpread.toFixed(2)}%, R: ${unrealizedR.toFixed(2)})`);
-      return true;
-    }
-    
+
+    this.trendReversalContext = null;
+
     // 2. Momentum Loss (RSI extreme + losing position)
     const rsi = snap.rsi14 || 50;
     const momentumLoss = (this.pos.side === 'buy' && rsi < 35 && unrealizedR < 0) ||
                          (this.pos.side === 'sell' && rsi > 65 && unrealizedR < 0);
-    
+
     if (momentumLoss) {
       console.log(`🔴 Exit: Momentum loss (RSI: ${rsi.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
       return true;
     }
-    
+
     // 3. ADX Declining (trend weakening while losing)
     const adx = snap.adx14 || 0;
     const adxWeak = adx < 15;
-    
+
     if (adxWeak && unrealizedR < -0.3) {
       console.log(`🔴 Exit: Weak trend + losing (ADX: ${adx.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
       return true;
     }
-    
+
     return false;
+  }
+
+  private noteTrendReversalSignal(direction: 'bullish' | 'bearish', now: number): number {
+    if (!this.trendReversalContext || this.trendReversalContext.direction !== direction) {
+      this.trendReversalContext = { direction, count: 1, lastSignal: now };
+      return 1;
+    }
+
+    const age = now - this.trendReversalContext.lastSignal;
+    const withinWindow = age <= 8000;
+    const nextCount = withinWindow ? this.trendReversalContext.count + 1 : 1;
+
+    this.trendReversalContext = { direction, count: nextCount, lastSignal: now };
+    return nextCount;
   }
 
   /**
