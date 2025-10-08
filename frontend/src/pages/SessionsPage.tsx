@@ -1572,23 +1572,29 @@ export default function SessionsPage(){
                 />
               </Form.Item>
             )}
-            <Form.Item label='Max leverage' name='maxLeverage' rules={[{ type:'number', min:1, max:10 }]}> 
+            <Form.Item label='Max leverage'>
               <div style={{ padding: '0 4px' }}>
-                <Slider
-                  min={1}
-                  max={10}
-                  step={1}
-                  tooltip={{ formatter: (value?: number) => `${value}x` }}
-                  disabled={!!restartSessionId}
-                />
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '12px',
-                  color: '#475569',
-                  marginTop: 8
-                }}>
-                  <span>Leverage: <strong>{Number(leverageValue || 1)}x</strong></span>
+                <Form.Item name='maxLeverage' rules={[{ type: 'number', min: 1, max: 10 }]} noStyle>
+                  <Slider
+                    min={1}
+                    max={10}
+                    step={1}
+                    tooltip={{ formatter: (value?: number) => `${value}x` }}
+                    disabled={!!restartSessionId}
+                  />
+                </Form.Item>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    fontSize: '12px',
+                    color: '#475569',
+                    marginTop: 8,
+                  }}
+                >
+                  <span>
+                    Leverage: <strong>{Number(leverageValue || 1)}x</strong>
+                  </span>
                   <span>Cap 10x</span>
                 </div>
               </div>
