@@ -2261,6 +2261,80 @@ export default function SessionsPage(){
             </div>
           </Form>
         </Modal>
+        {creationProgress && (
+          <Modal
+            open={creationProgress.visible}
+            title='Agent launch progress'
+            closable={Boolean(creationProgress.result || creationProgress.error)}
+            maskClosable={false}
+            onCancel={() => {
+              if (creationProgress.result || creationProgress.error) {
+                setCreationProgress(null);
+              }
+            }}
+            footer={
+              creationProgress.result || creationProgress.error ? (
+                <Button type='primary' onClick={() => setCreationProgress(null)}>
+                  Close
+                </Button>
+              ) : null
+            }
+            style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif' }}
+          >
+            {(() => {
+              const total = creationProgress.steps.length || 1;
+              const completed = creationProgress.steps.filter((step) => step.status === 'success').length;
+              const hasError = creationProgress.steps.some((step) => step.status === 'error');
+              const running = creationProgress.steps.some((step) => step.status === 'running');
+              const percentRaw = ((completed + (running ? 0.4 : 0)) / total) * 100;
+              const percent = Math.min(100, Math.max(5, Math.round(percentRaw)));
+              return (
+                <Space direction='vertical' size='large' style={{ width: '100%' }}>
+                  <Progress
+                    percent={percent}
+                    status={hasError ? 'exception' : creationProgress.result ? 'success' : 'active'}
+                  />
+                  <Steps
+                    direction='vertical'
+                    items={creationProgress.steps.map((step) => ({
+                      key: step.key,
+                      title: step.title,
+                      status:
+                        step.status === 'pending'
+                          ? 'wait'
+                          : step.status === 'running'
+                          ? 'process'
+                          : step.status === 'success'
+                          ? 'finish'
+                          : 'error',
+                      description: step.message,
+                    }))}
+                  />
+                  {creationProgress.result && (
+                    <Alert
+                      type='success'
+                      showIcon
+                      message={`Agent ready on ${creationProgress.result.symbol}`}
+                      description={
+                        creationProgress.result.state === 'ready'
+                          ? 'The trading agent is active and monitoring the market.'
+                          : 'The agent is warming up with historical data before trading.'
+                      }
+                    />
+                  )}
+                  {creationProgress.error && (
+                    <Alert
+                      type='error'
+                      showIcon
+                      message='Agent creation failed'
+                      description={creationProgress.error}
+                    />
+                  )}
+                </Space>
+              );
+            })()}
+          </Modal>
+        )}
       </Space>
     </div>
   );
