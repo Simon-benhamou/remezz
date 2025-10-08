@@ -20,30 +20,6 @@ function normalizeSymbol(symbol) {
   return upper;
 }
 
-async function waitForJobCompletion(getSnapshot, jobId, timeoutMs = 20000) {
-  const started = Date.now();
-  return new Promise((resolve, reject) => {
-    const timer = setInterval(() => {
-      const snapshot = getSnapshot(jobId);
-      if (!snapshot) return;
-      if (snapshot.status === 'completed') {
-        clearInterval(timer);
-        resolve(snapshot);
-      } else if (snapshot.status === 'failed') {
-        clearInterval(timer);
-        reject(
-          new Error(
-            `Agent start job failed: ${snapshot.error?.code || 'unknown'} - ${snapshot.error?.message || ''}`
-          )
-        );
-      } else if (Date.now() - started > timeoutMs) {
-        clearInterval(timer);
-        reject(new Error(`Timed out waiting for job ${jobId}`));
-      }
-    }, 50);
-  });
-}
-
 try {
   const { prisma } = await import('../../dist/src/db/client.js');
   if (typeof prisma.$reset === 'function') {
@@ -69,7 +45,7 @@ try {
     typeof topRanked.score === 'number' ? topRanked.score.toFixed(2) : topRanked.score ?? 'n/a';
   console.log(`🏆 Top ranked opportunity: ${expectedSymbol} (score=${formattedScore})`);
 
-  const { enqueueAgentStartJob, getAgentStartJob } = await import('../../dist/src/services/agentStartJob.js');
+  const { startAgentCreation } = await import('../../dist/src/services/agentCreationFlow.js');
 
   const payload = {
     mode: 'paper',
@@ -83,16 +59,15 @@ try {
     budgetPct: 40,
   };
 
-  const { jobId } = enqueueAgentStartJob({ payload, userId: null });
-  const snapshot = await waitForJobCompletion(getAgentStartJob, jobId, 20000);
+  const result = await startAgentCreation(payload, null);
 
-  if (!snapshot?.result) {
-    throw new Error('Agent start job did not yield a result');
+  if (!result) {
+    throw new Error('Agent creation did not yield a result');
   }
 
-  const selectedSymbol = normalizeSymbol(snapshot.result.symbol);
+  const selectedSymbol = normalizeSymbol(result.symbol);
   if (!selectedSymbol) {
-    throw new Error('Agent start job returned an empty symbol');
+    throw new Error('Agent creation returned an empty symbol');
   }
 
   if (selectedSymbol !== expectedSymbol) {
@@ -105,7 +80,7 @@ try {
   }
 
   await wait(100);
-  const stored = await prisma.agentSession.findUnique({ where: { id: snapshot.result.sessionId } });
+  const stored = await prisma.agentSession.findUnique({ where: { id: result.sessionId } });
   if (!stored) {
     throw new Error('Agent session record not found after creation');
   }
@@ -113,6 +88,10 @@ try {
   const persistedSymbol = normalizeSymbol(stored.symbol);
   if (persistedSymbol !== expectedSymbol) {
     throw new Error(`Persisted session symbol ${persistedSymbol} does not match expected ${expectedSymbol}`);
+  }
+
+  if (!result.selection?.autoSelected) {
+    throw new Error('Result did not mark selection as auto-selected');
   }
 
   console.log('✅ Agent auto-selection matched the top ranked opportunity.');

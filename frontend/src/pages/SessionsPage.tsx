@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select, Row, Col, Tooltip, Progress, Badge, Switch, Dropdown, MenuProps, Slider } from 'antd';
+import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select, Row, Col, Tooltip, Progress, Badge, Switch, Dropdown, MenuProps, Slider, Steps, Alert } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { AppMode } from '../store';
@@ -14,6 +14,35 @@ import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
 import ApiKeyMigrationTool from '../components/ApiKeyMigrationTool';
 
 type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
+
+type CreationStepKey = 'select' | 'session' | 'activate';
+type CreationStepState = {
+  key: CreationStepKey;
+  title: string;
+  status: 'pending' | 'running' | 'success' | 'error';
+  message?: string;
+  meta?: Record<string, any>;
+};
+
+type CreationProgressState = {
+  visible: boolean;
+  steps: CreationStepState[];
+  creationId?: string;
+  result?: { sessionId: string; symbol: string; state: string };
+  error?: string;
+};
+
+const CREATION_STEP_TEMPLATE: { key: CreationStepKey; title: string }[] = [
+  { key: 'select', title: 'Select crypto' },
+  { key: 'session', title: 'Create session' },
+  { key: 'activate', title: 'Activate agent' },
+];
+
+const buildInitialCreationSteps = (): CreationStepState[] =>
+  CREATION_STEP_TEMPLATE.map((step, index) => ({
+    ...step,
+    status: index === 0 ? 'running' : 'pending',
+  }));
 
 const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyLoss: number; note: string }> = {
   conservative: {
@@ -40,6 +69,7 @@ export default function SessionsPage(){
   const [filteredRows, setFilteredRows] = React.useState<any[]>([]);
   const [open, setOpen] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
+  const [creationProgress, setCreationProgress] = React.useState<CreationProgressState | null>(null);
   const [restartSessionId, setRestartSessionId] = React.useState<string | null>(null);
   const [form] = Form.useForm();
   const navigate = useNavigate();
@@ -82,9 +112,40 @@ export default function SessionsPage(){
   const [aggressivenessFilter, setAggressivenessFilter] = React.useState<string>('all');
   const [searchText, setSearchText] = React.useState<string>('');
   const [compactView, setCompactView] = React.useState<boolean>(true);
-  
+
   const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
   const enrichedCacheRef = React.useRef<Partial<Record<AppMode, any[]>>>({});
+
+  const updateCreationStep = React.useCallback((key: CreationStepKey, patch: Partial<CreationStepState>) => {
+    setCreationProgress((prev) => {
+      if (!prev) return prev;
+      const steps = prev.steps.map((step) =>
+        step.key === key
+          ? {
+              ...step,
+              ...patch,
+            }
+          : step
+      );
+      return { ...prev, steps };
+    });
+  }, []);
+
+  const markNextStepRunning = React.useCallback((key: CreationStepKey) => {
+    setCreationProgress((prev) => {
+      if (!prev) return prev;
+      const steps = prev.steps.map((step) =>
+        step.key === key
+          ? {
+              ...step,
+              status: 'running',
+              message: undefined,
+            }
+          : step
+      );
+      return { ...prev, steps };
+    });
+  }, []);
   
   const enrichSessionData = React.useCallback(async (sessions: any[]) => {
     return Promise.all(sessions.map(async (session: any) => {
@@ -153,50 +214,6 @@ export default function SessionsPage(){
         return session;
       }
     }));
-  }, []);
-
-  const pollAgentStartJob = React.useCallback(async (
-    jobId: string,
-    options?: { timeoutMs?: number; intervalMs?: number }
-  ) => {
-    const timeoutMs = options?.timeoutMs ?? 120_000;
-    const intervalMs = options?.intervalMs ?? 800;
-    const deadline = Date.now() + timeoutMs;
-    let lastPhase: string | null = null;
-    let snapshot: any = null;
-
-    while (Date.now() < deadline) {
-      try {
-        snapshot = await api.getAgentStartStatus(jobId);
-      } catch (error) {
-        console.warn('⚠️ Failed to fetch agent start status:', error);
-        await sleep(intervalMs);
-        continue;
-      }
-
-      if (snapshot?.phase && snapshot.phase !== lastPhase) {
-        console.log(`🚀 Agent start job ${jobId} entered phase ${snapshot.phase}`);
-        lastPhase = snapshot.phase;
-      }
-
-      if (snapshot?.status === 'completed') {
-        return snapshot;
-      }
-
-      if (snapshot?.status === 'failed') {
-        const errMessage = snapshot?.error?.message || snapshot?.error?.code || 'Agent start failed';
-        const err: any = new Error(errMessage);
-        err.code = snapshot?.error?.code;
-        err.details = snapshot?.error?.details;
-        throw err;
-      }
-
-      await sleep(intervalMs);
-    }
-
-    const timeoutError: any = new Error('Timed out waiting for agent start job to complete');
-    timeoutError.code = 'start.timeout';
-    throw timeoutError;
   }, []);
 
   const load = React.useCallback(async (forceRefresh = false) => { 
@@ -1348,6 +1365,7 @@ export default function SessionsPage(){
             let hide: (() => void) | null = null;
             const sessionIdForRestart = restartSessionId;
             const isRestart = Boolean(sessionIdForRestart);
+            let currentStep: CreationStepKey = 'select';
             try {
               setStarting(true);
               const v = await form.validateFields();
@@ -1363,15 +1381,13 @@ export default function SessionsPage(){
 
               if (v.smartAutoMode && !isRestart) {
                 console.log('🔄 Processing Auto-Select mode...');
-                console.log('📋 Symbol before delete:', v.symbol);
                 delete v.symbol;
-                console.log('📋 Symbol after delete:', v.symbol);
                 v.isSmartAgent = true;
                 v.smartConfig = {
                   minHoldDuration: 24 * 60 * 60 * 1000,
                   rescanInterval: 6 * 60 * 60 * 1000,
                   momentumThreshold: 0.5,
-                  volumeThreshold: 10000
+                  volumeThreshold: 10000,
                 };
 
                 if (!v.smartConfig.minHoldDuration || !v.smartConfig.rescanInterval) {
@@ -1407,115 +1423,112 @@ export default function SessionsPage(){
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd || 0), Number(exBal.totalUsd || 0));
               }
 
-              hide = message.loading(isRestart ? 'Restarting agent...' : 'Starting agent...', 0);
               setOpen(false);
 
-              let responseData: any = null;
-              let jobSnapshot: any = null;
-              let sessionIdentifier: string | null = sessionIdForRestart || null;
-              let selectedSymbol: string | null = null;
-              let jobState: string | undefined;
-
               if (isRestart) {
-                responseData = (await api.client.post('/api/agent/restart', v)).data;
-              } else {
-                responseData = await api.startAgentJob(v);
-                if (responseData?.jobId) {
-                  jobSnapshot = await pollAgentStartJob(responseData.jobId, { timeoutMs: 180_000, intervalMs: 900 });
-                }
-
-                if (jobSnapshot?.result) {
-                  sessionIdentifier = jobSnapshot.result.sessionId || null;
-                  selectedSymbol = jobSnapshot.result.symbol || null;
-                  jobState = jobSnapshot.result.state;
-                } else if (responseData?.id) {
-                  sessionIdentifier = responseData.id || null;
-                  selectedSymbol = responseData.symbol || null;
-                } else if (!sessionIdentifier) {
-                  sessionIdentifier = typeof responseData?.sessionId === 'string' ? responseData.sessionId : null;
-                  selectedSymbol = responseData?.symbol || null;
-                }
-              }
-
-              if (hide) { hide(); hide = null; }
-
-              const cacheEvent = isRestart ? 'settings_changed' : 'session_created';
-              if (sessionIdentifier) {
-                invalidateSmartly(cacheEvent, { mode: v.mode as any, sessionId: sessionIdentifier });
-              } else {
-                invalidateSmartly(cacheEvent, { mode: v.mode as any });
-              }
-
-              if (isRestart) {
+                hide = message.loading('Restarting agent...', 0);
+                await api.client.post('/api/agent/restart', v);
+                if (hide) hide();
+                hide = null;
+                invalidateSmartly('settings_changed', { mode: v.mode as any, sessionId: sessionIdForRestart! });
                 message.success('Agent restarted successfully!');
-              } else if (selectedSymbol && selectedSymbol !== 'SMART/SLEEP') {
-                message.success(`Agent started on ${selectedSymbol}!`);
-              } else {
-                message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
-              }
-
-              await load(true);
-
-              const navigateTargetId = sessionIdForRestart || sessionIdentifier || null;
-              let shouldNavigate = true;
-
-              if (!isRestart && v.smartAutoMode && navigateTargetId) {
-                let pending = Boolean(jobState === 'warming' || !selectedSymbol || selectedSymbol === 'SMART/SLEEP');
-                const closeWaiting = message.loading('Analyzing market and selecting the best opportunity…', 0);
-                const POLL_TIMEOUT_MS = 120_000;
-                const POLL_INTERVAL_MS = 1500;
-                const deadline = Date.now() + POLL_TIMEOUT_MS;
-                try {
-                  while (pending && Date.now() < deadline) {
-                    await sleep(POLL_INTERVAL_MS);
-                    try {
-                      const sessions = await api.listSessions(mode);
-                      const current = sessions.find((row: any) => row.id === navigateTargetId);
-                      if (current && current.symbol && current.symbol !== 'SMART/SLEEP') {
-                        pending = false;
-                        selectedSymbol = current.symbol;
-                        break;
-                      }
-                    } catch (pollError) {
-                      console.warn('⚠️ Smart agent polling failed:', pollError);
-                    }
-                  }
-                } finally {
-                  if (typeof closeWaiting === 'function') closeWaiting();
+                await load(true);
+                if (sessionIdForRestart) {
+                  navigate(`/monitor/${sessionIdForRestart}`);
                 }
-
-                if (pending) {
-                  message.warning('Auto-selection is still running. You will be able to open the monitor once the symbol is assigned.');
-                  shouldNavigate = false;
-                }
-              }
-
-              if (!shouldNavigate) {
                 return;
               }
 
-              if (isRestart && sessionIdForRestart) {
-                navigate(`/monitor/${sessionIdForRestart}`);
-              } else if (navigateTargetId) {
-                navigate(`/monitor/${navigateTargetId}`);
-              } else {
-                const list = await api.listSessions(mode);
-                const active = list.find((r:any)=> !r.stoppedAt);
-                if (active) navigate(`/monitor/${active.id}`);
+              const initialSteps = buildInitialCreationSteps();
+              setCreationProgress({ visible: true, steps: initialSteps });
+
+              const prepare = await api.prepareAgentCreation(v);
+              currentStep = 'select';
+              const creationId: string | undefined = prepare?.creationId;
+              const selectedSymbol: string | undefined = prepare?.selection?.symbol;
+              const selectionMessage = selectedSymbol
+                ? prepare?.selection?.autoSelected
+                  ? `Auto-selected ${selectedSymbol}`
+                  : `Using ${selectedSymbol}`
+                : 'Selection completed';
+              updateCreationStep('select', {
+                status: 'success',
+                message: selectionMessage,
+                meta: prepare?.selection,
+              });
+
+              if (!creationId) {
+                throw new Error('Missing creation identifier');
               }
+
+              setCreationProgress((prev) => (prev ? { ...prev, creationId } : prev));
+              markNextStepRunning('session');
+              currentStep = 'session';
+
+              const sessionResult = await api.createAgentSession(creationId, selectedSymbol);
+              updateCreationStep('session', {
+                status: 'success',
+                message: `Session ${sessionResult.sessionId} created`,
+                meta: { symbol: sessionResult.symbol },
+              });
+
+              markNextStepRunning('activate');
+              currentStep = 'activate';
+
+              const activation = await api.activateAgentCreation(creationId);
+              updateCreationStep('activate', {
+                status: 'success',
+                message:
+                  activation.state === 'ready'
+                    ? `Agent activated on ${activation.symbol}`
+                    : 'Agent warming up with market data',
+                meta: { state: activation.state },
+              });
+
+              setCreationProgress((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      result: {
+                        sessionId: activation.sessionId,
+                        symbol: activation.symbol,
+                        state: activation.state,
+                      },
+                    }
+                  : prev
+              );
+
+              invalidateSmartly('session_created', { mode: v.mode as any, sessionId: activation.sessionId });
+
+              if (activation.symbol && activation.symbol !== 'SMART/SLEEP') {
+                message.success(`Agent started on ${activation.symbol}!`);
+              } else {
+                message.success(v.smartAutoMode ? 'Auto-Select agent scanning for best opportunities…' : 'Session started successfully!');
+              }
+
+              await load(true);
+              setCreationProgress(null);
+              navigate(`/monitor/${activation.sessionId}`);
             } catch (e: any) {
               if (typeof hide === 'function') hide();
-              const msg = String(e?.response?.data?.error || e?.message || e);
-              if (!isRestart && msg.includes('active_session_exists')) {
+              const errorCode = e?.code || e?.response?.data?.error;
+              const detailMessage = e?.response?.data?.message || e?.message || e;
+              const errorMessage = String(detailMessage || 'Failed to start session');
+
+              if (!isRestart) {
+                updateCreationStep(currentStep, { status: 'error', message: errorMessage });
+                setCreationProgress((prev) => (prev ? { ...prev, error: errorMessage } : prev));
+              }
+
+              if (!isRestart && typeof errorMessage === 'string' && errorMessage.includes('active_session_exists')) {
                 message.warning('Stop the active session first.');
-              } else if (e?.code === 'start.universe_conflict') {
+              } else if (errorCode === 'start.universe_conflict') {
                 message.error('No unused futures market is currently available for a smart agent. Please stop an existing session or try again later.');
-              } else if (e?.code === 'start.timeout') {
-                message.error('Timed out while waiting for the agent to initialize. Please check the backend logs and try again.');
               } else {
-                message.error(isRestart ? 'Failed to restart session' : 'Failed to start session');
+                message.error(isRestart ? 'Failed to restart session' : errorMessage);
               }
             } finally {
+              if (typeof hide === 'function') hide();
               setStarting(false);
               setRestartSessionId(null);
             }
@@ -1705,6 +1718,80 @@ export default function SessionsPage(){
             </div>
           </Form>
         </Modal>
+        {creationProgress && (
+          <Modal
+            open={creationProgress.visible}
+            title='Agent launch progress'
+            closable={Boolean(creationProgress.result || creationProgress.error)}
+            maskClosable={false}
+            onCancel={() => {
+              if (creationProgress.result || creationProgress.error) {
+                setCreationProgress(null);
+              }
+            }}
+            footer={
+              creationProgress.result || creationProgress.error ? (
+                <Button type='primary' onClick={() => setCreationProgress(null)}>
+                  Close
+                </Button>
+              ) : null
+            }
+            style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif' }}
+          >
+            {(() => {
+              const total = creationProgress.steps.length || 1;
+              const completed = creationProgress.steps.filter((step) => step.status === 'success').length;
+              const hasError = creationProgress.steps.some((step) => step.status === 'error');
+              const running = creationProgress.steps.some((step) => step.status === 'running');
+              const percentRaw = ((completed + (running ? 0.4 : 0)) / total) * 100;
+              const percent = Math.min(100, Math.max(5, Math.round(percentRaw)));
+              return (
+                <Space direction='vertical' size='large' style={{ width: '100%' }}>
+                  <Progress
+                    percent={percent}
+                    status={hasError ? 'exception' : creationProgress.result ? 'success' : 'active'}
+                  />
+                  <Steps
+                    direction='vertical'
+                    items={creationProgress.steps.map((step) => ({
+                      key: step.key,
+                      title: step.title,
+                      status:
+                        step.status === 'pending'
+                          ? 'wait'
+                          : step.status === 'running'
+                          ? 'process'
+                          : step.status === 'success'
+                          ? 'finish'
+                          : 'error',
+                      description: step.message,
+                    }))}
+                  />
+                  {creationProgress.result && (
+                    <Alert
+                      type='success'
+                      showIcon
+                      message={`Agent ready on ${creationProgress.result.symbol}`}
+                      description={
+                        creationProgress.result.state === 'ready'
+                          ? 'The trading agent is active and monitoring the market.'
+                          : 'The agent is warming up with historical data before trading.'
+                      }
+                    />
+                  )}
+                  {creationProgress.error && (
+                    <Alert
+                      type='error'
+                      showIcon
+                      message='Agent creation failed'
+                      description={creationProgress.error}
+                    />
+                  )}
+                </Space>
+              );
+            })()}
+          </Modal>
+        )}
       </Space>
     </div>
   );
