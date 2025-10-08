@@ -1,5 +1,32 @@
 import React from 'react';
-import { Card, Table, Tag, Button, Space, message, Modal, Form, Input, InputNumber, Select, Row, Col, Tooltip, Progress, Badge, Switch, Dropdown, MenuProps, Slider } from 'antd';
+import {
+  Card,
+  Table,
+  Tag,
+  Button,
+  Space,
+  message,
+  Modal,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Row,
+  Col,
+  Tooltip,
+  Progress,
+  Badge,
+  Switch,
+  Dropdown,
+  MenuProps,
+  Slider,
+  Steps,
+  Alert,
+  Timeline,
+  Typography,
+  Divider,
+} from 'antd';
+import type { StepsProps } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { AppMode } from '../store';
@@ -7,13 +34,429 @@ import { useMode } from '../contexts/ModeContext';
 import { useSessionsCache } from '../hooks/useSessionsCache';
 import { useCacheNotifications } from '../hooks/useCacheNotifications';
 import { useSmartCacheInvalidation } from '../hooks/useSmartCacheInvalidation';
-import { SearchOutlined, FilterOutlined, DownloadOutlined, EyeOutlined, SettingOutlined, PlayCircleOutlined, StopOutlined, DeleteOutlined, ReloadOutlined, RocketOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  SearchOutlined,
+  FilterOutlined,
+  DownloadOutlined,
+  EyeOutlined,
+  SettingOutlined,
+  PlayCircleOutlined,
+  StopOutlined,
+  DeleteOutlined,
+  ReloadOutlined,
+  RocketOutlined,
+  ThunderboltOutlined,
+  CloseOutlined,
+  InfoCircleOutlined,
+} from '@ant-design/icons';
 import TradingDiagnosticsCollapsible from '../components/TradingDiagnosticsCollapsible';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
 import ApiKeyMigrationTool from '../components/ApiKeyMigrationTool';
 
 type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
+
+type CreationStepKey = 'select' | 'session' | 'activate';
+type CreationStepState = {
+  key: CreationStepKey;
+  title: string;
+  status: 'pending' | 'running' | 'success' | 'error';
+  message?: string;
+  meta?: Record<string, any>;
+};
+
+type CreationLogLevel = 'info' | 'warn' | 'error' | 'success';
+
+type CreationLogEntry = {
+  id: string;
+  timestamp: number;
+  level: CreationLogLevel;
+  message: string;
+  context?: string;
+  meta?: Record<string, any>;
+};
+
+type PartialCreationLogEntry = {
+  id?: string;
+  timestamp?: number;
+  level?: CreationLogLevel | 'warning' | 'failed' | 'ok' | 'pending';
+  message?: string;
+  context?: string;
+  meta?: Record<string, any>;
+};
+
+type CreationProgressState = {
+  visible: boolean;
+  steps: CreationStepState[];
+  logs: CreationLogEntry[];
+  startedAt: number;
+  creationId?: string;
+  result?: { sessionId: string; symbol: string; state: string };
+  error?: string;
+};
+
+const CREATION_STEP_WEIGHTS: Record<CreationStepKey, number> = {
+  select: 0.6,
+  session: 0.25,
+  activate: 0.15,
+};
+
+const LOG_LEVEL_COLORS: Record<CreationLogLevel, { primary: string; background: string }> = {
+  info: { primary: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)' },
+  warn: { primary: '#fb923c', background: 'rgba(251, 146, 60, 0.15)' },
+  error: { primary: '#f87171', background: 'rgba(248, 113, 113, 0.18)' },
+  success: { primary: '#4ade80', background: 'rgba(74, 222, 128, 0.15)' },
+};
+
+const CREATION_STEP_TEMPLATE: { key: CreationStepKey; title: string }[] = [
+  { key: 'select', title: 'Select crypto' },
+  { key: 'session', title: 'Create session' },
+  { key: 'activate', title: 'Activate agent' },
+];
+
+const buildInitialCreationSteps = (): CreationStepState[] =>
+  CREATION_STEP_TEMPLATE.map((step, index) => ({
+    ...step,
+    status: index === 0 ? 'running' : 'pending',
+  }));
+
+const CREATION_STEP_WEIGHT_TOTAL = Object.values(CREATION_STEP_WEIGHTS).reduce(
+  (acc, weight) => acc + weight,
+  0
+);
+
+const computeProgressPercent = (steps: CreationStepState[]): number => {
+  if (!steps.length) return 0;
+  let progress = 0;
+  steps.forEach((step) => {
+    const weight = CREATION_STEP_WEIGHTS[step.key] ?? 0;
+    if (step.status === 'success') {
+      progress += weight;
+    } else if (step.status === 'running') {
+      progress += weight * 0.35;
+    } else if (step.status === 'error') {
+      progress += weight;
+    }
+  });
+  const normalized = CREATION_STEP_WEIGHT_TOTAL > 0 ? progress / CREATION_STEP_WEIGHT_TOTAL : 0;
+  return Math.round(Math.min(1, Math.max(0, normalized)) * 100);
+};
+
+const normalizeLogLevel = (value: PartialCreationLogEntry['level']): CreationLogLevel => {
+  switch (value) {
+    case 'warn':
+    case 'warning':
+      return 'warn';
+    case 'error':
+    case 'failed':
+      return 'error';
+    case 'success':
+    case 'ok':
+      return 'success';
+    default:
+      return 'info';
+  }
+};
+
+const formatLogTime = (timestamp: number) =>
+  new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+const formatSymbol = (symbol?: string) => (symbol ? symbol.replace(/:USDT$/i, '') : symbol);
+
+const { Text } = Typography;
+
+type AgentCreationProgressBannerProps = {
+  progress: CreationProgressState;
+  onDismiss?: () => void;
+};
+
+const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = ({
+  progress,
+  onDismiss,
+}) => {
+  const percent = React.useMemo(() => computeProgressPercent(progress.steps), [progress.steps]);
+  const hasError = React.useMemo(
+    () => progress.error || progress.steps.some((step) => step.status === 'error'),
+    [progress.error, progress.steps]
+  );
+  const isComplete = Boolean(progress.result) && !hasError;
+  const selectionStep = React.useMemo(
+    () => progress.steps.find((step) => step.key === 'select'),
+    [progress.steps]
+  );
+  const selectionMeta = React.useMemo(() => {
+    const meta = selectionStep?.meta ?? {};
+    const universeSummary = meta?.universeSummary ?? {};
+    return {
+      ...meta,
+      universeSummary,
+      candidates: meta?.candidates ?? universeSummary?.topSymbols ?? [],
+      analyzedSymbols:
+        meta?.analyzedSymbols ?? universeSummary?.analyzedSymbols ?? meta?.candidates ?? [],
+      orderableSymbols: meta?.orderableSymbols ?? universeSummary?.orderableSymbols ?? [],
+    } as Record<string, any>;
+  }, [selectionStep]);
+
+  const runningStep = progress.steps.find((step) => step.status === 'running');
+  const currentMessage = progress.error
+    ? progress.error
+    : runningStep?.message
+    ? runningStep.message
+    : isComplete && progress.result
+    ? `Agent ready on ${formatSymbol(progress.result.symbol)}`
+    : 'Agent creation running with intelligent auto-select…';
+
+  const stepItems = React.useMemo<StepsProps['items']>(() => {
+    return progress.steps.map((step) => {
+      const status: 'wait' | 'process' | 'finish' | 'error' =
+        step.status === 'pending'
+          ? 'wait'
+          : step.status === 'running'
+          ? 'process'
+          : step.status === 'success'
+          ? 'finish'
+          : 'error';
+      return {
+        key: step.key,
+        title: step.title,
+        status,
+        description: step.message ? <Text style={{ color: '#cbd5f5' }}>{step.message}</Text> : undefined,
+      };
+    });
+  }, [progress.steps]);
+
+  const logs = React.useMemo(() => progress.logs.slice(-15), [progress.logs]);
+  const timelineItems = React.useMemo(
+    () =>
+      logs.length
+        ? logs.map((log) => ({
+            color: LOG_LEVEL_COLORS[log.level].primary,
+            dot: <InfoCircleOutlined style={{ color: LOG_LEVEL_COLORS[log.level].primary }} />,
+            children: (
+              <div key={log.id} style={{ color: '#e2e8f0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ color: '#94a3b8', fontSize: 12 }}>{formatLogTime(log.timestamp)}</Text>
+                  <Tag
+                    style={{
+                      borderRadius: 12,
+                      border: 'none',
+                      background: LOG_LEVEL_COLORS[log.level].background,
+                      color: LOG_LEVEL_COLORS[log.level].primary,
+                      fontWeight: 600,
+                      fontSize: 11,
+                    }}
+                  >
+                    {log.level.toUpperCase()}
+                  </Tag>
+                  {log.context && (
+                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>{log.context}</Text>
+                  )}
+                </div>
+                <Text style={{ color: '#e2e8f0' }}>{log.message}</Text>
+                {log.meta && Object.keys(log.meta).length ? (
+                  <Text style={{ color: '#cbd5f5', fontSize: 12 }}>
+                    {JSON.stringify(log.meta)}
+                  </Text>
+                ) : null}
+              </div>
+            ),
+          }))
+        : [
+            {
+              color: '#475569',
+              dot: <InfoCircleOutlined style={{ color: '#475569' }} />,
+              children: (
+                <Text style={{ color: '#cbd5f5' }}>
+                  Progress updates will appear here as soon as the AI pipeline reports them.
+                </Text>
+              ),
+            },
+          ],
+    [logs]
+  );
+
+  const renderSymbolGroup = React.useCallback(
+    (label: string, symbols: string[], palette: { primary: string; background: string }) => {
+      if (!symbols || !symbols.length) return null;
+      const display = symbols.slice(0, 8);
+      const remainder = symbols.length - display.length;
+      return (
+        <div style={{ marginTop: 12 }}>
+          <Text style={{ color: '#cbd5f5', fontSize: 13 }}>{label}</Text>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+            {display.map((symbol) => (
+              <Tag
+                key={`${label}-${symbol}`}
+                style={{
+                  borderRadius: 14,
+                  border: 'none',
+                  background: palette.background,
+                  color: palette.primary,
+                  fontWeight: 600,
+                  padding: '4px 12px',
+                }}
+              >
+                {formatSymbol(symbol)}
+              </Tag>
+            ))}
+            {remainder > 0 && (
+              <Tag
+                style={{
+                  borderRadius: 14,
+                  border: '1px dashed rgba(148, 163, 184, 0.4)',
+                  background: 'transparent',
+                  color: '#94a3b8',
+                  padding: '4px 12px',
+                }}
+              >
+                +{remainder} more
+              </Tag>
+            )}
+          </div>
+        </div>
+      );
+    },
+    []
+  );
+
+  return (
+    <div
+      style={{
+        background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #111827 100%)',
+        borderRadius: 16,
+        padding: 24,
+        border: '1px solid rgba(148, 163, 184, 0.18)',
+        boxShadow: '0 24px 48px -32px rgba(15, 23, 42, 0.9)',
+        width: '100%',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: 16,
+        }}
+      >
+        <div>
+          <Text style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>Launching trading agent…</Text>
+          <div style={{ marginTop: 4 }}>
+            <Text style={{ color: '#94a3b8' }}>{currentMessage}</Text>
+          </div>
+        </div>
+        {onDismiss ? (
+          <Button
+            type='text'
+            icon={<CloseOutlined />}
+            onClick={onDismiss}
+            style={{ color: '#94a3b8' }}
+          >
+            Close
+          </Button>
+        ) : null}
+      </div>
+
+      <Progress
+        percent={percent}
+        status={hasError ? 'exception' : isComplete ? 'success' : 'active'}
+        strokeColor={hasError ? '#f87171' : '#38bdf8'}
+        trailColor='rgba(148, 163, 184, 0.18)'
+        style={{ marginTop: 16 }}
+      />
+
+      <Steps
+        responsive
+        size='small'
+        items={stepItems}
+        style={{ marginTop: 18 }}
+      />
+
+      <Divider style={{ borderColor: 'rgba(148, 163, 184, 0.25)', margin: '20px 0 16px' }} />
+
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 320px', minWidth: 280 }}>
+          <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>AI selection insights</Text>
+          <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+            <div>
+              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Candidates scanned</Text>
+              <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
+                {selectionMeta?.candidateCount ?? selectionMeta?.analyzedSymbols?.length ?? '--'}
+              </div>
+            </div>
+            <div>
+              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Orderable</Text>
+              <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
+                {selectionMeta?.orderableCount ?? selectionMeta?.orderableSymbols?.length ?? '--'}
+              </div>
+            </div>
+            <div>
+              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Mode</Text>
+              <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
+                {selectionMeta?.autoSelected ? 'Auto' : 'Manual'}
+              </div>
+            </div>
+          </div>
+          <div style={{ marginTop: 12, color: '#94a3b8', fontSize: 13 }}>
+            {selectionMeta?.prefetchedSymbol ? (
+              <div>
+                Prefetched opportunity:{' '}
+                <Text style={{ color: '#e2e8f0' }}>{formatSymbol(selectionMeta.prefetchedSymbol)}</Text>
+              </div>
+            ) : (
+              <div>Prefetched opportunity: <Text style={{ color: '#e2e8f0' }}>None</Text></div>
+            )}
+            {selectionMeta?.symbol || progress.result?.symbol ? (
+              <div>
+                Selected target:{' '}
+                <Text style={{ color: '#e2e8f0' }}>{formatSymbol(selectionMeta?.symbol ?? progress.result?.symbol)}</Text>
+              </div>
+            ) : null}
+            {selectionMeta?.source ? (
+              <div>
+                Source:{' '}
+                <Text style={{ color: '#e2e8f0' }}>{selectionMeta.source}</Text>
+              </div>
+            ) : null}
+          </div>
+          {renderSymbolGroup('AI-ranked candidates', selectionMeta?.analyzedSymbols || [], LOG_LEVEL_COLORS.info)}
+          {renderSymbolGroup('Orderable shortlist', selectionMeta?.orderableSymbols || [], LOG_LEVEL_COLORS.success)}
+        </div>
+        <div style={{ flex: '1 1 320px', minWidth: 280 }}>
+          <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>Live diagnostics</Text>
+          <Timeline style={{ marginTop: 12 }} items={timelineItems} />
+        </div>
+      </div>
+
+      {progress.result && (
+        <Alert
+          type='success'
+          showIcon
+          style={{
+            marginTop: 16,
+            background: 'rgba(74, 222, 128, 0.08)',
+            borderColor: 'rgba(34, 197, 94, 0.35)',
+          }}
+          message={`Agent ready on ${formatSymbol(progress.result.symbol)}`}
+          description={
+            progress.result.state === 'ready'
+              ? 'The trading agent is active and monitoring the market.'
+              : 'The agent is warming up with historical data before trading.'
+          }
+        />
+      )}
+
+      {progress.error && (
+        <Alert
+          type='error'
+          showIcon
+          style={{ marginTop: 16 }}
+          message='Agent creation failed'
+          description={progress.error}
+        />
+      )}
+    </div>
+  );
+};
 
 const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyLoss: number; note: string }> = {
   conservative: {
@@ -40,6 +483,7 @@ export default function SessionsPage(){
   const [filteredRows, setFilteredRows] = React.useState<any[]>([]);
   const [open, setOpen] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
+  const [creationProgress, setCreationProgress] = React.useState<CreationProgressState | null>(null);
   const [restartSessionId, setRestartSessionId] = React.useState<string | null>(null);
   const [form] = Form.useForm();
   const navigate = useNavigate();
@@ -82,10 +526,56 @@ export default function SessionsPage(){
   const [aggressivenessFilter, setAggressivenessFilter] = React.useState<string>('all');
   const [searchText, setSearchText] = React.useState<string>('');
   const [compactView, setCompactView] = React.useState<boolean>(true);
-  
+
   const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
   const enrichedCacheRef = React.useRef<Partial<Record<AppMode, any[]>>>({});
-  
+
+  const pushCreationLogs = React.useCallback(
+    (entries: PartialCreationLogEntry[] | PartialCreationLogEntry | null | undefined) => {
+      if (!entries) return;
+      const list = Array.isArray(entries) ? entries : [entries];
+      if (!list.length) return;
+      setCreationProgress((prev) => {
+        if (!prev) return prev;
+        const normalized = list
+          .filter((entry): entry is PartialCreationLogEntry => Boolean(entry))
+          .map((entry) => {
+            const timestamp =
+              typeof entry.timestamp === 'number' && Number.isFinite(entry.timestamp)
+                ? entry.timestamp
+                : Date.now();
+            return {
+              id: entry.id ?? `${timestamp}-${Math.random().toString(36).slice(2, 8)}`,
+              timestamp,
+              level: normalizeLogLevel(entry.level),
+              message: entry.message ?? '',
+              context: entry.context,
+              meta: entry.meta,
+            } as CreationLogEntry;
+          })
+          .filter((entry) => entry.message !== undefined);
+        if (!normalized.length) return prev;
+        return { ...prev, logs: [...prev.logs, ...normalized] };
+      });
+    },
+    []
+  );
+
+  const updateCreationStep = React.useCallback((key: CreationStepKey, patch: Partial<CreationStepState>) => {
+    setCreationProgress((prev) => {
+      if (!prev) return prev;
+      const steps = prev.steps.map<CreationStepState>((step) =>
+        step.key === key
+          ? ({
+              ...step,
+              ...patch,
+            } as CreationStepState)
+          : step
+      );
+      return { ...prev, steps };
+    });
+  }, []);
+
   const enrichSessionData = React.useCallback(async (sessions: any[]) => {
     return Promise.all(sessions.map(async (session: any) => {
       try {
@@ -153,50 +643,6 @@ export default function SessionsPage(){
         return session;
       }
     }));
-  }, []);
-
-  const pollAgentStartJob = React.useCallback(async (
-    jobId: string,
-    options?: { timeoutMs?: number; intervalMs?: number }
-  ) => {
-    const timeoutMs = options?.timeoutMs ?? 120_000;
-    const intervalMs = options?.intervalMs ?? 800;
-    const deadline = Date.now() + timeoutMs;
-    let lastPhase: string | null = null;
-    let snapshot: any = null;
-
-    while (Date.now() < deadline) {
-      try {
-        snapshot = await api.getAgentStartStatus(jobId);
-      } catch (error) {
-        console.warn('⚠️ Failed to fetch agent start status:', error);
-        await sleep(intervalMs);
-        continue;
-      }
-
-      if (snapshot?.phase && snapshot.phase !== lastPhase) {
-        console.log(`🚀 Agent start job ${jobId} entered phase ${snapshot.phase}`);
-        lastPhase = snapshot.phase;
-      }
-
-      if (snapshot?.status === 'completed') {
-        return snapshot;
-      }
-
-      if (snapshot?.status === 'failed') {
-        const errMessage = snapshot?.error?.message || snapshot?.error?.code || 'Agent start failed';
-        const err: any = new Error(errMessage);
-        err.code = snapshot?.error?.code;
-        err.details = snapshot?.error?.details;
-        throw err;
-      }
-
-      await sleep(intervalMs);
-    }
-
-    const timeoutError: any = new Error('Timed out waiting for agent start job to complete');
-    timeoutError.code = 'start.timeout';
-    throw timeoutError;
   }, []);
 
   const load = React.useCallback(async (forceRefresh = false) => { 
@@ -624,12 +1070,22 @@ export default function SessionsPage(){
                   </Button>
                 </Space>
               </Col>
-            </Row>
-          }
-        >
-          {/* Modern Filters Section */}
-          <div style={{
-            background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+          </Row>
+        }
+      >
+        {creationProgress?.visible && (
+          <AgentCreationProgressBanner
+            progress={creationProgress}
+            onDismiss={
+              creationProgress.result || creationProgress.error
+                ? () => setCreationProgress(null)
+                : undefined
+            }
+          />
+        )}
+        {/* Modern Filters Section */}
+        <div style={{
+          background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
             borderRadius: '12px',
             padding: '24px',
             marginBottom: '24px',
@@ -1348,6 +1804,7 @@ export default function SessionsPage(){
             let hide: (() => void) | null = null;
             const sessionIdForRestart = restartSessionId;
             const isRestart = Boolean(sessionIdForRestart);
+            let currentStep: CreationStepKey = 'select';
             try {
               setStarting(true);
               const v = await form.validateFields();
@@ -1363,15 +1820,13 @@ export default function SessionsPage(){
 
               if (v.smartAutoMode && !isRestart) {
                 console.log('🔄 Processing Auto-Select mode...');
-                console.log('📋 Symbol before delete:', v.symbol);
                 delete v.symbol;
-                console.log('📋 Symbol after delete:', v.symbol);
                 v.isSmartAgent = true;
                 v.smartConfig = {
                   minHoldDuration: 24 * 60 * 60 * 1000,
                   rescanInterval: 6 * 60 * 60 * 1000,
                   momentumThreshold: 0.5,
-                  volumeThreshold: 10000
+                  volumeThreshold: 10000,
                 };
 
                 if (!v.smartConfig.minHoldDuration || !v.smartConfig.rescanInterval) {
@@ -1407,115 +1862,218 @@ export default function SessionsPage(){
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd || 0), Number(exBal.totalUsd || 0));
               }
 
-              hide = message.loading(isRestart ? 'Restarting agent...' : 'Starting agent...', 0);
               setOpen(false);
-
-              let responseData: any = null;
-              let jobSnapshot: any = null;
-              let sessionIdentifier: string | null = sessionIdForRestart || null;
-              let selectedSymbol: string | null = null;
-              let jobState: string | undefined;
+              // Ensure no legacy progress modal remains visible once we pivot to the banner flow
+              Modal.destroyAll();
 
               if (isRestart) {
-                responseData = (await api.client.post('/api/agent/restart', v)).data;
-              } else {
-                responseData = await api.startAgentJob(v);
-                if (responseData?.jobId) {
-                  jobSnapshot = await pollAgentStartJob(responseData.jobId, { timeoutMs: 180_000, intervalMs: 900 });
-                }
-
-                if (jobSnapshot?.result) {
-                  sessionIdentifier = jobSnapshot.result.sessionId || null;
-                  selectedSymbol = jobSnapshot.result.symbol || null;
-                  jobState = jobSnapshot.result.state;
-                } else if (responseData?.id) {
-                  sessionIdentifier = responseData.id || null;
-                  selectedSymbol = responseData.symbol || null;
-                } else if (!sessionIdentifier) {
-                  sessionIdentifier = typeof responseData?.sessionId === 'string' ? responseData.sessionId : null;
-                  selectedSymbol = responseData?.symbol || null;
-                }
-              }
-
-              if (hide) { hide(); hide = null; }
-
-              const cacheEvent = isRestart ? 'settings_changed' : 'session_created';
-              if (sessionIdentifier) {
-                invalidateSmartly(cacheEvent, { mode: v.mode as any, sessionId: sessionIdentifier });
-              } else {
-                invalidateSmartly(cacheEvent, { mode: v.mode as any });
-              }
-
-              if (isRestart) {
+                hide = message.loading('Restarting agent...', 0);
+                await api.client.post('/api/agent/restart', v);
+                if (hide) hide();
+                hide = null;
+                invalidateSmartly('settings_changed', { mode: v.mode as any, sessionId: sessionIdForRestart! });
                 message.success('Agent restarted successfully!');
-              } else if (selectedSymbol && selectedSymbol !== 'SMART/SLEEP') {
-                message.success(`Agent started on ${selectedSymbol}!`);
-              } else {
-                message.success(v.smartAutoMode ? 'Auto-Select Agent started! Scanning for best opportunities...' : 'Session started successfully!');
-              }
-
-              await load(true);
-
-              const navigateTargetId = sessionIdForRestart || sessionIdentifier || null;
-              let shouldNavigate = true;
-
-              if (!isRestart && v.smartAutoMode && navigateTargetId) {
-                let pending = Boolean(jobState === 'warming' || !selectedSymbol || selectedSymbol === 'SMART/SLEEP');
-                const closeWaiting = message.loading('Analyzing market and selecting the best opportunity…', 0);
-                const POLL_TIMEOUT_MS = 120_000;
-                const POLL_INTERVAL_MS = 1500;
-                const deadline = Date.now() + POLL_TIMEOUT_MS;
-                try {
-                  while (pending && Date.now() < deadline) {
-                    await sleep(POLL_INTERVAL_MS);
-                    try {
-                      const sessions = await api.listSessions(mode);
-                      const current = sessions.find((row: any) => row.id === navigateTargetId);
-                      if (current && current.symbol && current.symbol !== 'SMART/SLEEP') {
-                        pending = false;
-                        selectedSymbol = current.symbol;
-                        break;
-                      }
-                    } catch (pollError) {
-                      console.warn('⚠️ Smart agent polling failed:', pollError);
-                    }
-                  }
-                } finally {
-                  if (typeof closeWaiting === 'function') closeWaiting();
+                await load(true);
+                if (sessionIdForRestart) {
+                  navigate(`/monitor/${sessionIdForRestart}`);
                 }
-
-                if (pending) {
-                  message.warning('Auto-selection is still running. You will be able to open the monitor once the symbol is assigned.');
-                  shouldNavigate = false;
-                }
-              }
-
-              if (!shouldNavigate) {
                 return;
               }
 
-              if (isRestart && sessionIdForRestart) {
-                navigate(`/monitor/${sessionIdForRestart}`);
-              } else if (navigateTargetId) {
-                navigate(`/monitor/${navigateTargetId}`);
-              } else {
-                const list = await api.listSessions(mode);
-                const active = list.find((r:any)=> !r.stoppedAt);
-                if (active) navigate(`/monitor/${active.id}`);
+              const initialSteps = buildInitialCreationSteps();
+              const creationStartedAt = Date.now();
+              setCreationProgress({
+                visible: true,
+                steps: initialSteps,
+                logs: [
+                  {
+                    id: `start-${creationStartedAt}`,
+                    timestamp: creationStartedAt,
+                    level: 'info',
+                    message: v.smartAutoMode
+                      ? 'Initiating smart auto-select agent creation…'
+                      : 'Preparing agent creation workflow…',
+                    context: 'system',
+                    meta: { mode: v.mode },
+                  },
+                ],
+                startedAt: creationStartedAt,
+              });
+              pushCreationLogs({
+                level: 'info',
+                message: v.smartAutoMode
+                  ? 'Scanning AI-ranked universe for the strongest opportunities…'
+                  : 'Validating requested symbol against exchange metadata…',
+                context: 'selection',
+              });
+              updateCreationStep('select', {
+                status: 'running',
+                message: v.smartAutoMode
+                  ? 'Scanning AI-ranked universe…'
+                  : 'Validating configuration…',
+              });
+
+              const prepare = await api.prepareAgentCreation(v);
+              currentStep = 'select';
+              const creationId: string | undefined = prepare?.creationId;
+              const selectedSymbol: string | undefined = prepare?.selection?.symbol;
+              const selectionMessage = selectedSymbol
+                ? prepare?.selection?.autoSelected
+                  ? `Auto-selected ${selectedSymbol}`
+                  : `Using ${selectedSymbol}`
+                : 'Selection completed';
+              const { decisionLog: selectionDecisionLog = [], ...selectionMeta } = prepare?.selection ?? {};
+              updateCreationStep('select', {
+                status: 'success',
+                message: selectionMessage,
+                meta: {
+                  ...selectionMeta,
+                  universeSummary: prepare?.universeSummary,
+                },
+              });
+              if (Array.isArray(selectionDecisionLog) && selectionDecisionLog.length) {
+                pushCreationLogs(
+                  selectionDecisionLog.map((entry: any) => ({
+                    timestamp: entry?.timestamp,
+                    level: entry?.level,
+                    message: entry?.message,
+                    context: entry?.context,
+                    meta: entry?.meta,
+                  }))
+                );
               }
+              pushCreationLogs({
+                level: 'success',
+                message: selectionMessage,
+                context: 'selection',
+                meta: {
+                  symbol: selectedSymbol,
+                  autoSelected: prepare?.selection?.autoSelected,
+                  candidateCount: prepare?.selection?.candidateCount,
+                  orderableCount: prepare?.selection?.orderableCount,
+                },
+              });
+              if (Array.isArray(prepare?.universeSummary?.topSymbols) && prepare?.universeSummary?.topSymbols.length) {
+                pushCreationLogs({
+                  level: 'info',
+                  message: `Top AI candidates: ${prepare.universeSummary.topSymbols
+                    .slice(0, 5)
+                    .map((s: string) => formatSymbol(s))
+                    .join(', ')}`,
+                  context: 'selection',
+                });
+              }
+
+              if (!creationId) {
+                throw new Error('Missing creation identifier');
+              }
+
+              setCreationProgress((prev) => (prev ? { ...prev, creationId } : prev));
+              updateCreationStep('session', {
+                status: 'running',
+                message: 'Provisioning trading session…',
+              });
+              pushCreationLogs({
+                level: 'info',
+                message: 'Provisioning trading session…',
+                context: 'session',
+                meta: { symbol: selectedSymbol },
+              });
+              currentStep = 'session';
+
+              const sessionResult = await api.createAgentSession(creationId, selectedSymbol);
+              updateCreationStep('session', {
+                status: 'success',
+                message: `Session ${sessionResult.sessionId} created`,
+                meta: { symbol: sessionResult.symbol },
+              });
+              pushCreationLogs({
+                level: 'success',
+                message: `Session ${sessionResult.sessionId} created`,
+                context: 'session',
+                meta: { symbol: sessionResult.symbol },
+              });
+
+              updateCreationStep('activate', {
+                status: 'running',
+                message: 'Activating trading engine…',
+              });
+              pushCreationLogs({
+                level: 'info',
+                message: 'Activating trading engine…',
+                context: 'activation',
+                meta: { symbol: sessionResult.symbol },
+              });
+              currentStep = 'activate';
+
+              const activation = await api.activateAgentCreation(creationId);
+              updateCreationStep('activate', {
+                status: 'success',
+                message:
+                  activation.state === 'ready'
+                    ? `Agent activated on ${activation.symbol}`
+                    : 'Agent warming up with market data',
+                meta: { state: activation.state },
+              });
+              pushCreationLogs({
+                level: activation.state === 'ready' ? 'success' : 'warn',
+                message:
+                  activation.state === 'ready'
+                    ? `Agent live on ${activation.symbol}`
+                    : 'Agent warming up with historical data',
+                context: 'activation',
+                meta: { state: activation.state, symbol: activation.symbol },
+              });
+
+              setCreationProgress((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      result: {
+                        sessionId: activation.sessionId,
+                        symbol: activation.symbol,
+                        state: activation.state,
+                      },
+                    }
+                  : prev
+              );
+
+              invalidateSmartly('session_created', { mode: v.mode as any, sessionId: activation.sessionId });
+
+              if (activation.symbol && activation.symbol !== 'SMART/SLEEP') {
+                message.success(`Agent started on ${activation.symbol}!`);
+              } else {
+                message.success(v.smartAutoMode ? 'Auto-Select agent scanning for best opportunities…' : 'Session started successfully!');
+              }
+
+              await load(true);
+              navigate(`/monitor/${activation.sessionId}`);
             } catch (e: any) {
               if (typeof hide === 'function') hide();
-              const msg = String(e?.response?.data?.error || e?.message || e);
-              if (!isRestart && msg.includes('active_session_exists')) {
+              const errorCode = e?.code || e?.response?.data?.error;
+              const detailMessage = e?.response?.data?.message || e?.message || e;
+              const errorMessage = String(detailMessage || 'Failed to start session');
+
+              if (!isRestart) {
+                updateCreationStep(currentStep, { status: 'error', message: errorMessage });
+                setCreationProgress((prev) => (prev ? { ...prev, error: errorMessage } : prev));
+                pushCreationLogs({
+                  level: 'error',
+                  message: errorMessage,
+                  context: currentStep || 'system',
+                  meta: errorCode ? { code: errorCode } : undefined,
+                });
+              }
+
+              if (!isRestart && typeof errorMessage === 'string' && errorMessage.includes('active_session_exists')) {
                 message.warning('Stop the active session first.');
-              } else if (e?.code === 'start.universe_conflict') {
+              } else if (errorCode === 'start.universe_conflict') {
                 message.error('No unused futures market is currently available for a smart agent. Please stop an existing session or try again later.');
-              } else if (e?.code === 'start.timeout') {
-                message.error('Timed out while waiting for the agent to initialize. Please check the backend logs and try again.');
               } else {
-                message.error(isRestart ? 'Failed to restart session' : 'Failed to start session');
+                message.error(isRestart ? 'Failed to restart session' : errorMessage);
               }
             } finally {
+              if (typeof hide === 'function') hide();
               setStarting(false);
               setRestartSessionId(null);
             }
