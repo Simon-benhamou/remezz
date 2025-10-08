@@ -17,6 +17,63 @@ const exchangeCache = new Map<string, any>();
 const binanceKlineSeeded = new Set<string>();
 const binanceKlineSeedPromises = new Map<string, Promise<number[][]>>();
 
+type WarmupState = {
+  attempts: number;
+  lastAttempt?: number;
+  pending: boolean;
+  lastError?: string;
+  fulfilled?: boolean;
+  nextRetryTs?: number;
+  lastSuccess?: number;
+};
+
+const ohlcvWarmupState = new Map<string, WarmupState>();
+const backfillRetryTimers = new Map<string, NodeJS.Timeout>();
+
+function warmupStateKey(symbol: string, tf: string): string {
+  return `${symbol.toUpperCase()}__${tf}`;
+}
+
+function getWarmupState(key: string): WarmupState {
+  return ohlcvWarmupState.get(key) || { attempts: 0, pending: false };
+}
+
+function setWarmupState(key: string, patch: Partial<WarmupState> & { attempts?: number }): WarmupState {
+  const current = getWarmupState(key);
+  const attempts = patch.attempts != null ? patch.attempts : current.attempts;
+  const updated: WarmupState = {
+    attempts,
+    lastAttempt: current.lastAttempt,
+    pending: current.pending,
+    lastError: current.lastError,
+    fulfilled: current.fulfilled,
+    nextRetryTs: current.nextRetryTs,
+    lastSuccess: current.lastSuccess,
+    ...patch,
+  };
+  ohlcvWarmupState.set(key, updated);
+  return updated;
+}
+
+function scheduleWarmupRetry(key: string, seedKey: string, delayMs: number): void {
+  if (delayMs <= 0) {
+    binanceKlineSeeded.delete(seedKey);
+    setWarmupState(key, { pending: false, nextRetryTs: undefined });
+    return;
+  }
+  if (backfillRetryTimers.has(key)) return;
+  const timer = setTimeout(() => {
+    backfillRetryTimers.delete(key);
+    binanceKlineSeeded.delete(seedKey);
+    setWarmupState(key, { pending: false, nextRetryTs: undefined });
+  }, delayMs);
+  backfillRetryTimers.set(key, timer);
+}
+
+export function getOhlcvWarmupState(symbol: string, tf: string): WarmupState | undefined {
+  return ohlcvWarmupState.get(warmupStateKey(symbol, tf));
+}
+
 function toNumber(value: any): number | undefined {
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
@@ -28,6 +85,29 @@ function pickFirstNumber(...values: any[]): number | undefined {
     if (n !== undefined) return n;
   }
   return undefined;
+}
+
+function timeframeToMs(tf: string): number {
+  const match = /^\s*(\d+)([mhd])\s*$/i.exec(tf);
+  if (!match) return 0;
+  const value = Number(match[1] || 0);
+  const unit = match[2]?.toLowerCase();
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  switch (unit) {
+    case 'm':
+      return value * 60_000;
+    case 'h':
+      return value * 3_600_000;
+    case 'd':
+      return value * 86_400_000;
+    default:
+      return 0;
+  }
+}
+
+function timeframeToMinutes(tf: string): number {
+  const ms = timeframeToMs(tf);
+  return ms > 0 ? ms / 60_000 : 0;
 }
 
 async function populateBidAskFromOrderBook(ex: any, symbol: string, ticker: any) {
@@ -80,6 +160,41 @@ function maybeLogOhlcvDebug(symbol: string, tf: string, data: number[][]) {
       );
     } catch {}
   }
+}
+
+function dropPartialLastBar(data: number[][], tf: string, allowPartial: boolean): number[][] {
+  if (allowPartial || data.length === 0) return data;
+  const intervalMs = timeframeToMs(tf);
+  if (!intervalMs) return data;
+  const last = data[data.length - 1];
+  const lastTs = Number(last?.[0] || 0);
+  if (!Number.isFinite(lastTs)) return data;
+  const now = Date.now();
+  if (now - lastTs < intervalMs) {
+    return data.slice(0, -1);
+  }
+  return data;
+}
+
+function prepareOhlcvSeries(raw: number[][], tf: string, limit: number, allowPartial: boolean): number[][] {
+  if (!Array.isArray(raw)) return [];
+  const sorted = raw.slice().filter(Boolean).sort((a, b) => Number(a[0]) - Number(b[0]));
+  if (!sorted.length) return [];
+  const trimmed = dropPartialLastBar(sorted, tf, allowPartial);
+  return trimmed.slice(-limit);
+}
+
+function computeBackfillLimit(tf: string, minBars: number, cfgBackfillDays: number): number {
+  const minutesPerBar = timeframeToMinutes(tf) || 1;
+  const requestedBars = Math.ceil(Math.max(minBars, cfgBackfillDays * 24 * 60 / minutesPerBar));
+  return Math.max(minBars, Math.min(1500, requestedBars));
+}
+
+function computeRetryDelayMs(attempt: number): number {
+  const base = 5_000;
+  const max = 10 * 60_000;
+  const factor = Math.pow(2, Math.max(0, attempt - 1));
+  return Math.min(max, base * factor);
 }
 
 // Heuristic: infer market type from unified symbol
@@ -417,6 +532,7 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
   const exchangeHint = userCredentials?.exchange || cfg.EXCHANGE_ID;
   const preferBinanceWs = isBinanceExchange(exchangeHint);
   const seedKey = binanceSeedKey(symbol, tf);
+  const warmKey = warmupStateKey(symbol, tf);
   let seededViaRest: number[][] | null = null;
 
   if (preferBinanceWs) {
@@ -427,35 +543,91 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
 
       if ((!wsData || wsData.length < normalizedLimit) && !binanceKlineSeeded.has(seedKey)) {
         let seedPromise = binanceKlineSeedPromises.get(seedKey);
-        // REST seeding disabled for Binance to avoid 418 bans.
-        // Rely on live WebSocket accumulation only.
-        // If insufficient bars, we'll pad/synthesize below.
+        if (!seedPromise) {
+          const attempts = getWarmupState(warmKey).attempts + 1;
+          seedPromise = (async () => {
+            setWarmupState(warmKey, {
+              attempts,
+              pending: true,
+              lastAttempt: Date.now(),
+              fulfilled: false,
+            });
+            try {
+              const backfillLimit = computeBackfillLimit(tf, normalizedLimit, Math.max(1, cfg.DIAGNOSTICS_BACKFILL_DAYS || 1));
+              const rest = await fetchOhlcvRest(symbol, tf, backfillLimit, userId, userCredentials);
+              if (rest && rest.length) {
+                seedKlinesFromWebSocket(symbol, tf, rest);
+                binanceKlineSeeded.add(seedKey);
+                const retryTimer = backfillRetryTimers.get(warmKey);
+                if (retryTimer) {
+                  clearTimeout(retryTimer);
+                  backfillRetryTimers.delete(warmKey);
+                }
+                setWarmupState(warmKey, {
+                  pending: false,
+                  fulfilled: true,
+                  lastError: undefined,
+                  nextRetryTs: undefined,
+                  lastSuccess: Date.now(),
+                });
+                return rest;
+              }
+              throw new Error('rest_backfill_empty');
+            } catch (error) {
+              const retryDelay = computeRetryDelayMs(attempts);
+              scheduleWarmupRetry(warmKey, seedKey, retryDelay);
+              setWarmupState(warmKey, {
+                pending: false,
+                lastError: String((error as any)?.message || error),
+                nextRetryTs: Date.now() + retryDelay,
+                fulfilled: false,
+              });
+              throw error;
+            } finally {
+              binanceKlineSeedPromises.delete(seedKey);
+            }
+          })();
+          binanceKlineSeedPromises.set(seedKey, seedPromise);
+        }
+        try {
+          seededViaRest = await seedPromise;
+        } catch (error) {
+          console.warn(`Binance REST backfill failed for ${symbol} ${tf}:`, error);
+        }
+        if (!wsData && seededViaRest && seededViaRest.length) {
+          wsData = seededViaRest;
+        }
+      } else if (!wsData || wsData.length < normalizedLimit) {
+        setWarmupState(warmKey, {
+          pending: true,
+          lastAttempt: Date.now(),
+          attempts: getWarmupState(warmKey).attempts,
+        });
       }
 
-      if (wsData && wsData.length >= Math.min(normalizedLimit, 10)) {
-        const sorted = wsData.slice().sort((a, b) => Number(a[0]) - Number(b[0]));
-        const trimmed = sorted.slice(-normalizedLimit);
-        maybeLogOhlcvDebug(symbol, tf, trimmed);
-        return trimmed;
-      }
-      // If we have some WS data but not enough, pad from the first candle
-      if (wsData && wsData.length > 0) {
-        const sorted = wsData.slice().sort((a, b) => Number(a[0]) - Number(b[0]));
-        const first = sorted[0];
-        const padCount = Math.max(0, normalizedLimit - sorted.length);
-        const intervalMs = tf.endsWith('m') ? Number(tf.replace('m','')) * 60_000 : tf.endsWith('h') ? Number(tf.replace('h','')) * 3_600_000 : 900_000;
-        const padded: number[][] = [];
-        for (let i = padCount; i > 0; i--) {
-          const ts = Number(first[0]) - i * intervalMs;
-          // Flatline padding to avoid NaN indicators
-          padded.push([ts, first[4], first[4], first[4], first[4], 0]);
+      if (wsData && wsData.length) {
+        const merged = seededViaRest && seededViaRest.length ? [...wsData, ...seededViaRest] : wsData;
+        const prepared = prepareOhlcvSeries(merged, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+        if (prepared.length) {
+          maybeLogOhlcvDebug(symbol, tf, prepared);
+          if (prepared.length >= normalizedLimit) {
+            setWarmupState(warmKey, {
+              pending: false,
+              fulfilled: true,
+              lastError: undefined,
+              nextRetryTs: undefined,
+              lastSuccess: Date.now(),
+            });
+          }
+          return prepared;
         }
-        const combined = [...padded, ...sorted].slice(-normalizedLimit);
-        maybeLogOhlcvDebug(symbol, tf, combined);
-        return combined;
       }
     } catch (error) {
       console.warn(`Binance WebSocket OHLCV fallback for ${symbol} ${tf}:`, error);
+      setWarmupState(warmKey, {
+        pending: false,
+        lastError: String((error as any)?.message || error),
+      });
     }
   }
   // Final fallback for Binance: synthesize stable OHLCV using last known ticker
@@ -466,20 +638,27 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
       const wsTicker = await getTickerFromWebSocket(symbol);
       const last = Number(wsTicker?.last || 0);
       const now = Date.now();
-      const intervalMs = tf.endsWith('m') ? Number(tf.replace('m','')) * 60_000 : tf.endsWith('h') ? Number(tf.replace('h','')) * 3_600_000 : 900_000;
+      const intervalMs = timeframeToMs(tf) || 900_000;
       const out: number[][] = [];
       for (let i = normalizedLimit; i > 0; i--) {
         const ts = now - i * intervalMs;
         out.push([ts, last, last, last, last, 0]);
       }
-      maybeLogOhlcvDebug(symbol, tf, out);
-      return out;
+      const prepared = prepareOhlcvSeries(out, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+      maybeLogOhlcvDebug(symbol, tf, prepared);
+      setWarmupState(warmKey, {
+        pending: false,
+        fulfilled: false,
+        lastError: 'synthetic_warmup',
+      });
+      return prepared;
     } catch {}
   }
   // Non-Binance exchanges: safe to use REST
   const restData = await fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials);
-  maybeLogOhlcvDebug(symbol, tf, restData);
-  return restData;
+  const preparedRest = prepareOhlcvSeries(restData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+  maybeLogOhlcvDebug(symbol, tf, preparedRest);
+  return preparedRest;
 }
 
 export async function computeCoreIndicators(symbol: string) {

@@ -118,6 +118,10 @@ export type Cfg = {
   VOLUME_CMF_RELAX: number;            // base relax to subtract when CMF aligns
   VOLUME_CMF_RELAX_MAX: number;        // cap of relax
   VOLUME_CMF_MIN_ADX: number;          // minimal ADX to trust CMF relaxation
+  // Diagnostics warm-up controls
+  DIAGNOSTICS_MIN_BARS_15M: number;
+  DIAGNOSTICS_BACKFILL_DAYS: number;
+  DIAGNOSTICS_ALLOW_PARTIAL_CANDLE: boolean;
   QUALITY_MIN_SCORE_CONSERVATIVE: number;
   QUALITY_MIN_SCORE_REACTIVE: number;
   QUALITY_MIN_SCORE_AGGRESSIVE: number;
@@ -375,6 +379,9 @@ export function getConfig(): Cfg {
     VOLUME_CMF_RELAX: Number(e.VOLUME_CMF_RELAX || "0.15"),
     VOLUME_CMF_RELAX_MAX: Number(e.VOLUME_CMF_RELAX_MAX || "0.20"),
     VOLUME_CMF_MIN_ADX: Number(e.VOLUME_CMF_MIN_ADX || "15"),
+    DIAGNOSTICS_MIN_BARS_15M: Number(e.DIAGNOSTICS_MIN_BARS_15M || "120"),
+    DIAGNOSTICS_BACKFILL_DAYS: Number(e.DIAGNOSTICS_BACKFILL_DAYS || "3"),
+    DIAGNOSTICS_ALLOW_PARTIAL_CANDLE: (e.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE || "false") === "true",
     // Entry near-zone tuning
     ENTRY_NEAR_ATR_FACTOR: Number(e.ENTRY_NEAR_ATR_FACTOR || "0.2"),
     ENTRY_NEAR_WIDTH_FACTOR: Number(e.ENTRY_NEAR_WIDTH_FACTOR || "0.15"),

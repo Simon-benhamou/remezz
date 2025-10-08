@@ -21,6 +21,7 @@ import type { PlacedOrder } from '../broker/types.js';
 import { prisma } from '../db/client.js';
 import { predictor } from '../ai/predictor.js';
 import { getUserCredentials } from '../services/userCredentials.js';
+import { isInsufficientDataError, InsufficientDataError } from '../data/errors.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -4037,6 +4038,7 @@ export class ReboundRejectionAgent {
    * Get comprehensive trading diagnostics for frontend display
    */
   public async getDiagnostics(): Promise<any> {
+    const cfg = getConfig();
     try {
       const snapshotFetcher = typeof (this as any).getDiagnosticSnapshot === 'function'
         ? (this as any).getDiagnosticSnapshot.bind(this)
@@ -4048,14 +4050,24 @@ export class ReboundRejectionAgent {
       const lastPx = Number((snap as any)?.last || 0);
       const dataReady = lastPx > 0 && (vol > 0 || volMA > 0);
       if (!dataReady) {
+        const warmupDetails = { last: lastPx, volume: vol, volumeMA: volMA };
         return {
           canTrade: false,
-          reason: 'waiting_for_market_data',
-          checks: {},
-          summary: { totalChecks: 0, passed: 0, failed: 0, partial: 0, rejected: 0 },
+          reason: 'data.unavailable',
+          errorCode: 'data.unavailable',
+          warmup: warmupDetails,
+          checks: {
+            marketData: {
+              status: 'FAIL',
+              code: 'data.unavailable',
+              reason: 'waiting_for_market_data',
+              details: warmupDetails,
+            },
+          },
+          summary: { totalChecks: 1, passed: 0, failed: 1, partial: 0, rejected: 0 },
           trigger: {
             entryReady: false,
-            phase: 'data_unavailable',
+            phase: 'warming',
             bias: this.plan?.bias || 'none',
             price: lastPx,
             zone: this.plan?.zone ? { ...this.plan.zone } : null,
@@ -4065,7 +4077,7 @@ export class ReboundRejectionAgent {
             qualityOk: false,
             profitOk: false,
             tp1ProfitPct: 0,
-            minProfitPct: (await import('../utils/env.js')).getConfig().MIN_TRADE_PROFIT_PCT,
+            minProfitPct: cfg.MIN_TRADE_PROFIT_PCT,
             dir: this.plan?.bias === 'short' ? -1 : 1,
           },
           timestamp: Date.now()
@@ -4085,16 +4097,30 @@ export class ReboundRejectionAgent {
         timestamp: Date.now()
       };
     } catch (error) {
+      if (isInsufficientDataError(error)) {
+        return this.buildWarmupDiagnostics(error);
+      }
       console.error('Diagnostics error:', error);
+      const bias = this.plan?.bias || 'none';
+      const dir = bias === 'short' ? -1 : 1;
+      const runtimeChecks = {
+        runtime: {
+          status: 'FAIL',
+          code: 'diagnostics.error',
+          reason: 'unexpected_runtime_error',
+          details: { message: String((error as any)?.message || error) },
+        },
+      } as const;
       return {
         canTrade: false,
-        reason: 'Diagnostic error',
-        checks: {},
-        summary: { totalChecks: 0, passed: 0, failed: 0 },
+        reason: 'diagnostics.error',
+        errorCode: 'diagnostics.error',
+        checks: runtimeChecks,
+        summary: { totalChecks: 1, passed: 0, failed: 1, partial: 0, rejected: 0 },
         trigger: {
           entryReady: false,
           phase: 'error',
-          bias: this.plan?.bias || 'none',
+          bias,
           price: undefined,
           zone: this.plan?.zone ? { ...this.plan.zone } : null,
           inZone: false,
@@ -4103,10 +4129,11 @@ export class ReboundRejectionAgent {
           qualityOk: false,
           profitOk: false,
           tp1ProfitPct: 0,
-          minProfitPct: (await import('../utils/env.js')).getConfig().MIN_TRADE_PROFIT_PCT,
-          dir: this.plan?.bias === 'short' ? -1 : 1,
+          minProfitPct: cfg.MIN_TRADE_PROFIT_PCT,
+          dir,
         },
-        error: String(error)
+        error: String((error as any)?.message || error),
+        timestamp: Date.now(),
       };
     }
   }
@@ -4467,6 +4494,55 @@ export class ReboundRejectionAgent {
         details,
       });
     } catch {}
+  }
+
+  private buildWarmupDiagnostics(error: InsufficientDataError): any {
+    const cfg = getConfig();
+    const bias = this.plan?.bias || 'none';
+    const dir = bias === 'short' ? -1 : 1;
+    const now = Date.now();
+    const warmupMeta = {
+      ...error.meta,
+      firstBarAtIso: error.meta.firstBarAt ? new Date(error.meta.firstBarAt).toISOString() : null,
+      lastBarAtIso: error.meta.lastBarAt ? new Date(error.meta.lastBarAt).toISOString() : null,
+      retryMs: error.meta.warmupState?.nextRetryTs ? Math.max(0, error.meta.warmupState.nextRetryTs - now) : undefined,
+    };
+
+    const checks = {
+      marketData: {
+        status: 'FAIL',
+        code: 'data.insufficient_bars',
+        reason: 'warmup_insufficient_bars_15m',
+        details: warmupMeta,
+      },
+    } as const;
+
+    const summary = { totalChecks: 1, passed: 0, failed: 1, partial: 0, rejected: 0 };
+
+    return {
+      canTrade: false,
+      reason: 'data.insufficient_bars',
+      errorCode: 'data.insufficient_bars',
+      warmup: warmupMeta,
+      checks,
+      summary,
+      trigger: {
+        entryReady: false,
+        phase: 'warming',
+        bias,
+        price: undefined,
+        zone: this.plan?.zone ? { ...this.plan.zone } : null,
+        inZone: false,
+        confirmationOk: false,
+        momentumOk: false,
+        qualityOk: false,
+        profitOk: false,
+        tp1ProfitPct: 0,
+        minProfitPct: cfg.MIN_TRADE_PROFIT_PCT,
+        dir,
+      },
+      timestamp: now,
+    };
   }
 
   // Stub implementations for missing methods - to be implemented properly later

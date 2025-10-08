@@ -1,8 +1,9 @@
 // backend/src/ai/tech.ts
-import { getOHLCV } from '../data/market.js';
+import { getOHLCV, getOhlcvWarmupState } from '../data/market.js';
 import { ema, rsi, atr, adx } from '../data/indicators.js';
 import { classifyRegime, RegimeProfile } from './regime.js';
 import { getConfig } from '../utils/env.js';
+import { InsufficientDataError } from '../data/errors.js';
 
 export type TechnicalSnapshot = {
   symbol: string;
@@ -204,9 +205,22 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
       return { ...(cached.data) };
     }
   } catch {}
+  const cfg = getConfig();
+  const minBars15m = Math.max(50, Number(cfg.DIAGNOSTICS_MIN_BARS_15M || 100));
   // 15m window for reactivity (~2 days), 1h for pivots/daily
-  const o15 = await getOHLCV(symbol, '15m', 300, userId); // [ts, o, h, l, c, v]
-  if (!o15 || o15.length < 100) throw new Error('Not enough data (15m)');
+  const o15 = await getOHLCV(symbol, '15m', Math.max(300, minBars15m), userId); // [ts, o, h, l, c, v]
+  if (!o15 || o15.length < minBars15m) {
+    const warmup = getOhlcvWarmupState(symbol, '15m');
+    throw new InsufficientDataError('Not enough data (15m)', {
+      symbol,
+      timeframe: '15m',
+      availableBars: o15?.length ?? 0,
+      minBarsNeeded: minBars15m,
+      firstBarAt: o15?.length ? o15[0][0] : null,
+      lastBarAt: o15?.length ? o15[o15.length - 1][0] : null,
+      warmupState: warmup,
+    });
+  }
 
   // 🔍 DEBUG RAW OHLCV: Compare avec API publique
   console.log(`[RAW OHLCV DEBUG] ${symbol}: Last 5 candles from getOHLCV:`, 

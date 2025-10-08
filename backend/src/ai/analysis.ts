@@ -4,13 +4,39 @@ import { ema, rsi, atr } from '../data/indicators.js';
 import { llmJSON } from './llm.js';
 import { getConfig } from '../utils/env.js';
 import { getHybridSentiment } from '../sentiment/index.js';
+import { isInsufficientDataError } from '../data/errors.js';
 // Track per-symbol daily Grok usage (in-memory)
 const GROK_DAILY: Map<string, number> = new Map();
 const ANALYSIS_CACHE = new Map<string,{ ts:number, data:any }>();
 const ANALYSIS_TTL = Number(process.env.ANALYSIS_TTL_MIN || 360) * 60 * 1000;
 export async function fullAnalysis(symbol: string) {
-  // technical snapshot (15m)
-  const technical = await buildTechSnapshot(symbol);
+  let technical;
+  try {
+    technical = await buildTechSnapshot(symbol);
+  } catch (error) {
+    if (isInsufficientDataError(error)) {
+      const now = Date.now();
+      const warmup = {
+        ...error.meta,
+        firstBarAtIso: error.meta.firstBarAt ? new Date(error.meta.firstBarAt).toISOString() : null,
+        lastBarAtIso: error.meta.lastBarAt ? new Date(error.meta.lastBarAt).toISOString() : null,
+        retryMs: error.meta.warmupState?.nextRetryTs ? Math.max(0, error.meta.warmupState.nextRetryTs - now) : undefined,
+      };
+      const payload = {
+        symbol,
+        dataReady: false,
+        phase: 'warming',
+        reason: 'data.insufficient_bars',
+        errorCode: 'data.insufficient_bars',
+        warmup,
+        technical: null,
+      };
+      const warmupTtlMs = 15_000;
+      ANALYSIS_CACHE.set(symbol, { ts: now - (ANALYSIS_TTL - warmupTtlMs), data: payload });
+      return payload;
+    }
+    throw error;
+  }
   const hit = ANALYSIS_CACHE.get(symbol);
   const now = Date.now();
   if (hit && now - hit.ts < ANALYSIS_TTL) return hit.data;
