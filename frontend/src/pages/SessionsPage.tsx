@@ -119,12 +119,12 @@ export default function SessionsPage(){
   const updateCreationStep = React.useCallback((key: CreationStepKey, patch: Partial<CreationStepState>) => {
     setCreationProgress((prev) => {
       if (!prev) return prev;
-      const steps = prev.steps.map((step) =>
+      const steps = prev.steps.map<CreationStepState>((step) =>
         step.key === key
-          ? {
+          ? ({
               ...step,
               ...patch,
-            }
+            } as CreationStepState)
           : step
       );
       return { ...prev, steps };
@@ -134,13 +134,13 @@ export default function SessionsPage(){
   const markNextStepRunning = React.useCallback((key: CreationStepKey) => {
     setCreationProgress((prev) => {
       if (!prev) return prev;
-      const steps = prev.steps.map((step) =>
+      const steps = prev.steps.map<CreationStepState>((step) =>
         step.key === key
-          ? {
+          ? ({
               ...step,
               status: 'running',
               message: undefined,
-            }
+            } as CreationStepState)
           : step
       );
       return { ...prev, steps };
