@@ -2084,12 +2084,16 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
     } satisfies IntelligentAnalysis;
   }
   console.log('🎯 Smart Agent Selection: Finding best available opportunity from ranked list...');
-  
+
   // Get the complete ranked list of qualified opportunities
-  const opportunities = opts?.candidatesOverride ?? await scanIntelligentOpportunities(undefined, opts);
-  
+  const opportunities =
+    opts?.candidatesOverride ??
+    (testMode
+      ? await scanIntelligentOpportunitiesLegacy(excludeSessionId, opts)
+      : await scanIntelligentOpportunities(undefined, opts));
+
   if (opportunities.length === 0) {
-    console.log('� No qualified opportunities found (all below minimum score threshold) → SLEEP mode');
+    console.log('😴 No qualified opportunities found (all below minimum score threshold) → SLEEP mode');
     return null;
   }
   
@@ -2108,7 +2112,7 @@ export async function getBestIntelligentOpportunity(excludeSessionId?: string, o
   // 3. Never allow 2+ agents on same symbol (avoid conflicts)
   
   for (let maxUsage = 0; maxUsage <= 1; maxUsage++) {
-    console.log(`� Pass ${maxUsage + 1}: Looking for symbols with ${maxUsage} active agent(s)...`);
+    console.log(`🔄 Pass ${maxUsage + 1}: Looking for symbols with ${maxUsage} active agent(s)...`);
     
     for (const opportunity of opportunities) {
       const currentUsage = symbolUsageMap.get(opportunity.symbol) || 0;
