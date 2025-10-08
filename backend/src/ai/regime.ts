@@ -1,5 +1,12 @@
 import type { TechnicalSnapshot } from './tech.js';
 
+export type RegimeRiskModifier = {
+  level: 'caution' | 'extreme';
+  sizingMultiplier?: number;
+  stopMultiplier?: number;
+  reason: string;
+};
+
 export type RegimeProfile = {
   trend: 'uptrend'|'downtrend'|'range';
   volatility: 'low'|'medium'|'high';
@@ -9,6 +16,7 @@ export type RegimeProfile = {
   trendStrength: number;
   playbook: 'mean_reversion'|'momentum_breakout'|'standby';
   shouldTrade: boolean;
+  riskModifier?: RegimeRiskModifier;
   notes?: string;
 };
 
@@ -33,25 +41,65 @@ export function classifyRegime(snap: TechnicalSnapshot & {
   // Volatility buckets (realized vol expressed in % terms already)
   const vol = realizedVol;
   let volatility: RegimeProfile['volatility'];
-  if (vol >= 1.2) volatility = 'high';
-  else if (vol >= 0.5) volatility = 'medium';
+  if (vol >= 3) volatility = 'high';
+  else if (vol >= 1) volatility = 'medium';
   else volatility = 'low';
 
   // Determine playbook
   let playbook: RegimeProfile['playbook'] = 'mean_reversion';
   let shouldTrade = true;
+  let riskModifier: RegimeRiskModifier | undefined;
   const momentumStrong = adx >= 25 && Math.abs(adxSlope) > 0.5 && trendStrength > 0.35;
   const hurstBiasTrend = hurst > 0.6;
   const hurstBiasRange = hurst < 0.45;
+  const structureWeak = trendStrength < 0.2 || adx < 15;
+  const structureFragile = trendStrength < 0.25 || adx < 18;
+  const adxFallingHard = adxSlope < -1.2;
+  const extremeVol = vol >= 4;
 
   if (momentumStrong || hurstBiasTrend) {
     playbook = 'momentum_breakout';
-  } else if (volatility === 'high' && !momentumStrong && !hurstBiasTrend) {
-    // High vol chop, stand aside unless we regain structure
-    playbook = 'standby';
-    shouldTrade = false;
+    if (volatility === 'high' && !hurstBiasTrend) {
+      // Encourage caution in breakouts during high vol conditions
+      riskModifier = {
+        level: 'caution',
+        sizingMultiplier: 0.75,
+        stopMultiplier: 0.9,
+        reason: 'high_volatility_breakout_context'
+      };
+    }
+  } else if (volatility === 'high' && !momentumStrong) {
+    // Only step aside completely if structure is breaking down alongside extreme volatility
+    if ((extremeVol && structureWeak) || (structureWeak && adxFallingHard)) {
+      playbook = 'standby';
+      shouldTrade = false;
+      riskModifier = {
+        level: 'extreme',
+        sizingMultiplier: 0,
+        stopMultiplier: 1,
+        reason: 'extreme_volatility_with_no_structure'
+      };
+    } else {
+      riskModifier = {
+        level: 'caution',
+        sizingMultiplier: 0.6,
+        stopMultiplier: 0.85,
+        reason: structureFragile
+          ? 'high_volatility_with_soft_structure'
+          : 'high_volatility_requires_tighter_risk'
+      };
+    }
   } else if (hurstBiasRange || trendStrength <= 0.25) {
     playbook = 'mean_reversion';
+  }
+
+  if (!riskModifier && volatility === 'medium' && structureFragile && !momentumStrong) {
+    riskModifier = {
+      level: 'caution',
+      sizingMultiplier: 0.7,
+      stopMultiplier: 0.9,
+      reason: 'elevated_volatility_with_fragile_structure'
+    };
   }
 
   // In case of conflicting signals (e.g. down ADX slope but large spread) soften to mean reversion
@@ -68,6 +116,9 @@ export function classifyRegime(snap: TechnicalSnapshot & {
     trendStrength,
     playbook,
     shouldTrade,
-    notes: playbook === 'standby' ? 'High-volatility chop detected; standing by.' : undefined,
+    riskModifier,
+    notes: !shouldTrade
+      ? 'Extreme volatility and structural breakdown detected; standing by.'
+      : riskModifier?.reason,
   };
 }

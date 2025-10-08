@@ -628,7 +628,23 @@ export class ReboundRejectionAgent {
     const side = this.plan.bias === 'long' ? 'buy' : 'sell';
     const entry = mktPrice;
     const round4 = (n:number)=> Math.round(n*1e4)/1e4;
-    const stopRaw = this.plan.bias === 'long' ? entry - this.plan.stopDistance : entry + this.plan.stopDistance;
+    const regimeRisk = this.regime?.riskModifier;
+    const planAny = this.plan as any;
+    const baseStopDistance = typeof planAny._baseStopDistance === 'number'
+      ? planAny._baseStopDistance
+      : this.plan.stopDistance;
+    if (planAny._baseStopDistance == null) {
+      planAny._baseStopDistance = baseStopDistance;
+    }
+    let effectiveStopDistance = baseStopDistance;
+    if (regimeRisk?.stopMultiplier != null && Number.isFinite(regimeRisk.stopMultiplier)) {
+      const clamp = Math.max(0.4, Math.min(1, regimeRisk.stopMultiplier));
+      effectiveStopDistance = baseStopDistance * clamp;
+    }
+    this.plan.stopDistance = effectiveStopDistance;
+    const stopRaw = this.plan.bias === 'long'
+      ? entry - this.plan.stopDistance
+      : entry + this.plan.stopDistance;
     const stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
     const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
@@ -737,6 +753,26 @@ export class ReboundRejectionAgent {
     if (planRiskMinPct != null) dynamicRiskPct = Math.max(planRiskMinPct, dynamicRiskPct);
     if (planRiskMaxPct != null) dynamicRiskPct = Math.min(planRiskMaxPct, dynamicRiskPct);
     if (this.adaptiveRisk) this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
+
+    if (regimeRisk && regimeRisk.level === 'caution') {
+      recordOpsEvent({
+        level: 'info',
+        source: 'regime_risk_modifier',
+        message: regimeRisk.reason,
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          sizingMultiplier: regimeRisk.sizingMultiplier,
+          stopMultiplier: regimeRisk.stopMultiplier,
+        },
+      });
+    }
+
+    if (regimeRisk?.sizingMultiplier != null && Number.isFinite(regimeRisk.sizingMultiplier)) {
+      const clamp = Math.max(0.05, Math.min(1, regimeRisk.sizingMultiplier));
+      dynamicRiskPct *= clamp;
+    }
+
     // Compute requested size
     let notional = 0;
     // Determine effective leverage for this trade (risk-aware if enabled)
