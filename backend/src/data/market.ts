@@ -79,6 +79,16 @@ function toNumber(value: any): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+export function resolveTickerReceivedAt(
+  ticker: { receivedAt?: number } | null | undefined,
+  fallback: number,
+): number {
+  if (ticker && Number.isFinite(Number(ticker.receivedAt))) {
+    return Number(ticker.receivedAt);
+  }
+  return fallback;
+}
+
 function pickFirstNumber(...values: any[]): number | undefined {
   for (const v of values) {
     const n = toNumber(v);
@@ -307,11 +317,12 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       const wsTicker = await getTickerFromWebSocket(symbol);
       if (wsTicker) {
         const adapted = adaptBinanceTickerToCcxt(symbol, wsTicker);
+        const receivedAt = resolveTickerReceivedAt(wsTicker, now);
         const validation = evaluateTickerFrame({
           symbol,
           frame: adapted,
           source: 'WS',
-          receivedAt: now,
+          receivedAt,
           expectedSymbolId: toBinanceSymbolId(symbol),
         });
         if (validation.status === 'accepted') {
