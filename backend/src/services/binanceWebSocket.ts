@@ -15,6 +15,27 @@ import { getConfig } from '../utils/env.js';
 import { evaluateTickerFrame } from '../data/tickerValidation.js';
 import { recordMarketFrame, recordWsReconnect, setFallbackState, updateWsConnectionState } from '../monitor/marketMetrics.js';
 
+const MARKET_TYPE = String(process.env.MARKET_TYPE || 'swap').toLowerCase();
+type BinanceMarketKind = 'spot' | 'futures';
+
+const MARKET_KIND: BinanceMarketKind = MARKET_TYPE === 'spot' ? 'spot' : 'futures';
+
+const BINANCE_ENDPOINTS = MARKET_KIND === 'spot'
+  ? {
+      wsMulti: 'wss://stream.binance.com:9443/stream',
+      wsUserBase: 'wss://stream.binance.com:9443/ws',
+      rest: 'https://api.binance.com',
+      listenKeyPath: '/api/v3/userDataStream',
+      requiresSignature: false,
+    }
+  : {
+      wsMulti: 'wss://fstream.binance.com/stream',
+      wsUserBase: 'wss://fstream.binance.com/ws',
+      rest: 'https://fapi.binance.com',
+      listenKeyPath: '/fapi/v1/listenKey',
+      requiresSignature: true,
+    } as const;
+
 export interface BinanceTickerData {
   symbol: string;
   last: number;
@@ -120,7 +141,7 @@ class BinanceWebSocketManager {
   private klineCallbacks: Array<(kline: BinanceKlineData) => void> = [];
   
   // User data stream management
-  private userDataStreams = new Map<string, { ws: WebSocket | null; listenKey: string; userId: string }>();
+  private userDataStreams = new Map<string, { ws: WebSocket | null; listenKey: string; userId: string; keepAliveTimer?: NodeJS.Timeout }>();
   private userDataSubscriptions = new Map<string, Promise<void>>();
   
   private isConnecting = false;
@@ -132,6 +153,8 @@ class BinanceWebSocketManager {
   // Streams actifs
   private activeStreams = new Set<string>();
   private desiredKlineStreams = new Map<string, { stream: string; symbol: string; interval: string }>();
+
+  private readonly endpoints = BINANCE_ENDPOINTS;
 
   constructor() {
     console.log('📡 Initializing Binance WebSocket Manager...');
@@ -197,9 +220,9 @@ class BinanceWebSocketManager {
     
     try {
       // Multi-stream endpoint Binance
-      const wsUrl = 'wss://fstream.binance.com/stream';
-      
-      console.log(`📡 Connecting to Binance WebSocket: ${wsUrl}`);
+      const wsUrl = this.endpoints.wsMulti;
+
+      console.log(`📡 Connecting to Binance ${MARKET_KIND.toUpperCase()} WebSocket: ${wsUrl}`);
       
       this.ws = new WebSocket(wsUrl);
 
@@ -802,28 +825,33 @@ class BinanceWebSocketManager {
     const subscription = (async () => {
       try {
         // Step 1: Create listenKey (0 weight)
-        const timestamp = Date.now();
-        const queryString = `timestamp=${timestamp}`;
-        const signature = crypto
-          .createHmac('sha256', apiSecret)
-          .update(queryString)
-          .digest('hex');
+        const listenKeyUrl = new URL(this.endpoints.listenKeyPath, this.endpoints.rest);
 
-        const listenKeyUrl = `https://fapi.binance.com/fapi/v1/listenKey?${queryString}&signature=${signature}`;
-        const response = await fetch(listenKeyUrl, {
-          method: 'POST',
-          headers: { 'X-MBX-APIKEY': apiKey }
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to create listenKey: ${await response.text()}`);
+        if (this.endpoints.requiresSignature) {
+          const timestamp = Date.now();
+          const params = new URLSearchParams({ timestamp: String(timestamp) });
+          const signature = crypto
+            .createHmac('sha256', apiSecret)
+            .update(params.toString())
+            .digest('hex');
+          params.append('signature', signature);
+          listenKeyUrl.search = params.toString();
         }
 
-        const { listenKey } = await response.json();
+        const listenKeyResponse = await fetch(listenKeyUrl.toString(), {
+          method: 'POST',
+          headers: { 'X-MBX-APIKEY': apiKey },
+        });
+
+        if (!listenKeyResponse.ok) {
+          throw new Error(`Failed to create listenKey: ${await listenKeyResponse.text()}`);
+        }
+
+        const { listenKey } = await listenKeyResponse.json();
         console.log(`✅ Created listenKey for user ${userId}: ${listenKey.substring(0, 10)}...`);
 
         // Step 2: Connect to user data stream
-        const wsUrl = `wss://fstream.binance.com/ws/${listenKey}`;
+        const wsUrl = `${this.endpoints.wsUserBase}/${listenKey}`;
         const userWs = new WebSocket(wsUrl);
 
         userWs.on('open', () => {
@@ -842,12 +870,15 @@ class BinanceWebSocketManager {
                 const wb = parseFloat(bal.wb || '0'); // Wallet balance
                 const cw = parseFloat(bal.cw || '0'); // Cross wallet balance
                 
+                const free = Math.max(cw, 0);
+                const locked = Math.max(wb - cw, 0);
+
                 const balanceData: BinanceBalance = {
                   asset,
-                  free: wb - cw, // Free = wallet - cross
-                  locked: cw,
+                  free,
+                  locked,
                   total: wb,
-                  timestamp: Date.now()
+                  timestamp: Date.now(),
                 };
 
                 const cacheKey = `${userId}_${asset}`;
@@ -870,39 +901,78 @@ class BinanceWebSocketManager {
           console.error(`❌ User data stream error for ${userId}:`, error);
         });
 
-        userWs.on('close', () => {
-          console.log(`🔌 User data stream closed for user ${userId}`);
-          this.userDataStreams.delete(userId);
-        });
+        const streamRecord = { ws: userWs, listenKey, userId } as {
+          ws: WebSocket | null;
+          listenKey: string;
+          userId: string;
+          keepAliveTimer?: NodeJS.Timeout;
+        };
+        this.userDataStreams.set(userId, streamRecord);
 
-        // Store stream reference
-        this.userDataStreams.set(userId, { ws: userWs, listenKey, userId });
+        const clearKeepAlive = () => {
+          const existing = this.userDataStreams.get(userId);
+          if (existing?.keepAliveTimer) {
+            clearInterval(existing.keepAliveTimer);
+            existing.keepAliveTimer = undefined;
+          }
+        };
 
         // Step 3: Keep listenKey alive (every 30 minutes)
         const keepAliveInterval = setInterval(async () => {
           try {
-            const keepAliveTimestamp = Date.now();
-            const keepAliveQuery = `timestamp=${keepAliveTimestamp}`;
-            const keepAliveSignature = crypto
-              .createHmac('sha256', apiSecret)
-              .update(keepAliveQuery)
-              .digest('hex');
+            const keepAliveUrl = new URL(this.endpoints.listenKeyPath, this.endpoints.rest);
+            const params = new URLSearchParams({ listenKey });
 
-            const keepAliveUrl = `https://fapi.binance.com/fapi/v1/listenKey?${keepAliveQuery}&signature=${keepAliveSignature}`;
-            await fetch(keepAliveUrl, {
+            if (this.endpoints.requiresSignature) {
+              const ts = Date.now();
+              params.append('timestamp', String(ts));
+              const signature = crypto
+                .createHmac('sha256', apiSecret)
+                .update(params.toString())
+                .digest('hex');
+              params.append('signature', signature);
+            }
+
+            keepAliveUrl.search = params.toString();
+
+            const keepAliveResponse = await fetch(keepAliveUrl.toString(), {
               method: 'PUT',
-              headers: { 'X-MBX-APIKEY': apiKey }
+              headers: { 'X-MBX-APIKEY': apiKey },
             });
+
+            if (!keepAliveResponse.ok) {
+              const errorText = await keepAliveResponse.text();
+              throw new Error(`Keep-alive failed (${keepAliveResponse.status}): ${errorText}`);
+            }
 
             console.log(`✅ ListenKey kept alive for user ${userId}`);
           } catch (error) {
             console.error(`❌ Failed to keep listenKey alive for ${userId}:`, error);
+            clearKeepAlive();
+            this.userDataStreams.delete(userId);
+            try { userWs.close(); } catch {}
+            setTimeout(() => {
+              this.subscribeToUserData(userId, apiKey, apiSecret).catch((err) => {
+                console.error(`❌ Failed to resubscribe user data stream for ${userId}:`, err);
+              });
+            }, 1000);
           }
         }, 30 * 60 * 1000); // 30 minutes
 
-        // Clean up on close
+        streamRecord.keepAliveTimer = keepAliveInterval;
+
+        const cleanup = () => {
+          clearKeepAlive();
+          this.userDataStreams.delete(userId);
+        };
+
         userWs.on('close', () => {
-          clearInterval(keepAliveInterval);
+          console.log(`🔌 User data stream closed for user ${userId}`);
+          cleanup();
+        });
+
+        userWs.on('error', () => {
+          cleanup();
         });
 
       } catch (error) {
@@ -938,11 +1008,21 @@ class BinanceWebSocketManager {
   seedBalance(userId: string, asset: string, payload: { free: number; locked: number; total: number; timestamp?: number }): void {
     const normalizedAsset = asset.toUpperCase();
     const cacheKey = `${userId}_${normalizedAsset}`;
+    const totalRaw = Number(payload.total);
+    const freeRaw = Number(payload.free);
+    const lockedRaw = Number(payload.locked);
+
+    const total = Number.isFinite(totalRaw) ? Math.max(totalRaw, 0) : 0;
+    const free = Number.isFinite(freeRaw) ? Math.max(Math.min(freeRaw, total), 0) : Math.max(total, 0);
+    const locked = Number.isFinite(lockedRaw)
+      ? Math.max(Math.min(lockedRaw, total), 0)
+      : Math.max(total - free, 0);
+
     const balanceData: BinanceBalance = {
       asset: normalizedAsset,
-      free: Number(payload.free) || 0,
-      locked: Number(payload.locked) || 0,
-      total: Number(payload.total) || 0,
+      free,
+      locked,
+      total,
       timestamp: payload.timestamp ? Number(payload.timestamp) : Date.now(),
     };
     this.balanceCache.set(cacheKey, balanceData);
@@ -955,9 +1035,12 @@ class BinanceWebSocketManager {
     const stream = this.userDataStreams.get(userId);
     if (stream?.ws) {
       stream.ws.close();
-      this.userDataStreams.delete(userId);
-      console.log(`🔌 Unsubscribed user ${userId} from user data stream`);
+      if (stream.keepAliveTimer) {
+        clearInterval(stream.keepAliveTimer);
+      }
     }
+    this.userDataStreams.delete(userId);
+    console.log(`🔌 Unsubscribed user ${userId} from user data stream`);
   }
 }
 
