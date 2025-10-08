@@ -15,7 +15,13 @@ import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan, extractPersistedPlan } from '../services/planStore.js';
 import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
-import { enqueueAgentStartJob, getAgentStartJob } from '../services/agentStartJob.js';
+import {
+  prepareAgentCreation,
+  createSessionFromPrepared,
+  activatePreparedAgent,
+  startAgentCreation,
+  PhaseError,
+} from '../services/agentCreationFlow.js';
 import { stopSession, activeSession } from '../session/session.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
 import { getUserCredentials } from '../services/userCredentials.js';
@@ -79,27 +85,85 @@ async function processSmartReselect(sessionId: string, res: Response) {
 
 router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
+function handleCreationError(res: Response, error: unknown) {
+  if (error instanceof PhaseError) {
+    const code = error.code;
+    const status =
+      code === 'start.validation_failed'
+        ? 400
+        : code === 'start.universe_conflict' || code === 'start.universe_empty'
+        ? 409
+        : code === 'start.context_not_found' || code === 'start.session_missing'
+        ? 404
+        : 500;
+    return res.status(status).json({ error: code, message: error.message, details: error.details });
+  }
+  console.error('❌ Agent creation error:', error);
+  return res.status(500).json({
+    error: 'start.unexpected_error',
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
 router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res) => {
-  const { jobId, agentTempId } = enqueueAgentStartJob({ payload: req.body ?? {}, userId: req.user?.id });
-  res.status(202).json({ status: 'accepted', jobId, agentTempId });
+  try {
+    const result = await startAgentCreation(req.body ?? {}, req.user?.id);
+    res.status(201).json(result);
+  } catch (error) {
+    handleCreationError(res, error);
+  }
 });
 
 router.post('/start-agent', authenticateUser, async (req: AuthenticatedRequest, res) => {
-  const { jobId, agentTempId } = enqueueAgentStartJob({ payload: req.body ?? {}, userId: req.user?.id });
-  res.status(202).json({ status: 'accepted', jobId, agentTempId });
+  try {
+    const result = await startAgentCreation(req.body ?? {}, req.user?.id);
+    res.status(201).json(result);
+  } catch (error) {
+    handleCreationError(res, error);
+  }
 });
 
-router.get('/start-status', authenticateUser, async (req: AuthenticatedRequest, res) => {
-  const jobIdParam = Array.isArray(req.query.jobId) ? req.query.jobId[0] : req.query.jobId;
-  const jobId = typeof jobIdParam === 'string' ? jobIdParam : '';
-  if (!jobId) {
-    return res.status(400).json({ error: 'job_id_required' });
+router.get('/start-status', authenticateUser, async (_req: AuthenticatedRequest, res) => {
+  res.status(410).json({
+    error: 'job_tracking_removed',
+    message: 'Agent start jobs are now handled synchronously. Please use the new creation endpoints.',
+  });
+});
+
+router.post('/creation/prepare', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const result = await prepareAgentCreation(req.body ?? {}, req.user?.id);
+    res.json(result);
+  } catch (error) {
+    handleCreationError(res, error);
   }
-  const job = getAgentStartJob(jobId);
-  if (!job) {
-    return res.status(404).json({ error: 'job_not_found' });
+});
+
+router.post('/creation/create-session', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const creationId = String((req.body as any)?.creationId || '');
+    const symbol = typeof (req.body as any)?.symbol === 'string' ? (req.body as any).symbol : undefined;
+    if (!creationId) {
+      return res.status(400).json({ error: 'creation_id_required' });
+    }
+    const result = await createSessionFromPrepared(creationId, symbol ? { symbol } : undefined);
+    res.status(201).json(result);
+  } catch (error) {
+    handleCreationError(res, error);
   }
-  res.json(job);
+});
+
+router.post('/creation/activate', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const creationId = String((req.body as any)?.creationId || '');
+    if (!creationId) {
+      return res.status(400).json({ error: 'creation_id_required' });
+    }
+    const result = await activatePreparedAgent(creationId);
+    res.json(result);
+  } catch (error) {
+    handleCreationError(res, error);
+  }
 });
 
 router.post('/stop', async (req,res)=>{

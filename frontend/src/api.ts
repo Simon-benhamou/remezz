@@ -69,10 +69,12 @@ export const api = {
   ) =>
     (await client.post("/api/agent/start", { symbol, mode, startBalanceUsd }))
       .data,
-  startAgentJob: async (payload: Record<string, any>) =>
-    (await client.post('/api/agent/start', payload)).data,
-  getAgentStartStatus: async (jobId: string) =>
-    (await client.get('/api/agent-start-status', { params: { jobId } })).data,
+  prepareAgentCreation: async (payload: Record<string, any>) =>
+    (await client.post('/api/agent/creation/prepare', payload)).data,
+  createAgentSession: async (creationId: string, symbol?: string) =>
+    (await client.post('/api/agent/creation/create-session', { creationId, symbol })).data,
+  activateAgentCreation: async (creationId: string) =>
+    (await client.post('/api/agent/creation/activate', { creationId })).data,
   restartSession: async (sessionId: string, payload: Record<string, any>) =>
     (await client.post('/api/agent/restart', { sessionId, ...payload })).data,
   stopSession: async (sessionId: string, closePosition?: boolean) => (await client.post("/api/agent/stop", { sessionId, closePosition })).data,
