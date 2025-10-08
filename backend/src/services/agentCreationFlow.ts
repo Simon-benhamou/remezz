@@ -35,6 +35,16 @@ export type AgentCreationStepSnapshot = {
   error?: { code: string; message: string; details?: Record<string, any> };
 };
 
+export type AgentCreationLogLevel = 'info' | 'warn' | 'error' | 'success';
+
+export type AgentCreationLogEntry = {
+  timestamp: number;
+  level: AgentCreationLogLevel;
+  message: string;
+  context?: string;
+  meta?: Record<string, any>;
+};
+
 export type AgentCreationSelectionSummary = {
   symbol: string;
   autoSelected: boolean;
@@ -43,6 +53,9 @@ export type AgentCreationSelectionSummary = {
   prefetchedSymbol?: string | null;
   candidateCount?: number;
   orderableCount?: number;
+  analyzedSymbols?: string[];
+  orderableSymbols?: string[];
+  decisionLog: AgentCreationLogEntry[];
 };
 
 export type AgentCreationResult = {
@@ -91,6 +104,9 @@ type UniverseBuildResult = {
   orderableCount: number;
   shouldActivate: boolean;
   topSymbols: string[];
+  analyzedSymbols: string[];
+  orderableSymbols: string[];
+  diagnostics: AgentCreationLogEntry[];
 };
 
 type AgentCreationContext = {
@@ -163,6 +179,8 @@ export async function prepareAgentCreation(payload: StartPayload, userId?: strin
           candidateCount: universe.candidateCount,
           orderableCount: universe.orderableCount,
           topSymbols: universe.topSymbols,
+          analyzedSymbols: universe.analyzedSymbols,
+          orderableSymbols: universe.orderableSymbols,
         }
       : null,
   };
@@ -421,16 +439,48 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
 async function buildSmartUniverse(config: NormalizedStartConfig): Promise<UniverseBuildResult> {
   const agg = config.aggressiveness;
   let candidateSymbols: string[] = [];
+  const diagnostics: AgentCreationLogEntry[] = [];
+
+  const pushDiagnostic = (
+    level: AgentCreationLogLevel,
+    message: string,
+    meta?: Record<string, any>
+  ) => {
+    diagnostics.push({
+      timestamp: Date.now(),
+      level,
+      message,
+      context: 'universe_build',
+      meta,
+    });
+  };
+
+  pushDiagnostic('info', 'Fetching optimized crypto universe', {
+    aggressiveness: agg,
+    minVolumeUsd: config.volumeThresholdUsd,
+  });
+
   try {
     candidateSymbols = await getOptimizedCryptoList(undefined);
   } catch (error) {
     console.warn('⚠️ Failed to fetch optimized crypto list:', error);
+    pushDiagnostic('warn', 'Failed to fetch optimized crypto list', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   const prefetchedOpportunity = await getBestIntelligentOpportunity(undefined, {
     aggressiveness: agg,
     maxUsage: 0,
   });
+
+  if (prefetchedOpportunity) {
+    pushDiagnostic('info', 'Evaluated prefetched AI opportunity', {
+      symbol: prefetchedOpportunity.symbol,
+      score: (prefetchedOpportunity as any)?.score,
+    });
+  }
+
   if (prefetchedOpportunity && !candidateSymbols.includes(prefetchedOpportunity.symbol)) {
     candidateSymbols.unshift(prefetchedOpportunity.symbol);
   }
@@ -446,27 +496,43 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
       orderableCount: fallbackCandidates.length,
       shouldActivate: false,
       topSymbols: fallbackCandidates.slice(0, 5),
+      analyzedSymbols: fallbackCandidates,
+      orderableSymbols: fallbackCandidates,
+      diagnostics,
     };
   }
 
   if (!candidateSymbols.length) {
+    pushDiagnostic('warn', 'No candidates returned by AI ranking');
     return {
       prefetchedOpportunity,
       candidateCount: 0,
       orderableCount: 0,
       shouldActivate: false,
       topSymbols: [],
+      analyzedSymbols: [],
+      orderableSymbols: [],
+      diagnostics,
     };
   }
 
+  const analysisUniverse = candidateSymbols.slice(0, 40);
+  pushDiagnostic('info', 'Running orderability checks on AI-ranked shortlist', {
+    shortlistSize: analysisUniverse.length,
+  });
+
   const orderabilityChecks = await Promise.all(
-    candidateSymbols.slice(0, 40).map(async (sym) => {
+    analysisUniverse.map(async (sym) => {
       try {
         const ticker = await getTicker(sym);
         const price = Number(ticker?.last || 0);
         const notional = price * config.startBalanceUsd * (config.riskPerTradePct / 100);
         return { symbol: sym, orderable: Number.isFinite(notional) && notional >= 10 };
-      } catch {
+      } catch (error) {
+        pushDiagnostic('warn', 'Orderability check failed for symbol', {
+          symbol: sym,
+          error: error instanceof Error ? error.message : String(error),
+        });
         return { symbol: sym, orderable: false };
       }
     })
@@ -474,12 +540,25 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
 
   const orderableSymbols = orderabilityChecks.filter((c) => c.orderable).map((c) => c.symbol);
 
+  if (!orderableSymbols.length) {
+    pushDiagnostic('warn', 'No orderable symbols cleared risk thresholds', {
+      analyzedSymbols: analysisUniverse.slice(0, 10),
+    });
+  } else {
+    pushDiagnostic('success', 'Found orderable symbols above liquidity floor', {
+      symbols: orderableSymbols.slice(0, 10),
+    });
+  }
+
   return {
     prefetchedOpportunity,
     candidateCount: candidateSymbols.length,
     orderableCount: orderableSymbols.length,
     shouldActivate: false,
     topSymbols: (orderableSymbols.length ? orderableSymbols : candidateSymbols).slice(0, 10),
+    analyzedSymbols: analysisUniverse,
+    orderableSymbols,
+    diagnostics,
   };
 }
 
@@ -488,6 +567,7 @@ async function selectSymbol(
   universe: UniverseBuildResult | null
 ): Promise<AgentCreationSelectionSummary> {
   let symbol = config.symbol;
+  const decisionLog: AgentCreationLogEntry[] = [];
   const summary: AgentCreationSelectionSummary = {
     symbol: symbol || '',
     autoSelected: false,
@@ -496,12 +576,29 @@ async function selectSymbol(
     prefetchedSymbol: universe?.prefetchedOpportunity?.symbol ?? null,
     candidateCount: universe?.candidateCount,
     orderableCount: universe?.orderableCount,
+    analyzedSymbols: universe?.analyzedSymbols ?? [],
+    orderableSymbols: universe?.orderableSymbols ?? [],
+    decisionLog,
   };
 
   if (config.isSmartAgent) {
     const prefetched = universe?.prefetchedOpportunity ?? null;
     const candidates = universe?.topSymbols ?? [];
     summary.candidates = candidates;
+    decisionLog.push({
+      timestamp: Date.now(),
+      level: 'info',
+      message: 'Evaluating smart auto-select candidates',
+      context: 'selection',
+      meta: {
+        candidateCount: universe?.candidateCount ?? candidates.length,
+        orderableCount: universe?.orderableCount ?? candidates.length,
+      },
+    });
+
+    for (const diagnostic of universe?.diagnostics ?? []) {
+      decisionLog.push({ ...diagnostic });
+    }
 
     if (!symbol && prefetched) {
       const usage = await getActiveAgentCountForSymbol(prefetched.symbol);
@@ -509,10 +606,23 @@ async function selectSymbol(
         symbol = prefetched.symbol;
         summary.autoSelected = true;
         summary.source = 'prefetched';
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'success',
+          message: `Prefetched opportunity ${prefetched.symbol} selected`,
+          context: 'selection',
+        });
       } else {
         console.log(
           `🚫 Prefetched opportunity ${prefetched.symbol} already has ${usage} active agent(s) – seeking alternative`
         );
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'warn',
+          message: `Prefetched opportunity ${prefetched.symbol} already used`,
+          context: 'selection',
+          meta: { activeAgents: usage },
+        });
       }
     }
 
@@ -524,16 +634,41 @@ async function selectSymbol(
             symbol = candidate;
             summary.autoSelected = true;
             summary.source = 'candidate';
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'success',
+              message: `Selected ${candidate} after availability scan`,
+              context: 'selection',
+            });
             break;
           }
         } catch (error) {
           console.warn(`⚠️ Failed to check active count for ${candidate}:`, error);
+          decisionLog.push({
+            timestamp: Date.now(),
+            level: 'warn',
+            message: `Failed to check active agent count for ${candidate}`,
+            context: 'selection',
+            meta: {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
         }
       }
     }
 
     if (!symbol) {
       const activeCount = await prisma.agentSession.count({ where: { stoppedAt: null } });
+      decisionLog.push({
+        timestamp: Date.now(),
+        level: 'error',
+        message: 'No unused symbol available for smart agent',
+        context: 'selection',
+        meta: {
+          activeAgents: activeCount,
+          candidateCount: universe?.candidateCount ?? 0,
+        },
+      });
       throw new PhaseError('start.universe_conflict', 'no_unused_symbol_available', {
         activeAgents: activeCount,
         candidateCount: universe?.candidateCount ?? 0,
@@ -548,6 +683,12 @@ async function selectSymbol(
     summary.autoSelected = true;
     summary.source = 'perp_ranking';
     summary.candidates = config.perps;
+    decisionLog.push({
+      timestamp: Date.now(),
+      level: 'info',
+      message: `Selected ${symbol} from provided perp list`,
+      context: 'selection',
+    });
   }
 
   if (!symbol) {
@@ -555,6 +696,25 @@ async function selectSymbol(
   }
 
   summary.symbol = symbol;
+
+  if (config.symbol) {
+    decisionLog.push({
+      timestamp: Date.now(),
+      level: 'info',
+      message: `Using manually specified symbol ${symbol}`,
+      context: 'selection',
+    });
+  }
+
+  if (!decisionLog.some((entry) => entry.level === 'success')) {
+    decisionLog.push({
+      timestamp: Date.now(),
+      level: 'success',
+      message: `Selected ${symbol} for new session`,
+      context: 'selection',
+    });
+  }
+
   return summary;
 }
 
