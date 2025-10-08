@@ -54,8 +54,10 @@ export function classifyRegime(snap: TechnicalSnapshot & {
   const hurstBiasRange = hurst < 0.45;
   const structureWeak = trendStrength < 0.2 || adx < 15;
   const structureFragile = trendStrength < 0.25 || adx < 18;
+  const structureCollapsed = trendStrength < 0.12 && adx < 12;
   const adxFallingHard = adxSlope < -1.2;
-  const extremeVol = vol >= 4;
+  const extremeVol = vol >= 6;
+  const catastrophicVol = vol >= 8;
 
   if (momentumStrong || hurstBiasTrend) {
     playbook = 'momentum_breakout';
@@ -69,24 +71,23 @@ export function classifyRegime(snap: TechnicalSnapshot & {
       };
     }
   } else if (volatility === 'high' && !momentumStrong) {
-    // Only step aside completely if structure is breaking down alongside extreme volatility
-    if ((extremeVol && structureWeak) || (structureWeak && adxFallingHard)) {
-      playbook = 'standby';
-      shouldTrade = false;
+    // Only step aside completely if market structure collapses under extreme volatility
+    if (catastrophicVol && structureCollapsed && adxFallingHard) {
+      playbook = 'mean_reversion';
       riskModifier = {
         level: 'extreme',
-        sizingMultiplier: 0,
+        sizingMultiplier: 0.35,
         stopMultiplier: 1,
-        reason: 'extreme_volatility_with_no_structure'
+        reason: 'catastrophic_volatility_structure_collapse'
       };
     } else {
       riskModifier = {
         level: 'caution',
-        sizingMultiplier: 0.6,
-        stopMultiplier: 0.85,
+        sizingMultiplier: structureWeak ? 0.55 : 0.7,
+        stopMultiplier: structureWeak ? 0.8 : 0.9,
         reason: structureFragile
-          ? 'high_volatility_with_soft_structure'
-          : 'high_volatility_requires_tighter_risk'
+          ? 'high_volatility_soft_structure'
+          : 'high_volatility_opportunity'
       };
     }
   } else if (hurstBiasRange || trendStrength <= 0.25) {
