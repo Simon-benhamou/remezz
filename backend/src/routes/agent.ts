@@ -1,12 +1,8 @@
 import { Router, type Response } from 'express';
-import { startSession, stopSession, activeSession } from '../session/session.js';
-import { getUserExchange } from '../exchange/ccxtClient.js';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
-import { getUserCredentials } from '../services/userCredentials.js';
 import { prisma } from '../db/client.js';
-import { selectBestPerp } from '../ai/orchestrator.js';
-import { initializeIntelligentSmartAgent, getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgent.js';
-import { getBestIntelligentOpportunity, triggerIntelligentReselection } from '../services/intelligentAgent.js';
+import { getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgent.js';
+import { triggerIntelligentReselection } from '../services/intelligentAgent.js';
 import type { IntelligentAnalysis } from '../services/intelligentAgent.js';
 import { broadcast } from '../ws/hub.js';
 import { levels as calcLevels } from '../risk/brackets.js';
@@ -19,6 +15,10 @@ import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan, extractPersistedPlan } from '../services/planStore.js';
 import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
+import { enqueueAgentStartJob, getAgentStartJob } from '../services/agentStartJob.js';
+import { stopSession, activeSession } from '../session/session.js';
+import { getUserExchange } from '../exchange/ccxtClient.js';
+import { getUserCredentials } from '../services/userCredentials.js';
 
 export const router = Router();
 
@@ -79,367 +79,27 @@ async function processSmartReselect(sessionId: string, res: Response) {
 
 router.get('/session', async (_req,res)=> res.json(await activeSession()));
 
-router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res)=>{
-  try {
-    const { mode, startBalanceUsd } = req.body as { mode:'paper'|'live', startBalanceUsd?:number };
-    const body = req.body as { 
-      symbol?: string, 
-      mode:'paper'|'live', 
-      startBalanceUsd?:number, 
-      perps?: string[], 
-      riskPerTradePct?: number, 
-      maxLeverage?: number, 
-      dailyLossLimitPct?: number, 
-      budgetPct?: number, 
-      aggressiveness?: 'conservative'|'reactive'|'aggressive',
-      isSmartAgent?: boolean,
-      smartAutoMode?: boolean,  // Add support for frontend field name
-      smartConfig?: any
-    };
-    let symbol = body.symbol;
+router.post('/start', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  const { jobId, agentTempId } = enqueueAgentStartJob({ payload: req.body ?? {}, userId: req.user?.id });
+  res.status(202).json({ status: 'accepted', jobId, agentTempId });
+});
 
-    // Smart Agent mode - auto-select best symbol
-    const isSmartAgent = body.isSmartAgent || body.smartAutoMode;
-    console.log('🔍 Debug: isSmartAgent =', body.isSmartAgent, 'smartAutoMode =', body.smartAutoMode, 'final =', isSmartAgent);
-    
-    // UNIT TEST MODE: skip heavy prefetch/ccxt resolution
-    if (process.env.UNIT_TEST_MODE === 'true') {
-      console.log('🧪 UNIT_TEST_MODE enabled: skipping intelligent prefetch and symbol resolution');
-      symbol = symbol || 'BTC/USDT';
-    }
+router.post('/start-agent', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  const { jobId, agentTempId } = enqueueAgentStartJob({ payload: req.body ?? {}, userId: req.user?.id });
+  res.status(202).json({ status: 'accepted', jobId, agentTempId });
+});
 
-    let prefetchedOpportunity: IntelligentAnalysis | null = null;
-    let smartInitPromise: Promise<boolean> | null = null;
-    let shouldActivate = true;
-    let smartInitSucceeded = true;
-    let smartInitFailureReason: string | null = null;
-    if (isSmartAgent && process.env.UNIT_TEST_MODE !== 'true') {
-      const aggressiveness = (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
-        ? (body.aggressiveness as 'conservative'|'reactive'|'aggressive')
-        : 'reactive';
-      try {
-        prefetchedOpportunity = await getBestIntelligentOpportunity(undefined, { aggressiveness });
-      } catch (error) {
-        console.error('❌ Failed to prefetch intelligent opportunity:', error);
-        prefetchedOpportunity = null;
-      }
-      if (!prefetchedOpportunity) {
-        return res.status(503).json({
-          error: 'smart_agent_no_opportunity',
-          message: 'No qualifying opportunities available right now. Please try again in a few minutes.'
-        });
-      }
-      symbol = prefetchedOpportunity.symbol;
-      shouldActivate = false;
-    } else {
-      // Ensure symbol is provided for non-smart agents
-      if (!symbol && process.env.RANK_ON_START === 'true') {
-        const list = body.perps ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
-        const ranked = await selectBestPerp(list);     // may call LLM once
-        symbol = ranked[0]?.symbol || 'BTC/USDT';
-      } else if (!symbol) {
-        return res.status(400).json({ error: 'symbol_required', message: 'Trading symbol is required for non-smart agents' });
-      }
-    }
-    // Ensure we resolve a perpetual market symbol; return descriptive error if not available
-    if (process.env.UNIT_TEST_MODE !== 'true') {
-      try { const s = await (await import('../exchange/ccxtClient.js')).resolveSymbol(symbol); symbol = s; } catch (e:any) { return res.status(400).json({ error: 'symbol_not_found_perp', details: String(e?.message || e) }); }
-    }
-  
-    let startBal = startBalanceUsd;
-    if (mode === 'live') {
-      if (!req.user?.id) {
-        return res.status(401).json({ error: 'authentication_required_for_live_trading' });
-      }
-      
-      try {
-        const userCredentials = await getUserCredentials(req.user.id);
-        if (!userCredentials) {
-          return res.status(400).json({ error: 'api_keys_required_for_live_trading' });
-        }
-        // 🚀 WebSocket for Binance (0 weight)
-        let b: any;
-        let exchange: any = null;
-        if (userCredentials.exchange === 'binance') {
-          try {
-            const { getBalanceFromWebSocket, subscribeToUserData, seedBalanceCache, runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
-            await subscribeToUserData(req.user.id, userCredentials.apiKey, userCredentials.apiSecret);
-            const wsBalance = await getBalanceFromWebSocket(req.user.id, 'USDT');
-            if (wsBalance) {
-              b = {
-                total: { USDT: wsBalance.total, USD: 0 },
-                free: { USDT: wsBalance.free, USD: 0 },
-                used: { USDT: wsBalance.locked, USD: 0 }
-              };
-              console.log(`✅ [WebSocket] Balance fetched - 0 weight`);
-            } else {
-              exchange = await getUserExchange(req.user.id, userCredentials);
-              b = await runExclusiveBalanceFetch(req.user.id, 'USDT', () => exchange.fetchBalance());
-              console.log(`⚠️ [REST] Balance fetched - 40 weight (WebSocket not ready)`);
-              try {
-                const total = Number(b?.total?.USDT ?? 0);
-                const free = Number(b?.free?.USDT ?? 0);
-                const locked = Number(b?.used?.USDT ?? 0);
-                if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
-                  seedBalanceCache(req.user.id, 'USDT', { total, free, locked });
-                }
-              } catch {}
-            }
-          } catch (error) {
-            console.warn('⚠️ WebSocket balance failed, using REST:', error);
-            exchange = await getUserExchange(req.user.id, userCredentials);
-            const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
-            b = await runExclusiveBalanceFetch(req.user.id, 'USDT', () => exchange.fetchBalance());
-            try {
-              const total = Number(b?.total?.USDT ?? 0);
-              const free = Number(b?.free?.USDT ?? 0);
-              const locked = Number(b?.used?.USDT ?? 0);
-              if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
-                seedBalanceCache(req.user.id, 'USDT', { total, free, locked });
-              }
-            } catch {}
-          }
-        } else {
-          exchange = await getUserExchange(req.user.id, userCredentials);
-          b = await exchange.fetchBalance();
-        }
-        
-        const totalUsd = (Number(b?.total?.USDT || 0) + Number(b?.total?.USD || 0));
-        const freeUsd = (Number(b?.free?.USDT || 0) + Number(b?.free?.USD || 0));
-        if (!startBal || startBal <= 0) {
-          startBal = totalUsd > 0 ? totalUsd : (freeUsd > 0 ? freeUsd : undefined);
-        } else {
-          if (totalUsd > 0) startBal = Math.min(startBal, totalUsd);
-        }
-      } catch (e:any) {
-        return res.status(502).json({ error: 'exchange_balance_failed', details: String(e?.message || e) });
-      }
-    } else {
-      // PAPER DEFAULT: force 1000 USD per agent for crypto trading
-      startBal = 1000;
-    }
-    const s = await startSession(symbol, mode, startBal, {
-      riskPerTradePct: body.riskPerTradePct,
-      maxLeverage: body.maxLeverage,
-      dailyLossLimitPct: body.dailyLossLimitPct,
-      budgetPct: body.budgetPct,
-      aggressiveness: body.aggressiveness || 'reactive',
-      startBalanceUsd: startBal,
-    }, req.user!.id);
-
-    // Mark as Smart Agent if requested
-    if (isSmartAgent) {
-      const defaultSmartConfig = {
-        rescanInterval: 21600000, // 6h
-        minHoldDuration: 86400000, // 24h
-        volumeThreshold: 10000,
-        momentumThreshold: 0.5
-      };
-      
-      try {
-        console.log(`🎯 Marking session ${s.id} as Smart Agent...`);
-        await (prisma.agentSession as any).update({
-          where: { id: s.id },
-          data: {
-            isSmartAgent: true,
-            smartConfig: body.smartConfig || defaultSmartConfig
-          }
-        });
-        console.log(`✅ Session ${s.id} marked as Smart Agent successfully`);
-        
-        // Update the session object we return to frontend
-        (s as any).isSmartAgent = true;
-        (s as any).smartConfig = body.smartConfig || defaultSmartConfig;
-      } catch (error) {
-        console.error(`❌ Failed to mark session ${s.id} as Smart Agent:`, error);
-        // Continue anyway, the intelligent agent init will still work
-      }
-    }
-    await setActiveSession(s.id);
-    // Activate the new agent state machine (profile freeze)
-    let budgetFraction = typeof body.budgetPct === 'number' ? body.budgetPct : 1;
-    if (budgetFraction > 1) budgetFraction = budgetFraction / 100; // accept 0..1 or 0..100
-    budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
-    if (shouldActivate) {
-      await AgentHub.activate(s.id, {
-      symbol,
-      mode,
-      maxLeverage: Math.min(10, Math.max(1, body.maxLeverage ?? 4)),
-      riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
-      dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
-      timestamp: new Date().toISOString(),
-      startBalanceUsd: startBal,
-      budgetFraction,
-      aggressiveness: (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
-        ? (body.aggressiveness as any)
-        : 'reactive',
-  userId: req.user!.id,
-  // Optional frontend-configurable sizing and leverage behavior
-  sizingMode: ((body as any).sizingMode === 'budget' || (body as any).sizingMode === 'risk')
-    ? (body as any).sizingMode
-    : (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget'),
-  dynamicLeverage: (body as any).dynamicLeverage !== false,
-  minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
-      } as any).catch(()=>{});
-    } else {
-      console.log(`⏸️ Deferring agent activation for ${s.id} (smart sleep startup)`);
-    }
-
-    // Initialize Auto-Select Agent BEFORE responding (for better UX)
-    if (isSmartAgent) {
-      console.log(`🎯 Initializing Auto-Select Agent for session ${s.id}`);
-      try {
-        const initTimeoutMs = Math.max(10000, Number(process.env.SMART_AGENT_INIT_RESPONSE_TIMEOUT_MS || 15000));
-        const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-        const runSmartInit = async () => {
-          const success = await initializeIntelligentSmartAgent(s.id, prefetchedOpportunity)
-            .catch((error) => {
-              console.error(`❌ Auto-Select Agent ${s.id} initialization error:`, error);
-              return false;
-            });
-          if (success) {
-            console.log(`✅ Auto-Select Agent ${s.id} initialized successfully`);
-            const updated = await prisma.agentSession.findUnique({ where: { id: s.id } }).catch(() => null);
-            if (updated?.symbol) {
-              symbol = updated.symbol;
-              if (!shouldActivate) {
-                try {
-                  await AgentHub.activate(s.id, {
-                    symbol,
-                    mode,
-                    maxLeverage: Math.min(10, Math.max(1, body.maxLeverage ?? 4)),
-                    riskPerTradePct: Math.min(5, Math.max(0.5, body.riskPerTradePct ?? 1.5)),
-                    dailyLossLimitPct: Math.min(4, Math.max(3, body.dailyLossLimitPct ?? 3.5)),
-                    timestamp: new Date().toISOString(),
-                    startBalanceUsd: startBal,
-                    budgetFraction,
-                    aggressiveness: (['conservative','reactive','aggressive'].includes(String(body.aggressiveness)))
-                      ? (body.aggressiveness as any)
-                      : 'reactive',
-                    userId: req.user!.id,
-                    sizingMode: ((body as any).sizingMode === 'budget' || (body as any).sizingMode === 'risk')
-                      ? (body as any).sizingMode
-                      : (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget'),
-                    dynamicLeverage: (body as any).dynamicLeverage !== false,
-                    minLeverage: Math.min(Math.max(1, Number((body as any).minLeverage || 1)), Math.min(10, Math.max(1, body.maxLeverage ?? 4))),
-                  } as any).catch(()=>{});
-                } catch (err) {
-                  console.warn(`⚠️ Auto-activation after smart init failed for ${s.id}:`, err);
-                }
-              }
-            }
-          } else {
-            console.warn(`⚠️ Auto-Select Agent ${s.id} initialization returned false`);
-          }
-          return success;
-        };
-
-        smartInitPromise = runSmartInit();
-
-        const initResult = await Promise.race([
-          smartInitPromise,
-          sleep(initTimeoutMs).then(() => 'timeout')
-        ]);
-
-        if (initResult === 'timeout') {
-          console.log(`⌛ Auto-Select initialization for ${s.id} timed out after ${initTimeoutMs}ms`);
-          smartInitSucceeded = false;
-          smartInitFailureReason = `Initialization timed out after ${initTimeoutMs}ms`;
-        } else if (initResult === false) {
-          console.warn(`⚠️ Auto-Select initialization failed for ${s.id}`);
-          smartInitSucceeded = false;
-          smartInitFailureReason = 'No qualifying opportunities were found during initialization.';
-        } else {
-          const updated = await prisma.agentSession.findUnique({ where: { id: s.id } }).catch(() => null);
-          if (updated) {
-            Object.assign(s, updated);
-          }
-        }
-      } catch (error) {
-        console.error(`❌ Auto-Select Agent ${s.id} initialization scheduling error:`, error);
-        smartInitSucceeded = false;
-        smartInitFailureReason = String((error as any)?.message || error);
-      }
-      prefetchedOpportunity = null;
-    }
-
-    if (isSmartAgent && !smartInitSucceeded) {
-      try {
-        await stopSession(s.id);
-      } catch (cleanupError) {
-        console.warn(`⚠️ Failed to mark smart session ${s.id} as stopped after init failure:`, cleanupError);
-      }
-      return res.status(503).json({
-        error: 'smart_agent_initialization_failed',
-        details: smartInitFailureReason || 'Auto-select initialization failed'
-      });
-    }
-
-    // Respond with the session (now with selected symbol if Auto-Select succeeded)
-    res.json(isSmartAgent ? { ...s, initPending: Boolean(s.symbol === 'SMART/SLEEP') } : s);
-
-    // Continue lighter background work
-    setTimeout(async () => {
-      // In UNIT_TEST_MODE, skip network/LLM heavy background tasks to keep tests fast and silent
-      if (process.env.UNIT_TEST_MODE === 'true') return;
-      try {
-        if (isSmartAgent) {
-          let success = false;
-          if (smartInitPromise) {
-            success = await smartInitPromise;
-          }
-          if (!success) {
-            console.log(`🔁 Retrying Auto-Select Agent initialization for ${s.id}`);
-            success = await initializeIntelligentSmartAgent(s.id).catch((err) => {
-              console.error(`❌ Auto-Select retry failed for ${s.id}:`, err);
-              return false;
-            }) as boolean;
-          }
-          if (success) {
-            const updatedSession = await prisma.agentSession.findUnique({ where: { id: s.id } });
-            if (updatedSession?.symbol) {
-              symbol = updatedSession.symbol;
-              console.log(`🔄 Updated symbol for background processes: ${symbol}`);
-            }
-          } else {
-            console.warn(`⚠️ Auto-Select Agent ${s.id} initialization still pending errors`);
-          }
-        }
-
-        // Plan + arm (only if symbol is defined)
-        if (symbol) {
-          const plan = await proposePlan(symbol, { fresh: true, sessionId: s.id });
-          // Persist LLM plan JSON on the session so we can re-arm after a reboot without re-calling LLM
-          try { await savePlan(s.id, plan as any); } catch (err) { console.warn('Failed to persist plan', err); }
-          const a = AgentHub.get(s.id);
-          if (a) {
-            await a.propose(plan as any);
-            await a.validateAndArm();
-          }
-        } else {
-          console.log(`⏳ Skipping plan generation - symbol not yet determined for Smart Agent ${s.id}`);
-        }
-      } catch {}
-      try {
-        // Strategy preview (only if symbol is defined)
-        if (symbol) {
-          const { strategy: strat, levels: lvls } = await requestStrategy({ symbol, trigger: 'activation', sessionId: s.id, fresh: true, force: true });
-          broadcast('strategy', { ...(strat as any), levels: lvls }, s.symbol, s.id);
-        } else {
-          console.log(`⏳ Skipping strategy generation - symbol not yet determined for Smart Agent ${s.id}`);
-        }
-      } catch {}
-      try {
-        const tech = await buildTechSnapshot(s.symbol);
-        broadcast('analysis', { symbol: s.symbol, technical: tech }, s.symbol, s.id);
-      } catch {}
-      // Ensure session broadcast after activation
-      try { broadcast('session', s, s.symbol, s.id); } catch {}
-    }, 0);
-  } catch (e:any) {
-    res.status(500).json({ error: 'agent_start_failed', details: String(e?.message || e) });
+router.get('/start-status', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  const jobIdParam = Array.isArray(req.query.jobId) ? req.query.jobId[0] : req.query.jobId;
+  const jobId = typeof jobIdParam === 'string' ? jobIdParam : '';
+  if (!jobId) {
+    return res.status(400).json({ error: 'job_id_required' });
   }
+  const job = getAgentStartJob(jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'job_not_found' });
+  }
+  res.json(job);
 });
 
 router.post('/stop', async (req,res)=>{

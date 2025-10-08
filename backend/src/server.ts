@@ -32,6 +32,7 @@ import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
+import { getAgentStartJob, enqueueAgentStartJob } from "./services/agentStartJob.js";
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -108,6 +109,23 @@ app.use("/api/arbitrage", arbitrageRouter);
 app.use("/api/llm", llmTestRouter);
 app.use("/api/ops", opsRouter);
 app.use("/api/improvements", improvementsRouter);
+app.post("/api/start-agent", (req, res) => {
+  const userId = typeof (req as any)?.user?.id === "string" ? (req as any).user.id : undefined;
+  const { jobId, agentTempId } = enqueueAgentStartJob({ payload: req.body ?? {}, userId });
+  res.status(202).json({ status: "accepted", jobId, agentTempId });
+});
+app.get("/api/agent-start-status", (req, res) => {
+  const jobIdParam = Array.isArray(req.query.jobId) ? req.query.jobId[0] : req.query.jobId;
+  const jobId = typeof jobIdParam === "string" ? jobIdParam : "";
+  if (!jobId) {
+    return res.status(400).json({ error: "job_id_required" });
+  }
+  const job = getAgentStartJob(jobId);
+  if (!job) {
+    return res.status(404).json({ error: "job_not_found" });
+  }
+  res.json(job);
+});
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
