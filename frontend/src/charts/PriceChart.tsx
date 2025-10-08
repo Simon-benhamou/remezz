@@ -1,10 +1,35 @@
-import React from 'react';
 import { createChart, ColorType, IChartApi, LineStyle } from 'lightweight-charts';
+import React from 'react';
+
 import { api } from '../api';
 
-type Props = { symbol?: string; price?: number; support?: number; resistance?: number; strategy?: any; agentPlan?: any; agentPos?: any; pivots?: any; agentExit?: any };
+type Props = {
+  symbol?: string;
+  price?: number;
+  support?: number;
+  resistance?: number;
+  agentPlan?: any;
+  agentPos?: any;
+  pivots?: any;
+  agentExit?: any;
+  orders?: any[];
+  trades?: any[];
+  projection?: any;
+};
 
-export default function PriceChart({ symbol, price, support, resistance, strategy, agentPlan, agentPos, pivots, agentExit }: Props){
+export default function PriceChart({
+  symbol,
+  price,
+  support,
+  resistance,
+  agentPlan,
+  agentPos,
+  pivots,
+  agentExit,
+  orders,
+  trades,
+  projection,
+}: Props){
   const ref = React.useRef<HTMLDivElement>(null);
   const seriesRef = React.useRef<any>(null);
   const chartRef = React.useRef<IChartApi|null>(null);
@@ -19,6 +44,8 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
   const plS1 = React.useRef<any>(null);
   const plR1 = React.useRef<any>(null);
   const plBE = React.useRef<any>(null);
+  const plProjectionHigh = React.useRef<any>(null);
+  const plProjectionLow = React.useRef<any>(null);
   const trailSeriesRef = React.useRef<any>(null);
   const pnlRef = React.useRef<HTMLDivElement|null>(null);
   const markersRef = React.useRef<any[]>([]);
@@ -397,36 +424,146 @@ export default function PriceChart({ symbol, price, support, resistance, strateg
     }
   }, [price, agentPos?.entry, agentPos?.side]);
 
-  // Markers for entries/exits
-  React.useEffect(()=>{
+  // Projected envelope (bias confidence overlay)
+  React.useEffect(() => {
     if (!seriesRef.current) return;
-    const marks: any[] = [...markersRef.current];
-    // Add entry marker
-    if (agentPos?.openedAt && agentPos?.entry) {
-      const t = Math.floor(agentPos.openedAt/1000);
-      const exists = marks.some(m=> m.time === t && m.text?.startsWith('Entry'));
-      if (!exists) {
-        marks.push({ time: t, position: 'belowBar', color: '#1f8f1f', shape: 'arrowUp', text: `Entry ${agentPos.entry.toFixed(4)}` });
+    const ensure = (ref: any, title: string, color: string, lineStyle = LineStyle.Dashed) => {
+      if (!ref.current && seriesRef.current) {
+        ref.current = seriesRef.current.createPriceLine({
+          price: 0,
+          title,
+          lineWidth: 1,
+          color,
+          lineStyle,
+        });
       }
+      return ref.current;
+    };
+    const remove = (ref: any) => {
+      if (ref.current && seriesRef.current) {
+        try { seriesRef.current.removePriceLine(ref.current); } catch {}
+        ref.current = null;
+      }
+    };
+
+    const up = projection?.rangeUpPrice ?? projection?.upsidePrice;
+    const down = projection?.rangeDownPrice ?? projection?.downsidePrice;
+
+    if (typeof up === 'number' && isFinite(up)) {
+      ensure(plProjectionHigh, 'Projection High', '#3b82f6', LineStyle.Dotted)?.applyOptions({ price: up });
+    } else {
+      remove(plProjectionHigh);
     }
+
+    if (typeof down === 'number' && isFinite(down)) {
+      ensure(plProjectionLow, 'Projection Low', '#8b5cf6', LineStyle.Dotted)?.applyOptions({ price: down });
+    } else {
+      remove(plProjectionLow);
+    }
+  }, [projection]);
+
+  // Markers for orders, trades, and live position
+  React.useEffect(() => {
+    if (!seriesRef.current) return;
+
+    const cache = new Map<string, any>();
+    const pushMarker = (marker: any) => {
+      if (marker.time == null || Number.isNaN(marker.time)) return;
+      const key = `${marker.time}:${marker.position}:${marker.text}`;
+      cache.set(key, marker);
+    };
+
+    const safeTs = (value: any): number | null => {
+      if (value == null) return null;
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return Math.floor(value / 1000);
+      }
+      const date = new Date(value);
+      const ms = date.getTime();
+      if (Number.isNaN(ms)) return null;
+      return Math.floor(ms / 1000);
+    };
+
+    const renderOrders = Array.isArray(orders) ? orders : [];
+    renderOrders.forEach((order) => {
+      const ts = safeTs(order.createdAt);
+      if (ts == null) return;
+      const isExit = Boolean(order.clientOrderId?.endsWith?.('.exit'));
+      const status = String(order.status || '').toUpperCase();
+      const priceNum = Number(order.price);
+      const priceLabel = Number.isFinite(priceNum) ? priceNum.toFixed(4) : '';
+      pushMarker({
+        time: ts,
+        position: isExit ? 'aboveBar' : 'belowBar',
+        color: isExit ? '#ef4444' : '#22c55e',
+        shape: isExit ? 'arrowDown' : 'arrowUp',
+        text: `${isExit ? 'Exit' : 'Entry'} ${priceLabel} (${status || 'PENDING'})`,
+      });
+    });
+
+    const renderTrades = Array.isArray(trades) ? trades : [];
+    renderTrades.forEach((trade) => {
+      const ts = safeTs(trade.createdAt);
+      if (ts == null) return;
+      const side = String(trade.positionSide || '').toLowerCase();
+      const exitPriceNum = Number(trade.exitPrice);
+      const exitPrice = Number.isFinite(exitPriceNum) ? exitPriceNum.toFixed(4) : '-';
+      const pnl = Number(trade.realizedPnlUsd || 0);
+      const pnlLabel = `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD`;
+      pushMarker({
+        time: ts,
+        position: side === 'short' ? 'aboveBar' : 'belowBar',
+        color: pnl >= 0 ? '#16a34a' : '#dc2626',
+        shape: pnl >= 0 ? 'circle' : 'square',
+        text: `Trade ${exitPrice} (${pnlLabel})`,
+      });
+    });
+
     if (agentPos?.partialInfo?.ts && agentPos?.partialInfo?.price) {
-      const t = Math.floor(agentPos.partialInfo.ts/1000);
-      const exists = marks.some(m=> m.time === t && m.text?.startsWith('Partial'));
-      if (!exists) {
-        marks.push({ time: t, position: 'aboveBar', color: '#2980b9', shape: 'circle', text: `Partial ${agentPos.partialInfo.price.toFixed?.(4)}` });
+      const ts = safeTs(agentPos.partialInfo.ts);
+      const priceLabel = Number(agentPos.partialInfo.price).toFixed?.(4);
+      if (ts != null && priceLabel) {
+        pushMarker({
+          time: ts,
+          position: 'aboveBar',
+          color: '#0ea5e9',
+          shape: 'circle',
+          text: `Partial ${priceLabel}`,
+        });
       }
     }
-    // Add last exit marker
+
+    if (agentPos?.openedAt && agentPos?.entry) {
+      const ts = safeTs(agentPos.openedAt);
+      if (ts != null) {
+        pushMarker({
+          time: ts,
+          position: 'belowBar',
+          color: '#1f8f1f',
+          shape: 'arrowUp',
+          text: `Entry ${Number(agentPos.entry).toFixed(4)}`,
+        });
+      }
+    }
+
     if (agentExit?.ts && agentExit?.price) {
-      const t = Math.floor((agentExit.ts)/1000);
-      const exists = marks.some(m=> m.time === t && m.text?.startsWith('Exit'));
-      if (!exists) {
-        marks.push({ time: t, position: 'aboveBar', color: '#c0392b', shape: 'arrowDown', text: `Exit ${agentExit.price.toFixed?.(4)} (${agentExit.reason||''})` });
+      const ts = safeTs(agentExit.ts);
+      if (ts != null) {
+        pushMarker({
+          time: ts,
+          position: 'aboveBar',
+          color: '#c0392b',
+          shape: 'arrowDown',
+          text: `Exit ${Number(agentExit.price).toFixed?.(4)} ${agentExit.reason ? `(${agentExit.reason})` : ''}`,
+        });
       }
     }
-    markersRef.current = marks.slice(-50);
+
+    // Replace markers with latest snapshot
+    const ordered = Array.from(cache.values()).sort((a, b) => a.time - b.time);
+    markersRef.current = ordered.slice(-150);
     seriesRef.current.setMarkers(markersRef.current);
-  }, [agentPos?.openedAt, agentPos?.partialInfo?.ts, agentExit?.ts]);
+  }, [orders, trades, agentPos?.openedAt, agentPos?.entry, agentPos?.partialInfo?.ts, agentExit?.ts]);
 
   return <div style={{ border:'1px solid #eee', borderRadius:8, padding:8 }}>
     <div style={{ fontWeight:600, marginBottom:8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
