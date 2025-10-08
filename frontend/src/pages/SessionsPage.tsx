@@ -1863,6 +1863,8 @@ export default function SessionsPage(){
               }
 
               setOpen(false);
+              // Ensure no legacy progress modal remains visible once we pivot to the banner flow
+              Modal.destroyAll();
 
               if (isRestart) {
                 hide = message.loading('Restarting agent...', 0);
