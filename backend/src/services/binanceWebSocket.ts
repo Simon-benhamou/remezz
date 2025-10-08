@@ -18,23 +18,19 @@ import { recordMarketFrame, recordWsReconnect, setFallbackState, updateWsConnect
 const MARKET_TYPE = String(process.env.MARKET_TYPE || 'swap').toLowerCase();
 type BinanceMarketKind = 'spot' | 'futures';
 
-const MARKET_KIND: BinanceMarketKind = MARKET_TYPE === 'spot' ? 'spot' : 'futures';
+if (MARKET_TYPE === 'spot') {
+  throw new Error('Binance spot streams are disabled: configure MARKET_TYPE=futures for the perpetual engine.');
+}
 
-const BINANCE_ENDPOINTS = MARKET_KIND === 'spot'
-  ? {
-      wsMulti: 'wss://stream.binance.com:9443/stream',
-      wsUserBase: 'wss://stream.binance.com:9443/ws',
-      rest: 'https://api.binance.com',
-      listenKeyPath: '/api/v3/userDataStream',
-      requiresSignature: false,
-    }
-  : {
-      wsMulti: 'wss://fstream.binance.com/stream',
-      wsUserBase: 'wss://fstream.binance.com/ws',
-      rest: 'https://fapi.binance.com',
-      listenKeyPath: '/fapi/v1/listenKey',
-      requiresSignature: true,
-    } as const;
+const MARKET_KIND: BinanceMarketKind = 'futures';
+
+const BINANCE_ENDPOINTS = {
+  wsMulti: 'wss://fstream.binance.com/stream',
+  wsUserBase: 'wss://fstream.binance.com/ws',
+  rest: 'https://fapi.binance.com',
+  listenKeyPath: '/fapi/v1/listenKey',
+  requiresSignature: true,
+} as const;
 
 export interface BinanceTickerData {
   symbol: string;
