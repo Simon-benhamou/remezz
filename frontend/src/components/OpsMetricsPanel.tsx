@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Col, Row, Statistic, Tooltip } from 'antd';
+import { Badge, Card, Col, Progress, Row, Statistic, Tag, Tooltip } from 'antd';
 
 function formatBytes(num?: number) {
   if (!num || !Number.isFinite(num)) return '0 MB';
@@ -28,6 +28,16 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
   const positions = metrics.positions || {};
   const alerts = metrics.alerts || {};
   const agents = metrics.agents || {};
+  const margin = metrics.margin || null;
+  const avgUtil = margin ? Number(margin.averageUtilisationPct || 0) : 0;
+  const marginStatus = margin
+    ? margin.critical
+      ? { label: `${margin.critical} critical`, color: '#dc2626', progressStatus: 'exception' as const }
+      : margin.warn
+        ? { label: `${margin.warn} elevated`, color: '#f97316', progressStatus: 'active' as const }
+        : { label: 'Healthy', color: '#16a34a', progressStatus: 'normal' as const }
+    : null;
+  const worstSessions = Array.isArray(margin?.worstSessions) ? margin.worstSessions.slice(0, 3) : [];
   return (
     <Card title={<Tooltip title="Santé opérationnelle : infrastructure & agents">Ops metrics</Tooltip>} loading={loading} style={{ borderRadius: 12 }}>
       <Row gutter={[12, 12]}>
@@ -62,6 +72,49 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
           </Tooltip>
         </Col>
       </Row>
+      {margin && (
+        <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+          <Col xs={24} md={12}>
+            <div style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Tooltip title="Utilisation moyenne de la marge sur les sessions actives">
+                  <span style={{ fontWeight: 600, color: '#334155' }}>Margin utilisation</span>
+                </Tooltip>
+                {marginStatus && <Tag color={marginStatus.color}>{marginStatus.label}</Tag>}
+              </div>
+              <Progress
+                percent={Number.isFinite(avgUtil) ? Number(avgUtil.toFixed(1)) : 0}
+                strokeColor={marginStatus?.color || '#0ea5e9'}
+                status={marginStatus?.progressStatus || 'normal'}
+                showInfo
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, color: '#64748b', fontSize: 12 }}>
+                <span>{margin.tracked || 0} sessions tracked</span>
+                <span>Updated {margin.lastUpdated ? new Date(margin.lastUpdated).toLocaleTimeString() : '—'}</span>
+              </div>
+            </div>
+          </Col>
+          <Col xs={24} md={12}>
+            <div style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc', minHeight: 94 }}>
+              <Tooltip title="Sessions nécessitant une réduction de taille ou un hedging">
+                <div style={{ fontWeight: 600, color: '#334155', marginBottom: 8 }}>Risky sessions</div>
+              </Tooltip>
+              {worstSessions.length === 0 ? (
+                <div style={{ color: '#94a3b8', fontSize: 12 }}>No margin pressure detected.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {worstSessions.map((row: any) => (
+                    <div key={`${row.sessionId}_${row.symbol}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                      <Badge status={row.status === 'critical' ? 'error' : 'warning'} text={`${row.symbol || row.sessionId}`} />
+                      <span style={{ fontWeight: 600 }}>{Number(row.utilisationPct || 0).toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Col>
+        </Row>
+      )}
     </Card>
   );
 }

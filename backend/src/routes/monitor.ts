@@ -7,6 +7,7 @@ import { getAIMetrics } from '../metrics/aiCalls.js';
 import { computeMonitorAnalytics } from '../monitor/analytics.js';
 import { getMarketMetrics } from '../monitor/marketMetrics.js';
 import { llmJSON } from '../ai/llm.js';
+import type { MarginGuardSeverity } from '../risk/marginGuard.js';
 
 export const router = Router();
 
@@ -76,6 +77,92 @@ router.get('/analytics', async (req,res)=>{
     res.json(data);
   } catch (e:any) {
     res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+router.get('/margin', async (req, res) => {
+  try {
+    const limitRaw = Number(req.query.limit ?? 80);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 80;
+    const repo = (prisma as any).marginSnapshot as any;
+    if (!repo) return res.json({ summary: null, sessions: [], ts: new Date().toISOString() });
+    const rows = await repo.findMany({ orderBy: { createdAt: 'desc' }, take: limit });
+    const latestBySession = new Map<string, any>();
+    for (const row of rows) {
+      if (!latestBySession.has(row.sessionId)) {
+        latestBySession.set(row.sessionId, row);
+      }
+    }
+    const latest = Array.from(latestBySession.values());
+    const tracked = latest.length;
+    const summary = tracked
+      ? {
+          tracked,
+          warn: latest.filter((row) => row.status === 'warn').length,
+          critical: latest.filter((row) => row.status === 'critical').length,
+          averageUtilisationPct:
+            latest.reduce((acc, row) => acc + (Number(row.utilisationPct) || 0), 0) / tracked,
+          worstSessions: latest
+            .filter((row) => row.status !== 'ok')
+            .sort((a, b) => Number(b.utilisationPct || 0) - Number(a.utilisationPct || 0))
+            .slice(0, 5)
+            .map((row) => ({
+              sessionId: row.sessionId,
+              symbol: row.symbol,
+              status: row.status as MarginGuardSeverity,
+              utilisationPct: Number(row.utilisationPct || 0),
+              worstLiquidationDistancePct: row.worstLiquidationDistancePct,
+              actions: row.recommendedActions,
+            })),
+        }
+      : null;
+    res.json({
+      summary,
+      sessions: latest.map((row) => ({
+        sessionId: row.sessionId,
+        symbol: row.symbol,
+        status: row.status as MarginGuardSeverity,
+        utilisationPct: Number(row.utilisationPct || 0),
+        worstLiquidationDistancePct: row.worstLiquidationDistancePct,
+        actions: row.recommendedActions,
+        createdAt: row.createdAt,
+      })),
+      ts: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+router.get('/margin/:sessionId', async (req, res) => {
+  const sessionId = String(req.params.sessionId || '');
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  try {
+    const repo = (prisma as any).marginSnapshot as any;
+    if (!repo) return res.json({ sessionId, snapshots: [] });
+    const limitRaw = Number(req.query.limit ?? 60);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 60;
+    const rows = await repo.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    res.json({
+      sessionId,
+      snapshots: rows.map((row: any) => ({
+        status: row.status as MarginGuardSeverity,
+        utilisationPct: Number(row.utilisationPct || 0),
+        maintenanceMarginUsd: row.maintenanceMarginUsd,
+        marginRatio: row.marginRatio,
+        worstLiquidationDistancePct: row.worstLiquidationDistancePct,
+        actions: row.recommendedActions,
+        concentration: row.concentration,
+        createdAt: row.createdAt,
+        telemetry: row.telemetry,
+      })),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
   }
 });
 

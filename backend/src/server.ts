@@ -32,6 +32,7 @@ import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
+import { startMarginMonitor } from "./services/marginMonitor.js";
 import {
   startAgentCreation,
   PhaseError,
@@ -140,6 +141,7 @@ startWSHub(wss);
 startEventEngine();
 startArbitrageMonitor();
 startIntegratedMonitoring();
+startMarginMonitor();
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
 
 // Prime Binance WS early so UI/API has data immediately

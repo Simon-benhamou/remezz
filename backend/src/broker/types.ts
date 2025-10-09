@@ -34,9 +34,49 @@ export type PlacedOrder = NewOrder & {
   requestedPrice?: number;
 };
 
+export type BrokerPositionMargin = {
+  symbol: string;
+  side: 'long'|'short';
+  qty: number;
+  notionalUsd?: number;
+  entryPrice?: number;
+  markPrice?: number;
+  liquidationPrice?: number;
+  maintenanceMarginUsd?: number;
+  initialMarginUsd?: number;
+  leverage?: number;
+  unrealizedPnlUsd?: number;
+  marginRatio?: number;
+  raw?: any;
+};
+
+export type BrokerCorrelatedExposure = {
+  key: string;
+  base?: string;
+  quote?: string;
+  totalNotionalUsd: number;
+  longNotionalUsd: number;
+  shortNotionalUsd: number;
+  positions: string[];
+  concentrationPct?: number;
+};
+
+export type BrokerMarginSnapshot = {
+  freeUsd: number;
+  equityUsd: number;
+  committedUsd: number;
+  maintenanceMarginUsd?: number;
+  marginRatio?: number;
+  marginLevel?: number;
+  marginMode?: string;
+  positions?: BrokerPositionMargin[];
+  correlatedExposure?: Record<string, BrokerCorrelatedExposure>;
+  timestamp?: number;
+};
+
 export interface Broker {
   mode: 'paper'|'live';
-  balance(): Promise<{ freeUsd: number; equityUsd: number; committedUsd: number }>;
+  balance(): Promise<BrokerMarginSnapshot>;
   place(o: NewOrder): Promise<PlacedOrder>;
   cancel(id: string): Promise<void>;
   estimateFillableQty?(params: { symbol: string; side: OrderSide; desiredQty: number; maxImpactPct?: number }): Promise<{ fillableQty: number; impactPct?: number; minQty?: number }>;

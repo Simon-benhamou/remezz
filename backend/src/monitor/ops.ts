@@ -67,6 +67,8 @@ export async function computeOpsMetrics() {
   const loadAvg = os.loadavg()[0];
   const memory = formatMemory();
 
+  const marginRepo = (prisma as any).marginSnapshot as any;
+
   const agents = AgentHub.snapshot();
   const agentStates = agents.reduce((acc: Record<string, number>, a) => {
     const state = a.state || 'UNKNOWN';
@@ -76,7 +78,7 @@ export async function computeOpsMetrics() {
   const haltedAgents = agents.filter((a) => a.state === 'HALT').length;
   const managingAgents = agents.filter((a) => a.state === 'MANAGE').length;
 
-  const [activeSessions, openPositions, protectiveIssues, alerts1h, alerts24h, kpiAgg] = await Promise.all([
+  const [activeSessions, openPositions, protectiveIssues, alerts1h, alerts24h, kpiAgg, marginRows] = await Promise.all([
     prisma.agentSession.count({ where: { stoppedAt: null } }),
     prisma.position.count({ where: { qty: { gt: 0 } } }),
     prisma.position.count({
@@ -92,7 +94,45 @@ export async function computeOpsMetrics() {
     countAlertsBySeverity(new Date(now - 60 * 60 * 1000)),
     countAlertsBySeverity(new Date(now - 24 * 60 * 60 * 1000)),
     prisma.sessionKpi.aggregate({ _sum: { aiCallsTotal: true } }),
+    marginRepo ? marginRepo.findMany({ orderBy: { createdAt: 'desc' }, take: 120 }) : [],
   ]);
+
+  let marginSummary: any = null;
+  if (Array.isArray(marginRows) && marginRows.length) {
+    const latestBySession = new Map<string, any>();
+    for (const row of marginRows) {
+      if (!latestBySession.has(row.sessionId)) {
+        latestBySession.set(row.sessionId, row);
+      }
+    }
+    const latest = Array.from(latestBySession.values());
+    const tracked = latest.length;
+    const warnCount = latest.filter((row) => row.status === 'warn').length;
+    const criticalCount = latest.filter((row) => row.status === 'critical').length;
+    const averageUtilisationPct = tracked
+      ? latest.reduce((acc, row) => acc + (Number(row.utilisationPct) || 0), 0) / tracked
+      : 0;
+    const worstSessions = latest
+      .filter((row) => row.status !== 'ok')
+      .sort((a, b) => Number(b.utilisationPct || 0) - Number(a.utilisationPct || 0))
+      .slice(0, 5)
+      .map((row) => ({
+        sessionId: row.sessionId,
+        symbol: row.symbol,
+        status: row.status,
+        utilisationPct: Number(row.utilisationPct || 0),
+        worstLiquidationDistancePct: row.worstLiquidationDistancePct,
+        actions: row.recommendedActions,
+      }));
+    marginSummary = {
+      tracked,
+      warn: warnCount,
+      critical: criticalCount,
+      averageUtilisationPct,
+      worstSessions,
+      lastUpdated: marginRows[0]?.createdAt ?? null,
+    };
+  }
 
   return {
     timestamp: now,
@@ -119,5 +159,6 @@ export async function computeOpsMetrics() {
     ai: {
       totalCalls: kpiAgg._sum.aiCallsTotal ?? 0,
     },
+    margin: marginSummary,
   };
 }

@@ -104,6 +104,10 @@ export const api = {
     (await client.get('/api/monitor/alerts', { params: { sessionId } })).data,
   getMonitorAnalytics: async (sessionId: string) =>
     (await client.get('/api/monitor/analytics', { params: { sessionId } })).data,
+  getMarginOverview: async (limit?: number) =>
+    (await client.get('/api/monitor/margin', { params: limit ? { limit } : undefined })).data,
+  getSessionMargin: async (sessionId: string, limit = 60) =>
+    (await client.get(`/api/monitor/margin/${sessionId}`, { params: { limit } })).data,
   getHealth: async (sessionId?: string) =>
     (await client.get('/api/monitor/health', { params: { sessionId } })).data,
   getDailyReport: async (sessionId: string, date?: string, opts?: { refresh?: boolean }) =>

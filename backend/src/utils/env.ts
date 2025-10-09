@@ -56,6 +56,11 @@ export type Cfg = {
   GROK_REVERSAL_PCT_THRESHOLD: number; // absolute % change to treat as major reversal
   // Monitoring
   STALE_TICK_SEC: number;             // alert if no tick per session beyond this threshold
+  MARGIN_UTIL_WARN_PCT: number;
+  MARGIN_UTIL_CRITICAL_PCT: number;
+  MARGIN_LIQUIDATION_MIN_DIST_PCT: number;
+  MARGIN_CONCENTRATION_WARN_PCT: number;
+  MARGIN_MONITOR_INTERVAL_MS: number;
   // Order reliability
   ORDER_FILL_TIMEOUT_SEC: number;     // max seconds to wait for a live order to fill
   ORDER_FILL_POLL_MS: number;         // polling interval for fetchOrder
@@ -293,6 +298,11 @@ export function getConfig(): Cfg {
     GROK_ANALYSIS_DAILY_MAX: Number(e.GROK_ANALYSIS_DAILY_MAX || "10"), // augmenté pour plus d'analyses
     GROK_REVERSAL_PCT_THRESHOLD: Number(e.GROK_REVERSAL_PCT_THRESHOLD || "3.5"),
     STALE_TICK_SEC: Number(e.STALE_TICK_SEC || "300"),  // 5 min instead of 2 min for crypto
+    MARGIN_UTIL_WARN_PCT: Number(e.MARGIN_UTIL_WARN_PCT || "55"),
+    MARGIN_UTIL_CRITICAL_PCT: Number(e.MARGIN_UTIL_CRITICAL_PCT || "75"),
+    MARGIN_LIQUIDATION_MIN_DIST_PCT: Number(e.MARGIN_LIQUIDATION_MIN_DIST_PCT || "12"),
+    MARGIN_CONCENTRATION_WARN_PCT: Number(e.MARGIN_CONCENTRATION_WARN_PCT || "35"),
+    MARGIN_MONITOR_INTERVAL_MS: Number(e.MARGIN_MONITOR_INTERVAL_MS || "30000"),
     ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
     // Crypto-specific optimizations
     MIN_PROFIT_PCT: Number(e.MIN_PROFIT_PCT || "0.3"),
