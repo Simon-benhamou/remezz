@@ -20,7 +20,7 @@ const MAX_DELAY = 30_000;
 export function openWS(
   apiBase: string,
   _apiKey: string,
-  symbol?: string,
+  symbol: string | undefined,
   on: Handler,
   onConn?: (ok: boolean) => void,
   onReplace?: (next: WebSocket) => void,
