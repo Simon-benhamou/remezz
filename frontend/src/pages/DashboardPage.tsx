@@ -87,6 +87,21 @@ export default function DashboardPage(){
     ),
   });
 
+  const loadOps = React.useCallback(async ()=>{
+    try {
+      setOpsLoading(true);
+      setAdaptiveLoading(true);
+      const [metrics, adaptive] = await Promise.all([
+        api.getOpsMetrics().catch(()=>null),
+        api.getAdaptiveWeights().catch(()=>null),
+      ]);
+      if (metrics) setOpsMetrics(metrics);
+      if (adaptive) setAdaptiveData(adaptive);
+    } finally {
+      setOpsLoading(false);
+      setAdaptiveLoading(false);
+    }
+  }, []);
   const quickActions = React.useMemo<MenuProps['items']>(() => {
     const items: NonNullable<MenuProps['items']> = [
       {
@@ -132,21 +147,6 @@ export default function DashboardPage(){
 
     return items;
   }, [locked, navigate, showStopAllConfirm, load, loadOps, unlock]);
-  const loadOps = React.useCallback(async ()=>{
-    try {
-      setOpsLoading(true);
-      setAdaptiveLoading(true);
-      const [metrics, adaptive] = await Promise.all([
-        api.getOpsMetrics().catch(()=>null),
-        api.getAdaptiveWeights().catch(()=>null),
-      ]);
-      if (metrics) setOpsMetrics(metrics);
-      if (adaptive) setAdaptiveData(adaptive);
-    } finally {
-      setOpsLoading(false);
-      setAdaptiveLoading(false);
-    }
-  }, []);
   React.useEffect(()=>{
     void load();
     void loadOps();

@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react';
-import { describe, expect, vi, beforeEach, afterEach, afterAll, it } from 'vitest';
+import { describe, expect, vi, beforeEach, afterEach, afterAll, it, Mock } from 'vitest';
 import { Modal, message } from 'antd';
 import { useStopAllConfirmation } from '../useStopAllConfirmation';
 import { api } from '../../api';
@@ -26,7 +26,7 @@ describe('useStopAllConfirmation', () => {
   const errorSpy = vi.spyOn(message, 'error');
 
   beforeEach(() => {
-    (api.stopAllAgents as unknown as vi.Mock).mockResolvedValue({ stopped: 2, results: [] });
+    (api.stopAllAgents as unknown as Mock).mockResolvedValue({ stopped: 2, results: [] });
     confirmSpy.mockClear();
     successSpy.mockClear();
     warningSpy.mockClear();
