@@ -48,7 +48,15 @@ export const api = {
       const out = (await client.post('/api/auth/login', { username, password })).data;
       if (out?.token) setApiKey(out.token);
       return out;
-    }
+    },
+    requestWsToken: async (sessionId?: string) => {
+      const payload = sessionId ? { sessionId } : {};
+      return (await client.post('/api/auth/ws-token', payload)).data as {
+        token: string;
+        expiresAt?: string;
+        expiresIn?: number;
+      };
+    },
   },
   status: async (sessionId?: string, options?: { includeBalance?: boolean; includeTech?: boolean }) => {
     const params: any = { sessionId };

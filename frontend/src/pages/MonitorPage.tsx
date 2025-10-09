@@ -63,7 +63,7 @@ export default function MonitorPage(){
   
   const [wsConnected, setWsConnected] = React.useState(false);
   const [expandedView, setExpandedView] = React.useState(false);
-  const wsRef = React.useRef<WebSocket|null>(null);
+  const wsRef = React.useRef<ReturnType<typeof openWS> | null>(null);
   const [savingAgg, setSavingAgg] = React.useState(false);
 
   // Core data states (Phase 1)
@@ -380,7 +380,7 @@ export default function MonitorPage(){
         setAlerts((prev:any[])=> [msg.data, ...prev].slice(0,50));
         loadAnalytics();
       }
-    }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; }, sessionId);
+    }, (ok)=> setWsConnected(ok), undefined, sessionId);
     wsRef.current = ws;
     return ()=> { try { wsRef.current?.close?.(); } catch {} };
   }, [API_BASE, sessionId, symbol, loadAnalytics]);

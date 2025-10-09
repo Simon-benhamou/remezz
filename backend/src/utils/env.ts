@@ -8,6 +8,12 @@ export type Cfg = {
   CORS_ORIGIN: string;
   REQUIRE_API_KEY: boolean;
   APP_API_KEY: string;
+  API_RATE_LIMIT_AGENT_WINDOW_MS: number;
+  API_RATE_LIMIT_AGENT_PER_IP: number;
+  API_RATE_LIMIT_AGENT_PER_KEY: number;
+  API_RATE_LIMIT_MONITOR_WINDOW_MS: number;
+  API_RATE_LIMIT_MONITOR_PER_IP: number;
+  API_RATE_LIMIT_MONITOR_PER_KEY: number;
   DEFAULT_RISK_PCT: number;
   DEFAULT_MAX_LEVERAGE: number;
   DAILY_LOSS_LIMIT_PCT: number;
@@ -31,6 +37,8 @@ export type Cfg = {
   AUTH_PASS: string;        // password
   ACCESS_CODE?: string;     // optional single access code alternative
   JWT_SECRET: string;       // JWT secret for user authentication
+  WS_JWT_SECRET: string;
+  WS_JWT_TTL_SEC: number;
   // LLM governance
   LLM_DISABLE: boolean;         // disable LLM calls (use heuristic fallbacks)
   LLM_MIN_INTERVAL_MS: number;  // min spacing between LLM calls (global)
@@ -252,6 +260,12 @@ export function getConfig(): Cfg {
     // Respect env flag; default off for dev
     REQUIRE_API_KEY: (e.REQUIRE_API_KEY || "false") === "true",
     APP_API_KEY: e.APP_API_KEY || "change-me",
+    API_RATE_LIMIT_AGENT_WINDOW_MS: Number(e.API_RATE_LIMIT_AGENT_WINDOW_MS || "60000"),
+    API_RATE_LIMIT_AGENT_PER_IP: Number(e.API_RATE_LIMIT_AGENT_PER_IP || "60"),
+    API_RATE_LIMIT_AGENT_PER_KEY: Number(e.API_RATE_LIMIT_AGENT_PER_KEY || "120"),
+    API_RATE_LIMIT_MONITOR_WINDOW_MS: Number(e.API_RATE_LIMIT_MONITOR_WINDOW_MS || "60000"),
+    API_RATE_LIMIT_MONITOR_PER_IP: Number(e.API_RATE_LIMIT_MONITOR_PER_IP || "120"),
+    API_RATE_LIMIT_MONITOR_PER_KEY: Number(e.API_RATE_LIMIT_MONITOR_PER_KEY || "240"),
     DEFAULT_RISK_PCT: Number(e.DEFAULT_RISK_PCT || "1.0"),
     DEFAULT_MAX_LEVERAGE: Number(e.DEFAULT_MAX_LEVERAGE || "10"),
     DAILY_LOSS_LIMIT_PCT: Number(e.DAILY_LOSS_LIMIT_PCT || "5"),
@@ -273,6 +287,8 @@ export function getConfig(): Cfg {
     AUTH_PASS: e.AUTH_PASS || "",
     ACCESS_CODE: e.ACCESS_CODE || "",
     JWT_SECRET: e.JWT_SECRET || e.APP_API_KEY || "change-me-jwt-secret",
+    WS_JWT_SECRET: e.WS_JWT_SECRET || e.JWT_SECRET || e.APP_API_KEY || "change-me-ws-secret",
+    WS_JWT_TTL_SEC: Number(e.WS_JWT_TTL_SEC || "60"),
     LLM_DISABLE: (e.LLM_DISABLE || "false") === "true",
     LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "1000"), // réduit à 1s pour plus de réactivité
     LLM_CACHE_TTL_MIN: Number(e.LLM_CACHE_TTL_MIN || "30"), // réduit de 60 à 30 min

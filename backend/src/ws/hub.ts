@@ -1,22 +1,30 @@
 import type { WebSocketServer, WebSocket } from 'ws';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../db/client.js';
 import { getConfig } from '../utils/env.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { fullAnalysis } from '../ai/analysis.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { setActiveSession } from '../metrics/aiCalls.js';
+import { recordOpsEvent } from '../monitor/ops.js';
 
 type ClientState = {
   ws: WebSocket;
   authed: boolean;
   symbol?: string;
   sessionId?: string;
+  tokenExpiresAt?: number;
+  identity?: string;
 };
 
 const clients = new Set<ClientState>();
 
 function send(ws: WebSocket, msg: any) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+function sendError(ws: WebSocket, code: string, message: string, details?: Record<string, any>) {
+  send(ws, { type: 'error', code, message, details });
 }
 
 export function broadcast(type: string, payload: any, symbol?: string, sessionId?: string) {
@@ -30,6 +38,7 @@ export function broadcast(type: string, payload: any, symbol?: string, sessionId
 
 export function startWSHub(wss: WebSocketServer) {
   const cfg = getConfig();
+  const secret = cfg.WS_JWT_SECRET || cfg.JWT_SECRET || cfg.APP_API_KEY;
 
   // Heartbeat ping/pong to clean up dead connections
   const HEARTBEAT_MS = 30_000;
@@ -52,6 +61,9 @@ export function startWSHub(wss: WebSocketServer) {
 
   wss.on('connection', (ws) => {
     const state: ClientState = { ws, authed: !cfg.REQUIRE_API_KEY };
+    if (!cfg.REQUIRE_API_KEY) {
+      state.tokenExpiresAt = Number.MAX_SAFE_INTEGER;
+    }
     clients.add(state);
 
     // mark alive on connect and on pong
@@ -63,16 +75,120 @@ export function startWSHub(wss: WebSocketServer) {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'hello') {
-          const ok = !cfg.REQUIRE_API_KEY || msg.apiKey === cfg.APP_API_KEY;
-          state.authed = ok;
-          send(ws, { type: ok ? 'hello_ok' : 'hello_ko' });
-          if (!ok) { try { ws.close(); } catch {} }
+          if (!cfg.REQUIRE_API_KEY) {
+            state.authed = true;
+            send(ws, { type: 'hello_ok', expiresAt: null });
+            return;
+          }
+
+          if (typeof msg.token !== 'string' || !msg.token.trim()) {
+            sendError(ws, 'ws.auth.required', 'WebSocket token is required.');
+            try { ws.close(); } catch {}
+            return;
+          }
+
+          try {
+            const payload = jwt.verify(msg.token, secret) as any;
+            const expMs = payload?.exp ? payload.exp * 1000 : Date.now() + cfg.WS_JWT_TTL_SEC * 1000;
+            state.authed = true;
+            state.tokenExpiresAt = expMs;
+            state.identity = payload?.sub || 'unknown';
+            if (payload?.sessionId && typeof payload.sessionId === 'string') {
+              state.sessionId = payload.sessionId;
+            }
+            send(ws, { type: 'hello_ok', expiresAt: new Date(expMs).toISOString() });
+            recordOpsEvent({
+              level: 'info',
+              source: 'ws_auth',
+              message: 'ws_hello_ok',
+              details: {
+                identity: state.identity,
+                sessionId: state.sessionId,
+                expiresAt: new Date(expMs).toISOString(),
+              },
+            });
+          } catch (err: any) {
+            const expired = err?.name === 'TokenExpiredError';
+            sendError(
+              ws,
+              expired ? 'ws.auth.expired' : 'ws.auth.invalid',
+              expired ? 'WebSocket token has expired.' : 'WebSocket token is invalid.',
+              expired && err?.expiredAt ? { expiredAt: err.expiredAt } : undefined,
+            );
+            recordOpsEvent({
+              level: 'warn',
+              source: 'ws_auth',
+              message: expired ? 'ws_hello_expired' : 'ws_hello_invalid',
+              details: { error: String(err?.message || err) },
+            });
+            try { ws.close(); } catch {}
+          }
+          return;
+        }
+
+        if (msg.type === 'refresh') {
+          if (typeof msg.token !== 'string' || !msg.token.trim()) {
+            sendError(ws, 'ws.auth.invalid', 'Refresh token missing.');
+            return;
+          }
+          try {
+            const payload = jwt.verify(msg.token, secret) as any;
+            const expMs = payload?.exp ? payload.exp * 1000 : Date.now() + cfg.WS_JWT_TTL_SEC * 1000;
+            state.authed = true;
+            state.tokenExpiresAt = expMs;
+            state.identity = payload?.sub || state.identity;
+            if (payload?.sessionId && typeof payload.sessionId === 'string') {
+              state.sessionId = payload.sessionId;
+            }
+            send(ws, { type: 'refresh_ok', expiresAt: new Date(expMs).toISOString() });
+            recordOpsEvent({
+              level: 'info',
+              source: 'ws_auth',
+              message: 'ws_token_refreshed',
+              details: {
+                identity: state.identity,
+                sessionId: state.sessionId,
+                expiresAt: new Date(expMs).toISOString(),
+              },
+            });
+          } catch (err: any) {
+            const expired = err?.name === 'TokenExpiredError';
+            sendError(
+              ws,
+              expired ? 'ws.auth.expired' : 'ws.auth.invalid',
+              expired ? 'WebSocket refresh token expired.' : 'WebSocket refresh token invalid.',
+              expired && err?.expiredAt ? { expiredAt: err.expiredAt } : undefined,
+            );
+            recordOpsEvent({
+              level: 'warn',
+              source: 'ws_auth',
+              message: expired ? 'ws_refresh_expired' : 'ws_refresh_invalid',
+              details: { error: String(err?.message || err) },
+            });
+          }
           return;
         }
 
         if (!state.authed) {
-          try { send(ws, { type: 'error', data: 'unauthorized' }); } catch {}
+          sendError(ws, 'ws.auth.required', 'WebSocket authentication required.');
           try { ws.close(); } catch {}
+          return;
+        }
+
+        if (state.tokenExpiresAt && Date.now() >= state.tokenExpiresAt) {
+          state.authed = false;
+          sendError(ws, 'ws.auth.expired', 'WebSocket token expired. Please refresh.', {
+            expiresAt: new Date(state.tokenExpiresAt).toISOString(),
+          });
+          recordOpsEvent({
+            level: 'warn',
+            source: 'ws_auth',
+            message: 'ws_token_expired',
+            details: {
+              identity: state.identity,
+              sessionId: state.sessionId,
+            },
+          });
           return;
         }
 
