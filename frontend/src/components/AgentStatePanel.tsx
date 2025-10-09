@@ -76,6 +76,12 @@ const formatPct = (value: any, precision = 2) => {
   return `${num.toFixed(precision)}%`;
 };
 
+const formatLeverage = (value: any) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  return `${num.toFixed(1)}x`;
+};
+
 const formatUsd = (value: any) => {
   const num = Number(value);
   if (!Number.isFinite(num)) return '—';
@@ -272,7 +278,44 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
 
   const stateTagColor = stateColors[agent?.state || ''] || '#6366f1';
 
-  const riskMetrics = [
+  const leverageMeta = (agent?.profile?.leverageCap as any) || null;
+  const resolvedLeverage = Number.isFinite(Number(leverageMeta?.resolved))
+    ? Number(leverageMeta.resolved)
+    : (Number.isFinite(Number(agent?.profile?.maxLeverage)) ? Number(agent.profile.maxLeverage) : undefined);
+  const requestedLeverage = Number.isFinite(Number(leverageMeta?.requested))
+    ? Number(leverageMeta.requested)
+    : (Number.isFinite(Number(agent?.profile?.requestedMaxLeverage))
+        ? Number(agent.profile.requestedMaxLeverage)
+        : resolvedLeverage);
+  const leverageTrimmed = Boolean(
+    leverageMeta?.trimmed ?? (
+      resolvedLeverage != null && requestedLeverage != null && resolvedLeverage + 1e-9 < requestedLeverage
+    )
+  );
+  const leverageTooltipParts = [] as string[];
+  if (leverageMeta?.modeCap != null) leverageTooltipParts.push(`Mode cap ${formatLeverage(leverageMeta.modeCap)}`);
+  if (leverageMeta?.categoryCap != null) leverageTooltipParts.push(`Category cap ${formatLeverage(leverageMeta.categoryCap)}`);
+  if (leverageMeta?.constraintCap != null) leverageTooltipParts.push(`Constraint cap ${formatLeverage(leverageMeta.constraintCap)}`);
+  if (leverageMeta?.constraintSource) leverageTooltipParts.push(`Source: ${leverageMeta.constraintSource}`);
+  const leverageTooltip = leverageTooltipParts.length ? leverageTooltipParts.join(' · ') : undefined;
+  const leverageBadges: React.ReactNode[] = [];
+  if (leverageTooltip) {
+    leverageBadges.push(
+      <Tooltip key="cap" title={leverageTooltip}>
+        <InfoCircleOutlined style={{ color: '#2563eb' }} />
+      </Tooltip>
+    );
+  }
+  if (leverageTrimmed) {
+    const trimTooltip = `Requested ${formatLeverage(requestedLeverage)} trimmed to ${formatLeverage(resolvedLeverage)}`;
+    leverageBadges.push(
+      <Tooltip key="trimmed" title={trimTooltip}>
+        <Tag color="orange">Trimmed</Tag>
+      </Tooltip>
+    );
+  }
+
+  const riskMetrics: { label: string; value: React.ReactNode; badge?: React.ReactNode }[] = [
     {
       label: 'Risk / trade',
       value: formatPct(agent?.profile?.riskPerTradePct),
@@ -283,10 +326,14 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
     },
     {
       label: 'Max leverage',
-      value:
-        agent?.profile?.maxLeverage != null
-          ? `${Number(agent.profile.maxLeverage).toFixed(1)}x`
-          : '—',
+      value: formatLeverage(resolvedLeverage),
+      badge: leverageBadges.length ? (
+        <Space size={4}>
+          {leverageBadges.map((badge, idx) => (
+            <React.Fragment key={idx}>{badge}</React.Fragment>
+          ))}
+        </Space>
+      ) : undefined,
     },
   ];
 
@@ -493,7 +540,10 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
                   style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}
                 >
                   <span style={{ color: '#64748b' }}>{metric.label}</span>
-                  <span style={{ fontWeight: 600 }}>{metric.value}</span>
+                  <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>{metric.value}</span>
+                    {metric.badge}
+                  </span>
                 </div>
               ))}
             </Space>

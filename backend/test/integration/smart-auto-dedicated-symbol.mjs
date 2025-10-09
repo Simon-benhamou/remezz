@@ -73,12 +73,27 @@ try {
     throw new Error(`Persisted symbol reused existing asset: ${created.symbol}`);
   }
 
-  const leverage = Number((created.profileJson || {}).maxLeverage ?? 0);
-  if (leverage !== 8) {
-    throw new Error(`Max leverage not persisted from request: expected 8, received ${leverage}`);
+  const profile = (created.profileJson || {});
+  const leverage = Number(profile.maxLeverage ?? 0);
+  const requested = Number(profile.requestedMaxLeverage ?? profile.maxLeverage ?? 0);
+  const cap = profile.leverageCap || {};
+  if (!Number.isFinite(leverage) || leverage <= 0) {
+    throw new Error(`Resolved leverage missing or invalid: ${leverage}`);
+  }
+  if (requested !== 8) {
+    throw new Error(`Requested leverage should remain 8x but was ${requested}`);
+  }
+  if (Math.abs(Number(cap.resolved ?? leverage) - leverage) > 1e-6) {
+    throw new Error('Resolved leverage cap metadata mismatch with stored leverage');
+  }
+  if (!cap.trimmed) {
+    throw new Error('Expected leverage cap to indicate trimming for smart auto-select');
+  }
+  if (leverage + 1e-9 >= requested) {
+    throw new Error(`Resolved leverage ${leverage}x should be below requested ${requested}x after trimming`);
   }
 
-  console.log('✅ Smart auto-select created a new symbol with requested leverage.');
+  console.log('✅ Smart auto-select created a new symbol with trimmed leverage cap.');
 
   if (typeof prisma.$disconnect === 'function') {
     await prisma.$disconnect();

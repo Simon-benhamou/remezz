@@ -15,6 +15,7 @@ import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan, extractPersistedPlan } from '../services/planStore.js';
 import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
+import { resolveLeverageCap } from '../risk/leverageCaps.js';
 import {
   prepareAgentCreation,
   createSessionFromPrepared,
@@ -260,6 +261,13 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
     const safeMaxLev = Math.min(10, Math.max(1, Number(body.maxLeverage ?? currentProfile.maxLeverage ?? 4)));
     const safeDailyLoss = Math.min(4, Math.max(3, Number(body.dailyLossLimitPct ?? currentProfile.dailyLossLimitPct ?? 3.5)));
 
+    const leverageCap = await resolveLeverageCap({
+      symbol: existing.symbol,
+      requestedMaxLeverage: safeMaxLev,
+      mode: existing.mode as 'paper' | 'live',
+    });
+    const resolvedMaxLev = leverageCap.resolved;
+
     let budgetPctValue = Number(body.budgetPct ?? currentProfile.budgetPct ?? 100);
     if (!Number.isFinite(budgetPctValue) || budgetPctValue <= 0) budgetPctValue = 100;
     let budgetFraction = budgetPctValue;
@@ -280,7 +288,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
     const updatedProfileJson = {
       ...currentProfile,
       riskPerTradePct: safeRiskPct,
-      maxLeverage: safeMaxLev,
+      maxLeverage: resolvedMaxLev,
+      requestedMaxLeverage: safeMaxLev,
+      leverageCap,
       dailyLossLimitPct: safeDailyLoss,
       budgetPct: storedBudgetPct,
       aggressiveness,
@@ -289,7 +299,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
         ? body.sizingMode
         : (currentProfile.sizingMode || (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget')),
       dynamicLeverage: body.dynamicLeverage !== undefined ? !!body.dynamicLeverage : (currentProfile.dynamicLeverage !== false),
-      minLeverage: (()=>{ const m = Number(body.minLeverage ?? currentProfile.minLeverage ?? 1); return Math.max(1, Math.min(m, safeMaxLev)); })(),
+      minLeverage: (()=>{ const m = Number(body.minLeverage ?? currentProfile.minLeverage ?? 1); return Math.max(1, Math.min(m, resolvedMaxLev)); })(),
       timestamp: new Date().toISOString()
     };
 
@@ -310,7 +320,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
     const agentProfile = {
       symbol: updated.symbol,
       mode: updated.mode as 'paper' | 'live',
-      maxLeverage: safeMaxLev,
+      maxLeverage: resolvedMaxLev,
+      requestedMaxLeverage: safeMaxLev,
+      leverageCap,
       riskPerTradePct: safeRiskPct,
       dailyLossLimitPct: safeDailyLoss,
       timestamp: new Date().toISOString(),
@@ -466,7 +478,19 @@ router.get('/state', async (req,res)=>{
   const a = sessionId ? AgentHub.get(sessionId) : null;
   let balance: any = null;
   try { balance = await (a as any)?.broker?.balance?.(); } catch {}
-  res.json({ state: a?.state, profile: a?.profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics(sessionId || undefined) });
+  let profile = (a as any)?.profile || null;
+  if (!profile && sessionId) {
+    try {
+      const session = await prisma.agentSession.findUnique({
+        where: { id: sessionId },
+        select: { profileJson: true },
+      });
+      profile = (session?.profileJson as any) || null;
+    } catch (error) {
+      console.warn('Failed to load session profile for state route:', error);
+    }
+  }
+  res.json({ state: a?.state, profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics(sessionId || undefined) });
 });
 
 // Sessions list
@@ -696,6 +720,10 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       const agent = AgentHub.get(session.id);
       const agentState = (agent as any)?.state || 'UNKNOWN'; // Fix: use .state not .phase
       const agentBias = (agent as any)?.bias || 'none';
+      const profile = (session.profileJson as any) || {};
+      const leverageMeta = (profile.leverageCap as any) || null;
+      const requestedMaxLev = Number(profile.requestedMaxLeverage ?? leverageMeta?.requested ?? profile.maxLeverage ?? 1);
+      const resolvedMaxLev = Number(leverageMeta?.resolved ?? profile.maxLeverage ?? requestedMaxLev);
 
       return {
         id: session.id,
@@ -705,12 +733,18 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
         bias: agentBias,
         aggressiveness: session.profileJson ? (session.profileJson as any)?.aggressiveness : 'conservative',
         pnlUsd: Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0),
-        roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ? 
+        roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ?
           ((Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0)) / Number(session.startBalanceUsd)) * 100 : 0,
         winRate: Number(session.kpi?.winRate || 0),
         trades: Number((session.kpi?.stats as any)?.tradesTotal || 0),
         createdAt: session.startedAt,
-        lastActivity: new Date().toISOString()
+        lastActivity: new Date().toISOString(),
+        leverage: {
+          requested: requestedMaxLev,
+          resolved: resolvedMaxLev,
+          trimmed: resolvedMaxLev + 1e-9 < requestedMaxLev,
+          cap: leverageMeta,
+        },
       };
     });
 

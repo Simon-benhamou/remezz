@@ -22,6 +22,7 @@ import { prisma } from '../db/client.js';
 import { predictor } from '../ai/predictor.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { isInsufficientDataError, InsufficientDataError } from '../data/errors.js';
+import type { ResolvedLeverageCap } from '../risk/leverageCaps.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -30,6 +31,8 @@ export type ActivationProfile = {
   symbol: string;
   mode: AgentMode;
   maxLeverage: number; // <= 10
+  requestedMaxLeverage?: number;
+  leverageCap?: ResolvedLeverageCap;
   riskPerTradePct: number; // 0.5..5
   dailyLossLimitPct: number; // 3..4
   timestamp: string; // ISO, acts as a signed "freeze"
@@ -194,6 +197,35 @@ export class ReboundRejectionAgent {
   async activate(profile: ActivationProfile) {
     // PREFLIGHT
     this.state = 'PREFLIGHT';
+    const existingCap = profile.leverageCap as ResolvedLeverageCap | undefined;
+    const existingCategory = existingCap?.category ?? '';
+    const requestedMaxLev = Math.max(1, Math.min(10, Number(profile.requestedMaxLeverage ?? profile.maxLeverage ?? existingCap?.requested ?? 1)));
+    const resolvedMaxLev = Math.max(1, Math.min(10, Number(existingCap?.resolved ?? profile.maxLeverage ?? requestedMaxLev)));
+    const leverageCapMeta: ResolvedLeverageCap = existingCap
+      ? {
+          ...existingCap,
+          requested: requestedMaxLev,
+          resolved: resolvedMaxLev,
+          trimmed: resolvedMaxLev + 1e-9 < requestedMaxLev,
+        }
+      : {
+          symbol: profile.symbol,
+          category: existingCategory,
+          requested: requestedMaxLev,
+          resolved: resolvedMaxLev,
+          modeCap: resolvedMaxLev,
+          categoryCap: resolvedMaxLev,
+          constraintCap: null,
+          constraintTarget: null,
+          constraintSource: 'fallback',
+          trimmed: resolvedMaxLev + 1e-9 < requestedMaxLev,
+        };
+    profile.maxLeverage = resolvedMaxLev;
+    profile.requestedMaxLeverage = requestedMaxLev;
+    profile.leverageCap = leverageCapMeta;
+    if (profile.minLeverage != null) {
+      profile.minLeverage = Math.max(1, Math.min(resolvedMaxLev, profile.minLeverage));
+    }
     this.profile = profile;
     this.haltAckRequired = false;
     if (this.recoveryTimer) { try { clearTimeout(this.recoveryTimer); } catch {} this.recoveryTimer = null; }
@@ -213,7 +245,7 @@ export class ReboundRejectionAgent {
       ? profile.budgetFraction
       : (typeof (profile as any).budgetPct === 'number' ? ((profile as any).budgetPct > 1 ? (profile as any).budgetPct / 100 : (profile as any).budgetPct) : 1);
     const safeBudgetFraction = Math.min(1, Math.max(0.1, budgetFractionRaw || 1));
-    const leverageCap = Math.max(1, Math.min(10, profile.maxLeverage || 1));
+    const leverageCap = Math.max(1, Math.min(10, profile.maxLeverage || resolvedMaxLev || 1));
     const baselineBalance = typeof profile.startBalanceUsd === 'number' && profile.startBalanceUsd > 0
       ? profile.startBalanceUsd
       : undefined;
@@ -558,9 +590,9 @@ export class ReboundRejectionAgent {
     
     // �🚨 COOLDOWN CHECK: Prevent entries too soon after last exit
     const envMod = await import('../utils/env.js');
-    const cfg = envMod.getConfig();
+    const envCfg = envMod.getConfig();
     const modeParams = envMod.getModeParams(this.profile.aggressiveness || 'reactive');
-    const baseCooldownMs = modeParams?.tradeCooldownMs || cfg.TRADE_COOLDOWN_MS;
+    const baseCooldownMs = modeParams?.tradeCooldownMs || envCfg.TRADE_COOLDOWN_MS;
     const cooldownMs = this.lastExitCooldownMs > 0 ? this.lastExitCooldownMs : baseCooldownMs;
     const timeSinceLastExit = Date.now() - this.lastExitTime;
 
@@ -801,17 +833,27 @@ export class ReboundRejectionAgent {
       const riskFactor = Math.max(0.5, Math.min(1, dynamicRiskPct / baseRisk));
       effectiveLev = Math.max(minLevCfg, Math.min(baseLev, baseLev * qualFactor * stopFactor * riskFactor));
     }
-    {
-      const cfg = getConfig();
-      const defaultSizing = (cfg.SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget');
-      const mode = (this.profile.sizingMode || defaultSizing);
-      if (mode === 'budget') {
-      // Budget-based sizing: use budget allocation times effective leverage
+    const sizingCfg = getConfig();
+    const defaultSizing = (sizingCfg.SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget');
+    const sizingMode = (this.profile.sizingMode || defaultSizing);
+    const sizing = await computeQtyNotional({
+      balanceUsd: usableBalance,
+      riskPct: dynamicRiskPct,
+      stopDistanceAbs: Math.abs(entry - stop),
+      entryPrice: entry,
+      requestedLeverage: effectiveLev,
+      symbol: this.profile.symbol,
+      mode: this.profile.mode,
+      leverageCap: this.profile.leverageCap,
+    });
+    this.profile.leverageCap = sizing.leverageCap;
+    effectiveLev = Math.min(effectiveLev, sizing.leverageCap.resolved);
+    if (sizingMode === 'budget') {
+      // Budget-based sizing: use budget allocation times effective leverage (respect resolved cap)
       notional = Math.max(0, usableBalance * effectiveLev);
-      } else {
+    } else {
       // Risk-based sizing: cap by effective leverage, not maximum
-      notional = computeQtyNotional({ balanceUsd: usableBalance, riskPct: dynamicRiskPct, stopDistanceAbs: Math.abs(entry - stop), entryPrice: entry, maxLev: effectiveLev });
-      }
+      notional = sizing.notional;
     }
     
     // ✅ FIX: Enforce minimum notional (8% of balance) to ensure meaningful position sizes
