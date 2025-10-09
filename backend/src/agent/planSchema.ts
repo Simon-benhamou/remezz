@@ -47,7 +47,12 @@ export const PlanZ = z.object({
   meta: z.object({
     playbook: z.enum(['mean_reversion','momentum_breakout','standby']).optional(),
     regime: z.enum(['uptrend','downtrend','range']).optional(),
-    volatility: z.enum(['low','medium','high']).optional(),
+    volatility: z.enum(['low','medium','high','elevated','extreme']).optional(),
+    leverageGuard: z.object({
+      cap: z.number().min(1).max(10),
+      reason: z.string().nullable().optional(),
+      riskLevel: z.enum(['normal','elevated','extreme']).optional(),
+    }).optional(),
   }).partial().optional(),
 });
 

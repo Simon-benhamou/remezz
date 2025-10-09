@@ -4,6 +4,7 @@ import type { RegimeProfile } from '../ai/regime.js';
 import { sizeUsd } from '../risk/sizing.js';
 import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
+import { classifySymbolVolatility, computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
 
 export type ValidatedPlan = {
   plan: PlanJson;
@@ -29,16 +30,8 @@ export type ValidatedPlan = {
   regime?: RegimeProfile;
 };
 
-function classifyVolatility(symbol: string): 'HIGH'|'MODERATE'|'LOW' {
-  const base = (symbol || '').split('/')[0]?.toUpperCase();
-  if (!base) return 'MODERATE';
-  if (['DOGE','SHIB','PEPE','AVNT','WIF','BONK'].includes(base)) return 'HIGH';
-  if (['BTC','BCH','USDT','USDC','DAI'].includes(base)) return 'LOW';
-  return 'MODERATE';
-}
-
 function adjustedStopsPct(cfg: ReturnType<typeof getConfig>, symbol: string) {
-  const prof = classifyVolatility(symbol);
+  const prof = classifySymbolVolatility(symbol);
   // Base env minima
   let minStopPct = Math.max(0, cfg.MIN_STOP_PCT);
   let minTpPct = Math.max(0, cfg.MIN_TP_PCT);
@@ -178,6 +171,26 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
     // reject if spread > 0.15%
     spreadOk = spreadPct <= 0.15;
   }
+  const leverageGuard = computeLeverageGuardForSymbol({
+    symbol: plan.symbol,
+    atrPct,
+    volatilityTag: plan.meta?.volatility,
+  });
+  if (leverageGuard.cap != null && plan.position.max_leverage > leverageGuard.cap) {
+    const capped = Math.max(1, Math.min(10, leverageGuard.cap));
+    plan.position.max_leverage = capped;
+    const note = leverageGuard.reason
+      ? `[Guard] Max leverage capped at ${capped}x (${leverageGuard.reason})`
+      : `[Guard] Max leverage capped at ${capped}x due to volatility guard`;
+    if (!plan.notes || !plan.notes.includes('[Guard] Max leverage capped')) {
+      plan.notes = plan.notes ? `${plan.notes}\n${note}` : note;
+    }
+    plan.meta = {
+      ...(plan.meta || {}),
+      leverageGuard: { cap: capped, reason: leverageGuard.reason, riskLevel: leverageGuard.riskLevel },
+    } as any;
+  }
+
   const leverageOk = plan.position.max_leverage <= 10;
 
   const regime = snap.regime;

@@ -23,6 +23,7 @@ import { predictor } from '../ai/predictor.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { isInsufficientDataError, InsufficientDataError } from '../data/errors.js';
 import type { ResolvedLeverageCap } from '../risk/leverageCaps.js';
+import { computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -813,7 +814,70 @@ export class ReboundRejectionAgent {
     // Compute requested size
     let notional = 0;
     // Determine effective leverage for this trade (risk-aware if enabled)
-    const baseLev = Math.max(1, this.profile.maxLeverage || 1);
+    const profileMaxLev = Math.max(1, this.profile.maxLeverage || 1);
+    let baseLev = profileMaxLev;
+    const appliedCaps: Array<{ source: string; cap: number; reason?: string | null; riskLevel?: string }> = [];
+
+    const planCapRaw = Number(this.plan?.sizing?.maxLev);
+    if (Number.isFinite(planCapRaw) && planCapRaw > 0) {
+      const planCap = Math.max(1, Math.min(10, planCapRaw));
+      baseLev = Math.min(baseLev, planCap);
+      if (planCap < profileMaxLev - 1e-6) {
+        appliedCaps.push({ source: 'plan_max_leverage', cap: planCap });
+      }
+    }
+
+    const planAtr = this.plan?.atrPct;
+    const guardAtr = Number.isFinite(planAtr)
+      ? Number(planAtr)
+      : Number.isFinite(snap?.atrPct) ? Number(snap?.atrPct) : undefined;
+    const volatilityTag = (this.plan?.plan.meta as any)?.volatility || (this.regime as any)?.volatility || null;
+    const guardInfo = computeLeverageGuardForSymbol({
+      symbol: this.profile.symbol,
+      atrPct: guardAtr,
+      volatilityTag: typeof volatilityTag === 'string' ? volatilityTag : null,
+    });
+
+    if (guardInfo.cap != null) {
+      const guardCap = Math.max(1, Math.min(10, guardInfo.cap));
+      baseLev = Math.min(baseLev, guardCap);
+      if (guardCap < profileMaxLev - 1e-6 || guardCap < planCapRaw - 1e-6) {
+        appliedCaps.push({
+          source: 'volatility_guard',
+          cap: guardCap,
+          reason: guardInfo.reason,
+          riskLevel: guardInfo.riskLevel,
+        });
+      }
+    }
+
+    if (appliedCaps.length) {
+      recordOpsEvent({
+        level: appliedCaps.some(c => c.riskLevel === 'extreme') ? 'warn' : 'info',
+        source: 'leverage_guard',
+        message: 'volatility_guard_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          profileMaxLeverage: profileMaxLev,
+          appliedCaps,
+          finalCap: baseLev,
+        },
+      });
+      if (this.plan) {
+        this.plan.sizing.maxLev = baseLev;
+        if (guardInfo.cap != null) {
+          const meta = { ...(this.plan.plan.meta || {}) } as any;
+          meta.leverageGuard = {
+            cap: baseLev,
+            reason: guardInfo.reason,
+            riskLevel: guardInfo.riskLevel,
+          };
+          this.plan.plan.meta = meta;
+        }
+      }
+    }
+
     const dynLevEnabled = this.profile.dynamicLeverage !== false; // default true
     const minLevCfg = Math.max(1, Math.min(baseLev, Number(this.profile.minLeverage || 1)));
     let effectiveLev = baseLev;

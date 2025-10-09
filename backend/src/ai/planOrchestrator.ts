@@ -7,6 +7,7 @@ import { fullAnalysis } from './analysis.js';
 import type { RegimeProfile } from './regime.js';
 import { recordOpsEvent } from '../monitor/ops.js';
 import { markPlanLLM, shouldAllowPlanLLM } from './guard.js';
+import { computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
 
 function safeParse<T=any>(s: string): T { try { return JSON.parse(s) as T; } catch { throw new Error('LLM returned non-JSON'); } }
 
@@ -170,6 +171,40 @@ function alignPlanForConsistency(plan: PlanJson): PlanJson {
   return clone;
 }
 
+function enforceLeverageGuard(plan: PlanJson, symbol: string, snap: TechnicalSnapshot): PlanJson {
+  const guard = computeLeverageGuardForSymbol({
+    symbol,
+    atrPct: Number.isFinite(snap?.atrPct) ? Number(snap.atrPct) : undefined,
+    volatilityTag: plan.meta?.volatility,
+  });
+  if (guard.cap == null) return plan;
+
+  const currentMax = Math.max(1, plan.position.max_leverage ?? 1);
+  const cap = Math.max(1, Math.min(10, guard.cap));
+  if (currentMax <= cap + 1e-6) {
+    if (plan.meta?.leverageGuard) {
+      const clone: PlanJson = {
+        ...plan,
+        meta: { ...(plan.meta || {}), leverageGuard: { cap: Math.min(currentMax, cap), reason: guard.reason, riskLevel: guard.riskLevel } },
+      };
+      return clone;
+    }
+    return plan;
+  }
+
+  const clone: PlanJson = {
+    ...plan,
+    position: { ...plan.position, max_leverage: cap },
+    meta: { ...(plan.meta || {}), leverageGuard: { cap, reason: guard.reason, riskLevel: guard.riskLevel } },
+    notes: plan.notes,
+  };
+  const note = guard.reason
+    ? `[Guard] Leverage capped at ${cap}x (${guard.reason})`
+    : `[Guard] Leverage capped at ${cap}x due to volatility guard`;
+  clone.notes = clone.notes ? `${clone.notes}\n${note}` : note;
+  return clone;
+}
+
 const PLAN_CACHE_TTL_MS = Number(process.env.PLAN_CACHE_TTL_MS || 30 * 60 * 1000);
 const planCache = new Map<string, { ts: number; plan: PlanJson }>();
 
@@ -308,6 +343,7 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
     let plan = alignPlanForConsistency(parsed.data);
     plan = applyRegimePlaybook(plan, regime, snap);
     plan = alignPlanForConsistency(plan);
+    plan = enforceLeverageGuard(plan, symbol, snap);
     ensurePlanConsistency(plan, regime, snap);
     normalizeRiskRange(plan.position);
     if (allowCache) cachePlan(cacheKey, plan);
@@ -428,7 +464,8 @@ function buildFallbackPlan(symbol: string, snap: TechnicalSnapshot, regime: Regi
     notes: `Fallback plan (${momentum ? 'momentum breakout' : 'mean reversion'}) around ${zoneType}`,
     meta: { playbook: regime?.playbook || (momentum ? 'momentum_breakout' : 'mean_reversion'), regime: regime?.trend || (snap.trend >= 0 ? 'uptrend' : 'downtrend'), volatility: regime?.volatility },
   };
-  const adjusted = applyRegimePlaybook(basePlan, regime, snap);
+  let adjusted = applyRegimePlaybook(basePlan, regime, snap);
+  adjusted = enforceLeverageGuard(adjusted, symbol, snap);
   ensurePlanConsistency(adjusted, regime, snap);
   normalizeRiskRange(adjusted.position);
   return PlanZ.parse(clonePlan(adjusted));
