@@ -20,6 +20,7 @@ import { getTicker, getOhlcvWarmupState } from '../data/market.js';
 import { broadcast } from '../ws/hub.js';
 import { getUserCredentials } from './userCredentials.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
+import { resolveLeverageCap, type ResolvedLeverageCap } from '../risk/leverageCaps.js';
 
 type StartPayload = Record<string, any>;
 
@@ -87,6 +88,8 @@ type NormalizedStartConfig = {
   aggressiveness: 'conservative' | 'reactive' | 'aggressive';
   riskPerTradePct: number;
   maxLeverage: number;
+  requestedMaxLeverage: number;
+  leverageCap?: ResolvedLeverageCap;
   dailyLossLimitPct: number;
   budgetFraction: number;
   perps?: string[];
@@ -424,6 +427,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
     aggressiveness,
     riskPerTradePct,
     maxLeverage,
+    requestedMaxLeverage: maxLeverage,
     dailyLossLimitPct,
     budgetFraction,
     perps,
@@ -730,6 +734,14 @@ async function createSessionRecord(
     symbol = resolved;
   }
 
+  const leverageCap = await resolveLeverageCap({
+    symbol,
+    requestedMaxLeverage: config.requestedMaxLeverage,
+    mode: config.mode,
+  });
+  config.leverageCap = leverageCap;
+  config.maxLeverage = leverageCap.resolved;
+
   if (config.mode === 'live') {
     if (!userId) {
       throw new PhaseError('start.validation_failed', 'authentication_required_for_live_trading', {});
@@ -762,6 +774,8 @@ async function createSessionRecord(
     {
       riskPerTradePct: config.riskPerTradePct,
       maxLeverage: config.maxLeverage,
+      requestedMaxLeverage: config.requestedMaxLeverage,
+      leverageCap,
       dailyLossLimitPct: config.dailyLossLimitPct,
       budgetPct: Math.round(config.budgetFraction * 100),
       aggressiveness: config.aggressiveness,
@@ -805,11 +819,23 @@ async function activateAgent(params: {
 
   let agentId: string | undefined;
 
+  const leverageCap = normalized.leverageCap
+    ?? await resolveLeverageCap({
+      symbol: session.symbol,
+      requestedMaxLeverage: normalized.requestedMaxLeverage,
+      mode: normalized.mode,
+    });
+  const effectiveMaxLev = leverageCap.resolved;
+  const requestedMaxLev = normalized.requestedMaxLeverage;
+  const minLeverage = Math.max(1, Math.min(effectiveMaxLev, Number(normalized.rawPayload?.minLeverage ?? 1)));
+
   if (params.shouldActivate) {
     await AgentHub.activate(session.id, {
       symbol: session.symbol,
       mode: normalized.mode,
-      maxLeverage: normalized.maxLeverage,
+      maxLeverage: effectiveMaxLev,
+      requestedMaxLeverage: requestedMaxLev,
+      leverageCap,
       riskPerTradePct: normalized.riskPerTradePct,
       dailyLossLimitPct: normalized.dailyLossLimitPct,
       timestamp: new Date().toISOString(),
@@ -819,7 +845,7 @@ async function activateAgent(params: {
       userId: normalized.userId,
       sizingMode: normalized.rawPayload?.sizingMode,
       dynamicLeverage: normalized.rawPayload?.dynamicLeverage !== false,
-      minLeverage: Math.max(1, Math.min(normalized.maxLeverage, Number(normalized.rawPayload?.minLeverage ?? 1))),
+      minLeverage,
     } as any);
     agentId = session.id;
   }

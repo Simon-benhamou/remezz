@@ -484,6 +484,15 @@ export default function SessionsPage(){
   const [starting, setStarting] = React.useState(false);
   const [creationProgress, setCreationProgress] = React.useState<CreationProgressState | null>(null);
   const [restartSessionId, setRestartSessionId] = React.useState<string | null>(null);
+  const [restartLeverageInfo, setRestartLeverageInfo] = React.useState<{
+    resolved?: number;
+    requested?: number;
+    trimmed?: boolean;
+    source?: string;
+    modeCap?: number;
+    categoryCap?: number;
+    constraintCap?: number;
+  } | null>(null);
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
@@ -494,6 +503,12 @@ export default function SessionsPage(){
   const leverageValue = Form.useWatch?.('maxLeverage', form) ?? 4;
   const riskPreset = React.useMemo(() => AGGRESSIVENESS_PRESETS[aggressivenessValue], [aggressivenessValue]);
   const [apiKeyHealth, setApiKeyHealth] = React.useState<any>(null);
+  const restartLeverageTooltipParts: string[] = [];
+  if (restartLeverageInfo?.modeCap != null) restartLeverageTooltipParts.push(`Mode ${formatLeverageValue(restartLeverageInfo.modeCap)}`);
+  if (restartLeverageInfo?.categoryCap != null) restartLeverageTooltipParts.push(`Category ${formatLeverageValue(restartLeverageInfo.categoryCap)}`);
+  if (restartLeverageInfo?.constraintCap != null) restartLeverageTooltipParts.push(`Constraint ${formatLeverageValue(restartLeverageInfo.constraintCap)}`);
+  if (restartLeverageInfo?.source) restartLeverageTooltipParts.push(`Source: ${restartLeverageInfo.source}`);
+  const restartLeverageTooltip = restartLeverageTooltipParts.length ? restartLeverageTooltipParts.join(' · ') : undefined;
   
   // Cache intelligent pour les sessions
   const {
@@ -794,6 +809,13 @@ export default function SessionsPage(){
     if (hours > 0) return `${hours}h ${Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60))}m`;
     return `${Math.floor(ms / (1000 * 60))}m`;
   };
+  function formatLeverageValue(value?: number | null) {
+    if (value == null) return '—';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '—';
+    const decimals = num >= 10 ? 0 : num >= 4 ? 1 : 2;
+    return `${num.toFixed(decimals)}x`;
+  }
   
   const getHealthColor = (status: string, score: number) => {
     if (status === 'error' || score < 30) return '#ff4d4f';
@@ -903,9 +925,25 @@ export default function SessionsPage(){
       symbol: r.symbol,
       mode: r.mode,
       startBalanceUsd: r.startBalanceUsd,
-      maxLeverage: Math.min(10, Math.max(1, p.maxLeverage ?? 4)),
+      maxLeverage: Math.min(10, Math.max(1, p.requestedMaxLeverage ?? p.maxLeverage ?? 4)),
       aggressiveness: p.aggressiveness || 'conservative',
       smartAutoMode: !!r.isSmartAgent,
+    });
+    const resolvedLev = Number(p.maxLeverage ?? p.leverageCap?.resolved);
+    const requestedLev = Number(p.requestedMaxLeverage ?? p.leverageCap?.requested ?? p.maxLeverage);
+    const trimmed = Boolean(
+      p?.leverageCap?.trimmed ?? (
+        Number.isFinite(resolvedLev) && Number.isFinite(requestedLev) && resolvedLev + 1e-9 < requestedLev
+      )
+    );
+    setRestartLeverageInfo({
+      resolved: Number.isFinite(resolvedLev) ? resolvedLev : undefined,
+      requested: Number.isFinite(requestedLev) ? requestedLev : undefined,
+      trimmed,
+      source: p?.leverageCap?.constraintSource,
+      modeCap: p?.leverageCap?.modeCap,
+      categoryCap: p?.leverageCap?.categoryCap,
+      constraintCap: p?.leverageCap?.constraintCap,
     });
     setOpen(true);
   };
@@ -1040,16 +1078,17 @@ export default function SessionsPage(){
                       Actions
                     </Button>
                   </Dropdown>
-                  <Button 
-                    type='primary' 
+                  <Button
+                    type='primary'
                     icon={<PlayCircleOutlined />}
-                    onClick={()=>{ 
+                    onClick={()=>{
                       setRestartSessionId(null);
-                      form.setFieldsValue({ 
-                        symbol:'BTC/USDT', 
-                        mode, 
+                      setRestartLeverageInfo(null);
+                      form.setFieldsValue({
+                        symbol:'BTC/USDT',
+                        mode,
                         startBalanceUsd: undefined,
-                        maxLeverage:4, 
+                        maxLeverage:4,
                         aggressiveness:'conservative',
                         smartAutoMode: false
                       }); 
@@ -1332,8 +1371,8 @@ export default function SessionsPage(){
                   return (bIsSmartAgent ? 1 : 0) - (aIsSmartAgent ? 1 : 0);
                 }
               },
-              { 
-                title:'Aggressiveness', 
+              {
+                title:'Aggressiveness',
                 dataIndex:'aggressiveness',
                 width: 130,
                 render:(a)=> {
@@ -1359,9 +1398,51 @@ export default function SessionsPage(){
                 },
                 sorter: (a, b) => (a.aggressiveness || 'conservative').localeCompare(b.aggressiveness || 'conservative')
               },
+              {
+                title:'Leverage',
+                width: 140,
+                render:(_:any, record:any)=> {
+                  const leverage = record.leverage || {};
+                  const cap = leverage.cap || record.profileJson?.leverageCap || null;
+                  const resolved = Number.isFinite(Number(leverage.resolved ?? cap?.resolved ?? record.profileJson?.maxLeverage))
+                    ? Number(leverage.resolved ?? cap?.resolved ?? record.profileJson?.maxLeverage)
+                    : undefined;
+                  const requested = Number.isFinite(Number(leverage.requested ?? cap?.requested ?? record.profileJson?.requestedMaxLeverage))
+                    ? Number(leverage.requested ?? cap?.requested ?? record.profileJson?.requestedMaxLeverage)
+                    : resolved;
+                  const trimmed = Boolean(
+                    leverage.trimmed ?? cap?.trimmed ?? (
+                      resolved != null && requested != null && resolved + 1e-9 < requested
+                    )
+                  );
+                  const tooltipParts: string[] = [];
+                  if (cap?.modeCap != null) tooltipParts.push(`Mode ${formatLeverageValue(cap.modeCap)}`);
+                  if (cap?.categoryCap != null) tooltipParts.push(`Category ${formatLeverageValue(cap.categoryCap)}`);
+                  if (cap?.constraintCap != null) tooltipParts.push(`Constraint ${formatLeverageValue(cap.constraintCap)}`);
+                  if (cap?.constraintSource) tooltipParts.push(`Source: ${cap.constraintSource}`);
+                  const tooltip = tooltipParts.length ? tooltipParts.join(' · ') : undefined;
+                  return (
+                    <Space size={6}>
+                      <Tooltip title={tooltip}>
+                        <span style={{ fontWeight: 600 }}>{formatLeverageValue(resolved)}</span>
+                      </Tooltip>
+                      {trimmed && (
+                        <Tooltip title={`Requested ${formatLeverageValue(requested)} trimmed${cap?.constraintSource ? ` by ${cap.constraintSource}` : ''}`}>
+                          <Tag color="orange">Trimmed</Tag>
+                        </Tooltip>
+                      )}
+                    </Space>
+                  );
+                },
+                sorter: (a: any, b: any) => {
+                  const aLev = Number(a.leverage?.resolved ?? a.profileJson?.maxLeverage ?? 0);
+                  const bLev = Number(b.leverage?.resolved ?? b.profileJson?.maxLeverage ?? 0);
+                  return aLev - bLev;
+                }
+              },
               ...(compactView ? [] : [
-                { 
-                  title:'Health', 
+                {
+                  title:'Health',
                   width: 100,
                   render:(_:any,r:any)=> (
                     <Space>
@@ -1794,7 +1875,7 @@ export default function SessionsPage(){
           }
           okText={restartSessionId ? 'Restart Agent' : 'Start Agent'} 
           cancelText='Cancel' 
-          onCancel={()=> { setOpen(false); setRestartSessionId(null); }} 
+          onCancel={()=> { setOpen(false); setRestartSessionId(null); setRestartLeverageInfo(null); }}
           confirmLoading={starting}
           style={{
             fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
@@ -1862,6 +1943,7 @@ export default function SessionsPage(){
               }
 
               setOpen(false);
+              setRestartLeverageInfo(null);
               // Ensure no legacy progress modal remains visible once we pivot to the banner flow
               Modal.destroyAll();
 
@@ -2219,16 +2301,28 @@ export default function SessionsPage(){
                 <div
                   style={{
                     display: 'flex',
-                    justifyContent: 'space-between',
+                    flexDirection: 'column',
+                    gap: 4,
                     fontSize: '12px',
                     color: '#475569',
                     marginTop: 8,
                   }}
                 >
                   <span>
-                    Leverage: <strong>{Number(leverageValue || 1)}x</strong>
+                    Requested: <strong>{formatLeverageValue(leverageValue)}</strong>
                   </span>
-                  <span>Cap 10x</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Tooltip title={restartLeverageTooltip}>
+                      <span>
+                        Effective: <strong>{formatLeverageValue(restartLeverageInfo?.resolved)}</strong>
+                      </span>
+                    </Tooltip>
+                    {restartLeverageInfo?.trimmed && (
+                      <Tooltip title={`Requested ${formatLeverageValue(restartLeverageInfo?.requested)} trimmed${restartLeverageInfo?.source ? ` by ${restartLeverageInfo.source}` : ''}`}>
+                        <Tag color="orange" style={{ marginLeft: 0 }}>Trimmed</Tag>
+                      </Tooltip>
+                    )}
+                  </span>
                 </div>
               </div>
             </Form.Item>

@@ -1,5 +1,6 @@
 import { prisma } from '../db/client.js';
 import { getConfig, getModeParams, type AgentAggressiveness } from '../utils/env.js';
+import { resolveLeverageCap, type ResolvedLeverageCap } from './leverageCaps.js';
 
 export type RiskContext = {
   sessionId: string;
@@ -55,13 +56,23 @@ export type SizingInput = {
   riskPct: number; // 0.5..5
   stopDistanceAbs: number;
   entryPrice: number;
-  maxLev: number;
+  requestedLeverage: number;
+  symbol: string;
+  mode?: 'paper' | 'live';
+  leverageCap?: ResolvedLeverageCap;
 };
 
-export function computeQtyNotional({ balanceUsd, riskPct, stopDistanceAbs, entryPrice, maxLev }: SizingInput) {
+export type SizingResult = {
+  notional: number;
+  leverageCap: ResolvedLeverageCap;
+};
+
+export async function computeQtyNotional({ balanceUsd, riskPct, stopDistanceAbs, entryPrice, requestedLeverage, symbol, mode, leverageCap: inputCap }: SizingInput): Promise<SizingResult> {
+  const leverageCap = inputCap ?? await resolveLeverageCap({ symbol, requestedMaxLeverage: requestedLeverage, mode });
   const riskDollar = balanceUsd * (riskPct/100);
   const stopPct = (stopDistanceAbs/entryPrice)*100;
   const notional = stopPct > 0 ? (riskDollar / (stopPct/100)) : 0;
-  const maxNotional = balanceUsd * maxLev;
-  return Math.max(0, Math.min(notional, maxNotional));
+  const maxNotional = balanceUsd * leverageCap.resolved;
+  const clamped = Math.max(0, Math.min(notional, maxNotional));
+  return { notional: clamped, leverageCap };
 }

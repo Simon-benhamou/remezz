@@ -250,10 +250,15 @@ export async function startEventEngine(){
           const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null } });
           for (const s of sessions) {
             const p:any = (s as any).profileJson || {};
+            const leverageMeta = (p.leverageCap as any) || null;
+            const requestedMaxLev = Math.min(10, Math.max(1, Number(p.requestedMaxLeverage ?? leverageMeta?.requested ?? p.maxLeverage ?? 4)));
+            const resolvedMaxLev = Math.min(10, Math.max(1, Number(leverageMeta?.resolved ?? p.maxLeverage ?? requestedMaxLev)));
             const profile = {
               symbol: s.symbol,
               mode: s.mode as any,
-              maxLeverage: Math.min(10, Math.max(1, p.maxLeverage ?? 4)),
+              maxLeverage: resolvedMaxLev,
+              requestedMaxLeverage: requestedMaxLev,
+              leverageCap: leverageMeta || undefined,
               riskPerTradePct: Math.min(5, Math.max(0.5, p.riskPerTradePct ?? 1.5)),
               dailyLossLimitPct: Math.min(4, Math.max(3, p.dailyLossLimitPct ?? 3.5)),
               timestamp: new Date().toISOString(),
@@ -263,6 +268,7 @@ export async function startEventEngine(){
               budgetFraction: (()=>{ let bf = typeof p.budgetPct==='number'? p.budgetPct:1; if (bf>1) bf/=100; return Math.min(1, Math.max(0.1, bf)); })(),
               aggressiveness: (p.aggressiveness === 'reactive' || p.aggressiveness === 'aggressive') ? p.aggressiveness : 'conservative',
               userId: s.userId ?? undefined,
+              minLeverage: Math.max(1, Math.min(resolvedMaxLev, Number(p.minLeverage ?? 1))),
             };
             try { await (await import('../agent/hub.js')).AgentHub.activate(s.id, profile as any); } catch {}
             // If a persisted plan exists, re-arm the agent automatically without calling LLM again

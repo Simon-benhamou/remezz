@@ -67,6 +67,10 @@ export type Cfg = {
   PAPER_MAX_IMPACT_PCT: number;       // max impact allowed for paper estimate
   LIQUIDITY_MIN_15M_USD: number;      // minimum 15m USD volume to allow trading
   LIQUIDITY_VOLUME_MULTIPLIER: number; // multiplier for volume24h vs position size (e.g., 50x)
+  LEVERAGE_CAP_DEFAULT: number;
+  LEVERAGE_CAP_MAJOR: number;
+  LEVERAGE_CAP_ALT: number;
+  LEVERAGE_CAP_MEME: number;
   
   // Anti-whale / manipulation filters
   ANTI_WHALE_ENABLED: boolean;        // enable anti-whale entry filters
@@ -342,6 +346,14 @@ export function getConfig(): Cfg {
   PAPER_MAX_IMPACT_PCT: Number(e.PAPER_MAX_IMPACT_PCT || e.ORDER_MAX_IMPACT_PCT || "0.35"),
   LIQUIDITY_MIN_15M_USD: Number(e.LIQUIDITY_MIN_15M_USD || "100000"),
   LIQUIDITY_VOLUME_MULTIPLIER: Number(e.LIQUIDITY_VOLUME_MULTIPLIER || "30"),
+  LEVERAGE_CAP_DEFAULT: Number(e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "5"),
+  LEVERAGE_CAP_MAJOR: Number(e.LEVERAGE_CAP_MAJOR || e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "6"),
+  LEVERAGE_CAP_ALT: Number(e.LEVERAGE_CAP_ALT || e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "4"),
+  LEVERAGE_CAP_MEME: Number(
+    e.LEVERAGE_CAP_MEME
+      || e.LEVERAGE_CAP_DEFAULT
+      || Math.min(Number(e.DEFAULT_MAX_LEVERAGE || "3"), 3)
+  ),
   // Anti-whale / manipulation filters
   ANTI_WHALE_ENABLED: (e.ANTI_WHALE_ENABLED || "true") === "true",
   ANTI_WHALE_VOL_SPIKE_MULT: Number(e.ANTI_WHALE_VOL_SPIKE_MULT || "2.2"),

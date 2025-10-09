@@ -20,7 +20,8 @@ type ModelName =
   | 'aiCall'
   | 'user'
   | 'userApiKey'
-  | 'userSetting';
+  | 'userSetting'
+  | 'leverageConstraint';
 
 type ModelStore = Map<ModelName, any[]>;
 
@@ -252,6 +253,11 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     createdAt: new Date(),
     updatedAt: new Date(),
   }),
+  leverageConstraint: () => ({
+    id: randomUUID(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
 };
 
 class InMemoryModel {
@@ -388,6 +394,7 @@ export class InMemoryPrismaClient {
   user: InMemoryModel;
   userApiKey: InMemoryModel;
   userSetting: InMemoryModel;
+  leverageConstraint: InMemoryModel;
 
   constructor() {
     this.store = new Map();
@@ -408,6 +415,7 @@ export class InMemoryPrismaClient {
     this.user = new InMemoryModel('user', this);
     this.userApiKey = new InMemoryModel('userApiKey', this);
     this.userSetting = new InMemoryModel('userSetting', this);
+    this.leverageConstraint = new InMemoryModel('leverageConstraint', this);
   }
 
   _getStore(name: ModelName): any[] {

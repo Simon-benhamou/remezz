@@ -8,6 +8,7 @@ import { authMiddleware } from "./utils/security.js";
 import { router as authRouter } from "./routes/auth.js";
 import { router as userRouter } from "./routes/user.js";
 import { router as debugRouter } from "./routes/debug.js";
+import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { router as statusRouter } from "./routes/status.js";
 import { router as strategyRouter } from "./routes/strategy.js";
 import { router as agentRouter } from "./routes/agent.js";
@@ -32,6 +33,7 @@ import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
+import { refreshLeverageConstraintInputs } from "./risk/leverageCaps.js";
 import {
   startAgentCreation,
   PhaseError,
@@ -93,8 +95,6 @@ app.get("/api/health", (_req, res) =>
 app.use("/api/status", statusRouter);
 app.use("/api/user", userRouter);
 app.use("/api/debug", debugRouter);
-// Debug selection endpoint
-import { router as debugSelectionRouter } from './routes/debug-selection.js';
 app.use("/api/debug-selection", debugSelectionRouter);
 app.use("/api/strategy", strategyRouter);
 app.use("/api/agent", agentRouter);
@@ -141,6 +141,24 @@ startEventEngine();
 startArbitrageMonitor();
 startIntegratedMonitoring();
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
+
+const DEFAULT_LEVERAGE_REFRESH_MS = 15 * 60 * 1000;
+const LEVERAGE_REFRESH_INTERVAL_MS = Math.max(
+  5 * 60 * 1000,
+  Number(process.env.LEVERAGE_REFRESH_INTERVAL_MS || `${DEFAULT_LEVERAGE_REFRESH_MS}`)
+);
+async function runLeverageRefresh(startup = false) {
+  try {
+    await refreshLeverageConstraintInputs({ force: startup });
+  } catch (error) {
+    console.error('⚠️ Failed to refresh leverage constraints:', error);
+  }
+}
+
+if (process.env.LEVERAGE_CONSTRAINT_REFRESH_DISABLED !== 'true') {
+  runLeverageRefresh(true);
+  setInterval(() => runLeverageRefresh(false), LEVERAGE_REFRESH_INTERVAL_MS);
+}
 
 // Prime Binance WS early so UI/API has data immediately
 try {
