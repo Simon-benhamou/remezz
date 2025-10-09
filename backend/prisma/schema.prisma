@@ -99,6 +99,7 @@ model AgentSession {
   alerts     Alert[]               // back-rel from Alert.session
   reports    DailyReport[]         // back-rel from DailyReport.session
   prompts    AiPromptLog[]
+  marginSnapshots MarginSnapshot[]
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
