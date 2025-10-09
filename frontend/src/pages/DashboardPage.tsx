@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Space, Button, Table, Tag, List, Progress, Badge, Avatar, Typography, Divider, Alert, Tooltip, Dropdown, MenuProps } from 'antd';
+import { Card, Row, Col, Statistic, Space, Button, Table, Tag, List, Progress, Badge, Avatar, Typography, Divider, Alert, Tooltip, Dropdown, MenuProps, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { openWS } from '../ws';
@@ -22,8 +22,11 @@ import {
   SettingOutlined,
   BulbOutlined,
   FireOutlined,
-  RocketOutlined
+  RocketOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
+import { useStopAllLock } from '../hooks/useStopAllLock';
+import { useStopAllConfirmation } from '../hooks/useStopAllConfirmation';
 
 const { Title, Text } = Typography;
 
@@ -65,46 +68,70 @@ export default function DashboardPage(){
     };
   };
   
-  // Quick actions menu
-  const quickActions: MenuProps['items'] = [
-    {
-      key: 'smart-scanner',
-      label: 'Smart Opportunity Scanner',
-      icon: <RocketOutlined />,
-      onClick: () => setShowSmartScanner(!showSmartScanner)
-    },
-    {
-      key: 'new-btc',
-      label: 'New BTC Agent',
-      icon: <PlusOutlined />,
-      onClick: () => navigate('/sessions')
-    },
-    {
-      key: 'new-eth', 
-      label: 'New ETH Agent',
-      icon: <PlusOutlined />,
-      onClick: () => navigate('/sessions')
-    },
-    {
-      key: 'stop-all',
-      label: 'Emergency Stop All',
-      icon: <StopOutlined />,
-      danger: true,
-      onClick: () => {
-        // Implement emergency stop all logic
-        console.log('Emergency stop all agents');
-      }
-    }
-  ];
-  
-  const load = async ()=>{
+  const load = React.useCallback(async ()=>{
     try {
       const data = await api.overview(mode);
       setOv(data);
     } finally {
       if (!loadedRef.current) { setLoading(false); loadedRef.current = true; }
     }
-  };
+  }, [mode]);
+
+  const { locked, unlock, setLocked } = useStopAllLock();
+  const showStopAllConfirm = useStopAllConfirmation({
+    description: (
+      <span>
+        This will immediately halt every active agent, cancel all outstanding orders, and flatten open positions. New agent
+        creation stays disabled until you reset the lock.
+      </span>
+    ),
+  });
+
+  const quickActions = React.useMemo<MenuProps['items']>(() => {
+    const items: NonNullable<MenuProps['items']> = [
+      {
+        key: 'smart-scanner',
+        label: 'Smart Opportunity Scanner',
+        icon: <RocketOutlined />,
+        onClick: () => setShowSmartScanner((prev) => !prev),
+      },
+      {
+        key: 'new-btc',
+        label: 'New BTC Agent',
+        icon: <PlusOutlined />,
+        onClick: () => navigate('/sessions'),
+        disabled: locked,
+      },
+      {
+        key: 'new-eth',
+        label: 'New ETH Agent',
+        icon: <PlusOutlined />,
+        onClick: () => navigate('/sessions'),
+        disabled: locked,
+      },
+      {
+        key: 'stop-all',
+        label: 'Emergency Stop All',
+        icon: <StopOutlined />,
+        danger: true,
+        onClick: () => showStopAllConfirm({ onSuccess: () => { load(); loadOps(); } }),
+      },
+    ];
+
+    if (locked) {
+      items.push({
+        key: 'reset-lock',
+        label: 'Reset Emergency Lock',
+        icon: <ReloadOutlined />,
+        onClick: () => {
+          unlock();
+          message.success('Agent creation re-enabled.');
+        },
+      });
+    }
+
+    return items;
+  }, [locked, navigate, showStopAllConfirm, load, loadOps, unlock]);
   const loadOps = React.useCallback(async ()=>{
     try {
       setOpsLoading(true);
@@ -121,12 +148,10 @@ export default function DashboardPage(){
     }
   }, []);
   React.useEffect(()=>{
-    load();
-    loadOps();
-    const t = setInterval(async ()=>{
-      try { const data = await api.overview(mode); setOv(data); } catch {}
-    }, 15000);
-    const opsTimer = setInterval(()=>{ loadOps(); }, 30000);
+    void load();
+    void loadOps();
+    const t = setInterval(() => { void load(); }, 15000);
+    const opsTimer = setInterval(() => { void loadOps(); }, 30000);
     // WS live updates for overview_session events
     const API_BASE = (import.meta as any).env.VITE_API_BASE || 'http://localhost:4000';
     const key = (localStorage.getItem('apiKey') || '');
@@ -142,11 +167,24 @@ export default function DashboardPage(){
           return { ...cur, sessions, updatedAt: new Date().toISOString() };
         });
       }
+      if (msg?.type === 'agent_stop_all') {
+        setLocked(true);
+        void load();
+        void loadOps();
+      }
     });
     return ()=> { try { clearInterval(t); } catch {}; try { clearInterval(opsTimer); } catch {}; try { ws?.close?.(); } catch {} };
-  }, [mode, loadOps]);
+  }, [load, loadOps, setLocked]);
   
   const globalHealth = getGlobalHealth();
+  const marginOverview = opsMetrics?.margin;
+  const marginFlag = marginOverview
+    ? marginOverview.critical
+      ? { label: 'Critical', color: '#ff4d4f' }
+      : marginOverview.warn
+        ? { label: 'Elevated', color: '#faad14' }
+        : { label: 'Healthy', color: '#52c41a' }
+    : null;
   
   return (
     <div style={{ padding: '24px', background: '#f5f5f5', minHeight: '100vh' }}>
@@ -187,14 +225,17 @@ export default function DashboardPage(){
                   <SettingOutlined /> Quick Actions
                 </Button>
               </Dropdown>
-              <Button 
-                size="large" 
-                type="primary"
-                style={{ background: '#52c41a', border: 'none' }}
-                onClick={() => navigate('/sessions')}
-              >
-                <PlusOutlined /> New Agent
-              </Button>
+              <Tooltip title={locked ? 'Emergency halt active. Reset to enable new agent creation.' : undefined}>
+                <Button
+                  size="large"
+                  type="primary"
+                  style={{ background: '#52c41a', border: 'none' }}
+                  onClick={() => navigate('/sessions')}
+                  disabled={locked}
+                >
+                  <PlusOutlined /> New Agent
+                </Button>
+              </Tooltip>
             </Space>
           </Col>
         </Row>
@@ -331,7 +372,79 @@ export default function DashboardPage(){
           </Card>
         </Col>
       </Row>
-      
+
+      {marginOverview && (
+        <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
+          <Col xs={24} lg={12}>
+            <Card
+              title={
+                <Space>
+                  <WarningOutlined style={{ color: marginFlag?.color || '#0ea5e9' }} />
+                  Margin health
+                </Space>
+              }
+              extra={marginFlag ? <Tag color={marginFlag.color}>{marginFlag.label}</Tag> : null}
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div>
+                  <Text type="secondary">Average utilisation</Text>
+                  <Progress
+                    percent={Number.isFinite(marginOverview.averageUtilisationPct)
+                      ? Number(marginOverview.averageUtilisationPct.toFixed(1))
+                      : 0}
+                    strokeColor={marginFlag?.color || '#0ea5e9'}
+                    showInfo
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: 12 }}>
+                  <span>{marginOverview.tracked || 0} sessions monitored</span>
+                  <span>
+                    {marginOverview.warn || 0} warn · {marginOverview.critical || 0} critical
+                  </span>
+                </div>
+              </Space>
+            </Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card
+              title={
+                <Space>
+                  <ExclamationCircleOutlined style={{ color: '#f97316' }} />
+                  Sessions needing downsizing
+                </Space>
+              }
+            >
+              {Array.isArray(marginOverview.worstSessions) && marginOverview.worstSessions.length ? (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {marginOverview.worstSessions.map((row: any) => (
+                    <Card key={`${row.sessionId}_${row.symbol}`} size="small" style={{ background: '#f8fafc' }}>
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                          <Text strong>{row.symbol || row.sessionId}</Text>
+                          <Tag color={row.status === 'critical' ? 'red' : 'orange'}>{row.status.toUpperCase()}</Tag>
+                        </Space>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#475569' }}>
+                          <span>Utilisation</span>
+                          <span>{Number(row.utilisationPct || 0).toFixed(1)}%</span>
+                        </div>
+                        {Number.isFinite(row.worstLiquidationDistancePct) && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#475569' }}>
+                            <span>Liquidation buffer</span>
+                            <span>{Number(row.worstLiquidationDistancePct).toFixed(2)}%</span>
+                          </div>
+                        )}
+                      </Space>
+                    </Card>
+                  ))}
+                </Space>
+              ) : (
+                <div style={{ color: '#94a3b8' }}>All sessions within safe margins.</div>
+              )}
+            </Card>
+          </Col>
+        </Row>
+      )}
+
       {/* Active Agents Grid */}
       <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={16}>

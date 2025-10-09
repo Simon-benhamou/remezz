@@ -15,7 +15,7 @@ export async function startSession(
 export async function stopSession(sessionId: string) {
   return prisma.agentSession.update({
     where: { id: sessionId },
-    data: { stoppedAt: new Date() },
+    data: { stoppedAt: new Date(), haltedAt: null, haltReason: null },
   });
 }
 export async function activeSession() {

@@ -27,6 +27,8 @@ type Props = {
   lastPrice?: number;
   onPlan?: (plan: any) => void;
   sessionId?: string;
+  margin?: any;
+  marginHistory?: any[];
 };
 
 const { Text } = Typography;
@@ -93,10 +95,24 @@ const stateColors: Record<string, string> = {
   HALT: '#dc2626',
 };
 
-export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sessionId }: Props) {
+export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sessionId, margin, marginHistory }: Props) {
   const [llmPlan, setLlmPlan] = React.useState<any>(null);
   const [forcingArm, setForcingArm] = React.useState(false);
   const balance = agent?.balance;
+  const marginSnapshot = margin;
+  const marginRecommendations = Array.isArray(marginSnapshot?.actions)
+    ? marginSnapshot.actions
+    : [];
+  const marginStatusRaw = typeof marginSnapshot?.status === 'string' ? marginSnapshot.status.toLowerCase() : 'ok';
+  const marginStatusMeta = marginStatusRaw === 'critical'
+    ? { label: 'Critical', color: '#dc2626' }
+    : marginStatusRaw === 'warn'
+      ? { label: 'Warning', color: '#f97316' }
+      : { label: 'Healthy', color: '#16a34a' };
+  const marginUtilisation = Number(marginSnapshot?.utilisationPct ?? 0);
+  const marginBuffer = Number.isFinite(Number(marginSnapshot?.worstLiquidationDistancePct))
+    ? Number(marginSnapshot?.worstLiquidationDistancePct)
+    : null;
   const [agg, setAgg] = React.useState<string>(agent?.profile?.aggressiveness || 'conservative');
 
   React.useEffect(() => {
@@ -561,6 +577,52 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
                     <span style={{ fontWeight: 600 }}>{metric.value}</span>
                   </div>
                 ))}
+              </Space>
+            </div>
+          )}
+          {marginSnapshot && (
+            <div style={{ minWidth: 220, flex: '1 1 220px' }}>
+              <Text strong style={{ display: 'block', marginBottom: 8 }}>
+                Margin safety
+              </Text>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                  <Tag color={marginStatusMeta.color}>{marginStatusMeta.label}</Tag>
+                  <span style={{ fontWeight: 600 }}>
+                    {Number.isFinite(marginUtilisation) ? marginUtilisation.toFixed(1) : '0.0'}%
+                  </span>
+                </Space>
+                <Progress
+                  percent={Number.isFinite(marginUtilisation) ? Number(marginUtilisation.toFixed(1)) : 0}
+                  strokeColor={marginStatusMeta.color}
+                  showInfo={false}
+                />
+                {marginBuffer !== null && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
+                    <span>Worst liq. buffer</span>
+                    <span>{marginBuffer !== null ? marginBuffer.toFixed(2) : '—'}%</span>
+                  </div>
+                )}
+                <div>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Recommended actions</Text>
+                  {marginRecommendations.length ? (
+                    <Space direction="vertical" size={6} style={{ marginTop: 6, width: '100%' }}>
+                      {marginRecommendations.slice(0, 3).map((action: any, idx: number) => (
+                        <div key={idx} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 10px', background: 'rgba(248, 250, 252, 0.7)' }}>
+                          <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                            <span style={{ fontWeight: 600 }}>{action.label}</span>
+                            {action.severity && <Tag color={action.severity === 'critical' ? 'red' : action.severity === 'warn' ? 'orange' : 'blue'}>{String(action.severity).toUpperCase()}</Tag>}
+                          </Space>
+                          {action.rationale && (
+                            <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{action.rationale}</div>
+                          )}
+                        </div>
+                      ))}
+                    </Space>
+                  ) : (
+                    <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 6 }}>No downsizing required.</div>
+                  )}
+                </div>
               </Space>
             </div>
           )}

@@ -1,4 +1,4 @@
-import { Broker, NewOrder, PlacedOrder } from './types.js';
+import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot } from './types.js';
 import { getTicker, getOHLCV } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
 
@@ -14,8 +14,21 @@ export class PaperBroker implements Broker {
     if (startUsd && startUsd > 0) this.balanceUsd = startUsd;
   }
 
-  async balance() {
-    return { freeUsd: Math.max(0, this.balanceUsd - this.committedUsd), equityUsd: this.balanceUsd, committedUsd: this.committedUsd };
+  async balance(): Promise<BrokerMarginSnapshot> {
+    const freeUsd = Math.max(0, this.balanceUsd - this.committedUsd);
+    const equityUsd = this.balanceUsd;
+    const committedUsd = this.committedUsd;
+    const maintenanceMarginUsd = committedUsd > 0 ? committedUsd * 0.05 : undefined;
+    const marginRatio = equityUsd > 0 ? committedUsd / equityUsd : undefined;
+    return {
+      freeUsd,
+      equityUsd,
+      committedUsd,
+      maintenanceMarginUsd,
+      marginRatio,
+      marginMode: 'paper',
+      timestamp: Date.now(),
+    };
   }
 
   async place(o: NewOrder): Promise<PlacedOrder> {

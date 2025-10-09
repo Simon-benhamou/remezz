@@ -1,13 +1,35 @@
 import { Router } from 'express';
+import { createHash } from 'crypto';
 import { getConfig } from '../utils/env.js';
 import { prisma } from '../db/client.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
+import { recordOpsEvent } from '../monitor/ops.js';
 
 export const router = Router();
 
 const REGISTRATION_CODE = 'Shira1704';
+
+function collectHeaderValues(...values: (string | string[] | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value === 'string') {
+      out.push(value);
+    } else if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === 'string') {
+          out.push(entry);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function normalizeToken(raw: string): string {
+  return raw.replace(/^Bearer\s+/i, '').trim();
+}
 
 // Login endpoint
 router.post('/login', async (req, res) => {
@@ -56,6 +78,116 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+router.post('/ws-token', async (req, res) => {
+  try {
+    const cfg = getConfig();
+    const tokens = collectHeaderValues(req.headers['x-api-key'], req.headers['authorization'])
+      .map((value) => normalizeToken(value.trim()))
+      .filter(Boolean);
+
+    let identity:
+      | { kind: 'apiKey'; id: string; fingerprint: string }
+      | { kind: 'user'; id: string; username: string; role: string }
+      | null = null;
+
+    for (const candidate of tokens) {
+      if (candidate === cfg.APP_API_KEY) {
+        const fingerprint = createHash('sha256').update(candidate).digest('hex').slice(0, 16);
+        identity = { kind: 'apiKey', id: 'app-key', fingerprint };
+        break;
+      }
+
+      try {
+        const decoded = jwt.verify(candidate, cfg.JWT_SECRET || cfg.APP_API_KEY) as any;
+        if (decoded?.userId) {
+          const user = await prisma.user
+            .findUnique({ where: { id: decoded.userId } })
+            .catch(() => null);
+          if (user && user.isActive) {
+            identity = {
+              kind: 'user',
+              id: user.id,
+              username: user.username,
+              role: user.role,
+            };
+            break;
+          }
+        }
+      } catch (err) {
+        // ignore, try next candidate
+      }
+    }
+
+    if (!identity) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'ws_auth',
+        message: 'ws_token_denied',
+        details: {
+          reason: 'invalid_credentials',
+          ip: req.ip,
+        },
+      });
+      return res.status(401).json({
+        error: 'unauthorized',
+        code: 'ws.auth.required',
+        message: 'Valid API key or session token is required to obtain a WebSocket credential.',
+      });
+    }
+
+    const ttlSec = Math.max(15, Number(cfg.WS_JWT_TTL_SEC || 60));
+    const expiresAt = new Date(Date.now() + ttlSec * 1000);
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
+
+    const payload: Record<string, any> = {
+      sub: identity.id,
+      kind: identity.kind,
+      sessionId,
+    };
+
+    if (identity.kind === 'apiKey') {
+      payload.fingerprint = identity.fingerprint;
+    } else {
+      payload.user = {
+        id: identity.id,
+        username: identity.username,
+        role: identity.role,
+      };
+    }
+
+    const token = jwt.sign(payload, cfg.WS_JWT_SECRET || cfg.JWT_SECRET || cfg.APP_API_KEY, {
+      expiresIn: ttlSec,
+    });
+
+    recordOpsEvent({
+      level: 'info',
+      source: 'ws_auth',
+      message: 'ws_token_issued',
+      details: {
+        identity: identity.kind,
+        sessionId,
+        ip: req.ip,
+        expiresAt: expiresAt.toISOString(),
+      },
+    });
+
+    return res.json({
+      token,
+      expiresIn: ttlSec,
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (error) {
+    console.error('WS token issuance error:', error);
+    recordOpsEvent({
+      level: 'error',
+      source: 'ws_auth',
+      message: 'ws_token_error',
+      details: { error: String((error as any)?.message || error) },
+    });
+    return res.status(500).json({ error: 'ws_token_error' });
   }
 });
 

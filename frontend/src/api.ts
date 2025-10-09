@@ -48,7 +48,15 @@ export const api = {
       const out = (await client.post('/api/auth/login', { username, password })).data;
       if (out?.token) setApiKey(out.token);
       return out;
-    }
+    },
+    requestWsToken: async (sessionId?: string) => {
+      const payload = sessionId ? { sessionId } : {};
+      return (await client.post('/api/auth/ws-token', payload)).data as {
+        token: string;
+        expiresAt?: string;
+        expiresIn?: number;
+      };
+    },
   },
   status: async (sessionId?: string, options?: { includeBalance?: boolean; includeTech?: boolean }) => {
     const params: any = { sessionId };
@@ -78,6 +86,7 @@ export const api = {
   restartSession: async (sessionId: string, payload: Record<string, any>) =>
     (await client.post('/api/agent/restart', { sessionId, ...payload })).data,
   stopSession: async (sessionId: string, closePosition?: boolean) => (await client.post("/api/agent/stop", { sessionId, closePosition })).data,
+  stopAllAgents: async () => (await client.post('/api/agent/stop-all')).data,
   getSession: async () => (await client.get("/api/agent/session")).data,
   listSessions: async (mode?: string, includeStats?: boolean) => {
     const params: any = {};
@@ -104,6 +113,10 @@ export const api = {
     (await client.get('/api/monitor/alerts', { params: { sessionId } })).data,
   getMonitorAnalytics: async (sessionId: string) =>
     (await client.get('/api/monitor/analytics', { params: { sessionId } })).data,
+  getMarginOverview: async (limit?: number) =>
+    (await client.get('/api/monitor/margin', { params: limit ? { limit } : undefined })).data,
+  getSessionMargin: async (sessionId: string, limit = 60) =>
+    (await client.get(`/api/monitor/margin/${sessionId}`, { params: { limit } })).data,
   getHealth: async (sessionId?: string) =>
     (await client.get('/api/monitor/health', { params: { sessionId } })).data,
   getDailyReport: async (sessionId: string, date?: string, opts?: { refresh?: boolean }) =>

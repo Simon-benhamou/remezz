@@ -26,6 +26,7 @@ import { batchRouter } from "./routes/batch.js";
 import { scannerRouter } from "./routes/scanner.js";
 import { router as intelligentRouter } from "./routes/intelligent.js";
 import { router as arbitrageRouter } from "./routes/arbitrage.js";
+import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
 import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
@@ -34,10 +35,15 @@ import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
 import { refreshLeverageConstraintInputs } from "./risk/leverageCaps.js";
+import { startMarginMonitor } from "./services/marginMonitor.js";
 import {
   startAgentCreation,
   PhaseError,
 } from "./services/agentCreationFlow.js";
+import {
+  createAgentRateLimiters,
+  createMonitorRateLimiters,
+} from "./middleware/rateLimit.js";
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -55,6 +61,8 @@ const allowedOrigins = new Set<string>([
 ]);
 const app = express();
 app.use(express.json());
+const agentRateLimiters = createAgentRateLimiters();
+const monitorRateLimiters = createMonitorRateLimiters();
 // CORS: allow only known origins and those provided via env; include x-api-key header
 const corsOptions = {
   origin(origin, cb) {
@@ -97,12 +105,12 @@ app.use("/api/user", userRouter);
 app.use("/api/debug", debugRouter);
 app.use("/api/debug-selection", debugSelectionRouter);
 app.use("/api/strategy", strategyRouter);
-app.use("/api/agent", agentRouter);
+app.use("/api/agent", ...agentRateLimiters, agentRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/perf", perfRouter);
 app.use("/api/analysis", analysisRouter);
 app.use("/api/sim", simRouter);
-app.use("/api/monitor", monitorRouter);
+app.use("/api/monitor", ...monitorRateLimiters, monitorRouter);
 app.use("/api/market", marketRouter);
 app.use("/api/cache", cacheRouter);
 app.use("/api/batch", batchRouter);
@@ -140,6 +148,7 @@ startWSHub(wss);
 startEventEngine();
 startArbitrageMonitor();
 startIntegratedMonitoring();
+startMarginMonitor();
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
 
 const DEFAULT_LEVERAGE_REFRESH_MS = 15 * 60 * 1000;

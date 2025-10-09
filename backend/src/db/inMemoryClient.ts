@@ -9,6 +9,7 @@ type ModelName =
   | 'order'
   | 'fill'
   | 'position'
+  | 'marginSnapshot'
   | 'alert'
   | 'strategy'
   | 'adaptiveThreshold'
@@ -22,6 +23,7 @@ type ModelName =
   | 'userApiKey'
   | 'userSetting'
   | 'leverageConstraint';
+  | 'auditLog';
 
 type ModelStore = Map<ModelName, any[]>;
 
@@ -168,6 +170,8 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     id: randomUUID(),
     startedAt: new Date(),
     stoppedAt: null,
+    haltedAt: null,
+    haltReason: null,
     profileJson: null,
     planJson: null,
     mode: 'paper',
@@ -194,6 +198,12 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     createdAt: new Date(),
     updatedAt: new Date(),
     qty: 0,
+  }),
+  marginSnapshot: () => ({
+    id: randomUUID(),
+    createdAt: new Date(),
+    status: 'ok',
+    utilisationPct: 0,
   }),
   alert: () => ({
     id: randomUUID(),
@@ -257,6 +267,11 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     id: randomUUID(),
     createdAt: new Date(),
     updatedAt: new Date(),
+  auditLog: () => ({
+    id: randomUUID(),
+    createdAt: new Date(),
+    action: 'test',
+    details: null,
   }),
 };
 
@@ -326,6 +341,19 @@ class InMemoryModel {
     return clone(current);
   }
 
+  async updateMany(args: UpdateArgs) {
+    const data = this.store();
+    let count = 0;
+    for (const record of data) {
+      if (whereMatches(record, args.where)) {
+        Object.assign(record, clone(args.data ?? {}));
+        if ('updatedAt' in record) record.updatedAt = new Date();
+        count += 1;
+      }
+    }
+    return { count };
+  }
+
   async findUnique(args: FindUniqueArgs) {
     const record = this.store().find((item) => whereMatches(item, args?.where));
     if (!record) return null;
@@ -383,6 +411,7 @@ export class InMemoryPrismaClient {
   fill: InMemoryModel;
   position: InMemoryModel;
   alert: InMemoryModel;
+  marginSnapshot: InMemoryModel;
   strategy: InMemoryModel;
   adaptiveThreshold: InMemoryModel;
   decisionMemory: InMemoryModel;
@@ -395,6 +424,7 @@ export class InMemoryPrismaClient {
   userApiKey: InMemoryModel;
   userSetting: InMemoryModel;
   leverageConstraint: InMemoryModel;
+  auditLog: InMemoryModel;
 
   constructor() {
     this.store = new Map();
@@ -403,6 +433,7 @@ export class InMemoryPrismaClient {
     this.order = new InMemoryModel('order', this);
     this.fill = new InMemoryModel('fill', this);
     this.position = new InMemoryModel('position', this);
+    this.marginSnapshot = new InMemoryModel('marginSnapshot', this);
     this.alert = new InMemoryModel('alert', this);
     this.strategy = new InMemoryModel('strategy', this);
     this.adaptiveThreshold = new InMemoryModel('adaptiveThreshold', this);
@@ -416,6 +447,7 @@ export class InMemoryPrismaClient {
     this.userApiKey = new InMemoryModel('userApiKey', this);
     this.userSetting = new InMemoryModel('userSetting', this);
     this.leverageConstraint = new InMemoryModel('leverageConstraint', this);
+    this.auditLog = new InMemoryModel('auditLog', this);
   }
 
   _getStore(name: ModelName): any[] {
@@ -432,6 +464,14 @@ export class InMemoryPrismaClient {
 
   async $reset() {
     this.store.clear();
+  }
+
+  async $transaction<T>(operations: Promise<T>[]) {
+    const results: T[] = [];
+    for (const op of operations) {
+      results.push(await op);
+    }
+    return results;
   }
 }
 

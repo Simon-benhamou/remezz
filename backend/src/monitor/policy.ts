@@ -14,7 +14,8 @@ export type PolicyAlert = {
     | 'capacity_breach'
     | 'order_unfilled'
     | 'stale_data'
-    | 'llm_invalid';
+    | 'llm_invalid'
+    | 'margin_risk';
   severity: 'low'|'med'|'high';
   details?: any;
   ts: number;

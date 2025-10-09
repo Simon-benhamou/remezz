@@ -63,7 +63,7 @@ export default function MonitorPage(){
   
   const [wsConnected, setWsConnected] = React.useState(false);
   const [expandedView, setExpandedView] = React.useState(false);
-  const wsRef = React.useRef<WebSocket|null>(null);
+  const wsRef = React.useRef<ReturnType<typeof openWS> | null>(null);
   const [savingAgg, setSavingAgg] = React.useState(false);
 
   // Core data states (Phase 1)
@@ -87,6 +87,7 @@ export default function MonitorPage(){
   const [alerts, setAlerts] = React.useState<any[]>([]);
   const [analytics, setAnalytics] = React.useState<any>(null);
   const [health, setHealth] = React.useState<any>(null);
+  const [marginHealth, setMarginHealth] = React.useState<any>(null);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
   const currentAggressiveness = React.useMemo(() => {
@@ -215,6 +216,10 @@ export default function MonitorPage(){
         }
         
         setStatus(s);
+        try {
+          const margin = await api.getSessionMargin(s.session.id).catch(() => null);
+          if (margin) setMarginHealth(margin);
+        } catch {}
         const sym = s?.session?.symbol || s?.symbol || symbol;
         if (sym) setSymbol(sym);
         
@@ -323,6 +328,23 @@ export default function MonitorPage(){
     return () => { clearInterval(timer); };
   }, [sessionId, loadAnalytics]);
 
+  React.useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const fetchMargin = async () => {
+      try {
+        const margin = await api.getSessionMargin(sessionId);
+        if (!cancelled && margin) setMarginHealth(margin);
+      } catch {}
+    };
+    fetchMargin();
+    const marginTimer = setInterval(fetchMargin, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(marginTimer);
+    };
+  }, [sessionId]);
+
   // Periodic ticker refresh
   React.useEffect(() => {
     if (!symbol) return;
@@ -380,7 +402,7 @@ export default function MonitorPage(){
         setAlerts((prev:any[])=> [msg.data, ...prev].slice(0,50));
         loadAnalytics();
       }
-    }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; }, sessionId);
+    }, (ok)=> setWsConnected(ok), undefined, sessionId);
     wsRef.current = ws;
     return ()=> { try { wsRef.current?.close?.(); } catch {} };
   }, [API_BASE, sessionId, symbol, loadAnalytics]);
@@ -794,6 +816,8 @@ export default function MonitorPage(){
                   symbol={status?.symbol}
                   lastPrice={status?.price}
                   sessionId={status?.session?.id}
+                  margin={marginHealth?.snapshots?.[0]}
+                  marginHistory={marginHealth?.snapshots}
                   onPlan={() => {}}
                 />
               ) : (
