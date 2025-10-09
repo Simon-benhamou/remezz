@@ -11,6 +11,7 @@ import { recordDecisionSnapshot, markDecisionCancelled } from '../learning/decis
 import { getHybridSentiment } from '../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
+import { recordOpsEvent } from '../monitor/ops.js';
 
 // HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
@@ -20,6 +21,17 @@ const CACHE_DURATION_AI = 30 * 60 * 1000; // 30min cache IA (plus long)
 const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
 const CACHE_DURATION_ML = 15 * 60 * 1000; // 15min cache ML
 const waitFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const OPEN_ORDER_STATUS_LIST = [
+  'new', 'NEW',
+  'open', 'OPEN',
+  'partially_filled', 'PARTIALLY_FILLED',
+  'pending', 'PENDING',
+  'accepted', 'ACCEPTED',
+  'working', 'WORKING',
+  'trigger_pending', 'TRIGGER_PENDING'
+];
+const OPEN_ORDER_STATUSES = new Set(OPEN_ORDER_STATUS_LIST.map((status) => status.toLowerCase()));
 
 type AutoUniverseStatus = {
   source: 'dynamic' | 'fallback_dynamic' | 'fallback_static';
@@ -2447,6 +2459,17 @@ export async function checkIntelligentOpportunities(): Promise<void> {
         positions: {
           where: { qty: { gt: 0 } }, // Only open positions
           take: 5
+        },
+        orders: {
+          where: {
+            status: { in: OPEN_ORDER_STATUS_LIST }
+          },
+          select: {
+            id: true,
+            status: true,
+            symbol: true,
+            createdAt: true
+          }
         }
       }
     });
@@ -2476,7 +2499,48 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     const now = new Date();
     // Configurable recent-activity window (hours). Default 3h (was 12h).
     const activityWindowHours = Math.max(1, Number(process.env.SMART_RECENT_ACTIVITY_HOURS || '3'));
-    
+
+    const agent = AgentHub.get(session.id) as any;
+    const hasOpenPosition = Array.isArray(session.positions)
+      && session.positions.some((p: any) => Number(p?.qty || 0) > 0);
+    const hasOpenOrders = Array.isArray(session.orders)
+      && session.orders.some((order: any) => OPEN_ORDER_STATUSES.has(String(order?.status || '').toLowerCase()));
+    const agentBusy = !!(agent && ((agent.pos && Number(agent.pos.qty || 0) > 0) || agent.entering));
+
+    if (hasOpenPosition || hasOpenOrders || agentBusy) {
+      const nextCheck = new Date(now.getTime() + 60 * 60 * 1000); // Re-evaluate in 1h
+      console.log(
+        `⏸️ Session ${session.id}: active trade detected (position=${hasOpenPosition}, orders=${hasOpenOrders}, state=${agent?.state}) — postponing reselection`
+      );
+
+      try {
+        await mergeSessionProfileJson(session.id, {
+          lastScan: now.toISOString(),
+          nextScanDue: nextCheck.toISOString(),
+          pendingRotation: 'active_trade_guard'
+        });
+      } catch (err) {
+        console.warn(`⚠️ Failed to persist active-trade guard for session ${session.id}:`, err);
+      }
+
+      await updateSessionNextCheck(session.id, nextCheck);
+
+      recordOpsEvent({
+        level: 'info',
+        source: 'intelligent_rotation',
+        message: 'skip_due_to_active_trade',
+        sessionId: session.id,
+        symbol: session.symbol,
+        details: {
+          hasOpenPosition,
+          hasOpenOrders,
+          agentState: agent?.state
+        }
+      });
+
+      return;
+    }
+
     // Dynamic min-hold based on last known ADX (from stored analysis). Fallback to 12h.
     // - strong trend (ADX>=25): 10h
     // - moderate trend (20<=ADX<25): 8h

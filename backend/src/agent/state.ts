@@ -61,6 +61,7 @@ export type ActivePosition = {
   mfeR?: number;
   breakeven?: number;
   partialInfo?: { ts: number; price: number } | null;
+  initialStopDistance?: number;
 };
 
 // Advanced Performance Tracking Interfaces
@@ -291,6 +292,7 @@ export class ReboundRejectionAgent {
             trail: [{ ts: now, price: stop }],
             breakeven: entry,
             partialInfo: null,
+            initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
           } as any;
           this.state = 'MANAGE';
           broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
@@ -1012,9 +1014,12 @@ export class ReboundRejectionAgent {
 
     const telemetry = this.computeTelemetry(startTs, placed, { expectedPrice: entry, requestedQty: qty, side });
     const now = Date.now();
+    const executionPrice = placed.avgPrice ?? entry;
+    const initialStopDistance = Math.max(1e-12,
+      Math.abs(executionPrice - stop) || Math.abs(entry - stop) || Math.abs(this.plan.stopDistance));
     this.pos = {
       side,
-      entry: placed.avgPrice ?? entry,
+      entry: executionPrice,
       qty: placed.filledQty,
       stop,
       tp,
@@ -1025,8 +1030,9 @@ export class ReboundRejectionAgent {
       trail: [{ ts: now, price: stop }],
       maeR: 0,
       mfeR: 0,
-      breakeven: placed.avgPrice ?? entry,
+      breakeven: executionPrice,
       partialInfo: null,
+      initialStopDistance,
     };
     if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
       // CRYPTO ADAPTATION: Use 4-5R targets minimum for crypto volatility
@@ -4762,6 +4768,7 @@ export class ReboundRejectionAgent {
         mfeR: 0, // Will be calculated in manage()
         breakeven: entry,
         partialInfo: null,
+        initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
       };
 
       // Update agent state
@@ -4881,21 +4888,29 @@ export class ReboundRejectionAgent {
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
     // ✅ FIX: Validate position exists, reset state if missing (prevents stuck MANAGE state)
     if (!this.pos || !this.plan || !this.profile) {
+      const hadPos = !!this.pos;
+      const hadPlan = !!this.plan;
+      const hadProfile = !!this.profile;
+      const symbol = this.profile?.symbol;
+      this.entering = false;
+      this.pos = null;
+      this.trendReversalContext = null;
+
       console.warn(`⚠️  Agent in MANAGE state but missing position/plan/profile - resetting to SCAN`);
-      
+
       recordOpsEvent({
         level: 'warn',
         source: 'position_validation',
         message: 'manage_without_position',
         sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { 
-          hasPos: !!this.pos, 
-          hasPlan: !!this.plan, 
-          hasProfile: !!this.profile 
+        symbol,
+        details: {
+          hasPos: hadPos,
+          hasPlan: hadPlan,
+          hasProfile: hadProfile
         },
       });
-      
+
       // Reset to SCAN to allow new opportunities
       this.state = 'SCAN';
       broadcast('agent_state', { 
@@ -5530,21 +5545,42 @@ export class ReboundRejectionAgent {
   private async checkPartialExits(price: number, snap: TechnicalSnapshot): Promise<void> {
     if (!this.pos || !this.plan || this.pos.partialTaken) return;
 
-    // ✅ FIX: Use same logic as policy.ts monitoring
-    // Get firstR from plan (should be 2R typically)
-    const firstR = (this.plan?.plan?.risk?.tp?.[0]?.value || this.plan?.rPrices?.[0]?.r || 2.0) as number;
-    
-    const firstTarget = this.pos.tp[0] ?? (
-      this.pos.side === 'buy'
-        ? this.pos.entry + (firstR * this.plan.stopDistance)  // ← FIX: Use firstR multiplier
-        : this.pos.entry - (firstR * this.plan.stopDistance)
-    );
+    const firstR = Number(this.plan?.plan?.risk?.tp?.[0]?.value ?? this.plan?.rPrices?.[0]?.r ?? 2.0) || 2.0;
+    const baseDistance = Math.max(1e-12,
+      this.pos.initialStopDistance ?? Math.abs(this.plan.stopDistance) ?? Math.abs(this.pos.entry - this.pos.stop));
 
-    const hitFirstTarget = this.pos.side === 'buy' ? price >= firstTarget : price <= firstTarget;
+    const computedTarget = this.pos.side === 'buy'
+      ? this.pos.entry + (firstR * baseDistance)
+      : this.pos.entry - (firstR * baseDistance);
 
-    if (hitFirstTarget) {
-      await this.executePartialExit(price, firstTarget, 'first_target');
+    const plannedTarget = this.pos.tp[0] ?? computedTarget;
+    const dir = this.pos.side === 'buy' ? 1 : -1;
+    const realizedR = (dir * (price - this.pos.entry)) / baseDistance;
+    const triggerR = firstR * 0.98; // Trigger slightly before policy kill-switch buffer
+    const priceBeyondTarget = this.pos.side === 'buy'
+      ? price >= plannedTarget * 0.9995
+      : price <= plannedTarget * 1.0005;
+
+    if (realizedR < triggerR && !priceBeyondTarget) {
+      return;
     }
+
+    const rawPartialQty = this.pos.qty * 0.5;
+    const partialQty = Number(rawPartialQty.toFixed(8));
+    if (!(partialQty > 0 && partialQty < this.pos.qty)) {
+      return;
+    }
+
+    const minNotional = Number(getConfig().MIN_ORDER_NOTIONAL_USD || 0);
+    const partialNotional = partialQty * price;
+
+    if (minNotional > 0 && partialNotional < minNotional) {
+      console.log(`Partial exit notional ${partialNotional.toFixed(4)} below minimum ${minNotional} — closing entire position`);
+      await this.exitPosition(price, 'partial_too_small_exit');
+      return;
+    }
+
+    await this.executePartialExit(price, plannedTarget, 'first_target');
   }
 
   private async executePartialExit(price: number, targetPrice: number, reason: string): Promise<void> {
