@@ -929,7 +929,7 @@ export default function SessionsPage(){
         }
         showStopAllConfirm({
           onSuccess: async () => {
-            invalidateSmartly('stop_all', { mode: mode as any });
+            invalidateSmartly('session_stopped', { mode: mode as any });
             await load(true);
           },
         });
