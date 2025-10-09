@@ -1,4 +1,4 @@
-import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot } from './types.js';
+import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot, BrokerPositionMargin, BrokerCorrelatedExposure } from './types.js';
 import { getTicker, getOHLCV } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
 
@@ -6,20 +6,24 @@ import { getConfig } from '../utils/env.js';
 export class PaperBroker implements Broker {
   mode: 'paper'|'live' = 'paper';
   private balanceUsd = 10000; // updated on session start
-  private committedUsd = 0;
+  private marginReservedUsd = 0; // simulated margin currently locked
+  private totalNotionalUsd = 0; // gross notional of open legs (for leverage cap)
   private feesBps = 5; // 0.05%
   private slippageToSpread = 0.8; // 0.8 * spread
+  private positions: Map<string, PaperLeg[]> = new Map(); // track open paper legs per symbol
 
   constructor(startUsd?: number) {
     if (startUsd && startUsd > 0) this.balanceUsd = startUsd;
   }
 
   async balance(): Promise<BrokerMarginSnapshot> {
-    const freeUsd = Math.max(0, this.balanceUsd - this.committedUsd);
+    const freeUsd = Math.max(0, this.balanceUsd - this.marginReservedUsd);
     const equityUsd = this.balanceUsd;
-    const committedUsd = this.committedUsd;
+    const committedUsd = this.marginReservedUsd;
     const maintenanceMarginUsd = committedUsd > 0 ? committedUsd * 0.05 : undefined;
     const marginRatio = equityUsd > 0 ? committedUsd / equityUsd : undefined;
+    const positions = this.snapshotPositions();
+    const correlatedExposure = this.buildCorrelatedExposure(positions);
     return {
       freeUsd,
       equityUsd,
@@ -27,6 +31,8 @@ export class PaperBroker implements Broker {
       maintenanceMarginUsd,
       marginRatio,
       marginMode: 'paper',
+      positions: positions.length ? positions : undefined,
+      correlatedExposure: correlatedExposure,
       timestamp: Date.now(),
     };
   }
@@ -63,13 +69,12 @@ export class PaperBroker implements Broker {
     // Margin capacity check: allow at most balanceUsd * leverage minus already committed
     const lev = Math.max(1, Math.min(10, o.leverage || 1));
     const maxNotional = this.balanceUsd * lev;
-    const freeCapacity = Math.max(0, maxNotional - this.committedUsd);
-    if (notional > freeCapacity) {
+    const notionalIncrease = this.previewNotionalIncrease(o.symbol, o.side, qty, px);
+    const freeCapacity = Math.max(0, maxNotional - this.totalNotionalUsd);
+    if (notionalIncrease > freeCapacity + 1e-9) {
       const id = `paper_rejected_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
       return { ...o, id, status: 'rejected', ts: Date.now() } as PlacedOrder;
     }
-
-    this.committedUsd += notional; // reserve margin capacity
 
     const id = `paper_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
     const out: PlacedOrder = {
@@ -86,6 +91,7 @@ export class PaperBroker implements Broker {
 
     // Simplified PnL handling will be done by agent engine on exit
     this.balanceUsd -= fee; // fees paid
+    this.applyFilledTrade(o.symbol, o.side, qty, px, lev);
     return out;
   }
 
@@ -94,7 +100,133 @@ export class PaperBroker implements Broker {
   // Release reserved notional on position close (approximate)
   releaseCommitted(usd: number) {
     if (!Number.isFinite(usd)) return;
-    this.committedUsd = Math.max(0, this.committedUsd - Math.max(0, usd));
+    this.marginReservedUsd = Math.max(0, this.marginReservedUsd - Math.max(0, usd));
+  }
+
+  private previewNotionalIncrease(symbol: string, side: 'buy'|'sell', qty: number, price: number): number {
+    if (!(qty > 0) || !(price > 0)) return 0;
+    const legs = this.positions.get(symbol);
+    if (!legs || !legs.length) return qty * price;
+    const opposite = side === 'buy' ? 'short' : 'long';
+    const oppositeQty = legs
+      .filter((leg) => leg.side === opposite)
+      .reduce((sum, leg) => sum + leg.qty, 0);
+    const additionalQty = Math.max(0, qty - oppositeQty);
+    return additionalQty * price;
+  }
+
+  private applyFilledTrade(symbol: string, side: 'buy'|'sell', qty: number, price: number, leverage: number) {
+    if (!(qty > 0) || !(price > 0)) return;
+    const legs = this.positions.get(symbol) ?? [];
+    const opposite = side === 'buy' ? 'short' : 'long';
+    const aligned = side === 'buy' ? 'long' : 'short';
+    let remaining = qty;
+    const EPS = 1e-8;
+
+    // First, offset opposite legs (closing positions)
+    for (let i = 0; i < legs.length && remaining > EPS; ) {
+      const leg = legs[i];
+      if (leg.side !== opposite || leg.qty <= EPS) {
+        i++;
+        continue;
+      }
+      const closedQty = Math.min(leg.qty, remaining);
+      const proportion = closedQty / leg.qty;
+      const marginRelease = leg.marginUsd * proportion;
+      const notionalRelease = leg.notionalUsd * proportion;
+
+      leg.qty -= closedQty;
+      leg.marginUsd -= marginRelease;
+      leg.notionalUsd -= notionalRelease;
+      remaining -= closedQty;
+
+      this.marginReservedUsd = Math.max(0, this.marginReservedUsd - marginRelease);
+      this.totalNotionalUsd = Math.max(0, this.totalNotionalUsd - notionalRelease);
+
+      if (leg.qty <= EPS || leg.notionalUsd <= EPS) {
+        legs.splice(i, 1);
+      } else {
+        i++;
+      }
+    }
+
+    // Any remaining quantity opens / adds to aligned side exposure
+    if (remaining > EPS) {
+      const notional = remaining * price;
+      const margin = notional / Math.max(1, leverage);
+      legs.push({
+        side: aligned,
+        qty: remaining,
+        notionalUsd: notional,
+        marginUsd: margin,
+      });
+      this.marginReservedUsd += margin;
+      this.totalNotionalUsd += notional;
+    }
+
+    if (legs.length) this.positions.set(symbol, legs);
+    else this.positions.delete(symbol);
+
+    this.marginReservedUsd = Math.max(0, this.marginReservedUsd);
+    this.totalNotionalUsd = Math.max(0, this.totalNotionalUsd);
+  }
+
+  private snapshotPositions(): BrokerPositionMargin[] {
+    const positions: BrokerPositionMargin[] = [];
+    for (const [symbol, legs] of this.positions.entries()) {
+      for (const leg of legs) {
+        if (!(leg.qty > 0) || !(leg.notionalUsd > 0)) continue;
+        const entryPrice = leg.notionalUsd / leg.qty;
+        const leverage = leg.marginUsd > 0 ? leg.notionalUsd / leg.marginUsd : undefined;
+        positions.push({
+          symbol,
+          side: leg.side,
+          qty: leg.qty,
+          notionalUsd: leg.notionalUsd,
+          entryPrice,
+          leverage,
+          initialMarginUsd: leg.marginUsd,
+        });
+      }
+    }
+    return positions;
+  }
+
+  private buildCorrelatedExposure(positions: BrokerPositionMargin[]): Record<string, BrokerCorrelatedExposure> | undefined {
+    if (!positions.length) return undefined;
+    const map: Record<string, BrokerCorrelatedExposure> = {};
+    for (const pos of positions) {
+      const notional = Math.abs(pos.notionalUsd || 0);
+      if (!(notional > 0)) continue;
+      const [baseRaw, quoteRaw] = pos.symbol.includes('/') ? pos.symbol.split('/') : [pos.symbol, undefined];
+      const base = baseRaw;
+      const quote = quoteRaw ? quoteRaw.split(':')[0] : undefined;
+      const key = base || pos.symbol;
+      if (!map[key]) {
+        map[key] = {
+          key,
+          base,
+          quote,
+          totalNotionalUsd: 0,
+          longNotionalUsd: 0,
+          shortNotionalUsd: 0,
+          positions: [],
+        };
+      }
+      const bucket = map[key];
+      bucket.totalNotionalUsd += notional;
+      if (pos.side === 'long') bucket.longNotionalUsd += notional;
+      else bucket.shortNotionalUsd += notional;
+      if (!bucket.positions.includes(pos.symbol)) bucket.positions.push(pos.symbol);
+    }
+
+    const totalExposure = Object.values(map).reduce((sum, entry) => sum + entry.totalNotionalUsd, 0);
+    if (totalExposure > 0) {
+      for (const entry of Object.values(map)) {
+        entry.concentrationPct = (entry.totalNotionalUsd / totalExposure) * 100;
+      }
+    }
+    return map;
   }
 
   async syncProtective(_params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number | number[] }) {
@@ -140,3 +272,10 @@ export class PaperBroker implements Broker {
     }
   }
 }
+
+type PaperLeg = {
+  side: 'long'|'short';
+  qty: number;
+  notionalUsd: number;
+  marginUsd: number;
+};
