@@ -207,6 +207,24 @@ model Position {
   @@index([sessionId])
 }
 
+model MarginSnapshot {
+  id                           String        @id @default(cuid())
+  session                      AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId                    String
+  symbol                       String?
+  status                       String
+  utilisationPct               Float
+  maintenanceMarginUsd         Float?
+  marginRatio                  Float?
+  worstLiquidationDistancePct  Float?
+  concentration                Json?
+  recommendedActions           Json?
+  telemetry                    Json?
+  createdAt                    DateTime      @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
 model SessionKpi {
   session          AgentSession @relation(fields: [sessionId], references: [id])
   sessionId        String @id

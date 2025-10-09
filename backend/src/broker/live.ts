@@ -1,4 +1,4 @@
-import { Broker, NewOrder, PlacedOrder } from './types.js';
+import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot, BrokerPositionMargin, BrokerCorrelatedExposure } from './types.js';
 import { getUserExchange, resolveSymbol } from '../exchange/ccxtClient.js';
 import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
@@ -80,6 +80,7 @@ export class LiveBroker implements Broker {
 
   async balance() {
     // 🚀 WebSocket for Binance (0 weight)
+    let ex: any;
     let b: any;
     const userCredentials = await getUserCredentials(this.userId);
 
@@ -97,7 +98,7 @@ export class LiveBroker implements Broker {
           };
           console.log(`✅ [WebSocket] Balance fetched in broker - 0 weight`);
         } else {
-          const ex = await this.getExchange();
+          ex = await this.getExchange();
           b = await runExclusiveBalanceFetch(this.userId, 'USDT', () => ex.fetchBalance());
           console.log(`⚠️ [REST] Balance fetched in broker - 40 weight`);
           try {
@@ -111,7 +112,7 @@ export class LiveBroker implements Broker {
         }
       } catch (error) {
         console.warn('⚠️ WebSocket balance failed in broker, using REST:', error);
-        const ex = await this.getExchange();
+        ex = await this.getExchange();
         const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
         b = await runExclusiveBalanceFetch(this.userId, 'USDT', () => ex.fetchBalance());
         try {
@@ -124,7 +125,7 @@ export class LiveBroker implements Broker {
         } catch {}
       }
     } else {
-      const ex = await this.getExchange();
+      ex = await this.getExchange();
       b = await ex.fetchBalance();
     }
     
@@ -144,6 +145,13 @@ export class LiveBroker implements Broker {
     let marginBal = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value);
     let positionCost = num(raw?.total_position_cost);
     let openOrderMargin: number | undefined;
+    let maintenanceUsd = num(raw?.total_maint_margin)
+      ?? num(raw?.totalMaintenanceMargin)
+      ?? num(raw?.totalMaintMargin)
+      ?? num(raw?.maintMargin);
+    let marginRatio = num(raw?.margin_ratio) ?? num(raw?.marginRatio);
+    let marginLevel = num(raw?.margin_level) ?? num(raw?.marginLevel);
+    let marginMode = typeof raw?.margin_mode === 'string' ? String(raw.margin_mode) : undefined;
 
     for (const src of infoSources) {
       if (avail === undefined) {
@@ -168,6 +176,26 @@ export class LiveBroker implements Broker {
       if (openOrderMargin === undefined) {
         openOrderMargin = num(src?.total_open_order_margin)
           ?? num(src?.totalOpenOrderInitialMargin);
+      }
+      if (maintenanceUsd === undefined) {
+        maintenanceUsd = num(src?.total_maint_margin)
+          ?? num(src?.totalMaintenanceMargin)
+          ?? num(src?.totalMaintMargin)
+          ?? num(src?.maintMargin);
+      }
+      if (marginRatio === undefined) {
+        marginRatio = num(src?.margin_ratio)
+          ?? num(src?.marginRatio)
+          ?? num(src?.positionMarginRatio)
+          ?? num(src?.info?.margin_ratio);
+      }
+      if (marginLevel === undefined) {
+        marginLevel = num(src?.margin_level)
+          ?? num(src?.marginLevel)
+          ?? num(src?.info?.margin_level);
+      }
+      if (!marginMode && typeof src?.margin_mode === 'string') {
+        marginMode = String(src.margin_mode);
       }
     }
 
@@ -201,11 +229,156 @@ export class LiveBroker implements Broker {
       });
     }
 
-    return {
+    const pickNum = (...values: any[]) => {
+      for (const value of values) {
+        const parsed = num(value);
+        if (parsed !== undefined) return parsed;
+      }
+      return undefined;
+    };
+
+    const positions: BrokerPositionMargin[] = [];
+    const exposureMap = new Map<string, BrokerCorrelatedExposure>();
+    let maintenanceFromPositions = 0;
+
+    const recordExposure = (
+      key: string,
+      params: { base?: string; quote?: string; notional?: number; side: 'long'|'short'; symbol: string }
+    ) => {
+      const notional = Number(params.notional || 0);
+      if (!(notional > 0)) return;
+      const current = exposureMap.get(key) || {
+        key,
+        base: params.base,
+        quote: params.quote,
+        totalNotionalUsd: 0,
+        longNotionalUsd: 0,
+        shortNotionalUsd: 0,
+        positions: [] as string[],
+      };
+      if (!current.base && params.base) current.base = params.base;
+      if (!current.quote && params.quote) current.quote = params.quote;
+      current.totalNotionalUsd += notional;
+      if (params.side === 'long') current.longNotionalUsd += notional; else current.shortNotionalUsd += notional;
+      if (!current.positions.includes(params.symbol)) current.positions.push(params.symbol);
+      exposureMap.set(key, current);
+    };
+
+    if (!ex) {
+      try { ex = await this.getExchange(); } catch {}
+    }
+
+    if (ex && typeof (ex as any).fetchPositions === 'function') {
+      try {
+        const fetched = await (ex as any).fetchPositions().catch(() => []);
+        if (Array.isArray(fetched)) {
+          for (const pos of fetched) {
+            const symbolRaw = pos?.symbol || pos?.info?.symbol || pos?.info?.symbolName || '';
+            const symbol = typeof symbolRaw === 'string' && symbolRaw.length ? symbolRaw : (pos?.id || 'UNKNOWN');
+            const contracts = pickNum(pos?.contracts, pos?.size, pos?.positionAmt, pos?.amount, pos?.qty);
+            const absQty = contracts !== undefined ? Math.abs(contracts) : pickNum(pos?.quantity, pos?.baseSize) || 0;
+            if (!absQty || !(absQty > 0)) continue;
+            let side: 'long'|'short' = 'long';
+            const declaredSide = typeof pos?.side === 'string' ? pos.side.toLowerCase() : '';
+            if (declaredSide.includes('short') || declaredSide.includes('sell')) side = 'short';
+            else if (declaredSide.includes('long') || declaredSide.includes('buy')) side = 'long';
+            else if (contracts !== undefined && contracts < 0) side = 'short';
+
+            const entryPrice = pickNum(pos?.entryPrice, pos?.avgEntryPrice, pos?.average, pos?.info?.avgEntryPrice, pos?.info?.entryPrice);
+            const markPrice = pickNum(pos?.markPrice, pos?.lastPrice, pos?.info?.markPrice, pos?.info?.lastPrice, pos?.info?.indexPrice);
+            let notional = pickNum(pos?.notional, pos?.notionalUsd, pos?.notionalValue, pos?.positionValue, pos?.info?.notionalValue, pos?.info?.positionValue);
+            if (notional === undefined && markPrice !== undefined) notional = absQty * markPrice;
+            if (notional === undefined && entryPrice !== undefined) notional = absQty * entryPrice;
+            const liquidationPrice = pickNum(pos?.liquidationPrice, pos?.liquidation, pos?.liqPrice, pos?.liquidationPrice1, pos?.info?.liquidationPrice, pos?.info?.liqPrice);
+            const maintenance = pickNum(pos?.maintenanceMargin, pos?.maintMargin, pos?.info?.maintMargin, pos?.info?.maintenanceMargin);
+            const initialMargin = pickNum(pos?.initialMargin, pos?.initialMarginUsd, pos?.marginInitial, pos?.info?.initialMargin, pos?.info?.positionInitialMargin);
+            const leverage = pickNum(pos?.leverage, pos?.info?.leverage, pos?.info?.marginLeverage);
+            const unrealized = pickNum(pos?.unrealizedPnl, pos?.unrealizedPnlUsd, pos?.info?.unrealizedProfit, pos?.info?.unrealisedPnl);
+            const positionMarginRatio = pickNum(pos?.marginRatio, pos?.info?.marginRatio, pos?.info?.positionMarginRatio);
+
+            const market = symbol && ex?.markets ? ex.markets[symbol] : undefined;
+            const base = market?.base || (typeof symbol === 'string' && symbol.includes('/') ? symbol.split('/')[0] : undefined);
+            const quote = market?.quote || (typeof symbol === 'string' && symbol.includes('/') ? symbol.split('/')[1]?.split(':')[0] : undefined);
+
+            if (Number.isFinite(maintenance)) maintenanceFromPositions += Math.max(Number(maintenance), 0);
+
+            const position: BrokerPositionMargin = {
+              symbol,
+              side,
+              qty: absQty,
+              notionalUsd: Number.isFinite(notional) ? Math.abs(Number(notional)) : undefined,
+              entryPrice: entryPrice,
+              markPrice: markPrice,
+              liquidationPrice: liquidationPrice,
+              maintenanceMarginUsd: Number.isFinite(maintenance) ? Number(maintenance) : undefined,
+              initialMarginUsd: Number.isFinite(initialMargin) ? Number(initialMargin) : undefined,
+              leverage: Number.isFinite(leverage) ? Number(leverage) : undefined,
+              unrealizedPnlUsd: Number.isFinite(unrealized) ? Number(unrealized) : undefined,
+              marginRatio: Number.isFinite(positionMarginRatio) ? Number(positionMarginRatio) : undefined,
+              raw: pos,
+            };
+            positions.push(position);
+
+            const exposureKey = base || symbol;
+            recordExposure(exposureKey, {
+              base,
+              quote,
+              notional: position.notionalUsd,
+              side,
+              symbol,
+            });
+          }
+        }
+      } catch (err) {
+        console.debug('⚠️ Failed to fetch positions for margin snapshot:', err);
+      }
+    }
+
+    if (!Number.isFinite(maintenanceUsd) && maintenanceFromPositions > 0) {
+      maintenanceUsd = maintenanceFromPositions;
+    } else if (Number.isFinite(maintenanceUsd) && maintenanceFromPositions > 0) {
+      maintenanceUsd = Math.max(Number(maintenanceUsd), maintenanceFromPositions);
+    }
+
+    if ((marginRatio === undefined || Number.isNaN(Number(marginRatio))) && normalizedEquityUsd > 0) {
+      if (Number.isFinite(maintenanceUsd)) {
+        marginRatio = Number(maintenanceUsd) / normalizedEquityUsd;
+      } else {
+        marginRatio = committedUsd / normalizedEquityUsd;
+      }
+    }
+
+    if ((marginLevel === undefined || Number.isNaN(Number(marginLevel))) && normalizedEquityUsd > 0) {
+      marginLevel = normalizedEquityUsd / Math.max(committedUsd || normalizedEquityUsd, 1e-8);
+    }
+
+    let correlatedExposure: Record<string, BrokerCorrelatedExposure> | undefined;
+    if (exposureMap.size) {
+      const totalExposure = Array.from(exposureMap.values()).reduce((acc, item) => acc + item.totalNotionalUsd, 0);
+      correlatedExposure = {};
+      exposureMap.forEach((value, key) => {
+        const concentration = totalExposure > 0 ? (value.totalNotionalUsd / totalExposure) * 100 : 0;
+        correlatedExposure![key] = {
+          ...value,
+          concentrationPct: Number.isFinite(concentration) ? concentration : undefined,
+        };
+      });
+    }
+
+    const snapshot: BrokerMarginSnapshot = {
       freeUsd: normalizedFreeUsd,
       equityUsd: normalizedEquityUsd,
       committedUsd,
+      maintenanceMarginUsd: Number.isFinite(maintenanceUsd) ? Number(maintenanceUsd) : undefined,
+      marginRatio: Number.isFinite(marginRatio) ? Number(marginRatio) : undefined,
+      marginLevel: Number.isFinite(marginLevel) ? Number(marginLevel) : undefined,
+      marginMode,
+      positions: positions.length ? positions : undefined,
+      correlatedExposure,
+      timestamp: Date.now(),
     };
+
+    return snapshot;
   }
 
   async place(o: NewOrder): Promise<PlacedOrder> {

@@ -147,6 +147,14 @@ export default function DashboardPage(){
   }, [mode, loadOps]);
   
   const globalHealth = getGlobalHealth();
+  const marginOverview = opsMetrics?.margin;
+  const marginFlag = marginOverview
+    ? marginOverview.critical
+      ? { label: 'Critical', color: '#ff4d4f' }
+      : marginOverview.warn
+        ? { label: 'Elevated', color: '#faad14' }
+        : { label: 'Healthy', color: '#52c41a' }
+    : null;
   
   return (
     <div style={{ padding: '24px', background: '#f5f5f5', minHeight: '100vh' }}>
@@ -331,7 +339,79 @@ export default function DashboardPage(){
           </Card>
         </Col>
       </Row>
-      
+
+      {marginOverview && (
+        <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
+          <Col xs={24} lg={12}>
+            <Card
+              title={
+                <Space>
+                  <WarningOutlined style={{ color: marginFlag?.color || '#0ea5e9' }} />
+                  Margin health
+                </Space>
+              }
+              extra={marginFlag ? <Tag color={marginFlag.color}>{marginFlag.label}</Tag> : null}
+            >
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div>
+                  <Text type="secondary">Average utilisation</Text>
+                  <Progress
+                    percent={Number.isFinite(marginOverview.averageUtilisationPct)
+                      ? Number(marginOverview.averageUtilisationPct.toFixed(1))
+                      : 0}
+                    strokeColor={marginFlag?.color || '#0ea5e9'}
+                    showInfo
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: 12 }}>
+                  <span>{marginOverview.tracked || 0} sessions monitored</span>
+                  <span>
+                    {marginOverview.warn || 0} warn · {marginOverview.critical || 0} critical
+                  </span>
+                </div>
+              </Space>
+            </Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card
+              title={
+                <Space>
+                  <ExclamationCircleOutlined style={{ color: '#f97316' }} />
+                  Sessions needing downsizing
+                </Space>
+              }
+            >
+              {Array.isArray(marginOverview.worstSessions) && marginOverview.worstSessions.length ? (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {marginOverview.worstSessions.map((row: any) => (
+                    <Card key={`${row.sessionId}_${row.symbol}`} size="small" style={{ background: '#f8fafc' }}>
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+                          <Text strong>{row.symbol || row.sessionId}</Text>
+                          <Tag color={row.status === 'critical' ? 'red' : 'orange'}>{row.status.toUpperCase()}</Tag>
+                        </Space>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#475569' }}>
+                          <span>Utilisation</span>
+                          <span>{Number(row.utilisationPct || 0).toFixed(1)}%</span>
+                        </div>
+                        {Number.isFinite(row.worstLiquidationDistancePct) && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#475569' }}>
+                            <span>Liquidation buffer</span>
+                            <span>{Number(row.worstLiquidationDistancePct).toFixed(2)}%</span>
+                          </div>
+                        )}
+                      </Space>
+                    </Card>
+                  ))}
+                </Space>
+              ) : (
+                <div style={{ color: '#94a3b8' }}>All sessions within safe margins.</div>
+              )}
+            </Card>
+          </Col>
+        </Row>
+      )}
+
       {/* Active Agents Grid */}
       <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={16}>

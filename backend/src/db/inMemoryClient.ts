@@ -9,6 +9,7 @@ type ModelName =
   | 'order'
   | 'fill'
   | 'position'
+  | 'marginSnapshot'
   | 'alert'
   | 'strategy'
   | 'adaptiveThreshold'
@@ -194,6 +195,12 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     updatedAt: new Date(),
     qty: 0,
   }),
+  marginSnapshot: () => ({
+    id: randomUUID(),
+    createdAt: new Date(),
+    status: 'ok',
+    utilisationPct: 0,
+  }),
   alert: () => ({
     id: randomUUID(),
     createdAt: new Date(),
@@ -377,6 +384,7 @@ export class InMemoryPrismaClient {
   fill: InMemoryModel;
   position: InMemoryModel;
   alert: InMemoryModel;
+  marginSnapshot: InMemoryModel;
   strategy: InMemoryModel;
   adaptiveThreshold: InMemoryModel;
   decisionMemory: InMemoryModel;
@@ -396,6 +404,7 @@ export class InMemoryPrismaClient {
     this.order = new InMemoryModel('order', this);
     this.fill = new InMemoryModel('fill', this);
     this.position = new InMemoryModel('position', this);
+    this.marginSnapshot = new InMemoryModel('marginSnapshot', this);
     this.alert = new InMemoryModel('alert', this);
     this.strategy = new InMemoryModel('strategy', this);
     this.adaptiveThreshold = new InMemoryModel('adaptiveThreshold', this);
