@@ -84,7 +84,7 @@ export class PaperBroker implements Broker {
     this.committedUsd = Math.max(0, this.committedUsd - Math.max(0, usd));
   }
 
-  async syncProtective(_params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number }) {
+  async syncProtective(_params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number | number[] }) {
     return {};
   }
 

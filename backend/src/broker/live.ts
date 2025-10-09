@@ -129,15 +129,47 @@ export class LiveBroker implements Broker {
     }
     
     const raw = Array.isArray(b?.info?.result?.data) ? b.info.result.data[0] : undefined;
+    const infoSources: any[] = [];
+    if (raw) infoSources.push(raw);
+    if (b?.info && !infoSources.includes(b.info)) infoSources.push(b.info);
+    const nestedInfo = (b?.info as any)?.info;
+    if (nestedInfo && !infoSources.includes(nestedInfo)) infoSources.push(nestedInfo);
 
     const num = (v: any) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : undefined;
     };
 
-    const avail = num(raw?.total_available_balance);
-    const marginBal = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value);
-    const positionCost = num(raw?.total_position_cost);
+    let avail = num(raw?.total_available_balance);
+    let marginBal = num(raw?.total_margin_balance) ?? num(raw?.total_collateral_value);
+    let positionCost = num(raw?.total_position_cost);
+    let openOrderMargin: number | undefined;
+
+    for (const src of infoSources) {
+      if (avail === undefined) {
+        avail = num(src?.total_available_balance)
+          ?? num(src?.availableBalance)
+          ?? num(src?.maxWithdrawAmount)
+          ?? num(src?.totalAvailableBalance);
+      }
+      if (marginBal === undefined) {
+        marginBal = num(src?.total_margin_balance)
+          ?? num(src?.total_collateral_value)
+          ?? num(src?.totalMarginBalance)
+          ?? num(src?.totalWalletBalance)
+          ?? num(src?.totalCrossWalletBalance);
+      }
+      if (positionCost === undefined) {
+        positionCost = num(src?.total_position_cost)
+          ?? num(src?.totalPositionInitialMargin)
+          ?? num(src?.totalInitialMargin)
+          ?? num(src?.totalMaintMargin);
+      }
+      if (openOrderMargin === undefined) {
+        openOrderMargin = num(src?.total_open_order_margin)
+          ?? num(src?.totalOpenOrderInitialMargin);
+      }
+    }
 
     // Fallbacks to legacy spot fields if derivatives-specific fields are absent.
     const fallbackTotal = (b?.total?.USDT ?? 0) + (b?.total?.USD ?? 0);
@@ -145,9 +177,18 @@ export class LiveBroker implements Broker {
 
     const equityUsd = marginBal ?? fallbackTotal;
     const freeUsd = avail ?? fallbackFree;
-    let committedUsd = positionCost ?? (Number.isFinite(equityUsd) && Number.isFinite(freeUsd)
+    const inferredCommit = (Number.isFinite(equityUsd) && Number.isFinite(freeUsd))
       ? Math.max(0, equityUsd - freeUsd)
-      : 0);
+      : 0;
+    const baseCommitted = positionCost ?? inferredCommit;
+    const ordersCommitted = Number.isFinite(openOrderMargin) ? Math.max(openOrderMargin!, 0) : 0;
+    let committedUsd = Math.max(0, baseCommitted);
+    if (ordersCommitted > 0) {
+      committedUsd = Math.max(committedUsd, (positionCost ?? 0) + ordersCommitted);
+    }
+    if (Number.isFinite(equityUsd)) {
+      committedUsd = Math.min(committedUsd, Math.max(0, Number(equityUsd)));
+    }
     if (!Number.isFinite(committedUsd)) committedUsd = 0;
 
     const normalizedFreeUsd = Number.isFinite(freeUsd) ? freeUsd : 0;
@@ -352,18 +393,23 @@ export class LiveBroker implements Broker {
     return { fillableQty, impactPct, minQty };
   }
 
-  async syncProtective(params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number; slOrderId?: string|null; tpOrderId?: string|null }) {
+  async syncProtective(params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number | number[]; slOrderId?: string|null; tpOrderId?: string|null }) {
     const ex = await this.getExchange();
     const symbol = await resolveSymbol(params.symbol);
     const reduceSide = params.side === 'buy' ? 'sell' : 'buy';
     const result: { slOrderId?: string; tpOrderId?: string } = {};
+    const tpLevels = Array.isArray(params.takeProfit)
+      ? params.takeProfit.filter(v => typeof v === 'number' && Number.isFinite(v))
+      : (typeof params.takeProfit === 'number' && Number.isFinite(params.takeProfit) ? [params.takeProfit] : []);
+    const primaryTp = tpLevels[0];
     if (params.slOrderId) {
       try { await ex.cancelOrder(params.slOrderId, symbol).catch(()=>{}); } catch {}
     }
     if (params.tpOrderId) {
       try { await ex.cancelOrder(params.tpOrderId, symbol).catch(()=>{}); } catch {}
     }
-    if (params.stopLoss) {
+    const stopLossValid = params.stopLoss !== undefined && params.stopLoss !== null && Number.isFinite(Number(params.stopLoss));
+    if (stopLossValid && params.qty > 0) {
       try {
         const slParams: any = { reduceOnly: true, stopPrice: params.stopLoss, triggerPrice: params.stopLoss };
         if (String(ex.id).toLowerCase() === 'cryptocom') slParams.type = 'stop_market';
@@ -371,11 +417,11 @@ export class LiveBroker implements Broker {
         result.slOrderId = String(slo?.id || slo?.clientOrderId || '');
       } catch {}
     }
-    if (params.takeProfit) {
+    if (primaryTp !== undefined && params.qty > 0) {
       try {
-        const tpParams: any = { reduceOnly: true, takeProfitPrice: params.takeProfit };
+        const tpParams: any = { reduceOnly: true, takeProfitPrice: primaryTp };
         if (String(ex.id).toLowerCase() === 'cryptocom') tpParams.type = 'take_profit_limit';
-        const tpo = await ex.createOrder(symbol, 'limit', reduceSide, params.qty, params.takeProfit, tpParams);
+        const tpo = await ex.createOrder(symbol, 'limit', reduceSide, params.qty, primaryTp, tpParams);
         result.tpOrderId = String(tpo?.id || tpo?.clientOrderId || '');
       } catch {}
     }

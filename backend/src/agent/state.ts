@@ -4826,12 +4826,13 @@ export class ReboundRejectionAgent {
         return;
       }
 
+      const primaryTp = Array.isArray(this.pos.tp) ? this.pos.tp.find(tp => typeof tp === 'number' && Number.isFinite(tp)) : this.pos.tp;
       const params = {
         symbol: this.profile.symbol,
         side: this.pos.side,
         qty: this.pos.qty,
         stopLoss: this.pos.stop,
-        takeProfit: this.pos.tp,
+        takeProfit: primaryTp,
         slOrderId: this.pos.slOrderId || null,
         tpOrderId: this.pos.tpOrderId || null
       };
@@ -5116,6 +5117,13 @@ export class ReboundRejectionAgent {
       // Calculate realized P&L
       const realizedPnl = this.calculateRealizedPnL(price);
 
+      const protectiveSnapshot = {
+        slOrderId: this.pos.slOrderId || null,
+        tpOrderId: this.pos.tpOrderId || null,
+        qty: this.pos.qty,
+        side: this.pos.side as 'buy' | 'sell',
+      };
+
       // Place exit order
       const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
       const exitOrder = await this.broker.place({
@@ -5185,6 +5193,28 @@ export class ReboundRejectionAgent {
             mfeR: this.pos.mfeR
           }
         });
+
+        try {
+          await (this.broker as any).syncProtective?.({
+            symbol: this.profile.symbol,
+            side: protectiveSnapshot.side,
+            qty: protectiveSnapshot.qty,
+            stopLoss: undefined,
+            takeProfit: undefined,
+            slOrderId: protectiveSnapshot.slOrderId,
+            tpOrderId: protectiveSnapshot.tpOrderId,
+          });
+        } catch (cancelError) {
+          console.warn(`Failed to cancel protective orders after exit for ${this.profile.symbol}:`, cancelError);
+          recordOpsEvent({
+            level: 'warn',
+            source: 'protective_orders',
+            message: 'protective_orders_cleanup_failed',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: { error: String(cancelError) },
+          });
+        }
 
         // Clear position and update state
         this.pos = null;
