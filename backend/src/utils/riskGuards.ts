@@ -84,7 +84,8 @@ export function computeLeverageGuardForSymbol(params: {
     return { cap: null, reason: null, riskLevel: 'normal' };
   }
 
-  const finalCap = Math.max(1, Math.min(10, Number(cap.toFixed(2))));
+  const boundedCap = Math.max(1, Math.min(10, cap));
+  const finalCap = Math.round(boundedCap * 100) / 100;
   const reason = reasons.length ? Array.from(new Set(reasons)).join('; ') : null;
   return { cap: finalCap, reason, riskLevel };
 }
