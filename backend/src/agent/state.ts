@@ -4083,13 +4083,51 @@ export class ReboundRejectionAgent {
 
   /**
    * Get comprehensive trading diagnostics for frontend display
-   */
+  */
   public async getDiagnostics(): Promise<any> {
     const cfg = getConfig();
+    const symbol = this.profile?.symbol;
+    const defaultTrigger = {
+      entryReady: false,
+      phase: 'warming',
+      bias: this.plan?.bias || 'none',
+      price: 0,
+      zone: this.plan?.zone ? { ...this.plan.zone } : null,
+      inZone: false,
+      confirmationOk: false,
+      momentumOk: false,
+      qualityOk: false,
+      profitOk: false,
+      tp1ProfitPct: 0,
+      minProfitPct: cfg.MIN_TRADE_PROFIT_PCT,
+      dir: this.plan?.bias === 'short' ? -1 : 1,
+    };
+
+    if (!symbol) {
+      const warmupDetails = { last: 0, volume: 0, volumeMA: 0 };
+      return {
+        canTrade: false,
+        reason: 'profile.symbol_unset',
+        errorCode: 'profile.symbol_unset',
+        warmup: warmupDetails,
+        checks: {
+          marketData: {
+            status: 'FAIL',
+            code: 'profile.symbol_unset',
+            reason: 'no_symbol_assigned',
+            details: warmupDetails,
+          },
+        },
+        summary: { totalChecks: 1, passed: 0, failed: 1, partial: 0, rejected: 0 },
+        trigger: defaultTrigger,
+        timestamp: Date.now(),
+      };
+    }
+
     try {
       const snapshotFetcher = typeof (this as any).getDiagnosticSnapshot === 'function'
         ? (this as any).getDiagnosticSnapshot.bind(this)
-        : async () => buildTechSnapshot(this.profile?.symbol || '');
+        : async () => buildTechSnapshot(symbol);
       const snap = await snapshotFetcher();
       // Guard: if market data is not ready (cold WS or synthetic), avoid incoherent diagnostics
       const vol = Number((snap as any)?.volume || 0);
@@ -4112,21 +4150,7 @@ export class ReboundRejectionAgent {
             },
           },
           summary: { totalChecks: 1, passed: 0, failed: 1, partial: 0, rejected: 0 },
-          trigger: {
-            entryReady: false,
-            phase: 'warming',
-            bias: this.plan?.bias || 'none',
-            price: lastPx,
-            zone: this.plan?.zone ? { ...this.plan.zone } : null,
-            inZone: false,
-            confirmationOk: false,
-            momentumOk: false,
-            qualityOk: false,
-            profitOk: false,
-            tp1ProfitPct: 0,
-            minProfitPct: cfg.MIN_TRADE_PROFIT_PCT,
-            dir: this.plan?.bias === 'short' ? -1 : 1,
-          },
+          trigger: { ...defaultTrigger, price: lastPx },
           timestamp: Date.now()
         };
       }
