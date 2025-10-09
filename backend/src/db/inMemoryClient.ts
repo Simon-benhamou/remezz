@@ -20,7 +20,8 @@ type ModelName =
   | 'aiCall'
   | 'user'
   | 'userApiKey'
-  | 'userSetting';
+  | 'userSetting'
+  | 'auditLog';
 
 type ModelStore = Map<ModelName, any[]>;
 
@@ -167,6 +168,8 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     id: randomUUID(),
     startedAt: new Date(),
     stoppedAt: null,
+    haltedAt: null,
+    haltReason: null,
     profileJson: null,
     planJson: null,
     mode: 'paper',
@@ -252,6 +255,12 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     createdAt: new Date(),
     updatedAt: new Date(),
   }),
+  auditLog: () => ({
+    id: randomUUID(),
+    createdAt: new Date(),
+    action: 'test',
+    details: null,
+  }),
 };
 
 class InMemoryModel {
@@ -318,6 +327,19 @@ class InMemoryModel {
     Object.assign(current, patch);
     if ('updatedAt' in current) current.updatedAt = new Date();
     return clone(current);
+  }
+
+  async updateMany(args: UpdateArgs) {
+    const data = this.store();
+    let count = 0;
+    for (const record of data) {
+      if (whereMatches(record, args.where)) {
+        Object.assign(record, clone(args.data ?? {}));
+        if ('updatedAt' in record) record.updatedAt = new Date();
+        count += 1;
+      }
+    }
+    return { count };
   }
 
   async findUnique(args: FindUniqueArgs) {
@@ -388,6 +410,7 @@ export class InMemoryPrismaClient {
   user: InMemoryModel;
   userApiKey: InMemoryModel;
   userSetting: InMemoryModel;
+  auditLog: InMemoryModel;
 
   constructor() {
     this.store = new Map();
@@ -408,6 +431,7 @@ export class InMemoryPrismaClient {
     this.user = new InMemoryModel('user', this);
     this.userApiKey = new InMemoryModel('userApiKey', this);
     this.userSetting = new InMemoryModel('userSetting', this);
+    this.auditLog = new InMemoryModel('auditLog', this);
   }
 
   _getStore(name: ModelName): any[] {
@@ -424,6 +448,14 @@ export class InMemoryPrismaClient {
 
   async $reset() {
     this.store.clear();
+  }
+
+  async $transaction<T>(operations: Promise<T>[]) {
+    const results: T[] = [];
+    for (const op of operations) {
+      results.push(await op);
+    }
+    return results;
   }
 }
 

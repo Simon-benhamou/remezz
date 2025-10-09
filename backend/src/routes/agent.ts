@@ -1,5 +1,5 @@
 import { Router, type Response } from 'express';
-import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
+import { authenticateUser, AuthenticatedRequest, requireRole } from '../middleware/auth.js';
 import { prisma } from '../db/client.js';
 import { getAllIntelligentOpportunities, getIntelligentAgentStatus } from '../services/smartAgent.js';
 import { triggerIntelligentReselection } from '../services/intelligentAgent.js';
@@ -25,6 +25,7 @@ import {
 import { stopSession, activeSession } from '../session/session.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
 import { getUserCredentials } from '../services/userCredentials.js';
+import { stopAllAgents } from '../services/stopAllAgents.js';
 
 export const router = Router();
 
@@ -32,6 +33,11 @@ export const router = Router();
 const OVERVIEW_TTL_MS = 3000;
 const overviewCache = new Map<string, { ts: number; data: any }>();
 const overviewPending = new Map<string, Promise<any>>();
+
+function invalidateOverviewCaches() {
+  overviewCache.clear();
+  overviewPending.clear();
+}
 
 async function processSmartReselect(sessionId: string, res: Response) {
   try {
@@ -175,6 +181,48 @@ router.post('/stop', async (req,res)=>{
   broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol, s.id);
   await AgentHub.halt(s.id);
   res.json({ok:true});
+});
+
+router.post('/stop-all', authenticateUser, requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+  try {
+    const outcome = await stopAllAgents({
+      actorId: req.user?.id,
+      actorUsername: req.user?.username,
+      reason: 'stop_all',
+    });
+
+    invalidateOverviewCaches();
+
+    const updatedSessions = outcome.updatedSessions.length
+      ? outcome.updatedSessions
+      : outcome.stoppedSessionIds.length
+        ? await prisma.agentSession.findMany({ where: { id: { in: outcome.stoppedSessionIds } } })
+        : [];
+
+    for (const session of updatedSessions) {
+      broadcast('session', session, session.symbol, session.id);
+    }
+
+    broadcast('agent_stop_all', {
+      ts: new Date().toISOString(),
+      actor: req.user?.username || null,
+      sessionIds: outcome.stoppedSessionIds,
+      results: outcome.results,
+    });
+
+    res.json({
+      ok: true,
+      stopped: outcome.stoppedSessionIds.length,
+      results: outcome.results,
+      auditLogId: outcome.auditLogId,
+    });
+  } catch (error) {
+    console.error('❌ Stop-all error:', error);
+    res.status(500).json({
+      error: 'stop_all_failed',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 });
 
 router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res) => {
@@ -494,6 +542,8 @@ router.get('/sessions', async (req,res)=>{
       mode: r.mode,
       startedAt: r.startedAt,
       stoppedAt: r.stoppedAt,
+      haltedAt: (r as any).haltedAt ?? null,
+      haltReason: (r as any).haltReason ?? null,
       startBalanceUsd: r.startBalanceUsd,
       aggressiveness,
       // Detect Smart Agent from either top-level flag or profileJson
