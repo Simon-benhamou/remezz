@@ -59,6 +59,10 @@ Additional manual probes:
    - New unit (`ticker-validation.mjs`), integration (`qa-agent-lifecycle.mjs`, `qa-market-validation.mjs`), and e2e (`qa-ws-fault-injection.mjs`) scripts.
    - `run-integration-tests.mjs` gains `QA_ENABLE_REMOTE` gate and skips DB-bound suites when artefacts absent.
    - Added `npm run test:e2e` entry point.
+6. **Directional bias decision tree (`src/ai/prompts.ts`, `src/ai/orchestrator.ts`)**
+   - Long bias now unlocks when trend is positive and structure is near support even if RSI creeps into the high-60s, provided ATR% is tame and EMA20>EMA50 confirms momentum.
+   - Short bias mirrors the rule: strong downtrend near resistance may trigger even with RSI drifting toward 30 if ATR% is contained and EMA20<EMA50.
+   - Rule-based fallback shares the same tree, preventing bullish contexts from defaulting to `range` simply because RSI crossed 65.
 
 ## 5. Findings & Open Issues
 

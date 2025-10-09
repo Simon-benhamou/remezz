@@ -47,7 +47,10 @@ export function rankingPrompt(ctx: {
     "rationale": "string",
     "trigger": "string"
   }
-  - If trend>0 and RSI<65 near support -> bias long; if trend<0 and RSI>35 near resistance -> bias short; else range.
+  - Bias rules:
+    - If trend>0 with srBias near support → bias long when RSI<65. Allow long up to RSI≈70 when ATR%≤2.5 and momentum confirms (e.g. EMA20>EMA50).
+    - If trend<0 with srBias near resistance → bias short when RSI>35. Allow short down to RSI≈30 when ATR%≤2.5 and momentum confirms (e.g. EMA20<EMA50).
+    - Otherwise default to range/neutral setups.
   - Use target ~3.0–4.0% and stop 1.0–2.0% (tighter if ATR% low).
   - Always include confirmations (e.g., "RSI_up","EMA20>EMA50","volume_increase").
   - If using "zone", fill min/max around last price ±0.3–0.7% depending on volatility.
