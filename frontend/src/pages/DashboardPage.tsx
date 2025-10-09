@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Space, Button, Table, Tag, List, Progress, Badge, Avatar, Typography, Divider, Alert, Tooltip, Dropdown, MenuProps } from 'antd';
+import { Card, Row, Col, Statistic, Space, Button, Table, Tag, List, Progress, Badge, Avatar, Typography, Divider, Alert, Tooltip, Dropdown, MenuProps, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { openWS } from '../ws';
@@ -22,8 +22,11 @@ import {
   SettingOutlined,
   BulbOutlined,
   FireOutlined,
-  RocketOutlined
+  RocketOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
+import { useStopAllLock } from '../hooks/useStopAllLock';
+import { useStopAllConfirmation } from '../hooks/useStopAllConfirmation';
 
 const { Title, Text } = Typography;
 
@@ -65,46 +68,70 @@ export default function DashboardPage(){
     };
   };
   
-  // Quick actions menu
-  const quickActions: MenuProps['items'] = [
-    {
-      key: 'smart-scanner',
-      label: 'Smart Opportunity Scanner',
-      icon: <RocketOutlined />,
-      onClick: () => setShowSmartScanner(!showSmartScanner)
-    },
-    {
-      key: 'new-btc',
-      label: 'New BTC Agent',
-      icon: <PlusOutlined />,
-      onClick: () => navigate('/sessions')
-    },
-    {
-      key: 'new-eth', 
-      label: 'New ETH Agent',
-      icon: <PlusOutlined />,
-      onClick: () => navigate('/sessions')
-    },
-    {
-      key: 'stop-all',
-      label: 'Emergency Stop All',
-      icon: <StopOutlined />,
-      danger: true,
-      onClick: () => {
-        // Implement emergency stop all logic
-        console.log('Emergency stop all agents');
-      }
-    }
-  ];
-  
-  const load = async ()=>{
+  const load = React.useCallback(async ()=>{
     try {
       const data = await api.overview(mode);
       setOv(data);
     } finally {
       if (!loadedRef.current) { setLoading(false); loadedRef.current = true; }
     }
-  };
+  }, [mode]);
+
+  const { locked, unlock, setLocked } = useStopAllLock();
+  const showStopAllConfirm = useStopAllConfirmation({
+    description: (
+      <span>
+        This will immediately halt every active agent, cancel all outstanding orders, and flatten open positions. New agent
+        creation stays disabled until you reset the lock.
+      </span>
+    ),
+  });
+
+  const quickActions = React.useMemo<MenuProps['items']>(() => {
+    const items: NonNullable<MenuProps['items']> = [
+      {
+        key: 'smart-scanner',
+        label: 'Smart Opportunity Scanner',
+        icon: <RocketOutlined />,
+        onClick: () => setShowSmartScanner((prev) => !prev),
+      },
+      {
+        key: 'new-btc',
+        label: 'New BTC Agent',
+        icon: <PlusOutlined />,
+        onClick: () => navigate('/sessions'),
+        disabled: locked,
+      },
+      {
+        key: 'new-eth',
+        label: 'New ETH Agent',
+        icon: <PlusOutlined />,
+        onClick: () => navigate('/sessions'),
+        disabled: locked,
+      },
+      {
+        key: 'stop-all',
+        label: 'Emergency Stop All',
+        icon: <StopOutlined />,
+        danger: true,
+        onClick: () => showStopAllConfirm({ onSuccess: () => { load(); loadOps(); } }),
+      },
+    ];
+
+    if (locked) {
+      items.push({
+        key: 'reset-lock',
+        label: 'Reset Emergency Lock',
+        icon: <ReloadOutlined />,
+        onClick: () => {
+          unlock();
+          message.success('Agent creation re-enabled.');
+        },
+      });
+    }
+
+    return items;
+  }, [locked, navigate, showStopAllConfirm, load, loadOps, unlock]);
   const loadOps = React.useCallback(async ()=>{
     try {
       setOpsLoading(true);
@@ -121,12 +148,10 @@ export default function DashboardPage(){
     }
   }, []);
   React.useEffect(()=>{
-    load();
-    loadOps();
-    const t = setInterval(async ()=>{
-      try { const data = await api.overview(mode); setOv(data); } catch {}
-    }, 15000);
-    const opsTimer = setInterval(()=>{ loadOps(); }, 30000);
+    void load();
+    void loadOps();
+    const t = setInterval(() => { void load(); }, 15000);
+    const opsTimer = setInterval(() => { void loadOps(); }, 30000);
     // WS live updates for overview_session events
     const API_BASE = (import.meta as any).env.VITE_API_BASE || 'http://localhost:4000';
     const key = (localStorage.getItem('apiKey') || '');
@@ -142,9 +167,14 @@ export default function DashboardPage(){
           return { ...cur, sessions, updatedAt: new Date().toISOString() };
         });
       }
+      if (msg?.type === 'agent_stop_all') {
+        setLocked(true);
+        void load();
+        void loadOps();
+      }
     });
     return ()=> { try { clearInterval(t); } catch {}; try { clearInterval(opsTimer); } catch {}; try { ws?.close?.(); } catch {} };
-  }, [mode, loadOps]);
+  }, [load, loadOps, setLocked]);
   
   const globalHealth = getGlobalHealth();
   const marginOverview = opsMetrics?.margin;
@@ -195,14 +225,17 @@ export default function DashboardPage(){
                   <SettingOutlined /> Quick Actions
                 </Button>
               </Dropdown>
-              <Button 
-                size="large" 
-                type="primary"
-                style={{ background: '#52c41a', border: 'none' }}
-                onClick={() => navigate('/sessions')}
-              >
-                <PlusOutlined /> New Agent
-              </Button>
+              <Tooltip title={locked ? 'Emergency halt active. Reset to enable new agent creation.' : undefined}>
+                <Button
+                  size="large"
+                  type="primary"
+                  style={{ background: '#52c41a', border: 'none' }}
+                  onClick={() => navigate('/sessions')}
+                  disabled={locked}
+                >
+                  <PlusOutlined /> New Agent
+                </Button>
+              </Tooltip>
             </Space>
           </Col>
         </Row>

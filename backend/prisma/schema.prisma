@@ -29,6 +29,7 @@ model User {
   reports      DailyReport[]
   improvements ImprovementItem[]
   diagnosticsCache DiagnosticsCache[]
+  auditLogs  AuditLog[]
 
   @@index([username])
   @@index([email])
@@ -74,6 +75,8 @@ model AgentSession {
   mode            String   // 'paper' | 'live'
   startedAt       DateTime @default(now())
   stoppedAt       DateTime?
+  haltedAt        DateTime?
+  haltReason      String?
   startBalanceUsd Float?
   profileJson     Json?
   planJson        Json?
@@ -100,6 +103,19 @@ model AgentSession {
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
   @@index([isSmartAgent, nextRescanAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  action    String
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+  username  String?
+  details   Json?
+
+  @@index([action, createdAt])
+  @@index([userId, createdAt])
 }
 
 model Strategy {

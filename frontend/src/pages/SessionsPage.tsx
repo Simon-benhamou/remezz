@@ -34,6 +34,8 @@ import { useMode } from '../contexts/ModeContext';
 import { useSessionsCache } from '../hooks/useSessionsCache';
 import { useCacheNotifications } from '../hooks/useCacheNotifications';
 import { useSmartCacheInvalidation } from '../hooks/useSmartCacheInvalidation';
+import { useStopAllLock } from '../hooks/useStopAllLock';
+import { useStopAllConfirmation } from '../hooks/useStopAllConfirmation';
 import {
   SearchOutlined,
   FilterOutlined,
@@ -506,9 +508,40 @@ export default function SessionsPage(){
 
   // Notifications de cache
   const { notifyModeSwitch, notifyCacheRefresh, notifyCacheHit, notifyError } = useCacheNotifications();
-  
+
   // Invalidation intelligente du cache
   const { invalidateSmartly } = useSmartCacheInvalidation();
+
+  const { locked, unlock } = useStopAllLock();
+  const showStopAllConfirm = useStopAllConfirmation({
+    description: (
+      <span>
+        Emergency stop cancels all outstanding orders, flattens positions, and marks every agent as halted. Creation stays
+        disabled until the lock is reset.
+      </span>
+    ),
+  });
+
+  const sessionStoppedAt = React.useCallback((session: any) => session.haltedAt || session.stoppedAt || null, []);
+  const sessionStatusLabel = React.useCallback((session: any) => {
+    if (session.haltedAt) return 'Halted';
+    return session.stoppedAt ? 'Stopped' : 'Active';
+  }, []);
+  const isSessionActive = React.useCallback((session: any) => !session.haltedAt && !session.stoppedAt, []);
+  const getStatusMeta = React.useCallback((session: any) => {
+    if (session.haltedAt) {
+      return { dot: '#dc2626', text: '#b91c1c', glow: '0 0 8px rgba(220, 38, 38, 0.35)', label: 'Halted' };
+    }
+    if (session.stoppedAt) {
+      return { dot: '#94a3b8', text: '#64748b', glow: 'none', label: 'Stopped' };
+    }
+    return { dot: '#10b981', text: '#059669', glow: '0 0 8px rgba(16, 185, 129, 0.5)', label: 'Active' };
+  }, []);
+  const statusRank = React.useCallback((session: any) => {
+    if (session.haltedAt) return 2;
+    if (session.stoppedAt) return 1;
+    return 0;
+  }, []);
   
   // Clear symbol field when Auto-Select Mode is enabled
   React.useEffect(() => {
@@ -580,9 +613,9 @@ export default function SessionsPage(){
       try {
         // Pull KPI metrics for all sessions (cheap lookup)
         const perf = session.id ? await api.getPerf(session.id).catch(() => null) : null;
-        const health = session.id && !session.stoppedAt ? await api.getHealth(session.id).catch(() => null) : null;
-        const agentState = session.id && !session.stoppedAt ? await api.getAgentState(session.id).catch(() => null) : null;
-        const diagnostics = session.id && !session.stoppedAt ? await api.getDiagnostics(session.id).catch(() => null) : null;
+        const health = session.id && isSessionActive(session) ? await api.getHealth(session.id).catch(() => null) : null;
+        const agentState = session.id && isSessionActive(session) ? await api.getAgentState(session.id).catch(() => null) : null;
+        const diagnostics = session.id && isSessionActive(session) ? await api.getDiagnostics(session.id).catch(() => null) : null;
 
         // Get pending orders (lightweight)
         const orders = session.id ? await api.getOrders(session.id).catch(() => []) : [];
@@ -684,10 +717,12 @@ export default function SessionsPage(){
     let filtered = rows;
     
     // Status filter
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter(r => 
-        statusFilter === 'active' ? !r.stoppedAt : !!r.stoppedAt
-      );
+    if (statusFilter === 'active') {
+      filtered = filtered.filter(isSessionActive);
+    } else if (statusFilter === 'halted') {
+      filtered = filtered.filter(r => !!r.haltedAt);
+    } else if (statusFilter === 'stopped') {
+      filtered = filtered.filter(r => !!r.stoppedAt && !r.haltedAt);
     }
     
     // Mode filter
@@ -714,7 +749,7 @@ export default function SessionsPage(){
     }
     
     setFilteredRows(filtered);
-  }, [rows, statusFilter, modeFilter, symbolFilter, aggressivenessFilter, searchText]);
+  }, [rows, statusFilter, modeFilter, symbolFilter, aggressivenessFilter, searchText, isSessionActive]);
 
   // Chargement initial et gestion du changement de mode
   React.useEffect(() => {
@@ -805,7 +840,7 @@ export default function SessionsPage(){
     const csvData = filteredRows.map(r => ({
       Symbol: r.symbol,
       Mode: r.mode,
-      Status: r.stoppedAt ? 'Stopped' : 'Active',
+      Status: sessionStatusLabel(r),
       Aggressiveness: r.aggressiveness || 'conservative',
       'Win Rate %': (r.winRate || 0).toFixed(1),
       'PnL USD': (r.pnlUsd || 0).toFixed(2),
@@ -813,7 +848,10 @@ export default function SessionsPage(){
       'Readiness %': (r.tradingReadiness?.percent || 0).toFixed(0),
       'Total Trades': r.totalTrades || 0,
       'Started': new Date(r.startedAt).toISOString(),
-      'Stopped': r.stoppedAt ? new Date(r.stoppedAt).toISOString() : ''
+      'Stopped': (() => {
+        const ts = sessionStoppedAt(r);
+        return ts ? new Date(ts).toISOString() : '';
+      })()
     }));
     
     if (csvData.length === 0) {
@@ -862,29 +900,16 @@ export default function SessionsPage(){
       label: 'Stop All Active',
       danger: true,
       onClick: () => {
-        const activeSessions = filteredRows.filter(r => !r.stoppedAt);
+        const activeSessions = filteredRows.filter(isSessionActive);
         if (activeSessions.length === 0) {
           message.info('No active sessions to stop');
           return;
         }
-        Modal.confirm({
-          title: `Stop ${activeSessions.length} active sessions?`,
-          content: 'This will stop all active sessions and close open positions.',
-          okText: 'Stop All',
-          okButtonProps: { danger: true },
-          onOk: async () => {
-            for (const session of activeSessions) {
-              try {
-                await api.stopSession(session.id, true);
-                // Invalider le cache pour chaque session arrêtée
-                invalidateSmartly('session_stopped', { mode: session.mode as any });
-              } catch (e) {
-                console.error(`Failed to stop session ${session.id}:`, e);
-              }
-            }
-            message.success(`Stopped ${activeSessions.length} sessions`);
-            await load();
-          }
+        showStopAllConfirm({
+          onSuccess: async () => {
+            invalidateSmartly('stop_all', { mode: mode as any });
+            await load(true);
+          },
         });
       }
     },
@@ -937,8 +962,28 @@ export default function SessionsPage(){
         {apiKeyHealth?.needsMigration && (
           <ApiKeyMigrationTool />
         )}
-        
-        <Card 
+
+        {locked && (
+          <Alert
+            type='warning'
+            showIcon
+            style={{
+              borderRadius: '12px',
+              border: '1px solid #f97316',
+              background: 'rgba(249, 115, 22, 0.08)',
+              marginBottom: 24
+            }}
+            message='Emergency stop is active'
+            description='All agents are halted and new creation is disabled until you reset the lock.'
+            action={
+              <Button size='small' type='default' icon={<ReloadOutlined />} onClick={unlock}>
+                Reset lock
+              </Button>
+            }
+          />
+        )}
+
+        <Card
           style={{
             borderRadius: '16px',
             border: '1px solid #e2e8f0',
@@ -971,7 +1016,22 @@ export default function SessionsPage(){
                       boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
                     }}>
                       <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
-                      {filteredRows.filter(r => !r.stoppedAt).length} Active
+                      {filteredRows.filter(isSessionActive).length} Active
+                    </div>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'linear-gradient(135deg, #b91c1c, #dc2626)',
+                      padding: '6px 14px',
+                      borderRadius: '20px',
+                      color: 'white',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      boxShadow: '0 2px 8px rgba(220, 38, 38, 0.25)'
+                    }}>
+                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
+                      {filteredRows.filter(r => !!r.haltedAt).length} Halted
                     </div>
                     <div style={{
                       display: 'flex',
@@ -985,7 +1045,7 @@ export default function SessionsPage(){
                       fontWeight: '600'
                     }}>
                       <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
-                      {filteredRows.filter(r => !!r.stoppedAt).length} Stopped
+                      {filteredRows.filter(r => !!sessionStoppedAt(r) && !r.haltedAt).length} Stopped
                     </div>
                   </div>
                 </Space>
@@ -1040,33 +1100,36 @@ export default function SessionsPage(){
                       Actions
                     </Button>
                   </Dropdown>
-                  <Button 
-                    type='primary' 
-                    icon={<PlayCircleOutlined />}
-                    onClick={()=>{ 
-                      setRestartSessionId(null);
-                      form.setFieldsValue({ 
-                        symbol:'BTC/USDT', 
-                        mode, 
-                        startBalanceUsd: undefined,
-                        maxLeverage:4, 
-                        aggressiveness:'conservative',
-                        smartAutoMode: false
-                      }); 
-                      setOpen(true); 
-                    }}
-                    style={{
-                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                      border: 'none',
-                      borderRadius: '10px',
-                      fontWeight: '600',
-                      boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)',
-                      fontSize: '14px',
-                      height: '40px'
-                    }}
-                  >
-                    New Agent
-                  </Button>
+                  <Tooltip title={locked ? 'Emergency stop active. Reset to enable new agent creation.' : undefined}>
+                    <Button
+                      type='primary'
+                      icon={<PlayCircleOutlined />}
+                      onClick={()=>{
+                        setRestartSessionId(null);
+                        form.setFieldsValue({
+                          symbol:'BTC/USDT',
+                          mode,
+                          startBalanceUsd: undefined,
+                          maxLeverage:4,
+                          aggressiveness:'conservative',
+                          smartAutoMode: false
+                        });
+                        setOpen(true);
+                      }}
+                      style={{
+                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                        border: 'none',
+                        borderRadius: '10px',
+                        fontWeight: '600',
+                        boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)',
+                        fontSize: '14px',
+                        height: '40px'
+                      }}
+                      disabled={locked}
+                    >
+                      New Agent
+                    </Button>
+                  </Tooltip>
                 </Space>
               </Col>
           </Row>
@@ -1119,6 +1182,7 @@ export default function SessionsPage(){
                   options={[
                     { value: 'all', label: 'All Status' },
                     { value: 'active', label: 'Active' },
+                    { value: 'halted', label: 'Halted' },
                     { value: 'stopped', label: 'Stopped' }
                   ]}
                 />
@@ -1185,12 +1249,12 @@ export default function SessionsPage(){
               showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} sessions`,
               style: { fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif' }
             }}
-            onRow={(r)=> ({ 
-              onClick: async ()=> { 
-                if (!r.stoppedAt) navigate(`/monitor/${r.id}`); 
+            onRow={(r)=> ({
+              onClick: async ()=> {
+                if (isSessionActive(r)) navigate(`/monitor/${r.id}`);
               },
-              style: { 
-                cursor: !r.stoppedAt ? 'pointer' : 'default',
+              style: {
+                cursor: isSessionActive(r) ? 'pointer' : 'default',
                 fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
               }
             })}
@@ -1204,8 +1268,8 @@ export default function SessionsPage(){
               boxShadow: '0 10px 24px -18px rgba(15, 23, 42, 0.35)'
             }}
             columns={[
-              { 
-                title:'Status', 
+              {
+                title:'Status',
                 width: 80,
                 render:(_,r)=> (
                   <div style={{
@@ -1213,24 +1277,31 @@ export default function SessionsPage(){
                     alignItems: 'center',
                     gap: '8px'
                   }}>
+                    {(() => {
+                      const meta = getStatusMeta(r);
+                      return (
+                        <>
                     <div style={{
                       width: '8px',
                       height: '8px',
                       borderRadius: '50%',
-                      background: r.stoppedAt ? '#94a3b8' : '#10b981',
-                      boxShadow: r.stoppedAt ? 'none' : '0 0 8px rgba(16, 185, 129, 0.5)'
+                      background: meta.dot,
+                      boxShadow: meta.glow
                     }} />
                     <span style={{
                       fontSize: '12px',
                       fontWeight: '600',
-                      color: r.stoppedAt ? '#64748b' : '#059669',
+                      color: meta.text,
                       fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
                     }}>
-                      {r.stoppedAt ? 'Stopped' : 'Active'}
+                      {meta.label}
                     </span>
+                        </>
+                      );
+                    })()}
                   </div>
                 ),
-                sorter: (a, b) => (a.stoppedAt ? 1 : 0) - (b.stoppedAt ? 1 : 0)
+                sorter: (a, b) => statusRank(a) - statusRank(b)
               },
               { 
                 title:'Symbol', 
@@ -1396,7 +1467,7 @@ export default function SessionsPage(){
                       color: '#64748b',
                       fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                     }}>
-                      {r.stoppedAt ? '-' : formatDuration(r.uptime || 0)}
+                      {isSessionActive(r) ? formatDuration(r.uptime || 0) : '-'}
                     </span>
                   ),
                   sorter: (a: any, b: any) => (a.uptime || 0) - (b.uptime || 0)
@@ -1498,8 +1569,9 @@ export default function SessionsPage(){
                 title:'Readiness', 
                 width: 120,
                 render:(_:any,r:any)=> {
-                  if (r.stoppedAt) {
-                    return <Tag color="#94a3b8">STOPPED</Tag>;
+                  if (!isSessionActive(r)) {
+                    const color = r.haltedAt ? '#f97316' : '#94a3b8';
+                    return <Tag color={color}>{sessionStatusLabel(r).toUpperCase()}</Tag>;
                   }
                   const readiness = r.tradingReadiness;
                   if (!readiness) {
@@ -1634,11 +1706,11 @@ export default function SessionsPage(){
                     );
                   }
                 },
-                { 
-                  title:'Diagnostics', 
+                {
+                  title:'Diagnostics',
                   width: 120,
                   render:(_:any,r:any)=> {
-                    if (r.stoppedAt) {
+                    if (!isSessionActive(r)) {
                       return (
                         <span style={{ color: '#94a3b8', fontSize: '12px' }}>Inactive</span>
                       );
@@ -1698,12 +1770,12 @@ export default function SessionsPage(){
                 sorter: (a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
               },
               { 
-                title:'Actions', 
+                title:'Actions',
                 width: 120,
                 render:(_,r)=> {
-                  if (!r.stoppedAt) {
+                  if (isSessionActive(r)) {
                     return (
-                      <Button 
+                      <Button
                         danger 
                         size="small"
                         icon={<StopOutlined />}
@@ -1770,9 +1842,9 @@ export default function SessionsPage(){
               }
             ]}
           expandedRowRender={(record) => (
-              <TradingDiagnosticsCollapsible 
-                sessionId={record.id} 
-                isActive={!record.stoppedAt} 
+              <TradingDiagnosticsCollapsible
+                sessionId={record.id}
+                isActive={isSessionActive(record)}
                 initialDiagnostics={record.diagnosticsInitial}
               />
             )}
