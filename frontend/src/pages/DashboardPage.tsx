@@ -155,7 +155,7 @@ export default function DashboardPage(){
     // WS live updates for overview_session events
     const API_BASE = (import.meta as any).env.VITE_API_BASE || 'http://localhost:4000';
     const key = (localStorage.getItem('apiKey') || '');
-    const ws = openWS(API_BASE, key, '', (msg:any)=>{
+    const ws = openWS(API_BASE, key, undefined, (msg:any)=>{
       if (msg?.type === 'overview_session') {
         setOv((prev:any)=>{
           const cur = prev || {};

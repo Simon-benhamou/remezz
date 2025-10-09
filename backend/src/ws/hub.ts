@@ -193,17 +193,34 @@ export function startWSHub(wss: WebSocketServer) {
         }
 
         if (msg.type === 'sub') {
-          state.symbol = msg.symbol;
-          state.sessionId = msg.sessionId;
+          const rawSymbol = typeof msg.symbol === 'string' ? msg.symbol.trim() : '';
+          const normalizedSymbol = rawSymbol.length ? rawSymbol : undefined;
+          const rawSessionId = typeof msg.sessionId === 'string' ? msg.sessionId.trim() : '';
+          const normalizedSessionId = rawSessionId.length ? rawSessionId : undefined;
+
+          state.symbol = normalizedSymbol;
+          state.sessionId = normalizedSessionId;
+
           try { if (state.sessionId) await setActiveSession(state.sessionId); } catch {}
-          send(ws, { type: 'sub_ok', symbol: state.symbol, sessionId: state.sessionId, data: { symbol: state.symbol, sessionId: state.sessionId } });
+
+          send(ws, {
+            type: 'sub_ok',
+            symbol: state.symbol,
+            sessionId: state.sessionId,
+            data: { symbol: state.symbol, sessionId: state.sessionId },
+          });
+
+          if (!state.symbol) {
+            return;
+          }
+
           // Push analysis immediately so UI can fill tabs
           try {
-            const a = await fullAnalysis(state.symbol!);
+            const a = await fullAnalysis(state.symbol);
             send(ws, { type: 'analysis', symbol: state.symbol, sessionId: state.sessionId, data: a });
           } catch {
             try {
-              const snap = await buildTechSnapshot(state.symbol!);
+              const snap = await buildTechSnapshot(state.symbol);
               send(ws, { type: 'analysis', symbol: state.symbol, sessionId: state.sessionId, data: { symbol: state.symbol, technical: snap } });
             } catch {}
           }

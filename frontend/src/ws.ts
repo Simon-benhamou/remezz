@@ -20,7 +20,7 @@ const MAX_DELAY = 30_000;
 export function openWS(
   apiBase: string,
   _apiKey: string,
-  symbol: string,
+  symbol?: string,
   on: Handler,
   onConn?: (ok: boolean) => void,
   onReplace?: (next: WebSocket) => void,
@@ -28,8 +28,8 @@ export function openWS(
 ): ManagedWS {
   const url = apiBase.replace('http', 'ws') + '/ws';
   let attempt = 0;
-  let curSymbol = symbol;
-  let curSessionId: string | undefined = sessionId;
+  const curSymbol = typeof symbol === 'string' && symbol.trim().length ? symbol : undefined;
+  const curSessionId: string | undefined = sessionId;
   let ws: WebSocket | null = null;
   let tokenInfo: TokenInfo | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -134,7 +134,12 @@ export function openWS(
           if (tokenInfo) tokenInfo.expiresAt = expiresAt;
           scheduleTokenRefresh(expiresAt);
           setTimeout(() => {
-            try { next.send(JSON.stringify({ type: 'sub', symbol: curSymbol, sessionId: curSessionId })); } catch {}
+            try {
+              const payload: Record<string, any> = { type: 'sub' };
+              if (curSymbol) payload.symbol = curSymbol;
+              if (curSessionId) payload.sessionId = curSessionId;
+              next.send(JSON.stringify(payload));
+            } catch {}
           }, 100);
         } else if (msg.type === 'refresh_ok') {
           const expiresAt = msg.expiresAt || tokenInfo?.expiresAt;
