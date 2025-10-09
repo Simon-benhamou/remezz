@@ -8,7 +8,6 @@ import { authMiddleware } from "./utils/security.js";
 import { router as authRouter } from "./routes/auth.js";
 import { router as userRouter } from "./routes/user.js";
 import { router as debugRouter } from "./routes/debug.js";
-import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { router as statusRouter } from "./routes/status.js";
 import { router as strategyRouter } from "./routes/strategy.js";
 import { router as agentRouter } from "./routes/agent.js";

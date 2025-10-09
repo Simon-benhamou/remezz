@@ -22,7 +22,7 @@ type ModelName =
   | 'user'
   | 'userApiKey'
   | 'userSetting'
-  | 'leverageConstraint';
+  | 'leverageConstraint'
   | 'auditLog';
 
 type ModelStore = Map<ModelName, any[]>;
@@ -267,6 +267,7 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     id: randomUUID(),
     createdAt: new Date(),
     updatedAt: new Date(),
+  }),
   auditLog: () => ({
     id: randomUUID(),
     createdAt: new Date(),
