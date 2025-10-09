@@ -54,12 +54,22 @@ export function classifyRegime(snap: TechnicalSnapshot & {
   const hurstBiasRange = hurst < 0.45;
   const structureWeak = trendStrength < 0.2 || adx < 15;
   const structureFragile = trendStrength < 0.25 || adx < 18;
-  const structureCollapsed = trendStrength < 0.12 && adx < 12;
+  const structureCollapsed = trendStrength <= 0.12 && adx <= 12;
   const adxFallingHard = adxSlope < -1.2;
   const extremeVol = vol >= 6;
   const catastrophicVol = vol >= 8;
+  const violentSpike = volatility === 'high' && structureCollapsed && adxFallingHard && hurst < 0.5;
 
-  if (momentumStrong || hurstBiasTrend) {
+  if (violentSpike) {
+    playbook = 'standby';
+    shouldTrade = false;
+    riskModifier = {
+      level: 'extreme',
+      sizingMultiplier: 0.25,
+      stopMultiplier: 1.05,
+      reason: 'disorderly_spike_structure_failure'
+    };
+  } else if (momentumStrong || hurstBiasTrend) {
     playbook = 'momentum_breakout';
     if (volatility === 'high' && !hurstBiasTrend) {
       // Encourage caution in breakouts during high vol conditions

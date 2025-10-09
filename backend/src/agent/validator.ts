@@ -57,6 +57,34 @@ function adjustedStopsPct(cfg: ReturnType<typeof getConfig>, symbol: string) {
   return { minStopPct, minTpPct };
 }
 
+export function normalizeStopDistance(mid: number, desiredStop: number, minStopAbs: number): number {
+  const fallbackAbs = minStopAbs > 0
+    ? minStopAbs
+    : (mid > 0 ? mid * 0.01 : 0.0001);
+
+  let stopDistance = Number.isFinite(desiredStop) && desiredStop > 0 ? desiredStop : fallbackAbs;
+  if (!Number.isFinite(stopDistance) || stopDistance <= 0) {
+    stopDistance = fallbackAbs;
+  }
+
+  if (stopDistance < minStopAbs) {
+    stopDistance = minStopAbs;
+  }
+
+  if (mid > 0) {
+    const maxStopAbs = mid * 0.25; // cap stops to 25% of price to avoid nonsensical distances
+    if (maxStopAbs > 0 && Number.isFinite(maxStopAbs) && stopDistance > maxStopAbs) {
+      stopDistance = Math.max(minStopAbs, maxStopAbs);
+    }
+  }
+
+  if (!Number.isFinite(stopDistance) || stopDistance <= 0) {
+    stopDistance = fallbackAbs;
+  }
+
+  return stopDistance;
+}
+
 export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   const snap = await buildTechSnapshot(plan.symbol);
   const tf = plan.timeframe || '1h';
@@ -113,14 +141,17 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   const mid = (from + to) / 2;
 
   // ATR: prefer 1h ATR when plan timeframe is 1h, else 15m
-  const atrAbs = (tf === '1h' && (snap as any).atr14_1h) ? (snap as any).atr14_1h as number : snap.atr14;
-  const atrPct = snap.atrPct;
+  const atrAbsRaw = (tf === '1h' && (snap as any).atr14_1h) ? (snap as any).atr14_1h as number : snap.atr14;
+  const atrAbs = Number.isFinite(atrAbsRaw) && atrAbsRaw > 0 ? atrAbsRaw : mid * 0.01;
+  const atrPct = Number.isFinite(snap.atrPct) ? snap.atrPct : ((atrAbs / Math.max(mid, 1e-8)) * 100);
   // Enforce a minimum stop distance in % of price to avoid micro moves
   const cfg = getConfig();
   const { minStopPct, minTpPct } = adjustedStopsPct(cfg, plan.symbol);
   const minStopAbs = mid * (minStopPct / 100);
-  const rawStop = plan.risk.stop.mult * atrAbs;
-  const stopDistance = Math.max(rawStop, minStopAbs);
+  const rawStop = Number.isFinite(plan.risk.stop.mult) && Number.isFinite(atrAbsRaw)
+    ? plan.risk.stop.mult * atrAbsRaw
+    : NaN;
+  const stopDistance = normalizeStopDistance(mid, rawStop, minStopAbs);
 
   // R ladder prices
   const side = plan.bias === 'long' ? 1 : -1;

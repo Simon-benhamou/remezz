@@ -2,6 +2,7 @@ import { StrategyZ, StrategyJson } from "./schema.js";
 import { rankingPrompt, strategyPrompt } from "./prompts.js";
 import { llmJSON } from "./llm.js";
 import { buildTechSnapshot, type TechnicalSnapshot } from './tech.js';
+
 import { getConfig } from '../utils/env.js';
 import { emitAlert } from '../monitor/policy.js';
 import { randomUUID } from "crypto";
@@ -122,6 +123,118 @@ export function deriveDirectionalBias(feats: BiasDecisionInput): 'long'|'short'|
   return 'range';
 }
 
+function clamp(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeSymbol(symbol: string) {
+  const upper = (symbol || '').toUpperCase();
+  const base = upper.split(/[\/:]/)[0] || upper;
+  const match = base.match(/[A-Z]+/);
+  return match ? match[0] : base;
+}
+
+function instrumentTier(symbol: string): 'major' | 'large' | 'alt' {
+  const base = normalizeSymbol(symbol);
+  if (base === 'BTC' || base === 'ETH') return 'major';
+  const largeCaps = new Set([
+    'BNB','SOL','XRP','ADA','DOGE','TRX','MATIC','LTC','LINK','DOT','ATOM','AVAX','APT','ARB','OP','TON','TIA','RNDR'
+  ]);
+  return largeCaps.has(base) ? 'large' : 'alt';
+}
+
+const ATR_TIER_BOUNDS: Record<'major'|'large'|'alt', { stop: [number, number]; target: [number, number] }> = {
+  major: { stop: [0.4, 3.0], target: [0.9, 6.0] },
+  large: { stop: [0.6, 3.8], target: [1.2, 7.0] },
+  alt: { stop: [0.8, 5.5], target: [1.8, 9.0] },
+};
+
+type AtrRiskParams = {
+  stopPct: number;
+  targetPct: number;
+  stopBounds: { min: number; max: number };
+  targetBounds: { min: number; max: number };
+};
+
+function pickStopRange(atr: number): [number, number] {
+  if (atr <= 0.6) return [1.5, 1.9];
+  if (atr >= 2.8) return [1.1, 1.5];
+  return [1.2, 1.7];
+}
+
+function pickTargetRange(atr: number): [number, number] {
+  if (atr <= 0.6) return [2.0, 2.4];
+  if (atr >= 2.8) return [1.6, 2.1];
+  return [1.7, 2.2];
+}
+
+function clampRange([minMult, maxMult]: [number, number], atr: number, [floor, ceil]: [number, number]) {
+  let min = clamp(atr * minMult, floor, ceil);
+  let max = clamp(atr * maxMult, floor, ceil);
+  if (min > max) {
+    const mid = clamp((min + max) / 2, floor, ceil);
+    min = mid;
+    max = mid;
+  }
+  return { min, max };
+}
+
+export function computeAtrRiskParams(symbol: string, atrPctRaw: number): AtrRiskParams {
+  const atr = clamp(Number.isFinite(atrPctRaw) ? atrPctRaw : 0.1, 0.1, 6.0);
+  const tier = instrumentTier(symbol);
+  const bounds = ATR_TIER_BOUNDS[tier];
+  const stopRange = pickStopRange(atr);
+  const targetRange = pickTargetRange(atr);
+  const stopBounds = clampRange(stopRange, atr, bounds.stop);
+  const targetBounds = clampRange(targetRange, atr, bounds.target);
+  let stopPct = clamp(atr * ((stopRange[0] + stopRange[1]) / 2), stopBounds.min, stopBounds.max);
+  let targetPct = clamp(atr * ((targetRange[0] + targetRange[1]) / 2), targetBounds.min, targetBounds.max);
+  if (targetPct <= stopPct) {
+    const uplift = Math.max(0.2, atr * 0.5);
+    targetPct = clamp(stopPct + uplift, targetBounds.min, targetBounds.max);
+    if (targetPct <= stopPct) {
+      targetPct = clamp(stopBounds.max + uplift, targetBounds.min, targetBounds.max);
+    }
+  }
+  return {
+    stopPct,
+    targetPct,
+    stopBounds,
+    targetBounds,
+  };
+}
+
+function enforceAtrRiskBounds(draft: StrategyJson, symbol: string, atrPct: number): StrategyJson {
+  const clone: StrategyJson = {
+    ...draft,
+    entry: draft.entry ? { ...draft.entry, zone: draft.entry.zone ? { ...draft.entry.zone } : undefined } : (draft.entry as any),
+    risk: draft.risk ? {
+      ...draft.risk,
+      stop: draft.risk.stop ? { ...draft.risk.stop } : (draft.risk.stop as any),
+      target: draft.risk.target ? { ...draft.risk.target } : (draft.risk.target as any)
+    } : (draft.risk as any)
+  };
+  if (!clone.risk) return clone;
+  const params = computeAtrRiskParams(symbol, atrPct);
+  if (clone.risk.stop?.type === 'percent') {
+    const raw = Number(clone.risk.stop.value);
+    clone.risk.stop.value = clamp(Number.isFinite(raw) ? raw : params.stopPct, params.stopBounds.min, params.stopBounds.max);
+  }
+  if (clone.risk.target?.type === 'percent') {
+    const raw = Number(clone.risk.target.value);
+    let next = clamp(Number.isFinite(raw) ? raw : params.targetPct, params.targetBounds.min, params.targetBounds.max);
+    if (clone.risk.stop?.type === 'percent' && next <= clone.risk.stop.value) {
+      next = clamp(clone.risk.stop.value + Math.max(0.2, atrPct * 0.5), params.targetBounds.min, params.targetBounds.max);
+      if (next <= clone.risk.stop.value) {
+        next = clamp(params.targetPct, params.targetBounds.min, params.targetBounds.max);
+      }
+    }
+    clone.risk.target.value = next;
+  }
+  return clone;
+}
+
 // --- 1) Multi-perp ranking --- //
 export async function selectBestPerp(
   perps: string[]
@@ -185,14 +298,17 @@ export async function selectBestPerp(
 }
 
 // --- 2) Daily strategy generation (legacy classic) --- //
-export async function generateStrategy(symbol: string, trigger: string, opts?: { fresh?: boolean; sessionId?: string }): Promise<StrategyJson> {
-  const feats = await buildTechSnapshot(symbol);
+type GenerateOpts = { fresh?: boolean; sessionId?: string; llm?: typeof llmJSON; snapshot?: TechnicalSnapshot };
+
+export async function generateStrategy(symbol: string, trigger: string, opts?: GenerateOpts): Promise<StrategyJson> {
+  const feats = opts?.snapshot ?? await buildTechSnapshot(symbol);
   const today = new Date().toISOString().slice(0,10);
 
   // 2.1 Ask LLM (JSON)
   try {
     const cfg = getConfig();
-    const raw = await llmJSON(strategyPrompt({
+    const callLLM = opts?.llm ?? llmJSON;
+    const raw = await callLLM(strategyPrompt({
       symbol, trigger,
       features: {
         ema20: feats.ema20, ema50: feats.ema50, rsi14: feats.rsi14,
@@ -209,20 +325,15 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: {
       context: { sessionId: opts?.sessionId, symbol, kind: 'strategy' },
     });
     // 2.2 Parse & validate
-    const draft = safeParseJSON<StrategyDraft>(raw);
+    const draft = safeParseJSON<StrategyJson>(raw);
     // patch fields minimum
     if (!draft.strategyId) draft.strategyId = `${today}:${symbol}:${trigger}:${Date.now()}:${randomUUID()}`; // <-- make unique
     if (!draft.symbol) draft.symbol = symbol;
     if (!draft.trigger) draft.trigger = trigger;
     if (!draft.validity) draft.validity = { from: new Date().toISOString(), to: null as any };
-    const normalized = normalizeStrategyDraft(draft, {
-      last: feats.last,
-      atrPct: feats.atrPct,
-      support: feats.support,
-      resistance: feats.resistance,
-    });
-    const parsed = StrategyZ.parse(normalized);
-    return parsed;
+  
+    const normalized = enforceAtrRiskBounds(draft, symbol, feats.atrPct);
+    return StrategyZ.parse(normalized);
   } catch (e) {
     try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'strategy', trigger, error: String((e as any)?.message || e) } }); } catch {}
     // 2.3 Fallback rule-based
@@ -246,8 +357,9 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: {
       max = tmp;
     }
 
-    const stopPct = Math.min(Math.max(1.0, feats.atrPct * 0.8), 2.0);
-    const targetPct = 3.5;
+    const atrRisk = computeAtrRiskParams(symbol, feats.atrPct);
+    const stopPct = atrRisk.stopPct;
+    const targetPct = Math.max(atrRisk.targetPct, stopPct + Math.max(0.2, feats.atrPct * 0.5));
 
     const confirmations = bias === 'long'
       ? ['RSI_up', 'EMA20>EMA50', 'pivot_respect']
@@ -268,7 +380,7 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: {
       },
       risk: {
         stop: { type: 'percent', value: stopPct },
-        target: { type: 'percent', value: targetPct },
+        target: { type: 'percent', value: clamp(targetPct, atrRisk.targetBounds.min, atrRisk.targetBounds.max) },
         risk_pct_balance: 1.0,
         max_leverage: 10
       },
@@ -282,6 +394,7 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: {
       support: feats.support,
       resistance: feats.resistance,
     });
-    return StrategyZ.parse(normalized);
+    const bounded = enforceAtrRiskBounds(normalized as StrategyJson, symbol, feats.atrPct);
+    return StrategyZ.parse(bounded);
   }
 }
