@@ -245,17 +245,18 @@ class BinanceWebSocketManager {
       this.ws.on('open', () => {
         console.log('✅ Binance WebSocket connected');
         this.isConnected = true;
-      this.isConnecting = false;
-      this.shuttingDown = false;
-      this.reconnectAttempts = 0;
-      this.activeStreams.clear();
-      this.throttledKlineStreams.clear();
-      recordWsReconnect('global');
-       this.lastHealthy = false;
-       updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
-        
+        this.isConnecting = false;
+        this.shuttingDown = false;
+        this.reconnectAttempts = 0;
+        this.activeStreams.clear();
+        this.throttledKlineStreams.clear();
+        recordWsReconnect('global');
+        this.lastHealthy = false;
+        updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
+
         // Subscribe aux streams par défaut
         this.subscribeToAllTickers();
+        this.subscribeToBookTickers();
         this.resubscribeKlines();
       });
 
@@ -279,11 +280,11 @@ class BinanceWebSocketManager {
 
       this.ws.on('close', () => {
         console.log('🔌 Binance WebSocket closed');
-      this.isConnected = false;
-      this.isConnecting = false;
-      this.activeStreams.clear();
-      this.throttledKlineStreams.clear();
-      this.lastHealthy = false;
+        this.isConnected = false;
+        this.isConnecting = false;
+        this.activeStreams.clear();
+        this.throttledKlineStreams.clear();
+        this.lastHealthy = false;
         updateWsConnectionState({ connected: false, healthy: false, reason: 'ws_close' });
         if (this.pingTimer) {
           clearInterval(this.pingTimer);
@@ -350,6 +351,19 @@ class BinanceWebSocketManager {
     this.sendSubscription(stream);
   }
 
+  private subscribeToBookTickers(): void {
+    if (!this.ws || !this.isConnected) {
+      console.warn('⚠️ Cannot subscribe: WebSocket not connected');
+      return;
+    }
+    const stream = '!bookTicker';
+    if (this.activeStreams.has(stream)) {
+      return;
+    }
+    console.log('📡 Subscribing to bookTicker stream...');
+    this.sendSubscription(stream);
+  }
+
   /**
    * Subscribe à un stream de klines (OHLCV) pour un symbole
    * 0 weight - Remplace fetchOHLCV (2 weight × n appels)
@@ -385,6 +399,11 @@ class BinanceWebSocketManager {
           this.handleAllTickersUpdate(data);
           return;
         }
+      }
+
+      if (stream === '!bookTicker' && data) {
+        this.handleBookTickerUpdate(data);
+        return;
       }
 
       if (typeof stream === 'string' && stream.includes('@kline_')) {
@@ -519,6 +538,29 @@ class BinanceWebSocketManager {
     // Log stats périodiquement
     if (receivedTs % 60000 < 5000) { // ~toutes les minutes
       console.log(`📊 WebSocket cache: ${this.tickersCache.size} tickers, updated ${new Date(this.lastUpdate).toISOString()}`);
+    }
+  }
+
+  private handleBookTickerUpdate(payload: any): void {
+    const receivedTs = Date.now();
+    const updates = Array.isArray(payload) ? payload : [payload];
+    for (const item of updates) {
+      const rawSymbol = String(item?.s || '').trim();
+      if (!rawSymbol) continue;
+      const bid = parseTickerNumber(item?.b ?? item?.bidPrice);
+      const ask = parseTickerNumber(item?.a ?? item?.askPrice);
+      if (!hasPositive(bid) || !hasPositive(ask)) continue;
+      const cacheSymbol = this.normalizeCacheSymbol(rawSymbol);
+      this.lastValidBidAsk.set(cacheSymbol, { bid: bid!, ask: ask!, ts: receivedTs });
+      const cached = this.tickersCache.get(cacheSymbol);
+      if (cached) {
+        cached.bid = bid!;
+        cached.ask = ask!;
+        cached.timestamp = Number.isFinite(Number(item?.T ?? item?.E)) ? Number(item.T ?? item.E) : receivedTs;
+        cached.receivedAt = receivedTs;
+        cached.stale = false;
+        this.tickersCache.set(cacheSymbol, cached);
+      }
     }
   }
 
