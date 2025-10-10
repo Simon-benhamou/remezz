@@ -46,7 +46,7 @@ const IntelligencePage: React.FC = () => {
       setAdaptiveLoading(true);
       setOpsLoading(true);
       const [adaptive, metrics] = await Promise.all([
-        api.getAdaptiveWeights({ decisionsLimit: 100 }).catch(() => null),
+        api.getAdaptiveWeights({ decisionsLimit: 50 }).catch(() => null),
         api.getOpsMetrics().catch(() => null),
       ]);
       if (adaptive) setAdaptiveData(adaptive);
