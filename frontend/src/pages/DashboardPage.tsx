@@ -5,6 +5,7 @@ import { api } from '../api';
 import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
+import AgentHealthTable from '../components/AgentHealthTable';
 import SmartOpportunityScanner from '../components/SmartOpportunityScanner';
 import { useMode } from '../contexts/ModeContext';
 import { 
@@ -37,6 +38,8 @@ export default function DashboardPage(){
   const [opsLoading, setOpsLoading] = React.useState<boolean>(true);
   const [adaptiveData, setAdaptiveData] = React.useState<any>(null);
   const [adaptiveLoading, setAdaptiveLoading] = React.useState<boolean>(true);
+  const [agentHealth, setAgentHealth] = React.useState<any>(null);
+  const [agentHealthLoading, setAgentHealthLoading] = React.useState<boolean>(true);
   const [showSmartScanner, setShowSmartScanner] = React.useState(false);
   const loadedRef = React.useRef(false);
   const navigate = useNavigate();
@@ -91,15 +94,19 @@ export default function DashboardPage(){
     try {
       setOpsLoading(true);
       setAdaptiveLoading(true);
-      const [metrics, adaptive] = await Promise.all([
+      setAgentHealthLoading(true);
+      const [metrics, adaptive, health] = await Promise.all([
         api.getOpsMetrics().catch(()=>null),
         api.getAdaptiveWeights().catch(()=>null),
+        api.getAgentHealth().catch(()=>null),
       ]);
       if (metrics) setOpsMetrics(metrics);
       if (adaptive) setAdaptiveData(adaptive);
+      if (health) setAgentHealth(health);
     } finally {
       setOpsLoading(false);
       setAdaptiveLoading(false);
+      setAgentHealthLoading(false);
     }
   }, []);
   const quickActions = React.useMemo<MenuProps['items']>(() => {
@@ -654,6 +661,12 @@ export default function DashboardPage(){
               </Space>
             )}
           </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
+        <Col xs={24}>
+          <AgentHealthTable data={agentHealth} loading={agentHealthLoading} onRefresh={loadOps} />
         </Col>
       </Row>
 
