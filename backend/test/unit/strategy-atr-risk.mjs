@@ -7,6 +7,8 @@ process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
 const { computeAtrRiskParams, generateStrategy } = await import('../../dist/src/ai/orchestrator.js');
+const { computeAdaptiveRisk } = await import('../../dist/src/risk/adaptive.js');
+const { prisma } = await import('../../dist/src/db/client.js');
 
 function makeSnapshot(symbol, atrPct, overrides = {}) {
   const last = overrides.last ?? 100;
@@ -79,6 +81,52 @@ function buildLLMResponse(symbol, trigger, stop, target) {
   });
 }
 
+async function resetDb() {
+  if (typeof prisma.$reset === 'function') {
+    await prisma.$reset();
+  } else {
+    await prisma.fill.deleteMany();
+    await prisma.order.deleteMany();
+    await prisma.agentSession.deleteMany();
+  }
+}
+
+async function createSession(sessionId, symbol) {
+  await prisma.agentSession.create({
+    data: {
+      id: sessionId,
+      symbol,
+      mode: 'paper',
+      profileJson: { riskPerTradePct: 1 },
+    },
+  });
+}
+
+async function seedExitOrders(sessionId, symbol, pctChanges) {
+  const now = Date.now();
+  let idx = 0;
+  for (const pct of pctChanges) {
+    const ts = new Date(now - idx * 60_000);
+    await prisma.order.create({
+      data: {
+        clientOrderId: `${sessionId}-${symbol}-${idx}.exit`,
+        sessionId,
+        symbol,
+        side: pct >= 0 ? 'sell' : 'buy',
+        type: 'market',
+        qty: 1,
+        price: 1,
+        pctChange: pct,
+        leverage: 1,
+        status: 'filled',
+        createdAt: ts,
+        updatedAt: ts,
+      },
+    });
+    idx += 1;
+  }
+}
+
 // --- LLM path should clamp risk into ATR-derived bounds --- //
 const llmSnapshot = makeSnapshot('BTC/USDT', 1.4, { trend: 0.9, srBias: 'nearSupport' });
 const llmParams = computeAtrRiskParams(llmSnapshot.symbol, llmSnapshot.atrPct);
@@ -115,5 +163,28 @@ assert(Math.abs(fallbackStrategy.risk.stop.value - fallbackParams.stopPct) < 1e-
 assert(fallbackStrategy.risk.target.value >= fallbackParams.targetBounds.min - 1e-9 && fallbackStrategy.risk.target.value <= fallbackParams.targetBounds.max + 1e-9,
   `Fallback target ${fallbackStrategy.risk.target.value} should lie within ATR bounds ${JSON.stringify(fallbackParams.targetBounds)}`);
 assert(fallbackStrategy.risk.target.value > fallbackStrategy.risk.stop.value, 'Fallback target must exceed stop');
+
+// --- Adaptive risk engine --- //
+await resetDb();
+const goodSessionId = 'session-good';
+await createSession(goodSessionId, 'AGIXUSDT');
+await seedExitOrders(goodSessionId, 'AGIXUSDT', [1.4, 1.1, 1.2, 1.3, 1.0, 1.05, 1.25]);
+await seedExitOrders(goodSessionId, 'ETCUSDT', [0.9, 1.0, 0.95, 1.1, 0.85]);
+await seedExitOrders(goodSessionId, 'BADUSDT', [0.2, -0.3, 0.1, -0.1]);
+
+const adaptivePositive = await computeAdaptiveRisk(goodSessionId, 1);
+assert(adaptivePositive.appliedSymbolMultiplier > 1, 'Top symbol should earn a multiplier above 1');
+assert(adaptivePositive.riskPct > 1, 'Adaptive risk should increase sizing for strong Sharpe/low drawdown');
+assert(adaptivePositive.symbolMultipliers.AGIXUSDT.multiplier >= adaptivePositive.appliedSymbolMultiplier,
+  'Dominant symbol multiplier should match applied boost');
+
+await resetDb();
+const flatSessionId = 'session-flat';
+await createSession(flatSessionId, 'BTCUSDT');
+await seedExitOrders(flatSessionId, 'BTCUSDT', [0.5, -0.5, 0.4, -0.4, 0.3, -0.3, 0.2, -0.2]);
+
+const adaptiveFlat = await computeAdaptiveRisk(flatSessionId, 1);
+assert.equal(adaptiveFlat.appliedSymbolMultiplier, 1, 'No multiplier should be applied when performance is mixed');
+assert.equal(adaptiveFlat.riskPct, 1, 'Baseline risk should remain unchanged for underperforming stats');
 
 console.log('✅ strategy-atr-risk.mjs passed');

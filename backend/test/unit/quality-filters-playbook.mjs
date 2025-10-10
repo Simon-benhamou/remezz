@@ -7,6 +7,7 @@ process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
 const { ReboundRejectionAgent } = await import('../../dist/src/agent/state.js');
+const { clearOpsEvents, recentOpsEvents } = await import('../../dist/src/monitor/ops.js');
 
 function sumPoints(filters) {
   return Object.values(filters).reduce((sum, filter) => sum + (filter.points || 0), 0);
@@ -69,6 +70,36 @@ const momentumPoints = sumPoints(momentumFilters);
 assert(momentumPoints >= 55, `momentum setup should clear breakout threshold (got ${momentumPoints})`);
 assert.equal(momentumFilters.momentum.status, 'PASS', 'momentum filter should pass for breakout context');
 
+const strongMomentumSnap = {
+  symbol: 'SOL/USDT:USDT',
+  last: 124.1,
+  ema20: 125.2,
+  ema50: 121.0,
+  ema20Slope: 0.16,
+  adx14: 28.7,
+  atrPct: 1.7,
+  momentumPct: 1.9,
+  volume: 2100,
+  volumeMA: 1500,
+};
+
+assert(momentumAgent['passesEntryMomentumGates'](strongMomentumSnap, 'enter'), 'momentum gates should allow strong trending context with slope and ATR above tightened thresholds');
+
+const weakMomentumSnap = {
+  symbol: 'SOL/USDT:USDT',
+  last: 123.6,
+  ema20: 124.0,
+  ema50: 122.5,
+  ema20Slope: 0.02,
+  adx14: 24.3,
+  atrPct: 0.9,
+  momentumPct: 1.1,
+  volume: 1900,
+  volumeMA: 1700,
+};
+
+assert(!momentumAgent['passesEntryMomentumGates'](weakMomentumSnap, 'enter'), 'momentum gates should now reject shallow slope / low ATR breakouts');
+
 const meanAgent = createAgent('mean_reversion', 'long');
 const meanSnap = {
   symbol: 'SOL/USDT:USDT',
@@ -110,5 +141,39 @@ const poorMeanFilters = meanAgent['getQualityFiltersDiagnostics'](poorMeanSnap);
 const poorMeanPoints = sumPoints(poorMeanFilters);
 assert(poorMeanPoints < 40, `uninspired range trade should stay blocked (got ${poorMeanPoints})`);
 assert.equal(poorMeanFilters.rsiPosition.status, 'FAIL', 'lack of RSI extremes should not qualify mean reversion');
+
+// Regression: diagnostics should emit VOS block events with detailed reason codes
+clearOpsEvents();
+const vosAgent = createAgent('momentum_breakout', 'long');
+vosAgent.sessionId = 'unit-test-session';
+vosAgent.state = 'ARMED';
+(vosAgent).pos = null;
+(vosAgent).entering = false;
+(vosAgent).plan.zone = { from: 229, to: 231, mid: 230 };
+(vosAgent).plan.bias = 'long';
+(vosAgent).profile.symbol = 'SOL/USDT:USDT';
+(vosAgent).profile.mode = 'paper';
+(vosAgent).profile.aggressiveness = 'reactive';
+(vosAgent).getDiagnosticSnapshot = async () => ({
+  symbol: 'SOL/USDT:USDT',
+  last: 245.1,
+  ema20: 246.5,
+  ema50: 240.2,
+  rsi14: 58.2,
+  adx14: 26.4,
+  atrPct: 1.05,
+  volume: 1800,
+  volumeMA: 1500,
+});
+
+const vosDiag = await vosAgent.getDiagnostics();
+assert.equal(vosDiag.canTrade, false, 'diagnostics should report blocked state');
+
+const vosEvents = recentOpsEvents(5);
+const vosBlock = vosEvents.find((evt) => evt.message === 'validator_of_signal_block');
+assert(vosBlock, 'expected validator_of_signal_block event');
+assert.equal(vosBlock.sessionId, 'unit-test-session');
+assert.equal(vosBlock.details?.primary?.key, 'inEntryZone', 'primary failing check should be entry zone');
+assert.equal(vosBlock.details?.primary?.code, 'entry_zone.out_of_zone', 'event should include reason code');
 
 console.log('✅ quality-filters-playbook.mjs passed');

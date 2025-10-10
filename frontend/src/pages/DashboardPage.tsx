@@ -31,6 +31,12 @@ import { useStopAllConfirmation } from '../hooks/useStopAllConfirmation';
 
 const { Title, Text } = Typography;
 
+const formatSignalTime = (ts?: number | null) => {
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return '—';
+  const date = new Date(ts);
+  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+};
+
 export default function DashboardPage(){
   const [ov, setOv] = React.useState<any>({});
   const [loading, setLoading] = React.useState<boolean>(true);
@@ -185,6 +191,8 @@ export default function DashboardPage(){
   
   const globalHealth = getGlobalHealth();
   const marginOverview = opsMetrics?.margin;
+  const entryGateBlocks = opsMetrics?.ops?.entryGateBlocks;
+  const flaggedVos = Array.isArray(opsMetrics?.ops?.flaggedSessions) ? opsMetrics.ops.flaggedSessions : [];
   const marginFlag = marginOverview
     ? marginOverview.critical
       ? { label: 'Critical', color: '#ff4d4f' }
@@ -587,7 +595,38 @@ export default function DashboardPage(){
                 <Badge count={ov?.alerts?.severityCounts?.low || 0} style={{ backgroundColor: '#1890ff' }} />
               </div>
             </Space>
-            
+
+            {entryGateBlocks && (
+              <>
+                <Divider />
+                <Text strong style={{ marginBottom: 8, display: 'block' }}>Signal Gate Blocks</Text>
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Text type='secondary'>Total blocks captured</Text>
+                    <Tag color='geekblue'>{entryGateBlocks.total || 0}</Tag>
+                  </div>
+                  {flaggedVos.length === 0 ? (
+                    <Text type='secondary' style={{ fontSize: 12 }}>No agents stalled on validator checks.</Text>
+                  ) : (
+                    flaggedVos.slice(0, 3).map((row: any) => (
+                      <div key={row.sessionId} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px', background: '#fee2e2', borderRadius: 8 }}>
+                        <Space size='small'>
+                          <Tag color='red'>Stalled</Tag>
+                          <Text strong>{row.symbol || row.sessionId}</Text>
+                        </Space>
+                        <Text type='secondary' style={{ fontSize: 12 }}>
+                          Blocks: {row.count} · Last block {formatSignalTime(row.lastBlockedAt)}
+                        </Text>
+                        <Text type='secondary' style={{ fontSize: 12 }}>
+                          Last successful trade: {formatSignalTime(row.lastSuccessfulTradeAt)}
+                        </Text>
+                      </div>
+                    ))
+                  )}
+                </Space>
+              </>
+            )}
+
             {(ov?.alerts?.recent || []).length > 0 && (
               <>
                 <Divider />

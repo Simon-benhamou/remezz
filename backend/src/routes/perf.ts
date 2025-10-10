@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../db/client.js";
+import { computeAdaptiveRisk } from "../risk/adaptive.js";
+import type { AdaptiveRiskResult } from "../risk/adaptive.js";
 
 export const router = Router();
 
@@ -14,6 +16,16 @@ router.get("/", async (req, res) => {
 router.get("/breakdown", async (req, res) => {
   const sessionId = String(req.query.sessionId || "");
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+
+  const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  const profileJson: any = session?.profileJson && typeof session.profileJson === 'object' ? session.profileJson : {};
+  const baseRiskPct = Number(profileJson?.riskPerTradePct ?? profileJson?.risk_per_trade_pct ?? 1) || 1;
+  let adaptiveRisk: AdaptiveRiskResult | null = null;
+  try {
+    adaptiveRisk = await computeAdaptiveRisk(sessionId, baseRiskPct);
+  } catch (err) {
+    adaptiveRisk = null;
+  }
 
   // Only exit orders carry pctChange/realized effects for a closed slice
   const exits = await prisma.order.findMany({
@@ -78,5 +90,6 @@ router.get("/breakdown", async (req, res) => {
     bySide: { long: longS, short: shortS },
     bySymbol: bySymbolOut,
     sample: exits.length,
+    adaptiveRisk,
   });
 });
