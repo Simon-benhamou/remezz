@@ -59,7 +59,8 @@ export class IntegratedPerformanceMonitor {
 
       this.monitor = new AgentPerformanceMonitor({
         intervalMinutes: 60, // Run every hour
-        enableAlerts: true
+        enableAlerts: true,
+        watchInactivity: true
       });
 
       await this.monitor.start();

@@ -9,6 +9,9 @@
 import { AgentPerformanceAnalyzer } from './agent-performance-analyzer.js';
 import { createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';
+import { prisma } from '../src/db/client.js';
+import { emitAlert } from '../src/monitor/policy.js';
+import { recordOpsEvent } from '../src/monitor/ops.js';
 
 interface MonitorConfig {
   intervalMinutes: number;
@@ -19,6 +22,7 @@ interface MonitorConfig {
     lowWinRateThreshold: number;
     negativeExpectancyCount: number;
   };
+  watchInactivity: boolean;
 }
 
 class AgentPerformanceMonitor {
@@ -37,6 +41,7 @@ class AgentPerformanceMonitor {
         lowWinRateThreshold: 30, // Alert if global win rate below 30%
         negativeExpectancyCount: 3 // Alert if 3+ agents have negative expectancy
       },
+      watchInactivity: false,
       ...config
     };
 
@@ -69,12 +74,12 @@ class AgentPerformanceMonitor {
 
   stop(): void {
     this.isRunning = false;
-    this.logStream.end();
     console.log('🛑 Performance monitor stopped');
     this.log('INFO', 'Monitor stopped');
+    this.logStream.end();
   }
 
-  private async runAnalysis(): Promise<void> {
+  async runAnalysis(): Promise<void> {
     try {
       const timestamp = new Date().toISOString();
       console.log(`\n🔍 Running scheduled analysis at ${timestamp}`);
@@ -84,6 +89,10 @@ class AgentPerformanceMonitor {
       // Check alert conditions
       if (this.config.enableAlerts) {
         await this.checkAlerts(analysis);
+      }
+
+      if (this.config.watchInactivity) {
+        await this.checkInactivity();
       }
 
       // Log summary
@@ -133,6 +142,70 @@ class AgentPerformanceMonitor {
     }
   }
 
+  private async checkInactivity(): Promise<void> {
+    const activeSessions = await prisma.agentSession.findMany({
+      where: { stoppedAt: null },
+      select: {
+        id: true,
+        symbol: true,
+        mode: true,
+        startedAt: true,
+      },
+    });
+
+    if (!activeSessions.length) {
+      return;
+    }
+
+    for (const session of activeSessions) {
+      const startedHoursAgo = (Date.now() - new Date(session.startedAt).getTime()) / (1000 * 60 * 60);
+      if (startedHoursAgo < 24) {
+        continue;
+      }
+
+      const lastFill = await prisma.fill.findFirst({
+        where: { sessionId: session.id },
+        orderBy: { ts: 'desc' },
+        select: { ts: true },
+      });
+
+      const lastTradeAt = lastFill?.ts ?? session.startedAt;
+      const hoursInactive = (Date.now() - new Date(lastTradeAt).getTime()) / (1000 * 60 * 60);
+
+      if (hoursInactive < 24) {
+        continue;
+      }
+
+      const details = {
+        hoursInactive,
+        lastTradeAt,
+        startedAt: session.startedAt,
+        mode: session.mode,
+      };
+
+      recordOpsEvent({
+        level: 'warn',
+        source: 'performance_monitor',
+        message: 'agent_inactivity',
+        sessionId: session.id,
+        symbol: session.symbol,
+        details,
+      });
+
+      await emitAlert({
+        sessionId: session.id,
+        symbol: session.symbol,
+        kind: 'inactivity',
+        severity: 'med',
+        details,
+      });
+
+      const summary = `Inactivity detected for session ${session.id} (${session.symbol}) - ${hoursInactive.toFixed(1)}h without trades`;
+      console.log(`🚨 ${summary}`);
+      this.log('ALERT', summary);
+    }
+  }
+
   private log(level: string, message: string): void {
     const timestamp = new Date().toISOString();
     const logEntry = `[${timestamp}] ${level}: ${message}\n`;
@@ -147,7 +220,8 @@ async function main() {
 
   const monitor = new AgentPerformanceMonitor({
     intervalMinutes: parseInt(process.env.MONITOR_INTERVAL_MINUTES || '60'),
-    enableAlerts: process.env.DISABLE_ALERTS !== 'true'
+    enableAlerts: process.env.DISABLE_ALERTS !== 'true',
+    watchInactivity: process.env.WATCH_INACTIVITY === 'true'
   });
 
   switch (command) {
