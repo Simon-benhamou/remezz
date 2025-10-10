@@ -16,6 +16,40 @@ export type DecisionFeatures = {
   divergenceScore?: number;
 };
 
+const FEATURE_KEYS: Array<keyof DecisionFeatures> = [
+  'momentum',
+  'volume24h',
+  'volatility',
+  'trend',
+  'trendStrength',
+  'score',
+  'confidence',
+  'biasConfidence',
+  'agreementScore',
+  'divergenceScore',
+];
+
+type SimilarDecision = {
+  id: string;
+  createdAt: string;
+  outcome: string | null;
+  realizedPnl: number | null;
+  bias?: string | null;
+  similarity: number;
+  features: DecisionFeatures | null;
+};
+
+export type DecisionMemoryInsight = {
+  symbol: string;
+  sampleSize: number;
+  symbolWinRate: number | null;
+  weightedOutcome: number | null;
+  scoreMultiplier: number;
+  similarDecisions: SimilarDecision[];
+  similarWinCount: number;
+  similarLossCount: number;
+};
+
 function extractFeatures(analysis: IntelligentAnalysis): DecisionFeatures {
   const metrics = analysis.metrics || ({} as any);
   return {
@@ -68,6 +102,99 @@ function normalizeFeature(value: number): number {
   if (!Number.isFinite(value)) return 0;
   const abs = Math.abs(value);
   return Math.log10(abs + 1);
+}
+
+function buildFeatureVector(features: Partial<DecisionFeatures> | null | undefined): number[] {
+  return FEATURE_KEYS.map((key) => normalizeFeature(Number((features as any)?.[key] ?? 0)));
+}
+
+function computeSimilarityVector(current: number[], historical: number[]): number {
+  let distanceSquared = 0;
+  let valid = 0;
+  for (let i = 0; i < current.length; i += 1) {
+    const a = current[i];
+    const b = historical[i];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    const diff = a - b;
+    distanceSquared += diff * diff;
+    valid += 1;
+  }
+  if (valid === 0) return 0;
+  const distance = Math.sqrt(distanceSquared / valid);
+  return Math.exp(-distance);
+}
+
+function outcomeToScore(outcome: string | null): number {
+  if (outcome === 'win') return 1;
+  if (outcome === 'breakeven') return 0.5;
+  if (outcome === 'loss') return 0;
+  return 0.4; // cancelled/unknown/slight penalty
+}
+
+function clampMultiplier(value: number): number {
+  return Math.max(0.6, Math.min(1.4, value));
+}
+
+export async function analyzeDecisionMemoryForSymbol(symbol: string, currentFeatures: DecisionFeatures): Promise<DecisionMemoryInsight | null> {
+  try {
+    const rows = await prisma.decisionMemory.findMany({
+      where: { symbol },
+      orderBy: { createdAt: 'desc' },
+      take: 250,
+    });
+
+    if (!rows.length) {
+      return null;
+    }
+
+    const withOutcome = rows.filter((row) => row.outcome && row.features) as Array<typeof rows[number]>;
+    const sampleSize = withOutcome.length;
+    const wins = withOutcome.filter((row) => row.outcome === 'win').length;
+    const symbolWinRate = sampleSize > 0 ? wins / sampleSize : null;
+
+    const currentVector = buildFeatureVector(currentFeatures);
+    const similar = withOutcome
+      .map((row) => {
+        const vector = buildFeatureVector(row.features as DecisionFeatures);
+        const similarity = computeSimilarityVector(currentVector, vector);
+        return {
+          id: row.id,
+          createdAt: row.createdAt.toISOString(),
+          outcome: row.outcome,
+          realizedPnl: row.realizedPnl ?? null,
+          bias: row.bias,
+          similarity,
+          features: row.features as DecisionFeatures,
+        } as SimilarDecision;
+      })
+      .filter((item) => item.similarity > 0.05)
+      .sort((a, b) => b.similarity - a.similarity);
+
+    const topSimilar = similar.slice(0, 12);
+    const weightSum = topSimilar.reduce((sum, item) => sum + item.similarity, 0);
+    const weightedOutcome = weightSum > 0
+      ? topSimilar.reduce((sum, item) => sum + outcomeToScore(item.outcome) * item.similarity, 0) / weightSum
+      : null;
+
+    const baseMultiplier = weightedOutcome != null ? 1 + (weightedOutcome - 0.5) * 0.8 : 1;
+    const trendMultiplier = symbolWinRate != null ? 1 + (symbolWinRate - 0.5) * 0.4 : 1;
+    const similarityMultiplier = topSimilar.length >= 3 ? 1 + Math.min(0.15, weightSum / topSimilar.length - 0.5) : 1;
+    const combinedMultiplier = clampMultiplier(baseMultiplier * trendMultiplier * similarityMultiplier);
+
+    return {
+      symbol,
+      sampleSize,
+      symbolWinRate,
+      weightedOutcome,
+      scoreMultiplier: combinedMultiplier,
+      similarDecisions: topSimilar,
+      similarWinCount: topSimilar.filter((item) => item.outcome === 'win').length,
+      similarLossCount: topSimilar.filter((item) => item.outcome === 'loss').length,
+    };
+  } catch (error) {
+    console.warn('Failed to analyze decision memory:', error);
+    return null;
+  }
 }
 
 export async function recomputeAdaptiveWeights(family: string) {

@@ -8,7 +8,8 @@ import { getConfig } from '../utils/env.js';
 import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
 import { getAdaptiveWeightsForSymbol } from '../learning/adaptiveWeights.js';
 import { classifySymbolFamily } from '../learning/symbolFamily.js';
-import { recordDecisionSnapshot, markDecisionCancelled } from '../learning/decisionMemory.js';
+import { recordDecisionSnapshot, markDecisionCancelled, analyzeDecisionMemoryForSymbol } from '../learning/decisionMemory.js';
+import type { DecisionFeatures } from '../learning/decisionMemory.js';
 import { getHybridSentiment } from '../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
@@ -430,6 +431,61 @@ export interface IntelligentAnalysis {
     targetR?: number;
   };
   regime: string;
+  memoryContext?: {
+    symbolWinRate: number | null;
+    weightedOutcome: number | null;
+    scoreMultiplier: number;
+    sampleSize: number;
+    similarWinCount: number;
+    similarLossCount: number;
+    similarDecisions: Array<{
+      id: string;
+      createdAt: string;
+      outcome: string | null;
+      realizedPnl: number | null;
+      bias?: string | null;
+      similarity: number;
+    }>;
+  };
+}
+
+async function enrichAnalysisWithMemory(analysis: IntelligentAnalysis): Promise<IntelligentAnalysis> {
+  try {
+    const memoryFeatures = {
+      momentum: Number(analysis.metrics.momentum ?? 0),
+      volume24h: Number(analysis.metrics.volume24h ?? 0),
+      volatility: Number(analysis.metrics.volatility ?? 0),
+      trend: Number(analysis.metrics.trend ?? 0),
+      trendStrength: Number(analysis.metrics.trendStrength ?? 0),
+      score: Number(analysis.score ?? 0),
+      confidence: Number(analysis.confidence ?? 0),
+      biasConfidence: Number(analysis.autoBias?.confidence ?? 0),
+      agreementScore: analysis.multiTimeframe?.agreementScore != null
+        ? Number(analysis.multiTimeframe.agreementScore)
+        : undefined,
+      divergenceScore: analysis.multiTimeframe?.divergenceScore != null
+        ? Number(analysis.multiTimeframe.divergenceScore)
+        : undefined,
+    } satisfies DecisionFeatures;
+
+    const insight = await analyzeDecisionMemoryForSymbol(analysis.symbol, memoryFeatures);
+    if (insight) {
+      analysis.memoryContext = insight;
+      const adjustedScore = Number((analysis.score * insight.scoreMultiplier).toFixed(2));
+      const delta = adjustedScore - analysis.score;
+      analysis.score = adjustedScore;
+      const weighted = insight.weightedOutcome != null ? `${Math.round(insight.weightedOutcome * 100)}%` : 'n/a';
+      const neutralCount = insight.similarDecisions.length - insight.similarWinCount - insight.similarLossCount;
+      analysis.reasoning.technical.unshift(
+        `Memory check: ${insight.similarWinCount}W/${insight.similarLossCount}L/${neutralCount}N (weighted win ${weighted}) → score ${delta >= 0 ? '+' : ''}${delta.toFixed(2)} (${insight.scoreMultiplier.toFixed(2)}x)`,
+      );
+      analysis.reasoning.summary = `${analysis.reasoning.summary} | Memory ${weighted} (${insight.similarDecisions.length} matches)`;
+    }
+  } catch (error) {
+    console.warn(`Memory enrichment failed for ${analysis.symbol}:`, error);
+  }
+
+  return analysis;
 }
 
 const MAX_HISTORY_ENTRIES = 40;
@@ -1995,7 +2051,7 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
     console.log(`🤖 AI ranked ${aiRanked.length} opportunities`);
     
     // Convert AI ranking to IntelligentAnalysis format
-    const analyses: IntelligentAnalysis[] = aiRanked.map((ranked, index) => {
+    const analyses: IntelligentAnalysis[] = await Promise.all(aiRanked.map(async (ranked, index) => {
       // Auto-bias based on AI direction
       const autoBias = {
         bias: ranked.opportunity.direction as 'long' | 'short' | 'none',
@@ -2020,7 +2076,7 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
                 opportunityType === 'trend' ? 6 : 4
       };
       
-      return {
+      const analysis: IntelligentAnalysis = {
         symbol: ranked.symbol,
         score: ranked.score * 10, // Convert 0-1 to 0-10 scale
         rank: ranked.rank,
@@ -2046,7 +2102,10 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
         opportunity,
         regime: ranked.technical.trend
       };
-    });
+      return enrichAnalysisWithMemory(analysis);
+    }));
+
+    analyses.sort((a, b) => b.score - a.score);
     
     console.log(`✅ AI scan complete. ${analyses.length} opportunities converted.`);
     console.log(`🏆 Top 5: ${analyses.slice(0, 5).map(a => `${a.symbol}(${a.score.toFixed(1)})`).join(', ')}`);
@@ -2087,26 +2146,28 @@ async function scanIntelligentOpportunitiesLegacy(excludeSessionId?: string, opt
     console.log(`📈 Analyzed ${Math.min(i + batchSize, symbols.length)}/${symbols.length} top cryptos`);
   }
   
+  const enrichedAnalyses = await Promise.all(analyses.map(enrichAnalysisWithMemory));
+
   // Sort by score (descending) and assign ranks
-  analyses.sort((a, b) => b.score - a.score);
-  
+  enrichedAnalyses.sort((a, b) => b.score - a.score);
+
   // Filter by minimum score threshold to remove poor quality cryptos
   const minScoreThreshold = 2.0; // Minimum score to be considered tradeable
-  let qualifiedAnalyses = analyses.filter(a => a.score >= minScoreThreshold);
-  
-  if (!qualifiedAnalyses.length && analyses.length) {
+  let qualifiedAnalyses = enrichedAnalyses.filter(a => a.score >= minScoreThreshold);
+
+  if (!qualifiedAnalyses.length && enrichedAnalyses.length) {
     console.warn(`⚠️ All analyses scored below ${minScoreThreshold}. Falling back to top-ranked candidate anyway.`);
-    const fallbackCount = Math.min(3, analyses.length);
-    qualifiedAnalyses = analyses.slice(0, fallbackCount);
+    const fallbackCount = Math.min(3, enrichedAnalyses.length);
+    qualifiedAnalyses = enrichedAnalyses.slice(0, fallbackCount);
   }
-  
+
   qualifiedAnalyses.forEach((analysis, index) => {
     analysis.rank = index + 1;
   });
-  
-  console.log(`✅ Legacy scan complete. Found ${analyses.length} total analyses, ${qualifiedAnalyses.length} selected (score threshold ${minScoreThreshold}).`);
+
+  console.log(`✅ Legacy scan complete. Found ${enrichedAnalyses.length} total analyses, ${qualifiedAnalyses.length} selected (score threshold ${minScoreThreshold}).`);
   console.log(`🏆 Selected: ${qualifiedAnalyses.slice(0, 5).map(a => `${a.symbol}(${a.score.toFixed(1)})`).join(', ')}`);
-  
+
   return qualifiedAnalyses;
 }
 
