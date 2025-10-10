@@ -31,4 +31,23 @@ function approxEqual(a, b, tol = 1e-9) {
   approxEqual(stop, minStopAbs);
 }
 
+// Case 4: custom maxStopPct clamps more aggressively
+{
+  const mid = 1.2;
+  const minStopAbs = mid * 0.006; // 0.6%
+  const rawStop = mid * 0.6; // 60% unrealistic
+  const stop = normalizeStopDistance(mid, rawStop, minStopAbs, { maxStopPct: 0.18 });
+  const expected = mid * 0.18;
+  approxEqual(stop, expected);
+}
+
+// Case 5: clamp cannot drop below minStopAbs even with tiny maxStopPct
+{
+  const mid = 2.0;
+  const minStopAbs = mid * 0.01; // 1%
+  const rawStop = mid * 0.5;
+  const stop = normalizeStopDistance(mid, rawStop, minStopAbs, { maxStopPct: 0.005 });
+  approxEqual(stop, minStopAbs);
+}
+
 console.log('✅ plan-stop-distance-clamp: all assertions passed');
