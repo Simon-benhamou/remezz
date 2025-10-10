@@ -149,11 +149,16 @@ class BinanceWebSocketManager {
   // Streams actifs
   private activeStreams = new Set<string>();
   private desiredKlineStreams = new Map<string, { stream: string; symbol: string; interval: string }>();
+  private throttledKlineStreams = new Set<string>();
+  private readonly maxKlineStreams: number;
 
   private readonly endpoints = BINANCE_ENDPOINTS;
 
   constructor() {
     console.log('📡 Initializing Binance WebSocket Manager...');
+    const envLimit = Number(process.env.BINANCE_MAX_KLINE_STREAMS || '30');
+    this.maxKlineStreams = Math.max(5, Number.isFinite(envLimit) ? envLimit : 30);
+    console.log(`📊 Binance WS manager limit: max ${this.maxKlineStreams} concurrent kline streams`);
   }
 
   private normalizeStreamSymbol(symbol: string): string {
@@ -168,18 +173,29 @@ class BinanceWebSocketManager {
     return `${this.normalizeCacheSymbol(symbol)}_${interval}`;
   }
 
-  private enqueueKlineSubscription(symbol: string, interval: string): void {
+  private enqueueKlineSubscription(symbol: string, interval: string): boolean {
     const streamSymbol = this.normalizeStreamSymbol(symbol);
     const stream = `${streamSymbol}@kline_${interval}`;
+    if (this.desiredKlineStreams.has(stream)) return true;
+    if (this.desiredKlineStreams.size >= this.maxKlineStreams) {
+      this.throttledKlineStreams.add(stream);
+      console.warn(`⚠️ Binance WS kline limit (${this.maxKlineStreams}) reached. Skipping live stream for ${symbol} ${interval}`);
+      return false;
+    }
     this.desiredKlineStreams.set(stream, { stream, symbol, interval });
     if (this.isConnected) {
-      this.sendSubscription(stream);
+      const ok = this.sendSubscription(stream, true);
+      if (!ok) {
+        this.desiredKlineStreams.delete(stream);
+        return false;
+      }
     }
+    return true;
   }
 
-  private sendSubscription(stream: string): void {
-    if (!this.ws || !this.isConnected) return;
-    if (this.activeStreams.has(stream)) return;
+  private sendSubscription(stream: string, isKline = false): boolean {
+    if (!this.ws || !this.isConnected) return false;
+    if (this.activeStreams.has(stream)) return true;
 
     const payload = {
       method: 'SUBSCRIBE',
@@ -191,15 +207,19 @@ class BinanceWebSocketManager {
       this.ws.send(JSON.stringify(payload));
       this.activeStreams.add(stream);
       console.log(`📡 Subscribed to stream ${stream}`);
+      if (isKline) this.throttledKlineStreams.delete(stream);
+      return true;
     } catch (error) {
       console.error(`❌ Failed to subscribe to ${stream}:`, error);
+      return false;
     }
   }
 
   private resubscribeKlines(): void {
     if (!this.ws || !this.isConnected) return;
     for (const { stream } of this.desiredKlineStreams.values()) {
-      this.sendSubscription(stream);
+      if (this.activeStreams.has(stream)) continue;
+      this.sendSubscription(stream, true);
     }
   }
 
@@ -225,13 +245,14 @@ class BinanceWebSocketManager {
       this.ws.on('open', () => {
         console.log('✅ Binance WebSocket connected');
         this.isConnected = true;
-        this.isConnecting = false;
-        this.shuttingDown = false;
-        this.reconnectAttempts = 0;
-        this.activeStreams.clear();
-        recordWsReconnect('global');
-         this.lastHealthy = false;
-         updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
+      this.isConnecting = false;
+      this.shuttingDown = false;
+      this.reconnectAttempts = 0;
+      this.activeStreams.clear();
+      this.throttledKlineStreams.clear();
+      recordWsReconnect('global');
+       this.lastHealthy = false;
+       updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
         
         // Subscribe aux streams par défaut
         this.subscribeToAllTickers();
@@ -258,10 +279,11 @@ class BinanceWebSocketManager {
 
       this.ws.on('close', () => {
         console.log('🔌 Binance WebSocket closed');
-        this.isConnected = false;
-        this.isConnecting = false;
-        this.activeStreams.clear();
-        this.lastHealthy = false;
+      this.isConnected = false;
+      this.isConnecting = false;
+      this.activeStreams.clear();
+      this.throttledKlineStreams.clear();
+      this.lastHealthy = false;
         updateWsConnectionState({ connected: false, healthy: false, reason: 'ws_close' });
         if (this.pingTimer) {
           clearInterval(this.pingTimer);
@@ -332,14 +354,13 @@ class BinanceWebSocketManager {
    * Subscribe à un stream de klines (OHLCV) pour un symbole
    * 0 weight - Remplace fetchOHLCV (2 weight × n appels)
    */
-  subscribeToKline(symbol: string, interval: string = '15m'): void {
+  subscribeToKline(symbol: string, interval: string = '15m'): boolean {
     const cacheSymbol = this.normalizeCacheSymbol(symbol);
     const key = this.klineCacheKey(cacheSymbol, interval);
     if (!this.klinesCache.has(key)) {
       this.klinesCache.set(key, []);
     }
-
-    this.enqueueKlineSubscription(symbol, interval);
+    return this.enqueueKlineSubscription(symbol, interval);
   }
 
   /**

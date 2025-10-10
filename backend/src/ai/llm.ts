@@ -57,18 +57,30 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   }
   lastCallAt = Date.now();
 
-  const which = opts?.provider ?? pickLLM();
-  try { if (process.env.DEBUG_LLM === 'true') console.log(`[llm] provider=${which} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} key=${(opts?.cacheKey||'auto')}`); } catch {}
+  let provider = opts?.provider ?? pickLLM();
+  if (provider === 'grok') {
+    if (!cfg.GROK_API_KEY) {
+      if (cfg.OPENAI_API_KEY) {
+        provider = 'openai';
+        if (process.env.DEBUG_LLM === 'true') {
+          try { console.log('[llm] switching provider from grok to openai (missing GROK_API_KEY)'); } catch {}
+        }
+      } else {
+        throw new Error('Grok provider requested but GROK_API_KEY missing and no OpenAI fallback available');
+      }
+    }
+  }
+  try { if (process.env.DEBUG_LLM === 'true') console.log(`[llm] provider=${provider} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} key=${(opts?.cacheKey||'auto')}`); } catch {}
   const p = (async () => {
     try {
       let result: LLMCallResult;
-      if (which === 'openai') result = await callOpenAI(prompt);
-      else if (which === 'grok') result = await callGrok(prompt);
+      if (provider === 'openai') result = await callOpenAI(prompt);
+      else if (provider === 'grok') result = await callGrok(prompt);
       else throw new Error('No LLM configured (OPENAI_API_KEY or GROK_API_KEY missing).');
-      if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: result.text, provider: which, model: result.modelUsed, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd });
+      if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: result.text, provider, model: result.modelUsed, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd });
       if (process.env.DEBUG_LLM === 'true') {
         try {
-          console.log(`[llm] call provider=${which} model=${result.modelUsed} tokens_in=${result.tokensIn || 0} tokens_out=${result.tokensOut || 0}`);
+          console.log(`[llm] call provider=${provider} model=${result.modelUsed} tokens_in=${result.tokensIn || 0} tokens_out=${result.tokensOut || 0}`);
         } catch {}
       }
       return result.text;
@@ -76,8 +88,23 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
       if (!opts?.noCache) inFlight.delete(key);
     }
   })();
-  if (!opts?.noCache) inFlight.set(key, p);
-  return p;
+  let finalPromise: Promise<string> = p.catch(async (err) => {
+    if (provider === 'grok' && cfg.OPENAI_API_KEY) {
+      try {
+        if (process.env.DEBUG_LLM === 'true') {
+          try { console.log('[llm] grok call failed, retrying with openai fallback'); } catch {}
+        }
+        const fallback = await callOpenAI(prompt);
+        if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: fallback.text, provider: 'openai', model: fallback.modelUsed, tokensIn: fallback.tokensIn, tokensOut: fallback.tokensOut, costUsd: fallback.costUsd });
+        return fallback.text;
+      } catch (fallbackErr) {
+        throw fallbackErr;
+      }
+    }
+    throw err;
+  });
+  if (!opts?.noCache) inFlight.set(key, finalPromise);
+  return finalPromise;
 }
 
 async function callOpenAI(prompt: string): Promise<LLMCallResult> {
@@ -126,7 +153,11 @@ async function callOpenAI(prompt: string): Promise<LLMCallResult> {
 // Par défaut, beaucoup utilisent `https://api.x.ai/v1/chat/completions`.
 async function callGrok(prompt: string): Promise<LLMCallResult> {
   const { GROK_API_KEY, GROK_BASE_URL } = getConfig();
+  if (!GROK_API_KEY) {
+    throw new Error('GROK_API_KEY missing');
+  }
   const endpoint = GROK_BASE_URL || "https://api.x.ai/v1/chat/completions";
+  const controller = AbortSignal.timeout(15000);
   const r = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -142,6 +173,7 @@ async function callGrok(prompt: string): Promise<LLMCallResult> {
         { role: "user", content: prompt },
       ],
     }),
+    signal: controller,
   });
   if (!r.ok) throw new Error(`Grok HTTP ${r.status}`);
   const j = await r.json();

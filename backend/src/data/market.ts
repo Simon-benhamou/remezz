@@ -120,6 +120,19 @@ function timeframeToMinutes(tf: string): number {
   return ms > 0 ? ms / 60_000 : 0;
 }
 
+function shouldUseWebsocketForTimeframe(tf: string): boolean {
+  const normalized = tf.trim().toLowerCase();
+  switch (normalized) {
+    case '1m':
+    case '3m':
+    case '5m':
+    case '15m':
+      return true;
+    default:
+      return false;
+  }
+}
+
 async function populateBidAskFromOrderBook(ex: any, symbol: string, ticker: any) {
   if (!ex || typeof ex.fetchOrderBook !== 'function') return;
   try {
@@ -546,91 +559,115 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
   const warmKey = warmupStateKey(symbol, tf);
   let seededViaRest: number[][] | null = null;
 
-  if (preferBinanceWs) {
+  let wsData: number[][] | null = null;
+  let subscribedToWs = false;
+
+  if (preferBinanceWs && shouldUseWebsocketForTimeframe(tf)) {
     try {
       const ws = getBinanceWebSocket();
-      ws.subscribeToKline(symbol, tf);
-      let wsData = getKlinesOhlcvFromWebSocket(symbol, tf);
+      subscribedToWs = ws.subscribeToKline(symbol, tf);
+      wsData = getKlinesOhlcvFromWebSocket(symbol, tf);
 
-      if ((!wsData || wsData.length < normalizedLimit) && !binanceKlineSeeded.has(seedKey)) {
-        let seedPromise = binanceKlineSeedPromises.get(seedKey);
-        if (!seedPromise) {
-          const attempts = getWarmupState(warmKey).attempts + 1;
-          seedPromise = (async () => {
-            setWarmupState(warmKey, {
-              attempts,
-              pending: true,
-              lastAttempt: Date.now(),
-              fulfilled: false,
-            });
-            try {
-              const backfillLimit = computeBackfillLimit(tf, normalizedLimit, Math.max(1, cfg.DIAGNOSTICS_BACKFILL_DAYS || 1));
-              const rest = await fetchOhlcvRest(symbol, tf, backfillLimit, userId, userCredentials);
-              if (rest && rest.length) {
-                seedKlinesFromWebSocket(symbol, tf, rest);
-                binanceKlineSeeded.add(seedKey);
-                const retryTimer = backfillRetryTimers.get(warmKey);
-                if (retryTimer) {
-                  clearTimeout(retryTimer);
-                  backfillRetryTimers.delete(warmKey);
-                }
-                setWarmupState(warmKey, {
-                  pending: false,
-                  fulfilled: true,
-                  lastError: undefined,
-                  nextRetryTs: undefined,
-                  lastSuccess: Date.now(),
-                });
-                return rest;
-              }
-              throw new Error('rest_backfill_empty');
-            } catch (error) {
-              const retryDelay = computeRetryDelayMs(attempts);
-              scheduleWarmupRetry(warmKey, seedKey, retryDelay);
+      if (!subscribedToWs) {
+        if (!wsData || wsData.length < normalizedLimit) {
+          console.warn(`⚠️ Using REST fallback for ${symbol} ${tf} (WS kline limit reached).`);
+        } else {
+          const prepared = prepareOhlcvSeries(wsData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+          if (prepared.length) {
+            maybeLogOhlcvDebug(symbol, tf, prepared);
+            if (prepared.length >= normalizedLimit) {
               setWarmupState(warmKey, {
                 pending: false,
-                lastError: String((error as any)?.message || error),
-                nextRetryTs: Date.now() + retryDelay,
+                fulfilled: true,
+                lastError: undefined,
+                nextRetryTs: undefined,
+                lastSuccess: Date.now(),
+              });
+            }
+            return prepared;
+          }
+        }
+      } else {
+        if ((!wsData || wsData.length < normalizedLimit) && !binanceKlineSeeded.has(seedKey)) {
+          let seedPromise = binanceKlineSeedPromises.get(seedKey);
+          if (!seedPromise) {
+            const attempts = getWarmupState(warmKey).attempts + 1;
+            seedPromise = (async () => {
+              setWarmupState(warmKey, {
+                attempts,
+                pending: true,
+                lastAttempt: Date.now(),
                 fulfilled: false,
               });
-              throw error;
-            } finally {
-              binanceKlineSeedPromises.delete(seedKey);
-            }
-          })();
-          binanceKlineSeedPromises.set(seedKey, seedPromise);
-        }
-        try {
-          seededViaRest = await seedPromise;
-        } catch (error) {
-          console.warn(`Binance REST backfill failed for ${symbol} ${tf}:`, error);
-        }
-        if (!wsData && seededViaRest && seededViaRest.length) {
-          wsData = seededViaRest;
-        }
-      } else if (!wsData || wsData.length < normalizedLimit) {
-        setWarmupState(warmKey, {
-          pending: true,
-          lastAttempt: Date.now(),
-          attempts: getWarmupState(warmKey).attempts,
-        });
-      }
-
-      if (wsData && wsData.length) {
-        const merged = seededViaRest && seededViaRest.length ? [...wsData, ...seededViaRest] : wsData;
-        const prepared = prepareOhlcvSeries(merged, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-        if (prepared.length) {
-          maybeLogOhlcvDebug(symbol, tf, prepared);
-          if (prepared.length >= normalizedLimit) {
-            setWarmupState(warmKey, {
-              pending: false,
-              fulfilled: true,
-              lastError: undefined,
-              nextRetryTs: undefined,
-              lastSuccess: Date.now(),
-            });
+              try {
+                const backfillLimit = computeBackfillLimit(tf, normalizedLimit, Math.max(1, cfg.DIAGNOSTICS_BACKFILL_DAYS || 1));
+                const rest = await fetchOhlcvRest(symbol, tf, backfillLimit, userId, userCredentials);
+                if (rest && rest.length) {
+                  seedKlinesFromWebSocket(symbol, tf, rest);
+                  binanceKlineSeeded.add(seedKey);
+                  const retryTimer = backfillRetryTimers.get(warmKey);
+                  if (retryTimer) {
+                    clearTimeout(retryTimer);
+                    backfillRetryTimers.delete(warmKey);
+                  }
+                  setWarmupState(warmKey, {
+                    pending: false,
+                    fulfilled: true,
+                    lastError: undefined,
+                    nextRetryTs: undefined,
+                    lastSuccess: Date.now(),
+                  });
+                  return rest;
+                }
+                throw new Error('rest_backfill_empty');
+              } catch (error) {
+                const retryDelay = computeRetryDelayMs(attempts);
+                scheduleWarmupRetry(warmKey, seedKey, retryDelay);
+                setWarmupState(warmKey, {
+                  pending: false,
+                  lastError: String((error as any)?.message || error),
+                  nextRetryTs: Date.now() + retryDelay,
+                  fulfilled: false,
+                });
+                throw error;
+              } finally {
+                binanceKlineSeedPromises.delete(seedKey);
+              }
+            })();
+            binanceKlineSeedPromises.set(seedKey, seedPromise);
           }
-          return prepared;
+          try {
+            seededViaRest = await seedPromise;
+          } catch (error) {
+            console.warn(`Binance REST backfill failed for ${symbol} ${tf}:`, error);
+          }
+          if ((!wsData || wsData.length < normalizedLimit) && seededViaRest && seededViaRest.length) {
+            wsData = seededViaRest;
+          }
+        } else if (!wsData || wsData.length < normalizedLimit) {
+          setWarmupState(warmKey, {
+            pending: true,
+            lastAttempt: Date.now(),
+            attempts: getWarmupState(warmKey).attempts,
+          });
+        }
+
+        if (wsData && wsData.length) {
+          const merged = seededViaRest && seededViaRest.length ? [...wsData, ...seededViaRest] : wsData;
+          const prepared = prepareOhlcvSeries(merged, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+          if (prepared.length) {
+            maybeLogOhlcvDebug(symbol, tf, prepared);
+            if (prepared.length >= normalizedLimit) {
+              setWarmupState(warmKey, {
+                pending: false,
+                fulfilled: true,
+                lastError: undefined,
+                nextRetryTs: undefined,
+                lastSuccess: Date.now(),
+              });
+            }
+            return prepared;
+          }
         }
       }
     } catch (error) {

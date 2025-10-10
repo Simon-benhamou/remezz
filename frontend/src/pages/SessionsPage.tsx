@@ -1584,34 +1584,7 @@ export default function SessionsPage(){
                       Actions
                     </Button>
                   </Dropdown>
-                  <Button
-                    type='primary'
-                    icon={<PlayCircleOutlined />}
-                    onClick={()=>{
-                      setRestartSessionId(null);
-                      setRestartLeverageInfo(null);
-                      form.setFieldsValue({
-                        symbol:'BTC/USDT',
-                        mode,
-                        startBalanceUsd: undefined,
-                        maxLeverage:4,
-                        aggressiveness:'conservative',
-                        smartAutoMode: false
-                      }); 
-                      setOpen(true); 
-                    }}
-                    style={{
-                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                      border: 'none',
-                      borderRadius: '10px',
-                      fontWeight: '600',
-                      boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)',
-                      fontSize: '14px',
-                      height: '40px'
-                    }}
-                  >
-                    New Agent
-                  </Button>
+               
                   <Tooltip title={locked ? 'Emergency stop active. Reset to enable new agent creation.' : undefined}>
                     <Button
                       type='primary'
