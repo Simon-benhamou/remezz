@@ -673,9 +673,12 @@ export class ReboundRejectionAgent {
       planAny._baseStopDistance = baseStopDistance;
     }
     let effectiveStopDistance = baseStopDistance;
+    if (playbook === 'momentum_breakout') {
+      effectiveStopDistance *= 0.85;
+    }
     if (regimeRisk?.stopMultiplier != null && Number.isFinite(regimeRisk.stopMultiplier)) {
       const clamp = Math.max(0.4, Math.min(1, regimeRisk.stopMultiplier));
-      effectiveStopDistance = baseStopDistance * clamp;
+      effectiveStopDistance *= clamp;
     }
     this.plan.stopDistance = effectiveStopDistance;
     const stopRaw = this.plan.bias === 'long'
@@ -683,6 +686,11 @@ export class ReboundRejectionAgent {
       : entry + this.plan.stopDistance;
     const stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
+    if (playbook === 'momentum_breakout') {
+      const momentumTargets = [1.6, 2.6];
+      this.plan.plan.risk.tp = momentumTargets.map(value => ({ type: 'R', value }));
+      this.plan.rPrices = momentumTargets.map(r => ({ r, price: round4(entry + dir0 * r * this.plan!.stopDistance) }));
+    }
     const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
     
     // CRYPTO PROFIT FILTER: Minimum profit threshold
@@ -3418,6 +3426,11 @@ export class ReboundRejectionAgent {
     const thresholds = this.effectiveEntryThresholds();
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
+    const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    if (playbook === 'momentum_breakout') {
+      minAtr *= 1.15; // demand more volatility for breakout setups
+      minSlopeAbsPct *= 1.05;
+    }
 
     // 🚨 CIRCUIT BREAKER CHECK: Prevent new entries if circuit breaker is active
     if (this.performanceMetrics?.circuitBreaker?.isActive) {
@@ -3481,10 +3494,13 @@ export class ReboundRejectionAgent {
       const atrDeficit = minAtr - atrPct;
       const momentumPct = Math.abs(Number((snap as any)?.momentumPct ?? 0));
 
+      const momentumBoost = Math.abs(momentumPct);
+      const atrBuffer = playbook === 'momentum_breakout' ? 0.5 : 0.8;
       const allowFlexibility = (
         trendAligned &&
-        (strongAdx || momentumPct >= 1.0) &&
-        atrDeficit <= 0.8
+        strongAdx &&
+        momentumBoost >= (playbook === 'momentum_breakout' ? 1.5 : 1.0) &&
+        atrDeficit <= atrBuffer
       );
 
       if (!allowFlexibility) {
@@ -3506,7 +3522,12 @@ export class ReboundRejectionAgent {
     const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
     const bias = this.plan?.bias || 'none';
 
-    const adjustedSlopeRequirement = Math.max(0.05, Math.min(minSlopeAbsPct * 0.6, Math.max(minSlopeAbsPct - 0.05, 0.05)));
+    const slopeFloor = playbook === 'momentum_breakout' ? 0.08 : 0.05;
+    const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.75 : 0.6;
+    const adjustedSlopeRequirement = Math.max(
+      slopeFloor,
+      Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - (playbook === 'momentum_breakout' ? 0.03 : 0.05), slopeFloor))
+    );
 
     if (slopePctAbs < adjustedSlopeRequirement) {
       recordOpsEvent({
