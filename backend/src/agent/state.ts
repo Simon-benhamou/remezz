@@ -141,6 +141,8 @@ export class ReboundRejectionAgent {
   private lastExitCooldownMs = 0;
   private maxNotionalCapUsd = Infinity;
   private orderAttemptLogCount = 0;
+  private lastDiagnosticCanTrade: boolean | null = null;
+  private lastQualityFilterFailure: { code: string; message?: string; details?: any } | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -3618,6 +3620,11 @@ export class ReboundRejectionAgent {
 
     // CRITICAL: Block if volume is 0 (no data or illiquid symbol) and no strong context
     if (volume === 0) {
+      this.lastQualityFilterFailure = {
+        code: 'quality.volume_zero',
+        message: 'Detected zero volume in latest bar',
+        details: { volume, volumeMA },
+      };
       recordOpsEvent({
         level: 'warn',
         source: 'quality_filter',
@@ -3633,6 +3640,11 @@ export class ReboundRejectionAgent {
     const emaSpread = ((ema20 - ema50) / ema50) * 100;
     const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.25 : ema20 < ema50 && emaSpread < -0.25;
     if (!trendAligned) {
+      this.lastQualityFilterFailure = {
+        code: 'quality.trend_misaligned',
+        message: 'EMA trend misalignment',
+        details: { emaSpread, bias },
+      };
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -3646,6 +3658,11 @@ export class ReboundRejectionAgent {
 
     // 2. ADX Trend Strength (required) - Using realistic threshold
     if (adx < 12) {
+      this.lastQualityFilterFailure = {
+        code: 'quality.adx_weak',
+        message: 'ADX below minimum threshold',
+        details: { adx, bias },
+      };
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -3660,6 +3677,11 @@ export class ReboundRejectionAgent {
     // 3. RSI Position (required) - Using realistic thresholds
     const rsiOptimal = bias === 'long' ? (rsi >= 25 && rsi <= 85) : (rsi >= 15 && rsi <= 75);
     if (!rsiOptimal) {
+      this.lastQualityFilterFailure = {
+        code: 'quality.rsi_out_of_range',
+        message: 'RSI outside optimal range',
+        details: { rsi, bias },
+      };
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -3677,6 +3699,11 @@ export class ReboundRejectionAgent {
     let thr = baseMinAtr;
     try { thr = this.getAdaptiveATRThresholdSync(symForAtr, baseMinAtr); } catch {}
     if (atrPct < thr) {
+      this.lastQualityFilterFailure = {
+        code: 'quality.atr_low',
+        message: 'ATR below adaptive threshold',
+        details: { atrPct, min: thr, base: baseMinAtr, bias },
+      };
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -3801,6 +3828,19 @@ export class ReboundRejectionAgent {
 
     if (volumeRatio < requiredVolumeRatio) {
       const contextAfter = this.updateVolumeContext(symbol, volumeRatio, usdVolumeMA, true);
+      this.lastQualityFilterFailure = {
+        code: 'quality.volume_too_low',
+        message: 'Volume ratio below requirement',
+        details: {
+          volumeRatio,
+          requiredVolumeRatio,
+          usdVolumeMA,
+          bias,
+          level,
+          volumeBaseline: contextAfter?.emaRatio,
+          volumePressure: contextAfter?.rejectionScore,
+        },
+      };
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
@@ -3823,6 +3863,7 @@ export class ReboundRejectionAgent {
     const contextAfter = this.updateVolumeContext(symbol, volumeRatio, usdVolumeMA, false);
 
     // All essential filters passed
+    this.lastQualityFilterFailure = null;
     recordOpsEvent({
       level: 'info',
       source: 'quality_filter',
@@ -4260,10 +4301,16 @@ export class ReboundRejectionAgent {
       const checks = this.getDiagnosticChecks(snap);
       const summary = this.getDiagnosticSummary(checks);
       const trigger = await this.getDiagnosticTrigger(snap, checks);
+      const readiness = this.getTradingReadinessReason(checks);
+
+      if (!canTrade && this.lastDiagnosticCanTrade !== false) {
+        this.emitValidatorBlockEvent({ snap, checks, trigger, summary, readiness });
+      }
+      this.lastDiagnosticCanTrade = canTrade;
 
       return {
         canTrade,
-        reason: this.getTradingReadinessReason(checks),
+        reason: readiness.summary,
         checks,
         summary,
         trigger,
@@ -4342,19 +4389,22 @@ export class ReboundRejectionAgent {
     checks.hasPosition = {
       status: !this.pos ? 'PASS' : 'FAIL',
       reason: !this.pos ? 'No active position - ready for new entry' : 'Position already exists - cannot enter new trade',
-      message: !this.pos ? 'No active position' : 'Position already exists'
+      message: !this.pos ? 'No active position' : 'Position already exists',
+      code: !this.pos ? 'state.no_position' : 'state.position_open',
     };
 
     checks.isArmed = {
       status: this.state === 'ARMED' ? 'PASS' : 'FAIL',
       reason: this.state === 'ARMED' ? 'Agent is armed and ready to trade' : `Agent is in ${this.state} state - must be ARMED to trade`,
-      message: this.state === 'ARMED' ? 'Agent is armed' : `Agent state: ${this.state}`
+      message: this.state === 'ARMED' ? 'Agent is armed' : `Agent state: ${this.state}`,
+      code: this.state === 'ARMED' ? 'state.armed' : 'state.not_armed',
     };
 
     checks.isEntering = {
       status: !this.entering ? 'PASS' : 'FAIL',
       reason: !this.entering ? 'Not currently entering a position' : 'Entry process already in progress - wait for completion',
-      message: !this.entering ? 'Not currently entering' : 'Entry in progress'
+      message: !this.entering ? 'Not currently entering' : 'Entry in progress',
+      code: !this.entering ? 'state.idle' : 'state.entry_in_progress',
     };
 
     // Risk management checks (mode-adaptive limits)
@@ -4364,10 +4414,11 @@ export class ReboundRejectionAgent {
     
     checks.dailyTradeLimit = {
       status: (this.tradesToday || 0) < maxDailyTrades ? 'PASS' : 'FAIL',
-      reason: (this.tradesToday || 0) < maxDailyTrades 
+      reason: (this.tradesToday || 0) < maxDailyTrades
         ? `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - within limit (${this.profile?.aggressiveness || 'reactive'} mode)`
         : `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - limit exceeded for risk management`,
-      message: `Trades today: ${this.tradesToday || 0}`
+      message: `Trades today: ${this.tradesToday || 0}`,
+      code: (this.tradesToday || 0) < maxDailyTrades ? 'limits.daily_ok' : 'limits.daily_exceeded',
     };
 
     checks.consecutiveStopsLimit = {
@@ -4375,27 +4426,32 @@ export class ReboundRejectionAgent {
       reason: (this.consecutiveStops || 0) < maxConsecStops
         ? `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - acceptable loss streak (${this.profile?.aggressiveness || 'reactive'} mode)`
         : `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - circuit breaker activated`,
-      message: `Consecutive stops: ${this.consecutiveStops || 0}`
+      message: `Consecutive stops: ${this.consecutiveStops || 0}`,
+      code: (this.consecutiveStops || 0) < maxConsecStops ? 'limits.stops_ok' : 'limits.stops_exceeded',
     };
 
     // Zone and momentum checks
     const price = snap.last;
     const { from, to } = this.plan?.zone || { from: 0, to: 0 };
     const zoneCheck = this.plan?.zone ? this.priceInZoneWithEpsilon(price, this.plan.zone) : false;
+    const momentumPass = this.passesEntryMomentumGates(snap, 'enter');
+
     checks.inEntryZone = {
       status: zoneCheck ? 'PASS' : 'FAIL',
       reason: zoneCheck
         ? `Price ${price.toFixed(4)} is within entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`
         : `Price ${price.toFixed(4)} is outside entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`,
-      message: `Price: ${price?.toFixed(4)}, Zone: ${Math.min(from, to).toFixed(4)} - ${Math.max(from, to).toFixed(4)}`
+      message: `Price: ${price?.toFixed(4)}, Zone: ${Math.min(from, to).toFixed(4)} - ${Math.max(from, to).toFixed(4)}`,
+      code: zoneCheck ? 'entry_zone.in_zone' : 'entry_zone.out_of_zone',
     };
 
     checks.momentumGates = {
-      status: this.passesEntryMomentumGates(snap, 'enter') ? 'PASS' : 'FAIL',
-      reason: this.passesEntryMomentumGates(snap, 'enter') 
+      status: momentumPass ? 'PASS' : 'FAIL',
+      reason: momentumPass
         ? 'All momentum requirements met (ATR, slope, trend alignment)'
         : 'Failed momentum gates - insufficient volatility or trend strength',
-      message: 'Momentum gates check'
+      message: 'Momentum gates check',
+      code: momentumPass ? 'momentum.ok' : 'momentum.blocked',
     };
 
     // Simplified quality filters (binary pass/fail for essential indicators)
@@ -4414,7 +4470,8 @@ export class ReboundRejectionAgent {
       current: qualityPoints,
       required: minTradingPoints, // Changed from maxPoints to minTradingPoints
       status: qualityPoints >= minTradingPoints ? 'PASS' : 'FAIL',
-      reason: `Quality score: ${qualityPoints}/${maxPoints} points (${Object.values(checks.qualityFilters).filter((f: any) => f.points > 0).length}/5 filters passed) - ${qualityPoints >= minTradingPoints ? 'Ready to trade' : 'Insufficient quality'}`
+      reason: `Quality score: ${qualityPoints}/${maxPoints} points (${Object.values(checks.qualityFilters).filter((f: any) => f.points > 0).length}/5 filters passed) - ${qualityPoints >= minTradingPoints ? 'Ready to trade' : 'Insufficient quality'}`,
+      code: qualityPoints >= minTradingPoints ? 'quality.score_ok' : 'quality.score_below_threshold',
     };
 
     return checks;
@@ -4754,16 +4811,93 @@ export class ReboundRejectionAgent {
     };
   }
 
-  private getTradingReadinessReason(checks: any): string {
-    const failedChecks = Object.entries(checks)
-      .filter(([_, check]: [string, any]) => check.status === 'FAIL')
-      .map(([key, check]: [string, any]) => `${key}: ${check.message}`);
+  private getTradingReadinessReason(checks: any): {
+    summary: string;
+    primary: { key: string; code?: string; message?: string; reason?: string } | null;
+    failingChecks: { key: string; code?: string; message?: string; reason?: string }[];
+  } {
+    const failingChecks: { key: string; code?: string; message?: string; reason?: string }[] = [];
 
-    if (failedChecks.length === 0) {
-      return 'Ready to trade - all conditions met';
+    for (const [key, check] of Object.entries(checks)) {
+      if (check && typeof check === 'object' && (check as any).status === 'FAIL') {
+        failingChecks.push({
+          key,
+          code: (check as any).code || `diagnostic.${key}`,
+          message: (check as any).message,
+          reason: (check as any).reason,
+        });
+      } else if (key === 'qualityFilters' && check && typeof check === 'object') {
+        for (const [subKey, subCheck] of Object.entries(check as Record<string, any>)) {
+          if (subCheck && typeof subCheck === 'object' && (subCheck as any).status === 'FAIL') {
+            failingChecks.push({
+              key: `qualityFilters.${subKey}`,
+              code: (subCheck as any).code || `quality.${subKey}.failed`,
+              message: (subCheck as any).message,
+              reason: (subCheck as any).reason,
+            });
+          }
+        }
+      }
     }
 
-    return `Blocked by: ${failedChecks.join(', ')}`;
+    if (failingChecks.length === 0) {
+      return {
+        summary: 'Ready to trade - all conditions met',
+        primary: null,
+        failingChecks: [],
+      };
+    }
+
+    const summary = `Blocked by: ${failingChecks
+      .map((check) => `${check.key}${check.message ? ` (${check.message})` : ''}`)
+      .join(', ')}`;
+
+    return {
+      summary,
+      primary: failingChecks[0],
+      failingChecks,
+    };
+  }
+
+  private emitValidatorBlockEvent(params: {
+    snap: TechnicalSnapshot;
+    checks: any;
+    trigger: any;
+    summary: any;
+    readiness: { summary: string; primary: { key: string; code?: string; message?: string; reason?: string } | null; failingChecks: { key: string; code?: string; message?: string; reason?: string }[] };
+  }): void {
+    try {
+      const { snap, trigger, readiness } = params;
+      const snapshotMetrics = {
+        price: snap.last,
+        ema20: (snap as any)?.ema20 ?? null,
+        ema50: (snap as any)?.ema50 ?? null,
+        adx14: (snap as any)?.adx14 ?? null,
+        rsi14: (snap as any)?.rsi14 ?? null,
+        atrPct: (snap as any)?.atrPct ?? null,
+        volume: (snap as any)?.volume ?? null,
+        volumeMA: (snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? null,
+      };
+
+      recordOpsEvent({
+        level: 'warn',
+        source: 'entry_gate',
+        message: 'validator_of_signal_block',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          primary: readiness.primary,
+          failingChecks: readiness.failingChecks,
+          summary: readiness.summary,
+          trigger,
+          snapshot: snapshotMetrics,
+          agentState: this.state,
+          qualityFilterFailure: this.lastQualityFilterFailure,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to record validator block event', error);
+    }
   }
 
   private noteSignalDrop(message: string, level: 'info' | 'warn' = 'info', details?: Record<string, unknown>): void {
