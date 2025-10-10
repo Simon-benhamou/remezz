@@ -7,6 +7,7 @@ import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
 import { getAdaptiveWeightsForSymbol } from '../learning/adaptiveWeights.js';
+import { classifySymbolFamily } from '../learning/symbolFamily.js';
 import { recordDecisionSnapshot, markDecisionCancelled } from '../learning/decisionMemory.js';
 import { getHybridSentiment } from '../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
@@ -21,6 +22,93 @@ const CACHE_DURATION_AI = 30 * 60 * 1000; // 30min cache IA (plus long)
 const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
 const CACHE_DURATION_ML = 15 * 60 * 1000; // 15min cache ML
 const waitFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const QUALITY_BLUE_CHIP_BASES = new Set([
+  'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'MATIC', 'LTC', 'LINK', 'UNI', 'ATOM',
+  'NEAR', 'FIL', 'TRX', 'XLM', 'BCH', 'ETC', 'ICP', 'AAVE', 'INJ', 'RNDR', 'TIA', 'SEI', 'APT',
+  'SUI', 'OP', 'ARB', 'TON', 'HBAR', 'ALGO', 'MKR', 'IMX', 'DYDX', 'JUP', 'PYTH', 'STX', 'FTM',
+  'AR', 'FLOW', 'SAND', 'MANA'
+]);
+
+const QUALITY_MEME_BASES = new Set([
+  'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'BOME', 'MEME', 'POPCAT', 'MEW', 'TURBO', 'DOGS',
+  '1000BONK'
+]);
+
+type LiquidityGuardrailOptions = {
+  aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+};
+
+type SymbolQualityContext = {
+  symbol: string;
+  base: string;
+  sanitizedBase: string;
+  family: string;
+  isBlueChip: boolean;
+  isMeme: boolean;
+  isComplexName: boolean;
+};
+
+function sanitizeBaseSymbol(base: string): string {
+  const cleaned = base.toUpperCase().replace(/[^A-Z]/g, '');
+  return cleaned || base.toUpperCase();
+}
+
+function buildSymbolQualityContext(symbolOrBase: string): SymbolQualityContext {
+  const normalized = symbolOrBase.includes('/') ? symbolOrBase : `${symbolOrBase}/USDT`;
+  const base = normalized.split('/')[0]?.toUpperCase() || normalized.toUpperCase();
+  const sanitizedBase = sanitizeBaseSymbol(base);
+  const family = classifySymbolFamily(normalized);
+  const isBlueChip = QUALITY_BLUE_CHIP_BASES.has(base) || QUALITY_BLUE_CHIP_BASES.has(sanitizedBase);
+  const isMeme = QUALITY_MEME_BASES.has(base) || QUALITY_MEME_BASES.has(sanitizedBase) || family === 'meme';
+  const isComplexName = base.length >= 6 || /[0-9]/.test(base);
+  return { symbol: normalized, base, sanitizedBase, family, isBlueChip, isMeme, isComplexName };
+}
+
+function evaluateSymbolLiquidityGuardrails(
+  symbolOrBase: string,
+  volumeUsd: number,
+  price?: number,
+  options: LiquidityGuardrailOptions = {},
+): { ok: boolean; reason?: string; minRequired?: number } {
+  const context = buildSymbolQualityContext(symbolOrBase);
+  const px = Number(price || 0);
+  const aggressiveness = options.aggressiveness || 'reactive';
+  const aggressivenessMultiplier = aggressiveness === 'conservative' ? 1.2 : aggressiveness === 'aggressive' ? 0.9 : 1.0;
+
+  let minVolume = context.isBlueChip ? 15_000_000 : context.family === 'major' ? 20_000_000 : 30_000_000;
+  if (context.isComplexName && !context.isBlueChip) {
+    minVolume = Math.max(minVolume, 35_000_000);
+  }
+  if (context.isMeme) {
+    minVolume = Math.max(minVolume, 50_000_000);
+  }
+  if (px > 0 && px < 0.1) {
+    minVolume = Math.max(minVolume, 40_000_000);
+  }
+  if (px > 0 && px < 0.01) {
+    minVolume = Math.max(minVolume, 75_000_000);
+  }
+
+  minVolume = Math.round(minVolume * aggressivenessMultiplier);
+
+  if (volumeUsd < minVolume) {
+    return { ok: false, reason: 'quality_volume_floor', minRequired: minVolume };
+  }
+
+  return { ok: true };
+}
+
+function symbolQualityRank(symbol: string): number {
+  const context = buildSymbolQualityContext(symbol);
+  if (context.isBlueChip) return 0;
+  if (context.family === 'major') return 1;
+  if (context.isMeme) return 5;
+  let rank = 2;
+  if (context.isComplexName) rank += 1;
+  if (/[0-9]/.test(context.base)) rank += 0.5;
+  return rank;
+}
 
 const OPEN_ORDER_STATUS_LIST = [
   'new', 'NEW',
@@ -678,23 +766,29 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
     // Convert to array et calcul VRAI changement 24h
     const cryptoPerformance = Object.entries(tickers).map(([symbol, ticker]) => {
       const tickerData = ticker as any;
-      
+
       // 🔥 CALCUL VRAI CHANGEMENT 24H (pour AVNT -21.9% au lieu de -0.22%)
-      const currentPrice = Number(tickerData.last || tickerData.close || 0);
+      const currentPrice = Number(tickerData.last || tickerData.close || tickerData.ask || 0);
       const openPrice = Number(tickerData.open || currentPrice);
       const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : Number(tickerData.percentage || 0);
-      
+
       const quoteVolume24h = volumeUsdFromTicker(tickerData);
       const volume24h = quoteVolume24h; // keep naming compatibility
       const change24h = realChange24h; // 🔥 Utilise le vrai changement
-      
+
+      const liquidityGuardrail = evaluateSymbolLiquidityGuardrails(symbol, quoteVolume24h, currentPrice);
+      if (!liquidityGuardrail.ok) {
+        console.log(`🚫 ${symbol} rejected: ${liquidityGuardrail.reason} (volUsd=$${(quoteVolume24h/1_000_000).toFixed(2)}M, required ≥ $${((liquidityGuardrail.minRequired || 0)/1_000_000).toFixed(1)}M)`);
+        return false;
+      }
+
       // SÉCURITÉ: Scoring strict avec validation volume
       const volumeScore = calculateVolumeComponent(quoteVolume24h); // Utilise fonction sécurisée
       const performanceScore = Math.abs(change24h); // Direct percentage
-      
-      // Calcul du score de mouvement (Phase 3)  
+
+      // Calcul du score de mouvement (Phase 3)
       const movementScore = calculatePriceMovementComponent(change24h);
-      
+
       // 🎯 SMART QUALITY SCORING: Objective criteria based
       let combinedScore = 0;
       const smartQuality = applySmartQualityAdjustments({
@@ -704,14 +798,14 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
         avgVolatility: 2.0, // Default typical daily movement
         setupQuality: volumeScore, // Use volume score as proxy for now
       });
-      
+
       // 📊 Filtrage par mouvement minimum requis (based on liquidity, not name)
       const absChange = Math.abs(change24h);
       if (absChange < smartQuality.minMovement) {
         console.log(`🚫 ${symbol} (${smartQuality.label}): Movement ${change24h.toFixed(2)}% below threshold ${smartQuality.minMovement}% for this liquidity level`);
         return false; // Skip - insufficient movement for liquidity profile
       }
-      
+
       if (volumeScore >= 5.0) { // Seuil volume de base
         // 🎯 SMART QUALITY: Objective scoring without name bias
         // - Liquidity adjustments (execution quality)
@@ -719,13 +813,13 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
         // - Volatility-adjusted movement (exceptional opportunities)
         // - Technical setup quality
         combinedScore = (performanceScore * 0.25) + (volumeScore * 0.25) + (movementScore * 0.20) + smartQuality.adjustments;
-        
+
         console.log(`✅ ${symbol} (${smartQuality.label}): Score=${combinedScore.toFixed(2)}`);
         smartQuality.reasons.forEach(r => console.log(`   ${r}`));
       } else {
         console.log(`🚫 Score volume ${volumeScore} insuffisant pour ${symbol}`);
       }
-      
+
       return {
         symbol,
         change24h,
@@ -734,7 +828,8 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
         combinedScore,
         absChange: Math.abs(change24h),
         volumeScore,
-        performanceScore
+        performanceScore,
+        lastPrice: currentPrice,
       };
     }).filter((crypto): crypto is {
       symbol: string;
@@ -745,37 +840,35 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       absChange: number;
       volumeScore: number;
       performanceScore: number;
+      lastPrice: number;
     } => {
       if (!crypto) return false;
-      
+
       // Smart eligibility (dynamic)
       const base = crypto.symbol.split("/")[0];
-      const elig = isSymbolEligibleForAuto(base, { last: Number((tickers as any)[`${crypto.symbol.replace('/USDT','/USD:USD')}`]?.last || 0), volumeUsd: crypto.quoteVolume24h });
+      const elig = isSymbolEligibleForAuto(base, { last: crypto.lastPrice, volumeUsd: crypto.quoteVolume24h });
       if (!elig.ok) {
         console.log(`🚫 ${crypto.symbol} rejected: ${elig.reason} (volUsd=$${(crypto.quoteVolume24h/1_000_000).toFixed(2)}M, required: $${(elig.minRequired || 0)/1_000_000}M)`);
         return false;
       }
-      
-      // DYNAMIC FILTERING based on volume (RÉDUITS pour plus d'opportunités)
+
+      // DYNAMIC FILTERING based on volume with stricter guardrails
       const volumeUsd = crypto.quoteVolume24h;
-      const isHighVolumeAsset = volumeUsd >= 50_000_000; // $50M+ = established
-      const isMediumVolumeAsset = volumeUsd >= 1_000_000; // $1M+ = emerging (réduit de $5M)
-      const isLowVolumeAsset = volumeUsd >= 100_000; // $100K+ = speculative (réduit de $500K)
-      
+      const isHighVolumeAsset = volumeUsd >= 200_000_000; // $200M+ = institutional grade
+      const isMediumVolumeAsset = volumeUsd >= 75_000_000; // $75M+ = strong liquidity
+      const isBaselineVolumeAsset = volumeUsd >= 35_000_000; // $35M+ = acceptable floor
+
       if (isHighVolumeAsset) {
-        // High volume: accept tiny movements (very safe)
-        if (crypto.absChange < 0.005) return false; // 0.005% minimum
+        if (crypto.absChange < 0.5) return false; // Need at least 0.5% move on mega liquidity
       } else if (isMediumVolumeAsset) {
-        // Medium volume: moderate movements (balanced)
-        if (crypto.absChange < 0.02) return false; // 0.02% minimum (réduit de 0.05%)
-      } else if (isLowVolumeAsset) {
-        // Lower volume: require significant movements (higher risk/reward)
-        if (crypto.absChange < 0.05) return false; // 0.05% minimum (réduit de 0.15%)
+        if (crypto.absChange < 1.0) return false; // Require 1% move on solid liquidity
+      } else if (isBaselineVolumeAsset) {
+        if (crypto.absChange < 2.0) return false; // Smaller caps need bigger dislocations
       } else {
-        // Very low volume: reject (too risky)
+        // Below $35M we rely on guardrails to filter out by default
         return false;
       }
-      
+
       return true;
     });
 
@@ -852,21 +945,26 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
     
     // Combiner les priorités et les performers normaux
     const finalPerformers = [...prioritySymbols, ...availablePerformers];
-    
+
     if (finalPerformers.length > 0) {
+      const orderedPerformers = finalPerformers
+        .map(symbol => ({ symbol, rank: symbolQualityRank(symbol) }))
+        .sort((a, b) => a.rank - b.rank)
+        .map(item => item.symbol);
+
       console.log(`✅ Selected ${finalPerformers.length} performers (${prioritySymbols.length} priority + ${availablePerformers.length} normal)`);
       if (prioritySymbols.length > 0) {
         console.log('🔥 Priority symbols (>3%):', prioritySymbols.slice(0, 3));
       }
-      console.log('🏆 Top available:', finalPerformers.slice(0, 5));
+      console.log('🏆 Top available (quality first):', orderedPerformers.slice(0, 5));
       updateAutoUniverseStatus({
         source: 'dynamic',
         attempt: attemptLabel,
-        candidateCount: finalPerformers.length,
+        candidateCount: orderedPerformers.length,
         reason: 'dynamic_ready',
         ts: Date.now(),
       });
-      return finalPerformers;
+      return orderedPerformers;
     } else {
       const reason = 'top_performers_conflict';
       console.log('⚠️ All top performers at capacity - falling back to static list without active ones');
@@ -907,10 +1005,12 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
  * Filters out symbols already active in other agents
  */
 const FALLBACK_STATIC_SYMBOLS = [
-  'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT',
-  'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
-  'LINK/USDT', 'UNI/USDT', 'BCH/USDT', 'XLM/USDT', 'ATOM/USDT',
-  'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'BTC/USDT'
+  'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'ADA/USDT',
+  'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT', 'LINK/USDT', 'LTC/USDT', 'UNI/USDT',
+  'ATOM/USDT', 'NEAR/USDT', 'FIL/USDT', 'TRX/USDT', 'XLM/USDT', 'BCH/USDT',
+  'ETC/USDT', 'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'INJ/USDT',
+  'AAVE/USDT', 'RNDR/USDT', 'TIA/USDT', 'SEI/USDT', 'IMX/USDT', 'DYDX/USDT',
+  'HBAR/USDT', 'ALGO/USDT', 'MKR/USDT', 'PYTH/USDT', 'JUP/USDT', 'TON/USDT'
 ];
 
 async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
@@ -1596,30 +1696,32 @@ function calculateVolatilityComponent(metrics: any, aggressiveMultiplier: number
  * Volume component scoring avec intelligence adaptative
  */
 function calculateVolumeComponent(volume: number, aggressiveMultiplier: number = 1.0, isHighVolatility: boolean = false): number {
-  // Ajustement intelligent des seuils selon volatilité et agressivité (RÉDUITS pour plus d'opportunités)
-  let minVolumeThreshold = 25000; // Seuil de base très réduit ($25K)
-  
+  // Ajustement intelligent des seuils selon volatilité et agressivité (plus stricts pour garantir la liquidité)
+  let minVolumeThreshold = 1_000_000; // Seuil de base $1M
+
   if (isHighVolatility) {
-    minVolumeThreshold = 10000; // Seuil très bas en haute volatilité ($10K)
+    minVolumeThreshold = 750_000; // Légèrement réduit en haute volatilité
   }
-  
-  minVolumeThreshold = minVolumeThreshold / aggressiveMultiplier;
-  
+
+  minVolumeThreshold = Math.max(500_000, Math.round(minVolumeThreshold / aggressiveMultiplier));
+
   // SÉCURITÉ: Rejet automatique pour volumes insuffisants
   if (volume < minVolumeThreshold) {
-    console.log(`🚫 Volume ${volume} insuffisant pour trading AUTO (minimum $${(minVolumeThreshold/1000).toFixed(0)}K)`);
+    console.log(`🚫 Volume ${volume} insuffisant pour trading AUTO (minimum $${(minVolumeThreshold/1_000_000).toFixed(2)}M)`);
     return 0; // REJET AUTOMATIQUE
   }
-  
+
   // Scores progressifs avec bonus haute volatilité
-  const volatilityBonus = isHighVolatility ? 0.5 : 0;
-  
-  if (volume > 10000000) return Math.min(10.0, 9.5 + volatilityBonus); // $10M+ = Excellent
-  if (volume > 5000000) return Math.min(10.0, 8.5 + volatilityBonus);  // $5M+ = High volume 
-  if (volume > 2000000) return Math.min(10.0, 7.5 + volatilityBonus);  // $2M+ = Good volume
-  if (volume > 1000000) return Math.min(10.0, 7.0 + volatilityBonus);  // $1M+ = Acceptable volume
-  if (volume > 500000) return Math.min(10.0, 6.5 + volatilityBonus);   // $500K+ = Decent
-  return Math.min(10.0, 6.0 + volatilityBonus); // $100K-$500K = Minimum acceptable
+  const volatilityBonus = isHighVolatility ? 0.3 : 0;
+
+  if (volume >= 500_000_000) return Math.min(10.0, 9.8 + volatilityBonus); // $500M+ = Exceptionnel
+  if (volume >= 200_000_000) return Math.min(10.0, 9.3 + volatilityBonus); // $200M+ = Très élevé
+  if (volume >= 100_000_000) return Math.min(10.0, 8.8 + volatilityBonus); // $100M+ = Excellent
+  if (volume >= 50_000_000) return Math.min(10.0, 8.2 + volatilityBonus);  // $50M+ = Très bon
+  if (volume >= 25_000_000) return Math.min(10.0, 7.5 + volatilityBonus);  // $25M+ = Bon
+  if (volume >= 10_000_000) return Math.min(10.0, 7.0 + volatilityBonus);  // $10M+ = Correct
+  if (volume >= 5_000_000) return Math.min(10.0, 6.5 + volatilityBonus);   // $5M+ = Minimum accepté
+  return Math.min(10.0, 6.0 + volatilityBonus); // < $5M = très limite mais acceptable avec garde-fous
 }
 
 /**
@@ -3074,6 +3176,7 @@ export function applySmartQualityAdjustments(params: {
 } {
   let adjustments = 0;
   const reasons: string[] = [];
+  const qualityContext = buildSymbolQualityContext(params.symbol);
   
   // 1. LIQUIDITY ADJUSTMENT (objective execution quality)
   if (params.volumeUsd < 50_000_000) {
@@ -3115,19 +3218,49 @@ export function applySmartQualityAdjustments(params: {
     reasons.push('Clean setup +0.5 (strong technical confirmation)');
   }
   
-  // Determine minimum movement threshold (based on liquidity, not arbitrary names)
-  let minMovement = 0.5; // Default
-  if (params.volumeUsd < 50_000_000) minMovement = 3.0; // Need big moves to justify risk
-  else if (params.volumeUsd < 200_000_000) minMovement = 1.5; // Moderate threshold
-  else if (params.volumeUsd > 1_000_000_000) minMovement = 0.3; // Can trade small moves
-  
-  // Label based on actual characteristics, not name
-  let label = 'Unknown';
-  if (params.volumeUsd > 5_000_000_000) label = 'Mega Cap (Excellent)';
-  else if (params.volumeUsd > 1_000_000_000) label = 'Large Cap (Very Good)';
-  else if (params.volumeUsd > 200_000_000) label = 'Mid Cap (Good)';
-  else if (params.volumeUsd > 50_000_000) label = 'Small Cap (Risky)';
-  else label = 'Micro Cap (Very Risky)';
+  // Quality premium/penalty based on symbol family
+  if (qualityContext.isBlueChip) {
+    adjustments += 0.5;
+    reasons.push('Blue-chip liquidity premium +0.5');
+  } else if (qualityContext.family === 'major') {
+    adjustments += 0.25;
+    reasons.push('Major cap liquidity premium +0.25');
+  } else if (qualityContext.isMeme) {
+    adjustments -= 0.8;
+    reasons.push('Meme/speculative asset -0.8 (requires exceptional confirmation)');
+  } else {
+    adjustments -= 0.2;
+    reasons.push('Unproven altcoin -0.2 (demand stronger confluence)');
+  }
+
+  // Determine minimum movement threshold (based on liquidity profile and quality)
+  let minMovement = 0.8; // Default baseline
+  if (params.volumeUsd < 35_000_000) minMovement = 3.5; // Need big moves to justify risk
+  else if (params.volumeUsd < 75_000_000) minMovement = 2.0;
+  else if (params.volumeUsd < 200_000_000) minMovement = 1.0;
+  else if (params.volumeUsd > 1_000_000_000) minMovement = 0.4; // Can trade small moves
+
+  if (qualityContext.isMeme) {
+    minMovement = Math.max(minMovement, 4.0);
+  } else if (!qualityContext.isBlueChip && qualityContext.family !== 'major') {
+    minMovement = Math.max(minMovement, 2.5);
+  }
+
+  // Label based on actual characteristics and quality
+  let label: string;
+  if (qualityContext.isMeme) {
+    label = params.volumeUsd >= 100_000_000 ? 'Meme (High Liquidity)' : 'Meme (Speculative)';
+  } else if (qualityContext.isBlueChip) {
+    label = params.volumeUsd > 1_000_000_000 ? 'Blue Chip Mega Cap' : 'Blue Chip Major';
+  } else if (qualityContext.family === 'major') {
+    label = params.volumeUsd > 200_000_000 ? 'Large Cap Major' : 'Major Alt (Monitor liquidity)';
+  } else if (params.volumeUsd > 200_000_000) {
+    label = 'Mid Cap Alt (Good)';
+  } else if (params.volumeUsd > 50_000_000) {
+    label = 'Small Cap Alt (Risky)';
+  } else {
+    label = 'Micro Cap (Very Risky)';
+  }
   
   return { adjustments, reasons, minMovement, label };
 }
@@ -3166,7 +3299,7 @@ export function getCryptoTier(symbol: string, volumeUsd: number, marketCap?: num
 }
 
 // Smart eligibility criteria (dynamic, not static):
-// - Must pass a minimum USD volume (relâché de $500K à $200K)
+// - Must pass dynamic USD volume guardrails (≥$35M for altcoins, higher for memes)
 // - Stricter thresholds for sub-penny and complex/long symbols
 export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string; minRequired?: number } {
   const cfg = getConfig();
@@ -3182,8 +3315,13 @@ export function isSymbolEligibleForAuto(base: string, params: { last: number; vo
   // Complex/long symbols (often micro-caps) must have higher volume (relâché)
   const isComplex = base.length >= 6 || /[0-9]/.test(base);
   if (isComplex && vol < 1_000_000) return { ok: false, reason: 'complex_symbol_low_volume', minRequired: 1_000_000 };
-  // Meme-like names must have strong liquidity (relâché)
-  const memeLike = ['BOME', 'WIF', 'PEPE', 'SHIB', 'FLOKI', 'BONK'];
-  if (memeLike.includes(base.toUpperCase()) && vol < 5_000_000) return { ok: false, reason: 'meme_low_volume', minRequired: 5_000_000 };
+  // Meme-like names must have extremely strong liquidity
+  const qualityContext = buildSymbolQualityContext(base);
+  if (qualityContext.isMeme && vol < 50_000_000) {
+    return { ok: false, reason: 'meme_low_volume', minRequired: 50_000_000 };
+  }
+
+  const guardrail = evaluateSymbolLiquidityGuardrails(base, vol, px, { aggressiveness: level });
+  if (!guardrail.ok) return guardrail;
   return { ok: true };
 }
