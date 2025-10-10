@@ -69,6 +69,36 @@ const momentumPoints = sumPoints(momentumFilters);
 assert(momentumPoints >= 55, `momentum setup should clear breakout threshold (got ${momentumPoints})`);
 assert.equal(momentumFilters.momentum.status, 'PASS', 'momentum filter should pass for breakout context');
 
+const strongMomentumSnap = {
+  symbol: 'SOL/USDT:USDT',
+  last: 124.1,
+  ema20: 125.2,
+  ema50: 121.0,
+  ema20Slope: 0.16,
+  adx14: 28.7,
+  atrPct: 1.7,
+  momentumPct: 1.9,
+  volume: 2100,
+  volumeMA: 1500,
+};
+
+assert(momentumAgent['passesEntryMomentumGates'](strongMomentumSnap, 'enter'), 'momentum gates should allow strong trending context with slope and ATR above tightened thresholds');
+
+const weakMomentumSnap = {
+  symbol: 'SOL/USDT:USDT',
+  last: 123.6,
+  ema20: 124.0,
+  ema50: 122.5,
+  ema20Slope: 0.02,
+  adx14: 24.3,
+  atrPct: 0.9,
+  momentumPct: 1.1,
+  volume: 1900,
+  volumeMA: 1700,
+};
+
+assert(!momentumAgent['passesEntryMomentumGates'](weakMomentumSnap, 'enter'), 'momentum gates should now reject shallow slope / low ATR breakouts');
+
 const meanAgent = createAgent('mean_reversion', 'long');
 const meanSnap = {
   symbol: 'SOL/USDT:USDT',
