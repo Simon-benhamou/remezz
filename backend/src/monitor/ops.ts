@@ -78,7 +78,7 @@ export async function computeOpsMetrics() {
   const haltedAgents = agents.filter((a) => a.state === 'HALT').length;
   const managingAgents = agents.filter((a) => a.state === 'MANAGE').length;
 
-  const [activeSessions, openPositions, protectiveIssues, alerts1h, alerts24h, kpiAgg, marginRows] = await Promise.all([
+  const [activeSessions, openPositions, protectiveIssues, alerts1h, alerts24h, kpiAgg, marginRows, tradeStats, profitableStats] = await Promise.all([
     prisma.agentSession.count({ where: { stoppedAt: null } }),
     prisma.position.count({ where: { qty: { gt: 0 } } }),
     prisma.position.count({
@@ -95,6 +95,17 @@ export async function computeOpsMetrics() {
     countAlertsBySeverity(new Date(now - 24 * 60 * 60 * 1000)),
     prisma.sessionKpi.aggregate({ _sum: { aiCallsTotal: true } }),
     marginRepo ? marginRepo.findMany({ orderBy: { createdAt: 'desc' }, take: 120 }) : [],
+    prisma.fill.groupBy({
+      by: ['sessionId'],
+      where: { sessionId: { not: null }, realizedPnl: { not: null } },
+      _count: { _all: true },
+      _max: { ts: true },
+    }),
+    prisma.fill.groupBy({
+      by: ['sessionId'],
+      where: { sessionId: { not: null }, realizedPnl: { gt: 0 } },
+      _max: { ts: true },
+    }),
   ]);
 
   let marginSummary: any = null;
@@ -134,6 +145,79 @@ export async function computeOpsMetrics() {
     };
   }
 
+  const agentSymbolMap = agents.reduce((acc: Map<string, string | null>, agent) => {
+    if (agent.sessionId) {
+      acc.set(agent.sessionId, agent.symbol || null);
+    }
+    return acc;
+  }, new Map<string, string | null>());
+
+  const vosEvents = opsEvents.filter((evt) => evt.message === 'validator_of_signal_block');
+  const vosBySession = new Map<string, { sessionId: string; symbol: string | null; count: number; lastEvent: OpsEvent | null }>();
+
+  for (const evt of vosEvents) {
+    if (!evt.sessionId) continue;
+    const existing = vosBySession.get(evt.sessionId) || {
+      sessionId: evt.sessionId,
+      symbol: evt.symbol ?? agentSymbolMap.get(evt.sessionId) ?? null,
+      count: 0,
+      lastEvent: null,
+    };
+    existing.count += 1;
+    if (!existing.symbol && evt.symbol) {
+      existing.symbol = evt.symbol;
+    }
+    if (!existing.lastEvent || existing.lastEvent.ts < evt.ts) {
+      existing.lastEvent = evt;
+    }
+    vosBySession.set(evt.sessionId, existing);
+  }
+
+  const tradeCountMap = new Map<string, { count: number; lastTradeAt: number | null }>();
+  for (const row of tradeStats as any[]) {
+    const sessionId = row.sessionId as string | null;
+    if (!sessionId) continue;
+    const count = Number(row?._count?._all ?? 0);
+    const lastTradeAt = row?._max?.ts ? new Date(row._max.ts).getTime() : null;
+    tradeCountMap.set(sessionId, { count, lastTradeAt });
+  }
+
+  const profitableMap = new Map<string, number | null>();
+  for (const row of profitableStats as any[]) {
+    const sessionId = row.sessionId as string | null;
+    if (!sessionId) continue;
+    const ts = row?._max?.ts ? new Date(row._max.ts).getTime() : null;
+    profitableMap.set(sessionId, ts);
+  }
+
+  const entryGateSessions = Array.from(vosBySession.values())
+    .map((row) => {
+      const tradeInfo = tradeCountMap.get(row.sessionId);
+      const successfulTradeAt = profitableMap.get(row.sessionId) ?? null;
+      const tradeCount = tradeInfo?.count ?? 0;
+      const lastTradeAt = tradeInfo?.lastTradeAt ?? null;
+      const lastEvent = row.lastEvent;
+      const primary = lastEvent?.details?.primary as any;
+      const flagged = tradeCount === 0 && row.count >= 3;
+
+      return {
+        sessionId: row.sessionId,
+        symbol: row.symbol ?? agentSymbolMap.get(row.sessionId) ?? null,
+        count: row.count,
+        lastBlockedAt: lastEvent?.ts ?? null,
+        lastReasonCode: primary?.code ?? primary?.key ?? null,
+        lastReason: primary?.reason ?? primary?.message ?? null,
+        lastSuccessfulTradeAt: successfulTradeAt,
+        tradeCount,
+        lastTradeAt,
+        triggerPhase: lastEvent?.details?.trigger?.phase ?? null,
+        flagged,
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+
+  const flaggedSessions = entryGateSessions.filter((row) => row.flagged);
+
   return {
     timestamp: now,
     uptimeSec,
@@ -160,5 +244,12 @@ export async function computeOpsMetrics() {
       totalCalls: kpiAgg._sum.aiCallsTotal ?? 0,
     },
     margin: marginSummary,
+    ops: {
+      entryGateBlocks: {
+        total: vosEvents.length,
+        sessions: entryGateSessions,
+      },
+      flaggedSessions,
+    },
   };
 }

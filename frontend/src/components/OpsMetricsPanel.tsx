@@ -1,5 +1,5 @@
 import React from 'react';
-import { Badge, Card, Col, Progress, Row, Statistic, Tag, Tooltip } from 'antd';
+import { Badge, Card, Col, Progress, Row, Space, Statistic, Tag, Tooltip } from 'antd';
 
 function formatBytes(num?: number) {
   if (!num || !Number.isFinite(num)) return '0 MB';
@@ -16,6 +16,12 @@ function formatUptime(sec?: number) {
   return `${seconds}s`;
 }
 
+function formatTime(ts?: number | null) {
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return '—';
+  const date = new Date(ts);
+  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 type Props = {
   metrics?: any;
   loading?: boolean;
@@ -30,6 +36,11 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
   const agents = metrics.agents || {};
   const margin = metrics.margin || null;
   const avgUtil = margin ? Number(margin.averageUtilisationPct || 0) : 0;
+  const entryGateBlocks = metrics.ops?.entryGateBlocks;
+  const flaggedVos = Array.isArray(metrics.ops?.flaggedSessions) ? metrics.ops.flaggedSessions : [];
+  const highlightedVos = Array.isArray(entryGateBlocks?.sessions)
+    ? entryGateBlocks.sessions.slice(0, 3)
+    : [];
   const marginStatus = margin
     ? margin.critical
       ? { label: `${margin.critical} critical`, color: '#dc2626', progressStatus: 'exception' as const }
@@ -110,6 +121,68 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
                     </div>
                   ))}
                 </div>
+              )}
+            </div>
+          </Col>
+        </Row>
+      )}
+      {entryGateBlocks && (
+        <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+          <Col xs={24} md={12}>
+            <div style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc', minHeight: 132 }}>
+              <Tooltip title="Validator of signal blocks detected across agents">
+                <div style={{ fontWeight: 600, color: '#334155', marginBottom: 8 }}>Signal gate blocks</div>
+              </Tooltip>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ color: '#64748b' }}>Total events</span>
+                <Tag color='geekblue'>{entryGateBlocks.total || 0}</Tag>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, color: '#64748b', fontSize: 12 }}>
+                <span>Sessions impacted</span>
+                <span>{entryGateBlocks.sessions?.length || 0}</span>
+              </div>
+              {highlightedVos.length === 0 ? (
+                <div style={{ color: '#94a3b8', fontSize: 12 }}>No active blocks recorded.</div>
+              ) : (
+                <Space direction='vertical' size={6} style={{ width: '100%' }}>
+                  {highlightedVos.map((row: any) => (
+                    <div key={row.sessionId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#475569' }}>
+                      <span style={{ fontWeight: 600 }}>{row.symbol || row.sessionId}</span>
+                      <span>
+                        <Tag color={row.flagged ? 'red' : 'blue'}>{row.count} blocks</Tag>
+                      </span>
+                    </div>
+                  ))}
+                </Space>
+              )}
+            </div>
+          </Col>
+          <Col xs={24} md={12}>
+            <div style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fef2f2', minHeight: 132 }}>
+              <Tooltip title="Agents repeatedly blocked without any closed trades">
+                <div style={{ fontWeight: 600, color: '#b91c1c', marginBottom: 8 }}>Stalled agents</div>
+              </Tooltip>
+              {flaggedVos.length === 0 ? (
+                <div style={{ color: '#9ca3af', fontSize: 12 }}>All agents have a recorded trade history.</div>
+              ) : (
+                <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                  {flaggedVos.slice(0, 4).map((row: any) => (
+                    <div key={row.sessionId} style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12, color: '#7f1d1d', padding: 6, borderRadius: 8, background: '#fee2e2' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 600 }}>{row.symbol || row.sessionId}</span>
+                        <Tag color='red'>{row.count} blocks</Tag>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Last block</span>
+                        <span>{formatTime(row.lastBlockedAt)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Last successful trade</span>
+                        <span>{formatTime(row.lastSuccessfulTradeAt)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </Space>
               )}
             </div>
           </Col>

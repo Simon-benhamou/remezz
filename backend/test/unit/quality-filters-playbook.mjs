@@ -7,6 +7,7 @@ process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
 const { ReboundRejectionAgent } = await import('../../dist/src/agent/state.js');
+const { clearOpsEvents, recentOpsEvents } = await import('../../dist/src/monitor/ops.js');
 
 function sumPoints(filters) {
   return Object.values(filters).reduce((sum, filter) => sum + (filter.points || 0), 0);
@@ -110,5 +111,39 @@ const poorMeanFilters = meanAgent['getQualityFiltersDiagnostics'](poorMeanSnap);
 const poorMeanPoints = sumPoints(poorMeanFilters);
 assert(poorMeanPoints < 40, `uninspired range trade should stay blocked (got ${poorMeanPoints})`);
 assert.equal(poorMeanFilters.rsiPosition.status, 'FAIL', 'lack of RSI extremes should not qualify mean reversion');
+
+// Regression: diagnostics should emit VOS block events with detailed reason codes
+clearOpsEvents();
+const vosAgent = createAgent('momentum_breakout', 'long');
+vosAgent.sessionId = 'unit-test-session';
+vosAgent.state = 'ARMED';
+(vosAgent).pos = null;
+(vosAgent).entering = false;
+(vosAgent).plan.zone = { from: 229, to: 231, mid: 230 };
+(vosAgent).plan.bias = 'long';
+(vosAgent).profile.symbol = 'SOL/USDT:USDT';
+(vosAgent).profile.mode = 'paper';
+(vosAgent).profile.aggressiveness = 'reactive';
+(vosAgent).getDiagnosticSnapshot = async () => ({
+  symbol: 'SOL/USDT:USDT',
+  last: 245.1,
+  ema20: 246.5,
+  ema50: 240.2,
+  rsi14: 58.2,
+  adx14: 26.4,
+  atrPct: 1.05,
+  volume: 1800,
+  volumeMA: 1500,
+});
+
+const vosDiag = await vosAgent.getDiagnostics();
+assert.equal(vosDiag.canTrade, false, 'diagnostics should report blocked state');
+
+const vosEvents = recentOpsEvents(5);
+const vosBlock = vosEvents.find((evt) => evt.message === 'validator_of_signal_block');
+assert(vosBlock, 'expected validator_of_signal_block event');
+assert.equal(vosBlock.sessionId, 'unit-test-session');
+assert.equal(vosBlock.details?.primary?.key, 'inEntryZone', 'primary failing check should be entry zone');
+assert.equal(vosBlock.details?.primary?.code, 'entry_zone.out_of_zone', 'event should include reason code');
 
 console.log('✅ quality-filters-playbook.mjs passed');
