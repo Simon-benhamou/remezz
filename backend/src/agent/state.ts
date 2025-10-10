@@ -20,6 +20,8 @@ import { broadcast } from '../ws/hub.js';
 import { loadActivePosition, recordEnter, recordExit } from './persistence.js';
 import { PlanJson } from './planSchema.js';
 import { ValidatedPlan, validatePlan } from './validator.js';
+import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, maybeAdjustOrExit, computeInitialBracket } from '../quantai/index.js';
+import type { CircuitBreakerDecision } from '../quantai/index.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -62,6 +64,7 @@ export type ActivePosition = {
   breakeven?: number;
   partialInfo?: { ts: number; price: number } | null;
   initialStopDistance?: number;
+  hitTargets?: number[];
 };
 
 type ProtectiveSnapshot = {
@@ -257,10 +260,22 @@ export class ReboundRejectionAgent {
   // Advanced performance tracking by strategy and bias
   private performanceMetrics: PerformanceMetrics | null = null;
   private strategyPerformance: Map<string, StrategyPerformance> = new Map();
+  private quantConfig = getQuantAIConfig();
+  private circuitBreaker = new CircuitBreaker(this.quantConfig.risk);
+  private entryFilters = new EntryFilters(this.quantConfig.filters);
+  private positionSizer = new PositionSizer(this.quantConfig.risk.baseRiskPerTradePct);
+  private lastKnownEquityUsd = 0;
 
   async activate(profile: ActivationProfile) {
     // PREFLIGHT
     this.state = 'PREFLIGHT';
+    this.quantConfig = reloadQuantAIConfig();
+    this.circuitBreaker = new CircuitBreaker(this.quantConfig.risk);
+    this.entryFilters = new EntryFilters(this.quantConfig.filters);
+    this.positionSizer = new PositionSizer(this.quantConfig.risk.baseRiskPerTradePct);
+    this.lastKnownEquityUsd = 0;
+    this.ensurePerformanceMetricsSkeleton(profile);
+    this.syncCircuitBreakerTelemetry();
     const existingCap = profile.leverageCap as ResolvedLeverageCap | undefined;
     const existingCategory = existingCap?.category ?? '';
     const requestedMaxLev = Math.max(1, Math.min(10, Number(profile.requestedMaxLeverage ?? profile.maxLeverage ?? existingCap?.requested ?? 1)));
@@ -726,6 +741,37 @@ export class ReboundRejectionAgent {
       return;
     }
     const bal = await this.broker.balance();
+    const equityCandidate = Number.isFinite(bal?.equityUsd) ? Number(bal.equityUsd) : Number(bal?.freeUsd ?? this.profile.startBalanceUsd ?? 0);
+    this.lastKnownEquityUsd = Number.isFinite(equityCandidate) && equityCandidate > 0 ? equityCandidate : Math.max(0, Number(this.profile.startBalanceUsd ?? 0));
+    const nowDate = new Date();
+    const circuitDecision = this.circuitBreaker.canOpenTrade(nowDate, this.lastKnownEquityUsd);
+    this.syncCircuitBreakerTelemetry(circuitDecision);
+    if (!circuitDecision.allowed) {
+      const state = this.circuitBreaker.getState();
+      recordOpsEvent({
+        level: 'warn',
+        source: 'circuit_breaker',
+        message: 'entry_blocked_circuit_breaker',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          reason: circuitDecision.reason,
+          cooldownUntil: circuitDecision.cooldownUntil?.toISOString() ?? null,
+          consecutiveLosses: state.consecutiveLosses,
+          tradesToday: state.tradesToday,
+        },
+      });
+      this.noteSignalDrop('circuit_breaker_blocked', 'warn', {
+        reason: circuitDecision.reason,
+        cooldownUntil: circuitDecision.cooldownUntil?.toISOString(),
+      });
+      this.entering = false;
+      return;
+    }
+    let marketTicker = await getTicker(this.profile.symbol).catch(() => null as any);
+    let spreadBps = marketTicker?.bid && marketTicker?.ask
+      ? ((marketTicker.ask - marketTicker.bid) / ((marketTicker.ask + marketTicker.bid) / 2)) * 10_000
+      : undefined;
     const side = this.plan.bias === 'long' ? 'buy' : 'sell';
     const entry = mktPrice;
     const round4 = (n:number)=> Math.round(n*1e4)/1e4;
@@ -749,14 +795,68 @@ export class ReboundRejectionAgent {
     const stopRaw = this.plan.bias === 'long'
       ? entry - this.plan.stopDistance
       : entry + this.plan.stopDistance;
-    const stop = round4(stopRaw);
+    let stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
     if (playbook === 'momentum_breakout') {
       const momentumTargets = [1.6, 2.6];
       this.plan.plan.risk.tp = momentumTargets.map(value => ({ type: 'R', value }));
       this.plan.rPrices = momentumTargets.map(r => ({ r, price: round4(entry + dir0 * r * this.plan!.stopDistance) }));
     }
-    const tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
+    let tp = this.plan.rPrices.map(x => round4(entry + dir0 * x.r * this.plan!.stopDistance));
+    const atrForBracket = typeof (snap as any)?.atr14 === 'number' ? Number((snap as any).atr14) : this.plan.atr;
+    if (atrForBracket && atrForBracket > 0) {
+      try {
+        const bracket = computeInitialBracket(entry, atrForBracket, side === 'buy' ? 'long' : 'short', this.quantConfig.exits);
+        const quantStop = round4(bracket.stop);
+        const quantDistance = Math.abs(entry - quantStop);
+        if (quantDistance > this.plan.stopDistance) {
+          this.plan.stopDistance = quantDistance;
+          stop = quantStop;
+          tp = bracket.targets.map(target => round4(target));
+          this.plan.rPrices = tp.map((price, idx) => ({ r: this.quantConfig.exits.tpRMultiples[idx] ?? (idx + 1), price }));
+          this.plan.plan.risk.tp = this.quantConfig.exits.tpRMultiples.map(value => ({ type: 'R', value }));
+        }
+      } catch (error) {
+        console.debug('QuantAI bracket computation failed:', error);
+      }
+    }
+    const riskAbs = Math.max(1e-9, Math.abs(entry - stop));
+    const firstR = this.plan.rPrices?.[0]?.r ?? (tp.length > 0 ? Math.abs(tp[0] - entry) / riskAbs : undefined);
+    const planMeta = (this.plan.plan.meta || {}) as Record<string, unknown>;
+    const modelConfidence =
+      typeof planMeta.confidenceScore === 'number'
+        ? planMeta.confidenceScore
+        : typeof planMeta.confidence === 'number'
+          ? planMeta.confidence
+          : typeof (planMeta as any)?.probability === 'number'
+            ? Number((planMeta as any).probability)
+            : undefined;
+    const filterEvaluation = this.entryFilters.evaluateEntry({
+      price: entry,
+      atr: typeof (snap as any)?.atr14 === 'number' ? Number((snap as any).atr14) : this.plan.atr,
+      adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : undefined,
+      spreadBps,
+      dollarVolume: typeof (marketTicker as any)?.quoteVolume === 'number'
+        ? Number((marketTicker as any).quoteVolume)
+        : typeof (snap as any)?.volume24h === 'number'
+          ? Number((snap as any).volume24h)
+          : undefined,
+      rrToTp1: typeof firstR === 'number' ? firstR : undefined,
+      modelConfidence: typeof modelConfidence === 'number' ? modelConfidence : undefined,
+    });
+    if (!filterEvaluation.ok) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_filters',
+        message: 'quantai_entry_rejected',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: filterEvaluation.reasons,
+      });
+      this.noteSignalDrop('quantai_filter_blocked', 'info', filterEvaluation.reasons);
+      this.entering = false;
+      return;
+    }
     
     // CRYPTO PROFIT FILTER: Minimum profit threshold
     const cfgProfit = getConfig();
@@ -882,6 +982,32 @@ export class ReboundRejectionAgent {
       dynamicRiskPct *= clamp;
     }
 
+    const circuitSizeMultiplier = this.circuitBreaker.sizeMultiplier();
+    if (circuitSizeMultiplier !== 1) {
+      dynamicRiskPct *= circuitSizeMultiplier;
+      recordOpsEvent({
+        level: 'info',
+        source: 'circuit_breaker',
+        message: 'size_reduced_due_to_losses',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          multiplier: circuitSizeMultiplier,
+          adjustedRiskPct: dynamicRiskPct,
+        },
+      });
+    }
+
+    const quantSizerResult = this.positionSizer.computeSize({
+      equityUsd: Math.max(this.lastKnownEquityUsd, usableBalance),
+      entryPrice: entry,
+      stopPrice: stop,
+      riskPct: dynamicRiskPct,
+      maxNotionalUsd: Number.isFinite(this.maxNotionalCapUsd) && this.maxNotionalCapUsd > 0
+        ? this.maxNotionalCapUsd
+        : undefined,
+    });
+
     // Compute requested size
     let notional = 0;
     // Determine effective leverage for this trade (risk-aware if enabled)
@@ -989,6 +1115,23 @@ export class ReboundRejectionAgent {
     } else {
       // Risk-based sizing: cap by effective leverage, not maximum
       notional = sizing.notional;
+    }
+    if (sizingMode === 'risk' && quantSizerResult.notionalUsd > 0 && notional > 0) {
+      const quantNotional = quantSizerResult.notionalUsd;
+      if (quantNotional < notional) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'position_sizing',
+          message: 'quantai_risk_cap_applied',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            requestedNotional: notional,
+            quantNotional,
+          },
+        });
+        notional = quantNotional;
+      }
     }
     
     // ✅ FIX: Enforce minimum notional (8% of balance) to ensure meaningful position sizes
@@ -1109,13 +1252,18 @@ export class ReboundRejectionAgent {
       }
     }
 
-    const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
+    marketTicker = await getTicker(this.profile.symbol).catch(() => null as any);
+    spreadBps = marketTicker?.bid && marketTicker?.ask
+      ? ((marketTicker.ask - marketTicker.bid) / ((marketTicker.ask + marketTicker.bid) / 2)) * 10_000
+      : spreadBps;
     let spreadPct = 0;
-    if (ticker?.bid && ticker?.ask) spreadPct = ((ticker.ask - ticker.bid) / ((ticker.ask + ticker.bid) / 2)) * 100;
+    if (marketTicker?.bid && marketTicker?.ask) {
+      spreadPct = ((marketTicker.ask - marketTicker.bid) / ((marketTicker.ask + marketTicker.bid) / 2)) * 100;
+    }
     const limitSpreadThresh = 0.12;
     const twapSpreadThresh = 0.2;
     let executionMode: 'market'|'limit'|'twap' = 'market';
-    if (ticker && playbook !== 'momentum_breakout') {
+    if (marketTicker && playbook !== 'momentum_breakout') {
       if (spreadPct >= twapSpreadThresh && qty * entry > 5000) executionMode = 'twap';
       else if (spreadPct >= limitSpreadThresh) executionMode = 'limit';
     }
@@ -1159,7 +1307,7 @@ export class ReboundRejectionAgent {
     let placed: PlacedOrder;
     try {
       if (executionMode === 'limit') {
-        const limitPrice = this.computePassivePrice(side, entry, ticker);
+        const limitPrice = this.computePassivePrice(side, entry, marketTicker);
         placed = await this.placeLimitAdaptive({ side, qty, limitPrice, stop, tp, entry, leverage: effectiveLev });
       } else if (executionMode === 'twap') {
         placed = await this.executeTwapOrder({ side, totalQty: qty, slices: 3, intervalMs: 250, stop, tp, entry, leverage: effectiveLev });
@@ -1190,7 +1338,7 @@ export class ReboundRejectionAgent {
     }
 
     const telemetry = this.computeTelemetry(startTs, placed, { expectedPrice: entry, requestedQty: qty, side });
-    const now = Date.now();
+    const openedAt = Date.now();
     const executionPrice = placed.avgPrice ?? entry;
     const initialStopDistance = Math.max(1e-12,
       Math.abs(executionPrice - stop) || Math.abs(entry - stop) || Math.abs(this.plan.stopDistance));
@@ -1200,17 +1348,20 @@ export class ReboundRejectionAgent {
       qty: placed.filledQty,
       stop,
       tp,
-      openedAt: now,
+      openedAt,
       extended: false,
       slOrderId: (placed as any).slOrderId,
       tpOrderId: (placed as any).tpOrderId,
-      trail: [{ ts: now, price: stop }],
+      trail: [{ ts: openedAt, price: stop }],
       maeR: 0,
       mfeR: 0,
       breakeven: executionPrice,
       partialInfo: null,
       initialStopDistance,
+      hitTargets: [],
     };
+    this.circuitBreaker.onBeforeOpen(new Date(openedAt), this.lastKnownEquityUsd);
+    this.syncCircuitBreakerTelemetry();
     if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
       // CRYPTO ADAPTATION: Use 4-5R targets minimum for crypto volatility
       const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 4)) : (this.pos.entry - (this.plan.stopDistance * 4));
@@ -3497,8 +3648,9 @@ export class ReboundRejectionAgent {
       minSlopeAbsPct *= 1.05;
     }
 
-    // 🚨 CIRCUIT BREAKER CHECK: Prevent new entries if circuit breaker is active
-    if (this.performanceMetrics?.circuitBreaker?.isActive) {
+    const circuitProbe = this.circuitBreaker.canOpenTrade(new Date(), this.lastKnownEquityUsd);
+    this.syncCircuitBreakerTelemetry(circuitProbe);
+    if (!circuitProbe.allowed) {
       recordOpsEvent({
         level: 'warn',
         source: 'circuit_breaker',
@@ -3506,9 +3658,9 @@ export class ReboundRejectionAgent {
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
         details: {
-          reason: this.performanceMetrics.circuitBreaker.reason,
-          activatedAt: this.performanceMetrics.circuitBreaker.activatedAt,
-          reasonHint
+          reason: circuitProbe.reason,
+          cooldownUntil: circuitProbe.cooldownUntil?.toISOString() ?? null,
+          reasonHint,
         },
       });
       return false;
@@ -4450,8 +4602,9 @@ export class ReboundRejectionAgent {
     if (this.pos) return false; // Already have position
     if (this.entering) return false; // Currently entering
 
-    // Check circuit breaker
-    if (this.performanceMetrics?.circuitBreaker?.isActive) return false;
+    const circuitProbe = this.circuitBreaker.canOpenTrade(new Date(), this.lastKnownEquityUsd);
+    this.syncCircuitBreakerTelemetry(circuitProbe);
+    if (!circuitProbe.allowed) return false;
 
     // Check bias switching
     const planBias = this.plan?.bias;
@@ -4986,6 +5139,69 @@ export class ReboundRejectionAgent {
     }
   }
 
+  private ensurePerformanceMetricsSkeleton(profile: ActivationProfile): void {
+    if (this.performanceMetrics) {
+      this.performanceMetrics.symbol = profile.symbol;
+      this.performanceMetrics.circuitBreaker.lossThreshold = this.quantConfig.risk.maxConsecutiveLosses;
+      return;
+    }
+    this.performanceMetrics = {
+      symbol: profile.symbol,
+      totalTrades: 0,
+      winRate: 0,
+      profitRatio: 0,
+      maxDrawdown: 0,
+      dailyPnL: 0,
+      strategyPerformance: new Map(),
+      circuitBreaker: {
+        isActive: false,
+        reason: 'ready',
+        activatedAt: 0,
+        lossThreshold: this.quantConfig.risk.maxConsecutiveLosses,
+        winRateThreshold: 0,
+      },
+      adaptationState: {
+        atrMultiplier: 1,
+        adxMultiplier: 1,
+        qualityThresholdAdjustment: 0,
+        lastUpdated: Date.now(),
+      },
+      biasSwitching: {
+        currentBias: 'standby',
+        lastBiasSwitch: Date.now(),
+        consecutiveLosses: 0,
+        triggerThreshold: 0,
+      },
+    };
+  }
+
+  private syncCircuitBreakerTelemetry(decision?: CircuitBreakerDecision): void {
+    if (!this.performanceMetrics) return;
+    const state = this.circuitBreaker.getState();
+    const now = Date.now();
+    const cooldownActive = !!(state.cooldownUntil && state.cooldownUntil.getTime() > now);
+    const blocked = decision?.allowed === false;
+    const isActive = blocked || cooldownActive;
+    const reason = blocked
+      ? decision?.reason || 'circuit_blocked'
+      : cooldownActive
+        ? `cooldown_until_${state.cooldownUntil?.toISOString()}`
+        : 'ready';
+    const activatedAt = isActive
+      ? (state.cooldownUntil
+        ? state.cooldownUntil.getTime() - (this.quantConfig.risk.cooldownMinutes * 60 * 1000)
+        : now)
+      : 0;
+    const prevWinRateThreshold = this.performanceMetrics.circuitBreaker?.winRateThreshold ?? 0;
+    this.performanceMetrics.circuitBreaker = {
+      isActive,
+      reason,
+      activatedAt,
+      lossThreshold: this.quantConfig.risk.maxConsecutiveLosses,
+      winRateThreshold: prevWinRateThreshold,
+    };
+  }
+
   private noteSignalDrop(message: string, level: 'info' | 'warn' = 'info', details?: Record<string, unknown>): void {
     try {
       recordOpsEvent({
@@ -5232,6 +5448,72 @@ export class ReboundRejectionAgent {
     }
   }
 
+  private async applyQuantExitDirective(price: number, snap: TechnicalSnapshot): Promise<boolean> {
+    if (!this.pos) return false;
+    const targets = Array.isArray(this.pos.tp) ? this.pos.tp : [];
+    if (!targets.length) return false;
+
+    const atr = typeof (snap as any)?.atr14 === 'number' ? Number((snap as any).atr14) : this.plan?.atr ?? null;
+    if (!(atr && atr > 0)) return false;
+
+    const tradeSide: 'long' | 'short' = this.pos.side === 'buy' ? 'long' : 'short';
+    const hitTargets = new Set<number>(this.pos.hitTargets ?? []);
+    const directive = maybeAdjustOrExit({
+      side: tradeSide,
+      entryPrice: this.pos.entry,
+      stop: this.pos.stop,
+      targets,
+      lastPrice: price,
+      atr,
+      adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : null,
+      cmf: typeof (snap as any)?.cmf20 === 'number' ? Number((snap as any).cmf20) : null,
+      cfg: this.quantConfig.exits,
+      alreadyTriggeredTargets: hitTargets,
+    });
+
+    if (directive.action === 'exit') {
+      recordOpsEvent({
+        level: 'info',
+        source: 'quantai_exit',
+        message: 'forced_exit',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { reason: directive.reason },
+      });
+      await this.exitPosition(price, 'quantai_directive_exit');
+      return true;
+    }
+
+    if (directive.action === 'move_sl' && typeof directive.stop === 'number') {
+      const newStop = Number(directive.stop);
+      if (Number.isFinite(newStop) && ((this.pos.side === 'buy' && newStop > this.pos.stop + 1e-8) || (this.pos.side === 'sell' && newStop < this.pos.stop - 1e-8))) {
+        await this.updateTrailingStop(newStop, price);
+        recordOpsEvent({
+          level: 'info',
+          source: 'quantai_exit',
+          message: 'trail_adjusted',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { newStop, reason: directive.reason },
+        });
+      }
+      return false;
+    }
+
+    if (directive.action === 'take_partial' && directive.tpHitIndex != null) {
+      if (!this.pos.partialTaken) {
+        const tpIndex = directive.tpHitIndex;
+        hitTargets.add(tpIndex);
+        this.pos.hitTargets = Array.from(hitTargets.values());
+        const targetPrice = targets[tpIndex] ?? price;
+        await this.executePartialExit(price, targetPrice, `quantai_tp${tpIndex + 1}_hit`);
+      }
+      return false;
+    }
+
+    return false;
+  }
+
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
     // ✅ FIX: Validate position exists, reset state if missing (prevents stuck MANAGE state)
     if (!this.pos || !this.plan || !this.profile) {
@@ -5320,6 +5602,11 @@ export class ReboundRejectionAgent {
 
     // Update position metrics
     this.updatePositionMetrics(price);
+
+    const quantExitTriggered = await this.applyQuantExitDirective(price, snap);
+    if (quantExitTriggered) {
+      return;
+    }
 
     // Check for exit conditions
     const exitReason = this.checkExitConditions(price, snap);
@@ -5513,6 +5800,14 @@ export class ReboundRejectionAgent {
         });
 
         // Update performance tracking
+        const balanceAfter = await this.broker.balance().catch(() => null as any);
+        const equityAfter = Number(balanceAfter?.equityUsd ?? this.lastKnownEquityUsd ?? this.profile.startBalanceUsd ?? 0);
+        const baseEquity = this.lastKnownEquityUsd > 0 ? this.lastKnownEquityUsd : (this.profile.startBalanceUsd ?? equityAfter);
+        const pnlPct = baseEquity > 0 ? (realizedPnl / baseEquity) * 100 : 0;
+        this.circuitBreaker.onTradeResult(new Date(), pnlPct, equityAfter);
+        this.lastKnownEquityUsd = equityAfter;
+        this.syncCircuitBreakerTelemetry();
+
         const win = realizedPnl > 0;
         this.recentTrades.push({
           win,
@@ -5928,7 +6223,10 @@ export class ReboundRejectionAgent {
     const qty = this.pos.qty;
     const side = this.pos.side;
 
-    const priceDiff = side === 'buy' ? exitPrice - entry : entry - exitPrice;
+    const entryNet = applyFeesAndSlippage(entry, this.quantConfig.feesSlippage, { side: side });
+    const exitSide = side === 'buy' ? 'sell' : 'buy';
+    const exitNet = applyFeesAndSlippage(exitPrice, this.quantConfig.feesSlippage, { side: exitSide });
+    const priceDiff = side === 'buy' ? exitNet - entryNet : entryNet - exitNet;
     return priceDiff * qty;
   }
 
@@ -6108,6 +6406,9 @@ export class ReboundRejectionAgent {
           ts: Date.now(),
           price: partialExit.avgPrice || targetPrice
         };
+        const recordedHits = new Set(this.pos.hitTargets ?? []);
+        recordedHits.add(0);
+        this.pos.hitTargets = Array.from(recordedHits.values());
 
         // Adjust stop to breakeven or better
         const newStop = this.pos.breakeven || this.pos.entry;

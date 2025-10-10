@@ -1,0 +1,54 @@
+# Tunable thresholds for filters, risk, and exits.
+risk:
+  max_consecutive_losses: 3
+  cooldown_minutes: 60
+  daily_loss_limit_pct: 3.0        # stop trading if daily equity drawdown <= -3%
+  daily_trade_limit: 7
+  reduce_size_after_losses: true
+  size_reduction_after_n_losses: 2 # reduce size after >= 2 losses in a row
+  size_reduction_factor: 0.5       # 50% size during recovery
+  base_risk_per_trade_pct: 0.5     # % of equity risked per trade (target 0.25–0.75% typical)
+
+fees_slippage:
+  taker_fee_bps: 7.5               # 0.075%
+  maker_fee_bps: 2.5               # 0.025%
+  default_slippage_bps: 2.0        # 0.02% avg slippage
+
+filters:
+  min_adx: 18                      # allow entries only if ADX >= 18 (momentum present)
+  min_dollar_volume: 500000        # require $ volume over lookback
+  min_rr: 1.3                      # minimum risk-reward to first TP
+  min_atr_pct: 0.2                 # avoid dead markets (ATR% of price)
+  max_spread_bps: 8                # avoid high spread pairs
+  confidence_threshold: 0.58       # require p(score) > p* ~ (L+C)/(W+L)
+  use_confidence_filter: true
+
+entries:
+  ema_fast: 20
+  ema_slow: 50
+  rsi_period: 14
+  adx_period: 14
+  cmf_period: 20
+  rsi_long_min: 48                 # permissive long threshold (not 50+ only)
+  rsi_short_max: 52                # permissive short threshold (symmetry)
+  allow_long_with_high_rsi: true   # don't block longs just because RSI is high in uptrend
+  allow_short_with_low_rsi: true   # don't block shorts just because RSI is low in downtrend
+
+exits:
+  atr_period: 14
+  sl_atr_mult: 1.5                 # initial SL at 1.5x ATR
+  tp_r_multiples: [0.5, 1.0, 2.0]  # partial TPs at 0.5R, 1R, 2R
+  trail_after_r: 1.0               # start trailing after 1R reached
+  trail_atr_mult: 1.0              # trail distance ~1x ATR
+  early_exit:
+    adx_below: 18
+    cmf_negative: true
+    tighten_only_if_profit_gt_r: 0.2  # tighten if small profit exists
+    cut_if_loss_gt_r: 0.5             # cut early if loss worse than 0.5R and momentum fails
+
+regime:
+  ema_trend_period_fast: 50
+  ema_trend_period_slow: 200
+  adx_trend_min: 16
+  neutral_band_bps: 10               # +-0.10% slope per period ~ neutral
+
