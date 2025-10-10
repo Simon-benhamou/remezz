@@ -49,7 +49,7 @@ function formatUsd(v?: number | null, digits = 2) {
   return `$${Number(v).toFixed(digits)}`;
 }
 
-export default function TradesJournalPage() {
+export default function ExecutionLedgerPage() {
   const [sessions, setSessions] = React.useState<any[]>([]);
   const [sessionId, setSessionId] = React.useState<string>('');
   const [rows, setRows] = React.useState<TradeRow[]>([]);
@@ -301,7 +301,7 @@ export default function TradesJournalPage() {
     <Space direction='vertical' size='large' style={{ width: '100%' }}>
       {/* Enhanced Header with Global Stats */}
       <Card>
-        <Title level={3}>📖 Comprehensive Trading Journal</Title>
+        <Title level={3}>📈 Execution Ledger</Title>
         <Row gutter={[16, 16]} align="middle">
           <Col span={24}>
             <Space wrap align='center'>
@@ -480,7 +480,7 @@ export default function TradesJournalPage() {
       )}
 
       {/* Enhanced Trades Table */}
-      <Card title={`📊 ${viewMode === 'global' ? 'All Sessions' : 'Session'} Trades Journal`}>
+      <Card title={`📊 ${viewMode === 'global' ? 'All Sessions' : 'Session'} Execution Ledger`}>
         <Table
           rowKey='id'
           loading={loading}

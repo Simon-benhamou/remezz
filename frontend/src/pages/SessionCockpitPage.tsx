@@ -49,7 +49,7 @@ type LoadingState = {
   errors: string[];
 };
 
-export default function MonitorPage(){
+export default function SessionCockpitPage(){
   const { sessionId } = useParams();
   const navigate = useNavigate();
 
