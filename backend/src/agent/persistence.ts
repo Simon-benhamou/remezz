@@ -121,6 +121,13 @@ export async function loadActivePosition(sessionId: string) {
   });
 }
 
+type ProtectiveSnapshot = {
+  slOrderId: string | null;
+  tpOrderId: string | null;
+  qty?: number | null;
+  side?: 'buy'|'sell'|null;
+};
+
 export async function recordExit(params: {
   sessionId: string;
   symbol: string;
@@ -135,6 +142,9 @@ export async function recordExit(params: {
   fillRatio?: number;
   cancelCount?: number;
   attempts?: number;
+  reason?: string;
+  diagnostics?: any;
+  protectiveSnapshot?: ProtectiveSnapshot | null;
 }) {
   const round4 = (n:number)=> Math.round(n*1e4)/1e4;
   // Fetch last position to carry leverage info to the exit order
@@ -176,6 +186,29 @@ export async function recordExit(params: {
       sessionId: params.sessionId,
     }
   });
+
+  if (params.reason || params.diagnostics || params.protectiveSnapshot) {
+    try {
+      await prisma.triggerLog.create({
+        data: {
+          sessionId: params.sessionId,
+          symbol: params.symbol,
+          kind: 'exit_diagnostic',
+          payload: {
+            orderId: order.id,
+            exitPrice: round4(params.exitPrice),
+            realizedPnl: params.realizedPnl ?? null,
+            reason: params.reason ?? null,
+            protectiveSnapshot: params.protectiveSnapshot ?? null,
+            diagnostics: params.diagnostics ?? null,
+            capturedAt: new Date().toISOString(),
+          },
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to persist exit diagnostics snapshot:', error);
+    }
+  }
   // Adjust remaining position qty (supports partial exits)
   if (lastPos) {
     const newQty = Math.max(0, (Number(lastPos.qty || 0) - Number(params.qty || 0)));
