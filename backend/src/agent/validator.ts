@@ -6,6 +6,32 @@ import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
 import { classifySymbolVolatility, computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
 
+type VolProfile = 'HIGH' | 'MODERATE' | 'LOW';
+
+const STOP_DISTANCE_MULTIPLIER_BY_VOL = {
+  HIGH: 1.35,
+  MODERATE: 1.1,
+  LOW: 0.9,
+} as const;
+
+const STOP_DISTANCE_MAX_PCT_BY_VOL = {
+  HIGH: 0.22,
+  MODERATE: 0.18,
+  LOW: 0.14,
+} as const;
+
+const MIN_STOP_PCT_BY_VOL = {
+  HIGH: 0.65,
+  MODERATE: 0.45,
+  LOW: 0.32,
+} as const;
+
+const MIN_TP_PCT_BY_VOL = {
+  HIGH: 1.3,
+  MODERATE: 0.9,
+  LOW: 0.65,
+} as const;
+
 export type ValidatedPlan = {
   plan: PlanJson;
   symbol: string;
@@ -31,26 +57,21 @@ export type ValidatedPlan = {
 };
 
 function adjustedStopsPct(cfg: ReturnType<typeof getConfig>, symbol: string) {
-  const prof = classifySymbolVolatility(symbol);
-  // Base env minima
-  let minStopPct = Math.max(0, cfg.MIN_STOP_PCT);
-  let minTpPct = Math.max(0, cfg.MIN_TP_PCT);
-  // Raise floors per volatility class
-  if (prof === 'HIGH') {
-    minStopPct = Math.max(minStopPct, 0.6);
-    minTpPct = Math.max(minTpPct, 1.2);
-  } else if (prof === 'MODERATE') {
-    minStopPct = Math.max(minStopPct, 0.4);
-    minTpPct = Math.max(minTpPct, 0.8);
-  } else {
-    // LOW
-    minStopPct = Math.max(minStopPct, 0.3);
-    minTpPct = Math.max(minTpPct, 0.6);
-  }
-  return { minStopPct, minTpPct };
+  const prof = classifySymbolVolatility(symbol) as VolProfile | null;
+  const profile: VolProfile = prof ?? 'MODERATE';
+  const minStopPct = Math.max(Math.max(0, cfg.MIN_STOP_PCT), MIN_STOP_PCT_BY_VOL[profile]);
+  const minTpPct = Math.max(Math.max(0, cfg.MIN_TP_PCT), MIN_TP_PCT_BY_VOL[profile]);
+  const stopMultiplier = STOP_DISTANCE_MULTIPLIER_BY_VOL[profile] ?? 1;
+  const maxStopPct = STOP_DISTANCE_MAX_PCT_BY_VOL[profile] ?? 0.25;
+  return { minStopPct, minTpPct, stopMultiplier, maxStopPct, profile };
 }
 
-export function normalizeStopDistance(mid: number, desiredStop: number, minStopAbs: number): number {
+export function normalizeStopDistance(
+  mid: number,
+  desiredStop: number,
+  minStopAbs: number,
+  opts?: { maxStopPct?: number }
+): number {
   const fallbackAbs = minStopAbs > 0
     ? minStopAbs
     : (mid > 0 ? mid * 0.01 : 0.0001);
@@ -65,7 +86,8 @@ export function normalizeStopDistance(mid: number, desiredStop: number, minStopA
   }
 
   if (mid > 0) {
-    const maxStopAbs = mid * 0.25; // cap stops to 25% of price to avoid nonsensical distances
+    const maxStopPct = opts?.maxStopPct != null ? Math.max(0, opts.maxStopPct) : 0.25;
+    const maxStopAbs = mid * maxStopPct; // cap stops to avoid nonsensical distances
     if (maxStopAbs > 0 && Number.isFinite(maxStopAbs) && stopDistance > maxStopAbs) {
       stopDistance = Math.max(minStopAbs, maxStopAbs);
     }
@@ -139,12 +161,13 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
   const atrPct = Number.isFinite(snap.atrPct) ? snap.atrPct : ((atrAbs / Math.max(mid, 1e-8)) * 100);
   // Enforce a minimum stop distance in % of price to avoid micro moves
   const cfg = getConfig();
-  const { minStopPct, minTpPct } = adjustedStopsPct(cfg, plan.symbol);
+  const { minStopPct, minTpPct, stopMultiplier, maxStopPct } = adjustedStopsPct(cfg, plan.symbol);
   const minStopAbs = mid * (minStopPct / 100);
-  const rawStop = Number.isFinite(plan.risk.stop.mult) && Number.isFinite(atrAbsRaw)
+  const rawStopBase = Number.isFinite(plan.risk.stop.mult) && Number.isFinite(atrAbsRaw)
     ? plan.risk.stop.mult * atrAbsRaw
     : NaN;
-  const stopDistance = normalizeStopDistance(mid, rawStop, minStopAbs);
+  const tunedStop = Number.isFinite(rawStopBase) ? rawStopBase * stopMultiplier : rawStopBase;
+  const stopDistance = normalizeStopDistance(mid, tunedStop, minStopAbs, { maxStopPct });
 
   // R ladder prices
   const side = plan.bias === 'long' ? 1 : -1;

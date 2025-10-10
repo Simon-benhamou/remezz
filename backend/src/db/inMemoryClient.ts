@@ -10,6 +10,7 @@ type ModelName =
   | 'fill'
   | 'position'
   | 'marginSnapshot'
+  | 'agentOpsTelemetry'
   | 'alert'
   | 'strategy'
   | 'adaptiveThreshold'
@@ -205,6 +206,13 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     status: 'ok',
     utilisationPct: 0,
   }),
+  agentOpsTelemetry: () => ({
+    sessionId: randomUUID(),
+    tradeCount24h: 0,
+    blockedByVos: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
   alert: () => ({
     id: randomUUID(),
     createdAt: new Date(),
@@ -314,6 +322,9 @@ class InMemoryModel {
       if (include.alerts) {
         out.alerts = this.client.alert.findMany({ where: { sessionId: record.id } });
       }
+      if (include.opsTelemetry) {
+        out.opsTelemetry = this.client.agentOpsTelemetry.findUnique({ where: { sessionId: record.id } }) ?? null;
+      }
       if (include.strategy) {
         out.strategy = this.client.strategy.findMany({ where: { sessionId: record.id } });
       }
@@ -411,6 +422,7 @@ export class InMemoryPrismaClient {
   order: InMemoryModel;
   fill: InMemoryModel;
   position: InMemoryModel;
+  agentOpsTelemetry: InMemoryModel;
   alert: InMemoryModel;
   marginSnapshot: InMemoryModel;
   strategy: InMemoryModel;
@@ -434,6 +446,7 @@ export class InMemoryPrismaClient {
     this.order = new InMemoryModel('order', this);
     this.fill = new InMemoryModel('fill', this);
     this.position = new InMemoryModel('position', this);
+    this.agentOpsTelemetry = new InMemoryModel('agentOpsTelemetry', this);
     this.marginSnapshot = new InMemoryModel('marginSnapshot', this);
     this.alert = new InMemoryModel('alert', this);
     this.strategy = new InMemoryModel('strategy', this);

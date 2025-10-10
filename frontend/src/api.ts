@@ -146,6 +146,8 @@ export const api = {
     (await client.get('/api/ops/metrics')).data,
   getOpsEvents: async (limit = 50) =>
     (await client.get('/api/ops/events', { params: { limit } })).data,
+  getAgentHealth: async () =>
+    (await client.get('/api/ops/agent-health')).data,
   getAdaptiveWeights: async (params?: { family?: string; limit?: number; decisionsLimit?: number }) =>
     (await client.get('/api/monitor/adaptive-weights', { params })).data,
   listImprovements: async (status?: string) =>

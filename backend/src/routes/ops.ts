@@ -1,11 +1,20 @@
 import { Router } from 'express';
-import { computeOpsMetrics, recentOpsEvents } from '../monitor/ops.js';
+import { computeAgentHealth, computeOpsMetrics, recentOpsEvents } from '../monitor/ops.js';
 
 export const router = Router();
 
 router.get('/metrics', async (_req, res) => {
   try {
     const snapshot = await computeOpsMetrics();
+    res.json(snapshot);
+  } catch (e: any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+router.get('/agent-health', async (_req, res) => {
+  try {
+    const snapshot = await computeAgentHealth();
     res.json(snapshot);
   } catch (e: any) {
     res.status(500).json({ error: String(e?.message || e) });
