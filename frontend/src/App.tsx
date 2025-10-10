@@ -1,20 +1,31 @@
-import { ConfigProvider, Layout, Menu, Space, Tag, theme, ThemeConfig, Segmented } from 'antd';
+import { AreaChartOutlined, BulbOutlined, ControlOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
+import { ConfigProvider, Layout, Menu, Segmented, Space, Tag, theme, ThemeConfig } from 'antd';
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { api, clearApiKey, getApiKey } from './api';
-import MissionControlPage from './pages/MissionControlPage';
+import { clearApiKey } from './api';
+import UserDropdown from './components/UserDropdown';
+import { useAuth } from './hooks/useAuth';
+import { useDashboard } from './hooks/useDashboard';
+import BacklogPage from './pages/BacklogPage';
+import ExecutionLedgerPage from './pages/ExecutionLedgerPage';
+import IntelligencePage from './pages/IntelligencePage';
 import LoginPage from './pages/LoginPage';
+import MissionControlPage from './pages/MissionControlPage';
 import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
-import ExecutionLedgerPage from './pages/ExecutionLedgerPage';
-import IntelligencePage from './pages/IntelligencePage';
-import BacklogPage from './pages/BacklogPage';
-import { AreaChartOutlined, ControlOutlined, BulbOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
-import { useAuth } from './hooks/useAuth';
-import { useDashboard } from './hooks/useDashboard';
 import { useAppStore } from './store';
-import UserDropdown from './components/UserDropdown';
+
+const resolveActiveMenuKey = (pathname: string) => {
+  if (pathname.startsWith('/mission-control')) return '/mission-control';
+  if (pathname.startsWith('/agents/')) return '/agents';
+  if (pathname.startsWith('/agents')) return '/agents';
+  if (pathname.startsWith('/ledger')) return '/ledger';
+  if (pathname.startsWith('/intelligence')) return '/intelligence';
+  if (pathname.startsWith('/backlog')) return '/backlog';
+  return '/mission-control';
+};
+
   const { Header, Content, Footer } = Layout;
 
 function AppInner(){
@@ -56,15 +67,7 @@ function AppInner(){
     );
   }
 
-  const activeMenuKey = React.useMemo(() => {
-    if (location.pathname.startsWith('/mission-control')) return '/mission-control';
-    if (location.pathname.startsWith('/agents/')) return '/agents';
-    if (location.pathname.startsWith('/agents')) return '/agents';
-    if (location.pathname.startsWith('/ledger')) return '/ledger';
-    if (location.pathname.startsWith('/intelligence')) return '/intelligence';
-    if (location.pathname.startsWith('/backlog')) return '/backlog';
-    return '/mission-control';
-  }, [location.pathname]);
+  const activeMenuKey = resolveActiveMenuKey(location.pathname);
 
   const menuItems = [
     { key: '/mission-control', label: 'Mission Control', icon: <AreaChartOutlined /> },
