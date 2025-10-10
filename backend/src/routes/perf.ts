@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../db/client.js";
+import { getSessionPerformanceMetrics } from "../services/performance.js";
 
 export const router = Router();
 
@@ -79,4 +80,32 @@ router.get("/breakdown", async (req, res) => {
     bySymbol: bySymbolOut,
     sample: exits.length,
   });
+});
+
+router.get("/session-metrics", async (req, res) => {
+  const rawIds = (req.query.sessionId ?? (req.query["sessionId[]"] as any)) as
+    | string
+    | string[]
+    | undefined;
+  const requested = Array.isArray(rawIds)
+    ? rawIds
+        .map((id) => String(id).trim())
+        .filter((id) => id.length > 0)
+    : typeof rawIds === "string"
+    ? String(rawIds)
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    : [];
+  if (!requested.length) {
+    return res.status(400).json({ error: "sessionId required" });
+  }
+
+  try {
+    const metrics = await getSessionPerformanceMetrics(requested);
+    res.json(metrics);
+  } catch (error) {
+    console.error("Failed to load session metrics", error);
+    res.status(500).json({ error: "failed_to_compute_metrics" });
+  }
 });

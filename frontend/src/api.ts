@@ -109,6 +109,11 @@ export const api = {
     (await client.get("/api/perf", { params: { sessionId } })).data,
   getPerfBreakdown: async (sessionId: string) =>
     (await client.get("/api/perf/breakdown", { params: { sessionId } })).data,
+  getSessionMetrics: async (sessionIds: string | string[]) => {
+    const ids = (Array.isArray(sessionIds) ? sessionIds : [sessionIds]).filter((id) => !!id);
+    const params: Record<string, string | string[]> = { sessionId: ids };
+    return (await client.get("/api/perf/session-metrics", { params })).data;
+  },
   getAlerts: async (sessionId: string) =>
     (await client.get('/api/monitor/alerts', { params: { sessionId } })).data,
   getMonitorAnalytics: async (sessionId: string) =>
