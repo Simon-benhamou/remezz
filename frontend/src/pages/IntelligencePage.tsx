@@ -12,10 +12,28 @@ import {
   Typography,
 } from 'antd';
 import { BulbOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
 import { api } from '../api';
 
 const { Title, Text } = Typography;
+
+type Decision = {
+  id?: string;
+  symbol?: string;
+  sessionId?: string;
+  family?: string;
+  action?: string;
+  confidence?: number;
+  outcome?: string;
+  createdAt?: number | string;
+};
+
+const outcomeMeta: Record<string, { color: string; label: string }> = {
+  win: { color: 'green', label: 'Win' },
+  loss: { color: 'red', label: 'Loss' },
+  breakeven: { color: 'blue', label: 'Flat' },
+};
 
 const IntelligencePage: React.FC = () => {
   const [adaptiveData, setAdaptiveData] = React.useState<any>(null);
@@ -47,7 +65,14 @@ const IntelligencePage: React.FC = () => {
     return () => clearInterval(timer);
   }, [loadIntelligence]);
 
-  const decisions = Array.isArray(adaptiveData?.recentDecisions) ? adaptiveData.recentDecisions : [];
+  const decisions: Decision[] = React.useMemo(() => {
+    if (!Array.isArray(adaptiveData?.recentDecisions)) return [];
+    return adaptiveData.recentDecisions.map((item: any) => ({
+      ...item,
+      createdAt: item.createdAt || item.ts,
+    }));
+  }, [adaptiveData]);
+
   const families = Array.isArray(adaptiveData?.weights) ? adaptiveData.weights.length : 0;
   const avgConfidence = decisions.length
     ? decisions.reduce((sum: number, item: any) => sum + Number(item.confidence || 0), 0) / decisions.length
@@ -159,6 +184,34 @@ const IntelligencePage: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      <Card title='Decision feed' style={{ borderRadius: 12 }} loading={adaptiveLoading}>
+        <List
+          dataSource={decisions.slice(0, 30)}
+          locale={{ emptyText: 'No recorded decisions yet.' }}
+          renderItem={(item) => {
+            const meta = outcomeMeta[item.outcome || ''] || outcomeMeta.breakeven;
+            return (
+              <List.Item>
+                <Space size={12} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                  <Space size={12} wrap>
+                    <Tag color='geekblue'>{item.symbol || item.family || 'Unknown'}</Tag>
+                    {item.action && <Tag color='blue'>{item.action.toUpperCase()}</Tag>}
+                    <Tag color={meta.color}>{meta.label}</Tag>
+                  </Space>
+                  <Space size={12} wrap>
+                    <Tag color='purple'>Confidence {Number(item.confidence || 0).toFixed(1)}%</Tag>
+                    {item.sessionId && <Tag>{item.sessionId.slice(0, 6)}…</Tag>}
+                    <Text type='secondary'>
+                      {item.createdAt ? dayjs(item.createdAt).format('MMM D · HH:mm:ss') : '—'}
+                    </Text>
+                  </Space>
+                </Space>
+              </List.Item>
+            );
+          }}
+        />
+      </Card>
     </Space>
   );
 };
