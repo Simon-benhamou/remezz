@@ -15,7 +15,6 @@ import {
   Col,
   Tooltip,
   Progress,
-  Badge,
   Switch,
   Dropdown,
   MenuProps,
@@ -38,7 +37,6 @@ import { useStopAllLock } from '../hooks/useStopAllLock';
 import { useStopAllConfirmation } from '../hooks/useStopAllConfirmation';
 import {
   SearchOutlined,
-  FilterOutlined,
   DownloadOutlined,
   EyeOutlined,
   SettingOutlined,
@@ -51,7 +49,6 @@ import {
   CloseOutlined,
   InfoCircleOutlined,
 } from '@ant-design/icons';
-import TradingDiagnosticsCollapsible from '../components/TradingDiagnosticsCollapsible';
 import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
 import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
 import ApiKeyMigrationTool from '../components/ApiKeyMigrationTool';
@@ -642,8 +639,42 @@ export default function SessionsPage(){
         const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
         const roiPct = Number(perf?.roiPct ?? 0);
 
+        const runtimeProfile = (agentState?.profile as any) ?? session.profileJson ?? null;
+        const leverageMeta = (runtimeProfile?.leverageCap as any) ?? (session.profileJson?.leverageCap as any) ?? null;
+        const resolvedRaw =
+          runtimeProfile?.maxLeverage ??
+          leverageMeta?.resolved ??
+          session.profileJson?.maxLeverage ??
+          null;
+        const requestedRaw =
+          runtimeProfile?.requestedMaxLeverage ??
+          leverageMeta?.requested ??
+          session.profileJson?.requestedMaxLeverage ??
+          resolvedRaw ??
+          null;
+        const resolvedLeverage = Number(resolvedRaw);
+        const requestedLeverage = Number(requestedRaw);
+        const hasResolved = Number.isFinite(resolvedLeverage);
+        const hasRequested = Number.isFinite(requestedLeverage);
+        const leverageSummary = {
+          resolved: hasResolved ? resolvedLeverage : undefined,
+          requested: hasRequested ? requestedLeverage : hasResolved ? resolvedLeverage : undefined,
+          trimmed:
+            leverageMeta?.trimmed ??
+            (hasResolved && hasRequested ? resolvedLeverage + 1e-9 < requestedLeverage : false),
+          source: leverageMeta?.constraintSource,
+          modeCap: leverageMeta?.modeCap,
+          categoryCap: leverageMeta?.categoryCap,
+          constraintCap: leverageMeta?.constraintCap,
+        };
+
         return {
           ...session,
+          profile: runtimeProfile ?? session.profileJson ?? null,
+          runtimeState: agentState?.state ?? null,
+          runtimePlan: agentState?.plan ?? null,
+          runtimeBalance: agentState?.balance ?? null,
+          runtimeAiMetrics: agentState?.aiMetrics ?? null,
           // PnL & ROI metrics
           realizedPnl: Number(perf?.realizedPnlUsd ?? 0),
           portfolioUnrealizedPnl: Number(perf?.unrealizedPnlUsd ?? 0),
@@ -657,12 +688,12 @@ export default function SessionsPage(){
           maxDrawdown: perf?.maxDrawdown || 0,
           uptime: session.startedAt ? Date.now() - new Date(session.startedAt).getTime() : 0,
           lastActivity: perf?.lastTradeAt || session.startedAt,
-          
+
           // Position info
-          currentPosition: agentState?.position || null,
-          
+          currentPosition: agentState?.pos || null,
+
           // Orders info
-          pendingOrders: pendingOrders,
+          pendingOrders,
           pendingOrdersCount: pendingOrders.length,
 
           // Health status
@@ -670,20 +701,25 @@ export default function SessionsPage(){
           healthScore: health?.score || 0,
           alertCount: health?.alerts?.length || 0,
 
+          // Risk summary
+          leverageSummary,
+
           // Trading diagnostics snapshot for quick gauge
-          tradingReadiness: diagnostics ? {
-            canTrade: !!diagnostics.canTrade,
-            reason: diagnostics.reason,
-            summary: diagnostics.summary,
-            qualityScore: diagnostics.checks?.qualityScore,
-            percent: (() => {
-              const qs = diagnostics.checks?.qualityScore;
-              if (qs && Number(qs.required)) {
-                return Math.round(Math.max(0, Math.min(100, (qs.current / qs.required) * 100)));
+          tradingReadiness: diagnostics
+            ? {
+                canTrade: !!diagnostics.canTrade,
+                reason: diagnostics.reason,
+                summary: diagnostics.summary,
+                qualityScore: diagnostics.checks?.qualityScore,
+                percent: (() => {
+                  const qs = diagnostics.checks?.qualityScore;
+                  if (qs && Number(qs.required)) {
+                    return Math.round(Math.max(0, Math.min(100, (qs.current / qs.required) * 100)));
+                  }
+                  return diagnostics.canTrade ? 100 : 0;
+                })(),
               }
-              return diagnostics.canTrade ? 100 : 0;
-            })(),
-          } : null,
+            : null,
           diagnosticsInitial: diagnostics || null,
         };
       } catch {
@@ -818,9 +854,16 @@ export default function SessionsPage(){
     form.setFieldsValue({ mode }); 
   }, [mode, form]);
   
-  React.useEffect(()=>{
-    let t:any; const pull = async ()=>{ try { const o = await api.overview(mode); setExBal(o?.exchangeBalance || null); } catch{} };
-    pull(); t = setInterval(pull, 15000); return ()=> clearInterval(t);
+  React.useEffect(() => {
+    const pull = async () => {
+      try {
+        const o = await api.overview(mode);
+        setExBal(o?.exchangeBalance || null);
+      } catch {}
+    };
+    pull();
+    const timer = setInterval(pull, 15000);
+    return () => clearInterval(timer);
   }, [mode]);
   
   // Load API key health status
@@ -837,13 +880,6 @@ export default function SessionsPage(){
   }, []);
   
   // Helper functions
-  const formatDuration = (ms: number) => {
-    const hours = Math.floor(ms / (1000 * 60 * 60));
-    const days = Math.floor(hours / 24);
-    if (days > 0) return `${days}d ${hours % 24}h`;
-    if (hours > 0) return `${hours}h ${Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60))}m`;
-    return `${Math.floor(ms / (1000 * 60))}m`;
-  };
   function formatLeverageValue(value?: number | null) {
     if (value == null) return '—';
     const num = Number(value);
@@ -851,6 +887,18 @@ export default function SessionsPage(){
     const decimals = num >= 10 ? 0 : num >= 4 ? 1 : 2;
     return `${num.toFixed(decimals)}x`;
   }
+
+  const formatRelativeTime = React.useCallback((value: string | number | null | undefined) => {
+    if (!value) return '—';
+    const ts = typeof value === 'number' ? value : Date.parse(value);
+    if (!Number.isFinite(ts)) return '—';
+    const diff = Date.now() - ts;
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return `${Math.max(1, Math.round(diff / 60000))}m ago`;
+    if (diff < 86400000) return `${Math.max(1, Math.round(diff / 3600000))}h ago`;
+    const days = Math.max(1, Math.round(diff / 86400000));
+    return `${days}d ago`;
+  }, []);
   
   const getHealthColor = (status: string, score: number) => {
     if (status === 'error' || score < 30) return '#ff4d4f';
@@ -972,6 +1020,402 @@ export default function SessionsPage(){
     });
     setOpen(true);
   };
+
+  const sessionColumns = React.useMemo(() => {
+    const parseTime = (value: string | number | null | undefined) => {
+      if (!value) return NaN;
+      if (typeof value === 'number') return value;
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : NaN;
+    };
+
+    return [
+      {
+        title: 'Status',
+        key: 'status',
+        width: compactView ? 140 : 160,
+        sorter: (a: any, b: any) => statusRank(a) - statusRank(b),
+        render: (_: any, record: any) => {
+          const meta = getStatusMeta(record);
+          const runtime = record.runtimeState
+            ? String(record.runtimeState).replace(/_/g, ' ')
+            : isSessionActive(record)
+            ? 'ACTIVE'
+            : 'OFFLINE';
+          return (
+            <Space direction="vertical" size={4}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: meta.dot,
+                    boxShadow: meta.glow,
+                  }}
+                />
+                <span style={{ fontWeight: 600, color: meta.text }}>{meta.label}</span>
+              </div>
+              <Tag
+                style={{
+                  background: isSessionActive(record) ? 'rgba(16, 185, 129, 0.18)' : 'rgba(148, 163, 184, 0.18)',
+                  border: 'none',
+                  color: isSessionActive(record) ? '#047857' : '#475569',
+                  fontWeight: 600,
+                  borderRadius: 6,
+                }}
+              >
+                {runtime.toUpperCase()}
+              </Tag>
+              {record.haltReason && (
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  Reason: {record.haltReason}
+                </Text>
+              )}
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Agent',
+        dataIndex: 'symbol',
+        key: 'agent',
+        width: compactView ? 200 : 220,
+        sorter: (a: any, b: any) => String(a.symbol || '').localeCompare(String(b.symbol || '')),
+        render: (_: any, record: any) => {
+          const isSmart =
+            record.isSmartAgent || record.profile?.isIntelligent || record.profileJson?.isIntelligent;
+          const aggressiveness = String(record.aggressiveness || 'reactive').toUpperCase();
+          return (
+            <Space direction="vertical" size={4}>
+              <Space align="center" size={6}>
+                {isSmart && <span role="img" aria-label="smart agent">🧠</span>}
+                <span style={{ fontWeight: 600, fontSize: 14, color: '#0f172a' }}>{record.symbol}</span>
+              </Space>
+              <Space size={4} wrap>
+                <Tag
+                  style={{
+                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                    color: 'white',
+                    border: 'none',
+                    fontWeight: 600,
+                    borderRadius: 6,
+                  }}
+                >
+                  {String(record.mode || 'paper').toUpperCase()}
+                </Tag>
+                <Tag
+                  style={{
+                    background: isSmart ? 'linear-gradient(135deg, #7c3aed, #6d28d9)' : 'rgba(148, 163, 184, 0.18)',
+                    color: isSmart ? '#ffffff' : '#475569',
+                    border: 'none',
+                    fontWeight: 600,
+                    borderRadius: 6,
+                  }}
+                >
+                  {isSmart ? 'AUTO' : 'MANUAL'}
+                </Tag>
+                <Tag
+                  style={{
+                    background: 'rgba(15, 23, 42, 0.04)',
+                    border: '1px solid rgba(148, 163, 184, 0.35)',
+                    color: '#475569',
+                    fontWeight: 500,
+                    borderRadius: 6,
+                  }}
+                >
+                  {aggressiveness}
+                </Tag>
+              </Space>
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Performance',
+        key: 'performance',
+        width: compactView ? 200 : 220,
+        sorter: (a: any, b: any) => (Number(a.pnlUsd) || 0) - (Number(b.pnlUsd) || 0),
+        render: (_: any, record: any) => {
+          const pnl = Number(record.pnlUsd ?? 0);
+          const roi = Number(record.roiPct ?? 0);
+          const winRate = Number(record.winRate ?? 0);
+          const dailyPnl = Number(record.pnl24h ?? 0);
+          const pnlColor = pnl >= 0 ? '#047857' : '#dc2626';
+          return (
+            <Space direction="vertical" size={compactView ? 2 : 4}>
+              <span style={{ fontWeight: 700, fontSize: 15, color: pnlColor }}>
+                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+              </span>
+              <Space size={10}>
+                <span style={{ fontSize: 12, color: '#334155' }}>
+                  ROI&nbsp;<strong>{roi.toFixed(2)}%</strong>
+                </span>
+                <span style={{ fontSize: 12, color: '#334155' }}>
+                  Win&nbsp;<strong>{winRate.toFixed(1)}%</strong>
+                </span>
+              </Space>
+              {!compactView && (
+                <span style={{ fontSize: 11, color: '#64748b' }}>
+                  24h {dailyPnl >= 0 ? '+' : ''}${dailyPnl.toFixed(2)} · Max DD {Number(record.maxDrawdown ?? 0).toFixed(2)}%
+                </span>
+              )}
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Exposure',
+        key: 'exposure',
+        width: compactView ? 200 : 220,
+        render: (_: any, record: any) => {
+          const pos = record.currentPosition;
+          if (!pos) {
+            return <span style={{ fontSize: 12, color: '#64748b' }}>No open position</span>;
+          }
+          const side = String(pos.side || '').toUpperCase();
+          const qty = Number(pos.qty ?? NaN);
+          const entry = Number(pos.entry ?? NaN);
+          const unrealized = Number(record.portfolioUnrealizedPnl ?? NaN);
+          const qtyDisplay = Number.isFinite(qty) ? qty.toFixed(4) : '—';
+          const entryDisplay = Number.isFinite(entry)
+            ? entry.toLocaleString(undefined, { maximumFractionDigits: 4 })
+            : '—';
+          return (
+            <Space direction="vertical" size={2}>
+              <Space size={6}>
+                <Tag
+                  style={{
+                    background: side === 'SELL' ? 'rgba(239, 68, 68, 0.18)' : 'rgba(16, 185, 129, 0.18)',
+                    border: 'none',
+                    color: side === 'SELL' ? '#b91c1c' : '#047857',
+                    fontWeight: 600,
+                    borderRadius: 6,
+                  }}
+                >
+                  {side === 'SELL' ? 'SHORT' : 'LONG'}
+                </Tag>
+                <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>
+                  {qtyDisplay}
+                </span>
+              </Space>
+              <span style={{ fontSize: 12, color: '#475569' }}>Entry&nbsp;{entryDisplay}</span>
+              {Number.isFinite(unrealized) && (
+                <span style={{ fontSize: 11, color: unrealized >= 0 ? '#059669' : '#dc2626', fontWeight: 600 }}>
+                  Unrealized {unrealized >= 0 ? '+' : ''}${unrealized.toFixed(2)}
+                </span>
+              )}
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Risk & Readiness',
+        key: 'risk',
+        width: compactView ? 210 : 230,
+        sorter: (a: any, b: any) => {
+          const aLev = Number(
+            a.leverageSummary?.resolved ?? a.profile?.maxLeverage ?? a.profileJson?.maxLeverage ?? 0
+          );
+          const bLev = Number(
+            b.leverageSummary?.resolved ?? b.profile?.maxLeverage ?? b.profileJson?.maxLeverage ?? 0
+          );
+          return aLev - bLev;
+        },
+        render: (_: any, record: any) => {
+          const summary = record.leverageSummary || {};
+          const resolved =
+            summary.resolved ?? record.profile?.maxLeverage ?? record.profileJson?.maxLeverage;
+          const requested =
+            summary.requested ??
+            record.profile?.requestedMaxLeverage ??
+            record.profileJson?.requestedMaxLeverage;
+          const readiness = record.tradingReadiness;
+          const healthScore = Number(record.healthScore ?? NaN);
+          const healthColor = getHealthColor(record.healthStatus, healthScore);
+          return (
+            <Space direction="vertical" size={compactView ? 2 : 4}>
+              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>
+                Leverage&nbsp;{formatLeverageValue(resolved)}
+              </span>
+              {requested && summary.trimmed ? (
+                <Tag color="orange" style={{ fontSize: 11, borderRadius: 6 }}>
+                  Trimmed from {formatLeverageValue(requested)}
+                </Tag>
+              ) : requested ? (
+                <span style={{ fontSize: 11, color: '#64748b' }}>
+                  Requested&nbsp;{formatLeverageValue(requested)}
+                </span>
+              ) : null}
+              {Number.isFinite(healthScore) && (
+                <span style={{ fontSize: 11, color: healthColor }}>
+                  Health {Math.round(healthScore)}%
+                </span>
+              )}
+              {readiness ? (
+                <Tooltip title={readiness.reason || readiness.summary}>
+                  <div style={{ width: 160 }}>
+                    <Progress
+                      percent={Math.round(readiness.percent ?? (readiness.canTrade ? 100 : 0))}
+                      showInfo={false}
+                      strokeColor={readiness.canTrade ? '#10b981' : '#f97316'}
+                      trailColor="rgba(148, 163, 184, 0.2)"
+                      style={{ marginBottom: 4 }}
+                    />
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: readiness.canTrade ? '#047857' : '#b45309',
+                        fontWeight: 500,
+                      }}
+                    >
+                      {readiness.canTrade ? 'Ready to trade' : 'Blocked'}
+                    </div>
+                  </div>
+                </Tooltip>
+              ) : (
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                  {isSessionActive(record) ? 'Diagnostics unavailable' : 'Agent offline'}
+                </span>
+              )}
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Activity',
+        key: 'activity',
+        width: compactView ? 200 : 220,
+        sorter: (a: any, b: any) => {
+          const aTs = parseTime(a.lastActivity);
+          const bTs = parseTime(b.lastActivity);
+          return (Number.isFinite(aTs) ? aTs : 0) - (Number.isFinite(bTs) ? bTs : 0);
+        },
+        render: (_: any, record: any) => {
+          const orders = Number(record.pendingOrdersCount ?? 0);
+          const totalTrades = Number(record.totalTrades ?? 0);
+          const today = Number(record.todayTrades ?? 0);
+          return (
+            <Space direction="vertical" size={2}>
+              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
+                Last trade&nbsp;{formatRelativeTime(record.lastActivity)}
+              </span>
+              <span style={{ fontSize: 11, color: '#64748b' }}>
+                {totalTrades} total · {today} today
+              </span>
+              <span style={{ fontSize: 11, color: orders > 0 ? '#b45309' : '#94a3b8' }}>
+                {orders} open orders
+              </span>
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Started',
+        dataIndex: 'startedAt',
+        key: 'started',
+        width: compactView ? 170 : 190,
+        sorter: (a: any, b: any) => {
+          const aTs = parseTime(a.startedAt);
+          const bTs = parseTime(b.startedAt);
+          return (Number.isFinite(aTs) ? aTs : 0) - (Number.isFinite(bTs) ? bTs : 0);
+        },
+        render: (value: string | number) => {
+          const ts = parseTime(value);
+          if (!Number.isFinite(ts)) {
+            return <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>;
+          }
+          const dt = new Date(ts);
+          return (
+            <Space direction="vertical" size={2}>
+              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
+                {dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{formatRelativeTime(ts)}</span>
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Actions',
+        key: 'actions',
+        width: compactView ? 150 : 170,
+        fixed: compactView ? undefined : 'right',
+        render: (_: any, record: any) => {
+          if (isSessionActive(record)) {
+            return (
+              <Button
+                danger
+                size="small"
+                icon={<StopOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  stop(record.id);
+                }}
+                style={{ borderRadius: 8, fontWeight: 500 }}
+              >
+                Stop
+              </Button>
+            );
+          }
+          return (
+            <Space>
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  relaunch(record);
+                }}
+                style={{ borderRadius: 8, fontWeight: 500 }}
+              >
+                Restart
+              </Button>
+              <Button
+                danger
+                size="small"
+                icon={<DeleteOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  Modal.confirm({
+                    title: 'Delete session?',
+                    content: 'This will permanently delete session and all associated data.',
+                    okText: 'Delete',
+                    cancelText: 'Cancel',
+                    okButtonProps: { danger: true },
+                    onOk: async () => {
+                      try {
+                        await api.deleteSession(record.id);
+                        message.success('Deleted');
+                        await load(true);
+                      } catch (error) {
+                        console.error('Delete failed', error);
+                        message.error('Delete failed');
+                      }
+                    },
+                  });
+                }}
+                style={{ borderRadius: 8, fontWeight: 500 }}
+              >
+                Delete
+              </Button>
+            </Space>
+          );
+        },
+      },
+    ];
+  }, [
+    compactView,
+    formatLeverageValue,
+    formatRelativeTime,
+    getHealthColor,
+    getStatusMeta,
+    isSessionActive,
+    load,
+    relaunch,
+    statusRank,
+    stop,
+  ]);
 
   return (
     <div style={{ 
@@ -1305,26 +1749,26 @@ export default function SessionsPage(){
           </div>
           
           {/* Modern Enhanced Table */}
-          <Table 
-            rowKey="id" 
-            dataSource={filteredRows} 
-            pagination={{ 
-              pageSize: 20, 
+          <Table
+            rowKey="id"
+            dataSource={filteredRows}
+            pagination={{
+              pageSize: 20,
               showSizeChanger: true,
               showQuickJumper: true,
               showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} sessions`,
-              style: { fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif' }
+              style: { fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif' },
             }}
-            onRow={(r)=> ({
-              onClick: async ()=> {
-                if (isSessionActive(r)) navigate(`/monitor/${r.id}`);
+            onRow={(record) => ({
+              onClick: async () => {
+                if (isSessionActive(record)) navigate(`/monitor/${record.id}`);
               },
               style: {
-                cursor: isSessionActive(r) ? 'pointer' : 'default',
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-              }
+                cursor: isSessionActive(record) ? 'pointer' : 'default',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
+              },
             })}
-            scroll={{ x: compactView ? 800 : 1400 }}
+            scroll={{ x: compactView ? 960 : 1280 }}
             size={compactView ? 'small' : 'middle'}
             style={{
               borderRadius: '12px',
@@ -1333,629 +1777,7 @@ export default function SessionsPage(){
               background: '#ffffff',
               boxShadow: '0 10px 24px -18px rgba(15, 23, 42, 0.35)'
             }}
-            columns={[
-              {
-                title:'Status',
-                width: 80,
-                render:(_,r)=> (
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
-                  }}>
-                    {(() => {
-                      const meta = getStatusMeta(r);
-                      return (
-                        <>
-                    <div style={{
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '50%',
-                      background: meta.dot,
-                      boxShadow: meta.glow
-                    }} />
-                    <span style={{
-                      fontSize: '12px',
-                      fontWeight: '600',
-                      color: meta.text,
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                    }}>
-                      {meta.label}
-                    </span>
-                        </>
-                      );
-                    })()}
-                  </div>
-                ),
-                sorter: (a, b) => statusRank(a) - statusRank(b)
-              },
-              { 
-                title:'Symbol', 
-                dataIndex:'symbol',
-                width: 120,
-                render: (symbol, record) => {
-                  // Check both isSmartAgent field and profileJson.isIntelligent
-                  const isSmartAgent = record.isSmartAgent || record.profileJson?.isIntelligent;
-                  return (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {isSmartAgent && (
-                        <span style={{ 
-                          fontSize: '14px',
-                          background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-                          borderRadius: '50%',
-                          width: '16px',
-                          height: '16px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}>
-                          🧠
-                        </span>
-                      )}
-                      <span style={{
-                        fontWeight: '600',
-                        fontSize: '14px',
-                        color: isSmartAgent ? '#7c3aed' : '#1e293b',
-                        fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                      }}>
-                        {symbol}
-                      </span>
-                      {isSmartAgent && (
-                        <Tag color="purple" style={{ fontSize: '10px', lineHeight: '14px', padding: '0 4px' }}>
-                          AUTO
-                        </Tag>
-                      )}
-                    </div>
-                  );
-                },
-                sorter: (a, b) => a.symbol.localeCompare(b.symbol)
-              },
-              { 
-                title:'Mode', 
-                dataIndex:'mode', 
-                width: 80,
-                render:(m)=> (
-                  <Tag style={{ 
-                    background: m === 'live' 
-                      ? 'linear-gradient(135deg, #ef4444, #dc2626)' 
-                      : 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                    color: 'white',
-                    border: 'none',
-                    fontWeight: '600',
-                    borderRadius: '6px',
-                    fontSize: '11px',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                  }}>
-                    {String(m).toUpperCase()}
-                  </Tag>
-                ),
-                sorter: (a, b) => a.mode.localeCompare(b.mode)
-              },
-              { 
-                title:'Type', 
-                dataIndex:'isSmartAgent',
-                width: 90,
-                render:(_, record)=> {
-                  const isSmartAgent = record.isSmartAgent || record.profileJson?.isIntelligent;
-                  return isSmartAgent ? (
-                    <Tag style={{ 
-                      background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', 
-                      color: 'white', 
-                      border: 'none',
-                      fontWeight: '600',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                    }}>
-                      🎯 AUTO
-                    </Tag>
-                  ) : (
-                    <Tag style={{ 
-                      background: 'rgba(248, 250, 252, 0.8)', 
-                      color: '#64748b', 
-                      border: '1px solid #e2e8f0',
-                      fontWeight: '500',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                    }}>
-                      MANUAL
-                    </Tag>
-                  );
-                },
-                sorter: (a, b) => {
-                  const aIsSmartAgent = a.isSmartAgent || a.profileJson?.isIntelligent;
-                  const bIsSmartAgent = b.isSmartAgent || b.profileJson?.isIntelligent;
-                  return (bIsSmartAgent ? 1 : 0) - (aIsSmartAgent ? 1 : 0);
-                }
-              },
-              {
-                title:'Aggressiveness',
-                dataIndex:'aggressiveness',
-                width: 130,
-                render:(a)=> {
-                  const level = a || 'conservative';
-                  const colors = {
-                    conservative: '#64748b',
-                    reactive: '#f59e0b', 
-                    aggressive: '#ef4444'
-                  };
-                  return (
-                    <Tag style={{ 
-                      background: 'rgba(248, 250, 252, 0.8)', 
-                      color: colors[level as keyof typeof colors] || '#64748b', 
-                      border: `1px solid ${colors[level as keyof typeof colors] || '#e2e8f0'}`,
-                      fontWeight: '500',
-                      borderRadius: '6px',
-                      fontSize: '11px',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                    }}>
-                      {level.toUpperCase()}
-                    </Tag>
-                  );
-                },
-                sorter: (a, b) => (a.aggressiveness || 'conservative').localeCompare(b.aggressiveness || 'conservative')
-              },
-              {
-                title:'Leverage',
-                width: 140,
-                render:(_:any, record:any)=> {
-                  const leverage = record.leverage || {};
-                  const cap = leverage.cap || record.profileJson?.leverageCap || null;
-                  const resolved = Number.isFinite(Number(leverage.resolved ?? cap?.resolved ?? record.profileJson?.maxLeverage))
-                    ? Number(leverage.resolved ?? cap?.resolved ?? record.profileJson?.maxLeverage)
-                    : undefined;
-                  const requested = Number.isFinite(Number(leverage.requested ?? cap?.requested ?? record.profileJson?.requestedMaxLeverage))
-                    ? Number(leverage.requested ?? cap?.requested ?? record.profileJson?.requestedMaxLeverage)
-                    : resolved;
-                  const trimmed = Boolean(
-                    leverage.trimmed ?? cap?.trimmed ?? (
-                      resolved != null && requested != null && resolved + 1e-9 < requested
-                    )
-                  );
-                  const tooltipParts: string[] = [];
-                  if (cap?.modeCap != null) tooltipParts.push(`Mode ${formatLeverageValue(cap.modeCap)}`);
-                  if (cap?.categoryCap != null) tooltipParts.push(`Category ${formatLeverageValue(cap.categoryCap)}`);
-                  if (cap?.constraintCap != null) tooltipParts.push(`Constraint ${formatLeverageValue(cap.constraintCap)}`);
-                  if (cap?.constraintSource) tooltipParts.push(`Source: ${cap.constraintSource}`);
-                  const tooltip = tooltipParts.length ? tooltipParts.join(' · ') : undefined;
-                  return (
-                    <Space size={6}>
-                      <Tooltip title={tooltip}>
-                        <span style={{ fontWeight: 600 }}>{formatLeverageValue(resolved)}</span>
-                      </Tooltip>
-                      {trimmed && (
-                        <Tooltip title={`Requested ${formatLeverageValue(requested)} trimmed${cap?.constraintSource ? ` by ${cap.constraintSource}` : ''}`}>
-                          <Tag color="orange">Trimmed</Tag>
-                        </Tooltip>
-                      )}
-                    </Space>
-                  );
-                },
-                sorter: (a: any, b: any) => {
-                  const aLev = Number(a.leverage?.resolved ?? a.profileJson?.maxLeverage ?? 0);
-                  const bLev = Number(b.leverage?.resolved ?? b.profileJson?.maxLeverage ?? 0);
-                  return aLev - bLev;
-                }
-              },
-              ...(compactView ? [] : [
-                {
-                  title:'Health',
-                  width: 100,
-                  render:(_:any,r:any)=> (
-                    <Space>
-                      <Progress 
-                        type="circle" 
-                        size={32}
-                        percent={r.healthScore || 0}
-                        strokeColor={getHealthColor(r.healthStatus, r.healthScore)}
-                        format={() => ''}
-                        strokeWidth={6}
-                      />
-                      {r.alertCount > 0 && (
-                        <Badge 
-                          count={r.alertCount} 
-                          size="small"
-                          style={{
-                            background: '#ef4444',
-                            fontSize: '10px'
-                          }}
-                        />
-                      )}
-                    </Space>
-                  ),
-                  sorter: (a: any, b: any) => (a.healthScore || 0) - (b.healthScore || 0)
-                },
-                { 
-                  title:'Uptime', 
-                  width: 80,
-                  render:(_:any,r:any)=> (
-                    <span style={{
-                      fontSize: '12px',
-                      color: '#64748b',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                    }}>
-                      {isSessionActive(r) ? formatDuration(r.uptime || 0) : '-'}
-                    </span>
-                  ),
-                  sorter: (a: any, b: any) => (a.uptime || 0) - (b.uptime || 0)
-                },
-                { 
-                  title:'Trades', 
-                  width: 100,
-                  render:(_:any,r:any)=> (
-                    <Space direction="vertical" size="small">
-                      <span style={{ 
-                        fontSize: '13px', 
-                        color: '#1e293b',
-                        fontWeight: '600',
-                        fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                      }}>
-                        Total: {r.totalTrades || 0}
-                      </span>
-                      <span style={{ 
-                        fontSize: '11px', 
-                        color: '#64748b',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                      }}>
-                        Today: {r.todayTrades || 0}
-                      </span>
-                    </Space>
-                  ),
-                  sorter: (a: any, b: any) => (a.totalTrades || 0) - (b.totalTrades || 0)
-                }
-              ]),
-              { 
-                title:'Win Rate', 
-                dataIndex:'winRate',
-                width: 100,
-                render:(v:any)=> {
-                  const rate = Number(v||0);
-                  return (
-                    <span style={{ 
-                      fontWeight: '700', 
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                      color: rate > 60 ? '#059669' : rate > 40 ? '#0ea5e9' : '#64748b',
-                      fontSize: '14px'
-                    }}>
-                      {rate.toFixed(1)}%
-                    </span>
-                  );
-                },
-                sorter: (a, b) => (a.winRate || 0) - (b.winRate || 0)
-              },
-              { 
-                title:'PnL (USD)', 
-                width: 120,
-                render:(_:any,r:any)=> (
-                  <Space direction="vertical" size="small">
-                    <span style={{ 
-                      color: (r.pnlUsd || 0) >= 0 ? '#10b981' : '#dc2626',
-                      fontWeight: '700',
-                      fontSize: '14px',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                    }}>
-                      ${(r.pnlUsd || 0).toFixed(2)}
-                    </span>
-                    {!compactView && (
-                      <span style={{ 
-                        fontSize: '11px', 
-                        color: '#64748b',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                      }}>
-                        24h: ${(r.pnl24h || 0).toFixed(2)}
-                      </span>
-                    )}
-                  </Space>
-                ),
-                sorter: (a, b) => (a.pnlUsd || 0) - (b.pnlUsd || 0)
-              },
-              {
-                title:'Activity',
-                width: 140,
-                render:(_:any,r:any)=> (
-                  <Space direction="vertical" size={2}>
-                    <span style={{
-                      fontWeight: 600,
-                      color: '#0f172a',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                    }}>
-                      {r.pendingOrdersCount || 0} open orders
-                    </span>
-                    <span style={{
-                      fontSize: '11px',
-                      color: '#64748b',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                    }}>
-                      {r.totalTrades || 0} trades · {r.todayTrades || 0} today
-                    </span>
-                  </Space>
-                ),
-                sorter: (a, b) => (a.pendingOrdersCount || 0) - (b.pendingOrdersCount || 0)
-              },
-              { 
-                title:'Readiness', 
-                width: 120,
-                render:(_:any,r:any)=> {
-                  if (!isSessionActive(r)) {
-                    const color = r.haltedAt ? '#f97316' : '#94a3b8';
-                    return <Tag color={color}>{sessionStatusLabel(r).toUpperCase()}</Tag>;
-                  }
-                  const readiness = r.tradingReadiness;
-                  if (!readiness) {
-                    return <Tag color="#d9d9d9">NO DATA</Tag>;
-                  }
-                  const color = readiness.canTrade ? '#16a34a' : '#dc2626';
-                  const percent = readiness.percent ?? 0;
-                  return (
-                    <Tooltip
-                      title={
-                        <div>
-                          <div style={{ fontWeight: 600 }}>{readiness.reason}</div>
-                          {readiness.qualityScore && (
-                            <div style={{ marginTop: 4 }}>
-                              Quality: {readiness.qualityScore.current}/{readiness.qualityScore.required}
-                            </div>
-                          )}
-                        </div>
-                      }
-                    >
-                      <Space direction="vertical" size={6}>
-                        <div
-                          style={{
-                            width: 118,
-                            height: 6,
-                            borderRadius: 999,
-                            background: '#e2e8f0',
-                            overflow: 'hidden'
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: `${Math.round(Math.max(4, Math.min(100, percent)))}%`,
-                              height: '100%',
-                              background: color,
-                              transition: 'width 0.3s ease'
-                            }}
-                          />
-                        </div>
-                        <Space size={6} align="center">
-                          <Badge status={readiness.canTrade ? 'success' : 'error'} text={readiness.canTrade ? 'Ready' : 'Blocked'} />
-                          <span style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>
-                            {Math.round(Math.max(0, Math.min(100, percent)))}%
-                          </span>
-                        </Space>
-                      </Space>
-                    </Tooltip>
-                  );
-                },
-                sorter: (a, b) => (a.tradingReadiness?.percent || 0) - (b.tradingReadiness?.percent || 0)
-              },
-              { 
-                title:'ROI %', 
-                dataIndex:'roiPct',
-                width: 80,
-                render:(v:any)=> {
-                  const roi = Number(v||0);
-                  return (
-                    <span style={{ 
-                      color: roi >= 0 ? '#10b981' : '#dc2626',
-                      fontWeight: '700',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                      fontSize: '14px'
-                    }}>
-                      {roi.toFixed(2)}%
-                    </span>
-                  );
-                },
-                sorter: (a, b) => (a.roiPct || 0) - (b.roiPct || 0)
-              },
-              ...(compactView ? [] : [
-                { 
-                  title:'Position', 
-                  width: 120,
-                  render:(_:any,r:any)=> {
-                    if (!r.currentPosition) return (
-                      <span style={{ color: '#94a3b8', fontSize: '12px' }}>-</span>
-                    );
-                    const pos = r.currentPosition;
-                    return (
-                      <Space direction="vertical" size="small">
-                        <Tag style={{
-                          background: pos.side === 'long' 
-                            ? 'linear-gradient(135deg, #10b981, #059669)'
-                            : 'linear-gradient(135deg, #ef4444, #dc2626)',
-                          color: 'white',
-                          border: 'none',
-                          margin: 0,
-                          fontWeight: '600',
-                          fontSize: '11px',
-                          borderRadius: '6px'
-                        }}>
-                          {pos.side?.toUpperCase()} {pos.size?.toFixed(4)}
-                        </Tag>
-                        <span style={{ 
-                          fontSize: '11px',
-                          color: (pos.unrealizedPnl || 0) >= 0 ? '#059669' : '#dc2626',
-                          fontWeight: '600',
-                          fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                        }}>
-                          ${(pos.unrealizedPnl || 0).toFixed(2)}
-                        </span>
-                      </Space>
-                    );
-                  }
-                },
-                { 
-                  title:'Orders', 
-                  width: 90,
-                  render:(_:any,r:any)=> {
-                    if (r.pendingOrdersCount === 0) return (
-                      <span style={{ color: '#94a3b8', fontSize: '12px' }}>-</span>
-                    );
-                    return (
-                      <Tooltip title={`${r.pendingOrdersCount} pending order(s)`}>
-                        <div style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                          padding: '4px 8px',
-                          borderRadius: '12px',
-                          color: 'white',
-                          fontSize: '11px',
-                          fontWeight: '600',
-                          cursor: 'pointer'
-                        }}>
-                          <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'white' }} />
-                          {r.pendingOrdersCount}
-                        </div>
-                      </Tooltip>
-                    );
-                  }
-                },
-                {
-                  title:'Diagnostics',
-                  width: 120,
-                  render:(_:any,r:any)=> {
-                    if (!isSessionActive(r)) {
-                      return (
-                        <span style={{ color: '#94a3b8', fontSize: '12px' }}>Inactive</span>
-                      );
-                    }
-                    
-                    return (
-                      <div style={{
-                        padding: '4px 8px',
-                        borderRadius: '8px',
-                        background: '#3b82f6',
-                        border: '1px solid #2563eb',
-                        color: 'white',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        textAlign: 'center',
-                        cursor: 'pointer'
-                      }}>
-                        Click to View
-                      </div>
-                    );
-                  }
-                },
-                { 
-                  title:'Max DD', 
-                  width: 80,
-                  render:(_:any,r:any)=> (
-                    <span style={{ 
-                      color: '#dc2626', 
-                      fontSize: '12px',
-                      fontWeight: '600',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                    }}>
-                      {(r.maxDrawdown || 0).toFixed(2)}%
-                    </span>
-                  ),
-                  sorter: (a: any, b: any) => (a.maxDrawdown || 0) - (b.maxDrawdown || 0)
-                }
-              ]),
-              { 
-                title:'Started', 
-                dataIndex:'startedAt',
-                width: 120,
-                render:(v)=> (
-                  <span style={{
-                    fontSize: '12px',
-                    color: '#64748b',
-                      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                  }}>
-                    {new Date(v).toLocaleString('en-US', { 
-                      month: 'short', 
-                      day: 'numeric', 
-                      hour: '2-digit', 
-                      minute: '2-digit' 
-                    })}
-                  </span>
-                ),
-                sorter: (a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
-              },
-              { 
-                title:'Actions',
-                width: 120,
-                render:(_,r)=> {
-                  if (isSessionActive(r)) {
-                    return (
-                      <Button
-                        danger 
-                        size="small"
-                        icon={<StopOutlined />}
-                        onClick={(e)=> { e.stopPropagation(); stop(r.id); }}
-                        style={{
-                          borderRadius: '8px',
-                          fontWeight: '500',
-                          height: '32px'
-                        }}
-                      >
-                        Stop
-                      </Button>
-                    );
-                  } else {
-                    return (
-                      <Space>
-                        <Button 
-                          size="small"
-                          icon={<ReloadOutlined />}
-                          onClick={(e)=>{ e.stopPropagation(); relaunch(r); }}
-                          style={{
-                            borderRadius: '8px',
-                            fontWeight: '500',
-                            border: '1px solid #e2e8f0',
-                            height: '32px'
-                          }}
-                        >
-                          Restart
-                        </Button>
-                        <Button 
-                          danger 
-                          size="small"
-                          icon={<DeleteOutlined />}
-                          onClick={(e)=>{
-                            e.stopPropagation();
-                            Modal.confirm({ 
-                              title:'Delete session?', 
-                              content:'This will permanently delete session and all associated data.', 
-                              okText:'Delete', 
-                              okButtonProps:{ danger:true }, 
-                              onOk: async ()=>{
-                                try { 
-                                  await api.deleteSession(r.id); 
-                                  message.success('Deleted'); 
-                                  await load(); 
-                                } catch { 
-                                  message.error('Delete failed'); 
-                                }
-                              } 
-                            });
-                          }}
-                          style={{
-                            borderRadius: '8px',
-                            fontWeight: '500',
-                            height: '32px'
-                          }}
-                        >
-                          Delete
-                        </Button>
-                      </Space>
-                    );
-                  }
-                }
-              }
-            ]}
-          expandedRowRender={(record) => (
-              <TradingDiagnosticsCollapsible
-                sessionId={record.id}
-                isActive={isSessionActive(record)}
-                initialDiagnostics={record.diagnosticsInitial}
-              />
-            )}
+            columns={sessionColumns}
           />
         </Card>
 
@@ -2031,6 +1853,7 @@ export default function SessionsPage(){
                     return;
                   }
                 } catch (error) {
+                  console.error('Unable to verify API keys', error);
                   message.error('Unable to verify API keys. Please check your configuration.');
                   setStarting(false);
                   return;

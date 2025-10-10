@@ -13,8 +13,8 @@ let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
 const NEAR_PIVOT_PCT = Number(process.env.NEAR_PIVOT_PCT || 0.25); // 0.25%
 const LOG_TRIGGERS = (process.env.LOG_TRIGGERS || 'true') === 'true';
-const TRIGGER_SAMPLE_RATE = Math.max(0, Math.min(1, Number(process.env.TRIGGER_SAMPLE_RATE || '1')));
-const TRIGGER_RETENTION_DAYS = Math.max(0, Number(process.env.TRIGGER_RETENTION_DAYS || '7'));
+const TRIGGER_SAMPLE_RATE = Math.max(0, Math.min(1, Number(process.env.TRIGGER_SAMPLE_RATE || '0.25')));
+const TRIGGER_RETENTION_DAYS = Math.max(0, Number(process.env.TRIGGER_RETENTION_DAYS || '3'));
 let lastPurgeAt = 0;
 
 // Local throttling to limit LLM calls
