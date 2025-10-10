@@ -1,7 +1,7 @@
 import 'dotenv/config';
-import { validateBinanceApiKey } from './src/services/binanceWebSocket.ts';
-import { prisma } from './src/db/client.js';
-import { getUserCredentials } from './src/services/userCredentials.ts';
+import { validateBinanceApiKey } from '../src/services/binanceWebSocket.ts';
+import { prisma } from '../src/db/client.js';
+import { getUserCredentials } from '../src/services/userCredentials.ts';
 
 async function test() {
   console.log('🔑 Testing Binance API key validation...');

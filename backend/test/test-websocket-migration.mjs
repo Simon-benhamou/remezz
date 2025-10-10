@@ -8,8 +8,8 @@ import 'dotenv/config';
  * À exécuter après le ban #3 (21:37).
  */
 
-import { getBinanceWebSocket, subscribeToUserData, getBalanceFromWebSocket } from './src/services/binanceWebSocket.js';
-import { getUserCredentials } from './src/services/userCredentials.js';
+import { getBinanceWebSocket, subscribeToUserData, getBalanceFromWebSocket } from '../src/services/binanceWebSocket.js';
+import { getUserCredentials } from '../src/services/userCredentials.js';
 
 console.log('🧪 Testing Binance WebSocket Migration...\n');
 
@@ -36,7 +36,7 @@ async function testUserDataStream() {
   console.log('\n2️⃣ Testing User Data Stream...');
   
   // Get first user with Binance credentials
-  const { prisma } = await import('./src/db/client.js');
+  const { prisma } = await import('../src/db/client.js');
   const user = await prisma.user.findFirst({
     where: { username: 'simon' }
   });
@@ -77,7 +77,7 @@ async function testUserDataStream() {
 async function testGetTicker() {
   console.log('\n3️⃣ Testing getTicker() WebSocket Integration...');
   
-  const { getTicker } = await import('./src/data/market.js');
+  const { getTicker } = await import('../src/data/market.js');
   
   try {
     const ticker = await getTicker('BTC/USDT:USDT');
@@ -92,7 +92,7 @@ async function testIntelligentAgent() {
   console.log('\n4️⃣ Testing intelligentAgent.ts WebSocket Integration...');
   
   try {
-    const { getBestIntelligentOpportunity } = await import('./src/services/intelligentAgent.js');
+    const { getBestIntelligentOpportunity } = await import('../src/services/intelligentAgent.js');
     const ccxt = await import('ccxt');
     
     const exchange = new ccxt.binanceusdm({

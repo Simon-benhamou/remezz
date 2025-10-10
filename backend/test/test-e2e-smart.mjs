@@ -3,14 +3,14 @@ import 'dotenv/config';
 
 // End-to-end sanity test for Binance WS + Smart Agent init + Diagnostics coherence
 
-import { getAIRankedOpportunities } from './src/ai/cryptoRanking.ts';
-import { prisma } from './src/db/client.js';
-import { waitForWsHealthy } from './src/services/binanceWebSocket.ts';
-import { initializeIntelligentAgent } from './src/services/intelligentAgent.ts';
-import { AgentHub } from './src/agent/hub.js';
-import { savePlan } from './src/services/planStore.ts';
-import { proposePlan } from './src/ai/planOrchestrator.ts';
-import { getConfig } from './src/utils/env.js';
+import { getAIRankedOpportunities } from '../src/ai/cryptoRanking.ts';
+import { prisma } from '../src/db/client.js';
+import { waitForWsHealthy } from '../src/services/binanceWebSocket.ts';
+import { initializeIntelligentAgent } from '../src/services/intelligentAgent.ts';
+import { AgentHub } from '../src/agent/hub.js';
+import { savePlan } from '../src/services/planStore.ts';
+import { proposePlan } from '../src/ai/planOrchestrator.ts';
+import { getConfig } from '../src/utils/env.js';
 
 async function main() {
   console.log('🚀 E2E Smart Agent test starting...');

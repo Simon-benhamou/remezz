@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { getUserCredentials } from './src/services/userCredentials.ts';
+import { getUserCredentials } from '../src/services/userCredentials.ts';
 import ccxt from 'ccxt';
 
 async function testDetailedBalanceRetrieval() {

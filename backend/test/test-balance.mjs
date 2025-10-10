@@ -1,6 +1,6 @@
 import 'dotenv/config';
-import { getUserCredentials } from './src/services/userCredentials.ts';
-import { getBalanceFromWebSocket, subscribeToUserData } from './src/services/binanceWebSocket.ts';
+import { getUserCredentials } from '../src/services/userCredentials.ts';
+import { getBalanceFromWebSocket, subscribeToUserData } from '../src/services/binanceWebSocket.ts';
 import ccxt from 'ccxt';
 
 async function testBalanceRetrieval() {

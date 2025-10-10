@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { getUserCredentials } from './src/services/userCredentials.js';
+import { getUserCredentials } from '../src/services/userCredentials.js';
 import ccxt from 'ccxt';
 
 async function testPortfolioMarginAccess() {

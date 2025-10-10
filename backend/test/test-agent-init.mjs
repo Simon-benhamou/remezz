@@ -1,6 +1,6 @@
 import 'dotenv/config';
-import { initializeIntelligentAgent } from './src/services/intelligentAgent.ts';
-import { getBinanceWebSocket } from './src/services/binanceWebSocket.ts';
+import { initializeIntelligentAgent } from '../src/services/intelligentAgent.ts';
+import { getBinanceWebSocket } from '../src/services/binanceWebSocket.ts';
 
 async function testAgentInitialization() {
   console.log('🧪 Testing agent initialization with auto-select...');

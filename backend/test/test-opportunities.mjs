@@ -1,6 +1,6 @@
 import 'dotenv/config';
-import { scanIntelligentOpportunities } from './src/services/intelligentAgent.ts';
-import { getBinanceWebSocket } from './src/services/binanceWebSocket.ts';
+import { scanIntelligentOpportunities } from '../src/services/intelligentAgent.ts';
+import { getBinanceWebSocket } from '../src/services/binanceWebSocket.ts';
 
 async function testOpportunities() {
   console.log('Testing intelligent opportunity scan...');
