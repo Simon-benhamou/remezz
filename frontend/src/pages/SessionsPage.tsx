@@ -26,6 +26,7 @@ import {
   Divider,
 } from 'antd';
 import type { StepsProps } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import type { AppMode } from '../store';
@@ -1021,7 +1022,7 @@ export default function SessionsPage(){
     setOpen(true);
   };
 
-  const sessionColumns = React.useMemo(() => {
+  const sessionColumns = React.useMemo<ColumnsType<any>>(() => {
     const parseTime = (value: string | number | null | undefined) => {
       if (!value) return NaN;
       if (typeof value === 'number') return value;
@@ -1029,7 +1030,7 @@ export default function SessionsPage(){
       return Number.isFinite(parsed) ? parsed : NaN;
     };
 
-    return [
+    const columns: ColumnsType<any> = [
       {
         title: 'Status',
         key: 'status',
@@ -1340,7 +1341,7 @@ export default function SessionsPage(){
         title: 'Actions',
         key: 'actions',
         width: compactView ? 150 : 170,
-        fixed: compactView ? undefined : 'right',
+        fixed: compactView ? undefined : ('right' as const),
         render: (_: any, record: any) => {
           if (isSessionActive(record)) {
             return (
@@ -1404,6 +1405,7 @@ export default function SessionsPage(){
         },
       },
     ];
+    return columns;
   }, [
     compactView,
     formatLeverageValue,
