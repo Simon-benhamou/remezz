@@ -1763,7 +1763,7 @@ export default function SessionsPage(){
             }}
             onRow={(record) => ({
               onClick: async () => {
-                if (isSessionActive(record)) navigate(`/monitor/${record.id}`);
+                if (isSessionActive(record)) navigate(`/agents/${record.id}`);
               },
               style: {
                 cursor: isSessionActive(record) ? 'pointer' : 'default',
@@ -1880,7 +1880,7 @@ export default function SessionsPage(){
                 message.success('Agent restarted successfully!');
                 await load(true);
                 if (sessionIdForRestart) {
-                  navigate(`/monitor/${sessionIdForRestart}`);
+                  navigate(`/agents/${sessionIdForRestart}`);
                 }
                 return;
               }
@@ -2052,7 +2052,7 @@ export default function SessionsPage(){
               }
 
               await load(true);
-              navigate(`/monitor/${activation.sessionId}`);
+              navigate(`/agents/${activation.sessionId}`);
             } catch (e: any) {
               if (typeof hide === 'function') hide();
               const errorCode = e?.code || e?.response?.data?.error;
