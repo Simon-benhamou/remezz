@@ -64,6 +64,71 @@ export type ActivePosition = {
   initialStopDistance?: number;
 };
 
+type ProtectiveSnapshot = {
+  slOrderId: string | null;
+  tpOrderId: string | null;
+  qty: number;
+  side: 'buy'|'sell';
+};
+
+type ExitDiagnosticsPayload = {
+  capturedAt: string;
+  reason: string;
+  agentState: AgentState;
+  sessionId: string | null;
+  symbol: string;
+  exitOrderId: string;
+  exitSide: 'buy'|'sell';
+  exitPrice: number;
+  realizedPnl: number;
+  plan?: {
+    bias: ValidatedPlan['bias'];
+    zone: ValidatedPlan['zone'];
+    atr: number;
+    atrPct: number;
+    sizing: ValidatedPlan['sizing'];
+  } | null;
+  position?: {
+    side: 'buy'|'sell';
+    entry: number;
+    qty: number;
+    openedAt: number;
+    maeR?: number;
+    mfeR?: number;
+    breakeven?: number;
+  } | null;
+  protectiveSnapshot: ProtectiveSnapshot;
+  diagnostics?: {
+    canTrade?: boolean;
+    reason?: string;
+    summary?: any;
+    trigger?: any;
+    gates?: Record<string, { status: string; reason?: string | null; details?: any }>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  } | null;
+  indicators?: {
+    last: number;
+    ema20: number;
+    ema50: number;
+    ema100: number;
+    ema200: number;
+    rsi14: number;
+    atr14: number;
+    atrPct: number;
+    adx14: number;
+    cmf20?: number | null;
+    support: number;
+    resistance: number;
+    trendBias: TechnicalSnapshot['trendBias'];
+    srBias: TechnicalSnapshot['srBias'];
+  } | null;
+  regime?: RegimeProfile | null;
+  performance?: {
+    tradesToday: number;
+    consecutiveStops: number;
+    realizedPnlTodayPct: number;
+  };
+};
+
 // Advanced Performance Tracking Interfaces
 interface StrategyPerformance {
   strategy: string; // 'mean_reversion', 'momentum_breakout', etc.
@@ -5243,7 +5308,7 @@ export class ReboundRejectionAgent {
       // Calculate realized P&L
       const realizedPnl = this.calculateRealizedPnL(price);
 
-      const protectiveSnapshot = {
+      const protectiveSnapshot: ProtectiveSnapshot = {
         slOrderId: this.pos.slOrderId || null,
         tpOrderId: this.pos.tpOrderId || null,
         qty: this.pos.qty,
@@ -5261,6 +5326,19 @@ export class ReboundRejectionAgent {
       });
 
       if (exitOrder.status === 'filled' && exitOrder.filledQty && exitOrder.filledQty > 0) {
+        let exitSnapshot: ExitDiagnosticsPayload | null = null;
+        try {
+          exitSnapshot = await this.captureExitDiagnostics({
+            reason,
+            exitOrder,
+            exitPrice: exitOrder.avgPrice || price,
+            realizedPnl,
+            protectiveSnapshot,
+          });
+        } catch (snapshotError) {
+          console.warn('Failed to capture exit diagnostics snapshot:', snapshotError);
+        }
+
         // Record exit in database
         await recordExit({
           sessionId: this.sessionId!,
@@ -5269,6 +5347,14 @@ export class ReboundRejectionAgent {
           exitPrice: exitOrder.avgPrice || price,
           qty: exitOrder.filledQty,
           realizedPnl,
+          latencyMs: exitOrder.latencyMs,
+          slippageBps: exitOrder.slippageBps,
+          fillRatio: exitOrder.fillRatio,
+          cancelCount: exitOrder.cancelCount,
+          attempts: exitOrder.attempts,
+          reason,
+          diagnostics: exitSnapshot,
+          protectiveSnapshot,
         });
 
         // Update performance tracking
@@ -5378,6 +5464,109 @@ export class ReboundRejectionAgent {
         details: { reason, error: String(error) }
       });
     }
+  }
+
+  private async captureExitDiagnostics(params: {
+    reason: string;
+    exitOrder: PlacedOrder;
+    exitPrice: number;
+    realizedPnl: number;
+    protectiveSnapshot: ProtectiveSnapshot;
+  }): Promise<ExitDiagnosticsPayload | null> {
+    if (!this.profile) return null;
+
+    const capturedAt = new Date().toISOString();
+    const symbol = this.profile.symbol;
+
+    const [techSnapshot, diagnostics] = await Promise.all([
+      buildTechSnapshot(symbol).catch(error => {
+        console.warn('Failed to build technical snapshot for exit diagnostics:', error);
+        return null;
+      }),
+      this.getDiagnostics().catch(error => {
+        console.warn('Failed to compute agent diagnostics during exit:', error);
+        return null;
+      })
+    ]);
+
+    const planSummary = this.plan ? {
+      bias: this.plan.bias,
+      zone: { ...this.plan.zone },
+      atr: this.plan.atr,
+      atrPct: this.plan.atrPct,
+      sizing: { ...this.plan.sizing },
+    } : null;
+
+    const positionSummary = this.pos ? {
+      side: this.pos.side,
+      entry: this.pos.entry,
+      qty: this.pos.qty,
+      openedAt: this.pos.openedAt,
+      maeR: this.pos.maeR,
+      mfeR: this.pos.mfeR,
+      breakeven: this.pos.breakeven,
+    } : null;
+
+    const indicatorSummary = techSnapshot ? {
+      last: techSnapshot.last,
+      ema20: techSnapshot.ema20,
+      ema50: techSnapshot.ema50,
+      ema100: techSnapshot.ema100,
+      ema200: techSnapshot.ema200,
+      rsi14: techSnapshot.rsi14,
+      atr14: techSnapshot.atr14,
+      atrPct: techSnapshot.atrPct,
+      adx14: techSnapshot.adx14,
+      cmf20: techSnapshot.cmf20 ?? null,
+      support: techSnapshot.support,
+      resistance: techSnapshot.resistance,
+      trendBias: techSnapshot.trendBias,
+      srBias: techSnapshot.srBias,
+    } : null;
+
+    const gateStatuses = diagnostics?.checks
+      ? Object.fromEntries(
+          Object.entries(diagnostics.checks).map(([key, value]) => {
+            const normalized = value as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+            return [key, {
+              status: normalized?.status,
+              reason: normalized?.reason ?? normalized?.message ?? null,
+              details: normalized?.details,
+            }];
+          })
+        )
+      : undefined;
+
+    const diagnosticsSummary = diagnostics ? {
+      canTrade: diagnostics.canTrade,
+      reason: diagnostics.reason ?? diagnostics.errorCode,
+      summary: diagnostics.summary,
+      trigger: diagnostics.trigger,
+      gates: gateStatuses,
+    } : null;
+
+    return {
+      capturedAt,
+      reason: params.reason,
+      agentState: this.state,
+      sessionId: this.sessionId,
+      symbol,
+      exitOrderId: params.exitOrder.id,
+      exitSide: params.exitOrder.side,
+      exitPrice: params.exitPrice,
+      realizedPnl: params.realizedPnl,
+      plan: planSummary,
+      position: positionSummary,
+      protectiveSnapshot: params.protectiveSnapshot,
+      diagnostics: diagnosticsSummary,
+      indicators: indicatorSummary,
+      regime: this.regime || null,
+      performance: {
+        tradesToday: this.tradesToday || 0,
+        consecutiveStops: this.consecutiveStops || 0,
+        realizedPnlTodayPct: this.realizedPnlTodayPct || 0,
+      },
+    };
   }
 
   /**
