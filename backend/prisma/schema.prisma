@@ -100,6 +100,7 @@ model AgentSession {
   reports    DailyReport[]         // back-rel from DailyReport.session
   prompts    AiPromptLog[]
   marginSnapshots MarginSnapshot[]
+  opsTelemetry      AgentOpsTelemetry?
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
@@ -240,6 +241,19 @@ model MarginSnapshot {
   createdAt                    DateTime      @default(now())
 
   @@index([sessionId, createdAt])
+}
+
+model AgentOpsTelemetry {
+  session        AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId      String       @id
+  tradeCount24h  Int          @default(0)
+  lastExecutionAt DateTime?
+  blockedByVos   Boolean      @default(false)
+  lastBlockedAt  DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([blockedByVos, updatedAt])
 }
 
 model SessionKpi {
