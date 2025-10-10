@@ -2,16 +2,15 @@ import { ConfigProvider, Layout, Menu, Space, Tag, theme, ThemeConfig, Segmented
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearApiKey, getApiKey } from './api';
-import DashboardPage from './pages/DashboardPage';
+import MissionControlPage from './pages/MissionControlPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
-import MonitorPage from './pages/MonitorPage';
+import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
-import TestingPage from './pages/TestingPage';
-import ReportsPage from './pages/ReportsPage';
-import TradesJournalPage from './pages/TradesJournalPage';
+import ExecutionLedgerPage from './pages/ExecutionLedgerPage';
+import IntelligencePage from './pages/IntelligencePage';
 import BacklogPage from './pages/BacklogPage';
-import { AreaChartOutlined, ControlOutlined, BulbOutlined, FileTextOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
+import { AreaChartOutlined, ControlOutlined, BulbOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
 import { useAuth } from './hooks/useAuth';
 import { useDashboard } from './hooks/useDashboard';
 import { useAppStore } from './store';
@@ -57,13 +56,22 @@ function AppInner(){
     );
   }
 
+  const activeMenuKey = React.useMemo(() => {
+    if (location.pathname.startsWith('/mission-control')) return '/mission-control';
+    if (location.pathname.startsWith('/agents/')) return '/agents';
+    if (location.pathname.startsWith('/agents')) return '/agents';
+    if (location.pathname.startsWith('/ledger')) return '/ledger';
+    if (location.pathname.startsWith('/intelligence')) return '/intelligence';
+    if (location.pathname.startsWith('/backlog')) return '/backlog';
+    return '/mission-control';
+  }, [location.pathname]);
+
   const menuItems = [
-    { key: '/dashboard', label: 'Dashboard', icon: <AreaChartOutlined /> },
-    { key: '/sessions', label: 'Sessions', icon: <ControlOutlined /> },
-    { key: '/reports', label: 'Reports', icon: <FileTextOutlined /> },
-    { key: '/journal', label: 'Journal', icon: <ReadOutlined /> },
-    { key: '/testing', label: 'Testing', icon: <BulbOutlined /> },
-    { key: '/backlog', label: 'Feed', icon: <WarningOutlined /> },
+    { key: '/mission-control', label: 'Mission Control', icon: <AreaChartOutlined /> },
+    { key: '/agents', label: 'Agents', icon: <ControlOutlined /> },
+    { key: '/ledger', label: 'Execution Ledger', icon: <ReadOutlined /> },
+    { key: '/intelligence', label: 'Intelligence', icon: <BulbOutlined /> },
+    { key: '/backlog', label: 'Ops Feed', icon: <WarningOutlined /> },
   ];
 
   return (
@@ -126,7 +134,7 @@ function AppInner(){
         <Menu
           theme='light'
           mode='inline'
-          selectedKeys={[location.pathname]}
+          selectedKeys={[activeMenuKey]}
           items={menuItems}
           onClick={({ key })=> navigate(String(key))}
           style={{ 
@@ -224,15 +232,14 @@ function AppInner(){
           background: '#fafafa'
         }}>
           <Routes>
-            <Route path='/' element={<Navigate to='/dashboard' replace />} />
-            <Route path='/dashboard' element={<DashboardPage />} />
-            <Route path='/monitor/:sessionId' element={<MonitorPage />} />
-            <Route path='/sessions' element={<SessionsPage />} />
-            <Route path='/reports' element={<ReportsPage />} />
-            <Route path='/journal' element={<TradesJournalPage />} />
-            <Route path='/testing' element={<TestingPage />} />
+            <Route path='/' element={<Navigate to='/mission-control' replace />} />
+            <Route path='/mission-control' element={<MissionControlPage />} />
+            <Route path='/agents/:sessionId' element={<SessionCockpitPage />} />
+            <Route path='/agents' element={<SessionsPage />} />
+            <Route path='/ledger' element={<ExecutionLedgerPage />} />
+            <Route path='/intelligence' element={<IntelligencePage />} />
             <Route path='/backlog' element={<BacklogPage />} />
-            <Route path='*' element={<Navigate to='/dashboard' replace />} />
+            <Route path='*' element={<Navigate to='/mission-control' replace />} />
           </Routes>
         </Content>
         <Footer style={{ 
