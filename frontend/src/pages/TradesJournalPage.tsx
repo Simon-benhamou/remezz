@@ -28,6 +28,16 @@ type TradeRow = {
   sessionMode?: string;
 };
 
+type SessionMetrics = {
+  sessionId: string;
+  startingBalanceUsd: number;
+  realizedPnlUsd: number;
+  feesUsd: number;
+  netPnlUsd: number;
+  roiPct: number;
+  tradeCount: number;
+};
+
 function asOutcome(row: TradeRow): Outcome {
   const pnl = Number(row.realizedPnlUsd || 0);
   if (Math.abs(pnl) < 1e-8) return 'breakeven';
@@ -44,6 +54,8 @@ export default function TradesJournalPage() {
   const [sessionId, setSessionId] = React.useState<string>('');
   const [rows, setRows] = React.useState<TradeRow[]>([]);
   const [allSessionData, setAllSessionData] = React.useState<TradeRow[]>([]);
+  const [sessionPerf, setSessionPerf] = React.useState<SessionMetrics | null>(null);
+  const [globalPerf, setGlobalPerf] = React.useState<SessionMetrics | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [filterOutcome, setFilterOutcome] = React.useState<'all' | Outcome>('all');
   const [filterSymbol, setFilterSymbol] = React.useState<string>('all');
@@ -72,26 +84,69 @@ export default function TradesJournalPage() {
       const params: { from?: string; to?: string; limit?: number } = { limit };
       if (range[0]) params.from = range[0].startOf('day').toISOString();
       if (range[1]) params.to = range[1].endOf('day').add(1, 'day').toISOString();
-      
+
       if (viewMode === 'global') {
-        // Load data from all sessions
-        const allData = await Promise.all(
-          sessions.map(async (session) => {
-            try {
-              const data = await api.getTrades(session.id, params);
-              return data.map((trade: any) => ({ ...trade, sessionSymbol: session.symbol, sessionMode: session.mode }));
-            } catch {
-              return [];
-            }
-          })
-        );
+        const sessionIds = sessions.map((session) => session.id).filter((id: string) => !!id);
+        const [allData, metricsListRaw] = await Promise.all([
+          Promise.all(
+            sessions.map(async (session) => {
+              try {
+                const data = await api.getTrades(session.id, params);
+                return data.map((trade: any) => ({ ...trade, sessionSymbol: session.symbol, sessionMode: session.mode }));
+              } catch {
+                return [];
+              }
+            })
+          ),
+          sessionIds.length ? api.getSessionMetrics(sessionIds) : Promise.resolve<SessionMetrics[]>([]),
+        ]);
         const flatData = allData.flat().sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
         setAllSessionData(flatData);
         setRows(flatData);
+        const metricsList = Array.isArray(metricsListRaw)
+          ? metricsListRaw
+          : metricsListRaw
+          ? [metricsListRaw as SessionMetrics]
+          : [];
+        if (metricsList.length) {
+          const aggregated = metricsList.reduce(
+            (acc: SessionMetrics, metric: SessionMetrics) => ({
+              sessionId: 'global',
+              startingBalanceUsd: acc.startingBalanceUsd + Number(metric?.startingBalanceUsd ?? 0),
+              realizedPnlUsd: acc.realizedPnlUsd + Number(metric?.realizedPnlUsd ?? 0),
+              feesUsd: acc.feesUsd + Number(metric?.feesUsd ?? 0),
+              netPnlUsd: acc.netPnlUsd + Number(metric?.netPnlUsd ?? 0),
+              roiPct: 0,
+              tradeCount: acc.tradeCount + Number(metric?.tradeCount ?? 0),
+            }),
+            {
+              sessionId: 'global',
+              startingBalanceUsd: 0,
+              realizedPnlUsd: 0,
+              feesUsd: 0,
+              netPnlUsd: 0,
+              roiPct: 0,
+              tradeCount: 0,
+            } as SessionMetrics
+          );
+          aggregated.roiPct = aggregated.startingBalanceUsd > 0
+            ? (aggregated.netPnlUsd / aggregated.startingBalanceUsd) * 100
+            : 0;
+          setGlobalPerf(aggregated);
+        } else {
+          setGlobalPerf(null);
+        }
+        setSessionPerf(null);
       } else {
-        // Load data from selected session only
-        const data = await api.getTrades(sessionId, params);
+        const [data, metricsResponse] = await Promise.all([
+          api.getTrades(sessionId, params),
+          api.getSessionMetrics(sessionId),
+        ]);
         setRows(data);
+        const metricsArray = Array.isArray(metricsResponse) ? metricsResponse : [metricsResponse];
+        const matched = metricsArray.find((metric: SessionMetrics) => metric.sessionId === sessionId) || null;
+        setSessionPerf(matched);
+        setGlobalPerf(null);
       }
     } catch (e: any) {
       message.error(String(e?.response?.data?.error || e?.message || 'Failed to load trades'));
@@ -142,21 +197,28 @@ export default function TradesJournalPage() {
   }, [rows]);
 
   const summary = React.useMemo(() => {
-    if (!rows.length) return null;
-    const base = rows.reduce((acc, row) => {
-      const pnl = Number(row.realizedPnlUsd || 0);
-      const outcome = asOutcome(row);
-      acc.trades += 1;
-      if (outcome === 'win') acc.wins += 1;
-      if (outcome === 'loss') acc.losses += 1;
-      acc.pnl += pnl;
-      acc.avgRoe += Number(row.roePct || 0);
-      return acc;
-    }, { trades: 0, wins: 0, losses: 0, pnl: 0, avgRoe: 0 });
+    const metrics = viewMode === 'global' ? globalPerf : sessionPerf;
+    if (!rows.length && !metrics) return null;
+    const base = rows.reduce(
+      (acc, row) => {
+        const outcome = asOutcome(row);
+        acc.trades += 1;
+        if (outcome === 'win') acc.wins += 1;
+        if (outcome === 'loss') acc.losses += 1;
+        return acc;
+      },
+      { trades: 0, wins: 0, losses: 0 }
+    );
     const winRate = base.trades ? base.wins / base.trades : 0;
-    const avgRoe = base.trades ? base.avgRoe / base.trades : 0;
-    return { ...base, winRate, avgRoe };
-  }, [rows]);
+    return {
+      ...base,
+      winRate,
+      realizedPnlUsd: Number(metrics?.realizedPnlUsd ?? 0),
+      feesUsd: Number(metrics?.feesUsd ?? 0),
+      pnl: Number(metrics?.netPnlUsd ?? 0),
+      roiPct: Number(metrics?.roiPct ?? 0),
+    };
+  }, [rows, sessionPerf, globalPerf, viewMode]);
 
   const exportCsv = React.useCallback(() => {
     if (!data.length) return;
@@ -359,40 +421,58 @@ export default function TradesJournalPage() {
               />
             </Col>
             <Col xs={24} sm={8} md={4}>
-              <Statistic 
-                title="Losses" 
-                value={summary.losses} 
+              <Statistic
+                title="Losses"
+                value={summary.losses}
                 valueStyle={{ color: '#ff4d4f' }}
               />
             </Col>
             <Col xs={24} sm={8} md={4}>
-              <Statistic 
-                title="Win Rate" 
-                value={summary.winRate * 100} 
-                suffix="%" 
+              <Statistic
+                title="Win Rate"
+                value={summary.winRate * 100}
+                suffix="%"
                 precision={1}
-                valueStyle={{ 
-                  color: summary.winRate >= 0.6 ? '#52c41a' : 
-                         summary.winRate >= 0.5 ? '#faad14' : '#ff4d4f' 
+                valueStyle={{
+                  color: summary.winRate >= 0.6 ? '#52c41a' :
+                         summary.winRate >= 0.5 ? '#faad14' : '#ff4d4f'
                 }}
               />
             </Col>
             <Col xs={24} sm={8} md={4}>
-              <Statistic 
-                title="Total P&L" 
-                value={summary.pnl} 
-                precision={2} 
+              <Statistic
+                title="Realized P&L"
+                value={summary.realizedPnlUsd}
+                precision={2}
+                prefix="$"
+                valueStyle={{ color: summary.realizedPnlUsd >= 0 ? '#52c41a' : '#ff4d4f' }}
+              />
+            </Col>
+            <Col xs={24} sm={8} md={4}>
+              <Statistic
+                title="Fees Paid"
+                value={summary.feesUsd}
+                prefix="$"
+                precision={2}
+                valueStyle={{ color: '#64748b' }}
+              />
+            </Col>
+            <Col xs={24} sm={8} md={4}>
+              <Statistic
+                title="Net P&L"
+                value={summary.pnl}
+                precision={2}
                 prefix="$"
                 valueStyle={{ color: summary.pnl >= 0 ? '#52c41a' : '#ff4d4f' }}
               />
             </Col>
             <Col xs={24} sm={8} md={4}>
-              <Statistic 
-                title="Avg ROI" 
-                value={summary.avgRoe} 
-                suffix="%" 
+              <Statistic
+                title="ROI (net)"
+                value={summary.roiPct}
+                suffix="%"
                 precision={2}
-                valueStyle={{ color: summary.avgRoe >= 0 ? '#52c41a' : '#ff4d4f' }}
+                valueStyle={{ color: summary.roiPct >= 0 ? '#52c41a' : '#ff4d4f' }}
               />
             </Col>
           </Row>

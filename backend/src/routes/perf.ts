@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../db/client.js";
+import { getSessionPerformanceMetrics } from "../services/performance.js";
 import { computeAdaptiveRisk } from "../risk/adaptive.js";
 import type { AdaptiveRiskResult } from "../risk/adaptive.js";
 
@@ -92,4 +93,32 @@ router.get("/breakdown", async (req, res) => {
     sample: exits.length,
     adaptiveRisk,
   });
+});
+
+router.get("/session-metrics", async (req, res) => {
+  const rawIds = (req.query.sessionId ?? (req.query["sessionId[]"] as any)) as
+    | string
+    | string[]
+    | undefined;
+  const requested = Array.isArray(rawIds)
+    ? rawIds
+        .map((id) => String(id).trim())
+        .filter((id) => id.length > 0)
+    : typeof rawIds === "string"
+    ? String(rawIds)
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    : [];
+  if (!requested.length) {
+    return res.status(400).json({ error: "sessionId required" });
+  }
+
+  try {
+    const metrics = await getSessionPerformanceMetrics(requested);
+    res.json(metrics);
+  } catch (error) {
+    console.error("Failed to load session metrics", error);
+    res.status(500).json({ error: "failed_to_compute_metrics" });
+  }
 });
