@@ -216,7 +216,18 @@ export async function computeOpsMetrics() {
   const haltedAgents = agents.filter((a) => a.state === 'HALT').length;
   const managingAgents = agents.filter((a) => a.state === 'MANAGE').length;
 
-  const [activeSessions, openPositions, protectiveIssues, alerts1h, alerts24h, kpiAgg, marginRows,agentHealth, tradeStats, profitableStats] = await Promise.all([
+  const [
+    activeSessions,
+    openPositions,
+    protectiveIssues,
+    alerts1h,
+    alerts24h,
+    kpiAgg,
+    marginRows,
+    agentHealth,
+    tradeStats,
+    profitableStats,
+  ] = await Promise.all([
     prisma.agentSession.count({ where: { stoppedAt: null } }),
     prisma.position.count({ where: { qty: { gt: 0 } } }),
     prisma.position.count({
@@ -240,7 +251,12 @@ export async function computeOpsMetrics() {
       _count: { _all: true },
       _max: { ts: true },
     }),
-
+    prisma.fill.groupBy({
+      by: ['sessionId'],
+      where: { sessionId: { not: null }, realizedPnl: { gt: 0 } },
+      _max: { ts: true },
+    }),
+  ]);
 
   let marginSummary: any = null;
   if (Array.isArray(marginRows) && marginRows.length) {
