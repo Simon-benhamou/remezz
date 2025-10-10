@@ -1360,8 +1360,19 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     const volLog = volUsdLog ? `$${(volUsdLog/1_000_000).toFixed(2)}M` : String(volBaseLog);
     // 🔥 CALCUL VRAI CHANGEMENT 24H (AVNT -21.9% vs -0.22%)
     const currentPrice = Number(ticker.last || ticker.close || 0);
-    const openPrice = Number(ticker.open || currentPrice);
-    const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : Number(ticker.percentage || 0);
+    const rawOpen = Number(ticker.open);
+    const hasValidOpen = Number.isFinite(rawOpen) && rawOpen > 0;
+    let openPrice = hasValidOpen ? rawOpen : currentPrice;
+    let realChange24h = 0;
+    if (hasValidOpen) {
+      realChange24h = ((currentPrice - openPrice) / openPrice) * 100;
+    } else if (Number.isFinite(Number(ticker.percentage))) {
+      realChange24h = Number(ticker.percentage);
+    }
+    if (Math.abs(realChange24h) < 0.01 && Number.isFinite(Number(ticker.percentage))) {
+      // Some exchanges (or REST fallbacks) don't provide open price; use percentage to avoid zero-momentum artifacts
+      realChange24h = Number(ticker.percentage);
+    }
     
     console.log(`📊 ${symbol}: RSI=${technical.rsi14}, ADX=${technical.adx14}, Vol=${volLog}, Change=${realChange24h.toFixed(2)}% (real 24h)`);
 
