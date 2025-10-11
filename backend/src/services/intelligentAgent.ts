@@ -1,5 +1,6 @@
 import { prisma } from '../db/client.js';
 import { getTicker, getOHLCV } from '../data/market.js';
+import { isUnusableMarketDataError } from '../data/errors.js';
 import { fullAnalysis, computeProjection } from '../ai/analysis.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { getAIRankedOpportunities, type RankedOpportunity } from '../ai/cryptoRanking.js';
@@ -14,6 +15,7 @@ import { getHybridSentiment } from '../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 import { recordOpsEvent } from '../monitor/ops.js';
+import { scheduleJob, registerSchedulerJobHandler, processSchedulerJobsOnce } from '../services/schedulerJobService.js';
 
 // HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
@@ -147,9 +149,9 @@ let lastAutoUniverseStatus: AutoUniverseStatus = {
   ts: 0,
   reason: 'uninitialized',
 };
-let pendingUniverseRetry: NodeJS.Timeout | null = null;
 let pendingUniverseRetryDeadline = 0;
 let pendingUniverseRetryExcludeSessionId: string | undefined;
+let pendingUniverseRetryJobId: string | null = null;
 let persistedUniverseRetryAt: number | null = null;
 let persistedUniverseRetryExcludeSessionId: string | null = null;
 
@@ -167,13 +169,24 @@ export function getAutoUniverseStatusSnapshot(): AutoUniverseStatus {
   };
 }
 
-function rememberPersistedUniverseRetryState(nextRetryAt: number | null, excludeSessionId?: string | null) {
+function rememberPersistedUniverseRetryState(
+  nextRetryAt: number | null,
+  excludeSessionId?: string | null,
+  jobId?: string | null,
+) {
   persistedUniverseRetryAt = nextRetryAt;
   persistedUniverseRetryExcludeSessionId = excludeSessionId ?? null;
+  if (jobId !== undefined) {
+    pendingUniverseRetryJobId = jobId;
+  }
 }
 
-function persistAutoUniverseRetryState(nextRetryAt: number | null, excludeSessionId?: string | null) {
-  rememberPersistedUniverseRetryState(nextRetryAt, excludeSessionId);
+function persistAutoUniverseRetryState(
+  nextRetryAt: number | null,
+  excludeSessionId?: string | null,
+  jobId?: string | null,
+) {
+  rememberPersistedUniverseRetryState(nextRetryAt, excludeSessionId, jobId ?? null);
   const nextRetryDate = nextRetryAt && Number.isFinite(nextRetryAt) && nextRetryAt > 0 ? new Date(nextRetryAt) : null;
   return prisma.autoUniverseSchedule
     .upsert({
@@ -182,10 +195,12 @@ function persistAutoUniverseRetryState(nextRetryAt: number | null, excludeSessio
         id: AUTO_UNIVERSE_SCHEDULE_ID,
         nextRetryAt: nextRetryDate,
         excludeSessionId: excludeSessionId ?? null,
+        metadata: jobId ? { schedulerJobId: jobId } : null,
       },
       update: {
         nextRetryAt: nextRetryDate,
         excludeSessionId: excludeSessionId ?? null,
+        metadata: jobId === undefined ? undefined : jobId ? { schedulerJobId: jobId } : null,
       },
     })
     .catch((error) => {
@@ -199,22 +214,28 @@ async function loadPersistedAutoUniverseSchedule() {
       where: { id: AUTO_UNIVERSE_SCHEDULE_ID },
     });
     if (schedule) {
+      const metadata = (schedule as any).metadata as Record<string, unknown> | null;
+      const schedulerJobId = metadata && typeof metadata.schedulerJobId === 'string' ? metadata.schedulerJobId : null;
       rememberPersistedUniverseRetryState(
         schedule.nextRetryAt ? schedule.nextRetryAt.getTime() : null,
         schedule.excludeSessionId ?? null,
+        schedulerJobId,
       );
       return schedule;
     }
-    rememberPersistedUniverseRetryState(null, null);
+    rememberPersistedUniverseRetryState(null, null, null);
     return null;
   } catch (error) {
     console.warn('⚠️ Failed to load auto universe retry schedule:', error);
-    rememberPersistedUniverseRetryState(null, null);
+    rememberPersistedUniverseRetryState(null, null, null);
     return null;
   }
 }
 
-function scheduleAutoUniverseRetry(excludeSessionId: string | undefined, delayMs: number = AUTO_UNIVERSE_RETRY_DEFAULT_MS) {
+async function scheduleAutoUniverseRetry(
+  excludeSessionId: string | undefined,
+  delayMs: number = AUTO_UNIVERSE_RETRY_DEFAULT_MS,
+) {
   const now = Date.now();
   const boundedDelay =
     delayMs <= 0
@@ -222,68 +243,108 @@ function scheduleAutoUniverseRetry(excludeSessionId: string | undefined, delayMs
       : UNIT_TEST_MODE
       ? Math.max(delayMs, 10)
       : Math.min(Math.max(delayMs, 30_000), 120_000);
-  if (pendingUniverseRetry && pendingUniverseRetryDeadline > now) {
+
+  if (pendingUniverseRetryDeadline > now && boundedDelay >= pendingUniverseRetryDeadline - now) {
     return;
   }
-  if (pendingUniverseRetry) {
-    clearTimeout(pendingUniverseRetry);
-    pendingUniverseRetry = null;
-  }
-  pendingUniverseRetryDeadline = now + boundedDelay;
+
+  const runAt = new Date(now + boundedDelay);
+  const job = await scheduleJob('UNIVERSE_RETRY', runAt, { excludeSessionId });
+  pendingUniverseRetryDeadline = job.runAt.getTime();
   pendingUniverseRetryExcludeSessionId = excludeSessionId;
-  void persistAutoUniverseRetryState(pendingUniverseRetryDeadline, excludeSessionId);
+  pendingUniverseRetryJobId = job.id;
+  await persistAutoUniverseRetryState(pendingUniverseRetryDeadline, excludeSessionId, job.id);
+  if (UNIT_TEST_MODE) {
+    setTimeout(() => {
+      processSchedulerJobsOnce().catch((error) =>
+        console.warn('⚠️ Failed to process scheduler jobs during unit test mode:', error),
+      );
+    }, Math.max(0, boundedDelay + 5));
+  }
   updateAutoUniverseStatus({
     ...lastAutoUniverseStatus,
     retryScheduledMs: boundedDelay,
+    nextRetryAt: pendingUniverseRetryDeadline,
+    persistedNextRetryAt: persistedUniverseRetryAt,
+    pendingExcludeSessionId: excludeSessionId,
+    persistedExcludeSessionId: persistedUniverseRetryExcludeSessionId,
   });
-  pendingUniverseRetry = setTimeout(async () => {
-    pendingUniverseRetry = null;
-    pendingUniverseRetryDeadline = 0;
-    const capturedExclude = pendingUniverseRetryExcludeSessionId;
-    pendingUniverseRetryExcludeSessionId = undefined;
-    await persistAutoUniverseRetryState(null, null);
-    updateAutoUniverseStatus({
-      ...lastAutoUniverseStatus,
-      retryScheduledMs: undefined,
-    });
-    try {
-      await getOptimizedCryptoList(capturedExclude, AUTO_UNIVERSE_MAX_ATTEMPTS);
-    } catch (error) {
-      console.warn('⚠️ Auto universe retry failed:', error);
-    }
-  }, boundedDelay);
 }
 
 export async function restoreAutoUniverseRetrySchedule() {
+  const existingJob = await prisma.schedulerJob.findFirst({
+    where: { type: 'UNIVERSE_RETRY', status: 'pending' },
+    orderBy: { runAt: 'asc' },
+  });
+  if (existingJob) {
+    const payload = (existingJob.payload as any) ?? {};
+    const exclude = typeof payload?.excludeSessionId === 'string' ? payload.excludeSessionId : undefined;
+    pendingUniverseRetryJobId = existingJob.id;
+    pendingUniverseRetryDeadline = existingJob.runAt.getTime();
+    pendingUniverseRetryExcludeSessionId = exclude;
+    rememberPersistedUniverseRetryState(pendingUniverseRetryDeadline, exclude ?? null, existingJob.id);
+    updateAutoUniverseStatus({
+      ...lastAutoUniverseStatus,
+      nextRetryAt: pendingUniverseRetryDeadline,
+      persistedNextRetryAt: persistedUniverseRetryAt,
+      pendingExcludeSessionId: exclude,
+      persistedExcludeSessionId: persistedUniverseRetryExcludeSessionId,
+    });
+    return;
+  }
+
   const schedule = await loadPersistedAutoUniverseSchedule();
   if (!schedule?.nextRetryAt) {
     return;
   }
   const delay = schedule.nextRetryAt.getTime() - Date.now();
-  scheduleAutoUniverseRetry(schedule.excludeSessionId ?? undefined, delay);
+  await scheduleAutoUniverseRetry(schedule.excludeSessionId ?? undefined, delay);
 }
+
+registerSchedulerJobHandler('UNIVERSE_RETRY', async (job) => {
+  const payload = (job.payload as any) ?? {};
+  const exclude = typeof payload?.excludeSessionId === 'string' ? payload.excludeSessionId : undefined;
+  pendingUniverseRetryJobId = job.id;
+  pendingUniverseRetryDeadline = job.runAt.getTime();
+  pendingUniverseRetryExcludeSessionId = exclude;
+  updateAutoUniverseStatus({
+    ...lastAutoUniverseStatus,
+    retryScheduledMs: undefined,
+    nextRetryAt: pendingUniverseRetryDeadline,
+    pendingExcludeSessionId: exclude,
+  });
+  try {
+    await getOptimizedCryptoList(exclude, AUTO_UNIVERSE_MAX_ATTEMPTS);
+  } catch (error) {
+    console.warn('⚠️ Auto universe retry job failed:', error);
+    throw error;
+  } finally {
+    await persistAutoUniverseRetryState(null, null, null).catch((persistError) => {
+      console.warn('⚠️ Failed to clear persisted auto universe schedule after job:', persistError);
+    });
+    pendingUniverseRetryDeadline = 0;
+    pendingUniverseRetryExcludeSessionId = undefined;
+    pendingUniverseRetryJobId = null;
+    rememberPersistedUniverseRetryState(null, null, null);
+  }
+});
 
 export const __autoUniverseSchedulerTesting = {
   schedule: (excludeSessionId?: string, delayMs: number = AUTO_UNIVERSE_RETRY_DEFAULT_MS) =>
     scheduleAutoUniverseRetry(excludeSessionId, delayMs),
   async clear(options: { clearPersisted?: boolean } = {}) {
-    if (pendingUniverseRetry) {
-      clearTimeout(pendingUniverseRetry);
-      pendingUniverseRetry = null;
-    }
     pendingUniverseRetryDeadline = 0;
     pendingUniverseRetryExcludeSessionId = undefined;
+    pendingUniverseRetryJobId = null;
+    await prisma.schedulerJob.deleteMany({ where: { type: 'UNIVERSE_RETRY' } });
     if (options.clearPersisted !== false) {
-      await persistAutoUniverseRetryState(null, null);
+      await persistAutoUniverseRetryState(null, null, null);
     }
   },
   async simulateRestart() {
-    if (pendingUniverseRetry) {
-      clearTimeout(pendingUniverseRetry);
-      pendingUniverseRetry = null;
-    }
     pendingUniverseRetryDeadline = 0;
     pendingUniverseRetryExcludeSessionId = undefined;
+    pendingUniverseRetryJobId = null;
     await loadPersistedAutoUniverseSchedule();
   },
   async reloadPersisted() {
@@ -293,6 +354,7 @@ export const __autoUniverseSchedulerTesting = {
     return {
       pendingUniverseRetryDeadline,
       pendingUniverseRetryExcludeSessionId,
+      pendingUniverseRetryJobId,
       persistedUniverseRetryAt,
       persistedUniverseRetryExcludeSessionId,
     };
@@ -1161,7 +1223,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
         retryScheduledMs: AUTO_UNIVERSE_RETRY_DEFAULT_MS,
         ts: Date.now(),
       });
-      scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
+      await scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
       return fallbackList;
     }
     
@@ -1177,7 +1239,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       retryScheduledMs: AUTO_UNIVERSE_RETRY_DEFAULT_MS,
       ts: Date.now(),
     });
-    scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
+    await scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
     return fallbackList; // Fallback to our curated list
   }
 }
@@ -1471,7 +1533,16 @@ async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness
     let multiTimeframe: MultiTimeframeDiagnostics | null = null;
     
     // Get technical snapshot first (no IA cost)
-    const technical = await buildTechSnapshot(symbol);
+    let technical;
+    try {
+      technical = await buildTechSnapshot(symbol);
+    } catch (error) {
+      if (isUnusableMarketDataError(error)) {
+        console.warn(`⚠️ Skipping ${symbol} due to unusable market data:`, error.meta);
+        return null;
+      }
+      throw error;
+    }
     const ticker = await getTicker(symbol);
     
     if (!technical || !ticker) {

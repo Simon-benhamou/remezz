@@ -25,7 +25,8 @@ type ModelName =
   | 'userSetting'
   | 'leverageConstraint'
   | 'auditLog'
-  | 'autoUniverseSchedule';
+  | 'autoUniverseSchedule'
+  | 'schedulerJob';
 
 type ModelStore = Map<ModelName, any[]>;
 
@@ -168,6 +169,30 @@ function applySelect(record: any, select: SelectSpec): any {
   return out;
 }
 
+function applyMutation(target: Record<string, any>, patch: Record<string, any>) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      if (Object.prototype.hasOwnProperty.call(value, 'increment')) {
+        const amount = Number((value as any).increment ?? 0);
+        const current = Number(target[key] ?? 0);
+        target[key] = current + amount;
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(value, 'decrement')) {
+        const amount = Number((value as any).decrement ?? 0);
+        const current = Number(target[key] ?? 0);
+        target[key] = current - amount;
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(value, 'set')) {
+        target[key] = (value as any).set;
+        continue;
+      }
+    }
+    target[key] = value;
+  }
+}
+
 const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
   agentSession: () => ({
     id: randomUUID(),
@@ -178,6 +203,7 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     profileJson: null,
     planJson: null,
     mode: 'paper',
+    needsAttention: false,
   }),
   sessionKpi: () => ({
     id: randomUUID(),
@@ -292,6 +318,19 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     excludeSessionId: null,
     metadata: null,
   }),
+  schedulerJob: () => ({
+    id: randomUUID(),
+    type: 'TEST_JOB',
+    payload: null,
+    runAt: new Date(),
+    status: 'pending',
+    lockedBy: null,
+    lockedAt: null,
+    attempts: 0,
+    lastError: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
 };
 
 class InMemoryModel {
@@ -348,6 +387,7 @@ class InMemoryModel {
     const now = new Date();
     if ('createdAt' in record && !(record.createdAt instanceof Date)) record.createdAt = new Date(record.createdAt ?? now);
     if ('updatedAt' in record && !(record.updatedAt instanceof Date)) record.updatedAt = new Date(record.updatedAt ?? now);
+    if ('runAt' in record && !(record.runAt instanceof Date)) record.runAt = new Date(record.runAt ?? now);
     this.store().push(record);
     return clone(record);
   }
@@ -358,7 +398,7 @@ class InMemoryModel {
     if (idx < 0) throw new Error(`${this.name}.update: record not found`);
     const current = data[idx];
     const patch = clone(args.data ?? {});
-    Object.assign(current, patch);
+    applyMutation(current, patch);
     if ('updatedAt' in current) current.updatedAt = new Date();
     return clone(current);
   }
@@ -368,7 +408,7 @@ class InMemoryModel {
     let count = 0;
     for (const record of data) {
       if (whereMatches(record, args.where)) {
-        Object.assign(record, clone(args.data ?? {}));
+        applyMutation(record, clone(args.data ?? {}));
         if ('updatedAt' in record) record.updatedAt = new Date();
         count += 1;
       }
@@ -380,7 +420,7 @@ class InMemoryModel {
     const data = this.store();
     const existing = data.find((item) => whereMatches(item, args.where));
     if (existing) {
-      Object.assign(existing, clone(args.update ?? {}));
+      applyMutation(existing, clone(args.update ?? {}));
       if ('updatedAt' in existing) existing.updatedAt = new Date();
       return clone(existing);
     }
@@ -388,6 +428,7 @@ class InMemoryModel {
     const now = new Date();
     if ('createdAt' in record && !(record.createdAt instanceof Date)) record.createdAt = new Date(record.createdAt ?? now);
     if ('updatedAt' in record && !(record.updatedAt instanceof Date)) record.updatedAt = new Date(record.updatedAt ?? now);
+    if ('runAt' in record && !(record.runAt instanceof Date)) record.runAt = new Date(record.runAt ?? now);
     data.push(record);
     return clone(record);
   }
@@ -439,6 +480,18 @@ class InMemoryModel {
     const [removed] = data.splice(idx, 1);
     return clone(removed);
   }
+
+  async deleteMany(args: DeleteArgs = {}) {
+    const data = this.store();
+    let count = 0;
+    for (let i = data.length - 1; i >= 0; i -= 1) {
+      if (whereMatches(data[i], args.where)) {
+        data.splice(i, 1);
+        count += 1;
+      }
+    }
+    return { count };
+  }
 }
 
 export class InMemoryPrismaClient {
@@ -465,6 +518,7 @@ export class InMemoryPrismaClient {
   leverageConstraint: InMemoryModel;
   auditLog: InMemoryModel;
   autoUniverseSchedule: InMemoryModel;
+  schedulerJob: InMemoryModel;
 
   constructor() {
     this.store = new Map();
@@ -490,6 +544,7 @@ export class InMemoryPrismaClient {
     this.leverageConstraint = new InMemoryModel('leverageConstraint', this);
     this.auditLog = new InMemoryModel('auditLog', this);
     this.autoUniverseSchedule = new InMemoryModel('autoUniverseSchedule', this);
+    this.schedulerJob = new InMemoryModel('schedulerJob', this);
   }
 
   _getStore(name: ModelName): any[] {

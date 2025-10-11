@@ -45,6 +45,7 @@ import {
   createMonitorRateLimiters,
 } from "./middleware/rateLimit.js";
 import { rehydrateActiveAgentSessions } from "./services/sessionRehydration.js";
+import { startSchedulerWorker } from "./services/schedulerJobService.js";
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -154,6 +155,8 @@ startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 1
 restoreAutoUniverseRetrySchedule().catch((error) => {
   console.warn('⚠️ Failed to restore auto universe retry schedule:', error);
 });
+
+startSchedulerWorker();
 
 const DEFAULT_LEVERAGE_REFRESH_MS = 15 * 60 * 1000;
 const LEVERAGE_REFRESH_INTERVAL_MS = Math.max(

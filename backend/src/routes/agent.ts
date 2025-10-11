@@ -40,6 +40,36 @@ function invalidateOverviewCaches() {
   overviewPending.clear();
 }
 
+type RequestUser = AuthenticatedRequest['user'];
+
+function isAdminUser(user?: RequestUser | null): boolean {
+  if (!user) return false;
+  return user.role === 'admin' || user.isLegacy === true;
+}
+
+function canAccessSessionOwner(session: { userId?: string | null }, user?: RequestUser | null): boolean {
+  if (!user) return false;
+  if (isAdminUser(user)) return true;
+  if (!session.userId) return false;
+  return session.userId === user.id;
+}
+
+function logUnauthorizedSessionAccess(
+  logger: Pick<typeof console, 'warn'>,
+  context: { action: string; sessionId?: string | null; user?: RequestUser | null },
+) {
+  const userTag = context.user ? `${context.user.id}:${context.user.role}` : 'anonymous';
+  logger.warn?.(
+    `🚫 [SECURITY] Unauthorized session access attempt during ${context.action} by ${userTag}${
+      context.sessionId ? ` on session ${context.sessionId}` : ''
+    }`,
+  );
+}
+
+function securityErrorResponse(res: Response, code: string, message: string, status: number) {
+  return res.status(status).json({ ok: false, code, message });
+}
+
 async function processSmartReselect(sessionId: string, res: Response) {
   try {
     if (!sessionId) {
@@ -173,13 +203,19 @@ router.post('/creation/activate', authenticateUser, async (req: AuthenticatedReq
   }
 });
 
+type StopRouteAgentHub = {
+  get?: (sessionId: string) => any;
+  closeNow: (sessionId: string) => Promise<void> | void;
+  halt: (sessionId: string) => Promise<void> | void;
+};
+
 type StopRouteDependencies = {
   prismaClient: typeof prisma;
-  agentHub: typeof AgentHub;
+  agentHub: StopRouteAgentHub;
   stopSessionFn: typeof stopSession;
-  activeSessionFn: typeof activeSession;
+  activeSessionFn?: typeof activeSession;
   broadcastFn: typeof broadcast;
-  logger?: Pick<typeof console, 'error'>;
+  logger?: Pick<typeof console, 'error' | 'warn'>;
 };
 
 export function createStopRouteHandler({
@@ -190,50 +226,122 @@ export function createStopRouteHandler({
   broadcastFn,
   logger = console,
 }: StopRouteDependencies) {
-  return async (req: any, res: Response) => {
-    const { sessionId, closePosition } = (req.body || {}) as { sessionId?: string; closePosition?: boolean };
-    const session = sessionId
-      ? await prismaClient.agentSession.findUnique({ where: { id: sessionId } })
-      : await activeSessionFn();
-
-    if (!session) {
-      return res.status(400).json({ error: 'no_active_session' });
+  return async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.user) {
+      return securityErrorResponse(res, 'auth_required', 'Authentication required', 401);
     }
 
-    let closeError: unknown;
+    const { sessionId, closePosition } = (req.body || {}) as { sessionId?: string; closePosition?: boolean };
+    const isAdmin = isAdminUser(req.user);
+
+    let session: Awaited<ReturnType<typeof prisma.agentSession.findUnique>> | null = null;
+    if (sessionId) {
+      session = await prismaClient.agentSession.findUnique({ where: { id: sessionId } });
+      if (!session) {
+        return securityErrorResponse(res, 'session_not_found', 'Session not found', 404);
+      }
+    } else if (activeSessionFn) {
+      session = await prismaClient.agentSession.findFirst({
+        where: {
+          stoppedAt: null,
+          ...(isAdmin ? {} : { userId: req.user.id }),
+        },
+        orderBy: { startedAt: 'desc' },
+      });
+      if (!session) {
+        return securityErrorResponse(res, 'no_active_session', 'No active session available for this account', 404);
+      }
+    }
+
+    if (!session) {
+      return securityErrorResponse(res, 'session_missing', 'Session context is required', 400);
+    }
+
+    if (!canAccessSessionOwner(session, req.user)) {
+      logUnauthorizedSessionAccess(logger, { action: 'agent.stop', sessionId: session.id, user: req.user });
+      return securityErrorResponse(res, 'session_forbidden', 'You are not allowed to control this session', 403);
+    }
+
+    const errors: Array<{ phase: string; error: string }> = [];
+    const agent = typeof agentHub.get === 'function' ? agentHub.get(session.id) : null;
+    const brokerName =
+      ((agent as any)?.broker?.id as string | undefined) ||
+      ((agent as any)?.broker?.name as string | undefined) ||
+      session.mode ||
+      'unknown';
+
+    let closeFailure: { phase: string; error: string; broker: string } | null = null;
+
     if (closePosition) {
       try {
         await agentHub.closeNow(session.id);
       } catch (error) {
-        closeError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        closeFailure = { phase: 'closeNow', error: message, broker: String(brokerName) };
         logger.error?.(`❌ Failed to close active position for session ${session.id}:`, error);
       }
     }
 
-    await stopSessionFn(session.id);
-    broadcastFn('session', { ...session, stoppedAt: new Date().toISOString() }, session.symbol, session.id);
-    await agentHub.halt(session.id);
+    try {
+      await stopSessionFn(session.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push({ phase: 'stopSession', error: message });
+      logger.error?.(`❌ stopSession failed for ${session.id}:`, error);
+    }
 
-    if (closeError) {
-      return res.status(500).json({
+    try {
+      broadcastFn('session', { ...session, stoppedAt: new Date().toISOString() }, session.symbol, session.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push({ phase: 'broadcast', error: message });
+      logger.error?.(`❌ broadcast failed during stop for ${session.id}:`, error);
+    }
+
+    try {
+      await agentHub.halt(session.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push({ phase: 'halt', error: message });
+      logger.error?.(`❌ halt failed for ${session.id}:`, error);
+    }
+
+    invalidateOverviewCaches();
+
+    if (closeFailure) {
+      return res.status(502).json({
         ok: false,
-        error: 'close_failed',
+        code: 'agent_close_failed',
+        message: 'Broker rejected the immediate close request',
+        phase: closeFailure.phase,
+        error: closeFailure.error,
+        broker: closeFailure.broker,
         sessionId: session.id,
-        message: closeError instanceof Error ? closeError.message : String(closeError),
+        errors: errors.length ? errors : undefined,
       });
     }
 
-    return res.json({ ok: true });
+    if (errors.length) {
+      return res.status(500).json({
+        ok: false,
+        code: 'agent_stop_partial_failure',
+        message: 'Agent stop completed with errors',
+        sessionId: session.id,
+        errors,
+      });
+    }
+
+    return res.json({ ok: true, sessionId: session.id });
   };
 }
 
 router.post(
   '/stop',
+  authenticateUser,
   createStopRouteHandler({
     prismaClient: prisma,
     agentHub: AgentHub,
     stopSessionFn: stopSession,
-    activeSessionFn: activeSession,
     broadcastFn: broadcast,
   }),
 );
@@ -443,19 +551,32 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
 });
 
 // Intelligent Agent status
-router.get('/sessions/:id/smart-status', async (req, res) => {
+router.get('/sessions/:id/smart-status', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return securityErrorResponse(res, 'auth_required', 'Authentication required', 401);
+  }
+
   try {
     const sessionId = req.params.id;
-    const status = await getIntelligentAgentStatus(sessionId);
-    
-    if (!status) {
-      return res.json({ isSmartAgent: false });
+    const session = await prisma.agentSession.findUnique({ where: { id: sessionId }, select: { id: true, userId: true } });
+    if (!session) {
+      return res.status(404).json({ ok: false, code: 'session_not_found', message: 'Session not found' });
     }
-    
-    res.json(status);
+    if (!canAccessSessionOwner(session, req.user)) {
+      logUnauthorizedSessionAccess(console, { action: 'agent.smart-status', sessionId, user: req.user });
+      return securityErrorResponse(res, 'session_forbidden', 'You are not allowed to inspect this session', 403);
+    }
+
+    const status = await getIntelligentAgentStatus(sessionId);
+
+    if (!status) {
+      return res.json({ ok: true, isSmartAgent: false });
+    }
+
+    res.json({ ok: true, ...status });
   } catch (error) {
     console.error('Error getting intelligent agent status:', error);
-    res.status(500).json({ error: 'Failed to get intelligent agent status' });
+    res.status(500).json({ ok: false, code: 'smart_status_error', message: 'Failed to get intelligent agent status' });
   }
 });
 
@@ -483,11 +604,26 @@ router.get('/intelligent-opportunities', async (req, res) => {
 });
 
 // Change the active session symbol
-router.post('/set-symbol', async (req,res)=>{
-  const { symbol, sessionId } = req.body as { symbol: string, sessionId: string };
+router.post('/set-symbol', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return securityErrorResponse(res, 'auth_required', 'Authentication required', 401);
+  }
+
+  const { symbol, sessionId } = req.body as { symbol: string; sessionId: string };
+  if (!sessionId || typeof sessionId !== 'string') {
+    return res.status(400).json({ ok: false, code: 'session_id_required', message: 'sessionId is required' });
+  }
+
   const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
-  if (!s) return res.status(400).json({ error: 'no_session' });
-  
+  if (!s) {
+    return res.status(404).json({ ok: false, code: 'session_not_found', message: 'Session not found' });
+  }
+
+  if (!canAccessSessionOwner(s, req.user)) {
+    logUnauthorizedSessionAccess(console, { action: 'agent.set-symbol', sessionId, user: req.user });
+    return securityErrorResponse(res, 'session_forbidden', 'You are not allowed to modify this session', 403);
+  }
+
   // For smart agents, validate that the symbol meets volume requirements
   const isSmartAgent = (s as any).isSmartAgent || (s as any).profileJson?.isIntelligent || false;
   if (isSmartAgent) {
@@ -515,10 +651,11 @@ router.post('/set-symbol', async (req,res)=>{
       console.warn(`⚠️ Could not validate volume for ${symbol}, proceeding anyway:`, error);
     }
   }
-  
+
   const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
   broadcast('session', upd, upd.symbol, upd.id);
-  res.json(upd);
+  invalidateOverviewCaches();
+  res.json({ ok: true, session: upd });
 });
 
 // AI calls count for current session
@@ -528,35 +665,86 @@ router.get('/ai-calls', async (req,res)=>{
 });
 
 // Basic status endpoint
-router.get('/state', async (req,res)=>{
-  const sessionId = String(req.query.sessionId || '');
-  const a = sessionId ? AgentHub.get(sessionId) : null;
-  let balance: any = null;
-  try { balance = await (a as any)?.broker?.balance?.(); } catch {}
-  let profile = (a as any)?.profile || null;
-  if (!profile && sessionId) {
-    try {
-      const session = await prisma.agentSession.findUnique({
-        where: { id: sessionId },
-        select: { profileJson: true },
-      });
-      profile = (session?.profileJson as any) || null;
-    } catch (error) {
-      console.warn('Failed to load session profile for state route:', error);
-    }
+router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return securityErrorResponse(res, 'auth_required', 'Authentication required', 401);
   }
-  res.json({ state: a?.state, profile, plan: a?.plan, pos: a?.pos, balance, aiMetrics: await getAIMetrics(sessionId || undefined) });
+
+  let sessionId = String(req.query.sessionId || '').trim();
+  const isAdmin = isAdminUser(req.user);
+  let sessionRecord: { id: string; userId: string | null; profileJson: unknown } | null = null;
+
+  if (sessionId) {
+    sessionRecord = await prisma.agentSession.findUnique({
+      where: { id: sessionId },
+      select: { id: true, userId: true, profileJson: true },
+    });
+    if (!sessionRecord) {
+      return res.status(404).json({ ok: false, code: 'session_not_found', message: 'Session not found' });
+    }
+    if (!canAccessSessionOwner(sessionRecord, req.user)) {
+      logUnauthorizedSessionAccess(console, { action: 'agent.state', sessionId, user: req.user });
+      return securityErrorResponse(res, 'session_forbidden', 'You are not allowed to inspect this session', 403);
+    }
+  } else {
+    sessionRecord = await prisma.agentSession.findFirst({
+      where: {
+        stoppedAt: null,
+        ...(isAdmin ? {} : { userId: req.user.id }),
+      },
+      select: { id: true, userId: true, profileJson: true },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (!sessionRecord) {
+      return res.status(404).json({ ok: false, code: 'no_active_session', message: 'No managed session for this account' });
+    }
+    sessionId = sessionRecord.id;
+  }
+
+  const agent = sessionId ? AgentHub.get(sessionId) : null;
+  let balance: any = null;
+  try {
+    balance = await (agent as any)?.broker?.balance?.();
+  } catch {}
+  let profile = (agent as any)?.profile || null;
+  if (!profile) {
+    profile = (sessionRecord?.profileJson as any) || null;
+  }
+
+  res.json({
+    ok: true,
+    sessionId,
+    state: agent?.state,
+    profile,
+    plan: agent?.plan,
+    pos: agent?.pos,
+    balance,
+    aiMetrics: await getAIMetrics(sessionId || undefined),
+  });
 });
 
 // Sessions list
-router.get('/sessions', async (req,res)=>{
+router.get('/sessions', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return securityErrorResponse(res, 'auth_required', 'Authentication required', 401);
+  }
+
   const modeRaw = String(req.query.mode || '').toLowerCase();
   const modeFilter = modeRaw === 'live' || modeRaw === 'paper' ? modeRaw : undefined;
   const includeStats = req.query.includeStats === 'true';
-  
+  const isAdmin = isAdminUser(req.user);
+
+  const where: Record<string, unknown> = {};
+  if (modeFilter) {
+    where.mode = modeFilter;
+  }
+  if (!isAdmin) {
+    where.userId = req.user.id;
+  }
+
   // Base query without heavy includes for better performance
   const baseQuery = {
-    where: modeFilter ? { mode: modeFilter } : undefined,
+    where: Object.keys(where).length ? where : undefined,
     orderBy: { startedAt: 'desc' as const },
     take: 100,
     select: {
@@ -568,25 +756,27 @@ router.get('/sessions', async (req,res)=>{
       startBalanceUsd: true,
       profileJson: true,
       // Only include heavy data if requested
-      ...(includeStats ? {
-        kpi: {
-          select: {
-            realizedPnlUsd: true,
-            unrealizedPnlUsd: true,
-            roiPct: true,
-            winRate: true
+      ...(includeStats
+        ? {
+            kpi: {
+              select: {
+                realizedPnlUsd: true,
+                unrealizedPnlUsd: true,
+                roiPct: true,
+                winRate: true,
+              },
+            },
+            positions: {
+              select: {
+                qty: true,
+              },
+              where: {
+                qty: { gt: 0 },
+              },
+            },
           }
-        },
-        positions: {
-          select: {
-            qty: true
-          },
-          where: {
-            qty: { gt: 0 }
-          }
-        }
-      } : {})
-    }
+        : {}),
+    },
   };
 
   const rows = await prisma.agentSession.findMany(baseQuery);
