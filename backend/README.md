@@ -34,3 +34,10 @@
 - Run `npm run prisma:gen` and `npm run migrate` after pulling to apply the `SchedulerJob` migration and regenerate Prisma types.
 - Ensure the scheduler worker remains enabled at boot to process pending jobs after restarts.
 - Update environment files with the new OHLCV fail-fast variables if custom settings are required.
+
+## Tests E2E
+- Execute `npm run test:e2e` depuis le dossier `backend` pour lancer les scénarios E2E Node.js (actuellement `qa-ws-fault-injection.mjs`).
+- Le lanceur d’E2E force `UNIT_TEST_MODE=true` pour utiliser le client Prisma en mémoire et définit `REQUIRE_API_KEY=false` par défaut afin que le hub WebSocket accepte les connexions de test sans jeton.
+- Si vous personnalisez l’environnement, assurez-vous que les variables suivantes sont définies (elles possèdent des valeurs de secours dans le script) :
+  - `APP_API_KEY` / `JWT_SECRET` / `WS_JWT_SECRET` (clé partagée pour les échanges JWT de test).
+  - `WS_JWT_TTL_SEC` (durée de vie des jetons WebSocket pendant l’E2E, par défaut `120`).
