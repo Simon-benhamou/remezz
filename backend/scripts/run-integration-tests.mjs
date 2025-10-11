@@ -1,37 +1,48 @@
-import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { discoverTestFiles } from './utils/discover-tests.mjs';
 
 process.env.UNIT_TEST_MODE = 'true';
-const base = path.resolve(process.cwd(), 'test/integration');
-const enableRemote = (process.env.QA_ENABLE_REMOTE || 'false') === 'true';
-const files = [];
 
-if (fs.existsSync(base)) {
-  const discovered = fs
-    .readdirSync(base)
-    .filter((f) => f.endsWith('.mjs'))
-    .map((f) => path.join(base, f))
-    .sort();
-  files.push(...discovered);
-} else {
-  console.warn(`⚠️ Integration tests directory missing: ${base}`);
-}
+const enableRemote = (process.env.QA_ENABLE_REMOTE || 'false') === 'true';
+const remoteOnlyFiles = new Set([
+  'qa-agent-lifecycle.mjs',
+  'qa-market-validation.mjs',
+]);
+const targets = [
+  {
+    path: 'test/integration',
+    label: 'Integration tests directory',
+    filter: (filePath) => enableRemote || !remoteOnlyFiles.has(path.basename(filePath)),
+  },
+  { path: 'test', label: 'Root test directory', recursive: false },
+];
 
 if (enableRemote) {
-  const remoteFiles = [
-    path.join(base, 'qa-agent-lifecycle.mjs'),
-    path.join(base, 'qa-market-validation.mjs'),
-  ];
-  for (const remote of remoteFiles) {
-    if (fs.existsSync(remote)) {
-      files.push(remote);
-    } else {
-      console.warn(`⚠️ Remote integration test missing: ${remote}`);
-    }
-  }
+  targets.push(
+    {
+      path: 'test/integration/qa-agent-lifecycle.mjs',
+      label: 'Remote integration test (qa-agent-lifecycle)',
+      optional: true,
+    },
+    {
+      path: 'test/integration/qa-market-validation.mjs',
+      label: 'Remote integration test (qa-market-validation)',
+      optional: true,
+    },
+  );
 } else {
   console.log('ℹ️ QA remote integration tests skipped (set QA_ENABLE_REMOTE=true to enable)');
+}
+
+const { files, missing } = discoverTestFiles({
+  cwd: process.cwd(),
+  targets,
+});
+
+for (const entry of missing) {
+  const label = entry.target?.label || 'Test target';
+  console.warn(`⚠️ ${label} missing: ${entry.path}`);
 }
 
 if (!files.length) {
@@ -40,9 +51,10 @@ if (!files.length) {
 }
 
 let code = 0;
-for (const f of files) {
-  console.log(`\n--- ${path.basename(f)} ---`);
-  const res = spawnSync('node', [f], { stdio: 'inherit' });
+for (const file of files) {
+  console.log(`\n--- ${path.relative(process.cwd(), file)} ---`);
+  const res = spawnSync('node', [file], { stdio: 'inherit' });
   if (res.status) code = res.status;
 }
+
 process.exit(code);

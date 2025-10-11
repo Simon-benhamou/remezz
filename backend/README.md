@@ -1,5 +1,10 @@
 # Backend Operations Notes
 
+## Tests
+- `npm run test:unit` exécute automatiquement tous les fichiers `.mjs` situés dans `backend/test/unit` via le nouvel utilitaire de découverte `scripts/utils/discover-tests.mjs`.
+- `npm run test:integration` parcourt à la fois `backend/test/integration` et les fichiers `.mjs` à la racine de `backend/test`, tout en évitant les doublons et en prenant en charge les scénarios QA distants (`QA_ENABLE_REMOTE=true`).
+- Centraliser la découverte permet d'ajouter de nouveaux tests simplement en déposant le fichier dans l'emplacement adéquat sans modifier les scripts.
+
 ## Scheduler Worker
 - The auto-universe retry flow now uses persisted scheduler jobs stored in the `SchedulerJob` table.
 - The API server starts a lightweight worker (`startSchedulerWorker`) during boot to poll for due jobs.
@@ -34,3 +39,10 @@
 - Run `npm run prisma:gen` and `npm run migrate` after pulling to apply the `SchedulerJob` migration and regenerate Prisma types.
 - Ensure the scheduler worker remains enabled at boot to process pending jobs after restarts.
 - Update environment files with the new OHLCV fail-fast variables if custom settings are required.
+
+## Tests E2E
+- Execute `npm run test:e2e` depuis le dossier `backend` pour lancer les scénarios E2E Node.js (actuellement `qa-ws-fault-injection.mjs`).
+- Le lanceur d’E2E force `UNIT_TEST_MODE=true` pour utiliser le client Prisma en mémoire et définit `REQUIRE_API_KEY=false` par défaut afin que le hub WebSocket accepte les connexions de test sans jeton.
+- Si vous personnalisez l’environnement, assurez-vous que les variables suivantes sont définies (elles possèdent des valeurs de secours dans le script) :
+  - `APP_API_KEY` / `JWT_SECRET` / `WS_JWT_SECRET` (clé partagée pour les échanges JWT de test).
+  - `WS_JWT_TTL_SEC` (durée de vie des jetons WebSocket pendant l’E2E, par défaut `120`).

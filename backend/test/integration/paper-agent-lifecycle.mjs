@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import 'dotenv/config';
 
 process.env.UNIT_TEST_MODE = 'true';
@@ -5,7 +6,7 @@ process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
-console.log('🧪 Running paper agent lifecycle integration test...');
+console.log('🧪 Vérification du cycle de vie d\'un agent paper...');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,61 +36,44 @@ try {
     perps: ['BTC/USDT:USDT', 'ETH/USDT:USDT'],
   };
 
-  console.log('📨 Starting agent creation flow in paper mode...');
   const result = await startAgentCreation(startPayload, null);
-
-  if (!result || result.state !== 'ready') {
-    throw new Error(`Unexpected agent creation state: ${result?.state}`);
-  }
+  assert.ok(result, 'Le flux de création doit retourner un résultat.');
+  assert.equal(result.state, 'ready', 'Le flux doit aboutir à un agent prêt.');
 
   const sessionId = result.sessionId;
-  console.log(`✅ Agent session created: ${sessionId}`);
+  assert.ok(sessionId, 'La création doit fournir un identifiant de session.');
 
   await wait(200);
   const agent = AgentHub.get(sessionId);
-  if (!agent) {
-    throw new Error('Agent not registered in AgentHub');
-  }
+  assert.ok(agent, 'L\'agent doit être enregistré dans l\'AgentHub.');
+  assert.equal(agent.profile?.mode, 'paper', 'Le profil doit rester en mode paper.');
 
-  if (agent.profile?.mode !== 'paper') {
-    throw new Error(`Agent mode mismatch: expected paper, got ${agent.profile?.mode}`);
-  }
-
-  console.log(`🤖 Agent state after activation: ${agent.state}`);
-  await AgentHub.onTick(sessionId).catch((error) => {
-    throw new Error(`Agent tick processing failed: ${error.message}`);
-  });
+  await assert.doesNotReject(
+    () => AgentHub.onTick(sessionId),
+    'L\'agent doit pouvoir traiter un tick immédiatement après la création.'
+  );
 
   const tech = await buildTechSnapshot(agent.profile.symbol);
-  if (!Number.isFinite(tech.last)) {
-    throw new Error('Technical snapshot did not return a valid last price');
-  }
-  console.log(`📈 Technical snapshot acquired for ${tech.symbol} @ $${tech.last.toFixed(2)}`);
+  assert.ok(Number.isFinite(tech.last), 'Le snapshot technique doit contenir un dernier prix valide.');
 
   const analytics = await computeMonitorAnalytics(sessionId);
-  if (!analytics || !analytics.panels || !analytics.health) {
-    throw new Error('Monitoring analytics missing expected structure');
-  }
-
-  if (analytics.agentState !== agent.state) {
-    throw new Error(`Monitoring coherence mismatch: analytics=${analytics.agentState} agent=${agent.state}`);
-  }
-
-  if (!Array.isArray(analytics.panels) || analytics.panels.length === 0) {
-    throw new Error('Monitoring analytics returned no panels');
-  }
-
-  if (analytics.health.level === 'alert') {
-    throw new Error('Monitoring health reported alert for fresh paper agent');
-  }
+  assert.ok(analytics?.panels?.length, 'Les analytics doivent inclure au moins un panneau.');
+  assert.ok(analytics.health, 'Les analytics doivent exposer un état de santé.');
+  assert.equal(
+    analytics.agentState,
+    agent.state,
+    'L\'état rapporté par la surveillance doit correspondre à l\'agent.'
+  );
+  assert.notEqual(
+    analytics.health.level,
+    'alert',
+    'Un agent fraîchement créé ne doit pas être en alerte.'
+  );
 
   const listed = AgentHub.snapshot().map((a) => a.sessionId);
-  if (!listed.includes(sessionId)) {
-    throw new Error('AgentHub snapshot does not list the newly created agent');
-  }
+  assert.ok(listed.includes(sessionId), 'Le snapshot de l\'hub doit référencer la session créée.');
 
-  console.log('🧪 Agent monitoring health:', analytics.health.level);
-  console.log('✅ Paper agent lifecycle integration test passed.');
+  console.log('✅ Cycle de vie paper validé (création, tick, monitoring).');
 
   if (typeof prisma.$disconnect === 'function') {
     await prisma.$disconnect();
