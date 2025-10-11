@@ -169,6 +169,7 @@ export type Cfg = {
   ENTRY_NEAR_MIN_BPS: number;           // min bps of price for near window (e.g., 2 => 0.02%)
   ENTRY_NEAR_MAX_BPS: number;           // max bps of price for near window (e.g., 12 => 0.12%)
   ENTRY_NEAR_SPREAD_WEIGHT: number;     // multiply spread% by this and take max with computed window
+  TECH_SNAPSHOT_SWING_TOLERANCE_PCT: number; // optional override for swing clustering tolerance
   // Mode-based adaptive parameters (Conservative/Reactive/Aggressive)
   CONSERVATIVE_RISK_PCT: number;
   CONSERVATIVE_MIN_ATR_PCT: number;
@@ -426,6 +427,7 @@ export function getConfig(): Cfg {
     ENTRY_NEAR_MIN_BPS: Number(e.ENTRY_NEAR_MIN_BPS || "2"),
     ENTRY_NEAR_MAX_BPS: Number(e.ENTRY_NEAR_MAX_BPS || "12"),
     ENTRY_NEAR_SPREAD_WEIGHT: Number(e.ENTRY_NEAR_SPREAD_WEIGHT || "0.5"),
+    TECH_SNAPSHOT_SWING_TOLERANCE_PCT: Number(e.TECH_SNAPSHOT_SWING_TOLERANCE_PCT || "0"),
     // Mode-based adaptive parameters
     CONSERVATIVE_RISK_PCT: Number(e.CONSERVATIVE_RISK_PCT || "1.0"),
     CONSERVATIVE_MIN_ATR_PCT: Number(e.CONSERVATIVE_MIN_ATR_PCT || "0.30"),

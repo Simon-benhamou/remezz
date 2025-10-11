@@ -55,6 +55,27 @@ function near(a: number, b: number, pPct: number) {
   return Math.abs(a - b) <= Math.abs(b) * (pPct / 100);
 }
 
+export function computeSwingTolerancePct(params: {
+  atrPct: number;
+  realizedVol: number;
+  override?: number;
+  minPct?: number;
+  maxPct?: number;
+}): number {
+  const { atrPct, realizedVol, override, minPct = 0.1, maxPct = 0.7 } = params;
+
+  if (override !== undefined && override > 0 && Number.isFinite(override)) {
+    return Math.max(minPct, Math.min(maxPct, override));
+  }
+
+  const atrComponent = Number.isFinite(atrPct) ? Math.max(0, atrPct) * 0.25 : 0;
+  const realizedComponent = Number.isFinite(realizedVol) ? Math.max(0, realizedVol) * 0.004 : 0;
+  const blended = atrComponent + realizedComponent;
+  const bounded = Math.max(minPct, Math.min(maxPct, blended || minPct));
+
+  return Number(bounded.toFixed(3));
+}
+
 function realizedVolatility(logReturns: number[]) {
   if (!logReturns.length) return 0;
   const mean = logReturns.reduce((a, b) => a + b, 0) / logReturns.length;
@@ -135,7 +156,7 @@ function computeTrendBias(ema100: number, ema200: number, neutralBandBps: number
   return 'neutral';
 }
 
-function swingLevels(highs: number[], lows: number[], closes: number[], period: number, tolerancePct: number) {
+export function swingLevels(highs: number[], lows: number[], closes: number[], period: number, tolerancePct: number) {
   const supports: { price: number; touches: number; strength: number }[] = [];
   const resistances: { price: number; touches: number; strength: number }[] = [];
 
@@ -337,8 +358,21 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const support24h = Math.min(...recent.map(r => r[3]));
   const resistance24h = Math.max(...recent.map(r => r[2]));
 
+  const logReturns: number[] = [];
+  for (let i = 1; i < closes15.length; i++) {
+    const prev = closes15[i - 1];
+    const cur = closes15[i];
+    if (prev > 0 && cur > 0) logReturns.push(Math.log(cur / prev));
+  }
+  const realizedVol = realizedVolatility(logReturns);
+
   // Swings (fractal)
-  const swings = swingLevels(highs15, lows15, closes15, 2, 0.15); // tolérance 0.15% pour regrouper
+  const swingTolerancePct = computeSwingTolerancePct({
+    atrPct,
+    realizedVol,
+    override: cfg.TECH_SNAPSHOT_SWING_TOLERANCE_PCT,
+  });
+  const swings = swingLevels(highs15, lows15, closes15, 2, swingTolerancePct);
   const supports = [
     { price: support24h, label: '24h-low', touches: 1, strength: 1 },
     ...swings.supports.slice(0, 5).map(s => ({ price: s.price, label: 'swing', touches: s.touches, strength: s.strength })),
@@ -367,13 +401,6 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   // Trend proxy
   const trend = ema20v - ema50v;
   const trendStrength = Math.abs(trend) / (lastPrice || 1) * 100;
-  const logReturns: number[] = [];
-  for (let i = 1; i < closes15.length; i++) {
-    const prev = closes15[i - 1];
-    const cur = closes15[i];
-    if (prev > 0 && cur > 0) logReturns.push(Math.log(cur / prev));
-  }
-  const realizedVol = realizedVolatility(logReturns);
   const hurst = hurstExponent(closes15.slice(-256));
   const adxPrev = adx14Arr.length >= 2 ? adx14Arr[adx14Arr.length - 2] : adx14v;
   const adxSlope = adx14v - (adxPrev ?? adx14v);
