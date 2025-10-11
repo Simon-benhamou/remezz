@@ -13,6 +13,7 @@ import { getConfig } from '../utils/env.js';
 import ccxt from 'ccxt';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId, waitForWsHealthy } from '../services/binanceWebSocket.js';
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
+import { isInsufficientDataError, type InsufficientDataMeta } from '../data/errors.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
 const RANKING_CACHE = new Map<string, { ts: number; data: RankedOpportunity[] }>();
@@ -337,6 +338,7 @@ export async function rankCryptosWithAI(
     
     // Build technical snapshots for all 50 cryptos
     console.log('📊 Building technical snapshots...');
+    const zeroVolumeSymbols: Array<{ symbol: string; meta: InsufficientDataMeta }> = [];
     const snapshots = await Promise.all(
       top50.map(async (crypto) => {
         try {
@@ -361,14 +363,55 @@ export async function rankCryptosWithAI(
             }
           };
         } catch (error) {
+          if (isInsufficientDataError(error)) {
+            const reason = error.meta.reason || 'insufficient_data';
+            if (reason === 'zero_volume') {
+              zeroVolumeSymbols.push({ symbol: crypto.symbol, meta: error.meta });
+              console.warn(`⏳ ${crypto.symbol}: Snapshot skipped due to zero recent volume from primary feed. Triggering ticker fallback for confirmation.`, {
+                timeframe: error.meta.timeframe,
+                availableBars: error.meta.availableBars,
+                warmup: error.meta.warmupState,
+                details: error.meta.details,
+              });
+              try {
+                const ticker = await getTicker(crypto.symbol);
+                console.warn(`ℹ️ ${crypto.symbol}: REST ticker volume check after zero-volume anomaly`, {
+                  quoteVolume: ticker?.quoteVolume,
+                  baseVolume: (ticker as any)?.baseVolume,
+                  info: (ticker as any)?.info?.volume || (ticker as any)?.info?.quoteVolume,
+                });
+              } catch (fallbackError) {
+                console.warn(`⚠️ ${crypto.symbol}: Failed fallback ticker fetch after zero-volume anomaly`, fallbackError);
+              }
+              return null;
+            }
+            console.warn(`⚠️ ${crypto.symbol}: Snapshot skipped due to insufficient data (${reason}).`, {
+              timeframe: error.meta.timeframe,
+              availableBars: error.meta.availableBars,
+              warmup: error.meta.warmupState,
+            });
+            return null;
+          }
           console.warn(`⚠️ Failed to build snapshot for ${crypto.symbol}:`, error);
           return null;
         }
       })
     );
-    
+
     const validSnapshots = snapshots.filter(s => s !== null);
     console.log(`✅ Built ${validSnapshots.length} technical snapshots`);
+
+    if (zeroVolumeSymbols.length > 0) {
+      console.warn('🚨 Zero-volume anomalies detected. Symbols will be retried after market data warmup.',
+        zeroVolumeSymbols.map(entry => ({
+          symbol: entry.symbol,
+          timeframe: entry.meta.timeframe,
+          availableBars: entry.meta.availableBars,
+          nextRetryTs: entry.meta.warmupState?.nextRetryTs,
+          details: entry.meta.details,
+        }))
+      );
+    }
     
     // Lightweight prefilter (liquidity + minimal momentum)
     let minimallyTradable = validSnapshots.filter(s => {

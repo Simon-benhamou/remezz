@@ -13,6 +13,10 @@ export type InsufficientDataMeta = {
     fulfilled?: boolean;
     nextRetryTs?: number;
   };
+  /** Optional machine-readable reason for why the data is insufficient */
+  reason?: string;
+  /** Extra diagnostic details related to the data anomaly */
+  details?: Record<string, unknown>;
 };
 
 export class InsufficientDataError extends Error {
