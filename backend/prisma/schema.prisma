@@ -438,3 +438,14 @@ model LeverageConstraint {
   @@index([symbol])
   @@index([category])
 }
+
+model AutoUniverseSchedule {
+  id                String   @id @default("auto_universe_retry")
+  nextRetryAt       DateTime?
+  excludeSessionId  String?
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("auto_universe_schedule")
+}

@@ -129,10 +129,16 @@ type AutoUniverseStatus = {
   ts: number;
   reason?: string;
   retryScheduledMs?: number;
+  nextRetryAt?: number | null;
+  persistedNextRetryAt?: number | null;
+  pendingExcludeSessionId?: string;
+  persistedExcludeSessionId?: string | null;
 };
 
 const AUTO_UNIVERSE_MAX_ATTEMPTS = 3;
 const AUTO_UNIVERSE_RETRY_DEFAULT_MS = 60_000;
+const AUTO_UNIVERSE_SCHEDULE_ID = 'auto_universe_retry';
+const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
 let lastAutoUniverseStatus: AutoUniverseStatus = {
   source: 'dynamic',
@@ -143,35 +149,155 @@ let lastAutoUniverseStatus: AutoUniverseStatus = {
 };
 let pendingUniverseRetry: NodeJS.Timeout | null = null;
 let pendingUniverseRetryDeadline = 0;
+let pendingUniverseRetryExcludeSessionId: string | undefined;
+let persistedUniverseRetryAt: number | null = null;
+let persistedUniverseRetryExcludeSessionId: string | null = null;
 
 function updateAutoUniverseStatus(status: AutoUniverseStatus) {
   lastAutoUniverseStatus = { ...status, ts: Date.now() };
 }
 
 export function getAutoUniverseStatusSnapshot(): AutoUniverseStatus {
-  return { ...lastAutoUniverseStatus };
+  return {
+    ...lastAutoUniverseStatus,
+    nextRetryAt: pendingUniverseRetryDeadline || null,
+    persistedNextRetryAt: persistedUniverseRetryAt,
+    pendingExcludeSessionId: pendingUniverseRetryExcludeSessionId,
+    persistedExcludeSessionId: persistedUniverseRetryExcludeSessionId,
+  };
+}
+
+function rememberPersistedUniverseRetryState(nextRetryAt: number | null, excludeSessionId?: string | null) {
+  persistedUniverseRetryAt = nextRetryAt;
+  persistedUniverseRetryExcludeSessionId = excludeSessionId ?? null;
+}
+
+function persistAutoUniverseRetryState(nextRetryAt: number | null, excludeSessionId?: string | null) {
+  rememberPersistedUniverseRetryState(nextRetryAt, excludeSessionId);
+  const nextRetryDate = nextRetryAt && Number.isFinite(nextRetryAt) && nextRetryAt > 0 ? new Date(nextRetryAt) : null;
+  return prisma.autoUniverseSchedule
+    .upsert({
+      where: { id: AUTO_UNIVERSE_SCHEDULE_ID },
+      create: {
+        id: AUTO_UNIVERSE_SCHEDULE_ID,
+        nextRetryAt: nextRetryDate,
+        excludeSessionId: excludeSessionId ?? null,
+      },
+      update: {
+        nextRetryAt: nextRetryDate,
+        excludeSessionId: excludeSessionId ?? null,
+      },
+    })
+    .catch((error) => {
+      console.warn('⚠️ Failed to persist auto universe retry schedule:', error);
+    });
+}
+
+async function loadPersistedAutoUniverseSchedule() {
+  try {
+    const schedule = await prisma.autoUniverseSchedule.findUnique({
+      where: { id: AUTO_UNIVERSE_SCHEDULE_ID },
+    });
+    if (schedule) {
+      rememberPersistedUniverseRetryState(
+        schedule.nextRetryAt ? schedule.nextRetryAt.getTime() : null,
+        schedule.excludeSessionId ?? null,
+      );
+      return schedule;
+    }
+    rememberPersistedUniverseRetryState(null, null);
+    return null;
+  } catch (error) {
+    console.warn('⚠️ Failed to load auto universe retry schedule:', error);
+    rememberPersistedUniverseRetryState(null, null);
+    return null;
+  }
 }
 
 function scheduleAutoUniverseRetry(excludeSessionId: string | undefined, delayMs: number = AUTO_UNIVERSE_RETRY_DEFAULT_MS) {
-  const boundedDelay = Math.min(Math.max(delayMs, 30_000), 120_000);
-  if (pendingUniverseRetry && pendingUniverseRetryDeadline > Date.now()) {
+  const now = Date.now();
+  const boundedDelay =
+    delayMs <= 0
+      ? 0
+      : UNIT_TEST_MODE
+      ? Math.max(delayMs, 10)
+      : Math.min(Math.max(delayMs, 30_000), 120_000);
+  if (pendingUniverseRetry && pendingUniverseRetryDeadline > now) {
     return;
   }
   if (pendingUniverseRetry) {
     clearTimeout(pendingUniverseRetry);
     pendingUniverseRetry = null;
   }
-  pendingUniverseRetryDeadline = Date.now() + boundedDelay;
+  pendingUniverseRetryDeadline = now + boundedDelay;
+  pendingUniverseRetryExcludeSessionId = excludeSessionId;
+  void persistAutoUniverseRetryState(pendingUniverseRetryDeadline, excludeSessionId);
+  updateAutoUniverseStatus({
+    ...lastAutoUniverseStatus,
+    retryScheduledMs: boundedDelay,
+  });
   pendingUniverseRetry = setTimeout(async () => {
     pendingUniverseRetry = null;
     pendingUniverseRetryDeadline = 0;
+    const capturedExclude = pendingUniverseRetryExcludeSessionId;
+    pendingUniverseRetryExcludeSessionId = undefined;
+    await persistAutoUniverseRetryState(null, null);
+    updateAutoUniverseStatus({
+      ...lastAutoUniverseStatus,
+      retryScheduledMs: undefined,
+    });
     try {
-      await getOptimizedCryptoList(excludeSessionId, AUTO_UNIVERSE_MAX_ATTEMPTS);
+      await getOptimizedCryptoList(capturedExclude, AUTO_UNIVERSE_MAX_ATTEMPTS);
     } catch (error) {
       console.warn('⚠️ Auto universe retry failed:', error);
     }
   }, boundedDelay);
 }
+
+export async function restoreAutoUniverseRetrySchedule() {
+  const schedule = await loadPersistedAutoUniverseSchedule();
+  if (!schedule?.nextRetryAt) {
+    return;
+  }
+  const delay = schedule.nextRetryAt.getTime() - Date.now();
+  scheduleAutoUniverseRetry(schedule.excludeSessionId ?? undefined, delay);
+}
+
+export const __autoUniverseSchedulerTesting = {
+  schedule: (excludeSessionId?: string, delayMs: number = AUTO_UNIVERSE_RETRY_DEFAULT_MS) =>
+    scheduleAutoUniverseRetry(excludeSessionId, delayMs),
+  async clear(options: { clearPersisted?: boolean } = {}) {
+    if (pendingUniverseRetry) {
+      clearTimeout(pendingUniverseRetry);
+      pendingUniverseRetry = null;
+    }
+    pendingUniverseRetryDeadline = 0;
+    pendingUniverseRetryExcludeSessionId = undefined;
+    if (options.clearPersisted !== false) {
+      await persistAutoUniverseRetryState(null, null);
+    }
+  },
+  async simulateRestart() {
+    if (pendingUniverseRetry) {
+      clearTimeout(pendingUniverseRetry);
+      pendingUniverseRetry = null;
+    }
+    pendingUniverseRetryDeadline = 0;
+    pendingUniverseRetryExcludeSessionId = undefined;
+    await loadPersistedAutoUniverseSchedule();
+  },
+  async reloadPersisted() {
+    await loadPersistedAutoUniverseSchedule();
+  },
+  getState() {
+    return {
+      pendingUniverseRetryDeadline,
+      pendingUniverseRetryExcludeSessionId,
+      persistedUniverseRetryAt,
+      persistedUniverseRetryExcludeSessionId,
+    };
+  },
+};
 
 // AUTO-DIRECTIONAL: Détection automatique du bias optimal (VERSION AGRESSIVE)
 function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 'short' | 'none'; confidence: number; reasoning: string } {

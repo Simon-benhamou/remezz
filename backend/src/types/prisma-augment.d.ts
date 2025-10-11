@@ -18,6 +18,7 @@ declare module '@prisma/client' {
     userApiKey: any;
     userSetting: any;
     auditLog: any;
+    autoUniverseSchedule: any;
     $executeRaw: any;
     $transaction: any;
     dailyReport: any;
