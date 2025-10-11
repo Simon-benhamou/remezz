@@ -32,15 +32,22 @@ export type QuantAIEntryFilterConfig = {
 export type QuantAIExitConfig = {
   atrPeriod: number;
   slAtrMult: number;
+  slAtrMultReversal?: number;
+  slAtrMultImpulse?: number;
   tpRMultiples: number[];
   trailAfterR: number;
+  trailAfterRReversal?: number;
+  trailAfterRImpulse?: number;
   trailAtrMult: number;
   earlyExit: {
     adxBelow: number;
     cmfNegative: boolean;
-    tightenOnlyIfProfitGtR: number;
-    cutIfLossGtR: number;
+    tightenProfitR: number;
+    cutLossR: number;
+    tightenOnlyIfProfitGtR?: number;
+    cutIfLossGtR?: number;
   };
+  maxHoldingMin?: number;
 };
 
 export type QuantAIRegimeConfig = {
@@ -63,7 +70,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     maxConsecutiveLosses: 3,
     cooldownMinutes: 60,
     dailyLossLimitPct: 3.0,
-    dailyTradeLimit: 7,
+    dailyTradeLimit: 24,
     reduceSizeAfterLosses: true,
     sizeReductionAfterLosses: 2,
     sizeReductionFactor: 0.5,
@@ -78,23 +85,28 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     minAdx: 18,
     minDollarVolume: 500_000,
     minRr: 1.3,
-    minAtrPct: 0.2,
-    maxSpreadBps: 8,
+    minAtrPct: 0.15,
+    maxSpreadBps: 10,
     confidenceThreshold: 0.58,
     useConfidenceFilter: true,
   },
   exits: {
     atrPeriod: 14,
     slAtrMult: 1.5,
+    slAtrMultReversal: 1.2,
+    slAtrMultImpulse: 1.5,
     tpRMultiples: [0.5, 1.0, 2.0],
     trailAfterR: 1.0,
+    trailAfterRReversal: 0.8,
+    trailAfterRImpulse: 1.0,
     trailAtrMult: 1.0,
     earlyExit: {
       adxBelow: 18,
       cmfNegative: true,
-      tightenOnlyIfProfitGtR: 0.2,
-      cutIfLossGtR: 0.5,
+      tightenProfitR: 0.2,
+      cutLossR: 0.5,
     },
+    maxHoldingMin: 20,
   },
   regime: {
     emaFastPeriod: 50,
@@ -146,20 +158,73 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
 function normalizeExits(raw: any): QuantAIExitConfig {
   if (!raw || typeof raw !== 'object') return DEFAULT_CONFIG.exits;
   const earlyExitRaw = raw.early_exit ?? raw.earlyExit ?? {};
+  const slBase = Number(raw.sl_atr_mult ?? raw.slAtrMult ?? DEFAULT_CONFIG.exits.slAtrMult);
+  const slReversal = Number(
+    raw.sl_atr_mult_reversal ??
+    raw.slAtrMultReversal ??
+    DEFAULT_CONFIG.exits.slAtrMultReversal ??
+    slBase,
+  );
+  const slImpulse = Number(
+    raw.sl_atr_mult_impulse ??
+    raw.slAtrMultImpulse ??
+    DEFAULT_CONFIG.exits.slAtrMultImpulse ??
+    slBase,
+  );
+  const trailBase = Number(raw.trail_after_r ?? raw.trailAfterR ?? DEFAULT_CONFIG.exits.trailAfterR);
+  const trailReversal = Number(
+    raw.trail_after_r_reversal ??
+    raw.trailAfterRReversal ??
+    DEFAULT_CONFIG.exits.trailAfterRReversal ??
+    trailBase,
+  );
+  const trailImpulse = Number(
+    raw.trail_after_r_impulse ??
+    raw.trailAfterRImpulse ??
+    DEFAULT_CONFIG.exits.trailAfterRImpulse ??
+    trailBase,
+  );
+  const tightenProfitR = Number(
+    earlyExitRaw.tighten_profit_r ??
+    earlyExitRaw.tightenProfitR ??
+    earlyExitRaw.tighten_only_if_profit_gt_r ??
+    earlyExitRaw.tightenOnlyIfProfitGtR ??
+    DEFAULT_CONFIG.exits.earlyExit.tightenProfitR ??
+    DEFAULT_CONFIG.exits.earlyExit.tightenOnlyIfProfitGtR,
+  );
+  const cutLossR = Number(
+    earlyExitRaw.cut_loss_r ??
+    earlyExitRaw.cutLossR ??
+    earlyExitRaw.cut_if_loss_gt_r ??
+    earlyExitRaw.cutIfLossGtR ??
+    DEFAULT_CONFIG.exits.earlyExit.cutLossR ??
+    DEFAULT_CONFIG.exits.earlyExit.cutIfLossGtR,
+  );
+  const maxHoldingRaw = raw.max_holding_min ?? raw.maxHoldingMin;
+  const maxHolding = maxHoldingRaw != null
+    ? Number(maxHoldingRaw)
+    : DEFAULT_CONFIG.exits.maxHoldingMin;
   return {
     atrPeriod: Number(raw.atr_period ?? raw.atrPeriod ?? DEFAULT_CONFIG.exits.atrPeriod),
-    slAtrMult: Number(raw.sl_atr_mult ?? raw.slAtrMult ?? DEFAULT_CONFIG.exits.slAtrMult),
+    slAtrMult: slBase,
+    slAtrMultReversal: slReversal,
+    slAtrMultImpulse: slImpulse,
     tpRMultiples: Array.isArray(raw.tp_r_multiples ?? raw.tpRMultiples)
       ? (raw.tp_r_multiples ?? raw.tpRMultiples).map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v) && v > 0)
       : DEFAULT_CONFIG.exits.tpRMultiples,
-    trailAfterR: Number(raw.trail_after_r ?? raw.trailAfterR ?? DEFAULT_CONFIG.exits.trailAfterR),
+    trailAfterR: trailBase,
+    trailAfterRReversal: trailReversal,
+    trailAfterRImpulse: trailImpulse,
     trailAtrMult: Number(raw.trail_atr_mult ?? raw.trailAtrMult ?? DEFAULT_CONFIG.exits.trailAtrMult),
     earlyExit: {
       adxBelow: Number(earlyExitRaw.adx_below ?? earlyExitRaw.adxBelow ?? DEFAULT_CONFIG.exits.earlyExit.adxBelow),
       cmfNegative: Boolean(earlyExitRaw.cmf_negative ?? earlyExitRaw.cmfNegative ?? DEFAULT_CONFIG.exits.earlyExit.cmfNegative),
-      tightenOnlyIfProfitGtR: Number(earlyExitRaw.tighten_only_if_profit_gt_r ?? earlyExitRaw.tightenOnlyIfProfitGtR ?? DEFAULT_CONFIG.exits.earlyExit.tightenOnlyIfProfitGtR),
-      cutIfLossGtR: Number(earlyExitRaw.cut_if_loss_gt_r ?? earlyExitRaw.cutIfLossGtR ?? DEFAULT_CONFIG.exits.earlyExit.cutIfLossGtR),
+      tightenProfitR,
+      cutLossR,
+      tightenOnlyIfProfitGtR: tightenProfitR,
+      cutIfLossGtR: cutLossR,
     },
+    maxHoldingMin: Number.isFinite(maxHolding) ? maxHolding : DEFAULT_CONFIG.exits.maxHoldingMin,
   };
 }
 

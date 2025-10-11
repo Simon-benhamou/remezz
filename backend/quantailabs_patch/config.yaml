@@ -3,7 +3,7 @@ risk:
   max_consecutive_losses: 3
   cooldown_minutes: 60
   daily_loss_limit_pct: 3.0        # stop trading if daily equity drawdown <= -3%
-  daily_trade_limit: 7
+  daily_trade_limit: 24
   reduce_size_after_losses: true
   size_reduction_after_n_losses: 2 # reduce size after >= 2 losses in a row
   size_reduction_factor: 0.5       # 50% size during recovery
@@ -18,8 +18,8 @@ filters:
   min_adx: 18                      # allow entries only if ADX >= 18 (momentum present)
   min_dollar_volume: 500000        # require $ volume over lookback
   min_rr: 1.3                      # minimum risk-reward to first TP
-  min_atr_pct: 0.2                 # avoid dead markets (ATR% of price)
-  max_spread_bps: 8                # avoid high spread pairs
+  min_atr_pct: 0.15                # avoid dead markets (ATR% of price)
+  max_spread_bps: 10               # avoid high spread pairs
   confidence_threshold: 0.58       # require p(score) > p* ~ (L+C)/(W+L)
   use_confidence_filter: true
 
@@ -36,15 +36,20 @@ entries:
 
 exits:
   atr_period: 14
-  sl_atr_mult: 1.5                 # initial SL at 1.5x ATR
+  sl_atr_mult: 1.5                 # base SL multiplier (fallback)
+  sl_atr_mult_reversal: 1.2        # tighter SL for reversal setups
+  sl_atr_mult_impulse: 1.5         # wider SL for impulse setups
   tp_r_multiples: [0.5, 1.0, 2.0]  # partial TPs at 0.5R, 1R, 2R
-  trail_after_r: 1.0               # start trailing after 1R reached
+  trail_after_r: 1.0               # default trailing threshold in R
+  trail_after_r_reversal: 0.8      # start trailing earlier on reversals
+  trail_after_r_impulse: 1.0       # keep base trailing threshold on impulses
   trail_atr_mult: 1.0              # trail distance ~1x ATR
+  max_holding_min: 20              # exit flat if no progress by 20 minutes
   early_exit:
     adx_below: 18
     cmf_negative: true
-    tighten_only_if_profit_gt_r: 0.2  # tighten if small profit exists
-    cut_if_loss_gt_r: 0.5             # cut early if loss worse than 0.5R and momentum fails
+    tighten_profit_r: 0.2          # tighten stops once 0.2R in profit if momentum fades
+    cut_loss_r: 0.5                # exit early if -0.5R and momentum fails
 
 regime:
   ema_trend_period_fast: 50
