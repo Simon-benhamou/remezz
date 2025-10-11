@@ -1,22 +1,15 @@
 import fs from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
-const base = path.resolve(process.cwd(), '../backend/test/e2e');
-const candidates = [path.join(base, 'qa-ws-fault-injection.mjs')];
+process.env.UNIT_TEST_MODE = process.env.UNIT_TEST_MODE || 'true';
+process.env.TS_NODE_TRANSPILE_ONLY = process.env.TS_NODE_TRANSPILE_ONLY || 'true';
 
-const files = candidates.filter((file) => {
-  if (fs.existsSync(file)) {
-    return true;
-  }
-  console.warn(`⚠️ E2E test missing: ${file}`);
-  return false;
-});
+const NODE_BIN = process.env.NODE_BINARY || 'node';
+const NODE_LOADER = process.env.TS_NODE_LOADER || 'ts-node/esm';
+const baseArgs = NODE_LOADER ? ['--loader', NODE_LOADER] : [];
 
-if (!files.length) {
-  console.log('ℹ️ No end-to-end tests to run.');
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(scriptDir, '..');
 const cwd = process.cwd();
@@ -60,7 +53,7 @@ for (const f of files) {
     continue;
   }
 
-  const res = spawnSync('node', [f], { stdio: 'inherit' });
+  const res = spawnSync(NODE_BIN, [...baseArgs, f], { stdio: 'inherit' });
   if (typeof res.status === 'number' && res.status !== 0) {
     code = res.status;
   }

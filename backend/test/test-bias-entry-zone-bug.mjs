@@ -132,18 +132,18 @@ async function testBiasEntryZoneBug() {
     // Vérifier les supports/résistances
     console.log('\n🎯 5. ANALYSE SUPPORTS/RÉSISTANCES:');
     
-    const supports = snap.supports || [];
-    const resistances = snap.resistances || [];
-    
-    console.log(`- Supports trouvés: ${supports.length}`);
-    supports.forEach((s, i) => {
+    const supportLevels = snap.supports || [];
+    const resistanceLevels = snap.resistances || [];
+
+    console.log(`- Supports trouvés: ${supportLevels.length}`);
+    supportLevels.forEach((s, i) => {
       const distance = Math.abs(currentPrice - s.price) / currentPrice * 100;
       const direction = s.price < currentPrice ? 'EN-DESSOUS' : 'AU-DESSUS';
       console.log(`  ${i+1}. $${s.price.toFixed(4)} (${direction}, ${distance.toFixed(1)}%, touches: ${s.touches})`);
     });
-    
-    console.log(`- Résistances trouvées: ${resistances.length}`);
-    resistances.forEach((r, i) => {
+
+    console.log(`- Résistances trouvées: ${resistanceLevels.length}`);
+    resistanceLevels.forEach((r, i) => {
       const distance = Math.abs(currentPrice - r.price) / currentPrice * 100;
       const direction = r.price < currentPrice ? 'EN-DESSOUS' : 'AU-DESSUS';
       console.log(`  ${i+1}. $${r.price.toFixed(4)} (${direction}, ${distance.toFixed(1)}%, touches: ${r.touches})`);
@@ -153,7 +153,7 @@ async function testBiasEntryZoneBug() {
     console.log('\n💡 6. RECOMMANDATIONS DE CORRECTION:');
     
     if (bias === 'short') {
-      const nearestResistanceAbove = resistances.find(r => r.price > currentPrice);
+      const nearestResistanceAbove = resistanceLevels.find(r => r.price > currentPrice);
       if (nearestResistanceAbove) {
         console.log(`✅ Pour SHORT: Cibler résistance à $${nearestResistanceAbove.price.toFixed(4)}`);
         console.log(`   Distance: ${((nearestResistanceAbove.price - currentPrice) / currentPrice * 100).toFixed(1)}% AU-DESSUS`);
@@ -161,7 +161,7 @@ async function testBiasEntryZoneBug() {
         console.log(`⚠️  Aucune résistance claire au-dessus - utiliser EMA ou calcul bounce`);
       }
     } else if (bias === 'long') {
-      const nearestSupportBelow = supports.find(s => s.price < currentPrice);
+      const nearestSupportBelow = supportLevels.find(s => s.price < currentPrice);
       if (nearestSupportBelow) {
         console.log(`✅ Pour LONG: Cibler support à $${nearestSupportBelow.price.toFixed(4)}`);
         console.log(`   Distance: ${((currentPrice - nearestSupportBelow.price) / currentPrice * 100).toFixed(1)}% EN-DESSOUS`);

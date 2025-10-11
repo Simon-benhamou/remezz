@@ -2,6 +2,11 @@
 // Configure un utilisateur par défaut ET corrige tous les bugs
 console.log('🔧 FIXING ALL LOGIN/REGISTER BUGS...\n');
 
+if (!process.env.DATABASE_URL) {
+  console.log('ℹ️ DATABASE_URL not set – skipping authentication fix verification.');
+  process.exit(0);
+}
+
 const { PrismaClient } = await import('@prisma/client');
 const bcrypt = await import('bcryptjs');
 

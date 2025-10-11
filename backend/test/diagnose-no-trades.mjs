@@ -14,7 +14,7 @@ async function diagnoseNoTrades() {
     // 1. Vérifier les sessions actives
     const activeSessions = await prisma.agentSession.findMany({
       where: { stoppedAt: null },
-      include: { 
+      include: {
         positions: true,
         orders: {
           where: {
@@ -27,16 +27,20 @@ async function diagnoseNoTrades() {
     });
 
     console.log(`📊 Sessions actives: ${activeSessions.length}`);
-    
+
     if (activeSessions.length === 0) {
       console.log('❌ Aucune session active trouvée!');
       return;
     }
 
+    const stateCounts = new Map();
+    const blockerCounts = new Map();
+
     // 2. Analyser chaque session active
     for (const session of activeSessions) {
-      console.log(`\n🔍 Analyse session ${session.id.substring(0, 8)} (${session.symbol}):`);
-      
+      const shortId = session.id.substring(0, 8);
+      console.log(`\n🔍 Analyse session ${shortId} (${session.symbol}):`);
+
       // Check agent hub
       const agent = AgentHub.get(session.id);
       if (!agent) {
@@ -45,15 +49,17 @@ async function diagnoseNoTrades() {
       }
 
       console.log(`  ✅ Agent actif dans hub`);
-      
+
+      const state = agent.state;
+      stateCounts.set(state, (stateCounts.get(state) ?? 0) + 1);
+
       // Check agent state
       try {
-        const state = agent.state;
         console.log(`  📊 État: ${state || 'unknown'}`);
-        
+
         const profile = agent.profile;
         console.log(`  📋 Profil: ${profile ? 'configuré' : 'manquant'}`);
-        
+
         const plan = agent.plan;
         console.log(`  📝 Plan: ${plan ? 'configuré' : 'manquant'}`);
         
@@ -67,18 +73,37 @@ async function diagnoseNoTrades() {
         // Check diagnostics
         const diagnostics = await agent.getDiagnostics?.() || null;
         if (diagnostics) {
-          console.log(`  🎯 Signal trading: ${diagnostics.tradingSignal || 'neutral'}`);
-          console.log(`  📈 Market triggers: ${diagnostics.marketTriggers?.overall || 'unknown'}`);
-          console.log(`  💭 Trade vibes: ${diagnostics.tradeVibes?.overall || 'unknown'}`);
-          
-          if (diagnostics.blockers && diagnostics.blockers.length > 0) {
-            console.log(`  🚫 Blockers:`);
-            diagnostics.blockers.forEach((blocker) => {
-              console.log(`    - ${blocker.reason || blocker}`);
+          console.log(`  🎯 Peut trader maintenant: ${diagnostics.canTrade ? 'oui' : 'non'}`);
+          if (diagnostics.trigger) {
+            console.log(`  🧭 Phase actuelle: ${diagnostics.trigger.phase || 'unknown'}`);
+          }
+
+          if (diagnostics.reason) {
+            console.log(`  📌 Diagnostic: ${diagnostics.reason}`);
+          }
+
+          const blockers = Array.isArray(diagnostics.blockers) ? diagnostics.blockers : [];
+          const primary = diagnostics.primaryBlocker || blockers[0];
+          if (primary) {
+            const label = primary.reason || primary.message || primary.code || primary.key;
+            console.log(`  🚧 Blocage principal: ${label}`);
+          }
+
+          if (blockers.length > 0) {
+            console.log(`  🚫 Détails des blocages:`);
+            blockers.forEach((blocker) => {
+              const label = blocker.reason || blocker.message || blocker.code || blocker.key;
+              console.log(`    - [${blocker.key}] ${label}`);
+              const mapKey = blocker.code || blocker.key;
+              const entry = blockerCounts.get(mapKey) || { count: 0, reason: label, sessions: new Set() };
+              entry.count += 1;
+              entry.reason = label;
+              entry.sessions.add(shortId);
+              blockerCounts.set(mapKey, entry);
             });
           }
         }
-        
+
         // Check recent market data
         const lastTick = agent.lastTick;
         if (lastTick) {
@@ -91,6 +116,23 @@ async function diagnoseNoTrades() {
       } catch (error) {
         console.log(`  ❌ Erreur lors de l'analyse: ${error.message}`);
       }
+    }
+
+    if (stateCounts.size) {
+      console.log(`\n📊 Répartition des états agents:`);
+      for (const [state, count] of Array.from(stateCounts.entries()).sort((a, b) => b[1] - a[1])) {
+        console.log(`  • ${state || 'UNKNOWN'}: ${count}`);
+      }
+    }
+
+    if (blockerCounts.size) {
+      console.log(`\n📌 Principaux blocages détectés:`);
+      for (const [code, info] of Array.from(blockerCounts.entries()).sort((a, b) => b[1].count - a[1].count)) {
+        const sessions = Array.from(info.sessions).join(', ');
+        console.log(`  • ${code}: ${info.reason} (x${info.count}) [sessions: ${sessions}]`);
+      }
+    } else {
+      console.log(`\n✅ Aucun blocage structurant détecté par les diagnostics (agents possiblement en phase d'échauffement).`);
     }
 
     // 3. Vérifier les métriques globales

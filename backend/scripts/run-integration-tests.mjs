@@ -3,20 +3,31 @@ import { spawnSync } from 'node:child_process';
 import { discoverTestFiles } from './utils/discover-tests.mjs';
 
 process.env.UNIT_TEST_MODE = 'true';
+process.env.TS_NODE_TRANSPILE_ONLY = process.env.TS_NODE_TRANSPILE_ONLY || 'true';
+
+const NODE_BIN = process.env.NODE_BINARY || 'node';
+const NODE_LOADER = process.env.TS_NODE_LOADER || 'ts-node/esm';
 
 const enableRemote = (process.env.QA_ENABLE_REMOTE || 'false') === 'true';
 const remoteOnlyFiles = new Set([
   'qa-agent-lifecycle.mjs',
   'qa-market-validation.mjs',
 ]);
+const includeLegacyRoot = (process.env.RUN_LEGACY_TESTS || '').toLowerCase() === 'true';
+
 const targets = [
   {
     path: 'test/integration',
     label: 'Integration tests directory',
     filter: (filePath) => enableRemote || !remoteOnlyFiles.has(path.basename(filePath)),
   },
-  { path: 'test', label: 'Root test directory', recursive: false },
 ];
+
+if (includeLegacyRoot) {
+  targets.push({ path: 'test', label: 'Legacy root test directory', recursive: false, optional: true });
+} else {
+  console.log('ℹ️ Legacy root scripts skipped (set RUN_LEGACY_TESTS=true to include diagnostic scripts).');
+}
 
 if (enableRemote) {
   targets.push(
@@ -51,9 +62,10 @@ if (!files.length) {
 }
 
 let code = 0;
+const baseArgs = NODE_LOADER ? ['--loader', NODE_LOADER] : [];
 for (const file of files) {
   console.log(`\n--- ${path.relative(process.cwd(), file)} ---`);
-  const res = spawnSync('node', [file], { stdio: 'inherit' });
+  const res = spawnSync(NODE_BIN, [...baseArgs, file], { stdio: 'inherit' });
   if (res.status) code = res.status;
 }
 
