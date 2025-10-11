@@ -1,5 +1,10 @@
 # Backend Operations Notes
 
+## Tests
+- `npm run test:unit` exécute automatiquement tous les fichiers `.mjs` situés dans `backend/test/unit` via le nouvel utilitaire de découverte `scripts/utils/discover-tests.mjs`.
+- `npm run test:integration` parcourt à la fois `backend/test/integration` et les fichiers `.mjs` à la racine de `backend/test`, tout en évitant les doublons et en prenant en charge les scénarios QA distants (`QA_ENABLE_REMOTE=true`).
+- Centraliser la découverte permet d'ajouter de nouveaux tests simplement en déposant le fichier dans l'emplacement adéquat sans modifier les scripts.
+
 ## Scheduler Worker
 - The auto-universe retry flow now uses persisted scheduler jobs stored in the `SchedulerJob` table.
 - The API server starts a lightweight worker (`startSchedulerWorker`) during boot to poll for due jobs.
