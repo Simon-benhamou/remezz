@@ -55,6 +55,7 @@ export type Cfg = {
   ENTRY_LONG_MAX_RSI: number;
   // Market data validation thresholds
   WS_MAX_TIMESTAMP_DRIFT_MS: number;   // reject WS frames if |ts_recv - ts_frame| exceeds this
+  REST_MAX_TIMESTAMP_DRIFT_MS: number; // reject REST frames if |ts_recv - ts_frame| exceeds this
   MARKET_STALE_THRESHOLD_MS: number;   // mark data stale when older than this
   OHLCV_FAILFAST_THRESHOLD: number;
   OHLCV_BACKFILL_RETRY: number;
@@ -314,6 +315,11 @@ export function getConfig(): Cfg {
     ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "4"),
     ENTRY_LONG_MAX_RSI: Number(e.ENTRY_LONG_MAX_RSI || "65"),
     WS_MAX_TIMESTAMP_DRIFT_MS: Number(e.WS_MAX_TIMESTAMP_DRIFT_MS || "5000"),
+    REST_MAX_TIMESTAMP_DRIFT_MS: Number(
+      e.REST_MAX_TIMESTAMP_DRIFT_MS ||
+      e.MARKET_STALE_THRESHOLD_MS ||
+      "12000"
+    ),
     MARKET_STALE_THRESHOLD_MS: Number(e.MARKET_STALE_THRESHOLD_MS || "12000"),
     OHLCV_FAILFAST_THRESHOLD: Number(e.OHLCV_FAILFAST_THRESHOLD || '0.2'),
     OHLCV_BACKFILL_RETRY: Number(e.OHLCV_BACKFILL_RETRY || '1'),
