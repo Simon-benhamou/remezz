@@ -201,6 +201,17 @@ type VolumeContext = {
   lastUpdated: number;
 };
 
+type DiagnosticCheckRef = {
+  key: string;
+  code?: string;
+  message?: string;
+  reason?: string;
+};
+
+type DiagnosticBlocker = DiagnosticCheckRef & {
+  status?: string;
+};
+
 export class ReboundRejectionAgent {
   state: AgentState = 'IDLE';
   profile: ActivationProfile | null = null;
@@ -4794,6 +4805,7 @@ export class ReboundRejectionAgent {
       const summary = this.getDiagnosticSummary(checks);
       const trigger = await this.getDiagnosticTrigger(snap, checks);
       const readiness = this.getTradingReadinessReason(checks);
+      const blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
 
       if (!canTrade && this.lastDiagnosticCanTrade !== false) {
         this.emitValidatorBlockEvent({ snap, checks, trigger, summary, readiness });
@@ -4806,6 +4818,9 @@ export class ReboundRejectionAgent {
         checks,
         summary,
         trigger,
+        readiness,
+        blockers,
+        primaryBlocker: blockers[0] ?? null,
         timestamp: Date.now()
       };
     } catch (error) {
@@ -5381,10 +5396,10 @@ export class ReboundRejectionAgent {
 
   private getTradingReadinessReason(checks: any): {
     summary: string;
-    primary: { key: string; code?: string; message?: string; reason?: string } | null;
-    failingChecks: { key: string; code?: string; message?: string; reason?: string }[];
+    primary: DiagnosticCheckRef | null;
+    failingChecks: DiagnosticCheckRef[];
   } {
-    const failingChecks: { key: string; code?: string; message?: string; reason?: string }[] = [];
+    const failingChecks: DiagnosticCheckRef[] = [];
 
     for (const [key, check] of Object.entries(checks)) {
       if (check && typeof check === 'object' && (check as any).status === 'FAIL') {
@@ -5427,12 +5442,48 @@ export class ReboundRejectionAgent {
     };
   }
 
+  private extractDiagnosticBlockers(checks: any, failingChecks: DiagnosticCheckRef[]): DiagnosticBlocker[] {
+    if (!Array.isArray(failingChecks) || failingChecks.length === 0) return [];
+
+    return failingChecks.map((entry) => {
+      const detail = this.lookupCheckDetail(checks, entry.key);
+      const status = typeof detail?.status === 'string' ? detail.status : 'FAIL';
+      const code = entry.code ?? (typeof detail?.code === 'string' ? detail.code : undefined);
+      const message = entry.message ?? (typeof detail?.message === 'string' ? detail.message : undefined);
+      const reason =
+        entry.reason ??
+        (typeof detail?.reason === 'string' ? detail.reason : undefined) ??
+        message ??
+        code ??
+        entry.key;
+
+      return {
+        key: entry.key,
+        code,
+        message,
+        reason,
+        status,
+      } satisfies DiagnosticBlocker;
+    });
+  }
+
+  private lookupCheckDetail(checks: any, key: string): any {
+    if (!key) return undefined;
+    const segments = key.split('.');
+    let current: any = checks;
+    for (const segment of segments) {
+      if (current == null) return undefined;
+      current = (current as any)?.[segment];
+    }
+    return current;
+  }
+
   private emitValidatorBlockEvent(params: {
     snap: TechnicalSnapshot;
     checks: any;
     trigger: any;
     summary: any;
-    readiness: { summary: string; primary: { key: string; code?: string; message?: string; reason?: string } | null; failingChecks: { key: string; code?: string; message?: string; reason?: string }[] };
+    readiness: { summary: string; primary: DiagnosticCheckRef | null; failingChecks: DiagnosticCheckRef[] };
   }): void {
     try {
       const { snap, trigger, readiness } = params;

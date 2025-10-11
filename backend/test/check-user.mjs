@@ -1,6 +1,11 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 
+if (!process.env.DATABASE_URL) {
+  console.log('ℹ️ DATABASE_URL not set – skipping Prisma connectivity check.');
+  process.exit(0);
+}
+
 const prisma = new PrismaClient();
 
 async function checkUser() {
