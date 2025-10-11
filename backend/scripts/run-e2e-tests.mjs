@@ -1,8 +1,22 @@
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const base = path.resolve(process.cwd(), '../backend/test/e2e');
+const candidates = [path.join(base, 'qa-ws-fault-injection.mjs')];
+
+const files = candidates.filter((file) => {
+  if (fs.existsSync(file)) {
+    return true;
+  }
+  console.warn(`⚠️ E2E test missing: ${file}`);
+  return false;
+});
+
+if (!files.length) {
+  console.log('ℹ️ No end-to-end tests to run.');
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(scriptDir, '..');
 const cwd = process.cwd();
