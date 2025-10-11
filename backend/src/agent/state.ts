@@ -917,6 +917,7 @@ export class ReboundRejectionAgent {
     const side = this.plan.bias === 'long' ? 'buy' : 'sell';
     const entry = mktPrice;
     const round4 = (n:number)=> Math.round(n*1e4)/1e4;
+    const roundR = (n:number)=> Math.round(n*100)/100;
     const regimeRisk = this.regime?.riskModifier;
     const planAny = this.plan as any;
     const baseStopDistance = typeof planAny._baseStopDistance === 'number'
@@ -961,8 +962,14 @@ export class ReboundRejectionAgent {
           this.plan.stopDistance = quantDistance;
           stop = quantStop;
           tp = bracket.targets.map(target => round4(target));
-          this.plan.rPrices = tp.map((price, idx) => ({ r: this.quantConfig.exits.tpRMultiples[idx] ?? (idx + 1), price }));
-          this.plan.plan.risk.tp = this.quantConfig.exits.tpRMultiples.map(value => ({ type: 'R', value }));
+          const stopForR = Math.max(this.plan.stopDistance, 1e-9);
+          this.plan.rPrices = tp.map((price, idx) => {
+            const rRaw = Math.abs(price - entry) / stopForR;
+            const fallback = this.quantConfig.exits.tpRMultiples[idx] ?? (idx + 1);
+            const r = Number.isFinite(rRaw) && rRaw > 0 ? rRaw : fallback;
+            return { r: roundR(r), price };
+          });
+          this.plan.plan.risk.tp = this.plan.rPrices.map(({ r }) => ({ type: 'R', value: r }));
         }
       } catch (error) {
         console.debug('QuantAI bracket computation failed:', error);
