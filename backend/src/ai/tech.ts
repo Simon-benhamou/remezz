@@ -191,6 +191,7 @@ function dailyPivotsFromOHLCV(ohlcv: number[][]) {
 const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
 const SNAP_TTL_MS = 1000 * 15; // 15s
 const cacheKey = (symbol: string) => `snap_${symbol}`;
+const MIN_MEANINGFUL_VOLUME = 1e-8; // effectively zero in base currency units
 
 // Full technical snapshot for a symbol:
 // - EMA20/50, RSI14, ATR14 & ATR%
@@ -237,6 +238,30 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const lows15   = o15.map(r => r[3]);
   const volumes15 = o15.map(r => Number(r[5] || 0));
   const lastPrice:any = last(closes15);
+
+  const recentVolumeWindow = volumes15.slice(-Math.min(volumes15.length, 48));
+  const meaningfulVolumes = recentVolumeWindow.filter(v => Math.abs(v) > MIN_MEANINGFUL_VOLUME);
+  if (recentVolumeWindow.length > 0 && meaningfulVolumes.length === 0) {
+    const warmup = getOhlcvWarmupState(symbol, '15m');
+    const anomalyDetails = {
+      windowSize: recentVolumeWindow.length,
+      threshold: MIN_MEANINGFUL_VOLUME,
+      sample: recentVolumeWindow.slice(-Math.min(5, recentVolumeWindow.length)),
+      lastClose: lastPrice,
+    };
+    console.warn(`[TECH SNAPSHOT] ${symbol}: Detected zero-volume anomaly across recent 15m candles.`, anomalyDetails);
+    throw new InsufficientDataError('Market data contains no usable recent volume (15m)', {
+      symbol,
+      timeframe: '15m',
+      availableBars: o15.length,
+      minBarsNeeded: minBars15m,
+      firstBarAt: o15?.length ? o15[0][0] : null,
+      lastBarAt: o15?.length ? o15[o15.length - 1][0] : null,
+      warmupState: warmup,
+      reason: 'zero_volume',
+      details: anomalyDetails,
+    });
+  }
 
   // DEBUG: Log volume data for troubleshooting
   const latestVolRaw = o15[o15.length - 1]?.[5];
