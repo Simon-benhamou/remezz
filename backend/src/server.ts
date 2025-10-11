@@ -43,6 +43,7 @@ import {
   createAgentRateLimiters,
   createMonitorRateLimiters,
 } from "./middleware/rateLimit.js";
+import { rehydrateActiveAgentSessions } from "./services/sessionRehydration.js";
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -185,5 +186,9 @@ setInterval(async () => {
     console.error('❌ Smart Agent background job failed:', error);
   }
 }, 5 * 60 * 1000); // Check every 5 minutes
+
+await rehydrateActiveAgentSessions().catch((error) => {
+  console.error('❌ Failed to rehydrate active agent sessions during startup:', error);
+});
 
 server.listen(cfg.PORT, () => console.log(`[api] listening on :${cfg.PORT}`));
