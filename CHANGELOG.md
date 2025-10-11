@@ -12,6 +12,11 @@
 ## Data Quality
 - Added fail-fast validation for recent OHLCV volumes with configurable retry thresholds to exclude unusable market data from technical analysis.
 
+## Risk Management
+- Introduced dynamic RR expectancy filtering using win rate EWMA, including safety multiplier, blending, and hysteresis controls persisted per session.
+- Exposed RR parameters via `GET /agent/state` and a new `PATCH /agent/:id` endpoint with validation guarding against unsafe thresholds.
+- Implemented `services/performance/winrate` to derive recent win rate statistics from fills and integrated the logic into the ProfitOk gate.
+
 ## Deployment Notes
-- Run `npm run prisma:gen` followed by the latest Prisma migration before deploying.
+- Run `npm run prisma:gen` followed by the latest Prisma migration (`20251015_rr_expectancy_config`) before deploying.
 - Ensure the scheduler worker is enabled at boot so persisted jobs execute.

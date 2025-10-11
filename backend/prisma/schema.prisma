@@ -82,6 +82,11 @@ model AgentSession {
   profileJson     Json?
   planJson        Json?
 
+  rrFloor      Float  @default(1.0)
+  rrCeil       Float  @default(2.0)
+  rrBaseMin    Float  @default(1.3)
+  rrExpectancy Json?  @default("{}")
+
   // Smart Auto Mode fields
   isSmartAgent         Boolean @default(false)
   smartConfig          Json?   // Configuration for smart mode

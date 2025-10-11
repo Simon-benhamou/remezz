@@ -4,10 +4,21 @@ export async function startSession(
   mode: "paper" | "live",
   startBalanceUsd?: number,
   profile?: any,
-  userId?: string
+  userId?: string,
+  rrConfig?: { rrFloor?: number; rrCeil?: number; rrBaseMin?: number; rrExpectancy?: any }
 ) {
   const s = await prisma.agentSession.create({
-    data: { symbol, mode, startBalanceUsd, profileJson: profile || undefined, userId },
+    data: {
+      symbol,
+      mode,
+      startBalanceUsd,
+      profileJson: profile || undefined,
+      userId,
+      rrFloor: rrConfig?.rrFloor ?? undefined,
+      rrCeil: rrConfig?.rrCeil ?? undefined,
+      rrBaseMin: rrConfig?.rrBaseMin ?? undefined,
+      rrExpectancy: rrConfig?.rrExpectancy ?? undefined,
+    },
   });
   await prisma.sessionKpi.create({ data: { sessionId: s.id } });
   return s;

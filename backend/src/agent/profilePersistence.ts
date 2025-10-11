@@ -1,4 +1,5 @@
 import type { ActivationProfile } from "./state.js";
+import { resolveRrExpectancyConfig } from "../risk/rrExpectancy.js";
 
 function clampBudgetFraction(raw: number | undefined | null) {
   if (raw == null) return undefined;
@@ -28,6 +29,12 @@ export function serializeActivationProfile(profile: ActivationProfile, extras: R
     : budgetFraction != null
     ? Math.round(budgetFraction * 100)
     : undefined;
+  const rrConfig = resolveRrExpectancyConfig({
+    rrFloor: profile.rrFloor,
+    rrCeil: profile.rrCeil,
+    rrBaseMin: profile.rrBaseMin,
+    rrExpectancy: profile.rrExpectancy,
+  });
 
   return {
     symbol: profile.symbol,
@@ -46,6 +53,18 @@ export function serializeActivationProfile(profile: ActivationProfile, extras: R
     dynamicLeverage: profile.dynamicLeverage,
     minLeverage: profile.minLeverage,
     userId: profile.userId,
+    rrFloor: rrConfig.rrFloor,
+    rrCeil: rrConfig.rrCeil,
+    rrBaseMin: rrConfig.rrBaseMin,
+    rrExpectancy: {
+      enabled: rrConfig.enabled,
+      minTrades: rrConfig.minTrades,
+      lookbackDays: rrConfig.lookbackDays,
+      decay: rrConfig.decay,
+      safetyMult: rrConfig.safetyMult,
+      blend: rrConfig.blend,
+      hysteresis: rrConfig.hysteresis,
+    },
     ...extras,
   } as Record<string, unknown>;
 }
@@ -58,6 +77,10 @@ type SessionRecord = {
   userId: string | null;
   startedAt: Date;
   profileJson: unknown;
+  rrFloor?: number | null;
+  rrCeil?: number | null;
+  rrBaseMin?: number | null;
+  rrExpectancy?: unknown;
 };
 
 export function hydrateActivationProfile(session: SessionRecord): ActivationProfile | null {
@@ -71,6 +94,16 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
   );
   const riskPerTradePct = parseMaybeNumber(stored?.riskPerTradePct);
   const dailyLossLimitPct = parseMaybeNumber(stored?.dailyLossLimitPct);
+  const rrFloorRaw = parseMaybeNumber(stored?.rrFloor ?? (session as any).rrFloor);
+  const rrCeilRaw = parseMaybeNumber(stored?.rrCeil ?? (session as any).rrCeil);
+  const rrBaseMinRaw = parseMaybeNumber(stored?.rrBaseMin ?? (session as any).rrBaseMin);
+  const rrExpectancyRaw = stored?.rrExpectancy ?? (session as any).rrExpectancy ?? undefined;
+  const rrConfig = resolveRrExpectancyConfig({
+    rrFloor: rrFloorRaw,
+    rrCeil: rrCeilRaw,
+    rrBaseMin: rrBaseMinRaw,
+    rrExpectancy: typeof rrExpectancyRaw === 'object' && rrExpectancyRaw !== null ? rrExpectancyRaw : undefined,
+  });
 
   if (!riskPerTradePct || !resolvedMaxLeverage || !dailyLossLimitPct) {
     return null;
@@ -118,6 +151,18 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
     sizingMode: stored?.sizingMode,
     dynamicLeverage: stored?.dynamicLeverage,
     minLeverage: minLeverage != null ? Math.max(1, Math.min(minLeverage, resolvedMaxLeverage)) : undefined,
+    rrFloor: rrConfig.rrFloor,
+    rrCeil: rrConfig.rrCeil,
+    rrBaseMin: rrConfig.rrBaseMin,
+    rrExpectancy: {
+      enabled: rrConfig.enabled,
+      minTrades: rrConfig.minTrades,
+      lookbackDays: rrConfig.lookbackDays,
+      decay: rrConfig.decay,
+      safetyMult: rrConfig.safetyMult,
+      blend: rrConfig.blend,
+      hysteresis: rrConfig.hysteresis,
+    },
   };
 
   return profile;

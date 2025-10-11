@@ -14,8 +14,10 @@ import { AdaptiveRiskResult, computeAdaptiveRisk } from '../risk/adaptive.js';
 import type { ResolvedLeverageCap } from '../risk/leverageCaps.js';
 import { computeQtyNotional, defaultLimits, RiskDecision } from '../risk/manager.js';
 import { getUserCredentials } from '../services/userCredentials.js';
+import { getAgentRecentWinRate } from '../services/performance/winrate.js';
 import { getConfig, getModeParams } from '../utils/env.js';
 import { computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
+import { applyHysteresis, blendRR, DEFAULT_RR_EXPECTANCY_CONFIG, resolveRrExpectancyConfig, rrMinFromWinrate, type RRExpectancyConfig } from '../risk/rrExpectancy.js';
 import { broadcast } from '../ws/hub.js';
 import { loadActivePosition, recordEnter, recordExit } from './persistence.js';
 import { PlanJson } from './planSchema.js';
@@ -45,6 +47,18 @@ export type ActivationProfile = {
   // Risk-aware leverage controls (optional)
   dynamicLeverage?: boolean; // default true: scale leverage based on setup quality and risk
   minLeverage?: number; // optional floor, >=1 and <= maxLeverage
+  rrFloor?: number;
+  rrCeil?: number;
+  rrBaseMin?: number;
+  rrExpectancy?: Partial<{
+    enabled: boolean;
+    minTrades: number;
+    lookbackDays: number;
+    decay: number;
+    safetyMult: number;
+    blend: number;
+    hysteresis: number;
+  }>;
 };
 
 export type ActivePosition = {
@@ -266,15 +280,54 @@ export class ReboundRejectionAgent {
   private entryFilters = new EntryFilters(this.quantConfig.filters);
   private positionSizer = new PositionSizer(this.quantConfig.risk.baseRiskPerTradePct);
   private lastKnownEquityUsd = 0;
+  private rrExpectancyConfig: RRExpectancyConfig = resolveRrExpectancyConfig();
+  private rrExpectancyState: { lastEffective?: number; lastWinRate?: number } = {};
+  private currentRrMin: number | null = null;
+  private lastRrSnapshot: {
+    effective: number;
+    dynamic?: number;
+    winRate?: number;
+    trades: number;
+    mode: 'base' | 'dynamic';
+    hysteresisApplied: boolean;
+  } | null = null;
 
   async activate(profile: ActivationProfile) {
     // PREFLIGHT
     this.state = 'PREFLIGHT';
     this.quantConfig = reloadQuantAIConfig();
+    this.rrExpectancyConfig = resolveRrExpectancyConfig({
+      rrFloor: profile.rrFloor,
+      rrCeil: profile.rrCeil,
+      rrBaseMin: profile.rrBaseMin,
+      rrExpectancy: profile.rrExpectancy,
+    });
+    this.quantConfig = {
+      ...this.quantConfig,
+      filters: {
+        ...this.quantConfig.filters,
+        minRr: this.rrExpectancyConfig.rrBaseMin,
+      },
+    };
     this.circuitBreaker = new CircuitBreaker(this.quantConfig.risk);
     this.entryFilters = new EntryFilters(this.quantConfig.filters);
     this.positionSizer = new PositionSizer(this.quantConfig.risk.baseRiskPerTradePct);
     this.lastKnownEquityUsd = 0;
+    this.rrExpectancyState = {};
+    this.currentRrMin = null;
+    this.lastRrSnapshot = null;
+    profile.rrFloor = this.rrExpectancyConfig.rrFloor;
+    profile.rrCeil = this.rrExpectancyConfig.rrCeil;
+    profile.rrBaseMin = this.rrExpectancyConfig.rrBaseMin;
+    profile.rrExpectancy = {
+      enabled: this.rrExpectancyConfig.enabled,
+      minTrades: this.rrExpectancyConfig.minTrades,
+      lookbackDays: this.rrExpectancyConfig.lookbackDays,
+      decay: this.rrExpectancyConfig.decay,
+      safetyMult: this.rrExpectancyConfig.safetyMult,
+      blend: this.rrExpectancyConfig.blend,
+      hysteresis: this.rrExpectancyConfig.hysteresis,
+    };
     this.ensurePerformanceMetricsSkeleton(profile);
     this.syncCircuitBreakerTelemetry();
     const existingCap = profile.leverageCap as ResolvedLeverageCap | undefined;
@@ -342,10 +395,37 @@ export class ReboundRejectionAgent {
     
     // Initialize adaptive ATR cache for this symbol
     if (profile.symbol) {
-      this.updateAdaptiveATRCache(profile.symbol, 1.0).catch(err => 
+      this.updateAdaptiveATRCache(profile.symbol, 1.0).catch(err =>
         console.warn('Initial ATR cache update failed:', err)
       );
     }
+  }
+
+  updateRrExpectancySettings(settings: Partial<Pick<ActivationProfile, 'rrFloor' | 'rrCeil' | 'rrBaseMin' | 'rrExpectancy'>>): void {
+    if (!this.profile) return;
+    if (settings.rrFloor != null) this.profile.rrFloor = settings.rrFloor;
+    if (settings.rrCeil != null) this.profile.rrCeil = settings.rrCeil;
+    if (settings.rrBaseMin != null) this.profile.rrBaseMin = settings.rrBaseMin;
+    if (settings.rrExpectancy) {
+      this.profile.rrExpectancy = {
+        ...(this.profile.rrExpectancy ?? {}),
+        ...settings.rrExpectancy,
+      };
+    }
+    this.rrExpectancyConfig = resolveRrExpectancyConfig({
+      rrFloor: this.profile.rrFloor,
+      rrCeil: this.profile.rrCeil,
+      rrBaseMin: this.profile.rrBaseMin,
+      rrExpectancy: this.profile.rrExpectancy,
+    });
+    this.quantConfig = {
+      ...this.quantConfig,
+      filters: { ...this.quantConfig.filters, minRr: this.rrExpectancyConfig.rrBaseMin },
+    };
+    this.entryFilters = new EntryFilters(this.quantConfig.filters);
+    this.rrExpectancyState = {};
+    this.currentRrMin = null;
+    this.lastRrSnapshot = null;
   }
 
   async propose(plan: PlanJson) {
@@ -710,6 +790,7 @@ export class ReboundRejectionAgent {
       this.entering = false;
       return;
     }
+    const rrSnapshot = await this.computeEffectiveRrThreshold();
     if (!this.passesEntryMomentumGates(snap, 'enter')) {
       this.noteSignalDrop('momentum_gate_blocked', 'info');
       this.entering = false;
@@ -840,6 +921,16 @@ export class ReboundRejectionAgent {
           : typeof (planMeta as any)?.probability === 'number'
             ? Number((planMeta as any).probability)
             : undefined;
+    const rrSummaryParts = [
+      `RR=${typeof firstR === 'number' ? firstR.toFixed(2) : 'n/a'}`,
+      `RR_MIN_EFF=${rrSnapshot.effective.toFixed(2)}`,
+      `mode=${rrSnapshot.mode}`,
+      rrSnapshot.winRate != null ? `p=${rrSnapshot.winRate.toFixed(2)}` : 'p=n/a',
+      `trades=${rrSnapshot.trades}`,
+      `rrDyn=${rrSnapshot.dynamic != null ? rrSnapshot.dynamic.toFixed(2) : 'n/a'}`,
+      `blend=${this.rrExpectancyConfig.blend.toFixed(2)}`,
+      `hysteresisApplied=${rrSnapshot.hysteresisApplied ? 'yes' : 'no'}`,
+    ].join(', ');
     const filterEvaluation = this.entryFilters.evaluateEntry({
       price: entry,
       atr: typeof (snap as any)?.atr14 === 'number' ? Number((snap as any).atr14) : this.plan.atr,
@@ -852,7 +943,7 @@ export class ReboundRejectionAgent {
           : undefined,
       rrToTp1: typeof firstR === 'number' ? firstR : undefined,
       modelConfidence: typeof modelConfidence === 'number' ? modelConfidence : undefined,
-    });
+    }, { minRr: rrSnapshot.effective, rrSummary: rrSummaryParts });
     if (!filterEvaluation.ok) {
       recordOpsEvent({
         level: 'info',
@@ -3653,15 +3744,14 @@ export class ReboundRejectionAgent {
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
     const quantFilters = this.quantConfig?.filters;
-
     if (quantFilters) {
       if (Number.isFinite(quantFilters.minAtrPct)) {
         const cfgAtr = Math.max(0.05, Number(quantFilters.minAtrPct));
         minAtr = Math.min(minAtr, cfgAtr);
       }
-      if (Number.isFinite(quantFilters.minRr)) {
-        // when the RR gate is strict we can afford to relax slope a little bit
-        const rrTightness = Math.max(1, Number(quantFilters.minRr));
+      const rrReferenceRaw = this.currentRrMin ?? (Number.isFinite(quantFilters.minRr) ? Number(quantFilters.minRr) : undefined);
+      if (Number.isFinite(rrReferenceRaw)) {
+        const rrTightness = Math.max(1, Number(rrReferenceRaw));
         const relaxedSlope = Math.max(0.04, minSlopeAbsPct * (rrTightness >= 1.5 ? 0.75 : 0.85));
         minSlopeAbsPct = Math.min(minSlopeAbsPct, relaxedSlope);
       } else {
@@ -5221,6 +5311,77 @@ export class ReboundRejectionAgent {
         triggerThreshold: 0,
       },
     };
+  }
+
+  private async computeEffectiveRrThreshold(): Promise<{
+    effective: number;
+    dynamic?: number;
+    winRate?: number;
+    trades: number;
+    mode: 'base' | 'dynamic';
+    hysteresisApplied: boolean;
+  }> {
+    const cfg = this.rrExpectancyConfig ?? DEFAULT_RR_EXPECTANCY_CONFIG;
+    const clampToRange = (value: number) => Math.max(cfg.rrFloor, Math.min(cfg.rrCeil, Math.round(value * 100) / 100));
+    const base = clampToRange(cfg.rrBaseMin);
+
+    if (!cfg.enabled || !this.sessionId) {
+      this.rrExpectancyState.lastEffective = base;
+      this.currentRrMin = base;
+      const snapshot = { effective: base, dynamic: undefined, winRate: undefined, trades: 0, mode: 'base' as const, hysteresisApplied: false };
+      this.lastRrSnapshot = snapshot;
+      return snapshot;
+    }
+
+    let winRate: number | undefined;
+    let trades = 0;
+    let dynamic: number | undefined;
+    let mode: 'base' | 'dynamic' = 'base';
+    let hysteresisApplied = false;
+    const prevEffective = this.rrExpectancyState.lastEffective;
+
+    try {
+      const result = await getAgentRecentWinRate(this.sessionId, {
+        maxTrades: Math.max(cfg.minTrades * 2, cfg.minTrades + 20),
+        minTrades: cfg.minTrades,
+        lookbackDays: cfg.lookbackDays,
+        decay: cfg.decay,
+      });
+      trades = result.trades;
+      if (result.p != null && trades >= cfg.minTrades) {
+        mode = 'dynamic';
+        winRate = result.p;
+        const prevWinRate = this.rrExpectancyState.lastWinRate;
+        if (prevWinRate != null && Math.abs(prevWinRate - winRate) > 0.1) {
+          console.warn(
+            `[RR_EXPECTANCY] Win rate swing for session ${this.sessionId}: ${(prevWinRate * 100).toFixed(1)}% → ${(winRate * 100).toFixed(1)}%`,
+          );
+        }
+        this.rrExpectancyState.lastWinRate = winRate;
+        dynamic = rrMinFromWinrate(winRate, cfg);
+        const blended = blendRR(cfg.rrBaseMin, dynamic, cfg.blend);
+        const clamped = clampToRange(blended);
+        const withHysteresis = applyHysteresis(prevEffective, clamped, cfg.hysteresis);
+        hysteresisApplied = withHysteresis !== clamped;
+        const effective = clampToRange(withHysteresis);
+        this.rrExpectancyState.lastEffective = effective;
+        this.currentRrMin = effective;
+        const snapshot = { effective, dynamic, winRate, trades, mode, hysteresisApplied };
+        this.lastRrSnapshot = snapshot;
+        return snapshot;
+      }
+      if (result.p != null) {
+        this.rrExpectancyState.lastWinRate = result.p;
+      }
+    } catch (error) {
+      console.warn(`[RR_EXPECTANCY] Failed to compute recent win rate for session ${this.sessionId}:`, error);
+    }
+
+    this.rrExpectancyState.lastEffective = base;
+    this.currentRrMin = base;
+    const snapshot = { effective: base, dynamic, winRate, trades, mode, hysteresisApplied };
+    this.lastRrSnapshot = snapshot;
+    return snapshot;
   }
 
   private syncCircuitBreakerTelemetry(decision?: CircuitBreakerDecision): void {
