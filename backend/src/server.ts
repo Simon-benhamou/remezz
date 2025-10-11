@@ -39,6 +39,7 @@ import {
   startAgentCreation,
   PhaseError,
 } from "./services/agentCreationFlow.js";
+import { restoreAutoUniverseRetrySchedule } from "./services/intelligentAgent.js";
 import {
   createAgentRateLimiters,
   createMonitorRateLimiters,
@@ -149,6 +150,9 @@ startArbitrageMonitor();
 startIntegratedMonitoring();
 startMarginMonitor();
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
+restoreAutoUniverseRetrySchedule().catch((error) => {
+  console.warn('⚠️ Failed to restore auto universe retry schedule:', error);
+});
 
 const DEFAULT_LEVERAGE_REFRESH_MS = 15 * 60 * 1000;
 const LEVERAGE_REFRESH_INTERVAL_MS = Math.max(

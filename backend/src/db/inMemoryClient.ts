@@ -24,7 +24,8 @@ type ModelName =
   | 'userApiKey'
   | 'userSetting'
   | 'leverageConstraint'
-  | 'auditLog';
+  | 'auditLog'
+  | 'autoUniverseSchedule';
 
 type ModelStore = Map<ModelName, any[]>;
 
@@ -46,6 +47,7 @@ type FindManyArgs = {
 };
 type CountArgs = { where?: WhereInput };
 type DeleteArgs = { where?: WhereInput };
+type UpsertArgs = { where: WhereInput; update: Record<string, any>; create: Record<string, any> };
 
 type DefaultFactory = () => Record<string, any>;
 
@@ -282,6 +284,14 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     action: 'test',
     details: null,
   }),
+  autoUniverseSchedule: () => ({
+    id: 'auto_universe_retry',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    nextRetryAt: null,
+    excludeSessionId: null,
+    metadata: null,
+  }),
 };
 
 class InMemoryModel {
@@ -366,6 +376,22 @@ class InMemoryModel {
     return { count };
   }
 
+  async upsert(args: UpsertArgs) {
+    const data = this.store();
+    const existing = data.find((item) => whereMatches(item, args.where));
+    if (existing) {
+      Object.assign(existing, clone(args.update ?? {}));
+      if ('updatedAt' in existing) existing.updatedAt = new Date();
+      return clone(existing);
+    }
+    const record = this.applyDefaults(clone(args.create ?? {}));
+    const now = new Date();
+    if ('createdAt' in record && !(record.createdAt instanceof Date)) record.createdAt = new Date(record.createdAt ?? now);
+    if ('updatedAt' in record && !(record.updatedAt instanceof Date)) record.updatedAt = new Date(record.updatedAt ?? now);
+    data.push(record);
+    return clone(record);
+  }
+
   async findUnique(args: FindUniqueArgs) {
     const record = this.store().find((item) => whereMatches(item, args?.where));
     if (!record) return null;
@@ -438,6 +464,7 @@ export class InMemoryPrismaClient {
   userSetting: InMemoryModel;
   leverageConstraint: InMemoryModel;
   auditLog: InMemoryModel;
+  autoUniverseSchedule: InMemoryModel;
 
   constructor() {
     this.store = new Map();
@@ -462,6 +489,7 @@ export class InMemoryPrismaClient {
     this.userSetting = new InMemoryModel('userSetting', this);
     this.leverageConstraint = new InMemoryModel('leverageConstraint', this);
     this.auditLog = new InMemoryModel('auditLog', this);
+    this.autoUniverseSchedule = new InMemoryModel('autoUniverseSchedule', this);
   }
 
   _getStore(name: ModelName): any[] {
