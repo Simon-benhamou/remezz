@@ -2,6 +2,7 @@ import { broadcast } from '../ws/hub.js';
 import { AgentHub } from '../agent/hub.js';
 import { getConfig } from '../utils/env.js';
 import { recordOpsEvent } from './ops.js';
+import { handlePolicyAlert } from '../services/alertMitigator.js';
 
 export type PolicyAlert = {
   id: string;
@@ -36,6 +37,19 @@ async function pushAlert(a: PolicyAlert){
     const { prisma } = await import('../db/client.js');
     await prisma.alert.create({ data: { sessionId: a.sessionId, symbol: a.symbol || undefined, kind: a.kind, severity: a.severity, details: a.details as any } });
   } catch {}
+
+  try {
+    await handlePolicyAlert(a);
+  } catch (error) {
+    recordOpsEvent({
+      level: 'warn',
+      source: 'alert_mitigator',
+      message: 'alert_handle_failed',
+      sessionId: a.sessionId,
+      symbol: a.symbol,
+      details: { error: String((error as Error)?.message || error) },
+    });
+  }
 }
 
 export function recentAlerts(sessionId?: string) {
