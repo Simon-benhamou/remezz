@@ -3,6 +3,8 @@ import { getConfig } from '../utils/env.js';
 import { startSession } from '../session/session.js';
 import { setActiveSession } from '../metrics/aiCalls.js';
 import { AgentHub } from '../agent/hub.js';
+import type { ActivationProfile } from '../agent/state.js';
+import { serializeActivationProfile } from '../agent/profilePersistence.js';
 import { initializeIntelligentSmartAgent } from './smartAgent.js';
 import {
   getBestIntelligentOpportunity,
@@ -767,20 +769,31 @@ async function createSessionRecord(
     }
   }
 
+  const activationTimestamp = new Date().toISOString();
+  const minLeverage = Math.max(1, Math.min(leverageCap.resolved, Number(config.rawPayload?.minLeverage ?? 1)));
+  const activationProfile: ActivationProfile = {
+    symbol,
+    mode: config.mode,
+    maxLeverage: leverageCap.resolved,
+    requestedMaxLeverage: config.requestedMaxLeverage,
+    leverageCap,
+    riskPerTradePct: config.riskPerTradePct,
+    dailyLossLimitPct: config.dailyLossLimitPct,
+    timestamp: activationTimestamp,
+    startBalanceUsd: config.startBalanceUsd,
+    budgetFraction: config.budgetFraction,
+    aggressiveness: config.aggressiveness,
+    userId: config.userId,
+    sizingMode: config.rawPayload?.sizingMode,
+    dynamicLeverage: config.rawPayload?.dynamicLeverage !== false,
+    minLeverage,
+  };
+
   const session = await startSession(
     symbol,
     config.mode,
     config.startBalanceUsd,
-    {
-      riskPerTradePct: config.riskPerTradePct,
-      maxLeverage: config.maxLeverage,
-      requestedMaxLeverage: config.requestedMaxLeverage,
-      leverageCap,
-      dailyLossLimitPct: config.dailyLossLimitPct,
-      budgetPct: Math.round(config.budgetFraction * 100),
-      aggressiveness: config.aggressiveness,
-      startBalanceUsd: config.startBalanceUsd,
-    },
+    serializeActivationProfile(activationProfile, { budgetPct: Math.round(config.budgetFraction * 100) }),
     userId
   );
 

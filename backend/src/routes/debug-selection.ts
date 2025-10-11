@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import type { ActivationProfile } from '../agent/state.js';
+import { serializeActivationProfile } from '../agent/profilePersistence.js';
 import { getOptimizedCryptoList, getBestIntelligentOpportunity } from '../services/intelligentAgent.js';
 
 export const router = Router();
@@ -80,13 +82,26 @@ router.post('/create-test-smart-agent', async (req, res) => {
     const { prisma } = await import('../db/client.js');
     
     // Create session with temporary symbol
-    const session = await startSession('BTC/USDT', 'paper', 1000, {
+    const activationTimestamp = new Date().toISOString();
+    const profile: ActivationProfile = {
+      symbol: 'BTC/USDT',
+      mode: 'paper',
       maxLeverage: 4,
+      requestedMaxLeverage: 4,
       riskPerTradePct: 1.5,
       dailyLossLimitPct: 3.5,
+      timestamp: activationTimestamp,
+      startBalanceUsd: 1000,
       budgetFraction: 1,
-      aggressiveness: 'conservative'
-    });
+      aggressiveness: 'conservative',
+    };
+
+    const session = await startSession(
+      'BTC/USDT',
+      'paper',
+      1000,
+      serializeActivationProfile(profile, { budgetPct: 100 }),
+    );
     
     console.log(`📋 Created session with ID: ${session.id}`);
     

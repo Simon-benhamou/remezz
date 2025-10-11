@@ -347,6 +347,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       leverageCap,
       dailyLossLimitPct: safeDailyLoss,
       budgetPct: storedBudgetPct,
+      budgetFraction,
       aggressiveness,
       startBalanceUsd: startBal,
       sizingMode: (body.sizingMode === 'budget' || body.sizingMode === 'risk')
