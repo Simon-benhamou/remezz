@@ -221,7 +221,12 @@ export function evaluateTickerFrame(params: EvaluateTickerFrameParams): TickerVa
 
   const frameTimestamp = toNumber(frame.timestamp) ?? receivedAt;
   const drift = Math.abs(receivedAt - frameTimestamp);
-  if (drift > cfg.WS_MAX_TIMESTAMP_DRIFT_MS) {
+  const maxDriftMs = params.source === 'WS'
+    ? cfg.WS_MAX_TIMESTAMP_DRIFT_MS
+    : cfg.REST_MAX_TIMESTAMP_DRIFT_MS;
+  const enforceDrift = params.source === 'WS' || frameTimestamp > receivedAt;
+
+  if (enforceDrift && drift > maxDriftMs) {
     return {
       status: 'rejected',
       ruleId: 'timestamp_drift',
