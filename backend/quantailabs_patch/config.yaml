@@ -22,6 +22,52 @@ filters:
   max_spread_bps: 10               # avoid high spread pairs
   confidence_threshold: 0.58       # require p(score) > p* ~ (L+C)/(W+L)
   use_confidence_filter: true
+  max_atr_pct: 8.0                 # block entries if ATR% exceeds runaway volatility
+  tier_overrides:
+    tier1:
+      min_rr: 1.5
+      min_dollar_volume: 10000000
+      max_spread_bps: 7
+      confidence_threshold_delta: 0.02
+      max_atr_pct: 4.0
+    tier2:
+      min_dollar_volume: 1000000
+    tier3:
+      min_adx: 25
+      min_rr: 2.0
+      min_dollar_volume: 1000000
+      max_spread_bps: 15
+      confidence_threshold_delta: 0.05
+      min_atr_pct_multiplier: 0.8
+      max_atr_pct: 9.0
+      spread_atr_ratio_limit: 0.4
+  dynamic:
+    baseline_atr_multiplier: 0.6     # require ATR to be at least 60% of its baseline
+    atr_high_vol_threshold_pct: 1.0  # if ATR% >= 1%, tighten ADX requirement
+    atr_high_vol_min_adx: 20
+    atr_extreme_vol_threshold_pct: 3.0
+    atr_extreme_vol_min_adx: 25
+    atr_extreme_vol_min_rr: 1.6
+    atr_max_pct: 8.0
+    atr_max_pct_by_tier:
+      tier1: 4.0
+      tier2: 6.0
+      tier3: 9.0
+    spread_atr_ratio_limit: 0.35     # spread% must stay below 35% of ATR%
+    confidence_tier_adjustments:
+      tier3: 0.05
+    rr_tier_adjustments:
+      tier1: 0.2
+      tier3: 0.5
+    aggressiveness_adjustments:
+      conservative:
+        min_rr_delta: 0.1
+        confidence_delta: 0.02
+      aggressive:
+        min_rr_delta: -0.15
+        min_adx_delta: -2
+        confidence_delta: -0.02
+        min_atr_pct_delta: -0.05
 
 entries:
   ema_fast: 20

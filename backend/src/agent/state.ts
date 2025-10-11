@@ -921,6 +921,15 @@ export class ReboundRejectionAgent {
           : typeof (planMeta as any)?.probability === 'number'
             ? Number((planMeta as any).probability)
             : undefined;
+    const snapAtrPct = typeof (snap as any)?.atrPct === 'number'
+      ? Number((snap as any).atrPct)
+      : undefined;
+    const planAtrPct = Number.isFinite(this.plan?.atrPct)
+      ? Number(this.plan?.atrPct)
+      : undefined;
+    const atrBaselinePct = planAtrPct ?? snapAtrPct ?? undefined;
+    const tier = this.getTierForSymbol(this.profile.symbol);
+    const aggressiveness = this.profile.aggressiveness || null;
     const rrSummaryParts = [
       `RR=${typeof firstR === 'number' ? firstR.toFixed(2) : 'n/a'}`,
       `RR_MIN_EFF=${rrSnapshot.effective.toFixed(2)}`,
@@ -934,6 +943,8 @@ export class ReboundRejectionAgent {
     const filterEvaluation = this.entryFilters.evaluateEntry({
       price: entry,
       atr: typeof (snap as any)?.atr14 === 'number' ? Number((snap as any).atr14) : this.plan.atr,
+      atrPct: snapAtrPct,
+      atrBaselinePct,
       adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : undefined,
       spreadBps,
       dollarVolume: typeof (marketTicker as any)?.quoteVolume === 'number'
@@ -943,7 +954,14 @@ export class ReboundRejectionAgent {
           : undefined,
       rrToTp1: typeof firstR === 'number' ? firstR : undefined,
       modelConfidence: typeof modelConfidence === 'number' ? modelConfidence : undefined,
-    }, { minRr: rrSnapshot.effective, rrSummary: rrSummaryParts });
+    }, {
+      minRr: rrSnapshot.effective,
+      rrSummary: rrSummaryParts,
+      tier,
+      symbol: this.profile.symbol,
+      aggressiveness,
+      atrBaselinePct,
+    });
     if (!filterEvaluation.ok) {
       recordOpsEvent({
         level: 'info',
