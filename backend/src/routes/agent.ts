@@ -173,16 +173,70 @@ router.post('/creation/activate', authenticateUser, async (req: AuthenticatedReq
   }
 });
 
-router.post('/stop', async (req,res)=>{
-  const { sessionId, closePosition } = (req.body || {}) as { sessionId?: string, closePosition?: boolean };
-  const s = sessionId ? await prisma.agentSession.findUnique({ where: { id: sessionId } }) : await activeSession();
-  if (!s) return res.status(400).json({ error: 'no_active_session' });
-  try { if (closePosition) await AgentHub.closeNow(s.id); } catch {}
-  await stopSession(s.id);
-  broadcast('session', { ...s, stoppedAt: new Date().toISOString() }, s.symbol, s.id);
-  await AgentHub.halt(s.id);
-  res.json({ok:true});
-});
+type StopRouteDependencies = {
+  prismaClient: typeof prisma;
+  agentHub: typeof AgentHub;
+  stopSessionFn: typeof stopSession;
+  activeSessionFn: typeof activeSession;
+  broadcastFn: typeof broadcast;
+  logger?: Pick<typeof console, 'error'>;
+};
+
+export function createStopRouteHandler({
+  prismaClient,
+  agentHub,
+  stopSessionFn,
+  activeSessionFn,
+  broadcastFn,
+  logger = console,
+}: StopRouteDependencies) {
+  return async (req: any, res: Response) => {
+    const { sessionId, closePosition } = (req.body || {}) as { sessionId?: string; closePosition?: boolean };
+    const session = sessionId
+      ? await prismaClient.agentSession.findUnique({ where: { id: sessionId } })
+      : await activeSessionFn();
+
+    if (!session) {
+      return res.status(400).json({ error: 'no_active_session' });
+    }
+
+    let closeError: unknown;
+    if (closePosition) {
+      try {
+        await agentHub.closeNow(session.id);
+      } catch (error) {
+        closeError = error;
+        logger.error?.(`❌ Failed to close active position for session ${session.id}:`, error);
+      }
+    }
+
+    await stopSessionFn(session.id);
+    broadcastFn('session', { ...session, stoppedAt: new Date().toISOString() }, session.symbol, session.id);
+    await agentHub.halt(session.id);
+
+    if (closeError) {
+      return res.status(500).json({
+        ok: false,
+        error: 'close_failed',
+        sessionId: session.id,
+        message: closeError instanceof Error ? closeError.message : String(closeError),
+      });
+    }
+
+    return res.json({ ok: true });
+  };
+}
+
+router.post(
+  '/stop',
+  createStopRouteHandler({
+    prismaClient: prisma,
+    agentHub: AgentHub,
+    stopSessionFn: stopSession,
+    activeSessionFn: activeSession,
+    broadcastFn: broadcast,
+  }),
+);
 
 router.post('/stop-all', authenticateUser, requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
   try {
