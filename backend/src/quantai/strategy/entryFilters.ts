@@ -30,12 +30,14 @@ export class EntryFilters {
       symbol?: string | null;
       aggressiveness?: string | null;
       atrBaselinePct?: number | null;
+      volatilityProfile?: string | null;
     } = {},
   ): EntryEvaluation {
     const reasons: Record<string, string> = {};
     let ok = true;
 
     const tier = opts.tier ?? null;
+    const volatilityProfile = opts.volatilityProfile ? opts.volatilityProfile.toUpperCase() : null;
 
     const baseMinRr = opts.minRr ?? this.cfg.minRr;
     let minAdx = this.cfg.minAdx;
@@ -75,6 +77,41 @@ export class EntryFilters {
       }
       if (tierOverride.spreadAtrRatioLimit != null) {
         spreadAtrRatioLimit = tierOverride.spreadAtrRatioLimit;
+      }
+    }
+
+    let profileOverride;
+    if (volatilityProfile) {
+      const candidates = new Set<string>([volatilityProfile]);
+      if (volatilityProfile.endsWith('_VOLATILITY')) {
+        candidates.add(volatilityProfile.replace(/_VOLATILITY$/, ''));
+      } else {
+        candidates.add(`${volatilityProfile}_VOLATILITY`);
+      }
+      for (const key of candidates) {
+        const override = this.cfg.volatilityProfileOverrides?.[key];
+        if (override) {
+          profileOverride = override;
+          break;
+        }
+      }
+    }
+
+    if (profileOverride) {
+      if (profileOverride.minDollarVolume != null) {
+        minDollarVolume = profileOverride.minDollarVolume;
+      }
+      if (profileOverride.minAtrPct != null) {
+        minAtrPct = profileOverride.minAtrPct;
+      }
+      if (profileOverride.maxAtrPct != null) {
+        maxAtrPct = Math.min(maxAtrPct, profileOverride.maxAtrPct);
+      }
+      if (profileOverride.minAdx != null) {
+        minAdx = Math.max(0, profileOverride.minAdx);
+      }
+      if (profileOverride.spreadAtrRatioLimit != null) {
+        spreadAtrRatioLimit = profileOverride.spreadAtrRatioLimit;
       }
     }
 

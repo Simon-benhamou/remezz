@@ -2,6 +2,7 @@ import { prisma } from '../db/client.js';
 import { broadcast } from '../ws/hub.js';
 import { recomputeKpi } from '../metrics/kpi.js';
 import { finalizeDecisionOutcome } from '../learning/decisionMemory.js';
+import type { CircuitBreakerState } from '../quantai/index.js';
 
 export async function recordEnter(params: {
   sessionId: string;
@@ -119,6 +120,71 @@ export async function loadActivePosition(sessionId: string) {
     where: { sessionId, qty: { gt: 0 } },
     orderBy: { openedAt: 'desc' },
   });
+}
+
+function serializeCircuitBreakerState(state: CircuitBreakerState) {
+  return {
+    consecutiveLosses: state.consecutiveLosses,
+    tradesToday: state.tradesToday,
+    equityStartDay: state.equityStartDay,
+    cooldownUntil: state.cooldownUntil ? state.cooldownUntil.toISOString() : null,
+    lastTradeDay: state.lastTradeDay,
+    dayStartAt: state.dayStartAt ? state.dayStartAt.toISOString() : null,
+  };
+}
+
+function deserializeCircuitBreakerState(raw: any): CircuitBreakerState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const toNumber = (value: any, fallback = 0) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  };
+  const toDate = (value: any) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  return {
+    consecutiveLosses: Math.max(0, Math.floor(toNumber((raw as any).consecutiveLosses, 0))),
+    tradesToday: Math.max(0, Math.floor(toNumber((raw as any).tradesToday, 0))),
+    equityStartDay: (raw as any).equityStartDay != null && Number.isFinite(Number((raw as any).equityStartDay))
+      ? Number((raw as any).equityStartDay)
+      : null,
+    cooldownUntil: toDate((raw as any).cooldownUntil),
+    lastTradeDay: (raw as any).lastTradeDay != null && Number.isFinite(Number((raw as any).lastTradeDay))
+      ? Math.floor(Number((raw as any).lastTradeDay))
+      : null,
+    dayStartAt: toDate((raw as any).dayStartAt),
+  };
+}
+
+export async function loadCircuitBreakerState(sessionId: string): Promise<CircuitBreakerState | null> {
+  if (!sessionId) return null;
+  try {
+    const row = await prisma.agentOpsTelemetry.findUnique({
+      where: { sessionId },
+      select: { circuitState: true },
+    });
+    if (!row?.circuitState) return null;
+    return deserializeCircuitBreakerState(row.circuitState);
+  } catch (error) {
+    console.warn('Failed to load circuit breaker state:', error);
+    return null;
+  }
+}
+
+export async function persistCircuitBreakerState(sessionId: string, state: CircuitBreakerState): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const payload = serializeCircuitBreakerState(state);
+    await prisma.agentOpsTelemetry.upsert({
+      where: { sessionId },
+      update: { circuitState: payload },
+      create: { sessionId, circuitState: payload },
+    });
+  } catch (error) {
+    console.warn('Failed to persist circuit breaker state:', error);
+  }
 }
 
 type ProtectiveSnapshot = {

@@ -1,6 +1,6 @@
 export { getQuantAIConfig, reloadQuantAIConfig } from './config.js';
 export { CircuitBreaker } from './risk/circuitBreaker.js';
-export type { CircuitBreakerDecision } from './risk/circuitBreaker.js';
+export type { CircuitBreakerDecision, CircuitBreakerState, CircuitBreakerOptions } from './risk/circuitBreaker.js';
 export { PositionSizer } from './risk/positionSizing.js';
 export { EntryFilters } from './strategy/entryFilters.js';
 export { computeInitialBracket, maybeAdjustOrExit } from './strategy/exitManager.js';

@@ -37,6 +37,14 @@ export type QuantAIEntryFilterTierOverride = Partial<EntryFilterThresholds> & {
   spreadAtrRatioLimit?: number;
 };
 
+export type QuantAIVolatilityProfileOverride = {
+  minDollarVolume?: number;
+  minAtrPct?: number;
+  maxAtrPct?: number;
+  minAdx?: number;
+  spreadAtrRatioLimit?: number;
+};
+
 export type QuantAIEntryFilterDynamicConfig = {
   baselineAtrMultiplier?: number;
   atrHighVolThresholdPct?: number;
@@ -60,6 +68,7 @@ export type QuantAIEntryFilterDynamicConfig = {
 export type QuantAIEntryFilterConfig = EntryFilterThresholds & {
   tierOverrides?: Record<string, QuantAIEntryFilterTierOverride>;
   dynamic?: QuantAIEntryFilterDynamicConfig;
+  volatilityProfileOverrides?: Record<string, QuantAIVolatilityProfileOverride>;
 };
 
 export type QuantAIExitConfig = {
@@ -144,6 +153,28 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         maxAtrPct: 9,
         spreadAtrRatioLimit: 0.4,
       },
+    },
+    volatilityProfileOverrides: {
+      HIGH_VOLATILITY: {
+        minDollarVolume: 300_000,
+        minAtrPct: 0.12,
+        spreadAtrRatioLimit: 0.45,
+      },
+      EXTREME_VOLATILITY: {
+        minDollarVolume: 400_000,
+        minAtrPct: 0.18,
+        maxAtrPct: 10,
+        minAdx: 10,
+      },
+      LOW_VOLATILITY: {
+        minDollarVolume: 800_000,
+        minAtrPct: 0.2,
+        maxAtrPct: 5,
+        minAdx: 16,
+        spreadAtrRatioLimit: 0.3,
+      },
+      MODERATE_VOLATILITY: {},
+      MODERATE: {},
     },
     dynamic: {
       baselineAtrMultiplier: 0.6,
