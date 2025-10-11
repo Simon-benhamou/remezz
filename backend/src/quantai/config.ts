@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { parse as parseYaml } from 'yaml';
+import { load as loadYaml } from 'js-yaml';
 
 export type QuantAIRiskConfig = {
   maxConsecutiveLosses: number;
@@ -181,7 +181,7 @@ function readConfigFile(): QuantAIConfig {
       return cachedConfig;
     }
     const file = fs.readFileSync(configPath, 'utf8');
-    const raw = parseYaml(file) as Record<string, unknown>;
+    const raw = (loadYaml(file) || {}) as Record<string, unknown>;
     const config: QuantAIConfig = {
       risk: normalizeRisk(raw?.risk),
       feesSlippage: normalizeFees(raw?.fees_slippage ?? raw?.feesSlippage),

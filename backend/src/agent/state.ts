@@ -3642,10 +3642,48 @@ export class ReboundRejectionAgent {
     const thresholds = this.effectiveEntryThresholds();
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
+    const quantFilters = this.quantConfig?.filters;
+
+    if (quantFilters) {
+      if (Number.isFinite(quantFilters.minAtrPct)) {
+        const cfgAtr = Math.max(0.05, Number(quantFilters.minAtrPct));
+        minAtr = Math.min(minAtr, cfgAtr);
+      }
+      if (Number.isFinite(quantFilters.minRr)) {
+        // when the RR gate is strict we can afford to relax slope a little bit
+        const rrTightness = Math.max(1, Number(quantFilters.minRr));
+        const relaxedSlope = Math.max(0.04, minSlopeAbsPct * (rrTightness >= 1.5 ? 0.75 : 0.85));
+        minSlopeAbsPct = Math.min(minSlopeAbsPct, relaxedSlope);
+      } else {
+        minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
+      }
+    } else {
+      minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
+    }
     const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
     if (playbook === 'momentum_breakout') {
       minAtr *= 1.15; // demand more volatility for breakout setups
       minSlopeAbsPct *= 1.05;
+    }
+
+    const adxValue = Number((snap as any)?.adx14 ?? 0);
+    const baseAdxRequirement = this.plan?.bias === 'short'
+      ? thresholds.ENTRY_SHORT_MIN_ADX
+      : thresholds.ENTRY_LONG_MIN_ADX;
+    const minAdxRequired = quantFilters && Number.isFinite(quantFilters.minAdx)
+      ? Math.min(baseAdxRequirement, Number(quantFilters.minAdx))
+      : baseAdxRequirement;
+
+    if (adxValue > 0 && adxValue < minAdxRequired) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_gate',
+        message: 'adx_too_low',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { adx: adxValue, min: minAdxRequired, reason: reasonHint },
+      });
+      return false;
     }
 
     const circuitProbe = this.circuitBreaker.canOpenTrade(new Date(), this.lastKnownEquityUsd);
