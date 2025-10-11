@@ -65,7 +65,7 @@ export function useDashboard() {
 
   const loadOpsEvents = useCallback(async () => {
     try {
-      const data = await api.getOpsEvents();
+      const data = await api.getOpsEvents(20);
       setOpsEvents(data);
     } catch (error) {
       console.error('Failed to load ops events:', error);
@@ -107,10 +107,19 @@ export function useDashboard() {
     return () => clearInterval(interval);
   }, [mode]); // Suppression des dépendances functions pour éviter boucles
 
-  // Load other data on mount (une seule fois)
+  // Load metrics/events on mount and whenever mode changes
   useEffect(() => {
     loadOpsMetrics();
-    loadOpsEvents();  
+    loadOpsEvents();
+  }, [mode, loadOpsMetrics, loadOpsEvents]);
+
+  // Auto-refresh ops metrics/events every 15 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadOpsMetrics();
+      void loadOpsEvents();
+    }, 15000);
+    return () => clearInterval(interval);
   }, [loadOpsMetrics, loadOpsEvents]);
 
   // Initial load pour le mode courant

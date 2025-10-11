@@ -21,7 +21,7 @@ import { loadActivePosition, recordEnter, recordExit } from './persistence.js';
 import { PlanJson } from './planSchema.js';
 import { ValidatedPlan, validatePlan } from './validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, maybeAdjustOrExit, computeInitialBracket } from '../quantai/index.js';
-import type { CircuitBreakerDecision } from '../quantai/index.js';
+import type { CircuitBreakerDecision, ExitArchetype } from '../quantai/index.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -65,6 +65,7 @@ export type ActivePosition = {
   partialInfo?: { ts: number; price: number } | null;
   initialStopDistance?: number;
   hitTargets?: number[];
+  archetype?: ExitArchetype;
 };
 
 type ProtectiveSnapshot = {
@@ -404,6 +405,7 @@ export class ReboundRejectionAgent {
             breakeven: entry,
             partialInfo: null,
             initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
+            archetype: (this.plan?.plan?.meta?.playbook || this.regime?.playbook) === 'momentum_breakout' ? 'impulse' : 'reversal',
           } as any;
           this.state = 'MANAGE';
           broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
@@ -724,6 +726,7 @@ export class ReboundRejectionAgent {
     const qualityPoints = Object.values(qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
     const mode = this.profile?.aggressiveness || 'reactive';
     const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const quantArchetype: ExitArchetype = playbook === 'momentum_breakout' ? 'impulse' : 'reversal';
     const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
     const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
     const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
@@ -806,7 +809,13 @@ export class ReboundRejectionAgent {
     const atrForBracket = typeof (snap as any)?.atr14 === 'number' ? Number((snap as any).atr14) : this.plan.atr;
     if (atrForBracket && atrForBracket > 0) {
       try {
-        const bracket = computeInitialBracket(entry, atrForBracket, side === 'buy' ? 'long' : 'short', this.quantConfig.exits);
+        const bracket = computeInitialBracket(
+          entry,
+          atrForBracket,
+          side === 'buy' ? 'long' : 'short',
+          this.quantConfig.exits,
+          quantArchetype,
+        );
         const quantStop = round4(bracket.stop);
         const quantDistance = Math.abs(entry - quantStop);
         if (quantDistance > this.plan.stopDistance) {
@@ -1359,6 +1368,7 @@ export class ReboundRejectionAgent {
       partialInfo: null,
       initialStopDistance,
       hitTargets: [],
+      archetype: quantArchetype,
     };
     this.circuitBreaker.onBeforeOpen(new Date(openedAt), this.lastKnownEquityUsd);
     this.syncCircuitBreakerTelemetry();
@@ -5352,6 +5362,10 @@ export class ReboundRejectionAgent {
       const openedAt = persistedPosition.openedAt.getTime();
       const now = Date.now();
 
+      const restoredArchetype: ExitArchetype = (this.plan?.plan?.meta?.playbook || this.regime?.playbook) === 'momentum_breakout'
+        ? 'impulse'
+        : 'reversal';
+
       this.pos = {
         side,
         entry,
@@ -5369,6 +5383,7 @@ export class ReboundRejectionAgent {
         breakeven: entry,
         partialInfo: null,
         initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
+        archetype: restoredArchetype,
       };
 
       // Update agent state
@@ -5496,6 +5511,7 @@ export class ReboundRejectionAgent {
 
     const tradeSide: 'long' | 'short' = this.pos.side === 'buy' ? 'long' : 'short';
     const hitTargets = new Set<number>(this.pos.hitTargets ?? []);
+    const minutesOpen = (Date.now() - this.pos.openedAt) / 60000;
     const directive = maybeAdjustOrExit({
       side: tradeSide,
       entryPrice: this.pos.entry,
@@ -5507,6 +5523,8 @@ export class ReboundRejectionAgent {
       cmf: typeof (snap as any)?.cmf20 === 'number' ? Number((snap as any).cmf20) : null,
       cfg: this.quantConfig.exits,
       alreadyTriggeredTargets: hitTargets,
+      archetype: this.pos.archetype,
+      minutesOpen,
     });
 
     if (directive.action === 'exit') {

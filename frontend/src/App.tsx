@@ -10,20 +10,20 @@ import BacklogPage from './pages/BacklogPage';
 import ExecutionLedgerPage from './pages/ExecutionLedgerPage';
 import IntelligencePage from './pages/IntelligencePage';
 import LoginPage from './pages/LoginPage';
-import MissionControlPage from './pages/MissionControlPage';
+import OperationsDashboardPage from './pages/OperationsDashboardPage';
 import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
 import { useAppStore } from './store';
 
 const resolveActiveMenuKey = (pathname: string) => {
-  if (pathname.startsWith('/mission-control')) return '/mission-control';
+  if (pathname.startsWith('/operations') || pathname.startsWith('/mission-control')) return '/operations';
   if (pathname.startsWith('/agents/')) return '/agents';
   if (pathname.startsWith('/agents')) return '/agents';
   if (pathname.startsWith('/ledger')) return '/ledger';
   if (pathname.startsWith('/intelligence')) return '/intelligence';
   if (pathname.startsWith('/backlog')) return '/backlog';
-  return '/mission-control';
+  return '/operations';
 };
 
   const { Header, Content, Footer } = Layout;
@@ -70,7 +70,7 @@ function AppInner(){
   const activeMenuKey = resolveActiveMenuKey(location.pathname);
 
   const menuItems = [
-    { key: '/mission-control', label: 'Mission Control', icon: <AreaChartOutlined /> },
+    { key: '/operations', label: 'Operations', icon: <AreaChartOutlined /> },
     { key: '/agents', label: 'Agents', icon: <ControlOutlined /> },
     { key: '/ledger', label: 'Execution Ledger', icon: <ReadOutlined /> },
     { key: '/intelligence', label: 'Intelligence', icon: <BulbOutlined /> },
@@ -235,14 +235,15 @@ function AppInner(){
           background: '#fafafa'
         }}>
           <Routes>
-            <Route path='/' element={<Navigate to='/mission-control' replace />} />
-            <Route path='/mission-control' element={<MissionControlPage />} />
+            <Route path='/' element={<Navigate to='/operations' replace />} />
+            <Route path='/operations' element={<OperationsDashboardPage />} />
+            <Route path='/mission-control' element={<Navigate to='/operations' replace />} />
             <Route path='/agents/:sessionId' element={<SessionCockpitPage />} />
             <Route path='/agents' element={<SessionsPage />} />
             <Route path='/ledger' element={<ExecutionLedgerPage />} />
             <Route path='/intelligence' element={<IntelligencePage />} />
             <Route path='/backlog' element={<BacklogPage />} />
-            <Route path='*' element={<Navigate to='/mission-control' replace />} />
+            <Route path='*' element={<Navigate to='/operations' replace />} />
           </Routes>
         </Content>
         <Footer style={{ 
