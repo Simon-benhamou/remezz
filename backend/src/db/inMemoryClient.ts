@@ -238,6 +238,7 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     sessionId: randomUUID(),
     tradeCount24h: 0,
     blockedByVos: false,
+    circuitState: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   }),

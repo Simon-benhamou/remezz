@@ -19,11 +19,11 @@ import { getConfig, getModeParams } from '../utils/env.js';
 import { computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
 import { applyHysteresis, blendRR, DEFAULT_RR_EXPECTANCY_CONFIG, resolveRrExpectancyConfig, rrMinFromWinrate, type RRExpectancyConfig } from '../risk/rrExpectancy.js';
 import { broadcast } from '../ws/hub.js';
-import { loadActivePosition, recordEnter, recordExit } from './persistence.js';
+import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, persistCircuitBreakerState } from './persistence.js';
 import { PlanJson } from './planSchema.js';
 import { ValidatedPlan, validatePlan } from './validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, maybeAdjustOrExit, computeInitialBracket } from '../quantai/index.js';
-import type { CircuitBreakerDecision, ExitArchetype } from '../quantai/index.js';
+import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../quantai/index.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -276,7 +276,7 @@ export class ReboundRejectionAgent {
   private performanceMetrics: PerformanceMetrics | null = null;
   private strategyPerformance: Map<string, StrategyPerformance> = new Map();
   private quantConfig = getQuantAIConfig();
-  private circuitBreaker = new CircuitBreaker(this.quantConfig.risk);
+  private circuitBreaker = this.createCircuitBreaker();
   private entryFilters = new EntryFilters(this.quantConfig.filters);
   private positionSizer = new PositionSizer(this.quantConfig.risk.baseRiskPerTradePct);
   private lastKnownEquityUsd = 0;
@@ -291,6 +291,20 @@ export class ReboundRejectionAgent {
     mode: 'base' | 'dynamic';
     hysteresisApplied: boolean;
   } | null = null;
+
+  private createCircuitBreaker(initialState?: Partial<CircuitBreakerState> | null): CircuitBreaker {
+    return new CircuitBreaker(this.quantConfig.risk, {
+      initialState,
+      onStateChange: (state) => this.handleCircuitBreakerStateChange(state),
+    });
+  }
+
+  private handleCircuitBreakerStateChange(state: CircuitBreakerState): Promise<void> | void {
+    if (!this.sessionId) return;
+    return persistCircuitBreakerState(this.sessionId, state).catch((error) => {
+      console.warn(`Failed to persist circuit breaker state for session ${this.sessionId}:`, error);
+    });
+  }
 
   async activate(profile: ActivationProfile) {
     // PREFLIGHT
@@ -309,7 +323,23 @@ export class ReboundRejectionAgent {
         minRr: this.rrExpectancyConfig.rrBaseMin,
       },
     };
-    this.circuitBreaker = new CircuitBreaker(this.quantConfig.risk);
+    let restoredCircuit: CircuitBreakerState | null = null;
+    if (this.sessionId) {
+      try {
+        restoredCircuit = await loadCircuitBreakerState(this.sessionId);
+        if (restoredCircuit) {
+          console.log(
+            `♻️ Restored circuit breaker state for ${this.sessionId}: ${restoredCircuit.consecutiveLosses} losses, ${restoredCircuit.tradesToday} trades today`,
+          );
+        }
+      } catch (error) {
+        console.warn(`Failed to load circuit breaker state for session ${this.sessionId}:`, error);
+      }
+    }
+    this.circuitBreaker = this.createCircuitBreaker(restoredCircuit ?? undefined);
+    if (this.sessionId && !restoredCircuit) {
+      void this.handleCircuitBreakerStateChange(this.circuitBreaker.getState());
+    }
     this.entryFilters = new EntryFilters(this.quantConfig.filters);
     this.positionSizer = new PositionSizer(this.quantConfig.risk.baseRiskPerTradePct);
     this.lastKnownEquityUsd = 0;
@@ -804,25 +834,53 @@ export class ReboundRejectionAgent {
     
     // Check quality score (allows trading with 2-3 filters passing instead of requiring all 5)
     const qualityFilters = this.getQualityFiltersDiagnostics(snap);
-    const qualityPoints = Object.values(qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
     const mode = this.profile?.aggressiveness || 'reactive';
     const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
     const quantArchetype: ExitArchetype = playbook === 'momentum_breakout' ? 'impulse' : 'reversal';
     const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
     const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
     const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
-    
-    if (qualityPoints < minTradingPoints) {
+    const qualityAssessment = this.assessQualityScore(qualityFilters, minTradingPoints);
+
+    if (!qualityAssessment.allow) {
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
         message: 'quality_score_insufficient',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
-        details: { qualityPoints, required: minTradingPoints, mode, filters: qualityFilters },
+        details: {
+          totalPoints: qualityAssessment.totalPoints,
+          effectivePoints: qualityAssessment.effectivePoints,
+          required: minTradingPoints,
+          bonus: qualityAssessment.bonus,
+          passCount: qualityAssessment.passCount,
+          failCount: qualityAssessment.failCount,
+          failingKeys: qualityAssessment.failingKeys,
+          mode,
+          filters: qualityFilters,
+        },
       });
       this.entering = false;
       return;
+    }
+
+    if (qualityAssessment.compensated) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'quality_filter',
+        message: 'quality_score_compensated',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          totalPoints: qualityAssessment.totalPoints,
+          effectivePoints: qualityAssessment.effectivePoints,
+          bonus: qualityAssessment.bonus,
+          required: minTradingPoints,
+          failingKeys: qualityAssessment.failingKeys,
+          mode,
+        },
+      });
     }
     const bal = await this.broker.balance();
     const equityCandidate = Number.isFinite(bal?.equityUsd) ? Number(bal.equityUsd) : Number(bal?.freeUsd ?? this.profile.startBalanceUsd ?? 0);
@@ -930,6 +988,7 @@ export class ReboundRejectionAgent {
     const atrBaselinePct = planAtrPct ?? snapAtrPct ?? undefined;
     const tier = this.getTierForSymbol(this.profile.symbol);
     const aggressiveness = this.profile.aggressiveness || null;
+    const volatilityProfileForFilters = this.resolveVolatilityProfileForFilters();
     const rrSummaryParts = [
       `RR=${typeof firstR === 'number' ? firstR.toFixed(2) : 'n/a'}`,
       `RR_MIN_EFF=${rrSnapshot.effective.toFixed(2)}`,
@@ -961,6 +1020,7 @@ export class ReboundRejectionAgent {
       symbol: this.profile.symbol,
       aggressiveness,
       atrBaselinePct,
+      volatilityProfile: volatilityProfileForFilters,
     });
     if (!filterEvaluation.ok) {
       recordOpsEvent({
@@ -3722,18 +3782,18 @@ export class ReboundRejectionAgent {
    */
   private getEnhancedStaticThresholds(symbol: string): any {
     const profile = this.getCryptoVolatilityProfile(symbol);
-    
+
     return {
       rsiZones: {
-        long: profile === 'HIGH_VOLATILITY' ? { min: 35, max: 75 } : 
+        long: profile === 'HIGH_VOLATILITY' ? { min: 35, max: 75 } :
               profile === 'LOW_VOLATILITY' ? { min: 45, max: 65 } : { min: 40, max: 70 },
-        short: profile === 'HIGH_VOLATILITY' ? { min: 25, max: 65 } : 
+        short: profile === 'HIGH_VOLATILITY' ? { min: 25, max: 65 } :
                profile === 'LOW_VOLATILITY' ? { min: 35, max: 55 } : { min: 30, max: 60 }
       },
       adxThresholds: profile === 'HIGH_VOLATILITY' ? { minimum: 10, moderate: 16, strong: 22 } :
                      profile === 'LOW_VOLATILITY' ? { minimum: 15, moderate: 20, strong: 28 } :
                      { minimum: 12, moderate: 18, strong: 25 },
-      emaSpreadRequired: profile === 'HIGH_VOLATILITY' ? 0.75 : 
+      emaSpreadRequired: profile === 'HIGH_VOLATILITY' ? 0.75 :
                         profile === 'LOW_VOLATILITY' ? 0.35 : 0.5,
       volatilityProfile: profile,
       confidenceScore: 0.6
@@ -3743,10 +3803,41 @@ export class ReboundRejectionAgent {
   /**
    * Helper method to get crypto volatility profile (reusing existing logic)
    */
+  private normalizeVolatilityProfile(profile: string | null | undefined): string | null {
+    if (!profile || typeof profile !== 'string') return null;
+    const trimmed = profile.trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    if (upper === 'MODERATE') return 'MODERATE_VOLATILITY';
+    if (upper.endsWith('_VOLATILITY')) return upper;
+    if (['HIGH', 'LOW', 'EXTREME', 'MODERATE'].includes(upper)) {
+      return upper === 'MODERATE' ? 'MODERATE_VOLATILITY' : `${upper}_VOLATILITY`;
+    }
+    return upper;
+  }
+
+  private resolveVolatilityProfileForFilters(): string | null {
+    const metaProfile = this.normalizeVolatilityProfile((this.plan?.plan?.meta as any)?.volatilityProfile);
+    if (metaProfile) return metaProfile;
+
+    const regimeProfile = this.normalizeVolatilityProfile((this.regime as any)?.volatilityProfile);
+    if (regimeProfile) return regimeProfile;
+
+    if (this.profile?.symbol) {
+      const cached = ReboundRejectionAgent.dynamicThresholdsCache.get(this.profile.symbol);
+      const cachedProfile = this.normalizeVolatilityProfile(cached?.volatilityProfile);
+      if (cachedProfile) return cachedProfile;
+      const fallback = this.normalizeVolatilityProfile(this.getCryptoVolatilityProfile(this.profile.symbol));
+      if (fallback) return fallback;
+    }
+
+    return null;
+  }
+
   private getCryptoVolatilityProfile(symbol: string): 'HIGH_VOLATILITY' | 'MODERATE' | 'LOW_VOLATILITY' {
     const baseCrypto = symbol.split('/')[0]?.toUpperCase();
     if (!baseCrypto) return 'MODERATE';
-    
+
     // Reuse existing volatility classification logic
     if (['AVNT', 'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK'].includes(baseCrypto)) {
       return 'HIGH_VOLATILITY';
@@ -4853,20 +4944,26 @@ export class ReboundRejectionAgent {
     checks.qualityFilters = this.getQualityFiltersDiagnostics(snap);
 
     // Calculate overall quality score based on points (0-100) - allow trading with 3/5 filters (60 points)
-    const qualityPoints = Object.values(checks.qualityFilters).reduce((sum: number, filter: any) => sum + (filter.points || 0), 0);
-    const maxPoints = 100; // 5 filters × 20 points each
+    const qualityAssessment = this.assessQualityScore(checks.qualityFilters, 0);
+    const qualityPoints = qualityAssessment.totalPoints;
+    const maxPoints = qualityAssessment.maxPoints;
     // Mode-adaptive minimum quality score for diagnostics (aligned with env.ts)
     const mode = this.profile?.aggressiveness || 'reactive';
     const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
     const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
     const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
     const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
+    const evaluatedQuality = this.assessQualityScore(checks.qualityFilters, minTradingPoints);
     checks.qualityScore = {
       current: qualityPoints,
+      effective: evaluatedQuality.effectivePoints,
+      bonus: evaluatedQuality.bonus,
       required: minTradingPoints, // Changed from maxPoints to minTradingPoints
-      status: qualityPoints >= minTradingPoints ? 'PASS' : 'FAIL',
-      reason: `Quality score: ${qualityPoints}/${maxPoints} points (${Object.values(checks.qualityFilters).filter((f: any) => f.points > 0).length}/5 filters passed) - ${qualityPoints >= minTradingPoints ? 'Ready to trade' : 'Insufficient quality'}`,
-      code: qualityPoints >= minTradingPoints ? 'quality.score_ok' : 'quality.score_below_threshold',
+      status: evaluatedQuality.allow ? 'PASS' : 'FAIL',
+      reason: `Quality score: ${qualityPoints}/${maxPoints} points (effective ${evaluatedQuality.effectivePoints.toFixed(1)} with bonus ${evaluatedQuality.bonus.toFixed(1)}) - ${evaluatedQuality.allow ? 'Ready to trade' : 'Insufficient quality'}`,
+      code: evaluatedQuality.allow ? 'quality.score_ok' : 'quality.score_below_threshold',
+      compensated: evaluatedQuality.compensated,
+      failingKeys: evaluatedQuality.failingKeys,
     };
 
     return checks;
@@ -4929,6 +5026,75 @@ export class ReboundRejectionAgent {
       tp1ProfitPct,
       minProfitPct,
       dir,
+    };
+  }
+
+  private assessQualityScore(filters: Record<string, any>, minTradingPoints: number) {
+    const entries = Object.entries(filters ?? {});
+    let totalPoints = 0;
+    let maxPoints = 0;
+    let passCount = 0;
+    let failCount = 0;
+    let partialCount = 0;
+    const failingKeys: string[] = [];
+
+    for (const [key, filter] of entries) {
+      if (!filter || typeof filter !== 'object') continue;
+      const points = typeof (filter as any).points === 'number' ? Number((filter as any).points) : 0;
+      totalPoints += points;
+      maxPoints += 20;
+      const status = (filter as any).status;
+      if (status === 'PASS') passCount += 1;
+      else if (status === 'FAIL') {
+        failCount += 1;
+        failingKeys.push(key);
+      } else if (status === 'PARTIAL') {
+        partialCount += 1;
+      }
+    }
+
+    const momentumPass = filters?.momentum?.status === 'PASS';
+    const volatilityPass = filters?.volatility?.status === 'PASS';
+    const volumePass = filters?.volume?.status === 'PASS';
+    const trendPass = filters?.trendAlignment?.status === 'PASS';
+    const rsiPass = filters?.rsiPosition?.status === 'PASS';
+
+    let synergyBonus = 0;
+    if (momentumPass && volatilityPass && volumePass) synergyBonus += 6;
+    if (trendPass && momentumPass) synergyBonus += 3;
+    if (volumePass && trendPass) synergyBonus += 2;
+    if (rsiPass && trendPass && momentumPass) synergyBonus += 2;
+    if (partialCount > 0 && passCount >= 3) synergyBonus += 2;
+    synergyBonus = Math.min(10, synergyBonus);
+
+    const effectivePoints = totalPoints + synergyBonus;
+    const deficit = Math.max(0, minTradingPoints - totalPoints);
+    let allow = totalPoints >= minTradingPoints;
+    let compensated = false;
+
+    if (!allow && effectivePoints >= minTradingPoints) {
+      const allowVolatilityComp = failingKeys.length === 1 && failingKeys[0] === 'volatility' && momentumPass && volumePass && trendPass;
+      const allowTrendComp = failingKeys.length === 1 && failingKeys[0] === 'trendAlignment' && momentumPass && volatilityPass && volumePass;
+      const allowRsiComp = failingKeys.length === 1 && failingKeys[0] === 'rsiPosition' && momentumPass && trendPass;
+      const allowPartialComp = failingKeys.length === 0 && partialCount > 0;
+      if (deficit <= 8 && (allowVolatilityComp || allowTrendComp || allowRsiComp || allowPartialComp)) {
+        allow = true;
+        compensated = true;
+      }
+    }
+
+    return {
+      totalPoints,
+      maxPoints,
+      effectivePoints,
+      bonus: synergyBonus,
+      passCount,
+      failCount,
+      partialCount,
+      deficit,
+      allow,
+      compensated,
+      failingKeys,
     };
   }
 
