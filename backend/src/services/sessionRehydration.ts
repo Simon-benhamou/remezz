@@ -1,6 +1,7 @@
 import { prisma } from '../db/client.js';
 import { AgentHub } from '../agent/hub.js';
 import { hydrateActivationProfile } from '../agent/profilePersistence.js';
+import { extractPersistedPlan } from './planStore.js';
 
 export async function rehydrateActiveAgentSessions() {
   const activeSessions = await prisma.agentSession.findMany({
@@ -13,6 +14,7 @@ export async function rehydrateActiveAgentSessions() {
       userId: true,
       startedAt: true,
       profileJson: true,
+      planJson: true,
     },
   });
 
@@ -23,21 +25,54 @@ export async function rehydrateActiveAgentSessions() {
 
   console.log(`♻️ Rehydrating ${activeSessions.length} active agent session(s) from persistence...`);
   const failures: { id: string; reason: string }[] = [];
+  const successes: string[] = [];
 
   for (const session of activeSessions) {
     const profile = hydrateActivationProfile(session);
     if (!profile) {
       failures.push({ id: session.id, reason: 'incomplete_profile' });
       console.warn(`⚠️ Skipping agent ${session.id} (${session.symbol}) rehydration: persisted profile incomplete.`);
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: { needsAttention: true },
+      }).catch((error) => {
+        console.warn(`⚠️ Failed to flag session ${session.id} as needs_attention:`, error);
+      });
       continue;
     }
 
     try {
-      await AgentHub.activate(session.id, profile);
+      const agent = await AgentHub.activate(session.id, profile);
+
+      const persistedPlan = extractPersistedPlan((session as any).planJson);
+      if (persistedPlan && agent && typeof agent.propose === 'function') {
+        try {
+          await agent.propose(persistedPlan as any);
+          if (typeof agent.validateAndArm === 'function') {
+            await agent.validateAndArm();
+          }
+        } catch (error) {
+          console.warn(`⚠️ Failed to restore persisted plan for ${session.id}:`, error);
+        }
+      }
+
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: { needsAttention: false },
+      }).catch((error) => {
+        console.warn(`⚠️ Failed to clear needs_attention for ${session.id}:`, error);
+      });
+      successes.push(session.id);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       failures.push({ id: session.id, reason });
       console.error(`❌ Failed to rehydrate agent ${session.id} (${session.symbol}):`, error);
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: { needsAttention: true },
+      }).catch((updateError) => {
+        console.warn(`⚠️ Failed to mark session ${session.id} as needs_attention:`, updateError);
+      });
     }
   }
 
@@ -57,5 +92,9 @@ export async function rehydrateActiveAgentSessions() {
         .map((failure) => `${failure.id} (${failure.reason})`)
         .join('; ')}`,
     );
+  }
+
+  if (successes.length) {
+    console.log(`✅ Successfully rehydrated ${successes.length} session(s): ${successes.join(', ')}`);
   }
 }

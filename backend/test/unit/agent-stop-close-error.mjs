@@ -22,8 +22,9 @@ const mockPrisma = {
   agentSession: {
     findUnique: async ({ where }) => {
       assert.equal(where.id, 'sess-123');
-      return { id: 'sess-123', symbol: 'BTC/USDT:USDT' };
+      return { id: 'sess-123', symbol: 'BTC/USDT:USDT', userId: 'user-1' };
     },
+    findFirst: async () => null,
   },
 };
 
@@ -41,7 +42,6 @@ const handler = createStopRouteHandler({
   prismaClient: mockPrisma,
   agentHub: mockAgentHub,
   stopSessionFn: mockStopSession,
-  activeSessionFn: async () => null,
   broadcastFn: mockBroadcast,
   logger: {
     error: (...args) => {
@@ -50,14 +50,18 @@ const handler = createStopRouteHandler({
   },
 });
 
-const req = { body: { sessionId: 'sess-123', closePosition: true } };
+const req = {
+  body: { sessionId: 'sess-123', closePosition: true },
+  user: { id: 'user-1', role: 'trader', username: 'alice' },
+};
 const res = createMockResponse();
 
 await handler(req, res);
 
-assert.equal(res.statusCode, 500, 'Expected 500 status when closeNow fails');
-assert.equal(res.body?.error, 'close_failed', 'Response should include close failure indicator');
+assert.equal(res.statusCode, 502, 'Expected 502 status when closeNow fails');
+assert.equal(res.body?.code, 'agent_close_failed', 'Response should include close failure indicator');
 assert.equal(res.body?.sessionId, 'sess-123', 'Response should echo failed session id');
+assert.equal(res.body?.phase, 'closeNow');
 assert.equal(stopCalls, 1, 'stopSession should still be invoked');
 assert.equal(mockAgentHub.closeCalls, 1, 'AgentHub.closeNow should be attempted once');
 assert.equal(mockAgentHub.haltCalls, 1, 'AgentHub.halt should be called once');

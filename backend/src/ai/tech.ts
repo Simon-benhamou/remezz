@@ -3,7 +3,7 @@ import { getOHLCV, getOhlcvWarmupState } from '../data/market.js';
 import { ema, rsi, atr, adx } from '../data/indicators.js';
 import { classifyRegime, RegimeProfile } from './regime.js';
 import { getConfig } from '../utils/env.js';
-import { InsufficientDataError } from '../data/errors.js';
+import { InsufficientDataError, UnusableMarketDataError } from '../data/errors.js';
 
 export type TechnicalSnapshot = {
   symbol: string;
@@ -214,6 +214,57 @@ const SNAP_TTL_MS = 1000 * 15; // 15s
 const cacheKey = (symbol: string) => `snap_${symbol}`;
 const MIN_MEANINGFUL_VOLUME = 1e-8; // effectively zero in base currency units
 
+export async function ensureRecentVolumeIntegrity(options: {
+  symbol: string;
+  timeframe: string;
+  ohlcv: number[][];
+  minWindow: number;
+  threshold: number;
+  backfillAttempts: number;
+  refetch: (limit: number, attempt: number) => Promise<number[][]>;
+}): Promise<number[][]> {
+  const { symbol, timeframe, minWindow, threshold, backfillAttempts, refetch } = options;
+  let data = options.ohlcv;
+
+  const evaluate = (series: number[][]) => {
+    const window = series.slice(-Math.min(series.length, minWindow));
+    const volumes = window.map((row) => row?.[5]);
+    const zeroCount = volumes.filter((v) => v === 0).length;
+    const nullCount = volumes.filter((v) => v == null).length;
+    const invalidCount = zeroCount + nullCount;
+    const windowSize = window.length;
+    const ratio = windowSize > 0 ? invalidCount / windowSize : 0;
+    return { ratio, zeroCount, nullCount, windowSize };
+  };
+
+  let attempt = 0;
+  while (true) {
+    const { ratio, zeroCount, nullCount, windowSize } = evaluate(data);
+    if (windowSize === 0 || ratio < threshold) {
+      return data;
+    }
+
+    console.warn(
+      `[TECH SNAPSHOT] ${symbol}(${timeframe}): volume anomaly ratio=${ratio.toFixed(2)} zero=${zeroCount} null=${nullCount} attempt ${attempt}/${backfillAttempts}`,
+    );
+
+    if (attempt >= backfillAttempts) {
+      throw new UnusableMarketDataError('Recent OHLCV volume is unusable', {
+        symbol,
+        timeframe,
+        invalidRatio: ratio,
+        windowSize,
+        zeroCount,
+        nullCount,
+        attempts: attempt,
+      });
+    }
+
+    attempt += 1;
+    data = await refetch(data.length + 10, attempt);
+  }
+}
+
 // Full technical snapshot for a symbol:
 // - EMA20/50, RSI14, ATR14 & ATR%
 // - 24h S/R + swing S/R
@@ -230,7 +281,7 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const cfg = getConfig();
   const minBars15m = Math.max(50, Number(cfg.DIAGNOSTICS_MIN_BARS_15M || 100));
   // 15m window for reactivity (~2 days), 1h for pivots/daily
-  const o15 = await getOHLCV(symbol, '15m', Math.max(300, minBars15m), userId); // [ts, o, h, l, c, v]
+  let o15 = await getOHLCV(symbol, '15m', Math.max(300, minBars15m), userId); // [ts, o, h, l, c, v]
   if (!o15 || o15.length < minBars15m) {
     const warmup = getOhlcvWarmupState(symbol, '15m');
     throw new InsufficientDataError('Not enough data (15m)', {
@@ -244,8 +295,26 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     });
   }
 
+  const failFastThreshold = Math.max(0, Math.min(1, cfg.OHLCV_FAILFAST_THRESHOLD ?? 0.2));
+  const backfillRetry = Math.max(0, Math.floor(cfg.OHLCV_BACKFILL_RETRY ?? 1));
+  const MIN_VOLUME_WINDOW = 30;
+
+  o15 = await ensureRecentVolumeIntegrity({
+    symbol,
+    timeframe: '15m',
+    ohlcv: o15,
+    minWindow: MIN_VOLUME_WINDOW,
+    threshold: failFastThreshold,
+    backfillAttempts: backfillRetry,
+    async refetch(limit, attempt) {
+      const baseLimit = Math.max(300, minBars15m);
+      const computedLimit = Math.max(limit, baseLimit + attempt * 10);
+      return getOHLCV(symbol, '15m', computedLimit, userId);
+    },
+  });
+
   // 🔍 DEBUG RAW OHLCV: Compare avec API publique
-  console.log(`[RAW OHLCV DEBUG] ${symbol}: Last 5 candles from getOHLCV:`, 
+  console.log(`[RAW OHLCV DEBUG] ${symbol}: Last 5 candles from getOHLCV:`,
     o15.slice(-5).map(r => ({
       ts: new Date(r[0]).toISOString(),
       close: r[4],
