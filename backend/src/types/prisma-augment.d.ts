@@ -6,6 +6,7 @@ declare module '@prisma/client' {
     position: any;
     agentSession: any;
     order: any;
+    agentOpsTelemetry: any;
     sessionKpi: any;
     alert: any;
     strategy: any;
