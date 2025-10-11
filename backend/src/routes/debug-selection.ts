@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { ActivationProfile } from '../agent/state.js';
+import { DEFAULT_RR_EXPECTANCY_CONFIG } from '../risk/rrExpectancy.js';
 import { serializeActivationProfile } from '../agent/profilePersistence.js';
 import { getOptimizedCryptoList, getBestIntelligentOpportunity } from '../services/intelligentAgent.js';
 
@@ -94,6 +95,18 @@ router.post('/create-test-smart-agent', async (req, res) => {
       startBalanceUsd: 1000,
       budgetFraction: 1,
       aggressiveness: 'conservative',
+      rrFloor: DEFAULT_RR_EXPECTANCY_CONFIG.rrFloor,
+      rrCeil: DEFAULT_RR_EXPECTANCY_CONFIG.rrCeil,
+      rrBaseMin: DEFAULT_RR_EXPECTANCY_CONFIG.rrBaseMin,
+      rrExpectancy: {
+        enabled: DEFAULT_RR_EXPECTANCY_CONFIG.enabled,
+        minTrades: DEFAULT_RR_EXPECTANCY_CONFIG.minTrades,
+        lookbackDays: DEFAULT_RR_EXPECTANCY_CONFIG.lookbackDays,
+        decay: DEFAULT_RR_EXPECTANCY_CONFIG.decay,
+        safetyMult: DEFAULT_RR_EXPECTANCY_CONFIG.safetyMult,
+        blend: DEFAULT_RR_EXPECTANCY_CONFIG.blend,
+        hysteresis: DEFAULT_RR_EXPECTANCY_CONFIG.hysteresis,
+      },
     };
 
     const session = await startSession(
@@ -101,6 +114,13 @@ router.post('/create-test-smart-agent', async (req, res) => {
       'paper',
       1000,
       serializeActivationProfile(profile, { budgetPct: 100 }),
+      undefined,
+      {
+        rrFloor: profile.rrFloor,
+        rrCeil: profile.rrCeil,
+        rrBaseMin: profile.rrBaseMin,
+        rrExpectancy: profile.rrExpectancy,
+      }
     );
     
     console.log(`📋 Created session with ID: ${session.id}`);

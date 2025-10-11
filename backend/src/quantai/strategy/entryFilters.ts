@@ -18,7 +18,10 @@ export type EntryEvaluation = {
 export class EntryFilters {
   constructor(private readonly cfg: QuantAIEntryFilterConfig) {}
 
-  evaluateEntry(facts: EntryFacts): EntryEvaluation {
+  evaluateEntry(
+    facts: EntryFacts,
+    opts: { minRr?: number | null; rrSummary?: string } = {},
+  ): EntryEvaluation {
     const reasons: Record<string, string> = {};
     let ok = true;
 
@@ -61,11 +64,13 @@ export class EntryFilters {
     }
 
     const rr = facts.rrToTp1;
-    if (rr != null && rr < this.cfg.minRr) {
+    const rrThreshold = opts.minRr ?? this.cfg.minRr;
+    const summarySuffix = opts.rrSummary ? ` | ${opts.rrSummary}` : '';
+    if (rr != null && rrThreshold != null && rr < rrThreshold) {
       ok = false;
-      reasons.profitOk = `FAIL (RR=${rr.toFixed(2)} < ${this.cfg.minRr})`;
+      reasons.profitOk = `FAIL (RR=${rr.toFixed(2)} < ${rrThreshold.toFixed(2)})${summarySuffix}`;
     } else {
-      reasons.profitOk = 'OK';
+      reasons.profitOk = summarySuffix ? `OK${summarySuffix}` : 'OK';
     }
 
     if (this.cfg.useConfidenceFilter) {

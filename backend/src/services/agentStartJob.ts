@@ -24,6 +24,7 @@ import { getOhlcvWarmupState } from '../data/market.js';
 import { getUserCredentials } from './userCredentials.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
 import { resolveLeverageCap, type ResolvedLeverageCap } from '../risk/leverageCaps.js';
+import { DEFAULT_RR_EXPECTANCY_CONFIG } from '../risk/rrExpectancy.js';
 
 type AgentStartPhase =
   | 'queued'
@@ -528,6 +529,18 @@ async function createSession(
     sizingMode: config.rawPayload?.sizingMode,
     dynamicLeverage: config.rawPayload?.dynamicLeverage !== false,
     minLeverage,
+    rrFloor: DEFAULT_RR_EXPECTANCY_CONFIG.rrFloor,
+    rrCeil: DEFAULT_RR_EXPECTANCY_CONFIG.rrCeil,
+    rrBaseMin: DEFAULT_RR_EXPECTANCY_CONFIG.rrBaseMin,
+    rrExpectancy: {
+      enabled: DEFAULT_RR_EXPECTANCY_CONFIG.enabled,
+      minTrades: DEFAULT_RR_EXPECTANCY_CONFIG.minTrades,
+      lookbackDays: DEFAULT_RR_EXPECTANCY_CONFIG.lookbackDays,
+      decay: DEFAULT_RR_EXPECTANCY_CONFIG.decay,
+      safetyMult: DEFAULT_RR_EXPECTANCY_CONFIG.safetyMult,
+      blend: DEFAULT_RR_EXPECTANCY_CONFIG.blend,
+      hysteresis: DEFAULT_RR_EXPECTANCY_CONFIG.hysteresis,
+    },
   };
 
   const session = await startSession(
@@ -536,6 +549,12 @@ async function createSession(
     config.startBalanceUsd,
     serializeActivationProfile(activationProfile, { budgetPct: Math.round(config.budgetFraction * 100) }),
     userId,
+    {
+      rrFloor: activationProfile.rrFloor,
+      rrCeil: activationProfile.rrCeil,
+      rrBaseMin: activationProfile.rrBaseMin,
+      rrExpectancy: activationProfile.rrExpectancy,
+    }
   );
 
   await setActiveSession(session.id);

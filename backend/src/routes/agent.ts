@@ -27,6 +27,7 @@ import { stopSession, activeSession } from '../session/session.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { stopAllAgents } from '../services/stopAllAgents.js';
+import { resolveRrExpectancyConfig } from '../risk/rrExpectancy.js';
 
 export const router = Router();
 
@@ -158,6 +159,159 @@ router.post('/start-agent', authenticateUser, async (req: AuthenticatedRequest, 
   } catch (error) {
     handleCreationError(res, error);
   }
+});
+
+router.patch('/:id', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return securityErrorResponse(res, 'auth_required', 'Authentication required', 401);
+  }
+
+  const sessionId = String(req.params.id || '').trim();
+  if (!sessionId) {
+    return res.status(400).json({ ok: false, code: 'session_id_required', message: 'Session identifier is required' });
+  }
+
+  const session = await prisma.agentSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      id: true,
+      userId: true,
+      profileJson: true,
+      rrFloor: true,
+      rrCeil: true,
+      rrBaseMin: true,
+      rrExpectancy: true,
+    },
+  });
+
+  if (!session) {
+    return res.status(404).json({ ok: false, code: 'session_not_found', message: 'Session not found' });
+  }
+
+  if (!canAccessSessionOwner(session, req.user)) {
+    logUnauthorizedSessionAccess(console, { action: 'agent.patch_rr', sessionId, user: req.user });
+    return securityErrorResponse(res, 'session_forbidden', 'You are not allowed to modify this session', 403);
+  }
+
+  const body = (req.body || {}) as {
+    rrFloor?: number;
+    rrCeil?: number;
+    rrBaseMin?: number;
+    rrExpectancy?: {
+      enabled?: boolean;
+      minTrades?: number;
+      lookbackDays?: number;
+      decay?: number;
+      safetyMult?: number;
+      blend?: number;
+      hysteresis?: number;
+    };
+  };
+
+  const currentConfig = resolveRrExpectancyConfig({
+    rrFloor: session.rrFloor ?? undefined,
+    rrCeil: session.rrCeil ?? undefined,
+    rrBaseMin: session.rrBaseMin ?? undefined,
+    rrExpectancy: session.rrExpectancy ?? undefined,
+  });
+
+  const floorCandidate = body.rrFloor ?? currentConfig.rrFloor;
+  const ceilCandidate = body.rrCeil ?? currentConfig.rrCeil;
+  const baseCandidate = body.rrBaseMin ?? currentConfig.rrBaseMin;
+  if (floorCandidate < 0.5 || floorCandidate > 5) {
+    return res.status(400).json({ ok: false, code: 'invalid_rr_floor', message: 'rrFloor must be between 0.5 and 5.0' });
+  }
+  if (ceilCandidate <= floorCandidate || ceilCandidate > 5) {
+    return res.status(400).json({ ok: false, code: 'invalid_rr_ceil', message: 'rrCeil must be greater than rrFloor and ≤ 5.0' });
+  }
+  if (baseCandidate < floorCandidate || baseCandidate > ceilCandidate) {
+    return res.status(400).json({ ok: false, code: 'invalid_rr_base', message: 'rrBaseMin must lie between rrFloor and rrCeil' });
+  }
+
+  const expectancyPayload = body.rrExpectancy ?? {};
+  if (expectancyPayload.minTrades != null && expectancyPayload.minTrades < 1) {
+    return res.status(400).json({ ok: false, code: 'invalid_min_trades', message: 'minTrades must be ≥ 1' });
+  }
+  if (expectancyPayload.lookbackDays != null && expectancyPayload.lookbackDays < 1) {
+    return res.status(400).json({ ok: false, code: 'invalid_lookback_days', message: 'lookbackDays must be ≥ 1' });
+  }
+  if (expectancyPayload.decay != null && (expectancyPayload.decay <= 0 || expectancyPayload.decay > 1)) {
+    return res.status(400).json({ ok: false, code: 'invalid_decay', message: 'decay must be in (0, 1]' });
+  }
+  if (expectancyPayload.blend != null && (expectancyPayload.blend < 0 || expectancyPayload.blend > 1)) {
+    return res.status(400).json({ ok: false, code: 'invalid_blend', message: 'blend must be between 0 and 1' });
+  }
+  if (expectancyPayload.hysteresis != null && (expectancyPayload.hysteresis < 0 || expectancyPayload.hysteresis > 0.2)) {
+    return res.status(400).json({ ok: false, code: 'invalid_hysteresis', message: 'hysteresis must be between 0 and 0.2' });
+  }
+  if (expectancyPayload.safetyMult != null && (expectancyPayload.safetyMult <= 0 || expectancyPayload.safetyMult > 3)) {
+    return res.status(400).json({ ok: false, code: 'invalid_safety_mult', message: 'safetyMult must be > 0 and ≤ 3' });
+  }
+
+  const nextConfig = resolveRrExpectancyConfig({
+    rrFloor: floorCandidate,
+    rrCeil: ceilCandidate,
+    rrBaseMin: baseCandidate,
+    rrExpectancy: {
+      enabled: expectancyPayload.enabled ?? currentConfig.enabled,
+      minTrades: expectancyPayload.minTrades ?? currentConfig.minTrades,
+      lookbackDays: expectancyPayload.lookbackDays ?? currentConfig.lookbackDays,
+      decay: expectancyPayload.decay ?? currentConfig.decay,
+      safetyMult: expectancyPayload.safetyMult ?? currentConfig.safetyMult,
+      blend: expectancyPayload.blend ?? currentConfig.blend,
+      hysteresis: expectancyPayload.hysteresis ?? currentConfig.hysteresis,
+    },
+  });
+
+  const existingProfile = (session.profileJson as any) || {};
+  const updatedProfile = {
+    ...existingProfile,
+    rrFloor: nextConfig.rrFloor,
+    rrCeil: nextConfig.rrCeil,
+    rrBaseMin: nextConfig.rrBaseMin,
+    rrExpectancy: {
+      enabled: nextConfig.enabled,
+      minTrades: nextConfig.minTrades,
+      lookbackDays: nextConfig.lookbackDays,
+      decay: nextConfig.decay,
+      safetyMult: nextConfig.safetyMult,
+      blend: nextConfig.blend,
+      hysteresis: nextConfig.hysteresis,
+    },
+  };
+
+  await prisma.agentSession.update({
+    where: { id: sessionId },
+    data: {
+      rrFloor: nextConfig.rrFloor,
+      rrCeil: nextConfig.rrCeil,
+      rrBaseMin: nextConfig.rrBaseMin,
+      rrExpectancy: updatedProfile.rrExpectancy,
+      profileJson: updatedProfile,
+    },
+  });
+
+  const agent = AgentHub.get(sessionId);
+  if (agent && typeof agent.updateRrExpectancySettings === 'function') {
+    try {
+      agent.updateRrExpectancySettings({
+        rrFloor: nextConfig.rrFloor,
+        rrCeil: nextConfig.rrCeil,
+        rrBaseMin: nextConfig.rrBaseMin,
+        rrExpectancy: updatedProfile.rrExpectancy,
+      });
+    } catch (error) {
+      console.warn(`⚠️ Failed to update in-memory RR expectancy for session ${sessionId}:`, error);
+    }
+  }
+
+  return res.json({
+    ok: true,
+    rrFloor: nextConfig.rrFloor,
+    rrCeil: nextConfig.rrCeil,
+    rrBaseMin: nextConfig.rrBaseMin,
+    rrExpectancy: updatedProfile.rrExpectancy,
+  });
 });
 
 router.get('/start-status', authenticateUser, async (_req: AuthenticatedRequest, res) => {
@@ -672,12 +826,20 @@ router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) =>
 
   let sessionId = String(req.query.sessionId || '').trim();
   const isAdmin = isAdminUser(req.user);
-  let sessionRecord: { id: string; userId: string | null; profileJson: unknown } | null = null;
+  let sessionRecord: {
+    id: string;
+    userId: string | null;
+    profileJson: unknown;
+    rrFloor: number | null;
+    rrCeil: number | null;
+    rrBaseMin: number | null;
+    rrExpectancy: unknown;
+  } | null = null;
 
   if (sessionId) {
     sessionRecord = await prisma.agentSession.findUnique({
       where: { id: sessionId },
-      select: { id: true, userId: true, profileJson: true },
+      select: { id: true, userId: true, profileJson: true, rrFloor: true, rrCeil: true, rrBaseMin: true, rrExpectancy: true },
     });
     if (!sessionRecord) {
       return res.status(404).json({ ok: false, code: 'session_not_found', message: 'Session not found' });
@@ -692,7 +854,7 @@ router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) =>
         stoppedAt: null,
         ...(isAdmin ? {} : { userId: req.user.id }),
       },
-      select: { id: true, userId: true, profileJson: true },
+      select: { id: true, userId: true, profileJson: true, rrFloor: true, rrCeil: true, rrBaseMin: true, rrExpectancy: true },
       orderBy: { startedAt: 'desc' },
     });
     if (!sessionRecord) {
@@ -710,6 +872,26 @@ router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) =>
   if (!profile) {
     profile = (sessionRecord?.profileJson as any) || null;
   }
+  const rrConfig = resolveRrExpectancyConfig({
+    rrFloor: (profile as any)?.rrFloor ?? sessionRecord?.rrFloor ?? undefined,
+    rrCeil: (profile as any)?.rrCeil ?? sessionRecord?.rrCeil ?? undefined,
+    rrBaseMin: (profile as any)?.rrBaseMin ?? sessionRecord?.rrBaseMin ?? undefined,
+    rrExpectancy: (profile as any)?.rrExpectancy ?? sessionRecord?.rrExpectancy ?? undefined,
+  });
+  if (profile && typeof profile === 'object') {
+    (profile as any).rrFloor = rrConfig.rrFloor;
+    (profile as any).rrCeil = rrConfig.rrCeil;
+    (profile as any).rrBaseMin = rrConfig.rrBaseMin;
+    (profile as any).rrExpectancy = {
+      enabled: rrConfig.enabled,
+      minTrades: rrConfig.minTrades,
+      lookbackDays: rrConfig.lookbackDays,
+      decay: rrConfig.decay,
+      safetyMult: rrConfig.safetyMult,
+      blend: rrConfig.blend,
+      hysteresis: rrConfig.hysteresis,
+    };
+  }
 
   res.json({
     ok: true,
@@ -720,6 +902,18 @@ router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) =>
     pos: agent?.pos,
     balance,
     aiMetrics: await getAIMetrics(sessionId || undefined),
+    rrFloor: rrConfig.rrFloor,
+    rrCeil: rrConfig.rrCeil,
+    rrBaseMin: rrConfig.rrBaseMin,
+    rrExpectancy: {
+      enabled: rrConfig.enabled,
+      minTrades: rrConfig.minTrades,
+      lookbackDays: rrConfig.lookbackDays,
+      decay: rrConfig.decay,
+      safetyMult: rrConfig.safetyMult,
+      blend: rrConfig.blend,
+      hysteresis: rrConfig.hysteresis,
+    },
   });
 });
 
