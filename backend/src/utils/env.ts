@@ -76,6 +76,10 @@ export type Cfg = {
   ORDER_FILL_TIMEOUT_SEC: number;     // max seconds to wait for a live order to fill
   ORDER_FILL_POLL_MS: number;         // polling interval for fetchOrder
   ORDER_RETRY_MAX: number;            // how many times to retry a market order if not filled
+  ORDER_LIMIT_SPREAD_BPS: number;     // spread bps threshold to switch to limit orders
+  ORDER_TWAP_SPREAD_BPS: number;      // spread bps threshold to prefer TWAP execution
+  ORDER_MARKET_ATR_PCT: number;       // ATR% threshold to allow market execution even in wider spreads
+  ORDER_LIMIT_TIMEOUT_MS: number;     // how long to wait before falling back from limit to market
   // Liquidity/impact controls
   ORDER_MAX_IMPACT_PCT: number;       // max acceptable market impact for sizing/gating
   MIN_ORDER_NOTIONAL_USD: number;     // minimum order notional to execute
@@ -335,6 +339,12 @@ export function getConfig(): Cfg {
     MARGIN_CONCENTRATION_WARN_PCT: Number(e.MARGIN_CONCENTRATION_WARN_PCT || "35"),
     MARGIN_MONITOR_INTERVAL_MS: Number(e.MARGIN_MONITOR_INTERVAL_MS || "30000"),
     ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
+    ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
+    ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
+    ORDER_LIMIT_SPREAD_BPS: Number(e.ORDER_LIMIT_SPREAD_BPS || "12"),
+    ORDER_TWAP_SPREAD_BPS: Number(e.ORDER_TWAP_SPREAD_BPS || "20"),
+    ORDER_MARKET_ATR_PCT: Number(e.ORDER_MARKET_ATR_PCT || "4"),
+    ORDER_LIMIT_TIMEOUT_MS: Number(e.ORDER_LIMIT_TIMEOUT_MS || "4000"),
     // Crypto-specific optimizations
     MIN_PROFIT_PCT: Number(e.MIN_PROFIT_PCT || "0.3"),
     CRYPTO_VOLATILITY_MIN: Number(e.CRYPTO_VOLATILITY_MIN || "0.5"),
@@ -374,28 +384,26 @@ export function getConfig(): Cfg {
     TREND_FILTER_ENABLED: (e.TREND_FILTER_ENABLED || "false") === "true",
     TREND_FILTER_NEUTRAL_BAND_BPS: Number(e.TREND_FILTER_NEUTRAL_BAND_BPS || "15"),
     TREND_FILTER_LOOKBACK_MIN: Number(e.TREND_FILTER_LOOKBACK_MIN || "240"),
-  ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
-  ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
-  // Liquidity/impact controls
-  ORDER_MAX_IMPACT_PCT: Number(e.ORDER_MAX_IMPACT_PCT || "0.35"),
-  MIN_ORDER_NOTIONAL_USD: Number(e.MIN_ORDER_NOTIONAL_USD || "40"),
-  PAPER_LIQ_SIM_ENABLED: (e.PAPER_LIQ_SIM_ENABLED || "true") === "true",
-  PAPER_MAX_IMPACT_PCT: Number(e.PAPER_MAX_IMPACT_PCT || e.ORDER_MAX_IMPACT_PCT || "0.35"),
-  LIQUIDITY_MIN_15M_USD: Number(e.LIQUIDITY_MIN_15M_USD || "100000"),
-  LIQUIDITY_VOLUME_MULTIPLIER: Number(e.LIQUIDITY_VOLUME_MULTIPLIER || "30"),
-  LEVERAGE_CAP_DEFAULT: Number(e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "5"),
-  LEVERAGE_CAP_MAJOR: Number(e.LEVERAGE_CAP_MAJOR || e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "6"),
-  LEVERAGE_CAP_ALT: Number(e.LEVERAGE_CAP_ALT || e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "4"),
-  LEVERAGE_CAP_MEME: Number(
-    e.LEVERAGE_CAP_MEME
-      || e.LEVERAGE_CAP_DEFAULT
-      || Math.min(Number(e.DEFAULT_MAX_LEVERAGE || "3"), 3)
-  ),
-  // Anti-whale / manipulation filters
-  ANTI_WHALE_ENABLED: (e.ANTI_WHALE_ENABLED || "true") === "true",
-  ANTI_WHALE_VOL_SPIKE_MULT: Number(e.ANTI_WHALE_VOL_SPIKE_MULT || "2.2"),
-  ANTI_WHALE_ATR_PCT: Number(e.ANTI_WHALE_ATR_PCT || "2.0"),
-  ANTI_WHALE_MIN_ADX: Number(e.ANTI_WHALE_MIN_ADX || "18"),
+    // Liquidity/impact controls
+    ORDER_MAX_IMPACT_PCT: Number(e.ORDER_MAX_IMPACT_PCT || "0.35"),
+    MIN_ORDER_NOTIONAL_USD: Number(e.MIN_ORDER_NOTIONAL_USD || "40"),
+    PAPER_LIQ_SIM_ENABLED: (e.PAPER_LIQ_SIM_ENABLED || "true") === "true",
+    PAPER_MAX_IMPACT_PCT: Number(e.PAPER_MAX_IMPACT_PCT || e.ORDER_MAX_IMPACT_PCT || "0.35"),
+    LIQUIDITY_MIN_15M_USD: Number(e.LIQUIDITY_MIN_15M_USD || "100000"),
+    LIQUIDITY_VOLUME_MULTIPLIER: Number(e.LIQUIDITY_VOLUME_MULTIPLIER || "30"),
+    LEVERAGE_CAP_DEFAULT: Number(e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "5"),
+    LEVERAGE_CAP_MAJOR: Number(e.LEVERAGE_CAP_MAJOR || e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "6"),
+    LEVERAGE_CAP_ALT: Number(e.LEVERAGE_CAP_ALT || e.LEVERAGE_CAP_DEFAULT || e.DEFAULT_MAX_LEVERAGE || "4"),
+    LEVERAGE_CAP_MEME: Number(
+      e.LEVERAGE_CAP_MEME
+        || e.LEVERAGE_CAP_DEFAULT
+        || Math.min(Number(e.DEFAULT_MAX_LEVERAGE || "3"), 3)
+    ),
+    // Anti-whale / manipulation filters
+    ANTI_WHALE_ENABLED: (e.ANTI_WHALE_ENABLED || "true") === "true",
+    ANTI_WHALE_VOL_SPIKE_MULT: Number(e.ANTI_WHALE_VOL_SPIKE_MULT || "2.2"),
+    ANTI_WHALE_ATR_PCT: Number(e.ANTI_WHALE_ATR_PCT || "2.0"),
+    ANTI_WHALE_MIN_ADX: Number(e.ANTI_WHALE_MIN_ADX || "18"),
     PLAN_LLM_COOLDOWN_MIN: Number(e.PLAN_LLM_COOLDOWN_MIN || "5"), // réduit de 15 à 5 min
     PLAN_LLM_MAX_PER_HOUR: Number(e.PLAN_LLM_MAX_PER_HOUR || "10"), // augmenté de 3 à 10
     COOLDOWN_CONFIDENCE_MIN: Number(e.COOLDOWN_CONFIDENCE_MIN || "0.6"),

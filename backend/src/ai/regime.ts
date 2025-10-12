@@ -16,6 +16,7 @@ export type RegimeProfile = {
   trendStrength: number;
   playbook: 'mean_reversion'|'momentum_breakout'|'standby';
   shouldTrade: boolean;
+  volatilityProfile?: 'LOW' | 'MEDIUM' | 'HIGH' | 'EXTREME' | string;
   riskModifier?: RegimeRiskModifier;
   notes?: string;
 };
@@ -127,6 +128,9 @@ export function classifyRegime(snap: TechnicalSnapshot & {
     trendStrength,
     playbook,
     shouldTrade,
+    volatilityProfile: volatility === 'high'
+      ? (catastrophicVol ? 'EXTREME' : 'HIGH')
+      : volatility.toUpperCase(),
     riskModifier,
     notes: !shouldTrade
       ? 'Extreme volatility and structural breakdown detected; standing by.'
