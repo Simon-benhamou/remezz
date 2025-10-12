@@ -120,6 +120,53 @@ export type QuantAIConfig = {
   regime: QuantAIRegimeConfig;
 };
 
+const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
+  baselineAtrMultiplier: 0.45,
+  atrHighVolThresholdPct: 1.5,
+  atrHighVolMinAdx: 18,
+  atrExtremeVolThresholdPct: 4.0,
+  atrExtremeVolMinAdx: 22,
+  atrExtremeVolMinRr: 1.35,
+  atrMaxPct: 12,
+  atrMaxPctByTier: {
+    tier1: 6,
+    tier2: 9,
+    tier3: 12,
+  },
+  spreadAtrRatioLimit: 0.55,
+  confidenceTierAdjustments: {
+    tier3: 0.02,
+  },
+  rrTierAdjustments: {
+    tier1: 0.15,
+    tier3: 0.2,
+  },
+  drySpell: {
+    enabled: true,
+    minMinutesWithoutTrade: 30,
+    rejectionsForStep: 4,
+    relaxationStepMinutes: 20,
+    maxSteps: 4,
+    minAdxDeltaPerStep: -2.5,
+    minRrDeltaPerStep: -0.15,
+    confidenceDeltaPerStep: -0.03,
+    minAtrPctDeltaPerStep: -0.04,
+  },
+};
+
+DEFAULT_DYNAMIC_FILTERS.aggressivenessAdjustments = {
+  conservative: {
+    minRrDelta: 0.05,
+    confidenceDelta: 0.015,
+  },
+  aggressive: {
+    minRrDelta: -0.25,
+    minAdxDelta: -3,
+    confidenceDelta: -0.04,
+    minAtrPctDelta: -0.06,
+  },
+};
+
 const DEFAULT_CONFIG: QuantAIConfig = {
   risk: {
     maxConsecutiveLosses: 3,
@@ -191,62 +238,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       MODERATE_VOLATILITY: {},
       MODERATE: {},
     },
-    dynamic: {
-      baselineAtrMultiplier: 0.45,
-      atrHighVolThresholdPct: 1.5,
-      atrHighVolMinAdx: 18,
-      atrExtremeVolThresholdPct: 4.0,
-      atrExtremeVolMinAdx: 22,
-      atrExtremeVolMinRr: 1.35,
-      atrMaxPct: 12,
-      atrMaxPctByTier: {
-        tier1: 6,
-        tier2: 9,
-        tier3: 12,
-      },
-      spreadAtrRatioLimit: 0.55,
-      confidenceTierAdjustments: {
-        tier3: 0.02,
-      },
-      rrTierAdjustments: {
-        tier1: 0.15,
-        tier3: 0.2,
-      },
-      drySpell: {
-        enabled: true,
-        minMinutesWithoutTrade: 30,
-        rejectionsForStep: 4,
-        relaxationStepMinutes: 20,
-        maxSteps: 4,
-        minAdxDeltaPerStep: -2.5,
-        minRrDeltaPerStep: -0.15,
-        confidenceDeltaPerStep: -0.03,
-        minAtrPctDeltaPerStep: -0.04,
-      },
-      drySpell: {
-        enabled: true,
-        minMinutesWithoutTrade: 45,
-        rejectionsForStep: 6,
-        relaxationStepMinutes: 30,
-        maxSteps: 3,
-        minAdxDeltaPerStep: -1.5,
-        minRrDeltaPerStep: -0.1,
-        confidenceDeltaPerStep: -0.02,
-        minAtrPctDeltaPerStep: -0.03,
-      },
-      aggressivenessAdjustments: {
-        conservative: {
-          minRrDelta: 0.05,
-          confidenceDelta: 0.015,
-        },
-        aggressive: {
-          minRrDelta: -0.25,
-          minAdxDelta: -3,
-          confidenceDelta: -0.04,
-          minAtrPctDelta: -0.06,
-        },
-      },
-    },
+    dynamic: DEFAULT_DYNAMIC_FILTERS,
   },
   exits: {
     atrPeriod: 14,
