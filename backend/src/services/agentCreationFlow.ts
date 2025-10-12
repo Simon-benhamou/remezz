@@ -11,6 +11,7 @@ import {
   type IntelligentAnalysis,
   getOptimizedCryptoList,
   getActiveAgentCountForSymbol,
+  normalizeUnifiedSymbol,
 } from './intelligentAgent.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
 import { prisma } from '../db/client.js';
@@ -122,6 +123,7 @@ type AgentCreationContext = {
   normalized: NormalizedStartConfig;
   universe: UniverseBuildResult | null;
   selection: AgentCreationSelectionSummary;
+  reservationToken?: string;
   session?: Awaited<ReturnType<typeof startSession>>;
   activation?: AgentActivationResult;
   createdAt: number;
@@ -130,10 +132,66 @@ type AgentCreationContext = {
 const CONTEXT_TTL_MS = 10 * 60 * 1000;
 const contexts = new Map<string, AgentCreationContext>();
 
+const SMART_SELECTION_RESERVATION_TTL_MS = 5 * 60 * 1000;
+const smartSelectionReservations = new Map<string, { symbol: string; expiresAt: number }>();
+
+function normalizeReservationSymbol(symbol: string): string {
+  if (!symbol) return symbol;
+  try {
+    return normalizeUnifiedSymbol(symbol).toUpperCase();
+  } catch {
+    return symbol.toUpperCase();
+  }
+}
+
+function cleanupSmartReservations() {
+  const now = Date.now();
+  for (const [token, entry] of smartSelectionReservations.entries()) {
+    if (!entry || !entry.symbol || entry.expiresAt <= now) {
+      smartSelectionReservations.delete(token);
+    }
+  }
+}
+
+function releaseSmartReservation(token?: string) {
+  if (!token) return;
+  smartSelectionReservations.delete(token);
+}
+
+function tryReserveSmartSymbol(symbol: string, token?: string): boolean {
+  if (!token) return true;
+  cleanupSmartReservations();
+  const normalized = normalizeReservationSymbol(symbol);
+  for (const [existingToken, entry] of smartSelectionReservations.entries()) {
+    if (existingToken !== token && entry.symbol === normalized) {
+      return false;
+    }
+  }
+  smartSelectionReservations.set(token, {
+    symbol: normalized,
+    expiresAt: Date.now() + SMART_SELECTION_RESERVATION_TTL_MS,
+  });
+  return true;
+}
+
+function isSmartSymbolReserved(symbol: string, excludeToken?: string): boolean {
+  cleanupSmartReservations();
+  if (!symbol) return false;
+  const normalized = normalizeReservationSymbol(symbol);
+  for (const [token, entry] of smartSelectionReservations.entries()) {
+    if (token === excludeToken) continue;
+    if (entry.symbol === normalized) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function cleanupContexts() {
   const now = Date.now();
   for (const [id, ctx] of contexts.entries()) {
     if (now - ctx.createdAt > CONTEXT_TTL_MS) {
+      releaseSmartReservation(ctx.reservationToken);
       contexts.delete(id);
     }
   }
@@ -153,7 +211,12 @@ function getContextOrThrow(creationId: string): AgentCreationContext {
 export async function prepareAgentCreation(payload: StartPayload, userId?: string | null) {
   const normalized = await validateAndNormalize(payload, userId);
   const universe = normalized.isSmartAgent ? await buildSmartUniverse(normalized) : null;
-  const selection = await selectSymbol(normalized, universe);
+  const reservationToken = normalized.isSmartAgent ? randomUUID() : undefined;
+  const selection = await selectSymbol(normalized, universe, { reservationToken });
+
+  if (reservationToken && !selection.autoSelected) {
+    releaseSmartReservation(reservationToken);
+  }
 
   const creationId = randomUUID();
   const ctx: AgentCreationContext = {
@@ -163,9 +226,14 @@ export async function prepareAgentCreation(payload: StartPayload, userId?: strin
     normalized,
     universe,
     selection,
+    reservationToken: selection.autoSelected ? reservationToken : undefined,
     createdAt: Date.now(),
   };
   contexts.set(creationId, ctx);
+
+  if (!selection.autoSelected) {
+    ctx.reservationToken = undefined;
+  }
 
   return {
     creationId,
@@ -199,23 +267,35 @@ export async function createSessionFromPrepared(creationId: string, opts?: { sym
     throw new PhaseError('start.universe_conflict', 'No symbol provided for session creation', {});
   }
 
-  const { session, symbol: resolvedSymbol } = await createSessionRecord(ctx.normalized, symbol, ctx.userId);
-  ctx.session = session;
-  ctx.selection = {
-    ...ctx.selection,
-    symbol: resolvedSymbol,
-  };
+  try {
+    const { session, symbol: resolvedSymbol } = await createSessionRecord(
+      ctx.normalized,
+      symbol,
+      ctx.userId
+    );
+    ctx.session = session;
+    ctx.selection = {
+      ...ctx.selection,
+      symbol: resolvedSymbol,
+    };
+    releaseSmartReservation(ctx.reservationToken);
+    ctx.reservationToken = undefined;
 
-  return {
-    creationId,
-    sessionId: session.id,
-    symbol: resolvedSymbol,
-    profile: {
-      mode: session.mode,
-      startBalanceUsd: session.startBalanceUsd,
-      aggressiveness: (session as any).profileJson?.aggressiveness,
-    },
-  };
+    return {
+      creationId,
+      sessionId: session.id,
+      symbol: resolvedSymbol,
+      profile: {
+        mode: session.mode,
+        startBalanceUsd: session.startBalanceUsd,
+        aggressiveness: (session as any).profileJson?.aggressiveness,
+      },
+    };
+  } catch (error) {
+    releaseSmartReservation(ctx.reservationToken);
+    ctx.reservationToken = undefined;
+    throw error;
+  }
 }
 
 export async function activatePreparedAgent(creationId: string) {
@@ -236,6 +316,8 @@ export async function activatePreparedAgent(creationId: string) {
   ctx.activation = activation;
   const warmup = gatherWarmupDiagnostics(ctx.session.symbol);
 
+  releaseSmartReservation(ctx.reservationToken);
+  ctx.reservationToken = undefined;
   contexts.delete(creationId);
 
   return {
@@ -275,13 +357,23 @@ export async function startAgentCreation(
   let selection: AgentCreationSelectionSummary;
   let sessionRecord: Awaited<ReturnType<typeof startSession>>;
   let activation: AgentActivationResult;
+  let selectionReservationToken: string | undefined;
+  let hasActiveReservation = false;
 
   const stepStart = Date.now();
   report('select_symbol', { status: 'running', startedAt: stepStart });
   try {
     normalized = await validateAndNormalize(payload, userId);
     universe = normalized.isSmartAgent ? await buildSmartUniverse(normalized) : null;
-    selection = await selectSymbol(normalized, universe);
+    selectionReservationToken = normalized.isSmartAgent ? randomUUID() : undefined;
+    selection = await selectSymbol(normalized, universe, {
+      reservationToken: selectionReservationToken,
+    });
+    hasActiveReservation = !!(selectionReservationToken && selection.autoSelected);
+    if (selectionReservationToken && !selection.autoSelected) {
+      releaseSmartReservation(selectionReservationToken);
+      selectionReservationToken = undefined;
+    }
     const finishedAt = Date.now();
     report('select_symbol', {
       status: 'completed',
@@ -291,6 +383,11 @@ export async function startAgentCreation(
     });
   } catch (error) {
     const finishedAt = Date.now();
+    if (hasActiveReservation && selectionReservationToken) {
+      releaseSmartReservation(selectionReservationToken);
+      hasActiveReservation = false;
+      selectionReservationToken = undefined;
+    }
     report('select_symbol', {
       status: 'failed',
       finishedAt,
@@ -308,6 +405,11 @@ export async function startAgentCreation(
       ...selection!,
       symbol: created.symbol,
     };
+    if (hasActiveReservation && selectionReservationToken) {
+      releaseSmartReservation(selectionReservationToken);
+      hasActiveReservation = false;
+      selectionReservationToken = undefined;
+    }
     const finishedAt = Date.now();
     report('create_session', {
       status: 'completed',
@@ -317,6 +419,11 @@ export async function startAgentCreation(
     });
   } catch (error) {
     const finishedAt = Date.now();
+    if (hasActiveReservation && selectionReservationToken) {
+      releaseSmartReservation(selectionReservationToken);
+      hasActiveReservation = false;
+      selectionReservationToken = undefined;
+    }
     report('create_session', {
       status: 'failed',
       finishedAt,
@@ -571,9 +678,11 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
 
 async function selectSymbol(
   config: NormalizedStartConfig,
-  universe: UniverseBuildResult | null
+  universe: UniverseBuildResult | null,
+  options?: { reservationToken?: string }
 ): Promise<AgentCreationSelectionSummary> {
   let symbol = config.symbol;
+  const reservationToken = options?.reservationToken;
   const decisionLog: AgentCreationLogEntry[] = [];
   const summary: AgentCreationSelectionSummary = {
     symbol: symbol || '',
@@ -608,36 +717,78 @@ async function selectSymbol(
     }
 
     if (!symbol && prefetched) {
-      const usage = await getActiveAgentCountForSymbol(prefetched.symbol);
-      if (usage === 0) {
-        symbol = prefetched.symbol;
-        summary.autoSelected = true;
-        summary.source = 'prefetched';
-        decisionLog.push({
-          timestamp: Date.now(),
-          level: 'success',
-          message: `Prefetched opportunity ${prefetched.symbol} selected`,
-          context: 'selection',
-        });
-      } else {
-        console.log(
-          `🚫 Prefetched opportunity ${prefetched.symbol} already has ${usage} active agent(s) – seeking alternative`
-        );
+      if (reservationToken && isSmartSymbolReserved(prefetched.symbol, reservationToken)) {
         decisionLog.push({
           timestamp: Date.now(),
           level: 'warn',
-          message: `Prefetched opportunity ${prefetched.symbol} already used`,
+          message: `Prefetched opportunity ${prefetched.symbol} temporarily reserved by another creation`,
           context: 'selection',
-          meta: { activeAgents: usage },
+          meta: { reason: 'reserved' },
         });
+      } else {
+        const usage = await getActiveAgentCountForSymbol(prefetched.symbol);
+        if (usage === 0) {
+          const reserved = tryReserveSmartSymbol(prefetched.symbol, reservationToken);
+          if (reserved) {
+            symbol = prefetched.symbol;
+            summary.autoSelected = true;
+            summary.source = 'prefetched';
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'success',
+              message: `Prefetched opportunity ${prefetched.symbol} selected`,
+              context: 'selection',
+            });
+          } else {
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'warn',
+              message: `Prefetched opportunity ${prefetched.symbol} reserved in parallel`,
+              context: 'selection',
+              meta: { reason: 'reservation_conflict' },
+            });
+          }
+        } else {
+          console.log(
+            `🚫 Prefetched opportunity ${prefetched.symbol} already has ${usage} active agent(s) – seeking alternative`
+          );
+          decisionLog.push({
+            timestamp: Date.now(),
+            level: 'warn',
+            message: `Prefetched opportunity ${prefetched.symbol} already used`,
+            context: 'selection',
+            meta: { activeAgents: usage },
+          });
+        }
       }
     }
 
     if (!symbol) {
       for (const candidate of candidates) {
         try {
+          if (reservationToken && isSmartSymbolReserved(candidate, reservationToken)) {
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'info',
+              message: `Skipped ${candidate} because it is reserved by another creation`,
+              context: 'selection',
+              meta: { reason: 'reserved' },
+            });
+            continue;
+          }
           const usage = await getActiveAgentCountForSymbol(candidate);
           if (usage === 0) {
+            const reserved = tryReserveSmartSymbol(candidate, reservationToken);
+            if (!reserved) {
+              decisionLog.push({
+                timestamp: Date.now(),
+                level: 'info',
+                message: `Skipped ${candidate} due to simultaneous reservation conflict`,
+                context: 'selection',
+                meta: { reason: 'reservation_conflict' },
+              });
+              continue;
+            }
             symbol = candidate;
             summary.autoSelected = true;
             summary.source = 'candidate';

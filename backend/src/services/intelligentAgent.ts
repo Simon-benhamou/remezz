@@ -537,7 +537,7 @@ function extractPerpBase(sym: string): string | null {
   return upper.includes('/') ? upper.split('/')[0] : upper;
 }
 
-function normalizeUnifiedSymbol(sym: string): string {
+export function normalizeUnifiedSymbol(sym: string): string {
   try {
     const base = extractPerpBase(sym);
     if (!base) return sym;
