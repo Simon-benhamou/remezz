@@ -294,6 +294,16 @@ export class ReboundRejectionAgent {
     lastTradeTs: 0,
   };
 
+  private filterRejectionStats: {
+    total: number;
+    failCounts: Map<string, number>;
+    lastLogTs: number;
+  } = {
+    total: 0,
+    failCounts: new Map<string, number>(),
+    lastLogTs: 0,
+  };
+
   private trendReversalContext: { direction: 'bullish' | 'bearish'; count: number; lastSignal: number } | null = null;
 
   // Advanced performance tracking by strategy and bias
@@ -376,6 +386,7 @@ export class ReboundRejectionAgent {
       lastStepTs: 0,
       lastTradeTs: Date.now(),
     };
+    this.resetFilterRejectionStats(this.drySpellState.lastTradeTs);
     profile.rrFloor = this.rrExpectancyConfig.rrFloor;
     profile.rrCeil = this.rrExpectancyConfig.rrCeil;
     profile.rrBaseMin = this.rrExpectancyConfig.rrBaseMin;
@@ -5714,6 +5725,7 @@ export class ReboundRejectionAgent {
   }
 
   private registerFilterRejection(reasons?: Record<string, string>): void {
+    this.recordFilterRejectionStats(reasons);
     this.drySpellState.rejections = Math.max(0, this.drySpellState.rejections + 1);
     const cfg = this.quantConfig.filters.dynamic?.drySpell;
     if (!cfg || !cfg.enabled) return;
@@ -5759,6 +5771,57 @@ export class ReboundRejectionAgent {
     });
   }
 
+  private recordFilterRejectionStats(reasons?: Record<string, string> | null, now = Date.now()): void {
+    const stats = this.filterRejectionStats;
+    stats.total += 1;
+    let recorded = false;
+    if (reasons) {
+      for (const [key, value] of Object.entries(reasons)) {
+        if (typeof value === 'string' && value.toUpperCase().startsWith('FAIL')) {
+          stats.failCounts.set(key, (stats.failCounts.get(key) ?? 0) + 1);
+          recorded = true;
+        }
+      }
+    }
+    if (!recorded) {
+      stats.failCounts.set('unknown', (stats.failCounts.get('unknown') ?? 0) + 1);
+    }
+
+    const threshold = 8;
+    const intervalMs = 10 * 60 * 1000;
+    const timeSinceLog = stats.lastLogTs > 0 ? now - stats.lastLogTs : 0;
+    const shouldLog = stats.total >= threshold || (stats.total > 0 && timeSinceLog >= intervalMs);
+    if (!shouldLog) return;
+
+    const topReasons = Array.from(stats.failCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([reason, count]) => ({ reason, count }));
+
+    try {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_filters',
+        message: 'entry_filter_rejections_summary',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          total: stats.total,
+          topReasons,
+          drySpellSteps: this.drySpellState.steps,
+          rejectionsSinceTrade: this.drySpellState.rejections,
+          minutesSinceLastTrade: this.drySpellState.lastTradeTs
+            ? Number(((now - this.drySpellState.lastTradeTs) / 60000).toFixed(1))
+            : null,
+        },
+      });
+    } catch {}
+
+    stats.total = 0;
+    stats.failCounts.clear();
+    stats.lastLogTs = now;
+  }
+
   private registerFilterPass(): void {
     if (this.drySpellState.rejections > 0) {
       this.drySpellState.rejections = Math.max(0, this.drySpellState.rejections - 1);
@@ -5772,6 +5835,13 @@ export class ReboundRejectionAgent {
       lastStepTs: 0,
       lastTradeTs: now,
     };
+    this.resetFilterRejectionStats(now);
+  }
+
+  private resetFilterRejectionStats(now = Date.now()): void {
+    this.filterRejectionStats.total = 0;
+    this.filterRejectionStats.failCounts.clear();
+    this.filterRejectionStats.lastLogTs = now;
   }
 
   private buildWarmupDiagnostics(error: InsufficientDataError): any {
