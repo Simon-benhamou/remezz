@@ -316,6 +316,25 @@ export class ReboundRejectionAgent {
   private lastZoneRecalcTime = 0;
   private lastZoneCheckTime = 0;
   private breakoutModeActive = false;
+  private runtimeEntryZone: { from: number; to: number; mid: number } | null = null;
+  private runtimeZoneDiagnostics: {
+    anchor: number;
+    k: number;
+    atr: number;
+    atrPct: number;
+    atrPctBase: number;
+    hysteresis: number;
+    breakoutDistancePct: number;
+    breakoutActive: boolean;
+    breakoutDirection: 'above' | 'below' | 'none';
+  } | null = null;
+  private lastBiasRouting: {
+    playbook: string;
+    planBias: string;
+    adaptiveBias: string;
+    activeBias: string;
+    reason: string | null;
+  } | null = null;
 
   private drySpellState: {
     rejections: number;
@@ -881,14 +900,67 @@ export class ReboundRejectionAgent {
       }
     }
 
+    const planBias = this.plan.bias;
+    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const validationSnap = snapForValidation!;
+    const { zone: adaptiveZone, meta: entryZoneMeta } = this.computeVolatilityAdjustedZone(validationSnap, {
+      planZone: this.plan.zone,
+      bias: planBias,
+      playbook,
+      price: validationSnap.last,
+    });
+    const zoneMinValidation = Math.min(adaptiveZone.from, adaptiveZone.to);
+    const zoneMaxValidation = Math.max(adaptiveZone.from, adaptiveZone.to);
+    const inZoneValidation = validationSnap.last >= zoneMinValidation - entryZoneMeta.hysteresis &&
+      validationSnap.last <= zoneMaxValidation + entryZoneMeta.hysteresis;
+    const overHighValidation = planBias === 'long' && validationSnap.last > zoneMaxValidation
+      ? (validationSnap.last - zoneMaxValidation) / validationSnap.last
+      : 0;
+    const underLowValidation = planBias === 'short' && validationSnap.last < zoneMinValidation
+      ? (zoneMinValidation - validationSnap.last) / validationSnap.last
+      : 0;
+    const breakoutToleranceValidation = 0.25 * (entryZoneMeta.atrPct / 100);
+    const momentumGateValidation = this.lastMomentumGateResult ?? this.evaluateMomentumGates(validationSnap, 'enter', false);
+    const breakoutActiveValidation = playbook === 'momentum_breakout'
+      && momentumGateValidation.status !== 'FAIL'
+      && ((planBias === 'long' && overHighValidation > 0 && overHighValidation <= breakoutToleranceValidation)
+        || (planBias === 'short' && underLowValidation > 0 && underLowValidation <= breakoutToleranceValidation));
+    const breakoutDistanceValidation = planBias === 'long'
+      ? overHighValidation
+      : planBias === 'short'
+        ? underLowValidation
+        : 0;
+    this.plan.zone = adaptiveZone;
+    this.runtimeEntryZone = adaptiveZone;
+    this.runtimeZoneDiagnostics = {
+      anchor: entryZoneMeta.anchor,
+      k: entryZoneMeta.k,
+      atr: entryZoneMeta.atr,
+      atrPct: entryZoneMeta.atrPct,
+      atrPctBase: entryZoneMeta.atrPctBase,
+      hysteresis: entryZoneMeta.hysteresis,
+      breakoutDistancePct: breakoutDistanceValidation,
+      breakoutActive: breakoutActiveValidation,
+      breakoutDirection: breakoutActiveValidation
+        ? planBias === 'long' ? 'above' : 'below'
+        : 'none',
+    };
+    const usingBreakoutEntry = breakoutActiveValidation && !inZoneValidation;
+
     if (this.plan.bias !== 'none' && !this.gapEntryOverride) {
-      const confirmation = this.confirmEntrySignal(snapForValidation, mktPrice, this.plan.zone, this.plan.bias);
-      if (!confirmation.confirmed) {
-        console.log(`Entry not confirmed: ${confirmation.reason}`);
-        this.noteSignalDrop('bias_confirmation_failed', 'info', { reason: confirmation.reason });
-        return; // Skip entry until all confirmations pass
+      if (usingBreakoutEntry) {
+        console.log('Breakout entry: skipping pullback confirmation due to momentum strength');
+      } else {
+        const confirmation = this.confirmEntrySignal(validationSnap, mktPrice, adaptiveZone, this.plan.bias);
+        if (!confirmation.confirmed) {
+          console.log(`Entry not confirmed: ${confirmation.reason}`);
+          this.noteSignalDrop('bias_confirmation_failed', 'info', { reason: confirmation.reason });
+          return; // Skip entry until all confirmations pass
+        }
+        console.log(`Entry confirmed: ${confirmation.reason}`);
       }
-      console.log(`Entry confirmed: ${confirmation.reason}`);
     }
     
     // Reset gap override after use
@@ -928,6 +1000,30 @@ export class ReboundRejectionAgent {
         return;
       }
     }
+    if (snap) {
+      const zoneLowNow = Math.min(adaptiveZone.from, adaptiveZone.to);
+      const zoneHighNow = Math.max(adaptiveZone.from, adaptiveZone.to);
+      const priceNow = snap.last;
+      const breakoutDistanceNow = planBias === 'long' && priceNow > zoneHighNow
+        ? (priceNow - zoneHighNow) / priceNow
+        : planBias === 'short' && priceNow < zoneLowNow
+          ? (zoneLowNow - priceNow) / priceNow
+          : 0;
+      if (this.runtimeZoneDiagnostics) {
+        this.runtimeZoneDiagnostics = {
+          ...this.runtimeZoneDiagnostics,
+          breakoutDistancePct: breakoutDistanceNow,
+          breakoutActive: usingBreakoutEntry || breakoutDistanceNow > 0,
+          breakoutDirection: (usingBreakoutEntry || breakoutDistanceNow > 0)
+            ? planBias === 'long'
+              ? 'above'
+              : planBias === 'short'
+                ? 'below'
+                : 'none'
+            : this.runtimeZoneDiagnostics.breakoutDirection,
+        };
+      }
+    }
     // Enhanced quality filters for 60%+ win rate
     // Use quality score system instead of binary pass/fail per filter
     if (!snap) {
@@ -950,9 +1046,6 @@ export class ReboundRejectionAgent {
     // Check quality score (allows trading with 2-3 filters passing instead of requiring all 5)
     const qualityFilters = this.getQualityFiltersDiagnostics(snap);
     const mode = this.profile?.aggressiveness || 'reactive';
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
     const normalizedPlaybook = String(playbook);
     const quantArchetype: ExitArchetype = playbook === 'momentum_breakout' ? 'impulse' : 'reversal';
     const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
@@ -1048,6 +1141,28 @@ export class ReboundRejectionAgent {
     if (playbook === 'momentum_breakout') {
       effectiveStopDistance *= 0.85;
     }
+    const atrForBreakoutStops = entryZoneMeta.atr > 0 ? entryZoneMeta.atr : Math.max(1e-8, Math.abs(mktPrice - adaptiveZone.mid));
+    if (usingBreakoutEntry) {
+      const adxValue = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
+      const atrMultiple = adxValue >= 35 ? 2.0 : adxValue >= 25 ? 1.75 : 1.5;
+      const atrStopDistance = atrForBreakoutStops * atrMultiple;
+      const ema20Now = Number((snap as any)?.ema20 ?? validationSnap.ema20 ?? mktPrice);
+      if (planBias === 'long') {
+        const emaStopPrice = Number.isFinite(ema20Now) && ema20Now > 0
+          ? Math.min(ema20Now, mktPrice - atrStopDistance)
+          : mktPrice - atrStopDistance;
+        const breakoutStopPrice = Math.min(mktPrice - atrStopDistance, emaStopPrice);
+        const breakoutDistance = Math.max(1e-8, mktPrice - breakoutStopPrice);
+        effectiveStopDistance = Math.max(effectiveStopDistance, breakoutDistance);
+      } else if (planBias === 'short') {
+        const emaStopPrice = Number.isFinite(ema20Now) && ema20Now > 0
+          ? Math.max(ema20Now, mktPrice + atrStopDistance)
+          : mktPrice + atrStopDistance;
+        const breakoutStopPrice = Math.max(mktPrice + atrStopDistance, emaStopPrice);
+        const breakoutDistance = Math.max(1e-8, breakoutStopPrice - mktPrice);
+        effectiveStopDistance = Math.max(effectiveStopDistance, breakoutDistance);
+      }
+    }
     if (regimeRisk?.stopMultiplier != null && Number.isFinite(regimeRisk.stopMultiplier)) {
       const clamp = Math.max(0.4, Math.min(1, regimeRisk.stopMultiplier));
       effectiveStopDistance *= clamp;
@@ -1092,6 +1207,31 @@ export class ReboundRejectionAgent {
       } catch (error) {
         console.debug('QuantAI bracket computation failed:', error);
       }
+    }
+    if (usingBreakoutEntry) {
+      const atrPctFraction = entryZoneMeta.atrPct / 100;
+      const breakoutTargetPct = Math.min(0.01, Math.max(0.006, atrPctFraction > 0 ? atrPctFraction * 0.5 : 0.008));
+      const breakoutTpPrice = this.plan.bias === 'long'
+        ? round4(entry * (1 + breakoutTargetPct))
+        : round4(entry * (1 - breakoutTargetPct));
+      tp[0] = breakoutTpPrice;
+      const stopForR = Math.max(this.plan.stopDistance, Math.abs(entry - stop), 1e-8);
+      const breakoutR = Math.max(0.4, Math.min(1.5, Math.abs(breakoutTpPrice - entry) / stopForR));
+      if (Array.isArray(this.plan.rPrices) && this.plan.rPrices.length > 0) {
+        this.plan.rPrices[0] = { r: roundR(breakoutR), price: breakoutTpPrice };
+      }
+      this.plan.plan.risk.tp = this.plan.rPrices.map(({ r }) => ({ type: 'R', value: r }));
+      recordOpsEvent({
+        level: 'info',
+        source: 'take_profit',
+        message: 'breakout_tp_adjusted',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          breakoutTargetPct: breakoutTargetPct * 100,
+          breakoutR,
+        },
+      });
     }
     const riskAbs = Math.max(1e-9, Math.abs(entry - stop));
     const firstR = this.plan.rPrices?.[0]?.r ?? (tp.length > 0 ? Math.abs(tp[0] - entry) / riskAbs : undefined);
@@ -1330,6 +1470,25 @@ export class ReboundRejectionAgent {
         details: {
           multiplier: circuitSizeMultiplier,
           adjustedRiskPct: dynamicRiskPct,
+        },
+      });
+    }
+
+    if (usingBreakoutEntry) {
+      const adxValue = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
+      let breakoutSizeMultiplier = adxValue >= 35 ? 0.85 : adxValue >= 25 ? 0.8 : 0.75;
+      breakoutSizeMultiplier = Math.max(0.7, Math.min(0.85, breakoutSizeMultiplier));
+      dynamicRiskPct *= breakoutSizeMultiplier;
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'breakout_size_adjustment',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          breakoutSizeMultiplier,
+          adx: adxValue,
+          breakoutDistancePct: breakoutDistanceValidation,
         },
       });
     }
@@ -3178,8 +3337,69 @@ export class ReboundRejectionAgent {
     const zoneMin = Math.min(zone.from, zone.to);
     const zoneMax = Math.max(zone.from, zone.to);
 
-    return price >= (zoneMin - zoneMin * EPSILON) && 
+    return price >= (zoneMin - zoneMin * EPSILON) &&
            price <= (zoneMax + zoneMax * EPSILON);
+  }
+
+  private computeVolatilityAdjustedZone(
+    snap: TechnicalSnapshot,
+    opts?: {
+      planZone?: { from: number; to: number; mid: number } | null;
+      bias?: 'long' | 'short' | 'none';
+      playbook?: string;
+      price?: number;
+    }
+  ): {
+    zone: { from: number; to: number; mid: number };
+    meta: { anchor: number; k: number; atr: number; atrPct: number; atrPctBase: number; hysteresis: number };
+  } {
+    const price = Number.isFinite(opts?.price) ? Number(opts?.price) : Number((snap as any)?.last ?? 0);
+    const ema20 = Number((snap as any)?.ema20 ?? 0);
+    const ema50 = Number((snap as any)?.ema50 ?? 0);
+    const vwap = Number((snap as any)?.sessionVWAP ?? (snap as any)?.sessionVwap ?? (snap as any)?.vwap ?? 0);
+
+    const anchorCandidates = [ema20, vwap, ema50].filter((value) => Number.isFinite(value) && value > 0);
+    let anchor = anchorCandidates.length > 0 ? anchorCandidates[0]! : price;
+    if (!(anchor > 0) && opts?.planZone) {
+      anchor = (opts.planZone.from + opts.planZone.to) / 2;
+    }
+    if (!(anchor > 0)) {
+      anchor = price;
+    }
+
+    const atrPct = Math.max(0, Number((snap as any)?.atrPct ?? 0));
+    let atrValue = Number((snap as any)?.atr14 ?? (snap as any)?.atr ?? 0);
+    if (!(atrValue > 0) && atrPct > 0 && price > 0) {
+      atrValue = (atrPct / 100) * price;
+    }
+    if (!(atrValue > 0) && opts?.planZone) {
+      atrValue = Math.max(1e-8, Math.abs(opts.planZone.to - opts.planZone.from) / 2);
+    }
+    if (!(atrValue > 0)) {
+      atrValue = Math.max(1e-8, Math.abs(price - anchor));
+    }
+
+    const adx = Math.max(0, Number((snap as any)?.adx14 ?? (snap as any)?.adx ?? 0));
+    const adxNorm = Math.max(0, Math.min(1, adx / 40));
+    const atrPctBaseRaw = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
+    const atrPctBase = Math.max(0.1, Number.isFinite(atrPctBaseRaw) ? Number(atrPctBaseRaw) : 1);
+    const atrRatio = atrPctBase > 0 ? atrPct / atrPctBase : 1;
+    const kUnclamped = 0.35 + 0.5 * adxNorm + 0.4 * atrRatio;
+    const k = Math.max(0.8, Math.min(1.8, kUnclamped));
+
+    const rawLow = anchor - k * atrValue;
+    const rawHigh = anchor + k * atrValue;
+    const from = Math.min(rawLow, rawHigh);
+    const to = Math.max(rawLow, rawHigh);
+    const mid = (from + to) / 2;
+
+    const tickSize = Number((snap as any)?.tickSize ?? (this.plan as any)?.plan?.meta?.tickSize ?? 0);
+    const hysteresis = tickSize > 0 ? tickSize * 2 : Math.max(0, mid * 0.0005);
+
+    return {
+      zone: { from, to, mid },
+      meta: { anchor, k, atr: atrValue, atrPct, atrPctBase, hysteresis },
+    };
   }
 
   /**
@@ -5373,9 +5593,60 @@ export class ReboundRejectionAgent {
 
     // Basic zone check
     const price = snap.last;
-    const { from, to } = this.plan.zone;
-    const inZone = this.priceInZoneWithEpsilon(price, this.plan.zone);
-    if (!inZone) return false;
+    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const { zone, meta } = this.computeVolatilityAdjustedZone(snap, {
+      planZone: this.plan.zone,
+      bias: planBias ?? 'none',
+      playbook,
+      price,
+    });
+    this.runtimeEntryZone = zone;
+    this.runtimeZoneDiagnostics = {
+      anchor: meta.anchor,
+      k: meta.k,
+      atr: meta.atr,
+      atrPct: meta.atrPct,
+      atrPctBase: meta.atrPctBase,
+      hysteresis: meta.hysteresis,
+      breakoutDistancePct: 0,
+      breakoutActive: false,
+      breakoutDirection: 'none',
+    };
+    const zoneMin = Math.min(zone.from, zone.to) - meta.hysteresis;
+    const zoneMax = Math.max(zone.from, zone.to) + meta.hysteresis;
+    const inZone = price >= zoneMin && price <= zoneMax;
+    let breakoutAllowed = false;
+    if (!inZone) {
+      const isLong = planBias === 'long';
+      const isShort = planBias === 'short';
+      const breakoutDistance = isLong && price > zoneMax
+        ? (price - zoneMax) / price
+        : isShort && price < zoneMin
+          ? (zoneMin - price) / price
+          : 0;
+      const breakoutTolerance = 0.25 * (meta.atrPct / 100);
+      const momentumGate = this.lastMomentumGateResult ?? this.evaluateMomentumGates(snap, 'enter', false);
+      breakoutAllowed = playbook === 'momentum_breakout'
+        && breakoutDistance > 0
+        && breakoutDistance <= breakoutTolerance
+        && momentumGate.status !== 'FAIL';
+      if (breakoutAllowed) {
+        this.runtimeZoneDiagnostics = {
+          anchor: meta.anchor,
+          k: meta.k,
+          atr: meta.atr,
+          atrPct: meta.atrPct,
+          atrPctBase: meta.atrPctBase,
+          hysteresis: meta.hysteresis,
+          breakoutDistancePct: breakoutDistance,
+          breakoutActive: true,
+          breakoutDirection: isLong ? 'above' : 'below',
+        };
+      }
+    }
+    if (!inZone && !breakoutAllowed) return false;
 
     // Basic momentum gates
     return this.passesEntryMomentumGates(snap, 'enter', { emitEvents: false });
@@ -5412,15 +5683,10 @@ export class ReboundRejectionAgent {
 
     const planBias = this.plan?.bias || 'none';
     const recommendedBias = this.performanceMetrics?.biasSwitching?.currentBias;
-    const biasAligned = !planBias || planBias === 'none' || !recommendedBias || recommendedBias === planBias;
-    checks.biasAlignment = {
-      status: biasAligned ? 'PASS' : 'FAIL',
-      reason: biasAligned
-        ? 'Plan bias aligned with adaptive bias recommendation'
-        : `Bias mismatch: plan ${planBias} vs adaptive ${recommendedBias}`,
-      message: biasAligned ? 'Bias aligned' : `Bias mismatch (${planBias} vs ${recommendedBias})`,
-      code: biasAligned ? 'bias.aligned' : 'bias.misaligned',
-    };
+    const adaptiveBias = recommendedBias ?? 'none';
+    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
 
     const regimeLabel = (this.regime as any)?.label || (this.regime as any)?.playbook || 'unknown';
     const regimeAllows = !this.regime || (this.regime as any)?.shouldTrade !== false;
@@ -5551,28 +5817,87 @@ export class ReboundRejectionAgent {
 
     // Zone and momentum checks
     const price = snap.last;
-    const { from, to } = this.plan?.zone || { from: 0, to: 0 };
-    const zoneCheck = this.plan?.zone ? this.priceInZoneWithEpsilon(price, this.plan.zone) : false;
+    const { zone: adaptiveZone, meta: zoneMeta } = this.computeVolatilityAdjustedZone(snap, {
+      planZone: this.plan?.zone ?? null,
+      bias: planBias,
+      playbook,
+      price,
+    });
+    this.runtimeEntryZone = adaptiveZone;
+    const zoneMin = Math.min(adaptiveZone.from, adaptiveZone.to);
+    const zoneMax = Math.max(adaptiveZone.from, adaptiveZone.to);
+    const inZoneRaw = price >= zoneMin - zoneMeta.hysteresis && price <= zoneMax + zoneMeta.hysteresis;
     const momentumEvaluation = this.evaluateMomentumGates(snap, 'enter', false);
+    const isLongBias = planBias === 'long';
+    const isShortBias = planBias === 'short';
+    const overHighPct = isLongBias && price > zoneMax ? (price - zoneMax) / price : 0;
+    const underLowPct = isShortBias && price < zoneMin ? (zoneMin - price) / price : 0;
+    const breakoutTolerance = 0.25 * (zoneMeta.atrPct / 100);
+    const momentumAllowsBreakout = momentumEvaluation.status !== 'FAIL';
+    const breakoutActive = playbook === 'momentum_breakout'
+      && momentumAllowsBreakout
+      && ((isLongBias && overHighPct > 0 && overHighPct <= breakoutTolerance)
+        || (isShortBias && underLowPct > 0 && underLowPct <= breakoutTolerance));
+    const inZone = inZoneRaw;
+    const zonePass = inZone || breakoutActive;
 
-    checks.inEntryZone = {
-      status: zoneCheck ? 'PASS' : 'FAIL',
-      reason: zoneCheck
-        ? `Price ${price.toFixed(4)} is within entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`
-        : `Price ${price.toFixed(4)} is outside entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`,
-      message: `Price: ${price?.toFixed(4)}, Zone: ${Math.min(from, to).toFixed(4)} - ${Math.max(from, to).toFixed(4)}`,
-      code: zoneCheck ? 'entry_zone.in_zone' : 'entry_zone.out_of_zone',
+    this.runtimeZoneDiagnostics = {
+      anchor: zoneMeta.anchor,
+      k: zoneMeta.k,
+      atr: zoneMeta.atr,
+      atrPct: zoneMeta.atrPct,
+      atrPctBase: zoneMeta.atrPctBase,
+      hysteresis: zoneMeta.hysteresis,
+      breakoutDistancePct: isLongBias ? overHighPct : isShortBias ? underLowPct : 0,
+      breakoutActive,
+      breakoutDirection: breakoutActive ? (isLongBias ? 'above' : 'below') : 'none',
     };
 
-    const requiresConfirmation = this.plan?.zone && planBias !== 'none' && !this.gapEntryOverride;
+    checks.inEntryZone = {
+      status: zonePass ? 'PASS' : 'FAIL',
+      reason: zonePass
+        ? inZone
+          ? `Price ${price.toFixed(4)} is within adaptive zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}]`
+          : `Breakout mode: price ${price.toFixed(4)} outside zone by ${(this.runtimeZoneDiagnostics!.breakoutDistancePct * 100).toFixed(2)}% with momentum confirmation`
+        : `Price ${price.toFixed(4)} is outside adaptive zone [${zoneMin.toFixed(4)}, ${zoneMax.toFixed(4)}] without breakout conditions`,
+      message: `Price: ${price?.toFixed(4)}, Adaptive zone: ${zoneMin.toFixed(4)} - ${zoneMax.toFixed(4)}`,
+      code: zonePass ? (inZone ? 'entry_zone.in_zone' : 'entry_zone.breakout_ok') : 'entry_zone.out_of_zone',
+      details: {
+        anchor: zoneMeta.anchor,
+        k: zoneMeta.k,
+        zoneLow: zoneMin,
+        zoneHigh: zoneMax,
+        hysteresis: zoneMeta.hysteresis,
+        overHighPct,
+        underLowPct,
+        breakoutTolerance,
+        breakoutActive,
+        playbook,
+      },
+    };
+
+    const requiresConfirmation = planBias !== 'none' && !this.gapEntryOverride;
     if (requiresConfirmation && this.plan) {
-      const confirmation = this.confirmEntrySignal(snap, price, this.plan.zone, planBias as 'long' | 'short');
-      checks.entryConfirmation = {
-        status: confirmation.confirmed ? 'PASS' : 'FAIL',
-        reason: confirmation.reason,
-        message: confirmation.reason,
-        code: confirmation.confirmed ? 'entry.confirmed' : 'entry.waiting_confirmation',
-      };
+      if (breakoutActive && !inZone) {
+        checks.entryConfirmation = {
+          status: 'PASS',
+          reason: 'Breakout momentum confirmed - bypassing pullback confirmation',
+          message: 'Breakout confirmation satisfied',
+          code: 'entry.breakout_confirmed',
+          details: {
+            breakoutDistancePct: this.runtimeZoneDiagnostics?.breakoutDistancePct ?? 0,
+            breakoutDirection: this.runtimeZoneDiagnostics?.breakoutDirection ?? 'none',
+          },
+        };
+      } else {
+        const confirmation = this.confirmEntrySignal(snap, price, adaptiveZone, planBias as 'long' | 'short');
+        checks.entryConfirmation = {
+          status: confirmation.confirmed ? 'PASS' : 'FAIL',
+          reason: confirmation.reason,
+          message: confirmation.reason,
+          code: confirmation.confirmed ? 'entry.confirmed' : 'entry.waiting_confirmation',
+        };
+      }
     } else {
       checks.entryConfirmation = {
         status: 'PASS',
@@ -5613,8 +5938,8 @@ export class ReboundRejectionAgent {
     const qualityPoints = qualityAssessment.totalPoints;
     const maxPoints = qualityAssessment.maxPoints;
     // Mode-adaptive minimum quality score for diagnostics (aligned with env.ts)
-    const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
-    const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
+    const qualityPlaybook = playbook;
+    const baseThreshold = qualityPlaybook === 'momentum_breakout' ? 55 : qualityPlaybook === 'mean_reversion' ? 40 : 50;
     const modeAdjustment = aggressiveness === 'aggressive' ? -5 : aggressiveness === 'reactive' ? 0 : 5;
     const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
     const evaluatedQuality = this.assessQualityScore(checks.qualityFilters, minTradingPoints);
@@ -5630,20 +5955,58 @@ export class ReboundRejectionAgent {
       failingKeys: evaluatedQuality.failingKeys,
     };
 
+    const momentumBiasAllows = checks.momentumGates?.code !== 'momentum.blocked';
+    const qualityPass = checks.qualityScore?.status === 'PASS';
+    const antiWhalePass = checks.antiWhale?.status === 'PASS';
+    const circuitPass = checks.circuitBreaker?.status === 'PASS';
+
+    let activeBias = adaptiveBias;
+    let biasOverrideReason: string | null = null;
+    if (momentumBiasAllows && qualityPass && antiWhalePass && circuitPass) {
+      activeBias = planBias;
+      biasOverrideReason = 'all_gates_green';
+    } else if (adaptiveBias === 'none' && planBias !== 'none') {
+      activeBias = planBias;
+      biasOverrideReason = 'adaptive_standby_fallback';
+    }
+
+    const finalAligned = planBias === 'none' || activeBias === 'none' || activeBias === planBias;
+    checks.biasAlignment = {
+      status: finalAligned ? 'PASS' : 'FAIL',
+      reason: finalAligned
+        ? `Active bias ${activeBias} aligned with plan bias ${planBias}`
+        : `Active bias ${activeBias} differs from plan bias ${planBias}`,
+      message: finalAligned ? 'Bias aligned' : `Bias mismatch (${planBias} vs ${activeBias})`,
+      code: finalAligned
+        ? biasOverrideReason ? 'bias.override_plan' : 'bias.aligned'
+        : 'bias.misaligned',
+      details: {
+        playbook,
+        planBias,
+        adaptiveBias,
+        activeBias,
+        biasOverrideReason,
+      },
+    };
+    this.lastBiasRouting = { playbook, planBias, adaptiveBias, activeBias, reason: biasOverrideReason };
+
     return checks;
   }
 
   private async getDiagnosticTrigger(snap: TechnicalSnapshot, checks: any) {
     const bias = this.plan?.bias || 'none';
-    const zone = this.plan?.zone;
+    const zone = this.runtimeEntryZone ?? this.plan?.zone ?? null;
+    const zoneDiagnostics = this.runtimeZoneDiagnostics;
     const price = snap.last;
     const cfg = getConfig();
     const dir = bias === 'short' ? -1 : 1;
 
-    const zoneMin = zone ? Math.min(zone.from, zone.to) : Number.NEGATIVE_INFINITY;
-    const zoneMax = zone ? Math.max(zone.from, zone.to) : Number.POSITIVE_INFINITY;
-    const mid = zone?.mid ?? (zone ? (zone.from + zone.to) / 2 : price);
-    const inZone = zone ? this.priceInZoneWithEpsilon(price, zone) : false;
+    const hysteresis = zoneDiagnostics?.hysteresis ?? 0;
+    const zoneMin = zone ? Math.min(zone.from, zone.to) - hysteresis : Number.NEGATIVE_INFINITY;
+    const zoneMax = zone ? Math.max(zone.from, zone.to) + hysteresis : Number.POSITIVE_INFINITY;
+    const mid = zone ? (zone.from + zone.to) / 2 : price;
+    const inZone = zone ? price >= zoneMin && price <= zoneMax : false;
+    const breakoutOk = zoneDiagnostics?.breakoutActive ?? false;
 
     const confirmationOk = this.diagnosticCheckAllows(checks, 'entryConfirmation');
 
@@ -5687,7 +6050,7 @@ export class ReboundRejectionAgent {
       liquidityOk &&
       antiWhaleOk;
 
-    const entryReady = readyPrechecks && inZone && confirmationOk && momentumOk && qualityOk && profitOk;
+    const entryReady = readyPrechecks && (inZone || breakoutOk) && confirmationOk && momentumOk && qualityOk && profitOk;
 
     let phase: string;
     if (entryReady) phase = 'entry_ready';
@@ -5703,7 +6066,7 @@ export class ReboundRejectionAgent {
       else if (!this.diagnosticCheckAllows(checks, 'isEntering')) phase = 'entering';
       else if (!this.diagnosticCheckAllows(checks, 'isArmed')) phase = 'inactive';
       else phase = 'inactive';
-    } else if (!inZone) phase = 'out_of_zone';
+    } else if (!inZone && !breakoutOk) phase = 'out_of_zone';
     else if (!confirmationOk) phase = 'awaiting_confirmation';
     else if (!momentumOk) phase = 'awaiting_momentum';
     else if (!qualityOk) phase = 'awaiting_quality';
@@ -5717,6 +6080,7 @@ export class ReboundRejectionAgent {
       price,
       zone: zone ? { ...zone } : null,
       inZone,
+      breakoutOk,
       confirmationOk,
       momentumOk,
       qualityOk,
@@ -5730,6 +6094,21 @@ export class ReboundRejectionAgent {
       tp1ProfitPct,
       minProfitPct,
       dir,
+      activeBias: this.lastBiasRouting?.activeBias ?? bias,
+      adaptiveBias: this.lastBiasRouting?.adaptiveBias ?? (this.performanceMetrics?.biasSwitching?.currentBias ?? 'none'),
+      biasOverrideReason: this.lastBiasRouting?.reason ?? null,
+      playbook: this.lastBiasRouting?.playbook ?? (this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'unknown'),
+      zoneDiagnostics: zoneDiagnostics
+        ? {
+            anchor: zoneDiagnostics.anchor,
+            k: zoneDiagnostics.k,
+            zoneLow: zone ? Math.min(zone.from, zone.to) : null,
+            zoneHigh: zone ? Math.max(zone.from, zone.to) : null,
+            hysteresis: zoneDiagnostics.hysteresis,
+            breakoutDistancePct: zoneDiagnostics.breakoutDistancePct,
+            breakoutDirection: zoneDiagnostics.breakoutDirection,
+          }
+        : null,
     };
   }
 
