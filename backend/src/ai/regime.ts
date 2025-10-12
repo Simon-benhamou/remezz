@@ -14,7 +14,7 @@ export type RegimeProfile = {
   realizedVol: number;
   adxSlope: number;
   trendStrength: number;
-  playbook: 'mean_reversion'|'momentum_breakout'|'standby';
+  playbook: 'mean_reversion'|'momentum_breakout'|'trend_following'|'standby';
   shouldTrade: boolean;
   volatilityProfile?: 'LOW' | 'MEDIUM' | 'HIGH' | 'EXTREME' | string;
   riskModifier?: RegimeRiskModifier;

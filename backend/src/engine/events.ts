@@ -413,9 +413,9 @@ async function maybeRefreshStrategyIndicators(sessionId: string, sym: string, te
 
   // 1) Bias divergence (EMA alignment + slope against bias) for N consecutive ticks
   if (cfg.STRAT_REFRESH_BIAS_DIVERGENCE_ENABLED && ema20 > 0 && ema50 > 0) {
-    const slopePct = ema20 !== 0 ? (ema20Slope / ema20) * 100 : 0;
+    const slopeRatio = ema20 !== 0 ? (ema20Slope / ema20) : 0;
     const trendMisaligned = bias === 'long' ? (ema20 <= ema50) : (ema20 >= ema50);
-    const slopeAgainst = bias === 'long' ? (slopePct < -0.03) : (slopePct > 0.03);
+    const slopeAgainst = bias === 'long' ? (slopeRatio < -0.0003) : (slopeRatio > 0.0003);
     if (trendMisaligned && slopeAgainst) {
       divergenceTicks[sym] = (divergenceTicks[sym] || 0) + 1;
     } else {
@@ -430,11 +430,11 @@ async function maybeRefreshStrategyIndicators(sessionId: string, sym: string, te
   if (!shouldForce && cfg.STRAT_REFRESH_SR_REJECTION_ENABLED && price > 0) {
     const nearPct = Number(process.env.NEAR_SR_PCT || 0.4);
     const nearLevel = (a:number,b:number,p:number)=> Math.abs(a-b) <= Math.abs(b)*(p/100);
-    const slopePct = ema20 !== 0 ? (ema20Slope / ema20) * 100 : 0;
+    const slopeRatio = ema20 !== 0 ? (ema20Slope / ema20) : 0;
     const nearRes = (typeof resistance === 'number') && nearLevel(price, resistance as number, nearPct);
     const nearSup = (typeof support === 'number') && nearLevel(price, support as number, nearPct);
-    if (bias === 'long' && nearRes && slopePct < -0.03) { shouldForce = true; reason = 'indicator-refresh:resistance-rejection'; }
-    if (bias === 'short' && nearSup && slopePct > 0.03) { shouldForce = true; reason = 'indicator-refresh:support-bounce'; }
+    if (bias === 'long' && nearRes && slopeRatio < -0.0003) { shouldForce = true; reason = 'indicator-refresh:resistance-rejection'; }
+    if (bias === 'short' && nearSup && slopeRatio > 0.0003) { shouldForce = true; reason = 'indicator-refresh:support-bounce'; }
   }
 
   // 3) RSI cross against bias
