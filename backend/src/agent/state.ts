@@ -4763,38 +4763,76 @@ export class ReboundRejectionAgent {
   }
 
   // Anti-whale / manipulation guard: blocks entries on abnormal volume spikes in extreme volatility without strong trend
-  private passesAntiWhaleFilters(snap: TechnicalSnapshot): boolean {
+  private evaluateAntiWhaleFilters(snap: TechnicalSnapshot): {
+    status: 'PASS' | 'FAIL';
+    reason: string;
+    details: Record<string, any>;
+  } {
     try {
       const cfg = getConfig();
-      if (!cfg.ANTI_WHALE_ENABLED) return true;
+      if (!cfg.ANTI_WHALE_ENABLED) {
+        return {
+          status: 'PASS',
+          reason: 'Anti-whale filters disabled',
+          details: { enabled: false },
+        };
+      }
+
       const price = Number((snap as any)?.last ?? 0);
       const vol = Number((snap as any)?.volume ?? 0);
       const volMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? 0);
       const atrPct = Number((snap as any)?.atrPct ?? 0);
       const adx = Number((snap as any)?.adx14 ?? 0);
 
-      if (!(volMA > 0) || !(price > 0)) return true; // nothing to check
-      const spikeRatio = vol / volMA;
+      if (!(volMA > 0) || !(price > 0)) {
+        return {
+          status: 'PASS',
+          reason: 'Insufficient volume data for anti-whale filters',
+          details: { vol, volMA, atrPct, adx },
+        };
+      }
+
       const spikeThreshold = Math.max(1.2, cfg.ANTI_WHALE_VOL_SPIKE_MULT);
+      const spikeRatio = vol / volMA;
       const extremeVol = atrPct >= Math.max(0.8, cfg.ANTI_WHALE_ATR_PCT);
       const weakTrend = adx < Math.max(10, cfg.ANTI_WHALE_MIN_ADX);
 
       if (spikeRatio >= spikeThreshold && extremeVol && weakTrend) {
-        recordOpsEvent({
-          level: 'warn',
-          source: 'anti_whale',
-          message: 'blocked_due_to_volume_spike_in_extreme_vol',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { spikeRatio, vol, volMA, atrPct, adx, spikeThreshold }
-        });
-        return false;
+        return {
+          status: 'FAIL',
+          reason: `Volume spike ${spikeRatio.toFixed(2)}x with weak trend (ADX ${adx.toFixed(1)}) during extreme volatility`,
+          details: { spikeRatio, vol, volMA, atrPct, adx, spikeThreshold },
+        };
       }
 
-      return true;
-    } catch {
-      return true;
+      return {
+        status: 'PASS',
+        reason: 'No adverse whale activity detected',
+        details: { spikeRatio, vol, volMA, atrPct, adx, spikeThreshold },
+      };
+    } catch (error) {
+      return {
+        status: 'PASS',
+        reason: 'Anti-whale evaluation unavailable',
+        details: { error: error instanceof Error ? error.message : String(error) },
+      };
     }
+  }
+
+  private passesAntiWhaleFilters(snap: TechnicalSnapshot): boolean {
+    const evaluation = this.evaluateAntiWhaleFilters(snap);
+    if (evaluation.status === 'FAIL') {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'anti_whale',
+        message: 'blocked_due_to_volume_spike_in_extreme_vol',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: evaluation.details,
+      });
+      return false;
+    }
+    return true;
   }
 
   // Dynamic position sizing based on setup quality and market conditions
@@ -5116,6 +5154,12 @@ export class ReboundRejectionAgent {
       momentumOk: false,
       qualityOk: false,
       profitOk: false,
+      liquidityOk: false,
+      antiWhaleOk: false,
+      circuitOk: false,
+      cooldownOk: false,
+      regimeOk: false,
+      biasOk: false,
       tp1ProfitPct: 0,
       minProfitPct: cfg.MIN_TRADE_PROFIT_PCT,
       dir: this.plan?.bias === 'short' ? -1 : 1,
@@ -5172,12 +5216,12 @@ export class ReboundRejectionAgent {
           timestamp: Date.now()
         };
       }
-      let canTrade = this.canTradeNow(snap);
-      const checks = this.getDiagnosticChecks(snap);
+      let checks = await this.getDiagnosticChecks(snap);
       let summary = this.getDiagnosticSummary(checks);
-      const trigger = await this.getDiagnosticTrigger(snap, checks);
+      let trigger = await this.getDiagnosticTrigger(snap, checks);
       let readiness = this.getTradingReadinessReason(checks);
       let blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
+      let canTrade = readiness.failingChecks.length === 0 && trigger.entryReady;
 
       if (
         !canTrade &&
@@ -5200,8 +5244,10 @@ export class ReboundRejectionAgent {
             },
           };
           summary = this.getDiagnosticSummary(checks);
+          trigger = await this.getDiagnosticTrigger(snap, checks);
           readiness = this.getTradingReadinessReason(checks);
           blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
+          canTrade = readiness.failingChecks.length === 0 && trigger.entryReady;
         }
       }
 
@@ -5245,8 +5291,10 @@ export class ReboundRejectionAgent {
             },
           };
           summary = this.getDiagnosticSummary(checks);
+          trigger = await this.getDiagnosticTrigger(snap, checks);
           readiness = this.getTradingReadinessReason(checks);
           blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
+          canTrade = readiness.failingChecks.length === 0 && trigger.entryReady;
         }
       }
 
@@ -5333,8 +5381,12 @@ export class ReboundRejectionAgent {
     return this.passesEntryMomentumGates(snap, 'enter', { emitEvents: false });
   }
 
-  private getDiagnosticChecks(snap: TechnicalSnapshot): any {
+  private async getDiagnosticChecks(snap: TechnicalSnapshot): Promise<any> {
     const checks: any = {};
+
+    const cfg = getConfig();
+    const now = Date.now();
+    const aggressiveness = this.profile?.aggressiveness || 'reactive';
 
     // Basic state checks
     checks.hasPosition = {
@@ -5358,15 +5410,72 @@ export class ReboundRejectionAgent {
       code: !this.entering ? 'state.idle' : 'state.entry_in_progress',
     };
 
+    const planBias = this.plan?.bias || 'none';
+    const recommendedBias = this.performanceMetrics?.biasSwitching?.currentBias;
+    const biasAligned = !planBias || planBias === 'none' || !recommendedBias || recommendedBias === planBias;
+    checks.biasAlignment = {
+      status: biasAligned ? 'PASS' : 'FAIL',
+      reason: biasAligned
+        ? 'Plan bias aligned with adaptive bias recommendation'
+        : `Bias mismatch: plan ${planBias} vs adaptive ${recommendedBias}`,
+      message: biasAligned ? 'Bias aligned' : `Bias mismatch (${planBias} vs ${recommendedBias})`,
+      code: biasAligned ? 'bias.aligned' : 'bias.misaligned',
+    };
+
+    const regimeLabel = (this.regime as any)?.label || (this.regime as any)?.playbook || 'unknown';
+    const regimeAllows = !this.regime || (this.regime as any)?.shouldTrade !== false;
+    checks.regimeGuard = {
+      status: regimeAllows ? 'PASS' : 'FAIL',
+      reason: regimeAllows
+        ? 'Market regime allows trading'
+        : `Regime ${regimeLabel} is in protective mode`,
+      message: regimeAllows ? 'Regime ok' : `Regime: ${regimeLabel}`,
+      code: regimeAllows ? 'regime.allowed' : 'regime.blocked',
+    };
+
+    const modeParams = getModeParams(aggressiveness);
+    const baseCooldownMs = modeParams?.tradeCooldownMs ?? cfg.TRADE_COOLDOWN_MS ?? 0;
+    const timeSinceLastExit = this.lastExitTime > 0 ? now - this.lastExitTime : Number.POSITIVE_INFINITY;
+    const cooldownActive = this.lastExitTime > 0 && timeSinceLastExit < baseCooldownMs;
+    const cooldownRemainingSec = cooldownActive ? (baseCooldownMs - timeSinceLastExit) / 1000 : 0;
+    checks.tradeCooldown = {
+      status: cooldownActive ? 'FAIL' : 'PASS',
+      reason: cooldownActive
+        ? `Trade cooldown active: ${cooldownRemainingSec.toFixed(0)}s remaining`
+        : 'Cooldown satisfied - ready for next entry',
+      message: cooldownActive ? `${cooldownRemainingSec.toFixed(0)}s remaining` : 'Cooldown cleared',
+      code: cooldownActive ? 'cooldown.active' : 'cooldown.clear',
+      details: {
+        remainingSec: Number(cooldownRemainingSec.toFixed(0)),
+        baseCooldownMs,
+        lastExitTime: this.lastExitTime || null,
+      },
+    };
+
+    const circuitProbe = this.circuitBreaker.canOpenTrade(new Date(now), this.lastKnownEquityUsd);
+    this.syncCircuitBreakerTelemetry(circuitProbe);
+    checks.circuitBreaker = {
+      status: circuitProbe.allowed ? 'PASS' : 'FAIL',
+      reason: circuitProbe.allowed
+        ? 'Circuit breaker allows new trades'
+        : circuitProbe.reason || 'Circuit breaker cooldown active',
+      message: circuitProbe.allowed ? 'Circuit breaker ok' : circuitProbe.reason || 'Circuit breaker blocking',
+      code: circuitProbe.allowed ? 'circuit.ok' : 'circuit.blocked',
+      details: {
+        reason: circuitProbe.reason ?? null,
+        cooldownUntil: circuitProbe.cooldownUntil ?? null,
+      },
+    };
+
     // Risk management checks (mode-adaptive limits)
-    const limits = defaultLimits(this.profile?.aggressiveness);
+    const limits = defaultLimits(aggressiveness);
     const maxDailyTrades = limits.maxTradesPerDay;
     const maxConsecStops = limits.maxConsecutiveStops;
-    
+
     checks.dailyTradeLimit = {
       status: (this.tradesToday || 0) < maxDailyTrades ? 'PASS' : 'FAIL',
       reason: (this.tradesToday || 0) < maxDailyTrades
-        ? `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - within limit (${this.profile?.aggressiveness || 'reactive'} mode)`
+        ? `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - within limit (${aggressiveness} mode)`
         : `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - limit exceeded for risk management`,
       message: `Trades today: ${this.tradesToday || 0}`,
       code: (this.tradesToday || 0) < maxDailyTrades ? 'limits.daily_ok' : 'limits.daily_exceeded',
@@ -5375,11 +5484,70 @@ export class ReboundRejectionAgent {
     checks.consecutiveStopsLimit = {
       status: (this.consecutiveStops || 0) < maxConsecStops ? 'PASS' : 'FAIL',
       reason: (this.consecutiveStops || 0) < maxConsecStops
-        ? `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - acceptable loss streak (${this.profile?.aggressiveness || 'reactive'} mode)`
+        ? `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - acceptable loss streak (${aggressiveness} mode)`
         : `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - circuit breaker activated`,
       message: `Consecutive stops: ${this.consecutiveStops || 0}`,
       code: (this.consecutiveStops || 0) < maxConsecStops ? 'limits.stops_ok' : 'limits.stops_exceeded',
     };
+
+    // Liquidity guard (mirrors entry gate)
+    if (this.plan?.sizing) {
+      let liquidityStatus: 'PASS' | 'FAIL' | 'PARTIAL' = 'PASS';
+      let liquidityReason = 'Liquidity sufficient';
+      let liquidityCode = 'liquidity.ok';
+      let liquidityDetails: Record<string, any> | undefined;
+
+      try {
+        const balance = this.broker ? await this.broker.balance() : null;
+        const budgetFrac = Math.max(0.1, Math.min(1, this.profile?.budgetFraction ?? 1));
+        const startBudgetCandidate = Number(this.profile?.startBalanceUsd ?? 0);
+        const freeUsd = Number((balance as any)?.freeUsd ?? 0);
+        const usableBase = startBudgetCandidate > 0 ? startBudgetCandidate : freeUsd;
+        const usableBalance = Math.max(0, usableBase * budgetFrac);
+        const riskPct = this.profile?.riskPerTradePct ?? 1.5;
+        const leverage = Math.min(10, this.profile?.maxLeverage ?? 10);
+        const stopPct = 0.5;
+        const estimatedNotional = (usableBalance * (riskPct / 100) * leverage) / (stopPct / 100);
+        const volume24h = Number((snap as any)?.volume24h ?? 0);
+        const multiplier = cfg.LIQUIDITY_VOLUME_MULTIPLIER;
+
+        if (!Number.isFinite(estimatedNotional) || estimatedNotional <= 0) {
+          liquidityStatus = 'PARTIAL';
+          liquidityReason = 'Unable to estimate position size for liquidity check';
+          liquidityCode = 'liquidity.unavailable';
+        } else {
+          const liquidityCheck = this.hasAdequateLiquidity(snap, estimatedNotional);
+          liquidityStatus = liquidityCheck.adequate ? 'PASS' : 'FAIL';
+          liquidityReason = liquidityCheck.reason;
+          liquidityCode = liquidityCheck.adequate ? 'liquidity.ok' : 'liquidity.insufficient';
+        }
+
+        liquidityDetails = {
+          estimatedNotional,
+          volume24h,
+          multiplier,
+        };
+      } catch (error) {
+        liquidityStatus = 'PARTIAL';
+        liquidityReason = `Unable to fetch balance for liquidity check: ${error instanceof Error ? error.message : String(error)}`;
+        liquidityCode = 'liquidity.unavailable';
+      }
+
+      checks.liquidity = {
+        status: liquidityStatus,
+        reason: liquidityReason,
+        message: liquidityReason,
+        code: liquidityCode,
+        details: liquidityDetails,
+      };
+    } else {
+      checks.liquidity = {
+        status: 'PASS',
+        reason: 'Liquidity check skipped - sizing configuration unavailable',
+        message: 'Sizing not configured',
+        code: 'liquidity.skipped',
+      };
+    }
 
     // Zone and momentum checks
     const price = snap.last;
@@ -5394,6 +5562,33 @@ export class ReboundRejectionAgent {
         : `Price ${price.toFixed(4)} is outside entry zone [${Math.min(from, to).toFixed(4)}, ${Math.max(from, to).toFixed(4)}]`,
       message: `Price: ${price?.toFixed(4)}, Zone: ${Math.min(from, to).toFixed(4)} - ${Math.max(from, to).toFixed(4)}`,
       code: zoneCheck ? 'entry_zone.in_zone' : 'entry_zone.out_of_zone',
+    };
+
+    const requiresConfirmation = this.plan?.zone && planBias !== 'none' && !this.gapEntryOverride;
+    if (requiresConfirmation && this.plan) {
+      const confirmation = this.confirmEntrySignal(snap, price, this.plan.zone, planBias as 'long' | 'short');
+      checks.entryConfirmation = {
+        status: confirmation.confirmed ? 'PASS' : 'FAIL',
+        reason: confirmation.reason,
+        message: confirmation.reason,
+        code: confirmation.confirmed ? 'entry.confirmed' : 'entry.waiting_confirmation',
+      };
+    } else {
+      checks.entryConfirmation = {
+        status: 'PASS',
+        reason: requiresConfirmation ? 'Gap override active - confirmation bypassed' : 'Confirmation not required for this setup',
+        message: requiresConfirmation ? 'Gap override - confirmation bypassed' : 'Confirmation not required',
+        code: 'entry.confirmation_skipped',
+      };
+    }
+
+    const antiWhaleEvaluation = this.evaluateAntiWhaleFilters(snap);
+    checks.antiWhale = {
+      status: antiWhaleEvaluation.status,
+      reason: antiWhaleEvaluation.reason,
+      message: antiWhaleEvaluation.reason,
+      code: antiWhaleEvaluation.status === 'PASS' ? 'anti_whale.ok' : 'anti_whale.blocked',
+      details: antiWhaleEvaluation.details,
     };
 
     checks.momentumGates = {
@@ -5418,10 +5613,9 @@ export class ReboundRejectionAgent {
     const qualityPoints = qualityAssessment.totalPoints;
     const maxPoints = qualityAssessment.maxPoints;
     // Mode-adaptive minimum quality score for diagnostics (aligned with env.ts)
-    const mode = this.profile?.aggressiveness || 'reactive';
     const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
     const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
-    const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
+    const modeAdjustment = aggressiveness === 'aggressive' ? -5 : aggressiveness === 'reactive' ? 0 : 5;
     const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
     const evaluatedQuality = this.assessQualityScore(checks.qualityFilters, minTradingPoints);
     checks.qualityScore = {
@@ -5451,17 +5645,28 @@ export class ReboundRejectionAgent {
     const mid = zone?.mid ?? (zone ? (zone.from + zone.to) / 2 : price);
     const inZone = zone ? this.priceInZoneWithEpsilon(price, zone) : false;
 
-    const confirmRequired = !!this.plan?.plan?.entry_rule?.confirm_close;
-    const confirmationOk = !confirmRequired || (bias === 'long' ? price > mid : price < mid);
+    const confirmationOk = this.diagnosticCheckAllows(checks, 'entryConfirmation');
 
-    const gateEvaluation = this.lastMomentumGateResult ?? this.evaluateMomentumGates(snap, 'enter', false);
-    const gateAllows = gateEvaluation.status === 'PASS' || gateEvaluation.status === 'SOFT_FAIL';
-    const momentumOk =
-      gateAllows ||
-      checks?.momentumGates?.status === 'PASS' ||
-      checks?.momentumGates?.status === 'SOFT_FAIL' ||
-      checks?.qualityFilters?.momentum?.status === 'PASS';
-    const qualityOk = checks?.qualityScore?.status === 'PASS' || await this.passesQualityFilters(snap);
+    const momentumOk = this.diagnosticCheckAllows(checks, 'momentumGates') || checks?.qualityFilters?.momentum?.status === 'PASS';
+
+    let qualityOk = this.diagnosticCheckAllows(checks, 'qualityScore');
+    if (!qualityOk) {
+      qualityOk = await this.passesQualityFilters(snap);
+    }
+
+    const liquidityOk = this.diagnosticCheckAllows(checks, 'liquidity');
+    const antiWhaleOk = this.diagnosticCheckAllows(checks, 'antiWhale');
+    const circuitOk = this.diagnosticCheckAllows(checks, 'circuitBreaker');
+    const cooldownOk = this.diagnosticCheckAllows(checks, 'tradeCooldown');
+    const regimeOk = this.diagnosticCheckAllows(checks, 'regimeGuard');
+    const biasOk = this.diagnosticCheckAllows(checks, 'biasAlignment');
+    const limitsOk =
+      this.diagnosticCheckAllows(checks, 'dailyTradeLimit') &&
+      this.diagnosticCheckAllows(checks, 'consecutiveStopsLimit');
+    const baseStateOk =
+      this.diagnosticCheckAllows(checks, 'hasPosition') &&
+      this.diagnosticCheckAllows(checks, 'isArmed') &&
+      this.diagnosticCheckAllows(checks, 'isEntering');
 
     const levelProfit = this.profile?.aggressiveness || 'reactive';
     let minProfitPct = cfg.MIN_TRADE_PROFIT_PCT;
@@ -5472,13 +5677,33 @@ export class ReboundRejectionAgent {
     const tp1ProfitPct = price > 0 ? Math.abs((firstR * (this.plan?.stopDistance ?? 0)) / price) * 100 : 0;
     const profitOk = tp1ProfitPct >= minProfitPct;
 
-    const readyPrechecks = this.state === 'ARMED' && !this.pos && !this.entering;
+    const readyPrechecks =
+      baseStateOk &&
+      limitsOk &&
+      cooldownOk &&
+      circuitOk &&
+      regimeOk &&
+      biasOk &&
+      liquidityOk &&
+      antiWhaleOk;
+
     const entryReady = readyPrechecks && inZone && confirmationOk && momentumOk && qualityOk && profitOk;
 
     let phase: string;
     if (entryReady) phase = 'entry_ready';
-    else if (!readyPrechecks) phase = 'inactive';
-    else if (!inZone) phase = 'out_of_zone';
+    else if (!readyPrechecks) {
+      if (!cooldownOk) phase = 'cooldown';
+      else if (!regimeOk) phase = 'regime_blocked';
+      else if (!circuitOk) phase = 'circuit_breaker';
+      else if (!biasOk) phase = 'bias_blocked';
+      else if (!limitsOk) phase = 'limits_reached';
+      else if (!liquidityOk) phase = 'liquidity_blocked';
+      else if (!antiWhaleOk) phase = 'anti_whale_blocked';
+      else if (!this.diagnosticCheckAllows(checks, 'hasPosition')) phase = 'position_open';
+      else if (!this.diagnosticCheckAllows(checks, 'isEntering')) phase = 'entering';
+      else if (!this.diagnosticCheckAllows(checks, 'isArmed')) phase = 'inactive';
+      else phase = 'inactive';
+    } else if (!inZone) phase = 'out_of_zone';
     else if (!confirmationOk) phase = 'awaiting_confirmation';
     else if (!momentumOk) phase = 'awaiting_momentum';
     else if (!qualityOk) phase = 'awaiting_quality';
@@ -5496,6 +5721,12 @@ export class ReboundRejectionAgent {
       momentumOk,
       qualityOk,
       profitOk,
+      liquidityOk,
+      antiWhaleOk,
+      circuitOk,
+      cooldownOk,
+      regimeOk,
+      biasOk,
       tp1ProfitPct,
       minProfitPct,
       dir,
@@ -6059,6 +6290,15 @@ export class ReboundRejectionAgent {
       current = (current as any)?.[segment];
     }
     return current;
+  }
+
+  private diagnosticCheckAllows(checks: any, key: string): boolean {
+    const detail = this.lookupCheckDetail(checks, key);
+    if (!detail || typeof detail !== 'object') return true;
+    const rawStatus = (detail as any).status;
+    if (rawStatus == null) return true;
+    const status = String(rawStatus).toUpperCase();
+    return status !== 'FAIL' && status !== 'BLOCK' && status !== 'REJECT' && status !== 'ERROR';
   }
 
   private emitValidatorBlockEvent(params: {
