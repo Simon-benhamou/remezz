@@ -16,6 +16,10 @@ export type EntryFacts = {
   volumeRatio?: number;
   modelConfidence?: number;
   notionalUsd?: number;
+  slopeDirectionalPct?: number;
+  slopeAbsPct?: number;
+  cmf?: number;
+  adxSlope?: number;
 };
 
 export type EntryEvaluation = {
@@ -41,6 +45,10 @@ export type EntryEvaluation = {
       relFail: boolean;
       penaltyApplied?: number | null;
     };
+    minRrFloor?: number | null;
+    flowSlope?: number | null;
+    flowCmf?: number | null;
+    adxSlope?: number | null;
   };
 };
 
@@ -434,17 +442,35 @@ export class EntryFilters {
     const volumeRatioVal = typeof facts.volumeRatio === 'number' && Number.isFinite(facts.volumeRatio)
       ? facts.volumeRatio
       : undefined;
+    const slopeDirectional = typeof facts.slopeDirectionalPct === 'number' && Number.isFinite(facts.slopeDirectionalPct)
+      ? facts.slopeDirectionalPct
+      : undefined;
+    const cmfVal = typeof facts.cmf === 'number' && Number.isFinite(facts.cmf) ? facts.cmf : undefined;
+    const adxSlopeVal = typeof facts.adxSlope === 'number' && Number.isFinite(facts.adxSlope)
+      ? facts.adxSlope
+      : undefined;
     const adxVal = adx;
+    const slopeRequirement = fastTrackCfg?.minSlopePct ?? 0.2;
+    const cmfRequirement = fastTrackCfg?.minCmf ?? 0;
+    const slopePass = slopeDirectional != null && slopeDirectional >= slopeRequirement;
+    const cmfPass = cmfVal == null ? true : cmfVal >= cmfRequirement;
     const strongFlow = fastTrackEnabled
-      && adxVal != null && adxVal >= (fastTrackCfg?.minAdx ?? 30)
-      && atrPct != null && atrPct >= (fastTrackCfg?.minAtrPct ?? 0.8)
-      && volumeRatioVal != null && volumeRatioVal >= (fastTrackCfg?.minVolumeRatio ?? 1.2);
+      && adxVal != null && adxVal >= (fastTrackCfg?.minAdx ?? 35)
+      && volumeRatioVal != null && volumeRatioVal >= (fastTrackCfg?.minVolumeRatio ?? 1.2)
+      && slopePass
+      && cmfPass;
+    const minWeightedRr = fastTrackCfg?.minWeightedRr ?? 0.9;
+    const rrForFastTrack = rrWeighted ?? rrTp1;
+    const rrFloor = fastTrackCfg?.rrFloor ?? 1.0;
     let fastTrackApplied = false;
-    if (strongFlow && rrThreshold != null) {
-      const fastTrackMin = fastTrackCfg?.minRr ?? 0.7;
+    if (strongFlow && rrThreshold != null && rrForFastTrack != null && rrForFastTrack >= minWeightedRr) {
+      const fastTrackMin = Math.max(rrFloor, fastTrackCfg?.minRr ?? rrFloor);
       const adjusted = Math.min(rrThreshold, fastTrackMin);
       fastTrackApplied = baseRrThreshold != null ? adjusted < baseRrThreshold : adjusted < rrThreshold;
       rrThreshold = adjusted;
+    }
+    if (rrThreshold != null) {
+      rrThreshold = Math.max(rrThreshold, rrFloor);
     }
     const rrNearThreshold = rrThreshold != null ? rrThreshold * nearFactor : null;
     const rrUsed = rrEff;
@@ -473,6 +499,7 @@ export class EntryFilters {
       rrDetailParts.push(`TPw%=${facts.tpWeightedPct.toFixed(2)}%`);
     }
     if (rrThreshold != null) rrDetailParts.push(`min>=${rrThreshold.toFixed(2)}`);
+    if (rrFloor != null) rrDetailParts.push(`floor=${rrFloor.toFixed(2)}`);
     rrDetailParts.push(`strongFlow=${strongFlow ? 'yes' : 'no'}`);
     if (fastTrackApplied) rrDetailParts.push('fastTrack');
     if (near && rrThreshold != null) rrDetailParts.push(`near>=${(nearFactor * 100).toFixed(0)}%`);
@@ -503,6 +530,10 @@ export class EntryFilters {
     meta.fastTrackApplied = fastTrackApplied;
     meta.nearFactor = nearFactor;
     meta.qualityHint = qualityHint ?? null;
+    meta.minRrFloor = rrFloor;
+    meta.flowSlope = slopeDirectional ?? null;
+    meta.flowCmf = cmfVal ?? null;
+    meta.adxSlope = adxSlopeVal ?? null;
 
     if (useConfidenceFilter) {
       const confidence = facts.modelConfidence;
