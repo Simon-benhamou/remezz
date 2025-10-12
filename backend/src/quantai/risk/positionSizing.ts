@@ -1,8 +1,10 @@
 export type PositionSizingParams = {
   equityUsd: number;
   entryPrice: number;
-  stopPrice: number;
+  stopPrice?: number;
+  stopDistanceAbs?: number;
   riskPct?: number;
+  qualityMultiplier?: number;
   maxNotionalUsd?: number;
 };
 
@@ -12,6 +14,9 @@ export type PositionSizingResult = {
   riskUsd: number;
   riskPct: number;
   stopDistance: number;
+  rawQty: number;
+  rawNotionalUsd: number;
+  qualityMultiplier: number;
 };
 
 export class PositionSizer {
@@ -19,7 +24,12 @@ export class PositionSizer {
 
   computeSize(params: PositionSizingParams): PositionSizingResult {
     const riskPct = params.riskPct && params.riskPct > 0 ? params.riskPct : this.baseRiskPerTradePct;
-    const stopDistance = Math.abs(params.entryPrice - params.stopPrice);
+    const stopDistance = params.stopDistanceAbs != null && params.stopDistanceAbs > 0
+      ? params.stopDistanceAbs
+      : Math.abs(params.entryPrice - (params.stopPrice ?? 0));
+    const qualityMultiplier = params.qualityMultiplier != null && params.qualityMultiplier > 0
+      ? params.qualityMultiplier
+      : 1;
     if (!(stopDistance > 0) || !(params.entryPrice > 0) || !(params.equityUsd > 0)) {
       return {
         qty: 0,
@@ -27,14 +37,17 @@ export class PositionSizer {
         riskUsd: 0,
         riskPct,
         stopDistance,
+        rawQty: 0,
+        rawNotionalUsd: 0,
+        qualityMultiplier,
       };
     }
-    const riskUsd = params.equityUsd * (riskPct / 100);
-    const qty = riskUsd / stopDistance;
-    const notionalUsd = qty * params.entryPrice;
+    const riskUsd = params.equityUsd * (riskPct / 100) * qualityMultiplier;
+    const rawQty = riskUsd / stopDistance;
+    const rawNotionalUsd = rawQty * params.entryPrice;
     const cappedNotional = params.maxNotionalUsd && params.maxNotionalUsd > 0
-      ? Math.min(notionalUsd, params.maxNotionalUsd)
-      : notionalUsd;
+      ? Math.min(rawNotionalUsd, params.maxNotionalUsd)
+      : rawNotionalUsd;
     const adjustedQty = params.entryPrice > 0 ? cappedNotional / params.entryPrice : 0;
     return {
       qty: Math.max(0, adjustedQty),
@@ -42,6 +55,9 @@ export class PositionSizer {
       riskUsd: Math.max(0, riskUsd),
       riskPct,
       stopDistance,
+      rawQty: Math.max(0, rawQty),
+      rawNotionalUsd: Math.max(0, rawNotionalUsd),
+      qualityMultiplier,
     };
   }
 
