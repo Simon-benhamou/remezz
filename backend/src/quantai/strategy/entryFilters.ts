@@ -46,6 +46,7 @@ export class EntryFilters {
 
     const tier = opts.tier ?? null;
     const volatilityProfile = opts.volatilityProfile ? opts.volatilityProfile.toUpperCase() : null;
+    const volatilityCandidates: string[] = [];
 
     const baseMinRr = opts.minRr ?? this.cfg.minRr;
     let minAdx = this.cfg.minAdx;
@@ -98,7 +99,9 @@ export class EntryFilters {
       } else {
         candidates.add(`${volatilityProfile}_VOLATILITY`);
       }
-      for (const key of candidates) {
+      const candidateList = Array.from(candidates);
+      volatilityCandidates.push(...candidateList);
+      for (const key of candidateList) {
         const override = this.cfg.volatilityProfileOverrides?.[key];
         if (override) {
           profileOverride = override;
@@ -122,6 +125,70 @@ export class EntryFilters {
       }
       if (profileOverride.spreadAtrRatioLimit != null) {
         spreadAtrRatioLimit = profileOverride.spreadAtrRatioLimit;
+      }
+    }
+
+    const symbol = opts.symbol ? opts.symbol.toUpperCase() : null;
+    const baseSymbol = symbol ? symbol.split(/[/:]/)[0] : null;
+    const symbolOverride = baseSymbol
+      ? this.cfg.symbolOverrides?.[baseSymbol] ?? (symbol ? this.cfg.symbolOverrides?.[symbol] : undefined)
+      : symbol
+        ? this.cfg.symbolOverrides?.[symbol]
+        : undefined;
+
+    if (symbolOverride) {
+      if (symbolOverride.minAdx != null) {
+        minAdx = symbolOverride.minAdx;
+      }
+      if (symbolOverride.minDollarVolume != null) {
+        minDollarVolume = symbolOverride.minDollarVolume;
+      }
+      if (symbolOverride.minRr != null) {
+        minRr = Math.max(minRr ?? symbolOverride.minRr, symbolOverride.minRr);
+      }
+      if (symbolOverride.minAtrPct != null) {
+        minAtrPct = symbolOverride.minAtrPct;
+      }
+      if (symbolOverride.maxSpreadBps != null) {
+        maxSpreadBps = symbolOverride.maxSpreadBps;
+      }
+      if (symbolOverride.confidenceThreshold != null) {
+        confidenceThreshold = symbolOverride.confidenceThreshold;
+      }
+      if (symbolOverride.useConfidenceFilter != null) {
+        useConfidenceFilter = symbolOverride.useConfidenceFilter;
+      }
+      if (symbolOverride.maxAtrPct != null) {
+        maxAtrPct = Math.min(maxAtrPct, symbolOverride.maxAtrPct);
+      }
+      if (symbolOverride.spreadAtrRatioLimit != null) {
+        spreadAtrRatioLimit = symbolOverride.spreadAtrRatioLimit;
+      }
+    }
+
+    if (
+      symbolOverride?.volatilityProfileOverrides &&
+      volatilityCandidates.length > 0
+    ) {
+      for (const key of volatilityCandidates) {
+        const override = symbolOverride.volatilityProfileOverrides[key];
+        if (!override) continue;
+        if (override.minDollarVolume != null) {
+          minDollarVolume = override.minDollarVolume;
+        }
+        if (override.minAtrPct != null) {
+          minAtrPct = override.minAtrPct;
+        }
+        if (override.maxAtrPct != null) {
+          maxAtrPct = Math.min(maxAtrPct, override.maxAtrPct);
+        }
+        if (override.minAdx != null) {
+          minAdx = Math.max(0, override.minAdx);
+        }
+        if (override.spreadAtrRatioLimit != null) {
+          spreadAtrRatioLimit = override.spreadAtrRatioLimit;
+        }
+        break;
       }
     }
 

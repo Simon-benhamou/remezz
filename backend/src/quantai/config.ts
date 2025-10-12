@@ -45,6 +45,11 @@ export type QuantAIVolatilityProfileOverride = {
   spreadAtrRatioLimit?: number;
 };
 
+export type QuantAISymbolEntryFilterOverride = Partial<EntryFilterThresholds> & {
+  spreadAtrRatioLimit?: number;
+  volatilityProfileOverrides?: Record<string, QuantAIVolatilityProfileOverride>;
+};
+
 export type QuantAIDrySpellConfig = {
   enabled: boolean;
   minMinutesWithoutTrade: number;
@@ -82,6 +87,7 @@ export type QuantAIEntryFilterConfig = EntryFilterThresholds & {
   tierOverrides?: Record<string, QuantAIEntryFilterTierOverride>;
   dynamic?: QuantAIEntryFilterDynamicConfig;
   volatilityProfileOverrides?: Record<string, QuantAIVolatilityProfileOverride>;
+  symbolOverrides?: Record<string, QuantAISymbolEntryFilterOverride>;
 };
 
 export type QuantAIExitConfig = {
@@ -245,6 +251,26 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       MODERATE_VOLATILITY: {},
       MODERATE: {},
     },
+    symbolOverrides: {
+      ETH: {
+        spreadAtrRatioLimit: 0.65,
+        volatilityProfileOverrides: {
+          LOW_VOLATILITY: { spreadAtrRatioLimit: 0.45 },
+          MODERATE_VOLATILITY: { spreadAtrRatioLimit: 0.62 },
+          MODERATE: { spreadAtrRatioLimit: 0.62 },
+          HIGH_VOLATILITY: { spreadAtrRatioLimit: 0.55 },
+        },
+      },
+      SOL: {
+        spreadAtrRatioLimit: 0.68,
+        volatilityProfileOverrides: {
+          LOW_VOLATILITY: { spreadAtrRatioLimit: 0.48 },
+          MODERATE_VOLATILITY: { spreadAtrRatioLimit: 0.64 },
+          MODERATE: { spreadAtrRatioLimit: 0.64 },
+          HIGH_VOLATILITY: { spreadAtrRatioLimit: 0.57 },
+        },
+      },
+    },
     dynamic: DEFAULT_DYNAMIC_FILTERS,
   },
   exits: {
@@ -320,6 +346,34 @@ function cloneTierOverrides(
   return Object.keys(cloned).length ? cloned : undefined;
 }
 
+function cloneVolatilityProfileOverrides(
+  overrides?: Record<string, QuantAIVolatilityProfileOverride>,
+): Record<string, QuantAIVolatilityProfileOverride> | undefined {
+  if (!overrides) return undefined;
+  const cloned: Record<string, QuantAIVolatilityProfileOverride> = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    cloned[key] = { ...value };
+  }
+  return Object.keys(cloned).length ? cloned : undefined;
+}
+
+function cloneSymbolOverrides(
+  overrides?: Record<string, QuantAISymbolEntryFilterOverride>,
+): Record<string, QuantAISymbolEntryFilterOverride> | undefined {
+  if (!overrides) return undefined;
+  const cloned: Record<string, QuantAISymbolEntryFilterOverride> = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    const symbolOverride: QuantAISymbolEntryFilterOverride = { ...value };
+    if (value.volatilityProfileOverrides) {
+      symbolOverride.volatilityProfileOverrides = cloneVolatilityProfileOverrides(
+        value.volatilityProfileOverrides,
+      );
+    }
+    cloned[key] = symbolOverride;
+  }
+  return Object.keys(cloned).length ? cloned : undefined;
+}
+
 function cloneDynamic(
   dynamic?: QuantAIEntryFilterDynamicConfig,
 ): QuantAIEntryFilterDynamicConfig | undefined {
@@ -357,6 +411,8 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
     maxAtrPct: defaults.maxAtrPct,
     tierOverrides: cloneTierOverrides(defaults.tierOverrides),
     dynamic: cloneDynamic(defaults.dynamic),
+    volatilityProfileOverrides: cloneVolatilityProfileOverrides(defaults.volatilityProfileOverrides),
+    symbolOverrides: cloneSymbolOverrides(defaults.symbolOverrides),
   };
 
   if (!raw || typeof raw !== 'object') return cfg;
@@ -442,6 +498,102 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
     cfg.tierOverrides = undefined;
   }
 
+  const profileOverridesRaw = raw.volatility_profile_overrides ?? raw.volatilityProfileOverrides;
+  if (profileOverridesRaw && typeof profileOverridesRaw === 'object') {
+    cfg.volatilityProfileOverrides = cfg.volatilityProfileOverrides ? { ...cfg.volatilityProfileOverrides } : {};
+    for (const [key, value] of Object.entries(profileOverridesRaw)) {
+      if (!value || typeof value !== 'object') continue;
+      const obj = value as Record<string, any>;
+      const target: QuantAIVolatilityProfileOverride = { ...(cfg.volatilityProfileOverrides?.[key] ?? {}) };
+      const minDollarVolume = normalizeOptionalNumber(obj['min_dollar_volume'] ?? obj['minDollarVolume']);
+      if (minDollarVolume != null) target.minDollarVolume = minDollarVolume;
+      const minAtrPct = normalizeOptionalNumber(obj['min_atr_pct'] ?? obj['minAtrPct']);
+      if (minAtrPct != null) target.minAtrPct = minAtrPct;
+      const maxAtrPct = normalizeOptionalNumber(obj['max_atr_pct'] ?? obj['maxAtrPct']);
+      if (maxAtrPct != null) target.maxAtrPct = maxAtrPct;
+      const minAdx = normalizeOptionalNumber(obj['min_adx'] ?? obj['minAdx']);
+      if (minAdx != null) target.minAdx = minAdx;
+      const spreadAtrRatioLimit = normalizeOptionalNumber(
+        obj['spread_atr_ratio_limit'] ?? obj['spreadAtrRatioLimit'],
+      );
+      if (spreadAtrRatioLimit != null) target.spreadAtrRatioLimit = spreadAtrRatioLimit;
+      if (Object.keys(target).length > 0) {
+        cfg.volatilityProfileOverrides![key] = target;
+      }
+    }
+  }
+  if (cfg.volatilityProfileOverrides && Object.keys(cfg.volatilityProfileOverrides).length === 0) {
+    cfg.volatilityProfileOverrides = undefined;
+  }
+
+  const symbolOverridesRaw = raw.symbol_overrides ?? raw.symbolOverrides;
+  if (symbolOverridesRaw && typeof symbolOverridesRaw === 'object') {
+    cfg.symbolOverrides = cfg.symbolOverrides ? { ...cfg.symbolOverrides } : {};
+    for (const [key, value] of Object.entries(symbolOverridesRaw)) {
+      if (!value || typeof value !== 'object') continue;
+      const obj = value as Record<string, any>;
+      const target: QuantAISymbolEntryFilterOverride = { ...(cfg.symbolOverrides?.[key] ?? {}) };
+      const minAdx = normalizeOptionalNumber(obj['min_adx'] ?? obj['minAdx']);
+      if (minAdx != null) target.minAdx = minAdx;
+      const minDollarVolume = normalizeOptionalNumber(obj['min_dollar_volume'] ?? obj['minDollarVolume']);
+      if (minDollarVolume != null) target.minDollarVolume = minDollarVolume;
+      const minRr = normalizeOptionalNumber(obj['min_rr'] ?? obj['minRr']);
+      if (minRr != null) target.minRr = minRr;
+      const minAtrPct = normalizeOptionalNumber(obj['min_atr_pct'] ?? obj['minAtrPct']);
+      if (minAtrPct != null) target.minAtrPct = minAtrPct;
+      const maxSpreadBps = normalizeOptionalNumber(obj['max_spread_bps'] ?? obj['maxSpreadBps']);
+      if (maxSpreadBps != null) target.maxSpreadBps = maxSpreadBps;
+      const confidenceThreshold = normalizeOptionalNumber(
+        obj['confidence_threshold'] ?? obj['confidenceThreshold'],
+      );
+      if (confidenceThreshold != null) target.confidenceThreshold = confidenceThreshold;
+      if (obj['use_confidence_filter'] != null || obj['useConfidenceFilter'] != null) {
+        target.useConfidenceFilter = Boolean(obj['use_confidence_filter'] ?? obj['useConfidenceFilter']);
+      }
+      const maxAtrPct = normalizeOptionalNumber(obj['max_atr_pct'] ?? obj['maxAtrPct']);
+      if (maxAtrPct != null) target.maxAtrPct = maxAtrPct;
+      const spreadAtrRatioLimit = normalizeOptionalNumber(
+        obj['spread_atr_ratio_limit'] ?? obj['spreadAtrRatioLimit'],
+      );
+      if (spreadAtrRatioLimit != null) target.spreadAtrRatioLimit = spreadAtrRatioLimit;
+
+      const symbolProfileOverrides = obj['volatility_profile_overrides'] ?? obj['volatilityProfileOverrides'];
+      if (symbolProfileOverrides && typeof symbolProfileOverrides === 'object') {
+        const dest = target.volatilityProfileOverrides ? { ...target.volatilityProfileOverrides } : {};
+        for (const [profileKey, profileValue] of Object.entries(symbolProfileOverrides)) {
+          if (!profileValue || typeof profileValue !== 'object') continue;
+          const profileObj = profileValue as Record<string, any>;
+          const profileTarget: QuantAIVolatilityProfileOverride = { ...(dest[profileKey] ?? {}) };
+          const symMinDollar = normalizeOptionalNumber(
+            profileObj['min_dollar_volume'] ?? profileObj['minDollarVolume'],
+          );
+          if (symMinDollar != null) profileTarget.minDollarVolume = symMinDollar;
+          const symMinAtr = normalizeOptionalNumber(profileObj['min_atr_pct'] ?? profileObj['minAtrPct']);
+          if (symMinAtr != null) profileTarget.minAtrPct = symMinAtr;
+          const symMaxAtr = normalizeOptionalNumber(profileObj['max_atr_pct'] ?? profileObj['maxAtrPct']);
+          if (symMaxAtr != null) profileTarget.maxAtrPct = symMaxAtr;
+          const symMinAdx = normalizeOptionalNumber(profileObj['min_adx'] ?? profileObj['minAdx']);
+          if (symMinAdx != null) profileTarget.minAdx = symMinAdx;
+          const symSpreadLimit = normalizeOptionalNumber(
+            profileObj['spread_atr_ratio_limit'] ?? profileObj['spreadAtrRatioLimit'],
+          );
+          if (symSpreadLimit != null) profileTarget.spreadAtrRatioLimit = symSpreadLimit;
+          if (Object.keys(profileTarget).length > 0) {
+            dest[profileKey] = profileTarget;
+          }
+        }
+        target.volatilityProfileOverrides = Object.keys(dest).length ? dest : undefined;
+      }
+
+      if (Object.keys(target).length > 0) {
+        cfg.symbolOverrides![key] = target;
+      }
+    }
+  }
+  if (cfg.symbolOverrides && Object.keys(cfg.symbolOverrides).length === 0) {
+    cfg.symbolOverrides = undefined;
+  }
+
   const dynamicRaw = raw.dynamic ?? raw.dynamic_adjustments ?? raw.adaptive;
   if (dynamicRaw && typeof dynamicRaw === 'object') {
     cfg.dynamic = cfg.dynamic ? { ...cfg.dynamic } : {};
@@ -487,9 +639,9 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
       ?? (dynamicRaw as Record<string, any>)['rrTierAdjustments'];
     if (rrAdjust && typeof rrAdjust === 'object') {
       const src = rrAdjust as Record<string, any>;
-    cfg.dynamic!.rrTierAdjustments = cfg.dynamic!.rrTierAdjustments
-      ? { ...cfg.dynamic!.rrTierAdjustments }
-      : {};
+      cfg.dynamic!.rrTierAdjustments = cfg.dynamic!.rrTierAdjustments
+        ? { ...cfg.dynamic!.rrTierAdjustments }
+        : {};
       for (const [key, value] of Object.entries(src)) {
         const val = normalizeOptionalNumber(value);
         if (val != null) cfg.dynamic!.rrTierAdjustments![key] = val;
