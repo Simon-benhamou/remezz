@@ -214,6 +214,27 @@ type DiagnosticBlocker = DiagnosticCheckRef & {
   status?: string;
 };
 
+type MomentumGateEvaluation = {
+  pass: boolean;
+  status: 'PASS' | 'SOFT_FAIL' | 'FAIL';
+  reasons: string[];
+  details: {
+    snapshotId?: string | number | null;
+    candleTime?: string | number | null;
+    tfLTF?: string | null;
+    tfHTF?: string | null;
+    atrPct: number;
+    minAtr: number;
+    adx: number;
+    minAdx: number;
+    slopePctAbs: number;
+    minSlope: number;
+    playbook: string;
+    bias: string;
+    reasonHint: 'enter' | 'reverse';
+  };
+};
+
 export class ReboundRejectionAgent {
   private static readonly memeSymbols = new Set<string>([
     'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK', 'PUMP', 'AVNT', 'MEW', 'WEN',
@@ -242,6 +263,7 @@ export class ReboundRejectionAgent {
   private orderAttemptLogCount = 0;
   private lastDiagnosticCanTrade: boolean | null = null;
   private lastQualityFilterFailure: { code: string; message?: string; details?: any } | null = null;
+  private lastMomentumGateResult: MomentumGateEvaluation | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -4045,21 +4067,32 @@ export class ReboundRejectionAgent {
     return 'MODERATE'; // ETH, BNB, ADA, etc.
   }
 
-  private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {
+  private evaluateMomentumGates(
+    snap: TechnicalSnapshot,
+    reasonHint: 'enter' | 'reverse',
+    emitEvents = true
+  ): MomentumGateEvaluation {
     const thresholds = this.effectiveEntryThresholds();
     const memeBias = this.isMemeCoin(this.profile?.symbol);
-    let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
-    let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
     const quantFilters = this.quantConfig?.filters;
+    const playbook = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const bias = this.plan?.bias || 'none';
+
+    let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
+    let minSlopeAbsPct = Math.max(0.02, thresholds.ENTRY_MIN_SLOPE_ABS_PCT);
+
     if (quantFilters) {
       if (Number.isFinite(quantFilters.minAtrPct)) {
         const cfgAtr = Math.max(0.05, Number(quantFilters.minAtrPct));
         minAtr = Math.min(minAtr, cfgAtr);
       }
+
       const rrReferenceRaw = this.currentRrMin ?? (Number.isFinite(quantFilters.minRr) ? Number(quantFilters.minRr) : undefined);
       if (Number.isFinite(rrReferenceRaw)) {
         const rrTightness = Math.max(1, Number(rrReferenceRaw));
-        const relaxedSlope = Math.max(0.04, minSlopeAbsPct * (rrTightness >= 1.5 ? 0.75 : 0.85));
+        const relaxedSlope = Math.max(0.03, minSlopeAbsPct * (rrTightness >= 1.5 ? 0.75 : 0.85));
         minSlopeAbsPct = Math.min(minSlopeAbsPct, relaxedSlope);
       } else {
         minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
@@ -4067,17 +4100,20 @@ export class ReboundRejectionAgent {
     } else {
       minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
     }
+
     if (memeBias) {
       minAtr = Math.max(0.06, minAtr * 0.9);
       minSlopeAbsPct = Math.max(0.005, minSlopeAbsPct * 0.8);
     }
-    const playbook = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+
     if (playbook === 'momentum_breakout') {
-      minAtr *= 1.15; // demand more volatility for breakout setups
+      minAtr *= 1.15;
       minSlopeAbsPct *= 1.05;
+    } else if (playbook === 'trend_following') {
+      minSlopeAbsPct = Math.max(0.02, minSlopeAbsPct * 0.85);
     }
+
+    minSlopeAbsPct = Math.max(0.02, Math.min(minSlopeAbsPct, 0.25));
 
     const adxValue = Number((snap as any)?.adx14 ?? 0);
     const baseAdxRequirement = this.plan?.bias === 'short'
@@ -4090,59 +4126,36 @@ export class ReboundRejectionAgent {
       minAdxRequired = Math.max(8, minAdxRequired - 2);
     }
 
+    if (memeBias) {
+      minAdxRequired = Math.max(8, minAdxRequired - 2);
+    }
+
+    const reasons: string[] = [];
+
     if (adxValue > 0 && adxValue < minAdxRequired) {
-      recordOpsEvent({
-        level: 'info',
-        source: 'entry_gate',
-        message: 'adx_too_low',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { adx: adxValue, min: minAdxRequired, reason: reasonHint },
-      });
-      return false;
+      reasons.push(`adx_too_low ${adxValue.toFixed(2)} < ${minAdxRequired.toFixed(2)}`);
+      if (emitEvents) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_gate',
+          message: 'adx_too_low',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { adx: adxValue, min: minAdxRequired, reason: reasonHint },
+        });
+      }
     }
 
-    const circuitProbe = this.circuitBreaker.canOpenTrade(new Date(), this.lastKnownEquityUsd);
-    this.syncCircuitBreakerTelemetry(circuitProbe);
-    if (!circuitProbe.allowed) {
-      recordOpsEvent({
-        level: 'warn',
-        source: 'circuit_breaker',
-        message: 'entry_blocked_circuit_breaker',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: {
-          reason: circuitProbe.reason,
-          cooldownUntil: circuitProbe.cooldownUntil?.toISOString() ?? null,
-          reasonHint,
-        },
-      });
-      return false;
-    }
-
-    // 🔄 BIAS SWITCHING CHECK: Ensure plan bias matches performance-recommended bias
-    const planBias = this.plan?.bias;
-    const recommendedBias = this.performanceMetrics?.biasSwitching?.currentBias;
-    if (
-      planBias &&
-      planBias !== 'none' &&
-      recommendedBias &&
-      recommendedBias !== 'standby' &&
-      planBias !== recommendedBias
-    ) {
-      console.log(`⚖️ Bias divergence detected (plan=${planBias}, perf=${recommendedBias}) but proceeding with entry gates due to market opportunity`);
-    }
-
-    // Intelligent per-crypto ATR threshold adaptation
     try {
       const sym = this.profile?.symbol || '';
       const adaptedMinAtr = this.getAdaptiveATRThresholdSync(sym, minAtr);
       if (adaptedMinAtr !== minAtr) {
-        console.log(`🎯 Adaptive ATR for ${sym}: ${minAtr.toFixed(3)}% → ${adaptedMinAtr.toFixed(3)}%`);
+        if (emitEvents) {
+          console.log(`🎯 Adaptive ATR for ${sym}: ${minAtr.toFixed(3)}% → ${adaptedMinAtr.toFixed(3)}%`);
+        }
         minAtr = adaptedMinAtr;
       }
-      // Trigger async cache update in background (don't await)
-      this.updateAdaptiveATRCache(sym, minAtr).catch(err => 
+      this.updateAdaptiveATRCache(sym, minAtr).catch(err =>
         console.warn('Background ATR cache update failed:', err)
       );
     } catch (error) {
@@ -4150,69 +4163,129 @@ export class ReboundRejectionAgent {
     }
 
     const atrPct = Number((snap as any)?.atrPct ?? 0);
+    const ema20 = Number((snap as any)?.ema20 ?? snap.last);
+    const ema50 = Number((snap as any)?.ema50 ?? snap.last);
+    const emaVal = Number((snap as any)?.ema20 ?? snap.last ?? 0);
+    const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+    const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
 
-    // Basic ATR check with simple flexibility
+    let minSlopeRequirement = minSlopeAbsPct;
+    const slopeFloor = playbook === 'momentum_breakout' ? 0.07 : playbook === 'trend_following' ? 0.02 : 0.04;
+    const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.7 : playbook === 'trend_following' ? 0.5 : 0.55;
+    const relaxation = playbook === 'momentum_breakout' ? 0.03 : playbook === 'trend_following' ? 0.015 : 0.05;
+    minSlopeRequirement = Math.max(
+      slopeFloor,
+      Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - relaxation, slopeFloor))
+    );
+
+    if (slopePctAbs < minSlopeRequirement) {
+      reasons.push(`slope_too_flat ${slopePctAbs.toFixed(3)}% < ${minSlopeRequirement.toFixed(3)}%`);
+      if (emitEvents) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_gate',
+          message: 'slope_too_flat',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { slopePctAbs, min: minSlopeRequirement, reason: reasonHint },
+        });
+      }
+    }
+
     if (atrPct < minAtr) {
-      const adx = Number((snap as any)?.adx14 ?? 0);
-      const ema20 = Number((snap as any)?.ema20 ?? snap.last);
-      const ema50 = Number((snap as any)?.ema50 ?? snap.last);
-      const bias: 'long'|'short' = (this.plan as any)?.bias || 'long';
-
-      // Simple quality assessment
-      const emaSpread = ((ema20 - ema50) / ema50) * 100;
-      const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.5 : ema20 < ema50 && emaSpread < -0.5;
-      const strongAdx = adx >= 25;
       const atrDeficit = minAtr - atrPct;
       const momentumPct = Math.abs(Number((snap as any)?.momentumPct ?? 0));
-
-      const momentumBoost = Math.abs(momentumPct);
-      const atrBuffer = playbook === 'momentum_breakout' ? 0.5 : 0.8;
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx: adxValue, playbook });
+      const strongAdx = adxValue >= Math.max(minAdxRequired, 25);
+      const atrBuffer = playbook === 'momentum_breakout' ? 0.5 : playbook === 'trend_following' ? 0.4 : 0.8;
       const allowFlexibility = (
         trendAligned &&
         strongAdx &&
-        momentumBoost >= (playbook === 'momentum_breakout' ? 1.5 : 1.0) &&
+        momentumPct >= (playbook === 'momentum_breakout' ? 1.5 : 0.75) &&
         atrDeficit <= atrBuffer
       );
 
       if (!allowFlexibility) {
-        recordOpsEvent({
-          level: 'info',
-          source: 'entry_gate',
-          message: 'atr_too_low',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { atrPct, min: minAtr, reason: reasonHint },
-        });
-        return false;
+        reasons.push(`atr_too_low ${atrPct.toFixed(3)}% < ${minAtr.toFixed(3)}%`);
+        if (emitEvents) {
+          recordOpsEvent({
+            level: 'info',
+            source: 'entry_gate',
+            message: 'atr_too_low',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile?.symbol,
+            details: { atrPct, min: minAtr, reason: reasonHint },
+          });
+        }
       }
     }
 
-    // Basic slope check
-    const emaVal = Number((snap as any)?.ema20 ?? snap.last ?? 0);
-    const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
-    const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
-    const bias = this.plan?.bias || 'none';
+    const playbookLower = playbook.toLowerCase();
+    const status: 'PASS' | 'SOFT_FAIL' | 'FAIL' = reasons.length === 0
+      ? 'PASS'
+      : playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
 
-    const slopeFloor = playbook === 'momentum_breakout' ? 0.07 : 0.04;
-    const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.7 : 0.55;
-    const adjustedSlopeRequirement = Math.max(
-      slopeFloor,
-      Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - (playbook === 'momentum_breakout' ? 0.03 : 0.05), slopeFloor))
-    );
+    const result: MomentumGateEvaluation = {
+      pass: status === 'PASS',
+      status,
+      reasons,
+      details: {
+        snapshotId: (snap as any)?.id ?? (snap as any)?.snapshotId ?? null,
+        candleTime: (snap as any)?.candleTime ?? null,
+        tfLTF: snap.meta?.tf ?? null,
+        tfHTF: (snap.meta as any)?.htf ?? null,
+        atrPct,
+        minAtr,
+        adx: adxValue,
+        minAdx: minAdxRequired,
+        slopePctAbs,
+        minSlope: minSlopeRequirement,
+        playbook,
+        bias,
+        reasonHint,
+      },
+    };
 
-    if (slopePctAbs < adjustedSlopeRequirement) {
-      recordOpsEvent({
-        level: 'info',
-        source: 'entry_gate',
-        message: 'slope_too_flat',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { slopePctAbs, min: adjustedSlopeRequirement, reason: reasonHint },
-      });
-      return false;
+    this.lastMomentumGateResult = result;
+    return result;
+  }
+
+  private passesEntryMomentumGates(
+    snap: TechnicalSnapshot,
+    reasonHint: 'enter' | 'reverse',
+    options?: { emitEvents?: boolean; allowSoft?: boolean }
+  ): boolean {
+    const { emitEvents = true, allowSoft = true } = options ?? {};
+    const evaluation = this.evaluateMomentumGates(snap, reasonHint, emitEvents);
+    if (!evaluation.pass && evaluation.status === 'SOFT_FAIL') {
+      return allowSoft;
+    }
+    return evaluation.pass;
+  }
+
+  private evaluateTrendPullback(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
+    const distanceToEma20 = Number.isFinite(ema20) && ema20 !== 0 ? ((price - ema20) / ema20) * 100 : Number.NaN;
+    const distanceToEma50 = Number.isFinite(ema50) && ema50 !== 0 ? ((price - ema50) / ema50) * 100 : Number.NaN;
+
+    if (!Number.isFinite(distanceToEma20) || !Number.isFinite(distanceToEma50)) {
+      return { ok: false, distanceToEma20, distanceToEma50, reason: 'missing_ema' };
     }
 
-    return true;
+    if (bias === 'long') {
+      const nearEma20 = distanceToEma20 >= -2.6 && distanceToEma20 <= 1.4;
+      const holdingEma50 = distanceToEma50 >= -1.8;
+      const ok = nearEma20 && holdingEma50;
+      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
+    }
+
+    if (bias === 'short') {
+      const nearEma20 = distanceToEma20 <= 2.6 && distanceToEma20 >= -1.4;
+      const holdingEma50 = distanceToEma50 <= 1.8;
+      const ok = nearEma20 && holdingEma50;
+      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
+    }
+
+    return { ok: false, distanceToEma20, distanceToEma50, reason: 'unknown_bias' };
   }
 
   private evaluateTrendPullback(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
@@ -4320,7 +4393,7 @@ export class ReboundRejectionAgent {
     // Detect breakout/reversal context early to avoid false blocks on data glitches
   const earlyBreakoutAdx = Math.max(18, Number(getConfig().ENTRY_LONG_MIN_ADX || 22));
   const earlyBreakoutAtr = Math.max(0.6, Number(getConfig().ENTRY_MIN_ATR_PCT || 0.8));
-  const isTrendAlignedEarly = this.checkTrendAlignment(ema20, ema50, bias);
+  const isTrendAlignedEarly = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
   const isBreakoutContextEarly = (adx >= earlyBreakoutAdx && atrPct >= earlyBreakoutAtr && isTrendAlignedEarly);
     const isReversalContextEarly = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(getConfig().ANTI_WHALE_MIN_ADX || 18)));
     const allowVolumeFallback = (isBreakoutContextEarly || isReversalContextEarly) && volumeMA > 0;
@@ -4361,7 +4434,7 @@ export class ReboundRejectionAgent {
     const emaSpread = ((ema20 - ema50) / ema50) * 100;
 
     if (normalizedPlaybook === 'trend_following') {
-      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias);
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
       if (!trendAligned) {
         this.lastQualityFilterFailure = {
           code: 'quality.trend_misaligned',
@@ -4542,7 +4615,7 @@ export class ReboundRejectionAgent {
   // Use existing thresholds where possible; fallback to sane constants
   const breakoutAdx = Math.max(18, Number(cfg.ENTRY_LONG_MIN_ADX || 22));
   const breakoutAtr = Math.max(0.6, Number(cfg.ENTRY_MIN_ATR_PCT || 0.8));
-    const isTrendAligned = this.checkTrendAlignment(ema20, ema50, bias);
+    const isTrendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
     const isBreakoutContext = (adx >= breakoutAdx && atrPct >= breakoutAtr && isTrendAligned);
   const isReversalContext = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(cfg.ANTI_WHALE_MIN_ADX || 18)));
 
@@ -5091,12 +5164,38 @@ export class ReboundRejectionAgent {
           timestamp: Date.now()
         };
       }
-      const canTrade = this.canTradeNow(snap);
+      let canTrade = this.canTradeNow(snap);
       const checks = this.getDiagnosticChecks(snap);
-      const summary = this.getDiagnosticSummary(checks);
+      let summary = this.getDiagnosticSummary(checks);
       const trigger = await this.getDiagnosticTrigger(snap, checks);
-      const readiness = this.getTradingReadinessReason(checks);
-      const blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
+      let readiness = this.getTradingReadinessReason(checks);
+      let blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
+
+      if (
+        !canTrade &&
+        trigger.entryReady &&
+        checks?.qualityScore?.status === 'PASS' &&
+        checks?.momentumGates?.status === 'FAIL' &&
+        checks?.qualityFilters?.momentum?.status === 'PASS'
+      ) {
+        const gateEvaluation = this.lastMomentumGateResult ?? this.evaluateMomentumGates(snap, 'enter', false);
+        if (gateEvaluation.status === 'SOFT_FAIL' || gateEvaluation.reasons.length <= 1) {
+          canTrade = true;
+          checks.momentumGates = {
+            ...checks.momentumGates,
+            status: 'SOFT_FAIL',
+            reason: `${gateEvaluation.reasons.join(' | ') || 'Momentum marginal but supported by quality'} | override:quality_confirmation`,
+            code: 'momentum.soft_fail',
+            details: {
+              ...(checks.momentumGates?.details ?? gateEvaluation.details),
+              override: 'quality_confirmation',
+            },
+          };
+          summary = this.getDiagnosticSummary(checks);
+          readiness = this.getTradingReadinessReason(checks);
+          blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
+        }
+      }
 
       if (!canTrade && this.lastDiagnosticCanTrade !== false) {
         this.emitValidatorBlockEvent({ snap, checks, trigger, summary, readiness });
@@ -5178,7 +5277,7 @@ export class ReboundRejectionAgent {
     if (!inZone) return false;
 
     // Basic momentum gates
-    return this.passesEntryMomentumGates(snap, 'enter');
+    return this.passesEntryMomentumGates(snap, 'enter', { emitEvents: false });
   }
 
   private getDiagnosticChecks(snap: TechnicalSnapshot): any {
@@ -5233,7 +5332,7 @@ export class ReboundRejectionAgent {
     const price = snap.last;
     const { from, to } = this.plan?.zone || { from: 0, to: 0 };
     const zoneCheck = this.plan?.zone ? this.priceInZoneWithEpsilon(price, this.plan.zone) : false;
-    const momentumPass = this.passesEntryMomentumGates(snap, 'enter');
+    const momentumEvaluation = this.evaluateMomentumGates(snap, 'enter', false);
 
     checks.inEntryZone = {
       status: zoneCheck ? 'PASS' : 'FAIL',
@@ -5245,12 +5344,17 @@ export class ReboundRejectionAgent {
     };
 
     checks.momentumGates = {
-      status: momentumPass ? 'PASS' : 'FAIL',
-      reason: momentumPass
-        ? 'All momentum requirements met (ATR, slope, trend alignment)'
-        : 'Failed momentum gates - insufficient volatility or trend strength',
+      status: momentumEvaluation.status,
+      reason: momentumEvaluation.reasons.length
+        ? momentumEvaluation.reasons.join(' | ')
+        : 'All momentum requirements met (ATR, slope, trend alignment)',
       message: 'Momentum gates check',
-      code: momentumPass ? 'momentum.ok' : 'momentum.blocked',
+      code: momentumEvaluation.status === 'FAIL'
+        ? 'momentum.blocked'
+        : momentumEvaluation.status === 'SOFT_FAIL'
+          ? 'momentum.soft_fail'
+          : 'momentum.ok',
+      details: momentumEvaluation.details,
     };
 
     // Simplified quality filters (binary pass/fail for essential indicators)
@@ -5297,10 +5401,13 @@ export class ReboundRejectionAgent {
     const confirmRequired = !!this.plan?.plan?.entry_rule?.confirm_close;
     const confirmationOk = !confirmRequired || (bias === 'long' ? price > mid : price < mid);
 
+    const gateEvaluation = this.lastMomentumGateResult ?? this.evaluateMomentumGates(snap, 'enter', false);
+    const gateAllows = gateEvaluation.status === 'PASS' || gateEvaluation.status === 'SOFT_FAIL';
     const momentumOk =
+      gateAllows ||
       checks?.momentumGates?.status === 'PASS' ||
-      checks?.qualityFilters?.momentum?.status === 'PASS' ||
-      this.passesEntryMomentumGates(snap, 'enter');
+      checks?.momentumGates?.status === 'SOFT_FAIL' ||
+      checks?.qualityFilters?.momentum?.status === 'PASS';
     const qualityOk = checks?.qualityScore?.status === 'PASS' || await this.passesQualityFilters(snap);
 
     const levelProfit = this.profile?.aggressiveness || 'reactive';
@@ -5482,7 +5589,7 @@ export class ReboundRejectionAgent {
     const emaSpreadPct = ema50 !== 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
 
     if (normalizedPlaybook === 'trend_following') {
-      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias);
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
       const pullback = bias === 'long' || bias === 'short'
         ? this.evaluateTrendPullback(price, ema20, ema50, bias)
         : { ok: false, distanceToEma20: Number.NaN, distanceToEma50: Number.NaN, reason: 'unknown_bias' };
@@ -5542,11 +5649,11 @@ export class ReboundRejectionAgent {
     if (normalizedPlaybook === 'momentum_breakout') {
       return {
         trendAlignment: {
-          status: this.checkTrendAlignment(ema20, ema50, bias) ? 'PASS' : 'FAIL',
+          status: this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook }) ? 'PASS' : 'FAIL',
           reason: bias === 'long'
             ? `EMA20 (${ema20.toFixed(4)}) should be above EMA50 (${ema50.toFixed(4)}) with >0.5% spread for long bias`
             : `EMA20 (${ema20.toFixed(4)}) should be below EMA50 (${ema50.toFixed(4)}) with <-0.5% spread for short bias`,
-          points: this.checkTrendAlignment(ema20, ema50, bias) ? 20 : 0,
+          points: this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook }) ? 20 : 0,
           details: {
             ema20: ema20.toFixed(4),
             ema50: ema50.toFixed(4),
@@ -5691,10 +5798,43 @@ export class ReboundRejectionAgent {
     };
   }
 
-  private checkTrendAlignment(ema20: number, ema50: number, bias: string): boolean {
-    const emaSpread = ((ema20 - ema50) / ema50) * 100;
-    if (bias === 'long') return ema20 > ema50 && emaSpread > 0.5;
-    if (bias === 'short') return ema20 < ema50 && emaSpread < -0.5;
+  private checkTrendAlignment(
+    ema20: number,
+    ema50: number,
+    bias: string,
+    opts?: { atrPct?: number; adx?: number; playbook?: string }
+  ): boolean {
+    if (!Number.isFinite(ema20) || !Number.isFinite(ema50) || ema50 === 0) {
+      return false;
+    }
+
+    const spreadPct = ((ema20 - ema50) / ema50) * 100;
+    const atrPct = Number.isFinite(opts?.atrPct) ? Math.max(0, Number(opts?.atrPct)) : undefined;
+    const adx = Number.isFinite(opts?.adx) ? Number(opts?.adx) : undefined;
+    const playbook = (opts?.playbook
+      ?? (this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion').toString().toLowerCase();
+
+    let requiredSpread = 0.5;
+
+    if (playbook === 'trend_following') {
+      const atrDerived = atrPct != null ? Math.max(0.2, Math.min(0.6, atrPct * 0.4)) : 0.3;
+      let dynamicRequirement = atrDerived;
+      if (adx != null && adx >= 25) dynamicRequirement = Math.max(0.2, dynamicRequirement - 0.05);
+      if (adx != null && adx >= 35) dynamicRequirement = Math.max(0.18, dynamicRequirement - 0.05);
+      requiredSpread = Math.max(0.2, dynamicRequirement);
+    } else if (atrPct != null) {
+      const base = 0.35 + (atrPct - 0.6) * 0.15;
+      requiredSpread = Math.max(0.3, Math.min(0.6, base));
+    }
+
+    if (bias === 'long') {
+      return ema20 > ema50 && spreadPct >= requiredSpread;
+    }
+    if (bias === 'short') {
+      return ema20 < ema50 && -spreadPct >= requiredSpread;
+    }
     return false;
   }
 
