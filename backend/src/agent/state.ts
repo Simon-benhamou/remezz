@@ -4206,7 +4206,12 @@ export class ReboundRejectionAgent {
     if (atrPct < minAtr) {
       const atrDeficit = minAtr - atrPct;
       const momentumPct = Math.abs(Number((snap as any)?.momentumPct ?? 0));
-      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx: adxValue, playbook });
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, {
+        atrPct,
+        adx: adxValue,
+        playbook,
+        price: snap.last,
+      });
       const strongAdx = adxValue >= Math.max(minAdxRequired, 25);
       const atrBuffer = playbook === 'momentum_breakout' ? 0.5 : playbook === 'trend_following' ? 0.4 : 0.8;
       const allowFlexibility = (
@@ -4379,10 +4384,15 @@ export class ReboundRejectionAgent {
     const normalizedPlaybook = String(playbook);
 
     // Detect breakout/reversal context early to avoid false blocks on data glitches
-  const earlyBreakoutAdx = Math.max(18, Number(getConfig().ENTRY_LONG_MIN_ADX || 22));
-  const earlyBreakoutAtr = Math.max(0.6, Number(getConfig().ENTRY_MIN_ATR_PCT || 0.8));
-  const isTrendAlignedEarly = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
-  const isBreakoutContextEarly = (adx >= earlyBreakoutAdx && atrPct >= earlyBreakoutAtr && isTrendAlignedEarly);
+    const earlyBreakoutAdx = Math.max(18, Number(getConfig().ENTRY_LONG_MIN_ADX || 22));
+    const earlyBreakoutAtr = Math.max(0.6, Number(getConfig().ENTRY_MIN_ATR_PCT || 0.8));
+    const isTrendAlignedEarly = this.checkTrendAlignment(ema20, ema50, bias, {
+      atrPct,
+      adx,
+      playbook: normalizedPlaybook,
+      price,
+    });
+    const isBreakoutContextEarly = (adx >= earlyBreakoutAdx && atrPct >= earlyBreakoutAtr && isTrendAlignedEarly);
     const isReversalContextEarly = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(getConfig().ANTI_WHALE_MIN_ADX || 18)));
     const allowVolumeFallback = (isBreakoutContextEarly || isReversalContextEarly) && volumeMA > 0;
 
@@ -4422,7 +4432,12 @@ export class ReboundRejectionAgent {
     const emaSpread = ((ema20 - ema50) / ema50) * 100;
 
     if (normalizedPlaybook === 'trend_following') {
-      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, {
+        atrPct,
+        adx,
+        playbook: normalizedPlaybook,
+        price,
+      });
       if (!trendAligned) {
         this.lastQualityFilterFailure = {
           code: 'quality.trend_misaligned',
@@ -4603,7 +4618,12 @@ export class ReboundRejectionAgent {
   // Use existing thresholds where possible; fallback to sane constants
   const breakoutAdx = Math.max(18, Number(cfg.ENTRY_LONG_MIN_ADX || 22));
   const breakoutAtr = Math.max(0.6, Number(cfg.ENTRY_MIN_ATR_PCT || 0.8));
-    const isTrendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
+    const isTrendAligned = this.checkTrendAlignment(ema20, ema50, bias, {
+      atrPct,
+      adx,
+      playbook: normalizedPlaybook,
+      price,
+    });
     const isBreakoutContext = (adx >= breakoutAdx && atrPct >= breakoutAtr && isTrendAligned);
   const isReversalContext = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(cfg.ANTI_WHALE_MIN_ADX || 18)));
 
@@ -5185,6 +5205,51 @@ export class ReboundRejectionAgent {
         }
       }
 
+      if (
+        !canTrade &&
+        trigger.entryReady &&
+        trigger.momentumOk &&
+        trigger.profitOk &&
+        checks?.qualityScore?.status === 'PASS'
+      ) {
+        const trendFilter = checks?.qualityFilters?.trendAlignment;
+        const trendStatus = typeof trendFilter?.status === 'string' ? trendFilter.status : null;
+        const otherQualityFailures = Object.entries(checks?.qualityFilters ?? {})
+          .filter(([key, filter]) => key !== 'trendAlignment' && (filter as any)?.status === 'FAIL');
+        const hasNonTrendBlockers = blockers.some((blocker) => blocker.status === 'FAIL' && blocker.key !== 'qualityFilters.trendAlignment');
+        if (
+          trendFilter &&
+          (trendStatus === 'SOFT_FAIL' || trendStatus === 'FAIL') &&
+          otherQualityFailures.length === 0 &&
+          !hasNonTrendBlockers
+        ) {
+          canTrade = true;
+          const overrideTag = 'override:trend_alignment_soft';
+          const existingReason = typeof trendFilter.reason === 'string' ? trendFilter.reason : '';
+          const reasonWithOverride = existingReason.includes(overrideTag)
+            ? existingReason
+            : `${existingReason}${existingReason ? ' | ' : ''}${overrideTag}`;
+          const existingDetails = (trendFilter as any).details && typeof (trendFilter as any).details === 'object'
+            ? { ...(trendFilter as any).details }
+            : {};
+          checks.qualityFilters.trendAlignment = {
+            ...trendFilter,
+            status: 'SOFT_FAIL',
+            reason: reasonWithOverride,
+            details: {
+              ...existingDetails,
+              override: 'trend_alignment_soft',
+              sizeMultiplier: typeof existingDetails.sizeMultiplier === 'number'
+                ? existingDetails.sizeMultiplier
+                : 0.7,
+            },
+          };
+          summary = this.getDiagnosticSummary(checks);
+          readiness = this.getTradingReadinessReason(checks);
+          blockers = this.extractDiagnosticBlockers(checks, readiness.failingChecks);
+        }
+      }
+
       if (!canTrade && this.lastDiagnosticCanTrade !== false) {
         this.emitValidatorBlockEvent({ snap, checks, trigger, summary, readiness });
       }
@@ -5584,7 +5649,12 @@ export class ReboundRejectionAgent {
     const emaSpreadPct = ema50 !== 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
 
     if (normalizedPlaybook === 'trend_following') {
-      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, {
+        atrPct,
+        adx,
+        playbook: normalizedPlaybook,
+        price,
+      });
       const pullback = bias === 'long' || bias === 'short'
         ? this.assessTrendPullbackStructure(price, ema20, ema50, bias)
         : { ok: false, distanceToEma20: Number.NaN, distanceToEma50: Number.NaN, reason: 'unknown_bias' };
@@ -5642,17 +5712,35 @@ export class ReboundRejectionAgent {
     }
 
     if (normalizedPlaybook === 'momentum_breakout') {
+      const price = Number.isFinite(snap.last) ? Number(snap.last) : Number((snap as any)?.last ?? 0);
+      const atrRequirement = Number.isFinite(atrPct)
+        ? Math.max(0.2, 0.4 * Number(atrPct))
+        : 0.5;
+      const spreadToPricePct = price > 0 ? ((ema20 - ema50) / price) * 100 : 0;
+      const directionalSpreadPct = bias === 'short' ? -spreadToPricePct : spreadToPricePct;
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, {
+        atrPct,
+        adx,
+        playbook: normalizedPlaybook,
+        price,
+      });
+      const trendStatus: 'PASS' | 'SOFT_FAIL' = trendAligned ? 'PASS' : 'SOFT_FAIL';
+      const trendPoints = trendAligned ? 20 : 14;
+
       return {
         trendAlignment: {
-          status: this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook }) ? 'PASS' : 'FAIL',
-          reason: bias === 'long'
-            ? `EMA20 (${ema20.toFixed(4)}) should be above EMA50 (${ema50.toFixed(4)}) with >0.5% spread for long bias`
-            : `EMA20 (${ema20.toFixed(4)}) should be below EMA50 (${ema50.toFixed(4)}) with <-0.5% spread for short bias`,
-          points: this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook }) ? 20 : 0,
+          status: trendStatus,
+          reason: trendAligned
+            ? 'Trend aligned with EMA stack and dynamic spread requirement met'
+            : 'Momentum breakout expects EMA20/EMA50 alignment with dynamic ATR-weighted spread',
+          points: trendPoints,
           details: {
             ema20: ema20.toFixed(4),
             ema50: ema50.toFixed(4),
-            spread: `${emaSpreadPct.toFixed(2)}%`
+            spreadToEma50Pct: `${emaSpreadPct.toFixed(2)}%`,
+            spreadToPricePct: `${directionalSpreadPct.toFixed(2)}%`,
+            requiredSpreadPct: `${atrRequirement.toFixed(2)}%`,
+            sizeMultiplier: trendAligned ? 1 : 0.7,
           }
         },
         momentum: {
@@ -5797,23 +5885,29 @@ export class ReboundRejectionAgent {
     ema20: number,
     ema50: number,
     bias: string,
-    opts?: { atrPct?: number; adx?: number; playbook?: string }
+    opts?: { atrPct?: number; adx?: number; playbook?: string; price?: number }
   ): boolean {
     if (!Number.isFinite(ema20) || !Number.isFinite(ema50) || ema50 === 0) {
       return false;
     }
 
-    const spreadPct = ((ema20 - ema50) / ema50) * 100;
-    const atrPct = Number.isFinite(opts?.atrPct) ? Math.max(0, Number(opts?.atrPct)) : undefined;
-    const adx = Number.isFinite(opts?.adx) ? Number(opts?.adx) : undefined;
     const playbook = (opts?.playbook
       ?? (this.plan?.plan?.meta?.playbook as string | undefined)
       ?? (this.regime?.playbook as string | undefined)
       ?? 'mean_reversion').toString().toLowerCase();
 
+    const priceBasis = playbook === 'momentum_breakout' && Number.isFinite(opts?.price) && Number(opts?.price) !== 0
+      ? Number(opts?.price)
+      : ema50;
+    const spreadPct = priceBasis !== 0 ? ((ema20 - ema50) / priceBasis) * 100 : 0;
+    const atrPct = Number.isFinite(opts?.atrPct) ? Math.max(0, Number(opts?.atrPct)) : undefined;
+    const adx = Number.isFinite(opts?.adx) ? Number(opts?.adx) : undefined;
+
     let requiredSpread = 0.5;
 
-    if (playbook === 'trend_following') {
+    if (playbook === 'momentum_breakout') {
+      requiredSpread = atrPct != null ? Math.max(0.2, 0.4 * atrPct) : 0.5;
+    } else if (playbook === 'trend_following') {
       const atrDerived = atrPct != null ? Math.max(0.2, Math.min(0.6, atrPct * 0.4)) : 0.3;
       let dynamicRequirement = atrDerived;
       if (adx != null && adx >= 25) dynamicRequirement = Math.max(0.2, dynamicRequirement - 0.05);
@@ -5824,11 +5918,13 @@ export class ReboundRejectionAgent {
       requiredSpread = Math.max(0.3, Math.min(0.6, base));
     }
 
+    const directionalSpread = bias === 'short' ? -spreadPct : spreadPct;
+
     if (bias === 'long') {
-      return ema20 > ema50 && spreadPct >= requiredSpread;
+      return ema20 > ema50 && directionalSpread >= requiredSpread;
     }
     if (bias === 'short') {
-      return ema20 < ema50 && -spreadPct >= requiredSpread;
+      return ema20 < ema50 && directionalSpread >= requiredSpread;
     }
     return false;
   }
