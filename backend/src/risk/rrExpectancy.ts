@@ -27,15 +27,15 @@ export type RRExpectancyOverrides = {
 };
 
 const DEFAULTS: RRExpectancyConfig = {
-  rrFloor: 1.0,
+  rrFloor: 0.95,
   rrCeil: 2.0,
-  rrBaseMin: 1.3,
+  rrBaseMin: 1.25,
   enabled: true,
-  minTrades: 50,
+  minTrades: 40,
   lookbackDays: 30,
   decay: 0.9,
-  safetyMult: 1.0,
-  blend: 0.5,
+  safetyMult: 0.95,
+  blend: 0.45,
   hysteresis: 0.05,
 };
 

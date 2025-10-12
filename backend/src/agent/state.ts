@@ -215,6 +215,9 @@ type DiagnosticBlocker = DiagnosticCheckRef & {
 };
 
 export class ReboundRejectionAgent {
+  private static readonly memeSymbols = new Set<string>([
+    'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK', 'PUMP', 'AVNT', 'MEW', 'WEN',
+  ]);
   state: AgentState = 'IDLE';
   profile: ActivationProfile | null = null;
   plan: ValidatedPlan | null = null;
@@ -1094,8 +1097,24 @@ export class ReboundRejectionAgent {
     // Aggressiveness-aware min profitability
     let minProfitPct = cfgProfit.MIN_TRADE_PROFIT_PCT;
     const levelProfit = this.profile?.aggressiveness || 'conservative';
-    if (levelProfit === 'reactive') minProfitPct = Math.max(0.6, minProfitPct - 0.2);
-    if (levelProfit === 'aggressive') minProfitPct = Math.max(0.5, minProfitPct - 0.3);
+    if (levelProfit === 'reactive') minProfitPct = Math.max(0.55, minProfitPct - 0.15);
+    if (levelProfit === 'aggressive') minProfitPct = Math.max(0.45, minProfitPct - 0.25);
+    const memeProfitRelax = this.isMemeCoin(this.profile?.symbol);
+    const atrContextPct = atrBaselinePct ?? snapAtrPct;
+    if (typeof atrContextPct === 'number' && atrContextPct > 0) {
+      if (atrContextPct < 0.1) {
+        minProfitPct = Math.min(minProfitPct, 0.3);
+      } else if (atrContextPct < 0.16) {
+        minProfitPct = Math.min(minProfitPct, 0.32);
+      } else if (atrContextPct < 0.25) {
+        minProfitPct = Math.min(minProfitPct, 0.35);
+      } else if (atrContextPct < 0.4) {
+        minProfitPct = Math.min(minProfitPct, 0.4);
+      }
+    }
+    if (memeProfitRelax) {
+      minProfitPct = Math.min(minProfitPct, 0.33);
+    }
     const firstTpProfitPct = Math.abs((tp[0] - entry) / entry) * 100;
     // Single profitability gate is enough; movement check duplicates the same quantity
     if (firstTpProfitPct < minProfitPct) {
@@ -1183,6 +1202,19 @@ export class ReboundRejectionAgent {
       }
     } catch {}
     dynamicRiskPct = await this.applyDailyRoiThrottle(dynamicRiskPct);
+    const memeGuard = this.isMemeCoin(this.profile?.symbol);
+    if (memeGuard) {
+      const memeMultiplier = 0.65;
+      dynamicRiskPct *= memeMultiplier;
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'meme_coin_risk_cap',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { memeMultiplier },
+      });
+    }
     if (this.profile.mode === 'live') {
       const pressure = getCapacityPressure(this.profile.symbol);
       if (pressure > 0) {
@@ -3903,13 +3935,19 @@ export class ReboundRejectionAgent {
     return null;
   }
 
+  private isMemeCoin(symbol?: string | null): boolean {
+    if (!symbol) return false;
+    const base = symbol.split('/')[0]?.toUpperCase();
+    return !!(base && ReboundRejectionAgent.memeSymbols.has(base));
+  }
+
   private getCryptoVolatilityProfile(symbol: string): 'HIGH_VOLATILITY' | 'MODERATE' | 'LOW_VOLATILITY' {
     const baseCrypto = symbol.split('/')[0]?.toUpperCase();
     if (!baseCrypto) return 'MODERATE';
 
     // Reuse existing volatility classification logic
-    if (['AVNT', 'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK'].includes(baseCrypto)) {
-      return 'HIGH_VOLATILITY';
+    if (ReboundRejectionAgent.memeSymbols.has(baseCrypto)) {
+      return 'MEME_VOLATILITY';
     }
     if (['BTC', 'USDC', 'USDT', 'DAI'].includes(baseCrypto)) {
       return 'LOW_VOLATILITY';
@@ -3919,6 +3957,7 @@ export class ReboundRejectionAgent {
 
   private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {
     const thresholds = this.effectiveEntryThresholds();
+    const memeBias = this.isMemeCoin(this.profile?.symbol);
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
     const quantFilters = this.quantConfig?.filters;
@@ -3938,6 +3977,10 @@ export class ReboundRejectionAgent {
     } else {
       minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
     }
+    if (memeBias) {
+      minAtr = Math.max(0.06, minAtr * 0.9);
+      minSlopeAbsPct = Math.max(0.005, minSlopeAbsPct * 0.8);
+    }
     const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
     if (playbook === 'momentum_breakout') {
       minAtr *= 1.15; // demand more volatility for breakout setups
@@ -3948,9 +3991,12 @@ export class ReboundRejectionAgent {
     const baseAdxRequirement = this.plan?.bias === 'short'
       ? thresholds.ENTRY_SHORT_MIN_ADX
       : thresholds.ENTRY_LONG_MIN_ADX;
-    const minAdxRequired = quantFilters && Number.isFinite(quantFilters.minAdx)
+    let minAdxRequired = quantFilters && Number.isFinite(quantFilters.minAdx)
       ? Math.min(baseAdxRequirement, Number(quantFilters.minAdx))
       : baseAdxRequirement;
+    if (memeBias) {
+      minAdxRequired = Math.max(8, minAdxRequired - 2);
+    }
 
     if (adxValue > 0 && adxValue < minAdxRequired) {
       recordOpsEvent({
@@ -4055,8 +4101,8 @@ export class ReboundRejectionAgent {
     const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
     const bias = this.plan?.bias || 'none';
 
-    const slopeFloor = playbook === 'momentum_breakout' ? 0.08 : 0.05;
-    const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.75 : 0.6;
+    const slopeFloor = playbook === 'momentum_breakout' ? 0.07 : 0.04;
+    const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.7 : 0.55;
     const adjustedSlopeRequirement = Math.max(
       slopeFloor,
       Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - (playbook === 'momentum_breakout' ? 0.03 : 0.05), slopeFloor))
@@ -5616,7 +5662,19 @@ export class ReboundRejectionAgent {
   }> {
     const cfg = this.rrExpectancyConfig ?? DEFAULT_RR_EXPECTANCY_CONFIG;
     const clampToRange = (value: number) => Math.max(cfg.rrFloor, Math.min(cfg.rrCeil, Math.round(value * 100) / 100));
-    const base = clampToRange(cfg.rrBaseMin);
+    const discoveryTrades = this.performanceMetrics?.totalTrades ?? 0;
+    let base = clampToRange(cfg.rrBaseMin);
+    if (this.isMemeCoin(this.profile?.symbol)) {
+      base = clampToRange(base - 0.05);
+    }
+    const discoveryThreshold = Math.max(10, Math.floor(cfg.minTrades / 2));
+    if (discoveryTrades < discoveryThreshold) {
+      base = clampToRange(Math.min(base, cfg.rrFloor + 0.2));
+    }
+    if (this.drySpellState.steps > 0) {
+      const rrRelax = Math.min(0.2, this.drySpellState.steps * 0.05);
+      base = clampToRange(base - rrRelax);
+    }
 
     if (!cfg.enabled || !this.sessionId) {
       this.rrExpectancyState.lastEffective = base;

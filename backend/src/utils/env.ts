@@ -362,7 +362,7 @@ export function getConfig(): Cfg {
     CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "3.0"), // 3% loss = immediate exit (increased for crypto)
     // Trade quality filters
     // Lowered to trigger more realistic crypto trades while keeping quality
-    MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "0.5"), // 0.5% minimum expected profit for crypto
+    MIN_TRADE_PROFIT_PCT: Number(e.MIN_TRADE_PROFIT_PCT || "0.35"), // 0.35% baseline profit target for calm crypto markets
     MIN_PRICE_MOVEMENT_PCT: Number(e.MIN_PRICE_MOVEMENT_PCT || "0.6"), // 0.6% movement significant
     // Slightly reduced base quality thresholds (dynamic adjustments still apply)
     QUALITY_MIN_SCORE_CONSERVATIVE: Number(e.QUALITY_MIN_SCORE_CONSERVATIVE || "60"),
@@ -410,7 +410,7 @@ export function getConfig(): Cfg {
     COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
     // ATR % threshold relaxed to 0.3 by default; adaptive logic still enforces safety per symbol
     ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.3"),
-    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.03"),
+    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.02"),
     // Adaptive performance tuning (streak-based)
     STREAK_WINDOW: Number(e.STREAK_WINDOW || "3"),
     LOSS_STREAK_ATR_BOOST: Number(e.LOSS_STREAK_ATR_BOOST || "0.15"),
