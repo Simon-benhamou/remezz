@@ -18,6 +18,13 @@ export type EntryEvaluation = {
   reasons: Record<string, string>;
 };
 
+export type EntryRelaxation = {
+  minAdxDelta?: number;
+  minRrDelta?: number;
+  confidenceDelta?: number;
+  minAtrPctDelta?: number;
+};
+
 export class EntryFilters {
   constructor(private readonly cfg: QuantAIEntryFilterConfig) {}
 
@@ -31,6 +38,7 @@ export class EntryFilters {
       aggressiveness?: string | null;
       atrBaselinePct?: number | null;
       volatilityProfile?: string | null;
+      relaxation?: EntryRelaxation | null;
     } = {},
   ): EntryEvaluation {
     const reasons: Record<string, string> = {};
@@ -49,6 +57,7 @@ export class EntryFilters {
     let useConfidenceFilter = this.cfg.useConfidenceFilter;
     let maxAtrPct = this.cfg.maxAtrPct ?? Number.POSITIVE_INFINITY;
     let spreadAtrRatioLimit = this.cfg.dynamic?.spreadAtrRatioLimit;
+    const relaxation = opts.relaxation ?? null;
 
     const tierOverride = tier ? this.cfg.tierOverrides?.[tier] : undefined;
     if (tierOverride) {
@@ -131,6 +140,33 @@ export class EntryFilters {
         if (adj.minAtrPctDelta != null) {
           minAtrPct = Math.max(0, minAtrPct + adj.minAtrPctDelta);
         }
+      }
+    }
+
+    if (relaxation) {
+      const relaxationNotes: string[] = [];
+      if (relaxation.minAdxDelta != null && relaxation.minAdxDelta !== 0) {
+        minAdx = Math.max(0, minAdx + relaxation.minAdxDelta);
+        relaxationNotes.push(`minAdx${relaxation.minAdxDelta >= 0 ? '+' : ''}${relaxation.minAdxDelta.toFixed(2)}`);
+      }
+      if (relaxation.minRrDelta != null && relaxation.minRrDelta !== 0) {
+        if (minRr != null) {
+          minRr = Math.max(0, minRr + relaxation.minRrDelta);
+        } else if (baseMinRr != null) {
+          minRr = Math.max(0, baseMinRr + relaxation.minRrDelta);
+        }
+        relaxationNotes.push(`minRr${relaxation.minRrDelta >= 0 ? '+' : ''}${relaxation.minRrDelta.toFixed(2)}`);
+      }
+      if (relaxation.confidenceDelta != null && relaxation.confidenceDelta !== 0) {
+        confidenceThreshold = Math.max(0, confidenceThreshold + relaxation.confidenceDelta);
+        relaxationNotes.push(`confidence${relaxation.confidenceDelta >= 0 ? '+' : ''}${relaxation.confidenceDelta.toFixed(2)}`);
+      }
+      if (relaxation.minAtrPctDelta != null && relaxation.minAtrPctDelta !== 0) {
+        minAtrPct = Math.max(0, minAtrPct + relaxation.minAtrPctDelta);
+        relaxationNotes.push(`minAtrPct${relaxation.minAtrPctDelta >= 0 ? '+' : ''}${relaxation.minAtrPctDelta.toFixed(2)}`);
+      }
+      if (relaxationNotes.length > 0) {
+        reasons.relaxation = `APPLIED (${relaxationNotes.join(', ')})`;
       }
     }
 

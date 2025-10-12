@@ -45,6 +45,18 @@ export type QuantAIVolatilityProfileOverride = {
   spreadAtrRatioLimit?: number;
 };
 
+export type QuantAIDrySpellConfig = {
+  enabled: boolean;
+  minMinutesWithoutTrade: number;
+  rejectionsForStep: number;
+  relaxationStepMinutes: number;
+  maxSteps: number;
+  minAdxDeltaPerStep: number;
+  minRrDeltaPerStep: number;
+  confidenceDeltaPerStep: number;
+  minAtrPctDeltaPerStep: number;
+};
+
 export type QuantAIEntryFilterDynamicConfig = {
   baselineAtrMultiplier?: number;
   atrHighVolThresholdPct?: number;
@@ -55,6 +67,7 @@ export type QuantAIEntryFilterDynamicConfig = {
   atrMaxPct?: number;
   atrMaxPctByTier?: Record<string, number>;
   spreadAtrRatioLimit?: number;
+  drySpell?: QuantAIDrySpellConfig;
   aggressivenessAdjustments?: Record<string, {
     minRrDelta?: number;
     minAdxDelta?: number;
@@ -124,34 +137,36 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     defaultSlippageBps: 2.0,
   },
   filters: {
-    minAdx: 18,
-    minDollarVolume: 500_000,
-    minRr: 1.3,
-    minAtrPct: 0.15,
-    maxSpreadBps: 10,
-    confidenceThreshold: 0.58,
+    minAdx: 14,
+    minDollarVolume: 150_000,
+    minRr: 1.15,
+    minAtrPct: 0.08,
+    maxSpreadBps: 16,
+    confidenceThreshold: 0.55,
     useConfidenceFilter: true,
-    maxAtrPct: 8,
+    maxAtrPct: 12,
     tierOverrides: {
       tier1: {
-        minRr: 1.5,
-        minDollarVolume: 10_000_000,
-        maxSpreadBps: 7,
-        confidenceThresholdDelta: 0.02,
-        maxAtrPct: 4,
+        minRr: 1.3,
+        minDollarVolume: 3_000_000,
+        maxSpreadBps: 8,
+        confidenceThresholdDelta: 0.01,
+        maxAtrPct: 6,
       },
       tier2: {
-        minDollarVolume: 1_000_000,
+        minDollarVolume: 500_000,
+        minRr: 1.2,
+        maxSpreadBps: 12,
       },
       tier3: {
-        minAdx: 25,
-        minRr: 2.0,
-        minDollarVolume: 1_000_000,
-        maxSpreadBps: 15,
-        confidenceThresholdDelta: 0.05,
-        minAtrPctMultiplier: 0.8,
-        maxAtrPct: 9,
-        spreadAtrRatioLimit: 0.4,
+        minAdx: 18,
+        minRr: 1.4,
+        minDollarVolume: 150_000,
+        maxSpreadBps: 18,
+        confidenceThresholdDelta: 0.02,
+        minAtrPctMultiplier: 0.6,
+        maxAtrPct: 12,
+        spreadAtrRatioLimit: 0.6,
       },
     },
     volatilityProfileOverrides: {
@@ -177,36 +192,47 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       MODERATE: {},
     },
     dynamic: {
-      baselineAtrMultiplier: 0.6,
-      atrHighVolThresholdPct: 1.0,
-      atrHighVolMinAdx: 20,
-      atrExtremeVolThresholdPct: 3.0,
-      atrExtremeVolMinAdx: 25,
-      atrExtremeVolMinRr: 1.6,
-      atrMaxPct: 8,
+      baselineAtrMultiplier: 0.45,
+      atrHighVolThresholdPct: 1.5,
+      atrHighVolMinAdx: 18,
+      atrExtremeVolThresholdPct: 4.0,
+      atrExtremeVolMinAdx: 22,
+      atrExtremeVolMinRr: 1.35,
+      atrMaxPct: 12,
       atrMaxPctByTier: {
-        tier1: 4,
-        tier2: 6,
-        tier3: 9,
+        tier1: 6,
+        tier2: 9,
+        tier3: 12,
       },
-      spreadAtrRatioLimit: 0.35,
+      spreadAtrRatioLimit: 0.55,
       confidenceTierAdjustments: {
-        tier3: 0.05,
+        tier3: 0.02,
       },
       rrTierAdjustments: {
-        tier1: 0.2,
-        tier3: 0.5,
+        tier1: 0.15,
+        tier3: 0.2,
+      },
+      drySpell: {
+        enabled: true,
+        minMinutesWithoutTrade: 30,
+        rejectionsForStep: 4,
+        relaxationStepMinutes: 20,
+        maxSteps: 4,
+        minAdxDeltaPerStep: -2.5,
+        minRrDeltaPerStep: -0.15,
+        confidenceDeltaPerStep: -0.03,
+        minAtrPctDeltaPerStep: -0.04,
       },
       aggressivenessAdjustments: {
         conservative: {
-          minRrDelta: 0.1,
-          confidenceDelta: 0.02,
+          minRrDelta: 0.05,
+          confidenceDelta: 0.015,
         },
         aggressive: {
-          minRrDelta: -0.15,
-          minAdxDelta: -2,
-          confidenceDelta: -0.02,
-          minAtrPctDelta: -0.05,
+          minRrDelta: -0.25,
+          minAdxDelta: -3,
+          confidenceDelta: -0.04,
+          minAtrPctDelta: -0.06,
         },
       },
     },
@@ -295,6 +321,9 @@ function cloneDynamic(
   }
   if (dynamic.rrTierAdjustments) {
     cloned.rrTierAdjustments = { ...dynamic.rrTierAdjustments };
+  }
+  if (dynamic.drySpell) {
+    cloned.drySpell = { ...dynamic.drySpell };
   }
   if (dynamic.aggressivenessAdjustments) {
     cloned.aggressivenessAdjustments = {};
@@ -448,13 +477,49 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
       ?? (dynamicRaw as Record<string, any>)['rrTierAdjustments'];
     if (rrAdjust && typeof rrAdjust === 'object') {
       const src = rrAdjust as Record<string, any>;
-      cfg.dynamic!.rrTierAdjustments = cfg.dynamic!.rrTierAdjustments
-        ? { ...cfg.dynamic!.rrTierAdjustments }
-        : {};
+    cfg.dynamic!.rrTierAdjustments = cfg.dynamic!.rrTierAdjustments
+      ? { ...cfg.dynamic!.rrTierAdjustments }
+      : {};
       for (const [key, value] of Object.entries(src)) {
         const val = normalizeOptionalNumber(value);
         if (val != null) cfg.dynamic!.rrTierAdjustments![key] = val;
       }
+    }
+    const drySpellRaw = (dynamicRaw as Record<string, any>)['dry_spell']
+      ?? (dynamicRaw as Record<string, any>)['drySpell'];
+    if (drySpellRaw && typeof drySpellRaw === 'object') {
+      const base = defaults.dynamic?.drySpell;
+      const normalize = (field: string, fallback: number): number => {
+        const value = (drySpellRaw as Record<string, any>)[field]
+          ?? (drySpellRaw as Record<string, any>)[field.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`)];
+        const num = Number(value);
+        return Number.isFinite(num) ? num : fallback;
+      };
+      const enabledValue = (drySpellRaw as Record<string, any>)['enabled'];
+      let enabled: boolean;
+      if (typeof enabledValue === 'boolean') {
+        enabled = enabledValue;
+      } else if (typeof enabledValue === 'string') {
+        enabled = enabledValue.trim().length === 0
+          ? (base?.enabled ?? true)
+          : enabledValue.trim().toLowerCase() !== 'false';
+      } else if (typeof enabledValue === 'number') {
+        enabled = enabledValue !== 0;
+      } else {
+        enabled = base?.enabled ?? true;
+      }
+      const defaultsDry = base ?? DEFAULT_CONFIG.filters.dynamic?.drySpell!;
+      cfg.dynamic!.drySpell = {
+        enabled,
+        minMinutesWithoutTrade: normalize('minMinutesWithoutTrade', defaultsDry.minMinutesWithoutTrade),
+        rejectionsForStep: normalize('rejectionsForStep', defaultsDry.rejectionsForStep),
+        relaxationStepMinutes: normalize('relaxationStepMinutes', defaultsDry.relaxationStepMinutes),
+        maxSteps: normalize('maxSteps', defaultsDry.maxSteps),
+        minAdxDeltaPerStep: normalize('minAdxDeltaPerStep', defaultsDry.minAdxDeltaPerStep),
+        minRrDeltaPerStep: normalize('minRrDeltaPerStep', defaultsDry.minRrDeltaPerStep),
+        confidenceDeltaPerStep: normalize('confidenceDeltaPerStep', defaultsDry.confidenceDeltaPerStep),
+        minAtrPctDeltaPerStep: normalize('minAtrPctDeltaPerStep', defaultsDry.minAtrPctDeltaPerStep),
+      };
     }
     const aggrAdjust = (dynamicRaw as Record<string, any>)['aggressiveness_adjustments']
       ?? (dynamicRaw as Record<string, any>)['aggressivenessAdjustments'];
