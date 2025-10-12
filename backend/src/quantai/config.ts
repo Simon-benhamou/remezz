@@ -123,10 +123,10 @@ export type QuantAIConfig = {
 const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
   baselineAtrMultiplier: 0.45,
   atrHighVolThresholdPct: 1.5,
-  atrHighVolMinAdx: 18,
-  atrExtremeVolThresholdPct: 4.0,
-  atrExtremeVolMinAdx: 22,
-  atrExtremeVolMinRr: 1.35,
+  atrHighVolMinAdx: 16,
+  atrExtremeVolThresholdPct: 3.5,
+  atrExtremeVolMinAdx: 19,
+  atrExtremeVolMinRr: 1.25,
   atrMaxPct: 12,
   atrMaxPctByTier: {
     tier1: 6,
@@ -144,13 +144,13 @@ const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
   drySpell: {
     enabled: true,
     minMinutesWithoutTrade: 30,
-    rejectionsForStep: 4,
-    relaxationStepMinutes: 20,
+    rejectionsForStep: 3,
+    relaxationStepMinutes: 15,
     maxSteps: 4,
-    minAdxDeltaPerStep: -2.5,
-    minRrDeltaPerStep: -0.15,
-    confidenceDeltaPerStep: -0.03,
-    minAtrPctDeltaPerStep: -0.04,
+    minAdxDeltaPerStep: -3,
+    minRrDeltaPerStep: -0.18,
+    confidenceDeltaPerStep: -0.035,
+    minAtrPctDeltaPerStep: -0.05,
   },
 };
 
@@ -186,7 +186,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
   filters: {
     minAdx: 14,
     minDollarVolume: 150_000,
-    minRr: 1.15,
+    minRr: 1.1,
     minAtrPct: 0.08,
     maxSpreadBps: 16,
     confidenceThreshold: 0.55,
@@ -194,7 +194,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     maxAtrPct: 12,
     tierOverrides: {
       tier1: {
-        minRr: 1.3,
+        minRr: 1.25,
         minDollarVolume: 3_000_000,
         maxSpreadBps: 8,
         confidenceThresholdDelta: 0.01,
@@ -202,12 +202,12 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       },
       tier2: {
         minDollarVolume: 500_000,
-        minRr: 1.2,
+        minRr: 1.15,
         maxSpreadBps: 12,
       },
       tier3: {
         minAdx: 18,
-        minRr: 1.4,
+        minRr: 1.32,
         minDollarVolume: 150_000,
         maxSpreadBps: 18,
         confidenceThresholdDelta: 0.02,
@@ -227,6 +227,13 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         minAtrPct: 0.18,
         maxAtrPct: 10,
         minAdx: 10,
+      },
+      MEME_VOLATILITY: {
+        minDollarVolume: 250_000,
+        minAtrPct: 0.14,
+        maxAtrPct: 14,
+        minAdx: 12,
+        spreadAtrRatioLimit: 0.65,
       },
       LOW_VOLATILITY: {
         minDollarVolume: 800_000,
