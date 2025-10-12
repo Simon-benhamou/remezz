@@ -1398,12 +1398,27 @@ export class ReboundRejectionAgent {
         .filter((value): value is number => value != null && Number.isFinite(value) && value > 0)
       : [];
     let rrWeighted: number | undefined;
-    let tpWeightProfile: number[] = [0.6, 0.3, 0.1];
-    if (adxValue >= 35 && (volumeRatio ?? 0) >= 1.2 && slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2)) {
-      tpWeightProfile = [0.35, 0.4, 0.25];
-    } else if ((adxValue >= 30 && slopeDirectionalPct >= 0.22) || (adxValue >= 32 && (volumeRatio ?? 0) >= 1.15)) {
-      tpWeightProfile = [0.45, 0.35, 0.2];
-    }
+    // Structured configuration for TP weight profiles and their threshold conditions
+    const tpWeightProfilesConfig = [
+      {
+        profile: [0.35, 0.4, 0.25],
+        condition: () =>
+          adxValue >= 35 &&
+          (volumeRatio ?? 0) >= 1.2 &&
+          slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2),
+      },
+      {
+        profile: [0.45, 0.35, 0.2],
+        condition: () =>
+          (adxValue >= 30 && slopeDirectionalPct >= 0.22) ||
+          (adxValue >= 32 && (volumeRatio ?? 0) >= 1.15),
+      },
+      {
+        profile: [0.6, 0.3, 0.1], // default
+        condition: () => true,
+      },
+    ];
+    let tpWeightProfile: number[] = tpWeightProfilesConfig.find(cfg => cfg.condition()).profile;
     if (rMultiples.length > 0) {
       const baseWeights = tpWeightProfile;
       const fallbackWeight = baseWeights[baseWeights.length - 1] ?? 0.1;
