@@ -51,7 +51,7 @@ async function handleMarginAlert(alert: PolicyAlert) {
     }
 
     try {
-      await AgentHub.halt(sessionId);
+      await AgentHub.halt(sessionId, 'entries_only');
     } catch (error) {
       recordOpsEvent({
         level: 'warn',
