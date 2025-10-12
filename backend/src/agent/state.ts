@@ -4,8 +4,7 @@ import type { RegimeProfile } from '../ai/regime.js';
 import { buildTechSnapshot, TechnicalSnapshot } from '../ai/tech.js';
 import { getCapacityPressure, inspectExposure, LiveBroker } from '../broker/live.js';
 import { PaperBroker } from '../broker/paper.js';
-import type { PlacedOrder } from '../broker/types.js';
-import { Broker } from '../broker/types.js';
+import type { Broker, PlacedOrder, BrokerMarginSnapshot } from '../broker/types.js';
 import { InsufficientDataError, isInsufficientDataError } from '../data/errors.js';
 import { getTicker } from '../data/market.js';
 import { getAICallsCount } from '../metrics/aiCalls.js';
@@ -26,6 +25,7 @@ import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, Po
 import { chooseExecutionPlan, ExecutionPlan } from './executionPlanner.js';
 import type { EntryRelaxation } from '../quantai/strategy/entryFilters.js';
 import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../quantai/index.js';
+import { createMarginAdvisor } from '../risk/marginTools.js';
 
 export type AgentMode = 'paper'|'live';
 export type AgentState = 'IDLE'|'PREFLIGHT'|'SCAN'|'PROPOSE'|'VALIDATE'|'ARMED'|'ENTERED'|'MANAGE'|'EXIT'|'REPORT'|'COOLDOWN'|'HALT';
@@ -271,6 +271,18 @@ export class ReboundRejectionAgent {
   private protectiveErrorCount = 0;
   private killSwitchContext: { reason: string; details?: any } | null = null;
   private haltAckRequired = false;
+  private marginHaltState: {
+    active: boolean;
+    mode: 'entries_only' | 'full' | null;
+    activatedAt: number;
+    lastBreachTs: number;
+  } = {
+    active: false,
+    mode: null,
+    activatedAt: 0,
+    lastBreachTs: 0,
+  };
+  private lastMarginSnapshot: BrokerMarginSnapshot | null = null;
   private recoveryTimer: NodeJS.Timeout | null = null;
   private cooldownTimer: NodeJS.Timeout | null = null;
   private cooldownContext: { reason: string; guard?: RiskDecision; triggeredAt: number } | null = null;
@@ -893,6 +905,22 @@ export class ReboundRejectionAgent {
     }
     if (this.pos || this.entering) return;
 
+    let marginSnapshot: BrokerMarginSnapshot | null = null;
+    if (this.isEntriesOnlyHaltActive()) {
+      try {
+        marginSnapshot = await this.broker.balance();
+        this.maybeReleaseMarginHalt(marginSnapshot);
+      } catch (error) {
+        console.warn('Failed to refresh margin snapshot while halt active:', error);
+      }
+      if (this.isEntriesOnlyHaltActive()) {
+        this.noteSignalDrop('margin_halt_entries_only', 'warn', {
+          reason: 'entries_only_halt_active',
+        });
+        return;
+      }
+    }
+
     this.resetQualityPreview();
 
     // � PHASE 1 FIX #1: Whipsaw protection - 3-stage confirmation
@@ -1132,7 +1160,10 @@ export class ReboundRejectionAgent {
         },
       });
     }
-    const bal = await this.broker.balance();
+    const bal = marginSnapshot ?? await this.broker.balance();
+    marginSnapshot = bal;
+    this.maybeReleaseMarginHalt(bal);
+    const marginAdvisor = createMarginAdvisor(bal);
     const equityCandidate = Number.isFinite(bal?.equityUsd) ? Number(bal.equityUsd) : Number(bal?.freeUsd ?? this.profile.startBalanceUsd ?? 0);
     this.lastKnownEquityUsd = Number.isFinite(equityCandidate) && equityCandidate > 0 ? equityCandidate : Math.max(0, Number(this.profile.startBalanceUsd ?? 0));
     const nowDate = new Date();
@@ -1805,7 +1836,40 @@ export class ReboundRejectionAgent {
         },
       });
     }
-    
+
+    if (notional > 0) {
+      const maxAdditional = marginAdvisor.maxAdditionalNotionalAt(effectiveLev);
+      const freeCapRatio = notional > 0 ? maxAdditional / notional : 1;
+      const marginClamp = Math.min(1, Math.max(0, freeCapRatio));
+      if (marginClamp <= 0) {
+        this.noteSignalDrop('margin_capacity_block', 'warn', {
+          reason: 'insufficient_free_margin',
+          leverage: effectiveLev,
+          utilisationPct: marginAdvisor.utilisationPct(),
+        });
+        this.entering = false;
+        return;
+      }
+      if (marginClamp < 1) {
+        const adjustedNotional = notional * marginClamp;
+        recordOpsEvent({
+          level: 'warn',
+          source: 'margin_guard',
+          message: 'margin_capacity_scaled',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            requestedNotional: notional,
+            allowedNotional: adjustedNotional,
+            leverage: effectiveLev,
+            utilisationPct: marginAdvisor.utilisationPct(),
+            ratio: marginClamp,
+          },
+        });
+        notional = adjustedNotional;
+      }
+    }
+
     let qty = notional / Math.max(entry, 1e-8);
 
     const equityCapNotional = Math.max(0, bal.equityUsd * (effectiveLev || 1));
@@ -1907,7 +1971,49 @@ export class ReboundRejectionAgent {
     spreadBps = marketTicker?.bid && marketTicker?.ask
       ? ((marketTicker.ask - marketTicker.bid) / ((marketTicker.ask + marketTicker.bid) / 2)) * 10_000
       : spreadBps;
-    const notionalUsd = qty * entry;
+    let notionalUsd = qty * entry;
+    if (notionalUsd > 0) {
+      const marginCfg = getConfig();
+      const critical = marginCfg.MARGIN_UTIL_CRITICAL_PCT ?? 75;
+      const utilNow = marginAdvisor.utilisationPct();
+      const utilAfter = marginAdvisor.utilisationPctIf(notionalUsd, effectiveLev);
+      if (utilAfter > critical) {
+        const denom = utilAfter - utilNow;
+        const scale = denom > 0 ? (critical - utilNow) / denom : 0;
+        const tolerance = 0.2;
+        if (scale > tolerance) {
+          const clamp = Math.max(0, Math.min(1, scale));
+          const adjustedNotional = notionalUsd * clamp;
+          qty = adjustedNotional / Math.max(entry, 1e-8);
+          notional = adjustedNotional;
+          notionalUsd = adjustedNotional;
+          recordOpsEvent({
+            level: 'warn',
+            source: 'margin_guard',
+            message: 'margin_projection_scaled',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile?.symbol,
+            details: {
+              utilNow,
+              utilAfter,
+              critical,
+              scale: clamp,
+              requestedNotional: notionalUsd / clamp,
+              adjustedNotional,
+            },
+          });
+        } else {
+          this.noteSignalDrop('margin_projection_block', 'warn', {
+            utilNow,
+            utilAfter,
+            critical,
+            tolerance,
+          });
+          this.entering = false;
+          return;
+        }
+      }
+    }
     const plan = chooseExecutionPlan({
       symbol: this.profile.symbol,
       side,
@@ -2038,6 +2144,16 @@ export class ReboundRejectionAgent {
       // Runner TP at 5R for crypto
       const runnerTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 5)) : (this.pos.entry - (this.plan.stopDistance * 5));
       this.pos.tp.push(runnerTp);
+    }
+
+    await this.enforceMarginAfterFill(effectiveLev, executionPrice);
+
+    if (!this.pos || this.pos.qty <= 0) {
+      this.noteSignalDrop('margin_auto_reduce_closed', 'warn', {
+        reason: 'position_reduced_to_zero_after_margin_guard',
+      });
+      this.entering = false;
+      return;
     }
 
     try {
@@ -3133,23 +3249,30 @@ export class ReboundRejectionAgent {
     const adaptiveTimeMs = this.getAdaptiveConfirmationTime(snap);
     const timeInZoneMs = now - this.priceInZoneStartTime;
     const timeInZoneMin = timeInZoneMs / 60000;
-    const requiredMin = adaptiveTimeMs / 60000;
-    
-    if (timeInZoneMs < adaptiveTimeMs) {
-      return { 
-        confirmed: false, 
-        reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${snap.adx14?.toFixed(1) || 'N/A'})` 
+
+    const recentSlope = this.calculateRecentSlope(snap, 5); // Last 5 candles
+    const momentumReversed = (bias === 'long' && recentSlope > 0) || (bias === 'short' && recentSlope < 0);
+
+    const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
+    const lastVolume = snap.volume || 0;
+    const volumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
+    const adx = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
+    const breakoutActive = this.runtimeZoneDiagnostics?.breakoutActive ?? false;
+    const fastTrackEligible = breakoutActive || (momentumReversed && adx >= 28 && volumeRatio >= 1.25);
+    const fastTrackTimeMs = fastTrackEligible ? Math.min(adaptiveTimeMs, 2 * 60 * 1000) : adaptiveTimeMs;
+    const requiredMin = fastTrackTimeMs / 60000;
+
+    if (timeInZoneMs < fastTrackTimeMs) {
+      return {
+        confirmed: false,
+        reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${adx.toFixed(1)})`
       };
     }
 
-    // 2️⃣ MOMENTUM CHECK: Trend must show reversal
-    const recentSlope = this.calculateRecentSlope(snap, 5); // Last 5 candles
-    const momentumReversed = (bias === 'long' && recentSlope > 0) || (bias === 'short' && recentSlope < 0);
-    
     if (!momentumReversed) {
-      return { 
-        confirmed: false, 
-        reason: `Waiting for momentum reversal (slope: ${recentSlope.toFixed(4)}, need ${bias === 'long' ? 'positive' : 'negative'})` 
+      return {
+        confirmed: false,
+        reason: `Waiting for momentum reversal (slope: ${recentSlope.toFixed(4)}, need ${bias === 'long' ? 'positive' : 'negative'})`
       };
     }
 
@@ -7347,6 +7470,168 @@ export class ReboundRejectionAgent {
     this.filterRejectionStats.lastLogTs = now;
   }
 
+  private isEntriesOnlyHaltActive(): boolean {
+    return this.marginHaltState.active && this.marginHaltState.mode === 'entries_only';
+  }
+
+  private setMarginHalt(mode: 'entries_only' | 'full', reason: string, details?: Record<string, unknown>): void {
+    const now = Date.now();
+    const sameMode = this.marginHaltState.active && this.marginHaltState.mode === mode;
+    this.marginHaltState.active = true;
+    this.marginHaltState.mode = mode;
+    this.marginHaltState.lastBreachTs = now;
+    if (!sameMode) {
+      this.marginHaltState.activatedAt = now;
+    }
+
+    recordOpsEvent({
+      level: mode === 'entries_only' ? 'warn' : 'error',
+      source: 'margin_guard',
+      message: mode === 'entries_only' ? 'margin_halt_entries_only' : 'margin_halt_full',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        reason,
+        mode,
+        ...(details || {}),
+      },
+    });
+
+    if (mode === 'full') {
+      this.state = 'HALT';
+      this.entering = false;
+    }
+  }
+
+  private clearMarginHalt(reason: string, snapshot?: BrokerMarginSnapshot | null): void {
+    if (!this.marginHaltState.active) return;
+
+    const referenceSnapshot = snapshot || this.lastMarginSnapshot;
+    const advisor = referenceSnapshot ? createMarginAdvisor(referenceSnapshot) : null;
+    const utilisation = advisor ? advisor.utilisationPct() : undefined;
+
+    this.marginHaltState = { active: false, mode: null, activatedAt: 0, lastBreachTs: 0 };
+
+    recordOpsEvent({
+      level: 'info',
+      source: 'margin_guard',
+      message: 'halt_released',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        reason,
+        utilisationPct: utilisation,
+      },
+    });
+  }
+
+  private maybeReleaseMarginHalt(snapshot: BrokerMarginSnapshot): void {
+    this.lastMarginSnapshot = snapshot;
+    if (!this.marginHaltState.active || this.marginHaltState.mode !== 'entries_only') return;
+
+    const cfg = getConfig();
+    const advisor = createMarginAdvisor(snapshot);
+    const utilisation = advisor.utilisationPct();
+    const resumeThreshold = Math.max(0, cfg.MARGIN_HALT_RESUME_PCT ?? cfg.MARGIN_UTIL_CRITICAL_PCT);
+    const cooldownMs = Math.max(0, cfg.MARGIN_HALT_RELEASE_COOLDOWN_MS ?? 10_000);
+    const now = Date.now();
+
+    if (utilisation < resumeThreshold && now - this.marginHaltState.lastBreachTs > cooldownMs) {
+      this.clearMarginHalt('auto_resume', snapshot);
+    }
+  }
+
+  private async enforceMarginAfterFill(effectiveLev: number, executionPrice: number): Promise<void> {
+    if (!this.broker || !this.profile || !this.pos) return;
+
+    let snapshot: BrokerMarginSnapshot;
+    try {
+      snapshot = await this.broker.balance();
+    } catch (error) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'margin_guard',
+        message: 'margin_auto_reduce_balance_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { error: String((error as any)?.message || error) },
+      });
+      return;
+    }
+
+    this.maybeReleaseMarginHalt(snapshot);
+    const cfg = getConfig();
+    const advisor = createMarginAdvisor(snapshot);
+    const utilisation = advisor.utilisationPct();
+    const critical = cfg.MARGIN_UTIL_CRITICAL_PCT ?? 75;
+    if (utilisation <= critical) return;
+
+    const targetBase = cfg.MARGIN_HALT_TARGET_PCT ?? Math.max(0, critical - 7);
+    const target = Math.min(targetBase, critical - 1);
+
+    this.setMarginHalt('entries_only', 'post_fill_breach', {
+      utilisationPct: utilisation,
+      critical,
+      target,
+    });
+
+    const leverageHint = Math.max(1, Number.isFinite(effectiveLev) && effectiveLev > 0 ? effectiveLev : 1);
+    let notionalToReduce = advisor.notionalToReduceTo(target, leverageHint);
+    if (!(notionalToReduce > 0)) return;
+
+    const referencePrice = executionPrice > 0 ? executionPrice : this.pos.entry;
+    if (!(referencePrice > 0) || !(this.pos.qty > 0)) return;
+
+    const qtyToReduce = Math.min(this.pos.qty, notionalToReduce / referencePrice);
+    if (!(qtyToReduce > 0)) return;
+
+    try {
+      const reduceSide = this.pos.side === 'buy' ? 'sell' : 'buy';
+      const reduceOrder = await this.broker.place({
+        symbol: this.profile.symbol,
+        side: reduceSide,
+        type: 'market',
+        qty: qtyToReduce,
+        leverage: leverageHint,
+        reduceOnly: true,
+      });
+
+      const filledQty = Number(reduceOrder?.filledQty ?? 0);
+      if (filledQty > 0 && this.pos) {
+        this.pos.qty = Math.max(0, this.pos.qty - filledQty);
+      }
+
+      recordOpsEvent({
+        level: filledQty > 0 ? 'info' : 'warn',
+        source: 'margin_guard',
+        message: filledQty > 0 ? 'margin_auto_reduce_filled' : 'margin_auto_reduce_submitted',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          utilisationPct: utilisation,
+          critical,
+          target,
+          requestedQty: qtyToReduce,
+          filledQty,
+        },
+      });
+    } catch (error) {
+      recordOpsEvent({
+        level: 'error',
+        source: 'margin_guard',
+        message: 'margin_auto_reduce_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          utilisationPct: utilisation,
+          critical,
+          target,
+          error: String((error as any)?.message || error),
+        },
+      });
+    }
+  }
+
   private buildWarmupDiagnostics(error: InsufficientDataError): any {
     const cfg = getConfig();
     const bias = this.plan?.bias || 'none';
@@ -7406,9 +7691,13 @@ export class ReboundRejectionAgent {
     return price.toFixed(6);
   }
 
-  public halt(): void {
-    this.state = 'HALT';
-    console.log(`Agent ${this.profile?.symbol} halted`);
+  public halt(mode: 'entries_only' | 'full' = 'full'): void {
+    this.setMarginHalt(mode, 'external_halt');
+    if (mode === 'full') {
+      console.log(`Agent ${this.profile?.symbol} halted`);
+    } else {
+      console.log(`Agent ${this.profile?.symbol} margin-halt entries only`);
+    }
   }
 
   private async restorePersistedPosition(): Promise<void> {

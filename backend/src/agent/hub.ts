@@ -35,9 +35,9 @@ export class AgentsHub {
     return a;
   }
 
-  async halt(sessionId: string) {
+  async halt(sessionId: string, mode: 'entries_only' | 'full' = 'full') {
     const a = this.agents.get(sessionId);
-    if (a) a.halt();
+    if (a) a.halt(mode);
   }
 
   async closeNow(sessionId: string) {
@@ -157,7 +157,7 @@ export class AgentsHub {
 
       if (agent) {
         try {
-          agent.halt();
+          agent.halt('full');
           result.haltOk = true;
         } catch (error) {
           result.errors.push(`halt_failed:${(error as any)?.message || error}`);

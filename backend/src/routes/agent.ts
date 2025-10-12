@@ -360,7 +360,7 @@ router.post('/creation/activate', authenticateUser, async (req: AuthenticatedReq
 type StopRouteAgentHub = {
   get?: (sessionId: string) => any;
   closeNow: (sessionId: string) => Promise<void> | void;
-  halt: (sessionId: string) => Promise<void> | void;
+  halt: (sessionId: string, mode?: 'entries_only' | 'full') => Promise<void> | void;
 };
 
 type StopRouteDependencies = {
