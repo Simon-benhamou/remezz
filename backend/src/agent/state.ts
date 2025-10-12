@@ -3256,16 +3256,16 @@ export class ReboundRejectionAgent {
     const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
     const lastVolume = snap.volume || 0;
     const volumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
-    const adx = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
+    const adxValue = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
     const breakoutActive = this.runtimeZoneDiagnostics?.breakoutActive ?? false;
-    const fastTrackEligible = breakoutActive || (momentumReversed && adx >= 28 && volumeRatio >= 1.25);
+    const fastTrackEligible = breakoutActive || (momentumReversed && adxValue >= 28 && volumeRatio >= 1.25);
     const fastTrackTimeMs = fastTrackEligible ? Math.min(adaptiveTimeMs, 2 * 60 * 1000) : adaptiveTimeMs;
     const requiredMin = fastTrackTimeMs / 60000;
 
     if (timeInZoneMs < fastTrackTimeMs) {
       return {
         confirmed: false,
-        reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${adx.toFixed(1)})`
+        reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${adxValue.toFixed(1)})`
       };
     }
 
@@ -3277,12 +3277,10 @@ export class ReboundRejectionAgent {
     }
 
     // 3️⃣ VOLUME CHECK: Must exceed 1.2x average
-    const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
-    const lastVolume = snap.volume || 0;
-    const rawVolumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
+    const rawVolumeRatio = volumeRatio;
     const { smoothed: volumeRatioSmoothed, previous: prevVolumeRatio } = this.updateVolumeRatioHistory(rawVolumeRatio);
 
-    const adx = Number.isFinite(snap.adx14) ? snap.adx14 : 0;
+    const adx = Number.isFinite(adxValue) ? adxValue : 0;
     const atrPct = Number.isFinite(snap.atrPct) ? snap.atrPct : 0;
     const adxNorm = this.normalizeToUnitInterval(adx, 15, 40);
     const atrNorm = this.normalizeToUnitInterval(atrPct, 0.5, 2.5);
