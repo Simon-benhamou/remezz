@@ -9,6 +9,11 @@ export type EntryFacts = {
   spreadBps?: number;
   dollarVolume?: number;
   rrToTp1?: number;
+  rrWeighted?: number;
+  tpWeightedPct?: number;
+  stopDistance?: number;
+  qualityPassHint?: boolean;
+  volumeRatio?: number;
   modelConfidence?: number;
   notionalUsd?: number;
 };
@@ -16,6 +21,27 @@ export type EntryFacts = {
 export type EntryEvaluation = {
   ok: boolean;
   reasons: Record<string, string>;
+  modifiers?: { sizeMultiplier?: number };
+  meta?: {
+    minRrUsed?: number | null;
+    baseMinRr?: number | null;
+    rrEffective?: number | null;
+    rrToTp1?: number | null;
+    strongFlow?: boolean;
+    rrNearThreshold?: boolean;
+    fastTrackApplied?: boolean;
+    nearFactor?: number | null;
+    qualityHint?: boolean | null;
+    spread?: {
+      spreadBps?: number | null;
+      maxSpreadBps?: number | null;
+      spreadAtrRatio?: number | null;
+      spreadAtrRatioLimit?: number | null;
+      absFail: boolean;
+      relFail: boolean;
+      penaltyApplied?: number | null;
+    };
+  };
 };
 
 export type EntryRelaxation = {
@@ -42,6 +68,8 @@ export class EntryFilters {
     } = {},
   ): EntryEvaluation {
     const reasons: Record<string, string> = {};
+    const modifiers: { sizeMultiplier?: number } = {};
+    const meta: EntryEvaluation['meta'] = {};
     let ok = true;
 
     const tier = opts.tier ?? null;
@@ -328,26 +356,51 @@ export class EntryFilters {
 
     const spread = facts.spreadBps;
     if (spread != null) {
-      let spreadReason = `OK (${spread.toFixed(2)}bps <= ${maxSpreadBps.toFixed(2)}bps)`;
-      if (spread > maxSpreadBps) {
-        ok = false;
-        spreadReason = `FAIL (${spread.toFixed(2)}bps > ${maxSpreadBps.toFixed(2)}bps)`;
-      }
+      const spreadPct = spread / 100;
+      const absFail = spread > maxSpreadBps;
+      let spreadRatio: number | null = null;
+      let relFail = false;
       if (spreadAtrRatioLimit != null && spreadAtrRatioLimit > 0 && atrPct != null && atrPct > 0) {
-        const spreadPct = spread / 100;
-        const ratio = spreadPct / atrPct;
-        const ratioPct = ratio * 100;
-        const limitPct = spreadAtrRatioLimit * 100;
-        if (ratio > spreadAtrRatioLimit) {
-          ok = false;
-          spreadReason = `FAIL (spread ${spreadPct.toFixed(3)}% = ${ratioPct.toFixed(1)}% of ATR, limit ${limitPct.toFixed(0)}%)`;
-        } else if (!spreadReason.startsWith('FAIL')) {
-          spreadReason = `OK (${spreadPct.toFixed(3)}% spread = ${ratioPct.toFixed(1)}% of ATR, limit ${limitPct.toFixed(0)}%)`;
-        } else {
-          spreadReason += ` | ratio ${ratioPct.toFixed(1)}% (limit ${limitPct.toFixed(0)}%)`;
-        }
+        spreadRatio = spreadPct / atrPct;
+        relFail = spreadRatio > spreadAtrRatioLimit;
       }
-      reasons.spreadOk = spreadReason;
+      const ratioPct = spreadRatio != null ? spreadRatio * 100 : null;
+      const limitPct = spreadAtrRatioLimit != null ? spreadAtrRatioLimit * 100 : null;
+      const absComparator = absFail ? '>' : '<=';
+      const absText = `${spread.toFixed(2)}bps${absComparator}${maxSpreadBps.toFixed(2)}bps`;
+      const ratioText = ratioPct != null && limitPct != null
+        ? `ratio=${ratioPct.toFixed(1)}% (limit ${limitPct.toFixed(0)}%)`
+        : ratioPct != null
+          ? `ratio=${ratioPct.toFixed(1)}%`
+          : undefined;
+      let spreadStatus: 'OK' | 'WARN' | 'FAIL' = 'OK';
+      if (absFail && relFail) {
+        spreadStatus = 'FAIL';
+        ok = false;
+      } else if (absFail || relFail) {
+        spreadStatus = 'WARN';
+      }
+      const spreadParts = [absText];
+      if (ratioText) spreadParts.push(ratioText);
+      reasons.spreadOk = `${spreadStatus} (${spreadParts.join(', ')})`;
+      let penaltyApplied: number | null = null;
+      if (absFail && !relFail && spreadStatus !== 'FAIL') {
+        const configuredPenalty = this.cfg.dynamic?.spreadSoftPenalty;
+        const penalty = Number.isFinite(configuredPenalty)
+          ? Math.max(0.5, Math.min(1, configuredPenalty!))
+          : 0.85;
+        modifiers.sizeMultiplier = penalty;
+        penaltyApplied = penalty;
+      }
+      meta.spread = {
+        spreadBps: spread,
+        maxSpreadBps,
+        spreadAtrRatio: spreadRatio,
+        spreadAtrRatioLimit,
+        absFail,
+        relFail,
+        penaltyApplied,
+      };
     } else {
       reasons.spreadOk = 'UNKNOWN';
     }
@@ -362,15 +415,94 @@ export class EntryFilters {
         : 'UNKNOWN';
     }
 
-    const rr = facts.rrToTp1;
-    const rrThreshold = minRr ?? baseMinRr;
-    const summarySuffix = opts.rrSummary ? ` | ${opts.rrSummary}` : '';
-    if (rr != null && rrThreshold != null && rr < rrThreshold) {
-      ok = false;
-      reasons.profitOk = `FAIL (RR=${rr.toFixed(2)} < ${rrThreshold.toFixed(2)})${summarySuffix}`;
+    const clampNearFactor = (value: number) => Math.max(0.5, Math.min(0.99, value));
+    const fastTrackCfg = this.cfg.dynamic?.momentumFastTrack;
+    const fastTrackEnabled = fastTrackCfg?.enabled !== false;
+    let nearFactor = 0.9;
+    if (this.cfg.dynamic?.rrNearThresholdFactor != null && Number.isFinite(this.cfg.dynamic.rrNearThresholdFactor)) {
+      nearFactor = clampNearFactor(this.cfg.dynamic.rrNearThresholdFactor!);
+    }
+    if (fastTrackCfg?.nearThresholdFactor != null && Number.isFinite(fastTrackCfg.nearThresholdFactor)) {
+      nearFactor = clampNearFactor(fastTrackCfg.nearThresholdFactor);
+    }
+    const rrTp1 = typeof facts.rrToTp1 === 'number' && Number.isFinite(facts.rrToTp1) ? facts.rrToTp1 : undefined;
+    const rrWeighted = typeof facts.rrWeighted === 'number' && Number.isFinite(facts.rrWeighted) ? facts.rrWeighted : undefined;
+    const rrEff = rrWeighted ?? rrTp1;
+    const baseRrThreshold = minRr ?? baseMinRr;
+    let rrThreshold = baseRrThreshold;
+    const qualityHint = facts.qualityPassHint === undefined ? undefined : Boolean(facts.qualityPassHint);
+    const volumeRatioVal = typeof facts.volumeRatio === 'number' && Number.isFinite(facts.volumeRatio)
+      ? facts.volumeRatio
+      : undefined;
+    const adxVal = adx;
+    const strongFlow = fastTrackEnabled
+      && adxVal != null && adxVal >= (fastTrackCfg?.minAdx ?? 30)
+      && atrPct != null && atrPct >= (fastTrackCfg?.minAtrPct ?? 0.8)
+      && volumeRatioVal != null && volumeRatioVal >= (fastTrackCfg?.minVolumeRatio ?? 1.2);
+    let fastTrackApplied = false;
+    if (strongFlow && rrThreshold != null) {
+      const fastTrackMin = fastTrackCfg?.minRr ?? 0.7;
+      const adjusted = Math.min(rrThreshold, fastTrackMin);
+      fastTrackApplied = baseRrThreshold != null ? adjusted < baseRrThreshold : adjusted < rrThreshold;
+      rrThreshold = adjusted;
+    }
+    const rrNearThreshold = rrThreshold != null ? rrThreshold * nearFactor : null;
+    const rrUsed = rrEff;
+    const near = rrUsed != null && rrNearThreshold != null ? rrUsed >= rrNearThreshold : false;
+    let profitPass = true;
+    let softPass = false;
+    if (rrUsed != null && rrThreshold != null && rrUsed < rrThreshold) {
+      if (near && qualityHint === true) {
+        softPass = true;
+      } else {
+        profitPass = false;
+        ok = false;
+      }
+    }
+    const rrDetailParts: string[] = [];
+    if (rrUsed != null && rrThreshold != null) {
+      const comparator = rrUsed >= rrThreshold ? '>=' : '<';
+      rrDetailParts.push(`RR_eff=${rrUsed.toFixed(2)} ${comparator} ${rrThreshold.toFixed(2)}`);
+    } else if (rrUsed != null) {
+      rrDetailParts.push(`RR_eff=${rrUsed.toFixed(2)}`);
+    }
+    if (rrTp1 != null && (rrWeighted == null || Math.abs(rrTp1 - (rrUsed ?? rrTp1)) > 1e-3)) {
+      rrDetailParts.push(`RR_TP1=${rrTp1.toFixed(2)}`);
+    }
+    if (typeof facts.tpWeightedPct === 'number' && Number.isFinite(facts.tpWeightedPct)) {
+      rrDetailParts.push(`TPw%=${facts.tpWeightedPct.toFixed(2)}%`);
+    }
+    if (rrThreshold != null) rrDetailParts.push(`min>=${rrThreshold.toFixed(2)}`);
+    rrDetailParts.push(`strongFlow=${strongFlow ? 'yes' : 'no'}`);
+    if (fastTrackApplied) rrDetailParts.push('fastTrack');
+    if (near && rrThreshold != null) rrDetailParts.push(`near>=${(nearFactor * 100).toFixed(0)}%`);
+    if (qualityHint === true) rrDetailParts.push('quality=pass');
+    else if (qualityHint === false) rrDetailParts.push('quality=fail');
+    const rrDetail = rrDetailParts.join(', ');
+    const summarySegments: string[] = [];
+    if (rrDetail) summarySegments.push(rrDetail);
+    if (opts.rrSummary) summarySegments.push(opts.rrSummary);
+    const summarySuffix = summarySegments.length ? ` | ${summarySegments.join(' | ')}` : '';
+    if (rrUsed != null && rrThreshold != null) {
+      if (!profitPass) {
+        reasons.profitOk = `FAIL${summarySuffix}`;
+      } else if (softPass) {
+        reasons.profitOk = `SOFT_PASS${summarySuffix}`;
+      } else {
+        reasons.profitOk = `OK${summarySuffix}`;
+      }
     } else {
       reasons.profitOk = summarySuffix ? `OK${summarySuffix}` : 'OK';
     }
+    meta.minRrUsed = rrThreshold ?? null;
+    meta.baseMinRr = baseRrThreshold ?? null;
+    meta.rrEffective = rrUsed ?? null;
+    meta.rrToTp1 = rrTp1 ?? null;
+    meta.strongFlow = strongFlow;
+    meta.rrNearThreshold = near;
+    meta.fastTrackApplied = fastTrackApplied;
+    meta.nearFactor = nearFactor;
+    meta.qualityHint = qualityHint ?? null;
 
     if (useConfidenceFilter) {
       const confidence = facts.modelConfidence;
@@ -388,6 +520,11 @@ export class EntryFilters {
 
     reasons.summary = ok ? 'OK' : 'BLOCKED';
 
-    return { ok, reasons };
+    return {
+      ok,
+      reasons,
+      modifiers: Object.keys(modifiers).length ? modifiers : undefined,
+      meta,
+    };
   }
 }

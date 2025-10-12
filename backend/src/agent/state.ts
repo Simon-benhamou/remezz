@@ -149,6 +149,20 @@ type ExitDiagnosticsPayload = {
   };
 };
 
+type QualityAssessmentSnapshot = {
+  totalPoints: number;
+  maxPoints: number;
+  effectivePoints: number;
+  bonus: number;
+  passCount: number;
+  failCount: number;
+  partialCount: number;
+  deficit: number;
+  allow: boolean;
+  compensated: boolean;
+  failingKeys: string[];
+};
+
 // Advanced Performance Tracking Interfaces
 interface StrategyPerformance {
   strategy: string; // 'mean_reversion', 'momentum_breakout', etc.
@@ -266,6 +280,11 @@ export class ReboundRejectionAgent {
   private lastDiagnosticCanTrade: boolean | null = null;
   private lastQualityFilterFailure: { code: string; message?: string; details?: any } | null = null;
   private lastMomentumGateResult: MomentumGateEvaluation | null = null;
+  private previewQualityDiagnostics: {
+    snapshotKey: string | number | null;
+    data: any;
+    assessment: QualityAssessmentSnapshot;
+  } | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -357,6 +376,14 @@ export class ReboundRejectionAgent {
     failCounts: new Map<string, number>(),
     lastLogTs: 0,
   };
+
+  private getQualitySnapshotKey(snap: TechnicalSnapshot): string | number | null {
+    return (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
+  }
+
+  private resetQualityPreview(): void {
+    this.previewQualityDiagnostics = null;
+  }
 
   private trendReversalContext: { direction: 'bullish' | 'bearish'; count: number; lastSignal: number } | null = null;
 
@@ -864,7 +891,9 @@ export class ReboundRejectionAgent {
       return;
     }
     if (this.pos || this.entering) return;
-    
+
+    this.resetQualityPreview();
+
     // � PHASE 1 FIX #1: Whipsaw protection - 3-stage confirmation
     // Get snap for validations
     let snapForValidation = _snap;
@@ -921,7 +950,16 @@ export class ReboundRejectionAgent {
     const underLowValidation = planBias === 'short' && validationSnap.last < zoneMinValidation
       ? (zoneMinValidation - validationSnap.last) / validationSnap.last
       : 0;
-    const breakoutToleranceValidation = 0.25 * (entryZoneMeta.atrPct / 100);
+    const atrPctFractionValidation = entryZoneMeta.atrPct > 0 ? entryZoneMeta.atrPct / 100 : 0;
+    let breakoutToleranceValidation = 0.25 * atrPctFractionValidation;
+    if (atrPctFractionValidation > 0) {
+      const breakoutMinValidation = atrPctFractionValidation * 0.2;
+      const breakoutMaxValidation = atrPctFractionValidation * 0.3;
+      breakoutToleranceValidation = Math.max(
+        breakoutMinValidation,
+        Math.min(breakoutToleranceValidation, breakoutMaxValidation),
+      );
+    }
     const momentumGateValidation = this.lastMomentumGateResult ?? this.evaluateMomentumGates(validationSnap, 'enter', false);
     const breakoutActiveValidation = playbook === 'momentum_breakout'
       && momentumGateValidation.status !== 'FAIL'
@@ -1235,6 +1273,35 @@ export class ReboundRejectionAgent {
     }
     const riskAbs = Math.max(1e-9, Math.abs(entry - stop));
     const firstR = this.plan.rPrices?.[0]?.r ?? (tp.length > 0 ? Math.abs(tp[0] - entry) / riskAbs : undefined);
+    const stopForR = Math.max(this.plan.stopDistance, Math.abs(entry - stop), 1e-8);
+    const rMultiples = Array.isArray(this.plan.rPrices)
+      ? this.plan.rPrices
+        .map(({ r, price }) => {
+          if (typeof r === 'number' && Number.isFinite(r)) return Number(r);
+          if (Number.isFinite(price)) return Math.abs((price as number) - entry) / stopForR;
+          return null;
+        })
+        .filter((value): value is number => value != null && Number.isFinite(value) && value > 0)
+      : [];
+    let rrWeighted: number | undefined;
+    if (rMultiples.length > 0) {
+      const baseWeights = [0.6, 0.3, 0.1];
+      const fallbackWeight = baseWeights[baseWeights.length - 1] ?? 0.1;
+      const weights = rMultiples.map((_, idx) => {
+        if (idx < baseWeights.length) return baseWeights[idx]!;
+        const decay = Math.pow(0.5, idx - baseWeights.length + 1);
+        return fallbackWeight * decay;
+      });
+      const weightSum = weights.reduce((acc, value) => acc + value, 0);
+      if (weightSum > 0) {
+        rrWeighted = rMultiples.reduce((acc, value, idx) => acc + value * (weights[idx]! / weightSum), 0);
+      }
+    }
+    const tpWeightedAbs = rrWeighted != null ? rrWeighted * stopForR : undefined;
+    const tpWeightedPct = tpWeightedAbs != null && entry > 0 ? (tpWeightedAbs / entry) * 100 : undefined;
+    const volumeNow = Number((snap as any)?.volume ?? 0);
+    const volumeMANow = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? 0);
+    const volumeRatio = volumeMANow > 0 ? volumeNow / volumeMANow : undefined;
     const planMeta = (this.plan.plan.meta || {}) as Record<string, unknown>;
     const modelConfidence =
       typeof planMeta.confidenceScore === 'number'
@@ -1254,15 +1321,33 @@ export class ReboundRejectionAgent {
     const tier = this.getTierForSymbol(this.profile.symbol);
     const aggressiveness = this.profile.aggressiveness || null;
     const volatilityProfileForFilters = this.resolveVolatilityProfileForFilters();
+    let qualityPassHint: boolean | undefined;
+    try {
+      const previewDiagnostics = this.getQualityFiltersDiagnostics(snap);
+      const previewAssessment = this.assessQualityScore(previewDiagnostics, 0) as QualityAssessmentSnapshot;
+      this.previewQualityDiagnostics = {
+        snapshotKey: this.getQualitySnapshotKey(snap),
+        data: previewDiagnostics,
+        assessment: previewAssessment,
+      };
+      qualityPassHint = previewAssessment.allow;
+    } catch (error) {
+      console.warn('Quality preview failed:', error);
+      this.resetQualityPreview();
+    }
     const rrSummaryParts = [
       `RR=${typeof firstR === 'number' ? firstR.toFixed(2) : 'n/a'}`,
       `RR_MIN_EFF=${rrSnapshot.effective.toFixed(2)}`,
       `mode=${rrSnapshot.mode}`,
       rrSnapshot.winRate != null ? `p=${rrSnapshot.winRate.toFixed(2)}` : 'p=n/a',
+      `RRw=${typeof rrWeighted === 'number' ? rrWeighted.toFixed(2) : 'n/a'}`,
+      `TPw%=${typeof tpWeightedPct === 'number' ? tpWeightedPct.toFixed(2) : 'n/a'}`,
       `trades=${rrSnapshot.trades}`,
       `rrDyn=${rrSnapshot.dynamic != null ? rrSnapshot.dynamic.toFixed(2) : 'n/a'}`,
       `blend=${this.rrExpectancyConfig.blend.toFixed(2)}`,
       `hysteresisApplied=${rrSnapshot.hysteresisApplied ? 'yes' : 'no'}`,
+      `qualityHint=${qualityPassHint === true ? 'pass' : qualityPassHint === false ? 'fail' : 'n/a'}`,
+      `volRatio=${volumeRatio != null ? volumeRatio.toFixed(2) : 'n/a'}`,
     ].join(', ');
     const drySpellRelaxation = this.resolveDrySpellRelaxation();
     const filterEvaluation = this.entryFilters.evaluateEntry({
@@ -1278,6 +1363,11 @@ export class ReboundRejectionAgent {
           ? Number((snap as any).volume24h)
           : undefined,
       rrToTp1: typeof firstR === 'number' ? firstR : undefined,
+      rrWeighted: typeof rrWeighted === 'number' ? rrWeighted : undefined,
+      tpWeightedPct: typeof tpWeightedPct === 'number' ? tpWeightedPct : undefined,
+      stopDistance: stopForR,
+      qualityPassHint,
+      volumeRatio: typeof volumeRatio === 'number' ? volumeRatio : undefined,
       modelConfidence: typeof modelConfidence === 'number' ? modelConfidence : undefined,
     }, {
       minRr: rrSnapshot.effective,
@@ -1289,6 +1379,49 @@ export class ReboundRejectionAgent {
       volatilityProfile: volatilityProfileForFilters,
       relaxation: drySpellRelaxation ?? undefined,
     });
+    const entryFilterSizePenalty = typeof filterEvaluation.modifiers?.sizeMultiplier === 'number'
+      ? filterEvaluation.modifiers.sizeMultiplier
+      : undefined;
+    recordOpsEvent({
+      level: 'info',
+      source: 'entry_filters',
+      message: 'rr_gate_evaluated',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile.symbol,
+      details: {
+        rrTp1: typeof firstR === 'number' ? firstR : null,
+        rrWeighted: typeof rrWeighted === 'number' ? rrWeighted : null,
+        tpWeightedPct: typeof tpWeightedPct === 'number' ? tpWeightedPct : null,
+        stopDistance: stopForR,
+        minRrBase: rrSnapshot.effective,
+        minRrApplied: filterEvaluation.meta?.minRrUsed ?? rrSnapshot.effective,
+        strongFlow: filterEvaluation.meta?.strongFlow ?? false,
+        rrNearThreshold: filterEvaluation.meta?.rrNearThreshold ?? false,
+        fastTrackApplied: filterEvaluation.meta?.fastTrackApplied ?? false,
+        qualityHint: filterEvaluation.meta?.qualityHint ?? (qualityPassHint ?? null),
+        volumeRatio: volumeRatio ?? null,
+        rrSummary: rrSummaryParts,
+      },
+    });
+    if (filterEvaluation.meta?.spread) {
+      const spreadMeta = filterEvaluation.meta.spread;
+      recordOpsEvent({
+        level: spreadMeta.absFail && spreadMeta.relFail ? 'warn' : 'info',
+        source: 'entry_filters',
+        message: 'spread_gate_evaluated',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          spreadBps: spreadMeta.spreadBps ?? spreadBps ?? null,
+          maxSpreadBps: spreadMeta.maxSpreadBps ?? null,
+          spreadAtrRatio: spreadMeta.spreadAtrRatio ?? null,
+          spreadAtrRatioLimit: spreadMeta.spreadAtrRatioLimit ?? null,
+          absFail: spreadMeta.absFail,
+          relFail: spreadMeta.relFail,
+          penaltyApplied: spreadMeta.penaltyApplied ?? null,
+        },
+      });
+    }
     if (!filterEvaluation.ok) {
       this.registerFilterRejection(filterEvaluation.reasons);
       recordOpsEvent({
@@ -1300,6 +1433,7 @@ export class ReboundRejectionAgent {
         details: filterEvaluation.reasons,
       });
       this.noteSignalDrop('quantai_filter_blocked', 'info', filterEvaluation.reasons);
+      this.resetQualityPreview();
       this.entering = false;
       return;
     }
@@ -1344,6 +1478,7 @@ export class ReboundRejectionAgent {
           entry
         },
       });
+      this.resetQualityPreview();
       this.entering = false;
       return;
     }
@@ -1380,7 +1515,24 @@ export class ReboundRejectionAgent {
     if (!(dynamicRiskPct > 0)) {
       dynamicRiskPct = this.profile.riskPerTradePct;
     }
-    
+
+    if (entryFilterSizePenalty != null && entryFilterSizePenalty > 0 && entryFilterSizePenalty < 1) {
+      dynamicRiskPct *= entryFilterSizePenalty;
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'entry_filter_size_penalty',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          sizeMultiplier: entryFilterSizePenalty,
+          origin: filterEvaluation.meta?.spread?.absFail && !filterEvaluation.meta?.spread?.relFail
+            ? 'spread_abs_soft_cap'
+            : 'entry_filter_penalty',
+        },
+      });
+    }
+
     // Apply quality-based position sizing
     try {
       const qualityAdjustment = this.computeQualityBasedSizing(snap!);
@@ -1476,8 +1628,11 @@ export class ReboundRejectionAgent {
 
     if (usingBreakoutEntry) {
       const adxValue = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
-      let breakoutSizeMultiplier = adxValue >= 35 ? 0.85 : adxValue >= 25 ? 0.8 : 0.75;
-      breakoutSizeMultiplier = Math.max(0.7, Math.min(0.85, breakoutSizeMultiplier));
+      let breakoutSizeMultiplier = 0.8;
+      if (adxValue >= 35) breakoutSizeMultiplier = 0.85;
+      else if (adxValue >= 25) breakoutSizeMultiplier = 0.82;
+      else breakoutSizeMultiplier = 0.78;
+      breakoutSizeMultiplier = Math.max(0.75, Math.min(0.85, breakoutSizeMultiplier));
       dynamicRiskPct *= breakoutSizeMultiplier;
       recordOpsEvent({
         level: 'info',
@@ -5862,7 +6017,13 @@ export class ReboundRejectionAgent {
     const isShortBias = planBias === 'short';
     const overHighPct = isLongBias && price > zoneMax ? (price - zoneMax) / price : 0;
     const underLowPct = isShortBias && price < zoneMin ? (zoneMin - price) / price : 0;
-    const breakoutTolerance = 0.25 * (zoneMeta.atrPct / 100);
+    const zoneAtrFraction = zoneMeta.atrPct > 0 ? zoneMeta.atrPct / 100 : 0;
+    let breakoutTolerance = 0.25 * zoneAtrFraction;
+    if (zoneAtrFraction > 0) {
+      const breakoutMin = zoneAtrFraction * 0.2;
+      const breakoutMax = zoneAtrFraction * 0.3;
+      breakoutTolerance = Math.max(breakoutMin, Math.min(breakoutTolerance, breakoutMax));
+    }
     const momentumAllowsBreakout = momentumEvaluation.status !== 'FAIL';
     const breakoutActive = playbook === 'momentum_breakout'
       && momentumAllowsBreakout
@@ -5961,10 +6122,21 @@ export class ReboundRejectionAgent {
     };
 
     // Simplified quality filters (binary pass/fail for essential indicators)
-    checks.qualityFilters = this.getQualityFiltersDiagnostics(snap);
+    const previewKey = this.getQualitySnapshotKey(snap);
+    let qualityDiagnostics = this.previewQualityDiagnostics && this.previewQualityDiagnostics.snapshotKey === previewKey
+      ? this.previewQualityDiagnostics.data
+      : null;
+    let qualityAssessmentSnapshot = this.previewQualityDiagnostics && this.previewQualityDiagnostics.snapshotKey === previewKey
+      ? this.previewQualityDiagnostics.assessment
+      : null;
+    if (!qualityDiagnostics) {
+      qualityDiagnostics = this.getQualityFiltersDiagnostics(snap);
+      qualityAssessmentSnapshot = this.assessQualityScore(qualityDiagnostics, 0) as QualityAssessmentSnapshot;
+    }
+    checks.qualityFilters = qualityDiagnostics;
 
     // Calculate overall quality score based on points (0-100) - allow trading with 3/5 filters (60 points)
-    const qualityAssessment = this.assessQualityScore(checks.qualityFilters, 0);
+    const qualityAssessment = qualityAssessmentSnapshot ?? this.assessQualityScore(checks.qualityFilters, 0);
     const qualityPoints = qualityAssessment.totalPoints;
     const maxPoints = qualityAssessment.maxPoints;
     // Mode-adaptive minimum quality score for diagnostics (aligned with env.ts)
@@ -5986,6 +6158,7 @@ export class ReboundRejectionAgent {
     };
 
     const momentumBiasAllows = checks.momentumGates?.code !== 'momentum.blocked';
+    this.resetQualityPreview();
     const qualityPass = checks.qualityScore?.status === 'PASS';
     const antiWhalePass = checks.antiWhale?.status === 'PASS';
     const circuitPass = checks.circuitBreaker?.status === 'PASS';
