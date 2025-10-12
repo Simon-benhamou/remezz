@@ -132,9 +132,22 @@ export async function auditTick(sessionId: string, symbol: string, price: number
             s.missedPartialAlerts = (s.missedPartialAlerts || 0) + 1;
             if (!s.killEngaged && MISSED_PARTIAL_KILL > 0 && s.missedPartialAlerts >= MISSED_PARTIAL_KILL) {
               s.killEngaged = true;
-              try { AgentHub.halt(sessionId); } catch {}
+              try {
+                await AgentHub.closeNow(sessionId);
+              } catch (error) {
+                recordOpsEvent({
+                  level: 'warn',
+                  source: 'kill_switch',
+                  message: 'missed_partial_close_failed',
+                  sessionId,
+                  symbol,
+                  details: { error: String((error as Error)?.message || error) },
+                });
+              }
+              try { await AgentHub.halt(sessionId); } catch {}
               recordOpsEvent({ level: 'error', source: 'kill_switch', message: 'missed_partial_threshold', sessionId, symbol, details: { missedPartialAlerts: s.missedPartialAlerts } });
               broadcast('agent_state', { state: 'HALT', killSwitch: 'missed_partial' }, symbol, sessionId);
+              s.missedPartialAlerts = 0;
             }
           }
           s.partialTicks = 0;

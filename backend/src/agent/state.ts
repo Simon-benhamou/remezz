@@ -23,6 +23,7 @@ import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, p
 import { PlanJson } from './planSchema.js';
 import { ValidatedPlan, validatePlan } from './validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, maybeAdjustOrExit, computeInitialBracket } from '../quantai/index.js';
+import type { EntryRelaxation } from '../quantai/strategy/entryFilters.js';
 import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../quantai/index.js';
 
 export type AgentMode = 'paper'|'live';
@@ -281,6 +282,18 @@ export class ReboundRejectionAgent {
   private lastZoneCheckTime = 0;
   private breakoutModeActive = false;
 
+  private drySpellState: {
+    rejections: number;
+    steps: number;
+    lastStepTs: number;
+    lastTradeTs: number;
+  } = {
+    rejections: 0,
+    steps: 0,
+    lastStepTs: 0,
+    lastTradeTs: 0,
+  };
+
   private trendReversalContext: { direction: 'bullish' | 'bearish'; count: number; lastSignal: number } | null = null;
 
   // Advanced performance tracking by strategy and bias
@@ -357,6 +370,12 @@ export class ReboundRejectionAgent {
     this.rrExpectancyState = {};
     this.currentRrMin = null;
     this.lastRrSnapshot = null;
+    this.drySpellState = {
+      rejections: 0,
+      steps: 0,
+      lastStepTs: 0,
+      lastTradeTs: Date.now(),
+    };
     profile.rrFloor = this.rrExpectancyConfig.rrFloor;
     profile.rrCeil = this.rrExpectancyConfig.rrCeil;
     profile.rrBaseMin = this.rrExpectancyConfig.rrBaseMin;
@@ -1017,6 +1036,7 @@ export class ReboundRejectionAgent {
       `blend=${this.rrExpectancyConfig.blend.toFixed(2)}`,
       `hysteresisApplied=${rrSnapshot.hysteresisApplied ? 'yes' : 'no'}`,
     ].join(', ');
+    const drySpellRelaxation = this.resolveDrySpellRelaxation();
     const filterEvaluation = this.entryFilters.evaluateEntry({
       price: entry,
       atr: typeof (snap as any)?.atr14 === 'number' ? Number((snap as any).atr14) : this.plan.atr,
@@ -1039,8 +1059,10 @@ export class ReboundRejectionAgent {
       aggressiveness,
       atrBaselinePct,
       volatilityProfile: volatilityProfileForFilters,
+      relaxation: drySpellRelaxation ?? undefined,
     });
     if (!filterEvaluation.ok) {
+      this.registerFilterRejection(filterEvaluation.reasons);
       recordOpsEvent({
         level: 'info',
         source: 'entry_filters',
@@ -1053,7 +1075,8 @@ export class ReboundRejectionAgent {
       this.entering = false;
       return;
     }
-    
+    this.registerFilterPass();
+
     // CRYPTO PROFIT FILTER: Minimum profit threshold
     const cfgProfit = getConfig();
     // Aggressiveness-aware min profitability
@@ -1609,6 +1632,7 @@ export class ReboundRejectionAgent {
 
     this.state = 'MANAGE';
     this.tradesToday += 1;
+    this.noteDrySpellTrade();
     broadcast('agent_state', { state: this.state, pos: this.pos, regime: this.regime, adaptiveRisk: this.adaptiveRisk, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     await this.syncProtectiveOrders('entry');
     this.entering = false;
@@ -5666,6 +5690,90 @@ export class ReboundRejectionAgent {
     } catch {}
   }
 
+  private resolveDrySpellRelaxation(now = Date.now()): EntryRelaxation | null {
+    const cfg = this.quantConfig.filters.dynamic?.drySpell;
+    if (!cfg || !cfg.enabled) return null;
+    const lastTradeTs = this.drySpellState.lastTradeTs;
+    if (!lastTradeTs) return null;
+    const minutesSinceTrade = (now - lastTradeTs) / 60000;
+    if (minutesSinceTrade < Math.max(0, cfg.minMinutesWithoutTrade)) {
+      return null;
+    }
+    const maxSteps = Math.max(0, cfg.maxSteps ?? 0);
+    const steps = Math.min(
+      Math.max(0, this.drySpellState.steps),
+      maxSteps > 0 ? maxSteps : Math.max(0, this.drySpellState.steps),
+    );
+    if (steps <= 0) return null;
+    const relaxation: EntryRelaxation = {};
+    if (cfg.minAdxDeltaPerStep) relaxation.minAdxDelta = cfg.minAdxDeltaPerStep * steps;
+    if (cfg.minRrDeltaPerStep) relaxation.minRrDelta = cfg.minRrDeltaPerStep * steps;
+    if (cfg.confidenceDeltaPerStep) relaxation.confidenceDelta = cfg.confidenceDeltaPerStep * steps;
+    if (cfg.minAtrPctDeltaPerStep) relaxation.minAtrPctDelta = cfg.minAtrPctDeltaPerStep * steps;
+    return Object.keys(relaxation).length > 0 ? relaxation : null;
+  }
+
+  private registerFilterRejection(reasons?: Record<string, string>): void {
+    this.drySpellState.rejections = Math.max(0, this.drySpellState.rejections + 1);
+    const cfg = this.quantConfig.filters.dynamic?.drySpell;
+    if (!cfg || !cfg.enabled) return;
+    const now = Date.now();
+    const lastTradeTs = this.drySpellState.lastTradeTs;
+    if (!lastTradeTs) return;
+    const minutesSinceTrade = (now - lastTradeTs) / 60000;
+    if (minutesSinceTrade < Math.max(0, cfg.minMinutesWithoutTrade)) {
+      return;
+    }
+    const maxSteps = Math.max(0, cfg.maxSteps ?? 0);
+    if (maxSteps === 0) return;
+    if (this.drySpellState.steps >= maxSteps) {
+      return;
+    }
+    const threshold = Math.max(1, cfg.rejectionsForStep ?? 1);
+    if (this.drySpellState.rejections < threshold) {
+      return;
+    }
+    const cooldownMinutes = Math.max(0, cfg.relaxationStepMinutes ?? 0);
+    const minutesSinceLastStep = this.drySpellState.lastStepTs
+      ? (now - this.drySpellState.lastStepTs) / 60000
+      : Number.POSITIVE_INFINITY;
+    if (minutesSinceLastStep < cooldownMinutes) {
+      return;
+    }
+    this.drySpellState.steps += 1;
+    this.drySpellState.lastStepTs = now;
+    this.drySpellState.rejections = 0;
+    recordOpsEvent({
+      level: 'info',
+      source: 'entry_filters',
+      message: 'dry_spell_relaxation_step',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        step: this.drySpellState.steps,
+        minutesSinceTrade: Number(minutesSinceTrade.toFixed(1)),
+        maxSteps,
+        threshold,
+        reasons,
+      },
+    });
+  }
+
+  private registerFilterPass(): void {
+    if (this.drySpellState.rejections > 0) {
+      this.drySpellState.rejections = Math.max(0, this.drySpellState.rejections - 1);
+    }
+  }
+
+  private noteDrySpellTrade(now = Date.now()): void {
+    this.drySpellState = {
+      rejections: 0,
+      steps: 0,
+      lastStepTs: 0,
+      lastTradeTs: now,
+    };
+  }
+
   private buildWarmupDiagnostics(error: InsufficientDataError): any {
     const cfg = getConfig();
     const bias = this.plan?.bias || 'none';
@@ -6342,6 +6450,7 @@ export class ReboundRejectionAgent {
         this.trendReversalContext = null;
         this.state = 'EXIT';
         this.lastExitTime = Date.now();
+        this.noteDrySpellTrade(this.lastExitTime);
 
         broadcast('agent_state', {
           state: this.state,

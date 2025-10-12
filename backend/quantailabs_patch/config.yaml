@@ -68,6 +68,16 @@ filters:
         min_adx_delta: -2
         confidence_delta: -0.02
         min_atr_pct_delta: -0.05
+    dry_spell:
+      enabled: true
+      min_minutes_without_trade: 45
+      rejections_for_step: 6
+      relaxation_step_minutes: 30
+      max_steps: 3
+      min_adx_delta_per_step: -1.5
+      min_rr_delta_per_step: -0.1
+      confidence_delta_per_step: -0.02
+      min_atr_pct_delta_per_step: -0.03
 
 entries:
   ema_fast: 20
