@@ -82,6 +82,19 @@ export type ActivePosition = {
   initialStopDistance?: number;
   hitTargets?: number[];
   archetype?: ExitArchetype;
+  initialQty?: number;
+  initialNotional?: number;
+  addOnFilledQty?: number;
+  scaleInTriggered?: boolean;
+  trailConfig?: {
+    mode: 'atr' | 'percent';
+    multiplier: number;
+    fromHighPct?: number;
+    armed: boolean;
+    highWatermark?: number | null;
+    lastUpdateTs?: number;
+  };
+  openLeverage?: number;
 };
 
 type ProtectiveSnapshot = {
@@ -652,6 +665,18 @@ export class ReboundRejectionAgent {
             partialInfo: null,
             initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
             archetype: (this.plan?.plan?.meta?.playbook || this.regime?.playbook) === 'momentum_breakout' ? 'impulse' : 'reversal',
+            initialQty: expo.qty,
+            initialNotional: expo.qty * entry,
+            addOnFilledQty: 0,
+            scaleInTriggered: false,
+            trailConfig: {
+              mode: 'atr',
+              multiplier: this.quantConfig.exits.trailAtrMult,
+              armed: false,
+              highWatermark: entry,
+              lastUpdateTs: now,
+            },
+            openLeverage: expo.leverage || this.profile.maxLeverage,
           } as any;
           this.state = 'MANAGE';
           broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
@@ -1329,6 +1354,10 @@ export class ReboundRejectionAgent {
         rrWeighted = rMultiples.reduce((acc, value, idx) => acc + value * (weights[idx]! / weightSum), 0);
       }
     }
+    const planRuntime: any = this.plan;
+    if (typeof rrWeighted === 'number' && Number.isFinite(rrWeighted)) {
+      planRuntime._initialWeightedR = rrWeighted;
+    }
     const tpWeightedAbs = rrWeighted != null ? rrWeighted * stopForR : undefined;
     const tpWeightedPct = tpWeightedAbs != null && entry > 0 ? (tpWeightedAbs / entry) * 100 : undefined;
     const volumeNow = Number((snap as any)?.volume ?? 0);
@@ -1537,16 +1566,38 @@ export class ReboundRejectionAgent {
     }
     if (planRiskMinPct != null) planRiskMinPct = Math.min(planRiskMinPct, this.profile.riskPerTradePct);
     if (planRiskMaxPct != null) planRiskMaxPct = Math.max(planRiskMaxPct, this.profile.riskPerTradePct);
-    let dynamicRiskPct = this.profile.riskPerTradePct;
-    
-    // Use plan recommended risk if current risk is invalid and plan has recommendation
-    if (!(dynamicRiskPct > 0) && planRiskRecommendedPct != null) {
-      dynamicRiskPct = planRiskRecommendedPct;
+    const baseProfileRisk = this.profile.riskPerTradePct > 0 ? this.profile.riskPerTradePct : 1.5;
+    let dynamicRiskPct = baseProfileRisk;
+
+    if (planRiskRecommendedPct != null && planRiskRecommendedPct > 0) {
+      dynamicRiskPct = Math.max(dynamicRiskPct, planRiskRecommendedPct);
     }
-    // Fallback to profile risk if still invalid
-    if (!(dynamicRiskPct > 0)) {
-      dynamicRiskPct = this.profile.riskPerTradePct;
+
+    let tierAdjustedRisk = dynamicRiskPct;
+    if (tier === 'tier1') {
+      tierAdjustedRisk = Math.max(2.5, Math.min(3.0, dynamicRiskPct + 1.0));
+    } else if (tier === 'tier2') {
+      const boost = Math.max(0.5, Math.min(1.0, 0.75));
+      tierAdjustedRisk = dynamicRiskPct + boost;
     }
+    if (tierAdjustedRisk !== dynamicRiskPct) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'tier_risk_adjustment',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          tier,
+          baseRisk: dynamicRiskPct,
+          adjustedRisk: tierAdjustedRisk,
+        },
+      });
+      dynamicRiskPct = tierAdjustedRisk;
+    }
+
+    if (planRiskMinPct != null) dynamicRiskPct = Math.max(dynamicRiskPct, planRiskMinPct);
+    if (planRiskMaxPct != null) dynamicRiskPct = Math.min(dynamicRiskPct, planRiskMaxPct);
 
     if (entryFilterSizePenalty != null && entryFilterSizePenalty > 0 && entryFilterSizePenalty < 1) {
       dynamicRiskPct *= entryFilterSizePenalty;
@@ -1566,23 +1617,28 @@ export class ReboundRejectionAgent {
     }
 
     // Apply quality-based position sizing
+    let qualityMultiplier = 1.0;
     try {
-      const qualityAdjustment = this.computeQualityBasedSizing(snap!);
-      dynamicRiskPct *= qualityAdjustment;
+      const rawQualityAdjustment = this.computeQualityBasedSizing(snap!);
+      qualityMultiplier = Math.max(0.9, Math.min(1.4, rawQualityAdjustment));
+      dynamicRiskPct *= qualityMultiplier;
       recordOpsEvent({
         level: 'info',
         source: 'position_sizing',
         message: 'quality_adjustment_applied',
         sessionId: this.sessionId || undefined,
         symbol: this.profile.symbol,
-        details: { 
-          baseRisk: this.profile.riskPerTradePct, 
-          qualityMultiplier: qualityAdjustment, 
+        details: {
+          baseRisk: this.profile.riskPerTradePct,
+          rawQualityMultiplier: rawQualityAdjustment,
+          qualityMultiplier,
           finalRisk: dynamicRiskPct,
-          aggressiveness: this.profile.aggressiveness 
+          aggressiveness: this.profile.aggressiveness
         },
       });
-    } catch {}
+    } catch {
+      qualityMultiplier = 1.0;
+    }
     
     try {
       this.adaptiveRisk = await computeAdaptiveRisk(this.sessionId, this.profile.riskPerTradePct);
@@ -1680,11 +1736,15 @@ export class ReboundRejectionAgent {
       });
     }
 
+    const stopDistanceAbs = Math.abs(entry - stop);
+    const stopPct = entry > 0 ? (stopDistanceAbs / entry) * 100 : 0;
     const quantSizerResult = this.positionSizer.computeSize({
       equityUsd: Math.max(this.lastKnownEquityUsd, usableBalance),
       entryPrice: entry,
       stopPrice: stop,
+      stopDistanceAbs,
       riskPct: dynamicRiskPct,
+      qualityMultiplier,
       maxNotionalUsd: Number.isFinite(this.maxNotionalCapUsd) && this.maxNotionalCapUsd > 0
         ? this.maxNotionalCapUsd
         : undefined,
@@ -1758,23 +1818,43 @@ export class ReboundRejectionAgent {
     }
 
     const dynLevEnabled = this.profile.dynamicLeverage !== false; // default true
-    const minLevCfg = Math.max(1, Math.min(baseLev, Number(this.profile.minLeverage || 1)));
-    let effectiveLev = baseLev;
+    const minLevCfg = Math.max(1, Number(this.profile.minLeverage || 1));
+    const spreadLimitBps = this.quantConfig?.filters?.maxSpreadBps ?? 16;
+    const spreadIsOk = spreadBps == null || spreadBps <= spreadLimitBps;
+    const adxNow = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
+    const atrPctForLev = typeof guardAtr === 'number' ? guardAtr : undefined;
+    const atrWindowOk = atrPctForLev != null && atrPctForLev >= 0.7 && atrPctForLev <= 2.5;
+    const rrWeightedOk = typeof rrWeighted === 'number' ? rrWeighted >= 0.9 : false;
+    const supportiveRegime = Boolean(this.regime?.shouldTrade !== false && (this.regime?.playbook || '') !== 'standby');
+    const favourableLeverageSetup = dynLevEnabled && supportiveRegime && atrWindowOk && adxNow >= 25 && spreadIsOk && rrWeightedOk;
+    const preferredLeverageCap = favourableLeverageSetup ? 7 : 3;
+    if (favourableLeverageSetup) {
+      baseLev = Math.min(baseLev, preferredLeverageCap);
+      recordOpsEvent({
+        level: 'info',
+        source: 'leverage_guard',
+        message: 'favourable_leverage_window',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { atrPct: atrPctForLev, adx: adxNow, spreadIsOk, rrWeightedOk, cap: baseLev },
+      });
+    } else {
+      baseLev = Math.max(Math.min(baseLev, preferredLeverageCap), Math.min(baseLev, Math.max(minLevCfg, 2)));
+    }
+    const volatilityHigh = atrPctForLev != null && atrPctForLev > 2.5;
+    const levGuard = volatilityHigh ? Math.min(baseLev, 3) : baseLev;
+    let effectiveLev = Math.max(Math.min(levGuard, baseLev), Math.min(levGuard, Math.max(minLevCfg, 1)));
     if (dynLevEnabled) {
-      // Quality multiplier from sizing heuristic (0.35..1.8 roughly)
-      let qualityMultiplier = 1.0;
-      try { qualityMultiplier = Math.max(0.35, Math.min(1.8, this.computeQualityBasedSizing(snap!))); } catch {}
-      const minFactor = minLevCfg / baseLev; // floor as fraction of base
-      // Normalize quality to [0..1] where 0.35 -> 0 and 1.0 -> 1 (cap >1 to 1)
-      const qNorm = Math.max(0, Math.min(1, (qualityMultiplier - 0.35) / (1.0 - 0.35)));
-      const qualFactor = minFactor + (1 - minFactor) * qNorm;
-      // Stop distance impact: wider stops => more risk => reduce leverage
-      const stopPct = Math.abs(entry - stop) / Math.max(entry, 1e-8) * 100;
-      const stopFactor = stopPct > 2.5 ? Math.max(0.6, 1 - (stopPct - 2.5) / 7.5) : 1; // down to ~0.6 at ~10% stop
-      // Adaptive risk factor (if engine cut risk): reflect partly into leverage (floor 0.5)
+      const safeBase = Math.max(baseLev, 1);
+      const minFactor = Math.min(1, Math.max(minLevCfg, 1) / safeBase);
+      const qualityForLev = Math.max(0.8, Math.min(1.5, qualityMultiplier));
+      const qNorm = (qualityForLev - 0.8) / (1.5 - 0.8);
+      const qualFactor = minFactor + (1 - minFactor) * Math.max(0, Math.min(1, qNorm));
+      const stopFactor = stopPct > 2.5 ? Math.max(0.6, 1 - (stopPct - 2.5) / 7.5) : 1;
       const baseRisk = Math.max(1e-6, this.profile.riskPerTradePct);
-      const riskFactor = Math.max(0.5, Math.min(1, dynamicRiskPct / baseRisk));
-      effectiveLev = Math.max(minLevCfg, Math.min(baseLev, baseLev * qualFactor * stopFactor * riskFactor));
+      const riskFactor = Math.max(0.5, Math.min(1.1, dynamicRiskPct / baseRisk));
+      const scaled = safeBase * qualFactor * stopFactor * riskFactor;
+      effectiveLev = Math.max(Math.min(levGuard, scaled), Math.min(levGuard, Math.max(minLevCfg, 1)));
     }
     const sizingCfg = getConfig();
     const defaultSizing = (sizingCfg.SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget');
@@ -1815,6 +1895,30 @@ export class ReboundRejectionAgent {
         notional = quantNotional;
       }
     }
+
+    const requestedNotionalBeforeCaps = notional;
+
+    const marginEquity = marginAdvisor.equityUsd();
+    const freeCapAtGuard = marginAdvisor.maxAdditionalNotionalAt(levGuard);
+    const notionalCapByLev = marginEquity > 0 ? marginEquity * levGuard : 0;
+    const dynamicNotionalCap = Math.max(0, Math.min(notionalCapByLev > 0 ? notionalCapByLev : Infinity, freeCapAtGuard > 0 ? freeCapAtGuard : Infinity));
+    if (dynamicNotionalCap > 0 && notional > dynamicNotionalCap) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'dynamic_notional_cap',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          requestedNotional: notional,
+          cap: dynamicNotionalCap,
+          levGuard,
+          marginEquity,
+          freeCapAtGuard,
+        },
+      });
+      notional = dynamicNotionalCap;
+    }
     
     // ✅ FIX: Enforce minimum notional (8% of balance) to ensure meaningful position sizes
     // Position too small (<8%) don't justify trading costs and make gains insignificant
@@ -1838,6 +1942,41 @@ export class ReboundRejectionAgent {
     }
 
     if (notional > 0) {
+      const utilNow = marginAdvisor.utilisationPct();
+      const utilAfterGuard = marginAdvisor.utilisationPctIf(notional, Math.max(levGuard, 1));
+      const utilisationTarget = tier === 'tier1' ? 55 : tier === 'tier2' ? 60 : 65;
+      if (utilAfterGuard > utilisationTarget) {
+        const committed = marginAdvisor.committedUsd();
+        const equity = marginAdvisor.equityUsd();
+        const targetMarginUsd = (utilisationTarget / 100) * equity;
+        const allowedIncrease = Math.max(0, targetMarginUsd - committed);
+        const scaledNotional = allowedIncrease > 0 ? allowedIncrease * Math.min(effectiveLev, levGuard) : 0;
+        if (scaledNotional <= 0) {
+          this.noteSignalDrop('margin_projection_block', 'warn', {
+            utilNow,
+            utilAfter: utilAfterGuard,
+            critical: true,
+            tolerance: utilisationTarget,
+          });
+          this.entering = false;
+          return;
+        }
+        recordOpsEvent({
+          level: 'info',
+          source: 'margin_guard',
+          message: 'utilisation_scaled_to_target',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            utilNow,
+            utilAfterGuard,
+            targetPct: utilisationTarget,
+            scaledNotional,
+            originalNotional: notional,
+          },
+        });
+        notional = Math.min(notional, scaledNotional);
+      }
       const maxAdditional = marginAdvisor.maxAdditionalNotionalAt(effectiveLev);
       const freeCapRatio = notional > 0 ? maxAdditional / notional : 1;
       const marginClamp = Math.min(1, Math.max(0, freeCapRatio));
@@ -2014,6 +2153,46 @@ export class ReboundRejectionAgent {
         }
       }
     }
+    const finalNotionalUsd = qty * entry;
+    const utilAfterFinal = marginAdvisor.utilisationPctIf(finalNotionalUsd, Math.max(effectiveLev, 1));
+    const tpPct = (price: number | undefined) => (price != null && entry > 0 ? Math.abs(price - entry) / entry * 100 : undefined);
+    const tp1Pct = tpPct(tp[0]);
+    const tp2Pct = tpPct(tp[1]);
+    const volGuardCap = guardInfo.cap != null && Number.isFinite(guardInfo.cap)
+      ? guardInfo.cap.toFixed(2)
+      : '∞';
+    const freeCapDisplay = Number.isFinite(freeCapAtGuard) ? freeCapAtGuard.toFixed(2) : '∞';
+    const concentrationCap = Number.isFinite(this.maxNotionalCapUsd) && (this.maxNotionalCapUsd ?? 0) > 0
+      ? (this.maxNotionalCapUsd as number).toFixed(2)
+      : '∞';
+    const sizingLogParts = [
+      `equity=${bal.equityUsd.toFixed(2)}`,
+      `risk%=${dynamicRiskPct.toFixed(3)}`,
+      `riskUsd=${quantSizerResult.riskUsd.toFixed(2)}`,
+      `stop=${stop.toFixed(4)}/${stopPct.toFixed(2)}%`,
+      `qty_desired=${quantSizerResult.rawQty.toFixed(6)}`,
+      `caps={volGuard:${volGuardCap},maxLev:${effectiveLev.toFixed(2)},freeCap:${freeCapDisplay},concentration:${concentrationCap}}`,
+      `final_qty=${qty.toFixed(6)}`,
+      `notional=${finalNotionalUsd.toFixed(2)}`,
+      `util_after=${utilAfterFinal.toFixed(2)}%`,
+      `TP1%=${tp1Pct != null ? tp1Pct.toFixed(2) : 'n/a'}`,
+      `TP2%=${tp2Pct != null ? tp2Pct.toFixed(2) : 'n/a'}`,
+      `trail=ATRx${this.quantConfig.exits.trailAtrMult.toFixed(2)}`,
+    ];
+    recordOpsEvent({
+      level: 'info',
+      source: 'position_sizing',
+      message: 'sizing_breakdown',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile.symbol,
+      details: {
+        log: sizingLogParts.join(', '),
+        requestedNotional: requestedNotionalBeforeCaps,
+        finalNotional: finalNotionalUsd,
+        qualityMultiplier,
+      },
+    });
+
     const plan = chooseExecutionPlan({
       symbol: this.profile.symbol,
       side,
@@ -2122,6 +2301,7 @@ export class ReboundRejectionAgent {
       tp,
       openedAt,
       extended: false,
+      partialTaken: false,
       slOrderId: (placed as any).slOrderId,
       tpOrderId: (placed as any).tpOrderId,
       trail: [{ ts: openedAt, price: stop }],
@@ -2132,6 +2312,18 @@ export class ReboundRejectionAgent {
       initialStopDistance,
       hitTargets: [],
       archetype: quantArchetype,
+      initialQty: placed.filledQty,
+      initialNotional: placed.filledQty * executionPrice,
+      addOnFilledQty: 0,
+      scaleInTriggered: false,
+      trailConfig: {
+        mode: 'atr',
+        multiplier: this.quantConfig.exits.trailAtrMult,
+        armed: false,
+        highWatermark: executionPrice,
+        lastUpdateTs: openedAt,
+      },
+      openLeverage: effectiveLev,
     };
     this.circuitBreaker.onBeforeOpen(new Date(openedAt), this.lastKnownEquityUsd);
     this.syncCircuitBreakerTelemetry();
@@ -2235,7 +2427,25 @@ export class ReboundRejectionAgent {
     const atrVal = Math.max(stopDistance * 0.6, snap.atr14 || stopDistance);
     const slope = snap.ema20Slope || 0;
     const realizedVol = snap.realizedVol || 0;
-    
+
+    const trailConfig = this.pos.trailConfig;
+    if (trailConfig?.armed) {
+      const mult = trailConfig.multiplier ?? 1;
+      const desired = side === 'buy'
+        ? price - atrVal * mult
+        : price + atrVal * mult;
+      const adjusted = side === 'buy'
+        ? Math.max(this.pos.stop, desired)
+        : Math.min(this.pos.stop, desired);
+      if ((side === 'buy' && adjusted > this.pos.stop + 1e-6) || (side === 'sell' && adjusted < this.pos.stop - 1e-6)) {
+        const highWater = side === 'buy'
+          ? Math.max(trailConfig.highWatermark ?? price, price)
+          : Math.min(trailConfig.highWatermark ?? price, price);
+        this.pos.trailConfig = { ...trailConfig, highWatermark: highWater, lastUpdateTs: Date.now() };
+        return adjusted;
+      }
+    }
+
     // Special logic for normal 2-3% moves - optimize timing
     const unrealizedPct = Math.abs((price - this.pos.entry) / this.pos.entry) * 100;
     const isNormalMove = unrealizedPct >= 1.5 && unrealizedPct <= 4.0;
@@ -2352,6 +2562,138 @@ export class ReboundRejectionAgent {
     }
 
     return candidate;
+  }
+
+  private resolvePartialFraction(): number {
+    const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : 'tier3';
+    if (tier === 'tier1') return 0.3;
+    if (tier === 'tier2') return 0.35;
+    return 0.4;
+  }
+
+  private resolveScaleInFraction(): number {
+    const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : 'tier3';
+    if (tier === 'tier1') return 0.2;
+    if (tier === 'tier2') return 0.25;
+    return 0.3;
+  }
+
+  private computeWeightedRFromPosition(): number | null {
+    if (!this.pos || !this.plan) return null;
+    const entry = this.pos.entry;
+    const stop = this.pos.stop;
+    const targets = this.pos.tp || [];
+    const stopDistance = Math.max(1e-9, Math.abs(entry - stop));
+    if (!(stopDistance > 0)) return null;
+    const baseWeights = [0.6, 0.3, 0.1];
+    const fallback = baseWeights[baseWeights.length - 1] ?? 0.1;
+    let weightSum = 0;
+    let accum = 0;
+    targets.forEach((target, idx) => {
+      if (target == null || !Number.isFinite(target)) return;
+      const rMultiple = Math.abs(target - entry) / stopDistance;
+      if (!(rMultiple > 0)) return;
+      const weight = idx < baseWeights.length ? baseWeights[idx]! : fallback * Math.pow(0.5, idx - baseWeights.length + 1);
+      accum += rMultiple * weight;
+      weightSum += weight;
+    });
+    if (weightSum <= 0) return null;
+    return accum / weightSum;
+  }
+
+  private async maybeScaleInAfterPartial(): Promise<void> {
+    if (!this.pos || !this.plan || !this.profile || !this.broker) return;
+    if (!this.pos.partialTaken || this.pos.scaleInTriggered) return;
+
+    const baselineWeighted = (this.plan as any)?._initialWeightedR;
+    const currentWeighted = this.computeWeightedRFromPosition();
+    if (currentWeighted == null || currentWeighted < 1.0) return;
+    if (baselineWeighted != null && currentWeighted <= baselineWeighted + 0.05) return;
+
+    const initialQty = this.pos.initialQty ?? this.pos.qty;
+    const remainingCapQty = Math.max(0, initialQty * 0.35 - (this.pos.addOnFilledQty ?? 0));
+    let desiredQty = Math.min(initialQty * this.resolveScaleInFraction(), remainingCapQty);
+    if (!(desiredQty > 0)) return;
+
+    let balance: BrokerMarginSnapshot;
+    try {
+      balance = await this.broker.balance();
+    } catch {
+      return;
+    }
+    const advisor = createMarginAdvisor(balance);
+    const utilNow = advisor.utilisationPct();
+    if (utilNow >= 60) return;
+
+    const leverageHint = Math.max(1, this.pos.openLeverage ?? this.profile.maxLeverage ?? 1);
+    let ticker: any = null;
+    try { ticker = await getTicker(this.profile.symbol); } catch {}
+    const price = ticker?.last && Number.isFinite(ticker.last) ? Number(ticker.last) : this.pos.entry;
+    const additionalNotional = desiredQty * price;
+    if (!(additionalNotional > 0)) return;
+
+    const utilAfter = advisor.utilisationPctIf(additionalNotional, leverageHint);
+    if (utilAfter >= 72) return;
+
+    const concentrationCapUsd = Number.isFinite(this.maxNotionalCapUsd) && (this.maxNotionalCapUsd ?? 0) > 0
+      ? (this.maxNotionalCapUsd as number)
+      : Infinity;
+    const currentNotional = this.pos.qty * price;
+    if (currentNotional + additionalNotional > concentrationCapUsd) {
+      const allowable = concentrationCapUsd - currentNotional;
+      if (!(allowable > price * 1e-8)) return;
+      desiredQty = Math.min(desiredQty, allowable / price);
+    }
+    if (!(desiredQty > 0)) return;
+
+    try {
+      const addOrder = await this.broker.place({
+        symbol: this.profile.symbol,
+        side: this.pos.side,
+        type: 'market',
+        qty: Number(desiredQty.toFixed(8)),
+        leverage: leverageHint,
+        reduceOnly: false,
+      });
+      if (addOrder?.filledQty && addOrder.filledQty > 0) {
+        const fillPrice = addOrder.avgPrice || price;
+        this.pos.qty += addOrder.filledQty;
+        this.pos.addOnFilledQty = (this.pos.addOnFilledQty ?? 0) + addOrder.filledQty;
+        this.pos.scaleInTriggered = true;
+        this.pos.initialNotional = (this.pos.initialNotional ?? 0) + addOrder.filledQty * fillPrice;
+        const trailConfig = this.pos.trailConfig;
+        if (trailConfig) {
+          const highWater = this.pos.side === 'buy'
+            ? Math.max(trailConfig.highWatermark ?? fillPrice, fillPrice)
+            : Math.min(trailConfig.highWatermark ?? fillPrice, fillPrice);
+          this.pos.trailConfig = { ...trailConfig, highWatermark: highWater, lastUpdateTs: Date.now() };
+        }
+        recordOpsEvent({
+          level: 'info',
+          source: 'scale_in',
+          message: 'scale_in_add_on_executed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            addQty: addOrder.filledQty,
+            price: fillPrice,
+            utilBefore: utilNow,
+            utilAfter,
+            weightedR: currentWeighted,
+          },
+        });
+        await this.syncProtectiveOrders('scale_in');
+      }
+    } catch (error) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'scale_in',
+        message: 'scale_in_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: { error: String((error as any)?.message || error) },
+      });
+    }
   }
 
   // Helper function to check if price is near key support/resistance levels
@@ -8793,7 +9135,8 @@ export class ReboundRejectionAgent {
       return;
     }
 
-    const rawPartialQty = this.pos.qty * 0.5;
+    const partialFraction = this.resolvePartialFraction();
+    const rawPartialQty = this.pos.qty * partialFraction;
     const partialQty = Number(rawPartialQty.toFixed(8));
     if (!(partialQty > 0 && partialQty < this.pos.qty)) {
       return;
@@ -8815,7 +9158,8 @@ export class ReboundRejectionAgent {
     if (!this.pos || !this.broker || !this.profile) return;
 
     try {
-      const rawQty = this.pos.qty * 0.5;
+      const partialFraction = this.resolvePartialFraction();
+      const rawQty = this.pos.qty * partialFraction;
       const partialQty = Number(rawQty.toFixed(8));
       if (!(partialQty > 0 && partialQty < this.pos.qty)) return;
 
@@ -8847,6 +9191,21 @@ export class ReboundRejectionAgent {
         const fillPrice = partialExit.avgPrice || price;
         console.log(`Partial exit: ${partialExit.filledQty} @ ${fillPrice} (${reason})`);
 
+        const now = Date.now();
+        const previousConfig = this.pos.trailConfig ?? { mode: 'atr', multiplier: this.quantConfig.exits.trailAtrMult, armed: false };
+        const trailMultiplier = Math.max(0.8, Math.min(1.2, (previousConfig.multiplier ?? 1.0) * 0.9));
+        const highWater = this.pos.side === 'buy'
+          ? Math.max(previousConfig.highWatermark ?? fillPrice, fillPrice)
+          : Math.min(previousConfig.highWatermark ?? fillPrice, fillPrice);
+        this.pos.trailConfig = {
+          ...previousConfig,
+          mode: 'atr',
+          multiplier: trailMultiplier,
+          armed: true,
+          highWatermark: highWater,
+          lastUpdateTs: now,
+        };
+
         // Record partial exit
         recordOpsEvent({
           level: 'info',
@@ -8864,6 +9223,7 @@ export class ReboundRejectionAgent {
 
         // Sync protective orders
         await this.syncProtectiveOrders('partial_exit');
+        await this.maybeScaleInAfterPartial();
       }
 
     } catch (error) {
