@@ -45,6 +45,18 @@ export type QuantAIVolatilityProfileOverride = {
   spreadAtrRatioLimit?: number;
 };
 
+export type QuantAIDrySpellConfig = {
+  enabled: boolean;
+  minMinutesWithoutTrade: number;
+  rejectionsForStep: number;
+  relaxationStepMinutes: number;
+  maxSteps: number;
+  minAdxDeltaPerStep: number;
+  minRrDeltaPerStep: number;
+  confidenceDeltaPerStep: number;
+  minAtrPctDeltaPerStep: number;
+};
+
 export type QuantAIEntryFilterDynamicConfig = {
   baselineAtrMultiplier?: number;
   atrHighVolThresholdPct?: number;
@@ -55,6 +67,7 @@ export type QuantAIEntryFilterDynamicConfig = {
   atrMaxPct?: number;
   atrMaxPctByTier?: Record<string, number>;
   spreadAtrRatioLimit?: number;
+  drySpell?: QuantAIDrySpellConfig;
   aggressivenessAdjustments?: Record<string, {
     minRrDelta?: number;
     minAdxDelta?: number;
@@ -197,6 +210,17 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         tier1: 0.2,
         tier3: 0.5,
       },
+      drySpell: {
+        enabled: true,
+        minMinutesWithoutTrade: 45,
+        rejectionsForStep: 6,
+        relaxationStepMinutes: 30,
+        maxSteps: 3,
+        minAdxDeltaPerStep: -1.5,
+        minRrDeltaPerStep: -0.1,
+        confidenceDeltaPerStep: -0.02,
+        minAtrPctDeltaPerStep: -0.03,
+      },
       aggressivenessAdjustments: {
         conservative: {
           minRrDelta: 0.1,
@@ -295,6 +319,9 @@ function cloneDynamic(
   }
   if (dynamic.rrTierAdjustments) {
     cloned.rrTierAdjustments = { ...dynamic.rrTierAdjustments };
+  }
+  if (dynamic.drySpell) {
+    cloned.drySpell = { ...dynamic.drySpell };
   }
   if (dynamic.aggressivenessAdjustments) {
     cloned.aggressivenessAdjustments = {};
@@ -448,13 +475,49 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
       ?? (dynamicRaw as Record<string, any>)['rrTierAdjustments'];
     if (rrAdjust && typeof rrAdjust === 'object') {
       const src = rrAdjust as Record<string, any>;
-      cfg.dynamic!.rrTierAdjustments = cfg.dynamic!.rrTierAdjustments
-        ? { ...cfg.dynamic!.rrTierAdjustments }
-        : {};
+    cfg.dynamic!.rrTierAdjustments = cfg.dynamic!.rrTierAdjustments
+      ? { ...cfg.dynamic!.rrTierAdjustments }
+      : {};
       for (const [key, value] of Object.entries(src)) {
         const val = normalizeOptionalNumber(value);
         if (val != null) cfg.dynamic!.rrTierAdjustments![key] = val;
       }
+    }
+    const drySpellRaw = (dynamicRaw as Record<string, any>)['dry_spell']
+      ?? (dynamicRaw as Record<string, any>)['drySpell'];
+    if (drySpellRaw && typeof drySpellRaw === 'object') {
+      const base = defaults.dynamic?.drySpell;
+      const normalize = (field: string, fallback: number): number => {
+        const value = (drySpellRaw as Record<string, any>)[field]
+          ?? (drySpellRaw as Record<string, any>)[field.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`)];
+        const num = Number(value);
+        return Number.isFinite(num) ? num : fallback;
+      };
+      const enabledValue = (drySpellRaw as Record<string, any>)['enabled'];
+      let enabled: boolean;
+      if (typeof enabledValue === 'boolean') {
+        enabled = enabledValue;
+      } else if (typeof enabledValue === 'string') {
+        enabled = enabledValue.trim().length === 0
+          ? (base?.enabled ?? true)
+          : enabledValue.trim().toLowerCase() !== 'false';
+      } else if (typeof enabledValue === 'number') {
+        enabled = enabledValue !== 0;
+      } else {
+        enabled = base?.enabled ?? true;
+      }
+      const defaultsDry = base ?? DEFAULT_CONFIG.filters.dynamic?.drySpell!;
+      cfg.dynamic!.drySpell = {
+        enabled,
+        minMinutesWithoutTrade: normalize('minMinutesWithoutTrade', defaultsDry.minMinutesWithoutTrade),
+        rejectionsForStep: normalize('rejectionsForStep', defaultsDry.rejectionsForStep),
+        relaxationStepMinutes: normalize('relaxationStepMinutes', defaultsDry.relaxationStepMinutes),
+        maxSteps: normalize('maxSteps', defaultsDry.maxSteps),
+        minAdxDeltaPerStep: normalize('minAdxDeltaPerStep', defaultsDry.minAdxDeltaPerStep),
+        minRrDeltaPerStep: normalize('minRrDeltaPerStep', defaultsDry.minRrDeltaPerStep),
+        confidenceDeltaPerStep: normalize('confidenceDeltaPerStep', defaultsDry.confidenceDeltaPerStep),
+        minAtrPctDeltaPerStep: normalize('minAtrPctDeltaPerStep', defaultsDry.minAtrPctDeltaPerStep),
+      };
     }
     const aggrAdjust = (dynamicRaw as Record<string, any>)['aggressiveness_adjustments']
       ?? (dynamicRaw as Record<string, any>)['aggressivenessAdjustments'];
