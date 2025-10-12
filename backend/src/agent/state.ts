@@ -304,6 +304,7 @@ export class ReboundRejectionAgent {
   private zoneCalculatedForBias: 'long' | 'short' | 'none' = 'none'; // Bias mismatch: track bias used for zone
   private lastZoneCalculation = 0;             // Zone expiration: timestamp of last zone calculation
   private requireStrongerConfirmation = false; // Support break: flag when price near weak support
+  private volumeRatioHistory: number[] = [];
   private aiBiasOverride: {
     bias: 'long' | 'short';
     originalBias: 'long' | 'short' | 'none';
@@ -3117,12 +3118,14 @@ export class ReboundRejectionAgent {
     // Track when price entered zone
     if (priceInZone && this.priceInZoneStartTime === 0) {
       this.priceInZoneStartTime = now;
+      this.resetVolumeRatioHistory();
       return { confirmed: false, reason: 'Price just entered zone - waiting 5min confirmation' };
     }
 
     // Reset if price exits zone
     if (!priceInZone) {
       this.priceInZoneStartTime = 0;
+      this.resetVolumeRatioHistory();
       return { confirmed: false, reason: 'Price outside zone' };
     }
 
@@ -3153,20 +3156,138 @@ export class ReboundRejectionAgent {
     // 3️⃣ VOLUME CHECK: Must exceed 1.2x average
     const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
     const lastVolume = snap.volume || 0;
-    const volumeConfirmed = avgVolume > 0 ? (lastVolume >= avgVolume * 1.2) : true; // Skip if no volume data
+    const rawVolumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
+    const { smoothed: volumeRatioSmoothed, previous: prevVolumeRatio } = this.updateVolumeRatioHistory(rawVolumeRatio);
+
+    const adx = Number.isFinite(snap.adx14) ? snap.adx14 : 0;
+    const atrPct = Number.isFinite(snap.atrPct) ? snap.atrPct : 0;
+    const adxNorm = this.normalizeToUnitInterval(adx, 15, 40);
+    const atrNorm = this.normalizeToUnitInterval(atrPct, 0.5, 2.5);
+    const adaptiveNeed = this.clampValue(0.9 + 0.4 * adxNorm + 0.2 * atrNorm, 0.9, 1.3);
+
+    const cmf20 = Number.isFinite(snap.cmf20) ? snap.cmf20 ?? 0 : 0;
+    const cmfAligned = bias === 'long' ? cmf20 > 0.03 : cmf20 < -0.03;
+    const adxImproving = Number.isFinite(snap.adxSlope) ? snap.adxSlope > 0 : false;
+    const prevRatio = prevVolumeRatio ?? rawVolumeRatio;
+    const volumeSpike = Number.isFinite(rawVolumeRatio)
+      && rawVolumeRatio >= Math.max(0.95, adaptiveNeed * 0.85)
+      && (prevRatio ? rawVolumeRatio >= prevRatio * 1.05 : true);
+    const minFastTrackRatio = 0.85;
+    const volumeSignal = volumeRatioSmoothed >= minFastTrackRatio;
+    const deltaSignal = cmfAligned;
+    const volSpikeSignal = volumeSpike;
+    const positiveSignals = [volumeSignal, deltaSignal, volSpikeSignal].filter(Boolean).length;
+
+    const planPlaybook = this.plan?.plan?.meta?.playbook ?? null;
+    const breakoutDistancePct = this.runtimeZoneDiagnostics?.breakoutDistancePct ?? 0;
+    const holdingFavorableHalf = bias === 'long'
+      ? currentPrice >= entryZone.mid
+      : currentPrice <= entryZone.mid;
+    const timeoutMs = 2 * 15 * 60 * 1000; // 2x15m candles
+
+    let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | null = null;
+    let effectiveNeed = adaptiveNeed;
+    let volumeConfirmed = volumeRatioSmoothed >= adaptiveNeed;
+
+    if (!volumeConfirmed && adxImproving && positiveSignals >= 2 && volumeSignal) {
+      volumeConfirmed = true;
+      confirmationMode = 'fast_track';
+      effectiveNeed = Math.max(minFastTrackRatio, Math.min(adaptiveNeed, volumeRatioSmoothed));
+    }
+
+    if (
+      !volumeConfirmed
+      && planPlaybook === 'momentum_breakout'
+      && timeInZoneMs >= timeoutMs
+      && Math.abs(breakoutDistancePct) < 1e-4
+      && holdingFavorableHalf
+    ) {
+      const timeoutNeed = Math.max(0.95, adaptiveNeed - 0.1);
+      if (volumeRatioSmoothed >= timeoutNeed) {
+        volumeConfirmed = true;
+        confirmationMode = 'timeout';
+        effectiveNeed = timeoutNeed;
+      }
+    }
 
     if (!volumeConfirmed) {
-      return { 
-        confirmed: false, 
-        reason: `Waiting for volume confirmation (current: ${(lastVolume / avgVolume).toFixed(2)}x, need 1.2x)` 
+      const target = confirmationMode === 'fast_track' ? minFastTrackRatio : adaptiveNeed;
+      const currentRatio = Number.isFinite(volumeRatioSmoothed) ? volumeRatioSmoothed : rawVolumeRatio;
+      const ratioDisplay = Number.isFinite(currentRatio) ? currentRatio.toFixed(2) : '0.00';
+      const rawDisplay = Number.isFinite(rawVolumeRatio) && rawVolumeRatio > 0 ? rawVolumeRatio.toFixed(2) : '0.00';
+      return {
+        confirmed: false,
+        reason: `Waiting for volume confirmation (smoothed ${ratioDisplay}x, raw ${rawDisplay}x, need ≥ ${target.toFixed(2)}x)`
       };
     }
 
-    // ✅ ALL CHECKS PASSED
-    return { 
-      confirmed: true, 
-      reason: `Entry confirmed: ${timeInZoneMin.toFixed(1)}min in zone, momentum reversed, volume ${(lastVolume / avgVolume).toFixed(2)}x` 
+    const smoothedDisplay = Number.isFinite(volumeRatioSmoothed) ? volumeRatioSmoothed.toFixed(2) : '0.00';
+    const rawDisplay = Number.isFinite(rawVolumeRatio) && rawVolumeRatio > 0 ? rawVolumeRatio.toFixed(2) : '0.00';
+    const baseReason = `Entry confirmed: ${timeInZoneMin.toFixed(1)}min in zone, momentum reversed`;
+
+    if (confirmationMode === 'fast_track') {
+      const signalsUsed = [
+        volumeSignal ? 'volume≥0.85x' : null,
+        deltaSignal ? 'CMF aligned' : null,
+        volSpikeSignal ? 'vol spike' : null,
+      ].filter(Boolean).join(' + ');
+      return {
+        confirmed: true,
+        reason: `${baseReason}, order-flow fast track (${signalsUsed || 'signals'}) → volume ${smoothedDisplay}x (raw ${rawDisplay}x)`
+      };
+    }
+
+    if (confirmationMode === 'timeout') {
+      return {
+        confirmed: true,
+        reason: `${baseReason}, timeout release with volume ${smoothedDisplay}x (raw ${rawDisplay}x, need ≥ ${effectiveNeed.toFixed(2)}x)`
+      };
+    }
+
+    return {
+      confirmed: true,
+      reason: `${baseReason}, volume ${smoothedDisplay}x (raw ${rawDisplay}x, need ≥ ${adaptiveNeed.toFixed(2)}x)`
     };
+  }
+
+  private resetVolumeRatioHistory(): void {
+    this.volumeRatioHistory = [];
+  }
+
+  private updateVolumeRatioHistory(ratio: number): { smoothed: number; previous?: number } {
+    const valid = Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
+    const previous = this.volumeRatioHistory.length
+      ? this.volumeRatioHistory[this.volumeRatioHistory.length - 1]
+      : undefined;
+
+    if (valid > 0) {
+      this.volumeRatioHistory.push(valid);
+      if (this.volumeRatioHistory.length > 3) {
+        this.volumeRatioHistory.shift();
+      }
+    }
+
+    const samples = this.volumeRatioHistory.length;
+    const smoothed = samples > 0
+      ? this.volumeRatioHistory.reduce((sum, value) => sum + value, 0) / samples
+      : valid;
+
+    return { smoothed, previous };
+  }
+
+  private normalizeToUnitInterval(value: number, min: number, max: number): number {
+    if (!Number.isFinite(value)) return 0;
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return 0;
+    const normalized = (value - min) / (max - min);
+    if (!Number.isFinite(normalized)) return 0;
+    return Math.max(0, Math.min(1, normalized));
+  }
+
+  private clampValue(value: number, min: number, max: number): number {
+    if (!Number.isFinite(value)) return min;
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return value;
+    if (min > max) return value;
+    return Math.max(min, Math.min(max, value));
   }
 
   /**
