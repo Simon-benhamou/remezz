@@ -23,6 +23,7 @@ import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, p
 import { PlanJson } from './planSchema.js';
 import { ValidatedPlan, validatePlan } from './validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, maybeAdjustOrExit, computeInitialBracket } from '../quantai/index.js';
+import { chooseExecutionPlan, ExecutionPlan } from './executionPlanner.js';
 import type { EntryRelaxation } from '../quantai/strategy/entryFilters.js';
 import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../quantai/index.js';
 
@@ -1486,41 +1487,52 @@ export class ReboundRejectionAgent {
     spreadBps = marketTicker?.bid && marketTicker?.ask
       ? ((marketTicker.ask - marketTicker.bid) / ((marketTicker.ask + marketTicker.bid) / 2)) * 10_000
       : spreadBps;
-    let spreadPct = 0;
-    if (marketTicker?.bid && marketTicker?.ask) {
-      spreadPct = ((marketTicker.ask - marketTicker.bid) / ((marketTicker.ask + marketTicker.bid) / 2)) * 100;
-    }
-    const limitSpreadThresh = 0.12;
-    const twapSpreadThresh = 0.2;
-    let executionMode: 'market'|'limit'|'twap' = 'market';
-    if (marketTicker && playbook !== 'momentum_breakout') {
-      if (spreadPct >= twapSpreadThresh && qty * entry > 5000) executionMode = 'twap';
-      else if (spreadPct >= limitSpreadThresh) executionMode = 'limit';
-    }
+    const notionalUsd = qty * entry;
+    const plan = chooseExecutionPlan({
+      symbol: this.profile.symbol,
+      side,
+      qty,
+      notionalUsd,
+      entryPrice: entry,
+      ticker: marketTicker || undefined,
+      atrPct: Number((snap as any)?.atrPct ?? null),
+      spreadBps,
+      volatilityProfile: (snap as any)?.volatilityProfile ?? this.regime?.volatilityProfile ?? null,
+      playbook,
+    });
     const startTs = Date.now();
 
-    if (executionMode !== 'market') {
+    if (plan.mode !== 'market' || plan.fallbacks.length > 0) {
       recordOpsEvent({
         level: 'info',
         source: 'execution',
-        message: `adaptive_${executionMode}`,
+        message: `plan_${plan.mode}`,
         sessionId: this.sessionId || undefined,
         symbol: this.profile.symbol,
-        details: { spreadPct, qty, playbook },
+        details: {
+          reason: plan.reason,
+          spreadBps,
+          qty,
+          notional: notionalUsd,
+          playbook,
+          fallbacks: plan.fallbacks.length,
+        },
       });
     }
 
     const attemptIndex = this.orderAttemptLogCount + 1;
     const attemptDetails = {
       attempt: attemptIndex,
-      executionMode,
+      executionMode: plan.mode,
       side,
       qty,
-      notional: qty * entry,
+      notional: notionalUsd,
       leverage: effectiveLev,
       entry,
       stop,
       takeProfit: tp[0],
+      planReason: plan.reason,
+      spreadBps,
     };
     this.orderAttemptLogCount = attemptIndex;
     if (attemptIndex <= 10) {
@@ -1534,19 +1546,23 @@ export class ReboundRejectionAgent {
       });
     }
 
-    let placed: PlacedOrder;
+    let placed: PlacedOrder | null = null;
     try {
-      if (executionMode === 'limit') {
-        const limitPrice = this.computePassivePrice(side, entry, marketTicker);
-        placed = await this.placeLimitAdaptive({ side, qty, limitPrice, stop, tp, entry, leverage: effectiveLev });
-      } else if (executionMode === 'twap') {
-        placed = await this.executeTwapOrder({ side, totalQty: qty, slices: 3, intervalMs: 250, stop, tp, entry, leverage: effectiveLev });
-      } else {
-        placed = await this.broker.place({ symbol: this.profile.symbol, side, type: 'market', qty, leverage: effectiveLev, takeProfit: tp[0], stopLoss: stop });
+      placed = await this.executeWithPlan(plan, {
+        side,
+        qty,
+        stop,
+        tp,
+        entry,
+        leverage: effectiveLev,
+        ticker: marketTicker || undefined,
+      });
+      if (!placed) {
+        throw new Error('execution_plan_failed');
       }
     } catch (error) {
       this.noteSignalDrop('order_attempt_failed', 'warn', {
-        executionMode,
+        executionMode: plan.mode,
         qty,
         error: String((error as any)?.message || error),
         attempt: attemptIndex,
@@ -1555,11 +1571,11 @@ export class ReboundRejectionAgent {
       throw error;
     }
 
-    if (placed.status === 'rejected' || !placed.filledQty || placed.filledQty <= 0) {
+    if (!placed || placed.status === 'rejected' || !placed.filledQty || placed.filledQty <= 0) {
       this.noteSignalDrop('order_rejected', 'warn', {
-        status: placed.status,
+        status: placed?.status || 'unknown',
         requestedQty: qty,
-        executionMode,
+        executionMode: plan.mode,
       });
       this.state = 'COOLDOWN';
       broadcast('agent_state', { state: this.state, reason: 'execution_failed' }, this.profile.symbol, this.sessionId || undefined);
@@ -7202,6 +7218,124 @@ export class ReboundRejectionAgent {
       console.error(`Failed to apply daily ROI throttle:`, error);
       return riskPct; // Return original risk on error
     }
+  }
+
+  private async executeWithPlan(
+    plan: ExecutionPlan,
+    base: {
+      side: 'buy'|'sell';
+      qty: number;
+      stop: number;
+      tp: number[];
+      entry: number;
+      leverage: number;
+      ticker?: { bid?: number; ask?: number; last?: number } | null;
+    },
+  ): Promise<PlacedOrder | null> {
+    if (!this.broker || !this.profile) return null;
+
+    const attempts = [
+      { ...plan, isFallback: false },
+      ...plan.fallbacks.map(fallback => ({ ...fallback, isFallback: true })),
+    ] as Array<
+      (ExecutionPlan & { isFallback: boolean }) |
+      (ExecutionPlan['fallbacks'][number] & { isFallback: boolean })
+    >;
+
+    let last: PlacedOrder | null = null;
+
+    for (const attempt of attempts) {
+      const step: any = attempt;
+      const isFallback = Boolean(step.isFallback);
+
+      if (isFallback) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'execution',
+          message: 'execution_fallback_attempt',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: { mode: step.mode, reason: step.reason, delayMs: step.delayMs },
+        });
+        if (step.delayMs && step.delayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, step.delayMs));
+        }
+      }
+
+      try {
+        if (step.mode === 'market') {
+          last = await this.broker.place({
+            symbol: this.profile.symbol,
+            side: base.side,
+            type: 'market',
+            qty: base.qty,
+            leverage: base.leverage,
+            takeProfit: base.tp[0],
+            stopLoss: base.stop,
+          });
+        } else if (step.mode === 'limit') {
+          let limitPrice = step.limitPrice ?? plan.limitPrice ?? this.computePassivePrice(base.side, base.entry, base.ticker || undefined);
+          if (step.passiveOffsetBps != null && base.ticker) {
+            const slip = step.passiveOffsetBps / 10_000;
+            if (base.side === 'buy') {
+              const bid = base.ticker?.bid ?? limitPrice;
+              limitPrice = Math.max(0, Math.min(limitPrice, bid * (1 - slip)));
+            } else {
+              const ask = base.ticker?.ask ?? limitPrice;
+              limitPrice = Math.max(limitPrice, ask * (1 + slip));
+            }
+          }
+          last = await this.placeLimitAdaptive({
+            side: base.side,
+            qty: base.qty,
+            limitPrice,
+            stop: base.stop,
+            tp: base.tp,
+            entry: base.entry,
+            leverage: base.leverage,
+          });
+        } else {
+          const slices = step.twapSlices ?? plan.twapSlices ?? 3;
+          const intervalMs = step.twapIntervalMs ?? plan.twapIntervalMs ?? 250;
+          last = await this.executeTwapOrder({
+            side: base.side,
+            totalQty: base.qty,
+            slices,
+            intervalMs,
+            stop: base.stop,
+            tp: base.tp,
+            entry: base.entry,
+            leverage: base.leverage,
+          });
+        }
+      } catch (error) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'execution',
+          message: 'execution_step_failed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: { mode: step.mode, reason: step.reason, error: String((error as any)?.message || error) },
+        });
+        last = null;
+      }
+
+      if (last && last.status !== 'rejected' && last.filledQty && last.filledQty > 0) {
+        if (isFallback) {
+          recordOpsEvent({
+            level: 'info',
+            source: 'execution',
+            message: 'fallback_success',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: { mode: step.mode, reason: step.reason, filledQty: last.filledQty },
+          });
+        }
+        return last;
+      }
+    }
+
+    return last;
   }
 
   private async placeLimitAdaptive(order: any): Promise<any> {

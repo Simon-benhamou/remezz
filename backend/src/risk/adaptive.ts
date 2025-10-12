@@ -17,6 +17,12 @@ export type AdaptiveRiskResult = {
   symbolMultipliers: Record<string, SymbolRiskAdjustment>;
   dominantSymbol: string | null;
   appliedSymbolMultiplier: number;
+  weightedSharpe: number;
+  downsideDeviation: number;
+  winRate: number;
+  lossStreak: number;
+  samplePenalty: number;
+  notes: string[];
 };
 
 function computeSharpe(returns: number[]) {
@@ -69,6 +75,12 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       symbolMultipliers: {},
       dominantSymbol: null,
       appliedSymbolMultiplier: 1,
+      weightedSharpe: 0,
+      downsideDeviation: 0,
+      winRate: 0,
+      lossStreak: 0,
+      samplePenalty: 1,
+      notes: ['no_session'],
     };
   }
   const exits = await prisma.order.findMany({
@@ -87,6 +99,12 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       symbolMultipliers: {},
       dominantSymbol: null,
       appliedSymbolMultiplier: 1,
+      weightedSharpe: 0,
+      downsideDeviation: 0,
+      winRate: 0,
+      lossStreak: 0,
+      samplePenalty: 1,
+      notes: ['no_trade_history'],
     };
   }
   const returns = exits
@@ -102,26 +120,149 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       symbolMultipliers: {},
       dominantSymbol: null,
       appliedSymbolMultiplier: 1,
+      weightedSharpe: 0,
+      downsideDeviation: 0,
+      winRate: 0,
+      lossStreak: 0,
+      samplePenalty: 1,
+      notes: ['no_valid_returns'],
     };
   }
 
-  const sharpe = computeSharpe(returns);
-  const maxDrawdownPct = computeDrawdown(returns);
+  const boundedReturns = returns.map((r) => Math.max(-0.6, Math.min(0.6, r)));
+
+  const sharpe = computeSharpe(boundedReturns);
+  const maxDrawdownPct = computeDrawdown(boundedReturns);
+
+  // Apply an EWMA to emphasise the last ~6 trades while retaining longer context.
+  const halfLife = 6;
+  const decay = Math.pow(0.5, 1 / Math.max(halfLife, 1));
+  let weight = 1;
+  let weightSum = 0;
+  let weightedMean = 0;
+  for (let i = boundedReturns.length - 1; i >= 0; i--) {
+    const r = boundedReturns[i];
+    weightedMean += r * weight;
+    weightSum += weight;
+    weight *= decay;
+  }
+  weightedMean = weightSum > 0 ? weightedMean / weightSum : 0;
+
+  weight = 1;
+  weightSum = 0;
+  let weightedVar = 0;
+  for (let i = boundedReturns.length - 1; i >= 0; i--) {
+    const r = boundedReturns[i];
+    const diff = r - weightedMean;
+    weightedVar += weight * diff * diff;
+    weightSum += weight;
+    weight *= decay;
+  }
+  weightedVar = weightSum > 0 ? weightedVar / weightSum : 0;
+  const weightedStdev = Math.sqrt(Math.max(weightedVar, 1e-12));
+  const weightedSharpe = weightedStdev === 0 ? 0 : (weightedMean / weightedStdev) * Math.sqrt(boundedReturns.length);
+
+  const downside = boundedReturns.filter((r) => r < 0);
+  const downsideDeviation = downside.length
+    ? Math.sqrt(downside.reduce((acc, r) => acc + r * r, 0) / downside.length)
+    : 0;
+
+  const wins = boundedReturns.filter((r) => r > 0).length;
+  const winRate = wins / boundedReturns.length;
+
+  let lossStreak = 0;
+  let currentStreak = 0;
+  for (const r of boundedReturns) {
+    if (r < 0) {
+      currentStreak += 1;
+      lossStreak = Math.max(lossStreak, currentStreak);
+    } else {
+      currentStreak = 0;
+    }
+  }
+
+  const notes: string[] = [];
+
+  const sampleSize = boundedReturns.length;
+  let samplePenalty = 1;
+  if (sampleSize < 5) {
+    samplePenalty = 0.6;
+    notes.push('low_sample_under_5');
+  } else if (sampleSize < 8) {
+    samplePenalty = 0.75;
+    notes.push('low_sample_under_8');
+  } else if (sampleSize < 12) {
+    samplePenalty = 0.9;
+    notes.push('light_sample_penalty');
+  }
 
   let riskPct = baseRiskPct;
-  const minRisk = Math.max(0.4, baseRiskPct * 0.4);
-  const maxRisk = Math.min(2, baseRiskPct * 1.5);
+  const minRisk = Math.max(0.35, baseRiskPct * 0.35);
+  const maxRisk = Math.min(2.2, baseRiskPct * 1.8);
 
-  if (maxDrawdownPct <= -7 || sharpe < -0.5) {
-    riskPct = Math.max(minRisk, baseRiskPct * 0.4);
-  } else if (maxDrawdownPct <= -5 || sharpe < 0) {
-    riskPct = Math.max(minRisk, baseRiskPct * 0.6);
-  } else if (sharpe > 1.2 && maxDrawdownPct > -2) {
-    riskPct = Math.min(maxRisk, baseRiskPct * 1.3);
-  } else if (sharpe > 0.6 && maxDrawdownPct > -3) {
-    riskPct = Math.min(maxRisk, baseRiskPct * 1.1);
-  } else {
-    riskPct = Math.max(minRisk, Math.min(maxRisk, baseRiskPct));
+  if (maxDrawdownPct <= -9) {
+    riskPct = Math.max(minRisk, riskPct * 0.45);
+    notes.push('severe_drawdown');
+  } else if (maxDrawdownPct <= -6.5) {
+    riskPct = Math.max(minRisk, riskPct * 0.6);
+    notes.push('elevated_drawdown');
+  }
+
+  if (weightedSharpe < -0.15) {
+    riskPct = Math.max(minRisk, riskPct * 0.55);
+    notes.push('negative_weighted_sharpe');
+  } else if (weightedSharpe < 0.25) {
+    riskPct = Math.max(minRisk, riskPct * 0.75);
+    notes.push('soft_weighted_sharpe');
+  }
+
+  if (downsideDeviation > 0.055) {
+    riskPct = Math.max(minRisk, riskPct * 0.7);
+    notes.push('high_downside_vol');
+  }
+
+  if (winRate < 0.42) {
+    riskPct = Math.max(minRisk, riskPct * 0.65);
+    notes.push('low_win_rate');
+  }
+
+  if (lossStreak >= 4) {
+    riskPct = Math.max(minRisk, riskPct * 0.5);
+    notes.push('loss_streak_4_plus');
+  } else if (lossStreak === 3) {
+    riskPct = Math.max(minRisk, riskPct * 0.7);
+    notes.push('loss_streak_3');
+  }
+
+  riskPct = Math.max(minRisk, riskPct * samplePenalty);
+
+  if (
+    weightedSharpe > 1.6 &&
+    winRate > 0.6 &&
+    maxDrawdownPct > -2.5 &&
+    downsideDeviation < 0.035 &&
+    sampleSize >= 12
+  ) {
+    riskPct = Math.min(maxRisk, riskPct * 1.35);
+    notes.push('strong_performance_boost');
+  } else if (
+    weightedSharpe > 1.1 &&
+    winRate > 0.55 &&
+    maxDrawdownPct > -3.5 &&
+    downsideDeviation < 0.045 &&
+    sampleSize >= 10
+  ) {
+    riskPct = Math.min(maxRisk, riskPct * 1.15);
+    notes.push('moderate_performance_boost');
+  } else if (
+    weightedSharpe > 0.8 &&
+    winRate > 0.52 &&
+    maxDrawdownPct > -4 &&
+    downsideDeviation < 0.05 &&
+    sampleSize >= 8
+  ) {
+    riskPct = Math.min(maxRisk, riskPct * 1.05);
+    notes.push('conservative_performance_boost');
   }
 
   const symbolReturns: Record<string, number[]> = {};
@@ -130,7 +271,8 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     if (!symbol) return;
     const r = tradeReturn(order);
     if (Number.isFinite(r) && Math.abs(r) < 5) {
-      (symbolReturns[symbol] ||= []).push(r);
+      const bounded = Math.max(-0.6, Math.min(0.6, r));
+      (symbolReturns[symbol] ||= []).push(bounded);
     }
   });
 
@@ -172,10 +314,11 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   if (dominantMultiplier > 1 && riskPct >= baseRiskPct) {
     const allowedBoost = Math.min(dominantMultiplier, maxRisk / Math.max(riskPct, 1e-9));
     riskPct = Math.min(maxRisk, riskPct * allowedBoost);
+    notes.push('symbol_bias_boost');
   }
 
-  // Round to two decimals
-  riskPct = Math.max(0.4, Math.min(2, Math.round(riskPct * 100) / 100));
+  // Round to two decimals within the computed band
+  riskPct = Math.max(minRisk, Math.min(maxRisk, Math.round(riskPct * 100) / 100));
 
   return {
     riskPct,
@@ -186,5 +329,11 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     symbolMultipliers,
     dominantSymbol,
     appliedSymbolMultiplier: dominantMultiplier,
+    weightedSharpe,
+    downsideDeviation,
+    winRate,
+    lossStreak,
+    samplePenalty,
+    notes,
   };
 }
