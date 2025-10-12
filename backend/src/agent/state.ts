@@ -229,6 +229,8 @@ type MomentumGateEvaluation = {
     minAdx: number;
     slopePctAbs: number;
     minSlope: number;
+    slopePct: number;
+    minSlopePct: number;
     playbook: string;
     bias: string;
     reasonHint: 'enter' | 'reverse';
@@ -1990,6 +1992,8 @@ export class ReboundRejectionAgent {
       ENTRY_SHORT_MIN_RSI = Math.max(30, ENTRY_SHORT_MIN_RSI - 10);
       ENTRY_LONG_MAX_RSI = Math.min(80, ENTRY_LONG_MAX_RSI + 10);
     }
+    ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.00005, ENTRY_MIN_SLOPE_ABS_PCT / 100);
+
     return { ENTRY_SHORT_MIN_ADX, ENTRY_LONG_MIN_ADX, ENTRY_SHORT_MIN_RSI, ENTRY_LONG_MAX_RSI, ENTRY_MIN_ATR_PCT, ENTRY_MIN_SLOPE_ABS_PCT };
   }
 
@@ -2232,9 +2236,9 @@ export class ReboundRejectionAgent {
     
     // Slope direction confirmation (trend acceleration/deceleration)
     const slopeAligned = trendUp ? ema20Slope > 0 : ema20Slope < 0;
-    const slopeMagnitude = Math.abs(ema20Slope / ema20) * 100; // Slope as percentage
-    
-    console.log(`🧠 TREND ANALYSIS: ${trendUp ? 'UP' : 'DOWN'} trend (${trendStrength}), ADX: ${adx.toFixed(1)}, EMA spread: ${emaSpread.toFixed(2)}%, Slope: ${slopeMagnitude.toFixed(3)}%`);
+    const slopeMagnitude = Math.abs(ema20Slope / ema20); // Fractional slope
+
+    console.log(`🧠 TREND ANALYSIS: ${trendUp ? 'UP' : 'DOWN'} trend (${trendStrength}), ADX: ${adx.toFixed(1)}, EMA spread: ${emaSpread.toFixed(2)}%, Slope: ${(slopeMagnitude * 100).toFixed(3)}%`);
     
     // SCENARIO 1: Near Support - Context-dependent behavior
     if (supportDistance < 0.04 && nearestSupport) { // Increased to 4% for more opportunities
@@ -4080,8 +4084,16 @@ export class ReboundRejectionAgent {
       ?? 'mean_reversion') as string;
     const bias = this.plan?.bias || 'none';
 
+    const snapshotId = (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
+    const tfLTF = snap.meta?.tf ?? (snap.meta as any)?.ltf ?? null;
+    const tfHTF = (snap.meta as any)?.htf ?? null;
+    console.log(
+      `🧭 Momentum gates check | playbook=${playbook} bias=${bias} snapshot=${snapshotId ?? 'n/a'} ` +
+      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'}`,
+    );
+
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
-    let minSlopeAbsPct = Math.max(0.02, thresholds.ENTRY_MIN_SLOPE_ABS_PCT);
+    let minSlopeAbsPct = Math.max(0.0002, thresholds.ENTRY_MIN_SLOPE_ABS_PCT);
 
     if (quantFilters) {
       if (Number.isFinite(quantFilters.minAtrPct)) {
@@ -4092,28 +4104,28 @@ export class ReboundRejectionAgent {
       const rrReferenceRaw = this.currentRrMin ?? (Number.isFinite(quantFilters.minRr) ? Number(quantFilters.minRr) : undefined);
       if (Number.isFinite(rrReferenceRaw)) {
         const rrTightness = Math.max(1, Number(rrReferenceRaw));
-        const relaxedSlope = Math.max(0.03, minSlopeAbsPct * (rrTightness >= 1.5 ? 0.75 : 0.85));
+        const relaxedSlope = Math.max(0.0003, minSlopeAbsPct * (rrTightness >= 1.5 ? 0.75 : 0.85));
         minSlopeAbsPct = Math.min(minSlopeAbsPct, relaxedSlope);
       } else {
-        minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
+        minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.0012);
       }
     } else {
-      minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
+      minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.0012);
     }
 
     if (memeBias) {
       minAtr = Math.max(0.06, minAtr * 0.9);
-      minSlopeAbsPct = Math.max(0.005, minSlopeAbsPct * 0.8);
+      minSlopeAbsPct = Math.max(0.00005, minSlopeAbsPct * 0.8);
     }
 
     if (playbook === 'momentum_breakout') {
       minAtr *= 1.15;
       minSlopeAbsPct *= 1.05;
     } else if (playbook === 'trend_following') {
-      minSlopeAbsPct = Math.max(0.02, minSlopeAbsPct * 0.85);
+      minSlopeAbsPct = Math.max(0.0002, minSlopeAbsPct * 0.85);
     }
 
-    minSlopeAbsPct = Math.max(0.02, Math.min(minSlopeAbsPct, 0.25));
+    minSlopeAbsPct = Math.max(0.0002, Math.min(minSlopeAbsPct, 0.0025));
 
     const adxValue = Number((snap as any)?.adx14 ?? 0);
     const baseAdxRequirement = this.plan?.bias === 'short'
@@ -4164,19 +4176,21 @@ export class ReboundRejectionAgent {
     const ema50 = Number((snap as any)?.ema50 ?? snap.last);
     const emaVal = Number((snap as any)?.ema20 ?? snap.last ?? 0);
     const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
-    const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
+    const slopeAbs = emaVal !== 0 ? Math.abs(emaSlope / emaVal) : 0;
 
     let minSlopeRequirement = minSlopeAbsPct;
-    const slopeFloor = playbook === 'momentum_breakout' ? 0.07 : playbook === 'trend_following' ? 0.02 : 0.04;
+    const slopeFloor = playbook === 'momentum_breakout' ? 0.0007 : playbook === 'trend_following' ? 0.0002 : 0.0004;
     const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.7 : playbook === 'trend_following' ? 0.5 : 0.55;
-    const relaxation = playbook === 'momentum_breakout' ? 0.03 : playbook === 'trend_following' ? 0.015 : 0.05;
+    const relaxation = playbook === 'momentum_breakout' ? 0.0003 : playbook === 'trend_following' ? 0.00015 : 0.0005;
     minSlopeRequirement = Math.max(
       slopeFloor,
       Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - relaxation, slopeFloor))
     );
 
-    if (slopePctAbs < minSlopeRequirement) {
-      reasons.push(`slope_too_flat ${slopePctAbs.toFixed(3)}% < ${minSlopeRequirement.toFixed(3)}%`);
+    if (slopeAbs < minSlopeRequirement) {
+      const slopePct = slopeAbs * 100;
+      const minSlopePct = minSlopeRequirement * 100;
+      reasons.push(`slope_too_flat ${slopePct.toFixed(3)}% < ${minSlopePct.toFixed(3)}%`);
       if (emitEvents) {
         recordOpsEvent({
           level: 'info',
@@ -4184,7 +4198,7 @@ export class ReboundRejectionAgent {
           message: 'slope_too_flat',
           sessionId: this.sessionId || undefined,
           symbol: this.profile?.symbol,
-          details: { slopePctAbs, min: minSlopeRequirement, reason: reasonHint },
+          details: { slopeAbs, min: minSlopeRequirement, slopePct, minSlopePct, reason: reasonHint },
         });
       }
     }
@@ -4205,15 +4219,15 @@ export class ReboundRejectionAgent {
       if (!allowFlexibility) {
         reasons.push(`atr_too_low ${atrPct.toFixed(3)}% < ${minAtr.toFixed(3)}%`);
         if (emitEvents) {
-          recordOpsEvent({
-            level: 'info',
-            source: 'entry_gate',
-            message: 'atr_too_low',
-            sessionId: this.sessionId || undefined,
-            symbol: this.profile?.symbol,
-            details: { atrPct, min: minAtr, reason: reasonHint },
-          });
-        }
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_gate',
+          message: 'atr_too_low',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { atrPct, min: minAtr, minPct: minAtr, reason: reasonHint },
+        });
+      }
       }
     }
 
@@ -4235,8 +4249,10 @@ export class ReboundRejectionAgent {
         minAtr,
         adx: adxValue,
         minAdx: minAdxRequired,
-        slopePctAbs,
+        slopePctAbs: slopeAbs,
+        slopePct: slopeAbs * 100,
         minSlope: minSlopeRequirement,
+        minSlopePct: minSlopeRequirement * 100,
         playbook,
         bias,
         reasonHint,
@@ -4916,7 +4932,7 @@ export class ReboundRejectionAgent {
     const realizedVol = Number((snap as any)?.realizedVol ?? 0);
     
     const emaSpread = Math.abs((ema20 - ema50) / ema50) * 100;
-    const slopeStrength = Math.abs(ema20Slope / ema20) * 100;
+    const slopeStrength = Math.abs(ema20Slope / ema20);
     
     // High volatility regime
     if (atrPct > 2.5 || realizedVol > 80) {
@@ -4924,12 +4940,12 @@ export class ReboundRejectionAgent {
     }
     
     // Strong trending regime
-    if (adx >= 25 && emaSpread > 1.0 && slopeStrength > 0.05) {
+    if (adx >= 25 && emaSpread > 1.0 && slopeStrength > 0.0005) {
       return 'trending_strong';
     }
-    
-    // Weak trending regime  
-    if (adx >= 18 && (emaSpread > 0.5 || slopeStrength > 0.03)) {
+
+    // Weak trending regime
+    if (adx >= 18 && (emaSpread > 0.5 || slopeStrength > 0.0003)) {
       return 'trending_weak';
     }
     
@@ -5499,6 +5515,13 @@ export class ReboundRejectionAgent {
     const normalizedPlaybook = String(playbook);
     const price = snap.last;
     const bias = this.plan.bias;
+    const snapshotId = (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
+    const tfLTF = snap.meta?.tf ?? (snap.meta as any)?.ltf ?? null;
+    const tfHTF = (snap.meta as any)?.htf ?? null;
+    console.log(
+      `🧪 Quality filters check | playbook=${normalizedPlaybook} bias=${bias} snapshot=${snapshotId ?? 'n/a'} ` +
+      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'}`,
+    );
     const adx = Number((snap as any)?.adx14 ?? 0);
     const rsi = Number((snap as any)?.rsi14 ?? 50);
     const ema20 = Number((snap as any)?.ema20 ?? price);
@@ -8338,9 +8361,11 @@ export class ReboundRejectionAgent {
 
     // Adjust based on current market regime
     if (regime) {
+      const existingPlaybook = basePlan.meta?.playbook;
+      const finalPlaybook = existingPlaybook != null ? existingPlaybook : regime.playbook;
       basePlan.meta = {
         ...basePlan.meta,
-        playbook: regime.playbook,
+        playbook: finalPlaybook,
         regime: regime.trend,
         volatility: regime.volatility
       };
@@ -8448,9 +8473,9 @@ export class ReboundRejectionAgent {
 
       // 4. Vérifier conditions de momentum (slope élevée)
       const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
-      const slopePct = Math.abs(emaSlope / currentPrice) * 100;
-      if (slopePct > 0.25) { // Slope > 0.25% = momentum très fort
-        console.log(`🧠 AI call triggered: Strong momentum (slope: ${slopePct.toFixed(3)}%)`);
+      const slopeRatio = Math.abs(currentPrice !== 0 ? emaSlope / currentPrice : 0);
+      if (slopeRatio > 0.0025) { // Slope > 0.25% = momentum très fort
+        console.log(`🧠 AI call triggered: Strong momentum (slope: ${(slopeRatio * 100).toFixed(3)}%)`);
         return true;
       }
 

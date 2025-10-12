@@ -218,7 +218,14 @@ export async function validatePlan(plan: PlanJson): Promise<ValidatedPlan> {
 
   const regime = snap.regime;
   if (regime) {
-    plan.meta = { ...(plan.meta || {}), playbook: regime.playbook, regime: regime.trend, volatility: regime.volatility };
+    const aiPlaybook = plan.meta?.playbook;
+    const finalPlaybook = aiPlaybook != null ? aiPlaybook : regime.playbook;
+    plan.meta = {
+      ...(plan.meta || {}),
+      playbook: finalPlaybook,
+      regime: regime.trend,
+      volatility: regime.volatility,
+    };
   }
 
   return {

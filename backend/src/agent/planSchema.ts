@@ -45,7 +45,7 @@ export const PlanZ = z.object({
   }),
   notes: z.string().optional(),
   meta: z.object({
-    playbook: z.enum(['mean_reversion','momentum_breakout','standby']).optional(),
+    playbook: z.enum(['mean_reversion','momentum_breakout','trend_following','standby']).optional(),
     regime: z.enum(['uptrend','downtrend','range']).optional(),
     volatility: z.enum(['low','medium','high','elevated','extreme']).optional(),
     leverageGuard: z.object({
