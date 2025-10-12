@@ -4122,6 +4122,9 @@ export class ReboundRejectionAgent {
     let minAdxRequired = quantFilters && Number.isFinite(quantFilters.minAdx)
       ? Math.min(baseAdxRequirement, Number(quantFilters.minAdx))
       : baseAdxRequirement;
+    if (memeBias) {
+      minAdxRequired = Math.max(8, minAdxRequired - 2);
+    }
 
     if (memeBias) {
       minAdxRequired = Math.max(8, minAdxRequired - 2);
@@ -4258,6 +4261,31 @@ export class ReboundRejectionAgent {
       return allowSoft;
     }
     return evaluation.pass;
+  }
+
+  private evaluateTrendPullback(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
+    const distanceToEma20 = Number.isFinite(ema20) && ema20 !== 0 ? ((price - ema20) / ema20) * 100 : Number.NaN;
+    const distanceToEma50 = Number.isFinite(ema50) && ema50 !== 0 ? ((price - ema50) / ema50) * 100 : Number.NaN;
+
+    if (!Number.isFinite(distanceToEma20) || !Number.isFinite(distanceToEma50)) {
+      return { ok: false, distanceToEma20, distanceToEma50, reason: 'missing_ema' };
+    }
+
+    if (bias === 'long') {
+      const nearEma20 = distanceToEma20 >= -2.6 && distanceToEma20 <= 1.4;
+      const holdingEma50 = distanceToEma50 >= -1.8;
+      const ok = nearEma20 && holdingEma50;
+      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
+    }
+
+    if (bias === 'short') {
+      const nearEma20 = distanceToEma20 <= 2.6 && distanceToEma20 >= -1.4;
+      const holdingEma50 = distanceToEma50 <= 1.8;
+      const ok = nearEma20 && holdingEma50;
+      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
+    }
+
+    return { ok: false, distanceToEma20, distanceToEma50, reason: 'unknown_bias' };
   }
 
   private evaluateTrendPullback(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
