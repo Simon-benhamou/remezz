@@ -223,6 +223,17 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         confidenceDeltaPerStep: -0.03,
         minAtrPctDeltaPerStep: -0.04,
       },
+      drySpell: {
+        enabled: true,
+        minMinutesWithoutTrade: 45,
+        rejectionsForStep: 6,
+        relaxationStepMinutes: 30,
+        maxSteps: 3,
+        minAdxDeltaPerStep: -1.5,
+        minRrDeltaPerStep: -0.1,
+        confidenceDeltaPerStep: -0.02,
+        minAtrPctDeltaPerStep: -0.03,
+      },
       aggressivenessAdjustments: {
         conservative: {
           minRrDelta: 0.05,
