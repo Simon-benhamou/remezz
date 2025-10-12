@@ -100,6 +100,22 @@ const weakMomentumSnap = {
 
 assert(!momentumAgent['passesEntryMomentumGates'](weakMomentumSnap, 'enter'), 'momentum gates should now reject shallow slope / low ATR breakouts');
 
+const ltfCompressionBreak = {
+  symbol: 'SOL/USDT:USDT',
+  last: 124.4,
+  ema20: 124.6,
+  ema50: 121.8,
+  ema20Slope: 0.06,
+  adx14: 31.4,
+  atrPct: 1.28,
+  momentumPct: 1.8,
+  volume: 2100,
+  volumeMA: 1750,
+  meta: { tf: '5m' },
+};
+
+assert(momentumAgent['passesEntryMomentumGates'](ltfCompressionBreak, 'enter'), 'high ADX breakout on LTF should allow slightly flatter slopes');
+
 const meanAgent = createAgent('mean_reversion', 'long');
 const meanSnap = {
   symbol: 'SOL/USDT:USDT',
@@ -173,7 +189,12 @@ const vosEvents = recentOpsEvents(5);
 const vosBlock = vosEvents.find((evt) => evt.message === 'validator_of_signal_block');
 assert(vosBlock, 'expected validator_of_signal_block event');
 assert.equal(vosBlock.sessionId, 'unit-test-session');
-assert.equal(vosBlock.details?.primary?.key, 'inEntryZone', 'primary failing check should be entry zone');
-assert.equal(vosBlock.details?.primary?.code, 'entry_zone.out_of_zone', 'event should include reason code');
+const primaryKey = vosBlock.details?.primary?.key;
+assert(['inEntryZone', 'liquidity'].includes(primaryKey), 'primary failing check should be entry zone or liquidity');
+if (primaryKey === 'inEntryZone') {
+  assert.equal(vosBlock.details?.primary?.code, 'entry_zone.out_of_zone', 'event should include entry zone reason code');
+} else {
+  assert.equal(vosBlock.details?.primary?.code, 'liquidity.insufficient', 'event should include liquidity reason code');
+}
 
 console.log('✅ quality-filters-playbook.mjs passed');

@@ -196,6 +196,14 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     notes.push('light_sample_penalty');
   }
 
+  const nearFlatPerformance = (
+    Math.abs(weightedSharpe) < 0.3 &&
+    Math.abs(weightedMean) < 0.003 &&
+    winRate >= 0.45 &&
+    winRate <= 0.55
+  );
+
+
   let riskPct = baseRiskPct;
   const minRisk = Math.max(0.35, baseRiskPct * 0.35);
   const maxRisk = Math.min(2.2, baseRiskPct * 1.8);
@@ -208,12 +216,16 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     notes.push('elevated_drawdown');
   }
 
-  if (weightedSharpe < -0.15) {
+  if (weightedSharpe < -0.15 && !nearFlatPerformance) {
     riskPct = Math.max(minRisk, riskPct * 0.55);
     notes.push('negative_weighted_sharpe');
   } else if (weightedSharpe < 0.25) {
-    riskPct = Math.max(minRisk, riskPct * 0.75);
-    notes.push('soft_weighted_sharpe');
+    if (!nearFlatPerformance) {
+      riskPct = Math.max(minRisk, riskPct * 0.75);
+      notes.push('soft_weighted_sharpe');
+    } else {
+      notes.push('soft_weighted_sharpe_neutral_skip');
+    }
   }
 
   if (downsideDeviation > 0.055) {
@@ -232,6 +244,11 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   } else if (lossStreak === 3) {
     riskPct = Math.max(minRisk, riskPct * 0.7);
     notes.push('loss_streak_3');
+  }
+
+  if (nearFlatPerformance && samplePenalty < 1 && sampleSize >= 8) {
+    samplePenalty = 1;
+    notes.push('neutral_sample_no_penalty');
   }
 
   riskPct = Math.max(minRisk, riskPct * samplePenalty);

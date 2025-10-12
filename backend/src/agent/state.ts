@@ -4307,6 +4307,19 @@ export class ReboundRejectionAgent {
     const snapshotId = (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
     const tfLTF = snap.meta?.tf ?? (snap.meta as any)?.ltf ?? null;
     const tfHTF = (snap.meta as any)?.htf ?? null;
+    const tfLower = typeof tfLTF === 'string' ? tfLTF.toLowerCase() : null;
+    let tfMinutes: number | null = null;
+    if (tfLower) {
+      const match = tfLower.match(/(\d+)\s*(m|min)/);
+      if (match) {
+        const parsed = Number(match[1]);
+        tfMinutes = Number.isFinite(parsed) ? parsed : null;
+      }
+    }
+    const isLowerTimeframeBreakout = playbook === 'momentum_breakout' && (
+      (tfLower != null && (tfLower.includes('ltf') || tfLower.includes('scalp')))
+      || (tfMinutes != null && tfMinutes <= 15)
+    );
     console.log(
       `🧭 Momentum gates check | playbook=${playbook} bias=${bias} snapshot=${snapshotId ?? 'n/a'} ` +
       `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'}`,
@@ -4399,13 +4412,30 @@ export class ReboundRejectionAgent {
     const slopeAbs = emaVal !== 0 ? Math.abs(emaSlope / emaVal) : 0;
 
     let minSlopeRequirement = minSlopeAbsPct;
-    const slopeFloor = playbook === 'momentum_breakout' ? 0.0007 : playbook === 'trend_following' ? 0.0002 : 0.0004;
+    let slopeFloor = playbook === 'momentum_breakout' ? 0.0007 : playbook === 'trend_following' ? 0.0002 : 0.0004;
+    if (isLowerTimeframeBreakout && adxValue > minAdxRequired) {
+      const floorHeadroom = Math.max(0, adxValue - minAdxRequired - 3);
+      if (floorHeadroom > 0) {
+        const floorRelax = Math.min(0.00022, floorHeadroom * 0.00002);
+        slopeFloor = Math.max(0.00045, slopeFloor - floorRelax);
+      }
+    }
     const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.7 : playbook === 'trend_following' ? 0.5 : 0.55;
     const relaxation = playbook === 'momentum_breakout' ? 0.0003 : playbook === 'trend_following' ? 0.00015 : 0.0005;
     minSlopeRequirement = Math.max(
       slopeFloor,
       Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - relaxation, slopeFloor))
     );
+
+    if (isLowerTimeframeBreakout && adxValue > minAdxRequired) {
+      const headroom = adxValue - minAdxRequired;
+      const effectiveHeadroom = Math.max(0, headroom - 2);
+      if (effectiveHeadroom > 0) {
+        const relaxFactor = Math.min(0.24, effectiveHeadroom * 0.018);
+        const relaxedSlope = Math.max(slopeFloor, minSlopeRequirement * (1 - relaxFactor));
+        minSlopeRequirement = Math.min(minSlopeRequirement, relaxedSlope);
+      }
+    }
 
     if (slopeAbs < minSlopeRequirement) {
       const slopePct = slopeAbs * 100;
