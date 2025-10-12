@@ -3573,9 +3573,9 @@ export function getCryptoTier(symbol: string, volumeUsd: number, marketCap?: num
 export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string; minRequired?: number } {
   const cfg = getConfig();
   const level = opts?.aggressiveness || 'reactive';
-  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 50000 : 
-                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 10000 : 
-                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 25000; // Très accessible: $25K pour plus d'opportunités
+  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 1000000 : 
+                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 300000 : 
+                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 500000; // Équilibre optimal sécurité/opportunités
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
   if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume', minRequired: minByLevel };

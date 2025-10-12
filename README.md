@@ -83,3 +83,73 @@ GitHub
 . Le profit factor semble être proche ou inférieur à 1 sur certains intervalles, signe que les pertes mangent la majorité des gains. Le ROI mensuel projeté n’était que d’environ +6% avec la configuration initiale malgré un marché offrant des opportunités, ce qui est relativement bas compte tenu du levier possible. Ces métriques décevantes ont motivé une analyse approfondie de la stratégie (score global initial 6,3/10) et la recherche de correctifs pour remonter la performance ciblée (objectif porté à 8,5/10 de score, ROI ~18% mensuel après optimisations)
 GitHub
 . Nous détaillons ci-dessous les causes identifiées pouvant expliquer ces pertes fréquentes et ce win rate faible, ainsi que les pistes d’amélioration correspondantes.
+
+
+Logique d’analyse implémentée (statistiques, IA, heuristiques)
+
+La logique de l’agent d’analyse combine plusieurs approches :
+
+Règles heuristiques basées sur l’analyse technique : À partir du snapshot technique évoqué, le système déduit un certain nombre de conditions de marché. Par exemple, la direction de la tendance est estimée via l’écart entre EMA20 et EMA50 (spread EMA) et la force de la tendance via l’ADX
+GitHub
+GitHub
+. De même, des règles sur le RSI indiquent un état de surachat, survente ou des conditions propices à des positions longues/courtes
+GitHub
+GitHub
+. Le code de test diagnostique donne un aperçu clair de ces règles : si le spread EMA20-50 dépasse +1% le marché est jugé fortement haussier, si au contraire il est en dessous de -1% c’est fortement baissier, avec des degrés intermédiaires (modéré/sideways)
+GitHub
+. Ensuite, l’ADX est utilisé pour qualifier la force (forte si ADX>25)
+GitHub
+, et l’on ajuste le bias (biais directionnel) de l’agent en conséquence. Ce dernier tient compte aussi de la volatilité (ATR%) : une volatilité trop haute classe le marché comme risqué, incitant l’agent à la prudence
+GitHub
+. Ces règles sont combinées pour simuler le comportement optimal d’un agent : par exemple, si tendance forte et volatilité modérée, l’agent passe en mode “ARMED” (prêt à trader) avec un biais long ou short selon la tendance; si la tendance est faible ou la volatilité excessive, l’agent reste “IDLE” (en attente)
+GitHub
+GitHub
+. On ajuste ensuite ce comportement par les signaux de RSI (éviter de prendre un long si RSI indique surachat, etc.)
+GitHub
+ et par le niveau de volatilité (si volatilité très haute, on peut réduire la taille de position même si on trade)
+GitHub
+. L’ensemble de ces heuristiques constitue un système d’analyse technique expert qui essaye de traduire des indicateurs multiples en décisions de trading prudentes.
+
+Analyse “Intelligente” multi-facteurs (IA) : Au-delà des règles fixes, QuantAILabs intègre une couche d’analyse qualifiée d’intelligente ou “AI-powered”. Cela inclut d’abord un filtre intelligent des opportunités : une fonction dédiée récupère le top 50 cryptos par volume (via WebSocket Binance pour éviter de surcharger l’API REST)
+GitHub
+GitHub
+, puis utilise une méthode rankCryptosWithAI pour classer ces actifs selon l’opportunité de trading sur un horizon 24h
+GitHub
+. Le résultat est une liste d’opportunités classées (type RankedOpportunity) avec pour chaque symbole un score de confiance (0-1), un type d’opportunité (breakout, reversal, momentum, etc.), une direction recommandée (long/short), et même un ensemble de raisons “AI reasoning” expliquant le classement
+GitHub
+GitHub
+. Comment ce classement est-il établi ? Le code fait appel à des fonctions llmJSON qui interrogent un modèle de langage IA (LLM) en lui fournissant le contexte technique et en demandant un résultat formaté en JSON
+GitHub
+. Concrètement, deux appels au LLM sont faits dans l’analyse complète : l’un pour estimer le sentiment de marché actuel sur l’actif (bullish, bearish ou neutre avec un score de confiance et quelques justifications)
+GitHub
+, l’autre pour résumer les nouvelles et narratives récentes susceptibles d’influer sur l’actif (nouvelles macro, ETF, news de développement, etc.)
+GitHub
+. Ces requêtes peuvent utiliser soit l’API OpenAI (ex: GPT) soit une alternative appelée “Grok” suivant la configuration, avec une mise en cache des résultats pour ne pas sursolliciter le modèle
+GitHub
+GitHub
+. Ainsi, l’agent incorpore une dimension d’actualité et de sentiment en plus des indicateurs purement quantitatifs, ce qui renforce son analyse du contexte.
+
+Apprentissage adaptatif et mémoire : Le système comporte un module de reinforcement learning simplifié. Un composant nommé Adaptive Training recalcule périodiquement (toutes les 15 minutes par défaut) des “poids adaptatifs” associés aux familles de symboles traités
+GitHub
+GitHub
+. Bien que les détails soient cachés (via recomputeAdaptiveWeightsForFamilies), on peut déduire que l’algorithme ajuste certains paramètres de décision en fonction de la performance historique récente des stratégies sur différents groupes d’actifs (familles sectorielles ou types de coins, p. ex. blue-chip vs meme coins). Par ailleurs, un module de mémoire de décision enregistre les décisions prises et leur issue, afin d’alimenter potentiellement l’apprentissage (voir learning/decisionMemory.ts). On voit aussi qu’avant de prendre position, l’agent vérifie des garde-fous de qualité du symbole (ex: volume minimal en USD selon la catégorie de coin, exclusion des coins trop illiquides ou à nom trop complexe)
+GitHub
+GitHub
+, pour éviter des actifs “pièges” – ces règles étant modulées par le niveau d’agressivité de l’agent (conservateur vs agressif) afin d’être plus ou moins strictes
+GitHub
+GitHub
+. Toute cette logique adaptative indique qu’au-delà des règles fixes, l’agent cherche à faire évoluer sa stratégie en continu, en se basant sur l’historique de ses décisions et sur des analyses multi-dimensionnelles (technique + sentiment + qualité de marché).
+
+En somme, le module d’analyse du marché est très sophistiqué : il mêle à la fois des heuristiques de trading bien établies (indicateurs techniques et règles de gestion de risques), des éléments d’intelligence artificielle (LLM pour sentiment/news, scorings automatisés), et des mécanismes d’apprentissage en boucle fermée (réajustement périodique via décisionMemory et adaptive weights). Cette combinaison vise à doter l’agent d’une compréhension riche du marché – non seulement les chiffres bruts, mais aussi le contexte plus global – et à optimiser ses décisions au fil du temps.
+
+Niveau de sophistication de l’agent d’analyse
+
+Compte tenu de ce qui précède, le niveau de sophistication de l’agent est élevé. Contrairement à un simple bot se basant sur un ou deux indicateurs (du type “RSI2 > 70 alors vendre”), QuantAILabs implémente une stratégie multi-critères intégrée. Il évalue la tendance (direction et force), le momentum, la volatilité, la position du prix dans son range, tout en considérant l’aspect actualités/sentiment et la qualité intrinsèque de l’actif. De plus, l’architecture prévoit des ajustements dynamiques : par exemple un Smart Agent peut automatiquement sélectionner le meilleur actif à trader du moment (logique d’auto-selection d’un symbole optimal) et même en changer si une meilleure opportunité apparaît, grâce à la fonction triggerIntelligentReselection qui peut être appelée manuellement ou automatiquement
+GitHub
+GitHub
+. Le statut d’un tel agent “intelligent” conserve l’historique des analyses effectuées, le symbole actuellement suivi, le prochain scan programmé, la dernière raison de changement, etc., pour donner de la transparence sur sa logique
+GitHub
+GitHub
+.
+
+En termes de sophistication algorithmique pure, il ne s’agit pas d’un algo haute fréquence ou mathématiquement très complexe (pas de réseau de neurones profond apparent, ni d’optimisation probabiliste en ligne). Néanmoins, le recours à un LLM pour contextualiser le trading et l’ensemble des règles de trading intègre une forme d’intelligence hybride (ML + règles expertes). On peut dire que c’est un système de trading algorithmique de niveau intermédiaire à avancé, comparable à ce qu’on pourrait attendre d’un assistant trading IA essayant de reproduire les analyses d’un trader humain compétent, tout en automatisant les actions.
