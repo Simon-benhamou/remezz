@@ -215,6 +215,9 @@ type DiagnosticBlocker = DiagnosticCheckRef & {
 };
 
 export class ReboundRejectionAgent {
+  private static readonly memeSymbols = new Set<string>([
+    'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK', 'PUMP', 'AVNT', 'MEW', 'WEN',
+  ]);
   state: AgentState = 'IDLE';
   profile: ActivationProfile | null = null;
   plan: ValidatedPlan | null = null;
@@ -258,6 +261,13 @@ export class ReboundRejectionAgent {
   private zoneCalculatedForBias: 'long' | 'short' | 'none' = 'none'; // Bias mismatch: track bias used for zone
   private lastZoneCalculation = 0;             // Zone expiration: timestamp of last zone calculation
   private requireStrongerConfirmation = false; // Support break: flag when price near weak support
+  private aiBiasOverride: {
+    bias: 'long' | 'short';
+    originalBias: 'long' | 'short' | 'none';
+    confidence: number;
+    appliedAt: number;
+    expiresAt: number;
+  } | null = null;
   
   // ✅ Quality threshold adjustment BY TIER (independent learning per category)
   private qualityAdjustmentByTier: Map<string, number> = new Map([
@@ -504,6 +514,7 @@ export class ReboundRejectionAgent {
     if (this.state !== 'SCAN' && this.state !== 'PROPOSE') return;
     this.state = 'PROPOSE';
     this.plan = await validatePlan(plan);
+    this.aiBiasOverride = null;
     this.regime = this.plan.regime ?? null;
     this.state = 'VALIDATE';
   }
@@ -582,7 +593,10 @@ export class ReboundRejectionAgent {
     }
     const price = snap.last;
     const { from, to, mid } = this.plan.zone;
-    const playbook = this.plan.plan.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const playbook: string = ((this.plan.plan.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const normalizedPlaybook = String(playbook);
 
     if (this.state === 'ARMED') {
       // 🔥 PHASE 1 FIX #3: Check for gaps at cycle start
@@ -590,6 +604,7 @@ export class ReboundRejectionAgent {
         const gapCheck = this.handleGapDetection(snap, price, this.plan.zone, this.plan.bias);
         if (gapCheck.action === 'invalidate') {
           console.warn(`🔥 ${gapCheck.reason} - Invalidating plan`);
+          this.clearAiBiasOverride('gap_invalidated');
           this.state = 'SCAN';
           broadcast('agent_state', { state: this.state, reason: gapCheck.reason }, this.profile.symbol, this.sessionId || undefined);
           return;
@@ -608,6 +623,7 @@ export class ReboundRejectionAgent {
         this.plan.zone = newZone;
         this.lastZoneCalculation = Date.now();
         this.zoneCalculatedForBias = this.plan.bias; // Track bias for mismatch detection
+        this.clearAiBiasOverride('zone_recalculated');
         console.log(`🔥 New zone: [${newZone.from.toFixed(4)}, ${newZone.to.toFixed(4)}] mid: ${newZone.mid.toFixed(4)}`);
       }
 
@@ -618,6 +634,7 @@ export class ReboundRejectionAgent {
         this.plan.zone = newZone;
         this.lastZoneCalculation = Date.now();
         this.zoneCalculatedForBias = this.plan.bias;
+        this.clearAiBiasOverride('zone_bias_mismatch');
         console.log(`🔥 Bias-corrected zone: [${newZone.from.toFixed(4)}, ${newZone.to.toFixed(4)}]`);
       }
 
@@ -629,6 +646,7 @@ export class ReboundRejectionAgent {
           const newZone = await this.calculateDynamicEntryZone(snap, price, this.plan.bias);
           this.plan.zone = newZone;
           this.lastZoneCalculation = Date.now();
+          this.clearAiBiasOverride('zone_timeout_refresh');
           console.log(`🟡 Progressive zone: [${newZone.from.toFixed(4)}, ${newZone.to.toFixed(4)}]`);
         }
       }
@@ -649,12 +667,13 @@ export class ReboundRejectionAgent {
         this.state = 'SCAN';
       }
       if (this.plan.bias === 'none') return;
+      this.applyActiveAIBiasOverride(price, snap);
       // PHASE 3 FIX #1: Use epsilon tolerance for zone check
       const inZone = this.priceInZoneWithEpsilon(price, this.plan.zone);
 
       // 🧠 AI Prediction for short-term moves (optimisé)
       let aiPrediction: any = null;
-      let originalBias = this.plan.bias; // Sauvegarder le bias original
+      const baselinePlanBias = this.aiBiasOverride?.originalBias ?? this.plan.bias;
 
       // Conditions pour appeler l'IA (optimisation coût)
       const shouldCallAI = this.shouldCallAIPrediction(snap, price);
@@ -662,34 +681,64 @@ export class ReboundRejectionAgent {
       if (shouldCallAI) {
         try {
           aiPrediction = await predictor.predictMove(this.profile.symbol, price, snap);
-          
+
           // Mettre à jour le suivi des prédictions IA
           (this as any).lastAIPredictionTime = Date.now();
           (this as any).lastAIPredictionPrice = price;
-          
+
           if (aiPrediction && aiPrediction.confidence >= 0.75 && aiPrediction.direction !== 'neutral') {
             console.log(`🧠 AI Prediction: ${aiPrediction.direction} (${(aiPrediction.confidence * 100).toFixed(1)}% confidence) - ${aiPrediction.reasoning}`);
+            const overrideBias = aiPrediction.direction === 'up' ? 'long' : 'short';
+            const now = Date.now();
+            const ttl = this.resolveAiBiasOverrideTtlMs();
+            const existingOverride = this.aiBiasOverride;
+            const originalBias = existingOverride?.originalBias ?? baselinePlanBias;
 
-            // Override plan bias seulement si IA très confiante et direction claire
-            if (aiPrediction.direction === 'up' && this.plan.bias !== 'long') {
-              console.log(`🧠 AI overriding to LONG bias for better opportunity capture`);
-              this.plan.bias = 'long';
-            } else if (aiPrediction.direction === 'down' && this.plan.bias !== 'short') {
-              console.log(`🧠 AI overriding to SHORT bias for better opportunity capture`);
-              this.plan.bias = 'short';
+            if (!existingOverride || existingOverride.bias !== overrideBias) {
+              this.aiBiasOverride = {
+                bias: overrideBias,
+                originalBias,
+                confidence: aiPrediction.confidence,
+                appliedAt: now,
+                expiresAt: now + ttl,
+              };
+              console.log(`🧠 AI overriding to ${overrideBias.toUpperCase()} bias for ${(ttl / 60000).toFixed(1)}m window`);
+            } else {
+              existingOverride.confidence = Math.max(existingOverride.confidence, aiPrediction.confidence);
+              existingOverride.appliedAt = now;
+              existingOverride.expiresAt = now + ttl;
+              this.aiBiasOverride = existingOverride;
+              console.log(`🧠 AI reaffirming ${overrideBias.toUpperCase()} bias (conf ${(existingOverride.confidence * 100).toFixed(1)}%)`);
             }
-          } else if (aiPrediction && aiPrediction.direction === 'neutral') {
-            // Neutral = no change, skip log to reduce noise
+            this.plan.bias = overrideBias;
+          } else if (aiPrediction && aiPrediction.direction !== 'neutral' && this.aiBiasOverride) {
+            const suggestedBias = aiPrediction.direction === 'up' ? 'long' : 'short';
+            const now = Date.now();
+            const needsFlip = suggestedBias !== this.aiBiasOverride.bias
+              && aiPrediction.confidence >= Math.max(0.7, this.aiBiasOverride.confidence - 0.05);
+            if (needsFlip) {
+              if (suggestedBias === this.aiBiasOverride.originalBias) {
+                this.clearAiBiasOverride('ai_confirms_original_bias');
+                this.plan.bias = suggestedBias;
+              } else {
+                const ttl = this.resolveAiBiasOverrideTtlMs();
+                this.aiBiasOverride = {
+                  bias: suggestedBias,
+                  originalBias: this.aiBiasOverride.originalBias ?? baselinePlanBias,
+                  confidence: aiPrediction.confidence,
+                  appliedAt: now,
+                  expiresAt: now + ttl,
+                };
+                this.plan.bias = suggestedBias;
+                console.log(`🧠 AI flipping override to ${suggestedBias.toUpperCase()} bias (conf ${(aiPrediction.confidence * 100).toFixed(1)}%)`);
+              }
+            }
+          } else if (aiPrediction && aiPrediction.direction === 'neutral' && this.aiBiasOverride && aiPrediction.confidence >= 0.7) {
+            this.clearAiBiasOverride('ai_neutral_signal');
           }
         } catch (error) {
           console.warn('AI prediction failed:', error);
         }
-      }
-
-      // Restaurer le bias original si nécessaire (après traitement de la prédiction)
-      if (this.plan.bias !== originalBias) {
-        console.log(`🧠 Restoring original bias: ${originalBias}`);
-        this.plan.bias = originalBias;
       }
 
       // Entry filters: basic RSI/ADX gates to avoid weak/contrarian entries (aggressiveness-adjusted)
@@ -877,7 +926,10 @@ export class ReboundRejectionAgent {
     // Check quality score (allows trading with 2-3 filters passing instead of requiring all 5)
     const qualityFilters = this.getQualityFiltersDiagnostics(snap);
     const mode = this.profile?.aggressiveness || 'reactive';
-    const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const normalizedPlaybook = String(playbook);
     const quantArchetype: ExitArchetype = playbook === 'momentum_breakout' ? 'impulse' : 'reversal';
     const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
     const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
@@ -1094,8 +1146,24 @@ export class ReboundRejectionAgent {
     // Aggressiveness-aware min profitability
     let minProfitPct = cfgProfit.MIN_TRADE_PROFIT_PCT;
     const levelProfit = this.profile?.aggressiveness || 'conservative';
-    if (levelProfit === 'reactive') minProfitPct = Math.max(0.6, minProfitPct - 0.2);
-    if (levelProfit === 'aggressive') minProfitPct = Math.max(0.5, minProfitPct - 0.3);
+    if (levelProfit === 'reactive') minProfitPct = Math.max(0.55, minProfitPct - 0.15);
+    if (levelProfit === 'aggressive') minProfitPct = Math.max(0.45, minProfitPct - 0.25);
+    const memeProfitRelax = this.isMemeCoin(this.profile?.symbol);
+    const atrContextPct = atrBaselinePct ?? snapAtrPct;
+    if (typeof atrContextPct === 'number' && atrContextPct > 0) {
+      if (atrContextPct < 0.1) {
+        minProfitPct = Math.min(minProfitPct, 0.3);
+      } else if (atrContextPct < 0.16) {
+        minProfitPct = Math.min(minProfitPct, 0.32);
+      } else if (atrContextPct < 0.25) {
+        minProfitPct = Math.min(minProfitPct, 0.35);
+      } else if (atrContextPct < 0.4) {
+        minProfitPct = Math.min(minProfitPct, 0.4);
+      }
+    }
+    if (memeProfitRelax) {
+      minProfitPct = Math.min(minProfitPct, 0.33);
+    }
     const firstTpProfitPct = Math.abs((tp[0] - entry) / entry) * 100;
     // Single profitability gate is enough; movement check duplicates the same quantity
     if (firstTpProfitPct < minProfitPct) {
@@ -1183,6 +1251,19 @@ export class ReboundRejectionAgent {
       }
     } catch {}
     dynamicRiskPct = await this.applyDailyRoiThrottle(dynamicRiskPct);
+    const memeGuard = this.isMemeCoin(this.profile?.symbol);
+    if (memeGuard) {
+      const memeMultiplier = 0.65;
+      dynamicRiskPct *= memeMultiplier;
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'meme_coin_risk_cap',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: { memeMultiplier },
+      });
+    }
     if (this.profile.mode === 'live') {
       const pressure = getCapacityPressure(this.profile.symbol);
       if (pressure > 0) {
@@ -1891,7 +1972,7 @@ export class ReboundRejectionAgent {
   }
 
   private static readonly adaptiveATRCache = new Map<string, { threshold: number; lastUpdated: number; baselineATR: number }>();
-  private static readonly volatilityProfileCache = new Map<string, 'LOW_VOLATILITY' | 'MODERATE_VOLATILITY' | 'HIGH_VOLATILITY' | 'EXTREME_VOLATILITY'>();
+  private static readonly volatilityProfileCache = new Map<string, 'LOW_VOLATILITY' | 'MODERATE_VOLATILITY' | 'HIGH_VOLATILITY' | 'EXTREME_VOLATILITY' | 'MEME_VOLATILITY'>();
   
   // 🧠 NEW: AI-Powered Dynamic Thresholds Cache System
   private static readonly dynamicThresholdsCache = new Map<string, {
@@ -3850,7 +3931,8 @@ export class ReboundRejectionAgent {
    * 🧠 Enhanced static thresholds as fallback
    */
   private getEnhancedStaticThresholds(symbol: string): any {
-    const profile = this.getCryptoVolatilityProfile(symbol);
+    const rawProfile = this.getCryptoVolatilityProfile(symbol);
+    const profile = rawProfile === 'MEME_VOLATILITY' ? 'HIGH_VOLATILITY' : rawProfile;
 
     return {
       rsiZones: {
@@ -3878,6 +3960,7 @@ export class ReboundRejectionAgent {
     if (!trimmed) return null;
     const upper = trimmed.toUpperCase();
     if (upper === 'MODERATE') return 'MODERATE_VOLATILITY';
+    if (upper === 'MEME') return 'MEME_VOLATILITY';
     if (upper.endsWith('_VOLATILITY')) return upper;
     if (['HIGH', 'LOW', 'EXTREME', 'MODERATE'].includes(upper)) {
       return upper === 'MODERATE' ? 'MODERATE_VOLATILITY' : `${upper}_VOLATILITY`;
@@ -3903,13 +3986,58 @@ export class ReboundRejectionAgent {
     return null;
   }
 
-  private getCryptoVolatilityProfile(symbol: string): 'HIGH_VOLATILITY' | 'MODERATE' | 'LOW_VOLATILITY' {
+  private isMemeCoin(symbol?: string | null): boolean {
+    if (!symbol) return false;
+    const base = symbol.split('/')[0]?.toUpperCase();
+    return !!(base && ReboundRejectionAgent.memeSymbols.has(base));
+  }
+
+  private resolveAiBiasOverrideTtlMs(): number {
+    const mode = this.profile?.aggressiveness || 'reactive';
+    if (mode === 'aggressive') return 8 * 60 * 1000;
+    if (mode === 'conservative') return 5 * 60 * 1000;
+    return 7 * 60 * 1000;
+  }
+
+  private clearAiBiasOverride(reason?: string): void {
+    if (!this.aiBiasOverride) return;
+    const { originalBias } = this.aiBiasOverride;
+    if (reason) {
+      console.log(`🧠 Clearing AI bias override (${reason})`);
+    }
+    if (this.plan && originalBias && this.plan.bias !== originalBias) {
+      console.log(`🧠 Restoring plan bias to ${originalBias}`);
+      this.plan.bias = originalBias;
+    }
+    this.aiBiasOverride = null;
+  }
+
+  private applyActiveAIBiasOverride(_currentPrice: number, snap?: TechnicalSnapshot | null): void {
+    if (!this.plan || !this.aiBiasOverride) return;
+
+    const now = Date.now();
+    if (now > this.aiBiasOverride.expiresAt) {
+      this.clearAiBiasOverride('override_expired');
+      return;
+    }
+
+    if (snap?.regime?.playbook === 'standby') {
+      this.clearAiBiasOverride('regime_standby');
+      return;
+    }
+
+    if (this.plan.bias !== this.aiBiasOverride.bias) {
+      this.plan.bias = this.aiBiasOverride.bias;
+    }
+  }
+
+  private getCryptoVolatilityProfile(symbol: string): 'HIGH_VOLATILITY' | 'MODERATE' | 'LOW_VOLATILITY' | 'MEME_VOLATILITY' {
     const baseCrypto = symbol.split('/')[0]?.toUpperCase();
     if (!baseCrypto) return 'MODERATE';
 
     // Reuse existing volatility classification logic
-    if (['AVNT', 'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK'].includes(baseCrypto)) {
-      return 'HIGH_VOLATILITY';
+    if (ReboundRejectionAgent.memeSymbols.has(baseCrypto)) {
+      return 'MEME_VOLATILITY';
     }
     if (['BTC', 'USDC', 'USDT', 'DAI'].includes(baseCrypto)) {
       return 'LOW_VOLATILITY';
@@ -3919,6 +4047,7 @@ export class ReboundRejectionAgent {
 
   private passesEntryMomentumGates(snap: TechnicalSnapshot, reasonHint: 'enter'|'reverse'): boolean {
     const thresholds = this.effectiveEntryThresholds();
+    const memeBias = this.isMemeCoin(this.profile?.symbol);
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
     let minSlopeAbsPct = thresholds.ENTRY_MIN_SLOPE_ABS_PCT;
     const quantFilters = this.quantConfig?.filters;
@@ -3938,7 +4067,13 @@ export class ReboundRejectionAgent {
     } else {
       minSlopeAbsPct = Math.min(minSlopeAbsPct, 0.12);
     }
-    const playbook = this.plan?.plan?.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    if (memeBias) {
+      minAtr = Math.max(0.06, minAtr * 0.9);
+      minSlopeAbsPct = Math.max(0.005, minSlopeAbsPct * 0.8);
+    }
+    const playbook = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
     if (playbook === 'momentum_breakout') {
       minAtr *= 1.15; // demand more volatility for breakout setups
       minSlopeAbsPct *= 1.05;
@@ -3948,9 +4083,12 @@ export class ReboundRejectionAgent {
     const baseAdxRequirement = this.plan?.bias === 'short'
       ? thresholds.ENTRY_SHORT_MIN_ADX
       : thresholds.ENTRY_LONG_MIN_ADX;
-    const minAdxRequired = quantFilters && Number.isFinite(quantFilters.minAdx)
+    let minAdxRequired = quantFilters && Number.isFinite(quantFilters.minAdx)
       ? Math.min(baseAdxRequirement, Number(quantFilters.minAdx))
       : baseAdxRequirement;
+    if (memeBias) {
+      minAdxRequired = Math.max(8, minAdxRequired - 2);
+    }
 
     if (adxValue > 0 && adxValue < minAdxRequired) {
       recordOpsEvent({
@@ -4055,8 +4193,8 @@ export class ReboundRejectionAgent {
     const slopePctAbs = emaVal !== 0 ? Math.abs((emaSlope / emaVal) * 100) : 0;
     const bias = this.plan?.bias || 'none';
 
-    const slopeFloor = playbook === 'momentum_breakout' ? 0.08 : 0.05;
-    const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.75 : 0.6;
+    const slopeFloor = playbook === 'momentum_breakout' ? 0.07 : 0.04;
+    const relaxedMultiplier = playbook === 'momentum_breakout' ? 0.7 : 0.55;
     const adjustedSlopeRequirement = Math.max(
       slopeFloor,
       Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - (playbook === 'momentum_breakout' ? 0.03 : 0.05), slopeFloor))
@@ -4075,6 +4213,31 @@ export class ReboundRejectionAgent {
     }
 
     return true;
+  }
+
+  private evaluateTrendPullback(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
+    const distanceToEma20 = Number.isFinite(ema20) && ema20 !== 0 ? ((price - ema20) / ema20) * 100 : Number.NaN;
+    const distanceToEma50 = Number.isFinite(ema50) && ema50 !== 0 ? ((price - ema50) / ema50) * 100 : Number.NaN;
+
+    if (!Number.isFinite(distanceToEma20) || !Number.isFinite(distanceToEma50)) {
+      return { ok: false, distanceToEma20, distanceToEma50, reason: 'missing_ema' };
+    }
+
+    if (bias === 'long') {
+      const nearEma20 = distanceToEma20 >= -2.6 && distanceToEma20 <= 1.4;
+      const holdingEma50 = distanceToEma50 >= -1.8;
+      const ok = nearEma20 && holdingEma50;
+      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
+    }
+
+    if (bias === 'short') {
+      const nearEma20 = distanceToEma20 <= 2.6 && distanceToEma20 >= -1.4;
+      const holdingEma50 = distanceToEma50 <= 1.8;
+      const ok = nearEma20 && holdingEma50;
+      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
+    }
+
+    return { ok: false, distanceToEma20, distanceToEma50, reason: 'unknown_bias' };
   }
 
   // Get exchange-specific volume thresholds (cached per agent)
@@ -4149,6 +4312,10 @@ export class ReboundRejectionAgent {
     const atrPct = Number((snap as any)?.atrPct ?? 0);
     let volume = Number((snap as any)?.volume ?? 0);
     const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
+    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const normalizedPlaybook = String(playbook);
 
     // Detect breakout/reversal context early to avoid false blocks on data glitches
   const earlyBreakoutAdx = Math.max(18, Number(getConfig().ENTRY_LONG_MIN_ADX || 22));
@@ -4192,59 +4359,132 @@ export class ReboundRejectionAgent {
 
     // 1. EMA Trend Alignment (required)
     const emaSpread = ((ema20 - ema50) / ema50) * 100;
-    const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.25 : ema20 < ema50 && emaSpread < -0.25;
-    if (!trendAligned) {
-      this.lastQualityFilterFailure = {
-        code: 'quality.trend_misaligned',
-        message: 'EMA trend misalignment',
-        details: { emaSpread, bias },
-      };
-      recordOpsEvent({
-        level: 'info',
-        source: 'quality_filter',
-        message: 'ema_trend_misaligned',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { emaSpread, bias },
-      });
-      return false;
-    }
 
-    // 2. ADX Trend Strength (required) - Using realistic threshold
-    if (adx < 12) {
-      this.lastQualityFilterFailure = {
-        code: 'quality.adx_weak',
-        message: 'ADX below minimum threshold',
-        details: { adx, bias },
-      };
-      recordOpsEvent({
-        level: 'info',
-        source: 'quality_filter',
-        message: 'adx_too_weak',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { adx, bias },
-      });
-      return false;
-    }
+    if (normalizedPlaybook === 'trend_following') {
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias);
+      if (!trendAligned) {
+        this.lastQualityFilterFailure = {
+          code: 'quality.trend_misaligned',
+          message: 'EMA trend misalignment in trend-following playbook',
+          details: { emaSpread, bias, playbook },
+        };
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'ema_trend_misaligned_trend_follow',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { emaSpread, bias, playbook },
+        });
+        return false;
+      }
 
-    // 3. RSI Position (required) - Using realistic thresholds
-    const rsiOptimal = bias === 'long' ? (rsi >= 25 && rsi <= 85) : (rsi >= 15 && rsi <= 75);
-    if (!rsiOptimal) {
-      this.lastQualityFilterFailure = {
-        code: 'quality.rsi_out_of_range',
-        message: 'RSI outside optimal range',
-        details: { rsi, bias },
-      };
-      recordOpsEvent({
-        level: 'info',
-        source: 'quality_filter',
-        message: 'rsi_out_of_range',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { rsi, bias },
-      });
-      return false;
+      const pullback = this.evaluateTrendPullback(price, ema20, ema50, bias as 'long' | 'short');
+      if (!pullback.ok) {
+        this.lastQualityFilterFailure = {
+          code: 'quality.pullback_invalid',
+          message: 'Pullback structure not healthy for trend-following entry',
+          details: { ...pullback, bias },
+        };
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'trend_pullback_not_ready',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { ...pullback, bias },
+        });
+        return false;
+      }
+
+      const adxThreshold = Math.max(16, this.getRealisticADXThreshold() + 1);
+      if (adx < adxThreshold) {
+        this.lastQualityFilterFailure = {
+          code: 'quality.adx_insufficient_trend',
+          message: 'ADX below trend-following minimum',
+          details: { adx, bias, required: adxThreshold },
+        };
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'adx_too_weak_trend_follow',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { adx, bias, required: adxThreshold },
+        });
+        return false;
+      }
+
+      const rsiBounds = bias === 'long' ? { min: 28, max: 82 } : { min: 18, max: 72 };
+      if (rsi < rsiBounds.min || rsi > rsiBounds.max) {
+        this.lastQualityFilterFailure = {
+          code: 'quality.rsi_out_of_range_trend',
+          message: 'RSI outside acceptable pullback window for trend-following entry',
+          details: { rsi, bias, bounds: rsiBounds },
+        };
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'rsi_out_of_range_trend_follow',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { rsi, bias, bounds: rsiBounds },
+        });
+        return false;
+      }
+    } else {
+      const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.25 : ema20 < ema50 && emaSpread < -0.25;
+      if (!trendAligned) {
+        this.lastQualityFilterFailure = {
+          code: 'quality.trend_misaligned',
+          message: 'EMA trend misalignment',
+          details: { emaSpread, bias },
+        };
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'ema_trend_misaligned',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { emaSpread, bias },
+        });
+        return false;
+      }
+
+      if (adx < 12) {
+        this.lastQualityFilterFailure = {
+          code: 'quality.adx_weak',
+          message: 'ADX below minimum threshold',
+          details: { adx, bias },
+        };
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'adx_too_weak',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { adx, bias },
+        });
+        return false;
+      }
+
+      const rsiOptimal = bias === 'long' ? (rsi >= 25 && rsi <= 85) : (rsi >= 15 && rsi <= 75);
+      if (!rsiOptimal) {
+        this.lastQualityFilterFailure = {
+          code: 'quality.rsi_out_of_range',
+          message: 'RSI outside optimal range',
+          details: { rsi, bias },
+        };
+        recordOpsEvent({
+          level: 'info',
+          source: 'quality_filter',
+          message: 'rsi_out_of_range',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: { rsi, bias },
+        });
+        return false;
+      }
     }
 
     // 4. ATR Volatility (required) — use per-crypto adaptive threshold (fallback: mode-based)
@@ -5174,7 +5414,10 @@ export class ReboundRejectionAgent {
   private getQualityFiltersDiagnostics(snap: TechnicalSnapshot): any {
     if (!this.plan) return {};
 
-    const playbook = this.plan.plan.meta?.playbook || this.regime?.playbook || 'mean_reversion';
+    const playbook: string = ((this.plan.plan.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const normalizedPlaybook = String(playbook);
     const price = snap.last;
     const bias = this.plan.bias;
     const adx = Number((snap as any)?.adx14 ?? 0);
@@ -5238,7 +5481,65 @@ export class ReboundRejectionAgent {
 
     const emaSpreadPct = ema50 !== 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
 
-    if (playbook === 'momentum_breakout') {
+    if (normalizedPlaybook === 'trend_following') {
+      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias);
+      const pullback = bias === 'long' || bias === 'short'
+        ? this.evaluateTrendPullback(price, ema20, ema50, bias)
+        : { ok: false, distanceToEma20: Number.NaN, distanceToEma50: Number.NaN, reason: 'unknown_bias' };
+      const comboStatus = trendAligned && pullback.ok ? 'PASS' : (trendAligned || pullback.ok) ? 'PARTIAL' : 'FAIL';
+      const comboPoints = trendAligned && pullback.ok ? 20 : (trendAligned || pullback.ok) ? 10 : 0;
+      const adxThreshold = Math.max(16, this.getRealisticADXThreshold() + 1);
+      const rsiBounds = bias === 'long' ? { min: 28, max: 82 } : { min: 18, max: 72 };
+      const rsiPass = bias === 'long' || bias === 'short'
+        ? rsi >= rsiBounds.min && rsi <= rsiBounds.max
+        : false;
+
+      return {
+        trendAlignment: {
+          status: comboStatus,
+          reason: comboStatus === 'PASS'
+            ? 'Trend aligned with healthy pullback toward EMA stack'
+            : 'Trend-following entry requires EMA alignment and controlled pullback',
+          points: comboPoints,
+          details: {
+            ema20: ema20.toFixed(4),
+            ema50: ema50.toFixed(4),
+            spreadPct: `${emaSpreadPct.toFixed(2)}%`,
+            pullback,
+          }
+        },
+        momentum: {
+          status: adx >= adxThreshold ? 'PASS' : 'FAIL',
+          reason: `ADX (${adx.toFixed(1)}) must stay above ${adxThreshold} to confirm trend persistence`,
+          points: adx >= adxThreshold ? 20 : 0,
+          details: { adx, threshold: adxThreshold }
+        },
+        rsiPosition: {
+          status: rsiPass ? 'PASS' : 'FAIL',
+          reason: bias === 'long'
+            ? `RSI (${rsi.toFixed(1)}) should stay between ${rsiBounds.min}-${rsiBounds.max} to avoid exhaustion`
+            : `RSI (${rsi.toFixed(1)}) should stay between ${rsiBounds.min}-${rsiBounds.max} to avoid exhaustion`,
+          points: rsiPass ? 20 : 0,
+          details: { rsi, bounds: rsiBounds, bias }
+        },
+        volatility: (() => {
+          const baseMinAtr = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
+          const symForAtr = this.profile?.symbol || '';
+          let thr = baseMinAtr;
+          try { thr = this.getAdaptiveATRThresholdSync(symForAtr, baseMinAtr); } catch {}
+          const pass = atrPct >= thr;
+          return {
+            status: pass ? 'PASS' : 'FAIL',
+            reason: `ATR (${atrPct.toFixed(2)}%) must be >= ${thr}% to sustain trend continuation`,
+            points: pass ? 20 : 0,
+            details: { currentATR: atrPct, threshold: thr, base: baseMinAtr }
+          };
+        })(),
+        volume: computeVolumeDiagnostics({ relax: 0.05, floorBoost: 0.02 }),
+      };
+    }
+
+    if (normalizedPlaybook === 'momentum_breakout') {
       return {
         trendAlignment: {
           status: this.checkTrendAlignment(ema20, ema50, bias) ? 'PASS' : 'FAIL',
@@ -5616,7 +5917,19 @@ export class ReboundRejectionAgent {
   }> {
     const cfg = this.rrExpectancyConfig ?? DEFAULT_RR_EXPECTANCY_CONFIG;
     const clampToRange = (value: number) => Math.max(cfg.rrFloor, Math.min(cfg.rrCeil, Math.round(value * 100) / 100));
-    const base = clampToRange(cfg.rrBaseMin);
+    const discoveryTrades = this.performanceMetrics?.totalTrades ?? 0;
+    let base = clampToRange(cfg.rrBaseMin);
+    if (this.isMemeCoin(this.profile?.symbol)) {
+      base = clampToRange(base - 0.05);
+    }
+    const discoveryThreshold = Math.max(10, Math.floor(cfg.minTrades / 2));
+    if (discoveryTrades < discoveryThreshold) {
+      base = clampToRange(Math.min(base, cfg.rrFloor + 0.2));
+    }
+    if (this.drySpellState.steps > 0) {
+      const rrRelax = Math.min(0.2, this.drySpellState.steps * 0.05);
+      base = clampToRange(base - rrRelax);
+    }
 
     if (!cfg.enabled || !this.sessionId) {
       this.rrExpectancyState.lastEffective = base;
@@ -6902,19 +7215,21 @@ export class ReboundRejectionAgent {
     try {
       // Recalculer zone avec conditions actuelles
       const snap = await buildTechSnapshot(this.profile.symbol, this.profile.userId);
+      const previousZone = this.plan.zone;
       const newZone = await this.calculateDynamicEntryZone(snap, snap.last, this.plan.bias);
-      
+      this.plan.zone = newZone;
+      this.clearAiBiasOverride('periodic_zone_refresh');
+
       // Vérifier si passage en breakout mode
       const wasBreakout = this.breakoutModeActive;
       const isBreakout = this.shouldSwitchToBreakoutMode(snap, snap.last);
-      
+
       if (isBreakout && !wasBreakout) {
         console.log('🔄 Entry zone mise à jour → Mode BREAKOUT');
-        this.plan.zone = newZone;
-        
+
         // Broadcast pour UI
-        broadcast('zone_updated', { 
-          zone: newZone, 
+        broadcast('zone_updated', {
+          zone: newZone,
           mode: 'breakout',
           reason: 'strong_trend_detected'
         }, this.profile.symbol, this.sessionId || undefined);
@@ -6925,7 +7240,7 @@ export class ReboundRejectionAgent {
           message: 'Entry zone updated to breakout mode',
           sessionId: this.sessionId || undefined,
           symbol: this.profile.symbol,
-          details: { oldZone: this.plan.zone, newZone, mode: 'breakout' },
+          details: { oldZone: previousZone, newZone, mode: 'breakout' },
         });
       } else if (!isBreakout && this.lastZoneRecalcTime > 0) {
         console.log('🔄 Entry zone recalculated (pullback mode maintained)');
@@ -7708,6 +8023,7 @@ export class ReboundRejectionAgent {
 
       // Update agent state
       this.plan = validatedPlan;
+      this.aiBiasOverride = null;
       this.regime = regime || null;
       
       // 🔥 PHASE 1: Initialize zone tracking variables
