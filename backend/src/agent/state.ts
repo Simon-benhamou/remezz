@@ -4122,9 +4122,6 @@ export class ReboundRejectionAgent {
     let minAdxRequired = quantFilters && Number.isFinite(quantFilters.minAdx)
       ? Math.min(baseAdxRequirement, Number(quantFilters.minAdx))
       : baseAdxRequirement;
-    if (memeBias) {
-      minAdxRequired = Math.max(8, minAdxRequired - 2);
-    }
 
     if (memeBias) {
       minAdxRequired = Math.max(8, minAdxRequired - 2);
@@ -4263,32 +4260,7 @@ export class ReboundRejectionAgent {
     return evaluation.pass;
   }
 
-  private evaluateTrendPullback(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
-    const distanceToEma20 = Number.isFinite(ema20) && ema20 !== 0 ? ((price - ema20) / ema20) * 100 : Number.NaN;
-    const distanceToEma50 = Number.isFinite(ema50) && ema50 !== 0 ? ((price - ema50) / ema50) * 100 : Number.NaN;
-
-    if (!Number.isFinite(distanceToEma20) || !Number.isFinite(distanceToEma50)) {
-      return { ok: false, distanceToEma20, distanceToEma50, reason: 'missing_ema' };
-    }
-
-    if (bias === 'long') {
-      const nearEma20 = distanceToEma20 >= -2.6 && distanceToEma20 <= 1.4;
-      const holdingEma50 = distanceToEma50 >= -1.8;
-      const ok = nearEma20 && holdingEma50;
-      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
-    }
-
-    if (bias === 'short') {
-      const nearEma20 = distanceToEma20 <= 2.6 && distanceToEma20 >= -1.4;
-      const holdingEma50 = distanceToEma50 <= 1.8;
-      const ok = nearEma20 && holdingEma50;
-      return { ok, distanceToEma20, distanceToEma50, reason: ok ? 'healthy_pullback' : 'distance_constraints' };
-    }
-
-    return { ok: false, distanceToEma20, distanceToEma50, reason: 'unknown_bias' };
-  }
-
-  private evaluateTrendPullback(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
+  private assessTrendPullbackStructure(price: number, ema20: number, ema50: number, bias: 'long' | 'short') {
     const distanceToEma20 = Number.isFinite(ema20) && ema20 !== 0 ? ((price - ema20) / ema20) * 100 : Number.NaN;
     const distanceToEma50 = Number.isFinite(ema50) && ema50 !== 0 ? ((price - ema50) / ema50) * 100 : Number.NaN;
 
@@ -4315,7 +4287,7 @@ export class ReboundRejectionAgent {
 
   // Get exchange-specific volume thresholds (cached per agent)
   private exchangeVolumeThresholds: { base: number; floor: number } | null = null;
-  private async getExchangeVolumeThresholds(): Promise<{ base: number; floor: number }> {
+  private async resolveExchangeVolumeThresholds(): Promise<{ base: number; floor: number }> {
     // Return cached if available
     if (this.exchangeVolumeThresholds) {
       return this.exchangeVolumeThresholds;
@@ -4452,7 +4424,7 @@ export class ReboundRejectionAgent {
         return false;
       }
 
-      const pullback = this.evaluateTrendPullback(price, ema20, ema50, bias as 'long' | 'short');
+      const pullback = this.assessTrendPullbackStructure(price, ema20, ema50, bias as 'long' | 'short');
       if (!pullback.ok) {
         this.lastQualityFilterFailure = {
           code: 'quality.pullback_invalid',
@@ -4589,7 +4561,7 @@ export class ReboundRejectionAgent {
     const usdVolumeMA = volumeMA > 0 ? volumeMA * price : 0;
     
     // Get exchange-adaptive thresholds
-    const exchangeThresholds = await this.getExchangeVolumeThresholds();
+    const exchangeThresholds = await this.resolveExchangeVolumeThresholds();
     const baseRequired = exchangeThresholds.base;
     const floor = exchangeThresholds.floor;
     const ceiling = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL) ? cfg.QUALITY_VOLUME_RATIO_CEIL : 0.78;
@@ -5591,7 +5563,7 @@ export class ReboundRejectionAgent {
     if (normalizedPlaybook === 'trend_following') {
       const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, { atrPct, adx, playbook: normalizedPlaybook });
       const pullback = bias === 'long' || bias === 'short'
-        ? this.evaluateTrendPullback(price, ema20, ema50, bias)
+        ? this.assessTrendPullbackStructure(price, ema20, ema50, bias)
         : { ok: false, distanceToEma20: Number.NaN, distanceToEma50: Number.NaN, reason: 'unknown_bias' };
       const comboStatus = trendAligned && pullback.ok ? 'PASS' : (trendAligned || pullback.ok) ? 'PARTIAL' : 'FAIL';
       const comboPoints = trendAligned && pullback.ok ? 20 : (trendAligned || pullback.ok) ? 10 : 0;
