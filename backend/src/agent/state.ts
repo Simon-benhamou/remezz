@@ -3301,7 +3301,7 @@ export class ReboundRejectionAgent {
     const volSpikeSignal = volumeSpike;
     const positiveSignals = [volumeSignal, deltaSignal, volSpikeSignal].filter(Boolean).length;
 
-    const planPlaybook = this.plan?.playbook ?? null;
+    const planPlaybook = this.plan?.plan?.meta?.playbook ?? null;
     const breakoutDistancePct = this.runtimeZoneDiagnostics?.breakoutDistancePct ?? 0;
     const holdingFavorableHalf = bias === 'long'
       ? currentPrice >= entryZone.mid
