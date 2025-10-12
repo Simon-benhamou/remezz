@@ -67,6 +67,16 @@ export type QuantAIEntryFilterDynamicConfig = {
   atrMaxPct?: number;
   atrMaxPctByTier?: Record<string, number>;
   spreadAtrRatioLimit?: number;
+  spreadSoftPenalty?: number;
+  rrNearThresholdFactor?: number;
+  momentumFastTrack?: {
+    enabled?: boolean;
+    minAdx?: number;
+    minAtrPct?: number;
+    minVolumeRatio?: number;
+    minRr?: number;
+    nearThresholdFactor?: number;
+  };
   drySpell?: QuantAIDrySpellConfig;
   aggressivenessAdjustments?: Record<string, {
     minRrDelta?: number;
@@ -134,6 +144,16 @@ const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
     tier3: 12,
   },
   spreadAtrRatioLimit: 0.55,
+  spreadSoftPenalty: 0.85,
+  rrNearThresholdFactor: 0.9,
+  momentumFastTrack: {
+    enabled: true,
+    minAdx: 30,
+    minAtrPct: 0.8,
+    minVolumeRatio: 1.2,
+    minRr: 0.7,
+    nearThresholdFactor: 0.9,
+  },
   confidenceTierAdjustments: {
     tier3: 0.02,
   },
