@@ -697,7 +697,7 @@ export class ReboundRejectionAgent {
             partialInfo: null,
             initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
             archetype: (this.plan?.plan?.meta?.playbook || this.regime?.playbook) === 'momentum_breakout' ? 'impulse' : 'reversal',
-            tp1Fraction: planAny._tp1Fraction ?? 0.35,
+            tp1Fraction: planAny._tp1Fraction ?? 0.3,
             flowSnapshot: planAny._flowSnapshot ?? null,
             initialQty: expo.qty,
             initialNotional: expo.qty * entry,
@@ -1382,7 +1382,7 @@ export class ReboundRejectionAgent {
     let stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
     if (playbook === 'momentum_breakout') {
-      const momentumTargets = [1.6, 2.6];
+      const momentumTargets = [1.0, 2.0, 3.0];
       this.plan.plan.risk.tp = momentumTargets.map(value => ({ type: 'R', value }));
       this.plan.rPrices = momentumTargets.map(r => ({ r, price: round4(entry + dir0 * r * this.plan!.stopDistance) }));
     }
@@ -1500,20 +1500,14 @@ export class ReboundRejectionAgent {
     // Structured configuration for TP weight profiles and their threshold conditions
     const tpWeightProfilesConfig = [
       {
-        profile: [0.35, 0.4, 0.25],
+        profile: [0.27, 0.38, 0.35],
         condition: () =>
           adxValue >= 35 &&
           (volumeRatio ?? 0) >= 1.2 &&
           slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2),
       },
       {
-        profile: [0.45, 0.35, 0.2],
-        condition: () =>
-          (adxValue >= 30 && slopeDirectionalPct >= 0.22) ||
-          (adxValue >= 32 && (volumeRatio ?? 0) >= 1.15),
-      },
-      {
-        profile: [0.6, 0.3, 0.1], // default
+        profile: [0.3, 0.35, 0.35], // default
         condition: () => true,
       },
     ];
@@ -1539,7 +1533,7 @@ export class ReboundRejectionAgent {
     }
     const tpWeightedAbs = rrWeighted != null ? rrWeighted * stopForR : undefined;
     const tpWeightedPct = tpWeightedAbs != null && entry > 0 ? (tpWeightedAbs / entry) * 100 : undefined;
-    const tp1Fraction = Math.max(0.3, Math.min(0.4, tpWeightProfile[0] ?? 0.35));
+    const tp1Fraction = Math.max(0.28, Math.min(0.34, tpWeightProfile[0] ?? 0.3));
     planAny._tpWeightProfile = tpWeightProfile;
     planAny._tp1Fraction = tp1Fraction;
     planAny._stopBasis = stopBasis;
@@ -1568,6 +1562,26 @@ export class ReboundRejectionAgent {
       ? Number(this.plan?.atrPct)
       : undefined;
     const atrBaselinePct = planAtrPct ?? snapAtrPct ?? undefined;
+    const firstTpPrice = tp.length > 0 ? tp[0] : this.plan.rPrices?.[0]?.price ?? null;
+    if (firstTpPrice != null && Number.isFinite(firstTpPrice) && entry > 0) {
+      const tp1Dist = Math.abs(firstTpPrice - entry) / entry;
+      const atrPctForGate = atrBaselinePct;
+      const atrFloor = atrPctForGate != null && Number.isFinite(atrPctForGate)
+        ? Math.max(0, 0.006 * (atrPctForGate as number))
+        : 0;
+      const minTp1Dist = Math.max(atrFloor, 0.0008);
+      if (tp1Dist < minTp1Dist) {
+        this.noteSignalDrop('tp_too_close', 'info', {
+          tp1Dist,
+          minRequired: minTp1Dist,
+          atrPct: atrPctForGate,
+          entry,
+          tp1: firstTpPrice,
+        });
+        this.entering = false;
+        return;
+      }
+    }
     const tier = this.getTierForSymbol(this.profile.symbol);
     const aggressiveness = this.profile.aggressiveness || null;
     const volatilityProfileForFilters = this.resolveVolatilityProfileForFilters();
@@ -2185,77 +2199,182 @@ export class ReboundRejectionAgent {
       notional = dynamicNotionalCap;
     }
     
-    // ✅ FIX: Enforce minimum notional (8% of balance) to ensure meaningful position sizes
-    // Position too small (<8%) don't justify trading costs and make gains insignificant
-    const minNotionalPct = bal.equityUsd * 0.08; // 8% of balance minimum
-    if (notional < minNotionalPct) {
-      const oldNotional = notional;
-      notional = Math.min(minNotionalPct, usableBalance * effectiveLev); // Cap by usable balance
-      recordOpsEvent({
-        level: 'info',
-        source: 'position_sizing',
-        message: 'minimum_notional_enforced',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile.symbol,
-        details: {
-          oldNotional,
-          minNotional: minNotionalPct,
-          newNotional: notional,
-          reason: 'Position size below 8% threshold'
-        },
-      });
-    }
+    const configMinNotional = Number(getConfig().MIN_ORDER_NOTIONAL_USD || 0);
+    const equityFloor = bal.equityUsd * 0.005;
+    const dynamicFloor = Math.max(500, equityFloor);
+    const minTradeNotional = Math.max(configMinNotional, dynamicFloor);
+    const HALT_CRITICAL = 80;
+    const HALT_TARGET = 70;
+    const ENTRY_PROJ_CAP = 72;
+    const FLOOR_TOLERANCE = 5;
+    const FLOOR_UTIL_LIMIT = 78;
 
     if (notional > 0) {
-      const utilNow = marginAdvisor.utilisationPct();
-      const utilAfterGuard = marginAdvisor.utilisationPctIf(notional, Math.max(levGuard, 1));
-      const utilisationTarget = tier === 'tier1' ? 55 : tier === 'tier2' ? 60 : 65;
-      if (utilAfterGuard > utilisationTarget) {
-        const committed = marginAdvisor.committedUsd();
-        const equity = marginAdvisor.equityUsd();
-        const targetMarginUsd = (utilisationTarget / 100) * equity;
-        const allowedIncrease = Math.max(0, targetMarginUsd - committed);
-        const scaledNotional = allowedIncrease > 0 ? allowedIncrease * Math.min(effectiveLev, levGuard) : 0;
-        if (scaledNotional <= 0) {
-          this.noteSignalDrop('margin_projection_block', 'warn', {
+      const leverageForUtil = Math.max(levGuard, 1);
+      const utilNowRaw = marginAdvisor.utilisationPct();
+      const utilNow = Number.isFinite(utilNowRaw) ? utilNowRaw : 0;
+      const utilIf = (value: number) => marginAdvisor.utilisationPctIf(value, leverageForUtil);
+
+      let adjustedNotional = notional;
+      let utilAfter = utilIf(adjustedNotional);
+      if (utilAfter >= HALT_CRITICAL) {
+        this.noteSignalDrop('margin_block', 'warn', {
+          utilNow,
+          utilAfter,
+          entryCap: ENTRY_PROJ_CAP,
+          reason: 'initial_util_above_critical',
+        });
+        this.entering = false;
+        return;
+      }
+
+      if (adjustedNotional < minTradeNotional) {
+        const utilWithFloor = utilIf(minTradeNotional);
+        if (utilWithFloor <= HALT_TARGET + FLOOR_TOLERANCE && utilWithFloor < HALT_CRITICAL) {
+          recordOpsEvent({
+            level: 'info',
+            source: 'position_sizing',
+            message: 'minimum_notional_floor_enforced',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              previousNotional: adjustedNotional,
+              newNotional: minTradeNotional,
+              utilWithFloor,
+              minTradeNotional,
+            },
+          });
+          adjustedNotional = minTradeNotional;
+          utilAfter = utilWithFloor;
+        } else {
+          this.noteSignalDrop('min_notional_floor_block', 'info', {
+            requestedNotional: adjustedNotional,
+            minTradeNotional,
+            utilWithFloor,
+            tolerance: HALT_TARGET + FLOOR_TOLERANCE,
+          });
+          this.entering = false;
+          return;
+        }
+      }
+
+      if (utilAfter >= HALT_CRITICAL) {
+        this.noteSignalDrop('margin_block', 'warn', {
+          utilNow,
+          utilAfter,
+          entryCap: ENTRY_PROJ_CAP,
+          reason: 'post_floor_util_above_critical',
+        });
+        this.entering = false;
+        return;
+      }
+
+      if (utilAfter > ENTRY_PROJ_CAP) {
+        const denom = utilAfter - utilNow;
+        const scaleFactor = denom > 0 ? (ENTRY_PROJ_CAP - utilNow) / denom : 0;
+        const clamp = Math.max(0, Math.min(1, scaleFactor));
+        if (!(clamp > 0)) {
+          this.noteSignalDrop('margin_block', 'warn', {
             utilNow,
-            utilAfter: utilAfterGuard,
-            critical: true,
-            tolerance: utilisationTarget,
+            utilAfter,
+            entryCap: ENTRY_PROJ_CAP,
+            reason: 'scale_factor_non_positive',
+          });
+          this.entering = false;
+          return;
+        }
+        const scaledNotional = adjustedNotional * clamp;
+        const floorCandidate = Math.max(scaledNotional, minTradeNotional);
+        let candidateNotional = scaledNotional;
+        let floorApplied = false;
+        if (floorCandidate > scaledNotional) {
+          const utilFloor = utilIf(floorCandidate);
+          if (utilFloor <= Math.min(FLOOR_UTIL_LIMIT, HALT_CRITICAL)) {
+            candidateNotional = floorCandidate;
+            floorApplied = true;
+            utilAfter = utilFloor;
+          }
+        }
+        if (!floorApplied) {
+          utilAfter = utilIf(candidateNotional);
+        }
+        if (utilAfter >= HALT_CRITICAL) {
+          this.noteSignalDrop('margin_block', 'warn', {
+            utilNow,
+            utilAfter,
+            entryCap: ENTRY_PROJ_CAP,
+            reason: 'scaled_util_above_critical',
+          });
+          this.entering = false;
+          return;
+        }
+        if (candidateNotional < minTradeNotional && !floorApplied) {
+          this.noteSignalDrop('min_notional_floor_block', 'info', {
+            requestedNotional: adjustedNotional,
+            scaledNotional,
+            minTradeNotional,
+            utilAfter,
           });
           this.entering = false;
           return;
         }
         recordOpsEvent({
-          level: 'info',
+          level: 'warn',
           source: 'margin_guard',
-          message: 'utilisation_scaled_to_target',
+          message: 'margin_projection_scaled',
           sessionId: this.sessionId || undefined,
           symbol: this.profile?.symbol,
           details: {
             utilNow,
-            utilAfterGuard,
-            targetPct: utilisationTarget,
-            scaledNotional,
-            originalNotional: notional,
+            utilBefore: utilIf(adjustedNotional),
+            utilAfter,
+            entryCap: ENTRY_PROJ_CAP,
+            requestedNotional: adjustedNotional,
+            scaledNotional: candidateNotional,
+            minTradeNotional,
+            floorApplied,
           },
         });
-        notional = Math.min(notional, scaledNotional);
+        adjustedNotional = candidateNotional;
       }
-      const maxAdditional = marginAdvisor.maxAdditionalNotionalAt(effectiveLev);
-      const freeCapRatio = notional > 0 ? maxAdditional / notional : 1;
+
+      if (utilAfter >= HALT_CRITICAL) {
+        this.noteSignalDrop('margin_block', 'warn', {
+          utilNow,
+          utilAfter,
+          entryCap: ENTRY_PROJ_CAP,
+          reason: 'final_util_above_critical',
+        });
+        this.entering = false;
+        return;
+      }
+
+      const maxAdditional = marginAdvisor.maxAdditionalNotionalAt(leverageForUtil);
+      const freeCapRatio = adjustedNotional > 0 ? maxAdditional / adjustedNotional : 1;
       const marginClamp = Math.min(1, Math.max(0, freeCapRatio));
       if (marginClamp <= 0) {
         this.noteSignalDrop('margin_capacity_block', 'warn', {
           reason: 'insufficient_free_margin',
           leverage: effectiveLev,
-          utilisationPct: marginAdvisor.utilisationPct(),
+          utilisationPct: utilNow,
         });
         this.entering = false;
         return;
       }
       if (marginClamp < 1) {
-        const adjustedNotional = notional * marginClamp;
+        const scaledNotional = adjustedNotional * marginClamp;
+        if (scaledNotional < minTradeNotional) {
+          this.noteSignalDrop('min_notional_floor_block', 'info', {
+            requestedNotional: adjustedNotional,
+            scaledNotional,
+            minTradeNotional,
+            utilAfter: utilIf(scaledNotional),
+          });
+          this.entering = false;
+          return;
+        }
+        adjustedNotional = scaledNotional;
+        utilAfter = utilIf(adjustedNotional);
         recordOpsEvent({
           level: 'warn',
           source: 'margin_guard',
@@ -2266,12 +2385,13 @@ export class ReboundRejectionAgent {
             requestedNotional: notional,
             allowedNotional: adjustedNotional,
             leverage: effectiveLev,
-            utilisationPct: marginAdvisor.utilisationPct(),
+            utilisationPct: utilAfter,
             ratio: marginClamp,
           },
         });
-        notional = adjustedNotional;
       }
+
+      notional = adjustedNotional;
     }
 
     let qty = notional / Math.max(entry, 1e-8);
@@ -2341,30 +2461,48 @@ export class ReboundRejectionAgent {
         }
       } catch {}
     }
-    const minNotional = getConfig().MIN_ORDER_NOTIONAL_USD || 0;
+    const minNotional = minTradeNotional;
     if (!(qty > 0)) {
       this.noteSignalDrop('position_size_non_positive', 'warn', { qty, entry, minNotional });
       this.entering = false;
       return;
     }
     const currentNotional = qty * entry;
-    if (currentNotional < minNotional) {
+    if (currentNotional + 1e-6 < minNotional) {
       const adjustedQty = minNotional / Math.max(entry, 1e-8);
-      const maxAffordable = usableBalance * effectiveLev;
-      if (adjustedQty * entry <= maxAffordable * 1.01) {
+      const utilWithAdjust = marginAdvisor.utilisationPctIf(minNotional, Math.max(effectiveLev, 1));
+      if (utilWithAdjust <= HALT_TARGET + FLOOR_TOLERANCE && utilWithAdjust < HALT_CRITICAL) {
         this.noteSignalDrop('position_size_bumped_to_min_notional', 'info', {
           previousQty: qty,
           previousNotional: currentNotional,
           minNotional,
           adjustedQty,
+          utilWithAdjust,
         });
         qty = adjustedQty;
         notional = qty * entry;
       } else {
-        this.noteSignalDrop('min_notional_block', 'info', {
+        this.noteSignalDrop('min_notional_floor_block', 'info', {
           currentNotional,
           minNotional,
-          maxAffordable,
+          utilWithAdjust,
+        });
+        this.entering = false;
+        return;
+      }
+    }
+
+    const tp1ForEv = tp.length > 0 ? tp[0] : this.plan.rPrices?.[0]?.price ?? null;
+    if (tp1ForEv != null && Number.isFinite(tp1ForEv)) {
+      const dir = side === 'buy' ? 1 : -1;
+      const priceDiff = dir * (tp1ForEv - entry);
+      const expectedPnL1 = qty > 0 && priceDiff > 0 ? qty * priceDiff : 0;
+      if (expectedPnL1 < 3) {
+        this.noteSignalDrop('ev_too_small', 'info', {
+          expectedPnL1,
+          qty,
+          entry,
+          tp1: tp1ForEv,
         });
         this.entering = false;
         return;
@@ -2625,7 +2763,7 @@ export class ReboundRejectionAgent {
       initialStopDistance,
       hitTargets: [],
       archetype: quantArchetype,
-      tp1Fraction: planAny._tp1Fraction ?? 0.35,
+      tp1Fraction: planAny._tp1Fraction ?? 0.3,
       flowSnapshot: planAny._flowSnapshot ?? null,
       initialQty: placed.filledQty,
       initialNotional: placed.filledQty * executionPrice,
@@ -2882,8 +3020,8 @@ export class ReboundRejectionAgent {
   private resolvePartialFraction(): number {
     const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : 'tier3';
     if (tier === 'tier1') return 0.3;
-    if (tier === 'tier2') return 0.35;
-    return 0.4;
+    if (tier === 'tier2') return 0.33;
+    return 0.35;
   }
 
   private resolveScaleInFraction(): number {
@@ -2900,7 +3038,7 @@ export class ReboundRejectionAgent {
     const targets = this.pos.tp || [];
     const stopDistance = Math.max(1e-9, Math.abs(entry - stop));
     if (!(stopDistance > 0)) return null;
-    const baseWeights = [0.6, 0.3, 0.1];
+    const baseWeights = [0.35, 0.35, 0.3];
     const fallback = baseWeights[baseWeights.length - 1] ?? 0.1;
     let weightSum = 0;
     let accum = 0;
@@ -9627,7 +9765,10 @@ export class ReboundRejectionAgent {
         this.pos.hitTargets = Array.from(recordedHits.values());
 
         // Adjust stop to breakeven or better
-        const newStop = this.pos.breakeven || this.pos.entry;
+        const previousStop = this.pos.stop;
+        const volRatio = this.pos.flowSnapshot?.volRatio ?? null;
+        const allowBreakeven = volRatio != null ? volRatio >= 1.1 : false;
+        const newStop = allowBreakeven ? (this.pos.breakeven || this.pos.entry) : previousStop;
         this.pos.stop = newStop;
 
         const fillPrice = partialExit.avgPrice || price;
@@ -9635,7 +9776,9 @@ export class ReboundRejectionAgent {
 
         const now = Date.now();
         const previousConfig = this.pos.trailConfig ?? { mode: 'atr', multiplier: this.quantConfig.exits.trailAtrMult, armed: false };
-        const trailMultiplier = Math.max(0.8, Math.min(1.2, (previousConfig.multiplier ?? 1.0) * 0.9));
+        const trailMultiplier = allowBreakeven
+          ? Math.max(0.8, Math.min(1.2, (previousConfig.multiplier ?? 1.0) * 0.9))
+          : Math.min(1.4, Math.max(0.9, (previousConfig.multiplier ?? 1.0) * 1.05));
         const highWater = this.pos.side === 'buy'
           ? Math.max(previousConfig.highWatermark ?? fillPrice, fillPrice)
           : Math.min(previousConfig.highWatermark ?? fillPrice, fillPrice);
@@ -9659,7 +9802,10 @@ export class ReboundRejectionAgent {
             partialQty: partialExit.filledQty,
             exitPrice: fillPrice,
             remainingQty: this.pos.qty,
-            newStop
+            newStop,
+            previousStop,
+            volRatio,
+            allowBreakeven,
           }
         });
 
