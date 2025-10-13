@@ -684,6 +684,12 @@ export class ReboundRejectionAgent {
               highWatermark: entry,
               lastUpdateTs: now,
             },
+            openLeverage: (() => {
+              const leverage = (expo as any)?.leverage;
+              return typeof leverage === 'number' && Number.isFinite(leverage)
+                ? leverage
+                : this.profile.maxLeverage;
+            })(),
             openLeverage,
           } as any;
           this.state = 'MANAGE';
@@ -1489,6 +1495,9 @@ export class ReboundRejectionAgent {
         condition: () => true,
       },
     ];
+    const matchingProfile = tpWeightProfilesConfig.find(cfg => cfg.condition());
+    const tpWeightProfile: number[] = matchingProfile?.profile
+      ?? tpWeightProfilesConfig[tpWeightProfilesConfig.length - 1]!.profile;
     const defaultProfile = tpWeightProfilesConfig[tpWeightProfilesConfig.length - 1]!.profile;
     const tpWeightProfile: number[] = tpWeightProfilesConfig.find(cfg => cfg.condition())?.profile ?? defaultProfile;
     if (rMultiples.length > 0) {
@@ -2019,6 +2028,7 @@ export class ReboundRejectionAgent {
     const spreadIsOk = spreadBps == null || spreadBps <= spreadLimitBps;
     const adxNow = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
     const atrPctForLev = typeof guardAtr === 'number' ? guardAtr : undefined;
+    const volatilityHigh = atrPctForLev != null && atrPctForLev > 2.5;
     const atrWindowOk = atrPctForLev != null && atrPctForLev >= 0.7 && atrPctForLev <= 2.5;
     const rrWeightedOk = typeof rrWeighted === 'number' ? rrWeighted >= 0.9 : false;
     const supportiveRegime = Boolean(this.regime?.shouldTrade !== false && (this.regime?.playbook || '') !== 'standby');
@@ -2077,7 +2087,6 @@ export class ReboundRejectionAgent {
         });
       }
     }
-    const volatilityHigh = atrPctForLev != null && atrPctForLev > 2.5;
     const levGuard = volatilityHigh ? Math.min(baseLev, 3) : baseLev;
     let effectiveLev = Math.max(Math.min(levGuard, baseLev), Math.min(levGuard, Math.max(minLevCfg, 1)));
     if (dynLevEnabled) {
@@ -9450,10 +9459,7 @@ export class ReboundRejectionAgent {
       return;
     }
 
-    const partialFraction = Math.max(
-      0.2,
-      Math.min(0.6, this.pos.tp1Fraction ?? this.resolvePartialFraction() ?? 0.35),
-    );
+    const partialFraction = this.resolvePartialFraction();
     const rawPartialQty = this.pos.qty * partialFraction;
     const partialQty = Number(rawPartialQty.toFixed(8));
     if (!(partialQty > 0 && partialQty < this.pos.qty)) {
@@ -9476,10 +9482,7 @@ export class ReboundRejectionAgent {
     if (!this.pos || !this.broker || !this.profile) return;
 
     try {
-      const partialFraction = Math.max(
-        0.2,
-        Math.min(0.6, this.pos.tp1Fraction ?? this.resolvePartialFraction() ?? 0.35),
-      );
+      const partialFraction = this.resolvePartialFraction();
       const rawQty = this.pos.qty * partialFraction;
       const partialQty = Number(rawQty.toFixed(8));
       if (!(partialQty > 0 && partialQty < this.pos.qty)) return;

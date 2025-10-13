@@ -69,6 +69,9 @@ export type Cfg = {
   STALE_TICK_SEC: number;             // alert if no tick per session beyond this threshold
   MARGIN_UTIL_WARN_PCT: number;
   MARGIN_UTIL_CRITICAL_PCT: number;
+  MARGIN_UTIL_TARGET_PCT: number;      // desired utilisation target when projecting new orders
+  MARGIN_UTIL_BUFFER_PCT: number;      // safety buffer below the critical threshold
+  MARGIN_PROJECTION_MIN_SCALE: number; // minimum acceptable scale factor when resizing orders
   MARGIN_LIQUIDATION_MIN_DIST_PCT: number;
   MARGIN_CONCENTRATION_WARN_PCT: number;
   MARGIN_MONITOR_INTERVAL_MS: number;
@@ -338,6 +341,9 @@ export function getConfig(): Cfg {
     STALE_TICK_SEC: Number(e.STALE_TICK_SEC || "300"),  // 5 min instead of 2 min for crypto
     MARGIN_UTIL_WARN_PCT: Number(e.MARGIN_UTIL_WARN_PCT || "55"),
     MARGIN_UTIL_CRITICAL_PCT: Number(e.MARGIN_UTIL_CRITICAL_PCT || "75"),
+    MARGIN_UTIL_TARGET_PCT: Number(e.MARGIN_UTIL_TARGET_PCT || e.MARGIN_HALT_TARGET_PCT || "62"),
+    MARGIN_UTIL_BUFFER_PCT: Number(e.MARGIN_UTIL_BUFFER_PCT || "2"),
+    MARGIN_PROJECTION_MIN_SCALE: Number(e.MARGIN_PROJECTION_MIN_SCALE || "0.15"),
     MARGIN_LIQUIDATION_MIN_DIST_PCT: Number(e.MARGIN_LIQUIDATION_MIN_DIST_PCT || "12"),
     MARGIN_CONCENTRATION_WARN_PCT: Number(e.MARGIN_CONCENTRATION_WARN_PCT || "35"),
     MARGIN_MONITOR_INTERVAL_MS: Number(e.MARGIN_MONITOR_INTERVAL_MS || "30000"),
