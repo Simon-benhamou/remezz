@@ -8368,27 +8368,35 @@ export class ReboundRejectionAgent {
     try {
       const persistedPosition = await loadActivePosition(this.sessionId);
 
-      if (!persistedPosition || !persistedPosition.qty || persistedPosition.qty <= 0) {
+      const qty = Number((persistedPosition as any)?.qty ?? 0);
+      if (!persistedPosition || !Number.isFinite(qty) || qty <= 1e-8) {
         console.log(`No active position found for session ${this.sessionId}`);
         return;
       }
 
-      console.log(`Restoring persisted position: ${persistedPosition.symbol} ${persistedPosition.side} qty=${persistedPosition.qty} @ ${persistedPosition.entryPrice}`);
+      const entryPrice = Number((persistedPosition as any)?.entryPrice ?? 0);
+
+      console.log(`Restoring persisted position: ${persistedPosition.symbol} ${persistedPosition.side} qty=${qty} @ ${entryPrice}`);
 
       // Validate required fields
-      if (!persistedPosition.entryPrice || !persistedPosition.openedAt) {
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !persistedPosition.openedAt) {
         console.error('Invalid persisted position data: missing entryPrice or openedAt');
         return;
       }
 
       // Restore position state
       const side = persistedPosition.side as 'buy' | 'sell';
-      const entry = persistedPosition.entryPrice;
-      const qty = persistedPosition.qty;
-      const stop = persistedPosition.stopPrice || (side === 'buy' ? entry * 0.95 : entry * 1.05); // Fallback stop
-      const tp = Array.isArray(persistedPosition.takeProfit) ?
-        (persistedPosition.takeProfit as number[]).filter(n => typeof n === 'number') :
-        persistedPosition.takeProfit && typeof persistedPosition.takeProfit === 'number' ? [persistedPosition.takeProfit] : [];
+      const entry = entryPrice;
+      const stopRaw = (persistedPosition as any)?.stopPrice;
+      const stop = Number.isFinite(Number(stopRaw)) && Number(stopRaw) > 0
+        ? Number(stopRaw)
+        : (side === 'buy' ? entry * 0.95 : entry * 1.05); // Fallback stop
+      const tpRaw = Array.isArray(persistedPosition.takeProfit)
+        ? persistedPosition.takeProfit
+        : (persistedPosition.takeProfit != null ? [persistedPosition.takeProfit] : []);
+      const tp = tpRaw
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value) && value > 0);
 
       // Calculate current P&L and other metrics
       const openedAt = persistedPosition.openedAt.getTime();
@@ -8670,7 +8678,8 @@ export class ReboundRejectionAgent {
       // ✅ NEW: Paper mode position validation (prevents stuck state)
       try {
         // Verify paper position still exists with valid quantity
-        if (!this.pos || this.pos.qty <= 0) {
+        const currentQty = Number(this.pos?.qty ?? 0);
+        if (!this.pos || !Number.isFinite(currentQty) || currentQty <= 1e-8) {
           console.log(`Paper position cleared for ${this.profile.symbol}, transitioning to EXIT`);
           this.pos = null;
           this.trendReversalContext = null;
