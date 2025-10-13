@@ -16,6 +16,8 @@
 - Introduced dynamic RR expectancy filtering using win rate EWMA, including safety multiplier, blending, and hysteresis controls persisted per session.
 - Exposed RR parameters via `GET /agent/state` and a new `PATCH /agent/:id` endpoint with validation guarding against unsafe thresholds.
 - Implemented `services/performance/winrate` to derive recent win rate statistics from fills and integrated the logic into the ProfitOk gate.
+- Tuned momentum-aware risk handling by tightening ATR stops under strong flow, rebalancing multi-target exits toward higher-RR fills, and enforcing a 1.0 RR floor with fast-track safeguards.
+- Logged structured telemetry for RR, stops, targets, and confirmation context to trace how entry filters adjust position sizing in real time.
 
 ## Deployment Notes
 - Run `npm run prisma:gen` followed by the latest Prisma migration (`20251015_rr_expectancy_config`) before deploying.

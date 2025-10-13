@@ -77,9 +77,13 @@ export type QuantAIEntryFilterDynamicConfig = {
   momentumFastTrack?: {
     enabled?: boolean;
     minAdx?: number;
-    minAtrPct?: number;
     minVolumeRatio?: number;
+    minSlopePct?: number;
+    minCmf?: number;
+    minWeightedRr?: number;
     minRr?: number;
+    rrFloor?: number;
+    minAtrPct?: number;
     nearThresholdFactor?: number;
   };
   drySpell?: QuantAIDrySpellConfig;
@@ -154,10 +158,14 @@ const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
   rrNearThresholdFactor: 0.9,
   momentumFastTrack: {
     enabled: true,
-    minAdx: 30,
-    minAtrPct: 0.8,
+    minAdx: 35,
     minVolumeRatio: 1.2,
-    minRr: 0.7,
+    minSlopePct: 0.2,
+    minCmf: 0,
+    minWeightedRr: 0.9,
+    minRr: 1.05,
+    rrFloor: 1.0,
+    minAtrPct: 0.8,
     nearThresholdFactor: 0.9,
   },
   confidenceTierAdjustments: {

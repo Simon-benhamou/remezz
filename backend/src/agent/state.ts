@@ -82,6 +82,8 @@ export type ActivePosition = {
   initialStopDistance?: number;
   hitTargets?: number[];
   archetype?: ExitArchetype;
+  tp1Fraction?: number;
+  flowSnapshot?: { adx?: number | null; slopePct?: number | null; volRatio?: number | null; cmf?: number | null } | null;
   initialQty?: number;
   initialNotional?: number;
   addOnFilledQty?: number;
@@ -330,6 +332,7 @@ export class ReboundRejectionAgent {
   private lastZoneCalculation = 0;             // Zone expiration: timestamp of last zone calculation
   private requireStrongerConfirmation = false; // Support break: flag when price near weak support
   private volumeRatioHistory: number[] = [];
+  private lastWhaleSpikeTs = 0;
   private aiBiasOverride: {
     bias: 'long' | 'short';
     originalBias: 'long' | 'short' | 'none';
@@ -649,6 +652,7 @@ export class ReboundRejectionAgent {
           const dir = side === 'buy' ? 1 : -1;
           const tp = (this.plan.rPrices || []).map(x => entry + dir * x.r * this.plan!.stopDistance);
           const now = Date.now();
+          const planAny = this.plan as any;
           this.pos = {
             side,
             entry,
@@ -665,6 +669,8 @@ export class ReboundRejectionAgent {
             partialInfo: null,
             initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
             archetype: (this.plan?.plan?.meta?.playbook || this.regime?.playbook) === 'momentum_breakout' ? 'impulse' : 'reversal',
+            tp1Fraction: planAny._tp1Fraction ?? 0.35,
+            flowSnapshot: planAny._flowSnapshot ?? null,
             initialQty: expo.qty,
             initialNotional: expo.qty * entry,
             addOnFilledQty: 0,
@@ -1226,6 +1232,26 @@ export class ReboundRejectionAgent {
     const roundR = (n:number)=> Math.round(n*100)/100;
     const regimeRisk = this.regime?.riskModifier;
     const planAny = this.plan as any;
+    const volumeNow = Number((snap as any)?.volume ?? 0);
+    const volumeMANow = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? 0);
+    const volumeRatio = volumeMANow > 0 ? volumeNow / volumeMANow : undefined;
+    const adxValue = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
+    const emaValue = Number((snap as any)?.ema20 ?? validationSnap.ema20 ?? mktPrice);
+    const emaSlope = Number((snap as any)?.ema20Slope ?? validationSnap?.ema20Slope ?? 0);
+    const slopeFraction = emaValue !== 0 ? emaSlope / emaValue : 0;
+    const slopeDirectionalPct = this.plan.bias === 'none' ? 0 : slopeFraction * 100 * (this.plan.bias === 'short' ? -1 : 1);
+    const slopeAbsPct = Math.abs(slopeFraction) * 100;
+    const cmfVal = typeof (snap as any)?.cmf20 === 'number' ? Number((snap as any).cmf20) : undefined;
+    const adxSlopeVal = typeof (snap as any)?.adxSlope === 'number' ? Number((snap as any).adxSlope) : undefined;
+    const fastTrackCfg = this.quantConfig.filters.dynamic?.momentumFastTrack;
+    const strongMomentumStopEligible = adxValue >= 30
+      && Number.isFinite(slopeDirectionalPct) && slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2)
+      && volumeRatio != null && volumeRatio >= 1.1
+      && (cmfVal == null || cmfVal >= 0);
+    let stopBasis: 'structure' | 'atr' | 'momentum_atr' = 'structure';
+    let stopAtrMult: number | null = null;
+    let momentumStopDistance: number | null = null;
+    let momentumStopApplied = false;
     const baseStopDistance = typeof planAny._baseStopDistance === 'number'
       ? planAny._baseStopDistance
       : this.plan.stopDistance;
@@ -1238,7 +1264,6 @@ export class ReboundRejectionAgent {
     }
     const atrForBreakoutStops = entryZoneMeta.atr > 0 ? entryZoneMeta.atr : Math.max(1e-8, Math.abs(mktPrice - adaptiveZone.mid));
     if (usingBreakoutEntry) {
-      const adxValue = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
       const atrMultiple = adxValue >= 35 ? 2.0 : adxValue >= 25 ? 1.75 : 1.5;
       const atrStopDistance = atrForBreakoutStops * atrMultiple;
       const ema20Now = Number((snap as any)?.ema20 ?? validationSnap.ema20 ?? mktPrice);
@@ -1262,6 +1287,20 @@ export class ReboundRejectionAgent {
       const clamp = Math.max(0.4, Math.min(1, regimeRisk.stopMultiplier));
       effectiveStopDistance *= clamp;
     }
+    if (strongMomentumStopEligible && atrForBreakoutStops > 0) {
+      let momentumAtrMult = 0.75;
+      if (adxValue >= 42 && slopeDirectionalPct >= 0.35 && (volumeRatio ?? 0) >= 1.3) momentumAtrMult = 0.6;
+      else if (adxValue >= 36 && slopeDirectionalPct >= 0.28 && (volumeRatio ?? 0) >= 1.22) momentumAtrMult = 0.68;
+      else if (adxValue >= 32 && slopeDirectionalPct >= 0.24 && (volumeRatio ?? 0) >= 1.15) momentumAtrMult = 0.72;
+      momentumAtrMult = Math.max(0.6, Math.min(0.8, momentumAtrMult));
+      const atrTightDistance = Math.max(1e-8, atrForBreakoutStops * momentumAtrMult);
+      const tightened = Math.min(effectiveStopDistance, atrTightDistance);
+      if (tightened < effectiveStopDistance - 1e-8) {
+        momentumStopApplied = tightened < baseStopDistance - 1e-8;
+      }
+      effectiveStopDistance = tightened;
+      momentumStopDistance = tightened;
+    }
     this.plan.stopDistance = effectiveStopDistance;
     const stopRaw = this.plan.bias === 'long'
       ? entry - this.plan.stopDistance
@@ -1284,15 +1323,22 @@ export class ReboundRejectionAgent {
           this.quantConfig.exits,
           quantArchetype,
         );
-        const quantStop = round4(bracket.stop);
-        const quantDistance = Math.abs(entry - quantStop);
-        if (quantDistance > this.plan.stopDistance) {
+        let quantStopPrice = round4(bracket.stop);
+        let quantDistance = Math.abs(entry - quantStopPrice);
+        if (momentumStopDistance != null && quantDistance > momentumStopDistance + 1e-8) {
+          quantDistance = momentumStopDistance;
+          quantStopPrice = round4(side === 'buy' ? entry - quantDistance : entry + quantDistance);
+        }
+        if (quantDistance > this.plan.stopDistance + 1e-8) {
           this.plan.stopDistance = quantDistance;
-          stop = quantStop;
-          tp = bracket.targets.map(target => round4(target));
-          const stopForR = Math.max(this.plan.stopDistance, 1e-9);
+          stop = quantStopPrice;
+          const targets = momentumStopDistance != null && Math.abs(quantDistance - momentumStopDistance) <= 1e-8
+            ? this.quantConfig.exits.tpRMultiples.map((r) => round4(entry + dir0 * r * quantDistance))
+            : bracket.targets.map(target => round4(target));
+          tp = targets;
+          const stopForRLocal = Math.max(this.plan.stopDistance, 1e-9);
           this.plan.rPrices = tp.map((price, idx) => {
-            const rRaw = Math.abs(price - entry) / stopForR;
+            const rRaw = Math.abs(price - entry) / stopForRLocal;
             const fallback = this.quantConfig.exits.tpRMultiples[idx] ?? (idx + 1);
             const r = Number.isFinite(rRaw) && rRaw > 0 ? rRaw : fallback;
             return { r: roundR(r), price };
@@ -1328,9 +1374,45 @@ export class ReboundRejectionAgent {
         },
       });
     }
+    if (momentumStopDistance != null && this.plan.stopDistance <= momentumStopDistance + 1e-8 && momentumStopDistance < baseStopDistance - 1e-8) {
+      stopBasis = 'momentum_atr';
+    } else if (this.plan.stopDistance > baseStopDistance + 1e-8) {
+      stopBasis = 'atr';
+    } else {
+      stopBasis = 'structure';
+    }
+    if (atrForBracket && atrForBracket > 0) {
+      stopAtrMult = this.plan.stopDistance / atrForBracket;
+    } else if (atrForBreakoutStops > 0) {
+      stopAtrMult = this.plan.stopDistance / atrForBreakoutStops;
+    }
     const riskAbs = Math.max(1e-9, Math.abs(entry - stop));
-    const firstR = this.plan.rPrices?.[0]?.r ?? (tp.length > 0 ? Math.abs(tp[0] - entry) / riskAbs : undefined);
     const stopForR = Math.max(this.plan.stopDistance, Math.abs(entry - stop), 1e-8);
+    const flowStrongForTp = adxValue >= 35
+      && slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2)
+      && (volumeRatio ?? 0) >= 1.15
+      && (cmfVal == null || cmfVal >= 0);
+    if (
+      flowStrongForTp &&
+      atrForBracket && atrForBracket > 0 &&
+      stopForR > 0 &&
+      Array.isArray(this.plan.rPrices) &&
+      this.plan.rPrices.length > 0
+    ) {
+      const extraAtrMult = adxValue >= 42 && (volumeRatio ?? 0) >= 1.28 ? 0.25 : 0.18;
+      const extraR = (atrForBracket * extraAtrMult) / stopForR;
+      if (extraR > 0.05) {
+        const baseR = typeof this.plan.rPrices[0].r === 'number'
+          ? this.plan.rPrices[0].r
+          : Math.abs(tp[0] - entry) / stopForR;
+        const newR = baseR + extraR;
+        const newPrice = round4(entry + dir0 * newR * stopForR);
+        this.plan.rPrices[0] = { r: roundR(newR), price: newPrice };
+        tp[0] = newPrice;
+        this.plan.plan.risk.tp = this.plan.rPrices.map(({ r }) => ({ type: 'R', value: r }));
+      }
+    }
+    const firstR = this.plan.rPrices?.[0]?.r ?? (tp.length > 0 ? Math.abs(tp[0] - entry) / stopForR : undefined);
     const rMultiples = Array.isArray(this.plan.rPrices)
       ? this.plan.rPrices
         .map(({ r, price }) => {
@@ -1341,8 +1423,29 @@ export class ReboundRejectionAgent {
         .filter((value): value is number => value != null && Number.isFinite(value) && value > 0)
       : [];
     let rrWeighted: number | undefined;
+    // Structured configuration for TP weight profiles and their threshold conditions
+    const tpWeightProfilesConfig = [
+      {
+        profile: [0.35, 0.4, 0.25],
+        condition: () =>
+          adxValue >= 35 &&
+          (volumeRatio ?? 0) >= 1.2 &&
+          slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2),
+      },
+      {
+        profile: [0.45, 0.35, 0.2],
+        condition: () =>
+          (adxValue >= 30 && slopeDirectionalPct >= 0.22) ||
+          (adxValue >= 32 && (volumeRatio ?? 0) >= 1.15),
+      },
+      {
+        profile: [0.6, 0.3, 0.1], // default
+        condition: () => true,
+      },
+    ];
+    let tpWeightProfile: number[] = tpWeightProfilesConfig.find(cfg => cfg.condition()).profile;
     if (rMultiples.length > 0) {
-      const baseWeights = [0.6, 0.3, 0.1];
+      const baseWeights = tpWeightProfile;
       const fallbackWeight = baseWeights[baseWeights.length - 1] ?? 0.1;
       const weights = rMultiples.map((_, idx) => {
         if (idx < baseWeights.length) return baseWeights[idx]!;
@@ -1360,9 +1463,19 @@ export class ReboundRejectionAgent {
     }
     const tpWeightedAbs = rrWeighted != null ? rrWeighted * stopForR : undefined;
     const tpWeightedPct = tpWeightedAbs != null && entry > 0 ? (tpWeightedAbs / entry) * 100 : undefined;
-    const volumeNow = Number((snap as any)?.volume ?? 0);
-    const volumeMANow = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? 0);
-    const volumeRatio = volumeMANow > 0 ? volumeNow / volumeMANow : undefined;
+    const tp1Fraction = Math.max(0.3, Math.min(0.4, tpWeightProfile[0] ?? 0.35));
+    planAny._tpWeightProfile = tpWeightProfile;
+    planAny._tp1Fraction = tp1Fraction;
+    planAny._stopBasis = stopBasis;
+    planAny._stopAtrMult = stopAtrMult;
+    planAny._momentumStopTarget = momentumStopDistance;
+    planAny._flowSnapshot = {
+      adx: Number.isFinite(adxValue) ? adxValue : null,
+      slopePct: Number.isFinite(slopeDirectionalPct) ? slopeDirectionalPct : null,
+      volRatio: Number.isFinite(volumeRatio ?? NaN) ? volumeRatio : null,
+      cmf: cmfVal ?? null,
+    };
+    const firstTpProfitPct = tp.length > 0 && entry !== 0 ? Math.abs((tp[0] - entry) / entry) * 100 : 0;
     const planMeta = (this.plan.plan.meta || {}) as Record<string, unknown>;
     const modelConfidence =
       typeof planMeta.confidenceScore === 'number'
@@ -1430,6 +1543,10 @@ export class ReboundRejectionAgent {
       qualityPassHint,
       volumeRatio: typeof volumeRatio === 'number' ? volumeRatio : undefined,
       modelConfidence: typeof modelConfidence === 'number' ? modelConfidence : undefined,
+      slopeDirectionalPct: Number.isFinite(slopeDirectionalPct) ? slopeDirectionalPct : undefined,
+      slopeAbsPct: Number.isFinite(slopeAbsPct) ? slopeAbsPct : undefined,
+      cmf: typeof cmfVal === 'number' ? cmfVal : undefined,
+      adxSlope: typeof adxSlopeVal === 'number' ? adxSlopeVal : undefined,
     }, {
       minRr: rrSnapshot.effective,
       rrSummary: rrSummaryParts,
@@ -1443,6 +1560,41 @@ export class ReboundRejectionAgent {
     const entryFilterSizePenalty = typeof filterEvaluation.modifiers?.sizeMultiplier === 'number'
       ? filterEvaluation.modifiers.sizeMultiplier
       : undefined;
+    const waitSeconds = this.priceInZoneStartTime > 0 ? Math.round((Date.now() - this.priceInZoneStartTime) / 1000) : null;
+    const confirmMode = usingBreakoutEntry ? 'breakout' : 'pullback';
+    const rrDetails = {
+      tp1: typeof firstR === 'number' ? firstR : null,
+      rrw: typeof rrWeighted === 'number' ? rrWeighted : null,
+      minBase: rrSnapshot.effective,
+      minApplied: filterEvaluation.meta?.minRrUsed ?? rrSnapshot.effective,
+      floor: filterEvaluation.meta?.minRrFloor ?? null,
+      strongFlow: filterEvaluation.meta?.strongFlow ?? false,
+      fastTrack: filterEvaluation.meta?.fastTrackApplied ?? false,
+      near: filterEvaluation.meta?.rrNearThreshold ?? false,
+      quality: filterEvaluation.meta?.qualityHint ?? (qualityPassHint ?? null),
+    };
+    const stopsDetails = {
+      pct: entry > 0 ? (stopForR / entry) * 100 : null,
+      atrMult: stopAtrMult,
+      basis: stopBasis,
+      distance: stopForR,
+    };
+    const tpDetails = {
+      tp1PctDist: firstTpProfitPct,
+      tpMix: tpWeightProfile,
+      weightedPct: typeof tpWeightedPct === 'number' ? tpWeightedPct : null,
+    };
+    const flowDetails = {
+      adx: Number.isFinite(adxValue) ? adxValue : null,
+      slopePct: Number.isFinite(slopeDirectionalPct) ? slopeDirectionalPct : null,
+      volRatio: volumeRatio ?? null,
+      cmf: cmfVal ?? null,
+      adxSlope: adxSlopeVal ?? null,
+    };
+    const confirmDetails = {
+      mode: confirmMode,
+      waitSec: waitSeconds,
+    };
     recordOpsEvent({
       level: 'info',
       source: 'entry_filters',
@@ -1450,20 +1602,18 @@ export class ReboundRejectionAgent {
       sessionId: this.sessionId || undefined,
       symbol: this.profile.symbol,
       details: {
-        rrTp1: typeof firstR === 'number' ? firstR : null,
-        rrWeighted: typeof rrWeighted === 'number' ? rrWeighted : null,
-        tpWeightedPct: typeof tpWeightedPct === 'number' ? tpWeightedPct : null,
-        stopDistance: stopForR,
-        minRrBase: rrSnapshot.effective,
-        minRrApplied: filterEvaluation.meta?.minRrUsed ?? rrSnapshot.effective,
-        strongFlow: filterEvaluation.meta?.strongFlow ?? false,
-        rrNearThreshold: filterEvaluation.meta?.rrNearThreshold ?? false,
-        fastTrackApplied: filterEvaluation.meta?.fastTrackApplied ?? false,
-        qualityHint: filterEvaluation.meta?.qualityHint ?? (qualityPassHint ?? null),
-        volumeRatio: volumeRatio ?? null,
-        rrSummary: rrSummaryParts,
+        rr: rrDetails,
+        stops: stopsDetails,
+        tp: tpDetails,
+        flow: flowDetails,
+        confirm: confirmDetails,
+        summary: rrSummaryParts,
       },
     });
+    planAny._strongFlow = filterEvaluation.meta?.strongFlow ?? false;
+    planAny._rrFloor = filterEvaluation.meta?.minRrFloor ?? null;
+    planAny._rrApplied = filterEvaluation.meta?.minRrUsed ?? rrSnapshot.effective;
+    planAny._confirmWaitSec = waitSeconds;
     if (filterEvaluation.meta?.spread) {
       const spreadMeta = filterEvaluation.meta.spread;
       recordOpsEvent({
@@ -1523,7 +1673,6 @@ export class ReboundRejectionAgent {
     if (memeProfitRelax) {
       minProfitPct = Math.min(minProfitPct, 0.33);
     }
-    const firstTpProfitPct = Math.abs((tp[0] - entry) / entry) * 100;
     // Single profitability gate is enough; movement check duplicates the same quantity
     if (firstTpProfitPct < minProfitPct) {
       recordOpsEvent({
@@ -2312,6 +2461,8 @@ export class ReboundRejectionAgent {
       initialStopDistance,
       hitTargets: [],
       archetype: quantArchetype,
+      tp1Fraction: planAny._tp1Fraction ?? 0.35,
+      flowSnapshot: planAny._flowSnapshot ?? null,
       initialQty: placed.filledQty,
       initialNotional: placed.filledQty * executionPrice,
       addOnFilledQty: 0,
@@ -3597,14 +3748,33 @@ export class ReboundRejectionAgent {
 
     const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
     const lastVolume = snap.volume || 0;
-    const volumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
+    const rawVolumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
     const adxValue = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
     const breakoutActive = this.runtimeZoneDiagnostics?.breakoutActive ?? false;
-    const fastTrackEligible = breakoutActive || (momentumReversed && adxValue >= 28 && volumeRatio >= 1.25);
+    const fastTrackEligible = breakoutActive || (momentumReversed && adxValue >= 28 && rawVolumeRatio >= 1.25);
     const fastTrackTimeMs = fastTrackEligible ? Math.min(adaptiveTimeMs, 2 * 60 * 1000) : adaptiveTimeMs;
-    const requiredMin = fastTrackTimeMs / 60000;
-
-    if (timeInZoneMs < fastTrackTimeMs) {
+    const breakoutMode = (this.plan?.plan?.meta?.playbook ?? null) === 'momentum_breakout' || breakoutActive;
+    const breakoutCapMs = 2 * 60 * 1000;
+    let timeThresholdMs = fastTrackTimeMs;
+    if (breakoutMode) {
+      timeThresholdMs = Math.min(timeThresholdMs, breakoutCapMs);
+    }
+    const previousSample = this.volumeRatioHistory.length
+      ? this.volumeRatioHistory[this.volumeRatioHistory.length - 1]
+      : undefined;
+    const adxSlopeVal = Number.isFinite(snap.adxSlope) ? snap.adxSlope : 0;
+    const whaleCooldownMs = 120_000;
+    const whaleRecently = this.lastWhaleSpikeTs > 0 && now - this.lastWhaleSpikeTs < whaleCooldownMs;
+    const volumeRising = rawVolumeRatio >= 1.05 && (previousSample == null || rawVolumeRatio >= previousSample * 1.03);
+    const momentumConfirmEligible = breakoutMode && adxSlopeVal > 0 && volumeRising && !whaleRecently;
+    let timeMode: 'standard' | 'momentum' = 'standard';
+    let timeRequirementMet = timeInZoneMs >= timeThresholdMs;
+    if (!timeRequirementMet && momentumConfirmEligible && timeInZoneMs >= 60 * 1000) {
+      timeRequirementMet = true;
+      timeMode = 'momentum';
+    }
+    const requiredMin = timeThresholdMs / 60000;
+    if (!timeRequirementMet) {
       return {
         confirmed: false,
         reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${adxValue.toFixed(1)})`
@@ -3619,7 +3789,6 @@ export class ReboundRejectionAgent {
     }
 
     // 3️⃣ VOLUME CHECK: Must exceed 1.2x average
-    const rawVolumeRatio = volumeRatio;
     const { smoothed: volumeRatioSmoothed, previous: prevVolumeRatio } = this.updateVolumeRatioHistory(rawVolumeRatio);
 
     const adx = Number.isFinite(adxValue) ? adxValue : 0;
@@ -3648,7 +3817,7 @@ export class ReboundRejectionAgent {
       : currentPrice <= entryZone.mid;
     const timeoutMs = 2 * 15 * 60 * 1000; // 2x15m candles
 
-    let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | null = null;
+    let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null = null;
     let effectiveNeed = adaptiveNeed;
     let volumeConfirmed = volumeRatioSmoothed >= adaptiveNeed;
 
@@ -3686,8 +3855,18 @@ export class ReboundRejectionAgent {
 
     const smoothedDisplay = Number.isFinite(volumeRatioSmoothed) ? volumeRatioSmoothed.toFixed(2) : '0.00';
     const rawDisplay = Number.isFinite(rawVolumeRatio) && rawVolumeRatio > 0 ? rawVolumeRatio.toFixed(2) : '0.00';
-    const baseReason = `Entry confirmed: ${timeInZoneMin.toFixed(1)}min in zone, momentum reversed`;
+    let baseReason = `Entry confirmed: ${timeInZoneMin.toFixed(1)}min in zone, momentum reversed`;
+    if (timeMode === 'momentum') {
+      baseReason = `Entry confirmed: momentum fast-track (${timeInZoneMin.toFixed(1)}min in zone, ADX ${adxValue.toFixed(1)})`;
+      if (confirmationMode == null) confirmationMode = 'momentum';
+    }
 
+    if (confirmationMode === 'momentum') {
+      return {
+        confirmed: true,
+        reason: `${baseReason}, momentum confirm (volume ${smoothedDisplay}x, raw ${rawDisplay}x)`
+      };
+    }
     if (confirmationMode === 'fast_track') {
       const signalsUsed = [
         volumeSignal ? 'volume≥0.85x' : null,
@@ -5787,6 +5966,7 @@ export class ReboundRejectionAgent {
       const weakTrend = adx < Math.max(10, cfg.ANTI_WHALE_MIN_ADX);
 
       if (spikeRatio >= spikeThreshold && extremeVol && weakTrend) {
+        this.lastWhaleSpikeTs = Date.now();
         return {
           status: 'FAIL',
           reason: `Volume spike ${spikeRatio.toFixed(2)}x with weak trend (ADX ${adx.toFixed(1)}) during extreme volatility`,
@@ -9135,6 +9315,7 @@ export class ReboundRejectionAgent {
       return;
     }
 
+    const partialFraction = Math.max(0.2, Math.min(0.6, this.pos.tp1Fraction ?? 0.35));
     const partialFraction = this.resolvePartialFraction();
     const rawPartialQty = this.pos.qty * partialFraction;
     const partialQty = Number(rawPartialQty.toFixed(8));
@@ -9158,6 +9339,7 @@ export class ReboundRejectionAgent {
     if (!this.pos || !this.broker || !this.profile) return;
 
     try {
+      const partialFraction = Math.max(0.2, Math.min(0.6, this.pos.tp1Fraction ?? 0.35));
       const partialFraction = this.resolvePartialFraction();
       const rawQty = this.pos.qty * partialFraction;
       const partialQty = Number(rawQty.toFixed(8));
