@@ -306,7 +306,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     slAtrMult: 1.5,
     slAtrMultReversal: 1.2,
     slAtrMultImpulse: 1.5,
-    tpRMultiples: [0.5, 1.0, 2.0],
+    tpRMultiples: [0.8, 1.6, 2.6],
     trailAfterR: 1.0,
     trailAfterRReversal: 0.8,
     trailAfterRImpulse: 1.0,
