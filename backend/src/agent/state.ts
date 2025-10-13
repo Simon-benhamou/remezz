@@ -1191,10 +1191,54 @@ export class ReboundRejectionAgent {
         },
       });
     }
-    const bal = marginSnapshot ?? await this.broker.balance();
+    let bal = marginSnapshot ?? await this.broker.balance();
     marginSnapshot = bal;
+    let marginAdvisor = createMarginAdvisor(bal);
+    const utilNowSnapshot = marginAdvisor.utilisationPct();
+    const hasCommittedExposure = (bal?.committedUsd ?? 0) > 1
+      || (Array.isArray(bal?.positions) && bal.positions.some(pos => Math.abs(pos?.notionalUsd ?? 0) > 1));
+    const snapshotAgeMs = bal?.timestamp != null ? Math.max(0, Date.now() - bal.timestamp) : null;
+    const snapshotIsStale = snapshotAgeMs != null && snapshotAgeMs > 5_000;
+    if (snapshotIsStale || !Number.isFinite(utilNowSnapshot) || (utilNowSnapshot <= 0 && hasCommittedExposure)) {
+      try {
+        const fresh = await this.broker.balance();
+        if (fresh && (!bal?.timestamp || (fresh.timestamp ?? 0) >= (bal.timestamp ?? 0))) {
+          const previousSnapshot = bal;
+          bal = fresh;
+          marginSnapshot = fresh;
+          marginAdvisor = createMarginAdvisor(fresh);
+          recordOpsEvent({
+            level: 'info',
+            source: 'margin_guard',
+            message: 'margin_snapshot_refreshed',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile?.symbol,
+            details: {
+              previousTimestamp: previousSnapshot?.timestamp ?? null,
+              snapshotAgeMs,
+              refreshedAt: fresh.timestamp ?? Date.now(),
+              previousUtilisation: utilNowSnapshot,
+              hadCommittedExposure: hasCommittedExposure,
+            },
+          });
+        }
+      } catch (error) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'margin_guard',
+          message: 'margin_snapshot_refresh_failed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            snapshotAgeMs,
+            error: error instanceof Error ? error.message : String(error),
+            previousUtilisation: utilNowSnapshot,
+            hadCommittedExposure: hasCommittedExposure,
+          },
+        });
+      }
+    }
     this.maybeReleaseMarginHalt(bal);
-    const marginAdvisor = createMarginAdvisor(bal);
     const equityCandidate = Number.isFinite(bal?.equityUsd) ? Number(bal.equityUsd) : Number(bal?.freeUsd ?? this.profile.startBalanceUsd ?? 0);
     this.lastKnownEquityUsd = Number.isFinite(equityCandidate) && equityCandidate > 0 ? equityCandidate : Math.max(0, Number(this.profile.startBalanceUsd ?? 0));
     const nowDate = new Date();
@@ -1976,19 +2020,59 @@ export class ReboundRejectionAgent {
     const rrWeightedOk = typeof rrWeighted === 'number' ? rrWeighted >= 0.9 : false;
     const supportiveRegime = Boolean(this.regime?.shouldTrade !== false && (this.regime?.playbook || '') !== 'standby');
     const favourableLeverageSetup = dynLevEnabled && supportiveRegime && atrWindowOk && adxNow >= 25 && spreadIsOk && rrWeightedOk;
-    const preferredLeverageCap = favourableLeverageSetup ? 7 : 3;
+    const utilisationForCap = marginAdvisor.utilisationPct();
+    const allowLeverageBoost = !volatilityHigh && (guardInfo?.riskLevel ?? null) !== 'extreme';
+    const dynamicPreferredCap = (() => {
+      const baseCap = 3;
+      if (!allowLeverageBoost) return baseCap;
+      let bonus = 0;
+      if (utilisationForCap < 40) bonus += 2;
+      else if (utilisationForCap < 55) bonus += 1;
+      if (strongMomentumStopEligible && rrWeightedOk) bonus += 1;
+      return Math.min(7, baseCap + bonus);
+    })();
     if (favourableLeverageSetup) {
-      baseLev = Math.min(baseLev, preferredLeverageCap);
+      const appliedCap = Math.min(baseLev, dynamicPreferredCap);
+      baseLev = appliedCap;
       recordOpsEvent({
         level: 'info',
         source: 'leverage_guard',
         message: 'favourable_leverage_window',
         sessionId: this.sessionId || undefined,
         symbol: this.profile.symbol,
-        details: { atrPct: atrPctForLev, adx: adxNow, spreadIsOk, rrWeightedOk, cap: baseLev },
+        details: {
+          atrPct: atrPctForLev,
+          adx: adxNow,
+          spreadIsOk,
+          rrWeightedOk,
+          utilisation: utilisationForCap,
+          cap: appliedCap,
+          dynamicPreferredCap,
+          allowLeverageBoost,
+        },
       });
     } else {
-      baseLev = Math.max(Math.min(baseLev, preferredLeverageCap), Math.min(baseLev, Math.max(minLevCfg, 2)));
+      const fallbackCap = Math.max(3, dynamicPreferredCap);
+      const floorCap = Math.min(baseLev, Math.max(minLevCfg, 2));
+      baseLev = Math.max(Math.min(baseLev, fallbackCap), floorCap);
+      if (fallbackCap > 3 && allowLeverageBoost) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'leverage_guard',
+          message: 'dynamic_leverage_boost_applied',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            utilisation: utilisationForCap,
+            fallbackCap,
+            floorCap,
+            rrWeightedOk,
+            strongMomentumStopEligible,
+            dynamicPreferredCap,
+            allowLeverageBoost,
+          },
+        });
+      }
     }
     const volatilityHigh = atrPctForLev != null && atrPctForLev > 2.5;
     const levGuard = volatilityHigh ? Math.min(baseLev, 3) : baseLev;
@@ -2262,16 +2346,49 @@ export class ReboundRejectionAgent {
     let notionalUsd = qty * entry;
     if (notionalUsd > 0) {
       const marginCfg = getConfig();
-      const critical = marginCfg.MARGIN_UTIL_CRITICAL_PCT ?? 75;
-      const utilNow = marginAdvisor.utilisationPct();
-      const utilAfter = marginAdvisor.utilisationPctIf(notionalUsd, effectiveLev);
-      if (utilAfter > critical) {
+      const criticalCandidate = Number(marginCfg.MARGIN_UTIL_CRITICAL_PCT);
+      const critical = Number.isFinite(criticalCandidate) && criticalCandidate > 0 ? criticalCandidate : 75;
+      const targetCandidate = Number(marginCfg.MARGIN_UTIL_TARGET_PCT);
+      const target = Number.isFinite(targetCandidate)
+        ? Math.max(0, Math.min(critical, targetCandidate))
+        : Math.min(critical, 62);
+      const bufferCandidate = Number(marginCfg.MARGIN_UTIL_BUFFER_PCT);
+      const buffer = Number.isFinite(bufferCandidate)
+        ? Math.max(0, bufferCandidate)
+        : 2;
+      const capUtil = Math.max(0, Math.min(critical - buffer, target));
+      const utilNowRaw = marginAdvisor.utilisationPct();
+      const utilAfterRaw = marginAdvisor.utilisationPctIf(notionalUsd, effectiveLev);
+      const utilNow = Number.isFinite(utilNowRaw) ? utilNowRaw : 0;
+      const utilAfter = Number.isFinite(utilAfterRaw) ? utilAfterRaw : utilNow;
+      if (capUtil <= 0 || utilNow >= capUtil) {
+        this.noteSignalDrop('margin_projection_block', 'warn', {
+          utilNow,
+          utilNowRaw,
+          utilAfter,
+          utilAfterRaw,
+          critical,
+          capUtil,
+          target,
+          buffer,
+          reason: 'target_reached',
+          requestedNotional: notionalUsd,
+          effectiveLeverage: effectiveLev,
+        });
+        this.entering = false;
+        return;
+      }
+      if (utilAfter > capUtil) {
         const denom = utilAfter - utilNow;
-        const scale = denom > 0 ? (critical - utilNow) / denom : 0;
-        const tolerance = 0.2;
-        if (scale > tolerance) {
-          const clamp = Math.max(0, Math.min(1, scale));
-          const adjustedNotional = notionalUsd * clamp;
+        const scaleRaw = denom > 0 ? (capUtil - utilNow) / denom : 0;
+        const minScaleCandidate = Number(marginCfg.MARGIN_PROJECTION_MIN_SCALE);
+        const minScale = Number.isFinite(minScaleCandidate)
+          ? Math.max(0, Math.min(1, minScaleCandidate))
+          : 0.15;
+        const clamp = Math.max(0, Math.min(1, scaleRaw));
+        if (clamp > minScale) {
+          const requestedNotional = notionalUsd;
+          const adjustedNotional = requestedNotional * clamp;
           qty = adjustedNotional / Math.max(entry, 1e-8);
           notional = adjustedNotional;
           notionalUsd = adjustedNotional;
@@ -2283,19 +2400,34 @@ export class ReboundRejectionAgent {
             symbol: this.profile?.symbol,
             details: {
               utilNow,
+              utilNowRaw,
               utilAfter,
+              utilAfterRaw,
               critical,
+              target,
+              buffer,
+              capUtil,
               scale: clamp,
-              requestedNotional: notionalUsd / clamp,
+              minScale,
+              requestedNotional,
               adjustedNotional,
             },
           });
         } else {
           this.noteSignalDrop('margin_projection_block', 'warn', {
             utilNow,
+            utilNowRaw,
             utilAfter,
+            utilAfterRaw,
             critical,
-            tolerance,
+            capUtil,
+            target,
+            buffer,
+            minScale,
+            scale: clamp,
+            reason: 'scale_below_threshold',
+            requestedNotional: notionalUsd,
+            effectiveLeverage: effectiveLev,
           });
           this.entering = false;
           return;
