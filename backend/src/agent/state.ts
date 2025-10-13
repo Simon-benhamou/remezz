@@ -653,7 +653,10 @@ export class ReboundRejectionAgent {
           const tp = (this.plan.rPrices || []).map(x => entry + dir * x.r * this.plan!.stopDistance);
           const now = Date.now();
           const planAny = this.plan as any;
-          const openLeverage = (expo as { leverage?: number } | null)?.leverage ?? this.profile.maxLeverage;
+          const leverageRaw = (expo as { leverage?: number } | null)?.leverage;
+          const openLeverage = typeof leverageRaw === 'number' && Number.isFinite(leverageRaw)
+            ? leverageRaw
+            : this.profile.maxLeverage;
 
           this.pos = {
             side,
@@ -684,12 +687,6 @@ export class ReboundRejectionAgent {
               highWatermark: entry,
               lastUpdateTs: now,
             },
-            openLeverage: (() => {
-              const leverage = (expo as any)?.leverage;
-              return typeof leverage === 'number' && Number.isFinite(leverage)
-                ? leverage
-                : this.profile.maxLeverage;
-            })(),
             openLeverage,
           } as any;
           this.state = 'MANAGE';
@@ -1495,11 +1492,9 @@ export class ReboundRejectionAgent {
         condition: () => true,
       },
     ];
-    const matchingProfile = tpWeightProfilesConfig.find(cfg => cfg.condition());
-    const tpWeightProfile: number[] = matchingProfile?.profile
-      ?? tpWeightProfilesConfig[tpWeightProfilesConfig.length - 1]!.profile;
     const defaultProfile = tpWeightProfilesConfig[tpWeightProfilesConfig.length - 1]!.profile;
-    const tpWeightProfile: number[] = tpWeightProfilesConfig.find(cfg => cfg.condition())?.profile ?? defaultProfile;
+    const matchingProfile = tpWeightProfilesConfig.find(cfg => cfg.condition());
+    const tpWeightProfile: number[] = matchingProfile?.profile ?? defaultProfile;
     if (rMultiples.length > 0) {
       const baseWeights = tpWeightProfile;
       const fallbackWeight = baseWeights[baseWeights.length - 1] ?? 0.1;
