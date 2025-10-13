@@ -653,6 +653,8 @@ export class ReboundRejectionAgent {
           const tp = (this.plan.rPrices || []).map(x => entry + dir * x.r * this.plan!.stopDistance);
           const now = Date.now();
           const planAny = this.plan as any;
+          const openLeverage = (expo as { leverage?: number } | null)?.leverage ?? this.profile.maxLeverage;
+
           this.pos = {
             side,
             entry,
@@ -682,7 +684,7 @@ export class ReboundRejectionAgent {
               highWatermark: entry,
               lastUpdateTs: now,
             },
-            openLeverage: expo.leverage || this.profile.maxLeverage,
+            openLeverage,
           } as any;
           this.state = 'MANAGE';
           broadcast('agent_state', { state: this.state, pos: this.pos }, this.profile.symbol, this.sessionId || undefined);
@@ -1443,7 +1445,8 @@ export class ReboundRejectionAgent {
         condition: () => true,
       },
     ];
-    let tpWeightProfile: number[] = tpWeightProfilesConfig.find(cfg => cfg.condition()).profile;
+    const defaultProfile = tpWeightProfilesConfig[tpWeightProfilesConfig.length - 1]!.profile;
+    const tpWeightProfile: number[] = tpWeightProfilesConfig.find(cfg => cfg.condition())?.profile ?? defaultProfile;
     if (rMultiples.length > 0) {
       const baseWeights = tpWeightProfile;
       const fallbackWeight = baseWeights[baseWeights.length - 1] ?? 0.1;
@@ -9315,8 +9318,10 @@ export class ReboundRejectionAgent {
       return;
     }
 
-    const partialFraction = Math.max(0.2, Math.min(0.6, this.pos.tp1Fraction ?? 0.35));
-    const partialFraction = this.resolvePartialFraction();
+    const partialFraction = Math.max(
+      0.2,
+      Math.min(0.6, this.pos.tp1Fraction ?? this.resolvePartialFraction() ?? 0.35),
+    );
     const rawPartialQty = this.pos.qty * partialFraction;
     const partialQty = Number(rawPartialQty.toFixed(8));
     if (!(partialQty > 0 && partialQty < this.pos.qty)) {
@@ -9339,8 +9344,10 @@ export class ReboundRejectionAgent {
     if (!this.pos || !this.broker || !this.profile) return;
 
     try {
-      const partialFraction = Math.max(0.2, Math.min(0.6, this.pos.tp1Fraction ?? 0.35));
-      const partialFraction = this.resolvePartialFraction();
+      const partialFraction = Math.max(
+        0.2,
+        Math.min(0.6, this.pos.tp1Fraction ?? this.resolvePartialFraction() ?? 0.35),
+      );
       const rawQty = this.pos.qty * partialFraction;
       const partialQty = Number(rawQty.toFixed(8));
       if (!(partialQty > 0 && partialQty < this.pos.qty)) return;
