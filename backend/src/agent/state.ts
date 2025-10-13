@@ -164,6 +164,28 @@ type ExitDiagnosticsPayload = {
   };
 };
 
+type MomentumAwaitContext = {
+  awaitingSince: number | null;
+  avgSlopePct: number;
+  lastSlopePct: number;
+  lastSlopeRaw: number;
+  lastLogTs: number;
+  lastReason: string | null;
+  unlocked: boolean;
+};
+
+function createMomentumAwaitContext(): MomentumAwaitContext {
+  return {
+    awaitingSince: null,
+    avgSlopePct: 0,
+    lastSlopePct: 0,
+    lastSlopeRaw: 0,
+    lastLogTs: 0,
+    lastReason: null,
+    unlocked: false,
+  };
+}
+
 type QualityAssessmentSnapshot = {
   totalPoints: number;
   maxPoints: number;
@@ -333,6 +355,7 @@ export class ReboundRejectionAgent {
   private requireStrongerConfirmation = false; // Support break: flag when price near weak support
   private volumeRatioHistory: number[] = [];
   private lastWhaleSpikeTs = 0;
+  private momentumAwaitContext: MomentumAwaitContext = createMomentumAwaitContext();
   private aiBiasOverride: {
     bias: 'long' | 'short';
     originalBias: 'long' | 'short' | 'none';
@@ -1058,7 +1081,9 @@ export class ReboundRejectionAgent {
       } else {
         const confirmation = this.confirmEntrySignal(validationSnap, mktPrice, adaptiveZone, this.plan.bias);
         if (!confirmation.confirmed) {
-          console.log(`Entry not confirmed: ${confirmation.reason}`);
+          if (confirmation.shouldLog !== false) {
+            console.log(`Entry not confirmed: ${confirmation.reason}`);
+          }
           this.noteSignalDrop('bias_confirmation_failed', 'info', { reason: confirmation.reason });
           return; // Skip entry until all confirmations pass
         }
@@ -3859,7 +3884,7 @@ export class ReboundRejectionAgent {
     currentPrice: number,
     entryZone: { from: number; to: number; mid: number },
     bias: 'long' | 'short'
-  ): { confirmed: boolean; reason: string } {
+  ): { confirmed: boolean; reason: string; shouldLog?: boolean } {
     const now = Date.now();
     const priceInZone = currentPrice >= entryZone.from && currentPrice <= entryZone.to;
 
@@ -3867,6 +3892,7 @@ export class ReboundRejectionAgent {
     if (priceInZone && this.priceInZoneStartTime === 0) {
       this.priceInZoneStartTime = now;
       this.resetVolumeRatioHistory();
+      this.resetMomentumAwaitContext();
       return { confirmed: false, reason: 'Price just entered zone - waiting 5min confirmation' };
     }
 
@@ -3874,6 +3900,7 @@ export class ReboundRejectionAgent {
     if (!priceInZone) {
       this.priceInZoneStartTime = 0;
       this.resetVolumeRatioHistory();
+      this.resetMomentumAwaitContext();
       return { confirmed: false, reason: 'Price outside zone' };
     }
 
@@ -3883,13 +3910,57 @@ export class ReboundRejectionAgent {
     const timeInZoneMin = timeInZoneMs / 60000;
 
     const recentSlope = this.calculateRecentSlope(snap, 5); // Last 5 candles
-    const momentumReversed = (bias === 'long' && recentSlope > 0) || (bias === 'short' && recentSlope < 0);
+    const emaBasis = Number.isFinite(snap.ema20) && Math.abs(snap.ema20) > 1e-8
+      ? Math.abs(snap.ema20)
+      : Math.max(1e-8, Math.abs(currentPrice));
+    const slopePct = emaBasis > 0 ? (recentSlope / emaBasis) * 100 : 0;
 
     const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
     const lastVolume = snap.volume || 0;
     const rawVolumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
     const adxValue = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
+    const adxSlopeVal = Number.isFinite(snap.adxSlope) ? snap.adxSlope : 0;
     const breakoutActive = this.runtimeZoneDiagnostics?.breakoutActive ?? false;
+
+    const momentumCtx = this.momentumAwaitContext;
+    const unlockThresholdPct = bias === 'long' ? 0.05 : -0.05;
+    const relockThresholdPct = bias === 'long' ? -0.05 : 0.05;
+
+    if (momentumCtx.unlocked) {
+      const shouldRelock = bias === 'long' ? slopePct <= relockThresholdPct : slopePct >= relockThresholdPct;
+      if (shouldRelock) {
+        momentumCtx.unlocked = false;
+      }
+    }
+
+    let momentumReversed = momentumCtx.unlocked;
+    if (!momentumReversed) {
+      const shouldUnlock = bias === 'long' ? slopePct >= unlockThresholdPct : slopePct <= unlockThresholdPct;
+      if (shouldUnlock) {
+        momentumCtx.unlocked = true;
+        momentumReversed = true;
+      }
+    }
+
+    const rsiValue = Number.isFinite(snap.rsi14) ? Number(snap.rsi14) : null;
+    const ema20 = Number.isFinite(snap.ema20) ? Number(snap.ema20) : 0;
+    const ema50 = Number.isFinite(snap.ema50) ? Number(snap.ema50) : 0;
+
+    const adxImproving = adxSlopeVal > 0;
+    const comboVolumeSignal = rawVolumeRatio >= 1.1;
+    const comboRsiSignal = rsiValue != null ? (bias === 'long' ? rsiValue >= 55 : rsiValue <= 45) : false;
+    const comboEmaSignal = bias === 'long'
+      ? ema20 > 0 && ema50 > 0 && ema20 >= ema50 && slopePct >= -0.02
+      : ema20 > 0 && ema50 > 0 && ema20 <= ema50 && slopePct <= 0.02;
+
+    const momentumSignalsMet = [comboVolumeSignal, adxImproving, comboRsiSignal, comboEmaSignal].filter(Boolean).length;
+    const slopeNotStronglyAgainst = bias === 'long' ? slopePct > -0.2 : slopePct < 0.2;
+
+    if (!momentumReversed && slopeNotStronglyAgainst && momentumSignalsMet >= 2) {
+      momentumCtx.unlocked = true;
+      momentumReversed = true;
+    }
+
     const fastTrackEligible = breakoutActive || (momentumReversed && adxValue >= 28 && rawVolumeRatio >= 1.25);
     const fastTrackTimeMs = fastTrackEligible ? Math.min(adaptiveTimeMs, 2 * 60 * 1000) : adaptiveTimeMs;
     const breakoutMode = (this.plan?.plan?.meta?.playbook ?? null) === 'momentum_breakout' || breakoutActive;
@@ -3901,7 +3972,6 @@ export class ReboundRejectionAgent {
     const previousSample = this.volumeRatioHistory.length
       ? this.volumeRatioHistory[this.volumeRatioHistory.length - 1]
       : undefined;
-    const adxSlopeVal = Number.isFinite(snap.adxSlope) ? snap.adxSlope : 0;
     const whaleCooldownMs = 120_000;
     const whaleRecently = this.lastWhaleSpikeTs > 0 && now - this.lastWhaleSpikeTs < whaleCooldownMs;
     const volumeRising = rawVolumeRatio >= 1.05 && (previousSample == null || rawVolumeRatio >= previousSample * 1.03);
@@ -3921,10 +3991,50 @@ export class ReboundRejectionAgent {
     }
 
     if (!momentumReversed) {
-      return {
-        confirmed: false,
-        reason: `Waiting for momentum reversal (slope: ${recentSlope.toFixed(4)}, need ${bias === 'long' ? 'positive' : 'negative'})`
-      };
+      momentumCtx.awaitingSince = momentumCtx.awaitingSince ?? now;
+      momentumCtx.lastSlopePct = slopePct;
+      momentumCtx.lastSlopeRaw = recentSlope;
+      const smoothing = 0.7;
+      momentumCtx.avgSlopePct = Number.isFinite(momentumCtx.avgSlopePct)
+        ? momentumCtx.avgSlopePct * smoothing + slopePct * (1 - smoothing)
+        : slopePct;
+
+      const elapsedMs = now - momentumCtx.awaitingSince;
+      const MOMENTUM_TIMEOUT_MS = 6 * 60 * 1000;
+      if (elapsedMs >= MOMENTUM_TIMEOUT_MS) {
+        const slopeRelaxThreshold = bias === 'long' ? -0.03 : 0.03;
+        const slopeWithinRelax = bias === 'long' ? slopePct >= slopeRelaxThreshold : slopePct <= slopeRelaxThreshold;
+        const volumeStrong = rawVolumeRatio >= 1.2;
+        const adxHealthy = adxValue >= 20 && adxSlopeVal >= 0;
+        if (slopeWithinRelax && volumeStrong && adxHealthy) {
+          momentumCtx.unlocked = true;
+          momentumReversed = true;
+        }
+      }
+
+      if (!momentumReversed) {
+        const formatElapsed = (ms: number) => {
+          const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+          const minutes = Math.floor(totalSeconds / 60);
+          const seconds = totalSeconds % 60;
+          return `${minutes}m${seconds.toString().padStart(2, '0')}s`;
+        };
+        const elapsedStr = formatElapsed(elapsedMs);
+        const avgSlopeDisplay = momentumCtx.avgSlopePct.toFixed(2);
+        const lastSlopeDisplay = slopePct.toFixed(2);
+        const reason = `Still waiting for momentum reversal — elapsed ${elapsedStr}, slope avg ${avgSlopeDisplay}% (last ${lastSlopeDisplay}%), vol ${rawVolumeRatio.toFixed(2)}x`;
+        const logIntervalMs = 60 * 1000;
+        const shouldLog = now - momentumCtx.lastLogTs >= logIntervalMs;
+        if (shouldLog) {
+          momentumCtx.lastLogTs = now;
+        }
+        momentumCtx.lastReason = reason;
+        return { confirmed: false, reason, shouldLog };
+      }
+    }
+
+    if (momentumReversed) {
+      this.resetMomentumAwaitContext(true);
     }
 
     // 3️⃣ VOLUME CHECK: Must exceed 1.2x average
@@ -3938,7 +4048,6 @@ export class ReboundRejectionAgent {
 
     const cmf20 = Number.isFinite(snap.cmf20) ? snap.cmf20 ?? 0 : 0;
     const cmfAligned = bias === 'long' ? cmf20 > 0.03 : cmf20 < -0.03;
-    const adxImproving = Number.isFinite(snap.adxSlope) ? snap.adxSlope > 0 : false;
     const prevRatio = prevVolumeRatio ?? rawVolumeRatio;
     const volumeSpike = Number.isFinite(rawVolumeRatio)
       && rawVolumeRatio >= Math.max(0.95, adaptiveNeed * 0.85)
@@ -4033,6 +4142,11 @@ export class ReboundRejectionAgent {
 
   private resetVolumeRatioHistory(): void {
     this.volumeRatioHistory = [];
+  }
+
+  private resetMomentumAwaitContext(preserveUnlocked = false): void {
+    const unlocked = preserveUnlocked ? this.momentumAwaitContext.unlocked : false;
+    this.momentumAwaitContext = { ...createMomentumAwaitContext(), unlocked };
   }
 
   private updateVolumeRatioHistory(ratio: number): { smoothed: number; previous?: number } {
