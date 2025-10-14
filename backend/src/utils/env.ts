@@ -21,6 +21,10 @@ export type Cfg = {
   MIN_STOP_PCT: number;    // minimum stop distance in % of price
   MIN_TP_PCT: number;      // minimum TP distance in % of price (for first TP)
   MIN_FIRST_R: number;     // minimum R for first TP
+  TARGET_TP1_PCT: number;
+  TARGET_TP2_PCT: number;
+  TARGET_TP3_PCT: number;
+  TARGET_TP1_MIN_PNL_USD: number;
   USE_GROK: boolean;
   GROK_API_KEY?: string;
   GROK_BASE_URL?: string;
@@ -289,12 +293,16 @@ export function getConfig(): Cfg {
     API_RATE_LIMIT_MONITOR_WINDOW_MS: Number(e.API_RATE_LIMIT_MONITOR_WINDOW_MS || "60000"),
     API_RATE_LIMIT_MONITOR_PER_IP: Number(e.API_RATE_LIMIT_MONITOR_PER_IP || "120"),
     API_RATE_LIMIT_MONITOR_PER_KEY: Number(e.API_RATE_LIMIT_MONITOR_PER_KEY || "240"),
-    DEFAULT_RISK_PCT: Number(e.DEFAULT_RISK_PCT || "1.0"),
+    DEFAULT_RISK_PCT: Number(e.DEFAULT_RISK_PCT || "2.0"),
     DEFAULT_MAX_LEVERAGE: Number(e.DEFAULT_MAX_LEVERAGE || "10"),
     DAILY_LOSS_LIMIT_PCT: Number(e.DAILY_LOSS_LIMIT_PCT || "5"),
     MIN_STOP_PCT: Number(e.MIN_STOP_PCT || "0.2"),
     MIN_TP_PCT: Number(e.MIN_TP_PCT || "0.4"),
     MIN_FIRST_R: Number(e.MIN_FIRST_R || "1.5"),
+    TARGET_TP1_PCT: Number(e.TARGET_TP1_PCT || "1.5"),
+    TARGET_TP2_PCT: Number(e.TARGET_TP2_PCT || "3"),
+    TARGET_TP3_PCT: Number(e.TARGET_TP3_PCT || "5"),
+    TARGET_TP1_MIN_PNL_USD: Number(e.TARGET_TP1_MIN_PNL_USD || "30"),
     USE_GROK: (e.USE_GROK || "true") === "true",
     GROK_API_KEY: e.GROK_API_KEY || "",
     GROK_BASE_URL: e.GROK_BASE_URL || "https://api.x.ai/v1/chat/completions",
@@ -339,16 +347,16 @@ export function getConfig(): Cfg {
     GROK_ANALYSIS_DAILY_MAX: Number(e.GROK_ANALYSIS_DAILY_MAX || "10"), // augmenté pour plus d'analyses
     GROK_REVERSAL_PCT_THRESHOLD: Number(e.GROK_REVERSAL_PCT_THRESHOLD || "3.5"),
     STALE_TICK_SEC: Number(e.STALE_TICK_SEC || "300"),  // 5 min instead of 2 min for crypto
-    MARGIN_UTIL_WARN_PCT: Number(e.MARGIN_UTIL_WARN_PCT || "55"),
-    MARGIN_UTIL_CRITICAL_PCT: Number(e.MARGIN_UTIL_CRITICAL_PCT || "75"),
-    MARGIN_UTIL_TARGET_PCT: Number(e.MARGIN_UTIL_TARGET_PCT || e.MARGIN_HALT_TARGET_PCT || "62"),
+    MARGIN_UTIL_WARN_PCT: Number(e.MARGIN_UTIL_WARN_PCT || "65"),
+    MARGIN_UTIL_CRITICAL_PCT: Number(e.MARGIN_UTIL_CRITICAL_PCT || "90"),
+    MARGIN_UTIL_TARGET_PCT: Number(e.MARGIN_UTIL_TARGET_PCT || e.MARGIN_HALT_TARGET_PCT || "80"),
     MARGIN_UTIL_BUFFER_PCT: Number(e.MARGIN_UTIL_BUFFER_PCT || "2"),
     MARGIN_PROJECTION_MIN_SCALE: Number(e.MARGIN_PROJECTION_MIN_SCALE || "0.15"),
     MARGIN_LIQUIDATION_MIN_DIST_PCT: Number(e.MARGIN_LIQUIDATION_MIN_DIST_PCT || "12"),
     MARGIN_CONCENTRATION_WARN_PCT: Number(e.MARGIN_CONCENTRATION_WARN_PCT || "35"),
     MARGIN_MONITOR_INTERVAL_MS: Number(e.MARGIN_MONITOR_INTERVAL_MS || "30000"),
-    MARGIN_HALT_TARGET_PCT: Number(e.MARGIN_HALT_TARGET_PCT || "68"),
-    MARGIN_HALT_RESUME_PCT: Number(e.MARGIN_HALT_RESUME_PCT || "70"),
+    MARGIN_HALT_TARGET_PCT: Number(e.MARGIN_HALT_TARGET_PCT || "80"),
+    MARGIN_HALT_RESUME_PCT: Number(e.MARGIN_HALT_RESUME_PCT || "78"),
     MARGIN_HALT_RELEASE_COOLDOWN_MS: Number(e.MARGIN_HALT_RELEASE_COOLDOWN_MS || "10000"),
     ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),

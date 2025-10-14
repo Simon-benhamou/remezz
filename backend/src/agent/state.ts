@@ -1381,6 +1381,15 @@ export class ReboundRejectionAgent {
       : entry + this.plan.stopDistance;
     let stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
+    const targetSizingCfg = getConfig();
+    const targetTp1BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP1_PCT ?? targetSizingCfg.MIN_TP_PCT ?? 0));
+    const targetTp2BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP2_PCT ?? 0));
+    const targetTp3BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP3_PCT ?? 0));
+    const targetMinTp1PnlUsd = Math.max(0, Number(targetSizingCfg.TARGET_TP1_MIN_PNL_USD ?? 0));
+    const targetSizingEnabled = targetMinTp1PnlUsd > 0
+      || targetTp1BasePct > 0
+      || targetTp2BasePct > 0
+      || targetTp3BasePct > 0;
     if (playbook === 'momentum_breakout') {
       const momentumTargets = [1.0, 2.0, 3.0];
       this.plan.plan.risk.tp = momentumTargets.map(value => ({ type: 'R', value }));
@@ -1462,6 +1471,40 @@ export class ReboundRejectionAgent {
     }
     const riskAbs = Math.max(1e-9, Math.abs(entry - stop));
     const stopForR = Math.max(this.plan.stopDistance, Math.abs(entry - stop), 1e-8);
+    let forcedTpPercents: number[] | null = null;
+    if (targetSizingEnabled) {
+      const baseTp1Pct = targetTp1BasePct > 0 ? targetTp1BasePct : 1.5;
+      const baseTp2Pct = targetTp2BasePct > 0 ? targetTp2BasePct : 3;
+      const baseTp3Pct = targetTp3BasePct > 0 ? targetTp3BasePct : 5;
+      const ratio2 = baseTp1Pct > 0 ? baseTp2Pct / baseTp1Pct : 2;
+      const ratio3 = baseTp1Pct > 0 ? baseTp3Pct / baseTp1Pct : (baseTp3Pct > 0 ? baseTp3Pct / 1.5 : 10 / 3);
+      const atrCandidates = [
+        typeof this.plan?.atrPct === 'number' ? this.plan.atrPct : null,
+        typeof snap?.atrPct === 'number' ? snap.atrPct : null,
+        typeof (validationSnap as any)?.atrPct === 'number' ? (validationSnap as any).atrPct : null,
+      ];
+      const atrPctContext = atrCandidates.find((value): value is number => value != null && Number.isFinite(value) && value > 0) ?? 0;
+      const atrBoostPct = atrPctContext > 0 ? atrPctContext * 0.6 : 0;
+      const tp1Pct = Math.max(baseTp1Pct, atrBoostPct);
+      const tp2Pct = Math.max(baseTp2Pct, tp1Pct * (ratio2 > 0 ? ratio2 : 2));
+      const tp3Pct = Math.max(baseTp3Pct, tp1Pct * (ratio3 > 0 ? ratio3 : 10 / 3));
+      forcedTpPercents = [tp1Pct, tp2Pct, tp3Pct];
+    }
+    if (forcedTpPercents) {
+      const forcedTpPrices = forcedTpPercents.map((pct) => {
+        const pctFraction = pct / 100;
+        const price = entry * (1 + dir0 * pctFraction);
+        const safePrice = dir0 > 0 ? price : Math.max(price, 1e-8);
+        return round4(safePrice);
+      });
+      tp = forcedTpPrices;
+      this.plan.rPrices = forcedTpPrices.map((price) => {
+        const diff = Math.abs(price - entry);
+        const r = stopForR > 0 ? diff / stopForR : 0;
+        return { r: roundR(Math.max(r, 1e-6)), price };
+      });
+      this.plan.plan.risk.tp = this.plan.rPrices.map(({ r }) => ({ type: 'R', value: r }));
+    }
     const flowStrongForTp = adxValue >= 35
       && slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2)
       && (volumeRatio ?? 0) >= 1.15
@@ -1500,7 +1543,7 @@ export class ReboundRejectionAgent {
     // Structured configuration for TP weight profiles and their threshold conditions
     const tpWeightProfilesConfig = [
       {
-        profile: [0.27, 0.38, 0.35],
+        profile: [0.3, 0.35, 0.35],
         condition: () =>
           adxValue >= 35 &&
           (volumeRatio ?? 0) >= 1.2 &&
@@ -1533,7 +1576,7 @@ export class ReboundRejectionAgent {
     }
     const tpWeightedAbs = rrWeighted != null ? rrWeighted * stopForR : undefined;
     const tpWeightedPct = tpWeightedAbs != null && entry > 0 ? (tpWeightedAbs / entry) * 100 : undefined;
-    const tp1Fraction = Math.max(0.28, Math.min(0.34, tpWeightProfile[0] ?? 0.3));
+    const tp1Fraction = Math.max(0.3, Math.min(0.35, tpWeightProfile[0] ?? 0.3));
     planAny._tpWeightProfile = tpWeightProfile;
     planAny._tp1Fraction = tp1Fraction;
     planAny._stopBasis = stopBasis;
@@ -1859,7 +1902,8 @@ export class ReboundRejectionAgent {
     let qualityMultiplier = 1.0;
     try {
       const rawQualityAdjustment = this.computeQualityBasedSizing(snap!);
-      qualityMultiplier = Math.max(0.9, Math.min(1.4, rawQualityAdjustment));
+      const qualityFloor = targetSizingEnabled ? 1.0 : 0.9;
+      qualityMultiplier = Math.max(qualityFloor, Math.min(1.4, rawQualityAdjustment));
       dynamicRiskPct *= qualityMultiplier;
       recordOpsEvent({
         level: 'info',
@@ -1977,6 +2021,12 @@ export class ReboundRejectionAgent {
 
     const stopDistanceAbs = Math.abs(entry - stop);
     const stopPct = entry > 0 ? (stopDistanceAbs / entry) * 100 : 0;
+    const tp1Price = Array.isArray(tp) && tp.length > 0
+      ? tp[0]
+      : (this.plan.rPrices?.[0]?.price ?? null);
+    const tp1DistanceAbs = tp1Price != null && Number.isFinite(tp1Price)
+      ? Math.abs(tp1Price - entry)
+      : null;
     const quantSizerResult = this.positionSizer.computeSize({
       equityUsd: Math.max(this.lastKnownEquityUsd, usableBalance),
       entryPrice: entry,
@@ -2057,7 +2107,10 @@ export class ReboundRejectionAgent {
     }
 
     const dynLevEnabled = this.profile.dynamicLeverage !== false; // default true
-    const minLevCfg = Math.max(1, Number(this.profile.minLeverage || 1));
+    let minLevCfg = Math.max(1, Number(this.profile.minLeverage || 1));
+    if (targetSizingEnabled && stopPct <= 1.05 && dynamicRiskPct <= 2.05) {
+      minLevCfg = Math.max(minLevCfg, 2);
+    }
     const spreadLimitBps = this.quantConfig?.filters?.maxSpreadBps ?? 16;
     const spreadIsOk = spreadBps == null || spreadBps <= spreadLimitBps;
     const adxNow = Number((snap as any)?.adx14 ?? validationSnap.adx14 ?? 0);
@@ -2141,13 +2194,39 @@ export class ReboundRejectionAgent {
     const sizing = await computeQtyNotional({
       balanceUsd: usableBalance,
       riskPct: dynamicRiskPct,
-      stopDistanceAbs: Math.abs(entry - stop),
+      stopDistanceAbs,
       entryPrice: entry,
       requestedLeverage: effectiveLev,
       symbol: this.profile.symbol,
       mode: this.profile.mode,
       leverageCap: this.profile.leverageCap,
+      tp1DistanceAbs,
+      minTp1PnlUsd: targetSizingEnabled ? targetMinTp1PnlUsd : undefined,
     });
+    if (targetSizingEnabled && !sizing.meetsMinPnLTarget && targetMinTp1PnlUsd > 0) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'min_pnl_target_block',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          desiredNotional: sizing.desiredNotional,
+          allowedNotional: sizing.notional,
+          minPnLNotional: sizing.minPnLNotional,
+          targetMinTp1PnlUsd,
+        },
+      });
+      this.noteSignalDrop('ev_too_small', 'info', {
+        desiredNotional: sizing.desiredNotional,
+        allowedNotional: sizing.notional,
+        minPnLNotional: sizing.minPnLNotional,
+        tp1DistanceAbs,
+        targetMinTp1PnlUsd,
+      });
+      this.entering = false;
+      return;
+    }
     this.profile.leverageCap = sizing.leverageCap;
     effectiveLev = Math.min(effectiveLev, sizing.leverageCap.resolved);
     if (sizingMode === 'budget') {
@@ -2203,11 +2282,11 @@ export class ReboundRejectionAgent {
     const equityFloor = bal.equityUsd * 0.005;
     const dynamicFloor = Math.max(500, equityFloor);
     const minTradeNotional = Math.max(configMinNotional, dynamicFloor);
-    const HALT_CRITICAL = 80;
-    const HALT_TARGET = 70;
-    const ENTRY_PROJ_CAP = 72;
+    const HALT_CRITICAL = 90;
+    const HALT_TARGET = 80;
+    const ENTRY_PROJ_CAP = 85;
     const FLOOR_TOLERANCE = 5;
-    const FLOOR_UTIL_LIMIT = 78;
+    const FLOOR_UTIL_LIMIT = 88;
 
     if (notional > 0) {
       const leverageForUtil = Math.max(levGuard, 1);
@@ -2497,12 +2576,14 @@ export class ReboundRejectionAgent {
       const dir = side === 'buy' ? 1 : -1;
       const priceDiff = dir * (tp1ForEv - entry);
       const expectedPnL1 = qty > 0 && priceDiff > 0 ? qty * priceDiff : 0;
-      if (expectedPnL1 < 3) {
+      const minExpectedTp1Pnl = targetSizingEnabled && targetMinTp1PnlUsd > 0 ? targetMinTp1PnlUsd : 3;
+      if (expectedPnL1 + 1e-6 < minExpectedTp1Pnl) {
         this.noteSignalDrop('ev_too_small', 'info', {
           expectedPnL1,
           qty,
           entry,
           tp1: tp1ForEv,
+          minExpectedTp1Pnl,
         });
         this.entering = false;
         return;

@@ -60,19 +60,32 @@ export type SizingInput = {
   symbol: string;
   mode?: 'paper' | 'live';
   leverageCap?: ResolvedLeverageCap;
+  tp1DistanceAbs?: number | null;
+  minTp1PnlUsd?: number;
 };
 
 export type SizingResult = {
   notional: number;
   leverageCap: ResolvedLeverageCap;
+  desiredNotional: number;
+  minPnLNotional?: number | null;
+  meetsMinPnLTarget: boolean;
 };
 
-export async function computeQtyNotional({ balanceUsd, riskPct, stopDistanceAbs, entryPrice, requestedLeverage, symbol, mode, leverageCap: inputCap }: SizingInput): Promise<SizingResult> {
+export async function computeQtyNotional({ balanceUsd, riskPct, stopDistanceAbs, entryPrice, requestedLeverage, symbol, mode, leverageCap: inputCap, tp1DistanceAbs, minTp1PnlUsd }: SizingInput): Promise<SizingResult> {
   const leverageCap = inputCap ?? await resolveLeverageCap({ symbol, requestedMaxLeverage: requestedLeverage, mode });
   const riskDollar = balanceUsd * (riskPct/100);
-  const stopPct = (stopDistanceAbs/entryPrice)*100;
-  const notional = stopPct > 0 ? (riskDollar / (stopPct/100)) : 0;
+  const stopPct = entryPrice > 0 ? (stopDistanceAbs/entryPrice)*100 : 0;
+  const notionalByRisk = stopPct > 0 ? (riskDollar / (stopPct/100)) : 0;
+  const tp1Pct = entryPrice > 0 && tp1DistanceAbs != null && tp1DistanceAbs > 0
+    ? (tp1DistanceAbs / entryPrice) * 100
+    : 0;
+  const minTargetUsd = Number.isFinite(minTp1PnlUsd) && (minTp1PnlUsd as number) > 0 ? Number(minTp1PnlUsd) : 0;
+  const notionalByPnL = tp1Pct > 0 && minTargetUsd > 0 ? (minTargetUsd / (tp1Pct / 100)) : 0;
+  const desiredNotional = Math.max(notionalByRisk, notionalByPnL);
   const maxNotional = balanceUsd * leverageCap.resolved;
-  const clamped = Math.max(0, Math.min(notional, maxNotional));
-  return { notional: clamped, leverageCap };
+  const clamped = Math.max(0, Math.min(desiredNotional, maxNotional));
+  const minPnLNotional = notionalByPnL > 0 ? notionalByPnL : null;
+  const meetsMinPnLTarget = !(minPnLNotional && minPnLNotional > 0) || clamped + 1e-6 >= (minPnLNotional as number);
+  return { notional: clamped, leverageCap, desiredNotional, minPnLNotional, meetsMinPnLTarget };
 }
