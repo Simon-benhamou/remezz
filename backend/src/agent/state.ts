@@ -459,6 +459,27 @@ export class ReboundRejectionAgent {
   private requireStrongerConfirmation = false; // Support break: flag when price near weak support
   private volumeRatioHistory: number[] = [];
   private lastWhaleSpikeTs = 0;
+  private whaleQuarantine: {
+    active: boolean;
+    triggeredAt: number;
+    until: number;
+    reason: string;
+    adxAtTrigger: number;
+    atrPctAtTrigger: number;
+    spikeRatio: number;
+    threshold: number;
+    logged: boolean;
+  } | null = null;
+  private volumeProbeState: {
+    active: boolean;
+    lastAttemptTs: number;
+    orderId: string | null;
+    side: 'buy' | 'sell';
+    status: 'new' | 'open' | 'partially_filled' | 'filled' | 'canceled' | 'rejected';
+    targetNotional: number;
+    timeoutMs: number;
+  } | null = null;
+  private volumeProbeTimeout: NodeJS.Timeout | null = null;
   private momentumAwaitContext: MomentumAwaitContext = createMomentumAwaitContext();
   private aiBiasOverride: {
     bias: 'long' | 'short';
@@ -486,6 +507,7 @@ export class ReboundRejectionAgent {
   private recentTrades: { win: boolean; pnlPct: number; timestamp: number }[] = [];
   private qualityThresholdAdjustment = 0; // Dynamic adjustment to quality thresholds
   private lastLossStreakNotified = 0;
+  private lastMomentumTimeoutTs = 0;
   
   // 🆕 Breakout mode tracking
   private lastTradeWasWin = false;
@@ -4533,6 +4555,7 @@ export class ReboundRejectionAgent {
     bias: 'long' | 'short'
   ): { confirmed: boolean; reason: string; shouldLog?: boolean } {
     const now = Date.now();
+    const cfg = getConfig();
     const priceInZone = currentPrice >= entryZone.from && currentPrice <= entryZone.to;
 
     // Track when price entered zone
@@ -4593,6 +4616,14 @@ export class ReboundRejectionAgent {
     const ema20 = Number.isFinite(snap.ema20) ? Number(snap.ema20) : 0;
     const ema50 = Number.isFinite(snap.ema50) ? Number(snap.ema50) : 0;
 
+    const stopDistance = Number.isFinite(this.plan?.stopDistance)
+      ? Number(this.plan?.stopDistance)
+      : 0;
+    const firstR = Number(this.plan?.rPrices?.[0]?.r ?? 0);
+    const tp1ProfitPct = currentPrice > 0 && stopDistance > 0 && Number.isFinite(firstR)
+      ? Math.abs((firstR * stopDistance) / currentPrice) * 100
+      : 0;
+
     const adxImproving = adxSlopeVal > 0;
     const comboVolumeSignal = rawVolumeRatio >= 1.1;
     const longMomentumRsiFloor = 45;
@@ -4625,7 +4656,9 @@ export class ReboundRejectionAgent {
     const previousSample = this.volumeRatioHistory.length
       ? this.volumeRatioHistory[this.volumeRatioHistory.length - 1]
       : undefined;
-    const whaleCooldownMs = 120_000;
+    const whaleCooldownMs = this.whaleQuarantine && this.whaleQuarantine.active
+      ? Math.max(120_000, this.whaleQuarantine.until - this.whaleQuarantine.triggeredAt)
+      : 120_000;
     const whaleRecently = this.lastWhaleSpikeTs > 0 && now - this.lastWhaleSpikeTs < whaleCooldownMs;
     const volumeRising = rawVolumeRatio >= 1.05 && (previousSample == null || rawVolumeRatio >= previousSample * 1.03);
     const momentumConfirmEligible = breakoutMode && adxSlopeVal > 0 && volumeRising && !whaleRecently;
@@ -4665,6 +4698,30 @@ export class ReboundRejectionAgent {
         }
       }
 
+      const REASSESS_TIMEOUT_MS = 12 * 60 * 1000;
+      if (!momentumReversed && elapsedMs >= REASSESS_TIMEOUT_MS && now - this.lastMomentumTimeoutTs >= 60_000) {
+        this.lastMomentumTimeoutTs = now;
+        this.marketContext = null;
+        this.lastMomentumGateResult = null;
+        const reason = `Momentum reversal timeout reached (${(elapsedMs / 60000).toFixed(1)}min) — forcing playbook reassessment`;
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_confirmation',
+          message: 'momentum_reassessment_triggered',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            elapsedMs,
+            slopePct,
+            rawVolumeRatio,
+            adx: adxValue,
+            bias,
+          },
+        });
+        this.resetMomentumAwaitContext();
+        return { confirmed: false, reason, shouldLog: true };
+      }
+
       if (!momentumReversed) {
         const formatElapsed = (ms: number) => {
           const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -4697,10 +4754,44 @@ export class ReboundRejectionAgent {
     const atrPct = Number.isFinite(snap.atrPct) ? snap.atrPct : 0;
     const adxNorm = this.normalizeToUnitInterval(adx, 15, 40);
     const atrNorm = this.normalizeToUnitInterval(atrPct, 0.5, 2.5);
-    const adaptiveNeed = this.clampValue(0.9 + 0.4 * adxNorm + 0.2 * atrNorm, 0.9, 1.3);
+    const ratioFloorCfg = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_FLOOR)
+      ? Number(cfg.QUALITY_VOLUME_RATIO_FLOOR)
+      : 0.85;
+    const ratioCeilCfg = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL)
+      ? Number(cfg.QUALITY_VOLUME_RATIO_CEIL)
+      : 1.3;
+    const ratioFloor = this.clampValue(ratioFloorCfg, 0.8, 1.05);
+    const ratioCeil = Math.max(1.05, Math.min(1.45, ratioCeilCfg));
+    const rawNeed = this.clampValue(0.9 + 0.4 * adxNorm + 0.2 * atrNorm, Math.max(0.9, ratioFloor), ratioCeil);
+    const profitFloor = Math.max(1, Number(cfg.MIN_TRADE_PROFIT_PCT || 1));
+    const enhancedProfit = Math.max(profitFloor + 0.2, Number(cfg.TARGET_TP1_PCT || profitFloor + 0.2));
+    let adaptiveNeed = rawNeed;
+    if (adx >= 25) {
+      adaptiveNeed = Math.min(adaptiveNeed, Math.max(ratioFloor, 1.0));
+    }
+    if (tp1ProfitPct >= enhancedProfit) {
+      adaptiveNeed = Math.min(adaptiveNeed, Math.max(ratioFloor, 0.92));
+    } else if (tp1ProfitPct >= profitFloor) {
+      adaptiveNeed = Math.min(adaptiveNeed, Math.max(ratioFloor, 0.98));
+    }
 
     const cmf20 = Number.isFinite(snap.cmf20) ? snap.cmf20 ?? 0 : 0;
     const cmfAligned = bias === 'long' ? cmf20 > 0.03 : cmf20 < -0.03;
+    if (cmfAligned) {
+      const cmfMagnitude = Math.abs(cmf20);
+      const cmfStrong = Math.max(0.01, Number(cfg.VOLUME_CMF_STRONG || 0.15));
+      const cmfRelax = Math.max(0, Number(cfg.VOLUME_CMF_RELAX || 0.12));
+      const cmfRelaxMax = Math.max(cmfRelax, Number(cfg.VOLUME_CMF_RELAX_MAX || 0.2));
+      const cmfMinAdx = Math.max(8, Number(cfg.VOLUME_CMF_MIN_ADX || 15));
+      if (adx >= cmfMinAdx) {
+        const relaxScale = cmfMagnitude >= cmfStrong
+          ? Math.min(1.5, cmfMagnitude / cmfStrong)
+          : 0.6;
+        const relaxAmount = Math.min(cmfRelaxMax, cmfRelax * relaxScale);
+        adaptiveNeed = Math.max(ratioFloor, adaptiveNeed - relaxAmount);
+      }
+    }
+    adaptiveNeed = this.clampValue(adaptiveNeed, ratioFloor, ratioCeil);
     const prevRatio = prevVolumeRatio ?? rawVolumeRatio;
     const volumeSpike = Number.isFinite(rawVolumeRatio)
       && rawVolumeRatio >= Math.max(0.95, adaptiveNeed * 0.85)
@@ -4748,6 +4839,17 @@ export class ReboundRejectionAgent {
       const currentRatio = Number.isFinite(volumeRatioSmoothed) ? volumeRatioSmoothed : rawVolumeRatio;
       const ratioDisplay = Number.isFinite(currentRatio) ? currentRatio.toFixed(2) : '0.00';
       const rawDisplay = Number.isFinite(rawVolumeRatio) && rawVolumeRatio > 0 ? rawVolumeRatio.toFixed(2) : '0.00';
+      void this.executeVolumeProbe({
+        side: bias === 'long' ? 'buy' : 'sell',
+        zonePrice: entryZone.mid,
+        currentPrice,
+        targetRatio: target,
+        currentRatio,
+        rawRatio: rawVolumeRatio,
+        tp1ProfitPct,
+        adx,
+        atrPct,
+      });
       return {
         confirmed: false,
         reason: `Waiting for volume confirmation (smoothed ${ratioDisplay}x, raw ${rawDisplay}x, need ≥ ${target.toFixed(2)}x)`
@@ -6169,6 +6271,11 @@ export class ReboundRejectionAgent {
     const regimeTrend = snap.regime?.trend ?? null;
     const externalPlaybook = snap.regime?.playbook ?? null;
     const trendStrength = Number((snap as any)?.trendStrength ?? Math.abs(assessment.emaSpreadPct));
+    const ema20Value = Number.isFinite((snap as any)?.ema20) ? Number((snap as any)?.ema20) : Number(snap.last ?? 0);
+    const ema50Value = Number.isFinite((snap as any)?.ema50) ? Number((snap as any)?.ema50) : Number(snap.last ?? 0);
+    const ema20Slope = Number.isFinite((snap as any)?.ema20Slope) ? Number((snap as any)?.ema20Slope) : 0;
+    const slopeBasis = Math.abs(ema20Value) > 1e-8 ? Math.abs(ema20Value) : Math.abs(Number(snap.last ?? ema20Value));
+    const slopePct = slopeBasis > 0 ? (ema20Slope / slopeBasis) * 100 : 0;
 
     let regime: MarketContext['regime'];
     if (assessment.strong) {
@@ -6187,16 +6294,33 @@ export class ReboundRejectionAgent {
       regime = 'breakout';
     }
 
-    const effectivePlaybook: MarketContext['effectivePlaybook'] = regime === 'range'
+    let effectivePlaybook: MarketContext['effectivePlaybook'] = regime === 'range'
       ? 'mean_reversion'
       : regime === 'breakout'
         ? 'momentum_breakout'
         : 'trend_following';
 
-    const allowMomentumOverride = regime !== 'range' && (assessment.strong || regime === 'breakout');
-    const favorMeanReversion = regime === 'range';
-
     const notes = assessment.reasons.slice();
+    const emaAligned = bias === 'long'
+      ? ema20Value >= ema50Value
+      : bias === 'short'
+        ? ema20Value <= ema50Value
+        : true;
+    const slopeAgainst = bias === 'long'
+      ? slopePct <= 0
+      : bias === 'short'
+        ? slopePct >= 0
+        : slopePct === 0;
+    const trendStrengthOk = trendStrength > 0.25;
+
+    if (effectivePlaybook === 'trend_following' && (!emaAligned || slopeAgainst || !trendStrengthOk)) {
+      notes.push('trend_following_downgraded_due_to_slope');
+      regime = 'range';
+      effectivePlaybook = 'mean_reversion';
+    }
+
+    let allowMomentumOverride = regime !== 'range' && (assessment.strong || regime === 'breakout');
+    let favorMeanReversion = regime === 'range';
     if (regime === 'range') notes.push('range_structure_detected');
     if (regime === 'trend_following' && !assessment.strong && assessment.moderate) notes.push('moderate_trend_following');
     if (externalPlaybook && externalPlaybook !== effectivePlaybook) {
@@ -6981,7 +7105,7 @@ export class ReboundRejectionAgent {
 
   // Anti-whale / manipulation guard: blocks entries on abnormal volume spikes in extreme volatility without strong trend
   private evaluateAntiWhaleFilters(snap: TechnicalSnapshot): {
-    status: 'PASS' | 'FAIL';
+    status: 'PASS' | 'FAIL' | 'QUARANTINE';
     reason: string;
     details: Record<string, any>;
   } {
@@ -7000,6 +7124,7 @@ export class ReboundRejectionAgent {
       const volMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? 0);
       const atrPct = Number((snap as any)?.atrPct ?? 0);
       const adx = Number((snap as any)?.adx14 ?? 0);
+      const now = Date.now();
 
       if (!(volMA > 0) || !(price > 0)) {
         return {
@@ -7009,17 +7134,93 @@ export class ReboundRejectionAgent {
         };
       }
 
-      const spikeThreshold = Math.max(1.2, cfg.ANTI_WHALE_VOL_SPIKE_MULT);
-      const spikeRatio = vol / volMA;
-      const extremeVol = atrPct >= Math.max(0.8, cfg.ANTI_WHALE_ATR_PCT);
+      let spikeThreshold = Math.max(1.2, cfg.ANTI_WHALE_VOL_SPIKE_MULT);
+      const highVol = atrPct >= Math.max(0.8, cfg.ANTI_WHALE_ATR_PCT);
+      if (highVol) {
+        spikeThreshold = Math.max(spikeThreshold, 3.5);
+      }
+
+      const spikeRatio = volMA > 0 ? vol / volMA : 0;
       const weakTrend = adx < Math.max(10, cfg.ANTI_WHALE_MIN_ADX);
 
-      if (spikeRatio >= spikeThreshold && extremeVol && weakTrend) {
-        this.lastWhaleSpikeTs = Date.now();
+      if (this.whaleQuarantine && this.whaleQuarantine.active) {
+        const { until, triggeredAt, adxAtTrigger, atrPctAtTrigger, threshold } = this.whaleQuarantine;
+        if (now >= until) {
+          const needsTrendRecovery = (atrPctAtTrigger >= Math.max(0.8, cfg.ANTI_WHALE_ATR_PCT))
+            || (highVol && atrPct >= Math.max(0.8, cfg.ANTI_WHALE_ATR_PCT));
+          if (needsTrendRecovery && adx < Math.max(10, cfg.ANTI_WHALE_MIN_ADX)) {
+            const extensionMs = 60_000;
+            this.whaleQuarantine = {
+              ...this.whaleQuarantine,
+              until: now + extensionMs,
+            };
+            return {
+              status: 'QUARANTINE',
+              reason: 'Volume spike quarantine extended while waiting for ADX recovery',
+              details: {
+                spikeRatio,
+                vol,
+                volMA,
+                atrPct,
+                adx,
+                spikeThreshold,
+                quarantineUntil: this.whaleQuarantine.until,
+                triggeredAt,
+                adxAtTrigger,
+                atrPctAtTrigger,
+                threshold,
+              },
+            };
+          }
+          this.whaleQuarantine = null;
+        } else {
+          return {
+            status: 'QUARANTINE',
+            reason: 'Volume spike quarantine active',
+            details: {
+              spikeRatio,
+              vol,
+              volMA,
+              atrPct,
+              adx,
+              spikeThreshold,
+              quarantineUntil: until,
+              triggeredAt,
+              adxAtTrigger,
+              atrPctAtTrigger,
+            },
+          };
+        }
+      }
+
+      if (spikeRatio >= spikeThreshold && highVol && weakTrend) {
+        const reason = `Volume spike ${spikeRatio.toFixed(2)}x with weak trend (ADX ${adx.toFixed(1)}) during extreme volatility`;
+        const quarantineMs = 4 * 60 * 1000;
+        const until = now + quarantineMs;
+        this.lastWhaleSpikeTs = now;
+        this.whaleQuarantine = {
+          active: true,
+          triggeredAt: now,
+          until,
+          reason,
+          adxAtTrigger: adx,
+          atrPctAtTrigger: atrPct,
+          spikeRatio,
+          threshold: spikeThreshold,
+          logged: false,
+        };
         return {
           status: 'FAIL',
-          reason: `Volume spike ${spikeRatio.toFixed(2)}x with weak trend (ADX ${adx.toFixed(1)}) during extreme volatility`,
-          details: { spikeRatio, vol, volMA, atrPct, adx, spikeThreshold },
+          reason,
+          details: {
+            spikeRatio,
+            vol,
+            volMA,
+            atrPct,
+            adx,
+            spikeThreshold,
+            quarantineUntil: until,
+          },
         };
       }
 
@@ -7040,6 +7241,9 @@ export class ReboundRejectionAgent {
   private passesAntiWhaleFilters(snap: TechnicalSnapshot): boolean {
     const evaluation = this.evaluateAntiWhaleFilters(snap);
     if (evaluation.status === 'FAIL') {
+      if (this.whaleQuarantine) {
+        this.whaleQuarantine.logged = true;
+      }
       recordOpsEvent({
         level: 'warn',
         source: 'anti_whale',
@@ -7050,7 +7254,204 @@ export class ReboundRejectionAgent {
       });
       return false;
     }
+    if (evaluation.status === 'QUARANTINE') {
+      const alreadyLogged = this.whaleQuarantine?.logged ?? false;
+      if (!alreadyLogged) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'anti_whale',
+          message: 'blocked_due_to_volume_spike_in_extreme_vol',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: evaluation.details,
+        });
+        if (this.whaleQuarantine) {
+          this.whaleQuarantine.logged = true;
+        }
+      }
+      return false;
+    }
     return true;
+  }
+
+  private async executeVolumeProbe(params: {
+    side: 'buy' | 'sell';
+    zonePrice: number;
+    currentPrice: number;
+    targetRatio: number;
+    currentRatio: number;
+    rawRatio: number;
+    tp1ProfitPct: number;
+    adx: number;
+    atrPct: number;
+  }): Promise<void> {
+    if (!this.broker || !this.profile) return;
+    const now = Date.now();
+    const cooldownMs = 90_000;
+    const existing = this.volumeProbeState;
+    if (existing) {
+      if (existing.active) return;
+      if (now - existing.lastAttemptTs < cooldownMs) return;
+    }
+    if (!(params.targetRatio > 0) || !(params.currentRatio > 0)) return;
+    const readiness = params.currentRatio / params.targetRatio;
+    if (!Number.isFinite(readiness) || readiness < 0.7) return;
+
+    const cfg = getConfig();
+    const floorUsd = Math.max(30, Number(cfg.MIN_ORDER_NOTIONAL_USD || 0));
+    const referencePrice = params.zonePrice > 0 ? params.zonePrice : params.currentPrice;
+    const limitPrice = params.side === 'buy'
+      ? Math.min(params.currentPrice, referencePrice)
+      : Math.max(params.currentPrice, referencePrice);
+    if (!(limitPrice > 0)) return;
+
+    const qty = floorUsd / limitPrice;
+    if (!(qty > 0)) return;
+
+    const timeoutMs = 8_000;
+    const targetNotional = qty * limitPrice;
+    const attempt = {
+      active: true,
+      lastAttemptTs: now,
+      orderId: null,
+      side: params.side,
+      status: 'new' as const,
+      targetNotional,
+      timeoutMs,
+    };
+    this.volumeProbeState = attempt;
+
+    try {
+      const order = await this.broker.place({
+        symbol: this.profile.symbol,
+        side: params.side,
+        type: 'limit',
+        qty,
+        price: limitPrice,
+        postOnly: true,
+        timeInForce: 'GTC',
+      });
+
+      this.volumeProbeState = {
+        ...attempt,
+        orderId: order.id,
+        status: order.status,
+      };
+
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_probe',
+        message: order.status === 'filled' ? 'volume_probe_filled' : 'volume_probe_order_placed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          side: params.side,
+          price: limitPrice,
+          qty,
+          notional: targetNotional,
+          targetRatio: params.targetRatio,
+          currentRatio: params.currentRatio,
+          rawRatio: params.rawRatio,
+          tp1ProfitPct: params.tp1ProfitPct,
+          adx: params.adx,
+          atrPct: params.atrPct,
+          status: order.status,
+        },
+      });
+
+      if (order.status === 'filled') {
+        this.volumeProbeState = {
+          ...this.volumeProbeState!,
+          active: false,
+        };
+        return;
+      }
+
+      if (this.volumeProbeTimeout) {
+        clearTimeout(this.volumeProbeTimeout);
+      }
+      this.volumeProbeTimeout = setTimeout(() => {
+        void this.finalizeVolumeProbe(order.id);
+      }, timeoutMs);
+    } catch (error) {
+      this.volumeProbeState = {
+        ...attempt,
+        active: false,
+        status: 'rejected',
+      };
+      recordOpsEvent({
+        level: 'warn',
+        source: 'entry_probe',
+        message: 'volume_probe_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          error: error instanceof Error ? error.message : String(error),
+          side: params.side,
+          price: limitPrice,
+          qty,
+          notional: targetNotional,
+          targetRatio: params.targetRatio,
+          currentRatio: params.currentRatio,
+          rawRatio: params.rawRatio,
+        },
+      });
+    }
+  }
+
+  private async finalizeVolumeProbe(orderId: string): Promise<void> {
+    if (this.volumeProbeTimeout) {
+      clearTimeout(this.volumeProbeTimeout);
+      this.volumeProbeTimeout = null;
+    }
+    const state = this.volumeProbeState;
+    if (!state || state.orderId !== orderId) {
+      return;
+    }
+    if (!this.broker) {
+      this.volumeProbeState = { ...state, active: false };
+      return;
+    }
+    if (state.status === 'filled') {
+      this.volumeProbeState = { ...state, active: false };
+      return;
+    }
+
+    try {
+      await this.broker.cancel(orderId);
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_probe',
+        message: 'volume_probe_cancelled',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          orderId,
+          side: state.side,
+          notional: state.targetNotional,
+        },
+      });
+      this.volumeProbeState = {
+        ...state,
+        active: false,
+        status: 'canceled',
+        orderId: null,
+      };
+    } catch (error) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'entry_probe',
+        message: 'volume_probe_cancel_failed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          orderId,
+          side: state.side,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      this.volumeProbeState = { ...state, active: false };
+    }
   }
 
   private computeAdaptiveStopDistance(params: {

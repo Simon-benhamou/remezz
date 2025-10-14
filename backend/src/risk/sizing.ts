@@ -1,3 +1,5 @@
+import { getConfig } from '../utils/env.js';
+
 const EPSILON = 1e-9;
 
 function clamp(value: number, min: number, max: number): number {
@@ -54,6 +56,7 @@ export type DynamicLeverageResult = {
   flags: {
     reduceOnly: boolean;
     marginWarning: boolean;
+    floorBumped: boolean;
   };
   metrics: {
     notionalUsd: number;
@@ -75,6 +78,7 @@ type MarginState = {
 };
 
 export function computeDynamicLeverageSizing(ctx: DynamicLeverageInput): DynamicLeverageResult {
+  const cfg = getConfig();
   const entry = Math.max(0, Number(ctx.entry) || 0);
   const stop = Math.max(0, Number(ctx.stop) || 0);
   const atrLtf = Math.max(0, Number(ctx.ATRpct_LTF) || 0);
@@ -99,6 +103,8 @@ export function computeDynamicLeverageSizing(ctx: DynamicLeverageInput): Dynamic
   const spreadTightThresholdPct = Math.max(0, Number(ctx.spreadTightThresholdPct) || 0.0008);
   const spreadLooseThresholdPct = Math.max(spreadTightThresholdPct, Number(ctx.spreadLooseThresholdPct) || 0.0016);
   const marginTightBufferPct = Math.max(0, Number(ctx.marginTightBufferPct) || 0.15);
+  const minOrderNotional = Math.max(30, Number(cfg.MIN_ORDER_NOTIONAL_USD || 0));
+  let floorApplied = false;
 
   const stopRiskPct = entry > EPSILON && stop > 0 ? Math.abs(entry - stop) / entry : 0;
   const gapRiskPct = kGap * atrLtf;
@@ -131,7 +137,18 @@ export function computeDynamicLeverageSizing(ctx: DynamicLeverageInput): Dynamic
     const cappedByTradeCap = capPerTradeUsd > 0 ? Math.min(cappedByRisk, capPerTradeUsd) : cappedByRisk;
     const cappedByLeverage = equity > 0 ? Math.min(cappedByTradeCap, equity * lev) : cappedByTradeCap;
     const cappedByFreeBalance = freeBalance > 0 ? Math.min(cappedByLeverage, freeBalance * lev) : cappedByLeverage;
-    return Math.max(0, cappedByFreeBalance);
+    let result = Math.max(0, cappedByFreeBalance);
+    if (minOrderNotional > 0) {
+      const allowByRisk = cappedByRisk <= 0 || minOrderNotional <= cappedByRisk + EPSILON;
+      const allowByTradeCap = capPerTradeUsd <= 0 || minOrderNotional <= cappedByTradeCap + EPSILON;
+      const allowByLeverage = equity <= 0 || minOrderNotional <= cappedByLeverage + EPSILON;
+      const allowByFree = freeBalance <= 0 || minOrderNotional <= cappedByFreeBalance + EPSILON;
+      if (allowByRisk && allowByTradeCap && allowByLeverage && allowByFree && result + EPSILON < minOrderNotional) {
+        result = minOrderNotional;
+        floorApplied = true;
+      }
+    }
+    return result;
   };
 
   const evaluateMargin = (lev: number): MarginState => {
@@ -193,6 +210,7 @@ export function computeDynamicLeverageSizing(ctx: DynamicLeverageInput): Dynamic
     flags: {
       reduceOnly,
       marginWarning,
+      floorBumped: floorApplied,
     },
     metrics: {
       notionalUsd: marginState.notionalUsd,
