@@ -6417,6 +6417,12 @@ export class ReboundRejectionAgent {
         compensationReason = 'volatility_volume_combo';
       }
     }
+    const usdVolumeMA = typeof volumeDetails.usdVolumeMA === 'number'
+      ? Number(volumeDetails.usdVolumeMA)
+      : undefined;
+    if (this.profile?.symbol) {
+      this.updateVolumeContext(this.profile.symbol, computedRatio ?? 0, usdVolumeMA ?? 0, !allow);
+    }
 
     const volumeDetails = diagnostics?.volume?.details ?? {};
     const rawRatio = typeof volumeDetails.ratio === 'number' ? Number(volumeDetails.ratio) : undefined;
