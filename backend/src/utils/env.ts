@@ -430,7 +430,7 @@ export function getConfig(): Cfg {
     COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
     // ATR % threshold relaxed to 0.3 by default; adaptive logic still enforces safety per symbol
     ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.3"),
-    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.02"),
+    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.08"),
     // Adaptive performance tuning (streak-based)
     STREAK_WINDOW: Number(e.STREAK_WINDOW || "3"),
     LOSS_STREAK_ATR_BOOST: Number(e.LOSS_STREAK_ATR_BOOST || "0.15"),
