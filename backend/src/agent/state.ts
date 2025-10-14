@@ -1452,6 +1452,7 @@ export class ReboundRejectionAgent {
     let stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
     const targetSizingCfg = getConfig();
+    const minFirstR = Math.max(1, Number(targetSizingCfg.MIN_FIRST_R ?? 1.5));
     const targetTp1BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP1_PCT ?? targetSizingCfg.MIN_TP_PCT ?? 0));
     const targetTp2BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP2_PCT ?? 0));
     const targetTp3BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP3_PCT ?? 0));
@@ -1510,7 +1511,11 @@ export class ReboundRejectionAgent {
         : round4(entry * (1 - breakoutTargetPct));
       tp[0] = breakoutTpPrice;
       const stopForR = Math.max(this.plan.stopDistance, Math.abs(entry - stop), 1e-8);
-      const breakoutR = Math.max(0.4, Math.min(1.5, Math.abs(breakoutTpPrice - entry) / stopForR));
+      let breakoutR = Math.abs(breakoutTpPrice - entry) / stopForR;
+      if (!Number.isFinite(breakoutR) || breakoutR <= 0) {
+        breakoutR = minFirstR;
+      }
+      breakoutR = Math.max(minFirstR, Math.min(1.8, breakoutR));
       if (Array.isArray(this.plan.rPrices) && this.plan.rPrices.length > 0) {
         this.plan.rPrices[0] = { r: roundR(breakoutR), price: breakoutTpPrice };
       }
@@ -1574,6 +1579,20 @@ export class ReboundRejectionAgent {
         return { r: roundR(Math.max(r, 1e-6)), price };
       });
       this.plan.plan.risk.tp = this.plan.rPrices.map(({ r }) => ({ type: 'R', value: r }));
+    }
+    if (Array.isArray(this.plan.rPrices) && this.plan.rPrices.length > 0 && stopForR > 0) {
+      const currentFirstR = Number(this.plan.rPrices[0].r);
+      if (!(currentFirstR >= minFirstR - 1e-6)) {
+        const adjustedR = roundR(minFirstR);
+        const adjustedPrice = round4(entry + dir0 * adjustedR * stopForR);
+        this.plan.rPrices[0] = { r: adjustedR, price: adjustedPrice };
+        tp[0] = adjustedPrice;
+        if (Array.isArray(this.plan.plan.risk?.tp) && this.plan.plan.risk.tp.length > 0) {
+          this.plan.plan.risk.tp = this.plan.plan.risk.tp.map((target, idx) => (
+            idx === 0 ? { type: 'R', value: adjustedR } : target
+          ));
+        }
+      }
     }
     const flowStrongForTp = adxValue >= 35
       && slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2)
@@ -3040,7 +3059,38 @@ export class ReboundRejectionAgent {
     const slope = snap.ema20Slope || 0;
     const realizedVol = snap.realizedVol || 0;
 
-    const trailConfig = this.pos.trailConfig;
+    let trailConfig = this.pos.trailConfig;
+    if (trailConfig) {
+      const highWater = side === 'buy'
+        ? Math.max(trailConfig.highWatermark ?? price, price)
+        : Math.min(trailConfig.highWatermark ?? price, price);
+      if (highWater !== trailConfig.highWatermark) {
+        trailConfig = this.pos.trailConfig = {
+          ...trailConfig,
+          highWatermark: highWater,
+          lastUpdateTs: Date.now(),
+        };
+      }
+    }
+    if (trailConfig?.mode === 'percent' && trailConfig.armed) {
+      const pct = Math.max(0.0025, Math.min(0.0075, trailConfig.fromHighPct ?? this.resolveRunnerTrailPercent()));
+      const base = trailConfig.highWatermark ?? price;
+      const percentDesired = side === 'buy'
+        ? base * (1 - pct)
+        : base * (1 + pct);
+      const adjusted = side === 'buy'
+        ? Math.max(this.pos.stop, percentDesired)
+        : Math.min(this.pos.stop, percentDesired);
+      if ((side === 'buy' && adjusted > this.pos.stop + 1e-6) || (side === 'sell' && adjusted < this.pos.stop - 1e-6)) {
+        this.pos.trailConfig = {
+          ...trailConfig,
+          fromHighPct: pct,
+          highWatermark: base,
+          lastUpdateTs: Date.now(),
+        };
+        return adjusted;
+      }
+    }
     if (trailConfig?.armed) {
       const mult = trailConfig.multiplier ?? 1;
       const desired = side === 'buy'
@@ -3173,14 +3223,44 @@ export class ReboundRejectionAgent {
       candidate = side === 'buy' ? Math.max(candidate, lock) : Math.min(candidate, lock);
     }
 
+    if (upR > 0) {
+      const strongTrend = trendAligned && adx >= 32;
+      let pctOffset = upR >= 2 ? 0.0042 : upR >= 1 ? 0.0034 : 0;
+      if (strongTrend) {
+        pctOffset += 0.0008;
+      }
+      if (this.pos.partialTaken) {
+        pctOffset = Math.min(0.0055, pctOffset * 1.15);
+      }
+      if (pctOffset > 0) {
+        const pctTrailPrice = side === 'buy'
+          ? price * (1 - pctOffset)
+          : price * (1 + pctOffset);
+        candidate = side === 'buy'
+          ? Math.max(candidate, pctTrailPrice)
+          : Math.min(candidate, pctTrailPrice);
+      }
+    }
+
+    const progressAbs = Math.max(0, dir * (price - entry));
+    const halfR = stopDistance * 0.5;
+    if (progressAbs < halfR) {
+      const guard = entry - dir * (stopDistance * 0.25);
+      if (side === 'buy' && candidate > guard) {
+        candidate = Math.max(entry - stopDistance, guard);
+      } else if (side === 'sell' && candidate < guard) {
+        candidate = Math.min(entry + stopDistance, guard);
+      }
+    }
+
     return candidate;
   }
 
   private resolvePartialFraction(): number {
     const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : 'tier3';
-    if (tier === 'tier1') return 0.3;
-    if (tier === 'tier2') return 0.33;
-    return 0.35;
+    if (tier === 'tier1') return 0.8;
+    if (tier === 'tier2') return 0.82;
+    return 0.85;
   }
 
   private resolveScaleInFraction(): number {
@@ -3211,6 +3291,13 @@ export class ReboundRejectionAgent {
     });
     if (weightSum <= 0) return null;
     return accum / weightSum;
+  }
+
+  private resolveRunnerTrailPercent(): number {
+    const aggressiveness = this.profile?.aggressiveness ?? 'conservative';
+    if (aggressiveness === 'aggressive') return 0.005;
+    if (aggressiveness === 'reactive') return 0.004;
+    return 0.0035;
   }
 
   private async maybeScaleInAfterPartial(): Promise<void> {
@@ -6440,7 +6527,6 @@ export class ReboundRejectionAgent {
       }
     }
 
-
     const volumeDetails = diagnostics?.volume?.details ?? {};
     const rawRatio = typeof volumeDetails.ratio === 'number' ? Number(volumeDetails.ratio) : undefined;
     let computedRatio = rawRatio;
@@ -6451,13 +6537,13 @@ export class ReboundRejectionAgent {
         computedRatio = current / ma;
       }
     }
- 
     const usdVolumeMA = typeof volumeDetails.usdVolumeMA === 'number'
       ? Number(volumeDetails.usdVolumeMA)
       : undefined;
     if (this.profile?.symbol) {
       this.updateVolumeContext(this.profile.symbol, computedRatio ?? 0, usdVolumeMA ?? 0, !allow);
     }
+
     if (!allow) {
       this.lastQualityFilterFailure = {
         code: 'quality.score_insufficient',
@@ -10078,21 +10164,22 @@ export class ReboundRejectionAgent {
         console.log(`Partial exit: ${partialExit.filledQty} @ ${fillPrice} (${reason})`);
 
         const now = Date.now();
-        const previousConfig = this.pos.trailConfig ?? { mode: 'atr', multiplier: this.quantConfig.exits.trailAtrMult, armed: false };
-        const trailMultiplier = allowBreakeven
-          ? Math.max(0.8, Math.min(1.2, (previousConfig.multiplier ?? 1.0) * 0.9))
-          : Math.min(1.4, Math.max(0.9, (previousConfig.multiplier ?? 1.0) * 1.05));
+        const previousConfig = this.pos.trailConfig ?? { mode: 'percent', multiplier: this.quantConfig.exits.trailAtrMult, armed: false };
+        const runnerTrailPct = this.resolveRunnerTrailPercent();
         const highWater = this.pos.side === 'buy'
           ? Math.max(previousConfig.highWatermark ?? fillPrice, fillPrice)
           : Math.min(previousConfig.highWatermark ?? fillPrice, fillPrice);
         this.pos.trailConfig = {
           ...previousConfig,
-          mode: 'atr',
-          multiplier: trailMultiplier,
+          mode: 'percent',
+          multiplier: previousConfig.multiplier ?? this.quantConfig.exits.trailAtrMult,
           armed: true,
+          fromHighPct: runnerTrailPct,
           highWatermark: highWater,
           lastUpdateTs: now,
         };
+        this.pos.tp = [];
+        this.pos.scaleInTriggered = true;
 
         // Record partial exit
         recordOpsEvent({
@@ -10109,6 +10196,7 @@ export class ReboundRejectionAgent {
             previousStop,
             volRatio,
             allowBreakeven,
+            runnerTrailPct,
           }
         });
 
