@@ -488,6 +488,16 @@ export class ReboundRejectionAgent {
     appliedAt: number;
     expiresAt: number;
   } | null = null;
+  private lastConfirmationSnapshot: {
+    reason: string;
+    timestamp: number;
+    meta?: {
+      timeThresholdMs: number;
+      timeInZoneMs: number;
+      mode: 'standard' | 'momentum';
+      confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null;
+    };
+  } | null = null;
   
   // ✅ Quality threshold adjustment BY TIER (independent learning per category)
   private qualityAdjustmentByTier: Map<string, number> = new Map([
@@ -1354,6 +1364,28 @@ export class ReboundRejectionAgent {
           return; // Skip entry until all confirmations pass
         }
         console.log(`Entry confirmed: ${confirmation.reason}`);
+        const holdMs = this.getAdaptiveConfirmationTime(validationSnap, { playbook, bias: this.plan.bias ?? 'none' });
+        const elapsedMs = this.priceInZoneStartTime > 0 ? Date.now() - this.priceInZoneStartTime : holdMs;
+        const reasonLower = confirmation.reason.toLowerCase();
+        const confirmationMode = reasonLower.includes('timeout')
+          ? 'timeout'
+          : reasonLower.includes('fast track')
+            ? 'fast_track'
+            : reasonLower.includes('momentum')
+              ? 'momentum'
+              : null;
+        const timeMode = reasonLower.includes('momentum fast-track') ? 'momentum' : 'standard';
+        const normalizedMode = confirmationMode ?? 'adaptive';
+        this.lastConfirmationSnapshot = {
+          reason: confirmation.reason,
+          timestamp: Date.now(),
+          meta: {
+            timeThresholdMs: holdMs,
+            timeInZoneMs: elapsedMs,
+            mode: timeMode as 'standard' | 'momentum',
+            confirmationMode: normalizedMode as 'adaptive' | 'fast_track' | 'timeout' | 'momentum',
+          },
+        };
       }
     }
     
@@ -1453,6 +1485,8 @@ export class ReboundRejectionAgent {
       minPassCount: qualityProfile.minPassCount,
       comboTolerance: qualityProfile.comboTolerance,
     });
+
+    let rrEffectiveForFilters = rrSnapshot.effective;
 
     if (!qualityAssessment.allow) {
       recordOpsEvent({
@@ -1651,7 +1685,73 @@ export class ReboundRejectionAgent {
       momentumStopDistance = tightened;
     }
 
+    let structurePivotApplied = false;
+    const ema50Candidate = Number((snap as any)?.ema50 ?? validationSnap?.ema50 ?? mktPrice);
+    const supports = Array.isArray((snap as any)?.supports) ? (snap as any).supports : [];
+    const resistances = Array.isArray((snap as any)?.resistances) ? (snap as any).resistances : [];
+    const nearestSupport = supports
+      .filter(level => level && typeof level.price === 'number' && level.price < mktPrice)
+      .map(level => level.price as number)
+      .reduce((best: number | null, price) => (best == null || mktPrice - price < mktPrice - best ? price : best), null as number | null);
+    const nearestResistance = resistances
+      .filter(level => level && typeof level.price === 'number' && level.price > mktPrice)
+      .map(level => level.price as number)
+      .reduce((best: number | null, price) => (best == null || price - mktPrice < best - mktPrice ? price : best), null as number | null);
+    let swingDistance: number | null = null;
+    if (planBias === 'long' && nearestSupport != null) {
+      const diff = mktPrice - nearestSupport;
+      if (diff > 0) swingDistance = diff;
+    } else if (planBias === 'short' && nearestResistance != null) {
+      const diff = nearestResistance - mktPrice;
+      if (diff > 0) swingDistance = diff;
+    }
+    let emaDistance: number | null = null;
+    if (Number.isFinite(ema50Candidate) && ema50Candidate > 0) {
+      if ((planBias === 'long' && ema50Candidate <= mktPrice) || (planBias === 'short' && ema50Candidate >= mktPrice)) {
+        const diff = Math.abs(mktPrice - ema50Candidate);
+        if (diff > 0) emaDistance = diff;
+      }
+    }
+    let structureDistance: number | null = null;
+    let structureBasis: 'swing' | 'ema50' | null = null;
+    if (swingDistance != null) {
+      structureDistance = swingDistance;
+      structureBasis = 'swing';
+    }
+    if (emaDistance != null && (structureDistance == null || emaDistance < structureDistance)) {
+      structureDistance = emaDistance;
+      structureBasis = 'ema50';
+    }
+    if (structureDistance != null && structureDistance > 0) {
+      const trendQualified = adxValue >= 25 || Math.abs(slopeDirectionalPct) >= 0.2;
+      const distanceFloor = baseStopDistance > 0 ? baseStopDistance * 0.55 : 0;
+      if (trendQualified && structureDistance >= distanceFloor && structureDistance < effectiveStopDistance) {
+        const tightened = structureDistance;
+        effectiveStopDistance = tightened;
+        if (momentumStopDistance != null) {
+          momentumStopDistance = Math.min(momentumStopDistance, tightened);
+        }
+        planAny._structureStopPivot = { basis: structureBasis, distance: tightened };
+        recordOpsEvent({
+          level: 'info',
+          source: 'risk_engine',
+          message: 'structure_stop_pivot',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            basis: structureBasis,
+            distance: tightened,
+            baseStopDistance,
+            adx: adxValue,
+          },
+        });
+        structurePivotApplied = true;
+      }
+    }
     const momentumDetails = this.lastMomentumGateResult?.details as any;
+    if (!structurePivotApplied && planAny._structureStopPivot) {
+      delete planAny._structureStopPivot;
+    }
     let recognizedConfidence: number | null = null;
     if (momentumDetails?.recognizedOverrideConfidence != null) {
       const candidate = Number(momentumDetails.recognizedOverrideConfidence);
@@ -1885,6 +1985,44 @@ export class ReboundRejectionAgent {
       }
     }
     const firstR = this.plan.rPrices?.[0]?.r ?? (tp.length > 0 ? Math.abs(tp[0] - entry) / stopForR : undefined);
+    const snapAtrPct = typeof (snap as any)?.atrPct === 'number'
+      ? Number((snap as any).atrPct)
+      : undefined;
+    const planAtrPct = Number.isFinite(this.plan?.atrPct)
+      ? Number(this.plan?.atrPct)
+      : undefined;
+    const atrBaselinePct = planAtrPct ?? snapAtrPct ?? undefined;
+    const spreadPercent = spreadBps != null ? Math.max(0, spreadBps / 100) : null;
+    const spreadAtrRatio = spreadPercent != null && atrBaselinePct != null && atrBaselinePct > 0
+      ? spreadPercent / atrBaselinePct
+      : null;
+    const rrRelaxEligible = adxValue >= 25
+      && (spreadBps == null || spreadBps <= 1)
+      && (spreadAtrRatio != null && spreadAtrRatio <= 0.2)
+      && (volumeRatio == null || Math.abs(volumeRatio - 1) <= 0.25);
+    if (rrRelaxEligible) {
+      const deviation = volumeRatio != null ? Math.abs(volumeRatio - 1) : 0;
+      const rrRelaxedTarget = 1.2 + Math.min(0.05, Math.max(0, deviation * 0.2));
+      if (rrRelaxedTarget < rrEffectiveForFilters) {
+        rrEffectiveForFilters = rrRelaxedTarget;
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_filters',
+          message: 'rr_dynamic_relaxed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            base: rrSnapshot.effective,
+            applied: rrEffectiveForFilters,
+            adx: adxValue,
+            spreadBps,
+            spreadAtrRatio,
+            volumeRatio,
+          },
+        });
+      }
+    }
+
     const rMultiples = Array.isArray(this.plan.rPrices)
       ? this.plan.rPrices
         .map(({ r, price }) => {
@@ -1897,6 +2035,13 @@ export class ReboundRejectionAgent {
     let rrWeighted: number | undefined;
     // Structured configuration for TP weight profiles and their threshold conditions
     const tpWeightProfilesConfig = [
+      {
+        profile: [0.2, 0.3, 0.5],
+        condition: () =>
+          adxValue >= 25 &&
+          (spreadAtrRatio != null && spreadAtrRatio <= 0.2) &&
+          (volumeRatio ?? 0) >= 0.85,
+      },
       {
         profile: [0.3, 0.35, 0.35],
         condition: () =>
@@ -1931,7 +2076,7 @@ export class ReboundRejectionAgent {
     }
     const tpWeightedAbs = rrWeighted != null ? rrWeighted * stopForR : undefined;
     const tpWeightedPct = tpWeightedAbs != null && entry > 0 ? (tpWeightedAbs / entry) * 100 : undefined;
-    const tp1Fraction = Math.max(0.3, Math.min(0.35, tpWeightProfile[0] ?? 0.3));
+    const tp1Fraction = Math.max(0.15, Math.min(0.4, tpWeightProfile[0] ?? 0.3));
     planAny._tpWeightProfile = tpWeightProfile;
     planAny._tp1Fraction = tp1Fraction;
     planAny._stopBasis = stopBasis;
@@ -1942,6 +2087,7 @@ export class ReboundRejectionAgent {
       slopePct: Number.isFinite(slopeDirectionalPct) ? slopeDirectionalPct : null,
       volRatio: Number.isFinite(volumeRatio ?? NaN) ? volumeRatio : null,
       cmf: cmfVal ?? null,
+      spreadAtrRatio: spreadAtrRatio ?? null,
     };
     const firstTpProfitPct = tp.length > 0 && entry !== 0 ? Math.abs((tp[0] - entry) / entry) * 100 : 0;
     const planMeta = (this.plan.plan.meta || {}) as Record<string, unknown>;
@@ -1953,13 +2099,6 @@ export class ReboundRejectionAgent {
           : typeof (planMeta as any)?.probability === 'number'
             ? Number((planMeta as any).probability)
             : undefined;
-    const snapAtrPct = typeof (snap as any)?.atrPct === 'number'
-      ? Number((snap as any).atrPct)
-      : undefined;
-    const planAtrPct = Number.isFinite(this.plan?.atrPct)
-      ? Number(this.plan?.atrPct)
-      : undefined;
-    const atrBaselinePct = planAtrPct ?? snapAtrPct ?? undefined;
     const firstTpPrice = tp.length > 0 ? tp[0] : this.plan.rPrices?.[0]?.price ?? null;
     if (firstTpPrice != null && Number.isFinite(firstTpPrice) && entry > 0) {
       const tp1Dist = Math.abs(firstTpPrice - entry) / entry;
@@ -2008,6 +2147,7 @@ export class ReboundRejectionAgent {
     const rrSummaryParts = [
       `RR=${typeof firstR === 'number' ? firstR.toFixed(2) : 'n/a'}`,
       `RR_MIN_EFF=${rrSnapshot.effective.toFixed(2)}`,
+      `RR_MIN_USED=${rrEffectiveForFilters.toFixed(2)}`,
       `mode=${rrSnapshot.mode}`,
       rrSnapshot.winRate != null ? `p=${rrSnapshot.winRate.toFixed(2)}` : 'p=n/a',
       `RRw=${typeof rrWeighted === 'number' ? rrWeighted.toFixed(2) : 'n/a'}`,
@@ -2044,7 +2184,7 @@ export class ReboundRejectionAgent {
       cmf: typeof cmfVal === 'number' ? cmfVal : undefined,
       adxSlope: typeof adxSlopeVal === 'number' ? adxSlopeVal : undefined,
     }, {
-      minRr: rrSnapshot.effective,
+      minRr: rrEffectiveForFilters,
       rrSummary: rrSummaryParts,
       tier,
       symbol: this.profile.symbol,
@@ -2108,7 +2248,7 @@ export class ReboundRejectionAgent {
     });
     planAny._strongFlow = filterEvaluation.meta?.strongFlow ?? false;
     planAny._rrFloor = filterEvaluation.meta?.minRrFloor ?? null;
-    planAny._rrApplied = filterEvaluation.meta?.minRrUsed ?? rrSnapshot.effective;
+    planAny._rrApplied = filterEvaluation.meta?.minRrUsed ?? rrEffectiveForFilters;
     planAny._confirmWaitSec = waitSeconds;
     if (filterEvaluation.meta?.spread) {
       const spreadMeta = filterEvaluation.meta.spread;
@@ -2168,6 +2308,32 @@ export class ReboundRejectionAgent {
     }
     if (memeProfitRelax) {
       minProfitPct = Math.min(minProfitPct, 0.33);
+    }
+    const profitRelaxEligible = adxValue >= 25
+      && (spreadBps == null || spreadBps <= 1.2)
+      && (spreadAtrRatio != null && spreadAtrRatio <= 0.2)
+      && (volumeRatio == null || (volumeRatio >= 0.85 && volumeRatio <= 1.35))
+      && qualityAssessment.allow;
+    if (profitRelaxEligible) {
+      const relaxedFloor = Math.max(0.26, Math.min(0.32, minProfitPct));
+      if (relaxedFloor < minProfitPct) {
+        minProfitPct = relaxedFloor;
+        recordOpsEvent({
+          level: 'info',
+          source: 'profit_filter',
+          message: 'profit_threshold_relaxed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            applied: relaxedFloor,
+            base: cfgProfit.MIN_TRADE_PROFIT_PCT,
+            adx: adxValue,
+            spreadBps,
+            spreadAtrRatio,
+            volumeRatio,
+          },
+        });
+      }
     }
     // Single profitability gate is enough; movement check duplicates the same quantity
     if (firstTpProfitPct < minProfitPct) {
@@ -2937,6 +3103,44 @@ export class ReboundRejectionAgent {
       }
     }
 
+    const sizingFloorUsd = 30;
+    if (sizingFloorUsd > 0 && entry > 0) {
+      const notionalAfterFloors = qty * entry;
+      if (notionalAfterFloors + 1e-6 < sizingFloorUsd) {
+        const floorQty = sizingFloorUsd / Math.max(entry, 1e-8);
+        const utilWithFloor = marginAdvisor.utilisationPctIf(sizingFloorUsd, Math.max(effectiveLev, 1));
+        if (utilWithFloor <= HALT_TARGET + FLOOR_TOLERANCE && utilWithFloor < HALT_CRITICAL) {
+          const previousQty = qty;
+          const previousNotional = notionalAfterFloors;
+          qty = floorQty;
+          notional = qty * entry;
+          recordOpsEvent({
+            level: 'info',
+            source: 'position_sizing',
+            message: 'floor-bumped',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              previousQty,
+              previousNotional,
+              floorNotional: sizingFloorUsd,
+              adjustedQty: qty,
+              adjustedNotional: notional,
+              utilisationPct: utilWithFloor,
+            },
+          });
+        } else {
+          this.noteSignalDrop('sizing_floor_block', 'info', {
+            previousNotional: notionalAfterFloors,
+            floorNotional: sizingFloorUsd,
+            utilisationPct: utilWithFloor,
+          });
+          this.entering = false;
+          return;
+        }
+      }
+    }
+
     const tp1ForEv = tp.length > 0 ? tp[0] : this.plan.rPrices?.[0]?.price ?? null;
     if (tp1ForEv != null && Number.isFinite(tp1ForEv)) {
       const dir = side === 'buy' ? 1 : -1;
@@ -3091,6 +3295,8 @@ export class ReboundRejectionAgent {
       },
     });
 
+    const confirmationMeta = this.lastConfirmationSnapshot?.meta;
+    const confirmationUrgent = confirmationMeta?.confirmationMode === 'timeout';
     const plan = chooseExecutionPlan({
       symbol: this.profile.symbol,
       side,
@@ -3102,7 +3308,54 @@ export class ReboundRejectionAgent {
       spreadBps,
       volatilityProfile: (snap as any)?.volatilityProfile ?? this.regime?.volatilityProfile ?? null,
       playbook,
+      volumeRatio: typeof volumeRatio === 'number' ? volumeRatio : null,
+      confirmationUrgent,
     });
+    const estimatedSlippagePct = (() => {
+      if (plan.mode === 'market') {
+        return spreadBps != null ? (spreadBps / 2) / 100 : 0.05;
+      }
+      if (plan.mode === 'limit') {
+        const offset = plan.passiveOffsetBps ?? 0;
+        return Math.max(0, offset / 100);
+      }
+      return spreadBps != null ? Math.min(0.1, spreadBps / 100) : 0.05;
+    })();
+    const slippageBudgetCandidates: number[] = [];
+    if (firstTpProfitPct != null && Number.isFinite(firstTpProfitPct) && firstTpProfitPct > 0) {
+      slippageBudgetCandidates.push(firstTpProfitPct * 0.25);
+    }
+    if (atrBaselinePct != null && Number.isFinite(atrBaselinePct) && atrBaselinePct > 0) {
+      slippageBudgetCandidates.push(atrBaselinePct * 0.15);
+    }
+    const slippageBudgetPct = slippageBudgetCandidates.length > 0
+      ? Math.min(...slippageBudgetCandidates)
+      : null;
+    if (slippageBudgetPct != null && Number.isFinite(slippageBudgetPct) && estimatedSlippagePct > slippageBudgetPct + 1e-6) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'execution',
+        message: 'slippage_budget_exceeded',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          estimatedSlippagePct: Number(estimatedSlippagePct.toFixed(4)),
+          slippageBudgetPct: Number(slippageBudgetPct.toFixed(4)),
+          spreadBps,
+          tp1Pct,
+          atrBaselinePct,
+          mode: plan.mode,
+        },
+      });
+      this.noteSignalDrop('slippage_budget_block', 'info', {
+        estimatedSlippagePct,
+        slippageBudgetPct,
+        spreadBps,
+        tp1Pct,
+      });
+      this.entering = false;
+      return;
+    }
     const startTs = Date.now();
 
     if (plan.mode !== 'market' || plan.fallbacks.length > 0) {
@@ -4553,20 +4806,36 @@ export class ReboundRejectionAgent {
     currentPrice: number,
     entryZone: { from: number; to: number; mid: number },
     bias: 'long' | 'short'
-  ): { confirmed: boolean; reason: string; shouldLog?: boolean } {
+  ): {
+    confirmed: boolean;
+    reason: string;
+    shouldLog?: boolean;
+    meta?: {
+      timeThresholdMs: number;
+      timeInZoneMs: number;
+      mode: 'standard' | 'momentum';
+      confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null;
+    };
+  } {
     const now = Date.now();
     const cfg = getConfig();
     const priceInZone = currentPrice >= entryZone.from && currentPrice <= entryZone.to;
+    const { playbook: contextualPlaybook } = this.getContextualPlaybook(snap, bias);
+    const adxSnapshot = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
+    const baseHoldMs = this.getAdaptiveConfirmationTime(snap, { playbook: contextualPlaybook, bias });
 
-    // Track when price entered zone
     if (priceInZone && this.priceInZoneStartTime === 0) {
       this.priceInZoneStartTime = now;
       this.resetVolumeRatioHistory();
       this.resetMomentumAwaitContext();
-      return { confirmed: false, reason: 'Price just entered zone - waiting 5min confirmation' };
+      const waitMinutes = Math.max(1, baseHoldMs / 60000);
+      return {
+        confirmed: false,
+        reason: `Price just entered zone - waiting ${waitMinutes.toFixed(1)}min confirmation`,
+        meta: { timeThresholdMs: baseHoldMs, timeInZoneMs: 0, mode: 'standard', confirmationMode: null },
+      };
     }
 
-    // Reset if price exits zone
     if (!priceInZone) {
       this.priceInZoneStartTime = 0;
       this.resetVolumeRatioHistory();
@@ -4574,12 +4843,11 @@ export class ReboundRejectionAgent {
       return { confirmed: false, reason: 'Price outside zone' };
     }
 
-    // 1️⃣ TIME CHECK: Adaptive time based on trend strength (PHASE 4 FIX #3)
-    const adaptiveTimeMs = this.getAdaptiveConfirmationTime(snap);
+    let adaptiveTimeMs = baseHoldMs;
     const timeInZoneMs = now - this.priceInZoneStartTime;
     const timeInZoneMin = timeInZoneMs / 60000;
 
-    const recentSlope = this.calculateRecentSlope(snap, 5); // Last 5 candles
+    const recentSlope = this.calculateRecentSlope(snap, 5);
     const emaBasis = Number.isFinite(snap.ema20) && Math.abs(snap.ema20) > 1e-8
       ? Math.abs(snap.ema20)
       : Math.max(1e-8, Math.abs(currentPrice));
@@ -4588,7 +4856,7 @@ export class ReboundRejectionAgent {
     const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
     const lastVolume = snap.volume || 0;
     const rawVolumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
-    const adxValue = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
+    const adxValue = adxSnapshot;
     const adxSlopeVal = Number.isFinite(snap.adxSlope) ? snap.adxSlope : 0;
     const breakoutActive = this.runtimeZoneDiagnostics?.breakoutActive ?? false;
 
@@ -4629,9 +4897,7 @@ export class ReboundRejectionAgent {
     const longMomentumRsiFloor = 45;
     const shortMomentumRsiCeil = 45;
     const comboRsiSignal = rsiValue != null
-      ? (bias === 'long'
-        ? rsiValue >= longMomentumRsiFloor
-        : rsiValue <= shortMomentumRsiCeil)
+      ? (bias === 'long' ? rsiValue >= longMomentumRsiFloor : rsiValue <= shortMomentumRsiCeil)
       : false;
     const comboEmaSignal = bias === 'long'
       ? ema20 > 0 && ema50 > 0 && ema20 >= ema50 && slopePct >= -0.02
@@ -4668,11 +4934,19 @@ export class ReboundRejectionAgent {
       timeRequirementMet = true;
       timeMode = 'momentum';
     }
+
+    const buildMeta = (mode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null) => ({
+      timeThresholdMs,
+      timeInZoneMs,
+      mode: timeMode,
+      confirmationMode: mode,
+    });
     const requiredMin = timeThresholdMs / 60000;
     if (!timeRequirementMet) {
       return {
         confirmed: false,
-        reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${adxValue.toFixed(1)})`
+        reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${adxValue.toFixed(1)})`,
+        meta: buildMeta(null),
       };
     }
 
@@ -4719,7 +4993,7 @@ export class ReboundRejectionAgent {
           },
         });
         this.resetMomentumAwaitContext();
-        return { confirmed: false, reason, shouldLog: true };
+        return { confirmed: false, reason, shouldLog: true, meta: buildMeta(null) };
       }
 
       if (!momentumReversed) {
@@ -4739,7 +5013,7 @@ export class ReboundRejectionAgent {
           momentumCtx.lastLogTs = now;
         }
         momentumCtx.lastReason = reason;
-        return { confirmed: false, reason, shouldLog };
+        return { confirmed: false, reason, shouldLog, meta: buildMeta(null) };
       }
     }
 
@@ -4747,7 +5021,6 @@ export class ReboundRejectionAgent {
       this.resetMomentumAwaitContext(true);
     }
 
-    // 3️⃣ VOLUME CHECK: Must exceed 1.2x average
     const { smoothed: volumeRatioSmoothed, previous: prevVolumeRatio } = this.updateVolumeRatioHistory(rawVolumeRatio);
 
     const adx = Number.isFinite(adxValue) ? adxValue : 0;
@@ -4807,7 +5080,7 @@ export class ReboundRejectionAgent {
     const holdingFavorableHalf = bias === 'long'
       ? currentPrice >= entryZone.mid
       : currentPrice <= entryZone.mid;
-    const timeoutMs = 2 * 15 * 60 * 1000; // 2x15m candles
+    const timeoutMs = 2 * 15 * 60 * 1000;
 
     let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null = null;
     let effectiveNeed = adaptiveNeed;
@@ -4852,7 +5125,8 @@ export class ReboundRejectionAgent {
       });
       return {
         confirmed: false,
-        reason: `Waiting for volume confirmation (smoothed ${ratioDisplay}x, raw ${rawDisplay}x, need ≥ ${target.toFixed(2)}x)`
+        reason: `Waiting for volume confirmation (smoothed ${ratioDisplay}x, raw ${rawDisplay}x, need ≥ ${target.toFixed(2)}x)`,
+        meta: buildMeta(confirmationMode),
       };
     }
 
@@ -4867,7 +5141,8 @@ export class ReboundRejectionAgent {
     if (confirmationMode === 'momentum') {
       return {
         confirmed: true,
-        reason: `${baseReason}, momentum confirm (volume ${smoothedDisplay}x, raw ${rawDisplay}x)`
+        reason: `${baseReason}, momentum confirm (volume ${smoothedDisplay}x, raw ${rawDisplay}x)`,
+        meta: buildMeta('momentum'),
       };
     }
     if (confirmationMode === 'fast_track') {
@@ -4878,20 +5153,23 @@ export class ReboundRejectionAgent {
       ].filter(Boolean).join(' + ');
       return {
         confirmed: true,
-        reason: `${baseReason}, order-flow fast track (${signalsUsed || 'signals'}) → volume ${smoothedDisplay}x (raw ${rawDisplay}x)`
+        reason: `${baseReason}, order-flow fast track (${signalsUsed || 'signals'}) → volume ${smoothedDisplay}x (raw ${rawDisplay}x)`,
+        meta: buildMeta('fast_track'),
       };
     }
 
     if (confirmationMode === 'timeout') {
       return {
         confirmed: true,
-        reason: `${baseReason}, timeout release with volume ${smoothedDisplay}x (raw ${rawDisplay}x, need ≥ ${effectiveNeed.toFixed(2)}x)`
+        reason: `${baseReason}, timeout relaxation (volume ${smoothedDisplay}x, raw ${rawDisplay}x)`,
+        meta: buildMeta('timeout'),
       };
     }
 
     return {
       confirmed: true,
-      reason: `${baseReason}, volume ${smoothedDisplay}x (raw ${rawDisplay}x, need ≥ ${adaptiveNeed.toFixed(2)}x)`
+      reason: `${baseReason}, volume confirmed (${smoothedDisplay}x smoothed, raw ${rawDisplay}x)`,
+      meta: buildMeta('adaptive'),
     };
   }
 
@@ -5489,23 +5767,36 @@ export class ReboundRejectionAgent {
    * 
    * Impact: +40% faster entries on strong trends
    */
-  private getAdaptiveConfirmationTime(snap: TechnicalSnapshot): number {
-    const atr = snap.atrPct || 2.0;
-    const adx = snap.adx14 || 20;
-    
-    // Strong trend + high volatility = Fast entries (1min)
-    // Crypto moves FAST in trends, can't wait 5min
+  private getAdaptiveConfirmationTime(
+    snap: TechnicalSnapshot,
+    opts?: { playbook?: string | null; bias?: 'long' | 'short' | 'none' }
+  ): number {
+    const atr = Number.isFinite(snap.atrPct) ? Number(snap.atrPct) : 2.0;
+    const adx = Number.isFinite(snap.adx14) ? Number(snap.adx14) : 20;
+
+    let playbook = opts?.playbook ?? null;
+    if (!playbook) {
+      playbook = this.getContextualPlaybook(snap, opts?.bias ?? (this.plan?.bias ?? 'none')).playbook;
+    }
+    const normalizedPlaybook = (playbook || '').toString().toLowerCase();
+    const isTrendContext = normalizedPlaybook === 'trend_following' || normalizedPlaybook === 'momentum_breakout';
+    const isRangeContext = normalizedPlaybook === 'mean_reversion';
+
+    if (isTrendContext && adx >= 25) {
+      return 2 * 60 * 1000;
+    }
+
+    if (isRangeContext) {
+      return adx <= 18 ? 7 * 60 * 1000 : 5 * 60 * 1000;
+    }
+
     if (adx > 35 && atr > 3.0) {
-      return 1 * 60 * 1000; // 1 minute
+      return 1 * 60 * 1000;
     }
-    
-    // Moderate trend = 3min
     if (adx > 25) {
-      return 3 * 60 * 1000; // 3 minutes
+      return 3 * 60 * 1000;
     }
-    
-    // Weak trend = 5min (current default)
-    return 5 * 60 * 1000; // 5 minutes
+    return 5 * 60 * 1000;
   }
 
   /**
@@ -7479,6 +7770,11 @@ export class ReboundRejectionAgent {
       ? Math.max(0, Math.min(1.5, recognizedConfidence))
       : 0.35;
 
+    const playbookContext = this.marketContext?.effectivePlaybook
+      ?? (typeof (this.plan?.plan?.meta?.playbook) === 'string' ? (this.plan?.plan?.meta?.playbook as string) : null);
+    const allowTrendTightening = playbookContext === 'trend_following' || playbookContext === 'momentum_breakout';
+    const contextAdx = Number.isFinite(this.marketContext?.adx) ? Number(this.marketContext!.adx) : null;
+
     const compositeConfidence = Math.max(0.25, Math.min(
       1.85,
       (boundedQuality * 0.35)
@@ -7489,9 +7785,11 @@ export class ReboundRejectionAgent {
 
     let targetMultiplier = currentMultiplier;
     if (compositeConfidence >= 1.35) {
-      targetMultiplier = Math.max(currentMultiplier * 0.78, 0.75);
+      const tightFloor = allowTrendTightening && (contextAdx ?? 0) >= 25 ? 0.7 : 0.75;
+      targetMultiplier = Math.max(currentMultiplier * 0.78, tightFloor);
     } else if (compositeConfidence >= 1.1) {
-      targetMultiplier = Math.max(currentMultiplier * 0.88, 0.85);
+      const moderateFloor = allowTrendTightening && (contextAdx ?? 0) >= 22 ? 0.78 : 0.85;
+      targetMultiplier = Math.max(currentMultiplier * 0.88, moderateFloor);
     } else if (compositeConfidence <= 0.7) {
       targetMultiplier = Math.min(currentMultiplier * 1.45, 2.6);
     } else if (compositeConfidence <= 0.85) {
@@ -7505,7 +7803,10 @@ export class ReboundRejectionAgent {
       targetMultiplier = Math.min(targetMultiplier, currentMultiplier * 0.9);
     }
 
-    const minDistance = Math.max(baseDistance * 0.7, atrBase * 0.55);
+    const minDistance = Math.max(
+      baseDistance * (allowTrendTightening ? 0.65 : 0.7),
+      atrBase * (allowTrendTightening ? 0.5 : 0.55),
+    );
     const maxDistance = Math.max(baseDistance * 1.6, atrBase * 2.8);
     const adjustedDistance = Math.max(minDistance, Math.min(maxDistance, atrBase * targetMultiplier));
     if (!Number.isFinite(adjustedDistance) || adjustedDistance <= 0) return null;
@@ -9216,21 +9517,47 @@ export class ReboundRejectionAgent {
         distancePct: Number.isFinite(nearestDistancePct) ? nearestDistancePct : null,
       };
     })();
-
-    const rsiExtremes = (() => {
-      if (bias === 'long') return {
-        pass: rsi <= 35,
-        severe: rsi <= 30,
-        lower: 28,
-        upper: 38,
-      };
-      if (bias === 'short') return {
-        pass: rsi >= 65,
-        severe: rsi >= 70,
-        lower: 62,
-        upper: 72,
-      };
-      return { pass: false, severe: false, lower: 0, upper: 0 };
+    const emaSlopeRaw = Number((snap as any)?.ema20Slope ?? 0);
+    const emaSlopePct = ema20 !== 0 ? (emaSlopeRaw / ema20) * 100 : 0;
+    const meanReversionAdxCap = 22;
+    const emaFlat = Math.abs(emaSpreadPct) <= 1.0 && Math.abs(emaSlopePct) <= 1.0;
+    const srTightAligned = srInfo.srAligned && srInfo.withinTolerance && emaFlat;
+    const srTighterThanOnePct = srInfo.distancePct != null && srInfo.distancePct <= 1.0;
+    const cmfForRsi = typeof (snap as any)?.cmf20 === 'number'
+      ? Number((snap as any).cmf20)
+      : 0;
+    const rsiProfile = (() => {
+      if (bias === 'long') {
+        const strictPass = rsi <= 38;
+        const relaxedPass = rsi >= 40 && rsi <= 45 && srTighterThanOnePct && srInfo.srAligned && cmfForRsi >= 0;
+        return {
+          strictPass,
+          relaxedPass,
+          severe: rsi <= 30,
+          status: strictPass || relaxedPass,
+          details: {
+            strictMax: 38,
+            relaxed: [40, 45],
+            cmfRequired: '>= 0',
+          },
+        };
+      }
+      if (bias === 'short') {
+        const strictPass = rsi >= 62;
+        const relaxedPass = rsi <= 60 && rsi >= 55 && srTighterThanOnePct && srInfo.srAligned && cmfForRsi <= 0;
+        return {
+          strictPass,
+          relaxedPass,
+          severe: rsi >= 70,
+          status: strictPass || relaxedPass,
+          details: {
+            strictMin: 62,
+            relaxed: [55, 60],
+            cmfRequired: '<= 0',
+          },
+        };
+      }
+      return { strictPass: false, relaxedPass: false, severe: false, status: false, details: {} };
     })();
 
     const moderateAtrBounds = (() => {
@@ -9242,38 +9569,50 @@ export class ReboundRejectionAgent {
 
     return {
       trendAlignment: {
-        status: (Math.abs(emaSpreadPct) <= 1.0 && srInfo.srAligned && srInfo.withinTolerance) ? 'PASS' : 'FAIL',
-        reason: `Mean-reversion structure requires price to respect nearby ${bias === 'long' ? 'support' : 'resistance'} (≤2.5%) with EMA20/EMA50 flat (<±1%).`,
-        points: (Math.abs(emaSpreadPct) <= 1.0 && srInfo.srAligned && srInfo.withinTolerance) ? 20 : srInfo.srAligned ? 10 : 0,
+        status: srTightAligned ? 'PASS' : srInfo.srAligned ? 'SOFT_FAIL' : 'FAIL',
+        reason: srTightAligned
+          ? `Range confirmed: ${bias === 'long' ? 'support' : 'resistance'} respected and EMA spread/slope within ±1%.`
+          : `Mean reversion requires flat EMA stack (spread & slope ≤ ±1%) and nearby ${bias === 'long' ? 'support' : 'resistance'} (≤2.5%).`,
+        points: srTightAligned ? 20 : srInfo.srAligned ? 10 : 0,
         details: {
           ema20: ema20.toFixed(4),
           ema50: ema50.toFixed(4),
           emaSpreadPct: `${emaSpreadPct.toFixed(2)}%`,
+          emaSlopePct: `${emaSlopePct.toFixed(2)}%`,
           srBias: srInfo.srBias,
           nearestLevel: srInfo.nearestPrice,
           distancePct: srInfo.distancePct != null ? `${srInfo.distancePct.toFixed(2)}%` : 'N/A',
+          adx: adx.toFixed(2),
         }
       },
       momentum: {
-        status: adx <= 22 ? 'PASS' : 'FAIL',
-        reason: `ADX (${adx.toFixed(1)}) should stay below ~22 to confirm a range-bound environment suitable for mean reversion.`,
-        points: adx <= 22 ? 20 : adx <= 25 ? 10 : 0,
+        status: adx <= meanReversionAdxCap ? 'PASS' : 'FAIL',
+        reason: `ADX (${adx.toFixed(1)}) must stay ≤ ${meanReversionAdxCap} to confirm a true range; higher ADX flips to trend mode.`,
+        points: adx <= meanReversionAdxCap ? 20 : adx <= 25 ? 10 : 0,
         details: {
           currentADX: adx,
-          tolerance: 22,
+          tolerance: meanReversionAdxCap,
         }
       },
       rsiPosition: {
-        status: rsiExtremes.pass && srInfo.srAligned ? 'PASS' : 'FAIL',
+        status: rsiProfile.status && srInfo.srAligned ? 'PASS' : 'FAIL',
         reason: bias === 'long'
-          ? `RSI (${rsi.toFixed(1)}) should show oversold divergence (≤${rsiExtremes.upper}) near support to justify a bounce.`
-          : `RSI (${rsi.toFixed(1)}) should show overbought divergence (≥${rsiExtremes.lower}) near resistance to justify a fade.`,
-        points: rsiExtremes.severe && srInfo.srAligned ? 20 : rsiExtremes.pass ? 15 : 0,
+          ? `RSI (${rsi.toFixed(1)}) must tag ≤38, or 40–45 only if support is <1% away with positive CMF.`
+          : `RSI (${rsi.toFixed(1)}) must tag ≥62, or 55–60 only if resistance is <1% away with negative CMF.`,
+        points: (() => {
+          if (!srInfo.srAligned) return 0;
+          if (rsiProfile.strictPass) return rsiProfile.severe ? 20 : 15;
+          if (rsiProfile.relaxedPass) return 10;
+          return 0;
+        })(),
         details: {
           currentRSI: rsi,
           bias,
-          severe: rsiExtremes.severe,
+          severe: rsiProfile.severe,
           srBias: srInfo.srBias,
+          srDistancePct: srInfo.distancePct != null ? `${srInfo.distancePct.toFixed(2)}%` : 'N/A',
+          cmf20: cmfForRsi,
+          relaxedEligible: srTighterThanOnePct && srInfo.srAligned,
         }
       },
       volatility: {
@@ -11478,9 +11817,17 @@ export class ReboundRejectionAgent {
   ): Promise<PlacedOrder | null> {
     if (!this.broker || !this.profile) return null;
 
+    const propagatePostOnly = <T extends ExecutionPlan | ExecutionPlan['fallbacks'][number]>(
+      step: T,
+      isFallback: boolean,
+    ) => {
+      const shouldPropagate = plan.postOnly === true && step.mode === 'limit' && step.postOnly == null;
+      const postOnly = shouldPropagate ? true : step.postOnly;
+      return { ...step, postOnly, isFallback };
+    };
     const attempts = [
-      { ...plan, isFallback: false },
-      ...plan.fallbacks.map(fallback => ({ ...fallback, isFallback: true })),
+      propagatePostOnly(plan, false),
+      ...plan.fallbacks.map(fallback => propagatePostOnly(fallback, true)),
     ] as Array<
       (ExecutionPlan & { isFallback: boolean }) |
       (ExecutionPlan['fallbacks'][number] & { isFallback: boolean })
@@ -11537,6 +11884,7 @@ export class ReboundRejectionAgent {
             tp: base.tp,
             entry: base.entry,
             leverage: base.leverage,
+            postOnly: Boolean(step.postOnly ?? plan.postOnly),
           });
         } else {
           const slices = step.twapSlices ?? plan.twapSlices ?? 3;
@@ -11583,7 +11931,7 @@ export class ReboundRejectionAgent {
   }
 
   private async placeLimitAdaptive(order: any): Promise<any> {
-    const { side, qty, limitPrice, stop, tp, entry, leverage } = order;
+    const { side, qty, limitPrice, stop, tp, entry, leverage, postOnly } = order;
 
     if (!this.broker || !this.profile) {
       console.log('Cannot place limit order: missing broker or profile');
@@ -11602,7 +11950,8 @@ export class ReboundRejectionAgent {
         price: limitPrice,
         leverage: Math.max(1, Math.min(this.profile.maxLeverage || 1, leverage || (this.profile.dynamicLeverage !== false ? (this.profile.minLeverage || 1) : (this.profile.maxLeverage || 1)))) ,
         takeProfit: tp[0], // Primary TP
-        stopLoss: stop
+        stopLoss: stop,
+        postOnly: Boolean(postOnly),
       });
 
       if (placed.status === 'rejected' || !placed.filledQty || placed.filledQty <= 0) {

@@ -24,6 +24,8 @@ export type ExecutionContext = {
   volatilityProfile?: string | null;
   playbook?: string | null;
   recentRejections?: number;
+  volumeRatio?: number | null;
+  confirmationUrgent?: boolean;
 };
 
 export type ExecutionStep = {
@@ -31,6 +33,7 @@ export type ExecutionStep = {
   reason: string;
   limitPrice?: number;
   passiveOffsetBps?: number;
+  postOnly?: boolean;
   twapSlices?: number;
   twapIntervalMs?: number;
   delayMs?: number;
