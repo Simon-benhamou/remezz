@@ -28,6 +28,7 @@ import { getUserExchange } from '../exchange/ccxtClient.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { stopAllAgents } from '../services/stopAllAgents.js';
 import { resolveRrExpectancyConfig } from '../risk/rrExpectancy.js';
+import { getPortfolioSnapshot, updatePortfolioBalance, rebalancePortfolio } from '../services/portfolioManager.js';
 
 export const router = Router();
 
@@ -122,6 +123,60 @@ async function processSmartReselect(sessionId: string, res: Response) {
 }
 
 router.get('/session', async (_req,res)=> res.json(await activeSession()));
+
+router.get('/portfolio', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(403).json({ ok: false, code: 'auth_required' });
+  }
+  const modeRaw = typeof req.query.mode === 'string' ? req.query.mode.toLowerCase() : 'paper';
+  const mode = modeRaw === 'live' ? 'live' : 'paper';
+  try {
+    const snapshot = await getPortfolioSnapshot(req.user.id, mode);
+    return res.json(snapshot);
+  } catch (error) {
+    console.error('Failed to fetch portfolio snapshot:', error);
+    return res.status(500).json({ ok: false, error: 'portfolio_snapshot_failed' });
+  }
+});
+
+router.post('/portfolio/balance', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(403).json({ ok: false, code: 'auth_required' });
+  }
+  const body = req.body || {};
+  const modeRaw = typeof body.mode === 'string' ? body.mode.toLowerCase() : 'paper';
+  const mode = modeRaw === 'live' ? 'live' : 'paper';
+  const balanceValue = Number(body.balanceUsd);
+  if (!Number.isFinite(balanceValue) || balanceValue < 0) {
+    return res.status(400).json({ ok: false, code: 'invalid_balance' });
+  }
+  try {
+    await updatePortfolioBalance(req.user.id, mode, balanceValue);
+    invalidateOverviewCaches();
+    const snapshot = await getPortfolioSnapshot(req.user.id, mode);
+    return res.json({ ok: true, snapshot });
+  } catch (error) {
+    console.error('Failed to update portfolio balance:', error);
+    return res.status(500).json({ ok: false, error: 'portfolio_balance_update_failed' });
+  }
+});
+
+router.post('/portfolio/rebalance', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(403).json({ ok: false, code: 'auth_required' });
+  }
+  const body = req.body || {};
+  const modeRaw = typeof body.mode === 'string' ? body.mode.toLowerCase() : 'paper';
+  const mode = modeRaw === 'live' ? 'live' : 'paper';
+  try {
+    const snapshot = await rebalancePortfolio({ userId: req.user.id, mode, reason: 'manual_rebalance' });
+    invalidateOverviewCaches();
+    return res.json({ ok: true, snapshot });
+  } catch (error) {
+    console.error('Failed to rebalance portfolio:', error);
+    return res.status(500).json({ ok: false, error: 'portfolio_rebalance_failed' });
+  }
+});
 
 function handleCreationError(res: Response, error: unknown) {
   if (error instanceof PhaseError) {

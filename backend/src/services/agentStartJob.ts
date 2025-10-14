@@ -18,6 +18,7 @@ import { buildTechSnapshot } from '../ai/tech.js';
 import { requestStrategy } from '../ai/strategyManager.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan } from './planStore.js';
+import { updatePortfolioBalance, rebalancePortfolio } from './portfolioManager.js';
 import { getTicker } from '../data/market.js';
 import { broadcast } from '../ws/hub.js';
 import { getOhlcvWarmupState } from '../data/market.js';
@@ -214,6 +215,20 @@ async function runJob(jobId: string) {
     updateJob(jobId, { metrics: { ...jobs.get(jobId)!.metrics, dataWarmup: warmup } });
   }
 
+  if (job.userId) {
+    const targetBalance = Number.isFinite(normalized.portfolioBalanceUsd)
+      ? normalized.portfolioBalanceUsd
+      : normalized.startBalanceUsd;
+    try {
+      if (Number.isFinite(targetBalance) && targetBalance >= 0) {
+        await updatePortfolioBalance(job.userId, normalized.mode, Number(targetBalance));
+      }
+      await rebalancePortfolio({ userId: job.userId, mode: normalized.mode, reason: 'agent_start_job' });
+    } catch (error) {
+      console.warn('⚠️ Portfolio update failed during agent start job:', error);
+    }
+  }
+
   const result: AgentStartJobResult =
     activationResult.state === 'ready'
       ? {
@@ -274,6 +289,7 @@ function failJob(jobId: string, error: AgentStartJobError) {
 type NormalizedStartConfig = {
   mode: 'paper' | 'live';
   startBalanceUsd: number;
+  portfolioBalanceUsd: number;
   isSmartAgent: boolean;
   smartConfig: Record<string, any>;
   aggressiveness: 'conservative' | 'reactive' | 'aggressive';
@@ -314,7 +330,20 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
 
   const startBalanceUsd =
-    typeof payload.startBalanceUsd === 'number' && payload.startBalanceUsd > 0 ? payload.startBalanceUsd : mode === 'paper' ? 1000 : 0;
+    typeof payload.startBalanceUsd === 'number' && payload.startBalanceUsd > 0
+      ? Number(payload.startBalanceUsd)
+      : mode === 'paper'
+      ? 1000
+      : 0;
+
+  const requestedPortfolioBalance =
+    typeof payload.portfolioBalanceUsd === 'number' && payload.portfolioBalanceUsd >= 0
+      ? Number(payload.portfolioBalanceUsd)
+      : undefined;
+  const portfolioBalanceUsd =
+    requestedPortfolioBalance != null
+      ? requestedPortfolioBalance
+      : startBalanceUsd;
 
   const smartConfig = {
     minHoldDuration: Number(payload.smartConfig?.minHoldDuration ?? 86_400_000),
@@ -335,6 +364,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   return {
     mode,
     startBalanceUsd,
+    portfolioBalanceUsd,
     isSmartAgent,
     smartConfig,
     aggressiveness,

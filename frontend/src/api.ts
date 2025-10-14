@@ -148,6 +148,12 @@ export const api = {
     (await client.get('/api/ops/events', { params: { limit } })).data,
   getAgentHealth: async () =>
     (await client.get('/api/ops/agent-health')).data,
+  getPortfolio: async (mode: 'paper' | 'live' = 'paper') =>
+    (await client.get('/api/agent/portfolio', { params: { mode } })).data,
+  setPortfolioBalance: async (mode: 'paper' | 'live', balanceUsd: number) =>
+    (await client.post('/api/agent/portfolio/balance', { mode, balanceUsd })).data,
+  rebalancePortfolio: async (mode: 'paper' | 'live') =>
+    (await client.post('/api/agent/portfolio/rebalance', { mode })).data,
   getAdaptiveWeights: async (params?: { family?: string; limit?: number; decisionsLimit?: number }) =>
     (await client.get('/api/monitor/adaptive-weights', { params })).data,
   listImprovements: async (status?: string) =>

@@ -21,7 +21,12 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
   const start = async () => {
     setLoading(true);
     try {
-      await api.client.post('/api/agent/start', { symbol, mode, startBalanceUsd: mode==='paper'? startBal: undefined, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss, budgetPct, aggressiveness });
+      const payload: any = { symbol, mode, riskPerTradePct: riskPct, maxLeverage: maxLev, dailyLossLimitPct: dailyLoss, budgetPct, aggressiveness };
+      if (mode === 'paper') {
+        payload.startBalanceUsd = startBal;
+        payload.portfolioBalanceUsd = startBal;
+      }
+      await api.client.post('/api/agent/start', payload);
       message.success('QuantAI agent activated');
       onStarted?.();
     } catch (e:any) {
@@ -46,7 +51,7 @@ export default function ActivationPanel({ defaultSymbol = 'BTC/USDT', onStarted 
           </div>
           {mode==='paper' && (
             <div>
-              <div style={{ fontSize:12, color:'#888' }}>Start balance (USD)</div>
+              <div style={{ fontSize:12, color:'#888' }}>Paper portfolio balance (USD)</div>
               <InputNumber min={100} step={100} value={startBal} onChange={setStartBal as any} />
             </div>
           )}

@@ -16,6 +16,19 @@ export class PaperBroker implements Broker {
     if (startUsd && startUsd > 0) this.balanceUsd = startUsd;
   }
 
+  setBalanceUsd(amount: number) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return;
+    }
+    this.balanceUsd = amount;
+    if (this.marginReservedUsd > this.balanceUsd) {
+      this.marginReservedUsd = Math.max(0, Math.min(this.marginReservedUsd, this.balanceUsd));
+    }
+    if (this.totalNotionalUsd > this.balanceUsd * 10) {
+      this.totalNotionalUsd = Math.max(0, Math.min(this.totalNotionalUsd, this.balanceUsd * 10));
+    }
+  }
+
   async balance(): Promise<BrokerMarginSnapshot> {
     const freeUsd = Math.max(0, this.balanceUsd - this.marginReservedUsd);
     const equityUsd = this.balanceUsd;
