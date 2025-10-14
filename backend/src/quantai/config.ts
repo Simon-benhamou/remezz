@@ -11,6 +11,9 @@ export type QuantAIRiskConfig = {
   sizeReductionAfterLosses: number;
   sizeReductionFactor: number;
   baseRiskPerTradePct: number;
+  winStreakForIncrease?: number;
+  sizeIncreaseFactor?: number;
+  sizeIncreaseMaxMultiplier?: number;
 };
 
 export type QuantAIFeesConfig = {
@@ -211,6 +214,9 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     sizeReductionAfterLosses: 2,
     sizeReductionFactor: 0.5,
     baseRiskPerTradePct: 0.5,
+    winStreakForIncrease: 2,
+    sizeIncreaseFactor: 1.1,
+    sizeIncreaseMaxMultiplier: 1.35,
   },
   feesSlippage: {
     takerFeeBps: 7.5,
@@ -341,6 +347,9 @@ function normalizeRisk(raw: any): QuantAIRiskConfig {
     sizeReductionAfterLosses: Number(raw.size_reduction_after_n_losses ?? raw.sizeReductionAfterLosses ?? DEFAULT_CONFIG.risk.sizeReductionAfterLosses),
     sizeReductionFactor: Number(raw.size_reduction_factor ?? raw.sizeReductionFactor ?? DEFAULT_CONFIG.risk.sizeReductionFactor),
     baseRiskPerTradePct: Number(raw.base_risk_per_trade_pct ?? raw.baseRiskPerTradePct ?? DEFAULT_CONFIG.risk.baseRiskPerTradePct),
+    winStreakForIncrease: Number(raw.win_streak_for_increase ?? raw.winStreakForIncrease ?? DEFAULT_CONFIG.risk.winStreakForIncrease ?? 0),
+    sizeIncreaseFactor: Number(raw.size_increase_factor ?? raw.sizeIncreaseFactor ?? DEFAULT_CONFIG.risk.sizeIncreaseFactor ?? 1),
+    sizeIncreaseMaxMultiplier: Number(raw.size_increase_max_multiplier ?? raw.sizeIncreaseMaxMultiplier ?? DEFAULT_CONFIG.risk.sizeIncreaseMaxMultiplier ?? 1),
   };
 }
 
