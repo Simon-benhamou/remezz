@@ -198,6 +198,19 @@ type QualityAssessmentSnapshot = {
   allow: boolean;
   compensated: boolean;
   failingKeys: string[];
+  rawPoints?: number;
+  rawMaxPoints?: number;
+  weightsApplied?: Record<string, number>;
+  majorityThreshold?: number;
+  effectivePasses?: number;
+};
+
+type QualityScoreProfile = {
+  weights: Record<string, number>;
+  majorityRatio: number;
+  partialCredit: number;
+  comboTolerance: number;
+  minPassCount: number;
 };
 
 // Advanced Performance Tracking Interfaces
@@ -285,7 +298,39 @@ type MomentumGateEvaluation = {
     playbook: string;
     bias: string;
     reasonHint: 'enter' | 'reverse';
+    overrideApplied?: boolean;
+    context?: MarketContext | null;
+    strongTrendOverride?: boolean;
   };
+};
+
+type StrongTrendAssessment = {
+  strong: boolean;
+  moderate: boolean;
+  direction: 'long' | 'short' | 'none';
+  confidence: number;
+  adx: number;
+  emaSpreadPct: number;
+  emaSlopePct: number;
+  hurst?: number;
+  reasons: string[];
+  multiTimeframeAgreement: boolean;
+};
+
+type MarketContext = {
+  regime: 'trend_following' | 'range' | 'breakout';
+  basePlaybook: string;
+  effectivePlaybook: 'trend_following' | 'mean_reversion' | 'momentum_breakout';
+  strongTrend: boolean;
+  moderateTrend: boolean;
+  direction: 'long' | 'short' | 'none';
+  allowMomentumOverride: boolean;
+  favorMeanReversion: boolean;
+  confidence: number;
+  notes: string[];
+  hurst?: number;
+  trendStrength?: number;
+  adx?: number;
 };
 
 export class ReboundRejectionAgent {
@@ -334,6 +379,7 @@ export class ReboundRejectionAgent {
     data: any;
     assessment: QualityAssessmentSnapshot;
   } | null = null;
+  private marketContext: MarketContext | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -735,10 +781,14 @@ export class ReboundRejectionAgent {
     }
     const price = snap.last;
     const { from, to, mid } = this.plan.zone;
-    const playbook: string = ((this.plan.plan.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook, context } = this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
     const normalizedPlaybook = String(playbook);
+    if (context && context.basePlaybook !== context.effectivePlaybook) {
+      console.log(
+        `🧭 Context shift: ${context.basePlaybook} → ${context.effectivePlaybook} | regime=${context.regime}` +
+        ` notes=${context.notes.join(',')}`
+      );
+    }
 
     if (this.state === 'ARMED') {
       // 🔥 PHASE 1 FIX #3: Check for gaps at cycle start
@@ -1018,9 +1068,23 @@ export class ReboundRejectionAgent {
     }
 
     const planBias = this.plan.bias;
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook, context } = this.getContextualPlaybook(snapForValidation, planBias ?? 'none');
+    if (context && context.basePlaybook !== context.effectivePlaybook) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_context',
+        message: 'playbook_adjusted',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          base: context.basePlaybook,
+          effective: context.effectivePlaybook,
+          regime: context.regime,
+          direction: context.direction,
+          confidence: context.confidence,
+        },
+      });
+    }
     const validationSnap = snapForValidation!;
     const { zone: adaptiveZone, meta: entryZoneMeta } = this.computeVolatilityAdjustedZone(validationSnap, {
       planZone: this.plan.zone,
@@ -1175,11 +1239,17 @@ export class ReboundRejectionAgent {
     const qualityFilters = this.getQualityFiltersDiagnostics(snap);
     const mode = this.profile?.aggressiveness || 'reactive';
     const normalizedPlaybook = String(playbook);
+    const tierForQuality = this.profile ? this.getTierForSymbol(this.profile.symbol) : null;
+    const qualityProfile = this.getQualityScoreProfile(normalizedPlaybook, mode);
     const quantArchetype: ExitArchetype = playbook === 'momentum_breakout' ? 'impulse' : 'reversal';
-    const baseThreshold = playbook === 'momentum_breakout' ? 55 : playbook === 'mean_reversion' ? 40 : 50;
-    const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'reactive' ? 0 : 5;
-    const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
-    const qualityAssessment = this.assessQualityScore(qualityFilters, minTradingPoints);
+    const minTradingPoints = this.computeQualityScoreThreshold(normalizedPlaybook, mode, tierForQuality);
+    const qualityAssessment = this.assessQualityScore(qualityFilters, minTradingPoints, {
+      weights: qualityProfile.weights,
+      majorityRatio: qualityProfile.majorityRatio,
+      partialCredit: qualityProfile.partialCredit,
+      minPassCount: qualityProfile.minPassCount,
+      comboTolerance: qualityProfile.comboTolerance,
+    });
 
     if (!qualityAssessment.allow) {
       recordOpsEvent({
@@ -1627,11 +1697,19 @@ export class ReboundRejectionAgent {
     }
     const tier = this.getTierForSymbol(this.profile.symbol);
     const aggressiveness = this.profile.aggressiveness || null;
+    const { playbook: previewPlaybook } = this.getContextualPlaybook(snap, this.plan?.bias ?? 'none');
+    const previewProfile = this.getQualityScoreProfile(previewPlaybook, aggressiveness || 'reactive');
     const volatilityProfileForFilters = this.resolveVolatilityProfileForFilters();
     let qualityPassHint: boolean | undefined;
     try {
       const previewDiagnostics = this.getQualityFiltersDiagnostics(snap);
-      const previewAssessment = this.assessQualityScore(previewDiagnostics, 0) as QualityAssessmentSnapshot;
+      const previewAssessment = this.assessQualityScore(previewDiagnostics, 0, {
+        weights: previewProfile.weights,
+        majorityRatio: previewProfile.majorityRatio,
+        partialCredit: previewProfile.partialCredit,
+        minPassCount: previewProfile.minPassCount,
+        comboTolerance: previewProfile.comboTolerance,
+      }) as QualityAssessmentSnapshot;
       this.previewQualityDiagnostics = {
         snapshotKey: this.getQualitySnapshotKey(snap),
         data: previewDiagnostics,
@@ -5667,6 +5745,155 @@ export class ReboundRejectionAgent {
     }
   }
 
+  private checkStrongTrend(snap: TechnicalSnapshot, bias: 'long' | 'short' | 'none'): StrongTrendAssessment {
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const ema20 = Number((snap as any)?.ema20 ?? snap.last);
+    const ema50 = Number((snap as any)?.ema50 ?? snap.last);
+    const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+    const emaSpreadPct = ema50 !== 0 ? ((ema20 - ema50) / Math.abs(ema50)) * 100 : 0;
+    const emaSlopePct = ema20 !== 0 ? (emaSlope / ema20) * 100 : 0;
+    const hurst = Number.isFinite((snap as any)?.hurst) ? Number((snap as any)?.hurst) : undefined;
+    const trendBias = ema20 > ema50 ? 'long' : ema20 < ema50 ? 'short' : 'none';
+    const multiTimeframeAgreement = (snap.trendBias === 'bullish' && trendBias === 'long')
+      || (snap.trendBias === 'bearish' && trendBias === 'short');
+
+    const absSpread = Math.abs(emaSpreadPct);
+    const absSlope = Math.abs(emaSlopePct);
+    const reasons: string[] = [];
+
+    if (adx >= 25) reasons.push(`adx_${adx.toFixed(1)}`);
+    if (absSpread >= 0.8) reasons.push(`ema_spread_${absSpread.toFixed(2)}%`);
+    if (absSlope >= 0.12) reasons.push(`slope_${absSlope.toFixed(2)}%`);
+    if (multiTimeframeAgreement) reasons.push('htf_alignment');
+    if (hurst != null && hurst > 0.58) reasons.push(`hurst_${hurst.toFixed(2)}`);
+
+    const strong = adx >= 27 && absSpread >= 1 && absSlope >= 0.12;
+    const moderate = !strong && adx >= 20 && absSpread >= 0.6 && absSlope >= 0.06;
+    const direction = strong || moderate ? trendBias : 'none';
+
+    const adxFactor = Math.max(0, Math.min(1, (adx - 15) / 20));
+    const spreadFactor = Math.max(0, Math.min(1, absSpread / 2.2));
+    const slopeFactor = Math.max(0, Math.min(1, absSlope / 0.22));
+    const hurstFactor = hurst != null ? Math.max(0, Math.min(1, (hurst - 0.45) / 0.35)) : 0.5;
+    const alignmentFactor = multiTimeframeAgreement ? 1 : 0.4;
+
+    const confidence = Number((
+      0.32 * adxFactor
+      + 0.28 * spreadFactor
+      + 0.16 * slopeFactor
+      + 0.12 * hurstFactor
+      + 0.12 * alignmentFactor
+    ).toFixed(3));
+
+    if (direction === 'none' && bias !== 'none' && (strong || moderate)) {
+      reasons.push(`bias_${bias}_override`);
+    }
+
+    return {
+      strong,
+      moderate,
+      direction,
+      confidence,
+      adx,
+      emaSpreadPct,
+      emaSlopePct,
+      hurst,
+      reasons,
+      multiTimeframeAgreement,
+    };
+  }
+
+  private resolveMarketContext(
+    snap: TechnicalSnapshot,
+    basePlaybook: string,
+    bias: 'long' | 'short' | 'none'
+  ): MarketContext {
+    const assessment = this.checkStrongTrend(snap, bias);
+    const hurst = assessment.hurst ?? (Number.isFinite((snap as any)?.hurst) ? Number((snap as any)?.hurst) : undefined);
+    const regimeTrend = snap.regime?.trend ?? null;
+    const externalPlaybook = snap.regime?.playbook ?? null;
+    const trendStrength = Number((snap as any)?.trendStrength ?? Math.abs(assessment.emaSpreadPct));
+
+    let regime: MarketContext['regime'];
+    if (assessment.strong) {
+      regime = 'trend_following';
+    } else if (basePlaybook === 'momentum_breakout' || externalPlaybook === 'momentum_breakout') {
+      regime = assessment.moderate ? 'breakout' : 'range';
+    } else if (regimeTrend === 'range' || trendStrength < 0.25 || (hurst != null && hurst < 0.48) || assessment.adx < 18) {
+      regime = 'range';
+    } else if (assessment.moderate) {
+      regime = 'trend_following';
+    } else {
+      regime = regimeTrend === 'uptrend' || regimeTrend === 'downtrend' ? 'trend_following' : 'range';
+    }
+
+    if (regime === 'range' && (externalPlaybook === 'momentum_breakout' || basePlaybook === 'momentum_breakout') && assessment.moderate) {
+      regime = 'breakout';
+    }
+
+    const effectivePlaybook: MarketContext['effectivePlaybook'] = regime === 'range'
+      ? 'mean_reversion'
+      : regime === 'breakout'
+        ? 'momentum_breakout'
+        : 'trend_following';
+
+    const allowMomentumOverride = regime !== 'range' && (assessment.strong || regime === 'breakout');
+    const favorMeanReversion = regime === 'range';
+
+    const notes = assessment.reasons.slice();
+    if (regime === 'range') notes.push('range_structure_detected');
+    if (regime === 'trend_following' && !assessment.strong && assessment.moderate) notes.push('moderate_trend_following');
+    if (externalPlaybook && externalPlaybook !== effectivePlaybook) {
+      notes.push(`regime_playbook=${externalPlaybook}`);
+    }
+    if (basePlaybook !== effectivePlaybook) {
+      notes.push(`playbook_adjusted:${basePlaybook}->${effectivePlaybook}`);
+    }
+
+    const context: MarketContext = {
+      regime,
+      basePlaybook,
+      effectivePlaybook,
+      strongTrend: assessment.strong,
+      moderateTrend: assessment.moderate,
+      direction: assessment.direction,
+      allowMomentumOverride,
+      favorMeanReversion,
+      confidence: assessment.confidence,
+      notes,
+      hurst,
+      trendStrength,
+      adx: assessment.adx,
+    };
+
+    this.marketContext = context;
+    return context;
+  }
+
+  private getContextualPlaybook(
+    snap?: TechnicalSnapshot | null,
+    bias?: 'long' | 'short' | 'none'
+  ): { playbook: string; context: MarketContext | null; basePlaybook: string } {
+    const fallbackRaw = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const fallback = (['trend_following', 'momentum_breakout', 'mean_reversion'].includes(fallbackRaw)
+      ? fallbackRaw
+      : 'mean_reversion') as 'trend_following' | 'momentum_breakout' | 'mean_reversion';
+
+    if (snap) {
+      const context = this.resolveMarketContext(snap, fallback, bias ?? (this.plan?.bias ?? 'none'));
+      return { playbook: context.effectivePlaybook, context, basePlaybook: fallback };
+    }
+
+    const context = this.marketContext;
+    return {
+      playbook: context?.effectivePlaybook ?? fallback,
+      context: context ?? null,
+      basePlaybook: context?.basePlaybook ?? fallback,
+    };
+  }
+
   private getCryptoVolatilityProfile(symbol: string): 'HIGH_VOLATILITY' | 'MODERATE' | 'LOW_VOLATILITY' | 'MEME_VOLATILITY' {
     const baseCrypto = symbol.split('/')[0]?.toUpperCase();
     if (!baseCrypto) return 'MODERATE';
@@ -5689,10 +5916,8 @@ export class ReboundRejectionAgent {
     const thresholds = this.effectiveEntryThresholds();
     const memeBias = this.isMemeCoin(this.profile?.symbol);
     const quantFilters = this.quantConfig?.filters;
-    const playbook = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
     const bias = this.plan?.bias || 'none';
+    const { playbook, context } = this.getContextualPlaybook(snap, bias);
 
     const snapshotId = (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
     const tfLTF = snap.meta?.tf ?? (snap.meta as any)?.ltf ?? null;
@@ -5712,7 +5937,8 @@ export class ReboundRejectionAgent {
     );
     console.log(
       `🧭 Momentum gates check | playbook=${playbook} bias=${bias} snapshot=${snapshotId ?? 'n/a'} ` +
-      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'}`,
+      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'} regime=${context?.regime ?? 'n/a'} ` +
+      `trend=${context?.strongTrend ? 'strong' : context?.moderateTrend ? 'moderate' : 'weak'} conf=${context?.confidence ?? 0}`,
     );
 
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
@@ -5741,6 +5967,16 @@ export class ReboundRejectionAgent {
       minSlopeAbsPct = Math.max(0.00005, minSlopeAbsPct * 0.8);
     }
 
+    if (context?.regime === 'trend_following') {
+      const atrFactor = context.strongTrend ? 0.9 : 0.95;
+      const slopeFactor = context.strongTrend ? 0.75 : 0.85;
+      minAtr = Math.max(0.05, minAtr * atrFactor);
+      minSlopeAbsPct = Math.max(0.00015, minSlopeAbsPct * slopeFactor);
+    } else if (context?.regime === 'range') {
+      minAtr *= 1.1;
+      minSlopeAbsPct *= 1.2;
+    }
+
     if (playbook === 'momentum_breakout') {
       minAtr *= 1.15;
       minSlopeAbsPct *= 1.05;
@@ -5760,6 +5996,14 @@ export class ReboundRejectionAgent {
 
     if (memeBias) {
       minAdxRequired = Math.max(8, minAdxRequired - 2);
+    }
+
+    if (context?.regime === 'trend_following') {
+      minAdxRequired = Math.max(8, minAdxRequired - (context.strongTrend ? 4 : 2));
+    } else if (context?.regime === 'range') {
+      minAdxRequired = Math.min(40, minAdxRequired + 2);
+    } else if (context?.regime === 'breakout') {
+      minAdxRequired = Math.max(10, minAdxRequired - 1);
     }
 
     const reasons: string[] = [];
@@ -5877,9 +6121,27 @@ export class ReboundRejectionAgent {
     }
 
     const playbookLower = playbook.toLowerCase();
-    const status: 'PASS' | 'SOFT_FAIL' | 'FAIL' = reasons.length === 0
-      ? 'PASS'
-      : playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
+    let overrideApplied = false;
+    let strongTrendOverride = false;
+    let status: 'PASS' | 'SOFT_FAIL' | 'FAIL';
+    if (reasons.length === 0) {
+      status = 'PASS';
+    } else if (context?.allowMomentumOverride && context.confidence >= 0.55) {
+      const overrideable = reasons.every(reason => (
+        reason.startsWith('atr_too_low')
+        || reason.startsWith('slope_too_flat')
+        || reason.startsWith('adx_too_low')
+      ));
+      if (overrideable) {
+        status = 'PASS';
+        overrideApplied = true;
+        strongTrendOverride = context.strongTrend || (context.moderateTrend && context.regime !== 'range');
+      } else {
+        status = playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
+      }
+    } else {
+      status = playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
+    }
 
     const result: MomentumGateEvaluation = {
       pass: status === 'PASS',
@@ -5901,6 +6163,9 @@ export class ReboundRejectionAgent {
         playbook,
         bias,
         reasonHint,
+        overrideApplied,
+        context: context ?? null,
+        strongTrendOverride,
       },
     };
 
@@ -5915,6 +6180,10 @@ export class ReboundRejectionAgent {
   ): boolean {
     const { emitEvents = true, allowSoft = true } = options ?? {};
     const evaluation = this.evaluateMomentumGates(snap, reasonHint, emitEvents);
+    if (!evaluation.pass && evaluation.details.overrideApplied) {
+      console.log('⚡ Strong trend override applied to momentum gates');
+      return true;
+    }
     if (!evaluation.pass && evaluation.status === 'SOFT_FAIL') {
       return allowSoft;
     }
@@ -6003,399 +6272,236 @@ export class ReboundRejectionAgent {
     return this.exchangeVolumeThresholds;
   }
 
+  private getQualityScoreProfile(playbook: string, aggressiveness: string | null | undefined): QualityScoreProfile {
+    const normalized = (playbook || 'mean_reversion').toString().toLowerCase();
+    const weights: Record<string, number> = {
+      trendAlignment: 1,
+      momentum: 1,
+      volatility: 1,
+      volume: 1,
+      rsiPosition: 1,
+    };
+
+    let majorityRatio = 0.6;
+    let partialCredit = 0.5;
+    let comboTolerance = 6;
+    let minPassCount = 3;
+
+    switch (normalized) {
+      case 'momentum_breakout':
+        weights.momentum = 1.3;
+        weights.trendAlignment = 1.2;
+        weights.volatility = 1.1;
+        weights.volume = 0.9;
+        weights.rsiPosition = 0.7;
+        comboTolerance = 8;
+        break;
+      case 'trend_following':
+        weights.momentum = 1.2;
+        weights.trendAlignment = 1.3;
+        weights.volatility = 1.0;
+        weights.volume = 0.9;
+        weights.rsiPosition = 0.8;
+        comboTolerance = 7;
+        break;
+      default:
+        weights.momentum = 0.85;
+        weights.trendAlignment = 1.0;
+        weights.volatility = 1.1;
+        weights.volume = 0.95;
+        weights.rsiPosition = 1.2;
+        partialCredit = 0.6;
+        comboTolerance = 5;
+        break;
+    }
+
+    const mode = (aggressiveness || 'reactive').toString().toLowerCase();
+    if (mode === 'aggressive') {
+      majorityRatio -= 0.05;
+      comboTolerance += 2;
+      weights.volume *= 0.9;
+      weights.volatility *= 0.95;
+    } else if (mode === 'conservative') {
+      majorityRatio += 0.05;
+      weights.volume *= 1.05;
+      weights.volatility *= 1.05;
+    }
+
+    majorityRatio = Math.min(0.75, Math.max(0.5, majorityRatio));
+    partialCredit = Math.min(0.7, Math.max(0.35, partialCredit));
+    comboTolerance = Math.max(3, comboTolerance);
+    minPassCount = Math.max(2, minPassCount);
+
+    return { weights, majorityRatio, partialCredit, comboTolerance, minPassCount };
+  }
+
+  private computeQualityScoreThreshold(
+    playbook: string,
+    aggressiveness: string | null | undefined,
+    tier?: string | null,
+  ): number {
+    const normalized = (playbook || 'mean_reversion').toString().toLowerCase();
+    let baseThreshold = normalized === 'momentum_breakout' ? 55 : normalized === 'mean_reversion' ? 40 : 50;
+    const mode = (aggressiveness || 'reactive').toString().toLowerCase();
+    const modeAdjustment = mode === 'aggressive' ? -5 : mode === 'conservative' ? 5 : 0;
+    const tierAdjustment = tier ? this.qualityAdjustmentByTier.get(tier) ?? 0 : 0;
+    const dynamicAdjustment = this.qualityThresholdAdjustment;
+    const total = baseThreshold + modeAdjustment + tierAdjustment + dynamicAdjustment;
+    return Math.max(30, Math.min(90, total));
+  }
+
   // Simplified quality filters - keep only essential indicators: EMA20/50, RSI, ATR, ADX, volume
   private async passesQualityFilters(snap: TechnicalSnapshot): Promise<boolean> {
     if (!this.plan) return false;
-    const price = snap.last;
     const bias = this.plan.bias;
     if (bias === 'none') return false;
 
-    const cfg = getConfig();
-    const adx = Number((snap as any)?.adx14 ?? 0);
-    const rsi = Number((snap as any)?.rsi14 ?? 50);
-    const ema20 = Number((snap as any)?.ema20 ?? price);
-    const ema50 = Number((snap as any)?.ema50 ?? price);
-    const atrPct = Number((snap as any)?.atrPct ?? 0);
-    let volume = Number((snap as any)?.volume ?? 0);
-    const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
-    const normalizedPlaybook = String(playbook);
+    const { playbook } = this.getContextualPlaybook(snap, bias ?? 'none');
+    const aggressiveness = this.profile?.aggressiveness || 'reactive';
+    const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : null;
 
-    // Detect breakout/reversal context early to avoid false blocks on data glitches
-    const earlyBreakoutAdx = Math.max(18, Number(getConfig().ENTRY_LONG_MIN_ADX || 22));
-    const earlyBreakoutAtr = Math.max(0.6, Number(getConfig().ENTRY_MIN_ATR_PCT || 0.8));
-    const isTrendAlignedEarly = this.checkTrendAlignment(ema20, ema50, bias, {
-      atrPct,
-      adx,
-      playbook: normalizedPlaybook,
-      price,
+    const profile = this.getQualityScoreProfile(playbook, aggressiveness);
+    const threshold = this.computeQualityScoreThreshold(playbook, aggressiveness, tier);
+
+    const diagnostics = this.getQualityFiltersDiagnostics(snap);
+    const assessment = this.assessQualityScore(diagnostics, threshold, {
+      weights: profile.weights,
+      majorityRatio: profile.majorityRatio,
+      partialCredit: profile.partialCredit,
+      minPassCount: profile.minPassCount,
+      comboTolerance: profile.comboTolerance,
     });
-    const isBreakoutContextEarly = (adx >= earlyBreakoutAdx && atrPct >= earlyBreakoutAtr && isTrendAlignedEarly);
-    const isReversalContextEarly = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(getConfig().ANTI_WHALE_MIN_ADX || 18)));
-    const allowVolumeFallback = (isBreakoutContextEarly || isReversalContextEarly) && volumeMA > 0;
 
-    // If last candle volume is zero but context is strong, use a conservative fallback
-    if (volume === 0 && allowVolumeFallback) {
-      const fallback = Math.max(volumeMA * 0.25, 1e-8); // 25% of baseline to remain conservative
-      recordOpsEvent({
-        level: 'info',
-        source: 'quality_filter',
-        message: 'volume_zero_fallback_applied',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { prevVolume: 0, fallback, volumeMA, context: isBreakoutContextEarly ? 'breakout' : 'reversal' },
-      });
-      volume = fallback;
-    }
+    const momentumStatus = diagnostics?.momentum?.status;
+    const trendStatus = diagnostics?.trendAlignment?.status;
+    const volatilityStatus = diagnostics?.volatility?.status;
+    const volumeStatus = diagnostics?.volume?.status;
+    const rsiStatus = diagnostics?.rsiPosition?.status;
 
-    // CRITICAL: Block if volume is 0 (no data or illiquid symbol) and no strong context
-    if (volume === 0) {
-      this.lastQualityFilterFailure = {
-        code: 'quality.volume_zero',
-        message: 'Detected zero volume in latest bar',
-        details: { volume, volumeMA },
-      };
-      recordOpsEvent({
-        level: 'warn',
-        source: 'quality_filter',
-        message: 'volume_zero_critical_block',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { volume, volumeMA, reason: 'No volume data available - possible data issue or illiquid symbol' },
-      });
-      return false;
-    }
+    const momentumPass = momentumStatus === 'PASS';
+    const trendPass = trendStatus === 'PASS';
+    const volatilityPass = volatilityStatus === 'PASS';
+    const volumePass = volumeStatus === 'PASS';
+    const rsiPass = rsiStatus === 'PASS';
 
-    // 1. EMA Trend Alignment (required)
-    const emaSpread = ((ema20 - ema50) / ema50) * 100;
+    const totalChecks = assessment.passCount + assessment.failCount + assessment.partialCount;
+    const effectivePasses = assessment.effectivePasses
+      ?? (assessment.passCount + assessment.partialCount * profile.partialCredit);
+    const majorityThreshold = assessment.majorityThreshold
+      ?? (totalChecks > 0 ? Math.ceil(totalChecks * profile.majorityRatio) : 0);
+    const tolerance = profile.comboTolerance;
+    const nearThreshold = assessment.effectivePoints >= Math.max(30, threshold - tolerance);
 
-    if (normalizedPlaybook === 'trend_following') {
-      const trendAligned = this.checkTrendAlignment(ema20, ema50, bias, {
-        atrPct,
-        adx,
-        playbook: normalizedPlaybook,
-        price,
-      });
-      if (!trendAligned) {
-        this.lastQualityFilterFailure = {
-          code: 'quality.trend_misaligned',
-          message: 'EMA trend misalignment in trend-following playbook',
-          details: { emaSpread, bias, playbook },
-        };
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'ema_trend_misaligned_trend_follow',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { emaSpread, bias, playbook },
-        });
-        return false;
-      }
+    let allow = assessment.allow;
+    let compensationReason: string | null = null;
 
-      const pullback = this.assessTrendPullbackStructure(price, ema20, ema50, bias as 'long' | 'short');
-      if (!pullback.ok) {
-        this.lastQualityFilterFailure = {
-          code: 'quality.pullback_invalid',
-          message: 'Pullback structure not healthy for trend-following entry',
-          details: { ...pullback, bias },
-        };
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'trend_pullback_not_ready',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { ...pullback, bias },
-        });
-        return false;
-      }
-
-      const adxThreshold = Math.max(16, this.getRealisticADXThreshold() + 1);
-      if (adx < adxThreshold) {
-        this.lastQualityFilterFailure = {
-          code: 'quality.adx_insufficient_trend',
-          message: 'ADX below trend-following minimum',
-          details: { adx, bias, required: adxThreshold },
-        };
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'adx_too_weak_trend_follow',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { adx, bias, required: adxThreshold },
-        });
-        return false;
-      }
-
-      const rsiBounds = bias === 'long' ? { min: 28, max: 82 } : { min: 18, max: 72 };
-      if (rsi < rsiBounds.min || rsi > rsiBounds.max) {
-        this.lastQualityFilterFailure = {
-          code: 'quality.rsi_out_of_range_trend',
-          message: 'RSI outside acceptable pullback window for trend-following entry',
-          details: { rsi, bias, bounds: rsiBounds },
-        };
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'rsi_out_of_range_trend_follow',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { rsi, bias, bounds: rsiBounds },
-        });
-        return false;
-      }
-    } else {
-      const trendAligned = bias === 'long' ? ema20 > ema50 && emaSpread > 0.25 : ema20 < ema50 && emaSpread < -0.25;
-      if (!trendAligned) {
-        this.lastQualityFilterFailure = {
-          code: 'quality.trend_misaligned',
-          message: 'EMA trend misalignment',
-          details: { emaSpread, bias },
-        };
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'ema_trend_misaligned',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { emaSpread, bias },
-        });
-        return false;
-      }
-
-      if (adx < 12) {
-        this.lastQualityFilterFailure = {
-          code: 'quality.adx_weak',
-          message: 'ADX below minimum threshold',
-          details: { adx, bias },
-        };
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'adx_too_weak',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { adx, bias },
-        });
-        return false;
-      }
-
-      const rsiOptimal = bias === 'long' ? (rsi >= 25 && rsi <= 85) : (rsi >= 15 && rsi <= 75);
-      if (!rsiOptimal) {
-        this.lastQualityFilterFailure = {
-          code: 'quality.rsi_out_of_range',
-          message: 'RSI outside optimal range',
-          details: { rsi, bias },
-        };
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'rsi_out_of_range',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { rsi, bias },
-        });
-        return false;
-      }
-    }
-
-    // 4. ATR Volatility (required) — use per-crypto adaptive threshold (fallback: mode-based)
-    const baseMinAtr = this.effectiveEntryThresholds().ENTRY_MIN_ATR_PCT;
-    const symForAtr = this.profile?.symbol || '';
-    let thr = baseMinAtr;
-    try { thr = this.getAdaptiveATRThresholdSync(symForAtr, baseMinAtr); } catch {}
-    if (atrPct < thr) {
-      this.lastQualityFilterFailure = {
-        code: 'quality.atr_low',
-        message: 'ATR below adaptive threshold',
-        details: { atrPct, min: thr, base: baseMinAtr, bias },
-      };
-      recordOpsEvent({
-        level: 'info',
-        source: 'quality_filter',
-        message: 'atr_too_low',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: { atrPct, min: thr, base: baseMinAtr, bias },
-      });
-      return false;
-    }
-
-  // 5. Volume Confirmation (required)
-    const level = this.profile?.aggressiveness || 'conservative';
-    const symbol = this.profile?.symbol || (this.plan as any)?.symbol || '';
-    const volumeRatio = volumeMA > 0 ? volume / volumeMA : 1;
-    const usdVolumeMA = volumeMA > 0 ? volumeMA * price : 0;
-    
-    // Get exchange-adaptive thresholds
-    const exchangeThresholds = await this.resolveExchangeVolumeThresholds();
-    const baseRequired = exchangeThresholds.base;
-    const floor = exchangeThresholds.floor;
-    const ceiling = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL) ? cfg.QUALITY_VOLUME_RATIO_CEIL : 0.78;
-
-    let requiredVolumeRatio = baseRequired;
-
-    // Aggressiveness-driven relaxation/tightening
-    if (level === 'reactive') requiredVolumeRatio -= 0.05;
-    else if (level === 'aggressive') requiredVolumeRatio -= 0.1;
-    else requiredVolumeRatio += 0.02; // conservative keeps tighter filter
-
-    // Absolute liquidity adjustments
-    if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_HIGH_USD) requiredVolumeRatio -= 0.08;
-    else if (usdVolumeMA >= cfg.QUALITY_VOLUME_RATIO_MEDIUM_USD) requiredVolumeRatio -= 0.05;
-    else if (usdVolumeMA <= cfg.QUALITY_VOLUME_RATIO_LOW_USD && usdVolumeMA > 0) requiredVolumeRatio += 0.07;
-
-    // Volatility context: quieter markets require more confirmation
-    if (atrPct >= 1.4) requiredVolumeRatio -= 0.03;
-    else if (atrPct <= 0.45) requiredVolumeRatio += 0.03;
-
-    // Breakout/Reversal context: relax volume confirmation to avoid missing strong moves
-    // Heuristics only – we still require minimal liquidity via usdVolumeMA and trend/RSI/ADX signals
-  // Use existing thresholds where possible; fallback to sane constants
-  const breakoutAdx = Math.max(18, Number(cfg.ENTRY_LONG_MIN_ADX || 22));
-  const breakoutAtr = Math.max(0.6, Number(cfg.ENTRY_MIN_ATR_PCT || 0.8));
-    const isTrendAligned = this.checkTrendAlignment(ema20, ema50, bias, {
-      atrPct,
-      adx,
-      playbook: normalizedPlaybook,
-      price,
-    });
-    const isBreakoutContext = (adx >= breakoutAdx && atrPct >= breakoutAtr && isTrendAligned);
-  const isReversalContext = ((rsi >= 75 || rsi <= 25) && adx >= Math.max(16, Number(cfg.ANTI_WHALE_MIN_ADX || 18)));
-
-    if (isBreakoutContext || isReversalContext) {
-      // Extra relaxation with floors by aggressiveness
-  const extraRelax = Number((cfg as any).QUALITY_VOLUME_BREAKOUT_RELAX ?? 0.25); // subtract up to 0.25 from requirement
-      const floorBreakout = level === 'aggressive' ? 0.20 : level === 'reactive' ? 0.28 : 0.35;
-      const before = requiredVolumeRatio;
-      requiredVolumeRatio = Math.max(floorBreakout, requiredVolumeRatio - extraRelax);
-
-      recordOpsEvent({
-        level: 'info',
-        source: 'quality_filter',
-        message: 'volume_requirement_relaxed_for_breakout',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: {
-          context: isBreakoutContext ? 'breakout' : 'reversal',
-          before,
-          after: requiredVolumeRatio,
-          level,
-          adx,
-          rsi,
-          atrPct,
-          isTrendAligned,
-          usdVolumeMA,
-        },
-      });
-    }
-
-    // CMF20 directional flow modulation (relax when flow aligns with bias)
-    try {
-      const cmf20 = Number((snap as any)?.cmf20 ?? 0);
-      const cmfStrong = Number(cfg.VOLUME_CMF_STRONG || 0.15);
-      const cmfMinAdx = Number(cfg.VOLUME_CMF_MIN_ADX || 15);
-      const cmfAligned = (bias === 'long' && cmf20 >= cmfStrong) || (bias === 'short' && cmf20 <= -cmfStrong);
-      if (cmfAligned && adx >= cmfMinAdx) {
-        const relaxBase = Number(cfg.VOLUME_CMF_RELAX || 0.15);
-        const relaxCap = Number(cfg.VOLUME_CMF_RELAX_MAX || relaxBase);
-        const magnitude = Math.max(1, Math.abs(cmf20) / Math.max(1e-6, cmfStrong));
-        const relaxAmt = Math.min(relaxCap, relaxBase * magnitude);
-        const floorCmf = level === 'aggressive' ? 0.20 : level === 'reactive' ? 0.28 : 0.35;
-        const before = requiredVolumeRatio;
-        requiredVolumeRatio = Math.max(floorCmf, requiredVolumeRatio - relaxAmt);
-        recordOpsEvent({
-          level: 'info',
-          source: 'quality_filter',
-          message: 'volume_requirement_relaxed_cmf',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: { before, after: requiredVolumeRatio, cmf20, adx, relaxAmt, floorCmf, level }
-        });
-      }
-    } catch {}
-
-    const contextBefore = symbol ? ReboundRejectionAgent.volumeContextCache.get(symbol) : undefined;
-    if (contextBefore && contextBefore.sampleCount >= 6) {
-      const baseline = contextBefore.emaRatio;
-      const pressure = contextBefore.rejectionScore;
-      if (Number.isFinite(baseline) && baseline > 0) {
-        if (baseline < requiredVolumeRatio) {
-          const shortfall = requiredVolumeRatio - baseline;
-          const relax = shortfall * Math.min(0.5, 0.35 + pressure * 0.4);
-          requiredVolumeRatio -= relax;
-        } else if (baseline > requiredVolumeRatio + 0.06 && pressure < 0.2) {
-          const tighten = (baseline - requiredVolumeRatio) * 0.3;
-          requiredVolumeRatio += tighten;
+    if (!allow) {
+      if (momentumPass && (trendPass || trendStatus === 'PARTIAL') && nearThreshold) {
+        allow = true;
+        compensationReason = 'momentum_trend_combo';
+      } else if (!allow && momentumPass && rsiPass && nearThreshold) {
+        allow = true;
+        compensationReason = 'momentum_rsi_combo';
+      } else if (!allow && trendPass && volumePass && momentumPass && nearThreshold) {
+        allow = true;
+        compensationReason = 'trend_volume_combo';
+      } else if (!allow && totalChecks >= profile.minPassCount) {
+        const passesWithPartial = effectivePasses;
+        const requiredPasses = Math.max(profile.minPassCount, majorityThreshold);
+        if (passesWithPartial >= requiredPasses && nearThreshold) {
+          allow = true;
+          compensationReason = 'super_majority_compensation';
         }
-      }
-      if (Number.isFinite(contextBefore.emaUsd) && contextBefore.emaUsd > 0) {
-        if (contextBefore.emaUsd > cfg.QUALITY_VOLUME_RATIO_HIGH_USD * 1.4) requiredVolumeRatio -= 0.02;
-        else if (contextBefore.emaUsd < cfg.QUALITY_VOLUME_RATIO_LOW_USD * 0.7) requiredVolumeRatio += 0.04;
+      } else if (!allow && totalChecks >= 3 && nearThreshold && volumePass && volatilityPass && (momentumPass || trendPass)) {
+        allow = true;
+        compensationReason = 'volatility_volume_combo';
       }
     }
 
-    requiredVolumeRatio = Math.max(floor, Math.min(ceiling, requiredVolumeRatio));
+    const volumeDetails = diagnostics?.volume?.details ?? {};
+    const rawRatio = typeof volumeDetails.ratio === 'number' ? Number(volumeDetails.ratio) : undefined;
+    let computedRatio = rawRatio;
+    if (computedRatio == null) {
+      const current = typeof volumeDetails.currentVolume === 'number' ? Number(volumeDetails.currentVolume) : undefined;
+      const ma = typeof volumeDetails.volumeMA === 'number' ? Number(volumeDetails.volumeMA) : undefined;
+      if (current != null && ma != null && ma > 0) {
+        computedRatio = current / ma;
+      }
+    }
+    const usdVolumeMA = typeof volumeDetails.usdVolumeMA === 'number'
+      ? Number(volumeDetails.usdVolumeMA)
+      : undefined;
+    if (this.profile?.symbol) {
+      this.updateVolumeContext(this.profile.symbol, computedRatio ?? 0, usdVolumeMA ?? 0, !allow);
+    }
 
-    if (volumeRatio < requiredVolumeRatio) {
-      const contextAfter = this.updateVolumeContext(symbol, volumeRatio, usdVolumeMA, true);
+    if (!allow) {
       this.lastQualityFilterFailure = {
-        code: 'quality.volume_too_low',
-        message: 'Volume ratio below requirement',
+        code: 'quality.score_insufficient',
+        message: 'Quality score below dynamic threshold',
         details: {
-          volumeRatio,
-          requiredVolumeRatio,
-          usdVolumeMA,
-          bias,
-          level,
-          volumeBaseline: contextAfter?.emaRatio,
-          volumePressure: contextAfter?.rejectionScore,
+          totalPoints: assessment.totalPoints,
+          effectivePoints: assessment.effectivePoints,
+          threshold,
+          passCount: assessment.passCount,
+          failCount: assessment.failCount,
+          partialCount: assessment.partialCount,
+          failingKeys: assessment.failingKeys,
+          weights: profile.weights,
+          majorityThreshold,
+          effectivePasses,
         },
       };
       recordOpsEvent({
         level: 'info',
         source: 'quality_filter',
-        message: 'volume_too_low',
+        message: 'quality_score_blocked',
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
         details: {
-          volumeRatio,
-          requiredVolumeRatio,
-          usdVolumeMA,
-          bias,
-          level,
-          volumeBaseline: contextAfter?.emaRatio,
-          volumePressure: contextAfter?.rejectionScore,
+          playbook,
+          aggressiveness,
+          threshold,
+          assessment: {
+            totalPoints: assessment.totalPoints,
+            effectivePoints: assessment.effectivePoints,
+            bonus: assessment.bonus,
+            passCount: assessment.passCount,
+            failCount: assessment.failCount,
+            partialCount: assessment.partialCount,
+            failingKeys: assessment.failingKeys,
+            majorityThreshold,
+            effectivePasses,
+          },
         },
       });
       return false;
     }
 
-    const contextAfter = this.updateVolumeContext(symbol, volumeRatio, usdVolumeMA, false);
-
-    // All essential filters passed
     this.lastQualityFilterFailure = null;
     recordOpsEvent({
       level: 'info',
       source: 'quality_filter',
-      message: 'quality_filter_passed',
+      message: compensationReason ? 'quality_score_compensated_pass' : 'quality_score_pass',
       sessionId: this.sessionId || undefined,
       symbol: this.profile?.symbol,
       details: {
-        bias,
-        adx,
-        rsi,
-        atrPct,
-        volumeRatio,
-        requiredVolumeRatio,
-        usdVolumeMA,
-        volumeBaseline: contextAfter?.emaRatio,
-        volumePressure: contextAfter?.rejectionScore,
-        emaSpread
+        playbook,
+        aggressiveness,
+        threshold,
+        compensationReason,
+        assessment: {
+          totalPoints: assessment.totalPoints,
+          effectivePoints: assessment.effectivePoints,
+          bonus: assessment.bonus,
+          passCount: assessment.passCount,
+          failCount: assessment.failCount,
+          partialCount: assessment.partialCount,
+          failingKeys: assessment.failingKeys,
+          majorityThreshold,
+          effectivePasses,
+        },
+        weights: profile.weights,
       },
     });
 
@@ -7014,9 +7120,7 @@ export class ReboundRejectionAgent {
 
     // Basic zone check
     const price = snap.last;
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook } = this.getContextualPlaybook(snap, planBias ?? 'none');
     const { zone, meta } = this.computeVolatilityAdjustedZone(snap, {
       planZone: this.plan.zone,
       bias: planBias ?? 'none',
@@ -7105,9 +7209,7 @@ export class ReboundRejectionAgent {
     const planBias = this.plan?.bias || 'none';
     const recommendedBias = this.performanceMetrics?.biasSwitching?.currentBias;
     const adaptiveBias = recommendedBias ?? 'none';
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook } = this.getContextualPlaybook(snap, planBias);
 
     const regimeLabel = (this.regime as any)?.label || (this.regime as any)?.playbook || 'unknown';
     const regimeAllows = !this.regime || (this.regime as any)?.shouldTrade !== false;
@@ -7365,22 +7467,39 @@ export class ReboundRejectionAgent {
     let qualityAssessmentSnapshot = this.previewQualityDiagnostics && this.previewQualityDiagnostics.snapshotKey === previewKey
       ? this.previewQualityDiagnostics.assessment
       : null;
+    const diagnosticsTier = this.profile ? this.getTierForSymbol(this.profile.symbol) : null;
+    const qualityProfile = this.getQualityScoreProfile(playbook, aggressiveness || 'reactive');
     if (!qualityDiagnostics) {
       qualityDiagnostics = this.getQualityFiltersDiagnostics(snap);
-      qualityAssessmentSnapshot = this.assessQualityScore(qualityDiagnostics, 0) as QualityAssessmentSnapshot;
+      qualityAssessmentSnapshot = this.assessQualityScore(qualityDiagnostics, 0, {
+        weights: qualityProfile.weights,
+        majorityRatio: qualityProfile.majorityRatio,
+        partialCredit: qualityProfile.partialCredit,
+        minPassCount: qualityProfile.minPassCount,
+        comboTolerance: qualityProfile.comboTolerance,
+      }) as QualityAssessmentSnapshot;
     }
     checks.qualityFilters = qualityDiagnostics;
 
     // Calculate overall quality score based on points (0-100) - allow trading with 3/5 filters (60 points)
-    const qualityAssessment = qualityAssessmentSnapshot ?? this.assessQualityScore(checks.qualityFilters, 0);
+    const qualityAssessment = qualityAssessmentSnapshot ?? this.assessQualityScore(checks.qualityFilters, 0, {
+      weights: qualityProfile.weights,
+      majorityRatio: qualityProfile.majorityRatio,
+      partialCredit: qualityProfile.partialCredit,
+      minPassCount: qualityProfile.minPassCount,
+      comboTolerance: qualityProfile.comboTolerance,
+    });
     const qualityPoints = qualityAssessment.totalPoints;
     const maxPoints = qualityAssessment.maxPoints;
     // Mode-adaptive minimum quality score for diagnostics (aligned with env.ts)
-    const qualityPlaybook = playbook;
-    const baseThreshold = qualityPlaybook === 'momentum_breakout' ? 55 : qualityPlaybook === 'mean_reversion' ? 40 : 50;
-    const modeAdjustment = aggressiveness === 'aggressive' ? -5 : aggressiveness === 'reactive' ? 0 : 5;
-    const minTradingPoints = Math.max(30, baseThreshold + modeAdjustment);
-    const evaluatedQuality = this.assessQualityScore(checks.qualityFilters, minTradingPoints);
+    const minTradingPoints = this.computeQualityScoreThreshold(playbook, aggressiveness || 'reactive', diagnosticsTier);
+    const evaluatedQuality = this.assessQualityScore(checks.qualityFilters, minTradingPoints, {
+      weights: qualityProfile.weights,
+      majorityRatio: qualityProfile.majorityRatio,
+      partialCredit: qualityProfile.partialCredit,
+      minPassCount: qualityProfile.minPassCount,
+      comboTolerance: qualityProfile.comboTolerance,
+    });
     checks.qualityScore = {
       current: qualityPoints,
       effective: evaluatedQuality.effectivePoints,
@@ -7551,20 +7670,50 @@ export class ReboundRejectionAgent {
     };
   }
 
-  private assessQualityScore(filters: Record<string, any>, minTradingPoints: number) {
+  private assessQualityScore(
+    filters: Record<string, any>,
+    minTradingPoints: number,
+    opts?: {
+      weights?: Record<string, number>;
+      majorityRatio?: number;
+      partialCredit?: number;
+      minPassCount?: number;
+      comboTolerance?: number;
+    },
+  ) {
     const entries = Object.entries(filters ?? {});
-    let totalPoints = 0;
-    let maxPoints = 0;
+    let rawPoints = 0;
+    let rawMaxPoints = 0;
+    let weightedPoints = 0;
+    let weightedMaxPoints = 0;
     let passCount = 0;
     let failCount = 0;
     let partialCount = 0;
     const failingKeys: string[] = [];
+    const weightsApplied: Record<string, number> = {};
+
+    const weightMap = opts?.weights ?? {};
+    const majorityRatio = typeof opts?.majorityRatio === 'number'
+      ? Math.min(0.85, Math.max(0.4, opts.majorityRatio))
+      : 0.6;
+    const partialCredit = typeof opts?.partialCredit === 'number'
+      ? Math.min(0.8, Math.max(0.2, opts.partialCredit))
+      : 0.5;
+    const minPassCount = Math.max(1, opts?.minPassCount ?? 3);
+    const comboTolerance = Math.max(0, opts?.comboTolerance ?? 5);
 
     for (const [key, filter] of entries) {
       if (!filter || typeof filter !== 'object') continue;
-      const points = typeof (filter as any).points === 'number' ? Number((filter as any).points) : 0;
-      totalPoints += points;
-      maxPoints += 20;
+      const basePoints = typeof (filter as any).points === 'number' ? Number((filter as any).points) : 0;
+      rawPoints += basePoints;
+      rawMaxPoints += 20;
+      const weight = (() => {
+        const candidate = (weightMap as Record<string, number | undefined>)[key];
+        return typeof candidate === 'number' && Number.isFinite(candidate) ? Number(candidate) : 1;
+      })();
+      weightsApplied[key] = weight;
+      weightedPoints += basePoints * weight;
+      weightedMaxPoints += 20 * weight;
       const status = (filter as any).status;
       if (status === 'PASS') passCount += 1;
       else if (status === 'FAIL') {
@@ -7574,6 +7723,9 @@ export class ReboundRejectionAgent {
         partialCount += 1;
       }
     }
+
+    const normalizedPoints = weightedMaxPoints > 0 ? (weightedPoints / weightedMaxPoints) * 100 : 0;
+    const rawNormalized = rawMaxPoints > 0 ? (rawPoints / rawMaxPoints) * 100 : 0;
 
     const momentumPass = filters?.momentum?.status === 'PASS';
     const volatilityPass = filters?.volatility?.status === 'PASS';
@@ -7589,9 +7741,10 @@ export class ReboundRejectionAgent {
     if (partialCount > 0 && passCount >= 3) synergyBonus += 2;
     synergyBonus = Math.min(10, synergyBonus);
 
-    const effectivePoints = totalPoints + synergyBonus;
-    const deficit = Math.max(0, minTradingPoints - totalPoints);
-    let allow = totalPoints >= minTradingPoints;
+    const effectivePoints = Math.min(100, normalizedPoints + synergyBonus);
+    const deficit = Math.max(0, minTradingPoints - effectivePoints);
+
+    let allow = normalizedPoints >= minTradingPoints;
     let compensated = false;
 
     if (!allow && effectivePoints >= minTradingPoints) {
@@ -7599,15 +7752,27 @@ export class ReboundRejectionAgent {
       const allowTrendComp = failingKeys.length === 1 && failingKeys[0] === 'trendAlignment' && momentumPass && volatilityPass && volumePass;
       const allowRsiComp = failingKeys.length === 1 && failingKeys[0] === 'rsiPosition' && momentumPass && trendPass;
       const allowPartialComp = failingKeys.length === 0 && partialCount > 0;
-      if (deficit <= 8 && (allowVolatilityComp || allowTrendComp || allowRsiComp || allowPartialComp)) {
+      if (deficit <= comboTolerance && (allowVolatilityComp || allowTrendComp || allowRsiComp || allowPartialComp)) {
+        allow = true;
+        compensated = true;
+      }
+    }
+
+    const totalChecks = passCount + failCount + partialCount;
+    const effectivePasses = passCount + partialCount * partialCredit;
+    const majorityThreshold = totalChecks > 0 ? Math.ceil(totalChecks * majorityRatio) : 0;
+
+    if (!allow && totalChecks >= minPassCount) {
+      const requiredPasses = Math.max(minPassCount, majorityThreshold);
+      if (effectivePasses >= requiredPasses && effectivePoints >= Math.max(30, minTradingPoints - comboTolerance)) {
         allow = true;
         compensated = true;
       }
     }
 
     return {
-      totalPoints,
-      maxPoints,
+      totalPoints: normalizedPoints,
+      maxPoints: 100,
       effectivePoints,
       bonus: synergyBonus,
       passCount,
@@ -7617,15 +7782,18 @@ export class ReboundRejectionAgent {
       allow,
       compensated,
       failingKeys,
-    };
+      rawPoints: rawNormalized,
+      rawMaxPoints: 100,
+      weightsApplied,
+      majorityThreshold,
+      effectivePasses,
+    } satisfies QualityAssessmentSnapshot;
   }
 
   private getQualityFiltersDiagnostics(snap: TechnicalSnapshot): any {
     if (!this.plan) return {};
 
-    const playbook: string = ((this.plan.plan.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook, context } = this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
     const normalizedPlaybook = String(playbook);
     const price = snap.last;
     const bias = this.plan.bias;
@@ -7634,7 +7802,7 @@ export class ReboundRejectionAgent {
     const tfHTF = (snap.meta as any)?.htf ?? null;
     console.log(
       `🧪 Quality filters check | playbook=${normalizedPlaybook} bias=${bias} snapshot=${snapshotId ?? 'n/a'} ` +
-      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'}`,
+      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'} regime=${context?.regime ?? 'n/a'}`,
     );
     const adx = Number((snap as any)?.adx14 ?? 0);
     const rsi = Number((snap as any)?.rsi14 ?? 50);
@@ -8894,7 +9062,7 @@ export class ReboundRejectionAgent {
       atr,
       adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : null,
       cmf: typeof (snap as any)?.cmf20 === 'number' ? Number((snap as any).cmf20) : null,
-      cfg: this.quantConfig.exits,
+      cfg: this.resolveDynamicExitConfig(),
       alreadyTriggeredTargets: hitTargets,
       archetype: this.pos.archetype,
       minutesOpen,
@@ -8943,6 +9111,35 @@ export class ReboundRejectionAgent {
     return false;
   }
 
+  private resolveDynamicExitConfig() {
+    const baseCfg = this.quantConfig.exits;
+    const { context } = this.getContextualPlaybook(undefined, this.pos ? (this.pos.side === 'buy' ? 'long' : 'short') : 'none');
+    if (!context) return baseCfg;
+
+    const dynamicCfg = {
+      ...baseCfg,
+      earlyExit: { ...baseCfg.earlyExit },
+    };
+
+    if (context.regime === 'trend_following') {
+      const trailBoost = context.strongTrend ? 1.25 : 1.1;
+      dynamicCfg.trailAtrMult = Number((dynamicCfg.trailAtrMult * trailBoost).toFixed(3));
+      dynamicCfg.trailAfterR = Math.max(dynamicCfg.trailAfterR, context.strongTrend ? 1.2 : 1.05);
+      dynamicCfg.earlyExit.adxBelow = Math.max(14, dynamicCfg.earlyExit.adxBelow - 2);
+      dynamicCfg.earlyExit.tightenProfitR = Number((dynamicCfg.earlyExit.tightenProfitR * 0.7).toFixed(3));
+    } else if (context.regime === 'range') {
+      dynamicCfg.trailAtrMult = Number((dynamicCfg.trailAtrMult * 0.85).toFixed(3));
+      dynamicCfg.trailAfterR = Math.min(dynamicCfg.trailAfterR, 0.9);
+      dynamicCfg.earlyExit.adxBelow = Math.min(30, dynamicCfg.earlyExit.adxBelow + 3);
+      dynamicCfg.earlyExit.tightenProfitR = Number((dynamicCfg.earlyExit.tightenProfitR * 1.25).toFixed(3));
+    } else if (context.regime === 'breakout') {
+      dynamicCfg.trailAtrMult = Number((dynamicCfg.trailAtrMult * 1.05).toFixed(3));
+      dynamicCfg.trailAfterR = Math.max(dynamicCfg.trailAfterR, 1.05);
+    }
+
+    return dynamicCfg;
+  }
+
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
     // ✅ FIX: Validate position exists, reset state if missing (prevents stuck MANAGE state)
     if (!this.pos || !this.plan || !this.profile) {
@@ -8978,6 +9175,8 @@ export class ReboundRejectionAgent {
       
       return;
     }
+
+    this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
 
     try {
       const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
