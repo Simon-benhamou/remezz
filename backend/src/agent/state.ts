@@ -298,7 +298,39 @@ type MomentumGateEvaluation = {
     playbook: string;
     bias: string;
     reasonHint: 'enter' | 'reverse';
+    overrideApplied?: boolean;
+    context?: MarketContext | null;
+    strongTrendOverride?: boolean;
   };
+};
+
+type StrongTrendAssessment = {
+  strong: boolean;
+  moderate: boolean;
+  direction: 'long' | 'short' | 'none';
+  confidence: number;
+  adx: number;
+  emaSpreadPct: number;
+  emaSlopePct: number;
+  hurst?: number;
+  reasons: string[];
+  multiTimeframeAgreement: boolean;
+};
+
+type MarketContext = {
+  regime: 'trend_following' | 'range' | 'breakout';
+  basePlaybook: string;
+  effectivePlaybook: 'trend_following' | 'mean_reversion' | 'momentum_breakout';
+  strongTrend: boolean;
+  moderateTrend: boolean;
+  direction: 'long' | 'short' | 'none';
+  allowMomentumOverride: boolean;
+  favorMeanReversion: boolean;
+  confidence: number;
+  notes: string[];
+  hurst?: number;
+  trendStrength?: number;
+  adx?: number;
 };
 
 export class ReboundRejectionAgent {
@@ -347,6 +379,7 @@ export class ReboundRejectionAgent {
     data: any;
     assessment: QualityAssessmentSnapshot;
   } | null = null;
+  private marketContext: MarketContext | null = null;
 
   // simplistic counters for risk
   consecutiveStops = 0;
@@ -748,10 +781,14 @@ export class ReboundRejectionAgent {
     }
     const price = snap.last;
     const { from, to, mid } = this.plan.zone;
-    const playbook: string = ((this.plan.plan.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook, context } = this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
     const normalizedPlaybook = String(playbook);
+    if (context && context.basePlaybook !== context.effectivePlaybook) {
+      console.log(
+        `🧭 Context shift: ${context.basePlaybook} → ${context.effectivePlaybook} | regime=${context.regime}` +
+        ` notes=${context.notes.join(',')}`
+      );
+    }
 
     if (this.state === 'ARMED') {
       // 🔥 PHASE 1 FIX #3: Check for gaps at cycle start
@@ -1031,9 +1068,23 @@ export class ReboundRejectionAgent {
     }
 
     const planBias = this.plan.bias;
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook, context } = this.getContextualPlaybook(snapForValidation, planBias ?? 'none');
+    if (context && context.basePlaybook !== context.effectivePlaybook) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_context',
+        message: 'playbook_adjusted',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          base: context.basePlaybook,
+          effective: context.effectivePlaybook,
+          regime: context.regime,
+          direction: context.direction,
+          confidence: context.confidence,
+        },
+      });
+    }
     const validationSnap = snapForValidation!;
     const { zone: adaptiveZone, meta: entryZoneMeta } = this.computeVolatilityAdjustedZone(validationSnap, {
       planZone: this.plan.zone,
@@ -1646,9 +1697,7 @@ export class ReboundRejectionAgent {
     }
     const tier = this.getTierForSymbol(this.profile.symbol);
     const aggressiveness = this.profile.aggressiveness || null;
-    const previewPlaybook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook: previewPlaybook } = this.getContextualPlaybook(snap, this.plan?.bias ?? 'none');
     const previewProfile = this.getQualityScoreProfile(previewPlaybook, aggressiveness || 'reactive');
     const volatilityProfileForFilters = this.resolveVolatilityProfileForFilters();
     let qualityPassHint: boolean | undefined;
@@ -5696,6 +5745,155 @@ export class ReboundRejectionAgent {
     }
   }
 
+  private checkStrongTrend(snap: TechnicalSnapshot, bias: 'long' | 'short' | 'none'): StrongTrendAssessment {
+    const adx = Number((snap as any)?.adx14 ?? 0);
+    const ema20 = Number((snap as any)?.ema20 ?? snap.last);
+    const ema50 = Number((snap as any)?.ema50 ?? snap.last);
+    const emaSlope = Number((snap as any)?.ema20Slope ?? 0);
+    const emaSpreadPct = ema50 !== 0 ? ((ema20 - ema50) / Math.abs(ema50)) * 100 : 0;
+    const emaSlopePct = ema20 !== 0 ? (emaSlope / ema20) * 100 : 0;
+    const hurst = Number.isFinite((snap as any)?.hurst) ? Number((snap as any)?.hurst) : undefined;
+    const trendBias = ema20 > ema50 ? 'long' : ema20 < ema50 ? 'short' : 'none';
+    const multiTimeframeAgreement = (snap.trendBias === 'bullish' && trendBias === 'long')
+      || (snap.trendBias === 'bearish' && trendBias === 'short');
+
+    const absSpread = Math.abs(emaSpreadPct);
+    const absSlope = Math.abs(emaSlopePct);
+    const reasons: string[] = [];
+
+    if (adx >= 25) reasons.push(`adx_${adx.toFixed(1)}`);
+    if (absSpread >= 0.8) reasons.push(`ema_spread_${absSpread.toFixed(2)}%`);
+    if (absSlope >= 0.12) reasons.push(`slope_${absSlope.toFixed(2)}%`);
+    if (multiTimeframeAgreement) reasons.push('htf_alignment');
+    if (hurst != null && hurst > 0.58) reasons.push(`hurst_${hurst.toFixed(2)}`);
+
+    const strong = adx >= 27 && absSpread >= 1 && absSlope >= 0.12;
+    const moderate = !strong && adx >= 20 && absSpread >= 0.6 && absSlope >= 0.06;
+    const direction = strong || moderate ? trendBias : 'none';
+
+    const adxFactor = Math.max(0, Math.min(1, (adx - 15) / 20));
+    const spreadFactor = Math.max(0, Math.min(1, absSpread / 2.2));
+    const slopeFactor = Math.max(0, Math.min(1, absSlope / 0.22));
+    const hurstFactor = hurst != null ? Math.max(0, Math.min(1, (hurst - 0.45) / 0.35)) : 0.5;
+    const alignmentFactor = multiTimeframeAgreement ? 1 : 0.4;
+
+    const confidence = Number((
+      0.32 * adxFactor
+      + 0.28 * spreadFactor
+      + 0.16 * slopeFactor
+      + 0.12 * hurstFactor
+      + 0.12 * alignmentFactor
+    ).toFixed(3));
+
+    if (direction === 'none' && bias !== 'none' && (strong || moderate)) {
+      reasons.push(`bias_${bias}_override`);
+    }
+
+    return {
+      strong,
+      moderate,
+      direction,
+      confidence,
+      adx,
+      emaSpreadPct,
+      emaSlopePct,
+      hurst,
+      reasons,
+      multiTimeframeAgreement,
+    };
+  }
+
+  private resolveMarketContext(
+    snap: TechnicalSnapshot,
+    basePlaybook: string,
+    bias: 'long' | 'short' | 'none'
+  ): MarketContext {
+    const assessment = this.checkStrongTrend(snap, bias);
+    const hurst = assessment.hurst ?? (Number.isFinite((snap as any)?.hurst) ? Number((snap as any)?.hurst) : undefined);
+    const regimeTrend = snap.regime?.trend ?? null;
+    const externalPlaybook = snap.regime?.playbook ?? null;
+    const trendStrength = Number((snap as any)?.trendStrength ?? Math.abs(assessment.emaSpreadPct));
+
+    let regime: MarketContext['regime'];
+    if (assessment.strong) {
+      regime = 'trend_following';
+    } else if (basePlaybook === 'momentum_breakout' || externalPlaybook === 'momentum_breakout') {
+      regime = assessment.moderate ? 'breakout' : 'range';
+    } else if (regimeTrend === 'range' || trendStrength < 0.25 || (hurst != null && hurst < 0.48) || assessment.adx < 18) {
+      regime = 'range';
+    } else if (assessment.moderate) {
+      regime = 'trend_following';
+    } else {
+      regime = regimeTrend === 'uptrend' || regimeTrend === 'downtrend' ? 'trend_following' : 'range';
+    }
+
+    if (regime === 'range' && (externalPlaybook === 'momentum_breakout' || basePlaybook === 'momentum_breakout') && assessment.moderate) {
+      regime = 'breakout';
+    }
+
+    const effectivePlaybook: MarketContext['effectivePlaybook'] = regime === 'range'
+      ? 'mean_reversion'
+      : regime === 'breakout'
+        ? 'momentum_breakout'
+        : 'trend_following';
+
+    const allowMomentumOverride = regime !== 'range' && (assessment.strong || regime === 'breakout');
+    const favorMeanReversion = regime === 'range';
+
+    const notes = assessment.reasons.slice();
+    if (regime === 'range') notes.push('range_structure_detected');
+    if (regime === 'trend_following' && !assessment.strong && assessment.moderate) notes.push('moderate_trend_following');
+    if (externalPlaybook && externalPlaybook !== effectivePlaybook) {
+      notes.push(`regime_playbook=${externalPlaybook}`);
+    }
+    if (basePlaybook !== effectivePlaybook) {
+      notes.push(`playbook_adjusted:${basePlaybook}->${effectivePlaybook}`);
+    }
+
+    const context: MarketContext = {
+      regime,
+      basePlaybook,
+      effectivePlaybook,
+      strongTrend: assessment.strong,
+      moderateTrend: assessment.moderate,
+      direction: assessment.direction,
+      allowMomentumOverride,
+      favorMeanReversion,
+      confidence: assessment.confidence,
+      notes,
+      hurst,
+      trendStrength,
+      adx: assessment.adx,
+    };
+
+    this.marketContext = context;
+    return context;
+  }
+
+  private getContextualPlaybook(
+    snap?: TechnicalSnapshot | null,
+    bias?: 'long' | 'short' | 'none'
+  ): { playbook: string; context: MarketContext | null; basePlaybook: string } {
+    const fallbackRaw = ((this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? (this.regime?.playbook as string | undefined)
+      ?? 'mean_reversion') as string;
+    const fallback = (['trend_following', 'momentum_breakout', 'mean_reversion'].includes(fallbackRaw)
+      ? fallbackRaw
+      : 'mean_reversion') as 'trend_following' | 'momentum_breakout' | 'mean_reversion';
+
+    if (snap) {
+      const context = this.resolveMarketContext(snap, fallback, bias ?? (this.plan?.bias ?? 'none'));
+      return { playbook: context.effectivePlaybook, context, basePlaybook: fallback };
+    }
+
+    const context = this.marketContext;
+    return {
+      playbook: context?.effectivePlaybook ?? fallback,
+      context: context ?? null,
+      basePlaybook: context?.basePlaybook ?? fallback,
+    };
+  }
+
   private getCryptoVolatilityProfile(symbol: string): 'HIGH_VOLATILITY' | 'MODERATE' | 'LOW_VOLATILITY' | 'MEME_VOLATILITY' {
     const baseCrypto = symbol.split('/')[0]?.toUpperCase();
     if (!baseCrypto) return 'MODERATE';
@@ -5718,10 +5916,8 @@ export class ReboundRejectionAgent {
     const thresholds = this.effectiveEntryThresholds();
     const memeBias = this.isMemeCoin(this.profile?.symbol);
     const quantFilters = this.quantConfig?.filters;
-    const playbook = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
     const bias = this.plan?.bias || 'none';
+    const { playbook, context } = this.getContextualPlaybook(snap, bias);
 
     const snapshotId = (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
     const tfLTF = snap.meta?.tf ?? (snap.meta as any)?.ltf ?? null;
@@ -5741,7 +5937,8 @@ export class ReboundRejectionAgent {
     );
     console.log(
       `🧭 Momentum gates check | playbook=${playbook} bias=${bias} snapshot=${snapshotId ?? 'n/a'} ` +
-      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'}`,
+      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'} regime=${context?.regime ?? 'n/a'} ` +
+      `trend=${context?.strongTrend ? 'strong' : context?.moderateTrend ? 'moderate' : 'weak'} conf=${context?.confidence ?? 0}`,
     );
 
     let minAtr = thresholds.ENTRY_MIN_ATR_PCT;
@@ -5770,6 +5967,16 @@ export class ReboundRejectionAgent {
       minSlopeAbsPct = Math.max(0.00005, minSlopeAbsPct * 0.8);
     }
 
+    if (context?.regime === 'trend_following') {
+      const atrFactor = context.strongTrend ? 0.9 : 0.95;
+      const slopeFactor = context.strongTrend ? 0.75 : 0.85;
+      minAtr = Math.max(0.05, minAtr * atrFactor);
+      minSlopeAbsPct = Math.max(0.00015, minSlopeAbsPct * slopeFactor);
+    } else if (context?.regime === 'range') {
+      minAtr *= 1.1;
+      minSlopeAbsPct *= 1.2;
+    }
+
     if (playbook === 'momentum_breakout') {
       minAtr *= 1.15;
       minSlopeAbsPct *= 1.05;
@@ -5789,6 +5996,14 @@ export class ReboundRejectionAgent {
 
     if (memeBias) {
       minAdxRequired = Math.max(8, minAdxRequired - 2);
+    }
+
+    if (context?.regime === 'trend_following') {
+      minAdxRequired = Math.max(8, minAdxRequired - (context.strongTrend ? 4 : 2));
+    } else if (context?.regime === 'range') {
+      minAdxRequired = Math.min(40, minAdxRequired + 2);
+    } else if (context?.regime === 'breakout') {
+      minAdxRequired = Math.max(10, minAdxRequired - 1);
     }
 
     const reasons: string[] = [];
@@ -5906,9 +6121,27 @@ export class ReboundRejectionAgent {
     }
 
     const playbookLower = playbook.toLowerCase();
-    const status: 'PASS' | 'SOFT_FAIL' | 'FAIL' = reasons.length === 0
-      ? 'PASS'
-      : playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
+    let overrideApplied = false;
+    let strongTrendOverride = false;
+    let status: 'PASS' | 'SOFT_FAIL' | 'FAIL';
+    if (reasons.length === 0) {
+      status = 'PASS';
+    } else if (context?.allowMomentumOverride && context.confidence >= 0.55) {
+      const overrideable = reasons.every(reason => (
+        reason.startsWith('atr_too_low')
+        || reason.startsWith('slope_too_flat')
+        || reason.startsWith('adx_too_low')
+      ));
+      if (overrideable) {
+        status = 'PASS';
+        overrideApplied = true;
+        strongTrendOverride = context.strongTrend || (context.moderateTrend && context.regime !== 'range');
+      } else {
+        status = playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
+      }
+    } else {
+      status = playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
+    }
 
     const result: MomentumGateEvaluation = {
       pass: status === 'PASS',
@@ -5930,6 +6163,9 @@ export class ReboundRejectionAgent {
         playbook,
         bias,
         reasonHint,
+        overrideApplied,
+        context: context ?? null,
+        strongTrendOverride,
       },
     };
 
@@ -5944,6 +6180,10 @@ export class ReboundRejectionAgent {
   ): boolean {
     const { emitEvents = true, allowSoft = true } = options ?? {};
     const evaluation = this.evaluateMomentumGates(snap, reasonHint, emitEvents);
+    if (!evaluation.pass && evaluation.details.overrideApplied) {
+      console.log('⚡ Strong trend override applied to momentum gates');
+      return true;
+    }
     if (!evaluation.pass && evaluation.status === 'SOFT_FAIL') {
       return allowSoft;
     }
@@ -6116,9 +6356,7 @@ export class ReboundRejectionAgent {
     const bias = this.plan.bias;
     if (bias === 'none') return false;
 
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook } = this.getContextualPlaybook(snap, bias ?? 'none');
     const aggressiveness = this.profile?.aggressiveness || 'reactive';
     const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : null;
 
@@ -6178,6 +6416,12 @@ export class ReboundRejectionAgent {
         allow = true;
         compensationReason = 'volatility_volume_combo';
       }
+    }
+    const usdVolumeMA = typeof volumeDetails.usdVolumeMA === 'number'
+      ? Number(volumeDetails.usdVolumeMA)
+      : undefined;
+    if (this.profile?.symbol) {
+      this.updateVolumeContext(this.profile.symbol, computedRatio ?? 0, usdVolumeMA ?? 0, !allow);
     }
 
     const volumeDetails = diagnostics?.volume?.details ?? {};
@@ -6882,9 +7126,7 @@ export class ReboundRejectionAgent {
 
     // Basic zone check
     const price = snap.last;
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook } = this.getContextualPlaybook(snap, planBias ?? 'none');
     const { zone, meta } = this.computeVolatilityAdjustedZone(snap, {
       planZone: this.plan.zone,
       bias: planBias ?? 'none',
@@ -6973,9 +7215,7 @@ export class ReboundRejectionAgent {
     const planBias = this.plan?.bias || 'none';
     const recommendedBias = this.performanceMetrics?.biasSwitching?.currentBias;
     const adaptiveBias = recommendedBias ?? 'none';
-    const playbook: string = ((this.plan?.plan?.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook } = this.getContextualPlaybook(snap, planBias);
 
     const regimeLabel = (this.regime as any)?.label || (this.regime as any)?.playbook || 'unknown';
     const regimeAllows = !this.regime || (this.regime as any)?.shouldTrade !== false;
@@ -7559,9 +7799,7 @@ export class ReboundRejectionAgent {
   private getQualityFiltersDiagnostics(snap: TechnicalSnapshot): any {
     if (!this.plan) return {};
 
-    const playbook: string = ((this.plan.plan.meta?.playbook as string | undefined)
-      ?? (this.regime?.playbook as string | undefined)
-      ?? 'mean_reversion') as string;
+    const { playbook, context } = this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
     const normalizedPlaybook = String(playbook);
     const price = snap.last;
     const bias = this.plan.bias;
@@ -7570,7 +7808,7 @@ export class ReboundRejectionAgent {
     const tfHTF = (snap.meta as any)?.htf ?? null;
     console.log(
       `🧪 Quality filters check | playbook=${normalizedPlaybook} bias=${bias} snapshot=${snapshotId ?? 'n/a'} ` +
-      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'}`,
+      `tf=${tfLTF ?? 'n/a'} htf=${tfHTF ?? 'n/a'} regime=${context?.regime ?? 'n/a'}`,
     );
     const adx = Number((snap as any)?.adx14 ?? 0);
     const rsi = Number((snap as any)?.rsi14 ?? 50);
@@ -8830,7 +9068,7 @@ export class ReboundRejectionAgent {
       atr,
       adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : null,
       cmf: typeof (snap as any)?.cmf20 === 'number' ? Number((snap as any).cmf20) : null,
-      cfg: this.quantConfig.exits,
+      cfg: this.resolveDynamicExitConfig(),
       alreadyTriggeredTargets: hitTargets,
       archetype: this.pos.archetype,
       minutesOpen,
@@ -8879,6 +9117,35 @@ export class ReboundRejectionAgent {
     return false;
   }
 
+  private resolveDynamicExitConfig() {
+    const baseCfg = this.quantConfig.exits;
+    const { context } = this.getContextualPlaybook(undefined, this.pos ? (this.pos.side === 'buy' ? 'long' : 'short') : 'none');
+    if (!context) return baseCfg;
+
+    const dynamicCfg = {
+      ...baseCfg,
+      earlyExit: { ...baseCfg.earlyExit },
+    };
+
+    if (context.regime === 'trend_following') {
+      const trailBoost = context.strongTrend ? 1.25 : 1.1;
+      dynamicCfg.trailAtrMult = Number((dynamicCfg.trailAtrMult * trailBoost).toFixed(3));
+      dynamicCfg.trailAfterR = Math.max(dynamicCfg.trailAfterR, context.strongTrend ? 1.2 : 1.05);
+      dynamicCfg.earlyExit.adxBelow = Math.max(14, dynamicCfg.earlyExit.adxBelow - 2);
+      dynamicCfg.earlyExit.tightenProfitR = Number((dynamicCfg.earlyExit.tightenProfitR * 0.7).toFixed(3));
+    } else if (context.regime === 'range') {
+      dynamicCfg.trailAtrMult = Number((dynamicCfg.trailAtrMult * 0.85).toFixed(3));
+      dynamicCfg.trailAfterR = Math.min(dynamicCfg.trailAfterR, 0.9);
+      dynamicCfg.earlyExit.adxBelow = Math.min(30, dynamicCfg.earlyExit.adxBelow + 3);
+      dynamicCfg.earlyExit.tightenProfitR = Number((dynamicCfg.earlyExit.tightenProfitR * 1.25).toFixed(3));
+    } else if (context.regime === 'breakout') {
+      dynamicCfg.trailAtrMult = Number((dynamicCfg.trailAtrMult * 1.05).toFixed(3));
+      dynamicCfg.trailAfterR = Math.max(dynamicCfg.trailAfterR, 1.05);
+    }
+
+    return dynamicCfg;
+  }
+
   private async manage(price: number, snap: TechnicalSnapshot): Promise<void> {
     // ✅ FIX: Validate position exists, reset state if missing (prevents stuck MANAGE state)
     if (!this.pos || !this.plan || !this.profile) {
@@ -8914,6 +9181,8 @@ export class ReboundRejectionAgent {
       
       return;
     }
+
+    this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
 
     try {
       const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
