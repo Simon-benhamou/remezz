@@ -3361,6 +3361,22 @@ export class ReboundRejectionAgent {
     let ENTRY_LONG_MAX_RSI = cfg.ENTRY_LONG_MAX_RSI;
     let ENTRY_MIN_ATR_PCT = modeParams.minAtrPct; // Use mode-specific ATR threshold
     let ENTRY_MIN_SLOPE_ABS_PCT = cfg.ENTRY_MIN_SLOPE_ABS_PCT;
+
+    if (ENTRY_MIN_ATR_PCT > 0.2) {
+      const reduction = level === 'conservative'
+        ? 0.1
+        : level === 'reactive'
+          ? 0.04
+          : 0.02;
+      ENTRY_MIN_ATR_PCT = Math.max(0.2, ENTRY_MIN_ATR_PCT - reduction);
+    } else if (level !== 'conservative') {
+      const floor = level === 'aggressive' ? 0.1 : 0.14;
+      ENTRY_MIN_ATR_PCT = Math.max(floor, ENTRY_MIN_ATR_PCT);
+    }
+
+    if (ENTRY_MIN_SLOPE_ABS_PCT > 0.08) {
+      ENTRY_MIN_SLOPE_ABS_PCT = Math.max(0.08, ENTRY_MIN_SLOPE_ABS_PCT - 0.02);
+    }
     
     if (level === 'reactive') {
       ENTRY_SHORT_MIN_ADX = Math.max(10, ENTRY_SHORT_MIN_ADX - 2);
@@ -4245,7 +4261,13 @@ export class ReboundRejectionAgent {
 
     const adxImproving = adxSlopeVal > 0;
     const comboVolumeSignal = rawVolumeRatio >= 1.1;
-    const comboRsiSignal = rsiValue != null ? (bias === 'long' ? rsiValue >= 55 : rsiValue <= 45) : false;
+    const longMomentumRsiFloor = 45;
+    const shortMomentumRsiCeil = 45;
+    const comboRsiSignal = rsiValue != null
+      ? (bias === 'long'
+        ? rsiValue >= longMomentumRsiFloor
+        : rsiValue <= shortMomentumRsiCeil)
+      : false;
     const comboEmaSignal = bias === 'long'
       ? ema20 > 0 && ema50 > 0 && ema20 >= ema50 && slopePct >= -0.02
       : ema20 > 0 && ema50 > 0 && ema20 <= ema50 && slopePct <= 0.02;
@@ -5763,17 +5785,17 @@ export class ReboundRejectionAgent {
 
     if (adx >= 25) reasons.push(`adx_${adx.toFixed(1)}`);
     if (absSpread >= 0.8) reasons.push(`ema_spread_${absSpread.toFixed(2)}%`);
-    if (absSlope >= 0.12) reasons.push(`slope_${absSlope.toFixed(2)}%`);
+    if (absSlope >= 0.08) reasons.push(`slope_${absSlope.toFixed(2)}%`);
     if (multiTimeframeAgreement) reasons.push('htf_alignment');
     if (hurst != null && hurst > 0.58) reasons.push(`hurst_${hurst.toFixed(2)}`);
 
-    const strong = adx >= 27 && absSpread >= 1 && absSlope >= 0.12;
-    const moderate = !strong && adx >= 20 && absSpread >= 0.6 && absSlope >= 0.06;
+    const strong = adx >= 27 && absSpread >= 1 && absSlope >= 0.08;
+    const moderate = !strong && adx >= 20 && absSpread >= 0.6 && absSlope >= 0.05;
     const direction = strong || moderate ? trendBias : 'none';
 
     const adxFactor = Math.max(0, Math.min(1, (adx - 15) / 20));
     const spreadFactor = Math.max(0, Math.min(1, absSpread / 2.2));
-    const slopeFactor = Math.max(0, Math.min(1, absSlope / 0.22));
+    const slopeFactor = Math.max(0, Math.min(1, absSlope / 0.18));
     const hurstFactor = hurst != null ? Math.max(0, Math.min(1, (hurst - 0.45) / 0.35)) : 0.5;
     const alignmentFactor = multiTimeframeAgreement ? 1 : 0.4;
 
@@ -6434,12 +6456,7 @@ export class ReboundRejectionAgent {
         computedRatio = current / ma;
       }
     }
-    const usdVolumeMA = typeof volumeDetails.usdVolumeMA === 'number'
-      ? Number(volumeDetails.usdVolumeMA)
-      : undefined;
-    if (this.profile?.symbol) {
-      this.updateVolumeContext(this.profile.symbol, computedRatio ?? 0, usdVolumeMA ?? 0, !allow);
-    }
+ 
 
     if (!allow) {
       this.lastQualityFilterFailure = {
