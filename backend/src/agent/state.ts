@@ -14,7 +14,7 @@ import type { ResolvedLeverageCap } from '../risk/leverageCaps.js';
 import { computeQtyNotional, defaultLimits, RiskDecision } from '../risk/manager.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { getAgentRecentWinRate } from '../services/performance/winrate.js';
-import { getConfig, getModeParams } from '../utils/env.js';
+import { getConfig, getModeParams, type AgentAggressiveness, type ModeParams } from '../utils/env.js';
 import { computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
 import { applyHysteresis, blendRR, DEFAULT_RR_EXPECTANCY_CONFIG, resolveRrExpectancyConfig, rrMinFromWinrate, type RRExpectancyConfig } from '../risk/rrExpectancy.js';
 import { broadcast } from '../ws/hub.js';
@@ -213,6 +213,30 @@ type QualityScoreProfile = {
   minPassCount: number;
 };
 
+type TradeCadenceStageConfig = {
+  maxTrades: number;
+  cooldownMs: number;
+  winRateThreshold: number;
+  minTrades: number;
+  label: string;
+};
+
+type TradeCadenceConfig = {
+  stages: TradeCadenceStageConfig[];
+  hysteresis: number;
+};
+
+type TradeCadenceState = {
+  stageIndex: number;
+  stageLabel: string;
+  maxTradesPerDay: number;
+  cooldownMs: number;
+  lastWinRate: number;
+  sampleSize: number;
+  lastUpdated: number;
+  reason: string;
+};
+
 // Advanced Performance Tracking Interfaces
 interface StrategyPerformance {
   strategy: string; // 'mean_reversion', 'momentum_breakout', etc.
@@ -248,6 +272,15 @@ interface PerformanceMetrics {
     winStreak: number;
     sizeMultiplier: number;
     resumeAt: number | null;
+  };
+  tradeCadence: {
+    stageIndex: number;
+    label: string;
+    maxTradesPerDay: number;
+    cooldownMs: number;
+    winRate: number;
+    sampleSize: number;
+    lastUpdated: number;
   };
   adaptationState: {
     atrMultiplier: number;
@@ -389,6 +422,18 @@ export class ReboundRejectionAgent {
   consecutiveStops = 0;
   tradesToday = 0;
   realizedPnlTodayPct = 0;
+
+  private tradeCadenceConfig: TradeCadenceConfig | null = null;
+  private tradeCadenceState: TradeCadenceState = {
+    stageIndex: 0,
+    stageLabel: 'base',
+    maxTradesPerDay: 7,
+    cooldownMs: 30_000,
+    lastWinRate: 0,
+    sampleSize: 0,
+    lastUpdated: Date.now(),
+    reason: 'init',
+  };
   
   // ✅ ULTRA-INTELLIGENT: Performance tracking BY TIER (contextualized learning)
   private recentTradesByTier: Map<string, { symbol: string; win: boolean; pnlPct: number; timestamp: number }[]> = new Map([
@@ -528,14 +573,34 @@ export class ReboundRejectionAgent {
     // PREFLIGHT
     this.state = 'PREFLIGHT';
     this.quantConfig = reloadQuantAIConfig();
+    this.tradeCadenceConfig = null;
     const mode = profile.aggressiveness ?? 'reactive';
     const modeParams = getModeParams(mode);
+    this.tradeCadenceConfig = this.buildTradeCadenceConfig(modeParams, mode);
+    const baseCadenceStage = this.tradeCadenceConfig.stages[0] ?? {
+      maxTrades: modeParams.maxTradesPerDay,
+      cooldownMs: Math.max(1_000, modeParams.tradeCooldownMs),
+      winRateThreshold: 0,
+      minTrades: 0,
+      label: 'base',
+    };
+    this.tradeCadenceState = {
+      stageIndex: 0,
+      stageLabel: baseCadenceStage.label,
+      maxTradesPerDay: baseCadenceStage.maxTrades,
+      cooldownMs: baseCadenceStage.cooldownMs,
+      lastWinRate: 0,
+      sampleSize: 0,
+      lastUpdated: Date.now(),
+      reason: 'activation',
+    };
     const mergedRisk = {
       ...this.quantConfig.risk,
       maxConsecutiveLosses: Math.max(1, modeParams.maxConsecutiveStops),
       dailyLossLimitPct: Math.max(0.5, profile.dailyLossLimitPct ?? modeParams.dailyLossLimitPct),
       baseRiskPerTradePct: profile.riskPerTradePct,
     };
+    mergedRisk.dailyTradeLimit = baseCadenceStage.maxTrades;
     if (mergedRisk.reduceSizeAfterLosses) {
       const lossTriggerFloor = Math.max(1, mergedRisk.maxConsecutiveLosses - 1);
       mergedRisk.sizeReductionAfterLosses = Math.max(
@@ -613,6 +678,7 @@ export class ReboundRejectionAgent {
     };
     this.ensurePerformanceMetricsSkeleton(profile);
     this.syncCircuitBreakerTelemetry();
+    this.evaluateTradeCadence('activation');
     const existingCap = profile.leverageCap as ResolvedLeverageCap | undefined;
     const existingCategory = existingCap?.category ?? '';
     const requestedMaxLev = Math.max(1, Math.min(10, Number(profile.requestedMaxLeverage ?? profile.maxLeverage ?? existingCap?.requested ?? 1)));
@@ -1195,7 +1261,8 @@ export class ReboundRejectionAgent {
     const envMod = await import('../utils/env.js');
     const envCfg = envMod.getConfig();
     const modeParams = envMod.getModeParams(this.profile.aggressiveness || 'reactive');
-    const baseCooldownMs = modeParams?.tradeCooldownMs || envCfg.TRADE_COOLDOWN_MS;
+    const cadenceSnapshot = this.evaluateTradeCadence('readiness');
+    const baseCooldownMs = cadenceSnapshot.cooldownMs || modeParams?.tradeCooldownMs || envCfg.TRADE_COOLDOWN_MS;
     const cooldownMs = this.lastExitCooldownMs > 0 ? this.lastExitCooldownMs : baseCooldownMs;
     const timeSinceLastExit = Date.now() - this.lastExitTime;
 
@@ -3055,7 +3122,7 @@ export class ReboundRejectionAgent {
     this.state = 'MANAGE';
     this.tradesToday += 1;
     this.noteDrySpellTrade();
-    broadcast('agent_state', { state: this.state, pos: this.pos, regime: this.regime, adaptiveRisk: this.adaptiveRisk, aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
+    broadcast('agent_state', { state: this.state, pos: this.pos, regime: this.regime, adaptiveRisk: this.adaptiveRisk, tradeCadence: this.getTradeCadenceSnapshot(), aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     await this.syncProtectiveOrders('entry');
     this.entering = false;
   }
@@ -6872,6 +6939,186 @@ export class ReboundRejectionAgent {
     return { trades, winRate, avgPnlPct };
   }
 
+  private getTradeCadenceSnapshot(): TradeCadenceState {
+    return { ...this.tradeCadenceState };
+  }
+
+  private updateTradeCadenceTelemetry(): void {
+    if (!this.performanceMetrics) return;
+    const snapshot = this.tradeCadenceState;
+    this.performanceMetrics.tradeCadence = {
+      stageIndex: snapshot.stageIndex,
+      label: snapshot.stageLabel,
+      maxTradesPerDay: snapshot.maxTradesPerDay,
+      cooldownMs: snapshot.cooldownMs,
+      winRate: snapshot.lastWinRate,
+      sampleSize: snapshot.sampleSize,
+      lastUpdated: snapshot.lastUpdated,
+    };
+  }
+
+  private buildTradeCadenceConfig(modeParams: ModeParams, aggressiveness: AgentAggressiveness): TradeCadenceConfig {
+    const cfg = getConfig();
+    const baseStages = cfg.TRADE_FREQUENCY_STAGE_COUNTS.length
+      ? cfg.TRADE_FREQUENCY_STAGE_COUNTS
+      : [modeParams.maxTradesPerDay];
+    const cooldownFallback = cfg.TRADE_COOLDOWN_STAGE_MS.length
+      ? cfg.TRADE_COOLDOWN_STAGE_MS[cfg.TRADE_COOLDOWN_STAGE_MS.length - 1]
+      : modeParams.tradeCooldownMs;
+    const thresholdFallback = cfg.TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS.length
+      ? cfg.TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS[cfg.TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS.length - 1]
+      : 0;
+    const minTradesFallback = cfg.TRADE_FREQUENCY_STAGE_MIN_TRADES.length
+      ? cfg.TRADE_FREQUENCY_STAGE_MIN_TRADES[cfg.TRADE_FREQUENCY_STAGE_MIN_TRADES.length - 1]
+      : 0;
+
+    const stages: TradeCadenceStageConfig[] = baseStages.map((count, idx) => {
+      const cappedCount = Math.max(1, Math.min(count, modeParams.maxTradesPerDay));
+      const cooldownSource = cfg.TRADE_COOLDOWN_STAGE_MS[idx] ?? cooldownFallback;
+      const thresholdSource = cfg.TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS[idx] ?? thresholdFallback;
+      const minTradesSource = cfg.TRADE_FREQUENCY_STAGE_MIN_TRADES[idx] ?? minTradesFallback;
+      return {
+        maxTrades: cappedCount,
+        cooldownMs: Math.max(1_000, Math.round(cooldownSource)),
+        winRateThreshold: Math.max(0, Math.min(1, thresholdSource)),
+        minTrades: Math.max(0, Math.round(minTradesSource)),
+        label: idx === 0 ? 'base' : `expanded_${cappedCount}`,
+      };
+    });
+
+    if (!stages.length) {
+      stages.push({
+        maxTrades: modeParams.maxTradesPerDay,
+        cooldownMs: Math.max(1_000, modeParams.tradeCooldownMs),
+        winRateThreshold: 0,
+        minTrades: 0,
+        label: 'base',
+      });
+    }
+
+    for (let i = 1; i < stages.length; i += 1) {
+      if (stages[i].maxTrades < stages[i - 1].maxTrades) {
+        stages[i].maxTrades = stages[i - 1].maxTrades;
+      }
+      if (stages[i].cooldownMs > stages[i - 1].cooldownMs && stages[i].maxTrades === stages[i - 1].maxTrades) {
+        stages[i].cooldownMs = stages[i - 1].cooldownMs;
+      }
+    }
+
+    const hysteresis = cfg.TRADE_FREQUENCY_HYSTERESIS ?? 0.05;
+    console.log(`⚙️ Trade cadence configuration for ${aggressiveness}:`, stages.map(s => `${s.label}:${s.maxTrades}/${s.cooldownMs}ms`).join(', '));
+    return { stages, hysteresis: Math.max(0, Math.min(0.3, hysteresis)) };
+  }
+
+  private resolveTradeCadenceStage(winRate: number, trades: number): number {
+    if (!this.tradeCadenceConfig || !this.tradeCadenceConfig.stages.length) return 0;
+    const { stages, hysteresis } = this.tradeCadenceConfig;
+    const currentStage = this.tradeCadenceState.stageIndex ?? 0;
+    for (let idx = stages.length - 1; idx >= 0; idx -= 1) {
+      const stage = stages[idx];
+      if (!stage) continue;
+      if (trades < stage.minTrades) continue;
+      let threshold = stage.winRateThreshold;
+      if (idx === currentStage && threshold > 0) {
+        threshold = Math.max(0, threshold - hysteresis);
+      }
+      if (winRate >= threshold) {
+        return idx;
+      }
+    }
+    return 0;
+  }
+
+  private applyTradeCadenceStage(stageIndex: number, context: string, metrics: { winRate: number; trades: number }): void {
+    if (!this.tradeCadenceConfig || !this.tradeCadenceConfig.stages.length) return;
+    const stage = this.tradeCadenceConfig.stages[stageIndex] ?? this.tradeCadenceConfig.stages[0];
+    const prevStage = this.tradeCadenceState.stageIndex;
+    const now = Date.now();
+
+    this.tradeCadenceState = {
+      stageIndex,
+      stageLabel: stage.label,
+      maxTradesPerDay: stage.maxTrades,
+      cooldownMs: stage.cooldownMs,
+      lastWinRate: metrics.winRate,
+      sampleSize: metrics.trades,
+      lastUpdated: now,
+      reason: context,
+    };
+
+    if (this.quantConfig?.risk) {
+      this.quantConfig.risk.dailyTradeLimit = stage.maxTrades;
+    }
+
+    this.updateTradeCadenceTelemetry();
+
+    if (stageIndex !== prevStage) {
+      const level: 'info' | 'warn' = stageIndex > prevStage ? 'info' : 'warn';
+      console.log(`🕒 Trade cadence stage ${prevStage} → ${stageIndex} (${stage.label}) | maxTrades=${stage.maxTrades}, cooldown=${stage.cooldownMs}ms`);
+      recordOpsEvent({
+        level,
+        source: 'risk_manager',
+        message: 'trade_cadence_stage_changed',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          stageIndex,
+          stageLabel: stage.label,
+          maxTradesPerDay: stage.maxTrades,
+          cooldownMs: stage.cooldownMs,
+          winRate: metrics.winRate,
+          sampleSize: metrics.trades,
+          previousStage: prevStage,
+          reason: context,
+        },
+      });
+    }
+  }
+
+  private evaluateTradeCadence(context: 'activation' | 'post_trade' | 'readiness' = 'readiness'): TradeCadenceState {
+    const aggressiveness = this.profile?.aggressiveness ?? 'reactive';
+    if (!this.tradeCadenceConfig || !this.tradeCadenceConfig.stages.length) {
+      const modeParams = getModeParams(aggressiveness);
+      this.tradeCadenceConfig = this.buildTradeCadenceConfig(modeParams, aggressiveness);
+      const baseStage = this.tradeCadenceConfig.stages[0];
+      if (baseStage) {
+        this.tradeCadenceState = {
+          stageIndex: 0,
+          stageLabel: baseStage.label,
+          maxTradesPerDay: baseStage.maxTrades,
+          cooldownMs: baseStage.cooldownMs,
+          lastWinRate: this.tradeCadenceState.lastWinRate,
+          sampleSize: this.tradeCadenceState.sampleSize,
+          lastUpdated: Date.now(),
+          reason: 'init',
+        };
+        if (this.quantConfig?.risk) {
+          this.quantConfig.risk.dailyTradeLimit = baseStage.maxTrades;
+        }
+        this.updateTradeCadenceTelemetry();
+      }
+    }
+
+    const maxWindow = this.tradeCadenceConfig?.stages.reduce((acc, stage) => Math.max(acc, stage.minTrades), 5) ?? 5;
+    const performance = this.getRecentPerformance(Math.max(5, maxWindow));
+    const targetStage = this.resolveTradeCadenceStage(performance.winRate, performance.trades);
+
+    if (targetStage !== this.tradeCadenceState.stageIndex) {
+      this.applyTradeCadenceStage(targetStage, context, { winRate: performance.winRate, trades: performance.trades });
+    } else {
+      this.tradeCadenceState = {
+        ...this.tradeCadenceState,
+        lastWinRate: performance.winRate,
+        sampleSize: performance.trades,
+        lastUpdated: Date.now(),
+        reason: context,
+      };
+      this.updateTradeCadenceTelemetry();
+    }
+
+    return this.getTradeCadenceSnapshot();
+  }
+
   // Market regime detection for adaptive strategy
   private detectMarketRegime(snap: TechnicalSnapshot): 'trending_strong' | 'trending_weak' | 'ranging' | 'choppy' | 'volatile' {
     const adx = Number((snap as any)?.adx14 ?? 0);
@@ -7227,6 +7474,7 @@ export class ReboundRejectionAgent {
         readiness,
         blockers,
         primaryBlocker: blockers[0] ?? null,
+        tradeCadence: this.getTradeCadenceSnapshot(),
         timestamp: Date.now()
       };
     } catch (error) {
@@ -7391,7 +7639,8 @@ export class ReboundRejectionAgent {
     };
 
     const modeParams = getModeParams(aggressiveness);
-    const baseCooldownMs = modeParams?.tradeCooldownMs ?? cfg.TRADE_COOLDOWN_MS ?? 0;
+    const cadence = this.evaluateTradeCadence('readiness');
+    const baseCooldownMs = cadence.cooldownMs ?? modeParams?.tradeCooldownMs ?? cfg.TRADE_COOLDOWN_MS ?? 0;
     const timeSinceLastExit = this.lastExitTime > 0 ? now - this.lastExitTime : Number.POSITIVE_INFINITY;
     const cooldownActive = this.lastExitTime > 0 && timeSinceLastExit < baseCooldownMs;
     const cooldownRemainingSec = cooldownActive ? (baseCooldownMs - timeSinceLastExit) / 1000 : 0;
@@ -7406,6 +7655,10 @@ export class ReboundRejectionAgent {
         remainingSec: Number(cooldownRemainingSec.toFixed(0)),
         baseCooldownMs,
         lastExitTime: this.lastExitTime || null,
+        cadenceStage: cadence.stageLabel,
+        cadenceStageIndex: cadence.stageIndex,
+        cadenceSample: cadence.sampleSize,
+        cadenceWinRate: cadence.lastWinRate,
       },
     };
 
@@ -7426,7 +7679,7 @@ export class ReboundRejectionAgent {
 
     // Risk management checks (mode-adaptive limits)
     const limits = defaultLimits(aggressiveness);
-    const maxDailyTrades = limits.maxTradesPerDay;
+    const maxDailyTrades = Math.max(1, cadence.maxTradesPerDay || limits.maxTradesPerDay);
     const maxConsecStops = limits.maxConsecutiveStops;
 
     checks.dailyTradeLimit = {
@@ -7436,6 +7689,13 @@ export class ReboundRejectionAgent {
         : `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - limit exceeded for risk management`,
       message: `Trades today: ${this.tradesToday || 0}`,
       code: (this.tradesToday || 0) < maxDailyTrades ? 'limits.daily_ok' : 'limits.daily_exceeded',
+      details: {
+        stage: cadence.stageLabel,
+        stageIndex: cadence.stageIndex,
+        sampleSize: cadence.sampleSize,
+        winRate: cadence.lastWinRate,
+        maxDailyTrades,
+      },
     };
 
     checks.consecutiveStopsLimit = {
@@ -8505,6 +8765,16 @@ export class ReboundRejectionAgent {
       this.performanceMetrics.circuitBreaker.winStreak = circuitState.consecutiveWins ?? 0;
       this.performanceMetrics.circuitBreaker.sizeMultiplier = this.circuitBreaker.sizeMultiplier();
       this.performanceMetrics.circuitBreaker.resumeAt = circuitState.cooldownUntil?.getTime() ?? null;
+      const cadence = this.getTradeCadenceSnapshot();
+      this.performanceMetrics.tradeCadence = {
+        stageIndex: cadence.stageIndex,
+        label: cadence.stageLabel,
+        maxTradesPerDay: cadence.maxTradesPerDay,
+        cooldownMs: cadence.cooldownMs,
+        winRate: cadence.lastWinRate,
+        sampleSize: cadence.sampleSize,
+        lastUpdated: cadence.lastUpdated,
+      };
       return;
     }
     this.performanceMetrics = {
@@ -8525,6 +8795,15 @@ export class ReboundRejectionAgent {
         winStreak: 0,
         sizeMultiplier: 1,
         resumeAt: null,
+      },
+      tradeCadence: {
+        stageIndex: this.tradeCadenceState.stageIndex,
+        label: this.tradeCadenceState.stageLabel,
+        maxTradesPerDay: this.tradeCadenceState.maxTradesPerDay,
+        cooldownMs: this.tradeCadenceState.cooldownMs,
+        winRate: this.tradeCadenceState.lastWinRate,
+        sampleSize: this.tradeCadenceState.sampleSize,
+        lastUpdated: this.tradeCadenceState.lastUpdated,
       },
       adaptationState: {
         atrMultiplier: 1,
@@ -9650,6 +9929,7 @@ export class ReboundRejectionAgent {
         // ✅ ADAPTIVE LEARNING: Adjust thresholds based on recent performance
         this.adjustQualityThresholds();
         this.detectLosingStreak();
+        const cadenceAfterExit = this.evaluateTradeCadence('post_trade');
 
         // Update daily P&L
         if (this.performanceMetrics) {
@@ -9706,12 +9986,16 @@ export class ReboundRejectionAgent {
           state: this.state,
           reason,
           exitPrice: exitOrder.avgPrice || price,
-          realizedPnl
+          realizedPnl,
+          tradeCadence: cadenceAfterExit
         }, this.profile.symbol, this.sessionId || undefined);
 
         const cooldownCfg = getConfig();
-        const winCooldown = cooldownCfg.TRADE_COOLDOWN_WIN_MS || (cooldownCfg.TRADE_COOLDOWN_MS * 0.2);
-        const lossCooldown = cooldownCfg.TRADE_COOLDOWN_LOSS_MS || cooldownCfg.TRADE_COOLDOWN_MS;
+        const baseCooldown = cadenceAfterExit.cooldownMs || cooldownCfg.TRADE_COOLDOWN_MS;
+        const winMultiplier = Math.max(0.1, cooldownCfg.TRADE_COOLDOWN_WIN_MULTIPLIER || 0.2);
+        const lossMultiplier = Math.max(0.5, cooldownCfg.TRADE_COOLDOWN_LOSS_MULTIPLIER || 1);
+        const winCooldown = cooldownCfg.TRADE_COOLDOWN_WIN_MS || Math.max(2_000, Math.round(baseCooldown * winMultiplier));
+        const lossCooldown = cooldownCfg.TRADE_COOLDOWN_LOSS_MS || Math.max(4_000, Math.round(baseCooldown * lossMultiplier));
         const exitCooldown = realizedPnl > 0 ? winCooldown : lossCooldown;
         this.lastExitCooldownMs = exitCooldown;
 
