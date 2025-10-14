@@ -8,6 +8,7 @@ export type CircuitBreakerDecision = {
 
 export type CircuitBreakerState = {
   consecutiveLosses: number;
+  consecutiveWins: number;
   tradesToday: number;
   equityStartDay: number | null;
   cooldownUntil: Date | null;
@@ -29,6 +30,7 @@ function dayOfYear(date: Date): number {
 
 export class CircuitBreaker {
   private consecutiveLosses = 0;
+  private consecutiveWins = 0;
   private tradesToday = 0;
   private equityStartDay: number | null = null;
   private cooldownUntil: Date | null = null;
@@ -46,6 +48,9 @@ export class CircuitBreaker {
   private hydrateState(state: Partial<CircuitBreakerState>): void {
     if (typeof state.consecutiveLosses === 'number' && Number.isFinite(state.consecutiveLosses)) {
       this.consecutiveLosses = Math.max(0, Math.floor(state.consecutiveLosses));
+    }
+    if (typeof state.consecutiveWins === 'number' && Number.isFinite(state.consecutiveWins)) {
+      this.consecutiveWins = Math.max(0, Math.floor(state.consecutiveWins));
     }
     if (typeof state.tradesToday === 'number' && Number.isFinite(state.tradesToday)) {
       this.tradesToday = Math.max(0, Math.floor(state.tradesToday));
@@ -99,6 +104,18 @@ export class CircuitBreaker {
     this.emitStateChange();
   }
 
+  private computeCooldownUntil(now: Date, overrideMinutes?: number): Date {
+    const minutes = Math.max(1, overrideMinutes ?? this.cfg.cooldownMinutes ?? 0);
+    return new Date(now.getTime() + minutes * 60 * 1000);
+  }
+
+  private startCooldown(now: Date, overrideMinutes?: number): Date {
+    const until = this.computeCooldownUntil(now, overrideMinutes);
+    this.cooldownUntil = until;
+    this.emitStateChange();
+    return until;
+  }
+
   canOpenTrade(now: Date, equity: number): CircuitBreakerDecision {
     this.resetDayIfNeeded(now, equity);
     if (this.cooldownUntil && now < this.cooldownUntil) {
@@ -126,9 +143,7 @@ export class CircuitBreaker {
       }
     }
     if (this.consecutiveLosses >= this.cfg.maxConsecutiveLosses) {
-      const until = new Date(now.getTime() + this.cfg.cooldownMinutes * 60 * 1000);
-      this.cooldownUntil = until;
-      this.emitStateChange();
+      const until = this.startCooldown(now);
       return {
         allowed: false,
         reason: `Consecutive losses threshold reached (${this.consecutiveLosses}/${this.cfg.maxConsecutiveLosses})`,
@@ -149,16 +164,21 @@ export class CircuitBreaker {
     let changed = false;
     if (pnlPct < 0) {
       this.consecutiveLosses += 1;
+      this.consecutiveWins = 0;
       changed = true;
       if (this.consecutiveLosses >= this.cfg.maxConsecutiveLosses) {
-        this.cooldownUntil = new Date(now.getTime() + this.cfg.cooldownMinutes * 60 * 1000);
+        this.startCooldown(now);
         changed = true;
       }
     } else {
-      if (this.consecutiveLosses !== 0) {
-        changed = true;
-      }
+      const wasLoss = this.consecutiveLosses !== 0;
       this.consecutiveLosses = 0;
+      if (pnlPct > 0) {
+        this.consecutiveWins += 1;
+      } else {
+        this.consecutiveWins = 0;
+      }
+      if (wasLoss || this.consecutiveWins > 0) changed = true;
       if (this.cooldownUntil) {
         this.cooldownUntil = null;
         changed = true;
@@ -168,11 +188,36 @@ export class CircuitBreaker {
   }
 
   sizeMultiplier(): number {
-    if (!this.cfg.reduceSizeAfterLosses) return 1;
-    if (this.consecutiveLosses >= this.cfg.sizeReductionAfterLosses) {
-      return Math.max(0.05, this.cfg.sizeReductionFactor);
+    let multiplier = 1;
+
+    if (this.cfg.reduceSizeAfterLosses && this.cfg.sizeReductionAfterLosses > 0) {
+      if (this.consecutiveLosses >= this.cfg.sizeReductionAfterLosses) {
+        const baseFactor = Math.max(0.05, this.cfg.sizeReductionFactor);
+        const excess = this.consecutiveLosses - this.cfg.sizeReductionAfterLosses;
+        const progressive = excess > 0 ? baseFactor * Math.pow(0.85, excess) : baseFactor;
+        multiplier *= Math.max(0.05, progressive);
+      }
     }
-    return 1;
+
+    if (this.consecutiveLosses > 0) {
+      return Math.max(0.05, multiplier);
+    }
+
+    const winsForIncrease = this.cfg.winStreakForIncrease ?? 0;
+    const increaseFactor = this.cfg.sizeIncreaseFactor ?? 1;
+    const maxIncrease = this.cfg.sizeIncreaseMaxMultiplier ?? 1;
+
+    if (winsForIncrease > 0 && increaseFactor > 1 && maxIncrease > 1 && this.consecutiveWins >= winsForIncrease) {
+      const steps = this.consecutiveWins - winsForIncrease + 1;
+      const boost = Math.pow(increaseFactor, Math.max(1, steps));
+      multiplier *= Math.min(maxIncrease, boost);
+    }
+
+    return Math.max(0.05, multiplier);
+  }
+
+  enforceLossCooldown(now: Date, overrideMinutes?: number): Date {
+    return this.startCooldown(now, overrideMinutes);
   }
 
   clearCooldown() {
@@ -185,6 +230,7 @@ export class CircuitBreaker {
   getState(): CircuitBreakerState {
     return {
       consecutiveLosses: this.consecutiveLosses,
+      consecutiveWins: this.consecutiveWins,
       tradesToday: this.tradesToday,
       equityStartDay: this.equityStartDay,
       cooldownUntil: this.cloneDate(this.cooldownUntil),

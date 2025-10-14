@@ -244,6 +244,10 @@ interface PerformanceMetrics {
     activatedAt: number;
     lossThreshold: number;
     winRateThreshold: number;
+    lossStreak: number;
+    winStreak: number;
+    sizeMultiplier: number;
+    resumeAt: number | null;
   };
   adaptationState: {
     atrMultiplier: number;
@@ -427,6 +431,7 @@ export class ReboundRejectionAgent {
   // Legacy global tracking (deprecated, kept for compatibility)
   private recentTrades: { win: boolean; pnlPct: number; timestamp: number }[] = [];
   private qualityThresholdAdjustment = 0; // Dynamic adjustment to quality thresholds
+  private lastLossStreakNotified = 0;
   
   // 🆕 Breakout mode tracking
   private lastTradeWasWin = false;
@@ -523,6 +528,34 @@ export class ReboundRejectionAgent {
     // PREFLIGHT
     this.state = 'PREFLIGHT';
     this.quantConfig = reloadQuantAIConfig();
+    const mode = profile.aggressiveness ?? 'reactive';
+    const modeParams = getModeParams(mode);
+    const mergedRisk = {
+      ...this.quantConfig.risk,
+      maxConsecutiveLosses: Math.max(1, modeParams.maxConsecutiveStops),
+      dailyLossLimitPct: Math.max(0.5, profile.dailyLossLimitPct ?? modeParams.dailyLossLimitPct),
+      baseRiskPerTradePct: profile.riskPerTradePct,
+    };
+    if (mergedRisk.reduceSizeAfterLosses) {
+      const lossTriggerFloor = Math.max(1, mergedRisk.maxConsecutiveLosses - 1);
+      mergedRisk.sizeReductionAfterLosses = Math.max(
+        1,
+        Math.min(mergedRisk.sizeReductionAfterLosses, lossTriggerFloor),
+      );
+    }
+    if (mergedRisk.winStreakForIncrease != null && mergedRisk.winStreakForIncrease < 1) {
+      mergedRisk.winStreakForIncrease = 0;
+    }
+    if (mergedRisk.sizeIncreaseFactor != null && mergedRisk.sizeIncreaseFactor < 1) {
+      mergedRisk.sizeIncreaseFactor = 1;
+    }
+    if (mergedRisk.sizeIncreaseMaxMultiplier != null && mergedRisk.sizeIncreaseMaxMultiplier < 1) {
+      mergedRisk.sizeIncreaseMaxMultiplier = 1;
+    }
+    this.quantConfig = {
+      ...this.quantConfig,
+      risk: mergedRisk,
+    };
     this.rrExpectancyConfig = resolveRrExpectancyConfig({
       rrFloor: profile.rrFloor,
       rrCeil: profile.rrCeil,
@@ -2084,7 +2117,7 @@ export class ReboundRejectionAgent {
       recordOpsEvent({
         level: 'info',
         source: 'circuit_breaker',
-        message: 'size_reduced_due_to_losses',
+        message: circuitSizeMultiplier < 1 ? 'size_reduced_due_to_losses' : 'size_increased_due_to_wins',
         sessionId: this.sessionId || undefined,
         symbol: this.profile.symbol,
         details: {
@@ -2092,6 +2125,9 @@ export class ReboundRejectionAgent {
           adjustedRiskPct: dynamicRiskPct,
         },
       });
+    }
+    if (planRiskMaxPct != null) {
+      dynamicRiskPct = Math.min(dynamicRiskPct, planRiskMaxPct);
     }
 
     if (usingBreakoutEntry) {
@@ -6958,38 +6994,61 @@ export class ReboundRejectionAgent {
    * After 3 consecutive losses: Enter 1h cooldown (circuit breaker)
    */
   private detectLosingStreak(): void {
-    if (this.recentTrades.length < 2) return;
-    
-    // Check last 3 trades for consecutive losses
-    const last3 = this.recentTrades.slice(-3);
-    const consecutiveLosses = last3.every(t => !t.win) ? last3.length : 0;
-    
-    if (consecutiveLosses >= 2) {
-      // 🚨 2+ consecutive losses: Increase selectivity dramatically
-      const adjustment = consecutiveLosses === 2 ? 10 : 15;
+    const state = this.circuitBreaker.getState();
+    const threshold = Math.max(1, this.quantConfig.risk.maxConsecutiveLosses);
+    const window = Math.max(3, threshold);
+    const tradeLossStreak = this.getLossStreak(window);
+    const lossStreak = Math.max(state.consecutiveLosses, tradeLossStreak);
+
+    if (lossStreak <= 0) {
+      this.lastLossStreakNotified = 0;
+      return;
+    }
+
+    if (lossStreak > this.lastLossStreakNotified && lossStreak >= 2) {
+      const adjustment = lossStreak === 2 ? 10 : Math.min(20, 10 + (lossStreak - 2) * 5);
       this.qualityThresholdAdjustment = Math.min(20, this.qualityThresholdAdjustment + adjustment);
-      
+
       recordOpsEvent({
         level: 'warn',
         source: 'adaptive_learning',
-        message: `Losing streak detected: ${consecutiveLosses} losses`,
+        message: `Losing streak detected: ${lossStreak} losses`,
         sessionId: this.sessionId || undefined,
         symbol: this.profile?.symbol,
-        details: { 
-          consecutiveLosses,
+        details: {
+          consecutiveLosses: lossStreak,
           adjustment: this.qualityThresholdAdjustment,
-          action: consecutiveLosses >= 3 ? 'entering_cooldown' : 'increased_selectivity'
+          threshold,
+          sizeMultiplier: this.circuitBreaker.sizeMultiplier(),
         },
       });
-      
-      console.log(`🛑 Losing streak: ${consecutiveLosses} losses → Quality threshold +${adjustment} (now ${this.qualityThresholdAdjustment})`);
+
+      console.log(`🛑 Losing streak: ${lossStreak} losses → Quality threshold +${adjustment} (now ${this.qualityThresholdAdjustment})`);
+      this.lastLossStreakNotified = lossStreak;
     }
-    
-    if (consecutiveLosses >= 3) {
-      // 🔴 3 consecutive losses: HALT for 1 hour (circuit breaker)
-      const cooldownMs = 60 * 60 * 1000; // 1 hour
+
+    const nowMs = Date.now();
+    if (lossStreak >= threshold) {
+      const existingCooldown = state.cooldownUntil && state.cooldownUntil.getTime() > nowMs
+        ? state.cooldownUntil
+        : this.circuitBreaker.enforceLossCooldown(new Date(nowMs));
+      const cooldownMs = Math.max(60_000, existingCooldown.getTime() - nowMs);
+
+      recordOpsEvent({
+        level: 'error',
+        source: 'circuit_breaker',
+        message: 'loss_streak_cooldown',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          consecutiveLosses: lossStreak,
+          threshold,
+          cooldownUntil: existingCooldown.toISOString(),
+        },
+      });
+
       this.scheduleReactivation('losing_streak_circuit_breaker', cooldownMs);
-      console.log('🔴 CIRCUIT BREAKER: 3 consecutive losses → 1h trading pause');
+      console.log(`🔴 CIRCUIT BREAKER: ${lossStreak} consecutive losses → trading pause until ${existingCooldown.toISOString()}`);
     }
   }
 
@@ -8440,7 +8499,12 @@ export class ReboundRejectionAgent {
   private ensurePerformanceMetricsSkeleton(profile: ActivationProfile): void {
     if (this.performanceMetrics) {
       this.performanceMetrics.symbol = profile.symbol;
+      const circuitState = this.circuitBreaker.getState();
       this.performanceMetrics.circuitBreaker.lossThreshold = this.quantConfig.risk.maxConsecutiveLosses;
+      this.performanceMetrics.circuitBreaker.lossStreak = circuitState.consecutiveLosses;
+      this.performanceMetrics.circuitBreaker.winStreak = circuitState.consecutiveWins ?? 0;
+      this.performanceMetrics.circuitBreaker.sizeMultiplier = this.circuitBreaker.sizeMultiplier();
+      this.performanceMetrics.circuitBreaker.resumeAt = circuitState.cooldownUntil?.getTime() ?? null;
       return;
     }
     this.performanceMetrics = {
@@ -8457,6 +8521,10 @@ export class ReboundRejectionAgent {
         activatedAt: 0,
         lossThreshold: this.quantConfig.risk.maxConsecutiveLosses,
         winRateThreshold: 0,
+        lossStreak: 0,
+        winStreak: 0,
+        sizeMultiplier: 1,
+        resumeAt: null,
       },
       adaptationState: {
         atrMultiplier: 1,
@@ -8574,12 +8642,20 @@ export class ReboundRejectionAgent {
         : now)
       : 0;
     const prevWinRateThreshold = this.performanceMetrics.circuitBreaker?.winRateThreshold ?? 0;
+    const sizeMultiplier = this.circuitBreaker.sizeMultiplier();
+    const lossStreak = state.consecutiveLosses;
+    const winStreak = state.consecutiveWins ?? 0;
+    const resumeAt = cooldownActive ? state.cooldownUntil!.getTime() : null;
     this.performanceMetrics.circuitBreaker = {
       isActive,
       reason,
       activatedAt,
       lossThreshold: this.quantConfig.risk.maxConsecutiveLosses,
       winRateThreshold: prevWinRateThreshold,
+      lossStreak,
+      winStreak,
+      sizeMultiplier,
+      resumeAt,
     };
   }
 
@@ -9547,6 +9623,9 @@ export class ReboundRejectionAgent {
         this.syncCircuitBreakerTelemetry();
 
         const win = realizedPnl > 0;
+        if (win) {
+          this.lastLossStreakNotified = 0;
+        }
         this.recentTrades.push({
           win,
           pnlPct: (realizedPnl / (this.pos.entry * this.pos.qty)) * 100,
