@@ -125,6 +125,7 @@ export async function loadActivePosition(sessionId: string) {
 function serializeCircuitBreakerState(state: CircuitBreakerState) {
   return {
     consecutiveLosses: state.consecutiveLosses,
+    consecutiveWins: state.consecutiveWins,
     tradesToday: state.tradesToday,
     equityStartDay: state.equityStartDay,
     cooldownUntil: state.cooldownUntil ? state.cooldownUntil.toISOString() : null,
@@ -146,6 +147,7 @@ function deserializeCircuitBreakerState(raw: any): CircuitBreakerState | null {
   };
   return {
     consecutiveLosses: Math.max(0, Math.floor(toNumber((raw as any).consecutiveLosses, 0))),
+    consecutiveWins: Math.max(0, Math.floor(toNumber((raw as any).consecutiveWins, 0))),
     tradesToday: Math.max(0, Math.floor(toNumber((raw as any).tradesToday, 0))),
     equityStartDay: (raw as any).equityStartDay != null && Number.isFinite(Number((raw as any).equityStartDay))
       ? Number((raw as any).equityStartDay)

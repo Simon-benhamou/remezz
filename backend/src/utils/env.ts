@@ -137,6 +137,11 @@ export type Cfg = {
   TRADE_COOLDOWN_MS: number;        // Cooldown between trades to prevent over-trading
   TRADE_COOLDOWN_WIN_MS: number;
   TRADE_COOLDOWN_LOSS_MS: number;
+  TRADE_COOLDOWN_STAGE_MS: number[];
+  TRADE_FREQUENCY_STAGE_COUNTS: number[];
+  TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS: number[];
+  TRADE_FREQUENCY_STAGE_MIN_TRADES: number[];
+  TRADE_FREQUENCY_HYSTERESIS: number;
   CRITICAL_LOSS_PCT: number;        // Loss threshold for immediate exit (bypass min hold)
   // Trade quality filters
   MIN_TRADE_PROFIT_PCT: number;     // Minimum expected profit to enter a trade (1-2%)
@@ -275,6 +280,54 @@ export function getModeParams(mode: AgentAggressiveness = 'reactive'): ModeParam
 
 export function getConfig(): Cfg {
   const e = process.env as Record<string, string>;
+
+  const parseNumberList = (raw: string | undefined, fallback: number[]): number[] => {
+    if (!raw) return [...fallback];
+    const parts = raw
+      .split(/[,;\s]+/)
+      .map((part) => Number(part.trim()))
+      .filter((value) => Number.isFinite(value));
+    return parts.length ? parts.map((value) => Number(value)) : [...fallback];
+  };
+
+  const alignList = (values: number[], length: number, fallback: number): number[] => {
+    if (length <= 0) return [];
+    const copy = values.slice(0, length);
+    while (copy.length < length) {
+      copy.push(copy.length ? copy[copy.length - 1] : fallback);
+    }
+    return copy;
+  };
+
+  const defaultStageCounts = [7, 10, 12];
+  const stageCountsRaw = parseNumberList(e.TRADE_FREQUENCY_STAGE_COUNTS, defaultStageCounts)
+    .map((value) => Math.max(1, Math.round(value)));
+  const stageCounts = stageCountsRaw.length ? stageCountsRaw : defaultStageCounts;
+  const stageCooldownsRaw = parseNumberList(e.TRADE_COOLDOWN_STAGE_MS, [30_000, 20_000, 10_000])
+    .map((value) => Math.max(1_000, Math.round(value)));
+  const stageCooldowns = alignList(stageCooldownsRaw.length ? stageCooldownsRaw : [30_000, 20_000, 10_000], stageCounts.length, 30_000);
+  const stageWinThresholdsRaw = parseNumberList(e.TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS, [0, 0.35, 0.42])
+    .map((value) => Math.max(0, Math.min(1, value)));
+  const stageWinThresholdFallback = stageWinThresholdsRaw.length
+    ? stageWinThresholdsRaw[stageWinThresholdsRaw.length - 1]
+    : 0;
+  const stageWinThresholds = alignList(
+    stageWinThresholdsRaw.length ? stageWinThresholdsRaw : [0, 0.35, 0.42],
+    stageCounts.length,
+    stageWinThresholdFallback,
+  );
+  const stageMinTradesRaw = parseNumberList(e.TRADE_FREQUENCY_STAGE_MIN_TRADES, [0, 6, 10])
+    .map((value) => Math.max(0, Math.round(value)));
+  const stageMinTradesFallback = stageMinTradesRaw.length
+    ? stageMinTradesRaw[stageMinTradesRaw.length - 1]
+    : 0;
+  const stageMinTrades = alignList(
+    stageMinTradesRaw.length ? stageMinTradesRaw : [0, 6, 10],
+    stageCounts.length,
+    stageMinTradesFallback,
+  );
+  const tradeFrequencyHysteresis = Math.max(0, Math.min(0.3, Number(e.TRADE_FREQUENCY_HYSTERESIS || '0.05')));
+
   return {
     EXCHANGE_ID: e.EXCHANGE_ID || "cryptocom",
     SYMBOL: e.SYMBOL || "BTCUSDT",
@@ -379,6 +432,11 @@ export function getConfig(): Cfg {
     TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "600000"), // 10 minutes cooldown for crypto
     TRADE_COOLDOWN_WIN_MS: Number(e.TRADE_COOLDOWN_WIN_MS || Math.min(Number(e.TRADE_COOLDOWN_MS || 600000), 90000)),
     TRADE_COOLDOWN_LOSS_MS: Number(e.TRADE_COOLDOWN_LOSS_MS || Number(e.TRADE_COOLDOWN_MS || 600000)),
+    TRADE_COOLDOWN_STAGE_MS: stageCooldowns,
+    TRADE_FREQUENCY_STAGE_COUNTS: stageCounts,
+    TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS: stageWinThresholds,
+    TRADE_FREQUENCY_STAGE_MIN_TRADES: stageMinTrades,
+    TRADE_FREQUENCY_HYSTERESIS: tradeFrequencyHysteresis,
     CRITICAL_LOSS_PCT: Number(e.CRITICAL_LOSS_PCT || "3.0"), // 3% loss = immediate exit (increased for crypto)
     // Trade quality filters
     // Lowered to trigger more realistic crypto trades while keeping quality
@@ -430,7 +488,7 @@ export function getConfig(): Cfg {
     COOLDOWN_MOMENTUM_THRESHOLD: Number(e.COOLDOWN_MOMENTUM_THRESHOLD || "0.3"),
     // ATR % threshold relaxed to 0.3 by default; adaptive logic still enforces safety per symbol
     ENTRY_MIN_ATR_PCT: Number(e.ENTRY_MIN_ATR_PCT || "0.3"),
-    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.02"),
+    ENTRY_MIN_SLOPE_ABS_PCT: Number(e.ENTRY_MIN_SLOPE_ABS_PCT || "0.08"),
     // Adaptive performance tuning (streak-based)
     STREAK_WINDOW: Number(e.STREAK_WINDOW || "3"),
     LOSS_STREAK_ATR_BOOST: Number(e.LOSS_STREAK_ATR_BOOST || "0.15"),
@@ -469,13 +527,13 @@ export function getConfig(): Cfg {
     // Mode-based adaptive parameters
     CONSERVATIVE_RISK_PCT: Number(e.CONSERVATIVE_RISK_PCT || "1.0"),
     CONSERVATIVE_MIN_ATR_PCT: Number(e.CONSERVATIVE_MIN_ATR_PCT || "0.30"),
-    CONSERVATIVE_MAX_TRADES_PER_DAY: Number(e.CONSERVATIVE_MAX_TRADES_PER_DAY || "6"),
+    CONSERVATIVE_MAX_TRADES_PER_DAY: Number(e.CONSERVATIVE_MAX_TRADES_PER_DAY || "10"),
     CONSERVATIVE_MAX_CONSECUTIVE_STOPS: Number(e.CONSERVATIVE_MAX_CONSECUTIVE_STOPS || "2"),
     CONSERVATIVE_DAILY_LOSS_LIMIT_PCT: Number(e.CONSERVATIVE_DAILY_LOSS_LIMIT_PCT || "4.0"),
     CONSERVATIVE_TRADE_COOLDOWN_MS: Number(e.CONSERVATIVE_TRADE_COOLDOWN_MS || "30000"),
     REACTIVE_RISK_PCT: Number(e.REACTIVE_RISK_PCT || "1.5"),
     REACTIVE_MIN_ATR_PCT: Number(e.REACTIVE_MIN_ATR_PCT || "0.18"),
-    REACTIVE_MAX_TRADES_PER_DAY: Number(e.REACTIVE_MAX_TRADES_PER_DAY || "10"),
+    REACTIVE_MAX_TRADES_PER_DAY: Number(e.REACTIVE_MAX_TRADES_PER_DAY || "12"),
     REACTIVE_MAX_CONSECUTIVE_STOPS: Number(e.REACTIVE_MAX_CONSECUTIVE_STOPS || "3"),
     REACTIVE_DAILY_LOSS_LIMIT_PCT: Number(e.REACTIVE_DAILY_LOSS_LIMIT_PCT || "5.5"),
     REACTIVE_TRADE_COOLDOWN_MS: Number(e.REACTIVE_TRADE_COOLDOWN_MS || "20000"),
