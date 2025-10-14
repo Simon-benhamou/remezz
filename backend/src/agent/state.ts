@@ -1487,32 +1487,6 @@ export class ReboundRejectionAgent {
     });
 
     let rrEffectiveForFilters = rrSnapshot.effective;
-    const rrRelaxEligible = adxValue >= 25
-      && (spreadBps == null || spreadBps <= 1)
-      && (spreadAtrRatio != null && spreadAtrRatio <= 0.2)
-      && (volumeRatio == null || Math.abs(volumeRatio - 1) <= 0.25);
-    if (rrRelaxEligible) {
-      const deviation = volumeRatio != null ? Math.abs(volumeRatio - 1) : 0;
-      const rrRelaxedTarget = 1.2 + Math.min(0.05, Math.max(0, deviation * 0.2));
-      if (rrRelaxedTarget < rrEffectiveForFilters) {
-        rrEffectiveForFilters = rrRelaxedTarget;
-        recordOpsEvent({
-          level: 'info',
-          source: 'entry_filters',
-          message: 'rr_dynamic_relaxed',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile.symbol,
-          details: {
-            base: rrSnapshot.effective,
-            applied: rrEffectiveForFilters,
-            adx: adxValue,
-            spreadBps,
-            spreadAtrRatio,
-            volumeRatio,
-          },
-        });
-      }
-    }
 
     if (!qualityAssessment.allow) {
       recordOpsEvent({
@@ -1718,11 +1692,11 @@ export class ReboundRejectionAgent {
     const nearestSupport = supports
       .filter(level => level && typeof level.price === 'number' && level.price < mktPrice)
       .map(level => level.price as number)
-      .reduce<number | null>((best, price) => (best == null || mktPrice - price < mktPrice - best ? price : best), null);
+      .reduce((best: number | null, price) => (best == null || mktPrice - price < mktPrice - best ? price : best), null as number | null);
     const nearestResistance = resistances
       .filter(level => level && typeof level.price === 'number' && level.price > mktPrice)
       .map(level => level.price as number)
-      .reduce<number | null>((best, price) => (best == null || price - mktPrice < best - mktPrice ? price : best), null);
+      .reduce((best: number | null, price) => (best == null || price - mktPrice < best - mktPrice ? price : best), null as number | null);
     let swingDistance: number | null = null;
     if (planBias === 'long' && nearestSupport != null) {
       const diff = mktPrice - nearestSupport;
@@ -2022,6 +1996,33 @@ export class ReboundRejectionAgent {
     const spreadAtrRatio = spreadPercent != null && atrBaselinePct != null && atrBaselinePct > 0
       ? spreadPercent / atrBaselinePct
       : null;
+    const rrRelaxEligible = adxValue >= 25
+      && (spreadBps == null || spreadBps <= 1)
+      && (spreadAtrRatio != null && spreadAtrRatio <= 0.2)
+      && (volumeRatio == null || Math.abs(volumeRatio - 1) <= 0.25);
+    if (rrRelaxEligible) {
+      const deviation = volumeRatio != null ? Math.abs(volumeRatio - 1) : 0;
+      const rrRelaxedTarget = 1.2 + Math.min(0.05, Math.max(0, deviation * 0.2));
+      if (rrRelaxedTarget < rrEffectiveForFilters) {
+        rrEffectiveForFilters = rrRelaxedTarget;
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_filters',
+          message: 'rr_dynamic_relaxed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            base: rrSnapshot.effective,
+            applied: rrEffectiveForFilters,
+            adx: adxValue,
+            spreadBps,
+            spreadAtrRatio,
+            volumeRatio,
+          },
+        });
+      }
+    }
+
     const rMultiples = Array.isArray(this.plan.rPrices)
       ? this.plan.rPrices
         .map(({ r, price }) => {
@@ -4822,9 +4823,6 @@ export class ReboundRejectionAgent {
     const { playbook: contextualPlaybook } = this.getContextualPlaybook(snap, bias);
     const adxSnapshot = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
     const baseHoldMs = this.getAdaptiveConfirmationTime(snap, { playbook: contextualPlaybook, bias });
-    const { playbook: contextualPlaybook } = this.getContextualPlaybook(snap, bias);
-    const adxSnapshot = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
-    const baseHoldMs = this.getAdaptiveConfirmationTime(snap, { playbook: contextualPlaybook, bias });
 
     if (priceInZone && this.priceInZoneStartTime === 0) {
       this.priceInZoneStartTime = now;
@@ -4849,7 +4847,7 @@ export class ReboundRejectionAgent {
     const timeInZoneMs = now - this.priceInZoneStartTime;
     const timeInZoneMin = timeInZoneMs / 60000;
 
-    const recentSlope = this.calculateRecentSlope(snap, 5); // Last 5 candles
+    const recentSlope = this.calculateRecentSlope(snap, 5);
     const emaBasis = Number.isFinite(snap.ema20) && Math.abs(snap.ema20) > 1e-8
       ? Math.abs(snap.ema20)
       : Math.max(1e-8, Math.abs(currentPrice));
@@ -4899,9 +4897,7 @@ export class ReboundRejectionAgent {
     const longMomentumRsiFloor = 45;
     const shortMomentumRsiCeil = 45;
     const comboRsiSignal = rsiValue != null
-      ? (bias === 'long'
-        ? rsiValue >= longMomentumRsiFloor
-        : rsiValue <= shortMomentumRsiCeil)
+      ? (bias === 'long' ? rsiValue >= longMomentumRsiFloor : rsiValue <= shortMomentumRsiCeil)
       : false;
     const comboEmaSignal = bias === 'long'
       ? ema20 > 0 && ema50 > 0 && ema20 >= ema50 && slopePct >= -0.02
@@ -4938,6 +4934,7 @@ export class ReboundRejectionAgent {
       timeRequirementMet = true;
       timeMode = 'momentum';
     }
+
     const buildMeta = (mode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null) => ({
       timeThresholdMs,
       timeInZoneMs,
@@ -5024,7 +5021,6 @@ export class ReboundRejectionAgent {
       this.resetMomentumAwaitContext(true);
     }
 
-    // 3️⃣ VOLUME CHECK: Must exceed 1.2x average
     const { smoothed: volumeRatioSmoothed, previous: prevVolumeRatio } = this.updateVolumeRatioHistory(rawVolumeRatio);
 
     const adx = Number.isFinite(adxValue) ? adxValue : 0;
@@ -5084,7 +5080,7 @@ export class ReboundRejectionAgent {
     const holdingFavorableHalf = bias === 'long'
       ? currentPrice >= entryZone.mid
       : currentPrice <= entryZone.mid;
-    const timeoutMs = 2 * 15 * 60 * 1000; // 2x15m candles
+    const timeoutMs = 2 * 15 * 60 * 1000;
 
     let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null = null;
     let effectiveNeed = adaptiveNeed;
@@ -5174,350 +5170,6 @@ export class ReboundRejectionAgent {
       confirmed: true,
       reason: `${baseReason}, volume confirmed (${smoothedDisplay}x smoothed, raw ${rawDisplay}x)`,
       meta: buildMeta('adaptive'),
-    };
-  }
-,
-    bias: 'long' | 'short'
-  ): { confirmed: boolean; reason: string; shouldLog?: boolean } {
-    const now = Date.now();
-    const cfg = getConfig();
-    const priceInZone = currentPrice >= entryZone.from && currentPrice <= entryZone.to;
-
-    // Track when price entered zone
-    if (priceInZone && this.priceInZoneStartTime === 0) {
-      this.priceInZoneStartTime = now;
-      this.resetVolumeRatioHistory();
-      this.resetMomentumAwaitContext();
-      const waitMinutes = Math.max(1, baseHoldMs / 60000);
-      return { confirmed: false, reason: `Price just entered zone - waiting ${waitMinutes.toFixed(1)}min confirmation` };
-    }
-
-    // Reset if price exits zone
-    if (!priceInZone) {
-      this.priceInZoneStartTime = 0;
-      this.resetVolumeRatioHistory();
-      this.resetMomentumAwaitContext();
-      return { confirmed: false, reason: 'Price outside zone' };
-    }
-
-    // 1️⃣ TIME CHECK: Adaptive time based on trend strength (PHASE 4 FIX #3)
-    let adaptiveTimeMs = baseHoldMs;
-    const timeInZoneMs = now - this.priceInZoneStartTime;
-    const timeInZoneMin = timeInZoneMs / 60000;
-
-    const recentSlope = this.calculateRecentSlope(snap, 5); // Last 5 candles
-    const emaBasis = Number.isFinite(snap.ema20) && Math.abs(snap.ema20) > 1e-8
-      ? Math.abs(snap.ema20)
-      : Math.max(1e-8, Math.abs(currentPrice));
-    const slopePct = emaBasis > 0 ? (recentSlope / emaBasis) * 100 : 0;
-
-    const avgVolume = snap.volumeMA || snap.volumeAvg || 0;
-    const lastVolume = snap.volume || 0;
-    const rawVolumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
-    const adxValue = adxSnapshot;
-    const adxSlopeVal = Number.isFinite(snap.adxSlope) ? snap.adxSlope : 0;
-    const breakoutActive = this.runtimeZoneDiagnostics?.breakoutActive ?? false;
-
-    const momentumCtx = this.momentumAwaitContext;
-    const unlockThresholdPct = bias === 'long' ? 0.05 : -0.05;
-    const relockThresholdPct = bias === 'long' ? -0.05 : 0.05;
-
-    if (momentumCtx.unlocked) {
-      const shouldRelock = bias === 'long' ? slopePct <= relockThresholdPct : slopePct >= relockThresholdPct;
-      if (shouldRelock) {
-        momentumCtx.unlocked = false;
-      }
-    }
-
-    let momentumReversed = momentumCtx.unlocked;
-    if (!momentumReversed) {
-      const shouldUnlock = bias === 'long' ? slopePct >= unlockThresholdPct : slopePct <= unlockThresholdPct;
-      if (shouldUnlock) {
-        momentumCtx.unlocked = true;
-        momentumReversed = true;
-      }
-    }
-
-    const rsiValue = Number.isFinite(snap.rsi14) ? Number(snap.rsi14) : null;
-    const ema20 = Number.isFinite(snap.ema20) ? Number(snap.ema20) : 0;
-    const ema50 = Number.isFinite(snap.ema50) ? Number(snap.ema50) : 0;
-
-    const stopDistance = Number.isFinite(this.plan?.stopDistance)
-      ? Number(this.plan?.stopDistance)
-      : 0;
-    const firstR = Number(this.plan?.rPrices?.[0]?.r ?? 0);
-    const tp1ProfitPct = currentPrice > 0 && stopDistance > 0 && Number.isFinite(firstR)
-      ? Math.abs((firstR * stopDistance) / currentPrice) * 100
-      : 0;
-
-    const adxImproving = adxSlopeVal > 0;
-    const comboVolumeSignal = rawVolumeRatio >= 1.1;
-    const longMomentumRsiFloor = 45;
-    const shortMomentumRsiCeil = 45;
-    const comboRsiSignal = rsiValue != null
-      ? (bias === 'long'
-        ? rsiValue >= longMomentumRsiFloor
-        : rsiValue <= shortMomentumRsiCeil)
-      : false;
-    const comboEmaSignal = bias === 'long'
-      ? ema20 > 0 && ema50 > 0 && ema20 >= ema50 && slopePct >= -0.02
-      : ema20 > 0 && ema50 > 0 && ema20 <= ema50 && slopePct <= 0.02;
-
-    const momentumSignalsMet = [comboVolumeSignal, adxImproving, comboRsiSignal, comboEmaSignal].filter(Boolean).length;
-    const slopeNotStronglyAgainst = bias === 'long' ? slopePct > -0.2 : slopePct < 0.2;
-
-    if (!momentumReversed && slopeNotStronglyAgainst && momentumSignalsMet >= 2) {
-      momentumCtx.unlocked = true;
-      momentumReversed = true;
-    }
-
-    const fastTrackEligible = breakoutActive || (momentumReversed && adxValue >= 28 && rawVolumeRatio >= 1.25);
-    const fastTrackTimeMs = fastTrackEligible ? Math.min(adaptiveTimeMs, 2 * 60 * 1000) : adaptiveTimeMs;
-    const breakoutMode = (this.plan?.plan?.meta?.playbook ?? null) === 'momentum_breakout' || breakoutActive;
-    const breakoutCapMs = 2 * 60 * 1000;
-    let timeThresholdMs = fastTrackTimeMs;
-    if (breakoutMode) {
-      timeThresholdMs = Math.min(timeThresholdMs, breakoutCapMs);
-    }
-    const previousSample = this.volumeRatioHistory.length
-      ? this.volumeRatioHistory[this.volumeRatioHistory.length - 1]
-      : undefined;
-    const whaleCooldownMs = this.whaleQuarantine && this.whaleQuarantine.active
-      ? Math.max(120_000, this.whaleQuarantine.until - this.whaleQuarantine.triggeredAt)
-      : 120_000;
-    const whaleRecently = this.lastWhaleSpikeTs > 0 && now - this.lastWhaleSpikeTs < whaleCooldownMs;
-    const volumeRising = rawVolumeRatio >= 1.05 && (previousSample == null || rawVolumeRatio >= previousSample * 1.03);
-    const momentumConfirmEligible = breakoutMode && adxSlopeVal > 0 && volumeRising && !whaleRecently;
-    let timeMode: 'standard' | 'momentum' = 'standard';
-    let timeRequirementMet = timeInZoneMs >= timeThresholdMs;
-    if (!timeRequirementMet && momentumConfirmEligible && timeInZoneMs >= 60 * 1000) {
-      timeRequirementMet = true;
-      timeMode = 'momentum';
-    }
-    const requiredMin = timeThresholdMs / 60000;
-    if (!timeRequirementMet) {
-      return {
-        confirmed: false,
-        reason: `Waiting for ${requiredMin.toFixed(1)}min confirmation (${timeInZoneMin.toFixed(1)}min elapsed, ADX ${adxValue.toFixed(1)})`
-      };
-    }
-
-    if (!momentumReversed) {
-      momentumCtx.awaitingSince = momentumCtx.awaitingSince ?? now;
-      momentumCtx.lastSlopePct = slopePct;
-      momentumCtx.lastSlopeRaw = recentSlope;
-      const smoothing = 0.7;
-      momentumCtx.avgSlopePct = Number.isFinite(momentumCtx.avgSlopePct)
-        ? momentumCtx.avgSlopePct * smoothing + slopePct * (1 - smoothing)
-        : slopePct;
-
-      const elapsedMs = now - momentumCtx.awaitingSince;
-      const MOMENTUM_TIMEOUT_MS = 6 * 60 * 1000;
-      if (elapsedMs >= MOMENTUM_TIMEOUT_MS) {
-        const slopeRelaxThreshold = bias === 'long' ? -0.03 : 0.03;
-        const slopeWithinRelax = bias === 'long' ? slopePct >= slopeRelaxThreshold : slopePct <= slopeRelaxThreshold;
-        const volumeStrong = rawVolumeRatio >= 1.2;
-        const adxHealthy = adxValue >= 20 && adxSlopeVal >= 0;
-        if (slopeWithinRelax && volumeStrong && adxHealthy) {
-          momentumCtx.unlocked = true;
-          momentumReversed = true;
-        }
-      }
-
-      const REASSESS_TIMEOUT_MS = 12 * 60 * 1000;
-      if (!momentumReversed && elapsedMs >= REASSESS_TIMEOUT_MS && now - this.lastMomentumTimeoutTs >= 60_000) {
-        this.lastMomentumTimeoutTs = now;
-        this.marketContext = null;
-        this.lastMomentumGateResult = null;
-        const reason = `Momentum reversal timeout reached (${(elapsedMs / 60000).toFixed(1)}min) — forcing playbook reassessment`;
-        recordOpsEvent({
-          level: 'info',
-          source: 'entry_confirmation',
-          message: 'momentum_reassessment_triggered',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: {
-            elapsedMs,
-            slopePct,
-            rawVolumeRatio,
-            adx: adxValue,
-            bias,
-          },
-        });
-        this.resetMomentumAwaitContext();
-        return { confirmed: false, reason, shouldLog: true };
-      }
-
-      if (!momentumReversed) {
-        const formatElapsed = (ms: number) => {
-          const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-          const minutes = Math.floor(totalSeconds / 60);
-          const seconds = totalSeconds % 60;
-          return `${minutes}m${seconds.toString().padStart(2, '0')}s`;
-        };
-        const elapsedStr = formatElapsed(elapsedMs);
-        const avgSlopeDisplay = momentumCtx.avgSlopePct.toFixed(2);
-        const lastSlopeDisplay = slopePct.toFixed(2);
-        const reason = `Still waiting for momentum reversal — elapsed ${elapsedStr}, slope avg ${avgSlopeDisplay}% (last ${lastSlopeDisplay}%), vol ${rawVolumeRatio.toFixed(2)}x`;
-        const logIntervalMs = 60 * 1000;
-        const shouldLog = now - momentumCtx.lastLogTs >= logIntervalMs;
-        if (shouldLog) {
-          momentumCtx.lastLogTs = now;
-        }
-        momentumCtx.lastReason = reason;
-        return { confirmed: false, reason, shouldLog };
-      }
-    }
-
-    if (momentumReversed) {
-      this.resetMomentumAwaitContext(true);
-    }
-
-    // 3️⃣ VOLUME CHECK: Must exceed 1.2x average
-    const { smoothed: volumeRatioSmoothed, previous: prevVolumeRatio } = this.updateVolumeRatioHistory(rawVolumeRatio);
-
-    const adx = Number.isFinite(adxValue) ? adxValue : 0;
-    const atrPct = Number.isFinite(snap.atrPct) ? snap.atrPct : 0;
-    const adxNorm = this.normalizeToUnitInterval(adx, 15, 40);
-    const atrNorm = this.normalizeToUnitInterval(atrPct, 0.5, 2.5);
-    const ratioFloorCfg = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_FLOOR)
-      ? Number(cfg.QUALITY_VOLUME_RATIO_FLOOR)
-      : 0.85;
-    const ratioCeilCfg = Number.isFinite(cfg.QUALITY_VOLUME_RATIO_CEIL)
-      ? Number(cfg.QUALITY_VOLUME_RATIO_CEIL)
-      : 1.3;
-    const ratioFloor = this.clampValue(ratioFloorCfg, 0.8, 1.05);
-    const ratioCeil = Math.max(1.05, Math.min(1.45, ratioCeilCfg));
-    const rawNeed = this.clampValue(0.9 + 0.4 * adxNorm + 0.2 * atrNorm, Math.max(0.9, ratioFloor), ratioCeil);
-    const profitFloor = Math.max(1, Number(cfg.MIN_TRADE_PROFIT_PCT || 1));
-    const enhancedProfit = Math.max(profitFloor + 0.2, Number(cfg.TARGET_TP1_PCT || profitFloor + 0.2));
-    let adaptiveNeed = rawNeed;
-    if (adx >= 25) {
-      adaptiveNeed = Math.min(adaptiveNeed, Math.max(ratioFloor, 1.0));
-    }
-    if (tp1ProfitPct >= enhancedProfit) {
-      adaptiveNeed = Math.min(adaptiveNeed, Math.max(ratioFloor, 0.92));
-    } else if (tp1ProfitPct >= profitFloor) {
-      adaptiveNeed = Math.min(adaptiveNeed, Math.max(ratioFloor, 0.98));
-    }
-
-    const cmf20 = Number.isFinite(snap.cmf20) ? snap.cmf20 ?? 0 : 0;
-    const cmfAligned = bias === 'long' ? cmf20 > 0.03 : cmf20 < -0.03;
-    if (cmfAligned) {
-      const cmfMagnitude = Math.abs(cmf20);
-      const cmfStrong = Math.max(0.01, Number(cfg.VOLUME_CMF_STRONG || 0.15));
-      const cmfRelax = Math.max(0, Number(cfg.VOLUME_CMF_RELAX || 0.12));
-      const cmfRelaxMax = Math.max(cmfRelax, Number(cfg.VOLUME_CMF_RELAX_MAX || 0.2));
-      const cmfMinAdx = Math.max(8, Number(cfg.VOLUME_CMF_MIN_ADX || 15));
-      if (adx >= cmfMinAdx) {
-        const relaxScale = cmfMagnitude >= cmfStrong
-          ? Math.min(1.5, cmfMagnitude / cmfStrong)
-          : 0.6;
-        const relaxAmount = Math.min(cmfRelaxMax, cmfRelax * relaxScale);
-        adaptiveNeed = Math.max(ratioFloor, adaptiveNeed - relaxAmount);
-      }
-    }
-    adaptiveNeed = this.clampValue(adaptiveNeed, ratioFloor, ratioCeil);
-    const prevRatio = prevVolumeRatio ?? rawVolumeRatio;
-    const volumeSpike = Number.isFinite(rawVolumeRatio)
-      && rawVolumeRatio >= Math.max(0.95, adaptiveNeed * 0.85)
-      && (prevRatio ? rawVolumeRatio >= prevRatio * 1.05 : true);
-    const minFastTrackRatio = 0.85;
-    const volumeSignal = volumeRatioSmoothed >= minFastTrackRatio;
-    const deltaSignal = cmfAligned;
-    const volSpikeSignal = volumeSpike;
-    const positiveSignals = [volumeSignal, deltaSignal, volSpikeSignal].filter(Boolean).length;
-
-    const planPlaybook = this.plan?.plan?.meta?.playbook ?? null;
-    const breakoutDistancePct = this.runtimeZoneDiagnostics?.breakoutDistancePct ?? 0;
-    const holdingFavorableHalf = bias === 'long'
-      ? currentPrice >= entryZone.mid
-      : currentPrice <= entryZone.mid;
-    const timeoutMs = 2 * 15 * 60 * 1000; // 2x15m candles
-
-    let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null = null;
-    let effectiveNeed = adaptiveNeed;
-    let volumeConfirmed = volumeRatioSmoothed >= adaptiveNeed;
-
-    if (!volumeConfirmed && adxImproving && positiveSignals >= 2 && volumeSignal) {
-      volumeConfirmed = true;
-      confirmationMode = 'fast_track';
-      effectiveNeed = Math.max(minFastTrackRatio, Math.min(adaptiveNeed, volumeRatioSmoothed));
-    }
-
-    if (
-      !volumeConfirmed
-      && planPlaybook === 'momentum_breakout'
-      && timeInZoneMs >= timeoutMs
-      && Math.abs(breakoutDistancePct) < 1e-4
-      && holdingFavorableHalf
-    ) {
-      const timeoutNeed = Math.max(0.95, adaptiveNeed - 0.1);
-      if (volumeRatioSmoothed >= timeoutNeed) {
-        volumeConfirmed = true;
-        confirmationMode = 'timeout';
-        effectiveNeed = timeoutNeed;
-      }
-    }
-
-    if (!volumeConfirmed) {
-      const target = confirmationMode === 'fast_track' ? minFastTrackRatio : adaptiveNeed;
-      const currentRatio = Number.isFinite(volumeRatioSmoothed) ? volumeRatioSmoothed : rawVolumeRatio;
-      const ratioDisplay = Number.isFinite(currentRatio) ? currentRatio.toFixed(2) : '0.00';
-      const rawDisplay = Number.isFinite(rawVolumeRatio) && rawVolumeRatio > 0 ? rawVolumeRatio.toFixed(2) : '0.00';
-      void this.executeVolumeProbe({
-        side: bias === 'long' ? 'buy' : 'sell',
-        zonePrice: entryZone.mid,
-        currentPrice,
-        targetRatio: target,
-        currentRatio,
-        rawRatio: rawVolumeRatio,
-        tp1ProfitPct,
-        adx,
-        atrPct,
-      });
-      return {
-        confirmed: false,
-        reason: `Waiting for volume confirmation (smoothed ${ratioDisplay}x, raw ${rawDisplay}x, need ≥ ${target.toFixed(2)}x)`
-      };
-    }
-
-    const smoothedDisplay = Number.isFinite(volumeRatioSmoothed) ? volumeRatioSmoothed.toFixed(2) : '0.00';
-    const rawDisplay = Number.isFinite(rawVolumeRatio) && rawVolumeRatio > 0 ? rawVolumeRatio.toFixed(2) : '0.00';
-    let baseReason = `Entry confirmed: ${timeInZoneMin.toFixed(1)}min in zone, momentum reversed`;
-    if (timeMode === 'momentum') {
-      baseReason = `Entry confirmed: momentum fast-track (${timeInZoneMin.toFixed(1)}min in zone, ADX ${adxValue.toFixed(1)})`;
-      if (confirmationMode == null) confirmationMode = 'momentum';
-    }
-
-    if (confirmationMode === 'momentum') {
-      return {
-        confirmed: true,
-        reason: `${baseReason}, momentum confirm (volume ${smoothedDisplay}x, raw ${rawDisplay}x)`
-      };
-    }
-    if (confirmationMode === 'fast_track') {
-      const signalsUsed = [
-        volumeSignal ? 'volume≥0.85x' : null,
-        deltaSignal ? 'CMF aligned' : null,
-        volSpikeSignal ? 'vol spike' : null,
-      ].filter(Boolean).join(' + ');
-      return {
-        confirmed: true,
-        reason: `${baseReason}, order-flow fast track (${signalsUsed || 'signals'}) → volume ${smoothedDisplay}x (raw ${rawDisplay}x)`
-      };
-    }
-
-    if (confirmationMode === 'timeout') {
-      return {
-        confirmed: true,
-        reason: `${baseReason}, timeout release with volume ${smoothedDisplay}x (raw ${rawDisplay}x, need ≥ ${effectiveNeed.toFixed(2)}x)`
-      };
-    }
-
-    return {
-      confirmed: true,
-      reason: `${baseReason}, volume ${smoothedDisplay}x (raw ${rawDisplay}x, need ≥ ${adaptiveNeed.toFixed(2)}x)`
     };
   }
 
@@ -9865,17 +9517,15 @@ export class ReboundRejectionAgent {
         distancePct: Number.isFinite(nearestDistancePct) ? nearestDistancePct : null,
       };
     })();
-    const emaSlopeRaw = Number((snap as any)?.ema20Slope ?? validationSnap?.ema20Slope ?? 0);
+    const emaSlopeRaw = Number((snap as any)?.ema20Slope ?? 0);
     const emaSlopePct = ema20 !== 0 ? (emaSlopeRaw / ema20) * 100 : 0;
     const meanReversionAdxCap = 22;
     const emaFlat = Math.abs(emaSpreadPct) <= 1.0 && Math.abs(emaSlopePct) <= 1.0;
     const srTightAligned = srInfo.srAligned && srInfo.withinTolerance && emaFlat;
     const srTighterThanOnePct = srInfo.distancePct != null && srInfo.distancePct <= 1.0;
-    const cmfForRsi = typeof cmfVal === 'number'
-      ? cmfVal
-      : typeof (snap as any)?.cmf20 === 'number'
-        ? Number((snap as any).cmf20)
-        : 0;
+    const cmfForRsi = typeof (snap as any)?.cmf20 === 'number'
+      ? Number((snap as any).cmf20)
+      : 0;
     const rsiProfile = (() => {
       if (bias === 'long') {
         const strictPass = rsi <= 38;
