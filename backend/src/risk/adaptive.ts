@@ -23,6 +23,12 @@ export type AdaptiveRiskResult = {
   lossStreak: number;
   samplePenalty: number;
   notes: string[];
+  avgWin: number;
+  avgLoss: number;
+  rewardRatio: number;
+  kellyFraction: number;
+  kellyMultiplier: number;
+  kellyRiskPct: number;
 };
 
 function computeSharpe(returns: number[]) {
@@ -81,6 +87,12 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       lossStreak: 0,
       samplePenalty: 1,
       notes: ['no_session'],
+      avgWin: 0,
+      avgLoss: 0,
+      rewardRatio: 0,
+      kellyFraction: 0,
+      kellyMultiplier: 1,
+      kellyRiskPct: baseRiskPct,
     };
   }
   const exits = await prisma.order.findMany({
@@ -105,6 +117,12 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       lossStreak: 0,
       samplePenalty: 1,
       notes: ['no_trade_history'],
+      avgWin: 0,
+      avgLoss: 0,
+      rewardRatio: 0,
+      kellyFraction: 0,
+      kellyMultiplier: 1,
+      kellyRiskPct: baseRiskPct,
     };
   }
   const returns = exits
@@ -126,6 +144,12 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       lossStreak: 0,
       samplePenalty: 1,
       notes: ['no_valid_returns'],
+      avgWin: 0,
+      avgLoss: 0,
+      rewardRatio: 0,
+      kellyFraction: 0,
+      kellyMultiplier: 1,
+      kellyRiskPct: baseRiskPct,
     };
   }
 
@@ -170,6 +194,32 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   const wins = boundedReturns.filter((r) => r > 0).length;
   const winRate = wins / boundedReturns.length;
 
+  const winningReturns = boundedReturns.filter((r) => r > 0);
+  const losingReturns = boundedReturns.filter((r) => r < 0);
+  const avgWin = winningReturns.length
+    ? winningReturns.reduce((acc, r) => acc + r, 0) / winningReturns.length
+    : 0;
+  const avgLoss = losingReturns.length
+    ? Math.abs(losingReturns.reduce((acc, r) => acc + r, 0) / losingReturns.length)
+    : 0;
+  const rewardRatio = avgLoss > 0 ? avgWin / avgLoss : 0;
+
+  let kellyFraction = 0;
+  if (avgLoss > 0 && winRate > 0 && winRate < 1 && rewardRatio > 0) {
+    kellyFraction = winRate - ((1 - winRate) / rewardRatio);
+  }
+  const clampedKellyFraction = Math.max(-0.35, Math.min(0.5, kellyFraction));
+  const targetKelly = 0.2;
+  let kellyMultiplier = 1;
+  if (clampedKellyFraction <= 0) {
+    const normalized = Math.max(-1.5, clampedKellyFraction / Math.max(targetKelly, 1e-6));
+    kellyMultiplier = 1 + normalized * 0.7;
+  } else {
+    const normalized = Math.min(clampedKellyFraction / Math.max(targetKelly, 1e-6), 2.0);
+    kellyMultiplier = 1 + normalized * 0.45;
+  }
+  kellyMultiplier = Math.max(0.3, Math.min(1.55, kellyMultiplier));
+
   let lossStreak = 0;
   let currentStreak = 0;
   for (const r of boundedReturns) {
@@ -205,8 +255,11 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
 
 
   let riskPct = baseRiskPct;
-  const minRisk = Math.max(0.35, baseRiskPct * 0.35);
-  const maxRisk = Math.min(2.2, baseRiskPct * 1.8);
+  const minRisk = Math.max(0.2, baseRiskPct * 0.25);
+  const maxRisk = Math.min(2.2, baseRiskPct * 1.9);
+  const kellyFloor = Math.max(minRisk, baseRiskPct * 0.2);
+  const kellyCeil = Math.min(maxRisk, baseRiskPct * 2.1);
+  const kellyRiskPct = Math.max(kellyFloor, Math.min(kellyCeil, baseRiskPct * kellyMultiplier));
 
   if (maxDrawdownPct <= -9) {
     riskPct = Math.max(minRisk, riskPct * 0.45);
@@ -253,6 +306,8 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
 
   riskPct = Math.max(minRisk, riskPct * samplePenalty);
 
+  const preKellyRisk = riskPct;
+
   if (
     weightedSharpe > 1.6 &&
     winRate > 0.6 &&
@@ -280,6 +335,18 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   ) {
     riskPct = Math.min(maxRisk, riskPct * 1.05);
     notes.push('conservative_performance_boost');
+  }
+
+  if (kellyMultiplier < 0.95) {
+    riskPct = Math.max(minRisk, Math.min(riskPct, kellyRiskPct));
+    notes.push('kelly_fraction_reduction');
+  } else if (kellyMultiplier > 1.05) {
+    const blended = (preKellyRisk * 0.6) + (kellyRiskPct * 0.4);
+    riskPct = Math.max(minRisk, Math.min(maxRisk, blended));
+    notes.push('kelly_fraction_boost');
+  } else {
+    const blended = (preKellyRisk + kellyRiskPct) / 2;
+    riskPct = Math.max(minRisk, Math.min(maxRisk, blended));
   }
 
   const symbolReturns: Record<string, number[]> = {};
@@ -352,5 +419,11 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     lossStreak,
     samplePenalty,
     notes,
+    avgWin,
+    avgLoss,
+    rewardRatio,
+    kellyFraction: clampedKellyFraction,
+    kellyMultiplier,
+    kellyRiskPct: Math.round(kellyRiskPct * 100) / 100,
   };
 }

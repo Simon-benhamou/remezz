@@ -1497,10 +1497,12 @@ export class ReboundRejectionAgent {
       && Number.isFinite(slopeDirectionalPct) && slopeDirectionalPct >= (fastTrackCfg?.minSlopePct ?? 0.2)
       && volumeRatio != null && volumeRatio >= 1.1
       && (cmfVal == null || cmfVal >= 0);
-    let stopBasis: 'structure' | 'atr' | 'momentum_atr' = 'structure';
+    let stopBasis: 'structure' | 'atr' | 'momentum_atr' | 'adaptive_atr' = 'structure';
     let stopAtrMult: number | null = null;
     let momentumStopDistance: number | null = null;
     let momentumStopApplied = false;
+    let adaptiveStopApplied = false;
+    let adaptiveStopMeta: { distance: number; multiplier: number; confidence: number } | null = null;
     const baseStopDistance = typeof planAny._baseStopDistance === 'number'
       ? planAny._baseStopDistance
       : this.plan.stopDistance;
@@ -1549,6 +1551,65 @@ export class ReboundRejectionAgent {
       }
       effectiveStopDistance = tightened;
       momentumStopDistance = tightened;
+    }
+
+    const momentumDetails = this.lastMomentumGateResult?.details as any;
+    let recognizedConfidence: number | null = null;
+    if (momentumDetails?.recognizedOverrideConfidence != null) {
+      const candidate = Number(momentumDetails.recognizedOverrideConfidence);
+      recognizedConfidence = Number.isFinite(candidate) ? candidate : null;
+    } else if (Array.isArray(momentumDetails?.context?.recognizedStrategies)) {
+      const first = momentumDetails.context.recognizedStrategies[0];
+      if (first && typeof first.confidence === 'number' && Number.isFinite(first.confidence)) {
+        recognizedConfidence = first.confidence;
+      }
+    }
+    let qualitySizingPreview = 1.0;
+    try {
+      const rawPreview = this.computeQualityBasedSizing(snap!);
+      qualitySizingPreview = Math.max(0.6, Math.min(1.6, rawPreview));
+    } catch {}
+    const riskContextPct = this.adaptiveRisk?.riskPct ?? this.profile.riskPerTradePct;
+    const stopBeforeAdaptive = effectiveStopDistance;
+    const adaptiveStop = this.computeAdaptiveStopDistance({
+      baseDistance: effectiveStopDistance,
+      atrDistance: atrForBreakoutStops,
+      atrPct: Number(entryZoneMeta?.atrPct ?? this.plan?.atrPct ?? 0),
+      riskContextPct,
+      qualityMultiplier: qualitySizingPreview,
+      recognizedConfidence,
+    });
+    if (adaptiveStop && Math.abs(adaptiveStop.distance - stopBeforeAdaptive) > 1e-8) {
+      adaptiveStopApplied = true;
+      adaptiveStopMeta = adaptiveStop;
+      effectiveStopDistance = adaptiveStop.distance;
+      if (momentumStopDistance != null && adaptiveStop.distance < momentumStopDistance) {
+        momentumStopDistance = adaptiveStop.distance;
+      }
+      planAny._adaptiveStopMeta = {
+        distance: adaptiveStop.distance,
+        multiplier: adaptiveStop.multiplier,
+        confidence: adaptiveStop.confidence,
+        atrDistance: atrForBreakoutStops,
+      };
+      recordOpsEvent({
+        level: 'info',
+        source: 'risk_engine',
+        message: 'adaptive_atr_stop_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          previousDistance: stopBeforeAdaptive,
+          adjustedDistance: adaptiveStop.distance,
+          atrDistance: atrForBreakoutStops,
+          multiplier: adaptiveStop.multiplier,
+          confidence: adaptiveStop.confidence,
+          kellyMultiplier: this.adaptiveRisk?.kellyMultiplier ?? null,
+        },
+      });
+    }
+    if (!adaptiveStopApplied && planAny._adaptiveStopMeta) {
+      delete planAny._adaptiveStopMeta;
     }
     this.plan.stopDistance = effectiveStopDistance;
     const stopRaw = this.plan.bias === 'long'
@@ -1637,7 +1698,9 @@ export class ReboundRejectionAgent {
         },
       });
     }
-    if (momentumStopDistance != null && this.plan.stopDistance <= momentumStopDistance + 1e-8 && momentumStopDistance < baseStopDistance - 1e-8) {
+    if (adaptiveStopApplied && adaptiveStopMeta) {
+      stopBasis = 'adaptive_atr';
+    } else if (momentumStopDistance != null && this.plan.stopDistance <= momentumStopDistance + 1e-8 && momentumStopDistance < baseStopDistance - 1e-8) {
       stopBasis = 'momentum_atr';
     } else if (this.plan.stopDistance > baseStopDistance + 1e-8) {
       stopBasis = 'atr';
@@ -6912,6 +6975,72 @@ export class ReboundRejectionAgent {
       return false;
     }
     return true;
+  }
+
+  private computeAdaptiveStopDistance(params: {
+    baseDistance: number;
+    atrDistance: number | null;
+    atrPct: number;
+    riskContextPct: number;
+    qualityMultiplier: number;
+    recognizedConfidence: number | null;
+  }): { distance: number; multiplier: number; confidence: number } | null {
+    const { baseDistance, atrDistance, atrPct, riskContextPct, qualityMultiplier, recognizedConfidence } = params;
+    if (!(baseDistance > 0)) return null;
+    const atrBase = atrDistance != null && atrDistance > 0 ? atrDistance : null;
+    if (!atrBase) return null;
+
+    const currentMultiplier = baseDistance / atrBase;
+    if (!Number.isFinite(currentMultiplier) || currentMultiplier <= 0) return null;
+
+    const baseRisk = this.profile?.riskPerTradePct ?? 0;
+    const riskRatio = baseRisk > 0 ? riskContextPct / baseRisk : 1;
+    const boundedRiskRatio = Math.max(0.35, Math.min(1.8, riskRatio));
+    const boundedQuality = Math.max(0.5, Math.min(1.6, qualityMultiplier));
+    const boundedKelly = this.adaptiveRisk ? Math.max(0.3, Math.min(1.6, this.adaptiveRisk.kellyMultiplier)) : 1;
+    const boundedRecognized = recognizedConfidence != null
+      ? Math.max(0, Math.min(1.5, recognizedConfidence))
+      : 0.35;
+
+    const compositeConfidence = Math.max(0.25, Math.min(
+      1.85,
+      (boundedQuality * 0.35)
+        + (boundedRiskRatio * 0.25)
+        + (boundedKelly * 0.2)
+        + (boundedRecognized * 0.2),
+    ));
+
+    let targetMultiplier = currentMultiplier;
+    if (compositeConfidence >= 1.35) {
+      targetMultiplier = Math.max(currentMultiplier * 0.78, 0.75);
+    } else if (compositeConfidence >= 1.1) {
+      targetMultiplier = Math.max(currentMultiplier * 0.88, 0.85);
+    } else if (compositeConfidence <= 0.7) {
+      targetMultiplier = Math.min(currentMultiplier * 1.45, 2.6);
+    } else if (compositeConfidence <= 0.85) {
+      targetMultiplier = Math.min(currentMultiplier * 1.2, 2.2);
+    }
+
+    const boundedAtrPct = Math.max(0, atrPct);
+    if (boundedAtrPct < 0.35) {
+      targetMultiplier = Math.max(targetMultiplier, currentMultiplier * 1.1);
+    } else if (boundedAtrPct > 1.8) {
+      targetMultiplier = Math.min(targetMultiplier, currentMultiplier * 0.9);
+    }
+
+    const minDistance = Math.max(baseDistance * 0.7, atrBase * 0.55);
+    const maxDistance = Math.max(baseDistance * 1.6, atrBase * 2.8);
+    const adjustedDistance = Math.max(minDistance, Math.min(maxDistance, atrBase * targetMultiplier));
+    if (!Number.isFinite(adjustedDistance) || adjustedDistance <= 0) return null;
+
+    const relativeDelta = Math.abs(adjustedDistance - baseDistance) / baseDistance;
+    if (relativeDelta < 0.08) return null;
+
+    return {
+      distance: adjustedDistance,
+      multiplier: adjustedDistance / atrBase,
+      confidence: compositeConfidence,
+    };
   }
 
   // Dynamic position sizing based on setup quality and market conditions

@@ -177,6 +177,11 @@ assert(adaptivePositive.appliedSymbolMultiplier > 1, 'Top symbol should earn a m
 assert(adaptivePositive.riskPct > 1, 'Adaptive risk should increase sizing for strong Sharpe/low drawdown');
 assert(adaptivePositive.symbolMultipliers.AGIXUSDT.multiplier >= adaptivePositive.appliedSymbolMultiplier,
   'Dominant symbol multiplier should match applied boost');
+assert(adaptivePositive.kellyMultiplier >= 1, 'Kelly fraction should amplify risk on strong performance');
+assert(adaptivePositive.kellyRiskPct >= adaptivePositive.baseRiskPct,
+  'Kelly-derived risk should not undershoot base when momentum is strong');
+assert(adaptivePositive.avgWin > 0 && adaptivePositive.avgLoss > 0,
+  'Kelly stats should compute positive averages for positive sample');
 
 await resetDb();
 const flatSessionId = 'session-flat';
@@ -186,5 +191,6 @@ await seedExitOrders(flatSessionId, 'BTCUSDT', [0.5, -0.5, 0.4, -0.4, 0.3, -0.3,
 const adaptiveFlat = await computeAdaptiveRisk(flatSessionId, 1);
 assert.equal(adaptiveFlat.appliedSymbolMultiplier, 1, 'No multiplier should be applied when performance is mixed');
 assert.equal(adaptiveFlat.riskPct, 1, 'Baseline risk should remain unchanged for underperforming stats');
+assert(Math.abs(adaptiveFlat.kellyFraction) < 0.05, 'Kelly fraction should be near flat for symmetric outcomes');
 
 console.log('✅ strategy-atr-risk.mjs passed');
