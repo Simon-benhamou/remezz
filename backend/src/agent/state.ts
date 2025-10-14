@@ -22,6 +22,7 @@ import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, p
 import { PlanJson } from './planSchema.js';
 import { ValidatedPlan, validatePlan } from './validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, maybeAdjustOrExit, computeInitialBracket } from '../quantai/index.js';
+import { evaluateRecognizedStrategies, RecognizedStrategySignal } from '../quantai/strategy/recognizedStrategies.js';
 import { chooseExecutionPlan, ExecutionPlan } from './executionPlanner.js';
 import type { EntryRelaxation } from '../quantai/strategy/entryFilters.js';
 import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../quantai/index.js';
@@ -338,6 +339,8 @@ type MomentumGateEvaluation = {
     overrideApplied?: boolean;
     context?: MarketContext | null;
     strongTrendOverride?: boolean;
+    recognizedOverrideId?: string | null;
+    recognizedOverrideConfidence?: number | null;
   };
 };
 
@@ -368,6 +371,8 @@ type MarketContext = {
   hurst?: number;
   trendStrength?: number;
   adx?: number;
+  recognizedStrategies: RecognizedStrategySignal[];
+  primaryStrategy: RecognizedStrategySignal | null;
 };
 
 export class ReboundRejectionAgent {
@@ -6062,6 +6067,25 @@ export class ReboundRejectionAgent {
       notes.push(`playbook_adjusted:${basePlaybook}->${effectivePlaybook}`);
     }
 
+    const recognizedStrategies = evaluateRecognizedStrategies(snap, {
+      bias,
+      regime,
+      allowMomentumOverride,
+      favorMeanReversion,
+    });
+
+    const targetBias: 'long' | 'short' | 'none' = bias !== 'none'
+      ? bias
+      : assessment.direction;
+    const prioritized = recognizedStrategies
+      .filter(signal => signal.active && (signal.bias === targetBias || signal.bias === 'both'))
+      .sort((a, b) => b.confidence - a.confidence);
+    const primaryStrategy = prioritized[0] ?? recognizedStrategies[0] ?? null;
+
+    if (primaryStrategy) {
+      notes.push(`recognized_primary=${primaryStrategy.id}:${primaryStrategy.bias}:${primaryStrategy.confidence.toFixed(2)}`);
+    }
+
     const context: MarketContext = {
       regime,
       basePlaybook,
@@ -6076,6 +6100,8 @@ export class ReboundRejectionAgent {
       hurst,
       trendStrength,
       adx: assessment.adx,
+      recognizedStrategies,
+      primaryStrategy,
     };
 
     this.marketContext = context;
@@ -6335,6 +6361,7 @@ export class ReboundRejectionAgent {
     const playbookLower = playbook.toLowerCase();
     let overrideApplied = false;
     let strongTrendOverride = false;
+    let recognizedOverride: RecognizedStrategySignal | null = null;
     let status: 'PASS' | 'SOFT_FAIL' | 'FAIL';
     if (reasons.length === 0) {
       status = 'PASS';
@@ -6353,6 +6380,39 @@ export class ReboundRejectionAgent {
       }
     } else {
       status = playbookLower === 'trend_following' ? 'SOFT_FAIL' : 'FAIL';
+    }
+
+    if (status !== 'PASS') {
+      const recognizedSignals = context?.recognizedStrategies ?? [];
+      const targetBias = bias !== 'none' ? bias : context?.direction ?? 'none';
+      if (targetBias !== 'none' && recognizedSignals.length > 0) {
+        const supportiveSignals = recognizedSignals
+          .filter(signal => signal.active && (signal.bias === targetBias || signal.bias === 'both'))
+          .sort((a, b) => b.confidence - a.confidence);
+        const candidate = supportiveSignals[0];
+        if (candidate) {
+          const overrideable = reasons.every(reason => (
+            reason.startsWith('atr_too_low')
+            || reason.startsWith('slope_too_flat')
+            || reason.startsWith('adx_too_low')
+            || reason.startsWith('volatility')
+            || reason.startsWith('rsi')
+          ));
+          const confidenceThreshold = candidate.id === 'bollinger_mean_reversion' ? 0.5 : 0.6;
+          if (overrideable && candidate.confidence >= confidenceThreshold) {
+            status = 'PASS';
+            overrideApplied = true;
+            recognizedOverride = candidate;
+            if (!context?.notes?.includes('recognized_strategy_override')) {
+              context?.notes?.push('recognized_strategy_override');
+            }
+            console.log(
+              `✅ Recognized strategy ${candidate.id} (${candidate.bias}) override applied ` +
+              `with confidence ${candidate.confidence.toFixed(2)}`,
+            );
+          }
+        }
+      }
     }
 
     const result: MomentumGateEvaluation = {
@@ -6378,6 +6438,8 @@ export class ReboundRejectionAgent {
         overrideApplied,
         context: context ?? null,
         strongTrendOverride,
+        recognizedOverrideId: recognizedOverride?.id ?? null,
+        recognizedOverrideConfidence: recognizedOverride?.confidence ?? null,
       },
     };
 
@@ -6492,6 +6554,7 @@ export class ReboundRejectionAgent {
       volatility: 1,
       volume: 1,
       rsiPosition: 1,
+      recognizedStrategy: 1,
     };
 
     let majorityRatio = 0.6;
@@ -6506,6 +6569,7 @@ export class ReboundRejectionAgent {
         weights.volatility = 1.1;
         weights.volume = 0.9;
         weights.rsiPosition = 0.7;
+        weights.recognizedStrategy = 1.0;
         comboTolerance = 8;
         break;
       case 'trend_following':
@@ -6514,6 +6578,7 @@ export class ReboundRejectionAgent {
         weights.volatility = 1.0;
         weights.volume = 0.9;
         weights.rsiPosition = 0.8;
+        weights.recognizedStrategy = 1.15;
         comboTolerance = 7;
         break;
       default:
@@ -6522,6 +6587,7 @@ export class ReboundRejectionAgent {
         weights.volatility = 1.1;
         weights.volume = 0.95;
         weights.rsiPosition = 1.2;
+        weights.recognizedStrategy = 1.1;
         partialCredit = 0.6;
         comboTolerance = 5;
         break;
@@ -6533,10 +6599,12 @@ export class ReboundRejectionAgent {
       comboTolerance += 2;
       weights.volume *= 0.9;
       weights.volatility *= 0.95;
+      weights.recognizedStrategy *= 1.05;
     } else if (mode === 'conservative') {
       majorityRatio += 0.05;
       weights.volume *= 1.05;
       weights.volatility *= 1.05;
+      weights.recognizedStrategy *= 0.95;
     }
 
     majorityRatio = Math.min(0.75, Math.max(0.5, majorityRatio));
@@ -6568,7 +6636,7 @@ export class ReboundRejectionAgent {
     const bias = this.plan.bias;
     if (bias === 'none') return false;
 
-    const { playbook } = this.getContextualPlaybook(snap, bias ?? 'none');
+    const { playbook, context } = this.getContextualPlaybook(snap, bias ?? 'none');
     const aggressiveness = this.profile?.aggressiveness || 'reactive';
     const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : null;
 
@@ -6576,6 +6644,12 @@ export class ReboundRejectionAgent {
     const threshold = this.computeQualityScoreThreshold(playbook, aggressiveness, tier);
 
     const diagnostics = this.getQualityFiltersDiagnostics(snap);
+    const recognizedSignals = context?.recognizedStrategies ?? [];
+    const targetBias = (context?.direction ?? bias) as 'long' | 'short' | 'none';
+    const recognizedCandidates = targetBias === 'none'
+      ? recognizedSignals
+      : recognizedSignals.filter(signal => signal.bias === targetBias || signal.bias === 'both');
+    const recognizedTop = recognizedCandidates[0] ?? null;
     const assessment = this.assessQualityScore(diagnostics, threshold, {
       weights: profile.weights,
       majorityRatio: profile.majorityRatio,
@@ -6606,6 +6680,7 @@ export class ReboundRejectionAgent {
 
     let allow = assessment.allow;
     let compensationReason: string | null = null;
+    let recognizedCompensation: RecognizedStrategySignal | null = null;
 
     if (!allow) {
       if (momentumPass && (trendPass || trendStatus === 'PARTIAL') && nearThreshold) {
@@ -6627,6 +6702,27 @@ export class ReboundRejectionAgent {
       } else if (!allow && totalChecks >= 3 && nearThreshold && volumePass && volatilityPass && (momentumPass || trendPass)) {
         allow = true;
         compensationReason = 'volatility_volume_combo';
+      } else if (!allow && recognizedCandidates.length > 0 && nearThreshold) {
+        const candidate = recognizedCandidates
+          .filter(signal => signal.active)
+          .sort((a, b) => b.confidence - a.confidence)[0];
+        if (candidate) {
+          const allowedFailures = new Set([
+            'momentum',
+            'trendAlignment',
+            'volatility',
+            'volume',
+            'rsiPosition',
+          ]);
+          const failingKeys = assessment.failingKeys ?? [];
+          const compatible = failingKeys.every(key => allowedFailures.has(key));
+          const confidenceThreshold = candidate.id === 'bollinger_mean_reversion' ? 0.5 : 0.6;
+          if (compatible && candidate.confidence >= confidenceThreshold) {
+            allow = true;
+            recognizedCompensation = candidate;
+            compensationReason = `recognized_strategy_${candidate.id}`;
+          }
+        }
       }
     }
 
@@ -6662,6 +6758,14 @@ export class ReboundRejectionAgent {
           weights: profile.weights,
           majorityThreshold,
           effectivePasses,
+          recognized: recognizedTop
+            ? {
+              id: recognizedTop.id,
+              bias: recognizedTop.bias,
+              confidence: recognizedTop.confidence,
+              active: recognizedTop.active,
+            }
+            : null,
         },
       };
       recordOpsEvent({
@@ -6684,6 +6788,14 @@ export class ReboundRejectionAgent {
             failingKeys: assessment.failingKeys,
             majorityThreshold,
             effectivePasses,
+            recognizedCompensation: recognizedCompensation
+              ? {
+                id: recognizedCompensation.id,
+                bias: recognizedCompensation.bias,
+                confidence: recognizedCompensation.confidence,
+                active: recognizedCompensation.active,
+              }
+              : null,
           },
         },
       });
@@ -6712,6 +6824,14 @@ export class ReboundRejectionAgent {
           failingKeys: assessment.failingKeys,
           majorityThreshold,
           effectivePasses,
+          recognizedCompensation: recognizedCompensation
+            ? {
+              id: recognizedCompensation.id,
+              bias: recognizedCompensation.bias,
+              confidence: recognizedCompensation.confidence,
+              active: recognizedCompensation.active,
+            }
+            : null,
         },
         weights: profile.weights,
       },
@@ -8240,6 +8360,43 @@ export class ReboundRejectionAgent {
     const volume = Number((snap as any)?.volume ?? 0);
     const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volumeAvg ?? volume);
 
+    const recognizedSignals = context?.recognizedStrategies ?? [];
+    const targetBias = bias !== 'none' ? bias : context?.direction ?? 'none';
+    const recognizedCandidates = targetBias === 'none'
+      ? recognizedSignals
+      : recognizedSignals.filter(signal => signal.bias === targetBias || signal.bias === 'both');
+    const recognizedTop = recognizedCandidates[0] ?? null;
+    const recognizedSummary = {
+      status: recognizedTop
+        ? recognizedTop.active && recognizedTop.confidence >= 0.5
+          ? 'PASS'
+          : recognizedTop.confidence >= 0.35
+            ? 'PARTIAL'
+            : 'FAIL'
+        : 'FAIL',
+      points: recognizedTop ? Math.round(Math.max(0, Math.min(1, recognizedTop.confidence)) * 20) : 0,
+      details: {
+        primary: recognizedTop
+          ? {
+            id: recognizedTop.id,
+            bias: recognizedTop.bias,
+            confidence: recognizedTop.confidence,
+            active: recognizedTop.active,
+            reasons: recognizedTop.reasons,
+          }
+          : null,
+        candidates: recognizedCandidates.slice(0, 3).map(signal => ({
+          id: signal.id,
+          bias: signal.bias,
+          confidence: signal.confidence,
+          active: signal.active,
+        })),
+      },
+      message: recognizedTop
+        ? `${recognizedTop.id}:${recognizedTop.bias} conf=${recognizedTop.confidence.toFixed(2)}`
+        : 'No recognized strategy alignment',
+    };
+
     const computeVolumeDiagnostics = (opts?: { relax?: number; floorBoost?: number }) => {
       const cfg = getConfig();
       const level = this.profile?.aggressiveness || 'conservative';
@@ -8353,6 +8510,7 @@ export class ReboundRejectionAgent {
           };
         })(),
         volume: computeVolumeDiagnostics({ relax: 0.05, floorBoost: 0.02 }),
+        recognizedStrategy: recognizedSummary,
       };
     }
 
@@ -8423,6 +8581,7 @@ export class ReboundRejectionAgent {
           };
         })(),
         volume: computeVolumeDiagnostics(),
+        recognizedStrategy: recognizedSummary,
       };
     }
 
@@ -8522,9 +8681,10 @@ export class ReboundRejectionAgent {
           base: moderateAtrBounds.base,
         }
       },
-      volume: computeVolumeDiagnostics({ relax: 0.12, floorBoost: 0.05 }),
-    };
-  }
+        volume: computeVolumeDiagnostics({ relax: 0.12, floorBoost: 0.05 }),
+        recognizedStrategy: recognizedSummary,
+      };
+    }
 
   private checkTrendAlignment(
     ema20: number,
