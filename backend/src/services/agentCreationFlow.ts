@@ -25,6 +25,7 @@ import { getUserCredentials } from './userCredentials.js';
 import { getUserExchange } from '../exchange/ccxtClient.js';
 import { resolveLeverageCap, type ResolvedLeverageCap } from '../risk/leverageCaps.js';
 import { DEFAULT_RR_EXPECTANCY_CONFIG } from '../risk/rrExpectancy.js';
+import { updatePortfolioBalance, rebalancePortfolio } from './portfolioManager.js';
 
 type StartPayload = Record<string, any>;
 
@@ -87,6 +88,7 @@ export class PhaseError extends Error {
 type NormalizedStartConfig = {
   mode: 'paper' | 'live';
   startBalanceUsd: number;
+  portfolioBalanceUsd: number;
   isSmartAgent: boolean;
   smartConfig: Record<string, any>;
   aggressiveness: 'conservative' | 'reactive' | 'aggressive';
@@ -461,6 +463,20 @@ export async function startAgentCreation(
 
   const warmup = gatherWarmupDiagnostics(sessionRecord.symbol);
 
+  if (userId && normalized) {
+    const targetBalance = Number.isFinite(normalized.portfolioBalanceUsd)
+      ? normalized.portfolioBalanceUsd
+      : normalized.startBalanceUsd;
+    try {
+      if (Number.isFinite(targetBalance) && targetBalance >= 0) {
+        await updatePortfolioBalance(userId, normalized.mode, Number(targetBalance));
+      }
+      await rebalancePortfolio({ userId, mode: normalized.mode, reason: 'agent_start' });
+    } catch (error) {
+      console.warn('⚠️ Portfolio update failed during agent start:', error);
+    }
+  }
+
   return {
     sessionId: sessionRecord.id,
     agentId: activation.agentId,
@@ -508,10 +524,19 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
 
   const startBalanceUsd =
     typeof payload.startBalanceUsd === 'number' && payload.startBalanceUsd > 0
-      ? payload.startBalanceUsd
+      ? Number(payload.startBalanceUsd)
       : mode === 'paper'
       ? 1000
       : 0;
+
+  const requestedPortfolioBalance =
+    typeof payload.portfolioBalanceUsd === 'number' && payload.portfolioBalanceUsd >= 0
+      ? Number(payload.portfolioBalanceUsd)
+      : undefined;
+  const portfolioBalanceUsd =
+    requestedPortfolioBalance != null
+      ? requestedPortfolioBalance
+      : startBalanceUsd;
 
   const smartConfig = {
     minHoldDuration: Number(payload.smartConfig?.minHoldDuration ?? 86_400_000),
@@ -532,6 +557,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   return {
     mode,
     startBalanceUsd,
+    portfolioBalanceUsd,
     isSmartAgent,
     smartConfig,
     aggressiveness,

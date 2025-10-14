@@ -45,6 +45,24 @@ export class AgentsHub {
     if (a && (a as any).closeNow) await (a as any).closeNow();
   }
 
+  applyAllocation(
+    sessionId: string,
+    update: {
+      capitalUsd?: number;
+      budgetFraction?: number;
+      maxLeverage?: number;
+      leverageCap?: { resolved: number; requested?: number; dynamicMax?: number };
+      weight?: number;
+      score?: number;
+      reason?: string;
+    },
+  ) {
+    const agent = this.agents.get(sessionId);
+    if (agent && typeof (agent as any).applyPortfolioAllocation === 'function') {
+      (agent as any).applyPortfolioAllocation(update);
+    }
+  }
+
   private async resolveBroker(
     session: { id: string; mode: string; startBalanceUsd: number | null; userId: string | null },
     agent: ReboundRejectionAgent | undefined | null,

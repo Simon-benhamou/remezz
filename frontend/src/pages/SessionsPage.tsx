@@ -24,6 +24,7 @@ import {
   Timeline,
   Typography,
   Divider,
+  Statistic,
 } from 'antd';
 import type { StepsProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -496,6 +497,10 @@ export default function SessionsPage(){
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
+  const [portfolioPaper, setPortfolioPaper] = React.useState<any | null>(null);
+  const [portfolioLive, setPortfolioLive] = React.useState<any | null>(null);
+  const [portfolioLoading, setPortfolioLoading] = React.useState(false);
+  const [paperBalanceInput, setPaperBalanceInput] = React.useState<number | undefined>(undefined);
   const { mode } = useMode();
   const modeVal = Form.useWatch?.('mode', form);
   const smartAutoMode = Form.useWatch?.('smartAutoMode', form);
@@ -534,6 +539,63 @@ export default function SessionsPage(){
       </span>
     ),
   });
+
+  const refreshPortfolio = React.useCallback(async () => {
+    try {
+      setPortfolioLoading(true);
+      const [paper, live] = await Promise.all([
+        api.getPortfolio('paper').catch(() => null),
+        api.getPortfolio('live').catch(() => null),
+      ]);
+      setPortfolioPaper(paper);
+      setPortfolioLive(live);
+    } catch (error) {
+      console.warn('Failed to refresh portfolio snapshots:', error);
+    } finally {
+      setPortfolioLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (portfolioPaper?.balanceUsd != null) {
+      setPaperBalanceInput(Number(portfolioPaper.balanceUsd));
+    }
+  }, [portfolioPaper]);
+
+  const handleUpdatePortfolioBalance = React.useCallback(async () => {
+    if (!Number.isFinite(Number(paperBalanceInput))) {
+      message.error('Please enter a valid balance');
+      return;
+    }
+    try {
+      setPortfolioLoading(true);
+      await api.setPortfolioBalance('paper', Number(paperBalanceInput));
+      message.success('Paper balance updated');
+      await refreshPortfolio();
+    } catch (error) {
+      console.error('Failed to update paper balance', error);
+      message.error('Unable to update portfolio balance');
+    } finally {
+      setPortfolioLoading(false);
+    }
+  }, [paperBalanceInput, refreshPortfolio]);
+
+  const handleRebalancePortfolio = React.useCallback(
+    async (modeToRebalance: 'paper' | 'live') => {
+      try {
+        setPortfolioLoading(true);
+        await api.rebalancePortfolio(modeToRebalance);
+        message.success(`${modeToRebalance === 'paper' ? 'Paper' : 'Live'} portfolio rebalanced`);
+        await refreshPortfolio();
+      } catch (error) {
+        console.error('Failed to rebalance portfolio', error);
+        message.error('Unable to rebalance portfolio');
+      } finally {
+        setPortfolioLoading(false);
+      }
+    },
+    [refreshPortfolio],
+  );
 
   const sessionStoppedAt = React.useCallback((session: any) => session.haltedAt || session.stoppedAt || null, []);
   const sessionStatusLabel = React.useCallback((session: any) => {
@@ -756,13 +818,14 @@ export default function SessionsPage(){
       }
       
       console.log(`✅ Loaded ${enrichedSessions.length} sessions for ${currentMode} mode`);
+      await refreshPortfolio();
     } catch(e) {
       console.error('Failed to load sessions:', e);
       if ((mode as AppMode) === currentMode) {
         notifyError(`Failed to load ${currentMode} sessions`);
       }
-    } 
-  }, [mode, loadSessions, notifyCacheRefresh, notifyError, enrichSessionData]);
+    }
+  }, [mode, loadSessions, notifyCacheRefresh, notifyError, enrichSessionData, refreshPortfolio]);
   
   // Apply filters
   React.useEffect(() => {
@@ -1419,6 +1482,76 @@ export default function SessionsPage(){
     stop,
   ]);
 
+  const portfolioColumns = React.useMemo<ColumnsType<any>>(
+    () => [
+      {
+        title: 'Symbol',
+        dataIndex: 'symbol',
+        key: 'symbol',
+        render: (value: string) => (
+          <span style={{ fontWeight: 600, color: '#0f172a' }}>{value || '—'}</span>
+        ),
+      },
+      {
+        title: 'Capital',
+        dataIndex: 'capitalUsd',
+        key: 'capitalUsd',
+        render: (value: number) => `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      },
+      {
+        title: 'Weight',
+        dataIndex: 'weightPct',
+        key: 'weightPct',
+        render: (value: number) => `${Number(value || 0).toFixed(1)}%`,
+      },
+      {
+        title: 'Budget',
+        dataIndex: 'budgetFraction',
+        key: 'budgetFraction',
+        render: (value: number) => `${Math.round(Number(value || 0) * 100)}%`,
+      },
+      {
+        title: 'ROI',
+        dataIndex: 'roiPct',
+        key: 'roiPct',
+        render: (value: number) => `${Number(value || 0).toFixed(1)}%`,
+      },
+      {
+        title: 'Win rate',
+        dataIndex: 'winRate',
+        key: 'winRate',
+        render: (value: number) => `${Number(value || 0).toFixed(1)}%`,
+      },
+      {
+        title: 'Status',
+        dataIndex: 'tags',
+        key: 'tags',
+        render: (tags?: string[]) =>
+          tags && tags.length ? (
+            <Space size={4} wrap>
+              {tags.map((tag) => (
+                <Tag key={tag} color={tag === 'correlation-limited' ? 'volcano' : 'gold'}>
+                  {tag.replace(/-/g, ' ')}
+                </Tag>
+              ))}
+            </Space>
+          ) : (
+            <span style={{ color: '#94a3b8' }}>—</span>
+          ),
+      },
+    ],
+    [],
+  );
+
+  const paperAllocations = React.useMemo(() => {
+    const list = Array.isArray(portfolioPaper?.allocations) ? portfolioPaper.allocations : [];
+    return list.map((entry: any) => ({
+      key: entry.sessionId || entry.symbol,
+      ...entry,
+      weightPct: Number(entry.weight || 0) * 100,
+    }));
+  }, [portfolioPaper]);
+
   return (
     <div style={{ 
       background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
@@ -1466,6 +1599,108 @@ export default function SessionsPage(){
             }
           />
         )}
+
+        <Card
+          style={{
+            borderRadius: '16px',
+            border: '1px solid #e2e8f0',
+            background: '#fff',
+            boxShadow: '0 4px 16px rgba(15, 23, 42, 0.08)'
+          }}
+          title={
+            <Space size={12} align="center">
+              <span style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Portfolio Allocation</span>
+              <Tag color="processing" style={{ borderRadius: 12 }}>
+                Max exposure 150%
+              </Tag>
+            </Space>
+          }
+          extra={
+            <Space>
+              <Button onClick={refreshPortfolio} loading={portfolioLoading} icon={<ReloadOutlined />}>Refresh</Button>
+              <Button onClick={() => handleRebalancePortfolio('paper')} loading={portfolioLoading} type="primary">
+                Rebalance paper
+              </Button>
+              <Button onClick={() => handleRebalancePortfolio('live')} loading={portfolioLoading} disabled={!portfolioLive}>
+                Rebalance live
+              </Button>
+            </Space>
+          }
+        >
+          <Row gutter={[24, 16]}>
+            <Col xs={24} sm={12} md={6}>
+              <Statistic
+                title="Paper balance"
+                prefix="$"
+                value={Number(portfolioPaper?.balanceUsd || 0)}
+                precision={0}
+              />
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Statistic
+                title="Allocated"
+                prefix="$"
+                value={Number(portfolioPaper?.allocatedUsd || 0)}
+                precision={0}
+              />
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Statistic
+                title="Free capital"
+                prefix="$"
+                value={Math.max(0, Number(portfolioPaper?.freeUsd || 0))}
+                precision={0}
+              />
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Statistic
+                title="Exposure used"
+                value={Number(portfolioPaper?.exposureUtilizationPct || 0)}
+                suffix="%"
+                precision={1}
+              />
+            </Col>
+          </Row>
+          <Divider />
+          <Row gutter={[16, 16]} align="middle" justify="space-between">
+            <Col xs={24} md={14}>
+              <Space size={12} wrap>
+                <span style={{ fontSize: 13, color: '#475569' }}>Paper balance</span>
+                <InputNumber
+                  min={0}
+                  step={100}
+                  value={paperBalanceInput}
+                  onChange={(value) => setPaperBalanceInput(value ?? undefined)}
+                />
+                <Button onClick={handleUpdatePortfolioBalance} loading={portfolioLoading} type="primary">
+                  Update balance
+                </Button>
+                {portfolioPaper?.lastRebalancedAt && (
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                    Last rebalanced {formatRelativeTime(portfolioPaper.lastRebalancedAt)}
+                  </span>
+                )}
+              </Space>
+            </Col>
+            <Col xs={24} md={10}>
+              <Space direction="vertical" size={2} style={{ width: '100%', textAlign: 'right' }}>
+                <span style={{ fontSize: 12, color: '#64748b' }}>Live balance estimate</span>
+                <span style={{ fontWeight: 600, fontSize: 16, color: '#0f172a' }}>
+                  ${Number(portfolioLive?.balanceUsd || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </span>
+              </Space>
+            </Col>
+          </Row>
+          <Divider />
+          <Table
+            dataSource={paperAllocations}
+            columns={portfolioColumns}
+            pagination={false}
+            size='small'
+            loading={portfolioLoading}
+            locale={{ emptyText: 'No allocations yet' }}
+          />
+        </Card>
 
         <Card
           style={{
@@ -1839,6 +2074,10 @@ export default function SessionsPage(){
                 v.startBalanceUsd = Math.min(Number(v.startBalanceUsd || 0), Number(exBal.totalUsd || 0));
               }
 
+              if (v.startBalanceUsd != null) {
+                v.portfolioBalanceUsd = v.startBalanceUsd;
+              }
+
               setOpen(false);
               setRestartLeverageInfo(null);
               // Ensure no legacy progress modal remains visible once we pivot to the banner flow
@@ -2172,8 +2411,8 @@ export default function SessionsPage(){
               </Form.Item>
             </Form.Item>
             {String(modeVal||'paper') !== 'live' && (
-              <Form.Item 
-                label='Start balance USD (optional)' 
+              <Form.Item
+                label='Paper portfolio balance USD (optional)'
                 name='startBalanceUsd' 
                 tooltip={exBal? `Exchange: Free $${Number(exBal.freeUsd||0).toFixed(2)} • Equity $${Number(exBal.totalUsd||0).toFixed(2)}`: undefined}
               >

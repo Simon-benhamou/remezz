@@ -48,6 +48,10 @@ export function serializeActivationProfile(profile: ActivationProfile, extras: R
     budgetPct,
     aggressiveness: profile.aggressiveness,
     startBalanceUsd: profile.startBalanceUsd,
+    capitalAllocationUsd: profile.capitalAllocationUsd,
+    portfolioWeight: profile.portfolioWeight,
+    portfolioScore: profile.portfolioScore,
+    portfolioUpdatedAt: profile.portfolioUpdatedAt,
     timestamp: profile.timestamp,
     sizingMode: profile.sizingMode,
     dynamicLeverage: profile.dynamicLeverage,
@@ -142,6 +146,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
       : typeof session.startBalanceUsd === "number"
       ? session.startBalanceUsd
       : undefined,
+    capitalAllocationUsd: parseMaybeNumber(stored?.capitalAllocationUsd) ?? undefined,
     budgetFraction: budgetFraction ?? undefined,
     aggressiveness:
       stored?.aggressiveness === "conservative" || stored?.aggressiveness === "aggressive"
@@ -163,6 +168,9 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
       blend: rrConfig.blend,
       hysteresis: rrConfig.hysteresis,
     },
+    portfolioWeight: parseMaybeNumber(stored?.portfolioWeight) ?? undefined,
+    portfolioScore: parseMaybeNumber(stored?.portfolioScore) ?? undefined,
+    portfolioUpdatedAt: typeof stored?.portfolioUpdatedAt === "string" ? stored.portfolioUpdatedAt : undefined,
   };
 
   return profile;

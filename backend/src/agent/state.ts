@@ -42,6 +42,10 @@ export type ActivationProfile = {
   timestamp: string; // ISO, acts as a signed "freeze"
   startBalanceUsd?: number;
   budgetFraction?: number; // 0..1 fraction of free balance usable by the agent
+  capitalAllocationUsd?: number;
+  portfolioWeight?: number;
+  portfolioScore?: number;
+  portfolioUpdatedAt?: string;
   aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
   userId?: string; // User ID for authenticated exchange access
   // New: control how position size is computed and liquidity guard
@@ -470,7 +474,7 @@ export class ReboundRejectionAgent {
     ['tier2', 0],
     ['tier3', 0]
   ]);
-  
+
   // ✅ Cooldown tracking BY TIER (one tier paused doesn't affect others)
   private cooldownByTier: Map<string, number> = new Map([
     ['tier1', 0],
@@ -529,6 +533,78 @@ export class ReboundRejectionAgent {
     failCounts: new Map<string, number>(),
     lastLogTs: 0,
   };
+
+  private lastPortfolioAllocationUpdate = 0;
+
+  applyPortfolioAllocation(update: {
+    capitalUsd?: number;
+    budgetFraction?: number;
+    maxLeverage?: number;
+    leverageCap?: ResolvedLeverageCap | { resolved: number; requested?: number; dynamicMax?: number };
+    weight?: number;
+    score?: number;
+    reason?: string;
+  }): void {
+    if (!this.profile) return;
+    const details: Record<string, any> = {};
+    if (typeof update.capitalUsd === 'number' && Number.isFinite(update.capitalUsd) && update.capitalUsd > 0) {
+      this.profile.capitalAllocationUsd = update.capitalUsd;
+      this.profile.startBalanceUsd = update.capitalUsd;
+      details.capitalUsd = update.capitalUsd;
+      if (this.broker instanceof PaperBroker && typeof (this.broker as PaperBroker).setBalanceUsd === 'function') {
+        (this.broker as PaperBroker).setBalanceUsd(update.capitalUsd);
+      }
+    }
+    if (typeof update.budgetFraction === 'number' && Number.isFinite(update.budgetFraction)) {
+      const clamped = Math.max(0.1, Math.min(1, update.budgetFraction));
+      this.profile.budgetFraction = clamped;
+      details.budgetFraction = clamped;
+    }
+    if (typeof update.maxLeverage === 'number' && Number.isFinite(update.maxLeverage)) {
+      const resolved = Math.max(1, Math.min(10, update.maxLeverage));
+      this.profile.maxLeverage = resolved;
+      details.maxLeverage = resolved;
+      if (this.profile.leverageCap) {
+        this.profile.leverageCap = {
+          ...this.profile.leverageCap,
+          resolved: Math.max(1, Math.min(resolved, this.profile.leverageCap.resolved ?? resolved)),
+        };
+      }
+    }
+    if (update.leverageCap) {
+      const resolved = Math.max(1, Math.min(10, Number((update.leverageCap as any).resolved ?? update.maxLeverage ?? this.profile.maxLeverage)));
+      this.profile.leverageCap = {
+        ...(this.profile.leverageCap ?? {}),
+        ...(update.leverageCap as any),
+        resolved,
+      } as ResolvedLeverageCap;
+      details.leverageCap = this.profile.leverageCap;
+    }
+    if (typeof update.weight === 'number' && Number.isFinite(update.weight)) {
+      this.profile.portfolioWeight = Math.max(0, update.weight);
+      details.weight = this.profile.portfolioWeight;
+    }
+    if (typeof update.score === 'number' && Number.isFinite(update.score)) {
+      this.profile.portfolioScore = update.score;
+      details.score = update.score;
+    }
+    const now = Date.now();
+    this.profile.portfolioUpdatedAt = new Date(now).toISOString();
+    this.lastPortfolioAllocationUpdate = now;
+    if (Object.keys(details).length) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'portfolio_manager',
+        message: 'allocation_update',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          ...details,
+          reason: update.reason,
+        },
+      });
+    }
+  }
 
   private getQualitySnapshotKey(snap: TechnicalSnapshot): string | number | null {
     return (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
