@@ -8,6 +8,8 @@ const levelColor: Record<string, string> = {
   info: 'blue',
   warn: 'orange',
   error: 'red',
+  watch: 'geekblue',
+  debug: 'default',
 };
 
 type Props = {

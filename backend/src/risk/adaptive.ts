@@ -29,14 +29,17 @@ export type AdaptiveRiskResult = {
   kellyFraction: number;
   kellyMultiplier: number;
   kellyRiskPct: number;
+  preKellyRiskPct: number;
+  kellyFloorPct: number;
 };
 
 function computeSharpe(returns: number[]) {
   if (!returns.length) return 0;
   const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
   const variance = returns.reduce((acc, r) => acc + Math.pow(r - mean, 2), 0) / returns.length;
-  const stdev = Math.sqrt(Math.max(variance, 1e-12));
-  return stdev === 0 ? 0 : (mean / stdev) * Math.sqrt(returns.length);
+  const stdev = Math.sqrt(Math.max(variance, 1e-8));
+  const sharpe = stdev === 0 ? 0 : (mean / stdev) * Math.sqrt(returns.length);
+  return Math.max(-8, Math.min(8, sharpe));
 }
 
 function computeDrawdown(returns: number[]) {
@@ -95,6 +98,8 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       kellyFraction: 0,
       kellyMultiplier: 1,
       kellyRiskPct: baseRiskPct,
+      preKellyRiskPct: baseRiskPct,
+      kellyFloorPct: 0,
     };
   }
   const exits = await prisma.order.findMany({
@@ -125,6 +130,8 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       kellyFraction: 0,
       kellyMultiplier: 1,
       kellyRiskPct: baseRiskPct,
+      preKellyRiskPct: baseRiskPct,
+      kellyFloorPct: 0,
     };
   }
   const returns = exits
@@ -152,6 +159,8 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
       kellyFraction: 0,
       kellyMultiplier: 1,
       kellyRiskPct: baseRiskPct,
+      preKellyRiskPct: baseRiskPct,
+      kellyFloorPct: 0,
     };
   }
 
@@ -185,12 +194,14 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     weight *= decay;
   }
   weightedVar = weightSum > 0 ? weightedVar / weightSum : 0;
-  const weightedStdev = Math.sqrt(Math.max(weightedVar, 1e-12));
-  const weightedSharpe = weightedStdev === 0 ? 0 : (weightedMean / weightedStdev) * Math.sqrt(boundedReturns.length);
+  const weightedStdev = Math.sqrt(Math.max(weightedVar, 1e-8));
+  let weightedSharpe = weightedStdev === 0 ? 0 : (weightedMean / weightedStdev) * Math.sqrt(boundedReturns.length);
+  const sampleScale = boundedReturns.length < 8 ? boundedReturns.length / 8 : 1;
+  weightedSharpe = Math.max(-8, Math.min(8, weightedSharpe * sampleScale));
 
   const downside = boundedReturns.filter((r) => r < 0);
   const downsideDeviation = downside.length
-    ? Math.sqrt(downside.reduce((acc, r) => acc + r * r, 0) / downside.length)
+    ? Math.sqrt(Math.max(downside.reduce((acc, r) => acc + r * r, 0) / downside.length, 1e-8))
     : 0;
 
   const wins = boundedReturns.filter((r) => r > 0).length;
@@ -210,17 +221,20 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   if (avgLoss > 0 && winRate > 0 && winRate < 1 && rewardRatio > 0) {
     kellyFraction = winRate - ((1 - winRate) / rewardRatio);
   }
+  if (boundedReturns.length < 8) {
+    kellyFraction *= boundedReturns.length / 8;
+  }
   const clampedKellyFraction = Math.max(-0.35, Math.min(0.5, kellyFraction));
   const targetKelly = 0.2;
   let kellyMultiplier = 1;
   if (clampedKellyFraction <= 0) {
     const normalized = Math.max(-1.5, clampedKellyFraction / Math.max(targetKelly, 1e-6));
-    kellyMultiplier = 1 + normalized * 0.7;
+    kellyMultiplier = Math.max(0, 1 + normalized * 0.7);
   } else {
     const normalized = Math.min(clampedKellyFraction / Math.max(targetKelly, 1e-6), 2.0);
     kellyMultiplier = 1 + normalized * 0.45;
   }
-  kellyMultiplier = Math.max(0.3, Math.min(1.55, kellyMultiplier));
+  kellyMultiplier = Math.max(0, Math.min(1.55, kellyMultiplier));
 
   let lossStreak = 0;
   let currentStreak = 0;
@@ -261,7 +275,7 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   const maxRisk = Math.min(2.2, baseRiskPct * 1.9);
   const kellyFloor = Math.max(minRisk, baseRiskPct * 0.2);
   const kellyCeil = Math.min(maxRisk, baseRiskPct * 2.1);
-  const kellyRiskPct = Math.max(kellyFloor, Math.min(kellyCeil, baseRiskPct * kellyMultiplier));
+  const kellyRiskPct = Math.max(clampedKellyFraction <= 0 ? 0 : kellyFloor, Math.min(kellyCeil, baseRiskPct * Math.max(kellyMultiplier, 0)));
 
   if (maxDrawdownPct <= -9) {
     riskPct = Math.max(minRisk, riskPct * 0.45);
@@ -309,6 +323,7 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   riskPct = Math.max(minRisk, riskPct * samplePenalty);
 
   const preKellyRisk = riskPct;
+  const kellyFloorPct = clampedKellyFraction <= 0 ? Math.max(0.25, Math.min(maxRisk, baseRiskPct * 0.2)) : 0;
 
   if (
     weightedSharpe > 1.6 &&
@@ -340,7 +355,8 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   }
 
   if (kellyMultiplier < 0.95) {
-    riskPct = Math.max(minRisk, Math.min(riskPct, kellyRiskPct));
+    const target = clampedKellyFraction <= 0 ? Math.max(kellyFloorPct, Math.min(kellyRiskPct, riskPct)) : Math.min(riskPct, kellyRiskPct);
+    riskPct = Math.max(minRisk, target);
     notes.push('kelly_fraction_reduction');
   } else if (kellyMultiplier > 1.05) {
     const blended = (preKellyRisk * 0.6) + (kellyRiskPct * 0.4);
@@ -403,6 +419,7 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     notes.push('symbol_bias_boost');
   }
 
+  const preKellyRiskPct = Math.max(minRisk, Math.min(maxRisk, Math.round(preKellyRisk * 100) / 100));
   // Round to two decimals within the computed band
   riskPct = Math.max(minRisk, Math.min(maxRisk, Math.round(riskPct * 100) / 100));
 
@@ -427,5 +444,7 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
     kellyFraction: clampedKellyFraction,
     kellyMultiplier,
     kellyRiskPct: Math.round(kellyRiskPct * 100) / 100,
+    preKellyRiskPct,
+    kellyFloorPct,
   };
 }

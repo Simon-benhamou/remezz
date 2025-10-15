@@ -32,7 +32,7 @@ export type AgentHealthSnapshot = {
   agents: AgentHealthRow[];
 };
 
-type OpsEventLevel = 'info'|'warn'|'error';
+type OpsEventLevel = 'info'|'warn'|'error'|'watch'|'debug';
 
 export type OpsEvent = {
   id: string;

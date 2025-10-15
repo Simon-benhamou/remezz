@@ -1288,7 +1288,7 @@ export class ReboundRejectionAgent {
     const { playbook, context } = this.getContextualPlaybook(snapForValidation, planBias ?? 'none');
     if (context && context.basePlaybook !== context.effectivePlaybook) {
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'entry_context',
         message: 'playbook_adjusted',
         sessionId: this.sessionId || undefined,
@@ -1796,7 +1796,7 @@ export class ReboundRejectionAgent {
         atrDistance: atrForBreakoutStops,
       };
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'risk_engine',
         message: 'adaptive_atr_stop_applied',
         sessionId: this.sessionId || undefined,
@@ -2237,7 +2237,7 @@ export class ReboundRejectionAgent {
       waitSec: waitSeconds,
     };
     recordOpsEvent({
-      level: 'info',
+      level: 'watch',
       source: 'entry_filters',
       message: 'rr_gate_evaluated',
       sessionId: this.sessionId || undefined,
@@ -2258,7 +2258,7 @@ export class ReboundRejectionAgent {
     if (filterEvaluation.meta?.spread) {
       const spreadMeta = filterEvaluation.meta.spread;
       recordOpsEvent({
-        level: spreadMeta.absFail && spreadMeta.relFail ? 'warn' : 'info',
+        level: spreadMeta.absFail && spreadMeta.relFail ? 'warn' : 'watch',
         source: 'entry_filters',
         message: 'spread_gate_evaluated',
         sessionId: this.sessionId || undefined,
@@ -2384,6 +2384,9 @@ export class ReboundRejectionAgent {
     if (planRiskMaxPct != null) planRiskMaxPct = Math.max(planRiskMaxPct, this.profile.riskPerTradePct);
     const baseProfileRisk = this.profile.riskPerTradePct > 0 ? this.profile.riskPerTradePct : 1.5;
     let dynamicRiskPct = baseProfileRisk;
+    let pendingKellyMultiplier = 1;
+    let pendingKellyFloor = 0;
+    let pendingKellyFraction = 0;
 
     if (planRiskRecommendedPct != null && planRiskRecommendedPct > 0) {
       dynamicRiskPct = Math.max(dynamicRiskPct, planRiskRecommendedPct);
@@ -2398,7 +2401,7 @@ export class ReboundRejectionAgent {
     }
     if (tierAdjustedRisk !== dynamicRiskPct) {
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'position_sizing',
         message: 'tier_risk_adjustment',
         sessionId: this.sessionId || undefined,
@@ -2418,7 +2421,7 @@ export class ReboundRejectionAgent {
     if (entryFilterSizePenalty != null && entryFilterSizePenalty > 0 && entryFilterSizePenalty < 1) {
       dynamicRiskPct *= entryFilterSizePenalty;
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'position_sizing',
         message: 'entry_filter_size_penalty',
         sessionId: this.sessionId || undefined,
@@ -2440,7 +2443,7 @@ export class ReboundRejectionAgent {
       qualityMultiplier = Math.max(qualityFloor, Math.min(1.4, rawQualityAdjustment));
       dynamicRiskPct *= qualityMultiplier;
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'position_sizing',
         message: 'quality_adjustment_applied',
         sessionId: this.sessionId || undefined,
@@ -2459,25 +2462,36 @@ export class ReboundRejectionAgent {
     
     try {
       this.adaptiveRisk = await computeAdaptiveRisk(this.sessionId, this.profile.riskPerTradePct);
-      dynamicRiskPct = Math.min(dynamicRiskPct, this.adaptiveRisk.riskPct); // Take the more conservative value
-      if (this.adaptiveRisk.riskPct < this.profile.riskPerTradePct * 0.75) {
+      pendingKellyMultiplier = this.adaptiveRisk.kellyMultiplier;
+      pendingKellyFloor = this.adaptiveRisk.kellyFloorPct;
+      pendingKellyFraction = this.adaptiveRisk.kellyFraction;
+      const adaptiveCap = this.adaptiveRisk.preKellyRiskPct ?? this.adaptiveRisk.riskPct;
+      if (adaptiveCap != null && adaptiveCap + 1e-6 < dynamicRiskPct) {
         recordOpsEvent({
-          level: 'warn',
+          level: 'watch',
           source: 'risk_engine',
-          message: 'Adaptive risk reduced',
+          message: 'adaptive_risk_capped',
           sessionId: this.sessionId || undefined,
           symbol: this.profile.symbol,
-          details: this.adaptiveRisk,
+          details: {
+            cappedRiskPct: adaptiveCap,
+            sharpe: this.adaptiveRisk.weightedSharpe,
+            sampleSize: this.adaptiveRisk.sampleSize,
+            winRate: this.adaptiveRisk.winRate,
+          },
         });
+        dynamicRiskPct = adaptiveCap;
       }
-    } catch {}
+    } catch {
+      this.adaptiveRisk = null;
+    }
     dynamicRiskPct = await this.applyDailyRoiThrottle(dynamicRiskPct);
     const memeGuard = this.isMemeCoin(this.profile?.symbol);
     if (memeGuard) {
       const memeMultiplier = 0.65;
       dynamicRiskPct *= memeMultiplier;
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'position_sizing',
         message: 'meme_coin_risk_cap',
         sessionId: this.sessionId || undefined,
@@ -2519,7 +2533,7 @@ export class ReboundRejectionAgent {
     if (circuitSizeMultiplier !== 1) {
       dynamicRiskPct *= circuitSizeMultiplier;
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'circuit_breaker',
         message: circuitSizeMultiplier < 1 ? 'size_reduced_due_to_losses' : 'size_increased_due_to_wins',
         sessionId: this.sessionId || undefined,
@@ -2543,7 +2557,7 @@ export class ReboundRejectionAgent {
       breakoutSizeMultiplier = Math.max(0.75, Math.min(0.85, breakoutSizeMultiplier));
       dynamicRiskPct *= breakoutSizeMultiplier;
       recordOpsEvent({
-        level: 'info',
+        level: 'watch',
         source: 'position_sizing',
         message: 'breakout_size_adjustment',
         sessionId: this.sessionId || undefined,
@@ -2554,6 +2568,29 @@ export class ReboundRejectionAgent {
           breakoutDistancePct: breakoutDistanceValidation,
         },
       });
+    }
+
+    if (pendingKellyMultiplier !== 1 || pendingKellyFloor > 0) {
+      const beforeKelly = dynamicRiskPct;
+      const multiplier = Math.max(0, pendingKellyMultiplier);
+      const applied = Math.max(pendingKellyFloor, beforeKelly * multiplier);
+      if (applied + 1e-6 < beforeKelly) {
+        recordOpsEvent({
+          level: 'watch',
+          source: 'risk_engine',
+          message: 'kelly_fraction_applied',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            beforeKelly,
+            appliedRiskPct: applied,
+            multiplier,
+            floorPct: pendingKellyFloor,
+            fraction: pendingKellyFraction,
+          },
+        });
+      }
+      dynamicRiskPct = Math.max(pendingKellyFloor > 0 ? pendingKellyFloor : 0, Math.min(beforeKelly, applied));
     }
 
     const stopDistanceAbs = Math.abs(entry - stop);
@@ -2704,7 +2741,7 @@ export class ReboundRejectionAgent {
       baseLev = Math.max(Math.min(baseLev, fallbackCap), floorCap);
       if (fallbackCap > 3 && allowLeverageBoost) {
         recordOpsEvent({
-          level: 'info',
+          level: 'watch',
           source: 'leverage_guard',
           message: 'dynamic_leverage_boost_applied',
           sessionId: this.sessionId || undefined,
@@ -2738,6 +2775,7 @@ export class ReboundRejectionAgent {
     const sizingCfg = getConfig();
     const defaultSizing = (sizingCfg.SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget');
     const sizingMode = (this.profile.sizingMode || defaultSizing);
+    let minPnLTargetWarning: Record<string, unknown> | null = null;
     const sizing = await computeQtyNotional({
       balanceUsd: usableBalance,
       riskPct: dynamicRiskPct,
@@ -2752,28 +2790,20 @@ export class ReboundRejectionAgent {
       tp1RMultiple,
     });
     if (targetSizingEnabled && !sizing.meetsMinPnLTarget && targetMinTp1PnlUsd > 0) {
-      recordOpsEvent({
-        level: 'info',
-        source: 'position_sizing',
-        message: 'min_pnl_target_block',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile.symbol,
-        details: {
-          desiredNotional: sizing.desiredNotional,
-          allowedNotional: sizing.notional,
-          minPnLNotional: sizing.minPnLNotional,
-          targetMinTp1PnlUsd,
-        },
-      });
-      this.noteSignalDrop('ev_too_small', 'info', {
+      minPnLTargetWarning = {
         desiredNotional: sizing.desiredNotional,
         allowedNotional: sizing.notional,
         minPnLNotional: sizing.minPnLNotional,
-        tp1DistanceAbs,
         targetMinTp1PnlUsd,
+      };
+      recordOpsEvent({
+        level: 'watch',
+        source: 'position_sizing',
+        message: 'min_pnl_target_warning',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: minPnLTargetWarning,
       });
-      this.entering = false;
-      return;
     }
     this.profile.leverageCap = sizing.leverageCap;
     effectiveLev = Math.min(effectiveLev, sizing.leverageCap.resolved);
@@ -3164,12 +3194,45 @@ export class ReboundRejectionAgent {
       const expectedPnL1 = qty > 0 && priceDiff > 0 ? qty * priceDiff : 0;
       const minExpectedTp1Pnl = targetSizingEnabled && targetMinTp1PnlUsd > 0 ? targetMinTp1PnlUsd : 3;
       if (expectedPnL1 + 1e-6 < minExpectedTp1Pnl) {
-        this.noteSignalDrop('ev_too_small', 'info', {
-          expectedPnL1,
+        const notionalUsd = qty * entry;
+        const tp1PctDist = entry > 0 ? Math.abs((tp1ForEv - entry) / entry) * 100 : null;
+        this.logEntryDecision('SKIP', {
+          reason: 'ev_dollar_below_min',
+          side,
           qty,
-          entry,
-          tp1: tp1ForEv,
-          minExpectedTp1Pnl,
+          notionalUsd,
+          leverage: Math.max(1, effectiveLev),
+          rr: tp1RMultiple ?? null,
+          adx: Number.isFinite(adxValue) ? adxValue : null,
+          atrPct: typeof entryZoneMeta?.atrPct === 'number' ? entryZoneMeta.atrPct : null,
+          tp1Pct: tp1PctDist,
+          level: 'warn',
+        }, {
+          decision_pipeline: {
+            requestedQty: quantSizerResult.rawQty,
+            finalQty: qty,
+            caps: {
+              preferred: profileMaxLev,
+              guards: appliedCaps,
+              volatilityGuard: guardInfo.cap ?? null,
+              final: effectiveLev,
+            },
+            minNotional,
+            minFloorUsd: sizingFloorUsd,
+            expectedPnL1,
+            evThresholdUsd: minExpectedTp1Pnl,
+            warnings: {
+              minPnLTarget: minPnLTargetWarning,
+            },
+          },
+          market: {
+            entry,
+            tp1: tp1ForEv,
+            stop,
+            spreadBps,
+            adx: adxValue,
+            atrPct: entryZoneMeta?.atrPct ?? null,
+          },
         });
         this.entering = false;
         return;
@@ -3298,7 +3361,7 @@ export class ReboundRejectionAgent {
       `trail=ATRx${this.quantConfig.exits.trailAtrMult.toFixed(2)}`,
     ];
     recordOpsEvent({
-      level: 'info',
+      level: 'debug',
       source: 'position_sizing',
       message: 'sizing_breakdown',
       sessionId: this.sessionId || undefined,
@@ -3308,6 +3371,44 @@ export class ReboundRejectionAgent {
         requestedNotional: requestedNotionalBeforeCaps,
         finalNotional: finalNotionalUsd,
         qualityMultiplier,
+      },
+    });
+
+    this.logEntryDecision('ENTER', {
+      reason: 'enter',
+      side,
+      qty,
+      notionalUsd: finalNotionalUsd,
+      leverage: Math.max(1, effectiveLev),
+      rr: tp1RMultiple ?? null,
+      adx: Number.isFinite(adxValue) ? adxValue : null,
+      atrPct: typeof entryZoneMeta?.atrPct === 'number' ? entryZoneMeta.atrPct : null,
+      tp1Pct: tp1Pct ?? null,
+      level: 'info',
+    }, {
+      decision_pipeline: {
+        requestedQty: quantSizerResult.rawQty,
+        finalQty: qty,
+        caps: {
+          preferred: profileMaxLev,
+          guards: appliedCaps,
+          volatilityGuard: guardInfo.cap ?? null,
+          final: effectiveLev,
+        },
+        minNotional,
+        minFloorUsd: sizingFloorUsd,
+        expectedPnL1: tp1Pct != null && entry > 0 ? qty * entry * (tp1Pct / 100) : null,
+        warnings: {
+          minPnLTarget: minPnLTargetWarning,
+        },
+      },
+      market: {
+        entry,
+        tp,
+        stop,
+        spreadBps,
+        adx: adxValue,
+        atrPct: entryZoneMeta?.atrPct ?? null,
       },
     });
 
@@ -10070,6 +10171,84 @@ export class ReboundRejectionAgent {
         details,
       });
     } catch {}
+  }
+
+  private logEntryDecision(
+    decision: 'ENTER' | 'SKIP',
+    summary: {
+      reason?: string | null;
+      side: 'buy' | 'sell';
+      qty: number;
+      notionalUsd: number;
+      leverage: number;
+      rr?: number | null;
+      adx?: number | null;
+      atrPct?: number | null;
+      tp1Pct?: number | null;
+      level?: 'info' | 'warn';
+    },
+    debug?: Record<string, unknown>,
+  ): void {
+    const symbol = this.profile?.symbol ?? 'UNKNOWN';
+    const reason = summary.reason ?? (decision === 'SKIP' ? 'unspecified' : 'ok');
+    const level = summary.level ?? (decision === 'SKIP' ? 'warn' : 'info');
+    const decisionId = `${symbol}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const formatPct = (value: number | null | undefined, fractionDigits: number) =>
+      value != null && Number.isFinite(value)
+        ? `${value.toFixed(fractionDigits)}${fractionDigits === 0 ? '' : '%'}`
+        : 'n/a';
+    const qtyFormatted = summary.qty > 0 ? summary.qty.toFixed(6) : '0.000000';
+    const notionalFormatted = summary.notionalUsd > 0 ? `$${summary.notionalUsd.toFixed(2)}` : '$0.00';
+    const message = [
+      '[ENTRY]',
+      `decision=${decision}`,
+      `symbol=${symbol}`,
+      `side=${summary.side.toUpperCase()}`,
+      `reason=${reason}`,
+      `qty=${qtyFormatted}`,
+      `notion=${notionalFormatted}`,
+      `lev_cap=${summary.leverage.toFixed(2)}`,
+      `rr=${summary.rr != null && Number.isFinite(summary.rr) ? summary.rr.toFixed(2) : 'n/a'}`,
+      `adx=${summary.adx != null && Number.isFinite(summary.adx) ? summary.adx.toFixed(1) : 'n/a'}`,
+      `atr%=${formatPct(summary.atrPct ?? null, 2)}`,
+      `tp1%=${formatPct(summary.tp1Pct ?? null, 2)}`,
+    ].join(' ');
+
+    recordOpsEvent({
+      level,
+      source: 'entry_gate',
+      message,
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        decisionId,
+        decision,
+        reason,
+        qty: summary.qty,
+        notionalUsd: summary.notionalUsd,
+        leverage: summary.leverage,
+        rr: summary.rr ?? null,
+        adx: summary.adx ?? null,
+        atrPct: summary.atrPct ?? null,
+        tp1Pct: summary.tp1Pct ?? null,
+      },
+    });
+
+    if (debug) {
+      recordOpsEvent({
+        level: 'debug',
+        source: 'entry_gate',
+        message: 'entry_decision_detail',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          decisionId,
+          decision,
+          reason,
+          context: debug,
+        },
+      });
+    }
   }
 
   private resolveDrySpellRelaxation(now = Date.now()): EntryRelaxation | null {
