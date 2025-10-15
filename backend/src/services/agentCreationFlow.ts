@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { getConfig } from '../utils/env.js';
+import { resolveBudgetFraction } from '../utils/budget.js';
 import { startSession } from '../session/session.js';
 import { setActiveSession } from '../metrics/aiCalls.js';
 import { AgentHub } from '../agent/hub.js';
@@ -518,9 +519,9 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
 
   let budgetPctValue = Number(payload.budgetPct ?? 100);
   if (!Number.isFinite(budgetPctValue) || budgetPctValue <= 0) budgetPctValue = 100;
-  let budgetFraction = budgetPctValue;
-  if (budgetFraction > 1) budgetFraction = budgetFraction / 100;
-  budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
+  let budgetFractionInput = budgetPctValue;
+  if (budgetFractionInput > 1) budgetFractionInput = budgetFractionInput / 100;
+  const budgetFraction = resolveBudgetFraction(budgetFractionInput, cfg);
 
   const startBalanceUsd =
     typeof payload.startBalanceUsd === 'number' && payload.startBalanceUsd > 0

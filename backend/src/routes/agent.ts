@@ -15,6 +15,7 @@ import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan, extractPersistedPlan } from '../services/planStore.js';
 import { getTicker } from '../data/market.js';
 import { getConfig } from '../utils/env.js';
+import { resolveBudgetFraction } from '../utils/budget.js';
 import { resolveLeverageCap } from '../risk/leverageCaps.js';
 import {
   prepareAgentCreation,
@@ -641,9 +642,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
 
     let budgetPctValue = Number(body.budgetPct ?? currentProfile.budgetPct ?? 100);
     if (!Number.isFinite(budgetPctValue) || budgetPctValue <= 0) budgetPctValue = 100;
-    let budgetFraction = budgetPctValue;
-    if (budgetFraction > 1) budgetFraction = budgetFraction / 100;
-    budgetFraction = Math.min(1, Math.max(0.1, budgetFraction));
+    let budgetFractionInput = budgetPctValue;
+    if (budgetFractionInput > 1) budgetFractionInput = budgetFractionInput / 100;
+    const budgetFraction = resolveBudgetFraction(budgetFractionInput);
     const storedBudgetPct = Math.round(budgetFraction * 100);
 
     const requestedAggressiveness = body.aggressiveness ?? currentProfile.aggressiveness;

@@ -1,13 +1,6 @@
 import type { ActivationProfile } from "./state.js";
 import { resolveRrExpectancyConfig } from "../risk/rrExpectancy.js";
-
-function clampBudgetFraction(raw: number | undefined | null) {
-  if (raw == null) return undefined;
-  const numeric = typeof raw === "number" ? raw : Number(raw);
-  if (!Number.isFinite(numeric)) return undefined;
-  const safe = Math.min(1, Math.max(0.1, numeric));
-  return Number.isFinite(safe) ? safe : undefined;
-}
+import { clampBudgetFraction } from "../utils/budget.js";
 
 function parseMaybeNumber(value: unknown): number | undefined {
   if (typeof value === "number") {
