@@ -55,7 +55,9 @@ function computeDrawdown(returns: number[]) {
 
 function tradeReturn(order: any): number {
   const fills = Array.isArray(order?.fills) ? order.fills : [];
-  const realized = fills.reduce((sum: number, f: any) => sum + Number(f?.realizedPnl || 0), 0);
+  const realizedGross = fills.reduce((sum: number, f: any) => sum + Number(f?.realizedPnl || 0), 0);
+  const fees = fills.reduce((sum: number, f: any) => sum + Number(f?.fee || 0), 0);
+  const realized = realizedGross - fees;
   const qty = Number(order?.qty || 0);
   const price = Number(order?.price || 0);
   const notional = Math.abs(qty * price);

@@ -66,14 +66,14 @@ export async function getAgentRecentWinRate(
     where,
     orderBy: { ts: 'desc' },
     take,
-    select: { orderId: true, realizedPnl: true, ts: true },
+    select: { orderId: true, realizedPnl: true, fee: true, ts: true },
   });
 
   const orderMap = new Map<string, { pnl: number; ts: Date }>();
   for (const fill of fills) {
     const orderId = fill.orderId;
     if (!orderId) continue;
-    const pnl = Number(fill.realizedPnl ?? 0);
+    const pnl = Number(fill.realizedPnl ?? 0) - Number(fill.fee ?? 0);
     const ts = normalizeDate(fill.ts);
     const existing = orderMap.get(orderId);
     if (existing) {

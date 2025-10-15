@@ -219,8 +219,8 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     sizeIncreaseMaxMultiplier: 1.35,
   },
   feesSlippage: {
-    takerFeeBps: 7.5,
-    makerFeeBps: 2.5,
+    takerFeeBps: 4.0,
+    makerFeeBps: 4.0,
     defaultSlippageBps: 2.0,
   },
   filters: {
@@ -312,7 +312,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     slAtrMult: 1.5,
     slAtrMultReversal: 1.2,
     slAtrMultImpulse: 1.5,
-    tpRMultiples: [0.8, 1.6, 2.6],
+    tpRMultiples: [1.8, 2.6, 3.4],
     trailAfterR: 1.0,
     trailAfterRReversal: 0.8,
     trailAfterRImpulse: 1.0,
@@ -801,14 +801,25 @@ function normalizeExits(raw: any): QuantAIExitConfig {
   const maxHolding = maxHoldingRaw != null
     ? Number(maxHoldingRaw)
     : DEFAULT_CONFIG.exits.maxHoldingMin;
+  const tpRaw = Array.isArray(raw.tp_r_multiples ?? raw.tpRMultiples)
+    ? (raw.tp_r_multiples ?? raw.tpRMultiples).map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v) && v > 0)
+    : DEFAULT_CONFIG.exits.tpRMultiples;
+  const tpMultiples: number[] = [];
+  for (const value of Array.from(new Set(tpRaw)).sort((a, b) => a - b)) {
+    if (tpMultiples.length >= 3) break;
+    const clamped = Math.min(Math.max(value, 1.5), 3.5);
+    const last = tpMultiples[tpMultiples.length - 1];
+    if (last == null || Math.abs(clamped - last) >= 0.2) {
+      tpMultiples.push(clamped);
+    }
+  }
+
   return {
     atrPeriod: Number(raw.atr_period ?? raw.atrPeriod ?? DEFAULT_CONFIG.exits.atrPeriod),
     slAtrMult: slBase,
     slAtrMultReversal: slReversal,
     slAtrMultImpulse: slImpulse,
-    tpRMultiples: Array.isArray(raw.tp_r_multiples ?? raw.tpRMultiples)
-      ? (raw.tp_r_multiples ?? raw.tpRMultiples).map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v) && v > 0)
-      : DEFAULT_CONFIG.exits.tpRMultiples,
+    tpRMultiples: tpMultiples.length ? tpMultiples : DEFAULT_CONFIG.exits.tpRMultiples,
     trailAfterR: trailBase,
     trailAfterRReversal: trailReversal,
     trailAfterRImpulse: trailImpulse,

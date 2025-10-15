@@ -61,7 +61,7 @@ function normalizePlanOutput(raw: any, symbol: string): any {
   const riskFraction = clamp(Number.isFinite(riskFractionRaw) ? riskFractionRaw : 0.015, 0.005, 0.05);
 
   const tpRaw = Array.isArray(risk.tp) ? risk.tp : Array.isArray(out.tp) ? out.tp : [];
-  const tpValues = tpRaw
+  const tpValuesRaw = tpRaw
     .map((item: any) => {
       if (item == null) return null;
       if (typeof item === 'number') return item;
@@ -76,7 +76,23 @@ function normalizePlanOutput(raw: any, symbol: string): any {
       return null;
     })
     .filter((v: number | null): v is number => Number.isFinite(v) && v != null && v > 0);
-  if (!tpValues.length) tpValues.push(1.6, 2.8);
+
+  const sanitizedTpValues = Array.from(new Set(tpValuesRaw))
+    .map((value) => clamp(value, 0.5, 3.5))
+    .sort((a, b) => a - b);
+
+  const limitedTpValues: number[] = [];
+  for (const value of sanitizedTpValues) {
+    if (limitedTpValues.length >= 3) break;
+    const last = limitedTpValues[limitedTpValues.length - 1];
+    if (last == null || Math.abs(value - last) >= 0.2) {
+      limitedTpValues.push(value);
+    }
+  }
+
+  if (!limitedTpValues.length) {
+    limitedTpValues.push(1.8, 2.6, 3.4);
+  }
 
   const stopMult = clamp(Number.isFinite(stopMultRaw) ? stopMultRaw : 1, 0.4, 3);
   const maxHold = clamp(Number(risk.max_hold_hours ?? risk.maxHoldHours ?? 36) || 36, 6, 72);
@@ -108,7 +124,7 @@ function normalizePlanOutput(raw: any, symbol: string): any {
     },
     risk: {
       stop: { type: 'atr', mult: stopMult },
-      tp: tpValues.map((value) => ({ type: 'R' as const, value: clamp(value, 0.5, 5) })),
+      tp: limitedTpValues.map((value) => ({ type: 'R' as const, value: clamp(value, 0.5, 3.5) })),
       max_hold_hours: maxHold,
     },
     position: {
@@ -150,10 +166,21 @@ function alignPlanForConsistency(plan: PlanJson): PlanJson {
     clone.zone.type = 'support';
   }
   clone.risk.stop.mult = clamp(clone.risk.stop.mult, 0.4, 3);
-  // Clamp TPs for crypto: minimum 1.5R, max 5R
-  clone.risk.tp = clone.risk.tp.map(tp => ({ type: 'R', value: clamp(tp.value, 1.5, 5) }));
-  
-  // Crypto-specific TP optimization: boost TPs if too conservative
+  // Clamp TPs for crypto: minimum 1.5R, max 3.5R and keep at most 3 levels
+  const sanitizedTp = clone.risk.tp
+    .map(tp => ({ type: 'R' as const, value: clamp(tp.value, 1.5, 3.5) }))
+    .sort((a, b) => a.value - b.value);
+  const limitedTp: typeof sanitizedTp = [];
+  for (const tp of sanitizedTp) {
+    if (limitedTp.length >= 3) break;
+    const last = limitedTp[limitedTp.length - 1];
+    if (!last || Math.abs(tp.value - last.value) >= 0.2) {
+      limitedTp.push({ ...tp });
+    }
+  }
+  clone.risk.tp = limitedTp.length ? limitedTp : [{ type: 'R', value: 1.8 }, { type: 'R', value: 2.6 }, { type: 'R', value: 3.4 }];
+
+  // Crypto-specific TP optimization: boost first TP if too conservative
   if (clone.risk.tp.length > 0 && clone.risk.tp[0].value < 2.0) {
     clone.risk.tp[0].value = Math.max(clone.risk.tp[0].value * 1.5, 2.0);
   }
