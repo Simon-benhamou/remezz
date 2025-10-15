@@ -5142,6 +5142,48 @@ export class ReboundRejectionAgent {
         : slopePct;
 
       const elapsedMs = now - momentumCtx.awaitingSince;
+      const formatElapsed = (ms: number) => {
+        const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${minutes}m${seconds.toString().padStart(2, '0')}s`;
+      };
+
+      const opposingAvgSlope = bias === 'long' ? -momentumCtx.avgSlopePct : momentumCtx.avgSlopePct;
+      const opposingSlope = bias === 'long' ? -slopePct : slopePct;
+      const sustainedOppositionMs = 4 * 60 * 1000;
+      const adxInTrendMode = adxValue >= 22 && adxSlopeVal >= 0;
+      const volumeSupportive = rawVolumeRatio >= 0.85;
+      const strongOpposition = opposingAvgSlope >= 0.35 && opposingSlope >= 0.25;
+
+      if (
+        elapsedMs >= sustainedOppositionMs &&
+        strongOpposition &&
+        volumeSupportive &&
+        (adxInTrendMode || opposingAvgSlope >= 0.6)
+      ) {
+        const reason = `Momentum persistently opposes ${bias} bias for ${formatElapsed(elapsedMs)} — forcing plan recalibration (avg slope ${momentumCtx.avgSlopePct.toFixed(2)}%, ADX ${adxValue.toFixed(1)})`;
+        recordOpsEvent({
+          level: 'info',
+          source: 'entry_confirmation',
+          message: 'momentum_recalibration_triggered',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            elapsedMs,
+            avgSlopePct: momentumCtx.avgSlopePct,
+            slopePct,
+            rawVolumeRatio,
+            adx: adxValue,
+            bias,
+          },
+        });
+        this.marketContext = null;
+        this.lastMomentumGateResult = null;
+        this.resetMomentumAwaitContext();
+        return { confirmed: false, reason, shouldLog: true, meta: buildMeta('timeout') };
+      }
+
       const MOMENTUM_TIMEOUT_MS = 6 * 60 * 1000;
       if (elapsedMs >= MOMENTUM_TIMEOUT_MS) {
         const slopeRelaxThreshold = bias === 'long' ? -0.03 : 0.03;
@@ -5179,12 +5221,6 @@ export class ReboundRejectionAgent {
       }
 
       if (!momentumReversed) {
-        const formatElapsed = (ms: number) => {
-          const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-          const minutes = Math.floor(totalSeconds / 60);
-          const seconds = totalSeconds % 60;
-          return `${minutes}m${seconds.toString().padStart(2, '0')}s`;
-        };
         const elapsedStr = formatElapsed(elapsedMs);
         const avgSlopeDisplay = momentumCtx.avgSlopePct.toFixed(2);
         const lastSlopeDisplay = slopePct.toFixed(2);
