@@ -301,7 +301,7 @@ router.get('/reports/daily', async (req,res)=>{
     const avgLoss = P.filter(v=> v<0).reduce((a,b)=>a+b,0)/(losses||1);
     const winRate = P.length ? wins/P.length : 0;
     const expectancy = (winRate * avgWin) + ((1-winRate) * (avgLoss||0));
-    const pnlUsd = (fills||[]).reduce((s,f)=> s + Number(f.realizedPnl||0), 0);
+    const pnlUsd = (fills||[]).reduce((s,f)=> s + Number(f.realizedPnl||0) - Number(f.fee||0), 0);
     const baseEquity = Number(sess?.startBalanceUsd || 0);
     const roiPct = baseEquity > 0 ? (pnlUsd / baseEquity) * 100 : undefined;
     const alertCounts = alerts.reduce((m:any,a)=> (m[a.kind]=(m[a.kind]||0)+1, m), {} as Record<string,number>);

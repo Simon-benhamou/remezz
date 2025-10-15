@@ -16,9 +16,11 @@ export async function recomputeKpi(sessionId: string) {
 
   const fillAgg = await prisma.fill.aggregate({
     where: { sessionId, realizedPnl: { not: null } },
-    _sum: { realizedPnl: true },
+    _sum: { realizedPnl: true, fee: true },
   });
-  const realized = Number(fillAgg._sum.realizedPnl || 0);
+  const realizedGross = Number(fillAgg._sum.realizedPnl || 0);
+  const totalFees = Number(fillAgg._sum.fee || 0);
+  const realized = realizedGross - totalFees;
 
   let unrealized = 0;
   const pos = await prisma.position.findFirst({ where: { sessionId, qty: { gt: 0 } }, orderBy: { openedAt: 'desc' } });

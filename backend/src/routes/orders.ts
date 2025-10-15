@@ -21,7 +21,9 @@ router.get("/", async (req, res) => {
     const positionSide = isExit
       ? (o.side === 'buy' ? 'short' : 'long')
       : (o.side === 'buy' ? 'long' : 'short');
-    const realizedPnlUsd = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0;
+    const realizedGross = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0;
+    const feesUsd = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.fee || 0), 0) : 0;
+    const realizedPnlUsd = realizedGross - feesUsd;
     const roePct = isExit && o.leverage && o.pctChange != null ? Number(o.pctChange) * Number(o.leverage) : null;
     const notional = (Number(o.qty||0) * Number(o.price||0));
     const estLev = equityAlloc > 0 ? (notional / equityAlloc) : null;
@@ -29,7 +31,7 @@ router.get("/", async (req, res) => {
     const lev = Number(o.leverage || 0) || null;
     const notionalCapUsd = (equityAlloc > 0 && lev) ? (equityAlloc * lev) : null;
     const { fills, ...rest } = o;
-    return { ...rest, positionSide, realizedPnlUsd, roePct, estLev, notionalCapUsd };
+    return { ...rest, positionSide, realizedPnlUsd, feesUsd, roePct, estLev, notionalCapUsd };
   });
   res.json(out);
 });
@@ -68,7 +70,9 @@ router.get('/trades', async (req, res) => {
     const dir = positionSide === 'long' ? 1 : -1;
     const qty = Number(o.qty || 0);
     const exitPrice = Number(o.price || 0);
-    const realized = (Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0);
+    const realizedGross = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0;
+    const feesUsd = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.fee || 0), 0) : 0;
+    const realized = realizedGross - feesUsd;
     const entryPrice = (qty>0 && exitPrice>0) ? (exitPrice - (realized / (dir * qty))) : null;
     const roePct = (o.pctChange != null && o.leverage) ? (Number(o.pctChange) * Number(o.leverage)) : null;
     const notional = qty * exitPrice;
@@ -86,6 +90,7 @@ router.get('/trades', async (req, res) => {
       estLev,
       leverage: o.leverage,
       realizedPnlUsd: realized,
+      feesUsd,
       status: o.status,
     };
   });
