@@ -62,6 +62,7 @@ export type SizingInput = {
   leverageCap?: ResolvedLeverageCap;
   tp1DistanceAbs?: number | null;
   minTp1PnlUsd?: number;
+  tp1RMultiple?: number | null;
 };
 
 export type SizingResult = {
@@ -72,13 +73,36 @@ export type SizingResult = {
   meetsMinPnLTarget: boolean;
 };
 
-export async function computeQtyNotional({ balanceUsd, riskPct, stopDistanceAbs, entryPrice, requestedLeverage, symbol, mode, leverageCap: inputCap, tp1DistanceAbs, minTp1PnlUsd }: SizingInput): Promise<SizingResult> {
+export async function computeQtyNotional({
+  balanceUsd,
+  riskPct,
+  stopDistanceAbs,
+  entryPrice,
+  requestedLeverage,
+  symbol,
+  mode,
+  leverageCap: inputCap,
+  tp1DistanceAbs,
+  minTp1PnlUsd,
+  tp1RMultiple,
+}: SizingInput): Promise<SizingResult> {
   const leverageCap = inputCap ?? await resolveLeverageCap({ symbol, requestedMaxLeverage: requestedLeverage, mode });
   const riskDollar = balanceUsd * (riskPct/100);
   const stopPct = entryPrice > 0 ? (stopDistanceAbs/entryPrice)*100 : 0;
   const notionalByRisk = stopPct > 0 ? (riskDollar / (stopPct/100)) : 0;
-  const tp1Pct = entryPrice > 0 && tp1DistanceAbs != null && tp1DistanceAbs > 0
-    ? (tp1DistanceAbs / entryPrice) * 100
+  const effectiveTp1Distance = (() => {
+    if (tp1DistanceAbs != null && tp1DistanceAbs > 0) return tp1DistanceAbs;
+    if (stopDistanceAbs > 0 && tp1RMultiple != null && Number.isFinite(tp1RMultiple) && tp1RMultiple > 0) {
+      return stopDistanceAbs * tp1RMultiple;
+    }
+    if (stopDistanceAbs > 0) {
+      // Fall back to assuming at least a 1R move when no explicit TP is provided.
+      return stopDistanceAbs;
+    }
+    return 0;
+  })();
+  const tp1Pct = entryPrice > 0 && effectiveTp1Distance > 0
+    ? (effectiveTp1Distance / entryPrice) * 100
     : 0;
   const minTargetUsd = Number.isFinite(minTp1PnlUsd) && (minTp1PnlUsd as number) > 0 ? Number(minTp1PnlUsd) : 0;
   const notionalByPnL = tp1Pct > 0 && minTargetUsd > 0 ? (minTargetUsd / (tp1Pct / 100)) : 0;

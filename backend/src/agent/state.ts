@@ -2559,6 +2559,16 @@ export class ReboundRejectionAgent {
     const tp1DistanceAbs = tp1Price != null && Number.isFinite(tp1Price)
       ? Math.abs(tp1Price - entry)
       : null;
+    const tp1RMultiple = (() => {
+      const raw = this.plan.rPrices?.[0]?.r;
+      if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+        return raw;
+      }
+      if (tp1DistanceAbs != null && tp1DistanceAbs > 0 && stopDistanceAbs > 0) {
+        return tp1DistanceAbs / stopDistanceAbs;
+      }
+      return null;
+    })();
     const quantSizerResult = this.positionSizer.computeSize({
       equityUsd: Math.max(this.lastKnownEquityUsd, usableBalance),
       entryPrice: entry,
@@ -2734,6 +2744,7 @@ export class ReboundRejectionAgent {
       leverageCap: this.profile.leverageCap,
       tp1DistanceAbs,
       minTp1PnlUsd: targetSizingEnabled ? targetMinTp1PnlUsd : undefined,
+      tp1RMultiple,
     });
     if (targetSizingEnabled && !sizing.meetsMinPnLTarget && targetMinTp1PnlUsd > 0) {
       recordOpsEvent({
@@ -11735,22 +11746,28 @@ export class ReboundRejectionAgent {
 
     try {
       const cfg = getConfig();
-      const maxDailyRoi = 5.0; // Default 5% max daily ROI
+      const configuredMax = Number((cfg as any)?.MAX_DAILY_ROI_PCT);
+      const maxDailyRoi = Number.isFinite(configuredMax) && configuredMax > 0 ? configuredMax : 5.0; // Default 5%
       const dailyPnL = this.performanceMetrics.dailyPnL || 0;
 
-      // Calculate current daily ROI as percentage of starting balance
-      const startBalance = this.profile.startBalanceUsd || 10000; // Fallback to 10k
+      const balanceFallback = this.profile.startBalanceUsd
+        ?? (this.lastKnownEquityUsd > 0 ? this.lastKnownEquityUsd : null)
+        ?? 10000;
+      const startBalance = Math.max(1, Number(balanceFallback));
       const dailyRoiPct = (dailyPnL / startBalance) * 100;
+      const baselineRisk = Math.max(0, riskPct);
+      const profileRisk = Math.max(0, Number(this.profile.riskPerTradePct || baselineRisk));
+      const riskFloor = baselineRisk > 0
+        ? Math.min(baselineRisk, Math.max(0.35, profileRisk * 0.35))
+        : 0;
 
       console.log(`📊 Daily ROI check: ${dailyRoiPct.toFixed(2)}% (max: ${maxDailyRoi}%, dailyPnL: ${dailyPnL.toFixed(2)})`);
 
-      // If daily ROI exceeds threshold, reduce risk progressively
       if (dailyRoiPct > maxDailyRoi) {
         const excessRoi = dailyRoiPct - maxDailyRoi;
-        const reductionFactor = Math.max(0.1, 1.0 - (excessRoi / maxDailyRoi)); // Reduce risk by excess percentage
-
-        const originalRisk = riskPct;
-        const adjustedRisk = riskPct * reductionFactor;
+        const severity = Math.min(2.5, Math.max(0, excessRoi / maxDailyRoi));
+        const reductionFactor = Math.max(0.5, 1 - (severity * 0.55));
+        const adjustedRisk = Math.max(riskFloor, baselineRisk * reductionFactor);
 
         recordOpsEvent({
           level: 'warn',
@@ -11762,20 +11779,21 @@ export class ReboundRejectionAgent {
             dailyRoiPct: dailyRoiPct.toFixed(2),
             maxDailyRoi,
             excessRoi: excessRoi.toFixed(2),
-            originalRisk: originalRisk.toFixed(3),
+            originalRisk: baselineRisk.toFixed(3),
             adjustedRisk: adjustedRisk.toFixed(3),
-            reductionFactor: reductionFactor.toFixed(3)
+            reductionFactor: reductionFactor.toFixed(3),
+            riskFloor: riskFloor.toFixed(3),
           },
         });
 
-        console.log(`⚠️ Daily ROI throttle: ${originalRisk.toFixed(3)}% → ${adjustedRisk.toFixed(3)}% (excess ROI: ${excessRoi.toFixed(2)}%)`);
+        console.log(`⚠️ Daily ROI throttle: ${baselineRisk.toFixed(3)}% → ${adjustedRisk.toFixed(3)}% (excess ROI: ${excessRoi.toFixed(2)}%, floor: ${riskFloor.toFixed(3)}%)`);
         return adjustedRisk;
       }
 
-      // If daily ROI is approaching the limit, apply mild throttling
-      else if (dailyRoiPct > maxDailyRoi * 0.8) {
-        const mildReduction = 0.9; // 10% reduction when approaching limit
-        const adjustedRisk = riskPct * mildReduction;
+      if (dailyRoiPct > maxDailyRoi * 0.8) {
+        const approachRatio = Math.max(0, (dailyRoiPct - (maxDailyRoi * 0.8)) / (maxDailyRoi * 0.2));
+        const reductionFactor = Math.max(0.75, 1 - (0.15 * Math.min(1, approachRatio)));
+        const adjustedRisk = Math.max(riskFloor, baselineRisk * reductionFactor);
 
         recordOpsEvent({
           level: 'info',
@@ -11786,19 +11804,21 @@ export class ReboundRejectionAgent {
           details: {
             dailyRoiPct: dailyRoiPct.toFixed(2),
             maxDailyRoi,
-            adjustedRisk: adjustedRisk.toFixed(3)
+            originalRisk: baselineRisk.toFixed(3),
+            adjustedRisk: adjustedRisk.toFixed(3),
+            reductionFactor: reductionFactor.toFixed(3),
+            riskFloor: riskFloor.toFixed(3),
           },
         });
 
-        console.log(`📉 Mild daily ROI throttle: ${riskPct.toFixed(3)}% → ${adjustedRisk.toFixed(3)}%`);
+        console.log(`📉 Mild daily ROI throttle: ${baselineRisk.toFixed(3)}% → ${adjustedRisk.toFixed(3)}% (floor: ${riskFloor.toFixed(3)}%)`);
         return adjustedRisk;
       }
 
-      // Daily ROI within acceptable range
-      return riskPct;
+      return baselineRisk;
 
     } catch (error) {
-      console.error(`Failed to apply daily ROI throttle:`, error);
+      console.error('Failed to apply daily ROI throttle:', error);
       return riskPct; // Return original risk on error
     }
   }
