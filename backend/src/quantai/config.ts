@@ -801,11 +801,12 @@ function normalizeExits(raw: any): QuantAIExitConfig {
   const maxHolding = maxHoldingRaw != null
     ? Number(maxHoldingRaw)
     : DEFAULT_CONFIG.exits.maxHoldingMin;
-  const tpRaw = Array.isArray(raw.tp_r_multiples ?? raw.tpRMultiples)
+  const tpRaw: number[] = Array.isArray(raw.tp_r_multiples ?? raw.tpRMultiples)
     ? (raw.tp_r_multiples ?? raw.tpRMultiples).map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v) && v > 0)
     : DEFAULT_CONFIG.exits.tpRMultiples;
   const tpMultiples: number[] = [];
-  for (const value of Array.from(new Set(tpRaw)).sort((a, b) => a - b)) {
+  const uniqueTpValues = Array.from(new Set<number>(tpRaw));
+  for (const value of uniqueTpValues.sort((a, b) => a - b)) {
     if (tpMultiples.length >= 3) break;
     const clamped = Math.min(Math.max(value, 1.5), 3.5);
     const last = tpMultiples[tpMultiples.length - 1];

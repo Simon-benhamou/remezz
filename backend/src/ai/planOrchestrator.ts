@@ -77,7 +77,7 @@ function normalizePlanOutput(raw: any, symbol: string): any {
     })
     .filter((v: number | null): v is number => Number.isFinite(v) && v != null && v > 0);
 
-  const sanitizedTpValues = Array.from(new Set(tpValuesRaw))
+  const sanitizedTpValues = Array.from(new Set<number>(tpValuesRaw))
     .map((value) => clamp(value, 0.5, 3.5))
     .sort((a, b) => a - b);
 
