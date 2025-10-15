@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Table, Select, Space, DatePicker, Segmented, Button, Statistic, Tag, message, InputNumber, Row, Col, Input, Tooltip, Typography } from 'antd';
+import { Card, Table, Select, Space, DatePicker, Segmented, Button, Statistic, Tag, message, InputNumber, Row, Col, Input, Tooltip, Typography, Alert } from 'antd';
 import { SearchOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { api } from '../api';
@@ -202,14 +202,42 @@ export default function ExecutionLedgerPage() {
     const base = rows.reduce(
       (acc, row) => {
         const outcome = asOutcome(row);
+        const pnlUsd = Number(row.realizedPnlUsd ?? 0);
+        const leverageValue = Number(row.leverage ?? row.estLev ?? NaN);
+
         acc.trades += 1;
-        if (outcome === 'win') acc.wins += 1;
-        if (outcome === 'loss') acc.losses += 1;
+        if (outcome === 'win') {
+          acc.wins += 1;
+          acc.winPnls.push(pnlUsd);
+          if (Number.isFinite(leverageValue) && leverageValue > 0) acc.winLeverages.push(leverageValue);
+        }
+        if (outcome === 'loss') {
+          acc.losses += 1;
+          acc.lossPnls.push(pnlUsd);
+          if (Number.isFinite(leverageValue) && leverageValue > 0) acc.lossLeverages.push(leverageValue);
+        }
+        if (Number.isFinite(leverageValue) && leverageValue > 0) acc.allLeverages.push(leverageValue);
         return acc;
       },
-      { trades: 0, wins: 0, losses: 0 }
+      { trades: 0, wins: 0, losses: 0, winPnls: [] as number[], lossPnls: [] as number[], allLeverages: [] as number[], winLeverages: [] as number[], lossLeverages: [] as number[] }
     );
     const winRate = base.trades ? base.wins / base.trades : 0;
+    const avgWinUsd = base.winPnls.length
+      ? base.winPnls.reduce((sum, value) => sum + value, 0) / base.winPnls.length
+      : 0;
+    const avgLossUsd = base.lossPnls.length
+      ? Math.abs(base.lossPnls.reduce((sum, value) => sum + value, 0) / base.lossPnls.length)
+      : 0;
+    const riskRewardRatio = avgLossUsd > 0 ? avgWinUsd / avgLossUsd : 0;
+    const avgLeverage = base.allLeverages.length
+      ? base.allLeverages.reduce((sum, value) => sum + value, 0) / base.allLeverages.length
+      : null;
+    const avgWinLeverage = base.winLeverages.length
+      ? base.winLeverages.reduce((sum, value) => sum + value, 0) / base.winLeverages.length
+      : null;
+    const avgLossLeverage = base.lossLeverages.length
+      ? base.lossLeverages.reduce((sum, value) => sum + value, 0) / base.lossLeverages.length
+      : null;
     return {
       ...base,
       winRate,
@@ -217,6 +245,12 @@ export default function ExecutionLedgerPage() {
       feesUsd: Number(metrics?.feesUsd ?? 0),
       pnl: Number(metrics?.netPnlUsd ?? 0),
       roiPct: Number(metrics?.roiPct ?? 0),
+      avgWinUsd,
+      avgLossUsd,
+      riskRewardRatio,
+      avgLeverage,
+      avgWinLeverage,
+      avgLossLeverage,
     };
   }, [rows, sessionPerf, globalPerf, viewMode]);
 
@@ -475,7 +509,111 @@ export default function ExecutionLedgerPage() {
                 valueStyle={{ color: summary.roiPct >= 0 ? '#52c41a' : '#ff4d4f' }}
               />
             </Col>
+            <Col xs={24} sm={8} md={4}>
+              <Statistic
+                title="Avg Win (USD)"
+                value={summary.avgWinUsd}
+                prefix="$"
+                precision={2}
+                valueStyle={{ color: summary.avgWinUsd > 0 ? '#52c41a' : '#64748b' }}
+              />
+            </Col>
+            <Col xs={24} sm={8} md={4}>
+              <Statistic
+                title="Avg Loss (USD)"
+                value={summary.avgLossUsd}
+                prefix="$"
+                precision={2}
+                valueStyle={{ color: summary.avgLossUsd > 0 ? '#ff4d4f' : '#64748b' }}
+              />
+            </Col>
+            <Col xs={24} sm={8} md={4}>
+              <Statistic
+                title="Win/Loss Ratio"
+                value={summary.riskRewardRatio}
+                precision={2}
+                valueStyle={{
+                  color:
+                    summary.riskRewardRatio >= 1.2
+                      ? '#52c41a'
+                      : summary.riskRewardRatio >= 0.9
+                        ? '#faad14'
+                        : '#ff4d4f'
+                }}
+              />
+            </Col>
+            <Col xs={24} sm={8} md={4}>
+              <Statistic
+                title="Avg Leverage"
+                value={summary.avgLeverage ?? 0}
+                precision={2}
+                suffix={summary.avgLeverage != null ? 'x' : undefined}
+                formatter={(value) => (summary.avgLeverage != null ? Number(value).toFixed(2) : '-')}
+                valueStyle={{
+                  color:
+                    summary.avgLeverage == null
+                      ? '#64748b'
+                      : summary.avgLeverage >= 1.5
+                        ? '#52c41a'
+                        : summary.avgLeverage >= 1.0
+                          ? '#faad14'
+                          : '#ff4d4f'
+                }}
+              />
+            </Col>
+            {summary.avgWinLeverage != null && summary.avgLossLeverage != null && (
+              <>
+                <Col xs={24} sm={8} md={4}>
+                  <Statistic
+                    title="Avg Win Lev"
+                    value={summary.avgWinLeverage}
+                    precision={2}
+                    suffix="x"
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                </Col>
+                <Col xs={24} sm={8} md={4}>
+                  <Statistic
+                    title="Avg Loss Lev"
+                    value={summary.avgLossLeverage}
+                    precision={2}
+                    suffix="x"
+                    valueStyle={{ color: '#ff4d4f' }}
+                  />
+                </Col>
+              </>
+            )}
           </Row>
+          {(() => {
+            const riskSkew = summary.wins > 0 && summary.losses > 0 && summary.avgWinUsd < summary.avgLossUsd;
+            const leverageLow = summary.avgLeverage != null && summary.avgLeverage < 1.2;
+            if (!riskSkew && !leverageLow) return null;
+            return (
+              <Alert
+                style={{ marginTop: 16 }}
+                type='warning'
+                showIcon
+                message='Risk/Reward imbalance detected'
+                description={(
+                  <Space direction='vertical' size={4}>
+                    {riskSkew && (
+                      <span>
+                        Average win {formatUsd(summary.avgWinUsd)} vs average loss {formatUsd(summary.avgLossUsd)} → ratio
+                        {` ${summary.riskRewardRatio.toFixed(2)}.`} Consider tightening stops or scaling winners to improve the
+                        payoff profile.
+                      </span>
+                    )}
+                    {leverageLow && (
+                      <span>
+                        Average leverage {summary.avgLeverage?.toFixed(2)}x indicates under-utilised exposure on winners.
+                        Review position sizing rules to ensure gains can offset losses when conviction is high.
+                      </span>
+                    )}
+                  </Space>
+                )}
+              />
+            );
+          })()}
         </Card>
       )}
 
