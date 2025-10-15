@@ -1,6 +1,8 @@
 import { prisma } from '../db/client.js';
 import { AgentHub } from '../agent/hub.js';
 import { recordOpsEvent } from '../monitor/ops.js';
+import { getConfig } from '../utils/env.js';
+import { derivePortfolioBudgetFraction, getBudgetFractionBounds, resolveBudgetFraction } from '../utils/budget.js';
 
 export type PortfolioMode = 'paper' | 'live';
 
@@ -166,19 +168,19 @@ function buildSnapshot(
 ): PortfolioSnapshot {
   const balanceUsd = Math.max(0, Number(settings.balanceUsd || 0));
   const maxExposureUsd = balanceUsd * settings.maxExposureMultiplier;
+  const budgetBounds = getBudgetFractionBounds();
+  const reducedThreshold = Math.min(budgetBounds.max, budgetBounds.min + 0.05);
   const mappedAllocations: PortfolioSnapshot['allocations'] = sessions.map((session) => {
     const profile = ((session.profileJson ?? {}) as Record<string, any>) || {};
     const allocation = settings.allocations?.[session.id];
     const capitalUsd = Number(allocation?.capitalUsd ?? session.startBalanceUsd ?? 0);
     const rawBudgetFraction = allocation?.budgetFraction ?? profile?.budgetFraction;
-    const budgetFraction = Number.isFinite(Number(rawBudgetFraction))
-      ? Math.max(0, Number(rawBudgetFraction))
-      : 1;
+    const budgetFraction = resolveBudgetFraction(rawBudgetFraction);
     const weightPct = balanceUsd > 0 ? (capitalUsd / balanceUsd) * 100 : 0;
     const kpi = session.kpi;
     const tags: string[] = [];
     if (allocation?.correlationLimited) tags.push('correlation-limited');
-    if (budgetFraction <= 0.25) tags.push('capital-reduced');
+    if (budgetFraction <= reducedThreshold) tags.push('capital-reduced');
     const performanceScore = allocation?.performanceScore ?? allocation?.weight ?? 0;
     return {
       sessionId: session.id,
@@ -241,6 +243,7 @@ export async function rebalancePortfolio(params: {
   const { userId, mode, reason, balanceOverrideUsd } = params;
   const nowIso = new Date().toISOString();
   const settings = await loadSettings(userId, mode);
+  const cfg = getConfig();
   if (balanceOverrideUsd != null) {
     const override = Number(balanceOverrideUsd);
     if (Number.isFinite(override) && override >= 0) {
@@ -307,7 +310,9 @@ export async function rebalancePortfolio(params: {
   for (const entry of entries) {
     const rawCapital = Math.max(0, entry.weight * unit);
     const capitalUsd = Math.max(minAllocationUsd, Math.min(rawCapital, exposureBudgetUsd * 0.6));
-    const budgetFraction = Math.max(0.1, Math.min(1, capitalUsd / settings.balanceUsd));
+    const totalBalance = settings.balanceUsd > 0 ? settings.balanceUsd : 1;
+    const allocationShare = totalBalance > 0 ? capitalUsd / totalBalance : 1;
+    const budgetFraction = derivePortfolioBudgetFraction(allocationShare, cfg);
     let targetMaxLeverage = Math.max(1, Math.min(10, entry.baseMaxLeverage));
     if (entry.performance.roiPct > 10 && entry.performance.winRate > 55 && entry.performance.drawdownPct < 8) {
       targetMaxLeverage = Math.min(10, targetMaxLeverage + 1);

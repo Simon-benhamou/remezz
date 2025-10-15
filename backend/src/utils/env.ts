@@ -215,6 +215,10 @@ export type Cfg = {
   TRADE_COOLDOWN_LOSS_MULTIPLIER: number;
   // Default sizing mode for agents: 'risk' | 'budget'
   SIZING_DEFAULT_MODE: string;
+  PORTFOLIO_MIN_BUDGET_FRACTION: number;
+  PORTFOLIO_MAX_BUDGET_FRACTION: number;
+  PORTFOLIO_BUDGET_FRACTION_MULTIPLIER: number;
+  PORTFOLIO_BUDGET_FRACTION_OFFSET: number;
 
   // Intelligent strategy refresh (indicator-driven, debounced)
   STRAT_REFRESH_ENABLED: boolean;
@@ -546,6 +550,10 @@ export function getConfig(): Cfg {
     TRADE_COOLDOWN_WIN_MULTIPLIER: Number(e.TRADE_COOLDOWN_WIN_MULTIPLIER || "0.5"),
     TRADE_COOLDOWN_LOSS_MULTIPLIER: Number(e.TRADE_COOLDOWN_LOSS_MULTIPLIER || "1.5"),
     SIZING_DEFAULT_MODE: (e.SIZING_DEFAULT_MODE || "budget").toLowerCase() === 'risk' ? 'risk' : 'budget',
+    PORTFOLIO_MIN_BUDGET_FRACTION: Number(e.PORTFOLIO_MIN_BUDGET_FRACTION || "0.25"),
+    PORTFOLIO_MAX_BUDGET_FRACTION: Number(e.PORTFOLIO_MAX_BUDGET_FRACTION || "1"),
+    PORTFOLIO_BUDGET_FRACTION_MULTIPLIER: Number(e.PORTFOLIO_BUDGET_FRACTION_MULTIPLIER || "3"),
+    PORTFOLIO_BUDGET_FRACTION_OFFSET: Number(e.PORTFOLIO_BUDGET_FRACTION_OFFSET || "0"),
 
     // Intelligent strategy refresh (indicator-driven, debounced)
     STRAT_REFRESH_ENABLED: (e.STRAT_REFRESH_ENABLED || "true") === "true",

@@ -15,6 +15,7 @@ import { computeQtyNotional, defaultLimits, RiskDecision } from '../risk/manager
 import { getUserCredentials } from '../services/userCredentials.js';
 import { getAgentRecentWinRate } from '../services/performance/winrate.js';
 import { getConfig, getModeParams, type AgentAggressiveness, type ModeParams } from '../utils/env.js';
+import { clampBudgetFraction, resolveBudgetFraction } from '../utils/budget.js';
 import { computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
 import { applyHysteresis, blendRR, DEFAULT_RR_EXPECTANCY_CONFIG, resolveRrExpectancyConfig, rrMinFromWinrate, type RRExpectancyConfig } from '../risk/rrExpectancy.js';
 import { broadcast } from '../ws/hub.js';
@@ -588,9 +589,11 @@ export class ReboundRejectionAgent {
       }
     }
     if (typeof update.budgetFraction === 'number' && Number.isFinite(update.budgetFraction)) {
-      const clamped = Math.max(0.1, Math.min(1, update.budgetFraction));
-      this.profile.budgetFraction = clamped;
-      details.budgetFraction = clamped;
+      const clamped = clampBudgetFraction(update.budgetFraction);
+      if (clamped != null) {
+        this.profile.budgetFraction = clamped;
+        details.budgetFraction = clamped;
+      }
     }
     if (typeof update.maxLeverage === 'number' && Number.isFinite(update.maxLeverage)) {
       const resolved = Math.max(1, Math.min(10, update.maxLeverage));
@@ -838,8 +841,10 @@ export class ReboundRejectionAgent {
 
     const budgetFractionRaw = typeof profile.budgetFraction === 'number'
       ? profile.budgetFraction
-      : (typeof (profile as any).budgetPct === 'number' ? ((profile as any).budgetPct > 1 ? (profile as any).budgetPct / 100 : (profile as any).budgetPct) : 1);
-    const safeBudgetFraction = Math.min(1, Math.max(0.1, budgetFractionRaw || 1));
+      : (typeof (profile as any).budgetPct === 'number'
+        ? ((profile as any).budgetPct > 1 ? (profile as any).budgetPct / 100 : (profile as any).budgetPct)
+        : 1);
+    const safeBudgetFraction = resolveBudgetFraction(budgetFractionRaw);
     const leverageCap = Math.max(1, Math.min(10, profile.maxLeverage || resolvedMaxLev || 1));
     const baselineBalance = typeof profile.startBalanceUsd === 'number' && profile.startBalanceUsd > 0
       ? profile.startBalanceUsd
@@ -1256,7 +1261,7 @@ export class ReboundRejectionAgent {
     // Use realistic position size based on actual balance, not plan's placeholder 10k
     if (this.plan && this.plan.sizing) {
       const bal = await this.broker.balance();
-      const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
+      const budgetFrac = resolveBudgetFraction(this.profile.budgetFraction);
       const startBudget = (this.profile.startBalanceUsd && this.profile.startBalanceUsd > 0)
         ? this.profile.startBalanceUsd
         : bal.freeUsd;
@@ -2354,7 +2359,7 @@ export class ReboundRejectionAgent {
       this.entering = false;
       return;
     }
-    const budgetFrac = Math.max(0.1, Math.min(1, this.profile.budgetFraction ?? 1));
+    const budgetFrac = resolveBudgetFraction(this.profile.budgetFraction);
     const availableMargin = Math.max(0, bal.equityUsd - bal.committedUsd);
     // Hard budget cap: limit balance used for sizing to startBalanceUsd * budget%
     const startBudget = (this.profile.startBalanceUsd && this.profile.startBalanceUsd > 0)
@@ -8754,7 +8759,7 @@ export class ReboundRejectionAgent {
 
       try {
         const balance = this.broker ? await this.broker.balance() : null;
-        const budgetFrac = Math.max(0.1, Math.min(1, this.profile?.budgetFraction ?? 1));
+        const budgetFrac = resolveBudgetFraction(this.profile?.budgetFraction);
         const startBudgetCandidate = Number(this.profile?.startBalanceUsd ?? 0);
         const freeUsd = Number((balance as any)?.freeUsd ?? 0);
         const usableBase = startBudgetCandidate > 0 ? startBudgetCandidate : freeUsd;
