@@ -69,6 +69,18 @@ export type ActivationProfile = {
   }>;
 };
 
+type AccountSnapshot = {
+  equityUsd?: number | null;
+  freeUsd?: number | null;
+  committedUsd?: number | null;
+  availableMarginUsd?: number | null;
+  budgetCapUsd?: number | null;
+  usableBalanceUsd?: number | null;
+  requestedNotionalUsd?: number | null;
+  finalNotionalUsd?: number | null;
+  filledNotionalUsd?: number | null;
+};
+
 export type ActivePosition = {
   side: 'buy'|'sell';
   entry: number;
@@ -103,6 +115,8 @@ export type ActivePosition = {
     lastUpdateTs?: number;
   };
   openLeverage?: number;
+  equityAtEntryUsd?: number | null;
+  accountSnapshot?: AccountSnapshot | null;
 };
 
 type ProtectiveSnapshot = {
@@ -168,6 +182,10 @@ type ExitDiagnosticsPayload = {
     consecutiveStops: number;
     realizedPnlTodayPct: number;
   };
+  account?: {
+    before?: AccountSnapshot | null;
+    after?: AccountSnapshot | null;
+  } | null;
 };
 
 type MomentumAwaitContext = {
@@ -2360,13 +2378,24 @@ export class ReboundRejectionAgent {
       return;
     }
     const budgetFrac = resolveBudgetFraction(this.profile.budgetFraction);
-    const availableMargin = Math.max(0, bal.equityUsd - bal.committedUsd);
-    // Hard budget cap: limit balance used for sizing to startBalanceUsd * budget%
-    const startBudget = (this.profile.startBalanceUsd && this.profile.startBalanceUsd > 0)
-      ? this.profile.startBalanceUsd
-      : bal.freeUsd;
-    const capBalance = Math.max(0, startBudget * budgetFrac);
-    const usableBalance = Math.max(0, Math.min(bal.freeUsd, availableMargin, capBalance));
+    const marginCapacity = Math.max(0, marginAdvisor.marginCapacityUsd());
+    const availableMargin = marginCapacity > 0 ? marginCapacity : Math.max(0, bal.equityUsd - bal.committedUsd);
+    // Hard budget cap: allow growth beyond initial balance by considering live equity
+    const startBalance = Number.isFinite(this.profile.startBalanceUsd)
+      ? Math.max(0, Number(this.profile.startBalanceUsd))
+      : 0;
+    const equityNow = Number.isFinite(bal.equityUsd) ? Math.max(0, Number(bal.equityUsd)) : 0;
+    const freeNow = Number.isFinite(bal.freeUsd) ? Math.max(0, Number(bal.freeUsd)) : 0;
+    const budgetBase = Math.max(startBalance, equityNow, freeNow);
+    const capBalance = budgetBase > 0 ? budgetBase * budgetFrac : 0;
+    const usableBalance = Math.max(
+      0,
+      Math.min(
+        freeNow,
+        availableMargin > 0 ? availableMargin : freeNow,
+        capBalance > 0 ? capBalance : freeNow,
+      ),
+    );
     const planPosition: any = this.plan.plan?.position || {};
     let planRiskMinPct: number | undefined;
     let planRiskMaxPct: number | undefined;
@@ -2833,6 +2862,15 @@ export class ReboundRejectionAgent {
     }
 
     const requestedNotionalBeforeCaps = notional;
+    const sizingSnapshot: AccountSnapshot = {
+      equityUsd: Number.isFinite(bal?.equityUsd) ? Number(bal?.equityUsd) : null,
+      freeUsd: Number.isFinite(bal?.freeUsd) ? Number(bal?.freeUsd) : null,
+      committedUsd: Number.isFinite(bal?.committedUsd) ? Number(bal?.committedUsd) : null,
+      availableMarginUsd: availableMargin,
+      budgetCapUsd: capBalance,
+      usableBalanceUsd: usableBalance,
+      requestedNotionalUsd: requestedNotionalBeforeCaps,
+    };
 
     const marginEquity = marginAdvisor.equityUsd();
     const freeCapAtGuard = marginAdvisor.maxAdditionalNotionalAt(levGuard);
@@ -2873,6 +2911,7 @@ export class ReboundRejectionAgent {
       const utilIf = (value: number) => marginAdvisor.utilisationPctIf(value, leverageForUtil);
 
       let adjustedNotional = notional;
+      sizingSnapshot.finalNotionalUsd = adjustedNotional;
       let utilAfter = utilIf(adjustedNotional);
       if (utilAfter >= HALT_CRITICAL) {
         this.noteSignalDrop('margin_block', 'warn', {
@@ -2902,6 +2941,7 @@ export class ReboundRejectionAgent {
             },
           });
           adjustedNotional = minTradeNotional;
+          sizingSnapshot.finalNotionalUsd = adjustedNotional;
           utilAfter = utilWithFloor;
         } else {
           this.noteSignalDrop('min_notional_floor_block', 'info', {
@@ -2993,6 +3033,7 @@ export class ReboundRejectionAgent {
           },
         });
         adjustedNotional = candidateNotional;
+        sizingSnapshot.finalNotionalUsd = adjustedNotional;
       }
 
       if (utilAfter >= HALT_CRITICAL) {
@@ -3046,6 +3087,7 @@ export class ReboundRejectionAgent {
             ratio: marginClamp,
           },
         });
+        sizingSnapshot.finalNotionalUsd = adjustedNotional;
       }
 
       notional = adjustedNotional;
@@ -3084,6 +3126,7 @@ export class ReboundRejectionAgent {
         },
       });
       qty = cappedQty;
+      sizingSnapshot.finalNotionalUsd = effectiveNotionalCap;
     }
     // Optionally estimate fillable quantity (liquidity guard)
     const useLiqGuard = this.profile.liquidityGuard !== false; // default true
@@ -3138,6 +3181,7 @@ export class ReboundRejectionAgent {
         });
         qty = adjustedQty;
         notional = qty * entry;
+        sizingSnapshot.finalNotionalUsd = notional;
       } else {
         this.noteSignalDrop('min_notional_floor_block', 'info', {
           currentNotional,
@@ -3160,6 +3204,7 @@ export class ReboundRejectionAgent {
           const previousNotional = notionalAfterFloors;
           qty = floorQty;
           notional = qty * entry;
+          sizingSnapshot.finalNotionalUsd = notional;
           recordOpsEvent({
             level: 'info',
             source: 'position_sizing',
@@ -3186,6 +3231,23 @@ export class ReboundRejectionAgent {
         }
       }
     }
+
+    sizingSnapshot.finalNotionalUsd = qty * entry;
+
+    recordOpsEvent({
+      level: 'info',
+      source: 'position_sizing',
+      message: 'pre_entry_sizing_snapshot',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile.symbol,
+      details: {
+        riskPct: dynamicRiskPct,
+        stopPct,
+        effectiveLeverage: effectiveLev,
+        budgetFraction: budgetFrac,
+        snapshot: sizingSnapshot,
+      },
+    });
 
     const tp1ForEv = tp.length > 0 ? tp[0] : this.plan.rPrices?.[0]?.price ?? null;
     if (tp1ForEv != null && Number.isFinite(tp1ForEv)) {
@@ -3559,6 +3621,7 @@ export class ReboundRejectionAgent {
     const telemetry = this.computeTelemetry(startTs, placed, { expectedPrice: entry, requestedQty: qty, side });
     const openedAt = Date.now();
     const executionPrice = placed.avgPrice ?? entry;
+    sizingSnapshot.filledNotionalUsd = (placed.avgPrice ?? entry) * placed.filledQty;
     const initialStopDistance = Math.max(1e-12,
       Math.abs(executionPrice - stop) || Math.abs(entry - stop) || Math.abs(this.plan.stopDistance));
     this.pos = {
@@ -3594,6 +3657,8 @@ export class ReboundRejectionAgent {
         lastUpdateTs: openedAt,
       },
       openLeverage: effectiveLev,
+      equityAtEntryUsd: this.lastKnownEquityUsd,
+      accountSnapshot: sizingSnapshot,
     };
     this.circuitBreaker.onBeforeOpen(new Date(openedAt), this.lastKnownEquityUsd);
     this.syncCircuitBreakerTelemetry();
@@ -11161,6 +11226,7 @@ export class ReboundRejectionAgent {
       });
 
       if (exitOrder.status === 'filled' && exitOrder.filledQty && exitOrder.filledQty > 0) {
+        const balanceAfter = await this.broker.balance().catch(() => null as BrokerMarginSnapshot | null);
         let exitSnapshot: ExitDiagnosticsPayload | null = null;
         try {
           exitSnapshot = await this.captureExitDiagnostics({
@@ -11169,6 +11235,7 @@ export class ReboundRejectionAgent {
             exitPrice: exitOrder.avgPrice || price,
             realizedPnl,
             protectiveSnapshot,
+            balanceAfter,
           });
         } catch (snapshotError) {
           console.warn('Failed to capture exit diagnostics snapshot:', snapshotError);
@@ -11193,7 +11260,6 @@ export class ReboundRejectionAgent {
         });
 
         // Update performance tracking
-        const balanceAfter = await this.broker.balance().catch(() => null as any);
         const equityAfter = Number(balanceAfter?.equityUsd ?? this.lastKnownEquityUsd ?? this.profile.startBalanceUsd ?? 0);
         const baseEquity = this.lastKnownEquityUsd > 0 ? this.lastKnownEquityUsd : (this.profile.startBalanceUsd ?? equityAfter);
         const pnlPct = baseEquity > 0 ? (realizedPnl / baseEquity) * 100 : 0;
@@ -11324,6 +11390,7 @@ export class ReboundRejectionAgent {
     exitPrice: number;
     realizedPnl: number;
     protectiveSnapshot: ProtectiveSnapshot;
+    balanceAfter?: BrokerMarginSnapshot | null;
   }): Promise<ExitDiagnosticsPayload | null> {
     if (!this.profile) return null;
 
@@ -11397,6 +11464,28 @@ export class ReboundRejectionAgent {
       gates: gateStatuses,
     } : null;
 
+    const accountBefore = this.pos?.accountSnapshot
+      ? { ...this.pos.accountSnapshot }
+      : null;
+    if (accountBefore && (accountBefore.finalNotionalUsd == null || Number.isNaN(accountBefore.finalNotionalUsd))) {
+      if (this.pos) {
+        accountBefore.finalNotionalUsd = this.pos.qty * this.pos.entry;
+      }
+    }
+    const accountAfter = params.balanceAfter
+      ? {
+          equityUsd: Number.isFinite(params.balanceAfter.equityUsd)
+            ? Number(params.balanceAfter.equityUsd)
+            : null,
+          freeUsd: Number.isFinite(params.balanceAfter.freeUsd)
+            ? Number(params.balanceAfter.freeUsd)
+            : null,
+          committedUsd: Number.isFinite(params.balanceAfter.committedUsd)
+            ? Number(params.balanceAfter.committedUsd)
+            : null,
+        }
+      : null;
+
     return {
       capturedAt,
       reason: params.reason,
@@ -11417,6 +11506,10 @@ export class ReboundRejectionAgent {
         tradesToday: this.tradesToday || 0,
         consecutiveStops: this.consecutiveStops || 0,
         realizedPnlTodayPct: this.realizedPnlTodayPct || 0,
+      },
+      account: {
+        before: accountBefore,
+        after: accountAfter,
       },
     };
   }
