@@ -1,10 +1,12 @@
 import React from 'react';
 import {
-  Alert,
   Badge,
   Button,
   Card,
   Col,
+  Descriptions,
+  Divider,
+  Drawer,
   Empty,
   Row,
   Space,
@@ -343,6 +345,36 @@ const OperationsDashboardPage: React.FC = () => {
       helper: 'Protective coverage',
     },
   ];
+
+  const diagnosticsEntries = React.useMemo(() => {
+    const diagnostics = (opsMetrics?.diagnostics ?? opsMetrics?.health) as Record<string, any> | undefined;
+    if (!diagnostics || typeof diagnostics !== 'object') return [] as Array<[string, string]>;
+    return Object.entries(diagnostics)
+      .filter(([key]) => !['timestamp', 'ts'].includes(key))
+      .slice(0, 6)
+      .map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value || '—')]);
+  }, [opsMetrics]);
+
+  const strategyHighlights = React.useMemo(() => {
+    const raw = opsMetrics?.strategy?.conditions
+      || opsMetrics?.strategy?.signals
+      || opsMetrics?.strategy?.highlights;
+    if (Array.isArray(raw)) {
+      return raw.slice(0, 6).map((item: any, idx: number) => ({
+        key: String(item?.id ?? idx),
+        label: typeof item === 'string' ? item : item?.label ?? item?.title ?? 'Signal',
+        detail: typeof item === 'string' ? undefined : item?.detail ?? item?.value,
+      }));
+    }
+    if (raw && typeof raw === 'object') {
+      return Object.entries(raw).slice(0, 6).map(([key, value]) => ({
+        key,
+        label: key,
+        detail: typeof value === 'object' ? JSON.stringify(value) : String(value ?? '—'),
+      }));
+    }
+    return [] as Array<{ key: string; label: string; detail?: string }>;
+  }, [opsMetrics]);
 
   return (
     <Space direction='vertical' size={24} style={{ width: '100%' }}>
