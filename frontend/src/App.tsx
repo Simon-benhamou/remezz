@@ -63,30 +63,6 @@ function AuthenticatedApp() {
     setBalanceModalOpen(true);
   }, []);
 
-  const paperBalance = overview?.paperBalance;
-  const liveBalance = overview?.exchangeBalance;
-  const balanceValue = mode === 'live'
-    ? Number(liveBalance?.totalUsd ?? 0)
-    : Number(paperBalance?.equityUsd ?? paperBalance?.balanceUsd ?? 0);
-  const freeValue = mode === 'live'
-    ? Number(liveBalance?.freeUsd ?? 0)
-    : Number(paperBalance?.freeUsd ?? 0);
-  const formattedBalance = `$${balanceValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-  const formattedFree = `$${freeValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-  const balanceSubtitle = mode === 'live' ? 'Live exchange equity' : 'Paper equity';
-  const freeSubtitle = mode === 'live' ? 'Free balance' : 'Available';
-  const roiValue = Number(overview?.roiPct ?? 0);
-  const pnlValue = Number(overview?.pnlUsd ?? 0);
-  const activeAgents = overview?.activeCount ?? 0;
-  const marketCoverage = Array.isArray(overview?.symbols) ? overview.symbols.length : 0;
-
-  const handleBalanceUpdated = React.useCallback(() => {
-    void loadOverview(true);
-  }, [loadOverview]);
-
-  const handleBalanceClick = React.useCallback(() => {
-    setBalanceModalOpen(true);
-  }, []);
 
   const menuItems = [
     { key: '/operations', label: 'Control', icon: <Activity /> },
