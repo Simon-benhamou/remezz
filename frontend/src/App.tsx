@@ -15,6 +15,7 @@ import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
 import { useAppStore } from './store';
+import { Activity, Bot, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
 
 const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/operations') || pathname.startsWith('/mission-control')) return '/operations';
@@ -28,34 +29,12 @@ const resolveActiveMenuKey = (pathname: string) => {
 
 const { Header, Content, Footer } = Layout;
 
-function AppInner() {
+function AuthenticatedApp() {
   const navigate = useNavigate();
   const location = useLocation();
-
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const { mode, setMode, setInitialized, isInitialized } = useAppStore();
+  const { mode, setMode } = useAppStore();
   const { overview, loadOverview } = useDashboard();
   const [balanceModalOpen, setBalanceModalOpen] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!isInitialized) {
-      setInitialized(true);
-    }
-  }, [isInitialized, setInitialized]);
-
-  if (authLoading || !isInitialized) {
-    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: '#60a5fa' }}>Loading…</div>;
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <Routes>
-        <Route path='/login' element={<LoginPage />} />
-        <Route path='/register' element={<RegisterPage />} />
-        <Route path='*' element={<Navigate to='/login' replace />} />
-      </Routes>
-    );
-  }
 
   const activeMenuKey = resolveActiveMenuKey(location.pathname);
 
@@ -84,15 +63,41 @@ function AppInner() {
     setBalanceModalOpen(true);
   }, []);
 
+  const paperBalance = overview?.paperBalance;
+  const liveBalance = overview?.exchangeBalance;
+  const balanceValue = mode === 'live'
+    ? Number(liveBalance?.totalUsd ?? 0)
+    : Number(paperBalance?.equityUsd ?? paperBalance?.balanceUsd ?? 0);
+  const freeValue = mode === 'live'
+    ? Number(liveBalance?.freeUsd ?? 0)
+    : Number(paperBalance?.freeUsd ?? 0);
+  const formattedBalance = `$${balanceValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const formattedFree = `$${freeValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const balanceSubtitle = mode === 'live' ? 'Live exchange equity' : 'Paper equity';
+  const freeSubtitle = mode === 'live' ? 'Free balance' : 'Available';
+  const roiValue = Number(overview?.roiPct ?? 0);
+  const pnlValue = Number(overview?.pnlUsd ?? 0);
+  const activeAgents = overview?.activeCount ?? 0;
+  const marketCoverage = Array.isArray(overview?.symbols) ? overview.symbols.length : 0;
+
+  const handleBalanceUpdated = React.useCallback(() => {
+    void loadOverview(true);
+  }, [loadOverview]);
+
+  const handleBalanceClick = React.useCallback(() => {
+    setBalanceModalOpen(true);
+  }, []);
+
   const menuItems = [
-    { key: '/operations', label: 'Operations', icon: <AreaChartOutlined /> },
-    { key: '/agents', label: 'Agents', icon: <ControlOutlined /> },
-    { key: '/ledger', label: 'Execution Ledger', icon: <ReadOutlined /> },
-    { key: '/intelligence', label: 'Intelligence', icon: <BulbOutlined /> },
-    { key: '/backlog', label: 'Activity Feed', icon: <WarningOutlined /> },
+    { key: '/operations', label: 'Control', icon: <Activity /> },
+    { key: '/agents', label: 'Agents', icon: <Bot /> },
+    { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
+    { key: '/intelligence', label: 'Intelligence', icon: <Lightbulb /> },
+    { key: '/backlog', label: 'Feed Info', icon: <Radio /> },
   ];
 
   return (
+    
     <Layout
       style={{
         minHeight: '100vh',
@@ -114,33 +119,28 @@ function AppInner() {
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '24px 18px',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
-            marginBottom: 12,
+            gap: 8,
+            padding: '24px 20px',
+            borderBottom: '1px solid rgba(148, 163, 184, 0.12)'
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 12,
-                background: 'linear-gradient(135deg, #38bdf8 0%, #6366f1 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#0f172a',
-                fontSize: 16,
-                fontWeight: 700,
-              }}
-            >
-              Q
-            </div>
-            <div>
-              <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>QuantAI</div>
-              <div style={{ color: '#60a5fa', fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.6 }}>Labs</div>
-            </div>
+          <div style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ffffff',
+            fontSize: 14,
+            fontWeight: 600
+          }}>
+           <Zap className='w-5 h-5' />
+          </div>
+          <div>
+            <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>QuantAI</div>
+            <div style={{ color: '#60a5fa', fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.6 }}>Labs</div>
           </div>
         </div>
         <Menu
@@ -299,6 +299,43 @@ function AppInner() {
       </Layout>
     </Layout>
   );
+}
+
+function AppInner() {
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { setInitialized, isInitialized } = useAppStore();
+
+  React.useEffect(() => {
+    if (!isInitialized) {
+      setInitialized(true);
+    }
+  }, [isInitialized, setInitialized]);
+
+  if (authLoading || !isInitialized) {
+    return (
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh', 
+        color: '#60a5fa' 
+      }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <Routes>
+        <Route path='/login' element={<LoginPage />} />
+        <Route path='/register' element={<RegisterPage />} />
+        <Route path='*' element={<Navigate to='/login' replace />} />
+      </Routes>
+    );
+  }
+
+  return <AuthenticatedApp />;
 }
 
 export default function App() {
