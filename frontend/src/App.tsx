@@ -212,14 +212,7 @@ function AuthenticatedApp() {
                 </div>
                 <div style={{ color: '#f8fafc', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>{activeAgents}</div>
               </div>
-              {marketCoverage > 0 && (
-                <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 80, display: 'grid', rowGap: 2 }}>
-                  <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                    Markets
-                  </div>
-                  <div style={{ color: '#f8fafc', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>{marketCoverage}</div>
-                </div>
-              )}
+          
             </div>
           </div>
           <Space size={18} align='center'>

@@ -35,7 +35,7 @@ import {
   Key,
   Lightbulb,
   LineChart,
-  LoaderCircle,
+  Loader2,
   Lock,
   LogOut,
   Mail,
@@ -89,7 +89,7 @@ export { Zap as ThunderboltOutlined };
 export { Wrench as ToolOutlined };
 export { Bell as BellOutlined };
 export { Bug as BugOutlined };
-export const LoadingOutlined = withClassName(LoaderCircle, 'lucide-spin');
+export const LoadingOutlined = withClassName(Loader2, 'lucide-spin');
 export { ArrowLeftRight as SwapOutlined };
 export { History as HistoryOutlined };
 export { Crosshair as AimOutlined };

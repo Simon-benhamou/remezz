@@ -1,6 +1,6 @@
 import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography, Tooltip, Select, message, theme, Drawer, Empty, List, Statistic } from 'antd';
+import { Row, Col, Space, Tag, Card, Skeleton, Alert, Button, Typography, Tooltip, Select, message, Drawer, Empty, List, Statistic, Segmented, Progress, theme } from 'antd';
 import { ReloadOutlined, ExpandOutlined, CompressOutlined, SyncOutlined, InfoCircleOutlined } from '../icons';
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
@@ -27,6 +27,27 @@ enum LoadingPhase {
   SECONDARY_DATA = 'secondary_data',
   COMPLETE = 'complete'
 }
+
+const OPEN_ORDER_STATUSES = new Set([
+  'new',
+  'open',
+  'working',
+  'pending',
+  'accepted',
+  'partially_filled',
+]);
+
+const formatUsd = (value: any, digits = 2) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  return `$${num.toFixed(digits)}`;
+};
+
+const formatPercent = (value: any, digits = 1) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  return `${num >= 0 ? '+' : ''}${num.toFixed(digits)}%`;
+};
 
 type LoadingState = {
   phase: LoadingPhase;
@@ -66,6 +87,7 @@ export default function SessionCockpitPage(){
   const [kpi, setKpi] = React.useState<any>(null);
   const [orders, setOrders] = React.useState<any[]>([]);
   const [trades, setTrades] = React.useState<any[]>([]);
+  const [ordersView, setOrdersView] = React.useState<'trades' | 'orders'>('trades');
   
   // Tertiary data states (Phase 3)
   const [alerts, setAlerts] = React.useState<any[]>([]);
@@ -74,12 +96,50 @@ export default function SessionCockpitPage(){
   const [refreshing, setRefreshing] = React.useState(false);
   const [marginHealth, setMarginHealth] = React.useState<any>(null);
 
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+  const activeOrders = React.useMemo(
+    () =>
+      (orders || []).filter((order: any) =>
+        OPEN_ORDER_STATUSES.has(String(order?.status || '').toLowerCase())
+      ),
+    [orders]
+  );
   const currentAggressiveness = React.useMemo(() => {
     const runtime = (agent as any)?.profile?.aggressiveness;
     const persisted = (status?.session as any)?.profileJson?.aggressiveness;
     return (runtime || persisted || 'reactive') as 'conservative'|'reactive'|'aggressive';
   }, [agent, status]);
+  const statusSummary = React.useMemo(() => {
+    const items: Array<{ label: string; value: string }> = [
+      {
+        label: 'Mode',
+        value: status?.session?.mode ? String(status.session.mode).toUpperCase() : '—',
+      },
+      {
+        label: 'Agent state',
+        value: agent?.state || status?.session?.state || '—',
+      },
+      {
+        label: 'Aggressiveness',
+        value: currentAggressiveness ? currentAggressiveness.toUpperCase() : '—',
+      },
+    ];
+    const allocated = status?.session?.allocatedUsd ?? agent?.profile?.allocatedUsd;
+    if (Number.isFinite(Number(allocated))) {
+      items.push({ label: 'Allocated', value: formatUsd(allocated) });
+    }
+    const available = agent?.profile?.availableUsd ?? agent?.balance?.freeUsd;
+    if (Number.isFinite(Number(available))) {
+      items.push({ label: 'Available', value: formatUsd(available) });
+    }
+    const todaysPnl = kpi?.today?.netPnlUsd ?? kpi?.today?.pnlUsd ?? kpi?.netPnlUsd ?? kpi?.pnlUsd;
+    if (Number.isFinite(Number(todaysPnl))) {
+      items.push({ label: 'Daily PnL', value: formatUsd(todaysPnl) });
+    }
+    return items;
+  }, [status?.session, agent, currentAggressiveness, kpi]);
+
+  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
+
 
   const handleAggressivenessChange = async (val: 'conservative'|'reactive'|'aggressive') => {
     if (!status?.session?.id) return;
@@ -790,110 +850,135 @@ export default function SessionCockpitPage(){
           </Row>
         </Card>
 
-        <Card className="session-section-card" bordered={false} bodyStyle={{ padding: 0 }}>
-          {shouldShowContent(LoadingPhase.CORE_DATA) ? (
-            <div className="session-chart-card">
-              <PriceChart
-                symbol={status?.symbol}
-                price={status?.price}
-                support={status?.sr?.support}
-                resistance={status?.sr?.resistance}
-                agentPlan={agent?.plan}
-                agentPos={agent?.pos}
-                pivots={status?.pivots}
-                agentExit={agent?.exit}
-                orders={orders}
-                trades={trades}
-                projection={analysis?.projection}
-              />
-            </div>
-          ) : (
-            <Card bordered={false} style={{ margin: 0, borderRadius: 0 }}>
-              <Skeleton active paragraph={{ rows: 8 }} />
-            </Card>
-          )}
-        </Card>
-
-        <Row gutter={[24, 24]}>
-          <Col xs={24} lg={16}>
-            <Space direction="vertical" size={24} style={{ width: '100%' }}>
-              <Card title="Agent strategy" bordered={false} className="session-section-card">
-                {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                  <StrategyPanel strategy={strategy} />
-                ) : (
-                  <Skeleton active paragraph={{ rows: 6 }} />
-                )}
-              </Card>
-              <Card title="Agent diagnostics" bordered={false} className="session-section-card">
-                {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
-                  <AgentStatePanel
-                    agent={agent}
+        <Row gutter={[24, 24]} className="session-grid">
+          <Col xs={24} xl={16}>
+            <Card className="session-section-card session-section-card--flush" bordered={false} bodyStyle={{ padding: 0 }}>
+              {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+                <div className="session-chart-card">
+                  <PriceChart
                     symbol={status?.symbol}
-                    lastPrice={status?.price}
-                    sessionId={status?.session?.id}
-                    margin={marginHealth?.snapshots?.[0]}
-                    marginHistory={marginHealth?.snapshots}
-                    onPlan={() => {}}
+                    price={status?.price}
+                    support={status?.sr?.support}
+                    resistance={status?.sr?.resistance}
+                    agentPlan={agent?.plan}
+                    agentPos={agent?.pos}
+                    pivots={status?.pivots}
+                    agentExit={agent?.exit}
+                    orders={orders}
+                    trades={trades}
+                    projection={analysis?.projection}
                   />
-                ) : (
-                  <Skeleton active paragraph={{ rows: 5 }} />
-                )}
-              </Card>
-              <Card title="Performance" bordered={false} className="session-section-card">
+                </div>
+              ) : (
+                <Skeleton active paragraph={{ rows: 10 }} />
+              )}
+            </Card>
+          </Col>
+          <Col xs={24} xl={8}>
+            <Space direction="vertical" size={24} style={{ width: '100%' }}>
+              <Card title="Performance metrics" bordered={false} className="session-section-card">
                 {shouldShowContent(LoadingPhase.SECONDARY_DATA) && status?.session?.id ? (
                   <PerfBreakdownPanel sessionId={status?.session?.id} api={api} />
                 ) : (
                   <Skeleton active paragraph={{ rows: 8 }} />
                 )}
               </Card>
+              <Card title="Agent status" bordered={false} className="session-section-card">
+                {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+                  <div className="session-status-card">
+                    <div className="session-status-card__primary">
+                      <Tag color={agent?.state === 'ARMED' ? 'green' : agent?.state === 'MANAGE' ? 'blue' : agent?.state === 'COOLDOWN' ? 'orange' : 'red'}>
+                        {(agent?.state || status?.session?.state || 'UNKNOWN').toUpperCase()}
+                      </Tag>
+                      <span>{status?.symbol || '—'}</span>
+                    </div>
+                    <div className="session-status-card__grid">
+                      {statusSummary.map((item) => (
+                        <div key={item.label} className="session-status-card__metric">
+                          <span>{item.label}</span>
+                          <strong>{item.value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <Skeleton active paragraph={{ rows: 5 }} />
+                )}
+              </Card>
             </Space>
           </Col>
-          <Col xs={24} lg={8}>
-            <Space direction="vertical" size={24} style={{ width: '100%' }}>
-              <Card title="Market snapshot" bordered={false} className="session-section-card">
-                {shouldShowContent(LoadingPhase.CORE_DATA) ? (
-                  <LiveMetrics
-                    symbol={status?.symbol}
-                    price={status?.price}
-                    ticker={ticker}
-                    lastUpdate={ticker?.lastUpdate || (ticker?.timestamp ? new Date(ticker.timestamp).toISOString() : undefined)}
-                    status={tickerStatus}
-                    errorMessage={tickerError || undefined}
-                  />
-                ) : (
-                  <Skeleton active paragraph={{ rows: 4 }} />
-                )}
-              </Card>
-              <Card title="Orders & trades" bordered={false} className="session-section-card">
-                {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                  <Tabs
-                    defaultActiveKey="orders"
-                    items={[
-                      {
-                        key: 'orders',
-                        label: `Orders (${orders.length})`,
-                        children: (
-                          <div style={{ marginTop: 8 }}>
-                            <MemoOrdersTable rows={orders} />
-                          </div>
-                        ),
-                      },
-                      {
-                        key: 'trades',
-                        label: `Trades (${trades.length})`,
-                        children: (
-                          <div style={{ marginTop: 8 }}>
-                            <MemoTradesTable rows={trades} />
-                          </div>
-                        ),
-                      },
+        </Row>
+
+        <Row gutter={[24, 24]}>
+          <Col xs={24} xl={12}>
+            <Card title="Strategy analysis" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                <StrategyPanel strategy={strategy} />
+              ) : (
+                <Skeleton active paragraph={{ rows: 6 }} />
+              )}
+            </Card>
+          </Col>
+          <Col xs={24} xl={12}>
+            <Card title="Agent diagnostics" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
+                <AgentStatePanel
+                  agent={agent}
+                  symbol={status?.symbol}
+                  lastPrice={status?.price}
+                  sessionId={status?.session?.id}
+                  margin={marginHealth?.snapshots?.[0]}
+                  marginHistory={marginHealth?.snapshots}
+                />
+              ) : (
+                <Skeleton active paragraph={{ rows: 6 }} />
+              )}
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[24, 24]}>
+          <Col xs={24} xl={12}>
+            <Card title="Market snapshot" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+                <LiveMetrics
+                  symbol={status?.symbol}
+                  price={status?.price}
+                  ticker={ticker}
+                  lastUpdate={ticker?.lastUpdate || (ticker?.timestamp ? new Date(ticker.timestamp).toISOString() : undefined)}
+                  status={tickerStatus}
+                  errorMessage={tickerError || undefined}
+                />
+              ) : (
+                <Skeleton active paragraph={{ rows: 4 }} />
+              )}
+            </Card>
+          </Col>
+          <Col xs={24} xl={12}>
+            <Card title="Orders & trades" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                <div className="session-trade-card">
+                  <Segmented
+                    value={ordersView}
+                    onChange={(value) => setOrdersView(value as 'trades' | 'orders')}
+                    options={[
+                      { label: `Recent trades (${trades.length})`, value: 'trades' },
+                      { label: `Active orders (${activeOrders.length})`, value: 'orders' },
                     ]}
+                    className="session-trade-card__toggle"
                   />
-                ) : (
-                  <Skeleton active paragraph={{ rows: 6 }} />
-                )}
-              </Card>
-            </Space>
+                  <div className="session-trade-card__table">
+                    {ordersView === 'trades' ? (
+                      <MemoTradesTable rows={trades} />
+                    ) : (
+                      <MemoOrdersTable rows={activeOrders} />
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <Skeleton active paragraph={{ rows: 6 }} />
+              )}
+            </Card>
           </Col>
         </Row>
       </Space>

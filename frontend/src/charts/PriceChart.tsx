@@ -88,20 +88,23 @@ export default function PriceChart({
     if (!ref.current) return;
     const chart = createChart(ref.current, {
       height: 360,
-      layout:{ textColor:'#1e293b', background:{ type: ColorType.Solid, color: 'white' } },
+      layout: {
+        textColor: '#94a3b8',
+        background: { type: ColorType.Solid, color: '#0b1326' },
+      },
       grid: {
-        vertLines: { color: '#e2e8f0', style: LineStyle.Solid },
-        horzLines: { color: '#e2e8f0', style: LineStyle.Solid },
+        vertLines: { color: 'rgba(148, 163, 184, 0.16)', style: LineStyle.Solid },
+        horzLines: { color: 'rgba(148, 163, 184, 0.12)', style: LineStyle.Solid },
       },
       crosshair: {
         mode: 0,
-        vertLine: { color: '#94a3b8', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
-        horzLine: { color: '#94a3b8', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
+        vertLine: { color: 'rgba(148, 163, 184, 0.45)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
+        horzLine: { color: 'rgba(148, 163, 184, 0.45)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
       },
       localization: {
         priceFormatter: (value: number) => value.toFixed(4),
       },
-      rightPriceScale: { borderVisible: false },
+      rightPriceScale: { borderVisible: false, textColor: '#cbd5f5' },
       timeScale: {
         borderVisible: false,
         rightOffset: 12, // Add space on the right for live updates
@@ -111,6 +114,7 @@ export default function PriceChart({
     const line = chart.addLineSeries({ 
       priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
       lineWidth: 2, // Make line thicker for better visibility
+      color: '#60a5fa',
     });
     const trailSeries = chart.addLineSeries({
       priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
@@ -130,7 +134,7 @@ export default function PriceChart({
     pnlOverlay.style.right = '0';
     pnlOverlay.style.pointerEvents = 'none';
     pnlOverlay.style.display = 'none';
-    pnlOverlay.style.background = 'rgba(39, 174, 96, 0.10)';
+    pnlOverlay.style.background = 'rgba(16, 185, 129, 0.12)';
     pnlOverlay.style.zIndex = '1';
     pnlOverlay.style.overflow = 'hidden'; // Prevent overflow
     pnlOverlay.style.maxHeight = '360px'; // Match chart height
@@ -141,7 +145,7 @@ export default function PriceChart({
     overlay.style.left = '0';
     overlay.style.right = '0';
     overlay.style.pointerEvents = 'none';
-    overlay.style.background = 'rgba(30,144,255,0.06)';
+    overlay.style.background = 'rgba(37, 99, 235, 0.10)';
     overlay.style.display = 'none';
     overlay.style.zIndex = '2';
     overlay.style.overflow = 'hidden'; // Prevent overflow
@@ -152,8 +156,8 @@ export default function PriceChart({
     tooltip.style.top = '16px';
     tooltip.style.padding = '8px 12px';
     tooltip.style.borderRadius = '8px';
-    tooltip.style.background = 'rgba(15, 23, 42, 0.78)';
-    tooltip.style.color = '#fff';
+    tooltip.style.background = 'rgba(8, 15, 35, 0.9)';
+    tooltip.style.color = '#e2e8f0';
     tooltip.style.fontSize = '12px';
     tooltip.style.lineHeight = '1.4';
     tooltip.style.pointerEvents = 'none';

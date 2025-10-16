@@ -1,121 +1,161 @@
-import React from "react";
-import { Card, Descriptions, Empty, Tooltip } from "antd";
-export default function StrategyPanel({ strategy }: any) {
-  if (!strategy)
+import React from 'react';
+import { Empty, Tag } from 'antd';
+
+const formatNumber = (value: any, opts: Intl.NumberFormatOptions = { minimumFractionDigits: 2, maximumFractionDigits: 2 }) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  return num.toLocaleString(undefined, opts);
+};
+
+const formatPercent = (value: any) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  return `${num >= 0 ? '+' : ''}${num.toFixed(1)}%`;
+};
+
+const resolveConfidence = (confidence?: number) => {
+  if (confidence == null) return '—';
+  return confidence > 1 ? `${confidence.toFixed(0)}%` : `${(confidence * 100).toFixed(0)}%`;
+};
+
+const biasMeta = (bias?: string) => {
+  const normalized = String(bias || '').toLowerCase();
+  if (normalized === 'long' || normalized === 'bullish') {
+    return { label: 'Bullish', tone: 'success', emoji: '📈' };
+  }
+  if (normalized === 'short' || normalized === 'bearish') {
+    return { label: 'Bearish', tone: 'error', emoji: '📉' };
+  }
+  return { label: 'Neutral', tone: 'default', emoji: '⚖️' };
+};
+
+type StrategyPanelProps = {
+  strategy?: any;
+};
+
+export default function StrategyPanel({ strategy }: StrategyPanelProps) {
+  if (!strategy) {
     return (
-      <Card title="Strategy">
-        <Empty description="No strategy" />
-      </Card>
+      <div className='strategy-panel strategy-panel--empty'>
+        <Empty description="No active strategy plan" />
+      </div>
     );
-  const s = strategy;
-  const bias = String(s.bias || '').toLowerCase();
-  const color = bias==='long'? 'green' : bias==='short'? 'red' : 'default';
+  }
+
+  const bias = biasMeta(strategy.bias);
+  const entryMin = Number(strategy.entry?.zone?.min);
+  const entryMax = Number(strategy.entry?.zone?.max);
+  const entryMid = Number.isFinite(Number(strategy.entry?.price))
+    ? Number(strategy.entry.price)
+    : Number.isFinite(entryMin) && Number.isFinite(entryMax)
+      ? (entryMin + entryMax) / 2
+      : null;
+
+  const strategyInfo = [
+    { label: 'Bias', value: bias.label },
+    { label: 'Confidence', value: resolveConfidence(strategy.confidence) },
+    { label: 'Score', value: strategy.score != null ? strategy.score.toFixed(1) : '—' },
+    { label: 'Target R', value: strategy.targetR != null ? strategy.targetR.toFixed(1) : '—' },
+    { label: 'Valid from', value: strategy.validity?.from ? new Date(strategy.validity.from).toLocaleString() : '—' },
+    { label: 'Valid to', value: strategy.validity?.to ? new Date(strategy.validity.to).toLocaleString() : '—' },
+  ];
+
+  const riskInfo = [
+    {
+      label: 'Entry zone',
+      value:
+        Number.isFinite(entryMin) && Number.isFinite(entryMax)
+          ? `$${formatNumber(entryMin)} → $${formatNumber(entryMax)}`
+          : entryMid != null
+            ? `$${formatNumber(entryMid)}`
+            : '—',
+    },
+    {
+      label: 'Stop loss',
+      value:
+        strategy.risk?.stop?.value != null
+          ? strategy.risk?.stop?.type === 'percent'
+            ? formatPercent(strategy.risk.stop.value)
+            : `$${formatNumber(strategy.risk.stop.value)}`
+          : '—',
+    },
+    {
+      label: 'Take profit',
+      value:
+        strategy.risk?.target?.value != null
+          ? strategy.risk?.target?.type === 'percent'
+            ? formatPercent(strategy.risk.target.value)
+            : `$${formatNumber(strategy.risk.target.value)}`
+          : '—',
+    },
+    {
+      label: 'Risk / reward',
+      value:
+        strategy.opportunity?.riskReward != null
+          ? `${strategy.opportunity.riskReward.toFixed(2)}`
+          : strategy.risk?.rewardMultiple
+            ? strategy.risk.rewardMultiple.toFixed(2)
+            : '—',
+    },
+  ];
+
+  const signals: string[] =
+    (Array.isArray(strategy.signals) && strategy.signals) ||
+    (Array.isArray(strategy.reasons) && strategy.reasons) ||
+    (Array.isArray(strategy.reasoning?.signals) && strategy.reasoning.signals) ||
+    (typeof strategy.rationale === 'string' ? [strategy.rationale] : []);
+
   return (
-    <Card title={
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <span>Strategy (active)</span>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '6px 12px',
-          borderRadius: '8px',
-          background: color === 'green' 
-            ? 'linear-gradient(135deg, #f6ffed 0%, #d9f7be 100%)' 
-            : color === 'red' 
-              ? 'linear-gradient(135deg, #fff2e8 0%, #ffbb96 100%)'
-              : '#f0f0f0',
-          border: `2px solid ${color === 'green' ? '#52c41a' : color === 'red' ? '#ff7875' : '#d9d9d9'}`,
-          fontSize: '14px',
-          fontWeight: 'bold'
-        }}>
-          <span style={{
-            fontSize: '16px'
-          }}>
-            {bias === 'long' ? '📈' : bias === 'short' ? '📉' : '⚖️'}
-          </span>
-          <span style={{
-            color: color === 'green' ? '#389e0d' : color === 'red' ? '#cf1322' : '#666'
-          }}>
-            {(s.bias || 'NEUTRAL').toUpperCase()}
-          </span>
+    <div className='strategy-panel'>
+      <div className='strategy-panel__header'>
+        <div className='strategy-panel__title'>
+          <span className='strategy-panel__icon'>{bias.emoji}</span>
+          <div>
+            <div className='strategy-panel__name'>{strategy?.name || strategy?.label || 'Strategy insights'}</div>
+            <div className='strategy-panel__subtitle'>
+              {strategy?.symbol || '—'} · {(strategy?.type || strategy?.category || 'Momentum').toString()}
+            </div>
+          </div>
+        </div>
+        <Tag color={bias.tone === 'success' ? 'green' : bias.tone === 'error' ? 'red' : 'default'} className='strategy-panel__bias'>
+          {bias.label.toUpperCase()}
+        </Tag>
+      </div>
+
+      <div className='strategy-panel__section'>
+        <div className='strategy-panel__section-title'>Plan overview</div>
+        <div className='strategy-panel__grid'>
+          {strategyInfo.map((item) => (
+            <div key={item.label} className='strategy-panel__metric'>
+              <span className='strategy-panel__metric-label'>{item.label}</span>
+              <span className='strategy-panel__metric-value'>{item.value}</span>
+            </div>
+          ))}
         </div>
       </div>
-    }>
-      
-      {/* Strategy Bias Explanation */}
-      {s.bias && (
-        <div style={{
-          background: color === 'green' 
-            ? 'rgba(82, 196, 26, 0.1)' 
-            : color === 'red' 
-              ? 'rgba(255, 77, 79, 0.1)'
-              : 'rgba(0,0,0,0.05)',
-          padding: '8px 12px',
-          borderRadius: '6px',
-          marginBottom: '16px',
-          fontSize: '12px',
-          fontStyle: 'italic',
-          color: '#666'
-        }}>
-          {bias === 'long' 
-            ? '🎯 Agent recherche des opportunités d\'ACHAT (rebonds sur support, breakouts haussiers)'
-            : bias === 'short'
-              ? '🎯 Agent recherche des opportunités de VENTE (rejections sur résistance, breakouts baissiers)'
-              : '🎯 Agent en attente de signal directionnel clair'
-          }
+
+      <div className='strategy-panel__section'>
+        <div className='strategy-panel__section-title'>Risk controls</div>
+        <div className='strategy-panel__grid'>
+          {riskInfo.map((item) => (
+            <div key={item.label} className='strategy-panel__metric'>
+              <span className='strategy-panel__metric-label'>{item.label}</span>
+              <span className='strategy-panel__metric-value'>{item.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {signals.length > 0 && (
+        <div className='strategy-panel__section'>
+          <div className='strategy-panel__section-title'>Active signals</div>
+          <ul className='strategy-panel__signals'>
+            {signals.map((signal, index) => (
+              <li key={`${signal}-${index}`}>{signal}</li>
+            ))}
+          </ul>
         </div>
       )}
-      
-      <Descriptions column={1} size="small" bordered>
-        <Descriptions.Item label={<Tooltip title="Strategy identifier">ID</Tooltip>}>{s.id || s.strategyId}</Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="Trading pair">Symbol</Tooltip>}>{s.symbol}</Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="Direction: long = buy pullback/rebound, short = sell rejection">Bias</Tooltip>}>{s.bias}</Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="How confident the model is (0–1)">Confidence</Tooltip>}>
-          {s.confidence ?? "-"}
-        </Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="Planned entry price or zone bounds">Entry</Tooltip>}>
-          {s.entry?.price ??
-            `${s.entry?.zone?.min ?? "-"} → ${s.entry?.zone?.max ?? "-"}`}
-        </Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="Stop loss level or %">SL</Tooltip>}>
-          {s.risk?.stop?.value}
-          {s.risk?.stop?.type === "percent" ? "%" : ""}
-        </Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="Take profit level or %">TP</Tooltip>}>
-          {s.risk?.target?.value}
-          {s.risk?.target?.type === "percent" ? "%" : ""}
-        </Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="Maximum leverage allowed for this plan">Max leverage</Tooltip>}>
-          {s.risk?.max_leverage}
-        </Descriptions.Item>
-        <Descriptions.Item label={<Tooltip title="Time window when the plan is valid">Validity</Tooltip>}>
-          {s.validity?.from || "-"} → {s.validity?.to || "-"}
-        </Descriptions.Item>
-        <Descriptions.Item label="Trigger">
-          {s.trigger || "-"}
-        </Descriptions.Item>
-        {s.rationale && (
-          <Descriptions.Item label={<Tooltip title="Why the strategy chose this setup">Rationale</Tooltip>}>
-            {s.rationale}
-          </Descriptions.Item>
-        )}
-      </Descriptions>
-      {strategy?.levels && (
-        <div style={{ marginTop: 8 }}>
-          <b>Targets:</b>&nbsp; Entry mid:{" "}
-          {strategy.entry?.price ?? (
-            (() => {
-              const mn = Number(strategy.entry?.zone?.min ?? 0);
-              const mx = Number(strategy.entry?.zone?.max ?? 0);
-              const mid = (mn + mx) / 2;
-              return isFinite(mid) && mid > 0 ? mid.toFixed(4) : '-';
-            })()
-          )}{" "}
-          &nbsp;|&nbsp; SL: {strategy.levels?.stopPrice?.toFixed?.(4)}{" "}
-          &nbsp;|&nbsp; TP: {strategy.levels?.takeProfitPrice?.toFixed?.(4)}
-        </div>
-      )}
-    </Card>
+    </div>
   );
 }
