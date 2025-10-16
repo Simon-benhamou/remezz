@@ -1,4 +1,7 @@
+import type { RegimeDiagnostics } from '../diagnostics/regime.js';
+
 const triggerOverrides = new Map<string, { rate: number; expiresAt: number | null }>();
+const regimeStore = new Map<string, { diagnostics: RegimeDiagnostics; updatedAt: number }>();
 
 export function setTriggerSampleRate(symbol: string, rate: number, ttlMs = 60 * 60 * 1000): void {
   const clamped = Math.max(0, Math.min(1, rate));
@@ -23,5 +26,23 @@ export function getTriggerSampleRate(symbol: string, fallback: number): number {
 
 export function clearTriggerOverride(symbol?: string): void {
   if (symbol) triggerOverrides.delete(symbol); else triggerOverrides.clear();
+}
+
+export function setRegimeDiagnostics(symbol: string, diagnostics: RegimeDiagnostics): void {
+  regimeStore.set(symbol, { diagnostics, updatedAt: Date.now() });
+}
+
+export function getRegimeDiagnostics(symbol: string, maxAgeMs = 5 * 60 * 1000): RegimeDiagnostics | null {
+  const entry = regimeStore.get(symbol);
+  if (!entry) return null;
+  if (maxAgeMs > 0 && Date.now() - entry.updatedAt > maxAgeMs) {
+    regimeStore.delete(symbol);
+    return null;
+  }
+  return entry.diagnostics;
+}
+
+export function clearRegimeDiagnostics(symbol?: string): void {
+  if (symbol) regimeStore.delete(symbol); else regimeStore.clear();
 }
 
