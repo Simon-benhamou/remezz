@@ -81,8 +81,10 @@ export async function getSessionPerformanceMetrics(
     if (!sessionId) continue;
     const metrics = metricsBySession.get(sessionId);
     if (!metrics) continue;
-    metrics.realizedPnlUsd += Number(fill?.realizedPnl ?? 0);
-    metrics.feesUsd += Number(fill?.fee ?? 0);
+    const net = Number(fill?.realizedPnl ?? 0);
+    const fee = Number(fill?.fee ?? 0);
+    metrics.realizedPnlUsd += net + fee;
+    metrics.feesUsd += fee;
     const orderKey = `${sessionId}:${fill.orderId}`;
     if (!countedOrders.has(orderKey)) {
       countedOrders.add(orderKey);

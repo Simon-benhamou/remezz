@@ -111,6 +111,7 @@ export type ActivePosition = {
   openLeverage?: number;
   equityAtEntryUsd?: number | null;
   accountSnapshot?: AccountSnapshot | null;
+  entryFeePerUnit?: number;
 };
 
 export type ProtectiveSnapshot = {

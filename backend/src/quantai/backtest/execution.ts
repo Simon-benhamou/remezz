@@ -25,3 +25,19 @@ export function applyFeesAndSlippage(
   }
   return price * (1 - totalBps);
 }
+
+export function calculateFeeUsd(
+  price: number,
+  qty: number,
+  cfg: QuantAIFeesConfig,
+  options: FillAdjustmentOptions,
+): number {
+  if (!Number.isFinite(price) || !Number.isFinite(qty) || qty <= 0) {
+    return 0;
+  }
+  const liquidity = options.liquidity ?? 'taker';
+  const feeBps = liquidity === 'maker' ? cfg.makerFeeBps : cfg.takerFeeBps;
+  const feeRate = feeBps / BPS_DIVISOR;
+  const notional = Math.abs(price * qty);
+  return notional * feeRate;
+}
