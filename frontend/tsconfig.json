@@ -14,10 +14,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": true,
-    "paths": {
-      "lucide-react": ["./src/stubs/lucide-react.tsx"]
-    }
+    "strict": true
   },
   "include": [
     "src"

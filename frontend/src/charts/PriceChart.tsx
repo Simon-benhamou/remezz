@@ -719,7 +719,7 @@ export default function PriceChart({
     { key: 'trades', label: 'Trades' },
   ];
 
-  return <div style={{ border:'1px solid #e2e8f0', borderRadius:16, padding:16, background:'#ffffff' }}>
+  return <div style={{  borderRadius:16, padding:16, }}>
     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12, marginBottom:12 }}>
       <div>
         <div style={{ fontWeight:700, fontSize:16 }}>{symbol || '—'}</div>
