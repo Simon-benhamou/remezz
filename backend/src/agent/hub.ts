@@ -3,6 +3,7 @@ import { prisma } from '../db/client.js';
 import { PaperBroker } from '../broker/paper.js';
 import { LiveBroker } from '../broker/live.js';
 import type { Broker } from '../broker/types.js';
+import type { StrategyGuardrail } from '../services/strategyHealth.js';
 
 export type StopAllSessionResult = {
   sessionId: string;
@@ -60,6 +61,14 @@ export class AgentsHub {
     const agent = this.agents.get(sessionId);
     if (agent && typeof (agent as any).applyPortfolioAllocation === 'function') {
       (agent as any).applyPortfolioAllocation(update);
+    }
+  }
+
+  applyStrategyHealth(sessionId: string, guardrail: StrategyGuardrail | null) {
+    if (!guardrail) return;
+    const agent = this.agents.get(sessionId);
+    if (agent && typeof (agent as any).applyStrategyHealth === 'function') {
+      (agent as any).applyStrategyHealth(guardrail);
     }
   }
 

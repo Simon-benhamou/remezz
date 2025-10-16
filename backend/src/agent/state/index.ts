@@ -12,8 +12,11 @@ import { recordOpsEvent } from '../../monitor/ops.js';
 import { AdaptiveRiskResult, computeAdaptiveRisk } from '../../risk/adaptive.js';
 import type { ResolvedLeverageCap } from '../../risk/leverageCaps.js';
 import { computeQtyNotional, defaultLimits, RiskDecision } from '../../risk/manager.js';
+import { assessCorrelationLoad } from '../../risk/correlation.js';
 import { getUserCredentials } from '../../services/userCredentials.js';
 import { getAgentRecentWinRate } from '../../services/performance/winrate.js';
+import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
+import type { StrategyGuardrail } from '../../services/strategyHealth.js';
 import { getConfig, getModeParams, type AgentAggressiveness, type ModeParams } from '../../utils/env.js';
 import { clampBudgetFraction, resolveBudgetFraction } from '../../utils/budget.js';
 import { computeLeverageGuardForSymbol } from '../../utils/riskGuards.js';
@@ -56,6 +59,7 @@ import { createMomentumAwaitContext } from './types.js';
 import { applyPortfolioAllocation as applyPortfolioAllocationHelper, type PortfolioAllocationUpdate } from './portfolioAllocation.js';
 import { entryZoneMethods } from './rebound/entryZone.js';
 import { liquidityMethods } from './rebound/liquidity.js';
+import { postTradeReview } from '../../jobs/postTradeReview.js';
 
 export class ReboundRejectionAgent {
   public static readonly memeSymbols = new Set<string>([
@@ -203,6 +207,7 @@ export class ReboundRejectionAgent {
     appliedAt: number;
     expiresAt: number;
   } | null = null;
+  public strategyHealthState: { riskMultiplier: number; atrMultiplier: number; expiresAt: number; reason: string } | null = null;
   public lastConfirmationSnapshot: {
     reason: string;
     timestamp: number;
@@ -294,6 +299,22 @@ export class ReboundRejectionAgent {
     );
     if (result.updatedAt != null) {
       this.lastPortfolioAllocationUpdate = result.updatedAt;
+    }
+  }
+
+  applyStrategyHealth(guardrail: StrategyGuardrail): void {
+    const now = Date.now();
+    const boundedRisk = Math.max(0.3, Math.min(1, guardrail.riskMultiplier));
+    const boundedAtr = Math.max(1, Math.min(2.5, guardrail.atrMultiplier));
+    const lifetime = Math.max(guardrail.cooldownMs ?? 10 * 60 * 1000, 5 * 60 * 1000);
+    this.strategyHealthState = {
+      riskMultiplier: boundedRisk,
+      atrMultiplier: boundedAtr,
+      expiresAt: now + lifetime,
+      reason: guardrail.reason,
+    };
+    if (guardrail.cooldownMs && guardrail.cooldownMs > 0) {
+      this.scheduleReactivation(`strategy_health_${guardrail.reason}`, guardrail.cooldownMs);
     }
   }
 
@@ -1646,12 +1667,20 @@ export class ReboundRejectionAgent {
       }
     }
     const firstR = this.plan.rPrices?.[0]?.r ?? (tp.length > 0 ? Math.abs(tp[0] - entry) / stopForR : undefined);
-    const snapAtrPct = typeof (snap as any)?.atrPct === 'number'
+    let snapAtrPct = typeof (snap as any)?.atrPct === 'number'
       ? Number((snap as any).atrPct)
       : undefined;
     const planAtrPct = Number.isFinite(this.plan?.atrPct)
       ? Number(this.plan?.atrPct)
       : undefined;
+    let activeStrategyGuard = this.strategyHealthState;
+    if (activeStrategyGuard && activeStrategyGuard.expiresAt <= Date.now()) {
+      this.strategyHealthState = null;
+      activeStrategyGuard = null;
+    }
+    if (activeStrategyGuard && snapAtrPct != null) {
+      snapAtrPct *= activeStrategyGuard.atrMultiplier;
+    }
     const atrBaselinePct = planAtrPct ?? snapAtrPct ?? undefined;
     const spreadPercent = spreadBps != null ? Math.max(0, spreadBps / 100) : null;
     const spreadAtrRatio = spreadPercent != null && atrBaselinePct != null && atrBaselinePct > 0
@@ -2194,6 +2223,42 @@ export class ReboundRejectionAgent {
     if (regimeRisk?.sizingMultiplier != null && Number.isFinite(regimeRisk.sizingMultiplier)) {
       const clamp = Math.max(0.05, Math.min(1, regimeRisk.sizingMultiplier));
       dynamicRiskPct *= clamp;
+    }
+
+    if (activeStrategyGuard) {
+      dynamicRiskPct *= activeStrategyGuard.riskMultiplier;
+      recordOpsEvent({
+        level: 'info',
+        source: 'strategy_health_guard',
+        message: 'risk_scaled_by_strategy_health',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          multiplier: activeStrategyGuard.riskMultiplier,
+          reason: activeStrategyGuard.reason,
+        },
+      });
+    }
+
+    if (this.sessionId) {
+      try {
+        const correlation = await assessCorrelationLoad(this.sessionId, this.profile.symbol);
+        if (correlation && correlation.riskMultiplier < 0.999) {
+          dynamicRiskPct *= correlation.riskMultiplier;
+          recordOpsEvent({
+            level: 'info',
+            source: 'correlation_guard',
+            message: 'risk_scaled_by_correlation',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              multiplier: correlation.riskMultiplier,
+              baseExposureUsd: correlation.baseExposureUsd,
+              share: correlation.correlation,
+            },
+          });
+        }
+      } catch {}
     }
 
     const circuitSizeMultiplier = this.circuitBreaker.sizeMultiplier();
@@ -3264,6 +3329,20 @@ export class ReboundRejectionAgent {
       Math.abs(executionPrice - stop) || Math.abs(entry - stop) || Math.abs(this.plan.stopDistance));
     const entryFeeUsd = this.estimateFillFeeUsd(executionPrice, placed.filledQty, side);
     const entryFeePerUnit = placed.filledQty > 0 ? entryFeeUsd / placed.filledQty : 0;
+
+    try {
+      updateExecutionTelemetry(this.profile.symbol, {
+        symbol: this.profile.symbol,
+        mode: plan.mode,
+        passiveOffsetBps: plan.passiveOffsetBps ?? null,
+        slippageBps: telemetry.slippageBps ?? null,
+        fillRatio: telemetry.fillRatio ?? null,
+        latencyMs: telemetry.latencyMs ?? null,
+        fallbackTriggered: (plan.fallbacks?.length ?? 0) > 0 && (telemetry.attempts ?? 1) > 1,
+        spreadBps,
+        notionalUsd: sizingSnapshot.filledNotionalUsd ?? null,
+      });
+    } catch {}
 
     this.pos = {
       side,
@@ -9518,7 +9597,7 @@ export class ReboundRejectionAgent {
         }
 
         // Record exit in database
-        await recordExit({
+        const dbExitOrder = await recordExit({
           sessionId: this.sessionId!,
           symbol: this.profile.symbol,
           side: this.pos.side,
@@ -9535,6 +9614,15 @@ export class ReboundRejectionAgent {
           diagnostics: exitSnapshot,
           protectiveSnapshot,
         });
+
+        try {
+          await postTradeReview({
+            sessionId: this.sessionId!,
+            symbol: this.profile.symbol,
+            exitOrderId: dbExitOrder.id,
+            planStopDistance: this.plan?.stopDistance ?? null,
+          });
+        } catch {}
 
         // Update performance tracking
         const equityAfter = Number(balanceAfter?.equityUsd ?? this.lastKnownEquityUsd ?? this.profile.startBalanceUsd ?? 0);
