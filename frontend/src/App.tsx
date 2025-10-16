@@ -15,6 +15,7 @@ import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
 import { useAppStore } from './store';
+import { Activity, Bot, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
 
 const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/operations') || pathname.startsWith('/mission-control')) return '/operations';
@@ -85,11 +86,11 @@ function AppInner() {
   }, []);
 
   const menuItems = [
-    { key: '/operations', label: 'Operations', icon: <AreaChartOutlined /> },
-    { key: '/agents', label: 'Agents', icon: <ControlOutlined /> },
-    { key: '/ledger', label: 'Execution Ledger', icon: <ReadOutlined /> },
-    { key: '/intelligence', label: 'Intelligence', icon: <BulbOutlined /> },
-    { key: '/backlog', label: 'Activity Feed', icon: <WarningOutlined /> },
+    { key: '/operations', label: 'Control', icon: <Activity /> },
+    { key: '/agents', label: 'Agents', icon: <Bot /> },
+    { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
+    { key: '/intelligence', label: 'Intelligence', icon: <Lightbulb /> },
+    { key: '/backlog', label: 'Feed Info', icon: <Radio /> },
   ];
 
   return (
@@ -114,28 +115,21 @@ function AppInner() {
           style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '24px 18px',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 12,
-                background: 'linear-gradient(135deg, #38bdf8 0%, #6366f1 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#0f172a',
-                fontSize: 16,
-                fontWeight: 700,
-              }}
-            >
-              Q
+            gap: 8
+          }}>
+            <div style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+              fontSize: 14,
+              fontWeight: 600
+            }}>
+             <Zap className='w-5 h-5' />
             </div>
             <div>
               <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>QuantAI</div>
