@@ -144,11 +144,15 @@ function AuthenticatedApp() {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            gap: 24,
             background: 'rgba(8, 15, 35, 0.92)',
             borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
             boxShadow: '0 12px 25px -18px rgba(2, 6, 23, 0.8)',
-            padding: '0 28px',
-            height: 72,
+            padding: '18px 28px',
+            height: 'auto',
+            minHeight: 88,
+            lineHeight: 'normal',
+            flexWrap: 'wrap',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
