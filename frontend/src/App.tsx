@@ -74,7 +74,7 @@ function AppInner(){
     { key: '/agents', label: 'Agents', icon: <ControlOutlined /> },
     { key: '/ledger', label: 'Execution Ledger', icon: <ReadOutlined /> },
     { key: '/intelligence', label: 'Intelligence', icon: <BulbOutlined /> },
-    { key: '/backlog', label: 'Ops Feed', icon: <WarningOutlined /> },
+    { key: '/backlog', label: 'Activity Feed', icon: <WarningOutlined /> },
   ];
 
   return (
@@ -130,7 +130,7 @@ function AppInner(){
                 fontWeight: 500,
                 textTransform: 'uppercase',
                 letterSpacing: 0.5
-              }}>Alpha</div>
+              }}>Labs</div>
             </div>
           </div>
         </div>
