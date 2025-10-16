@@ -25,6 +25,9 @@ type Trade = {
 type Props = {
   trades: Trade[];
   loading?: boolean;
+  title?: string;
+  subtitle?: string;
+  tagLabel?: string;
 };
 
 type ChartPoint = {
@@ -151,6 +154,9 @@ function formatRelative(ts?: string) {
 const PerformanceOverviewCard: React.FC<Props> = ({
   trades,
   loading,
+  title,
+  subtitle,
+  tagLabel,
 }) => {
   const chartPoints = React.useMemo(() => buildChart(trades), [trades]);
   const stats = React.useMemo(() => aggregateStats(trades), [trades]);
@@ -173,15 +179,21 @@ const PerformanceOverviewCard: React.FC<Props> = ({
   const statCardBorder = isDarkTheme ? 'rgba(56, 189, 248, 0.25)' : token.colorBorderSecondary;
   const subtleSurface = isDarkTheme ? 'rgba(30, 41, 59, 0.8)' : token.colorFillQuaternary;
 
+  const headerTitle = title ?? 'Performance & utilisation';
+  const headerTag = tagLabel ?? 'Realtime';
+
   return (
     <Card
       loading={loading}
       style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg }}
       bodyStyle={{ padding: 24 }}
       title={
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: isDarkTheme ? '#f8fafc' : token.colorText }}>
-          <span>Performance & utilisation</span>
-          <Tag color='geekblue'>Realtime</Tag>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: subtitle ? 'flex-start' : 'center', color: isDarkTheme ? '#f8fafc' : token.colorText }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span>{headerTitle}</span>
+            {subtitle && <span style={{ color: mutedText, fontSize: 12 }}>{subtitle}</span>}
+          </div>
+          <Tag color='geekblue'>{headerTag}</Tag>
         </div>
       }
     >
