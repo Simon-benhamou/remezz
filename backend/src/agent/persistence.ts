@@ -203,6 +203,7 @@ export async function recordExit(params: {
   exitPrice: number;
   qty: number;
   realizedPnl?: number;
+  feeUsd?: number;
   requestedPrice?: number;
   requestedQty?: number;
   latencyMs?: number;
@@ -244,6 +245,10 @@ export async function recordExit(params: {
       source: 'agent',
     }
   });
+  const feeRounded = typeof params.feeUsd === 'number' && Number.isFinite(params.feeUsd)
+    ? Math.max(0, Math.round(params.feeUsd * 1e6) / 1e6)
+    : 0;
+
   await prisma.fill.create({
     data: {
       orderId: order.id,
@@ -251,6 +256,7 @@ export async function recordExit(params: {
       qty: params.qty,
       side: order.side,
       realizedPnl: params.realizedPnl,
+      fee: feeRounded,
       sessionId: params.sessionId,
     }
   });

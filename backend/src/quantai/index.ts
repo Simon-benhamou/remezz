@@ -6,4 +6,5 @@ export { EntryFilters } from './strategy/entryFilters.js';
 export { computeInitialBracket, maybeAdjustOrExit } from './strategy/exitManager.js';
 export type { TradeSide, ExitDirective, InitialBracket, ExitArchetype } from './strategy/exitManager.js';
 export { classifyRegime, selectMode } from './regime/regime.js';
-export { applyFeesAndSlippage } from './backtest/execution.js';
+export { applyFeesAndSlippage, calculateFeeUsd } from './backtest/execution.js';
+export type { LiquidityType } from './backtest/execution.js';

@@ -22,7 +22,8 @@ import { broadcast } from '../../ws/hub.js';
 import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, persistCircuitBreakerState } from '../persistence.js';
 import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
-import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
+import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
+import type { LiquidityType } from '../../quantai/index.js';
 import { evaluateRecognizedStrategies, RecognizedStrategySignal } from '../../quantai/strategy/recognizedStrategies.js';
 import { chooseExecutionPlan, ExecutionPlan } from '../executionPlanner.js';
 import type { EntryRelaxation } from '../../quantai/strategy/entryFilters.js';
@@ -3261,6 +3262,9 @@ export class ReboundRejectionAgent {
     sizingSnapshot.filledNotionalUsd = (placed.avgPrice ?? entry) * placed.filledQty;
     const initialStopDistance = Math.max(1e-12,
       Math.abs(executionPrice - stop) || Math.abs(entry - stop) || Math.abs(this.plan.stopDistance));
+    const entryFeeUsd = this.estimateFillFeeUsd(executionPrice, placed.filledQty, side);
+    const entryFeePerUnit = placed.filledQty > 0 ? entryFeeUsd / placed.filledQty : 0;
+
     this.pos = {
       side,
       entry: executionPrice,
@@ -3296,6 +3300,7 @@ export class ReboundRejectionAgent {
       openLeverage: effectiveLev,
       equityAtEntryUsd: this.lastKnownEquityUsd,
       accountSnapshot: sizingSnapshot,
+      entryFeePerUnit,
     };
     this.circuitBreaker.onBeforeOpen(new Date(openedAt), this.lastKnownEquityUsd);
     this.syncCircuitBreakerTelemetry();
@@ -3697,10 +3702,17 @@ export class ReboundRejectionAgent {
       });
       if (addOrder?.filledQty && addOrder.filledQty > 0) {
         const fillPrice = addOrder.avgPrice || price;
+        const prevQty = this.pos.qty;
+        const prevEntryFeePerUnit = this.resolveEntryFeePerUnit();
+        const additionalFeeUsd = this.estimateFillFeeUsd(fillPrice, addOrder.filledQty, this.pos.side);
         this.pos.qty += addOrder.filledQty;
         this.pos.addOnFilledQty = (this.pos.addOnFilledQty ?? 0) + addOrder.filledQty;
         this.pos.scaleInTriggered = true;
         this.pos.initialNotional = (this.pos.initialNotional ?? 0) + addOrder.filledQty * fillPrice;
+        const newQty = this.pos.qty;
+        const prevTotalFee = prevEntryFeePerUnit * prevQty;
+        const newTotalFee = prevTotalFee + additionalFeeUsd;
+        this.pos.entryFeePerUnit = newQty > 0 ? newTotalFee / newQty : this.pos.entryFeePerUnit;
         const trailConfig = this.pos.trailConfig;
         if (trailConfig) {
           const highWater = this.pos.side === 'buy'
@@ -9016,6 +9028,7 @@ export class ReboundRejectionAgent {
         partialInfo: null,
         initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
         archetype: restoredArchetype,
+        entryFeePerUnit: qty > 0 ? this.estimateFillFeeUsd(entry, qty, side) / qty : 0,
       };
 
       // Update agent state
@@ -9467,9 +9480,6 @@ export class ReboundRejectionAgent {
     try {
       console.log(`Exiting position: ${reason} at ${price}`);
 
-      // Calculate realized P&L
-      const realizedPnl = this.calculateRealizedPnL(price);
-
       const protectiveSnapshot: ProtectiveSnapshot = {
         slOrderId: this.pos.slOrderId || null,
         tpOrderId: this.pos.tpOrderId || null,
@@ -9488,13 +9498,17 @@ export class ReboundRejectionAgent {
       });
 
       if (exitOrder.status === 'filled' && exitOrder.filledQty && exitOrder.filledQty > 0) {
+        const exitPriceFilled = exitOrder.avgPrice || price;
+        const exitQty = Number(exitOrder.filledQty ?? this.pos.qty ?? 0);
+        const realizedPnl = this.calculateRealizedPnL(exitPriceFilled, exitQty);
+        const feesUsd = this.estimateTradeFees(exitPriceFilled, exitQty);
         const balanceAfter = await this.broker.balance().catch(() => null as BrokerMarginSnapshot | null);
         let exitSnapshot: ExitDiagnosticsPayload | null = null;
         try {
           exitSnapshot = await this.captureExitDiagnostics({
             reason,
             exitOrder,
-            exitPrice: exitOrder.avgPrice || price,
+            exitPrice: exitPriceFilled,
             realizedPnl,
             protectiveSnapshot,
             balanceAfter,
@@ -9508,9 +9522,10 @@ export class ReboundRejectionAgent {
           sessionId: this.sessionId!,
           symbol: this.profile.symbol,
           side: this.pos.side,
-          exitPrice: exitOrder.avgPrice || price,
+          exitPrice: exitPriceFilled,
           qty: exitOrder.filledQty,
           realizedPnl,
+          feeUsd: feesUsd,
           latencyMs: exitOrder.latencyMs,
           slippageBps: exitOrder.slippageBps,
           fillRatio: exitOrder.fillRatio,
@@ -9534,7 +9549,7 @@ export class ReboundRejectionAgent {
           this.lastLossStreakNotified = 0;
         }
         const tradeTimestamp = Date.now();
-        const tradePnlPct = (realizedPnl / (this.pos.entry * this.pos.qty)) * 100;
+        const tradePnlPct = exitQty > 0 ? (realizedPnl / (this.pos.entry * exitQty)) * 100 : 0;
         this.recentTrades.push({
           win,
           pnlPct: tradePnlPct,
@@ -9576,7 +9591,7 @@ export class ReboundRejectionAgent {
           symbol: this.profile.symbol,
           details: {
             reason,
-            exitPrice: exitOrder.avgPrice || price,
+            exitPrice: exitPriceFilled,
             realizedPnl,
             holdTimeMs: Date.now() - this.pos.openedAt,
             maeR: this.pos.maeR,
@@ -9616,7 +9631,7 @@ export class ReboundRejectionAgent {
         broadcast('agent_state', {
           state: this.state,
           reason,
-          exitPrice: exitOrder.avgPrice || price,
+          exitPrice: exitPriceFilled,
           realizedPnl,
           tradeCadence: cadenceAfterExit
         }, this.profile.symbol, this.sessionId || undefined);
@@ -9976,14 +9991,54 @@ export class ReboundRejectionAgent {
     return false;
   }
 
-  public calculateRealizedPnL(exitPrice: number): number {
+  private estimateFillFeeUsd(price: number, qty: number, side: 'buy' | 'sell', liquidity?: LiquidityType): number {
+    if (!Number.isFinite(price) || !Number.isFinite(qty) || qty <= 0) {
+      return 0;
+    }
+    try {
+      return calculateFeeUsd(price, qty, this.quantConfig.feesSlippage, { side, liquidity });
+    } catch {
+      return 0;
+    }
+  }
+
+  private resolveEntryFeePerUnit(entryLiquidity?: LiquidityType): number {
+    if (!this.pos) return 0;
+    const stored = Number(this.pos.entryFeePerUnit ?? 0);
+    if (Number.isFinite(stored) && stored > 0) {
+      return stored;
+    }
+    const baseQty = Number(this.pos.initialQty ?? this.pos.qty ?? 0);
+    if (!(baseQty > 0)) return 0;
+    const totalFee = this.estimateFillFeeUsd(this.pos.entry, baseQty, this.pos.side, entryLiquidity);
+    return baseQty > 0 ? totalFee / baseQty : 0;
+  }
+
+  private estimateTradeFees(
+    exitPrice: number,
+    qty: number,
+    options?: { entryLiquidity?: LiquidityType; exitLiquidity?: LiquidityType },
+  ): number {
+    if (!this.pos || !(qty > 0)) {
+      return 0;
+    }
+    const entryFeePerUnit = this.resolveEntryFeePerUnit(options?.entryLiquidity);
+    const entryFeePortion = entryFeePerUnit * qty;
+    const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
+    const exitFee = this.estimateFillFeeUsd(exitPrice, qty, exitSide, options?.exitLiquidity);
+    const total = entryFeePortion + exitFee;
+    return Number.isFinite(total) && total > 0 ? total : 0;
+  }
+
+  public calculateRealizedPnL(exitPrice: number, qtyOverride?: number): number {
     if (!this.pos) return 0;
 
     const entry = this.pos.entry;
-    const qty = this.pos.qty;
+    const qty = qtyOverride ?? this.pos.qty;
+    if (!(qty > 0)) return 0;
     const side = this.pos.side;
 
-    const entryNet = applyFeesAndSlippage(entry, this.quantConfig.feesSlippage, { side: side });
+    const entryNet = applyFeesAndSlippage(entry, this.quantConfig.feesSlippage, { side });
     const exitSide = side === 'buy' ? 'sell' : 'buy';
     const exitNet = applyFeesAndSlippage(exitPrice, this.quantConfig.feesSlippage, { side: exitSide });
     const priceDiff = side === 'buy' ? exitNet - entryNet : entryNet - exitNet;
