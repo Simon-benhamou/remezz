@@ -4,7 +4,15 @@ import { generateStrategy } from './orchestrator.js';
 import { markStrategyLLM, shouldAllowStrategyLLM, updateZoneState, zoneExitDebounced } from './guard.js';
 import { levels as calcLevels } from '../risk/brackets.js';
 import { setActiveSession } from '../metrics/aiCalls.js';
-import { resolveReusableStrategy, resolveStrategyHealth, mergeGuardrails, type StrategyGuardrail } from '../services/strategyHealth.js';
+import {
+  resolveReusableStrategy,
+  resolveStrategyHealth,
+  mergeGuardrails,
+  buildPerformanceSummary,
+  type StrategyGuardrail,
+  type StrategyPerformanceSummary,
+} from '../services/strategyHealth.js';
+import { getRegimeDiagnostics } from '../engine/diagnosticRegistry.js';
 import { AgentHub } from '../agent/hub.js';
 
 const COOL_MIN = Number(process.env.LLM_STRATEGY_COOLDOWN_MIN || 3); // minutes - réduit pour réactivité
@@ -27,6 +35,15 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
   const allowed = req.force ? true : shouldAllowStrategyLLM(key, { cooldownMin: COOL_MIN, maxPerHour: MAX_PER_HOUR });
 
   let guardrail: StrategyGuardrail | null = null;
+  let performanceSummary: StrategyPerformanceSummary | null = null;
+  const hydrateHealth = async () => {
+    if (!req.sessionId) return;
+    if (performanceSummary) return;
+    const bundle = await resolveStrategyHealth(req.sessionId, req.symbol);
+    performanceSummary = buildPerformanceSummary(bundle.health, bundle.samples);
+    guardrail = mergeGuardrails(guardrail, bundle.health.guardrails ?? null);
+  };
+
   if (!allowed) {
     try {
       const reuse = await resolveReusableStrategy(req.sessionId, req.symbol);
@@ -43,9 +60,20 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
     return { strategy: last, levels: undefined as any, reused: true };
   }
 
+  if (req.sessionId) {
+    try { await hydrateHealth(); } catch { performanceSummary = performanceSummary ?? null; }
+  }
+
+  const regimeDiagnostics = getRegimeDiagnostics(req.symbol);
+
   // Ensure AI usage is attributed to the triggering session when present
   try { if (req.sessionId) await setActiveSession(req.sessionId); } catch {}
-  const strat = await generateStrategy(req.symbol, req.trigger, { fresh: !!req.fresh || !!req.force, sessionId: req.sessionId });
+  const strat = await generateStrategy(req.symbol, req.trigger, {
+    fresh: !!req.fresh || !!req.force,
+    sessionId: req.sessionId,
+    regime: regimeDiagnostics ?? undefined,
+    performance: performanceSummary ?? undefined,
+  });
   updateZoneState(key, strat.entry?.zone || null);
   markStrategyLLM(key);
 
@@ -75,14 +103,8 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
     if (e?.code !== 'P2002') throw e;
   }
 
-  if (req.sessionId) {
-    try {
-      const { health } = await resolveStrategyHealth(req.sessionId, req.symbol);
-      guardrail = mergeGuardrails(guardrail, health.guardrails ?? null);
-      if (guardrail) {
-        try { AgentHub.applyStrategyHealth(req.sessionId, guardrail); } catch {}
-      }
-    } catch {}
+  if (req.sessionId && guardrail) {
+    try { AgentHub.applyStrategyHealth(req.sessionId, guardrail); } catch {}
   }
 
   return { strategy: strat, levels, reused: false };

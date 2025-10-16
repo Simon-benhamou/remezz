@@ -10,7 +10,7 @@ import { recordOpsEvent } from '../monitor/ops.js';
 import { inspectExposure } from '../broker/live.js';
 import { extractPersistedPlan } from '../services/planStore.js';
 import { classifyRegime } from '../diagnostics/regime.js';
-import { getTriggerSampleRate } from './diagnosticRegistry.js';
+import { getTriggerSampleRate, setRegimeDiagnostics } from './diagnosticRegistry.js';
 
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
@@ -31,12 +31,6 @@ const lastRsiBySym: Record<string, number> = {};
 const lastIndicatorSig: Record<string, { price: number; emaSpread: number; rsi: number; adx: number }> = {};
 let lastTick = { symbol: '', price: 0, ts: 0 };
 const lastTickBySession = new Map<string, number>();
-const regimeDiagnosticsBySymbol = new Map<string, ReturnType<typeof classifyRegime>>();
-
-export function getLatestRegimeDiagnostics(symbol: string) {
-  return regimeDiagnosticsBySymbol.get(symbol) ?? null;
-}
-
 // Expose last tick info for health checks
 export function getLastTickAgeSec(sessionId: string): number | null {
   try {
@@ -95,7 +89,7 @@ async function tickOnce(sessionId: string, sym: string){
       spreadBps: typeof (tech as any)?.spreadBps === 'number' ? Number((tech as any).spreadBps) : null,
       liquidityScore: typeof (tech as any)?.liquidityScore === 'number' ? Number((tech as any).liquidityScore) : null,
     });
-    regimeDiagnosticsBySymbol.set(sym, diagnostics);
+    setRegimeDiagnostics(sym, diagnostics);
 
     broadcast('tick', {
       ts: Date.now(),

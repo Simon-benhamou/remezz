@@ -2114,6 +2114,36 @@ export class ReboundRejectionAgent {
     if (planRiskMinPct != null) dynamicRiskPct = Math.max(dynamicRiskPct, planRiskMinPct);
     if (planRiskMaxPct != null) dynamicRiskPct = Math.min(dynamicRiskPct, planRiskMaxPct);
 
+    if (snapAtrPct != null && snapAtrPct > 0) {
+      const baselineAtr = planAtrPct && planAtrPct > 0
+        ? planAtrPct
+        : Math.max(0.35, Number(this.quantConfig?.filters?.minAtrPct ?? 1.6));
+      if (baselineAtr > 0) {
+        const atrMultiplier = Math.max(0.4, Math.min(1.6, baselineAtr / snapAtrPct));
+        if (Number.isFinite(atrMultiplier) && Math.abs(atrMultiplier - 1) > 0.05) {
+          const before = dynamicRiskPct;
+          dynamicRiskPct = Math.max(0.1, dynamicRiskPct * atrMultiplier);
+          recordOpsEvent({
+            level: 'watch',
+            source: 'position_sizing',
+            message: 'atr_volatility_risk_scaling',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              baselineAtr,
+              currentAtr: snapAtrPct,
+              atrMultiplier,
+              riskBefore: before,
+              riskAfter: dynamicRiskPct,
+            },
+          });
+        }
+      }
+    }
+
+    if (planRiskMinPct != null) dynamicRiskPct = Math.max(dynamicRiskPct, planRiskMinPct);
+    if (planRiskMaxPct != null) dynamicRiskPct = Math.min(dynamicRiskPct, planRiskMaxPct);
+
     if (entryFilterSizePenalty != null && entryFilterSizePenalty > 0 && entryFilterSizePenalty < 1) {
       dynamicRiskPct *= entryFilterSizePenalty;
       recordOpsEvent({

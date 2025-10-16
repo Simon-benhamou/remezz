@@ -2,6 +2,8 @@ import { StrategyZ, StrategyJson } from "./schema.js";
 import { rankingPrompt, strategyPrompt } from "./prompts.js";
 import { llmJSON } from "./llm.js";
 import { buildTechSnapshot, type TechnicalSnapshot } from './tech.js';
+import type { RegimeDiagnostics } from '../diagnostics/regime.js';
+import type { StrategyPerformanceSummary } from '../services/strategyHealth.js';
 
 import { getConfig } from '../utils/env.js';
 import { emitAlert } from '../monitor/policy.js';
@@ -373,7 +375,14 @@ export async function selectBestPerp(
 }
 
 // --- 2) Daily strategy generation (legacy classic) --- //
-type GenerateOpts = { fresh?: boolean; sessionId?: string; llm?: typeof llmJSON; snapshot?: TechnicalSnapshot };
+type GenerateOpts = {
+  fresh?: boolean;
+  sessionId?: string;
+  llm?: typeof llmJSON;
+  snapshot?: TechnicalSnapshot;
+  regime?: RegimeDiagnostics | null;
+  performance?: StrategyPerformanceSummary | null;
+};
 
 export async function generateStrategy(symbol: string, trigger: string, opts?: GenerateOpts): Promise<StrategyJson> {
   const feats = opts?.snapshot ?? await buildTechSnapshot(symbol);
@@ -405,7 +414,9 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: G
         volume24hChangePct: feats.volume24hChangePct,
         pivots: feats.pivots,
         srBias: feats.srBias,
-      }
+      },
+      regime: opts?.regime ?? null,
+      performance: opts?.performance ?? null,
     }), {
       cacheKey: opts?.fresh ? undefined : `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`,
       ttlMin: 90,
