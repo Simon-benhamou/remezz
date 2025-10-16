@@ -2,6 +2,7 @@ import { AreaChartOutlined, BulbOutlined, ControlOutlined, ReadOutlined, Warning
 import { ConfigProvider, Layout, Menu, Segmented, Space, Tag, theme, ThemeConfig } from 'antd';
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { clearApiKey } from './api';
 import UserDropdown from './components/UserDropdown';
 import { useAuth } from './hooks/useAuth';
 import { useDashboard } from './hooks/useDashboard';
@@ -14,6 +15,7 @@ import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
 import { useAppStore } from './store';
+import { Activity, Bot, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
 
 const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/operations') || pathname.startsWith('/mission-control')) return '/operations';
@@ -25,27 +27,38 @@ const resolveActiveMenuKey = (pathname: string) => {
   return '/operations';
 };
 
-const { Header, Content, Footer } = Layout;
+  const { Header, Content, Footer } = Layout;
 
-function AppInner() {
+function AppInner(){
   const navigate = useNavigate();
   const location = useLocation();
 
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  // Use Zustand stores
+  const { isAuthenticated, isLoading: authLoading, signOut } = useAuth();
   const { mode, setMode, setInitialized, isInitialized } = useAppStore();
   const { overview } = useDashboard();
 
+  // Initialize app
   React.useEffect(() => {
     if (!isInitialized) {
       setInitialized(true);
     }
   }, [isInitialized, setInitialized]);
 
+  // Logout handler
+  const handleLogout = () => {
+    signOut();
+    clearApiKey();
+    window.location.href = '/login';
+  };
+
+  // Attendre l'initialisation
   if (authLoading || !isInitialized) {
-    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: '#60a5fa' }}>Loading…</div>;
+    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>Loading...</div>;
   }
 
-  if (!isAuthenticated) {
+  const authed = isAuthenticated;
+  if (!authed) {
     return (
       <Routes>
         <Route path='/login' element={<LoginPage />} />
@@ -58,108 +71,121 @@ function AppInner() {
   const activeMenuKey = resolveActiveMenuKey(location.pathname);
 
   const menuItems = [
-    { key: '/operations', label: 'Operations', icon: <AreaChartOutlined /> },
-    { key: '/agents', label: 'Agents', icon: <ControlOutlined /> },
-    { key: '/ledger', label: 'Execution Ledger', icon: <ReadOutlined /> },
-    { key: '/intelligence', label: 'Intelligence', icon: <BulbOutlined /> },
-    { key: '/backlog', label: 'Activity Feed', icon: <WarningOutlined /> },
+    { key: '/operations', label: 'Control', icon: <Activity /> },
+    { key: '/agents', label: 'Agents', icon: <Bot /> },
+    { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
+    { key: '/intelligence', label: 'Intelligence', icon: <Lightbulb /> },
+    { key: '/backlog', label: 'Feed Info', icon: <Radio /> },
   ];
 
   return (
-    <Layout
-      style={{
-        minHeight: '100vh',
-        background: 'radial-gradient(circle at top, #102045 0%, #050b1b 60%, #02050f 100%)',
-      }}
-    >
+    <Layout style={{ minHeight:'100vh', background: '#fafafa' }}>
       <Layout.Sider
         breakpoint='lg'
-        collapsedWidth={72}
-        theme='dark'
+        collapsedWidth={60}
+        theme='light'
         style={{
-          background: 'linear-gradient(180deg, #111c44 0%, #0b1120 100%)',
-          borderRight: '1px solid rgba(148, 163, 184, 0.18)',
-          boxShadow: '0 12px 35px -18px rgba(2, 6, 23, 0.9)',
-          zIndex: 100,
+          background: '#ffffff',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06)',
+          borderRight: '1px solid #f3f4f6',
+          zIndex: 100
         }}
       >
-        <div
-          style={{
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '20px 16px',
+          borderBottom: '1px solid #f3f4f6',
+          marginBottom: 8
+        }}>
+          <div style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '24px 18px',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 12,
-                background: 'linear-gradient(135deg, #38bdf8 0%, #6366f1 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#0f172a',
-                fontSize: 16,
-                fontWeight: 700,
-              }}
-            >
-              Q
+            gap: 8
+          }}>
+            <div style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+              fontSize: 14,
+              fontWeight: 600
+            }}>
+             <Zap className='w-5 h-5' />
             </div>
             <div>
-              <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>QuantAI</div>
-              <div style={{ color: '#60a5fa', fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.6 }}>Labs</div>
+              <div style={{
+                color: '#111827',
+                fontWeight: 600,
+                fontSize: 16,
+                lineHeight: 1.2
+              }}>QuantAI</div>
+              <div style={{
+                color: '#2563eb',
+                fontSize: 10,
+                fontWeight: 500,
+                textTransform: 'uppercase',
+                letterSpacing: 0.5
+              }}>Labs</div>
             </div>
           </div>
         </div>
         <Menu
-          theme='dark'
+          theme='light'
           mode='inline'
           selectedKeys={[activeMenuKey]}
           items={menuItems}
-          onClick={({ key }) => navigate(String(key))}
-          style={{
-            background: 'transparent',
+          onClick={({ key })=> navigate(String(key))}
+          style={{ 
+            background:'transparent', 
             border: 'none',
-            fontSize: 14,
-            color: '#e2e8f0',
-            padding: '12px 8px',
+            fontSize: 14
           }}
         />
-        <div style={{ padding: '18px', borderTop: '1px solid rgba(148, 163, 184, 0.12)', marginTop: 'auto' }}>
-          <div style={{ color: '#60a5fa', fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Pulse Engine</div>
-          <div style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, lineHeight: 1.4 }}>Live trade intelligence & AI risk governance</div>
+        <div style={{
+          padding: '16px',
+          borderTop: '1px solid #f3f4f6',
+          marginTop: 'auto'
+        }}>
+          <div style={{
+            color: '#2563eb',
+            fontWeight: 600,
+            fontSize: 12,
+            marginBottom: 4
+          }}>Pulse Engine</div>
+          <div style={{
+            color: '#6b7280',
+            fontSize: 11,
+            lineHeight: 1.4
+          }}>Live trade intelligence & AI risk governance</div>
         </div>
       </Layout.Sider>
       <Layout>
-        <Header
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            background: 'rgba(8, 15, 35, 0.92)',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
-            boxShadow: '0 12px 25px -18px rgba(2, 6, 23, 0.8)',
-            padding: '0 28px',
-            height: 72,
-          }}
-        >
-          <Space size={20} style={{ color: '#cbd5f5', fontWeight: 500, fontSize: 14 }}>
-            <span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>Active agents</span>
-            <Tag color='blue' style={{ borderRadius: 8, fontSize: 12 }}>
-              {overview?.activeCount ?? 0}
-            </Tag>
+        <Header style={{
+          display:'flex',
+          justifyContent:'space-between',
+          alignItems:'center',
+          background: '#ffffff',
+          borderBottom: '1px solid #f3f4f6',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)',
+          padding: '0 24px',
+          height: 64
+        }}>
+          <Space size={16} style={{ color: '#374151', fontWeight:500, fontSize: 14 }}>
+            <span style={{ color:'#6b7280' }}>Active:</span>
+            <Tag color='blue' style={{ borderRadius: 6, fontSize: 12 }}>{overview?.activeCount ?? 0}</Tag>
             {Array.isArray(overview?.symbols) && overview.symbols.length > 0 && (
-              <span style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+              <span style={{ color:'#9ca3af', fontSize:12 }}>
                 {overview.symbols.length} markets monitored
               </span>
             )}
           </Space>
-          <Space size={16} style={{ color: '#e2e8f0', fontWeight: 500, fontSize: 14 }}>
+          <Space style={{ color: '#374151', fontWeight:500, fontSize: 14 }}>
             <Segmented
               size='small'
               value={mode}
@@ -167,54 +193,48 @@ function AppInner() {
                 { label: 'Live', value: 'live' },
                 { label: 'Paper', value: 'paper' },
               ]}
-              onChange={(val) => setMode(val as 'live' | 'paper')}
-              style={{ background: 'rgba(15, 23, 42, 0.88)', color: '#e2e8f0', borderRadius: 20 }}
+              onChange={(val)=> setMode((val as 'live'|'paper'))}
+              style={{ background: '#f9fafb' }}
             />
-            <span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>ROI</span>
-            <Tag color={(Number(overview?.roiPct || 0) >= 0) ? 'success' : 'error'} style={{ borderRadius: 8, fontSize: 12 }}>
-              {Number(overview?.roiPct || 0).toFixed(2)}%
+            <span style={{ color:'#6b7280' }}>ROI:</span>
+            <Tag
+              color={(Number(overview?.roiPct||0) >= 0) ? 'success' : 'error'}
+              style={{ borderRadius: 6, fontSize: 12 }}
+            >
+              {Number(overview?.roiPct||0).toFixed(2)}%
             </Tag>
-            <span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>PnL</span>
-            <Tag color={(Number(overview?.pnlUsd || 0) >= 0) ? 'success' : 'error'} style={{ borderRadius: 8, fontSize: 12 }}>
-              ${Number(overview?.pnlUsd || 0).toFixed(2)}
+            <span style={{ color:'#6b7280' }}>PnL:</span>
+            <Tag
+              color={(Number(overview?.pnlUsd||0) >= 0) ? 'success' : 'error'}
+              style={{ borderRadius: 6, fontSize: 12 }}
+            >
+              ${Number(overview?.pnlUsd||0).toFixed(2)}
             </Tag>
-            <span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>AI</span>
-            <Tag color='cyan' style={{ borderRadius: 8, fontSize: 12 }}>
-              {Number(overview?.aiCallsTotal || 0)}
-            </Tag>
+            <span style={{ color:'#6b7280' }}>AI:</span>
+            <Tag color='cyan' style={{ borderRadius: 6, fontSize: 12 }}>{Number(overview?.aiCallsTotal||0)}</Tag>
             {mode === 'live' && overview?.exchangeBalance && (
               <>
-                <span style={{ color: '#60a5fa', fontWeight: 600 }}>Exchange</span>
-                <Tag color='cyan' style={{ borderRadius: 8, fontSize: 12 }}>
-                  Free ${Number(overview.exchangeBalance.freeUsd || 0).toFixed(2)}
-                </Tag>
-                <Tag color='geekblue' style={{ borderRadius: 8, fontSize: 12 }}>
-                  Equity ${Number(overview.exchangeBalance.totalUsd || 0).toFixed(2)}
-                </Tag>
+                <span style={{ color:'#2563eb', fontWeight: 600 }}>Exchange</span>
+                <Tag color='cyan' style={{ borderRadius: 6, fontSize: 12 }}>Free ${Number(overview.exchangeBalance.freeUsd||0).toFixed(2)}</Tag>
+                <Tag color='geekblue' style={{ borderRadius: 6, fontSize: 12 }}>Equity ${Number(overview.exchangeBalance.totalUsd||0).toFixed(2)}</Tag>
               </>
             )}
             {mode === 'paper' && overview?.paperBalance && (
               <>
-                <span style={{ color: '#60a5fa', fontWeight: 600 }}>Paper</span>
-                <Tag color='cyan' style={{ borderRadius: 8, fontSize: 12 }}>
-                  Free ${Number(overview.paperBalance.freeUsd || 0).toFixed(2)}
-                </Tag>
-                <Tag color='purple' style={{ borderRadius: 8, fontSize: 12 }}>
-                  Equity ${Number(overview.paperBalance.equityUsd || 0).toFixed(2)}
-                </Tag>
+                <span style={{ color:'#2563eb', fontWeight: 600 }}>Paper</span>
+                <Tag color='cyan' style={{ borderRadius: 6, fontSize: 12 }}>Free ${Number(overview.paperBalance.freeUsd||0).toFixed(2)}</Tag>
+                <Tag color='purple' style={{ borderRadius: 6, fontSize: 12 }}>Equity ${Number(overview.paperBalance.equityUsd||0).toFixed(2)}</Tag>
               </>
             )}
             <UserDropdown />
           </Space>
         </Header>
-        <Content
-          style={{
-            padding: '32px',
-            overflow: 'auto',
-            maxHeight: 'calc(100vh - 144px)',
-            background: 'transparent',
-          }}
-        >
+        <Content style={{
+          padding: '24px',
+          overflow:'auto',
+          maxHeight:"calc(100vh - 128px)",
+          background: '#fafafa'
+        }}>
           <Routes>
             <Route path='/' element={<Navigate to='/operations' replace />} />
             <Route path='/operations' element={<OperationsDashboardPage />} />
@@ -227,16 +247,14 @@ function AppInner() {
             <Route path='*' element={<Navigate to='/operations' replace />} />
           </Routes>
         </Content>
-        <Footer
-          style={{
-            textAlign: 'center',
-            background: 'rgba(8, 15, 35, 0.92)',
-            borderTop: '1px solid rgba(148, 163, 184, 0.14)',
-            color: 'rgba(148, 163, 184, 0.72)',
-            fontSize: 12,
-            padding: '18px 24px',
-          }}
-        >
+        <Footer style={{ 
+          textAlign:'center',
+          background: '#ffffff',
+          borderTop: '1px solid #f3f4f6',
+          color: '#6b7280',
+          fontSize: 12,
+          padding: '16px 24px'
+        }}>
           Realtime AI Trade Engine · Adaptive Risk Governance · Storyboarded Insights
         </Footer>
       </Layout>
@@ -244,58 +262,69 @@ function AppInner() {
   );
 }
 
-export default function App() {
-  const neoDarkTheme: ThemeConfig = {
-    algorithm: theme.darkAlgorithm,
-    token: {
-      colorPrimary: '#60a5fa',
-      colorInfo: '#38bdf8',
-      colorSuccess: '#34d399',
-      colorWarning: '#fbbf24',
-      colorError: '#f87171',
-      colorBgLayout: '#050b1b',
-      colorBgContainer: 'rgba(15, 23, 42, 0.92)',
-      colorBgElevated: 'rgba(15, 23, 42, 0.92)',
-      colorBorder: 'rgba(148, 163, 184, 0.22)',
-      colorBorderSecondary: 'rgba(148, 163, 184, 0.14)',
-      colorText: '#e2e8f0',
-      colorTextSecondary: 'rgba(148, 163, 184, 0.78)',
-      borderRadius: 12,
-      wireframe: false,
+export default function App(){
+ const minimalistTheme: ThemeConfig = {
+  algorithm: theme.defaultAlgorithm,
+  token: {
+    // Couleurs principales ultra-réduites
+    colorPrimary: '#2563eb',      // Bleu principal uniquement
+    colorSuccess: '#059669',      // Vert très discret
+    colorError: '#dc2626',        // Rouge minimal
+    
+    // Tout le reste en gris neutres
+    colorBgContainer: '#ffffff',
+    colorBgElevated: '#ffffff',
+    colorBgLayout: '#fafafa',
+    colorBorder: '#e5e7eb',
+    colorBorderSecondary: '#f3f4f6',
+    
+    // Textes en niveaux de gris
+    colorText: '#111827',
+    colorTextSecondary: '#6b7280',
+    colorTextTertiary: '#9ca3af',
+    colorTextQuaternary: '#d1d5db',
+    
+    // Suppression des couleurs secondaires
+    colorInfo: '#6b7280',         // Gris au lieu de bleu
+    colorWarning: '#9ca3af',      // Gris au lieu d'orange
+    
+    // Espacement et bordures plus généreux
+    borderRadius: 8,
+    lineWidth: 1,
+    wireframe: false,
+  },
+  components: {
+    // Tags ultra-neutres
+    Tag: {
+      defaultBg: '#f9fafb',
+      defaultColor: '#6b7280',
+      colorBorder: '#e5e7eb',
     },
-    components: {
-      Layout: {
-        headerBg: 'rgba(8, 15, 35, 0.92)',
-        bodyBg: 'transparent',
-      },
-      Menu: {
-        darkItemBg: 'transparent',
-        darkItemSelectedBg: 'rgba(96, 165, 250, 0.2)',
-        darkItemSelectedColor: '#60a5fa',
-        darkItemColor: 'rgba(226, 232, 240, 0.85)',
-      },
-      Card: {
-        colorBgContainer: 'rgba(15, 23, 42, 0.92)',
-        colorBorderSecondary: 'rgba(148, 163, 184, 0.16)',
-        headerBg: 'rgba(15, 23, 42, 0.92)',
-        paddingLG: 24,
-        borderRadiusLG: 18,
-      },
-      Table: {
-        headerBg: 'rgba(15, 23, 42, 0.95)',
-        colorBgContainer: 'rgba(15, 23, 42, 0.92)',
-        borderColor: 'rgba(148, 163, 184, 0.14)',
-      },
-      Tag: {
-        defaultBg: 'rgba(148, 163, 184, 0.14)',
-        colorBorder: 'transparent',
-      },
+    // Tables épurées
+    Table: {
+      headerBg: '#f9fafb',
+      headerColor: '#374151',
+      borderColor: '#f3f4f6',
+      rowHoverBg: '#f9fafb',
     },
-  };
-
+    // Cards minimalistes
+    Card: {
+      headerBg: '#ffffff',
+      bodyPadding: 20,
+      actionsBg: '#fafafa',
+    },
+    // Menu sidebar épuré
+    Menu: {
+      itemSelectedBg: '#f1f5f9',
+      itemSelectedColor: '#2563eb',
+      itemHoverBg: '#f8fafc',
+      itemColor: '#64748b',
+    }
+  }
+};
   return (
     <BrowserRouter>
-      <ConfigProvider theme={neoDarkTheme}>
+      <ConfigProvider theme={minimalistTheme}>
         <AppInner />
       </ConfigProvider>
     </BrowserRouter>
