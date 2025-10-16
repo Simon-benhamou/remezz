@@ -49,6 +49,7 @@ export default function PriceChart({
   const trailSeriesRef = React.useRef<any>(null);
   const pnlRef = React.useRef<HTMLDivElement|null>(null);
   const markersRef = React.useRef<any[]>([]);
+  const markerDetailsRef = React.useRef<Map<number, Array<{ label: string; color: string }>>>(new Map());
   const tooltipRef = React.useRef<HTMLDivElement|null>(null);
 
   const [overlays, setOverlays] = React.useState({
@@ -64,6 +65,11 @@ export default function PriceChart({
 
   const toggleOverlay = React.useCallback((key: keyof typeof overlays) => {
     setOverlays(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  const formatPriceValue = React.useCallback((value: any): string | undefined => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num.toFixed(4) : undefined;
   }, []);
 
   React.useEffect(()=> {
@@ -177,10 +183,19 @@ export default function PriceChart({
       }
       const date = new Date((param.time as number) * 1000);
       const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const markerDetails = markerDetailsRef.current.get(param.time as number) || [];
+      const markerRows = markerDetails
+        .map(item => `<div style="display:flex; align-items:center; gap:6px; font-size:12px;">
+            <span style="width:6px; height:6px; border-radius:9999px; background:${item.color}; display:inline-block;"></span>
+            <span>${item.label}</span>
+          </div>`)
+        .join('');
+
       tooltipRef.current.innerHTML = `
         <div style="font-weight:600; font-size:12px; margin-bottom:4px;">${symbol || ''}</div>
         <div style="font-size:14px;">${Number(price).toFixed(4)}</div>
-        <div style="opacity:0.75;">${formattedDate}</div>
+        <div style="opacity:0.75; margin-bottom:${markerRows ? '6px' : '0'};">${formattedDate}</div>
+        ${markerRows}
       `;
       tooltipRef.current.style.display = 'block';
     };
@@ -557,11 +572,19 @@ export default function PriceChart({
   React.useEffect(() => {
     if (!seriesRef.current) return;
 
+    markerDetailsRef.current = new Map();
     const cache = new Map<string, any>();
-    const pushMarker = (marker: any) => {
+    const pushMarker = (marker: any & { tooltipLabel?: string }) => {
       if (marker.time == null || Number.isNaN(marker.time)) return;
       const key = `${marker.time}:${marker.position}:${marker.text}`;
       cache.set(key, marker);
+      if (!markerDetailsRef.current.has(marker.time)) {
+        markerDetailsRef.current.set(marker.time, []);
+      }
+      const label = marker.tooltipLabel || marker.text || '';
+      if (label) {
+        markerDetailsRef.current.get(marker.time)?.push({ label, color: marker.color || '#2563eb' });
+      }
     };
 
     const safeTs = (value: any): number | null => {
@@ -586,9 +609,10 @@ export default function PriceChart({
       pushMarker({
         time: ts,
         position: isExit ? 'aboveBar' : 'belowBar',
-        color: isExit ? '#ef4444' : '#22c55e',
-        shape: isExit ? 'arrowDown' : 'arrowUp',
-        text: `${isExit ? 'Exit' : 'Entry'} ${priceLabel} (${status || 'PENDING'})`,
+        color: isExit ? '#f87171' : '#34d399',
+        shape: 'circle',
+        text: `${isExit ? 'Exit' : 'Entry'} ${priceLabel}`,
+        tooltipLabel: `${isExit ? 'Ordre sortie' : 'Ordre entrée'} • ${status || 'PENDING'}${priceLabel ? ` @ ${priceLabel}` : ''}`,
       });
     });
 
@@ -597,29 +621,30 @@ export default function PriceChart({
       const ts = safeTs(trade.createdAt);
       if (ts == null) return;
       const side = String(trade.positionSide || '').toLowerCase();
-      const exitPriceNum = Number(trade.exitPrice);
-      const exitPrice = Number.isFinite(exitPriceNum) ? exitPriceNum.toFixed(4) : '-';
+      const exitPrice = formatPriceValue(trade.exitPrice) ?? '-';
       const pnl = Number(trade.realizedPnlUsd || 0);
       const pnlLabel = `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USD`;
       pushMarker({
         time: ts,
         position: side === 'short' ? 'aboveBar' : 'belowBar',
-        color: pnl >= 0 ? '#16a34a' : '#dc2626',
-        shape: pnl >= 0 ? 'circle' : 'square',
-        text: `Trade ${exitPrice} (${pnlLabel})`,
+        color: pnl >= 0 ? '#10b981' : '#f87171',
+        shape: 'square',
+        text: `Trade ${exitPrice}`,
+        tooltipLabel: `Trade ${exitPrice} • ${pnlLabel}`,
       });
     });
 
     if (agentPos?.partialInfo?.ts && agentPos?.partialInfo?.price) {
       const ts = safeTs(agentPos.partialInfo.ts);
-      const priceLabel = Number(agentPos.partialInfo.price).toFixed?.(4);
+      const priceLabel = formatPriceValue(agentPos.partialInfo.price);
       if (ts != null && priceLabel) {
         pushMarker({
           time: ts,
           position: 'aboveBar',
           color: '#0ea5e9',
-          shape: 'circle',
+          shape: 'square',
           text: `Partial ${priceLabel}`,
+          tooltipLabel: `Prise de profit partielle @ ${priceLabel}`,
         });
       }
     }
@@ -627,12 +652,14 @@ export default function PriceChart({
     if (agentPos?.openedAt && agentPos?.entry) {
       const ts = safeTs(agentPos.openedAt);
       if (ts != null) {
+        const entryLabel = formatPriceValue(agentPos.entry);
         pushMarker({
           time: ts,
           position: 'belowBar',
-          color: '#1f8f1f',
-          shape: 'arrowUp',
-          text: `Entry ${Number(agentPos.entry).toFixed(4)}`,
+          color: '#16a34a',
+          shape: 'circle',
+          text: entryLabel ? `Entry ${entryLabel}` : 'Entry',
+          tooltipLabel: entryLabel ? `Entrée position @ ${entryLabel}` : 'Entrée position',
         });
       }
     }
@@ -640,12 +667,14 @@ export default function PriceChart({
     if (agentExit?.ts && agentExit?.price) {
       const ts = safeTs(agentExit.ts);
       if (ts != null) {
+        const exitLabel = formatPriceValue(agentExit.price);
         pushMarker({
           time: ts,
           position: 'aboveBar',
-          color: '#c0392b',
-          shape: 'arrowDown',
-          text: `Exit ${Number(agentExit.price).toFixed?.(4)} ${agentExit.reason ? `(${agentExit.reason})` : ''}`,
+          color: '#dc2626',
+          shape: 'circle',
+          text: exitLabel ? `Exit ${exitLabel}` : 'Exit',
+          tooltipLabel: `Sortie position${exitLabel ? ` @ ${exitLabel}` : ''}${agentExit.reason ? ` • ${agentExit.reason}` : ''}`,
         });
       }
     }
@@ -654,7 +683,22 @@ export default function PriceChart({
     const ordered = Array.from(cache.values()).sort((a, b) => a.time - b.time);
     markersRef.current = overlays.trades ? ordered.slice(-150) : [];
     seriesRef.current.setMarkers(markersRef.current);
-  }, [orders, trades, agentPos?.openedAt, agentPos?.entry, agentPos?.partialInfo?.ts, agentExit?.ts, overlays.trades]);
+    if (!overlays.trades) {
+      markerDetailsRef.current = new Map();
+    }
+  }, [
+    orders,
+    trades,
+    agentPos?.openedAt,
+    agentPos?.entry,
+    agentPos?.partialInfo?.ts,
+    agentPos?.partialInfo?.price,
+    agentExit?.ts,
+    agentExit?.price,
+    agentExit?.reason,
+    overlays.trades,
+    formatPriceValue,
+  ]);
 
   const latestPoint = chartData[chartData.length - 1];
   const firstPoint = chartData[0];
@@ -668,68 +712,63 @@ export default function PriceChart({
     { key: 'plan', label: 'Plan' },
     { key: 'pivots', label: 'Pivots' },
     { key: 'projection', label: 'Projection' },
-    { key: 'trades', label: 'Orders & Trades' },
+    { key: 'trades', label: 'Trades' },
   ];
 
-  return <div style={{ border:'1px solid #e2e8f0', borderRadius:12, padding:12, background:'#fff', boxShadow:'0 12px 32px -18px rgba(15, 23, 42, 0.35)' }}>
-    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:12 }}>
-        <div>
-          <div style={{ fontWeight:700, fontSize:16 }}>{symbol} — Historical + Live</div>
-          <div style={{ fontSize:12, color:'#64748b' }}>
-            {isLoadingHistory ? 'Loading history…' : chartData.length > 0 ? `${chartData.length} data points` : 'No data available'}
-          </div>
+  return <div style={{ border:'1px solid #e2e8f0', borderRadius:16, padding:16, background:'#ffffff' }}>
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12, marginBottom:12 }}>
+      <div>
+        <div style={{ fontWeight:700, fontSize:16 }}>{symbol || '—'}</div>
+        <div style={{ fontSize:12, color:'#64748b' }}>
+          {isLoadingHistory ? 'Chargement de l’historique…' : chartData.length > 0 ? `${chartData.length} points` : 'Aucune donnée'}
         </div>
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-          {overlayButtons.map(button => (
+      </div>
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+        {overlayButtons.map(button => {
+          const active = overlays[button.key];
+          return (
             <button
               key={button.key}
               onClick={() => toggleOverlay(button.key)}
               style={{
-                border:'1px solid #cbd5f5',
-                padding:'6px 10px',
-                borderRadius:6,
+                border:'1px solid ' + (active ? '#2563eb' : '#cbd5f5'),
+                padding:'4px 10px',
+                borderRadius:999,
                 fontSize:12,
                 cursor:'pointer',
-                background: overlays[button.key] ? '#2563eb' : '#f8fafc',
-                color: overlays[button.key] ? '#fff' : '#0f172a',
-                transition:'all 0.2s ease',
+                background: active ? '#2563eb' : '#f8fafc',
+                color: active ? '#ffffff' : '#1e293b',
               }}
             >
-              {overlays[button.key] ? '✓ ' : ''}{button.label}
+              {button.label}
             </button>
-          ))}
+          );
+        })}
+      </div>
+    </div>
+
+    <div style={{ display:'flex', gap:16, flexWrap:'wrap', marginBottom:16 }}>
+      <div style={{ minWidth:120 }}>
+        <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last price</div>
+        <div style={{ fontSize:18, fontWeight:600 }}>{latestPoint ? latestPoint.value.toFixed(4) : '—'}</div>
+      </div>
+      <div style={{ minWidth:120 }}>
+        <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>24h change</div>
+        <div style={{ fontSize:18, fontWeight:600, color: change != null && changePct != null ? (change >= 0 ? '#16a34a' : '#dc2626') : '#1e293b' }}>
+          {change != null && changePct != null ? `${change >= 0 ? '+' : ''}${change.toFixed(4)} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%)` : '—'}
         </div>
       </div>
-
-      <div style={{
-        display:'grid',
-        gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))',
-        gap:12,
-        fontSize:12,
-        color:'#0f172a',
-      }}>
-        <div style={{ background:'#f8fafc', borderRadius:8, padding:'10px 12px' }}>
-          <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last Price</div>
-          <div style={{ fontSize:16, fontWeight:600 }}>{latestPoint ? latestPoint.value.toFixed(4) : '—'}</div>
+      <div style={{ minWidth:140 }}>
+        <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last trade</div>
+        <div style={{ fontSize:16, fontWeight:600 }}>
+          {latestTrade?.exitPrice ? Number(latestTrade.exitPrice).toFixed(4) : latestTrade?.entryPrice ? Number(latestTrade.entryPrice).toFixed(4) : '—'}
         </div>
-        <div style={{ background:'#f8fafc', borderRadius:8, padding:'10px 12px' }}>
-          <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>24h Change</div>
-          <div style={{ fontSize:16, fontWeight:600, color: change != null && changePct != null ? (change >= 0 ? '#16a34a' : '#dc2626') : '#0f172a' }}>
-            {change != null && changePct != null ? `${change >= 0 ? '+' : ''}${change.toFixed(4)} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%)` : '—'}
-          </div>
-        </div>
-        <div style={{ background:'#f8fafc', borderRadius:8, padding:'10px 12px' }}>
-          <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last Trade</div>
-          <div style={{ fontSize:14, fontWeight:600 }}>
-            {latestTrade?.exitPrice ? Number(latestTrade.exitPrice).toFixed(4) : latestTrade?.entryPrice ? Number(latestTrade.entryPrice).toFixed(4) : '—'}
-          </div>
-          <div style={{ fontSize:12, color:'#475569' }}>
-            {latestTrade?.realizedPnlUsd != null ? formatUsd(Number(latestTrade.realizedPnlUsd)) : ''}
-          </div>
+        <div style={{ fontSize:12, color:'#475569' }}>
+          {latestTrade?.realizedPnlUsd != null ? formatUsd(Number(latestTrade.realizedPnlUsd)) : ''}
         </div>
       </div>
     </div>
-    <div ref={ref} style={{ marginTop:16 }} />
+
+    <div ref={ref} style={{ minHeight:360 }} />
   </div>;
 }
