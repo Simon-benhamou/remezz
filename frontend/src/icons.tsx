@@ -35,7 +35,7 @@ import {
   Key,
   Lightbulb,
   LineChart,
-  Loader,
+  LoaderCircle,
   Lock,
   LogOut,
   Mail,
@@ -58,7 +58,6 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
-
 const withClassName = (Component: React.ComponentType<any>, ...classNames: string[]) =>
   React.forwardRef<SVGSVGElement, any>((props, ref) => {
     const mergedClassName = [...classNames, props.className].filter(Boolean).join(' ');
@@ -90,7 +89,7 @@ export { Zap as ThunderboltOutlined };
 export { Wrench as ToolOutlined };
 export { Bell as BellOutlined };
 export { Bug as BugOutlined };
-export const LoadingOutlined = withClassName(Loader, 'lucide-spin');
+export const LoadingOutlined = withClassName(LoaderCircle, 'lucide-spin');
 export { ArrowLeftRight as SwapOutlined };
 export { History as HistoryOutlined };
 export { Crosshair as AimOutlined };
