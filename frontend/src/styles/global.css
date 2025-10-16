@@ -105,6 +105,96 @@ body {
   background: #fafafa;
 }
 
+.sessions-table .ant-table-thead > tr > th {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.sessions-table .ant-table-tbody > tr > td {
+  padding: 10px 12px;
+  vertical-align: top;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sessions-table__row {
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.sessions-table__row:hover td {
+  background: #f8fafc !important;
+}
+
+.allocation-row {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.allocation-row:hover {
+  border-color: #cbd5f5;
+  box-shadow: 0 4px 16px rgba(100, 116, 139, 0.12);
+}
+
+.allocation-row__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.allocation-row__symbol {
+  font-weight: 600;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.allocation-row__tag {
+  border: none !important;
+  font-weight: 600;
+}
+
+.allocation-row__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.allocation-row__metric {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  gap: 4px;
+}
+
+.allocation-row__metric-label {
+  font-size: 11px;
+  color: #64748b;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.allocation-row__metric-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.allocation-empty {
+  padding: 24px;
+  text-align: center;
+  color: #94a3b8;
+  border: 1px dashed #dbeafe;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
 /* Modern Buttons */
 .ant-btn {
   font-weight: 500;

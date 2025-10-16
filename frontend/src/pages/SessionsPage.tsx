@@ -46,6 +46,7 @@ import {
   StopOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  EditOutlined,
   RocketOutlined,
   ThunderboltOutlined,
   CloseOutlined,
@@ -165,6 +166,18 @@ const formatLogTime = (timestamp: number) =>
 const formatSymbol = (symbol?: string) => (symbol ? symbol.replace(/:USDT$/i, '') : symbol);
 
 const { Text } = Typography;
+
+type PortfolioAllocationRow = {
+  key: string;
+  symbol?: string;
+  sessionId?: string;
+  weightPct: number;
+  budgetPct: number;
+  capitalUsd: number;
+  roiPct: number;
+  winRate: number;
+  tags: string[];
+};
 
 type AgentCreationProgressBannerProps = {
   progress: CreationProgressState;
@@ -963,12 +976,84 @@ export default function SessionsPage(){
     const days = Math.max(1, Math.round(diff / 86400000));
     return `${days}d ago`;
   }, []);
-  
+
   const getHealthColor = (status: string, score: number) => {
     if (status === 'error' || score < 30) return '#ff4d4f';
     if (status === 'warning' || score < 70) return '#faad14';
     return '#52c41a';
   };
+
+  const resolveArmedState = React.useCallback(
+    (record: any) => {
+      const diagnostics = record?.diagnosticsInitial || {};
+      const check = diagnostics?.checks?.isArmed;
+      const status = String(check?.status || '').toUpperCase();
+      if (['PASS', 'ACTIVE', 'PARTIAL'].includes(status)) {
+        return { armed: true, reason: check?.reason };
+      }
+      if (['FAIL', 'REJECT'].includes(status)) {
+        return { armed: false, reason: check?.reason };
+      }
+      if (typeof diagnostics?.isArmed === 'boolean') {
+        return { armed: diagnostics.isArmed, reason: check?.reason };
+      }
+      if (typeof record?.isArmed === 'boolean') {
+        return { armed: record.isArmed, reason: check?.reason };
+      }
+      if (typeof record?.tradingReadiness?.canTrade === 'boolean') {
+        return { armed: record.tradingReadiness.canTrade, reason: record.tradingReadiness.reason };
+      }
+      return { armed: null, reason: check?.reason };
+    },
+    []
+  );
+
+  const getPositionSnapshot = React.useCallback((record: any) => {
+    const position = record?.currentPosition || record?.position;
+    if (!position) {
+      return { side: null, sizeDisplay: null, entryDisplay: null, unrealized: null, notional: null };
+    }
+
+    const sideRaw = String(
+      position?.side || position?.positionSide || position?.direction || position?.state || ''
+    ).toUpperCase();
+    const inferredSide = sideRaw.includes('SELL') || sideRaw.includes('SHORT') ? 'SHORT' : sideRaw.includes('LONG') || sideRaw.includes('BUY') ? 'LONG' : null;
+
+    const sizeValue = Number(
+      position?.size ?? position?.qty ?? position?.quantity ?? position?.positionSize ?? position?.contracts ?? 0
+    );
+    const baseSymbol = (record?.symbol || '').split('/')[0] || '';
+    const sizeDisplay = Number.isFinite(sizeValue) && sizeValue !== 0
+      ? `${Math.abs(sizeValue).toFixed(Math.abs(sizeValue) >= 1 ? 2 : 4)} ${baseSymbol}`
+      : null;
+
+    const notionalValue = Number(
+      position?.notionalUsd ?? position?.notional ?? position?.usdValue ?? position?.valueUsd ?? position?.positionValue ?? 0
+    );
+    const notional = Number.isFinite(notionalValue) && notionalValue !== 0 ? notionalValue : null;
+
+    const entryPrice = Number(
+      position?.entryPrice ?? position?.avgEntryPrice ?? position?.averageEntryPrice ?? position?.avgPrice ?? position?.entry
+    );
+    const entryDisplay = Number.isFinite(entryPrice) && entryPrice > 0 ? `$${entryPrice.toFixed(entryPrice >= 100 ? 2 : 4)}` : null;
+
+    const unrealizedValue = Number(
+      position?.unrealizedPnlUsd ?? position?.pnlUsd ?? position?.unrealized ?? position?.upnlUsd ?? position?.floatingPnl
+    );
+    const unrealized = Number.isFinite(unrealizedValue) ? unrealizedValue : null;
+
+    if (!inferredSide && !sizeDisplay && !notional && !entryDisplay) {
+      return { side: null, sizeDisplay: null, entryDisplay: null, unrealized: null, notional: null };
+    }
+
+    return {
+      side: inferredSide,
+      sizeDisplay,
+      entryDisplay,
+      unrealized,
+      notional,
+    };
+  }, []);
   
   const exportToCsv = () => {
     const csvData = filteredRows.map(r => ({
@@ -1097,7 +1182,7 @@ export default function SessionsPage(){
       {
         title: 'Status',
         key: 'status',
-        width: compactView ? 140 : 160,
+        width: compactView ? 120 : 140,
         sorter: (a: any, b: any) => statusRank(a) - statusRank(b),
         render: (_: any, record: any) => {
           const meta = getStatusMeta(record);
@@ -1107,8 +1192,8 @@ export default function SessionsPage(){
             ? 'ACTIVE'
             : 'OFFLINE';
           return (
-            <Space direction="vertical" size={4}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Space direction="vertical" size={2}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span
                   style={{
                     width: 8,
@@ -1118,22 +1203,12 @@ export default function SessionsPage(){
                     boxShadow: meta.glow,
                   }}
                 />
-                <span style={{ fontWeight: 600, color: meta.text }}>{meta.label}</span>
+                <span style={{ fontWeight: 600, color: meta.text, fontSize: 12 }}>{meta.label}</span>
               </div>
-              <Tag
-                style={{
-                  background: isSessionActive(record) ? 'rgba(16, 185, 129, 0.18)' : 'rgba(148, 163, 184, 0.18)',
-                  border: 'none',
-                  color: isSessionActive(record) ? '#047857' : '#475569',
-                  fontWeight: 600,
-                  borderRadius: 6,
-                }}
-              >
-                {runtime.toUpperCase()}
-              </Tag>
+              <span style={{ fontSize: 11, color: '#64748b' }}>{runtime.toUpperCase()}</span>
               {record.haltReason && (
                 <Text type="secondary" style={{ fontSize: 11 }}>
-                  Reason: {record.haltReason}
+                  {record.haltReason}
                 </Text>
               )}
             </Space>
@@ -1141,56 +1216,107 @@ export default function SessionsPage(){
         },
       },
       {
+        title: 'Armed',
+        key: 'armed',
+        width: compactView ? 90 : 100,
+        align: 'center',
+        sorter: (a: any, b: any) => {
+          const aVal = resolveArmedState(a).armed;
+          const bVal = resolveArmedState(b).armed;
+          return Number(Boolean(aVal)) - Number(Boolean(bVal));
+        },
+        render: (_: any, record: any) => {
+          const { armed, reason } = resolveArmedState(record);
+          if (armed === null) {
+            return <Tag color="default">Unknown</Tag>;
+          }
+          return (
+            <Tooltip title={reason || (armed ? 'Agent is armed and ready to execute.' : 'Agent is disarmed.')}>
+              <Tag color={armed ? 'success' : 'warning'} style={{ borderRadius: 6, fontWeight: 600 }}>
+                {armed ? 'ARMED' : 'STANDBY'}
+              </Tag>
+            </Tooltip>
+          );
+        },
+      },
+      {
         title: 'Agent',
         dataIndex: 'symbol',
         key: 'agent',
-        width: compactView ? 200 : 220,
+        width: compactView ? 180 : 210,
         sorter: (a: any, b: any) => String(a.symbol || '').localeCompare(String(b.symbol || '')),
         render: (_: any, record: any) => {
           const isSmart =
             record.isSmartAgent || record.profile?.isIntelligent || record.profileJson?.isIntelligent;
           const aggressiveness = String(record.aggressiveness || 'reactive').toUpperCase();
           return (
-            <Space direction="vertical" size={4}>
+            <Space direction="vertical" size={2}>
               <Space align="center" size={6}>
                 {isSmart && <span role="img" aria-label="smart agent">🧠</span>}
-                <span style={{ fontWeight: 600, fontSize: 14, color: '#0f172a' }}>{record.symbol}</span>
+                <span style={{ fontWeight: 600, fontSize: 13, color: '#0f172a' }}>{record.symbol}</span>
               </Space>
               <Space size={4} wrap>
-                <Tag
-                  style={{
-                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                    color: 'white',
-                    border: 'none',
-                    fontWeight: 600,
-                    borderRadius: 6,
-                  }}
-                >
+                <Tag color="blue" style={{ borderRadius: 6 }}>
                   {String(record.mode || 'paper').toUpperCase()}
                 </Tag>
-                <Tag
-                  style={{
-                    background: isSmart ? 'linear-gradient(135deg, #7c3aed, #6d28d9)' : 'rgba(148, 163, 184, 0.18)',
-                    color: isSmart ? '#ffffff' : '#475569',
-                    border: 'none',
-                    fontWeight: 600,
-                    borderRadius: 6,
-                  }}
-                >
-                  {isSmart ? 'AUTO' : 'MANUAL'}
-                </Tag>
-                <Tag
-                  style={{
-                    background: 'rgba(15, 23, 42, 0.04)',
-                    border: '1px solid rgba(148, 163, 184, 0.35)',
-                    color: '#475569',
-                    fontWeight: 500,
-                    borderRadius: 6,
-                  }}
-                >
+                <Tag color="geekblue" style={{ borderRadius: 6 }}>
                   {aggressiveness}
                 </Tag>
+                <Tooltip title={`Session ID: ${record.id}`}>
+                  <Tag color="default" style={{ borderRadius: 6 }}>
+                    #{String(record.id || '').slice(-6).toUpperCase()}
+                  </Tag>
+                </Tooltip>
               </Space>
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Market stance',
+        key: 'stance',
+        width: compactView ? 210 : 230,
+        sorter: (a: any, b: any) => {
+          const aPos = getPositionSnapshot(a);
+          const bPos = getPositionSnapshot(b);
+          const aNotional = typeof aPos.notional === 'number' ? aPos.notional : 0;
+          const bNotional = typeof bPos.notional === 'number' ? bPos.notional : 0;
+          return aNotional - bNotional;
+        },
+        render: (_: any, record: any) => {
+          const snapshot = getPositionSnapshot(record);
+          if (!snapshot.side) {
+            return (
+              <Space direction="vertical" size={2}>
+                <Tag color="default" style={{ borderRadius: 6 }}>FLAT</Tag>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>Waiting for a signal</span>
+              </Space>
+            );
+          }
+          const { side, sizeDisplay, entryDisplay, unrealized, notional } = snapshot;
+          const notionalText = typeof notional === 'number' && Number.isFinite(notional)
+            ? `$${Math.abs(notional).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+            : null;
+          const safeUnrealized = typeof unrealized === 'number' && Number.isFinite(unrealized) ? unrealized : null;
+          return (
+            <Space direction="vertical" size={2}>
+              <Space size={6}>
+                <Tag color={side === 'SHORT' ? 'volcano' : 'green'} style={{ borderRadius: 6 }}>
+                  {side}
+                </Tag>
+                {sizeDisplay && (
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#0f172a' }}>{sizeDisplay}</span>
+                )}
+              </Space>
+              <span style={{ fontSize: 11, color: '#64748b' }}>
+                {entryDisplay ? `Entry ${entryDisplay}` : 'Entry price pending'}
+                {notionalText ? ` • ${notionalText}` : ''}
+              </span>
+              {safeUnrealized != null && (
+                <span style={{ fontSize: 11, color: safeUnrealized >= 0 ? '#047857' : '#dc2626', fontWeight: 600 }}>
+                  Unrealized {safeUnrealized >= 0 ? '+' : '-'}${Math.abs(safeUnrealized).toFixed(2)}
+                </span>
+              )}
             </Space>
           );
         },
@@ -1198,32 +1324,19 @@ export default function SessionsPage(){
       {
         title: 'Performance',
         key: 'performance',
-        width: compactView ? 200 : 220,
+        width: compactView ? 170 : 190,
         sorter: (a: any, b: any) => (Number(a.pnlUsd) || 0) - (Number(b.pnlUsd) || 0),
         render: (_: any, record: any) => {
-          const pnl = Number(record.pnlUsd ?? 0);
-          const roi = Number(record.roiPct ?? 0);
-          const winRate = Number(record.winRate ?? 0);
-          const dailyPnl = Number(record.pnl24h ?? 0);
-          const pnlColor = pnl >= 0 ? '#047857' : '#dc2626';
+          const pnl = Number(record.pnlUsd || 0);
+          const roi = Number(record.roiPct || 0);
           return (
-            <Space direction="vertical" size={compactView ? 2 : 4}>
-              <span style={{ fontWeight: 700, fontSize: 15, color: pnlColor }}>
-                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+            <Space direction="vertical" size={2}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: pnl >= 0 ? '#047857' : '#dc2626' }}>
+                {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
               </span>
-              <Space size={10}>
-                <span style={{ fontSize: 12, color: '#334155' }}>
-                  ROI&nbsp;<strong>{roi.toFixed(2)}%</strong>
-                </span>
-                <span style={{ fontSize: 12, color: '#334155' }}>
-                  Win&nbsp;<strong>{winRate.toFixed(1)}%</strong>
-                </span>
-              </Space>
-              {!compactView && (
-                <span style={{ fontSize: 11, color: '#64748b' }}>
-                  24h {dailyPnl >= 0 ? '+' : ''}${dailyPnl.toFixed(2)} · Max DD {Number(record.maxDrawdown ?? 0).toFixed(2)}%
-                </span>
-              )}
+              <span style={{ fontSize: 11, color: roi >= 0 ? '#0f766e' : '#b91c1c' }}>
+                ROI {roi >= 0 ? '+' : '-'}{Math.abs(roi).toFixed(2)}%
+              </span>
             </Space>
           );
         },
@@ -1232,114 +1345,78 @@ export default function SessionsPage(){
         title: 'Exposure',
         key: 'exposure',
         width: compactView ? 200 : 220,
+        sorter: (a: any, b: any) => {
+          const aBalance = a.runtimeBalance || {};
+          const bBalance = b.runtimeBalance || {};
+          const aExposure = Number(aBalance.exposureUsd ?? aBalance.notionalUsd ?? 0);
+          const bExposure = Number(bBalance.exposureUsd ?? bBalance.notionalUsd ?? 0);
+          return aExposure - bExposure;
+        },
         render: (_: any, record: any) => {
-          const pos = record.currentPosition;
-          if (!pos) {
-            return <span style={{ fontSize: 12, color: '#64748b' }}>No open position</span>;
-          }
-          const side = String(pos.side || '').toUpperCase();
-          const qty = Number(pos.qty ?? NaN);
-          const entry = Number(pos.entry ?? NaN);
-          const unrealized = Number(record.portfolioUnrealizedPnl ?? NaN);
-          const qtyDisplay = Number.isFinite(qty) ? qty.toFixed(4) : '—';
-          const entryDisplay = Number.isFinite(entry)
-            ? entry.toLocaleString(undefined, { maximumFractionDigits: 4 })
+          const balance = record.runtimeBalance || {};
+          const exposure = Number(balance.exposureUsd ?? balance.notionalUsd ?? NaN);
+          const capital = Number(balance.allocatedUsd ?? record.startBalanceUsd ?? NaN);
+          const summary = record.leverageSummary || {};
+          const hasExposure = Number.isFinite(exposure);
+          const utilization = capital > 0 && hasExposure ? Math.min(999, (exposure / capital) * 100) : null;
+          const exposureDisplay = hasExposure
+            ? `$${Math.abs(exposure).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
             : '—';
           return (
             <Space direction="vertical" size={2}>
-              <Space size={6}>
-                <Tag
-                  style={{
-                    background: side === 'SELL' ? 'rgba(239, 68, 68, 0.18)' : 'rgba(16, 185, 129, 0.18)',
-                    border: 'none',
-                    color: side === 'SELL' ? '#b91c1c' : '#047857',
-                    fontWeight: 600,
-                    borderRadius: 6,
-                  }}
-                >
-                  {side === 'SELL' ? 'SHORT' : 'LONG'}
-                </Tag>
-                <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>
-                  {qtyDisplay}
-                </span>
-              </Space>
-              <span style={{ fontSize: 12, color: '#475569' }}>Entry&nbsp;{entryDisplay}</span>
-              {Number.isFinite(unrealized) && (
-                <span style={{ fontSize: 11, color: unrealized >= 0 ? '#059669' : '#dc2626', fontWeight: 600 }}>
-                  Unrealized {unrealized >= 0 ? '+' : ''}${unrealized.toFixed(2)}
+              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
+                Exposure {exposureDisplay}
+              </span>
+              {utilization != null && Number.isFinite(utilization) && (
+                <span style={{ fontSize: 11, color: utilization > 100 ? '#b91c1c' : '#475569' }}>
+                  {utilization.toFixed(utilization >= 10 ? 0 : 1)}% of capital
                 </span>
               )}
+              <span style={{ fontSize: 11, color: '#64748b' }}>
+                Leverage {formatLeverageValue(summary.resolved ?? record.profile?.maxLeverage)}
+                {summary.trimmed && summary.requested ? ` • trimmed from ${formatLeverageValue(summary.requested)}` : ''}
+              </span>
             </Space>
           );
         },
       },
       {
-        title: 'Risk & Readiness',
-        key: 'risk',
-        width: compactView ? 210 : 230,
+        title: 'Readiness',
+        key: 'readiness',
+        width: compactView ? 200 : 220,
         sorter: (a: any, b: any) => {
-          const aLev = Number(
-            a.leverageSummary?.resolved ?? a.profile?.maxLeverage ?? a.profileJson?.maxLeverage ?? 0
-          );
-          const bLev = Number(
-            b.leverageSummary?.resolved ?? b.profile?.maxLeverage ?? b.profileJson?.maxLeverage ?? 0
-          );
-          return aLev - bLev;
+          const aReady = Number(a.tradingReadiness?.percent ?? (a.tradingReadiness?.canTrade ? 100 : 0));
+          const bReady = Number(b.tradingReadiness?.percent ?? (b.tradingReadiness?.canTrade ? 100 : 0));
+          return aReady - bReady;
         },
         render: (_: any, record: any) => {
-          const summary = record.leverageSummary || {};
-          const resolved =
-            summary.resolved ?? record.profile?.maxLeverage ?? record.profileJson?.maxLeverage;
-          const requested =
-            summary.requested ??
-            record.profile?.requestedMaxLeverage ??
-            record.profileJson?.requestedMaxLeverage;
           const readiness = record.tradingReadiness;
           const healthScore = Number(record.healthScore ?? NaN);
-          const healthColor = getHealthColor(record.healthStatus, healthScore);
-          return (
-            <Space direction="vertical" size={compactView ? 2 : 4}>
-              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 600 }}>
-                Leverage&nbsp;{formatLeverageValue(resolved)}
+          if (!readiness) {
+            return (
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                {isSessionActive(record) ? 'Diagnostics unavailable' : 'Agent offline'}
               </span>
-              {requested && summary.trimmed ? (
-                <Tag color="orange" style={{ fontSize: 11, borderRadius: 6 }}>
-                  Trimmed from {formatLeverageValue(requested)}
-                </Tag>
-              ) : requested ? (
-                <span style={{ fontSize: 11, color: '#64748b' }}>
-                  Requested&nbsp;{formatLeverageValue(requested)}
-                </span>
-              ) : null}
-              {Number.isFinite(healthScore) && (
-                <span style={{ fontSize: 11, color: healthColor }}>
-                  Health {Math.round(healthScore)}%
-                </span>
+            );
+          }
+          const percent = Math.round(readiness.percent ?? (readiness.canTrade ? 100 : 0));
+          return (
+            <Space direction="vertical" size={4} style={{ width: 180 }}>
+              <Progress
+                percent={percent}
+                size="small"
+                status={readiness.canTrade ? 'normal' : 'exception'}
+                showInfo={false}
+              />
+              <span style={{ fontSize: 11, color: readiness.canTrade ? '#047857' : '#b45309', fontWeight: 500 }}>
+                {readiness.canTrade ? 'Ready to trade' : 'Blocked'}
+              </span>
+              {readiness.reason && (
+                <span style={{ fontSize: 11, color: '#64748b' }}>{readiness.reason}</span>
               )}
-              {readiness ? (
-                <Tooltip title={readiness.reason || readiness.summary}>
-                  <div style={{ width: 160 }}>
-                    <Progress
-                      percent={Math.round(readiness.percent ?? (readiness.canTrade ? 100 : 0))}
-                      showInfo={false}
-                      strokeColor={readiness.canTrade ? '#10b981' : '#f97316'}
-                      trailColor="rgba(148, 163, 184, 0.2)"
-                      style={{ marginBottom: 4 }}
-                    />
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: readiness.canTrade ? '#047857' : '#b45309',
-                        fontWeight: 500,
-                      }}
-                    >
-                      {readiness.canTrade ? 'Ready to trade' : 'Blocked'}
-                    </div>
-                  </div>
-                </Tooltip>
-              ) : (
-                <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                  {isSessionActive(record) ? 'Diagnostics unavailable' : 'Agent offline'}
+              {Number.isFinite(healthScore) && (
+                <span style={{ fontSize: 11, color: getHealthColor(record.healthStatus, healthScore) }}>
+                  Health {Math.round(healthScore)}%
                 </span>
               )}
             </Space>
@@ -1349,7 +1426,7 @@ export default function SessionsPage(){
       {
         title: 'Activity',
         key: 'activity',
-        width: compactView ? 200 : 220,
+        width: compactView ? 180 : 190,
         sorter: (a: any, b: any) => {
           const aTs = parseTime(a.lastActivity);
           const bTs = parseTime(b.lastActivity);
@@ -1362,40 +1439,14 @@ export default function SessionsPage(){
           return (
             <Space direction="vertical" size={2}>
               <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
-                Last trade&nbsp;{formatRelativeTime(record.lastActivity)}
+                {formatRelativeTime(record.lastActivity)}
               </span>
               <span style={{ fontSize: 11, color: '#64748b' }}>
                 {totalTrades} total · {today} today
               </span>
               <span style={{ fontSize: 11, color: orders > 0 ? '#b45309' : '#94a3b8' }}>
-                {orders} open orders
+                {orders} pending
               </span>
-            </Space>
-          );
-        },
-      },
-      {
-        title: 'Started',
-        dataIndex: 'startedAt',
-        key: 'started',
-        width: compactView ? 170 : 190,
-        sorter: (a: any, b: any) => {
-          const aTs = parseTime(a.startedAt);
-          const bTs = parseTime(b.startedAt);
-          return (Number.isFinite(aTs) ? aTs : 0) - (Number.isFinite(bTs) ? bTs : 0);
-        },
-        render: (value: string | number) => {
-          const ts = parseTime(value);
-          if (!Number.isFinite(ts)) {
-            return <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>;
-          }
-          const dt = new Date(ts);
-          return (
-            <Space direction="vertical" size={2}>
-              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
-                {dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-              </span>
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>{formatRelativeTime(ts)}</span>
             </Space>
           );
         },
@@ -1403,12 +1454,14 @@ export default function SessionsPage(){
       {
         title: 'Actions',
         key: 'actions',
-        width: compactView ? 150 : 170,
+        width: compactView ? 170 : 190,
         fixed: compactView ? undefined : ('right' as const),
         render: (_: any, record: any) => {
+          const buttons: React.ReactNode[] = [];
           if (isSessionActive(record)) {
-            return (
+            buttons.push(
               <Button
+                key="stop"
                 danger
                 size="small"
                 icon={<StopOutlined />}
@@ -1416,55 +1469,56 @@ export default function SessionsPage(){
                   e.stopPropagation();
                   stop(record.id);
                 }}
-                style={{ borderRadius: 8, fontWeight: 500 }}
               >
                 Stop
               </Button>
             );
           }
-          return (
-            <Space>
-              <Button
-                size="small"
-                icon={<ReloadOutlined />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  relaunch(record);
-                }}
-                style={{ borderRadius: 8, fontWeight: 500 }}
-              >
-                Restart
-              </Button>
-              <Button
-                danger
-                size="small"
-                icon={<DeleteOutlined />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  Modal.confirm({
-                    title: 'Delete session?',
-                    content: 'This will permanently delete session and all associated data.',
-                    okText: 'Delete',
-                    cancelText: 'Cancel',
-                    okButtonProps: { danger: true },
-                    onOk: async () => {
-                      try {
-                        await api.deleteSession(record.id);
-                        message.success('Deleted');
-                        await load(true);
-                      } catch (error) {
-                        console.error('Delete failed', error);
-                        message.error('Delete failed');
-                      }
-                    },
-                  });
-                }}
-                style={{ borderRadius: 8, fontWeight: 500 }}
-              >
-                Delete
-              </Button>
-            </Space>
+          buttons.push(
+            <Button
+              key="modify"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                relaunch(record);
+              }}
+            >
+              Modify
+            </Button>
           );
+          buttons.push(
+            <Button
+              key="delete"
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                Modal.confirm({
+                  title: 'Delete session?',
+                  content: 'This will permanently delete session and all associated data.',
+                  okText: 'Delete',
+                  cancelText: 'Cancel',
+                  okButtonProps: { danger: true },
+                  onOk: async () => {
+                    try {
+                      await api.deleteSession(record.id);
+                      message.success('Deleted');
+                      await load(true);
+                    } catch (error) {
+                      console.error('Delete failed', error);
+                      message.error('Delete failed');
+                    }
+                  },
+                });
+              }}
+            >
+              Delete
+            </Button>
+          );
+
+          return <Space size={6}>{buttons}</Space>;
         },
       },
     ];
@@ -1474,83 +1528,36 @@ export default function SessionsPage(){
     formatLeverageValue,
     formatRelativeTime,
     getHealthColor,
+    getPositionSnapshot,
     getStatusMeta,
     isSessionActive,
     load,
     relaunch,
+    resolveArmedState,
     statusRank,
     stop,
   ]);
-
-  const portfolioColumns = React.useMemo<ColumnsType<any>>(
-    () => [
-      {
-        title: 'Symbol',
-        dataIndex: 'symbol',
-        key: 'symbol',
-        render: (value: string) => (
-          <span style={{ fontWeight: 600, color: '#0f172a' }}>{value || '—'}</span>
-        ),
-      },
-      {
-        title: 'Capital',
-        dataIndex: 'capitalUsd',
-        key: 'capitalUsd',
-        render: (value: number) => `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-      },
-      {
-        title: 'Weight',
-        dataIndex: 'weightPct',
-        key: 'weightPct',
-        render: (value: number) => `${Number(value || 0).toFixed(1)}%`,
-      },
-      {
-        title: 'Budget',
-        dataIndex: 'budgetFraction',
-        key: 'budgetFraction',
-        render: (value: number) => `${Math.round(Number(value || 0) * 100)}%`,
-      },
-      {
-        title: 'ROI',
-        dataIndex: 'roiPct',
-        key: 'roiPct',
-        render: (value: number) => `${Number(value || 0).toFixed(1)}%`,
-      },
-      {
-        title: 'Win rate',
-        dataIndex: 'winRate',
-        key: 'winRate',
-        render: (value: number) => `${Number(value || 0).toFixed(1)}%`,
-      },
-      {
-        title: 'Status',
-        dataIndex: 'tags',
-        key: 'tags',
-        render: (tags?: string[]) =>
-          tags && tags.length ? (
-            <Space size={4} wrap>
-              {tags.map((tag) => (
-                <Tag key={tag} color={tag === 'correlation-limited' ? 'volcano' : 'gold'}>
-                  {tag.replace(/-/g, ' ')}
-                </Tag>
-              ))}
-            </Space>
-          ) : (
-            <span style={{ color: '#94a3b8' }}>—</span>
-          ),
-      },
-    ],
-    [],
-  );
-
-  const paperAllocations = React.useMemo(() => {
+  const paperAllocations = React.useMemo<PortfolioAllocationRow[]>(() => {
     const list = Array.isArray(portfolioPaper?.allocations) ? portfolioPaper.allocations : [];
     return list.map((entry: any) => ({
       key: entry.sessionId || entry.symbol,
-      ...entry,
+      symbol: entry.symbol,
+      sessionId: entry.sessionId,
       weightPct: Number(entry.weight || 0) * 100,
+      budgetPct: Number(entry.budgetFraction ?? entry.weight ?? 0) * 100,
+      capitalUsd: Number(entry.capitalUsd ?? 0),
+      roiPct: Number(entry.roiPct ?? 0),
+      winRate: Number(entry.winRate ?? 0),
+      tags: Array.isArray(entry.tags) ? entry.tags : [],
     }));
   }, [portfolioPaper]);
+
+  const paperBalanceUsd = Number(portfolioPaper?.balanceUsd ?? NaN);
+  const allocatedUsd = Number(portfolioPaper?.allocatedUsd ?? NaN);
+  const hasOverallocation =
+    Number.isFinite(paperBalanceUsd) &&
+    Number.isFinite(allocatedUsd) &&
+    allocatedUsd > paperBalanceUsd + 1;
 
   return (
     <div style={{ 
@@ -1618,9 +1625,11 @@ export default function SessionsPage(){
           extra={
             <Space>
               <Button onClick={refreshPortfolio} loading={portfolioLoading} icon={<ReloadOutlined />}>Refresh</Button>
-              <Button onClick={() => handleRebalancePortfolio('paper')} loading={portfolioLoading} type="primary">
-                Rebalance paper
-              </Button>
+              <Tooltip title="Realign paper allocations to the paper balance you configure. Uses target weights only.">
+                <Button onClick={() => handleRebalancePortfolio('paper')} loading={portfolioLoading} type="primary">
+                  Rebalance paper
+                </Button>
+              </Tooltip>
               <Button onClick={() => handleRebalancePortfolio('live')} loading={portfolioLoading} disabled={!portfolioLive}>
                 Rebalance live
               </Button>
@@ -1692,14 +1701,73 @@ export default function SessionsPage(){
             </Col>
           </Row>
           <Divider />
-          <Table
-            dataSource={paperAllocations}
-            columns={portfolioColumns}
-            pagination={false}
-            size='small'
-            loading={portfolioLoading}
-            locale={{ emptyText: 'No allocations yet' }}
-          />
+          {hasOverallocation && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ borderRadius: 10, marginBottom: 16 }}
+              message="Allocated capital exceeds paper balance"
+              description="Leverage or exposure can momentarily exceed the configured paper balance. Rebalancing brings allocations back to the paper plan without affecting live funds."
+            />
+          )}
+          <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 16 }}>
+            Rebalance paper redistributes simulated capital using each agent's target weights so that the
+            total matches your paper balance. Use it after updating the balance or when allocations drift
+            because of performance.
+          </Text>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {paperAllocations.length ? (
+              paperAllocations.map((allocation) => {
+                const weightLabel = Number.isFinite(allocation.weightPct)
+                  ? `${allocation.weightPct.toFixed(1)}%`
+                  : '—';
+                const budgetLabel = Number.isFinite(allocation.budgetPct)
+                  ? `${allocation.budgetPct.toFixed(1)}%`
+                  : '—';
+                const capitalLabel = Number.isFinite(allocation.capitalUsd)
+                  ? `$${Math.round(allocation.capitalUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                  : '—';
+                const roiLabel = Number.isFinite(allocation.roiPct)
+                  ? `${allocation.roiPct.toFixed(1)}%`
+                  : '—';
+                const winLabel = Number.isFinite(allocation.winRate)
+                  ? `${allocation.winRate.toFixed(1)}%`
+                  : '—';
+                return (
+                  <div key={allocation.key} className="allocation-row">
+                    <div className="allocation-row__header">
+                      <Space size={8} wrap>
+                        <span className="allocation-row__symbol">{allocation.symbol || '—'}</span>
+                        <Tag color="blue" className="allocation-row__tag">Target {weightLabel}</Tag>
+                        <Tag color="purple" className="allocation-row__tag">Budget {budgetLabel}</Tag>
+                      </Space>
+                      {allocation.tags.length > 0 && (
+                        <Space size={4} wrap>
+                          {allocation.tags.map((tag) => (
+                            <Tag key={tag} color={tag === 'correlation-limited' ? 'volcano' : 'gold'}>
+                              {tag.replace(/-/g, ' ')}
+                            </Tag>
+                          ))}
+                        </Space>
+                      )}
+                    </div>
+                    <div className="allocation-row__metrics">
+                      <div className="allocation-row__metric">
+                        <span className="allocation-row__metric-label">Target capital</span>
+                        <span className="allocation-row__metric-value">{capitalLabel}</span>
+                      </div>
+                      <div className="allocation-row__metric">
+                        <span className="allocation-row__metric-label">Performance</span>
+                        <span className="allocation-row__metric-value">ROI {roiLabel} · Win {winLabel}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="allocation-empty">No allocations yet</div>
+            )}
+          </Space>
         </Card>
 
         <Card
@@ -1960,15 +2028,17 @@ export default function SessionsPage(){
           
           {/* Modern Enhanced Table */}
           <Table
+            className="sessions-table"
             rowKey="id"
             dataSource={filteredRows}
             pagination={{
-              pageSize: 20,
+              pageSize: compactView ? 18 : 12,
               showSizeChanger: true,
               showQuickJumper: true,
               showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} sessions`,
               style: { fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif' },
             }}
+            rowClassName={() => 'sessions-table__row'}
             onRow={(record) => ({
               onClick: async () => {
                 if (isSessionActive(record)) navigate(`/agents/${record.id}`);
@@ -1978,8 +2048,8 @@ export default function SessionsPage(){
                 fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
               },
             })}
-            scroll={{ x: compactView ? 960 : 1280 }}
-            size={compactView ? 'small' : 'middle'}
+            scroll={{ x: compactView ? 1024 : 1280 }}
+            size="small"
             style={{
               borderRadius: '12px',
               border: '1px solid #f1f5f9',
@@ -2001,10 +2071,10 @@ export default function SessionsPage(){
               color: '#1e293b',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
             }}>
-              {restartSessionId ? '🔄 Restart Agent' : '🚀 Activate New Agent'}
+              {restartSessionId ? '⚙️ Modify Agent' : '🚀 Activate New Agent'}
             </span>
           }
-          okText={restartSessionId ? 'Restart Agent' : 'Start Agent'} 
+          okText={restartSessionId ? 'Save Changes' : 'Start Agent'}
           cancelText='Cancel' 
           onCancel={()=> { setOpen(false); setRestartSessionId(null); setRestartLeverageInfo(null); }}
           confirmLoading={starting}
@@ -2084,12 +2154,12 @@ export default function SessionsPage(){
               Modal.destroyAll();
 
               if (isRestart) {
-                hide = message.loading('Restarting agent...', 0);
+                hide = message.loading('Applying agent changes...', 0);
                 await api.client.post('/api/agent/restart', v);
                 if (hide) hide();
                 hide = null;
                 invalidateSmartly('settings_changed', { mode: v.mode as any, sessionId: sessionIdForRestart! });
-                message.success('Agent restarted successfully!');
+                message.success('Agent updated successfully!');
                 await load(true);
                 if (sessionIdForRestart) {
                   navigate(`/agents/${sessionIdForRestart}`);
