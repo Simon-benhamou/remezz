@@ -170,6 +170,7 @@ function AuthenticatedApp() {
                 background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(59, 130, 246, 0.38))',
                 boxShadow: '0 24px 58px -32px rgba(59, 130, 246, 0.65)',
                 minWidth: 220,
+                lineHeight: 1.2,
               }}
             >
               <div style={{ fontSize: 12, color: 'rgba(226, 232, 240, 0.78)', letterSpacing: 0.8, textTransform: 'uppercase' }}>
@@ -180,7 +181,6 @@ function AuthenticatedApp() {
                 <span>{freeSubtitle}</span>
                 <span>{formattedFree}</span>
               </div>
-              <div style={{ color: 'rgba(226, 232, 240, 0.65)', fontSize: 11, marginTop: 8 }}>Click to manage allocation</div>
             </div>
             <Space size={16} wrap>
               <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 16, padding: '10px 16px', minWidth: 110 }}>
