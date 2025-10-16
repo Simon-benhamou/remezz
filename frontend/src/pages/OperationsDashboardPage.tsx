@@ -31,7 +31,7 @@ import {
   ReloadOutlined,
   ThunderboltOutlined,
   WarningOutlined,
-} from '@ant-design/icons';
+} from '../icons';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import RecentTradesTable from '../components/RecentTradesTable';

@@ -1,6 +1,6 @@
 import React from "react";
 import { Table, Tag, Tooltip, Space, Badge } from "antd";
-import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined } from "../icons";
 
 export default function OrdersTable({ rows = [] }: any) {
   const getStatusBadge = (status: string) => {

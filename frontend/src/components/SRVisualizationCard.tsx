@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Row, Col, Space, Tag, Tooltip, Progress } from 'antd';
-import { AimOutlined, LineChartOutlined } from '@ant-design/icons';
+import { AimOutlined, LineChartOutlined } from '../icons';
 
 interface SRLevel {
   price: number;

@@ -16,16 +16,16 @@ import {
   Alert,
   Switch
 } from 'antd';
-import { 
-  KeyOutlined, 
-  PlusOutlined, 
-  DeleteOutlined, 
-  EyeInvisibleOutlined, 
+import {
+  KeyOutlined,
+  PlusOutlined,
+  DeleteOutlined,
+  EyeInvisibleOutlined,
   EyeOutlined,
   SafetyOutlined,
   SettingOutlined,
-  UserOutlined
-} from '@ant-design/icons';
+  UserOutlined,
+} from '../icons';
 import { api } from '../api';
 
 const { Title, Text, Paragraph } = Typography;

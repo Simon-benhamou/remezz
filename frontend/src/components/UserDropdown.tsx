@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Avatar, Dropdown, Space, Typography, Button, Modal, Badge } from 'antd';
-import { UserOutlined, SettingOutlined, LogoutOutlined, EditOutlined } from '@ant-design/icons';
+import { UserOutlined, SettingOutlined, LogoutOutlined, EditOutlined } from '../icons';
 import type { MenuProps } from 'antd';
 import { clearApiKey } from '../api';
 import { useNavigate } from 'react-router-dom';

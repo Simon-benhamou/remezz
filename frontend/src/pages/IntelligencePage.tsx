@@ -11,7 +11,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { BulbOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons';
+import { BulbOutlined, ReloadOutlined, WarningOutlined } from '../icons';
 import dayjs from 'dayjs';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
 import { api } from '../api';

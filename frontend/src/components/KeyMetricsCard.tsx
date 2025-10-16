@@ -1,13 +1,13 @@
 import React from 'react';
 import { Card, Row, Col, Statistic, Progress, Space, Tag, Tooltip } from 'antd';
-import { 
-  ArrowUpOutlined, 
-  ArrowDownOutlined, 
+import {
+  ArrowUpOutlined,
+  ArrowDownOutlined,
   FireOutlined,
   ThunderboltOutlined,
   EyeOutlined,
-  BarChartOutlined 
-} from '@ant-design/icons';
+  BarChartOutlined,
+} from '../icons';
 
 interface KeyMetric {
   key: string;

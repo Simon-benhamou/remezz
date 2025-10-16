@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Table, Select, Space, DatePicker, Segmented, Button, Statistic, Tag, message, InputNumber, Row, Col, Input, Tooltip, Typography, Alert } from 'antd';
-import { SearchOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
+import { SearchOutlined, DownloadOutlined, ReloadOutlined } from '../icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';

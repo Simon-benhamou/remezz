@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Table, Tag, Space, List, Typography, Tooltip, Button, Statistic } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined } from '../icons';
 
 const { Text } = Typography;
 

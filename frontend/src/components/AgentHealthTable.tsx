@@ -1,7 +1,7 @@
 import React from 'react';
 import { Badge, Button, Card, Col, Row, Space, Statistic, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { SyncOutlined } from '@ant-design/icons';
+import { SyncOutlined } from '../icons';
 type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
 type AgentHealthFlag = 'no_trades' | 'vos_block' | 'stale';
 

@@ -14,7 +14,7 @@ import {
   message,
   theme,
 } from 'antd';
-import { ReloadOutlined, BellOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { ReloadOutlined, BellOutlined, ThunderboltOutlined } from '../icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';

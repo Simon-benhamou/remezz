@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Button, Typography, Space, message, Divider, Alert } from 'antd';
-import { UserOutlined, LockOutlined, MailOutlined, KeyOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, MailOutlined, KeyOutlined } from '../icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, setApiKey } from '../api';
 

@@ -6,7 +6,7 @@ import {
   PauseCircleOutlined,
   PlayCircleFilled,
   StopOutlined,
-} from "@ant-design/icons";
+} from "../icons";
 import {
   Button,
   Dropdown,

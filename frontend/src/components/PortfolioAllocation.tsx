@@ -1,8 +1,4 @@
-import {
-  InfoCircleOutlined,
-  MoreOutlined,
-  ReloadOutlined,
-} from "@ant-design/icons";
+import { InfoCircleOutlined, MoreOutlined, ReloadOutlined } from "../icons";
 import {
   Button,
   Collapse,

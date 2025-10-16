@@ -1,26 +1,7 @@
 import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import {
-  Row,
-  Col,
-  Space,
-  Tag,
-  Tabs,
-  Card,
-  Skeleton,
-  Alert,
-  Progress,
-  Button,
-  Typography,
-  Tooltip,
-  Select,
-  message,
-  Drawer,
-  List,
-  Empty,
-  Statistic,
-} from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography, Tooltip, Select, message, theme, Drawer, Empty, List, Statistic } from 'antd';
+import { ReloadOutlined, ExpandOutlined, CompressOutlined, SyncOutlined, InfoCircleOutlined } from '../icons';
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
@@ -584,6 +565,7 @@ export default function SessionCockpitPage(){
   // Modern Loading UI that respects sidebar on desktop, full screen on mobile
   const LoadingOverlay = () => {
     const [windowWidth, setWindowWidth] = React.useState(window.innerWidth);
+    const { token } = theme.useToken();
     
     React.useEffect(() => {
       const handleResize = () => setWindowWidth(window.innerWidth);
@@ -602,7 +584,7 @@ export default function SessionCockpitPage(){
         left: leftOffset,
         right: 0,
         bottom: 0,
-        background: 'rgba(255,255,255,0.95)', 
+        background: `color-mix(in srgb, ${token.colorBgBase} 20%, transparent)`,
         display: 'flex', 
         alignItems: 'center', 
         justifyContent: 'center', 

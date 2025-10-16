@@ -1,13 +1,13 @@
 import React from 'react';
 import { Card, Alert, Space, Tag, Badge, Tooltip, Progress, Row, Col } from 'antd';
-import { 
-  FireOutlined, 
-  ThunderboltOutlined, 
-  ArrowUpOutlined, 
+import {
+  FireOutlined,
+  ThunderboltOutlined,
+  ArrowUpOutlined,
   ArrowDownOutlined,
   ExclamationCircleOutlined,
-  CheckCircleOutlined 
-} from '@ant-design/icons';
+  CheckCircleOutlined,
+} from '../icons';
 
 interface Trigger {
   id: string;

@@ -8,6 +8,19 @@
   box-sizing: border-box;
 }
 
+@keyframes lucide-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lucide-spin {
+  animation: lucide-spin 1s linear infinite;
+}
+
 html,
 body,
 #root {

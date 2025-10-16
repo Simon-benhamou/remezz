@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Spin, Button, Collapse, Alert, Tag, Space, Progress, Descriptions } from 'antd';
-import { EyeOutlined, ReloadOutlined, WarningOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { EyeOutlined, ReloadOutlined, WarningOutlined, CheckCircleOutlined, CloseCircleOutlined } from '../icons';
 import { api } from '../api';
 
 interface TradingDiagnosticsCollapsibleProps {

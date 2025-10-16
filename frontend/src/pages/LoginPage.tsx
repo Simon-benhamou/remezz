@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Form, Input, Button, Typography, message, Divider, Space } from 'antd';
-import { UserOutlined, LockOutlined, GoogleOutlined, GithubOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, GoogleOutlined, GithubOutlined } from '../icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';

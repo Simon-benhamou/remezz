@@ -1,6 +1,6 @@
 import React from 'react';
 import { Modal, message } from 'antd';
-import { ExclamationCircleOutlined } from '@ant-design/icons';
+import { ExclamationCircleOutlined } from '../icons';
 import { api } from '../api';
 import { useStopAllLock } from './useStopAllLock';
 

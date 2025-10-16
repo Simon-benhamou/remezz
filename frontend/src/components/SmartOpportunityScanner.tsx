@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Button, Table, Tag, Progress, Space, Typography, Select, InputNumber, Switch, Badge, Tooltip } from 'antd';
-import { ReloadOutlined, RocketOutlined, TrophyOutlined, FireOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { ReloadOutlined, RocketOutlined, TrophyOutlined, FireOutlined, ThunderboltOutlined } from '../icons';
 import { api } from '../api';
 
 const { Text, Title } = Typography;

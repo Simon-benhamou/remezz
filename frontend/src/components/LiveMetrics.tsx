@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Row, Col, Statistic, Tag, Space, Alert } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined } from '../icons';
 
 type Props = {
   symbol?: string;

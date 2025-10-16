@@ -18,7 +18,7 @@ import {
   CloseCircleOutlined,
   ExclamationCircleOutlined,
   InfoCircleOutlined,
-} from '@ant-design/icons';
+} from '../icons';
 import { api } from '../api';
 
 type Props = {
@@ -807,4 +807,3 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, onPlan, sess
     </Card>
   );
 }
-

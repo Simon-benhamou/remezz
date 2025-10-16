@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Row, Col, Space, Tag, Tooltip, Typography, Progress, Divider } from 'antd';
-import { ArrowUpOutlined, ArrowDownOutlined, AimOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, ArrowDownOutlined, AimOutlined } from '../icons';
 
 const { Text } = Typography;
 

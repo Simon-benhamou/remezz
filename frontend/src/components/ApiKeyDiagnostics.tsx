@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Button, Space, Typography, Alert, Collapse, Tag, Divider } from 'antd';
-import { BugOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined } from '@ant-design/icons';
+import { BugOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined } from '../icons';
 import { api } from '../api';
 
 const { Title, Text, Paragraph } = Typography;

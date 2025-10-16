@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Space, Tag, Tooltip, Progress, Collapse, Typography } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, ExclamationCircleOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, CloseCircleOutlined, ExclamationCircleOutlined, InfoCircleOutlined } from '../icons';
 import { api } from '../api';
 
 const { Text } = Typography;

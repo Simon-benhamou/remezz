@@ -1,6 +1,6 @@
 import React from 'react';
 import { Table, Tag, Tooltip, Space, Progress, Badge } from 'antd';
-import { TrophyOutlined, FireOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { TrophyOutlined, FireOutlined, ThunderboltOutlined } from '../icons';
 
 export default function TradesTable({ rows = [] }: any) {
   const getTradeBadge = (pnl: number, roi: number) => {

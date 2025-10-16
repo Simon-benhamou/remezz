@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
+import { ArrowDownOutlined, ArrowUpOutlined } from '../icons';
 import { Typography, theme } from 'antd';
 
 const { Title, Text } = Typography;

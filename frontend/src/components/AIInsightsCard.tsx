@@ -1,13 +1,13 @@
 import React from 'react';
 import { Card, Tabs, Space, Tag, Alert, Collapse, Typography, Progress, Row, Col } from 'antd';
-import { 
-  BulbOutlined, 
-  FileTextOutlined, 
-  HeartOutlined, 
+import {
+  BulbOutlined,
+  FileTextOutlined,
+  HeartOutlined,
   ArrowUpOutlined,
   BookOutlined,
-  RobotOutlined
-} from '@ant-design/icons';
+  RobotOutlined,
+} from '../icons';
 
 const { Text, Paragraph } = Typography;
 const { Panel } = Collapse;

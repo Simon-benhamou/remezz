@@ -1,4 +1,3 @@
-import { AreaChartOutlined, BulbOutlined, ControlOutlined, ReadOutlined, WarningOutlined } from '@ant-design/icons';
 import { ConfigProvider, Layout, Menu, Segmented, Space, Tag, theme, ThemeConfig } from 'antd';
 import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -144,18 +143,19 @@ function AuthenticatedApp() {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            gap: 24,
+            gap: 20,
             background: 'rgba(8, 15, 35, 0.92)',
             borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
             boxShadow: '0 12px 25px -18px rgba(2, 6, 23, 0.8)',
-            padding: '18px 28px',
-            height: 'auto',
-            minHeight: 88,
+            padding: '0 28px',
+            height: 72,
+            minHeight: 72,
             lineHeight: 'normal',
-            flexWrap: 'wrap',
+            flexWrap: 'nowrap',
+            overflow: 'hidden',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24, height: '100%' }}>
             <div
               role='button'
               tabIndex={0}
@@ -168,56 +168,59 @@ function AuthenticatedApp() {
               }}
               style={{
                 cursor: 'pointer',
-                padding: '16px 22px',
-                borderRadius: 20,
+                padding: '10px 16px',
+                borderRadius: 18,
                 border: '1px solid rgba(96, 165, 250, 0.32)',
                 background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(59, 130, 246, 0.38))',
                 boxShadow: '0 24px 58px -32px rgba(59, 130, 246, 0.65)',
-                minWidth: 220,
-                lineHeight: 1.2,
+                minWidth: 200,
+                display: 'grid',
+                gridAutoRows: 'max-content',
+                rowGap: 4,
+                alignContent: 'center',
               }}
             >
-              <div style={{ fontSize: 12, color: 'rgba(226, 232, 240, 0.78)', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+              <div style={{ fontSize: 11, color: 'rgba(226, 232, 240, 0.78)', letterSpacing: 0.6, textTransform: 'uppercase' }}>
                 {balanceSubtitle}
               </div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: '#f8fafc', marginTop: 4 }}>{formattedBalance}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'rgba(226, 232, 240, 0.75)', marginTop: 8 }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: '#f8fafc', lineHeight: 1 }}>{formattedBalance}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'rgba(226, 232, 240, 0.75)' }}>
                 <span>{freeSubtitle}</span>
                 <span>{formattedFree}</span>
               </div>
             </div>
-            <Space size={16} wrap>
-              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 16, padding: '10px 16px', minWidth: 110 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>
                 <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
                   ROI
                 </div>
-                <div style={{ color: roiValue >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 16 }}>
+                <div style={{ color: roiValue >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>
                   {roiValue >= 0 ? '+' : '-'}{Math.abs(roiValue).toFixed(1)}%
                 </div>
               </div>
-              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 16, padding: '10px 16px', minWidth: 110 }}>
+              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>
                 <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
                   PnL
                 </div>
-                <div style={{ color: pnlValue >= 0 ? '#60a5fa' : '#f87171', fontWeight: 600, fontSize: 16 }}>
+                <div style={{ color: pnlValue >= 0 ? '#60a5fa' : '#f87171', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>
                   {pnlValue >= 0 ? '+' : '-'}${Math.abs(pnlValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </div>
               </div>
-              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 16, padding: '10px 16px', minWidth: 110 }}>
+              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 80, display: 'grid', rowGap: 2 }}>
                 <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
                   Active
                 </div>
-                <div style={{ color: '#f8fafc', fontWeight: 600, fontSize: 16 }}>{activeAgents}</div>
+                <div style={{ color: '#f8fafc', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>{activeAgents}</div>
               </div>
               {marketCoverage > 0 && (
-                <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 16, padding: '10px 16px', minWidth: 110 }}>
+                <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 80, display: 'grid', rowGap: 2 }}>
                   <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
                     Markets
                   </div>
-                  <div style={{ color: '#f8fafc', fontWeight: 600, fontSize: 16 }}>{marketCoverage}</div>
+                  <div style={{ color: '#f8fafc', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>{marketCoverage}</div>
                 </div>
               )}
-            </Space>
+            </div>
           </div>
           <Space size={18} align='center'>
             <Segmented
@@ -228,7 +231,7 @@ function AuthenticatedApp() {
                 { label: <span style={{ fontWeight: 600, color: mode === 'live' ? '#f87171' : '#cbd5f5' }}>Live</span>, value: 'live' },
               ]}
               onChange={(val) => setMode(val as 'live' | 'paper')}
-              style={{ background: 'rgba(15, 23, 42, 0.85)', color: '#e2e8f0', borderRadius: 999, padding: 4 }}
+              style={{ background: 'rgba(15, 23, 42, 0.85)', color: '#e2e8f0', borderRadius: 999, padding: 2 }}
             />
             {mode === 'live' && (
               <Tag color='error' style={{ borderRadius: 12, padding: '4px 10px', fontWeight: 600 }}>
