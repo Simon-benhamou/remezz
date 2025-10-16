@@ -35,6 +35,7 @@ const OPEN_ORDER_STATUS_LIST = [
   'trigger_pending', 'TRIGGER_PENDING'
 ];
 const OPEN_ORDER_STATUSES = new Set(OPEN_ORDER_STATUS_LIST.map((status) => status.toLowerCase()));
+const POSITION_QTY_EPSILON = 1e-6;
 
 // AUTO-DIRECTIONAL: Détection automatique du bias optimal (VERSION AGRESSIVE)
 function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 'short' | 'none'; confidence: number; reasoning: string } {
@@ -2976,10 +2977,10 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
 
     const agent = AgentHub.get(session.id) as any;
     const hasOpenPosition = Array.isArray(session.positions)
-      && session.positions.some((p: any) => Number(p?.qty || 0) > 0);
+      && session.positions.some((p: any) => Number(p?.qty || 0) > POSITION_QTY_EPSILON);
     const hasOpenOrders = Array.isArray(session.orders)
       && session.orders.some((order: any) => OPEN_ORDER_STATUSES.has(String(order?.status || '').toLowerCase()));
-    const agentBusy = !!(agent && ((agent.pos && Number(agent.pos.qty || 0) > 0) || agent.entering));
+    const agentBusy = !!(agent && ((agent.pos && Number(agent.pos.qty || 0) > POSITION_QTY_EPSILON) || agent.entering));
 
     if (hasOpenPosition || hasOpenOrders || agentBusy) {
       const nextCheck = new Date(now.getTime() + 60 * 60 * 1000); // Re-evaluate in 1h

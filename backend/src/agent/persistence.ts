@@ -4,6 +4,8 @@ import { recomputeKpi } from '../metrics/kpi.js';
 import { finalizeDecisionOutcome } from '../learning/decisionMemory.js';
 import type { CircuitBreakerState } from '../quantai/index.js';
 
+const POSITION_QTY_EPSILON = 1e-6;
+
 export async function recordEnter(params: {
   sessionId: string;
   symbol: string;
@@ -285,11 +287,16 @@ export async function recordExit(params: {
   }
   // Adjust remaining position qty (supports partial exits)
   if (lastPos) {
-    const newQty = Math.max(0, (Number(lastPos.qty || 0) - Number(params.qty || 0)));
+    const existingQty = Number(lastPos.qty || 0);
+    const exitQty = Number(params.qty || 0);
+    const remaining = existingQty - exitQty;
+    const adjustedQty = Math.abs(remaining) <= POSITION_QTY_EPSILON
+      ? 0
+      : Math.max(0, Math.round(remaining * 1e8) / 1e8);
     await prisma.position.update({
       where: { id: lastPos.id },
       data: {
-        qty: newQty,
+        qty: adjustedQty,
         updatedAt: new Date(),
       }
     });
