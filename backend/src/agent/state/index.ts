@@ -60,6 +60,8 @@ export class ReboundRejectionAgent {
   public static readonly memeSymbols = new Set<string>([
     'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'WIF', 'BONK', 'PUMP', 'AVNT', 'MEW', 'WEN',
   ]);
+  private static readonly TIER_PERFORMANCE_RETENTION_MS = 72 * 60 * 60 * 1000; // 72h rolling window
+  private static readonly TIER_PERFORMANCE_MAX = 30;
   state: AgentState = 'IDLE';
   profile: ActivationProfile | null = null;
   plan: ValidatedPlan | null = null;
@@ -6603,6 +6605,27 @@ export class ReboundRejectionAgent {
     return 'choppy';
   }
 
+  private recordTierPerformance(symbol: string | null | undefined, win: boolean, pnlPct: number, timestamp: number): void {
+    if (!symbol) return;
+    const tier = this.getTierForSymbol(symbol);
+    const existing = this.recentTradesByTier.get(tier) ?? [];
+    const now = timestamp;
+    const retentionMs = ReboundRejectionAgent.TIER_PERFORMANCE_RETENTION_MS;
+    const filtered = existing.filter((trade) => now - trade.timestamp <= retentionMs);
+    filtered.push({ symbol, win, pnlPct, timestamp: now });
+    const trimmed = filtered.slice(-ReboundRejectionAgent.TIER_PERFORMANCE_MAX);
+    this.recentTradesByTier.set(tier, trimmed);
+
+    // Also prune other tiers opportunistically to keep data fresh
+    for (const [key, trades] of this.recentTradesByTier.entries()) {
+      if (key === tier) continue;
+      const pruned = trades.filter((trade) => now - trade.timestamp <= retentionMs);
+      if (pruned.length !== trades.length) {
+        this.recentTradesByTier.set(key, pruned);
+      }
+    }
+  }
+
   /**
    * ✅ ULTRA-INTELLIGENT: Adjust quality thresholds BY TIER (contextualized learning)
    * Each tier learns independently: BTC losses don't affect ADA trading
@@ -9510,11 +9533,14 @@ export class ReboundRejectionAgent {
         if (win) {
           this.lastLossStreakNotified = 0;
         }
+        const tradeTimestamp = Date.now();
+        const tradePnlPct = (realizedPnl / (this.pos.entry * this.pos.qty)) * 100;
         this.recentTrades.push({
           win,
-          pnlPct: (realizedPnl / (this.pos.entry * this.pos.qty)) * 100,
-          timestamp: Date.now()
+          pnlPct: tradePnlPct,
+          timestamp: tradeTimestamp
         });
+        this.recordTierPerformance(this.profile?.symbol, win, tradePnlPct, tradeTimestamp);
         
         // 🆕 Track last trade result for breakout mode logic
         this.lastTradeWasWin = win;

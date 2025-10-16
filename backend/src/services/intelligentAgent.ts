@@ -727,7 +727,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       const liquidityGuardrail = evaluateSymbolLiquidityGuardrails(symbol, quoteVolume24h, currentPrice);
       if (!liquidityGuardrail.ok) {
         console.log(`🚫 ${symbol} rejected: ${liquidityGuardrail.reason} (volUsd=$${(quoteVolume24h/1_000_000).toFixed(2)}M, required ≥ $${((liquidityGuardrail.minRequired || 0)/1_000_000).toFixed(1)}M)`);
-        return false;
+        return null;
       }
 
       // SÉCURITÉ: Scoring strict avec validation volume
@@ -751,7 +751,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       const absChange = Math.abs(change24h);
       if (absChange < smartQuality.minMovement) {
         console.log(`🚫 ${symbol} (${smartQuality.label}): Movement ${change24h.toFixed(2)}% below threshold ${smartQuality.minMovement}% for this liquidity level`);
-        return false; // Skip - insufficient movement for liquidity profile
+        return null; // Skip - insufficient movement for liquidity profile
       }
 
       if (volumeScore >= 5.0) { // Seuil volume de base
@@ -779,17 +779,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
         performanceScore,
         lastPrice: currentPrice,
       };
-    }).filter((crypto): crypto is {
-      symbol: string;
-      change24h: number;
-      volume24h: number;
-      quoteVolume24h: number;
-      combinedScore: number;
-      absChange: number;
-      volumeScore: number;
-      performanceScore: number;
-      lastPrice: number;
-    } => {
+    }).filter((crypto): crypto is CryptoPerformanceEntry => {
       if (!crypto) return false;
 
       // Smart eligibility (dynamic)
@@ -818,7 +808,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       }
 
       return true;
-    });
+    }) as CryptoPerformanceEntry[];
 
     if (cryptoPerformance.length === 0) {
       const reason = 'no_dynamic_candidates';
@@ -895,16 +885,21 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
     const finalPerformers = [...prioritySymbols, ...availablePerformers];
 
     if (finalPerformers.length > 0) {
-      const orderedPerformers = finalPerformers
+      let orderedPerformers = finalPerformers
         .map(symbol => ({ symbol, rank: symbolQualityRank(symbol) }))
         .sort((a, b) => a.rank - b.rank)
         .map(item => item.symbol);
+
+      const prioritySet = new Set(prioritySymbols);
+      const performanceForTrend = cryptoPerformance.filter(entry => finalPerformers.includes(entry.symbol));
+      const { ordering: trendWeighted } = await applyTrendWeighting(orderedPerformers, performanceForTrend, prioritySet);
+      orderedPerformers = trendWeighted;
 
       console.log(`✅ Selected ${finalPerformers.length} performers (${prioritySymbols.length} priority + ${availablePerformers.length} normal)`);
       if (prioritySymbols.length > 0) {
         console.log('🔥 Priority symbols (>3%):', prioritySymbols.slice(0, 3));
       }
-      console.log('🏆 Top available (quality first):', orderedPerformers.slice(0, 5));
+      console.log('🏆 Top available (trend-weighted):', orderedPerformers.slice(0, 5));
       updateAutoUniverseStatus({
         source: 'dynamic',
         attempt: attemptLabel,
@@ -1851,6 +1846,164 @@ function determineOpportunity(metrics: any, technical: any, sentiment: any, mult
     playbook: 'volatility',
     targetR: 3,
   };
+}
+
+type TrendAssessment = {
+  symbol: string;
+  score: number;
+  ok: boolean;
+  direction: 'bullish' | 'bearish' | 'neutral';
+  adx: number;
+  trendStrength: number;
+  slope: number;
+  atrPct: number;
+  reasons: string[];
+};
+
+type CryptoPerformanceEntry = {
+  symbol: string;
+  change24h: number;
+  volume24h: number;
+  quoteVolume24h: number;
+  combinedScore: number;
+  absChange: number;
+  volumeScore: number;
+  performanceScore: number;
+  lastPrice: number;
+};
+
+function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null): TrendAssessment {
+  if (!snap) {
+    return {
+      symbol,
+      score: 0,
+      ok: false,
+      direction: 'neutral',
+      adx: 0,
+      trendStrength: 0,
+      slope: 0,
+      atrPct: 0,
+      reasons: ['no_snapshot'],
+    };
+  }
+
+  const adx = Number(snap.adx14 ?? 0);
+  const trendStrength = Number(snap.trendStrength ?? 0);
+  const ema20 = Number(snap.ema20 ?? 0);
+  const ema50 = Number(snap.ema50 ?? 0);
+  const ema100 = Number(snap.ema100 ?? 0);
+  const ema200 = Number(snap.ema200 ?? 0);
+  const last = Number(snap.last ?? 0);
+  const slope = Number(snap.ema20Slope ?? 0);
+  const atrPct = Number(snap.atrPct ?? 0);
+  const cmf = Number(snap.cmf20 ?? 0);
+
+  const direction: TrendAssessment['direction'] = ema20 > ema50
+    ? 'bullish'
+    : ema20 < ema50
+      ? 'bearish'
+      : 'neutral';
+
+  const adxScore = Math.max(0, Math.min(1, (adx - 15) / 22));
+  const strengthScore = Math.max(0, Math.min(1, (trendStrength - 0.2) / 0.8));
+  const alignment = ema50 !== 0 ? Math.abs((ema20 - ema50) / ema50) : 0;
+  const alignmentScore = Math.max(0, Math.min(1, alignment / 0.018));
+  const slopeNorm = last !== 0 ? Math.abs(slope / last) : 0;
+  const slopeScore = Math.max(0, Math.min(1, slopeNorm * 220));
+  const flowScore = Math.max(0, Math.min(1, (cmf + 0.2) / 0.6));
+
+  const weightedScore = adxScore * 0.3 + strengthScore * 0.3 + alignmentScore * 0.2 + slopeScore * 0.1 + flowScore * 0.1;
+  const score = Number(weightedScore.toFixed(4));
+
+  const reasons: string[] = [];
+  if (adx < 18) reasons.push('adx_below_trend_threshold');
+  if (trendStrength < 0.25) reasons.push('weak_trend_structure');
+  if (direction === 'bullish' && ema20 <= ema100) reasons.push('bullish_trend_missing_stack');
+  if (direction === 'bearish' && ema20 >= ema100) reasons.push('bearish_trend_missing_stack');
+  if (Math.abs(cmf) < 0.05) reasons.push('neutral_flow');
+  if (ema200 !== 0) {
+    const distance = Math.abs((last - ema200) / ema200) * 100;
+    if (distance < 0.4) reasons.push('price_near_ema200');
+  }
+
+  const ok = score >= 0.45 && adx >= 18 && trendStrength >= 0.25;
+
+  return {
+    symbol,
+    score,
+    ok,
+    direction,
+    adx,
+    trendStrength,
+    slope,
+    atrPct,
+    reasons,
+  };
+}
+
+async function evaluateSymbolTrend(symbol: string): Promise<TrendAssessment> {
+  const candidates = symbol.includes(':') ? [symbol] : [symbol, `${symbol}:USDT`];
+  let lastError: unknown = null;
+  for (const candidate of candidates) {
+    try {
+      const snap = await buildTechSnapshot(candidate);
+      return computeTrendConfidence(symbol, snap);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) {
+    console.warn(`⚠️ Trend snapshot unavailable for ${symbol}:`, lastError);
+  }
+  return computeTrendConfidence(symbol, null);
+}
+
+async function applyTrendWeighting(
+  symbols: string[],
+  performance: CryptoPerformanceEntry[],
+  prioritySymbols: Set<string>,
+): Promise<{ ordering: string[]; evaluations: TrendAssessment[] }> {
+  if (symbols.length === 0) {
+    return { ordering: symbols, evaluations: [] };
+  }
+
+  console.log(`🔎 Evaluating trend diagnostics for ${symbols.length} candidate${symbols.length === 1 ? '' : 's'}...`);
+  const evaluations = await Promise.all(symbols.map((symbol) => evaluateSymbolTrend(symbol)));
+
+  evaluations.forEach((evaluation) => {
+    const status = evaluation.ok ? '✅' : '⚠️';
+    const details = `score=${(evaluation.score * 100).toFixed(1)}%, ADX=${evaluation.adx.toFixed(1)}, trend=${evaluation.trendStrength.toFixed(2)}, slope=${evaluation.slope.toFixed(4)}`;
+    const reasons = evaluation.reasons.length ? ` | ${evaluation.reasons.join(', ')}` : '';
+    console.log(`${status} ${evaluation.symbol}: ${details}${reasons}`);
+  });
+
+  if (!evaluations.some((ev) => ev.ok)) {
+    console.log('⚠️ No candidates passed trend quality threshold. Retaining original ordering.');
+    return { ordering: symbols, evaluations };
+  }
+
+  const perfMap = new Map(performance.map((entry) => [entry.symbol, entry]));
+  const evalMap = new Map(evaluations.map((entry) => [entry.symbol, entry]));
+
+  const scored = symbols.map((symbol, idx) => {
+    const perf = perfMap.get(symbol);
+    const trend = evalMap.get(symbol);
+    const perfScore = perf ? Math.max(0.15, Math.min(1, perf.combinedScore / 12)) : 0.4;
+    const trendScore = trend ? trend.score : 0;
+    const reliability = trend && trend.ok ? 0.08 : -0.05;
+    const priorityBonus = prioritySymbols.has(symbol) ? 0.05 : 0;
+    const finalScore = perfScore * 0.45 + trendScore * 0.5 + reliability + priorityBonus;
+    return { symbol, finalScore, idx };
+  });
+
+  scored.sort((a, b) => {
+    if (b.finalScore === a.finalScore) return a.idx - b.idx;
+    return b.finalScore - a.finalScore;
+  });
+
+  const ordering = scored.map((item) => item.symbol);
+  console.log('🏁 Trend-weighted ordering:', ordering.slice(0, 8));
+  return { ordering, evaluations };
 }
 
 /**
