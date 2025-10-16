@@ -497,6 +497,9 @@ export class ReboundRejectionAgent {
     status: 'new' | 'open' | 'partially_filled' | 'filled' | 'canceled' | 'rejected';
     targetNotional: number;
     timeoutMs: number;
+    readiness?: number;
+    lastFillTs?: number;
+    fillNotional?: number;
   } | null = null;
   private volumeProbeTimeout: NodeJS.Timeout | null = null;
   private momentumAwaitContext: MomentumAwaitContext = createMomentumAwaitContext();
@@ -514,7 +517,7 @@ export class ReboundRejectionAgent {
       timeThresholdMs: number;
       timeInZoneMs: number;
       mode: 'standard' | 'momentum';
-      confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null;
+      confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | 'probe' | null;
     };
   } | null = null;
   
@@ -4996,11 +4999,12 @@ export class ReboundRejectionAgent {
       timeThresholdMs: number;
       timeInZoneMs: number;
       mode: 'standard' | 'momentum';
-      confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null;
+      confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | 'probe' | null;
     };
   } {
     const now = Date.now();
     const cfg = getConfig();
+    const sessionContext = this.resolveSessionLiquidityContext(now);
     const priceInZone = currentPrice >= entryZone.from && currentPrice <= entryZone.to;
     const { playbook: contextualPlaybook } = this.getContextualPlaybook(snap, bias);
     const adxSnapshot = typeof snap.adx14 === 'number' ? Number(snap.adx14) : 0;
@@ -5040,6 +5044,8 @@ export class ReboundRejectionAgent {
     const rawVolumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 0;
     const adxValue = adxSnapshot;
     const adxSlopeVal = Number.isFinite(snap.adxSlope) ? snap.adxSlope : 0;
+    const realizedVol = Number.isFinite(snap.realizedVol) ? Number(snap.realizedVol) : 0;
+    const realizedVolNorm = this.normalizeToUnitInterval(realizedVol, 40, 160);
     const breakoutActive = this.runtimeZoneDiagnostics?.breakoutActive ?? false;
 
     const momentumCtx = this.momentumAwaitContext;
@@ -5117,7 +5123,7 @@ export class ReboundRejectionAgent {
       timeMode = 'momentum';
     }
 
-    const buildMeta = (mode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null) => ({
+    const buildMeta = (mode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | 'probe' | null) => ({
       timeThresholdMs,
       timeInZoneMs,
       mode: timeMode,
@@ -5282,16 +5288,60 @@ export class ReboundRejectionAgent {
         adaptiveNeed = Math.max(ratioFloor, adaptiveNeed - relaxAmount);
       }
     }
+
+    const sessionBias = sessionContext.liquidityBias;
+    if (sessionBias < 0) {
+      const offPeakDampener = 1 - Math.min(0.8, realizedVolNorm * 0.6);
+      const relax = Math.min(0.12, Math.abs(sessionBias) * offPeakDampener);
+      adaptiveNeed = Math.max(ratioFloor, adaptiveNeed - relax);
+    } else if (sessionBias > 0) {
+      const overlapBoost = 0.5 + realizedVolNorm * 0.6;
+      const tighten = Math.min(0.12, sessionBias * overlapBoost);
+      adaptiveNeed = Math.min(ratioCeil, adaptiveNeed + tighten);
+    }
+
+    if (sessionContext.weekend) {
+      adaptiveNeed = Math.max(ratioFloor, adaptiveNeed - 0.02);
+    }
+
     adaptiveNeed = this.clampValue(adaptiveNeed, ratioFloor, ratioCeil);
+
+    const probeFeedback = this.resolveProbeFeedback(now);
+    const probeRelax = probeFeedback.signal && probeFeedback.relax > 0
+      ? Math.min(probeFeedback.relax, adaptiveNeed - ratioFloor)
+      : 0;
+    const adaptiveNeedWithProbe = Math.max(ratioFloor, adaptiveNeed - probeRelax);
     const prevRatio = prevVolumeRatio ?? rawVolumeRatio;
     const volumeSpike = Number.isFinite(rawVolumeRatio)
-      && rawVolumeRatio >= Math.max(0.95, adaptiveNeed * 0.85)
+      && rawVolumeRatio >= Math.max(0.95, adaptiveNeedWithProbe * 0.85)
       && (prevRatio ? rawVolumeRatio >= prevRatio * 1.05 : true);
     const minFastTrackRatio = 0.85;
     const volumeSignal = volumeRatioSmoothed >= minFastTrackRatio;
     const deltaSignal = cmfAligned;
     const volSpikeSignal = volumeSpike;
-    const positiveSignals = [volumeSignal, deltaSignal, volSpikeSignal].filter(Boolean).length;
+    const trendBias = typeof snap.trendBias === 'string' ? snap.trendBias : null;
+    const trendBiasSignal = trendBias != null
+      ? ((trendBias === 'bullish' && bias === 'long') || (trendBias === 'bearish' && bias === 'short'))
+      : false;
+    const realizedVolSignal = realizedVolNorm >= 0.55;
+    const sessionSignal = sessionContext.liquidityBias >= 0.06;
+    const probeSignal = probeFeedback.signal;
+    const signalDescriptors = [
+      { active: volumeSignal, weight: 1, label: 'volume≥0.85x' },
+      { active: deltaSignal, weight: 1, label: 'CMF aligned' },
+      { active: volSpikeSignal, weight: 0.75, label: 'vol spike' },
+      { active: trendBiasSignal, weight: 0.6, label: trendBias ? `trend ${trendBias}` : 'trend support' },
+      { active: realizedVolSignal, weight: 0.5, label: 'realized vol high' },
+      { active: sessionSignal, weight: 0.4, label: `${sessionContext.label} liquidity` },
+      { active: probeSignal, weight: 1, label: 'probe fill' },
+    ];
+    const signalScore = signalDescriptors.reduce(
+      (sum, descriptor) => sum + (descriptor.active ? descriptor.weight : 0),
+      0,
+    );
+    const activeSignalLabels = signalDescriptors
+      .filter((descriptor) => descriptor.active)
+      .map((descriptor) => descriptor.label);
 
     const planPlaybook = this.plan?.plan?.meta?.playbook ?? null;
     const breakoutDistancePct = this.runtimeZoneDiagnostics?.breakoutDistancePct ?? 0;
@@ -5300,14 +5350,23 @@ export class ReboundRejectionAgent {
       : currentPrice <= entryZone.mid;
     const timeoutMs = 2 * 15 * 60 * 1000;
 
-    let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | null = null;
-    let effectiveNeed = adaptiveNeed;
-    let volumeConfirmed = volumeRatioSmoothed >= adaptiveNeed;
+    let confirmationMode: 'adaptive' | 'fast_track' | 'timeout' | 'momentum' | 'probe' | null = null;
+    let effectiveNeed = adaptiveNeedWithProbe;
+    let volumeConfirmed = volumeRatioSmoothed >= adaptiveNeedWithProbe;
 
-    if (!volumeConfirmed && adxImproving && positiveSignals >= 2 && volumeSignal) {
+    if (!volumeConfirmed && adxImproving && signalScore >= 2.25 && (volumeSignal || probeSignal)) {
       volumeConfirmed = true;
       confirmationMode = 'fast_track';
-      effectiveNeed = Math.max(minFastTrackRatio, Math.min(adaptiveNeed, volumeRatioSmoothed));
+      effectiveNeed = Math.max(minFastTrackRatio, Math.min(adaptiveNeedWithProbe, volumeRatioSmoothed));
+    }
+
+    if (!volumeConfirmed && probeSignal) {
+      const probeThreshold = Math.max(minFastTrackRatio, adaptiveNeedWithProbe * 0.97);
+      if (volumeRatioSmoothed >= probeThreshold) {
+        volumeConfirmed = true;
+        confirmationMode = 'probe';
+        effectiveNeed = Math.max(minFastTrackRatio, Math.min(adaptiveNeedWithProbe, volumeRatioSmoothed));
+      }
     }
 
     if (
@@ -5326,7 +5385,7 @@ export class ReboundRejectionAgent {
     }
 
     if (!volumeConfirmed) {
-      const target = confirmationMode === 'fast_track' ? minFastTrackRatio : adaptiveNeed;
+      const target = confirmationMode === 'fast_track' ? minFastTrackRatio : adaptiveNeedWithProbe;
       const currentRatio = Number.isFinite(volumeRatioSmoothed) ? volumeRatioSmoothed : rawVolumeRatio;
       const ratioDisplay = Number.isFinite(currentRatio) ? currentRatio.toFixed(2) : '0.00';
       const rawDisplay = Number.isFinite(rawVolumeRatio) && rawVolumeRatio > 0 ? rawVolumeRatio.toFixed(2) : '0.00';
@@ -5364,15 +5423,21 @@ export class ReboundRejectionAgent {
       };
     }
     if (confirmationMode === 'fast_track') {
-      const signalsUsed = [
-        volumeSignal ? 'volume≥0.85x' : null,
-        deltaSignal ? 'CMF aligned' : null,
-        volSpikeSignal ? 'vol spike' : null,
-      ].filter(Boolean).join(' + ');
+      const signalsUsed = activeSignalLabels.slice(0, 4).join(' + ');
       return {
         confirmed: true,
-        reason: `${baseReason}, order-flow fast track (${signalsUsed || 'signals'}) → volume ${smoothedDisplay}x (raw ${rawDisplay}x)`,
+        reason: `${baseReason}, order-flow fast track (${signalsUsed || 'signals'}; score ${signalScore.toFixed(2)}) → volume ${smoothedDisplay}x (raw ${rawDisplay}x)`,
         meta: buildMeta('fast_track'),
+      };
+    }
+
+    if (confirmationMode === 'probe') {
+      const probeDescriptor = probeFeedback.status === 'filled' ? 'probe fill' : 'probe signal';
+      const signalsUsed = activeSignalLabels.slice(0, 4).join(' + ');
+      return {
+        confirmed: true,
+        reason: `${baseReason}, ${probeDescriptor} support (${signalsUsed || 'signals'}) → volume ${smoothedDisplay}x (raw ${rawDisplay}x)`,
+        meta: buildMeta('probe'),
       };
     }
 
@@ -5427,6 +5492,79 @@ export class ReboundRejectionAgent {
     const normalized = (value - min) / (max - min);
     if (!Number.isFinite(normalized)) return 0;
     return Math.max(0, Math.min(1, normalized));
+  }
+
+  private resolveSessionLiquidityContext(ts: number): {
+    liquidityBias: number;
+    label: string;
+    weekend: boolean;
+    offPeak: boolean;
+  } {
+    const date = new Date(ts);
+    const hour = date.getUTCHours();
+    const day = date.getUTCDay();
+    const weekend = day === 0 || day === 6;
+
+    let baseLabel = 'asia';
+    let bias = -0.06;
+
+    if (hour >= 12 && hour < 19) {
+      baseLabel = 'us overlap';
+      bias = 0.12;
+    } else if (hour >= 7 && hour < 12) {
+      baseLabel = 'europe';
+      bias = 0.07;
+    } else if (hour >= 19 && hour < 22) {
+      baseLabel = 'us late';
+      bias = -0.04;
+    } else if (hour >= 0 && hour < 2) {
+      baseLabel = 'asia open';
+      bias = -0.1;
+    } else if (hour >= 2 && hour < 7) {
+      baseLabel = 'asia';
+      bias = -0.05;
+    } else {
+      baseLabel = 'transition';
+      bias = -0.03;
+    }
+
+    if (weekend) {
+      bias -= 0.05;
+    }
+
+    const liquidityBias = Math.max(-0.15, Math.min(0.15, bias));
+    const label = weekend ? `${baseLabel} wknd` : baseLabel;
+    const offPeak = liquidityBias <= 0;
+
+    return { liquidityBias, label, weekend, offPeak };
+  }
+
+  private resolveProbeFeedback(now: number): { signal: boolean; relax: number; status: 'filled' | 'partial' | null } {
+    const state = this.volumeProbeState;
+    if (!state) {
+      return { signal: false, relax: 0, status: null };
+    }
+
+    const lastInteraction = state.lastFillTs ?? state.lastAttemptTs;
+    if (!(lastInteraction > 0) || now - lastInteraction > 5 * 60 * 1000) {
+      return { signal: false, relax: 0, status: null };
+    }
+
+    if (state.status === 'filled') {
+      const readiness = Number.isFinite(state.readiness) ? Math.max(0, Math.min(2, state.readiness!)) : 1;
+      const relax = Math.max(0.02, Math.min(0.08, 0.03 + (readiness - 0.7) * 0.08));
+      return { signal: true, relax, status: 'filled' };
+    }
+
+    if (state.status === 'partially_filled') {
+      const readiness = Number.isFinite(state.readiness) ? state.readiness! : 0.9;
+      if (readiness >= 0.9) {
+        const relax = Math.max(0.01, Math.min(0.05, (readiness - 0.85) * 0.1));
+        return { signal: true, relax, status: 'partial' };
+      }
+    }
+
+    return { signal: false, relax: 0, status: null };
   }
 
   private clampValue(value: number, min: number, max: number): number {
@@ -7803,8 +7941,9 @@ export class ReboundRejectionAgent {
       if (now - existing.lastAttemptTs < cooldownMs) return;
     }
     if (!(params.targetRatio > 0) || !(params.currentRatio > 0)) return;
-    const readiness = params.currentRatio / params.targetRatio;
+    let readiness = params.currentRatio / params.targetRatio;
     if (!Number.isFinite(readiness) || readiness < 0.7) return;
+    readiness = Math.max(0, Math.min(2, readiness));
 
     const cfg = getConfig();
     const floorUsd = Math.max(30, Number(cfg.MIN_ORDER_NOTIONAL_USD || 0));
@@ -7827,6 +7966,7 @@ export class ReboundRejectionAgent {
       status: 'new' as const,
       targetNotional,
       timeoutMs,
+      readiness,
     };
     this.volumeProbeState = attempt;
 
@@ -7872,6 +8012,9 @@ export class ReboundRejectionAgent {
         this.volumeProbeState = {
           ...this.volumeProbeState!,
           active: false,
+          status: 'filled',
+          lastFillTs: now,
+          fillNotional: (order as any)?.filledNotional ?? targetNotional,
         };
         return;
       }
