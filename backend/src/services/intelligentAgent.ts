@@ -2,7 +2,7 @@ import { prisma } from '../db/client.js';
 import { getTicker, getOHLCV } from '../data/market.js';
 import { isUnusableMarketDataError } from '../data/errors.js';
 import { fullAnalysis, computeProjection } from '../ai/analysis.js';
-import { buildTechSnapshot } from '../ai/tech.js';
+import { buildTechSnapshot, type TechnicalSnapshot } from '../ai/tech.js';
 import { getAIRankedOpportunities, type RankedOpportunity } from '../ai/cryptoRanking.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
@@ -2568,6 +2568,252 @@ export async function checkIntelligentOpportunities(): Promise<void> {
 /**
  * Optimized session check: 12h minimum + trade activity condition + sleep mode handling
  */
+async function maybeHandleDirectionalReversal(
+  session: any,
+  config: any,
+  now: Date,
+  minHoldHours: number,
+  hoursSinceSelection: number
+): Promise<boolean> {
+  try {
+    if (!session?.symbol || !config?.analysis) {
+      return false;
+    }
+
+    const analysis = config.analysis as any;
+    const expectedBiasRaw = analysis?.autoBias?.bias ?? analysis?.opportunity?.direction ?? null;
+    let expectedBias: 'long' | 'short' | null = null;
+    if (expectedBiasRaw === 'long' || expectedBiasRaw === 'bullish') expectedBias = 'long';
+    else if (expectedBiasRaw === 'short' || expectedBiasRaw === 'bearish') expectedBias = 'short';
+
+    if (!expectedBias) {
+      return false;
+    }
+
+    const minHoursBeforeCheck = Math.max(
+      1,
+      Math.min(
+        minHoldHours,
+        Number(process.env.SMART_DIRECTIONAL_REVERSAL_MIN_HOURS || '1.5')
+      ),
+    );
+    if (hoursSinceSelection < minHoursBeforeCheck) {
+      return false;
+    }
+
+    let snap: TechnicalSnapshot | null = null;
+    try {
+      snap = await buildTechSnapshot(session.symbol);
+    } catch (error) {
+      console.warn(`⚠️ Failed to build tech snapshot for ${session.symbol} during reversal check:`, error);
+      return false;
+    }
+
+    if (!snap) return false;
+
+    const ema20 = Number(snap.ema20 ?? 0);
+    const ema50 = Number(snap.ema50 ?? 0);
+    const slopeRaw = Number(snap.ema20Slope ?? 0);
+    const slopePct = Math.abs(ema20) > 1e-8 ? (slopeRaw / Math.abs(ema20)) * 100 : 0;
+    const emaSpreadPct = Math.abs(ema50) > 1e-8 ? Math.abs(ema20 - ema50) / Math.abs(ema50) * 100 : 0;
+    const adx = Number(snap.adx14 ?? 0);
+    const trendStrength = Number((snap as any)?.trendStrength ?? 0);
+    const regimeBias = snap.trendBias === 'bullish' ? 'long' : snap.trendBias === 'bearish' ? 'short' : 'none';
+    const slopeBias = slopeRaw >= 0 ? 'long' : 'short';
+    const maBias = ema20 >= ema50 ? 'long' : 'short';
+
+    const consensus = [slopeBias, maBias, regimeBias].reduce(
+      (acc: { long: number; short: number }, value) => {
+        if (value === 'long') acc.long += 1;
+        else if (value === 'short') acc.short += 1;
+        return acc;
+      },
+      { long: 0, short: 0 }
+    );
+    const consensusBias =
+      consensus.long === consensus.short
+        ? maBias
+        : consensus.long > consensus.short
+          ? 'long'
+          : 'short';
+    const consensusStrength = Math.max(consensus.long, consensus.short);
+
+    let change24h = 0;
+    try {
+      const ticker = await getTicker(session.symbol);
+      change24h = Number(ticker?.percentage ?? (ticker as any)?.info?.priceChangePercent ?? 0);
+    } catch (error) {
+      console.warn(`⚠️ Failed to fetch ticker for ${session.symbol} during reversal check:`, error);
+    }
+
+    const previousMomentum = Number(analysis?.metrics?.momentum ?? 0);
+    const momentumFlip =
+      Number.isFinite(previousMomentum) &&
+      Math.abs(change24h) >= 1 &&
+      Math.sign(previousMomentum) !== Math.sign(change24h);
+
+    const structuralReversal =
+      consensusBias !== expectedBias &&
+      consensusStrength >= 2 &&
+      emaSpreadPct >= Number(process.env.SMART_DIRECTIONAL_REVERSAL_SPREAD_PCT || 0.35);
+    const trendSupport = adx >= 18 || trendStrength >= 0.9;
+    const momentumSupport = momentumFlip || Math.abs(change24h) >= 2;
+
+    if (!(structuralReversal && trendSupport && momentumSupport)) {
+      return false;
+    }
+
+    console.log(
+      `🔄 Directional reversal guard triggered for ${session.id} (${session.symbol}) ` +
+        `bias ${expectedBias}→${consensusBias} | Δ24h ${change24h.toFixed(2)}% | ADX ${adx.toFixed(2)} | slope ${slopePct.toFixed(3)}%`
+    );
+
+    recordOpsEvent({
+      level: 'warn',
+      source: 'intelligent_rotation',
+      message: 'directional_reversal_detected',
+      sessionId: session.id,
+      symbol: session.symbol,
+      details: {
+        expectedBias,
+        consensusBias,
+        consensusStrength,
+        emaSpreadPct,
+        slopePct,
+        adx,
+        trendStrength,
+        change24h,
+        momentumFlip,
+        hoursSinceSelection,
+      },
+    });
+
+    const candidate = await getBestIntelligentOpportunity(session.id, { relaxSteps: 1 });
+
+    if (!candidate) {
+      const nextCheck = new Date(now.getTime() + 60 * 60 * 1000);
+      await mergeSessionProfileJson(session.id, {
+        lastScan: now.toISOString(),
+        nextScanDue: nextCheck.toISOString(),
+        pendingRotation: 'directional_reversal_wait',
+      });
+      await updateSessionNextCheck(session.id, nextCheck);
+      return true;
+    }
+
+    const historyBase = normalizePlanContainer(session.planJson).intelligentHistory || [];
+    const historyEntryBase = {
+      timestamp: now.toISOString(),
+      fromBias: expectedBias,
+      toBias: consensusBias,
+      change24h,
+      adx,
+      slopePct,
+      emaSpreadPct,
+    } as Record<string, any>;
+
+    if (candidate.symbol !== session.symbol) {
+      const updatedConfig = {
+        ...(config || {}),
+        analysis: candidate,
+        selectedAt: now.toISOString(),
+        lastScan: now.toISOString(),
+        nextScanDue: new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString(),
+        switchReason: 'directional_reversal',
+        sleepMode: false,
+      };
+
+      try {
+        await prisma.$executeRaw`
+          UPDATE "AgentSession"
+          SET "symbol" = ${candidate.symbol}, "currentSymbol" = ${candidate.symbol}, "lastSymbolSwitchAt" = NOW()
+          WHERE id = ${session.id}
+        `;
+      } catch (error) {
+        console.warn(`⚠️ Failed to persist symbol switch for ${session.id}:`, error);
+      }
+
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: { profileJson: updatedConfig as any },
+      });
+      const history = clampHistory([
+        ...historyBase,
+        {
+          ...historyEntryBase,
+          action: 'intelligent_switch_reversal',
+          fromSymbol: session.symbol,
+          toSymbol: candidate.symbol,
+          score: candidate.score,
+          confidence: candidate.confidence,
+          reasoning: candidate.reasoning.summary,
+        },
+      ]);
+      await mergePlanContainer(session.id, { intelligentHistory: history });
+      await refreshPlanAndStrategy(session.id, candidate.symbol, 'intelligent_switch_reversal');
+
+      recordOpsEvent({
+        level: 'info',
+        source: 'intelligent_rotation',
+        message: 'directional_reversal_switch',
+        sessionId: session.id,
+        symbol: candidate.symbol,
+        details: {
+          fromSymbol: session.symbol,
+          toSymbol: candidate.symbol,
+          score: candidate.score,
+          confidence: candidate.confidence,
+        },
+      });
+    } else {
+      const updatedConfig = {
+        ...(config || {}),
+        analysis: candidate,
+        selectedAt: now.toISOString(),
+        lastScan: now.toISOString(),
+        nextScanDue: new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString(),
+        switchReason: 'directional_reversal_refresh',
+        sleepMode: false,
+      };
+
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: { profileJson: updatedConfig as any },
+      });
+      const history = clampHistory([
+        ...historyBase,
+        {
+          ...historyEntryBase,
+          action: 'intelligent_refresh_reversal',
+          symbol: session.symbol,
+          score: candidate.score,
+          confidence: candidate.confidence,
+          reasoning: candidate.reasoning.summary,
+        },
+      ]);
+      await mergePlanContainer(session.id, { intelligentHistory: history });
+      await refreshPlanAndStrategy(session.id, candidate.symbol, 'intelligent_reversal_refresh');
+
+      recordOpsEvent({
+        level: 'info',
+        source: 'intelligent_rotation',
+        message: 'directional_reversal_refresh',
+        sessionId: session.id,
+        symbol: session.symbol,
+        details: {
+          score: candidate.score,
+          confidence: candidate.confidence,
+        },
+      });
+    }
+
+    return true;
+  } catch (error) {
+    console.warn(`⚠️ Directional reversal handling failed for ${session?.id}:`, error);
+    return false;
+  }
+}
+
 async function checkSessionForBetterOpportunityOptimized(session: any): Promise<void> {
   try {
     const config = session.profileJson as any;
@@ -2793,6 +3039,16 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     
     // RULE 1: Minimum hold period (configurable)
     if (hoursSinceSelection < minHoldHours) {
+      const reversalHandled = await maybeHandleDirectionalReversal(
+        session,
+        config,
+        now,
+        minHoldHours,
+        hoursSinceSelection
+      );
+      if (reversalHandled) {
+        return;
+      }
       console.log(`⏱️ Session ${session.id}: Only ${hoursSinceSelection.toFixed(1)}h since selection (${minHoldHours}h minimum)`);
       return;
     }

@@ -103,6 +103,7 @@ export class ReboundRejectionAgent {
     assessment: QualityAssessmentSnapshot;
   } | null = null;
   public marketContext: MarketContext | null = null;
+  public lastMarketContextSignature: { direction: 'long' | 'short' | 'none'; playbook: string; updatedAt: number } | null = null;
 
   // Entry zone intelligence helpers
   public confirmEntrySignal = entryZoneMethods.confirmEntrySignal;
@@ -5238,6 +5239,88 @@ export class ReboundRejectionAgent {
     };
   }
 
+  private refreshEntryDiagnosticsForContext(
+    snap: TechnicalSnapshot,
+    playbook: 'trend_following' | 'mean_reversion' | 'momentum_breakout'
+  ): void {
+    if (!this.profile) {
+      this.resetQualityPreview();
+      return;
+    }
+
+    const aggressiveness = this.profile.aggressiveness ?? 'reactive';
+    try {
+      const profile = this.getQualityScoreProfile(playbook, aggressiveness);
+      const diagnostics = this.getQualityFiltersDiagnostics(snap);
+      const assessment = this.assessQualityScore(diagnostics, 0, {
+        weights: profile.weights,
+        majorityRatio: profile.majorityRatio,
+        partialCredit: profile.partialCredit,
+        minPassCount: profile.minPassCount,
+        comboTolerance: profile.comboTolerance,
+      }) as QualityAssessmentSnapshot;
+      this.previewQualityDiagnostics = {
+        snapshotKey: this.getQualitySnapshotKey(snap),
+        data: diagnostics,
+        assessment,
+      };
+    } catch (error) {
+      console.warn('Failed to refresh entry diagnostics on market context shift:', error);
+      this.resetQualityPreview();
+    }
+  }
+
+  private handleMarketContextShift(
+    previous: MarketContext | null,
+    next: MarketContext,
+    snap: TechnicalSnapshot
+  ): void {
+    const directionChanged =
+      previous != null &&
+      previous.direction !== next.direction &&
+      previous.direction !== 'none' &&
+      next.direction !== 'none';
+    const playbookChanged = previous != null && previous.effectivePlaybook !== next.effectivePlaybook;
+    const trendStateChanged =
+      previous != null && (previous.strongTrend !== next.strongTrend || previous.moderateTrend !== next.moderateTrend);
+
+    if (!previous) {
+      this.refreshEntryDiagnosticsForContext(snap, next.effectivePlaybook);
+    } else if (directionChanged || playbookChanged || trendStateChanged) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'market_context',
+        message: 'market_context_shift',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          fromDirection: previous.direction,
+          toDirection: next.direction,
+          fromPlaybook: previous.effectivePlaybook,
+          toPlaybook: next.effectivePlaybook,
+          fromStrongTrend: previous.strongTrend,
+          toStrongTrend: next.strongTrend,
+          fromModerateTrend: previous.moderateTrend,
+          toModerateTrend: next.moderateTrend,
+        },
+      });
+      console.log(
+        `🧭 Market context shift detected | dir ${previous.direction}→${next.direction} | playbook ${previous.effectivePlaybook}` +
+          `→${next.effectivePlaybook} | trend strong ${previous.strongTrend}→${next.strongTrend}`
+      );
+      this.resetQualityPreview();
+      this.refreshEntryDiagnosticsForContext(snap, next.effectivePlaybook);
+      this.lastMomentumGateResult = null;
+      this.resetMomentumAwaitContext();
+    }
+
+    this.lastMarketContextSignature = {
+      direction: next.direction,
+      playbook: next.effectivePlaybook,
+      updatedAt: Date.now(),
+    };
+  }
+
   public resolveMarketContext(
     snap: TechnicalSnapshot,
     basePlaybook: string,
@@ -5326,6 +5409,7 @@ export class ReboundRejectionAgent {
       notes.push(`recognized_primary=${primaryStrategy.id}:${primaryStrategy.bias}:${primaryStrategy.confidence.toFixed(2)}`);
     }
 
+    const previousContext = this.marketContext;
     const context: MarketContext = {
       regime,
       basePlaybook,
@@ -5344,6 +5428,7 @@ export class ReboundRejectionAgent {
       primaryStrategy,
     };
 
+    this.handleMarketContextShift(previousContext, context, snap);
     this.marketContext = context;
     return context;
   }
