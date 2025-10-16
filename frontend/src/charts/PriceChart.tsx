@@ -49,23 +49,22 @@ export default function PriceChart({
   const trailSeriesRef = React.useRef<any>(null);
   const pnlRef = React.useRef<HTMLDivElement|null>(null);
   const markersRef = React.useRef<any[]>([]);
+  const tooltipRef = React.useRef<HTMLDivElement|null>(null);
+
+  const [overlays, setOverlays] = React.useState({
+    plan: true,
+    pivots: true,
+    projection: true,
+    trades: true,
+  });
   
   // State to track historical + live data
   const [chartData, setChartData] = React.useState<Array<{time: number, value: number}>>([]);
   const [isLoadingHistory, setIsLoadingHistory] = React.useState(true);
-  React.useEffect(()=> {
-    if (!chartRef.current || !seriesRef.current) return;
-    plP.current  = seriesRef.current.createPriceLine({ price: 0, title: 'Pivot P', lineWidth: 1 });
-    plS1.current = seriesRef.current.createPriceLine({ price: 0, title: 'S1', lineWidth: 1 });
-    plR1.current = seriesRef.current.createPriceLine({ price: 0, title: 'R1', lineWidth: 1 });
-    plBE.current = seriesRef.current.createPriceLine({ price: 0, title: 'Break-even', lineWidth: 1, color: '#888' });
+
+  const toggleOverlay = React.useCallback((key: keyof typeof overlays) => {
+    setOverlays(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
-  React.useEffect(()=> {
-    if (!pivots) return;
-    plP.current?.applyOptions({ price: pivots.P });
-    plS1.current?.applyOptions({ price: pivots.S1 });
-    plR1.current?.applyOptions({ price: pivots.R1 });
-  }, [pivots]);
 
   React.useEffect(()=> {
     const be = agentPos?.breakeven;
@@ -83,9 +82,21 @@ export default function PriceChart({
     if (!ref.current) return;
     const chart = createChart(ref.current, {
       height: 360,
-      layout:{ textColor:'#222', background:{ type: ColorType.Solid, color: 'white' } },
+      layout:{ textColor:'#1e293b', background:{ type: ColorType.Solid, color: 'white' } },
+      grid: {
+        vertLines: { color: '#e2e8f0', style: LineStyle.Solid },
+        horzLines: { color: '#e2e8f0', style: LineStyle.Solid },
+      },
+      crosshair: {
+        mode: 0,
+        vertLine: { color: '#94a3b8', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
+        horzLine: { color: '#94a3b8', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
+      },
+      localization: {
+        priceFormatter: (value: number) => value.toFixed(4),
+      },
       rightPriceScale: { borderVisible: false },
-      timeScale: { 
+      timeScale: {
         borderVisible: false,
         rightOffset: 12, // Add space on the right for live updates
         barSpacing: 6,   // Adjust bar spacing for better live visualization
@@ -129,14 +140,55 @@ export default function PriceChart({
     overlay.style.zIndex = '2';
     overlay.style.overflow = 'hidden'; // Prevent overflow
     overlay.style.maxHeight = '360px'; // Match chart height
+    const tooltip = document.createElement('div');
+    tooltip.style.position = 'absolute';
+    tooltip.style.right = '16px';
+    tooltip.style.top = '16px';
+    tooltip.style.padding = '8px 12px';
+    tooltip.style.borderRadius = '8px';
+    tooltip.style.background = 'rgba(15, 23, 42, 0.78)';
+    tooltip.style.color = '#fff';
+    tooltip.style.fontSize = '12px';
+    tooltip.style.lineHeight = '1.4';
+    tooltip.style.pointerEvents = 'none';
+    tooltip.style.display = 'none';
+    tooltip.style.backdropFilter = 'blur(6px)';
+    tooltip.style.boxShadow = '0 6px 18px rgba(15,23,42,0.25)';
+
     ref.current.style.position = 'relative';
     ref.current.style.overflow = 'hidden'; // Prevent any child overflow
     ref.current.appendChild(pnlOverlay);
     ref.current.appendChild(overlay);
+    ref.current.appendChild(tooltip);
     zoneRef.current = overlay;
     pnlRef.current = pnlOverlay;
+    tooltipRef.current = tooltip;
+
+    const handleCrosshairMove = (param: any) => {
+      if (!tooltipRef.current || !seriesRef.current) return;
+      if (!param || !param.time || !param.seriesPrices) {
+        tooltipRef.current.style.display = 'none';
+        return;
+      }
+      const price = param.seriesPrices.get(seriesRef.current);
+      if (price == null) {
+        tooltipRef.current.style.display = 'none';
+        return;
+      }
+      const date = new Date((param.time as number) * 1000);
+      const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      tooltipRef.current.innerHTML = `
+        <div style="font-weight:600; font-size:12px; margin-bottom:4px;">${symbol || ''}</div>
+        <div style="font-size:14px;">${Number(price).toFixed(4)}</div>
+        <div style="opacity:0.75;">${formattedDate}</div>
+      `;
+      tooltipRef.current.style.display = 'block';
+    };
+
+    chart.subscribeCrosshairMove(handleCrosshairMove);
 
     return ()=> {
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
       chart.remove();
       chartRef.current = null;
       trailSeriesRef.current = null;
@@ -144,6 +196,8 @@ export default function PriceChart({
       zoneRef.current = null;
       pnlRef.current?.remove();
       pnlRef.current = null;
+      tooltipRef.current?.remove();
+      tooltipRef.current = null;
       plP.current = null;
       plS1.current = null;
       plR1.current = null;
@@ -254,8 +308,8 @@ export default function PriceChart({
   React.useEffect(()=> {
     const ensure = (ref: any, title: string, color: string, lineStyle?: any) => {
       if (!ref.current && seriesRef.current) {
-        ref.current = seriesRef.current.createPriceLine({ 
-          price: 0, 
+        ref.current = seriesRef.current.createPriceLine({
+          price: 0,
           title, 
           lineWidth: 1, 
           color,
@@ -284,6 +338,30 @@ export default function PriceChart({
     }
   }, [support, resistance]);
 
+  React.useEffect(() => {
+    const ensure = (ref: any, title: string, color: string) => {
+      if (!ref.current && seriesRef.current) {
+        ref.current = seriesRef.current.createPriceLine({ price: 0, title, lineWidth: 1, color });
+      }
+      return ref.current;
+    };
+    const remove = (ref: any) => {
+      if (ref.current && seriesRef.current) {
+        try { seriesRef.current.removePriceLine(ref.current); } catch {}
+        ref.current = null;
+      }
+    };
+
+    if (!overlays.pivots || !pivots) {
+      [plP, plS1, plR1].forEach(remove);
+      return;
+    }
+
+    ensure(plP, 'Pivot P', '#0f172a')?.applyOptions({ price: pivots.P, color: '#0f172a' });
+    ensure(plS1, 'S1', '#dc2626')?.applyOptions({ price: pivots.S1, color: '#dc2626' });
+    ensure(plR1, 'R1', '#2563eb')?.applyOptions({ price: pivots.R1, color: '#2563eb' });
+  }, [pivots, overlays.pivots]);
+
   // ✅ FIX: SOURCE UNIQUE = Agent State (plus de strategy obsolète)
   React.useEffect(()=> {
     // Helper functions
@@ -307,7 +385,14 @@ export default function PriceChart({
     
     // ✅ NETTOYER toutes les lines d'abord (éviter overlaps)
     [plEntryMin, plEntryMax, plSL, plTP].forEach(ref => remove(ref));
-    
+
+    if (!overlays.plan) {
+      if (zoneRef.current) {
+        zoneRef.current.style.display = 'none';
+      }
+      return;
+    }
+
     // ✅ RECRÉER depuis agent plan uniquement (source de vérité)
     if (agentPlan) {
       const zmin = agentPlan?.zone?.from;
@@ -344,7 +429,7 @@ export default function PriceChart({
     }
 
     // ✅ Zone shading depuis agent plan
-    if (agentPlan) {
+    if (agentPlan && overlays.plan) {
       const zmin = agentPlan?.zone?.from;
       const zmax = agentPlan?.zone?.to;
       
@@ -380,7 +465,7 @@ export default function PriceChart({
         zoneRef.current.style.display = 'none';
       }
     }
-  }, [agentPlan, agentPos]);
+  }, [agentPlan, agentPos, overlays.plan]);
 
   React.useEffect(()=> {
     if (!pnlRef.current || !seriesRef.current) return;
@@ -446,6 +531,12 @@ export default function PriceChart({
       }
     };
 
+    if (!overlays.projection) {
+      remove(plProjectionHigh);
+      remove(plProjectionLow);
+      return;
+    }
+
     const up = projection?.rangeUpPrice ?? projection?.upsidePrice;
     const down = projection?.rangeDownPrice ?? projection?.downsidePrice;
 
@@ -460,7 +551,7 @@ export default function PriceChart({
     } else {
       remove(plProjectionLow);
     }
-  }, [projection]);
+  }, [projection, overlays.projection]);
 
   // Markers for orders, trades, and live position
   React.useEffect(() => {
@@ -561,18 +652,84 @@ export default function PriceChart({
 
     // Replace markers with latest snapshot
     const ordered = Array.from(cache.values()).sort((a, b) => a.time - b.time);
-    markersRef.current = ordered.slice(-150);
+    markersRef.current = overlays.trades ? ordered.slice(-150) : [];
     seriesRef.current.setMarkers(markersRef.current);
-  }, [orders, trades, agentPos?.openedAt, agentPos?.entry, agentPos?.partialInfo?.ts, agentExit?.ts]);
+  }, [orders, trades, agentPos?.openedAt, agentPos?.entry, agentPos?.partialInfo?.ts, agentExit?.ts, overlays.trades]);
 
-  return <div style={{ border:'1px solid #eee', borderRadius:8, padding:8 }}>
-    <div style={{ fontWeight:600, marginBottom:8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <span>{symbol} — Historical + Live</span>
-      <span style={{ fontSize: '12px', color: '#666' }}>
-        {isLoadingHistory ? 'Loading history...' : 
-         chartData.length > 0 ? `${chartData.length} data points` : 'No data'}
-      </span>
+  const latestPoint = chartData[chartData.length - 1];
+  const firstPoint = chartData[0];
+  const change = latestPoint && firstPoint ? latestPoint.value - firstPoint.value : undefined;
+  const changePct = change !== undefined && firstPoint ? (change / firstPoint.value) * 100 : undefined;
+  const latestTrade = Array.isArray(trades) && trades.length > 0 ? trades[trades.length - 1] : null;
+
+  const formatUsd = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)} USD`;
+
+  const overlayButtons: Array<{ key: keyof typeof overlays; label: string }> = [
+    { key: 'plan', label: 'Plan' },
+    { key: 'pivots', label: 'Pivots' },
+    { key: 'projection', label: 'Projection' },
+    { key: 'trades', label: 'Orders & Trades' },
+  ];
+
+  return <div style={{ border:'1px solid #e2e8f0', borderRadius:12, padding:12, background:'#fff', boxShadow:'0 12px 32px -18px rgba(15, 23, 42, 0.35)' }}>
+    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:12 }}>
+        <div>
+          <div style={{ fontWeight:700, fontSize:16 }}>{symbol} — Historical + Live</div>
+          <div style={{ fontSize:12, color:'#64748b' }}>
+            {isLoadingHistory ? 'Loading history…' : chartData.length > 0 ? `${chartData.length} data points` : 'No data available'}
+          </div>
+        </div>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+          {overlayButtons.map(button => (
+            <button
+              key={button.key}
+              onClick={() => toggleOverlay(button.key)}
+              style={{
+                border:'1px solid #cbd5f5',
+                padding:'6px 10px',
+                borderRadius:6,
+                fontSize:12,
+                cursor:'pointer',
+                background: overlays[button.key] ? '#2563eb' : '#f8fafc',
+                color: overlays[button.key] ? '#fff' : '#0f172a',
+                transition:'all 0.2s ease',
+              }}
+            >
+              {overlays[button.key] ? '✓ ' : ''}{button.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{
+        display:'grid',
+        gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))',
+        gap:12,
+        fontSize:12,
+        color:'#0f172a',
+      }}>
+        <div style={{ background:'#f8fafc', borderRadius:8, padding:'10px 12px' }}>
+          <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last Price</div>
+          <div style={{ fontSize:16, fontWeight:600 }}>{latestPoint ? latestPoint.value.toFixed(4) : '—'}</div>
+        </div>
+        <div style={{ background:'#f8fafc', borderRadius:8, padding:'10px 12px' }}>
+          <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>24h Change</div>
+          <div style={{ fontSize:16, fontWeight:600, color: change != null && changePct != null ? (change >= 0 ? '#16a34a' : '#dc2626') : '#0f172a' }}>
+            {change != null && changePct != null ? `${change >= 0 ? '+' : ''}${change.toFixed(4)} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%)` : '—'}
+          </div>
+        </div>
+        <div style={{ background:'#f8fafc', borderRadius:8, padding:'10px 12px' }}>
+          <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last Trade</div>
+          <div style={{ fontSize:14, fontWeight:600 }}>
+            {latestTrade?.exitPrice ? Number(latestTrade.exitPrice).toFixed(4) : latestTrade?.entryPrice ? Number(latestTrade.entryPrice).toFixed(4) : '—'}
+          </div>
+          <div style={{ fontSize:12, color:'#475569' }}>
+            {latestTrade?.realizedPnlUsd != null ? formatUsd(Number(latestTrade.realizedPnlUsd)) : ''}
+          </div>
+        </div>
+      </div>
     </div>
-    <div ref={ref} />
+    <div ref={ref} style={{ marginTop:16 }} />
   </div>;
 }
