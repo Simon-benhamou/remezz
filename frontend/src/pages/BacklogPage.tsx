@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Space, Typography, List, Tag, message, Button, Badge, Empty, Tooltip } from 'antd';
+import { Card, Space, Typography, List, Tag, message, Button, Badge, Empty, Tooltip, Divider } from 'antd';
 import { ThunderboltOutlined, ReloadOutlined, InfoCircleOutlined, WarningOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
@@ -18,10 +18,18 @@ type OpsEvent = {
   details?: any;
 };
 
+const severityOrder: OpsEvent['level'][] = ['info', 'warn', 'error'];
+
 const levelMeta: Record<string, { color: string; label: string; icon: React.ReactNode }> = {
   info: { color: 'blue', label: 'Info', icon: <InfoCircleOutlined /> },
   warn: { color: 'gold', label: 'Watch', icon: <WarningOutlined /> },
   error: { color: 'red', label: 'Action', icon: <ExclamationCircleOutlined /> },
+};
+
+const severityBackgrounds: Record<string, string> = {
+  blue: '#eff6ff',
+  gold: '#fff7ed',
+  red: '#fee2e2',
 };
 
 const messageCatalog: Record<string, { title: string; description?: string }> = {
@@ -73,6 +81,7 @@ export default function BacklogPage() {
   const [loading, setLoading] = React.useState(false);
   const [events, setEvents] = React.useState<OpsEvent[]>([]);
   const [activeSessions, setActiveSessions] = React.useState<any[]>([]);
+  const [levelFilter, setLevelFilter] = React.useState<OpsEvent['level'][]>(severityOrder);
 
   const loadActivity = React.useCallback(async () => {
     setLoading(true);
@@ -133,6 +142,47 @@ export default function BacklogPage() {
     return { meta, title, description, detailEntries };
   };
 
+  const filteredEvents = React.useMemo(
+    () =>
+      events.filter((evt) => {
+        const level = evt.level || 'info';
+        return levelFilter.includes(level);
+      }),
+    [events, levelFilter],
+  );
+
+  const toggleFilterLevel = (level: OpsEvent['level']) => {
+    setLevelFilter((prev) => {
+      if (prev.includes(level)) {
+        const remaining = prev.filter((item) => item !== level);
+        return remaining.length === 0 ? prev : remaining;
+      }
+      return [...prev, level];
+    });
+  };
+
+  const renderSeverityFlag = (meta: { color: string; label: string; icon: React.ReactNode }) => {
+    const background = severityBackgrounds[meta.color] || '#f3f4f6';
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          background,
+          color: meta.color,
+          borderRadius: 999,
+          padding: '2px 12px',
+          fontWeight: 600,
+          fontSize: 12,
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center' }}>{meta.icon}</span>
+        <span>{meta.label}</span>
+      </div>
+    );
+  };
+
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card>
@@ -150,7 +200,7 @@ export default function BacklogPage() {
           </Space>
           <Space wrap size="small">
             <Tag color="blue">{activeSessions.length} active agents</Tag>
-            <Tag color="cyan">{events.length} recent events</Tag>
+            <Tag color="cyan">{filteredEvents.length} matching events</Tag>
             <Button size="small" icon={<ReloadOutlined />} onClick={loadActivity} loading={loading}>
               Refresh
             </Button>
@@ -167,12 +217,40 @@ export default function BacklogPage() {
           </Button>
         }
       >
-        {events.length === 0 ? (
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <Space size={4} wrap>
+            {severityOrder.map((level) => {
+              const meta = levelMeta[level || 'info'];
+              const active = levelFilter.includes(level);
+              return (
+                <Tag.CheckableTag
+                  key={level}
+                  checked={active}
+                  onChange={() => toggleFilterLevel(level)}
+                  style={{
+                    borderRadius: 999,
+                    padding: '4px 12px',
+                    border: `1px solid ${active ? meta.color : '#e5e7eb'}`,
+                    background: active ? `${meta.color}10` : '#fff',
+                    color: active ? meta.color : '#4b5563',
+                  }}
+                >
+                  <Space size={6}>
+                    {meta.icon}
+                    <span>{meta.label}</span>
+                  </Space>
+                </Tag.CheckableTag>
+              );
+            })}
+          </Space>
+          <Divider style={{ margin: '8px 0' }} />
+        </Space>
+        {filteredEvents.length === 0 ? (
           <Empty description="No recent activity for active agents" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           <List
-            itemLayout="vertical"
-            dataSource={events.slice(0, 30)}
+            itemLayout="horizontal"
+            dataSource={filteredEvents.slice(0, 40)}
             renderItem={(evt) => {
               const decorated = decorateEvent(evt);
               const meta = decorated.meta;
@@ -180,34 +258,60 @@ export default function BacklogPage() {
                 ? activeSessions.find((s: any) => s.id === evt.sessionId)
                 : null;
               return (
-                <List.Item key={evt.id} style={{ padding: '12px 8px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-                      <Tag color={meta.color} icon={meta.icon}>{meta.label}</Tag>
-                      {evt.symbol && (
-                        <Tag bordered={false} style={{ background: '#eef2ff', color: '#312e81' }}>{evt.symbol}</Tag>
-                      )}
-                      {session && (
-                        <Text type="secondary">{session.mode?.toUpperCase()}</Text>
-                      )}
-                      <Text type="secondary">{formatTime(evt.ts)}</Text>
-                    </div>
-                    <Text strong style={{ fontSize: 14 }}>{decorated.title}</Text>
-                    {decorated.description && (
-                      <Text type="secondary" style={{ fontSize: 13 }}>{decorated.description}</Text>
-                    )}
-                    {decorated.detailEntries.length > 0 && (
-                      <Space wrap size={8} style={{ marginTop: 4 }}>
-                        {decorated.detailEntries.map((entry) => (
-                          <Tooltip key={entry.key} title={entry.label}>
-                            <Tag bordered={false} style={{ background: '#f4f4f5', color: '#111827', borderRadius: 12 }}>
-                              <span style={{ fontWeight: 600 }}>{entry.value}</span>
-                              {entry.label ? <span style={{ marginLeft: 6, color: '#6b7280', fontWeight: 500 }}>{entry.label}</span> : null}
-                            </Tag>
-                          </Tooltip>
-                        ))}
+                <List.Item key={evt.id} style={{ padding: '10px 0' }}>
+                  <div
+                    style={{
+                      width: '100%',
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(160px, 220px) 1fr',
+                      gap: 16,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Space direction="vertical" size={4}>
+                      {renderSeverityFlag(meta)}
+                      <Space size={6}>
+                        {evt.symbol && (
+                          <Tag bordered={false} style={{ background: '#eef2ff', color: '#312e81', borderRadius: 999 }}>
+                            {evt.symbol}
+                          </Tag>
+                        )}
+                        {session && <Text type="secondary">{session.mode?.toUpperCase()}</Text>}
+                        <Text type="secondary">{formatTime(evt.ts)}</Text>
                       </Space>
-                    )}
+                    </Space>
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                        <Text strong style={{ fontSize: 14 }}>{decorated.title}</Text>
+                        {evt.source && (
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            via {evt.source}
+                          </Text>
+                        )}
+                      </div>
+                      {decorated.description && (
+                        <Text type="secondary" style={{ fontSize: 13 }}>{decorated.description}</Text>
+                      )}
+                      {decorated.detailEntries.length > 0 && (
+                        <Space wrap size={6}>
+                          {decorated.detailEntries.slice(0, 4).map((entry) => (
+                            <Tooltip key={entry.key} title={entry.label}>
+                              <Tag bordered={false} style={{ background: '#f3f4f6', color: '#1f2937', borderRadius: 999 }}>
+                                <span style={{ fontWeight: 600 }}>{entry.value}</span>
+                                {entry.label ? (
+                                  <span style={{ marginLeft: 6, color: '#6b7280', fontWeight: 500 }}>{entry.label}</span>
+                                ) : null}
+                              </Tag>
+                            </Tooltip>
+                          ))}
+                          {decorated.detailEntries.length > 4 && (
+                            <Tag bordered={false} style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 999 }}>
+                              +{decorated.detailEntries.length - 4} more
+                            </Tag>
+                          )}
+                        </Space>
+                      )}
+                    </Space>
                   </div>
                 </List.Item>
               );

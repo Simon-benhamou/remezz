@@ -1,7 +1,7 @@
 import { prisma } from '../db/client.js';
 import { recordOpsEvent } from '../monitor/ops.js';
 
-type StrategyExpectancySample = {
+export type StrategyExpectancySample = {
   strategyId: string;
   expectancy: number;
   winRate: number;
@@ -9,11 +9,23 @@ type StrategyExpectancySample = {
   lastSeen: Date;
 };
 
-type SessionHealthSnapshot = {
+export type SessionHealthSnapshot = {
   expectancy: number;
   winRate: number;
   sample: number;
   guardrails: StrategyGuardrail | null;
+};
+
+export type StrategyPerformanceSummary = {
+  expectancy: number;
+  winRate: number;
+  sample: number;
+  guardrail: StrategyGuardrail | null;
+  best?: { strategyId: string; expectancy: number; winRate: number; trades: number; ageMinutes: number } | null;
+  worst?: { strategyId: string; expectancy: number; winRate: number; trades: number; ageMinutes: number } | null;
+  positiveCount: number;
+  negativeCount: number;
+  staleCount: number;
 };
 
 export type StrategyGuardrail = {
@@ -201,6 +213,52 @@ export function mergeGuardrails(base: StrategyGuardrail | null, next: StrategyGu
     atrMultiplier: Math.max(base.atrMultiplier, next.atrMultiplier),
     cooldownMs: Math.max(base.cooldownMs ?? 0, next.cooldownMs ?? 0) || undefined,
     reason: `${base.reason}+${next.reason}`,
+  };
+}
+
+export function buildPerformanceSummary(
+  health: SessionHealthSnapshot,
+  samples: Map<string, StrategyExpectancySample>,
+): StrategyPerformanceSummary {
+  const now = Date.now();
+  let best: StrategyExpectancySample | null = null;
+  let worst: StrategyExpectancySample | null = null;
+  let positiveCount = 0;
+  let negativeCount = 0;
+  let staleCount = 0;
+
+  for (const sample of samples.values()) {
+    if (!best || sample.expectancy > best.expectancy) best = sample;
+    if (!worst || sample.expectancy < worst.expectancy) worst = sample;
+    if (sample.expectancy >= 0) positiveCount += 1; else negativeCount += 1;
+    const ageMs = Math.max(0, now - sample.lastSeen.getTime());
+    if (ageMs > 45 * 60 * 1000) staleCount += 1;
+  }
+
+  const decorate = (
+    sample: StrategyExpectancySample | null,
+  ): ({ strategyId: string; expectancy: number; winRate: number; trades: number; ageMinutes: number }) | null => {
+    if (!sample) return null;
+    const ageMinutes = Math.round(Math.max(0, now - sample.lastSeen.getTime()) / 60000);
+    return {
+      strategyId: sample.strategyId,
+      expectancy: sample.expectancy,
+      winRate: sample.winRate,
+      trades: sample.trades,
+      ageMinutes,
+    };
+  };
+
+  return {
+    expectancy: health.expectancy,
+    winRate: health.winRate,
+    sample: health.sample,
+    guardrail: health.guardrails,
+    best: decorate(best),
+    worst: decorate(worst),
+    positiveCount,
+    negativeCount,
+    staleCount,
   };
 }
 
