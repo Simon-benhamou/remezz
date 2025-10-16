@@ -1,5 +1,4 @@
 import React from 'react';
-import type { LucideProps } from 'lucide-react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -60,8 +59,8 @@ import {
   Zap,
 } from 'lucide-react';
 
-const withClassName = (Component: React.ComponentType<LucideProps>, ...classNames: string[]) =>
-  React.forwardRef<SVGSVGElement, LucideProps>((props, ref) => {
+const withClassName = (Component: React.ComponentType<any>, ...classNames: string[]) =>
+  React.forwardRef<SVGSVGElement, any>((props, ref) => {
     const mergedClassName = [...classNames, props.className].filter(Boolean).join(' ');
     return <Component ref={ref} {...props} className={mergedClassName} />;
   });
