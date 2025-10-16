@@ -9,77 +9,70 @@ import {
   Row,
   Space,
   Tag,
-  Tooltip,
   Typography,
   theme,
 } from 'antd';
 import {
-  AreaChartOutlined,
+  Area,
+  AreaChart,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import {
   CheckCircleOutlined,
+  CloudOutlined,
   DatabaseOutlined,
   ExclamationCircleOutlined,
-  FundOutlined,
   ReloadOutlined,
-  StopOutlined,
   ThunderboltOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { useDashboard } from '../hooks/useDashboard';
-import { useMode } from '../contexts/ModeContext';
-import OpsMetricsPanel from '../components/OpsMetricsPanel';
-import OpsEventsList from '../components/OpsEventsList';
-import AgentHealthTable from '../components/AgentHealthTable';
-import { useStopAllLock } from '../hooks/useStopAllLock';
-import { useStopAllConfirmation } from '../hooks/useStopAllConfirmation';
 import { api } from '../api';
-import DashboardKpiCard from '../components/DashboardKpiCard';
-import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import RecentTradesTable from '../components/RecentTradesTable';
+import AgentHealthTable from '../components/AgentHealthTable';
+import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
+import { useDashboard } from '../hooks/useDashboard';
 
 const { Title, Text } = Typography;
 
-type OverviewSession = {
+type ActivityPoint = {
+  timestamp: number;
+  label: string;
+  trades: number;
+};
+
+type GlobalHealth = {
+  tone: 'success' | 'warning' | 'error' | 'info';
+  icon: React.ReactNode;
+  color: string;
+  label: string;
+  description: string;
+};
+
+type OpsEvent = {
   id: string;
+  ts?: number;
+  level?: 'info' | 'warn' | 'error';
+  source?: string;
+  message?: string;
+  sessionId?: string;
   symbol?: string;
-  mode?: string;
-  state?: string;
-  pnlUsd?: number;
-  roiPct?: number;
-  winRate?: number;
-  trades?: number;
-  aggressiveness?: string;
-  lastExecutionTs?: number;
-  lastTradeAt?: number;
+  details?: any;
 };
 
-type HealthSnapshot = {
-  sessionId: string;
-  hasPosition: boolean;
-  tradeCount24h: number;
-  lastExecutionTs: number | null;
-  status: 'ok' | 'idle' | 'stale' | 'blocked';
-};
+function formatPercent(value?: number | null, digits = 1) {
+  if (value == null || Number.isNaN(value)) return '0%';
+  return `${Number(value).toFixed(digits)}%`;
+}
 
-type DecoratedSession = OverviewSession & {
-  hasPosition: boolean;
-  tradeCount24h: number | null;
-  healthStatus: HealthSnapshot['status'] | null;
-};
-
-const stateTheme: Record<string, { bg: string; border: string; text: string }> = {
-  MANAGE: { bg: '#ecfdf5', border: '#059669', text: '#065f46' },
-  ARMED: { bg: '#eff6ff', border: '#2563eb', text: '#1d4ed8' },
-  HALT: { bg: '#fef2f2', border: '#dc2626', text: '#991b1b' },
-  UNKNOWN: { bg: '#f8fafc', border: '#cbd5f5', text: '#1f2937' },
-};
-
-const healthTone: Record<string, { color: string; label: string }> = {
-  ok: { color: 'green', label: 'Nominal' },
-  idle: { color: 'geekblue', label: 'Idle' },
-  stale: { color: 'orange', label: 'Stale' },
-  blocked: { color: 'red', label: 'Blocked' },
-};
+function formatUsd(value?: number | null, digits = 2) {
+  if (value == null || Number.isNaN(value)) return '$0.00';
+  const sign = value < 0 ? '-' : '';
+  return `${sign}$${Math.abs(Number(value)).toFixed(digits)}`;
+}
 
 function formatRelative(ts?: number | null) {
   if (!ts) return '—';
@@ -89,29 +82,13 @@ function formatRelative(ts?: number | null) {
     const minutes = Math.round(delta / 60_000);
     return `${minutes} min ago`;
   }
-  const hours = Math.round(delta / 3_600_000);
-  if (hours < 48) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
+  if (delta < 86_400_000) {
+    const hours = Math.round(delta / 3_600_000);
+    return `${hours}h ago`;
+  }
+  const days = Math.round(delta / 86_400_000);
   return `${days}d ago`;
 }
-
-function formatPercent(value?: number | null, digits = 2) {
-  if (value == null || Number.isNaN(value)) return '0.00%';
-  return `${Number(value).toFixed(digits)}%`;
-}
-
-function formatUsd(value?: number | null, digits = 2) {
-  if (value == null || Number.isNaN(value)) return '$0.00';
-  return `$${Number(value).toFixed(digits)}`;
-}
-
-type GlobalHealth = {
-  tone: 'success' | 'warning' | 'error' | 'info';
-  icon: React.ReactNode;
-  color: string;
-  label: string;
-  description: string;
-};
 
 function resolveGlobalHealth(metrics?: any): GlobalHealth {
   const alerts = metrics?.alerts?.lastHour ?? {};
@@ -123,41 +100,73 @@ function resolveGlobalHealth(metrics?: any): GlobalHealth {
     return {
       tone: 'error',
       icon: <ExclamationCircleOutlined />,
-      color: '#dc2626',
+      color: '#f87171',
       label: 'Critical risk',
-      description: 'Resolve protective issues and high-severity alerts immediately.',
+      description: 'Resolve protective gaps and high-severity alerts immediately.',
     };
   }
   if (halted > 0 || (alerts.med ?? 0) > 2) {
     return {
       tone: 'warning',
       icon: <WarningOutlined />,
-      color: '#f97316',
+      color: '#fbbf24',
       label: 'Degraded',
-      description: 'Some agents require attention before resuming normal operations.',
+      description: 'Some agents require attention before resuming normal ops.',
     };
   }
   if (managing > 0) {
     return {
       tone: 'success',
       icon: <CheckCircleOutlined />,
-      color: '#16a34a',
-      label: 'Nominal',
+      color: '#34d399',
+      label: 'Operational',
       description: 'Agents are trading and protective systems are green.',
     };
   }
   return {
     tone: 'info',
-    icon: <StopOutlined />,
-    color: '#64748b',
+    icon: <ThunderboltOutlined />,
+    color: '#60a5fa',
     label: 'Idle',
     description: 'No active agents detected in the current mode.',
   };
 }
 
+function buildActivitySeries(trades: any[]): ActivityPoint[] {
+  if (!Array.isArray(trades) || trades.length === 0) return [];
+  const buckets = new Map<number, ActivityPoint>();
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  for (const trade of trades) {
+    if (!trade?.createdAt) continue;
+    const ts = new Date(trade.createdAt).getTime();
+    if (!Number.isFinite(ts)) continue;
+    const bucketTs = Math.floor(ts / (60 * 60 * 1000)) * 60 * 60 * 1000;
+    const existing = buckets.get(bucketTs);
+    if (existing) {
+      existing.trades += 1;
+    } else {
+      buckets.set(bucketTs, {
+        timestamp: bucketTs,
+        label: formatter.format(new Date(bucketTs)),
+        trades: 1,
+      });
+    }
+  }
+  const sorted = Array.from(buckets.values()).sort((a, b) => a.timestamp - b.timestamp);
+  return sorted.slice(-12);
+}
+
+const severityMeta: Record<string, { color: string; label: string }> = {
+  info: { color: '#38bdf8', label: 'Info' },
+  warn: { color: '#fbbf24', label: 'Watch' },
+  error: { color: '#f87171', label: 'Action' },
+};
+
 const OperationsDashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { mode } = useMode();
   const {
     overview,
     opsMetrics,
@@ -172,14 +181,6 @@ const OperationsDashboardPage: React.FC = () => {
   const [agentHealthLoading, setAgentHealthLoading] = React.useState(false);
   const [recentTrades, setRecentTrades] = React.useState<any[]>([]);
   const [recentTradesLoading, setRecentTradesLoading] = React.useState(false);
-  const { locked, unlock, setLocked } = useStopAllLock();
-  const confirmStopAll = useStopAllConfirmation({
-    description: (
-      <span>
-        This will halt every agent, cancel open orders and flatten positions. Creation of new agents will remain disabled until the lock is reset.
-      </span>
-    ),
-  });
 
   const refreshAll = React.useCallback(async () => {
     setRefreshing(true);
@@ -200,10 +201,8 @@ const OperationsDashboardPage: React.FC = () => {
         (async () => {
           setRecentTradesLoading(true);
           try {
-            const trades = await api.getTrades(undefined, { limit: 50 });
+            const trades = await api.getTrades(undefined, { limit: 120 });
             setRecentTrades(Array.isArray(trades) ? trades : []);
-          } catch (error) {
-            console.error('Failed to load trades:', error);
           } finally {
             setRecentTradesLoading(false);
           }
@@ -216,75 +215,29 @@ const OperationsDashboardPage: React.FC = () => {
 
   React.useEffect(() => {
     void refreshAll();
-  }, [refreshAll, mode]);
-
-  const handleStopAll = React.useCallback(() => {
-    confirmStopAll({
-      onSuccess: () => {
-        setLocked(true);
-        void refreshAll();
-      },
-    });
-  }, [confirmStopAll, refreshAll, setLocked]);
-
-  const rawSessions: OverviewSession[] = React.useMemo(
-    () => (Array.isArray(overview?.sessions) ? overview.sessions : []),
-    [overview?.sessions],
-  );
-
-  const healthMap = React.useMemo(() => {
-    const rows: HealthSnapshot[] = Array.isArray(opsMetrics?.agentHealth?.agents)
-      ? opsMetrics.agentHealth.agents
-      : [];
-    return new Map(rows.map((row) => [row.sessionId, row]));
-  }, [opsMetrics?.agentHealth?.agents]);
-
-  const sessions: DecoratedSession[] = React.useMemo(() => {
-    return rawSessions
-      .map((session) => {
-        const health = healthMap.get(session.id);
-        return {
-          ...session,
-          hasPosition: Boolean(health?.hasPosition),
-          tradeCount24h: health?.tradeCount24h ?? null,
-          healthStatus: health?.status ?? null,
-          lastExecutionTs: health?.lastExecutionTs ?? session.lastExecutionTs ?? session.lastTradeAt,
-        };
-      })
-      .sort((a, b) => Number(b.hasPosition) - Number(a.hasPosition));
-  }, [rawSessions, healthMap]);
-
-  const latestEvents = React.useMemo(
-    () => (Array.isArray(opsEvents) ? opsEvents.slice(0, 5) : []),
-    [opsEvents],
-  );
+  }, [refreshAll]);
 
   const { token } = theme.useToken();
-  const base = token.colorBgBase.toLowerCase();
-  const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
-  const surfaceColor = isDarkTheme ? '#0f172a' : token.colorBgContainer;
-  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
-  const textPrimary = isDarkTheme ? '#f8fafc' : token.colorText;
-  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.7)' : token.colorTextSecondary;
-  const secondarySurface = isDarkTheme ? 'rgba(15, 23, 42, 0.78)' : token.colorFillTertiary;
-  const heroBackground = isDarkTheme
-    ? 'linear-gradient(135deg, #0f172a 0%, #020617 60%, #1e293b 100%)'
-    : '#ffffff';
-  const heroOverlay = isDarkTheme
-    ? 'radial-gradient(circle at top right, rgba(59, 130, 246, 0.35), transparent 45%)'
-    : 'radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 45%)';
-  const heroBorder = isDarkTheme ? '1px solid rgba(148, 163, 184, 0.2)' : `1px solid ${token.colorBorderSecondary}`;
-
-  const globalHealth = resolveGlobalHealth(opsMetrics);
   const metricsTimestamp = opsMetrics?.timestamp
     ? new Date(opsMetrics.timestamp).toLocaleTimeString()
     : '—';
-  const totalEquityUsd = Number(overview?.equityUsd || overview?.paperBalance?.equityUsd || overview?.exchangeBalance?.totalUsd || 0);
+
+  const totalEquityUsd = Number(
+    overview?.equityUsd ||
+      overview?.paperBalance?.equityUsd ||
+      overview?.exchangeBalance?.totalUsd ||
+      0,
+  );
   const pnlUsd = Number(overview?.pnlUsd || 0);
-  const alertsLastHour = Number(opsMetrics?.alerts?.lastHour?.total || 0);
-  const aiCalls = Number(opsMetrics?.ai?.totalCalls ?? overview?.aiCallsTotal ?? 0);
-  const sessionsTotal = Number(overview?.sessionsCount || opsMetrics?.agents?.total || sessions.length);
-  const sessionsInPosition = sessions.filter((session) => session.hasPosition).length;
+  const roiPct = Number(overview?.roiPct || 0);
+  const activeAgents = Number(overview?.activeCount || 0);
+  const marketsTracked = Array.isArray(overview?.symbols) ? overview?.symbols.length : 0;
+
+  const totalTrades24h = React.useMemo(() => {
+    if (!agentHealth?.agents) return 0;
+    return agentHealth.agents.reduce((acc: number, row: any) => acc + Number(row.tradeCount24h || 0), 0);
+  }, [agentHealth]);
+
   const tradesSummary = React.useMemo(() => {
     if (!recentTrades.length) {
       return { totalPnl: 0, winRate: 0, lastTradeAt: null as number | null };
@@ -308,335 +261,324 @@ const OperationsDashboardPage: React.FC = () => {
       lastTradeAt: lastTs || null,
     };
   }, [recentTrades]);
-  const latestTrade = React.useMemo(() => {
-    if (!recentTrades.length) {
-      return null;
-    }
-    return recentTrades.reduce<null | { ts: number; trade: any }>((latest, trade) => {
-      const ts = trade?.createdAt ? new Date(trade.createdAt).getTime() : 0;
-      if (!latest || ts > latest.ts) {
-        return { ts, trade };
-      }
-      return latest;
-    }, null)?.trade ?? null;
-  }, [recentTrades]);
-  const lastTradeRelative = tradesSummary.lastTradeAt ? formatRelative(tradesSummary.lastTradeAt) : 'No trades yet';
-  const latestTradeSymbol = latestTrade?.symbol || latestTrade?.instrument || '—';
-  const latestTradePnL = Number(latestTrade?.realizedPnlUsd || 0);
-  const latestEvent = latestEvents[0];
-  const latestEventRelative = latestEvent?.ts ? formatRelative(latestEvent.ts) : 'No events yet';
-  const latestEventMessage = latestEvent?.message || 'No ops events logged';
-  const agentsFlat = Math.max(sessionsTotal - sessionsInPosition, 0);
-  const heroHighlights = [
+
+  const activitySeries = React.useMemo(() => buildActivitySeries(recentTrades), [recentTrades]);
+  const latestEvents = React.useMemo(
+    () => (Array.isArray(opsEvents) ? opsEvents.slice(0, 6) : []),
+    [opsEvents],
+  );
+
+  const globalHealth = resolveGlobalHealth(opsMetrics);
+
+  const summaryCards = [
     {
-      label: 'Ops lock',
-      value: locked ? 'Engaged' : 'Open',
-      helper: locked ? 'Agent creation disabled' : 'Normal operations',
-      tone: locked ? token.colorError : token.colorSuccess,
+      key: 'balance',
+      title: 'Balance',
+      value: formatUsd(totalEquityUsd),
+      helper: `PnL ${formatUsd(pnlUsd)}`,
+      accent: '#38bdf8',
     },
     {
-      label: 'Agents flat',
-      value: String(agentsFlat),
-      helper: 'awaiting entries',
-      tone: token.colorInfo,
+      key: 'roi',
+      title: 'ROI',
+      value: formatPercent(roiPct, 2),
+      helper: roiPct >= 0 ? 'Above benchmark' : 'Underwater',
+      accent: roiPct >= 0 ? '#34d399' : '#f87171',
     },
     {
-      label: 'Last trade',
-      value: tradesSummary.lastTradeAt ? `${latestTradeSymbol} ${latestTrade?.positionSide?.toUpperCase?.() || ''}`.trim() : 'No trades',
-      helper: tradesSummary.lastTradeAt ? lastTradeRelative : 'Awaiting execution',
-      tone: tradesSummary.lastTradeAt ? (latestTradePnL >= 0 ? token.colorSuccess : token.colorError) : mutedText,
+      key: 'agents',
+      title: 'Active agents',
+      value: activeAgents.toString(),
+      helper: `${marketsTracked} markets tracked`,
+      accent: '#a855f7',
     },
     {
-      label: 'Ops feed',
-      value: latestEventMessage,
-      helper: latestEvent?.ts ? latestEventRelative : 'All clear',
-      tone: latestEvent ? token.colorWarning : mutedText,
+      key: 'exec',
+      title: '24h executions',
+      value: totalTrades24h.toString(),
+      helper: tradesSummary.lastTradeAt ? `Last trade ${formatRelative(tradesSummary.lastTradeAt)}` : 'No fills yet',
+      accent: '#fbbf24',
+    },
+    {
+      key: 'winRate',
+      title: 'Win rate',
+      value: formatPercent(tradesSummary.winRate, 1),
+      helper: `Realised PnL ${formatUsd(tradesSummary.totalPnl)}`,
+      accent: '#34d399',
+    },
+    {
+      key: 'ai',
+      title: 'AI calls',
+      value: Number(opsMetrics?.ai?.totalCalls ?? overview?.aiCallsTotal ?? 0).toString(),
+      helper: 'Model utilisation',
+      accent: '#60a5fa',
+    },
+  ];
+
+  const systemStatus = [
+    {
+      key: 'api',
+      label: 'API Connection',
+      icon: <DatabaseOutlined />,
+      status: activeAgents > 0 ? 'Operational' : 'Idle',
+      tone: activeAgents > 0 ? '#34d399' : '#fbbf24',
+      helper: `${activeAgents} sessions connected`,
+    },
+    {
+      key: 'market',
+      label: 'Market Stream',
+      icon: <CloudOutlined />,
+      status: Number(opsMetrics?.alerts?.lastHour?.total || 0) > 0 ? 'Degraded' : 'Stable',
+      tone: Number(opsMetrics?.alerts?.lastHour?.total || 0) > 0 ? '#fbbf24' : '#38bdf8',
+      helper: `${Number(opsMetrics?.alerts?.lastHour?.total || 0)} alerts / 1h`,
+    },
+    {
+      key: 'risk',
+      label: 'Risk Monitor',
+      icon: <WarningOutlined />,
+      status: Number(opsMetrics?.positions?.protectiveIssues || 0) > 0
+        ? `${opsMetrics?.positions?.protectiveIssues} issues`
+        : 'Protected',
+      tone: Number(opsMetrics?.positions?.protectiveIssues || 0) > 0 ? '#f87171' : '#34d399',
+      helper: 'Protective coverage',
     },
   ];
 
   return (
     <Space direction='vertical' size={24} style={{ width: '100%' }}>
-      <Row gutter={[24, 24]}>
-        <Col xs={24} md={12} xl={6}>
-          <DashboardKpiCard
-            title='Portfolio equity'
-            icon={<FundOutlined />}
-            value={formatUsd(totalEquityUsd)}
-            hint={`Aggregated capital (${mode || 'n/a'} mode)`}
-            delta={{ value: formatUsd(pnlUsd), positive: pnlUsd >= 0 }}
-            accent='purple'
-          />
-        </Col>
-        <Col xs={24} md={12} xl={6}>
-          <DashboardKpiCard
-            title='Recent trade PnL'
-            icon={<AreaChartOutlined />}
-            value={formatUsd(tradesSummary.totalPnl)}
-            hint='Last 50 exits'
-            delta={{ value: `${formatPercent(tradesSummary.winRate, 1)} win rate`, positive: tradesSummary.winRate >= 50 }}
-            accent='emerald'
-          />
-        </Col>
-        <Col xs={24} md={12} xl={6}>
-          <DashboardKpiCard
-            title='Active coverage'
-            icon={<ThunderboltOutlined />}
-            value={String(overview?.activeCount || 0)}
-            hint={`Tracking ${sessionsTotal} agents`}
-            delta={{ value: `${sessionsInPosition} in position`, positive: sessionsInPosition > 0 }}
-            accent='blue'
-          />
-        </Col>
-        <Col xs={24} md={12} xl={6}>
-          <DashboardKpiCard
-            title='AI throughput'
-            icon={<DatabaseOutlined />}
-            value={new Intl.NumberFormat().format(aiCalls)}
-            hint='LLM + signal evaluations'
-            delta={{ value: `${alertsLastHour} alerts / 1h`, positive: alertsLastHour < 1 }}
-            accent='amber'
-          />
-        </Col>
-      </Row>
-
-      <div
+      <Card
         style={{
-          position: 'relative',
-          borderRadius: 28,
-          padding: 32,
-          background: heroBackground,
-          color: textPrimary,
+          borderRadius: 20,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 64, 175, 0.6))',
           overflow: 'hidden',
-          border: heroBorder,
         }}
+        bodyStyle={{ padding: 28 }}
       >
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background: heroOverlay,
-            pointerEvents: 'none',
-          }}
-        />
         <Row gutter={[24, 24]} align='middle'>
-          <Col xs={24} lg={15}>
-            <Space direction='vertical' size={20} style={{ position: 'relative', zIndex: 1, width: '100%' }}>
-              <Space size={12} wrap>
-                <Tag color='geekblue' style={{ borderRadius: 8 }}>Mode {mode?.toUpperCase?.() || '—'}</Tag>
-                <Tag color='purple' style={{ borderRadius: 8 }}>Snapshot {metricsTimestamp}</Tag>
-              </Space>
-              <Space align='start' size={16}>
-                <div
-                  style={{
-                    width: 60,
-                    height: 60,
-                    borderRadius: '50%',
-                    background: isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorFillQuaternary,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 28,
-                    color: globalHealth.color,
-                  }}
-                >
-                  {globalHealth.icon}
-                </div>
-                <Space direction='vertical' size={8} style={{ maxWidth: 520 }}>
-                  <Title level={3} style={{ color: textPrimary, margin: 0 }}>
-                    Operations mission control
-                  </Title>
-                  <Text style={{ color: mutedText, fontSize: 15 }}>
-                    {globalHealth.description}
-                  </Text>
-                </Space>
-              </Space>
-              <Space size={12} wrap>
-                {locked ? (
-                  <Button onClick={unlock} icon={<CheckCircleOutlined />}>Unlock creation</Button>
-                ) : (
-                  <Button danger icon={<StopOutlined />} onClick={handleStopAll}>
-                    Emergency stop all
-                  </Button>
-                )}
-                <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()} loading={refreshing}>
-                  Refresh snapshot
-                </Button>
-              </Space>
+          <Col xs={24} md={16}>
+            <Space direction='vertical' size={8}>
+              <Tag color='blue' style={{ alignSelf: 'flex-start', borderRadius: 999 }}>
+                Control Center
+              </Tag>
+              <Title level={2} style={{ margin: 0, color: '#e2e8f0' }}>
+                Monitoring & automated execution overview
+              </Title>
+              <Text style={{ color: 'rgba(226, 232, 240, 0.72)', maxWidth: 520 }}>
+                Track live performance, execution cadence and platform health across every autonomous agent.
+              </Text>
+            </Space>
+          </Col>
+          <Col xs={24} md={8}>
+            <Space direction='vertical' size={12} style={{ width: '100%' }}>
+              <Button
+                type='primary'
+                icon={<ReloadOutlined />}
+                onClick={() => void refreshAll()}
+                loading={refreshing || recentTradesLoading || agentHealthLoading}
+                style={{ width: '100%', borderRadius: 12 }}
+              >
+                Refresh data
+              </Button>
               <Alert
+                message={
+                  <Space align='center' size={8}>
+                    <span style={{ color: globalHealth.color, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {globalHealth.icon}
+                      {globalHealth.label}
+                    </span>
+                    <Tag color='geekblue' style={{ borderRadius: 8 }}>Snapshot {metricsTimestamp}</Tag>
+                  </Space>
+                }
+                description={<span style={{ color: 'rgba(226, 232, 240, 0.78)' }}>{globalHealth.description}</span>}
                 type={globalHealth.tone}
-                message={globalHealth.label}
-                description={globalHealth.description}
-                showIcon
+                showIcon={false}
                 style={{
-                  background: isDarkTheme ? 'rgba(15, 23, 42, 0.6)' : token.colorFillTertiary,
-                  border: heroBorder,
-                  color: textPrimary,
+                  background: 'rgba(15, 23, 42, 0.85)',
+                  borderRadius: 14,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  color: '#e2e8f0',
                 }}
               />
             </Space>
           </Col>
-          <Col xs={24} lg={9}>
-            <div
-              style={{
-                position: 'relative',
-                zIndex: 1,
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-                gap: 16,
-              }}
-            >
-              {heroHighlights.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderRadius: 16,
-                    border: `1px solid ${borderColor}`,
-                    background: secondarySurface,
-                    padding: 16,
-                    minHeight: 120,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                  }}
-                >
-                  <Text style={{ color: mutedText, fontSize: 12 }}>{item.label}</Text>
-                  <div
-                    style={{
-                      fontSize: item.value.length > 12 ? 18 : 22,
-                      fontWeight: 600,
-                      color: item.tone || textPrimary,
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    {item.value}
-                  </div>
-                  {item.helper && (
-                    <Text style={{ color: mutedText, fontSize: 12 }}>{item.helper}</Text>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Col>
         </Row>
-      </div>
+      </Card>
 
-      <Row gutter={[24, 24]} align='stretch'>
-        <Col xs={24} xl={14}>
-          <PerformanceOverviewCard trades={recentTrades} loading={recentTradesLoading || refreshing} />
-        </Col>
-        <Col xs={24} xl={10}>
-          <OpsMetricsPanel metrics={opsMetrics} loading={refreshing} />
-        </Col>
+      <Row gutter={[24, 24]}>
+        {summaryCards.map((card) => (
+          <Col xs={24} sm={12} xl={8} xxl={4} key={card.key}>
+            <Card
+              style={{
+                borderRadius: 18,
+                border: `1px solid ${token.colorBorderSecondary}`,
+                background: 'rgba(15, 23, 42, 0.92)',
+                height: '100%',
+              }}
+              bodyStyle={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}
+            >
+              <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{card.title}</Text>
+              <Title level={3} style={{ margin: 0, color: card.accent }}>{card.value}</Title>
+              <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{card.helper}</Text>
+            </Card>
+          </Col>
+        ))}
       </Row>
 
-      <Row gutter={[24, 24]} align='stretch'>
+      <Row gutter={[24, 24]}>
         <Col xs={24} xl={14}>
+          <PerformanceOverviewCard
+            trades={recentTrades}
+            loading={recentTradesLoading || refreshing}
+            title='Portfolio performance'
+            subtitle='Cumulative realised PnL across the monitored sessions'
+          />
+        </Col>
+        <Col xs={24} xl={10}>
           <Card
-            title='Agent overview'
-            bodyStyle={{ padding: 0, paddingBottom: 16 }}
-            style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: surfaceColor, color: textPrimary }}
+            title={<span style={{ color: '#e2e8f0' }}>Agent activity</span>}
+            extra={<Tag color='geekblue'>Last 12 hours</Tag>}
+            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+            bodyStyle={{ height: 280, padding: 20 }}
           >
-            {sessions.length === 0 ? (
-              <Empty description='No active agents in this mode.' style={{ margin: '32px 0', color: mutedText }} />
+            {activitySeries.length === 0 ? (
+              <Empty description='No executions yet.' style={{ marginTop: 40, color: 'rgba(148, 163, 184, 0.78)' }} />
             ) : (
-              <Space direction='vertical' size={16} style={{ width: '100%', padding: 20 }}>
-                {sessions.map((session) => {
-                  const palette = stateTheme[session.state || 'UNKNOWN'] || stateTheme.UNKNOWN;
-                  const health = session.healthStatus ? healthTone[session.healthStatus] : null;
-                  const tileBackground = isDarkTheme
-                    ? `linear-gradient(135deg, ${palette.border}33, rgba(15, 23, 42, 0.9))`
-                    : palette.bg;
-                  const labelColor = isDarkTheme ? textPrimary : palette.text;
-
-                  return (
-                    <div
-                      key={session.id}
-                      style={{
-                        borderRadius: 16,
-                        border: `1px solid ${palette.border}`,
-                        background: tileBackground,
-                        padding: 18,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 14,
-                        boxShadow: isDarkTheme
-                          ? '0 12px 35px -20px rgba(15, 23, 42, 0.6)'
-                          : '0 8px 24px -16px rgba(15, 23, 42, 0.2)',
-                      }}
-                    >
-                      <Space align='center' style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-                        <Space size={10} wrap>
-                          <Badge color={session.mode === 'live' ? '#fbbf24' : '#3b82f6'} text={session.symbol || 'Unknown'} />
-                          {session.aggressiveness && (
-                            <Tag color={session.aggressiveness === 'aggressive' ? 'red' : session.aggressiveness === 'reactive' ? 'orange' : 'blue'}>
-                              {session.aggressiveness.toUpperCase()}
-                            </Tag>
-                          )}
-                          {session.state && <Tag color={palette.border}>{session.state}</Tag>}
-                          {session.hasPosition && <Tag color='geekblue'>In position</Tag>}
-                          {health && <Tag color={health.color}>{health.label}</Tag>}
-                        </Space>
-                        <Button type='link' onClick={() => navigate(`/agents/${session.id}`)}>
-                          Open cockpit
-                        </Button>
-                      </Space>
-
-                      <Row gutter={[16, 12]}>
-                        <Col xs={12} md={6}>
-                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>ROI</Text>
-                          <Text style={{ color: (session.roiPct || 0) >= 0 ? token.colorSuccess : token.colorError, fontWeight: 600 }}>
-                            {formatPercent(session.roiPct)}
-                          </Text>
-                        </Col>
-                        <Col xs={12} md={6}>
-                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>PnL</Text>
-                          <Text style={{ color: (session.pnlUsd || 0) >= 0 ? token.colorSuccess : token.colorError, fontWeight: 600 }}>
-                            {formatUsd(session.pnlUsd)}
-                          </Text>
-                        </Col>
-                        <Col xs={12} md={6}>
-                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Win rate</Text>
-                          <Text style={{ fontWeight: 600, color: labelColor }}>{formatPercent(session.winRate, 1)}</Text>
-                        </Col>
-                        <Col xs={12} md={6}>
-                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Trades (24h)</Text>
-                          <Text style={{ fontWeight: 600, color: labelColor }}>{session.tradeCount24h ?? 0}</Text>
-                        </Col>
-                        <Col xs={12} md={6}>
-                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Total trades</Text>
-                          <Text style={{ fontWeight: 600, color: labelColor }}>{session.trades ?? 0}</Text>
-                        </Col>
-                        <Col xs={12} md={6}>
-                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Last execution</Text>
-                          <Tooltip title={session.lastExecutionTs ? new Date(session.lastExecutionTs).toLocaleString() : undefined}>
-                            <Text style={{ fontWeight: 600, color: labelColor }}>{formatRelative(session.lastExecutionTs)}</Text>
-                          </Tooltip>
-                        </Col>
-                      </Row>
-
-                      <Text style={{ fontSize: 12, color: mutedText }}>{session.id}</Text>
-                    </div>
-                  );
-                })}
-              </Space>
+              <ResponsiveContainer width='100%' height='100%'>
+                <AreaChart data={activitySeries}>
+                  <defs>
+                    <linearGradient id='agentActivityGradient' x1='0' y1='0' x2='0' y2='1'>
+                      <stop offset='0%' stopColor='#60a5fa' stopOpacity={0.8} />
+                      <stop offset='100%' stopColor='#60a5fa' stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey='label' stroke='rgba(148, 163, 184, 0.7)' tickLine={false} axisLine={false} />
+                  <YAxis stroke='rgba(148, 163, 184, 0.7)' tickLine={false} axisLine={false} allowDecimals={false} />
+                  <RechartsTooltip
+                    contentStyle={{
+                      background: 'rgba(15, 23, 42, 0.92)',
+                      borderRadius: 12,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      color: '#e2e8f0',
+                    }}
+                    formatter={(value: number) => [`${value} trades`, 'Executions']}
+                  />
+                  <Area type='monotone' dataKey='trades' stroke='#60a5fa' fill='url(#agentActivityGradient)' strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
             )}
           </Card>
         </Col>
+      </Row>
+
+      <Row gutter={[24, 24]}>
         <Col xs={24} xl={10}>
-          <RecentTradesTable
-            trades={recentTrades}
-            loading={recentTradesLoading}
+          <Card
+            title={<span style={{ color: '#e2e8f0' }}>System status</span>}
+            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+            bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            {systemStatus.map((item) => (
+              <div
+                key={item.key}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(15, 23, 42, 0.7)',
+                  padding: '14px 16px',
+                  borderRadius: 14,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Space size={14}>
+                  <div
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 12,
+                      background: 'rgba(96, 165, 250, 0.2)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#60a5fa',
+                      fontSize: 16,
+                    }}
+                  >
+                    {item.icon}
+                  </div>
+                  <Space direction='vertical' size={2}>
+                    <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>{item.label}</Text>
+                    <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>{item.helper}</Text>
+                  </Space>
+                </Space>
+                <Badge color={item.tone} text={<span style={{ color: item.tone }}>{item.status}</span>} />
+              </div>
+            ))}
+          </Card>
+        </Col>
+        <Col xs={24} xl={14}>
+          <AgentHealthTable
+            data={agentHealth}
+            loading={agentHealthLoading || refreshing}
             onRefresh={() => void refreshAll()}
           />
         </Col>
       </Row>
 
-      <Row gutter={[24, 24]} align='stretch'>
-        <Col xs={24} xl={12}>
-          <OpsEventsList events={latestEvents} loading={refreshing} onRefresh={() => void refreshAll()} />
+      <Row gutter={[24, 24]}>
+        <Col xs={24} xl={14}>
+          <RecentTradesTable
+            trades={recentTrades}
+            loading={recentTradesLoading || refreshing}
+            onRefresh={() => void refreshAll()}
+          />
         </Col>
-        <Col xs={24} xl={12}>
-          <AgentHealthTable data={agentHealth} loading={agentHealthLoading} onRefresh={() => void refreshAll()} />
+        <Col xs={24} xl={10}>
+          <Card
+            title={<span style={{ color: '#e2e8f0' }}>Latest alerts</span>}
+            extra={<Button type='link' style={{ color: '#60a5fa', padding: 0 }} onClick={() => navigate('/backlog')}>Open feed</Button>}
+            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+            bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            {latestEvents.length === 0 ? (
+              <Empty description='No alerts captured.' style={{ margin: '32px 0', color: 'rgba(148, 163, 184, 0.78)' }} />
+            ) : (
+              latestEvents.map((evt: OpsEvent) => {
+                const meta = severityMeta[evt.level || 'info'] || severityMeta.info;
+                return (
+                  <div
+                    key={evt.id}
+                    style={{
+                      borderRadius: 14,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      padding: 16,
+                      background: 'rgba(15, 23, 42, 0.75)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                    }}
+                  >
+                    <Space align='center' size={8}>
+                      <Badge color={meta.color} />
+                      <Text style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</Text>
+                      <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>
+                        {formatRelative(evt.ts)}
+                      </Text>
+                    </Space>
+                    <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                      {evt.message?.replace(/_/g, ' ') ?? 'Agent update'}
+                    </Text>
+                    <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                      {evt.symbol && <Tag color='geekblue'>{evt.symbol}</Tag>}
+                      {evt.sessionId && <Tag color='purple'>{evt.sessionId}</Tag>}
+                      <span>{evt.source}</span>
+                    </Space>
+                  </div>
+                );
+              })
+            )}
+          </Card>
         </Col>
       </Row>
     </Space>
