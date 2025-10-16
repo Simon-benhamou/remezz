@@ -29,34 +29,12 @@ const resolveActiveMenuKey = (pathname: string) => {
 
 const { Header, Content, Footer } = Layout;
 
-function AppInner() {
+function AuthenticatedApp() {
   const navigate = useNavigate();
   const location = useLocation();
-
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const { mode, setMode, setInitialized, isInitialized } = useAppStore();
+  const { mode, setMode } = useAppStore();
   const { overview, loadOverview } = useDashboard();
   const [balanceModalOpen, setBalanceModalOpen] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!isInitialized) {
-      setInitialized(true);
-    }
-  }, [isInitialized, setInitialized]);
-
-  if (authLoading || !isInitialized) {
-    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', color: '#60a5fa' }}>Loading…</div>;
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <Routes>
-        <Route path='/login' element={<LoginPage />} />
-        <Route path='/register' element={<RegisterPage />} />
-        <Route path='*' element={<Navigate to='/login' replace />} />
-      </Routes>
-    );
-  }
 
   const activeMenuKey = resolveActiveMenuKey(location.pathname);
 
@@ -296,6 +274,43 @@ function AppInner() {
       </Layout>
     </Layout>
   );
+}
+
+function AppInner() {
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { setInitialized, isInitialized } = useAppStore();
+
+  React.useEffect(() => {
+    if (!isInitialized) {
+      setInitialized(true);
+    }
+  }, [isInitialized, setInitialized]);
+
+  if (authLoading || !isInitialized) {
+    return (
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh', 
+        color: '#60a5fa' 
+      }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <Routes>
+        <Route path='/login' element={<LoginPage />} />
+        <Route path='/register' element={<RegisterPage />} />
+        <Route path='*' element={<Navigate to='/login' replace />} />
+      </Routes>
+    );
+  }
+
+  return <AuthenticatedApp />;
 }
 
 export default function App() {
