@@ -94,6 +94,7 @@ function AppInner() {
   ];
 
   return (
+    
     <Layout
       style={{
         minHeight: '100vh',
@@ -115,26 +116,28 @@ function AppInner() {
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 8
+            gap: 8,
+            padding: '24px 20px',
+            borderBottom: '1px solid rgba(148, 163, 184, 0.12)'
+          }}
+        >
+          <div style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ffffff',
+            fontSize: 14,
+            fontWeight: 600
           }}>
-            <div style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#ffffff',
-              fontSize: 14,
-              fontWeight: 600
-            }}>
-             <Zap className='w-5 h-5' />
-            </div>
-            <div>
-              <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>QuantAI</div>
-              <div style={{ color: '#60a5fa', fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.6 }}>Labs</div>
-            </div>
+           <Zap className='w-5 h-5' />
+          </div>
+          <div>
+            <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16, lineHeight: 1.2 }}>QuantAI</div>
+            <div style={{ color: '#60a5fa', fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.6 }}>Labs</div>
           </div>
         </div>
         <Menu
