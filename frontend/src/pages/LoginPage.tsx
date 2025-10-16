@@ -1,11 +1,18 @@
 import React from 'react';
-import { Card, Form, Input, Button, Typography, message, Divider } from 'antd';
-import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { Card, Form, Input, Button, Typography, message, Divider, Space } from 'antd';
+import { UserOutlined, LockOutlined, GoogleOutlined, GithubOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
 
 const { Title, Text } = Typography;
+
+const HERO_METRICS = [
+  { label: 'Active Users', value: '128' },
+  { label: 'All Agents', value: '45,692' },
+  { label: 'Average Win Rate', value: '74.2%' },
+  { label: '24h Executions', value: '8,120' },
+];
 
 export default function LoginPage() {
   const [form] = Form.useForm();
@@ -14,7 +21,7 @@ export default function LoginPage() {
 
   React.useEffect(() => {
     if (isAuthenticated) {
-      navigate('/dashboard', { replace: true });
+      navigate('/operations', { replace: true });
     }
   }, [isAuthenticated, navigate]);
 
@@ -24,127 +31,116 @@ export default function LoginPage() {
       if (result?.token) {
         await signIn(result.token);
         message.success(`Welcome back, ${result.user.username}!`);
-        navigate('/dashboard', { replace: true });
+        navigate('/operations', { replace: true });
       } else {
         throw new Error('Invalid response from server');
       }
     } catch (error: any) {
-      message.error('Login failed');
+      message.error(error?.response?.data?.error || 'Login failed');
     }
   };
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '20px'
-    }}>
-      <Card
-        style={{
-          width: '100%',
-          maxWidth: '400px',
-          borderRadius: '16px',
-          boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-          border: 'none'
-        }}
-        bodyStyle={{ padding: '40px' }}
-      >
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <div style={{
-            width: '64px',
-            height: '64px',
-            borderRadius: '50%',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto 16px auto',
-            fontSize: '28px',
-            fontWeight: '700',
-            color: 'white'
-          }}>
-            Q
+    <div className='auth-layout'>
+      <div className='auth-panel'>
+        <div className='auth-panel__badge'>⚡</div>
+        <h1 className='auth-panel__title'>QuantAI</h1>
+        <p className='auth-panel__subtitle'>
+          Trade smarter with AI agents that monitor markets 24/7, react instantly to volatility, and keep risk under control.
+        </p>
+        <div className='auth-panel__metrics'>
+          {HERO_METRICS.map((metric) => (
+            <div key={metric.label} className='auth-panel__metric'>
+              <span className='auth-panel__metric-label'>{metric.label}</span>
+              <span className='auth-panel__metric-value'>{metric.value}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 48, fontSize: 12, color: 'rgba(226, 232, 240, 0.65)' }}>
+          Advanced AI trading · Real-time analytics · 24/7 autonomous execution
+        </div>
+      </div>
+
+      <div className='auth-form-wrapper'>
+        <Card className='auth-form-card' bordered={false}>
+          <div style={{ marginBottom: 32 }}>
+            <Title level={2} style={{ color: '#e2e8f0', marginBottom: 8 }}>
+              Welcome back
+            </Title>
+            <Text type='secondary' style={{ color: 'rgba(148, 163, 184, 0.75)' }}>
+              Sign in to your account to continue
+            </Text>
           </div>
-          <Title level={2} style={{
-            margin: '0 0 8px 0',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent'
-          }}>
-            Welcome Back
-          </Title>
-          <Text type="secondary">Sign in to your trading dashboard</Text>
-        </div>
 
-        <Form
-          form={form}
-          name="login"
-          onFinish={onFinish}
-          layout="vertical"
-          size="large"
-        >
-          <Form.Item
-            name="username"
-            label="Username"
-            rules={[{ required: true, message: 'Please input your username!' }]}
+          <Form
+            form={form}
+            name='login'
+            onFinish={onFinish}
+            layout='vertical'
+            size='large'
+            requiredMark={false}
           >
-            <Input
-              prefix={<UserOutlined style={{ color: '#667eea' }} />}
-              placeholder="Enter your username"
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="password"
-            label="Password"
-            rules={[{ required: true, message: 'Please input your password!' }]}
-          >
-            <Input.Password
-              prefix={<LockOutlined style={{ color: '#667eea' }} />}
-              placeholder="Enter your password"
-            />
-          </Form.Item>
-
-          <Form.Item style={{ marginBottom: '16px' }}>
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={isLoading}
-              style={{
-                width: '100%',
-                height: '48px',
-                borderRadius: '8px',
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                border: 'none'
-              }}
+            <Form.Item
+              name='username'
+              label='Email'
+              rules={[{ required: true, message: 'Please enter your email' }]}
             >
-              Sign In
-            </Button>
-          </Form.Item>
-        </Form>
+              <Input
+                prefix={<UserOutlined style={{ color: '#60a5fa' }} />}
+                placeholder='name@example.com'
+                autoComplete='username'
+              />
+            </Form.Item>
 
-        <Divider>
-          <Text type="secondary">New to our platform?</Text>
-        </Divider>
+            <Form.Item
+              name='password'
+              label='Password'
+              rules={[{ required: true, message: 'Please enter your password' }]}
+            >
+              <Input.Password
+                prefix={<LockOutlined style={{ color: '#60a5fa' }} />}
+                placeholder='Enter your password'
+                autoComplete='current-password'
+              />
+            </Form.Item>
 
-        <div style={{ textAlign: 'center' }}>
-          <Link to="/register">
-            <Button style={{
-              width: '100%',
-              height: '48px',
-              borderRadius: '8px',
-              border: '2px solid #667eea',
-              color: '#667eea',
-              background: 'transparent'
-            }}>
-              Create Account
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+              <Link to='/register'>Need an account?</Link>
+              <Link to='/reset-password'>Forgot password?</Link>
+            </div>
+
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Button
+                type='primary'
+                htmlType='submit'
+                loading={isLoading}
+                block
+              >
+                Sign In
+              </Button>
+            </Form.Item>
+          </Form>
+
+          <Divider plain style={{ borderColor: 'rgba(148, 163, 184, 0.25)', color: 'rgba(148, 163, 184, 0.6)' }}>
+            Or continue with
+          </Divider>
+
+          <Space direction='vertical' size={12} style={{ width: '100%' }}>
+            <Button icon={<GoogleOutlined />} block disabled>
+              Google (coming soon)
             </Button>
-          </Link>
-        </div>
-      </Card>
+            <Button icon={<GithubOutlined />} block disabled>
+              GitHub (coming soon)
+            </Button>
+          </Space>
+
+          <div style={{ marginTop: 24, fontSize: 12, color: 'rgba(148, 163, 184, 0.6)' }}>
+            By continuing, you agree to the{' '}
+            <a href='https://quantai.ai/terms' target='_blank' rel='noreferrer'>Terms of Service</a> and{' '}
+            <a href='https://quantai.ai/privacy' target='_blank' rel='noreferrer'>Privacy Policy</a>.
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Avatar, Dropdown, Space, Typography, Button, Modal, Badge } from 'antd';
-import { UserOutlined, SettingOutlined, LogoutOutlined, KeyOutlined, EditOutlined } from '@ant-design/icons';
+import { UserOutlined, SettingOutlined, LogoutOutlined, EditOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { clearApiKey } from '../api';
 import { useNavigate } from 'react-router-dom';
@@ -64,14 +64,14 @@ export default function UserDropdown() {
     {
       key: 'profile',
       label: (
-        <div style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-          <div style={{ fontWeight: 600, fontSize: '14px', color: '#1f2937' }}>
+        <div style={{ padding: '8px 0', borderBottom: '1px solid rgba(148, 163, 184, 0.18)' }}>
+          <div style={{ fontWeight: 600, fontSize: '14px', color: '#e2e8f0' }}>
             {userInfo?.username || 'User'}
           </div>
-          <div style={{ fontSize: '12px', color: '#6b7280' }}>
+          <div style={{ fontSize: '12px', color: 'rgba(148, 163, 184, 0.78)' }}>
             {userInfo?.email}
           </div>
-          <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '2px' }}>
+          <div style={{ fontSize: '11px', color: 'rgba(148, 163, 184, 0.58)', marginTop: '2px' }}>
             {userInfo?.role === 'admin' ? '👑 Administrator' : '📈 Trader'}
           </div>
         </div>
@@ -118,31 +118,33 @@ export default function UserDropdown() {
         placement="bottomRight"
         trigger={['click']}
       >
-        <Button 
-          type="text" 
-          style={{ 
-            height: '40px',
-            padding: '0 8px',
+        <Button
+          type="text"
+          style={{
+            height: '44px',
+            padding: '0 12px',
             display: 'flex',
             alignItems: 'center',
-            gap: '8px',
-            borderRadius: '8px',
-            border: '1px solid transparent',
-            transition: 'all 0.2s ease'
+            gap: '10px',
+            borderRadius: '12px',
+            border: '1px solid rgba(96, 165, 250, 0.25)',
+            transition: 'all 0.2s ease',
+            background: 'rgba(15, 23, 42, 0.6)',
+            color: '#e2e8f0',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#f9fafb';
-            e.currentTarget.style.borderColor = '#e5e7eb';
+            e.currentTarget.style.backgroundColor = 'rgba(37, 99, 235, 0.18)';
+            e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.55)';
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'transparent';
-            e.currentTarget.style.borderColor = 'transparent';
+            e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.6)';
+            e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.25)';
           }}
         >
           <Space>
-            <Avatar 
+            <Avatar
               size={32}
-              style={{ 
+              style={{
                 backgroundColor: getAvatarColor(userInfo?.username || 'U'),
                 fontSize: '14px',
                 fontWeight: '600'
@@ -152,20 +154,20 @@ export default function UserDropdown() {
               {userInfo?.username?.[0]?.toUpperCase()}
             </Avatar>
             <div style={{ textAlign: 'left', lineHeight: '1.2' }}>
-              <div style={{ 
-                fontSize: '13px', 
-                fontWeight: '600', 
-                color: '#1f2937',
-                maxWidth: '100px',
+              <div style={{
+                fontSize: '13px',
+                fontWeight: '600',
+                color: '#e2e8f0',
+                maxWidth: '120px',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap'
               }}>
                 {userInfo?.username || 'Loading...'}
               </div>
-              <div style={{ 
-                fontSize: '11px', 
-                color: '#6b7280',
+              <div style={{
+                fontSize: '11px',
+                color: 'rgba(148, 163, 184, 0.78)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px'

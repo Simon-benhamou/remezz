@@ -1,2569 +1,851 @@
 import React from 'react';
 import {
+  Button,
   Card,
+  Empty,
+  Form,
+  InputNumber,
+  Modal,
+  Segmented,
+  Select,
+  Skeleton,
+  Space,
+  Switch,
   Table,
   Tag,
-  Button,
-  Space,
-  message,
-  Modal,
-  Form,
-  Input,
-  InputNumber,
-  Select,
-  Row,
-  Col,
   Tooltip,
-  Progress,
-  Switch,
-  Dropdown,
-  MenuProps,
-  Slider,
-  Steps,
-  Alert,
-  Timeline,
   Typography,
-  Divider,
-  Statistic,
+  Slider,
+  message,
 } from 'antd';
-import type { StepsProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import {
+  AppstoreOutlined,
+  BarsOutlined,
+  DeleteOutlined,
+  EyeOutlined,
+  PauseCircleFilled,
+  PlayCircleFilled,
+  PlusOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import type { AppMode } from '../store';
 import { useMode } from '../contexts/ModeContext';
 import { useSessionsCache } from '../hooks/useSessionsCache';
-import { useCacheNotifications } from '../hooks/useCacheNotifications';
-import { useSmartCacheInvalidation } from '../hooks/useSmartCacheInvalidation';
-import { useStopAllLock } from '../hooks/useStopAllLock';
-import { useStopAllConfirmation } from '../hooks/useStopAllConfirmation';
-import {
-  SearchOutlined,
-  DownloadOutlined,
-  EyeOutlined,
-  SettingOutlined,
-  PlayCircleOutlined,
-  StopOutlined,
-  DeleteOutlined,
-  ReloadOutlined,
-  EditOutlined,
-  RocketOutlined,
-  ThunderboltOutlined,
-  CloseOutlined,
-  InfoCircleOutlined,
-} from '@ant-design/icons';
-import ApiKeyStatusBanner from '../components/ApiKeyStatusBanner';
-import ApiKeyDiagnostics from '../components/ApiKeyDiagnostics';
-import ApiKeyMigrationTool from '../components/ApiKeyMigrationTool';
+import type { AppMode } from '../store';
+
+const { Text, Title } = Typography;
+
+type ViewMode = 'cards' | 'table';
 
 type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
 
-type CreationStepKey = 'select' | 'session' | 'activate';
-type CreationStepState = {
-  key: CreationStepKey;
-  title: string;
-  status: 'pending' | 'running' | 'success' | 'error';
-  message?: string;
-  meta?: Record<string, any>;
-};
-
-type CreationLogLevel = 'info' | 'warn' | 'error' | 'success';
-
-type CreationLogEntry = {
+type AgentSession = {
   id: string;
-  timestamp: number;
-  level: CreationLogLevel;
-  message: string;
-  context?: string;
-  meta?: Record<string, any>;
-};
-
-type PartialCreationLogEntry = {
-  id?: string;
-  timestamp?: number;
-  level?: CreationLogLevel | 'warning' | 'failed' | 'ok' | 'pending';
-  message?: string;
-  context?: string;
-  meta?: Record<string, any>;
-};
-
-type CreationProgressState = {
-  visible: boolean;
-  steps: CreationStepState[];
-  logs: CreationLogEntry[];
-  startedAt: number;
-  creationId?: string;
-  result?: { sessionId: string; symbol: string; state: string };
-  error?: string;
-};
-
-const CREATION_STEP_WEIGHTS: Record<CreationStepKey, number> = {
-  select: 0.6,
-  session: 0.25,
-  activate: 0.15,
-};
-
-const LOG_LEVEL_COLORS: Record<CreationLogLevel, { primary: string; background: string }> = {
-  info: { primary: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)' },
-  warn: { primary: '#fb923c', background: 'rgba(251, 146, 60, 0.15)' },
-  error: { primary: '#f87171', background: 'rgba(248, 113, 113, 0.18)' },
-  success: { primary: '#4ade80', background: 'rgba(74, 222, 128, 0.15)' },
-};
-
-const CREATION_STEP_TEMPLATE: { key: CreationStepKey; title: string }[] = [
-  { key: 'select', title: 'Select crypto' },
-  { key: 'session', title: 'Create session' },
-  { key: 'activate', title: 'Activate agent' },
-];
-
-const buildInitialCreationSteps = (): CreationStepState[] =>
-  CREATION_STEP_TEMPLATE.map((step, index) => ({
-    ...step,
-    status: index === 0 ? 'running' : 'pending',
-  }));
-
-const CREATION_STEP_WEIGHT_TOTAL = Object.values(CREATION_STEP_WEIGHTS).reduce(
-  (acc, weight) => acc + weight,
-  0
-);
-
-const computeProgressPercent = (steps: CreationStepState[]): number => {
-  if (!steps.length) return 0;
-  let progress = 0;
-  steps.forEach((step) => {
-    const weight = CREATION_STEP_WEIGHTS[step.key] ?? 0;
-    if (step.status === 'success') {
-      progress += weight;
-    } else if (step.status === 'running') {
-      progress += weight * 0.35;
-    } else if (step.status === 'error') {
-      progress += weight;
-    }
-  });
-  const normalized = CREATION_STEP_WEIGHT_TOTAL > 0 ? progress / CREATION_STEP_WEIGHT_TOTAL : 0;
-  return Math.round(Math.min(1, Math.max(0, normalized)) * 100);
-};
-
-const normalizeLogLevel = (value: PartialCreationLogEntry['level']): CreationLogLevel => {
-  switch (value) {
-    case 'warn':
-    case 'warning':
-      return 'warn';
-    case 'error':
-    case 'failed':
-      return 'error';
-    case 'success':
-    case 'ok':
-      return 'success';
-    default:
-      return 'info';
-  }
-};
-
-const formatLogTime = (timestamp: number) =>
-  new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-const formatSymbol = (symbol?: string) => (symbol ? symbol.replace(/:USDT$/i, '') : symbol);
-
-const { Text } = Typography;
-
-type PortfolioAllocationRow = {
-  key: string;
+  name?: string;
   symbol?: string;
-  sessionId?: string;
-  weightPct: number;
-  budgetPct: number;
-  capitalUsd: number;
-  roiPct: number;
-  winRate: number;
-  tags: string[];
+  mode: AppMode;
+  startBalanceUsd?: number;
+  pnlUsd?: number;
+  roiPct?: number;
+  winRate?: number;
+  totalTrades?: number;
+  haltedAt?: string | null;
+  stoppedAt?: string | null;
+  startedAt?: string | null;
+  profile?: Record<string, any> | null;
+  runtimeBalance?: { allocatedUsd?: number } | null;
+  strategy?: string | null;
+  strategyFamily?: string | null;
+  isSmartAgent?: boolean;
 };
 
-type AgentCreationProgressBannerProps = {
-  progress: CreationProgressState;
-  onDismiss?: () => void;
-};
-
-const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = ({
-  progress,
-  onDismiss,
-}) => {
-  const percent = React.useMemo(() => computeProgressPercent(progress.steps), [progress.steps]);
-  const hasError = React.useMemo(
-    () => progress.error || progress.steps.some((step) => step.status === 'error'),
-    [progress.error, progress.steps]
-  );
-  const isComplete = Boolean(progress.result) && !hasError;
-  const selectionStep = React.useMemo(
-    () => progress.steps.find((step) => step.key === 'select'),
-    [progress.steps]
-  );
-  const selectionMeta = React.useMemo(() => {
-    const meta = selectionStep?.meta ?? {};
-    const universeSummary = meta?.universeSummary ?? {};
-    return {
-      ...meta,
-      universeSummary,
-      candidates: meta?.candidates ?? universeSummary?.topSymbols ?? [],
-      analyzedSymbols:
-        meta?.analyzedSymbols ?? universeSummary?.analyzedSymbols ?? meta?.candidates ?? [],
-      orderableSymbols: meta?.orderableSymbols ?? universeSummary?.orderableSymbols ?? [],
-    } as Record<string, any>;
-  }, [selectionStep]);
-
-  const runningStep = progress.steps.find((step) => step.status === 'running');
-  const currentMessage = progress.error
-    ? progress.error
-    : runningStep?.message
-    ? runningStep.message
-    : isComplete && progress.result
-    ? `Agent ready on ${formatSymbol(progress.result.symbol)}`
-    : 'Agent creation running with intelligent auto-select…';
-
-  const stepItems = React.useMemo<StepsProps['items']>(() => {
-    return progress.steps.map((step) => {
-      const status: 'wait' | 'process' | 'finish' | 'error' =
-        step.status === 'pending'
-          ? 'wait'
-          : step.status === 'running'
-          ? 'process'
-          : step.status === 'success'
-          ? 'finish'
-          : 'error';
-      return {
-        key: step.key,
-        title: step.title,
-        status,
-        description: step.message ? <Text style={{ color: '#cbd5f5' }}>{step.message}</Text> : undefined,
-      };
-    });
-  }, [progress.steps]);
-
-  const logs = React.useMemo(() => progress.logs.slice(-15), [progress.logs]);
-  const timelineItems = React.useMemo(
-    () =>
-      logs.length
-        ? logs.map((log) => ({
-            color: LOG_LEVEL_COLORS[log.level].primary,
-            dot: <InfoCircleOutlined style={{ color: LOG_LEVEL_COLORS[log.level].primary }} />,
-            children: (
-              <div key={log.id} style={{ color: '#e2e8f0' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Text style={{ color: '#94a3b8', fontSize: 12 }}>{formatLogTime(log.timestamp)}</Text>
-                  <Tag
-                    style={{
-                      borderRadius: 12,
-                      border: 'none',
-                      background: LOG_LEVEL_COLORS[log.level].background,
-                      color: LOG_LEVEL_COLORS[log.level].primary,
-                      fontWeight: 600,
-                      fontSize: 11,
-                    }}
-                  >
-                    {log.level.toUpperCase()}
-                  </Tag>
-                  {log.context && (
-                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>{log.context}</Text>
-                  )}
-                </div>
-                <Text style={{ color: '#e2e8f0' }}>{log.message}</Text>
-                {log.meta && Object.keys(log.meta).length ? (
-                  <Text style={{ color: '#cbd5f5', fontSize: 12 }}>
-                    {JSON.stringify(log.meta)}
-                  </Text>
-                ) : null}
-              </div>
-            ),
-          }))
-        : [
-            {
-              color: '#475569',
-              dot: <InfoCircleOutlined style={{ color: '#475569' }} />,
-              children: (
-                <Text style={{ color: '#cbd5f5' }}>
-                  Progress updates will appear here as soon as the AI pipeline reports them.
-                </Text>
-              ),
-            },
-          ],
-    [logs]
-  );
-
-  const renderSymbolGroup = React.useCallback(
-    (label: string, symbols: string[], palette: { primary: string; background: string }) => {
-      if (!symbols || !symbols.length) return null;
-      const display = symbols.slice(0, 8);
-      const remainder = symbols.length - display.length;
-      return (
-        <div style={{ marginTop: 12 }}>
-          <Text style={{ color: '#cbd5f5', fontSize: 13 }}>{label}</Text>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-            {display.map((symbol) => (
-              <Tag
-                key={`${label}-${symbol}`}
-                style={{
-                  borderRadius: 14,
-                  border: 'none',
-                  background: palette.background,
-                  color: palette.primary,
-                  fontWeight: 600,
-                  padding: '4px 12px',
-                }}
-              >
-                {formatSymbol(symbol)}
-              </Tag>
-            ))}
-            {remainder > 0 && (
-              <Tag
-                style={{
-                  borderRadius: 14,
-                  border: '1px dashed rgba(148, 163, 184, 0.4)',
-                  background: 'transparent',
-                  color: '#94a3b8',
-                  padding: '4px 12px',
-                }}
-              >
-                +{remainder} more
-              </Tag>
-            )}
-          </div>
-        </div>
-      );
-    },
-    []
-  );
-
-  return (
-    <div
-      style={{
-        background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #111827 100%)',
-        borderRadius: 16,
-        padding: 24,
-        border: '1px solid rgba(148, 163, 184, 0.18)',
-        boxShadow: '0 24px 48px -32px rgba(15, 23, 42, 0.9)',
-        width: '100%',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: 16,
-        }}
-      >
-        <div>
-          <Text style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>Launching trading agent…</Text>
-          <div style={{ marginTop: 4 }}>
-            <Text style={{ color: '#94a3b8' }}>{currentMessage}</Text>
-          </div>
-        </div>
-        {onDismiss ? (
-          <Button
-            type='text'
-            icon={<CloseOutlined />}
-            onClick={onDismiss}
-            style={{ color: '#94a3b8' }}
-          >
-            Close
-          </Button>
-        ) : null}
-      </div>
-
-      <Progress
-        percent={percent}
-        status={hasError ? 'exception' : isComplete ? 'success' : 'active'}
-        strokeColor={hasError ? '#f87171' : '#38bdf8'}
-        trailColor='rgba(148, 163, 184, 0.18)'
-        style={{ marginTop: 16 }}
-      />
-
-      <Steps
-        responsive
-        size='small'
-        items={stepItems}
-        style={{ marginTop: 18 }}
-      />
-
-      <Divider style={{ borderColor: 'rgba(148, 163, 184, 0.25)', margin: '20px 0 16px' }} />
-
-      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 320px', minWidth: 280 }}>
-          <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>AI selection insights</Text>
-          <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
-            <div>
-              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Candidates scanned</Text>
-              <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
-                {selectionMeta?.candidateCount ?? selectionMeta?.analyzedSymbols?.length ?? '--'}
-              </div>
-            </div>
-            <div>
-              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Orderable</Text>
-              <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
-                {selectionMeta?.orderableCount ?? selectionMeta?.orderableSymbols?.length ?? '--'}
-              </div>
-            </div>
-            <div>
-              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Mode</Text>
-              <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
-                {selectionMeta?.autoSelected ? 'Auto' : 'Manual'}
-              </div>
-            </div>
-          </div>
-          <div style={{ marginTop: 12, color: '#94a3b8', fontSize: 13 }}>
-            {selectionMeta?.prefetchedSymbol ? (
-              <div>
-                Prefetched opportunity:{' '}
-                <Text style={{ color: '#e2e8f0' }}>{formatSymbol(selectionMeta.prefetchedSymbol)}</Text>
-              </div>
-            ) : (
-              <div>Prefetched opportunity: <Text style={{ color: '#e2e8f0' }}>None</Text></div>
-            )}
-            {selectionMeta?.symbol || progress.result?.symbol ? (
-              <div>
-                Selected target:{' '}
-                <Text style={{ color: '#e2e8f0' }}>{formatSymbol(selectionMeta?.symbol ?? progress.result?.symbol)}</Text>
-              </div>
-            ) : null}
-            {selectionMeta?.source ? (
-              <div>
-                Source:{' '}
-                <Text style={{ color: '#e2e8f0' }}>{selectionMeta.source}</Text>
-              </div>
-            ) : null}
-          </div>
-          {renderSymbolGroup('AI-ranked candidates', selectionMeta?.analyzedSymbols || [], LOG_LEVEL_COLORS.info)}
-          {renderSymbolGroup('Orderable shortlist', selectionMeta?.orderableSymbols || [], LOG_LEVEL_COLORS.success)}
-        </div>
-        <div style={{ flex: '1 1 320px', minWidth: 280 }}>
-          <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>Live diagnostics</Text>
-          <Timeline style={{ marginTop: 12 }} items={timelineItems} />
-        </div>
-      </div>
-
-      {progress.result && (
-        <Alert
-          type='success'
-          showIcon
-          style={{
-            marginTop: 16,
-            background: 'rgba(74, 222, 128, 0.08)',
-            borderColor: 'rgba(34, 197, 94, 0.35)',
-          }}
-          message={`Agent ready on ${formatSymbol(progress.result.symbol)}`}
-          description={
-            progress.result.state === 'ready'
-              ? 'The trading agent is active and monitoring the market.'
-              : 'The agent is warming up with historical data before trading.'
-          }
-        />
-      )}
-
-      {progress.error && (
-        <Alert
-          type='error'
-          showIcon
-          style={{ marginTop: 16 }}
-          message='Agent creation failed'
-          description={progress.error}
-        />
-      )}
-    </div>
-  );
+type CreationFormShape = {
+  smartAutoMode: boolean;
+  symbol?: string;
+  startBalanceUsd?: number;
+  maxLeverage: number;
+  aggressiveness: AggressivenessLevel;
+  mode: AppMode;
 };
 
 const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyLoss: number; note: string }> = {
   conservative: {
     risk: 1.0,
     dailyLoss: 3.0,
-    note: 'Tight exposure for steady accumulation.',
+    note: 'Tight exposure for steadier growth.',
   },
   reactive: {
     risk: 1.5,
     dailyLoss: 3.5,
-    note: 'Balanced profile with adaptive rotations.',
+    note: 'Balanced risk profile for most agents.',
   },
   aggressive: {
     risk: 2.2,
     dailyLoss: 3.8,
-    note: 'Faster rotations and higher tolerance to drawdown swings.',
+    note: 'Higher swings allowed for faster compounding.',
   },
 };
 
+const commonSymbols = [
+  'BTC/USDT',
+  'ETH/USDT',
+  'SOL/USDT',
+  'XRP/USDT',
+  'BNB/USDT',
+  'ADA/USDT',
+  'AVAX/USDT',
+  'DOGE/USDT',
+  'TON/USDT',
+  'LINK/USDT',
+  'MATIC/USDT',
+  'DOT/USDT',
+];
 
-export default function SessionsPage(){
-  const [rows, setRows] = React.useState<any[]>([]);
-  const [filteredRows, setFilteredRows] = React.useState<any[]>([]);
-  const [open, setOpen] = React.useState(false);
-  const [starting, setStarting] = React.useState(false);
-  const [creationProgress, setCreationProgress] = React.useState<CreationProgressState | null>(null);
-  const [restartSessionId, setRestartSessionId] = React.useState<string | null>(null);
-  const [restartLeverageInfo, setRestartLeverageInfo] = React.useState<{
-    resolved?: number;
-    requested?: number;
-    trimmed?: boolean;
-    source?: string;
-    modeCap?: number;
-    categoryCap?: number;
-    constraintCap?: number;
-  } | null>(null);
-  const [form] = Form.useForm();
-  const navigate = useNavigate();
-  const [exBal, setExBal] = React.useState<{ totalUsd?: number; freeUsd?: number } | null>(null);
-  const [portfolioPaper, setPortfolioPaper] = React.useState<any | null>(null);
-  const [portfolioLive, setPortfolioLive] = React.useState<any | null>(null);
-  const [portfolioLoading, setPortfolioLoading] = React.useState(false);
-  const [paperBalanceInput, setPaperBalanceInput] = React.useState<number | undefined>(undefined);
-  const { mode } = useMode();
-  const modeVal = Form.useWatch?.('mode', form);
-  const smartAutoMode = Form.useWatch?.('smartAutoMode', form);
-  const aggressivenessValue = (Form.useWatch?.('aggressiveness', form) as AggressivenessLevel | undefined) || 'conservative';
-  const leverageValue = Form.useWatch?.('maxLeverage', form) ?? 4;
-  const riskPreset = React.useMemo(() => AGGRESSIVENESS_PRESETS[aggressivenessValue], [aggressivenessValue]);
-  const [apiKeyHealth, setApiKeyHealth] = React.useState<any>(null);
-  const restartLeverageTooltipParts: string[] = [];
-  if (restartLeverageInfo?.modeCap != null) restartLeverageTooltipParts.push(`Mode ${formatLeverageValue(restartLeverageInfo.modeCap)}`);
-  if (restartLeverageInfo?.categoryCap != null) restartLeverageTooltipParts.push(`Category ${formatLeverageValue(restartLeverageInfo.categoryCap)}`);
-  if (restartLeverageInfo?.constraintCap != null) restartLeverageTooltipParts.push(`Constraint ${formatLeverageValue(restartLeverageInfo.constraintCap)}`);
-  if (restartLeverageInfo?.source) restartLeverageTooltipParts.push(`Source: ${restartLeverageInfo.source}`);
-  const restartLeverageTooltip = restartLeverageTooltipParts.length ? restartLeverageTooltipParts.join(' · ') : undefined;
-  
-  // Cache intelligent pour les sessions
-  const {
-    loading: sessionsLoading,
-    loadSessions,
-    getCachedSessions,
-    setupAutoRefresh,
-    isCacheValid,
-  } = useSessionsCache();
+const isSessionActive = (session: AgentSession) => !session.haltedAt && !session.stoppedAt;
 
-  // Notifications de cache
-  const { notifyModeSwitch, notifyCacheRefresh, notifyCacheHit, notifyError } = useCacheNotifications();
-
-  // Invalidation intelligente du cache
-  const { invalidateSmartly } = useSmartCacheInvalidation();
-
-  const { locked, unlock } = useStopAllLock();
-  const showStopAllConfirm = useStopAllConfirmation({
-    description: (
-      <span>
-        Emergency stop cancels all outstanding orders, flattens positions, and marks every agent as halted. Creation stays
-        disabled until the lock is reset.
-      </span>
-    ),
-  });
-
-  const refreshPortfolio = React.useCallback(async () => {
-    try {
-      setPortfolioLoading(true);
-      const [paper, live] = await Promise.all([
-        api.getPortfolio('paper').catch(() => null),
-        api.getPortfolio('live').catch(() => null),
-      ]);
-      setPortfolioPaper(paper);
-      setPortfolioLive(live);
-    } catch (error) {
-      console.warn('Failed to refresh portfolio snapshots:', error);
-    } finally {
-      setPortfolioLoading(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    if (portfolioPaper?.balanceUsd != null) {
-      setPaperBalanceInput(Number(portfolioPaper.balanceUsd));
-    }
-  }, [portfolioPaper]);
-
-  const handleUpdatePortfolioBalance = React.useCallback(async () => {
-    if (!Number.isFinite(Number(paperBalanceInput))) {
-      message.error('Please enter a valid balance');
-      return;
-    }
-    try {
-      setPortfolioLoading(true);
-      await api.setPortfolioBalance('paper', Number(paperBalanceInput));
-      message.success('Paper balance updated');
-      await refreshPortfolio();
-    } catch (error) {
-      console.error('Failed to update paper balance', error);
-      message.error('Unable to update portfolio balance');
-    } finally {
-      setPortfolioLoading(false);
-    }
-  }, [paperBalanceInput, refreshPortfolio]);
-
-  const handleRebalancePortfolio = React.useCallback(
-    async (modeToRebalance: 'paper' | 'live') => {
-      try {
-        setPortfolioLoading(true);
-        await api.rebalancePortfolio(modeToRebalance);
-        message.success(`${modeToRebalance === 'paper' ? 'Paper' : 'Live'} portfolio rebalanced`);
-        await refreshPortfolio();
-      } catch (error) {
-        console.error('Failed to rebalance portfolio', error);
-        message.error('Unable to rebalance portfolio');
-      } finally {
-        setPortfolioLoading(false);
-      }
-    },
-    [refreshPortfolio],
-  );
-
-  const sessionStoppedAt = React.useCallback((session: any) => session.haltedAt || session.stoppedAt || null, []);
-  const sessionStatusLabel = React.useCallback((session: any) => {
-    if (session.haltedAt) return 'Halted';
-    return session.stoppedAt ? 'Stopped' : 'Active';
-  }, []);
-  const isSessionActive = React.useCallback((session: any) => !session.haltedAt && !session.stoppedAt, []);
-  const getStatusMeta = React.useCallback((session: any) => {
-    if (session.haltedAt) {
-      return { dot: '#dc2626', text: '#b91c1c', glow: '0 0 8px rgba(220, 38, 38, 0.35)', label: 'Halted' };
-    }
-    if (session.stoppedAt) {
-      return { dot: '#94a3b8', text: '#64748b', glow: 'none', label: 'Stopped' };
-    }
-    return { dot: '#10b981', text: '#059669', glow: '0 0 8px rgba(16, 185, 129, 0.5)', label: 'Active' };
-  }, []);
-  const statusRank = React.useCallback((session: any) => {
-    if (session.haltedAt) return 2;
-    if (session.stoppedAt) return 1;
-    return 0;
-  }, []);
-  
-  // Clear symbol field when Auto-Select Mode is enabled
-  React.useEffect(() => {
-    if (smartAutoMode) {
-      form.setFieldValue('symbol', undefined);
-      console.log('🔄 Cleared symbol field for Auto-Select mode');
-    }
-  }, [smartAutoMode, form]);
-  
-  // Filter states
-  const [statusFilter, setStatusFilter] = React.useState<string>('all');
-  const [modeFilter, setModeFilter] = React.useState<string>('all');
-  const [symbolFilter, setSymbolFilter] = React.useState<string>('all');
-  const [aggressivenessFilter, setAggressivenessFilter] = React.useState<string>('all');
-  const [searchText, setSearchText] = React.useState<string>('');
-  const [compactView, setCompactView] = React.useState<boolean>(true);
-
-  const commonSymbols = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','AVAX/USDT','DOGE/USDT','TON/USDT','LINK/USDT','MATIC/USDT','DOT/USDT'];
-  const enrichedCacheRef = React.useRef<Partial<Record<AppMode, any[]>>>({});
-
-  const pushCreationLogs = React.useCallback(
-    (entries: PartialCreationLogEntry[] | PartialCreationLogEntry | null | undefined) => {
-      if (!entries) return;
-      const list = Array.isArray(entries) ? entries : [entries];
-      if (!list.length) return;
-      setCreationProgress((prev) => {
-        if (!prev) return prev;
-        const normalized = list
-          .filter((entry): entry is PartialCreationLogEntry => Boolean(entry))
-          .map((entry) => {
-            const timestamp =
-              typeof entry.timestamp === 'number' && Number.isFinite(entry.timestamp)
-                ? entry.timestamp
-                : Date.now();
-            return {
-              id: entry.id ?? `${timestamp}-${Math.random().toString(36).slice(2, 8)}`,
-              timestamp,
-              level: normalizeLogLevel(entry.level),
-              message: entry.message ?? '',
-              context: entry.context,
-              meta: entry.meta,
-            } as CreationLogEntry;
-          })
-          .filter((entry) => entry.message !== undefined);
-        if (!normalized.length) return prev;
-        return { ...prev, logs: [...prev.logs, ...normalized] };
-      });
-    },
-    []
-  );
-
-  const updateCreationStep = React.useCallback((key: CreationStepKey, patch: Partial<CreationStepState>) => {
-    setCreationProgress((prev) => {
-      if (!prev) return prev;
-      const steps = prev.steps.map<CreationStepState>((step) =>
-        step.key === key
-          ? ({
-              ...step,
-              ...patch,
-            } as CreationStepState)
-          : step
-      );
-      return { ...prev, steps };
-    });
-  }, []);
-
-  const enrichSessionData = React.useCallback(async (sessions: any[]) => {
-    return Promise.all(sessions.map(async (session: any) => {
-      try {
-        // Pull KPI metrics for all sessions (cheap lookup)
-        const perf = session.id ? await api.getPerf(session.id).catch(() => null) : null;
-        const health = session.id && isSessionActive(session) ? await api.getHealth(session.id).catch(() => null) : null;
-        const agentState = session.id && isSessionActive(session) ? await api.getAgentState(session.id).catch(() => null) : null;
-        const diagnostics = session.id && isSessionActive(session) ? await api.getDiagnostics(session.id).catch(() => null) : null;
-
-        // Get pending orders (lightweight)
-        const orders = session.id ? await api.getOrders(session.id).catch(() => []) : [];
-        const pendingOrders = orders.filter((o: any) => 
-          ['new', 'open', 'partially_filled'].includes(o.status)
-        );
-        
-        const rawWinRate = Number(perf?.winRate ?? 0);
-        const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
-        const roiPct = Number(perf?.roiPct ?? 0);
-
-        const runtimeProfile = (agentState?.profile as any) ?? session.profileJson ?? null;
-        const leverageMeta = (runtimeProfile?.leverageCap as any) ?? (session.profileJson?.leverageCap as any) ?? null;
-        const resolvedRaw =
-          runtimeProfile?.maxLeverage ??
-          leverageMeta?.resolved ??
-          session.profileJson?.maxLeverage ??
-          null;
-        const requestedRaw =
-          runtimeProfile?.requestedMaxLeverage ??
-          leverageMeta?.requested ??
-          session.profileJson?.requestedMaxLeverage ??
-          resolvedRaw ??
-          null;
-        const resolvedLeverage = Number(resolvedRaw);
-        const requestedLeverage = Number(requestedRaw);
-        const hasResolved = Number.isFinite(resolvedLeverage);
-        const hasRequested = Number.isFinite(requestedLeverage);
-        const leverageSummary = {
-          resolved: hasResolved ? resolvedLeverage : undefined,
-          requested: hasRequested ? requestedLeverage : hasResolved ? resolvedLeverage : undefined,
-          trimmed:
-            leverageMeta?.trimmed ??
-            (hasResolved && hasRequested ? resolvedLeverage + 1e-9 < requestedLeverage : false),
-          source: leverageMeta?.constraintSource,
-          modeCap: leverageMeta?.modeCap,
-          categoryCap: leverageMeta?.categoryCap,
-          constraintCap: leverageMeta?.constraintCap,
-        };
-
-        return {
-          ...session,
-          profile: runtimeProfile ?? session.profileJson ?? null,
-          runtimeState: agentState?.state ?? null,
-          runtimePlan: agentState?.plan ?? null,
-          runtimeBalance: agentState?.balance ?? null,
-          runtimeAiMetrics: agentState?.aiMetrics ?? null,
-          // PnL & ROI metrics
-          realizedPnl: Number(perf?.realizedPnlUsd ?? 0),
-          portfolioUnrealizedPnl: Number(perf?.unrealizedPnlUsd ?? 0),
-          pnlUsd: Number(perf?.realizedPnlUsd ?? 0) + Number(perf?.unrealizedPnlUsd ?? 0),
-          roiPct,
-          winRate: normalizedWinRate,
-          // Performance metrics
-          totalTrades: perf?.totalTrades || 0,
-          todayTrades: perf?.todayTrades || 0,
-          pnl24h: perf?.pnl24h || 0,
-          maxDrawdown: perf?.maxDrawdown || 0,
-          uptime: session.startedAt ? Date.now() - new Date(session.startedAt).getTime() : 0,
-          lastActivity: perf?.lastTradeAt || session.startedAt,
-
-          // Position info
-          currentPosition: agentState?.pos || null,
-
-          // Orders info
-          pendingOrders,
-          pendingOrdersCount: pendingOrders.length,
-
-          // Health status
-          healthStatus: health?.status || 'unknown',
-          healthScore: health?.score || 0,
-          alertCount: health?.alerts?.length || 0,
-
-          // Risk summary
-          leverageSummary,
-
-          // Trading diagnostics snapshot for quick gauge
-          tradingReadiness: diagnostics
-            ? {
-                canTrade: !!diagnostics.canTrade,
-                reason: diagnostics.reason,
-                summary: diagnostics.summary,
-                qualityScore: diagnostics.checks?.qualityScore,
-                percent: (() => {
-                  const qs = diagnostics.checks?.qualityScore;
-                  if (qs && Number(qs.required)) {
-                    return Math.round(Math.max(0, Math.min(100, (qs.current / qs.required) * 100)));
-                  }
-                  return diagnostics.canTrade ? 100 : 0;
-                })(),
-              }
-            : null,
-          diagnosticsInitial: diagnostics || null,
-        };
-      } catch {
-        return session;
-      }
-    }));
-  }, []);
-
-  const load = React.useCallback(async (forceRefresh = false) => { 
-    const currentMode = mode as AppMode;
-    try {
-      console.log(`🔄 Loading sessions for mode: ${currentMode} ${forceRefresh ? '(force refresh)' : ''}`);
-      
-      // Utiliser le cache intelligent
-      const sessions = await loadSessions(currentMode as any, false, forceRefresh);
-      
-      // ✅ FIX: Forcer le filtre par mode côté client (défense en profondeur)
-      const filteredByMode = sessions.filter((s: any) => s.mode === currentMode);
-      console.log(`🔍 Filtered ${sessions.length} → ${filteredByMode.length} sessions for mode=${currentMode}`);
-      
-      const enrichedSessions = await enrichSessionData(filteredByMode);
-      // Guard against race conditions if mode changed while loading
-      if ((mode as AppMode) !== currentMode) {
-        console.log(`⚠️ Mode changed to ${mode} during load(${currentMode}), discarding results.`);
-        return;
-      }
-
-      enrichedCacheRef.current[currentMode] = enrichedSessions;
-      setRows(enrichedSessions);
-      
-      if (forceRefresh) {
-        notifyCacheRefresh(currentMode as any, enrichedSessions.length);
-      }
-      
-      console.log(`✅ Loaded ${enrichedSessions.length} sessions for ${currentMode} mode`);
-      await refreshPortfolio();
-    } catch(e) {
-      console.error('Failed to load sessions:', e);
-      if ((mode as AppMode) === currentMode) {
-        notifyError(`Failed to load ${currentMode} sessions`);
-      }
-    }
-  }, [mode, loadSessions, notifyCacheRefresh, notifyError, enrichSessionData, refreshPortfolio]);
-  
-  // Apply filters
-  React.useEffect(() => {
-    let filtered = rows;
-    
-    // Status filter
-    if (statusFilter === 'active') {
-      filtered = filtered.filter(isSessionActive);
-    } else if (statusFilter === 'halted') {
-      filtered = filtered.filter(r => !!r.haltedAt);
-    } else if (statusFilter === 'stopped') {
-      filtered = filtered.filter(r => !!r.stoppedAt && !r.haltedAt);
-    }
-    
-    // Mode filter
-    if (modeFilter !== 'all') {
-      filtered = filtered.filter(r => r.mode === modeFilter);
-    }
-    
-    // Symbol filter
-    if (symbolFilter !== 'all') {
-      filtered = filtered.filter(r => r.symbol === symbolFilter);
-    }
-    
-    // Aggressiveness filter
-    if (aggressivenessFilter !== 'all') {
-      filtered = filtered.filter(r => (r.aggressiveness || 'conservative') === aggressivenessFilter);
-    }
-    
-    // Search text
-    if (searchText) {
-      filtered = filtered.filter(r => 
-        r.symbol?.toLowerCase().includes(searchText.toLowerCase()) ||
-        r.id?.toLowerCase().includes(searchText.toLowerCase())
-      );
-    }
-    
-    setFilteredRows(filtered);
-  }, [rows, statusFilter, modeFilter, symbolFilter, aggressivenessFilter, searchText, isSessionActive]);
-
-  // Chargement initial et gestion du changement de mode
-  React.useEffect(() => {
-    console.log(`📋 Mode changed to: ${mode}`);
-
-    const currentMode = mode as AppMode;
-    const rawCachedInitial = getCachedSessions(currentMode as any, false) || [];
-    const hasImmediateCache = (enrichedCacheRef.current[currentMode]?.length ?? 0) > 0 || rawCachedInitial.length > 0;
-    notifyModeSwitch(currentMode as any, hasImmediateCache);
-
-    let cancelled = false;
-    const hydrate = async () => {
-
-      // Attempt to reuse enriched cache first
-      const enrichedCached = enrichedCacheRef.current[currentMode];
-      if (enrichedCached && enrichedCached.length) {
-        console.log(`🎯 Reusing enriched cache for ${currentMode} (${enrichedCached.length} sessions)`);
-        setRows(enrichedCached);
-        notifyCacheHit(currentMode as any);
-      } else {
-        if (rawCachedInitial.length) {
-          console.log(`💾 Hydrating ${rawCachedInitial.length} cached sessions for ${currentMode}`);
-          const filteredByMode = rawCachedInitial.filter((s: any) => s.mode === currentMode);
-          try {
-            const enriched = await enrichSessionData(filteredByMode);
-            if (!cancelled && (mode as AppMode) === currentMode) {
-              enrichedCacheRef.current[currentMode] = enriched;
-              setRows(enriched);
-              notifyCacheHit(currentMode as any);
-            }
-          } catch (error) {
-            console.warn(`⚠️ Failed to hydrate cached sessions for ${currentMode}:`, error);
-          }
-        }
-      }
-
-      // ✅ Force refresh to update data in background
-      console.log(`⚡ Force refresh for mode=${currentMode}`);
-      load(true);
-      setupAutoRefresh(currentMode as any, false);
-    };
-
-    hydrate();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, getCachedSessions, load, setupAutoRefresh, notifyModeSwitch, notifyCacheHit, enrichSessionData]);
-
-  React.useEffect(()=>{ 
-    form.setFieldsValue({ mode }); 
-  }, [mode, form]);
-  
-  React.useEffect(() => {
-    const pull = async () => {
-      try {
-        const o = await api.overview(mode);
-        setExBal(o?.exchangeBalance || null);
-      } catch {}
-    };
-    pull();
-    const timer = setInterval(pull, 15000);
-    return () => clearInterval(timer);
-  }, [mode]);
-  
-  // Load API key health status
-  React.useEffect(() => {
-    const loadApiKeyHealth = async () => {
-      try {
-        const health = await api.client.get('/api/user/api-keys/health');
-        setApiKeyHealth(health.data);
-      } catch (error) {
-        console.error('Failed to load API key health:', error);
-      }
-    };
-    loadApiKeyHealth();
-  }, []);
-  
-  // Helper functions
-  function formatLeverageValue(value?: number | null) {
-    if (value == null) return '—';
-    const num = Number(value);
-    if (!Number.isFinite(num)) return '—';
-    const decimals = num >= 10 ? 0 : num >= 4 ? 1 : 2;
-    return `${num.toFixed(decimals)}x`;
+const formatUsd = (value?: number | null) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return '—';
   }
+  const amount = Number(value);
+  const prefix = amount >= 0 ? '$' : '-$';
+  const absolute = Math.abs(amount);
+  return `${prefix}${absolute.toLocaleString(undefined, { maximumFractionDigits: absolute < 1000 ? 2 : 0 })}`;
+};
 
-  const formatRelativeTime = React.useCallback((value: string | number | null | undefined) => {
-    if (!value) return '—';
-    const ts = typeof value === 'number' ? value : Date.parse(value);
-    if (!Number.isFinite(ts)) return '—';
-    const diff = Date.now() - ts;
-    if (diff < 60000) return 'just now';
-    if (diff < 3600000) return `${Math.max(1, Math.round(diff / 60000))}m ago`;
-    if (diff < 86400000) return `${Math.max(1, Math.round(diff / 3600000))}h ago`;
-    const days = Math.max(1, Math.round(diff / 86400000));
-    return `${days}d ago`;
-  }, []);
+const formatPercent = (value?: number | null, fractionDigits = 1) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return '—';
+  }
+  const percent = Number(value);
+  const formatted = Math.abs(percent).toFixed(fractionDigits);
+  const prefix = percent >= 0 ? '+' : '-';
+  return `${prefix}${formatted}%`;
+};
 
-  const getHealthColor = (status: string, score: number) => {
-    if (status === 'error' || score < 30) return '#ff4d4f';
-    if (status === 'warning' || score < 70) return '#faad14';
-    return '#52c41a';
-  };
-
-  const resolveArmedState = React.useCallback(
-    (record: any) => {
-      const diagnostics = record?.diagnosticsInitial || {};
-      const check = diagnostics?.checks?.isArmed;
-      const status = String(check?.status || '').toUpperCase();
-      if (['PASS', 'ACTIVE', 'PARTIAL'].includes(status)) {
-        return { armed: true, reason: check?.reason };
-      }
-      if (['FAIL', 'REJECT'].includes(status)) {
-        return { armed: false, reason: check?.reason };
-      }
-      if (typeof diagnostics?.isArmed === 'boolean') {
-        return { armed: diagnostics.isArmed, reason: check?.reason };
-      }
-      if (typeof record?.isArmed === 'boolean') {
-        return { armed: record.isArmed, reason: check?.reason };
-      }
-      if (typeof record?.tradingReadiness?.canTrade === 'boolean') {
-        return { armed: record.tradingReadiness.canTrade, reason: record.tradingReadiness.reason };
-      }
-      return { armed: null, reason: check?.reason };
-    },
-    []
+const resolveStrategyLabel = (session: AgentSession) => {
+  return (
+    session.strategy ||
+    session.strategyFamily ||
+    (session.profile as any)?.strategy ||
+    (session.profile as any)?.strategyFamily ||
+    'Adaptive'
   );
+};
 
-  const getPositionSnapshot = React.useCallback((record: any) => {
-    const position = record?.currentPosition || record?.position;
-    if (!position) {
-      return { side: null, sizeDisplay: null, entryDisplay: null, unrealized: null, notional: null };
-    }
+const resolveAgentLabel = (session: AgentSession) => {
+  if (session.name) return session.name;
+  if (session.symbol) return `${session.symbol} Agent`;
+  return 'Trading Agent';
+};
 
-    const sideRaw = String(
-      position?.side || position?.positionSide || position?.direction || position?.state || ''
-    ).toUpperCase();
-    const inferredSide = sideRaw.includes('SELL') || sideRaw.includes('SHORT') ? 'SHORT' : sideRaw.includes('LONG') || sideRaw.includes('BUY') ? 'LONG' : null;
+const statusMeta = (session: AgentSession) => {
+  if (session.haltedAt) {
+    return {
+      label: 'Paused',
+      tone: 'linear-gradient(135deg, rgba(251, 191, 36, 0.25), rgba(251, 146, 60, 0.35))',
+      color: '#fbbf24',
+    };
+  }
+  if (session.stoppedAt) {
+    return {
+      label: 'Stopped',
+      tone: 'linear-gradient(135deg, rgba(148, 163, 184, 0.18), rgba(100, 116, 139, 0.32))',
+      color: '#cbd5f5',
+    };
+  }
+  return {
+    label: 'Active',
+    tone: 'linear-gradient(135deg, rgba(34, 197, 94, 0.25), rgba(74, 222, 128, 0.35))',
+    color: '#4ade80',
+  };
+};
 
-    const sizeValue = Number(
-      position?.size ?? position?.qty ?? position?.quantity ?? position?.positionSize ?? position?.contracts ?? 0
-    );
-    const baseSymbol = (record?.symbol || '').split('/')[0] || '';
-    const sizeDisplay = Number.isFinite(sizeValue) && sizeValue !== 0
-      ? `${Math.abs(sizeValue).toFixed(Math.abs(sizeValue) >= 1 ? 2 : 4)} ${baseSymbol}`
-      : null;
+async function enrichSession(session: AgentSession): Promise<AgentSession> {
+  if (!session.id) return session;
 
-    const notionalValue = Number(
-      position?.notionalUsd ?? position?.notional ?? position?.usdValue ?? position?.valueUsd ?? position?.positionValue ?? 0
-    );
-    const notional = Number.isFinite(notionalValue) && notionalValue !== 0 ? notionalValue : null;
+  try {
+    const [perf] = await Promise.all([
+      api.getPerf(session.id).catch(() => null),
+    ]);
 
-    const entryPrice = Number(
-      position?.entryPrice ?? position?.avgEntryPrice ?? position?.averageEntryPrice ?? position?.avgPrice ?? position?.entry
-    );
-    const entryDisplay = Number.isFinite(entryPrice) && entryPrice > 0 ? `$${entryPrice.toFixed(entryPrice >= 100 ? 2 : 4)}` : null;
-
-    const unrealizedValue = Number(
-      position?.unrealizedPnlUsd ?? position?.pnlUsd ?? position?.unrealized ?? position?.upnlUsd ?? position?.floatingPnl
-    );
-    const unrealized = Number.isFinite(unrealizedValue) ? unrealizedValue : null;
-
-    if (!inferredSide && !sizeDisplay && !notional && !entryDisplay) {
-      return { side: null, sizeDisplay: null, entryDisplay: null, unrealized: null, notional: null };
-    }
+    const realized = Number(perf?.realizedPnlUsd ?? 0);
+    const unrealized = Number(perf?.unrealizedPnlUsd ?? 0);
+    const rawWinRate = Number(perf?.winRate ?? 0);
+    const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
 
     return {
-      side: inferredSide,
-      sizeDisplay,
-      entryDisplay,
-      unrealized,
-      notional,
+      ...session,
+      pnlUsd: realized + unrealized,
+      roiPct: Number(perf?.roiPct ?? 0),
+      winRate: normalizedWinRate,
+      totalTrades: perf?.totalTrades ?? 0,
     };
-  }, []);
-  
-  const exportToCsv = () => {
-    const csvData = filteredRows.map(r => ({
-      Symbol: r.symbol,
-      Mode: r.mode,
-      Status: sessionStatusLabel(r),
-      Aggressiveness: r.aggressiveness || 'conservative',
-      'Win Rate %': (r.winRate || 0).toFixed(1),
-      'PnL USD': (r.pnlUsd || 0).toFixed(2),
-      'ROI %': (r.roiPct || 0).toFixed(2),
-      'Readiness %': (r.tradingReadiness?.percent || 0).toFixed(0),
-      'Total Trades': r.totalTrades || 0,
-      'Started': new Date(r.startedAt).toISOString(),
-      'Stopped': (() => {
-        const ts = sessionStoppedAt(r);
-        return ts ? new Date(ts).toISOString() : '';
-      })()
-    }));
-    
-    if (csvData.length === 0) {
-      message.warning('No data to export');
-      return;
-    }
-    
-    const csv = [
-      Object.keys(csvData[0]).join(','),
-      ...csvData.map(row => Object.values(row).join(','))
-    ].join('\n');
-    
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `trading-sessions-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
+  } catch (error) {
+    console.warn('Failed to enrich session metrics', error);
+    return session;
+  }
+}
 
-  const stop = async (id:string)=>{
-    Modal.confirm({
-      title: 'Stop session?',
-      content: 'This will stop the agent. Close any open position now?',
-      okText: 'Stop', 
-      cancelText: 'Cancel', 
-      okButtonProps:{ danger:true },
-      onOk: async ()=>{
-        try {
-          await api.stopSession(id, true);
-          // Invalider le cache après l'arrêt de la session
-          invalidateSmartly('session_stopped', { mode: mode as any });
-          message.success('Session stopped');
-          await load(true); // Force refresh after cache invalidation
-        } catch { 
-          message.error('Stop failed'); 
-        }
-      }
-    });
-  };
-  
-  const bulkActions: MenuProps['items'] = [
-    {
-      key: 'stop-all',
-      label: 'Stop All Active',
-      danger: true,
-      onClick: () => {
-        const activeSessions = filteredRows.filter(isSessionActive);
-        if (activeSessions.length === 0) {
-          message.info('No active sessions to stop');
-          return;
-        }
-        showStopAllConfirm({
-          onSuccess: async () => {
-            invalidateSmartly('session_stopped', { mode: mode as any });
-            await load(true);
-          },
-        });
+const cardGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+  gap: 20,
+  width: '100%',
+};
+
+const cardStyle: React.CSSProperties = {
+  background: 'linear-gradient(155deg, rgba(16, 27, 57, 0.95) 0%, rgba(16, 26, 49, 0.75) 100%)',
+  border: '1px solid rgba(56, 90, 150, 0.35)',
+  borderRadius: 18,
+  boxShadow: '0 18px 40px -24px rgba(15, 23, 42, 0.75)',
+};
+
+export default function SessionsPage() {
+  const navigate = useNavigate();
+  const { mode } = useMode();
+  const currentMode = mode as AppMode;
+  const { loadSessions, invalidateCache } = useSessionsCache();
+
+  const [sessions, setSessions] = React.useState<AgentSession[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [viewMode, setViewMode] = React.useState<ViewMode>('cards');
+  const [modalOpen, setModalOpen] = React.useState(false);
+  const [editingSession, setEditingSession] = React.useState<AgentSession | null>(null);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [form] = Form.useForm<CreationFormShape>();
+
+  const smartAutoMode = Form.useWatch('smartAutoMode', form);
+  const aggressiveness = (Form.useWatch('aggressiveness', form) as AggressivenessLevel) ?? 'conservative';
+  const riskPreset = AGGRESSIVENESS_PRESETS[aggressiveness];
+
+  const fetchSessions = React.useCallback(
+    async (forceRefresh = false) => {
+      setLoading(true);
+      try {
+        const raw = await loadSessions(currentMode, true, forceRefresh);
+        const filtered = (raw || []).filter((session: any) => session.mode === currentMode);
+        const enriched = await Promise.all(filtered.map((session: AgentSession) => enrichSession(session)));
+        setSessions(enriched);
+      } catch (error: any) {
+        const messageText = error?.response?.data?.error || error?.message || 'Failed to load agents';
+        message.error(messageText);
+      } finally {
+        setLoading(false);
       }
     },
-    {
-      key: 'export',
-      label: 'Export to CSV',
-      icon: <DownloadOutlined />,
-      onClick: exportToCsv
-    }
-  ];
+    [currentMode, loadSessions]
+  );
 
-  const relaunch = async (r:any)=>{
-    const p = r.profile || {};
-    setRestartSessionId(r.id);
+  React.useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  const openCreateModal = React.useCallback(() => {
+    setEditingSession(null);
+    form.resetFields();
     form.setFieldsValue({
-      symbol: r.symbol,
-      mode: r.mode,
-      startBalanceUsd: r.startBalanceUsd,
-      maxLeverage: Math.min(10, Math.max(1, p.requestedMaxLeverage ?? p.maxLeverage ?? 4)),
-      aggressiveness: p.aggressiveness || 'conservative',
-      smartAutoMode: !!r.isSmartAgent,
+      smartAutoMode: true,
+      maxLeverage: 4,
+      aggressiveness: 'conservative',
+      startBalanceUsd: undefined,
+      mode: currentMode,
     });
-    const resolvedLev = Number(p.maxLeverage ?? p.leverageCap?.resolved);
-    const requestedLev = Number(p.requestedMaxLeverage ?? p.leverageCap?.requested ?? p.maxLeverage);
-    const trimmed = Boolean(
-      p?.leverageCap?.trimmed ?? (
-        Number.isFinite(resolvedLev) && Number.isFinite(requestedLev) && resolvedLev + 1e-9 < requestedLev
-      )
-    );
-    setRestartLeverageInfo({
-      resolved: Number.isFinite(resolvedLev) ? resolvedLev : undefined,
-      requested: Number.isFinite(requestedLev) ? requestedLev : undefined,
-      trimmed,
-      source: p?.leverageCap?.constraintSource,
-      modeCap: p?.leverageCap?.modeCap,
-      categoryCap: p?.leverageCap?.categoryCap,
-      constraintCap: p?.leverageCap?.constraintCap,
-    });
-    setOpen(true);
-  };
+    setModalOpen(true);
+  }, [currentMode, form]);
 
-  const sessionColumns = React.useMemo<ColumnsType<any>>(() => {
-    const parseTime = (value: string | number | null | undefined) => {
-      if (!value) return NaN;
-      if (typeof value === 'number') return value;
-      const parsed = Date.parse(value);
-      return Number.isFinite(parsed) ? parsed : NaN;
-    };
+  const openEditModal = React.useCallback(
+    (session: AgentSession) => {
+      setEditingSession(session);
+      form.resetFields();
+      form.setFieldsValue({
+        smartAutoMode: Boolean(session.isSmartAgent),
+        symbol: session.symbol,
+        startBalanceUsd: session.startBalanceUsd,
+        maxLeverage:
+          Number((session.profile as any)?.requestedMaxLeverage ?? (session.profile as any)?.maxLeverage ?? 4) || 4,
+        aggressiveness: ((session.profile as any)?.aggressiveness as AggressivenessLevel) ?? 'conservative',
+        mode: session.mode,
+      });
+      setModalOpen(true);
+    },
+    [form]
+  );
 
-    const columns: ColumnsType<any> = [
+  const closeModal = React.useCallback(() => {
+    setModalOpen(false);
+    setEditingSession(null);
+    form.resetFields();
+  }, [form]);
+
+  const handleStopSession = React.useCallback(
+    (session: AgentSession) => {
+      Modal.confirm({
+        title: `Pause ${resolveAgentLabel(session)}?`,
+        content: 'The agent will stop trading immediately.',
+        okText: 'Pause Agent',
+        okButtonProps: { danger: true },
+        onOk: async () => {
+          try {
+            await api.stopSession(session.id, true);
+            message.success('Agent paused');
+            invalidateCache(currentMode);
+            await fetchSessions(true);
+          } catch (error: any) {
+            message.error(error?.response?.data?.message || 'Failed to pause agent');
+          }
+        },
+      });
+    },
+    [currentMode, fetchSessions, invalidateCache]
+  );
+
+  const handleDeleteSession = React.useCallback(
+    (session: AgentSession) => {
+      Modal.confirm({
+        title: `Delete ${resolveAgentLabel(session)}?`,
+        content: 'This removes the agent configuration and history from the console.',
+        okText: 'Delete',
+        okButtonProps: { danger: true },
+        onOk: async () => {
+          try {
+            await api.deleteSession(session.id);
+            message.success('Agent removed');
+            invalidateCache(currentMode);
+            await fetchSessions(true);
+          } catch (error: any) {
+            message.error(error?.response?.data?.message || 'Failed to delete agent');
+          }
+        },
+      });
+    },
+    [currentMode, fetchSessions, invalidateCache]
+  );
+
+  const handleModalSubmit = React.useCallback(async () => {
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+      const payload = {
+        mode: values.mode ?? currentMode,
+        smartAutoMode: values.smartAutoMode,
+        startBalanceUsd: values.startBalanceUsd,
+        maxLeverage: values.maxLeverage,
+        aggressiveness: values.aggressiveness,
+      } as Record<string, any>;
+
+      if (!values.smartAutoMode) {
+        payload.symbol = values.symbol;
+      }
+
+      if (editingSession) {
+        await api.restartSession(editingSession.id, payload);
+        message.success('Agent settings updated');
+      } else {
+        const prepare = await api.prepareAgentCreation(payload);
+        const creationId: string | undefined = prepare?.creationId;
+        const selectedSymbol = values.smartAutoMode ? prepare?.selection?.symbol : values.symbol;
+
+        if (!creationId) {
+          throw new Error('Missing creation identifier');
+        }
+
+        await api.createAgentSession(creationId, selectedSymbol);
+        const activation = await api.activateAgentCreation(creationId);
+        message.success(
+          activation?.symbol
+            ? `Agent ready on ${activation.symbol}`
+            : 'Agent created successfully'
+        );
+      }
+
+      invalidateCache(currentMode);
+      await fetchSessions(true);
+      closeModal();
+    } catch (error: any) {
+      const detail = error?.response?.data?.message || error?.message || error;
+      message.error(typeof detail === 'string' ? detail : 'Unable to save agent');
+    } finally {
+      setSubmitting(false);
+      setEditingSession(null);
+    }
+  }, [closeModal, currentMode, editingSession, fetchSessions, form, invalidateCache]);
+
+  const handlePrimaryAction = React.useCallback(
+    (session: AgentSession) => {
+      if (isSessionActive(session)) {
+        handleStopSession(session);
+        return;
+      }
+      openEditModal(session);
+    },
+    [handleStopSession, openEditModal]
+  );
+
+  const handleRefresh = React.useCallback(() => {
+    fetchSessions(true);
+  }, [fetchSessions]);
+
+  const columns = React.useMemo<ColumnsType<AgentSession>>(
+    () => [
+      {
+        title: 'Agent',
+        key: 'agent',
+        render: (_, record) => (
+          <Space direction="vertical" size={2}>
+            <Space size={8}>
+              <Text style={{ color: '#f8fafc', fontWeight: 600 }}>{resolveAgentLabel(record)}</Text>
+              <Tag
+                style={{
+                  borderRadius: 10,
+                  border: 'none',
+                  background: 'rgba(59, 130, 246, 0.12)',
+                  color: '#93c5fd',
+                }}
+              >
+                {record.mode?.toUpperCase?.()}
+              </Tag>
+            </Space>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{resolveStrategyLabel(record)}</Text>
+          </Space>
+        ),
+      },
+      {
+        title: 'Pair',
+        dataIndex: 'symbol',
+        key: 'symbol',
+        render: (value: string) => <Text style={{ color: '#cbd5f5' }}>{value || '—'}</Text>,
+      },
       {
         title: 'Status',
         key: 'status',
-        width: compactView ? 120 : 140,
-        sorter: (a: any, b: any) => statusRank(a) - statusRank(b),
-        render: (_: any, record: any) => {
-          const meta = getStatusMeta(record);
-          const runtime = record.runtimeState
-            ? String(record.runtimeState).replace(/_/g, ' ')
-            : isSessionActive(record)
-            ? 'ACTIVE'
-            : 'OFFLINE';
+        render: (_, record) => {
+          const meta = statusMeta(record);
           return (
-            <Space direction="vertical" size={2}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    background: meta.dot,
-                    boxShadow: meta.glow,
-                  }}
-                />
-                <span style={{ fontWeight: 600, color: meta.text, fontSize: 12 }}>{meta.label}</span>
-              </div>
-              <span style={{ fontSize: 11, color: '#64748b' }}>{runtime.toUpperCase()}</span>
-              {record.haltReason && (
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {record.haltReason}
-                </Text>
-              )}
-            </Space>
+            <Tag
+              style={{
+                borderRadius: 10,
+                border: 'none',
+                background: meta.tone,
+                color: meta.color,
+                fontWeight: 600,
+              }}
+            >
+              {meta.label}
+            </Tag>
           );
         },
       },
       {
-        title: 'Armed',
-        key: 'armed',
-        width: compactView ? 90 : 100,
+        title: 'Allocated',
+        key: 'allocated',
+        align: 'right',
+        render: (_, record) => (
+          <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
+            {formatUsd(record.startBalanceUsd ?? record.runtimeBalance?.allocatedUsd)}
+          </Text>
+        ),
+      },
+      {
+        title: 'PnL',
+        key: 'pnl',
+        align: 'right',
+        render: (_, record) => {
+          const pnl = Number(record.pnlUsd ?? 0);
+          return (
+            <Text style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+              {formatUsd(record.pnlUsd)}
+            </Text>
+          );
+        },
+      },
+      {
+        title: 'ROI',
+        key: 'roi',
+        align: 'right',
+        render: (_, record) => (
+          <Text style={{ color: Number(record.roiPct ?? 0) >= 0 ? '#38bdf8' : '#f87171', fontWeight: 600 }}>
+            {formatPercent(record.roiPct)}
+          </Text>
+        ),
+      },
+      {
+        title: 'Win Rate',
+        key: 'winRate',
+        align: 'right',
+        render: (_, record) => <Text style={{ color: '#e2e8f0' }}>{formatPercent(record.winRate)}</Text>,
+      },
+      {
+        title: 'Trades',
+        dataIndex: 'totalTrades',
         align: 'center',
-        sorter: (a: any, b: any) => {
-          const aVal = resolveArmedState(a).armed;
-          const bVal = resolveArmedState(b).armed;
-          return Number(Boolean(aVal)) - Number(Boolean(bVal));
-        },
-        render: (_: any, record: any) => {
-          const { armed, reason } = resolveArmedState(record);
-          if (armed === null) {
-            return <Tag color="default">Unknown</Tag>;
-          }
-          return (
-            <Tooltip title={reason || (armed ? 'Agent is armed and ready to execute.' : 'Agent is disarmed.')}>
-              <Tag color={armed ? 'success' : 'warning'} style={{ borderRadius: 6, fontWeight: 600 }}>
-                {armed ? 'ARMED' : 'STANDBY'}
-              </Tag>
-            </Tooltip>
-          );
-        },
-      },
-      {
-        title: 'Agent',
-        dataIndex: 'symbol',
-        key: 'agent',
-        width: compactView ? 180 : 210,
-        sorter: (a: any, b: any) => String(a.symbol || '').localeCompare(String(b.symbol || '')),
-        render: (_: any, record: any) => {
-          const isSmart =
-            record.isSmartAgent || record.profile?.isIntelligent || record.profileJson?.isIntelligent;
-          const aggressiveness = String(record.aggressiveness || 'reactive').toUpperCase();
-          return (
-            <Space direction="vertical" size={2}>
-              <Space align="center" size={6}>
-                {isSmart && <span role="img" aria-label="smart agent">🧠</span>}
-                <span style={{ fontWeight: 600, fontSize: 13, color: '#0f172a' }}>{record.symbol}</span>
-              </Space>
-              <Space size={4} wrap>
-                <Tag color="blue" style={{ borderRadius: 6 }}>
-                  {String(record.mode || 'paper').toUpperCase()}
-                </Tag>
-                <Tag color="geekblue" style={{ borderRadius: 6 }}>
-                  {aggressiveness}
-                </Tag>
-                <Tooltip title={`Session ID: ${record.id}`}>
-                  <Tag color="default" style={{ borderRadius: 6 }}>
-                    #{String(record.id || '').slice(-6).toUpperCase()}
-                  </Tag>
-                </Tooltip>
-              </Space>
-            </Space>
-          );
-        },
-      },
-      {
-        title: 'Market stance',
-        key: 'stance',
-        width: compactView ? 210 : 230,
-        sorter: (a: any, b: any) => {
-          const aPos = getPositionSnapshot(a);
-          const bPos = getPositionSnapshot(b);
-          const aNotional = typeof aPos.notional === 'number' ? aPos.notional : 0;
-          const bNotional = typeof bPos.notional === 'number' ? bPos.notional : 0;
-          return aNotional - bNotional;
-        },
-        render: (_: any, record: any) => {
-          const snapshot = getPositionSnapshot(record);
-          if (!snapshot.side) {
-            return (
-              <Space direction="vertical" size={2}>
-                <Tag color="default" style={{ borderRadius: 6 }}>FLAT</Tag>
-                <span style={{ fontSize: 11, color: '#94a3b8' }}>Waiting for a signal</span>
-              </Space>
-            );
-          }
-          const { side, sizeDisplay, entryDisplay, unrealized, notional } = snapshot;
-          const notionalText = typeof notional === 'number' && Number.isFinite(notional)
-            ? `$${Math.abs(notional).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-            : null;
-          const safeUnrealized = typeof unrealized === 'number' && Number.isFinite(unrealized) ? unrealized : null;
-          return (
-            <Space direction="vertical" size={2}>
-              <Space size={6}>
-                <Tag color={side === 'SHORT' ? 'volcano' : 'green'} style={{ borderRadius: 6 }}>
-                  {side}
-                </Tag>
-                {sizeDisplay && (
-                  <span style={{ fontSize: 12, fontWeight: 600, color: '#0f172a' }}>{sizeDisplay}</span>
-                )}
-              </Space>
-              <span style={{ fontSize: 11, color: '#64748b' }}>
-                {entryDisplay ? `Entry ${entryDisplay}` : 'Entry price pending'}
-                {notionalText ? ` • ${notionalText}` : ''}
-              </span>
-              {safeUnrealized != null && (
-                <span style={{ fontSize: 11, color: safeUnrealized >= 0 ? '#047857' : '#dc2626', fontWeight: 600 }}>
-                  Unrealized {safeUnrealized >= 0 ? '+' : '-'}${Math.abs(safeUnrealized).toFixed(2)}
-                </span>
-              )}
-            </Space>
-          );
-        },
-      },
-      {
-        title: 'Performance',
-        key: 'performance',
-        width: compactView ? 170 : 190,
-        sorter: (a: any, b: any) => (Number(a.pnlUsd) || 0) - (Number(b.pnlUsd) || 0),
-        render: (_: any, record: any) => {
-          const pnl = Number(record.pnlUsd || 0);
-          const roi = Number(record.roiPct || 0);
-          return (
-            <Space direction="vertical" size={2}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: pnl >= 0 ? '#047857' : '#dc2626' }}>
-                {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
-              </span>
-              <span style={{ fontSize: 11, color: roi >= 0 ? '#0f766e' : '#b91c1c' }}>
-                ROI {roi >= 0 ? '+' : '-'}{Math.abs(roi).toFixed(2)}%
-              </span>
-            </Space>
-          );
-        },
-      },
-      {
-        title: 'Exposure',
-        key: 'exposure',
-        width: compactView ? 200 : 220,
-        sorter: (a: any, b: any) => {
-          const aBalance = a.runtimeBalance || {};
-          const bBalance = b.runtimeBalance || {};
-          const aExposure = Number(aBalance.exposureUsd ?? aBalance.notionalUsd ?? 0);
-          const bExposure = Number(bBalance.exposureUsd ?? bBalance.notionalUsd ?? 0);
-          return aExposure - bExposure;
-        },
-        render: (_: any, record: any) => {
-          const balance = record.runtimeBalance || {};
-          const exposure = Number(balance.exposureUsd ?? balance.notionalUsd ?? NaN);
-          const capital = Number(balance.allocatedUsd ?? record.startBalanceUsd ?? NaN);
-          const summary = record.leverageSummary || {};
-          const hasExposure = Number.isFinite(exposure);
-          const utilization = capital > 0 && hasExposure ? Math.min(999, (exposure / capital) * 100) : null;
-          const exposureDisplay = hasExposure
-            ? `$${Math.abs(exposure).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-            : '—';
-          return (
-            <Space direction="vertical" size={2}>
-              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
-                Exposure {exposureDisplay}
-              </span>
-              {utilization != null && Number.isFinite(utilization) && (
-                <span style={{ fontSize: 11, color: utilization > 100 ? '#b91c1c' : '#475569' }}>
-                  {utilization.toFixed(utilization >= 10 ? 0 : 1)}% of capital
-                </span>
-              )}
-              <span style={{ fontSize: 11, color: '#64748b' }}>
-                Leverage {formatLeverageValue(summary.resolved ?? record.profile?.maxLeverage)}
-                {summary.trimmed && summary.requested ? ` • trimmed from ${formatLeverageValue(summary.requested)}` : ''}
-              </span>
-            </Space>
-          );
-        },
-      },
-      {
-        title: 'Readiness',
-        key: 'readiness',
-        width: compactView ? 200 : 220,
-        sorter: (a: any, b: any) => {
-          const aReady = Number(a.tradingReadiness?.percent ?? (a.tradingReadiness?.canTrade ? 100 : 0));
-          const bReady = Number(b.tradingReadiness?.percent ?? (b.tradingReadiness?.canTrade ? 100 : 0));
-          return aReady - bReady;
-        },
-        render: (_: any, record: any) => {
-          const readiness = record.tradingReadiness;
-          const healthScore = Number(record.healthScore ?? NaN);
-          if (!readiness) {
-            return (
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                {isSessionActive(record) ? 'Diagnostics unavailable' : 'Agent offline'}
-              </span>
-            );
-          }
-          const percent = Math.round(readiness.percent ?? (readiness.canTrade ? 100 : 0));
-          return (
-            <Space direction="vertical" size={4} style={{ width: 180 }}>
-              <Progress
-                percent={percent}
-                size="small"
-                status={readiness.canTrade ? 'normal' : 'exception'}
-                showInfo={false}
-              />
-              <span style={{ fontSize: 11, color: readiness.canTrade ? '#047857' : '#b45309', fontWeight: 500 }}>
-                {readiness.canTrade ? 'Ready to trade' : 'Blocked'}
-              </span>
-              {readiness.reason && (
-                <span style={{ fontSize: 11, color: '#64748b' }}>{readiness.reason}</span>
-              )}
-              {Number.isFinite(healthScore) && (
-                <span style={{ fontSize: 11, color: getHealthColor(record.healthStatus, healthScore) }}>
-                  Health {Math.round(healthScore)}%
-                </span>
-              )}
-            </Space>
-          );
-        },
-      },
-      {
-        title: 'Activity',
-        key: 'activity',
-        width: compactView ? 180 : 190,
-        sorter: (a: any, b: any) => {
-          const aTs = parseTime(a.lastActivity);
-          const bTs = parseTime(b.lastActivity);
-          return (Number.isFinite(aTs) ? aTs : 0) - (Number.isFinite(bTs) ? bTs : 0);
-        },
-        render: (_: any, record: any) => {
-          const orders = Number(record.pendingOrdersCount ?? 0);
-          const totalTrades = Number(record.totalTrades ?? 0);
-          const today = Number(record.todayTrades ?? 0);
-          return (
-            <Space direction="vertical" size={2}>
-              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
-                {formatRelativeTime(record.lastActivity)}
-              </span>
-              <span style={{ fontSize: 11, color: '#64748b' }}>
-                {totalTrades} total · {today} today
-              </span>
-              <span style={{ fontSize: 11, color: orders > 0 ? '#b45309' : '#94a3b8' }}>
-                {orders} pending
-              </span>
-            </Space>
-          );
-        },
+        render: (value?: number) => <Text style={{ color: '#cbd5f5' }}>{Number(value ?? 0)}</Text>,
       },
       {
         title: 'Actions',
         key: 'actions',
-        width: compactView ? 170 : 190,
-        fixed: compactView ? undefined : ('right' as const),
-        render: (_: any, record: any) => {
-          const buttons: React.ReactNode[] = [];
-          if (isSessionActive(record)) {
-            buttons.push(
+        align: 'right',
+        render: (_, record) => (
+          <Space>
+            <Button
+              type={isSessionActive(record) ? 'default' : 'primary'}
+              danger={isSessionActive(record)}
+              size="small"
+              icon={isSessionActive(record) ? <PauseCircleFilled /> : <PlayCircleFilled />}
+              onClick={(event) => {
+                event.stopPropagation();
+                handlePrimaryAction(record);
+              }}
+            >
+              {isSessionActive(record) ? 'Pause' : 'Start'}
+            </Button>
+            <Tooltip title="View details">
               <Button
-                key="stop"
+                size="small"
+                icon={<EyeOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  navigate(`/agents/${record.id}`);
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="Delete agent">
+              <Button
                 danger
                 size="small"
-                icon={<StopOutlined />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  stop(record.id);
+                icon={<DeleteOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleDeleteSession(record);
                 }}
-              >
-                Stop
-              </Button>
-            );
-          }
-          buttons.push(
-            <Button
-              key="modify"
-              size="small"
-              icon={<EditOutlined />}
-              onClick={(e) => {
-                e.stopPropagation();
-                relaunch(record);
-              }}
-            >
-              Modify
-            </Button>
-          );
-          buttons.push(
-            <Button
-              key="delete"
-              danger
-              size="small"
-              icon={<DeleteOutlined />}
-              onClick={(e) => {
-                e.stopPropagation();
-                Modal.confirm({
-                  title: 'Delete session?',
-                  content: 'This will permanently delete session and all associated data.',
-                  okText: 'Delete',
-                  cancelText: 'Cancel',
-                  okButtonProps: { danger: true },
-                  onOk: async () => {
-                    try {
-                      await api.deleteSession(record.id);
-                      message.success('Deleted');
-                      await load(true);
-                    } catch (error) {
-                      console.error('Delete failed', error);
-                      message.error('Delete failed');
-                    }
-                  },
-                });
-              }}
-            >
-              Delete
-            </Button>
-          );
-
-          return <Space size={6}>{buttons}</Space>;
-        },
+              />
+            </Tooltip>
+          </Space>
+        ),
       },
-    ];
-    return columns;
-  }, [
-    compactView,
-    formatLeverageValue,
-    formatRelativeTime,
-    getHealthColor,
-    getPositionSnapshot,
-    getStatusMeta,
-    isSessionActive,
-    load,
-    relaunch,
-    resolveArmedState,
-    statusRank,
-    stop,
-  ]);
-  const paperAllocations = React.useMemo<PortfolioAllocationRow[]>(() => {
-    const list = Array.isArray(portfolioPaper?.allocations) ? portfolioPaper.allocations : [];
-    return list.map((entry: any) => ({
-      key: entry.sessionId || entry.symbol,
-      symbol: entry.symbol,
-      sessionId: entry.sessionId,
-      weightPct: Number(entry.weight || 0) * 100,
-      budgetPct: Number(entry.budgetFraction ?? entry.weight ?? 0) * 100,
-      capitalUsd: Number(entry.capitalUsd ?? 0),
-      roiPct: Number(entry.roiPct ?? 0),
-      winRate: Number(entry.winRate ?? 0),
-      tags: Array.isArray(entry.tags) ? entry.tags : [],
-    }));
-  }, [portfolioPaper]);
-
-  const paperBalanceUsd = Number(portfolioPaper?.balanceUsd ?? NaN);
-  const allocatedUsd = Number(portfolioPaper?.allocatedUsd ?? NaN);
-  const hasOverallocation =
-    Number.isFinite(paperBalanceUsd) &&
-    Number.isFinite(allocatedUsd) &&
-    allocatedUsd > paperBalanceUsd + 1;
+    ],
+    [handleDeleteSession, handlePrimaryAction, navigate]
+  );
 
   return (
-    <div style={{ 
-      background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-      minHeight: '100vh',
-      padding: '24px',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif'
-    }}>
-      <Space direction='vertical' style={{ width:'100%' }} size="large">
-        {/* API Key Status Warning */}
-        <ApiKeyStatusBanner 
-          mode={mode as 'live' | 'paper'}
-          onConfigureKeys={() => {
-            // Open user settings modal - you'll need to implement this
-            console.log('Open user settings for API keys');
-          }}
-          showTitle={false}
-        />
-
-        {/* Debug Tool for API Keys - Only show if there are issues */}
-        {apiKeyHealth?.needsDiagnostics && (
-          <ApiKeyDiagnostics />
-        )}
-
-        {/* Migration Tool for Broken Keys - Only show if migration needed */}
-        {apiKeyHealth?.needsMigration && (
-          <ApiKeyMigrationTool />
-        )}
-
-        {locked && (
-          <Alert
-            type='warning'
-            showIcon
-            style={{
-              borderRadius: '12px',
-              border: '1px solid #f97316',
-              background: 'rgba(249, 115, 22, 0.08)',
-              marginBottom: 24
-            }}
-            message='Emergency stop is active'
-            description='All agents are halted and new creation is disabled until you reset the lock.'
-            action={
-              <Button size='small' type='default' icon={<ReloadOutlined />} onClick={unlock}>
-                Reset lock
-              </Button>
-            }
-          />
-        )}
-
-        <Card
-          style={{
-            borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            background: '#fff',
-            boxShadow: '0 4px 16px rgba(15, 23, 42, 0.08)'
-          }}
-          title={
-            <Space size={12} align="center">
-              <span style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Portfolio Allocation</span>
-              <Tag color="processing" style={{ borderRadius: 12 }}>
-                Max exposure 150%
-              </Tag>
-            </Space>
-          }
-          extra={
-            <Space>
-              <Button onClick={refreshPortfolio} loading={portfolioLoading} icon={<ReloadOutlined />}>Refresh</Button>
-              <Tooltip title="Realign paper allocations to the paper balance you configure. Uses target weights only.">
-                <Button onClick={() => handleRebalancePortfolio('paper')} loading={portfolioLoading} type="primary">
-                  Rebalance paper
-                </Button>
-              </Tooltip>
-              <Button onClick={() => handleRebalancePortfolio('live')} loading={portfolioLoading} disabled={!portfolioLive}>
-                Rebalance live
-              </Button>
-            </Space>
-          }
-        >
-          <Row gutter={[24, 16]}>
-            <Col xs={24} sm={12} md={6}>
-              <Statistic
-                title="Paper balance"
-                prefix="$"
-                value={Number(portfolioPaper?.balanceUsd || 0)}
-                precision={0}
-              />
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Statistic
-                title="Allocated"
-                prefix="$"
-                value={Number(portfolioPaper?.allocatedUsd || 0)}
-                precision={0}
-              />
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Statistic
-                title="Free capital"
-                prefix="$"
-                value={Math.max(0, Number(portfolioPaper?.freeUsd || 0))}
-                precision={0}
-              />
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Statistic
-                title="Exposure used"
-                value={Number(portfolioPaper?.exposureUtilizationPct || 0)}
-                suffix="%"
-                precision={1}
-              />
-            </Col>
-          </Row>
-          <Divider />
-          <Row gutter={[16, 16]} align="middle" justify="space-between">
-            <Col xs={24} md={14}>
-              <Space size={12} wrap>
-                <span style={{ fontSize: 13, color: '#475569' }}>Paper balance</span>
-                <InputNumber
-                  min={0}
-                  step={100}
-                  value={paperBalanceInput}
-                  onChange={(value) => setPaperBalanceInput(value ?? undefined)}
-                />
-                <Button onClick={handleUpdatePortfolioBalance} loading={portfolioLoading} type="primary">
-                  Update balance
-                </Button>
-                {portfolioPaper?.lastRebalancedAt && (
-                  <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                    Last rebalanced {formatRelativeTime(portfolioPaper.lastRebalancedAt)}
-                  </span>
-                )}
-              </Space>
-            </Col>
-            <Col xs={24} md={10}>
-              <Space direction="vertical" size={2} style={{ width: '100%', textAlign: 'right' }}>
-                <span style={{ fontSize: 12, color: '#64748b' }}>Live balance estimate</span>
-                <span style={{ fontWeight: 600, fontSize: 16, color: '#0f172a' }}>
-                  ${Number(portfolioLive?.balanceUsd || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </span>
-              </Space>
-            </Col>
-          </Row>
-          <Divider />
-          {hasOverallocation && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ borderRadius: 10, marginBottom: 16 }}
-              message="Allocated capital exceeds paper balance"
-              description="Leverage or exposure can momentarily exceed the configured paper balance. Rebalancing brings allocations back to the paper plan without affecting live funds."
-            />
-          )}
-          <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 16 }}>
-            Rebalance paper redistributes simulated capital using each agent's target weights so that the
-            total matches your paper balance. Use it after updating the balance or when allocations drift
-            because of performance.
-          </Text>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            {paperAllocations.length ? (
-              paperAllocations.map((allocation) => {
-                const weightLabel = Number.isFinite(allocation.weightPct)
-                  ? `${allocation.weightPct.toFixed(1)}%`
-                  : '—';
-                const budgetLabel = Number.isFinite(allocation.budgetPct)
-                  ? `${allocation.budgetPct.toFixed(1)}%`
-                  : '—';
-                const capitalLabel = Number.isFinite(allocation.capitalUsd)
-                  ? `$${Math.round(allocation.capitalUsd).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-                  : '—';
-                const roiLabel = Number.isFinite(allocation.roiPct)
-                  ? `${allocation.roiPct.toFixed(1)}%`
-                  : '—';
-                const winLabel = Number.isFinite(allocation.winRate)
-                  ? `${allocation.winRate.toFixed(1)}%`
-                  : '—';
-                return (
-                  <div key={allocation.key} className="allocation-row">
-                    <div className="allocation-row__header">
-                      <Space size={8} wrap>
-                        <span className="allocation-row__symbol">{allocation.symbol || '—'}</span>
-                        <Tag color="blue" className="allocation-row__tag">Target {weightLabel}</Tag>
-                        <Tag color="purple" className="allocation-row__tag">Budget {budgetLabel}</Tag>
-                      </Space>
-                      {allocation.tags.length > 0 && (
-                        <Space size={4} wrap>
-                          {allocation.tags.map((tag) => (
-                            <Tag key={tag} color={tag === 'correlation-limited' ? 'volcano' : 'gold'}>
-                              {tag.replace(/-/g, ' ')}
-                            </Tag>
-                          ))}
-                        </Space>
-                      )}
-                    </div>
-                    <div className="allocation-row__metrics">
-                      <div className="allocation-row__metric">
-                        <span className="allocation-row__metric-label">Target capital</span>
-                        <span className="allocation-row__metric-value">{capitalLabel}</span>
-                      </div>
-                      <div className="allocation-row__metric">
-                        <span className="allocation-row__metric-label">Performance</span>
-                        <span className="allocation-row__metric-value">ROI {roiLabel} · Win {winLabel}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="allocation-empty">No allocations yet</div>
-            )}
-          </Space>
-        </Card>
-
-        <Card
-          style={{
-            borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
-            background: 'white'
-          }}
-          title={
-            <Row justify="space-between" align="middle">
-              <Col>
-                <Space size="large">
-                  <span style={{
-                    fontSize: '28px',
-                    fontWeight: '700',
-                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif'
-                  }}>Trading Sessions</span>
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      background: 'linear-gradient(135deg, #10b981, #059669)',
-                      padding: '6px 14px',
-                      borderRadius: '20px',
-                      color: 'white',
-                      fontSize: '13px',
-                      fontWeight: '600',
-                      boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
-                    }}>
-                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
-                      {filteredRows.filter(isSessionActive).length} Active
-                    </div>
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      background: 'linear-gradient(135deg, #b91c1c, #dc2626)',
-                      padding: '6px 14px',
-                      borderRadius: '20px',
-                      color: 'white',
-                      fontSize: '13px',
-                      fontWeight: '600',
-                      boxShadow: '0 2px 8px rgba(220, 38, 38, 0.25)'
-                    }}>
-                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
-                      {filteredRows.filter(r => !!r.haltedAt).length} Halted
-                    </div>
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      background: 'linear-gradient(135deg, #64748b, #475569)',
-                      padding: '6px 14px',
-                      borderRadius: '20px',
-                      color: 'white',
-                      fontSize: '13px',
-                      fontWeight: '600'
-                    }}>
-                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
-                      {filteredRows.filter(r => !!sessionStoppedAt(r) && !r.haltedAt).length} Stopped
-                    </div>
-                  </div>
-                </Space>
-              </Col>
-              <Col>
-                <Space size="middle">
-                  <Tooltip title="Compact View">
-                    <Switch 
-                      checkedChildren={<EyeOutlined />} 
-                      unCheckedChildren={<EyeOutlined />}
-                      checked={compactView}
-                      onChange={setCompactView}
-                      style={{ 
-                        background: compactView ? 'linear-gradient(135deg, #667eea, #764ba2)' : undefined,
-                        boxShadow: compactView ? '0 2px 8px rgba(102, 126, 234, 0.3)' : undefined
-                      }}
-                    />
-                  </Tooltip>
-                  <Tooltip title={`Refresh (Cache: ${isCacheValid(mode as any, false) ? '✅ Valid' : '❌ Expired'})`}>
-                    <Button 
-                      icon={<ReloadOutlined />}
-                      loading={sessionsLoading}
-                      onClick={() => {
-                        console.log('🔄 Manual refresh triggered');
-                        load(true); // Force refresh
-                      }}
-                      style={{
-                        borderRadius: '10px',
-                        fontWeight: '500',
-                        border: `1px solid ${isCacheValid(mode as any, false) ? '#10b981' : '#ef4444'}`,
-                        background: 'white',
-                        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
-                        height: '40px',
-                        color: isCacheValid(mode as any, false) ? '#10b981' : '#ef4444'
-                      }}
-                    >
-                      {isCacheValid(mode as any, false) ? 'Cached' : 'Refresh'}
-                    </Button>
-                  </Tooltip>
-                  <Dropdown menu={{ items: bulkActions }} placement="bottomRight">
-                    <Button 
-                      icon={<SettingOutlined />}
-                      style={{
-                        borderRadius: '10px',
-                        fontWeight: '500',
-                        border: '1px solid #e2e8f0',
-                        background: 'white',
-                        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
-                        height: '40px'
-                      }}
-                    >
-                      Actions
-                    </Button>
-                  </Dropdown>
-               
-                  <Tooltip title={locked ? 'Emergency stop active. Reset to enable new agent creation.' : undefined}>
-                    <Button
-                      type='primary'
-                      icon={<PlayCircleOutlined />}
-                      onClick={()=>{
-                        setRestartSessionId(null);
-                        form.setFieldsValue({
-                          symbol:'BTC/USDT',
-                          mode,
-                          startBalanceUsd: undefined,
-                          maxLeverage:4,
-                          aggressiveness:'conservative',
-                          smartAutoMode: false
-                        });
-                        setOpen(true);
-                      }}
-                      style={{
-                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                        border: 'none',
-                        borderRadius: '10px',
-                        fontWeight: '600',
-                        boxShadow: '0 4px 12px rgba(102, 126, 234, 0.4)',
-                        fontSize: '14px',
-                        height: '40px'
-                      }}
-                      disabled={locked}
-                    >
-                      New Agent
-                    </Button>
-                  </Tooltip>
-                </Space>
-              </Col>
-          </Row>
-        }
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 24,
+        paddingBottom: 48,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 16,
+        }}
       >
-        {creationProgress?.visible && (
-          <AgentCreationProgressBanner
-            progress={creationProgress}
-            onDismiss={
-              creationProgress.result || creationProgress.error
-                ? () => setCreationProgress(null)
-                : undefined
-            }
-          />
-        )}
-        {/* Modern Filters Section */}
-        <div style={{
-          background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-            borderRadius: '12px',
-            padding: '24px',
-            marginBottom: '24px',
-            border: '1px solid #e2e8f0'
-          }}>
-            <Row gutter={[16, 16]}>
-              <Col xs={24} sm={12} md={6}>
-                <Input
-                  placeholder="Search symbol or ID..."
-                  prefix={<SearchOutlined style={{ color: '#64748b' }} />}
-                  value={searchText}
-                  onChange={e => setSearchText(e.target.value)}
-                  allowClear
-                  style={{
-                    borderRadius: '10px',
-                    border: '1px solid #e2e8f0',
-                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.08)',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                    height: '40px'
-                  }}
-                />
-              </Col>
-              <Col xs={12} sm={6} md={4}>
-                <Select
-                  placeholder="Status"
-                  style={{ 
-                    width: '100%',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                  }}
-                  value={statusFilter}
-                  onChange={setStatusFilter}
-                  options={[
-                    { value: 'all', label: 'All Status' },
-                    { value: 'active', label: 'Active' },
-                    { value: 'halted', label: 'Halted' },
-                    { value: 'stopped', label: 'Stopped' }
-                  ]}
-                />
-              </Col>
-              <Col xs={12} sm={6} md={4}>
-                <Select
-                  placeholder="Mode"
-                  style={{ 
-                    width: '100%',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                  }}
-                  value={modeFilter}
-                  onChange={setModeFilter}
-                  options={[
-                    { value: 'all', label: 'All Modes' },
-                    { value: 'live', label: 'Live' },
-                    { value: 'paper', label: 'Paper' }
-                  ]}
-                />
-              </Col>
-              <Col xs={12} sm={6} md={5}>
-                <Select
-                  placeholder="Symbol"
-                  style={{ 
-                    width: '100%',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                  }}
-                  value={symbolFilter}
-                  onChange={setSymbolFilter}
-                  options={[
-                    { value: 'all', label: 'All Symbols' },
-                    ...Array.from(new Set(rows.map(r => r.symbol))).map(s => ({ value: s, label: s }))
-                  ]}
-                />
-              </Col>
-              <Col xs={12} sm={6} md={5}>
-                <Select
-                  placeholder="Aggressiveness"
-                  style={{ 
-                    width: '100%',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                  }}
-                  value={aggressivenessFilter}
-                  onChange={setAggressivenessFilter}
-                  options={[
-                    { value: 'all', label: 'All Levels' },
-                    { value: 'conservative', label: 'Conservative' },
-                    { value: 'reactive', label: 'Reactive' },
-                    { value: 'aggressive', label: 'Aggressive' }
-                  ]}
-                />
-              </Col>
-            </Row>
-          </div>
-          
-          {/* Modern Enhanced Table */}
-          <Table
-            className="sessions-table"
-            rowKey="id"
-            dataSource={filteredRows}
-            pagination={{
-              pageSize: compactView ? 18 : 12,
-              showSizeChanger: true,
-              showQuickJumper: true,
-              showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} sessions`,
-              style: { fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif' },
-            }}
-            rowClassName={() => 'sessions-table__row'}
-            onRow={(record) => ({
-              onClick: async () => {
-                if (isSessionActive(record)) navigate(`/agents/${record.id}`);
+        <div>
+          <Title level={3} style={{ color: '#f8fafc', marginBottom: 4 }}>
+            AI Trading Agents
+          </Title>
+          <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>
+            Manage automated strategies in {currentMode === 'live' ? 'live' : 'paper'} mode.
+          </Text>
+        </div>
+        <Space size={12} wrap>
+          <Segmented
+            value={viewMode}
+            onChange={(value) => setViewMode(value as ViewMode)}
+            options={[
+              {
+                label: (
+                  <Space size={6}>
+                    <AppstoreOutlined />
+                    <span>Cards</span>
+                  </Space>
+                ),
+                value: 'cards',
               },
-              style: {
-                cursor: isSessionActive(record) ? 'pointer' : 'default',
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
+              {
+                label: (
+                  <Space size={6}>
+                    <BarsOutlined />
+                    <span>Table</span>
+                  </Space>
+                ),
+                value: 'table',
               },
-            })}
-            scroll={{ x: compactView ? 1024 : 1280 }}
-            size="small"
-            style={{
-              borderRadius: '12px',
-              border: '1px solid #f1f5f9',
-              overflow: 'hidden',
-              background: '#ffffff',
-              boxShadow: '0 10px 24px -18px rgba(15, 23, 42, 0.35)'
-            }}
-            columns={sessionColumns}
+            ]}
           />
-        </Card>
+          <Button icon={<ReloadOutlined />} onClick={handleRefresh} disabled={loading}>
+            Refresh
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+            Create Agent
+          </Button>
+        </Space>
+      </div>
 
-        {/* Modern Modal */}
-        <Modal 
-          open={open} 
-          title={
-            <span style={{
-              fontSize: '20px',
-              fontWeight: '600',
-              color: '#1e293b',
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-            }}>
-              {restartSessionId ? '⚙️ Modify Agent' : '🚀 Activate New Agent'}
-            </span>
-          }
-          okText={restartSessionId ? 'Save Changes' : 'Start Agent'}
-          cancelText='Cancel' 
-          onCancel={()=> { setOpen(false); setRestartSessionId(null); setRestartLeverageInfo(null); }}
-          confirmLoading={starting}
-          style={{
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-          }}
-          onOk={async ()=>{
-            let hide: (() => void) | null = null;
-            const sessionIdForRestart = restartSessionId;
-            const isRestart = Boolean(sessionIdForRestart);
-            let currentStep: CreationStepKey = 'select';
-            try {
-              setStarting(true);
-              const v = await form.validateFields();
+      {viewMode === 'cards' ? (
+        <div style={cardGridStyle}>
+          {loading
+            ? Array.from({ length: 3 }).map((_, index) => (
+                <Card key={`skeleton-${index}`} style={cardStyle} bodyStyle={{ padding: 24 }}>
+                  <Skeleton active paragraph={{ rows: 6 }} />
+                </Card>
+              ))
+            : sessions.length === 0
+            ? (
+                <Card style={cardStyle} bodyStyle={{ padding: 48, textAlign: 'center' }}>
+                  <Empty description="No agents yet" />
+                </Card>
+              )
+            : sessions.map((session) => {
+                const meta = statusMeta(session);
+                return (
+                  <Card
+                    key={session.id}
+                    style={cardStyle}
+                    bodyStyle={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <Space direction="vertical" size={4}>
+                        <Text style={{ color: '#f8fafc', fontSize: 18, fontWeight: 600 }}>
+                          {resolveAgentLabel(session)}
+                        </Text>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{resolveStrategyLabel(session)}</Text>
+                      </Space>
+                      <Tag
+                        style={{
+                          borderRadius: 12,
+                          border: 'none',
+                          background: meta.tone,
+                          color: meta.color,
+                          fontWeight: 600,
+                          padding: '6px 12px',
+                        }}
+                      >
+                        {meta.label}
+                      </Tag>
+                    </div>
 
-              console.log('🔍 Form values BEFORE processing:', v);
-              console.log('🎯 Auto-Select Mode:', v.smartAutoMode);
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                        gap: 16,
+                      }}
+                    >
+                      <div>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Pair</Text>
+                        <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>{session.symbol || '—'}</div>
+                      </div>
+                      <div>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Allocated</Text>
+                        <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>
+                          {formatUsd(session.startBalanceUsd ?? session.runtimeBalance?.allocatedUsd)}
+                        </div>
+                      </div>
+                      <div>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>PnL</Text>
+                        <div
+                          style={{
+                            color: Number(session.pnlUsd ?? 0) >= 0 ? '#4ade80' : '#f87171',
+                            fontWeight: 600,
+                            fontSize: 16,
+                          }}
+                        >
+                          {formatUsd(session.pnlUsd)}
+                        </div>
+                      </div>
+                      <div>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>ROI</Text>
+                        <div
+                          style={{
+                            color: Number(session.roiPct ?? 0) >= 0 ? '#38bdf8' : '#f87171',
+                            fontWeight: 600,
+                            fontSize: 16,
+                          }}
+                        >
+                          {formatPercent(session.roiPct)}
+                        </div>
+                      </div>
+                      <div>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Win Rate</Text>
+                        <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>
+                          {formatPercent(session.winRate)}
+                        </div>
+                      </div>
+                      <div>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Trades</Text>
+                        <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>
+                          {Number(session.totalTrades ?? 0)}
+                        </div>
+                      </div>
+                    </div>
 
-              const level = (v.aggressiveness || 'conservative') as AggressivenessLevel;
-              const preset = AGGRESSIVENESS_PRESETS[level];
-              v.riskPerTradePct = preset.risk;
-              v.dailyLossLimitPct = preset.dailyLoss;
-              if (typeof v.budgetPct === 'undefined') v.budgetPct = 100;
-
-              if (v.smartAutoMode && !isRestart) {
-                console.log('🔄 Processing Auto-Select mode...');
-                delete v.symbol;
-                v.isSmartAgent = true;
-                v.smartConfig = {
-                  minHoldDuration: 24 * 60 * 60 * 1000,
-                  rescanInterval: 6 * 60 * 60 * 1000,
-                  momentumThreshold: 0.5,
-                  volumeThreshold: 10000,
-                };
-
-                if (!v.smartConfig.minHoldDuration || !v.smartConfig.rescanInterval) {
-                  message.error('Smart Agent configuration is invalid. Please try again.');
-                  setStarting(false);
-                  return;
-                }
-              } else if (isRestart) {
-                delete v.smartAutoMode;
-                delete v.smartConfig;
-              }
-
-              if (isRestart && sessionIdForRestart) {
-                v.sessionId = sessionIdForRestart;
-              }
-
-              if (String(v.mode) === 'live') {
-                try {
-                  const apiStatus = await api.client.get('/api/user/api-keys/status');
-                  if (!apiStatus.data.canUseLive) {
-                    message.error('Live trading requires valid API keys. Please configure your Crypto.com API keys first.');
-                    setStarting(false);
-                    return;
-                  }
-                } catch (error) {
-                  console.error('Unable to verify API keys', error);
-                  message.error('Unable to verify API keys. Please check your configuration.');
-                  setStarting(false);
-                  return;
-                }
-              }
-
-              if (String(v.mode) === 'live' && exBal?.totalUsd != null && v.startBalanceUsd != null) {
-                v.startBalanceUsd = Math.min(Number(v.startBalanceUsd || 0), Number(exBal.totalUsd || 0));
-              }
-
-              if (v.startBalanceUsd != null) {
-                v.portfolioBalanceUsd = v.startBalanceUsd;
-              }
-
-              setOpen(false);
-              setRestartLeverageInfo(null);
-              // Ensure no legacy progress modal remains visible once we pivot to the banner flow
-              Modal.destroyAll();
-
-              if (isRestart) {
-                hide = message.loading('Applying agent changes...', 0);
-                await api.client.post('/api/agent/restart', v);
-                if (hide) hide();
-                hide = null;
-                invalidateSmartly('settings_changed', { mode: v.mode as any, sessionId: sessionIdForRestart! });
-                message.success('Agent updated successfully!');
-                await load(true);
-                if (sessionIdForRestart) {
-                  navigate(`/agents/${sessionIdForRestart}`);
-                }
-                return;
-              }
-
-              const initialSteps = buildInitialCreationSteps();
-              const creationStartedAt = Date.now();
-              setCreationProgress({
-                visible: true,
-                steps: initialSteps,
-                logs: [
-                  {
-                    id: `start-${creationStartedAt}`,
-                    timestamp: creationStartedAt,
-                    level: 'info',
-                    message: v.smartAutoMode
-                      ? 'Initiating smart auto-select agent creation…'
-                      : 'Preparing agent creation workflow…',
-                    context: 'system',
-                    meta: { mode: v.mode },
-                  },
-                ],
-                startedAt: creationStartedAt,
-              });
-              pushCreationLogs({
-                level: 'info',
-                message: v.smartAutoMode
-                  ? 'Scanning AI-ranked universe for the strongest opportunities…'
-                  : 'Validating requested symbol against exchange metadata…',
-                context: 'selection',
-              });
-              updateCreationStep('select', {
-                status: 'running',
-                message: v.smartAutoMode
-                  ? 'Scanning AI-ranked universe…'
-                  : 'Validating configuration…',
-              });
-
-              const prepare = await api.prepareAgentCreation(v);
-              currentStep = 'select';
-              const creationId: string | undefined = prepare?.creationId;
-              const selectedSymbol: string | undefined = prepare?.selection?.symbol;
-              const selectionMessage = selectedSymbol
-                ? prepare?.selection?.autoSelected
-                  ? `Auto-selected ${selectedSymbol}`
-                  : `Using ${selectedSymbol}`
-                : 'Selection completed';
-              const { decisionLog: selectionDecisionLog = [], ...selectionMeta } = prepare?.selection ?? {};
-              updateCreationStep('select', {
-                status: 'success',
-                message: selectionMessage,
-                meta: {
-                  ...selectionMeta,
-                  universeSummary: prepare?.universeSummary,
-                },
-              });
-              if (Array.isArray(selectionDecisionLog) && selectionDecisionLog.length) {
-                pushCreationLogs(
-                  selectionDecisionLog.map((entry: any) => ({
-                    timestamp: entry?.timestamp,
-                    level: entry?.level,
-                    message: entry?.message,
-                    context: entry?.context,
-                    meta: entry?.meta,
-                  }))
+                    <Space size={12} wrap>
+                      <Button
+                        type={isSessionActive(session) ? 'default' : 'primary'}
+                        danger={isSessionActive(session)}
+                        icon={isSessionActive(session) ? <PauseCircleFilled /> : <PlayCircleFilled />}
+                        onClick={() => handlePrimaryAction(session)}
+                      >
+                        {isSessionActive(session) ? 'Pause' : 'Start'}
+                      </Button>
+                      <Button icon={<EyeOutlined />} onClick={() => navigate(`/agents/${session.id}`)}>
+                        View
+                      </Button>
+                      <Button danger icon={<DeleteOutlined />} onClick={() => handleDeleteSession(session)}>
+                        Remove
+                      </Button>
+                    </Space>
+                  </Card>
                 );
-              }
-              pushCreationLogs({
-                level: 'success',
-                message: selectionMessage,
-                context: 'selection',
-                meta: {
-                  symbol: selectedSymbol,
-                  autoSelected: prepare?.selection?.autoSelected,
-                  candidateCount: prepare?.selection?.candidateCount,
-                  orderableCount: prepare?.selection?.orderableCount,
-                },
-              });
-              if (Array.isArray(prepare?.universeSummary?.topSymbols) && prepare?.universeSummary?.topSymbols.length) {
-                pushCreationLogs({
-                  level: 'info',
-                  message: `Top AI candidates: ${prepare.universeSummary.topSymbols
-                    .slice(0, 5)
-                    .map((s: string) => formatSymbol(s))
-                    .join(', ')}`,
-                  context: 'selection',
-                });
-              }
+              })}
+        </div>
+      ) : (
+        <Card style={cardStyle} bodyStyle={{ padding: 0 }}>
+          <Table
+            rowKey="id"
+            columns={columns}
+            dataSource={sessions}
+            pagination={false}
+            loading={loading}
+            onRow={(record) => ({
+              onClick: () => navigate(`/agents/${record.id}`),
+              style: { cursor: 'pointer' },
+            })}
+          />
+          {sessions.length === 0 && !loading ? (
+            <div style={{ padding: 32 }}>
+              <Empty description="No agents yet" />
+            </div>
+          ) : null}
+        </Card>
+      )}
 
-              if (!creationId) {
-                throw new Error('Missing creation identifier');
-              }
-
-              setCreationProgress((prev) => (prev ? { ...prev, creationId } : prev));
-              updateCreationStep('session', {
-                status: 'running',
-                message: 'Provisioning trading session…',
-              });
-              pushCreationLogs({
-                level: 'info',
-                message: 'Provisioning trading session…',
-                context: 'session',
-                meta: { symbol: selectedSymbol },
-              });
-              currentStep = 'session';
-
-              const sessionResult = await api.createAgentSession(creationId, selectedSymbol);
-              updateCreationStep('session', {
-                status: 'success',
-                message: `Session ${sessionResult.sessionId} created`,
-                meta: { symbol: sessionResult.symbol },
-              });
-              pushCreationLogs({
-                level: 'success',
-                message: `Session ${sessionResult.sessionId} created`,
-                context: 'session',
-                meta: { symbol: sessionResult.symbol },
-              });
-
-              updateCreationStep('activate', {
-                status: 'running',
-                message: 'Activating trading engine…',
-              });
-              pushCreationLogs({
-                level: 'info',
-                message: 'Activating trading engine…',
-                context: 'activation',
-                meta: { symbol: sessionResult.symbol },
-              });
-              currentStep = 'activate';
-
-              const activation = await api.activateAgentCreation(creationId);
-              updateCreationStep('activate', {
-                status: 'success',
-                message:
-                  activation.state === 'ready'
-                    ? `Agent activated on ${activation.symbol}`
-                    : 'Agent warming up with market data',
-                meta: { state: activation.state },
-              });
-              pushCreationLogs({
-                level: activation.state === 'ready' ? 'success' : 'warn',
-                message:
-                  activation.state === 'ready'
-                    ? `Agent live on ${activation.symbol}`
-                    : 'Agent warming up with historical data',
-                context: 'activation',
-                meta: { state: activation.state, symbol: activation.symbol },
-              });
-
-              setCreationProgress((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      result: {
-                        sessionId: activation.sessionId,
-                        symbol: activation.symbol,
-                        state: activation.state,
-                      },
-                    }
-                  : prev
-              );
-
-              invalidateSmartly('session_created', { mode: v.mode as any, sessionId: activation.sessionId });
-
-              if (activation.symbol && activation.symbol !== 'SMART/SLEEP') {
-                message.success(`Agent started on ${activation.symbol}!`);
-              } else {
-                message.success(v.smartAutoMode ? 'Auto-Select agent scanning for best opportunities…' : 'Session started successfully!');
-              }
-
-              await load(true);
-              navigate(`/agents/${activation.sessionId}`);
-            } catch (e: any) {
-              if (typeof hide === 'function') hide();
-              const errorCode = e?.code || e?.response?.data?.error;
-              const detailMessage = e?.response?.data?.message || e?.message || e;
-              const errorMessage = String(detailMessage || 'Failed to start session');
-
-              if (!isRestart) {
-                updateCreationStep(currentStep, { status: 'error', message: errorMessage });
-                setCreationProgress((prev) => (prev ? { ...prev, error: errorMessage } : prev));
-                pushCreationLogs({
-                  level: 'error',
-                  message: errorMessage,
-                  context: currentStep || 'system',
-                  meta: errorCode ? { code: errorCode } : undefined,
-                });
-              }
-
-              if (!isRestart && typeof errorMessage === 'string' && errorMessage.includes('active_session_exists')) {
-                message.warning('Stop the active session first.');
-              } else if (errorCode === 'start.universe_conflict') {
-                message.error('No unused futures market is currently available for a smart agent. Please stop an existing session or try again later.');
-              } else {
-                message.error(isRestart ? 'Failed to restart session' : errorMessage);
-              }
-            } finally {
-              if (typeof hide === 'function') hide();
-              setStarting(false);
-              setRestartSessionId(null);
-            }
+      <Modal
+        open={modalOpen}
+        onCancel={closeModal}
+        onOk={handleModalSubmit}
+        okText={editingSession ? 'Save' : 'Create agent'}
+        confirmLoading={submitting}
+        title={editingSession ? 'Adjust agent settings' : 'Create new agent'}
+        destroyOnClose
+        maskClosable={false}
+        styles={{
+          body: {
+            background: 'linear-gradient(155deg, rgba(15, 23, 42, 0.95) 0%, rgba(15, 23, 42, 0.85) 100%)',
+            padding: 24,
+            borderRadius: 16,
+          },
+          header: {
+            background: 'rgba(15, 23, 42, 0.92)',
+            borderBottom: '1px solid rgba(148, 163, 184, 0.18)',
+          },
+          footer: {
+            background: 'rgba(15, 23, 42, 0.92)',
+            borderTop: '1px solid rgba(148, 163, 184, 0.18)',
+          },
+        }}
+      >
+        <Form<CreationFormShape>
+          layout="vertical"
+          form={form}
+          initialValues={{
+            smartAutoMode: true,
+            maxLeverage: 4,
+            aggressiveness: 'conservative',
+            mode: currentMode,
           }}
         >
-          <Form 
-            layout='vertical' 
-            form={form} 
-            initialValues={{ 
-              mode, 
-              maxLeverage:4, 
-              aggressiveness:'conservative',
-              smartAutoMode: false
-            }}
+          <Form.Item
+            label={<Text style={{ color: '#e2e8f0' }}>Auto-select best market</Text>}
+            name="smartAutoMode"
+            valuePropName="checked"
+          >
+            <Switch
+              checkedChildren="Auto"
+              unCheckedChildren="Manual"
+              style={{ background: smartAutoMode ? '#6366f1' : undefined }}
+            />
+          </Form.Item>
+
+          {!smartAutoMode && (
+            <Form.Item
+              label={<Text style={{ color: '#e2e8f0' }}>Trading pair</Text>}
+              name="symbol"
+              rules={[{ required: true, message: 'Select a trading pair' }]}
+            >
+              <Select
+                showSearch
+                placeholder="Select pair"
+                options={commonSymbols.map((symbol) => ({ label: symbol, value: symbol }))}
+                filterOption={(input, option) =>
+                  (option?.label as string).toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+          )}
+
+          {currentMode !== 'live' && (
+            <Form.Item
+              label={<Text style={{ color: '#e2e8f0' }}>Paper balance allocation (USD)</Text>}
+              name="startBalanceUsd"
+              rules={[{ type: 'number', min: 0 }]}
+            >
+              <InputNumber style={{ width: '100%' }} min={0} step={100} />
+            </Form.Item>
+          )}
+
+          <Form.Item label={<Text style={{ color: '#e2e8f0' }}>Max leverage</Text>} name="maxLeverage">
+            <Slider min={1} max={10} tooltip={{ formatter: (value) => `${value}x` }} />
+          </Form.Item>
+
+          <Form.Item
+            label={<Text style={{ color: '#e2e8f0' }}>Aggressiveness</Text>}
+            name="aggressiveness"
+            rules={[{ required: true }]}
+          >
+            <Select
+              options={[
+                { value: 'conservative', label: 'Conservative' },
+                { value: 'reactive', label: 'Reactive' },
+                { value: 'aggressive', label: 'Aggressive' },
+              ]}
+            />
+          </Form.Item>
+
+          <div
             style={{
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
+              background: 'rgba(30, 41, 59, 0.65)',
+              border: '1px solid rgba(148, 163, 184, 0.22)',
+              borderRadius: 12,
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
             }}
           >
-            {/* Auto-Select Mode Toggle */}
-            <Form.Item 
-              label={
-                <Space>
-                  <RocketOutlined style={{ color: '#722ed1' }} />
-                  <span style={{ fontWeight: 600 }}>Auto-Select Mode</span>
-                </Space>
-              } 
-              name='smartAutoMode' 
-              valuePropName="checked"
-              tooltip="Automatically analyzes 50+ cryptocurrencies and selects the best performing one. Uses the same advanced trading logic, but switches to new opportunities when they arise."
-            >
-              <Switch 
-                checkedChildren="🎯 Auto" 
-                unCheckedChildren="Manual" 
-                style={{
-                  background: smartAutoMode ? 'linear-gradient(135deg, #722ed1, #9254de)' : undefined
-                }}
-                disabled={!!restartSessionId}
-              />
-            </Form.Item>
+            <Text style={{ color: '#f8fafc', fontWeight: 600 }}>Risk profile</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>
+              Risk per trade: <strong>{riskPreset.risk.toFixed(1)}%</strong>
+            </Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>
+              Daily loss cap: <strong>{riskPreset.dailyLoss.toFixed(1)}%</strong>
+            </Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.65)', fontSize: 12 }}>{riskPreset.note}</Text>
+          </div>
 
-            {/* Smart Mode Info Banner */}
-            {smartAutoMode && (
-              <div style={{
-                background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
-                border: '1px solid #0ea5e9',
-                borderRadius: '10px',
-                padding: '16px',
-                marginBottom: '16px'
-              }}>
-                <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <ThunderboltOutlined style={{ color: '#0ea5e9', fontSize: '16px' }} />
-                    <span style={{ fontWeight: 600, color: '#0369a1' }}>Auto-Select Agent Configuration</span>
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#0369a1', lineHeight: '1.5' }}>
-                    • <strong>Crypto Selection:</strong> Analyzes 50+ cryptocurrencies and selects the best performer<br/>
-                    • <strong>Same Trading Logic:</strong> Uses identical strategies and risk management as manual mode<br/>
-                    • <strong>Automatic Switching:</strong> Changes to new opportunities when better ones are found<br/>
-                    • <strong>High Liquidity Focus:</strong> Only trades cryptocurrencies with sufficient volume
-                  </div>
-                </Space>
-              </div>
-            )}
-
-            {/* Traditional Symbol Selection - Hidden in Smart Mode */}
-            {!smartAutoMode && (
-              <Form.Item label='Trading Symbol' name='symbol' rules={[{ required: !smartAutoMode }]}>
-                <Select
-                  showSearch
-                  placeholder='Select trading symbol'
-                  options={commonSymbols.map(s=>({ value: s, label: s }))}
-                  filterOption={(input, option)=> (option?.label as string).toLowerCase().includes(input.toLowerCase())}
-                  style={{
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-                  }}
-                  disabled={!!restartSessionId}
-                />
-              </Form.Item>
-            )}
-
-            {/* Current Symbol Display for Smart Mode */}
-            {smartAutoMode && (
-              <div style={{
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: '8px',
-                padding: '12px',
-                marginBottom: '16px'
-              }}>
-                <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>
-                  Trading Symbol
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <RocketOutlined style={{ color: '#722ed1' }} />
-                  <span style={{ fontWeight: 600, color: '#1e293b' }}>
-                    Will be auto-selected from best opportunities
-                  </span>
-                </div>
-              </div>
-            )}
-            <Form.Item label='Trading Mode'>
-              <Tag style={{ 
-                background: modeVal === 'live' 
-                  ? 'linear-gradient(135deg, #ef4444, #dc2626)' 
-                  : 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                color: 'white',
-                border: 'none',
-                fontWeight: '600',
-                borderRadius: '6px',
-                padding: '4px 12px',
-                fontSize: '12px',
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
-              }}>
-                {String(modeVal ?? mode).toUpperCase()}
-              </Tag>
-              <Form.Item name='mode' hidden>
-                <Input type='hidden' />
-              </Form.Item>
-            </Form.Item>
-            {String(modeVal||'paper') !== 'live' && (
-              <Form.Item
-                label='Paper portfolio balance USD (optional)'
-                name='startBalanceUsd' 
-                tooltip={exBal? `Exchange: Free $${Number(exBal.freeUsd||0).toFixed(2)} • Equity $${Number(exBal.totalUsd||0).toFixed(2)}`: undefined}
-              >
-                <InputNumber 
-                  style={{ width: '100%' }} 
-                  min={0} 
-                  max={exBal?.totalUsd ?? undefined} 
-                />
-              </Form.Item>
-            )}
-            <Form.Item label='Max leverage'>
-              <div style={{ padding: '0 4px' }}>
-                <Form.Item name='maxLeverage' rules={[{ type: 'number', min: 1, max: 10 }]} noStyle>
-                  <Slider
-                    min={1}
-                    max={10}
-                    step={1}
-                    tooltip={{ formatter: (value?: number) => `${value}x` }}
-                    disabled={!!restartSessionId}
-                  />
-                </Form.Item>
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                    fontSize: '12px',
-                    color: '#475569',
-                    marginTop: 8,
-                  }}
-                >
-                  <span>
-                    Requested: <strong>{formatLeverageValue(leverageValue)}</strong>
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Tooltip title={restartLeverageTooltip}>
-                      <span>
-                        Effective: <strong>{formatLeverageValue(restartLeverageInfo?.resolved)}</strong>
-                      </span>
-                    </Tooltip>
-                    {restartLeverageInfo?.trimmed && (
-                      <Tooltip title={`Requested ${formatLeverageValue(restartLeverageInfo?.requested)} trimmed${restartLeverageInfo?.source ? ` by ${restartLeverageInfo.source}` : ''}`}>
-                        <Tag color="orange" style={{ marginLeft: 0 }}>Trimmed</Tag>
-                      </Tooltip>
-                    )}
-                  </span>
-                </div>
-              </div>
-            </Form.Item>
-            <Form.Item label='Aggressiveness Level' name='aggressiveness'>
-              <Select
-                options={[
-                  { value:'conservative', label:'Conservative' },
-                  { value:'reactive', label:'Reactive' },
-                  { value:'aggressive', label:'Aggressive' }
-                ]}
-              />
-            </Form.Item>
-            <div style={{
-              background: '#f8fafc',
-              border: '1px solid #e2e8f0',
-              borderRadius: '10px',
-              padding: '12px 16px',
-              marginTop: -4,
-              marginBottom: 16
-            }}>
-              <Space direction="vertical" size={4}>
-                <span style={{ fontWeight: 600, color: '#1e293b' }}>Risk profile derived automatically</span>
-                <span style={{ color: '#475569' }}>
-                  Risk per trade: <strong>{riskPreset.risk.toFixed(1)}%</strong>
-                </span>
-                <span style={{ color: '#475569' }}>
-                  Daily loss cap: <strong>{riskPreset.dailyLoss.toFixed(1)}%</strong>
-                </span>
-                <span style={{ color: '#64748b', fontSize: 12 }}>{riskPreset.note}</span>
-              </Space>
-            </div>
-          </Form>
-        </Modal>
-     
-      </Space>
+          <Form.Item name="mode" hidden initialValue={currentMode}>
+            <input type="hidden" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
