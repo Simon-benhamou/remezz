@@ -1,0 +1,100 @@
+.session-monitor-page {
+  min-height: calc(100vh - 64px);
+  background: radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 55%),
+    radial-gradient(circle at bottom right, rgba(8, 145, 178, 0.1), transparent 50%),
+    #0f172a;
+  padding-bottom: 48px;
+}
+
+.session-monitor-hero {
+  background: linear-gradient(135deg, rgba(30, 64, 175, 0.92), rgba(12, 74, 110, 0.88));
+  border-radius: 20px !important;
+  color: #f8fafc;
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
+}
+
+.session-monitor-hero .ant-typography,
+.session-monitor-hero .ant-statistic-title,
+.session-monitor-hero .ant-statistic-content,
+.session-monitor-hero .ant-tag {
+  color: inherit !important;
+}
+
+.session-monitor-chip {
+  border-radius: 999px !important;
+  padding: 0 12px !important;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.session-monitor-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.session-monitor-actions__control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-section-card {
+  background: rgba(15, 23, 42, 0.92) !important;
+  border-radius: 20px !important;
+  border: 1px solid rgba(100, 116, 139, 0.18) !important;
+  box-shadow: 0 18px 36px rgba(2, 6, 23, 0.35);
+}
+
+.session-section-card .ant-card-head {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16) !important;
+}
+
+.session-section-card .ant-card-head-title {
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #cbd5f5;
+}
+
+.session-section-card .ant-card-body {
+  background: transparent;
+}
+
+.session-chart-card {
+  padding: 12px 16px 4px;
+}
+
+.session-monitor-page .ant-list-item {
+  background: rgba(15, 23, 42, 0.8);
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  margin-bottom: 12px;
+  padding: 16px;
+}
+
+.session-monitor-page .ant-list-item:last-child {
+  margin-bottom: 0;
+}
+
+.session-monitor-page .ant-drawer-body {
+  background: #0f172a;
+}
+
+.session-monitor-page .ant-empty-description {
+  color: #cbd5f5;
+}
+
+@media (max-width: 768px) {
+  .session-monitor-page {
+    padding: 16px !important;
+  }
+
+  .session-monitor-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

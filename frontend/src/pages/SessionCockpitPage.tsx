@@ -1,31 +1,36 @@
 import React from 'react';
 import { useParams, Navigate, useNavigate } from 'react-router-dom';
-import { Row, Col, Space, Tag, Tabs, Card, Skeleton, Alert, Progress, Button, Typography, Tooltip, Select, message } from 'antd';
-import { ReloadOutlined, ExpandOutlined, CompressOutlined, SyncOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import {
+  Row,
+  Col,
+  Space,
+  Tag,
+  Tabs,
+  Card,
+  Skeleton,
+  Alert,
+  Progress,
+  Button,
+  Typography,
+  Tooltip,
+  Select,
+  message,
+  Drawer,
+  List,
+  Empty,
+  Statistic,
+} from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
-import AnalysisTabs from '../components/AnalysisTabs';
 import AgentStatePanel from '../components/AgentStatePanel';
-// Removed old PerfPanel/IndicatorsPanel row in favor of banners
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
-import TriggersPanel from '../components/TriggersPanel';
 import OrdersTable from '../components/OrdersTable';
 import TradesTable from '../components/TradesTable';
-import HelpPanel from '../components/HelpPanel';
-import DailyReviewPanel from '../components/DailyReviewPanel';
-import AlertPanel from '../components/AlertPanel';
 import { api, getApiKey } from '../api';
 import { openWS, wsSend } from '../ws';
-import MonitorHealthBanner from '../components/MonitorHealthBanner';
-import MonitorMiniPanels from '../components/MonitorMiniPanels';
-import MarketTriggersCard from '../components/MarketTriggersCard';
-import KeyMetricsCard from '../components/KeyMetricsCard';
-import RangeProjectionCard from '../components/RangeProjectionCard';
-import AIInsightsCard from '../components/AIInsightsCard';
-import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
-import PerformanceBanner from '../components/PerformanceBanner';
-import PositionBanner from '../components/PositionBanner';
+import '../styles/sessionMonitor.css';
 
 const { Title, Text } = Typography;
 // Memoized heavy components to avoid needless re-renders
@@ -62,7 +67,6 @@ export default function SessionCockpitPage(){
   });
   
   const [wsConnected, setWsConnected] = React.useState(false);
-  const [expandedView, setExpandedView] = React.useState(false);
   const wsRef = React.useRef<ReturnType<typeof openWS> | null>(null);
   const [savingAgg, setSavingAgg] = React.useState(false);
 
@@ -83,10 +87,10 @@ export default function SessionCockpitPage(){
   const [trades, setTrades] = React.useState<any[]>([]);
   
   // Tertiary data states (Phase 3)
-  const [triggers, setTriggers] = React.useState<any[]>([]);
   const [alerts, setAlerts] = React.useState<any[]>([]);
-  const [analytics, setAnalytics] = React.useState<any>(null);
-  const [health, setHealth] = React.useState<any>(null);
+  const [activityOpen, setActivityOpen] = React.useState(false);
+  const [rearming, setRearming] = React.useState(false);
+  const [refreshing, setRefreshing] = React.useState(false);
   const [marginHealth, setMarginHealth] = React.useState<any>(null);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
@@ -110,6 +114,97 @@ export default function SessionCockpitPage(){
     }
   };
 
+  const handleRearm = async () => {
+    if (!status?.session?.id) {
+      message.error('No active session');
+      return;
+    }
+
+    const rawPlan = (agent as any)?.plan?.plan || (agent as any)?.plan;
+    if (!rawPlan) {
+      message.warning('No trading plan available to rearm');
+      return;
+    }
+
+    try {
+      setRearming(true);
+      await api.proposeAgentPlan(status.session.id, rawPlan);
+      message.success('Agent rearmed with current plan');
+    } catch (err: any) {
+      const detail = err?.response?.data?.error || err?.response?.data?.message || err?.message || String(err);
+      message.error(detail);
+    } finally {
+      setRearming(false);
+    }
+  };
+
+  const refreshAll = React.useCallback(async () => {
+    if (!sessionId) return;
+    setRefreshing(true);
+    try {
+      const [sessionStatus, agentState, perf, ordersData, tradesData] = await Promise.all([
+        api.status(sessionId, { includeBalance: false, includeTech: false }).catch((err) => {
+          console.error('Refresh status failed', err);
+          message.error('Unable to refresh session status');
+          return null;
+        }),
+        api.getAgentState(sessionId).catch((err) => {
+          console.error('Refresh agent state failed', err);
+          return null;
+        }),
+        api.getPerf(sessionId).catch((err) => {
+          console.error('Refresh performance failed', err);
+          return null;
+        }),
+        api.getOrders(sessionId).catch((err) => {
+          console.error('Refresh orders failed', err);
+          return [] as any[];
+        }),
+        api.getTrades(sessionId).catch((err) => {
+          console.error('Refresh trades failed', err);
+          return [] as any[];
+        }),
+      ]);
+
+      if (sessionStatus) setStatus(sessionStatus);
+      if (agentState) setAgent(agentState);
+      if (perf) setKpi(perf);
+      setOrders(Array.isArray(ordersData) ? ordersData : []);
+      setTrades(Array.isArray(tradesData) ? tradesData : []);
+
+      if (symbol) {
+        try { setStrategy(await api.strategyToday(symbol)); } catch (err) { console.warn('Refresh strategy failed', err); }
+        try { setAnalysis(await api.analysis(symbol)); } catch (err) { console.warn('Refresh analysis failed', err); }
+        try {
+          const t = await api.getTicker(symbol);
+          setTicker(t);
+          setTickerStatus('live');
+          setTickerError(null);
+          lastTickerUpdateRef.current = Date.now();
+        } catch (err) {
+          console.warn('Refresh ticker failed', err);
+        }
+      }
+
+      if (sessionStatus?.session?.id) {
+        try {
+          const margin = await api.getSessionMargin(sessionStatus.session.id);
+          setMarginHealth(margin);
+        } catch (err) {
+          console.warn('Refresh margin failed', err);
+        }
+        try {
+          const alertList = await api.getAlerts(sessionStatus.session.id);
+          setAlerts(Array.isArray(alertList) ? alertList : []);
+        } catch (err) {
+          console.warn('Refresh alerts failed', err);
+        }
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [sessionId, symbol, lastTickerUpdateRef]);
+
   React.useEffect(() => {
     const interval = setInterval(() => {
       if (tickerStatus === 'live' && lastTickerUpdateRef.current) {
@@ -121,20 +216,6 @@ export default function SessionCockpitPage(){
     }, 5_000);
     return () => clearInterval(interval);
   }, [tickerStatus]);
-
-  // Scoreboard metrics (compact chips under hero)
-  const metricPrice = Number(status?.price ?? analysis?.technical?.last ?? 0);
-  const metricAtr = Number(analysis?.technical?.atrPct ?? status?.indicators?.atrPct ?? 0);
-  const metricRsi = Number(analysis?.technical?.rsi14 ?? status?.indicators?.rsi14 ?? 0);
-  const metricAdx = Number(analysis?.technical?.adx14 ?? status?.indicators?.adx14 ?? 0);
-  const metricVol = Number(analysis?.technical?.volume24h ?? ticker?.quoteVolume ?? ticker?.baseVolume ?? 0);
-  const spreadPct = React.useMemo(()=>{
-    const bid = Number((ticker as any)?.bid ?? 0);
-    const ask = Number((ticker as any)?.ask ?? 0);
-    if (!bid || !ask) return 0;
-    const mid = (bid + ask) / 2;
-    return mid ? ((ask - bid) / mid) * 100 : 0;
-  }, [ticker]);
 
   // Update loading progress
   const updateProgress = (phase: LoadingPhase, progress: number, message: string, error?: string) => {
@@ -282,19 +363,6 @@ export default function SessionCockpitPage(){
         if (ordersData.status === 'fulfilled') setOrders(ordersData.value || []);
         if (tradesData.status === 'fulfilled') setTrades(tradesData.value || []);
         
-        updateProgress(LoadingPhase.SECONDARY_DATA, 80, 'Loading monitoring data...');
-        
-        // Phase 3: Monitoring data (analytics, health, triggers) - non-critical
-        const [analyticsData, healthData, triggersData] = await Promise.allSettled([
-          api.getMonitorAnalytics(s.session.id).catch(e => { console.warn('Analytics failed:', e); return null; }),
-          api.getHealth(s.session.id).catch(e => { console.warn('Health failed:', e); return null; }),
-          api.getTriggers(s.session.id).catch(e => { console.warn('Triggers failed:', e); return []; })
-        ]);
-        
-        if (analyticsData.status === 'fulfilled') setAnalytics(analyticsData.value);
-        if (healthData.status === 'fulfilled') setHealth(healthData.value);
-        if (triggersData.status === 'fulfilled') setTriggers(triggersData.value || []);
-        
         clearTimeout(loadingTimeout);
         updateProgress(LoadingPhase.COMPLETE, 100, 'Monitor ready!');
         
@@ -312,21 +380,6 @@ export default function SessionCockpitPage(){
     
     loadData();
   }, [sessionId]);
-
-  const loadAnalytics = React.useCallback(async () => {
-    if (!sessionId) return;
-    try {
-      setAnalytics(await api.getMonitorAnalytics(sessionId));
-      setHealth(await api.getHealth(sessionId));
-    } catch {}
-  }, [sessionId]);
-
-  React.useEffect(() => {
-    if (!sessionId) return;
-    loadAnalytics();
-    const timer = setInterval(() => { loadAnalytics(); }, 20000);
-    return () => { clearInterval(timer); };
-  }, [sessionId, loadAnalytics]);
 
   React.useEffect(() => {
     if (!sessionId) return;
@@ -354,6 +407,23 @@ export default function SessionCockpitPage(){
     return () => { clearInterval(tickerTimer); };
   }, [symbol]);
 
+  React.useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const loadAlerts = async () => {
+      try {
+        const list = await api.getAlerts(sessionId);
+        if (!cancelled) setAlerts(Array.isArray(list) ? list : []);
+      } catch {}
+    };
+    loadAlerts();
+    const timer = setInterval(loadAlerts, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [sessionId]);
+
   // WS subscription dedicated to this monitor
   React.useEffect(()=>{
     if (!sessionId || !symbol) return; // wait until symbol known to subscribe correctly
@@ -371,14 +441,13 @@ export default function SessionCockpitPage(){
         // refresh balance snapshot
         try { setAgent(await api.getAgentState(sessionId)); } catch {}
         // ✅ FIX: Refresh diagnostics automatiquement quand agent state change
-        try { 
+        try {
           const diag = await api.getDiagnostics(sessionId);
           setAgent((prev: any) => ({ ...prev, diagnostics: diag }));
         } catch {}
         if (msg?.data?.exit) {
           try { setKpi(await api.getPerf(sessionId)); } catch {}
         }
-        loadAnalytics();
       }
       if (msg.type === 'session') {
         setStatus((s:any)=> ({ ...s, session: msg.data, symbol: msg.data.symbol || s.symbol }));
@@ -389,23 +458,19 @@ export default function SessionCockpitPage(){
         try { setAnalysis(await api.analysis(sym)); } catch {}
         try { setKpi(await api.getPerf(sessionId)); } catch {}
         try { setOrders(await api.getOrders(sessionId)); } catch {}
-        loadAnalytics();
       }
       if (msg.type === 'orders') {
         setOrders(msg.data);
         try { if (sessionId) setTrades(await api.getTrades(sessionId)); } catch {}
         try { setAgent(await api.getAgentState(sessionId)); } catch {}
-        loadAnalytics();
       }
-      if (msg.type === 'trigger') setTriggers((prev:any[])=> [msg.data, ...prev].slice(0,100));
       if (msg.type === 'alert') {
         setAlerts((prev:any[])=> [msg.data, ...prev].slice(0,50));
-        loadAnalytics();
       }
     }, (ok)=> setWsConnected(ok), undefined, sessionId);
     wsRef.current = ws;
     return ()=> { try { wsRef.current?.close?.(); } catch {} };
-  }, [API_BASE, sessionId, symbol, loadAnalytics]);
+  }, [API_BASE, sessionId, symbol]);
 
   if (!sessionId) return <Navigate to='/sessions' replace />;
   const hasSession = !!status?.session?.id;
@@ -444,12 +509,77 @@ export default function SessionCockpitPage(){
       [LoadingPhase.SECONDARY_DATA]: 2,
       [LoadingPhase.COMPLETE]: 3
     };
-    
+
     const currentOrder = phaseOrder[loadingState.phase];
     const requiredOrder = phaseOrder[requiredPhase];
-    
+
     return currentOrder >= requiredOrder;
   };
+
+  const activityItems = React.useMemo(() => {
+    const items: Array<{ id: string; ts: number; title: string; description?: string; meta?: string; tone?: 'info' | 'warn' | 'error' | 'success' }> = [];
+    const toTs = (value: any) => {
+      if (!value) return null;
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+
+    (alerts || []).forEach((alert: any, index: number) => {
+      const ts = toTs(alert?.ts || alert?.createdAt);
+      if (!ts) return;
+      items.push({
+        id: `alert-${alert?.id ?? index}-${ts}`,
+        ts,
+        title: alert?.kind || 'Policy alert',
+        description: alert?.details?.message || alert?.details?.error || alert?.message || '',
+        meta: alert?.symbol || status?.symbol,
+        tone: alert?.severity === 'high' ? 'error' : alert?.severity === 'med' ? 'warn' : 'info',
+      });
+    });
+
+    (trades || []).forEach((trade: any, index: number) => {
+      const ts = toTs(trade?.createdAt || trade?.ts);
+      if (!ts) return;
+      items.push({
+        id: `trade-${trade?.id ?? index}-${ts}`,
+        ts,
+        title: `${String(trade?.side || '').toUpperCase()} ${trade?.symbol || status?.symbol || ''}`.trim(),
+        description: trade?.qty ? `${trade.qty} @ ${trade.price}` : undefined,
+        meta: typeof trade?.pnlUsd === 'number' ? `${trade.pnlUsd >= 0 ? '+' : ''}$${Math.abs(trade.pnlUsd).toFixed(2)}` : undefined,
+        tone: trade?.pnlUsd > 0 ? 'success' : trade?.pnlUsd < 0 ? 'error' : 'info',
+      });
+    });
+
+    (orders || []).forEach((order: any, index: number) => {
+      const ts = toTs(order?.createdAt || order?.ts);
+      if (!ts) return;
+      items.push({
+        id: `order-${order?.id ?? index}-${ts}`,
+        ts,
+        title: `Order ${order?.status || ''}`.trim(),
+        description: order?.symbol ? `${order.symbol} · ${order.side || ''} ${order.amount || ''}`.trim() : undefined,
+        meta: order?.type,
+        tone: order?.status === 'closed' ? 'success' : order?.status === 'canceled' ? 'warn' : 'info',
+      });
+    });
+
+    return items
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 60);
+  }, [alerts, orders, trades, status?.symbol]);
+
+  const roi = Number(kpi?.roiPct ?? kpi?.roi ?? 0);
+  const winRate = Number(kpi?.winRate ?? 0);
+  const realizedPnl = Number(kpi?.realizedPnlUsd ?? 0);
+  const unrealizedPnl = Number(kpi?.unrealizedPnlUsd ?? 0);
+  const maxDrawdown = Number(kpi?.maxDrawdownPct ?? 0);
+  const netPnl = realizedPnl + unrealizedPnl;
+  const canRearm = React.useMemo(() => {
+    const payload = (agent as any)?.plan;
+    if (!payload) return false;
+    return Boolean(payload?.plan || payload);
+  }, [agent]);
 
   // Modern Loading UI that respects sidebar on desktop, full screen on mobile
   const LoadingOverlay = () => {
@@ -561,175 +691,126 @@ export default function SessionCockpitPage(){
   };
 
   return (
-    <div style={{ position: 'relative', minHeight: '100vh' }}>
+    <div className="session-monitor-page">
       {isLoading && <LoadingOverlay />}
-      
-      {/* Hero Section */}
-      <Card style={{ 
-        marginBottom: 24, 
-        background: 'linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)',
-        color: 'white',
-        border: 'none'
-      }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <Space direction="vertical" size="small">
-              <Title level={3} style={{ color: 'white', margin: 0 }}>
-                {symbol || 'Trading Monitor'}
-              </Title>
-              <Space>
-                <Tag color={status?.session?.mode === 'live' ? 'gold' : 'blue'} style={{ borderRadius: 8, padding: '0 8px', fontWeight: 600 }}>
-                  {(status?.session?.mode || 'paper').toUpperCase()}
-                </Tag>
-                <Tag color={wsConnected ? 'green' : 'red'} style={{ borderRadius: 8, padding: '0 8px', fontWeight: 600 }}>
-                  {wsConnected ? 'LIVE' : 'DISCONNECTED'}
-                </Tag>
-                {agent?.state && (
-                  <Tag color={agent.state === 'ARMED' ? 'green' : agent.state === 'MANAGE' ? 'blue' : 'default'} style={{ borderRadius: 8, padding: '0 8px', fontWeight: 600 }}>
-                    {agent.state}
+      <Space direction="vertical" size={32} style={{ width: '100%', padding: 24, paddingBottom: 48 }}>
+        <Card bordered={false} className="session-monitor-hero" bodyStyle={{ padding: 24 }}>
+          <Row gutter={[16, 24]} align="top">
+            <Col xs={24} md={14}>
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <div>
+                  <Title level={3} style={{ marginBottom: 4 }}>
+                    {status?.session?.name || status?.session?.label || status?.symbol || 'Trading session'}
+                  </Title>
+                  <Text type="secondary">{status?.symbol || '—'}</Text>
+                </div>
+                <Space wrap size={[8, 8]}>
+                  {status?.session?.mode && (
+                    <Tag className="session-monitor-chip" color="geekblue">
+                      {(status.session.mode as string).toUpperCase()}
+                    </Tag>
+                  )}
+                  {status?.session?.state && (
+                    <Tag
+                      className="session-monitor-chip"
+                      color={
+                        status.session.state === 'MANAGE'
+                          ? 'green'
+                          : status.session.state === 'COOLDOWN'
+                          ? 'orange'
+                          : status.session.state === 'HALT'
+                          ? 'red'
+                          : 'blue'
+                      }
+                    >
+                      {status.session.state}
+                    </Tag>
+                  )}
+                  <Tag className="session-monitor-chip" color={wsConnected ? 'green' : 'red'}>
+                    {wsConnected ? 'LIVE DATA' : 'PAUSED'}
                   </Tag>
-                )}
+                  {status?.session?.profileJson?.aggressiveness && (
+                    <Tag className="session-monitor-chip" color="purple">
+                      {(status.session.profileJson.aggressiveness as string).toUpperCase()}
+                    </Tag>
+                  )}
+                </Space>
+                <Row gutter={[16, 16]}>
+                  <Col xs={12} sm={12} md={12}>
+                    <Statistic
+                      title="ROI"
+                      value={roi}
+                      precision={2}
+                      suffix="%"
+                      valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
+                    />
+                  </Col>
+                  <Col xs={12} sm={12} md={12}>
+                    <Statistic
+                      title="Win rate"
+                      value={winRate}
+                      precision={1}
+                      suffix="%"
+                      valueStyle={{ color: '#2563eb' }}
+                    />
+                  </Col>
+                  <Col xs={12} sm={12} md={12}>
+                    <Statistic
+                      title="Max drawdown"
+                      value={Math.abs(maxDrawdown)}
+                      precision={1}
+                      suffix="%"
+                      valueStyle={{ color: maxDrawdown <= 0 ? '#2563eb' : '#dc2626' }}
+                    />
+                  </Col>
+                  <Col xs={12} sm={12} md={12}>
+                    <Statistic
+                      title="Net PnL"
+                      value={Math.abs(netPnl)}
+                      precision={2}
+                      prefix={netPnl >= 0 ? '+' : '-'}
+                      suffix=" USD"
+                      valueStyle={{ color: netPnl >= 0 ? '#16a34a' : '#dc2626' }}
+                    />
+                  </Col>
+                </Row>
               </Space>
-            </Space>
-          </Col>
-          <Col>
-            <Space>
-              <Select
-                size="middle"
-                value={currentAggressiveness}
-                loading={savingAgg}
-                onChange={(v)=> handleAggressivenessChange(v as any)}
-                style={{ minWidth: 160 }}
-                options={[
-                  { value: 'conservative', label: 'Conservative' },
-                  { value: 'reactive', label: 'Reactive' },
-                  { value: 'aggressive', label: 'Aggressive' },
-                ]}
-              />
-              {/* Moved actions here: Propose Plan + Rescan Smart Agent */}
-              {status?.session?.id && (
-                <>
-                  <Button 
-                    onClick={async()=>{
-                      try {
-                        await api.proposePlan(status?.symbol, { sessionId: status?.session?.id, fresh: true });
-                        message.success('Plan proposed (LLM)');
-                      } catch(e){ message.error('Failed to propose plan'); }
-                    }}
-                  >
-                    Propose Plan (LLM)
+            </Col>
+            <Col xs={24} md={10}>
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Space size={12} wrap>
+                  <Tooltip title="Refresh session data">
+                    <Button icon={<ReloadOutlined />} onClick={refreshAll} loading={refreshing} />
+                  </Tooltip>
+                  <Button onClick={() => setActivityOpen(true)}>Activity feed</Button>
+                </Space>
+                <div className="session-monitor-actions">
+                  <div className="session-monitor-actions__control">
+                    <Text type="secondary">Aggressiveness</Text>
+                    <Select
+                      value={currentAggressiveness}
+                      loading={savingAgg}
+                      onChange={handleAggressivenessChange}
+                      options={[
+                        { value: 'conservative', label: 'Conservative' },
+                        { value: 'reactive', label: 'Reactive' },
+                        { value: 'aggressive', label: 'Aggressive' },
+                      ]}
+                      style={{ minWidth: 160 }}
+                    />
+                  </div>
+                  <Button type="primary" onClick={handleRearm} loading={rearming} disabled={!canRearm}>
+                    Rearm plan
                   </Button>
-                  <Button 
-                    onClick={async()=>{
-                      try {
-                        await api.client.post('/api/agent/reselect', { sessionId: status?.session?.id });
-                        message.success('Smart Agent reselection requested');
-                      } catch(e){ message.error('Reselect failed'); }
-                    }}
-                  >
-                    Rescan Smart Agent
-                  </Button>
-                </>
-              )}
-              <Button 
-                type="primary" 
-                style={{ background: 'rgba(255,255,255,0.2)', border: 'none' }}
-                icon={<ReloadOutlined />}
-                onClick={() => window.location.reload()}
-              >
-                Refresh
-              </Button>
-              <Button 
-                type="primary"
-                style={{ background: 'rgba(255,255,255,0.2)', border: 'none' }}
-                icon={expandedView ? <CompressOutlined /> : <ExpandOutlined />}
-                onClick={() => setExpandedView(!expandedView)}
-              >
-                {expandedView ? 'Compact' : 'Expand'}
-              </Button>
-            </Space>
-          </Col>
-        </Row>
-      </Card>
+                </div>
+              </Space>
+            </Col>
+          </Row>
+        </Card>
 
-      {/* Performance Banner */}
-      {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (
-        <div style={{ marginTop: -8, marginBottom: 16 }}>
-          <PerformanceBanner kpi={kpi} session={status?.session} />
-        </div>
-      )}
-
-      {/* Compact Scoreboard */}
-      <Row style={{ marginTop: -16, marginBottom: 16 }}>
-        <Col xs={24}>
-          <Space wrap size={[8, 8]}>
-            <Tag color="blue">
-              Price: ${metricPrice ? metricPrice.toFixed(metricPrice >= 1 ? 4 : 6) : '—'}
-            </Tag>
-            <Tag color="cyan">
-              ATR%: {metricAtr ? metricAtr.toFixed(2) : '—'}
-            </Tag>
-            <Tag color={metricRsi >= 70 ? 'red' : metricRsi <= 30 ? 'green' : 'gold'}>
-              RSI: {metricRsi ? metricRsi.toFixed(1) : '—'}
-            </Tag>
-            <Tag color="purple">
-              ADX: {metricAdx ? metricAdx.toFixed(1) : '—'}
-            </Tag>
-            <Tag color="geekblue">
-              Vol 24h: {metricVol ? (metricVol / 1_000_000).toFixed(2) + 'M' : '—'}
-            </Tag>
-            <Tag color={spreadPct > 0.25 ? 'red' : 'green'}>
-              Spread: {spreadPct ? spreadPct.toFixed(2) + '%' : '—'}
-            </Tag>
-          </Space>
-        </Col>
-      </Row>
-      
-      {/* Health Banner */}
-      <Row gutter={[24, 24]}>
-        <Col xs={24}>
-          {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (analytics?.health || health) ? (
-            <MonitorHealthBanner health={analytics?.health || health} updatedAt={analytics?.updatedAt || health?.ts} />
-          ) : (
-            <Skeleton.Button active style={{ width: '100%', height: 60 }} />
-          )}
-        </Col>
-        
-        <Col xs={24}>
-          {shouldShowContent(LoadingPhase.SECONDARY_DATA) && analytics?.panels ? (
-            <MonitorMiniPanels panels={analytics?.panels} />
-          ) : (
-            <Row gutter={16}>
-              {[1,2,3,4].map(i => (
-                <Col xs={6} key={i}>
-                  <Skeleton.Button active style={{ width: '100%', height: 80 }} />
-                </Col>
-              ))}
-            </Row>
-          )}
-        </Col>
-      </Row>
-
-      {/* Primary Section: Chart + Performance + Tables */}
-      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-        <Col xs={24} lg={16}>
-          <Space direction="vertical" style={{ width: '100%' }} size="large">
-            {/* Live Metrics */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) ? (
-              <LiveMetrics 
-                symbol={status?.symbol} 
-                price={status?.price} 
-                ticker={ticker}
-                lastUpdate={ticker?.lastUpdate || (ticker?.timestamp ? new Date(ticker.timestamp).toISOString() : undefined)}
-                status={tickerStatus}
-                errorMessage={tickerError || undefined}
-              />
-            ) : (
-              <Skeleton active paragraph={{ rows: 2 }} />
-            )}
-            
-            {/* Price Chart */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+        <Card className="session-section-card" bordered={false} bodyStyle={{ padding: 0 }}>
+          {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+            <div className="session-chart-card">
               <PriceChart
                 symbol={status?.symbol}
                 price={status?.price}
@@ -743,238 +824,141 @@ export default function SessionCockpitPage(){
                 trades={trades}
                 projection={analysis?.projection}
               />
-            ) : (
-              <Card>
-                <Skeleton active paragraph={{ rows: 8 }} />
-              </Card>
-            )}
-
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <RangeProjectionCard
-                projection={analysis?.projection}
-                symbol={status?.symbol}
-                price={Number(status?.price ?? analysis?.technical?.last ?? 0)}
-              />
-            ) : (
-              <Card>
-                <Skeleton active paragraph={{ rows: 4 }} />
-              </Card>
-            )}
-            
-            {/* Position banner — only if position exists OR there is historical activity */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id && ((agent?.pos) || (orders?.length || 0) > 0 || (trades?.length || 0) > 0) && (
-              <PositionBanner agent={agent} price={status?.price} orders={orders} trades={trades} />
-            )}
-            
-            {/* Orders/Trades Full Width Tabs */}
-            <Card size="small" style={{ marginTop: 8 }}>
-              {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                <Tabs
-                  defaultActiveKey="orders"
-                  items={[
-                    {
-                      key: 'orders',
-                      label: `Orders (${orders.length})`,
-                      children: (
-                        <div style={{ marginTop: 8 }}>
-                          <MemoOrdersTable rows={orders} />
-                        </div>
-                      )
-                    },
-                    {
-                      key: 'trades',
-                      label: `Trades (${trades.length})`,
-                      children: (
-                        <div style={{ marginTop: 8 }}>
-                          <MemoTradesTable rows={trades} />
-                        </div>
-                      )
-                    }
-                  ]}
-                />
-              ) : (
-                <Skeleton active paragraph={{ rows: 6 }} />
-              )}
+            </div>
+          ) : (
+            <Card bordered={false} style={{ margin: 0, borderRadius: 0 }}>
+              <Skeleton active paragraph={{ rows: 8 }} />
             </Card>
-          </Space>
-        </Col>
-        
-        <Col xs={24} lg={8}>
-          <div style={{ position: 'sticky', top: 76, alignSelf: 'flex-start' }}>
-            <Space direction="vertical" size="large" style={{ width: '100%' }}>
-              {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
-                <SmartAgentStatusPanel sessionId={status.session.id} />
-              ) : (
-                <Card title="Smart Agent">
-                  <Skeleton active paragraph={{ rows: 3 }} />
-                </Card>
-              )}
+          )}
+        </Card>
 
-              {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
-                <AgentStatePanel
-                  agent={agent}
-                  symbol={status?.symbol}
-                  lastPrice={status?.price}
-                  sessionId={status?.session?.id}
-                  margin={marginHealth?.snapshots?.[0]}
-                  marginHistory={marginHealth?.snapshots}
-                  onPlan={() => {}}
-                />
-              ) : (
-                <Card title="Agent State">
-                  <Skeleton active paragraph={{ rows: 4 }} />
-                </Card>
-              )}
-
-              {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                <KeyMetricsCard
-                  indicators={{
-                    atrPct: Number(analysis?.technical?.atrPct || status?.indicators?.atrPct || 0),
-                    adx: Number(analysis?.technical?.adx14 || status?.indicators?.adx14 || 0),
-                    rsi: Number(analysis?.technical?.rsi14 || status?.indicators?.rsi14 || 50),
-                    ema20: Number(analysis?.technical?.ema20 || status?.indicators?.ema20 || 0),
-                    ema50: Number(analysis?.technical?.ema50 || status?.indicators?.ema50 || 0),
-                    ema20Slope: Number(analysis?.technical?.ema20Slope || 0),
-                    volume: Number(analysis?.technical?.volume24h || 0),
-                    price: Number(analysis?.technical?.last || status?.price || 0),
-                  }}
-                />
-              ) : (
-                <Card title="Key Metrics">
-                  <Skeleton active paragraph={{ rows: 3 }} />
-                </Card>
-              )}
-
-              {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                <MarketTriggersCard
-                  triggers={triggers.map((t: any) => ({
-                    id: t.id || String(t.createdAt || Math.random()),
-                    name: t.summary || t.name || 'Trigger',
-                    description: t.reason || t.description || '',
-                    active: t.active != null ? Boolean(t.active) : true,
-                    strength: (t.strength || 'medium') as 'weak' | 'medium' | 'strong',
-                    confidence: Number(t.confidence ?? 50),
-                    timeframe: t.timeframe,
-                    value: t.value,
-                    threshold: t.threshold,
-                  }))}
-                />
-              ) : (
-                <Card title="Market Triggers">
-                  <Skeleton active paragraph={{ rows: 3 }} />
-                </Card>
-              )}
-
-              {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                <AlertPanel sessionId={status?.session?.id} />
-              ) : (
-                <Card title="Policy Alerts">
-                  <Skeleton active paragraph={{ rows: 3 }} />
-                </Card>
-              )}
-            </Space>
-          </div>
-        </Col>
-      </Row>
-
-      {/* Expandable Advanced Sections */}
-      {expandedView && (
-        <>
-          {/* AI Insights Section */}
-          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-            <Col xs={24} lg={16}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
-                <AIInsightsCard 
-                  sentiment={analysis?.sentiment ? {
-                    score: analysis.sentiment.score || 0,
-                    label: analysis.sentiment.label || 'neutral',
-                    confidence: analysis.sentiment.confidence || 50,
-                    factors: analysis.sentiment.factors || []
-                  } : undefined}
-                  news={analysis?.news || []}
-                  dailyReview={analysis?.dailyReview}
-                />
-              ) : (
-                <Card title="AI Insights">
+        <Row gutter={[24, 24]}>
+          <Col xs={24} lg={16}>
+            <Space direction="vertical" size={24} style={{ width: '100%' }}>
+              <Card title="Agent strategy" bordered={false} className="session-section-card">
+                {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                  <StrategyPanel strategy={strategy} />
+                ) : (
                   <Skeleton active paragraph={{ rows: 6 }} />
-                </Card>
-              )}
-            </Col>
-            
-            <Col xs={24} lg={8}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
-                <StrategyPanel strategy={strategy} />
-              ) : (
-                <Card title="Strategy Details">
-                  <Skeleton active paragraph={{ rows: 6 }} />
-                </Card>
-              )}
-            </Col>
-          </Row>
-          
-          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-            <Col xs={24}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
-                <AnalysisTabs analysis={analysis} />
-              ) : (
-                <Card title="Technical Analysis">
-                  <Skeleton active paragraph={{ rows: 6 }} />
-                </Card>
-              )}
-            </Col>
-          </Row>
-          
-          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-            <Col xs={24} lg={16}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
-                <PerfBreakdownPanel sessionId={status?.session?.id} api={api} />
-              ) : (
-                <Card title="Performance Breakdown">
+                )}
+              </Card>
+              <Card title="Agent diagnostics" bordered={false} className="session-section-card">
+                {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
+                  <AgentStatePanel
+                    agent={agent}
+                    symbol={status?.symbol}
+                    lastPrice={status?.price}
+                    sessionId={status?.session?.id}
+                    margin={marginHealth?.snapshots?.[0]}
+                    marginHistory={marginHealth?.snapshots}
+                    onPlan={() => {}}
+                  />
+                ) : (
+                  <Skeleton active paragraph={{ rows: 5 }} />
+                )}
+              </Card>
+              <Card title="Performance" bordered={false} className="session-section-card">
+                {shouldShowContent(LoadingPhase.SECONDARY_DATA) && status?.session?.id ? (
+                  <PerfBreakdownPanel sessionId={status?.session?.id} api={api} />
+                ) : (
                   <Skeleton active paragraph={{ rows: 8 }} />
-                </Card>
-              )}
-            </Col>
-            
-            <Col xs={24} lg={8}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
-                <AlertPanel sessionId={status?.session?.id} />
-              ) : (
-                <Card title="Alerts">
-                  <Skeleton active paragraph={{ rows: 6 }} />
-                </Card>
-              )}
-            </Col>
-          </Row>
-          
-          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-            <Col xs={24}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
-                <TriggersPanel rows={triggers} />
-              ) : (
-                <Card title="Trading Triggers">
+                )}
+              </Card>
+            </Space>
+          </Col>
+          <Col xs={24} lg={8}>
+            <Space direction="vertical" size={24} style={{ width: '100%' }}>
+              <Card title="Market snapshot" bordered={false} className="session-section-card">
+                {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+                  <LiveMetrics
+                    symbol={status?.symbol}
+                    price={status?.price}
+                    ticker={ticker}
+                    lastUpdate={ticker?.lastUpdate || (ticker?.timestamp ? new Date(ticker.timestamp).toISOString() : undefined)}
+                    status={tickerStatus}
+                    errorMessage={tickerError || undefined}
+                  />
+                ) : (
                   <Skeleton active paragraph={{ rows: 4 }} />
-                </Card>
-              )}
-            </Col>
-          </Row>
-          
-          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-            <Col xs={24} lg={12}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
-                <DailyReviewPanel sessionId={status?.session?.id} />
-              ) : (
-                <Card title="Daily Review">
+                )}
+              </Card>
+              <Card title="Orders & trades" bordered={false} className="session-section-card">
+                {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                  <Tabs
+                    defaultActiveKey="orders"
+                    items={[
+                      {
+                        key: 'orders',
+                        label: `Orders (${orders.length})`,
+                        children: (
+                          <div style={{ marginTop: 8 }}>
+                            <MemoOrdersTable rows={orders} />
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'trades',
+                        label: `Trades (${trades.length})`,
+                        children: (
+                          <div style={{ marginTop: 8 }}>
+                            <MemoTradesTable rows={trades} />
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
+                ) : (
                   <Skeleton active paragraph={{ rows: 6 }} />
-                </Card>
-              )}
-            </Col>
-            
-            <Col xs={24} lg={12}>
-              <HelpPanel />
-            </Col>
-          </Row>
-        </>
-      )}
+                )}
+              </Card>
+            </Space>
+          </Col>
+        </Row>
+      </Space>
+
+      <Drawer title="Activity feed" open={activityOpen} onClose={() => setActivityOpen(false)} width={420}>
+        {activityItems.length > 0 ? (
+          <List
+            itemLayout="vertical"
+            dataSource={activityItems}
+            renderItem={(item) => (
+              <List.Item key={item.id}>
+                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                  <Space align="center" size={8} wrap>
+                    <Tag
+                      color={
+                        item.tone === 'error'
+                          ? 'red'
+                          : item.tone === 'warn'
+                          ? 'orange'
+                          : item.tone === 'success'
+                          ? 'green'
+                          : 'blue'
+                      }
+                    >
+                      {item.tone === 'error'
+                        ? 'Alert'
+                        : item.tone === 'warn'
+                        ? 'Warning'
+                        : item.tone === 'success'
+                        ? 'Success'
+                        : 'Info'}
+                    </Tag>
+                    <Text strong>{item.title}</Text>
+                  </Space>
+                  {item.description && <Text>{item.description}</Text>}
+                  <Space size={8} wrap align="center">
+                    <Text type="secondary">{new Date(item.ts).toLocaleString()}</Text>
+                    {item.meta && <Tag>{item.meta}</Tag>}
+                  </Space>
+                </Space>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty description="No recent activity" />
+        )}
+      </Drawer>
     </div>
   );
 }
