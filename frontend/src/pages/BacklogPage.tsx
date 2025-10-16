@@ -1,6 +1,20 @@
 import React from 'react';
-import { Card, Space, Typography, List, Tag, message, Button, Badge, Empty, Tooltip, Divider } from 'antd';
-import { ThunderboltOutlined, ReloadOutlined, InfoCircleOutlined, WarningOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import {
+  Badge,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Row,
+  Segmented,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+  theme,
+} from 'antd';
+import { ReloadOutlined, BellOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -18,28 +32,22 @@ type OpsEvent = {
   details?: any;
 };
 
-const severityOrder: OpsEvent['level'][] = ['info', 'warn', 'error'];
+type SeverityFilter = 'all' | 'info' | 'warn' | 'error';
 
-const levelMeta: Record<string, { color: string; label: string; icon: React.ReactNode }> = {
-  info: { color: 'blue', label: 'Info', icon: <InfoCircleOutlined /> },
-  warn: { color: 'gold', label: 'Watch', icon: <WarningOutlined /> },
-  error: { color: 'red', label: 'Action', icon: <ExclamationCircleOutlined /> },
-};
-
-const severityBackgrounds: Record<string, string> = {
-  blue: '#eff6ff',
-  gold: '#fff7ed',
-  red: '#fee2e2',
+const severityMeta: Record<string, { color: string; label: string }> = {
+  info: { color: '#38bdf8', label: 'Informational' },
+  warn: { color: '#fbbf24', label: 'Watch' },
+  error: { color: '#f87171', label: 'Action' },
 };
 
 const messageCatalog: Record<string, { title: string; description?: string }> = {
   volume_too_low: {
     title: 'Volume unchanged – skipping entry',
-    description: 'Spot + derivatives volume is under the 0.60× requirement, so the strategy waits for healthier liquidity.',
+    description: 'Spot + derivatives volume is under the requirement, the strategy waits for healthier liquidity.',
   },
   atr_too_low: {
     title: 'Volatility filter blocked the trade',
-    description: 'ATR is below the minimum threshold for crypto entries; momentum is too muted right now.',
+    description: 'ATR is below the minimum threshold — momentum is too muted for execution.',
   },
   adx_not_ready: {
     title: 'Trend strength too weak',
@@ -71,24 +79,20 @@ const fieldLabels: Record<string, string> = {
   volumePressure: 'Volume Pressure',
 };
 
-function formatTime(ts?: number) {
-  if (!ts) return '—';
-  return dayjs(ts).format('HH:mm:ss');
-}
-
-export default function BacklogPage() {
+const BacklogPage: React.FC = () => {
   const { mode } = useMode();
+  const { token } = theme.useToken();
   const [loading, setLoading] = React.useState(false);
   const [events, setEvents] = React.useState<OpsEvent[]>([]);
   const [activeSessions, setActiveSessions] = React.useState<any[]>([]);
-  const [levelFilter, setLevelFilter] = React.useState<OpsEvent['level'][]>(severityOrder);
+  const [severity, setSeverity] = React.useState<SeverityFilter>('all');
 
   const loadActivity = React.useCallback(async () => {
     setLoading(true);
     try {
       const [sessionsResponse, opsResponse] = await Promise.all([
         api.listSessions(mode).catch(() => []),
-        api.getOpsEvents(120).catch(() => []),
+        api.getOpsEvents(160).catch(() => []),
       ]);
       const activeOnly = Array.isArray(sessionsResponse)
         ? sessionsResponse.filter((session: any) => !session.stoppedAt)
@@ -99,7 +103,7 @@ export default function BacklogPage() {
       const filtered = Array.isArray(opsResponse)
         ? opsResponse.filter((evt: OpsEvent) => !evt.sessionId || activeSet.has(evt.sessionId))
         : [];
-      const sorted = filtered.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 80);
+      const sorted = filtered.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 100);
       setEvents(sorted);
     } catch (err) {
       console.error('Failed to load backlog activity', err);
@@ -115,6 +119,22 @@ export default function BacklogPage() {
     return () => clearInterval(timer);
   }, [loadActivity]);
 
+  const counts = React.useMemo(() => {
+    return events.reduce(
+      (acc, evt) => {
+        const level = evt.level || 'info';
+        acc[level] = (acc[level] || 0) + 1;
+        return acc;
+      },
+      { info: 0, warn: 0, error: 0 } as Record<'info' | 'warn' | 'error', number>,
+    );
+  }, [events]);
+
+  const filteredEvents = React.useMemo(() => {
+    if (severity === 'all') return events;
+    return events.filter((evt) => (evt.level || 'info') === severity);
+  }, [events, severity]);
+
   const eventsBySession = React.useMemo(() => {
     const map = new Map<string, OpsEvent[]>();
     activeSessions.forEach((session: any) => {
@@ -128,282 +148,265 @@ export default function BacklogPage() {
     return map;
   }, [events, activeSessions]);
 
-  const decorateEvent = (evt: OpsEvent) => {
-    const meta = levelMeta[evt.level || 'info'] || levelMeta.info;
+  const renderEventCard = (evt: OpsEvent) => {
+    const level = evt.level || 'info';
+    const meta = severityMeta[level] || severityMeta.info;
     const catalog = messageCatalog[evt.message || ''] || null;
-    const title = catalog?.title || (evt.message ? evt.message.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase()) : 'Agent update');
+    const title = catalog?.title || formatMessage(evt.message);
     const description = catalog?.description;
     const detailsObject = normalizeDetails(evt.details);
-    const detailEntries = Object.entries(detailsObject).map(([key, value]) => ({
-      key,
-      label: fieldLabels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase()),
-      value: formatDetailValue(key, value),
-    })).filter((entry) => entry.value !== undefined && entry.value !== null && entry.value !== '');
-    return { meta, title, description, detailEntries };
-  };
+    const detailEntries = Object.entries(detailsObject)
+      .map(([key, value]) => ({
+        key,
+        label: fieldLabels[key] || formatMessage(key),
+        value: formatDetailValue(key, value),
+      }))
+      .filter((entry) => entry.value !== undefined && entry.value !== null && entry.value !== '');
 
-  const filteredEvents = React.useMemo(
-    () =>
-      events.filter((evt) => {
-        const level = evt.level || 'info';
-        return levelFilter.includes(level);
-      }),
-    [events, levelFilter],
-  );
-
-  const toggleFilterLevel = (level: OpsEvent['level']) => {
-    setLevelFilter((prev) => {
-      if (prev.includes(level)) {
-        const remaining = prev.filter((item) => item !== level);
-        return remaining.length === 0 ? prev : remaining;
-      }
-      return [...prev, level];
-    });
-  };
-
-  const renderSeverityFlag = (meta: { color: string; label: string; icon: React.ReactNode }) => {
-    const background = severityBackgrounds[meta.color] || '#f3f4f6';
     return (
-      <div
+      <Card
+        key={evt.id}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          background,
-          color: meta.color,
-          borderRadius: 999,
-          padding: '2px 12px',
-          fontWeight: 600,
-          fontSize: 12,
+          borderRadius: 18,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          background: 'rgba(15, 23, 42, 0.88)',
+          height: '100%',
         }}
+        bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 12 }}
       >
-        <span style={{ display: 'flex', alignItems: 'center' }}>{meta.icon}</span>
-        <span>{meta.label}</span>
-      </div>
+        <Space align='center' size={10}>
+          <Badge color={meta.color} />
+          <Text style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</Text>
+          <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+            {evt.ts ? dayjs(evt.ts).format('HH:mm:ss') : '—'}
+          </Text>
+          {evt.source && (
+            <Tag color='geekblue' style={{ borderRadius: 8 }}>{evt.source}</Tag>
+          )}
+        </Space>
+        <Text style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>{title}</Text>
+        {description && <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{description}</Text>}
+        <Space size={8} wrap>
+          {evt.symbol && <Tag color='cyan'>{evt.symbol}</Tag>}
+          {evt.sessionId && <Tag color='purple'>{evt.sessionId}</Tag>}
+        </Space>
+        {detailEntries.length > 0 && (
+          <Space wrap size={8}>
+            {detailEntries.slice(0, 4).map((entry) => (
+              <Tooltip key={`${evt.id}-${entry.key}`} title={entry.label}>
+                <Tag
+                  bordered={false}
+                  style={{
+                    background: 'rgba(96, 165, 250, 0.16)',
+                    color: '#e2e8f0',
+                    borderRadius: 12,
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{entry.value}</span>
+                  <span style={{ marginLeft: 6, color: 'rgba(148, 163, 184, 0.78)' }}>{entry.label}</span>
+                </Tag>
+              </Tooltip>
+            ))}
+            {detailEntries.length > 4 && (
+              <Tag bordered={false} style={{ background: 'rgba(148, 163, 184, 0.18)', color: '#e2e8f0', borderRadius: 12 }}>
+                +{detailEntries.length - 4} more
+              </Tag>
+            )}
+          </Space>
+        )}
+      </Card>
     );
   };
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card>
-        <Space direction="vertical" size="small" style={{ width: '100%' }}>
-          <Space align="center" size="middle">
-            <Badge count={activeSessions.length} size="small" color="#2563eb">
-              <AvatarIcon />
-            </Badge>
-            <div>
-              <Title level={3} style={{ margin: 0 }}>Agent Activity Feed</Title>
-              <Text type="secondary">
-                Live operational timeline for the active crypto agents.
-              </Text>
-            </div>
-          </Space>
-          <Space wrap size="small">
-            <Tag color="blue">{activeSessions.length} active agents</Tag>
-            <Tag color="cyan">{filteredEvents.length} matching events</Tag>
-            <Button size="small" icon={<ReloadOutlined />} onClick={loadActivity} loading={loading}>
+    <Space direction='vertical' size={24} style={{ width: '100%' }}>
+      <Card
+        style={{
+          borderRadius: 20,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(30, 64, 175, 0.6))',
+        }}
+        bodyStyle={{ padding: 28 }}
+      >
+        <Space direction='vertical' size={12} style={{ width: '100%' }}>
+          <Tag color='geekblue' style={{ alignSelf: 'flex-start', borderRadius: 999 }}>
+            Market feed
+          </Tag>
+          <Title level={2} style={{ margin: 0, color: '#e2e8f0' }}>
+            Operational telemetry & AI signal feed
+          </Title>
+          <Text style={{ color: 'rgba(226, 232, 240, 0.72)', maxWidth: 600 }}>
+            Review live agent alerts, validator outcomes and market health signals across the trading stack.
+          </Text>
+          <Space wrap size={12}>
+            <Tag color='cyan'>Mode {mode.toUpperCase()}</Tag>
+            <Tag color='blue'>{activeSessions.length} active agents</Tag>
+            <Tag color='purple'>{events.length} events tracked</Tag>
+            <Button icon={<ReloadOutlined />} onClick={loadActivity} loading={loading}>
               Refresh
             </Button>
           </Space>
         </Space>
       </Card>
 
-      <Card
-        title="Latest Activity"
-        loading={loading}
-        extra={
-          <Button type="link" icon={<ReloadOutlined />} onClick={loadActivity} disabled={loading}>
-            Refresh
-          </Button>
-        }
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
-          <Space size={4} wrap>
-            {severityOrder.map((level) => {
-              const meta = levelMeta[level || 'info'];
-              const active = levelFilter.includes(level);
-              return (
-                <Tag.CheckableTag
-                  key={level}
-                  checked={active}
-                  onChange={() => toggleFilterLevel(level)}
-                  style={{
-                    borderRadius: 999,
-                    padding: '4px 12px',
-                    border: `1px solid ${active ? meta.color : '#e5e7eb'}`,
-                    background: active ? `${meta.color}10` : '#fff',
-                    color: active ? meta.color : '#4b5563',
-                  }}
-                >
-                  <Space size={6}>
-                    {meta.icon}
-                    <span>{meta.label}</span>
-                  </Space>
-                </Tag.CheckableTag>
-              );
-            })}
-          </Space>
-          <Divider style={{ margin: '8px 0' }} />
-        </Space>
-        {filteredEvents.length === 0 ? (
-          <Empty description="No recent activity for active agents" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : (
-          <List
-            itemLayout="horizontal"
-            dataSource={filteredEvents.slice(0, 40)}
-            renderItem={(evt) => {
-              const decorated = decorateEvent(evt);
-              const meta = decorated.meta;
-              const session = evt.sessionId
-                ? activeSessions.find((s: any) => s.id === evt.sessionId)
-                : null;
-              return (
-                <List.Item key={evt.id} style={{ padding: '10px 0' }}>
-                  <div
-                    style={{
-                      width: '100%',
-                      display: 'grid',
-                      gridTemplateColumns: 'minmax(160px, 220px) 1fr',
-                      gap: 16,
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Space direction="vertical" size={4}>
-                      {renderSeverityFlag(meta)}
-                      <Space size={6}>
-                        {evt.symbol && (
-                          <Tag bordered={false} style={{ background: '#eef2ff', color: '#312e81', borderRadius: 999 }}>
-                            {evt.symbol}
-                          </Tag>
-                        )}
-                        {session && <Text type="secondary">{session.mode?.toUpperCase()}</Text>}
-                        <Text type="secondary">{formatTime(evt.ts)}</Text>
-                      </Space>
-                    </Space>
-                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-                        <Text strong style={{ fontSize: 14 }}>{decorated.title}</Text>
-                        {evt.source && (
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            via {evt.source}
-                          </Text>
-                        )}
-                      </div>
-                      {decorated.description && (
-                        <Text type="secondary" style={{ fontSize: 13 }}>{decorated.description}</Text>
-                      )}
-                      {decorated.detailEntries.length > 0 && (
-                        <Space wrap size={6}>
-                          {decorated.detailEntries.slice(0, 4).map((entry) => (
-                            <Tooltip key={entry.key} title={entry.label}>
-                              <Tag bordered={false} style={{ background: '#f3f4f6', color: '#1f2937', borderRadius: 999 }}>
-                                <span style={{ fontWeight: 600 }}>{entry.value}</span>
-                                {entry.label ? (
-                                  <span style={{ marginLeft: 6, color: '#6b7280', fontWeight: 500 }}>{entry.label}</span>
-                                ) : null}
-                              </Tag>
-                            </Tooltip>
-                          ))}
-                          {decorated.detailEntries.length > 4 && (
-                            <Tag bordered={false} style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 999 }}>
-                              +{decorated.detailEntries.length - 4} more
-                            </Tag>
-                          )}
-                        </Space>
-                      )}
-                    </Space>
-                  </div>
-                </List.Item>
-              );
-            }}
+      <Row gutter={[24, 24]}>
+        <Col xs={24} sm={12} xl={6}>
+          <SummaryTile
+            icon={<ThunderboltOutlined />}
+            label='Active agents'
+            value={activeSessions.length.toString()}
+            hint='Currently trading'
+            tone='#60a5fa'
           />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <SummaryTile
+            icon={<BellOutlined />}
+            label='Actions'
+            value={counts.error.toString()}
+            hint='High severity'
+            tone='#f87171'
+          />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <SummaryTile
+            icon={<BellOutlined />}
+            label='Watch'
+            value={counts.warn.toString()}
+            hint='Medium severity'
+            tone='#fbbf24'
+          />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <SummaryTile
+            icon={<BellOutlined />}
+            label='Info'
+            value={counts.info.toString()}
+            hint='Advisory'
+            tone='#38bdf8'
+          />
+        </Col>
+      </Row>
+
+      <Card
+        title={<span style={{ color: '#e2e8f0' }}>Live activity</span>}
+        extra={
+          <Segmented
+            options={[
+              { label: 'All', value: 'all' },
+              { label: 'Actions', value: 'error' },
+              { label: 'Watch', value: 'warn' },
+              { label: 'Info', value: 'info' },
+            ]}
+            value={severity}
+            onChange={(val) => setSeverity(val as SeverityFilter)}
+            size='small'
+          />
+        }
+        style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+        bodyStyle={{ padding: 24 }}
+        loading={loading}
+      >
+        {filteredEvents.length === 0 ? (
+          <Empty description='No recent events in this category.' style={{ margin: '40px 0' }} />
+        ) : (
+          <Row gutter={[20, 20]}>
+            {filteredEvents.slice(0, 12).map((evt) => (
+              <Col xs={24} md={12} key={evt.id}>
+                {renderEventCard(evt)}
+              </Col>
+            ))}
+          </Row>
         )}
       </Card>
 
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
-        {activeSessions.length === 0 && (
-          <Card>
-            <Empty description="No active agents" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          </Card>
-        )}
-        {activeSessions.map((session: any) => {
-          const sessionEvents = eventsBySession.get(session.id) || [];
-          return (
-            <Card
-              key={session.id}
-              title={
-                <Space>
-                  <Tag color="blue">{session.symbol}</Tag>
-                  <Text>{session.mode?.toUpperCase()}</Text>
+      <Card
+        title={<span style={{ color: '#e2e8f0' }}>Active agents</span>}
+        style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+        bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+      >
+        {activeSessions.length === 0 ? (
+          <Empty description='No active sessions in this mode.' style={{ margin: '40px 0' }} />
+        ) : (
+          activeSessions.map((session: any) => {
+            const sessionEvents = eventsBySession.get(session.id) || [];
+            return (
+              <Card
+                key={session.id}
+                style={{
+                  borderRadius: 16,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  background: 'rgba(15, 23, 42, 0.88)',
+                }}
+                bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+              >
+                <Space align='center' size={10}>
+                  <Tag color='cyan'>{session.symbol || 'Unknown'}</Tag>
+                  <Tag color='blue'>{session.mode?.toUpperCase()}</Tag>
+                  <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{sessionEvents.length} events</Text>
                 </Space>
-              }
-              extra={<Text type="secondary">{sessionEvents.length} events today</Text>}
-            >
-              {sessionEvents.length === 0 ? (
-                <Empty
-                  description="No recent logs for this agent"
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                />
-              ) : (
-                <List
-                  dataSource={sessionEvents.slice(0, 10)}
-                  renderItem={(evt) => {
-                    const decorated = decorateEvent(evt);
-                    const meta = decorated.meta;
-                    return (
-                      <List.Item key={evt.id} style={{ padding: '10px 6px' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                            <Tag color={meta.color} icon={meta.icon}>{meta.label}</Tag>
-                            <Text>{evt.source}</Text>
-                            <Text type="secondary">{formatTime(evt.ts)}</Text>
-                          </div>
-                          <Text strong style={{ fontSize: 13 }}>{decorated.title}</Text>
-                          {decorated.description && (
-                            <Text type="secondary" style={{ fontSize: 12 }}>{decorated.description}</Text>
-                          )}
-                          {decorated.detailEntries.length > 0 && (
-                            <Space wrap size={8}>
-                              {decorated.detailEntries.map((entry) => (
-                                <Tag key={entry.key} bordered={false} style={{ background: '#eef2ff', color: '#1e293b', borderRadius: 12 }}>
-                                  <span style={{ fontWeight: 600 }}>{entry.value}</span>
-                                  {entry.label ? <span style={{ marginLeft: 6, color: '#475569', fontWeight: 500 }}>{entry.label}</span> : null}
-                                </Tag>
-                              ))}
-                            </Space>
-                          )}
-                        </div>
-                      </List.Item>
-                    );
-                  }}
-                />
-              )}
-            </Card>
-          );
-        })}
-      </Space>
+                {sessionEvents.length === 0 ? (
+                  <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>No alerts recorded for this agent.</Text>
+                ) : (
+                  <Space direction='vertical' size={8}>
+                    {sessionEvents.slice(0, 3).map((evt) => {
+                      const meta = severityMeta[evt.level || 'info'] || severityMeta.info;
+                      return (
+                        <Space key={evt.id} size={10} wrap>
+                          <Badge color={meta.color} />
+                          <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                            {formatMessage(evt.message)}
+                          </Text>
+                          <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                            {evt.ts ? dayjs(evt.ts).format('HH:mm:ss') : '—'}
+                          </Text>
+                        </Space>
+                      );
+                    })}
+                  </Space>
+                )}
+              </Card>
+            );
+          })
+        )}
+      </Card>
     </Space>
+  );
+};
+
+function SummaryTile({ icon, label, value, hint, tone }: { icon: React.ReactNode; label: string; value: string; hint: string; tone: string; }) {
+  return (
+    <Card
+      style={{ borderRadius: 18, border: '1px solid rgba(148, 163, 184, 0.2)', background: 'rgba(15, 23, 42, 0.88)' }}
+      bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 20 }}
+    >
+      <div
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 14,
+          background: `${tone}22`,
+          color: tone,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 18,
+        }}
+      >
+        {icon}
+      </div>
+      <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{label}</Text>
+      <Title level={3} style={{ margin: 0, color: tone }}>
+        {value}
+      </Title>
+      <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>{hint}</Text>
+    </Card>
   );
 }
 
-function AvatarIcon() {
-  return (
-    <div
-      style={{
-        width: 48,
-        height: 48,
-        borderRadius: 12,
-        background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#fff',
-        fontSize: 22,
-      }}
-    >
-      <ThunderboltOutlined />
-    </div>
-  );
+function formatMessage(message?: string) {
+  if (!message) return 'Agent update';
+  return message.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
 function normalizeDetails(details: any): Record<string, any> {
@@ -456,3 +459,5 @@ function formatUsdVolume(raw: number): string {
   }
   return `$${raw.toFixed(0)}`;
 }
+
+export default BacklogPage;
