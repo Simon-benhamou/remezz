@@ -83,16 +83,91 @@ function applyConfidenceSizing(draft: StrategyDraft) {
   risk.risk_pct_balance = Math.max(0, Math.min(5, Number(scaled.toFixed(4))));
 }
 
+function coerceRiskShape(input: StrategyDraft): StrategyDraft {
+  const draft: StrategyDraft = { ...input };
+  const risk = (draft.risk = draft.risk ? { ...draft.risk } : {} as any);
+
+  const topStop = (draft as any).stop ?? (draft as any).risk_stop ?? (draft as any).riskStop;
+  if (!risk.stop && topStop && typeof topStop === 'object') {
+    const type = typeof topStop.type === 'string' && (topStop.type === 'percent' || topStop.type === 'price')
+      ? topStop.type
+      : typeof topStop.kind === 'string' && (topStop.kind === 'percent' || topStop.kind === 'price')
+        ? topStop.kind
+        : undefined;
+    const rawValue = Number(topStop.value ?? topStop.amount ?? topStop.level);
+    if (type && Number.isFinite(rawValue)) {
+      risk.stop = { type, value: rawValue };
+    }
+  }
+
+  const topTarget = (draft as any).target ?? (draft as any).risk_target ?? (draft as any).riskTarget;
+  if (!risk.target && topTarget && typeof topTarget === 'object') {
+    const type = typeof topTarget.type === 'string' && (topTarget.type === 'percent' || topTarget.type === 'price')
+      ? topTarget.type
+      : typeof topTarget.kind === 'string' && (topTarget.kind === 'percent' || topTarget.kind === 'price')
+        ? topTarget.kind
+        : undefined;
+    const rawValue = Number(topTarget.value ?? topTarget.amount ?? topTarget.level);
+    if (type && Number.isFinite(rawValue)) {
+      risk.target = { type, value: rawValue };
+    }
+  }
+
+  if (risk.stop && !Number.isFinite(risk.stop.value)) {
+    const parsed = Number(risk.stop.value);
+    if (Number.isFinite(parsed)) risk.stop.value = parsed;
+    else delete risk.stop;
+  }
+
+  if (risk.target && !Number.isFinite(risk.target.value)) {
+    const parsed = Number(risk.target.value);
+    if (Number.isFinite(parsed)) risk.target.value = parsed;
+    else delete risk.target;
+  }
+
+  if (risk.stop && risk.stop.type !== 'percent' && risk.stop.type !== 'price') {
+    risk.stop.type = risk.stop.type === 'price' ? 'price' : 'percent';
+  }
+
+  if (risk.target && risk.target.type !== 'percent' && risk.target.type !== 'price') {
+    risk.target.type = risk.target.type === 'price' ? 'price' : 'percent';
+  }
+
+  const riskPctTop = (draft as any).risk_pct_balance ?? (draft as any).riskPctBalance;
+  if (risk.risk_pct_balance === undefined && Number.isFinite(Number(riskPctTop))) {
+    risk.risk_pct_balance = Number(riskPctTop);
+  }
+  if (risk.risk_pct_balance !== undefined && !Number.isFinite(risk.risk_pct_balance)) {
+    const parsed = Number(risk.risk_pct_balance);
+    if (Number.isFinite(parsed)) risk.risk_pct_balance = parsed;
+    else delete risk.risk_pct_balance;
+  }
+
+  const maxLevTop = (draft as any).max_leverage ?? (draft as any).maxLeverage;
+  if (risk.max_leverage === undefined && Number.isFinite(Number(maxLevTop))) {
+    risk.max_leverage = Number(maxLevTop);
+  }
+  if (risk.max_leverage !== undefined && !Number.isFinite(risk.max_leverage)) {
+    const parsed = Number(risk.max_leverage);
+    if (Number.isFinite(parsed)) risk.max_leverage = parsed;
+    else delete risk.max_leverage;
+  }
+
+  draft.risk = risk;
+  return draft;
+}
+
 export function normalizeStrategyDraft(input: StrategyDraft, ctx: ZoneContext): StrategyDraft {
-  const entry: any = { ...(input.entry ?? {}) };
+  const coerced = coerceRiskShape(input);
+  const entry: any = { ...(coerced.entry ?? {}) };
   if (!entry.type) entry.type = 'limit';
   const draft: StrategyDraft = {
-    ...input,
+    ...coerced,
     entry,
     risk: {
-      ...(input.risk ?? {}),
-      stop: { ...(input.risk?.stop ?? {}) },
-      target: { ...(input.risk?.target ?? {}) },
+      ...(coerced.risk ?? {}),
+      stop: { ...(coerced.risk?.stop ?? {}) },
+      target: { ...(coerced.risk?.target ?? {}) },
     } as any,
   };
   ensureEntryZone(draft, ctx);
@@ -311,10 +386,25 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: G
     const raw = await callLLM(strategyPrompt({
       symbol, trigger,
       features: {
-        ema20: feats.ema20, ema50: feats.ema50, rsi14: feats.rsi14,
-        atrPct: feats.atrPct, volPct: Math.abs((feats.ema20-feats.ema50)/feats.last)*100,
-        last: feats.last, support: feats.support, resistance: feats.resistance, trend: feats.trend,
-        pivots: feats.pivots, srBias: feats.srBias
+        ema20: feats.ema20,
+        ema50: feats.ema50,
+        ema100: feats.ema100,
+        ema200: feats.ema200,
+        rsi14: feats.rsi14,
+        atrPct: feats.atrPct,
+        volPct: Math.abs((feats.ema20 - feats.ema50) / Math.max(1e-6, feats.last)) * 100,
+        last: feats.last,
+        support: feats.support,
+        resistance: feats.resistance,
+        trend: feats.trend,
+        trendStrength: feats.trendStrength,
+        trendBias: feats.trendBias,
+        adx14: feats.adx14,
+        volume: feats.volume,
+        volumeMA: feats.volumeMA,
+        volume24hChangePct: feats.volume24hChangePct,
+        pivots: feats.pivots,
+        srBias: feats.srBias,
       }
     }), {
       cacheKey: opts?.fresh ? undefined : `strategy:${new Date().toISOString().slice(0,13)}:${symbol}:${trigger}`,
@@ -325,15 +415,22 @@ export async function generateStrategy(symbol: string, trigger: string, opts?: G
       context: { sessionId: opts?.sessionId, symbol, kind: 'strategy' },
     });
     // 2.2 Parse & validate
-    const draft = safeParseJSON<StrategyJson>(raw);
+    const draft = safeParseJSON<StrategyDraft>(raw);
     // patch fields minimum
     if (!draft.strategyId) draft.strategyId = `${today}:${symbol}:${trigger}:${Date.now()}:${randomUUID()}`; // <-- make unique
     if (!draft.symbol) draft.symbol = symbol;
     if (!draft.trigger) draft.trigger = trigger;
     if (!draft.validity) draft.validity = { from: new Date().toISOString(), to: null as any };
-  
-    const normalized = enforceAtrRiskBounds(draft, symbol, feats.atrPct);
-    return StrategyZ.parse(normalized);
+
+    const normalized = normalizeStrategyDraft(draft, {
+      last: feats.last,
+      atrPct: feats.atrPct,
+      support: feats.support,
+      resistance: feats.resistance,
+    });
+
+    const bounded = enforceAtrRiskBounds(normalized as StrategyJson, symbol, feats.atrPct);
+    return StrategyZ.parse(bounded);
   } catch (e) {
     try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'strategy', trigger, error: String((e as any)?.message || e) } }); } catch {}
     // 2.3 Fallback rule-based
