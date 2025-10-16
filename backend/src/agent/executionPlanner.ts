@@ -1,5 +1,6 @@
 import { getConfig } from '../utils/env.js';
 import { getCapacityPressure } from '../broker/live.js';
+import { getExecutionTuning } from '../services/executionTelemetry.js';
 
 export type ExecutionMode = 'market' | 'limit' | 'twap';
 
@@ -94,6 +95,7 @@ export function chooseExecutionPlan(context: ExecutionContext): ExecutionPlan {
   const capacityPressure = getCapacityPressure(context.symbol);
   const volProfile = normalizeVolProfile(context.volatilityProfile);
   const liquidityScore = estimateLiquidityScore(context.ticker);
+  const tuning = getExecutionTuning(context.symbol);
   const notional = Math.max(0, context.notionalUsd);
   const trendPlaybook = (context.playbook || '').toLowerCase();
 
@@ -146,16 +148,28 @@ export function chooseExecutionPlan(context: ExecutionContext): ExecutionPlan {
     telemetry.modeOverride = 'trend_speed_priority';
   }
 
-  const passiveOffsetBps = mode === 'limit' ? (fragileBook ? 8 : 5) : undefined;
+  if (tuning.modeOverride && tuning.modeOverride !== mode) {
+    mode = tuning.modeOverride;
+    telemetry.modeOverride = `telemetry_${tuning.modeOverride}`;
+  }
+
+  let passiveOffsetBps = mode === 'limit' ? (fragileBook ? 8 : 5) : undefined;
+  if (mode === 'limit' && tuning.passiveOffsetBps != null) {
+    passiveOffsetBps = tuning.passiveOffsetBps;
+  }
   let limitPrice: number | undefined;
   if (mode === 'limit') {
     limitPrice = derivePassivePrice(context.side, context.entryPrice, context.ticker, passiveOffsetBps);
-    fallbacks.push({ mode: 'market', reason: 'limit_timeout', delayMs: Math.max(2500, cfg.ORDER_LIMIT_TIMEOUT_MS ?? 4000) });
+    const baseDelay = Math.max(2500, cfg.ORDER_LIMIT_TIMEOUT_MS ?? 4000);
+    const tunedDelay = tuning.limitFallbackMs != null ? Math.max(1500, tuning.limitFallbackMs) : baseDelay;
+    fallbacks.push({ mode: 'market', reason: 'limit_timeout', delayMs: tunedDelay });
   }
 
   if (mode === 'twap') {
-    const slices = Math.min(6, Math.max(3, Math.round(notional / 7000)));
-    const intervalMs = Math.max(150, Math.min(600, Math.round((spreadPct ?? 0.12) * 1500)));
+    let slices = Math.min(6, Math.max(3, Math.round(notional / 7000)));
+    let intervalMs = Math.max(150, Math.min(600, Math.round((spreadPct ?? 0.12) * 1500)));
+    if (tuning.twapSliceCount != null) slices = Math.max(2, tuning.twapSliceCount);
+    if (tuning.twapIntervalMs != null) intervalMs = Math.max(120, tuning.twapIntervalMs);
     fallbacks.push({ mode: 'market', reason: 'twap_slippage_guard', delayMs: Math.max(4000, intervalMs * slices) });
     telemetry.twapSlices = slices;
     telemetry.twapIntervalMs = intervalMs;

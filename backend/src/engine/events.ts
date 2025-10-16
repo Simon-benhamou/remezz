@@ -9,6 +9,8 @@ import { hydrateActivationProfile } from '../agent/profilePersistence.js';
 import { recordOpsEvent } from '../monitor/ops.js';
 import { inspectExposure } from '../broker/live.js';
 import { extractPersistedPlan } from '../services/planStore.js';
+import { classifyRegime } from '../diagnostics/regime.js';
+import { getTriggerSampleRate, setRegimeDiagnostics } from './diagnosticRegistry.js';
 
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
@@ -29,7 +31,6 @@ const lastRsiBySym: Record<string, number> = {};
 const lastIndicatorSig: Record<string, { price: number; emaSpread: number; rsi: number; adx: number }> = {};
 let lastTick = { symbol: '', price: 0, ts: 0 };
 const lastTickBySession = new Map<string, number>();
-
 // Expose last tick info for health checks
 export function getLastTickAgeSec(sessionId: string): number | null {
   try {
@@ -84,6 +85,12 @@ async function tickOnce(sessionId: string, sym: string){
     piv = tech.pivots;
 
     // Broadcast a rich tick payload (supports/resistances/pivots)
+    const diagnostics = classifyRegime(tech as any, {
+      spreadBps: typeof (tech as any)?.spreadBps === 'number' ? Number((tech as any).spreadBps) : null,
+      liquidityScore: typeof (tech as any)?.liquidityScore === 'number' ? Number((tech as any).liquidityScore) : null,
+    });
+    setRegimeDiagnostics(sym, diagnostics);
+
     broadcast('tick', {
       ts: Date.now(),
       symbol: sym,
@@ -92,7 +99,8 @@ async function tickOnce(sessionId: string, sym: string){
       resistance,
       supports: tech.supports,
       resistances: tech.resistances,
-      pivots: tech.pivots
+      pivots: tech.pivots,
+      diagnostics,
     }, sym, sessionId);
     
   } catch (error) {
@@ -148,7 +156,8 @@ async function tickOnce(sessionId: string, sym: string){
   if (trigger && sessionId) {
     let created: any = { sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv }, createdAt: new Date() };
     if (LOG_TRIGGERS) {
-      const keep = Math.random() < TRIGGER_SAMPLE_RATE;
+      const sampleRate = getTriggerSampleRate(sym, TRIGGER_SAMPLE_RATE);
+      const keep = Math.random() < sampleRate;
       if (keep) {
         try {
           created = await prisma.triggerLog.create({ data:{ sessionId, symbol: sym, kind: trigger, payload: { price: tech.last, support, resistance, pivots: piv } }});

@@ -310,4 +310,6 @@ export async function recordExit(params: {
   } catch (error) {
     console.warn('Failed to finalize decision outcome:', error);
   }
+
+  return order;
 }
