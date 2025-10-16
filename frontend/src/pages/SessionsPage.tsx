@@ -249,7 +249,7 @@ const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = 
             children: (
               <div key={log.id} style={{ color: '#e2e8f0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Text style={{ color: '#94a3b8', fontSize: 12 }}>{formatLogTime(log.timestamp)}</Text>
+                  <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>{formatLogTime(log.timestamp)}</Text>
                   <Tag
                     style={{
                       borderRadius: 12,
@@ -263,7 +263,7 @@ const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = 
                     {log.level.toUpperCase()}
                   </Tag>
                   {log.context && (
-                    <Text style={{ color: '#94a3b8', fontSize: 12 }}>{log.context}</Text>
+                    <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>{log.context}</Text>
                   )}
                 </div>
                 <Text style={{ color: '#e2e8f0' }}>{log.message}</Text>
@@ -277,8 +277,8 @@ const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = 
           }))
         : [
             {
-              color: '#475569',
-              dot: <InfoCircleOutlined style={{ color: '#475569' }} />,
+              color: 'rgba(148, 163, 184, 0.75)',
+              dot: <InfoCircleOutlined style={{ color: 'rgba(148, 163, 184, 0.75)' }} />,
               children: (
                 <Text style={{ color: '#cbd5f5' }}>
                   Progress updates will appear here as soon as the AI pipeline reports them.
@@ -319,7 +319,7 @@ const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = 
                   borderRadius: 14,
                   border: '1px dashed rgba(148, 163, 184, 0.4)',
                   background: 'transparent',
-                  color: '#94a3b8',
+                  color: 'rgba(148, 163, 184, 0.72)',
                   padding: '4px 12px',
                 }}
               >
@@ -355,7 +355,7 @@ const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = 
         <div>
           <Text style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>Launching trading agent…</Text>
           <div style={{ marginTop: 4 }}>
-            <Text style={{ color: '#94a3b8' }}>{currentMessage}</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.72)' }}>{currentMessage}</Text>
           </div>
         </div>
         {onDismiss ? (
@@ -363,7 +363,7 @@ const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = 
             type='text'
             icon={<CloseOutlined />}
             onClick={onDismiss}
-            style={{ color: '#94a3b8' }}
+            style={{ color: 'rgba(148, 163, 184, 0.72)' }}
           >
             Close
           </Button>
@@ -392,25 +392,25 @@ const AgentCreationProgressBanner: React.FC<AgentCreationProgressBannerProps> = 
           <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>AI selection insights</Text>
           <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
             <div>
-              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Candidates scanned</Text>
+              <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>Candidates scanned</Text>
               <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
                 {selectionMeta?.candidateCount ?? selectionMeta?.analyzedSymbols?.length ?? '--'}
               </div>
             </div>
             <div>
-              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Orderable</Text>
+              <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>Orderable</Text>
               <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
                 {selectionMeta?.orderableCount ?? selectionMeta?.orderableSymbols?.length ?? '--'}
               </div>
             </div>
             <div>
-              <Text style={{ color: '#94a3b8', fontSize: 12 }}>Mode</Text>
+              <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>Mode</Text>
               <div style={{ color: '#e2e8f0', fontSize: 18, fontWeight: 600 }}>
                 {selectionMeta?.autoSelected ? 'Auto' : 'Manual'}
               </div>
             </div>
           </div>
-          <div style={{ marginTop: 12, color: '#94a3b8', fontSize: 13 }}>
+          <div style={{ marginTop: 12, color: 'rgba(148, 163, 184, 0.72)', fontSize: 13 }}>
             {selectionMeta?.prefetchedSymbol ? (
               <div>
                 Prefetched opportunity:{' '}
@@ -618,12 +618,12 @@ export default function SessionsPage(){
   const isSessionActive = React.useCallback((session: any) => !session.haltedAt && !session.stoppedAt, []);
   const getStatusMeta = React.useCallback((session: any) => {
     if (session.haltedAt) {
-      return { dot: '#dc2626', text: '#b91c1c', glow: '0 0 8px rgba(220, 38, 38, 0.35)', label: 'Halted' };
+      return { dot: '#f87171', text: '#fca5a5', glow: '0 0 12px rgba(248, 113, 113, 0.45)', label: 'Halted' };
     }
     if (session.stoppedAt) {
-      return { dot: '#94a3b8', text: '#64748b', glow: 'none', label: 'Stopped' };
+      return { dot: '#94a3b8', text: 'rgba(148, 163, 184, 0.72)', glow: '0 0 6px rgba(148, 163, 184, 0.35)', label: 'Stopped' };
     }
-    return { dot: '#10b981', text: '#059669', glow: '0 0 8px rgba(16, 185, 129, 0.5)', label: 'Active' };
+    return { dot: '#34d399', text: '#6ee7b7', glow: '0 0 14px rgba(52, 211, 153, 0.45)', label: 'Active' };
   }, []);
   const statusRank = React.useCallback((session: any) => {
     if (session.haltedAt) return 2;
@@ -1205,7 +1205,7 @@ export default function SessionsPage(){
                 />
                 <span style={{ fontWeight: 600, color: meta.text, fontSize: 12 }}>{meta.label}</span>
               </div>
-              <span style={{ fontSize: 11, color: '#64748b' }}>{runtime.toUpperCase()}</span>
+              <span style={{ fontSize: 11, color: 'rgba(148, 163, 184, 0.72)' }}>{runtime.toUpperCase()}</span>
               {record.haltReason && (
                 <Text type="secondary" style={{ fontSize: 11 }}>
                   {record.haltReason}
@@ -1253,7 +1253,7 @@ export default function SessionsPage(){
             <Space direction="vertical" size={2}>
               <Space align="center" size={6}>
                 {isSmart && <span role="img" aria-label="smart agent">🧠</span>}
-                <span style={{ fontWeight: 600, fontSize: 13, color: '#0f172a' }}>{record.symbol}</span>
+                <span style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>{record.symbol}</span>
               </Space>
               <Space size={4} wrap>
                 <Tag color="blue" style={{ borderRadius: 6 }}>
@@ -1289,7 +1289,7 @@ export default function SessionsPage(){
             return (
               <Space direction="vertical" size={2}>
                 <Tag color="default" style={{ borderRadius: 6 }}>FLAT</Tag>
-                <span style={{ fontSize: 11, color: '#94a3b8' }}>Waiting for a signal</span>
+                <span style={{ fontSize: 11, color: 'rgba(148, 163, 184, 0.72)' }}>Waiting for a signal</span>
               </Space>
             );
           }
@@ -1305,10 +1305,10 @@ export default function SessionsPage(){
                   {side}
                 </Tag>
                 {sizeDisplay && (
-                  <span style={{ fontSize: 12, fontWeight: 600, color: '#0f172a' }}>{sizeDisplay}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{sizeDisplay}</span>
                 )}
               </Space>
-              <span style={{ fontSize: 11, color: '#64748b' }}>
+              <span style={{ fontSize: 11, color: 'rgba(148, 163, 184, 0.72)' }}>
                 {entryDisplay ? `Entry ${entryDisplay}` : 'Entry price pending'}
                 {notionalText ? ` • ${notionalText}` : ''}
               </span>
@@ -1364,15 +1364,15 @@ export default function SessionsPage(){
             : '—';
           return (
             <Space direction="vertical" size={2}>
-              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
+              <span style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 500 }}>
                 Exposure {exposureDisplay}
               </span>
               {utilization != null && Number.isFinite(utilization) && (
-                <span style={{ fontSize: 11, color: utilization > 100 ? '#b91c1c' : '#475569' }}>
+                <span style={{ fontSize: 11, color: utilization > 100 ? '#f87171' : 'rgba(148, 163, 184, 0.75)' }}>
                   {utilization.toFixed(utilization >= 10 ? 0 : 1)}% of capital
                 </span>
               )}
-              <span style={{ fontSize: 11, color: '#64748b' }}>
+              <span style={{ fontSize: 11, color: 'rgba(148, 163, 184, 0.72)' }}>
                 Leverage {formatLeverageValue(summary.resolved ?? record.profile?.maxLeverage)}
                 {summary.trimmed && summary.requested ? ` • trimmed from ${formatLeverageValue(summary.requested)}` : ''}
               </span>
@@ -1394,7 +1394,7 @@ export default function SessionsPage(){
           const healthScore = Number(record.healthScore ?? NaN);
           if (!readiness) {
             return (
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>
+              <span style={{ fontSize: 11, color: 'rgba(148, 163, 184, 0.72)' }}>
                 {isSessionActive(record) ? 'Diagnostics unavailable' : 'Agent offline'}
               </span>
             );
@@ -1412,7 +1412,7 @@ export default function SessionsPage(){
                 {readiness.canTrade ? 'Ready to trade' : 'Blocked'}
               </span>
               {readiness.reason && (
-                <span style={{ fontSize: 11, color: '#64748b' }}>{readiness.reason}</span>
+                <span style={{ fontSize: 11, color: 'rgba(148, 163, 184, 0.72)' }}>{readiness.reason}</span>
               )}
               {Number.isFinite(healthScore) && (
                 <span style={{ fontSize: 11, color: getHealthColor(record.healthStatus, healthScore) }}>
@@ -1438,13 +1438,13 @@ export default function SessionsPage(){
           const today = Number(record.todayTrades ?? 0);
           return (
             <Space direction="vertical" size={2}>
-              <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 500 }}>
+              <span style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 500 }}>
                 {formatRelativeTime(record.lastActivity)}
               </span>
-              <span style={{ fontSize: 11, color: '#64748b' }}>
+              <span style={{ fontSize: 11, color: 'rgba(148, 163, 184, 0.72)' }}>
                 {totalTrades} total · {today} today
               </span>
-              <span style={{ fontSize: 11, color: orders > 0 ? '#b45309' : '#94a3b8' }}>
+              <span style={{ fontSize: 11, color: orders > 0 ? '#f97316' : 'rgba(148, 163, 184, 0.72)' }}>
                 {orders} pending
               </span>
             </Space>
@@ -1561,7 +1561,7 @@ export default function SessionsPage(){
 
   return (
     <div style={{ 
-      background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+      background: 'linear-gradient(155deg, rgba(15, 23, 42, 0.92) 0%, rgba(2, 8, 23, 0.94) 100%)',
       minHeight: '100vh',
       padding: '24px',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif'
@@ -1610,13 +1610,13 @@ export default function SessionsPage(){
         <Card
           style={{
             borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            background: '#fff',
-            boxShadow: '0 4px 16px rgba(15, 23, 42, 0.08)'
+            border: '1px solid rgba(148, 163, 184, 0.16)',
+            background: 'linear-gradient(165deg, rgba(15, 23, 42, 0.92) 0%, rgba(2, 8, 23, 0.94) 100%)',
+            boxShadow: '0 26px 60px -32px rgba(2, 6, 23, 0.85)'
           }}
           title={
             <Space size={12} align="center">
-              <span style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Portfolio Allocation</span>
+              <span style={{ fontSize: 20, fontWeight: 700, color: '#e2e8f0' }}>Portfolio Allocation</span>
               <Tag color="processing" style={{ borderRadius: 12 }}>
                 Max exposure 150%
               </Tag>
@@ -1674,7 +1674,7 @@ export default function SessionsPage(){
           <Row gutter={[16, 16]} align="middle" justify="space-between">
             <Col xs={24} md={14}>
               <Space size={12} wrap>
-                <span style={{ fontSize: 13, color: '#475569' }}>Paper balance</span>
+                <span style={{ fontSize: 13, color: 'rgba(148, 163, 184, 0.75)' }}>Paper balance</span>
                 <InputNumber
                   min={0}
                   step={100}
@@ -1685,7 +1685,7 @@ export default function SessionsPage(){
                   Update balance
                 </Button>
                 {portfolioPaper?.lastRebalancedAt && (
-                  <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                  <span style={{ fontSize: 12, color: 'rgba(148, 163, 184, 0.72)' }}>
                     Last rebalanced {formatRelativeTime(portfolioPaper.lastRebalancedAt)}
                   </span>
                 )}
@@ -1693,8 +1693,8 @@ export default function SessionsPage(){
             </Col>
             <Col xs={24} md={10}>
               <Space direction="vertical" size={2} style={{ width: '100%', textAlign: 'right' }}>
-                <span style={{ fontSize: 12, color: '#64748b' }}>Live balance estimate</span>
-                <span style={{ fontWeight: 600, fontSize: 16, color: '#0f172a' }}>
+                <span style={{ fontSize: 12, color: 'rgba(148, 163, 184, 0.72)' }}>Live balance estimate</span>
+                <span style={{ fontWeight: 600, fontSize: 16, color: '#e2e8f0' }}>
                   ${Number(portfolioLive?.balanceUsd || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </span>
               </Space>
@@ -1773,9 +1773,9 @@ export default function SessionsPage(){
         <Card
           style={{
             borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
-            background: 'white'
+            border: '1px solid rgba(148, 163, 184, 0.16)',
+            boxShadow: '0 32px 70px -34px rgba(2, 6, 23, 0.85)',
+            background: 'linear-gradient(165deg, rgba(15, 23, 42, 0.92) 0%, rgba(2, 8, 23, 0.94) 100%)'
           }}
           title={
             <Row justify="space-between" align="middle">
@@ -1794,7 +1794,7 @@ export default function SessionsPage(){
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
-                      background: 'linear-gradient(135deg, #10b981, #059669)',
+                      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.9), rgba(5, 150, 105, 0.9))',
                       padding: '6px 14px',
                       borderRadius: '20px',
                       color: 'white',
@@ -1802,14 +1802,14 @@ export default function SessionsPage(){
                       fontWeight: '600',
                       boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
                     }}>
-                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
+                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ffffff' }} />
                       {filteredRows.filter(isSessionActive).length} Active
                     </div>
                     <div style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
-                      background: 'linear-gradient(135deg, #b91c1c, #dc2626)',
+                      background: 'linear-gradient(135deg, rgba(185, 28, 28, 0.9), rgba(220, 38, 38, 0.9))',
                       padding: '6px 14px',
                       borderRadius: '20px',
                       color: 'white',
@@ -1817,21 +1817,21 @@ export default function SessionsPage(){
                       fontWeight: '600',
                       boxShadow: '0 2px 8px rgba(220, 38, 38, 0.25)'
                     }}>
-                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
+                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ffffff' }} />
                       {filteredRows.filter(r => !!r.haltedAt).length} Halted
                     </div>
                     <div style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
-                      background: 'linear-gradient(135deg, #64748b, #475569)',
+                      background: 'linear-gradient(135deg, rgba(148, 163, 184, 0.45), rgba(100, 116, 139, 0.45))',
                       padding: '6px 14px',
                       borderRadius: '20px',
                       color: 'white',
                       fontSize: '13px',
                       fontWeight: '600'
                     }}>
-                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white' }} />
+                      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ffffff' }} />
                       {filteredRows.filter(r => !!sessionStoppedAt(r) && !r.haltedAt).length} Stopped
                     </div>
                   </div>
@@ -1863,7 +1863,7 @@ export default function SessionsPage(){
                         borderRadius: '10px',
                         fontWeight: '500',
                         border: `1px solid ${isCacheValid(mode as any, false) ? '#10b981' : '#ef4444'}`,
-                        background: 'white',
+                        background: 'rgba(15, 23, 42, 0.9)',
                         boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
                         height: '40px',
                         color: isCacheValid(mode as any, false) ? '#10b981' : '#ef4444'
@@ -1878,8 +1878,8 @@ export default function SessionsPage(){
                       style={{
                         borderRadius: '10px',
                         fontWeight: '500',
-                        border: '1px solid #e2e8f0',
-                        background: 'white',
+                        border: '1px solid rgba(148, 163, 184, 0.16)',
+                        background: 'rgba(15, 23, 42, 0.9)',
                         boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
                         height: '40px'
                       }}
@@ -1935,23 +1935,23 @@ export default function SessionsPage(){
         )}
         {/* Modern Filters Section */}
         <div style={{
-          background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+          background: 'linear-gradient(155deg, rgba(15, 23, 42, 0.92) 0%, rgba(2, 8, 23, 0.94) 100%)',
             borderRadius: '12px',
             padding: '24px',
             marginBottom: '24px',
-            border: '1px solid #e2e8f0'
+            border: '1px solid rgba(148, 163, 184, 0.16)'
           }}>
             <Row gutter={[16, 16]}>
               <Col xs={24} sm={12} md={6}>
                 <Input
                   placeholder="Search symbol or ID..."
-                  prefix={<SearchOutlined style={{ color: '#64748b' }} />}
+                  prefix={<SearchOutlined style={{ color: 'rgba(148, 163, 184, 0.72)' }} />}
                   value={searchText}
                   onChange={e => setSearchText(e.target.value)}
                   allowClear
                   style={{
                     borderRadius: '10px',
-                    border: '1px solid #e2e8f0',
+                    border: '1px solid rgba(148, 163, 184, 0.16)',
                     boxShadow: '0 2px 6px rgba(0, 0, 0, 0.08)',
                     fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
                     height: '40px'
@@ -2052,10 +2052,10 @@ export default function SessionsPage(){
             size="small"
             style={{
               borderRadius: '12px',
-              border: '1px solid #f1f5f9',
+              border: '1px solid rgba(148, 163, 184, 0.18)',
               overflow: 'hidden',
-              background: '#ffffff',
-              boxShadow: '0 10px 24px -18px rgba(15, 23, 42, 0.35)'
+              background: 'linear-gradient(165deg, rgba(15, 23, 42, 0.92) 0%, rgba(2, 8, 23, 0.94) 100%)',
+              boxShadow: '0 28px 70px -36px rgba(15, 118, 228, 0.25)'
             }}
             columns={sessionColumns}
           />
@@ -2068,7 +2068,7 @@ export default function SessionsPage(){
             <span style={{
               fontSize: '20px',
               fontWeight: '600',
-              color: '#1e293b',
+              color: '#e2e8f0',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif'
             }}>
               {restartSessionId ? '⚙️ Modify Agent' : '🚀 Activate New Agent'}
@@ -2404,18 +2404,18 @@ export default function SessionsPage(){
             {/* Smart Mode Info Banner */}
             {smartAutoMode && (
               <div style={{
-                background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
-                border: '1px solid #0ea5e9',
+                background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.12) 0%, rgba(59, 130, 246, 0.18) 100%)',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
                 borderRadius: '10px',
                 padding: '16px',
                 marginBottom: '16px'
               }}>
                 <Space direction="vertical" size="small" style={{ width: '100%' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <ThunderboltOutlined style={{ color: '#0ea5e9', fontSize: '16px' }} />
-                    <span style={{ fontWeight: 600, color: '#0369a1' }}>Auto-Select Agent Configuration</span>
+                    <ThunderboltOutlined style={{ color: '#38bdf8', fontSize: '16px' }} />
+                    <span style={{ fontWeight: 600, color: '#93c5fd' }}>Auto-Select Agent Configuration</span>
                   </div>
-                  <div style={{ fontSize: '12px', color: '#0369a1', lineHeight: '1.5' }}>
+                  <div style={{ fontSize: '12px', color: '#93c5fd', lineHeight: '1.5' }}>
                     • <strong>Crypto Selection:</strong> Analyzes 50+ cryptocurrencies and selects the best performer<br/>
                     • <strong>Same Trading Logic:</strong> Uses identical strategies and risk management as manual mode<br/>
                     • <strong>Automatic Switching:</strong> Changes to new opportunities when better ones are found<br/>
@@ -2444,18 +2444,18 @@ export default function SessionsPage(){
             {/* Current Symbol Display for Smart Mode */}
             {smartAutoMode && (
               <div style={{
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid rgba(148, 163, 184, 0.16)',
                 borderRadius: '8px',
                 padding: '12px',
                 marginBottom: '16px'
               }}>
-                <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>
+                <div style={{ fontSize: '12px', color: 'rgba(148, 163, 184, 0.72)', marginBottom: '4px' }}>
                   Trading Symbol
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <RocketOutlined style={{ color: '#722ed1' }} />
-                  <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                  <span style={{ fontWeight: 600, color: '#e2e8f0' }}>
                     Will be auto-selected from best opportunities
                   </span>
                 </div>
@@ -2510,7 +2510,7 @@ export default function SessionsPage(){
                     flexDirection: 'column',
                     gap: 4,
                     fontSize: '12px',
-                    color: '#475569',
+                    color: 'rgba(148, 163, 184, 0.75)',
                     marginTop: 8,
                   }}
                 >
@@ -2542,22 +2542,22 @@ export default function SessionsPage(){
               />
             </Form.Item>
             <div style={{
-              background: '#f8fafc',
-              border: '1px solid #e2e8f0',
+              background: 'rgba(15, 23, 42, 0.6)',
+              border: '1px solid rgba(148, 163, 184, 0.16)',
               borderRadius: '10px',
               padding: '12px 16px',
               marginTop: -4,
               marginBottom: 16
             }}>
               <Space direction="vertical" size={4}>
-                <span style={{ fontWeight: 600, color: '#1e293b' }}>Risk profile derived automatically</span>
-                <span style={{ color: '#475569' }}>
+                <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Risk profile derived automatically</span>
+                <span style={{ color: 'rgba(148, 163, 184, 0.75)' }}>
                   Risk per trade: <strong>{riskPreset.risk.toFixed(1)}%</strong>
                 </span>
-                <span style={{ color: '#475569' }}>
+                <span style={{ color: 'rgba(148, 163, 184, 0.75)' }}>
                   Daily loss cap: <strong>{riskPreset.dailyLoss.toFixed(1)}%</strong>
                 </span>
-                <span style={{ color: '#64748b', fontSize: 12 }}>{riskPreset.note}</span>
+                <span style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>{riskPreset.note}</span>
               </Space>
             </div>
           </Form>
