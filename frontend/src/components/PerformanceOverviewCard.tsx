@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Col, Progress, Row, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
+import { Card, Col, Divider, Progress, Row, Space, Statistic, Tag, Tooltip, Typography, theme } from 'antd';
 import {
   Area,
   AreaChart,
@@ -19,15 +19,11 @@ type Trade = {
   realizedPnlUsd?: number;
   roePct?: number | null;
   estLev?: number | null;
+  qty?: number | null;
 };
 
 type Props = {
   trades: Trade[];
-  totalSessions: number;
-  activeSessions: number;
-  pnlUsd?: number;
-  roiPct?: number;
-  aiCallsTotal?: number;
   loading?: boolean;
 };
 
@@ -88,6 +84,9 @@ function aggregateStats(trades: Trade[]) {
       avgLev: 0,
       wins: 0,
       losses: 0,
+      longs: 0,
+      shorts: 0,
+      sample: 0,
     };
   }
   let totalPnl = 0;
@@ -97,11 +96,15 @@ function aggregateStats(trades: Trade[]) {
   let levSum = 0;
   let roeCount = 0;
   let levCount = 0;
+  let longs = 0;
+  let shorts = 0;
   for (const trade of trades) {
     const pnl = Number(trade.realizedPnlUsd || 0);
     totalPnl += pnl;
     if (pnl > 0) wins += 1;
     else if (pnl < 0) losses += 1;
+    if (trade.positionSide === 'long') longs += 1;
+    else if (trade.positionSide === 'short') shorts += 1;
     if (trade.roePct != null) {
       roeSum += Number(trade.roePct);
       roeCount += 1;
@@ -119,29 +122,64 @@ function aggregateStats(trades: Trade[]) {
     avgLev: levCount > 0 ? levSum / levCount : 0,
     wins,
     losses,
+    longs,
+    shorts,
+    sample: trades.length,
   };
+}
+
+function formatRelative(ts?: string) {
+  if (!ts) return '—';
+  const date = new Date(ts);
+  const delta = Date.now() - date.getTime();
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (delta < minute) return 'Just now';
+  if (delta < hour) {
+    const mins = Math.round(delta / minute);
+    return `${mins} min ago`;
+  }
+  if (delta < day) {
+    const hours = Math.round(delta / hour);
+    return `${hours}h ago`;
+  }
+  const days = Math.round(delta / day);
+  return `${days}d ago`;
 }
 
 const PerformanceOverviewCard: React.FC<Props> = ({
   trades,
-  totalSessions,
-  activeSessions,
-  pnlUsd,
-  roiPct,
-  aiCallsTotal,
   loading,
 }) => {
   const chartPoints = React.useMemo(() => buildChart(trades), [trades]);
   const stats = React.useMemo(() => aggregateStats(trades), [trades]);
   const gradientId = React.useId();
+  const sortedTrades = React.useMemo(
+    () => [...(trades || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [trades],
+  );
+  const latestTrade = sortedTrades[0];
+  const { token } = theme.useToken();
+  const base = token.colorBgBase.toLowerCase();
+  const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
+  const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
+  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
+  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.7)' : token.colorTextSecondary;
+  const accentColor = isDarkTheme ? '#38bdf8' : token.colorPrimary;
+  const areaFillFrom = isDarkTheme ? 'rgba(56, 189, 248, 0.8)' : `${accentColor}CC`;
+  const areaFillTo = isDarkTheme ? 'rgba(56, 189, 248, 0)' : `${accentColor}11`;
+  const statCardBg = isDarkTheme ? 'rgba(15, 23, 42, 0.55)' : token.colorFillTertiary;
+  const statCardBorder = isDarkTheme ? 'rgba(56, 189, 248, 0.25)' : token.colorBorderSecondary;
+  const subtleSurface = isDarkTheme ? 'rgba(30, 41, 59, 0.8)' : token.colorFillQuaternary;
 
   return (
     <Card
       loading={loading}
-      style={{ borderRadius: 16, border: '1px solid #1f2937', background: '#0f172a' }}
+      style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg }}
       bodyStyle={{ padding: 24 }}
       title={
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#f8fafc' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: isDarkTheme ? '#f8fafc' : token.colorText }}>
           <span>Performance & utilisation</span>
           <Tag color='geekblue'>Realtime</Tag>
         </div>
@@ -157,7 +195,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#94a3b8',
+                  color: mutedText,
                 }}
               >
                 No realized trades yet.
@@ -167,25 +205,25 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                 <AreaChart data={chartPoints}>
                   <defs>
                     <linearGradient id={`pnlGradient-${gradientId}`} x1='0' y1='0' x2='0' y2='1'>
-                      <stop offset='5%' stopColor='#38bdf8' stopOpacity={0.8} />
-                      <stop offset='95%' stopColor='#38bdf8' stopOpacity={0} />
+                      <stop offset='5%' stopColor={areaFillFrom} stopOpacity={1} />
+                      <stop offset='95%' stopColor={areaFillTo} stopOpacity={0.2} />
                     </linearGradient>
                   </defs>
-                  <XAxis dataKey='label' tick={{ fill: '#cbd5f5', fontSize: 12 }} interval='preserveStartEnd' minTickGap={32} />
-                  <YAxis tick={{ fill: '#cbd5f5', fontSize: 12 }} width={80} tickFormatter={(value) => `$${value}`}/>
+                  <XAxis dataKey='label' tick={{ fill: mutedText, fontSize: 12 }} interval='preserveStartEnd' minTickGap={32} />
+                  <YAxis tick={{ fill: mutedText, fontSize: 12 }} width={80} tickFormatter={(value) => `$${value}`}/>
                   <RechartsTooltip
-                    cursor={{ stroke: '#38bdf8', strokeDasharray: '4 4' }}
+                    cursor={{ stroke: accentColor, strokeDasharray: '4 4' }}
                     content={({ label, payload }) => {
                       if (!payload || payload.length === 0) return null;
                       const point = payload[0];
                       return (
                         <div
                           style={{
-                            background: '#0f172a',
+                            background: cardBg,
                             padding: '12px 16px',
                             borderRadius: 12,
-                            border: '1px solid rgba(56, 189, 248, 0.3)',
-                            color: '#e2e8f0',
+                            border: `1px solid ${accentColor}33`,
+                            color: isDarkTheme ? '#e2e8f0' : token.colorText,
                           }}
                         >
                           <div style={{ fontWeight: 600 }}>{label}</div>
@@ -194,7 +232,7 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                       );
                     }}
                   />
-                  <Area type='monotone' dataKey='pnl' stroke='#38bdf8' strokeWidth={2.6} fill={`url(#pnlGradient-${gradientId})`} />
+                  <Area type='monotone' dataKey='pnl' stroke={accentColor} strokeWidth={2.6} fill={`url(#pnlGradient-${gradientId})`} />
                 </AreaChart>
               </ResponsiveContainer>
             )}
@@ -207,14 +245,14 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                 <Statistic
                   title={<Tooltip title='Total realized PnL across the last recorded trades'>Realized PnL</Tooltip>}
                   value={formatUsd(stats.totalPnl)}
-                  valueStyle={{ color: stats.totalPnl >= 0 ? '#34d399' : '#f87171' }}
+                  valueStyle={{ color: stats.totalPnl >= 0 ? token.colorSuccess : token.colorError }}
                 />
               </Col>
               <Col span={12}>
                 <Statistic
                   title={<Tooltip title='Win rate computed from the recent trade sample'>Win rate</Tooltip>}
                   value={formatPercent(stats.winRate)}
-                  valueStyle={{ color: stats.winRate >= 50 ? '#c084fc' : '#fbbf24' }}
+                  valueStyle={{ color: stats.winRate >= 50 ? accentColor : token.colorWarning }}
                 />
               </Col>
               <Col span={12}>
@@ -230,35 +268,75 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                 />
               </Col>
             </Row>
-            <Row gutter={[12, 12]}>
-              <Col span={12}>
-                <Statistic title='Active sessions' value={activeSessions} />
-              </Col>
-              <Col span={12}>
-                <Statistic title='Sessions total' value={totalSessions} />
-              </Col>
-              <Col span={12}>
-                <Statistic
-                  title='Portfolio ROI'
-                  value={formatPercent(roiPct, 2)}
-                  valueStyle={{ color: Number(roiPct || 0) >= 0 ? '#34d399' : '#f87171' }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic title='AI calls' value={aiCallsTotal || 0} />
-              </Col>
-            </Row>
-            <div style={{ padding: 14, borderRadius: 12, border: '1px solid rgba(148, 163, 184, 0.3)', background: '#1e293b' }}>
-              <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>PnL distribution</Text>
+            <div
+              style={{
+                padding: 14,
+                borderRadius: 12,
+                border: `1px solid ${statCardBorder}`,
+                background: statCardBg,
+              }}
+            >
+              <Text style={{ color: isDarkTheme ? '#e2e8f0' : token.colorText, fontWeight: 600 }}>PnL distribution</Text>
               <Progress
                 percent={stats.wins + stats.losses > 0 ? (stats.wins / (stats.wins + stats.losses)) * 100 : 0}
                 showInfo={false}
-                strokeColor={{ from: '#22d3ee', to: '#38bdf8' }}
+                strokeColor={{ from: accentColor, to: accentColor }}
                 style={{ marginTop: 12 }}
               />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#cbd5f5' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: mutedText }}>
                 <span>{stats.wins} winning trades</span>
                 <span>{stats.losses} losing trades</span>
+              </div>
+            </div>
+            <Divider style={{ margin: '0 0 8px' }} />
+            <Row gutter={[12, 12]}>
+              <Col span={12}>
+                <Statistic
+                  title='Sample size'
+                  value={stats.sample}
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic
+                  title='Direction split'
+                  value={`${stats.longs}/${stats.shorts}`}
+                  suffix={<span style={{ color: mutedText }}>L/S</span>}
+                />
+              </Col>
+            </Row>
+            <div
+              style={{
+                display: 'flex',
+                gap: 12,
+                padding: 14,
+                borderRadius: 12,
+                border: `1px solid ${borderColor}`,
+                background: subtleSurface,
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <Text type='secondary' style={{ fontSize: 12, display: 'block', color: mutedText }}>
+                  Last trade
+                </Text>
+                <div style={{ fontWeight: 600, color: isDarkTheme ? '#f8fafc' : token.colorText }}>
+                  {latestTrade ? latestTrade.symbol || '—' : 'No trades recorded'}
+                </div>
+                <div style={{ color: mutedText, fontSize: 12 }}>
+                  {latestTrade ? formatRelative(latestTrade.createdAt) : 'Awaiting execution'}
+                </div>
+              </div>
+              <div>
+                <Text type='secondary' style={{ fontSize: 12, display: 'block', color: mutedText }}>
+                  PnL
+                </Text>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    color: (latestTrade?.realizedPnlUsd ?? 0) >= 0 ? token.colorSuccess : token.colorError,
+                  }}
+                >
+                  {formatUsd(latestTrade?.realizedPnlUsd ?? 0)}
+                </div>
               </div>
             </div>
           </Space>

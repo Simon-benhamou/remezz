@@ -1,6 +1,6 @@
 import React from 'react';
 import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
-import { Badge, Card, Empty, Space, Table, Tag, Typography } from 'antd';
+import { Badge, Card, Empty, Space, Table, Tag, Typography, theme } from 'antd';
 
 const { Text } = Typography;
 
@@ -41,6 +41,12 @@ function formatTimestamp(ts?: string) {
 }
 
 const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
+  const { token } = theme.useToken();
+  const base = token.colorBgBase.toLowerCase();
+  const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
+  const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
+  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
+  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.6)' : token.colorTextSecondary;
   const columns = React.useMemo(
     () => [
       {
@@ -99,26 +105,32 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
         title: 'Time',
         dataIndex: 'createdAt',
         key: 'createdAt',
-        render: (value: string) => <Text type='secondary'>{formatTimestamp(value)}</Text>,
+        render: (value: string) => (
+          <Text style={{ color: mutedText }}>{formatTimestamp(value)}</Text>
+        ),
       },
     ],
-    [],
+    [mutedText],
   );
 
   return (
     <Card
-      style={{ borderRadius: 16, border: '1px solid #1f2937', background: '#0f172a' }}
+      style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg }}
       bodyStyle={{ padding: 0 }}
       title={
         <Space size={12}>
-          <span style={{ color: '#f8fafc' }}>Recent trades</span>
+          <span style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>Recent trades</span>
           <Tag color='blue'>{trades.length}</Tag>
         </Space>
       }
       extra={onRefresh ? <a onClick={onRefresh}>Refresh</a> : undefined}
     >
       {trades.length === 0 && !loading ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description='No trades yet.' style={{ margin: '32px 0', color: '#94a3b8' }} />
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description='No trades yet.'
+          style={{ margin: '32px 0', color: mutedText }}
+        />
       ) : (
         <Table
           size='small'
@@ -127,7 +139,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
           rowKey={(row) => row.id}
           pagination={false}
           loading={loading}
-          style={{ color: '#e2e8f0' }}
+          style={{ color: isDarkTheme ? '#e2e8f0' : token.colorText }}
         />
       )}
     </Card>

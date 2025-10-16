@@ -8,10 +8,10 @@ import {
   Empty,
   Row,
   Space,
-  Statistic,
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import {
   AreaChartOutlined,
@@ -259,16 +259,28 @@ const OperationsDashboardPage: React.FC = () => {
     [opsEvents],
   );
 
+  const { token } = theme.useToken();
+  const base = token.colorBgBase.toLowerCase();
+  const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
+  const surfaceColor = isDarkTheme ? '#0f172a' : token.colorBgContainer;
+  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
+  const textPrimary = isDarkTheme ? '#f8fafc' : token.colorText;
+  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.7)' : token.colorTextSecondary;
+  const secondarySurface = isDarkTheme ? 'rgba(15, 23, 42, 0.78)' : token.colorFillTertiary;
+  const heroBackground = isDarkTheme
+    ? 'linear-gradient(135deg, #0f172a 0%, #020617 60%, #1e293b 100%)'
+    : '#ffffff';
+  const heroOverlay = isDarkTheme
+    ? 'radial-gradient(circle at top right, rgba(59, 130, 246, 0.35), transparent 45%)'
+    : 'radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 45%)';
+  const heroBorder = isDarkTheme ? '1px solid rgba(148, 163, 184, 0.2)' : `1px solid ${token.colorBorderSecondary}`;
+
   const globalHealth = resolveGlobalHealth(opsMetrics);
   const metricsTimestamp = opsMetrics?.timestamp
     ? new Date(opsMetrics.timestamp).toLocaleTimeString()
     : '—';
   const totalEquityUsd = Number(overview?.equityUsd || overview?.paperBalance?.equityUsd || overview?.exchangeBalance?.totalUsd || 0);
   const pnlUsd = Number(overview?.pnlUsd || 0);
-  const roiPctValue = Number(overview?.roiPct || 0);
-  const avgWinRate = Number(overview?.avgWinRate || 0);
-  const openPositions = Number(opsMetrics?.positions?.open || 0);
-  const protectiveIssues = Number(opsMetrics?.positions?.protectiveIssues || 0);
   const alertsLastHour = Number(opsMetrics?.alerts?.lastHour?.total || 0);
   const aiCalls = Number(opsMetrics?.ai?.totalCalls ?? overview?.aiCallsTotal ?? 0);
   const sessionsTotal = Number(overview?.sessionsCount || opsMetrics?.agents?.total || sessions.length);
@@ -296,125 +308,54 @@ const OperationsDashboardPage: React.FC = () => {
       lastTradeAt: lastTs || null,
     };
   }, [recentTrades]);
+  const latestTrade = React.useMemo(() => {
+    if (!recentTrades.length) {
+      return null;
+    }
+    return recentTrades.reduce<null | { ts: number; trade: any }>((latest, trade) => {
+      const ts = trade?.createdAt ? new Date(trade.createdAt).getTime() : 0;
+      if (!latest || ts > latest.ts) {
+        return { ts, trade };
+      }
+      return latest;
+    }, null)?.trade ?? null;
+  }, [recentTrades]);
   const lastTradeRelative = tradesSummary.lastTradeAt ? formatRelative(tradesSummary.lastTradeAt) : 'No trades yet';
+  const latestTradeSymbol = latestTrade?.symbol || latestTrade?.instrument || '—';
+  const latestTradePnL = Number(latestTrade?.realizedPnlUsd || 0);
+  const latestEvent = latestEvents[0];
+  const latestEventRelative = latestEvent?.ts ? formatRelative(latestEvent.ts) : 'No events yet';
+  const latestEventMessage = latestEvent?.message || 'No ops events logged';
+  const agentsFlat = Math.max(sessionsTotal - sessionsInPosition, 0);
+  const heroHighlights = [
+    {
+      label: 'Ops lock',
+      value: locked ? 'Engaged' : 'Open',
+      helper: locked ? 'Agent creation disabled' : 'Normal operations',
+      tone: locked ? token.colorError : token.colorSuccess,
+    },
+    {
+      label: 'Agents flat',
+      value: String(agentsFlat),
+      helper: 'awaiting entries',
+      tone: token.colorInfo,
+    },
+    {
+      label: 'Last trade',
+      value: tradesSummary.lastTradeAt ? `${latestTradeSymbol} ${latestTrade?.positionSide?.toUpperCase?.() || ''}`.trim() : 'No trades',
+      helper: tradesSummary.lastTradeAt ? lastTradeRelative : 'Awaiting execution',
+      tone: tradesSummary.lastTradeAt ? (latestTradePnL >= 0 ? token.colorSuccess : token.colorError) : mutedText,
+    },
+    {
+      label: 'Ops feed',
+      value: latestEventMessage,
+      helper: latestEvent?.ts ? latestEventRelative : 'All clear',
+      tone: latestEvent ? token.colorWarning : mutedText,
+    },
+  ];
 
   return (
     <Space direction='vertical' size={24} style={{ width: '100%' }}>
-      <div
-        style={{
-          position: 'relative',
-          borderRadius: 28,
-          padding: 32,
-          background: 'linear-gradient(135deg, #0f172a 0%, #020617 60%, #1e293b 100%)',
-          color: '#f8fafc',
-          overflow: 'hidden',
-          border: '1px solid rgba(148, 163, 184, 0.2)',
-        }}
-      >
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'radial-gradient(circle at top right, rgba(59, 130, 246, 0.35), transparent 45%)',
-            pointerEvents: 'none',
-          }}
-        />
-        <Row gutter={[24, 24]} align='middle'>
-          <Col xs={24} lg={16}>
-            <Space direction='vertical' size={20} style={{ position: 'relative', zIndex: 1, width: '100%' }}>
-              <Space size={12} wrap>
-                <Tag color='geekblue' style={{ borderRadius: 8 }}>Mode {mode?.toUpperCase?.() || '—'}</Tag>
-                <Tag color='purple' style={{ borderRadius: 8 }}>Metrics {metricsTimestamp}</Tag>
-              </Space>
-              <Space align='start' size={16}>
-                <div
-                  style={{
-                    width: 60,
-                    height: 60,
-                    borderRadius: '50%',
-                    background: 'rgba(148, 163, 184, 0.2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 28,
-                    color: globalHealth.color,
-                  }}
-                >
-                  {globalHealth.icon}
-                </div>
-                <Space direction='vertical' size={8} style={{ maxWidth: 500 }}>
-                  <Title level={3} style={{ color: '#f8fafc', margin: 0 }}>
-                    Operations mission control
-                  </Title>
-                  <Text style={{ color: 'rgba(226, 232, 240, 0.82)', fontSize: 15 }}>
-                    {globalHealth.description}
-                  </Text>
-                </Space>
-              </Space>
-              <Space size={12} wrap>
-                {locked ? (
-                  <Button onClick={unlock} icon={<CheckCircleOutlined />}>Unlock creation</Button>
-                ) : (
-                  <Button danger icon={<StopOutlined />} onClick={handleStopAll}>
-                    Emergency stop all
-                  </Button>
-                )}
-                <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()} loading={refreshing}>
-                  Refresh snapshot
-                </Button>
-              </Space>
-              <Alert
-                type={globalHealth.tone}
-                message={globalHealth.label}
-                description={globalHealth.description}
-                showIcon
-                style={{
-                  background: 'rgba(15, 23, 42, 0.6)',
-                  border: '1px solid rgba(148, 163, 184, 0.2)',
-                  color: '#e2e8f0',
-                }}
-              />
-            </Space>
-          </Col>
-          <Col xs={24} lg={8}>
-            <div
-              style={{
-                position: 'relative',
-                zIndex: 1,
-                borderRadius: 20,
-                padding: 20,
-                background: 'rgba(15, 23, 42, 0.7)',
-                border: '1px solid rgba(148, 163, 184, 0.25)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 14,
-              }}
-            >
-              <Statistic
-                title={<span style={{ color: '#cbd5f5' }}>Active agents</span>}
-                value={overview?.activeCount || 0}
-                valueStyle={{ color: '#f8fafc' }}
-              />
-              <Statistic
-                title={<span style={{ color: '#cbd5f5' }}>Agents managing risk</span>}
-                value={Number(opsMetrics?.sessions?.managing || 0)}
-                valueStyle={{ color: '#f8fafc' }}
-              />
-              <Statistic
-                title={<span style={{ color: '#cbd5f5' }}>Open positions</span>}
-                value={openPositions}
-                valueStyle={{ color: openPositions > 0 ? '#38bdf8' : '#cbd5f5' }}
-              />
-              <Statistic
-                title={<span style={{ color: '#cbd5f5' }}>Alerts (1h)</span>}
-                value={alertsLastHour}
-                valueStyle={{ color: alertsLastHour > 0 ? '#f97316' : '#86efac' }}
-              />
-            </div>
-          </Col>
-        </Row>
-      </div>
-
       <Row gutter={[24, 24]}>
         <Col xs={24} md={12} xl={6}>
           <DashboardKpiCard
@@ -458,17 +399,130 @@ const OperationsDashboardPage: React.FC = () => {
         </Col>
       </Row>
 
+      <div
+        style={{
+          position: 'relative',
+          borderRadius: 28,
+          padding: 32,
+          background: heroBackground,
+          color: textPrimary,
+          overflow: 'hidden',
+          border: heroBorder,
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: heroOverlay,
+            pointerEvents: 'none',
+          }}
+        />
+        <Row gutter={[24, 24]} align='middle'>
+          <Col xs={24} lg={15}>
+            <Space direction='vertical' size={20} style={{ position: 'relative', zIndex: 1, width: '100%' }}>
+              <Space size={12} wrap>
+                <Tag color='geekblue' style={{ borderRadius: 8 }}>Mode {mode?.toUpperCase?.() || '—'}</Tag>
+                <Tag color='purple' style={{ borderRadius: 8 }}>Snapshot {metricsTimestamp}</Tag>
+              </Space>
+              <Space align='start' size={16}>
+                <div
+                  style={{
+                    width: 60,
+                    height: 60,
+                    borderRadius: '50%',
+                    background: isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorFillQuaternary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 28,
+                    color: globalHealth.color,
+                  }}
+                >
+                  {globalHealth.icon}
+                </div>
+                <Space direction='vertical' size={8} style={{ maxWidth: 520 }}>
+                  <Title level={3} style={{ color: textPrimary, margin: 0 }}>
+                    Operations mission control
+                  </Title>
+                  <Text style={{ color: mutedText, fontSize: 15 }}>
+                    {globalHealth.description}
+                  </Text>
+                </Space>
+              </Space>
+              <Space size={12} wrap>
+                {locked ? (
+                  <Button onClick={unlock} icon={<CheckCircleOutlined />}>Unlock creation</Button>
+                ) : (
+                  <Button danger icon={<StopOutlined />} onClick={handleStopAll}>
+                    Emergency stop all
+                  </Button>
+                )}
+                <Button icon={<ReloadOutlined />} onClick={() => void refreshAll()} loading={refreshing}>
+                  Refresh snapshot
+                </Button>
+              </Space>
+              <Alert
+                type={globalHealth.tone}
+                message={globalHealth.label}
+                description={globalHealth.description}
+                showIcon
+                style={{
+                  background: isDarkTheme ? 'rgba(15, 23, 42, 0.6)' : token.colorFillTertiary,
+                  border: heroBorder,
+                  color: textPrimary,
+                }}
+              />
+            </Space>
+          </Col>
+          <Col xs={24} lg={9}>
+            <div
+              style={{
+                position: 'relative',
+                zIndex: 1,
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                gap: 16,
+              }}
+            >
+              {heroHighlights.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderRadius: 16,
+                    border: `1px solid ${borderColor}`,
+                    background: secondarySurface,
+                    padding: 16,
+                    minHeight: 120,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  <Text style={{ color: mutedText, fontSize: 12 }}>{item.label}</Text>
+                  <div
+                    style={{
+                      fontSize: item.value.length > 12 ? 18 : 22,
+                      fontWeight: 600,
+                      color: item.tone || textPrimary,
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    {item.value}
+                  </div>
+                  {item.helper && (
+                    <Text style={{ color: mutedText, fontSize: 12 }}>{item.helper}</Text>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Col>
+        </Row>
+      </div>
+
       <Row gutter={[24, 24]} align='stretch'>
         <Col xs={24} xl={14}>
-          <PerformanceOverviewCard
-            trades={recentTrades}
-            totalSessions={sessionsTotal}
-            activeSessions={overview?.activeCount || 0}
-            pnlUsd={overview?.pnlUsd}
-            roiPct={roiPctValue}
-            aiCallsTotal={aiCalls}
-            loading={recentTradesLoading || refreshing}
-          />
+          <PerformanceOverviewCard trades={recentTrades} loading={recentTradesLoading || refreshing} />
         </Col>
         <Col xs={24} xl={10}>
           <OpsMetricsPanel metrics={opsMetrics} loading={refreshing} />
@@ -480,15 +534,19 @@ const OperationsDashboardPage: React.FC = () => {
           <Card
             title='Agent overview'
             bodyStyle={{ padding: 0, paddingBottom: 16 }}
-            style={{ borderRadius: 16, border: '1px solid #1f2937', background: '#0f172a', color: '#e2e8f0' }}
+            style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: surfaceColor, color: textPrimary }}
           >
             {sessions.length === 0 ? (
-              <Empty description='No active agents in this mode.' style={{ margin: '32px 0', color: '#94a3b8' }} />
+              <Empty description='No active agents in this mode.' style={{ margin: '32px 0', color: mutedText }} />
             ) : (
               <Space direction='vertical' size={16} style={{ width: '100%', padding: 20 }}>
                 {sessions.map((session) => {
                   const palette = stateTheme[session.state || 'UNKNOWN'] || stateTheme.UNKNOWN;
                   const health = session.healthStatus ? healthTone[session.healthStatus] : null;
+                  const tileBackground = isDarkTheme
+                    ? `linear-gradient(135deg, ${palette.border}33, rgba(15, 23, 42, 0.9))`
+                    : palette.bg;
+                  const labelColor = isDarkTheme ? textPrimary : palette.text;
 
                   return (
                     <div
@@ -496,12 +554,14 @@ const OperationsDashboardPage: React.FC = () => {
                       style={{
                         borderRadius: 16,
                         border: `1px solid ${palette.border}`,
-                        background: palette.bg,
+                        background: tileBackground,
                         padding: 18,
                         display: 'flex',
                         flexDirection: 'column',
                         gap: 14,
-                        boxShadow: '0 12px 35px -20px rgba(15, 23, 42, 0.6)',
+                        boxShadow: isDarkTheme
+                          ? '0 12px 35px -20px rgba(15, 23, 42, 0.6)'
+                          : '0 8px 24px -16px rgba(15, 23, 42, 0.2)',
                       }}
                     >
                       <Space align='center' style={{ width: '100%', justifyContent: 'space-between' }} wrap>
@@ -523,38 +583,38 @@ const OperationsDashboardPage: React.FC = () => {
 
                       <Row gutter={[16, 12]}>
                         <Col xs={12} md={6}>
-                          <Text type='secondary' style={{ display: 'block', fontSize: 12 }}>ROI</Text>
-                          <Text style={{ color: (session.roiPct || 0) >= 0 ? '#22c55e' : '#f87171', fontWeight: 600 }}>
+                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>ROI</Text>
+                          <Text style={{ color: (session.roiPct || 0) >= 0 ? token.colorSuccess : token.colorError, fontWeight: 600 }}>
                             {formatPercent(session.roiPct)}
                           </Text>
                         </Col>
                         <Col xs={12} md={6}>
-                          <Text type='secondary' style={{ display: 'block', fontSize: 12 }}>PnL</Text>
-                          <Text style={{ color: (session.pnlUsd || 0) >= 0 ? '#22c55e' : '#f87171', fontWeight: 600 }}>
+                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>PnL</Text>
+                          <Text style={{ color: (session.pnlUsd || 0) >= 0 ? token.colorSuccess : token.colorError, fontWeight: 600 }}>
                             {formatUsd(session.pnlUsd)}
                           </Text>
                         </Col>
                         <Col xs={12} md={6}>
-                          <Text type='secondary' style={{ display: 'block', fontSize: 12 }}>Win rate</Text>
-                          <Text style={{ fontWeight: 600 }}>{formatPercent(session.winRate, 1)}</Text>
+                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Win rate</Text>
+                          <Text style={{ fontWeight: 600, color: labelColor }}>{formatPercent(session.winRate, 1)}</Text>
                         </Col>
                         <Col xs={12} md={6}>
-                          <Text type='secondary' style={{ display: 'block', fontSize: 12 }}>Trades (24h)</Text>
-                          <Text style={{ fontWeight: 600 }}>{session.tradeCount24h ?? 0}</Text>
+                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Trades (24h)</Text>
+                          <Text style={{ fontWeight: 600, color: labelColor }}>{session.tradeCount24h ?? 0}</Text>
                         </Col>
                         <Col xs={12} md={6}>
-                          <Text type='secondary' style={{ display: 'block', fontSize: 12 }}>Total trades</Text>
-                          <Text style={{ fontWeight: 600 }}>{session.trades ?? 0}</Text>
+                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Total trades</Text>
+                          <Text style={{ fontWeight: 600, color: labelColor }}>{session.trades ?? 0}</Text>
                         </Col>
                         <Col xs={12} md={6}>
-                          <Text type='secondary' style={{ display: 'block', fontSize: 12 }}>Last execution</Text>
+                          <Text style={{ display: 'block', fontSize: 12, color: mutedText }}>Last execution</Text>
                           <Tooltip title={session.lastExecutionTs ? new Date(session.lastExecutionTs).toLocaleString() : undefined}>
-                            <Text style={{ fontWeight: 600 }}>{formatRelative(session.lastExecutionTs)}</Text>
+                            <Text style={{ fontWeight: 600, color: labelColor }}>{formatRelative(session.lastExecutionTs)}</Text>
                           </Tooltip>
                         </Col>
                       </Row>
 
-                      <Text type='secondary' style={{ fontSize: 12 }}>{session.id}</Text>
+                      <Text style={{ fontSize: 12, color: mutedText }}>{session.id}</Text>
                     </div>
                   );
                 })}

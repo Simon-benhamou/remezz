@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Table, Tag, Space, Typography, Tooltip, Button } from 'antd';
+import { Badge, Button, Card, Col, Row, Space, Statistic, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { SyncOutlined } from '@ant-design/icons';
 type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
@@ -63,6 +63,22 @@ function formatRelative(ts: number | null, reference: number): string {
 export default function AgentHealthTable({ data, loading, onRefresh }: AgentHealthTableProps) {
   const referenceTs = data?.timestamp ?? Date.now();
   const agents = data?.agents ?? [];
+  const { token } = theme.useToken();
+  const base = token.colorBgBase.toLowerCase();
+  const isDarkTheme = !['#ffffff', '#fff', '#fafafa'].includes(base);
+  const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
+  const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
+  const headingColor = isDarkTheme ? '#f8fafc' : token.colorTextHeading;
+  const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.65)' : token.colorTextSecondary;
+  const statusCounts = agents.reduce<Record<AgentHealthStatus, number>>((acc, row) => {
+    acc[row.status] = (acc[row.status] || 0) + 1;
+    return acc;
+  }, { ok: 0, idle: 0, stale: 0, blocked: 0 });
+  const summaryItems = (Object.keys(STATUS_META) as AgentHealthStatus[]).map((statusKey) => ({
+    ...STATUS_META[statusKey],
+    status: statusKey,
+    count: statusCounts[statusKey] || 0,
+  }));
 
   const columns = React.useMemo<ColumnsType<AgentHealthRow>>(() => [
     {
@@ -70,8 +86,8 @@ export default function AgentHealthTable({ data, loading, onRefresh }: AgentHeal
       key: 'agent',
       render: (_value, record) => (
         <Space direction="vertical" size={0}>
-          <Text strong>{record.symbol || 'Unknown'}</Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>{record.sessionId}</Text>
+          <Text strong style={{ color: headingColor }}>{record.symbol || 'Unknown'}</Text>
+          <Text style={{ fontSize: 12, color: mutedText }}>{record.sessionId}</Text>
         </Space>
       ),
     },
@@ -117,34 +133,55 @@ export default function AgentHealthTable({ data, loading, onRefresh }: AgentHeal
       key: 'signals',
       render: (_value, record) => {
         if (!record.flags.length) {
-          return <Text type="secondary">Nominal</Text>;
+          return <Text style={{ color: mutedText }}>Nominal</Text>;
         }
         return (
           <Space size={[4, 4]} wrap>
             {record.flags.map((flag) => {
               const meta = FLAG_META[flag];
               if (!meta) return null;
-              return (
-                <Tag key={`${record.sessionId}-${flag}`} color={meta.color}>
-                  {meta.label}
-                </Tag>
-              );
+              return <Tag key={`${record.sessionId}-${flag}`} color={meta.color}>{meta.label}</Tag>;
             })}
           </Space>
         );
       },
     },
-  ], [referenceTs]);
+  ], [headingColor, mutedText, referenceTs]);
 
   return (
     <Card
-      title="Agent Health"
+      title={<span style={{ color: headingColor }}>Agent health</span>}
+      style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg }}
       extra={
         <Button icon={<SyncOutlined />} onClick={onRefresh} disabled={loading}>
           Refresh
         </Button>
       }
     >
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        {summaryItems.map((item) => (
+          <Col xs={12} md={6} key={item.status}>
+            <div
+              style={{
+                borderRadius: 12,
+                border: `1px solid ${borderColor}`,
+                padding: 12,
+                background: isDarkTheme ? 'rgba(15, 23, 42, 0.65)' : token.colorFillTertiary,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+              }}
+            >
+              <Space size={6}>
+                <Badge color={item.color} />
+                <Text style={{ color: headingColor, fontWeight: 600 }}>{item.label}</Text>
+              </Space>
+              <Text style={{ fontSize: 12, color: mutedText }}>Agents</Text>
+              <Statistic value={item.count} valueStyle={{ fontSize: 22, color: headingColor }} />
+            </div>
+          </Col>
+        ))}
+      </Row>
       <Table
         rowKey="sessionId"
         columns={columns}
@@ -152,6 +189,7 @@ export default function AgentHealthTable({ data, loading, onRefresh }: AgentHeal
         loading={loading}
         pagination={false}
         size="small"
+        style={{ color: headingColor }}
         locale={{ emptyText: loading ? 'Loading agents…' : 'No active agents' }}
       />
     </Card>
