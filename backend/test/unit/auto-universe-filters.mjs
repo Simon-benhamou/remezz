@@ -30,6 +30,7 @@ function makeCandidate(overrides = {}) {
       avgFillRate: overrides.avgFillRate ?? 0.72,
       lastTradeAt: overrides.lastTradeAt ?? Date.now() - 6 * 3_600_000,
     },
+    multiTimeframe: overrides.multiTimeframe,
   };
 }
 
@@ -83,5 +84,19 @@ assert.equal(altAssetResult.ok, true, 'baseline alt asset must pass when liquidi
 const majorAsset = makeCandidate({ symbol: 'BTC/USDT:USDT' });
 const majorAssetResult = evaluateCandidateAgainstFilters(majorAsset, strategy, now);
 assert(majorAssetResult.score > altAssetResult.score, 'majors should gain a post-filter quality bonus');
+
+const conflictCandidate = makeCandidate({
+  multiTimeframe: {
+    timeframes: {
+      '4h': { tf: '4h', bias: 'bullish', momentumPct: 0, rsi: 55 },
+      '15m': { tf: '15m', bias: 'bearish', momentumPct: -0.3, rsi: 42 },
+    },
+    agreementScore: 1,
+    divergenceScore: 1,
+  },
+});
+const conflictResult = evaluateCandidateAgainstFilters(conflictCandidate, strategy, now);
+assert.equal(conflictResult.ok, false, '4h vs 15m bias conflict must block execution');
+assert(conflictResult.reasons.includes('tf_conflict_4h_vs_15m'), 'conflict reason should be reported');
 
 console.log('✅ auto-universe-filters.mjs passed');

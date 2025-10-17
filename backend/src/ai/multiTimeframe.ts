@@ -72,8 +72,9 @@ export async function computeMultiTimeframeDiagnostics(symbol: string): Promise<
   if (cached && Date.now() - cached.ts < TTL_MS) return cached.diag;
 
   const metrics = await Promise.all([
-    computeTf(symbol, '1h'),
-    computeTf(symbol, '15m'),
+    computeTf(symbol, '4h', 240),
+    computeTf(symbol, '1h', 240),
+    computeTf(symbol, '15m', 300),
     computeTf(symbol, '5m', 240),
   ]);
 
