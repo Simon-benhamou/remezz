@@ -184,10 +184,8 @@ function AuthenticatedApp() {
                 {balanceSubtitle}
               </div>
               <div style={{ fontSize: 22, fontWeight: 700, color: '#f8fafc', lineHeight: 1 }}>{formattedBalance}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'rgba(226, 232, 240, 0.75)' }}>
-                <span>{freeSubtitle}</span>
-                <span>{formattedFree}</span>
-              </div>
+            
+            
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>

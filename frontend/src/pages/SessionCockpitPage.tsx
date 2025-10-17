@@ -885,7 +885,6 @@ export default function SessionCockpitPage() {
         <Button onClick={() => setActivityOpen(true)}>Activity feed</Button>
         <div className="session-monitor-actions">
           <div className="session-monitor-actions__control">
-            <Text type="secondary">Aggressiveness</Text>
             <Select
               value={currentAggressiveness}
               loading={savingAgg}
@@ -1005,12 +1004,12 @@ export default function SessionCockpitPage() {
         </Card>
         <Row gutter={[24, 24]} className="session-grid">
             <Card
-              className="session-section-card session-section-card--flush"
+              className="session-section-card session-section-card--flush w-full"
               bordered={false}
               bodyStyle={{ padding: 0 }}
             >
               {shouldShowContent(LoadingPhase.CORE_DATA) ? (
-                <div className="session-chart-card">
+                <div className="session-chart-card w-full">
                   <PriceChart
                     symbol={status?.symbol}
                     price={status?.price}
@@ -1060,7 +1059,7 @@ export default function SessionCockpitPage() {
         </Row>
 
         <Row gutter={[24, 24]}>
-          <Card title="Orders & trades" bordered={false} className="session-section-card">
+          <Card title="Orders & trades" bordered={false} className="session-section-card  w-full">
             {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
               <div className="session-trade-card">
                 <Segmented
