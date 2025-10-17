@@ -13,6 +13,7 @@ import {
   getOptimizedCryptoList,
   getActiveAgentCountForSymbol,
   normalizeUnifiedSymbol,
+  type StrategyFilterProfile,
 } from './intelligentAgent.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
 import { prisma } from '../db/client.js';
@@ -581,6 +582,7 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
   const agg = config.aggressiveness;
   let candidateSymbols: string[] = [];
   const diagnostics: AgentCreationLogEntry[] = [];
+  const strategyProfile = deriveStrategyFilterProfile(config);
 
   const pushDiagnostic = (
     level: AgentCreationLogLevel,
@@ -602,7 +604,11 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
   });
 
   try {
-    candidateSymbols = await getOptimizedCryptoList(undefined);
+    candidateSymbols = await getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile });
+    pushDiagnostic('info', 'Applied liquidity and performance filters', {
+      survivors: candidateSymbols.length,
+      aggressiveness: strategyProfile.aggressiveness,
+    });
   } catch (error) {
     console.warn('⚠️ Failed to fetch optimized crypto list:', error);
     pushDiagnostic('warn', 'Failed to fetch optimized crypto list', {
@@ -700,6 +706,20 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
     analyzedSymbols: analysisUniverse,
     orderableSymbols,
     diagnostics,
+  };
+}
+
+function deriveStrategyFilterProfile(config: NormalizedStartConfig): StrategyFilterProfile {
+  const env = getConfig();
+  const minTp = Number(env.MIN_TP_PCT ?? 0.6);
+  const targetTpRaw = env.TARGET_TP1_PCT ?? env.MIN_TP_PCT ?? 0.8;
+  const targetTp = Number(targetTpRaw);
+  const stopFloor = Number(env.MIN_STOP_PCT ?? 0.5);
+  const requestedStop = Number((config.rawPayload as any)?.minStopPct);
+  return {
+    aggressiveness: config.aggressiveness,
+    targetTpPct: Math.max(minTp, targetTp || minTp),
+    stopLossPct: Math.max(stopFloor, Number.isFinite(requestedStop) ? requestedStop : stopFloor),
   };
 }
 

@@ -475,7 +475,380 @@ async function isSymbolInUse(symbol: string, excludeSessionId?: string): Promise
 /**
  * Get optimized list of top performing cryptos for analysis (max 20)
  */
-export async function getOptimizedCryptoList(excludeSessionId?: string, attempt: number = 1): Promise<string[]> {
+export type StrategyFilterProfile = {
+  aggressiveness: 'conservative' | 'reactive' | 'aggressive';
+  targetTpPct: number;
+  stopLossPct: number;
+};
+
+type CandidateRegimeTag = 'trending' | 'ranging' | 'volatile' | 'quiet';
+
+type CandidatePerformanceSnapshot = {
+  sample: number;
+  winRate: number | null;
+  expectancyUsd: number | null;
+  profitFactor: number | null;
+  avgSlippageBps: number | null;
+  avgFillRate: number | null;
+  lastTradeAt: number | null;
+};
+
+type CandidateMicrostructureSnapshot = {
+  spreadBps: number | null;
+  bidDepthCents: bigint;
+  askDepthCents: bigint;
+};
+
+type CandidateMetrics = {
+  symbol: string;
+  baseScore: number;
+  volumeCents24h: bigint;
+  lastPrice: number;
+  regimeTag: CandidateRegimeTag;
+  atrPct: number | null;
+  micro: CandidateMicrostructureSnapshot;
+  performance: CandidatePerformanceSnapshot;
+};
+
+const VOLUME_FLOOR_CENTS = BigInt(50_000_000 * 100);
+const DEPTH_FLOOR_CENTS = BigInt(12_500 * 100);
+const MAX_SPREAD_BPS = 10;
+const MIN_PASSIVE_FILL_RATE = 0.4;
+const PERFORMANCE_LOOKBACK_TRADES = 40;
+const PERFORMANCE_COOLDOWN_HOURS = 24;
+
+function numberToCents(value: number | null | undefined): bigint | null {
+  if (value == null) return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return BigInt(Math.round(num * 100));
+}
+
+function sumDepthLevels(levels: Array<[number, number]>): bigint {
+  let total = BigInt(0);
+  for (const level of levels) {
+    const price = Number(level?.[0] ?? NaN);
+    const qty = Number(level?.[1] ?? NaN);
+    if (!Number.isFinite(price) || !Number.isFinite(qty)) continue;
+    const usd = Math.round(price * qty * 100);
+    if (!Number.isFinite(usd)) continue;
+    if (usd > 0) total += BigInt(usd);
+  }
+  return total;
+}
+
+function deriveRegimeTag(regime: any | undefined, atrPct: number | null): CandidateRegimeTag {
+  if (regime && typeof regime === 'object') {
+    const playbook = regime.playbook as string | undefined;
+    const volatility = regime.volatility as string | undefined;
+    const trend = regime.trend as string | undefined;
+    if (volatility === 'high' || playbook === 'momentum_breakout') {
+      return 'volatile';
+    }
+    if (playbook === 'trend_following' || trend === 'uptrend' || trend === 'downtrend') {
+      return 'trending';
+    }
+    if (volatility === 'low') {
+      return 'quiet';
+    }
+    return 'ranging';
+  }
+  if (atrPct != null && Number.isFinite(atrPct)) {
+    if (atrPct >= 3) return 'volatile';
+    if (atrPct >= 1.2) return 'trending';
+    if (atrPct <= 0.6) return 'quiet';
+  }
+  return 'ranging';
+}
+
+function evaluateCandidateAgainstFilters(
+  metrics: CandidateMetrics,
+  strategy: StrategyFilterProfile,
+  now: number,
+): { ok: boolean; reasons: string[]; score: number } {
+  const reasons: string[] = [];
+
+  if (metrics.volumeCents24h < VOLUME_FLOOR_CENTS) {
+    reasons.push('volume_below_floor');
+  }
+
+  const spreadBps = metrics.micro.spreadBps;
+  if (spreadBps == null || !Number.isFinite(spreadBps)) {
+    reasons.push('spread_missing');
+  } else if (spreadBps > MAX_SPREAD_BPS) {
+    reasons.push('spread_too_wide');
+  }
+
+  if (metrics.micro.bidDepthCents < DEPTH_FLOOR_CENTS || metrics.micro.askDepthCents < DEPTH_FLOOR_CENTS) {
+    reasons.push('book_depth_thin');
+  }
+
+  const fillRate = metrics.performance.avgFillRate;
+  if (fillRate == null || !Number.isFinite(fillRate)) {
+    reasons.push('fill_rate_missing');
+  } else if (fillRate < MIN_PASSIVE_FILL_RATE) {
+    reasons.push('fill_rate_low');
+  }
+
+  const atrPct = metrics.atrPct;
+  if (atrPct == null || !Number.isFinite(atrPct)) {
+    reasons.push('atr_missing');
+  } else {
+    const minAtr = strategy.targetTpPct * 0.5;
+    const maxAtr = strategy.targetTpPct * 3;
+    if (atrPct < minAtr) {
+      reasons.push('atr_too_low');
+    } else if (atrPct > maxAtr) {
+      reasons.push('atr_too_high');
+    }
+  }
+
+  const regime = metrics.regimeTag;
+  switch (strategy.aggressiveness) {
+    case 'conservative':
+      if (regime === 'volatile' || regime === 'trending') {
+        reasons.push('regime_mismatch');
+      }
+      break;
+    case 'reactive':
+      if (regime === 'volatile' && (atrPct ?? 0) > strategy.targetTpPct * 2.5) {
+        reasons.push('regime_excessive_vol');
+      }
+      break;
+    case 'aggressive':
+      // aggressive mode prefers volatile/trending. Ranging/quiet still allowed but penalized later.
+      break;
+  }
+
+  const perf = metrics.performance;
+  if (perf.sample >= 8) {
+    if (perf.winRate != null && Number.isFinite(perf.winRate) && perf.winRate < 35) {
+      const ageHours = perf.lastTradeAt != null ? (now - perf.lastTradeAt) / 3_600_000 : null;
+      reasons.push(ageHours != null && ageHours < PERFORMANCE_COOLDOWN_HOURS ? 'win_rate_cooldown' : 'win_rate_low');
+    }
+    if (perf.expectancyUsd != null && Number.isFinite(perf.expectancyUsd) && perf.expectancyUsd <= 0) {
+      const ageHours = perf.lastTradeAt != null ? (now - perf.lastTradeAt) / 3_600_000 : null;
+      reasons.push(ageHours != null && ageHours < PERFORMANCE_COOLDOWN_HOURS ? 'expectancy_cooldown' : 'expectancy_negative');
+    }
+  }
+
+  if (
+    perf.avgSlippageBps != null && Number.isFinite(perf.avgSlippageBps) &&
+    spreadBps != null && Number.isFinite(spreadBps) &&
+    perf.avgSlippageBps > spreadBps * 1.5
+  ) {
+    reasons.push('slippage_vs_spread');
+  }
+
+  if (reasons.some((reason) => reason.endsWith('cooldown'))) {
+    // treat cooldown reasons as hard failure during cooldown window
+    return { ok: false, reasons, score: metrics.baseScore };
+  }
+
+  if (reasons.includes('volume_below_floor') || reasons.includes('spread_missing') || reasons.includes('book_depth_thin')) {
+    return { ok: false, reasons, score: metrics.baseScore };
+  }
+
+  if (reasons.includes('fill_rate_low') || reasons.includes('fill_rate_missing')) {
+    return { ok: false, reasons, score: metrics.baseScore };
+  }
+
+  if (reasons.includes('atr_missing') || reasons.includes('atr_too_low') || reasons.includes('atr_too_high')) {
+    return { ok: false, reasons, score: metrics.baseScore };
+  }
+
+  if (reasons.includes('expectancy_negative') || reasons.includes('win_rate_low') || reasons.includes('slippage_vs_spread')) {
+    return { ok: false, reasons, score: metrics.baseScore };
+  }
+
+  // Soft penalties (regime mismatch for aggressive/conservative)
+  let score = metrics.baseScore;
+  const liquidityBoost = Number(metrics.micro.bidDepthCents + metrics.micro.askDepthCents) / Number(DEPTH_FLOOR_CENTS * BigInt(2));
+  if (Number.isFinite(liquidityBoost) && liquidityBoost > 0) {
+    score *= Math.min(1.35, Math.max(0.8, liquidityBoost));
+  }
+
+  if (perf.sample >= 8 && perf.expectancyUsd != null && Number.isFinite(perf.expectancyUsd)) {
+    score *= 1 + Math.max(-0.2, Math.min(0.25, perf.expectancyUsd / 200));
+  }
+
+  if (perf.winRate != null && Number.isFinite(perf.winRate)) {
+    score *= 1 + Math.max(-0.1, Math.min(0.15, (perf.winRate - 50) / 250));
+  }
+
+  if (strategy.aggressiveness === 'aggressive' && (regime === 'ranging' || regime === 'quiet')) {
+    score *= 0.9;
+  }
+  if (strategy.aggressiveness === 'conservative' && regime === 'volatile') {
+    score *= 0.85;
+  }
+
+  return { ok: true, reasons, score };
+}
+
+async function fetchCandidatePerformanceSnapshot(symbol: string): Promise<CandidatePerformanceSnapshot> {
+  const orders = await prisma.order.findMany({
+    where: {
+      symbol,
+      status: { in: ['filled', 'FILLED', 'partially_filled', 'PARTIALLY_FILLED'] },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: PERFORMANCE_LOOKBACK_TRADES,
+    select: {
+      createdAt: true,
+      fillRatio: true,
+      slippageBps: true,
+      type: true,
+      status: true,
+      fills: { select: { realizedPnl: true } },
+    },
+  });
+
+  if (!orders.length) {
+    return {
+      sample: 0,
+      winRate: null,
+      expectancyUsd: null,
+      profitFactor: null,
+      avgSlippageBps: null,
+      avgFillRate: null,
+      lastTradeAt: null,
+    };
+  }
+
+  let wins = 0;
+  let losses = 0;
+  let totalProfitCents = BigInt(0);
+  let totalLossCents = BigInt(0);
+  let totalNetCents = BigInt(0);
+  let fillRateSum = 0;
+  let fillRateCount = 0;
+  let slippageSum = 0;
+  let slippageCount = 0;
+  let lastTradeAt: number | null = null;
+
+  for (const order of orders) {
+    const createdAt = order.createdAt instanceof Date ? order.createdAt.getTime() : new Date(order.createdAt as any).getTime();
+    if (!Number.isNaN(createdAt)) {
+      if (lastTradeAt == null || createdAt > lastTradeAt) {
+        lastTradeAt = createdAt;
+      }
+    }
+
+    const fillRatioRaw = order.fillRatio != null
+      ? Number(order.fillRatio)
+      : String(order.status || '').toLowerCase() === 'filled'
+      ? 1
+      : null;
+    if (fillRatioRaw != null && Number.isFinite(fillRatioRaw)) {
+      fillRateSum += fillRatioRaw;
+      fillRateCount += 1;
+    }
+
+    if (order.slippageBps != null && Number.isFinite(Number(order.slippageBps))) {
+      slippageSum += Number(order.slippageBps);
+      slippageCount += 1;
+    }
+
+    let orderPnlCents = BigInt(0);
+    for (const fill of order.fills) {
+      const pnl = Number(fill?.realizedPnl ?? 0);
+      if (!Number.isFinite(pnl) || pnl === 0) continue;
+      orderPnlCents += BigInt(Math.round(pnl * 100));
+    }
+
+    totalNetCents += orderPnlCents;
+    if (orderPnlCents > 0) {
+      wins += 1;
+      totalProfitCents += orderPnlCents;
+    } else if (orderPnlCents < 0) {
+      losses += 1;
+      totalLossCents += -orderPnlCents;
+    }
+  }
+
+  const sample = orders.length;
+  const winRate = sample > 0 ? (wins / sample) * 100 : null;
+  const expectancyUsd = sample > 0 ? Number(totalNetCents) / 100 / sample : null;
+  const profitFactor = totalLossCents > 0 ? Number(totalProfitCents) / Number(totalLossCents) : (totalProfitCents > 0 ? Infinity : null);
+  const avgFillRate = fillRateCount > 0 ? fillRateSum / fillRateCount : null;
+  const avgSlippageBps = slippageCount > 0 ? slippageSum / slippageCount : null;
+
+  return {
+    sample,
+    winRate,
+    expectancyUsd,
+    profitFactor,
+    avgSlippageBps,
+    avgFillRate,
+    lastTradeAt,
+  };
+}
+
+async function computeCandidateMetrics(
+  symbol: string,
+  performance: CryptoPerformanceEntry,
+  ticker: any,
+  exchange: any,
+): Promise<CandidateMetrics | null> {
+  const volumeCents = numberToCents(performance.quoteVolume24h);
+  if (volumeCents == null) return null;
+
+  let spreadBps: number | null = null;
+  const bid = Number(ticker?.bid ?? ticker?.info?.bid ?? NaN);
+  const ask = Number(ticker?.ask ?? ticker?.info?.ask ?? NaN);
+  if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0 && ask > bid) {
+    const mid = (bid + ask) / 2;
+    spreadBps = ((ask - bid) / mid) * 10_000;
+  }
+
+  let book: CandidateMicrostructureSnapshot = {
+    spreadBps,
+    bidDepthCents: BigInt(0),
+    askDepthCents: BigInt(0),
+  };
+  try {
+    const ob = await exchange.fetchOrderBook(symbol, 5);
+    const obBid = Array.isArray(ob?.bids) ? ob.bids : [];
+    const obAsk = Array.isArray(ob?.asks) ? ob.asks : [];
+    const bestBid = obBid?.[0]?.[0];
+    const bestAsk = obAsk?.[0]?.[0];
+    if (spreadBps == null && Number.isFinite(bestBid) && Number.isFinite(bestAsk) && bestAsk > bestBid) {
+      const mid = (bestBid + bestAsk) / 2;
+      spreadBps = ((bestAsk - bestBid) / mid) * 10_000;
+    }
+    book = {
+      spreadBps,
+      bidDepthCents: sumDepthLevels(obBid as Array<[number, number]>),
+      askDepthCents: sumDepthLevels(obAsk as Array<[number, number]>),
+    };
+  } catch (error) {
+    console.warn(`⚠️ Failed to fetch order book for ${symbol}:`, error);
+  }
+
+  const snapshot = await buildTechSnapshot(symbol);
+  const atrPct = Number(snapshot?.atrPct ?? snapshot?.atr14 ?? null);
+  const regimeTag = deriveRegimeTag(snapshot?.regime, Number.isFinite(atrPct) ? atrPct : null);
+
+  const performanceSnapshot = await fetchCandidatePerformanceSnapshot(symbol);
+
+  return {
+    symbol,
+    baseScore: performance.combinedScore,
+    volumeCents24h: volumeCents,
+    lastPrice: performance.lastPrice,
+    regimeTag,
+    atrPct: Number.isFinite(atrPct) ? atrPct : null,
+    micro: book,
+    performance: performanceSnapshot,
+  };
+}
+
+export async function getOptimizedCryptoList(
+  excludeSessionId?: string,
+  attempt: number = 1,
+  options?: { strategy?: StrategyFilterProfile },
+): Promise<string[]> {
   const maxAttempts = AUTO_UNIVERSE_MAX_ATTEMPTS;
   const retryDelayMs = 2000;
   const attemptLabel = Math.max(1, attempt);
@@ -708,7 +1081,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       });
       if (attemptLabel < maxAttempts) {
         await waitFor(retryDelayMs * attemptLabel);
-        return getOptimizedCryptoList(excludeSessionId, attemptLabel + 1);
+        return getOptimizedCryptoList(excludeSessionId, attemptLabel + 1, options);
       }
     }
     
@@ -823,7 +1196,7 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       });
       if (attemptLabel < maxAttempts) {
         await waitFor(retryDelayMs * attemptLabel);
-        return getOptimizedCryptoList(excludeSessionId, attemptLabel + 1);
+        return getOptimizedCryptoList(excludeSessionId, attemptLabel + 1, options);
       }
     }
 
@@ -838,8 +1211,58 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
       console.log(`      ${i+1}. ${crypto.symbol}: ${crypto.change24h.toFixed(3)}% change, $${(crypto.quoteVolume24h/1000000).toFixed(2)}M vol, score: ${crypto.combinedScore.toFixed(2)}`);
     });
     
-    // Take top 20 and keep original symbol format for analysis
-    const topPerformers = cryptoPerformance.slice(0, 20).map(crypto => crypto.symbol);
+    const strategyProfile: StrategyFilterProfile = options?.strategy ?? {
+      aggressiveness: 'reactive',
+      targetTpPct: Math.max(0.6, Number(getConfig().TARGET_TP1_PCT ?? getConfig().MIN_TP_PCT ?? 0.8)),
+      stopLossPct: Math.max(0.4, Number(getConfig().MIN_STOP_PCT ?? 0.6)),
+    };
+
+    const enriched: { symbol: string; score: number; reasons: string[] }[] = [];
+    const evaluationDiagnostics: { symbol: string; reasons: string[] }[] = [];
+    const shortlist = cryptoPerformance.slice(0, 30);
+    for (const entry of shortlist) {
+      try {
+        const metrics = await computeCandidateMetrics(entry.symbol, entry, tickers[entry.symbol], exchange);
+        if (!metrics) {
+          evaluationDiagnostics.push({ symbol: entry.symbol, reasons: ['metrics_unavailable'] });
+          continue;
+        }
+        const evaluation = evaluateCandidateAgainstFilters(metrics, strategyProfile, Date.now());
+        if (evaluation.ok) {
+          enriched.push({ symbol: entry.symbol, score: evaluation.score, reasons: evaluation.reasons });
+        } else {
+          evaluationDiagnostics.push({ symbol: entry.symbol, reasons: evaluation.reasons });
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to evaluate candidate ${entry.symbol}:`, error);
+        evaluationDiagnostics.push({ symbol: entry.symbol, reasons: ['evaluation_error'] });
+      }
+    }
+
+    if (!enriched.length) {
+      console.warn('⚠️ Liquidity/performance filters rejected all candidates');
+      evaluationDiagnostics.forEach((diag) => {
+        console.warn(`   ${diag.symbol}: ${diag.reasons.join(', ') || 'no_reason'}`);
+      });
+      const reason = 'filters_rejected_all';
+      updateAutoUniverseStatus({
+        source: 'fallback_dynamic',
+        attempt: attemptLabel,
+        candidateCount: 0,
+        reason,
+        ts: Date.now(),
+      });
+      if (attemptLabel < maxAttempts) {
+        await waitFor(retryDelayMs * attemptLabel);
+        return getOptimizedCryptoList(excludeSessionId, attemptLabel + 1, options);
+      }
+    }
+
+    // Take top performers after gating and keep original symbol format for analysis
+    const topPerformers = enriched
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 20)
+      .map((item) => item.symbol);
     
     // 🚫 ÉVITER LES CONFLITS: Filtrer les cryptos déjà actives avec gestion intelligente
     // PRIORISATION: Mouvement >3% = priorité absolue, >2% = agent supplémentaire autorisé
@@ -943,6 +1366,9 @@ export async function getOptimizedCryptoList(excludeSessionId?: string, attempt:
     return fallbackList; // Fallback to our curated list
   }
 }
+
+export type { CandidateMetrics };
+export { evaluateCandidateAgainstFilters };
 
 /**
  * Top cryptos by volume/market cap - focus on liquid markets only
