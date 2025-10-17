@@ -303,20 +303,28 @@ export function getConfig(): Cfg {
     return copy;
   };
 
-  const defaultStageCounts = [7, 10, 12];
+  const defaultStageCounts = [6, 10, 14];
   const stageCountsRaw = parseNumberList(e.TRADE_FREQUENCY_STAGE_COUNTS, defaultStageCounts)
     .map((value) => Math.max(1, Math.round(value)));
   const stageCounts = stageCountsRaw.length ? stageCountsRaw : defaultStageCounts;
-  const stageCooldownsRaw = parseNumberList(e.TRADE_COOLDOWN_STAGE_MS, [30_000, 20_000, 10_000])
+  const defaultStageCooldowns = [20_000, 12_000, 8_000];
+  const stageCooldownsRaw = parseNumberList(e.TRADE_COOLDOWN_STAGE_MS, defaultStageCooldowns)
     .map((value) => Math.max(1_000, Math.round(value)));
-  const stageCooldowns = alignList(stageCooldownsRaw.length ? stageCooldownsRaw : [30_000, 20_000, 10_000], stageCounts.length, 30_000);
-  const stageWinThresholdsRaw = parseNumberList(e.TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS, [0, 0.35, 0.42])
+  const stageCooldownFallback = stageCooldownsRaw.length
+    ? stageCooldownsRaw[stageCooldownsRaw.length - 1]
+    : defaultStageCooldowns[defaultStageCooldowns.length - 1];
+  const stageCooldowns = alignList(
+    stageCooldownsRaw.length ? stageCooldownsRaw : defaultStageCooldowns,
+    stageCounts.length,
+    stageCooldownFallback,
+  );
+  const stageWinThresholdsRaw = parseNumberList(e.TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS, [0, 0.36, 0.44])
     .map((value) => Math.max(0, Math.min(1, value)));
   const stageWinThresholdFallback = stageWinThresholdsRaw.length
     ? stageWinThresholdsRaw[stageWinThresholdsRaw.length - 1]
     : 0;
   const stageWinThresholds = alignList(
-    stageWinThresholdsRaw.length ? stageWinThresholdsRaw : [0, 0.35, 0.42],
+    stageWinThresholdsRaw.length ? stageWinThresholdsRaw : [0, 0.36, 0.44],
     stageCounts.length,
     stageWinThresholdFallback,
   );
@@ -434,8 +442,8 @@ export function getConfig(): Cfg {
     // Trading timing controls to prevent over-trading
     MIN_HOLD_TIME_MS: Number(e.MIN_HOLD_TIME_MS || "600000"), // 10 minutes minimum for crypto scalping
     TRADE_COOLDOWN_MS: Number(e.TRADE_COOLDOWN_MS || "600000"), // 10 minutes cooldown for crypto
-    TRADE_COOLDOWN_WIN_MS: Number(e.TRADE_COOLDOWN_WIN_MS || Math.min(Number(e.TRADE_COOLDOWN_MS || 600000), 90000)),
-    TRADE_COOLDOWN_LOSS_MS: Number(e.TRADE_COOLDOWN_LOSS_MS || Number(e.TRADE_COOLDOWN_MS || 600000)),
+    TRADE_COOLDOWN_WIN_MS: Number(e.TRADE_COOLDOWN_WIN_MS || "60000"),
+    TRADE_COOLDOWN_LOSS_MS: Number(e.TRADE_COOLDOWN_LOSS_MS || "180000"),
     TRADE_COOLDOWN_STAGE_MS: stageCooldowns,
     TRADE_FREQUENCY_STAGE_COUNTS: stageCounts,
     TRADE_FREQUENCY_STAGE_WIN_THRESHOLDS: stageWinThresholds,
