@@ -432,6 +432,7 @@ async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason:
     try {
       await getTicker(symbol, { forceRefresh: true });
       await Promise.allSettled([
+        getOHLCV(symbol, '4h', 200),
         getOHLCV(symbol, '1h', 200),
         getOHLCV(symbol, '15m', 200)
       ]);
@@ -508,6 +509,7 @@ type CandidateMetrics = {
   atrPct: number | null;
   micro: CandidateMicrostructureSnapshot;
   performance: CandidatePerformanceSnapshot;
+  multiTimeframe?: MultiTimeframeDiagnostics;
 };
 
 const VOLUME_FLOOR_CENTS = BigInt(50_000_000 * 100);
@@ -575,6 +577,19 @@ function evaluateCandidateAgainstFilters(
   now: number,
 ): { ok: boolean; reasons: string[]; score: number } {
   const reasons: string[] = [];
+
+  // 🆕 Cross-timeframe constraint: 4h bias pilots 15m execution bias
+  const mt = metrics.multiTimeframe?.timeframes ?? {};
+  const bias4h = String(mt['4h']?.bias ?? 'neutral');
+  const bias15 = String(mt['15m']?.bias ?? 'neutral');
+  if (bias4h !== 'neutral') {
+    const conflict =
+      (bias4h === 'bullish' && bias15 === 'bearish') ||
+      (bias4h === 'bearish' && bias15 === 'bullish');
+    if (conflict) {
+      reasons.push('tf_conflict_4h_vs_15m');
+    }
+  }
 
   if (metrics.volumeCents24h < VOLUME_FLOOR_CENTS) {
     reasons.push('volume_below_floor');
@@ -651,6 +666,10 @@ function evaluateCandidateAgainstFilters(
 
   if (reasons.some((reason) => reason.endsWith('cooldown'))) {
     // treat cooldown reasons as hard failure during cooldown window
+    return { ok: false, reasons, score: metrics.baseScore };
+  }
+
+  if (reasons.includes('tf_conflict_4h_vs_15m')) {
     return { ok: false, reasons, score: metrics.baseScore };
   }
 
@@ -846,6 +865,12 @@ async function computeCandidateMetrics(
   }
 
   const snapshot = await buildTechSnapshot(symbol);
+  let multiTimeframe: MultiTimeframeDiagnostics | undefined;
+  try {
+    multiTimeframe = await computeMultiTimeframeDiagnostics(symbol);
+  } catch (error) {
+    console.warn(`⚠️ Failed to compute multi-timeframe diagnostics for ${symbol}:`, error);
+  }
   const atrPct = Number(snapshot?.atrPct ?? snapshot?.atr14 ?? null);
   const regimeTag = deriveRegimeTag(snapshot?.regime, Number.isFinite(atrPct) ? atrPct : null);
 
@@ -860,6 +885,7 @@ async function computeCandidateMetrics(
     atrPct: Number.isFinite(atrPct) ? atrPct : null,
     micro: book,
     performance: performanceSnapshot,
+    multiTimeframe,
   };
 }
 
