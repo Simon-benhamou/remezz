@@ -112,6 +112,9 @@ export type ActivePosition = {
   equityAtEntryUsd?: number | null;
   accountSnapshot?: AccountSnapshot | null;
   entryFeePerUnit?: number;
+  strategyId?: string | null;
+  strategyToken?: string | null;
+  strategyFamily?: 'trend' | 'breakout' | 'mean_reversion' | 'momentum' | null;
 };
 
 export type ProtectiveSnapshot = {
@@ -390,6 +393,8 @@ export type MarketContext = {
   adx?: number;
   recognizedStrategies: RecognizedStrategySignal[];
   primaryStrategy: RecognizedStrategySignal | null;
+  strategyToken?: string | null;
+  strategyFamily?: 'trend' | 'breakout' | 'mean_reversion' | 'momentum' | null;
 };
 
 export type StateDependencies = {
