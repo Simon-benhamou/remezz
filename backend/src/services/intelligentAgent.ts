@@ -511,11 +511,19 @@ type CandidateMetrics = {
 };
 
 const VOLUME_FLOOR_CENTS = BigInt(50_000_000 * 100);
-const DEPTH_FLOOR_CENTS = BigInt(12_500 * 100);
-const MAX_SPREAD_BPS = 10;
+const DEPTH_FLOOR_CENTS_BY_PROFILE = {
+  conservative: BigInt(25_000 * 100),
+  reactive: BigInt(15_000 * 100),
+  aggressive: BigInt(10_000 * 100),
+} as const;
+const MAX_SPREAD_BPS = 8;
 const MIN_PASSIVE_FILL_RATE = 0.4;
 const PERFORMANCE_LOOKBACK_TRADES = 40;
 const PERFORMANCE_COOLDOWN_HOURS = 24;
+
+function getDepthFloorCents(aggressiveness: StrategyFilterProfile['aggressiveness']): bigint {
+  return DEPTH_FLOOR_CENTS_BY_PROFILE[aggressiveness] ?? DEPTH_FLOOR_CENTS_BY_PROFILE.reactive;
+}
 
 function numberToCents(value: number | null | undefined): bigint | null {
   if (value == null) return null;
@@ -579,7 +587,8 @@ function evaluateCandidateAgainstFilters(
     reasons.push('spread_too_wide');
   }
 
-  if (metrics.micro.bidDepthCents < DEPTH_FLOOR_CENTS || metrics.micro.askDepthCents < DEPTH_FLOOR_CENTS) {
+  const depthFloorCents = getDepthFloorCents(strategy.aggressiveness);
+  if (metrics.micro.bidDepthCents < depthFloorCents || metrics.micro.askDepthCents < depthFloorCents) {
     reasons.push('book_depth_thin');
   }
 
@@ -663,7 +672,10 @@ function evaluateCandidateAgainstFilters(
 
   // Soft penalties (regime mismatch for aggressive/conservative)
   let score = metrics.baseScore;
-  const liquidityBoost = Number(metrics.micro.bidDepthCents + metrics.micro.askDepthCents) / Number(DEPTH_FLOOR_CENTS * BigInt(2));
+  const liquidityDenominator = depthFloorCents * BigInt(2);
+  const liquidityBoost = liquidityDenominator > BigInt(0)
+    ? Number(metrics.micro.bidDepthCents + metrics.micro.askDepthCents) / Number(liquidityDenominator)
+    : 0;
   if (Number.isFinite(liquidityBoost) && liquidityBoost > 0) {
     score *= Math.min(1.35, Math.max(0.8, liquidityBoost));
   }
@@ -681,6 +693,13 @@ function evaluateCandidateAgainstFilters(
   }
   if (strategy.aggressiveness === 'conservative' && regime === 'volatile') {
     score *= 0.85;
+  }
+
+  const quality = buildSymbolQualityContext(metrics.symbol);
+  if (quality.isBlueChip) {
+    score *= 1.1;
+  } else if (quality.family === 'major') {
+    score *= 1.05;
   }
 
   return { ok: true, reasons, score };
@@ -4113,9 +4132,9 @@ export function getCryptoTier(symbol: string, volumeUsd: number, marketCap?: num
 export function isSymbolEligibleForAuto(base: string, params: { last: number; volumeUsd: number }, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): { ok: boolean; reason?: string; minRequired?: number } {
   const cfg = getConfig();
   const level = opts?.aggressiveness || 'reactive';
-  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 1000000 :
-                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 300000 :
-                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 500000; // Équilibre optimal sécurité/opportunités
+  const minByLevel = level === 'conservative' ? cfg.AUTO_MIN_USD_VOLUME_CONSERVATIVE || 75_000_000 :
+                     level === 'aggressive' ? cfg.AUTO_MIN_USD_VOLUME_AGGRESSIVE || 35_000_000 :
+                     cfg.AUTO_MIN_USD_VOLUME_REACTIVE || 50_000_000; // Équilibre optimal sécurité/opportunités
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
   if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume', minRequired: minByLevel };

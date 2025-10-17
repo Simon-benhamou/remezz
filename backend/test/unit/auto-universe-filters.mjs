@@ -56,4 +56,32 @@ const strongResult = evaluateCandidateAgainstFilters(strong, strategy, now);
 assert.equal(strongResult.ok, true, 'well structured assets should survive filters');
 assert(strongResult.score > strong.baseScore * 0.8, 'score should retain most of base value');
 
+const shallowDepthReactive = makeCandidate({
+  bidDepthCents: BigInt(12_000 * 100),
+  askDepthCents: BigInt(11_500 * 100),
+});
+const shallowDepthReactiveResult = evaluateCandidateAgainstFilters(shallowDepthReactive, strategy, now);
+assert.equal(shallowDepthReactiveResult.ok, false, 'reactive profile should reject sub-15k depth books');
+assert(shallowDepthReactiveResult.reasons.includes('book_depth_thin'));
+
+const aggressiveStrategy = {
+  aggressiveness: 'aggressive',
+  targetTpPct: 1.2,
+  stopLossPct: 0.8,
+};
+const aggressiveDepthCandidate = makeCandidate({
+  bidDepthCents: BigInt(11_500 * 100),
+  askDepthCents: BigInt(10_500 * 100),
+});
+const aggressiveDepthResult = evaluateCandidateAgainstFilters(aggressiveDepthCandidate, aggressiveStrategy, now);
+assert.equal(aggressiveDepthResult.ok, true, 'aggressive profile should allow ≥10k depth per side');
+
+const altAsset = makeCandidate({ symbol: 'ACH/USDT:USDT' });
+const altAssetResult = evaluateCandidateAgainstFilters(altAsset, strategy, now);
+assert.equal(altAssetResult.ok, true, 'baseline alt asset must pass when liquidity is ample');
+
+const majorAsset = makeCandidate({ symbol: 'BTC/USDT:USDT' });
+const majorAssetResult = evaluateCandidateAgainstFilters(majorAsset, strategy, now);
+assert(majorAssetResult.score > altAssetResult.score, 'majors should gain a post-filter quality bonus');
+
 console.log('✅ auto-universe-filters.mjs passed');
