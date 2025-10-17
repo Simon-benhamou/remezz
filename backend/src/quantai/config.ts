@@ -312,7 +312,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     slAtrMult: 1.5,
     slAtrMultReversal: 1.2,
     slAtrMultImpulse: 1.5,
-    tpRMultiples: [1.8, 2.6, 3.4],
+    tpRMultiples: [2.0, 3.2, 4.6],
     trailAfterR: 1.0,
     trailAfterRReversal: 0.8,
     trailAfterRImpulse: 1.0,
@@ -321,7 +321,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       adxBelow: 18,
       cmfNegative: true,
       tightenProfitR: 0.2,
-      cutLossR: 0.5,
+      cutLossR: 0.35,
     },
     maxHoldingMin: 20,
   },
@@ -806,9 +806,11 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     : DEFAULT_CONFIG.exits.tpRMultiples;
   const tpMultiples: number[] = [];
   const uniqueTpValues = Array.from(new Set<number>(tpRaw));
+  const minAllowedTp = Math.min(1.5, ...DEFAULT_CONFIG.exits.tpRMultiples);
+  const maxAllowedTp = Math.max(3.5, ...DEFAULT_CONFIG.exits.tpRMultiples);
   for (const value of uniqueTpValues.sort((a, b) => a - b)) {
     if (tpMultiples.length >= 3) break;
-    const clamped = Math.min(Math.max(value, 1.5), 3.5);
+    const clamped = Math.min(Math.max(value, minAllowedTp), maxAllowedTp);
     const last = tpMultiples[tpMultiples.length - 1];
     if (last == null || Math.abs(clamped - last) >= 0.2) {
       tpMultiples.push(clamped);

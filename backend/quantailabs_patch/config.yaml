@@ -97,7 +97,7 @@ exits:
   sl_atr_mult: 1.5                 # base SL multiplier (fallback)
   sl_atr_mult_reversal: 1.2        # tighter SL for reversal setups
   sl_atr_mult_impulse: 1.5         # wider SL for impulse setups
-  tp_r_multiples: [0.5, 1.0, 2.0]  # partial TPs at 0.5R, 1R, 2R
+  tp_r_multiples: [2.0, 3.2, 4.6]  # enforce larger upside before scaling out
   trail_after_r: 1.0               # default trailing threshold in R
   trail_after_r_reversal: 0.8      # start trailing earlier on reversals
   trail_after_r_impulse: 1.0       # keep base trailing threshold on impulses
@@ -107,7 +107,7 @@ exits:
     adx_below: 18
     cmf_negative: true
     tighten_profit_r: 0.2          # tighten stops once 0.2R in profit if momentum fades
-    cut_loss_r: 0.5                # exit early if -0.5R and momentum fails
+    cut_loss_r: 0.35               # exit earlier if -0.35R and momentum fails
 
 regime:
   ema_trend_period_fast: 50

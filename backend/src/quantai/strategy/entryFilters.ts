@@ -382,10 +382,10 @@ export class EntryFilters {
           ? `ratio=${ratioPct.toFixed(1)}%`
           : undefined;
       let spreadStatus: 'OK' | 'WARN' | 'FAIL' = 'OK';
-      if (absFail && relFail) {
+      if (relFail) {
         spreadStatus = 'FAIL';
         ok = false;
-      } else if (absFail || relFail) {
+      } else if (absFail) {
         spreadStatus = 'WARN';
       }
       const spreadParts = [absText];
