@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
+from decimal import Decimal, getcontext
 from typing import List, Dict
 import math
+
+
+getcontext().prec = 28
 
 @dataclass
 class Trade:
@@ -18,39 +22,61 @@ class Metrics:
         n = len(self.trades)
         if n == 0:
             return {"n": 0}
-        wins = sum(1 for t in self.trades if t.win)
+
+        equity_curve = Decimal('1')
+        peak_equity = Decimal('1')
+        max_drawdown = Decimal('0')
+
+        wins = 0
+        sum_gains = Decimal('0')
+        sum_losses = Decimal('0')
+        pnl_values: List[Decimal] = []
+
+        for trade in self.trades:
+            pnl_pct = Decimal(str(trade.pnl_pct))
+            pnl_values.append(pnl_pct)
+            if trade.win:
+                wins += 1
+                sum_gains += pnl_pct
+            else:
+                sum_losses += -pnl_pct
+
+            equity_curve *= (Decimal('1') + pnl_pct / Decimal('100'))
+            peak_equity = max(peak_equity, equity_curve)
+            drawdown = (equity_curve - peak_equity) / peak_equity * Decimal('100')
+            max_drawdown = min(max_drawdown, drawdown)
+
         losses = n - wins
-        win_rate = wins / n
-        gains = [t.pnl_pct for t in self.trades if t.pnl_pct > 0]
-        losses_abs = [-t.pnl_pct for t in self.trades if t.pnl_pct < 0]
-        sum_gains = sum(gains) if gains else 0.0
-        sum_losses = sum(losses_abs) if losses_abs else 0.0
-        profit_factor = (sum_gains / sum_losses) if sum_losses > 0 else float('inf')
-        expectancy = (sum_gains - sum_losses) / n
-        # Sharpe-like (not annualized): mean/std of per-trade pnl
-        mean = (sum_gains - sum_losses) / n
-        variance = 0.0
-        for t in self.trades:
-            variance += (t.pnl_pct - mean)**2
-        variance /= n
-        std = math.sqrt(variance)
-        sharpe_like = mean / std if std > 0 else float('inf')
-        # Max drawdown via equity curve
-        eq = 0.0
-        peak = 0.0
-        max_dd = 0.0
-        for t in self.trades:
-            eq += t.pnl_pct
-            peak = max(peak, eq)
-            dd = (eq - peak)
-            max_dd = min(max_dd, dd)
-        return {
+        win_rate = Decimal(wins) / Decimal(n)
+        profit_factor = Decimal('inf') if sum_losses == 0 else sum_gains / sum_losses
+        expectancy = (sum_gains - sum_losses) / Decimal(n)
+
+        mean = (sum_gains - sum_losses) / Decimal(n)
+        variance = Decimal('0')
+        for pnl in pnl_values:
+            diff = pnl - mean
+            variance += diff * diff
+        variance /= Decimal(n)
+        std = variance.sqrt() if variance > 0 else Decimal('0')
+        sharpe_like = Decimal('inf') if std == 0 else mean / std
+
+        if equity_curve <= 0:
+            raise ValueError("Equity curve collapsed; metrics invalid")
+        cagr_per_trade = equity_curve ** (Decimal('1') / Decimal(n)) - Decimal('1')
+
+        metrics = {
             "n": n,
             "wins": wins,
             "losses": losses,
-            "win_rate": round(win_rate, 4),
-            "profit_factor": round(profit_factor, 4),
-            "expectancy": round(expectancy, 4),
-            "sharpe_like": round(sharpe_like, 4),
-            "max_drawdown_pct": round(max_dd, 4),
+            "win_rate": float(round(win_rate, 4)),
+            "profit_factor": float(round(profit_factor, 4)) if profit_factor != Decimal('inf') else float('inf'),
+            "expectancy": float(round(expectancy, 4)),
+            "sharpe_like": float(round(sharpe_like, 4)) if sharpe_like != Decimal('inf') else float('inf'),
+            "max_drawdown_pct": float(round(max_drawdown, 4)),
+            "cagr_per_trade": float(round(cagr_per_trade * Decimal('100'), 4)),
         }
+
+        for key, value in metrics.items():
+            if isinstance(value, float) and math.isnan(value):
+                raise ValueError(f"Metric {key} is NaN")
+        return metrics
