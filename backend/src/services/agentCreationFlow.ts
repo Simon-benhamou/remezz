@@ -63,6 +63,7 @@ export type AgentCreationSelectionSummary = {
   orderableCount?: number;
   analyzedSymbols?: string[];
   orderableSymbols?: string[];
+  baselineSymbols?: string[];
   decisionLog: AgentCreationLogEntry[];
 };
 
@@ -117,6 +118,7 @@ type UniverseBuildResult = {
   topSymbols: string[];
   analyzedSymbols: string[];
   orderableSymbols: string[];
+  baselineSymbols: string[];
   diagnostics: AgentCreationLogEntry[];
 };
 
@@ -583,6 +585,15 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
   let candidateSymbols: string[] = [];
   const diagnostics: AgentCreationLogEntry[] = [];
   const strategyProfile = deriveStrategyFilterProfile(config);
+  const majorPriorityList = [
+    'BTC/USDT:USDT',
+    'ETH/USDT:USDT',
+    'SOL/USDT:USDT',
+    'BNB/USDT:USDT',
+    'XRP/USDT:USDT',
+    'ADA/USDT:USDT',
+  ];
+  const altVolumeFloor = Math.max(Number(config.volumeThresholdUsd ?? 50_000_000), 120_000_000);
 
   const pushDiagnostic = (
     level: AgentCreationLogLevel,
@@ -631,12 +642,14 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
   if (prefetchedOpportunity && !candidateSymbols.includes(prefetchedOpportunity.symbol)) {
     candidateSymbols.unshift(prefetchedOpportunity.symbol);
   }
+  candidateSymbols = Array.from(new Set(candidateSymbols));
 
   const testMode = process.env.UNIT_TEST_MODE === 'true';
   if (testMode) {
     const fallbackCandidates = candidateSymbols.length
       ? candidateSymbols
       : ['ETH/USDT:USDT', 'SOL/USDT:USDT', 'ADA/USDT:USDT'];
+    const baselineSymbols = fallbackCandidates.filter((sym) => majorPriorityList.includes(sym));
     return {
       prefetchedOpportunity,
       candidateCount: fallbackCandidates.length,
@@ -645,6 +658,7 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
       topSymbols: fallbackCandidates.slice(0, 5),
       analyzedSymbols: fallbackCandidates,
       orderableSymbols: fallbackCandidates,
+      baselineSymbols: baselineSymbols.length ? baselineSymbols : majorPriorityList,
       diagnostics,
     };
   }
@@ -659,6 +673,7 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
       topSymbols: [],
       analyzedSymbols: [],
       orderableSymbols: [],
+      baselineSymbols: majorPriorityList,
       diagnostics,
     };
   }
@@ -674,18 +689,34 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
         const ticker = await getTicker(sym);
         const price = Number(ticker?.last || 0);
         const notional = price * config.startBalanceUsd * (config.riskPerTradePct / 100);
-        return { symbol: sym, orderable: Number.isFinite(notional) && notional >= 10 };
+        const rawVolume = Number((ticker as any)?.quoteVolume ?? (ticker as any)?.info?.quoteVolume ?? 0);
+        const volumeUsd = Number.isFinite(rawVolume) && rawVolume > 0 ? rawVolume : 0;
+        return { symbol: sym, orderable: Number.isFinite(notional) && notional >= 10, volumeUsd };
       } catch (error) {
         pushDiagnostic('warn', 'Orderability check failed for symbol', {
           symbol: sym,
           error: error instanceof Error ? error.message : String(error),
         });
-        return { symbol: sym, orderable: false };
+        return { symbol: sym, orderable: false, volumeUsd: 0 };
       }
     })
   );
 
   const orderableSymbols = orderabilityChecks.filter((c) => c.orderable).map((c) => c.symbol);
+  const baselineMajors = majorPriorityList.filter((sym) => orderableSymbols.includes(sym) || candidateSymbols.includes(sym));
+  const baselineSymbols = baselineMajors.length ? Array.from(new Set(baselineMajors)) : majorPriorityList;
+  const baselineSet = new Set(baselineSymbols);
+
+  const qualifiedAlts = orderabilityChecks
+    .filter((c) => !baselineSet.has(c.symbol) && c.orderable && c.volumeUsd >= altVolumeFloor)
+    .map((c) => c.symbol);
+
+  const prioritized = Array.from(new Set([
+    ...baselineSymbols,
+    ...qualifiedAlts,
+    ...orderableSymbols,
+    ...candidateSymbols,
+  ]));
 
   if (!orderableSymbols.length) {
     pushDiagnostic('warn', 'No orderable symbols cleared risk thresholds', {
@@ -702,9 +733,10 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
     candidateCount: candidateSymbols.length,
     orderableCount: orderableSymbols.length,
     shouldActivate: orderableSymbols.length > 0 || candidateSymbols.length > 0,
-    topSymbols: (orderableSymbols.length ? orderableSymbols : candidateSymbols).slice(0, 10),
+    topSymbols: prioritized.slice(0, 10),
     analyzedSymbols: analysisUniverse,
     orderableSymbols,
+    baselineSymbols,
     diagnostics,
   };
 }
@@ -741,6 +773,7 @@ async function selectSymbol(
     orderableCount: universe?.orderableCount,
     analyzedSymbols: universe?.analyzedSymbols ?? [],
     orderableSymbols: universe?.orderableSymbols ?? [],
+    baselineSymbols: universe?.baselineSymbols ?? [],
     decisionLog,
   };
 

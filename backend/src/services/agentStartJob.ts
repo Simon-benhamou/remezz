@@ -391,12 +391,22 @@ type UniverseBuildResult = {
   orderableCount: number;
   shouldActivate: boolean;
   topSymbols: string[];
+  baselineSymbols: string[];
 };
 
 async function buildSmartUniverse(config: NormalizedStartConfig): Promise<UniverseBuildResult> {
   const agg = config.aggressiveness;
   let candidateSymbols: string[] = [];
   const strategyProfile = deriveStrategyFilterProfile(config);
+  const majorPriorityList = [
+    'BTC/USDT:USDT',
+    'ETH/USDT:USDT',
+    'SOL/USDT:USDT',
+    'BNB/USDT:USDT',
+    'XRP/USDT:USDT',
+    'ADA/USDT:USDT',
+  ];
+  const altVolumeFloor = Math.max(Number(config.volumeThresholdUsd ?? 50_000_000), 120_000_000);
   try {
     candidateSymbols = await getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile });
   } catch (error) {
@@ -410,18 +420,21 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
   if (prefetchedOpportunity && !candidateSymbols.includes(prefetchedOpportunity.symbol)) {
     candidateSymbols.unshift(prefetchedOpportunity.symbol);
   }
+  candidateSymbols = Array.from(new Set(candidateSymbols));
 
   const testMode = process.env.UNIT_TEST_MODE === 'true';
   if (testMode) {
     const fallbackCandidates = candidateSymbols.length
       ? candidateSymbols
       : ['ETH/USDT:USDT', 'SOL/USDT:USDT', 'ADA/USDT:USDT'];
+    const baseline = fallbackCandidates.filter((sym) => majorPriorityList.includes(sym));
     return {
       prefetchedOpportunity,
       candidateCount: fallbackCandidates.length,
       orderableCount: fallbackCandidates.length,
       shouldActivate: false,
       topSymbols: fallbackCandidates.slice(0, 5),
+      baselineSymbols: baseline.length ? baseline : majorPriorityList,
     };
   }
 
@@ -432,6 +445,7 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
       orderableCount: 0,
       shouldActivate: false,
       topSymbols: [],
+      baselineSymbols: majorPriorityList,
     };
   }
 
@@ -441,21 +455,36 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
         const ticker = await getTicker(sym);
         const price = Number(ticker?.last || 0);
         const notional = price * config.startBalanceUsd * (config.riskPerTradePct / 100);
-        return { symbol: sym, orderable: Number.isFinite(notional) && notional >= 10 };
+        const rawVolume = Number((ticker as any)?.quoteVolume ?? (ticker as any)?.info?.quoteVolume ?? 0);
+        const volumeUsd = Number.isFinite(rawVolume) && rawVolume > 0 ? rawVolume : 0;
+        return { symbol: sym, orderable: Number.isFinite(notional) && notional >= 10, volumeUsd };
       } catch {
-        return { symbol: sym, orderable: false };
+        return { symbol: sym, orderable: false, volumeUsd: 0 };
       }
     })
   );
 
   const orderableSymbols = orderabilityChecks.filter((c) => c.orderable).map((c) => c.symbol);
+  const baselineMajors = majorPriorityList.filter((sym) => orderableSymbols.includes(sym) || candidateSymbols.includes(sym));
+  const baselineSymbols = baselineMajors.length ? Array.from(new Set(baselineMajors)) : majorPriorityList;
+  const baselineSet = new Set(baselineSymbols);
+  const qualifiedAlts = orderabilityChecks
+    .filter((c) => !baselineSet.has(c.symbol) && c.orderable && c.volumeUsd >= altVolumeFloor)
+    .map((c) => c.symbol);
+  const prioritized = Array.from(new Set([
+    ...baselineSymbols,
+    ...qualifiedAlts,
+    ...orderableSymbols,
+    ...candidateSymbols,
+  ]));
 
   return {
     prefetchedOpportunity,
     candidateCount: candidateSymbols.length,
     orderableCount: orderableSymbols.length,
     shouldActivate: false,
-    topSymbols: (orderableSymbols.length ? orderableSymbols : candidateSymbols).slice(0, 10),
+    topSymbols: prioritized.slice(0, 10),
+    baselineSymbols,
   };
 }
 

@@ -27,7 +27,13 @@ import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
 import type { LiquidityType } from '../../quantai/index.js';
-import { evaluateRecognizedStrategies, RecognizedStrategySignal } from '../../quantai/strategy/recognizedStrategies.js';
+import {
+  evaluateRecognizedStrategies,
+  RecognizedStrategySignal,
+  RecognizedStrategyId,
+  registerAdaptiveTradeEntry,
+  registerAdaptiveTradeOutcome,
+} from '../../quantai/strategy/recognizedStrategies.js';
 import { chooseExecutionPlan, ExecutionPlan } from '../executionPlanner.js';
 import type { EntryRelaxation } from '../../quantai/strategy/entryFilters.js';
 import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../../quantai/index.js';
@@ -111,6 +117,7 @@ export class ReboundRejectionAgent {
   } | null = null;
   public marketContext: MarketContext | null = null;
   public lastMarketContextSignature: { direction: 'long' | 'short' | 'none'; playbook: string; updatedAt: number } | null = null;
+  public lastAdaptiveSelection: { token: string | null; id: RecognizedStrategyId | null; family: MarketContext['strategyFamily'] } | null = null;
 
   // Entry zone intelligence helpers
   public confirmEntrySignal = entryZoneMethods.confirmEntrySignal;
@@ -3411,6 +3418,12 @@ export class ReboundRejectionAgent {
       accountSnapshot: sizingSnapshot,
       entryFeePerUnit,
     };
+    const primaryStrategy = this.marketContext?.primaryStrategy ?? null;
+    if (this.pos) {
+      this.pos.strategyId = primaryStrategy?.id ?? null;
+      this.pos.strategyToken = this.marketContext?.strategyToken ?? primaryStrategy?.meta?.token ?? null;
+      this.pos.strategyFamily = this.marketContext?.strategyFamily ?? this.recognizedFamilyFromId(primaryStrategy?.id ?? null);
+    }
     this.circuitBreaker.onBeforeOpen(new Date(openedAt), this.lastKnownEquityUsd);
     this.syncCircuitBreakerTelemetry();
     if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
@@ -3443,7 +3456,7 @@ export class ReboundRejectionAgent {
         entryPrice: this.pos.entry,
         stop: this.pos.stop,
         tp: this.pos.tp,
-  leverage: effectiveLev,
+        leverage: effectiveLev,
         requestedPrice: telemetry.requestedPrice,
         requestedQty: qty,
         latencyMs: telemetry.latencyMs,
@@ -3455,6 +3468,24 @@ export class ReboundRejectionAgent {
         tpOrderId: this.pos.tpOrderId,
       });
     } catch {}
+
+    if (this.pos) {
+      registerAdaptiveTradeEntry({
+        sessionId: this.sessionId ?? null,
+        symbol: this.profile.symbol,
+        signal: this.marketContext?.primaryStrategy ?? null,
+        qty: this.pos.qty,
+        entryPrice: this.pos.entry,
+        stopDistance: this.plan?.stopDistance ?? initialStopDistance,
+        fillRatio: telemetry.fillRatio ?? null,
+        slippageBps: telemetry.slippageBps ?? null,
+        spreadBps,
+        latencyMs: telemetry.latencyMs ?? null,
+        passiveOffsetBps: plan.passiveOffsetBps ?? null,
+        fallbackLatencyMs: plan.fallbacks?.[0]?.delayMs ?? null,
+        executionMode: plan.mode,
+      });
+    }
 
     this.logMovement('Position entered', `${side.toUpperCase()} ${this.profile.symbol} qty=${this.pos.qty.toFixed(6)} @ ${this.formatPrice(this.pos.entry)}`, {
       tags: ['movement', 'entry'],
@@ -5513,11 +5544,23 @@ export class ReboundRejectionAgent {
       notes.push(`playbook_adjusted:${basePlaybook}->${effectivePlaybook}`);
     }
 
+    const microContext = {
+      spreadBps: Number.isFinite((snap as any)?.spreadBps) ? Number((snap as any).spreadBps) : null,
+      depthUsd: Number.isFinite((snap as any)?.orderBookDepthUsd) ? Number((snap as any).orderBookDepthUsd) : null,
+      slippageBps: Number.isFinite((snap as any)?.slippageBps) ? Number((snap as any).slippageBps) : null,
+      fillRatio: Number.isFinite((snap as any)?.fillRatio) ? Number((snap as any).fillRatio) : null,
+    };
+
     const recognizedStrategies = evaluateRecognizedStrategies(snap, {
+      sessionId: this.sessionId ?? null,
+      symbol: this.profile?.symbol ?? null,
       bias,
       regime,
       allowMomentumOverride,
       favorMeanReversion,
+      micro: microContext,
+      atr1h: Number.isFinite((snap as any)?.atr14_1h) ? Number((snap as any).atr14_1h) : null,
+      atr4h: Number.isFinite((snap as any)?.atr14_4h) ? Number((snap as any).atr14_4h) : null,
     });
 
     const targetBias: 'long' | 'short' | 'none' = bias !== 'none'
@@ -5528,8 +5571,17 @@ export class ReboundRejectionAgent {
       .sort((a, b) => b.confidence - a.confidence);
     const primaryStrategy = prioritized[0] ?? recognizedStrategies[0] ?? null;
 
+    const primaryFamily: MarketContext['strategyFamily'] = this.recognizedFamilyFromId(primaryStrategy?.id ?? null);
+    const strategyToken = primaryStrategy?.meta?.token ?? null;
+
     if (primaryStrategy) {
       notes.push(`recognized_primary=${primaryStrategy.id}:${primaryStrategy.bias}:${primaryStrategy.confidence.toFixed(2)}`);
+      if (primaryStrategy.meta?.guardrail) {
+        notes.push(`guardrail=${primaryStrategy.meta.guardrail}`);
+      }
+      if (strategyToken) {
+        notes.push(`adaptive_token=${strategyToken}`);
+      }
     }
 
     const previousContext = this.marketContext;
@@ -5549,7 +5601,13 @@ export class ReboundRejectionAgent {
       adx: assessment.adx,
       recognizedStrategies,
       primaryStrategy,
+      strategyToken,
+      strategyFamily: primaryFamily,
     };
+
+    this.lastAdaptiveSelection = primaryStrategy
+      ? { token: strategyToken, id: primaryStrategy.id, family: primaryFamily }
+      : null;
 
     this.handleMarketContextShift(previousContext, context, snap);
     this.marketContext = context;
@@ -5893,6 +5951,14 @@ export class ReboundRejectionAgent {
 
     this.lastMomentumGateResult = result;
     return result;
+  }
+
+  private recognizedFamilyFromId(id: RecognizedStrategyId | null): MarketContext['strategyFamily'] {
+    if (!id) return null;
+    if (id === 'classic_trend_following') return 'trend';
+    if (id === 'breakout_retest') return 'breakout';
+    if (id === 'bollinger_mean_reversion') return 'mean_reversion';
+    return 'momentum';
   }
 
   public passesEntryMomentumGates(
@@ -9589,6 +9655,8 @@ export class ReboundRejectionAgent {
     try {
       console.log(`Exiting position: ${reason} at ${price}`);
 
+      const exitStrategyToken = this.pos.strategyToken ?? this.marketContext?.strategyToken ?? null;
+
       const protectiveSnapshot: ProtectiveSnapshot = {
         slOrderId: this.pos.slOrderId || null,
         tpOrderId: this.pos.tpOrderId || null,
@@ -9653,6 +9721,13 @@ export class ReboundRejectionAgent {
             planStopDistance: this.plan?.stopDistance ?? null,
           });
         } catch {}
+
+        registerAdaptiveTradeOutcome({
+          sessionId: this.sessionId ?? null,
+          symbol: this.profile.symbol,
+          token: exitStrategyToken,
+          realizedPnlUsd: realizedPnl,
+        });
 
         // Update performance tracking
         const equityAfter = Number(balanceAfter?.equityUsd ?? this.lastKnownEquityUsd ?? this.profile.startBalanceUsd ?? 0);
