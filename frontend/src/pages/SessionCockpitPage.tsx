@@ -909,7 +909,7 @@ export default function SessionCockpitPage() {
       >
         <Card bordered={false} className="session-monitor-hero" bodyStyle={{ padding: 24 }}>
           <Row gutter={[16, 24]} align="top">
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Flex  align='space-around' style={{ width: '100%' }}>
               <div>
                 <Title level={3} style={{ marginBottom: 4 }}>
                   {status?.session?.name ||
@@ -919,7 +919,6 @@ export default function SessionCockpitPage() {
                 </Title>
                 <Text type="secondary">{status?.symbol || '—'}</Text>
               </div>
-              <Space wrap size={[8, 8]}>
                 {status?.session?.mode && (
                   <Tag className="session-monitor-chip" color="geekblue">
                     {(status.session.mode as string).toUpperCase()}
@@ -949,8 +948,6 @@ export default function SessionCockpitPage() {
                     {(status.session.profileJson.aggressiveness as string).toUpperCase()}
                   </Tag>
                 )}
-              </Space>
-              <Row gutter={[16, 16]}>
                  <Statistic
                     title="ROI"
                     value={roi}
@@ -981,8 +978,8 @@ export default function SessionCockpitPage() {
                     suffix=" USD"
                     valueStyle={{ color: netPnl >= 0 ? '#16a34a' : '#dc2626' }}
                   />
-              </Row>
-            </Space>
+            </Flex>
+
           </Row>
         </Card>
         <Card title="Market snapshot" bordered={false} className="session-section-card">
