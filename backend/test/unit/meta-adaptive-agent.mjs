@@ -72,7 +72,7 @@ assert(acceptable.has(selected.id), 'Trending context should select a trend-awar
 assert.equal(selected.active, true, 'Trend strategy should be active');
 
 // Simulate a run of consecutive losses to trigger guardrail logic
-for (let i = 0; i < 6; i += 1) {
+for (let i = 0; i < 12; i += 1) {
   registerAdaptiveTradeEntry({
     sessionId,
     symbol: 'BTC/USDT',
@@ -101,6 +101,24 @@ const postLoss = evaluateRecognizedStrategies(strongTrendSnap, {
 const afterGuardrail = postLoss.find(signal => signal.id === selected.id);
 assert(afterGuardrail, 'Trend strategy should still be present');
 assert.equal(afterGuardrail.active, false, 'Guardrail should deactivate trend strategy after repeated losses');
-assert(afterGuardrail.meta?.guardrail?.includes('winrate'), 'Guardrail reason should mention winrate');
+assert(afterGuardrail.meta?.guardrail?.includes('halt_winrate'), 'Guardrail reason should mention winrate halt');
+
+const illiquid = buildSnapshot({
+  volume24h: 12_000_000,
+  ema20: 100,
+  ema50: 100,
+  ema100: 100,
+  ema200: 100,
+  adx14: 8,
+});
+
+const gated = evaluateRecognizedStrategies(illiquid, {
+  sessionId,
+  symbol: 'DOGE/USDT',
+  micro: { spreadBps: 18, depthUsd: 4000 },
+  forceLiquidityGate: true,
+});
+
+assert.equal(gated.length, 0, 'Liquidity gate should skip strategy scoring on illiquid symbols');
 
 console.log('✅ meta-adaptive-agent logic test passed');

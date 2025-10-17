@@ -135,6 +135,8 @@ export type AdaptiveEvaluationInput = {
   };
   atr1h?: number | null;
   atr4h?: number | null;
+  volume24hUsd?: number | null;
+  forceLiquidityGate?: boolean;
 };
 
 type StrategyStats = {
@@ -153,6 +155,28 @@ type ActiveTrade = {
   timestamp: number;
   symbol: string;
 };
+
+type GuardrailHalt = {
+  reason: string;
+  triggeredAt: number;
+  activeUntil: number;
+  winRate: number;
+  expectancy: PreciseDecimal;
+  samples: number;
+};
+
+const LIQUIDITY_GUARD = {
+  minVolumeUsd: 50_000_000,
+  maxSpreadBps: 10,
+  minDepthUsd: 10_000,
+} as const;
+
+const GUARDRAIL_CONFIG = {
+  minSamples: 12,
+  winRateFloor: 0.35,
+  expectancyFloor: 0,
+  cooldownMs: 6 * 60 * 60 * 1000,
+} as const;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -203,6 +227,8 @@ class MetaAdaptiveStrategyAgent {
 
   private readonly stats = new Map<string, Map<StrategyFamily, StrategyStats>>();
   private readonly activeTrades = new Map<string, ActiveTrade[]>();
+  private readonly liquidityLog = new Map<string, number>();
+  private readonly guardrailHalts = new Map<string, Map<StrategyFamily, GuardrailHalt>>();
   private epsilon = 0.08;
 
   static getInstance(): MetaAdaptiveStrategyAgent {
@@ -255,6 +281,46 @@ class MetaAdaptiveStrategyAgent {
     const depthUsd = micro.depthUsd ?? safeNumber((snap as any)?.bookDepthUsd, NaN);
     const slippageBps = micro.slippageBps ?? safeNumber((snap as any)?.slippageBps, NaN);
     const fillRatio = micro.fillRatio ?? safeNumber((snap as any)?.fillRatio, NaN);
+    const volume24hUsd = safeNumber(input.volume24hUsd ?? (snap as any)?.volume24hUsd ?? (snap as any)?.volume24h, NaN);
+
+    const liquidityFailures: string[] = [];
+    const volumePresent = Number.isFinite(volume24hUsd);
+    const volumeOk = !volumePresent || (volume24hUsd as number) >= LIQUIDITY_GUARD.minVolumeUsd;
+    const spreadOk = Number.isFinite(spreadBps) ? (spreadBps as number) <= LIQUIDITY_GUARD.maxSpreadBps : true;
+    const depthOk = Number.isFinite(depthUsd) ? (depthUsd as number) >= LIQUIDITY_GUARD.minDepthUsd : true;
+
+    if (volumePresent && !volumeOk) {
+      liquidityFailures.push('volume_24h_below_threshold');
+    }
+    if (!spreadOk) {
+      liquidityFailures.push('spread_above_threshold');
+    }
+    if (!depthOk) {
+      liquidityFailures.push('depth_below_threshold');
+    }
+
+    const bypassGate = process.env.UNIT_TEST_MODE === 'true' && !input.forceLiquidityGate;
+
+    if (liquidityFailures.length > 0 && !bypassGate) {
+      const lastLogTs = this.liquidityLog.get(input.symbol) ?? 0;
+      const now = Date.now();
+      if (now - lastLogTs > 60_000) {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'adaptive_liquidity_gate',
+          symbol: input.symbol,
+          session_id: input.sessionId ?? null,
+          reasons: liquidityFailures,
+          metrics: {
+            volume24hUsd: Number.isFinite(volume24hUsd) ? volume24hUsd : null,
+            spreadBps: Number.isFinite(spreadBps) ? spreadBps : null,
+            depthUsd: Number.isFinite(depthUsd) ? depthUsd : null,
+          },
+        }));
+        this.liquidityLog.set(input.symbol, now);
+      }
+      return { signals: [], selection: null };
+    }
 
     const penalties: string[] = [];
     let microPenalty = 0;
@@ -536,23 +602,103 @@ class MetaAdaptiveStrategyAgent {
     }
     symbolMap.set(family, stat);
     this.stats.set(symbol, symbolMap);
+    this.evaluateGuardrail(symbol, family, stat);
   }
 
   private guardrailReason(symbol: string, family: StrategyFamily): string | null {
-    const symbolMap = this.stats.get(symbol);
-    if (!symbolMap) return null;
-    const stat = symbolMap.get(family);
-    if (!stat || stat.outcomes.length < 5) return null;
-    const sample = stat.outcomes.length;
-    const expectancy = stat.sum.dividedBy(new PreciseDecimal(sample.toString()));
-    const winRate = stat.wins / sample;
-    if (winRate < 0.35) {
-      return `winrate_guardrail(${(winRate * 100).toFixed(1)}%)`;
-    }
-    if (expectancy.lt(0)) {
-      return `expectancy_guardrail(${expectancy.toNumber().toFixed(2)})`;
+    const halt = this.getGuardrailState(symbol, family);
+    if (halt) {
+      if (halt.activeUntil > Date.now()) {
+        const remainingMs = halt.activeUntil - Date.now();
+        const remainingHours = Math.max(0, remainingMs / (60 * 60 * 1000));
+        return `${halt.reason}(cooldown=${remainingHours.toFixed(2)}h)`;
+      }
+      this.clearGuardrail(symbol, family);
     }
     return null;
+  }
+
+  private getGuardrailState(symbol: string, family: StrategyFamily): GuardrailHalt | null {
+    const bucket = this.guardrailHalts.get(symbol);
+    if (!bucket) return null;
+    return bucket.get(family) ?? null;
+  }
+
+  private setGuardrailState(symbol: string, family: StrategyFamily, halt: GuardrailHalt): void {
+    const bucket = this.guardrailHalts.get(symbol) ?? new Map<StrategyFamily, GuardrailHalt>();
+    bucket.set(family, halt);
+    this.guardrailHalts.set(symbol, bucket);
+  }
+
+  private clearGuardrail(symbol: string, family: StrategyFamily): void {
+    const bucket = this.guardrailHalts.get(symbol);
+    if (!bucket) return;
+    if (bucket.delete(family)) {
+      console.log(JSON.stringify({
+        level: 'info',
+        event: 'adaptive_guardrail_clear',
+        symbol,
+        family,
+      }));
+    }
+    if (bucket.size === 0) {
+      this.guardrailHalts.delete(symbol);
+    }
+  }
+
+  private evaluateGuardrail(symbol: string, family: StrategyFamily, stat: StrategyStats): void {
+    const sample = stat.outcomes.length;
+    if (sample < GUARDRAIL_CONFIG.minSamples) {
+      const existing = this.getGuardrailState(symbol, family);
+      if (existing && existing.activeUntil <= Date.now()) {
+        this.clearGuardrail(symbol, family);
+      }
+      return;
+    }
+
+    const expectancy = stat.sum.dividedBy(new PreciseDecimal(sample.toString()));
+    const winRate = stat.wins / sample;
+    const now = Date.now();
+    const existing = this.getGuardrailState(symbol, family);
+
+    const shouldHaltByWinRate = winRate < GUARDRAIL_CONFIG.winRateFloor;
+    const shouldHaltByExpectancy = expectancy.lt(GUARDRAIL_CONFIG.expectancyFloor);
+
+    if (shouldHaltByWinRate || shouldHaltByExpectancy) {
+      const reason = shouldHaltByWinRate
+        ? `halt_winrate_below_${Math.round(GUARDRAIL_CONFIG.winRateFloor * 100)}pct`
+        : 'halt_expectancy_negative';
+      if (existing && existing.reason === reason && existing.activeUntil > now) {
+        return;
+      }
+      const halt: GuardrailHalt = {
+        reason,
+        triggeredAt: now,
+        activeUntil: now + GUARDRAIL_CONFIG.cooldownMs,
+        winRate,
+        expectancy,
+        samples: sample,
+      };
+      this.setGuardrailState(symbol, family, halt);
+      console.warn(JSON.stringify({
+        level: 'warn',
+        event: 'adaptive_guardrail_halt',
+        symbol,
+        family,
+        reason,
+        cooldown_hours: GUARDRAIL_CONFIG.cooldownMs / (60 * 60 * 1000),
+        metrics: {
+          winRate,
+          expectancy: expectancy.toNumber(),
+          samples: sample,
+        },
+      }));
+      return;
+    }
+
+    if (existing && !shouldHaltByWinRate && !shouldHaltByExpectancy) {
+      this.clearGuardrail(symbol, family);
+    }
   }
 
   private chooseStrategy(sessionId: string | null | undefined, symbol: string, ordered: StrategyScoreResult[]): AdaptiveSignal | null {

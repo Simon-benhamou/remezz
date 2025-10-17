@@ -3477,6 +3477,13 @@ export class ReboundRejectionAgent {
         qty: this.pos.qty,
         entryPrice: this.pos.entry,
         stopDistance: this.plan?.stopDistance ?? initialStopDistance,
+        fillRatio: telemetry.fillRatio ?? null,
+        slippageBps: telemetry.slippageBps ?? null,
+        spreadBps,
+        latencyMs: telemetry.latencyMs ?? null,
+        passiveOffsetBps: plan.passiveOffsetBps ?? null,
+        fallbackLatencyMs: plan.fallbacks?.[0]?.delayMs ?? null,
+        executionMode: plan.mode,
       });
     }
 

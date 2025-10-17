@@ -1,5 +1,7 @@
 import { metaAdaptiveStrategyAgent, AdaptiveSignal, PreciseDecimal } from './metaAdaptiveAgent.js';
 import { TechnicalSnapshot } from '../../ai/tech.js';
+import { recordOpsEvent } from '../../monitor/ops.js';
+import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
 
 type StrategyBias = 'long' | 'short' | 'both';
 
@@ -45,6 +47,7 @@ type EvaluateOptions = {
   };
   atr1h?: number | null;
   atr4h?: number | null;
+  forceLiquidityGate?: boolean;
 };
 
 function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
@@ -95,6 +98,7 @@ export function evaluateRecognizedStrategies(
     micro: opts.micro,
     atr1h: opts.atr1h,
     atr4h: opts.atr4h,
+    forceLiquidityGate: opts.forceLiquidityGate ?? false,
   });
 
   return evaluation.signals
@@ -109,6 +113,13 @@ export function registerAdaptiveTradeEntry(params: {
   qty: number;
   entryPrice: number;
   stopDistance: number;
+  fillRatio?: number | null;
+  slippageBps?: number | null;
+  spreadBps?: number | null;
+  latencyMs?: number | null;
+  passiveOffsetBps?: number | null;
+  fallbackLatencyMs?: number | null;
+  executionMode?: 'market' | 'limit' | 'twap';
 }): void {
   if (!params.signal || !params.signal.meta) return;
   const planRiskPct = new PreciseDecimal(params.signal.meta.riskPct ?? '0');
@@ -133,6 +144,56 @@ export function registerAdaptiveTradeEntry(params: {
       stopAtrMult,
       takeProfitMultiples: (params.signal.meta.takeProfitMultiples ?? []).map(v => new PreciseDecimal(v)),
       executionMode: params.signal.meta.executionMode ?? 'market',
+    },
+  });
+
+  const executionMode = params.executionMode ?? params.signal.meta.executionMode ?? 'market';
+  const fillRatio = Number.isFinite(params.fillRatio ?? NaN) ? Number(params.fillRatio) : null;
+  const slippageBps = Number.isFinite(params.slippageBps ?? NaN) ? Number(params.slippageBps) : null;
+  const spreadBps = Number.isFinite(params.spreadBps ?? NaN) ? Number(params.spreadBps) : null;
+  const latencyMs = Number.isFinite(params.latencyMs ?? NaN) ? Number(params.latencyMs) : null;
+  const passiveOffsetBps = Number.isFinite(params.passiveOffsetBps ?? NaN) ? Number(params.passiveOffsetBps) : null;
+  const fallbackLatencyMs = Number.isFinite(params.fallbackLatencyMs ?? NaN) ? Number(params.fallbackLatencyMs) : null;
+  const notionalUsd = Number.isFinite(params.entryPrice) && Number.isFinite(params.qty)
+    ? params.entryPrice * params.qty
+    : null;
+
+  updateExecutionTelemetry(params.symbol, {
+    symbol: params.symbol,
+    mode: executionMode,
+    fillRatio,
+    slippageBps,
+    spreadBps,
+    latencyMs,
+    passiveOffsetBps,
+    fallbackTriggered: fallbackLatencyMs != null && fallbackLatencyMs > 0,
+    notionalUsd,
+  });
+
+  const makerShare = executionMode === 'limit' && fillRatio != null ? Math.max(0, Math.min(1, fillRatio)) : null;
+  const takerShare = executionMode === 'market'
+    ? 1
+    : fillRatio != null
+      ? Number((1 - Math.max(0, Math.min(1, fillRatio))).toFixed(4))
+      : null;
+
+  recordOpsEvent({
+    level: 'info',
+    source: 'adaptive_plan_vs_fill',
+    message: 'plan_fill_snapshot',
+    symbol: params.symbol,
+    details: {
+      strategy: params.signal.id,
+      executionMode,
+      fillRatio,
+      makerShare,
+      takerShare,
+      slippageBps,
+      spreadBps,
+      latencyMs,
+      fallbackLatencyMs,
+      notionalUsd,
+      passiveOffsetBps,
     },
   });
 }
