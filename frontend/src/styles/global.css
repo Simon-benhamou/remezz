@@ -21,6 +21,11 @@
   animation: lucide-spin 1s linear infinite;
 }
 
+.lucide {
+  width: 16px;
+  height: 16px;
+}
+
 html,
 body,
 #root {

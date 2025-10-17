@@ -11,6 +11,7 @@ import {
   Empty,
   Row,
   Space,
+  Statistic,
   Tag,
   Typography,
   theme,
@@ -18,6 +19,10 @@ import {
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip as RechartsTooltip,
   XAxis,
@@ -35,7 +40,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import RecentTradesTable from '../components/RecentTradesTable';
-import AgentHealthTable from '../components/AgentHealthTable';
+import AgentHealthTable, { type AgentHealthRow } from '../components/AgentHealthTable';
 import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import { useDashboard } from '../hooks/useDashboard';
 
@@ -46,6 +51,8 @@ type ActivityPoint = {
   label: string;
   trades: number;
 };
+
+type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
 
 type GlobalHealth = {
   tone: 'success' | 'warning' | 'error' | 'info';
@@ -168,6 +175,12 @@ const severityMeta: Record<string, { color: string; label: string }> = {
   error: { color: '#f87171', label: 'Action' },
 };
 
+const AGGRESSIVENESS_META: Record<AggressivenessLevel, { label: string; color: string }> = {
+  conservative: { label: 'Conservative', color: '#0ea5e9' },
+  reactive: { label: 'Reactive', color: '#a855f7' },
+  aggressive: { label: 'Aggressive', color: '#ef4444' },
+};
+
 const OperationsDashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const {
@@ -270,6 +283,71 @@ const OperationsDashboardPage: React.FC = () => {
     () => (Array.isArray(opsEvents) ? opsEvents.slice(0, 6) : []),
     [opsEvents],
   );
+
+  const aggressivenessStats = React.useMemo(() => {
+    const rows = Array.isArray(agentHealth?.agents) ? agentHealth.agents : [];
+    if (!rows.length) return [] as Array<{
+      level: AggressivenessLevel;
+      label: string;
+      successRate: number;
+      total: number;
+      ok: number;
+      blocked: number;
+      stale: number;
+      avgTrades: number;
+    }>;
+    const order: AggressivenessLevel[] = ['conservative', 'reactive', 'aggressive'];
+    const buckets: Record<AggressivenessLevel, { total: number; ok: number; blocked: number; stale: number; tradeCount: number }> = {
+      conservative: { total: 0, ok: 0, blocked: 0, stale: 0, tradeCount: 0 },
+      reactive: { total: 0, ok: 0, blocked: 0, stale: 0, tradeCount: 0 },
+      aggressive: { total: 0, ok: 0, blocked: 0, stale: 0, tradeCount: 0 },
+    };
+    rows.forEach((row: AgentHealthRow) => {
+      const raw = (row.aggressiveness ?? (row as any)?.profile?.aggressiveness ?? (row as any)?.profileJson?.aggressiveness) as AggressivenessLevel | undefined;
+      const level = raw && AGGRESSIVENESS_META[raw] ? raw : 'reactive';
+      const bucket = buckets[level];
+      bucket.total += 1;
+      bucket.tradeCount += Number(row.tradeCount24h || 0);
+      if (row.status === 'ok') bucket.ok += 1;
+      if (row.status === 'blocked') bucket.blocked += 1;
+      if (row.status === 'stale') bucket.stale += 1;
+    });
+
+    return order
+      .map((level) => {
+        const bucket = buckets[level];
+        if (!bucket || bucket.total === 0) {
+          return null;
+        }
+        const successRate = bucket.total ? Number(((bucket.ok / bucket.total) * 100).toFixed(1)) : 0;
+        const avgTrades = bucket.total ? Number((bucket.tradeCount / bucket.total).toFixed(1)) : 0;
+        return {
+          level,
+          label: AGGRESSIVENESS_META[level].label,
+          successRate,
+          total: bucket.total,
+          ok: bucket.ok,
+          blocked: bucket.blocked,
+          stale: bucket.stale,
+          avgTrades,
+        };
+      })
+      .filter(Boolean) as Array<{
+        level: AggressivenessLevel;
+        label: string;
+        successRate: number;
+        total: number;
+        ok: number;
+        blocked: number;
+        stale: number;
+        avgTrades: number;
+      }>;
+  }, [agentHealth]);
+
+  const bestAggressiveness = React.useMemo(() => {
+    if (!aggressivenessStats.length) return null;
+    return aggressivenessStats.reduce((best, entry) => (entry.successRate > best.successRate ? entry : best), aggressivenessStats[0]);
+  }, [aggressivenessStats]);
 
   const globalHealth = resolveGlobalHealth(opsMetrics);
 
@@ -457,6 +535,80 @@ const OperationsDashboardPage: React.FC = () => {
           </Col>
         ))}
       </Row>
+
+      <Card
+        title={<span style={{ color: '#e2e8f0' }}>Execution success by aggressiveness</span>}
+        extra={bestAggressiveness ? <Tag color={AGGRESSIVENESS_META[bestAggressiveness.level].color}>Top: {bestAggressiveness.label} · {bestAggressiveness.successRate}%</Tag> : undefined}
+        style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+        bodyStyle={{ padding: 24 }}
+      >
+        {aggressivenessStats.length === 0 ? (
+          <Empty description='No agent activity captured yet.' style={{ color: 'rgba(148, 163, 184, 0.7)' }} />
+        ) : (
+          <Row gutter={[24, 24]} align='middle'>
+            <Col xs={24} lg={14} style={{ height: 260 }}>
+              <ResponsiveContainer width='100%' height='100%'>
+                <BarChart data={aggressivenessStats} barSize={38}>
+                  <CartesianGrid stroke='rgba(148, 163, 184, 0.15)' vertical={false} />
+                  <XAxis dataKey='label' stroke='rgba(148, 163, 184, 0.7)' tickLine={false} axisLine={false} />
+                  <YAxis stroke='rgba(148, 163, 184, 0.7)' tickFormatter={(value) => `${value}%`} tickLine={false} axisLine={false} domain={[0, 100]} />
+                  <RechartsTooltip
+                    contentStyle={{
+                      background: 'rgba(15, 23, 42, 0.92)',
+                      borderRadius: 12,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      color: '#e2e8f0',
+                    }}
+                    formatter={(value: number, _name, entry) => {
+                      const stat = entry?.payload as typeof aggressivenessStats[number];
+                      return [`${value}% success`, `${stat.total} agents · ${stat.avgTrades} trades/agent`];
+                    }}
+                  />
+                  <Bar dataKey='successRate' radius={[8, 8, 0, 0]}>
+                    {aggressivenessStats.map((entry) => (
+                      <Cell key={entry.level} fill={AGGRESSIVENESS_META[entry.level].color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Col>
+            <Col xs={24} lg={10}>
+              <Space direction='vertical' size={16} style={{ width: '100%' }}>
+                {aggressivenessStats.map((entry) => (
+                  <div
+                    key={entry.level}
+                    style={{
+                      borderRadius: 14,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      padding: 16,
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Space direction='vertical' size={4}>
+                      <Space size={8}>
+                        <Tag color={AGGRESSIVENESS_META[entry.level].color} style={{ borderRadius: 8 }}>
+                          {entry.label}
+                        </Tag>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.75)' }}>{entry.total} agents</Text>
+                      </Space>
+                      <Text style={{ color: '#e2e8f0' }}>Success {entry.successRate}% · Avg trades {entry.avgTrades}</Text>
+                    </Space>
+                    <Statistic
+                      title={<span style={{ color: 'rgba(148, 163, 184, 0.75)' }}>Nominal</span>}
+                      value={entry.ok}
+                      valueStyle={{ color: '#34d399', fontSize: 24 }}
+                      suffix={<span style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 12 }}>/{entry.total}</span>}
+                    />
+                  </div>
+                ))}
+              </Space>
+            </Col>
+          </Row>
+        )}
+      </Card>
 
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={14}>

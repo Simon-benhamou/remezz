@@ -9,6 +9,13 @@ const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
 
 type Outcome = 'win' | 'loss' | 'breakeven';
+type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
+
+const AGGRESSIVENESS_META: Record<AggressivenessLevel, { label: string; color: string }> = {
+  conservative: { label: 'Conservative', color: '#0ea5e9' },
+  reactive: { label: 'Reactive', color: '#a855f7' },
+  aggressive: { label: 'Aggressive', color: '#ef4444' },
+};
 
 type TradeRow = {
   id: string;
@@ -26,6 +33,8 @@ type TradeRow = {
   status?: string;
   sessionSymbol?: string;
   sessionMode?: string;
+  sessionId?: string;
+  aggressiveness?: AggressivenessLevel;
 };
 
 type SessionMetrics = {
@@ -59,17 +68,34 @@ export default function ExecutionLedgerPage() {
   const [loading, setLoading] = React.useState(false);
   const [filterOutcome, setFilterOutcome] = React.useState<'all' | Outcome>('all');
   const [filterSymbol, setFilterSymbol] = React.useState<string>('all');
+  const [filterSessionMode, setFilterSessionMode] = React.useState<'all' | 'paper' | 'live'>('all');
+  const [aggressivenessFilter, setAggressivenessFilter] = React.useState<'all' | AggressivenessLevel>('all');
   const [searchText, setSearchText] = React.useState<string>('');
   const [range, setRange] = React.useState<[Dayjs | null, Dayjs | null]>([dayjs().subtract(14, 'day'), dayjs()]);
   const [limit, setLimit] = React.useState<number>(200);
   const [viewMode, setViewMode] = React.useState<'session' | 'global'>('session');
   const { mode } = useMode();
+  const [sessionMeta, setSessionMeta] = React.useState<Record<string, { symbol?: string; mode?: string; aggressiveness: AggressivenessLevel }>>({});
 
   React.useEffect(() => {
     (async () => {
       try {
         const list = await api.listSessions(mode);
         setSessions(list);
+        const map: Record<string, { symbol?: string; mode?: string; aggressiveness: AggressivenessLevel }> = {};
+        list.forEach((session: any) => {
+          if (!session?.id) return;
+          const rawLevel =
+            (session?.aggressiveness as AggressivenessLevel | undefined)
+            ?? (session?.profileJson?.aggressiveness as AggressivenessLevel | undefined)
+            ?? (session?.profile?.aggressiveness as AggressivenessLevel | undefined);
+          map[session.id] = {
+            symbol: session.symbol,
+            mode: session.mode,
+            aggressiveness: rawLevel ?? 'reactive',
+          };
+        });
+        setSessionMeta(map);
         const active = list.find((s: any) => !s.stoppedAt);
         const first = active || list[0];
         setSessionId(first?.id || '');
@@ -87,12 +113,25 @@ export default function ExecutionLedgerPage() {
 
       if (viewMode === 'global') {
         const sessionIds = sessions.map((session) => session.id).filter((id: string) => !!id);
-        const [allData, metricsListRaw] = await Promise.all([
+        const [allDataRaw, metricsListRaw] = await Promise.all([
           Promise.all(
             sessions.map(async (session) => {
               try {
                 const data = await api.getTrades(session.id, params);
-                return data.map((trade: any) => ({ ...trade, sessionSymbol: session.symbol, sessionMode: session.mode }));
+                return data.map((trade: any) => {
+                  const meta = sessionMeta[session.id] ?? {
+                    symbol: session.symbol,
+                    mode: session.mode,
+                    aggressiveness: 'reactive' as AggressivenessLevel,
+                  };
+                  return {
+                    ...trade,
+                    sessionId: session.id,
+                    sessionSymbol: session.symbol ?? meta.symbol,
+                    sessionMode: session.mode ?? meta.mode,
+                    aggressiveness: (trade?.aggressiveness as AggressivenessLevel | undefined) ?? meta.aggressiveness,
+                  } as TradeRow;
+                });
               } catch {
                 return [];
               }
@@ -100,25 +139,36 @@ export default function ExecutionLedgerPage() {
           ),
           sessionIds.length ? api.getSessionMetrics(sessionIds) : Promise.resolve<SessionMetrics[]>([]),
         ]);
-        const flatData = allData.flat().sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
+        const allData = allDataRaw as TradeRow[][];
+        const flatData = allData
+          .flat()
+          .map((trade) => {
+            if (trade.aggressiveness) return trade;
+            const meta = trade.sessionId ? sessionMeta[trade.sessionId] : undefined;
+            return {
+              ...trade,
+              aggressiveness: (trade.aggressiveness as AggressivenessLevel | undefined) ?? meta?.aggressiveness ?? 'reactive',
+            };
+          })
+          .sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
         setAllSessionData(flatData);
         setRows(flatData);
-        const metricsList = Array.isArray(metricsListRaw)
-          ? metricsListRaw
-          : metricsListRaw
-          ? [metricsListRaw as SessionMetrics]
+        const metricsListRawTyped = metricsListRaw as SessionMetrics | SessionMetrics[] | undefined;
+        const metricsList = Array.isArray(metricsListRawTyped)
+          ? metricsListRawTyped
+          : metricsListRawTyped
+          ? [metricsListRawTyped]
           : [];
         if (metricsList.length) {
-          const aggregated = metricsList.reduce(
-            (acc: SessionMetrics, metric: SessionMetrics) => ({
-              sessionId: 'global',
-              startingBalanceUsd: acc.startingBalanceUsd + Number(metric?.startingBalanceUsd ?? 0),
-              realizedPnlUsd: acc.realizedPnlUsd + Number(metric?.realizedPnlUsd ?? 0),
-              feesUsd: acc.feesUsd + Number(metric?.feesUsd ?? 0),
-              netPnlUsd: acc.netPnlUsd + Number(metric?.netPnlUsd ?? 0),
-              roiPct: 0,
-              tradeCount: acc.tradeCount + Number(metric?.tradeCount ?? 0),
-            }),
+          const aggregated = metricsList.reduce<SessionMetrics>(
+            (acc, metric) => {
+              acc.startingBalanceUsd += Number(metric?.startingBalanceUsd ?? 0);
+              acc.realizedPnlUsd += Number(metric?.realizedPnlUsd ?? 0);
+              acc.feesUsd += Number(metric?.feesUsd ?? 0);
+              acc.netPnlUsd += Number(metric?.netPnlUsd ?? 0);
+              acc.tradeCount += Number(metric?.tradeCount ?? 0);
+              return acc;
+            },
             {
               sessionId: 'global',
               startingBalanceUsd: 0,
@@ -127,7 +177,7 @@ export default function ExecutionLedgerPage() {
               netPnlUsd: 0,
               roiPct: 0,
               tradeCount: 0,
-            } as SessionMetrics
+            }
           );
           aggregated.roiPct = aggregated.startingBalanceUsd > 0
             ? (aggregated.netPnlUsd / aggregated.startingBalanceUsd) * 100
@@ -142,7 +192,15 @@ export default function ExecutionLedgerPage() {
           api.getTrades(sessionId, params),
           api.getSessionMetrics(sessionId),
         ]);
-        setRows(data);
+        const meta = sessionMeta[sessionId];
+        const decorated = data.map((trade: any) => ({
+          ...trade,
+          sessionId,
+          sessionSymbol: trade.sessionSymbol ?? meta?.symbol,
+          sessionMode: trade.sessionMode ?? meta?.mode,
+          aggressiveness: (trade?.aggressiveness as AggressivenessLevel | undefined) ?? meta?.aggressiveness ?? 'reactive',
+        }));
+        setRows(decorated as TradeRow[]);
         const metricsArray = Array.isArray(metricsResponse) ? metricsResponse : [metricsResponse];
         const matched = metricsArray.find((metric: SessionMetrics) => metric.sessionId === sessionId) || null;
         setSessionPerf(matched);
@@ -152,12 +210,34 @@ export default function ExecutionLedgerPage() {
       message.error(String(e?.response?.data?.error || e?.message || 'Failed to load trades'));
     }
     setLoading(false);
-  }, [sessionId, range, limit, viewMode, sessions]);
+  }, [limit, range, sessionId, sessionMeta, sessions, viewMode]);
 
   React.useEffect(() => {
     if (viewMode === 'session' && sessionId) loadTrades();
     else if (viewMode === 'global' && sessions.length) loadTrades();
   }, [sessionId, loadTrades, viewMode, sessions.length]);
+
+  const resolveAggressiveness = React.useCallback(
+    (row: TradeRow): AggressivenessLevel | undefined => {
+      if (row.aggressiveness) return row.aggressiveness;
+      if (row.sessionId && sessionMeta[row.sessionId]) {
+        return sessionMeta[row.sessionId].aggressiveness;
+      }
+      return 'reactive';
+    },
+    [sessionMeta],
+  );
+
+  const resolveMode = React.useCallback(
+    (row: TradeRow): string | undefined => {
+      if (row.sessionMode) return row.sessionMode;
+      if (row.sessionId && sessionMeta[row.sessionId]) {
+        return sessionMeta[row.sessionId].mode;
+      }
+      return undefined;
+    },
+    [sessionMeta],
+  );
 
   const data = React.useMemo(() => {
     let mapped = rows.map((row) => ({
@@ -173,18 +253,26 @@ export default function ExecutionLedgerPage() {
     if (filterSymbol !== 'all') {
       mapped = mapped.filter((row) => row.symbol === filterSymbol || row.sessionSymbol === filterSymbol);
     }
-    
+
     if (searchText) {
       const search = searchText.toLowerCase();
-      mapped = mapped.filter((row) => 
+      mapped = mapped.filter((row) =>
         row.symbol?.toLowerCase().includes(search) ||
         row.sessionSymbol?.toLowerCase().includes(search) ||
         row.positionSide?.toLowerCase().includes(search)
       );
     }
-    
+
+    if (filterSessionMode !== 'all') {
+      mapped = mapped.filter((row) => resolveMode(row) === filterSessionMode);
+    }
+
+    if (aggressivenessFilter !== 'all') {
+      mapped = mapped.filter((row) => resolveAggressiveness(row) === aggressivenessFilter);
+    }
+
     return mapped;
-  }, [rows, filterOutcome, filterSymbol, searchText]);
+  }, [rows, filterOutcome, filterSymbol, searchText, filterSessionMode, aggressivenessFilter, resolveMode, resolveAggressiveness]);
 
   // Get unique symbols for filter
   const symbols = React.useMemo(() => {
@@ -195,6 +283,24 @@ export default function ExecutionLedgerPage() {
     });
     return Array.from(symbolSet).sort();
   }, [rows]);
+
+  const availableModes = React.useMemo(() => {
+    const set = new Set<string>();
+    rows.forEach((row) => {
+      const mode = resolveMode(row);
+      if (mode) set.add(mode);
+    });
+    return Array.from(set) as Array<'paper' | 'live'>;
+  }, [rows, resolveMode]);
+
+  const availableAggressiveness = React.useMemo(() => {
+    const set = new Set<AggressivenessLevel>();
+    rows.forEach((row) => {
+      const level = resolveAggressiveness(row);
+      if (level) set.add(level);
+    });
+    return Array.from(set);
+  }, [rows, resolveAggressiveness]);
 
   const summary = React.useMemo(() => {
     const metrics = viewMode === 'global' ? globalPerf : sessionPerf;
@@ -256,9 +362,10 @@ export default function ExecutionLedgerPage() {
 
   const exportCsv = React.useCallback(() => {
     if (!data.length) return;
-    const headers = ['Date', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'PnL_USD', 'PnL_%', 'Leverage', 'EstLev', 'Outcome'];
+    const headers = ['Date', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'PnL_USD', 'PnL_%', 'Leverage', 'EstLev', 'Aggressiveness', 'Mode', 'Outcome'];
     const lines = data.map((row) => [
       dayjs(row.createdAt).format('YYYY-MM-DD HH:mm:ss'),
+      row.sessionSymbol ?? '',
       row.symbol,
       row.positionSide,
       Number(row.qty || 0).toFixed(4),
@@ -268,6 +375,8 @@ export default function ExecutionLedgerPage() {
       row.pctChange != null ? Number(row.pctChange).toFixed(2) : '',
       row.leverage != null ? Number(row.leverage).toFixed(2) : '',
       row.estLev != null ? Number(row.estLev).toFixed(2) : '',
+      resolveAggressiveness(row) ?? '',
+      resolveMode(row) ?? '',
       asOutcome(row),
     ].join(','));
     const csv = [headers.join(','), ...lines].join('\n');
@@ -278,7 +387,7 @@ export default function ExecutionLedgerPage() {
     a.download = `journal_${sessionId}_${dayjs().format('YYYYMMDD_HHmm')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [data, sessionId]);
+  }, [data, resolveAggressiveness, resolveMode, sessionId]);
 
   const columns = React.useMemo(() => ([
     {
@@ -300,6 +409,15 @@ export default function ExecutionLedgerPage() {
       ),
     }] : []),
     { title: 'Symbol', dataIndex: 'symbol', width: 110 },
+    {
+      title: 'Aggressiveness',
+      dataIndex: 'aggressiveness',
+      width: 150,
+      render: (value: AggressivenessLevel) => {
+        const meta = value ? AGGRESSIVENESS_META[value] : undefined;
+        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : '—';
+      },
+    },
     {
       title: 'Side',
       dataIndex: 'positionSide',
@@ -395,7 +513,39 @@ export default function ExecutionLedgerPage() {
                   ...symbols.map(symbol => ({ label: symbol, value: symbol }))
                 ]}
               />
-              
+
+              {/* Mode Filter */}
+              <Select<'all' | 'paper' | 'live'>
+                placeholder="Mode"
+                style={{ minWidth: 120 }}
+                value={filterSessionMode}
+                onChange={(val) => setFilterSessionMode(val)}
+                options={[
+                  { label: 'All Modes', value: 'all' },
+                  ...availableModes.map((mode) => ({
+                    label: mode.toUpperCase(),
+                    value: mode,
+                  })),
+                ]}
+                disabled={!availableModes.length}
+              />
+
+              {/* Aggressiveness Filter */}
+              <Select<'all' | AggressivenessLevel>
+                placeholder="Aggressiveness"
+                style={{ minWidth: 160 }}
+                value={aggressivenessFilter}
+                onChange={(val) => setAggressivenessFilter(val)}
+                options={[
+                  { label: 'All Levels', value: 'all' },
+                  ...availableAggressiveness.map((level) => ({
+                    label: AGGRESSIVENESS_META[level].label,
+                    value: level,
+                  })),
+                ]}
+                disabled={!availableAggressiveness.length}
+              />
+
               {/* Search */}
               <Input
                 placeholder="Search symbols..."

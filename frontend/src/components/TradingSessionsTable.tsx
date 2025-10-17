@@ -16,6 +16,7 @@ import {
   Select,
   Space,
   Table,
+  Tag,
   Tooltip,
 } from "antd";
 import type { ColumnsType, TableProps } from "antd/es/table";
@@ -30,6 +31,7 @@ import {
 
 type SessionStatus = "running" | "waiting" | "blocked" | "stopped";
 type SessionMode = "paper" | "live";
+type AggressivenessLevel = "conservative" | "reactive" | "aggressive";
 
 type TradingSession = {
   id: string;
@@ -38,6 +40,7 @@ type TradingSession = {
   profile: string;
   mode: SessionMode;
   status: SessionStatus;
+  aggressiveness: AggressivenessLevel;
   pnl: Money;
   roi: number;
   exposure: number;
@@ -63,6 +66,7 @@ const sessionsSeed: TradingSession[] = [
     profile: "Momentum scalper",
     mode: "paper",
     status: "running",
+    aggressiveness: "aggressive",
     pnl: 1_240_500n,
     roi: 4.6,
     exposure: 1.12,
@@ -84,6 +88,7 @@ const sessionsSeed: TradingSession[] = [
     profile: "Market maker",
     mode: "live",
     status: "running",
+    aggressiveness: "reactive",
     pnl: 2_780_900n,
     roi: 7.8,
     exposure: 1.24,
@@ -105,6 +110,7 @@ const sessionsSeed: TradingSession[] = [
     profile: "Breakout chaser",
     mode: "paper",
     status: "waiting",
+    aggressiveness: "aggressive",
     pnl: -340_200n,
     roi: -2.3,
     exposure: 0.58,
@@ -126,6 +132,7 @@ const sessionsSeed: TradingSession[] = [
     profile: "Adaptive trend",
     mode: "paper",
     status: "blocked",
+    aggressiveness: "reactive",
     pnl: -125_800n,
     roi: -1.1,
     exposure: 0.34,
@@ -147,6 +154,7 @@ const sessionsSeed: TradingSession[] = [
     profile: "Range mean reversion",
     mode: "live",
     status: "running",
+    aggressiveness: "conservative",
     pnl: 980_400n,
     roi: 5.6,
     exposure: 0.95,
@@ -168,6 +176,7 @@ const sessionsSeed: TradingSession[] = [
     profile: "Micro structure arb",
     mode: "paper",
     status: "stopped",
+    aggressiveness: "conservative",
     pnl: 150_000n,
     roi: 1.2,
     exposure: 0.0,
@@ -189,6 +198,15 @@ const statusColorMap: Record<SessionStatus, string> = {
   waiting: "#0ea5e9",
   blocked: "#f97316",
   stopped: "#94a3b8",
+};
+
+const aggressivenessMeta: Record<
+  AggressivenessLevel,
+  { label: string; color: string }
+> = {
+  conservative: { label: "Conservative", color: "#0ea5e9" },
+  reactive: { label: "Reactive", color: "#a855f7" },
+  aggressive: { label: "Aggressive", color: "#ef4444" },
 };
 
 const readinessIconMap: Record<
@@ -221,7 +239,9 @@ const TradingSessionsTable: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<SessionStatus | "all">("all");
   const [modeFilter, setModeFilter] = useState<SessionMode | "all">("all");
   const [symbolFilter, setSymbolFilter] = useState<string | undefined>(undefined);
-  const [levelFilter, setLevelFilter] = useState<string | undefined>(undefined);
+  const [aggressivenessFilter, setAggressivenessFilter] = useState<
+    AggressivenessLevel | undefined
+  >(undefined);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
 
@@ -238,7 +258,7 @@ const TradingSessionsTable: React.FC = () => {
     setStatusFilter("all");
     setModeFilter("all");
     setSymbolFilter(undefined);
-    setLevelFilter(undefined);
+    setAggressivenessFilter(undefined);
   };
 
   const filteredSessions = useMemo(() => {
@@ -260,12 +280,12 @@ const TradingSessionsTable: React.FC = () => {
       if (symbolFilter && session.symbol !== symbolFilter) {
         return false;
       }
-      if (levelFilter && session.profile.toLowerCase().indexOf(levelFilter.toLowerCase()) === -1) {
+      if (aggressivenessFilter && session.aggressiveness !== aggressivenessFilter) {
         return false;
       }
       return true;
     });
-  }, [levelFilter, modeFilter, search, statusFilter, symbolFilter]);
+  }, [aggressivenessFilter, modeFilter, search, statusFilter, symbolFilter]);
 
   const bulkActionsVisible = selectedRowKeys.length > 0;
 
@@ -330,6 +350,16 @@ const TradingSessionsTable: React.FC = () => {
           <div className="id">{record.symbol} · {record.id}</div>
         </div>
       ),
+    },
+    {
+      title: "Aggressiveness",
+      dataIndex: "aggressiveness",
+      key: "aggressiveness",
+      width: 150,
+      render: (value: AggressivenessLevel) => {
+        const meta = aggressivenessMeta[value];
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
     },
     {
       title: "P&L $",
@@ -481,20 +511,16 @@ const TradingSessionsTable: React.FC = () => {
             }))}
             aria-label="Filtrer par symbole"
           />
-          <Select<string>
-            placeholder="Level"
-            value={levelFilter}
-            onChange={setLevelFilter}
+          <Select<AggressivenessLevel>
+            placeholder="Aggressiveness"
+            value={aggressivenessFilter}
+            onChange={(value) => setAggressivenessFilter(value ?? undefined)}
             allowClear
-            options={[
-              { label: "Momentum", value: "momentum" },
-              { label: "Maker", value: "maker" },
-              { label: "Breakout", value: "breakout" },
-              { label: "Trend", value: "trend" },
-              { label: "Range", value: "range" },
-              { label: "Arb", value: "arb" },
-            ]}
-            aria-label="Filtrer par niveau"
+            options={(Object.keys(aggressivenessMeta) as AggressivenessLevel[]).map((key) => ({
+              label: aggressivenessMeta[key].label,
+              value: key,
+            }))}
+            aria-label="Filter by aggressiveness"
           />
           <Button type="text" onClick={handleReset}>
             Reset filters
