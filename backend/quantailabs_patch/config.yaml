@@ -16,10 +16,10 @@ fees_slippage:
 
 filters:
   min_adx: 14                      # allow entries if ADX >= 14 (crypto momentum is noisier)
-  min_dollar_volume: 150000        # $150k+ recent liquidity is enough for most pairs
+  min_dollar_volume: 50000000        # $150k+ recent liquidity is enough for most pairs
   min_rr: 1.15                     # baseline RR so we still target >=1.15R
   min_atr_pct: 0.08                # accept quieter consolidations (ATR% of price)
-  max_spread_bps: 16               # crypto spreads can expand during chop
+  max_spread_bps: 8               # crypto spreads can expand during chop
   confidence_threshold: 0.55       # slightly more permissive confidence gate
   use_confidence_filter: true
   max_atr_pct: 12.0                # keep trading until ATR% becomes extreme
@@ -55,7 +55,7 @@ filters:
       tier1: 6.0
       tier2: 9.0
       tier3: 12.0
-    spread_atr_ratio_limit: 0.55     # allow spreads up to 55% of ATR% before blocking
+    spread_atr_ratio_limit: 0.35     # allow spreads up to 55% of ATR% before blocking
     confidence_tier_adjustments:
       tier3: 0.02
     rr_tier_adjustments:
