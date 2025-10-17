@@ -55,6 +55,7 @@ const momentumSnap = {
   last: 123.4,
   ema20: 124.6,
   ema50: 120.8,
+  ema20Slope: 0.07,
   rsi14: 62.5,
   adx14: 27.2,
   atrPct: 1.15,

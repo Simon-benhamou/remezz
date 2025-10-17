@@ -1,5 +1,72 @@
 import { prisma } from '../../db/client.js';
 
+const SCALE_FACTOR = 100_000_000;
+const EPSILON = 50n; // ≈5e-7 units with SCALE_FACTOR precision
+
+type NormalizedSide = 'buy' | 'sell';
+
+export type AggregatedFill = {
+  ts: Date;
+  qty: number;
+  side: NormalizedSide;
+  realizedPnl: number;
+};
+
+export type AggregatedTrade = {
+  pnl: bigint;
+  ts: Date;
+};
+
+function toFixed(value: number | null | undefined): bigint {
+  if (value == null || !Number.isFinite(value)) return 0n;
+  const scaled = Math.round(value * SCALE_FACTOR);
+  return BigInt(scaled);
+}
+
+function isZeroish(value: bigint): boolean {
+  return value >= -EPSILON && value <= EPSILON;
+}
+
+export function aggregateFillsToTrades(fills: AggregatedFill[]): AggregatedTrade[] {
+  if (!Array.isArray(fills) || fills.length === 0) return [];
+
+  const sorted = fills.slice().sort((a, b) => a.ts.getTime() - b.ts.getTime());
+  let position = 0n;
+  let tradePnl = 0n;
+  const trades: AggregatedTrade[] = [];
+
+  for (const fill of sorted) {
+    const qtyFixed = toFixed(fill.qty);
+    const realizedFixed = toFixed(fill.realizedPnl);
+    const side: NormalizedSide = fill.side === 'sell' ? 'sell' : 'buy';
+    if (qtyFixed === 0n && realizedFixed === 0n) continue;
+
+    const before = isZeroish(position) ? 0n : position;
+    const signedQty = side === 'sell' ? -qtyFixed : qtyFixed;
+    let after = before + signedQty;
+    if (isZeroish(after)) after = 0n;
+
+    if (realizedFixed !== 0n) {
+      tradePnl += realizedFixed;
+    }
+
+    const beforeSign = before > 0n ? 1 : before < 0n ? -1 : 0;
+    const afterSign = after > 0n ? 1 : after < 0n ? -1 : 0;
+    const crossed = beforeSign !== 0 && afterSign !== 0 && beforeSign !== afterSign;
+
+    if (crossed || afterSign === 0) {
+      trades.push({ pnl: tradePnl, ts: fill.ts });
+      tradePnl = 0n;
+      position = after;
+      continue;
+    }
+
+    position = after;
+  }
+
+  return trades;
+}
+
 export type WinRateOptions = {
   maxTrades?: number;
   minTrades?: number;
@@ -61,30 +128,23 @@ export async function getAgentRecentWinRate(
     where.ts = { gte: since };
   }
 
-  const take = Math.max(maxTrades * 4, 100);
+  const take = Math.max(maxTrades * 20, 200);
   const fills = await prisma.fill.findMany({
     where,
     orderBy: { ts: 'desc' },
     take,
-    select: { orderId: true, realizedPnl: true, fee: true, ts: true },
+    select: { ts: true, qty: true, side: true, realizedPnl: true },
   });
 
-  const orderMap = new Map<string, { pnl: number; ts: Date }>();
-  for (const fill of fills) {
-    const orderId = fill.orderId;
-    if (!orderId) continue;
-    const pnl = Number(fill.realizedPnl ?? 0);
-    const ts = normalizeDate(fill.ts);
-    const existing = orderMap.get(orderId);
-    if (existing) {
-      existing.pnl += pnl;
-      if (existing.ts < ts) existing.ts = ts;
-    } else {
-      orderMap.set(orderId, { pnl, ts });
-    }
-  }
+  const aggregated = aggregateFillsToTrades(
+    fills.map((fill) => ({
+      ts: normalizeDate(fill.ts),
+      qty: Number(fill.qty ?? 0),
+      side: String(fill.side ?? 'buy') === 'sell' ? 'sell' : 'buy',
+      realizedPnl: Number(fill.realizedPnl ?? 0),
+    })),
+  ).sort((a, b) => b.ts.getTime() - a.ts.getTime());
 
-  const aggregated = Array.from(orderMap.values()).sort((a, b) => b.ts.getTime() - a.ts.getTime());
   const trades = aggregated.slice(0, maxTrades);
 
   let wins = 0;
@@ -92,10 +152,10 @@ export async function getAgentRecentWinRate(
   let breakeven = 0;
   const outcomes: number[] = [];
   for (const trade of trades.slice().reverse()) {
-    if (trade.pnl > 0) {
+    if (trade.pnl > 0n) {
       wins += 1;
       outcomes.push(1);
-    } else if (trade.pnl < 0) {
+    } else if (trade.pnl < 0n) {
       losses += 1;
       outcomes.push(0);
     } else {

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../db/client.js";
+import { listAggregatedTrades } from "../services/performance/tradeLedger.js";
 export const router = Router();
 router.get("/", async (req, res) => {
   const sessionId = String(req.query.sessionId || "");
@@ -38,62 +39,52 @@ router.get("/", async (req, res) => {
 
 // Aggregated trades: one row per exit (partial or full), with reconstructed entry price from realized PnL
 router.get('/trades', async (req, res) => {
-  const sessionId = String(req.query.sessionId || "");
+  const sessionId = String(req.query.sessionId || "").trim();
   const limitRaw = Number(req.query.limit ?? 200);
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 200;
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
   const fromStr = String(req.query.from || '').trim();
   const toStr = String(req.query.to || '').trim();
-  const createdAt: any = {};
-  if (fromStr) {
-    const from = new Date(fromStr);
-    if (!Number.isNaN(from.getTime())) createdAt.gte = from;
-  }
-  if (toStr) {
-    const to = new Date(toStr);
-    if (!Number.isNaN(to.getTime())) createdAt.lt = to;
-  }
 
-  const where: any = { clientOrderId: { endsWith: '.exit' } };
-  if (sessionId) where.sessionId = sessionId;
-  if (Object.keys(createdAt).length > 0) where.createdAt = createdAt;
+  const from = fromStr ? new Date(fromStr) : null;
+  const to = toStr ? new Date(toStr) : null;
 
-  const [rows, sess] = await Promise.all([
-    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: limit, include: { fills: true } }),
+  const [trades, session] = await Promise.all([
+    listAggregatedTrades({
+      sessionId,
+      from: from && !Number.isNaN(from.getTime()) ? from : undefined,
+      to: to && !Number.isNaN(to.getTime()) ? to : undefined,
+      limit,
+    }),
     sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
   ]);
-  const budgetPct = Number(((sess as any)?.profileJson?.budgetPct) ?? 100);
-  const equity = Number((sess as any)?.startBalanceUsd || 0);
-  const equityAlloc = equity * (budgetPct > 1 ? (budgetPct/100) : (budgetPct||1));
-  function posDirFromExitSide(side: string) { return side === 'buy' ? 'short' : 'long'; }
-  const out = rows.map((o:any)=>{
-    const positionSide = posDirFromExitSide(o.side || '');
-    const dir = positionSide === 'long' ? 1 : -1;
-    const qty = Number(o.qty || 0);
-    const exitPrice = Number(o.price || 0);
-    const realizedNet = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.realizedPnl || 0), 0) : 0;
-    const feesUsd = Array.isArray(o.fills) ? o.fills.reduce((s:number,f:any)=> s + Number(f?.fee || 0), 0) : 0;
-    const realizedGross = realizedNet + feesUsd;
-    const realized = realizedNet;
-    const entryPrice = (qty>0 && exitPrice>0) ? (exitPrice - (realizedGross / (dir * qty))) : null;
-    const roePct = (o.pctChange != null && o.leverage) ? (Number(o.pctChange) * Number(o.leverage)) : null;
-    const notional = qty * exitPrice;
-    const estLev = equityAlloc > 0 ? (notional / equityAlloc) : null;
+
+  const budgetPct = Number(((session as any)?.profileJson?.budgetPct) ?? 100);
+  const equity = Number((session as any)?.startBalanceUsd || 0);
+  const equityAlloc = equity * (budgetPct > 1 ? budgetPct / 100 : budgetPct || 1);
+
+  const out = trades.map((trade) => {
+    const notional = trade.entryNotional ?? (trade.entryPrice != null ? trade.entryPrice * trade.qty : null);
+    const estLev = equityAlloc > 0 && notional != null ? notional / equityAlloc : null;
+    const leverage = trade.leverage ?? null;
+    const roePct = leverage != null && trade.roiPct != null ? trade.roiPct * leverage : trade.roePct ?? null;
     return {
-      id: o.id,
-      createdAt: o.createdAt,
-      symbol: o.symbol,
-      positionSide,
-      qty,
-      entryPrice,
-      exitPrice,
-      pctChange: o.pctChange,
+      id: trade.id,
+      createdAt: trade.createdAt,
+      symbol: trade.symbol,
+      positionSide: trade.positionSide,
+      qty: trade.qty,
+      entryPrice: trade.entryPrice,
+      exitPrice: trade.exitPrice,
+      pctChange: trade.roiPct ?? trade.pctChange,
       roePct,
+      leverage,
       estLev,
-      leverage: o.leverage,
-      realizedPnlUsd: realized,
-      feesUsd,
-      status: o.status,
+      realizedPnlUsd: trade.realizedPnlUsd,
+      feesUsd: trade.feesUsd,
+      status: 'filled',
+      orderCount: trade.orderCount,
     };
   });
+
   res.json(out);
 });
