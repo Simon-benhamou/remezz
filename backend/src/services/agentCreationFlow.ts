@@ -743,8 +743,8 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
 
 function deriveStrategyFilterProfile(config: NormalizedStartConfig): StrategyFilterProfile {
   const env = getConfig();
-  const minTp = Number(env.MIN_TP_PCT ?? 0.6);
-  const targetTpRaw = env.TARGET_TP1_PCT ?? env.MIN_TP_PCT ?? 0.8;
+  const minTp = Number(env.MIN_TP_PCT ?? 1.2);
+  const targetTpRaw = env.TARGET_TP1_PCT ?? env.MIN_TP_PCT ?? 1.2;
   const targetTp = Number(targetTpRaw);
   const stopFloor = Number(env.MIN_STOP_PCT ?? 0.5);
   const requestedStop = Number((config.rawPayload as any)?.minStopPct);
