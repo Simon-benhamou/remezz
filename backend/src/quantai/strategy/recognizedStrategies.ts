@@ -30,6 +30,8 @@ export type RecognizedStrategySignal = {
     riskPct?: string;
     stopAtrMult?: string;
     takeProfitMultiples?: string[];
+    riskUsd?: string;
+    targetProfitUsd?: string;
   };
 };
 
@@ -84,6 +86,8 @@ function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
       riskPct: signal.plan.riskPct.toFixed(6),
       stopAtrMult: signal.plan.stopAtrMult.toFixed(6),
       takeProfitMultiples: signal.plan.takeProfitMultiples.map(tp => tp.toFixed(4)),
+      riskUsd: signal.plan.riskUsd.toFixed(6),
+      targetProfitUsd: signal.plan.targetProfitUsd.toFixed(6),
     },
   };
 }
@@ -127,6 +131,11 @@ export function registerAdaptiveTradeEntry(params: {
   if (!params.signal || !params.signal.meta) return;
   const planRiskPct = new PreciseDecimal(params.signal.meta.riskPct ?? '0');
   const stopAtrMult = new PreciseDecimal(params.signal.meta.stopAtrMult ?? '1');
+  const planRiskUsd = new PreciseDecimal(params.signal.meta.riskUsd ?? '0');
+  const planTargetProfitUsd = new PreciseDecimal(params.signal.meta.targetProfitUsd ?? '0');
+  const tpList = params.signal.meta.takeProfitMultiples ?? [];
+  const medianIndex = tpList.length > 1 ? 1 : 0;
+  const medianTakeProfitR = new PreciseDecimal(tpList[medianIndex] ?? '1');
   metaAdaptiveStrategyAgent.registerActiveTrade({
     sessionId: params.sessionId,
     symbol: params.symbol,
@@ -147,7 +156,11 @@ export function registerAdaptiveTradeEntry(params: {
       stopAtrMult,
       takeProfitMultiples: (params.signal.meta.takeProfitMultiples ?? []).map(v => new PreciseDecimal(v)),
       executionMode: params.signal.meta.executionMode ?? 'market',
+      riskUsd: planRiskUsd,
+      targetProfitUsd: planTargetProfitUsd,
+      medianTakeProfitR,
     },
+    side: params.signal.bias,
   });
 
   const executionMode = params.executionMode ?? params.signal.meta.executionMode ?? 'market';
