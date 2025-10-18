@@ -8,8 +8,10 @@ export interface TradingEnv {
   SLIP_ALPHA: number;
   SLIP_BETA: number;
   SLIP_CAP_BPS: number;
-  ENTRY_LIMIT_TIMEOUT_MS: number;
-  ENTRY_TWAP_TRIGGER_SPREAD_BPS: number;
+  ORDER_LIMIT_TIMEOUT_MS: number;
+  ORDER_TWAP_SPREAD_BPS: number;
+  ORDER_MARKET_ATR_PCT: number;
+  ORDER_MAX_IMPACT_PCT: number;
   ENTRY_SPLIT_LIMIT: number;
   ENTRY_SPLIT_PA: number;
   ACCEPT_Q_TREND: number;
@@ -46,6 +48,19 @@ function parseDecimal(name: string, fallback: number | string): PreciseDecimal {
   return new PreciseDecimal(raw ?? fallback);
 }
 
+function parsePositiveFallback(names: string[], fallback: number): number {
+  for (const name of names) {
+    const raw = process.env[name];
+    if (raw != null) {
+      const value = Number(raw);
+      if (Number.isFinite(value) && value >= 0) {
+        return value;
+      }
+    }
+  }
+  return fallback;
+}
+
 export function getEnv(): TradingEnv {
   if (cachedEnv) {
     return cachedEnv;
@@ -55,12 +70,14 @@ export function getEnv(): TradingEnv {
     MIN_TARGET_GAIN_USD: parseDecimal('MIN_TARGET_GAIN_USD', '30'),
     RISK_PCT_PER_TRADE: parseRatio('RISK_PCT_PER_TRADE', 0.015),
     MIN_RR: parsePositive('MIN_RR', 2),
-    FEES_BPS: parsePositive('FEES_BPS', 7),
-    SLIP_ALPHA: parsePositive('SLIP_ALPHA', 0.7),
-    SLIP_BETA: parsePositive('SLIP_BETA', 0.3),
-    SLIP_CAP_BPS: parsePositive('SLIP_CAP_BPS', 18),
-    ENTRY_LIMIT_TIMEOUT_MS: parsePositive('ENTRY_LIMIT_TIMEOUT_MS', 2500),
-    ENTRY_TWAP_TRIGGER_SPREAD_BPS: parsePositive('ENTRY_TWAP_TRIGGER_SPREAD_BPS', 18),
+    FEES_BPS: parsePositive('FEES_BPS', 8),
+    SLIP_ALPHA: parsePositive('SLIP_ALPHA', 0.5),
+    SLIP_BETA: parsePositive('SLIP_BETA', 1.2),
+    SLIP_CAP_BPS: parsePositive('SLIP_CAP_BPS', 15),
+    ORDER_LIMIT_TIMEOUT_MS: parsePositiveFallback(['ORDER_LIMIT_TIMEOUT_MS', 'ENTRY_LIMIT_TIMEOUT_MS'], 2500),
+    ORDER_TWAP_SPREAD_BPS: parsePositiveFallback(['ORDER_TWAP_SPREAD_BPS', 'ENTRY_TWAP_TRIGGER_SPREAD_BPS'], 16),
+    ORDER_MARKET_ATR_PCT: parsePositive('ORDER_MARKET_ATR_PCT', 4),
+    ORDER_MAX_IMPACT_PCT: parsePositive('ORDER_MAX_IMPACT_PCT', 0.35),
     ENTRY_SPLIT_LIMIT: parseRatio('ENTRY_SPLIT_LIMIT', 0.6),
     ENTRY_SPLIT_PA: parseRatio('ENTRY_SPLIT_PA', 0.4),
     ACCEPT_Q_TREND: parseRatio('ACCEPT_Q_TREND', 0.65),

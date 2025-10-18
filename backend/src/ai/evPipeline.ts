@@ -13,12 +13,15 @@ import { passesHardGates, passesQuantile } from './kpi/perfGuards.js';
 import { Telemetry } from './kpi/telemetry.js';
 import type { LabeledRow } from './labeling/tripleBarrier.js';
 import { PreciseDecimal } from '../quantai/strategy/metaAdaptiveAgent.js';
+import { fetchPerformanceSnapshot, type PerformanceSnapshot } from './performance/memory.js';
 
 type ContextWithMulti = ContextFeatures & {
   multiTimeframe?: {
     timeframes?: Record<string, { bias?: string | null }>;
   };
 };
+
+type PerformanceMemory = Pick<PerformanceSnapshot, 'sample' | 'winRate' | 'lastTradeAt'>;
 
 export interface OpportunityEvaluation {
   accepted: boolean;
@@ -77,6 +80,13 @@ type EvaluateOptions = {
   now?: number;
   ohlcv15m?: number[][];
   baseNotionalCapUsd?: number;
+  performanceMemory?: {
+    sample: number;
+    winRate: number | null;
+    lastTradeAt: number | null;
+  };
+  sizingMode?: 'risk' | 'budget';
+  budgetUsd?: number;
 };
 
 export async function evaluateOpportunity(
@@ -118,6 +128,26 @@ export async function evaluateOpportunity(
 
   const { p_win_cal } = probModel.predictProba(features);
   const { p_low, p_high } = conformal.interval(features);
+  const perfMemory = await resolvePerformanceMemory(symbol, options?.performanceMemory);
+  if (perfMemory && Number.isFinite(perfMemory.sample) && perfMemory.sample >= cfg.EV_PERF_MIN_SAMPLE) {
+    const winRate = typeof perfMemory.winRate === 'number' ? perfMemory.winRate : null;
+    if (winRate != null && Number.isFinite(winRate) && winRate < cfg.EV_PERF_MIN_WINRATE) {
+      const nowTs = options?.now ?? Date.now();
+      const ageHours = perfMemory.lastTradeAt != null
+        ? (nowTs - perfMemory.lastTradeAt) / 3_600_000
+        : Infinity;
+      const reason = ageHours < cfg.EV_PERF_COOLDOWN_HOURS
+        ? 'perf_memory_cooldown'
+        : 'perf_memory_reject';
+      console.warn(`EV pipeline rejecting ${symbol} due to performance memory (${winRate.toFixed(1)}% win, sample=${perfMemory.sample}).`);
+      return {
+        accepted: false,
+        reason,
+        p_win: p_win_cal,
+        p_interval: [p_low, p_high],
+      };
+    }
+  }
   const actions = options?.playbooks ?? ['PULLBACK', 'BREAKOUT', 'MR'];
   const banditCtx = selectBanditContext(features);
   const action = bandit.choose(banditCtx, actions);
@@ -136,6 +166,14 @@ export async function evaluateOpportunity(
     return { accepted: false, reason: 'invalid_stop' };
   }
 
+  const slipRecentBps = typeof (options?.context as any)?.micro?.slipRecentBps === 'number'
+    ? Number((options?.context as any)?.micro?.slipRecentBps)
+    : features.micro.spreadBps;
+  const atrPctPercent = Number.isFinite(atrPct) ? atrPct * 100 : undefined;
+  const rawDepthUsd = Math.min(Number(features.micro.bidDepthUsd ?? 0), Number(features.micro.askDepthUsd ?? 0));
+  const depthForPlan = Number.isFinite(rawDepthUsd) && rawDepthUsd > 0 ? rawDepthUsd : undefined;
+  const sizingMode = options?.sizingMode ?? 'risk';
+
   const plan = buildExecutionPlan({
     equityUsd,
     stopPct,
@@ -143,14 +181,15 @@ export async function evaluateOpportunity(
     tpMultipliers,
     spreadBps: features.micro.spreadBps,
     passiveFillRate: features.micro.passiveFillRate,
+    mode: sizingMode,
+    budgetUsd: options?.budgetUsd,
+    atrPct: atrPctPercent,
+    depthUsd: depthForPlan,
+    slipRecentBps,
   });
   if (!plan) {
     return { accepted: false, reason: 'low_reward', p_win: p_win_cal, p_interval: [p_low, p_high] };
   }
-
-  const slipRecentBps = typeof (options?.context as any)?.micro?.slipRecentBps === 'number'
-    ? Number((options?.context as any)?.micro?.slipRecentBps)
-    : features.micro.spreadBps;
 
   const pUse = (p_high - p_low > 0.2)
     ? Math.max(p_low, cfg.EV_MIN_CONSERVATIVE_PROB)
@@ -235,6 +274,33 @@ export function recordOutcome(pnl: PreciseDecimal): void {
 
 export function getTelemetrySummary() {
   return telemetry.summary();
+}
+
+async function resolvePerformanceMemory(
+  symbol: string,
+  provided?: EvaluateOptions['performanceMemory'],
+): Promise<PerformanceMemory | null> {
+  if (provided) {
+    return {
+      sample: provided.sample,
+      winRate: provided.winRate,
+      lastTradeAt: provided.lastTradeAt ?? null,
+    };
+  }
+  if (process.env.UNIT_TEST_MODE === 'true') {
+    return null;
+  }
+  try {
+    const snapshot = await fetchPerformanceSnapshot(symbol);
+    return {
+      sample: snapshot.sample,
+      winRate: snapshot.winRate,
+      lastTradeAt: snapshot.lastTradeAt,
+    };
+  } catch (error) {
+    console.warn(`EV pipeline could not load performance memory for ${symbol}:`, error);
+    return null;
+  }
 }
 
 function serializePlan(plan: NonNullable<ReturnType<typeof buildExecutionPlan>>): {

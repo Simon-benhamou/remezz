@@ -252,8 +252,6 @@ export type Cfg = {
   SLIP_CAP_BPS: number;
   ENTRY_SPLIT_LIMIT: number;
   ENTRY_SPLIT_PA: number;
-  ENTRY_LIMIT_TIMEOUT_MS: number;
-  ENTRY_TWAP_TRIGGER_SPREAD_BPS: number;
   TRAIL_ACTIVATE_R: number;
   EV_MIN_VOLUME_USD: number;
   EV_MAX_SPREAD_BPS: number;
@@ -268,6 +266,9 @@ export type Cfg = {
   EV_BREAKOUT_TP_MULTS: number[];
   EV_MR_TP_MULTS: number[];
   EV_MIN_CONSERVATIVE_PROB: number;
+  EV_PERF_MIN_SAMPLE: number;
+  EV_PERF_MIN_WINRATE: number;
+  EV_PERF_COOLDOWN_HOURS: number;
 };
 export type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
 
@@ -438,7 +439,7 @@ export function getConfig(): Cfg {
     ),
     MARKET_STALE_THRESHOLD_MS: Number(e.MARKET_STALE_THRESHOLD_MS || "12000"),
     OHLCV_FAILFAST_THRESHOLD: Number(e.OHLCV_FAILFAST_THRESHOLD || '0.2'),
-    OHLCV_BACKFILL_RETRY: Number(e.OHLCV_BACKFILL_RETRY || '1'),
+    OHLCV_BACKFILL_RETRY: Number(e.OHLCV_BACKFILL_RETRY || '2'),
     USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
     USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
     USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",
@@ -460,9 +461,6 @@ export function getConfig(): Cfg {
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
     ORDER_LIMIT_SPREAD_BPS: Number(e.ORDER_LIMIT_SPREAD_BPS || "12"),
-    ORDER_TWAP_SPREAD_BPS: Number(e.ORDER_TWAP_SPREAD_BPS || "16"),
-    ORDER_MARKET_ATR_PCT: Number(e.ORDER_MARKET_ATR_PCT || "4"),
-    ORDER_LIMIT_TIMEOUT_MS: Number(e.ORDER_LIMIT_TIMEOUT_MS || "2500"),
     // Crypto-specific optimizations
     MIN_PROFIT_PCT: Number(e.MIN_PROFIT_PCT || "0.3"),
     CRYPTO_VOLATILITY_MIN: Number(e.CRYPTO_VOLATILITY_MIN || "0.5"),
@@ -508,7 +506,6 @@ export function getConfig(): Cfg {
     TREND_FILTER_NEUTRAL_BAND_BPS: Number(e.TREND_FILTER_NEUTRAL_BAND_BPS || "15"),
     TREND_FILTER_LOOKBACK_MIN: Number(e.TREND_FILTER_LOOKBACK_MIN || "240"),
     // Liquidity/impact controls
-    ORDER_MAX_IMPACT_PCT: Number(e.ORDER_MAX_IMPACT_PCT || "0.35"),
     MIN_ORDER_NOTIONAL_USD: Number(e.MIN_ORDER_NOTIONAL_USD || "40"),
     PAPER_LIQ_SIM_ENABLED: (e.PAPER_LIQ_SIM_ENABLED || "true") === "true",
     PAPER_MAX_IMPACT_PCT: Number(e.PAPER_MAX_IMPACT_PCT || e.ORDER_MAX_IMPACT_PCT || "0.35"),
@@ -626,14 +623,16 @@ export function getConfig(): Cfg {
     THROTTLE_PF_LOW: Number(e.THROTTLE_PF_LOW || "1.0"),
     THROTTLE_PF_HIGH: Number(e.THROTTLE_PF_HIGH || "1.3"),
     THROTTLE_STEP: Number(e.THROTTLE_STEP || "0.05"),
-    FEES_BPS: Number(e.FEES_BPS || "7"),
-    SLIP_ALPHA: Number(e.SLIP_ALPHA || "0.7"),
-    SLIP_BETA: Number(e.SLIP_BETA || "0.3"),
-    SLIP_CAP_BPS: Number(e.SLIP_CAP_BPS || "18"),
+    FEES_BPS: Number(e.FEES_BPS || "8"),
+    SLIP_ALPHA: Number(e.SLIP_ALPHA || "0.5"),
+    SLIP_BETA: Number(e.SLIP_BETA || "1.2"),
+    SLIP_CAP_BPS: Number(e.SLIP_CAP_BPS || "15"),
     ENTRY_SPLIT_LIMIT: Number(e.ENTRY_SPLIT_LIMIT || "0.6"),
     ENTRY_SPLIT_PA: Number(e.ENTRY_SPLIT_PA || "0.4"),
-    ENTRY_LIMIT_TIMEOUT_MS: Number(e.ENTRY_LIMIT_TIMEOUT_MS || "2500"),
-    ENTRY_TWAP_TRIGGER_SPREAD_BPS: Number(e.ENTRY_TWAP_TRIGGER_SPREAD_BPS || "18"),
+    ORDER_LIMIT_TIMEOUT_MS: Number(e.ORDER_LIMIT_TIMEOUT_MS || e.ENTRY_LIMIT_TIMEOUT_MS || "2500"),
+    ORDER_TWAP_SPREAD_BPS: Number(e.ORDER_TWAP_SPREAD_BPS || e.ENTRY_TWAP_TRIGGER_SPREAD_BPS || "16"),
+    ORDER_MARKET_ATR_PCT: Number(e.ORDER_MARKET_ATR_PCT || "4"),
+    ORDER_MAX_IMPACT_PCT: Number(e.ORDER_MAX_IMPACT_PCT || "0.35"),
     TRAIL_ACTIVATE_R: Number(e.TRAIL_ACTIVATE_R || "3.0"),
     EV_MIN_VOLUME_USD: Number(e.EV_MIN_VOLUME_USD || "50000000"),
     EV_MAX_SPREAD_BPS: Number(e.EV_MAX_SPREAD_BPS || "10"),
@@ -648,5 +647,8 @@ export function getConfig(): Cfg {
     EV_BREAKOUT_TP_MULTS: parseNumberList(e.EV_BREAKOUT_TP_MULTS, [2, 3.5, 5]),
     EV_MR_TP_MULTS: parseNumberList(e.EV_MR_TP_MULTS, [1.5, 2.4, 3.5]),
     EV_MIN_CONSERVATIVE_PROB: Number(e.EV_MIN_CONSERVATIVE_PROB || "0.05"),
+    EV_PERF_MIN_SAMPLE: Number(e.EV_PERF_MIN_SAMPLE || "8"),
+    EV_PERF_MIN_WINRATE: Number(e.EV_PERF_MIN_WINRATE || "35"),
+    EV_PERF_COOLDOWN_HOURS: Number(e.EV_PERF_COOLDOWN_HOURS || "24"),
   };
 }
