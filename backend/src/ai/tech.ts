@@ -4,6 +4,7 @@ import { ema, rsi, atr, adx } from '../data/indicators.js';
 import { classifyRegime, RegimeProfile } from './regime.js';
 import { getConfig } from '../utils/env.js';
 import { InsufficientDataError, UnusableMarketDataError } from '../data/errors.js';
+import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDiagnostics } from './multiTimeframe.js';
 
 export type TechnicalSnapshot = {
   symbol: string;
@@ -42,6 +43,7 @@ export type TechnicalSnapshot = {
   volume24hChangePct?: number;
   // Chaikin Money Flow 20 (15m)
   cmf20?: number;
+  multiTimeframe?: MultiTimeframeDiagnostics;
 };
 
 // Utilities
@@ -462,6 +464,13 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const atr4h = atr4hArr.at(-1) ?? undefined;
   const pivots = dailyPivotsFromOHLCV(o1h || o15);
 
+  let multiTimeframe: MultiTimeframeDiagnostics | undefined;
+  try {
+    multiTimeframe = await computeMultiTimeframeDiagnostics(symbol);
+  } catch (error) {
+    console.warn(`⚠️ Failed to compute multi-timeframe diagnostics for ${symbol}:`, error);
+  }
+
   // Select primary support/resistance (closest to last price)
   const primarySupport = supports[0]?.price ?? support24h;
   const primaryResistance = resistances[0]?.price ?? resistance24h;
@@ -519,6 +528,7 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     volume24h: recentVolumeUSD, // Volume in USD (tokens * price)
     volume24hChangePct: volumeChangePct,
     cmf20: cmf20v,
+    multiTimeframe,
   };
 
   snapshot.regime = classifyRegime(snapshot);

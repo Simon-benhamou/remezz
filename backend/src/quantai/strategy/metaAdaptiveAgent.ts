@@ -1,4 +1,5 @@
 import { TechnicalSnapshot } from '../../ai/tech.js';
+import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 
@@ -137,6 +138,7 @@ export type AdaptiveEvaluationInput = {
   atr4h?: number | null;
   volume24hUsd?: number | null;
   forceLiquidityGate?: boolean;
+  multiTimeframe?: MultiTimeframeDiagnostics | null;
 };
 
 type StrategyStats = {
@@ -216,6 +218,72 @@ function chooseBiasFromTrend(trendBias: TechnicalSnapshot['trendBias']): Strateg
   if (trendBias === 'bullish') return 'long';
   if (trendBias === 'bearish') return 'short';
   return 'both';
+}
+
+type ContextAlignment = {
+  direction: StrategyBias;
+  alignmentScore: number;
+  conflict: boolean;
+  reasons: string[];
+};
+
+function deriveBiasTag(bias: string | undefined | null): 'bullish' | 'bearish' | 'neutral' {
+  if (bias === 'bullish' || bias === 'bearish') return bias;
+  return 'neutral';
+}
+
+function biasToStrategy(bias: string | undefined | null): StrategyBias {
+  const normalized = deriveBiasTag(bias);
+  if (normalized === 'bullish') return 'long';
+  if (normalized === 'bearish') return 'short';
+  return 'both';
+}
+
+function computeContextAlignment(
+  multi: MultiTimeframeDiagnostics | null | undefined,
+  snap: TechnicalSnapshot,
+): ContextAlignment {
+  const timeframes = multi?.timeframes ?? {};
+  const bias4h = deriveBiasTag(timeframes['4h']?.bias ?? (snap.meta?.contextTf ? undefined : null));
+  const bias1h = deriveBiasTag(timeframes['1h']?.bias);
+  const bias15m = deriveBiasTag(timeframes['15m']?.bias ?? (snap.trendBias === 'bullish'
+    ? 'bullish'
+    : snap.trendBias === 'bearish'
+      ? 'bearish'
+      : 'neutral'));
+
+  const direction = biasToStrategy(bias4h === 'neutral' ? bias1h : bias4h);
+  const reasons = [
+    `htf=${bias4h}`,
+    `1h=${bias1h}`,
+    `15m=${bias15m}`,
+  ];
+
+  let alignmentScore = 0.6;
+  let conflict = false;
+
+  if (bias4h !== 'neutral') {
+    const matches = [bias1h, bias15m].filter(b => b === bias4h).length;
+    const mismatches = [bias1h, bias15m].filter(b => b !== 'neutral' && b !== bias4h).length;
+    if (mismatches > 0) {
+      conflict = true;
+      alignmentScore = 0.18 + matches * 0.1;
+    } else {
+      alignmentScore = 0.7 + matches * 0.15;
+    }
+  } else {
+    if (bias1h !== 'neutral' && bias15m === bias1h) {
+      alignmentScore = 0.78;
+    } else if (bias1h !== 'neutral' || bias15m !== 'neutral') {
+      alignmentScore = 0.65;
+    }
+  }
+
+  alignmentScore = clamp(alignmentScore, 0.1, 1);
+  reasons.push(`alignment=${alignmentScore.toFixed(2)}`);
+  if (conflict) reasons.push('htf_conflict');
+
+  return { direction, alignmentScore, conflict, reasons };
 }
 
 function randomToken(): string {
@@ -342,14 +410,19 @@ class MetaAdaptiveStrategyAgent {
     }
     microPenalty = clamp(microPenalty, 0, 1);
 
+    const context = computeContextAlignment(input.multiTimeframe ?? (snap as any)?.multiTimeframe, snap);
+    if (context.conflict) penalties.push('htf_conflict');
+
     const distanceSupportScore = distSupport == null ? 0 : clamp(1 - distSupport / Math.max(1.2, atr15mPct * 1.5), 0, 1);
     const distanceResistanceScore = distResistance == null ? 0 : clamp(1 - distResistance / Math.max(1.2, atr15mPct * 1.5), 0, 1);
+    const contextInverse = clamp(1 - context.alignmentScore, 0, 1);
 
     const scoreTrend = clamp(
       (normalize(adx, 15, 42)
         + emaAlignmentScore
         + slope
-        + clamp(trendStrength / 1.2, 0, 1)) / 4,
+        + clamp(trendStrength / 1.2, 0, 1)
+        + context.alignmentScore) / 5,
       0,
       1,
     );
@@ -358,7 +431,8 @@ class MetaAdaptiveStrategyAgent {
       (compressionScore
         + normalize(adx, 16, 35)
         + clamp(volumeRatio / 2, 0, 1)
-        + clamp((cmf + 0.3) / 0.8, 0, 1)) / 4,
+        + clamp((cmf + 0.3) / 0.8, 0, 1)
+        + Math.max(context.alignmentScore, 0.4)) / 5,
       0,
       1,
     );
@@ -368,7 +442,8 @@ class MetaAdaptiveStrategyAgent {
       (rangeFavor
         + rangeComponent
         + clamp((50 - Math.abs(rsi - 50)) / 20, 0, 1)
-        + Math.max(distanceSupportScore, distanceResistanceScore)) / 4,
+        + Math.max(distanceSupportScore, distanceResistanceScore)
+        + contextInverse) / 5,
       0,
       1,
     );
@@ -377,35 +452,63 @@ class MetaAdaptiveStrategyAgent {
       (clamp(Math.abs((snap as any)?.trend ?? 0) / 1.8, 0, 1)
         + clamp(trendStrength / 1.0, 0, 1)
         + clamp(volumeRatio / 2.5, 0, 1)
-        + clamp((cmf + 0.2) / 0.6, 0, 1)) / 4,
+        + clamp((cmf + 0.2) / 0.6, 0, 1)
+        + context.alignmentScore) / 5,
       0,
       1,
     );
 
+    const trendRiskBase = context.conflict
+      ? '0.6'
+      : context.alignmentScore >= 0.85
+        ? '1.4'
+        : context.alignmentScore >= 0.65
+          ? '1.2'
+          : '1';
+    const breakoutRiskBase = context.conflict
+      ? '0.7'
+      : context.alignmentScore >= 0.75
+        ? '1.25'
+        : '0.95';
+    const meanRiskBase = context.alignmentScore <= 0.45
+      ? '1.0'
+      : context.alignmentScore <= 0.6
+        ? '0.9'
+        : '0.75';
+    const momentumRiskBase = context.conflict
+      ? '0.6'
+      : context.alignmentScore >= 0.8
+        ? '1.3'
+        : '1.05';
+
+    const trendExecution: 'market' | 'limit' = context.alignmentScore >= 0.75 ? 'market' : 'limit';
+    const breakoutExecution: 'market' | 'limit' = context.alignmentScore >= 0.7 ? 'market' : 'limit';
+    const momentumExecution: 'market' | 'limit' = context.alignmentScore >= 0.8 ? 'market' : 'limit';
+
     const basePlans: Record<StrategyFamily, AdaptiveStrategyPlan> = {
       trend: {
-        riskPct: new PreciseDecimal('1'),
-        stopAtrMult: new PreciseDecimal(clamp(atr15mPct > 0 ? atr15mPct / atr15mPct : 1, 0.8, 1.2)),
+        riskPct: new PreciseDecimal(trendRiskBase),
+        stopAtrMult: new PreciseDecimal('1'),
         takeProfitMultiples: [new PreciseDecimal('1.8'), new PreciseDecimal('3'), new PreciseDecimal('5')],
-        executionMode: 'limit',
+        executionMode: trendExecution,
       },
       breakout: {
-        riskPct: new PreciseDecimal('1'),
+        riskPct: new PreciseDecimal(breakoutRiskBase),
         stopAtrMult: new PreciseDecimal('1'),
         takeProfitMultiples: [new PreciseDecimal('2'), new PreciseDecimal('3.5'), new PreciseDecimal('5')],
-        executionMode: 'limit',
+        executionMode: breakoutExecution,
       },
       mean_reversion: {
-        riskPct: new PreciseDecimal('0.8'),
+        riskPct: new PreciseDecimal(meanRiskBase),
         stopAtrMult: new PreciseDecimal('0.9'),
         takeProfitMultiples: [new PreciseDecimal('1.5'), new PreciseDecimal('2.4'), new PreciseDecimal('3.5')],
         executionMode: 'limit',
       },
       momentum: {
-        riskPct: new PreciseDecimal('1.1'),
+        riskPct: new PreciseDecimal(momentumRiskBase),
         stopAtrMult: new PreciseDecimal('1.1'),
         takeProfitMultiples: [new PreciseDecimal('2'), new PreciseDecimal('3.5'), new PreciseDecimal('5')],
-        executionMode: 'market',
+        executionMode: momentumExecution,
       },
     };
 
@@ -427,6 +530,7 @@ class MetaAdaptiveStrategyAgent {
             `adx=${adx.toFixed(2)}`,
             `trend_strength=${trendStrength.toFixed(2)}`,
             emaAlignmentBull ? 'ema_bull_stack' : emaAlignmentBear ? 'ema_bear_stack' : 'ema_mixed',
+            ...context.reasons,
           ],
           plan: adjustedPlans.trend,
         },
@@ -439,6 +543,7 @@ class MetaAdaptiveStrategyAgent {
             `compression=${compressionScore.toFixed(2)}`,
             `volume_ratio=${volumeRatio.toFixed(2)}`,
             `cmf=${cmf.toFixed(3)}`,
+            ...context.reasons,
           ],
           plan: adjustedPlans.breakout,
         },
@@ -452,6 +557,7 @@ class MetaAdaptiveStrategyAgent {
             `range_bias=${srBias}`,
             distSupport != null ? `dist_support=${distSupport.toFixed(2)}%` : 'support_missing',
             distResistance != null ? `dist_resistance=${distResistance.toFixed(2)}%` : 'resistance_missing',
+            `context_inverse=${contextInverse.toFixed(2)}`,
           ],
           plan: adjustedPlans.mean_reversion,
         },
@@ -465,6 +571,7 @@ class MetaAdaptiveStrategyAgent {
             `trend_strength=${trendStrength.toFixed(2)}`,
             `volume_ratio=${volumeRatio.toFixed(2)}`,
             `cmf=${cmf.toFixed(3)}`,
+            ...context.reasons,
           ],
           plan: adjustedPlans.momentum,
         },
@@ -473,6 +580,18 @@ class MetaAdaptiveStrategyAgent {
     const weighted: StrategyScoreResult[] = familyScores.map(item => {
       const penaltiesApplied = [...penalties];
       let effectiveScore = item.score * (1 - microPenalty * 0.6);
+      if (context.conflict && item.family !== 'mean_reversion') {
+        effectiveScore *= 0.45;
+        if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
+      }
+      if (!context.conflict && item.family === 'mean_reversion') {
+        const suppress = clamp(1 - context.alignmentScore * 0.5, 0.4, 1);
+        effectiveScore *= suppress;
+        if (context.alignmentScore > 0.6) penaltiesApplied.push('htf_trend_dominant');
+      }
+      if (context.alignmentScore >= 0.8 && (item.family === 'trend' || item.family === 'momentum')) {
+        effectiveScore = Math.min(1, effectiveScore * 1.15);
+      }
       if (item.family === 'mean_reversion' && adx >= 18) {
         effectiveScore *= 0.6;
         penaltiesApplied.push('adx_too_high');
@@ -572,7 +691,7 @@ class MetaAdaptiveStrategyAgent {
   private scalePlanByAtr(base: AdaptiveStrategyPlan, atr15m: number, atr1h: number, atr4h: number): AdaptiveStrategyPlan {
     const targetAtr = atr1h > 0 ? atr1h : atr15m;
     const current = atr15m > 0 ? atr15m : targetAtr;
-    const ratio = current > 0 ? clamp(targetAtr / current, 0.4, 1.6) : 1;
+    const ratio = current > 0 ? clamp(targetAtr / current, 0.75, 1.35) : 1;
     const scaledRisk = base.riskPct.times(new PreciseDecimal(ratio.toFixed(6)));
     const atrBlend = atr4h > 0 ? (atr4h + atr1h + atr15m) / 3 : atr1h > 0 ? (atr1h + atr15m) / 2 : atr15m;
     const stopMult = base.stopAtrMult.times(new PreciseDecimal(clamp(atrBlend > 0 ? atr15m / atrBlend : 1, 0.75, 1.35).toFixed(6)));

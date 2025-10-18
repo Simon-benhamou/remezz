@@ -1,5 +1,6 @@
 import { metaAdaptiveStrategyAgent, AdaptiveSignal, PreciseDecimal } from './metaAdaptiveAgent.js';
 import { TechnicalSnapshot } from '../../ai/tech.js';
+import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 import { recordOpsEvent } from '../../monitor/ops.js';
 import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
 
@@ -48,6 +49,7 @@ type EvaluateOptions = {
   atr1h?: number | null;
   atr4h?: number | null;
   forceLiquidityGate?: boolean;
+  multiTimeframe?: MultiTimeframeDiagnostics | null;
 };
 
 function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
@@ -99,6 +101,7 @@ export function evaluateRecognizedStrategies(
     atr1h: opts.atr1h,
     atr4h: opts.atr4h,
     forceLiquidityGate: opts.forceLiquidityGate ?? false,
+    multiTimeframe: opts.multiTimeframe ?? (snap as any)?.multiTimeframe ?? null,
   });
 
   return evaluation.signals
