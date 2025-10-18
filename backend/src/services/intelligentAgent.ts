@@ -577,21 +577,17 @@ function evaluateCandidateAgainstFilters(
   now: number,
 ): { ok: boolean; reasons: string[]; score: number } {
   const reasons: string[] = [];
+  const quality = buildSymbolQualityContext(metrics.symbol);
 
   // 🆕 Cross-timeframe constraint: 4h bias pilots 15m execution bias
   const mt = metrics.multiTimeframe?.timeframes ?? {};
   const bias4h = String(mt['4h']?.bias ?? 'neutral');
   const bias15 = String(mt['15m']?.bias ?? 'neutral');
-  if ((bias4h === 'bullish' && bias15 === 'bearish') || (bias4h === 'bearish' && bias15 === 'bullish')) {
-  reasons.push('tf_conflict_4h_vs_15m'); // <-- il manque ça aujourd’hui
-}
-  if (bias4h !== 'neutral') {
-    const conflict =
-      (bias4h === 'bullish' && bias15 === 'bearish') ||
-      (bias4h === 'bearish' && bias15 === 'bullish');
-    if (conflict) {
-      reasons.push('tf_conflict_4h_vs_15m');
-    }
+  const conflictingBias =
+    (bias4h === 'bullish' && bias15 === 'bearish') ||
+    (bias4h === 'bearish' && bias15 === 'bullish');
+  if (conflictingBias) {
+    reasons.push('tf_conflict_4h_vs_15m');
   }
 
   if (metrics.volumeCents24h < VOLUME_FLOOR_CENTS) {
@@ -648,7 +644,8 @@ function evaluateCandidateAgainstFilters(
   }
 
   const perf = metrics.performance;
-  if (perf.sample >= 8) {
+  const sampleThreshold = quality.family === 'major' ? 5 : 8;
+  if (perf.sample >= sampleThreshold) {
     if (perf.winRate != null && Number.isFinite(perf.winRate) && perf.winRate < 35) {
       const ageHours = perf.lastTradeAt != null ? (now - perf.lastTradeAt) / 3_600_000 : null;
       reasons.push(ageHours != null && ageHours < PERFORMANCE_COOLDOWN_HOURS ? 'win_rate_cooldown' : 'win_rate_low');
@@ -661,10 +658,13 @@ function evaluateCandidateAgainstFilters(
 
   if (
     perf.avgSlippageBps != null && Number.isFinite(perf.avgSlippageBps) &&
-    spreadBps != null && Number.isFinite(spreadBps) &&
-    perf.avgSlippageBps > spreadBps * 1.5
+    spreadBps != null && Number.isFinite(spreadBps)
   ) {
-    reasons.push('slippage_vs_spread');
+    const spreadGuard = Math.max(5, spreadBps * 1.2);
+    const slippageLimitBps = Math.min(spreadGuard, 18);
+    if (perf.avgSlippageBps > slippageLimitBps) {
+      reasons.push('slippage_vs_spread');
+    }
   }
 
   if (reasons.some((reason) => reason.endsWith('cooldown'))) {
@@ -695,18 +695,23 @@ function evaluateCandidateAgainstFilters(
   // Soft penalties (regime mismatch for aggressive/conservative)
   let score = metrics.baseScore;
   const liquidityDenominator = depthFloorCents * BigInt(2);
-  const liquidityBoost = liquidityDenominator > BigInt(0)
+  const liquidityRatio = liquidityDenominator > BigInt(0)
     ? Number(metrics.micro.bidDepthCents + metrics.micro.askDepthCents) / Number(liquidityDenominator)
     : 0;
-  if (Number.isFinite(liquidityBoost) && liquidityBoost > 0) {
-    score *= Math.min(1.35, Math.max(0.8, liquidityBoost));
+  if (Number.isFinite(liquidityRatio) && liquidityRatio > 0) {
+    if (liquidityRatio < 1) {
+      const malus = Math.max(0.7, liquidityRatio * 0.9);
+      score *= malus;
+    } else if (liquidityRatio >= 1.15) {
+      score *= Math.min(1.2, liquidityRatio);
+    }
   }
 
-  if (perf.sample >= 8 && perf.expectancyUsd != null && Number.isFinite(perf.expectancyUsd)) {
+  if (perf.sample >= sampleThreshold && perf.expectancyUsd != null && Number.isFinite(perf.expectancyUsd)) {
     score *= 1 + Math.max(-0.2, Math.min(0.25, perf.expectancyUsd / 200));
   }
 
-  if (perf.winRate != null && Number.isFinite(perf.winRate)) {
+  if (perf.winRate != null && Number.isFinite(perf.winRate) && perf.sample >= sampleThreshold) {
     score *= 1 + Math.max(-0.1, Math.min(0.15, (perf.winRate - 50) / 250));
   }
 
@@ -717,7 +722,6 @@ function evaluateCandidateAgainstFilters(
     score *= 0.85;
   }
 
-  const quality = buildSymbolQualityContext(metrics.symbol);
   if (quality.isBlueChip) {
     score *= 1.1;
   } else if (quality.family === 'major') {
@@ -1261,7 +1265,7 @@ export async function getOptimizedCryptoList(
     
     const strategyProfile: StrategyFilterProfile = options?.strategy ?? {
       aggressiveness: 'reactive',
-      targetTpPct: Math.max(0.6, Number(getConfig().TARGET_TP1_PCT ?? getConfig().MIN_TP_PCT ?? 0.8)),
+      targetTpPct: Math.max(1.2, Number(getConfig().TARGET_TP1_PCT ?? getConfig().MIN_TP_PCT ?? 1.2)),
       stopLossPct: Math.max(0.4, Number(getConfig().MIN_STOP_PCT ?? 0.6)),
     };
 

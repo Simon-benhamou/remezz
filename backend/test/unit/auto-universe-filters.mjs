@@ -36,8 +36,8 @@ function makeCandidate(overrides = {}) {
 
 const strategy = {
   aggressiveness: 'reactive',
-  targetTpPct: 1,
-  stopLossPct: 0.7,
+  targetTpPct: 1.6,
+  stopLossPct: 0.9,
 };
 
 const now = Date.now();
@@ -67,8 +67,8 @@ assert(shallowDepthReactiveResult.reasons.includes('book_depth_thin'));
 
 const aggressiveStrategy = {
   aggressiveness: 'aggressive',
-  targetTpPct: 1.2,
-  stopLossPct: 0.8,
+  targetTpPct: 1.8,
+  stopLossPct: 1.0,
 };
 const aggressiveDepthCandidate = makeCandidate({
   bidDepthCents: BigInt(11_500 * 100),
@@ -85,6 +85,23 @@ const majorAsset = makeCandidate({ symbol: 'BTC/USDT:USDT' });
 const majorAssetResult = evaluateCandidateAgainstFilters(majorAsset, strategy, now);
 assert(majorAssetResult.score > altAssetResult.score, 'majors should gain a post-filter quality bonus');
 
+const weakMajor = makeCandidate({
+  symbol: 'BTC/USDT:USDT',
+  sample: 5,
+  winRate: 30,
+  expectancyUsd: -2,
+});
+const weakMajorResult = evaluateCandidateAgainstFilters(weakMajor, strategy, now);
+assert.equal(weakMajorResult.ok, false, 'majors with 5 samples and poor stats must trigger halt');
+const weakReasons = new Set(weakMajorResult.reasons);
+assert(
+  weakReasons.has('win_rate_low') ||
+  weakReasons.has('win_rate_cooldown') ||
+  weakReasons.has('expectancy_negative') ||
+  weakReasons.has('expectancy_cooldown'),
+  'weak major should surface performance halt reasons',
+);
+
 const conflictCandidate = makeCandidate({
   multiTimeframe: {
     timeframes: {
@@ -98,5 +115,15 @@ const conflictCandidate = makeCandidate({
 const conflictResult = evaluateCandidateAgainstFilters(conflictCandidate, strategy, now);
 assert.equal(conflictResult.ok, false, '4h vs 15m bias conflict must block execution');
 assert(conflictResult.reasons.includes('tf_conflict_4h_vs_15m'), 'conflict reason should be reported');
+
+const slippageCandidate = makeCandidate({
+  spreadBps: 10,
+  avgSlippageBps: 17,
+  expectancyUsd: 25,
+  winRate: 60,
+});
+const slippageResult = evaluateCandidateAgainstFilters(slippageCandidate, strategy, now);
+assert.equal(slippageResult.ok, false, 'slippage exceeding tightened guard must fail');
+assert(slippageResult.reasons.includes('slippage_vs_spread'));
 
 console.log('✅ auto-universe-filters.mjs passed');

@@ -46,7 +46,7 @@ export type ExecutionPlan = ExecutionStep & {
 };
 
 const DEFAULT_LIMIT_SPREAD_THRESHOLD = 12; // 12 bps = 0.12%
-const DEFAULT_TWAP_SPREAD_THRESHOLD = 20; // 20 bps = 0.20%
+const DEFAULT_TWAP_SPREAD_THRESHOLD = 16; // 16 bps = 0.16%
 const LARGE_NOTIONAL_THRESHOLD = 15_000;
 const EXTREME_NOTIONAL_THRESHOLD = 35_000;
 
@@ -160,7 +160,7 @@ export function chooseExecutionPlan(context: ExecutionContext): ExecutionPlan {
   let limitPrice: number | undefined;
   if (mode === 'limit') {
     limitPrice = derivePassivePrice(context.side, context.entryPrice, context.ticker, passiveOffsetBps);
-    const baseDelay = Math.max(2500, cfg.ORDER_LIMIT_TIMEOUT_MS ?? 4000);
+    const baseDelay = Math.max(1800, cfg.ORDER_LIMIT_TIMEOUT_MS ?? 2500);
     const tunedDelay = tuning.limitFallbackMs != null ? Math.max(1500, tuning.limitFallbackMs) : baseDelay;
     fallbacks.push({ mode: 'market', reason: 'limit_timeout', delayMs: tunedDelay });
   }

@@ -27,9 +27,9 @@ const MIN_STOP_PCT_BY_VOL = {
 } as const;
 
 const MIN_TP_PCT_BY_VOL = {
-  HIGH: 1.3,
-  MODERATE: 0.9,
-  LOW: 0.65,
+  HIGH: 1.8,
+  MODERATE: 1.4,
+  LOW: 1.2,
 } as const;
 
 export type ValidatedPlan = {

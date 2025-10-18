@@ -36,7 +36,7 @@ export interface RankedOpportunity {
   opportunity: {
     type: 'breakout' | 'reversal' | 'trend' | 'momentum' | 'range';
     direction: 'long' | 'short' | 'neutral';
-    timeframe: '24h';
+    timeframe: '4h';
     confidence: number;
   };
   aiReasoning: string[];
@@ -349,6 +349,7 @@ export async function rankCryptosWithAI(
             change24h: crypto.change24h,
             price: crypto.price,
             volumeRank: crypto.volumeRank,
+            multiTimeframe: snap.multiTimeframe ?? null,
             technical: {
               rsi: snap.rsi14,
               adx: snap.adx14,
@@ -562,22 +563,42 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
     // Map AI results to our format
     const ranked: RankedOpportunity[] = aiOpportunities.map((opp: any, index: number) => {
       const snapshot = validSnapshots.find(s => s?.symbol === opp.symbol);
-      
+
       if (!snapshot) {
         return null;
       }
-      
+
+      const mt = snapshot.multiTimeframe?.timeframes ?? {};
+      const bias4h = String(mt['4h']?.bias ?? 'neutral');
+      const bias1h = String(mt['1h']?.bias ?? 'neutral');
+      const conflicting =
+        (bias4h === 'bullish' && bias1h === 'bearish') ||
+        (bias4h === 'bearish' && bias1h === 'bullish');
+      if (conflicting) {
+        console.log(`⚠️ Skipping ${opp.symbol}: 4h(${bias4h}) vs 1h(${bias1h}) conflict.`);
+        return null;
+      }
+
+      const aligned = bias4h === 'neutral' || bias1h === 'neutral' || bias4h === bias1h;
+      const adjustedScore = aligned ? Number(opp.score || 0) : Number(opp.score || 0) * 0.85;
+      const reasoning = Array.isArray(opp.reasons) ? [...opp.reasons] : [];
+      if (!aligned) {
+        reasoning.push(`Alignment caution: 4h=${bias4h}, 1h=${bias1h}`);
+      } else {
+        reasoning.push(`HTF alignment confirmed: 4h=${bias4h}, 1h=${bias1h}`);
+      }
+
       return {
         symbol: opp.symbol,
         rank: index + 1,
-        score: Number(opp.score || 0),
+        score: Number(adjustedScore),
         volumeUsd24h: snapshot.volumeUsd24h,
         change24h: snapshot.change24h,
         technical: {
           rsi: snapshot.technical.rsi,
           adx: snapshot.technical.adx,
           atrPct: snapshot.technical.atrPct,
-          trend: snapshot.technical.ema20 > snapshot.technical.ema50 ? 'bullish' : 
+          trend: snapshot.technical.ema20 > snapshot.technical.ema50 ? 'bullish' :
                  snapshot.technical.ema20 < snapshot.technical.ema50 ? 'bearish' : 'neutral',
           ema20: snapshot.technical.ema20,
           ema50: snapshot.technical.ema50
@@ -585,10 +606,10 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
         opportunity: {
           type: opp.type || 'momentum',
           direction: opp.direction || 'neutral',
-          timeframe: '24h',
+          timeframe: '4h',
           confidence: Number(opp.confidence || 0)
         },
-        aiReasoning: opp.reasons || []
+        aiReasoning: reasoning
       };
     }).filter(r => r !== null) as RankedOpportunity[];
     
