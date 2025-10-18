@@ -5561,6 +5561,7 @@ export class ReboundRejectionAgent {
       micro: microContext,
       atr1h: Number.isFinite((snap as any)?.atr14_1h) ? Number((snap as any).atr14_1h) : null,
       atr4h: Number.isFinite((snap as any)?.atr14_4h) ? Number((snap as any).atr14_4h) : null,
+      multiTimeframe: (snap as any)?.multiTimeframe ?? null,
     });
 
     const targetBias: 'long' | 'short' | 'none' = bias !== 'none'

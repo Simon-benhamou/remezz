@@ -21,6 +21,9 @@ function decimal(value) {
 
 function buildSnapshot(config) {
   const last = config.last ?? 100;
+  const bias4h = config.bias4h ?? 'bullish';
+  const bias1h = config.bias1h ?? bias4h;
+  const bias15m = config.bias15m ?? bias1h;
   return {
     symbol: config.symbol ?? 'ETH/USDT',
     last,
@@ -56,6 +59,15 @@ function buildSnapshot(config) {
     volumeMA: config.volumeMA ?? 500_000,
     volume24h: config.volume24h ?? 60_000_000,
     cmf20: config.cmf20 ?? 0.18,
+    multiTimeframe: config.multiTimeframe ?? {
+      timeframes: {
+        '4h': { tf: '4h', bias: bias4h, momentumPct: 0.4, rsi: 55 },
+        '1h': { tf: '1h', bias: bias1h, momentumPct: 0.3, rsi: 53 },
+        '15m': { tf: '15m', bias: bias15m, momentumPct: 0.2, rsi: 52 },
+      },
+      agreementScore: 3,
+      divergenceScore: 0,
+    },
   };
 }
 

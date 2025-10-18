@@ -4,6 +4,7 @@ import { ema, rsi, atr, adx } from '../data/indicators.js';
 import { classifyRegime, RegimeProfile } from './regime.js';
 import { getConfig } from '../utils/env.js';
 import { InsufficientDataError, UnusableMarketDataError } from '../data/errors.js';
+import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDiagnostics } from './multiTimeframe.js';
 
 export type TechnicalSnapshot = {
   symbol: string;
@@ -15,6 +16,7 @@ export type TechnicalSnapshot = {
   rsi14: number;
   atr14: number;
   atr14_1h?: number;
+  atr14_4h?: number;
   atrPct: number;
   adx14: number;
   ema20Slope: number;
@@ -26,7 +28,7 @@ export type TechnicalSnapshot = {
   pivots: null | { P: number; S1: number; S2: number; R1: number; R2: number; refDay: string };
   trend: number;
   srBias: 'nearSupport'|'nearResistance'|'neutral';
-  meta: { tf: string; windowBars: number; recentBarsFor24h: number };
+  meta: { tf: string; contextTf?: string; windowBars: number; recentBarsFor24h: number };
   realizedVol: number;
   hurst: number;
   adxSlope: number;
@@ -41,6 +43,7 @@ export type TechnicalSnapshot = {
   volume24hChangePct?: number;
   // Chaikin Money Flow 20 (15m)
   cmf20?: number;
+  multiTimeframe?: MultiTimeframeDiagnostics;
 };
 
 // Utilities
@@ -453,10 +456,20 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   ].sort((a, b) => Math.abs(lastPrice - a.price) - Math.abs(lastPrice - b.price));
 
   // Daily pivots from 1h (fallback to 15m if needed) and 1h ATR for sturdier risk sizing
-  const o1h = await getOHLCV(symbol, '1h', 600, userId); // ~25 jours
+  const o1h = await getOHLCV(symbol, '1h', 600, userId);    // ~25 jours
+  const o4h = await getOHLCV(symbol, '4h', 600, userId);    // 🆕 macro
   const atr1hArr = atr(o1h || o15, 14);
-  const atr1h = atr1hArr[atr1hArr.length - 1] ?? undefined;
+  const atr1h = atr1hArr.at(-1) ?? undefined;
+  const atr4hArr = atr(o4h || o1h || o15, 14);              // 🆕 ATR 4h
+  const atr4h = atr4hArr.at(-1) ?? undefined;
   const pivots = dailyPivotsFromOHLCV(o1h || o15);
+
+  let multiTimeframe: MultiTimeframeDiagnostics | undefined;
+  try {
+    multiTimeframe = await computeMultiTimeframeDiagnostics(symbol);
+  } catch (error) {
+    console.warn(`⚠️ Failed to compute multi-timeframe diagnostics for ${symbol}:`, error);
+  }
 
   // Select primary support/resistance (closest to last price)
   const primarySupport = supports[0]?.price ?? support24h;
@@ -486,6 +499,7 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     rsi14: rsi14v,
     atr14: atr14v,
     atr14_1h: atr1h,
+    atr14_4h: atr4h,
     atrPct,
     adx14: adx14v,
     ema20Slope,
@@ -497,7 +511,8 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     trend,
     srBias,
     meta: {
-      tf: '15m',
+      tf: '15m',  // exécution
+      contextTf: '4h', // 🆕 contexte
       windowBars: o15.length,
       recentBarsFor24h: recent.length,
     },
@@ -513,6 +528,7 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     volume24h: recentVolumeUSD, // Volume in USD (tokens * price)
     volume24hChangePct: volumeChangePct,
     cmf20: cmf20v,
+    multiTimeframe,
   };
 
   snapshot.regime = classifyRegime(snapshot);
