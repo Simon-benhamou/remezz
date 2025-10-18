@@ -1,13 +1,17 @@
 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="quantai-zap" x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2563eb" />
-      <stop offset="1" stop-color="#1d4ed8" />
+    <linearGradient id="quantai-zap" x1="4" y1="3" x2="20" y2="21" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6" />
+      <stop offset="1" stop-color="#2563eb" />
     </linearGradient>
   </defs>
-  <rect width="24" height="24" rx="6" fill="url(#quantai-zap)" />
+  <rect width="24" height="24" rx="7" fill="url(#quantai-zap)" />
   <path
-    d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"
-    fill="#f8fafc"
+    d="M8.9 7.4H14.6L9.7 12h5.4l-4.8 5.6"
+    fill="none"
+    stroke="#f8fafc"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   />
 </svg>
