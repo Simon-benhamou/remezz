@@ -25,7 +25,8 @@ import { broadcast } from '../../ws/hub.js';
 import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, persistCircuitBreakerState } from '../persistence.js';
 import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
-import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, applyFeesAndSlippage, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
+import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
+import { PreciseDecimal } from '../../quantai/strategy/metaAdaptiveAgent.js';
 import type { LiquidityType } from '../../quantai/index.js';
 import {
   evaluateRecognizedStrategies,
@@ -10227,16 +10228,16 @@ export class ReboundRejectionAgent {
   public calculateRealizedPnL(exitPrice: number, qtyOverride?: number): number {
     if (!this.pos) return 0;
 
-    const entry = this.pos.entry;
     const qty = qtyOverride ?? this.pos.qty;
     if (!(qty > 0)) return 0;
-    const side = this.pos.side;
 
-    const entryNet = applyFeesAndSlippage(entry, this.quantConfig.feesSlippage, { side });
-    const exitSide = side === 'buy' ? 'sell' : 'buy';
-    const exitNet = applyFeesAndSlippage(exitPrice, this.quantConfig.feesSlippage, { side: exitSide });
-    const priceDiff = side === 'buy' ? exitNet - entryNet : entryNet - exitNet;
-    return priceDiff * qty;
+    const entry = new PreciseDecimal(this.pos.entry);
+    const exit = new PreciseDecimal(exitPrice);
+    const quantity = new PreciseDecimal(qty);
+    const direction = this.pos.side === 'buy' ? new PreciseDecimal('1') : new PreciseDecimal('-1');
+
+    const priceDiff = exit.minus(entry).times(direction);
+    return priceDiff.times(quantity).toNumber();
   }
 
   /**
