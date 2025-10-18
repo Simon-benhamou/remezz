@@ -4,15 +4,9 @@ import { UserOutlined, LockOutlined, GoogleOutlined, GithubOutlined } from '../i
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
+import { AUTH_FEATURES, HERO_METRICS } from './authContent';
 
 const { Title, Text } = Typography;
-
-const HERO_METRICS = [
-  { label: 'Active Users', value: '128' },
-  { label: 'All Agents', value: '45,692' },
-  { label: 'Average Win Rate', value: '74.2%' },
-  { label: '24h Executions', value: '8,120' },
-];
 
 export default function LoginPage() {
   const [form] = Form.useForm();
@@ -56,8 +50,20 @@ export default function LoginPage() {
             </div>
           ))}
         </div>
-        <div style={{ marginTop: 48, fontSize: 12, color: 'rgba(226, 232, 240, 0.65)' }}>
-          Advanced AI trading · Real-time analytics · 24/7 autonomous execution
+        <div className='auth-panel__features'>
+          {AUTH_FEATURES.map((feature) => (
+            <div key={feature} className='auth-panel__feature'>
+              <span className='auth-panel__feature-icon'>
+                <span role='img' aria-label='check'>
+                  ✓
+                </span>
+              </span>
+              <span className='auth-panel__feature-label'>{feature}</span>
+            </div>
+          ))}
+        </div>
+        <div className='auth-panel__footer'>
+          Trusted by professional quant desks and high-frequency trading teams worldwide.
         </div>
       </div>
 
