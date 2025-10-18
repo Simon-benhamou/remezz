@@ -246,6 +246,8 @@ const OperationsDashboardPage: React.FC = () => {
   );
   const pnlUsd = Number(overview?.pnlUsd || 0);
   const roiPct = Number(overview?.roiPct || 0);
+  const netRoiCandidate = Number(overview?.netRoiPct);
+  const netRoiPct = Number.isFinite(netRoiCandidate) ? netRoiCandidate : roiPct;
   const activeAgents = Number(overview?.activeCount || 0);
   const marketsTracked = Array.isArray(overview?.symbols) ? overview?.symbols.length : 0;
 
@@ -363,7 +365,7 @@ const OperationsDashboardPage: React.FC = () => {
       key: 'roi',
       title: 'ROI',
       value: formatPercent(roiPct, 2),
-      helper: roiPct >= 0 ? 'Above benchmark' : 'Underwater',
+      helper: `Net ${formatPercent(netRoiPct, 2)}`,
       accent: roiPct >= 0 ? '#34d399' : '#f87171',
     },
     {

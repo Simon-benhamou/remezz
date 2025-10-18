@@ -49,6 +49,7 @@ type AgentSession = {
   startBalanceUsd?: number;
   pnlUsd?: number;
   roiPct?: number;
+  netRoiPct?: number;
   winRate?: number;
   totalTrades?: number;
   haltedAt?: string | null;
@@ -173,13 +174,22 @@ async function enrichSession(session: AgentSession): Promise<AgentSession> {
 
     const realized = Number(perf?.realizedPnlUsd ?? 0);
     const unrealized = Number(perf?.unrealizedPnlUsd ?? 0);
+    const statsMeta = (perf?.stats ?? {}) as Record<string, any>;
+    const startBalance = Number(session.startBalanceUsd ?? 0);
+    const roiPct = Number(perf?.roiPct ?? (startBalance > 0 ? (realized / startBalance) * 100 : 0));
+    const netRoiPct = Number.isFinite(Number(statsMeta?.netRoiPct))
+      ? Number(statsMeta.netRoiPct)
+      : startBalance > 0
+        ? ((realized + unrealized) / startBalance) * 100
+        : roiPct;
     const rawWinRate = Number(perf?.winRate ?? 0);
     const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
 
     return {
       ...session,
       pnlUsd: realized + unrealized,
-      roiPct: Number(perf?.roiPct ?? 0),
+      roiPct,
+      netRoiPct,
       winRate: normalizedWinRate,
       totalTrades: perf?.totalTrades ?? 0,
     };
@@ -465,11 +475,23 @@ export default function SessionsPage() {
         title: 'ROI',
         key: 'roi',
         align: 'right',
-        render: (_, record) => (
-          <Text style={{ color: Number(record.roiPct ?? 0) >= 0 ? '#38bdf8' : '#f87171', fontWeight: 600 }}>
-            {formatPercent(record.roiPct)}
-          </Text>
-        ),
+        render: (_, record) => {
+          const realized = Number(record.roiPct ?? 0);
+          const net = Number.isFinite(Number(record.netRoiPct)) ? Number(record.netRoiPct) : realized;
+          const showNet = Math.abs(net - realized) > 0.05;
+          return (
+            <Space direction="vertical" size={0} style={{ alignItems: 'flex-end' }}>
+              <Text style={{ color: realized >= 0 ? '#38bdf8' : '#f87171', fontWeight: 600 }}>
+                {formatPercent(realized)}
+              </Text>
+              {showNet && (
+                <Text style={{ color: '#94a3b8', fontSize: 11 }}>
+                  Net {formatPercent(net)}
+                </Text>
+              )}
+            </Space>
+          );
+        },
       },
       {
         title: 'Win Rate',
@@ -668,9 +690,18 @@ export default function SessionsPage() {
                             color: Number(session.roiPct ?? 0) >= 0 ? '#38bdf8' : '#f87171',
                             fontWeight: 600,
                             fontSize: 16,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'flex-start',
+                            gap: 2,
                           }}
                         >
-                          {formatPercent(session.roiPct)}
+                          <span>{formatPercent(session.roiPct)}</span>
+                          {Math.abs(Number(session.netRoiPct ?? session.roiPct) - Number(session.roiPct ?? 0)) > 0.05 && (
+                            <span style={{ color: '#94a3b8', fontSize: 12, fontWeight: 500 }}>
+                              Net {formatPercent(session.netRoiPct)}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div>
