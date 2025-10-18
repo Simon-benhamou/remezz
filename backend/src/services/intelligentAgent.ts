@@ -582,6 +582,9 @@ function evaluateCandidateAgainstFilters(
   const mt = metrics.multiTimeframe?.timeframes ?? {};
   const bias4h = String(mt['4h']?.bias ?? 'neutral');
   const bias15 = String(mt['15m']?.bias ?? 'neutral');
+  if ((bias4h === 'bullish' && bias15 === 'bearish') || (bias4h === 'bearish' && bias15 === 'bullish')) {
+  reasons.push('tf_conflict_4h_vs_15m'); // <-- il manque ça aujourd’hui
+}
   if (bias4h !== 'neutral') {
     const conflict =
       (bias4h === 'bullish' && bias15 === 'bearish') ||

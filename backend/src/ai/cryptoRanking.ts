@@ -660,7 +660,7 @@ export async function getBestAIOpportunity(excludeSessionId?: string): Promise<R
     
     // Return top ranked with score > 0.5 (relaxed from 0.6)
     const best = ranked[0];
-    if (best.score < 0.5) {
+    if (best.score < 0.65) {
       console.log(`⚠️ Best opportunity score too low: ${best.score.toFixed(2)}`);
       return null;
     }
