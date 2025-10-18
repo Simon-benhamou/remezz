@@ -1,4 +1,5 @@
 import { getConfig } from '../utils/env.js';
+import { getEnv } from '../config/env.js';
 import { buildContext, DefaultMarketDataProvider } from './features/contextReader.js';
 import type { ContextFeatures } from './features/featureBuilder.js';
 import { validateContextFeatures, computeAtrPct } from './features/featureBuilder.js';
@@ -13,6 +14,12 @@ import { Telemetry } from './kpi/telemetry.js';
 import type { LabeledRow } from './labeling/tripleBarrier.js';
 import { PreciseDecimal } from '../quantai/strategy/metaAdaptiveAgent.js';
 
+type ContextWithMulti = ContextFeatures & {
+  multiTimeframe?: {
+    timeframes?: Record<string, { bias?: string | null }>;
+  };
+};
+
 export interface OpportunityEvaluation {
   accepted: boolean;
   reason?: string;
@@ -20,7 +27,7 @@ export interface OpportunityEvaluation {
   p_win?: number;
   p_interval?: [number, number];
   ev?: number;
-  plan?: ReturnType<typeof buildExecutionPlan>;
+  plan?: ReturnType<typeof serializePlan>;
   why?: string[];
 }
 
@@ -64,11 +71,24 @@ export function fitProbabilityModel(dataset: LabeledRow[]): void {
   modelReady = true;
 }
 
-export async function evaluateOpportunity(symbol: string, notional: number, options?: { context?: ContextFeatures; playbooks?: StrategyAction['kind'][]; now?: number; ohlcv15m?: number[][] }): Promise<OpportunityEvaluation> {
+type EvaluateOptions = {
+  context?: ContextWithMulti;
+  playbooks?: StrategyAction['kind'][];
+  now?: number;
+  ohlcv15m?: number[][];
+  baseNotionalCapUsd?: number;
+};
+
+export async function evaluateOpportunity(
+  symbol: string,
+  equityUsd: number,
+  options?: EvaluateOptions,
+): Promise<OpportunityEvaluation> {
   if (!modelReady) {
     throw new Error('Probability model not trained');
   }
   const cfg = getConfig();
+  const envPolicy = getEnv();
   const provider = new DefaultMarketDataProvider();
   const features = options?.context ?? await buildContext(symbol, { now: options?.now });
   validateContextFeatures(features);
@@ -90,77 +110,106 @@ export async function evaluateOpportunity(symbol: string, notional: number, opti
     return { accepted: false, reason: `hard_gate:${hardGate.reason}` };
   }
 
+  const bias4h = resolveBias('4h', features, options?.context);
+  const bias15 = resolveBias('15m', features, options?.context);
+  if ((bias4h === 'bullish' && bias15 === 'bearish') || (bias4h === 'bearish' && bias15 === 'bullish')) {
+    return { accepted: false, reason: 'tf_conflict_4h_vs_15m' };
+  }
+
   const { p_win_cal } = probModel.predictProba(features);
   const { p_low, p_high } = conformal.interval(features);
   const actions = options?.playbooks ?? ['PULLBACK', 'BREAKOUT', 'MR'];
   const banditCtx = selectBanditContext(features);
   const action = bandit.choose(banditCtx, actions);
   const strategyScores = scoreStrategies(features);
-  const selected = strategyScores.find(s => s.kind === action.kind) ?? strategyScores[0];
+  const selected = strategyScores.find((s) => s.kind === action.kind) ?? strategyScores[0];
 
   const slMult = action.kind === 'PULLBACK' ? cfg.EV_PULLBACK_K_SL : action.kind === 'BREAKOUT' ? cfg.EV_BREAKOUT_K_SL : cfg.EV_MR_K_SL;
-  const tpMultipliers = action.kind === 'PULLBACK' ? cfg.EV_PULLBACK_TP_MULTS : action.kind === 'BREAKOUT' ? cfg.EV_BREAKOUT_TP_MULTS : cfg.EV_MR_TP_MULTS;
-  const plan = buildExecutionPlan({
-    side: features.tf4h.trendBias === 'bear' ? 'short' : 'long',
-    price: tf15m[tf15m.length - 1][4],
-    atrPct,
-    slMult,
-    tpMultipliers,
-    conformalWidth: p_high - p_low,
-    spreadBps: features.micro.spreadBps,
-    config: {
-      entryLimitSplit: cfg.ENTRY_SPLIT_LIMIT,
-      entryPaSplit: cfg.ENTRY_SPLIT_PA,
-      limitTimeoutMs: cfg.ENTRY_LIMIT_TIMEOUT_MS,
-      twapTriggerSpreadBps: cfg.ENTRY_TWAP_TRIGGER_SPREAD_BPS,
-      trailActivateR: cfg.TRAIL_ACTIVATE_R,
-      trailPct: cfg.TRAIL_PCT,
-    },
-  });
+  const tpMultipliers = action.kind === 'PULLBACK'
+    ? cfg.EV_PULLBACK_TP_MULTS
+    : action.kind === 'BREAKOUT'
+      ? cfg.EV_BREAKOUT_TP_MULTS
+      : cfg.EV_MR_TP_MULTS;
 
-  const tpUsd = notional * tpMultipliers[0] * atrPct;
-  const slUsd = notional * slMult * atrPct;
+  const stopPct = atrPct * slMult;
+  if (!Number.isFinite(stopPct) || stopPct <= 0) {
+    return { accepted: false, reason: 'invalid_stop' };
+  }
+
+  const plan = buildExecutionPlan({
+    equityUsd,
+    stopPct,
+    baseNotionalCapUsd: options?.baseNotionalCapUsd,
+    tpMultipliers,
+    spreadBps: features.micro.spreadBps,
+    passiveFillRate: features.micro.passiveFillRate,
+  });
+  if (!plan) {
+    return { accepted: false, reason: 'low_reward', p_win: p_win_cal, p_interval: [p_low, p_high] };
+  }
+
+  const slipRecentBps = typeof (options?.context as any)?.micro?.slipRecentBps === 'number'
+    ? Number((options?.context as any)?.micro?.slipRecentBps)
+    : features.micro.spreadBps;
+
   const pUse = (p_high - p_low > 0.2)
     ? Math.max(p_low, cfg.EV_MIN_CONSERVATIVE_PROB)
-    : p_win_cal;
-  const ev = expectedValue({
+    : (Number.isFinite(p_win_cal) ? p_win_cal : 0.55);
+
+  const evEstimate = expectedValue({
     p: pUse,
-    tpUsd,
-    slUsd,
-    notional,
+    tpUsd: plan.precise.tpUsd,
+    slUsd: plan.precise.riskUsd,
+    notionalUsd: plan.precise.notionalUsd,
     spreadBps: features.micro.spreadBps,
-    slipRecentBps: features.micro.spreadBps,
+    slipRecentBps,
     passiveFillRate: features.micro.passiveFillRate,
-    feesBps: cfg.FEES_BPS,
-    alpha: cfg.SLIP_ALPHA,
-    beta: cfg.SLIP_BETA,
-    capBps: cfg.SLIP_CAP_BPS,
   });
 
-  const regime = features.tf4h.trendBias;
-  const accept = passesQuantile(regime, p_win_cal, rollingPf.value(), {
+  if (evEstimate.rawSlipBps > envPolicy.SLIP_CAP_BPS) {
+    return {
+      accepted: false,
+      reason: 'slippage_cap',
+      p_win: p_win_cal,
+      p_interval: [p_low, p_high],
+      ev: evEstimate.ev.toNumber(),
+    };
+  }
+
+  if (!evEstimate.ev.gt(0)) {
+    return {
+      accepted: false,
+      reason: 'ev_non_positive',
+      p_win: p_win_cal,
+      p_interval: [p_low, p_high],
+      ev: evEstimate.ev.toNumber(),
+    };
+  }
+
+  const regime = features.tf4h.trendBias as 'bull' | 'bear' | 'neutral';
+  const passesPolicy = passesQuantile(regime, p_win_cal, rollingPf.value(), {
     trend: cfg.ACCEPT_Q_TREND,
     range: cfg.ACCEPT_Q_RANGE,
     volatile: cfg.ACCEPT_Q_VOL,
     pfLow: cfg.THROTTLE_PF_LOW,
     pfHigh: cfg.THROTTLE_PF_HIGH,
     step: cfg.THROTTLE_STEP,
-  }) && ev.ev.gt(0);
+  });
 
   telemetry.record({
     symbol,
     regime,
     probability: p_win_cal,
-    evEstimate: ev.ev.toNumber(),
+    evEstimate: evEstimate.ev.toNumber(),
   });
 
-  if (!accept) {
+  if (!passesPolicy) {
     return {
       accepted: false,
       reason: 'policy',
       p_win: p_win_cal,
       p_interval: [p_low, p_high],
-      ev: ev.ev.toNumber(),
+      ev: evEstimate.ev.toNumber(),
     };
   }
 
@@ -169,8 +218,8 @@ export async function evaluateOpportunity(symbol: string, notional: number, opti
     action: action.kind,
     p_win: p_win_cal,
     p_interval: [p_low, p_high],
-    ev: ev.ev.toNumber(),
-    plan,
+    ev: evEstimate.ev.toNumber(),
+    plan: serializePlan(plan),
     why: selected?.reasons ?? [],
   };
 }
@@ -186,4 +235,60 @@ export function recordOutcome(pnl: PreciseDecimal): void {
 
 export function getTelemetrySummary() {
   return telemetry.summary();
+}
+
+function serializePlan(plan: NonNullable<ReturnType<typeof buildExecutionPlan>>): {
+  legs: typeof plan.legs;
+  notionalUsd: number;
+  riskUsd: number;
+  slPct: number;
+  tpPcts: number[];
+  tpUsd: number;
+  precise: typeof plan.precise;
+  preciseDisplay: {
+    notionalUsd: string;
+    riskUsd: string;
+    slPct: string;
+    tpPcts: string[];
+    tpUsd: string;
+  };
+} {
+  return {
+    legs: plan.legs,
+    notionalUsd: plan.notionalUsd,
+    riskUsd: plan.riskUsd,
+    slPct: plan.slPct,
+    tpPcts: plan.tpPcts,
+    tpUsd: plan.tpUsd,
+    precise: plan.precise,
+    preciseDisplay: {
+      notionalUsd: plan.precise.notionalUsd.toFixed(2),
+      riskUsd: plan.precise.riskUsd.toFixed(2),
+      slPct: plan.precise.slPct.toFixed(6),
+      tpPcts: plan.precise.tpPcts.map((tp) => tp.toFixed(6)),
+      tpUsd: plan.precise.tpUsd.toFixed(2),
+    },
+  };
+}
+
+type Bias = 'bullish' | 'bearish' | 'neutral';
+
+function resolveBias(timeframe: '4h' | '15m', features: ContextFeatures, context?: ContextWithMulti): Bias {
+  const multi = context?.multiTimeframe?.timeframes?.[timeframe]?.bias;
+  if (multi) return normalizeBias(multi);
+  if (timeframe === '4h') {
+    return normalizeBias(features.tf4h.trendBias);
+  }
+  const slope = Number(features.tf15m.emaSlope20);
+  const roc = Number(features.tf15m.roc12);
+  if (slope > 0.0005 || roc > 0.0005) return 'bullish';
+  if (slope < -0.0005 || roc < -0.0005) return 'bearish';
+  return 'neutral';
+}
+
+function normalizeBias(value: unknown): Bias {
+  const str = String(value ?? '').toLowerCase();
+  if (['bull', 'bullish', 'long', 'up'].includes(str)) return 'bullish';
+  if (['bear', 'bearish', 'short', 'down'].includes(str)) return 'bearish';
+  return 'neutral';
 }

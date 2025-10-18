@@ -33,11 +33,11 @@ router.get('/intelligent-opportunities', async (req, res) => {
 
 router.post('/ai/opportunities/rank', async (req, res) => {
   try {
-    const { symbol, notional, contextFeatures, playbooks, now } = req.body || {};
-    if (typeof symbol !== 'string' || !Number.isFinite(Number(notional))) {
-      return res.status(400).json({ success: false, error: 'symbol and notional are required' });
+    const { symbol, equityUsd, contextFeatures, playbooks, now } = req.body || {};
+    if (typeof symbol !== 'string' || !Number.isFinite(Number(equityUsd))) {
+      return res.status(400).json({ success: false, error: 'symbol and equityUsd are required' });
     }
-    const result = await evaluateEvOpportunity(symbol, Number(notional), {
+    const result = await evaluateEvOpportunity(symbol, Number(equityUsd), {
       context: contextFeatures,
       playbooks,
       now: typeof now === 'number' ? now : undefined,
