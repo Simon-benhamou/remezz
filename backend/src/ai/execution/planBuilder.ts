@@ -1,5 +1,6 @@
 import { getEnv } from '../../config/env.js';
 import { PreciseDecimal } from '../../quantai/strategy/metaAdaptiveAgent.js';
+import { estimateCosts } from '../ranking/costModel.js';
 
 export interface ExecutionLeg {
   type: 'LIMIT' | 'PA' | 'TWAP' | 'MARKET';
@@ -30,6 +31,11 @@ export interface BuildPlanInput {
   tpMultipliers?: number[];
   spreadBps: number;
   passiveFillRate?: number;
+  mode?: 'risk' | 'budget';
+  budgetUsd?: number;
+  atrPct?: number;
+  depthUsd?: number;
+  slipRecentBps?: number;
 }
 
 export function buildExecutionPlan(input: BuildPlanInput): ExecutionPlan | null {
@@ -39,14 +45,32 @@ export function buildExecutionPlan(input: BuildPlanInput): ExecutionPlan | null 
     return null;
   }
 
-  const equity = new PreciseDecimal(Number.isFinite(input.equityUsd) ? input.equityUsd : 0);
-  const riskUsd = equity.times(new PreciseDecimal(env.RISK_PCT_PER_TRADE));
-  if (riskUsd.toNumber() <= 0) {
-    return null;
-  }
-
   const stopPct = new PreciseDecimal(stopPctNumber);
-  let notionalUsd = riskUsd.dividedBy(stopPct);
+  const mode = input.mode ?? 'risk';
+
+  let notionalUsd: PreciseDecimal;
+  let riskUsd: PreciseDecimal;
+
+  if (mode === 'budget') {
+    const budgetCandidate = Number.isFinite(input.budgetUsd)
+      ? Number(input.budgetUsd)
+      : Number.isFinite(input.baseNotionalCapUsd)
+        ? Number(input.baseNotionalCapUsd)
+        : NaN;
+    if (!Number.isFinite(budgetCandidate) || budgetCandidate <= 0) {
+      return null;
+    }
+    notionalUsd = new PreciseDecimal(budgetCandidate);
+    riskUsd = notionalUsd.times(stopPct);
+  } else {
+    const equity = new PreciseDecimal(Number.isFinite(input.equityUsd) ? input.equityUsd : 0);
+    const rawRisk = equity.times(new PreciseDecimal(env.RISK_PCT_PER_TRADE));
+    if (rawRisk.toNumber() <= 0) {
+      return null;
+    }
+    notionalUsd = rawRisk.dividedBy(stopPct);
+    riskUsd = rawRisk;
+  }
   if (input.baseNotionalCapUsd != null && Number.isFinite(input.baseNotionalCapUsd)) {
     const cap = new PreciseDecimal(input.baseNotionalCapUsd);
     if (notionalUsd.gt(cap)) {
@@ -56,6 +80,10 @@ export function buildExecutionPlan(input: BuildPlanInput): ExecutionPlan | null 
 
   if (notionalUsd.toNumber() <= 0) {
     return null;
+  }
+
+  if (mode !== 'budget') {
+    riskUsd = notionalUsd.times(stopPct);
   }
 
   const defaultMultipliers = [env.MIN_RR, env.MIN_RR * 1.5, env.MIN_RR * 2.5];
@@ -84,35 +112,88 @@ export function buildExecutionPlan(input: BuildPlanInput): ExecutionPlan | null 
     return null;
   }
 
+  const costs = estimateCosts({
+    notionalUsd,
+    spreadBps: input.spreadBps,
+    slipRecentBps: input.slipRecentBps,
+    passiveFillRate: input.passiveFillRate,
+  });
+  const tpUsdNet = tpUsd.minus(costs.total);
+  if (tpUsdNet.lt(env.MIN_TARGET_GAIN_USD) || tpUsdNet.lt(0)) {
+    return null;
+  }
+
   let limitShare = clamp01(env.ENTRY_SPLIT_LIMIT);
   let activeShare = clamp01(env.ENTRY_SPLIT_PA);
-  const sumShares = limitShare + activeShare;
-  if (sumShares > 1) {
-    limitShare /= sumShares;
-    activeShare /= sumShares;
+  const baseSum = limitShare + activeShare;
+  if (baseSum <= 0) {
+    limitShare = 1;
+    activeShare = 0;
   }
-  const twapCondition = input.spreadBps > env.ENTRY_TWAP_TRIGGER_SPREAD_BPS
+
+  const atrPct = Number.isFinite(input.atrPct) ? Number(input.atrPct) : null;
+  const depthValue = Number.isFinite(input.depthUsd) ? Math.max(0, Number(input.depthUsd)) : null;
+  const impactPct = depthValue && depthValue > 0
+    ? notionalUsd.dividedBy(new PreciseDecimal(depthValue)).times(new PreciseDecimal('100'))
+    : null;
+  const impactPctNumber = impactPct?.toNumber();
+
+  const allowMarket = atrPct != null
+    && atrPct >= env.ORDER_MARKET_ATR_PCT
+    && impactPctNumber != null
+    && impactPctNumber <= env.ORDER_MAX_IMPACT_PCT;
+
+  if (allowMarket && baseSum > 1) {
+    limitShare /= baseSum;
+    activeShare /= baseSum;
+  }
+
+  if (!allowMarket) {
+    const normalizer = baseSum > 0 ? baseSum : 1;
+    limitShare = limitShare / normalizer;
+    activeShare = activeShare / normalizer;
+  }
+
+  let limitPct = roundPct(limitShare);
+  let activePct = roundPct(activeShare);
+  let marketPct = 0;
+  if (allowMarket) {
+    const assigned = limitPct + activePct;
+    marketPct = roundPct(Math.max(0, 1 - assigned));
+  } else {
+    const assigned = limitPct + activePct;
+    if (assigned < 1) {
+      const shortfall = 1 - assigned;
+      if (limitPct > 0) {
+        limitPct = roundPct(limitPct + shortfall);
+      } else if (activePct > 0) {
+        activePct = roundPct(activePct + shortfall);
+      } else {
+        limitPct = 1;
+      }
+    }
+  }
+
+  const twapCondition = input.spreadBps > env.ORDER_TWAP_SPREAD_BPS
     || (input.passiveFillRate ?? 0.5) < 0.3;
 
-  const limitPct = roundPct(limitShare);
-  const activePct = roundPct(activeShare);
-  const remainder = Math.max(0, 1 - limitPct - activePct);
   const legs: ExecutionLeg[] = [];
-  legs.push({ type: 'LIMIT', sizePct: limitPct, params: { timeoutMs: env.ENTRY_LIMIT_TIMEOUT_MS } });
-
   if (twapCondition) {
-    const twapSize = roundPct(activePct + remainder);
-    if (twapSize > 0) {
-      legs.push({ type: 'TWAP', sizePct: twapSize, params: { durationMs: env.ENTRY_LIMIT_TIMEOUT_MS } });
-    }
+    legs.push({ type: 'TWAP', sizePct: 1, params: { durationMs: env.ORDER_LIMIT_TIMEOUT_MS } });
   } else {
+    if (limitPct > 0) {
+      legs.push({ type: 'LIMIT', sizePct: limitPct, params: { timeoutMs: env.ORDER_LIMIT_TIMEOUT_MS } });
+    }
     if (activePct > 0) {
       legs.push({ type: 'PA', sizePct: activePct, params: { offsetBps: Math.max(1, input.spreadBps * 0.25) } });
     }
-    const leftover = roundPct(Math.max(0, 1 - limitPct - (activePct > 0 ? activePct : 0)));
-    if (leftover > 0 && (activePct === 0 || leftover > 1e-4)) {
-      legs.push({ type: 'MARKET', sizePct: leftover, params: {} });
+    if (marketPct > 0) {
+      legs.push({ type: 'MARKET', sizePct: marketPct, params: {} });
     }
+  }
+
+  if (!legs.length) {
+    return null;
   }
 
   const plan: ExecutionPlan = {

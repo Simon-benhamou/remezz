@@ -14,12 +14,12 @@ import { expectedValue as computeExpectedValue } from '../../dist/src/ai/ranking
 process.env.MIN_TARGET_GAIN_USD = '30';
 process.env.RISK_PCT_PER_TRADE = '0.015';
 process.env.MIN_RR = '2.0';
-process.env.FEES_BPS = '7';
-process.env.SLIP_ALPHA = '0.7';
-process.env.SLIP_BETA = '0.3';
-process.env.SLIP_CAP_BPS = '18';
-process.env.ENTRY_LIMIT_TIMEOUT_MS = '2500';
-process.env.ENTRY_TWAP_TRIGGER_SPREAD_BPS = '18';
+process.env.FEES_BPS = '8';
+process.env.SLIP_ALPHA = '0.5';
+process.env.SLIP_BETA = '1.2';
+process.env.SLIP_CAP_BPS = '15';
+process.env.ORDER_LIMIT_TIMEOUT_MS = '2500';
+process.env.ORDER_TWAP_SPREAD_BPS = '18';
 process.env.ENTRY_SPLIT_LIMIT = '0.6';
 process.env.ENTRY_SPLIT_PA = '0.4';
 process.env.ACCEPT_Q_TREND = '0.65';
@@ -29,6 +29,7 @@ process.env.THROTTLE_PF_LOW = '0.80';
 process.env.THROTTLE_PF_HIGH = '1.60';
 process.env.THROTTLE_STEP = '0.02';
 process.env.EV_MIN_CONSERVATIVE_PROB = '0.60';
+process.env.UNIT_TEST_MODE = 'true';
 resetEnvCache();
 
 const baseFeatures = {
@@ -76,6 +77,8 @@ const baseFeatures = {
     isNight: false,
   },
 };
+
+const ACCEPT_EQUITY_USD = 2_000;
 
 function cloneFeatures(overrides = {}) {
   return JSON.parse(JSON.stringify({ ...baseFeatures, ...overrides }));
@@ -154,7 +157,7 @@ async function runUnitTest() {
   const dataset = buildDataset();
   fitProbabilityModel(dataset);
 
-  const evaluation = await evaluateOpportunity('TEST/USDT', 1_000, {
+  const evaluation = await evaluateOpportunity('TEST/USDT', ACCEPT_EQUITY_USD, {
     context: baseFeatures,
     ohlcv15m: buildOhlcv(100),
     playbooks: ['PULLBACK', 'BREAKOUT', 'MR'],
@@ -189,22 +192,31 @@ async function runUnitTest() {
     tf4h: { ...baseFeatures.tf4h, trendBias: 'bull' },
     tf15m: { ...baseFeatures.tf15m, roc12: -0.02, emaSlope20: -0.015 },
   });
-  const conflict = await evaluateOpportunity('TEST/USDT', 1_000, {
+  const conflict = await evaluateOpportunity('TEST/USDT', ACCEPT_EQUITY_USD, {
     context: conflictFeatures,
     ohlcv15m: buildOhlcv(100),
   });
   assert.strictEqual(conflict.accepted, false, 'conflict scenario must be rejected');
   assert.strictEqual(conflict.reason, 'tf_conflict_4h_vs_15m');
 
+  const perfReject = await evaluateOpportunity('TEST/USDT', ACCEPT_EQUITY_USD, {
+    context: baseFeatures,
+    ohlcv15m: buildOhlcv(100),
+    performanceMemory: { sample: 10, winRate: 20, lastTradeAt: Date.now() - 60 * 60 * 1000 },
+    now: Date.now(),
+  });
+  assert.strictEqual(perfReject.accepted, false, 'poor performance memory must be rejected');
+  assert.strictEqual(perfReject.reason, 'perf_memory_cooldown');
+
   const twapPlan = buildPlan({
-    equityUsd: 1_000,
+    equityUsd: ACCEPT_EQUITY_USD,
     stopPct: 0.015,
     spreadBps: 22,
     passiveFillRate: 0.6,
   });
   assert.ok(twapPlan && twapPlan.legs.some((leg) => leg.type === 'TWAP'), 'wider spread should trigger TWAP leg');
 
-  const flatEval = await evaluateOpportunity('TEST/USDT', 1_000, {
+  const flatEval = await evaluateOpportunity('TEST/USDT', ACCEPT_EQUITY_USD, {
     context: baseFeatures,
     ohlcv15m: buildFlatOhlcv(100),
   });
@@ -220,7 +232,8 @@ async function runSmokeBacktest() {
     { ctx: cloneFeatures({ tf4h: { ...baseFeatures.tf4h, trendBias: 'neutral', adx14: 18 } }), seedPrice: 99.5, move: -0.004 },
     { ctx: cloneFeatures({ tf4h: { ...baseFeatures.tf4h, trendBias: 'bull', emaSlope20: 0.014 }, tf1h: { ...baseFeatures.tf1h, roc12: 0.02 } }), seedPrice: 102.5, move: 0.02 },
   ];
-  let equity = 1_000;
+  let equity = ACCEPT_EQUITY_USD;
+  const startingEquity = ACCEPT_EQUITY_USD;
   let peak = equity;
   let maxDrawdown = 0;
   const returns = [];
@@ -259,7 +272,7 @@ async function runSmokeBacktest() {
 
   assert.ok(returns.length > 0, 'smoke backtest must produce returns');
   const years = Math.max(returns.length / 252, 1 / 252);
-  const cagr = Math.pow(equity / 1_000, 1 / years) - 1;
+  const cagr = Math.pow(equity / startingEquity, 1 / years) - 1;
   const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
   const variance = returns.reduce((acc, r) => acc + (r - avgReturn) ** 2, 0) / returns.length;
   const std = Math.sqrt(variance);
