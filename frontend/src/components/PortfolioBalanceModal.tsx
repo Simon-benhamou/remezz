@@ -130,8 +130,8 @@ const PortfolioBalanceModal: React.FC<PortfolioBalanceModalProps> = ({ open, mod
     }
   };
 
-  const paperMetrics = paperSnapshot ?? {};
-  const liveMetrics = liveSnapshot ?? {};
+  const paperMetrics:any = paperSnapshot ?? {};
+  const liveMetrics:any = liveSnapshot ?? {};
   const activeSnapshot = mode === 'paper' ? paperSnapshot : liveSnapshot;
   const allocationRows = React.useMemo(() => {
     const list = activeSnapshot?.allocations ?? [];
