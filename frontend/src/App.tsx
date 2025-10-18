@@ -50,6 +50,9 @@ function AuthenticatedApp() {
   const balanceSubtitle = mode === 'live' ? 'Live exchange equity' : 'Paper equity';
   const freeSubtitle = mode === 'live' ? 'Free balance' : 'Available';
   const roiValue = Number(overview?.roiPct ?? 0);
+  const netRoiCandidate = Number(overview?.netRoiPct);
+  const netRoiValue = Number.isFinite(netRoiCandidate) ? netRoiCandidate : roiValue;
+  const showNetRoi = Math.abs(netRoiValue - roiValue) > 0.05;
   const pnlValue = Number(overview?.pnlUsd ?? 0);
   const activeAgents = overview?.activeCount ?? 0;
   const marketCoverage = Array.isArray(overview?.symbols) ? overview.symbols.length : 0;
@@ -190,11 +193,16 @@ function AuthenticatedApp() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>
                 <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                  ROI
+                  ROI (realized)
                 </div>
                 <div style={{ color: roiValue >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>
                   {roiValue >= 0 ? '+' : '-'}{Math.abs(roiValue).toFixed(1)}%
                 </div>
+                {showNetRoi && (
+                  <div style={{ color: netRoiValue >= 0 ? '#0ea5e9' : '#f87171', fontSize: 11, fontWeight: 500 }}>
+                    Net {netRoiValue >= 0 ? '+' : '-'}{Math.abs(netRoiValue).toFixed(1)}%
+                  </div>
+                )}
               </div>
               <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>
                 <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>

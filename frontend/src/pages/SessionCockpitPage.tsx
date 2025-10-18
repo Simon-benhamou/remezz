@@ -752,12 +752,20 @@ export default function SessionCockpitPage() {
     return items.sort((a, b) => b.ts - a.ts).slice(0, 60);
   }, [alerts, orders, trades, status?.symbol]);
 
-  const roi = Number(kpi?.roiPct ?? kpi?.roi ?? 0);
-  const winRate = Number(kpi?.winRate ?? 0);
+  const startBalance = Number(status?.session?.startBalanceUsd ?? status?.session?.startBalance ?? 0);
+  const statsMeta = (kpi?.stats ?? {}) as Record<string, any>;
   const realizedPnl = Number(kpi?.realizedPnlUsd ?? 0);
   const unrealizedPnl = Number(kpi?.unrealizedPnlUsd ?? 0);
+  const roi = startBalance > 0 ? (realizedPnl / startBalance) * 100 : Number(kpi?.roiPct ?? kpi?.roi ?? 0);
+  const netRoi = Number.isFinite(Number(statsMeta?.netRoiPct))
+    ? Number(statsMeta.netRoiPct)
+    : startBalance > 0
+      ? ((realizedPnl + unrealizedPnl) / startBalance) * 100
+      : roi;
+  const winRate = Number(kpi?.winRate ?? 0);
   const maxDrawdown = Number(kpi?.maxDrawdownPct ?? 0);
   const netPnl = realizedPnl + unrealizedPnl;
+  const showNetRoi = Number.isFinite(netRoi) && Math.abs(netRoi - roi) > 0.05;
   const canRearm = React.useMemo(() => {
     const payload = (agent as any)?.plan;
     if (!payload) return false;
@@ -948,14 +956,23 @@ export default function SessionCockpitPage() {
                     {(status.session.profileJson.aggressiveness as string).toUpperCase()}
                   </Tag>
                 )}
-                 <Statistic
-                    title="ROI"
-                    value={roi}
+                <Statistic
+                  title="ROI (realized)"
+                  value={roi}
+                  precision={2}
+                  suffix="%"
+                  valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
+                />
+                {showNetRoi && (
+                  <Statistic
+                    title="ROI (net)"
+                    value={netRoi}
                     precision={2}
                     suffix="%"
-                    valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
+                    valueStyle={{ color: netRoi >= 0 ? '#0ea5e9' : '#dc2626' }}
                   />
-                     <Statistic
+                )}
+                <Statistic
                     title="Win rate"
                     value={winRate}
                     precision={1}
@@ -1072,7 +1089,7 @@ export default function SessionCockpitPage() {
                   {ordersView === 'trades' ? (
                     <MemoTradesTable rows={trades} />
                   ) : (
-                    <MemoOrdersTable rows={activeOrders} />
+                    <MemoOrdersTable rows={orders} />
                   )}
                 </div>
               </div>

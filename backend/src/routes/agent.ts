@@ -1047,9 +1047,13 @@ router.get('/sessions', authenticateUser, async (req: AuthenticatedRequest, res)
     if (includeStats && (r as any).kpi) {
       const realized = Number((r as any).kpi?.realizedPnlUsd || 0);
       const unrealized = Number((r as any).kpi?.unrealizedPnlUsd || 0);
+      const start = Number(r.startBalanceUsd || 0);
+      const realizedRoi = Number((r as any).kpi?.roiPct || (start > 0 ? (realized / start) * 100 : 0));
+      const netRoiPct = Number(((r as any).kpi?.stats as any)?.netRoiPct ?? (start > 0 ? ((realized + unrealized) / start) * 100 : realizedRoi));
       stats = {
         pnlUsd: realized + unrealized,
-        roiPct: Number((r as any).kpi?.roiPct || 0),
+        roiPct: realizedRoi,
+        netRoiPct,
         winRate: Number((r as any).kpi?.winRate || 0),
         openPositions: ((r as any).positions || []).length
       };
@@ -1107,9 +1111,12 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     ]);
     const symbols = actives.map(a => a.symbol);
     const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.kpi?.aiCallsTotal || 0), 0);
-    const pnlUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0) + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
+    const realizedUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0), 0);
+    const unrealizedUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
+    const pnlUsd = realizedUsd + unrealizedUsd;
     const capitalStartUsd = actives.reduce((sum, a)=> sum + Number(a.startBalanceUsd || 0), 0);
-    const roiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : 0;
+    const roiPct = capitalStartUsd > 0 ? (realizedUsd / capitalStartUsd) * 100 : 0;
+    const netRoiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : roiPct;
 
     // Calculate global win rate across all agents (not average of individual win rates)
     const totalWins = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.wins || 0), 0);
@@ -1229,6 +1236,8 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
         aggressiveness: session.profileJson ? (session.profileJson as any)?.aggressiveness : 'conservative',
         pnlUsd: Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0),
         roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ?
+          (Number(session.kpi?.realizedPnlUsd || 0) / Number(session.startBalanceUsd)) * 100 : 0,
+        netRoiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ?
           ((Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0)) / Number(session.startBalanceUsd)) * 100 : 0,
         winRate: Number(session.kpi?.winRate || 0),
         trades: Number((session.kpi?.stats as any)?.tradesTotal || 0),
@@ -1256,6 +1265,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       exchangeBalance,
       paperBalance,
       sessions: sessionsData, // ✅ Ajout des sessions dans la réponse
+      netRoiPct,
       updatedAt: new Date().toISOString(),
     };
     return payload;

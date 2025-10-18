@@ -7,7 +7,17 @@ export default function PerfPanel({ kpi, session }: any) {
         <Empty description="No active session" />
       </Card>
     );
-  const roi = kpi?.roiPct ?? 0;
+  const startBalance = Number(session?.startBalanceUsd ?? 0);
+  const realizedPnl = Number(kpi?.realizedPnlUsd ?? 0);
+  const unrealizedPnl = Number(kpi?.unrealizedPnlUsd ?? 0);
+  const statsMeta = (kpi?.stats ?? {}) as Record<string, any>;
+  const roi = startBalance > 0 ? (realizedPnl / startBalance) * 100 : Number(kpi?.roiPct ?? 0);
+  const netRoi = Number.isFinite(Number(statsMeta?.netRoiPct))
+    ? Number(statsMeta.netRoiPct)
+    : startBalance > 0
+      ? ((realizedPnl + unrealizedPnl) / startBalance) * 100
+      : roi;
+  const showNet = Number.isFinite(netRoi) && Math.abs(netRoi - roi) > 0.05;
   const color = roi >= 0 ? '#1f8f1f' : '#c0392b';
   const stats = (kpi?.stats || {}) as any;
   const expectancy = typeof kpi?.expectancy === 'number' ? kpi.expectancy : 0;
@@ -34,7 +44,15 @@ export default function PerfPanel({ kpi, session }: any) {
             value={kpi?.unrealizedPnlUsd ?? 0}
             precision={2}
           />
-          <Statistic title={<Tooltip title="Return on investment since activation">ROI (%)</Tooltip>} value={roi} precision={2} valueStyle={{ color }} />
+          <Statistic title={<Tooltip title="Closed return relative to starting balance">ROI (realized %)</Tooltip>} value={roi} precision={2} valueStyle={{ color }} />
+          {showNet && (
+            <Statistic
+              title={<Tooltip title="Realized + open PnL relative to starting balance">ROI (net %)</Tooltip>}
+              value={netRoi}
+              precision={2}
+              valueStyle={{ color: netRoi >= 0 ? '#0ea5e9' : '#c0392b' }}
+            />
+          )}
           <Statistic
             title={<Tooltip title="Winning trades / total trades">Win rate (%)</Tooltip>}
             value={kpi?.winRate ?? 0}

@@ -128,11 +128,21 @@ async function tickOnce(sessionId: string, sym: string){
         upnlUsd = dir * (tech.last - a.pos.entry) * a.pos.qty;
       }
       const realized = Number((s as any)?.kpi?.realizedPnlUsd || 0);
-      const unrealized = Number((s as any)?.kpi?.unrealizedPnlUsd || 0);
-      const pnlUsd = realized + unrealized + upnlUsd;
+      const persistedUnrealized = Number((s as any)?.kpi?.unrealizedPnlUsd || 0);
       const capital = Number(s.startBalanceUsd || 0);
-      const roiPct = capital > 0 ? (pnlUsd / capital) * 100 : Number((s as any)?.kpi?.roiPct || 0);
-      broadcast('overview_session', { id: s.id, symbol: s.symbol, price: tech.last, pnlUsd, roiPct, ts: Date.now() });
+      const realizedRoi = capital > 0 ? (realized / capital) * 100 : Number((s as any)?.kpi?.roiPct || 0);
+      const totalUnrealized = persistedUnrealized + upnlUsd;
+      const pnlUsd = realized + totalUnrealized;
+      const netRoiPct = capital > 0 ? (pnlUsd / capital) * 100 : realizedRoi;
+      broadcast('overview_session', {
+        id: s.id,
+        symbol: s.symbol,
+        price: tech.last,
+        pnlUsd,
+        roiPct: realizedRoi,
+        netRoiPct,
+        ts: Date.now(),
+      });
     }
   } catch {}
 

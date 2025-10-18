@@ -10,6 +10,20 @@ function percentile(samples: number[], p: number) {
   return sorted[idx];
 }
 
+export function computeRoiBreakdown(
+  startBalance: number,
+  realizedPnlUsd: number,
+  unrealizedPnlUsd: number,
+) {
+  const start = Number.isFinite(startBalance) ? startBalance : 0;
+  const realized = Number.isFinite(realizedPnlUsd) ? realizedPnlUsd : 0;
+  const unrealized = Number.isFinite(unrealizedPnlUsd) ? unrealizedPnlUsd : 0;
+  const total = realized + unrealized;
+  const realizedPct = start > 0 ? (realized / start) * 100 : 0;
+  const netPct = start > 0 ? (total / start) * 100 : 0;
+  return { realizedPct, netPct };
+}
+
 export async function recomputeKpi(sessionId: string) {
   const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
   if (!session) return;
@@ -35,7 +49,11 @@ export async function recomputeKpi(sessionId: string) {
   }
 
   const startBal = Number(session.startBalanceUsd || 0);
-  const roiPct = startBal > 0 ? ((realized + unrealized) / startBal) * 100 : 0;
+  const { realizedPct: roiPct, netPct: netRoiPct } = computeRoiBreakdown(
+    startBal,
+    realized,
+    unrealized,
+  );
 
   const orders = await prisma.order.findMany({
     where: { sessionId, source: 'agent' },
@@ -162,6 +180,7 @@ export async function recomputeKpi(sessionId: string) {
     medianHoldMin: medianHold,
     p75HoldMin: p75Hold,
     bySymbol,
+    netRoiPct,
   };
 
   await prisma.sessionKpi.upsert({
