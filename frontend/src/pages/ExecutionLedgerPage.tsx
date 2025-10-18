@@ -47,10 +47,25 @@ type SessionMetrics = {
   tradeCount: number;
 };
 
-function asOutcome(row: TradeRow): Outcome {
-  const pnl = Number(row.realizedPnlUsd || 0);
-  if (Math.abs(pnl) < 1e-8) return 'breakeven';
-  return pnl > 0 ? 'win' : 'loss';
+export function resolvePerformanceSignal(row: TradeRow): number {
+  const percentLikeSources = [row.pctChange, row.roePct];
+  for (const source of percentLikeSources) {
+    if (source == null) continue;
+    const value = Number(source);
+    if (!Number.isFinite(value)) continue;
+    if (Math.abs(value) < 1e-8) continue;
+    return value;
+  }
+
+  const realized = Number(row.realizedPnlUsd ?? 0);
+  if (!Number.isFinite(realized)) return 0;
+  return realized;
+}
+
+export function asOutcome(row: TradeRow): Outcome {
+  const signal = resolvePerformanceSignal(row);
+  if (Math.abs(signal) < 1e-8) return 'breakeven';
+  return signal > 0 ? 'win' : 'loss';
 }
 
 function formatUsd(v?: number | null, digits = 2) {
@@ -314,12 +329,12 @@ export default function ExecutionLedgerPage() {
         acc.trades += 1;
         if (outcome === 'win') {
           acc.wins += 1;
-          acc.winPnls.push(pnlUsd);
+          if (pnlUsd > 0) acc.winPnls.push(pnlUsd);
           if (Number.isFinite(leverageValue) && leverageValue > 0) acc.winLeverages.push(leverageValue);
         }
         if (outcome === 'loss') {
           acc.losses += 1;
-          acc.lossPnls.push(pnlUsd);
+          if (pnlUsd < 0) acc.lossPnls.push(pnlUsd);
           if (Number.isFinite(leverageValue) && leverageValue > 0) acc.lossLeverages.push(leverageValue);
         }
         if (Number.isFinite(leverageValue) && leverageValue > 0) acc.allLeverages.push(leverageValue);
