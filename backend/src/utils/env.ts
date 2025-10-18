@@ -235,6 +235,39 @@ export type Cfg = {
   STRAT_REFRESH_MIN_EMA_SPREAD_BPS: number;  // min EMA20/50 spread delta (bps)
   STRAT_REFRESH_MIN_RSI_DELTA: number;       // min RSI delta (points)
   STRAT_REFRESH_MIN_ADX_DELTA: number;       // min ADX delta (points)
+
+  // EV-driven intelligent agent pipeline
+  ML_TB_K_TP: number;
+  ML_TB_K_SL: number;
+  ML_TB_HORIZON_BARS: number;
+  ACCEPT_Q_TREND: number;
+  ACCEPT_Q_RANGE: number;
+  ACCEPT_Q_VOL: number;
+  THROTTLE_PF_LOW: number;
+  THROTTLE_PF_HIGH: number;
+  THROTTLE_STEP: number;
+  FEES_BPS: number;
+  SLIP_ALPHA: number;
+  SLIP_BETA: number;
+  SLIP_CAP_BPS: number;
+  ENTRY_SPLIT_LIMIT: number;
+  ENTRY_SPLIT_PA: number;
+  ENTRY_LIMIT_TIMEOUT_MS: number;
+  ENTRY_TWAP_TRIGGER_SPREAD_BPS: number;
+  TRAIL_ACTIVATE_R: number;
+  EV_MIN_VOLUME_USD: number;
+  EV_MAX_SPREAD_BPS: number;
+  EV_MIN_DEPTH_USD: number;
+  EV_MIN_PASSIVE_FILL_RATE: number;
+  EV_ATR_TP_MIN_RATIO: number;
+  EV_ATR_TP_MAX_RATIO: number;
+  EV_PULLBACK_K_SL: number;
+  EV_BREAKOUT_K_SL: number;
+  EV_MR_K_SL: number;
+  EV_PULLBACK_TP_MULTS: number[];
+  EV_BREAKOUT_TP_MULTS: number[];
+  EV_MR_TP_MULTS: number[];
+  EV_MIN_CONSERVATIVE_PROB: number;
 };
 export type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
 
@@ -391,7 +424,7 @@ export function getConfig(): Cfg {
     BREAKOUT_CONFIRM_TICKS: Number(e.BREAKOUT_CONFIRM_TICKS || "2"),
     BREAKOUT_HYSTERESIS_PCT: Number(e.BREAKOUT_HYSTERESIS_PCT || "0.15"),
     REVERSE_ON_BREAKOUT: (e.REVERSE_ON_BREAKOUT || "false") === "true",
-    TRAIL_PCT: Number(e.TRAIL_PCT || "0"),
+    TRAIL_PCT: Number(e.TRAIL_PCT || "0.6"),
     // Slightly more permissive by default to avoid idle agents on moderate-trend days
     ENTRY_SHORT_MIN_ADX: Number(e.ENTRY_SHORT_MIN_ADX || "6"),
     ENTRY_SHORT_MIN_RSI: Number(e.ENTRY_SHORT_MIN_RSI || "45"),
@@ -582,5 +615,38 @@ export function getConfig(): Cfg {
     STRAT_REFRESH_MIN_EMA_SPREAD_BPS: Number(e.STRAT_REFRESH_MIN_EMA_SPREAD_BPS || "8"),
     STRAT_REFRESH_MIN_RSI_DELTA: Number(e.STRAT_REFRESH_MIN_RSI_DELTA || "2"),
     STRAT_REFRESH_MIN_ADX_DELTA: Number(e.STRAT_REFRESH_MIN_ADX_DELTA || "2"),
+
+    // EV-driven intelligent agent pipeline defaults
+    ML_TB_K_TP: Number(e.ML_TB_K_TP || "2.0"),
+    ML_TB_K_SL: Number(e.ML_TB_K_SL || "1.2"),
+    ML_TB_HORIZON_BARS: Number(e.ML_TB_HORIZON_BARS || "48"),
+    ACCEPT_Q_TREND: Number(e.ACCEPT_Q_TREND || "0.65"),
+    ACCEPT_Q_RANGE: Number(e.ACCEPT_Q_RANGE || "0.40"),
+    ACCEPT_Q_VOL: Number(e.ACCEPT_Q_VOL || "0.30"),
+    THROTTLE_PF_LOW: Number(e.THROTTLE_PF_LOW || "1.0"),
+    THROTTLE_PF_HIGH: Number(e.THROTTLE_PF_HIGH || "1.3"),
+    THROTTLE_STEP: Number(e.THROTTLE_STEP || "0.05"),
+    FEES_BPS: Number(e.FEES_BPS || "7"),
+    SLIP_ALPHA: Number(e.SLIP_ALPHA || "0.7"),
+    SLIP_BETA: Number(e.SLIP_BETA || "0.3"),
+    SLIP_CAP_BPS: Number(e.SLIP_CAP_BPS || "18"),
+    ENTRY_SPLIT_LIMIT: Number(e.ENTRY_SPLIT_LIMIT || "0.6"),
+    ENTRY_SPLIT_PA: Number(e.ENTRY_SPLIT_PA || "0.4"),
+    ENTRY_LIMIT_TIMEOUT_MS: Number(e.ENTRY_LIMIT_TIMEOUT_MS || "2500"),
+    ENTRY_TWAP_TRIGGER_SPREAD_BPS: Number(e.ENTRY_TWAP_TRIGGER_SPREAD_BPS || "18"),
+    TRAIL_ACTIVATE_R: Number(e.TRAIL_ACTIVATE_R || "3.0"),
+    EV_MIN_VOLUME_USD: Number(e.EV_MIN_VOLUME_USD || "50000000"),
+    EV_MAX_SPREAD_BPS: Number(e.EV_MAX_SPREAD_BPS || "10"),
+    EV_MIN_DEPTH_USD: Number(e.EV_MIN_DEPTH_USD || "20000"),
+    EV_MIN_PASSIVE_FILL_RATE: Number(e.EV_MIN_PASSIVE_FILL_RATE || "0.4"),
+    EV_ATR_TP_MIN_RATIO: Number(e.EV_ATR_TP_MIN_RATIO || "0.5"),
+    EV_ATR_TP_MAX_RATIO: Number(e.EV_ATR_TP_MAX_RATIO || "3.0"),
+    EV_PULLBACK_K_SL: Number(e.EV_PULLBACK_K_SL || "1.2"),
+    EV_BREAKOUT_K_SL: Number(e.EV_BREAKOUT_K_SL || "1.1"),
+    EV_MR_K_SL: Number(e.EV_MR_K_SL || "0.9"),
+    EV_PULLBACK_TP_MULTS: parseNumberList(e.EV_PULLBACK_TP_MULTS, [1.8, 3, 5]),
+    EV_BREAKOUT_TP_MULTS: parseNumberList(e.EV_BREAKOUT_TP_MULTS, [2, 3.5, 5]),
+    EV_MR_TP_MULTS: parseNumberList(e.EV_MR_TP_MULTS, [1.5, 2.4, 3.5]),
+    EV_MIN_CONSERVATIVE_PROB: Number(e.EV_MIN_CONSERVATIVE_PROB || "0.05"),
   };
 }

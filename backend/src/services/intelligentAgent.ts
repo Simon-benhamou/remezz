@@ -4190,3 +4190,11 @@ export function isSymbolEligibleForAuto(base: string, params: { last: number; vo
 registerUniverseFetcher((excludeSessionId?: string, attempt: number = AUTO_UNIVERSE_MAX_ATTEMPTS) =>
   getOptimizedCryptoList(excludeSessionId, attempt),
 );
+
+export {
+  evaluateOpportunity,
+  fitProbabilityModel,
+  updateBandit,
+  recordOutcome,
+  getTelemetrySummary,
+} from '../ai/evPipeline.js';
