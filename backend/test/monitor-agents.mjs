@@ -148,3 +148,85 @@ await test('agent health falls back to fills when telemetry is stale', async () 
   assert.equal(entry.status, 'ok');
   assert.equal(entry.flags.includes('no_trades'), false);
 });
+
+await test('agent health tallies wins and losses from fills', async () => {
+  const session = await prisma.agentSession.create({
+    data: {
+      symbol: 'ETH/USDT',
+      mode: 'paper',
+      startedAt: new Date(now - 4 * 60 * 60 * 1000),
+    },
+  });
+
+  const makeOrder = async (suffix) =>
+    prisma.order.create({
+      data: {
+        clientOrderId: `test_${session.id}_${suffix}`,
+        sessionId: session.id,
+        symbol: 'ETH/USDT',
+        side: 'BUY',
+        type: 'market',
+        qty: 1,
+      },
+    });
+
+  const [winOrder, lossOrder, evenOrder] = await Promise.all([
+    makeOrder('win'),
+    makeOrder('loss'),
+    makeOrder('even'),
+  ]);
+
+  await prisma.fill.create({
+    data: {
+      orderId: winOrder.id,
+      sessionId: session.id,
+      price: 1900,
+      qty: 1,
+      side: 'SELL',
+      realizedPnl: 25.5,
+      ts: new Date(now - 30 * 60 * 1000),
+    },
+  });
+
+  await prisma.fill.create({
+    data: {
+      orderId: lossOrder.id,
+      sessionId: session.id,
+      price: 1880,
+      qty: 1,
+      side: 'SELL',
+      realizedPnl: -12.25,
+      ts: new Date(now - 25 * 60 * 1000),
+    },
+  });
+
+  await prisma.fill.create({
+    data: {
+      orderId: evenOrder.id,
+      sessionId: session.id,
+      price: 1890,
+      qty: 1,
+      side: 'SELL',
+      realizedPnl: 0,
+      ts: new Date(now - 20 * 60 * 1000),
+    },
+  });
+
+  const health = await computeAgentHealth(now, {
+    agentsSnapshot: [
+      {
+        sessionId: session.id,
+        state: 'RUN',
+        mode: 'paper',
+        symbol: 'ETH/USDT',
+        hasPosition: false,
+      },
+    ],
+  });
+
+  const entry = health.agents.find((row) => row.sessionId === session.id);
+  assert.ok(entry, 'expected session to appear in health results');
+  assert.equal(entry.wins24h, 1);
+  assert.equal(entry.losses24h, 1);
+  assert.equal(entry.breakeven24h, 1);
+});
