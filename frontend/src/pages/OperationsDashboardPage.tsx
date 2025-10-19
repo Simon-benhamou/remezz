@@ -288,49 +288,70 @@ const OperationsDashboardPage: React.FC = () => {
 
   const aggressivenessStats = React.useMemo(() => {
     const rows = Array.isArray(agentHealth?.agents) ? agentHealth.agents : [];
-    if (!rows.length) return [] as Array<{
-      level: AggressivenessLevel;
-      label: string;
-      successRate: number;
-      total: number;
-      ok: number;
-      blocked: number;
-      stale: number;
-      avgTrades: number;
-    }>;
+    if (!rows.length)
+      return [] as Array<{
+        level: AggressivenessLevel;
+        label: string;
+        successRate: number;
+        totalAgents: number;
+        profitableAgents: number;
+        winTrades: number;
+        lossTrades: number;
+        breakevenTrades: number;
+        avgTrades: number;
+      }>;
     const order: AggressivenessLevel[] = ['conservative', 'reactive', 'aggressive'];
-    const buckets: Record<AggressivenessLevel, { total: number; ok: number; blocked: number; stale: number; tradeCount: number }> = {
-      conservative: { total: 0, ok: 0, blocked: 0, stale: 0, tradeCount: 0 },
-      reactive: { total: 0, ok: 0, blocked: 0, stale: 0, tradeCount: 0 },
-      aggressive: { total: 0, ok: 0, blocked: 0, stale: 0, tradeCount: 0 },
+    const buckets: Record<
+      AggressivenessLevel,
+      {
+        totalAgents: number;
+        tradeCount: number;
+        winTrades: number;
+        lossTrades: number;
+        breakevenTrades: number;
+        profitableAgents: number;
+      }
+    > = {
+      conservative: { totalAgents: 0, tradeCount: 0, winTrades: 0, lossTrades: 0, breakevenTrades: 0, profitableAgents: 0 },
+      reactive: { totalAgents: 0, tradeCount: 0, winTrades: 0, lossTrades: 0, breakevenTrades: 0, profitableAgents: 0 },
+      aggressive: { totalAgents: 0, tradeCount: 0, winTrades: 0, lossTrades: 0, breakevenTrades: 0, profitableAgents: 0 },
     };
     rows.forEach((row: AgentHealthRow) => {
       const raw = (row.aggressiveness ?? (row as any)?.profile?.aggressiveness ?? (row as any)?.profileJson?.aggressiveness) as AggressivenessLevel | undefined;
-      const level = raw && AGGRESSIVENESS_META[raw] ? raw : 'reactive';
+      const level = raw && AGGRESSIVENESS_META[raw] ? raw : row.aggressiveness === null ? null : 'reactive';
+      if (!level) return;
       const bucket = buckets[level];
-      bucket.total += 1;
+      bucket.totalAgents += 1;
       bucket.tradeCount += Number(row.tradeCount24h || 0);
-      if (row.status === 'ok') bucket.ok += 1;
-      if (row.status === 'blocked') bucket.blocked += 1;
-      if (row.status === 'stale') bucket.stale += 1;
+      const wins = Number(row.wins24h || 0);
+      const losses = Number(row.losses24h || 0);
+      const breakeven = Number(row.breakeven24h || 0);
+      bucket.winTrades += wins;
+      bucket.lossTrades += losses;
+      bucket.breakevenTrades += breakeven;
+      if (wins > losses) {
+        bucket.profitableAgents += 1;
+      }
     });
 
     return order
       .map((level) => {
         const bucket = buckets[level];
-        if (!bucket || bucket.total === 0) {
+        if (!bucket || bucket.totalAgents === 0) {
           return null;
         }
-        const successRate = bucket.total ? Number(((bucket.ok / bucket.total) * 100).toFixed(1)) : 0;
-        const avgTrades = bucket.total ? Number((bucket.tradeCount / bucket.total).toFixed(1)) : 0;
+        const tradeDecisions = bucket.winTrades + bucket.lossTrades;
+        const successRate = tradeDecisions ? Number(((bucket.winTrades / tradeDecisions) * 100).toFixed(1)) : 0;
+        const avgTrades = bucket.totalAgents ? Number((bucket.tradeCount / bucket.totalAgents).toFixed(1)) : 0;
         return {
           level,
           label: AGGRESSIVENESS_META[level].label,
           successRate,
-          total: bucket.total,
-          ok: bucket.ok,
-          blocked: bucket.blocked,
-          stale: bucket.stale,
+          totalAgents: bucket.totalAgents,
+          profitableAgents: bucket.profitableAgents,
+          winTrades: bucket.winTrades,
+          lossTrades: bucket.lossTrades,
+          breakevenTrades: bucket.breakevenTrades,
           avgTrades,
         };
       })
@@ -338,10 +359,11 @@ const OperationsDashboardPage: React.FC = () => {
         level: AggressivenessLevel;
         label: string;
         successRate: number;
-        total: number;
-        ok: number;
-        blocked: number;
-        stale: number;
+        totalAgents: number;
+        profitableAgents: number;
+        winTrades: number;
+        lossTrades: number;
+        breakevenTrades: number;
         avgTrades: number;
       }>;
   }, [agentHealth]);
@@ -563,7 +585,10 @@ const OperationsDashboardPage: React.FC = () => {
                     }}
                     formatter={(value: number, _name, entry) => {
                       const stat = entry?.payload as typeof aggressivenessStats[number];
-                      return [`${value}% success`, `${stat.total} agents · ${stat.avgTrades} trades/agent`];
+                      return [
+                        `${value}% success`,
+                        `${stat.totalAgents} agents · ${stat.avgTrades} trades/agent · ${stat.winTrades} wins / ${stat.lossTrades} losses`,
+                      ];
                     }}
                   />
                   <Bar dataKey='successRate' radius={[8, 8, 0, 0]}>
@@ -594,15 +619,17 @@ const OperationsDashboardPage: React.FC = () => {
                         <Tag color={AGGRESSIVENESS_META[entry.level].color} style={{ borderRadius: 8 }}>
                           {entry.label}
                         </Tag>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.75)' }}>{entry.total} agents</Text>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.75)' }}>{entry.totalAgents} agents</Text>
                       </Space>
-                      <Text style={{ color: '#e2e8f0' }}>Success {entry.successRate}% · Avg trades {entry.avgTrades}</Text>
+                      <Text style={{ color: '#e2e8f0' }}>
+                        Success {entry.successRate}% · Avg trades {entry.avgTrades} · {entry.winTrades} wins
+                      </Text>
                     </Space>
                     <Statistic
-                      title={<span style={{ color: 'rgba(148, 163, 184, 0.75)' }}>Nominal</span>}
-                      value={entry.ok}
+                      title={<span style={{ color: 'rgba(148, 163, 184, 0.75)' }}>Profitable agents</span>}
+                      value={entry.profitableAgents}
                       valueStyle={{ color: '#34d399', fontSize: 24 }}
-                      suffix={<span style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 12 }}>/{entry.total}</span>}
+                      suffix={<span style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 12 }}>/{entry.totalAgents}</span>}
                     />
                   </div>
                 ))}

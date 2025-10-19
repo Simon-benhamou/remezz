@@ -13,12 +13,15 @@ export type AgentHealthRow = {
   state: string | null;
   hasPosition: boolean;
   tradeCount24h: number;
+  wins24h: number;
+  losses24h: number;
+  breakeven24h: number;
   lastExecutionTs: number | null;
   blockedByVos: boolean;
   lastBlockedAt: number | null;
   status: AgentHealthStatus;
   flags: AgentHealthFlag[];
-  aggressiveness?: AggressivenessLevel;
+  aggressiveness?: AggressivenessLevel | null;
 };
 
 export type AgentHealthSnapshot = {

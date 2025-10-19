@@ -11,6 +11,8 @@ type AgentSnapshotEntry = AgentSnapshot extends Array<infer Item> ? Item : never
 export type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
 export type AgentHealthFlag = 'no_trades' | 'vos_block' | 'stale';
 
+type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
+
 export type AgentHealthRow = {
   sessionId: string;
   symbol: string | null;
@@ -18,11 +20,15 @@ export type AgentHealthRow = {
   state: string | null;
   hasPosition: boolean;
   tradeCount24h: number;
+  wins24h: number;
+  losses24h: number;
+  breakeven24h: number;
   lastExecutionTs: number | null;
   blockedByVos: boolean;
   lastBlockedAt: number | null;
   status: AgentHealthStatus;
   flags: AgentHealthFlag[];
+  aggressiveness: AgentAggressiveness | null;
 };
 
 export type AgentHealthSnapshot = {
@@ -94,7 +100,7 @@ export async function computeAgentHealth(
 
   const activeSessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null },
-    select: { id: true, symbol: true, mode: true },
+    select: { id: true, symbol: true, mode: true, profileJson: true },
   });
   const sessionIds = activeSessions.map((session) => session.id);
 
@@ -113,36 +119,76 @@ export async function computeAgentHealth(
   const needsFallback = activeSessions
     .filter((session) => {
       const telemetry = telemetryBySession.get(session.id);
-      return !telemetry || telemetry.tradeCount24h == null || telemetry.lastExecutionAt == null;
+      if (!telemetry) return true;
+      const tradeCount = Number(telemetry.tradeCount24h ?? 0);
+      const lastExec = telemetry.lastExecutionAt ?? telemetry.lastExecutionTs;
+      return tradeCount <= 0 || lastExec == null;
     })
     .map((session) => session.id);
 
   const fallbackCounts = new Map<string, number>();
   const fallbackLastTs = new Map<string, number>();
-  if (needsFallback.length) {
-    const fillRows = await prisma.fill.findMany({
-      where: { sessionId: { in: needsFallback } },
-      select: { sessionId: true, ts: true },
+  const fillPerformance = new Map<string, { wins: number; losses: number; breakeven: number }>();
+  if (sessionIds.length) {
+    const needsFallbackSet = new Set(needsFallback);
+    const fillsInWindow = await prisma.fill.findMany({
+      where: {
+        sessionId: { in: sessionIds },
+        ts: { gte: new Date(now - TRADE_WINDOW_MS) },
+      },
+      select: { sessionId: true, ts: true, realizedPnl: true },
     });
-    for (const row of fillRows) {
+
+    for (const row of fillsInWindow) {
+      if (!row.sessionId) continue;
       const ts = toTimestampMs((row as any).ts);
       if (ts == null) continue;
-      if (ts >= now - TRADE_WINDOW_MS) {
+
+      if (needsFallbackSet.has(row.sessionId)) {
         fallbackCounts.set(row.sessionId, (fallbackCounts.get(row.sessionId) ?? 0) + 1);
+        if (!fallbackLastTs.has(row.sessionId) || ts > (fallbackLastTs.get(row.sessionId) ?? 0)) {
+          fallbackLastTs.set(row.sessionId, ts);
+        }
       }
-      if (!fallbackLastTs.has(row.sessionId) || ts > (fallbackLastTs.get(row.sessionId) ?? 0)) {
-        fallbackLastTs.set(row.sessionId, ts);
+
+      if (row.realizedPnl != null) {
+        const pnl = Number(row.realizedPnl);
+        if (!Number.isFinite(pnl)) {
+          continue;
+        }
+        const stats = fillPerformance.get(row.sessionId) ?? { wins: 0, losses: 0, breakeven: 0 };
+        if (pnl > 0) stats.wins += 1;
+        else if (pnl < 0) stats.losses += 1;
+        else stats.breakeven += 1;
+        fillPerformance.set(row.sessionId, stats);
       }
     }
   }
+
+  const normalizeAggressiveness = (value: unknown): AgentAggressiveness | null => {
+    if (typeof value !== 'string') return null;
+    const lower = value.toLowerCase();
+    if (lower === 'conservative' || lower === 'reactive' || lower === 'aggressive') {
+      return lower;
+    }
+    return null;
+  };
 
   const agentsHealth: AgentHealthRow[] = activeSessions.map((session) => {
     const telemetry = telemetryBySession.get(session.id) ?? null;
     const agent = agentById.get(session.id) ?? null;
 
-    const tradeCount24h = telemetry?.tradeCount24h ?? fallbackCounts.get(session.id) ?? 0;
+    const telemetryTradeCount = Number(telemetry?.tradeCount24h ?? 0);
+    const fallbackTradeCount = fallbackCounts.get(session.id);
+    const tradeCount24h =
+      fallbackTradeCount != null ? Math.max(telemetryTradeCount, fallbackTradeCount) : telemetryTradeCount;
+
+    const telemetryLastExecution = toTimestampMs(telemetry?.lastExecutionAt);
+    const fallbackLastExecution = fallbackLastTs.get(session.id) ?? null;
     const lastExecutionTs =
-      toTimestampMs(telemetry?.lastExecutionAt) ?? fallbackLastTs.get(session.id) ?? null;
+      telemetryLastExecution && fallbackLastExecution
+        ? Math.max(telemetryLastExecution, fallbackLastExecution)
+        : telemetryLastExecution ?? fallbackLastExecution ?? null;
     const blockedByVos = Boolean(telemetry?.blockedByVos);
     const lastBlockedAt = toTimestampMs(telemetry?.lastBlockedAt);
 
@@ -157,6 +203,16 @@ export async function computeAgentHealth(
     else if (isStale) status = 'stale';
     else if (tradeCount24h === 0) status = 'idle';
 
+    const runtimeAggressiveness = normalizeAggressiveness((agent as any)?.aggressiveness ?? (agent as any)?.profile?.aggressiveness);
+    let persistedAggressiveness: AgentAggressiveness | null = null;
+    if (session.profileJson && typeof session.profileJson === 'object' && !Array.isArray(session.profileJson)) {
+      persistedAggressiveness = normalizeAggressiveness((session.profileJson as Record<string, unknown>).aggressiveness);
+    }
+    const telemetryAggressiveness = normalizeAggressiveness((telemetry as any)?.profile?.aggressiveness);
+    const aggressiveness = runtimeAggressiveness || telemetryAggressiveness || persistedAggressiveness;
+
+    const performance = fillPerformance.get(session.id) ?? { wins: 0, losses: 0, breakeven: 0 };
+
     return {
       sessionId: session.id,
       symbol: session.symbol,
@@ -164,11 +220,15 @@ export async function computeAgentHealth(
       state: agent?.state ?? null,
       hasPosition: Boolean(agent?.hasPosition),
       tradeCount24h,
+      wins24h: performance.wins,
+      losses24h: performance.losses,
+      breakeven24h: performance.breakeven,
       lastExecutionTs,
       blockedByVos,
       lastBlockedAt,
       status,
       flags,
+      aggressiveness,
     };
   });
 
