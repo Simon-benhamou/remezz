@@ -40,6 +40,26 @@ function makeSeries(length, volumeFactory) {
   assert.equal(result.length, recovered.length, 'should return refetched data when it passes validation');
 }
 
+// No refetch when invalid ratio below threshold
+{
+  const initial = makeSeries(40, (i) => (i % 10 === 0 ? 0 : 25));
+  let refetchCalls = 0;
+  const result = await ensureRecentVolumeIntegrity({
+    symbol: 'STABLE/USDT',
+    timeframe: '15m',
+    ohlcv: initial,
+    minWindow: 30,
+    threshold: 0.5,
+    backfillAttempts: 2,
+    async refetch() {
+      refetchCalls += 1;
+      return makeSeries(40, () => 40);
+    },
+  });
+  assert.equal(refetchCalls, 0, 'should not refetch when anomaly ratio is below threshold');
+  assert.equal(result, initial, 'should return original series when validation passes');
+}
+
 // Failure after exhausting retries
 {
   const initial = makeSeries(35, () => 0);
