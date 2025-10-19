@@ -47,11 +47,14 @@ type EvaluateOptions = {
     depthUsd?: number | null;
     slippageBps?: number | null;
     fillRatio?: number | null;
+    takerFeeBps?: number | string | PreciseDecimal | null;
   };
   atr1h?: number | null;
   atr4h?: number | null;
   forceLiquidityGate?: boolean;
   multiTimeframe?: MultiTimeframeDiagnostics | null;
+  accountBalanceUsd?: string | number | null;
+  desiredProfitUsd?: string | number | null;
 };
 
 function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
@@ -106,6 +109,8 @@ export function evaluateRecognizedStrategies(
     atr4h: opts.atr4h,
     forceLiquidityGate: opts.forceLiquidityGate ?? false,
     multiTimeframe: opts.multiTimeframe ?? (snap as any)?.multiTimeframe ?? null,
+    accountBalanceUsd: opts.accountBalanceUsd ?? null,
+    desiredProfitUsd: opts.desiredProfitUsd ?? null,
   });
 
   return evaluation.signals

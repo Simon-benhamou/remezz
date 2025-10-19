@@ -142,6 +142,7 @@ export type AdaptiveEvaluationInput = {
     depthUsd?: number | null;
     slippageBps?: number | null;
     fillRatio?: number | null;
+    takerFeeBps?: number | string | PreciseDecimal | null;
   };
   atr1h?: number | null;
   atr4h?: number | null;
@@ -316,6 +317,9 @@ class MetaAdaptiveStrategyAgent {
   private readonly tradeLedgers = new Map<string, PreciseDecimal>();
   private readonly defaultCapital = new PreciseDecimal('1000');
   private readonly desiredProfitUsd = new PreciseDecimal('30');
+  private readonly defaultFeeBps = new PreciseDecimal('4');
+  private readonly hundred = new PreciseDecimal('100');
+  private readonly tenThousand = new PreciseDecimal('10000');
   private rngState = 0x9e3779b9n;
   private tokenCounter = 0n;
 
@@ -410,6 +414,27 @@ class MetaAdaptiveStrategyAgent {
       return this.sessionCapital.get(sessionId)!;
     }
     return this.defaultCapital;
+  }
+
+  private computeNetAfterFees(params: {
+    riskUsd: PreciseDecimal;
+    stopMult: PreciseDecimal;
+    atrPct: number;
+    feeBps: PreciseDecimal;
+    targetProfitUsd: PreciseDecimal;
+  }): { net: PreciseDecimal; feeUsd: PreciseDecimal } {
+    const zero = new PreciseDecimal('0');
+    if (params.riskUsd.equals(0) || params.targetProfitUsd.equals(0)) {
+      return { net: zero, feeUsd: zero };
+    }
+    const atrPercent = Number.isFinite(params.atrPct) ? Math.max(params.atrPct, 0.05) : 0.05;
+    const atrFraction = new PreciseDecimal((atrPercent / 100).toFixed(6));
+    const stopFraction = params.stopMult.times(atrFraction);
+    const notional = stopFraction.equals(0) ? params.riskUsd : params.riskUsd.dividedBy(stopFraction);
+    const roundTripPct = params.feeBps.times(new PreciseDecimal('2')).dividedBy(this.tenThousand);
+    const feeUsd = notional.times(roundTripPct);
+    const net = params.targetProfitUsd.minus(feeUsd);
+    return { net, feeUsd };
   }
 
   private computeExplorationProbability(symbol: string, candidate: StrategyScoreResult): number {
@@ -655,11 +680,15 @@ class MetaAdaptiveStrategyAgent {
       },
     };
 
+    const takerFeeBps = micro.takerFeeBps != null
+      ? new PreciseDecimal(micro.takerFeeBps)
+      : this.defaultFeeBps;
+
     const adjustedPlans: Record<StrategyFamily, AdaptiveStrategyPlan> = {
-      trend: this.scalePlanByAtr(basePlans.trend, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict),
-      breakout: this.scalePlanByAtr(basePlans.breakout, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict),
-      mean_reversion: this.scalePlanByAtr(basePlans.mean_reversion, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict),
-      momentum: this.scalePlanByAtr(basePlans.momentum, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict && context.alignmentScore >= 0.6),
+      trend: this.scalePlanByAtr(basePlans.trend, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
+      breakout: this.scalePlanByAtr(basePlans.breakout, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
+      mean_reversion: this.scalePlanByAtr(basePlans.mean_reversion, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
+      momentum: this.scalePlanByAtr(basePlans.momentum, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict && context.alignmentScore >= 0.6, takerFeeBps),
     };
 
     const familyScores: Array<{ family: StrategyFamily; score: number; confidence: number; bias: StrategyBias; reasons: string[]; plan: AdaptiveStrategyPlan }>
@@ -891,6 +920,7 @@ class MetaAdaptiveStrategyAgent {
     capital: PreciseDecimal,
     desiredProfit: PreciseDecimal,
     allowUpsize: boolean,
+    feeBps: PreciseDecimal,
   ): AdaptiveStrategyPlan {
     const targetAtr = atr1h > 0 ? atr1h : atr15m;
     const current = atr15m > 0 ? atr15m : targetAtr;
@@ -917,8 +947,46 @@ class MetaAdaptiveStrategyAgent {
     if (!allowUpsize && finalRiskPct.gt(base.riskPct)) {
       finalRiskPct = base.riskPct;
     }
-    const riskUsd = capital.times(finalRiskPct).dividedBy(new PreciseDecimal('100'));
-    const targetProfitUsd = median.times(riskUsd);
+    const zero = new PreciseDecimal('0');
+    const atrForStop = atr15m > 0 ? atr15m : atr1h > 0 ? atr1h : atr4h;
+    let riskUsd = capital.times(finalRiskPct).dividedBy(this.hundred);
+    let targetProfitUsd = median.times(riskUsd);
+    let netAfterFees = this.computeNetAfterFees({
+      riskUsd,
+      stopMult,
+      atrPct: atrForStop,
+      feeBps,
+      targetProfitUsd,
+    });
+    if (netAfterFees.net.lt(desiredProfit)) {
+      const netPositive = !netAfterFees.net.equals(0) && !netAfterFees.net.lt(0);
+      if (allowUpsize && netPositive) {
+        const scaleFactor = desiredProfit.dividedBy(netAfterFees.net);
+        let scaled = finalRiskPct.times(scaleFactor);
+        scaled = this.clampDecimal(scaled, minRisk, maxRisk);
+        if (base.riskPct.lt(suppressionThreshold) && scaled.gt(base.riskPct)) {
+          scaled = base.riskPct;
+        }
+        if (!allowUpsize && scaled.gt(base.riskPct)) {
+          scaled = base.riskPct;
+        }
+        finalRiskPct = scaled;
+        riskUsd = capital.times(finalRiskPct).dividedBy(this.hundred);
+        targetProfitUsd = median.times(riskUsd);
+        netAfterFees = this.computeNetAfterFees({
+          riskUsd,
+          stopMult,
+          atrPct: atrForStop,
+          feeBps,
+          targetProfitUsd,
+        });
+      }
+      if (!allowUpsize || netAfterFees.net.lt(desiredProfit) || !netPositive) {
+        finalRiskPct = zero;
+        riskUsd = zero;
+        targetProfitUsd = zero;
+      }
+    }
     return {
       riskPct: finalRiskPct,
       stopAtrMult: stopMult,
