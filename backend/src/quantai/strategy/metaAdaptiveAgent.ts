@@ -104,6 +104,15 @@ type StrategyId =
 
 type StrategyBias = 'long' | 'short' | 'both';
 
+export type AdaptiveTrailingPolicy = {
+  breakevenArmR: PreciseDecimal;
+  trailActivationR: PreciseDecimal;
+  atrLookback: 'atr15m' | 'atr1h';
+  atrMultiplier: PreciseDecimal;
+  contextAlignmentThreshold: PreciseDecimal;
+  adxThreshold: PreciseDecimal;
+};
+
 export type AdaptiveStrategyPlan = {
   riskPct: PreciseDecimal;
   stopAtrMult: PreciseDecimal;
@@ -112,6 +121,7 @@ export type AdaptiveStrategyPlan = {
   riskUsd: PreciseDecimal;
   targetProfitUsd: PreciseDecimal;
   medianTakeProfitR: PreciseDecimal;
+  trailingPolicy?: AdaptiveTrailingPolicy | null;
 };
 
 type StrategyScoreResult = {
@@ -180,6 +190,7 @@ type ActiveTrade = {
   planRiskPct: PreciseDecimal;
   targetProfitUsd: PreciseDecimal;
   medianTakeProfitR: PreciseDecimal;
+  trailingPolicy?: AdaptiveTrailingPolicy | null;
 };
 
 type GuardrailHalt = {
@@ -750,6 +761,14 @@ class MetaAdaptiveStrategyAgent {
         riskUsd: new PreciseDecimal('0'),
         targetProfitUsd: new PreciseDecimal('0'),
         medianTakeProfitR: trendTargets[Math.min(1, trendTargets.length - 1)],
+        trailingPolicy: {
+          breakevenArmR: new PreciseDecimal('1.6'),
+          trailActivationR: new PreciseDecimal('1.8'),
+          atrLookback: 'atr15m',
+          atrMultiplier: new PreciseDecimal('1'),
+          contextAlignmentThreshold: new PreciseDecimal('0.65'),
+          adxThreshold: new PreciseDecimal('20'),
+        },
       },
       breakout: {
         riskPct: new PreciseDecimal(breakoutRiskBase).times(riskAdjustmentFactor),
@@ -1049,6 +1068,7 @@ class MetaAdaptiveStrategyAgent {
       planRiskPct: params.plan.riskPct,
       targetProfitUsd: params.plan.targetProfitUsd,
       medianTakeProfitR: params.plan.medianTakeProfitR,
+      trailingPolicy: params.plan.trailingPolicy ?? null,
     });
     this.activeTrades.set(params.sessionId, queue);
   }
@@ -1178,6 +1198,18 @@ class MetaAdaptiveStrategyAgent {
         targetProfitUsd = zero;
       }
     }
+    const trailingPolicy = base.trailingPolicy
+      ? {
+          breakevenArmR: new PreciseDecimal(base.trailingPolicy.breakevenArmR),
+          trailActivationR: new PreciseDecimal(base.trailingPolicy.trailActivationR),
+          atrLookback: base.trailingPolicy.atrLookback,
+          atrMultiplier: base.trailingPolicy.atrMultiplier
+            .times(new PreciseDecimal(clamp(ratio, 0.85, 1.2).toFixed(6))),
+          contextAlignmentThreshold: new PreciseDecimal(base.trailingPolicy.contextAlignmentThreshold),
+          adxThreshold: new PreciseDecimal(base.trailingPolicy.adxThreshold),
+        }
+      : null;
+
     return {
       riskPct: finalRiskPct,
       stopAtrMult: stopMult,
@@ -1186,6 +1218,7 @@ class MetaAdaptiveStrategyAgent {
       riskUsd,
       targetProfitUsd,
       medianTakeProfitR: median,
+      trailingPolicy,
     };
   }
 

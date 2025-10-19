@@ -32,6 +32,14 @@ export type RecognizedStrategySignal = {
     takeProfitMultiples?: string[];
     riskUsd?: string;
     targetProfitUsd?: string;
+    trailingPolicy?: {
+      breakevenArmR: number;
+      trailActivationR: number;
+      atrLookback: 'atr15m' | 'atr1h';
+      atrMultiplier: number;
+      contextAlignmentThreshold: number;
+      adxThreshold: number;
+    } | null;
   };
 };
 
@@ -97,6 +105,16 @@ function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
       takeProfitMultiples: signal.plan.takeProfitMultiples.map(tp => tp.toFixed(4)),
       riskUsd: signal.plan.riskUsd.toFixed(6),
       targetProfitUsd: signal.plan.targetProfitUsd.toFixed(6),
+      trailingPolicy: signal.plan.trailingPolicy
+        ? {
+            breakevenArmR: signal.plan.trailingPolicy.breakevenArmR.toNumber(),
+            trailActivationR: signal.plan.trailingPolicy.trailActivationR.toNumber(),
+            atrLookback: signal.plan.trailingPolicy.atrLookback,
+            atrMultiplier: signal.plan.trailingPolicy.atrMultiplier.toNumber(),
+            contextAlignmentThreshold: signal.plan.trailingPolicy.contextAlignmentThreshold.toNumber(),
+            adxThreshold: signal.plan.trailingPolicy.adxThreshold.toNumber(),
+          }
+        : null,
     },
   };
 }
@@ -148,6 +166,7 @@ export function registerAdaptiveTradeEntry(params: {
   const tpList = params.signal.meta.takeProfitMultiples ?? [];
   const medianIndex = tpList.length > 1 ? 1 : 0;
   const medianTakeProfitR = new PreciseDecimal(tpList[medianIndex] ?? '1');
+  const trailingMeta = params.signal.meta.trailingPolicy ?? null;
   metaAdaptiveStrategyAgent.registerActiveTrade({
     sessionId: params.sessionId,
     symbol: params.symbol,
@@ -171,6 +190,16 @@ export function registerAdaptiveTradeEntry(params: {
       riskUsd: planRiskUsd,
       targetProfitUsd: planTargetProfitUsd,
       medianTakeProfitR,
+      trailingPolicy: trailingMeta
+        ? {
+            breakevenArmR: new PreciseDecimal(trailingMeta.breakevenArmR ?? 0),
+            trailActivationR: new PreciseDecimal(trailingMeta.trailActivationR ?? 0),
+            atrLookback: trailingMeta.atrLookback,
+            atrMultiplier: new PreciseDecimal(trailingMeta.atrMultiplier ?? 1),
+            contextAlignmentThreshold: new PreciseDecimal(trailingMeta.contextAlignmentThreshold ?? 0.65),
+            adxThreshold: new PreciseDecimal(trailingMeta.adxThreshold ?? 20),
+          }
+        : null,
     },
     side: params.signal.bias,
   });

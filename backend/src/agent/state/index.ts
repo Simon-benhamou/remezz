@@ -2,6 +2,7 @@ import { proposePlan } from '../../ai/planOrchestrator.js';
 import { predictor } from '../../ai/predictor.js';
 import type { RegimeProfile } from '../../ai/regime.js';
 import { buildTechSnapshot, TechnicalSnapshot } from '../../ai/tech.js';
+import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 import { getCapacityPressure, inspectExposure, LiveBroker } from '../../broker/live.js';
 import { PaperBroker } from '../../broker/paper.js';
 import type { Broker, PlacedOrder, BrokerMarginSnapshot } from '../../broker/types.js';
@@ -67,6 +68,88 @@ import { applyPortfolioAllocation as applyPortfolioAllocationHelper, type Portfo
 import { entryZoneMethods } from './rebound/entryZone.js';
 import { liquidityMethods } from './rebound/liquidity.js';
 import { postTradeReview } from '../../jobs/postTradeReview.js';
+
+type ContextTrailPreference = {
+  breakevenR: number;
+  trailActivationR: number;
+  atrMultiplier: number;
+  atrSource: 'atr14' | 'atr14_1h';
+  alignmentThreshold: number;
+  adxThreshold: number;
+};
+
+type SnapshotAlignment = {
+  score: number;
+  direction: 'long' | 'short' | 'both';
+  bullishStack: boolean;
+  bearishStack: boolean;
+};
+
+type TrendBiasTag = 'bullish' | 'bearish' | 'neutral';
+
+function deriveTrendBiasTag(bias: string | null | undefined): TrendBiasTag {
+  if (bias === 'bullish' || bias === 'bearish') return bias;
+  return 'neutral';
+}
+
+function toStrategyBiasFromTag(tag: TrendBiasTag): 'long' | 'short' | 'both' {
+  if (tag === 'bullish') return 'long';
+  if (tag === 'bearish') return 'short';
+  return 'both';
+}
+
+function computeSnapshotAlignment(snap: TechnicalSnapshot): SnapshotAlignment {
+  const multi = ((snap as any)?.multiTimeframe ?? null) as MultiTimeframeDiagnostics | null;
+  const timeframes = multi?.timeframes ?? {};
+  const bias4h = deriveTrendBiasTag(timeframes['4h']?.bias ?? (snap.meta?.contextTf ? undefined : null));
+  const bias1h = deriveTrendBiasTag(timeframes['1h']?.bias);
+  const bias15m = deriveTrendBiasTag(timeframes['15m']?.bias ?? (snap.trendBias === 'bullish'
+    ? 'bullish'
+    : snap.trendBias === 'bearish'
+      ? 'bearish'
+      : 'neutral'));
+
+  const biases: TrendBiasTag[] = [bias4h, bias1h, bias15m];
+  const nonNeutral = biases.filter(b => b !== 'neutral');
+  const bullishStack = biases.every(b => b === 'bullish');
+  const bearishStack = biases.every(b => b === 'bearish');
+
+  let direction: 'long' | 'short' | 'both' = 'both';
+  if (bullishStack) direction = 'long';
+  else if (bearishStack) direction = 'short';
+  else if (bias4h !== 'neutral' && nonNeutral.length >= 2 && nonNeutral.every(b => b === bias4h)) {
+    direction = toStrategyBiasFromTag(bias4h);
+  }
+
+  let alignmentScore = 0.4;
+  let conflict = false;
+
+  if (bullishStack || bearishStack) {
+    alignmentScore = 0.96;
+  } else if (bias4h !== 'neutral') {
+    const matches = [bias1h, bias15m].filter(b => b === bias4h).length;
+    const mismatches = [bias1h, bias15m].filter(b => b !== 'neutral' && b !== bias4h).length;
+    if (mismatches > 0) {
+      conflict = true;
+      alignmentScore = 0.22 + matches * 0.08;
+    } else if (matches === 2) {
+      alignmentScore = 0.9;
+    } else if (matches === 1) {
+      alignmentScore = 0.78;
+    } else {
+      alignmentScore = 0.6;
+    }
+  } else if (nonNeutral.length >= 2 && new Set(nonNeutral).size === 1) {
+    alignmentScore = 0.82;
+  } else if (nonNeutral.length === 1) {
+    alignmentScore = 0.65;
+  }
+
+  alignmentScore = Math.max(0.1, Math.min(1, alignmentScore));
+  if (conflict) alignmentScore = Math.max(0.1, Math.min(1, alignmentScore));
+
+  return { score: alignmentScore, direction, bullishStack, bearishStack };
+}
 
 export class ReboundRejectionAgent {
   public static readonly memeSymbols = new Set<string>([
@@ -3477,12 +3560,13 @@ export class ReboundRejectionAgent {
     }
     this.circuitBreaker.onBeforeOpen(new Date(openedAt), this.lastKnownEquityUsd);
     this.syncCircuitBreakerTelemetry();
-    if (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0) {
+    this.applyContextTrailPreference();
+    if (!this.pos.contextTrail?.enabled && (!Array.isArray(this.pos.tp) || this.pos.tp.length === 0)) {
       // CRYPTO ADAPTATION: Use 4-5R targets minimum for crypto volatility
       const baseTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 4)) : (this.pos.entry - (this.plan.stopDistance * 4));
       this.pos.tp = [baseTp];
     }
-    if (this.pos.tp.length === 1) {
+    if (!this.pos.contextTrail?.enabled && this.pos.tp.length === 1) {
       // Runner TP at 5R for crypto
       const runnerTp = side === 'buy' ? (this.pos.entry + (this.plan.stopDistance * 5)) : (this.pos.entry - (this.plan.stopDistance * 5));
       this.pos.tp.push(runnerTp);
@@ -3559,6 +3643,173 @@ export class ReboundRejectionAgent {
     broadcast('agent_state', { state: this.state, pos: this.pos, regime: this.regime, adaptiveRisk: this.adaptiveRisk, tradeCadence: this.getTradeCadenceSnapshot(), aiCalls: await getAICallsCount(this.sessionId || undefined) }, this.profile.symbol, this.sessionId || undefined);
     await this.syncProtectiveOrders('entry');
     this.entering = false;
+  }
+
+  public resolveContextTrailPreference(): ContextTrailPreference | null {
+    if (!this.marketContext?.primaryStrategy?.meta) return null;
+    const primary = this.marketContext.primaryStrategy;
+    const supported = primary.id === 'classic_trend_following' || primary.id === 'momentum_scanner_focus';
+    if (!supported) return null;
+    const trailing = (primary.meta as any)?.trailingPolicy as Record<string, unknown> | null | undefined;
+    if (!trailing) return null;
+
+    const parseNumber = (value: unknown, fallback: number): number => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : fallback;
+    };
+
+    const breakevenR = parseNumber(trailing.breakevenArmR ?? trailing.breakevenR, 0);
+    if (!(breakevenR > 0)) return null;
+    const trailActivationRaw = parseNumber(trailing.trailActivationR, breakevenR + 0.15);
+    const trailActivationR = Math.max(breakevenR, trailActivationRaw);
+    const atrMultiplier = Math.max(0.4, parseNumber(trailing.atrMultiplier, 1));
+    const alignmentThreshold = Math.max(0.3, Math.min(1, parseNumber(trailing.contextAlignmentThreshold, 0.65)));
+    const adxThreshold = Math.max(8, parseNumber(trailing.adxThreshold, 20));
+    const atrLookbackRaw = String(trailing.atrLookback ?? 'atr15m');
+    const atrSource: 'atr14' | 'atr14_1h' = atrLookbackRaw === 'atr1h' ? 'atr14_1h' : 'atr14';
+
+    return {
+      breakevenR,
+      trailActivationR,
+      atrMultiplier,
+      atrSource,
+      alignmentThreshold,
+      adxThreshold,
+    };
+  }
+
+  public applyContextTrailPreference(): void {
+    if (!this.pos) return;
+    if (this.pos.contextTrail?.enabled) return;
+    const preference = this.resolveContextTrailPreference();
+    if (!preference) return;
+
+    this.pos.contextTrail = {
+      enabled: true,
+      breakevenR: preference.breakevenR,
+      trailActivationR: preference.trailActivationR,
+      atrMultiplier: preference.atrMultiplier,
+      atrSource: preference.atrSource,
+      alignmentThreshold: preference.alignmentThreshold,
+      adxThreshold: preference.adxThreshold,
+      breakevenTriggered: false,
+      trailActivated: false,
+      contextSatisfied: false,
+      shouldExit: false,
+    };
+
+    this.pos.tp = [];
+    this.pos.tpOrderId = undefined;
+    this.pos.trailConfig = {
+      mode: 'atr',
+      multiplier: preference.atrMultiplier,
+      armed: false,
+      highWatermark: this.pos.entry,
+      lastUpdateTs: Date.now(),
+    };
+
+    recordOpsEvent({
+      level: 'info',
+      source: 'context_trail',
+      message: 'context_trail_enabled',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        breakevenR: preference.breakevenR,
+        trailActivationR: preference.trailActivationR,
+        atrMultiplier: preference.atrMultiplier,
+        atrSource: preference.atrSource,
+        alignmentThreshold: preference.alignmentThreshold,
+        adxThreshold: preference.adxThreshold,
+      },
+    });
+  }
+
+  public maybeActivateContextTrail(price: number, snap: TechnicalSnapshot, unrealizedR: number): void {
+    if (!this.pos?.contextTrail?.enabled) return;
+    const ctx = this.pos.contextTrail;
+    const alignment = computeSnapshotAlignment(snap);
+    const positionBias: 'long' | 'short' = this.pos.side === 'buy' ? 'long' : 'short';
+    const alignmentOk = alignment.score >= ctx.alignmentThreshold
+      && (alignment.direction === 'both' || alignment.direction === positionBias);
+    const adxValue = Number((snap as any)?.adx14 ?? 0);
+    const adxOk = Number.isFinite(adxValue) ? adxValue >= ctx.adxThreshold : false;
+    const previouslySatisfied = ctx.contextSatisfied;
+
+    if (!ctx.breakevenTriggered && unrealizedR >= ctx.breakevenR) {
+      const breakevenPrice = this.pos.breakeven ?? this.pos.entry;
+      const improved = this.pos.side === 'buy'
+        ? breakevenPrice > this.pos.stop + 1e-8
+        : breakevenPrice < this.pos.stop - 1e-8;
+      if (improved) {
+        const prevStop = this.pos.stop;
+        this.pos.stop = this.pos.side === 'buy'
+          ? Math.max(this.pos.stop, breakevenPrice)
+          : Math.min(this.pos.stop, breakevenPrice);
+        recordOpsEvent({
+          level: 'info',
+          source: 'context_trail',
+          message: 'breakeven_lock_applied',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            previousStop: prevStop,
+            newStop: this.pos.stop,
+            unrealizedR: Number(unrealizedR.toFixed(3)),
+          },
+        });
+      }
+      ctx.breakevenTriggered = true;
+    }
+
+    if (alignmentOk && adxOk && unrealizedR >= ctx.trailActivationR) {
+      const trailConfig = this.pos.trailConfig ?? { mode: 'atr', multiplier: ctx.atrMultiplier, armed: false };
+      trailConfig.mode = 'atr';
+      trailConfig.multiplier = ctx.atrMultiplier;
+      trailConfig.armed = true;
+      trailConfig.highWatermark = this.pos.side === 'buy'
+        ? Math.max(trailConfig.highWatermark ?? price, price)
+        : Math.min(trailConfig.highWatermark ?? price, price);
+      trailConfig.lastUpdateTs = Date.now();
+      this.pos.trailConfig = trailConfig;
+      if (!ctx.trailActivated) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'context_trail',
+          message: 'context_trail_armed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            multiplier: ctx.atrMultiplier,
+            unrealizedR: Number(unrealizedR.toFixed(3)),
+            alignmentScore: alignment.score,
+            adx: adxValue,
+          },
+        });
+      }
+      ctx.trailActivated = true;
+    }
+
+    ctx.contextSatisfied = alignmentOk && adxOk;
+    if (ctx.trailActivated && previouslySatisfied && !ctx.contextSatisfied && unrealizedR > 0) {
+      if (!ctx.shouldExit) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'context_trail',
+          message: 'context_trail_exit_triggered',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            alignmentScore: alignment.score,
+            adx: adxValue,
+            unrealizedR: Number(unrealizedR.toFixed(3)),
+          },
+        });
+      }
+      ctx.shouldExit = true;
+    }
+
+    this.pos.contextTrail = ctx;
   }
 
   public noteTrail(price: number) {
@@ -9258,6 +9509,8 @@ export class ReboundRejectionAgent {
         entryFeePerUnit: qty > 0 ? this.estimateFillFeeUsd(entry, qty, side) / qty : 0,
       };
 
+      this.applyContextTrailPreference();
+
       // Update agent state
       this.state = 'MANAGE';
 
@@ -9509,6 +9762,10 @@ export class ReboundRejectionAgent {
 
     this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
 
+    if (this.pos && !this.pos.contextTrail?.enabled) {
+      this.applyContextTrailPreference();
+    }
+
     try {
       const ticker = await getTicker(this.profile.symbol).catch(() => null as any);
       if (ticker && typeof ticker.last === 'number' && Number.isFinite(ticker.last)) {
@@ -9563,6 +9820,13 @@ export class ReboundRejectionAgent {
     // Update position metrics
     this.updatePositionMetrics(price);
 
+    const unrealizedR = this.calculateUnrealizedR(price);
+    this.maybeActivateContextTrail(price, snap, unrealizedR);
+    if (this.pos?.contextTrail?.shouldExit) {
+      await this.exitPosition(price, 'context_alignment_lost');
+      return;
+    }
+
     const quantExitTriggered = await this.applyQuantExitDirective(price, snap);
     if (quantExitTriggered) {
       return;
@@ -9576,13 +9840,15 @@ export class ReboundRejectionAgent {
     }
 
     // Implement trailing stops
-    const newTrailPrice = this.computeDynamicTrail(price, snap, this.calculateUnrealizedR(price), Date.now() - this.pos!.openedAt);
+    const newTrailPrice = this.computeDynamicTrail(price, snap, unrealizedR, Date.now() - this.pos!.openedAt);
     if (newTrailPrice !== null && this.shouldUpdateTrail(newTrailPrice, price)) {
       await this.updateTrailingStop(newTrailPrice, price);
     }
 
     // Check for partial exits at profit targets
-    await this.checkPartialExits(price, snap);
+    if (!this.pos?.contextTrail?.enabled) {
+      await this.checkPartialExits(price, snap);
+    }
 
     // Extend position if profitable and conditions met
     if (this.pos && !this.pos.extended && this.shouldExtendPosition(price, snap)) {
@@ -9594,7 +9860,7 @@ export class ReboundRejectionAgent {
       await this.syncProtectiveOrders('management');
     }
 
-    console.log(`Managing position: ${this.pos!.side} ${this.profile.symbol} @ ${price.toFixed(6)}, unrealized R: ${this.calculateUnrealizedR(price).toFixed(2)}, trail: ${this.pos!.stop.toFixed(6)}`);
+    console.log(`Managing position: ${this.pos!.side} ${this.profile.symbol} @ ${price.toFixed(6)}, unrealized R: ${unrealizedR.toFixed(2)}, trail: ${this.pos!.stop.toFixed(6)}`);
   }
 
   public updatePositionMetrics(currentPrice: number): void {
@@ -10404,6 +10670,7 @@ export class ReboundRejectionAgent {
 
   public async checkPartialExits(price: number, snap: TechnicalSnapshot): Promise<void> {
     if (!this.pos || !this.plan || this.pos.partialTaken) return;
+    if (this.pos.contextTrail?.enabled) return;
 
     const firstR = Number(this.plan?.plan?.risk?.tp?.[0]?.value ?? this.plan?.rPrices?.[0]?.r ?? 2.0) || 2.0;
     const baseDistance = Math.max(1e-12,
