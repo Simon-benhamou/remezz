@@ -96,7 +96,7 @@ for (const scenario of scenarios) {
 
   const primary = signals.find(signal => signal.meta?.token) ?? signals[0];
 
-  registerAdaptiveTradeEntry({
+  await registerAdaptiveTradeEntry({
     sessionId,
     symbol: 'ETH/USDT',
     signal: primary,

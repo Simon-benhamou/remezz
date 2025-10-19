@@ -86,7 +86,7 @@ assert.equal(selected.active, true, 'Trend strategy should be active');
 
 // Simulate a run of consecutive losses to trigger guardrail logic
 for (let i = 0; i < 12; i += 1) {
-  registerAdaptiveTradeEntry({
+  await registerAdaptiveTradeEntry({
     sessionId,
     symbol: 'BTC/USDT',
     signal: selected,

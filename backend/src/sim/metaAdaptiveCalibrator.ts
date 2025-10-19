@@ -96,7 +96,7 @@ export async function runMetaAdaptiveCalibration(dataset: CalibrationDataset, op
     });
     const selection = ensureSelection(evaluation.selection ?? evaluation.signals[0] ?? null, scenario.label);
     const token = selection.token ?? `cal-${index}`;
-    agent.registerActiveTrade({
+    await agent.registerActiveTrade({
       sessionId,
       symbol,
       family: selection.family,
@@ -107,6 +107,7 @@ export async function runMetaAdaptiveCalibration(dataset: CalibrationDataset, op
       stopDistance: scenario.stopDistance ?? 1,
       plan: selection.plan,
       side: selection.bias,
+      predictorFeatures: selection.predictorFeatures ?? null,
     });
     const realizedDecimal = new PreciseDecimal(scenario.realizedPnlUsd);
     agent.registerOutcome({
