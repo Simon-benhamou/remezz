@@ -125,13 +125,13 @@ class XGBClassifier:  # type: ignore
         self._weights = [float(x) for x in payload.get("weights", [])]
         self._bias = float(payload.get("bias", 0.0))
 
-CACHE_PATH = Path(__file__).resolve().parents[1] / "data" / "xgboost_ohlcv_cache.csv"
+CACHE_DIR = Path(__file__).resolve().parents[1] / "data" / "ccxt_cache"
 MODEL_PATH = Path(__file__).resolve().parent / "xgboost_direction.model"
 FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
 
 DEFAULT_EXCHANGE = "binance"
-DEFAULT_SYMBOL = "BTC/USDT"
+DEFAULT_SYMBOLS = ("BTC/USDT","ETH/USDT","SOL/USDT","XRP/USDT")
 DEFAULT_TIMEFRAME = "15m"
 DEFAULT_LOOKBACK_HOURS = 24 * 30  # 30 days
 
@@ -150,14 +150,23 @@ def _seed_everything(seed: int = RANDOM_SEED) -> None:
     np.random.seed(seed)
 
 
-def load_cached_ohlcv() -> pd.DataFrame:
-    if CACHE_PATH.exists():
-        return pd.read_csv(CACHE_PATH, parse_dates=["timestamp"])
+def _cache_path(exchange: str, symbol: str, timeframe: str) -> Path:
+    safe_symbol = symbol.replace("/", "_").replace(":", "_")
+    filename = f"{exchange.lower()}_{safe_symbol}_{timeframe}.csv"
+    return CACHE_DIR / filename
+
+
+def load_cached_ohlcv(exchange: str, symbol: str, timeframe: str) -> pd.DataFrame:
+    path = _cache_path(exchange, symbol, timeframe)
+    if path.exists():
+        return pd.read_csv(path, parse_dates=["timestamp"])
     return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
-def save_cached_ohlcv(df: pd.DataFrame) -> None:
-    df.to_csv(CACHE_PATH, index=False)
+def save_cached_ohlcv(exchange: str, symbol: str, timeframe: str, df: pd.DataFrame) -> None:
+    path = _cache_path(exchange, symbol, timeframe)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
 
 
 def fetch_ohlcv(
@@ -173,7 +182,7 @@ def fetch_ohlcv(
     network access is restricted, it returns the cached data slice.
     """
 
-    cache = load_cached_ohlcv()
+    cache = load_cached_ohlcv(exchange_name, symbol, timeframe)
     if cache.empty:
         cache_start = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc)
         cache_end = datetime.fromtimestamp(end_ts / 1000, tz=timezone.utc)
@@ -201,9 +210,13 @@ def fetch_ohlcv(
             raise RuntimeError("Empty OHLCV response")
         df = pd.DataFrame(all_rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-        merged = pd.concat([cache, df], ignore_index=True)
+        frames = [frame for frame in (cache, df) if not frame.empty]
+        if frames:
+            merged = pd.concat(frames, ignore_index=True)
+        else:
+            merged = pd.DataFrame(columns=df.columns)
         merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
-        save_cached_ohlcv(merged)
+        save_cached_ohlcv(exchange_name, symbol, timeframe, merged)
         window = merged[(merged["timestamp"] >= pd.to_datetime(start_ts, unit="ms", utc=True)) &
                         (merged["timestamp"] <= pd.to_datetime(end_ts, unit="ms", utc=True))]
         return window.reset_index(drop=True)
@@ -227,7 +240,7 @@ def fetch_ohlcv(
                 "close": np.linspace(100, 111, len(timestamps)) + np.sin(np.linspace(0, 6.28, len(timestamps))),
                 "volume": np.linspace(1_000, 1_500, len(timestamps)),
             })
-            save_cached_ohlcv(synthetic)
+            save_cached_ohlcv(exchange_name, symbol, timeframe, synthetic)
             cache = synthetic
         window = cache[(cache["timestamp"] >= pd.to_datetime(start_ts, unit="ms", utc=True)) &
                        (cache["timestamp"] <= pd.to_datetime(end_ts, unit="ms", utc=True))]
@@ -310,9 +323,14 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
     model.fit(X_train, y_train)
 
     preds = model.predict(X_test)
+    accuracy = float(accuracy_score(y_test, preds))
+    f1 = float(f1_score(y_test, preds))
+    if any(map(lambda value: value != value, (accuracy, f1))):  # NaN check without math dependency
+        raise ValueError("Training metrics produced NaN; aborting")
+
     metrics = {
-        "accuracy": float(accuracy_score(y_test, preds)),
-        "f1": float(f1_score(y_test, preds)),
+        "accuracy": accuracy,
+        "f1": f1,
     }
 
     return TrainingArtifacts(model=model, features=features, metrics=metrics)
@@ -357,7 +375,7 @@ def predict_direction(model: XGBClassifier, latest_row) -> int:
 
 def run_training_workflow(
     exchange: str = DEFAULT_EXCHANGE,
-    symbol: str = DEFAULT_SYMBOL,
+    symbols: List[str] | tuple[str, ...] = DEFAULT_SYMBOLS,
     timeframe: str = DEFAULT_TIMEFRAME,
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
 ) -> TrainingArtifacts:
@@ -369,10 +387,22 @@ def run_training_workflow(
     start_ts = int(start.timestamp() * 1000)
     end_ts = int(end.timestamp() * 1000)
 
-    raw = fetch_ohlcv(exchange, symbol, timeframe, start_ts, end_ts)
-    prepared = prepare_dataset(raw)
+    datasets: List[pd.DataFrame] = []
+    for symbol in symbols:
+        raw = fetch_ohlcv(exchange, symbol, timeframe, start_ts, end_ts)
+        prepared = prepare_dataset(raw)
+        prepared = prepared.copy()
+        prepared["symbol"] = symbol
+        datasets.append(prepared)
+
+    if not datasets:
+        raise ValueError("No symbols provided for training workflow")
+
+    combined = pd.concat(datasets, ignore_index=True)
+    combined = combined.drop(columns=["symbol"], errors="ignore")
+
     artifacts = train_model(
-        prepared,
+        combined,
         params={
             "max_depth": 4,
             "n_estimators": 120,
@@ -387,11 +417,19 @@ def run_training_workflow(
 
 def main() -> None:
     exchange = os.environ.get("XGB_EXCHANGE", DEFAULT_EXCHANGE)
-    symbol = os.environ.get("XGB_SYMBOL", DEFAULT_SYMBOL)
+    symbols_env = os.environ.get("XGB_SYMBOLS")
+    if symbols_env:
+        symbols = tuple(sym.strip() for sym in symbols_env.split(",") if sym.strip())
+    else:
+        symbol_single = os.environ.get("XGB_SYMBOL")
+        if symbol_single:
+            symbols = (symbol_single,)
+        else:
+            symbols = DEFAULT_SYMBOLS
     timeframe = os.environ.get("XGB_TIMEFRAME", DEFAULT_TIMEFRAME)
     lookback = int(os.environ.get("XGB_LOOKBACK_HOURS", str(DEFAULT_LOOKBACK_HOURS)))
 
-    artifacts = run_training_workflow(exchange, symbol, timeframe, lookback)
+    artifacts = run_training_workflow(exchange, symbols, timeframe, lookback)
     print(json.dumps({"metrics": artifacts.metrics, "features": artifacts.features}))
 
 

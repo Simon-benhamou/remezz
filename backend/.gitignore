@@ -27,3 +27,6 @@ test
 !test/
 !test/unit/
 !test/unit/*.mjs
+
+# Model training cache
+data/ccxt_cache/
