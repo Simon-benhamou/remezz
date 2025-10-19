@@ -240,6 +240,8 @@ export class ReboundRejectionAgent {
     ['tier2', 0],
     ['tier3', 0]
   ]);
+
+  public lastDailyLossTriggerMarker: number | null = null;
   
   // Legacy global tracking (deprecated, kept for compatibility)
   public recentTrades: { win: boolean; pnlPct: number; timestamp: number }[] = [];
@@ -326,6 +328,38 @@ export class ReboundRejectionAgent {
     }
   }
 
+  private applyDailyLossPenalty(tier: string | null, trigger: Date | null): void {
+    if (!tier) return;
+    const marker = trigger?.getTime() ?? null;
+    if (marker && this.lastDailyLossTriggerMarker === marker) return;
+
+    const currentAdj = this.qualityAdjustmentByTier.get(tier) ?? 0;
+    const penalty = 10;
+    const newAdj = Math.min(30, currentAdj + penalty);
+
+    if (newAdj !== currentAdj) {
+      this.qualityAdjustmentByTier.set(tier, newAdj);
+      recordOpsEvent({
+        level: 'warn',
+        source: 'daily_loss_adaptation',
+        message: 'tier_quality_penalty_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          tier,
+          penalty,
+          previousAdjustment: currentAdj,
+          newAdjustment: newAdj,
+          triggeredAt: trigger?.toISOString() ?? null,
+        },
+      });
+    }
+
+    if (marker) {
+      this.lastDailyLossTriggerMarker = marker;
+    }
+  }
+
   public getQualitySnapshotKey(snap: TechnicalSnapshot): string | number | null {
     return (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
   }
@@ -408,6 +442,18 @@ export class ReboundRejectionAgent {
         1,
         Math.min(mergedRisk.sizeReductionAfterLosses, lossTriggerFloor),
       );
+    }
+    if (mergedRisk.dailyLossRiskReductionMultiplier != null) {
+      mergedRisk.dailyLossRiskReductionMultiplier = Math.min(
+        1,
+        Math.max(0.05, mergedRisk.dailyLossRiskReductionMultiplier),
+      );
+    }
+    if (mergedRisk.dailyLossCooldownMinutes != null) {
+      mergedRisk.dailyLossCooldownMinutes = Math.max(0, mergedRisk.dailyLossCooldownMinutes);
+    }
+    if (mergedRisk.dailyLossRecoveryWins != null) {
+      mergedRisk.dailyLossRecoveryWins = Math.max(0, Math.floor(mergedRisk.dailyLossRecoveryWins));
     }
     if (mergedRisk.winStreakForIncrease != null && mergedRisk.winStreakForIncrease < 1) {
       mergedRisk.winStreakForIncrease = 0;
@@ -1273,6 +1319,10 @@ export class ReboundRejectionAgent {
     this.syncCircuitBreakerTelemetry(circuitDecision);
     if (!circuitDecision.allowed) {
       const state = this.circuitBreaker.getState();
+      if (circuitDecision.reason?.startsWith('Daily loss limit hit')) {
+        const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : null;
+        this.applyDailyLossPenalty(tier, state.dailyLossTriggeredAt ?? null);
+      }
       recordOpsEvent({
         level: 'warn',
         source: 'circuit_breaker',
