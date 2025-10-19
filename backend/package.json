@@ -19,6 +19,7 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "analyze:performance": "tsx scripts/agent-performance-analyzer.ts",
+    "analyze:fees": "tsx scripts/analyze-fees.ts",
     "monitor:start": "tsx scripts/agent-performance-monitor.ts start",
     "monitor:once": "tsx scripts/agent-performance-monitor.ts once",
     "monitor:stop": "tsx scripts/agent-performance-monitor.ts stop",

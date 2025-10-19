@@ -70,13 +70,14 @@ const signals = evaluateRecognizedStrategies(conflictSnap, {
 const trendSignal = signals.find(signal => signal.id === 'classic_trend_following');
 assert(trendSignal, 'trend signal should be present');
 assert(trendSignal.meta?.penalties.includes('htf_conflict'), 'trend signal should record htf conflict');
-assert.equal(trendSignal.meta?.riskPct, '0.600000', 'trend risk must be cut under conflict');
+assert.equal(trendSignal.meta?.riskPct, '0.000000', 'trend risk must halt when conflict prevents net profit target');
+assert.equal(trendSignal.meta?.riskUsd, '0.000000', 'trend risk allocation should be suppressed under conflict');
 assert.equal(trendSignal.meta?.executionMode, 'limit', 'trend execution should remain passive under conflict');
 
 const meanSignal = signals.find(signal => signal.id === 'bollinger_mean_reversion');
 assert(meanSignal, 'mean reversion signal should be present');
-assert(meanSignal.active, 'mean reversion should stay active under conflict');
-assert.equal(meanSignal.meta?.riskPct, '1.000000', 'mean reversion risk should flex higher under conflict');
+assert.equal(meanSignal.meta?.riskPct, '0.000000', 'mean reversion risk should be flatlined under conflict gating');
+assert.equal(meanSignal.meta?.riskUsd, '0.000000', 'mean reversion position sizing should be zeroed under conflict');
 assert(meanSignal.reasons.some(reason => reason.startsWith('context_inverse=')), 'mean reversion should log context inverse reason');
 
 console.log('✅ meta-adaptive context alignment test passed');
