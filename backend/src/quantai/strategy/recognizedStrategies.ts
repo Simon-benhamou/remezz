@@ -55,6 +55,12 @@ type EvaluateOptions = {
   multiTimeframe?: MultiTimeframeDiagnostics | null;
   accountBalanceUsd?: string | number | null;
   desiredProfitUsd?: string | number | null;
+  fundamental?: {
+    severity?: 'negative' | 'neutral' | 'positive';
+    source?: string | null;
+    message?: string | null;
+    expiresAt?: number | null;
+  } | null;
 };
 
 function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
@@ -111,6 +117,7 @@ export function evaluateRecognizedStrategies(
     multiTimeframe: opts.multiTimeframe ?? (snap as any)?.multiTimeframe ?? null,
     accountBalanceUsd: opts.accountBalanceUsd ?? null,
     desiredProfitUsd: opts.desiredProfitUsd ?? null,
+    fundamental: opts.fundamental ?? null,
   });
 
   return evaluation.signals

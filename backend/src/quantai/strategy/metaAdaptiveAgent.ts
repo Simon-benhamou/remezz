@@ -151,6 +151,12 @@ export type AdaptiveEvaluationInput = {
   multiTimeframe?: MultiTimeframeDiagnostics | null;
   accountBalanceUsd?: string | number | PreciseDecimal | null;
   desiredProfitUsd?: string | number | PreciseDecimal | null;
+  fundamental?: {
+    severity?: 'negative' | 'neutral' | 'positive';
+    source?: string | null;
+    message?: string | null;
+    expiresAt?: number | null;
+  } | null;
 };
 
 type StrategyStats = {
@@ -185,18 +191,42 @@ type GuardrailHalt = {
   samples: number;
 };
 
+type LiquidityTier = {
+  name: string;
+  maxVolumeUsd: number | null;
+  minVolumeUsd: number;
+  maxSpreadBps: number;
+  minDepthUsd: number;
+};
+
 const LIQUIDITY_GUARD = {
-  minVolumeUsd: 50_000_000,
-  maxSpreadBps: 10,
-  minDepthUsd: 10_000,
+  tiers: [
+    { name: 'micro', maxVolumeUsd: 90_000_000, minVolumeUsd: 40_000_000, maxSpreadBps: 5, minDepthUsd: 50_000 },
+    { name: 'mid', maxVolumeUsd: 350_000_000, minVolumeUsd: 60_000_000, maxSpreadBps: 8, minDepthUsd: 35_000 },
+    { name: 'major', maxVolumeUsd: null, minVolumeUsd: 20_000_000, maxSpreadBps: 18, minDepthUsd: 25_000 },
+  ] as const,
+  microPenaltyCap: 1,
 } as const;
 
 const GUARDRAIL_CONFIG = {
-  minSamples: 12,
-  winRateFloor: 0.35,
-  expectancyFloor: 0,
+  minSamples: 6,
+  winRateFloor: 0.5,
+  expectancyFloor: 0.01,
   cooldownMs: 6 * 60 * 60 * 1000,
 } as const;
+
+function resolveLiquidityTier(volume24hUsd: number | null | undefined): LiquidityTier {
+  if (!Number.isFinite(volume24hUsd)) {
+    return LIQUIDITY_GUARD.tiers[LIQUIDITY_GUARD.tiers.length - 1];
+  }
+  const vol = Number(volume24hUsd);
+  for (const tier of LIQUIDITY_GUARD.tiers) {
+    if (tier.maxVolumeUsd == null || vol <= tier.maxVolumeUsd) {
+      return tier;
+    }
+  }
+  return LIQUIDITY_GUARD.tiers[LIQUIDITY_GUARD.tiers.length - 1];
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -243,6 +273,8 @@ type ContextAlignment = {
   alignmentScore: number;
   conflict: boolean;
   reasons: string[];
+  bullishStack: boolean;
+  bearishStack: boolean;
 };
 
 function deriveBiasTag(bias: string | undefined | null): 'bullish' | 'bearish' | 'neutral' {
@@ -270,38 +302,54 @@ function computeContextAlignment(
       ? 'bearish'
       : 'neutral'));
 
-  const direction = biasToStrategy(bias4h === 'neutral' ? bias1h : bias4h);
+  const biases = [bias4h, bias1h, bias15m];
+  const nonNeutral = biases.filter(b => b !== 'neutral');
+  const bullishStack = biases.every(b => b === 'bullish');
+  const bearishStack = biases.every(b => b === 'bearish');
+
+  let direction: StrategyBias = 'both';
+  if (bullishStack) direction = 'long';
+  else if (bearishStack) direction = 'short';
+  else if (bias4h !== 'neutral' && nonNeutral.length >= 2 && nonNeutral.every(b => b === bias4h)) {
+    direction = biasToStrategy(bias4h);
+  }
+
   const reasons = [
     `htf=${bias4h}`,
     `1h=${bias1h}`,
     `15m=${bias15m}`,
   ];
 
-  let alignmentScore = 0.6;
+  let alignmentScore = 0.4;
   let conflict = false;
 
-  if (bias4h !== 'neutral') {
+  if (bullishStack || bearishStack) {
+    alignmentScore = 0.96;
+    reasons.push(bullishStack ? 'stack_bullish' : 'stack_bearish');
+  } else if (bias4h !== 'neutral') {
     const matches = [bias1h, bias15m].filter(b => b === bias4h).length;
     const mismatches = [bias1h, bias15m].filter(b => b !== 'neutral' && b !== bias4h).length;
     if (mismatches > 0) {
       conflict = true;
-      alignmentScore = 0.18 + matches * 0.1;
-    } else {
-      alignmentScore = 0.7 + matches * 0.15;
-    }
-  } else {
-    if (bias1h !== 'neutral' && bias15m === bias1h) {
+      alignmentScore = 0.22 + matches * 0.08;
+    } else if (matches === 2) {
+      alignmentScore = 0.9;
+    } else if (matches === 1) {
       alignmentScore = 0.78;
-    } else if (bias1h !== 'neutral' || bias15m !== 'neutral') {
-      alignmentScore = 0.65;
+    } else {
+      alignmentScore = 0.6;
     }
+  } else if (nonNeutral.length >= 2 && new Set(nonNeutral).size === 1) {
+    alignmentScore = 0.82;
+  } else if (nonNeutral.length === 1) {
+    alignmentScore = 0.65;
   }
 
   alignmentScore = clamp(alignmentScore, 0.1, 1);
   reasons.push(`alignment=${alignmentScore.toFixed(2)}`);
   if (conflict) reasons.push('htf_conflict');
 
-  return { direction, alignmentScore, conflict, reasons };
+  return { direction, alignmentScore, conflict, reasons, bullishStack, bearishStack };
 }
 
 class MetaAdaptiveStrategyAgent {
@@ -311,7 +359,7 @@ class MetaAdaptiveStrategyAgent {
   private readonly activeTrades = new Map<string, ActiveTrade[]>();
   private readonly liquidityLog = new Map<string, number>();
   private readonly guardrailHalts = new Map<string, Map<StrategyFamily, GuardrailHalt>>();
-  private epsilonBase = 0.08;
+  private epsilonBase = 0.15;
   private calibrationProfile: CalibrationProfile = defaultCalibrationProfile;
   private readonly sessionCapital = new Map<string, PreciseDecimal>();
   private readonly tradeLedgers = new Map<string, PreciseDecimal>();
@@ -437,14 +485,19 @@ class MetaAdaptiveStrategyAgent {
     return { net, feeUsd };
   }
 
-  private computeExplorationProbability(symbol: string, candidate: StrategyScoreResult): number {
+  private computeExplorationProbability(
+    symbol: string,
+    candidate: StrategyScoreResult,
+    context: { atr15mPct: number; atr1hPct: number; realizedVol: number; hurst: number },
+  ): number {
     const base = this.epsilonBase;
     const symbolStats = this.stats.get(symbol);
     const familyStats = symbolStats?.get(candidate.family);
     const samples = familyStats?.outcomes.length ?? 0;
     let epsilon = base;
+    let expectancy = 0;
     if (familyStats && samples >= 4) {
-      const expectancy = familyStats.sum.dividedBy(new PreciseDecimal(samples.toString())).toNumber();
+      expectancy = familyStats.sum.dividedBy(new PreciseDecimal(samples.toString())).toNumber();
       const normalizedExpectancy = clamp(expectancy / 3, -1, 1);
       epsilon = base * (1 - Math.min(candidate.confidence, 0.95)) * (1 - Math.max(0, normalizedExpectancy));
     } else if (!familyStats || samples === 0) {
@@ -452,7 +505,19 @@ class MetaAdaptiveStrategyAgent {
     } else {
       epsilon = base * (1 + (4 - samples) / 10);
     }
-    epsilon = clamp(epsilon, this.calibrationProfile.explorationFloor, 0.35);
+
+    if (familyStats && samples >= 6 && expectancy > 0.6) {
+      epsilon += base * 0.1;
+    }
+
+    const volatilityGauge = Math.max(context.atr15mPct, context.atr1hPct, context.realizedVol);
+    if (volatilityGauge > 1.8 || context.realizedVol > 1.6) {
+      epsilon += base * 0.2;
+    } else if (context.hurst > 0.65) {
+      epsilon += base * 0.05;
+    }
+
+    epsilon = clamp(epsilon, this.calibrationProfile.explorationFloor, 0.4);
     return epsilon;
   }
 
@@ -460,6 +525,12 @@ class MetaAdaptiveStrategyAgent {
     const micro = input.micro ?? {};
     const snap = input.snap;
     const price = safeNumber(snap.last, 0);
+    const fundamental = input.fundamental ?? null;
+    const fundamentalSeverity = fundamental?.severity ?? 'neutral';
+    const fundamentalActive = fundamental != null
+      ? fundamental.expiresAt == null || fundamental.expiresAt > Date.now()
+      : false;
+    const fundamentalNegative = fundamentalActive && fundamentalSeverity === 'negative';
     const atr15mPct = safeNumber(snap.atrPct, 0);
     const atr1hPct = safeNumber(input.atr1h ?? (snap as any)?.atr14_1h, atr15mPct);
     const atr4hPct = safeNumber(input.atr4h ?? (snap as any)?.atr14_4h, atr1hPct);
@@ -470,6 +541,7 @@ class MetaAdaptiveStrategyAgent {
     const ema50 = safeNumber(snap.ema50, price);
     const ema100 = safeNumber(snap.ema100, price);
     const ema200 = safeNumber(snap.ema200, price);
+    const realizedVol = safeNumber(snap.realizedVol, atr15mPct);
 
     const emaAlignmentBull = ema20 >= ema50 && ema50 >= ema100 && ema100 >= ema200;
     const emaAlignmentBear = ema20 <= ema50 && ema50 <= ema100 && ema100 <= ema200;
@@ -479,9 +551,8 @@ class MetaAdaptiveStrategyAgent {
     const cmf = safeNumber((snap as any)?.cmf20, 0);
 
     const compressionScore = (() => {
-      const realized = safeNumber(snap.realizedVol, atr15mPct);
-      if (realized <= 0) return 0;
-      const atrRatio = atr15mPct / realized;
+      if (realizedVol <= 0) return 0;
+      const atrRatio = atr15mPct / realizedVol;
       return clamp(1 - atrRatio, 0, 1);
     })();
 
@@ -496,21 +567,22 @@ class MetaAdaptiveStrategyAgent {
     const slippageBps = micro.slippageBps ?? safeNumber((snap as any)?.slippageBps, NaN);
     const fillRatio = micro.fillRatio ?? safeNumber((snap as any)?.fillRatio, NaN);
     const volume24hUsd = safeNumber(input.volume24hUsd ?? (snap as any)?.volume24hUsd ?? (snap as any)?.volume24h, NaN);
+    const liquidityTier = resolveLiquidityTier(volume24hUsd);
 
     const liquidityFailures: string[] = [];
     const volumePresent = Number.isFinite(volume24hUsd);
-    const volumeOk = !volumePresent || (volume24hUsd as number) >= LIQUIDITY_GUARD.minVolumeUsd;
-    const spreadOk = Number.isFinite(spreadBps) ? (spreadBps as number) <= LIQUIDITY_GUARD.maxSpreadBps : true;
-    const depthOk = Number.isFinite(depthUsd) ? (depthUsd as number) >= LIQUIDITY_GUARD.minDepthUsd : true;
+    const volumeOk = !volumePresent || (volume24hUsd as number) >= liquidityTier.minVolumeUsd;
+    const spreadOk = Number.isFinite(spreadBps) ? (spreadBps as number) <= liquidityTier.maxSpreadBps : true;
+    const depthOk = Number.isFinite(depthUsd) ? (depthUsd as number) >= liquidityTier.minDepthUsd : true;
 
     if (volumePresent && !volumeOk) {
-      liquidityFailures.push('volume_24h_below_threshold');
+      liquidityFailures.push(`volume_24h_below_${liquidityTier.minVolumeUsd}`);
     }
     if (!spreadOk) {
-      liquidityFailures.push('spread_above_threshold');
+      liquidityFailures.push(`spread_above_${liquidityTier.maxSpreadBps}bps`);
     }
     if (!depthOk) {
-      liquidityFailures.push('depth_below_threshold');
+      liquidityFailures.push(`depth_below_${liquidityTier.minDepthUsd}`);
     }
 
     const bypassGate = process.env.UNIT_TEST_MODE === 'true' && !input.forceLiquidityGate;
@@ -537,13 +609,16 @@ class MetaAdaptiveStrategyAgent {
     }
 
     const penalties: string[] = [];
+    if (fundamentalNegative) {
+      penalties.push('fundamental_negative');
+    }
     let microPenalty = 0;
-    if (Number.isFinite(spreadBps) && spreadBps > 10) {
-      microPenalty += normalize(spreadBps, 10, 35);
+    if (Number.isFinite(spreadBps) && spreadBps > liquidityTier.maxSpreadBps) {
+      microPenalty += normalize(spreadBps, liquidityTier.maxSpreadBps, liquidityTier.maxSpreadBps + 25);
       penalties.push('spread_wide');
     }
-    if (Number.isFinite(depthUsd) && depthUsd < 10_000) {
-      microPenalty += normalize(10_000 - depthUsd, 0, 9_000);
+    if (Number.isFinite(depthUsd) && depthUsd < liquidityTier.minDepthUsd) {
+      microPenalty += normalize(liquidityTier.minDepthUsd - depthUsd, 0, Math.max(1, liquidityTier.minDepthUsd / 2));
       penalties.push('depth_shallow');
     }
     if (Number.isFinite(slippageBps) && Number.isFinite(spreadBps) && slippageBps > (spreadBps as number) * 1.5) {
@@ -554,7 +629,7 @@ class MetaAdaptiveStrategyAgent {
       microPenalty += normalize(0.45 - fillRatio, 0, 0.45);
       penalties.push('fill_ratio_low');
     }
-    microPenalty = clamp(microPenalty, 0, 1);
+    microPenalty = clamp(microPenalty, 0, LIQUIDITY_GUARD.microPenaltyCap);
 
     const context = computeContextAlignment(input.multiTimeframe ?? (snap as any)?.multiTimeframe, snap);
     if (context.conflict) penalties.push('htf_conflict');
@@ -573,12 +648,15 @@ class MetaAdaptiveStrategyAgent {
       1,
     );
 
+    const breakoutCompression = compressionScore * 1.25;
+    const breakoutAdx = normalize(adx, 16, 35);
+    const breakoutVolume = clamp(volumeRatio / 2, 0, 1) * 1.15;
+    const breakoutImpulse = clamp((volumeRatio - 1) / 1.5, 0, 1) * 0.8;
+    const breakoutCmf = clamp((cmf + 0.3) / 0.8, 0, 1);
+    const breakoutContext = Math.max(context.alignmentScore, 0.5);
+    const breakoutWeight = 1.25 + 1.15 + 0.8 + 1 + 1 + 1;
     const scoreBreakout = clamp(
-      (compressionScore
-        + normalize(adx, 16, 35)
-        + clamp(volumeRatio / 2, 0, 1)
-        + clamp((cmf + 0.3) / 0.8, 0, 1)
-        + Math.max(context.alignmentScore, 0.4)) / 5,
+      (breakoutCompression + breakoutAdx + breakoutVolume + breakoutImpulse + breakoutCmf + breakoutContext) / breakoutWeight,
       0,
       1,
     );
@@ -594,12 +672,24 @@ class MetaAdaptiveStrategyAgent {
       1,
     );
 
+    const momentumTrend = clamp(Math.abs((snap as any)?.trend ?? 0) / 1.8, 0, 1);
+    const momentumStrength = clamp(trendStrength / 1.0, 0, 1);
+    const momentumVolume = clamp(volumeRatio / 2.5, 0, 1) * 1.05;
+    const momentumImpulse = clamp((volumeRatio - 1) / 1.5, 0, 1);
+    const momentumCmf = clamp((cmf + 0.2) / 0.6, 0, 1);
+    const momentumContext = Math.max(context.alignmentScore, 0.55);
+    const momentumSlope = clamp(slope * 1.1, 0, 1);
+    const momentumWeight = 1 + 1 + 1.05 + 1 + 1 + 1 + 1;
     const scoreMomentum = clamp(
-      (clamp(Math.abs((snap as any)?.trend ?? 0) / 1.8, 0, 1)
-        + clamp(trendStrength / 1.0, 0, 1)
-        + clamp(volumeRatio / 2.5, 0, 1)
-        + clamp((cmf + 0.2) / 0.6, 0, 1)
-        + context.alignmentScore) / 5,
+      (
+        momentumTrend
+        + momentumStrength
+        + momentumVolume
+        + momentumImpulse
+        + momentumCmf
+        + momentumContext
+        + momentumSlope
+      ) / momentumWeight,
       0,
       1,
     );
@@ -609,41 +699,51 @@ class MetaAdaptiveStrategyAgent {
       ? new PreciseDecimal(input.desiredProfitUsd)
       : this.desiredProfitUsd;
 
-    const trendRiskBase = context.conflict
-      ? '0.6'
-      : context.alignmentScore >= 0.85
-        ? '1.4'
-        : context.alignmentScore >= 0.65
-          ? '1.2'
-          : '1';
-    const breakoutRiskBase = context.conflict
-      ? '0.7'
-      : context.alignmentScore >= 0.75
-        ? '1.25'
-        : '0.95';
-    const meanRiskBase = context.alignmentScore <= 0.45
-      ? '1.0'
-      : context.alignmentScore <= 0.6
-        ? '0.9'
-        : '0.75';
-    const momentumRiskBase = context.conflict
-      ? '0.6'
-      : context.alignmentScore >= 0.8
-        ? '1.3'
-        : '1.05';
+    const needsRiskReduction = context.alignmentScore < 0.65 || adx < 14;
+    const riskAdjustmentFactor = context.conflict
+      ? new PreciseDecimal('0.4')
+      : needsRiskReduction
+        ? new PreciseDecimal('0.5')
+        : new PreciseDecimal('1');
 
-    const trendExecution: 'market' | 'limit' = context.alignmentScore >= 0.75 ? 'market' : 'limit';
-    const breakoutExecution: 'market' | 'limit' = context.alignmentScore >= 0.7 ? 'market' : 'limit';
-    const momentumExecution: 'market' | 'limit' = context.alignmentScore >= 0.8 ? 'market' : 'limit';
+    const trendRiskBase = context.conflict
+      ? '0.45'
+      : context.alignmentScore >= 0.92
+        ? '1.3'
+        : context.alignmentScore >= 0.8
+          ? '1.05'
+          : '0.75';
+    const breakoutRiskBase = context.conflict
+      ? '0.5'
+      : context.alignmentScore >= 0.88
+        ? '1.1'
+        : '0.85';
+    const meanRiskBase = context.alignmentScore <= 0.45
+      ? '0.9'
+      : context.alignmentScore <= 0.6
+        ? '0.8'
+        : '0.7';
+    const momentumRiskBase = context.conflict
+      ? '0.45'
+      : context.alignmentScore >= 0.9
+        ? '1.2'
+        : '0.95';
+
+    const trendExecution: 'market' | 'limit' = context.alignmentScore >= 0.9 ? 'market' : 'limit';
+    const breakoutExecution: 'market' | 'limit' = context.alignmentScore >= 0.82 ? 'market' : 'limit';
+    const momentumExecution: 'market' | 'limit' = context.alignmentScore >= 0.9 ? 'market' : 'limit';
 
     const trendTargets = [new PreciseDecimal('1.8'), new PreciseDecimal('3'), new PreciseDecimal('5')];
     const breakoutTargets = [new PreciseDecimal('2'), new PreciseDecimal('3.5'), new PreciseDecimal('5')];
     const meanTargets = [new PreciseDecimal('1.5'), new PreciseDecimal('2.4'), new PreciseDecimal('3.5')];
     const momentumTargets = [new PreciseDecimal('2'), new PreciseDecimal('3.5'), new PreciseDecimal('5')];
 
+    const allowLongStack = context.bullishStack && context.alignmentScore >= 0.9;
+    const allowShortStack = context.bearishStack && context.alignmentScore >= 0.9;
+
     const basePlans: Record<StrategyFamily, AdaptiveStrategyPlan> = {
       trend: {
-        riskPct: new PreciseDecimal(trendRiskBase),
+        riskPct: new PreciseDecimal(trendRiskBase).times(riskAdjustmentFactor),
         stopAtrMult: new PreciseDecimal('1'),
         takeProfitMultiples: trendTargets,
         executionMode: trendExecution,
@@ -652,7 +752,7 @@ class MetaAdaptiveStrategyAgent {
         medianTakeProfitR: trendTargets[Math.min(1, trendTargets.length - 1)],
       },
       breakout: {
-        riskPct: new PreciseDecimal(breakoutRiskBase),
+        riskPct: new PreciseDecimal(breakoutRiskBase).times(riskAdjustmentFactor),
         stopAtrMult: new PreciseDecimal('1'),
         takeProfitMultiples: breakoutTargets,
         executionMode: breakoutExecution,
@@ -661,7 +761,7 @@ class MetaAdaptiveStrategyAgent {
         medianTakeProfitR: breakoutTargets[Math.min(1, breakoutTargets.length - 1)],
       },
       mean_reversion: {
-        riskPct: new PreciseDecimal(meanRiskBase),
+        riskPct: new PreciseDecimal(meanRiskBase).times(needsRiskReduction ? new PreciseDecimal('0.75') : new PreciseDecimal('1')),
         stopAtrMult: new PreciseDecimal('0.9'),
         takeProfitMultiples: meanTargets,
         executionMode: 'limit',
@@ -670,7 +770,7 @@ class MetaAdaptiveStrategyAgent {
         medianTakeProfitR: meanTargets[Math.min(1, meanTargets.length - 1)],
       },
       momentum: {
-        riskPct: new PreciseDecimal(momentumRiskBase),
+        riskPct: new PreciseDecimal(momentumRiskBase).times(riskAdjustmentFactor),
         stopAtrMult: new PreciseDecimal('1.1'),
         takeProfitMultiples: momentumTargets,
         executionMode: momentumExecution,
@@ -688,7 +788,16 @@ class MetaAdaptiveStrategyAgent {
       trend: this.scalePlanByAtr(basePlans.trend, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
       breakout: this.scalePlanByAtr(basePlans.breakout, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
       mean_reversion: this.scalePlanByAtr(basePlans.mean_reversion, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
-      momentum: this.scalePlanByAtr(basePlans.momentum, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict && context.alignmentScore >= 0.6, takerFeeBps),
+      momentum: this.scalePlanByAtr(
+        basePlans.momentum,
+        atr15mPct,
+        atr1hPct,
+        atr4hPct,
+        capital,
+        desiredProfit,
+        !context.conflict && context.alignmentScore >= 0.9,
+        takerFeeBps,
+      ),
     };
 
     const familyScores: Array<{ family: StrategyFamily; score: number; confidence: number; bias: StrategyBias; reasons: string[]; plan: AdaptiveStrategyPlan }>
@@ -697,7 +806,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'trend',
           score: scoreTrend,
           confidence: scoreTrend,
-          bias: chooseBiasFromTrend(snap.trendBias),
+          bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
           reasons: [
             `adx=${adx.toFixed(2)}`,
             `trend_strength=${trendStrength.toFixed(2)}`,
@@ -710,7 +819,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'breakout',
           score: scoreBreakout,
           confidence: scoreBreakout,
-          bias: chooseBiasFromTrend(snap.trendBias),
+          bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
           reasons: [
             `compression=${compressionScore.toFixed(2)}`,
             `volume_ratio=${volumeRatio.toFixed(2)}`,
@@ -737,7 +846,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'momentum',
           score: scoreMomentum,
           confidence: scoreMomentum,
-          bias: chooseBiasFromTrend(snap.trendBias),
+          bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
           reasons: [
             `trend=${safeNumber((snap as any)?.trend, 0).toFixed(2)}`,
             `trend_strength=${trendStrength.toFixed(2)}`,
@@ -751,9 +860,9 @@ class MetaAdaptiveStrategyAgent {
 
     const calibrationAdjustments = this.calibrationProfile.familyScoreAdjustments;
 
-    const weighted: StrategyScoreResult[] = familyScores.map(item => {
+    let weighted: StrategyScoreResult[] = familyScores.map(item => {
       const penaltiesApplied = [...penalties];
-      let effectiveScore = item.score * (1 - microPenalty * 0.6);
+      let effectiveScore = item.score * (1 - microPenalty * 0.3);
       if (context.conflict && item.family !== 'mean_reversion') {
         effectiveScore *= 0.45;
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
@@ -763,14 +872,30 @@ class MetaAdaptiveStrategyAgent {
         effectiveScore *= suppress;
         if (context.alignmentScore > 0.6) penaltiesApplied.push('htf_trend_dominant');
       }
-      if (context.alignmentScore >= 0.8 && (item.family === 'trend' || item.family === 'momentum')) {
+      if (item.family !== 'mean_reversion') {
+        if (!allowLongStack && !allowShortStack) {
+          effectiveScore = 0;
+          if (!penaltiesApplied.includes('htf_alignment_insufficient')) {
+            penaltiesApplied.push('htf_alignment_insufficient');
+          }
+        }
+        if (item.bias === 'long' && !allowLongStack) {
+          effectiveScore = 0;
+          penaltiesApplied.push('long_blocked_by_stack');
+        }
+        if (item.bias === 'short' && !allowShortStack) {
+          effectiveScore = 0;
+          penaltiesApplied.push('short_blocked_by_stack');
+        }
+      }
+      if (context.alignmentScore >= 0.9 && (item.family === 'trend' || item.family === 'momentum')) {
         effectiveScore = Math.min(1, effectiveScore * 1.15);
       }
-      if (item.family === 'mean_reversion' && adx >= 18) {
-        effectiveScore *= 0.6;
+      if (item.family === 'mean_reversion' && adx >= 22) {
+        effectiveScore *= 0.75;
         penaltiesApplied.push('adx_too_high');
       }
-      if (item.family === 'mean_reversion' && context.alignmentScore >= 0.75 && adx >= 25) {
+      if (item.family === 'mean_reversion' && context.alignmentScore >= 0.92 && adx >= 30) {
         effectiveScore = 0;
         if (!penaltiesApplied.includes('mean_disabled_strong_trend')) {
           penaltiesApplied.push('mean_disabled_strong_trend');
@@ -779,6 +904,12 @@ class MetaAdaptiveStrategyAgent {
       if (item.family === 'momentum' && context.alignmentScore <= 0.45 && adx <= 14) {
         effectiveScore *= 0.7;
         penaltiesApplied.push('momentum_suppressed_range');
+      }
+      if (fundamentalNegative) {
+        effectiveScore = 0;
+        if (!penaltiesApplied.includes('fundamental_negative')) {
+          penaltiesApplied.push('fundamental_negative');
+        }
       }
       const adjustment = calibrationAdjustments[item.family] ?? 0;
       effectiveScore = clamp(effectiveScore + adjustment, 0, 1);
@@ -789,8 +920,13 @@ class MetaAdaptiveStrategyAgent {
         effectiveScore *= 0.7;
         penaltiesApplied.push('volume_low');
       }
-      const guardrail = this.guardrailReason(input.symbol, item.family);
-      const active = effectiveScore >= 0.25 && guardrail == null;
+      const guardrailBase = this.guardrailReason(input.symbol, item.family);
+      const guardrail = fundamentalNegative
+        ? guardrailBase
+          ? `${guardrailBase};fundamental_negative_alert`
+          : 'fundamental_negative_alert'
+        : guardrailBase;
+      const active = effectiveScore >= 0.25 && guardrail == null && !fundamentalNegative;
       const id: StrategyId = item.family === 'trend'
         ? 'classic_trend_following'
         : item.family === 'breakout'
@@ -813,9 +949,60 @@ class MetaAdaptiveStrategyAgent {
       };
     });
 
+    let drawdownHalt: { reason: string; threshold: PreciseDecimal; cumulative: PreciseDecimal } | null = null;
+    if (input.sessionId) {
+      const ledgerKey = this.ledgerKey(input.sessionId, input.symbol);
+      const cumulative = this.tradeLedgers.get(ledgerKey);
+      if (cumulative && cumulative.lt(0)) {
+        const referenceCapital = capital.gt(0) ? capital : this.defaultCapital;
+        const threshold = referenceCapital.times(new PreciseDecimal('-0.05'));
+        if (cumulative.lt(threshold)) {
+          drawdownHalt = { reason: 'symbol_drawdown_limit', threshold, cumulative };
+        }
+      }
+    }
+
+    if (drawdownHalt) {
+      let logged = false;
+      weighted = weighted.map(signal => {
+        const penaltiesAugmented = signal.penalties.includes(drawdownHalt!.reason)
+          ? signal.penalties
+          : [...signal.penalties, drawdownHalt!.reason];
+        const guardrail = signal.guardrail
+          ? `${signal.guardrail};${drawdownHalt!.reason}`
+          : drawdownHalt!.reason;
+        if (!logged && !signal.guardrail?.includes(drawdownHalt!.reason)) {
+          console.warn(JSON.stringify({
+            level: 'warn',
+            event: 'adaptive_symbol_loss_halt',
+            symbol: input.symbol,
+            sessionId: input.sessionId ?? null,
+            reason: drawdownHalt!.reason,
+            cumulativePnlUsd: drawdownHalt!.cumulative.toFixed(6),
+            thresholdUsd: drawdownHalt!.threshold.toFixed(6),
+          }));
+          logged = true;
+        }
+        return {
+          ...signal,
+          score: 0,
+          active: false,
+          guardrail,
+          penalties: penaltiesAugmented,
+        };
+      });
+    }
+
     const ordered = weighted.sort((a, b) => b.score - a.score);
 
-    const selection = this.chooseStrategy(input.sessionId, input.symbol, ordered);
+      const selection = drawdownHalt || fundamentalNegative
+        ? null
+        : this.chooseStrategy(
+          input.sessionId ?? null,
+          input.symbol,
+          ordered,
+          { atr15mPct, atr1hPct, realizedVol, hurst },
+        );
     const enrichedSignals = ordered.map(signal => ({
       ...signal,
       exploration: selection != null && selection.id === signal.id ? selection.exploration : false,
@@ -937,8 +1124,12 @@ class MetaAdaptiveStrategyAgent {
         scaledRisk = targetRiskPct;
       }
     }
-    const minRisk = new PreciseDecimal('0.6');
-    const maxRisk = new PreciseDecimal('2.5');
+    const defaultMin = new PreciseDecimal('0.6');
+    const absoluteMin = new PreciseDecimal('0.25');
+    const minRiskCandidate = base.riskPct.lt(defaultMin) ? base.riskPct : defaultMin;
+    const minRisk = minRiskCandidate.lt(absoluteMin) ? absoluteMin : minRiskCandidate;
+    const baseMax = allowUpsize ? new PreciseDecimal('2.2') : new PreciseDecimal('1.4');
+    const maxRisk = base.riskPct.gt(baseMax) ? base.riskPct : baseMax;
     let finalRiskPct = this.clampDecimal(scaledRisk, minRisk, maxRisk);
     const suppressionThreshold = new PreciseDecimal('0.8');
     if (base.riskPct.lt(suppressionThreshold) && finalRiskPct.gt(base.riskPct)) {
@@ -1115,7 +1306,12 @@ class MetaAdaptiveStrategyAgent {
     }
   }
 
-  private chooseStrategy(sessionId: string | null | undefined, symbol: string, ordered: StrategyScoreResult[]): AdaptiveSignal | null {
+  private chooseStrategy(
+    sessionId: string | null | undefined,
+    symbol: string,
+    ordered: StrategyScoreResult[],
+    context: { atr15mPct: number; atr1hPct: number; realizedVol: number; hurst: number },
+  ): AdaptiveSignal | null {
     if (!ordered.length) return null;
     const available = ordered.filter(signal => signal.active).length > 0
       ? ordered.filter(signal => signal.active)
@@ -1123,7 +1319,9 @@ class MetaAdaptiveStrategyAgent {
     let chosen: StrategyScoreResult | null = null;
     let exploration = false;
     const candidate = available[0] ?? ordered[0];
-    const epsilon = candidate ? this.computeExplorationProbability(symbol, candidate) : this.epsilonBase;
+    const epsilon = candidate
+      ? this.computeExplorationProbability(symbol, candidate, context)
+      : this.epsilonBase;
     if (this.nextRandom() < epsilon) {
       exploration = true;
       const index = Math.floor(this.nextRandom() * available.length);

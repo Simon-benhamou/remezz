@@ -11,6 +11,10 @@ const {
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
 } = await import('../../dist/src/quantai/strategy/recognizedStrategies.js');
+const { metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+
+metaAdaptiveStrategyAgent.reset();
+metaAdaptiveStrategyAgent.setRandomSeed(42);
 
 const sessionId = 'meta-test-session';
 
@@ -49,8 +53,17 @@ function buildSnapshot(overrides = {}) {
     trendBias: overrides.trendBias ?? 'bullish',
     volume: overrides.volume ?? 1_000_000,
     volumeMA: overrides.volumeMA ?? 600_000,
-    volume24h: overrides.volume24h ?? 80_000_000,
+    volume24h: overrides.volume24h ?? 180_000_000,
     cmf20: overrides.cmf20 ?? 0.35,
+    multiTimeframe: overrides.multiTimeframe ?? {
+      timeframes: {
+        '4h': { tf: '4h', bias: 'bullish', momentumPct: 0.55, rsi: 58 },
+        '1h': { tf: '1h', bias: 'bullish', momentumPct: 0.48, rsi: 56 },
+        '15m': { tf: '15m', bias: 'bullish', momentumPct: 0.4, rsi: 54 },
+      },
+      agreementScore: 3,
+      divergenceScore: 0,
+    },
   };
 }
 
@@ -102,6 +115,7 @@ const afterGuardrail = postLoss.find(signal => signal.id === selected.id);
 assert(afterGuardrail, 'Trend strategy should still be present');
 assert.equal(afterGuardrail.active, false, 'Guardrail should deactivate trend strategy after repeated losses');
 assert(afterGuardrail.meta?.guardrail?.includes('halt_winrate'), 'Guardrail reason should mention winrate halt');
+assert(afterGuardrail.meta?.guardrail?.includes('symbol_drawdown_limit'), 'Drawdown guard should annotate guardrail reason');
 
 const illiquid = buildSnapshot({
   volume24h: 12_000_000,
@@ -120,5 +134,87 @@ const gated = evaluateRecognizedStrategies(illiquid, {
 });
 
 assert.equal(gated.length, 0, 'Liquidity gate should skip strategy scoring on illiquid symbols');
+
+const fundamentalSession = 'meta-fundamental';
+const fundamentalSignals = evaluateRecognizedStrategies(buildSnapshot(), {
+  sessionId: fundamentalSession,
+  symbol: 'BTC/USDT',
+  fundamental: { severity: 'negative', source: 'rss_feed', message: 'regulatory warning', expiresAt: Date.now() + 60_000 },
+});
+
+assert(fundamentalSignals.every(signal => signal.active === false), 'Fundamental halt should deactivate all strategies');
+assert(fundamentalSignals.every(signal => signal.meta?.guardrail?.includes('fundamental_negative_alert')),
+  'Fundamental halt should surface a guardrail reason');
+
+const breakoutCompressionSnap = buildSnapshot({
+  atrPct: 0.6,
+  realizedVol: 1.8,
+  adx14: 24,
+  trendStrength: 0.62,
+  trend: 0.85,
+  volume: 1_800_000,
+  volumeMA: 600_000,
+  volume24h: 140_000_000,
+  cmf20: 0.32,
+});
+
+const breakoutSignals = evaluateRecognizedStrategies(breakoutCompressionSnap, {
+  sessionId: 'meta-breakout',
+  symbol: 'SOL/USDT',
+  bias: 'long',
+});
+
+const breakoutEntry = breakoutSignals.find(signal => signal.id === 'breakout_retest');
+const trendEntry = breakoutSignals.find(signal => signal.id === 'classic_trend_following');
+
+assert(breakoutEntry, 'Breakout strategy should be present in compression regime');
+assert(trendEntry, 'Trend strategy should also be scored for comparison');
+assert(breakoutEntry.meta?.score > 0.6, 'Breakout strategy should achieve a healthy score');
+assert(breakoutEntry.meta?.score >= (trendEntry.meta?.score ?? 0), 'Breakout score should meet or exceed trend score under compression');
+assert(breakoutSignals.indexOf(breakoutEntry) <= 1, 'Breakout strategy should rank near the top under compression');
+
+const majorLiquiditySnap = buildSnapshot({
+  volume24h: 620_000_000,
+  cmf20: 0.28,
+});
+
+const majorSignals = evaluateRecognizedStrategies(majorLiquiditySnap, {
+  sessionId: 'meta-major',
+  symbol: 'ETH/USDT',
+  micro: { spreadBps: 17, depthUsd: 40_000 },
+  forceLiquidityGate: true,
+});
+
+assert.equal(majorSignals.length, 4, 'Major tier should allow scoring with 17 bps spread and strong depth');
+assert(majorSignals.some(signal => signal.id === 'momentum_scanner_focus'),
+  'Momentum strategy should be considered on major tier liquidity');
+
+const bearishSnap = buildSnapshot({
+  trendBias: 'bearish',
+  cmf20: -0.35,
+  adx14: 12,
+  trendStrength: -0.8,
+  multiTimeframe: {
+    timeframes: {
+      '4h': { tf: '4h', bias: 'bearish', momentumPct: -0.5, rsi: 42 },
+      '1h': { tf: '1h', bias: 'bearish', momentumPct: -0.4, rsi: 39 },
+      '15m': { tf: '15m', bias: 'bearish', momentumPct: -0.35, rsi: 37 },
+    },
+    agreementScore: 3,
+    divergenceScore: 0,
+  },
+});
+
+const bearishSignals = evaluateRecognizedStrategies(bearishSnap, {
+  sessionId: 'meta-bearish',
+  symbol: 'BTC/USDT',
+  bias: 'short',
+});
+
+const bearishTrend = bearishSignals.find(signal => signal.id === 'classic_trend_following');
+assert(bearishTrend, 'Bearish stack should still produce a trend signal');
+assert.equal(bearishTrend.bias, 'short', 'Bearish stack should enforce short bias');
+const bearishRiskPct = Number.parseFloat(bearishTrend.meta?.riskPct ?? '0');
+assert(bearishRiskPct <= 0.7, 'Low ADX should cut risk allocation for trend strategy');
 
 console.log('✅ meta-adaptive-agent logic test passed');
