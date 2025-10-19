@@ -42,3 +42,51 @@ await test('agent health surfaces VOS blocked sessions', async () => {
   assert.equal(entry.blockedByVos, true);
   assert.ok(entry.flags.includes('vos_block'));
 });
+
+await test('agent health exposes aggressiveness from runtime or profile', async () => {
+  const aggressiveSession = await prisma.agentSession.create({
+    data: {
+      symbol: 'ETH/USDT',
+      mode: 'paper',
+      startedAt: new Date(now - 3 * 60 * 60 * 1000),
+      profileJson: { aggressiveness: 'conservative' },
+    },
+  });
+
+  const conservativeSession = await prisma.agentSession.create({
+    data: {
+      symbol: 'SOL/USDT',
+      mode: 'paper',
+      startedAt: new Date(now - 4 * 60 * 60 * 1000),
+      profileJson: { aggressiveness: 'conservative' },
+    },
+  });
+
+  const health = await computeAgentHealth(now, {
+    agentsSnapshot: [
+      {
+        sessionId: aggressiveSession.id,
+        state: 'RUN',
+        mode: 'paper',
+        symbol: 'ETH/USDT',
+        hasPosition: false,
+        aggressiveness: 'aggressive',
+      },
+      {
+        sessionId: conservativeSession.id,
+        state: 'RUN',
+        mode: 'paper',
+        symbol: 'SOL/USDT',
+        hasPosition: false,
+      },
+    ],
+  });
+
+  const aggressiveEntry = health.agents.find((row) => row.sessionId === aggressiveSession.id);
+  assert.ok(aggressiveEntry, 'expected aggressive agent in snapshot');
+  assert.equal(aggressiveEntry.aggressiveness, 'aggressive');
+
+  const conservativeEntry = health.agents.find((row) => row.sessionId === conservativeSession.id);
+  assert.ok(conservativeEntry, 'expected conservative agent in snapshot');
+  assert.equal(conservativeEntry.aggressiveness, 'conservative');
+});
