@@ -19,6 +19,147 @@ import { scheduleJob, registerSchedulerJobHandler, processSchedulerJobsOnce } fr
 
 // HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
+const AUTO_UNIVERSE_CACHE_DURATION_MS = 4 * 60 * 60 * 1000;
+
+type CachedDynamicUniverse = {
+  kind: 'dynamic';
+  orderedPerformers: string[];
+  performanceSnapshot: Array<{ base: string; change24h: number }>;
+};
+
+type CachedFallbackUniverse = {
+  kind: 'fallback';
+  symbols: string[];
+};
+
+type CachedAutoUniverseResult = CachedDynamicUniverse | CachedFallbackUniverse;
+
+const autoUniverseCache = new Map<string, { result: CachedAutoUniverseResult; timestamp: number }>();
+
+type AutoUniverseDependencyBag = {
+  getActiveSymbols: typeof getActiveAgentSymbols;
+  getActiveCount: typeof getActiveAgentCountForSymbol;
+};
+
+const defaultAutoUniverseDeps: AutoUniverseDependencyBag = {
+  getActiveSymbols: getActiveAgentSymbols,
+  getActiveCount: getActiveAgentCountForSymbol,
+};
+
+function createAutoUniverseCacheKey(strategy?: StrategyFilterProfile): string {
+  if (!strategy) {
+    return 'auto_universe:default';
+  }
+  const target = Number.isFinite(strategy.targetTpPct)
+    ? Number(strategy.targetTpPct).toFixed(4)
+    : 'na';
+  const stop = Number.isFinite(strategy.stopLossPct)
+    ? Number(strategy.stopLossPct).toFixed(4)
+    : 'na';
+  return `auto_universe:${strategy.aggressiveness}:${target}:${stop}`;
+}
+
+function storeAutoUniverseCache(key: string, result: CachedAutoUniverseResult): void {
+  autoUniverseCache.set(key, { result, timestamp: Date.now() });
+  if (autoUniverseCache.size > 5) {
+    const oldestKey = autoUniverseCache.keys().next().value;
+    if (oldestKey) {
+      autoUniverseCache.delete(oldestKey);
+    }
+  }
+}
+
+async function resolveCachedAutoUniverse(
+  cached: CachedAutoUniverseResult,
+  excludeSessionId: string | undefined,
+  deps: AutoUniverseDependencyBag = defaultAutoUniverseDeps,
+): Promise<string[]> {
+  if (cached.kind === 'dynamic') {
+    return rebuildDynamicUniverseFromCache(cached, excludeSessionId, deps);
+  }
+  return filterSymbolsByActivity(cached.symbols, excludeSessionId, deps);
+}
+
+async function rebuildDynamicUniverseFromCache(
+  cached: CachedDynamicUniverse,
+  excludeSessionId: string | undefined,
+  deps: AutoUniverseDependencyBag,
+): Promise<string[]> {
+  const activeSymbols = await deps.getActiveSymbols(excludeSessionId);
+  const activeSet = new Set(activeSymbols.map((sym) => normalizeUnifiedSymbol(sym)));
+  const performanceByBase = new Map<string, number>();
+  for (const snap of cached.performanceSnapshot) {
+    if (!snap?.base) continue;
+    const upperBase = snap.base.toUpperCase();
+    if (!performanceByBase.has(upperBase)) {
+      performanceByBase.set(upperBase, snap.change24h);
+    }
+  }
+
+  const selected: string[] = [];
+  const seen = new Set<string>();
+
+  for (const symbol of cached.orderedPerformers) {
+    if (!symbol) continue;
+    const unified = normalizeUnifiedSymbol(symbol);
+    if (!unified || seen.has(unified)) continue;
+    const base = extractPerpBase(symbol)?.toUpperCase() ?? unified.split('/')[0] ?? symbol;
+    const change = performanceByBase.get(base) ?? 0;
+    const absChange = Math.abs(change);
+
+    if (absChange > 3) {
+      const activeCount = await deps.getActiveCount(symbol, excludeSessionId);
+      if (activeCount < 2) {
+        selected.push(symbol);
+        seen.add(unified);
+      }
+      continue;
+    }
+
+    if (activeSet.has(unified)) {
+      if (absChange > 2) {
+        const activeCount = await deps.getActiveCount(symbol, excludeSessionId);
+        if (activeCount < 2) {
+          selected.push(symbol);
+          seen.add(unified);
+        }
+      }
+      continue;
+    }
+
+    selected.push(symbol);
+    seen.add(unified);
+  }
+
+  if (selected.length > 0) {
+    return selected;
+  }
+
+  return filterSymbolsByActivity(cached.orderedPerformers, excludeSessionId, deps);
+}
+
+async function filterSymbolsByActivity(
+  symbols: string[],
+  excludeSessionId: string | undefined,
+  deps: AutoUniverseDependencyBag,
+): Promise<string[]> {
+  const activeSymbols = await deps.getActiveSymbols(excludeSessionId);
+  const activeSet = new Set(activeSymbols.map((sym) => normalizeUnifiedSymbol(sym)));
+  const seen = new Set<string>();
+  const available: string[] = [];
+
+  for (const symbol of symbols) {
+    if (!symbol) continue;
+    const unified = normalizeUnifiedSymbol(symbol);
+    if (!unified || seen.has(unified) || activeSet.has(unified)) {
+      continue;
+    }
+    seen.add(unified);
+    available.push(symbol);
+  }
+
+  return available;
+}
 const volatilityCache = new Map<string, boolean>();
 const mlPredictionCache = new Map<string, { confidence: number; prediction: string; reasoning: string; timestamp: number }>();
 const CACHE_DURATION_AI = 30 * 60 * 1000; // 30min cache IA (plus long)
@@ -813,8 +954,29 @@ export async function getOptimizedCryptoList(
   const maxAttempts = AUTO_UNIVERSE_MAX_ATTEMPTS;
   const retryDelayMs = 2000;
   const attemptLabel = Math.max(1, attempt);
+  const cacheKey = createAutoUniverseCacheKey(options?.strategy);
+  const cached = autoUniverseCache.get(cacheKey);
+  const now = Date.now();
+
+  if (cached) {
+    if (now - cached.timestamp < AUTO_UNIVERSE_CACHE_DURATION_MS) {
+      try {
+        console.log('💾 Using cached auto universe snapshot');
+        const cachedResult = await resolveCachedAutoUniverse(cached.result, excludeSessionId);
+        if (cachedResult.length > 0) {
+          return cachedResult;
+        }
+        console.log('⚠️ Cached auto universe was exhausted - rebuilding');
+      } catch (error) {
+        console.warn('⚠️ Failed to reuse cached auto universe:', error);
+      }
+    }
+    autoUniverseCache.delete(cacheKey);
+  }
+
   if (process.env.UNIT_TEST_MODE === 'true') {
     const syntheticUniverse = ['ETH/USDT:USDT', 'SOL/USDT:USDT', 'ADA/USDT:USDT', 'XRP/USDT:USDT'];
+    storeAutoUniverseCache(cacheKey, { kind: 'fallback', symbols: syntheticUniverse });
     return applyActiveFilter(syntheticUniverse, excludeSessionId);
   }
   try {
@@ -828,10 +990,12 @@ export async function getOptimizedCryptoList(
     
     const { EXCHANGE_ID } = getConfig();
     const ExchangeClass = (ccxt as any)[EXCHANGE_ID];
-    
+
     if (!ExchangeClass) {
       console.log('📊 Exchange not available, using static top 20 cryptos list');
-      return await getTopCryptos(excludeSessionId);
+      const fallback = await getTopCryptos(excludeSessionId);
+      storeAutoUniverseCache(cacheKey, { kind: 'fallback', symbols: fallback });
+      return fallback;
     }
 
     const exchange = new ExchangeClass({
@@ -954,7 +1118,9 @@ export async function getOptimizedCryptoList(
     
     if (perpetualMarkets.length === 0) {
       console.log('📊 No perpetual markets found, falling back to static list');
-      return await getTopCryptos(excludeSessionId);
+      const fallback = await getTopCryptos(excludeSessionId);
+      storeAutoUniverseCache(cacheKey, { kind: 'fallback', symbols: fallback });
+      return fallback;
     }
 
     // Fetch MORE tickers to get better selection - PRIORITIZE major cryptos
@@ -1292,6 +1458,14 @@ export async function getOptimizedCryptoList(
         reason: 'dynamic_ready',
         ts: Date.now(),
       });
+      storeAutoUniverseCache(cacheKey, {
+        kind: 'dynamic',
+        orderedPerformers,
+        performanceSnapshot: cryptoPerformance.map((entry) => ({
+          base: extractPerpBase(entry.symbol) ?? entry.symbol.split('/')[0] ?? entry.symbol,
+          change24h: entry.change24h,
+        })),
+      });
       return orderedPerformers;
     } else {
       const reason = 'top_performers_conflict';
@@ -1308,9 +1482,10 @@ export async function getOptimizedCryptoList(
         ts: Date.now(),
       });
       await scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
+      storeAutoUniverseCache(cacheKey, { kind: 'fallback', symbols: fallbackList });
       return fallbackList;
     }
-    
+
   } catch (error) {
     console.error('Error getting dynamic crypto list:', error);
     console.log('📊 Falling back to static top cryptos list');
@@ -1324,12 +1499,36 @@ export async function getOptimizedCryptoList(
       ts: Date.now(),
     });
     await scheduleAutoUniverseRetry(excludeSessionId, AUTO_UNIVERSE_RETRY_DEFAULT_MS);
+    storeAutoUniverseCache(cacheKey, { kind: 'fallback', symbols: fallbackList });
     return fallbackList; // Fallback to our curated list
   }
 }
 
 export type { CandidateMetrics };
 export { evaluateCandidateAgainstFilters };
+
+export const __autoUniverseTestHooks = {
+  clearCache(): void {
+    autoUniverseCache.clear();
+  },
+  getCacheKey(strategy?: StrategyFilterProfile): string {
+    return createAutoUniverseCacheKey(strategy);
+  },
+  setCacheEntry(key: string, result: CachedAutoUniverseResult, timestamp: number = Date.now()): void {
+    autoUniverseCache.set(key, { result, timestamp });
+  },
+  resolveCached(
+    cached: CachedAutoUniverseResult,
+    excludeSessionId?: string,
+    deps?: Partial<AutoUniverseDependencyBag>,
+  ): Promise<string[]> {
+    const effectiveDeps: AutoUniverseDependencyBag = {
+      ...defaultAutoUniverseDeps,
+      ...(deps ?? {}),
+    } as AutoUniverseDependencyBag;
+    return resolveCachedAutoUniverse(cached, excludeSessionId, effectiveDeps);
+  },
+};
 
 /**
  * Top cryptos by volume/market cap - focus on liquid markets only
