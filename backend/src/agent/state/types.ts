@@ -108,6 +108,19 @@ export type ActivePosition = {
     highWatermark?: number | null;
     lastUpdateTs?: number;
   };
+  contextTrail?: {
+    enabled: boolean;
+    breakevenR: number;
+    trailActivationR: number;
+    atrMultiplier: number;
+    atrSource: 'atr14' | 'atr14_1h';
+    alignmentThreshold: number;
+    adxThreshold: number;
+    breakevenTriggered: boolean;
+    trailActivated: boolean;
+    contextSatisfied: boolean;
+    shouldExit?: boolean;
+  };
   openLeverage?: number;
   equityAtEntryUsd?: number | null;
   accountSnapshot?: AccountSnapshot | null;
