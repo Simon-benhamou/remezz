@@ -116,7 +116,10 @@ export async function computeAgentHealth(
   const needsFallback = activeSessions
     .filter((session) => {
       const telemetry = telemetryBySession.get(session.id);
-      return !telemetry || telemetry.tradeCount24h == null || telemetry.lastExecutionAt == null;
+      if (!telemetry) return true;
+      const tradeCount = Number(telemetry.tradeCount24h ?? 0);
+      const lastExec = telemetry.lastExecutionAt ?? telemetry.lastExecutionTs;
+      return tradeCount <= 0 || lastExec == null;
     })
     .map((session) => session.id);
 
@@ -124,7 +127,10 @@ export async function computeAgentHealth(
   const fallbackLastTs = new Map<string, number>();
   if (needsFallback.length) {
     const fillRows = await prisma.fill.findMany({
-      where: { sessionId: { in: needsFallback } },
+      where: {
+        sessionId: { in: needsFallback },
+        ts: { gte: new Date(now - TRADE_WINDOW_MS) },
+      },
       select: { sessionId: true, ts: true },
     });
     for (const row of fillRows) {
@@ -152,9 +158,17 @@ export async function computeAgentHealth(
     const telemetry = telemetryBySession.get(session.id) ?? null;
     const agent = agentById.get(session.id) ?? null;
 
-    const tradeCount24h = telemetry?.tradeCount24h ?? fallbackCounts.get(session.id) ?? 0;
+    const telemetryTradeCount = Number(telemetry?.tradeCount24h ?? 0);
+    const fallbackTradeCount = fallbackCounts.get(session.id);
+    const tradeCount24h =
+      fallbackTradeCount != null ? Math.max(telemetryTradeCount, fallbackTradeCount) : telemetryTradeCount;
+
+    const telemetryLastExecution = toTimestampMs(telemetry?.lastExecutionAt);
+    const fallbackLastExecution = fallbackLastTs.get(session.id) ?? null;
     const lastExecutionTs =
-      toTimestampMs(telemetry?.lastExecutionAt) ?? fallbackLastTs.get(session.id) ?? null;
+      telemetryLastExecution && fallbackLastExecution
+        ? Math.max(telemetryLastExecution, fallbackLastExecution)
+        : telemetryLastExecution ?? fallbackLastExecution ?? null;
     const blockedByVos = Boolean(telemetry?.blockedByVos);
     const lastBlockedAt = toTimestampMs(telemetry?.lastBlockedAt);
 
