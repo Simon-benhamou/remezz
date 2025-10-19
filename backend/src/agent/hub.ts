@@ -211,6 +211,7 @@ export class AgentsHub {
       mode: agent.profile?.mode,
       symbol: agent.profile?.symbol,
       hasPosition: !!agent.pos,
+      aggressiveness: agent.profile?.aggressiveness ?? null,
     }));
   }
 }
