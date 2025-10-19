@@ -312,7 +312,11 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     async refetch(limit, attempt) {
       const baseLimit = Math.max(300, minBars15m);
       const computedLimit = Math.max(limit, baseLimit + attempt * 10);
-      return getOHLCV(symbol, '15m', computedLimit, userId);
+      const preferWebSocket = attempt === 0;
+      return getOHLCV(symbol, '15m', computedLimit, userId, {
+        preferWebSocket,
+        allowSyntheticFallback: preferWebSocket,
+      });
     },
   });
 

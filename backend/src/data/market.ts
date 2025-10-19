@@ -533,7 +533,18 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
   }
 }
 
-export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: string) {
+export type GetOhlcvOptions = {
+  preferWebSocket?: boolean;
+  allowSyntheticFallback?: boolean;
+};
+
+export async function getOHLCV(
+  symbol: string,
+  tf = '1h',
+  limit = 300,
+  userId?: string,
+  options?: GetOhlcvOptions,
+) {
   if (UNIT_TEST_MODE) {
     const now = Date.now();
     const out: number[][] = [];
@@ -554,13 +565,15 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
   const cfg = getConfig();
   const { credentials: userCredentials } = await fetchUserCredentialsSafe(userId);
   const exchangeHint = userCredentials?.exchange || cfg.EXCHANGE_ID;
-  const preferBinanceWs = isBinanceExchange(exchangeHint);
+  const preferWs = options?.preferWebSocket ?? true;
+  const preferBinanceWs = preferWs && isBinanceExchange(exchangeHint);
   const seedKey = binanceSeedKey(symbol, tf);
   const warmKey = warmupStateKey(symbol, tf);
   let seededViaRest: number[][] | null = null;
 
   let wsData: number[][] | null = null;
   let subscribedToWs = false;
+  const allowSyntheticFallback = options?.allowSyntheticFallback ?? true;
 
   if (preferBinanceWs && shouldUseWebsocketForTimeframe(tf)) {
     try {
@@ -679,7 +692,8 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
     }
   }
   // Final fallback for Binance: synthesize stable OHLCV using last known ticker
-  if (preferBinanceWs) {
+  let syntheticPrepared: number[][] | null = null;
+  if (preferBinanceWs && allowSyntheticFallback) {
     try {
       // Use ticker from WS (may be null); fallback to 0
       const { getTickerFromWebSocket } = await import('../services/binanceWebSocket.js');
@@ -692,21 +706,27 @@ export async function getOHLCV(symbol: string, tf = '1h', limit = 300, userId?: 
         const ts = now - i * intervalMs;
         out.push([ts, last, last, last, last, 0]);
       }
-      const prepared = prepareOhlcvSeries(out, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-      maybeLogOhlcvDebug(symbol, tf, prepared);
+      syntheticPrepared = prepareOhlcvSeries(out, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+      maybeLogOhlcvDebug(symbol, tf, syntheticPrepared);
+    } catch {}
+  }
+  // Non-Binance exchanges or forced REST path: safe to use REST
+  try {
+    const restData = await fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials);
+    const preparedRest = prepareOhlcvSeries(restData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+    maybeLogOhlcvDebug(symbol, tf, preparedRest);
+    return preparedRest;
+  } catch (error) {
+    if (syntheticPrepared && allowSyntheticFallback) {
       setWarmupState(warmKey, {
         pending: false,
         fulfilled: false,
         lastError: 'synthetic_warmup',
       });
-      return prepared;
-    } catch {}
+      return syntheticPrepared;
+    }
+    throw error;
   }
-  // Non-Binance exchanges: safe to use REST
-  const restData = await fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials);
-  const preparedRest = prepareOhlcvSeries(restData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-  maybeLogOhlcvDebug(symbol, tf, preparedRest);
-  return preparedRest;
 }
 
 export async function computeCoreIndicators(symbol: string) {
