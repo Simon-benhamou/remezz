@@ -3,6 +3,7 @@ import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTim
 import { defaultCalibrationProfile, type CalibrationProfile } from './metaAdaptiveCalibration.js';
 import { getMarketContext, type MarketContextSnapshot, type PerpetualMetrics, type OnChainMetrics, type SentimentSnapshot, type WatchlistMeta } from '../../analytics/marketContext.js';
 import { detectMarketRegime, type MarketRegimeSignal } from '../regime/marketRegimeDetector.js';
+import { getPrediction as getPythonPrediction } from '../pythonPredictor.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
 const DECIMAL_SCALE = 1_000_000n;
@@ -136,6 +137,7 @@ type StrategyScoreResult = {
   penalties: string[];
   guardrail?: string | null;
   plan: AdaptiveStrategyPlan;
+  predictorFeatures: Record<string, number> | null;
 };
 
 export type AdaptiveSignal = StrategyScoreResult & {
@@ -277,6 +279,41 @@ function computeVolumeRatio(snap: TechnicalSnapshot): number {
   const ma = safeNumber((snap as any)?.volumeMA, 0);
   if (ma <= 0) return current > 0 ? 2.5 : 0;
   return clamp(current / ma, 0, 5);
+}
+
+function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number> | null {
+  const ema20 = safeNumber((snap as any)?.ema20, Number.NaN);
+  const ema50 = safeNumber((snap as any)?.ema50, Number.NaN);
+  const ema100 = safeNumber((snap as any)?.ema100, Number.NaN);
+  const ema200 = safeNumber((snap as any)?.ema200, Number.NaN);
+  const rsi14 = safeNumber((snap as any)?.rsi14, Number.NaN);
+  const atr14 = safeNumber((snap as any)?.atr14 ?? (snap as any)?.atrPct, Number.NaN);
+  const adx14 = safeNumber((snap as any)?.adx14, Number.NaN);
+  const ema20Slope = safeNumber((snap as any)?.ema20Slope, Number.NaN);
+  const volume = safeNumber((snap as any)?.volume, Number.NaN);
+  const volumeMA = safeNumber((snap as any)?.volumeMA, Number.NaN);
+
+  if (!Number.isFinite(volume) || !Number.isFinite(volumeMA) || volumeMA <= 0) {
+    return null;
+  }
+
+  const features: Record<string, number> = {
+    ema20,
+    ema50,
+    ema100,
+    ema200,
+    rsi14,
+    atr14,
+    adx14,
+    ema20Slope,
+    volumeRatio: volume / volumeMA,
+  };
+
+  if (Object.values(features).some(value => !Number.isFinite(value))) {
+    return null;
+  }
+
+  return features;
 }
 
 function computeDistancePct(price: number, level: number | null | undefined): number | null {
@@ -1017,6 +1054,10 @@ class MetaAdaptiveStrategyAgent {
         : new PreciseDecimal('1');
     const riskAdjustmentFactor = riskAdjustmentFactorBase.times(volatilityRiskMultiplier);
 
+    const predictorFeatures = process.env.DISABLE_PYTHON_PREDICTOR === 'true'
+      ? null
+      : buildPredictorFeatures(snap);
+
     const trendRiskBase = context.conflict
       ? '0.45'
       : context.alignmentScore >= 0.92
@@ -1119,7 +1160,15 @@ class MetaAdaptiveStrategyAgent {
       ),
     };
 
-    const familyScores: Array<{ family: StrategyFamily; score: number; confidence: number; bias: StrategyBias; reasons: string[]; plan: AdaptiveStrategyPlan }>
+    const familyScores: Array<{
+      family: StrategyFamily;
+      score: number;
+      confidence: number;
+      bias: StrategyBias;
+      reasons: string[];
+      plan: AdaptiveStrategyPlan;
+      predictorFeatures: Record<string, number> | null;
+    }>
       = [
         {
           family: 'trend',
@@ -1134,6 +1183,7 @@ class MetaAdaptiveStrategyAgent {
             ...context.reasons,
           ],
           plan: adjustedPlans.trend,
+          predictorFeatures,
         },
         {
           family: 'breakout',
@@ -1148,6 +1198,7 @@ class MetaAdaptiveStrategyAgent {
             ...context.reasons,
           ],
           plan: adjustedPlans.breakout,
+          predictorFeatures,
         },
         {
           family: 'mean_reversion',
@@ -1163,6 +1214,7 @@ class MetaAdaptiveStrategyAgent {
             `context_inverse=${contextInverse.toFixed(2)}`,
           ],
           plan: adjustedPlans.mean_reversion,
+          predictorFeatures,
         },
         {
           family: 'momentum',
@@ -1178,6 +1230,7 @@ class MetaAdaptiveStrategyAgent {
             ...context.reasons,
           ],
           plan: adjustedPlans.momentum,
+          predictorFeatures,
         },
       ];
 
@@ -1312,6 +1365,7 @@ class MetaAdaptiveStrategyAgent {
         penalties: penaltiesApplied,
         guardrail,
         plan: item.plan,
+        predictorFeatures: item.predictorFeatures,
       };
     });
 
@@ -1391,7 +1445,7 @@ class MetaAdaptiveStrategyAgent {
     };
   }
 
-  registerActiveTrade(params: {
+  async registerActiveTrade(params: {
     sessionId?: string | null;
     symbol: string;
     family: StrategyFamily;
@@ -1402,8 +1456,42 @@ class MetaAdaptiveStrategyAgent {
     stopDistance: number;
     plan: AdaptiveStrategyPlan;
     side?: StrategyBias;
-  }): void {
+    predictorFeatures?: Record<string, number> | null;
+  }): Promise<void> {
     if (!params.sessionId || !params.token) return;
+
+    let predictorDecision: StrategyBias = 'both';
+    // The Python predictor (python/predict_service.py) loads the persisted XGBoost
+    // model and scores the latest indicator snapshot. A bullish prediction (1)
+    // permits long-biased strategies, whereas a bearish prediction (0) permits
+    // shorts. Updating the model means re-running `npm run train-model`, which
+    // refreshes python/xgboost_direction.model and python/features.txt – the
+    // agent picks up the new artefacts on the next process spawn.
+    if (params.predictorFeatures && process.env.DISABLE_PYTHON_PREDICTOR !== 'true') {
+      try {
+        const raw = await getPythonPrediction(params.predictorFeatures);
+        predictorDecision = raw === 1 ? 'long' : 'short';
+      } catch (error) {
+        if (process.env.UNIT_TEST_MODE !== 'true') {
+          console.warn('python predictor failure during trade registration', error);
+        }
+      }
+    }
+
+    const intendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
+    if ((predictorDecision === 'long' && intendedSide === 'short') || (predictorDecision === 'short' && intendedSide === 'long')) {
+      console.log(JSON.stringify({
+        level: 'info',
+        event: 'adaptive_trade_blocked_by_predictor',
+        symbol: params.symbol,
+        sessionId: params.sessionId ?? null,
+        token: params.token,
+        predictorDecision,
+        intendedSide,
+      }));
+      return;
+    }
+
     const qty = new PreciseDecimal(params.qty ?? 0);
     const entryPrice = new PreciseDecimal(params.entryPrice ?? 0);
     const stopDistance = new PreciseDecimal(params.stopDistance ?? 0).abs();
@@ -1429,6 +1517,16 @@ class MetaAdaptiveStrategyAgent {
       trailingPolicy: params.plan.trailingPolicy ?? null,
     });
     this.activeTrades.set(params.sessionId, queue);
+
+    console.log(JSON.stringify({
+      level: 'info',
+      event: 'adaptive_trade_registered',
+      symbol: params.symbol,
+      sessionId: params.sessionId ?? null,
+      token: params.token,
+      predictorDecision,
+      intendedSide,
+    }));
   }
 
   registerOutcome(params: {

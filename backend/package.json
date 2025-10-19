@@ -23,7 +23,8 @@
     "monitor:start": "tsx scripts/agent-performance-monitor.ts start",
     "monitor:once": "tsx scripts/agent-performance-monitor.ts once",
     "monitor:stop": "tsx scripts/agent-performance-monitor.ts stop",
-    "monitor:integrated": "tsx scripts/integrated-performance-monitor.ts"
+    "monitor:integrated": "tsx scripts/integrated-performance-monitor.ts",
+    "train-model": "python3 python/ccxt_xgboost_module.py"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",

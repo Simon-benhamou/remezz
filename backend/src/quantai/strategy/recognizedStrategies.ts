@@ -41,6 +41,7 @@ export type RecognizedStrategySignal = {
       contextAlignmentThreshold: number;
       adxThreshold: number;
     } | null;
+    predictorFeatures?: Record<string, number> | null;
   };
 };
 
@@ -126,6 +127,7 @@ function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
             adxThreshold: signal.plan.trailingPolicy.adxThreshold.toNumber(),
           }
         : null,
+      predictorFeatures: signal.predictorFeatures,
     },
   };
 }
@@ -159,7 +161,7 @@ export function evaluateRecognizedStrategies(
     .sort((a, b) => b.meta!.score - a.meta!.score);
 }
 
-export function registerAdaptiveTradeEntry(params: {
+export async function registerAdaptiveTradeEntry(params: {
   sessionId?: string | null;
   symbol: string;
   signal: RecognizedStrategySignal | null;
@@ -173,7 +175,7 @@ export function registerAdaptiveTradeEntry(params: {
   passiveOffsetBps?: number | null;
   fallbackLatencyMs?: number | null;
   executionMode?: 'market' | 'limit' | 'twap';
-}): void {
+}): Promise<void> {
   if (!params.signal || !params.signal.meta) return;
   const planRiskPct = new PreciseDecimal(params.signal.meta.riskPct ?? '0');
   const stopAtrMult = new PreciseDecimal(params.signal.meta.stopAtrMult ?? '1');
@@ -183,7 +185,7 @@ export function registerAdaptiveTradeEntry(params: {
   const medianIndex = tpList.length > 1 ? 1 : 0;
   const medianTakeProfitR = new PreciseDecimal(tpList[medianIndex] ?? '1');
   const trailingMeta = params.signal.meta.trailingPolicy ?? null;
-  metaAdaptiveStrategyAgent.registerActiveTrade({
+  await metaAdaptiveStrategyAgent.registerActiveTrade({
     sessionId: params.sessionId,
     symbol: params.symbol,
     family: params.signal.id === 'classic_trend_following'
@@ -218,6 +220,7 @@ export function registerAdaptiveTradeEntry(params: {
         : null,
     },
     side: params.signal.bias,
+    predictorFeatures: params.signal.meta.predictorFeatures ?? null,
   });
 
   const executionMode = params.executionMode ?? params.signal.meta.executionMode ?? 'market';
