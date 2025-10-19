@@ -1,6 +1,9 @@
 import { TechnicalSnapshot } from '../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 import { defaultCalibrationProfile, type CalibrationProfile } from './metaAdaptiveCalibration.js';
+import { getMarketContext, type MarketContextSnapshot, type PerpetualMetrics, type OnChainMetrics, type SentimentSnapshot, type WatchlistMeta } from '../../analytics/marketContext.js';
+import { detectMarketRegime, type MarketRegimeSignal } from '../regime/marketRegimeDetector.js';
+import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 
@@ -94,15 +97,13 @@ export class PreciseDecimal {
   }
 }
 
-export type StrategyFamily = 'trend' | 'breakout' | 'mean_reversion' | 'momentum';
+export type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
 type StrategyId =
   | 'classic_trend_following'
   | 'breakout_retest'
   | 'bollinger_mean_reversion'
   | 'momentum_scanner_focus';
-
-type StrategyBias = 'long' | 'short' | 'both';
 
 export type AdaptiveTrailingPolicy = {
   breakevenArmR: PreciseDecimal;
@@ -166,6 +167,16 @@ export type AdaptiveEvaluationInput = {
     source?: string | null;
     message?: string | null;
     expiresAt?: number | null;
+  } | null;
+  derivatives?: PerpetualMetrics | null;
+  onChain?: OnChainMetrics | null;
+  sentiment?: SentimentSnapshot | null;
+  watchlist?: WatchlistMeta | null;
+  ranking?: {
+    change24hPct?: number | null;
+    volumeUsd?: number | null;
+    volatilityPct?: number | null;
+    momentumScore?: number | null;
   } | null;
 };
 
@@ -374,11 +385,14 @@ class MetaAdaptiveStrategyAgent {
   private calibrationProfile: CalibrationProfile = defaultCalibrationProfile;
   private readonly sessionCapital = new Map<string, PreciseDecimal>();
   private readonly tradeLedgers = new Map<string, PreciseDecimal>();
+  private readonly assetRankings = new Map<string, { score: number; updatedAt: number }>();
+  private readonly symbolMeta = new Map<string, { firstSeen: number; lastSeen: number; volumeSurge: number; rankingScore: number; rankHint: number | null }>();
   private readonly defaultCapital = new PreciseDecimal('1000');
   private readonly desiredProfitUsd = new PreciseDecimal('30');
   private readonly defaultFeeBps = new PreciseDecimal('4');
   private readonly hundred = new PreciseDecimal('100');
   private readonly tenThousand = new PreciseDecimal('10000');
+  private readonly majorBases = new Set(['BTC', 'ETH']);
   private rngState = 0x9e3779b9n;
   private tokenCounter = 0n;
 
@@ -496,10 +510,212 @@ class MetaAdaptiveStrategyAgent {
     return { net, feeUsd };
   }
 
+  private isMajorSymbol(symbol: string): boolean {
+    if (!symbol) return false;
+    const base = symbol.includes('/') ? symbol.split('/')[0] : symbol;
+    return this.majorBases.has(base.toUpperCase());
+  }
+
+  private computeVolumeSurge(snap: TechnicalSnapshot): number {
+    const vol = Number((snap as any)?.volume ?? NaN);
+    const baseline = Number((snap as any)?.volumeMA ?? NaN);
+    if (!Number.isFinite(vol) || !Number.isFinite(baseline) || baseline <= 0) {
+      return 0;
+    }
+    return clamp(vol / baseline - 1, 0, 4);
+  }
+
+  private updateSymbolMeta(symbol: string, snap: TechnicalSnapshot, watchlist?: WatchlistMeta | null): { isNew: boolean; ageMs: number; volumeSurge: number; rankHint: number | null } {
+    const now = Date.now();
+    const key = symbol.toUpperCase();
+    const entry = this.symbolMeta.get(key) ?? {
+      firstSeen: now,
+      lastSeen: now,
+      volumeSurge: 0,
+      rankingScore: 0,
+      rankHint: watchlist?.rankHint ?? null,
+    };
+    entry.lastSeen = now;
+    if (watchlist?.addedAt != null && Number.isFinite(watchlist.addedAt)) {
+      entry.firstSeen = Math.min(entry.firstSeen, Number(watchlist.addedAt));
+    }
+    if (watchlist?.firstSeenAt != null && Number.isFinite(watchlist.firstSeenAt)) {
+      entry.firstSeen = Math.min(entry.firstSeen, Number(watchlist.firstSeenAt));
+    }
+    entry.rankHint = watchlist?.rankHint != null ? watchlist.rankHint : entry.rankHint;
+    const surge = this.computeVolumeSurge(snap);
+    if (watchlist?.volumeSurgeHint != null && Number.isFinite(watchlist.volumeSurgeHint)) {
+      entry.volumeSurge = Math.max(surge, Number(watchlist.volumeSurgeHint));
+    } else {
+      entry.volumeSurge = surge;
+    }
+    this.symbolMeta.set(key, entry);
+    const ageMs = Math.max(0, now - entry.firstSeen);
+    const isNew = watchlist?.isNew != null ? !!watchlist.isNew : ageMs < 4 * 60 * 60 * 1000;
+    return { isNew, ageMs, volumeSurge: entry.volumeSurge, rankHint: entry.rankHint ?? null };
+  }
+
+  private cleanupRankings(now: number): void {
+    const expiry = 15 * 60_000;
+    for (const [symbol, value] of this.assetRankings.entries()) {
+      if (now - value.updatedAt > expiry) {
+        this.assetRankings.delete(symbol);
+      }
+    }
+  }
+
+  private updateAssetRanking(symbol: string, factors: { change24hPct?: number | null; volumeUsd?: number | null; volatilityPct?: number | null; momentumScore?: number | null; fundingRate?: number | null }): { score: number; rank: number | null } {
+    const now = Date.now();
+    this.cleanupRankings(now);
+    const change = Number(factors.change24hPct ?? 0);
+    const changeScore = clamp(Math.abs(change) / 12, 0, 1);
+    const directionBonus = clamp(change / 18, -0.5, 0.5);
+    const volumeUsd = Number(factors.volumeUsd ?? 0);
+    const volumeScore = volumeUsd > 0 ? clamp(Math.log10(volumeUsd + 1) / 10, 0, 1) : 0;
+    const volatilityScore = clamp(Number(factors.volatilityPct ?? 0) / 6, 0, 1);
+    const momentumScore = clamp(Number(factors.momentumScore ?? 0), 0, 1);
+    const fundingScore = clamp(Math.abs(Number(factors.fundingRate ?? 0)) / 0.05, 0, 0.2);
+    const raw = clamp(
+      changeScore * 0.3 +
+        Math.max(0, directionBonus) * 0.1 +
+        volumeScore * 0.35 +
+        volatilityScore * 0.15 +
+        momentumScore * 0.1 +
+        fundingScore,
+      0,
+      1.5,
+    );
+    const score = Number(raw.toFixed(6));
+    const key = symbol.toUpperCase();
+    this.assetRankings.set(key, { score, updatedAt: now });
+    const meta = this.symbolMeta.get(key);
+    if (meta) {
+      meta.rankingScore = score;
+      this.symbolMeta.set(key, meta);
+    }
+    const sorted = Array.from(this.assetRankings.entries()).sort((a, b) => b[1].score - a[1].score);
+    const rankIndex = sorted.findIndex(([s]) => s === key);
+    const rank = rankIndex === -1 ? null : rankIndex + 1;
+    return { score, rank };
+  }
+
+  private computeRankingMultiplier(rank: number | null, rankingScore: number, meta: { isNew: boolean; ageMs: number; volumeSurge: number; rankHint: number | null }): number {
+    let multiplier = 1;
+    if (rank != null) {
+      if (rank <= 3) multiplier *= 1.12;
+      else if (rank <= 10) multiplier *= 1.05;
+      else if (rank > 15) multiplier *= 0.75;
+      else if (rank > 10) multiplier *= 0.85;
+    }
+    if (Number.isFinite(rankingScore) && rankingScore < 0.2) {
+      multiplier *= 0.9;
+    }
+    if (meta.rankHint != null) {
+      if (meta.rankHint <= 5) multiplier *= 1.1;
+      else if (meta.rankHint > 12) multiplier *= 0.85;
+    }
+    if (meta.isNew) {
+      multiplier *= 1.1;
+    }
+    if (meta.volumeSurge > 0) {
+      multiplier *= 1 + clamp(meta.volumeSurge / 4, 0, 0.2);
+    }
+    return clamp(multiplier, 0.5, 1.35);
+  }
+
+  private computeDirectionalMultiplier(bias: StrategyBias, signal: number): number {
+    const normalized = clamp(signal, -1, 1);
+    if (bias === 'both') {
+      return 1 + Math.abs(normalized) * 0.05;
+    }
+    const alignment = bias === 'long' ? normalized : -normalized;
+    if (alignment >= 0) {
+      return clamp(1 + alignment * 0.2, 0.85, 1.3);
+    }
+    return clamp(1 + alignment * 0.4, 0.4, 1);
+  }
+
+  private computeDerivativeSignal(metrics?: PerpetualMetrics | null): { bias: number; volatility: number; notes: string[] } {
+    if (!metrics) return { bias: 0, volatility: 0, notes: [] };
+    let bias = 0;
+    const notes: string[] = [];
+    if (metrics.fundingRate != null && Number.isFinite(metrics.fundingRate)) {
+      const funding = Number(metrics.fundingRate);
+      const fundingBias = clamp(funding / 0.015, -1.2, 1.2);
+      bias += fundingBias * 0.6;
+      notes.push(`funding=${funding.toFixed(4)}`);
+    }
+    if (metrics.longShortRatio != null && Number.isFinite(metrics.longShortRatio) && metrics.longShortRatio > 0) {
+      const ratio = Number(metrics.longShortRatio);
+      const ratioBias = clamp(Math.log(ratio), -1, 1);
+      bias += ratioBias * 0.4;
+      notes.push(`ls_ratio=${ratio.toFixed(2)}`);
+    }
+    if (metrics.openInterestChangePct != null && Number.isFinite(metrics.openInterestChangePct)) {
+      const oi = Number(metrics.openInterestChangePct);
+      const oiBias = clamp(oi / 35, -0.6, 0.6);
+      bias += oiBias * 0.25;
+      notes.push(`oi_change=${oi.toFixed(1)}%`);
+    }
+    const volatility = clamp(Math.abs(Number(metrics.openInterestChangePct ?? 0)) / 50, 0, 0.6);
+    return { bias: clamp(bias, -1.5, 1.5), volatility, notes };
+  }
+
+  private computeOnChainSignal(metrics?: OnChainMetrics | null): { bias: number; notes: string[] } {
+    if (!metrics) return { bias: 0, notes: [] };
+    let bias = 0;
+    const notes: string[] = [];
+    if (metrics.exchangeNetflowUsd != null && Number.isFinite(metrics.exchangeNetflowUsd)) {
+      const flow = Number(metrics.exchangeNetflowUsd);
+      const flowBias = clamp(-flow / 50_000_000, -0.6, 0.6);
+      bias += flowBias * 0.6;
+      notes.push(`netflow=${Math.round(flow)}`);
+    }
+    if (metrics.stablecoinInflowsUsd != null && Number.isFinite(metrics.stablecoinInflowsUsd)) {
+      const inflow = Number(metrics.stablecoinInflowsUsd);
+      const inflowBias = clamp(inflow / 40_000_000, 0, 0.7);
+      bias += inflowBias * 0.4;
+      notes.push(`stable_in=${Math.round(inflow)}`);
+    }
+    if (metrics.activeAddresses != null && Number.isFinite(metrics.activeAddresses)) {
+      const activity = Number(metrics.activeAddresses);
+      const activityBias = clamp((activity - 500_000) / 1_500_000, -0.3, 0.3);
+      bias += activityBias * 0.2;
+      notes.push(`active_addr=${Math.round(activity)}`);
+    }
+    return { bias: clamp(bias, -1.2, 1.2), notes };
+  }
+
+  private computeSentimentSignal(sentiment?: SentimentSnapshot | null): { bias: number; conviction: number; notes: string[] } {
+    if (!sentiment) return { bias: 0, conviction: 0, notes: [] };
+    const label = sentiment.label;
+    const direction = label === 'bullish' ? 1 : label === 'bearish' ? -1 : 0;
+    const score = clamp((Number(sentiment.score ?? 0.5) - 0.5) * 2, -1, 1);
+    const confidence = clamp(Number(sentiment.confidence ?? 0.5), 0, 1);
+    const bias = clamp((direction + score) * confidence, -1, 1);
+    const notes = [`sentiment=${label}`, `sentiment_score=${Number(sentiment.score ?? 0.5).toFixed(2)}`];
+    return { bias, conviction: confidence, notes };
+  }
+
+  private estimateChange24h(snap: TechnicalSnapshot): number {
+    const last = Number((snap as any)?.last ?? NaN);
+    const ema = Number((snap as any)?.ema50 ?? NaN);
+    if (!Number.isFinite(last) || !Number.isFinite(ema) || ema === 0) {
+      return 0;
+    }
+    return ((last - ema) / ema) * 100;
+  }
+
   private computeExplorationProbability(
     symbol: string,
     candidate: StrategyScoreResult,
     context: { atr15mPct: number; atr1hPct: number; realizedVol: number; hurst: number },
+    extras: {
+      watchlist: { isNew: boolean; volumeSurge: number; rank: number | null; rankingScore: number };
+      regime: MarketRegimeSignal;
+      derivativeVolatility: number;
+      combinedBias: number;
+    },
   ): number {
     const base = this.epsilonBase;
     const symbolStats = this.stats.get(symbol);
@@ -528,7 +744,32 @@ class MetaAdaptiveStrategyAgent {
       epsilon += base * 0.05;
     }
 
-    epsilon = clamp(epsilon, this.calibrationProfile.explorationFloor, 0.4);
+    if (extras.watchlist.isNew) {
+      epsilon += base * 0.25;
+    }
+    if (extras.watchlist.volumeSurge > 0) {
+      epsilon += base * clamp(extras.watchlist.volumeSurge / 4, 0, 0.2);
+    }
+    if (extras.watchlist.rank != null) {
+      if (extras.watchlist.rank <= 5) {
+        epsilon *= 0.9;
+      } else if (extras.watchlist.rank > 12) {
+        epsilon += base * 0.1;
+      }
+    }
+    if (extras.regime.dominant === 'high_vol') {
+      epsilon += base * 0.08;
+    } else if (extras.regime.dominant === 'range') {
+      epsilon *= 0.95;
+    }
+    if (extras.derivativeVolatility > 0.4) {
+      epsilon *= 0.85;
+    }
+    if (Math.abs(extras.combinedBias) > 0.8) {
+      epsilon *= 0.9;
+    }
+
+    epsilon = clamp(epsilon, this.calibrationProfile.explorationFloor, 0.45);
     return epsilon;
   }
 
@@ -553,6 +794,36 @@ class MetaAdaptiveStrategyAgent {
     const ema100 = safeNumber(snap.ema100, price);
     const ema200 = safeNumber(snap.ema200, price);
     const realizedVol = safeNumber(snap.realizedVol, atr15mPct);
+
+    const externalContext: MarketContextSnapshot | null = getMarketContext(input.symbol) ?? null;
+    const derivatives = input.derivatives ?? externalContext?.derivatives ?? null;
+    const onChain = input.onChain ?? externalContext?.onChain ?? null;
+    const sentiment = input.sentiment ?? externalContext?.sentiment ?? null;
+    const watchlistMeta = input.watchlist ?? externalContext?.watchlist ?? null;
+    const watchlistState = this.updateSymbolMeta(input.symbol, snap, watchlistMeta);
+    const isMajor = this.isMajorSymbol(input.symbol);
+
+    const regimeSignal = detectMarketRegime({
+      snap,
+      atr15mPct,
+      atr1h: input.atr1h ?? (snap as any)?.atr14_1h ?? null,
+      atr4h: input.atr4h ?? (snap as any)?.atr14_4h ?? null,
+      realizedVol,
+      hurst,
+      isMajor,
+      derivatives,
+      onChain,
+    });
+
+    const derivativeSignal = this.computeDerivativeSignal(derivatives);
+    const onChainSignal = this.computeOnChainSignal(onChain);
+    const sentimentSignal = this.computeSentimentSignal(sentiment);
+    const combinedBias = clamp(
+      derivativeSignal.bias + onChainSignal.bias + sentimentSignal.bias,
+      -1.5,
+      1.5,
+    );
+    const macroNotes = [...derivativeSignal.notes, ...onChainSignal.notes, ...sentimentSignal.notes, ...regimeSignal.notes];
 
     const emaAlignmentBull = ema20 >= ema50 && ema50 >= ema100 && ema100 >= ema200;
     const emaAlignmentBear = ema20 <= ema50 && ema50 <= ema100 && ema100 <= ema200;
@@ -622,6 +893,19 @@ class MetaAdaptiveStrategyAgent {
     const penalties: string[] = [];
     if (fundamentalNegative) {
       penalties.push('fundamental_negative');
+    }
+    if (sentimentSignal.bias <= -0.4) {
+      penalties.push('sentiment_bearish');
+    } else if (sentimentSignal.bias >= 0.4) {
+      penalties.push('sentiment_bullish');
+    }
+    if (derivativeSignal.bias <= -0.6) {
+      penalties.push('derivatives_bias_short');
+    } else if (derivativeSignal.bias >= 0.6) {
+      penalties.push('derivatives_bias_long');
+    }
+    if (regimeSignal.volatilityLevel === 'extreme') {
+      penalties.push('regime_extreme_volatility');
     }
     let microPenalty = 0;
     if (Number.isFinite(spreadBps) && spreadBps > liquidityTier.maxSpreadBps) {
@@ -705,17 +989,33 @@ class MetaAdaptiveStrategyAgent {
       1,
     );
 
+    const rankingInput = input.ranking ?? null;
+    const ranking = this.updateAssetRanking(input.symbol, {
+      change24hPct: rankingInput?.change24hPct ?? this.estimateChange24h(snap),
+      volumeUsd: rankingInput?.volumeUsd ?? (Number.isFinite(volume24hUsd) ? Number(volume24hUsd) : Number((snap as any)?.volume24h ?? 0)),
+      volatilityPct: rankingInput?.volatilityPct ?? realizedVol,
+      momentumScore: rankingInput?.momentumScore ?? scoreMomentum,
+      fundingRate: derivatives?.fundingRate ?? null,
+    });
+    const rankingMultiplier = this.computeRankingMultiplier(ranking.rank, ranking.score, watchlistState);
+
     const capital = this.resolveCapital(input.sessionId ?? null, input.accountBalanceUsd ?? null);
     const desiredProfit = input.desiredProfitUsd != null
       ? new PreciseDecimal(input.desiredProfitUsd)
       : this.desiredProfitUsd;
 
     const needsRiskReduction = context.alignmentScore < 0.65 || adx < 14;
-    const riskAdjustmentFactor = context.conflict
+    const volatilityRiskMultiplier = regimeSignal.volatilityLevel === 'extreme'
+      ? new PreciseDecimal('0.65')
+      : regimeSignal.volatilityLevel === 'high'
+        ? new PreciseDecimal('0.85')
+        : new PreciseDecimal('1');
+    const riskAdjustmentFactorBase = context.conflict
       ? new PreciseDecimal('0.4')
       : needsRiskReduction
         ? new PreciseDecimal('0.5')
         : new PreciseDecimal('1');
+    const riskAdjustmentFactor = riskAdjustmentFactorBase.times(volatilityRiskMultiplier);
 
     const trendRiskBase = context.conflict
       ? '0.45'
@@ -827,6 +1127,7 @@ class MetaAdaptiveStrategyAgent {
           confidence: scoreTrend,
           bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
           reasons: [
+            `regime=${regimeSignal.dominant}`,
             `adx=${adx.toFixed(2)}`,
             `trend_strength=${trendStrength.toFixed(2)}`,
             emaAlignmentBull ? 'ema_bull_stack' : emaAlignmentBear ? 'ema_bear_stack' : 'ema_mixed',
@@ -840,6 +1141,7 @@ class MetaAdaptiveStrategyAgent {
           confidence: scoreBreakout,
           bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
           reasons: [
+            `regime=${regimeSignal.dominant}`,
             `compression=${compressionScore.toFixed(2)}`,
             `volume_ratio=${volumeRatio.toFixed(2)}`,
             `cmf=${cmf.toFixed(3)}`,
@@ -853,6 +1155,7 @@ class MetaAdaptiveStrategyAgent {
           confidence: scoreMean,
           bias: 'both',
           reasons: [
+            `regime=${regimeSignal.dominant}`,
             `rsi=${rsi.toFixed(1)}`,
             `range_bias=${srBias}`,
             distSupport != null ? `dist_support=${distSupport.toFixed(2)}%` : 'support_missing',
@@ -867,6 +1170,7 @@ class MetaAdaptiveStrategyAgent {
           confidence: scoreMomentum,
           bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
           reasons: [
+            `regime=${regimeSignal.dominant}`,
             `trend=${safeNumber((snap as any)?.trend, 0).toFixed(2)}`,
             `trend_strength=${trendStrength.toFixed(2)}`,
             `volume_ratio=${volumeRatio.toFixed(2)}`,
@@ -881,7 +1185,14 @@ class MetaAdaptiveStrategyAgent {
 
     let weighted: StrategyScoreResult[] = familyScores.map(item => {
       const penaltiesApplied = [...penalties];
+      const reasonsAugmented = [...item.reasons, ...macroNotes];
+      if (ranking.rank != null) reasonsAugmented.push(`rank=${ranking.rank}`);
+      reasonsAugmented.push(`macro_bias=${combinedBias.toFixed(2)}`);
+      reasonsAugmented.push(`volatility=${regimeSignal.volatilityLevel}`);
+      if (watchlistState.isNew) reasonsAugmented.push('watchlist_new');
+
       let effectiveScore = item.score * (1 - microPenalty * 0.3);
+
       if (context.conflict && item.family !== 'mean_reversion') {
         effectiveScore *= 0.45;
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
@@ -930,8 +1241,43 @@ class MetaAdaptiveStrategyAgent {
           penaltiesApplied.push('fundamental_negative');
         }
       }
-      const adjustment = calibrationAdjustments[item.family] ?? 0;
-      effectiveScore = clamp(effectiveScore + adjustment, 0, 1);
+      if (regimeSignal.disableFamilies.includes(item.family)) {
+        effectiveScore = 0;
+        if (!penaltiesApplied.includes('regime_disabled')) {
+          penaltiesApplied.push('regime_disabled');
+        }
+      }
+      if (effectiveScore > 0) {
+        const regimeMultiplier = regimeSignal.familyMultipliers[item.family] ?? 1;
+        if (regimeMultiplier !== 1) {
+          effectiveScore *= regimeMultiplier;
+          reasonsAugmented.push(`regime_mult=${regimeMultiplier.toFixed(2)}`);
+        }
+        const directionalMultiplier = this.computeDirectionalMultiplier(item.bias, combinedBias);
+        if (directionalMultiplier !== 1) {
+          effectiveScore *= directionalMultiplier;
+          reasonsAugmented.push(`directional_mult=${directionalMultiplier.toFixed(2)}`);
+        }
+        if (rankingMultiplier !== 1) {
+          effectiveScore *= rankingMultiplier;
+          reasonsAugmented.push(`ranking_mult=${rankingMultiplier.toFixed(2)}`);
+        }
+        if (derivativeSignal.volatility > 0.35 && item.family === 'mean_reversion') {
+          effectiveScore *= 0.75;
+          penaltiesApplied.push('perp_volatility_suppression');
+        }
+        if (sentimentSignal.conviction > 0.7 && Math.abs(sentimentSignal.bias) > 0.4) {
+          const sentimentMultiplier = this.computeDirectionalMultiplier(item.bias, sentimentSignal.bias);
+          if (sentimentMultiplier !== 1) {
+            effectiveScore *= sentimentMultiplier;
+            reasonsAugmented.push(`sentiment_mult=${sentimentMultiplier.toFixed(2)}`);
+          }
+        }
+      }
+
+      const calibrationAdjustment = calibrationAdjustments[item.family] ?? 0;
+      effectiveScore = clamp(effectiveScore + calibrationAdjustment, 0, 1);
+
       if (item.family === 'trend' && item.score < 0.35) {
         penaltiesApplied.push('trend_score_low');
       }
@@ -939,6 +1285,7 @@ class MetaAdaptiveStrategyAgent {
         effectiveScore *= 0.7;
         penaltiesApplied.push('volume_low');
       }
+
       const guardrailBase = this.guardrailReason(input.symbol, item.family);
       const guardrail = fundamentalNegative
         ? guardrailBase
@@ -961,7 +1308,7 @@ class MetaAdaptiveStrategyAgent {
         score: clamp(effectiveScore, 0, 1),
         confidence,
         active,
-        reasons: item.reasons,
+        reasons: reasonsAugmented,
         penalties: penaltiesApplied,
         guardrail,
         plan: item.plan,
@@ -1021,6 +1368,17 @@ class MetaAdaptiveStrategyAgent {
           input.symbol,
           ordered,
           { atr15mPct, atr1hPct, realizedVol, hurst },
+          {
+            watchlist: {
+              isNew: watchlistState.isNew,
+              volumeSurge: watchlistState.volumeSurge,
+              rank: ranking.rank ?? null,
+              rankingScore: ranking.score,
+            },
+            regime: regimeSignal,
+            derivativeVolatility: derivativeSignal.volatility,
+            combinedBias,
+          },
         );
     const enrichedSignals = ordered.map(signal => ({
       ...signal,
@@ -1344,6 +1702,12 @@ class MetaAdaptiveStrategyAgent {
     symbol: string,
     ordered: StrategyScoreResult[],
     context: { atr15mPct: number; atr1hPct: number; realizedVol: number; hurst: number },
+    extras: {
+      watchlist: { isNew: boolean; volumeSurge: number; rank: number | null; rankingScore: number };
+      regime: MarketRegimeSignal;
+      derivativeVolatility: number;
+      combinedBias: number;
+    },
   ): AdaptiveSignal | null {
     if (!ordered.length) return null;
     const available = ordered.filter(signal => signal.active).length > 0
@@ -1353,7 +1717,7 @@ class MetaAdaptiveStrategyAgent {
     let exploration = false;
     const candidate = available[0] ?? ordered[0];
     const epsilon = candidate
-      ? this.computeExplorationProbability(symbol, candidate, context)
+      ? this.computeExplorationProbability(symbol, candidate, context, extras)
       : this.epsilonBase;
     if (this.nextRandom() < epsilon) {
       exploration = true;

@@ -3,6 +3,7 @@ import { TechnicalSnapshot } from '../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 import { recordOpsEvent } from '../../monitor/ops.js';
 import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
+import type { PerpetualMetrics, OnChainMetrics, SentimentSnapshot, WatchlistMeta } from '../../analytics/marketContext.js';
 
 type StrategyBias = 'long' | 'short' | 'both';
 
@@ -68,6 +69,16 @@ type EvaluateOptions = {
     source?: string | null;
     message?: string | null;
     expiresAt?: number | null;
+  } | null;
+  derivatives?: PerpetualMetrics | null;
+  onChain?: OnChainMetrics | null;
+  sentiment?: SentimentSnapshot | null;
+  watchlist?: WatchlistMeta | null;
+  ranking?: {
+    change24hPct?: number | null;
+    volumeUsd?: number | null;
+    volatilityPct?: number | null;
+    momentumScore?: number | null;
   } | null;
 };
 
@@ -136,6 +147,11 @@ export function evaluateRecognizedStrategies(
     accountBalanceUsd: opts.accountBalanceUsd ?? null,
     desiredProfitUsd: opts.desiredProfitUsd ?? null,
     fundamental: opts.fundamental ?? null,
+    derivatives: opts.derivatives ?? null,
+    onChain: opts.onChain ?? null,
+    sentiment: opts.sentiment ?? null,
+    watchlist: opts.watchlist ?? null,
+    ranking: opts.ranking ?? null,
   });
 
   return evaluation.signals
