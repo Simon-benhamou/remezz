@@ -133,6 +133,9 @@ function serializeCircuitBreakerState(state: CircuitBreakerState) {
     cooldownUntil: state.cooldownUntil ? state.cooldownUntil.toISOString() : null,
     lastTradeDay: state.lastTradeDay,
     dayStartAt: state.dayStartAt ? state.dayStartAt.toISOString() : null,
+    dailyLossActive: state.dailyLossActive,
+    dailyLossTriggeredAt: state.dailyLossTriggeredAt ? state.dailyLossTriggeredAt.toISOString() : null,
+    dailyLossRecoveryWinsRemaining: state.dailyLossRecoveryWinsRemaining,
   };
 }
 
@@ -159,6 +162,9 @@ function deserializeCircuitBreakerState(raw: any): CircuitBreakerState | null {
       ? Math.floor(Number((raw as any).lastTradeDay))
       : null,
     dayStartAt: toDate((raw as any).dayStartAt),
+    dailyLossActive: Boolean((raw as any).dailyLossActive),
+    dailyLossTriggeredAt: toDate((raw as any).dailyLossTriggeredAt),
+    dailyLossRecoveryWinsRemaining: Math.max(0, Math.floor(toNumber((raw as any).dailyLossRecoveryWinsRemaining, 0))),
   };
 }
 
