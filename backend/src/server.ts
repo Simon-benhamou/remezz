@@ -3,6 +3,7 @@ import http from "http";
 import express from "express";
 import cors from "cors";
 import { WebSocketServer } from "ws";
+import { configureLogging, createLogger } from "./utils/logger.js";
 import { getConfig } from "./utils/env.js";
 import { authMiddleware } from "./utils/security.js";
 import { router as authRouter } from "./routes/auth.js";
@@ -46,6 +47,10 @@ import {
 } from "./middleware/rateLimit.js";
 import { rehydrateActiveAgentSessions } from "./services/sessionRehydration.js";
 import { startSchedulerWorker } from "./services/schedulerJobService.js";
+
+const logLevel = configureLogging();
+const serverLogger = createLogger("server");
+serverLogger.debug("Logging initialized", { level: logLevel });
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")
@@ -153,7 +158,7 @@ startIntegratedMonitoring();
 startMarginMonitor();
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
 restoreAutoUniverseRetrySchedule().catch((error) => {
-  console.warn('⚠️ Failed to restore auto universe retry schedule:', error);
+  serverLogger.warn('⚠️ Failed to restore auto universe retry schedule:', error);
 });
 
 startSchedulerWorker();
@@ -167,7 +172,7 @@ async function runLeverageRefresh(startup = false) {
   try {
     await refreshLeverageConstraintInputs({ force: startup });
   } catch (error) {
-    console.error('⚠️ Failed to refresh leverage constraints:', error);
+    serverLogger.error('⚠️ Failed to refresh leverage constraints:', error);
   }
 }
 
@@ -179,23 +184,23 @@ if (process.env.LEVERAGE_CONSTRAINT_REFRESH_DISABLED !== 'true') {
 // Prime Binance WS early so UI/API has data immediately
 try {
   if (getConfig().EXCHANGE_ID.toLowerCase().includes('binance')) {
-    console.log('📡 Priming Binance WebSocket at server startup...');
+    serverLogger.info('📡 Priming Binance WebSocket at server startup...');
     getBinanceWebSocket();
   }
-} catch (e) { console.warn('WS prime failed:', e); }
+} catch (e) { serverLogger.warn('WS prime failed:', e); }
 
 // Start Smart Agent background job
-console.log('🤖 Starting Smart Agent background checker...');
+serverLogger.info('🤖 Starting Smart Agent background checker...');
 setInterval(async () => {
   try {
     await checkSmartOpportunities();
   } catch (error) {
-    console.error('❌ Smart Agent background job failed:', error);
+    serverLogger.error('❌ Smart Agent background job failed:', error);
   }
 }, 5 * 60 * 1000); // Check every 5 minutes
 
 await rehydrateActiveAgentSessions().catch((error) => {
-  console.error('❌ Failed to rehydrate active agent sessions during startup:', error);
+  serverLogger.error('❌ Failed to rehydrate active agent sessions during startup:', error);
 });
 
-server.listen(cfg.PORT, () => console.log(`[api] listening on :${cfg.PORT}`));
+server.listen(cfg.PORT, () => serverLogger.info(`[api] listening on :${cfg.PORT}`));

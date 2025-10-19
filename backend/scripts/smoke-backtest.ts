@@ -1,7 +1,12 @@
+import { configureLogging, createLogger } from '../src/utils/logger.js';
 import { getQuantAIConfig } from '../src/quantai/index.js';
 
+const level = configureLogging();
+const logger = createLogger('smoke-backtest');
+logger.debug('Initialized smoke backtest logger', { level });
+
 const cfg = getQuantAIConfig();
-console.log('Using exit cutLossR:', cfg.exits.earlyExit.cutLossR, 'tpRMultiples:', cfg.exits.tpRMultiples);
+logger.info('Using exit cutLossR:', cfg.exits.earlyExit.cutLossR, 'tpRMultiples:', cfg.exits.tpRMultiples);
 
 const startEquity = 10_000;
 const dailyReturns = [0.028, -0.012, 0.036, -0.009, 0.042];
@@ -36,8 +41,8 @@ const losses = dailyReturns.filter((r) => r < 0);
 const avgWin = wins.length ? wins.reduce((s, r) => s + r, 0) / wins.length : 0;
 const avgLoss = losses.length ? losses.reduce((s, r) => s + Math.abs(r), 0) / losses.length : 0;
 
-console.log('Smoke backtest metrics');
-console.log({
+logger.info('Smoke backtest metrics');
+logger.info({
   trades: dailyReturns.length,
   finalEquity: Number(finalEquity.toFixed(2)),
   CAGR: Number((cagr * 100).toFixed(2)),

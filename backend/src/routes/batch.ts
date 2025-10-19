@@ -3,8 +3,10 @@ import { z } from 'zod';
 import { requireLiveApiKeys } from '../middleware/requireApiKeys.js';
 import { fullAnalysis } from '../ai/analysis.js';
 import { getTicker } from '../data/market.js';
+import { createLogger } from '../utils/logger.js';
 
 const router = Router();
+const logger = createLogger('routes:batch');
 
 // Schema pour la requête batch
 const batchAnalysisSchema = z.object({
@@ -36,7 +38,7 @@ router.post('/trading-diagnostics', async (req, res) => {
   try {
     const { symbols, includeStrategy, includeSentiment, includeNews, forceRefresh } = batchAnalysisSchema.parse(req.body);
     
-    console.log(`[BATCH] Analyzing ${symbols.length} symbols: ${symbols.join(', ')}`);
+    logger.info(`[BATCH] Analyzing ${symbols.length} symbols: ${symbols.join(', ')}`);
     
     const results: CryptoSignal[] = [];
     const errors: string[] = [];
@@ -48,7 +50,7 @@ router.post('/trading-diagnostics', async (req, res) => {
       await new Promise(resolve => setTimeout(resolve, index * 100));
       
       try {
-        console.log(`[BATCH] Processing ${symbol}...`);
+        logger.debug(`[BATCH] Processing ${symbol}...`);
         
         // Récupérer les données de base (ticker + analyse technique)
         const [tickerData, analysisData] = await Promise.allSettled([
@@ -149,8 +151,8 @@ router.post('/trading-diagnostics', async (req, res) => {
         
         return cryptoSignal;
         
-      } catch (error: any) {
-        console.error(`[BATCH] Error processing ${symbol}:`, error.message);
+        } catch (error: any) {
+          logger.error(`[BATCH] Error processing ${symbol}:`, error.message);
         errors.push(`${symbol}: ${error.message}`);
         
         // Retourner un signal par défaut en cas d'erreur
@@ -178,7 +180,7 @@ router.post('/trading-diagnostics', async (req, res) => {
     // Trier par force du signal (plus forts en premier)
     const sortedResults = results.sort((a, b) => b.strength - a.strength);
     
-    console.log(`[BATCH] Completed analysis for ${symbols.length} symbols. API calls used: ${totalApiCalls}`);
+    logger.info(`[BATCH] Completed analysis for ${symbols.length} symbols. API calls used: ${totalApiCalls}`);
     
     res.json({
       success: true,
@@ -195,7 +197,7 @@ router.post('/trading-diagnostics', async (req, res) => {
     });
     
   } catch (error: any) {
-    console.error('[BATCH] Batch analysis error:', error);
+    logger.error('[BATCH] Batch analysis error:', error);
     res.status(500).json({
       success: false,
       error: error.message,
