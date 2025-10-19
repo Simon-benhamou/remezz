@@ -5,6 +5,48 @@
 - `npm run test:integration` parcourt à la fois `backend/test/integration` et les fichiers `.mjs` à la racine de `backend/test`, tout en évitant les doublons et en prenant en charge les scénarios QA distants (`QA_ENABLE_REMOTE=true`).
 - Centraliser la découverte permet d'ajouter de nouveaux tests simplement en déposant le fichier dans l'emplacement adéquat sans modifier les scripts.
 
+## Python prediction integration
+
+### Installation rapide
+
+- Installer les dépendances Node : `npm install`
+- Installer les dépendances Python 3 (>=3.9) : `pip install -r requirements.txt` depuis le dossier `backend`
+- Compiler les sources TypeScript si nécessaire : `npm run build`
+
+### Entraînement et mise à jour du modèle
+
+- Le script `python/ccxt_xgboost_module.py` encapsule le workflow complet : récupération OHLCV via ccxt, cache CSV incrémental (`data/xgboost_ohlcv_cache.csv`), calcul des indicateurs (ATR, ADX, RSI, EMA, pente, ratio de volume), création de la cible (variation 3 bougies) et entraînement d’un `xgboost.XGBClassifier` (split chronologique 80/20, métriques `accuracy`/`f1`).
+- Lancez `npm run train-model` (alias de `python3 python/ccxt_xgboost_module.py`) pour régénérer `python/xgboost_direction.model`, `python/features.txt` et `python/training_metrics.json`. En absence de réseau, le module génère un jeu de données synthétique déterministe pour conserver un modèle valide.
+- Les colonnes de features sont également persistées dans `features.txt` afin de vérifier les entrées du service de prédiction.
+
+### Mise à jour périodique
+
+- `python/scheduled_training.py` réutilise le même pipeline : mise à jour du cache OHLCV (`fetch_ohlcv`), préparation (`prepare_dataset`), entraînement (`train_model`) puis sauvegarde des artefacts (`save_model_and_features`).
+- Exécuter ce script manuellement (`python3 python/scheduled_training.py`) ou le déclencher via cron / un worker interne (ex. un `setInterval` Node qui appelle un endpoint dédié).
+
+### Service de prédiction
+
+- `python/predict_service.py` charge le modèle XGBoost et la liste de colonnes. Il accepte un JSON `{colonne: valeur}` via `stdin` ou `--features-json`, renvoie `{"prediction": 0|1}` et surface les erreurs sur `stderr`.
+- Le backend appelle ce service via `src/quantai/pythonPredictor.ts` (child process `python3`). La méthode `getPrediction(features)` renvoie une promesse résolue avec 0 ou 1 et applique des garde-fous : validation numérique, timeout configurable (`PYTHON_PREDICT_TIMEOUT_MS`), messages d’erreur explicites.
+- `MetaAdaptiveStrategyAgent.registerActiveTrade` déclenche systématiquement la prédiction (si les features sont disponibles) avant d’enregistrer un trade. Une prédiction baissière bloque les entrées `short`/`long` incompatibles et logge `adaptive_trade_blocked_by_predictor`.
+
+### Mise à jour et debug
+
+- Les features envoyées au service sont dérivées du snapshot technique (`ema20`, `ema50`, `ema100`, `ema200`, `rsi14`, `atr14`, `adx14`, `ema20Slope`, `volumeRatio`). Elles sont exposées dans `RecognizedStrategySignal.meta.predictorFeatures` pour faciliter les diagnostics.
+- Pour réentraîner régulièrement :
+  1. `pip install -r requirements.txt`
+  2. `npm run train-model`
+  3. Redéployer / recharger le modèle côté serveur si nécessaire.
+
+### Résumé du flux de données
+
+1. **Collecte** : `fetch_ohlcv` (ccxt) + cache CSV évitant les téléchargements redondants.
+2. **Préparation** : `prepare_dataset` calcule ATR/ADX/RSI/EMA/pente/volume, nettoie les NaN et dérive la cible directionnelle.
+3. **Entraînement** : `train_model` (split chronologique, métriques `accuracy`/`f1`, sauvegarde XGBoost + features).
+4. **Prédiction** : `predict_service.py` reçoit les features runtime, renvoie 0 (bear) ou 1 (bull), consommé via `pythonPredictor.getPrediction`.
+
+Veillez à conserver Python 3 disponible sur les serveurs cibles : le backend Node communique avec le moteur via des processus enfants, aucune dépendance native supplémentaire n’est nécessaire côté TypeScript.
+
 ## Scheduler Worker
 - The auto-universe retry flow now uses persisted scheduler jobs stored in the `SchedulerJob` table.
 - The API server starts a lightweight worker (`startSchedulerWorker`) during boot to poll for due jobs.

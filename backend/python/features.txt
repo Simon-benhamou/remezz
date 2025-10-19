@@ -1,0 +1,9 @@
+ema20
+ema50
+ema100
+ema200
+rsi14
+atr14
+adx14
+ema20Slope
+volumeRatio

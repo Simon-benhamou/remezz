@@ -3605,7 +3605,7 @@ export class ReboundRejectionAgent {
     } catch {}
 
     if (this.pos) {
-      registerAdaptiveTradeEntry({
+      await registerAdaptiveTradeEntry({
         sessionId: this.sessionId ?? null,
         symbol: this.profile.symbol,
         signal: this.marketContext?.primaryStrategy ?? null,
