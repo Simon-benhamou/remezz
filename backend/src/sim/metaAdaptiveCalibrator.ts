@@ -1,4 +1,5 @@
-import { metaAdaptiveStrategyAgent, PreciseDecimal, type AdaptiveSignal, type StrategyFamily } from '../quantai/strategy/metaAdaptiveAgent.js';
+import { metaAdaptiveStrategyAgent, PreciseDecimal, type AdaptiveSignal } from '../quantai/strategy/metaAdaptiveAgent.js';
+import type { StrategyFamily } from '../quantai/strategy/strategyTypes.js';
 import type { TechnicalSnapshot } from '../ai/tech.js';
 import { type CalibrationProfile } from '../quantai/strategy/metaAdaptiveCalibration.js';
 

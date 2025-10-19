@@ -1,4 +1,4 @@
-import type { StrategyFamily } from './metaAdaptiveAgent.js';
+import type { StrategyFamily } from './strategyTypes.js';
 
 export type CalibrationProfile = {
   familyScoreAdjustments: Record<StrategyFamily, number>;

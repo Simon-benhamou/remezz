@@ -217,4 +217,40 @@ assert.equal(bearishTrend.bias, 'short', 'Bearish stack should enforce short bia
 const bearishRiskPct = Number.parseFloat(bearishTrend.meta?.riskPct ?? '0');
 assert(bearishRiskPct <= 0.7, 'Low ADX should cut risk allocation for trend strategy');
 
+const derivativeContext = {
+  fundingRate: -0.015,
+  openInterestChangePct: 24,
+  longShortRatio: 0.82,
+};
+const onChainContext = {
+  exchangeNetflowUsd: 120_000_000,
+  stablecoinInflowsUsd: 6_000_000,
+  activeAddresses: 350_000,
+};
+const sentimentContext = {
+  label: 'bearish',
+  score: 0.32,
+  confidence: 0.8,
+  source: 'unit-test',
+  updatedAt: Date.now(),
+};
+
+const enrichedSignals = evaluateRecognizedStrategies(bearishSnap, {
+  sessionId: 'meta-enriched',
+  symbol: 'ADA/USDT',
+  bias: 'short',
+  derivatives: derivativeContext,
+  onChain: onChainContext,
+  sentiment: sentimentContext,
+  watchlist: { isNew: true, volumeSurgeHint: 2.5, rankHint: 18 },
+  ranking: { change24hPct: -7, volumeUsd: 45_000_000, volatilityPct: 2.4, momentumScore: 0.35 },
+});
+
+assert(enrichedSignals.length > 0, 'Enriched evaluation should return signals');
+assert(enrichedSignals.some(signal => signal.reasons.some(reason => reason.startsWith('macro_bias='))),
+  'Macro bias reasons should be surfaced when enriched context is provided');
+const enrichedTop = enrichedSignals[0];
+assert(enrichedTop?.reasons.some(reason => reason.startsWith('directional_mult=')),
+  'Directional multiplier should surface when macro bias is applied');
+
 console.log('✅ meta-adaptive-agent logic test passed');
