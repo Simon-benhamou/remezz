@@ -18,7 +18,7 @@ export type AgentHealthRow = {
   lastBlockedAt: number | null;
   status: AgentHealthStatus;
   flags: AgentHealthFlag[];
-  aggressiveness?: AggressivenessLevel;
+  aggressiveness?: AggressivenessLevel | null;
 };
 
 export type AgentHealthSnapshot = {

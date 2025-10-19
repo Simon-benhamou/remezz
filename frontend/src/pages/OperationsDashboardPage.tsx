@@ -306,7 +306,8 @@ const OperationsDashboardPage: React.FC = () => {
     };
     rows.forEach((row: AgentHealthRow) => {
       const raw = (row.aggressiveness ?? (row as any)?.profile?.aggressiveness ?? (row as any)?.profileJson?.aggressiveness) as AggressivenessLevel | undefined;
-      const level = raw && AGGRESSIVENESS_META[raw] ? raw : 'reactive';
+      const level = raw && AGGRESSIVENESS_META[raw] ? raw : row.aggressiveness === null ? null : 'reactive';
+      if (!level) return;
       const bucket = buckets[level];
       bucket.total += 1;
       bucket.tradeCount += Number(row.tradeCount24h || 0);

@@ -11,6 +11,8 @@ type AgentSnapshotEntry = AgentSnapshot extends Array<infer Item> ? Item : never
 export type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
 export type AgentHealthFlag = 'no_trades' | 'vos_block' | 'stale';
 
+type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
+
 export type AgentHealthRow = {
   sessionId: string;
   symbol: string | null;
@@ -23,6 +25,7 @@ export type AgentHealthRow = {
   lastBlockedAt: number | null;
   status: AgentHealthStatus;
   flags: AgentHealthFlag[];
+  aggressiveness: AgentAggressiveness | null;
 };
 
 export type AgentHealthSnapshot = {
@@ -94,7 +97,7 @@ export async function computeAgentHealth(
 
   const activeSessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null },
-    select: { id: true, symbol: true, mode: true },
+    select: { id: true, symbol: true, mode: true, profileJson: true },
   });
   const sessionIds = activeSessions.map((session) => session.id);
 
@@ -113,7 +116,10 @@ export async function computeAgentHealth(
   const needsFallback = activeSessions
     .filter((session) => {
       const telemetry = telemetryBySession.get(session.id);
-      return !telemetry || telemetry.tradeCount24h == null || telemetry.lastExecutionAt == null;
+      if (!telemetry) return true;
+      const tradeCount = Number(telemetry.tradeCount24h ?? 0);
+      const lastExec = telemetry.lastExecutionAt ?? telemetry.lastExecutionTs;
+      return tradeCount <= 0 || lastExec == null;
     })
     .map((session) => session.id);
 
@@ -121,7 +127,10 @@ export async function computeAgentHealth(
   const fallbackLastTs = new Map<string, number>();
   if (needsFallback.length) {
     const fillRows = await prisma.fill.findMany({
-      where: { sessionId: { in: needsFallback } },
+      where: {
+        sessionId: { in: needsFallback },
+        ts: { gte: new Date(now - TRADE_WINDOW_MS) },
+      },
       select: { sessionId: true, ts: true },
     });
     for (const row of fillRows) {
@@ -136,13 +145,30 @@ export async function computeAgentHealth(
     }
   }
 
+  const normalizeAggressiveness = (value: unknown): AgentAggressiveness | null => {
+    if (typeof value !== 'string') return null;
+    const lower = value.toLowerCase();
+    if (lower === 'conservative' || lower === 'reactive' || lower === 'aggressive') {
+      return lower;
+    }
+    return null;
+  };
+
   const agentsHealth: AgentHealthRow[] = activeSessions.map((session) => {
     const telemetry = telemetryBySession.get(session.id) ?? null;
     const agent = agentById.get(session.id) ?? null;
 
-    const tradeCount24h = telemetry?.tradeCount24h ?? fallbackCounts.get(session.id) ?? 0;
+    const telemetryTradeCount = Number(telemetry?.tradeCount24h ?? 0);
+    const fallbackTradeCount = fallbackCounts.get(session.id);
+    const tradeCount24h =
+      fallbackTradeCount != null ? Math.max(telemetryTradeCount, fallbackTradeCount) : telemetryTradeCount;
+
+    const telemetryLastExecution = toTimestampMs(telemetry?.lastExecutionAt);
+    const fallbackLastExecution = fallbackLastTs.get(session.id) ?? null;
     const lastExecutionTs =
-      toTimestampMs(telemetry?.lastExecutionAt) ?? fallbackLastTs.get(session.id) ?? null;
+      telemetryLastExecution && fallbackLastExecution
+        ? Math.max(telemetryLastExecution, fallbackLastExecution)
+        : telemetryLastExecution ?? fallbackLastExecution ?? null;
     const blockedByVos = Boolean(telemetry?.blockedByVos);
     const lastBlockedAt = toTimestampMs(telemetry?.lastBlockedAt);
 
@@ -157,6 +183,14 @@ export async function computeAgentHealth(
     else if (isStale) status = 'stale';
     else if (tradeCount24h === 0) status = 'idle';
 
+    const runtimeAggressiveness = normalizeAggressiveness((agent as any)?.aggressiveness ?? (agent as any)?.profile?.aggressiveness);
+    let persistedAggressiveness: AgentAggressiveness | null = null;
+    if (session.profileJson && typeof session.profileJson === 'object' && !Array.isArray(session.profileJson)) {
+      persistedAggressiveness = normalizeAggressiveness((session.profileJson as Record<string, unknown>).aggressiveness);
+    }
+    const telemetryAggressiveness = normalizeAggressiveness((telemetry as any)?.profile?.aggressiveness);
+    const aggressiveness = runtimeAggressiveness || telemetryAggressiveness || persistedAggressiveness;
+
     return {
       sessionId: session.id,
       symbol: session.symbol,
@@ -169,6 +203,7 @@ export async function computeAgentHealth(
       lastBlockedAt,
       status,
       flags,
+      aggressiveness,
     };
   });
 
