@@ -141,6 +141,88 @@ const contexts = new Map<string, AgentCreationContext>();
 const SMART_SELECTION_RESERVATION_TTL_MS = 5 * 60 * 1000;
 const smartSelectionReservations = new Map<string, { symbol: string; expiresAt: number }>();
 
+const ORDERABILITY_TICKER_TIMEOUT_MS = Number(process.env.ORDERABILITY_TICKER_TIMEOUT_MS ?? 5_000);
+
+class OrderabilityTickerTimeoutError extends Error {
+  symbol: string;
+  timeoutMs: number;
+
+  constructor(symbol: string, timeoutMs: number) {
+    super(`Orderability ticker fetch timed out for ${symbol} after ${timeoutMs}ms`);
+    this.name = 'OrderabilityTickerTimeoutError';
+    this.symbol = symbol;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function isOrderabilityTickerTimeoutError(error: unknown): error is OrderabilityTickerTimeoutError {
+  return error instanceof OrderabilityTickerTimeoutError;
+}
+
+async function fetchTickerWithTimeout(
+  symbol: string,
+  timeoutMs: number,
+  fetcher: typeof getTicker = getTicker
+): Promise<Awaited<ReturnType<typeof getTicker>>> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return fetcher(symbol);
+  }
+
+  let timeoutHandle: NodeJS.Timeout | null = null;
+
+  try {
+    return await Promise.race([
+      fetcher(symbol),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new OrderabilityTickerTimeoutError(symbol, timeoutMs));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+type OrderabilityEvaluationOptions = {
+  timeoutMs?: number;
+  tickerFetcher?: typeof getTicker;
+};
+
+async function evaluateOrderability(
+  symbol: string,
+  config: NormalizedStartConfig,
+  pushDiagnostic: (level: AgentCreationLogLevel, message: string, meta?: Record<string, any>) => void,
+  options?: OrderabilityEvaluationOptions
+): Promise<{ symbol: string; orderable: boolean; volumeUsd: number }> {
+  const timeoutMs = options?.timeoutMs ?? ORDERABILITY_TICKER_TIMEOUT_MS;
+  const tickerFetcher = options?.tickerFetcher ?? getTicker;
+
+  try {
+    const ticker = await fetchTickerWithTimeout(symbol, timeoutMs, tickerFetcher);
+    const price = Number((ticker as any)?.last ?? 0);
+    const notional = price * config.startBalanceUsd * (config.riskPerTradePct / 100);
+    const rawVolume = Number((ticker as any)?.quoteVolume ?? (ticker as any)?.info?.quoteVolume ?? 0);
+    const volumeUsd = Number.isFinite(rawVolume) && rawVolume > 0 ? rawVolume : 0;
+    return { symbol, orderable: Number.isFinite(notional) && notional >= 10, volumeUsd };
+  } catch (error) {
+    if (isOrderabilityTickerTimeoutError(error)) {
+      pushDiagnostic('warn', 'Orderability check timed out for symbol', {
+        symbol,
+        timeoutMs,
+      });
+    } else {
+      pushDiagnostic('warn', 'Orderability check failed for symbol', {
+        symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return { symbol, orderable: false, volumeUsd: 0 };
+  }
+}
+
 function normalizeReservationSymbol(symbol: string): string {
   if (!symbol) return symbol;
   try {
@@ -684,22 +766,7 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
   });
 
   const orderabilityChecks = await Promise.all(
-    analysisUniverse.map(async (sym) => {
-      try {
-        const ticker = await getTicker(sym);
-        const price = Number(ticker?.last || 0);
-        const notional = price * config.startBalanceUsd * (config.riskPerTradePct / 100);
-        const rawVolume = Number((ticker as any)?.quoteVolume ?? (ticker as any)?.info?.quoteVolume ?? 0);
-        const volumeUsd = Number.isFinite(rawVolume) && rawVolume > 0 ? rawVolume : 0;
-        return { symbol: sym, orderable: Number.isFinite(notional) && notional >= 10, volumeUsd };
-      } catch (error) {
-        pushDiagnostic('warn', 'Orderability check failed for symbol', {
-          symbol: sym,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return { symbol: sym, orderable: false, volumeUsd: 0 };
-      }
-    })
+    analysisUniverse.map((sym) => evaluateOrderability(sym, config, pushDiagnostic))
   );
 
   const orderableSymbols = orderabilityChecks.filter((c) => c.orderable).map((c) => c.symbol);
@@ -1178,4 +1245,11 @@ function gatherWarmupDiagnostics(symbol: string) {
     },
   };
 }
+
+export const __agentCreationTestHooks = {
+  fetchTickerWithTimeout,
+  evaluateOrderability,
+  isOrderabilityTickerTimeoutError,
+  OrderabilityTickerTimeoutError,
+};
 

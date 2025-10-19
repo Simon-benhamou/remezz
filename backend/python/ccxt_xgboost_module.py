@@ -131,7 +131,7 @@ FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
 
 DEFAULT_EXCHANGE = "binance"
-DEFAULT_SYMBOLS = ("BTC/USDT",)
+DEFAULT_SYMBOLS = ("BTC/USDT","ETH/USDT","SOL/USDT","XRP/USDT")
 DEFAULT_TIMEFRAME = "15m"
 DEFAULT_LOOKBACK_HOURS = 24 * 30  # 30 days
 
