@@ -14,6 +14,9 @@ export type QuantAIRiskConfig = {
   winStreakForIncrease?: number;
   sizeIncreaseFactor?: number;
   sizeIncreaseMaxMultiplier?: number;
+  dailyLossRiskReductionMultiplier?: number;
+  dailyLossCooldownMinutes?: number;
+  dailyLossRecoveryWins?: number;
 };
 
 export type QuantAIFeesConfig = {
@@ -217,6 +220,9 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     winStreakForIncrease: 2,
     sizeIncreaseFactor: 1.1,
     sizeIncreaseMaxMultiplier: 1.35,
+    dailyLossRiskReductionMultiplier: 0.35,
+    dailyLossCooldownMinutes: 75,
+    dailyLossRecoveryWins: 2,
   },
   feesSlippage: {
     takerFeeBps: 4.0,
@@ -350,6 +356,9 @@ function normalizeRisk(raw: any): QuantAIRiskConfig {
     winStreakForIncrease: Number(raw.win_streak_for_increase ?? raw.winStreakForIncrease ?? DEFAULT_CONFIG.risk.winStreakForIncrease ?? 0),
     sizeIncreaseFactor: Number(raw.size_increase_factor ?? raw.sizeIncreaseFactor ?? DEFAULT_CONFIG.risk.sizeIncreaseFactor ?? 1),
     sizeIncreaseMaxMultiplier: Number(raw.size_increase_max_multiplier ?? raw.sizeIncreaseMaxMultiplier ?? DEFAULT_CONFIG.risk.sizeIncreaseMaxMultiplier ?? 1),
+    dailyLossRiskReductionMultiplier: Number(raw.daily_loss_risk_reduction_multiplier ?? raw.dailyLossRiskReductionMultiplier ?? DEFAULT_CONFIG.risk.dailyLossRiskReductionMultiplier ?? 1),
+    dailyLossCooldownMinutes: Number(raw.daily_loss_cooldown_minutes ?? raw.dailyLossCooldownMinutes ?? DEFAULT_CONFIG.risk.dailyLossCooldownMinutes ?? DEFAULT_CONFIG.risk.cooldownMinutes),
+    dailyLossRecoveryWins: Number(raw.daily_loss_recovery_wins ?? raw.dailyLossRecoveryWins ?? DEFAULT_CONFIG.risk.dailyLossRecoveryWins ?? 0),
   };
 }
 

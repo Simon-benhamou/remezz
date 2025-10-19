@@ -14,6 +14,9 @@ export type CircuitBreakerState = {
   cooldownUntil: Date | null;
   lastTradeDay: number | null;
   dayStartAt: Date | null;
+  dailyLossActive: boolean;
+  dailyLossTriggeredAt: Date | null;
+  dailyLossRecoveryWinsRemaining: number;
 };
 
 export type CircuitBreakerOptions = {
@@ -36,6 +39,9 @@ export class CircuitBreaker {
   private cooldownUntil: Date | null = null;
   private lastTradeDay: number | null = null;
   private dayStartAt: Date | null = null;
+  private dailyLossActive = false;
+  private dailyLossTriggeredAt: Date | null = null;
+  private dailyLossRecoveryWinsRemaining = 0;
   private readonly onStateChange?: (state: CircuitBreakerState) => void | Promise<void>;
 
   constructor(private readonly cfg: QuantAIRiskConfig, opts: CircuitBreakerOptions = {}) {
@@ -73,6 +79,18 @@ export class CircuitBreaker {
         this.dayStartAt = parsed;
       }
     }
+    if (typeof (state as any).dailyLossActive === 'boolean') {
+      this.dailyLossActive = Boolean((state as any).dailyLossActive);
+    }
+    if ((state as any).dailyLossTriggeredAt) {
+      const parsed = new Date((state as any).dailyLossTriggeredAt as Date | string);
+      if (!Number.isNaN(parsed.getTime())) {
+        this.dailyLossTriggeredAt = parsed;
+      }
+    }
+    if (typeof (state as any).dailyLossRecoveryWinsRemaining === 'number' && Number.isFinite((state as any).dailyLossRecoveryWinsRemaining)) {
+      this.dailyLossRecoveryWinsRemaining = Math.max(0, Math.floor((state as any).dailyLossRecoveryWinsRemaining));
+    }
   }
 
   private emitStateChange(): void {
@@ -101,6 +119,11 @@ export class CircuitBreaker {
     this.equityStartDay = Number.isFinite(equity) ? equity : null;
     this.lastTradeDay = currentDay;
     this.dayStartAt = new Date(now.getTime());
+    if (this.dailyLossActive || this.dailyLossRecoveryWinsRemaining > 0 || this.dailyLossTriggeredAt) {
+      this.dailyLossActive = false;
+      this.dailyLossRecoveryWinsRemaining = 0;
+      this.dailyLossTriggeredAt = null;
+    }
     this.emitStateChange();
   }
 
@@ -135,10 +158,29 @@ export class CircuitBreaker {
     if (this.equityStartDay != null && this.equityStartDay > 0) {
       const drawdownPct = ((equity - this.equityStartDay) / this.equityStartDay) * 100;
       if (drawdownPct <= -Math.abs(this.cfg.dailyLossLimitPct)) {
+        if (!this.dailyLossActive) {
+          this.dailyLossActive = true;
+          this.dailyLossTriggeredAt = new Date(now.getTime());
+          const recoveryWins = Number.isFinite(this.cfg.dailyLossRecoveryWins)
+            ? Math.max(0, Math.floor(this.cfg.dailyLossRecoveryWins ?? 0))
+            : 0;
+          this.dailyLossRecoveryWinsRemaining = recoveryWins;
+          const cooldownMinutes = Number.isFinite(this.cfg.dailyLossCooldownMinutes)
+            ? Math.max(0, Math.floor(this.cfg.dailyLossCooldownMinutes ?? 0))
+            : 0;
+          const until = cooldownMinutes > 0
+            ? this.startCooldown(now, cooldownMinutes)
+            : this.startCooldown(now);
+          return {
+            allowed: false,
+            reason: `Daily loss limit hit (${drawdownPct.toFixed(2)}% <= -${this.cfg.dailyLossLimitPct}%)`,
+            cooldownUntil: until,
+          };
+        }
         return {
-          allowed: false,
-          reason: `Daily loss limit hit (${drawdownPct.toFixed(2)}% <= -${this.cfg.dailyLossLimitPct}%)`,
-          cooldownUntil: null,
+          allowed: true,
+          reason: 'Daily loss risk reduction active',
+          cooldownUntil: this.cooldownUntil,
         };
       }
     }
@@ -175,6 +217,14 @@ export class CircuitBreaker {
       this.consecutiveLosses = 0;
       if (pnlPct > 0) {
         this.consecutiveWins += 1;
+        if (this.dailyLossActive && this.dailyLossRecoveryWinsRemaining > 0) {
+          this.dailyLossRecoveryWinsRemaining -= 1;
+          if (this.dailyLossRecoveryWinsRemaining <= 0) {
+            this.dailyLossActive = false;
+            this.dailyLossTriggeredAt = null;
+            changed = true;
+          }
+        }
       } else {
         this.consecutiveWins = 0;
       }
@@ -184,11 +234,26 @@ export class CircuitBreaker {
         changed = true;
       }
     }
+    if (pnlPct < 0 && this.dailyLossActive && !this.cooldownUntil) {
+      const cooldownMinutes = Number.isFinite(this.cfg.dailyLossCooldownMinutes)
+        ? Math.max(0, Math.floor(this.cfg.dailyLossCooldownMinutes ?? 0))
+        : 0;
+      if (cooldownMinutes > 0) {
+        this.startCooldown(now, cooldownMinutes);
+      }
+    }
     if (changed) this.emitStateChange();
   }
 
   sizeMultiplier(): number {
     let multiplier = 1;
+
+    if (this.dailyLossActive) {
+      const reduction = Number.isFinite(this.cfg.dailyLossRiskReductionMultiplier)
+        ? Math.min(1, Math.max(0.05, this.cfg.dailyLossRiskReductionMultiplier ?? 1))
+        : 0.35;
+      multiplier *= reduction;
+    }
 
     if (this.cfg.reduceSizeAfterLosses && this.cfg.sizeReductionAfterLosses > 0) {
       if (this.consecutiveLosses >= this.cfg.sizeReductionAfterLosses) {
@@ -236,6 +301,9 @@ export class CircuitBreaker {
       cooldownUntil: this.cloneDate(this.cooldownUntil),
       lastTradeDay: this.lastTradeDay,
       dayStartAt: this.cloneDate(this.dayStartAt),
+      dailyLossActive: this.dailyLossActive,
+      dailyLossTriggeredAt: this.cloneDate(this.dailyLossTriggeredAt),
+      dailyLossRecoveryWinsRemaining: this.dailyLossRecoveryWinsRemaining,
     };
   }
 }
