@@ -11,6 +11,10 @@ const {
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
 } = await import('../../dist/src/quantai/strategy/recognizedStrategies.js');
+const { metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+
+metaAdaptiveStrategyAgent.reset();
+metaAdaptiveStrategyAgent.setRandomSeed(42);
 
 const sessionId = 'meta-test-session';
 
@@ -141,6 +145,49 @@ const fundamentalSignals = evaluateRecognizedStrategies(buildSnapshot(), {
 assert(fundamentalSignals.every(signal => signal.active === false), 'Fundamental halt should deactivate all strategies');
 assert(fundamentalSignals.every(signal => signal.meta?.guardrail?.includes('fundamental_negative_alert')),
   'Fundamental halt should surface a guardrail reason');
+
+const breakoutCompressionSnap = buildSnapshot({
+  atrPct: 0.6,
+  realizedVol: 1.8,
+  adx14: 24,
+  trendStrength: 0.62,
+  trend: 0.85,
+  volume: 1_800_000,
+  volumeMA: 600_000,
+  volume24h: 140_000_000,
+  cmf20: 0.32,
+});
+
+const breakoutSignals = evaluateRecognizedStrategies(breakoutCompressionSnap, {
+  sessionId: 'meta-breakout',
+  symbol: 'SOL/USDT',
+  bias: 'long',
+});
+
+const breakoutEntry = breakoutSignals.find(signal => signal.id === 'breakout_retest');
+const trendEntry = breakoutSignals.find(signal => signal.id === 'classic_trend_following');
+
+assert(breakoutEntry, 'Breakout strategy should be present in compression regime');
+assert(trendEntry, 'Trend strategy should also be scored for comparison');
+assert(breakoutEntry.meta?.score > 0.6, 'Breakout strategy should achieve a healthy score');
+assert(breakoutEntry.meta?.score >= (trendEntry.meta?.score ?? 0), 'Breakout score should meet or exceed trend score under compression');
+assert(breakoutSignals.indexOf(breakoutEntry) <= 1, 'Breakout strategy should rank near the top under compression');
+
+const majorLiquiditySnap = buildSnapshot({
+  volume24h: 620_000_000,
+  cmf20: 0.28,
+});
+
+const majorSignals = evaluateRecognizedStrategies(majorLiquiditySnap, {
+  sessionId: 'meta-major',
+  symbol: 'ETH/USDT',
+  micro: { spreadBps: 17, depthUsd: 40_000 },
+  forceLiquidityGate: true,
+});
+
+assert.equal(majorSignals.length, 4, 'Major tier should allow scoring with 17 bps spread and strong depth');
+assert(majorSignals.some(signal => signal.id === 'momentum_scanner_focus'),
+  'Momentum strategy should be considered on major tier liquidity');
 
 const bearishSnap = buildSnapshot({
   trendBias: 'bearish',

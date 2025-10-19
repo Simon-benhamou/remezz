@@ -201,9 +201,9 @@ type LiquidityTier = {
 
 const LIQUIDITY_GUARD = {
   tiers: [
-    { name: 'micro', maxVolumeUsd: 150_000_000, minVolumeUsd: 100_000_000, maxSpreadBps: 5, minDepthUsd: 50_000 },
-    { name: 'mid', maxVolumeUsd: 500_000_000, minVolumeUsd: 150_000_000, maxSpreadBps: 6, minDepthUsd: 65_000 },
-    { name: 'large', maxVolumeUsd: null, minVolumeUsd: 80_000_000, maxSpreadBps: 8, minDepthUsd: 30_000 },
+    { name: 'micro', maxVolumeUsd: 90_000_000, minVolumeUsd: 40_000_000, maxSpreadBps: 5, minDepthUsd: 50_000 },
+    { name: 'mid', maxVolumeUsd: 350_000_000, minVolumeUsd: 60_000_000, maxSpreadBps: 8, minDepthUsd: 35_000 },
+    { name: 'major', maxVolumeUsd: null, minVolumeUsd: 20_000_000, maxSpreadBps: 18, minDepthUsd: 25_000 },
   ] as const,
   microPenaltyCap: 1,
 } as const;
@@ -359,7 +359,7 @@ class MetaAdaptiveStrategyAgent {
   private readonly activeTrades = new Map<string, ActiveTrade[]>();
   private readonly liquidityLog = new Map<string, number>();
   private readonly guardrailHalts = new Map<string, Map<StrategyFamily, GuardrailHalt>>();
-  private epsilonBase = 0.08;
+  private epsilonBase = 0.15;
   private calibrationProfile: CalibrationProfile = defaultCalibrationProfile;
   private readonly sessionCapital = new Map<string, PreciseDecimal>();
   private readonly tradeLedgers = new Map<string, PreciseDecimal>();
@@ -485,14 +485,19 @@ class MetaAdaptiveStrategyAgent {
     return { net, feeUsd };
   }
 
-  private computeExplorationProbability(symbol: string, candidate: StrategyScoreResult): number {
+  private computeExplorationProbability(
+    symbol: string,
+    candidate: StrategyScoreResult,
+    context: { atr15mPct: number; atr1hPct: number; realizedVol: number; hurst: number },
+  ): number {
     const base = this.epsilonBase;
     const symbolStats = this.stats.get(symbol);
     const familyStats = symbolStats?.get(candidate.family);
     const samples = familyStats?.outcomes.length ?? 0;
     let epsilon = base;
+    let expectancy = 0;
     if (familyStats && samples >= 4) {
-      const expectancy = familyStats.sum.dividedBy(new PreciseDecimal(samples.toString())).toNumber();
+      expectancy = familyStats.sum.dividedBy(new PreciseDecimal(samples.toString())).toNumber();
       const normalizedExpectancy = clamp(expectancy / 3, -1, 1);
       epsilon = base * (1 - Math.min(candidate.confidence, 0.95)) * (1 - Math.max(0, normalizedExpectancy));
     } else if (!familyStats || samples === 0) {
@@ -500,7 +505,19 @@ class MetaAdaptiveStrategyAgent {
     } else {
       epsilon = base * (1 + (4 - samples) / 10);
     }
-    epsilon = clamp(epsilon, this.calibrationProfile.explorationFloor, 0.35);
+
+    if (familyStats && samples >= 6 && expectancy > 0.6) {
+      epsilon += base * 0.1;
+    }
+
+    const volatilityGauge = Math.max(context.atr15mPct, context.atr1hPct, context.realizedVol);
+    if (volatilityGauge > 1.8 || context.realizedVol > 1.6) {
+      epsilon += base * 0.2;
+    } else if (context.hurst > 0.65) {
+      epsilon += base * 0.05;
+    }
+
+    epsilon = clamp(epsilon, this.calibrationProfile.explorationFloor, 0.4);
     return epsilon;
   }
 
@@ -524,6 +541,7 @@ class MetaAdaptiveStrategyAgent {
     const ema50 = safeNumber(snap.ema50, price);
     const ema100 = safeNumber(snap.ema100, price);
     const ema200 = safeNumber(snap.ema200, price);
+    const realizedVol = safeNumber(snap.realizedVol, atr15mPct);
 
     const emaAlignmentBull = ema20 >= ema50 && ema50 >= ema100 && ema100 >= ema200;
     const emaAlignmentBear = ema20 <= ema50 && ema50 <= ema100 && ema100 <= ema200;
@@ -533,9 +551,8 @@ class MetaAdaptiveStrategyAgent {
     const cmf = safeNumber((snap as any)?.cmf20, 0);
 
     const compressionScore = (() => {
-      const realized = safeNumber(snap.realizedVol, atr15mPct);
-      if (realized <= 0) return 0;
-      const atrRatio = atr15mPct / realized;
+      if (realizedVol <= 0) return 0;
+      const atrRatio = atr15mPct / realizedVol;
       return clamp(1 - atrRatio, 0, 1);
     })();
 
@@ -631,12 +648,15 @@ class MetaAdaptiveStrategyAgent {
       1,
     );
 
+    const breakoutCompression = compressionScore * 1.25;
+    const breakoutAdx = normalize(adx, 16, 35);
+    const breakoutVolume = clamp(volumeRatio / 2, 0, 1) * 1.15;
+    const breakoutImpulse = clamp((volumeRatio - 1) / 1.5, 0, 1) * 0.8;
+    const breakoutCmf = clamp((cmf + 0.3) / 0.8, 0, 1);
+    const breakoutContext = Math.max(context.alignmentScore, 0.5);
+    const breakoutWeight = 1.25 + 1.15 + 0.8 + 1 + 1 + 1;
     const scoreBreakout = clamp(
-      (compressionScore
-        + normalize(adx, 16, 35)
-        + clamp(volumeRatio / 2, 0, 1)
-        + clamp((cmf + 0.3) / 0.8, 0, 1)
-        + Math.max(context.alignmentScore, 0.4)) / 5,
+      (breakoutCompression + breakoutAdx + breakoutVolume + breakoutImpulse + breakoutCmf + breakoutContext) / breakoutWeight,
       0,
       1,
     );
@@ -652,12 +672,24 @@ class MetaAdaptiveStrategyAgent {
       1,
     );
 
+    const momentumTrend = clamp(Math.abs((snap as any)?.trend ?? 0) / 1.8, 0, 1);
+    const momentumStrength = clamp(trendStrength / 1.0, 0, 1);
+    const momentumVolume = clamp(volumeRatio / 2.5, 0, 1) * 1.05;
+    const momentumImpulse = clamp((volumeRatio - 1) / 1.5, 0, 1);
+    const momentumCmf = clamp((cmf + 0.2) / 0.6, 0, 1);
+    const momentumContext = Math.max(context.alignmentScore, 0.55);
+    const momentumSlope = clamp(slope * 1.1, 0, 1);
+    const momentumWeight = 1 + 1 + 1.05 + 1 + 1 + 1 + 1;
     const scoreMomentum = clamp(
-      (clamp(Math.abs((snap as any)?.trend ?? 0) / 1.8, 0, 1)
-        + clamp(trendStrength / 1.0, 0, 1)
-        + clamp(volumeRatio / 2.5, 0, 1)
-        + clamp((cmf + 0.2) / 0.6, 0, 1)
-        + context.alignmentScore) / 5,
+      (
+        momentumTrend
+        + momentumStrength
+        + momentumVolume
+        + momentumImpulse
+        + momentumCmf
+        + momentumContext
+        + momentumSlope
+      ) / momentumWeight,
       0,
       1,
     );
@@ -830,7 +862,7 @@ class MetaAdaptiveStrategyAgent {
 
     let weighted: StrategyScoreResult[] = familyScores.map(item => {
       const penaltiesApplied = [...penalties];
-      let effectiveScore = item.score * (1 - microPenalty * 0.6);
+      let effectiveScore = item.score * (1 - microPenalty * 0.3);
       if (context.conflict && item.family !== 'mean_reversion') {
         effectiveScore *= 0.45;
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
@@ -859,11 +891,11 @@ class MetaAdaptiveStrategyAgent {
       if (context.alignmentScore >= 0.9 && (item.family === 'trend' || item.family === 'momentum')) {
         effectiveScore = Math.min(1, effectiveScore * 1.15);
       }
-      if (item.family === 'mean_reversion' && adx >= 18) {
-        effectiveScore *= 0.6;
+      if (item.family === 'mean_reversion' && adx >= 22) {
+        effectiveScore *= 0.75;
         penaltiesApplied.push('adx_too_high');
       }
-      if (item.family === 'mean_reversion' && context.alignmentScore >= 0.85 && adx >= 25) {
+      if (item.family === 'mean_reversion' && context.alignmentScore >= 0.92 && adx >= 30) {
         effectiveScore = 0;
         if (!penaltiesApplied.includes('mean_disabled_strong_trend')) {
           penaltiesApplied.push('mean_disabled_strong_trend');
@@ -963,9 +995,14 @@ class MetaAdaptiveStrategyAgent {
 
     const ordered = weighted.sort((a, b) => b.score - a.score);
 
-    const selection = drawdownHalt || fundamentalNegative
-      ? null
-      : this.chooseStrategy(input.sessionId, input.symbol, ordered);
+      const selection = drawdownHalt || fundamentalNegative
+        ? null
+        : this.chooseStrategy(
+          input.sessionId ?? null,
+          input.symbol,
+          ordered,
+          { atr15mPct, atr1hPct, realizedVol, hurst },
+        );
     const enrichedSignals = ordered.map(signal => ({
       ...signal,
       exploration: selection != null && selection.id === signal.id ? selection.exploration : false,
@@ -1269,7 +1306,12 @@ class MetaAdaptiveStrategyAgent {
     }
   }
 
-  private chooseStrategy(sessionId: string | null | undefined, symbol: string, ordered: StrategyScoreResult[]): AdaptiveSignal | null {
+  private chooseStrategy(
+    sessionId: string | null | undefined,
+    symbol: string,
+    ordered: StrategyScoreResult[],
+    context: { atr15mPct: number; atr1hPct: number; realizedVol: number; hurst: number },
+  ): AdaptiveSignal | null {
     if (!ordered.length) return null;
     const available = ordered.filter(signal => signal.active).length > 0
       ? ordered.filter(signal => signal.active)
@@ -1277,7 +1319,9 @@ class MetaAdaptiveStrategyAgent {
     let chosen: StrategyScoreResult | null = null;
     let exploration = false;
     const candidate = available[0] ?? ordered[0];
-    const epsilon = candidate ? this.computeExplorationProbability(symbol, candidate) : this.epsilonBase;
+    const epsilon = candidate
+      ? this.computeExplorationProbability(symbol, candidate, context)
+      : this.epsilonBase;
     if (this.nextRandom() < epsilon) {
       exploration = true;
       const index = Math.floor(this.nextRandom() * available.length);
