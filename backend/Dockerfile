@@ -11,7 +11,11 @@ WORKDIR /app
 
 # 🔐 OpenSSL pour Prisma (avant prisma:gen)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends openssl ca-certificates && \
+    apt-get install -y --no-install-recommends \
+        openssl \
+        ca-certificates \
+        python3 \
+        python-is-python3 && \
     rm -rf /var/lib/apt/lists/*
 
 # Install deps
