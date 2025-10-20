@@ -4,16 +4,17 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-
-import pandas as pd
+from typing import Sequence
 
 from ccxt_xgboost_module import (
     DEFAULT_EXCHANGE,
-    DEFAULT_LOOKBACK_HOURS,
     DEFAULT_SYMBOLS,
-    DEFAULT_TIMEFRAME,
-    fetch_ohlcv,
-    prepare_dataset,
+    DEFAULT_WINDOW_SPECS,
+    PreparedWindow,
+    WindowSpec,
+    assemble_training_dataframe,
+    collect_prepared_windows,
+    resolve_window_specs,
     save_model_and_features,
     train_model,
     _seed_everything,
@@ -22,38 +23,17 @@ from ccxt_xgboost_module import (
 
 def refresh_cache(
     exchange: str,
-    symbols: tuple[str, ...] | list[str],
-    timeframe: str,
-    lookback_hours: int,
-) -> list[tuple[str, pd.DataFrame]]:
-    """Ensure the OHLCV cache contains fresh data for each symbol."""
+    symbols: Sequence[str],
+    window_specs: Sequence[WindowSpec],
+    anchor: datetime | None = None,
+) -> list[PreparedWindow]:
+    """Collect prepared windows while ensuring the cache is refreshed."""
 
-    end = datetime.now(tz=timezone.utc)
-    start = end - pd.Timedelta(hours=lookback_hours)
-    start_ts = int(start.timestamp() * 1000)
-    end_ts = int(end.timestamp() * 1000)
-
-    windows: list[tuple[str, pd.DataFrame]] = []
-    for symbol in symbols:
-        window = fetch_ohlcv(exchange, symbol, timeframe, start_ts, end_ts)
-        windows.append((symbol, window))
-    return windows
+    return collect_prepared_windows(exchange, symbols, window_specs, anchor=anchor)
 
 
-def retrain_from_cache(frames: list[tuple[str, pd.DataFrame]]) -> dict[str, float]:
-    datasets: list[pd.DataFrame] = []
-    for symbol, frame in frames:
-        dataset = prepare_dataset(frame)
-        dataset = dataset.copy()
-        dataset["symbol"] = symbol
-        datasets.append(dataset)
-
-    if not datasets:
-        raise ValueError("No OHLCV data available for retraining")
-
-    combined = pd.concat(datasets, ignore_index=True)
-    combined = combined.drop(columns=["symbol"], errors="ignore")
-
+def retrain_from_cache(prepared_windows: Sequence[PreparedWindow]) -> dict[str, float]:
+    combined = assemble_training_dataframe(prepared_windows)
     artifacts = train_model(
         combined,
         params={
@@ -79,11 +59,34 @@ def main() -> None:
             symbols = (symbol_single,)
         else:
             symbols = DEFAULT_SYMBOLS
-    timeframe = os.environ.get("XGB_TIMEFRAME", DEFAULT_TIMEFRAME)
-    lookback = int(os.environ.get("XGB_LOOKBACK_HOURS", str(DEFAULT_LOOKBACK_HOURS)))
+    timeframe_single = os.environ.get("XGB_TIMEFRAME")
+    timeframes_env = os.environ.get("XGB_TIMEFRAMES")
+    window_specs_env = os.environ.get("XGB_WINDOW_SPECS")
+    lookback_env = os.environ.get("XGB_LOOKBACK_HOURS")
+    offset_env = os.environ.get("XGB_OFFSET_HOURS")
+
+    timeframe_values: tuple[str, ...] | None = None
+    if timeframes_env:
+        timeframe_values = tuple(
+            part.strip()
+            for part in timeframes_env.replace(";", ",").split(",")
+            if part.strip()
+        )
+        if not timeframe_values:
+            timeframe_values = None
+
+    window_specs = resolve_window_specs(
+        timeframe=timeframe_single,
+        timeframes=timeframe_values,
+        lookback_hours=lookback_env,
+        offset_hours=offset_env,
+        window_specs=window_specs_env,
+    )
+    if not window_specs:
+        window_specs = DEFAULT_WINDOW_SPECS
 
     _seed_everything()
-    frames = refresh_cache(exchange, symbols, timeframe, lookback)
+    frames = refresh_cache(exchange, symbols, tuple(window_specs))
     metrics = retrain_from_cache(frames)
     print(json.dumps({"metrics": metrics}))
 

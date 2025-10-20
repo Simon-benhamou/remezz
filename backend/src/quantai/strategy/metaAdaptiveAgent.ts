@@ -1511,7 +1511,7 @@ class MetaAdaptiveStrategyAgent {
     // model and scores the latest indicator snapshot. A bullish prediction (1)
     // permits long-biased strategies, whereas a bearish prediction (0) permits
     // shorts. Updating the model means re-running `npm run train-model`, which
-    // refreshes python/xgboost_direction.model and python/features.txt – the
+    // refreshes python/xgboost_direction.json and python/features.txt – the
     // agent picks up the new artefacts on the next process spawn.
     if (params.predictorFeatures && process.env.DISABLE_PYTHON_PREDICTOR !== 'true') {
       try {
