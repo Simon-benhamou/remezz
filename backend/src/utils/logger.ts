@@ -31,6 +31,13 @@ const originalConsole = {
   debug: (console.debug ?? console.log).bind(console),
 };
 
+const levelWriters: Record<LogLevel, LogWriter> = {
+  error: originalConsole.error,
+  warn: originalConsole.log,
+  info: originalConsole.info,
+  debug: originalConsole.debug,
+};
+
 let configured = false;
 let currentLevel: LogLevel = resolveInitialLevel();
 
@@ -87,20 +94,20 @@ export function configureLogging(level?: LogLevel): LogLevel {
     return currentLevel;
   }
   configured = true;
-  console.error = bind('error', originalConsole.error);
-  console.warn = bind('warn', originalConsole.warn);
-  console.info = bind('info', originalConsole.info);
-  console.debug = bind('debug', originalConsole.debug);
+  console.error = bind('error', levelWriters.error);
+  console.warn = bind('warn', levelWriters.warn);
+  console.info = bind('info', levelWriters.info);
+  console.debug = bind('debug', levelWriters.debug);
   console.log = bind('debug', originalConsole.log);
   return currentLevel;
 }
 
 export function createLogger(scope: string): ScopedLogger {
   return {
-    error: bind('error', originalConsole.error, scope),
-    warn: bind('warn', originalConsole.warn, scope),
-    info: bind('info', originalConsole.info, scope),
-    debug: bind('debug', originalConsole.debug, scope),
+    error: bind('error', levelWriters.error, scope),
+    warn: bind('warn', levelWriters.warn, scope),
+    info: bind('info', levelWriters.info, scope),
+    debug: bind('debug', levelWriters.debug, scope),
   };
 }
 

@@ -29,8 +29,9 @@ try {
   const scoped = createLogger('unit:logger');
   scoped.warn('important warning');
 
-  assert.equal(capturedStderr.length, 1, 'warning should be emitted');
-  assert.match(capturedStderr[0], /\[WARN\] \[unit:logger\] important warning/);
+  assert.equal(capturedStderr.length, 0, 'warnings should no longer write to stderr');
+  assert.equal(capturedStdout.length, 1, 'warning should be emitted to stdout');
+  assert.match(capturedStdout[0], /\[WARN\] \[unit:logger\] important warning/);
 
   capturedStdout.length = 0;
   capturedStderr.length = 0;
