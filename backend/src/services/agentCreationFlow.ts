@@ -144,6 +144,28 @@ const smartSelectionReservations = new Map<string, { symbol: string; expiresAt: 
 const ORDERABILITY_TICKER_TIMEOUT_MS = Number(process.env.ORDERABILITY_TICKER_TIMEOUT_MS ?? 5_000);
 const DEFAULT_SMART_ANALYSIS_LIMIT = 25;
 
+function resolveTimeoutMs(raw: unknown, fallback: number, floor: number, ceil: number): number {
+  const parsed = typeof raw === 'string' ? Number(raw) : Number(raw ?? NaN);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(ceil, Math.max(floor, Math.floor(parsed)));
+}
+
+const SMART_UNIVERSE_BUILD_TIMEOUT_MS = resolveTimeoutMs(
+  process.env.SMART_UNIVERSE_BUILD_TIMEOUT_MS,
+  45_000,
+  10_000,
+  5 * 60_000,
+);
+
+const SMART_PREFETCH_TIMEOUT_MS = resolveTimeoutMs(
+  process.env.SMART_PREFETCH_TIMEOUT_MS,
+  30_000,
+  5_000,
+  3 * 60_000,
+);
+
 export function resolveSmartAnalysisLimit(envValue: unknown = process.env.SMART_AUTO_ANALYSIS_LIMIT): number {
   const parsed = typeof envValue === 'string' ? Number(envValue) : Number(envValue ?? NaN);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -189,6 +211,40 @@ async function fetchTickerWithTimeout(
         }, timeoutMs);
       }),
     ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+async function runWithTimeout<T>(
+  factory: () => Promise<T>,
+  timeoutMs: number,
+): Promise<{ timedOut: boolean; result?: T; error?: unknown }> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    try {
+      const value = await factory();
+      return { timedOut: false, result: value };
+    } catch (error) {
+      return { timedOut: false, error };
+    }
+  }
+
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  try {
+    const outcome = await Promise.race([
+      factory().then((value) => ({ kind: 'value' as const, value })),
+      new Promise<{ kind: 'timeout' }>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs);
+      }),
+    ]);
+    if (outcome.kind === 'timeout') {
+      return { timedOut: true };
+    }
+    return { timedOut: false, result: outcome.value };
+  } catch (error) {
+    return { timedOut: false, error };
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
@@ -706,47 +762,58 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
     minVolumeUsd: config.volumeThresholdUsd,
   });
 
-  const [listResult, prefetchedOpportunity] = await Promise.all([
-    (async () => {
-      try {
-        const symbols = await getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile });
-        pushDiagnostic('info', 'Applied liquidity and performance filters', {
-          survivors: symbols.length,
-          aggressiveness: strategyProfile.aggressiveness,
-        });
-        return symbols;
-      } catch (error) {
-        console.warn('⚠️ Failed to fetch optimized crypto list:', error);
-        pushDiagnostic('warn', 'Failed to fetch optimized crypto list', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return [] as string[];
-      }
-    })(),
-    (async () => {
-      try {
-        const opportunity = await getBestIntelligentOpportunity(undefined, {
+  const [listOutcome, prefetchedOutcome] = await Promise.all([
+    runWithTimeout(() => getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile }), SMART_UNIVERSE_BUILD_TIMEOUT_MS),
+    runWithTimeout(
+      () =>
+        getBestIntelligentOpportunity(undefined, {
           aggressiveness: agg,
           maxUsage: 0,
-        });
-        if (opportunity) {
-          pushDiagnostic('info', 'Evaluated prefetched AI opportunity', {
-            symbol: opportunity.symbol,
-            score: (opportunity as any)?.score,
-          });
-        }
-        return opportunity;
-      } catch (error) {
-        console.warn('⚠️ Failed to evaluate prefetched opportunity:', error);
-        pushDiagnostic('warn', 'Failed to evaluate prefetched AI opportunity', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return null;
-      }
-    })(),
+        }),
+      SMART_PREFETCH_TIMEOUT_MS,
+    ),
   ]);
 
-  candidateSymbols = listResult;
+  if (listOutcome.timedOut) {
+    pushDiagnostic('warn', 'Optimized universe build timed out', {
+      timeoutMs: SMART_UNIVERSE_BUILD_TIMEOUT_MS,
+    });
+    candidateSymbols = majorPriorityList.slice();
+  } else if (listOutcome.error) {
+    console.warn('⚠️ Failed to fetch optimized crypto list:', listOutcome.error);
+    pushDiagnostic('warn', 'Failed to fetch optimized crypto list', {
+      error: listOutcome.error instanceof Error ? listOutcome.error.message : String(listOutcome.error),
+    });
+    candidateSymbols = [];
+  } else {
+    candidateSymbols = Array.isArray(listOutcome.result) ? listOutcome.result : [];
+    pushDiagnostic('info', 'Applied liquidity and performance filters', {
+      survivors: candidateSymbols.length,
+      aggressiveness: strategyProfile.aggressiveness,
+    });
+  }
+
+  let prefetchedOpportunity = prefetchedOutcome.result ?? null;
+  if (prefetchedOutcome.timedOut) {
+    prefetchedOpportunity = null;
+    pushDiagnostic('warn', 'Prefetched AI opportunity request timed out', {
+      timeoutMs: SMART_PREFETCH_TIMEOUT_MS,
+    });
+  } else if (prefetchedOutcome.error) {
+    console.warn('⚠️ Failed to evaluate prefetched opportunity:', prefetchedOutcome.error);
+    pushDiagnostic('warn', 'Failed to evaluate prefetched AI opportunity', {
+      error:
+        prefetchedOutcome.error instanceof Error
+          ? prefetchedOutcome.error.message
+          : String(prefetchedOutcome.error),
+    });
+    prefetchedOpportunity = null;
+  } else if (prefetchedOpportunity) {
+    pushDiagnostic('info', 'Evaluated prefetched AI opportunity', {
+      symbol: prefetchedOpportunity.symbol,
+      score: (prefetchedOpportunity as any)?.score,
+    });
+  }
 
   if (prefetchedOpportunity && !candidateSymbols.includes(prefetchedOpportunity.symbol)) {
     candidateSymbols.unshift(prefetchedOpportunity.symbol);
@@ -1280,5 +1347,6 @@ export const __agentCreationTestHooks = {
   evaluateOrderability,
   isOrderabilityTickerTimeoutError,
   OrderabilityTickerTimeoutError,
+  runWithTimeout,
 };
 
