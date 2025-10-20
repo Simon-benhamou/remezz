@@ -43,4 +43,24 @@ const lateExit = maybeAdjustOrExit({
 
 assert.equal(lateExit.action, 'exit', 'Should exit once min hold window passed and loss threshold breached');
 
+const holdBlocksTrailing = maybeAdjustOrExit({
+  ...baseParams,
+  lastPrice: 110,
+  minutesOpen: 5,
+});
+
+assert.equal(
+  holdBlocksTrailing.action,
+  'hold',
+  'Should not tighten stop via trailing before min hold is satisfied',
+);
+
+const trailAfterHold = maybeAdjustOrExit({
+  ...baseParams,
+  lastPrice: 110,
+  minutesOpen: 15,
+});
+
+assert.equal(trailAfterHold.action, 'move_sl', 'Should allow trailing once min hold is satisfied');
+
 console.log('✅ exit-manager min hold test passed');
