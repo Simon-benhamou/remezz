@@ -3,10 +3,16 @@ import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTim
 import { defaultCalibrationProfile, type CalibrationProfile } from './metaAdaptiveCalibration.js';
 import { getMarketContext, type MarketContextSnapshot, type PerpetualMetrics, type OnChainMetrics, type SentimentSnapshot, type WatchlistMeta } from '../../analytics/marketContext.js';
 import { detectMarketRegime, type MarketRegimeSignal } from '../regime/marketRegimeDetector.js';
-import { getPrediction as getPythonPrediction } from '../pythonPredictor.js';
+import {
+  getPrediction as getPythonPrediction,
+  getPredictionSync as getPythonPredictionSync,
+} from '../pythonPredictor.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
 const DECIMAL_SCALE = 1_000_000n;
+const PYTHON_BIAS_WEIGHT = 0.6;
+const PYTHON_NEUTRAL_THRESHOLD = 0.1;
+const PYTHON_GATE_THRESHOLD = 0.2;
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
@@ -138,6 +144,7 @@ type StrategyScoreResult = {
   guardrail?: string | null;
   plan: AdaptiveStrategyPlan;
   predictorFeatures: Record<string, number> | null;
+  pythonSignal: { bias: StrategyBias; probability: number } | null;
 };
 
 export type AdaptiveSignal = StrategyScoreResult & {
@@ -886,6 +893,35 @@ class MetaAdaptiveStrategyAgent {
     const watchlistState = this.updateSymbolMeta(input.symbol, snap, watchlistMeta);
     const isMajor = this.isMajorSymbol(input.symbol);
 
+    const pythonEnabled = process.env.DISABLE_PYTHON_PREDICTOR !== 'true';
+    const predictorFeatures = pythonEnabled ? buildPredictorFeatures(snap) : null;
+
+    let pythonBias = 0;
+    let pythonSignal: { bias: StrategyBias; probability: number } | null = null;
+    if (pythonEnabled && predictorFeatures) {
+      try {
+        const prediction = getPythonPredictionSync(predictorFeatures);
+        pythonBias = clamp(prediction.probability * 2 - 1, -1, 1);
+        const direction = Math.abs(pythonBias) < PYTHON_NEUTRAL_THRESHOLD
+          ? 'both'
+          : pythonBias > 0
+            ? 'long'
+            : 'short';
+        pythonSignal = {
+          bias: direction,
+          probability: Number(prediction.probability),
+        };
+      } catch (error) {
+        pythonBias = 0;
+        if (process.env.UNIT_TEST_MODE !== 'true') {
+          console.warn('python predictor sync failed during evaluation', {
+            symbol: input.symbol,
+            error: (error as Error).message,
+          });
+        }
+      }
+    }
+
     const regimeSignal = detectMarketRegime({
       snap,
       atr15mPct,
@@ -902,11 +938,14 @@ class MetaAdaptiveStrategyAgent {
     const onChainSignal = this.computeOnChainSignal(onChain);
     const sentimentSignal = this.computeSentimentSignal(sentiment);
     const combinedBias = clamp(
-      derivativeSignal.bias + onChainSignal.bias + sentimentSignal.bias,
+      derivativeSignal.bias + onChainSignal.bias + sentimentSignal.bias + pythonBias * PYTHON_BIAS_WEIGHT,
       -1.5,
       1.5,
     );
     const macroNotes = [...derivativeSignal.notes, ...onChainSignal.notes, ...sentimentSignal.notes, ...regimeSignal.notes];
+    if (pythonSignal) {
+      macroNotes.push(`python_bias=${pythonBias.toFixed(2)}`);
+    }
 
     const emaAlignmentBull = ema20 >= ema50 && ema50 >= ema100 && ema100 >= ema200;
     const emaAlignmentBear = ema20 <= ema50 && ema50 <= ema100 && ema100 <= ema200;
@@ -1100,10 +1139,6 @@ class MetaAdaptiveStrategyAgent {
         : new PreciseDecimal('1');
     const riskAdjustmentFactor = riskAdjustmentFactorBase.times(volatilityRiskMultiplier);
 
-    const predictorFeatures = process.env.DISABLE_PYTHON_PREDICTOR === 'true'
-      ? null
-      : buildPredictorFeatures(snap);
-
     const trendRiskBase = context.conflict
       ? '0.45'
       : context.alignmentScore >= 0.92
@@ -1213,8 +1248,9 @@ class MetaAdaptiveStrategyAgent {
       bias: StrategyBias;
       reasons: string[];
       plan: AdaptiveStrategyPlan;
-      predictorFeatures: Record<string, number> | null;
-    }>
+    predictorFeatures: Record<string, number> | null;
+    pythonSignal: { bias: StrategyBias; probability: number } | null;
+  }>
       = [
         {
           family: 'trend',
@@ -1230,6 +1266,7 @@ class MetaAdaptiveStrategyAgent {
           ],
           plan: adjustedPlans.trend,
           predictorFeatures,
+          pythonSignal,
         },
         {
           family: 'breakout',
@@ -1245,6 +1282,7 @@ class MetaAdaptiveStrategyAgent {
           ],
           plan: adjustedPlans.breakout,
           predictorFeatures,
+          pythonSignal,
         },
         {
           family: 'mean_reversion',
@@ -1261,6 +1299,7 @@ class MetaAdaptiveStrategyAgent {
           ],
           plan: adjustedPlans.mean_reversion,
           predictorFeatures,
+          pythonSignal,
         },
         {
           family: 'momentum',
@@ -1277,6 +1316,7 @@ class MetaAdaptiveStrategyAgent {
           ],
           plan: adjustedPlans.momentum,
           predictorFeatures,
+          pythonSignal,
         },
       ];
 
@@ -1352,6 +1392,14 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore *= regimeMultiplier;
           reasonsAugmented.push(`regime_mult=${regimeMultiplier.toFixed(2)}`);
         }
+        const pythonSignalForItem = item.pythonSignal;
+        if (pythonSignalForItem && Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD) {
+          const pythonMultiplier = this.computeDirectionalMultiplier(item.bias, pythonBias);
+          if (pythonMultiplier !== 1) {
+            effectiveScore *= pythonMultiplier;
+            reasonsAugmented.push(`python_mult=${pythonMultiplier.toFixed(2)}`);
+          }
+        }
         const directionalMultiplier = this.computeDirectionalMultiplier(item.bias, combinedBias);
         if (directionalMultiplier !== 1) {
           effectiveScore *= directionalMultiplier;
@@ -1412,6 +1460,7 @@ class MetaAdaptiveStrategyAgent {
         guardrail,
         plan: item.plan,
         predictorFeatures: item.predictorFeatures,
+        pythonSignal: item.pythonSignal,
       };
     });
 
@@ -1503,25 +1552,37 @@ class MetaAdaptiveStrategyAgent {
     plan: AdaptiveStrategyPlan;
     side?: StrategyBias;
     predictorFeatures?: Record<string, number> | null;
+    pythonSignal?: { bias: StrategyBias; probability: number } | null;
   }): Promise<void> {
     if (!params.sessionId || !params.token) return;
 
-    let predictorDecision: StrategyBias = 'both';
+    let predictorDecision: StrategyBias = params.pythonSignal?.bias ?? 'both';
+    let predictorProbability = params.pythonSignal?.probability ?? 0.5;
     // The Python predictor (python/predict_service.py) loads the persisted XGBoost
     // model and scores the latest indicator snapshot. A bullish prediction (1)
     // permits long-biased strategies, whereas a bearish prediction (0) permits
     // shorts. Updating the model means re-running `npm run train-model`, which
     // refreshes python/xgboost_direction.json and python/features.txt – the
     // agent picks up the new artefacts on the next process spawn.
-    if (params.predictorFeatures && process.env.DISABLE_PYTHON_PREDICTOR !== 'true') {
+    const shouldQueryPython = params.predictorFeatures
+      && process.env.DISABLE_PYTHON_PREDICTOR !== 'true'
+      && (!params.pythonSignal || Math.abs(predictorProbability - 0.5) * 2 < PYTHON_GATE_THRESHOLD);
+
+    if (shouldQueryPython && params.predictorFeatures) {
       try {
         const raw = await getPythonPrediction(params.predictorFeatures);
-        predictorDecision = raw === 1 ? 'long' : 'short';
+        predictorProbability = raw.probability;
+        predictorDecision = raw.prediction === 1 ? 'long' : 'short';
       } catch (error) {
         if (process.env.UNIT_TEST_MODE !== 'true') {
           console.warn('python predictor failure during trade registration', error);
         }
       }
+    }
+
+    const predictorConfidence = Math.abs(predictorProbability - 0.5) * 2;
+    if (predictorConfidence < PYTHON_GATE_THRESHOLD) {
+      predictorDecision = 'both';
     }
 
     const intendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
@@ -1533,6 +1594,8 @@ class MetaAdaptiveStrategyAgent {
         sessionId: params.sessionId ?? null,
         token: params.token,
         predictorDecision,
+        predictorProbability: Number(predictorProbability.toFixed(4)),
+        predictorConfidence: Number(predictorConfidence.toFixed(4)),
         intendedSide,
       }));
       return;
@@ -1571,6 +1634,8 @@ class MetaAdaptiveStrategyAgent {
       sessionId: params.sessionId ?? null,
       token: params.token,
       predictorDecision,
+      predictorProbability: Number(predictorProbability.toFixed(4)),
+      predictorConfidence: Number(predictorConfidence.toFixed(4)),
       intendedSide,
     }));
   }
