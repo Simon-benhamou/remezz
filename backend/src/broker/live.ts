@@ -2,12 +2,24 @@ import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot, BrokerPositionMarg
 import { getUserExchange, resolveSymbol } from '../exchange/ccxtClient.js';
 import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
+import type { Cfg } from '../utils/env.js';
 import { logImprovementAuto } from '../monitor/backlog.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 
 const CAPACITY_LOG = new Map<string, number[]>();
 const BREACH_WINDOW_MS = 60 * 60 * 1000;
 const LIMIT_SLIP_PCT = Number(process.env.ORDER_LIMIT_SLIP_PCT || '0.15'); // percent
+
+export function resolveOrderFillTimeoutSec(cfg: Cfg, orderType: 'market' | 'limit'): number {
+  const base = Math.max(1, Number(cfg.ORDER_FILL_TIMEOUT_SEC || 0) || 0);
+  if (orderType === 'limit') {
+    const limit = Number(cfg.ORDER_FILL_TIMEOUT_LIMIT_SEC);
+    if (Number.isFinite(limit) && limit > 0) {
+      return Math.max(base, limit);
+    }
+  }
+  return base;
+}
 
 function parsePositiveNumber(value: any): number | undefined {
   const n = Number(value);
@@ -398,7 +410,8 @@ export class LiveBroker implements Broker {
     if (o.postOnly) params.postOnly = true;
     if (o.timeInForce) params.timeInForce = o.timeInForce;
     const cfg = getConfig();
-    const deadline = Date.now() + Math.max(1000, cfg.ORDER_FILL_TIMEOUT_SEC * 1000);
+    const timeoutSec = resolveOrderFillTimeoutSec(cfg, o.type === 'limit' ? 'limit' : 'market');
+    const deadline = Date.now() + Math.max(1000, timeoutSec * 1000);
     const pollMs = Math.max(100, cfg.ORDER_FILL_POLL_MS);
     const maxRetry = Math.max(0, cfg.ORDER_RETRY_MAX);
     let attempts = 1;

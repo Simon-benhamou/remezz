@@ -84,6 +84,7 @@ export type Cfg = {
   MARGIN_HALT_RELEASE_COOLDOWN_MS: number;
   // Order reliability
   ORDER_FILL_TIMEOUT_SEC: number;     // max seconds to wait for a live order to fill
+  ORDER_FILL_TIMEOUT_LIMIT_SEC: number; // max seconds to wait for limit orders (gives them more room)
   ORDER_FILL_POLL_MS: number;         // polling interval for fetchOrder
   ORDER_RETRY_MAX: number;            // how many times to retry a market order if not filled
   ORDER_LIMIT_SPREAD_BPS: number;     // spread bps threshold to switch to limit orders
@@ -458,6 +459,7 @@ export function getConfig(): Cfg {
     MARGIN_HALT_RESUME_PCT: Number(e.MARGIN_HALT_RESUME_PCT || "78"),
     MARGIN_HALT_RELEASE_COOLDOWN_MS: Number(e.MARGIN_HALT_RELEASE_COOLDOWN_MS || "10000"),
     ORDER_FILL_TIMEOUT_SEC: Number(e.ORDER_FILL_TIMEOUT_SEC || "10"),
+    ORDER_FILL_TIMEOUT_LIMIT_SEC: Number(e.ORDER_FILL_TIMEOUT_LIMIT_SEC || "180"),
     ORDER_FILL_POLL_MS: Number(e.ORDER_FILL_POLL_MS || "300"),
     ORDER_RETRY_MAX: Number(e.ORDER_RETRY_MAX || "2"),
     ORDER_LIMIT_SPREAD_BPS: Number(e.ORDER_LIMIT_SPREAD_BPS || "12"),
