@@ -95,7 +95,7 @@ export function maybeAdjustOrExit({
 
   const rNow = riskPerUnit > 0 ? PositionSizer.rMultiple(entryPrice, stop, lastPrice, side) : 0;
 
-  if (rNow >= trailAfter && atr && atr > 0) {
+  if (holdSatisfied && rNow >= trailAfter && atr && atr > 0) {
     const desiredStop = side === 'long'
       ? lastPrice - cfg.trailAtrMult * atr
       : lastPrice + cfg.trailAtrMult * atr;
@@ -116,7 +116,7 @@ export function maybeAdjustOrExit({
     return { action: 'exit', reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure` };
   }
 
-  if (rNow >= tightenThreshold && momentumFail && atr && atr > 0 && holdSatisfied) {
+  if (holdSatisfied && rNow >= tightenThreshold && momentumFail && atr && atr > 0) {
     const tightenStop = side === 'long'
       ? lastPrice - 0.5 * cfg.trailAtrMult * atr
       : lastPrice + 0.5 * cfg.trailAtrMult * atr;
