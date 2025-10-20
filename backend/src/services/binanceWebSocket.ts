@@ -78,6 +78,7 @@ export function toBinanceSymbolId(unified: string): string {
 const LAST_VALID_BID_ASK_TTL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 1_500;
 const REST_MIN_INTERVAL_MS = 120;
+const WS_HEALTH_GRACE_MS = 15_000;
 export const REST_429_BACKOFF_MS = 7_500;
 
 export const BINANCE_REST_429_BACKOFF_MS = REST_429_BACKOFF_MS;
@@ -192,7 +193,8 @@ class BinanceWebSocketManager {
   private klinesCache = new Map<string, BinanceKlineData[]>();
   private balanceCache = new Map<string, BinanceBalance>();
   private lastUpdate = Date.now();
-  
+  private lastAcceptedTs = 0;
+
   // Callbacks pour notifier les consumers
   private tickerCallbacks: Array<(ticker: BinanceTickerData) => void> = [];
   private klineCallbacks: Array<(kline: BinanceKlineData) => void> = [];
@@ -204,6 +206,7 @@ class BinanceWebSocketManager {
   private isConnecting = false;
   private isConnected = false;
   private lastHealthy = false;
+  private lastHealthReason: string | null = null;
   private lastValidBidAsk = new Map<string, { bid: number; ask: number; ts: number }>();
   private snapshotCooldown = new Map<string, number>();
   
@@ -313,6 +316,8 @@ class BinanceWebSocketManager {
         this.throttledKlineStreams.clear();
         recordWsReconnect('global');
         this.lastHealthy = false;
+        this.lastAcceptedTs = 0;
+        this.lastHealthReason = 'ws_open';
         updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
 
         // Subscribe aux streams par défaut
@@ -346,6 +351,8 @@ class BinanceWebSocketManager {
         this.activeStreams.clear();
         this.throttledKlineStreams.clear();
         this.lastHealthy = false;
+        this.lastAcceptedTs = 0;
+        this.lastHealthReason = 'ws_close';
         updateWsConnectionState({ connected: false, healthy: false, reason: 'ws_close' });
         if (this.pingTimer) {
           clearInterval(this.pingTimer);
@@ -585,14 +592,28 @@ class BinanceWebSocketManager {
       }
     }
 
+    if (acceptedCount > 0) {
+      this.lastAcceptedTs = receivedTs;
+    }
+
     this.lastUpdate = receivedTs;
-    const isHealthy = acceptedCount > 0;
-    if (isHealthy !== this.lastHealthy) {
-      this.lastHealthy = isHealthy;
+
+    const lastAcceptAge = this.lastAcceptedTs > 0 ? receivedTs - this.lastAcceptedTs : Number.POSITIVE_INFINITY;
+    const withinGrace = this.lastAcceptedTs > 0 && lastAcceptAge <= WS_HEALTH_GRACE_MS;
+    const nextHealthy = acceptedCount > 0 || withinGrace;
+    const reason = acceptedCount > 0
+      ? 'ws_frames_accepted'
+      : withinGrace
+        ? 'ws_recent_accept'
+        : 'ws_no_recent_accept';
+
+    if (nextHealthy !== this.lastHealthy || reason !== this.lastHealthReason) {
+      this.lastHealthy = nextHealthy;
+      this.lastHealthReason = reason;
       updateWsConnectionState({
         connected: this.isConnected,
-        healthy: isHealthy,
-        reason: isHealthy ? 'ws_frames_accepted' : 'ws_frames_rejected',
+        healthy: nextHealthy,
+        reason,
       });
     }
     
@@ -875,9 +896,18 @@ class BinanceWebSocketManager {
    */
   isHealthy(): boolean {
     if (!this.isConnected) return false;
-    const cacheAge = Date.now() - this.lastUpdate;
-    // Cache considéré frais si < 10 secondes
-    return cacheAge < 10000 && this.tickersCache.size > 0 && this.lastHealthy;
+    if (this.tickersCache.size === 0) return false;
+
+    const now = Date.now();
+    const cacheAge = now - this.lastUpdate;
+    if (cacheAge >= 10_000) return false;
+
+    if (this.lastAcceptedTs <= 0) return false;
+
+    const sinceLastAccept = now - this.lastAcceptedTs;
+    if (sinceLastAccept > WS_HEALTH_GRACE_MS) return false;
+
+    return true;
   }
 
   /**
@@ -903,6 +933,9 @@ class BinanceWebSocketManager {
 
     this.isConnected = false;
     this.isConnecting = false;
+    this.lastHealthy = false;
+    this.lastAcceptedTs = 0;
+    this.lastHealthReason = 'manual_close';
     this.activeStreams.clear();
     this.tickersCache.clear();
     this.klinesCache.clear();
@@ -1231,6 +1264,43 @@ export async function runExclusiveBalanceFetch<T>(userId: string, asset: string,
 
   balanceFetchPromises.set(key, wrapped);
   return wrapped;
+}
+
+export function createTestBinanceWebSocketHarness() {
+  if (process.env.UNIT_TEST_MODE !== 'true') {
+    console.warn('createTestBinanceWebSocketHarness should only be used in UNIT_TEST_MODE.');
+  }
+
+  const manager = new BinanceWebSocketManager();
+  const internal = manager as unknown as {
+    isConnected: boolean;
+    handleAllTickersUpdate: (tickers: any[]) => void;
+  };
+
+  internal.isConnected = true;
+
+  const withFakeNow = <T>(now: number, fn: () => T): T => {
+    const originalNow = Date.now;
+    (Date as any).now = () => now;
+    try {
+      return fn();
+    } finally {
+      (Date as any).now = originalNow;
+    }
+  };
+
+  return {
+    manager,
+    feedBatch(tickers: any[], now: number) {
+      withFakeNow(now, () => internal.handleAllTickersUpdate(tickers));
+    },
+    isHealthyAt(now: number) {
+      return withFakeNow(now, () => manager.isHealthy());
+    },
+    setConnected(connected: boolean) {
+      internal.isConnected = connected;
+    },
+  };
 }
 
 /**
