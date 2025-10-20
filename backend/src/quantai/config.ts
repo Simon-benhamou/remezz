@@ -329,7 +329,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       tightenProfitR: 0.2,
       cutLossR: 0.35,
     },
-    maxHoldingMin: 20,
+    maxHoldingMin: 90,
   },
   regime: {
     emaFastPeriod: 50,

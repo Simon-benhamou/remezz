@@ -127,8 +127,11 @@ export function maybeAdjustOrExit({
 
   const maxHolding = cfg.maxHoldingMin;
   if (maxHolding != null && Number.isFinite(maxHolding) && maxHolding > 0 && minutesOpen != null) {
-    if (minutesOpen >= maxHolding && rNow < Math.max(tightenThreshold, 0.2)) {
-      return { action: 'exit', reason: `Time stop after ${minutesOpen.toFixed(1)}min without progress` };
+    if (minutesOpen >= maxHolding && lossR >= cutThreshold) {
+      return {
+        action: 'exit',
+        reason: `Time stop: drawdown ${lossR.toFixed(2)}R after ${minutesOpen.toFixed(1)}min`,
+      };
     }
   }
 
