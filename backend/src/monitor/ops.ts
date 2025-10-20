@@ -100,7 +100,7 @@ export async function computeAgentHealth(
 
   const activeSessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null },
-    select: { id: true, symbol: true, mode: true, profileJson: true },
+    select: { id: true, symbol: true, mode: true, profileJson: true, isSmartAgent: true },
   });
   const sessionIds = activeSessions.map((session) => session.id);
 
@@ -213,6 +213,12 @@ export async function computeAgentHealth(
 
     const performance = fillPerformance.get(session.id) ?? { wins: 0, losses: 0, breakeven: 0 };
 
+    const profile = (session.profileJson as Record<string, unknown>) || {};
+    const persistedSmart = Boolean(
+      (profile as any)?.isSmartAgent || (profile as any)?.isIntelligent,
+    );
+    const isSmartAgent = Boolean((session as any).isSmartAgent || persistedSmart);
+
     return {
       sessionId: session.id,
       symbol: session.symbol,
@@ -229,6 +235,7 @@ export async function computeAgentHealth(
       status,
       flags,
       aggressiveness,
+      isSmartAgent,
     };
   });
 

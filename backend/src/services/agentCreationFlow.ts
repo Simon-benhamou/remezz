@@ -142,6 +142,16 @@ const SMART_SELECTION_RESERVATION_TTL_MS = 5 * 60 * 1000;
 const smartSelectionReservations = new Map<string, { symbol: string; expiresAt: number }>();
 
 const ORDERABILITY_TICKER_TIMEOUT_MS = Number(process.env.ORDERABILITY_TICKER_TIMEOUT_MS ?? 5_000);
+const DEFAULT_SMART_ANALYSIS_LIMIT = 25;
+
+export function resolveSmartAnalysisLimit(envValue: unknown = process.env.SMART_AUTO_ANALYSIS_LIMIT): number {
+  const parsed = typeof envValue === 'string' ? Number(envValue) : Number(envValue ?? NaN);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SMART_ANALYSIS_LIMIT;
+  }
+  const bounded = Math.floor(parsed);
+  return Math.min(60, Math.max(5, bounded));
+}
 
 class OrderabilityTickerTimeoutError extends Error {
   symbol: string;
@@ -696,30 +706,47 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
     minVolumeUsd: config.volumeThresholdUsd,
   });
 
-  try {
-    candidateSymbols = await getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile });
-    pushDiagnostic('info', 'Applied liquidity and performance filters', {
-      survivors: candidateSymbols.length,
-      aggressiveness: strategyProfile.aggressiveness,
-    });
-  } catch (error) {
-    console.warn('⚠️ Failed to fetch optimized crypto list:', error);
-    pushDiagnostic('warn', 'Failed to fetch optimized crypto list', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  const [listResult, prefetchedOpportunity] = await Promise.all([
+    (async () => {
+      try {
+        const symbols = await getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile });
+        pushDiagnostic('info', 'Applied liquidity and performance filters', {
+          survivors: symbols.length,
+          aggressiveness: strategyProfile.aggressiveness,
+        });
+        return symbols;
+      } catch (error) {
+        console.warn('⚠️ Failed to fetch optimized crypto list:', error);
+        pushDiagnostic('warn', 'Failed to fetch optimized crypto list', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return [] as string[];
+      }
+    })(),
+    (async () => {
+      try {
+        const opportunity = await getBestIntelligentOpportunity(undefined, {
+          aggressiveness: agg,
+          maxUsage: 0,
+        });
+        if (opportunity) {
+          pushDiagnostic('info', 'Evaluated prefetched AI opportunity', {
+            symbol: opportunity.symbol,
+            score: (opportunity as any)?.score,
+          });
+        }
+        return opportunity;
+      } catch (error) {
+        console.warn('⚠️ Failed to evaluate prefetched opportunity:', error);
+        pushDiagnostic('warn', 'Failed to evaluate prefetched AI opportunity', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    })(),
+  ]);
 
-  const prefetchedOpportunity = await getBestIntelligentOpportunity(undefined, {
-    aggressiveness: agg,
-    maxUsage: 0,
-  });
-
-  if (prefetchedOpportunity) {
-    pushDiagnostic('info', 'Evaluated prefetched AI opportunity', {
-      symbol: prefetchedOpportunity.symbol,
-      score: (prefetchedOpportunity as any)?.score,
-    });
-  }
+  candidateSymbols = listResult;
 
   if (prefetchedOpportunity && !candidateSymbols.includes(prefetchedOpportunity.symbol)) {
     candidateSymbols.unshift(prefetchedOpportunity.symbol);
@@ -760,9 +787,11 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
     };
   }
 
-  const analysisUniverse = candidateSymbols.slice(0, 40);
+  const analysisLimit = resolveSmartAnalysisLimit();
+  const analysisUniverse = candidateSymbols.slice(0, analysisLimit);
   pushDiagnostic('info', 'Running orderability checks on AI-ranked shortlist', {
     shortlistSize: analysisUniverse.length,
+    analysisLimit,
   });
 
   const orderabilityChecks = await Promise.all(
