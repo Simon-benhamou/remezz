@@ -3,6 +3,7 @@ import { ema, rsi, atr } from './indicators.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
 import { getBinanceWebSocket, getTickerFromWebSocket, seedKlinesFromWebSocket, getKlinesOhlcvFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import { fetchBinanceOhlcv } from '../services/binanceRest.js';
 import { recordMarketFrame, recordRestFallback, setFallbackState } from '../monitor/marketMetrics.js';
 import { evaluateTickerFrame } from './tickerValidation.js';
 
@@ -259,6 +260,12 @@ function createPublicExchange(forSymbol?: string) {
 }
 
 async function fetchOhlcvRest(symbol: string, tf: string, limit: number, userId?: string, userCredentials?: any): Promise<number[][]> {
+  const cfg = getConfig();
+  const exchangeHint = userCredentials?.exchange || cfg.EXCHANGE_ID;
+  if (isBinanceExchange(exchangeHint)) {
+    return fetchBinanceOhlcv(symbol, tf, limit);
+  }
+
   let ex: any;
   let resolvedSymbol: string;
 
