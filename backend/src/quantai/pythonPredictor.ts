@@ -23,7 +23,15 @@ function probePythonExecutable(): string {
   const envExecutable =
     process.env.PYTHON_PREDICT_EXECUTABLE?.trim() || process.env.PYTHON?.trim();
 
-  const candidates = [envExecutable, 'python3', 'python'].filter(
+  const versionedCandidates = [
+    'python3.12',
+    'python3.11',
+    'python3.10',
+    'python3.9',
+    'python3.8',
+  ];
+
+  const candidates = [envExecutable, ...versionedCandidates, 'python3', 'python'].filter(
     (value): value is string => Boolean(value && value.length > 0),
   );
 
