@@ -12,6 +12,8 @@ const exitCfg = {
   maxHoldingMin: 5,
 };
 
+exitCfg.earlyExit.minHoldMinutes = 3;
+
 const baseParams = {
   side: 'long',
   entryPrice: 100,

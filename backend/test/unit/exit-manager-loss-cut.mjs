@@ -6,7 +6,10 @@ process.env.UNIT_TEST_MODE = 'true';
 const { getQuantAIConfig, maybeAdjustOrExit } = await import('../../dist/src/quantai/index.js');
 
 const cfg = getQuantAIConfig();
-const exitCfg = cfg.exits;
+const exitCfg = {
+  ...cfg.exits,
+  earlyExit: { ...cfg.exits.earlyExit, minHoldMinutes: 0 },
+};
 
 const directive = maybeAdjustOrExit({
   side: 'long',
