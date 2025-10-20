@@ -75,6 +75,63 @@ export function toBinanceSymbolId(unified: string): string {
 
 const LAST_VALID_BID_ASK_TTL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 1_500;
+const REST_MIN_INTERVAL_MS = 120;
+const REST_429_BACKOFF_MS = 7_500;
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+interface RestLimiterOptions {
+  minIntervalMs: number;
+  now?: () => number;
+}
+
+interface RestLimiter {
+  run<T>(task: () => Promise<T> | T): Promise<T>;
+  backoff(ms: number): void;
+}
+
+export function createBinanceRestLimiter(options?: Partial<RestLimiterOptions>): RestLimiter {
+  const minIntervalMs = Math.max(0, options?.minIntervalMs ?? REST_MIN_INTERVAL_MS);
+  const nowFn = options?.now ?? Date.now;
+
+  let tail: Promise<void> = Promise.resolve();
+  let lastRequestTs = 0;
+  let backoffUntilTs = 0;
+
+  return {
+    async run<T>(task: () => Promise<T> | T): Promise<T> {
+      let release: (() => void) | undefined;
+      const next = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const previous = tail;
+      tail = next;
+
+      await previous;
+
+      try {
+        const now = nowFn();
+        const waitUntil = Math.max(backoffUntilTs, lastRequestTs + minIntervalMs);
+        if (waitUntil > now) {
+          await sleep(waitUntil - now);
+        }
+        lastRequestTs = nowFn();
+        return await task();
+      } finally {
+        release?.();
+      }
+    },
+    backoff(ms: number) {
+      if (ms <= 0) return;
+      const target = nowFn() + ms;
+      if (target > backoffUntilTs) {
+        backoffUntilTs = target;
+      }
+    },
+  };
+}
+
+const bookTickerRestLimiter = createBinanceRestLimiter();
 
 function parseTickerNumber(value: any): number | undefined {
   if (value === undefined || value === null) return undefined;
@@ -651,7 +708,17 @@ class BinanceWebSocketManager {
 
   private async fetchBookTickerSnapshot(symbol: string): Promise<void> {
     try {
-      const response = await fetch(`https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol=${symbol}`);
+      const url = `${BINANCE_ENDPOINTS.rest}/fapi/v1/ticker/bookTicker?symbol=${symbol}`;
+      const response = await bookTickerRestLimiter.run(() => fetch(url));
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get('retry-after'));
+        const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.max(REST_429_BACKOFF_MS, retryAfter * 1_000)
+          : REST_429_BACKOFF_MS;
+        bookTickerRestLimiter.backoff(backoffMs);
+        const text = await response.text().catch(() => '');
+        throw new Error(`HTTP 429 ${text || ''}`.trim());
+      }
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -704,6 +771,9 @@ class BinanceWebSocketManager {
         extra: { snapshot: 'bookTicker_recovery' },
       });
     } catch (error) {
+      if (error instanceof Error && /429|too many requests/i.test(error.message)) {
+        bookTickerRestLimiter.backoff(REST_429_BACKOFF_MS);
+      }
       console.warn(`⚠️ Failed to refresh bookTicker snapshot for ${symbol}:`, error);
     }
   }
