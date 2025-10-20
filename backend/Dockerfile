@@ -32,6 +32,7 @@ COPY tsconfig.json ./
 # App source code (excluding test files via .dockerignore)
 COPY src ./src
 COPY scripts ./scripts
+COPY python ./python
 
 # Build the application
 RUN npm run build
