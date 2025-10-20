@@ -79,6 +79,9 @@ export function maybeAdjustOrExit({
       : cfg.trailAfterRImpulse ?? trailAfterBase;
   const tightenThreshold = cfg.earlyExit.tightenProfitR ?? cfg.earlyExit.tightenOnlyIfProfitGtR ?? 0.2;
   const cutThreshold = cfg.earlyExit.cutLossR ?? cfg.earlyExit.cutIfLossGtR ?? 0.5;
+  const minHoldMinutes = cfg.earlyExit.minHoldMinutes ?? 0;
+  const holdSatisfied =
+    minutesOpen == null || !Number.isFinite(minHoldMinutes) || minHoldMinutes <= 0 || minutesOpen >= minHoldMinutes;
 
   // Take profit detection (first non-triggered target)
   for (let i = 0; i < targets.length; i += 1) {
@@ -109,11 +112,11 @@ export function maybeAdjustOrExit({
     (adx != null && adx < cfg.earlyExit.adxBelow) ||
     (cfg.earlyExit.cmfNegative && cmf != null && cmf < 0);
 
-  if (lossR >= cutThreshold && momentumFail) {
+  if (lossR >= cutThreshold && momentumFail && holdSatisfied) {
     return { action: 'exit', reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure` };
   }
 
-  if (rNow >= tightenThreshold && momentumFail && atr && atr > 0) {
+  if (rNow >= tightenThreshold && momentumFail && atr && atr > 0 && holdSatisfied) {
     const tightenStop = side === 'long'
       ? lastPrice - 0.5 * cfg.trailAtrMult * atr
       : lastPrice + 0.5 * cfg.trailAtrMult * atr;
@@ -127,8 +130,11 @@ export function maybeAdjustOrExit({
 
   const maxHolding = cfg.maxHoldingMin;
   if (maxHolding != null && Number.isFinite(maxHolding) && maxHolding > 0 && minutesOpen != null) {
-    if (minutesOpen >= maxHolding && rNow < Math.max(tightenThreshold, 0.2)) {
-      return { action: 'exit', reason: `Time stop after ${minutesOpen.toFixed(1)}min without progress` };
+    if (minutesOpen >= maxHolding && lossR >= cutThreshold && holdSatisfied) {
+      return {
+        action: 'exit',
+        reason: `Time stop: drawdown ${lossR.toFixed(2)}R after ${minutesOpen.toFixed(1)}min`,
+      };
     }
   }
 

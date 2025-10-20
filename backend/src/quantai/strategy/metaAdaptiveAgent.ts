@@ -418,6 +418,7 @@ class MetaAdaptiveStrategyAgent {
   private readonly activeTrades = new Map<string, ActiveTrade[]>();
   private readonly liquidityLog = new Map<string, number>();
   private readonly guardrailHalts = new Map<string, Map<StrategyFamily, GuardrailHalt>>();
+  private readonly symbolCooldowns = new Map<string, number>();
   private epsilonBase = 0.15;
   private calibrationProfile: CalibrationProfile = defaultCalibrationProfile;
   private readonly sessionCapital = new Map<string, PreciseDecimal>();
@@ -432,6 +433,7 @@ class MetaAdaptiveStrategyAgent {
   private readonly majorBases = new Set(['BTC', 'ETH']);
   private rngState = 0x9e3779b9n;
   private tokenCounter = 0n;
+  private reentryCooldownMs = 0;
 
   static getInstance(): MetaAdaptiveStrategyAgent {
     if (!MetaAdaptiveStrategyAgent.instance) {
@@ -462,6 +464,7 @@ class MetaAdaptiveStrategyAgent {
       this.guardrailHalts.clear();
       this.sessionCapital.clear();
       this.tradeLedgers.clear();
+      this.symbolCooldowns.clear();
       this.setRandomSeed(0x9e3779b9);
       this.calibrationProfile = defaultCalibrationProfile;
       return;
@@ -470,6 +473,11 @@ class MetaAdaptiveStrategyAgent {
     this.activeTrades.delete(sessionId);
     this.guardrailHalts.delete(sessionId);
     this.sessionCapital.delete(sessionId);
+    for (const key of Array.from(this.symbolCooldowns.keys())) {
+      if (key.startsWith(`${sessionId}::`)) {
+        this.symbolCooldowns.delete(key);
+      }
+    }
     for (const key of Array.from(this.tradeLedgers.keys())) {
       if (key.startsWith(`${sessionId}::`)) {
         this.tradeLedgers.delete(key);
@@ -499,6 +507,44 @@ class MetaAdaptiveStrategyAgent {
   private nextToken(): string {
     const token = `meta-${(this.tokenCounter++).toString(36)}`;
     return token;
+  }
+
+  private cooldownKey(sessionId: string | null | undefined, symbol: string): string {
+    return `${sessionId ?? 'global'}::${symbol}`;
+  }
+
+  private purgeExpiredCooldowns(now: number): void {
+    if (!this.symbolCooldowns.size) return;
+    for (const [key, until] of Array.from(this.symbolCooldowns.entries())) {
+      if (until <= now) {
+        this.symbolCooldowns.delete(key);
+      }
+    }
+  }
+
+  setReentryCooldownMinutes(minutes?: number | null): void {
+    if (!Number.isFinite(minutes ?? NaN) || (minutes ?? 0) <= 0) {
+      this.reentryCooldownMs = 0;
+      this.symbolCooldowns.clear();
+      return;
+    }
+    const normalized = Math.max(0, Number(minutes));
+    this.reentryCooldownMs = normalized * 60_000;
+  }
+
+  public isSymbolEligibleForEntry(sessionId: string | null, symbol: string): boolean {
+    if (this.reentryCooldownMs <= 0) return true;
+    if (!symbol) return true;
+    const now = Date.now();
+    this.purgeExpiredCooldowns(now);
+    const key = this.cooldownKey(sessionId, symbol);
+    const until = this.symbolCooldowns.get(key);
+    if (!until) return true;
+    if (until <= now) {
+      this.symbolCooldowns.delete(key);
+      return true;
+    }
+    return false;
   }
 
   private ledgerKey(sessionId: string | null | undefined, symbol: string): string {
@@ -1572,6 +1618,20 @@ class MetaAdaptiveStrategyAgent {
       riskUsd: trade.riskUsd.toFixed(6),
       targetProfitUsd: trade.targetProfitUsd.toFixed(6),
     }));
+    if (this.reentryCooldownMs > 0 && normalized.lt(0)) {
+      const now = Date.now();
+      const until = now + this.reentryCooldownMs;
+      const cooldownKey = this.cooldownKey(params.sessionId ?? null, params.symbol);
+      this.symbolCooldowns.set(cooldownKey, until);
+      console.log(JSON.stringify({
+        level: 'info',
+        event: 'adaptive_symbol_cooldown',
+        sessionId: params.sessionId ?? null,
+        symbol: params.symbol,
+        cooldownMinutes: Number((this.reentryCooldownMs / 60000).toFixed(2)),
+        eligibleAt: new Date(until).toISOString(),
+      }));
+    }
     this.updateStats(params.symbol, trade.family, normalized);
   }
 
@@ -1808,6 +1868,9 @@ class MetaAdaptiveStrategyAgent {
     },
   ): AdaptiveSignal | null {
     if (!ordered.length) return null;
+    if (!this.isSymbolEligibleForEntry(sessionId ?? null, symbol)) {
+      return null;
+    }
     const available = ordered.filter(signal => signal.active).length > 0
       ? ordered.filter(signal => signal.active)
       : ordered;

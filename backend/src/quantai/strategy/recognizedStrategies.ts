@@ -1,4 +1,5 @@
 import { metaAdaptiveStrategyAgent, AdaptiveSignal, PreciseDecimal } from './metaAdaptiveAgent.js';
+import { getQuantAIConfig } from '../config.js';
 import { TechnicalSnapshot } from '../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 import { recordOpsEvent } from '../../monitor/ops.js';
@@ -177,6 +178,8 @@ export async function registerAdaptiveTradeEntry(params: {
   executionMode?: 'market' | 'limit' | 'twap';
 }): Promise<void> {
   if (!params.signal || !params.signal.meta) return;
+  const reentryCooldown = getQuantAIConfig().exits.reentryCooldownMin ?? 0;
+  metaAdaptiveStrategyAgent.setReentryCooldownMinutes(reentryCooldown);
   const planRiskPct = new PreciseDecimal(params.signal.meta.riskPct ?? '0');
   const stopAtrMult = new PreciseDecimal(params.signal.meta.stopAtrMult ?? '1');
   const planRiskUsd = new PreciseDecimal(params.signal.meta.riskUsd ?? '0');

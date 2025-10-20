@@ -66,6 +66,7 @@ export async function runMetaAdaptiveCalibration(dataset: CalibrationDataset, op
   }
   const agent = metaAdaptiveStrategyAgent;
   agent.reset();
+  agent.setReentryCooldownMinutes(0);
   if (options?.seed != null) {
     agent.setRandomSeed(options.seed);
   }
