@@ -14,6 +14,7 @@ import {
   Statistic,
   Tag,
   Typography,
+  message,
   theme,
 } from 'antd';
 import {
@@ -197,6 +198,7 @@ const OperationsDashboardPage: React.FC = () => {
   const [agentHealthLoading, setAgentHealthLoading] = React.useState(false);
   const [recentTrades, setRecentTrades] = React.useState<any[]>([]);
   const [recentTradesLoading, setRecentTradesLoading] = React.useState(false);
+  const [reselecting, setReselecting] = React.useState<Record<string, boolean>>({});
 
   const refreshAll = React.useCallback(async () => {
     setRefreshing(true);
@@ -232,6 +234,35 @@ const OperationsDashboardPage: React.FC = () => {
   React.useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
+
+  const handleSmartReselect = React.useCallback(
+    async (sessionId: string) => {
+      if (!sessionId) return;
+      setReselecting((prev) => ({ ...prev, [sessionId]: true }));
+      try {
+        const result = await api.triggerSmartReselect(sessionId);
+        if (result?.success) {
+          const from = result.oldSymbol || 'current';
+          const to = result.newSymbol || result.currentSymbol || 'current';
+          message.success(`Market refreshed: ${from} → ${to}`);
+        } else {
+          const reason = result?.reason ? String(result.reason) : 'No change required';
+          message.info(reason);
+        }
+        await refreshAll();
+      } catch (error: any) {
+        const msg = error?.response?.data?.error || error?.message || 'Re-selection failed';
+        message.error(msg);
+      } finally {
+        setReselecting((prev) => {
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+        });
+      }
+    },
+    [refreshAll],
+  );
 
   const { token } = theme.useToken();
   const metricsTimestamp = opsMetrics?.timestamp
@@ -736,6 +767,8 @@ const OperationsDashboardPage: React.FC = () => {
             data={agentHealth}
             loading={agentHealthLoading || refreshing}
             onRefresh={() => void refreshAll()}
+            onReselect={handleSmartReselect}
+            reselecting={reselecting}
           />
         </Col>
       </Row>
