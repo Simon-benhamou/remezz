@@ -8,6 +8,58 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = dirname(dirname(dirname(__dirname)));
 const defaultScript = join(projectRoot, 'python', 'predict_service.py');
 
+let cachedPythonExecutable: string | null = null;
+
+function resolvePythonExecutable(): string {
+  if (cachedPythonExecutable) {
+    return cachedPythonExecutable;
+  }
+
+  const envExecutable =
+    process.env.PYTHON_PREDICT_EXECUTABLE?.trim() || process.env.PYTHON?.trim();
+
+  const candidates = [envExecutable, 'python3', 'python'].filter(
+    (value): value is string => Boolean(value && value.length > 0),
+  );
+
+  const errors: string[] = [];
+
+  for (const candidate of candidates) {
+    const result = spawnSync(candidate, ['--version'], {
+      encoding: 'utf8',
+    });
+
+    if (!result.error) {
+      cachedPythonExecutable = candidate;
+      return candidate;
+    }
+
+    const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT' || code === 'EACCES') {
+      const reason = code === 'EACCES' ? 'not executable' : 'not found';
+      errors.push(`${reason}: ${candidate}`);
+      continue;
+    }
+
+    throw new Error(
+      `failed to execute python candidate "${candidate}": ${result.error?.message ?? 'unknown error'}`,
+    );
+  }
+
+  const hint =
+    'Set PYTHON_PREDICT_EXECUTABLE to a valid interpreter or ensure python3/python are on PATH.';
+  const errorDetails = errors.length > 0 ? ` (${errors.join(', ')})` : '';
+  throw new Error(`Unable to locate a Python interpreter for predictor${errorDetails}. ${hint}`);
+}
+
+export function __resetPythonExecutableCacheForTests(): void {
+  cachedPythonExecutable = null;
+}
+
+export function __getPythonExecutableCacheForTests(): string | null {
+  return cachedPythonExecutable;
+}
+
 // The Python process is a stateless bridge: each invocation loads the XGBoost
 // artefacts from python/ and returns `{ "prediction": 0|1, "probability": 0-1 }`.
 // Keeping the implementation out-of-process ensures Node stays dependency-light.
@@ -66,7 +118,15 @@ export async function getPrediction(features: Record<string, number>): Promise<P
   const payload = JSON.stringify(sanitized);
 
   return new Promise<PythonPredictionResult>((resolve, reject) => {
-    const child = spawn('python3', [scriptPath], {
+    let pythonCommand: string;
+    try {
+      pythonCommand = resolvePythonExecutable();
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const child = spawn(pythonCommand, [scriptPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
     });
@@ -126,7 +186,9 @@ export function getPredictionSync(features: Record<string, number>): PythonPredi
   const payload = JSON.stringify(sanitized);
   const timeoutMs = Number(process.env.PYTHON_PREDICT_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
 
-  const result = spawnSync('python3', [scriptPath], {
+  const pythonCommand = resolvePythonExecutable();
+
+  const result = spawnSync(pythonCommand, [scriptPath], {
     input: payload,
     encoding: 'utf8',
     env: { ...process.env },
