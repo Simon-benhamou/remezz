@@ -9,10 +9,15 @@ const projectRoot = dirname(dirname(dirname(__dirname)));
 const defaultScript = join(projectRoot, 'python', 'predict_service.py');
 
 let cachedPythonExecutable: string | null = null;
+let cachedPythonResolutionError: Error | null = null;
 
-function resolvePythonExecutable(): string {
+function probePythonExecutable(): string {
   if (cachedPythonExecutable) {
     return cachedPythonExecutable;
+  }
+
+  if (cachedPythonResolutionError) {
+    throw cachedPythonResolutionError;
   }
 
   const envExecutable =
@@ -31,6 +36,7 @@ function resolvePythonExecutable(): string {
 
     if (!result.error) {
       cachedPythonExecutable = candidate;
+      cachedPythonResolutionError = null;
       return candidate;
     }
 
@@ -41,23 +47,55 @@ function resolvePythonExecutable(): string {
       continue;
     }
 
-    throw new Error(
+    const failure = new Error(
       `failed to execute python candidate "${candidate}": ${result.error?.message ?? 'unknown error'}`,
     );
+    cachedPythonResolutionError = failure;
+    throw failure;
   }
 
   const hint =
     'Set PYTHON_PREDICT_EXECUTABLE to a valid interpreter or ensure python3/python are on PATH.';
   const errorDetails = errors.length > 0 ? ` (${errors.join(', ')})` : '';
-  throw new Error(`Unable to locate a Python interpreter for predictor${errorDetails}. ${hint}`);
+  const failure = new Error(
+    `Unable to locate a Python interpreter for predictor${errorDetails}. ${hint}`,
+  );
+  cachedPythonResolutionError = failure;
+  throw failure;
+}
+
+function resolvePythonExecutable(): string {
+  return probePythonExecutable();
+}
+
+export function isPythonPredictorAvailable(): boolean {
+  try {
+    probePythonExecutable();
+    return true;
+  } catch (error) {
+    if (!cachedPythonResolutionError) {
+      cachedPythonResolutionError =
+        error instanceof Error ? error : new Error(String(error));
+    }
+    return false;
+  }
 }
 
 export function __resetPythonExecutableCacheForTests(): void {
   cachedPythonExecutable = null;
+  cachedPythonResolutionError = null;
 }
 
 export function __getPythonExecutableCacheForTests(): string | null {
   return cachedPythonExecutable;
+}
+
+export function __getPythonResolutionErrorForTests(): Error | null {
+  return cachedPythonResolutionError;
+}
+
+export function getPythonResolutionError(): Error | null {
+  return cachedPythonResolutionError;
 }
 
 // The Python process is a stateless bridge: each invocation loads the XGBoost
