@@ -177,6 +177,41 @@ DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
     WindowSpec(DEFAULT_TIMEFRAME, hours=DEFAULT_LOOKBACK_HOURS, offset_hours=0),
 )
 
+
+@dataclass(frozen=True)
+class WindowSpec:
+    """Describe a historical slice to gather training samples from."""
+
+    timeframe: str
+    hours: int
+    offset_hours: int = 0
+
+    @property
+    def interval_minutes(self) -> int:
+        return _timeframe_to_minutes(self.timeframe)
+
+    def bounds(self, anchor: datetime) -> tuple[int, int]:
+        """Return (start_ts_ms, end_ts_ms) for this window."""
+
+        end = anchor - timedelta(hours=self.offset_hours)
+        start = end - timedelta(hours=self.hours)
+        return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+@dataclass
+class PreparedWindow:
+    symbol: str
+    spec: WindowSpec
+    dataset: "pd.DataFrame"
+
+
+DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
+    WindowSpec("15m", hours=24 * 45, offset_hours=0),
+    WindowSpec("15m", hours=24 * 30, offset_hours=24 * 30),
+    WindowSpec("1h", hours=24 * 180, offset_hours=0),
+    WindowSpec("4h", hours=24 * 365, offset_hours=0),
+)
+
 RANDOM_SEED = 42
 
 
@@ -549,7 +584,7 @@ def load_model() -> XGBClassifier:
     return model
 
 
-def predict_direction(model: XGBClassifier, latest_row) -> int:
+def predict_direction(model: XGBClassifier, latest_row) -> dict:
     features = load_features()
     if HAVE_PANDAS and pd is not None and isinstance(latest_row, pd.DataFrame):  # type: ignore
         if latest_row.empty:
@@ -564,8 +599,9 @@ def predict_direction(model: XGBClassifier, latest_row) -> int:
         raise TypeError('latest_row must be a DataFrame or dict of features')
 
     probs = model.predict_proba([ordered])
-    prob = probs[0][1]
-    return int(prob >= 0.5)
+    prob = float(probs[0][1])
+    direction = int(prob >= 0.5)
+    return {"prediction": direction, "probability": prob}
 
 
 def run_training_workflow(

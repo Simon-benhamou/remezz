@@ -22,6 +22,7 @@ export type AgentHealthRow = {
   status: AgentHealthStatus;
   flags: AgentHealthFlag[];
   aggressiveness?: AggressivenessLevel | null;
+  isSmartAgent?: boolean;
 };
 
 export type AgentHealthSnapshot = {
@@ -37,6 +38,8 @@ export type AgentHealthTableProps = {
   data?: AgentHealthSnapshot | null;
   loading?: boolean;
   onRefresh?: () => void;
+  onReselect?: (sessionId: string) => void;
+  reselecting?: Record<string, boolean>;
 };
 
 const STATUS_META: Record<AgentHealthStatus, { color: string; label: string }> = {
@@ -71,7 +74,7 @@ function formatRelative(ts: number | null, reference: number): string {
   return `${days}d ago`;
 }
 
-export default function AgentHealthTable({ data, loading, onRefresh }: AgentHealthTableProps) {
+export default function AgentHealthTable({ data, loading, onRefresh, onReselect, reselecting }: AgentHealthTableProps) {
   const referenceTs = data?.timestamp ?? Date.now();
   const agents = data?.agents ?? [];
   const { token } = theme.useToken();
@@ -107,6 +110,37 @@ export default function AgentHealthTable({ data, loading, onRefresh }: AgentHeal
       dataIndex: 'mode',
       key: 'mode',
       render: (value: string | null) => value?.toUpperCase() || '—',
+    },
+    {
+      title: 'Smart',
+      key: 'smartMode',
+      filters: [
+        { text: 'Smart Auto', value: 'smart' },
+        { text: 'Manual', value: 'manual' },
+      ],
+      onFilter: (value, record) => {
+        return value === 'smart' ? Boolean(record.isSmartAgent) : !record.isSmartAgent;
+      },
+      render: (_value, record) => {
+        if (record.isSmartAgent) {
+          return (
+            <Space size={6}>
+              <Tag color="cyan">Smart Auto</Tag>
+              {onReselect && (
+                <Button
+                  size="small"
+                  icon={<SyncOutlined />}
+                  onClick={() => onReselect(record.sessionId)}
+                  loading={Boolean(reselecting?.[record.sessionId])}
+                >
+                  Reselect
+                </Button>
+              )}
+            </Space>
+          );
+        }
+        return <Text style={{ color: mutedText }}>Manual</Text>;
+      },
     },
     {
       title: 'Aggressiveness',
@@ -172,7 +206,7 @@ export default function AgentHealthTable({ data, loading, onRefresh }: AgentHeal
         );
       },
     },
-  ], [headingColor, mutedText, referenceTs]);
+  ], [headingColor, mutedText, onReselect, referenceTs, reselecting]);
 
   return (
     <Card

@@ -15,5 +15,6 @@ const sampleFeatures = {
 };
 
 const prediction = await getPrediction(sampleFeatures);
-assert([0, 1].includes(prediction), 'Python predictor must return 0 or 1');
-console.log(`✅ python predictor returned ${prediction}`);
+assert([0, 1].includes(prediction.prediction), 'Python predictor must return 0 or 1');
+assert(prediction.probability >= 0 && prediction.probability <= 1, 'Python probability must be within [0,1]');
+console.log(`✅ python predictor returned ${prediction.prediction} (${(prediction.probability * 100).toFixed(1)}% bull)`);

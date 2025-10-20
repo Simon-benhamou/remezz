@@ -20,7 +20,7 @@ def _ensure_loaded():
         _FEATURES = load_features()
 
 
-def predict(features: Dict[str, Any]) -> int:
+def predict(features: Dict[str, Any]) -> Dict[str, Any]:
     _ensure_loaded()
     if not isinstance(features, dict):
         raise TypeError("features must be a dictionary")
@@ -50,7 +50,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         features = _read_json_payload(parsed)
         pred = predict(features)
-        sys.stdout.write(json.dumps({"prediction": int(pred)}))
+        if not isinstance(pred, dict) or "prediction" not in pred:
+            raise TypeError("predict_direction must return a mapping with 'prediction'")
+        payload = {
+            "prediction": int(pred.get("prediction", 0)),
+            "probability": float(pred.get("probability", 0.5)),
+        }
+        sys.stdout.write(json.dumps(payload))
         return 0
     except Exception as exc:  # pragma: no cover - surfaced to Node caller
         sys.stderr.write(json.dumps({"error": str(exc)}) + "\n")

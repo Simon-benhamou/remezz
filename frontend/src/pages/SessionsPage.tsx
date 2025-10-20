@@ -164,6 +164,14 @@ const statusMeta = (session: AgentSession) => {
   };
 };
 
+const selectionBadgeMeta = (isSmart?: boolean) => {
+  return {
+    label: isSmart ? 'Smart Auto' : 'Manual',
+    background: isSmart ? 'rgba(14, 165, 233, 0.18)' : 'rgba(148, 163, 184, 0.12)',
+    color: isSmart ? '#38bdf8' : '#cbd5f5',
+  };
+};
+
 async function enrichSession(session: AgentSession): Promise<AgentSession> {
   if (!session.id) return session;
 
@@ -417,6 +425,16 @@ export default function SessionsPage() {
               >
                 {record.mode?.toUpperCase?.()}
               </Tag>
+              <Tag
+                style={{
+                  borderRadius: 10,
+                  border: 'none',
+                  background: selectionBadgeMeta(record.isSmartAgent).background,
+                  color: selectionBadgeMeta(record.isSmartAgent).color,
+                }}
+              >
+                {selectionBadgeMeta(record.isSmartAgent).label}
+              </Tag>
             </Space>
             <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{resolveStrategyLabel(record)}</Text>
           </Space>
@@ -427,6 +445,25 @@ export default function SessionsPage() {
         dataIndex: 'symbol',
         key: 'symbol',
         render: (value: string) => <Text style={{ color: '#cbd5f5' }}>{value || '—'}</Text>,
+      },
+      {
+        title: 'Selection',
+        key: 'selectionMode',
+        render: (_, record) => {
+          const meta = selectionBadgeMeta(record.isSmartAgent);
+          return (
+            <Tag
+              style={{
+                borderRadius: 10,
+                border: 'none',
+                background: meta.background,
+                color: meta.color,
+              }}
+            >
+              {meta.label}
+            </Tag>
+          );
+        },
       },
       {
         title: 'Status',
@@ -627,6 +664,7 @@ export default function SessionsPage() {
               )
             : sessions.map((session) => {
                 const meta = statusMeta(session);
+                const selectionMeta = selectionBadgeMeta(session.isSmartAgent);
                 return (
                   <Card
                     key={session.id}
@@ -639,6 +677,28 @@ export default function SessionsPage() {
                           {resolveAgentLabel(session)}
                         </Text>
                         <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{resolveStrategyLabel(session)}</Text>
+                        <Space size={6}>
+                          <Tag
+                            style={{
+                              borderRadius: 10,
+                              border: 'none',
+                              background: 'rgba(59, 130, 246, 0.12)',
+                              color: '#93c5fd',
+                            }}
+                          >
+                            {session.mode?.toUpperCase?.()}
+                          </Tag>
+                          <Tag
+                            style={{
+                              borderRadius: 10,
+                              border: 'none',
+                              background: selectionMeta.background,
+                              color: selectionMeta.color,
+                            }}
+                          >
+                            {selectionMeta.label}
+                          </Tag>
+                        </Space>
                       </Space>
                       <Tag
                         style={{

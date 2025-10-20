@@ -127,8 +127,10 @@ export type QuantAIExitConfig = {
     cutLossR: number;
     tightenOnlyIfProfitGtR?: number;
     cutIfLossGtR?: number;
+    minHoldMinutes?: number;
   };
   maxHoldingMin?: number;
+  reentryCooldownMin?: number;
 };
 
 export type QuantAIRegimeConfig = {
@@ -328,8 +330,10 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       cmfNegative: true,
       tightenProfitR: 0.2,
       cutLossR: 0.35,
+      minHoldMinutes: 15,
     },
     maxHoldingMin: 90,
+    reentryCooldownMin: 25,
   },
   regime: {
     emaFastPeriod: 50,
@@ -806,10 +810,20 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     DEFAULT_CONFIG.exits.earlyExit.cutLossR ??
     DEFAULT_CONFIG.exits.earlyExit.cutIfLossGtR,
   );
+  const minHoldMinutes = Number(
+    earlyExitRaw.min_hold_minutes ??
+    earlyExitRaw.minHoldMinutes ??
+    DEFAULT_CONFIG.exits.earlyExit.minHoldMinutes ??
+    0,
+  );
   const maxHoldingRaw = raw.max_holding_min ?? raw.maxHoldingMin;
   const maxHolding = maxHoldingRaw != null
     ? Number(maxHoldingRaw)
     : DEFAULT_CONFIG.exits.maxHoldingMin;
+  const reentryCooldownRaw = raw.reentry_cooldown_min ?? raw.reentryCooldownMin;
+  const reentryCooldown = reentryCooldownRaw != null
+    ? Number(reentryCooldownRaw)
+    : (DEFAULT_CONFIG.exits.reentryCooldownMin ?? 0);
   const tpRaw: number[] = Array.isArray(raw.tp_r_multiples ?? raw.tpRMultiples)
     ? (raw.tp_r_multiples ?? raw.tpRMultiples).map((v: any) => Number(v)).filter((v: number) => Number.isFinite(v) && v > 0)
     : DEFAULT_CONFIG.exits.tpRMultiples;
@@ -843,8 +857,14 @@ function normalizeExits(raw: any): QuantAIExitConfig {
       cutLossR,
       tightenOnlyIfProfitGtR: tightenProfitR,
       cutIfLossGtR: cutLossR,
+      minHoldMinutes: Number.isFinite(minHoldMinutes)
+        ? Math.max(0, minHoldMinutes)
+        : DEFAULT_CONFIG.exits.earlyExit.minHoldMinutes,
     },
     maxHoldingMin: Number.isFinite(maxHolding) ? maxHolding : DEFAULT_CONFIG.exits.maxHoldingMin,
+    reentryCooldownMin: Number.isFinite(reentryCooldown)
+      ? Math.max(0, Number(reentryCooldown))
+      : (DEFAULT_CONFIG.exits.reentryCooldownMin ?? 0),
   };
 }
 
