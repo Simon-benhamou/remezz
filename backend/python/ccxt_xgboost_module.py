@@ -12,9 +12,9 @@ import os
 import random
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 from math import exp
 
@@ -126,14 +126,56 @@ class XGBClassifier:  # type: ignore
         self._bias = float(payload.get("bias", 0.0))
 
 CACHE_DIR = Path(__file__).resolve().parents[1] / "data" / "ccxt_cache"
-MODEL_PATH = Path(__file__).resolve().parent / "xgboost_direction.model"
+MODEL_PATH = Path(__file__).resolve().parent / "xgboost_direction.json"
 FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
 
 DEFAULT_EXCHANGE = "binance"
-DEFAULT_SYMBOLS = ("BTC/USDT","ETH/USDT","SOL/USDT","XRP/USDT")
+DEFAULT_SYMBOLS = (
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "LINK/USDT",
+    "ZEC/USDT",
+    "ADA/USDT",
+    "BNB/USDT",
+    "BAS/USDT",
+)
 DEFAULT_TIMEFRAME = "15m"
-DEFAULT_LOOKBACK_HOURS = 24 * 30  # 30 days
+DEFAULT_LOOKBACK_HOURS = 24 * 180  # 6 months
+
+
+@dataclass(frozen=True)
+class WindowSpec:
+    """Describe a historical slice to gather training samples from."""
+
+    timeframe: str
+    hours: int
+    offset_hours: int = 0
+
+    @property
+    def interval_minutes(self) -> int:
+        return _timeframe_to_minutes(self.timeframe)
+
+    def bounds(self, anchor: datetime) -> tuple[int, int]:
+        """Return (start_ts_ms, end_ts_ms) for this window."""
+
+        end = anchor - timedelta(hours=self.offset_hours)
+        start = end - timedelta(hours=self.hours)
+        return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+@dataclass
+class PreparedWindow:
+    symbol: str
+    spec: WindowSpec
+    dataset: "pd.DataFrame"
+
+
+DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
+    WindowSpec(DEFAULT_TIMEFRAME, hours=DEFAULT_LOOKBACK_HOURS, offset_hours=0),
+)
 
 RANDOM_SEED = 42
 
@@ -148,6 +190,158 @@ class TrainingArtifacts:
 def _seed_everything(seed: int = RANDOM_SEED) -> None:
     random.seed(seed)
     np.random.seed(seed)
+
+
+def _timeframe_to_minutes(timeframe: str) -> int:
+    if not timeframe:
+        raise ValueError("timeframe cannot be empty")
+    unit = timeframe[-1]
+    try:
+        value = int(timeframe[:-1])
+    except ValueError as exc:  # pragma: no cover - validated by caller
+        raise ValueError(f"Invalid timeframe value: {timeframe}") from exc
+    multipliers = {"m": 1, "h": 60, "d": 60 * 24, "w": 60 * 24 * 7}
+    if unit not in multipliers:
+        raise ValueError(f"Unsupported timeframe unit: {timeframe}")
+    return value * multipliers[unit]
+
+
+def _timeframe_to_pandas_freq(timeframe: str) -> str:
+    unit = timeframe[-1]
+    value = timeframe[:-1]
+    suffix_map = {"m": "min", "h": "h", "d": "D", "w": "W"}
+    if unit not in suffix_map:
+        raise ValueError(f"Unsupported timeframe unit: {timeframe}")
+    return f"{int(value)}{suffix_map[unit]}"
+
+
+def _parse_int_list(raw: str | None) -> List[int]:
+    if not raw:
+        return []
+    normalized = raw.replace(";", ",")
+    result: List[int] = []
+    for part in normalized.split(","):
+        chunk = part.strip()
+        if not chunk:
+            continue
+        result.append(int(chunk))
+    return result
+
+
+def _expand_values(values: Sequence[int], length: int, fallback: int) -> List[int]:
+    if length <= 0:
+        return []
+    if not values:
+        return [fallback] * length
+    if len(values) == 1 and length > 1:
+        return list(values) * length
+    if len(values) < length:
+        tail = values[-1]
+        return list(values) + [tail] * (length - len(values))
+    return list(values[:length])
+
+
+def _parse_window_specs_env(raw: str) -> Sequence[WindowSpec]:
+    if not raw:
+        raise ValueError("XGB_WINDOW_SPECS cannot be empty")
+    specs: List[WindowSpec] = []
+    for chunk in raw.replace(";", ",").split(","):
+        piece = chunk.strip()
+        if not piece:
+            continue
+        parts = [part.strip() for part in piece.split(":") if part.strip()]
+        if len(parts) < 2:
+            raise ValueError(
+                "Each window spec must provide at least timeframe and hours (e.g. '15m:720:0')"
+            )
+        timeframe = parts[0]
+        hours = int(parts[1])
+        offset = int(parts[2]) if len(parts) > 2 else 0
+        specs.append(WindowSpec(timeframe=timeframe, hours=hours, offset_hours=offset))
+    if not specs:
+        raise ValueError("No valid window specs parsed from environment string")
+    return specs
+
+
+def resolve_window_specs(
+    timeframe: str | None = None,
+    timeframes: Sequence[str] | None = None,
+    lookback_hours: str | None = None,
+    offset_hours: str | None = None,
+    window_specs: str | None = None,
+) -> Sequence[WindowSpec]:
+    """Resolve the collection of windows the training run should cover."""
+
+    if window_specs:
+        return tuple(_parse_window_specs_env(window_specs))
+
+    frames: List[str] = []
+    if timeframes:
+        frames = [value.strip() for value in timeframes if value.strip()]
+    elif timeframe:
+        frames = [timeframe.strip()]
+
+    if not frames:
+        return tuple(DEFAULT_WINDOW_SPECS)
+
+    lookbacks = _expand_values(
+        _parse_int_list(lookback_hours), len(frames), DEFAULT_LOOKBACK_HOURS
+    )
+    offsets = _expand_values(_parse_int_list(offset_hours), len(frames), 0)
+
+    return tuple(
+        WindowSpec(timeframe=frame, hours=hours, offset_hours=offset)
+        for frame, hours, offset in zip(frames, lookbacks, offsets)
+    )
+
+
+def collect_prepared_windows(
+    exchange: str,
+    symbols: Sequence[str],
+    window_specs: Sequence[WindowSpec],
+    anchor: datetime | None = None,
+) -> List[PreparedWindow]:
+    if not HAVE_PANDAS or pd is None:
+        raise RuntimeError('Preparing windows requires pandas to be installed')
+
+    anchor_dt = anchor or datetime.now(tz=timezone.utc)
+    prepared: List[PreparedWindow] = []
+    for spec in window_specs:
+        start_ts, end_ts = spec.bounds(anchor_dt)
+        for symbol in symbols:
+            raw = fetch_ohlcv(exchange, symbol, spec.timeframe, start_ts, end_ts)
+            dataset = prepare_dataset(raw)
+            prepared.append(PreparedWindow(symbol=symbol, spec=spec, dataset=dataset))
+    return prepared
+
+
+def assemble_training_dataframe(prepared_windows: Sequence[PreparedWindow]) -> "pd.DataFrame":
+    if not HAVE_PANDAS or pd is None:
+        raise RuntimeError('Assembling training data requires pandas to be installed')
+    if not prepared_windows:
+        raise ValueError("No prepared windows provided for training")
+
+    frames: List[pd.DataFrame] = []
+    for idx, prepared in enumerate(prepared_windows):
+        frame = prepared.dataset.copy()
+        frame["symbol"] = prepared.symbol
+        frame["windowIndex"] = idx
+        frame["timeframeMinutes"] = prepared.spec.interval_minutes
+        frame["windowOffsetHours"] = prepared.spec.offset_hours
+        frame["windowHours"] = prepared.spec.hours
+        frames.append(frame)
+
+    combined = pd.concat(frames, ignore_index=True)
+    return combined.drop(
+        columns=[
+            "symbol",
+            "windowIndex",
+            "timeframeMinutes",
+            "windowOffsetHours",
+            "windowHours",
+        ],
+        errors="ignore",
+    )
 
 
 def _cache_path(exchange: str, symbol: str, timeframe: str) -> Path:
@@ -227,10 +421,11 @@ def fetch_ohlcv(
         )
         if cache.empty:
             # Build a small synthetic dataset to keep training deterministic offline
+            freq = _timeframe_to_pandas_freq(timeframe)
             timestamps = pd.date_range(
                 start=pd.to_datetime(start_ts, unit="ms", utc=True),
                 end=pd.to_datetime(end_ts, unit="ms", utc=True),
-                freq="15min",
+                freq=freq,
             )
             synthetic = pd.DataFrame({
                 "timestamp": timestamps,
@@ -375,31 +570,24 @@ def predict_direction(model: XGBClassifier, latest_row) -> int:
 
 def run_training_workflow(
     exchange: str = DEFAULT_EXCHANGE,
-    symbols: List[str] | tuple[str, ...] = DEFAULT_SYMBOLS,
+    symbols: Sequence[str] = DEFAULT_SYMBOLS,
     timeframe: str = DEFAULT_TIMEFRAME,
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
+    window_specs: Sequence[WindowSpec] | None = None,
+    anchor: datetime | None = None,
 ) -> TrainingArtifacts:
     if not HAVE_PANDAS:
         raise RuntimeError('Training workflow requires pandas/numpy/ta/scikit-learn packages')
     _seed_everything()
-    end = datetime.now(tz=timezone.utc)
-    start = end - pd.Timedelta(hours=lookback_hours)
-    start_ts = int(start.timestamp() * 1000)
-    end_ts = int(end.timestamp() * 1000)
+    if window_specs is not None:
+        specs = list(window_specs)
+    elif timeframe != DEFAULT_TIMEFRAME or lookback_hours != DEFAULT_LOOKBACK_HOURS:
+        specs = [WindowSpec(timeframe=timeframe, hours=lookback_hours, offset_hours=0)]
+    else:
+        specs = list(DEFAULT_WINDOW_SPECS)
 
-    datasets: List[pd.DataFrame] = []
-    for symbol in symbols:
-        raw = fetch_ohlcv(exchange, symbol, timeframe, start_ts, end_ts)
-        prepared = prepare_dataset(raw)
-        prepared = prepared.copy()
-        prepared["symbol"] = symbol
-        datasets.append(prepared)
-
-    if not datasets:
-        raise ValueError("No symbols provided for training workflow")
-
-    combined = pd.concat(datasets, ignore_index=True)
-    combined = combined.drop(columns=["symbol"], errors="ignore")
+    prepared_windows = collect_prepared_windows(exchange, symbols, specs, anchor=anchor)
+    combined = assemble_training_dataframe(prepared_windows)
 
     artifacts = train_model(
         combined,
@@ -426,10 +614,43 @@ def main() -> None:
             symbols = (symbol_single,)
         else:
             symbols = DEFAULT_SYMBOLS
-    timeframe = os.environ.get("XGB_TIMEFRAME", DEFAULT_TIMEFRAME)
-    lookback = int(os.environ.get("XGB_LOOKBACK_HOURS", str(DEFAULT_LOOKBACK_HOURS)))
+    timeframe_single = os.environ.get("XGB_TIMEFRAME")
+    timeframes_env = os.environ.get("XGB_TIMEFRAMES")
+    window_specs_env = os.environ.get("XGB_WINDOW_SPECS")
+    lookback_env = os.environ.get("XGB_LOOKBACK_HOURS")
+    offset_env = os.environ.get("XGB_OFFSET_HOURS")
 
-    artifacts = run_training_workflow(exchange, symbols, timeframe, lookback)
+    timeframe_values: Sequence[str] | None = None
+    if timeframes_env:
+        timeframe_values = tuple(
+            part.strip()
+            for part in timeframes_env.replace(";", ",").split(",")
+            if part.strip()
+        )
+        if not timeframe_values:
+            timeframe_values = None
+
+    if lookback_env and any(sep in lookback_env for sep in (",", ";")):
+        lookback_default = DEFAULT_LOOKBACK_HOURS
+    else:
+        lookback_default = int(lookback_env) if lookback_env else DEFAULT_LOOKBACK_HOURS
+    timeframe_effective = timeframe_single or DEFAULT_TIMEFRAME
+
+    window_specs = resolve_window_specs(
+        timeframe=timeframe_single,
+        timeframes=timeframe_values,
+        lookback_hours=lookback_env,
+        offset_hours=offset_env,
+        window_specs=window_specs_env,
+    )
+
+    artifacts = run_training_workflow(
+        exchange,
+        symbols,
+        timeframe=timeframe_effective,
+        lookback_hours=lookback_default,
+        window_specs=window_specs,
+    )
     print(json.dumps({"metrics": artifacts.metrics, "features": artifacts.features}))
 
 
