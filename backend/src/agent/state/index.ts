@@ -5697,7 +5697,8 @@ export class ReboundRejectionAgent {
 
   private refreshEntryDiagnosticsForContext(
     snap: TechnicalSnapshot,
-    playbook: 'trend_following' | 'mean_reversion' | 'momentum_breakout'
+    playbook: 'trend_following' | 'mean_reversion' | 'momentum_breakout',
+    context: MarketContext | null = null
   ): void {
     if (!this.profile) {
       this.resetQualityPreview();
@@ -5707,7 +5708,11 @@ export class ReboundRejectionAgent {
     const aggressiveness = this.profile.aggressiveness ?? 'reactive';
     try {
       const profile = this.getQualityScoreProfile(playbook, aggressiveness);
-      const diagnostics = this.getQualityFiltersDiagnostics(snap);
+      const diagnostics = this.getQualityFiltersDiagnostics(snap, {
+        playbook,
+        context,
+        bias: this.plan?.bias ?? 'none',
+      });
       const assessment = this.assessQualityScore(diagnostics, 0, {
         weights: profile.weights,
         majorityRatio: profile.majorityRatio,
@@ -5741,7 +5746,7 @@ export class ReboundRejectionAgent {
       previous != null && (previous.strongTrend !== next.strongTrend || previous.moderateTrend !== next.moderateTrend);
 
     if (!previous) {
-      this.refreshEntryDiagnosticsForContext(snap, next.effectivePlaybook);
+      this.refreshEntryDiagnosticsForContext(snap, next.effectivePlaybook, next);
     } else if (directionChanged || playbookChanged || trendStateChanged) {
       recordOpsEvent({
         level: 'info',
@@ -5765,7 +5770,7 @@ export class ReboundRejectionAgent {
           `→${next.effectivePlaybook} | trend strong ${previous.strongTrend}→${next.strongTrend}`
       );
       this.resetQualityPreview();
-      this.refreshEntryDiagnosticsForContext(snap, next.effectivePlaybook);
+      this.refreshEntryDiagnosticsForContext(snap, next.effectivePlaybook, next);
       this.lastMomentumGateResult = null;
       this.resetMomentumAwaitContext();
     }
@@ -8179,13 +8184,31 @@ export class ReboundRejectionAgent {
     } satisfies QualityAssessmentSnapshot;
   }
 
-  public getQualityFiltersDiagnostics(snap: TechnicalSnapshot): any {
+  public getQualityFiltersDiagnostics(
+    snap: TechnicalSnapshot,
+    options?: {
+      playbook?: string;
+      context?: MarketContext | null;
+      bias?: 'long' | 'short' | 'none';
+    }
+  ): any {
     if (!this.plan) return {};
 
-    const { playbook, context } = this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
+    const resolvedBias = options?.bias ?? (this.plan.bias ?? 'none');
+    let playbook: string;
+    let context: MarketContext | null;
+    if (options?.playbook) {
+      playbook = options.playbook;
+      context = options.context ?? null;
+    } else {
+      const contextual = this.getContextualPlaybook(snap, resolvedBias);
+      playbook = contextual.playbook;
+      context = contextual.context;
+    }
+
     const normalizedPlaybook = String(playbook);
     const price = snap.last;
-    const bias = this.plan.bias;
+    const bias = resolvedBias;
     const snapshotId = (snap as any)?.id ?? (snap as any)?.snapshotId ?? null;
     const tfLTF = snap.meta?.tf ?? (snap.meta as any)?.ltf ?? null;
     const tfHTF = (snap.meta as any)?.htf ?? null;
