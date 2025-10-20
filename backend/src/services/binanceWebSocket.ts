@@ -32,6 +32,8 @@ const BINANCE_ENDPOINTS = {
   requiresSignature: true,
 } as const;
 
+export const BINANCE_REST_BASE_URL = BINANCE_ENDPOINTS.rest;
+
 export interface BinanceTickerData {
   symbol: string;
   last: number;
@@ -76,7 +78,9 @@ export function toBinanceSymbolId(unified: string): string {
 const LAST_VALID_BID_ASK_TTL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 1_500;
 const REST_MIN_INTERVAL_MS = 120;
-const REST_429_BACKOFF_MS = 7_500;
+export const REST_429_BACKOFF_MS = 7_500;
+
+export const BINANCE_REST_429_BACKOFF_MS = REST_429_BACKOFF_MS;
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
