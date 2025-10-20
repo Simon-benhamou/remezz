@@ -1131,9 +1131,9 @@ export default function SessionCockpitPage() {
                 />
                 <div className="session-trade-card__table">
                   {ordersView === 'trades' ? (
-                    <MemoTradesTable rows={filteredTrades} />
+                    <MemoTradesTable rows={trades} />
                   ) : (
-                    <MemoOrdersTable rows={filteredOrders} />
+                    <MemoOrdersTable rows={orders} />
                   )}
                 </div>
               </div>
