@@ -6,6 +6,8 @@ import { detectMarketRegime, type MarketRegimeSignal } from '../regime/marketReg
 import {
   getPrediction as getPythonPrediction,
   getPredictionSync as getPythonPredictionSync,
+  getPythonResolutionError,
+  isPythonPredictorAvailable,
 } from '../pythonPredictor.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
@@ -441,6 +443,7 @@ class MetaAdaptiveStrategyAgent {
   private rngState = 0x9e3779b9n;
   private tokenCounter = 0n;
   private reentryCooldownMs = 0;
+  private pythonUnavailableLogged = false;
 
   static getInstance(): MetaAdaptiveStrategyAgent {
     if (!MetaAdaptiveStrategyAgent.instance) {
@@ -894,11 +897,27 @@ class MetaAdaptiveStrategyAgent {
     const isMajor = this.isMajorSymbol(input.symbol);
 
     const pythonEnabled = process.env.DISABLE_PYTHON_PREDICTOR !== 'true';
-    const predictorFeatures = pythonEnabled ? buildPredictorFeatures(snap) : null;
+    const pythonAvailable = pythonEnabled && isPythonPredictorAvailable();
+    if (
+      pythonEnabled
+      && !pythonAvailable
+      && !this.pythonUnavailableLogged
+      && process.env.UNIT_TEST_MODE !== 'true'
+    ) {
+      const resolutionError = getPythonResolutionError();
+      console.warn('python predictor disabled: interpreter unavailable', {
+        error: resolutionError?.message ?? 'unknown error',
+      });
+      this.pythonUnavailableLogged = true;
+    }
+    if (pythonAvailable) {
+      this.pythonUnavailableLogged = false;
+    }
+    const predictorFeatures = pythonAvailable ? buildPredictorFeatures(snap) : null;
 
     let pythonBias = 0;
     let pythonSignal: { bias: StrategyBias; probability: number } | null = null;
-    if (pythonEnabled && predictorFeatures) {
+    if (pythonAvailable && predictorFeatures) {
       try {
         const prediction = getPythonPredictionSync(predictorFeatures);
         pythonBias = clamp(prediction.probability * 2 - 1, -1, 1);
@@ -1566,6 +1585,7 @@ class MetaAdaptiveStrategyAgent {
     // agent picks up the new artefacts on the next process spawn.
     const shouldQueryPython = params.predictorFeatures
       && process.env.DISABLE_PYTHON_PREDICTOR !== 'true'
+      && isPythonPredictorAvailable()
       && (!params.pythonSignal || Math.abs(predictorProbability - 0.5) * 2 < PYTHON_GATE_THRESHOLD);
 
     if (shouldQueryPython && params.predictorFeatures) {
