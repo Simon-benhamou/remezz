@@ -77,6 +77,12 @@ const result = evaluateRecognizedStrategies(strongTrendSnap, {
   favorMeanReversion: false,
 });
 
+for (const signal of result) {
+  assert(signal.meta?.pythonSignal, 'Python predictor signal should be attached to strategy meta');
+  assert(signal.meta?.pythonSignal?.probability >= 0 && signal.meta?.pythonSignal?.probability <= 1,
+    'Python signal probability must be normalized');
+}
+
 assert.equal(result.length, 4, 'Expected four strategy signals');
 const selected = result.find(signal => signal.meta?.token);
 assert(selected, 'Primary strategy should include token metadata');

@@ -43,6 +43,10 @@ export type RecognizedStrategySignal = {
       adxThreshold: number;
     } | null;
     predictorFeatures?: Record<string, number> | null;
+    pythonSignal?: {
+      bias: StrategyBias;
+      probability: number;
+    } | null;
   };
 };
 
@@ -129,6 +133,9 @@ function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
           }
         : null,
       predictorFeatures: signal.predictorFeatures,
+      pythonSignal: signal.pythonSignal
+        ? { bias: signal.pythonSignal.bias, probability: signal.pythonSignal.probability }
+        : null,
     },
   };
 }
@@ -224,6 +231,7 @@ export async function registerAdaptiveTradeEntry(params: {
     },
     side: params.signal.bias,
     predictorFeatures: params.signal.meta.predictorFeatures ?? null,
+    pythonSignal: params.signal.meta.pythonSignal ?? null,
   });
 
   const executionMode = params.executionMode ?? params.signal.meta.executionMode ?? 'market';

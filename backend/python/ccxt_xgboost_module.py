@@ -542,7 +542,7 @@ def load_model() -> XGBClassifier:
     return model
 
 
-def predict_direction(model: XGBClassifier, latest_row) -> int:
+def predict_direction(model: XGBClassifier, latest_row) -> dict:
     features = load_features()
     if HAVE_PANDAS and pd is not None and isinstance(latest_row, pd.DataFrame):  # type: ignore
         if latest_row.empty:
@@ -557,8 +557,9 @@ def predict_direction(model: XGBClassifier, latest_row) -> int:
         raise TypeError('latest_row must be a DataFrame or dict of features')
 
     probs = model.predict_proba([ordered])
-    prob = probs[0][1]
-    return int(prob >= 0.5)
+    prob = float(probs[0][1])
+    direction = int(prob >= 0.5)
+    return {"prediction": direction, "probability": prob}
 
 
 def run_training_workflow(
