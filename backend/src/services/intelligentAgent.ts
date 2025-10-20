@@ -1530,6 +1530,10 @@ export const __autoUniverseTestHooks = {
   },
 };
 
+export const __intelligentAgentTestHooks = {
+  shouldDeferDueToRecentActivity,
+};
+
 /**
  * Top cryptos by volume/market cap - focus on liquid markets only
  * Filters out symbols already active in other agents
@@ -3554,12 +3558,41 @@ async function maybeHandleDirectionalReversal(
   }
 }
 
+type RecentActivityDecision = {
+  shouldDefer: boolean;
+  nextCheckAt: Date | null;
+  inactivityMs: number | null;
+};
+
+function shouldDeferDueToRecentActivity(params: { lastActivityAt: Date | null; windowMs: number; now?: Date }): RecentActivityDecision {
+  const { lastActivityAt } = params;
+  const windowMs = Math.max(0, Number(params.windowMs || 0));
+  const now = params.now ?? new Date();
+
+  if (!lastActivityAt || windowMs <= 0) {
+    return { shouldDefer: false, nextCheckAt: null, inactivityMs: null };
+  }
+
+  const inactivityMs = now.getTime() - lastActivityAt.getTime();
+  if (!Number.isFinite(inactivityMs)) {
+    return { shouldDefer: false, nextCheckAt: null, inactivityMs: null };
+  }
+
+  const waitUntil = new Date(lastActivityAt.getTime() + windowMs);
+  if (waitUntil > now) {
+    return { shouldDefer: true, nextCheckAt: waitUntil, inactivityMs };
+  }
+
+  return { shouldDefer: false, nextCheckAt: null, inactivityMs };
+}
+
 async function checkSessionForBetterOpportunityOptimized(session: any): Promise<void> {
   try {
     const config = session.profileJson as any;
     const now = new Date();
     // Configurable recent-activity window (hours). Default 3h (was 12h).
     const activityWindowHours = Math.max(1, Number(process.env.SMART_RECENT_ACTIVITY_HOURS || '3'));
+    const activityWindowMs = activityWindowHours * 60 * 60 * 1000;
 
     const agent = AgentHub.get(session.id) as any;
     const hasOpenPosition = Array.isArray(session.positions)
@@ -3795,26 +3828,81 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     
     // RULE 2: Check if there were any trades (fills) in the last X hours ONLY (default 3h)
     let recentTrades = 0;
+    let lastTradeAt: Date | null = null;
+    let inactivityMinutes: number | null = null;
     try {
-      const windowStart = new Date(now.getTime() - activityWindowHours * 60 * 60 * 1000);
-      recentTrades = await prisma.fill.count({
-        where: { sessionId: session.id, ts: { gte: windowStart } }
+      const windowStart = new Date(now.getTime() - activityWindowMs);
+      const recentActivity = await prisma.fill.aggregate({
+        where: { sessionId: session.id, ts: { gte: windowStart } },
+        _count: { _all: true },
+        _max: { ts: true },
       });
+      recentTrades = Number(recentActivity?._count?._all ?? 0);
+      lastTradeAt = recentActivity?._max?.ts ? new Date(recentActivity._max.ts) : null;
     } catch (err) {
       console.warn(`⚠️ Failed to count recent fills for session ${session.id}:`, err);
       // fallback: do not block rotation on error
       recentTrades = 0;
+      lastTradeAt = null;
     }
-    const hasRecentActivity = recentTrades > 0;
-    
-    if (hasRecentActivity) {
-      console.log(`📈 Session ${session.id}: ${recentTrades} fills in last ${activityWindowHours}h — keep ${session.symbol}`);
-      // Update next check to 6h (was 12h): be more responsive to market rotation
-      const nextCheck = new Date(now.getTime() + 6 * 60 * 60 * 1000); // 6h (was 12h)
+
+    const activityDecision = shouldDeferDueToRecentActivity({
+      lastActivityAt: lastTradeAt,
+      windowMs: activityWindowMs,
+      now,
+    });
+    inactivityMinutes =
+      activityDecision.inactivityMs != null
+        ? Number((activityDecision.inactivityMs / 60000).toFixed(2))
+        : null;
+
+    if (activityDecision.shouldDefer) {
+      const nextCheck = activityDecision.nextCheckAt ?? new Date(now.getTime() + activityWindowMs);
+      console.log(
+        `📈 Session ${session.id}: trade ${(inactivityMinutes ?? 0).toFixed(2)} min ago — deferring rotation for ${session.symbol} until ${nextCheck.toISOString()}`
+      );
+
+      try {
+        await mergeSessionProfileJson(session.id, {
+          lastScan: now.toISOString(),
+          nextScanDue: nextCheck.toISOString(),
+          pendingRotation: 'recent_activity_guard',
+          pendingRotationDetails: {
+            recentTrades,
+            lastTradeAt: lastTradeAt?.toISOString() ?? null,
+            inactivityMinutes,
+            deferUntil: nextCheck.toISOString(),
+          },
+        });
+      } catch (err) {
+        console.warn(`⚠️ Failed to persist recent-activity guard for session ${session.id}:`, err);
+      }
+
       await updateSessionNextCheck(session.id, nextCheck);
+
+      recordOpsEvent({
+        level: 'info',
+        source: 'intelligent_rotation',
+        message: 'skip_due_to_recent_activity',
+        sessionId: session.id,
+        symbol: session.symbol,
+        details: {
+          recentTrades,
+          lastTradeAt: lastTradeAt?.toISOString() ?? null,
+          inactivityMinutes,
+          deferUntil: nextCheck.toISOString(),
+        },
+      });
+
       return;
     }
-    
+
+    if (recentTrades > 0) {
+      console.log(
+        `📈 Session ${session.id}: last trade ${inactivityMinutes != null ? inactivityMinutes.toFixed(2) : '??'} min ago meets inactivity threshold — continuing evaluation for ${session.symbol}`
+      );
+    }
+
     console.log(`🔍 Session ${session.id}: No trades in ${activityWindowHours}h+ - evaluating switch from ${session.symbol}`);
 
     // Refresh current symbol analysis so we compare against latest data
