@@ -56,6 +56,20 @@ export default function OrdersTable({ rows = [] }: OrdersTableProps) {
       ),
     },
     {
+      title: 'Symbol',
+      dataIndex: 'symbol',
+      width: 110,
+      render: (_: any, record: any) => {
+        const sym = typeof record?.symbol === 'string' ? record.symbol.toUpperCase() : '';
+        if (!sym) return '—';
+        return (
+          <Tag color='geekblue' className='session-table__tag'>
+            {sym}
+          </Tag>
+        );
+      },
+    },
+    {
       title: 'Price',
       dataIndex: 'price',
       align: 'right' as const,

@@ -76,6 +76,23 @@ const formatPercent = (value: any, digits = 1) => {
   return `${num >= 0 ? '+' : ''}${num.toFixed(digits)}%`;
 };
 
+const deriveSymbol = (input: any): string => {
+  if (!input) return '';
+  if (typeof input === 'string') return input.toUpperCase();
+  if (typeof input === 'object') {
+    if (typeof input.symbol === 'string') return input.symbol.toUpperCase();
+    if (typeof (input as Record<string, any>).ticker === 'string') {
+      return (input as Record<string, any>).ticker.toUpperCase();
+    }
+    const base = (input as Record<string, any>).base;
+    const quote = (input as Record<string, any>).quote;
+    if (typeof base === 'string' && typeof quote === 'string') {
+      return `${base}${quote}`.toUpperCase();
+    }
+  }
+  return '';
+};
+
 type LoadingState = {
   phase: LoadingPhase;
   progress: number;
@@ -125,12 +142,39 @@ export default function SessionCockpitPage() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [marginHealth, setMarginHealth] = React.useState<any>(null);
 
+  const normalizedSymbol = React.useMemo(
+    () => deriveSymbol(status?.symbol || symbol),
+    [status?.symbol, symbol],
+  );
+
+  const filteredTrades = React.useMemo(
+    () =>
+      (trades || []).filter((trade: any) => {
+        if (!normalizedSymbol) return true;
+        const tradeSymbol = deriveSymbol(trade?.symbol ?? trade?.instrument);
+        if (!tradeSymbol) return true;
+        return tradeSymbol === normalizedSymbol;
+      }),
+    [trades, normalizedSymbol],
+  );
+
+  const filteredOrders = React.useMemo(
+    () =>
+      (orders || []).filter((order: any) => {
+        if (!normalizedSymbol) return true;
+        const orderSymbol = deriveSymbol(order?.symbol ?? order?.instrument);
+        if (!orderSymbol) return true;
+        return orderSymbol === normalizedSymbol;
+      }),
+    [orders, normalizedSymbol],
+  );
+
   const activeOrders = React.useMemo(
     () =>
-      (orders || []).filter((order: any) =>
+      filteredOrders.filter((order: any) =>
         OPEN_ORDER_STATUSES.has(String(order?.status || '').toLowerCase()),
       ),
-    [orders],
+    [filteredOrders],
   );
   const currentAggressiveness = React.useMemo(() => {
     const runtime = (agent as any)?.profile?.aggressiveness;
@@ -716,7 +760,7 @@ export default function SessionCockpitPage() {
       });
     });
 
-    (trades || []).forEach((trade: any, index: number) => {
+    filteredTrades.forEach((trade: any, index: number) => {
       const ts = toTs(trade?.createdAt || trade?.ts);
       if (!ts) return;
       items.push({
@@ -733,7 +777,7 @@ export default function SessionCockpitPage() {
       });
     });
 
-    (orders || []).forEach((order: any, index: number) => {
+    filteredOrders.forEach((order: any, index: number) => {
       const ts = toTs(order?.createdAt || order?.ts);
       if (!ts) return;
       items.push({
@@ -750,7 +794,7 @@ export default function SessionCockpitPage() {
     });
 
     return items.sort((a, b) => b.ts - a.ts).slice(0, 60);
-  }, [alerts, orders, trades, status?.symbol]);
+  }, [alerts, filteredOrders, filteredTrades, status?.symbol]);
 
   const startBalance = Number(status?.session?.startBalanceUsd ?? status?.session?.startBalance ?? 0);
   const statsMeta = (kpi?.stats ?? {}) as Record<string, any>;
@@ -1033,8 +1077,8 @@ export default function SessionCockpitPage() {
                     agentPos={agent?.pos}
                     pivots={status?.pivots}
                     agentExit={agent?.exit}
-                    orders={orders}
-                    trades={trades}
+                    orders={filteredOrders}
+                    trades={filteredTrades}
                     projection={analysis?.projection}
                   />
                 </div>
@@ -1080,16 +1124,16 @@ export default function SessionCockpitPage() {
                   value={ordersView}
                   onChange={(value) => setOrdersView(value as 'trades' | 'orders')}
                   options={[
-                    { label: `Recent trades (${trades.length})`, value: 'trades' },
+                    { label: `Recent trades (${filteredTrades.length})`, value: 'trades' },
                     { label: `Active orders (${activeOrders.length})`, value: 'orders' },
                   ]}
                   className="session-trade-card__toggle"
                 />
                 <div className="session-trade-card__table">
                   {ordersView === 'trades' ? (
-                    <MemoTradesTable rows={trades} />
+                    <MemoTradesTable rows={filteredTrades} />
                   ) : (
-                    <MemoOrdersTable rows={orders} />
+                    <MemoOrdersTable rows={filteredOrders} />
                   )}
                 </div>
               </div>

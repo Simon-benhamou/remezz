@@ -51,6 +51,20 @@ export default function TradesTable({ rows = [] }: TradesTableProps) {
       ),
     },
     {
+      title: 'Symbol',
+      dataIndex: 'symbol',
+      width: 110,
+      render: (_: any, record: any) => {
+        const sym = typeof record?.symbol === 'string' ? record.symbol.toUpperCase() : '';
+        if (!sym) return '—';
+        return (
+          <Tag color='geekblue' className='session-table__tag'>
+            {sym}
+          </Tag>
+        );
+      },
+    },
+    {
       title: 'Price',
       align: 'right' as const,
       render: (_: any, record: any) => (
