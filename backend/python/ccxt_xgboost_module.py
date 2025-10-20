@@ -131,9 +131,51 @@ FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
 
 DEFAULT_EXCHANGE = "binance"
-DEFAULT_SYMBOLS = ("BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT")
+DEFAULT_SYMBOLS = (
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "LINK/USDT",
+    "ZEC/USDT",
+    "ADA/USDT",
+    "BNB/USDT",
+    "BAS/USDT",
+)
 DEFAULT_TIMEFRAME = "15m"
-DEFAULT_LOOKBACK_HOURS = 24 * 30  # 30 days
+DEFAULT_LOOKBACK_HOURS = 24 * 180  # 6 months
+
+
+@dataclass(frozen=True)
+class WindowSpec:
+    """Describe a historical slice to gather training samples from."""
+
+    timeframe: str
+    hours: int
+    offset_hours: int = 0
+
+    @property
+    def interval_minutes(self) -> int:
+        return _timeframe_to_minutes(self.timeframe)
+
+    def bounds(self, anchor: datetime) -> tuple[int, int]:
+        """Return (start_ts_ms, end_ts_ms) for this window."""
+
+        end = anchor - timedelta(hours=self.offset_hours)
+        start = end - timedelta(hours=self.hours)
+        return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+@dataclass
+class PreparedWindow:
+    symbol: str
+    spec: WindowSpec
+    dataset: "pd.DataFrame"
+
+
+DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
+    WindowSpec(DEFAULT_TIMEFRAME, hours=DEFAULT_LOOKBACK_HOURS, offset_hours=0),
+)
 
 
 @dataclass(frozen=True)

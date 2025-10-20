@@ -5,10 +5,76 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from ccxt_xgboost_module import TrainingArtifacts, WindowSpec, run_training_workflow
+from ccxt_xgboost_module import (
+    DEFAULT_LOOKBACK_HOURS,
+    DEFAULT_TIMEFRAME,
+    PreparedWindow,
+    TrainingArtifacts,
+    WindowSpec,
+    run_training_workflow,
+)
 
 
 class RunTrainingWorkflowTest(unittest.TestCase):
+    def test_run_training_basic_defaults_cover_all_symbols(self):
+        symbols = ("AAA/BBB", "CCC/DDD", "EEE/FFF")
+        rows_per_symbol = 16
+        captured_datasets: list[pd.DataFrame] = []
+
+        def fake_collect(exchange, symbols_arg, specs, anchor):
+            del anchor
+            self.assertEqual(exchange, "binance")
+            self.assertEqual(tuple(symbols_arg), symbols)
+            self.assertEqual(len(specs), 1)
+            spec = specs[0]
+            self.assertEqual(spec.timeframe, DEFAULT_TIMEFRAME)
+            self.assertEqual(spec.hours, DEFAULT_LOOKBACK_HOURS)
+            windows: list[PreparedWindow] = []
+            for idx, symbol in enumerate(symbols):
+                timestamps = pd.date_range("2024-01-01", periods=rows_per_symbol, freq="15min")
+                base = idx * 0.1
+                frame = pd.DataFrame(
+                    {
+                        "timestamp": timestamps,
+                        "ema20": np.linspace(1, 2, rows_per_symbol) + base,
+                        "ema50": np.linspace(2, 3, rows_per_symbol) + base,
+                        "ema100": np.linspace(3, 4, rows_per_symbol) + base,
+                        "ema200": np.linspace(4, 5, rows_per_symbol) + base,
+                        "rsi14": np.linspace(30, 70, rows_per_symbol),
+                        "atr14": np.linspace(0.5, 1.5, rows_per_symbol),
+                        "adx14": np.linspace(10, 40, rows_per_symbol),
+                        "ema20Slope": np.linspace(-1, 1, rows_per_symbol),
+                        "volumeRatio": np.linspace(0.5, 1.5, rows_per_symbol),
+                        "target": ([0, 1] * (rows_per_symbol // 2))[:rows_per_symbol],
+                    }
+                )
+                windows.append(PreparedWindow(symbol=symbol, spec=spec, dataset=frame))
+            return windows
+
+        def fake_train(data, params):
+            del params
+            captured_datasets.append(data.copy())
+            features = [col for col in data.columns if col not in {"timestamp", "target"}]
+            model = mock.Mock()
+            model.save_model = mock.Mock()
+            return TrainingArtifacts(model=model, features=features, metrics={"accuracy": 0.88, "f1": 0.83})
+
+        with (
+            mock.patch("ccxt_xgboost_module.collect_prepared_windows", side_effect=fake_collect) as patched_collect,
+            mock.patch("ccxt_xgboost_module.train_model", side_effect=fake_train) as patched_train,
+            mock.patch("ccxt_xgboost_module.save_model_and_features") as patched_save,
+        ):
+            artifacts = run_training_workflow(exchange="binance", symbols=symbols)
+
+        self.assertEqual(patched_collect.call_count, 1)
+        self.assertEqual(patched_train.call_count, 1)
+        self.assertEqual(patched_save.call_count, 1)
+        self.assertEqual(len(captured_datasets), 1)
+        combined = captured_datasets[0]
+        self.assertEqual(len(combined), rows_per_symbol * len(symbols))
+        for feature in ("ema20", "ema50", "ema100", "ema200", "rsi14", "atr14", "adx14", "ema20Slope", "volumeRatio"):
+            self.assertIn(feature, artifacts.features)
+
     def test_run_training_aggregates_multiple_windows(self):
         specs = (
             WindowSpec("15m", hours=24, offset_hours=0),

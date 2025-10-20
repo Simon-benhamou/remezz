@@ -17,7 +17,7 @@
 
 - Le script `python/ccxt_xgboost_module.py` encapsule le workflow complet : récupération OHLCV via ccxt, cache CSV incrémental (`data/xgboost_ohlcv_cache.csv`), calcul des indicateurs (ATR, ADX, RSI, EMA, pente, ratio de volume), création de la cible (variation 3 bougies) et entraînement d’un `xgboost.XGBClassifier` (split chronologique 80/20, métriques `accuracy`/`f1`).
 - Lancez `npm run train-model` (alias de `python3 python/ccxt_xgboost_module.py`) pour régénérer `python/xgboost_direction.json`, `python/features.txt` et `python/training_metrics.json`. En absence de réseau, le module génère un jeu de données synthétique déterministe pour conserver un modèle valide.
-- Pour entraîner sur plusieurs paires, définissez `XGB_SYMBOLS="BTC/USDT,ETH/USDT,SOL/USDT"` (sinon `XGB_SYMBOL` ou la valeur par défaut `BTC/USDT` est utilisée). Chaque paire dispose de son cache CSV dédié afin d'éviter les chevauchements de données.
+- Pour entraîner sur plusieurs paires, définissez `XGB_SYMBOLS="BTC/USDT,ETH/USDT,SOL/USDT"`. À défaut, `XGB_SYMBOL` ou la valeur par défaut (`BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,LINK/USDT,ZEC/USDT,ADA/USDT,BNB/USDT,BAS/USDT`) sont utilisées. Chaque paire dispose de son cache CSV dédié afin d'éviter les chevauchements de données.
 - Les colonnes de features sont également persistées dans `features.txt` afin de vérifier les entrées du service de prédiction.
 
 ### Mise à jour périodique
