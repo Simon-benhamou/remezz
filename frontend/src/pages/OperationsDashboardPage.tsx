@@ -45,6 +45,7 @@ import AgentHealthTable, { type AgentHealthRow } from '../components/AgentHealth
 import { formatDisplaySymbol } from '../utils/symbols';
 import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import { useDashboard } from '../hooks/useDashboard';
+import { collectOpsEventReasons, formatOpsEventMessage } from '../utils/opsEvents';
 
 const { Title, Text } = Typography;
 
@@ -815,8 +816,24 @@ const OperationsDashboardPage: React.FC = () => {
                       </Text>
                     </Space>
                     <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
-                      {evt.message?.replace(/_/g, ' ') ?? 'Agent update'}
+                      {formatOpsEventMessage(evt.message)}
                     </Text>
+                    {(() => {
+                      const reasons = collectOpsEventReasons(evt.details);
+                      if (!reasons.length) return null;
+                      return (
+                        <Space direction='vertical' size={4}>
+                          {reasons.slice(0, 2).map((reason, idx) => (
+                            <Text
+                              key={`${evt.id}-reason-${idx}`}
+                              style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}
+                            >
+                              {reason}
+                            </Text>
+                          ))}
+                        </Space>
+                      );
+                    })()}
                     <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
                       {evt.symbol && <Tag color='geekblue'>{formatDisplaySymbol(evt.symbol)}</Tag>}
                       <span>{evt.source}</span>
