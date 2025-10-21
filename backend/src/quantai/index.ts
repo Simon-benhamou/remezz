@@ -8,3 +8,5 @@ export type { TradeSide, ExitDirective, InitialBracket, ExitArchetype } from './
 export { classifyRegime, selectMode } from './regime/regime.js';
 export { applyFeesAndSlippage, calculateFeeUsd } from './backtest/execution.js';
 export type { LiquidityType } from './backtest/execution.js';
+export { StrategyHealth } from './services/strategyHealth.js';
+export type { StrategyHealthSnapshot } from './services/strategyHealth.js';

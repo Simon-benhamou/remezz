@@ -6,6 +6,10 @@ export type PositionSizingParams = {
   riskPct?: number;
   qualityMultiplier?: number;
   maxNotionalUsd?: number;
+  currentAtrPct?: number;
+  targetAtrPct?: number;
+  minRiskPct?: number;
+  maxRiskPct?: number;
 };
 
 export type PositionSizingResult = {
@@ -23,7 +27,18 @@ export class PositionSizer {
   constructor(private readonly baseRiskPerTradePct: number) {}
 
   computeSize(params: PositionSizingParams): PositionSizingResult {
-    const riskPct = params.riskPct && params.riskPct > 0 ? params.riskPct : this.baseRiskPerTradePct;
+    const baseRiskPct = params.riskPct && params.riskPct > 0 ? params.riskPct : this.baseRiskPerTradePct;
+    let riskPct = baseRiskPct;
+    const currentAtr = params.currentAtrPct && params.currentAtrPct > 0 ? params.currentAtrPct : null;
+    const targetAtr = params.targetAtrPct && params.targetAtrPct > 0 ? params.targetAtrPct : currentAtr;
+    if (currentAtr && targetAtr) {
+      const ratio = targetAtr / currentAtr;
+      const multiplier = Math.max(0.4, Math.min(1.6, ratio));
+      const unclamped = baseRiskPct * multiplier;
+      const minRisk = params.minRiskPct != null ? params.minRiskPct : baseRiskPct * 0.4;
+      const maxRisk = params.maxRiskPct != null ? params.maxRiskPct : baseRiskPct * 1.6;
+      riskPct = Math.max(minRisk, Math.min(maxRisk, unclamped));
+    }
     const stopDistance = params.stopDistanceAbs != null && params.stopDistanceAbs > 0
       ? params.stopDistanceAbs
       : Math.abs(params.entryPrice - (params.stopPrice ?? 0));
