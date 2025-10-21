@@ -1,0 +1,102 @@
+{
+  "volatility": {
+    "atrPeriod": 14,
+    "bollingerPeriod": 20,
+    "keltnerPeriod": 20,
+    "squeezeLow": 0.8,
+    "squeezeHigh": 1.25
+  },
+  "momentum": {
+    "rocPeriods": [1, 3, 5],
+    "emaSlopes": [5, 9],
+    "rsiPeriods": [7, 14],
+    "macd": {
+      "fast": 8,
+      "slow": 21,
+      "signal": 9
+    }
+  },
+  "volume": {
+    "zScoreLookback": 14,
+    "obvLookback": 10,
+    "spikePcts": {
+      "p95": 0.9,
+      "p99": 0.98
+    }
+  },
+  "orderBook": {
+    "topDepthLevels": 5,
+    "aggressionLookbackMs": 45000
+  },
+  "entry": {
+    "bom": {
+      "atrMinPct": 0.002,
+      "rsiMin": 52,
+      "confirmationBars": 0,
+      "stopBufferBps": 3,
+      "volumeZMin": 1.2,
+      "aggressionMin": 0.55,
+      "pyramidMaxAdds": 3,
+      "pyramidPullbackBps": 35,
+      "pyramidScale": 0.33,
+      "stopGraceMinutes": 2,
+      "stopGraceBps": 16
+    },
+    "mr": {
+      "atrMaxPct": 0.007,
+      "rsiMax": 38,
+      "wickMinPct": 0.001,
+      "cooldownMs": 120000,
+      "priceZScore": 1.8,
+      "obiExtreme": 0.4,
+      "obiDeltaMin": 0.04
+    }
+  },
+  "risk": {
+    "baseRiskPct": 0.009,
+    "bomMultiplier": 1.3,
+    "mrMultiplier": 1.0,
+    "dailyStopPct": 0.035,
+    "maxConcurrentPositions": 3,
+    "cooldownLosses": 2,
+    "cooldownMinutes": 45,
+    "strategyHealth": {
+      "expectancyFloor": -0.1,
+      "hitRateFloor": 0.36,
+      "riskPctReduction": 0.4
+    }
+  },
+  "execution": {
+    "maxSlippageBps": 8,
+    "makerOffsetBps": {
+      "min": 0.4,
+      "max": 1.2
+    },
+    "fallbackSeconds": {
+      "min": 5,
+      "max": 12
+    },
+    "twapThresholdUsd": 200000
+  },
+  "stops": {
+    "bom": {
+      "atrMultiplier": 1.4,
+      "minPct": 0.003
+    },
+    "mr": {
+      "atrMultiplier": 1.6,
+      "minPct": 0.004
+    },
+    "tp": {
+      "firstPct": 0.007,
+      "firstSize": 0.55,
+      "secondPct": 0.018,
+      "secondSize": 0.45,
+      "runner": {
+        "atrMultiplier": 1.2,
+        "lookback": 15
+      }
+    },
+    "timeStopMinutes": 12
+  }
+}

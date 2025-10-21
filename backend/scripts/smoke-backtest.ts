@@ -129,6 +129,10 @@ function printTradeLog(result: ReturnType<typeof runIntradayBacktest>): void {
       price: trade.price.toFixed(2),
       cumulativePnl: trade.cumulativePnl.toFixed(2),
       reason: trade.reason,
+      executionMode: trade.executionMode,
+      holdMs: trade.holdDurationMs,
+      entryAtrPct: trade.entryAtrPct,
+      exitAtrPct: trade.exitAtrPct,
     });
   }
 }
@@ -139,6 +143,11 @@ const result = runIntradayBacktest(candles, {
   symbol: 'BTCUSDT',
   equityUsd,
   slippageBps: 4,
+  makerFeeBps: 1.5,
+  takerFeeBps: 5,
+  fundingAnnualPct: 8,
+  latencyMs: 200,
+  impactBpsPerMillion: 5,
 });
 
 printTradeLog(result);
@@ -155,3 +164,15 @@ logger.info('Intraday dual strategy smoke metrics', {
   avgWin: metrics.avgWin.toFixed(4),
   avgLoss: metrics.avgLoss.toFixed(4),
 });
+
+if (result.walkForward?.length) {
+  for (const segment of result.walkForward) {
+    logger.info('walk-forward', {
+      start: new Date(segment.start).toISOString(),
+      end: new Date(segment.end).toISOString(),
+      cagr: segment.metrics.cagr.toFixed(6),
+      sharpe: segment.metrics.sharpe.toFixed(6),
+      maxDrawdownPct: segment.metrics.maxDrawdownPct.toFixed(4),
+    });
+  }
+}

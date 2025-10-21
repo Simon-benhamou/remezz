@@ -134,6 +134,10 @@ export type TradeLog = {
   price: PreciseDecimal;
   cumulativePnl: PreciseDecimal;
   reason: string;
+  executionMode: ExecutionDirective['mode'];
+  holdDurationMs: number;
+  entryAtrPct: number;
+  exitAtrPct: number;
 };
 
 export type BacktestMetrics = {
@@ -152,4 +156,5 @@ export type BacktestResult = {
   metrics: BacktestMetrics;
   trades: TradeLog[];
   signals: EntrySignal[];
+  walkForward?: { start: number; end: number; metrics: BacktestMetrics }[];
 };

@@ -37,6 +37,7 @@ type ActivePosition = {
   baseStopLoss: PreciseDecimal;
   stopGraceUntil?: number;
   stopGracePrice?: PreciseDecimal;
+  entryExecutionMode: EntrySignal['execution']['mode'];
 };
 
 type EvaluateContext = {
@@ -45,6 +46,7 @@ type EvaluateContext = {
   maxLevGlobal: number;
   exposureBudget: number;
   slippageBps: number;
+  runtimeMetrics?: { fillRate?: number; slippageBps?: number };
 };
 
 function pctToPrice(base: PreciseDecimal, pct: number, side: 'long' | 'short', direction: 'tp' | 'sl'): PreciseDecimal {
@@ -79,6 +81,7 @@ export class IntradayDualStrategy {
     exits: ExitDirective[];
     trades: TradeLog[];
   } {
+    this.execution.ingest(ctx.runtimeMetrics);
     if (input.aggression) {
       this.pipeline.updateAggression({
         timestamp: input.aggression.timestamp,
@@ -164,6 +167,13 @@ export class IntradayDualStrategy {
       : f1.volatility.bollingerPercentB < 0 ? 'short' : null;
     if (!side) return null;
 
+    const emaFast = f1.momentum.emaValue['9'] ?? signalCandle.close;
+    const emaSlow = f1.momentum.emaValue['20'] ?? signalCandle.close;
+    const trendAligned = side === 'long' ? emaFast >= emaSlow : emaFast <= emaSlow;
+    if (!trendAligned) {
+      return null;
+    }
+
     const confirmationBars = Math.max(0, this.cfg.entry.bom.confirmationBars);
     if (confirmationBars > 0) {
       const recent = candles1m.slice(-confirmationBars);
@@ -196,6 +206,10 @@ export class IntradayDualStrategy {
       }
       const existingSide = activeBom[0]?.side;
       if (existingSide && existingSide !== side) {
+        return null;
+      }
+      const emaTrendAligned = side === 'long' ? emaFast > emaSlow : emaFast < emaSlow;
+      if (!emaTrendAligned) {
         return null;
       }
       const ema9 = f1.momentum.emaValue['9'] ?? input.price;
@@ -398,7 +412,7 @@ export class IntradayDualStrategy {
         ? price.lt(position.stopLoss)
         : price.gt(position.stopLoss);
       if (hitStop) {
-        const exit = this.realizeExit(input.symbol, position, 1, price, 'stop', input.timestamp);
+        const exit = this.realizeExit(input.symbol, position, 1, price, 'stop', input.timestamp, atrPct);
         if (exit) exits.push(exit.directive);
         continue;
       }
@@ -406,7 +420,7 @@ export class IntradayDualStrategy {
       if (!position.tp1Executed) {
         const hitTp1 = position.side === 'long' ? price.gt(position.takeProfit1) : price.lt(position.takeProfit1);
         if (hitTp1) {
-          const exit = this.realizeExit(input.symbol, position, this.cfg.stops.tp.firstSize, position.takeProfit1, 'tp1', input.timestamp);
+          const exit = this.realizeExit(input.symbol, position, this.cfg.stops.tp.firstSize, position.takeProfit1, 'tp1', input.timestamp, atrPct);
           if (exit) exits.push(exit.directive);
           position.tp1Executed = true;
           position.stopLoss = position.entryPrice; // move to breakeven
@@ -416,7 +430,7 @@ export class IntradayDualStrategy {
       if (!position.tp2Executed) {
         const hitTp2 = position.side === 'long' ? price.gt(position.takeProfit2) : price.lt(position.takeProfit2);
         if (hitTp2) {
-          const exit = this.realizeExit(input.symbol, position, this.cfg.stops.tp.secondSize, position.takeProfit2, 'tp2', input.timestamp);
+          const exit = this.realizeExit(input.symbol, position, this.cfg.stops.tp.secondSize, position.takeProfit2, 'tp2', input.timestamp, atrPct);
           if (exit) exits.push(exit.directive);
           position.tp2Executed = true;
         }
@@ -434,19 +448,34 @@ export class IntradayDualStrategy {
         }
         const minStop = position.regime === 'BOM' ? this.cfg.stops.bom.minPct : this.cfg.stops.mr.minPct;
         const trailPct = Math.max(trailMult * atrPct, minStop);
-        const trailPrice = pctToPrice(price, trailPct, position.side, 'sl');
-        if (position.side === 'long') {
-          if (trailPrice.gt(position.stopLoss)) {
-            position.stopLoss = trailPrice;
+        const atrTrail = pctToPrice(price, trailPct, position.side, 'sl');
+        let candidate = atrTrail;
+        const donchianLookback = Math.max(0, this.cfg.stops.tp.runner.lookback ?? 0);
+        if (donchianLookback > 1) {
+          const source = input.candles['1m'];
+          if (source.length >= donchianLookback) {
+            const slice = source.slice(-donchianLookback);
+            if (position.side === 'long') {
+              const floor = Math.min(...slice.map((c) => c.low));
+              candidate = candidate.gt(floor) ? candidate : new PreciseDecimal(floor);
+            } else {
+              const ceiling = Math.max(...slice.map((c) => c.high));
+              candidate = candidate.lt(ceiling) ? candidate : new PreciseDecimal(ceiling);
+            }
           }
-        } else if (trailPrice.lt(position.stopLoss)) {
-          position.stopLoss = trailPrice;
+        }
+        if (position.side === 'long') {
+          if (candidate.gt(position.stopLoss)) {
+            position.stopLoss = candidate;
+          }
+        } else if (candidate.lt(position.stopLoss)) {
+          position.stopLoss = candidate;
         }
         position.runnerTrailMult = trailMult;
       }
 
       if (elapsed >= timeStopMs) {
-        const exit = this.realizeExit(input.symbol, position, 1, price, 'time', input.timestamp);
+        const exit = this.realizeExit(input.symbol, position, 1, price, 'time', input.timestamp, atrPct);
         if (exit) exits.push(exit.directive);
       }
     }
@@ -455,7 +484,15 @@ export class IntradayDualStrategy {
     return exits;
   }
 
-  private realizeExit(symbol: string, position: ActivePosition, fraction: number, price: PreciseDecimal, reason: ExitDirective['reason'], timestamp: number): { log: TradeLog; directive: ExitDirective } | null {
+  private realizeExit(
+    symbol: string,
+    position: ActivePosition,
+    fraction: number,
+    price: PreciseDecimal,
+    reason: ExitDirective['reason'],
+    timestamp: number,
+    atrPct: number,
+  ): { log: TradeLog; directive: ExitDirective } | null {
     const fractionDecimal = new PreciseDecimal(Math.min(1, Math.max(0, fraction)).toString());
     if (fractionDecimal.raw === 0n || position.remainingNotional.raw === 0n) {
       return null;
@@ -476,6 +513,10 @@ export class IntradayDualStrategy {
       price,
       cumulativePnl: pnl,
       reason,
+      executionMode: position.entryExecutionMode,
+      holdDurationMs: timestamp - position.entryTime,
+      entryAtrPct: position.entryAtrPct,
+      exitAtrPct: atrPct,
     };
     this.tradeLogs.push(log);
     position.remainingNotional = position.remainingNotional.minus(notionalClosed);
@@ -508,6 +549,7 @@ export class IntradayDualStrategy {
       baseStopLoss: entry.stopLossPrice,
       stopGraceUntil: entry.stopGrace?.expiresAt,
       stopGracePrice: entry.stopGrace?.price,
+      entryExecutionMode: entry.execution.mode,
     };
     list.push(position);
     this.positions.set(symbol, list);

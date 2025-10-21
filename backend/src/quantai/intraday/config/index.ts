@@ -87,8 +87,22 @@ export type IntradayStrategyConfig = {
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const distDefault = path.join(moduleDir, 'default.json');
 const sourceDefault = path.resolve(process.cwd(), 'src/quantai/intraday/config/default.json');
+const presetDir = path.join(moduleDir, 'presets');
+const sourcePresetDir = path.resolve(process.cwd(), 'src/quantai/intraday/config/presets');
 
 const DEFAULT_PATH = fs.existsSync(distDefault) ? distDefault : sourceDefault;
+
+const presetMap = new Map<string, string>([
+  ['normal', fs.existsSync(path.join(presetDir, 'normal.json'))
+    ? path.join(presetDir, 'normal.json')
+    : path.join(sourcePresetDir, 'normal.json')],
+  ['aggressive', fs.existsSync(path.join(presetDir, 'aggressive.json'))
+    ? path.join(presetDir, 'aggressive.json')
+    : path.join(sourcePresetDir, 'aggressive.json')],
+  ['prudent', fs.existsSync(path.join(presetDir, 'prudent.json'))
+    ? path.join(presetDir, 'prudent.json')
+    : path.join(sourcePresetDir, 'prudent.json')],
+]);
 
 function readConfigFromFile(filePath: string): IntradayStrategyConfig {
   const raw = fs.readFileSync(filePath, 'utf8');
@@ -103,7 +117,10 @@ let cached: IntradayStrategyConfig | null = null;
 export function loadIntradayConfig(): IntradayStrategyConfig {
   if (cached) return cached;
   const customPath = process.env.INTRADAY_STRATEGY_CONFIG;
-  const sourcePath = customPath && fs.existsSync(customPath) ? customPath : DEFAULT_PATH;
+  const presetPath = customPath ? presetMap.get(customPath.toLowerCase()) : undefined;
+  const resolvedPreset = presetPath && fs.existsSync(presetPath) ? presetPath : null;
+  const directPath = customPath && fs.existsSync(customPath) ? customPath : null;
+  const sourcePath = resolvedPreset ?? directPath ?? DEFAULT_PATH;
   cached = readConfigFromFile(sourcePath);
   return cached;
 }

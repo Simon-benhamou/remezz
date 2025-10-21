@@ -164,6 +164,116 @@ assert.ok(bomEntry.size.raw > 0n, 'Size should be positive');
 assert.equal(bomEntry.pyramidAdd, false, 'First BOM entry should not be pyramid add');
 assert.ok(bomEntry.entryAtrPct > 0, 'ATR snapshot should be positive');
 
+// Manual pyramid check using direct evaluation
+const manualStrategy = new IntradayDualStrategy();
+const baseFeatures = {
+  timeframe: '1m',
+  timestamp: 1_700_000_000_000,
+  price: 106,
+  volatility: {
+    atrPct: 0.003,
+    trueRangePct: 0.002,
+    bollingerWidthPct: 0.01,
+    bollingerPercentB: 1.2,
+    bollingerUpper: 105.8,
+    bollingerLower: 100,
+    bollingerMiddle: 102.9,
+    bandZScore: 2.4,
+    keltnerWidthPct: 0.008,
+    squeezeRatio: 1.3,
+    squeezeState: 'expansion',
+  },
+  momentum: {
+    roc: { '1': 0.01 },
+    emaSlope: { '9': 0.002, '20': 0.001 },
+    emaValue: { '9': 105, '20': 103 },
+    rsi: { '7': 60, '14': 58 },
+    rsiSlope: { '7': 0.5, '14': 0.4 },
+    macdHistogram: 0.6,
+  },
+  volume: {
+    zScore: 2,
+    obvDelta: 1500,
+    spike95: true,
+    spike99: false,
+  },
+  orderBook: {
+    imbalance: 0.4,
+    imbalanceDelta: 0.08,
+    aggressionRatio: 0.7,
+  },
+};
+const higherFeatures = {
+  timeframe: '5m',
+  timestamp: baseFeatures.timestamp,
+  price: baseFeatures.price,
+  volatility: baseFeatures.volatility,
+  momentum: baseFeatures.momentum,
+  volume: baseFeatures.volume,
+  orderBook: baseFeatures.orderBook,
+};
+const featuresMap = {
+  '1m': baseFeatures,
+  '5m': higherFeatures,
+  '15m': higherFeatures,
+};
+const baseInput = {
+  symbol: 'SOLUSDT',
+  timestamp: baseFeatures.timestamp,
+  price: baseFeatures.price,
+  candles: {
+    '1m': [{ timestamp: baseFeatures.timestamp, open: 104, high: 106.5, low: 103.5, close: 106, volume: 5_000 }],
+    '5m': [{ timestamp: baseFeatures.timestamp, open: 102, high: 107, low: 101, close: 106, volume: 20_000 }],
+    '15m': [{ timestamp: baseFeatures.timestamp, open: 100, high: 107, low: 99, close: 106, volume: 60_000 }],
+  },
+  orderBook: {
+    timestamp: baseFeatures.timestamp,
+    bids: [{ price: 105.8, size: 8_000 }],
+    asks: [{ price: 106.2, size: 6_000 }],
+  },
+  aggression: { timestamp: baseFeatures.timestamp, takerBuy: 4_000, takerSell: 2_000 },
+};
+const baseCtx = {
+  equityUsd: equity,
+  maxLevInstrument: 3,
+  maxLevGlobal: 3,
+  exposureBudget: 3,
+  slippageBps: 2,
+};
+const regimeSignal = { label: 'BOM', confidence: 0.9, reason: 'manual-test' };
+const manualBaseEntry = manualStrategy.evaluateBreakoutEntry(baseInput, featuresMap, baseCtx, 1, regimeSignal);
+assert.ok(manualBaseEntry, 'Manual base entry should exist');
+assert.equal(manualBaseEntry.pyramidAdd, false, 'Manual base entry is not a pyramid add');
+manualStrategy.registerPosition('SOLUSDT', manualBaseEntry, equity, baseInput.timestamp);
+
+const addFeatures = {
+  ...baseFeatures,
+  timestamp: baseFeatures.timestamp + 60_000,
+  price: 104.2,
+  volatility: {
+    ...baseFeatures.volatility,
+    bollingerPercentB: 1.1,
+    atrPct: 0.0032,
+  },
+  momentum: {
+    ...baseFeatures.momentum,
+    emaValue: { '9': 104.1, '20': 103 },
+  },
+};
+const addFeaturesMap = {
+  '1m': addFeatures,
+  '5m': higherFeatures,
+  '15m': higherFeatures,
+};
+const addInput = {
+  ...baseInput,
+  timestamp: addFeatures.timestamp,
+  price: addFeatures.price,
+};
+const pyramidEntry = manualStrategy.evaluateBreakoutEntry(addInput, addFeaturesMap, baseCtx, 1, regimeSignal);
+assert.ok(pyramidEntry, 'Manual pyramid entry should exist');
+assert.equal(pyramidEntry.pyramidAdd, true, 'Manual pyramid entry flagged correctly');
+
 // Mean-reversion scenario
 const mrStrategy = new IntradayDualStrategy();
 const mrCandles = makeFlatCandles(200, 200, 400);
