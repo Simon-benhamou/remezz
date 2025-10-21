@@ -120,7 +120,16 @@ function getScriptPath(): string {
   return defaultScript;
 }
 
-export type PythonPredictionResult = { prediction: 0 | 1; probability: number };
+export type PythonPredictionResult = {
+  prediction: 0 | 1;
+  probability: number;
+  bearishProbability: number;
+  confidence: number;
+  entryWeight: number;
+  riskMultiplier: number;
+  cooldown: { active: boolean; reason: string | null; seconds: number | null };
+  meta?: Record<string, unknown> | null;
+};
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -154,7 +163,18 @@ function parsePrediction(payload: string): PythonPredictionResult {
   }
   const probabilityRaw = Number(parsed?.probability);
   const probability = clamp(probabilityRaw, 0, 1);
-  return { prediction: value, probability };
+  const bearRaw = Number(parsed?.bearProbability);
+  const bearishProbability = clamp(Number.isFinite(bearRaw) ? bearRaw : 1 - probability, 0, 1);
+  const confidence = clamp(Number(parsed?.confidence ?? Math.abs(probability - 0.5) * 2), 0, 1);
+  const entryWeight = clamp(Number(parsed?.entryWeight ?? 1), 0.2, 3);
+  const riskMultiplier = clamp(Number(parsed?.riskMultiplier ?? 1), 0.2, 3);
+  const cooldownParsed = parsed?.cooldown;
+  const cooldown = {
+    active: Boolean(cooldownParsed?.active),
+    reason: typeof cooldownParsed?.reason === 'string' ? cooldownParsed.reason : null,
+    seconds: Number.isFinite(Number(cooldownParsed?.seconds)) ? Number(cooldownParsed.seconds) : null,
+  };
+  return { prediction: value, probability, bearishProbability, confidence, entryWeight, riskMultiplier, cooldown, meta: parsed?.meta ?? null };
 }
 
 export async function getPrediction(features: Record<string, number>): Promise<PythonPredictionResult> {

@@ -50,6 +50,21 @@ export type TechnicalSnapshot = {
   cmf20?: number;
   momentum3?: number;
   multiTimeframe?: MultiTimeframeDiagnostics;
+  microstructure?: {
+    orderFlowImbalance: number;
+    aggressionRatio: number;
+    deltaVolumeSlope: number;
+    midpricePressure: number;
+    microAtr: number;
+    trendStrength: number;
+    priceVelocity: number;
+    normalizedCloses: number[];
+    normalizedVolumes: number[];
+    rsiSequence: number[];
+    obiSequence: number[];
+    deltaRsi: number;
+    deltaObi: number;
+  };
 };
 
 // Utilities
@@ -120,6 +135,99 @@ function chaikinMoneyFlow(
   }
   if (volSum <= 0) return 0;
   return mfvSum / volSum;
+}
+
+function linearSlope(values: number[]): number {
+  const n = values.length;
+  if (n < 2) return 0;
+  const meanX = (n - 1) / 2;
+  const meanY = values.reduce((sum, value) => sum + value, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i += 1) {
+    const dx = i - meanX;
+    num += dx * (values[i] - meanY);
+    den += dx * dx;
+  }
+  return den === 0 ? 0 : num / den;
+}
+
+function computeMicrostructureFeatures(params: {
+  closes: number[];
+  highs: number[];
+  lows: number[];
+  volumes: number[];
+  rsiSeries: number[];
+}): TechnicalSnapshot['microstructure'] {
+  const seqLen = 20;
+  const closes = params.closes.slice(-seqLen);
+  const highs = params.highs.slice(-seqLen);
+  const lows = params.lows.slice(-seqLen);
+  const volumes = params.volumes.slice(-seqLen);
+  const rsiSeqRaw = params.rsiSeries.slice(-seqLen);
+  const normalizedCloses = closes.map((value, idx) => {
+    const ref = closes[0] || value || 1;
+    return ref === 0 ? 0 : (value - ref) / Math.abs(ref);
+  });
+  const volumeBaseline = volumes.reduce((sum, value) => sum + value, 0) / Math.max(volumes.length, 1);
+  const normalizedVolumes = volumes.map(value => {
+    if (!Number.isFinite(value) || volumeBaseline === 0) return 0;
+    return (value - volumeBaseline) / (Math.abs(volumeBaseline) + 1e-9);
+  });
+  const mfMultipliers: number[] = [];
+  for (let i = 0; i < closes.length; i += 1) {
+    const high = highs[i] ?? closes[i];
+    const low = lows[i] ?? closes[i];
+    const close = closes[i];
+    const range = Math.max(1e-9, high - low);
+    const multiplier = ((close - low) - (high - close)) / range;
+    mfMultipliers.push(multiplier);
+  }
+  const orderFlowImbalance = mfMultipliers.reduce((sum, value) => sum + value, 0) / Math.max(mfMultipliers.length, 1);
+  let positive = 0;
+  let negative = 0;
+  for (const value of mfMultipliers) {
+    if (value >= 0) positive += value;
+    else negative += Math.abs(value);
+  }
+  const aggressionRatio = positive + negative === 0 ? 0 : positive / (positive + negative);
+  const volumeSlope = linearSlope(normalizedVolumes);
+  const midPressure = mfMultipliers.reduce((sum, value) => sum + value, 0) / Math.max(mfMultipliers.length, 1);
+  const trSeries: number[] = [];
+  for (let i = 1; i < closes.length; i += 1) {
+    const high = highs[i] ?? closes[i];
+    const low = lows[i] ?? closes[i];
+    const prevClose = closes[i - 1];
+    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    trSeries.push(tr);
+  }
+  const lastClose = closes.at(-1) ?? closes[0] ?? 1;
+  const microAtr = trSeries.length === 0 ? 0 : (trSeries.reduce((sum, value) => sum + value, 0) / trSeries.length) / Math.max(Math.abs(lastClose), 1e-9);
+  const priceVelocity = linearSlope(closes.map(close => Math.log(Math.max(close, 1e-9))));
+  const obiSequence: number[] = [];
+  let obiCumulative = 0;
+  for (const value of mfMultipliers) {
+    obiCumulative += value;
+    obiSequence.push(obiCumulative);
+  }
+  const rsiSequence = rsiSeqRaw.map(value => (Number.isFinite(value) ? (value - 50) / 50 : 0));
+  const deltaRsi = rsiSequence.length >= 2 ? rsiSequence.at(-1)! - rsiSequence[0]! : 0;
+  const deltaObi = obiSequence.length >= 2 ? obiSequence.at(-1)! - obiSequence[0]! : 0;
+  return {
+    orderFlowImbalance,
+    aggressionRatio,
+    deltaVolumeSlope: volumeSlope,
+    midpricePressure: midPressure,
+    microAtr,
+    trendStrength: linearSlope(normalizedCloses),
+    priceVelocity,
+    normalizedCloses,
+    normalizedVolumes,
+    rsiSequence,
+    obiSequence,
+    deltaRsi,
+    deltaObi,
+  };
 }
 
 function hurstExponent(values: number[]) {
@@ -572,6 +680,14 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     momentum3,
     multiTimeframe,
   };
+
+  snapshot.microstructure = computeMicrostructureFeatures({
+    closes: closes15,
+    highs: highs15,
+    lows: lows15,
+    volumes: volumes15,
+    rsiSeries: rsi14Arr,
+  });
 
   snapshot.regime = classifyRegime(snapshot);
 

@@ -10,11 +10,12 @@ import {
   isPythonPredictorAvailable,
 } from '../pythonPredictor.js';
 import { getPythonSignalTuning } from '../pythonSignalTuning.js';
+import { PythonPerformanceTracker } from '../pythonPerformanceTracker.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 const pythonSignalTuning = getPythonSignalTuning();
-const PYTHON_BIAS_WEIGHT = pythonSignalTuning.biasWeight;
+const BASE_PYTHON_BIAS_WEIGHT = pythonSignalTuning.biasWeight;
 const PYTHON_NEUTRAL_THRESHOLD = pythonSignalTuning.neutralThreshold;
 const PYTHON_GATE_THRESHOLD = pythonSignalTuning.gateThreshold;
 
@@ -134,6 +135,19 @@ export type AdaptiveStrategyPlan = {
   targetProfitUsd: PreciseDecimal;
   medianTakeProfitR: PreciseDecimal;
   trailingPolicy?: AdaptiveTrailingPolicy | null;
+  entryWeight: PreciseDecimal;
+  pythonRiskMultiplier: PreciseDecimal;
+};
+
+type PythonHybridSignal = {
+  bias: StrategyBias;
+  probability: number;
+  bearishProbability: number;
+  confidence: number;
+  entryWeight: number;
+  riskMultiplier: number;
+  cooldown: { active: boolean; reason: string | null; seconds: number | null };
+  meta?: Record<string, unknown> | null;
 };
 
 type StrategyScoreResult = {
@@ -148,7 +162,7 @@ type StrategyScoreResult = {
   guardrail?: string | null;
   plan: AdaptiveStrategyPlan;
   predictorFeatures: Record<string, number> | null;
-  pythonSignal: { bias: StrategyBias; probability: number } | null;
+  pythonSignal: PythonHybridSignal | null;
 };
 
 export type AdaptiveSignal = StrategyScoreResult & {
@@ -215,6 +229,12 @@ type ActiveTrade = {
   targetProfitUsd: PreciseDecimal;
   medianTakeProfitR: PreciseDecimal;
   trailingPolicy?: AdaptiveTrailingPolicy | null;
+  pythonProbability?: number;
+  pythonConfidence?: number;
+  pythonEntryWeight?: number;
+  pythonRiskMultiplier?: number;
+  pythonCooldownSeconds?: number | null;
+  pythonTrackingKey?: string | null;
 };
 
 type GuardrailHalt = {
@@ -338,6 +358,38 @@ function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number>
     momentum3,
   };
 
+  const micro = (snap as any)?.microstructure as TechnicalSnapshot['microstructure'] | undefined;
+  if (micro) {
+    features.order_flow_imbalance = safeNumber(micro.orderFlowImbalance, 0);
+    features.aggression_ratio = safeNumber(micro.aggressionRatio, 0);
+    features.delta_volume_slope = safeNumber(micro.deltaVolumeSlope, 0);
+    features.midprice_pressure = safeNumber(micro.midpricePressure, 0);
+    features.micro_atr = safeNumber(micro.microAtr, 0);
+    features.trend_strength = safeNumber(micro.trendStrength, 0);
+    features.price_velocity = safeNumber(micro.priceVelocity, 0);
+    features.delta_rsi = safeNumber(micro.deltaRsi, 0);
+    features.delta_obi = safeNumber(micro.deltaObi, 0);
+    const seqs: Array<[string, number[]]> = [
+      ['seq_close_', micro.normalizedCloses ?? []],
+      ['seq_volume_', micro.normalizedVolumes ?? []],
+      ['seq_rsi_', micro.rsiSequence ?? []],
+      ['seq_obi_', micro.obiSequence ?? []],
+    ];
+    for (const [prefix, values] of seqs) {
+      for (let idx = 0; idx < 20; idx += 1) {
+        const value = Number.isFinite(values[idx] ?? NaN) ? values[idx]! : 0;
+        features[`${prefix}${idx}`] = value;
+      }
+    }
+  } else {
+    const prefixes = ['seq_close_', 'seq_volume_', 'seq_rsi_', 'seq_obi_'];
+    for (const prefix of prefixes) {
+      for (let idx = 0; idx < 20; idx += 1) {
+        features[`${prefix}${idx}`] = 0;
+      }
+    }
+  }
+
   if (Object.values(features).some(value => !Number.isFinite(value))) {
     return null;
   }
@@ -460,6 +512,7 @@ class MetaAdaptiveStrategyAgent {
   private readonly hundred = new PreciseDecimal('100');
   private readonly tenThousand = new PreciseDecimal('10000');
   private readonly majorBases = new Set(['BTC', 'ETH']);
+  private readonly pythonPerformance = new PythonPerformanceTracker(BASE_PYTHON_BIAS_WEIGHT);
   private rngState = 0x9e3779b9n;
   private tokenCounter = 0n;
   private reentryCooldownMs = 0;
@@ -497,6 +550,7 @@ class MetaAdaptiveStrategyAgent {
       this.symbolCooldowns.clear();
       this.setRandomSeed(0x9e3779b9);
       this.calibrationProfile = defaultCalibrationProfile;
+      this.pythonPerformance.reset();
       return;
     }
     this.stats.delete(sessionId);
@@ -541,6 +595,13 @@ class MetaAdaptiveStrategyAgent {
 
   private cooldownKey(sessionId: string | null | undefined, symbol: string): string {
     return `${sessionId ?? 'global'}::${symbol}`;
+  }
+
+  private pythonTradeKey(sessionId: string | null | undefined, token: string | null | undefined, symbol: string): string | null {
+    if (!sessionId || !token) {
+      return null;
+    }
+    return `${sessionId}::${symbol}::${token}`;
   }
 
   private purgeExpiredCooldowns(now: number): void {
@@ -936,11 +997,13 @@ class MetaAdaptiveStrategyAgent {
     const predictorFeatures = pythonAvailable ? buildPredictorFeatures(snap) : null;
 
     let pythonBias = 0;
-    let pythonSignal: { bias: StrategyBias; probability: number } | null = null;
+    let pythonSignal: PythonHybridSignal | null = null;
+    let pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
     if (pythonAvailable && predictorFeatures) {
       try {
         const prediction = getPythonPredictionSync(predictorFeatures);
-        pythonBias = clamp(prediction.probability * 2 - 1, -1, 1);
+        const probabilityEdge = clamp(prediction.probability * 2 - 1, -1, 1);
+        pythonBias = clamp(probabilityEdge * (0.5 + prediction.confidence * 0.5), -1, 1);
         const direction = Math.abs(pythonBias) < PYTHON_NEUTRAL_THRESHOLD
           ? 'both'
           : pythonBias > 0
@@ -949,7 +1012,24 @@ class MetaAdaptiveStrategyAgent {
         pythonSignal = {
           bias: direction,
           probability: Number(prediction.probability),
+          bearishProbability: Number(
+            Number.isFinite(prediction.bearishProbability)
+              ? prediction.bearishProbability
+              : 1 - prediction.probability,
+          ),
+          confidence: clamp(Number(prediction.confidence ?? Math.abs(probabilityEdge)), 0, 1),
+          entryWeight: clamp(Number(prediction.entryWeight ?? 1), 0.2, 3),
+          riskMultiplier: clamp(Number(prediction.riskMultiplier ?? 1), 0.2, 3),
+          cooldown: {
+            active: Boolean(prediction.cooldown?.active),
+            reason: prediction.cooldown?.reason ?? null,
+            seconds: Number.isFinite(Number(prediction.cooldown?.seconds))
+              ? Number(prediction.cooldown?.seconds)
+              : null,
+          },
+          meta: prediction.meta ?? null,
         };
+        pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
       } catch (error) {
         pythonBias = 0;
         if (process.env.UNIT_TEST_MODE !== 'true') {
@@ -977,13 +1057,19 @@ class MetaAdaptiveStrategyAgent {
     const onChainSignal = this.computeOnChainSignal(onChain);
     const sentimentSignal = this.computeSentimentSignal(sentiment);
     const combinedBias = clamp(
-      derivativeSignal.bias + onChainSignal.bias + sentimentSignal.bias + pythonBias * PYTHON_BIAS_WEIGHT,
+      derivativeSignal.bias + onChainSignal.bias + sentimentSignal.bias + pythonBias * pythonWeight,
       -1.5,
       1.5,
     );
     const macroNotes = [...derivativeSignal.notes, ...onChainSignal.notes, ...sentimentSignal.notes, ...regimeSignal.notes];
     if (pythonSignal) {
       macroNotes.push(`python_bias=${pythonBias.toFixed(2)}`);
+      macroNotes.push(`python_weight=${pythonWeight.toFixed(2)}`);
+      macroNotes.push(`python_conf=${pythonSignal.confidence.toFixed(2)}`);
+      macroNotes.push(`python_entry=${pythonSignal.entryWeight.toFixed(2)}`);
+      if (pythonSignal.cooldown.active) {
+        macroNotes.push('python_cooldown_active');
+      }
     }
 
     const emaAlignmentBull = ema20 >= ema50 && ema50 >= ema100 && ema100 >= ema200;
@@ -1230,6 +1316,8 @@ class MetaAdaptiveStrategyAgent {
           contextAlignmentThreshold: new PreciseDecimal('0.65'),
           adxThreshold: new PreciseDecimal('20'),
         },
+        entryWeight: new PreciseDecimal('1'),
+        pythonRiskMultiplier: new PreciseDecimal('1'),
       },
       breakout: {
         riskPct: new PreciseDecimal(breakoutRiskBase).times(riskAdjustmentFactor),
@@ -1239,6 +1327,8 @@ class MetaAdaptiveStrategyAgent {
         riskUsd: new PreciseDecimal('0'),
         targetProfitUsd: new PreciseDecimal('0'),
         medianTakeProfitR: breakoutTargets[Math.min(1, breakoutTargets.length - 1)],
+        entryWeight: new PreciseDecimal('1'),
+        pythonRiskMultiplier: new PreciseDecimal('1'),
       },
       mean_reversion: {
         riskPct: new PreciseDecimal(meanRiskBase).times(needsRiskReduction ? new PreciseDecimal('0.75') : new PreciseDecimal('1')),
@@ -1248,6 +1338,8 @@ class MetaAdaptiveStrategyAgent {
         riskUsd: new PreciseDecimal('0'),
         targetProfitUsd: new PreciseDecimal('0'),
         medianTakeProfitR: meanTargets[Math.min(1, meanTargets.length - 1)],
+        entryWeight: new PreciseDecimal('1'),
+        pythonRiskMultiplier: new PreciseDecimal('1'),
       },
       momentum: {
         riskPct: new PreciseDecimal(momentumRiskBase).times(riskAdjustmentFactor),
@@ -1257,6 +1349,8 @@ class MetaAdaptiveStrategyAgent {
         riskUsd: new PreciseDecimal('0'),
         targetProfitUsd: new PreciseDecimal('0'),
         medianTakeProfitR: momentumTargets[Math.min(1, momentumTargets.length - 1)],
+        entryWeight: new PreciseDecimal('1'),
+        pythonRiskMultiplier: new PreciseDecimal('1'),
       },
     };
 
@@ -1288,7 +1382,7 @@ class MetaAdaptiveStrategyAgent {
       reasons: string[];
       plan: AdaptiveStrategyPlan;
     predictorFeatures: Record<string, number> | null;
-    pythonSignal: { bias: StrategyBias; probability: number } | null;
+    pythonSignal: PythonHybridSignal | null;
   }>
       = [
         {
@@ -1362,6 +1456,8 @@ class MetaAdaptiveStrategyAgent {
     const calibrationAdjustments = this.calibrationProfile.familyScoreAdjustments;
 
     let weighted: StrategyScoreResult[] = familyScores.map(item => {
+      const pythonSignalForItem = item.pythonSignal;
+      const planAdjusted = this.applyPythonPlanAdjustments(item.plan, pythonSignalForItem);
       const penaltiesApplied = [...penalties];
       const reasonsAugmented = [...item.reasons, ...macroNotes];
       if (ranking.rank != null) reasonsAugmented.push(`rank=${ranking.rank}`);
@@ -1431,7 +1527,6 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore *= regimeMultiplier;
           reasonsAugmented.push(`regime_mult=${regimeMultiplier.toFixed(2)}`);
         }
-        const pythonSignalForItem = item.pythonSignal;
         if (pythonSignalForItem && Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD) {
           const pythonMultiplier = this.computeDirectionalMultiplier(item.bias, pythonBias);
           if (pythonMultiplier !== 1) {
@@ -1497,7 +1592,7 @@ class MetaAdaptiveStrategyAgent {
         reasons: reasonsAugmented,
         penalties: penaltiesApplied,
         guardrail,
-        plan: item.plan,
+        plan: planAdjusted,
         predictorFeatures: item.predictorFeatures,
         pythonSignal: item.pythonSignal,
       };
@@ -1591,12 +1686,13 @@ class MetaAdaptiveStrategyAgent {
     plan: AdaptiveStrategyPlan;
     side?: StrategyBias;
     predictorFeatures?: Record<string, number> | null;
-    pythonSignal?: { bias: StrategyBias; probability: number } | null;
+    pythonSignal?: PythonHybridSignal | null;
   }): Promise<void> {
     if (!params.sessionId || !params.token) return;
 
-    let predictorDecision: StrategyBias = params.pythonSignal?.bias ?? 'both';
-    let predictorProbability = params.pythonSignal?.probability ?? 0.5;
+    const pythonSignalMeta = params.pythonSignal ?? null;
+    let predictorDecision: StrategyBias = pythonSignalMeta?.bias ?? 'both';
+    let predictorProbability = pythonSignalMeta?.probability ?? 0.5;
     // The Python predictor (python/predict_service.py) loads the persisted XGBoost
     // model and scores the latest indicator snapshot. A bullish prediction (1)
     // permits long-biased strategies, whereas a bearish prediction (0) permits
@@ -1620,7 +1716,7 @@ class MetaAdaptiveStrategyAgent {
       }
     }
 
-    const predictorConfidence = Math.abs(predictorProbability - 0.5) * 2;
+    const predictorConfidence = pythonSignalMeta?.confidence ?? Math.abs(predictorProbability - 0.5) * 2;
     if (predictorConfidence < PYTHON_GATE_THRESHOLD) {
       predictorDecision = 'both';
     }
@@ -1649,6 +1745,22 @@ class MetaAdaptiveStrategyAgent {
     const riskUsd = planRiskUsd.gt(0) ? planRiskUsd : computedRisk;
     const side = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
     const queue = this.activeTrades.get(params.sessionId) ?? [];
+    const pythonTrackingKey = this.pythonTradeKey(params.sessionId ?? null, params.token ?? null, params.symbol);
+    if (pythonTrackingKey) {
+      this.pythonPerformance.recordExpectation(
+        pythonTrackingKey,
+        predictorProbability,
+        predictorConfidence,
+      );
+    }
+    const pythonEntryWeight = pythonSignalMeta?.entryWeight ?? 1;
+    const planRiskMultiplierDecimal = params.plan.pythonRiskMultiplier ?? new PreciseDecimal('1');
+    if (pythonSignalMeta?.cooldown.active) {
+      const cooldownSeconds = pythonSignalMeta.cooldown.seconds ?? 180;
+      const until = Date.now() + Math.max(0, cooldownSeconds) * 1000;
+      const key = this.cooldownKey(params.sessionId ?? null, params.symbol);
+      this.symbolCooldowns.set(key, Math.max(this.symbolCooldowns.get(key) ?? 0, until));
+    }
     queue.push({
       token: params.token,
       family: params.family,
@@ -1664,6 +1776,12 @@ class MetaAdaptiveStrategyAgent {
       targetProfitUsd: params.plan.targetProfitUsd,
       medianTakeProfitR: params.plan.medianTakeProfitR,
       trailingPolicy: params.plan.trailingPolicy ?? null,
+      pythonProbability: predictorProbability,
+      pythonConfidence: predictorConfidence,
+      pythonEntryWeight,
+      pythonRiskMultiplier: planRiskMultiplierDecimal.toNumber(),
+      pythonCooldownSeconds: pythonSignalMeta?.cooldown.seconds ?? null,
+      pythonTrackingKey,
     });
     this.activeTrades.set(params.sessionId, queue);
 
@@ -1708,6 +1826,9 @@ class MetaAdaptiveStrategyAgent {
     const previous = this.tradeLedgers.get(ledgerKey) ?? new PreciseDecimal('0');
     const cumulative = previous.plus(pnl);
     this.tradeLedgers.set(ledgerKey, cumulative);
+    if (trade.pythonTrackingKey) {
+      this.pythonPerformance.recordOutcome(trade.pythonTrackingKey, normalized.toNumber());
+    }
     console.log(JSON.stringify({
       level: 'info',
       event: 'adaptive_trade_outcome',
@@ -1840,6 +1961,25 @@ class MetaAdaptiveStrategyAgent {
       targetProfitUsd,
       medianTakeProfitR: median,
       trailingPolicy,
+      entryWeight: base.entryWeight,
+      pythonRiskMultiplier: base.pythonRiskMultiplier,
+    };
+  }
+
+  private applyPythonPlanAdjustments(
+    base: AdaptiveStrategyPlan,
+    signal: PythonHybridSignal | null,
+  ): AdaptiveStrategyPlan {
+    if (!signal) {
+      return base;
+    }
+    const riskMultiplier = new PreciseDecimal(signal.riskMultiplier.toFixed(6));
+    const entryWeight = new PreciseDecimal(signal.entryWeight.toFixed(6));
+    return {
+      ...base,
+      riskPct: base.riskPct.times(riskMultiplier),
+      pythonRiskMultiplier: riskMultiplier,
+      entryWeight,
     };
   }
 
