@@ -1,5 +1,6 @@
 import React from 'react';
 import { Table, Tag } from 'antd';
+import { formatDisplaySymbol } from '../utils/symbols';
 
 type OrdersTableProps = {
   rows: Array<Record<string, any>>;
@@ -60,8 +61,7 @@ export default function OrdersTable({ rows = [] }: OrdersTableProps) {
       dataIndex: 'symbol',
       width: 110,
       render: (_: any, record: any) => {
-        const sym = typeof record?.symbol === 'string' ? record.symbol.toUpperCase() : '';
-        if (!sym) return '—';
+        const sym = formatDisplaySymbol(record?.symbol);
         return (
           <Tag color='geekblue' className='session-table__tag'>
             {sym}

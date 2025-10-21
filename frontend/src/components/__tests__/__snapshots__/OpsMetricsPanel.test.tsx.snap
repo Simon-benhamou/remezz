@@ -619,7 +619,7 @@ exports[`OpsMetricsPanel > renders margin overview with actions 1`] = `
                                     <span
                                       style="color: rgba(0, 0, 0, 0.88); font-weight: 500;"
                                     >
-                                      BTC/USDT
+                                      BTC
                                     </span>
                                   </div>
                                 </div>
@@ -668,7 +668,7 @@ exports[`OpsMetricsPanel > renders margin overview with actions 1`] = `
                                     <span
                                       style="color: rgba(0, 0, 0, 0.88); font-weight: 500;"
                                     >
-                                      ETH/USDT
+                                      ETH
                                     </span>
                                   </div>
                                 </div>

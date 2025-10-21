@@ -2,6 +2,7 @@ import React from 'react';
 import { Badge, Button, Card, Col, Row, Space, Statistic, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { SyncOutlined } from '../icons';
+import { formatDisplaySymbol } from '../utils/symbols';
 type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
 type AgentHealthFlag = 'no_trades' | 'vos_block' | 'stale';
 type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
@@ -100,8 +101,10 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
       key: 'agent',
       render: (_value, record) => (
         <Space direction="vertical" size={0}>
-          <Text strong style={{ color: headingColor }}>{record.symbol || 'Unknown'}</Text>
-          <Text style={{ fontSize: 12, color: mutedText }}>{record.sessionId}</Text>
+          <Text strong style={{ color: headingColor }}>{formatDisplaySymbol(record.symbol)}</Text>
+          <Text style={{ fontSize: 12, color: mutedText }}>
+            {record.mode?.toUpperCase() || '—'} · {record.state || 'Unknown'}
+          </Text>
         </Space>
       ),
     },
@@ -211,7 +214,7 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
   return (
     <Card
       title={<span style={{ color: headingColor }}>Agent health</span>}
-      style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg }}
+      style={{ borderRadius: 16, border: `1px solid ${borderColor}`, background: cardBg, width: '100%' }}
       extra={
         <Button icon={<SyncOutlined />} onClick={onRefresh} disabled={loading}>
           Refresh
@@ -220,7 +223,7 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
     >
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {summaryItems.map((item) => (
-          <Col xs={12} md={6} key={item.status}>
+          <Col xs={12} sm={6} lg={6} key={item.status}>
             <div
               style={{
                 borderRadius: 12,

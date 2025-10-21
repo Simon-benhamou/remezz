@@ -42,6 +42,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import RecentTradesTable from '../components/RecentTradesTable';
 import AgentHealthTable, { type AgentHealthRow } from '../components/AgentHealthTable';
+import { formatDisplaySymbol } from '../utils/symbols';
 import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import { useDashboard } from '../hooks/useDashboard';
 
@@ -762,7 +763,7 @@ const OperationsDashboardPage: React.FC = () => {
             ))}
           </Card>
         </Col>
-        <Col xs={24} xl={14}>
+        <Col xs={24} xl={24}>
           <AgentHealthTable
             data={agentHealth}
             loading={agentHealthLoading || refreshing}
@@ -817,8 +818,7 @@ const OperationsDashboardPage: React.FC = () => {
                       {evt.message?.replace(/_/g, ' ') ?? 'Agent update'}
                     </Text>
                     <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
-                      {evt.symbol && <Tag color='geekblue'>{evt.symbol}</Tag>}
-                      {evt.sessionId && <Tag color='purple'>{evt.sessionId}</Tag>}
+                      {evt.symbol && <Tag color='geekblue'>{formatDisplaySymbol(evt.symbol)}</Tag>}
                       <span>{evt.source}</span>
                     </Space>
                   </div>

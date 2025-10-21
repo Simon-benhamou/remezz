@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Divider, InputNumber, Modal, Space, Statistic, Table, Typography, message } from 'antd';
 import { api } from '../api';
 import { ThunderboltOutlined } from '../icons';
+import { formatDisplaySymbol } from '../utils/symbols';
 
 type PortfolioBalanceModalProps = {
   open: boolean;
@@ -21,6 +22,8 @@ type PortfolioAllocation = {
   drawdownPct: number;
   budgetFraction: number;
   performanceScore: number;
+  mode?: string | null;
+  category?: string | null;
 };
 
 type PortfolioSnapshot = {
@@ -65,12 +68,6 @@ const getTrendColor = (value?: number | null, neutral = 0) => {
   if (value > neutral) return '#16a34a';
   if (value < neutral) return '#dc2626';
   return '#334155';
-};
-
-const formatSessionLabel = (sessionId: string) => {
-  if (!sessionId) return '—';
-  if (sessionId.length <= 12) return sessionId;
-  return `${sessionId.slice(0, 6)}…${sessionId.slice(-4)}`;
 };
 
 const PortfolioBalanceModal: React.FC<PortfolioBalanceModalProps> = ({ open, mode, onClose, onUpdated }) => {
@@ -156,9 +153,9 @@ const PortfolioBalanceModal: React.FC<PortfolioBalanceModalProps> = ({ open, mod
         key: 'agent',
         render: (_: string, record: PortfolioAllocation) => (
           <Space direction='vertical' size={0}>
-            <Typography.Text strong>{record.symbol || '—'}</Typography.Text>
+            <Typography.Text strong>{formatDisplaySymbol(record.symbol)}</Typography.Text>
             <Typography.Text type='secondary' style={{ fontSize: 12 }}>
-              {formatSessionLabel(record.sessionId)}
+              {record.mode?.toUpperCase() || '—'} · {record.category || 'Unassigned'}
             </Typography.Text>
           </Space>
         ),
