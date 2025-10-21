@@ -7,3 +7,8 @@ atr14
 adx14
 ema20Slope
 volumeRatio
+emaTrendSpread
+rsiSlope
+atrPct
+volumeZScore
+momentum3

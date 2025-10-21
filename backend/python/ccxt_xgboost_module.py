@@ -11,12 +11,13 @@ import json
 import os
 import random
 import sys
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal, getcontext
+from math import exp
 from pathlib import Path
 from typing import Dict, List, Sequence
-
-from math import exp
 
 try:  # pragma: no cover - optional dependency
     import ccxt  # type: ignore
@@ -28,7 +29,6 @@ try:  # Optional heavy deps
     import pandas as pd
     import ta  # type: ignore
     from sklearn.metrics import accuracy_score, f1_score
-    from sklearn.model_selection import train_test_split
     HAVE_PANDAS = True
 except Exception:  # pragma: no cover - fallback path
     np = None  # type: ignore
@@ -36,7 +36,6 @@ except Exception:  # pragma: no cover - fallback path
     ta = None  # type: ignore
     accuracy_score = None  # type: ignore
     f1_score = None  # type: ignore
-    train_test_split = None  # type: ignore
     HAVE_PANDAS = False
 
 try:  # pragma: no cover - optional dependency
@@ -136,11 +135,14 @@ DEFAULT_SYMBOLS = (
     "ETH/USDT",
     "SOL/USDT",
     "XRP/USDT",
-    "LINK/USDT",
-    "ZEC/USDT",
-    "ADA/USDT",
     "BNB/USDT",
-    "BAS/USDT",
+    "ADA/USDT",
+    "AVAX/USDT",
+    "DOGE/USDT",
+    "TON/USDT",
+    "LINK/USDT",
+    "MATIC/USDT",
+    "DOT/USDT",
 )
 DEFAULT_TIMEFRAME = "15m"
 DEFAULT_LOOKBACK_HOURS = 24 * 180  # 6 months
@@ -213,6 +215,7 @@ DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
 )
 
 RANDOM_SEED = 42
+getcontext().prec = 28
 
 
 @dataclass
@@ -462,13 +465,36 @@ def fetch_ohlcv(
                 end=pd.to_datetime(end_ts, unit="ms", utc=True),
                 freq=freq,
             )
+            if len(timestamps) == 0:
+                timestamps = pd.date_range(
+                    start=pd.to_datetime(start_ts, unit="ms", utc=True),
+                    periods=64,
+                    freq=freq,
+                )
+
+            seed_source = f"{exchange_name}:{symbol}:{timeframe}:{start_ts}:{end_ts}".encode()
+            seed = zlib.crc32(seed_source)
+            rng = np.random.default_rng(seed)
+
+            trend = np.full(len(timestamps), 100.0)
+            cycle = np.sin(np.linspace(0, 24 * np.pi, len(timestamps))) * 1.8
+            walk = rng.normal(0.0, 0.4, len(timestamps)).cumsum() * 0.12
+            close = trend + cycle + walk
+            open_delta = rng.normal(0.0, 0.3, len(timestamps))
+            open_prices = close + open_delta
+            spread = np.abs(rng.normal(0.6, 0.25, len(timestamps))) + 0.05
+            high = np.maximum(close, open_prices) + spread
+            low = np.minimum(close, open_prices) - spread
+            low = np.clip(low, 0.01, None)
+            volume = rng.uniform(800, 2200, len(timestamps))
+
             synthetic = pd.DataFrame({
                 "timestamp": timestamps,
-                "open": np.linspace(100, 110, len(timestamps)),
-                "high": np.linspace(101, 111, len(timestamps)),
-                "low": np.linspace(99, 109, len(timestamps)),
-                "close": np.linspace(100, 111, len(timestamps)) + np.sin(np.linspace(0, 6.28, len(timestamps))),
-                "volume": np.linspace(1_000, 1_500, len(timestamps)),
+                "open": open_prices,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
             })
             save_cached_ohlcv(exchange_name, symbol, timeframe, synthetic)
             cache = synthetic
@@ -504,12 +530,19 @@ def prepare_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["adx14"] = ta.trend.ADXIndicator(high, low, close, window=14, fillna=True).adx()
     df["ema20Slope"] = df["ema20"].diff()
     df["volumeRatio"] = volume / volume.rolling(window=20, min_periods=1).mean()
+    df["emaTrendSpread"] = (df["ema20"] - df["ema50"]) / df["ema50"].replace(0, np.nan)
+    df["rsiSlope"] = df["rsi14"].diff()
+    df["atrPct"] = df["atr14"] / close.replace(0, np.nan)
+    df["volumeZScore"] = (volume - volume.rolling(window=40, min_periods=1).mean()) / volume.rolling(window=40, min_periods=1).std(ddof=0)
+    df["momentum3"] = close.pct_change(periods=3)
 
     future_close = close.shift(-3)
+    df["futureClose"] = future_close
     df["target"] = (future_close > close).astype(int)
 
     df = df.dropna().copy()
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
+    df = df.reset_index()
 
     features = [
         "ema20",
@@ -521,28 +554,48 @@ def prepare_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
         "adx14",
         "ema20Slope",
         "volumeRatio",
+        "emaTrendSpread",
+        "rsiSlope",
+        "atrPct",
+        "volumeZScore",
+        "momentum3",
     ]
 
-    dataset = df[features + ["target"]]
+    dataset = df[["timestamp", "close", "futureClose"] + features + ["target"]]
     return dataset.reset_index()
 
 
 def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> TrainingArtifacts:
-    if not HAVE_PANDAS or train_test_split is None or accuracy_score is None or f1_score is None:
+    if not HAVE_PANDAS or accuracy_score is None or f1_score is None:
         raise RuntimeError('Model training requires scikit-learn and pandas')
     if data.empty:
         raise ValueError("Training dataset is empty")
 
-    features = [col for col in data.columns if col not in {"timestamp", "target"}]
+    feature_exclusions = {"timestamp", "target", "close", "futureClose", "index"}
+    features = [col for col in data.columns if col not in feature_exclusions]
     X = data[features]
     y = data["target"]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.2,
-        shuffle=False,
-    )
+    split_index = max(1, int(len(X) * 0.8))
+    if split_index >= len(X):
+        split_index = max(1, len(X) - 1)
+
+    X_train = X.iloc[:split_index]
+    y_train = y.iloc[:split_index]
+    X_test = X.iloc[split_index:]
+    y_test = y.iloc[split_index:]
+    closes_test = data["close"].iloc[split_index:]
+    future_test = data["futureClose"].iloc[split_index:]
+    timestamps_test = data["timestamp"].iloc[split_index:]
+
+    if X_test.empty:
+        raise ValueError("Insufficient samples for validation split")
+
+    if len(set(y_train)) < 2:
+        synthetic_target = 1 - int(y_train.iloc[0])
+        synthetic_features = X_train.iloc[[0]].copy()
+        X_train = pd.concat([X_train, synthetic_features], ignore_index=True)
+        y_train = pd.concat([y_train, pd.Series([synthetic_target])], ignore_index=True)
 
     model = XGBClassifier(
         objective="binary:logistic",
@@ -558,12 +611,139 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
     if any(map(lambda value: value != value, (accuracy, f1))):  # NaN check without math dependency
         raise ValueError("Training metrics produced NaN; aborting")
 
+    probs = model.predict_proba(X_test)[:, 1]
+    backtest_metrics = compute_prediction_backtest_metrics(
+        timestamps_test.reset_index(drop=True),
+        closes_test.reset_index(drop=True),
+        future_test.reset_index(drop=True),
+        y_test.reset_index(drop=True),
+        probs,
+    )
+
     metrics = {
         "accuracy": accuracy,
         "f1": f1,
+        **backtest_metrics,
     }
 
     return TrainingArtifacts(model=model, features=features, metrics=metrics)
+
+
+def compute_prediction_backtest_metrics(
+    timestamps: "pd.Series",
+    closes: "pd.Series",
+    future_closes: "pd.Series",
+    targets: "pd.Series",
+    probabilities,
+    long_threshold: float = 0.6,
+    short_threshold: float = 0.4,
+    position_scale: float = 0.01,
+) -> Dict[str, float]:
+    """Evaluate sequential predictive performance and derive risk metrics."""
+
+    if len(probabilities) != len(closes):
+        raise ValueError("Probabilities and price series length mismatch")
+
+    equity = Decimal("1")
+    peak = equity
+    equity_curve: List[Decimal] = [equity]
+    trade_returns: List[Decimal] = []
+    wins = 0
+    trade_count = 0
+    directional_hits = 0
+
+    for idx, prob in enumerate(probabilities):
+        close = float(closes.iloc[idx])
+        future_close = float(future_closes.iloc[idx])
+        ts = timestamps.iloc[idx]
+        if not isinstance(ts, datetime):
+            ts = pd.Timestamp(ts).to_pydatetime()
+        price_decimal = Decimal(str(close))
+        future_decimal = Decimal(str(future_close))
+        if price_decimal == 0:
+            continue
+        if not np.isfinite(prob):
+            continue
+
+        scale = Decimal(str(position_scale))
+        if prob >= long_threshold:
+            ret = ((future_decimal - price_decimal) / price_decimal) * scale
+            direction = 1
+        elif prob <= short_threshold:
+            ret = ((price_decimal - future_decimal) / price_decimal) * scale
+            direction = -1
+        else:
+            continue
+
+        trade_count += 1
+        trade_returns.append(ret)
+        if ret >= Decimal("0"):
+            wins += 1
+        target_value = int(targets.iloc[idx]) if idx < len(targets) else 0
+        if (direction == 1 and target_value == 1) or (direction == -1 and target_value == 0):
+            directional_hits += 1
+        equity = equity * (Decimal("1") + ret)
+        if equity > peak:
+            peak = equity
+        equity_curve.append(equity)
+
+    if not trade_returns:
+        return {
+            "winRate": 0.0,
+            "expectancy": 0.0,
+            "gainLossRatio": 0.0,
+            "trades": 0.0,
+            "cagr": 0.0,
+            "maxDrawdown": 0.0,
+            "sharpe": 0.0,
+        }
+
+    expectancy = float(sum(trade_returns) / len(trade_returns))
+    wins_series = [ret for ret in trade_returns if ret >= 0]
+    losses_series = [ret for ret in trade_returns if ret < 0]
+    avg_win = float(sum(wins_series) / len(wins_series)) if wins_series else 0.0
+    avg_loss = float(sum(losses_series) / len(losses_series)) if losses_series else 0.0
+    gain_loss_ratio = abs(avg_win / avg_loss) if losses_series else float("inf")
+    win_rate = wins / trade_count if trade_count else 0.0
+    directional_accuracy = directional_hits / trade_count if trade_count else 0.0
+
+    start_time = pd.Timestamp(timestamps.iloc[0]).to_pydatetime()
+    end_time = pd.Timestamp(timestamps.iloc[-1]).to_pydatetime()
+    duration_seconds = max((end_time - start_time).total_seconds(), 1.0)
+    years = Decimal(str(duration_seconds)) / Decimal(str(365 * 24 * 3600))
+    if years <= 0:
+        years = Decimal("1") / Decimal("365")
+    cagr = float((equity_curve[-1] / equity_curve[0]) ** (Decimal("1") / years) - Decimal("1"))
+
+    max_drawdown = Decimal("0")
+    peak_value = equity_curve[0]
+    for value in equity_curve[1:]:
+        if value > peak_value:
+            peak_value = value
+        drawdown = (peak_value - value) / peak_value if peak_value != 0 else Decimal("0")
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+
+    returns_float = [float(ret) for ret in trade_returns]
+    mean_return = sum(returns_float) / len(returns_float)
+    variance = sum((ret - mean_return) ** 2 for ret in returns_float) / len(returns_float)
+    sharpe = float("inf") if variance == 0 else mean_return / (variance ** 0.5)
+
+    metrics = {
+        "winRate": float(win_rate),
+        "expectancy": expectancy,
+        "gainLossRatio": float(gain_loss_ratio if np.isfinite(gain_loss_ratio) else 0.0),
+        "trades": float(trade_count),
+        "cagr": cagr,
+        "maxDrawdown": float(max_drawdown),
+        "sharpe": float(sharpe if np.isfinite(sharpe) else 0.0),
+        "directionalAccuracy": float(directional_accuracy),
+    }
+
+    if any(value != value for value in metrics.values()):
+        raise ValueError("Backtest metrics produced NaN; aborting")
+
+    return metrics
 
 
 def save_model_and_features(artifacts: TrainingArtifacts) -> None:
