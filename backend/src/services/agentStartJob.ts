@@ -605,6 +605,7 @@ async function createSession(
     sizingMode: config.rawPayload?.sizingMode,
     dynamicLeverage: config.rawPayload?.dynamicLeverage !== false,
     minLeverage,
+    strategyEngine: 'intraday_dual',
     rrFloor: DEFAULT_RR_EXPECTANCY_CONFIG.rrFloor,
     rrCeil: DEFAULT_RR_EXPECTANCY_CONFIG.rrCeil,
     rrBaseMin: DEFAULT_RR_EXPECTANCY_CONFIG.rrBaseMin,
