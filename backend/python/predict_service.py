@@ -1,4 +1,4 @@
-"""Tiny CLI for running the trained direction classifier."""
+"""CLI wrapper exposing the hybrid prediction engine to NodeJS."""
 from __future__ import annotations
 
 import argparse
@@ -6,31 +6,15 @@ import json
 import sys
 from typing import Any, Dict
 
-from ccxt_xgboost_module import load_features, load_model, predict_direction
-
-_MODEL = None
-_FEATURES = None
-
-
-def _ensure_loaded():
-    global _MODEL, _FEATURES
-    if _MODEL is None:
-        _MODEL = load_model()
-    if _FEATURES is None:
-        _FEATURES = load_features()
+from prediction_engine import predict_hybrid
 
 
 def predict(features: Dict[str, Any]) -> Dict[str, Any]:
-    _ensure_loaded()
     if not isinstance(features, dict):
         raise TypeError("features must be a dictionary")
 
-    missing = [col for col in _FEATURES if col not in features]
-    if missing:
-        raise ValueError(f"Missing feature columns: {missing}")
-
-    ordered = {key: float(features[key]) for key in _FEATURES}
-    return predict_direction(_MODEL, ordered)
+    sanitized = {key: float(value) for key, value in features.items()}
+    return predict_hybrid(sanitized)
 
 
 def _read_json_payload(args: argparse.Namespace) -> Dict[str, Any]:
@@ -51,10 +35,16 @@ def main(argv: list[str] | None = None) -> int:
         features = _read_json_payload(parsed)
         pred = predict(features)
         if not isinstance(pred, dict) or "prediction" not in pred:
-            raise TypeError("predict_direction must return a mapping with 'prediction'")
+            raise TypeError("predict_hybrid must return a mapping with 'prediction'")
         payload = {
             "prediction": int(pred.get("prediction", 0)),
             "probability": float(pred.get("probability", 0.5)),
+            "bearProbability": float(pred.get("bearProbability", 1 - float(pred.get("probability", 0.5)))),
+            "confidence": float(pred.get("confidence", 0.0)),
+            "entryWeight": float(pred.get("entryWeight", 1.0)),
+            "riskMultiplier": float(pred.get("riskMultiplier", 1.0)),
+            "cooldown": pred.get("cooldown", {"active": False, "reason": None, "seconds": None}),
+            "meta": pred.get("meta", {}),
         }
         sys.stdout.write(json.dumps(payload))
         return 0

@@ -34,6 +34,8 @@ export type RecognizedStrategySignal = {
     takeProfitMultiples?: string[];
     riskUsd?: string;
     targetProfitUsd?: string;
+    entryWeight?: string;
+    pythonRiskMultiplier?: string;
     trailingPolicy?: {
       breakevenArmR: number;
       trailActivationR: number;
@@ -46,6 +48,12 @@ export type RecognizedStrategySignal = {
     pythonSignal?: {
       bias: StrategyBias;
       probability: number;
+      bearishProbability: number;
+      confidence: number;
+      entryWeight: number;
+      riskMultiplier: number;
+      cooldown: { active: boolean; reason: string | null; seconds: number | null };
+      meta?: Record<string, unknown> | null;
     } | null;
   };
 };
@@ -122,6 +130,8 @@ function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
       takeProfitMultiples: signal.plan.takeProfitMultiples.map(tp => tp.toFixed(4)),
       riskUsd: signal.plan.riskUsd.toFixed(6),
       targetProfitUsd: signal.plan.targetProfitUsd.toFixed(6),
+      entryWeight: signal.plan.entryWeight.toFixed(6),
+      pythonRiskMultiplier: signal.plan.pythonRiskMultiplier.toFixed(6),
       trailingPolicy: signal.plan.trailingPolicy
         ? {
             breakevenArmR: signal.plan.trailingPolicy.breakevenArmR.toNumber(),
@@ -134,7 +144,16 @@ function toRecognizedSignal(signal: AdaptiveSignal): RecognizedStrategySignal {
         : null,
       predictorFeatures: signal.predictorFeatures,
       pythonSignal: signal.pythonSignal
-        ? { bias: signal.pythonSignal.bias, probability: signal.pythonSignal.probability }
+        ? {
+            bias: signal.pythonSignal.bias,
+            probability: signal.pythonSignal.probability,
+            bearishProbability: signal.pythonSignal.bearishProbability,
+            confidence: signal.pythonSignal.confidence,
+            entryWeight: signal.pythonSignal.entryWeight,
+            riskMultiplier: signal.pythonSignal.riskMultiplier,
+            cooldown: signal.pythonSignal.cooldown,
+            meta: signal.pythonSignal.meta ?? null,
+          }
         : null,
     },
   };
@@ -228,10 +247,23 @@ export async function registerAdaptiveTradeEntry(params: {
             adxThreshold: new PreciseDecimal(trailingMeta.adxThreshold ?? 20),
           }
         : null,
+      entryWeight: new PreciseDecimal(params.signal.meta.entryWeight ?? '1'),
+      pythonRiskMultiplier: new PreciseDecimal(params.signal.meta.pythonRiskMultiplier ?? '1'),
     },
     side: params.signal.bias,
     predictorFeatures: params.signal.meta.predictorFeatures ?? null,
-    pythonSignal: params.signal.meta.pythonSignal ?? null,
+    pythonSignal: params.signal.meta.pythonSignal
+      ? {
+          bias: params.signal.meta.pythonSignal.bias,
+          probability: params.signal.meta.pythonSignal.probability,
+          bearishProbability: params.signal.meta.pythonSignal.bearishProbability,
+          confidence: params.signal.meta.pythonSignal.confidence,
+          entryWeight: params.signal.meta.pythonSignal.entryWeight,
+          riskMultiplier: params.signal.meta.pythonSignal.riskMultiplier,
+          cooldown: params.signal.meta.pythonSignal.cooldown,
+          meta: params.signal.meta.pythonSignal.meta ?? null,
+        }
+      : null,
   });
 
   const executionMode = params.executionMode ?? params.signal.meta.executionMode ?? 'market';
