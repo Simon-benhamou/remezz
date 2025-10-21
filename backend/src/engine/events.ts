@@ -89,6 +89,46 @@ async function tickOnce(sessionId: string, sym: string){
       spreadBps: typeof (tech as any)?.spreadBps === 'number' ? Number((tech as any).spreadBps) : null,
       liquidityScore: typeof (tech as any)?.liquidityScore === 'number' ? Number((tech as any).liquidityScore) : null,
     });
+    const atrPctVal = typeof (tech as any)?.atrPct === 'number' ? Number((tech as any).atrPct) : null;
+    const atr1h = typeof (tech as any)?.atr14_1h === 'number' ? Number((tech as any).atr14_1h) : null;
+    const lastPrice = typeof tech.last === 'number' ? tech.last : null;
+    const atrPct1h = atr1h != null && lastPrice && lastPrice > 0 ? (atr1h / lastPrice) * 100 : null;
+    const volatilityRelative = atrPctVal != null && atrPct1h != null && atrPct1h > 0 ? atrPctVal / atrPct1h : null;
+    const volumeAnomaly = typeof tech.volume === 'number' && typeof tech.volumeMA === 'number' && tech.volumeMA > 0
+      ? tech.volume / tech.volumeMA
+      : null;
+    const supports: Array<{ price: number; strength?: number }> = Array.isArray((tech as any)?.supports)
+      ? (tech as any).supports
+      : [];
+    const resistances: Array<{ price: number; strength?: number }> = Array.isArray((tech as any)?.resistances)
+      ? (tech as any).resistances
+      : [];
+    const clusterWindow = lastPrice && lastPrice > 0 ? lastPrice * 0.012 : 0;
+    const supportCluster = clusterWindow > 0
+      ? supports.filter((level) => Math.abs(level.price - lastPrice) <= clusterWindow)
+      : [];
+    const resistanceCluster = clusterWindow > 0
+      ? resistances.filter((level) => Math.abs(level.price - lastPrice) <= clusterWindow)
+      : [];
+    const supportStrength = supportCluster.reduce((sum, level) => sum + (Number(level.strength) || 1), 0);
+    const resistanceStrength = resistanceCluster.reduce((sum, level) => sum + (Number(level.strength) || 1), 0);
+    const imbalanceDenom = supportStrength + resistanceStrength;
+    const orderBookImbalance = imbalanceDenom > 0 ? (supportStrength - resistanceStrength) / imbalanceDenom : null;
+    const clusterDensity = Math.max(supportCluster.length, resistanceCluster.length);
+    const liquidationClusters: { bias: 'long' | 'short' | 'mixed'; density: number } | null = clusterDensity > 0
+      ? {
+        bias: supportCluster.length > resistanceCluster.length
+          ? 'long'
+          : resistanceCluster.length > supportCluster.length
+            ? 'short'
+            : 'mixed',
+        density: clusterDensity,
+      }
+      : null;
+    diagnostics.volatilityRelative = volatilityRelative;
+    diagnostics.volumeAnomaly = volumeAnomaly;
+    diagnostics.orderBookImbalance = orderBookImbalance;
+    diagnostics.liquidationClusters = liquidationClusters;
     setRegimeDiagnostics(sym, diagnostics);
 
     broadcast('tick', {

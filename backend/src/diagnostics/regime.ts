@@ -6,6 +6,10 @@ export type RegimeDiagnostics = {
   spreadPercentile: number | null;
   anomaly?: string | null;
   tags: string[];
+  volatilityRelative?: number | null;
+  orderBookImbalance?: number | null;
+  volumeAnomaly?: number | null;
+  liquidationClusters?: { bias: 'long' | 'short' | 'mixed'; density: number } | null;
 };
 
 type NumericSnapshot = Record<string, number | null | undefined>;

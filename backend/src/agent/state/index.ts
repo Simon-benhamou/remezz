@@ -39,6 +39,7 @@ import {
 import { chooseExecutionPlan, ExecutionPlan } from '../executionPlanner.js';
 import type { EntryRelaxation } from '../../quantai/strategy/entryFilters.js';
 import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../../quantai/index.js';
+import { StrategyHealth } from '../../quantai/services/strategyHealth.js';
 import { createMarginAdvisor } from '../../risk/marginTools.js';
 import type {
   AccountSnapshot,
@@ -340,7 +341,8 @@ export class ReboundRejectionAgent {
   public qualityThresholdAdjustment = 0; // Dynamic adjustment to quality thresholds
   public lastLossStreakNotified = 0;
   public lastMomentumTimeoutTs = 0;
-  
+  private readonly strategyHealth = new StrategyHealth();
+
   // 🆕 Breakout mode tracking
   public lastTradeWasWin = false;
   public lastZoneRecalcTime = 0;
@@ -782,6 +784,7 @@ export class ReboundRejectionAgent {
             breakeven: entry,
             partialInfo: null,
             initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
+            riskUsd: Math.abs(entry - stop) * expo.qty,
             archetype: (this.plan?.plan?.meta?.playbook || this.regime?.playbook) === 'momentum_breakout' ? 'impulse' : 'reversal',
             tp1Fraction: planAny._tp1Fraction ?? 0.3,
             flowSnapshot: planAny._flowSnapshot ?? null,
@@ -2006,6 +2009,7 @@ export class ReboundRejectionAgent {
       atrPct: snapAtrPct,
       atrBaselinePct,
       adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : undefined,
+      rsi: typeof (snap as any)?.rsi14 === 'number' ? Number((snap as any).rsi14) : undefined,
       spreadBps,
       dollarVolume: typeof (marketTicker as any)?.quoteVolume === 'number'
         ? Number((marketTicker as any).quoteVolume)
@@ -2023,6 +2027,8 @@ export class ReboundRejectionAgent {
       slopeAbsPct: Number.isFinite(slopeAbsPct) ? slopeAbsPct : undefined,
       cmf: typeof cmfVal === 'number' ? cmfVal : undefined,
       adxSlope: typeof adxSlopeVal === 'number' ? adxSlopeVal : undefined,
+      diPlus: typeof (snap as any)?.diPlus14 === 'number' ? Number((snap as any).diPlus14) : undefined,
+      diMinus: typeof (snap as any)?.diMinus14 === 'number' ? Number((snap as any).diMinus14) : undefined,
     }, {
       minRr: rrEffectiveForFilters,
       rrSummary: rrSummaryParts,
@@ -2032,6 +2038,7 @@ export class ReboundRejectionAgent {
       atrBaselinePct,
       volatilityProfile: volatilityProfileForFilters,
       relaxation: drySpellRelaxation ?? undefined,
+      bias: this.plan.bias ?? 'none',
     });
     const entryFilterSizePenalty = typeof filterEvaluation.modifiers?.sizeMultiplier === 'number'
       ? filterEvaluation.modifiers.sizeMultiplier
@@ -2229,6 +2236,13 @@ export class ReboundRejectionAgent {
     if (planRiskMinPct != null) planRiskMinPct = Math.min(planRiskMinPct, this.profile.riskPerTradePct);
     if (planRiskMaxPct != null) planRiskMaxPct = Math.max(planRiskMaxPct, this.profile.riskPerTradePct);
     const baseProfileRisk = this.profile.riskPerTradePct > 0 ? this.profile.riskPerTradePct : 1.5;
+    const strategyHealthSnapshot = this.strategyHealth.snapshot((this.regime as any)?.regime ?? null);
+    if (strategyHealthSnapshot.guardrail) {
+      const currentReason = this.strategyHealthState?.reason ?? null;
+      if (!this.strategyHealthState || currentReason !== strategyHealthSnapshot.guardrail.reason) {
+        this.applyStrategyHealth(strategyHealthSnapshot.guardrail);
+      }
+    }
     let dynamicRiskPct = baseProfileRisk;
     let pendingKellyMultiplier = 1;
     let pendingKellyFloor = 0;
@@ -2384,6 +2398,9 @@ export class ReboundRejectionAgent {
     }
     if (planRiskMinPct != null) dynamicRiskPct = Math.max(planRiskMinPct, dynamicRiskPct);
     if (planRiskMaxPct != null) dynamicRiskPct = Math.min(planRiskMaxPct, dynamicRiskPct);
+    if (strategyHealthSnapshot.aggressionMultiplier !== 1) {
+      dynamicRiskPct *= strategyHealthSnapshot.aggressionMultiplier;
+    }
     if (this.adaptiveRisk) this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
 
     if (regimeRisk && regimeRisk.level === 'caution') {
@@ -2533,6 +2550,10 @@ export class ReboundRejectionAgent {
       maxNotionalUsd: Number.isFinite(this.maxNotionalCapUsd) && this.maxNotionalCapUsd > 0
         ? this.maxNotionalCapUsd
         : undefined,
+      currentAtrPct: typeof snapAtrPct === 'number' ? snapAtrPct : undefined,
+      targetAtrPct: typeof atrBaselinePct === 'number' ? atrBaselinePct : undefined,
+      minRiskPct: planRiskMinPct ?? undefined,
+      maxRiskPct: planRiskMaxPct ?? undefined,
     });
 
     // Compute requested size
@@ -3359,6 +3380,16 @@ export class ReboundRejectionAgent {
 
     const confirmationMeta = this.lastConfirmationSnapshot?.meta;
     const confirmationUrgent = confirmationMeta?.confirmationMode === 'timeout';
+    const depthInfo = (() => {
+      const raw = (marketTicker as any)?.orderbook ?? (marketTicker as any)?.depth ?? (marketTicker as any)?.info ?? {};
+      const bidSize = Number(raw.bestBidSize ?? raw.bestBidVolume ?? raw.bidVolume ?? raw.bidSize ?? 0);
+      const askSize = Number(raw.bestAskSize ?? raw.bestAskVolume ?? raw.askVolume ?? raw.askSize ?? 0);
+      const priceRef = entry > 0 ? entry : Number((marketTicker as any)?.last ?? 0);
+      const bidUsd = priceRef > 0 && Number.isFinite(bidSize) && bidSize > 0 ? bidSize * priceRef : null;
+      const askUsd = priceRef > 0 && Number.isFinite(askSize) && askSize > 0 ? askSize * priceRef : null;
+      if (bidUsd == null && askUsd == null) return null;
+      return { bid: bidUsd, ask: askUsd };
+    })();
     const plan = chooseExecutionPlan({
       symbol: this.profile.symbol,
       side,
@@ -3372,6 +3403,7 @@ export class ReboundRejectionAgent {
       playbook,
       volumeRatio: typeof volumeRatio === 'number' ? volumeRatio : null,
       confirmationUrgent,
+      bookDepthUsd: depthInfo,
     });
     const estimatedSlippagePct = (() => {
       if (plan.mode === 'market') {
@@ -3560,6 +3592,7 @@ export class ReboundRejectionAgent {
       equityAtEntryUsd: this.lastKnownEquityUsd,
       accountSnapshot: sizingSnapshot,
       entryFeePerUnit,
+      riskUsd: quantSizerResult.riskUsd,
     };
     const primaryStrategy = this.marketContext?.primaryStrategy ?? null;
     if (this.pos) {
@@ -9550,6 +9583,7 @@ export class ReboundRejectionAgent {
         breakeven: entry,
         partialInfo: null,
         initialStopDistance: Math.max(1e-12, Math.abs(entry - stop)),
+        riskUsd: Math.abs(entry - stop) * qty,
         archetype: restoredArchetype,
         entryFeePerUnit: qty > 0 ? this.estimateFillFeeUsd(entry, qty, side) / qty : 0,
       };
@@ -10111,8 +10145,43 @@ export class ReboundRejectionAgent {
           pnlPct: tradePnlPct,
           timestamp: tradeTimestamp
         });
+        const tradeRiskUsd = (() => {
+          const storedRisk = this.pos?.riskUsd;
+          if (storedRisk != null && Number.isFinite(storedRisk) && storedRisk > 0) {
+            return storedRisk;
+          }
+          if (this.pos) {
+            const stopDistance = Math.abs(this.pos.entry - this.pos.stop);
+            if (stopDistance > 0) return stopDistance * exitQty;
+          }
+          return null;
+        })();
+        this.strategyHealth.recordTrade({
+          pnlUsd: realizedPnl,
+          riskUsd: tradeRiskUsd ?? undefined,
+          regime: (this.regime as any)?.regime ?? null,
+        });
+        const healthSnapshot = this.strategyHealth.snapshot((this.regime as any)?.regime ?? null);
+        if (healthSnapshot.guardrail) {
+          this.applyStrategyHealth(healthSnapshot.guardrail);
+        }
+        if (healthSnapshot.refreshRecommended) {
+          this.strategyHealth.noteRefresh();
+          recordOpsEvent({
+            level: 'info',
+            source: 'strategy_health',
+            message: 'strategy_refresh_recommended',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              expectancy: healthSnapshot.expectancy,
+              winRate: healthSnapshot.winRate,
+              trades: healthSnapshot.trades,
+            },
+          });
+        }
         this.recordTierPerformance(this.profile?.symbol, win, tradePnlPct, tradeTimestamp);
-        
+
         // 🆕 Track last trade result for breakout mode logic
         this.lastTradeWasWin = win;
         

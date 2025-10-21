@@ -46,15 +46,17 @@ export function atr(ohlcv: number[][], period = 14) {
   return out;
 }
 
-// Wilder's ADX (Average Directional Index)
-export function adx(ohlcv: number[][], period = 14) {
-  const n = ohlcv.length;
-  if (n < period + 2) return [];
+type WilderSeries = {
+  tr: number[];
+  plusDm: number[];
+  minusDm: number[];
+};
 
+function computeWilderSeries(ohlcv: number[][], period: number): WilderSeries {
   const trs: number[] = [];
   const plusDM: number[] = [];
   const minusDM: number[] = [];
-  for (let i = 1; i < n; i++) {
+  for (let i = 1; i < ohlcv.length; i++) {
     const [, , high, low] = ohlcv[i];
     const [, , prevHigh, prevLow, prevClose] = ohlcv[i - 1];
     const upMove = high - prevHigh;
@@ -65,47 +67,80 @@ export function adx(ohlcv: number[][], period = 14) {
     trs.push(tr);
   }
 
-  // Wilder's smoothing
-  function smooth(arr: number[]) {
-    const out: number[] = [];
-    let sum = 0;
-    for (let i = 0; i < arr.length; i++) {
-      if (i < period) {
-        sum += arr[i];
-        if (i === period - 1) out.push(sum);
-      } else {
-        const prev = out[out.length - 1];
-        out.push(prev - prev / period + arr[i]);
-      }
+  return { tr: trs, plusDm: plusDM, minusDm: minusDM };
+}
+
+function smoothWilder(arr: number[], period: number): number[] {
+  const out: number[] = [];
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    if (i < period) {
+      sum += arr[i];
+      if (i === period - 1) out.push(sum);
+    } else {
+      const prev = out[out.length - 1];
+      out.push(prev - prev / period + arr[i]);
     }
-    return out;
+  }
+  return out;
+}
+
+type DmiComponents = {
+  plusDi: number[];
+  minusDi: number[];
+  dx: number[];
+};
+
+function computeDmiComponents(ohlcv: number[][], period: number): DmiComponents {
+  if (ohlcv.length < period + 2) {
+    return { plusDi: [], minusDi: [], dx: [] };
   }
 
-  const trN = smooth(trs);
-  const plusDMN = smooth(plusDM);
-  const minusDMN = smooth(minusDM);
-  const out: number[] = new Array(period).fill(NaN);
+  const { tr, plusDm, minusDm } = computeWilderSeries(ohlcv, period);
+  const trN = smoothWilder(tr, period);
+  const plusDMN = smoothWilder(plusDm, period);
+  const minusDMN = smoothWilder(minusDm, period);
+
+  const offset = new Array(period).fill(NaN);
+  const plusDi: number[] = [...offset];
+  const minusDi: number[] = [...offset];
+  const dx: number[] = [...offset];
 
   for (let i = 0; i < trN.length; i++) {
     const trVal = trN[i];
     const pdi = 100 * (plusDMN[i] / (trVal || 1e-12));
     const mdi = 100 * (minusDMN[i] / (trVal || 1e-12));
-    const dx = 100 * (Math.abs(pdi - mdi) / (pdi + mdi || 1e-12));
-    out.push(dx);
+    plusDi.push(pdi);
+    minusDi.push(mdi);
+    const denom = pdi + mdi;
+    const dxVal = denom === 0 ? 0 : 100 * (Math.abs(pdi - mdi) / denom);
+    dx.push(dxVal);
   }
 
-  // Smooth DX to ADX
+  return { plusDi, minusDi, dx };
+}
+
+export function dmi(ohlcv: number[][], period = 14): { plusDi: number[]; minusDi: number[] } {
+  const { plusDi, minusDi } = computeDmiComponents(ohlcv, period);
+  return { plusDi, minusDi };
+}
+
+// Wilder's ADX (Average Directional Index)
+export function adx(ohlcv: number[][], period = 14) {
+  const { dx } = computeDmiComponents(ohlcv, period);
+  if (!dx.length) return [];
+
   const adxArr: number[] = [];
-  const start = out.findIndex((v) => !Number.isNaN(v));
+  const start = dx.findIndex((v) => !Number.isNaN(v));
   if (start === -1) return [];
   let avg = 0;
-  for (let i = start; i < out.length; i++) {
+  for (let i = start; i < dx.length; i++) {
     if (i === start + period - 1) {
-      const seed = out.slice(start, start + period).reduce((a, b) => a + b, 0) / period;
+      const seed = dx.slice(start, start + period).reduce((a, b) => a + b, 0) / period;
       avg = seed;
       adxArr.push(seed);
     } else if (i > start + period - 1) {
-      avg = ((avg * (period - 1)) + out[i]) / period;
+      avg = ((avg * (period - 1)) + dx[i]) / period;
       adxArr.push(avg);
     }
   }

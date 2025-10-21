@@ -27,6 +27,7 @@ export type ExecutionContext = {
   recentRejections?: number;
   volumeRatio?: number | null;
   confirmationUrgent?: boolean;
+  bookDepthUsd?: { bid?: number | null; ask?: number | null } | null;
 };
 
 export type ExecutionStep = {
@@ -98,6 +99,15 @@ export function chooseExecutionPlan(context: ExecutionContext): ExecutionPlan {
   const tuning = getExecutionTuning(context.symbol);
   const notional = Math.max(0, context.notionalUsd);
   const trendPlaybook = (context.playbook || '').toLowerCase();
+  const depth = context.bookDepthUsd ?? null;
+  const bidDepthUsd = depth?.bid != null && Number.isFinite(depth.bid) ? Math.max(0, depth.bid as number) : null;
+  const askDepthUsd = depth?.ask != null && Number.isFinite(depth.ask) ? Math.max(0, depth.ask as number) : null;
+  const depthComparable = bidDepthUsd != null && askDepthUsd != null
+    ? Math.min(bidDepthUsd, askDepthUsd)
+    : bidDepthUsd ?? askDepthUsd ?? null;
+  const bookImbalance = bidDepthUsd != null && askDepthUsd != null && bidDepthUsd + askDepthUsd > 0
+    ? (bidDepthUsd - askDepthUsd) / (bidDepthUsd + askDepthUsd)
+    : null;
 
   let mode: ExecutionMode = 'market';
   const fallbacks: ExecutionStep[] = [];
@@ -110,7 +120,10 @@ export function chooseExecutionPlan(context: ExecutionContext): ExecutionPlan {
     liquidityScore,
     volatilityProfile: volProfile,
     playbook: context.playbook || null,
+    bookBidDepthUsd: bidDepthUsd,
+    bookAskDepthUsd: askDepthUsd,
   };
+  telemetry.orderBookImbalance = bookImbalance;
 
   // Primary heuristics
   const highSpread = spreadBps != null && spreadBps >= (cfg.ORDER_LIMIT_SPREAD_BPS ?? DEFAULT_LIMIT_SPREAD_THRESHOLD);
@@ -154,20 +167,36 @@ export function chooseExecutionPlan(context: ExecutionContext): ExecutionPlan {
   }
 
   let passiveOffsetBps = mode === 'limit' ? (fragileBook ? 8 : 5) : undefined;
-  if (mode === 'limit' && tuning.passiveOffsetBps != null) {
-    passiveOffsetBps = tuning.passiveOffsetBps;
-  }
   let limitPrice: number | undefined;
   if (mode === 'limit') {
+    if (passiveOffsetBps != null) {
+      if (bookImbalance != null) {
+        if (context.side === 'buy' && bookImbalance > 0.2) passiveOffsetBps = Math.max(2, passiveOffsetBps - 2);
+        if (context.side === 'sell' && bookImbalance < -0.2) passiveOffsetBps = Math.max(2, passiveOffsetBps - 2);
+      }
+      if (atrPct != null && atrPct > 4) passiveOffsetBps = Math.max(2, passiveOffsetBps - 1);
+      if (atrPct != null && atrPct < 1.2) passiveOffsetBps += 1;
+      if (tuning.passiveOffsetBps != null) passiveOffsetBps = tuning.passiveOffsetBps;
+    }
     limitPrice = derivePassivePrice(context.side, context.entryPrice, context.ticker, passiveOffsetBps);
-    const baseDelay = Math.max(1800, cfg.ORDER_LIMIT_TIMEOUT_MS ?? 2500);
-    const tunedDelay = tuning.limitFallbackMs != null ? Math.max(1500, tuning.limitFallbackMs) : baseDelay;
-    fallbacks.push({ mode: 'market', reason: 'limit_timeout', delayMs: tunedDelay });
+    let fallbackDelay = Math.max(1800, cfg.ORDER_LIMIT_TIMEOUT_MS ?? 2500);
+    if (tuning.limitFallbackMs != null) fallbackDelay = Math.max(1500, tuning.limitFallbackMs);
+    if (context.confirmationUrgent) fallbackDelay = Math.max(1200, Math.round(fallbackDelay * 0.75));
+    if (depthComparable != null && depthComparable > 0) {
+      const depthRatio = notional / depthComparable;
+      if (depthRatio > 1.2) fallbackDelay = Math.max(1500, Math.round(fallbackDelay * 0.85));
+      else if (depthRatio < 0.6) fallbackDelay = Math.min(Math.round(fallbackDelay * 1.25), fallbackDelay + 1200);
+    }
+    fallbacks.push({ mode: 'market', reason: 'limit_timeout', delayMs: Math.round(fallbackDelay) });
   }
 
   if (mode === 'twap') {
     let slices = Math.min(6, Math.max(3, Math.round(notional / 7000)));
     let intervalMs = Math.max(150, Math.min(600, Math.round((spreadPct ?? 0.12) * 1500)));
+    if (depthComparable != null && depthComparable > 0) {
+      const depthRatio = Math.max(1, Math.ceil(notional / depthComparable));
+      slices = Math.max(slices, Math.min(12, depthRatio));
+    }
     if (tuning.twapSliceCount != null) slices = Math.max(2, tuning.twapSliceCount);
     if (tuning.twapIntervalMs != null) intervalMs = Math.max(120, tuning.twapIntervalMs);
     fallbacks.push({ mode: 'market', reason: 'twap_slippage_guard', delayMs: Math.max(4000, intervalMs * slices) });
