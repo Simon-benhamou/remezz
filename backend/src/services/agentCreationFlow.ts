@@ -1182,6 +1182,7 @@ async function createSessionRecord(
     sizingMode: config.rawPayload?.sizingMode,
     dynamicLeverage: config.rawPayload?.dynamicLeverage !== false,
     minLeverage,
+    strategyEngine: 'intraday_dual',
     rrFloor: DEFAULT_RR_EXPECTANCY_CONFIG.rrFloor,
     rrCeil: DEFAULT_RR_EXPECTANCY_CONFIG.rrCeil,
     rrBaseMin: DEFAULT_RR_EXPECTANCY_CONFIG.rrBaseMin,
@@ -1266,13 +1267,14 @@ async function activateAgent(params: {
       dailyLossLimitPct: normalized.dailyLossLimitPct,
       timestamp: new Date().toISOString(),
       startBalanceUsd: normalized.startBalanceUsd,
-      budgetFraction: normalized.budgetFraction,
-      aggressiveness: normalized.aggressiveness,
-      userId: normalized.userId,
-      sizingMode: normalized.rawPayload?.sizingMode,
-      dynamicLeverage: normalized.rawPayload?.dynamicLeverage !== false,
-      minLeverage,
-    } as any);
+    budgetFraction: normalized.budgetFraction,
+    aggressiveness: normalized.aggressiveness,
+    userId: normalized.userId,
+    sizingMode: normalized.rawPayload?.sizingMode,
+    dynamicLeverage: normalized.rawPayload?.dynamicLeverage !== false,
+    minLeverage,
+    strategyEngine: 'intraday_dual',
+  } as any);
     agentId = session.id;
   }
 

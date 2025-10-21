@@ -50,6 +50,7 @@ export function serializeActivationProfile(profile: ActivationProfile, extras: R
     dynamicLeverage: profile.dynamicLeverage,
     minLeverage: profile.minLeverage,
     userId: profile.userId,
+    strategyEngine: profile.strategyEngine ?? 'intraday_dual',
     rrFloor: rrConfig.rrFloor,
     rrCeil: rrConfig.rrCeil,
     rrBaseMin: rrConfig.rrBaseMin,
@@ -119,6 +120,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
   );
 
   const minLeverage = parseMaybeNumber(stored?.minLeverage);
+  const strategyEngine = stored?.strategyEngine === 'intraday_dual' ? 'intraday_dual' : 'meta_adaptive';
   const timestamp = typeof stored?.timestamp === "string"
     ? stored.timestamp
     : session.startedAt instanceof Date
@@ -149,6 +151,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
     sizingMode: stored?.sizingMode,
     dynamicLeverage: stored?.dynamicLeverage,
     minLeverage: minLeverage != null ? Math.max(1, Math.min(minLeverage, resolvedMaxLeverage)) : undefined,
+    strategyEngine,
     rrFloor: rrConfig.rrFloor,
     rrCeil: rrConfig.rrCeil,
     rrBaseMin: rrConfig.rrBaseMin,
