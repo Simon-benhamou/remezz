@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, Space, Tag, Tooltip, Progress, Collapse, Typography } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, ExclamationCircleOutlined, InfoCircleOutlined } from '../icons';
 import { api } from '../api';
+import { formatDiagnosticReason } from '../utils/diagnostics';
 
 const { Text } = Typography;
 
@@ -49,6 +50,27 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
       case 'PARTIAL': return 'processing';
       default: return 'default';
     }
+  };
+
+  const renderReason = (reason?: string) => {
+    const formatted = formatDiagnosticReason(reason);
+    if (!formatted) {
+      return <Text type="secondary">No reason provided</Text>;
+    }
+
+    return (
+      <pre
+        style={{
+          margin: 0,
+          whiteSpace: 'pre-wrap',
+          fontFamily: 'inherit',
+          fontSize: 12,
+          lineHeight: 1.5,
+        }}
+      >
+        {formatted}
+      </pre>
+    );
   };
 
   if (!sessionId) {
@@ -99,7 +121,6 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
     { key: 'volume', label: 'Volume Confirmation', check: checks.qualityFilters.volume },
   ] : [];
 
-  const totalQualityPoints = qualityFilters.reduce((sum, f) => sum + (f.check?.points || 0), 0);
   // Guard against server/client mismatch: if current>=required, treat as PASS
   const qs = checks.qualityScore || { current: 0, required: 999, status: 'UNKNOWN', reason: '' };
   const derivedQualityPass = Number(qs.current || 0) >= Number(qs.required || 0);
@@ -142,16 +163,27 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
                 <span style={{ fontSize: 13 }}>{label}</span>
               </Space>
               <Space size="small">
-                <Tooltip title={
-                  <div>
-                    <div>{check?.reason}</div>
-                    {check?.details && (
-                      <div style={{ marginTop: 4, fontSize: 11, opacity: 0.8 }}>
-                        {JSON.stringify(check.details, null, 2)}
-                      </div>
-                    )}
-                  </div>
-                }>
+                <Tooltip
+                  title={
+                    <Space direction="vertical" size={6}>
+                      {renderReason(check?.reason)}
+                      {check?.details && (
+                        <pre
+                          style={{
+                            margin: 0,
+                            padding: 0,
+                            fontSize: 11,
+                            opacity: 0.8,
+                            whiteSpace: 'pre-wrap',
+                            fontFamily: 'monospace',
+                          }}
+                        >
+                          {JSON.stringify(check.details, null, 2)}
+                        </pre>
+                      )}
+                    </Space>
+                  }
+                >
                   <Tag color={getStatusColor(check?.status)}>
                     {check?.status}
                   </Tag>
@@ -198,32 +230,37 @@ export default function TradingDiagnostics({ sessionId, refreshTrigger }: Props)
                         </Space>
                         <Space size="small">
                           <Text style={{ fontSize: 11 }}>+{check?.points || 0}</Text>
-                          <Tooltip title={
-                            <div>
-                              <div>{check?.reason}</div>
-                              {check?.details && (
-                                <div style={{ marginTop: 8, fontSize: 11 }}>
-                                  <div><strong>Current:</strong> {check.details.currentVolume !== undefined ? 
-                                    `${(check.details.currentVolume / 1000).toFixed(0)}K` : 
-                                    check.details.currentATR !== undefined ? 
-                                    `${check.details.currentATR}%` :
-                                    check.details.currentADX !== undefined ?
-                                    check.details.currentADX :
-                                    check.value}</div>
-                                  {check.details.thresholds && (
-                                    <div style={{ marginTop: 4 }}>
-                                      <strong>Thresholds:</strong>
-                                      <div>• Min: {check.details.thresholds.minimum}</div>
-                                      {check.details.thresholds.good && <div>• Good: {check.details.thresholds.good}</div>}
-                                      {check.details.thresholds.excellent && <div>• Excellent: {check.details.thresholds.excellent}</div>}
-                                      {check.details.thresholds.moderate && <div>• Moderate: {check.details.thresholds.moderate}</div>}
-                                      {check.details.thresholds.strong && <div>• Strong: {check.details.thresholds.strong}</div>}
+                          <Tooltip
+                            title={
+                              <Space direction="vertical" size={6}>
+                                {renderReason(check?.reason)}
+                                {check?.details && (
+                                  <div style={{ marginTop: 8, fontSize: 11 }}>
+                                    <div>
+                                      <strong>Current:</strong>{' '}
+                                      {check.details.currentVolume !== undefined ?
+                                        `${(check.details.currentVolume / 1000).toFixed(0)}K` :
+                                        check.details.currentATR !== undefined ?
+                                        `${check.details.currentATR}%` :
+                                        check.details.currentADX !== undefined ?
+                                        check.details.currentADX :
+                                        check.value}
                                     </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          }>
+                                    {check.details.thresholds && (
+                                      <div style={{ marginTop: 4 }}>
+                                        <strong>Thresholds:</strong>
+                                        <div>• Min: {check.details.thresholds.minimum}</div>
+                                        {check.details.thresholds.good && <div>• Good: {check.details.thresholds.good}</div>}
+                                        {check.details.thresholds.excellent && <div>• Excellent: {check.details.thresholds.excellent}</div>}
+                                        {check.details.thresholds.moderate && <div>• Moderate: {check.details.thresholds.moderate}</div>}
+                                        {check.details.thresholds.strong && <div>• Strong: {check.details.thresholds.strong}</div>}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </Space>
+                            }
+                          >
                             <Tag color={getStatusColor(check?.status)}>
                               {check?.status}
                             </Tag>
