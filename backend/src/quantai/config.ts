@@ -68,6 +68,19 @@ export type QuantAIDrySpellConfig = {
   minAtrPctDeltaPerStep: number;
 };
 
+export type QuantAIDirectionalFilterConfig = {
+  enabled?: boolean;
+  trendAdx?: number;
+  rangeAdx?: number;
+  minDiTrend?: number;
+  minDiRange?: number;
+  minDiStrong?: number;
+  minRsiTrend?: number;
+  maxRsiTrend?: number;
+  rangeNeutralBand?: number;
+  requireDiSignal?: boolean;
+};
+
 export type QuantAIEntryFilterDynamicConfig = {
   baselineAtrMultiplier?: number;
   atrHighVolThresholdPct?: number;
@@ -101,6 +114,7 @@ export type QuantAIEntryFilterDynamicConfig = {
   }>;
   confidenceTierAdjustments?: Record<string, number>;
   rrTierAdjustments?: Record<string, number>;
+  directionalFilter?: QuantAIDirectionalFilterConfig;
 };
 
 export type QuantAIEntryFilterConfig = EntryFilterThresholds & {
@@ -120,6 +134,7 @@ export type QuantAIExitConfig = {
   trailAfterRReversal?: number;
   trailAfterRImpulse?: number;
   trailAtrMult: number;
+  trailingAdaptive?: QuantAITrailingAdaptiveConfig;
   earlyExit: {
     adxBelow: number;
     cmfNegative: boolean;
@@ -131,6 +146,23 @@ export type QuantAIExitConfig = {
   };
   maxHoldingMin?: number;
   reentryCooldownMin?: number;
+};
+
+export type QuantAITrailingAtrBands = {
+  low: number;
+  high: number;
+  extreme?: number;
+  lowMultiplier: number;
+  midMultiplier?: number;
+  highMultiplier: number;
+  extremeMultiplier?: number;
+};
+
+export type QuantAITrailingAdaptiveConfig = {
+  mode?: 'atr' | 'percent';
+  percent?: number;
+  atrBands?: QuantAITrailingAtrBands;
+  clampMultiplier?: { min?: number; max?: number };
 };
 
 export type QuantAIRegimeConfig = {
@@ -182,6 +214,17 @@ const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
   rrTierAdjustments: {
     tier1: 0.15,
     tier3: 0.2,
+  },
+  directionalFilter: {
+    enabled: true,
+    trendAdx: 24,
+    rangeAdx: 16,
+    minDiTrend: 3,
+    minDiRange: 1.25,
+    minDiStrong: 4.5,
+    minRsiTrend: 54,
+    rangeNeutralBand: 10,
+    requireDiSignal: false,
   },
   drySpell: {
     enabled: true,
@@ -325,6 +368,19 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     trailAfterRReversal: 0.8,
     trailAfterRImpulse: 1.0,
     trailAtrMult: 1.0,
+    trailingAdaptive: {
+      mode: 'atr',
+      atrBands: {
+        low: 0.9,
+        high: 3.5,
+        extreme: 6.0,
+        lowMultiplier: 1.35,
+        midMultiplier: 1.0,
+        highMultiplier: 0.85,
+        extremeMultiplier: 0.65,
+      },
+      clampMultiplier: { min: 0.55, max: 1.75 },
+    },
     earlyExit: {
       adxBelow: 18,
       cmfNegative: true,
@@ -444,6 +500,9 @@ function cloneDynamic(
     for (const [key, value] of Object.entries(dynamic.aggressivenessAdjustments)) {
       cloned.aggressivenessAdjustments[key] = { ...value };
     }
+  }
+  if (dynamic.directionalFilter) {
+    cloned.directionalFilter = { ...dynamic.directionalFilter };
   }
   return cloned;
 }
@@ -757,6 +816,33 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
         }
       }
     }
+    const directionalRaw = (dynamicRaw as Record<string, any>)['directional_filter']
+      ?? (dynamicRaw as Record<string, any>)['directionalFilter'];
+    if (directionalRaw && typeof directionalRaw === 'object') {
+      const baseFilter = cfg.dynamic!.directionalFilter
+        ?? defaults.dynamic?.directionalFilter
+        ?? DEFAULT_DYNAMIC_FILTERS.directionalFilter;
+      const next: QuantAIDirectionalFilterConfig = baseFilter ? { ...baseFilter } : {};
+      if (directionalRaw.enabled != null) next.enabled = Boolean(directionalRaw.enabled);
+      const numericFields: Array<[keyof QuantAIDirectionalFilterConfig, any]> = [
+        ['trendAdx', directionalRaw.trend_adx ?? directionalRaw.trendAdx],
+        ['rangeAdx', directionalRaw.range_adx ?? directionalRaw.rangeAdx],
+        ['minDiTrend', directionalRaw.min_di_trend ?? directionalRaw.minDiTrend],
+        ['minDiRange', directionalRaw.min_di_range ?? directionalRaw.minDiRange],
+        ['minDiStrong', directionalRaw.min_di_strong ?? directionalRaw.minDiStrong],
+        ['minRsiTrend', directionalRaw.min_rsi_trend ?? directionalRaw.minRsiTrend],
+        ['maxRsiTrend', directionalRaw.max_rsi_trend ?? directionalRaw.maxRsiTrend],
+        ['rangeNeutralBand', directionalRaw.range_neutral_band ?? directionalRaw.rangeNeutralBand],
+      ];
+      for (const [key, rawVal] of numericFields) {
+        const num = normalizeOptionalNumber(rawVal);
+        if (num != null) (next as any)[key] = num;
+      }
+      if (directionalRaw.require_di_signal != null || directionalRaw.requireDiSignal != null) {
+        next.requireDiSignal = Boolean(directionalRaw.require_di_signal ?? directionalRaw.requireDiSignal);
+      }
+      cfg.dynamic!.directionalFilter = next;
+    }
     if (cfg.dynamic && Object.keys(cfg.dynamic).length === 0) {
       cfg.dynamic = undefined;
     }
@@ -840,6 +926,66 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     }
   }
 
+  const trailingAdaptiveRaw = raw.trailing_adaptive ?? raw.trailingAdaptive;
+  let trailingAdaptive: QuantAITrailingAdaptiveConfig | undefined = DEFAULT_CONFIG.exits.trailingAdaptive
+    ? { ...DEFAULT_CONFIG.exits.trailingAdaptive }
+    : undefined;
+  if (trailingAdaptiveRaw && typeof trailingAdaptiveRaw === 'object') {
+    trailingAdaptive = trailingAdaptive ?? {};
+    const modeRaw = (trailingAdaptiveRaw as Record<string, any>)['mode']
+      ?? (trailingAdaptiveRaw as Record<string, any>)['trail_mode'];
+    if (modeRaw != null) {
+      const normalized = String(modeRaw).toLowerCase();
+      trailingAdaptive.mode = normalized === 'percent' ? 'percent' : 'atr';
+    }
+    const percentRaw = (trailingAdaptiveRaw as Record<string, any>)['percent']
+      ?? (trailingAdaptiveRaw as Record<string, any>)['percentTrail']
+      ?? (trailingAdaptiveRaw as Record<string, any>)['percentage'];
+    const percentVal = normalizeOptionalNumber(percentRaw);
+    if (percentVal != null) trailingAdaptive.percent = percentVal;
+    const clampRaw = (trailingAdaptiveRaw as Record<string, any>)['clamp_multiplier']
+      ?? (trailingAdaptiveRaw as Record<string, any>)['clampMultiplier'];
+    if (clampRaw && typeof clampRaw === 'object') {
+      const baseClamp = trailingAdaptive.clampMultiplier ?? {};
+      const minVal = normalizeOptionalNumber((clampRaw as Record<string, any>)['min']);
+      const maxVal = normalizeOptionalNumber((clampRaw as Record<string, any>)['max']);
+      trailingAdaptive.clampMultiplier = {
+        ...(baseClamp ?? {}),
+        ...(minVal != null ? { min: minVal } : {}),
+        ...(maxVal != null ? { max: maxVal } : {}),
+      };
+    }
+    const bandsRaw = (trailingAdaptiveRaw as Record<string, any>)['atr_bands']
+      ?? (trailingAdaptiveRaw as Record<string, any>)['atrBands']
+      ?? (trailingAdaptiveRaw as Record<string, any>)['bands'];
+    if (bandsRaw && typeof bandsRaw === 'object') {
+      const baseBands = trailingAdaptive.atrBands
+        ?? DEFAULT_CONFIG.exits.trailingAdaptive?.atrBands
+        ?? null;
+      const nextBands: QuantAITrailingAtrBands = baseBands ? { ...baseBands } : {
+        low: 1,
+        high: 3,
+        lowMultiplier: 1,
+        highMultiplier: 1,
+      };
+      const lowVal = normalizeOptionalNumber((bandsRaw as Record<string, any>)['low']);
+      if (lowVal != null) nextBands.low = lowVal;
+      const highVal = normalizeOptionalNumber((bandsRaw as Record<string, any>)['high']);
+      if (highVal != null) nextBands.high = highVal;
+      const extremeVal = normalizeOptionalNumber((bandsRaw as Record<string, any>)['extreme']);
+      if (extremeVal != null) nextBands.extreme = extremeVal;
+      const lowMult = normalizeOptionalNumber((bandsRaw as Record<string, any>)['low_multiplier'] ?? (bandsRaw as Record<string, any>)['lowMultiplier']);
+      if (lowMult != null) nextBands.lowMultiplier = lowMult;
+      const midMult = normalizeOptionalNumber((bandsRaw as Record<string, any>)['mid_multiplier'] ?? (bandsRaw as Record<string, any>)['midMultiplier']);
+      if (midMult != null) nextBands.midMultiplier = midMult;
+      const highMult = normalizeOptionalNumber((bandsRaw as Record<string, any>)['high_multiplier'] ?? (bandsRaw as Record<string, any>)['highMultiplier']);
+      if (highMult != null) nextBands.highMultiplier = highMult;
+      const extremeMult = normalizeOptionalNumber((bandsRaw as Record<string, any>)['extreme_multiplier'] ?? (bandsRaw as Record<string, any>)['extremeMultiplier']);
+      if (extremeMult != null) nextBands.extremeMultiplier = extremeMult;
+      trailingAdaptive.atrBands = nextBands;
+    }
+  }
+
   return {
     atrPeriod: Number(raw.atr_period ?? raw.atrPeriod ?? DEFAULT_CONFIG.exits.atrPeriod),
     slAtrMult: slBase,
@@ -850,6 +996,7 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     trailAfterRReversal: trailReversal,
     trailAfterRImpulse: trailImpulse,
     trailAtrMult: Number(raw.trail_atr_mult ?? raw.trailAtrMult ?? DEFAULT_CONFIG.exits.trailAtrMult),
+    trailingAdaptive,
     earlyExit: {
       adxBelow: Number(earlyExitRaw.adx_below ?? earlyExitRaw.adxBelow ?? DEFAULT_CONFIG.exits.earlyExit.adxBelow),
       cmfNegative: Boolean(earlyExitRaw.cmf_negative ?? earlyExitRaw.cmfNegative ?? DEFAULT_CONFIG.exits.earlyExit.cmfNegative),

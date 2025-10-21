@@ -16,6 +16,32 @@ export type ExitDirective =
   | { action: 'take_partial'; reason: string; tpHitIndex: number }
   | { action: 'exit'; reason: string };
 
+function resolveTrailMultiplier(cfg: QuantAIExitConfig, atrPct: number | null): number {
+  const adaptive = cfg.trailingAdaptive;
+  if (!adaptive || adaptive.mode === 'percent' || atrPct == null || !Number.isFinite(atrPct)) {
+    return cfg.trailAtrMult;
+  }
+  const bands = adaptive.atrBands;
+  if (!bands) return cfg.trailAtrMult;
+  const base = cfg.trailAtrMult;
+  let multiplier = bands.midMultiplier ?? 1;
+  if (atrPct <= bands.low) {
+    multiplier = bands.lowMultiplier;
+  } else if (bands.extreme != null && atrPct >= bands.extreme) {
+    multiplier = bands.extremeMultiplier ?? bands.highMultiplier;
+  } else if (atrPct >= bands.high) {
+    multiplier = bands.highMultiplier;
+  }
+  let adjusted = base * multiplier;
+  if (adaptive.clampMultiplier) {
+    const min = adaptive.clampMultiplier.min;
+    const max = adaptive.clampMultiplier.max;
+    if (min != null && Number.isFinite(min)) adjusted = Math.max(min, adjusted);
+    if (max != null && Number.isFinite(max)) adjusted = Math.min(max, adjusted);
+  }
+  return adjusted;
+}
+
 export function computeInitialBracket(
   entryPrice: number,
   atr: number,
@@ -82,6 +108,15 @@ export function maybeAdjustOrExit({
   const minHoldMinutes = cfg.earlyExit.minHoldMinutes ?? 0;
   const holdSatisfied =
     minutesOpen == null || !Number.isFinite(minHoldMinutes) || minHoldMinutes <= 0 || minutesOpen >= minHoldMinutes;
+  const trailingCfg = cfg.trailingAdaptive;
+  const trailingMode = trailingCfg?.mode ?? 'atr';
+  const atrPctContext = atr != null && Number.isFinite(atr) && atr > 0 && lastPrice > 0
+    ? (atr / lastPrice) * 100
+    : null;
+  const effectiveTrailMult = resolveTrailMultiplier(cfg, atrPctContext);
+  const percentTrail = trailingMode === 'percent'
+    ? Math.max(0.05, trailingCfg?.percent ?? 0.35)
+    : null;
 
   // Take profit detection (first non-triggered target)
   for (let i = 0; i < targets.length; i += 1) {
@@ -95,15 +130,25 @@ export function maybeAdjustOrExit({
 
   const rNow = riskPerUnit > 0 ? PositionSizer.rMultiple(entryPrice, stop, lastPrice, side) : 0;
 
-  if (holdSatisfied && rNow >= trailAfter && atr && atr > 0) {
-    const desiredStop = side === 'long'
-      ? lastPrice - cfg.trailAtrMult * atr
-      : lastPrice + cfg.trailAtrMult * atr;
-    const newStop = side === 'long'
-      ? Math.max(stop, desiredStop)
-      : Math.min(stop, desiredStop);
-    if ((side === 'long' && newStop > stop) || (side === 'short' && newStop < stop)) {
-      return { action: 'move_sl', reason: `Trailing after ${rNow.toFixed(2)}R`, stop: newStop };
+  if (holdSatisfied && rNow >= trailAfter) {
+    let desiredStop: number | null = null;
+    if (trailingMode === 'percent' && percentTrail != null) {
+      const distance = lastPrice * (percentTrail / 100);
+      desiredStop = side === 'long'
+        ? lastPrice - distance
+        : lastPrice + distance;
+    } else if (atr && atr > 0) {
+      desiredStop = side === 'long'
+        ? lastPrice - effectiveTrailMult * atr
+        : lastPrice + effectiveTrailMult * atr;
+    }
+    if (desiredStop != null) {
+      const newStop = side === 'long'
+        ? Math.max(stop, desiredStop)
+        : Math.min(stop, desiredStop);
+      if ((side === 'long' && newStop > stop) || (side === 'short' && newStop < stop)) {
+        return { action: 'move_sl', reason: `Trailing after ${rNow.toFixed(2)}R`, stop: newStop };
+      }
     }
   }
 
@@ -116,15 +161,25 @@ export function maybeAdjustOrExit({
     return { action: 'exit', reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure` };
   }
 
-  if (holdSatisfied && rNow >= tightenThreshold && momentumFail && atr && atr > 0) {
-    const tightenStop = side === 'long'
-      ? lastPrice - 0.5 * cfg.trailAtrMult * atr
-      : lastPrice + 0.5 * cfg.trailAtrMult * atr;
-    const newStop = side === 'long'
-      ? Math.max(stop, tightenStop)
-      : Math.min(stop, tightenStop);
-    if ((side === 'long' && newStop > stop) || (side === 'short' && newStop < stop)) {
-      return { action: 'move_sl', reason: 'Tighten stop due to momentum failure', stop: newStop };
+  if (holdSatisfied && rNow >= tightenThreshold && momentumFail) {
+    let tightenStop: number | null = null;
+    if (trailingMode === 'percent' && percentTrail != null) {
+      const distance = lastPrice * (percentTrail / 100) * 0.5;
+      tightenStop = side === 'long'
+        ? lastPrice - distance
+        : lastPrice + distance;
+    } else if (atr && atr > 0) {
+      tightenStop = side === 'long'
+        ? lastPrice - 0.5 * effectiveTrailMult * atr
+        : lastPrice + 0.5 * effectiveTrailMult * atr;
+    }
+    if (tightenStop != null) {
+      const newStop = side === 'long'
+        ? Math.max(stop, tightenStop)
+        : Math.min(stop, tightenStop);
+      if ((side === 'long' && newStop > stop) || (side === 'short' && newStop < stop)) {
+        return { action: 'move_sl', reason: 'Tighten stop due to momentum failure', stop: newStop };
+      }
     }
   }
 

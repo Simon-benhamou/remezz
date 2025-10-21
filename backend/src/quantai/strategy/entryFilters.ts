@@ -6,6 +6,7 @@ export type EntryFacts = {
   atrPct?: number;
   atrBaselinePct?: number;
   adx?: number;
+  rsi?: number;
   spreadBps?: number;
   dollarVolume?: number;
   rrToTp1?: number;
@@ -20,6 +21,8 @@ export type EntryFacts = {
   slopeAbsPct?: number;
   cmf?: number;
   adxSlope?: number;
+  diPlus?: number;
+  diMinus?: number;
 };
 
 export type EntryEvaluation = {
@@ -49,6 +52,9 @@ export type EntryEvaluation = {
     flowSlope?: number | null;
     flowCmf?: number | null;
     adxSlope?: number | null;
+    directionalDelta?: number | null;
+    directionalBias?: 'long' | 'short' | 'none' | null;
+    rsi?: number | null;
   };
 };
 
@@ -73,6 +79,7 @@ export class EntryFilters {
       atrBaselinePct?: number | null;
       volatilityProfile?: string | null;
       relaxation?: EntryRelaxation | null;
+      bias?: 'long' | 'short' | 'none' | null;
     } = {},
   ): EntryEvaluation {
     const reasons: Record<string, string> = {};
@@ -80,9 +87,15 @@ export class EntryFilters {
     const meta: EntryEvaluation['meta'] = {};
     let ok = true;
 
+    const bias = opts.bias ?? null;
     const tier = opts.tier ?? null;
     const volatilityProfile = opts.volatilityProfile ? opts.volatilityProfile.toUpperCase() : null;
     const volatilityCandidates: string[] = [];
+
+    const rsiVal = typeof facts.rsi === 'number' && Number.isFinite(facts.rsi) ? facts.rsi : undefined;
+    const diPlusVal = typeof facts.diPlus === 'number' && Number.isFinite(facts.diPlus) ? facts.diPlus : undefined;
+    const diMinusVal = typeof facts.diMinus === 'number' && Number.isFinite(facts.diMinus) ? facts.diMinus : undefined;
+    const directionalCfg = this.cfg.dynamic?.directionalFilter;
 
     const baseMinRr = opts.minRr ?? this.cfg.minRr;
     let minAdx = this.cfg.minAdx;
@@ -340,6 +353,73 @@ export class EntryFilters {
       reasons.momentumOk = `FAIL (ADX=${adx ?? 'n/a'} < ${minAdx.toFixed(2)})`;
     } else {
       reasons.momentumOk = `OK (ADX=${adx.toFixed(2)} >= ${minAdx.toFixed(2)})`;
+    }
+
+    if ((directionalCfg?.enabled ?? true) && bias && bias !== 'none') {
+      const delta = diPlusVal != null && diMinusVal != null
+        ? (bias === 'long' ? diPlusVal - diMinusVal : diMinusVal - diPlusVal)
+        : null;
+      const adxVal = typeof adx === 'number' && Number.isFinite(adx) ? adx : null;
+      const trendAdx = directionalCfg?.trendAdx ?? Math.max(minAdx, 20);
+      const rangeAdx = directionalCfg?.rangeAdx ?? Math.max(12, Math.min(minAdx, 18));
+      const inRangeRegime = adxVal != null && adxVal <= rangeAdx;
+      const strongTrend = adxVal != null && adxVal >= trendAdx;
+      const minTrendDelta = directionalCfg?.minDiTrend ?? 3;
+      const minRangeDelta = directionalCfg?.minDiRange ?? 1.5;
+      const strongTrendDelta = directionalCfg?.minDiStrong ?? (minTrendDelta + 1);
+      const minDelta = strongTrend ? strongTrendDelta : inRangeRegime ? minRangeDelta : minTrendDelta;
+      const nearNeutralBand = directionalCfg?.rangeNeutralBand ?? 9;
+      const minRsiTrend = directionalCfg?.minRsiTrend ?? 54;
+      const maxRsiTrend = directionalCfg?.maxRsiTrend ?? (100 - minRsiTrend);
+
+      let directionalPass = true;
+      const detail: string[] = [];
+
+      if (delta != null) {
+        detail.push(`ΔDI=${delta.toFixed(2)}>=${minDelta.toFixed(2)}`);
+        if (delta < minDelta) directionalPass = false;
+      } else if (directionalCfg?.requireDiSignal !== false) {
+        directionalPass = false;
+        detail.push('ΔDI=missing');
+      } else {
+        detail.push('ΔDI=n/a');
+      }
+
+      if (directionalPass && rsiVal != null) {
+        if (inRangeRegime) {
+          const deviation = Math.abs(rsiVal - 50);
+          detail.push(`|RSI-50|=${deviation.toFixed(1)}<=${nearNeutralBand.toFixed(1)}`);
+          if (deviation > nearNeutralBand) directionalPass = false;
+        } else if (bias === 'long') {
+          detail.push(`RSI=${rsiVal.toFixed(1)}>=${minRsiTrend.toFixed(1)}`);
+          if (rsiVal < minRsiTrend) directionalPass = false;
+        } else {
+          detail.push(`RSI=${rsiVal.toFixed(1)}<=${maxRsiTrend.toFixed(1)}`);
+          if (rsiVal > maxRsiTrend) directionalPass = false;
+        }
+      } else if (rsiVal == null) {
+        detail.push('RSI=n/a');
+      }
+
+      meta.directionalDelta = delta ?? null;
+      meta.directionalBias = bias;
+      meta.rsi = rsiVal ?? null;
+
+      if (!directionalPass) {
+        ok = false;
+        reasons.directionalOk = `FAIL (${detail.join(', ')})`;
+      } else {
+        reasons.directionalOk = `OK (${detail.join(', ')})`;
+      }
+    } else {
+      if (bias && bias !== 'none') {
+        meta.directionalBias = bias;
+      } else {
+        meta.directionalBias = bias ?? null;
+      }
+      meta.directionalDelta = diPlusVal != null && diMinusVal != null ? diPlusVal - diMinusVal : null;
+      meta.rsi = rsiVal ?? null;
+      reasons.directionalOk = directionalCfg?.enabled === false ? 'DISABLED' : 'SKIP';
     }
 
     if (atrPct != null) {

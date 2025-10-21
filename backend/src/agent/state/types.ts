@@ -92,6 +92,7 @@ export type ActivePosition = {
   breakeven?: number;
   partialInfo?: { ts: number; price: number } | null;
   initialStopDistance?: number;
+  riskUsd?: number;
   hitTargets?: number[];
   archetype?: ExitArchetype;
   tp1Fraction?: number;

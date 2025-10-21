@@ -1,6 +1,6 @@
 // backend/src/ai/tech.ts
 import { getOHLCV, getOhlcvWarmupState } from '../data/market.js';
-import { ema, rsi, atr, adx } from '../data/indicators.js';
+import { ema, rsi, atr, adx, dmi } from '../data/indicators.js';
 import { classifyRegime, RegimeProfile } from './regime.js';
 import { getConfig } from '../utils/env.js';
 import { InsufficientDataError, UnusableMarketDataError } from '../data/errors.js';
@@ -19,6 +19,8 @@ export type TechnicalSnapshot = {
   atr14_4h?: number;
   atrPct: number;
   adx14: number;
+  diPlus14?: number;
+  diMinus14?: number;
   ema20Slope: number;
   emaTrendSpread?: number;
   rsiSlope?: number;
@@ -397,6 +399,9 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const atrPct = (atr14v / lastPrice) * 100;
   const adx14Arr = adx(o15, 14);
   const adx14v = adx14Arr[adx14Arr.length - 1] ?? 0;
+  const { plusDi: diPlusArr, minusDi: diMinusArr } = dmi(o15, 14);
+  const diPlusVal = diPlusArr.length ? diPlusArr[diPlusArr.length - 1] : undefined;
+  const diMinusVal = diMinusArr.length ? diMinusArr[diMinusArr.length - 1] : undefined;
   // CMF20 (15m)
   const cmf20v = chaikinMoneyFlow(highs15, lows15, closes15, volumes15, 20);
   // Volume baseline: use EMA20 of 15m volumes for responsiveness
