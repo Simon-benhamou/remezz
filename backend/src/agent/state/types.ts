@@ -49,6 +49,7 @@ export type ActivationProfile = {
   // Risk-aware leverage controls (optional)
   dynamicLeverage?: boolean; // default true: scale leverage based on setup quality and risk
   minLeverage?: number; // optional floor, >=1 and <= maxLeverage
+  strategyEngine?: 'meta_adaptive' | 'intraday_dual';
   rrFloor?: number;
   rrCeil?: number;
   rrBaseMin?: number;
