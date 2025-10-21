@@ -139,6 +139,7 @@ export default function SessionCockpitPage() {
   const [alerts, setAlerts] = React.useState<any[]>([]);
   const [activityOpen, setActivityOpen] = React.useState(false);
   const [rearming, setRearming] = React.useState(false);
+  const [reselecting, setReselecting] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
   const [marginHealth, setMarginHealth] = React.useState<any>(null);
 
@@ -249,6 +250,25 @@ export default function SessionCockpitPage() {
       message.error(detail);
     } finally {
       setRearming(false);
+    }
+  };
+
+  const handleReselect = async () => {
+    if (!status?.session?.id) {
+      message.error('No active session');
+      return;
+    }
+
+    try {
+      setReselecting(true);
+      await api.triggerSmartReselect(status.session.id);
+      message.success('Auto-select request sent');
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.error || err?.response?.data?.message || err?.message || String(err);
+      message.error(detail);
+    } finally {
+      setReselecting(false);
     }
   };
 
@@ -930,118 +950,161 @@ export default function SessionCockpitPage() {
   return (
     <div className="session-monitor-page">
       {isLoading && <LoadingOverlay />}
-      <Flex align="center" justify="flex-end">
-        <Tooltip title="Refresh session data">
-          <Button icon={<ReloadOutlined />} onClick={refreshAll} loading={refreshing} />
-        </Tooltip>
-        <Button onClick={() => setActivityOpen(true)}>Activity feed</Button>
-        <div className="session-monitor-actions">
-          <div className="session-monitor-actions__control">
-            <Select
-              value={currentAggressiveness}
-              loading={savingAgg}
-              onChange={handleAggressivenessChange}
-              options={[
-                { value: 'conservative', label: 'Conservative' },
-                { value: 'reactive', label: 'Reactive' },
-                { value: 'aggressive', label: 'Aggressive' },
-              ]}
-              style={{ minWidth: 160 }}
-            />
-          </div>
-          <Button type="primary" onClick={handleRearm} loading={rearming} disabled={!canRearm}>
-            Rearm plan
-          </Button>
-        </div>
-      </Flex>
       <Space
         direction="vertical"
         size={32}
         style={{ width: '100%', padding: 24, paddingBottom: 48 }}
       >
         <Card bordered={false} className="session-monitor-hero" bodyStyle={{ padding: 24 }}>
-          <Row gutter={[16, 24]} align="top">
-            <Flex  align='space-around' style={{ width: '100%' }}>
-              <div>
-                <Title level={3} style={{ marginBottom: 4 }}>
-                  {status?.session?.name ||
-                    status?.session?.label ||
-                    status?.symbol ||
-                    'Trading session'}
-                </Title>
-                <Text type="secondary">{status?.symbol || '—'}</Text>
-              </div>
-                {status?.session?.mode && (
-                  <Tag className="session-monitor-chip" color="geekblue">
-                    {(status.session.mode as string).toUpperCase()}
+          <Space direction="vertical" size={24} style={{ width: '100%' }}>
+            <Flex
+              className="session-hero-header"
+              align="flex-start"
+              justify="space-between"
+              wrap="wrap"
+              gap={16}
+            >
+              <Space direction="vertical" size={12} style={{ flex: '1 1 260px', minWidth: 0 }}>
+                <div>
+                  <Title level={3} style={{ marginBottom: 4 }}>
+                    {status?.session?.name ||
+                      status?.session?.label ||
+                      status?.symbol ||
+                      'Trading session'}
+                  </Title>
+                  <Text type="secondary">{status?.symbol || '—'}</Text>
+                </div>
+                <Space size={[8, 8]} wrap className="session-hero-tags">
+                  {status?.session?.mode && (
+                    <Tag className="session-monitor-chip" color="geekblue">
+                      {(status.session.mode as string).toUpperCase()}
+                    </Tag>
+                  )}
+                  {status?.session?.state && (
+                    <Tag
+                      className="session-monitor-chip"
+                      color={
+                        status.session.state === 'MANAGE'
+                          ? 'green'
+                          : status.session.state === 'COOLDOWN'
+                            ? 'orange'
+                            : status.session.state === 'HALT'
+                              ? 'red'
+                              : 'blue'
+                      }
+                    >
+                      {status.session.state}
+                    </Tag>
+                  )}
+                  <Tag className="session-monitor-chip" color={wsConnected ? 'green' : 'red'}>
+                    {wsConnected ? 'LIVE DATA' : 'PAUSED'}
                   </Tag>
-                )}
-                {status?.session?.state && (
-                  <Tag
-                    className="session-monitor-chip"
-                    color={
-                      status.session.state === 'MANAGE'
-                        ? 'green'
-                        : status.session.state === 'COOLDOWN'
-                          ? 'orange'
-                          : status.session.state === 'HALT'
-                            ? 'red'
-                            : 'blue'
-                    }
-                  >
-                    {status.session.state}
-                  </Tag>
-                )}
-                <Tag className="session-monitor-chip" color={wsConnected ? 'green' : 'red'}>
-                  {wsConnected ? 'LIVE DATA' : 'PAUSED'}
-                </Tag>
-                {status?.session?.profileJson?.aggressiveness && (
-                  <Tag className="session-monitor-chip" color="purple">
-                    {(status.session.profileJson.aggressiveness as string).toUpperCase()}
-                  </Tag>
-                )}
-                <Statistic
-                  title="ROI (realized)"
-                  value={roi}
-                  precision={2}
-                  suffix="%"
-                  valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
+                  {status?.session?.profileJson?.aggressiveness && (
+                    <Tag className="session-monitor-chip" color="purple">
+                      {(status.session.profileJson.aggressiveness as string).toUpperCase()}
+                    </Tag>
+                  )}
+                </Space>
+              </Space>
+              <Space
+                size={12}
+                wrap
+                align="end"
+                className="session-hero-actions"
+                style={{ justifyContent: 'flex-end' }}
+              >
+                <Tooltip title="Refresh session data">
+                  <Button icon={<ReloadOutlined />} onClick={refreshAll} loading={refreshing} />
+                </Tooltip>
+                <Button onClick={() => setActivityOpen(true)}>Activity feed</Button>
+                <Select
+                  value={currentAggressiveness}
+                  loading={savingAgg}
+                  onChange={handleAggressivenessChange}
+                  options={[
+                    { value: 'conservative', label: 'Conservative' },
+                    { value: 'reactive', label: 'Reactive' },
+                    { value: 'aggressive', label: 'Aggressive' },
+                  ]}
+                  style={{ minWidth: 160 }}
                 />
-                {showNetRoi && (
-                  <Statistic
-                    title="ROI (net)"
-                    value={netRoi}
-                    precision={2}
-                    suffix="%"
-                    valueStyle={{ color: netRoi >= 0 ? '#0ea5e9' : '#dc2626' }}
-                  />
-                )}
-                <Statistic
-                    title="Win rate"
-                    value={winRate}
-                    precision={1}
-                    suffix="%"
-                    valueStyle={{ color: '#2563eb' }}
-                  />
-               
-                  <Statistic
-                    title="Max drawdown"
-                    value={Math.abs(maxDrawdown)}
-                    precision={1}
-                    suffix="%"
-                    valueStyle={{ color: maxDrawdown <= 0 ? '#2563eb' : '#dc2626' }}
-                  />
-                  <Statistic
-                    title="Net PnL"
-                    value={Math.abs(netPnl)}
-                    precision={2}
-                    prefix={netPnl >= 0 ? '+' : '-'}
-                    suffix=" USD"
-                    valueStyle={{ color: netPnl >= 0 ? '#16a34a' : '#dc2626' }}
-                  />
+                <Button icon={<SyncOutlined />} onClick={handleReselect} loading={reselecting}>
+                  Auto-select agent
+                </Button>
+                <Button type="primary" onClick={handleRearm} loading={rearming} disabled={!canRearm}>
+                  Rearm plan
+                </Button>
+              </Space>
             </Flex>
-
-          </Row>
+            <Row gutter={[24, 24]} align="top">
+              <Col xs={24} lg={10} xl={8}>
+                <div className="session-hero-summary">
+                  {statusSummary.length > 0 ? (
+                    statusSummary.map((item) => (
+                      <div key={item.label} className="session-hero-summary__item">
+                        <span>{item.label}</span>
+                        <strong>{item.value}</strong>
+                      </div>
+                    ))
+                  ) : (
+                    <Text type="secondary">Session diagnostics will appear here once available.</Text>
+                  )}
+                </div>
+              </Col>
+              <Col xs={24} lg={14} xl={16}>
+                <div className="session-hero-metrics-grid">
+                  <div className="session-hero-metric">
+                    <Statistic
+                      title="ROI (realized)"
+                      value={roi}
+                      precision={2}
+                      suffix="%"
+                      valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
+                    />
+                  </div>
+                  {showNetRoi && (
+                    <div className="session-hero-metric">
+                      <Statistic
+                        title="ROI (net)"
+                        value={netRoi}
+                        precision={2}
+                        suffix="%"
+                        valueStyle={{ color: netRoi >= 0 ? '#0ea5e9' : '#dc2626' }}
+                      />
+                    </div>
+                  )}
+                  <div className="session-hero-metric">
+                    <Statistic
+                      title="Win rate"
+                      value={winRate}
+                      precision={1}
+                      suffix="%"
+                      valueStyle={{ color: '#2563eb' }}
+                    />
+                  </div>
+                  <div className="session-hero-metric">
+                    <Statistic
+                      title="Max drawdown"
+                      value={Math.abs(maxDrawdown)}
+                      precision={1}
+                      suffix="%"
+                      valueStyle={{ color: maxDrawdown <= 0 ? '#2563eb' : '#dc2626' }}
+                    />
+                  </div>
+                  <div className="session-hero-metric">
+                    <Statistic
+                      title="Net PnL"
+                      value={Math.abs(netPnl)}
+                      precision={2}
+                      prefix={netPnl >= 0 ? '+' : '-'}
+                      suffix=" USD"
+                      valueStyle={{ color: netPnl >= 0 ? '#16a34a' : '#dc2626' }}
+                    />
+                  </div>
+                </div>
+              </Col>
+            </Row>
+          </Space>
         </Card>
         <Card title="Market snapshot" bordered={false} className="session-section-card">
           {shouldShowContent(LoadingPhase.CORE_DATA) ? (
