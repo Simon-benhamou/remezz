@@ -111,6 +111,7 @@ export type EntrySignal = {
   execution: ExecutionDirective;
   entryAtrPct: number;
   pyramidAdd?: boolean;
+  stopGrace?: { price: PreciseDecimal; expiresAt: number };
 };
 
 export type ExecutionDirective = {

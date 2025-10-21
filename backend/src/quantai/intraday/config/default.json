@@ -38,7 +38,9 @@
       "aggressionMin": 0.58,
       "pyramidMaxAdds": 2,
       "pyramidPullbackBps": 25,
-      "pyramidScale": 0.3
+      "pyramidScale": 0.3,
+      "stopGraceMinutes": 3,
+      "stopGraceBps": 12
     },
     "mr": {
       "atrMaxPct": 0.006,

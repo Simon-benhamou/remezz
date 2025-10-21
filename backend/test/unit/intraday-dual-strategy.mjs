@@ -84,6 +84,8 @@ testCfg.entry.bom.atrMinPct = 0.001;
 testCfg.entry.bom.pyramidMaxAdds = 2;
 testCfg.entry.bom.pyramidPullbackBps = 60;
 testCfg.entry.bom.pyramidScale = 0.3;
+testCfg.entry.bom.stopGraceMinutes = 4;
+testCfg.entry.bom.stopGraceBps = 15;
 testCfg.entry.mr.atrMaxPct = 0.5;
 testCfg.entry.mr.priceZScore = 1.2;
 testCfg.entry.mr.obiExtreme = 0.3;
@@ -229,6 +231,150 @@ assert.equal(mrEntry.regime, 'MR');
 assert.ok(mrEntry.size.raw > 0n, 'MR size positive');
 assert.equal(mrEntry.pyramidAdd, false, 'MR entry never pyramids');
 assert.ok(mrEntry.entryAtrPct > 0, 'MR ATR snapshot should be positive');
+
+// Grace stop behaviour
+const graceStrategy = new IntradayDualStrategy();
+const graceWarm = warmCandles.map((c) => ({ ...c }));
+const graceWarmTick = {
+  symbol: 'SOLUSDT',
+  timestamp: graceWarm[graceWarm.length - 1].timestamp,
+  price: graceWarm[graceWarm.length - 1].close,
+  candles: {
+    '1m': graceWarm,
+    '5m': aggregate(graceWarm, 5),
+    '15m': aggregate(graceWarm, 15),
+  },
+  orderBook: {
+    timestamp: graceWarm[graceWarm.length - 1].timestamp,
+    bids: [{ price: graceWarm[graceWarm.length - 1].close * 0.999, size: 4_000 }],
+    asks: [{ price: graceWarm[graceWarm.length - 1].close * 1.001, size: 4_500 }],
+    takerBuyVolume: 2_000,
+    takerSellVolume: 2_000,
+  },
+  aggression: { timestamp: graceWarm[graceWarm.length - 1].timestamp, takerBuy: 2_000, takerSell: 2_000 },
+  newsSpike: false,
+};
+
+graceStrategy.evaluateTick(graceWarmTick, {
+  equityUsd: equity,
+  maxLevInstrument: 3,
+  maxLevGlobal: 3,
+  exposureBudget: 3,
+  slippageBps: 2,
+});
+
+const graceBreakout = breakoutCandles.map((c) => ({ ...c }));
+const graceEntryEval = graceStrategy.evaluateTick({
+  symbol: 'SOLUSDT',
+  timestamp: graceBreakout[graceBreakout.length - 1].timestamp,
+  price: graceBreakout[graceBreakout.length - 1].close,
+  candles: {
+    '1m': graceBreakout,
+    '5m': aggregate(graceBreakout, 5),
+    '15m': aggregate(graceBreakout, 15),
+  },
+  orderBook: {
+    timestamp: graceBreakout[graceBreakout.length - 1].timestamp,
+    bids: [{ price: graceBreakout[graceBreakout.length - 1].close * 0.999, size: 12_000 }],
+    asks: [{ price: graceBreakout[graceBreakout.length - 1].close * 1.001, size: 2_000 }],
+    takerBuyVolume: 10_000,
+    takerSellVolume: 1_200,
+  },
+  aggression: { timestamp: graceBreakout[graceBreakout.length - 1].timestamp, takerBuy: 10_000, takerSell: 1_200 },
+  newsSpike: false,
+}, {
+  equityUsd: equity,
+  maxLevInstrument: 3,
+  maxLevGlobal: 3,
+  exposureBudget: 3,
+  slippageBps: 2,
+});
+
+assert.ok(graceEntryEval.entries.length >= 1, 'Expected grace BOM entry');
+const graceEntry = graceEntryEval.entries[0];
+assert.ok(graceEntry.stopGrace, 'Grace stop should be attached');
+const baseStop = graceEntry.stopLossPrice.toNumber();
+const graceStop = graceEntry.stopGrace.price.toNumber();
+assert.ok(graceStop < baseStop, 'Grace stop should be looser');
+
+const dipPrice = (baseStop + graceStop) / 2;
+const graceMs = testCfg.entry.bom.stopGraceMinutes * 60_000;
+
+const dipCandle = {
+  timestamp: graceBreakout[graceBreakout.length - 1].timestamp + 60_000,
+  open: graceEntry.triggerPrice.toNumber(),
+  high: graceEntry.triggerPrice.toNumber() * 1.001,
+  low: dipPrice * 0.999,
+  close: dipPrice,
+  volume: graceBreakout[graceBreakout.length - 1].volume + 2_000,
+};
+const dipSeries = [...graceBreakout.slice(1), dipCandle];
+
+const dipEval = graceStrategy.evaluateTick({
+  symbol: 'SOLUSDT',
+  timestamp: dipCandle.timestamp,
+  price: dipPrice,
+  candles: {
+    '1m': dipSeries,
+    '5m': aggregate(dipSeries, 5),
+    '15m': aggregate(dipSeries, 15),
+  },
+  orderBook: {
+    timestamp: dipCandle.timestamp,
+    bids: [{ price: dipPrice * 0.999, size: 8_000 }],
+    asks: [{ price: dipPrice * 1.001, size: 8_500 }],
+    takerBuyVolume: 3_000,
+    takerSellVolume: 3_500,
+  },
+  aggression: { timestamp: dipCandle.timestamp, takerBuy: 3_000, takerSell: 3_500 },
+  newsSpike: false,
+}, {
+  equityUsd: equity,
+  maxLevInstrument: 3,
+  maxLevGlobal: 3,
+  exposureBudget: 3,
+  slippageBps: 2,
+});
+
+assert.equal(dipEval.exits.length, 0, 'Grace period should prevent stop-out');
+
+const postGraceCandle = {
+  timestamp: dipCandle.timestamp + graceMs + 60_000,
+  open: dipPrice,
+  high: dipPrice * 1.0005,
+  low: dipPrice * 0.999,
+  close: dipPrice,
+  volume: dipCandle.volume + 1_000,
+};
+const postGraceSeries = [...dipSeries.slice(1), postGraceCandle];
+
+const postGraceEval = graceStrategy.evaluateTick({
+  symbol: 'SOLUSDT',
+  timestamp: postGraceCandle.timestamp,
+  price: dipPrice,
+  candles: {
+    '1m': postGraceSeries,
+    '5m': aggregate(postGraceSeries, 5),
+    '15m': aggregate(postGraceSeries, 15),
+  },
+  orderBook: {
+    timestamp: postGraceCandle.timestamp,
+    bids: [{ price: dipPrice * 0.999, size: 7_500 }],
+    asks: [{ price: dipPrice * 1.001, size: 7_800 }],
+    takerBuyVolume: 2_800,
+    takerSellVolume: 3_200,
+  },
+  aggression: { timestamp: postGraceCandle.timestamp, takerBuy: 2_800, takerSell: 3_200 },
+  newsSpike: false,
+}, {
+  equityUsd: equity,
+  maxLevInstrument: 3,
+  maxLevGlobal: 3,
+  exposureBudget: 3,
+  slippageBps: 2,
+});
+
+assert.ok(postGraceEval.exits.some((e) => e.reason === 'stop'), 'Stop should trigger after grace expires');
 
 overrideIntradayConfig(baseCfg);
 

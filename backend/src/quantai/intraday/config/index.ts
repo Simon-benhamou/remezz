@@ -37,6 +37,8 @@ export type IntradayStrategyConfig = {
       pyramidMaxAdds: number;
       pyramidPullbackBps: number;
       pyramidScale: number;
+      stopGraceMinutes: number;
+      stopGraceBps: number;
     };
     mr: {
       atrMaxPct: number;

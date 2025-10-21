@@ -34,6 +34,9 @@ type ActivePosition = {
   equityAtEntry: PreciseDecimal;
   entryAtrPct: number;
   pyramidAdd: boolean;
+  baseStopLoss: PreciseDecimal;
+  stopGraceUntil?: number;
+  stopGracePrice?: PreciseDecimal;
 };
 
 type EvaluateContext = {
@@ -230,6 +233,20 @@ export class IntradayDualStrategy {
     const tp1 = pctToPrice(triggerPrice, this.cfg.stops.tp.firstPct, side, 'tp');
     const tp2 = pctToPrice(triggerPrice, this.cfg.stops.tp.secondPct, side, 'tp');
 
+    let stopGrace: EntrySignal['stopGrace'];
+    if (!isPyramidAdd) {
+      const graceMinutes = this.cfg.entry.bom.stopGraceMinutes ?? 0;
+      const graceBps = this.cfg.entry.bom.stopGraceBps ?? 0;
+      if (graceMinutes > 0 && graceBps > 0) {
+        const gracePct = stopPct + graceBps / 10_000;
+        const gracePrice = pctToPrice(triggerPrice, gracePct, side, 'sl');
+        stopGrace = {
+          price: gracePrice,
+          expiresAt: input.timestamp + graceMinutes * 60_000,
+        };
+      }
+    }
+
     const execution = this.execution.plan({
       regime: 'BOM',
       orderBook: input.orderBook,
@@ -260,6 +277,7 @@ export class IntradayDualStrategy {
       execution,
       entryAtrPct: f1.volatility.atrPct,
       pyramidAdd: isPyramidAdd,
+      stopGrace,
     };
   }
 
@@ -358,6 +376,23 @@ export class IntradayDualStrategy {
     const price = new PreciseDecimal(input.price);
 
     for (const position of [...list]) {
+      if (position.stopGraceUntil && input.timestamp >= position.stopGraceUntil) {
+        const gracePrice = position.stopGracePrice;
+        const graceActive = gracePrice ? position.stopLoss.equals(gracePrice) : false;
+        position.stopGraceUntil = undefined;
+        position.stopGracePrice = undefined;
+        if (graceActive) {
+          const base = position.baseStopLoss;
+          if (position.side === 'long') {
+            if (base.gt(position.stopLoss)) {
+              position.stopLoss = base;
+            }
+          } else if (base.lt(position.stopLoss)) {
+            position.stopLoss = base;
+          }
+        }
+      }
+
       const elapsed = input.timestamp - position.entryTime;
       const hitStop = position.side === 'long'
         ? price.lt(position.stopLoss)
@@ -449,13 +484,14 @@ export class IntradayDualStrategy {
 
   private registerPosition(symbol: string, entry: EntrySignal, equity: PreciseDecimal, timestamp: number): void {
     const list = this.positions.get(symbol) ?? [];
+    const initialStop = entry.stopGrace?.price ?? entry.stopLossPrice;
     const position: ActivePosition = {
       symbol,
       side: entry.side,
       sizeNotional: entry.size,
       remainingNotional: entry.size,
       entryPrice: entry.triggerPrice,
-      stopLoss: entry.stopLossPrice,
+      stopLoss: initialStop,
       takeProfit1: entry.takeProfit1,
       takeProfit2: entry.takeProfit2,
       runnerTrailMult: entry.runnerTrailAtrMult,
@@ -469,6 +505,9 @@ export class IntradayDualStrategy {
       equityAtEntry: equity,
       entryAtrPct: entry.entryAtrPct,
       pyramidAdd: entry.pyramidAdd ?? false,
+      baseStopLoss: entry.stopLossPrice,
+      stopGraceUntil: entry.stopGrace?.expiresAt,
+      stopGracePrice: entry.stopGrace?.price,
     };
     list.push(position);
     this.positions.set(symbol, list);
