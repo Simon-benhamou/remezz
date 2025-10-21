@@ -19,6 +19,12 @@ import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { formatDisplaySymbol } from '../utils/symbols';
+import {
+  collectOpsEventReasons,
+  formatOpsEventDetailValue,
+  formatOpsEventMessage,
+  normalizeOpsEventDetails,
+} from '../utils/opsEvents';
 
 const { Title, Text } = Typography;
 
@@ -153,16 +159,17 @@ const BacklogPage: React.FC = () => {
     const level = evt.level || 'info';
     const meta = severityMeta[level] || severityMeta.info;
     const catalog = messageCatalog[evt.message || ''] || null;
-    const title = catalog?.title || formatMessage(evt.message);
+    const title = catalog?.title || formatOpsEventMessage(evt.message);
     const description = catalog?.description;
-    const detailsObject = normalizeDetails(evt.details);
+    const detailsObject = normalizeOpsEventDetails(evt.details);
     const detailEntries = Object.entries(detailsObject)
       .map(([key, value]) => ({
         key,
-        label: fieldLabels[key] || formatMessage(key),
-        value: formatDetailValue(key, value),
+        label: fieldLabels[key] || formatOpsEventMessage(key),
+        value: formatOpsEventDetailValue(key, value),
       }))
       .filter((entry) => entry.value !== undefined && entry.value !== null && entry.value !== '');
+    const reasons = collectOpsEventReasons(evt.details);
 
     return (
       <Card
@@ -187,6 +194,15 @@ const BacklogPage: React.FC = () => {
         </Space>
         <Text style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>{title}</Text>
         {description && <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{description}</Text>}
+        {reasons.length > 0 && (
+          <Space direction='vertical' size={4}>
+            {reasons.slice(0, 3).map((reason, idx) => (
+              <Text key={`${evt.id}-reason-${idx}`} style={{ color: 'rgba(148, 163, 184, 0.78)' }}>
+                {reason}
+              </Text>
+            ))}
+          </Space>
+        )}
         <Space size={8} wrap>
           {evt.symbol && <Tag color='cyan'>{formatDisplaySymbol(evt.symbol)}</Tag>}
         </Space>
@@ -355,7 +371,7 @@ const BacklogPage: React.FC = () => {
                         <Space key={evt.id} size={10} wrap>
                           <Badge color={meta.color} />
                           <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
-                            {formatMessage(evt.message)}
+                            {formatOpsEventMessage(evt.message)}
                           </Text>
                           <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
                             {evt.ts ? dayjs(evt.ts).format('HH:mm:ss') : '—'}
@@ -402,80 +418,6 @@ function SummaryTile({ icon, label, value, hint, tone }: { icon: React.ReactNode
       <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>{hint}</Text>
     </Card>
   );
-}
-
-function formatMessage(message?: string) {
-  if (!message) return 'Agent update';
-  return message.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
-
-function normalizeDetails(details: any): Record<string, any> {
-  if (!details) return {};
-  if (typeof details === 'string') {
-    try {
-      return JSON.parse(details);
-    } catch {
-      return { note: details };
-    }
-  }
-  if (typeof details === 'object') return details as Record<string, any>;
-  return { value: details };
-}
-
-function formatDetailValue(key: string, value: any, depth = 0): string {
-  if (value == null) return '';
-  if (typeof value === 'number') {
-    if (key === 'usdVolumeMA') return formatUsdVolume(value);
-    if (key === 'volumeBaseline') return `${(value * 100).toFixed(1)}%`;
-    if (key === 'volumePressure') return `${(value * 100).toFixed(0)}%`;
-    if (/ratio/i.test(key)) return `${(value * 100).toFixed(1)}%`;
-    if (/pct|percentage/i.test(key)) return `${value.toFixed(2)}%`;
-    if (/adx/i.test(key)) return value.toFixed(1);
-    if (/score/i.test(key)) return value.toFixed(2);
-    return Number.isInteger(value) ? String(value) : value.toFixed(3);
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'Yes' : 'No';
-  }
-  if (typeof value === 'string') {
-    const normalized = value.replace(/_/g, ' ');
-    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => formatDetailValue(key, item, depth + 1))
-      .filter((item) => item)
-      .join(', ');
-  }
-  if (typeof value === 'object') {
-    return Object.entries(value)
-      .map(([childKey, childValue]) => {
-        const label = formatMessage(childKey);
-        const formatted = formatDetailValue(childKey, childValue, depth + 1) || '—';
-        return `${label}: ${formatted}`;
-      })
-      .join(depth === 0 ? ' • ' : ', ');
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function formatUsdVolume(raw: number): string {
-  if (!Number.isFinite(raw) || raw <= 0) return '—';
-  const units = [
-    { limit: 1_000_000_000, suffix: 'B' },
-    { limit: 1_000_000, suffix: 'M' },
-    { limit: 1_000, suffix: 'K' },
-  ];
-  for (const unit of units) {
-    if (raw >= unit.limit) {
-      return `$${(raw / unit.limit).toFixed(1)}${unit.suffix}`;
-    }
-  }
-  return `$${raw.toFixed(0)}`;
 }
 
 export default BacklogPage;
