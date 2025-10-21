@@ -22,6 +22,8 @@ export type TechnicalSnapshot = {
   diPlus14?: number;
   diMinus14?: number;
   ema20Slope: number;
+  emaTrendSpread?: number;
+  rsiSlope?: number;
   // Volume/flow
   support: number;          // primary support (closest/best)
   resistance: number;       // primary resistance
@@ -40,11 +42,13 @@ export type TechnicalSnapshot = {
   // Volume snapshot for diagnostics
   volume?: number;      // latest 15m bar volume
   volumeMA?: number;    // smoothed (EMA20) volume baseline
+  volumeZScore?: number;
   volumeAvg?: number;
   volume24h?: number;
   volume24hChangePct?: number;
   // Chaikin Money Flow 20 (15m)
   cmf20?: number;
+  momentum3?: number;
   multiTimeframe?: MultiTimeframeDiagnostics;
 };
 
@@ -383,8 +387,13 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const ema100v = ema100Arr.length ? ema100Arr.at(-1)! : ema20v;
   const ema200v = ema200Arr.length ? ema200Arr.at(-1)! : ema50v;
   const ema20Slope = ema20Arr.length >= 2 ? ema20Arr.at(-1)! - ema20Arr.at(-2)! : 0;
+  const emaTrendSpread = Number.isFinite(ema20v) && Number.isFinite(ema50v) && Math.abs(ema50v) > 1e-9
+    ? (ema20v - ema50v) / ema50v
+    : 0;
   const rsi14Arr = rsi(closes15, 14);
   const rsi14v = rsi14Arr[rsi14Arr.length - 1] ?? 50;
+  const rsiPrev = rsi14Arr.length >= 2 ? rsi14Arr[rsi14Arr.length - 2] ?? rsi14v : rsi14v;
+  const rsiSlope = rsi14v - rsiPrev;
   const atr14Arr = atr(o15, 14);
   const atr14v = atr14Arr[atr14Arr.length - 1] ?? 0;
   const atrPct = (atr14v / lastPrice) * 100;
@@ -399,6 +408,15 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const volEma20 = ema(volumes15, 20);
   const latestVol = volumes15.length ? volumes15[volumes15.length - 1] : 0;
   const volMA = volEma20.length ? volEma20[volEma20.length - 1] : 0;
+  const volumeWindow = volumes15.slice(-40);
+  const volumeMean40 = volumeWindow.reduce((sum, value) => sum + value, 0) / Math.max(1, volumeWindow.length);
+  const volumeStd40 = Math.sqrt(
+    volumeWindow.reduce((sum, value) => sum + Math.pow(value - volumeMean40, 2), 0) / Math.max(1, volumeWindow.length),
+  );
+  const volumeZScore = volumeStd40 > 1e-12 ? (latestVol - volumeMean40) / volumeStd40 : 0;
+  const momentum3 = closes15.length >= 4 && closes15[closes15.length - 4] !== 0
+    ? (lastPrice - closes15[closes15.length - 4]) / closes15[closes15.length - 4]
+    : 0;
 
   // Enhanced volume logging for clarity when the last 15m bar volume is very low vs MA
   try {
@@ -530,17 +548,19 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     adxSlope,
     trendStrength,
     trendBias,
+    emaTrendSpread,
+    rsiSlope,
     // Provide both instantaneous and smoothed volume for diagnostics
     volume: latestVol,
     volumeMA: volMA || avgVolume,
+    volumeZScore,
     volumeAvg: avgVolume,
-  volume24h: recentVolumeUSD, // Volume in USD (tokens * price)
-  volume24hChangePct: volumeChangePct,
-  cmf20: cmf20v,
-  diPlus14: diPlusVal,
-  diMinus14: diMinusVal,
-  multiTimeframe,
-};
+    volume24h: recentVolumeUSD, // Volume in USD (tokens * price)
+    volume24hChangePct: volumeChangePct,
+    cmf20: cmf20v,
+    momentum3,
+    multiTimeframe,
+  };
 
   snapshot.regime = classifyRegime(snapshot);
 

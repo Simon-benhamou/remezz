@@ -298,11 +298,24 @@ function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number>
   const ema100 = safeNumber((snap as any)?.ema100, Number.NaN);
   const ema200 = safeNumber((snap as any)?.ema200, Number.NaN);
   const rsi14 = safeNumber((snap as any)?.rsi14, Number.NaN);
-  const atr14 = safeNumber((snap as any)?.atr14 ?? (snap as any)?.atrPct, Number.NaN);
+  const atr14 = safeNumber((snap as any)?.atr14 ?? Number.NaN, Number.NaN);
   const adx14 = safeNumber((snap as any)?.adx14, Number.NaN);
   const ema20Slope = safeNumber((snap as any)?.ema20Slope, Number.NaN);
   const volume = safeNumber((snap as any)?.volume, Number.NaN);
   const volumeMA = safeNumber((snap as any)?.volumeMA, Number.NaN);
+  const trendSpreadFallback = Number.isFinite(ema50) && Math.abs(ema50) > 1e-9 ? (ema20 - ema50) / ema50 : 0;
+  const emaTrendSpread = safeNumber((snap as any)?.emaTrendSpread, trendSpreadFallback);
+  const rsiSlope = safeNumber((snap as any)?.rsiSlope, 0);
+  const volumeZScore = safeNumber((snap as any)?.volumeZScore, 0);
+  const momentum3 = safeNumber((snap as any)?.momentum3, 0);
+  const lastPrice = safeNumber((snap as any)?.last, Number.NaN);
+  const atrPctPercent = safeNumber((snap as any)?.atrPct, Number.NaN);
+
+  const atrPct = Number.isFinite(atr14) && Number.isFinite(lastPrice) && Math.abs(lastPrice) > 1e-9
+    ? atr14 / lastPrice
+    : Number.isFinite(atrPctPercent)
+      ? atrPctPercent / 100
+      : Number.NaN;
 
   if (!Number.isFinite(volume) || !Number.isFinite(volumeMA) || volumeMA <= 0) {
     return null;
@@ -318,6 +331,11 @@ function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number>
     adx14,
     ema20Slope,
     volumeRatio: volume / volumeMA,
+    emaTrendSpread,
+    rsiSlope,
+    atrPct,
+    volumeZScore,
+    momentum3,
   };
 
   if (Object.values(features).some(value => !Number.isFinite(value))) {
@@ -1979,5 +1997,9 @@ class MetaAdaptiveStrategyAgent {
     return { ...chosen, exploration, token };
   }
 }
+
+export const __testHooks = {
+  buildPredictorFeatures,
+};
 
 export const metaAdaptiveStrategyAgent = MetaAdaptiveStrategyAgent.getInstance();
