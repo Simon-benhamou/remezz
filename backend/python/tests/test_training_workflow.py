@@ -8,9 +8,12 @@ import pandas as pd
 from ccxt_xgboost_module import (
     DEFAULT_LOOKBACK_HOURS,
     DEFAULT_TIMEFRAME,
+    DEFAULT_WINDOW_SPECS,
     PreparedWindow,
     TrainingArtifacts,
     WindowSpec,
+    fetch_ohlcv,
+    prepare_dataset,
     run_training_workflow,
 )
 
@@ -25,10 +28,12 @@ class RunTrainingWorkflowTest(unittest.TestCase):
             del anchor
             self.assertEqual(exchange, "binance")
             self.assertEqual(tuple(symbols_arg), symbols)
-            self.assertEqual(len(specs), 1)
+            self.assertEqual(len(specs), len(DEFAULT_WINDOW_SPECS))
             spec = specs[0]
-            self.assertEqual(spec.timeframe, DEFAULT_TIMEFRAME)
-            self.assertEqual(spec.hours, DEFAULT_LOOKBACK_HOURS)
+            self.assertEqual(spec.timeframe, DEFAULT_WINDOW_SPECS[0].timeframe)
+            self.assertEqual(spec.hours, DEFAULT_WINDOW_SPECS[0].hours)
+            self.assertEqual([s.timeframe for s in specs], [s.timeframe for s in DEFAULT_WINDOW_SPECS])
+            self.assertEqual([s.hours for s in specs], [s.hours for s in DEFAULT_WINDOW_SPECS])
             windows: list[PreparedWindow] = []
             for idx, symbol in enumerate(symbols):
                 timestamps = pd.date_range("2024-01-01", periods=rows_per_symbol, freq="15min")
@@ -36,6 +41,8 @@ class RunTrainingWorkflowTest(unittest.TestCase):
                 frame = pd.DataFrame(
                     {
                         "timestamp": timestamps,
+                        "close": np.linspace(100, 110, rows_per_symbol) + base,
+                        "futureClose": np.linspace(101, 111, rows_per_symbol) + base,
                         "ema20": np.linspace(1, 2, rows_per_symbol) + base,
                         "ema50": np.linspace(2, 3, rows_per_symbol) + base,
                         "ema100": np.linspace(3, 4, rows_per_symbol) + base,
@@ -45,6 +52,11 @@ class RunTrainingWorkflowTest(unittest.TestCase):
                         "adx14": np.linspace(10, 40, rows_per_symbol),
                         "ema20Slope": np.linspace(-1, 1, rows_per_symbol),
                         "volumeRatio": np.linspace(0.5, 1.5, rows_per_symbol),
+                        "emaTrendSpread": np.linspace(-0.02, 0.02, rows_per_symbol),
+                        "rsiSlope": np.linspace(-0.5, 0.5, rows_per_symbol),
+                        "atrPct": np.linspace(0.01, 0.02, rows_per_symbol),
+                        "volumeZScore": np.linspace(-1, 1, rows_per_symbol),
+                        "momentum3": np.linspace(-0.01, 0.01, rows_per_symbol),
                         "target": ([0, 1] * (rows_per_symbol // 2))[:rows_per_symbol],
                     }
                 )
@@ -72,8 +84,35 @@ class RunTrainingWorkflowTest(unittest.TestCase):
         self.assertEqual(len(captured_datasets), 1)
         combined = captured_datasets[0]
         self.assertEqual(len(combined), rows_per_symbol * len(symbols))
-        for feature in ("ema20", "ema50", "ema100", "ema200", "rsi14", "atr14", "adx14", "ema20Slope", "volumeRatio"):
+        for feature in (
+            "ema20",
+            "ema50",
+            "ema100",
+            "ema200",
+            "rsi14",
+            "atr14",
+            "adx14",
+            "ema20Slope",
+            "volumeRatio",
+            "emaTrendSpread",
+            "rsiSlope",
+            "atrPct",
+            "volumeZScore",
+            "momentum3",
+        ):
             self.assertIn(feature, artifacts.features)
+
+
+class SyntheticFallbackTest(unittest.TestCase):
+    def test_fallback_dataset_produces_mixed_targets(self):
+        start = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        end = int(datetime(2024, 2, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        raw = fetch_ohlcv("nonexistent", "TEST/USDT", "1h", start, end)
+        self.assertGreater(len(raw), 200)
+
+        dataset = prepare_dataset(raw)
+        self.assertGreater(len(dataset), 100)
+        self.assertGreaterEqual(dataset["target"].nunique(), 2, "synthetic data should contain both classes")
 
     def test_run_training_aggregates_multiple_windows(self):
         specs = (
@@ -113,6 +152,8 @@ class RunTrainingWorkflowTest(unittest.TestCase):
             return pd.DataFrame(
                 {
                     "timestamp": timestamps,
+                    "close": np.linspace(100, 110, prepared_rows) + base,
+                    "futureClose": np.linspace(101, 111, prepared_rows) + base,
                     "ema20": np.linspace(1, 2, prepared_rows) + base,
                     "ema50": np.linspace(2, 3, prepared_rows) + base,
                     "ema100": np.linspace(3, 4, prepared_rows) + base,
@@ -122,6 +163,11 @@ class RunTrainingWorkflowTest(unittest.TestCase):
                     "adx14": np.linspace(10, 40, prepared_rows),
                     "ema20Slope": np.linspace(-1, 1, prepared_rows),
                     "volumeRatio": np.linspace(0.5, 1.5, prepared_rows),
+                    "emaTrendSpread": np.linspace(-0.02, 0.02, prepared_rows),
+                    "rsiSlope": np.linspace(-0.5, 0.5, prepared_rows),
+                    "atrPct": np.linspace(0.01, 0.02, prepared_rows),
+                    "volumeZScore": np.linspace(-1, 1, prepared_rows),
+                    "momentum3": np.linspace(-0.01, 0.01, prepared_rows),
                     "target": targets,
                 }
             )
@@ -159,8 +205,50 @@ class RunTrainingWorkflowTest(unittest.TestCase):
         self.assertEqual(len(combined), expected_rows)
         for meta in ("symbol", "windowIndex", "timeframeMinutes", "windowOffsetHours", "windowHours"):
             self.assertNotIn(meta, combined.columns)
-        for feature in ("ema20", "ema50", "ema100", "ema200", "rsi14", "atr14", "adx14", "ema20Slope", "volumeRatio"):
+        for feature in (
+            "ema20",
+            "ema50",
+            "ema100",
+            "ema200",
+            "rsi14",
+            "atr14",
+            "adx14",
+            "ema20Slope",
+            "volumeRatio",
+            "emaTrendSpread",
+            "rsiSlope",
+            "atrPct",
+            "volumeZScore",
+            "momentum3",
+        ):
             self.assertIn(feature, artifacts.features)
+
+    def test_backtest_metrics_compute_portfolio_statistics(self):
+        timestamps = pd.date_range("2024-01-01", periods=40, freq="15min")
+        closes = pd.Series(np.linspace(100, 102, 40))
+        future = closes.shift(-1).fillna(closes.iloc[-1])
+        targets = pd.Series([1 if i % 2 == 0 else 0 for i in range(40)])
+        probabilities = np.array([0.7 if i % 3 == 0 else (0.3 if i % 3 == 1 else 0.5) for i in range(40)])
+
+        from ccxt_xgboost_module import compute_prediction_backtest_metrics
+
+        metrics = compute_prediction_backtest_metrics(
+            pd.Series(timestamps),
+            closes,
+            future,
+            targets,
+            probabilities,
+            long_threshold=0.6,
+            short_threshold=0.4,
+        )
+
+        self.assertGreaterEqual(metrics["trades"], 1.0)
+        self.assertIn("cagr", metrics)
+        self.assertIn("maxDrawdown", metrics)
+        self.assertIn("sharpe", metrics)
+        self.assertGreaterEqual(metrics["directionalAccuracy"], 0.0)
+        for key in ("cagr", "maxDrawdown", "sharpe", "expectancy"):
+            self.assertTrue(np.isfinite(metrics[key]))
 
 
 if __name__ == "__main__":
