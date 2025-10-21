@@ -9,12 +9,14 @@ import {
   getPythonResolutionError,
   isPythonPredictorAvailable,
 } from '../pythonPredictor.js';
+import { getPythonSignalTuning } from '../pythonSignalTuning.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
 const DECIMAL_SCALE = 1_000_000n;
-const PYTHON_BIAS_WEIGHT = 0.6;
-const PYTHON_NEUTRAL_THRESHOLD = 0.1;
-const PYTHON_GATE_THRESHOLD = 0.2;
+const pythonSignalTuning = getPythonSignalTuning();
+const PYTHON_BIAS_WEIGHT = pythonSignalTuning.biasWeight;
+const PYTHON_NEUTRAL_THRESHOLD = pythonSignalTuning.neutralThreshold;
+const PYTHON_GATE_THRESHOLD = pythonSignalTuning.gateThreshold;
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
