@@ -16,12 +16,17 @@ RUN apt-get update && \
         ca-certificates \
         python3 \
         python-is-python3 \
-        python3-pip && \
+        python3-pip \
+        python3-venv && \
     rm -rf /var/lib/apt/lists/*
 
-# Python dependencies for the prediction engine
+# Python dependencies for the prediction engine (installed in isolated venv)
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv ${VIRTUAL_ENV}
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 COPY requirements.txt ./requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Install deps
 COPY package*.json ./
