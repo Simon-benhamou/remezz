@@ -202,6 +202,15 @@ export class ReboundRejectionAgent {
   public marketContext: MarketContext | null = null;
   public lastMarketContextSignature: { direction: 'long' | 'short' | 'none'; playbook: string; updatedAt: number } | null = null;
   public lastAdaptiveSelection: { token: string | null; id: RecognizedStrategyId | null; family: MarketContext['strategyFamily'] } | null = null;
+  public lastBiasInference:
+    | {
+        bias: 'long' | 'short' | 'standby';
+        confidence: number;
+        reasons: string[];
+        snapshotTs: number | null;
+        updatedAt: number;
+      }
+    | null = null;
 
   // Entry zone intelligence helpers
   public confirmEntrySignal = entryZoneMethods.confirmEntrySignal;
@@ -8837,6 +8846,19 @@ export class ReboundRejectionAgent {
         sampleSize: cadence.sampleSize,
         lastUpdated: cadence.lastUpdated,
       };
+      if (!this.performanceMetrics.biasSwitching) {
+        this.performanceMetrics.biasSwitching = {
+          currentBias: 'standby',
+          lastBiasSwitch: Date.now(),
+          consecutiveLosses: 0,
+          triggerThreshold: 2,
+        };
+      } else if (
+        !Number.isFinite(this.performanceMetrics.biasSwitching.triggerThreshold) ||
+        (this.performanceMetrics.biasSwitching.triggerThreshold as number) < 1
+      ) {
+        this.performanceMetrics.biasSwitching.triggerThreshold = 2;
+      }
       return;
     }
     this.performanceMetrics = {
@@ -8877,7 +8899,7 @@ export class ReboundRejectionAgent {
         currentBias: 'standby',
         lastBiasSwitch: Date.now(),
         consecutiveLosses: 0,
-        triggerThreshold: 0,
+        triggerThreshold: 2,
       },
     };
   }
@@ -10127,10 +10149,22 @@ export class ReboundRejectionAgent {
             reason,
             exitPrice: exitPriceFilled,
             realizedPnl,
+            side: this.pos.side,
+            qty: exitQty,
+            exitAt: new Date().toISOString(),
+            cumulativePnlUsd: this.performanceMetrics?.dailyPnL ?? realizedPnl,
             holdTimeMs: Date.now() - this.pos.openedAt,
             maeR: this.pos.maeR,
             mfeR: this.pos.mfeR
           }
+        });
+
+        this.updateBiasSwitchingState({
+          planBias: this.plan?.bias ?? 'none',
+          realizedPnl,
+          exitSnapshot,
+          exitReason: reason,
+          side: this.pos.side,
         });
 
         try {
@@ -10326,6 +10360,206 @@ export class ReboundRejectionAgent {
         after: accountAfter,
       },
     };
+  }
+
+  private inferMarketBiasFromSnapshot(snapshot: ExitDiagnosticsPayload | null): {
+    bias: 'long' | 'short' | 'standby';
+    confidence: number;
+    reasons: string[];
+  } {
+    if (!snapshot?.indicators) {
+      return { bias: 'standby', confidence: 0, reasons: ['no_indicators'] };
+    }
+
+    const { ema20, ema50, ema100, ema200, rsi14, trendBias, srBias } = snapshot.indicators;
+    let longScore = 0;
+    let shortScore = 0;
+    const reasons: string[] = [];
+
+    if (typeof trendBias === 'string') {
+      if (trendBias === 'bullish') {
+        longScore += 1.1;
+        reasons.push('trend_bias_bullish');
+      } else if (trendBias === 'bearish') {
+        shortScore += 1.1;
+        reasons.push('trend_bias_bearish');
+      }
+    }
+
+    if (Number.isFinite(ema20) && Number.isFinite(ema50) && ema50) {
+      const spreadPct = ((ema20 - ema50) / ema50) * 100;
+      if (spreadPct > 0.2) {
+        longScore += 1.2;
+        reasons.push(`ema20_gt_ema50:${spreadPct.toFixed(2)}bps`);
+      } else if (spreadPct < -0.2) {
+        shortScore += 1.2;
+        reasons.push(`ema20_lt_ema50:${spreadPct.toFixed(2)}bps`);
+      }
+    }
+
+    if (Number.isFinite(ema20) && Number.isFinite(ema200) && ema200) {
+      const distance200 = ((ema20 - ema200) / ema200) * 100;
+      if (distance200 > 0.3) {
+        longScore += 0.5;
+        reasons.push(`ema_stack_above_200:${distance200.toFixed(2)}bps`);
+      } else if (distance200 < -0.3) {
+        shortScore += 0.5;
+        reasons.push(`ema_stack_below_200:${distance200.toFixed(2)}bps`);
+      }
+    }
+
+    if (Number.isFinite(ema100) && Number.isFinite(ema200) && ema200) {
+      const midStack = ((ema100 - ema200) / ema200) * 100;
+      if (midStack > 0.25) {
+        longScore += 0.3;
+        reasons.push(`ema100_gt_ema200:${midStack.toFixed(2)}bps`);
+      } else if (midStack < -0.25) {
+        shortScore += 0.3;
+        reasons.push(`ema100_lt_ema200:${midStack.toFixed(2)}bps`);
+      }
+    }
+
+    if (Number.isFinite(rsi14)) {
+      if ((rsi14 as number) >= 62) {
+        longScore += 0.4;
+        reasons.push(`rsi_high:${(rsi14 as number).toFixed(1)}`);
+      } else if ((rsi14 as number) <= 38) {
+        shortScore += 0.4;
+        reasons.push(`rsi_low:${(rsi14 as number).toFixed(1)}`);
+      }
+    }
+
+    if (srBias === 'nearSupport') {
+      longScore += 0.25;
+      reasons.push('sr_near_support');
+    } else if (srBias === 'nearResistance') {
+      shortScore += 0.25;
+      reasons.push('sr_near_resistance');
+    }
+
+    const total = longScore + shortScore;
+    const diff = Math.abs(longScore - shortScore);
+    const confidence = total > 0 ? Math.min(1, diff / total) : 0;
+
+    if (diff < 0.35) {
+      return { bias: 'standby', confidence, reasons };
+    }
+
+    const bias = longScore > shortScore ? 'long' : 'short';
+    return { bias, confidence, reasons };
+  }
+
+  public updateBiasSwitchingState(params: {
+    planBias: 'long' | 'short' | 'none';
+    realizedPnl: number;
+    exitSnapshot: ExitDiagnosticsPayload | null;
+    exitReason: string;
+    side: 'buy' | 'sell';
+  }): void {
+    if (!this.performanceMetrics) return;
+
+    if (!this.performanceMetrics.biasSwitching) {
+      this.performanceMetrics.biasSwitching = {
+        currentBias: 'standby',
+        lastBiasSwitch: Date.now(),
+        consecutiveLosses: 0,
+        triggerThreshold: 2,
+      };
+    }
+
+    const metrics = this.performanceMetrics.biasSwitching;
+    if (!metrics) return;
+
+    if (!Number.isFinite(metrics.triggerThreshold) || (metrics.triggerThreshold as number) < 1) {
+      metrics.triggerThreshold = 2;
+    }
+
+    const now = Date.now();
+    const inference = this.inferMarketBiasFromSnapshot(params.exitSnapshot);
+    this.lastBiasInference = {
+      bias: inference.bias,
+      confidence: inference.confidence,
+      reasons: inference.reasons,
+      snapshotTs: params.exitSnapshot?.capturedAt ? Date.parse(params.exitSnapshot.capturedAt) || null : null,
+      updatedAt: now,
+    };
+
+    if (params.realizedPnl >= 0) {
+      metrics.consecutiveLosses = 0;
+      metrics.triggerThreshold = 2;
+      if (metrics.currentBias !== 'standby') {
+        const previousBias = metrics.currentBias;
+        metrics.currentBias = 'standby';
+        metrics.lastBiasSwitch = now;
+        recordOpsEvent({
+          level: 'info',
+          source: 'bias_switch',
+          message: 'bias_reset_after_win',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile?.symbol,
+          details: {
+            previousBias,
+            planBias: params.planBias,
+            exitReason: params.exitReason,
+            realizedPnl: params.realizedPnl,
+            inference,
+          },
+        });
+      }
+      return;
+    }
+
+    metrics.consecutiveLosses += 1;
+
+    const threshold = Math.max(2, Number(metrics.triggerThreshold) || 2);
+    metrics.triggerThreshold = threshold;
+
+    if (params.planBias === 'none' && metrics.consecutiveLosses < threshold) {
+      return;
+    }
+
+    if (metrics.consecutiveLosses < threshold) {
+      return;
+    }
+
+    let newBias: 'long' | 'short' | 'standby' = 'standby';
+    if (inference.bias !== 'standby' && inference.confidence >= 0.55) {
+      if (params.planBias !== 'none' && inference.bias !== params.planBias) {
+        newBias = inference.bias;
+      } else if (inference.confidence >= 0.8) {
+        newBias = inference.bias;
+      }
+    }
+
+    const previousBias = metrics.currentBias;
+    if (newBias === previousBias) {
+      metrics.consecutiveLosses = 0;
+      metrics.lastBiasSwitch = now;
+      metrics.triggerThreshold = Math.min(4, threshold + 1);
+      return;
+    }
+
+    metrics.currentBias = newBias;
+    metrics.lastBiasSwitch = now;
+    metrics.consecutiveLosses = 0;
+    metrics.triggerThreshold = newBias === 'standby' ? 2 : Math.min(4, threshold + 1);
+
+    recordOpsEvent({
+      level: 'warn',
+      source: 'bias_switch',
+      message: 'bias_switch_triggered',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        previousBias,
+        newBias,
+        planBias: params.planBias,
+        lossesBeforeSwitch: threshold,
+        exitReason: params.exitReason,
+        tradeSide: params.side,
+        inference,
+      },
+    });
   }
 
   /**
