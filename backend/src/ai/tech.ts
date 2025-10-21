@@ -326,6 +326,9 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     },
   });
 
+  const o1hPromise = getOHLCV(symbol, '1h', 600, userId);
+  const o4hPromise = getOHLCV(symbol, '4h', 600, userId);
+
   // 🔍 DEBUG RAW OHLCV: Compare avec API publique
   console.log(`[RAW OHLCV DEBUG] ${symbol}: Last 5 candles from getOHLCV:`,
     o15.slice(-5).map(r => ({
@@ -483,8 +486,7 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   ].sort((a, b) => Math.abs(lastPrice - a.price) - Math.abs(lastPrice - b.price));
 
   // Daily pivots from 1h (fallback to 15m if needed) and 1h ATR for sturdier risk sizing
-  const o1h = await getOHLCV(symbol, '1h', 600, userId);    // ~25 jours
-  const o4h = await getOHLCV(symbol, '4h', 600, userId);    // 🆕 macro
+  const [o1h, o4h] = await Promise.all([o1hPromise, o4hPromise]);
   const atr1hArr = atr(o1h || o15, 14);
   const atr1h = atr1hArr.at(-1) ?? undefined;
   const atr4hArr = atr(o4h || o1h || o15, 14);              // 🆕 ATR 4h
@@ -493,7 +495,16 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
 
   let multiTimeframe: MultiTimeframeDiagnostics | undefined;
   try {
-    multiTimeframe = await computeMultiTimeframeDiagnostics(symbol);
+    const preloaded: Record<string, number[][]> = {
+      '15m': o15,
+    };
+    if (Array.isArray(o1h) && o1h.length) {
+      preloaded['1h'] = o1h;
+    }
+    if (Array.isArray(o4h) && o4h.length) {
+      preloaded['4h'] = o4h;
+    }
+    multiTimeframe = await computeMultiTimeframeDiagnostics(symbol, { preloaded, userId });
   } catch (error) {
     console.warn(`⚠️ Failed to compute multi-timeframe diagnostics for ${symbol}:`, error);
   }
