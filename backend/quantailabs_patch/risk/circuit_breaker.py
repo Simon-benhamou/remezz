@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import math
 
 @dataclass
@@ -20,14 +20,27 @@ class CircuitBreaker:
     trades_today: int = 0
     equity_start_day: Optional[float] = None
     cooldown_until: Optional[datetime] = None
-    last_trade_day: Optional[int] = None
+    last_trade_day: Optional[str] = None
+    day_start_at: Optional[datetime] = None
+
+    def _session_day_key(self, now: datetime) -> str:
+        if now.tzinfo is None:
+            utc_now = now
+        else:
+            utc_now = now.astimezone(timezone.utc)
+        return utc_now.date().isoformat()
 
     def _reset_day_if_needed(self, now: datetime, equity: float):
-        day = now.timetuple().tm_yday
-        if self.last_trade_day != day:
+        day_key = self._session_day_key(now)
+        if self.last_trade_day != day_key:
             self.trades_today = 0
             self.equity_start_day = equity
-            self.last_trade_day = day
+            self.last_trade_day = day_key
+            if now.tzinfo is None:
+                self.day_start_at = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            else:
+                utc_now = now.astimezone(timezone.utc)
+                self.day_start_at = datetime(utc_now.year, utc_now.month, utc_now.day, tzinfo=timezone.utc)
 
     def _trade_limit_evaluation(self, equity: float) -> Tuple[bool, Optional[str]]:
         if equity is None or not isinstance(equity, (int, float)) or not math.isfinite(equity):

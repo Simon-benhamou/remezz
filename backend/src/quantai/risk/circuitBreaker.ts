@@ -19,7 +19,7 @@ export type CircuitBreakerState = {
   tradesToday: number;
   equityStartDay: number | null;
   cooldownUntil: Date | null;
-  lastTradeDay: number | null;
+  lastTradeDay: string | null;
   dayStartAt: Date | null;
   dailyLossActive: boolean;
   dailyLossTriggeredAt: Date | null;
@@ -31,11 +31,12 @@ export type CircuitBreakerOptions = {
   onStateChange?: (state: CircuitBreakerState) => void | Promise<void>;
 };
 
-function dayOfYear(date: Date): number {
-  const start = new Date(date.getUTCFullYear(), 0, 0);
-  const diff = date.getTime() - start.getTime();
-  const oneDay = 1000 * 60 * 60 * 24;
-  return Math.floor(diff / oneDay);
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function sessionKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 export class CircuitBreaker {
@@ -44,7 +45,7 @@ export class CircuitBreaker {
   private tradesToday = 0;
   private equityStartDay: number | null = null;
   private cooldownUntil: Date | null = null;
-  private lastTradeDay: number | null = null;
+  private lastTradeDay: string | null = null;
   private dayStartAt: Date | null = null;
   private dailyLossActive = false;
   private dailyLossTriggeredAt: Date | null = null;
@@ -71,8 +72,11 @@ export class CircuitBreaker {
     if (state.equityStartDay != null && Number.isFinite(state.equityStartDay)) {
       this.equityStartDay = Number(state.equityStartDay);
     }
-    if (state.lastTradeDay != null && Number.isFinite(state.lastTradeDay)) {
-      this.lastTradeDay = Math.floor(state.lastTradeDay);
+    if (typeof state.lastTradeDay === 'string' && state.lastTradeDay.trim().length > 0) {
+      this.lastTradeDay = state.lastTradeDay;
+    } else if (state.lastTradeDay != null && Number.isFinite(state.lastTradeDay as unknown as number)) {
+      // Backwards compatibility for older persisted snapshots that stored a numeric day marker.
+      this.lastTradeDay = String(Math.floor(state.lastTradeDay as unknown as number));
     }
     if (state.cooldownUntil) {
       const parsed = new Date(state.cooldownUntil as Date | string);
@@ -173,12 +177,12 @@ export class CircuitBreaker {
   }
 
   private resetDayIfNeeded(now: Date, equity: number) {
-    const currentDay = dayOfYear(now);
+    const currentDay = sessionKey(now);
     if (this.lastTradeDay === currentDay) return;
     this.tradesToday = 0;
     this.equityStartDay = Number.isFinite(equity) ? equity : null;
     this.lastTradeDay = currentDay;
-    this.dayStartAt = new Date(now.getTime());
+    this.dayStartAt = startOfUtcDay(now);
     if (this.dailyLossActive || this.dailyLossRecoveryWinsRemaining > 0 || this.dailyLossTriggeredAt) {
       this.dailyLossActive = false;
       this.dailyLossRecoveryWinsRemaining = 0;
