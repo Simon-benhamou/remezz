@@ -15,8 +15,13 @@ RUN apt-get update && \
         openssl \
         ca-certificates \
         python3 \
-        python-is-python3 && \
+        python-is-python3 \
+        python3-pip && \
     rm -rf /var/lib/apt/lists/*
+
+# Python dependencies for the prediction engine
+COPY requirements.txt ./requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Install deps
 COPY package*.json ./
