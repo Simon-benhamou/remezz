@@ -28,6 +28,7 @@ import {
   formatPercent,
   formatSignedCurrency,
 } from "../utils/money";
+import { formatDisplaySymbol } from "../utils/symbols";
 
 type SessionStatus = "running" | "waiting" | "blocked" | "stopped";
 type SessionMode = "paper" | "live";
@@ -347,7 +348,7 @@ const TradingSessionsTable: React.FC = () => {
             </span>
           </div>
           <div className="profile">{record.profile}</div>
-          <div className="id">{record.symbol} · {record.id}</div>
+          <div className="id">{formatDisplaySymbol(record.symbol)}</div>
         </div>
       ),
     },

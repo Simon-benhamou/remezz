@@ -18,6 +18,7 @@ import { ReloadOutlined, BellOutlined, ThunderboltOutlined } from '../icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import { formatDisplaySymbol } from '../utils/symbols';
 
 const { Title, Text } = Typography;
 
@@ -187,8 +188,7 @@ const BacklogPage: React.FC = () => {
         <Text style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>{title}</Text>
         {description && <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{description}</Text>}
         <Space size={8} wrap>
-          {evt.symbol && <Tag color='cyan'>{evt.symbol}</Tag>}
-          {evt.sessionId && <Tag color='purple'>{evt.sessionId}</Tag>}
+          {evt.symbol && <Tag color='cyan'>{formatDisplaySymbol(evt.symbol)}</Tag>}
         </Space>
         {detailEntries.length > 0 && (
           <Space wrap size={8}>
@@ -341,7 +341,7 @@ const BacklogPage: React.FC = () => {
                 bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 10 }}
               >
                 <Space align='center' size={10}>
-                  <Tag color='cyan'>{session.symbol || 'Unknown'}</Tag>
+                  <Tag color='cyan'>{formatDisplaySymbol(session.symbol)}</Tag>
                   <Tag color='blue'>{session.mode?.toUpperCase()}</Tag>
                   <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{sessionEvents.length} events</Text>
                 </Space>
@@ -422,7 +422,7 @@ function normalizeDetails(details: any): Record<string, any> {
   return { value: details };
 }
 
-function formatDetailValue(key: string, value: any): string {
+function formatDetailValue(key: string, value: any, depth = 0): string {
   if (value == null) return '';
   if (typeof value === 'number') {
     if (key === 'usdVolumeMA') return formatUsdVolume(value);
@@ -434,9 +434,27 @@ function formatDetailValue(key: string, value: any): string {
     if (/score/i.test(key)) return value.toFixed(2);
     return Number.isInteger(value) ? String(value) : value.toFixed(3);
   }
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
   if (typeof value === 'string') {
     const normalized = value.replace(/_/g, ' ');
     return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => formatDetailValue(key, item, depth + 1))
+      .filter((item) => item)
+      .join(', ');
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([childKey, childValue]) => {
+        const label = formatMessage(childKey);
+        const formatted = formatDetailValue(childKey, childValue, depth + 1) || '—';
+        return `${label}: ${formatted}`;
+      })
+      .join(depth === 0 ? ' • ' : ', ');
   }
   try {
     return JSON.stringify(value);

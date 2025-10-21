@@ -15,6 +15,7 @@ import { BulbOutlined, ReloadOutlined, WarningOutlined } from '../icons';
 import dayjs from 'dayjs';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
 import { api } from '../api';
+import { formatDisplaySymbol } from '../utils/symbols';
 
 const { Title, Text } = Typography;
 
@@ -162,7 +163,7 @@ const IntelligencePage: React.FC = () => {
                         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                           <Space size={8}>
                             <Badge status='error' />
-                            <Text>{item.symbol || item.sessionId}</Text>
+                            <Text>{formatDisplaySymbol(item.symbol)}</Text>
                           </Space>
                           <Space size={8}>
                             <Tag color='red'>{item.count} blocks</Tag>
@@ -195,13 +196,12 @@ const IntelligencePage: React.FC = () => {
               <List.Item>
                 <Space size={12} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
                   <Space size={12} wrap>
-                    <Tag color='geekblue'>{item.symbol || item.family || 'Unknown'}</Tag>
+                    <Tag color='geekblue'>{item.symbol ? formatDisplaySymbol(item.symbol) : item.family || 'Unknown'}</Tag>
                     {item.action && <Tag color='blue'>{item.action.toUpperCase()}</Tag>}
                     <Tag color={meta.color}>{meta.label}</Tag>
                   </Space>
                   <Space size={12} wrap>
                     <Tag color='purple'>Confidence {Number(item.confidence || 0).toFixed(1)}%</Tag>
-                    {item.sessionId && <Tag>{item.sessionId.slice(0, 6)}…</Tag>}
                     <Text type='secondary'>
                       {item.createdAt ? dayjs(item.createdAt).format('MMM D · HH:mm:ss') : '—'}
                     </Text>

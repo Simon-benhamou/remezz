@@ -14,6 +14,7 @@ import {
   Typography,
   theme,
 } from 'antd';
+import { formatDisplaySymbol } from '../utils/symbols';
 
 const { Text } = Typography;
 
@@ -198,7 +199,7 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
                         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                           <Space size={8}>
                             <Badge status={row.status === 'critical' ? 'error' : 'warning'} />
-                            <span style={{ color: headingColor, fontWeight: 500 }}>{row.symbol || row.sessionId}</span>
+                            <span style={{ color: headingColor, fontWeight: 500 }}>{formatDisplaySymbol(row.symbol)}</span>
                           </Space>
                           <span style={{ color: headingColor, fontWeight: 600 }}>
                             {Number(row.utilisationPct || 0).toFixed(1)}%
@@ -242,7 +243,7 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
                         renderItem={(row: any) => (
                           <List.Item style={{ padding: '6px 0' }}>
                             <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                              <span style={{ color: headingColor }}>{row.symbol || row.sessionId}</span>
+                              <span style={{ color: headingColor }}>{formatDisplaySymbol(row.symbol)}</span>
                               <Tag color={row.flagged ? 'red' : 'blue'}>{row.count} blocks</Tag>
                             </Space>
                           </List.Item>
@@ -275,7 +276,7 @@ export default function OpsMetricsPanel({ metrics, loading }: Props) {
                         <List.Item style={{ padding: '6px 0' }}>
                           <Space direction='vertical' size={2} style={{ width: '100%' }}>
                             <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-                              <span style={{ color: headingColor, fontWeight: 500 }}>{row.symbol || row.sessionId}</span>
+                              <span style={{ color: headingColor, fontWeight: 500 }}>{formatDisplaySymbol(row.symbol)}</span>
                               <Tag color='red'>{row.count} blocks</Tag>
                             </Space>
                             <div style={{ color: subtleText, fontSize: 12, display: 'flex', justifyContent: 'space-between' }}>
