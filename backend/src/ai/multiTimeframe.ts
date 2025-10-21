@@ -18,6 +18,13 @@ export type Diagnostics = {
 const cache = new Map<string, { diag: Diagnostics; ts: number }>();
 const TTL_MS = 60 * 1000;
 
+type PreloadedSeries = Partial<Record<string, number[][]>>;
+
+export type ComputeMultiTimeframeOptions = {
+  preloaded?: PreloadedSeries;
+  userId?: string;
+};
+
 function computeBias(closes: number[]): 'bullish' | 'bearish' | 'neutral' {
   if (closes.length < 30) return 'neutral';
   const fast = ema(closes, 10).at(-1) ?? closes.at(-1)!;
@@ -27,8 +34,15 @@ function computeBias(closes: number[]): 'bullish' | 'bearish' | 'neutral' {
   return diff > 0 ? 'bullish' : 'bearish';
 }
 
-async function computeTf(symbol: string, tf: string, limit = 200): Promise<TfMetrics> {
-  const ohlcv = await getOHLCV(symbol, tf, limit);
+async function computeTf(
+  symbol: string,
+  tf: string,
+  limit = 200,
+  options?: ComputeMultiTimeframeOptions,
+): Promise<TfMetrics> {
+  const preloaded = options?.preloaded?.[tf];
+  const source = Array.isArray(preloaded) && preloaded.length ? preloaded : null;
+  const ohlcv = source ?? await getOHLCV(symbol, tf, limit, options?.userId);
   if (!ohlcv?.length) {
     return { tf, bias: 'neutral', momentumPct: 0, rsi: 50 };
   }
@@ -67,18 +81,26 @@ function computeScores(metrics: TfMetrics[]): Diagnostics {
   };
 }
 
-export async function computeMultiTimeframeDiagnostics(symbol: string): Promise<Diagnostics> {
-  const cached = cache.get(symbol);
-  if (cached && Date.now() - cached.ts < TTL_MS) return cached.diag;
+export async function computeMultiTimeframeDiagnostics(
+  symbol: string,
+  options?: ComputeMultiTimeframeOptions,
+): Promise<Diagnostics> {
+  const useCache = !options?.preloaded;
+  if (useCache) {
+    const cached = cache.get(symbol);
+    if (cached && Date.now() - cached.ts < TTL_MS) return cached.diag;
+  }
 
   const metrics = await Promise.all([
-    computeTf(symbol, '4h', 240),
-    computeTf(symbol, '1h', 240),
-    computeTf(symbol, '15m', 300),
-    computeTf(symbol, '5m', 240),
+    computeTf(symbol, '4h', 240, options),
+    computeTf(symbol, '1h', 240, options),
+    computeTf(symbol, '15m', 300, options),
+    computeTf(symbol, '5m', 240, options),
   ]);
 
   const diag = computeScores(metrics);
-  cache.set(symbol, { diag, ts: Date.now() });
+  if (useCache) {
+    cache.set(symbol, { diag, ts: Date.now() });
+  }
   return diag;
 }
