@@ -56,6 +56,26 @@ export type TechnicalSnapshot = {
 function last<T>(arr: T[]): T {
   return arr[arr.length - 1];
 }
+
+function lastFiniteNumber(values: number[]): number | undefined {
+  for (let i = values.length - 1; i >= 0; i--) {
+    const value = values[i];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function resolveDirectionalIndicators(
+  diPlusSeries: number[],
+  diMinusSeries: number[],
+): { diPlus?: number; diMinus?: number } {
+  return {
+    diPlus: lastFiniteNumber(diPlusSeries),
+    diMinus: lastFiniteNumber(diMinusSeries),
+  };
+}
 function pct(a: number, b: number) {
   if (b === 0) return 0; // Éviter division par zéro
   return (a - b) / b * 100;
@@ -403,8 +423,7 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   const adx14Arr = adx(o15, 14);
   const adx14v = adx14Arr[adx14Arr.length - 1] ?? 0;
   const { plusDi: diPlusArr, minusDi: diMinusArr } = dmi(o15, 14);
-  const diPlusVal = diPlusArr.length ? diPlusArr[diPlusArr.length - 1] : undefined;
-  const diMinusVal = diMinusArr.length ? diMinusArr[diMinusArr.length - 1] : undefined;
+  const { diPlus: diPlusVal, diMinus: diMinusVal } = resolveDirectionalIndicators(diPlusArr, diMinusArr);
   // CMF20 (15m)
   const cmf20v = chaikinMoneyFlow(highs15, lows15, closes15, volumes15, 20);
   // Volume baseline: use EMA20 of 15m volumes for responsiveness
@@ -541,6 +560,8 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     atrPct,
     adx14: adx14v,
     ema20Slope,
+    diPlus14: diPlusVal,
+    diMinus14: diMinusVal,
     support: primarySupport,
     resistance: primaryResistance,
     supports,       // [{ price, label, touches, strength }, ...] sorted by proximity
