@@ -158,9 +158,11 @@ function deserializeCircuitBreakerState(raw: any): CircuitBreakerState | null {
       ? Number((raw as any).equityStartDay)
       : null,
     cooldownUntil: toDate((raw as any).cooldownUntil),
-    lastTradeDay: (raw as any).lastTradeDay != null && Number.isFinite(Number((raw as any).lastTradeDay))
-      ? Math.floor(Number((raw as any).lastTradeDay))
-      : null,
+    lastTradeDay: typeof (raw as any).lastTradeDay === 'string'
+      ? ((raw as any).lastTradeDay.trim().length > 0 ? (raw as any).lastTradeDay : null)
+      : (raw as any).lastTradeDay != null && Number.isFinite(Number((raw as any).lastTradeDay))
+        ? String(Math.floor(Number((raw as any).lastTradeDay)))
+        : null,
     dayStartAt: toDate((raw as any).dayStartAt),
     dailyLossActive: Boolean((raw as any).dailyLossActive),
     dailyLossTriggeredAt: toDate((raw as any).dailyLossTriggeredAt),

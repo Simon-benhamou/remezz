@@ -4,6 +4,8 @@ risk:
   cooldown_minutes: 60
   daily_loss_limit_pct: 3.0        # stop trading if daily equity drawdown <= -3%
   daily_trade_limit: 24
+  catastrophic_trade_drawdown_pct: 2.0
+  catastrophic_trade_consecutive_losses: 4
   reduce_size_after_losses: true
   size_reduction_after_n_losses: 2 # reduce size after >= 2 losses in a row
   size_reduction_factor: 0.5       # 50% size during recovery

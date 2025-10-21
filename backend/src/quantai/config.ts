@@ -7,6 +7,8 @@ export type QuantAIRiskConfig = {
   cooldownMinutes: number;
   dailyLossLimitPct: number;
   dailyTradeLimit: number;
+  catastrophicTradeDrawdownPct?: number;
+  catastrophicTradeConsecutiveLosses?: number;
   reduceSizeAfterLosses: boolean;
   sizeReductionAfterLosses: number;
   sizeReductionFactor: number;
@@ -258,6 +260,8 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     cooldownMinutes: 60,
     dailyLossLimitPct: 3.0,
     dailyTradeLimit: 24,
+    catastrophicTradeDrawdownPct: 2.0,
+    catastrophicTradeConsecutiveLosses: 4,
     reduceSizeAfterLosses: true,
     sizeReductionAfterLosses: 2,
     sizeReductionFactor: 0.5,
@@ -409,6 +413,18 @@ function normalizeRisk(raw: any): QuantAIRiskConfig {
     cooldownMinutes: Number(raw.cooldown_minutes ?? raw.cooldownMinutes ?? DEFAULT_CONFIG.risk.cooldownMinutes),
     dailyLossLimitPct: Number(raw.daily_loss_limit_pct ?? raw.dailyLossLimitPct ?? DEFAULT_CONFIG.risk.dailyLossLimitPct),
     dailyTradeLimit: Number(raw.daily_trade_limit ?? raw.dailyTradeLimit ?? DEFAULT_CONFIG.risk.dailyTradeLimit),
+    catastrophicTradeDrawdownPct: Number(
+      raw.catastrophic_trade_drawdown_pct
+        ?? raw.catastrophicTradeDrawdownPct
+        ?? DEFAULT_CONFIG.risk.catastrophicTradeDrawdownPct
+        ?? 0,
+    ),
+    catastrophicTradeConsecutiveLosses: Number(
+      raw.catastrophic_trade_consecutive_losses
+        ?? raw.catastrophicTradeConsecutiveLosses
+        ?? DEFAULT_CONFIG.risk.catastrophicTradeConsecutiveLosses
+        ?? 0,
+    ),
     reduceSizeAfterLosses: Boolean(raw.reduce_size_after_losses ?? raw.reduceSizeAfterLosses ?? DEFAULT_CONFIG.risk.reduceSizeAfterLosses),
     sizeReductionAfterLosses: Number(raw.size_reduction_after_n_losses ?? raw.sizeReductionAfterLosses ?? DEFAULT_CONFIG.risk.sizeReductionAfterLosses),
     sizeReductionFactor: Number(raw.size_reduction_factor ?? raw.sizeReductionFactor ?? DEFAULT_CONFIG.risk.sizeReductionFactor),

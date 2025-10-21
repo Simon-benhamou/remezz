@@ -6,13 +6,20 @@ export type CircuitBreakerDecision = {
   cooldownUntil?: Date | null;
 };
 
+type CatastrophicTradeLimitEvaluation = {
+  enforce: boolean;
+  reason?: 'equity_unavailable' | 'daily_loss' | 'drawdown' | 'loss_streak';
+  drawdownPct?: number;
+  consecutiveLosses?: number;
+};
+
 export type CircuitBreakerState = {
   consecutiveLosses: number;
   consecutiveWins: number;
   tradesToday: number;
   equityStartDay: number | null;
   cooldownUntil: Date | null;
-  lastTradeDay: number | null;
+  lastTradeDay: string | null;
   dayStartAt: Date | null;
   dailyLossActive: boolean;
   dailyLossTriggeredAt: Date | null;
@@ -24,11 +31,12 @@ export type CircuitBreakerOptions = {
   onStateChange?: (state: CircuitBreakerState) => void | Promise<void>;
 };
 
-function dayOfYear(date: Date): number {
-  const start = new Date(date.getUTCFullYear(), 0, 0);
-  const diff = date.getTime() - start.getTime();
-  const oneDay = 1000 * 60 * 60 * 24;
-  return Math.floor(diff / oneDay);
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function sessionKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 export class CircuitBreaker {
@@ -37,7 +45,7 @@ export class CircuitBreaker {
   private tradesToday = 0;
   private equityStartDay: number | null = null;
   private cooldownUntil: Date | null = null;
-  private lastTradeDay: number | null = null;
+  private lastTradeDay: string | null = null;
   private dayStartAt: Date | null = null;
   private dailyLossActive = false;
   private dailyLossTriggeredAt: Date | null = null;
@@ -64,8 +72,11 @@ export class CircuitBreaker {
     if (state.equityStartDay != null && Number.isFinite(state.equityStartDay)) {
       this.equityStartDay = Number(state.equityStartDay);
     }
-    if (state.lastTradeDay != null && Number.isFinite(state.lastTradeDay)) {
-      this.lastTradeDay = Math.floor(state.lastTradeDay);
+    if (typeof state.lastTradeDay === 'string' && state.lastTradeDay.trim().length > 0) {
+      this.lastTradeDay = state.lastTradeDay;
+    } else if (state.lastTradeDay != null && Number.isFinite(state.lastTradeDay as unknown as number)) {
+      // Backwards compatibility for older persisted snapshots that stored a numeric day marker.
+      this.lastTradeDay = String(Math.floor(state.lastTradeDay as unknown as number));
     }
     if (state.cooldownUntil) {
       const parsed = new Date(state.cooldownUntil as Date | string);
@@ -112,13 +123,66 @@ export class CircuitBreaker {
     return date ? new Date(date.getTime()) : null;
   }
 
+  private evaluateDailyTradeLimit(equity: number): CatastrophicTradeLimitEvaluation {
+    if (!Number.isFinite(equity)) {
+      return { enforce: true, reason: 'equity_unavailable' };
+    }
+    if (this.dailyLossActive) {
+      return { enforce: true, reason: 'daily_loss' };
+    }
+    const drawdownThreshold = this.cfg.catastrophicTradeDrawdownPct;
+    if (
+      Number.isFinite(drawdownThreshold)
+      && (drawdownThreshold as number) > 0
+      && this.equityStartDay != null
+      && this.equityStartDay > 0
+    ) {
+      const drawdownPct = ((equity - this.equityStartDay) / this.equityStartDay) * 100;
+      if (drawdownPct <= -Math.abs(drawdownThreshold as number)) {
+        return { enforce: true, reason: 'drawdown', drawdownPct };
+      }
+    }
+    const lossStreakThreshold = this.cfg.catastrophicTradeConsecutiveLosses;
+    if (Number.isFinite(lossStreakThreshold) && (lossStreakThreshold as number) > 0) {
+      if (this.consecutiveLosses >= Math.floor(lossStreakThreshold as number)) {
+        return {
+          enforce: true,
+          reason: 'loss_streak',
+          consecutiveLosses: this.consecutiveLosses,
+        };
+      }
+    }
+    return { enforce: false };
+  }
+
+  private formatCatastrophicLimitReason(evaluation: CatastrophicTradeLimitEvaluation): string | null {
+    switch (evaluation.reason) {
+      case 'equity_unavailable':
+        return 'unable to verify equity';
+      case 'daily_loss':
+        return 'daily loss protection active';
+      case 'drawdown':
+        if (typeof evaluation.drawdownPct === 'number' && Number.isFinite(evaluation.drawdownPct)) {
+          return `drawdown ${evaluation.drawdownPct.toFixed(2)}%`;
+        }
+        return 'drawdown threshold reached';
+      case 'loss_streak':
+        if (typeof evaluation.consecutiveLosses === 'number' && Number.isFinite(evaluation.consecutiveLosses)) {
+          return `${evaluation.consecutiveLosses} consecutive losses`;
+        }
+        return 'loss streak threshold reached';
+      default:
+        return null;
+    }
+  }
+
   private resetDayIfNeeded(now: Date, equity: number) {
-    const currentDay = dayOfYear(now);
+    const currentDay = sessionKey(now);
     if (this.lastTradeDay === currentDay) return;
     this.tradesToday = 0;
     this.equityStartDay = Number.isFinite(equity) ? equity : null;
     this.lastTradeDay = currentDay;
-    this.dayStartAt = new Date(now.getTime());
+    this.dayStartAt = startOfUtcDay(now);
     if (this.dailyLossActive || this.dailyLossRecoveryWinsRemaining > 0 || this.dailyLossTriggeredAt) {
       this.dailyLossActive = false;
       this.dailyLossRecoveryWinsRemaining = 0;
@@ -148,12 +212,20 @@ export class CircuitBreaker {
         cooldownUntil: this.cooldownUntil,
       };
     }
-    if (this.tradesToday >= this.cfg.dailyTradeLimit) {
-      return {
-        allowed: false,
-        reason: `Daily trade limit reached (${this.tradesToday}/${this.cfg.dailyTradeLimit})`,
-        cooldownUntil: null,
-      };
+    const tradeLimit = Number.isFinite(this.cfg.dailyTradeLimit)
+      ? Math.max(0, Math.floor(this.cfg.dailyTradeLimit))
+      : 0;
+    if (tradeLimit > 0 && this.tradesToday >= tradeLimit) {
+      const evaluation = this.evaluateDailyTradeLimit(equity);
+      if (evaluation.enforce) {
+        const detail = this.formatCatastrophicLimitReason(evaluation);
+        const suffix = detail ? ` under catastrophic conditions (${detail})` : ' under catastrophic conditions';
+        return {
+          allowed: false,
+          reason: `Daily trade limit reached (${this.tradesToday}/${tradeLimit})${suffix}`,
+          cooldownUntil: null,
+        };
+      }
     }
     if (this.equityStartDay != null && this.equityStartDay > 0) {
       const drawdownPct = ((equity - this.equityStartDay) / this.equityStartDay) * 100;
