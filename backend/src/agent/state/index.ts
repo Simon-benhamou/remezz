@@ -231,6 +231,7 @@ export class ReboundRejectionAgent {
   public isConsolidating = entryZoneMethods.isConsolidating;
   public hasValidTechnicalData = entryZoneMethods.hasValidTechnicalData;
   public hasAdequateLiquidity = entryZoneMethods.hasAdequateLiquidity;
+  public estimateLiquidityNotional = entryZoneMethods.estimateLiquidityNotional;
   public priceInZoneWithEpsilon = entryZoneMethods.priceInZoneWithEpsilon;
   public computeVolatilityAdjustedZone = entryZoneMethods.computeVolatilityAdjustedZone;
   public capMaximumZoneWidth = entryZoneMethods.capMaximumZoneWidth;
@@ -1092,13 +1093,20 @@ export class ReboundRejectionAgent {
         ? this.profile.startBalanceUsd
         : bal.freeUsd;
       const usableBalance = Math.max(0, startBudget * budgetFrac);
-      
-      // Estimate realistic position size: balance × riskPct × leverage / stopPct
-      const riskPct = this.profile.riskPerTradePct || 1.5;
-      const leverage = Math.min(10, this.profile.maxLeverage || 10);
-      const stopPct = 0.5; // Conservative estimate
-      const estimatedNotional = (usableBalance * (riskPct / 100) * leverage) / (stopPct / 100);
-      
+      const midPrice = this.plan.zone?.mid ?? null;
+      const stopPctFromPlan = midPrice && this.plan.stopDistance > 0
+        ? (this.plan.stopDistance / midPrice) * 100
+        : null;
+
+      const estimatedNotional = this.estimateLiquidityNotional({
+        balanceUsd: usableBalance,
+        riskPct: this.profile.riskPerTradePct || 1.5,
+        leverage: this.profile.maxLeverage || 1,
+        stopPct: stopPctFromPlan ?? 0.5,
+        maxNotionalCapUsd: this.maxNotionalCapUsd,
+        sizingMode: this.profile.sizingMode || undefined,
+      });
+
       const liquidityCheck = this.hasAdequateLiquidity(snapForValidation, estimatedNotional);
       if (!liquidityCheck.adequate) {
         console.warn(`PHASE 2: ${liquidityCheck.reason} - Skipping entry to avoid slippage`);

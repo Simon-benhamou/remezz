@@ -901,7 +901,7 @@ function hasValidTechnicalData(this: ReboundRejectionAgent, snap: TechnicalSnaps
  * 
  * Impact: -10% slippage costs, +35% entry opportunities
  */
-function hasAdequateLiquidity(this: ReboundRejectionAgent, 
+function hasAdequateLiquidity(this: ReboundRejectionAgent,
   snap: TechnicalSnapshot,
   positionSizeUsd: number
 ): {
@@ -911,13 +911,55 @@ function hasAdequateLiquidity(this: ReboundRejectionAgent,
   const minVolume = positionSizeUsd * multiplier;
 
   if (volume24h < minVolume) {
-    return { 
-      adequate: false, 
-      reason: `Insufficient liquidity: $${(volume24h/1000).toFixed(0)}k < $${(minVolume/1000).toFixed(0)}k (need ${multiplier}x position)` 
+    return {
+      adequate: false,
+      reason: `Insufficient liquidity: $${(volume24h/1000).toFixed(0)}k < $${(minVolume/1000).toFixed(0)}k (need ${multiplier}x position)`
     };
   }
 
   return { adequate: true, reason: `Adequate liquidity: $${(volume24h/1000).toFixed(0)}k (>= ${multiplier}x position)` };
+}
+
+function estimateLiquidityNotional(this: ReboundRejectionAgent, params: {
+  balanceUsd: number;
+  riskPct: number;
+  leverage: number;
+  stopPct: number | null | undefined;
+  maxNotionalCapUsd: number;
+  sizingMode?: string | null;
+}): number {
+  const cfg = getConfig();
+  const balanceUsd = Number.isFinite(params.balanceUsd) ? Math.max(0, params.balanceUsd) : 0;
+  const riskPct = Number.isFinite(params.riskPct) ? Math.max(0, params.riskPct) : 0;
+  const leverage = Number.isFinite(params.leverage) ? Math.max(1, Math.min(10, params.leverage)) : 1;
+  const stopPct = params.stopPct != null && Number.isFinite(params.stopPct) && params.stopPct > 0
+    ? params.stopPct
+    : null;
+  const defaultSizing = cfg.SIZING_DEFAULT_MODE === 'budget' ? 'budget' : 'risk';
+  const sizingMode = (params.sizingMode === 'budget' || params.sizingMode === 'risk')
+    ? params.sizingMode
+    : defaultSizing;
+
+  let notional = 0;
+  if (sizingMode === 'budget') {
+    notional = balanceUsd * leverage;
+  } else if (stopPct) {
+    const riskUsd = balanceUsd * (riskPct / 100);
+    const stopFrac = stopPct / 100;
+    notional = stopFrac > 0 ? riskUsd / stopFrac : 0;
+  } else {
+    notional = balanceUsd * (riskPct / 100);
+  }
+
+  if (Number.isFinite(params.maxNotionalCapUsd) && params.maxNotionalCapUsd > 0) {
+    notional = Math.min(notional, params.maxNotionalCapUsd);
+  }
+
+  if (!Number.isFinite(notional) || notional <= 0) {
+    return 0;
+  }
+
+  return notional;
 }
 
 // ========================================================================
@@ -1338,6 +1380,7 @@ export interface EntryZoneMethods {
   isConsolidating: typeof isConsolidating;
   hasValidTechnicalData: typeof hasValidTechnicalData;
   hasAdequateLiquidity: typeof hasAdequateLiquidity;
+  estimateLiquidityNotional: typeof estimateLiquidityNotional;
   priceInZoneWithEpsilon: typeof priceInZoneWithEpsilon;
   computeVolatilityAdjustedZone: typeof computeVolatilityAdjustedZone;
   capMaximumZoneWidth: typeof capMaximumZoneWidth;
@@ -1366,6 +1409,7 @@ export const entryZoneMethods: EntryZoneMethods = {
   isConsolidating,
   hasValidTechnicalData,
   hasAdequateLiquidity,
+  estimateLiquidityNotional,
   priceInZoneWithEpsilon,
   computeVolatilityAdjustedZone,
   capMaximumZoneWidth,
