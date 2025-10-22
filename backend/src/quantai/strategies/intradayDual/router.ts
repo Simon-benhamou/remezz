@@ -8,35 +8,51 @@ type RouterState = {
   lastTimestamp: number;
 };
 
+const DEFAULT_STATE: RouterState = {
+  lastSqueeze: 1,
+  lastSqueezeState: 'neutral',
+  lastBreakoutDir: 'none',
+  lastTimestamp: 0,
+};
+
 function countSatisfied(flags: boolean[]): number {
   return flags.reduce((acc, flag) => acc + (flag ? 1 : 0), 0);
 }
 
 export class StrategyRouter {
   private readonly cfg = loadIntradayConfig();
-  private state: RouterState = {
-    lastSqueeze: 1,
-    lastSqueezeState: 'neutral',
-    lastBreakoutDir: 'none',
-    lastTimestamp: 0,
-  };
-  private lastStateTs = 0;
+  private readonly stateBySymbol = new Map<string, RouterState>();
 
-  classify(features: Record<'1m' | '5m' | '15m', TickFeatures>): RegimeSignal {
+  private getState(symbol: string): RouterState {
+    const existing = this.stateBySymbol.get(symbol);
+    if (existing) {
+      return existing;
+    }
+    const initial: RouterState = { ...DEFAULT_STATE };
+    this.stateBySymbol.set(symbol, initial);
+    return initial;
+  }
+
+  classify(symbol: string, features: Record<'1m' | '5m' | '15m', TickFeatures>): RegimeSignal {
     const f1 = features['1m'];
     const f5 = features['5m'];
     const f15 = features['15m'];
 
-    const squeezeNow = f1.volatility.squeezeRatio;
-    const squeezePrev = this.state.lastSqueeze;
-    const prevState = this.state.lastSqueezeState;
-    const squeezeState = f1.volatility.squeezeState;
-    this.state.lastSqueeze = squeezeNow;
-    this.state.lastSqueezeState = squeezeState;
-    const nowTs = f1.timestamp;
-    this.state.lastTimestamp = nowTs;
+    const state = this.getState(symbol);
+    const prevSqueeze = state.lastSqueeze;
+    const prevSqueezeState = state.lastSqueezeState;
+    const prevTimestamp = state.lastTimestamp;
 
-    const squeezeExpansion = (prevState === 'range' || squeezePrev < this.cfg.volatility.squeezeLow) && squeezeState === 'expansion';
+    const squeezeNow = f1.volatility.squeezeRatio;
+    const squeezeState = f1.volatility.squeezeState;
+    const nowTs = f1.timestamp;
+    state.lastSqueeze = squeezeNow;
+    state.lastSqueezeState = squeezeState;
+    state.lastTimestamp = nowTs;
+    this.stateBySymbol.set(symbol, state);
+
+    const squeezeExpansion = (prevSqueezeState === 'range' || prevSqueeze < this.cfg.volatility.squeezeLow)
+      && squeezeState === 'expansion';
     const squeezeActive = squeezeState === 'range';
 
     const ema9 = f1.momentum.emaValue['9'] ?? 0;
@@ -49,7 +65,7 @@ export class StrategyRouter {
     const breakoutConfirmed = breakoutUp || breakoutDown;
     const breakoutDir: 'long' | 'short' | 'none' = breakoutUp ? 'long' : breakoutDown ? 'short' : 'none';
 
-    if (breakoutConfirmed) this.state.lastBreakoutDir = breakoutDir;
+    if (breakoutConfirmed) state.lastBreakoutDir = breakoutDir;
 
     const volumeStrong = f1.volume.zScore >= this.cfg.entry.bom.volumeZMin;
     const aggressionSupportive = f1.orderBook.aggressionRatio >= this.cfg.entry.bom.aggressionMin;
@@ -87,8 +103,7 @@ export class StrategyRouter {
       reason = 'Mean-reversion: squeeze range with order-book reversal';
     }
 
-    const age = this.lastStateTs === 0 ? 0 : Math.max(0, nowTs - this.lastStateTs);
-    this.lastStateTs = nowTs;
+    const age = prevTimestamp === 0 ? 0 : Math.max(0, nowTs - prevTimestamp);
 
     return { label, confidence, reason, biasAgeMs: age };
   }
