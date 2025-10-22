@@ -34,13 +34,19 @@ import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { useSessionsCache } from '../hooks/useSessionsCache';
 import type { AppMode } from '../store';
+import {
+  STRATEGY_DESCRIPTIONS,
+  STRATEGY_META,
+  resolveSessionStrategyLabel,
+  inferSessionStrategyEngine,
+  type StrategyEngineOption,
+} from '../utils/strategies';
 
 const { Text, Title } = Typography;
 
 type ViewMode = 'cards' | 'table';
 
 type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
-type StrategyEngineOption = 'intraday_dual' | 'meta_adaptive';
 
 type AgentSession = {
   id: string;
@@ -92,16 +98,6 @@ const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyL
   },
 };
 
-const STRATEGY_LABELS: Record<StrategyEngineOption, string> = {
-  intraday_dual: 'Intraday Dual',
-  meta_adaptive: 'Meta Adaptive',
-};
-
-const STRATEGY_DESCRIPTIONS: Record<StrategyEngineOption, string> = {
-  intraday_dual: 'Momentum and mean-reversion tactics with rapid execution, tuned for scalping intraday orderflow.',
-  meta_adaptive: 'Reinforcement-guided swing entries blending technical and AI signals for adaptive positioning.',
-};
-
 const commonSymbols = [
   'BTC/USDT',
   'ETH/USDT',
@@ -137,22 +133,6 @@ const formatPercent = (value?: number | null, fractionDigits = 1) => {
   const formatted = Math.abs(percent).toFixed(fractionDigits);
   const prefix = percent >= 0 ? '+' : '-';
   return `${prefix}${formatted}%`;
-};
-
-const resolveStrategyLabel = (session: AgentSession) => {
-  const engine = session.strategyEngine
-    || (session.profile as any)?.strategyEngine
-    || null;
-  if (engine && STRATEGY_LABELS[engine as StrategyEngineOption]) {
-    return STRATEGY_LABELS[engine as StrategyEngineOption];
-  }
-  return (
-    session.strategy ||
-    session.strategyFamily ||
-    (session.profile as any)?.strategy ||
-    (session.profile as any)?.strategyFamily ||
-    'Adaptive'
-  );
 };
 
 const resolveAgentLabel = (session: AgentSession) => {
@@ -440,34 +420,52 @@ export default function SessionsPage() {
       {
         title: 'Agent',
         key: 'agent',
-        render: (_, record) => (
-          <Space direction="vertical" size={2}>
-            <Space size={8}>
-              <Text style={{ color: '#f8fafc', fontWeight: 600 }}>{resolveAgentLabel(record)}</Text>
+        render: (_, record) => {
+          const strategyEngine = inferSessionStrategyEngine(record);
+          const strategyColor = strategyEngine
+            ? STRATEGY_META[strategyEngine].color
+            : 'rgba(226, 232, 240, 0.85)';
+          const strategyBackground = strategyEngine
+            ? `${STRATEGY_META[strategyEngine].color}20`
+            : 'rgba(148, 163, 184, 0.12)';
+          return (
+            <Space direction="vertical" size={2}>
+              <Space size={8}>
+                <Text style={{ color: '#f8fafc', fontWeight: 600 }}>{resolveAgentLabel(record)}</Text>
+                <Tag
+                  style={{
+                    borderRadius: 10,
+                    border: 'none',
+                    background: 'rgba(59, 130, 246, 0.12)',
+                    color: '#93c5fd',
+                  }}
+                >
+                  {record.mode?.toUpperCase?.()}
+                </Tag>
+                <Tag
+                  style={{
+                    borderRadius: 10,
+                    border: 'none',
+                    background: selectionBadgeMeta(record.isSmartAgent).background,
+                    color: selectionBadgeMeta(record.isSmartAgent).color,
+                  }}
+                >
+                  {selectionBadgeMeta(record.isSmartAgent).label}
+                </Tag>
+              </Space>
               <Tag
                 style={{
                   borderRadius: 10,
                   border: 'none',
-                  background: 'rgba(59, 130, 246, 0.12)',
-                  color: '#93c5fd',
+                  background: strategyBackground,
+                  color: strategyColor,
                 }}
               >
-                {record.mode?.toUpperCase?.()}
-              </Tag>
-              <Tag
-                style={{
-                  borderRadius: 10,
-                  border: 'none',
-                  background: selectionBadgeMeta(record.isSmartAgent).background,
-                  color: selectionBadgeMeta(record.isSmartAgent).color,
-                }}
-              >
-                {selectionBadgeMeta(record.isSmartAgent).label}
+                {resolveSessionStrategyLabel(record)}
               </Tag>
             </Space>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{resolveStrategyLabel(record)}</Text>
-          </Space>
-        ),
+          );
+        },
       },
       {
         title: 'Pair',
@@ -705,7 +703,7 @@ export default function SessionsPage() {
                         <Text style={{ color: '#f8fafc', fontSize: 18, fontWeight: 600 }}>
                           {resolveAgentLabel(session)}
                         </Text>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{resolveStrategyLabel(session)}</Text>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{resolveSessionStrategyLabel(session)}</Text>
                         <Space size={6}>
                           <Tag
                             style={{
@@ -946,7 +944,9 @@ export default function SessionsPage() {
             name="strategyEngine"
             rules={[{ required: true, message: 'Select a strategy engine' }]}
           >
-            <Select options={Object.entries(STRATEGY_LABELS).map(([value, label]) => ({ value, label }))} />
+            <Select
+              options={Object.entries(STRATEGY_META).map(([value, meta]) => ({ value, label: meta.label }))}
+            />
           </Form.Item>
 
           <div
@@ -962,7 +962,7 @@ export default function SessionsPage() {
             }}
           >
             <Text style={{ color: '#f8fafc', fontWeight: 600 }}>Selected engine</Text>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{STRATEGY_LABELS[strategyEngine]}</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{STRATEGY_META[strategyEngine].label}</Text>
             <Text style={{ color: 'rgba(148, 163, 184, 0.65)', fontSize: 12 }}>
               {STRATEGY_DESCRIPTIONS[strategyEngine]}
             </Text>

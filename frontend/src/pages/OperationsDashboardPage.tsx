@@ -10,6 +10,7 @@ import {
   Drawer,
   Empty,
   Row,
+  Select,
   Space,
   Statistic,
   Tag,
@@ -46,6 +47,11 @@ import { formatDisplaySymbol } from '../utils/symbols';
 import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import { useDashboard } from '../hooks/useDashboard';
 import { collectOpsEventReasons, formatOpsEventMessage } from '../utils/opsEvents';
+import {
+  STRATEGY_META,
+  normalizeStrategyEngine,
+  type StrategyEngineOption,
+} from '../utils/strategies';
 
 const { Title, Text } = Typography;
 
@@ -201,6 +207,51 @@ const OperationsDashboardPage: React.FC = () => {
   const [recentTrades, setRecentTrades] = React.useState<any[]>([]);
   const [recentTradesLoading, setRecentTradesLoading] = React.useState(false);
   const [reselecting, setReselecting] = React.useState<Record<string, boolean>>({});
+  const [strategyFilter, setStrategyFilter] = React.useState<'all' | StrategyEngineOption>('all');
+
+  const strategyOptions = React.useMemo(
+    () => {
+      const rows = Array.isArray(agentHealth?.agents) ? (agentHealth.agents as AgentHealthRow[]) : [];
+      const counts = new Map<StrategyEngineOption, number>();
+      rows.forEach((row) => {
+        const engine = normalizeStrategyEngine(row.strategyEngine);
+        if (!engine) return;
+        counts.set(engine, (counts.get(engine) ?? 0) + 1);
+      });
+      return Array.from(counts.entries()).map(([engine, count]) => ({ engine, count }));
+    },
+    [agentHealth],
+  );
+
+  const strategySelectOptions = React.useMemo(
+    () => [
+      { value: 'all' as const, label: 'All strategies' },
+      ...strategyOptions.map(({ engine, count }) => ({
+        value: engine,
+        label: `${STRATEGY_META[engine].label} (${count})`,
+      })),
+    ],
+    [strategyOptions],
+  );
+
+  React.useEffect(() => {
+    if (strategyFilter === 'all') return;
+    const stillAvailable = strategyOptions.some((option) => option.engine === strategyFilter);
+    if (!stillAvailable) {
+      setStrategyFilter('all');
+    }
+  }, [strategyFilter, strategyOptions]);
+
+  const agentHealthForDisplay = React.useMemo(() => {
+    if (!agentHealth) return null;
+    if (strategyFilter === 'all') return agentHealth;
+    const filtered = Array.isArray(agentHealth.agents)
+      ? (agentHealth.agents as AgentHealthRow[]).filter(
+          (row) => normalizeStrategyEngine(row.strategyEngine) === strategyFilter,
+        )
+      : [];
+    return { ...agentHealth, agents: filtered };
+  }, [agentHealth, strategyFilter]);
 
   const refreshAll = React.useCallback(async () => {
     setRefreshing(true);
@@ -285,9 +336,12 @@ const OperationsDashboardPage: React.FC = () => {
   const marketsTracked = Array.isArray(overview?.symbols) ? overview?.symbols.length : 0;
 
   const totalTrades24h = React.useMemo(() => {
-    if (!agentHealth?.agents) return 0;
-    return agentHealth.agents.reduce((acc: number, row: any) => acc + Number(row.tradeCount24h || 0), 0);
-  }, [agentHealth]);
+    if (!agentHealthForDisplay?.agents) return 0;
+    return (agentHealthForDisplay.agents as AgentHealthRow[]).reduce(
+      (acc: number, row) => acc + Number(row.tradeCount24h || 0),
+      0,
+    );
+  }, [agentHealthForDisplay]);
 
   const tradesSummary = React.useMemo(() => {
     if (!recentTrades.length) {
@@ -320,7 +374,9 @@ const OperationsDashboardPage: React.FC = () => {
   );
 
   const aggressivenessStats = React.useMemo(() => {
-    const rows = Array.isArray(agentHealth?.agents) ? agentHealth.agents : [];
+    const rows = Array.isArray(agentHealthForDisplay?.agents)
+      ? (agentHealthForDisplay.agents as AgentHealthRow[])
+      : [];
     if (!rows.length)
       return [] as Array<{
         level: AggressivenessLevel;
@@ -399,7 +455,7 @@ const OperationsDashboardPage: React.FC = () => {
         breakevenTrades: number;
         avgTrades: number;
       }>;
-  }, [agentHealth]);
+  }, [agentHealthForDisplay]);
 
   const bestAggressiveness = React.useMemo(() => {
     if (!aggressivenessStats.length) return null;
@@ -595,7 +651,24 @@ const OperationsDashboardPage: React.FC = () => {
 
       <Card
         title={<span style={{ color: '#e2e8f0' }}>Execution success by aggressiveness</span>}
-        extra={bestAggressiveness ? <Tag color={AGGRESSIVENESS_META[bestAggressiveness.level].color}>Top: {bestAggressiveness.label} · {bestAggressiveness.successRate}%</Tag> : undefined}
+        extra={(
+          <Space size={12}>
+            <Select
+              size='small'
+              style={{ minWidth: 180 }}
+              value={strategyFilter}
+              onChange={(value) => setStrategyFilter(value as 'all' | StrategyEngineOption)}
+              options={strategySelectOptions}
+              disabled={strategySelectOptions.length <= 1}
+              dropdownMatchSelectWidth={false}
+            />
+            {bestAggressiveness ? (
+              <Tag color={AGGRESSIVENESS_META[bestAggressiveness.level].color}>
+                Top: {bestAggressiveness.label} · {bestAggressiveness.successRate}%
+              </Tag>
+            ) : null}
+          </Space>
+        )}
         style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
         bodyStyle={{ padding: 24 }}
       >
@@ -766,7 +839,7 @@ const OperationsDashboardPage: React.FC = () => {
         </Col>
         <Col xs={24} xl={24}>
           <AgentHealthTable
-            data={agentHealth}
+            data={agentHealthForDisplay ?? agentHealth}
             loading={agentHealthLoading || refreshing}
             onRefresh={() => void refreshAll()}
             onReselect={handleSmartReselect}
