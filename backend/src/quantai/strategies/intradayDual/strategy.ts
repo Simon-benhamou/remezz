@@ -107,7 +107,7 @@ export class IntradayDualStrategy {
     }
 
     const features = this.computeFeatures(input);
-    const regime = this.router.classify(features);
+    const regime = this.router.classify(input.symbol, features);
     const entries: EntrySignal[] = [];
     const exits: ExitDirective[] = [];
 
