@@ -3,6 +3,12 @@ import { Badge, Button, Card, Col, Row, Space, Statistic, Table, Tag, Tooltip, T
 import type { ColumnsType } from 'antd/es/table';
 import { SyncOutlined } from '../icons';
 import { formatDisplaySymbol } from '../utils/symbols';
+import {
+  STRATEGY_META,
+  normalizeStrategyEngine,
+  resolveStrategyLabel,
+  type StrategyEngineOption,
+} from '../utils/strategies';
 type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
 type AgentHealthFlag = 'no_trades' | 'vos_block' | 'stale';
 type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
@@ -24,6 +30,7 @@ export type AgentHealthRow = {
   flags: AgentHealthFlag[];
   aggressiveness?: AggressivenessLevel | null;
   isSmartAgent?: boolean;
+  strategyEngine?: StrategyEngineOption | null;
 };
 
 export type AgentHealthSnapshot = {
@@ -113,6 +120,22 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
       dataIndex: 'mode',
       key: 'mode',
       render: (value: string | null) => value?.toUpperCase() || '—',
+    },
+    {
+      title: 'Strategy',
+      dataIndex: 'strategyEngine',
+      key: 'strategyEngine',
+      filters: (Object.keys(STRATEGY_META) as StrategyEngineOption[]).map((engine) => ({
+        text: STRATEGY_META[engine].label,
+        value: engine,
+      })),
+      onFilter: (value, record) => normalizeStrategyEngine(record.strategyEngine) === value,
+      render: (_value: StrategyEngineOption | null | undefined, record) => {
+        const engine = normalizeStrategyEngine(record.strategyEngine);
+        const label = resolveStrategyLabel(record.strategyEngine);
+        const color = engine ? STRATEGY_META[engine].color : 'default';
+        return <Tag color={color}>{label}</Tag>;
+      },
     },
     {
       title: 'Smart',

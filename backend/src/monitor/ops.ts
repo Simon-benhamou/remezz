@@ -12,6 +12,7 @@ export type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
 export type AgentHealthFlag = 'no_trades' | 'vos_block' | 'stale';
 
 type AgentAggressiveness = 'conservative' | 'reactive' | 'aggressive';
+type AgentStrategyEngine = 'intraday_dual' | 'meta_adaptive';
 
 export type AgentHealthRow = {
   sessionId: string;
@@ -29,6 +30,7 @@ export type AgentHealthRow = {
   status: AgentHealthStatus;
   flags: AgentHealthFlag[];
   aggressiveness: AgentAggressiveness | null;
+  strategyEngine: AgentStrategyEngine | null;
 };
 
 export type AgentHealthSnapshot = {
@@ -174,6 +176,16 @@ export async function computeAgentHealth(
     return null;
   };
 
+  const normalizeStrategyEngine = (value: unknown): AgentStrategyEngine | null => {
+    if (typeof value !== 'string') return null;
+    const lower = value.toLowerCase();
+    if (lower === 'meta_adaptive') return 'meta_adaptive';
+    if (lower === 'intraday_dual') return 'intraday_dual';
+    if (lower.includes('meta')) return 'meta_adaptive';
+    if (lower.includes('dual')) return 'intraday_dual';
+    return null;
+  };
+
   const agentsHealth: AgentHealthRow[] = activeSessions.map((session) => {
     const telemetry = telemetryBySession.get(session.id) ?? null;
     const agent = agentById.get(session.id) ?? null;
@@ -211,6 +223,17 @@ export async function computeAgentHealth(
     const telemetryAggressiveness = normalizeAggressiveness((telemetry as any)?.profile?.aggressiveness);
     const aggressiveness = runtimeAggressiveness || telemetryAggressiveness || persistedAggressiveness;
 
+    const runtimeStrategy = normalizeStrategyEngine((agent as any)?.profile?.strategyEngine ?? (agent as any)?.strategyEngine);
+    let persistedStrategy: AgentStrategyEngine | null = null;
+    if (session.profileJson && typeof session.profileJson === 'object' && !Array.isArray(session.profileJson)) {
+      const profile = session.profileJson as Record<string, unknown>;
+      persistedStrategy = normalizeStrategyEngine(
+        profile.strategyEngine ?? profile.strategy ?? profile.strategyFamily ?? null,
+      );
+    }
+    const telemetryStrategy = normalizeStrategyEngine((telemetry as any)?.profile?.strategyEngine ?? (telemetry as any)?.strategyEngine);
+    const strategyEngine = runtimeStrategy || telemetryStrategy || persistedStrategy;
+
     const performance = fillPerformance.get(session.id) ?? { wins: 0, losses: 0, breakeven: 0 };
 
     const profile = (session.profileJson as Record<string, unknown>) || {};
@@ -236,6 +259,7 @@ export async function computeAgentHealth(
       flags,
       aggressiveness,
       isSmartAgent,
+      strategyEngine,
     };
   });
 
