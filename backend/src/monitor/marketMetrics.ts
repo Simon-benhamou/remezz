@@ -97,6 +97,8 @@ export interface MarketMetricsSnapshot {
   };
   totals: {
     restFallbacks: number;
+    marketFramesStale: number;
+    marketFramesStaleBySource: Record<FrameSource, number>;
   };
   symbols: Record<string, SymbolMetricsSnapshot>;
   legacy: Record<string, LegacySymbolMetrics>;
@@ -115,6 +117,11 @@ const wsState = {
 
 const totals = {
   restFallbacks: 0,
+  marketFramesStale: 0,
+  marketFramesStaleBySource: {
+    WS: 0,
+    REST: 0,
+  } as Record<FrameSource, number>,
 };
 
 const LOG_THROTTLE_MS = Math.max(0, Number(process.env.MARKET_METRICS_LOG_THROTTLE_MS || 60000));
@@ -248,6 +255,8 @@ export function recordMarketFrame(event: MarketFrameEvent): string | undefined {
     entry.framesStale += 1;
     entry.framesBySource[event.source].stale += 1;
     entry.lastStaleTs = event.receivedTs;
+    totals.marketFramesStale += 1;
+    totals.marketFramesStaleBySource[event.source] += 1;
   } else {
     entry.framesRejected += 1;
     entry.framesBySource[event.source].rejected += 1;
@@ -404,6 +413,8 @@ export function getMarketMetrics(): MarketMetricsSnapshot {
     },
     totals: {
       restFallbacks: totals.restFallbacks,
+      marketFramesStale: totals.marketFramesStale,
+      marketFramesStaleBySource: { ...totals.marketFramesStaleBySource },
     },
     symbols,
     legacy,
