@@ -25,7 +25,10 @@ router.get('/agent-health', async (_req, res) => {
 
 router.get('/events', (req, res) => {
   const limit = Number(req.query.limit ?? 50);
-  const rows = recentOpsEvents(Number.isFinite(limit) ? limit : 50);
+  const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim().length
+    ? req.query.sessionId
+    : undefined;
+  const rows = recentOpsEvents(Number.isFinite(limit) ? limit : 50, { sessionId });
   res.json(rows);
 });
 

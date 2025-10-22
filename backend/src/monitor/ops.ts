@@ -71,9 +71,11 @@ export function recordOpsEvent(evt: { level?: OpsEventLevel; source: string; mes
   if (opsEvents.length > MAX_EVENTS) opsEvents.splice(0, opsEvents.length - MAX_EVENTS);
 }
 
-export function recentOpsEvents(limit = 50) {
-  const slice = opsEvents.slice(-Math.max(1, Math.min(limit, MAX_EVENTS)));
-  return slice.reverse();
+export function recentOpsEvents(limit = 50, opts: { sessionId?: string } = {}) {
+  const windowSize = Math.max(1, Math.min(limit, MAX_EVENTS));
+  const slice = opsEvents.slice(-windowSize);
+  const filtered = opts.sessionId ? slice.filter((row) => row.sessionId === opts.sessionId) : slice;
+  return filtered.reverse();
 }
 
 export function clearOpsEvents() {

@@ -33,6 +33,8 @@ import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
 import AgentStatePanel from '../components/AgentStatePanel';
+import StrategyChecklistCard from '../components/StrategyChecklistCard';
+import type { StrategySnapshot } from '../types/strategies';
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
 import OrdersTable from '../components/OrdersTable';
 import TradesTable from '../components/TradesTable';
@@ -137,6 +139,7 @@ export default function SessionCockpitPage() {
 
   // Tertiary data states (Phase 3)
   const [alerts, setAlerts] = React.useState<any[]>([]);
+  const [opsEvents, setOpsEvents] = React.useState<any[]>([]);
   const [activityOpen, setActivityOpen] = React.useState(false);
   const [rearming, setRearming] = React.useState(false);
   const [reselecting, setReselecting] = React.useState(false);
@@ -340,6 +343,12 @@ export default function SessionCockpitPage() {
           setAlerts(Array.isArray(alertList) ? alertList : []);
         } catch (err) {
           console.warn('Refresh alerts failed', err);
+        }
+        try {
+          const logs = await api.getOpsEvents(40, sessionStatus.session.id);
+          setOpsEvents(Array.isArray(logs) ? logs : []);
+        } catch (err) {
+          console.warn('Refresh ops events failed', err);
         }
       }
     } finally {
@@ -617,6 +626,23 @@ export default function SessionCockpitPage() {
     };
   }, [sessionId]);
 
+  React.useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const loadLogs = async () => {
+      try {
+        const rows = await api.getOpsEvents(40, sessionId);
+        if (!cancelled) setOpsEvents(Array.isArray(rows) ? rows : []);
+      } catch {}
+    };
+    loadLogs();
+    const timer = setInterval(loadLogs, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [sessionId]);
+
   // WS subscription dedicated to this monitor
   React.useEffect(() => {
     if (!sessionId || !symbol) return; // wait until symbol known to subscribe correctly
@@ -813,8 +839,23 @@ export default function SessionCockpitPage() {
       });
     });
 
+    (opsEvents || []).forEach((evt: any, index: number) => {
+      const ts = toTs(evt?.ts || evt?.createdAt);
+      if (!ts) return;
+      const level = String(evt?.level || '').toLowerCase();
+      const tone = level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'success' ? 'success' : 'info';
+      items.push({
+        id: `log-${evt?.id ?? index}-${ts}`,
+        ts,
+        title: evt?.source || 'Agent log',
+        description: evt?.message || evt?.details?.message || '',
+        meta: level ? level.toUpperCase() : undefined,
+        tone,
+      });
+    });
+
     return items.sort((a, b) => b.ts - a.ts).slice(0, 60);
-  }, [alerts, filteredOrders, filteredTrades, status?.symbol]);
+  }, [alerts, filteredOrders, filteredTrades, opsEvents, status?.symbol]);
 
   const startBalance = Number(status?.session?.startBalanceUsd ?? status?.session?.startBalance ?? 0);
   const statsMeta = (kpi?.stats ?? {}) as Record<string, any>;
@@ -1162,21 +1203,76 @@ export default function SessionCockpitPage() {
               </Card>
 </Row>
         <Row gutter={[24, 24]}>
-      
-            <Card title="Agent diagnostics" bordered={false} className="session-section-card">
-              {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
-                <AgentStatePanel
-                  agent={agent}
-                  symbol={status?.symbol}
-                  lastPrice={status?.price}
-                  sessionId={status?.session?.id}
-                  margin={marginHealth?.snapshots?.[0]}
-                  marginHistory={marginHealth?.snapshots}
-                />
+          <Card title="Agent diagnostics" bordered={false} className="session-section-card">
+            {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
+              <AgentStatePanel
+                agent={agent}
+                symbol={status?.symbol}
+                lastPrice={status?.price}
+                sessionId={status?.session?.id}
+                margin={marginHealth?.snapshots?.[0]}
+                marginHistory={marginHealth?.snapshots}
+              />
+            ) : (
+              <Skeleton active paragraph={{ rows: 6 }} />
+            )}
+          </Card>
+        </Row>
+
+        <Row gutter={[24, 24]}>
+          <Col xs={24} lg={12}>
+            <Card title="Strategy monitoring" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+                <StrategyChecklistCard strategy={agent?.strategy as StrategySnapshot | undefined} />
               ) : (
                 <Skeleton active paragraph={{ rows: 6 }} />
               )}
             </Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card title="Recent agent logs" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+                opsEvents.length > 0 ? (
+                  <List
+                    dataSource={opsEvents.slice(0, 8)}
+                    renderItem={(evt: any) => {
+                      const tsRaw = evt?.ts || evt?.createdAt;
+                      const ts = tsRaw ? new Date(tsRaw) : null;
+                      const timeLabel = ts && !Number.isNaN(ts.getTime())
+                        ? ts.toLocaleTimeString(undefined, { hour12: false })
+                        : '';
+                      const level = String(evt?.level || '').toLowerCase();
+                      const color = level === 'error'
+                        ? 'red'
+                        : level === 'warn'
+                          ? 'orange'
+                          : level === 'success'
+                            ? 'green'
+                            : 'blue';
+                      return (
+                        <List.Item key={evt?.id ?? `${timeLabel}-${level}`} style={{ padding: '8px 0' }}>
+                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                            <Space size={8} align="center" wrap>
+                              <Tag color={color}>{(evt?.level || 'INFO').toUpperCase()}</Tag>
+                              <Text style={{ color: '#e2e8f0', fontWeight: 500 }}>{evt?.source || 'Agent'}</Text>
+                              {timeLabel && <Text type="secondary" style={{ fontSize: 12 }}>{timeLabel}</Text>}
+                            </Space>
+                            <Text style={{ color: '#cbd5f5' }}>
+                              {evt?.message || evt?.details?.message || '—'}
+                            </Text>
+                          </Space>
+                        </List.Item>
+                      );
+                    }}
+                  />
+                ) : (
+                  <Text type="secondary">No recent logs captured.</Text>
+                )
+              ) : (
+                <Skeleton active paragraph={{ rows: 5 }} />
+              )}
+            </Card>
+          </Col>
         </Row>
 
         <Row gutter={[24, 24]}>
