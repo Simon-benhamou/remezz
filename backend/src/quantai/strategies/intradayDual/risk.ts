@@ -1,6 +1,7 @@
 import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
 import { loadIntradayConfig } from './config/index.js';
 import type { RegimeLabel } from './types.js';
+import type { Side } from './history.js';
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 
 export type PositionContext = {
@@ -58,6 +59,56 @@ export class VolatilitySizer {
       leverage: cappedLeverage,
     };
   }
+}
+
+export type Regime = 'BOM' | 'MR';
+export type SRKey = `${Regime}:${Side}`;
+
+export class DirectionalPressure {
+  private readonly buckets = new Map<string, Map<SRKey, number[]>>();
+  private static readonly HALF_LIFE_MS = 30 * 60_000;
+  private static readonly MAX_SAMPLES = 5;
+
+  recordStop(symbol: string, regime: Regime, side: Side, ts: number): void {
+    const key = `${regime}:${side}` as SRKey;
+    const store = this.getStore(symbol);
+    const list = store.get(key) ?? [];
+    list.push(ts);
+    while (list.length > DirectionalPressure.MAX_SAMPLES) {
+      list.shift();
+    }
+    store.set(key, list);
+  }
+
+  recentPressure(symbol: string, regime: Regime, side: Side, now: number): number {
+    const key = `${regime}:${side}` as SRKey;
+    const store = this.buckets.get(symbol);
+    if (!store) return 0;
+    const list = store.get(key);
+    if (!list || !list.length) return 0;
+    let acc = 0;
+    for (const ts of list) {
+      const age = Math.max(0, now - ts);
+      const weight = Math.pow(0.5, age / DirectionalPressure.HALF_LIFE_MS);
+      acc += weight;
+    }
+    return Math.max(0, Math.min(1, acc));
+  }
+
+  private getStore(symbol: string): Map<SRKey, number[]> {
+    const existing = this.buckets.get(symbol);
+    if (existing) {
+      return existing;
+    }
+    const map = new Map<SRKey, number[]>();
+    this.buckets.set(symbol, map);
+    return map;
+  }
+}
+
+export function computeSidePenalty(pressure: number): number {
+  const clamped = Math.max(0, Math.min(1, pressure));
+  return Math.max(0.6, Math.min(1, 1 - 0.25 * clamped));
 }
 
 export class GuardrailMonitor {

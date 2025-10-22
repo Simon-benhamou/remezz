@@ -92,6 +92,7 @@ export type RegimeSignal = {
   label: RegimeLabel;
   confidence: number;
   reason: string;
+  biasAgeMs?: number;
 };
 
 export type EntrySignal = {
