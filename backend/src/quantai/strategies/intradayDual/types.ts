@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
 
 export type Timeframe = '1m' | '5m' | '15m';
 

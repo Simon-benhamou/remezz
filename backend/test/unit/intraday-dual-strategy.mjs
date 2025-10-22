@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 
 process.env.UNIT_TEST_MODE = 'true';
 
-const { IntradayDualStrategy } = await import('../../dist/src/quantai/intraday/strategy.js');
-const { overrideIntradayConfig, loadIntradayConfig } = await import('../../dist/src/quantai/intraday/config/index.js');
-const { PreciseDecimal } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+const { IntradayDualStrategy } = await import('../../dist/src/quantai/strategies/intradayDual/strategy.js');
+const { overrideIntradayConfig, loadIntradayConfig } = await import('../../dist/src/quantai/strategies/intradayDual/config/index.js');
+const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 function cloneConfig(cfg) {
   return JSON.parse(JSON.stringify(cfg));

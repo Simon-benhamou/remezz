@@ -379,3 +379,43 @@ export class CircuitBreaker {
     };
   }
 }
+
+export class DisabledCircuitBreaker extends CircuitBreaker {
+  constructor(cfg: QuantAIRiskConfig) {
+    super(cfg);
+    super.clearCooldown();
+  }
+
+  canOpenTrade(): CircuitBreakerDecision {
+    return { allowed: true, cooldownUntil: null };
+  }
+
+  onBeforeOpen(): void {}
+
+  onTradeResult(): void {}
+
+  sizeMultiplier(): number {
+    return 1;
+  }
+
+  enforceLossCooldown(now: Date, overrideMinutes?: number): Date {
+    return overrideMinutes ? new Date(now.getTime()) : now;
+  }
+
+  clearCooldown(): void {}
+
+  getState(): CircuitBreakerState {
+    return {
+      consecutiveLosses: 0,
+      consecutiveWins: 0,
+      tradesToday: 0,
+      equityStartDay: null,
+      cooldownUntil: null,
+      lastTradeDay: null,
+      dayStartAt: null,
+      dailyLossActive: false,
+      dailyLossTriggeredAt: null,
+      dailyLossRecoveryWinsRemaining: 0,
+    };
+  }
+}

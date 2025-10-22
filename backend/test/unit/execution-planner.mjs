@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 process.env.UNIT_TEST_MODE = 'true';
 
-const { ExecutionPlanner } = await import('../../dist/src/quantai/intraday/execution.js');
+const { ExecutionPlanner } = await import('../../dist/src/quantai/strategies/intradayDual/execution.js');
 
 const planner = new ExecutionPlanner();
 

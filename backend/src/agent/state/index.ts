@@ -19,6 +19,7 @@ import { getAgentRecentWinRate } from '../../services/performance/winrate.js';
 import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
 import type { StrategyGuardrail } from '../../services/strategyHealth.js';
 import { getConfig, getModeParams, type AgentAggressiveness, type ModeParams } from '../../utils/env.js';
+import { areAgentGuardsDisabled } from '../../utils/agentGuards.js';
 import { clampBudgetFraction, resolveBudgetFraction } from '../../utils/budget.js';
 import { computeLeverageGuardForSymbol } from '../../utils/riskGuards.js';
 import { applyHysteresis, blendRR, DEFAULT_RR_EXPECTANCY_CONFIG, resolveRrExpectancyConfig, rrMinFromWinrate, type RRExpectancyConfig } from '../../risk/rrExpectancy.js';
@@ -26,8 +27,8 @@ import { broadcast } from '../../ws/hub.js';
 import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, persistCircuitBreakerState } from '../persistence.js';
 import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
-import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, EntryFilters, PositionSizer, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
-import { PreciseDecimal } from '../../quantai/strategy/metaAdaptiveAgent.js';
+import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
+import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import type { LiquidityType } from '../../quantai/index.js';
 import {
   evaluateRecognizedStrategies,
@@ -35,9 +36,9 @@ import {
   RecognizedStrategyId,
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
-} from '../../quantai/strategy/recognizedStrategies.js';
+} from '../../quantai/strategies/metaAdaptive/recognizedStrategies.js';
 import { chooseExecutionPlan, ExecutionPlan } from '../executionPlanner.js';
-import type { EntryRelaxation } from '../../quantai/strategy/entryFilters.js';
+import type { EntryRelaxation } from '../../quantai/strategies/metaAdaptive/entryFilters.js';
 import type { CircuitBreakerDecision, CircuitBreakerState, ExitArchetype } from '../../quantai/index.js';
 import { StrategyHealth } from '../../quantai/services/strategyHealth.js';
 import { createMarginAdvisor } from '../../risk/marginTools.js';
@@ -408,6 +409,9 @@ export class ReboundRejectionAgent {
   }
 
   applyStrategyHealth(guardrail: StrategyGuardrail): void {
+    if (this.guardrailsDisabled) {
+      return;
+    }
     const now = Date.now();
     const boundedRisk = Math.max(0.3, Math.min(1, guardrail.riskMultiplier));
     const boundedAtr = Math.max(1, Math.min(2.5, guardrail.atrMultiplier));
@@ -424,6 +428,7 @@ export class ReboundRejectionAgent {
   }
 
   private applyDailyLossPenalty(tier: string | null, trigger: Date | null): void {
+    if (this.guardrailsDisabled) return;
     if (!tier) return;
     const marker = trigger?.getTime() ?? null;
     if (marker && this.lastDailyLossTriggerMarker === marker) return;
@@ -469,6 +474,7 @@ export class ReboundRejectionAgent {
   public performanceMetrics: PerformanceMetrics | null = null;
   public strategyPerformance: Map<string, StrategyPerformance> = new Map();
   public quantConfig = getQuantAIConfig();
+  private guardrailsDisabled = areAgentGuardsDisabled();
   public circuitBreaker = this.createCircuitBreaker();
   public entryFilters = new EntryFilters(this.quantConfig.filters);
   public positionSizer = new PositionSizer(this.quantConfig.risk.baseRiskPerTradePct);
@@ -486,6 +492,9 @@ export class ReboundRejectionAgent {
   } | null = null;
 
   public createCircuitBreaker(initialState?: Partial<CircuitBreakerState> | null): CircuitBreaker {
+    if (this.guardrailsDisabled) {
+      return new DisabledCircuitBreaker(this.quantConfig.risk);
+    }
     return new CircuitBreaker(this.quantConfig.risk, {
       initialState,
       onStateChange: (state) => this.handleCircuitBreakerStateChange(state),
@@ -502,7 +511,26 @@ export class ReboundRejectionAgent {
   async activate(profile: ActivationProfile) {
     // PREFLIGHT
     this.state = 'PREFLIGHT';
+    this.guardrailsDisabled = areAgentGuardsDisabled();
     this.quantConfig = reloadQuantAIConfig();
+    if (this.guardrailsDisabled) {
+      this.quantConfig = {
+        ...this.quantConfig,
+        risk: {
+          ...this.quantConfig.risk,
+          maxConsecutiveLosses: Number.MAX_SAFE_INTEGER,
+          cooldownMinutes: 0,
+          dailyLossLimitPct: Number.POSITIVE_INFINITY,
+          dailyTradeLimit: Number.MAX_SAFE_INTEGER,
+          reduceSizeAfterLosses: false,
+          sizeReductionAfterLosses: Number.MAX_SAFE_INTEGER,
+          sizeReductionFactor: 1,
+          dailyLossRiskReductionMultiplier: 1,
+          dailyLossCooldownMinutes: 0,
+          dailyLossRecoveryWins: 0,
+        },
+      };
+    }
     this.tradeCadenceConfig = null;
     const mode = profile.aggressiveness ?? 'reactive';
     const modeParams = getModeParams(mode);
@@ -7615,6 +7643,7 @@ export class ReboundRejectionAgent {
     const cfg = getConfig();
     const now = Date.now();
     const aggressiveness = this.profile?.aggressiveness || 'reactive';
+    const guardrailsDisabled = this.guardrailsDisabled;
 
     // Basic state checks
     checks.hasPosition = {
@@ -7656,17 +7685,23 @@ export class ReboundRejectionAgent {
 
     const modeParams = getModeParams(aggressiveness);
     const cadence = this.evaluateTradeCadence('readiness');
-    const baseCooldownMs = cadence.cooldownMs ?? modeParams?.tradeCooldownMs ?? cfg.TRADE_COOLDOWN_MS ?? 0;
+    const baseCooldownMs = guardrailsDisabled ? 0 : cadence.cooldownMs ?? modeParams?.tradeCooldownMs ?? cfg.TRADE_COOLDOWN_MS ?? 0;
     const timeSinceLastExit = this.lastExitTime > 0 ? now - this.lastExitTime : Number.POSITIVE_INFINITY;
-    const cooldownActive = this.lastExitTime > 0 && timeSinceLastExit < baseCooldownMs;
+    const cooldownActive = guardrailsDisabled ? false : this.lastExitTime > 0 && timeSinceLastExit < baseCooldownMs;
     const cooldownRemainingSec = cooldownActive ? (baseCooldownMs - timeSinceLastExit) / 1000 : 0;
     checks.tradeCooldown = {
       status: cooldownActive ? 'FAIL' : 'PASS',
-      reason: cooldownActive
+      reason: guardrailsDisabled
+        ? 'Cooldown checks disabled'
+        : cooldownActive
         ? `Trade cooldown active: ${cooldownRemainingSec.toFixed(0)}s remaining`
         : 'Cooldown satisfied - ready for next entry',
-      message: cooldownActive ? `${cooldownRemainingSec.toFixed(0)}s remaining` : 'Cooldown cleared',
-      code: cooldownActive ? 'cooldown.active' : 'cooldown.clear',
+      message: guardrailsDisabled
+        ? 'Cooldown bypassed'
+        : cooldownActive
+          ? `${cooldownRemainingSec.toFixed(0)}s remaining`
+          : 'Cooldown cleared',
+      code: guardrailsDisabled ? 'cooldown.disabled' : cooldownActive ? 'cooldown.active' : 'cooldown.clear',
       details: {
         remainingSec: Number(cooldownRemainingSec.toFixed(0)),
         baseCooldownMs,
@@ -7695,16 +7730,25 @@ export class ReboundRejectionAgent {
 
     // Risk management checks (mode-adaptive limits)
     const limits = defaultLimits(aggressiveness);
-    const maxDailyTrades = Math.max(1, cadence.maxTradesPerDay || limits.maxTradesPerDay);
-    const maxConsecStops = limits.maxConsecutiveStops;
+    const maxDailyTrades = guardrailsDisabled
+      ? Number.MAX_SAFE_INTEGER
+      : Math.max(1, cadence.maxTradesPerDay || limits.maxTradesPerDay);
+    const maxConsecStops = guardrailsDisabled ? Number.MAX_SAFE_INTEGER : limits.maxConsecutiveStops;
 
+    const tradesToday = this.tradesToday || 0;
     checks.dailyTradeLimit = {
-      status: (this.tradesToday || 0) < maxDailyTrades ? 'PASS' : 'FAIL',
-      reason: (this.tradesToday || 0) < maxDailyTrades
-        ? `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - within limit (${aggressiveness} mode)`
-        : `Daily trades: ${this.tradesToday || 0}/${maxDailyTrades} - limit exceeded for risk management`,
-      message: `Trades today: ${this.tradesToday || 0}`,
-      code: (this.tradesToday || 0) < maxDailyTrades ? 'limits.daily_ok' : 'limits.daily_exceeded',
+      status: guardrailsDisabled || tradesToday < maxDailyTrades ? 'PASS' : 'FAIL',
+      reason: guardrailsDisabled
+        ? 'Daily trade limits disabled'
+        : tradesToday < maxDailyTrades
+          ? `Daily trades: ${tradesToday}/${maxDailyTrades} - within limit (${aggressiveness} mode)`
+          : `Daily trades: ${tradesToday}/${maxDailyTrades} - limit exceeded for risk management`,
+      message: `Trades today: ${tradesToday}`,
+      code: guardrailsDisabled
+        ? 'limits.daily_disabled'
+        : tradesToday < maxDailyTrades
+          ? 'limits.daily_ok'
+          : 'limits.daily_exceeded',
       details: {
         stage: cadence.stageLabel,
         stageIndex: cadence.stageIndex,
@@ -7715,12 +7759,18 @@ export class ReboundRejectionAgent {
     };
 
     checks.consecutiveStopsLimit = {
-      status: (this.consecutiveStops || 0) < maxConsecStops ? 'PASS' : 'FAIL',
-      reason: (this.consecutiveStops || 0) < maxConsecStops
-        ? `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - acceptable loss streak (${aggressiveness} mode)`
-        : `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - circuit breaker activated`,
+      status: guardrailsDisabled || (this.consecutiveStops || 0) < maxConsecStops ? 'PASS' : 'FAIL',
+      reason: guardrailsDisabled
+        ? 'Consecutive stop limits disabled'
+        : (this.consecutiveStops || 0) < maxConsecStops
+          ? `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - acceptable loss streak (${aggressiveness} mode)`
+          : `Consecutive stops: ${this.consecutiveStops || 0}/${maxConsecStops} - circuit breaker activated`,
       message: `Consecutive stops: ${this.consecutiveStops || 0}`,
-      code: (this.consecutiveStops || 0) < maxConsecStops ? 'limits.stops_ok' : 'limits.stops_exceeded',
+      code: guardrailsDisabled
+        ? 'limits.stops_disabled'
+        : (this.consecutiveStops || 0) < maxConsecStops
+          ? 'limits.stops_ok'
+          : 'limits.stops_exceeded',
     };
 
     // Liquidity guard (mirrors entry gate)
@@ -8819,6 +8869,7 @@ export class ReboundRejectionAgent {
   }
 
   public diagnosticCheckAllows(checks: any, key: string): boolean {
+    if (this.guardrailsDisabled) return true;
     const detail = this.lookupCheckDetail(checks, key);
     if (!detail || typeof detail !== 'object') return true;
     const rawStatus = (detail as any).status;
@@ -10944,6 +10995,7 @@ export class ReboundRejectionAgent {
   }
   
   public scheduleReactivation(reason: string, delayOverrideMs?: number): void {
+    if (this.guardrailsDisabled) return;
     if (!this.profile || !this.plan) return;
 
     const cfg = getConfig();

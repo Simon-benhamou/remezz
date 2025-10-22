@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 const { computeFeeSummary } = await import('../../dist/src/analytics/feeAnalyzer.js');
-const { PreciseDecimal } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 const dataPath = path.resolve(process.cwd(), 'data/order-history/oct18-19-agent-orders.json');
 const payload = JSON.parse(fs.readFileSync(dataPath, 'utf8'));

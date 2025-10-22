@@ -7,7 +7,7 @@ process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
 const { runMetaAdaptiveCalibration } = await import('../../dist/src/sim/metaAdaptiveCalibrator.js');
-const { PreciseDecimal } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 function decimal(value) {
   return new PreciseDecimal(value);

@@ -1,5 +1,5 @@
 import { getEnv } from '../../config/env.js';
-import { PreciseDecimal } from '../../quantai/strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 
 export interface CostModelParams {
   notionalUsd: PreciseDecimal | number;

@@ -611,6 +611,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       sizingMode?: 'risk'|'budget';
       dynamicLeverage?: boolean;
       minLeverage?: number;
+      strategyEngine?: 'intraday_dual' | 'meta_adaptive';
     };
 
     const sessionId = body.sessionId;
@@ -657,6 +658,11 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       ? body.startBalanceUsd
       : Number(existing.startBalanceUsd ?? currentProfile.startBalanceUsd ?? 0) || undefined;
 
+    const requestedEngine = body.strategyEngine ?? currentProfile.strategyEngine ?? 'intraday_dual';
+    const strategyEngine: 'intraday_dual' | 'meta_adaptive' = requestedEngine === 'meta_adaptive'
+      ? 'meta_adaptive'
+      : 'intraday_dual';
+
     const updatedProfileJson = {
       ...currentProfile,
       riskPerTradePct: safeRiskPct,
@@ -673,6 +679,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
         : (currentProfile.sizingMode || (getConfig().SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget')),
       dynamicLeverage: body.dynamicLeverage !== undefined ? !!body.dynamicLeverage : (currentProfile.dynamicLeverage !== false),
       minLeverage: (()=>{ const m = Number(body.minLeverage ?? currentProfile.minLeverage ?? 1); return Math.max(1, Math.min(m, resolvedMaxLev)); })(),
+      strategyEngine,
       timestamp: new Date().toISOString()
     };
 
@@ -706,6 +713,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       sizingMode: updatedProfileJson.sizingMode,
       dynamicLeverage: updatedProfileJson.dynamicLeverage,
       minLeverage: updatedProfileJson.minLeverage,
+      strategyEngine,
     } as any;
 
     await AgentHub.activate(sessionId, agentProfile).catch((err) => {

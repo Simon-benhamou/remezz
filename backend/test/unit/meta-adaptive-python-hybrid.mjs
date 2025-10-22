@@ -6,8 +6,8 @@ process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
-const { registerAdaptiveTradeEntry, registerAdaptiveTradeOutcome } = await import('../../dist/src/quantai/strategy/recognizedStrategies.js');
-const { metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+const { registerAdaptiveTradeEntry, registerAdaptiveTradeOutcome } = await import('../../dist/src/quantai/strategies/metaAdaptive/recognizedStrategies.js');
+const { metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 metaAdaptiveStrategyAgent.reset();
 

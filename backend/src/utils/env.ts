@@ -47,6 +47,7 @@ export type Cfg = {
   LLM_DISABLE: boolean;         // disable LLM calls (use heuristic fallbacks)
   LLM_MIN_INTERVAL_MS: number;  // min spacing between LLM calls (global)
   LLM_CACHE_TTL_MIN: number;    // default cache TTL for identical prompts
+  DISABLE_AGENT_GUARDS: boolean; // bypass cooldowns, trade caps and defensive throttles
   // Agent invalidation & trailing
   BREAKOUT_CONFIRM_TICKS: number; // number of consecutive ticks outside zone to confirm breakout
   BREAKOUT_HYSTERESIS_PCT: number; // percent beyond zone to consider breakout (e.g. 0.15)
@@ -284,37 +285,51 @@ export interface ModeParams {
 
 export function getModeParams(mode: AgentAggressiveness = 'reactive'): ModeParams {
   const cfg = getConfig();
-  
-  switch (mode) {
-    case 'conservative':
-      return {
-        riskPct: cfg.CONSERVATIVE_RISK_PCT,
-        minAtrPct: cfg.CONSERVATIVE_MIN_ATR_PCT,
-        maxTradesPerDay: cfg.CONSERVATIVE_MAX_TRADES_PER_DAY,
-        maxConsecutiveStops: cfg.CONSERVATIVE_MAX_CONSECUTIVE_STOPS,
-        dailyLossLimitPct: cfg.CONSERVATIVE_DAILY_LOSS_LIMIT_PCT,
-        tradeCooldownMs: cfg.CONSERVATIVE_TRADE_COOLDOWN_MS,
-      };
-    case 'aggressive':
-      return {
-        riskPct: cfg.AGGRESSIVE_RISK_PCT,
-        minAtrPct: cfg.AGGRESSIVE_MIN_ATR_PCT,
-        maxTradesPerDay: cfg.AGGRESSIVE_MAX_TRADES_PER_DAY,
-        maxConsecutiveStops: cfg.AGGRESSIVE_MAX_CONSECUTIVE_STOPS,
-        dailyLossLimitPct: cfg.AGGRESSIVE_DAILY_LOSS_LIMIT_PCT,
-        tradeCooldownMs: cfg.AGGRESSIVE_TRADE_COOLDOWN_MS,
-      };
-    case 'reactive':
-    default:
-      return {
-        riskPct: cfg.REACTIVE_RISK_PCT,
-        minAtrPct: cfg.REACTIVE_MIN_ATR_PCT,
-        maxTradesPerDay: cfg.REACTIVE_MAX_TRADES_PER_DAY,
-        maxConsecutiveStops: cfg.REACTIVE_MAX_CONSECUTIVE_STOPS,
-        dailyLossLimitPct: cfg.REACTIVE_DAILY_LOSS_LIMIT_PCT,
-        tradeCooldownMs: cfg.REACTIVE_TRADE_COOLDOWN_MS,
-      };
+
+  const base: ModeParams = (() => {
+    switch (mode) {
+      case 'conservative':
+        return {
+          riskPct: cfg.CONSERVATIVE_RISK_PCT,
+          minAtrPct: cfg.CONSERVATIVE_MIN_ATR_PCT,
+          maxTradesPerDay: cfg.CONSERVATIVE_MAX_TRADES_PER_DAY,
+          maxConsecutiveStops: cfg.CONSERVATIVE_MAX_CONSECUTIVE_STOPS,
+          dailyLossLimitPct: cfg.CONSERVATIVE_DAILY_LOSS_LIMIT_PCT,
+          tradeCooldownMs: cfg.CONSERVATIVE_TRADE_COOLDOWN_MS,
+        };
+      case 'aggressive':
+        return {
+          riskPct: cfg.AGGRESSIVE_RISK_PCT,
+          minAtrPct: cfg.AGGRESSIVE_MIN_ATR_PCT,
+          maxTradesPerDay: cfg.AGGRESSIVE_MAX_TRADES_PER_DAY,
+          maxConsecutiveStops: cfg.AGGRESSIVE_MAX_CONSECUTIVE_STOPS,
+          dailyLossLimitPct: cfg.AGGRESSIVE_DAILY_LOSS_LIMIT_PCT,
+          tradeCooldownMs: cfg.AGGRESSIVE_TRADE_COOLDOWN_MS,
+        };
+      case 'reactive':
+      default:
+        return {
+          riskPct: cfg.REACTIVE_RISK_PCT,
+          minAtrPct: cfg.REACTIVE_MIN_ATR_PCT,
+          maxTradesPerDay: cfg.REACTIVE_MAX_TRADES_PER_DAY,
+          maxConsecutiveStops: cfg.REACTIVE_MAX_CONSECUTIVE_STOPS,
+          dailyLossLimitPct: cfg.REACTIVE_DAILY_LOSS_LIMIT_PCT,
+          tradeCooldownMs: cfg.REACTIVE_TRADE_COOLDOWN_MS,
+        };
+    }
+  })();
+
+  if (cfg.DISABLE_AGENT_GUARDS) {
+    return {
+      ...base,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxConsecutiveStops: Number.MAX_SAFE_INTEGER,
+      dailyLossLimitPct: Number.POSITIVE_INFINITY,
+      tradeCooldownMs: 0,
+    };
   }
+
+  return base;
 }
 
 export function getConfig(): Cfg {
@@ -423,6 +438,7 @@ export function getConfig(): Cfg {
     LLM_DISABLE: (e.LLM_DISABLE || "false") === "true",
     LLM_MIN_INTERVAL_MS: Number(e.LLM_MIN_INTERVAL_MS || "1000"), // réduit à 1s pour plus de réactivité
     LLM_CACHE_TTL_MIN: Number(e.LLM_CACHE_TTL_MIN || "30"), // réduit de 60 à 30 min
+    DISABLE_AGENT_GUARDS: (e.DISABLE_AGENT_GUARDS || "false") === "true",
     BREAKOUT_CONFIRM_TICKS: Number(e.BREAKOUT_CONFIRM_TICKS || "2"),
     BREAKOUT_HYSTERESIS_PCT: Number(e.BREAKOUT_HYSTERESIS_PCT || "0.15"),
     REVERSE_ON_BREAKOUT: (e.REVERSE_ON_BREAKOUT || "false") === "true",

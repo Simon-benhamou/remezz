@@ -40,6 +40,7 @@ const { Text, Title } = Typography;
 type ViewMode = 'cards' | 'table';
 
 type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
+type StrategyEngineOption = 'intraday_dual' | 'meta_adaptive';
 
 type AgentSession = {
   id: string;
@@ -60,6 +61,7 @@ type AgentSession = {
   strategy?: string | null;
   strategyFamily?: string | null;
   isSmartAgent?: boolean;
+  strategyEngine?: StrategyEngineOption | null;
 };
 
 type CreationFormShape = {
@@ -69,6 +71,7 @@ type CreationFormShape = {
   maxLeverage: number;
   aggressiveness: AggressivenessLevel;
   mode: AppMode;
+  strategyEngine: StrategyEngineOption;
 };
 
 const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyLoss: number; note: string }> = {
@@ -87,6 +90,16 @@ const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyL
     dailyLoss: 3.8,
     note: 'Higher swings allowed for faster compounding.',
   },
+};
+
+const STRATEGY_LABELS: Record<StrategyEngineOption, string> = {
+  intraday_dual: 'Intraday Dual',
+  meta_adaptive: 'Meta Adaptive',
+};
+
+const STRATEGY_DESCRIPTIONS: Record<StrategyEngineOption, string> = {
+  intraday_dual: 'Momentum and mean-reversion tactics with rapid execution, tuned for scalping intraday orderflow.',
+  meta_adaptive: 'Reinforcement-guided swing entries blending technical and AI signals for adaptive positioning.',
 };
 
 const commonSymbols = [
@@ -127,6 +140,12 @@ const formatPercent = (value?: number | null, fractionDigits = 1) => {
 };
 
 const resolveStrategyLabel = (session: AgentSession) => {
+  const engine = session.strategyEngine
+    || (session.profile as any)?.strategyEngine
+    || null;
+  if (engine && STRATEGY_LABELS[engine as StrategyEngineOption]) {
+    return STRATEGY_LABELS[engine as StrategyEngineOption];
+  }
   return (
     session.strategy ||
     session.strategyFamily ||
@@ -192,6 +211,9 @@ async function enrichSession(session: AgentSession): Promise<AgentSession> {
         : roiPct;
     const rawWinRate = Number(perf?.winRate ?? 0);
     const normalizedWinRate = rawWinRate > 0 && rawWinRate <= 1 ? rawWinRate * 100 : rawWinRate;
+    const resolvedEngine = ((session.profile as any)?.strategyEngine as StrategyEngineOption)
+      || (session.strategyEngine as StrategyEngineOption)
+      || null;
 
     return {
       ...session,
@@ -200,6 +222,7 @@ async function enrichSession(session: AgentSession): Promise<AgentSession> {
       netRoiPct,
       winRate: normalizedWinRate,
       totalTrades: perf?.totalTrades ?? 0,
+      strategyEngine: resolvedEngine,
     };
   } catch (error) {
     console.warn('Failed to enrich session metrics', error);
@@ -237,6 +260,7 @@ export default function SessionsPage() {
 
   const smartAutoMode = Form.useWatch('smartAutoMode', form);
   const aggressiveness = (Form.useWatch('aggressiveness', form) as AggressivenessLevel) ?? 'conservative';
+  const strategyEngine = (Form.useWatch('strategyEngine', form) as StrategyEngineOption) ?? 'meta_adaptive';
   const riskPreset = AGGRESSIVENESS_PRESETS[aggressiveness];
 
   const fetchSessions = React.useCallback(
@@ -286,6 +310,10 @@ export default function SessionsPage() {
           Number((session.profile as any)?.requestedMaxLeverage ?? (session.profile as any)?.maxLeverage ?? 4) || 4,
         aggressiveness: ((session.profile as any)?.aggressiveness as AggressivenessLevel) ?? 'conservative',
         mode: session.mode,
+        strategyEngine:
+          ((session.profile as any)?.strategyEngine as StrategyEngineOption)
+            || (session.strategyEngine as StrategyEngineOption)
+            || 'meta_adaptive',
       });
       setModalOpen(true);
     },
@@ -352,6 +380,7 @@ export default function SessionsPage() {
         startBalanceUsd: values.startBalanceUsd,
         maxLeverage: values.maxLeverage,
         aggressiveness: values.aggressiveness,
+        strategyEngine: values.strategyEngine,
       } as Record<string, any>;
 
       if (!values.smartAutoMode) {
@@ -852,6 +881,7 @@ export default function SessionsPage() {
             maxLeverage: 4,
             aggressiveness: 'conservative',
             mode: currentMode,
+            strategyEngine: 'meta_adaptive',
           }}
         >
           <Form.Item
@@ -910,6 +940,33 @@ export default function SessionsPage() {
               ]}
             />
           </Form.Item>
+
+          <Form.Item
+            label={<Text style={{ color: '#e2e8f0' }}>Strategy engine</Text>}
+            name="strategyEngine"
+            rules={[{ required: true, message: 'Select a strategy engine' }]}
+          >
+            <Select options={Object.entries(STRATEGY_LABELS).map(([value, label]) => ({ value, label }))} />
+          </Form.Item>
+
+          <div
+            style={{
+              background: 'rgba(30, 41, 59, 0.65)',
+              border: '1px solid rgba(148, 163, 184, 0.22)',
+              borderRadius: 12,
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              marginBottom: 16,
+            }}
+          >
+            <Text style={{ color: '#f8fafc', fontWeight: 600 }}>Selected engine</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{STRATEGY_LABELS[strategyEngine]}</Text>
+            <Text style={{ color: 'rgba(148, 163, 184, 0.65)', fontSize: 12 }}>
+              {STRATEGY_DESCRIPTIONS[strategyEngine]}
+            </Text>
+          </div>
 
           <div
             style={{

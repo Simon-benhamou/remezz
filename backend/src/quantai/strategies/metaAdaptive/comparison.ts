@@ -1,6 +1,6 @@
-import { runIntradayBacktest } from '../intraday/backtest.js';
-import type { Candle, BacktestResult, TradeLog as IntradayTradeLog } from '../intraday/types.js';
-import type { TechnicalSnapshot } from '../../ai/tech.js';
+import { runIntradayBacktest } from '../intradayDual/backtest.js';
+import type { Candle, BacktestResult, TradeLog as IntradayTradeLog } from '../intradayDual/types.js';
+import type { TechnicalSnapshot } from '../../../ai/tech.js';
 import {
   evaluateRecognizedStrategies,
   registerAdaptiveTradeEntry,

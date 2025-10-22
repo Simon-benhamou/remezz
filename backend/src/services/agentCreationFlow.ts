@@ -107,6 +107,7 @@ type NormalizedStartConfig = {
   volumeThresholdUsd?: number;
   momentumThreshold?: number;
   userId?: string;
+  strategyEngine: 'intraday_dual' | 'meta_adaptive';
   rawPayload: StartPayload;
 };
 
@@ -663,6 +664,11 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
       ? payload.aggressiveness
       : 'reactive';
 
+  const rawStrategyEngine = typeof payload.strategyEngine === 'string' ? payload.strategyEngine.toLowerCase() : '';
+  const strategyEngine: 'intraday_dual' | 'meta_adaptive' = rawStrategyEngine.includes('meta')
+    ? 'meta_adaptive'
+    : 'intraday_dual';
+
   const maxLeverage = Math.min(10, Math.max(1, Number(payload.maxLeverage ?? 4)));
   const dailyLossLimitPct = Math.min(4, Math.max(3, Number(payload.dailyLossLimitPct ?? 3.5)));
   const rawRiskPct = payload.riskPerTradePct ?? cfg.DEFAULT_RISK_PCT ?? 1.5;
@@ -724,6 +730,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
     volumeThresholdUsd,
     momentumThreshold: smartConfig.momentumThreshold,
     userId: userId || undefined,
+    strategyEngine,
     rawPayload: payload,
   };
 }
@@ -1182,7 +1189,7 @@ async function createSessionRecord(
     sizingMode: config.rawPayload?.sizingMode,
     dynamicLeverage: config.rawPayload?.dynamicLeverage !== false,
     minLeverage,
-    strategyEngine: 'intraday_dual',
+    strategyEngine: config.strategyEngine,
     rrFloor: DEFAULT_RR_EXPECTANCY_CONFIG.rrFloor,
     rrCeil: DEFAULT_RR_EXPECTANCY_CONFIG.rrCeil,
     rrBaseMin: DEFAULT_RR_EXPECTANCY_CONFIG.rrBaseMin,
@@ -1267,14 +1274,14 @@ async function activateAgent(params: {
       dailyLossLimitPct: normalized.dailyLossLimitPct,
       timestamp: new Date().toISOString(),
       startBalanceUsd: normalized.startBalanceUsd,
-    budgetFraction: normalized.budgetFraction,
-    aggressiveness: normalized.aggressiveness,
-    userId: normalized.userId,
-    sizingMode: normalized.rawPayload?.sizingMode,
-    dynamicLeverage: normalized.rawPayload?.dynamicLeverage !== false,
-    minLeverage,
-    strategyEngine: 'intraday_dual',
-  } as any);
+      budgetFraction: normalized.budgetFraction,
+      aggressiveness: normalized.aggressiveness,
+      userId: normalized.userId,
+      sizingMode: normalized.rawPayload?.sizingMode,
+      dynamicLeverage: normalized.rawPayload?.dynamicLeverage !== false,
+      minLeverage,
+      strategyEngine: normalized.strategyEngine,
+    } as any);
     agentId = session.id;
   }
 

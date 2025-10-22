@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../quantai/strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 
 export interface TradingEnv {
   MIN_TARGET_GAIN_USD: PreciseDecimal;

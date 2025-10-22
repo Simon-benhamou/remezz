@@ -1,6 +1,6 @@
 import type { TechnicalSnapshot } from '../../ai/tech.js';
 import type { PerpetualMetrics, OnChainMetrics } from '../../analytics/marketContext.js';
-import type { StrategyFamily } from '../strategy/strategyTypes.js';
+import type { StrategyFamily } from '../strategies/metaAdaptive/strategyTypes.js';
 
 export type RegimeDetectionInput = {
   snap: TechnicalSnapshot;

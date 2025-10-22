@@ -1,7 +1,7 @@
 import { configureLogging, createLogger } from '../src/utils/logger.js';
-import type { Candle } from '../src/quantai/intraday/types.js';
-import { runIntradayBacktest } from '../src/quantai/intraday/backtest.js';
-import { loadIntradayConfig, overrideIntradayConfig } from '../src/quantai/intraday/config/index.js';
+import type { Candle } from '../src/quantai/strategies/intradayDual/types.js';
+import { runIntradayBacktest } from '../src/quantai/strategies/intradayDual/backtest.js';
+import { loadIntradayConfig, overrideIntradayConfig } from '../src/quantai/strategies/intradayDual/config/index.js';
 
 const level = configureLogging();
 const logger = createLogger('smoke-backtest');

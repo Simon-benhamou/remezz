@@ -6,7 +6,7 @@ process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
-const { evaluateRecognizedStrategies } = await import('../../dist/src/quantai/strategy/recognizedStrategies.js');
+const { evaluateRecognizedStrategies } = await import('../../dist/src/quantai/strategies/metaAdaptive/recognizedStrategies.js');
 
 function buildConflictSnapshot() {
   const last = 100;

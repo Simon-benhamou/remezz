@@ -4,7 +4,7 @@ import 'dotenv/config';
 process.env.UNIT_TEST_MODE = 'true';
 process.env.USE_IN_MEMORY_DB = 'true';
 
-const { EntryFilters } = await import('../../dist/src/quantai/strategy/entryFilters.js');
+const { EntryFilters } = await import('../../dist/src/quantai/strategies/metaAdaptive/entryFilters.js');
 
 const filters = new EntryFilters({
   minAdx: 10,

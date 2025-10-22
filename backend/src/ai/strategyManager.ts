@@ -15,7 +15,7 @@ import {
 } from '../services/strategyHealth.js';
 import { getRegimeDiagnostics } from '../engine/diagnosticRegistry.js';
 import { AgentHub } from '../agent/hub.js';
-import { evaluateIntradayStrategy } from '../quantai/intraday/live.js';
+import { evaluateIntradayStrategy } from '../quantai/strategies/intradayDual/live.js';
 
 const COOL_MIN = Number(process.env.LLM_STRATEGY_COOLDOWN_MIN || 3); // minutes - réduit pour réactivité
 const MAX_PER_HOUR = Number(process.env.LLM_STRATEGY_MAX_PER_HOUR || 15); // augmenté pour plus de flexibilité

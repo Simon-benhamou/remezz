@@ -1,7 +1,7 @@
-import { metaAdaptiveStrategyAgent, PreciseDecimal, type AdaptiveSignal } from '../quantai/strategy/metaAdaptiveAgent.js';
-import type { StrategyFamily } from '../quantai/strategy/strategyTypes.js';
+import { metaAdaptiveStrategyAgent, PreciseDecimal, type AdaptiveSignal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import type { StrategyFamily } from '../quantai/strategies/metaAdaptive/strategyTypes.js';
 import type { TechnicalSnapshot } from '../ai/tech.js';
-import { type CalibrationProfile } from '../quantai/strategy/metaAdaptiveCalibration.js';
+import { type CalibrationProfile } from '../quantai/strategies/metaAdaptive/metaAdaptiveCalibration.js';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
