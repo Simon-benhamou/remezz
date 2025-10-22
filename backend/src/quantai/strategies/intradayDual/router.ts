@@ -20,6 +20,7 @@ export class StrategyRouter {
     lastBreakoutDir: 'none',
     lastTimestamp: 0,
   };
+  private lastStateTs = 0;
 
   classify(features: Record<'1m' | '5m' | '15m', TickFeatures>): RegimeSignal {
     const f1 = features['1m'];
@@ -32,7 +33,8 @@ export class StrategyRouter {
     const squeezeState = f1.volatility.squeezeState;
     this.state.lastSqueeze = squeezeNow;
     this.state.lastSqueezeState = squeezeState;
-    this.state.lastTimestamp = f1.timestamp;
+    const nowTs = f1.timestamp;
+    this.state.lastTimestamp = nowTs;
 
     const squeezeExpansion = (prevState === 'range' || squeezePrev < this.cfg.volatility.squeezeLow) && squeezeState === 'expansion';
     const squeezeActive = squeezeState === 'range';
@@ -85,6 +87,9 @@ export class StrategyRouter {
       reason = 'Mean-reversion: squeeze range with order-book reversal';
     }
 
-    return { label, confidence, reason };
+    const age = this.lastStateTs === 0 ? 0 : Math.max(0, nowTs - this.lastStateTs);
+    this.lastStateTs = nowTs;
+
+    return { label, confidence, reason, biasAgeMs: age };
   }
 }

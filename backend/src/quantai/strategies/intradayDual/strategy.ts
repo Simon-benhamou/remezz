@@ -3,7 +3,8 @@ import { loadIntradayConfig } from './config/index.js';
 import { FeaturePipeline } from './features.js';
 import { StrategyRouter } from './router.js';
 import { ExecutionPlanner } from './execution.js';
-import { GuardrailMonitor, VolatilitySizer } from './risk.js';
+import { GuardrailMonitor, VolatilitySizer, DirectionalPressure, computeSidePenalty } from './risk.js';
+import { History } from './history.js';
 import type {
   TickInput,
   RegimeSignal,
@@ -13,6 +14,7 @@ import type {
   TickFeatures,
   TradeLog,
 } from './types.js';
+import { createLogger } from '../../../utils/logger.js';
 
 type ActivePosition = {
   symbol: string;
@@ -40,6 +42,15 @@ type ActivePosition = {
   entryExecutionMode: EntrySignal['execution']['mode'];
 };
 
+type StopContext = { regime: 'BOM' | 'MR'; side: 'long' | 'short' };
+type AdaptiveParams = {
+  recheckActive: boolean;
+  staleBias: boolean;
+  lastStop: StopContext | null;
+  qValues: { qL: number; qS: number };
+  guardRiskReduction: number;
+};
+
 type EvaluateContext = {
   equityUsd: PreciseDecimal;
   maxLevInstrument: number;
@@ -65,15 +76,20 @@ function computeStopPct(regime: RegimeLabel, atrPct: number, cfg: ReturnType<typ
 }
 
 export class IntradayDualStrategy {
+  private readonly logger = createLogger('strategy:intraday-dual');
   private readonly cfg = loadIntradayConfig();
   private readonly pipeline = new FeaturePipeline();
   private readonly router = new StrategyRouter();
   private readonly execution = new ExecutionPlanner();
   private readonly sizer = new VolatilitySizer();
   private readonly guardrails = new GuardrailMonitor();
+  private readonly history = new History({ lambda: 0.97, costsBps: 5 });
+  private readonly dirPressure = new DirectionalPressure();
   private readonly positions = new Map<string, ActivePosition[]>();
   private readonly tradeLogs: TradeLog[] = [];
   private readonly lastMrEntry = new Map<string, number>();
+  private readonly postStopRecheck = new Map<string, number>();
+  private readonly lastStopContext = new Map<string, StopContext>();
 
   evaluateTick(input: TickInput, ctx: EvaluateContext): {
     regime: RegimeSignal;
@@ -137,15 +153,31 @@ export class IntradayDualStrategy {
     if (active.length >= this.cfg.risk.maxConcurrentPositions) {
       return null;
     }
+    const now = input.timestamp;
+    const recheckUntil = this.postStopRecheck.get(input.symbol) ?? 0;
+    const recheckActive = recheckUntil > now;
+    const lastStop = this.lastStopContext.get(input.symbol) ?? null;
+    const staleBias = (regime.biasAgeMs ?? 0) > 15 * 60_000 || regime.confidence < 0.7;
+    const qValues = this.history.qValues();
+    this.logger.debug('intraday.bias-state', {
+      symbol: input.symbol,
+      regime: regime.label,
+      confidence: regime.confidence,
+      biasAgeMs: regime.biasAgeMs ?? 0,
+      recheckActive,
+      staleBias,
+      lastStop,
+    });
+    const adaptive: AdaptiveParams = { recheckActive, staleBias, lastStop, qValues, guardRiskReduction: riskReduction };
     if (regime.label === 'BOM') {
-      return this.evaluateBreakoutEntry(input, features, ctx, riskReduction, regime);
+      return this.evaluateBreakoutEntry(input, features, ctx, adaptive, regime);
     }
     if (regime.label === 'MR' && !input.newsSpike) {
       const lastEntry = this.lastMrEntry.get(input.symbol) ?? 0;
       if (input.timestamp - lastEntry < this.cfg.entry.mr.cooldownMs) {
         return null;
       }
-      return this.evaluateMeanReversionEntry(input, features, ctx, riskReduction, regime);
+      return this.evaluateMeanReversionEntry(input, features, ctx, adaptive, regime);
     }
     return null;
   }
@@ -154,9 +186,18 @@ export class IntradayDualStrategy {
     input: TickInput,
     features: Record<'1m' | '5m' | '15m', TickFeatures>,
     ctx: EvaluateContext,
-    riskReduction: number,
+    adaptiveOrRisk: AdaptiveParams | number,
     regime: RegimeSignal,
   ): EntrySignal | null {
+    const adaptive: AdaptiveParams = typeof adaptiveOrRisk === 'number'
+      ? {
+        recheckActive: false,
+        staleBias: false,
+        lastStop: null,
+        qValues: this.history.qValues(),
+        guardRiskReduction: adaptiveOrRisk,
+      }
+      : adaptiveOrRisk;
     const f1 = features['1m'];
     const candles1m = input.candles['1m'];
     const signalCandle = candles1m[candles1m.length - 1];
@@ -174,6 +215,32 @@ export class IntradayDualStrategy {
       return null;
     }
 
+    const pressure = this.dirPressure.recentPressure(input.symbol, 'BOM', side, input.timestamp);
+    const sidePenalty = computeSidePenalty(pressure);
+    const guardReduction = adaptive.guardRiskReduction ?? 1;
+    const effectiveRiskReduction = Math.max(0, guardReduction) * sidePenalty;
+    let volumeThreshold = this.cfg.entry.bom.volumeZMin;
+    let aggressionThreshold = this.cfg.entry.bom.aggressionMin;
+    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop?.regime === 'BOM') {
+      if (adaptive.lastStop.side === side) {
+        volumeThreshold *= 1.1;
+        aggressionThreshold *= 1.1;
+      } else {
+        volumeThreshold *= 0.95;
+        aggressionThreshold *= 0.95;
+      }
+    }
+    volumeThreshold = Math.max(0, volumeThreshold);
+    aggressionThreshold = Math.max(0, aggressionThreshold);
+    this.logger.debug('intraday.directional-pressure', {
+      symbol: input.symbol,
+      regime: 'BOM',
+      side,
+      pressure,
+      sidePenalty,
+      effectiveRiskReduction,
+    });
+
     const confirmationBars = Math.max(0, this.cfg.entry.bom.confirmationBars);
     if (confirmationBars > 0) {
       const recent = candles1m.slice(-confirmationBars);
@@ -189,8 +256,8 @@ export class IntradayDualStrategy {
     const rsiOk = side === 'long'
       ? rsi >= this.cfg.entry.bom.rsiMin
       : rsi <= (100 - this.cfg.entry.bom.rsiMin);
-    const aggressionOk = f1.orderBook.aggressionRatio >= this.cfg.entry.bom.aggressionMin;
-    const volumeOk = f1.volume.zScore >= this.cfg.entry.bom.volumeZMin;
+    const aggressionOk = f1.orderBook.aggressionRatio >= aggressionThreshold;
+    const volumeOk = f1.volume.zScore >= volumeThreshold;
     const obiAligned = side === 'long' ? f1.orderBook.imbalance > 0 : f1.orderBook.imbalance < 0;
     if (!(atrOk && rsiOk && aggressionOk && volumeOk && obiAligned)) {
       return null;
@@ -233,7 +300,7 @@ export class IntradayDualStrategy {
       maxLevGlobal: ctx.maxLevGlobal,
       exposureBudget: ctx.exposureBudget,
       slippageBps: ctx.slippageBps,
-      riskReduction: riskReduction * pyramidScale,
+      riskReduction: effectiveRiskReduction * pyramidScale,
     });
     if (sized.size.raw === 0n) return null;
 
@@ -269,6 +336,30 @@ export class IntradayDualStrategy {
       slippageBps: ctx.slippageBps,
     });
 
+    let confidence = regime.confidence;
+    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop?.regime === 'BOM' && adaptive.lastStop.side === side) {
+      confidence = Math.max(0, confidence * 0.95);
+    }
+    const adjustedConfidence = this.adjustConfidenceWithHistory(confidence, side, adaptive.qValues);
+    this.logger.debug('intraday.history-bias', {
+      symbol: input.symbol,
+      regime: 'BOM',
+      side,
+      qL: adaptive.qValues.qL,
+      qS: adaptive.qValues.qS,
+      adjustedConfidence,
+    });
+
+    const rationale = [
+      'BOM breakout confirmed',
+      `volumeZ=${f1.volume.zScore.toFixed(2)}`,
+      `aggr=${f1.orderBook.aggressionRatio.toFixed(2)}`,
+      isPyramidAdd ? 'pyramid-add' : 'base-entry',
+    ];
+    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop) {
+      rationale.push(adaptive.lastStop.side === side ? 'adaptive-tighten' : 'adaptive-relax');
+    }
+
     return {
       regime: 'BOM',
       side,
@@ -281,13 +372,8 @@ export class IntradayDualStrategy {
       size: sized.size,
       riskUsd: sized.riskUsd,
       leverage: sized.leverage,
-      confidence: regime.confidence,
-      rationale: [
-        'BOM breakout confirmed',
-        `volumeZ=${f1.volume.zScore.toFixed(2)}`,
-        `aggr=${f1.orderBook.aggressionRatio.toFixed(2)}`,
-        isPyramidAdd ? 'pyramid-add' : 'base-entry',
-      ],
+      confidence: adjustedConfidence,
+      rationale,
       execution,
       entryAtrPct: f1.volatility.atrPct,
       pyramidAdd: isPyramidAdd,
@@ -299,34 +385,83 @@ export class IntradayDualStrategy {
     input: TickInput,
     features: Record<'1m' | '5m' | '15m', TickFeatures>,
     ctx: EvaluateContext,
-    riskReduction: number,
+    adaptiveOrRisk: AdaptiveParams | number,
     regime: RegimeSignal,
   ): EntrySignal | null {
+    const adaptive: AdaptiveParams = typeof adaptiveOrRisk === 'number'
+      ? {
+        recheckActive: false,
+        staleBias: false,
+        lastStop: null,
+        qValues: this.history.qValues(),
+        guardRiskReduction: adaptiveOrRisk,
+      }
+      : adaptiveOrRisk;
     const f1 = features['1m'];
     const atrOk = f1.volatility.atrPct <= this.cfg.entry.mr.atrMaxPct;
     if (!atrOk) return null;
 
+    const guardReduction = adaptive.guardRiskReduction ?? 1;
+    const lastStop = adaptive.lastStop;
+    const baseThreshold = this.cfg.entry.mr.priceZScore;
+    let thresholdLong = baseThreshold;
+    let thresholdShort = baseThreshold;
+    let obiDeltaLong = this.cfg.entry.mr.obiDeltaMin;
+    let obiDeltaShort = this.cfg.entry.mr.obiDeltaMin;
+    let wickLong = this.cfg.entry.mr.wickMinPct;
+    let wickShort = this.cfg.entry.mr.wickMinPct;
+    if (adaptive.recheckActive && adaptive.staleBias && lastStop?.regime === 'MR') {
+      if (lastStop.side === 'long') {
+        thresholdLong *= 1.05;
+        obiDeltaLong *= 1.1;
+        wickLong *= 1.05;
+        thresholdShort *= 0.95;
+        obiDeltaShort *= 0.9;
+        wickShort *= 0.95;
+      } else {
+        thresholdShort *= 1.05;
+        obiDeltaShort *= 1.1;
+        wickShort *= 1.05;
+        thresholdLong *= 0.95;
+        obiDeltaLong *= 0.9;
+        wickLong *= 0.95;
+      }
+    }
+
     const priceZ = f1.volatility.bandZScore;
-    const threshold = this.cfg.entry.mr.priceZScore;
-    const side: 'long' | 'short' | null = priceZ <= -threshold
+    const side: 'long' | 'short' | null = priceZ <= -thresholdLong
       ? 'long'
-      : priceZ >= threshold
+      : priceZ >= thresholdShort
         ? 'short'
         : null;
     if (!side) return null;
+
+    const obiDeltaMin = side === 'long' ? obiDeltaLong : obiDeltaShort;
+    const wickMinPct = side === 'long' ? wickLong : wickShort;
+    const sidePressure = this.dirPressure.recentPressure(input.symbol, 'MR', side, input.timestamp);
+    const sidePenalty = computeSidePenalty(sidePressure);
+    const effectiveRiskReduction = Math.max(0, guardReduction) * sidePenalty;
+    this.logger.debug('intraday.directional-pressure', {
+      symbol: input.symbol,
+      regime: 'MR',
+      side,
+      pressure: sidePressure,
+      sidePenalty,
+      effectiveRiskReduction,
+    });
 
     const wick = this.computeWickPct(input.candles['1m']);
     const imbalance = f1.orderBook.imbalance;
     const imbalanceExtreme = Math.abs(imbalance) >= this.cfg.entry.mr.obiExtreme;
     const imbalanceReversing = side === 'long'
-      ? f1.orderBook.imbalanceDelta >= this.cfg.entry.mr.obiDeltaMin
-      : f1.orderBook.imbalanceDelta <= -this.cfg.entry.mr.obiDeltaMin;
+      ? f1.orderBook.imbalanceDelta >= obiDeltaMin
+      : f1.orderBook.imbalanceDelta <= -obiDeltaMin;
     if (!imbalanceExtreme || !imbalanceReversing) return null;
 
     const momentumDiv = (f1.momentum.roc['1'] ?? 0) * (features['5m'].momentum.roc['3'] ?? 0) < 0;
     if (!momentumDiv) return null;
 
-    const wickOk = side === 'long' ? wick.lower >= this.cfg.entry.mr.wickMinPct : wick.upper >= this.cfg.entry.mr.wickMinPct;
+    const wickOk = side === 'long' ? wick.lower >= wickMinPct : wick.upper >= wickMinPct;
     if (!wickOk) return null;
 
     const stopPct = computeStopPct('MR', f1.volatility.atrPct, this.cfg);
@@ -339,7 +474,7 @@ export class IntradayDualStrategy {
       maxLevGlobal: ctx.maxLevGlobal,
       exposureBudget: ctx.exposureBudget,
       slippageBps: ctx.slippageBps,
-      riskReduction,
+      riskReduction: effectiveRiskReduction,
     });
     if (sized.size.raw === 0n) return null;
 
@@ -356,6 +491,33 @@ export class IntradayDualStrategy {
       slippageBps: ctx.slippageBps,
     });
 
+    let confidence = Math.max(regime.confidence, 0.6);
+    if (adaptive.recheckActive && adaptive.staleBias && lastStop?.regime === 'MR' && lastStop.side === side) {
+      confidence = Math.max(0.5, confidence * 0.95);
+    }
+    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop?.regime === 'BOM') {
+      confidence = Math.min(1, confidence * 1.05);
+    }
+    const adjustedConfidence = this.adjustConfidenceWithHistory(confidence, side, adaptive.qValues);
+    this.logger.debug('intraday.history-bias', {
+      symbol: input.symbol,
+      regime: 'MR',
+      side,
+      qL: adaptive.qValues.qL,
+      qS: adaptive.qValues.qS,
+      adjustedConfidence,
+    });
+
+    const rationale = [
+      'MR extreme detected',
+      `z=${priceZ.toFixed(2)}`,
+      `imb=${imbalance.toFixed(2)}`,
+      `wick=${(side === 'long' ? wick.lower : wick.upper).toFixed(4)}`,
+    ];
+    if (adaptive.recheckActive && adaptive.staleBias && lastStop) {
+      rationale.push(lastStop.side === side ? 'adaptive-tighten' : 'adaptive-relax');
+    }
+
     return {
       regime: 'MR',
       side,
@@ -368,17 +530,24 @@ export class IntradayDualStrategy {
       size: sized.size,
       riskUsd: sized.riskUsd,
       leverage: sized.leverage,
-      confidence: Math.max(regime.confidence, 0.6),
-      rationale: [
-        'MR extreme detected',
-        `z=${priceZ.toFixed(2)}`,
-        `imb=${imbalance.toFixed(2)}`,
-        `wick=${(side === 'long' ? wick.lower : wick.upper).toFixed(4)}`,
-      ],
+      confidence: adjustedConfidence,
+      rationale,
       execution,
       entryAtrPct: f1.volatility.atrPct,
       pyramidAdd: false,
     };
+  }
+
+  private adjustConfidenceWithHistory(
+    confidence: number,
+    side: 'long' | 'short',
+    qValues: { qL: number; qS: number },
+  ): number {
+    const delta = Math.max(-0.01, Math.min(0.01, qValues.qS - qValues.qL));
+    const tilt = side === 'short' ? delta : -delta;
+    const factor = 1 + 0.15 * (tilt / 0.01);
+    const adjusted = confidence * factor;
+    return Math.max(0, Math.min(1, adjusted));
   }
 
   private evaluateExits(input: TickInput, features: Record<'1m' | '5m' | '15m', TickFeatures>): ExitDirective[] {
@@ -502,10 +671,26 @@ export class IntradayDualStrategy {
       return null;
     }
     const direction = position.side === 'long' ? 1 : -1;
-    const pctChange = price.minus(position.entryPrice).dividedBy(position.entryPrice).times(new PreciseDecimal(direction.toString()));
+    const priceDelta = price.minus(position.entryPrice);
+    const normalizedDelta = priceDelta.dividedBy(position.entryPrice);
+    const directionDecimal = new PreciseDecimal(direction.toString());
+    const pctChange = normalizedDelta.times(directionDecimal);
     const pnl = notionalClosed.times(pctChange);
     const riskPortion = position.riskUsd.times(fractionDecimal);
     this.guardrails.recordTrade(symbol, pnl, riskPortion, position.equityAtEntry, timestamp);
+    if (reason === 'stop' && (position.regime === 'BOM' || position.regime === 'MR')) {
+      const expiresAt = timestamp + 10 * 60_000;
+      this.postStopRecheck.set(symbol, expiresAt);
+      const ctx: StopContext = { regime: position.regime, side: position.side };
+      this.lastStopContext.set(symbol, ctx);
+      this.dirPressure.recordStop(symbol, position.regime, position.side, timestamp);
+      this.logger.debug('intraday.post-stop-recheck', {
+        symbol,
+        regime: position.regime,
+        side: position.side,
+        expiresAt,
+      });
+    }
     const log: TradeLog = {
       timestamp,
       side: position.side,
@@ -519,6 +704,32 @@ export class IntradayDualStrategy {
       exitAtrPct: atrPct,
     };
     this.tradeLogs.push(log);
+    const counterDirectionDecimal = new PreciseDecimal((-direction).toString());
+    const counterfactualPct = normalizedDelta.times(counterDirectionDecimal);
+    const counterfactual = notionalClosed.times(counterfactualPct);
+    const pnlNumber = pnl.toNumber();
+    const counterNumber = counterfactual.toNumber();
+    if (Number.isFinite(pnlNumber) && Number.isFinite(counterNumber)) {
+      this.history.update(
+        {
+          side: position.side,
+          pnl: pnlNumber,
+          entryTs: position.entryTime,
+          exitTs: timestamp,
+          ctx: { reason, fraction: fractionDecimal.toNumber(), atrPct },
+        },
+        counterNumber,
+      );
+      const q = this.history.qValues();
+      this.logger.debug('intraday.history-update', {
+        symbol,
+        side: position.side,
+        pnl: pnlNumber,
+        counterfactual: counterNumber,
+        qL: q.qL,
+        qS: q.qS,
+      });
+    }
     position.remainingNotional = position.remainingNotional.minus(notionalClosed);
     return { log, directive: { reason, exitPrice: price, timestamp } };
   }
@@ -574,5 +785,26 @@ export class IntradayDualStrategy {
 
   getTradeLogs(): TradeLog[] {
     return [...this.tradeLogs];
+  }
+
+  getAdaptiveState(symbol: string, now: number): {
+    recheckUntil: number;
+    lastStop: StopContext | null;
+    pressure: Record<'BOM' | 'MR', { long: number; short: number }>;
+  } {
+    return {
+      recheckUntil: this.postStopRecheck.get(symbol) ?? 0,
+      lastStop: this.lastStopContext.get(symbol) ?? null,
+      pressure: {
+        BOM: {
+          long: this.dirPressure.recentPressure(symbol, 'BOM', 'long', now),
+          short: this.dirPressure.recentPressure(symbol, 'BOM', 'short', now),
+        },
+        MR: {
+          long: this.dirPressure.recentPressure(symbol, 'MR', 'long', now),
+          short: this.dirPressure.recentPressure(symbol, 'MR', 'short', now),
+        },
+      },
+    };
   }
 }
