@@ -97,8 +97,10 @@ export class GuardrailMonitor {
     } else {
       state.consecutiveLosses += 1;
       this.performance.losses += 1;
-      if (state.consecutiveLosses >= this.cfg.risk.cooldownLosses) {
+      if (!this.isCooldownDisabled() && state.consecutiveLosses >= this.cfg.risk.cooldownLosses) {
         state.cooldownUntil = timestamp + this.cfg.risk.cooldownMinutes * 60_000;
+      } else if (this.isCooldownDisabled()) {
+        state.cooldownUntil = 0;
       }
     }
     this.symbolState.set(symbol, state);
@@ -120,7 +122,7 @@ export class GuardrailMonitor {
       return { allowed: false, reason: 'Daily stop reached' };
     }
     const state = this.symbolState.get(symbol);
-    if (state && timestamp < state.cooldownUntil) {
+    if (!this.isCooldownDisabled() && state && timestamp < state.cooldownUntil) {
       return { allowed: false, reason: 'Symbol cooldown active' };
     }
     if (this.healthReduced) {
@@ -151,5 +153,9 @@ export class GuardrailMonitor {
     } else {
       this.healthReduced = false;
     }
+  }
+
+  private isCooldownDisabled(): boolean {
+    return this.cfg.risk.cooldownLosses <= 0 || this.cfg.risk.cooldownMinutes <= 0;
   }
 }
