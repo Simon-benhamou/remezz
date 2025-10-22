@@ -146,8 +146,11 @@ export const api = {
     (await client.post('/api/sim/quicktest', { symbol, hours, plan })).data,
   getOpsMetrics: async () =>
     (await client.get('/api/ops/metrics')).data,
-  getOpsEvents: async (limit = 50) =>
-    (await client.get('/api/ops/events', { params: { limit } })).data,
+  getOpsEvents: async (limit = 50, sessionId?: string) => {
+    const params: Record<string, any> = { limit };
+    if (sessionId) params.sessionId = sessionId;
+    return (await client.get('/api/ops/events', { params })).data;
+  },
   getAgentHealth: async () =>
     (await client.get('/api/ops/agent-health')).data,
   getPortfolio: async (mode: 'paper' | 'live' = 'paper') =>

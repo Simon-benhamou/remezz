@@ -30,6 +30,7 @@ import { getUserCredentials } from '../services/userCredentials.js';
 import { stopAllAgents } from '../services/stopAllAgents.js';
 import { resolveRrExpectancyConfig } from '../risk/rrExpectancy.js';
 import { getPortfolioSnapshot, updatePortfolioBalance, rebalancePortfolio } from '../services/portfolioManager.js';
+import { resolveStrategySnapshot } from '../utils/strategySnapshot.js';
 
 export const router = Router();
 
@@ -936,6 +937,12 @@ router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) =>
   if (!profile) {
     profile = (sessionRecord?.profileJson as any) || null;
   }
+
+  const strategySnapshot = await resolveStrategySnapshot(
+    agent,
+    (profile && typeof profile === 'object' ? profile : sessionRecord?.profileJson) as Record<string, any> | null,
+    { includeChecklist: true },
+  );
   const rrConfig = resolveRrExpectancyConfig({
     rrFloor: (profile as any)?.rrFloor ?? sessionRecord?.rrFloor ?? undefined,
     rrCeil: (profile as any)?.rrCeil ?? sessionRecord?.rrCeil ?? undefined,
@@ -978,6 +985,8 @@ router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) =>
       blend: rrConfig.blend,
       hysteresis: rrConfig.hysteresis,
     },
+    strategy: strategySnapshot,
+    strategyEngine: strategySnapshot.engine,
   });
 });
 
@@ -1038,20 +1047,25 @@ router.get('/sessions', authenticateUser, async (req: AuthenticatedRequest, res)
   };
 
   const rows = await prisma.agentSession.findMany(baseQuery);
-  
-  const out = rows.map(r => {
-    const profile = (r as any).profileJson || {};
-    // Prefer runtime aggressiveness from AgentHub when available
-    let aggressiveness: any = 'reactive';
+
+  const out = await Promise.all(rows.map(async (r) => {
+    const profile = ((r as any).profileJson || {}) as Record<string, any>;
+    let agent: any = null;
     try {
-      const rt = AgentHub.get(r.id) as any;
-      aggressiveness = rt?.profile?.aggressiveness || profile?.aggressiveness || 'reactive';
-    } catch {
-      aggressiveness = profile?.aggressiveness || 'reactive';
+      agent = AgentHub.get(r.id);
+    } catch {}
+
+    let aggressiveness: any = 'reactive';
+    if (agent?.profile?.aggressiveness) {
+      aggressiveness = agent.profile.aggressiveness;
+    } else if (typeof profile.aggressiveness === 'string') {
+      aggressiveness = profile.aggressiveness;
     }
-    
+
+    const strategySnapshot = await resolveStrategySnapshot(agent, profile, { includeChecklist: false });
+
     // Only calculate stats if included
-    let stats = {};
+    let stats = {} as Record<string, unknown>;
     if (includeStats && (r as any).kpi) {
       const realized = Number((r as any).kpi?.realizedPnlUsd || 0);
       const unrealized = Number((r as any).kpi?.unrealizedPnlUsd || 0);
@@ -1063,10 +1077,10 @@ router.get('/sessions', authenticateUser, async (req: AuthenticatedRequest, res)
         roiPct: realizedRoi,
         netRoiPct,
         winRate: Number((r as any).kpi?.winRate || 0),
-        openPositions: ((r as any).positions || []).length
+        openPositions: ((r as any).positions || []).length,
       };
     }
-    
+
     return {
       id: r.id,
       symbol: r.symbol,
@@ -1077,12 +1091,14 @@ router.get('/sessions', authenticateUser, async (req: AuthenticatedRequest, res)
       haltReason: (r as any).haltReason ?? null,
       startBalanceUsd: r.startBalanceUsd,
       aggressiveness,
+      strategyEngine: strategySnapshot.engine,
+      strategy: strategySnapshot,
       // Detect Smart Agent from either top-level flag or profileJson
       isSmartAgent: (r as any).isSmartAgent || (r as any).profileJson?.isSmartAgent || profile?.isIntelligent || false,
       smartConfig: (r as any).profileJson?.smartConfig,
-      ...stats
+      ...stats,
     };
-  });
+  }));
   res.json(out);
 });
 

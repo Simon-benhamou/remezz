@@ -1,4 +1,6 @@
-export type StrategyEngineOption = 'intraday_dual' | 'meta_adaptive';
+import type { StrategyEngineOption, StrategySnapshot } from '../types/strategies';
+
+export type { StrategyEngineOption } from '../types/strategies';
 
 type StrategyMeta = {
   label: string;
@@ -55,15 +57,30 @@ export function resolveStrategyLabel(value?: string | null): string {
 
 type SessionLike = {
   strategyEngine?: string | null;
-  strategy?: string | null;
+  strategy?: string | StrategySnapshot | null;
   strategyFamily?: string | null;
   profile?: Record<string, any> | null;
 };
 
+function asStrategySnapshot(value: unknown): StrategySnapshot | null {
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'engine' in (value as any)) {
+    return value as StrategySnapshot;
+  }
+  return null;
+}
+
 export function inferSessionStrategyEngine(session?: SessionLike | null): StrategyEngineOption | null {
   if (!session) return null;
+
+  const snapshot = asStrategySnapshot(session.strategy);
+  if (snapshot?.engine) {
+    const normalized = normalizeStrategyEngine(snapshot.engine);
+    if (normalized) return normalized;
+  }
+
   const fromSession = normalizeStrategyEngine(session.strategyEngine);
   if (fromSession) return fromSession;
+
   const profile = session.profile || undefined;
   if (profile && typeof profile === 'object') {
     const fromProfile =
@@ -76,13 +93,22 @@ export function inferSessionStrategyEngine(session?: SessionLike | null): Strate
 }
 
 export function resolveSessionStrategyLabel(session?: SessionLike | null): string {
+  if (!session) return 'Adaptive';
+
+  const snapshot = asStrategySnapshot(session.strategy);
+  if (snapshot?.primary?.label) {
+    const engineLabel = snapshot.engine ? STRATEGY_META[snapshot.engine].label : null;
+    return engineLabel ? `${snapshot.primary.label} • ${engineLabel}` : snapshot.primary.label;
+  }
+
   const engine = inferSessionStrategyEngine(session);
   if (engine) {
     return STRATEGY_META[engine].label;
   }
-  if (session?.strategy) return session.strategy;
-  if (session?.strategyFamily) return session.strategyFamily;
-  if (session?.profile?.strategy) return session.profile.strategy;
-  if (session?.profile?.strategyFamily) return session.profile.strategyFamily;
+
+  if (typeof session.strategy === 'string') return session.strategy;
+  if (session.strategyFamily) return session.strategyFamily;
+  if (session.profile?.strategy) return session.profile.strategy;
+  if (session.profile?.strategyFamily) return session.profile.strategyFamily;
   return 'Adaptive';
 }

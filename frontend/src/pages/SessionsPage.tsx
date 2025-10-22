@@ -34,6 +34,7 @@ import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { useSessionsCache } from '../hooks/useSessionsCache';
 import type { AppMode } from '../store';
+import type { StrategySnapshot } from '../types/strategies';
 import {
   STRATEGY_DESCRIPTIONS,
   STRATEGY_META,
@@ -64,10 +65,10 @@ type AgentSession = {
   startedAt?: string | null;
   profile?: Record<string, any> | null;
   runtimeBalance?: { allocatedUsd?: number } | null;
-  strategy?: string | null;
   strategyFamily?: string | null;
   isSmartAgent?: boolean;
   strategyEngine?: StrategyEngineOption | null;
+  strategy?: StrategySnapshot | string | null;
 };
 
 type CreationFormShape = {
@@ -169,6 +170,17 @@ const selectionBadgeMeta = (isSmart?: boolean) => {
     background: isSmart ? 'rgba(14, 165, 233, 0.18)' : 'rgba(148, 163, 184, 0.12)',
     color: isSmart ? '#38bdf8' : '#cbd5f5',
   };
+};
+
+const BIAS_META: Record<'long' | 'short' | 'both', { label: string; color: string; background: string }> = {
+  long: { label: 'LONG', color: '#22c55e', background: 'rgba(34, 197, 94, 0.12)' },
+  short: { label: 'SHORT', color: '#f97316', background: 'rgba(249, 115, 22, 0.15)' },
+  both: { label: 'BI-DIRECTIONAL', color: '#38bdf8', background: 'rgba(14, 165, 233, 0.18)' },
+};
+
+const formatConfidenceTag = (value?: number | null) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) return null;
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}% confidence`;
 };
 
 async function enrichSession(session: AgentSession): Promise<AgentSession> {
@@ -428,6 +440,14 @@ export default function SessionsPage() {
           const strategyBackground = strategyEngine
             ? `${STRATEGY_META[strategyEngine].color}20`
             : 'rgba(148, 163, 184, 0.12)';
+          const strategySnapshot =
+            record.strategy && typeof record.strategy === 'object' && !Array.isArray(record.strategy)
+              ? (record.strategy as StrategySnapshot)
+              : null;
+          const primary = strategySnapshot?.primary ?? null;
+          const biasMeta = primary?.bias ? BIAS_META[primary.bias] : null;
+          const confidenceText = formatConfidenceTag(primary?.confidence);
+          const guardrail = primary?.guardrail;
           return (
             <Space direction="vertical" size={2}>
               <Space size={8}>
@@ -453,16 +473,45 @@ export default function SessionsPage() {
                   {selectionBadgeMeta(record.isSmartAgent).label}
                 </Tag>
               </Space>
-              <Tag
-                style={{
-                  borderRadius: 10,
-                  border: 'none',
-                  background: strategyBackground,
-                  color: strategyColor,
-                }}
-              >
-                {resolveSessionStrategyLabel(record)}
-              </Tag>
+              <Space size={6} wrap>
+                <Tag
+                  style={{
+                    borderRadius: 10,
+                    border: 'none',
+                    background: strategyBackground,
+                    color: strategyColor,
+                  }}
+                >
+                  {resolveSessionStrategyLabel(record)}
+                </Tag>
+                {biasMeta && (
+                  <Tag
+                    style={{
+                      borderRadius: 10,
+                      border: 'none',
+                      background: biasMeta.background,
+                      color: biasMeta.color,
+                    }}
+                  >
+                    {biasMeta.label}
+                  </Tag>
+                )}
+                {guardrail && (
+                  <Tag
+                    style={{
+                      borderRadius: 10,
+                      border: 'none',
+                      background: 'rgba(251, 191, 36, 0.16)',
+                      color: '#fbbf24',
+                    }}
+                  >
+                    Guardrail active
+                  </Tag>
+                )}
+              </Space>
+              {confidenceText && (
+                <Text style={{ color: '#94a3b8', fontSize: 12 }}>{confidenceText}</Text>
+              )}
             </Space>
           );
         },
@@ -692,6 +741,14 @@ export default function SessionsPage() {
             : sessions.map((session) => {
                 const meta = statusMeta(session);
                 const selectionMeta = selectionBadgeMeta(session.isSmartAgent);
+                const strategySnapshot =
+                  session.strategy && typeof session.strategy === 'object' && !Array.isArray(session.strategy)
+                    ? (session.strategy as StrategySnapshot)
+                    : null;
+                const primary = strategySnapshot?.primary ?? null;
+                const biasMeta = primary?.bias ? BIAS_META[primary.bias] : null;
+                const confidenceText = formatConfidenceTag(primary?.confidence);
+                const guardrail = primary?.guardrail;
                 return (
                   <Card
                     key={session.id}
@@ -703,7 +760,49 @@ export default function SessionsPage() {
                         <Text style={{ color: '#f8fafc', fontSize: 18, fontWeight: 600 }}>
                           {resolveAgentLabel(session)}
                         </Text>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>{resolveSessionStrategyLabel(session)}</Text>
+                        <Space size={6} wrap>
+                          <Tag
+                            style={{
+                              borderRadius: 10,
+                              border: 'none',
+                              background: strategySnapshot?.engine
+                                ? `${STRATEGY_META[strategySnapshot.engine].color}20`
+                                : 'rgba(148, 163, 184, 0.12)',
+                              color: strategySnapshot?.engine
+                                ? STRATEGY_META[strategySnapshot.engine].color
+                                : '#cbd5f5',
+                            }}
+                          >
+                            {resolveSessionStrategyLabel(session)}
+                          </Tag>
+                          {biasMeta && (
+                            <Tag
+                              style={{
+                                borderRadius: 10,
+                                border: 'none',
+                                background: biasMeta.background,
+                                color: biasMeta.color,
+                              }}
+                            >
+                              {biasMeta.label}
+                            </Tag>
+                          )}
+                          {guardrail && (
+                            <Tag
+                              style={{
+                                borderRadius: 10,
+                                border: 'none',
+                                background: 'rgba(251, 191, 36, 0.16)',
+                                color: '#fbbf24',
+                              }}
+                            >
+                              Guardrail active
+                            </Tag>
+                          )}
+                        </Space>
+                        {confidenceText && (
+                          <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{confidenceText}</Text>
+                        )}
                         <Space size={6}>
                           <Tag
                             style={{
