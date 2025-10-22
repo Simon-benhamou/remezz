@@ -12,7 +12,7 @@ import { buildExecutionPlan } from './execution/planBuilder.js';
 import { passesHardGates, passesQuantile } from './kpi/perfGuards.js';
 import { Telemetry } from './kpi/telemetry.js';
 import type { LabeledRow } from './labeling/tripleBarrier.js';
-import { PreciseDecimal } from '../quantai/strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import { fetchPerformanceSnapshot, type PerformanceSnapshot } from './performance/memory.js';
 
 type ContextWithMulti = ContextFeatures & {

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 
-const { IntradayDualStrategy } = await import('../../dist/src/quantai/intraday/strategy.js');
-const { PreciseDecimal } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
-const { loadIntradayConfig, overrideIntradayConfig } = await import('../../dist/src/quantai/intraday/config/index.js');
+const { IntradayDualStrategy } = await import('../../dist/src/quantai/strategies/intradayDual/strategy.js');
+const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
+const { loadIntradayConfig, overrideIntradayConfig } = await import('../../dist/src/quantai/strategies/intradayDual/config/index.js');
 
 function buildSeries({ count, startPrice, drift, timeframeMinutes, volume }) {
   const candles = [];

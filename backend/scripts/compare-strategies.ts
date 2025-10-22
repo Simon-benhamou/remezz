@@ -1,4 +1,4 @@
-import { compareStrategies } from '../src/quantai/strategy/comparison.js';
+import { compareStrategies } from '../src/quantai/strategies/metaAdaptive/comparison.js';
 
 function formatPrecise(value: { toFixed: (decimals: number) => string }, decimals = 2) {
   return value.toFixed(decimals);

@@ -1,17 +1,18 @@
-import { TechnicalSnapshot } from '../../ai/tech.js';
-import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
+import { TechnicalSnapshot } from '../../../ai/tech.js';
+import type { Diagnostics as MultiTimeframeDiagnostics } from '../../../ai/multiTimeframe.js';
 import { defaultCalibrationProfile, type CalibrationProfile } from './metaAdaptiveCalibration.js';
-import { getMarketContext, type MarketContextSnapshot, type PerpetualMetrics, type OnChainMetrics, type SentimentSnapshot, type WatchlistMeta } from '../../analytics/marketContext.js';
-import { detectMarketRegime, type MarketRegimeSignal } from '../regime/marketRegimeDetector.js';
+import { getMarketContext, type MarketContextSnapshot, type PerpetualMetrics, type OnChainMetrics, type SentimentSnapshot, type WatchlistMeta } from '../../../analytics/marketContext.js';
+import { detectMarketRegime, type MarketRegimeSignal } from '../../regime/marketRegimeDetector.js';
 import {
   getPrediction as getPythonPrediction,
   getPredictionSync as getPythonPredictionSync,
   getPythonResolutionError,
   isPythonPredictorAvailable,
-} from '../pythonPredictor.js';
-import { getPythonSignalTuning } from '../pythonSignalTuning.js';
-import { PythonPerformanceTracker } from '../pythonPerformanceTracker.js';
+} from '../../pythonPredictor.js';
+import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
+import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
+import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 const pythonSignalTuning = getPythonSignalTuning();
@@ -500,6 +501,7 @@ class MetaAdaptiveStrategyAgent {
   private readonly liquidityLog = new Map<string, number>();
   private readonly guardrailHalts = new Map<string, Map<StrategyFamily, GuardrailHalt>>();
   private readonly symbolCooldowns = new Map<string, number>();
+  private readonly guardsDisabled = areAgentGuardsDisabled();
   private epsilonBase = 0.15;
   private calibrationProfile: CalibrationProfile = defaultCalibrationProfile;
   private readonly sessionCapital = new Map<string, PreciseDecimal>();
@@ -624,6 +626,7 @@ class MetaAdaptiveStrategyAgent {
   }
 
   public isSymbolEligibleForEntry(sessionId: string | null, symbol: string): boolean {
+    if (this.guardsDisabled) return true;
     if (this.reentryCooldownMs <= 0) return true;
     if (!symbol) return true;
     const now = Date.now();
@@ -1755,7 +1758,7 @@ class MetaAdaptiveStrategyAgent {
     }
     const pythonEntryWeight = pythonSignalMeta?.entryWeight ?? 1;
     const planRiskMultiplierDecimal = params.plan.pythonRiskMultiplier ?? new PreciseDecimal('1');
-    if (pythonSignalMeta?.cooldown.active) {
+    if (!this.guardsDisabled && pythonSignalMeta?.cooldown.active) {
       const cooldownSeconds = pythonSignalMeta.cooldown.seconds ?? 180;
       const until = Date.now() + Math.max(0, cooldownSeconds) * 1000;
       const key = this.cooldownKey(params.sessionId ?? null, params.symbol);

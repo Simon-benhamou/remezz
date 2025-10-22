@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 process.env.UNIT_TEST_MODE = 'true';
 
-const { runIntradayBacktest } = await import('../../dist/src/quantai/intraday/backtest.js');
+const { runIntradayBacktest } = await import('../../dist/src/quantai/strategies/intradayDual/backtest.js');
 
 function createScenarioCandles() {
   const candles = [];

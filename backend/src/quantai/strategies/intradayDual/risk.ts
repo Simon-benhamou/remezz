@@ -1,6 +1,7 @@
-import { PreciseDecimal } from '../strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
 import { loadIntradayConfig } from './config/index.js';
 import type { RegimeLabel } from './types.js';
+import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 
 export type PositionContext = {
   equityUsd: PreciseDecimal;
@@ -71,6 +72,7 @@ export class GuardrailMonitor {
   private dailyPnLPct = new PreciseDecimal(0);
   private lastResetDay = '';
   private healthReduced = false;
+  private readonly guardsDisabled = areAgentGuardsDisabled();
 
   resetIfNeeded(timestamp: number): void {
     const day = new Date(timestamp).toISOString().slice(0, 10);
@@ -82,6 +84,7 @@ export class GuardrailMonitor {
   }
 
   recordTrade(symbol: string, pnlUsd: PreciseDecimal, riskUsd: PreciseDecimal, equityUsd: PreciseDecimal, timestamp: number): void {
+    if (this.guardsDisabled) return;
     this.resetIfNeeded(timestamp);
     const equitySafe = equityUsd.raw === 0n ? new PreciseDecimal(1) : equityUsd;
     const pnlPct = pnlUsd.dividedBy(equitySafe);
@@ -109,6 +112,9 @@ export class GuardrailMonitor {
   }
 
   canEnter(symbol: string, timestamp: number, regime: RegimeLabel): { allowed: boolean; reason?: string; riskReduction?: number } {
+    if (this.guardsDisabled) {
+      return { allowed: true };
+    }
     this.resetIfNeeded(timestamp);
     if (this.dailyPnLPct.toNumber() <= -this.cfg.risk.dailyStopPct) {
       return { allowed: false, reason: 'Daily stop reached' };
@@ -131,6 +137,10 @@ export class GuardrailMonitor {
   }
 
   private updateHealthStatus(): void {
+    if (this.guardsDisabled) {
+      this.healthReduced = false;
+      return;
+    }
     const totalTrades = this.performance.wins + this.performance.losses;
     if (totalTrades >= 10) {
       const hitRate = totalTrades === 0 ? 0 : this.performance.wins / totalTrades;

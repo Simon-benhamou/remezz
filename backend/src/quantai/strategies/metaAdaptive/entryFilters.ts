@@ -1,4 +1,4 @@
-import { QuantAIEntryFilterConfig } from '../config.js';
+import { QuantAIEntryFilterConfig } from '../../config.js';
 
 export type EntryFacts = {
   price?: number;

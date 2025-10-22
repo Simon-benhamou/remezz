@@ -4,7 +4,7 @@ import 'dotenv/config';
 process.env.UNIT_TEST_MODE = 'true';
 process.env.DISABLE_PYTHON_PREDICTOR = 'true';
 
-const { metaAdaptiveStrategyAgent, PreciseDecimal } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+const { metaAdaptiveStrategyAgent, PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 metaAdaptiveStrategyAgent.reset();
 metaAdaptiveStrategyAgent.setRandomSeed(12345);

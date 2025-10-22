@@ -6,7 +6,7 @@ process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
-const { metaAdaptiveStrategyAgent, PreciseDecimal } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+const { metaAdaptiveStrategyAgent, PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 function buildSnapshot(overrides = {}) {
   const last = overrides.last ?? 100;

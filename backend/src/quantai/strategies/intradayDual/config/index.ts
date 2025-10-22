@@ -86,9 +86,9 @@ export type IntradayStrategyConfig = {
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const distDefault = path.join(moduleDir, 'default.json');
-const sourceDefault = path.resolve(process.cwd(), 'src/quantai/intraday/config/default.json');
+const sourceDefault = path.resolve(process.cwd(), 'src/quantai/strategies/intradayDual/config/default.json');
 const presetDir = path.join(moduleDir, 'presets');
-const sourcePresetDir = path.resolve(process.cwd(), 'src/quantai/intraday/config/presets');
+const sourcePresetDir = path.resolve(process.cwd(), 'src/quantai/strategies/intradayDual/config/presets');
 
 const DEFAULT_PATH = fs.existsSync(distDefault) ? distDefault : sourceDefault;
 

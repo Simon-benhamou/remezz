@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../../quantai/strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import type { ExecutionPlan } from './planBuilder.js';
 
 export interface ExecutionParams {

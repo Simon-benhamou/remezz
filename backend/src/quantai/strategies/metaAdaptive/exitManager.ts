@@ -1,5 +1,5 @@
-import { QuantAIExitConfig } from '../config.js';
-import { PositionSizer } from '../risk/positionSizing.js';
+import { QuantAIExitConfig } from '../../config.js';
+import { PositionSizer } from '../../risk/positionSizing.js';
 
 export type TradeSide = 'long' | 'short';
 export type ExitArchetype = 'reversal' | 'impulse';

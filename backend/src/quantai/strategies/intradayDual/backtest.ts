@@ -1,6 +1,6 @@
 import { IntradayDualStrategy } from './strategy.js';
 import type { Candle, TickInput, BacktestResult, EntrySignal, TradeLog, BacktestMetrics } from './types.js';
-import { PreciseDecimal } from '../strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
 
 export type BacktestOptions = {
   symbol: string;

@@ -1,5 +1,6 @@
 import { prisma } from '../db/client.js';
 import { getConfig, getModeParams, type AgentAggressiveness } from '../utils/env.js';
+import { areAgentGuardsDisabled } from '../utils/agentGuards.js';
 import { resolveLeverageCap, type ResolvedLeverageCap } from './leverageCaps.js';
 
 export type RiskContext = {
@@ -42,6 +43,9 @@ export type RiskDecision = {
 };
 
 export async function assessRisk(ctx: RiskContext, limits?: RiskLimits): Promise<RiskDecision> {
+  if (areAgentGuardsDisabled()) {
+    return { ok: true };
+  }
   // Use mode-specific limits if not provided
   const effectiveLimits = limits || defaultLimits(ctx.aggressiveness);
   

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-const { __testHooks } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+const { __testHooks } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 const { buildPredictorFeatures } = __testHooks;
 

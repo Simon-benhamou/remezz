@@ -18,7 +18,7 @@ const {
   applyHysteresis,
 } = await import('../../dist/src/risk/rrExpectancy.js');
 const { getAgentRecentWinRate } = await import('../../dist/src/services/performance/winrate.js');
-const { EntryFilters } = await import('../../dist/src/quantai/strategy/entryFilters.js');
+const { EntryFilters } = await import('../../dist/src/quantai/strategies/metaAdaptive/entryFilters.js');
 
 async function seedSession(sessionId, symbol, wins, losses) {
   await prisma.agentSession.create({

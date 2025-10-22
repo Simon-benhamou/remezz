@@ -307,6 +307,7 @@ type NormalizedStartConfig = {
   volumeThresholdUsd?: number;
   momentumThreshold?: number;
   userId?: string;
+  strategyEngine: 'intraday_dual' | 'meta_adaptive';
   rawPayload: StartPayload;
 };
 
@@ -319,6 +320,11 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
     payload.aggressiveness === 'conservative' || payload.aggressiveness === 'reactive' || payload.aggressiveness === 'aggressive'
       ? payload.aggressiveness
       : 'reactive';
+
+  const rawStrategyEngine = typeof payload.strategyEngine === 'string' ? payload.strategyEngine.toLowerCase() : '';
+  const strategyEngine: 'intraday_dual' | 'meta_adaptive' = rawStrategyEngine.includes('meta')
+    ? 'meta_adaptive'
+    : 'intraday_dual';
 
   const maxLeverage = Math.min(10, Math.max(1, Number(payload.maxLeverage ?? 4)));
   const dailyLossLimitPct = Math.min(4, Math.max(3, Number(payload.dailyLossLimitPct ?? 3.5)));
@@ -381,6 +387,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
     volumeThresholdUsd,
     momentumThreshold: smartConfig.momentumThreshold,
     userId: userId || undefined,
+    strategyEngine,
     rawPayload: payload,
   };
 }
@@ -605,7 +612,7 @@ async function createSession(
     sizingMode: config.rawPayload?.sizingMode,
     dynamicLeverage: config.rawPayload?.dynamicLeverage !== false,
     minLeverage,
-    strategyEngine: 'intraday_dual',
+    strategyEngine: config.strategyEngine,
     rrFloor: DEFAULT_RR_EXPECTANCY_CONFIG.rrFloor,
     rrCeil: DEFAULT_RR_EXPECTANCY_CONFIG.rrCeil,
     rrBaseMin: DEFAULT_RR_EXPECTANCY_CONFIG.rrBaseMin,

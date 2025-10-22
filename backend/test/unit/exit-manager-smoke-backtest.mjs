@@ -7,7 +7,7 @@ process.env.USE_IN_MEMORY_DB = 'true';
 const {
   computeInitialBracket,
   maybeAdjustOrExit,
-} = await import('../../dist/src/quantai/strategy/exitManager.js');
+} = await import('../../dist/src/quantai/strategies/metaAdaptive/exitManager.js');
 const { PositionSizer } = await import('../../dist/src/quantai/risk/positionSizing.js');
 
 const exitConfig = {

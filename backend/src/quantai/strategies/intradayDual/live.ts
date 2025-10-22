@@ -1,6 +1,6 @@
 import { IntradayDualStrategy } from './strategy.js';
-import { PreciseDecimal } from '../strategy/metaAdaptiveAgent.js';
-import type { ActivationProfile } from '../../agent/state.js';
+import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
+import type { ActivationProfile } from '../../../agent/state/types.js';
 import type {
   Timeframe,
   Candle,
@@ -11,7 +11,7 @@ import type {
   ExitDirective,
   TradeLog,
 } from './types.js';
-import { getOHLCV, getTicker } from '../../data/market.js';
+import { getOHLCV, getTicker } from '../../../data/market.js';
 
 const DEFAULT_LIMITS: Record<Timeframe, number> = {
   '1m': 240,

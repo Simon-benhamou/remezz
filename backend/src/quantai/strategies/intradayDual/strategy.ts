@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../strategy/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
 import { loadIntradayConfig } from './config/index.js';
 import { FeaturePipeline } from './features.js';
 import { StrategyRouter } from './router.js';

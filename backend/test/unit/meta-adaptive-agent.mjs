@@ -10,8 +10,8 @@ const {
   evaluateRecognizedStrategies,
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
-} = await import('../../dist/src/quantai/strategy/recognizedStrategies.js');
-const { metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategy/metaAdaptiveAgent.js');
+} = await import('../../dist/src/quantai/strategies/metaAdaptive/recognizedStrategies.js');
+const { metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 
 metaAdaptiveStrategyAgent.reset();
 metaAdaptiveStrategyAgent.setRandomSeed(42);

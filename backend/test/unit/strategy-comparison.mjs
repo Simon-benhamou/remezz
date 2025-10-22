@@ -5,7 +5,7 @@ process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 
-const { compareStrategies } = await import('../../dist/src/quantai/strategy/comparison.js');
+const { compareStrategies } = await import('../../dist/src/quantai/strategies/metaAdaptive/comparison.js');
 
 const report = await compareStrategies();
 
