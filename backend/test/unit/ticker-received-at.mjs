@@ -36,7 +36,7 @@ const accepted = evaluateTickerFrame({
 
 assert.equal(accepted.status, 'accepted', 'ticker should be accepted when validated with original receivedAt');
 
-const rejected = evaluateTickerFrame({
+const stale = evaluateTickerFrame({
   symbol: 'XRP/USDT',
   frame: validFrame,
   source: 'WS',
@@ -44,7 +44,24 @@ const rejected = evaluateTickerFrame({
   expectedSymbolId: 'XRPUSDT',
 });
 
-assert.equal(rejected.status, 'rejected');
-assert.equal(rejected.ruleId, 'timestamp_drift');
+assert.equal(stale.status, 'stale');
+assert.equal(stale.ruleId, 'timestamp_drift');
+assert.equal(stale.dataAgeMs, now - frameTs);
+
+const futureFrame = {
+  ...validFrame,
+  timestamp: now + 7000,
+};
+
+const futureRejected = evaluateTickerFrame({
+  symbol: 'XRP/USDT',
+  frame: futureFrame,
+  source: 'WS',
+  receivedAt: now,
+  expectedSymbolId: 'XRPUSDT',
+});
+
+assert.equal(futureRejected.status, 'rejected');
+assert.equal(futureRejected.ruleId, 'timestamp_drift');
 
 console.log('✅ resolveTickerReceivedAt preserves accepted ticker frames without timestamp drift regressions.');

@@ -220,24 +220,34 @@ export function evaluateTickerFrame(params: EvaluateTickerFrameParams): TickerVa
   }
 
   const frameTimestamp = toNumber(frame.timestamp) ?? receivedAt;
-  const drift = Math.abs(receivedAt - frameTimestamp);
   const maxDriftMs = params.source === 'WS'
     ? cfg.WS_MAX_TIMESTAMP_DRIFT_MS
     : cfg.REST_MAX_TIMESTAMP_DRIFT_MS;
-  const enforceDrift = params.source === 'WS' || frameTimestamp > receivedAt;
+  const aheadByMs = Math.max(0, frameTimestamp - receivedAt);
+  const dataAgeMs = Math.max(0, receivedAt - frameTimestamp);
 
-  if (enforceDrift && drift > maxDriftMs) {
+  if (aheadByMs > maxDriftMs) {
     return {
       status: 'rejected',
       ruleId: 'timestamp_drift',
-      dataAgeMs: drift,
+      dataAgeMs: aheadByMs,
       timestamp: frameTimestamp,
       frameSymbolId,
       expectedSymbolId: expectedId,
     };
   }
 
-  const dataAgeMs = Math.max(0, receivedAt - frameTimestamp);
+  if (params.source === 'WS' && dataAgeMs > maxDriftMs) {
+    return {
+      status: 'stale',
+      ruleId: 'timestamp_drift',
+      dataAgeMs,
+      timestamp: frameTimestamp,
+      frameSymbolId,
+      expectedSymbolId: expectedId,
+    };
+  }
+
   if (dataAgeMs > cfg.MARKET_STALE_THRESHOLD_MS) {
     return {
       status: 'stale',
