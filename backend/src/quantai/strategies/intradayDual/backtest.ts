@@ -19,34 +19,55 @@ type SimulationArtifacts = {
   signals: EntrySignal[];
 };
 
-function aggregateCandles(candles: Candle[], minutes: number): Candle[] {
-  if (!candles.length) return [];
-  const grouped: Candle[] = [];
-  let bucket: Candle[] = [];
-  for (const candle of candles) {
-    bucket.push(candle);
-    if (bucket.length === minutes) {
-      grouped.push({
-        timestamp: bucket[bucket.length - 1].timestamp,
-        open: bucket[0].open,
-        high: Math.max(...bucket.map((c) => c.high)),
-        low: Math.min(...bucket.map((c) => c.low)),
-        close: bucket[bucket.length - 1].close,
-        volume: bucket.reduce((acc, c) => acc + c.volume, 0),
-      });
-      bucket = [];
+function inferBaseIntervalMs(candles: Candle[]): number {
+  for (let i = 1; i < candles.length; i++) {
+    const diff = candles[i].timestamp - candles[i - 1].timestamp;
+    if (Number.isFinite(diff) && diff > 0) {
+      return diff;
     }
   }
-  if (bucket.length) {
-    grouped.push({
-      timestamp: bucket[bucket.length - 1].timestamp,
-      open: bucket[0].open,
-      high: Math.max(...bucket.map((c) => c.high)),
-      low: Math.min(...bucket.map((c) => c.low)),
-      close: bucket[bucket.length - 1].close,
-      volume: bucket.reduce((acc, c) => acc + c.volume, 0),
-    });
+  return 60_000;
+}
+
+function combineBucket(bucket: Candle[]): Candle {
+  return {
+    timestamp: bucket[bucket.length - 1].timestamp,
+    open: bucket[0].open,
+    high: bucket.reduce((acc, candle) => Math.max(acc, candle.high), Number.NEGATIVE_INFINITY),
+    low: bucket.reduce((acc, candle) => Math.min(acc, candle.low), Number.POSITIVE_INFINITY),
+    close: bucket[bucket.length - 1].close,
+    volume: bucket.reduce((acc, candle) => acc + candle.volume, 0),
+  };
+}
+
+export function aggregateCandles(candles: Candle[], minutes: number): Candle[] {
+  if (!candles.length) return [];
+  if (minutes <= 1) return candles.slice();
+
+  const grouped: Candle[] = [];
+  const expectedInterval = inferBaseIntervalMs(candles);
+  const maxGap = expectedInterval * 1.5;
+  let bucket: Candle[] = [];
+  let lastTimestamp: number | null = null;
+
+  for (const candle of candles) {
+    if (lastTimestamp != null && candle.timestamp - lastTimestamp > maxGap) {
+      if (bucket.length === minutes) {
+        grouped.push(combineBucket(bucket));
+      }
+      bucket = [];
+    }
+
+    bucket.push(candle);
+    lastTimestamp = candle.timestamp;
+
+    if (bucket.length === minutes) {
+      grouped.push(combineBucket(bucket));
+      bucket = [];
+      lastTimestamp = null;
+    }
   }
+
   return grouped;
 }
 
