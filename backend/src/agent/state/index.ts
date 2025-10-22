@@ -502,6 +502,12 @@ export class ReboundRejectionAgent {
   }
 
   public handleCircuitBreakerStateChange(state: CircuitBreakerState): Promise<void> | void {
+    if (state && typeof state.tradesToday === 'number' && Number.isFinite(state.tradesToday)) {
+      const normalizedTrades = Math.max(0, Math.floor(state.tradesToday));
+      if (this.tradesToday !== normalizedTrades) {
+        this.tradesToday = normalizedTrades;
+      }
+    }
     if (!this.sessionId) return;
     return persistCircuitBreakerState(this.sessionId, state).catch((error) => {
       console.warn(`Failed to persist circuit breaker state for session ${this.sessionId}:`, error);
