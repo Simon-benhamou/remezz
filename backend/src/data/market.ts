@@ -233,9 +233,13 @@ export function isSyntheticSeries(data: number[][]): boolean {
   let syntheticCount = 0;
   for (const row of tail) {
     if (!Array.isArray(row) || row.length < 6) continue;
-    const [, open, high, low, close, volume] = row;
-    const flat = open === high && high === low && low === close;
-    const zeroVol = Number(volume ?? 0) === 0;
+    const open = Number(row[1]);
+    const high = Number(row[2]);
+    const low = Number(row[3]);
+    const close = Number(row[4]);
+    const volume = Number(row[5]);
+    const flat = Number.isFinite(open) && open === high && high === low && low === close;
+    const zeroVol = Number.isFinite(volume) && volume === 0;
     if (flat || zeroVol) {
       syntheticCount += 1;
     }

@@ -2,6 +2,9 @@ import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot, BrokerPositionMarg
 import { getUserExchange, resolveSymbol } from '../exchange/ccxtClient.js';
 import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
+import { fetchDepth } from '../data/depth.js';
+import { walkBook } from '../exec/bookWalkSlippage.js';
+import { getIntradayRuntimeConfig } from '../config/intraday.js';
 import type { Cfg } from '../utils/env.js';
 import { logImprovementAuto } from '../monitor/backlog.js';
 import { getUserCredentials } from '../services/userCredentials.js';
@@ -397,6 +400,29 @@ export class LiveBroker implements Broker {
     const ex = await this.getExchange();
     const symbol = await resolveSymbol(o.symbol);
     const startTs = Date.now();
+    const { slip } = getIntradayRuntimeConfig();
+    let estImpactBps: number | undefined;
+    let usedDepth = false;
+    let depthFallback = false;
+
+    if (slip.bookWalkEnabled && o.type === 'market') {
+      try {
+        const depth = await fetchDepth(o.symbol, slip.depthLevels, this.userId);
+        if (depth) {
+          const walked = walkBook(o.side, o.qty, depth);
+          estImpactBps = walked.impactBps;
+          usedDepth = walked.filled > 0 && !walked.fallback;
+          depthFallback = walked.fallback || !(walked.filled > 0);
+          if (depthFallback && estImpactBps !== undefined) {
+            estImpactBps *= slip.fallbackInflation;
+          }
+        } else {
+          depthFallback = true;
+        }
+      } catch {
+        depthFallback = true;
+      }
+    }
 
     // Try set leverage if available and provided
     if (o.leverage && typeof (ex as any).setLeverage === 'function') {
@@ -505,6 +531,13 @@ export class LiveBroker implements Broker {
     placed.cancelCount = cancelCount;
     placed.requestedQty = o.qty;
     placed.requestedPrice = o.type === 'limit' ? o.price : undefined;
+    if (estImpactBps !== undefined) {
+      placed.estImpactBps = estImpactBps;
+    }
+    if (o.type === 'market') {
+      placed.usedDepth = usedDepth;
+      placed.depthFallback = depthFallback;
+    }
 
     // Best-effort: create protective SL/TP orders if provided
     try {
@@ -543,6 +576,7 @@ export class LiveBroker implements Broker {
   async estimateFillableQty(params: { symbol: string; side: 'buy'|'sell'; desiredQty: number; maxImpactPct?: number }) {
     const ex = await this.getExchange();
     const symbol = await resolveSymbol(params.symbol);
+    const { slip } = getIntradayRuntimeConfig();
     const maxImpactPct = params.maxImpactPct ?? Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35');
     let market: any;
     try {
@@ -550,33 +584,70 @@ export class LiveBroker implements Broker {
       if (!ex.markets && !isBinanceExchange) { await ex.loadMarkets(); }
       market = ex.market ? ex.market(symbol) : ex.markets?.[symbol];
     } catch {}
-    const book = await ex.fetchOrderBook(symbol, 40).catch(()=>null as any);
-    const levels = params.side === 'buy' ? book?.asks : book?.bids;
-    let cumQty = 0;
-    let bestPrice = levels?.[0]?.[0];
-    let worstPrice = bestPrice;
-    if (Array.isArray(levels)) {
-      for (const [price, qty] of levels) {
-        if (typeof price !== 'number' || typeof qty !== 'number') continue;
-        if (cumQty === 0 && !bestPrice) bestPrice = price;
-        cumQty += qty;
-        worstPrice = price;
-        if (cumQty >= params.desiredQty) break;
-      }
-    }
-    const impactPct = bestPrice && worstPrice
-      ? Math.abs((worstPrice - bestPrice) / bestPrice) * 100
-      : 0;
-    const fillableQty = cumQty > 0 ? Math.min(params.desiredQty, cumQty) : params.desiredQty;
+
     let minQty: number | undefined;
     try {
       minQty = Number(market?.limits?.amount?.min);
     } catch {}
-    if (impactPct > maxImpactPct && cumQty >= params.desiredQty) {
-      const scaled = Math.max(minQty ?? 0, params.desiredQty * (maxImpactPct / Math.max(0.0001, impactPct)));
-      return { fillableQty: scaled, impactPct, minQty };
+
+    const desiredQty = Math.max(0, params.desiredQty || 0);
+    if (!(desiredQty > 0)) {
+      return { fillableQty: desiredQty, impactPct: 0, minQty };
     }
-    return { fillableQty, impactPct, minQty };
+
+    let depthSim: ReturnType<typeof walkBook> | null = null;
+    if (slip.bookWalkEnabled) {
+      try {
+        const depth = await fetchDepth(params.symbol, slip.depthLevels, this.userId);
+        if (depth) {
+          depthSim = walkBook(params.side, desiredQty, depth);
+        }
+      } catch {}
+    }
+
+    const usedDepth = Boolean(depthSim && depthSim.filled > 0 && !depthSim.fallback);
+    let fillableQty = depthSim ? Math.min(desiredQty, depthSim.filled > 0 ? depthSim.filled : desiredQty) : desiredQty;
+    if (!(fillableQty > 0)) {
+      fillableQty = desiredQty;
+    }
+
+    let impactPct = depthSim ? Math.max(0, depthSim.impactBps / 100) : 0;
+    let fallback = !depthSim || depthSim.fallback || !(depthSim.filled > 0);
+
+    if (fallback) {
+      try {
+        const ticker = await ex.fetchTicker(symbol);
+        const bid = Number(ticker?.bid);
+        const ask = Number(ticker?.ask);
+        const best = params.side === 'buy' ? ask : bid;
+        const other = params.side === 'buy' ? bid : ask;
+        if (Number.isFinite(best) && Number.isFinite(other) && best > 0 && other > 0) {
+          const spread = Math.abs(best - other);
+          const baseImpact = (spread / best) * 100;
+          if (Number.isFinite(baseImpact)) {
+            impactPct = Math.max(impactPct, baseImpact * slip.fallbackInflation);
+          }
+        }
+      } catch {}
+    }
+
+    if (impactPct > maxImpactPct && maxImpactPct > 0) {
+      const scale = maxImpactPct / Math.max(0.0001, impactPct);
+      fillableQty = Math.min(fillableQty, desiredQty * Math.max(0, Math.min(1, scale)));
+      if (minQty) {
+        fillableQty = Math.max(fillableQty, minQty);
+      }
+    }
+
+    fillableQty = Math.max(0, Math.min(desiredQty, fillableQty));
+    return {
+      fillableQty,
+      impactPct,
+      minQty,
+      usedDepth,
+      simFallback: fallback,
+      simImpactBps: impactPct * 100,
+    } as any;
   }
 
   async syncProtective(params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number | number[]; slOrderId?: string|null; tpOrderId?: string|null }) {

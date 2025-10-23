@@ -32,6 +32,10 @@ export type PlacedOrder = NewOrder & {
   fillRatio?: number;
   requestedQty?: number;
   requestedPrice?: number;
+  simImpactBps?: number;
+  estImpactBps?: number;
+  usedDepth?: boolean;
+  depthFallback?: boolean;
 };
 
 export type BrokerPositionMargin = {

@@ -11,8 +11,9 @@ import type {
   ExitDirective,
   TradeLog,
 } from './types.js';
-import { getOHLCV, getTicker } from '../../../data/market.js';
-import { fetchDepth } from '../../../data/orderBook.js';
+import { getOHLCV, getTicker, isSyntheticSeries } from '../../../data/market.js';
+import { fetchDepth } from '../../../data/depth.js';
+import { getIntradayRuntimeConfig } from '../../../config/intraday.js';
 import { loadIntradayConfig } from './config/index.js';
 
 const DEFAULT_LIMITS: Record<Timeframe, number> = {
@@ -32,42 +33,23 @@ function toCandleSeries(raw: number[][]): Candle[] {
   }));
 }
 
+type CandleFetchResult = { candles: Candle[]; raw: number[][]; synthetic: boolean };
+
 async function fetchCandles(
   symbol: string,
   timeframe: Timeframe,
   limit: number,
   userId?: string,
-): Promise<Candle[]> {
+): Promise<CandleFetchResult> {
   const raw = await getOHLCV(symbol, timeframe, limit, userId, {
     preferWebSocket: true,
     allowSyntheticFallback: false,
   });
   const trimmed = raw.slice(-limit);
-  const trailing = trimmed.slice(-3);
-  const trailingZeroVolume = trailing.length === 3 && trailing.every((row) => Number(row?.[5] ?? 0) === 0);
-  const trailingFlat = trailing.length === 3 && trailing.every((row) => {
-    if (!Array.isArray(row) || row.length < 5) return false;
-    const [, open, high, low, close] = row;
-    return open === high && high === low && low === close;
-  });
-  const cleaned = trimmed.filter((row) => {
-    if (!Array.isArray(row) || row.length < 6) return false;
-    const [, open, high, low, close, volume] = row;
-    const vol = Number(volume ?? 0);
-    const flat = open === high && high === low && low === close;
-    if (vol === 0 || flat) {
-      return false;
-    }
-    return true;
-  });
-  if (trailingZeroVolume || trailingFlat) {
-    const cutoff = cleaned.length - 3;
-    cleaned.splice(Math.max(0, cutoff));
-  }
-  if (cleaned.length < Math.floor(limit / 2)) {
-    throw new Error('unusable_data');
-  }
-  return toCandleSeries(cleaned).slice(-limit);
+  const synthetic = isSyntheticSeries(trimmed);
+  const normalized = trimmed.filter((row) => Array.isArray(row) && row.length >= 6);
+  const candles = toCandleSeries(normalized).slice(-limit);
+  return { candles, raw: trimmed, synthetic };
 }
 
 function resolveEquity(profile?: ActivationProfile | null): PreciseDecimal {
@@ -110,7 +92,12 @@ export async function buildOrderBookSnapshot(
   try {
     const depth = await fetchDepth(symbol, depthLevels, userId);
     if (depth && depth.bids?.length && depth.asks?.length) {
-      return depth;
+      return {
+        timestamp: depth.timestamp,
+        bids: depth.bids,
+        asks: depth.asks,
+        source: 'depth',
+      };
     }
   } catch (error) {
     console.warn('intraday.depth.fetch_failed', { symbol, error: String((error as Error).message || error) });
@@ -171,13 +158,15 @@ export async function evaluateIntradayStrategy(
   } as Record<Timeframe, Candle[]>;
 
   const fetchPromises: Promise<void>[] = [];
+  const fetchMeta: Partial<Record<Timeframe, { synthetic: boolean }>> = {};
   (['1m', '5m', '15m'] as const).forEach((tf) => {
     if (!candles[tf] || candles[tf].length === 0) {
       const limit = DEFAULT_LIMITS[tf];
       fetchPromises.push(
         fetchCandles(symbol, tf, limit, userId)
-          .then((series) => {
-            candles[tf] = series;
+          .then((result) => {
+            candles[tf] = result.candles;
+            fetchMeta[tf] = { synthetic: result.synthetic };
           })
           .catch((error) => {
             throw new Error(`failed_fetch_candles_${tf}:${error instanceof Error ? error.message : String(error)}`);
@@ -187,6 +176,23 @@ export async function evaluateIntradayStrategy(
   });
 
   await Promise.all(fetchPromises);
+
+  const runtimeCfg = getIntradayRuntimeConfig();
+  if (runtimeCfg.flags.INTRADAY_DISALLOW_SYNTHETIC) {
+    for (const tf of ['1m', '5m', '15m'] as const) {
+      const meta = fetchMeta[tf];
+      if (meta?.synthetic) {
+        console.warn('intraday.unusable_data', { symbol, timeframe: tf, reason: 'synthetic_zero_volume' });
+        return {
+          timestamp: Date.now(),
+          regime: { label: 'NONE', confidence: 0, reason: 'synthetic_zero_volume' },
+          entry: null,
+          exits: [],
+          trades: [],
+        };
+      }
+    }
+  }
 
   const last1m = candles['1m'][candles['1m'].length - 1];
   if (!last1m) {
