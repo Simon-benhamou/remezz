@@ -354,7 +354,7 @@ export class PaperBroker implements Broker {
       }
       let impactPct = depthSim.simFallback ? 0 : Math.max(0, depthSim.impactPct);
       const bestGuess = params.side === 'buy' ? Number(t?.ask || price) : Number(t?.bid || price);
-      const bestPrice = depthSim.bestPrice ?? (Number.isFinite(bestGuess) && bestGuess > 0 ? bestGuess : price);
+      let bestPrice = depthSim.bestPrice ?? (Number.isFinite(bestGuess) && bestGuess > 0 ? bestGuess : price);
       let vwap = depthSim.vwap ?? bestPrice ?? price;
 
       if (volUsd15m > 0 && volUsd15m < cfg.LIQUIDITY_MIN_15M_USD) {
@@ -379,7 +379,32 @@ export class PaperBroker implements Broker {
 
       if (impactPct > maxImpactPct && maxImpactPct > 0) {
         const scale = maxImpactPct / Math.max(0.0001, impactPct);
-        fillableQty = Math.min(fillableQty, desiredQty * Math.max(0, Math.min(1, scale)));
+        const scaledQty = Math.max(
+          0,
+          Math.min(fillableQty, desiredQty * Math.max(0, Math.min(1, scale))),
+        );
+        if (scaledQty < fillableQty) {
+          fillableQty = scaledQty;
+          if (!depthSim.simFallback && scaledQty > 0) {
+            const rescaledDepth = await fetchSimulatedFill(symbol, params.side, scaledQty).catch(() => null);
+            if (rescaledDepth && !rescaledDepth.simFallback) {
+              fillableQty = Math.max(0, Math.min(scaledQty, rescaledDepth.fillableQty ?? scaledQty));
+              impactPct = Math.max(0, rescaledDepth.impactPct ?? 0);
+              const rescaledBest = Number(rescaledDepth.bestPrice);
+              if (Number.isFinite(rescaledBest) && rescaledBest > 0) {
+                bestPrice = rescaledBest;
+              }
+              const rescaledVwap = Number(rescaledDepth.vwap);
+              if (Number.isFinite(rescaledVwap) && rescaledVwap > 0) {
+                vwap = rescaledVwap;
+              }
+            } else {
+              impactPct = Math.min(impactPct, maxImpactPct);
+            }
+          } else {
+            impactPct = Math.min(impactPct, maxImpactPct);
+          }
+        }
       }
 
       fillableQty = Math.max(0, Math.min(desiredQty, fillableQty));
