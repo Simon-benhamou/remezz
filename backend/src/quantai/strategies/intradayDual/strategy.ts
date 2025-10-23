@@ -7,6 +7,7 @@ import { GuardrailMonitor, VolatilitySizer, DirectionalPressure, computeSidePena
 import { History } from './history.js';
 import { computeQualityScore, chooseEV } from '../../qs/qualityScore.js';
 import { getIntradayRuntimeConfig } from '../../../config/intraday.js';
+import { computeEntryNudge } from '../../micro/microTrigger.js';
 import type {
   TickInput,
   RegimeSignal,
@@ -42,6 +43,11 @@ type ActivePosition = {
   stopGraceUntil?: number;
   stopGracePrice?: PreciseDecimal;
   entryExecutionMode: EntrySignal['execution']['mode'];
+  tp1Fraction: number;
+  tp2Fraction: number;
+  timeStopExpiry: number;
+  telemetry?: EntrySignal['telemetry'];
+  scratchTriggered: boolean;
 };
 
 type StopContext = { regime: 'BOM' | 'MR'; side: 'long' | 'short' };
@@ -93,6 +99,23 @@ export class IntradayDualStrategy {
   private readonly lastMrEntry = new Map<string, number>();
   private readonly postStopRecheck = new Map<string, number>();
   private readonly lastStopContext = new Map<string, StopContext>();
+  private readonly microState = new Map<string, {
+    priceSamples: { timestamp: number; price: number }[];
+    lastTop3Bids?: number;
+    lastTop3Asks?: number;
+  }>();
+  private readonly microContext = new Map<string, {
+    priceDeltaBps: number;
+    top3BidDelta: number;
+    top3AskDelta: number;
+    spreadBps: number;
+  }>();
+  private readonly pendingMicroEntries = new Map<string, {
+    entry: EntrySignal;
+    trigger: PreciseDecimal;
+    side: 'long' | 'short';
+    createdAt: number;
+  }>();
 
   evaluateTick(input: TickInput, ctx: EvaluateContext): {
     regime: RegimeSignal;
@@ -110,10 +133,19 @@ export class IntradayDualStrategy {
       });
     }
 
+    this.updateMicroContext(input);
+
     const features = this.computeFeatures(input);
     const regime = this.router.classify(input.symbol, features);
     const entries: EntrySignal[] = [];
     const exits: ExitDirective[] = [];
+
+    const pendingMicro = this.pendingMicroEntries.get(input.symbol);
+    if (pendingMicro && this.hasPriceCrossed(pendingMicro.side, pendingMicro.trigger, input.price)) {
+      entries.push(pendingMicro.entry);
+      this.registerPosition(input.symbol, pendingMicro.entry, ctx.equityUsd, input.timestamp);
+      this.pendingMicroEntries.delete(input.symbol);
+    }
 
     exits.push(...this.evaluateExits(input, features));
 
@@ -146,6 +178,108 @@ export class IntradayDualStrategy {
     return result as Record<'1m' | '5m' | '15m', TickFeatures>;
   }
 
+  private updateMicroContext(input: TickInput): void {
+    const cfg = this.cfg.management?.microTrigger;
+    if (!cfg) return;
+    const lookbackMs = Math.max(1, Math.round(cfg.lookbackSec * 1000));
+    const state = this.microState.get(input.symbol) ?? { priceSamples: [] as { timestamp: number; price: number }[] };
+    state.priceSamples.push({ timestamp: input.timestamp, price: input.price });
+    const cutoff = input.timestamp - lookbackMs;
+    state.priceSamples = state.priceSamples.filter((sample) => sample.timestamp >= cutoff);
+    const anchor = state.priceSamples[0];
+    const priceDeltaBps = anchor && anchor.price !== 0
+      ? ((input.price - anchor.price) / Math.abs(anchor.price)) * 10_000
+      : 0;
+    let top3Bid = state.lastTop3Bids ?? 0;
+    let top3Ask = state.lastTop3Asks ?? 0;
+    if (input.orderBook) {
+      const bids = input.orderBook.bids.slice(0, 3);
+      const asks = input.orderBook.asks.slice(0, 3);
+      top3Bid = bids.reduce((acc, level) => acc + (Number.isFinite(level.size) ? level.size : 0), 0);
+      top3Ask = asks.reduce((acc, level) => acc + (Number.isFinite(level.size) ? level.size : 0), 0);
+    }
+    const top3BidDelta = state.lastTop3Bids !== undefined ? top3Bid - (state.lastTop3Bids ?? 0) : 0;
+    const top3AskDelta = state.lastTop3Asks !== undefined ? top3Ask - (state.lastTop3Asks ?? 0) : 0;
+    state.lastTop3Bids = top3Bid;
+    state.lastTop3Asks = top3Ask;
+    this.microState.set(input.symbol, state);
+    const spreadBps = (() => {
+      if (!input.orderBook || !input.orderBook.bids.length || !input.orderBook.asks.length) return 0;
+      const bestBid = input.orderBook.bids[0]?.price ?? 0;
+      const bestAsk = input.orderBook.asks[0]?.price ?? 0;
+      const mid = (bestBid + bestAsk) / 2;
+      if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk) || mid === 0) return 0;
+      return ((bestAsk - bestBid) / mid) * 10_000;
+    })();
+    this.microContext.set(input.symbol, {
+      priceDeltaBps,
+      top3BidDelta,
+      top3AskDelta,
+      spreadBps,
+    });
+  }
+
+  private hasPriceCrossed(side: 'long' | 'short', trigger: PreciseDecimal, price: number): boolean {
+    const priceDecimal = new PreciseDecimal(price.toString());
+    if (side === 'long') {
+      return priceDecimal.gt(trigger) || priceDecimal.equals(trigger);
+    }
+    return priceDecimal.lt(trigger) || priceDecimal.equals(trigger);
+  }
+
+  private applyMicroTrigger(symbol: string, entry: EntrySignal, input: TickInput): EntrySignal | null {
+    const cfg = this.cfg.management?.microTrigger;
+    if (!cfg?.enabled) {
+      this.pendingMicroEntries.delete(symbol);
+      return entry;
+    }
+    const context = this.microContext.get(symbol);
+    if (!context) {
+      this.pendingMicroEntries.delete(symbol);
+      return entry;
+    }
+    const microInputs = {
+      side: entry.side,
+      lookbackSec: cfg.lookbackSec,
+      entryNudgeBps: cfg.entryNudgeBps,
+      lastPrice: input.price,
+      spreadBps: context.spreadBps,
+      top3BidSizeDelta: context.top3BidDelta,
+      top3AskSizeDelta: context.top3AskDelta,
+      priceDeltaBps: context.priceDeltaBps,
+    } as const;
+    const microNudgeBps = computeEntryNudge(microInputs);
+    if (entry.telemetry) {
+      entry.telemetry = {
+        ...entry.telemetry,
+        microNudgeBps,
+      };
+    }
+    if (microNudgeBps <= 0) {
+      this.pendingMicroEntries.delete(symbol);
+      return entry;
+    }
+    const nudgeDecimal = new PreciseDecimal(microNudgeBps).dividedBy(new PreciseDecimal(10_000));
+    const scaleBase = new PreciseDecimal(1);
+    const scale = entry.side === 'long'
+      ? scaleBase.plus(nudgeDecimal)
+      : scaleBase.minus(nudgeDecimal);
+    const effectiveTrigger = entry.triggerPrice.times(scale);
+    entry.triggerPrice = effectiveTrigger;
+    const crossed = this.hasPriceCrossed(entry.side, effectiveTrigger, input.price);
+    if (crossed) {
+      this.pendingMicroEntries.delete(symbol);
+      return entry;
+    }
+    this.pendingMicroEntries.set(symbol, {
+      entry,
+      trigger: effectiveTrigger,
+      side: entry.side,
+      createdAt: input.timestamp,
+    });
+    return null;
+  }
+
   private evaluateEntry(
     input: TickInput,
     features: Record<'1m' | '5m' | '15m', TickFeatures>,
@@ -174,14 +308,18 @@ export class IntradayDualStrategy {
     });
     const adaptive: AdaptiveParams = { recheckActive, staleBias, lastStop, qValues, guardRiskReduction: riskReduction };
     if (regime.label === 'BOM') {
-      return this.evaluateBreakoutEntry(input, features, ctx, adaptive, regime);
+      const entry = this.evaluateBreakoutEntry(input, features, ctx, adaptive, regime);
+      if (!entry) return null;
+      return this.applyMicroTrigger(input.symbol, entry, input);
     }
     if (regime.label === 'MR' && !input.newsSpike) {
       const lastEntry = this.lastMrEntry.get(input.symbol) ?? 0;
       if (input.timestamp - lastEntry < this.cfg.entry.mr.cooldownMs) {
         return null;
       }
-      return this.evaluateMeanReversionEntry(input, features, ctx, adaptive, regime);
+      const entry = this.evaluateMeanReversionEntry(input, features, ctx, adaptive, regime);
+      if (!entry) return null;
+      return this.applyMicroTrigger(input.symbol, entry, input);
     }
     return null;
   }
@@ -695,7 +833,6 @@ export class IntradayDualStrategy {
     const list = this.positions.get(input.symbol) ?? [];
     const f1 = features['1m'];
     const atrPct = f1.volatility.atrPct;
-    const timeStopMs = this.cfg.stops.timeStopMinutes * 60_000;
     const price = new PreciseDecimal(input.price);
 
     for (const position of [...list]) {
@@ -716,7 +853,38 @@ export class IntradayDualStrategy {
         }
       }
 
-      const elapsed = input.timestamp - position.entryTime;
+      if (!position.scratchTriggered && this.cfg.management?.scratch?.enabled) {
+        const threshold = this.cfg.management.scratch.aggressionThreshold;
+        const aggression = f1.orderBook.aggressionRatio;
+        const imbalanceDelta = f1.orderBook.imbalanceDelta;
+        const aggressionFlip = position.side === 'long'
+          ? aggression <= threshold
+          : aggression >= (1 - threshold);
+        const imbalanceFlip = position.side === 'long'
+          ? imbalanceDelta < 0
+          : imbalanceDelta > 0;
+        if (aggressionFlip && imbalanceFlip) {
+          const feeBps = this.runtimeCfg.ev.feesBps;
+          const feeDecimal = new PreciseDecimal(feeBps).dividedBy(new PreciseDecimal(10_000));
+          const base = new PreciseDecimal(1);
+          const scale = position.side === 'long'
+            ? base.plus(feeDecimal)
+            : base.minus(feeDecimal);
+          const breakeven = position.entryPrice.times(scale);
+          if (position.side === 'long') {
+            if (position.stopLoss.lt(breakeven)) {
+              position.stopLoss = breakeven;
+            }
+          } else if (position.stopLoss.gt(breakeven)) {
+            position.stopLoss = breakeven;
+          }
+          position.scratchTriggered = true;
+          if (position.telemetry) {
+            position.telemetry.scratchTriggered = true;
+          }
+        }
+      }
+
       const hitStop = position.side === 'long'
         ? price.lt(position.stopLoss)
         : price.gt(position.stopLoss);
@@ -729,7 +897,7 @@ export class IntradayDualStrategy {
       if (!position.tp1Executed) {
         const hitTp1 = position.side === 'long' ? price.gt(position.takeProfit1) : price.lt(position.takeProfit1);
         if (hitTp1) {
-          const exit = this.realizeExit(input.symbol, position, this.cfg.stops.tp.firstSize, position.takeProfit1, 'tp1', input.timestamp, atrPct);
+          const exit = this.realizeExit(input.symbol, position, position.tp1Fraction, position.takeProfit1, 'tp1', input.timestamp, atrPct);
           if (exit) exits.push(exit.directive);
           position.tp1Executed = true;
           position.stopLoss = position.entryPrice; // move to breakeven
@@ -739,7 +907,7 @@ export class IntradayDualStrategy {
       if (!position.tp2Executed) {
         const hitTp2 = position.side === 'long' ? price.gt(position.takeProfit2) : price.lt(position.takeProfit2);
         if (hitTp2) {
-          const exit = this.realizeExit(input.symbol, position, this.cfg.stops.tp.secondSize, position.takeProfit2, 'tp2', input.timestamp, atrPct);
+          const exit = this.realizeExit(input.symbol, position, position.tp2Fraction, position.takeProfit2, 'tp2', input.timestamp, atrPct);
           if (exit) exits.push(exit.directive);
           position.tp2Executed = true;
         }
@@ -783,7 +951,7 @@ export class IntradayDualStrategy {
         position.runnerTrailMult = trailMult;
       }
 
-      if (elapsed >= timeStopMs) {
+      if (position.timeStopExpiry > 0 && input.timestamp >= position.timeStopExpiry) {
         const exit = this.realizeExit(input.symbol, position, 1, price, 'time', input.timestamp, atrPct);
         if (exit) exits.push(exit.directive);
       }
@@ -877,6 +1045,36 @@ export class IntradayDualStrategy {
   private registerPosition(symbol: string, entry: EntrySignal, equity: PreciseDecimal, timestamp: number): void {
     const list = this.positions.get(symbol) ?? [];
     const initialStop = entry.stopGrace?.price ?? entry.stopLossPrice;
+    const managementCfg = this.cfg.management;
+    const riskScale = entry.telemetry?.riskScale ?? 1;
+    const baseFraction = 0.5 - 0.2 * (riskScale - 1);
+    const tpMin = managementCfg?.tp?.minFraction ?? this.cfg.stops.tp.firstSize;
+    const tpMax = managementCfg?.tp?.maxFraction ?? this.cfg.stops.tp.firstSize;
+    const tp1Fraction = Math.min(tpMax, Math.max(tpMin, baseFraction));
+    const tp2Fraction = Math.max(0, Math.min(1, 1 - tp1Fraction));
+    const pWin = entry.telemetry?.pWin ?? 0.5;
+    const timeCfg = managementCfg?.timeStop;
+    const minMinutes = timeCfg?.minMinutes ?? this.cfg.stops.timeStopMinutes;
+    const maxMinutes = timeCfg?.maxMinutes ?? this.cfg.stops.timeStopMinutes;
+    const low = Math.min(minMinutes, maxMinutes);
+    const high = Math.max(minMinutes, maxMinutes);
+    const lerpFactor = Math.min(1, Math.max(0, 1 - pWin));
+    const timeStopMinutes = low + (high - low) * lerpFactor;
+    const timeStopExpiry = Number.isFinite(timeStopMinutes)
+      ? timestamp + Math.max(0, Math.round(timeStopMinutes * 60_000))
+      : timestamp + this.cfg.stops.timeStopMinutes * 60_000;
+    const telemetry = entry.telemetry
+      ? {
+        ...entry.telemetry,
+        tp1Fraction,
+        timeStopMin: timeStopMinutes,
+        scratchTriggered: entry.telemetry.scratchTriggered ?? false,
+        microNudgeBps: entry.telemetry.microNudgeBps ?? 0,
+      }
+      : undefined;
+    if (telemetry) {
+      entry.telemetry = telemetry;
+    }
     const position: ActivePosition = {
       symbol,
       side: entry.side,
@@ -901,6 +1099,11 @@ export class IntradayDualStrategy {
       stopGraceUntil: entry.stopGrace?.expiresAt,
       stopGracePrice: entry.stopGrace?.price,
       entryExecutionMode: entry.execution.mode,
+      tp1Fraction,
+      tp2Fraction,
+      timeStopExpiry,
+      telemetry,
+      scratchTriggered: telemetry?.scratchTriggered ?? false,
     };
     list.push(position);
     this.positions.set(symbol, list);

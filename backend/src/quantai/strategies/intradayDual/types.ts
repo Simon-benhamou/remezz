@@ -122,6 +122,10 @@ export type EntrySignal = {
     tpBps: number;
     evBps: number;
     predictedSlippageBps: number;
+    microNudgeBps?: number;
+    scratchTriggered?: boolean;
+    timeStopMin?: number;
+    tp1Fraction?: number;
   };
 };
 
