@@ -12,6 +12,8 @@ import type {
   TradeLog,
 } from './types.js';
 import { getOHLCV, getTicker } from '../../../data/market.js';
+import { fetchDepth } from '../../../data/orderBook.js';
+import { loadIntradayConfig } from './config/index.js';
 
 const DEFAULT_LIMITS: Record<Timeframe, number> = {
   '1m': 240,
@@ -36,8 +38,36 @@ async function fetchCandles(
   limit: number,
   userId?: string,
 ): Promise<Candle[]> {
-  const raw = await getOHLCV(symbol, timeframe, limit, userId, { preferWebSocket: true });
-  return toCandleSeries(raw).slice(-limit);
+  const raw = await getOHLCV(symbol, timeframe, limit, userId, {
+    preferWebSocket: true,
+    allowSyntheticFallback: false,
+  });
+  const trimmed = raw.slice(-limit);
+  const trailing = trimmed.slice(-3);
+  const trailingZeroVolume = trailing.length === 3 && trailing.every((row) => Number(row?.[5] ?? 0) === 0);
+  const trailingFlat = trailing.length === 3 && trailing.every((row) => {
+    if (!Array.isArray(row) || row.length < 5) return false;
+    const [, open, high, low, close] = row;
+    return open === high && high === low && low === close;
+  });
+  const cleaned = trimmed.filter((row) => {
+    if (!Array.isArray(row) || row.length < 6) return false;
+    const [, open, high, low, close, volume] = row;
+    const vol = Number(volume ?? 0);
+    const flat = open === high && high === low && low === close;
+    if (vol === 0 || flat) {
+      return false;
+    }
+    return true;
+  });
+  if (trailingZeroVolume || trailingFlat) {
+    const cutoff = cleaned.length - 3;
+    cleaned.splice(Math.max(0, cutoff));
+  }
+  if (cleaned.length < Math.floor(limit / 2)) {
+    throw new Error('unusable_data');
+  }
+  return toCandleSeries(cleaned).slice(-limit);
 }
 
 function resolveEquity(profile?: ActivationProfile | null): PreciseDecimal {
@@ -71,30 +101,42 @@ function resolveSlippageBps(profile?: ActivationProfile | null): number {
   }
 }
 
-async function buildOrderBookSnapshot(
+export async function buildOrderBookSnapshot(
   symbol: string,
   userId?: string,
 ): Promise<OrderBookSnapshot | null> {
+  const cfg = loadIntradayConfig();
+  const depthLevels = Math.max(1, Number(cfg.orderBook.topDepthLevels || 1));
   try {
-    const ticker = await getTicker(symbol, { userId });
-    if (!ticker) return null;
-    const bid = Number(ticker.bid || ticker.last || 0);
-    const ask = Number(ticker.ask || ticker.last || 0);
-    if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0) {
-      return null;
+    const depth = await fetchDepth(symbol, depthLevels, userId);
+    if (depth && depth.bids?.length && depth.asks?.length) {
+      return depth;
     }
-    const midSize = Number(ticker.baseVolume || ticker.quoteVolume || 0) / 100 || 0;
-    const size = Number.isFinite(midSize) && midSize > 0 ? midSize : 1;
-    const ts = Number(ticker.timestamp || Date.now());
-    return {
-      timestamp: ts,
-      bids: [{ price: bid, size }],
-      asks: [{ price: ask, size }],
-    };
+  } catch (error) {
+    console.warn('intraday.depth.fetch_failed', { symbol, error: String((error as Error).message || error) });
+  }
+
+  let ticker: any = null;
+  try {
+    ticker = await getTicker(symbol, { userId });
   } catch (error) {
     console.warn('⚠️ Failed to fetch ticker for intraday snapshot:', error);
+    ticker = null;
+  }
+  if (!ticker) return null;
+  const bid = Number(ticker.bid || ticker.last || 0);
+  const ask = Number(ticker.ask || ticker.last || 0);
+  if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0) {
     return null;
   }
+  const timestamp = Number(ticker.timestamp || Date.now());
+  console.warn('intraday.orderbook.fallback', { symbol, source: 'fallback_ticker' });
+  return {
+    timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+    bids: [{ price: bid, size: 1 }],
+    asks: [{ price: ask, size: 1 }],
+    source: 'fallback_ticker',
+  };
 }
 
 export type IntradayEvaluationOptions = {

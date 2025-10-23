@@ -134,7 +134,7 @@ export class IntradayDualStrategy {
     (['1m', '5m', '15m'] as const).forEach((tf) => {
       const candles = input.candles[tf];
       if (candles?.length) {
-        result[tf] = this.pipeline.compute(tf, candles, input.orderBook, input.price);
+        result[tf] = this.pipeline.compute(tf, candles, input.orderBook, input.price, input.symbol);
       } else {
         throw new Error(`Missing candles for timeframe ${tf}`);
       }

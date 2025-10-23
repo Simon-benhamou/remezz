@@ -64,6 +64,8 @@ export type Cfg = {
   MARKET_STALE_THRESHOLD_MS: number;   // mark data stale when older than this
   OHLCV_FAILFAST_THRESHOLD: number;
   OHLCV_BACKFILL_RETRY: number;
+  INTRADAY_DISALLOW_SYNTHETIC: boolean;
+  INTRADAY_DEPTH_LEVELS: number;
   // Provider routing
   USE_GROK_FOR_ANALYSIS: boolean;
   USE_GROK_FOR_STRATEGY: boolean;
@@ -457,6 +459,8 @@ export function getConfig(): Cfg {
     MARKET_STALE_THRESHOLD_MS: Number(e.MARKET_STALE_THRESHOLD_MS || "12000"),
     OHLCV_FAILFAST_THRESHOLD: Number(e.OHLCV_FAILFAST_THRESHOLD || '0.2'),
     OHLCV_BACKFILL_RETRY: Number(e.OHLCV_BACKFILL_RETRY || '2'),
+    INTRADAY_DISALLOW_SYNTHETIC: (e.INTRADAY_DISALLOW_SYNTHETIC || 'true') === 'true',
+    INTRADAY_DEPTH_LEVELS: Number(e.INTRADAY_DEPTH_LEVELS || '10'),
     USE_GROK_FOR_ANALYSIS: (e.USE_GROK_FOR_ANALYSIS || "true") === "true",
     USE_GROK_FOR_STRATEGY: (e.USE_GROK_FOR_STRATEGY || "false") === "true",
     USE_GROK_FOR_PLAN: (e.USE_GROK_FOR_PLAN || "false") === "true",

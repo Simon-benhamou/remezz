@@ -22,6 +22,7 @@ export type OrderBookSnapshot = {
   asks: OrderBookLevel[];
   takerBuyVolume?: number;
   takerSellVolume?: number;
+  source?: 'depth' | 'fallback_ticker';
 };
 
 export type AggressionSample = {

@@ -9,6 +9,31 @@ import { evaluateTickerFrame } from './tickerValidation.js';
 
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
+type OhlcvOverride = (
+  symbol: string,
+  tf: string,
+  limit: number,
+  userId?: string,
+  options?: GetOhlcvOptions,
+) => Promise<number[][]>;
+
+let ohlcvOverride: OhlcvOverride | null = null;
+
+export function setOhlcvOverride(fn: OhlcvOverride | null): void {
+  ohlcvOverride = fn;
+}
+
+type TickerOverride = (
+  symbol: string,
+  options?: { forceRefresh?: boolean; userId?: string },
+) => Promise<any>;
+
+let tickerOverride: TickerOverride | null = null;
+
+export function setTickerOverride(fn: TickerOverride | null): void {
+  tickerOverride = fn;
+}
+
 // Simple cache to reduce API calls - OPTIMIZED for faster real-time response
 const tickerCache = new Map<string, { data: any; timestamp: number }>();
 const TICKER_CACHE_TTL = 4000; // 4 seconds cache to reduce network churn
@@ -200,12 +225,38 @@ function dropPartialLastBar(data: number[][], tf: string, allowPartial: boolean)
   return data;
 }
 
+export function isSyntheticSeries(data: number[][]): boolean {
+  if (!Array.isArray(data) || data.length === 0) return false;
+  const window = Math.min(20, data.length);
+  if (window === 0) return false;
+  const tail = data.slice(-window);
+  let syntheticCount = 0;
+  for (const row of tail) {
+    if (!Array.isArray(row) || row.length < 6) continue;
+    const [, open, high, low, close, volume] = row;
+    const flat = open === high && high === low && low === close;
+    const zeroVol = Number(volume ?? 0) === 0;
+    if (flat || zeroVol) {
+      syntheticCount += 1;
+    }
+  }
+  return syntheticCount / window >= 0.8;
+}
+
 function prepareOhlcvSeries(raw: number[][], tf: string, limit: number, allowPartial: boolean): number[][] {
   if (!Array.isArray(raw)) return [];
   const sorted = raw.slice().filter(Boolean).sort((a, b) => Number(a[0]) - Number(b[0]));
   if (!sorted.length) return [];
   const trimmed = dropPartialLastBar(sorted, tf, allowPartial);
-  return trimmed.slice(-limit);
+  const clipped = trimmed.slice(-limit);
+  if (isSyntheticSeries(clipped)) {
+    try {
+      console.warn(`synthetic_ohlcv_detected:${tf}`, {
+        sample: clipped.slice(-3).map((row) => row?.[5]),
+      });
+    } catch {}
+  }
+  return clipped;
 }
 
 function computeBackfillLimit(tf: string, minBars: number, cfgBackfillDays: number): number {
@@ -315,6 +366,9 @@ async function fetchOhlcvRest(symbol: string, tf: string, limit: number, userId?
 }
 
 export async function getTicker(symbol: string, options?: { forceRefresh?: boolean; userId?: string }) {
+  if (tickerOverride) {
+    return tickerOverride(symbol, options);
+  }
   if (UNIT_TEST_MODE) {
     return { symbol, last: 100, percentage: 0, baseVolume: 0, quoteVolume: 0, bid: 99.9, ask: 100.1 } as any;
   }
@@ -552,6 +606,9 @@ export async function getOHLCV(
   userId?: string,
   options?: GetOhlcvOptions,
 ) {
+  if (ohlcvOverride) {
+    return ohlcvOverride(symbol, tf, limit, userId, options);
+  }
   if (UNIT_TEST_MODE) {
     const now = Date.now();
     const out: number[][] = [];
@@ -580,7 +637,14 @@ export async function getOHLCV(
 
   let wsData: number[][] | null = null;
   let subscribedToWs = false;
-  const allowSyntheticFallback = options?.allowSyntheticFallback ?? true;
+  const normalizedTf = tf.trim().toLowerCase();
+  let allowSyntheticFallback = options?.allowSyntheticFallback ?? true;
+  if (
+    (cfg as any)?.INTRADAY_DISALLOW_SYNTHETIC === true &&
+    ['1m', '5m', '15m'].includes(normalizedTf)
+  ) {
+    allowSyntheticFallback = false;
+  }
 
   if (preferBinanceWs && shouldUseWebsocketForTimeframe(tf)) {
     try {
