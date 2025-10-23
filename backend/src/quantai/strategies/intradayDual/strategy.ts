@@ -5,6 +5,8 @@ import { StrategyRouter } from './router.js';
 import { ExecutionPlanner } from './execution.js';
 import { GuardrailMonitor, VolatilitySizer, DirectionalPressure, computeSidePenalty } from './risk.js';
 import { History } from './history.js';
+import { computeQualityScore, chooseEV } from '../../qs/qualityScore.js';
+import { getIntradayRuntimeConfig } from '../../../config/intraday.js';
 import type {
   TickInput,
   RegimeSignal,
@@ -85,6 +87,7 @@ export class IntradayDualStrategy {
   private readonly guardrails = new GuardrailMonitor();
   private readonly history = new History({ lambda: 0.97, costsBps: 5 });
   private readonly dirPressure = new DirectionalPressure();
+  private runtimeCfg = getIntradayRuntimeConfig();
   private readonly positions = new Map<string, ActivePosition[]>();
   private readonly tradeLogs: TradeLog[] = [];
   private readonly lastMrEntry = new Map<string, number>();
@@ -97,6 +100,7 @@ export class IntradayDualStrategy {
     exits: ExitDirective[];
     trades: TradeLog[];
   } {
+    this.runtimeCfg = getIntradayRuntimeConfig();
     this.execution.ingest(ctx.runtimeMetrics);
     if (input.aggression) {
       this.pipeline.updateAggression({
@@ -289,7 +293,65 @@ export class IntradayDualStrategy {
       }
     }
 
-    const stopPct = computeStopPct('BOM', f1.volatility.atrPct, this.cfg);
+    const baseStopPct = computeStopPct('BOM', f1.volatility.atrPct, this.cfg);
+    const tpFirstPctBase = Math.max(1e-6, this.cfg.stops.tp.firstPct);
+    const tpSecondPctBase = Math.max(tpFirstPctBase * 1.1, this.cfg.stops.tp.secondPct);
+    const weightFirst = Math.max(0, this.cfg.stops.tp.firstSize);
+    const weightSecond = Math.max(0, this.cfg.stops.tp.secondSize);
+    const weightSum = weightFirst + weightSecond > 0 ? weightFirst + weightSecond : 1;
+    const expectedTpPctBase = (weightFirst * tpFirstPctBase + weightSecond * tpSecondPctBase) / weightSum;
+    const payoffRatio = baseStopPct > 0 ? expectedTpPctBase / baseStopPct : 1;
+    const trendAlignment = emaSlow === 0 ? 0 : (emaFast - emaSlow) / Math.max(Math.abs(emaSlow), 1e-8);
+    const candleRangePct = signalCandle.close === 0
+      ? 0
+      : Math.abs(signalCandle.high - signalCandle.low) / Math.max(Math.abs(signalCandle.close), 1e-8);
+    const historyExpectancy = side === 'long' ? adaptive.qValues.qL : adaptive.qValues.qS;
+    const quality = computeQualityScore({
+      regime: 'BOM',
+      confidence: regime.confidence,
+      trendAlignment,
+      volumeZScore: f1.volume.zScore,
+      aggressionRatio: f1.orderBook.aggressionRatio,
+      atrPct: f1.volatility.atrPct,
+      priceZScore: f1.volatility.bandZScore,
+      imbalance: f1.orderBook.imbalance,
+      wickPct: candleRangePct,
+      payoffRatio,
+      historyExpectancy,
+    }, this.runtimeCfg.qs);
+
+    const evCfg = this.runtimeCfg.ev;
+    const baseStopBps = Math.max(5, Math.round(baseStopPct * 10_000));
+    const defaultTpBps = Math.max(10, Math.round(tpFirstPctBase * 10_000));
+    const totalCostBps = Math.max(0, ctx.slippageBps) + evCfg.feesBps;
+    let evChoice = {
+      stopBps: baseStopBps,
+      takeProfitBps: defaultTpBps,
+      evBps: quality.pWin * Math.max(0, defaultTpBps - totalCostBps)
+        - (1 - quality.pWin) * (baseStopBps + totalCostBps),
+    };
+    if (evCfg.enabled) {
+      const slMin = Math.min(evCfg.slMinBps, baseStopBps);
+      const slMax = Math.max(evCfg.slMaxBps, baseStopBps);
+      const tpGrid = Array.from(new Set([...evCfg.tpGridBps, defaultTpBps]));
+      evChoice = chooseEV(quality.pWin, {
+        predictedSlippageBps: ctx.slippageBps,
+        feesBps: evCfg.feesBps,
+        tpGridBps: tpGrid,
+        slMinBps: slMin,
+        slMaxBps: slMax,
+      });
+    }
+    const strategyMinStopBps = Math.round(this.cfg.stops.bom.minPct * 10_000);
+    const evStopBps = Math.round(evChoice.stopBps);
+    const evTpBps = Math.round(evChoice.takeProfitBps);
+    const stopBps = Math.max(strategyMinStopBps, evCfg.enabled ? Math.max(evCfg.slMinBps, Math.min(evCfg.slMaxBps, evStopBps)) : baseStopBps);
+    const tpBaseBps = Math.max(stopBps + 5, evCfg.enabled ? Math.max(10, evTpBps) : defaultTpBps);
+    const stopPct = stopBps / 10_000;
+    const tpBasePct = tpBaseBps / 10_000;
+    const tpMultiplier = tpFirstPctBase > 0 ? tpSecondPctBase / tpFirstPctBase : 2;
+    const tpSecondPct = tpBasePct * tpMultiplier;
+
     const pyramidScale = isPyramidAdd ? this.cfg.entry.bom.pyramidScale ?? 0.3 : 1;
     const sized = this.sizer.compute({
       equityUsd: ctx.equityUsd,
@@ -301,6 +363,8 @@ export class IntradayDualStrategy {
       exposureBudget: ctx.exposureBudget,
       slippageBps: ctx.slippageBps,
       riskReduction: effectiveRiskReduction * pyramidScale,
+      riskScale: quality.riskScale,
+      baseRiskPct: this.runtimeCfg.qs.baseRiskPct,
     });
     if (sized.size.raw === 0n) return null;
 
@@ -311,8 +375,8 @@ export class IntradayDualStrategy {
     const signalExtremeDecimal = new PreciseDecimal(signalExtreme);
     const triggerPrice = signalExtremeDecimal.plus(signalExtremeDecimal.times(signedBuffer));
     const stopPrice = pctToPrice(triggerPrice, stopPct, side, 'sl');
-    const tp1 = pctToPrice(triggerPrice, this.cfg.stops.tp.firstPct, side, 'tp');
-    const tp2 = pctToPrice(triggerPrice, this.cfg.stops.tp.secondPct, side, 'tp');
+    const tp1 = pctToPrice(triggerPrice, tpBasePct, side, 'tp');
+    const tp2 = pctToPrice(triggerPrice, tpSecondPct, side, 'tp');
 
     let stopGrace: EntrySignal['stopGrace'];
     if (!isPyramidAdd) {
@@ -378,6 +442,15 @@ export class IntradayDualStrategy {
       entryAtrPct: f1.volatility.atrPct,
       pyramidAdd: isPyramidAdd,
       stopGrace,
+      telemetry: {
+        pWin: quality.pWin,
+        qs: quality.qs,
+        riskScale: quality.riskScale,
+        slBps: stopBps,
+        tpBps: Math.round(tpBasePct * 10_000),
+        evBps: evChoice.evBps,
+        predictedSlippageBps: ctx.slippageBps,
+      },
     };
   }
 
@@ -464,7 +537,63 @@ export class IntradayDualStrategy {
     const wickOk = side === 'long' ? wick.lower >= wickMinPct : wick.upper >= wickMinPct;
     if (!wickOk) return null;
 
-    const stopPct = computeStopPct('MR', f1.volatility.atrPct, this.cfg);
+    const baseStopPct = computeStopPct('MR', f1.volatility.atrPct, this.cfg);
+    const tpFirstPctBase = Math.max(1e-6, this.cfg.stops.tp.firstPct * 0.8);
+    const tpSecondPctBase = Math.max(tpFirstPctBase * 1.1, this.cfg.stops.tp.secondPct * 0.7);
+    const weightFirst = Math.max(0, this.cfg.stops.tp.firstSize);
+    const weightSecond = Math.max(0, this.cfg.stops.tp.secondSize);
+    const weightSum = weightFirst + weightSecond > 0 ? weightFirst + weightSecond : 1;
+    const expectedTpPctBase = (weightFirst * tpFirstPctBase + weightSecond * tpSecondPctBase) / weightSum;
+    const payoffRatio = baseStopPct > 0 ? expectedTpPctBase / baseStopPct : 1;
+    const wickPct = side === 'long' ? wick.lower : wick.upper;
+    const historyExpectancy = side === 'long' ? adaptive.qValues.qL : adaptive.qValues.qS;
+    const trendAlignment = -(Math.abs(features['5m'].momentum.roc['3'] ?? 0));
+    const quality = computeQualityScore({
+      regime: 'MR',
+      confidence: Math.max(regime.confidence, 0.6),
+      trendAlignment,
+      volumeZScore: f1.volume.zScore,
+      aggressionRatio: Math.abs(f1.orderBook.aggressionRatio - 0.5) * 2,
+      atrPct: f1.volatility.atrPct,
+      priceZScore: Math.abs(priceZ),
+      imbalance: imbalance,
+      wickPct,
+      payoffRatio,
+      historyExpectancy,
+    }, this.runtimeCfg.qs);
+
+    const evCfg = this.runtimeCfg.ev;
+    const baseStopBps = Math.max(5, Math.round(baseStopPct * 10_000));
+    const defaultTpBps = Math.max(10, Math.round(tpFirstPctBase * 10_000));
+    const totalCostBps = Math.max(0, ctx.slippageBps) + evCfg.feesBps;
+    let evChoice = {
+      stopBps: baseStopBps,
+      takeProfitBps: defaultTpBps,
+      evBps: quality.pWin * Math.max(0, defaultTpBps - totalCostBps)
+        - (1 - quality.pWin) * (baseStopBps + totalCostBps),
+    };
+    if (evCfg.enabled) {
+      const slMin = Math.min(evCfg.slMinBps, baseStopBps);
+      const slMax = Math.max(evCfg.slMaxBps, baseStopBps);
+      const tpGrid = Array.from(new Set([...evCfg.tpGridBps, defaultTpBps]));
+      evChoice = chooseEV(quality.pWin, {
+        predictedSlippageBps: ctx.slippageBps,
+        feesBps: evCfg.feesBps,
+        tpGridBps: tpGrid,
+        slMinBps: slMin,
+        slMaxBps: slMax,
+      });
+    }
+    const strategyMinStopBps = Math.round(this.cfg.stops.mr.minPct * 10_000);
+    const evStopBps = Math.round(evChoice.stopBps);
+    const evTpBps = Math.round(evChoice.takeProfitBps);
+    const stopBps = Math.max(strategyMinStopBps, evCfg.enabled ? Math.max(evCfg.slMinBps, Math.min(evCfg.slMaxBps, evStopBps)) : baseStopBps);
+    const tpBaseBps = Math.max(stopBps + 5, evCfg.enabled ? Math.max(10, evTpBps) : defaultTpBps);
+    const stopPct = stopBps / 10_000;
+    const tpBasePct = tpBaseBps / 10_000;
+    const tpMultiplier = tpFirstPctBase > 0 ? tpSecondPctBase / tpFirstPctBase : 2;
+    const tpSecondPct = tpBasePct * tpMultiplier;
+
     const sized = this.sizer.compute({
       equityUsd: ctx.equityUsd,
       stopLossPct: stopPct,
@@ -475,13 +604,15 @@ export class IntradayDualStrategy {
       exposureBudget: ctx.exposureBudget,
       slippageBps: ctx.slippageBps,
       riskReduction: effectiveRiskReduction,
+      riskScale: quality.riskScale,
+      baseRiskPct: this.runtimeCfg.qs.baseRiskPct,
     });
     if (sized.size.raw === 0n) return null;
 
     const entryPrice = new PreciseDecimal(input.price);
     const stopPrice = pctToPrice(entryPrice, stopPct, side, 'sl');
-    const tp1 = pctToPrice(entryPrice, this.cfg.stops.tp.firstPct * 0.8, side, 'tp');
-    const tp2 = pctToPrice(entryPrice, this.cfg.stops.tp.secondPct * 0.7, side, 'tp');
+    const tp1 = pctToPrice(entryPrice, tpBasePct, side, 'tp');
+    const tp2 = pctToPrice(entryPrice, tpSecondPct, side, 'tp');
 
     const execution = this.execution.plan({
       regime: 'MR',
@@ -535,6 +666,15 @@ export class IntradayDualStrategy {
       execution,
       entryAtrPct: f1.volatility.atrPct,
       pyramidAdd: false,
+      telemetry: {
+        pWin: quality.pWin,
+        qs: quality.qs,
+        riskScale: quality.riskScale,
+        slBps: stopBps,
+        tpBps: Math.round(tpBasePct * 10_000),
+        evBps: evChoice.evBps,
+        predictedSlippageBps: ctx.slippageBps,
+      },
     };
   }
 

@@ -14,6 +14,8 @@ export type PositionContext = {
   exposureBudget: number;
   slippageBps: number;
   riskReduction?: number;
+  riskScale?: number;
+  baseRiskPct?: number;
 };
 
 export type PositionSizingResult = {
@@ -39,10 +41,11 @@ export class VolatilitySizer {
 
   compute(ctx: PositionContext): PositionSizingResult {
     const stopPct = Math.max(1e-6, ctx.stopLossPct);
-    const baseRiskPct = this.cfg.risk.baseRiskPct;
+    const baseRiskPct = Math.max(1e-6, ctx.baseRiskPct ?? this.cfg.risk.baseRiskPct);
     const regimeMult = ctx.regime === 'BOM' ? this.cfg.risk.bomMultiplier : this.cfg.risk.mrMultiplier;
     const riskReduction = Math.max(0.1, Math.min(1, ctx.riskReduction ?? 1));
-    const riskPct = baseRiskPct * regimeMult * riskReduction;
+    const riskScale = Math.max(0.1, ctx.riskScale ?? 1);
+    const riskPct = baseRiskPct * riskScale * regimeMult * riskReduction;
     const riskUsd = ctx.equityUsd.times(new PreciseDecimal(riskPct.toString())).abs();
     const stopDecimal = new PreciseDecimal(stopPct);
     const sizeNotional = riskUsd.dividedBy(stopDecimal);

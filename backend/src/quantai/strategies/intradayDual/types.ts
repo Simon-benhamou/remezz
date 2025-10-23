@@ -114,6 +114,15 @@ export type EntrySignal = {
   entryAtrPct: number;
   pyramidAdd?: boolean;
   stopGrace?: { price: PreciseDecimal; expiresAt: number };
+  telemetry?: {
+    pWin: number;
+    qs: number;
+    riskScale: number;
+    slBps: number;
+    tpBps: number;
+    evBps: number;
+    predictedSlippageBps: number;
+  };
 };
 
 export type ExecutionDirective = {
