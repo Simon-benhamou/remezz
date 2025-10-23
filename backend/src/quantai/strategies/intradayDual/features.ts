@@ -167,13 +167,24 @@ export class FeaturePipeline {
     '5m': 0,
     '15m': 0,
   };
+  private readonly fallbackLogged = new Set<string>();
 
   updateAggression(sample: { timestamp: number; takerBuy: number; takerSell: number } | null | undefined): void {
     if (!sample) return;
     this.aggression.push(sample);
   }
 
-  compute(timeframe: Timeframe, candles: Candle[], orderBook: OrderBookSnapshot | null, price: number): TickFeatures {
+  compute(
+    timeframe: Timeframe,
+    candles: Candle[],
+    orderBook: OrderBookSnapshot | null,
+    price: number,
+    symbol?: string,
+  ): TickFeatures {
+    if (orderBook?.source === 'fallback_ticker' && symbol && !this.fallbackLogged.has(symbol)) {
+      console.warn('intraday.orderbook.using_fallback', { symbol, source: orderBook.source });
+      this.fallbackLogged.add(symbol);
+    }
     const cfg = this.config;
     const closes = candles.map((c) => c.close);
     const current = candles[candles.length - 1];
@@ -292,7 +303,7 @@ export function buildTickFeatures(input: TickInput): Record<Timeframe, TickFeatu
     if (!candles?.length) {
       continue;
     }
-    result[timeframe] = pipeline.compute(timeframe, candles, input.orderBook, input.price);
+    result[timeframe] = pipeline.compute(timeframe, candles, input.orderBook, input.price, input.symbol);
   }
   return result as Record<Timeframe, TickFeatures>;
 }

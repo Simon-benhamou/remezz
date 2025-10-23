@@ -1,6 +1,67 @@
 import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot, BrokerPositionMargin, BrokerCorrelatedExposure } from './types.js';
 import { getTicker, getOHLCV } from '../data/market.js';
+import { fetchDepth } from '../data/orderBook.js';
 import { getConfig } from '../utils/env.js';
+
+const DEPTH_LEVELS_SIM = 20;
+
+type SimulatedFill = {
+  fillableQty: number;
+  vwap: number | null;
+  bestPrice: number | null;
+  impactPct: number;
+  simFallback: boolean;
+};
+
+async function fetchSimulatedFill(symbol: string, side: 'buy'|'sell', qty: number): Promise<SimulatedFill> {
+  if (!(qty > 0)) {
+    return { fillableQty: 0, vwap: null, bestPrice: null, impactPct: 0, simFallback: false };
+  }
+  try {
+    const depth = await fetchDepth(symbol, DEPTH_LEVELS_SIM);
+    if (!depth || !depth.bids?.length || !depth.asks?.length) {
+      return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
+    }
+    const levels = side === 'buy' ? depth.asks : depth.bids;
+    if (!levels?.length) {
+      return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
+    }
+    const best = levels[0]?.price ?? null;
+    if (!best) {
+      return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
+    }
+    let remaining = qty;
+    let filled = 0;
+    let notional = 0;
+    let worst = best;
+    for (const level of levels) {
+      if (!(level?.price > 0) || !(level?.size > 0)) {
+        continue;
+      }
+      const take = Math.min(level.size, remaining);
+      if (take <= 0) break;
+      notional += take * level.price;
+      filled += take;
+      remaining -= take;
+      worst = level.price;
+      if (remaining <= 1e-12) break;
+    }
+    if (!best || filled <= 0) {
+      return { fillableQty: 0, vwap: best, bestPrice: best, impactPct: 0, simFallback: true };
+    }
+    const vwap = notional / filled;
+    const impactPct = Math.abs(((worst ?? best) - best) / best) * 100;
+    return {
+      fillableQty: filled,
+      vwap,
+      bestPrice: best,
+      impactPct: Number.isFinite(impactPct) ? impactPct : 0,
+      simFallback: false,
+    };
+  } catch {
+    return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
+  }
+}
 
 // Simple paper broker with committed balance and slippage modelling.
 export class PaperBroker implements Broker {
@@ -57,24 +118,39 @@ export class PaperBroker implements Broker {
     const bid = t?.bid ?? mid * 0.999;
     const ask = t?.ask ?? mid * 1.001;
     const spread = Math.max(1e-8, ask - bid);
-    const slip = this.slippageToSpread * spread;
+    const slipBase = this.slippageToSpread * spread;
+    let depthEstimate: (SimulatedFill & { impactPct?: number }) | null = null;
+    const pxMarketFallback = (side: 'buy'|'sell', slipMultiplier: number) =>
+      side === 'buy' ? ask + slipBase * slipMultiplier : bid - slipBase * slipMultiplier;
 
-    const px = o.type === 'market' ? (o.side === 'buy' ? ask + slip : bid - slip) : (o.price!);
     // Optionally simulate liquidity and scale qty to respect max impact
     let qty = o.qty;
     try {
       const { PAPER_LIQ_SIM_ENABLED, PAPER_MAX_IMPACT_PCT, MIN_ORDER_NOTIONAL_USD } = getConfig();
       if (PAPER_LIQ_SIM_ENABLED && typeof qty === 'number' && qty > 0 && mid > 0) {
-        const est = await this.estimateFillableQty({ symbol: o.symbol, desiredQty: qty, maxImpactPct: PAPER_MAX_IMPACT_PCT as any });
+        const est = await this.estimateFillableQty({ symbol: o.symbol, side: o.side, desiredQty: qty, maxImpactPct: PAPER_MAX_IMPACT_PCT as any });
         if (est && typeof (est as any).fillableQty === 'number') {
-          qty = (est as any).fillableQty;
+          qty = Math.max(0, Number((est as any).fillableQty));
         }
+        depthEstimate = est as any;
         if (qty * mid < MIN_ORDER_NOTIONAL_USD) {
           const id = `paper_rejected_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
           return { ...o, id, status: 'rejected', ts: Date.now() } as PlacedOrder;
         }
       }
     } catch {}
+
+    if (!(qty > 0)) {
+      const id = `paper_rejected_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+      return { ...o, id, status: 'rejected', ts: Date.now() } as PlacedOrder;
+    }
+
+    const slipMultiplier = depthEstimate?.simFallback ? 1.5 : 1;
+    const px = o.type === 'market'
+      ? depthEstimate && depthEstimate.vwap && depthEstimate.fillableQty > 0
+        ? depthEstimate.vwap
+        : pxMarketFallback(o.side, slipMultiplier)
+      : (o.price!);
 
     const notional = px * qty;
     const fee = (this.feesBps / 10000) * notional;
@@ -99,8 +175,12 @@ export class PaperBroker implements Broker {
       latencyMs: Math.max(0, Date.now() - startTs),
       requestedQty: o.qty,
       requestedPrice: o.type === 'limit' ? o.price : undefined,
-      fillRatio: 1,
+      fillRatio: o.qty > 0 ? Math.min(1, qty / o.qty) : 1,
     };
+
+    if (depthEstimate?.impactPct !== undefined) {
+      out.slippageBps = Math.max(0, depthEstimate.impactPct) * 100;
+    }
 
     // Simplified PnL handling will be done by agent engine on exit
     this.balanceUsd -= fee; // fees paid
@@ -246,40 +326,64 @@ export class PaperBroker implements Broker {
     return {};
   }
 
-  async estimateFillableQty(params: { symbol: string; desiredQty: number; maxImpactPct?: number }) {
+  async estimateFillableQty(params: { symbol: string; side: 'buy'|'sell'; desiredQty: number; maxImpactPct?: number }) {
     const cfg = getConfig();
     const symbol = params.symbol;
     const maxImpactPct = Math.max(0, Number(params.maxImpactPct ?? cfg.PAPER_MAX_IMPACT_PCT));
     try {
-      const t = await getTicker(symbol).catch(()=>null as any);
+      const [t, o15] = await Promise.all([
+        getTicker(symbol).catch(()=>null as any),
+        getOHLCV(symbol, '15m', 30).catch(()=>null as any),
+      ]);
       const price = Number(t?.last || t?.close || t?.ask || t?.bid || 0);
-      const o15 = await getOHLCV(symbol, '15m', 30).catch(()=>null as any);
+      const desiredQty = Math.max(0, params.desiredQty || 0);
+      if (!(desiredQty > 0) || !(price > 0)) {
+        return { fillableQty: desiredQty, impactPct: 0, vwap: price, bestPrice: price } as any;
+      }
       let volBase = 0;
       if (Array.isArray(o15) && o15.length) {
         const last = o15[o15.length - 1];
         volBase = Number(last?.[5] || 0);
       }
       const volUsd15m = price > 0 ? volBase * price : 0;
-      const desiredQty = Math.max(0, params.desiredQty || 0);
-      if (!(desiredQty > 0) || !(price > 0)) return { fillableQty: desiredQty, impactPct: 0 } as any;
+      const depthSim = await fetchSimulatedFill(symbol, params.side, desiredQty);
+      let fillableQty = depthSim.simFallback ? desiredQty : Math.min(desiredQty, depthSim.fillableQty);
+      if (!(fillableQty > 0)) {
+        fillableQty = desiredQty;
+        depthSim.simFallback = true;
+      }
+      let impactPct = depthSim.simFallback ? 0 : Math.max(0, depthSim.impactPct);
+      const bestGuess = params.side === 'buy' ? Number(t?.ask || price) : Number(t?.bid || price);
+      const bestPrice = depthSim.bestPrice ?? (Number.isFinite(bestGuess) && bestGuess > 0 ? bestGuess : price);
+      let vwap = depthSim.vwap ?? bestPrice ?? price;
 
-      // If extremely low recent volume, scale down aggressively
       if (volUsd15m > 0 && volUsd15m < cfg.LIQUIDITY_MIN_15M_USD) {
         const scale = Math.max(0, volUsd15m / cfg.LIQUIDITY_MIN_15M_USD);
         const scaledQty = desiredQty * Math.max(0.1, Math.min(1, scale));
-        return { fillableQty: scaledQty, impactPct: 2.5 } as any;
+        fillableQty = Math.min(fillableQty, scaledQty);
+        impactPct = Math.max(impactPct, 2.5);
       }
 
-      // Simple impact model: impactPct ≈ k * (orderNotional / 15mVolUsd) * 100
-      const k = 0.2; // 0.2% impact per 1% of 15m flow consumed
-      const orderNotional = desiredQty * price;
-      const flowShare = volUsd15m > 0 ? orderNotional / volUsd15m : 0;
-      const impactPct = Math.max(0, Math.min(5, k * flowShare * 100));
-      if (impactPct <= maxImpactPct) return { fillableQty: desiredQty, impactPct } as any;
-      // Scale down to fit max impact
-      const scale = maxImpactPct > 0 ? (maxImpactPct / Math.max(0.0001, impactPct)) : 0;
-      const fillableQty = desiredQty * Math.max(0, Math.min(1, scale));
-      return { fillableQty, impactPct } as any;
+      const k = 0.2;
+      if (depthSim.simFallback) {
+        const orderNotional = desiredQty * price;
+        const flowShare = volUsd15m > 0 ? orderNotional / volUsd15m : 0;
+        const fallbackImpact = Math.max(0, Math.min(5, k * flowShare * 100)) * 1.5;
+        if (Number.isFinite(fallbackImpact)) {
+          impactPct = fallbackImpact;
+        }
+        if (!Number.isFinite(vwap) || vwap <= 0) {
+          vwap = bestPrice;
+        }
+      }
+
+      if (impactPct > maxImpactPct && maxImpactPct > 0) {
+        const scale = maxImpactPct / Math.max(0.0001, impactPct);
+        fillableQty = Math.min(fillableQty, desiredQty * Math.max(0, Math.min(1, scale)));
+      }
+
+      fillableQty = Math.max(0, Math.min(desiredQty, fillableQty));
+      return { fillableQty, impactPct, vwap, bestPrice, simFallback: depthSim.simFallback } as any;
     } catch {
       return { fillableQty: params.desiredQty } as any;
     }
