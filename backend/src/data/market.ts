@@ -247,20 +247,28 @@ export function isSyntheticSeries(data: number[][]): boolean {
   return syntheticCount / window >= 0.8;
 }
 
-function prepareOhlcvSeries(raw: number[][], tf: string, limit: number, allowPartial: boolean): number[][] {
-  if (!Array.isArray(raw)) return [];
+export type PreparedOhlcvSeries = { series: number[][]; synthetic: boolean };
+
+function prepareOhlcvSeries(
+  raw: number[][],
+  tf: string,
+  limit: number,
+  allowPartial: boolean,
+): PreparedOhlcvSeries {
+  if (!Array.isArray(raw)) return { series: [], synthetic: false };
   const sorted = raw.slice().filter(Boolean).sort((a, b) => Number(a[0]) - Number(b[0]));
-  if (!sorted.length) return [];
+  if (!sorted.length) return { series: [], synthetic: false };
   const trimmed = dropPartialLastBar(sorted, tf, allowPartial);
   const clipped = trimmed.slice(-limit);
-  if (isSyntheticSeries(clipped)) {
+  const synthetic = isSyntheticSeries(clipped);
+  if (synthetic) {
     try {
       console.warn(`synthetic_ohlcv_detected:${tf}`, {
         sample: clipped.slice(-3).map((row) => row?.[5]),
       });
     } catch {}
   }
-  return clipped;
+  return { series: clipped, synthetic };
 }
 
 function computeBackfillLimit(tf: string, minBars: number, cfgBackfillDays: number): number {
@@ -638,6 +646,19 @@ export async function getOHLCV(
   const seedKey = binanceSeedKey(symbol, tf);
   const warmKey = warmupStateKey(symbol, tf);
   let seededViaRest: number[][] | null = null;
+  let fallbackActivated = false;
+  let fallbackReason: string | undefined;
+
+  const activateFallback = (reason: string, increment = false) => {
+    fallbackReason = reason;
+    if (!fallbackActivated) {
+      fallbackActivated = true;
+      setFallbackState(symbol, true, reason, { increment: true });
+      recordRestFallback(symbol, reason);
+    } else {
+      setFallbackState(symbol, true, reason, { increment });
+    }
+  };
 
   let wsData: number[][] | null = null;
   let subscribedToWs = false;
@@ -661,9 +682,9 @@ export async function getOHLCV(
           console.warn(`⚠️ Using REST fallback for ${symbol} ${tf} (WS kline limit reached).`);
         } else {
           const prepared = prepareOhlcvSeries(wsData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-          if (prepared.length) {
-            maybeLogOhlcvDebug(symbol, tf, prepared);
-            if (prepared.length >= normalizedLimit) {
+          if (prepared.series.length) {
+            maybeLogOhlcvDebug(symbol, tf, prepared.series);
+            if (!prepared.synthetic && prepared.series.length >= normalizedLimit) {
               setWarmupState(warmKey, {
                 pending: false,
                 fulfilled: true,
@@ -672,7 +693,11 @@ export async function getOHLCV(
                 lastSuccess: Date.now(),
               });
             }
-            return prepared;
+            if (!prepared.synthetic) {
+              setFallbackState(symbol, false);
+              return prepared.series;
+            }
+            activateFallback('ws_synthetic_series');
           }
         }
       } else {
@@ -743,9 +768,9 @@ export async function getOHLCV(
         if (wsData && wsData.length) {
           const merged = seededViaRest && seededViaRest.length ? [...wsData, ...seededViaRest] : wsData;
           const prepared = prepareOhlcvSeries(merged, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-          if (prepared.length) {
-            maybeLogOhlcvDebug(symbol, tf, prepared);
-            if (prepared.length >= normalizedLimit) {
+          if (prepared.series.length) {
+            maybeLogOhlcvDebug(symbol, tf, prepared.series);
+            if (!prepared.synthetic && prepared.series.length >= normalizedLimit) {
               setWarmupState(warmKey, {
                 pending: false,
                 fulfilled: true,
@@ -754,7 +779,11 @@ export async function getOHLCV(
                 lastSuccess: Date.now(),
               });
             }
-            return prepared;
+            if (!prepared.synthetic) {
+              setFallbackState(symbol, false);
+              return prepared.series;
+            }
+            activateFallback('ws_synthetic_series');
           }
         }
       }
@@ -767,7 +796,7 @@ export async function getOHLCV(
     }
   }
   // Final fallback for Binance: synthesize stable OHLCV using last known ticker
-  let syntheticPrepared: number[][] | null = null;
+  let syntheticPrepared: PreparedOhlcvSeries | null = null;
   if (preferBinanceWs && allowSyntheticFallback) {
     try {
       // Use ticker from WS (may be null); fallback to 0
@@ -782,23 +811,31 @@ export async function getOHLCV(
         out.push([ts, last, last, last, last, 0]);
       }
       syntheticPrepared = prepareOhlcvSeries(out, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-      maybeLogOhlcvDebug(symbol, tf, syntheticPrepared);
+      if (syntheticPrepared.series.length) {
+        maybeLogOhlcvDebug(symbol, tf, syntheticPrepared.series);
+      }
     } catch {}
   }
   // Non-Binance exchanges or forced REST path: safe to use REST
   try {
     const restData = await fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials);
     const preparedRest = prepareOhlcvSeries(restData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-    maybeLogOhlcvDebug(symbol, tf, preparedRest);
-    return preparedRest;
+    if (preparedRest.series.length) {
+      maybeLogOhlcvDebug(symbol, tf, preparedRest.series);
+    }
+    if (!preparedRest.synthetic && fallbackActivated) {
+      setFallbackState(symbol, false);
+    }
+    return preparedRest.series;
   } catch (error) {
-    if (syntheticPrepared && allowSyntheticFallback) {
+    if (syntheticPrepared && syntheticPrepared.series.length && allowSyntheticFallback) {
+      activateFallback('synthetic_warmup', false);
       setWarmupState(warmKey, {
         pending: false,
         fulfilled: false,
         lastError: 'synthetic_warmup',
       });
-      return syntheticPrepared;
+      return syntheticPrepared.series;
     }
     throw error;
   }
@@ -814,3 +851,5 @@ export async function computeCoreIndicators(symbol: string) {
     atr14: atr(o, 14).at(-1),
   };
 }
+
+export { prepareOhlcvSeries as __test_prepareOhlcvSeries };

@@ -13,7 +13,13 @@ import WebSocket from 'ws';
 import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
 import { evaluateTickerFrame } from '../data/tickerValidation.js';
-import { recordMarketFrame, recordWsReconnect, setFallbackState, updateWsConnectionState } from '../monitor/marketMetrics.js';
+import {
+  recordMarketFrame,
+  recordRestFallback,
+  recordWsReconnect,
+  setFallbackState,
+  updateWsConnectionState,
+} from '../monitor/marketMetrics.js';
 
 const MARKET_TYPE = String(process.env.MARKET_TYPE || 'swap').toLowerCase();
 type BinanceMarketKind = 'spot' | 'futures';
@@ -194,6 +200,8 @@ class BinanceWebSocketManager {
   private balanceCache = new Map<string, BinanceBalance>();
   private lastUpdate = Date.now();
   private lastAcceptedTs = 0;
+  private timestampDriftCounters = new Map<string, { count: number; firstTs: number; lastAge: number }>();
+  private lastTimestampDriftNotice = new Map<string, number>();
 
   // Callbacks pour notifier les consumers
   private tickerCallbacks: Array<(ticker: BinanceTickerData) => void> = [];
@@ -702,8 +710,14 @@ class BinanceWebSocketManager {
       this.tickersCache.set(rawSymbol, tickerData);
 
       if (validation.status !== 'accepted') {
+        if (validation.ruleId === 'timestamp_drift') {
+          this.noteTimestampDrift(rawSymbol, receivedTs, validation.dataAgeMs ?? 0);
+        }
         continue;
       }
+
+      this.clearTimestampDrift(rawSymbol);
+      setFallbackState(rawSymbol, false);
 
       acceptedCount += 1;
       for (const cb of this.tickerCallbacks) {
@@ -843,6 +857,44 @@ class BinanceWebSocketManager {
       needsSnapshot,
       extra: Object.keys(extra).length ? extra : undefined,
     };
+  }
+
+  private noteTimestampDrift(symbol: string, receivedTs: number, ageMs: number): void {
+    const windowMs = 15_000;
+    const threshold = 3;
+    const stats = this.timestampDriftCounters.get(symbol);
+    let count = 1;
+    let firstTs = receivedTs;
+    if (stats && receivedTs - stats.firstTs <= windowMs) {
+      count = stats.count + 1;
+      firstTs = stats.firstTs;
+    }
+    const nextStats = { count, firstTs, lastAge: ageMs };
+    this.timestampDriftCounters.set(symbol, nextStats);
+
+    if (nextStats.count >= threshold) {
+      const lastNotified = this.lastTimestampDriftNotice.get(symbol) ?? 0;
+      if (receivedTs - lastNotified >= 5_000) {
+        console.warn(
+          `⚠️ WS timestamp drift for ${symbol}: age ${ageMs}ms (count ${nextStats.count}) — forcing REST snapshot`,
+        );
+        this.lastTimestampDriftNotice.set(symbol, receivedTs);
+        setFallbackState(symbol, true, 'ws_timestamp_drift', { increment: nextStats.count === threshold });
+        if (nextStats.count === threshold) {
+          recordRestFallback(symbol, 'ws_timestamp_drift');
+        }
+        this.scheduleBookTickerRefresh(symbol);
+      }
+    }
+  }
+
+  private clearTimestampDrift(symbol: string): void {
+    if (this.timestampDriftCounters.has(symbol)) {
+      this.timestampDriftCounters.delete(symbol);
+    }
+    if (this.lastTimestampDriftNotice.has(symbol)) {
+      this.lastTimestampDriftNotice.delete(symbol);
+    }
   }
 
   private scheduleBookTickerRefresh(symbol: string): void {
