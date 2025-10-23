@@ -1,14 +1,15 @@
 import ccxt from 'ccxt';
-import type { OrderBookSnapshot } from '../quantai/strategies/intradayDual/types.js';
 import { resolveSymbol, getUserExchange } from '../exchange/ccxtClient.js';
 import { getConfig } from '../utils/env.js';
 
+export interface BookLevel { price: number; size: number }
+export interface DepthSnapshot { timestamp: number; bids: BookLevel[]; asks: BookLevel[] }
+
+type DepthOverride = (symbol: string, levels: number, userId?: string) => Promise<DepthSnapshot | null>;
+
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
-type DepthOverride = (symbol: string, levels: number, userId?: string) => Promise<OrderBookSnapshot | null>;
-
-let depthOverride: DepthOverride | null = null;
-
+let overrideFetcher: DepthOverride | null = null;
 const exchangeCache = new Map<string, any>();
 
 function inferMarketType(symbol?: string): 'spot' | 'swap' {
@@ -36,7 +37,7 @@ async function fetchUserCredentialsSafe(userId?: string) {
     const credentials = await getUserCredentials(userId);
     return { credentials, error: null } as const;
   } catch (error) {
-    console.warn(`Failed to load user credentials for ${userId}:`, error);
+    console.warn(`depth.credentials_failed:${userId}`, error);
     return { credentials: null, error } as const;
   }
 }
@@ -45,7 +46,9 @@ async function getPublicExchange(exchangeId: string, symbol: string) {
   const type = inferMarketType(symbol);
   const mapped = mapExchangeId(exchangeId, type);
   const cacheKey = `${mapped}:${type}`;
-  if (exchangeCache.has(cacheKey)) return exchangeCache.get(cacheKey);
+  if (exchangeCache.has(cacheKey)) {
+    return exchangeCache.get(cacheKey);
+  }
   const Klass: any = (ccxt as any)[mapped];
   if (!Klass) {
     throw new Error(`Unknown exchange ${exchangeId}`);
@@ -58,42 +61,42 @@ async function getPublicExchange(exchangeId: string, symbol: string) {
     try {
       await instance.loadMarkets();
     } catch (error) {
-      console.warn('depth.loadMarkets_failed', { exchangeId: mapped, error: String((error as Error).message || error) });
+      console.warn('depth.load_markets_failed', { exchangeId: mapped, error: String((error as Error).message || error) });
     }
   }
   exchangeCache.set(cacheKey, instance);
   return instance;
 }
 
-function mapLevels(levels: any[], limit: number) {
+function normalizeLevels(levels: any[], limit: number): BookLevel[] {
   return (Array.isArray(levels) ? levels : [])
     .slice(0, limit)
     .map((entry) => {
-      const price = Number(entry?.[0] ?? 0);
-      const size = Number(entry?.[1] ?? 0);
+      const price = Number(entry?.[0] ?? entry?.price ?? 0);
+      const size = Number(entry?.[1] ?? entry?.amount ?? entry?.size ?? 0);
       if (!Number.isFinite(price) || !Number.isFinite(size) || price <= 0 || size <= 0) {
         return null;
       }
       return { price, size };
     })
-    .filter((entry): entry is { price: number; size: number } => Boolean(entry));
+    .filter((level): level is BookLevel => Boolean(level));
 }
 
-function buildUnitTestDepth(levels: number): OrderBookSnapshot {
+function buildUnitTestDepth(levels: number): DepthSnapshot {
   const depthLevels = Math.max(1, Math.min(levels, 10));
   const mid = 100;
-  const bids = Array.from({ length: depthLevels }, (_, i) => ({ price: mid - i * 0.1, size: 5 + i }));
-  const asks = Array.from({ length: depthLevels }, (_, i) => ({ price: mid + i * 0.1, size: 5 + i }));
-  return { timestamp: Date.now(), bids, asks, source: 'depth' };
+  const bids: BookLevel[] = Array.from({ length: depthLevels }, (_, i) => ({ price: mid - i * 0.1, size: 5 + i }));
+  const asks: BookLevel[] = Array.from({ length: depthLevels }, (_, i) => ({ price: mid + i * 0.1, size: 5 + i }));
+  return { timestamp: Date.now(), bids, asks };
 }
 
 export function setDepthFetcherOverride(fn: DepthOverride | null) {
-  depthOverride = fn;
+  overrideFetcher = fn;
 }
 
-export async function fetchDepth(symbol: string, levels = 10, userId?: string): Promise<OrderBookSnapshot | null> {
-  if (depthOverride) {
-    return depthOverride(symbol, levels, userId);
+export async function fetchDepth(symbol: string, levels: number, userId?: string): Promise<DepthSnapshot | null> {
+  if (overrideFetcher) {
+    return overrideFetcher(symbol, levels, userId);
   }
   if (UNIT_TEST_MODE) {
     return buildUnitTestDepth(levels);
@@ -102,6 +105,7 @@ export async function fetchDepth(symbol: string, levels = 10, userId?: string): 
   const depthLevels = Math.max(1, Number(levels || cfg.INTRADAY_DEPTH_LEVELS || 10));
   const { credentials } = await fetchUserCredentialsSafe(userId);
   const exchangeHint = credentials?.exchange || cfg.EXCHANGE_ID;
+
   let exchange: any;
   let resolvedSymbol: string;
   try {
@@ -115,10 +119,11 @@ export async function fetchDepth(symbol: string, levels = 10, userId?: string): 
     console.warn('depth.exchange_unavailable', { symbol, error: String((error as Error).message || error) });
     return null;
   }
+
   try {
     const book = await exchange.fetchOrderBook(resolvedSymbol, depthLevels);
-    const bids = mapLevels(book?.bids || [], depthLevels);
-    const asks = mapLevels(book?.asks || [], depthLevels);
+    const bids = normalizeLevels(book?.bids || [], depthLevels);
+    const asks = normalizeLevels(book?.asks || [], depthLevels);
     if (!bids.length || !asks.length) {
       return null;
     }
@@ -127,7 +132,6 @@ export async function fetchDepth(symbol: string, levels = 10, userId?: string): 
       timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
       bids,
       asks,
-      source: 'depth',
     };
   } catch (error) {
     console.warn('depth.fetch_failed', { symbol, error: String((error as Error).message || error) });

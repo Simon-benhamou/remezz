@@ -1,65 +1,55 @@
 import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot, BrokerPositionMargin, BrokerCorrelatedExposure } from './types.js';
 import { getTicker, getOHLCV } from '../data/market.js';
-import { fetchDepth } from '../data/orderBook.js';
+import { fetchDepth } from '../data/depth.js';
+import { walkBook } from '../exec/bookWalkSlippage.js';
+import { getIntradayRuntimeConfig } from '../config/intraday.js';
 import { getConfig } from '../utils/env.js';
 
-const DEPTH_LEVELS_SIM = 20;
-
 type SimulatedFill = {
-  fillableQty: number;
   vwap: number | null;
   bestPrice: number | null;
-  impactPct: number;
-  simFallback: boolean;
+  impactBps: number;
+  filled: number;
+  usedDepth: boolean;
+  fallback: boolean;
 };
 
-async function fetchSimulatedFill(symbol: string, side: 'buy'|'sell', qty: number): Promise<SimulatedFill> {
+async function simulateBookFill(symbol: string, side: 'buy'|'sell', qty: number, userId?: string): Promise<SimulatedFill> {
   if (!(qty > 0)) {
-    return { fillableQty: 0, vwap: null, bestPrice: null, impactPct: 0, simFallback: false };
+    return { vwap: null, bestPrice: null, impactBps: 0, filled: 0, usedDepth: false, fallback: true };
   }
+
+  const { slip } = getIntradayRuntimeConfig();
+  if (!slip.bookWalkEnabled) {
+    return { vwap: null, bestPrice: null, impactBps: 0, filled: qty, usedDepth: false, fallback: true };
+  }
+
   try {
-    const depth = await fetchDepth(symbol, DEPTH_LEVELS_SIM);
-    if (!depth || !depth.bids?.length || !depth.asks?.length) {
-      return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
+    const depth = await fetchDepth(symbol, slip.depthLevels, userId);
+    if (!depth) {
+      return { vwap: null, bestPrice: null, impactBps: 0, filled: qty, usedDepth: false, fallback: true };
     }
-    const levels = side === 'buy' ? depth.asks : depth.bids;
-    if (!levels?.length) {
-      return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
+    const walked = walkBook(side, qty, depth);
+    if (!(walked.filled > 0) || walked.fallback) {
+      return {
+        vwap: walked.vwap || null,
+        bestPrice: walked.best || null,
+        impactBps: walked.impactBps || 0,
+        filled: walked.filled > 0 ? walked.filled : qty,
+        usedDepth: walked.filled > 0,
+        fallback: true,
+      };
     }
-    const best = levels[0]?.price ?? null;
-    if (!best) {
-      return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
-    }
-    let remaining = qty;
-    let filled = 0;
-    let notional = 0;
-    let worst = best;
-    for (const level of levels) {
-      if (!(level?.price > 0) || !(level?.size > 0)) {
-        continue;
-      }
-      const take = Math.min(level.size, remaining);
-      if (take <= 0) break;
-      notional += take * level.price;
-      filled += take;
-      remaining -= take;
-      worst = level.price;
-      if (remaining <= 1e-12) break;
-    }
-    if (!best || filled <= 0) {
-      return { fillableQty: 0, vwap: best, bestPrice: best, impactPct: 0, simFallback: true };
-    }
-    const vwap = notional / filled;
-    const impactPct = Math.abs(((worst ?? best) - best) / best) * 100;
     return {
-      fillableQty: filled,
-      vwap,
-      bestPrice: best,
-      impactPct: Number.isFinite(impactPct) ? impactPct : 0,
-      simFallback: false,
+      vwap: walked.vwap,
+      bestPrice: walked.best,
+      impactBps: walked.impactBps,
+      filled: walked.filled,
+      usedDepth: true,
+      fallback: false,
     };
   } catch {
-    return { fillableQty: qty, vwap: null, bestPrice: null, impactPct: 0, simFallback: true };
+    return { vwap: null, bestPrice: null, impactBps: 0, filled: qty, usedDepth: false, fallback: true };
   }
 }
 
@@ -132,7 +122,18 @@ export class PaperBroker implements Broker {
         if (est && typeof (est as any).fillableQty === 'number') {
           qty = Math.max(0, Number((est as any).fillableQty));
         }
-        depthEstimate = est as any;
+        if (est) {
+          const estAny = est as any;
+          depthEstimate = {
+            vwap: estAny.vwap ?? null,
+            bestPrice: estAny.bestPrice ?? null,
+            impactBps: estAny.simImpactBps ?? ((est.impactPct ?? 0) * 100),
+            filled: estAny.fillableQty ?? qty,
+            usedDepth: Boolean(estAny.usedDepth),
+            fallback: Boolean(estAny.simFallback ?? estAny.fallback),
+            impactPct: est.impactPct,
+          };
+        }
         if (qty * mid < MIN_ORDER_NOTIONAL_USD) {
           const id = `paper_rejected_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
           return { ...o, id, status: 'rejected', ts: Date.now() } as PlacedOrder;
@@ -145,10 +146,24 @@ export class PaperBroker implements Broker {
       return { ...o, id, status: 'rejected', ts: Date.now() } as PlacedOrder;
     }
 
-    const slipMultiplier = depthEstimate?.simFallback ? 1.5 : 1;
+    if (!depthEstimate) {
+      const sim = await simulateBookFill(o.symbol, o.side, qty);
+      depthEstimate = { ...sim, impactPct: sim.impactBps / 100 };
+    }
+
+    const { slip } = getIntradayRuntimeConfig();
+    const useDepthPrice = Boolean(
+      o.type === 'market'
+        && depthEstimate
+        && depthEstimate.vwap != null
+        && depthEstimate.usedDepth
+        && !depthEstimate.fallback,
+    );
+    const slipMultiplier = depthEstimate?.fallback ? slip.fallbackInflation : 1;
+
     const px = o.type === 'market'
-      ? depthEstimate && depthEstimate.vwap && depthEstimate.fillableQty > 0
-        ? depthEstimate.vwap
+      ? useDepthPrice
+        ? (depthEstimate!.vwap as number)
         : pxMarketFallback(o.side, slipMultiplier)
       : (o.price!);
 
@@ -178,9 +193,24 @@ export class PaperBroker implements Broker {
       fillRatio: o.qty > 0 ? Math.min(1, qty / o.qty) : 1,
     };
 
-    if (depthEstimate?.impactPct !== undefined) {
-      out.slippageBps = Math.max(0, depthEstimate.impactPct) * 100;
+    const bestPx = o.side === 'buy' ? ask : bid;
+    const simImpactBps = (() => {
+      if (useDepthPrice && depthEstimate) {
+        return Math.max(0, depthEstimate.impactBps);
+      }
+      if (o.type === 'market' && bestPx > 0) {
+        const impact = Math.abs(px - bestPx) / bestPx * 10_000;
+        return Number.isFinite(impact) ? impact : 0;
+      }
+      return undefined;
+    })();
+
+    if (simImpactBps !== undefined) {
+      out.slippageBps = simImpactBps;
+      out.simImpactBps = simImpactBps;
     }
+    out.usedDepth = useDepthPrice;
+    out.depthFallback = Boolean(depthEstimate?.fallback);
 
     // Simplified PnL handling will be done by agent engine on exit
     this.balanceUsd -= fee; // fees paid
@@ -328,6 +358,7 @@ export class PaperBroker implements Broker {
 
   async estimateFillableQty(params: { symbol: string; side: 'buy'|'sell'; desiredQty: number; maxImpactPct?: number }) {
     const cfg = getConfig();
+    const { slip } = getIntradayRuntimeConfig();
     const symbol = params.symbol;
     const maxImpactPct = Math.max(0, Number(params.maxImpactPct ?? cfg.PAPER_MAX_IMPACT_PCT));
     try {
@@ -338,24 +369,26 @@ export class PaperBroker implements Broker {
       const price = Number(t?.last || t?.close || t?.ask || t?.bid || 0);
       const desiredQty = Math.max(0, params.desiredQty || 0);
       if (!(desiredQty > 0) || !(price > 0)) {
-        return { fillableQty: desiredQty, impactPct: 0, vwap: price, bestPrice: price } as any;
+        return { fillableQty: desiredQty, impactPct: 0, vwap: price, bestPrice: price, usedDepth: false, simFallback: true } as any;
       }
+
       let volBase = 0;
       if (Array.isArray(o15) && o15.length) {
         const last = o15[o15.length - 1];
         volBase = Number(last?.[5] || 0);
       }
       const volUsd15m = price > 0 ? volBase * price : 0;
-      const depthSim = await fetchSimulatedFill(symbol, params.side, desiredQty);
-      let fillableQty = depthSim.simFallback ? desiredQty : Math.min(desiredQty, depthSim.fillableQty);
+
+      const depthSim = await simulateBookFill(symbol, params.side, desiredQty);
+      let fillableQty = Math.min(desiredQty, depthSim.filled > 0 ? depthSim.filled : desiredQty);
       if (!(fillableQty > 0)) {
         fillableQty = desiredQty;
-        depthSim.simFallback = true;
       }
-      let impactPct = depthSim.simFallback ? 0 : Math.max(0, depthSim.impactPct);
+
       const bestGuess = params.side === 'buy' ? Number(t?.ask || price) : Number(t?.bid || price);
       const bestPrice = depthSim.bestPrice ?? (Number.isFinite(bestGuess) && bestGuess > 0 ? bestGuess : price);
       let vwap = depthSim.vwap ?? bestPrice ?? price;
+      let impactPct = depthSim.usedDepth && !depthSim.fallback ? Math.max(0, depthSim.impactBps / 100) : 0;
 
       if (volUsd15m > 0 && volUsd15m < cfg.LIQUIDITY_MIN_15M_USD) {
         const scale = Math.max(0, volUsd15m / cfg.LIQUIDITY_MIN_15M_USD);
@@ -364,13 +397,13 @@ export class PaperBroker implements Broker {
         impactPct = Math.max(impactPct, 2.5);
       }
 
-      const k = 0.2;
-      if (depthSim.simFallback) {
+      if (depthSim.fallback) {
+        const k = 0.2;
         const orderNotional = desiredQty * price;
         const flowShare = volUsd15m > 0 ? orderNotional / volUsd15m : 0;
-        const fallbackImpact = Math.max(0, Math.min(5, k * flowShare * 100)) * 1.5;
+        const fallbackImpact = Math.max(0, Math.min(5, k * flowShare * 100)) * slip.fallbackInflation;
         if (Number.isFinite(fallbackImpact)) {
-          impactPct = fallbackImpact;
+          impactPct = Math.max(impactPct, fallbackImpact);
         }
         if (!Number.isFinite(vwap) || vwap <= 0) {
           vwap = bestPrice;
@@ -383,7 +416,15 @@ export class PaperBroker implements Broker {
       }
 
       fillableQty = Math.max(0, Math.min(desiredQty, fillableQty));
-      return { fillableQty, impactPct, vwap, bestPrice, simFallback: depthSim.simFallback } as any;
+      return {
+        fillableQty,
+        impactPct,
+        vwap,
+        bestPrice,
+        usedDepth: depthSim.usedDepth && !depthSim.fallback,
+        simFallback: depthSim.fallback,
+        simImpactBps: depthSim.usedDepth ? depthSim.impactBps : impactPct * 100,
+      } as any;
     } catch {
       return { fillableQty: params.desiredQty } as any;
     }
