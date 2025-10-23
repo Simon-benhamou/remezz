@@ -70,6 +70,7 @@ export type IntradayStrategyConfig = {
     fallbackSeconds: { min: number; max: number };
     twapThresholdUsd: number;
   };
+  management: ManagementConfig;
   stops: {
     bom: { atrMultiplier: number; minPct: number };
     mr: { atrMultiplier: number; minPct: number };
@@ -81,6 +82,26 @@ export type IntradayStrategyConfig = {
       runner: { atrMultiplier: number; lookback: number };
     };
     timeStopMinutes: number;
+  };
+};
+
+export type ManagementConfig = {
+  microTrigger: {
+    enabled: boolean;
+    lookbackSec: number;
+    entryNudgeBps: number;
+  };
+  scratch: {
+    enabled: boolean;
+    aggressionThreshold: number;
+  };
+  timeStop: {
+    minMinutes: number;
+    maxMinutes: number;
+  };
+  tp: {
+    minFraction: number;
+    maxFraction: number;
   };
 };
 

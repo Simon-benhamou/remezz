@@ -78,6 +78,25 @@
     },
     "twapThresholdUsd": 300000
   },
+  "management": {
+    "microTrigger": {
+      "enabled": false,
+      "lookbackSec": 15,
+      "entryNudgeBps": 3
+    },
+    "scratch": {
+      "enabled": true,
+      "aggressionThreshold": 0.25
+    },
+    "timeStop": {
+      "minMinutes": 10,
+      "maxMinutes": 24
+    },
+    "tp": {
+      "minFraction": 0.25,
+      "maxFraction": 0.6
+    }
+  },
   "stops": {
     "bom": {
       "atrMultiplier": 1.8,
