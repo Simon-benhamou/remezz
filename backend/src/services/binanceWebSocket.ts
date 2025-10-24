@@ -115,6 +115,7 @@ const lastWsUnhealthyLogTs = new Map<string, number>();
 const restFallbackHistory: number[] = [];
 const restFallbackSymbolTs = new Map<string, number>();
 const restFallbackInflight = new Map<string, Promise<unknown>>();
+const exchangeInfoRestLimiter = createBinanceRestLimiter({ minIntervalMs: 250 });
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
@@ -358,13 +359,26 @@ class BinanceWebSocketManager {
   private readonly klineSubscriptionTtlMs: number;
   private klineReconcileTimer: NodeJS.Timeout | null = null;
   private readonly maxKlineStreamsPerShard: number;
+  private tradableSymbols = new Set<string>();
+  private tradableSymbolsReady = false;
+  private exchangeInfoRefreshPromise: Promise<void> | null = null;
+  private exchangeInfoLastFetchedMs = 0;
+  private exchangeInfoLastAttemptMs = 0;
+  private readonly exchangeInfoTtlMs = 30 * 60 * 1000;
+  private readonly exchangeInfoRetryDelayMs = 15_000;
+  private readonly invalidSymbolNoticeIntervalMs = 60_000;
+  private invalidSymbolNoticeTs = new Map<string, number>();
+  private rejectedSymbols = new Set<string>();
+  private readonly shardReconnectSkewMs = 2_000;
+  private readonly shardReconnectJitterMs = 700;
 
   private readonly endpoints = BINANCE_ENDPOINTS;
 
   constructor() {
     console.log('📡 Initializing Binance WebSocket Manager...');
     const envLimit = Number(process.env.BINANCE_MAX_KLINE_STREAMS || '30');
-    this.maxKlineStreamsPerShard = Math.max(5, Number.isFinite(envLimit) ? envLimit : 30);
+    const configuredLimit = Number.isFinite(envLimit) ? envLimit : 30;
+    this.maxKlineStreamsPerShard = Math.min(100, Math.max(5, configuredLimit));
     console.log(`📊 Binance WS manager limit: max ${this.maxKlineStreamsPerShard} concurrent kline streams per shard`);
     const envTtlRaw = Number(process.env.BINANCE_KLINE_SUBSCRIPTION_TTL_MS);
     const defaultTtl = 600_000; // 10 minutes
@@ -397,6 +411,10 @@ class BinanceWebSocketManager {
     if (!this.isTestMode) {
       void this.refreshServerTimeOffset();
     }
+
+    if (!this.isTestMode) {
+      this.ensureExchangeInfoFresh({ force: true });
+    }
   }
 
   private normalizeStreamSymbol(symbol: string): string {
@@ -409,11 +427,29 @@ class BinanceWebSocketManager {
 
   private isValidBinanceSymbol(symbol: string): boolean {
     const cacheSymbol = this.normalizeCacheSymbol(symbol);
-    return (
+    const formatValid = (
       /^[A-Z0-9]{2,}$/.test(cacheSymbol)
       && cacheSymbol.length <= MAX_BINANCE_SYMBOL_LENGTH
       && cacheSymbol.length >= 6
     );
+
+    if (!formatValid) {
+      this.noteInvalidSymbol(cacheSymbol || symbol, symbol, 'format');
+      return false;
+    }
+
+    if (!this.tradableSymbolsReady) {
+      this.ensureExchangeInfoFresh();
+      return true;
+    }
+
+    if (!this.tradableSymbols.has(cacheSymbol)) {
+      this.noteInvalidSymbol(cacheSymbol, symbol, 'unknown');
+      this.rejectedSymbols.add(cacheSymbol);
+      return false;
+    }
+
+    return true;
   }
 
   private klineCacheKey(symbol: string, interval: string): string {
@@ -426,9 +462,18 @@ class BinanceWebSocketManager {
     const now = Date.now();
     this.pruneStaleKlineSubscriptions(now);
 
-    if (!this.isValidBinanceSymbol(symbol)) {
-      console.warn(`⚠️ Ignoring invalid Binance symbol for kline subscription: ${symbol}`);
+    const cacheSymbol = this.normalizeCacheSymbol(symbol);
+    if (this.rejectedSymbols.has(cacheSymbol)) {
+      this.noteInvalidSymbol(cacheSymbol, symbol, 'cached');
       return false;
+    }
+
+    if (!this.isValidBinanceSymbol(symbol)) {
+      return false;
+    }
+
+    if (!this.isTestMode) {
+      this.ensureExchangeInfoFresh();
     }
 
     const existing = this.desiredKlineStreams.get(stream);
@@ -527,15 +572,26 @@ class BinanceWebSocketManager {
 
   private reconcileKlineStreams(): void {
     const entries = Array.from(this.desiredKlineStreams.values());
-    if (!entries.length) {
+    const validEntries: typeof entries = [];
+
+    for (const entry of entries) {
+      if (this.tradableSymbolsReady && !this.isSymbolTradable(entry.symbol)) {
+        this.noteInvalidSymbol(this.normalizeCacheSymbol(entry.symbol), entry.symbol, 'unknown');
+        this.desiredKlineStreams.delete(entry.stream);
+        continue;
+      }
+      validEntries.push(entry);
+    }
+
+    if (!validEntries.length) {
       this.klineShards.forEach(shard => shard.setStreams([]));
       return;
     }
 
-    entries.sort((a, b) => b.lastRequestedAt - a.lastRequestedAt);
+    validEntries.sort((a, b) => b.lastRequestedAt - a.lastRequestedAt);
 
     const batches: typeof entries[] = [];
-    for (const entry of entries) {
+    for (const entry of validEntries) {
       let batch = batches[batches.length - 1];
       if (!batch || batch.length >= this.maxKlineStreamsPerShard) {
         batch = [];
@@ -575,6 +631,8 @@ class BinanceWebSocketManager {
         manager: this,
         endpoints: this.endpoints,
         maxStreams: this.maxKlineStreamsPerShard,
+        reconnectSkewMs: this.shardReconnectSkewMs,
+        reconnectJitterMs: this.shardReconnectJitterMs,
       });
       this.klineShards.push(shard);
     }
@@ -750,10 +808,9 @@ class BinanceWebSocketManager {
   /**
    * Subscribe à un stream de klines (OHLCV) pour un symbole
    * 0 weight - Remplace fetchOHLCV (2 weight × n appels)
-   */
+  */
   subscribeToKline(symbol: string, interval: string = '15m'): boolean {
     if (!this.isValidBinanceSymbol(symbol)) {
-      console.warn(`⚠️ Ignoring invalid Binance symbol for kline subscription: ${symbol}`);
       return false;
     }
     const cacheSymbol = this.normalizeCacheSymbol(symbol);
@@ -762,6 +819,104 @@ class BinanceWebSocketManager {
       this.klinesCache.set(key, []);
     }
     return this.enqueueKlineSubscription(symbol, interval);
+  }
+
+  private isSymbolTradable(symbol: string): boolean {
+    const cacheSymbol = this.normalizeCacheSymbol(symbol);
+    return cacheSymbol.length > 0 && this.tradableSymbols.has(cacheSymbol);
+  }
+
+  private noteInvalidSymbol(cacheKey: string, originalSymbol: string, reason: 'format' | 'unknown' | 'cached'): void {
+    const key = cacheKey || originalSymbol;
+    const now = Date.now();
+    const lastLog = this.invalidSymbolNoticeTs.get(key) ?? 0;
+    if (now - lastLog >= this.invalidSymbolNoticeIntervalMs) {
+      const reasonText =
+        reason === 'format'
+          ? 'fails symbol format checks'
+          : reason === 'cached'
+            ? 'previously rejected by Binance'
+            : 'not listed in Binance exchangeInfo';
+      console.warn(`⚠️ Ignoring invalid Binance symbol for kline subscription: ${originalSymbol} (${reasonText})`);
+      this.invalidSymbolNoticeTs.set(key, now);
+    }
+  }
+
+  private ensureExchangeInfoFresh(options?: { force?: boolean }): void {
+    if (this.isTestMode) {
+      return;
+    }
+
+    const now = Date.now();
+    const needsRefresh =
+      options?.force
+      || !this.tradableSymbolsReady
+      || now - this.exchangeInfoLastFetchedMs > this.exchangeInfoTtlMs;
+
+    if (!needsRefresh) {
+      return;
+    }
+
+    if (this.exchangeInfoRefreshPromise) {
+      return;
+    }
+
+    if (!options?.force && now - this.exchangeInfoLastAttemptMs < this.exchangeInfoRetryDelayMs) {
+      return;
+    }
+
+    this.exchangeInfoLastAttemptMs = now;
+    this.exchangeInfoRefreshPromise = this.refreshExchangeSymbols()
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`❌ Failed to refresh Binance exchange symbols: ${message}`);
+      })
+      .finally(() => {
+        this.exchangeInfoRefreshPromise = null;
+      });
+  }
+
+  private async refreshExchangeSymbols(): Promise<void> {
+    const url = `${this.endpoints.rest}/fapi/v1/exchangeInfo`;
+    const response = await exchangeInfoRestLimiter.run(() => fetch(url));
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`HTTP ${response.status} ${body}`.trim());
+    }
+
+    const payload = await response.json();
+    const symbols = Array.isArray(payload?.symbols) ? payload.symbols : [];
+    const next = new Set<string>();
+
+    for (const entry of symbols) {
+      if (!entry) continue;
+      const raw = typeof entry.symbol === 'string' ? entry.symbol.toUpperCase() : '';
+      const status = typeof entry.status === 'string' ? entry.status.toUpperCase() : '';
+      if (!raw) continue;
+      if (status === 'TRADING') {
+        next.add(raw);
+      }
+    }
+
+    if (next.size === 0) {
+      throw new Error('exchangeInfo returned no tradable symbols');
+    }
+
+    this.tradableSymbols = next;
+    this.tradableSymbolsReady = true;
+    this.exchangeInfoLastFetchedMs = Date.now();
+    this.rejectedSymbols.clear();
+    this.invalidSymbolNoticeTs = new Map();
+    console.log(`✅ Loaded ${next.size} Binance futures symbols from exchangeInfo`);
+  }
+
+  seedExchangeSymbols(symbols: string[]): void {
+    const normalized = symbols.map(symbol => this.normalizeCacheSymbol(symbol)).filter(Boolean);
+    this.tradableSymbols = new Set(normalized);
+    this.tradableSymbolsReady = normalized.length > 0;
+    this.rejectedSymbols.clear();
+    this.invalidSymbolNoticeTs = new Map();
   }
 
   /**
@@ -1922,6 +2077,8 @@ interface BinanceKlineShardOptions {
   manager: BinanceWebSocketManager;
   endpoints: typeof BINANCE_ENDPOINTS;
   maxStreams: number;
+  reconnectSkewMs: number;
+  reconnectJitterMs: number;
 }
 
 class BinanceKlineShard {
@@ -1929,6 +2086,8 @@ class BinanceKlineShard {
   private readonly manager: BinanceWebSocketManager;
   private readonly endpoints: typeof BINANCE_ENDPOINTS;
   private readonly maxStreams: number;
+  private readonly reconnectSkewMs: number;
+  private readonly reconnectJitterMs: number;
   private ws: WebSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -1950,6 +2109,8 @@ class BinanceKlineShard {
     this.manager = options.manager;
     this.endpoints = options.endpoints;
     this.maxStreams = options.maxStreams;
+    this.reconnectSkewMs = options.reconnectSkewMs;
+    this.reconnectJitterMs = options.reconnectJitterMs;
   }
 
   setStreams(streams: string[]): void {
@@ -2143,7 +2304,10 @@ class BinanceKlineShard {
     }
     const attempt = this.reconnectAttempts;
     this.reconnectAttempts += 1;
-    const delay = Math.min(this.baseBackoffMs * Math.pow(2, attempt), this.maxBackoffMs);
+    const baseDelay = Math.min(this.baseBackoffMs * Math.pow(2, attempt), this.maxBackoffMs);
+    const offset = Math.max(0, this.reconnectSkewMs * this.id);
+    const jitter = this.reconnectJitterMs > 0 ? Math.floor(Math.random() * this.reconnectJitterMs) : 0;
+    const delay = Math.min(baseDelay + offset + jitter, this.maxBackoffMs + offset);
     console.warn(`🔄 Scheduling Binance kline shard ${this.id} reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
@@ -2282,6 +2446,17 @@ export function createTestBinanceWebSocketHarness() {
   };
 
   internal.isConnected = true;
+  manager.seedExchangeSymbols([
+    'ADAUSDT',
+    'ARBUSDT',
+    'DYDXUSDT',
+    'SNXUSDT',
+    'CRVUSDT',
+    'LINKUSDT',
+    'OPUSDT',
+    'BTCUSDT',
+    'ETHUSDT',
+  ]);
 
   const withFakeNow = <T>(now: number, fn: () => T): T => {
     const originalNow = Date.now;
@@ -2315,6 +2490,9 @@ export function createTestBinanceWebSocketHarness() {
     },
     setServerOffset(offsetMs: number) {
       internal.setServerTimeOffsetForTest?.(offsetMs);
+    },
+    seedExchangeSymbols(symbols: string[]) {
+      manager.seedExchangeSymbols(symbols);
     },
   };
 }

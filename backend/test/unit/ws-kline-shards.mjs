@@ -7,13 +7,23 @@ const { createTestBinanceWebSocketHarness } = await import('../../dist/src/servi
 const harness = createTestBinanceWebSocketHarness();
 const { manager } = harness;
 
+const generatedSymbols = [];
+for (let i = 0; i < 65; i += 1) {
+  const suffix = String(i).padStart(2, '0');
+  generatedSymbols.push(`COIN${suffix}USDT`);
+}
+
+harness.seedExchangeSymbols([
+  'BTCUSDT',
+  'ETHUSDT',
+  ...generatedSymbols,
+]);
+
 const invalidAccepted = manager.subscribeToKline('币安人生/USDT', '15m');
 assert.equal(invalidAccepted, false, 'expected invalid symbol subscription to be rejected');
 
 const symbols = [];
-for (let i = 0; i < 65; i += 1) {
-  const suffix = String(i).padStart(2, '0');
-  const symbol = `COIN${suffix}USDT`;
+for (const symbol of generatedSymbols) {
   const ok = manager.subscribeToKline(symbol, '15m');
   assert.equal(ok, true, `expected subscription for ${symbol} to succeed`);
   symbols.push(symbol);
