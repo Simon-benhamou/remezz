@@ -245,7 +245,7 @@ export function isSyntheticSeries(data: number[][]): boolean {
   const window = Math.min(20, data.length);
   if (window === 0) return false;
   const tail = data.slice(-window);
-  let syntheticCount = 0;
+  let consecutive = 0;
   for (const row of tail) {
     if (!Array.isArray(row) || row.length < 6) continue;
     const open = Number(row[1]);
@@ -256,10 +256,15 @@ export function isSyntheticSeries(data: number[][]): boolean {
     const flat = Number.isFinite(open) && open === high && high === low && low === close;
     const zeroVol = Number.isFinite(volume) && volume === 0;
     if (flat || zeroVol) {
-      syntheticCount += 1;
+      consecutive += 1;
+      if (consecutive >= 3) {
+        return true;
+      }
+    } else {
+      consecutive = 0;
     }
   }
-  return syntheticCount / window >= 0.8;
+  return false;
 }
 
 export type PreparedOhlcvSeries = { series: number[][]; synthetic: boolean };

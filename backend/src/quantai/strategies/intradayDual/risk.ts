@@ -16,12 +16,15 @@ export type PositionContext = {
   riskReduction?: number;
   riskScale?: number;
   baseRiskPct?: number;
+  minNotionalUsd?: number;
 };
 
 export type PositionSizingResult = {
   size: PreciseDecimal;
   riskUsd: PreciseDecimal;
   leverage: number;
+  minNotionalApplied?: boolean;
+  droppedReason?: string;
 };
 
 type SymbolState = {
@@ -54,12 +57,41 @@ export class VolatilitySizer {
     const leverageCap = slippageOk ? Number.POSITIVE_INFINITY : 1;
     const cappedLeverage = Math.min(rawLeverage, ctx.maxLevInstrument, ctx.maxLevGlobal, ctx.exposureBudget, leverageCap);
     const leverageScalar = rawLeverage <= 0 ? 0 : cappedLeverage / rawLeverage;
-    const adjustedSize = sizeNotional.times(new PreciseDecimal(leverageScalar));
-    const adjustedRiskUsd = riskUsd.times(new PreciseDecimal(leverageScalar));
+    let adjustedSize = sizeNotional.times(new PreciseDecimal(leverageScalar));
+    let adjustedRiskUsd = riskUsd.times(new PreciseDecimal(leverageScalar));
+    let leverage = cappedLeverage;
+    let minNotionalApplied = false;
+    const priceAbs = ctx.price.abs();
+    if (ctx.minNotionalUsd && ctx.minNotionalUsd > 0 && priceAbs.raw !== 0n) {
+      const minNotionalDec = new PreciseDecimal(ctx.minNotionalUsd);
+      const currentNotional = adjustedSize.times(priceAbs).abs();
+      if (currentNotional.lt(minNotionalDec)) {
+        const minSize = minNotionalDec.dividedBy(priceAbs);
+        const stopPctDec = new PreciseDecimal(stopPct);
+        const minLeverage = ctx.equityUsd.raw === 0n
+          ? 0
+          : Number(minNotionalDec.dividedBy(ctx.equityUsd).toFixed(6));
+        const maxAllowedLeverage = Math.min(ctx.maxLevInstrument, ctx.maxLevGlobal, ctx.exposureBudget);
+        if (minLeverage <= maxAllowedLeverage + 1e-9) {
+          adjustedSize = minSize;
+          adjustedRiskUsd = minNotionalDec.times(stopPctDec);
+          leverage = Math.max(leverage, minLeverage);
+          minNotionalApplied = true;
+        } else {
+          return {
+            size: PreciseDecimal.fromRaw(0n),
+            riskUsd: PreciseDecimal.fromRaw(0n),
+            leverage: 0,
+            droppedReason: 'below_min_notional',
+          };
+        }
+      }
+    }
     return {
       size: adjustedSize,
       riskUsd: adjustedRiskUsd,
-      leverage: cappedLeverage,
+      leverage,
+      minNotionalApplied,
     };
   }
 }

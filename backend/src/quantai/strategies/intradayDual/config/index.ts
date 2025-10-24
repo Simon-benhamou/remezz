@@ -90,6 +90,7 @@ export type ManagementConfig = {
     enabled: boolean;
     lookbackSec: number;
     entryNudgeBps: number;
+    timeoutSec: number;
   };
   scratch: {
     enabled: boolean;

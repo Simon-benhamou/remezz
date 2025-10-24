@@ -8,6 +8,7 @@ import { History } from './history.js';
 import { computeQualityScore, chooseEV } from '../../qs/qualityScore.js';
 import { getIntradayRuntimeConfig } from '../../../config/intraday.js';
 import { computeEntryNudge } from '../../micro/microTrigger.js';
+import { recordDiagnostic } from './diagnostics.js';
 import type {
   TickInput,
   RegimeSignal,
@@ -66,6 +67,8 @@ type EvaluateContext = {
   exposureBudget: number;
   slippageBps: number;
   runtimeMetrics?: { fillRate?: number; slippageBps?: number };
+  minNotionalUsd: number;
+  minRiskScale: number;
 };
 
 function pctToPrice(base: PreciseDecimal, pct: number, side: 'long' | 'short', direction: 'tp' | 'sl'): PreciseDecimal {
@@ -141,10 +144,21 @@ export class IntradayDualStrategy {
     const exits: ExitDirective[] = [];
 
     const pendingMicro = this.pendingMicroEntries.get(input.symbol);
-    if (pendingMicro && this.hasPriceCrossed(pendingMicro.side, pendingMicro.trigger, input.price)) {
-      entries.push(pendingMicro.entry);
-      this.registerPosition(input.symbol, pendingMicro.entry, ctx.equityUsd, input.timestamp);
-      this.pendingMicroEntries.delete(input.symbol);
+    if (pendingMicro) {
+      const microCfg = this.cfg.management?.microTrigger;
+      const timeoutSec = microCfg?.timeoutSec ?? Math.max(15, (microCfg?.lookbackSec ?? 5) * 2);
+      const timeoutMs = Math.max(1, Math.round(timeoutSec * 1000));
+      if (input.timestamp - pendingMicro.createdAt >= timeoutMs) {
+        this.pendingMicroEntries.delete(input.symbol);
+        recordDiagnostic(input.symbol, 'micro_wait_timeout', {
+          waitedMs: input.timestamp - pendingMicro.createdAt,
+          configuredTimeoutMs: timeoutMs,
+        });
+      } else if (this.hasPriceCrossed(pendingMicro.side, pendingMicro.trigger, input.price)) {
+        entries.push(pendingMicro.entry);
+        this.registerPosition(input.symbol, pendingMicro.entry, ctx.equityUsd, input.timestamp);
+        this.pendingMicroEntries.delete(input.symbol);
+      }
     }
 
     exits.push(...this.evaluateExits(input, features));
@@ -331,6 +345,9 @@ export class IntradayDualStrategy {
     adaptiveOrRisk: AdaptiveParams | number,
     regime: RegimeSignal,
   ): EntrySignal | null {
+    const minRiskFloor = Number.isFinite(ctx.minRiskScale)
+      ? (ctx.minRiskScale as number)
+      : this.runtimeCfg.qs.minRiskScale;
     const adaptive: AdaptiveParams = typeof adaptiveOrRisk === 'number'
       ? {
         recheckActive: false,
@@ -480,6 +497,13 @@ export class IntradayDualStrategy {
         slMaxBps: slMax,
       });
     }
+    if (evChoice.evBps <= -120) {
+      recordDiagnostic(input.symbol, 'ev_extreme', {
+        evBps: evChoice.evBps,
+        slippageBps: ctx.slippageBps,
+        regime: 'BOM',
+      });
+    }
     const strategyMinStopBps = Math.round(this.cfg.stops.bom.minPct * 10_000);
     const evStopBps = Math.round(evChoice.stopBps);
     const evTpBps = Math.round(evChoice.takeProfitBps);
@@ -503,9 +527,35 @@ export class IntradayDualStrategy {
       riskReduction: effectiveRiskReduction * pyramidScale,
       riskScale: quality.riskScale,
       baseRiskPct: this.runtimeCfg.qs.baseRiskPct,
+      minNotionalUsd: ctx.minNotionalUsd,
     });
-    if (sized.size.raw === 0n) return null;
+    if (sized.droppedReason === 'below_min_notional') {
+      recordDiagnostic(input.symbol, 'min_notional_skip', {
+        price: signalCandle.close,
+        minNotionalUsd: ctx.minNotionalUsd,
+        regime: 'BOM',
+      });
+      return null;
+    }
+    if (sized.size.raw === 0n) {
+      if (quality.riskScale <= minRiskFloor + 1e-6) {
+        recordDiagnostic(input.symbol, 'risk_scale_floor', {
+          riskScale: quality.riskScale,
+          minRiskScale: minRiskFloor,
+          regime: 'BOM',
+        });
+      }
+      return null;
+    }
 
+    if (sized.minNotionalApplied) {
+      recordDiagnostic(input.symbol, 'min_notional_applied', {
+        price: signalCandle.close,
+        minNotionalUsd: ctx.minNotionalUsd,
+        regime: 'BOM',
+      });
+    }
+    const riskScaleAtFloor = quality.riskScale <= minRiskFloor + 1e-6;
     const bufferPct = (this.cfg.entry.bom.stopBufferBps ?? 0) / 10_000;
     const bufferDecimal = new PreciseDecimal(bufferPct.toString());
     const signedBuffer = side === 'long' ? bufferDecimal : new PreciseDecimal((-bufferPct).toString());
@@ -588,6 +638,8 @@ export class IntradayDualStrategy {
         tpBps: Math.round(tpBasePct * 10_000),
         evBps: evChoice.evBps,
         predictedSlippageBps: ctx.slippageBps,
+        minNotionalApplied: sized.minNotionalApplied ? true : undefined,
+        riskScaleFloor: riskScaleAtFloor ? true : undefined,
       },
     };
   }
@@ -599,6 +651,9 @@ export class IntradayDualStrategy {
     adaptiveOrRisk: AdaptiveParams | number,
     regime: RegimeSignal,
   ): EntrySignal | null {
+    const minRiskFloor = Number.isFinite(ctx.minRiskScale)
+      ? (ctx.minRiskScale as number)
+      : this.runtimeCfg.qs.minRiskScale;
     const adaptive: AdaptiveParams = typeof adaptiveOrRisk === 'number'
       ? {
         recheckActive: false,
@@ -744,9 +799,35 @@ export class IntradayDualStrategy {
       riskReduction: effectiveRiskReduction,
       riskScale: quality.riskScale,
       baseRiskPct: this.runtimeCfg.qs.baseRiskPct,
+      minNotionalUsd: ctx.minNotionalUsd,
     });
-    if (sized.size.raw === 0n) return null;
+    if (sized.droppedReason === 'below_min_notional') {
+      recordDiagnostic(input.symbol, 'min_notional_skip', {
+        price: input.price,
+        minNotionalUsd: ctx.minNotionalUsd,
+        regime: 'MR',
+      });
+      return null;
+    }
+    if (sized.size.raw === 0n) {
+      if (quality.riskScale <= minRiskFloor + 1e-6) {
+        recordDiagnostic(input.symbol, 'risk_scale_floor', {
+          riskScale: quality.riskScale,
+          minRiskScale: minRiskFloor,
+          regime: 'MR',
+        });
+      }
+      return null;
+    }
 
+    if (sized.minNotionalApplied) {
+      recordDiagnostic(input.symbol, 'min_notional_applied', {
+        price: input.price,
+        minNotionalUsd: ctx.minNotionalUsd,
+        regime: 'MR',
+      });
+    }
+    const riskScaleAtFloor = quality.riskScale <= minRiskFloor + 1e-6;
     const entryPrice = new PreciseDecimal(input.price);
     const stopPrice = pctToPrice(entryPrice, stopPct, side, 'sl');
     const tp1 = pctToPrice(entryPrice, tpBasePct, side, 'tp');
@@ -812,6 +893,8 @@ export class IntradayDualStrategy {
         tpBps: Math.round(tpBasePct * 10_000),
         evBps: evChoice.evBps,
         predictedSlippageBps: ctx.slippageBps,
+        minNotionalApplied: sized.minNotionalApplied ? true : undefined,
+        riskScaleFloor: riskScaleAtFloor ? true : undefined,
       },
     };
   }

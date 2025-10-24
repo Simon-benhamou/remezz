@@ -1,6 +1,7 @@
 import { IntradayDualStrategy } from './strategy.js';
 import type { Candle, TickInput, BacktestResult, EntrySignal, TradeLog, BacktestMetrics } from './types.js';
 import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
+import { getIntradayRuntimeConfig } from '../../../config/intraday.js';
 
 export type BacktestOptions = {
   symbol: string;
@@ -90,6 +91,7 @@ function decimalFromBps(bps: number): PreciseDecimal {
 function simulateSegment(candles: Candle[], options: BacktestOptions): SimulationArtifacts {
   if (!candles.length) throw new Error('No candles provided');
   const strategy = new IntradayDualStrategy();
+  const runtimeCfg = getIntradayRuntimeConfig();
   const candles5m = aggregateCandles(candles, 5);
   const candles15m = aggregateCandles(candles, 15);
   const startEquity = new PreciseDecimal(options.equityUsd);
@@ -159,6 +161,8 @@ function simulateSegment(candles: Candle[], options: BacktestOptions): Simulatio
       exposureBudget: 5,
       slippageBps: runtimeSlippage,
       runtimeMetrics: { fillRate: runtimeFillRate(), slippageBps: runtimeSlippage },
+      minNotionalUsd: 0,
+      minRiskScale: runtimeCfg.qs.minRiskScale,
     });
 
     if (result.entries.length) {
