@@ -1,6 +1,6 @@
 import { prisma } from '../db/client.js';
 import { getTicker, getOHLCV } from '../data/market.js';
-import { isUnusableMarketDataError } from '../data/errors.js';
+import { isInsufficientDataError, isUnusableMarketDataError } from '../data/errors.js';
 import { fullAnalysis, computeProjection } from '../ai/analysis.js';
 import { buildTechSnapshot, type TechnicalSnapshot } from '../ai/tech.js';
 import { getAIRankedOpportunities, type RankedOpportunity } from '../ai/cryptoRanking.js';
@@ -166,6 +166,242 @@ const CACHE_DURATION_AI = 30 * 60 * 1000; // 30min cache IA (plus long)
 const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
 const CACHE_DURATION_ML = 15 * 60 * 1000; // 15min cache ML
 const waitFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+type FetchImpl = (input: any, init?: any) => Promise<Response>;
+
+function isRequestTimeoutError(error: unknown): boolean {
+  if (!error) return false;
+  const ccxtAny = ccxt as any;
+  if (error instanceof ccxtAny.RequestTimeout) {
+    return true;
+  }
+  const name = typeof (error as any)?.name === 'string' ? (error as any).name : '';
+  if (name === 'AbortError') {
+    return true;
+  }
+  const message = typeof (error as any)?.message === 'string' ? (error as any).message : '';
+  return message.includes('RequestTimeout') || message.includes('timed out') || message.includes('ETIMEDOUT');
+}
+
+async function fetchJsonWithBackoff(
+  url: string,
+  label: string,
+  {
+    fetchImpl = fetch,
+    attempts = 3,
+    timeoutMs = 20_000,
+    baseDelayMs = 2_000,
+  }: { fetchImpl?: FetchImpl; attempts?: number; timeoutMs?: number; baseDelayMs?: number } = {},
+): Promise<any> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const abortController = new AbortController();
+    const timer = setTimeout(() => abortController.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(url, { signal: abortController.signal });
+      clearTimeout(timer);
+      if (!response.ok) {
+        throw new Error(`${label} HTTP ${response.status}: ${response.statusText}`);
+      }
+      return response.json();
+    } catch (error) {
+      clearTimeout(timer);
+      lastError = error;
+      const delay = Math.min(baseDelayMs * 2 ** attempt, 60_000);
+      const message = typeof (error as any)?.message === 'string' ? (error as any).message : String(error);
+      console.warn(`⚠️ ${label} attempt ${attempt + 1} failed: ${message}`);
+      if (attempt + 1 >= attempts) {
+        break;
+      }
+      await waitFor(delay);
+    }
+  }
+  throw lastError ?? new Error(`${label} failed after ${attempts} attempts`);
+}
+
+type BinanceMarket = {
+  symbol: string;
+  swap: boolean;
+  type: 'swap';
+  active: boolean;
+  settle: string;
+  base: string;
+  quote: string;
+};
+
+function toBinanceSwapSymbol(symbol: string): string {
+  if (!symbol) return symbol;
+  if (symbol.includes(':')) return symbol;
+  const [base, quote] = symbol.split('/') as [string, string | undefined];
+  if (quote && quote.toUpperCase() === 'USDT') {
+    return `${base}/USDT:USDT`;
+  }
+  return symbol;
+}
+
+async function fetchBinancePerpetualMarkets(
+  cacheKey: string,
+  {
+    fetchImpl = fetch,
+    disableCache = false,
+    getWsTickers,
+  }: { fetchImpl?: FetchImpl; disableCache?: boolean; getWsTickers?: () => Promise<Map<string, BinanceTickerData> | null> } = {},
+): Promise<{ markets: Record<string, BinanceMarket>; count: number; source: string }> {
+  const CACHE_DURATION = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  if (!disableCache) {
+    const cachedData = aiAnalysisCache.get(cacheKey);
+    if (cachedData && now - cachedData.timestamp < CACHE_DURATION) {
+      const cachedResult = cachedData.result as { markets: Record<string, BinanceMarket>; count: number };
+      return { markets: cachedResult.markets, count: cachedResult.count, source: 'cache' };
+    }
+  }
+
+  const markets: Record<string, BinanceMarket> = {};
+
+  try {
+    const wsProvider = getWsTickers ?? getAllTickersFromWebSocket;
+    const wsMap = await wsProvider();
+    if (wsMap && wsMap.size > 0) {
+      let count = 0;
+      for (const ticker of wsMap.values()) {
+        if (!ticker.symbol.endsWith('USDT')) continue;
+        const base = ticker.symbol.replace(/USDT$/i, '');
+        const unified = `${base}/USDT`;
+        markets[unified] = {
+          symbol: unified,
+          swap: true,
+          type: 'swap',
+          active: true,
+          settle: 'USDT',
+          base,
+          quote: 'USDT',
+        };
+        count += 1;
+      }
+      if (count > 0) {
+        if (!disableCache) {
+          aiAnalysisCache.set(cacheKey, { result: { markets, count }, timestamp: now });
+        }
+        console.log(`✅ Derived ${count} USDT perpetual markets from Binance WS tickers`);
+        return { markets, count, source: 'ws' };
+      }
+    }
+  } catch (error) {
+    console.warn('⚠️ Failed to derive Binance perpetual markets from WS tickers:', error);
+  }
+
+  const restEndpoints = [
+    {
+      url: 'https://fapi.binance.com/fapi/v1/exchangeInfo',
+      label: 'Binance futures exchangeInfo (fapi)',
+      settle: 'USDT',
+    },
+    {
+      url: 'https://dapi.binance.com/dapi/v1/exchangeInfo',
+      label: 'Binance coin-m futures exchangeInfo (dapi)',
+      settle: 'USD',
+    },
+  ] as const;
+
+  for (const endpoint of restEndpoints) {
+    try {
+      const exchangeInfo = await fetchJsonWithBackoff(endpoint.url, endpoint.label, { fetchImpl });
+      const symbols = Array.isArray(exchangeInfo?.symbols) ? exchangeInfo.symbols : [];
+      let count = 0;
+      for (const symbolInfo of symbols) {
+        const quote = String(symbolInfo?.quoteAsset ?? '').toUpperCase();
+        if (symbolInfo?.contractType !== 'PERPETUAL') continue;
+        if (symbolInfo?.status !== 'TRADING') continue;
+        if (quote !== 'USDT') continue;
+        const base = String(symbolInfo.baseAsset ?? '').toUpperCase();
+        if (!base) continue;
+        const unified = `${base}/USDT`;
+        markets[unified] = {
+          symbol: unified,
+          swap: true,
+          type: 'swap',
+          active: true,
+          settle: 'USDT',
+          base,
+          quote: 'USDT',
+        };
+        count += 1;
+      }
+      if (count > 0) {
+        if (!disableCache) {
+          aiAnalysisCache.set(cacheKey, { result: { markets, count }, timestamp: now });
+        }
+        console.log(`📊 Fetched ${count} Binance perpetual markets from ${endpoint.label}`);
+        return { markets, count, source: endpoint.label };
+      }
+    } catch (error) {
+      console.warn(`⚠️ ${endpoint.label} failed:`, error);
+    }
+  }
+
+  try {
+    const spotInfo = await fetchJsonWithBackoff('https://api.binance.com/api/v3/exchangeInfo', 'Binance spot exchangeInfo', {
+      fetchImpl,
+      attempts: 2,
+      baseDelayMs: 1_000,
+    });
+    const symbols = Array.isArray(spotInfo?.symbols) ? spotInfo.symbols : [];
+    let count = 0;
+    for (const symbolInfo of symbols) {
+      if (symbolInfo?.status !== 'TRADING') continue;
+      if (symbolInfo?.quoteAsset !== 'USDT') continue;
+      const base = String(symbolInfo.baseAsset ?? '').toUpperCase();
+      if (!base) continue;
+      const unified = `${base}/USDT`;
+      markets[unified] = {
+        symbol: unified,
+        swap: true,
+        type: 'swap',
+        active: true,
+        settle: 'USDT',
+        base,
+        quote: 'USDT',
+      };
+      count += 1;
+    }
+    if (count > 0) {
+      console.warn('⚠️ Falling back to Binance spot exchangeInfo for perpetual market validation');
+      if (!disableCache) {
+        aiAnalysisCache.set(cacheKey, { result: { markets, count }, timestamp: now });
+      }
+      return { markets, count, source: 'spot_fallback' };
+    }
+  } catch (error) {
+    console.error('❌ Binance spot exchangeInfo fallback failed:', error);
+  }
+
+  throw new Error('Unable to load Binance perpetual markets from any source');
+}
+
+async function fetchTickerWithRetry(
+  exchange: any,
+  symbol: string,
+  alias: string,
+  attempt: number = 0,
+  maxAttempts: number = 3,
+): Promise<any> {
+  try {
+    return await exchange.fetchTicker(symbol);
+  } catch (error) {
+    if (isRequestTimeoutError(error) && attempt + 1 < maxAttempts) {
+      const delay = Math.min(2_000 * 2 ** attempt, 15_000);
+      console.warn(`⚠️ ${exchange.id} timeout on ${alias} (${symbol}), retrying in ${delay}ms...`);
+      await waitFor(delay);
+      return fetchTickerWithRetry(exchange, symbol, alias, attempt + 1, maxAttempts);
+    }
+    if (isRequestTimeoutError(error)) {
+      console.warn(`⚠️ ${exchange.id} timeout on ${alias} (${symbol}) after ${maxAttempts} attempts. Skipping.`);
+      return null;
+    }
+    throw error;
+  }
+}
 
 const OPEN_ORDER_STATUS_LIST = [
   'new', 'NEW',
@@ -1000,89 +1236,56 @@ export async function getOptimizedCryptoList(
 
     const exchange = new ExchangeClass({
       enableRateLimit: true,
+      timeout: 20_000,
       options: { defaultType: 'swap' }
     });
 
     const isBinanceExchange = String((exchange as any)?.id || '').toLowerCase().includes('binance');
-    let markets: any = {};
+    let markets: Record<string, any> = {};
 
     if (isBinanceExchange) {
-      // For Binance, fetch dynamic perpetual markets list with aggressive caching (24h) to avoid bans
-      console.log('📊 [WebSocket] Fetching dynamic perpetual markets from Binance public API (0 weight, 24h cache)');
-      
-      // Aggressive caching: only call API once per day to avoid any ban risk
       const CACHE_KEY = 'binance_perpetuals_cache';
-      const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
-      
-      let cachedData = aiAnalysisCache.get(CACHE_KEY);
-      if (cachedData && (Date.now() - cachedData.timestamp) < CACHE_DURATION) {
-        console.log(`📊 Using cached Binance perpetual markets (${cachedData.result.count} markets, ${(Date.now() - cachedData.timestamp) / 1000 / 60}min old)`);
-        markets = cachedData.result.markets;
-      } else {
-        try {
-          // Prefer Binance WebSocket mini tickers (0 weight) to derive markets
-          const { getAllTickersFromWebSocket } = await import('../services/binanceWebSocket.js');
-          const wsMap = await getAllTickersFromWebSocket();
-          if (wsMap && wsMap.size > 0) {
-            markets = {};
-            let count = 0;
-            for (const t of wsMap.values()) {
-              if (!t.symbol.endsWith('USDT')) continue;
-              const base = t.symbol.replace('USDT','');
-              const unified = `${base}/USDT`;
-              markets[unified] = {
-                symbol: unified,
-                swap: true,
-                type: 'swap',
-                active: true,
-                settle: 'USDT',
-                base,
-                quote: 'USDT'
-              };
-              count++;
-            }
-            aiAnalysisCache.set(CACHE_KEY, {
-              result: { markets, count },
-              timestamp: Date.now()
-            });
-            console.log(`✅ Derived ${count} USDT perpetual markets from WS tickers`);
-          } else {
-            throw new Error('WS tickers unavailable');
-          }
-        } catch (wsErr) {
-          try {
-            // Fallback: Binance Futures API exchangeInfo (may be banned under 418)
-            const response = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
-            if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            const exchangeInfo = await response.json();
-            const symbols = exchangeInfo.symbols || [];
-            const usdtPerpetuals = symbols.filter((symbolInfo: any) => (
-              symbolInfo.contractType === 'PERPETUAL' && symbolInfo.quoteAsset === 'USDT' && symbolInfo.status === 'TRADING'
-            ));
-            markets = {};
-            usdtPerpetuals.forEach((si: any) => {
-              const unified = `${si.baseAsset}/USDT`;
-              markets[unified] = { symbol: unified, swap: true, type: 'swap', active: true, settle: 'USDT', base: si.baseAsset, quote: 'USDT' };
-            });
-            aiAnalysisCache.set(CACHE_KEY, { result: { markets, count: usdtPerpetuals.length }, timestamp: Date.now() });
-            console.log(`📊 Fetched ${usdtPerpetuals.length} USDT perpetual markets from Binance API`);
-          } catch (error) {
-            console.error('❌ Failed to fetch Binance perpetual markets:', error);
-            console.log('📊 Falling back to static list due to API error');
-            const binancePerpetuals = [
-              'BTC/USDT','ETH/USDT','BNB/USDT','ADA/USDT','XRP/USDT','SOL/USDT','DOT/USDT','DOGE/USDT',
-              'AVAX/USDT','LTC/USDT','MATIC/USDT','ALGO/USDT','VET/USDT','ICP/USDT','FIL/USDT','TRX/USDT',
-              'ETC/USDT','XLM/USDT','THETA/USDT','FTM/USDT','HBAR/USDT','EGLD/USDT','NEAR/USDT','FLOW/USDT'
-            ];
-            markets = {};
-            binancePerpetuals.forEach(symbol => {
-              markets[symbol] = { symbol, swap: true, type: 'swap', active: true, settle: 'USDT', base: symbol.split('/')[0], quote: 'USDT' };
-            });
-          }
+      try {
+        const { markets: binanceMarkets, count, source } = await fetchBinancePerpetualMarkets(CACHE_KEY);
+        markets = binanceMarkets;
+        console.log(`📊 Using ${count} Binance perpetual markets from ${source}`);
+      } catch (error) {
+        console.error('❌ Failed to load Binance perpetual markets:', error);
+        console.log('📊 Falling back to static Binance perpetual list');
+        const binancePerpetuals = [
+          'BTC/USDT','ETH/USDT','BNB/USDT','ADA/USDT','XRP/USDT','SOL/USDT','DOT/USDT','DOGE/USDT',
+          'AVAX/USDT','LTC/USDT','MATIC/USDT','ALGO/USDT','VET/USDT','ICP/USDT','FIL/USDT','TRX/USDT',
+          'ETC/USDT','XLM/USDT','THETA/USDT','FTM/USDT','HBAR/USDT','EGLD/USDT','NEAR/USDT','FLOW/USDT'
+        ];
+        markets = {};
+        for (const symbol of binancePerpetuals) {
+          const base = symbol.split('/')[0];
+          markets[symbol] = { symbol, swap: true, type: 'swap', active: true, settle: 'USDT', base, quote: 'USDT' };
         }
       }
+      if (typeof (exchange as any).setMarkets === 'function') {
+        (exchange as any).setMarkets(markets, Object.values(markets));
+      } else {
+        (exchange as any).markets = markets;
+        (exchange as any).symbols = Object.keys(markets);
+      }
     } else {
-      await exchange.loadMarkets();
+      let loadAttempt = 0;
+      while (loadAttempt < 3) {
+        try {
+          loadAttempt += 1;
+          await exchange.loadMarkets();
+          break;
+        } catch (error) {
+          if (isRequestTimeoutError(error) && loadAttempt < 3) {
+            const delay = Math.min(2_000 * 2 ** (loadAttempt - 1), 15_000);
+            console.warn(`⚠️ ${exchange.id} loadMarkets timeout (attempt ${loadAttempt}), retrying in ${delay}ms...`);
+            await waitFor(delay);
+            continue;
+          }
+          throw error;
+        }
+      }
       markets = exchange.markets || {};
     }
 
@@ -1161,8 +1364,11 @@ export async function getOptimizedCryptoList(
         }
 
         // Fallback REST only for non-Binance or WebSocket miss
-        const ticker = await exchange.fetchTicker(symbol);
-        allTickers[symbol] = ticker;
+        const requestSymbol = isBinanceExchange ? toBinanceSwapSymbol(symbol) : symbol;
+        const ticker = await fetchTickerWithRetry(exchange, requestSymbol, symbol);
+        if (ticker) {
+          allTickers[symbol] = ticker;
+        }
       } catch (error) {
         // Skip failed tickers
       }
@@ -1361,6 +1567,16 @@ export async function getOptimizedCryptoList(
           evaluationDiagnostics.push({ symbol: entry.symbol, reasons: evaluation.reasons });
         }
       } catch (error) {
+        if (isInsufficientDataError(error)) {
+          console.debug(`ℹ️ Skipping candidate ${entry.symbol} due to insufficient data (${error.meta?.timeframe ?? 'unknown'}).`, {
+            timeframe: error.meta?.timeframe,
+            availableBars: error.meta?.availableBars,
+            firstBarAt: error.meta?.firstBarAt,
+            warmupState: error.meta?.warmupState,
+          });
+          evaluationDiagnostics.push({ symbol: entry.symbol, reasons: ['insufficient_data'] });
+          continue;
+        }
         console.warn(`⚠️ Failed to evaluate candidate ${entry.symbol}:`, error);
         evaluationDiagnostics.push({ symbol: entry.symbol, reasons: ['evaluation_error'] });
       }
@@ -1528,6 +1744,15 @@ export const __autoUniverseTestHooks = {
     } as AutoUniverseDependencyBag;
     return resolveCachedAutoUniverse(cached, excludeSessionId, effectiveDeps);
   },
+  fetchBinanceMarkets(
+    options?: { fetchImpl?: FetchImpl; disableCache?: boolean; cacheKey?: string },
+  ): Promise<{ markets: Record<string, BinanceMarket>; count: number; source: string }> {
+    const cacheKey = options?.cacheKey ?? 'binance_perpetuals_cache';
+    return fetchBinancePerpetualMarkets(cacheKey, {
+      fetchImpl: options?.fetchImpl,
+      disableCache: options?.disableCache ?? false,
+    });
+  },
 };
 
 export const __intelligentAgentTestHooks = {
@@ -1555,96 +1780,32 @@ async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
 
     const exchange = new ExchangeClass({
       enableRateLimit: true,
+      timeout: 20_000,
       options: { defaultType: 'swap' }
     });
 
     const isBinanceExchange = String((exchange as any)?.id || '').toLowerCase().includes('binance');
-    let markets: any = {};
+    let markets: Record<string, any> = {};
 
     if (isBinanceExchange) {
-      // Check aggressive 4h cache first to prevent API bans (reduced from 24h)
-      const cacheKey = 'binance_perpetuals_cache';
-      const cachedData = aiAnalysisCache.get(cacheKey);
-      const now = Date.now();
-      const CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours (reduced from 24h for freshness)
-      
-      if (cachedData && (now - cachedData.timestamp) < CACHE_DURATION) {
-        console.log('📊 [WebSocket] Using cached Binance perpetual markets (4h cache)');
-        markets = cachedData.result.markets;
-      } else {
-        // For Binance, fetch dynamic perpetual markets list (0 weight via public API)
-        console.log('📊 [WebSocket] Fetching dynamic perpetual markets from Binance public API (0 weight)');
-        
-        try {
-          // Use Binance Futures API public endpoint (0 weight)
-          const response = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
-          
-          const exchangeInfo = await response.json();
-          const symbols = exchangeInfo.symbols || [];
-          
-          // Filter for USDT perpetual futures only
-          const usdtPerpetuals = symbols.filter((symbolInfo: any) => {
-            return symbolInfo.contractType === 'PERPETUAL' && 
-                   symbolInfo.quoteAsset === 'USDT' && 
-                   symbolInfo.status === 'TRADING';
-          });
-          
-          console.log(`📊 Fetched ${usdtPerpetuals.length} USDT perpetual markets from Binance API`);
-          
-          // Create market objects for filtering
-          markets = {};
-          usdtPerpetuals.forEach((symbolInfo: any) => {
-            const symbol = symbolInfo.symbol;
-            markets[symbol] = {
-              symbol: symbol,
-              swap: true,
-              type: 'swap',
-              active: true,
-              settle: 'USDT',
-              base: symbolInfo.baseAsset,
-              quote: 'USDT'
-            };
-          });
-          
-          // Cache the result aggressively for 4 hours (reduced from 24h for better freshness)
-          aiAnalysisCache.set(cacheKey, {
-            result: { markets: markets, count: usdtPerpetuals.length },
-            timestamp: now
-          });
-          
-          if (usdtPerpetuals.length === 0) {
-            console.warn('⚠️ No USDT perpetuals found in Binance API response');
-          }
-          
-        } catch (error) {
-          console.error('❌ Failed to fetch Binance perpetual markets:', error);
-          console.log('📊 Falling back to static list due to API error');
-          
-          // Fallback to static list if API fails
-          const binancePerpetuals = [
-            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT', 'DOT/USDT', 'DOGE/USDT',
-            'AVAX/USDT', 'LTC/USDT', 'MATIC/USDT', 'ALGO/USDT', 'VET/USDT', 'ICP/USDT', 'FIL/USDT', 'TRX/USDT',
-            'ETC/USDT', 'XLM/USDT', 'THETA/USDT', 'FTM/USDT', 'HBAR/USDT', 'EGLD/USDT', 'NEAR/USDT', 'FLOW/USDT',
-            'MANA/USDT', 'SAND/USDT', 'AXS/USDT', 'CHZ/USDT', 'ENJ/USDT', 'BAT/USDT', 'LRC/USDT', 'STORJ/USDT',
-            'ANT/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT', 'BTG/USDT', 'ZRX/USDT',
-            'OMG/USDT', 'REP/USDT', 'WAVES/USDT', 'LSK/USDT', 'ARK/USDT', 'STRAT/USDT', 'XEM/USDT', 'QTUM/USDT'
-          ];
-          
-          markets = {};
-          binancePerpetuals.forEach(symbol => {
-            markets[symbol] = {
-              symbol: symbol,
-              swap: true,
-              type: 'swap',
-              active: true,
-              settle: 'USDT',
-              base: symbol.split('/')[0],
-              quote: 'USDT'
-            };
-          });
+      try {
+        const { markets: binanceMarkets, count, source } = await fetchBinancePerpetualMarkets('binance_perpetuals_cache');
+        markets = binanceMarkets;
+        console.log(`📊 Using ${count} Binance perpetual markets from ${source}`);
+      } catch (error) {
+        console.error('❌ Failed to load Binance perpetual markets:', error);
+        markets = {};
+        for (const symbol of FALLBACK_STATIC_SYMBOLS) {
+          const base = symbol.split('/')[0];
+          markets[symbol] = {
+            symbol,
+            swap: true,
+            type: 'swap',
+            active: true,
+            settle: 'USDT',
+            base,
+            quote: 'USDT',
+          };
         }
       }
     } else {
