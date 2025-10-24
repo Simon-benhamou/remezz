@@ -710,7 +710,6 @@ export async function getOHLCV(
   };
 
   let wsData: number[][] | null = null;
-  let subscribedToWs = false;
   const normalizedTf = tf.trim().toLowerCase();
   let allowSyntheticFallback = options?.allowSyntheticFallback ?? true;
   if (
@@ -723,120 +722,118 @@ export async function getOHLCV(
   if (preferBinanceWs && shouldUseWebsocketForTimeframe(tf)) {
     try {
       const ws = getBinanceWebSocket();
-      subscribedToWs = ws.subscribeToKline(symbol, tf);
+      const subscription = ws.subscribeToKline(symbol, tf);
+
+      if (!subscription.ok) {
+        const reasonText =
+          subscription.reason === 'invalid_symbol_format'
+            ? 'invalid symbol format'
+            : subscription.reason === 'unknown_symbol'
+              ? 'symbol not listed in Binance exchangeInfo'
+              : 'symbol previously rejected by Binance';
+        const rejectionError: any = new Error(
+          `Binance WebSocket rejected ${symbol} ${tf} subscription: ${reasonText}`,
+        );
+        rejectionError.code = 'BINANCE_WS_SUBSCRIPTION_REJECTED';
+        rejectionError.reason = subscription.reason;
+        throw rejectionError;
+      }
+
       wsData = getKlinesOhlcvFromWebSocket(symbol, tf);
 
-      if (!subscribedToWs) {
-        if (!wsData || wsData.length < normalizedLimit) {
-          console.warn(`⚠️ Using REST fallback for ${symbol} ${tf} (WS kline limit reached).`);
-        } else {
-          const prepared = prepareOhlcvSeries(wsData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-          if (prepared.series.length) {
-            maybeLogOhlcvDebug(symbol, tf, prepared.series);
-            if (!prepared.synthetic && prepared.series.length >= normalizedLimit) {
-              setWarmupState(warmKey, {
-                pending: false,
-                fulfilled: true,
-                lastError: undefined,
-                nextRetryTs: undefined,
-                lastSuccess: Date.now(),
-              });
-            }
-            if (!prepared.synthetic) {
-              setFallbackState(symbol, false);
-              return prepared.series;
-            }
-            activateFallback('ws_synthetic_series');
-          }
-        }
-      } else {
-        if ((!wsData || wsData.length < normalizedLimit) && !binanceKlineSeeded.has(seedKey)) {
-          let seedPromise = binanceKlineSeedPromises.get(seedKey);
-          if (!seedPromise) {
-            const attempts = getWarmupState(warmKey).attempts + 1;
-            seedPromise = (async () => {
-              setWarmupState(warmKey, {
-                attempts,
-                pending: true,
-                lastAttempt: Date.now(),
-                fulfilled: false,
-              });
-              try {
-                const backfillLimit = computeBackfillLimit(tf, normalizedLimit, Math.max(1, cfg.DIAGNOSTICS_BACKFILL_DAYS || 1));
-                const rest = await fetchOhlcvRest(symbol, tf, backfillLimit, userId, userCredentials);
-                if (rest && rest.length) {
-                  seedKlinesFromWebSocket(symbol, tf, rest);
-                  binanceKlineSeeded.add(seedKey);
-                  const retryTimer = backfillRetryTimers.get(warmKey);
-                  if (retryTimer) {
-                    clearTimeout(retryTimer);
-                    backfillRetryTimers.delete(warmKey);
-                  }
-                  setWarmupState(warmKey, {
-                    pending: false,
-                    fulfilled: true,
-                    lastError: undefined,
-                    nextRetryTs: undefined,
-                    lastSuccess: Date.now(),
-                  });
-                  return rest;
+      if ((!wsData || wsData.length < normalizedLimit) && !binanceKlineSeeded.has(seedKey)) {
+        let seedPromise = binanceKlineSeedPromises.get(seedKey);
+        if (!seedPromise) {
+          const attempts = getWarmupState(warmKey).attempts + 1;
+          seedPromise = (async () => {
+            setWarmupState(warmKey, {
+              attempts,
+              pending: true,
+              lastAttempt: Date.now(),
+              fulfilled: false,
+            });
+            try {
+              const backfillLimit = computeBackfillLimit(
+                tf,
+                normalizedLimit,
+                Math.max(1, cfg.DIAGNOSTICS_BACKFILL_DAYS || 1),
+              );
+              const rest = await fetchOhlcvRest(symbol, tf, backfillLimit, userId, userCredentials);
+              if (rest && rest.length) {
+                seedKlinesFromWebSocket(symbol, tf, rest);
+                binanceKlineSeeded.add(seedKey);
+                const retryTimer = backfillRetryTimers.get(warmKey);
+                if (retryTimer) {
+                  clearTimeout(retryTimer);
+                  backfillRetryTimers.delete(warmKey);
                 }
-                throw new Error('rest_backfill_empty');
-              } catch (error) {
-                const retryDelay = computeRetryDelayMs(attempts);
-                scheduleWarmupRetry(warmKey, seedKey, retryDelay);
                 setWarmupState(warmKey, {
                   pending: false,
-                  lastError: String((error as any)?.message || error),
-                  nextRetryTs: Date.now() + retryDelay,
-                  fulfilled: false,
+                  fulfilled: true,
+                  lastError: undefined,
+                  nextRetryTs: undefined,
+                  lastSuccess: Date.now(),
                 });
-                throw error;
-              } finally {
-                binanceKlineSeedPromises.delete(seedKey);
+                return rest;
               }
-            })();
-            binanceKlineSeedPromises.set(seedKey, seedPromise);
-          }
-          try {
-            seededViaRest = await seedPromise;
-          } catch (error) {
-            console.warn(`Binance REST backfill failed for ${symbol} ${tf}:`, error);
-          }
-          if ((!wsData || wsData.length < normalizedLimit) && seededViaRest && seededViaRest.length) {
-            wsData = seededViaRest;
-          }
-        } else if (!wsData || wsData.length < normalizedLimit) {
-          setWarmupState(warmKey, {
-            pending: true,
-            lastAttempt: Date.now(),
-            attempts: getWarmupState(warmKey).attempts,
-          });
-        }
-
-        if (wsData && wsData.length) {
-          const merged = seededViaRest && seededViaRest.length ? [...wsData, ...seededViaRest] : wsData;
-          const prepared = prepareOhlcvSeries(merged, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-          if (prepared.series.length) {
-            maybeLogOhlcvDebug(symbol, tf, prepared.series);
-            if (!prepared.synthetic && prepared.series.length >= normalizedLimit) {
+              throw new Error('rest_backfill_empty');
+            } catch (error) {
+              const retryDelay = computeRetryDelayMs(attempts);
+              scheduleWarmupRetry(warmKey, seedKey, retryDelay);
               setWarmupState(warmKey, {
                 pending: false,
-                fulfilled: true,
-                lastError: undefined,
-                nextRetryTs: undefined,
-                lastSuccess: Date.now(),
+                lastError: String((error as any)?.message || error),
+                nextRetryTs: Date.now() + retryDelay,
+                fulfilled: false,
               });
+              throw error;
+            } finally {
+              binanceKlineSeedPromises.delete(seedKey);
             }
-            if (!prepared.synthetic) {
-              setFallbackState(symbol, false);
-              return prepared.series;
-            }
-            activateFallback('ws_synthetic_series');
+          })();
+          binanceKlineSeedPromises.set(seedKey, seedPromise);
+        }
+        try {
+          seededViaRest = await seedPromise;
+        } catch (error) {
+          console.warn(`Binance REST backfill failed for ${symbol} ${tf}:`, error);
+        }
+        if ((!wsData || wsData.length < normalizedLimit) && seededViaRest && seededViaRest.length) {
+          wsData = seededViaRest;
+        }
+      } else if (!wsData || wsData.length < normalizedLimit) {
+        setWarmupState(warmKey, {
+          pending: true,
+          lastAttempt: Date.now(),
+          attempts: getWarmupState(warmKey).attempts,
+        });
+      }
+
+      if (wsData && wsData.length) {
+        const merged = seededViaRest && seededViaRest.length ? [...wsData, ...seededViaRest] : wsData;
+        const prepared = prepareOhlcvSeries(merged, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+        if (prepared.series.length) {
+          maybeLogOhlcvDebug(symbol, tf, prepared.series);
+          if (!prepared.synthetic && prepared.series.length >= normalizedLimit) {
+            setWarmupState(warmKey, {
+              pending: false,
+              fulfilled: true,
+              lastError: undefined,
+              nextRetryTs: undefined,
+              lastSuccess: Date.now(),
+            });
           }
+          if (!prepared.synthetic) {
+            setFallbackState(symbol, false);
+            return prepared.series;
+          }
+          activateFallback('ws_synthetic_series');
         }
       }
     } catch (error) {
+      if ((error as any)?.code === 'BINANCE_WS_SUBSCRIPTION_REJECTED') {
+        throw error;
+      }
       console.warn(`Binance WebSocket OHLCV fallback for ${symbol} ${tf}:`, error);
       setWarmupState(warmKey, {
         pending: false,

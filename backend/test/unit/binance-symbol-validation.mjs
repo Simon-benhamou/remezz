@@ -11,22 +11,19 @@ const { manager } = harness;
 try {
   harness.seedExchangeSymbols(['BTCUSDT', 'ETHUSDT']);
 
-  assert.equal(manager.subscribeToKline('BTC/USDT', '1m'), true, 'BTC/USDT should be accepted when listed');
-  assert.equal(
-    manager.subscribeToKline('FOOBAR/USDT', '1m'),
-    false,
-    'Unknown symbol should be rejected and not subscribed',
-  );
+  const btcResult = manager.subscribeToKline('BTC/USDT', '1m');
+  assert.equal(btcResult.ok, true, 'BTC/USDT should be accepted when listed');
+
+  const rejection = manager.subscribeToKline('FOOBAR/USDT', '1m');
+  assert.equal(rejection.ok, false, 'Unknown symbol should be rejected and not subscribed');
+  assert.equal(rejection.reason, 'unknown_symbol', 'Rejection reason should flag unknown symbols');
 
   const desiredMap = manager.desiredKlineStreams;
   assert(!desiredMap.has('foobarusdt@kline_1m'), 'Invalid stream should not be tracked');
 
   harness.seedExchangeSymbols(['BTCUSDT', 'ETHUSDT', 'FOOBARUSDT']);
-  assert.equal(
-    manager.subscribeToKline('FOOBAR/USDT', '1m'),
-    true,
-    'Previously rejected symbol should subscribe once exchangeInfo includes it',
-  );
+  const refreshed = manager.subscribeToKline('FOOBAR/USDT', '1m');
+  assert.equal(refreshed.ok, true, 'Previously rejected symbol should subscribe once exchangeInfo includes it');
 
   console.log('✅ Binance WS symbol validation rejects unknown pairs and accepts refreshed listings');
 } finally {

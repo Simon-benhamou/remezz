@@ -77,6 +77,21 @@ export interface BinanceBalance {
   timestamp: number;
 }
 
+type SymbolRejectionReason = 'format' | 'unknown' | 'cached';
+
+type SymbolValidationResult =
+  | { ok: true; cacheSymbol: string }
+  | { ok: false; cacheSymbol: string; reason: SymbolRejectionReason };
+
+export type KlineSubscriptionFailureReason =
+  | 'invalid_symbol_format'
+  | 'unknown_symbol'
+  | 'symbol_rejected';
+
+export type KlineSubscriptionResult =
+  | { ok: true }
+  | { ok: false; reason: KlineSubscriptionFailureReason };
+
 export function toBinanceSymbolId(unified: string): string {
   const base = unified.split(':')[0] || unified;
   return base.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -426,52 +441,52 @@ class BinanceWebSocketManager {
     return toBinanceSymbolId(symbol);
   }
 
-  private isValidBinanceSymbol(symbol: string): boolean {
+  private validateBinanceSymbol(symbol: string): SymbolValidationResult {
     const cacheSymbol = this.normalizeCacheSymbol(symbol);
-    const formatValid = (
+
+    if (cacheSymbol && this.rejectedSymbols.has(cacheSymbol)) {
+      this.noteInvalidSymbol(cacheSymbol, symbol, 'cached');
+      return { ok: false, cacheSymbol, reason: 'cached' };
+    }
+
+    const formatValid =
       /^[A-Z0-9]{2,}$/.test(cacheSymbol)
       && cacheSymbol.length <= MAX_BINANCE_SYMBOL_LENGTH
-      && cacheSymbol.length >= 6
-    );
+      && cacheSymbol.length >= 6;
 
     if (!formatValid) {
       this.noteInvalidSymbol(cacheSymbol || symbol, symbol, 'format');
-      return false;
+      if (cacheSymbol) {
+        this.rejectedSymbols.add(cacheSymbol);
+      }
+      return { ok: false, cacheSymbol, reason: 'format' };
     }
 
     if (!this.tradableSymbolsReady) {
       this.ensureExchangeInfoFresh();
-      return true;
+      return { ok: true, cacheSymbol };
     }
 
     if (!this.tradableSymbols.has(cacheSymbol)) {
       this.noteInvalidSymbol(cacheSymbol, symbol, 'unknown');
-      this.rejectedSymbols.add(cacheSymbol);
-      return false;
+      if (cacheSymbol) {
+        this.rejectedSymbols.add(cacheSymbol);
+      }
+      return { ok: false, cacheSymbol, reason: 'unknown' };
     }
 
-    return true;
+    return { ok: true, cacheSymbol };
   }
 
   private klineCacheKey(symbol: string, interval: string): string {
     return `${this.normalizeCacheSymbol(symbol)}_${interval}`;
   }
 
-  private enqueueKlineSubscription(symbol: string, interval: string): boolean {
+  private enqueueKlineSubscription(symbol: string, interval: string, cacheSymbol: string): void {
     const streamSymbol = this.normalizeStreamSymbol(symbol);
     const stream = `${streamSymbol}@kline_${interval}`;
     const now = Date.now();
     this.pruneStaleKlineSubscriptions(now);
-
-    const cacheSymbol = this.normalizeCacheSymbol(symbol);
-    if (this.rejectedSymbols.has(cacheSymbol)) {
-      this.noteInvalidSymbol(cacheSymbol, symbol, 'cached');
-      return false;
-    }
-
-    if (!this.isValidBinanceSymbol(symbol)) {
-      return false;
-    }
 
     if (!this.isTestMode) {
       this.ensureExchangeInfoFresh();
@@ -493,8 +508,6 @@ class BinanceWebSocketManager {
     }
 
     this.reconcileKlineStreams();
-
-    return true;
   }
 
   private sendSubscription(stream: string, isKline = false): boolean {
@@ -810,16 +823,26 @@ class BinanceWebSocketManager {
    * Subscribe à un stream de klines (OHLCV) pour un symbole
    * 0 weight - Remplace fetchOHLCV (2 weight × n appels)
   */
-  subscribeToKline(symbol: string, interval: string = '15m'): boolean {
-    if (!this.isValidBinanceSymbol(symbol)) {
-      return false;
+  subscribeToKline(symbol: string, interval: string = '15m'): KlineSubscriptionResult {
+    const validation = this.validateBinanceSymbol(symbol);
+    if (!validation.ok) {
+      const reason: KlineSubscriptionFailureReason =
+        validation.reason === 'format'
+          ? 'invalid_symbol_format'
+          : validation.reason === 'unknown'
+            ? 'unknown_symbol'
+            : 'symbol_rejected';
+      return { ok: false, reason };
     }
-    const cacheSymbol = this.normalizeCacheSymbol(symbol);
+
+    const cacheSymbol = validation.cacheSymbol;
     const key = this.klineCacheKey(cacheSymbol, interval);
     if (!this.klinesCache.has(key)) {
       this.klinesCache.set(key, []);
     }
-    return this.enqueueKlineSubscription(symbol, interval);
+
+    this.enqueueKlineSubscription(symbol, interval, cacheSymbol);
+    return { ok: true };
   }
 
   private isSymbolTradable(symbol: string): boolean {
