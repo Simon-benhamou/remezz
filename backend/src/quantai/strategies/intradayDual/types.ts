@@ -126,6 +126,8 @@ export type EntrySignal = {
     scratchTriggered?: boolean;
     timeStopMin?: number;
     tp1Fraction?: number;
+    minNotionalApplied?: boolean;
+    riskScaleFloor?: boolean;
   };
 };
 

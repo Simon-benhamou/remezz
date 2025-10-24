@@ -81,8 +81,9 @@
   "management": {
     "microTrigger": {
       "enabled": false,
-      "lookbackSec": 15,
-      "entryNudgeBps": 3
+      "lookbackSec": 5,
+      "entryNudgeBps": 1,
+      "timeoutSec": 20
     },
     "scratch": {
       "enabled": true,

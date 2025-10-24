@@ -36,8 +36,8 @@ type IntradayRuntimeConfig = {
 const DEFAULTS: IntradayRuntimeConfig = {
   slip: {
     bookWalkEnabled: true,
-    depthLevels: 20,
-    fallbackInflation: 1.5,
+    depthLevels: 10,
+    fallbackInflation: 1.3,
   },
   flags: {
     INTRADAY_DISALLOW_SYNTHETIC: true,
@@ -121,7 +121,7 @@ export function getIntradayRuntimeConfig(): IntradayRuntimeConfig {
   const qs: IntradayQSConfig = {
     enabled: parseBool(process.env.INTRADAY_QS_ENABLED, DEFAULTS.qs.enabled),
     baseRiskPct: Math.max(0.0001, parseNumber(process.env.INTRADAY_QS_BASE_RISK_PCT, DEFAULTS.qs.baseRiskPct)),
-    minRiskScale: Math.max(0.1, parseNumber(process.env.INTRADAY_QS_MIN_SCALE, DEFAULTS.qs.minRiskScale)),
+    minRiskScale: Math.max(0.25, parseNumber(process.env.INTRADAY_QS_MIN_SCALE, DEFAULTS.qs.minRiskScale)),
     maxRiskScale: Math.max(0.1, parseNumber(process.env.INTRADAY_QS_MAX_SCALE, DEFAULTS.qs.maxRiskScale)),
     qsToScaleSlope: parseNumber(process.env.INTRADAY_QS_SCALE_SLOPE, DEFAULTS.qs.qsToScaleSlope),
   };

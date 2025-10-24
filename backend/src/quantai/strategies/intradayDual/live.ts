@@ -15,6 +15,8 @@ import { getOHLCV, getTicker, isSyntheticSeries } from '../../../data/market.js'
 import { fetchDepth } from '../../../data/depth.js';
 import { getIntradayRuntimeConfig } from '../../../config/intraday.js';
 import { loadIntradayConfig } from './config/index.js';
+import { getConfig } from '../../../utils/env.js';
+import { recordDiagnostic } from './diagnostics.js';
 
 const DEFAULT_LIMITS: Record<Timeframe, number> = {
   '1m': 240,
@@ -118,6 +120,11 @@ export async function buildOrderBookSnapshot(
   }
   const timestamp = Number(ticker.timestamp || Date.now());
   console.warn('intraday.orderbook.fallback', { symbol, source: 'fallback_ticker' });
+  recordDiagnostic(symbol, 'depth_fallback', {
+    usedDepth: false,
+    fallback: true,
+    depthLevels,
+  });
   return {
     timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
     bids: [{ price: bid, size: 1 }],
@@ -183,6 +190,7 @@ export async function evaluateIntradayStrategy(
       const meta = fetchMeta[tf];
       if (meta?.synthetic) {
         console.warn('intraday.unusable_data', { symbol, timeframe: tf, reason: 'synthetic_zero_volume' });
+        recordDiagnostic(symbol, 'unusable_data', { timeframe: tf, reason: 'synthetic_zero_volume' });
         return {
           timestamp: Date.now(),
           regime: { label: 'NONE', confidence: 0, reason: 'synthetic_zero_volume' },
@@ -215,12 +223,15 @@ export async function evaluateIntradayStrategy(
   };
 
   const strategy = new IntradayDualStrategy();
+  const envCfg = getConfig();
   const ctx = {
     equityUsd: resolveEquity(profile),
     maxLevInstrument: profile?.maxLeverage ?? 5,
     maxLevGlobal: profile?.maxLeverage ?? 5,
     exposureBudget: resolveExposureBudget(profile),
     slippageBps: resolveSlippageBps(profile),
+    minNotionalUsd: Number(envCfg.MIN_ORDER_NOTIONAL_USD ?? 0) || 0,
+    minRiskScale: runtimeCfg.qs.minRiskScale,
   };
 
   const evaluation = strategy.evaluateTick(tick, ctx);
