@@ -1378,6 +1378,8 @@ class BinanceWebSocketManager {
     updateWsConnectionState({ connected: false, healthy: false, reason: this.lastHealthReason });
     this.reconnectAttempts = 0;
 
+    this.forceReconnectKlineShards(reason);
+
     if (!hasSocket) {
       if (!this.isConnecting && !this.shuttingDown) {
         const timer = setTimeout(() => {
@@ -1401,6 +1403,20 @@ class BinanceWebSocketManager {
         console.error('❌ Failed to terminate Binance WS during forced reconnect:', message);
       }
       this.ws = null;
+    }
+  }
+
+  private forceReconnectKlineShards(reason: string): void {
+    if (!this.klineShards.length) {
+      return;
+    }
+    for (const shard of this.klineShards) {
+      try {
+        shard.forceReconnect();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`❌ Failed to force reconnect kline shard due to ${reason}:`, message);
+      }
     }
   }
 
@@ -1962,6 +1978,27 @@ class BinanceKlineShard {
     this.desiredStreams.clear();
     this.activeStreams.clear();
     this.stopSocket();
+  }
+
+  forceReconnect(): void {
+    const hasStreams = this.desiredStreams.size > 0;
+    this.stopSocket();
+    this.activeStreams.clear();
+
+    if (!hasStreams) {
+      return;
+    }
+
+    if (this.isTestMode) {
+      this.isConnected = true;
+      this.isConnecting = false;
+      this.reconnectAttempts = 0;
+      this.activeStreams = new Set(this.desiredStreams);
+      return;
+    }
+
+    this.ensureConnected();
+    this.flushSubscriptions();
   }
 
   private ensureConnected(): void {
