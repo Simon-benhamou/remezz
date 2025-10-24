@@ -2,7 +2,15 @@ import { resolveSymbol } from '../exchange/ccxtClient.js';
 import { ema, rsi, atr } from './indicators.js';
 import ccxt from 'ccxt';
 import { getConfig } from '../utils/env.js';
-import { getBinanceWebSocket, getTickerFromWebSocket, seedKlinesFromWebSocket, getKlinesOhlcvFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import {
+  getBinanceWebSocket,
+  getTickerFromWebSocket,
+  seedKlinesFromWebSocket,
+  getKlinesOhlcvFromWebSocket,
+  adaptBinanceTickerToCcxt,
+  toBinanceSymbolId,
+  scheduleBinanceRestFallback,
+} from '../services/binanceWebSocket.js';
 import { fetchBinanceOhlcv } from '../services/binanceRest.js';
 import { recordMarketFrame, recordRestFallback, setFallbackState } from '../monitor/marketMetrics.js';
 import { evaluateTickerFrame } from './tickerValidation.js';
@@ -512,7 +520,19 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
         } else {
           console.warn(`⚠️ [WebSocket] getTicker(${s}) miss${wsReady ? '' : ' (WS not healthy)' } - falling back to REST`);
           try {
-            ticker = await ex.fetchTicker(s);
+            const fallback = await scheduleBinanceRestFallback(s, () => ex.fetchTicker(s), {
+              reason: wsReady ? 'ws_cache_miss' : 'ws_unhealthy',
+            });
+            if (!fallback) {
+              console.warn(`🚫 [REST] getTicker(${s}) fallback suppressed by cooldown/quota`);
+              if (cached?.data) {
+                setFallbackState(s, true, 'rest_throttled', { increment: false });
+                return cached.data;
+              }
+              setFallbackState(s, true, 'rest_throttled', { increment: false });
+              throw new Error(`rest_fallback_throttled_${s}`);
+            }
+            ticker = fallback;
             recordRestFallback(s, 'ws_cache_miss');
             console.log(`✅ [REST] getTicker(${s}) fallback used`);
           } catch (restError) {
@@ -523,7 +543,19 @@ export async function getTicker(symbol: string, options?: { forceRefresh?: boole
       } catch (error) {
         console.warn(`⚠️ [WebSocket] getTicker error for ${s} - attempting REST fallback`, error);
         try {
-          ticker = await ex.fetchTicker(s);
+          const fallback = await scheduleBinanceRestFallback(s, () => ex.fetchTicker(s), {
+            reason: 'ws_error',
+          });
+          if (!fallback) {
+            console.warn(`🚫 [REST] getTicker(${s}) fallback suppressed after WS error`);
+            if (cached?.data) {
+              setFallbackState(s, true, 'rest_throttled', { increment: false });
+              return cached.data;
+            }
+            setFallbackState(s, true, 'rest_throttled', { increment: false });
+            throw new Error(`rest_fallback_throttled_${s}`);
+          }
+          ticker = fallback;
           recordRestFallback(s, 'ws_error');
           console.log(`✅ [REST] getTicker(${s}) fallback used after WS error`);
         } catch (restError) {

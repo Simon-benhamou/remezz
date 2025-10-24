@@ -89,6 +89,29 @@ export const REST_429_BACKOFF_MS = 7_500;
 
 export const BINANCE_REST_429_BACKOFF_MS = REST_429_BACKOFF_MS;
 
+const REST_FALLBACK_COOLDOWN_MS = Math.max(
+  10_000,
+  Number.isFinite(Number(process.env.BINANCE_REST_FALLBACK_COOLDOWN_MS))
+    ? Number(process.env.BINANCE_REST_FALLBACK_COOLDOWN_MS)
+    : 12_000,
+);
+const REST_FALLBACK_WINDOW_MS = Math.max(
+  REST_FALLBACK_COOLDOWN_MS,
+  Number.isFinite(Number(process.env.BINANCE_REST_FALLBACK_WINDOW_MS))
+    ? Number(process.env.BINANCE_REST_FALLBACK_WINDOW_MS)
+    : 60_000,
+);
+const REST_FALLBACK_GLOBAL_MAX = Math.max(
+  1,
+  Number.isFinite(Number(process.env.BINANCE_REST_FALLBACK_GLOBAL_MAX))
+    ? Number(process.env.BINANCE_REST_FALLBACK_GLOBAL_MAX)
+    : 18,
+);
+
+const restFallbackHistory: number[] = [];
+const restFallbackSymbolTs = new Map<string, number>();
+const restFallbackInflight = new Map<string, Promise<unknown>>();
+
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 interface RestLimiterOptions {
@@ -164,6 +187,80 @@ type BidAskSanitization = {
   needsSnapshot: boolean;
   extra?: Record<string, unknown>;
 };
+
+function normalizeRestFallbackKey(symbol: string): string {
+  try {
+    const normalized = toBinanceSymbolId(symbol);
+    if (normalized) return normalized;
+  } catch {}
+  return symbol.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+}
+
+function pruneRestFallbackHistory(now: number): void {
+  while (restFallbackHistory.length && now - restFallbackHistory[0] > REST_FALLBACK_WINDOW_MS) {
+    restFallbackHistory.shift();
+  }
+}
+
+function logRestFallbackSuppressed(event: {
+  symbol: string;
+  reason?: string;
+  mode: 'cooldown' | 'quota';
+}): void {
+  console.warn(
+    JSON.stringify({
+      event: 'rest_fallback_suppressed',
+      symbol: event.symbol,
+      reason: event.reason || null,
+      mode: event.mode,
+      cooldown_ms: REST_FALLBACK_COOLDOWN_MS,
+      window_ms: REST_FALLBACK_WINDOW_MS,
+      quota: REST_FALLBACK_GLOBAL_MAX,
+      ts: Date.now(),
+    }),
+  );
+}
+
+export async function scheduleBinanceRestFallback<T>(
+  symbol: string,
+  task: () => Promise<T>,
+  options?: { reason?: string; force?: boolean },
+): Promise<T | null> {
+  const key = normalizeRestFallbackKey(symbol);
+  const existing = restFallbackInflight.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  const now = Date.now();
+  if (!options?.force) {
+    const lastAttempt = restFallbackSymbolTs.get(key) ?? 0;
+    if (now - lastAttempt < REST_FALLBACK_COOLDOWN_MS) {
+      logRestFallbackSuppressed({ symbol: key, reason: options?.reason, mode: 'cooldown' });
+      return null;
+    }
+
+    pruneRestFallbackHistory(now);
+    if (restFallbackHistory.length >= REST_FALLBACK_GLOBAL_MAX) {
+      logRestFallbackSuppressed({ symbol: key, reason: options?.reason, mode: 'quota' });
+      return null;
+    }
+  }
+
+  restFallbackHistory.push(now);
+  restFallbackSymbolTs.set(key, now);
+
+  const promise = (async () => {
+    try {
+      return await task();
+    } finally {
+      restFallbackInflight.delete(key);
+    }
+  })();
+
+  restFallbackInflight.set(key, promise);
+  return promise;
+}
 
 export function adaptBinanceTickerToCcxt(symbol: string, ticker: BinanceTickerData) {
   const ts = Number(ticker.timestamp) || Date.now();
