@@ -5,6 +5,7 @@ import { buildTechSnapshot, TechnicalSnapshot } from '../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 import { getCapacityPressure, inspectExposure, LiveBroker } from '../../broker/live.js';
 import { PaperBroker } from '../../broker/paper.js';
+import { CapitalPoolBroker } from '../../broker/capitalPoolBroker.js';
 import type { Broker, PlacedOrder, BrokerMarginSnapshot } from '../../broker/types.js';
 import { InsufficientDataError, isInsufficientDataError } from '../../data/errors.js';
 import { getTicker } from '../../data/market.js';
@@ -19,6 +20,8 @@ import { getAgentRecentWinRate } from '../../services/performance/winrate.js';
 import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
 import type { StrategyGuardrail } from '../../services/strategyHealth.js';
 import { getConfig, getModeParams, type AgentAggressiveness, type ModeParams } from '../../utils/env.js';
+import { capitalConfig } from '../../config/capital.js';
+import { getCapitalManager } from '../../services/capitalPool.js';
 import { areAgentGuardsDisabled } from '../../utils/agentGuards.js';
 import { clampBudgetFraction, resolveBudgetFraction } from '../../utils/budget.js';
 import { computeLeverageGuardForSymbol } from '../../utils/riskGuards.js';
@@ -29,6 +32,8 @@ import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
 import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { ZERO_USD } from '../../core/capital/types.js';
+import { computeAdaptiveEvThreshold } from './evThreshold.js';
 import type { LiquidityType } from '../../quantai/index.js';
 import {
   evaluateRecognizedStrategies,
@@ -468,6 +473,20 @@ export class ReboundRejectionAgent {
     this.previewQualityDiagnostics = null;
   }
 
+  private async settleCapital(symbol: string, freedUsd: number) {
+    if (!this.profile) return;
+    if (!(Number.isFinite(freedUsd) && freedUsd > 0)) return;
+    try {
+      const mode: 'paper' | 'live' = this.profile.mode === 'live' ? 'live' : 'paper';
+      const manager = getCapitalManager(mode);
+      const amount = new PreciseDecimal(freedUsd);
+      const settlementId = this.sessionId ? `${this.sessionId}:${symbol}` : `session:${symbol}`;
+      await manager.settle(settlementId, symbol, amount);
+    } catch (error) {
+      console.warn('Failed to settle capital', { symbol, freedUsd, error });
+    }
+  }
+
   public trendReversalContext: { direction: 'bullish' | 'bearish'; count: number; lastSignal: number } | null = null;
 
   // Advanced performance tracking by strategy and bias
@@ -694,24 +713,31 @@ export class ReboundRejectionAgent {
     if (profile.riskPerTradePct < 0.5 || profile.riskPerTradePct > 5) throw new Error('risk/trade must be 0.5-5%');
     if (profile.dailyLossLimitPct < 3 || profile.dailyLossLimitPct > 4) throw new Error('daily loss must be 3-4%');
 
-    // init broker (paper only for now)
-    this.broker = profile.mode === 'live'
+    const capitalMode: 'paper' | 'live' = profile.mode === 'live' ? 'live' : 'paper';
+    const capitalManager = getCapitalManager(capitalMode);
+    const snapshot = await capitalManager.getBalance();
+    const agentCapitalId = this.sessionId
+      || (profile.mode === 'live' && profile.userId ? `${profile.userId}:${profile.symbol}` : `session:${profile.symbol}`);
+    const baseBroker = capitalMode === 'live'
       ? new LiveBroker(profile.userId || '')
       : new PaperBroker(profile.startBalanceUsd);
+    this.broker = new CapitalPoolBroker({
+      agentId: agentCapitalId,
+      mode: capitalMode,
+      capital: capitalManager,
+      broker: baseBroker,
+      minOrderUsd: capitalConfig.minOrderUSD,
+    });
 
-    const budgetFractionRaw = typeof profile.budgetFraction === 'number'
-      ? profile.budgetFraction
-      : (typeof (profile as any).budgetPct === 'number'
-        ? ((profile as any).budgetPct > 1 ? (profile as any).budgetPct / 100 : (profile as any).budgetPct)
-        : 1);
-    const safeBudgetFraction = resolveBudgetFraction(budgetFractionRaw);
-    const leverageCap = Math.max(1, Math.min(10, profile.maxLeverage || resolvedMaxLev || 1));
-    const baselineBalance = typeof profile.startBalanceUsd === 'number' && profile.startBalanceUsd > 0
-      ? profile.startBalanceUsd
-      : undefined;
-    this.maxNotionalCapUsd = baselineBalance != null
-      ? Math.max(0, baselineBalance * leverageCap * safeBudgetFraction)
+    profile.budgetFraction = 1;
+    (profile as any).budgetPct = 100;
+
+    const perSymbolCap = snapshot.totalUSD.times(capitalConfig.perSymbolCapPct);
+    this.maxNotionalCapUsd = perSymbolCap.raw > ZERO_USD.raw
+      ? perSymbolCap.toNumber()
       : Infinity;
+    profile.startBalanceUsd = snapshot.totalUSD.toNumber();
+    this.lastKnownEquityUsd = profile.startBalanceUsd;
 
     this.state = 'SCAN';
     this.logMovement('Agent activated', `Mode=${profile.mode}, symbol=${profile.symbol}`, {
@@ -3200,7 +3226,22 @@ export class ReboundRejectionAgent {
       const dir = side === 'buy' ? 1 : -1;
       const priceDiff = dir * (tp1ForEv - entry);
       const expectedPnL1 = qty > 0 && priceDiff > 0 ? qty * priceDiff : 0;
-      const minExpectedTp1Pnl = targetSizingEnabled && targetMinTp1PnlUsd > 0 ? targetMinTp1PnlUsd : 3;
+      const minExpectedTp1PnlBase = targetSizingEnabled && targetMinTp1PnlUsd > 0 ? targetMinTp1PnlUsd : 3;
+      const effectiveAtrForEv = typeof entryZoneMeta?.atrPct === 'number'
+        ? entryZoneMeta.atrPct
+        : typeof snapAtrPct === 'number'
+          ? snapAtrPct
+          : null;
+      const minAtrForEv = typeof entryZoneMeta?.atrPctBase === 'number'
+        ? entryZoneMeta.atrPctBase
+        : effectiveAtrForEv ?? 0;
+      const minExpectedTp1Pnl = computeAdaptiveEvThreshold({
+        baseThreshold: minExpectedTp1PnlBase,
+        stopPct,
+        tp1RMultiple: tp1RMultiple ?? null,
+        effectiveAtr: effectiveAtrForEv ?? null,
+        minAtr: minAtrForEv,
+      });
       if (expectedPnL1 + 1e-6 < minExpectedTp1Pnl) {
         const notionalUsd = qty * entry;
         const tp1PctDist = entry > 0 ? Math.abs((tp1ForEv - entry) / entry) * 100 : null;
@@ -6196,6 +6237,16 @@ export class ReboundRejectionAgent {
       slopeFloor,
       Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - relaxation, slopeFloor))
     );
+
+    if (atrPct > 0 && Number.isFinite(atrPct)) {
+      const atrReference = Math.max(0.12, Math.min(1.2, minAtr));
+      const atrRatio = atrReference > 0 ? atrPct / atrReference : 1;
+      if (atrRatio < 1) {
+        const deficit = Math.min(0.45, (1 - atrRatio) * 0.55);
+        const atrRelaxed = Math.max(slopeFloor * 0.9, minSlopeRequirement * (1 - deficit));
+        minSlopeRequirement = Math.min(minSlopeRequirement, atrRelaxed);
+      }
+    }
 
     if (isLowerTimeframeBreakout && adxValue > minAdxRequired) {
       const headroom = adxValue - minAdxRequired;
@@ -9483,6 +9534,7 @@ export class ReboundRejectionAgent {
       const filledQty = Number(reduceOrder?.filledQty ?? 0);
       if (filledQty > 0 && this.pos) {
         this.pos.qty = Math.max(0, this.pos.qty - filledQty);
+        await this.settleCapital(this.profile.symbol, (reduceOrder.avgPrice || referencePrice) * filledQty);
       }
 
       recordOpsEvent({
@@ -10141,6 +10193,7 @@ export class ReboundRejectionAgent {
         const exitQty = Number(exitOrder.filledQty ?? this.pos.qty ?? 0);
         const realizedPnl = this.calculateRealizedPnL(exitPriceFilled, exitQty);
         const feesUsd = this.estimateTradeFees(exitPriceFilled, exitQty);
+        await this.settleCapital(this.profile.symbol, exitPriceFilled * exitQty);
         const balanceAfter = await this.broker.balance().catch(() => null as BrokerMarginSnapshot | null);
         let exitSnapshot: ExitDiagnosticsPayload | null = null;
         try {
@@ -11124,6 +11177,10 @@ export class ReboundRejectionAgent {
       if (partialExit.filledQty && partialExit.filledQty > 0) {
         // Update position
         this.pos.qty -= partialExit.filledQty;
+        await this.settleCapital(
+          this.profile.symbol,
+          (partialExit.avgPrice || price) * Number(partialExit.filledQty)
+        );
         this.pos.partialTaken = true;
         this.pos.partialInfo = {
           ts: Date.now(),
@@ -11499,6 +11556,10 @@ export class ReboundRejectionAgent {
 
             if (runnerOrder.filledQty && runnerOrder.filledQty > 0) {
               console.log(`Placed runner TP: ${runnerQty} @ ${runnerTp}`);
+              await this.settleCapital(
+                this.profile.symbol,
+                runnerTp * Number(runnerOrder.filledQty)
+              );
             }
           }
         } catch (runnerError) {

@@ -348,6 +348,16 @@ export class EntryFilters {
     }
 
     const adx = facts.adx;
+    const volumeRatioVal = typeof facts.volumeRatio === 'number' && Number.isFinite(facts.volumeRatio)
+      ? facts.volumeRatio
+      : undefined;
+    const slopeDirectional = typeof facts.slopeDirectionalPct === 'number' && Number.isFinite(facts.slopeDirectionalPct)
+      ? facts.slopeDirectionalPct
+      : undefined;
+    const adxSlopeVal = typeof facts.adxSlope === 'number' && Number.isFinite(facts.adxSlope)
+      ? facts.adxSlope
+      : undefined;
+    const cmfVal = typeof facts.cmf === 'number' && Number.isFinite(facts.cmf) ? facts.cmf : undefined;
     if (adx == null || adx < minAdx) {
       ok = false;
       reasons.momentumOk = `FAIL (ADX=${adx ?? 'n/a'} < ${minAdx.toFixed(2)})`;
@@ -367,7 +377,31 @@ export class EntryFilters {
       const minTrendDelta = directionalCfg?.minDiTrend ?? 3;
       const minRangeDelta = directionalCfg?.minDiRange ?? 1.5;
       const strongTrendDelta = directionalCfg?.minDiStrong ?? (minTrendDelta + 1);
-      const minDelta = strongTrend ? strongTrendDelta : inRangeRegime ? minRangeDelta : minTrendDelta;
+      const baseMinDelta = strongTrend ? strongTrendDelta : inRangeRegime ? minRangeDelta : minTrendDelta;
+      const minDeltaFloor = 0.75;
+
+      let minDelta = baseMinDelta;
+      if (adxSlopeVal != null) {
+        const slopeClamp = Math.max(-1.5, Math.min(1.5, adxSlopeVal));
+        const slopeAdjustment = slopeClamp * 0.45;
+        minDelta -= slopeAdjustment;
+      }
+
+      if (atrPct != null) {
+        const atrReference = atrBaseline ?? opts.atrBaselinePct ?? 0.35;
+        if (atrReference > 0) {
+          const atrRatio = Math.max(0, Math.min(2.5, atrPct / atrReference));
+          if (atrRatio >= 1) {
+            const atrAdjustment = Math.min(0.9, (atrRatio - 1) * 0.6);
+            minDelta -= atrAdjustment;
+          }
+        }
+      }
+
+      if (minDelta < minDeltaFloor) {
+        minDelta = minDeltaFloor;
+      }
+      const adaptiveDeltaOffset = minDelta - baseMinDelta;
       const nearNeutralBand = directionalCfg?.rangeNeutralBand ?? 9;
       const minRsiTrend = directionalCfg?.minRsiTrend ?? 54;
       const maxRsiTrend = directionalCfg?.maxRsiTrend ?? (100 - minRsiTrend);
@@ -377,6 +411,9 @@ export class EntryFilters {
 
       if (delta != null) {
         detail.push(`ΔDI=${delta.toFixed(2)}>=${minDelta.toFixed(2)}`);
+        if (Math.abs(adaptiveDeltaOffset) > 1e-6) {
+          detail.push(`adaptiveΔ=${adaptiveDeltaOffset >= 0 ? '+' : ''}${adaptiveDeltaOffset.toFixed(2)}`);
+        }
         if (delta < minDelta) directionalPass = false;
       } else if (directionalCfg?.requireDiSignal !== false) {
         directionalPass = false;
@@ -519,16 +556,6 @@ export class EntryFilters {
     const baseRrThreshold = minRr ?? baseMinRr;
     let rrThreshold = baseRrThreshold;
     const qualityHint = facts.qualityPassHint === undefined ? undefined : Boolean(facts.qualityPassHint);
-    const volumeRatioVal = typeof facts.volumeRatio === 'number' && Number.isFinite(facts.volumeRatio)
-      ? facts.volumeRatio
-      : undefined;
-    const slopeDirectional = typeof facts.slopeDirectionalPct === 'number' && Number.isFinite(facts.slopeDirectionalPct)
-      ? facts.slopeDirectionalPct
-      : undefined;
-    const cmfVal = typeof facts.cmf === 'number' && Number.isFinite(facts.cmf) ? facts.cmf : undefined;
-    const adxSlopeVal = typeof facts.adxSlope === 'number' && Number.isFinite(facts.adxSlope)
-      ? facts.adxSlope
-      : undefined;
     const adxVal = adx;
     const slopeRequirement = fastTrackCfg?.minSlopePct ?? 0.2;
     const cmfRequirement = fastTrackCfg?.minCmf ?? 0;

@@ -2,6 +2,9 @@ import { ReboundRejectionAgent, ActivationProfile } from './state.js';
 import { prisma } from '../db/client.js';
 import { PaperBroker } from '../broker/paper.js';
 import { LiveBroker } from '../broker/live.js';
+import { CapitalPoolBroker } from '../broker/capitalPoolBroker.js';
+import { capitalConfig } from '../config/capital.js';
+import { getCapitalManager } from '../services/capitalPool.js';
 import type { Broker } from '../broker/types.js';
 import type { StrategyGuardrail } from '../services/strategyHealth.js';
 
@@ -85,10 +88,28 @@ export class AgentsHub {
       return { broker: null, source: 'none' };
     }
     if (session.mode === 'paper') {
-      return { broker: new PaperBroker(session.startBalanceUsd ?? undefined), source: 'paper' };
+      const base = new PaperBroker(session.startBalanceUsd ?? undefined);
+      const capital = getCapitalManager('paper');
+      const broker = new CapitalPoolBroker({
+        agentId: session.id,
+        mode: 'paper',
+        capital,
+        broker: base,
+        minOrderUsd: capitalConfig.minOrderUSD,
+      });
+      return { broker, source: 'paper' };
     }
     if (session.mode === 'live' && session.userId) {
-      return { broker: new LiveBroker(session.userId), source: 'live' };
+      const base = new LiveBroker(session.userId);
+      const capital = getCapitalManager('live');
+      const broker = new CapitalPoolBroker({
+        agentId: session.id,
+        mode: 'live',
+        capital,
+        broker: base,
+        minOrderUsd: capitalConfig.minOrderUSD,
+      });
+      return { broker, source: 'live' };
     }
     return { broker: null, source: 'none' };
   }

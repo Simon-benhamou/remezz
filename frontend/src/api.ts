@@ -159,6 +159,16 @@ export const api = {
     (await client.post('/api/agent/portfolio/balance', { mode, balanceUsd })).data,
   rebalancePortfolio: async (mode: 'paper' | 'live') =>
     (await client.post('/api/agent/portfolio/rebalance', { mode })).data,
+  getCapitalSnapshot: async (mode: 'paper' | 'live') =>
+    (await client.get(`/api/capital/${mode}/snapshot`)).data as {
+      totalUSD: number;
+      freeUSD: number;
+      reservedUSD: number;
+      inPositionsUSD: number;
+      ts: number;
+    },
+  setPaperCapitalBalance: async (initialUSD: number) =>
+    (await client.post('/api/capital/paper/set-balance', { initialUSD })).data,
   getAdaptiveWeights: async (params?: { family?: string; limit?: number; decisionsLimit?: number }) =>
     (await client.get('/api/monitor/adaptive-weights', { params })).data,
   listImprovements: async (status?: string) =>
