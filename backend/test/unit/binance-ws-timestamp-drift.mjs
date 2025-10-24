@@ -29,7 +29,7 @@ function makeTicker(ageMs) {
 }
 
 for (let i = 0; i < 3; i++) {
-  harness.feedBatch([makeTicker(6_000)], baseTs + i * 800);
+  harness.feedBatch([makeTicker(12_000)], baseTs + i * 800);
 }
 
 const metricsAfterDrift = getMarketMetrics();

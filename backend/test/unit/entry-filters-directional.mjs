@@ -59,4 +59,22 @@ const rangeFacts = {
 const rangeEvaluation = filters.evaluateEntry(rangeFacts, { bias: 'long' });
 assert.equal(rangeEvaluation.ok, true, 'Directional filter should relax in range regimes with neutral RSI');
 
+const adaptiveFacts = {
+  adx: 26,
+  atrPct: 0.62,
+  atrBaselinePct: 0.34,
+  rsi: 56,
+  diPlus: 28,
+  diMinus: 25.4,
+  rrToTp1: 1.3,
+  adxSlope: 1.05,
+};
+const adaptiveEvaluation = filters.evaluateEntry(adaptiveFacts, { bias: 'long' });
+assert.equal(adaptiveEvaluation.ok, true, 'Adaptive directional filter should pass marginal DI when slope/ATR support it');
+assert.match(
+  adaptiveEvaluation.reasons.directionalOk,
+  /adaptiveΔ=/,
+  'Directional detail should include adaptive delta information',
+);
+
 console.log('✅ entry-filters-directional.mjs passed');
