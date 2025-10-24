@@ -15,6 +15,7 @@ import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
 import { useAppStore } from './store';
 import { Activity, Bot, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
+import { api } from './api';
 
 const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/operations') || pathname.startsWith('/mission-control')) return '/operations';
@@ -34,17 +35,34 @@ function AuthenticatedApp() {
   const { mode, setMode } = useAppStore();
   const { overview, loadOverview } = useDashboard();
   const [balanceModalOpen, setBalanceModalOpen] = React.useState(false);
+  const [paperCapital, setPaperCapital] = React.useState<{ totalUSD: number; freeUSD: number; reservedUSD: number; inPositionsUSD: number } | null>(null);
+  const [liveCapital, setLiveCapital] = React.useState<{ totalUSD: number; freeUSD: number; reservedUSD: number; inPositionsUSD: number } | null>(null);
+
+  const loadCapital = React.useCallback(async () => {
+    try {
+      const [paper, live] = await Promise.all([
+        api.getCapitalSnapshot('paper').catch(() => null),
+        api.getCapitalSnapshot('live').catch(() => null),
+      ]);
+      setPaperCapital(paper ?? null);
+      setLiveCapital(live ?? null);
+    } catch (error) {
+      console.error('Unable to load capital snapshots', error);
+    }
+  }, []);
 
   const activeMenuKey = resolveActiveMenuKey(location.pathname);
 
-  const paperBalance = overview?.paperBalance;
-  const liveBalance = overview?.exchangeBalance;
+  React.useEffect(() => {
+    void loadCapital();
+  }, [loadCapital]);
+
   const balanceValue = mode === 'live'
-    ? Number(liveBalance?.totalUsd ?? 0)
-    : Number(paperBalance?.equityUsd ?? paperBalance?.balanceUsd ?? 0);
+    ? Number(liveCapital?.totalUSD ?? 0)
+    : Number(paperCapital?.totalUSD ?? 0);
   const freeValue = mode === 'live'
-    ? Number(liveBalance?.freeUsd ?? 0)
-    : Number(paperBalance?.freeUsd ?? 0);
+    ? Number(liveCapital?.freeUSD ?? 0)
+    : Number(paperCapital?.freeUSD ?? 0);
   const formattedBalance = `$${balanceValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
   const formattedFree = `$${freeValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
   const balanceSubtitle = mode === 'live' ? 'Live exchange equity' : 'Paper equity';
@@ -59,7 +77,8 @@ function AuthenticatedApp() {
 
   const handleBalanceUpdated = React.useCallback(() => {
     void loadOverview(true);
-  }, [loadOverview]);
+    void loadCapital();
+  }, [loadOverview, loadCapital]);
 
   const handleBalanceClick = React.useCallback(() => {
     setBalanceModalOpen(true);
@@ -187,8 +206,9 @@ function AuthenticatedApp() {
                 {balanceSubtitle}
               </div>
               <div style={{ fontSize: 22, fontWeight: 700, color: '#f8fafc', lineHeight: 1 }}>{formattedBalance}</div>
-            
-            
+              <div style={{ fontSize: 12, color: 'rgba(226, 232, 240, 0.7)' }}>
+                {freeSubtitle}: {formattedFree}
+              </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>

@@ -1,14 +1,20 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { discoverTestFiles } from './utils/discover-tests.mjs';
 
 process.env.UNIT_TEST_MODE = 'true';
+
+const require = createRequire(import.meta.url);
+const tsxCli = require.resolve('tsx/cli');
 
 const { files, missing } = discoverTestFiles({
   cwd: process.cwd(),
   targets: [
     { path: 'test/unit' },
+    { path: 'test/capital', recursive: true, optional: true },
   ],
+  extensions: ['.mjs', '.ts'],
 });
 
 const missingRequired = missing.filter((entry) => !entry.target?.optional);
@@ -28,7 +34,9 @@ console.log(`Running ${files.length} unit test files...`);
 let code = 0;
 for (const file of files) {
   console.log(`\n--- ${path.relative(process.cwd(), file)} ---`);
-  const res = spawnSync('node', [file], { stdio: 'inherit' });
+  const isTs = file.endsWith('.ts');
+  const runnerArgs = isTs ? [tsxCli, file] : [file];
+  const res = spawnSync('node', runnerArgs, { stdio: 'inherit' });
   if (res.status) code = res.status;
 }
 

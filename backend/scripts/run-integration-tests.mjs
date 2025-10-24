@@ -21,6 +21,12 @@ const targets = [
     label: 'Integration tests directory',
     filter: (filePath) => enableRemote || !remoteOnlyFiles.has(path.basename(filePath)),
   },
+  {
+    path: 'test/api',
+    label: 'API tests directory',
+    recursive: true,
+    optional: true,
+  },
 ];
 
 if (includeLegacyRoot) {
@@ -49,6 +55,7 @@ if (enableRemote) {
 const { files, missing } = discoverTestFiles({
   cwd: process.cwd(),
   targets,
+  extensions: ['.mjs', '.ts'],
 });
 
 for (const entry of missing) {
