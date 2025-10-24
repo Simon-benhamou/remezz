@@ -85,6 +85,7 @@ const LAST_VALID_BID_ASK_TTL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 1_500;
 const REST_MIN_INTERVAL_MS = 120;
 const WS_HEALTH_GRACE_MS = 15_000;
+const MAX_BINANCE_SYMBOL_LENGTH = 32;
 export const REST_429_BACKOFF_MS = 7_500;
 
 export const BINANCE_REST_429_BACKOFF_MS = REST_429_BACKOFF_MS;
@@ -290,7 +291,8 @@ class BinanceWebSocketManager {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
-  private reconnectDelay = 5000; // 5 secondes
+  private reconnectDelay = 2000; // base 2 secondes
+  private readonly maxReconnectDelayMs = 30_000;
   private pingTimer: NodeJS.Timeout | null = null;
   private shuttingDown = false;
   
@@ -327,7 +329,7 @@ class BinanceWebSocketManager {
   private readonly staleBurstAgeThresholdMs = 4_000;
   private readonly timestampDriftBurstWindowMs = 12_000;
   private readonly timestampDriftBurstThreshold = 4;
-  private readonly timestampDriftForceAgeMs = 5_000;
+  private timestampDriftForceAgeMs = 5_000;
   private readonly forcedReconnectCooldownMs = 45_000;
   private readonly forcedReconnectDelayMs = 400;
 
@@ -341,20 +343,19 @@ class BinanceWebSocketManager {
     lastSubscribedAt?: number;
     active: boolean;
   }>();
-  private throttledKlineStreams = new Set<string>();
-  private activeKlineStreams = new Set<string>();
+  private klineShards: BinanceKlineShard[] = [];
   private readonly klineReconcileIntervalMs = 15_000;
   private readonly klineSubscriptionTtlMs: number;
   private klineReconcileTimer: NodeJS.Timeout | null = null;
-  private readonly maxKlineStreams: number;
+  private readonly maxKlineStreamsPerShard: number;
 
   private readonly endpoints = BINANCE_ENDPOINTS;
 
   constructor() {
     console.log('📡 Initializing Binance WebSocket Manager...');
     const envLimit = Number(process.env.BINANCE_MAX_KLINE_STREAMS || '30');
-    this.maxKlineStreams = Math.max(5, Number.isFinite(envLimit) ? envLimit : 30);
-    console.log(`📊 Binance WS manager limit: max ${this.maxKlineStreams} concurrent kline streams`);
+    this.maxKlineStreamsPerShard = Math.max(5, Number.isFinite(envLimit) ? envLimit : 30);
+    console.log(`📊 Binance WS manager limit: max ${this.maxKlineStreamsPerShard} concurrent kline streams per shard`);
     const envTtlRaw = Number(process.env.BINANCE_KLINE_SUBSCRIPTION_TTL_MS);
     const defaultTtl = 600_000; // 10 minutes
     const minTtl = process.env.UNIT_TEST_MODE === 'true' ? 100 : 60_000;
@@ -367,6 +368,11 @@ class BinanceWebSocketManager {
       }
     }, this.klineReconcileIntervalMs);
     this.klineReconcileTimer?.unref?.();
+
+    const cfg = getConfig();
+    if (Number.isFinite(cfg.WS_MAX_TIMESTAMP_DRIFT_MS) && cfg.WS_MAX_TIMESTAMP_DRIFT_MS > 0) {
+      this.timestampDriftForceAgeMs = Math.max(5_000, cfg.WS_MAX_TIMESTAMP_DRIFT_MS - 1_000);
+    }
   }
 
   private normalizeStreamSymbol(symbol: string): string {
@@ -375,6 +381,15 @@ class BinanceWebSocketManager {
 
   private normalizeCacheSymbol(symbol: string): string {
     return toBinanceSymbolId(symbol);
+  }
+
+  private isValidBinanceSymbol(symbol: string): boolean {
+    const cacheSymbol = this.normalizeCacheSymbol(symbol);
+    return (
+      /^[A-Z0-9]{2,}$/.test(cacheSymbol)
+      && cacheSymbol.length <= MAX_BINANCE_SYMBOL_LENGTH
+      && cacheSymbol.length >= 6
+    );
   }
 
   private klineCacheKey(symbol: string, interval: string): string {
@@ -386,6 +401,11 @@ class BinanceWebSocketManager {
     const stream = `${streamSymbol}@kline_${interval}`;
     const now = Date.now();
     this.pruneStaleKlineSubscriptions(now);
+
+    if (!this.isValidBinanceSymbol(symbol)) {
+      console.warn(`⚠️ Ignoring invalid Binance symbol for kline subscription: ${symbol}`);
+      return false;
+    }
 
     const existing = this.desiredKlineStreams.get(stream);
     if (existing) {
@@ -404,7 +424,7 @@ class BinanceWebSocketManager {
 
     this.reconcileKlineStreams();
 
-    return !this.throttledKlineStreams.has(stream);
+    return true;
   }
 
   private sendSubscription(stream: string, isKline = false): boolean {
@@ -422,8 +442,6 @@ class BinanceWebSocketManager {
       this.activeStreams.add(stream);
       console.log(`📡 Subscribed to stream ${stream}`);
       if (isKline) {
-        this.activeKlineStreams.add(stream);
-        this.throttledKlineStreams.delete(stream);
         const desired = this.desiredKlineStreams.get(stream);
         if (desired) {
           desired.active = true;
@@ -452,7 +470,6 @@ class BinanceWebSocketManager {
       this.ws.send(JSON.stringify(payload));
       this.activeStreams.delete(stream);
       if (isKline) {
-        this.activeKlineStreams.delete(stream);
         const desired = this.desiredKlineStreams.get(stream);
         if (desired) {
           desired.active = false;
@@ -480,49 +497,66 @@ class BinanceWebSocketManager {
         this.sendUnsubscribe(entry.stream, true);
       }
       this.desiredKlineStreams.delete(entry.stream);
-      this.activeKlineStreams.delete(entry.stream);
-      this.throttledKlineStreams.delete(entry.stream);
       console.log(`🧹 Pruned inactive kline stream ${entry.symbol} ${entry.interval}`);
     }
   }
 
   private reconcileKlineStreams(): void {
     const entries = Array.from(this.desiredKlineStreams.values());
-    if (!entries.length) return;
+    if (!entries.length) {
+      this.klineShards.forEach(shard => shard.setStreams([]));
+      return;
+    }
 
     entries.sort((a, b) => b.lastRequestedAt - a.lastRequestedAt);
 
-    const allowed = new Set(entries.slice(0, this.maxKlineStreams).map(entry => entry.stream));
-
+    const batches: typeof entries[] = [];
     for (const entry of entries) {
-      const isAllowed = allowed.has(entry.stream);
-
-      if (isAllowed) {
-        if (this.throttledKlineStreams.delete(entry.stream)) {
-          console.log(`✅ Resuming live kline stream for ${entry.symbol} ${entry.interval}`);
-        }
-
-        if (!this.ws || !this.isConnected) {
-          entry.active = false;
-          continue;
-        }
-
-        if (!this.activeKlineStreams.has(entry.stream)) {
-          const ok = this.sendSubscription(entry.stream, true);
-          if (!ok) {
-            entry.active = false;
-          }
-        }
-      } else {
-        if (!this.throttledKlineStreams.has(entry.stream)) {
-          this.throttledKlineStreams.add(entry.stream);
-          console.warn(`⚠️ Binance WS kline limit (${this.maxKlineStreams}) reached. Throttling ${entry.symbol} ${entry.interval}`);
-        }
-        if (this.activeKlineStreams.has(entry.stream)) {
-          this.sendUnsubscribe(entry.stream, true);
-        }
-        entry.active = false;
+      let batch = batches[batches.length - 1];
+      if (!batch || batch.length >= this.maxKlineStreamsPerShard) {
+        batch = [];
+        batches.push(batch);
       }
+      batch.push(entry);
+    }
+
+    this.ensureKlineShardCount(batches.length);
+
+    const assigned = new Set<string>();
+    batches.forEach((batch, index) => {
+      const streams = batch.map(info => info.stream);
+      this.klineShards[index].setStreams(streams);
+      for (const info of batch) {
+        info.active = true;
+        info.lastSubscribedAt = info.lastSubscribedAt ?? Date.now();
+        assigned.add(info.stream);
+      }
+    });
+
+    for (let i = batches.length; i < this.klineShards.length; i++) {
+      this.klineShards[i].setStreams([]);
+    }
+
+    for (const info of this.desiredKlineStreams.values()) {
+      if (!assigned.has(info.stream)) {
+        info.active = false;
+      }
+    }
+  }
+
+  private ensureKlineShardCount(target: number): void {
+    while (this.klineShards.length < target) {
+      const shard = new BinanceKlineShard({
+        id: this.klineShards.length,
+        manager: this,
+        endpoints: this.endpoints,
+        maxStreams: this.maxKlineStreamsPerShard,
+      });
+      this.klineShards.push(shard);
+    }
+
+    if (target === 0) {
+      return;
     }
   }
 
@@ -552,7 +586,6 @@ class BinanceWebSocketManager {
         this.shuttingDown = false;
         this.reconnectAttempts = 0;
         this.activeStreams.clear();
-        this.activeKlineStreams.clear();
         for (const entry of this.desiredKlineStreams.values()) {
           entry.active = false;
         }
@@ -589,7 +622,6 @@ class BinanceWebSocketManager {
         this.isConnecting = false;
         this.ws = null;
         this.activeStreams.clear();
-        this.activeKlineStreams.clear();
         for (const entry of this.desiredKlineStreams.values()) {
           entry.active = false;
         }
@@ -643,10 +675,11 @@ class BinanceWebSocketManager {
       return;
     }
 
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts);
+    const attempt = this.reconnectAttempts;
     this.reconnectAttempts++;
+    const delay = Math.min(this.reconnectDelay * Math.pow(2, attempt), this.maxReconnectDelayMs);
 
-    console.log(`🔄 Scheduling reconnect attempt ${this.reconnectAttempts} in ${delay/1000}s...`);
+    console.log(`🔄 Scheduling reconnect attempt ${this.reconnectAttempts} in ${Math.round(delay / 1000)}s...`);
 
     this.reconnectTimer = setTimeout(() => {
       console.log('🔄 Attempting to reconnect...');
@@ -693,6 +726,10 @@ class BinanceWebSocketManager {
    * 0 weight - Remplace fetchOHLCV (2 weight × n appels)
    */
   subscribeToKline(symbol: string, interval: string = '15m'): boolean {
+    if (!this.isValidBinanceSymbol(symbol)) {
+      console.warn(`⚠️ Ignoring invalid Binance symbol for kline subscription: ${symbol}`);
+      return false;
+    }
     const cacheSymbol = this.normalizeCacheSymbol(symbol);
     const key = this.klineCacheKey(cacheSymbol, interval);
     if (!this.klinesCache.has(key)) {
@@ -741,6 +778,22 @@ class BinanceWebSocketManager {
       // Subscription confirmée
       return;
     }
+  }
+
+  onShardMessage(stream: string, data: any): void {
+    this.handleKlineUpdate(stream, data);
+  }
+
+  isShutdownRequested(): boolean {
+    return this.shuttingDown;
+  }
+
+  getKlineShardSizes(): number[] {
+    return this.klineShards.map(shard => shard.getDesiredStreamCount());
+  }
+
+  getKlineShardSnapshot(): string[][] {
+    return this.klineShards.map(shard => shard.getDesiredStreams());
   }
 
   /**
@@ -1372,11 +1425,13 @@ class BinanceWebSocketManager {
     this.lastAcceptedTs = 0;
     this.lastHealthReason = 'manual_close';
     this.activeStreams.clear();
-    this.activeKlineStreams.clear();
     this.desiredKlineStreams.clear();
-    this.throttledKlineStreams.clear();
     this.tickersCache.clear();
     this.klinesCache.clear();
+    for (const shard of this.klineShards) {
+      shard.close();
+    }
+    this.klineShards = [];
     // Close any user data streams as well
     for (const [userId, stream] of this.userDataStreams.entries()) {
       try { stream.ws?.close(); } catch {}
@@ -1648,6 +1703,216 @@ class BinanceWebSocketManager {
   }
 }
 
+interface BinanceKlineShardOptions {
+  id: number;
+  manager: BinanceWebSocketManager;
+  endpoints: typeof BINANCE_ENDPOINTS;
+  maxStreams: number;
+}
+
+class BinanceKlineShard {
+  private readonly id: number;
+  private readonly manager: BinanceWebSocketManager;
+  private readonly endpoints: typeof BINANCE_ENDPOINTS;
+  private readonly maxStreams: number;
+  private ws: WebSocket | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private isConnecting = false;
+  private isConnected = false;
+  private desiredStreams = new Set<string>();
+  private activeStreams = new Set<string>();
+  private reconnectAttempts = 0;
+  private readonly baseBackoffMs = 2_000;
+  private readonly maxBackoffMs = 30_000;
+  private readonly isTestMode = process.env.UNIT_TEST_MODE === 'true';
+
+  constructor(options: BinanceKlineShardOptions) {
+    this.id = options.id;
+    this.manager = options.manager;
+    this.endpoints = options.endpoints;
+    this.maxStreams = options.maxStreams;
+  }
+
+  setStreams(streams: string[]): void {
+    if (streams.length > this.maxStreams) {
+      console.warn(`⚠️ Kline shard ${this.id} received ${streams.length} streams (max ${this.maxStreams}), trimming.`);
+      streams = streams.slice(0, this.maxStreams);
+    }
+
+    const next = new Set(streams);
+    this.desiredStreams = next;
+
+    if (this.desiredStreams.size === 0) {
+      this.activeStreams.clear();
+      this.stopSocket();
+      return;
+    }
+
+    this.ensureConnected();
+    this.flushSubscriptions();
+  }
+
+  getDesiredStreamCount(): number {
+    return this.desiredStreams.size;
+  }
+
+  getDesiredStreams(): string[] {
+    return Array.from(this.desiredStreams);
+  }
+
+  close(): void {
+    this.desiredStreams.clear();
+    this.activeStreams.clear();
+    this.stopSocket();
+  }
+
+  private ensureConnected(): void {
+    if (this.desiredStreams.size === 0) {
+      return;
+    }
+
+    if (this.isTestMode) {
+      this.isConnected = true;
+      this.isConnecting = false;
+      this.reconnectAttempts = 0;
+      this.activeStreams = new Set(this.desiredStreams);
+      return;
+    }
+
+    if (this.ws || this.isConnecting) {
+      return;
+    }
+
+    this.isConnecting = true;
+    const ws = new WebSocket(this.endpoints.wsMulti);
+    this.ws = ws;
+
+    ws.on('open', () => {
+      console.log(`✅ Binance kline shard ${this.id} connected`);
+      this.isConnected = true;
+      this.isConnecting = false;
+      this.reconnectAttempts = 0;
+      this.activeStreams.clear();
+      this.flushSubscriptions();
+    });
+
+    ws.on('message', (buffer: Buffer) => {
+      try {
+        const payload = JSON.parse(buffer.toString());
+        if (payload && typeof payload === 'object') {
+          if (Array.isArray(payload)) {
+            return;
+          }
+          const stream = payload.stream;
+          const data = payload.data;
+          if (typeof stream === 'string' && stream.includes('@kline_')) {
+            this.manager.onShardMessage(stream, data);
+          }
+        }
+      } catch (error) {
+        console.error(`❌ Failed to parse kline shard ${this.id} message:`, error);
+      }
+    });
+
+    ws.on('close', () => {
+      console.warn(`⚠️ Binance kline shard ${this.id} closed`);
+      this.isConnected = false;
+      this.isConnecting = false;
+      this.ws = null;
+      this.activeStreams.clear();
+      if (this.desiredStreams.size > 0 && !this.manager.isShutdownRequested()) {
+        this.scheduleReconnect();
+      }
+    });
+
+    ws.on('error', (error) => {
+      console.error(`❌ Binance kline shard ${this.id} error:`, error instanceof Error ? error.message : error);
+    });
+  }
+
+  private flushSubscriptions(): void {
+    if (this.isTestMode) {
+      this.activeStreams = new Set(this.desiredStreams);
+      return;
+    }
+
+    if (!this.ws || !this.isConnected) {
+      return;
+    }
+
+    for (const stream of [...this.activeStreams]) {
+      if (!this.desiredStreams.has(stream)) {
+        this.sendUnsubscribe(stream);
+      }
+    }
+
+    for (const stream of this.desiredStreams) {
+      if (!this.activeStreams.has(stream)) {
+        this.sendSubscribe(stream);
+      }
+    }
+  }
+
+  private sendSubscribe(stream: string): void {
+    if (!this.ws || !this.isConnected || this.activeStreams.has(stream)) {
+      return;
+    }
+    const payload = { method: 'SUBSCRIBE', params: [stream], id: Date.now() };
+    try {
+      this.ws.send(JSON.stringify(payload));
+      this.activeStreams.add(stream);
+    } catch (error) {
+      console.error(`❌ Failed to subscribe shard ${this.id} to ${stream}:`, error);
+    }
+  }
+
+  private sendUnsubscribe(stream: string): void {
+    if (!this.ws || !this.isConnected || !this.activeStreams.has(stream)) {
+      this.activeStreams.delete(stream);
+      return;
+    }
+    const payload = { method: 'UNSUBSCRIBE', params: [stream], id: Date.now() };
+    try {
+      this.ws.send(JSON.stringify(payload));
+    } catch (error) {
+      console.error(`❌ Failed to unsubscribe shard ${this.id} from ${stream}:`, error);
+    }
+    this.activeStreams.delete(stream);
+  }
+
+  private scheduleReconnect(): void {
+    if (this.isTestMode || this.desiredStreams.size === 0) {
+      return;
+    }
+    const attempt = this.reconnectAttempts;
+    this.reconnectAttempts += 1;
+    const delay = Math.min(this.baseBackoffMs * Math.pow(2, attempt), this.maxBackoffMs);
+    this.clearReconnectTimer();
+    this.reconnectTimer = setTimeout(() => {
+      this.ensureConnected();
+    }, delay);
+    this.reconnectTimer.unref?.();
+  }
+
+  private stopSocket(): void {
+    this.clearReconnectTimer();
+    if (this.ws) {
+      try { this.ws.close(); } catch {}
+      this.ws = null;
+    }
+    this.isConnected = false;
+    this.isConnecting = false;
+    this.reconnectAttempts = 0;
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+}
+
 // Singleton instance
 let binanceWsManager: BinanceWebSocketManager | null = null;
 const balanceFetchPromises = new Map<string, Promise<any>>();
@@ -1740,6 +2005,12 @@ export function createTestBinanceWebSocketHarness() {
     },
     applyGrace(now: number) {
       withFakeNow(now, () => (internal as any).applyReconnectGrace(now));
+    },
+    getShardSizes() {
+      return manager.getKlineShardSizes();
+    },
+    getShardStreams() {
+      return manager.getKlineShardSnapshot();
     },
   };
 }
