@@ -314,7 +314,20 @@ class BinanceWebSocketManager {
   private lastHealthReason: string | null = null;
   private lastValidBidAsk = new Map<string, { bid: number; ask: number; ts: number }>();
   private snapshotCooldown = new Map<string, number>();
-  
+  private staleFrameBursts: number[] = [];
+  private timestampDriftBurstEvents: number[] = [];
+  private forcingReconnect = false;
+  private lastForcedReconnectTs = 0;
+  private readonly staleBurstWindowMs = 15_000;
+  private readonly staleBurstThreshold = 3;
+  private readonly staleBurstRatio = 0.6;
+  private readonly staleBurstAgeThresholdMs = 4_000;
+  private readonly timestampDriftBurstWindowMs = 12_000;
+  private readonly timestampDriftBurstThreshold = 4;
+  private readonly timestampDriftForceAgeMs = 5_000;
+  private readonly forcedReconnectCooldownMs = 45_000;
+  private readonly forcedReconnectDelayMs = 400;
+
   // Streams actifs
   private activeStreams = new Set<string>();
   private desiredKlineStreams = new Map<string, {
@@ -350,6 +363,7 @@ class BinanceWebSocketManager {
         console.error('❌ Failed to reconcile kline subscriptions:', error);
       }
     }, this.klineReconcileIntervalMs);
+    this.klineReconcileTimer?.unref?.();
   }
 
   private normalizeStreamSymbol(symbol: string): string {
@@ -573,6 +587,7 @@ class BinanceWebSocketManager {
         console.log('🔌 Binance WebSocket closed');
         this.isConnected = false;
         this.isConnecting = false;
+        this.ws = null;
         this.activeStreams.clear();
         this.activeKlineStreams.clear();
         for (const entry of this.desiredKlineStreams.values()) {
@@ -586,8 +601,21 @@ class BinanceWebSocketManager {
           clearInterval(this.pingTimer);
           this.pingTimer = null;
         }
+        const wasForced = this.forcingReconnect;
+        this.forcingReconnect = false;
         if (!this.shuttingDown) {
-          this.scheduleReconnect();
+          if (wasForced) {
+            const timer = setTimeout(() => {
+              if (!this.shuttingDown) {
+                this.connect().catch(error => {
+                  console.error('❌ Forced Binance WS reconnect failed:', error);
+                });
+              }
+            }, this.forcedReconnectDelayMs);
+            timer.unref?.();
+          } else {
+            this.scheduleReconnect();
+          }
         }
       });
 
@@ -721,6 +749,9 @@ class BinanceWebSocketManager {
   private handleAllTickersUpdate(tickers: any[]): void {
     const receivedTs = Date.now();
     let acceptedCount = 0;
+    let processedCount = 0;
+    let staleCount = 0;
+    let maxStaleAge = 0;
 
     for (const ticker of tickers) {
       const rawSymbol = String(ticker?.s || '').trim();
@@ -782,6 +813,14 @@ class BinanceWebSocketManager {
         expectedSymbolId: rawSymbol,
       });
 
+      processedCount += 1;
+      if (validation.status === 'stale') {
+        staleCount += 1;
+        if (validation.dataAgeMs && validation.dataAgeMs > maxStaleAge) {
+          maxStaleAge = validation.dataAgeMs;
+        }
+      }
+
       recordMarketFrame({
         symbol: rawSymbol,
         displaySymbol: rawSymbol,
@@ -831,6 +870,12 @@ class BinanceWebSocketManager {
     }
 
     this.lastUpdate = receivedTs;
+    this.evaluateStaleFrameHealth({
+      processedCount,
+      staleCount,
+      maxStaleAge,
+      receivedTs,
+    });
 
     const lastAcceptAge = this.lastAcceptedTs > 0 ? receivedTs - this.lastAcceptedTs : Number.POSITIVE_INFINITY;
     const withinGrace = this.lastAcceptedTs > 0 && lastAcceptAge <= WS_HEALTH_GRACE_MS;
@@ -854,6 +899,35 @@ class BinanceWebSocketManager {
     // Log stats périodiquement
     if (receivedTs % 60000 < 5000) { // ~toutes les minutes
       console.log(`📊 WebSocket cache: ${this.tickersCache.size} tickers, updated ${new Date(this.lastUpdate).toISOString()}`);
+    }
+  }
+
+  private evaluateStaleFrameHealth(params: { processedCount: number; staleCount: number; maxStaleAge: number; receivedTs: number }): void {
+    const { processedCount, staleCount, maxStaleAge, receivedTs } = params;
+    if (processedCount <= 0) {
+      this.pruneStaleFrameBursts(receivedTs);
+      return;
+    }
+
+    this.pruneStaleFrameBursts(receivedTs);
+    const ratio = staleCount / processedCount;
+
+    if (ratio >= this.staleBurstRatio && maxStaleAge >= this.staleBurstAgeThresholdMs) {
+      this.staleFrameBursts.push(receivedTs);
+      if (this.staleFrameBursts.length >= this.staleBurstThreshold) {
+        console.warn(
+          `⚠️ WS stale frame burst detected: ratio ${(ratio * 100).toFixed(1)}% maxAge ${maxStaleAge}ms — forcing reconnect`,
+        );
+        this.forceReconnect('stale_frames');
+      }
+    } else if (ratio === 0) {
+      this.staleFrameBursts.length = 0;
+    }
+  }
+
+  private pruneStaleFrameBursts(now: number): void {
+    while (this.staleFrameBursts.length && now - this.staleFrameBursts[0] > this.staleBurstWindowMs) {
+      this.staleFrameBursts.shift();
     }
   }
 
@@ -979,9 +1053,28 @@ class BinanceWebSocketManager {
         setFallbackState(symbol, true, 'ws_timestamp_drift', { increment: nextStats.count === threshold });
         if (nextStats.count === threshold) {
           recordRestFallback(symbol, 'ws_timestamp_drift');
+          this.registerTimestampDriftBurst(receivedTs, ageMs);
         }
         this.scheduleBookTickerRefresh(symbol);
       }
+    }
+  }
+
+  private registerTimestampDriftBurst(receivedTs: number, ageMs: number): void {
+    if (ageMs < this.timestampDriftForceAgeMs) {
+      return;
+    }
+    this.pruneTimestampDriftBursts(receivedTs);
+    this.timestampDriftBurstEvents.push(receivedTs);
+    if (this.timestampDriftBurstEvents.length >= this.timestampDriftBurstThreshold) {
+      console.warn(`⚠️ WS timestamp drift burst detected (age ${ageMs}ms) — forcing reconnect`);
+      this.forceReconnect('timestamp_drift');
+    }
+  }
+
+  private pruneTimestampDriftBursts(now: number): void {
+    while (this.timestampDriftBurstEvents.length && now - this.timestampDriftBurstEvents[0] > this.timestampDriftBurstWindowMs) {
+      this.timestampDriftBurstEvents.shift();
     }
   }
 
@@ -991,6 +1084,56 @@ class BinanceWebSocketManager {
     }
     if (this.lastTimestampDriftNotice.has(symbol)) {
       this.lastTimestampDriftNotice.delete(symbol);
+    }
+  }
+
+  private forceReconnect(reason: string): void {
+    const now = Date.now();
+    if (now - this.lastForcedReconnectTs < this.forcedReconnectCooldownMs) {
+      return;
+    }
+
+    this.lastForcedReconnectTs = now;
+    const socket = this.ws;
+    const hasSocket = Boolean(socket);
+    this.forcingReconnect = hasSocket;
+    this.staleFrameBursts = [];
+    this.timestampDriftBurstEvents = [];
+    console.warn(`🔄 Forcing Binance WebSocket reconnect due to ${reason}`);
+
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+
+    this.lastHealthy = false;
+    this.lastHealthReason = `ws_force_reconnect:${reason}`;
+    updateWsConnectionState({ connected: false, healthy: false, reason: this.lastHealthReason });
+    this.reconnectAttempts = 0;
+
+    if (!hasSocket) {
+      if (!this.isConnecting && !this.shuttingDown) {
+        const timer = setTimeout(() => {
+          if (!this.shuttingDown) {
+            this.connect().catch(error => {
+              console.error('❌ Forced Binance WS reconnect failed:', error);
+            });
+          }
+        }, this.forcedReconnectDelayMs);
+        timer.unref?.();
+      }
+      this.forcingReconnect = false;
+      return;
+    }
+
+    if (socket) {
+      try {
+        socket.terminate();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('❌ Failed to terminate Binance WS during forced reconnect:', message);
+      }
+      this.ws = null;
     }
   }
 
