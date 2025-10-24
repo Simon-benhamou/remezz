@@ -19,6 +19,7 @@ export class CapitalPoolBroker implements Broker {
   private readonly capital: CapitalManager;
   private readonly broker: Broker;
   private readonly minOrderUsd: USD;
+  private readonly pendingReservations = new Map<string, string>();
   public readonly estimateFillableQty?: Broker['estimateFillableQty'];
   public readonly syncProtective?: Broker['syncProtective'];
 
@@ -76,12 +77,28 @@ export class CapitalPoolBroker implements Broker {
     try {
       const placed = await this.broker.place(order);
       const filledUsd = this.resolveFilledUsd(order, placed);
-      if (!placed || placed.status === 'rejected' || filledUsd.raw <= ZERO_USD.raw) {
+
+      if (!placed || !placed.id || placed.status === 'rejected' || placed.status === 'canceled') {
         await this.capital.release(reservation.id);
+        if (placed?.id) {
+          this.pendingReservations.delete(placed.id);
+        }
         return placed;
       }
 
-      await this.capital.commit(reservation.id, filledUsd);
+      if (filledUsd.raw > ZERO_USD.raw) {
+        await this.capital.commit(reservation.id, filledUsd);
+        this.pendingReservations.delete(placed.id);
+        return placed;
+      }
+
+      if (placed.status === 'filled') {
+        await this.capital.commit(reservation.id);
+        this.pendingReservations.delete(placed.id);
+        return placed;
+      }
+
+      this.pendingReservations.set(placed.id, reservation.id);
       return placed;
     } catch (error) {
       await this.capital.release(reservation.id);
@@ -91,6 +108,11 @@ export class CapitalPoolBroker implements Broker {
 
   async cancel(id: string): Promise<void> {
     await this.broker.cancel(id);
+    const reservationId = this.pendingReservations.get(id);
+    if (reservationId) {
+      await this.capital.release(reservationId);
+      this.pendingReservations.delete(id);
+    }
   }
 
   private async estimateDesiredUsd(order: NewOrder): Promise<USD> {
