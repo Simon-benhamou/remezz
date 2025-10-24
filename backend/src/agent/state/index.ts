@@ -9534,7 +9534,10 @@ export class ReboundRejectionAgent {
       const filledQty = Number(reduceOrder?.filledQty ?? 0);
       if (filledQty > 0 && this.pos) {
         this.pos.qty = Math.max(0, this.pos.qty - filledQty);
-        await this.settleCapital(this.profile.symbol, (reduceOrder.avgPrice || referencePrice) * filledQty);
+        const shouldSettleManually = !(this.broker instanceof CapitalPoolBroker) || !reduceOrder?.reduceOnly;
+        if (shouldSettleManually) {
+          await this.settleCapital(this.profile.symbol, (reduceOrder.avgPrice || referencePrice) * filledQty);
+        }
       }
 
       recordOpsEvent({
