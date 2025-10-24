@@ -10,6 +10,7 @@
  */
 
 import WebSocket from 'ws';
+import { EventEmitter } from 'node:events';
 import crypto from 'crypto';
 import { getConfig } from '../utils/env.js';
 import { evaluateTickerFrame } from '../data/tickerValidation.js';
@@ -2079,6 +2080,8 @@ interface BinanceKlineShardOptions {
   maxStreams: number;
   reconnectSkewMs: number;
   reconnectJitterMs: number;
+  socketFactory?: (url: string) => WebSocket;
+  testModeOverride?: boolean;
 }
 
 class BinanceKlineShard {
@@ -2088,6 +2091,7 @@ class BinanceKlineShard {
   private readonly maxStreams: number;
   private readonly reconnectSkewMs: number;
   private readonly reconnectJitterMs: number;
+  private readonly socketFactory?: (url: string) => WebSocket;
   private ws: WebSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -2102,10 +2106,15 @@ class BinanceKlineShard {
   private readonly heartbeatTimeoutMs = 90_000;
   private lastPongTs = 0;
   private lastMessageTs = 0;
-  private readonly isTestMode = process.env.UNIT_TEST_MODE === 'true';
+  private readonly isTestMode: boolean;
   private hasConnectedOnce = false;
   private initialConnectTimer: NodeJS.Timeout | null = null;
   private lastCloseCode: number | null = null;
+  private pendingSubscriptions = new Set<string>();
+  private pendingUnsubscriptions = new Set<string>();
+  private subscriptionDrainTimer: NodeJS.Timeout | null = null;
+  private readonly subscriptionBatchSize = 16;
+  private readonly subscriptionRetryDelayMs = 150;
 
   constructor(options: BinanceKlineShardOptions) {
     this.id = options.id;
@@ -2114,6 +2123,8 @@ class BinanceKlineShard {
     this.maxStreams = options.maxStreams;
     this.reconnectSkewMs = options.reconnectSkewMs;
     this.reconnectJitterMs = options.reconnectJitterMs;
+    this.socketFactory = options.socketFactory;
+    this.isTestMode = options.testModeOverride ?? process.env.UNIT_TEST_MODE === 'true';
   }
 
   setStreams(streams: string[]): void {
@@ -2203,7 +2214,7 @@ class BinanceKlineShard {
     }
 
     this.isConnecting = true;
-    const ws = new WebSocket(this.endpoints.wsMulti);
+    const ws = this.socketFactory ? this.socketFactory(this.endpoints.wsMulti) : new WebSocket(this.endpoints.wsMulti);
     this.ws = ws;
 
     ws.on('open', () => {
@@ -2214,6 +2225,7 @@ class BinanceKlineShard {
       this.activeStreams.clear();
       this.startHeartbeatMonitoring();
       this.flushSubscriptions();
+      this.scheduleSubscriptionDrain();
       this.hasConnectedOnce = true;
       this.lastCloseCode = null;
     });
@@ -2272,6 +2284,8 @@ class BinanceKlineShard {
   private flushSubscriptions(): void {
     if (this.isTestMode) {
       this.activeStreams = new Set(this.desiredStreams);
+      this.pendingSubscriptions.clear();
+      this.pendingUnsubscriptions.clear();
       return;
     }
 
@@ -2293,30 +2307,142 @@ class BinanceKlineShard {
   }
 
   private sendSubscribe(stream: string): void {
-    if (!this.ws || !this.isConnected || this.activeStreams.has(stream)) {
+    if (this.activeStreams.has(stream) && !this.pendingUnsubscriptions.has(stream)) {
+      this.pendingSubscriptions.delete(stream);
       return;
     }
-    const payload = { method: 'SUBSCRIBE', params: [stream], id: Date.now() };
-    try {
-      this.ws.send(JSON.stringify(payload));
-      this.activeStreams.add(stream);
-    } catch (error) {
-      console.error(`❌ Failed to subscribe shard ${this.id} to ${stream}:`, error);
+
+    this.pendingUnsubscriptions.delete(stream);
+    if (this.pendingSubscriptions.has(stream)) {
+      return;
     }
+
+    this.pendingSubscriptions.add(stream);
+    this.scheduleSubscriptionDrain();
   }
 
   private sendUnsubscribe(stream: string): void {
-    if (!this.ws || !this.isConnected || !this.activeStreams.has(stream)) {
+    this.pendingSubscriptions.delete(stream);
+
+    if (this.pendingUnsubscriptions.has(stream)) {
+      return;
+    }
+
+    if (!this.ws || !this.isConnected) {
       this.activeStreams.delete(stream);
       return;
     }
-    const payload = { method: 'UNSUBSCRIBE', params: [stream], id: Date.now() };
-    try {
-      this.ws.send(JSON.stringify(payload));
-    } catch (error) {
-      console.error(`❌ Failed to unsubscribe shard ${this.id} from ${stream}:`, error);
+
+    if (!this.activeStreams.has(stream)) {
+      return;
     }
-    this.activeStreams.delete(stream);
+
+    this.pendingUnsubscriptions.add(stream);
+    this.scheduleSubscriptionDrain();
+  }
+
+  private scheduleSubscriptionDrain(delay = 0): void {
+    if (this.subscriptionDrainTimer) {
+      return;
+    }
+
+    this.subscriptionDrainTimer = setTimeout(() => {
+      this.subscriptionDrainTimer = null;
+      this.drainPendingSubscriptions();
+    }, delay);
+    this.subscriptionDrainTimer.unref?.();
+  }
+
+  private clearSubscriptionDrainTimer(): void {
+    if (this.subscriptionDrainTimer) {
+      clearTimeout(this.subscriptionDrainTimer);
+      this.subscriptionDrainTimer = null;
+    }
+  }
+
+  private drainPendingSubscriptions(): void {
+    if (this.isTestMode) {
+      for (const stream of this.pendingSubscriptions) {
+        this.activeStreams.add(stream);
+      }
+      this.pendingSubscriptions.clear();
+      this.pendingUnsubscriptions.clear();
+      return;
+    }
+
+    const ws = this.ws;
+    if (!ws || !this.isConnected || ws.readyState !== WebSocket.OPEN) {
+      if (this.pendingSubscriptions.size > 0 || this.pendingUnsubscriptions.size > 0) {
+        this.scheduleSubscriptionDrain(this.subscriptionRetryDelayMs);
+      }
+      return;
+    }
+
+    const takeBatch = (set: Set<string>): string[] => {
+      const chunk: string[] = [];
+      for (const stream of set) {
+        chunk.push(stream);
+        if (chunk.length >= this.subscriptionBatchSize) {
+          break;
+        }
+      }
+      return chunk;
+    };
+
+    while (this.pendingSubscriptions.size > 0) {
+      const batch = takeBatch(this.pendingSubscriptions);
+      if (!batch.length) {
+        break;
+      }
+      if (!this.dispatchSubscriptionBatch(ws, 'SUBSCRIBE', batch)) {
+        this.scheduleSubscriptionDrain(this.subscriptionRetryDelayMs);
+        return;
+      }
+    }
+
+    while (this.pendingUnsubscriptions.size > 0) {
+      const batch = takeBatch(this.pendingUnsubscriptions);
+      if (!batch.length) {
+        break;
+      }
+      if (!this.dispatchSubscriptionBatch(ws, 'UNSUBSCRIBE', batch)) {
+        this.scheduleSubscriptionDrain(this.subscriptionRetryDelayMs);
+        return;
+      }
+    }
+
+    const remaining = this.pendingSubscriptions.size + this.pendingUnsubscriptions.size;
+    if (remaining > 0) {
+      this.scheduleSubscriptionDrain(this.subscriptionRetryDelayMs);
+    }
+  }
+
+  private dispatchSubscriptionBatch(ws: WebSocket, method: 'SUBSCRIBE' | 'UNSUBSCRIBE', streams: string[]): boolean {
+    if (!streams.length) {
+      return true;
+    }
+
+    const payload = { method, params: streams, id: Date.now() };
+    try {
+      ws.send(JSON.stringify(payload));
+      if (method === 'SUBSCRIBE') {
+        for (const stream of streams) {
+          this.pendingSubscriptions.delete(stream);
+          this.activeStreams.add(stream);
+        }
+      } else {
+        for (const stream of streams) {
+          this.pendingUnsubscriptions.delete(stream);
+          this.activeStreams.delete(stream);
+        }
+      }
+      return true;
+    } catch (error) {
+      const action = method === 'SUBSCRIBE' ? 'subscribe' : 'unsubscribe';
+      const targets = streams.join(', ');
+      console.error(`❌ Failed to ${action} shard ${this.id} ${method === 'SUBSCRIBE' ? 'to' : 'from'} ${targets}:`, error);
+      return false;
+    }
   }
 
   private scheduleReconnect(): void {
@@ -2341,6 +2467,7 @@ class BinanceKlineShard {
   private stopSocket(): void {
     this.clearReconnectTimer();
     this.stopHeartbeatMonitoring();
+    this.clearSubscriptionDrainTimer();
     if (this.ws) {
       try { this.ws.close(); } catch {}
       this.ws = null;
@@ -2349,6 +2476,8 @@ class BinanceKlineShard {
     this.isConnecting = false;
     this.reconnectAttempts = 0;
     this.lastCloseCode = null;
+    this.pendingSubscriptions.clear();
+    this.pendingUnsubscriptions.clear();
   }
 
   private clearReconnectTimer(): void {
@@ -2516,6 +2645,67 @@ export function createTestBinanceWebSocketHarness() {
     },
     seedExchangeSymbols(symbols: string[]) {
       manager.seedExchangeSymbols(symbols);
+    },
+  };
+}
+
+export function createKlineShardQueueTestHarness() {
+  class StubSocket extends EventEmitter {
+    readyState: number = WebSocket.CONNECTING;
+    attempts: string[] = [];
+    sent: string[] = [];
+
+    send(data: string): void {
+      this.attempts.push(data);
+      if (this.readyState !== WebSocket.OPEN) {
+        throw new Error(`WebSocket is not open: readyState ${this.readyState}`);
+      }
+      this.sent.push(data);
+    }
+
+    ping(): void {}
+
+    pong(): void {}
+
+    close(): void {}
+
+    terminate(): void {}
+  }
+
+  const socket = new StubSocket();
+  const managerStub = {
+    onShardMessage: () => {},
+    isShutdownRequested: () => false,
+  };
+  const shard = new BinanceKlineShard({
+    id: 0,
+    manager: managerStub as unknown as BinanceWebSocketManager,
+    endpoints: BINANCE_ENDPOINTS,
+    maxStreams: 64,
+    reconnectSkewMs: 0,
+    reconnectJitterMs: 0,
+    socketFactory: () => socket as unknown as WebSocket,
+    testModeOverride: false,
+  });
+
+  return {
+    shard,
+    socket,
+    attempts(): string[] {
+      return [...socket.attempts];
+    },
+    sent(): any[] {
+      return socket.sent.map(entry => JSON.parse(entry));
+    },
+    async flush(): Promise<void> {
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    },
+    emitOpen(): void {
+      socket.readyState = WebSocket.OPEN;
+      socket.emit('open');
+    },
+    setReadyState(state: number): void {
+      socket.readyState = state;
     },
   };
 }
