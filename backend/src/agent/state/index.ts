@@ -29,6 +29,7 @@ import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
 import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { computeAdaptiveEvThreshold } from './evThreshold.js';
 import type { LiquidityType } from '../../quantai/index.js';
 import {
   evaluateRecognizedStrategies,
@@ -3200,7 +3201,22 @@ export class ReboundRejectionAgent {
       const dir = side === 'buy' ? 1 : -1;
       const priceDiff = dir * (tp1ForEv - entry);
       const expectedPnL1 = qty > 0 && priceDiff > 0 ? qty * priceDiff : 0;
-      const minExpectedTp1Pnl = targetSizingEnabled && targetMinTp1PnlUsd > 0 ? targetMinTp1PnlUsd : 3;
+      const minExpectedTp1PnlBase = targetSizingEnabled && targetMinTp1PnlUsd > 0 ? targetMinTp1PnlUsd : 3;
+      const effectiveAtrForEv = typeof entryZoneMeta?.atrPct === 'number'
+        ? entryZoneMeta.atrPct
+        : typeof snapAtrPct === 'number'
+          ? snapAtrPct
+          : null;
+      const minAtrForEv = typeof entryZoneMeta?.atrPctBase === 'number'
+        ? entryZoneMeta.atrPctBase
+        : effectiveAtrForEv ?? 0;
+      const minExpectedTp1Pnl = computeAdaptiveEvThreshold({
+        baseThreshold: minExpectedTp1PnlBase,
+        stopPct,
+        tp1RMultiple: tp1RMultiple ?? null,
+        effectiveAtr: effectiveAtrForEv ?? null,
+        minAtr: minAtrForEv,
+      });
       if (expectedPnL1 + 1e-6 < minExpectedTp1Pnl) {
         const notionalUsd = qty * entry;
         const tp1PctDist = entry > 0 ? Math.abs((tp1ForEv - entry) / entry) * 100 : null;
@@ -6196,6 +6212,16 @@ export class ReboundRejectionAgent {
       slopeFloor,
       Math.min(minSlopeAbsPct * relaxedMultiplier, Math.max(minSlopeAbsPct - relaxation, slopeFloor))
     );
+
+    if (atrPct > 0 && Number.isFinite(atrPct)) {
+      const atrReference = Math.max(0.12, Math.min(1.2, minAtr));
+      const atrRatio = atrReference > 0 ? atrPct / atrReference : 1;
+      if (atrRatio < 1) {
+        const deficit = Math.min(0.45, (1 - atrRatio) * 0.55);
+        const atrRelaxed = Math.max(slopeFloor * 0.9, minSlopeRequirement * (1 - deficit));
+        minSlopeRequirement = Math.min(minSlopeRequirement, atrRelaxed);
+      }
+    }
 
     if (isLowerTimeframeBreakout && adxValue > minAdxRequired) {
       const headroom = adxValue - minAdxRequired;
