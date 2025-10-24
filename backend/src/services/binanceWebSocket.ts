@@ -295,7 +295,8 @@ class BinanceWebSocketManager {
   private readonly maxReconnectDelayMs = 30_000;
   private pingTimer: NodeJS.Timeout | null = null;
   private shuttingDown = false;
-  
+  private readonly isTestMode = process.env.UNIT_TEST_MODE === 'true';
+
   // Cache en mémoire pour les données temps réel
   private tickersCache = new Map<string, BinanceTickerData>();
   private klinesCache = new Map<string, BinanceKlineData[]>();
@@ -332,6 +333,15 @@ class BinanceWebSocketManager {
   private timestampDriftForceAgeMs = 5_000;
   private readonly forcedReconnectCooldownMs = 45_000;
   private readonly forcedReconnectDelayMs = 400;
+  private serverTimeOffsetMs = 0;
+  private serverTimeOffsetSamples: number[] = [];
+  private serverTimeSyncTimer: NodeJS.Timeout | null = null;
+  private serverTimeSyncInFlight: Promise<void> | null = null;
+  private serverTimeLastSyncMs = 0;
+  private lastServerTimeLogMs = 0;
+  private readonly serverTimeSyncIntervalMs: number;
+  private readonly serverTimeAdjustmentThresholdMs: number;
+  private readonly maxServerTimeSamples = 5;
 
   // Streams actifs
   private activeStreams = new Set<string>();
@@ -360,6 +370,16 @@ class BinanceWebSocketManager {
     const defaultTtl = 600_000; // 10 minutes
     const minTtl = process.env.UNIT_TEST_MODE === 'true' ? 100 : 60_000;
     this.klineSubscriptionTtlMs = Math.max(minTtl, Number.isFinite(envTtlRaw) && envTtlRaw > 0 ? envTtlRaw : defaultTtl);
+    const syncIntervalRaw = Number(process.env.BINANCE_SERVER_TIME_SYNC_INTERVAL_MS);
+    const adjustThresholdRaw = Number(process.env.BINANCE_SERVER_TIME_ADJUST_THRESHOLD_MS);
+    this.serverTimeSyncIntervalMs = Math.max(
+      15_000,
+      Number.isFinite(syncIntervalRaw) && syncIntervalRaw > 0 ? syncIntervalRaw : 60_000,
+    );
+    this.serverTimeAdjustmentThresholdMs = Math.max(
+      1_000,
+      Number.isFinite(adjustThresholdRaw) && adjustThresholdRaw > 0 ? adjustThresholdRaw : 2_500,
+    );
     this.klineReconcileTimer = setInterval(() => {
       try {
         this.reconcileKlineStreams();
@@ -372,6 +392,10 @@ class BinanceWebSocketManager {
     const cfg = getConfig();
     if (Number.isFinite(cfg.WS_MAX_TIMESTAMP_DRIFT_MS) && cfg.WS_MAX_TIMESTAMP_DRIFT_MS > 0) {
       this.timestampDriftForceAgeMs = Math.max(5_000, cfg.WS_MAX_TIMESTAMP_DRIFT_MS - 1_000);
+    }
+
+    if (!this.isTestMode) {
+      void this.refreshServerTimeOffset();
     }
   }
 
@@ -591,6 +615,7 @@ class BinanceWebSocketManager {
         }
         recordWsReconnect('global');
         this.applyReconnectGrace(Date.now());
+        this.startServerTimeSync();
 
         // Subscribe aux streams par défaut
         this.subscribeToAllTickers();
@@ -629,6 +654,7 @@ class BinanceWebSocketManager {
         this.lastAcceptedTs = 0;
         this.lastHealthReason = 'ws_close';
         updateWsConnectionState({ connected: false, healthy: false, reason: 'ws_close' });
+        this.stopServerTimeSync();
         if (this.pingTimer) {
           clearInterval(this.pingTimer);
           this.pingTimer = null;
@@ -805,6 +831,7 @@ class BinanceWebSocketManager {
     let processedCount = 0;
     let staleCount = 0;
     let maxStaleAge = 0;
+    let maxObservedTimestampAge = 0;
 
     for (const ticker of tickers) {
       const rawSymbol = String(ticker?.s || '').trim();
@@ -821,6 +848,14 @@ class BinanceWebSocketManager {
       const percentageRaw = parseTickerNumber(ticker.P ?? ticker.p ?? ticker.priceChangePercent);
       const timestampRaw = parseTickerNumber(ticker.E ?? ticker.eventTime ?? ticker.closeTime);
 
+      const originalTimestamp = Number.isFinite(timestampRaw) ? Number(timestampRaw) : receivedTs;
+      const rawTimestampAge = Math.max(0, receivedTs - originalTimestamp);
+      if (rawTimestampAge > maxObservedTimestampAge) {
+        maxObservedTimestampAge = rawTimestampAge;
+      }
+      const adjustedTimestamp = this.adjustFrameTimestamp(originalTimestamp, receivedTs);
+      const clockAdjustmentMs = Math.round(adjustedTimestamp - originalTimestamp);
+
       const tickerData: BinanceTickerData = {
         symbol: rawSymbol,
         last: lastRaw ?? NaN,
@@ -832,10 +867,17 @@ class BinanceWebSocketManager {
         high: highRaw ?? NaN,
         low: lowRaw ?? NaN,
         open: openRaw ?? NaN,
-        timestamp: timestampRaw ?? receivedTs,
+        timestamp: adjustedTimestamp,
       };
 
       const sanitization = this.sanitizeBidAsk(rawSymbol, tickerData, receivedTs);
+      let frameExtra = sanitization.extra ? { ...sanitization.extra } : undefined;
+
+      if (clockAdjustmentMs !== 0 && Number.isFinite(this.serverTimeOffsetMs)) {
+        frameExtra = frameExtra ?? {};
+        frameExtra.clockOffsetAppliedMs = clockAdjustmentMs;
+        frameExtra.serverTimeOffsetMs = Math.round(this.serverTimeOffsetMs);
+      }
 
       if (sanitization.needsSnapshot) {
         this.scheduleBookTickerRefresh(rawSymbol);
@@ -853,7 +895,7 @@ class BinanceWebSocketManager {
           dataAgeMs: 0,
           expectedSymbolId: rawSymbol,
           rawFrame: tickerData,
-          extra: { recovery: 'snapshot_requested', ...sanitization.extra },
+          extra: frameExtra ? { recovery: 'snapshot_requested', ...frameExtra } : { recovery: 'snapshot_requested' },
         });
         continue;
       }
@@ -885,7 +927,7 @@ class BinanceWebSocketManager {
         dataAgeMs: validation.dataAgeMs,
         expectedSymbolId: validation.expectedSymbolId,
         rawFrame: tickerData,
-        extra: sanitization.extra,
+        extra: frameExtra,
       });
 
       if (validation.status === 'rejected') {
@@ -920,6 +962,10 @@ class BinanceWebSocketManager {
 
     if (acceptedCount > 0) {
       this.lastAcceptedTs = receivedTs;
+    }
+
+    if (processedCount > 0) {
+      this.considerServerTimeResync(maxObservedTimestampAge, receivedTs);
     }
 
     this.lastUpdate = receivedTs;
@@ -982,6 +1028,158 @@ class BinanceWebSocketManager {
     while (this.staleFrameBursts.length && now - this.staleFrameBursts[0] > this.staleBurstWindowMs) {
       this.staleFrameBursts.shift();
     }
+  }
+
+  private adjustFrameTimestamp(frameTimestamp: number, receivedTs: number): number {
+    const timestamp = Number(frameTimestamp);
+    if (!Number.isFinite(timestamp)) {
+      return receivedTs;
+    }
+
+    const offset = this.serverTimeOffsetMs;
+    if (!Number.isFinite(offset)) {
+      return timestamp;
+    }
+
+    const offsetMagnitude = Math.abs(offset);
+    if (offsetMagnitude < this.serverTimeAdjustmentThresholdMs) {
+      return timestamp;
+    }
+
+    const adjusted = timestamp - offset;
+    const originalDiff = Math.abs(receivedTs - timestamp);
+    const adjustedDiff = Math.abs(receivedTs - adjusted);
+
+    if (adjustedDiff + 200 < originalDiff) {
+      return adjusted;
+    }
+
+    return timestamp;
+  }
+
+  private considerServerTimeResync(observedAgeMs: number, receivedTs: number): void {
+    if (this.isTestMode) return;
+    if (observedAgeMs <= this.serverTimeAdjustmentThresholdMs) {
+      return;
+    }
+
+    const offsetMagnitude = Math.abs(this.serverTimeOffsetMs);
+    if (
+      offsetMagnitude >= this.serverTimeAdjustmentThresholdMs
+      && Math.abs(offsetMagnitude - observedAgeMs) <= 1_500
+    ) {
+      return;
+    }
+
+    if (this.serverTimeSyncInFlight) {
+      return;
+    }
+
+    if (receivedTs - this.serverTimeLastSyncMs < 5_000) {
+      return;
+    }
+
+    void this.refreshServerTimeOffset();
+  }
+
+  private startServerTimeSync(): void {
+    if (this.isTestMode || this.serverTimeSyncTimer) {
+      return;
+    }
+
+    this.serverTimeSyncTimer = setInterval(() => {
+      void this.refreshServerTimeOffset();
+    }, this.serverTimeSyncIntervalMs);
+    this.serverTimeSyncTimer.unref?.();
+
+    void this.refreshServerTimeOffset();
+  }
+
+  private stopServerTimeSync(): void {
+    if (this.serverTimeSyncTimer) {
+      clearInterval(this.serverTimeSyncTimer);
+      this.serverTimeSyncTimer = null;
+    }
+  }
+
+  private async refreshServerTimeOffset(): Promise<void> {
+    if (this.isTestMode) {
+      return;
+    }
+
+    if (this.serverTimeSyncInFlight) {
+      await this.serverTimeSyncInFlight;
+      return;
+    }
+
+    const task = (async () => {
+      try {
+        const start = Date.now();
+        const response = await fetch(`${this.endpoints.rest}/fapi/v1/time`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload: any = await response.json();
+        const serverTimeValue = Number(
+          payload?.serverTime
+          ?? payload?.server_time
+          ?? payload?.serverTimeMs
+          ?? payload?.time,
+        );
+        if (!Number.isFinite(serverTimeValue)) {
+          throw new Error('Invalid server time response');
+        }
+
+        const end = Date.now();
+        const latency = (end - start) / 2;
+        const estimatedLocalNow = start + latency;
+        const offset = serverTimeValue - estimatedLocalNow;
+        this.recordServerTimeOffset(offset);
+        this.serverTimeLastSyncMs = Date.now();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ Failed to sync Binance server time: ${message}`);
+      }
+    })();
+
+    this.serverTimeSyncInFlight = task;
+    try {
+      await task;
+    } finally {
+      this.serverTimeSyncInFlight = null;
+    }
+  }
+
+  private recordServerTimeOffset(offset: number): void {
+    if (!Number.isFinite(offset)) {
+      return;
+    }
+
+    this.serverTimeOffsetSamples.push(offset);
+    if (this.serverTimeOffsetSamples.length > this.maxServerTimeSamples) {
+      this.serverTimeOffsetSamples.shift();
+    }
+
+    const sorted = [...this.serverTimeOffsetSamples].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const previous = this.serverTimeOffsetMs;
+    this.serverTimeOffsetMs = median;
+
+    const now = Date.now();
+    if (!Number.isFinite(previous) || Math.abs(previous - this.serverTimeOffsetMs) >= 500) {
+      if (now - this.lastServerTimeLogMs >= 30_000) {
+        console.log(`🕒 Binance server clock offset ${Math.round(this.serverTimeOffsetMs)}ms`);
+        this.lastServerTimeLogMs = now;
+      }
+    }
+  }
+
+  setServerTimeOffsetForTest(offsetMs: number): void {
+    if (!this.isTestMode) {
+      return;
+    }
+    this.serverTimeOffsetMs = offsetMs;
+    this.serverTimeOffsetSamples = [offsetMs];
   }
 
   private handleBookTickerUpdate(payload: any): void {
@@ -1978,6 +2176,7 @@ export function createTestBinanceWebSocketHarness() {
   const internal = manager as unknown as {
     isConnected: boolean;
     handleAllTickersUpdate: (tickers: any[]) => void;
+    setServerTimeOffsetForTest?: (offsetMs: number) => void;
   };
 
   internal.isConnected = true;
@@ -2011,6 +2210,9 @@ export function createTestBinanceWebSocketHarness() {
     },
     getShardStreams() {
       return manager.getKlineShardSnapshot();
+    },
+    setServerOffset(offsetMs: number) {
+      internal.setServerTimeOffsetForTest?.(offsetMs);
     },
   };
 }
