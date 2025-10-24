@@ -200,10 +200,7 @@ export default function SessionCockpitPage() {
         value: currentAggressiveness ? currentAggressiveness.toUpperCase() : '—',
       },
     ];
-    const allocated = status?.session?.allocatedUsd ?? agent?.profile?.allocatedUsd;
-    if (Number.isFinite(Number(allocated))) {
-      items.push({ label: 'Allocated', value: formatUsd(allocated) });
-    }
+    items.push({ label: 'Capital source', value: 'Shared pool' });
     const available = agent?.profile?.availableUsd ?? agent?.balance?.freeUsd;
     if (Number.isFinite(Number(available))) {
       items.push({ label: 'Available', value: formatUsd(available) });

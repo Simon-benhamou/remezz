@@ -1,10 +1,10 @@
 import React from 'react';
 import {
+  Alert,
   Button,
   Card,
   Empty,
   Form,
-  InputNumber,
   Modal,
   Segmented,
   Select,
@@ -74,7 +74,6 @@ type AgentSession = {
 type CreationFormShape = {
   smartAutoMode: boolean;
   symbol?: string;
-  startBalanceUsd?: number;
   maxLeverage: number;
   aggressiveness: AggressivenessLevel;
   mode: AppMode;
@@ -284,7 +283,6 @@ export default function SessionsPage() {
       smartAutoMode: true,
       maxLeverage: 4,
       aggressiveness: 'conservative',
-      startBalanceUsd: undefined,
       mode: currentMode,
     });
     setModalOpen(true);
@@ -297,7 +295,6 @@ export default function SessionsPage() {
       form.setFieldsValue({
         smartAutoMode: Boolean(session.isSmartAgent),
         symbol: session.symbol,
-        startBalanceUsd: session.startBalanceUsd,
         maxLeverage:
           Number((session.profile as any)?.requestedMaxLeverage ?? (session.profile as any)?.maxLeverage ?? 4) || 4,
         aggressiveness: ((session.profile as any)?.aggressiveness as AggressivenessLevel) ?? 'conservative',
@@ -369,7 +366,6 @@ export default function SessionsPage() {
       const payload = {
         mode: values.mode ?? currentMode,
         smartAutoMode: values.smartAutoMode,
-        startBalanceUsd: values.startBalanceUsd,
         maxLeverage: values.maxLeverage,
         aggressiveness: values.aggressiveness,
         strategyEngine: values.strategyEngine,
@@ -562,13 +558,23 @@ export default function SessionsPage() {
         },
       },
       {
-        title: 'Allocated',
-        key: 'allocated',
+        title: 'Capital source',
+        key: 'capitalSource',
         align: 'right',
-        render: (_, record) => (
-          <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
-            {formatUsd(record.startBalanceUsd ?? record.runtimeBalance?.allocatedUsd)}
-          </Text>
+        render: () => (
+          <Tooltip title="Allocation dynamique depuis le pool de capital partagé">
+            <Tag
+              style={{
+                borderRadius: 10,
+                border: 'none',
+                background: 'rgba(59, 130, 246, 0.12)',
+                color: '#93c5fd',
+                fontWeight: 600,
+              }}
+            >
+              Shared pool
+            </Tag>
+          </Tooltip>
         ),
       },
       {
@@ -852,10 +858,10 @@ export default function SessionsPage() {
                         <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>{session.symbol || '—'}</div>
                       </div>
                       <div>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Allocated</Text>
-                        <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 16 }}>
-                          {formatUsd(session.startBalanceUsd ?? session.runtimeBalance?.allocatedUsd)}
-                        </div>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>Capital source</Text>
+                        <Tooltip title="Allocation dynamique depuis le pool de capital partagé">
+                          <div style={{ color: '#93c5fd', fontWeight: 600, fontSize: 16 }}>Shared pool</div>
+                        </Tooltip>
                       </div>
                       <div>
                         <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>PnL</Text>
@@ -1011,13 +1017,18 @@ export default function SessionsPage() {
           )}
 
           {currentMode !== 'live' && (
-            <Form.Item
-              label={<Text style={{ color: '#e2e8f0' }}>Paper balance allocation (USD)</Text>}
-              name="startBalanceUsd"
-              rules={[{ type: 'number', min: 0 }]}
-            >
-              <InputNumber style={{ width: '100%' }} min={0} step={100} />
-            </Form.Item>
+            <Alert
+              type="info"
+              showIcon
+              message="Shared capital pool"
+              description="Allocation dynamique depuis le pool : chaque agent réserve le capital dont il a besoin en fonction du solde disponible."
+              style={{
+                background: 'rgba(59, 130, 246, 0.08)',
+                border: '1px solid rgba(59, 130, 246, 0.24)',
+                borderRadius: 12,
+                color: '#e2e8f0',
+              }}
+            />
           )}
 
           <Form.Item label={<Text style={{ color: '#e2e8f0' }}>Max leverage</Text>} name="maxLeverage">
