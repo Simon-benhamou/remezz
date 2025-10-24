@@ -46,4 +46,24 @@ for (let batch = 0; batch < 3; batch += 1) {
 assert.equal(forcedReasons.length, 1, `expected one forced reconnect, got ${forcedReasons.length}`);
 assert.equal(forcedReasons[0], 'timestamp_drift');
 
+const graceNow = baseNow + 10_000;
+(manager).tickersCache.set('BTCUSDT', {
+  symbol: 'BTCUSDT',
+  last: 100,
+  bid: 99,
+  ask: 101,
+  percentage: 0,
+  baseVolume: 0,
+  quoteVolume: 0,
+  high: 101,
+  low: 99,
+  open: 100,
+  timestamp: graceNow - 1_000,
+  receivedAt: graceNow - 1_000,
+});
+harness.applyGrace(graceNow);
+
+assert.equal(harness.isHealthyAt(graceNow + 1_000), true, 'expected grace period to report healthy');
+assert.equal(harness.isHealthyAt(graceNow + 16_000), false, 'expected grace period to expire');
+
 console.log('ws-force-reconnect ✅');

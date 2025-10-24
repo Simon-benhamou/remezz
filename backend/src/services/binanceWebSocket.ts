@@ -108,6 +108,9 @@ const REST_FALLBACK_GLOBAL_MAX = Math.max(
     : 18,
 );
 
+const WS_UNHEALTHY_LOG_THROTTLE_MS = 2_000;
+const lastWsUnhealthyLogTs = new Map<string, number>();
+
 const restFallbackHistory: number[] = [];
 const restFallbackSymbolTs = new Map<string, number>();
 const restFallbackInflight = new Map<string, Promise<unknown>>();
@@ -554,10 +557,7 @@ class BinanceWebSocketManager {
           entry.active = false;
         }
         recordWsReconnect('global');
-        this.lastHealthy = false;
-        this.lastAcceptedTs = 0;
-        this.lastHealthReason = 'ws_open';
-        updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
+        this.applyReconnectGrace(Date.now());
 
         // Subscribe aux streams par défaut
         this.subscribeToAllTickers();
@@ -1075,6 +1075,22 @@ class BinanceWebSocketManager {
   private pruneTimestampDriftBursts(now: number): void {
     while (this.timestampDriftBurstEvents.length && now - this.timestampDriftBurstEvents[0] > this.timestampDriftBurstWindowMs) {
       this.timestampDriftBurstEvents.shift();
+    }
+  }
+
+  private applyReconnectGrace(now: number): void {
+    const hasSnapshot = this.tickersCache.size > 0;
+    if (hasSnapshot) {
+      this.lastAcceptedTs = now;
+      this.lastUpdate = now;
+      this.lastHealthy = true;
+      this.lastHealthReason = 'ws_open_grace';
+      updateWsConnectionState({ connected: true, healthy: true, reason: 'ws_open_grace' });
+    } else {
+      this.lastAcceptedTs = 0;
+      this.lastHealthy = false;
+      this.lastHealthReason = 'ws_open';
+      updateWsConnectionState({ connected: true, healthy: false, reason: 'ws_open' });
     }
   }
 
@@ -1722,6 +1738,9 @@ export function createTestBinanceWebSocketHarness() {
     setConnected(connected: boolean) {
       internal.isConnected = connected;
     },
+    applyGrace(now: number) {
+      withFakeNow(now, () => (internal as any).applyReconnectGrace(now));
+    },
   };
 }
 
@@ -1732,7 +1751,12 @@ export async function getTickerFromWebSocket(symbol: string): Promise<BinanceTic
   const ws = getBinanceWebSocket();
 
   if (!ws.isHealthy()) {
-    console.warn(`⚠️ WebSocket not healthy for ${symbol}, fallback required`);
+    const now = Date.now();
+    const lastLogTs = lastWsUnhealthyLogTs.get(symbol) ?? 0;
+    if (now - lastLogTs >= WS_UNHEALTHY_LOG_THROTTLE_MS) {
+      console.warn(`⚠️ WebSocket not healthy for ${symbol}, fallback required`);
+      lastWsUnhealthyLogTs.set(symbol, now);
+    }
     setFallbackState(symbol, true, 'ws_unhealthy', { increment: false });
     return null;
   }
@@ -1759,6 +1783,7 @@ export async function getTickerFromWebSocket(symbol: string): Promise<BinanceTic
   ticker.receivedAt = ticker.receivedAt ?? now;
   ticker.stale = false;
   setFallbackState(symbol, false);
+  lastWsUnhealthyLogTs.delete(symbol);
   return ticker;
 }
 
