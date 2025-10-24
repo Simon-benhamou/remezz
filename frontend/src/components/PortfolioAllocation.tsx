@@ -203,7 +203,7 @@ const PortfolioAllocation: React.FC = () => {
       ),
     },
     {
-      title: "Allocated $",
+      title: "Pool usage $",
       dataIndex: "allocated",
       key: "allocated",
       align: "right",
@@ -271,7 +271,7 @@ const PortfolioAllocation: React.FC = () => {
             <span className="value">{formatCurrency(paperBalance)}</span>
           </div>
           <div className="pa-kpi">
-            <span className="label">Allocated</span>
+            <span className="label">Pool usage</span>
             <span className="value">{formatCurrency(totals.allocated)}</span>
           </div>
           <div className="pa-kpi">
@@ -388,7 +388,7 @@ const PortfolioAllocation: React.FC = () => {
           <div className="footer-value">{formatPercent(totals.targetPercent, 0)}</div>
         </div>
         <div>
-          <div className="footer-label">Allocated</div>
+          <div className="footer-label">Pool usage</div>
           {formatFooterValue(totals.allocated)}
         </div>
         <div>
