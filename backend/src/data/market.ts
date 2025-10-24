@@ -254,7 +254,7 @@ export function isSyntheticSeries(data: number[][]): boolean {
   if (window === 0) return false;
   const tail = data.slice(-window);
   let consecutive = 0;
-  for (let i = tail.length - 1; i >= 0; i -= 1) {
+  for (let i = 0; i < tail.length; i += 1) {
     const row = tail[i];
     if (!Array.isArray(row) || row.length < 6) continue;
     const open = Number(row[1]);
@@ -270,7 +270,7 @@ export function isSyntheticSeries(data: number[][]): boolean {
         return true;
       }
     } else {
-      break;
+      consecutive = 0;
     }
   }
   return false;
