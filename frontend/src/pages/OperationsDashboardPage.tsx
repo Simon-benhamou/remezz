@@ -46,6 +46,7 @@ import AgentHealthTable, { type AgentHealthRow } from '../components/AgentHealth
 import { formatDisplaySymbol } from '../utils/symbols';
 import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import { useDashboard } from '../hooks/useDashboard';
+import { useAppStore } from '../store';
 import { collectOpsEventReasons, formatOpsEventMessage } from '../utils/opsEvents';
 import {
   STRATEGY_META,
@@ -208,6 +209,7 @@ const OperationsDashboardPage: React.FC = () => {
   const [recentTradesLoading, setRecentTradesLoading] = React.useState(false);
   const [reselecting, setReselecting] = React.useState<Record<string, boolean>>({});
   const [strategyFilter, setStrategyFilter] = React.useState<'all' | StrategyEngineOption>('all');
+  const mode = useAppStore((state) => state.mode);
 
   const strategyOptions = React.useMemo(
     () => {
@@ -322,12 +324,22 @@ const OperationsDashboardPage: React.FC = () => {
     ? new Date(opsMetrics.timestamp).toLocaleTimeString()
     : '—';
 
+  const capitalPool = React.useMemo(() => {
+    const pool = overview?.capitalPool;
+    if (!pool) return null;
+    if (mode === 'live') return pool.live ?? null;
+    return pool.paper ?? null;
+  }, [overview, mode]);
+
   const totalEquityUsd = Number(
-    overview?.equityUsd ||
-      overview?.paperBalance?.equityUsd ||
-      overview?.exchangeBalance?.totalUsd ||
+    capitalPool?.totalUsd ??
+      (mode === 'live' ? overview?.exchangeBalance?.totalUsd : overview?.paperBalance?.equityUsd) ??
+      overview?.equityUsd ??
       0,
   );
+  const freeCapitalUsd = Number(capitalPool?.freeUsd ?? 0);
+  const reservedCapitalUsd = Number(capitalPool?.reservedUsd ?? 0);
+  const inPositionsUsd = Number(capitalPool?.inPositionsUsd ?? 0);
   const pnlUsd = Number(overview?.pnlUsd || 0);
   const roiPct = Number(overview?.roiPct || 0);
   const netRoiCandidate = Number(overview?.netRoiPct);
@@ -466,11 +478,18 @@ const OperationsDashboardPage: React.FC = () => {
 
   const summaryCards = [
     {
-      key: 'balance',
-      title: 'Balance',
+      key: 'capital',
+      title: mode === 'live' ? 'Live capital pool' : 'Paper capital pool',
       value: formatUsd(totalEquityUsd),
-      helper: `PnL ${formatUsd(pnlUsd)}`,
+      helper: `Free ${formatUsd(freeCapitalUsd)} · Reserved ${formatUsd(reservedCapitalUsd)} · In-pos ${formatUsd(inPositionsUsd)}`,
       accent: '#38bdf8',
+    },
+    {
+      key: 'pnl',
+      title: 'PnL',
+      value: formatUsd(pnlUsd),
+      helper: `Net equity ${formatUsd(totalEquityUsd)}`,
+      accent: pnlUsd >= 0 ? '#34d399' : '#f87171',
     },
     {
       key: 'roi',

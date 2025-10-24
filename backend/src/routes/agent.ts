@@ -31,6 +31,8 @@ import { stopAllAgents } from '../services/stopAllAgents.js';
 import { resolveRrExpectancyConfig } from '../risk/rrExpectancy.js';
 import { getPortfolioSnapshot, updatePortfolioBalance, rebalancePortfolio } from '../services/portfolioManager.js';
 import { resolveStrategySnapshot } from '../utils/strategySnapshot.js';
+import { getBalanceSnapshot } from '../services/capitalPool.js';
+import type { BalanceSnapshot } from '../core/capital/types.js';
 
 export const router = Router();
 
@@ -1276,18 +1278,57 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       };
     });
 
+    function serializeSnapshot(snapshot: BalanceSnapshot | null) {
+      if (!snapshot) return null;
+      return {
+        totalUsd: snapshot.totalUSD.toNumber(),
+        freeUsd: snapshot.freeUSD.toNumber(),
+        reservedUsd: snapshot.reservedUSD.toNumber(),
+        inPositionsUsd: snapshot.inPositionsUSD.toNumber(),
+        ts: snapshot.ts,
+      };
+    }
+
+    let paperCapital: ReturnType<typeof serializeSnapshot> | null = null;
+    let liveCapital: ReturnType<typeof serializeSnapshot> | null = null;
+    try {
+      const [paperSnap, liveSnap] = await Promise.all([
+        getBalanceSnapshot('paper'),
+        getBalanceSnapshot('live'),
+      ]);
+      paperCapital = serializeSnapshot(paperSnap);
+      liveCapital = serializeSnapshot(liveSnap);
+    } catch (error) {
+      console.warn('⚠️ Failed to resolve capital pool snapshot for overview:', error);
+    }
+
+    const selectedPool = modeFilter === 'live' ? liveCapital : paperCapital;
+    const poolEquityUsd = selectedPool?.totalUsd;
+
     const payload = {
       activeCount: actives.length,
       sessionsCount: totalSessions,
       symbols,
       pnlUsd,
       capitalStartUsd,
-      equityUsd: Number(capitalStartUsd) + Number(pnlUsd),
+      equityUsd: poolEquityUsd != null ? poolEquityUsd : Number(capitalStartUsd) + Number(pnlUsd),
       roiPct,
       avgWinRate,
       aiCallsTotal,
       exchangeBalance,
-      paperBalance,
+      paperBalance: paperCapital
+        ? {
+            equityUsd: paperCapital.totalUsd,
+            freeUsd: paperCapital.freeUsd,
+            committedUsd: paperCapital.reservedUsd,
+            agentsCount: actives.filter((session) => session.mode === 'paper').length,
+            lastUpdated: paperCapital.ts ? new Date(paperCapital.ts).toISOString() : new Date().toISOString(),
+          }
+        : paperBalance,
+      capitalPool: {
+        paper: paperCapital,
+        live: liveCapital,
+      },
       sessions: sessionsData, // ✅ Ajout des sessions dans la réponse
       netRoiPct,
       updatedAt: new Date().toISOString(),
