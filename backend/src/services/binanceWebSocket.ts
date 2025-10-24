@@ -1931,6 +1931,7 @@ class BinanceKlineShard {
   private readonly maxStreams: number;
   private ws: WebSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
   private isConnecting = false;
   private isConnected = false;
   private desiredStreams = new Set<string>();
@@ -1938,6 +1939,10 @@ class BinanceKlineShard {
   private reconnectAttempts = 0;
   private readonly baseBackoffMs = 2_000;
   private readonly maxBackoffMs = 30_000;
+  private readonly heartbeatIntervalMs = 30_000;
+  private readonly heartbeatTimeoutMs = 90_000;
+  private lastPongTs = 0;
+  private lastMessageTs = 0;
   private readonly isTestMode = process.env.UNIT_TEST_MODE === 'true';
 
   constructor(options: BinanceKlineShardOptions) {
@@ -2028,6 +2033,7 @@ class BinanceKlineShard {
       this.isConnecting = false;
       this.reconnectAttempts = 0;
       this.activeStreams.clear();
+      this.startHeartbeatMonitoring();
       this.flushSubscriptions();
     });
 
@@ -2041,6 +2047,7 @@ class BinanceKlineShard {
           const stream = payload.stream;
           const data = payload.data;
           if (typeof stream === 'string' && stream.includes('@kline_')) {
+            this.lastMessageTs = Date.now();
             this.manager.onShardMessage(stream, data);
           }
         }
@@ -2049,11 +2056,23 @@ class BinanceKlineShard {
       }
     });
 
-    ws.on('close', () => {
-      console.warn(`⚠️ Binance kline shard ${this.id} closed`);
+    ws.on('pong', () => {
+      this.lastPongTs = Date.now();
+    });
+
+    ws.on('ping', () => {
+      try { ws.pong(); } catch {}
+    });
+
+    ws.on('close', (code, reason) => {
+      const reasonText = typeof reason?.toString === 'function' ? reason.toString('utf8') : '';
+      const trimmed = reasonText.trim();
+      const suffix = trimmed ? ` (code ${code}, reason: ${trimmed})` : code ? ` (code ${code})` : '';
+      console.warn(`⚠️ Binance kline shard ${this.id} closed${suffix}`);
       this.isConnected = false;
       this.isConnecting = false;
       this.ws = null;
+      this.stopHeartbeatMonitoring();
       this.activeStreams.clear();
       if (this.desiredStreams.size > 0 && !this.manager.isShutdownRequested()) {
         this.scheduleReconnect();
@@ -2062,6 +2081,9 @@ class BinanceKlineShard {
 
     ws.on('error', (error) => {
       console.error(`❌ Binance kline shard ${this.id} error:`, error instanceof Error ? error.message : error);
+      if (!this.isTestMode) {
+        try { this.ws?.terminate(); } catch {}
+      }
     });
   }
 
@@ -2122,6 +2144,7 @@ class BinanceKlineShard {
     const attempt = this.reconnectAttempts;
     this.reconnectAttempts += 1;
     const delay = Math.min(this.baseBackoffMs * Math.pow(2, attempt), this.maxBackoffMs);
+    console.warn(`🔄 Scheduling Binance kline shard ${this.id} reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
       this.ensureConnected();
@@ -2131,6 +2154,7 @@ class BinanceKlineShard {
 
   private stopSocket(): void {
     this.clearReconnectTimer();
+    this.stopHeartbeatMonitoring();
     if (this.ws) {
       try { this.ws.close(); } catch {}
       this.ws = null;
@@ -2144,6 +2168,47 @@ class BinanceKlineShard {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private startHeartbeatMonitoring(): void {
+    if (this.isTestMode) {
+      return;
+    }
+    this.stopHeartbeatMonitoring();
+    this.lastPongTs = Date.now();
+    this.lastMessageTs = Date.now();
+    this.heartbeatTimer = setInterval(() => {
+      this.runHeartbeatCheck();
+    }, this.heartbeatIntervalMs);
+    this.heartbeatTimer.unref?.();
+  }
+
+  private stopHeartbeatMonitoring(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private runHeartbeatCheck(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const now = Date.now();
+    try {
+      this.ws.ping();
+    } catch (error) {
+      console.error(`❌ Binance kline shard ${this.id} failed to send ping:`, error instanceof Error ? error.message : error);
+      return;
+    }
+
+    const sinceLastPong = now - this.lastPongTs;
+    const sinceLastMessage = now - this.lastMessageTs;
+    if (sinceLastPong > this.heartbeatTimeoutMs && sinceLastMessage > this.heartbeatTimeoutMs) {
+      console.warn(`⚠️ Binance kline shard ${this.id} heartbeat timeout (pong ${sinceLastPong}ms, message ${sinceLastMessage}ms), forcing reconnect`);
+      try { this.ws.terminate(); } catch {}
     }
   }
 }
