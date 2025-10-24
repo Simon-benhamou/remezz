@@ -9,6 +9,21 @@ import { evaluateTickerFrame } from './tickerValidation.js';
 
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
+const SYNTHETIC_WARN_INTERVAL_MS = 60_000;
+const syntheticWarnedAt = new Map<string, number>();
+
+function recordSyntheticWarning(tf: string, sample: number[][]): void {
+  const now = Date.now();
+  const lastWarn = syntheticWarnedAt.get(tf) || 0;
+  if (now - lastWarn < SYNTHETIC_WARN_INTERVAL_MS) return;
+  syntheticWarnedAt.set(tf, now);
+  try {
+    console.warn(`synthetic_ohlcv_detected:${tf}`, {
+      sample: sample.slice(-3).map((row) => row?.[5]),
+    });
+  } catch {}
+}
+
 type OhlcvOverride = (
   symbol: string,
   tf: string,
@@ -262,11 +277,7 @@ function prepareOhlcvSeries(
   const clipped = trimmed.slice(-limit);
   const synthetic = isSyntheticSeries(clipped);
   if (synthetic) {
-    try {
-      console.warn(`synthetic_ohlcv_detected:${tf}`, {
-        sample: clipped.slice(-3).map((row) => row?.[5]),
-      });
-    } catch {}
+    recordSyntheticWarning(tf, clipped);
   }
   return { series: clipped, synthetic };
 }
@@ -850,6 +861,10 @@ export async function computeCoreIndicators(symbol: string) {
     rsi14: rsi(c, 14).at(-1),
     atr14: atr(o, 14).at(-1),
   };
+}
+
+export function __test_resetSyntheticWarningThrottle(): void {
+  syntheticWarnedAt.clear();
 }
 
 export { prepareOhlcvSeries as __test_prepareOhlcvSeries };
