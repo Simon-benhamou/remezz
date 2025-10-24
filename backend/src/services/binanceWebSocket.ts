@@ -378,7 +378,7 @@ class BinanceWebSocketManager {
     console.log('📡 Initializing Binance WebSocket Manager...');
     const envLimit = Number(process.env.BINANCE_MAX_KLINE_STREAMS || '30');
     const configuredLimit = Number.isFinite(envLimit) ? envLimit : 30;
-    this.maxKlineStreamsPerShard = Math.min(100, Math.max(5, configuredLimit));
+    this.maxKlineStreamsPerShard = Math.min(200, Math.max(5, configuredLimit));
     console.log(`📊 Binance WS manager limit: max ${this.maxKlineStreamsPerShard} concurrent kline streams per shard`);
     const envTtlRaw = Number(process.env.BINANCE_KLINE_SUBSCRIPTION_TTL_MS);
     const defaultTtl = 600_000; // 10 minutes
@@ -2097,12 +2097,15 @@ class BinanceKlineShard {
   private activeStreams = new Set<string>();
   private reconnectAttempts = 0;
   private readonly baseBackoffMs = 2_000;
-  private readonly maxBackoffMs = 30_000;
+  private readonly maxBackoffMs = 60_000;
   private readonly heartbeatIntervalMs = 30_000;
   private readonly heartbeatTimeoutMs = 90_000;
   private lastPongTs = 0;
   private lastMessageTs = 0;
   private readonly isTestMode = process.env.UNIT_TEST_MODE === 'true';
+  private hasConnectedOnce = false;
+  private initialConnectTimer: NodeJS.Timeout | null = null;
+  private lastCloseCode: number | null = null;
 
   constructor(options: BinanceKlineShardOptions) {
     this.id = options.id;
@@ -2128,6 +2131,17 @@ class BinanceKlineShard {
       return;
     }
 
+    if (!this.ws && !this.isConnecting && !this.hasConnectedOnce && !this.initialConnectTimer) {
+      const staggerDelay = Math.min(3_000, Math.max(0, this.reconnectSkewMs * (this.id + 1)));
+      this.initialConnectTimer = setTimeout(() => {
+        this.initialConnectTimer = null;
+        this.ensureConnected();
+        this.flushSubscriptions();
+      }, staggerDelay);
+      this.initialConnectTimer.unref?.();
+      return;
+    }
+
     this.ensureConnected();
     this.flushSubscriptions();
   }
@@ -2144,6 +2158,10 @@ class BinanceKlineShard {
     this.desiredStreams.clear();
     this.activeStreams.clear();
     this.stopSocket();
+    if (this.initialConnectTimer) {
+      clearTimeout(this.initialConnectTimer);
+      this.initialConnectTimer = null;
+    }
   }
 
   forceReconnect(): void {
@@ -2196,6 +2214,8 @@ class BinanceKlineShard {
       this.activeStreams.clear();
       this.startHeartbeatMonitoring();
       this.flushSubscriptions();
+      this.hasConnectedOnce = true;
+      this.lastCloseCode = null;
     });
 
     ws.on('message', (buffer: Buffer) => {
@@ -2235,6 +2255,7 @@ class BinanceKlineShard {
       this.ws = null;
       this.stopHeartbeatMonitoring();
       this.activeStreams.clear();
+      this.lastCloseCode = typeof code === 'number' ? code : null;
       if (this.desiredStreams.size > 0 && !this.manager.isShutdownRequested()) {
         this.scheduleReconnect();
       }
@@ -2304,10 +2325,11 @@ class BinanceKlineShard {
     }
     const attempt = this.reconnectAttempts;
     this.reconnectAttempts += 1;
-    const baseDelay = Math.min(this.baseBackoffMs * Math.pow(2, attempt), this.maxBackoffMs);
+    const exponentialDelay = Math.min(this.baseBackoffMs * Math.pow(2, attempt), this.maxBackoffMs);
+    const rateLimitPenalty = this.lastCloseCode === 1008 ? Math.min(30_000, exponentialDelay) : 0;
     const offset = Math.max(0, this.reconnectSkewMs * this.id);
     const jitter = this.reconnectJitterMs > 0 ? Math.floor(Math.random() * this.reconnectJitterMs) : 0;
-    const delay = Math.min(baseDelay + offset + jitter, this.maxBackoffMs + offset);
+    const delay = Math.min(this.maxBackoffMs, exponentialDelay + rateLimitPenalty) + offset + jitter;
     console.warn(`🔄 Scheduling Binance kline shard ${this.id} reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
@@ -2326,6 +2348,7 @@ class BinanceKlineShard {
     this.isConnected = false;
     this.isConnecting = false;
     this.reconnectAttempts = 0;
+    this.lastCloseCode = null;
   }
 
   private clearReconnectTimer(): void {
