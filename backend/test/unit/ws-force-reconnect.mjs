@@ -29,7 +29,7 @@ const staleTicker = (symbol, now) => ({
   v: '12345',
   q: '23456',
   P: '0.8',
-  E: now - 6_200,
+  E: now - 11_500,
 });
 
 for (let batch = 0; batch < 3; batch += 1) {
