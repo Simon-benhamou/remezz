@@ -891,6 +891,8 @@ const DEPTH_FLOOR_CENTS_BY_PROFILE = {
 const MAX_SPREAD_BPS = 8;
 const MIN_PASSIVE_FILL_RATE = 0.4;
 const PERFORMANCE_COOLDOWN_HOURS = 24;
+const ORDER_BOOK_MIN_INTERVAL_MS = 1_000;
+const orderBookThrottle = new Map<string, number>();
 
 function getDepthFloorCents(aggressiveness: StrategyFilterProfile['aggressiveness']): bigint {
   return DEPTH_FLOOR_CENTS_BY_PROFILE[aggressiveness] ?? DEPTH_FLOOR_CENTS_BY_PROFILE.reactive;
@@ -914,6 +916,60 @@ function sumDepthLevels(levels: Array<[number, number]>): bigint {
     if (usd > 0) total += BigInt(usd);
   }
   return total;
+}
+
+function resolveExchangeSymbol(exchange: any, symbol: string): string | null {
+  if (!symbol) return null;
+  const markets = exchange?.markets as Record<string, any> | undefined;
+  if (markets?.[symbol]) {
+    return markets[symbol]?.symbol ?? symbol;
+  }
+
+  const alt = toBinanceSwapSymbol(symbol);
+  if (alt !== symbol && markets?.[alt]) {
+    return markets[alt]?.symbol ?? alt;
+  }
+
+  try {
+    if (typeof exchange?.market === 'function') {
+      const market = exchange.market(symbol);
+      if (market?.symbol) return market.symbol;
+    }
+  } catch (error) {
+    if (isMissingSymbolError(error)) {
+      return null;
+    }
+  }
+
+  const upper = symbol.toUpperCase();
+  if (markets?.[upper]) {
+    return markets[upper]?.symbol ?? upper;
+  }
+
+  return null;
+}
+
+function shouldFetchOrderBook(symbol: string): boolean {
+  const now = Date.now();
+  const last = orderBookThrottle.get(symbol) ?? 0;
+  if (now - last < ORDER_BOOK_MIN_INTERVAL_MS) {
+    return false;
+  }
+  orderBookThrottle.set(symbol, now);
+  return true;
+}
+
+function resetOrderBookThrottle(): void {
+  orderBookThrottle.clear();
+}
+
+function isMissingSymbolError(error: unknown): boolean {
+  if (!error) return false;
+  const message = typeof (error as any)?.message === 'string' ? (error as any).message : String(error);
+  if (!message) return false;
+  return message.includes("Mandatory parameter 'symbol'")
+    || message.includes('INVALID_SYMBOL')
+    || message.includes('not found');
 }
 
 function deriveRegimeTag(regime: any | undefined, atrPct: number | null): CandidateRegimeTag {
@@ -1106,6 +1162,12 @@ async function computeCandidateMetrics(
   ticker: any,
   exchange: any,
 ): Promise<CandidateMetrics | null> {
+  const requestSymbol = typeof symbol === 'string' ? symbol.trim() : '';
+  if (!requestSymbol) {
+    console.debug('Skipping candidate with empty symbol');
+    return null;
+  }
+
   const volumeCents = numberToCents(performance.quoteVolume24h);
   if (volumeCents == null) return null;
 
@@ -1123,22 +1185,37 @@ async function computeCandidateMetrics(
     askDepthCents: BigInt(0),
   };
   try {
-    const ob = await exchange.fetchOrderBook(symbol, 5);
-    const obBid = Array.isArray(ob?.bids) ? ob.bids : [];
-    const obAsk = Array.isArray(ob?.asks) ? ob.asks : [];
-    const bestBid = obBid?.[0]?.[0];
-    const bestAsk = obAsk?.[0]?.[0];
-    if (spreadBps == null && Number.isFinite(bestBid) && Number.isFinite(bestAsk) && bestAsk > bestBid) {
-      const mid = (bestBid + bestAsk) / 2;
-      spreadBps = ((bestAsk - bestBid) / mid) * 10_000;
+    const marketSymbol = resolveExchangeSymbol(exchange, requestSymbol);
+    if (!marketSymbol) {
+      console.debug(`Skipping ${requestSymbol} - symbol not present in exchange markets`);
+      return null;
     }
-    book = {
-      spreadBps,
-      bidDepthCents: sumDepthLevels(obBid as Array<[number, number]>),
-      askDepthCents: sumDepthLevels(obAsk as Array<[number, number]>),
-    };
+
+    if (!shouldFetchOrderBook(marketSymbol)) {
+      console.debug(`Throttling order book fetch for ${marketSymbol}`);
+    } else {
+      const ob = await exchange.fetchOrderBook(marketSymbol, 5);
+      const obBid = Array.isArray(ob?.bids) ? ob.bids : [];
+      const obAsk = Array.isArray(ob?.asks) ? ob.asks : [];
+      const bestBid = obBid?.[0]?.[0];
+      const bestAsk = obAsk?.[0]?.[0];
+      if (spreadBps == null && Number.isFinite(bestBid) && Number.isFinite(bestAsk) && bestAsk > bestBid) {
+        const mid = (bestBid + bestAsk) / 2;
+        spreadBps = ((bestAsk - bestBid) / mid) * 10_000;
+      }
+      book = {
+        spreadBps,
+        bidDepthCents: sumDepthLevels(obBid as Array<[number, number]>),
+        askDepthCents: sumDepthLevels(obAsk as Array<[number, number]>),
+      };
+    }
   } catch (error) {
-    console.warn(`⚠️ Failed to fetch order book for ${symbol}:`, error);
+    if (isMissingSymbolError(error)) {
+      const message = typeof (error as any)?.message === 'string' ? (error as any).message : String(error);
+      console.debug(`Skipping ${requestSymbol} - exchange rejected symbol`, message);
+      return null;
+    }
+    console.debug(`Binance order book fetch warning for ${requestSymbol}:`, error);
   }
 
   let snapshot: TechnicalSnapshot;
@@ -1167,10 +1244,10 @@ async function computeCandidateMetrics(
   const atrPct = Number(snapshot?.atrPct ?? snapshot?.atr14 ?? null);
   const regimeTag = deriveRegimeTag(snapshot?.regime, Number.isFinite(atrPct) ? atrPct : null);
 
-  const performanceSnapshot = await fetchPerformanceSnapshot(symbol);
+  const performanceSnapshot = await fetchPerformanceSnapshot(requestSymbol);
 
   return {
-    symbol,
+    symbol: requestSymbol,
     baseScore: performance.combinedScore,
     volumeCents24h: volumeCents,
     lastPrice: performance.lastPrice,
@@ -1757,6 +1834,10 @@ export const __autoUniverseTestHooks = {
 
 export const __intelligentAgentTestHooks = {
   shouldDeferDueToRecentActivity,
+  resolveExchangeSymbol,
+  shouldFetchOrderBook,
+  isMissingSymbolError,
+  resetOrderBookThrottle,
 };
 
 /**
