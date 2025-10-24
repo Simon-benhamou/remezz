@@ -14,15 +14,33 @@ import {
 } from './types.js';
 import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 
+type CapitalStore = {
+  reservations: Map<string, Reservation>;
+  symbolExposure: Map<string, USD>;
+};
+
 export class CapitalManager {
+  private mutex: Promise<void> = Promise.resolve();
+
   constructor(
     private provider: BalanceProvider,
     private cfg: CapitalManagerConfig,
-    private readonly store: {
-      reservations: Map<string, Reservation>;
-      symbolExposure: Map<string, USD>;
-    },
+    private readonly store: CapitalStore,
   ) {}
+
+  private async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.mutex;
+    let release!: () => void;
+    this.mutex = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
 
   async getBalance(): Promise<BalanceSnapshot> {
     return this.provider.getSnapshot();
@@ -32,9 +50,11 @@ export class CapitalManager {
     return Array.from(this.store.reservations.values());
   }
 
-  clearLedger(): void {
-    this.store.reservations.clear();
-    this.store.symbolExposure.clear();
+  async clearLedger(): Promise<void> {
+    await this.runExclusive(async () => {
+      this.store.reservations.clear();
+      this.store.symbolExposure.clear();
+    });
   }
 
   private currentSymbolExposureUSD(symbol: string): USD {
@@ -58,6 +78,15 @@ export class CapitalManager {
   }
 
   async reserve(req: {
+    agentId: string;
+    symbol: string;
+    requestedUSD: USD | number | string;
+    minUSD?: USD | number | string;
+  }): Promise<Reservation | null> {
+    return this.runExclusive(() => this.reserveInternal(req));
+  }
+
+  private async reserveInternal(req: {
     agentId: string;
     symbol: string;
     requestedUSD: USD | number | string;
@@ -106,6 +135,10 @@ export class CapitalManager {
   }
 
   async commit(resId: string, actualFilledUSD?: USD | number | string): Promise<boolean> {
+    return this.runExclusive(() => this.commitInternal(resId, actualFilledUSD));
+  }
+
+  private async commitInternal(resId: string, actualFilledUSD?: USD | number | string): Promise<boolean> {
     const reservation = this.store.reservations.get(resId);
     if (!reservation || reservation.state !== 'reserved') return false;
 
@@ -131,6 +164,10 @@ export class CapitalManager {
   }
 
   async release(resId: string): Promise<boolean> {
+    return this.runExclusive(() => this.releaseInternal(resId));
+  }
+
+  private async releaseInternal(resId: string): Promise<boolean> {
     const reservation = this.store.reservations.get(resId);
     if (!reservation || reservation.state !== 'reserved') return false;
 
@@ -144,6 +181,10 @@ export class CapitalManager {
   }
 
   async settle(_positionId: string, symbol: string, freedUSD: USD | number | string): Promise<void> {
+    await this.runExclusive(() => this.settleInternal(symbol, freedUSD));
+  }
+
+  private async settleInternal(symbol: string, freedUSD: USD | number | string): Promise<void> {
     const freed = toUSD(freedUSD);
     await this.provider.applyLedgerDelta({ inPositionsUSD: usdNeg(freed), freeUSD: freed });
 
@@ -153,11 +194,13 @@ export class CapitalManager {
   }
 
   async expireReservations(): Promise<void> {
-    const now = Date.now();
-    for (const reservation of this.store.reservations.values()) {
-      if (reservation.state === 'reserved' && reservation.expiresAt < now) {
-        await this.release(reservation.id);
+    await this.runExclusive(async () => {
+      const now = Date.now();
+      for (const reservation of this.store.reservations.values()) {
+        if (reservation.state === 'reserved' && reservation.expiresAt < now) {
+          await this.releaseInternal(reservation.id);
+        }
       }
-    }
+    });
   }
 }

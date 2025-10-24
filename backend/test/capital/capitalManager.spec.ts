@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 const { PaperBalanceProvider } = await import('../../dist/src/core/capital/PaperBalanceProvider.js');
+const { LiveBalanceProvider } = await import('../../dist/src/core/capital/LiveBalanceProvider.js');
 const { CapitalManager } = await import('../../dist/src/core/capital/CapitalManager.js');
 const { capitalConfig } = await import('../../dist/src/config/capital.js');
 
@@ -46,6 +47,51 @@ function createManager(options: ManagerFactoryOptions = {}) {
     symbolExposure: new Map(),
   });
   return { manager, provider };
+}
+
+type LiveManagerFactoryOptions = {
+  balance?: string | number;
+  perSymbolCapPct?: string | number | PreciseDecimal;
+};
+
+function createLiveManager(options: LiveManagerFactoryOptions = {}) {
+  const initialBalance = decimal(options.balance ?? '1000');
+  const zero = decimal(0);
+  const exchangeState = {
+    total: PreciseDecimal.fromRaw(initialBalance.raw),
+    free: PreciseDecimal.fromRaw(initialBalance.raw),
+  };
+  const provider = new LiveBalanceProvider(
+    {
+      async getUsdBalance() {
+        return { total: exchangeState.total, free: exchangeState.free };
+      },
+    },
+    {
+      snapshot: {
+        totalUSD: PreciseDecimal.fromRaw(initialBalance.raw),
+        freeUSD: PreciseDecimal.fromRaw(initialBalance.raw),
+        reservedUSD: PreciseDecimal.fromRaw(zero.raw),
+        inPositionsUSD: PreciseDecimal.fromRaw(zero.raw),
+        ts: Date.now(),
+      },
+    },
+  );
+  const perSymbolCap = options.perSymbolCapPct
+    ? new PreciseDecimal(options.perSymbolCapPct)
+    : cloneDecimal(capitalConfig.perSymbolCapPct);
+  const manager = new CapitalManager(provider as any, {
+    reserveTtlMs: capitalConfig.reserveTtlMs,
+    reserveBufferPct: cloneDecimal(capitalConfig.reserveBufferPct),
+    perSymbolCapPct: perSymbolCap,
+    maxPositions: capitalConfig.maxPositions,
+    minOrderUSD: cloneDecimal(capitalConfig.minOrderUSD),
+    validateLiveBalance: true,
+  }, {
+    reservations: new Map(),
+    symbolExposure: new Map(),
+  });
+  return { manager, provider, exchangeState };
 }
 
 // Test 1: Multiple reservations should respect buffer and per-symbol cap
@@ -138,6 +184,43 @@ function createManager(options: ManagerFactoryOptions = {}) {
   });
   const result = await manager.reserve({ agentId: 'live', symbol: 'BNB/USDT', requestedUSD: decimal('200'), minUSD: decimal('50') });
   assert.equal(result, null);
+}
+
+// Test 6: concurrent reservations respect remaining balance
+{
+  const { manager, provider } = createManager({ balance: '120', perSymbolCapPct: '1' });
+  const [first, second] = await Promise.all([
+    manager.reserve({ agentId: 'concurrent-1', symbol: 'BTC/USDT', requestedUSD: decimal('80'), minUSD: decimal('50') }),
+    manager.reserve({ agentId: 'concurrent-2', symbol: 'ETH/USDT', requestedUSD: decimal('80'), minUSD: decimal('50') }),
+  ]);
+  assert.ok(first, 'first reservation should be granted');
+  assert.equal(second, null, 'second reservation should be rejected due to insufficient capital');
+  const snap = await provider.getSnapshot();
+  assert.equal(Number(snap.reservedUSD.toNumber().toFixed(2)), 80);
+  assert.equal(Number(snap.freeUSD.toNumber().toFixed(2)), 40);
+}
+
+// Test 7: live manager tracks ledger against exchange updates
+{
+  const { manager, provider, exchangeState } = createLiveManager({ balance: '500', perSymbolCapPct: '1' });
+  const [first, second] = await Promise.all([
+    manager.reserve({ agentId: 'live-a', symbol: 'BTC/USDT', requestedUSD: decimal('300'), minUSD: decimal('50') }),
+    manager.reserve({ agentId: 'live-b', symbol: 'ETH/USDT', requestedUSD: decimal('300'), minUSD: decimal('50') }),
+  ]);
+  assert.ok(first, 'first live reservation granted');
+  assert.ok(second, 'second live reservation granted with cap');
+  const combined = first!.grantedUSD.plus(second!.grantedUSD);
+  assert.ok(combined.toNumber() <= 500, 'combined reservations do not exceed total capital');
+  const snapAfter = await provider.getSnapshot();
+  assert.equal(Number(snapAfter.reservedUSD.toNumber().toFixed(2)), Number(combined.toNumber().toFixed(2)));
+  assert.ok(snapAfter.freeUSD.toNumber() >= 0, 'free capital remains non-negative');
+
+  exchangeState.total = decimal('650');
+  exchangeState.free = decimal('650');
+  const driftSnap = await provider.getSnapshot();
+  assert.equal(Number(driftSnap.totalUSD.toNumber().toFixed(2)), 650);
+  const reconstructed = driftSnap.freeUSD.plus(driftSnap.reservedUSD).plus(driftSnap.inPositionsUSD).toNumber();
+  assert.equal(Number(reconstructed.toFixed(2)), 650);
 }
 
 console.log('✅ capitalManager.spec passed');
