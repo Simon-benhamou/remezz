@@ -20,7 +20,8 @@ Date.now = () => now;
 try {
   const baseSymbols = ['ADA/USDT', 'ARB/USDT', 'DYDX/USDT', 'SNX/USDT', 'CRV/USDT'];
   for (const symbol of baseSymbols) {
-    assert.equal(manager.subscribeToKline(symbol, '1m'), true, `${symbol} should subscribe while capacity remains`);
+    const result = manager.subscribeToKline(symbol, '1m');
+    assert.equal(result.ok, true, `${symbol} should subscribe while capacity remains`);
     now += 1;
   }
 
@@ -30,7 +31,8 @@ try {
     .sort();
   assert.deepEqual(flattenStreams(), expectedInitial, 'Initial shard snapshot should include the seed symbols');
 
-  assert.equal(manager.subscribeToKline('LINK/USDT', '1m'), true, 'LINK should be accepted into a shard');
+  const linkResult = manager.subscribeToKline('LINK/USDT', '1m');
+  assert.equal(linkResult.ok, true, 'LINK should be accepted into a shard');
   now += 1;
   const afterLink = new Set(flattenStreams());
   assert(afterLink.has('linkusdt@kline_1m'), 'LINK stream should be scheduled after subscription');
@@ -40,7 +42,8 @@ try {
   assert.deepEqual(shardSizes, [1, 5], 'Shard layout should spill over once the per-shard limit is hit');
 
   now += 5_000; // Advance beyond TTL so old entries expire.
-  assert.equal(manager.subscribeToKline('OP/USDT', '1m'), true, 'Fresh symbol should subscribe after TTL pruning');
+  const opResult = manager.subscribeToKline('OP/USDT', '1m');
+  assert.equal(opResult.ok, true, 'Fresh symbol should subscribe after TTL pruning');
   const postPruneStreams = flattenStreams();
   assert.deepEqual(postPruneStreams, ['opusdt@kline_1m'], 'Only the fresh stream should remain after TTL pruning');
 

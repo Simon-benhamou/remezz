@@ -20,12 +20,13 @@ harness.seedExchangeSymbols([
 ]);
 
 const invalidAccepted = manager.subscribeToKline('币安人生/USDT', '15m');
-assert.equal(invalidAccepted, false, 'expected invalid symbol subscription to be rejected');
+assert.equal(invalidAccepted.ok, false, 'expected invalid symbol subscription to be rejected');
+assert.equal(invalidAccepted.reason, 'invalid_symbol_format', 'non-latin symbol should fail format validation');
 
 const symbols = [];
 for (const symbol of generatedSymbols) {
   const ok = manager.subscribeToKline(symbol, '15m');
-  assert.equal(ok, true, `expected subscription for ${symbol} to succeed`);
+  assert.equal(ok.ok, true, `expected subscription for ${symbol} to succeed`);
   symbols.push(symbol);
 }
 
