@@ -16,7 +16,18 @@ const defaultPaperBalance = () => ({
 const paperStore = { snapshot: defaultPaperBalance() };
 
 const paperProvider = new PaperBalanceProvider(paperStore);
-const liveProvider = new LiveBalanceProvider({});
+
+const liveStore = {
+  snapshot: {
+    totalUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+    freeUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+    reservedUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+    inPositionsUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+    ts: Date.now(),
+  },
+};
+
+const liveProvider = new LiveBalanceProvider({}, liveStore);
 
 const paperManager = new CapitalManager(paperProvider, capitalConfig, {
   reservations: new Map<string, Reservation>(),
@@ -53,6 +64,6 @@ export async function setPaperBalance(amount: string | number | PreciseDecimal):
     ts: Date.now(),
   };
   paperStore.snapshot = snapshot;
-  paperManager.clearLedger();
+  await paperManager.clearLedger();
   return snapshot;
 }
