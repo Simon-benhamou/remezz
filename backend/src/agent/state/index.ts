@@ -10335,7 +10335,8 @@ export class ReboundRejectionAgent {
         side: exitSide,
         type: 'market',
         qty: this.pos.qty,
-        leverage: this.profile.maxLeverage
+        leverage: this.profile.maxLeverage,
+        reduceOnly: true,
       });
 
       if (exitOrder.status === 'filled' && exitOrder.filledQty && exitOrder.filledQty > 0) {
