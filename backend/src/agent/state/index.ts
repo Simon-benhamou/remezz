@@ -197,6 +197,8 @@ export class ReboundRejectionAgent {
   public cooldownContext: { reason: string; guard?: RiskDecision; triggeredAt: number } | null = null;
   public lastExitCooldownMs = 0;
   public maxNotionalCapUsd = Infinity;
+  private capitalAgentId: string | null = null;
+  private restoredCapitalApplied = false;
   public orderAttemptLogCount = 0;
   public lastDiagnosticCanTrade: boolean | null = null;
   public lastQualityFilterFailure: { code: string; message?: string; details?: any } | null = null;
@@ -728,6 +730,8 @@ export class ReboundRejectionAgent {
       broker: baseBroker,
       minOrderUsd: capitalConfig.minOrderUSD,
     });
+    this.capitalAgentId = agentCapitalId;
+    this.restoredCapitalApplied = false;
 
     profile.budgetFraction = 1;
     (profile as any).budgetPct = 100;
@@ -9682,6 +9686,61 @@ export class ReboundRejectionAgent {
     }
   }
 
+  private async ensureCapitalForRestoredPosition(position: ActivePosition): Promise<void> {
+    if (this.restoredCapitalApplied) return;
+    if (!this.profile || this.profile.mode !== 'paper') return;
+    if (!this.profile.symbol || !this.capitalAgentId) return;
+    const notional = Math.abs(position.qty * position.entry);
+    if (!(notional > 0)) return;
+
+    try {
+      const manager = getCapitalManager('paper');
+      const currentExposure = manager.getSymbolExposureUsd(this.profile.symbol);
+      const targetExposure = new PreciseDecimal(notional);
+      const exposureGap = Math.abs(currentExposure.toNumber() - targetExposure.toNumber());
+      const tolerance = Math.max(1e-6, targetExposure.toNumber() * 1e-6);
+      const alreadyApplied = exposureGap <= tolerance;
+      if (alreadyApplied) {
+        this.restoredCapitalApplied = true;
+        return;
+      }
+
+      const reservation = await manager.reserve({
+        agentId: this.capitalAgentId,
+        symbol: this.profile.symbol,
+        requestedUSD: targetExposure,
+        minUSD: ZERO_USD,
+      });
+      if (reservation) {
+        await manager.commit(reservation.id, targetExposure);
+        this.restoredCapitalApplied = true;
+        recordOpsEvent({
+          level: 'info',
+          source: 'capital_pool',
+          message: 'restored_position_committed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            notionalUsd: targetExposure.toNumber(),
+          },
+        });
+      } else {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'capital_pool',
+          message: 'restored_position_reserve_failed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            notionalUsd: targetExposure.toNumber(),
+          },
+        });
+      }
+    } catch (error) {
+      console.warn('Failed to reapply capital reservation for restored position', error);
+    }
+  }
+
   public async restorePersistedPosition(): Promise<void> {
     if (!this.sessionId) {
       console.log('No session ID available for position restoration');
@@ -9751,6 +9810,7 @@ export class ReboundRejectionAgent {
         entryFeePerUnit: qty > 0 ? this.estimateFillFeeUsd(entry, qty, side) / qty : 0,
       };
 
+      await this.ensureCapitalForRestoredPosition(this.pos);
       this.applyContextTrailPreference();
 
       // Update agent state

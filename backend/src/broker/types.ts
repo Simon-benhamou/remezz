@@ -36,6 +36,8 @@ export type PlacedOrder = NewOrder & {
   estImpactBps?: number;
   usedDepth?: boolean;
   depthFallback?: boolean;
+  releasedNotionalUsd?: number;
+  realizedPnlUsd?: number;
 };
 
 export type BrokerPositionMargin = {

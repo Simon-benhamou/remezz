@@ -31,7 +31,7 @@ import { stopAllAgents } from '../services/stopAllAgents.js';
 import { resolveRrExpectancyConfig } from '../risk/rrExpectancy.js';
 import { getPortfolioSnapshot, updatePortfolioBalance, rebalancePortfolio } from '../services/portfolioManager.js';
 import { resolveStrategySnapshot } from '../utils/strategySnapshot.js';
-import { getBalanceSnapshot } from '../services/capitalPool.js';
+import { getBalanceSnapshot, updateLiveExchangeBalance } from '../services/capitalPool.js';
 import type { BalanceSnapshot } from '../core/capital/types.js';
 
 export const router = Router();
@@ -1214,6 +1214,10 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
             currencies: Object.keys(balance?.total || {}),
             lastUpdated: new Date().toISOString()
           };
+
+          if (Number.isFinite(totalUsd) && Number.isFinite(freeUsd)) {
+            updateLiveExchangeBalance({ totalUsd, freeUsd, timestamp: Date.now() });
+          }
 
           console.log(`📊 Live balance for user ${req.user.id}: $${totalUsd.toFixed(2)} USD`);
         }

@@ -14,6 +14,11 @@ type SimulatedFill = {
   fallback: boolean;
 };
 
+type TradeResult = {
+  releasedNotionalUsd: number;
+  realizedPnlUsd: number;
+};
+
 async function simulateBookFill(symbol: string, side: 'buy'|'sell', qty: number, userId?: string): Promise<SimulatedFill> {
   if (!(qty > 0)) {
     return { vwap: null, bestPrice: null, impactBps: 0, filled: 0, usedDepth: false, fallback: true };
@@ -212,9 +217,12 @@ export class PaperBroker implements Broker {
     out.usedDepth = useDepthPrice;
     out.depthFallback = Boolean(depthEstimate?.fallback);
 
-    // Simplified PnL handling will be done by agent engine on exit
     this.balanceUsd -= fee; // fees paid
-    this.applyFilledTrade(o.symbol, o.side, qty, px, lev);
+    const tradeResult = this.applyFilledTrade(o.symbol, o.side, qty, px, lev);
+    if (tradeResult) {
+      (out as any).releasedNotionalUsd = tradeResult.releasedNotionalUsd;
+      (out as any).realizedPnlUsd = tradeResult.realizedPnlUsd;
+    }
     return out;
   }
 
@@ -238,13 +246,15 @@ export class PaperBroker implements Broker {
     return additionalQty * price;
   }
 
-  private applyFilledTrade(symbol: string, side: 'buy'|'sell', qty: number, price: number, leverage: number) {
-    if (!(qty > 0) || !(price > 0)) return;
+  private applyFilledTrade(symbol: string, side: 'buy'|'sell', qty: number, price: number, leverage: number): TradeResult {
+    if (!(qty > 0) || !(price > 0)) return { releasedNotionalUsd: 0, realizedPnlUsd: 0 };
     const legs = this.positions.get(symbol) ?? [];
     const opposite = side === 'buy' ? 'short' : 'long';
     const aligned = side === 'buy' ? 'long' : 'short';
     let remaining = qty;
     const EPS = 1e-8;
+    let releasedNotionalUsd = 0;
+    let realizedPnlUsd = 0;
 
     // First, offset opposite legs (closing positions)
     for (let i = 0; i < legs.length && remaining > EPS; ) {
@@ -253,10 +263,22 @@ export class PaperBroker implements Broker {
         i++;
         continue;
       }
-      const closedQty = Math.min(leg.qty, remaining);
-      const proportion = closedQty / leg.qty;
-      const marginRelease = leg.marginUsd * proportion;
-      const notionalRelease = leg.notionalUsd * proportion;
+      const legQtyBefore = leg.qty;
+      const legNotionalBefore = leg.notionalUsd;
+      const legMarginBefore = leg.marginUsd;
+      const closedQty = Math.min(legQtyBefore, remaining);
+      if (!(closedQty > 0) || !(legQtyBefore > EPS)) {
+        i++;
+        continue;
+      }
+      const proportion = closedQty / legQtyBefore;
+      const marginRelease = legMarginBefore * proportion;
+      const notionalRelease = legNotionalBefore * proportion;
+      const entryNotionalPortion = notionalRelease;
+      const exitNotional = closedQty * price;
+      const pnlPortion = leg.side === 'long'
+        ? exitNotional - entryNotionalPortion
+        : entryNotionalPortion - exitNotional;
 
       leg.qty -= closedQty;
       leg.marginUsd -= marginRelease;
@@ -265,6 +287,8 @@ export class PaperBroker implements Broker {
 
       this.marginReservedUsd = Math.max(0, this.marginReservedUsd - marginRelease);
       this.totalNotionalUsd = Math.max(0, this.totalNotionalUsd - notionalRelease);
+      releasedNotionalUsd += entryNotionalPortion;
+      realizedPnlUsd += pnlPortion;
 
       if (leg.qty <= EPS || leg.notionalUsd <= EPS) {
         legs.splice(i, 1);
@@ -292,6 +316,11 @@ export class PaperBroker implements Broker {
 
     this.marginReservedUsd = Math.max(0, this.marginReservedUsd);
     this.totalNotionalUsd = Math.max(0, this.totalNotionalUsd);
+    if (realizedPnlUsd !== 0) {
+      this.balanceUsd = Math.max(0, this.balanceUsd + realizedPnlUsd);
+    }
+
+    return { releasedNotionalUsd, realizedPnlUsd };
   }
 
   private snapshotPositions(): BrokerPositionMargin[] {

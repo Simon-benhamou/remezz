@@ -66,6 +66,10 @@ export class CapitalManager {
     this.store.symbolExposure.set(symbol, sanitized);
   }
 
+  public getSymbolExposureUsd(symbol: string): USD {
+    return this.currentSymbolExposureUSD(symbol);
+  }
+
   private incrementSymbolExposure(symbol: string, delta: USD): void {
     const current = this.currentSymbolExposureUSD(symbol);
     const next = current.plus(delta);
@@ -191,6 +195,43 @@ export class CapitalManager {
     const current = this.currentSymbolExposureUSD(symbol);
     const next = current.minus(freed);
     this.setSymbolExposure(symbol, next);
+  }
+
+  async applyPnlDelta(symbol: string, pnlUSD: USD | number | string): Promise<void> {
+    const pnl = toUSD(pnlUSD);
+    if (pnl.raw === 0n) return;
+    await this.runExclusive(async () => {
+      await this.provider.applyLedgerDelta({ freeUSD: pnl });
+      const current = this.currentSymbolExposureUSD(symbol);
+      this.setSymbolExposure(symbol, current);
+    });
+  }
+
+  async reseedLedger(params: {
+    snapshot: BalanceSnapshot;
+    exposures: Array<{ symbol: string; exposure: USD }>;
+  }): Promise<void> {
+    await this.runExclusive(async () => {
+      if (typeof (this.provider as any)?.setSnapshot === 'function') {
+        (this.provider as any).setSnapshot(params.snapshot);
+      } else {
+        const currentSnap = await this.provider.getSnapshot();
+        const freeDelta = params.snapshot.freeUSD.toNumber() - currentSnap.freeUSD.toNumber();
+        const reservedDelta = params.snapshot.reservedUSD.toNumber() - currentSnap.reservedUSD.toNumber();
+        const inPositionsDelta = params.snapshot.inPositionsUSD.toNumber() - currentSnap.inPositionsUSD.toNumber();
+        await this.provider.applyLedgerDelta({
+          freeUSD: toUSD(freeDelta),
+          reservedUSD: toUSD(reservedDelta),
+          inPositionsUSD: toUSD(inPositionsDelta),
+        });
+      }
+
+      this.store.reservations.clear();
+      this.store.symbolExposure.clear();
+      for (const entry of params.exposures) {
+        this.setSymbolExposure(entry.symbol, entry.exposure);
+      }
+    });
   }
 
   async expireReservations(): Promise<void> {

@@ -76,4 +76,14 @@ export class LiveBalanceProvider implements BalanceProvider {
     }
     return { totalUSD: ZERO_USD, freeUSD: ZERO_USD };
   }
+
+  setSnapshot(snapshot: BalanceSnapshot): void {
+    this.store.snapshot = {
+      totalUSD: snapshot.totalUSD,
+      freeUSD: snapshot.freeUSD,
+      reservedUSD: snapshot.reservedUSD,
+      inPositionsUSD: snapshot.inPositionsUSD,
+      ts: snapshot.ts ?? Date.now(),
+    };
+  }
 }

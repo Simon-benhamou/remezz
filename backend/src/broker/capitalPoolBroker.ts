@@ -141,13 +141,19 @@ export class CapitalPoolBroker implements Broker {
   }
 
   private async handleReduceFill(order: NewOrder, placed: PlacedOrder) {
-    const filledQty = typeof placed.filledQty === 'number' ? Math.abs(placed.filledQty) : 0;
-    if (!(filledQty > 0)) return;
-    const price = typeof placed.avgPrice === 'number' && placed.avgPrice > 0
-      ? placed.avgPrice
-      : (order.type === 'limit' && order.price ? order.price : 0);
-    if (!(price > 0)) return;
-    const freedUsd = new PreciseDecimal(filledQty).times(new PreciseDecimal(price));
-    await this.capital.settle(`${this.agentId}:${order.symbol}`, order.symbol, freedUsd);
+    const releasedNotional = Number((placed as any)?.releasedNotionalUsd ?? 0);
+    const pnlDelta = Number((placed as any)?.realizedPnlUsd ?? 0);
+
+    if (releasedNotional > 0) {
+      await this.capital.settle(
+        `${this.agentId}:${order.symbol}`,
+        order.symbol,
+        new PreciseDecimal(releasedNotional),
+      );
+    }
+
+    if (Number.isFinite(pnlDelta) && pnlDelta !== 0) {
+      await this.capital.applyPnlDelta(order.symbol, new PreciseDecimal(pnlDelta));
+    }
   }
 }
