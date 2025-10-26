@@ -1,13 +1,12 @@
 import type { PolicyAlert } from '../monitor/policy.js';
 import { AgentHub } from '../agent/hub.js';
-import { prisma } from '../db/client.js';
 import { recordOpsEvent } from '../monitor/ops.js';
 
-const MARGIN_HALT_COOLDOWN_MS = 5 * 60 * 1000; // avoid hammering halt logic
+const MARGIN_MITIGATION_COOLDOWN_MS = 5 * 60 * 1000; // avoid hammering mitigation logic
 const STALE_NOTE_COOLDOWN_MS = 10 * 60 * 1000;
 const INACTIVITY_NOTE_COOLDOWN_MS = 30 * 60 * 1000;
 
-const lastMarginHalt = new Map<string, number>();
+const lastMarginMitigation = new Map<string, number>();
 const lastStaleNote = new Map<string, number>();
 const lastInactivityNote = new Map<string, number>();
 
@@ -17,9 +16,9 @@ async function handleMarginAlert(alert: PolicyAlert) {
 
   const now = Date.now();
   if (alert.severity === 'high') {
-    const prev = lastMarginHalt.get(sessionId) || 0;
-    if (now - prev < MARGIN_HALT_COOLDOWN_MS) return;
-    lastMarginHalt.set(sessionId, now);
+    const prev = lastMarginMitigation.get(sessionId) || 0;
+    if (now - prev < MARGIN_MITIGATION_COOLDOWN_MS) return;
+    lastMarginMitigation.set(sessionId, now);
 
     const symbol = alert.symbol;
     const utilisationPct = Number(alert.details?.utilisationPct ?? alert.details?.breaches?.[0]?.value ?? NaN);
@@ -27,7 +26,7 @@ async function handleMarginAlert(alert: PolicyAlert) {
     recordOpsEvent({
       level: 'error',
       source: 'alert_mitigator',
-      message: 'margin_halt_engaged',
+      message: 'margin_mitigation_triggered',
       sessionId,
       symbol,
       details: {
@@ -37,8 +36,10 @@ async function handleMarginAlert(alert: PolicyAlert) {
       },
     });
 
+    let mitigationAttempted = false;
     try {
-      await AgentHub.closeNow(sessionId);
+      await AgentHub.closeNow(sessionId, 'margin_risk_alert');
+      mitigationAttempted = true;
     } catch (error) {
       recordOpsEvent({
         level: 'warn',
@@ -50,32 +51,17 @@ async function handleMarginAlert(alert: PolicyAlert) {
       });
     }
 
-    try {
-      await AgentHub.halt(sessionId, 'entries_only');
-    } catch (error) {
+    if (mitigationAttempted) {
       recordOpsEvent({
-        level: 'warn',
+        level: 'info',
         source: 'alert_mitigator',
-        message: 'margin_halt_failed',
+        message: 'margin_mitigation_executed',
         sessionId,
         symbol,
-        details: { error: String((error as Error)?.message || error) },
-      });
-    }
-
-    try {
-      await prisma.agentSession.updateMany({
-        where: { id: sessionId },
-        data: { haltedAt: new Date(), haltReason: 'margin_risk' },
-      });
-    } catch (error) {
-      recordOpsEvent({
-        level: 'warn',
-        source: 'alert_mitigator',
-        message: 'margin_halt_persist_failed',
-        sessionId,
-        symbol,
-        details: { error: String((error as Error)?.message || error) },
+        details: {
+          utilisationPct: Number.isFinite(utilisationPct) ? utilisationPct : undefined,
+          actions: alert.details?.actions ?? [],
+        },
       });
     }
   }

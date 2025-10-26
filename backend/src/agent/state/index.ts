@@ -9636,6 +9636,52 @@ export class ReboundRejectionAgent {
     }
   }
 
+  public async closeNow(reason = 'external_close_now'): Promise<void> {
+    if (!this.pos || !this.broker || !this.profile) return;
+
+    const symbol = this.profile.symbol;
+    let price = Number(this.pos.entry) || 0;
+
+    try {
+      const ticker = await getTicker(symbol).catch(() => null as any);
+      if (ticker) {
+        const parsedLast = Number((ticker as any).last);
+        if (Number.isFinite(parsedLast) && parsedLast > 0) {
+          price = parsedLast;
+        } else {
+          const parsedBid = Number((ticker as any).bid);
+          const parsedAsk = Number((ticker as any).ask);
+          if (Number.isFinite(parsedBid) && Number.isFinite(parsedAsk) && parsedBid > 0 && parsedAsk > 0) {
+            price = (parsedBid + parsedAsk) / 2;
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to refresh price for closeNow on ${symbol}:`, error);
+    }
+
+    if (!(price > 0)) {
+      price = Number(this.pos.entry) || 0;
+    }
+
+    try {
+      await this.exitPosition(price, reason);
+    } catch (error) {
+      recordOpsEvent({
+        level: 'error',
+        source: 'margin_guard',
+        message: 'close_now_failed',
+        sessionId: this.sessionId || undefined,
+        symbol,
+        details: {
+          error: String((error as Error)?.message || error),
+          reason,
+        },
+      });
+      throw error;
+    }
+  }
+
   public async restorePersistedPosition(): Promise<void> {
     if (!this.sessionId) {
       console.log('No session ID available for position restoration');

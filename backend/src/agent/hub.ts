@@ -44,9 +44,9 @@ export class AgentsHub {
     if (a) a.halt(mode);
   }
 
-  async closeNow(sessionId: string) {
+  async closeNow(sessionId: string, reason = 'external_close_now') {
     const a = this.agents.get(sessionId);
-    if (a && (a as any).closeNow) await (a as any).closeNow();
+    if (a && (a as any).closeNow) await (a as any).closeNow(reason);
   }
 
   applyAllocation(

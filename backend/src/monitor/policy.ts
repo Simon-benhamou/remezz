@@ -133,7 +133,7 @@ export async function auditTick(sessionId: string, symbol: string, price: number
             if (!s.killEngaged && MISSED_PARTIAL_KILL > 0 && s.missedPartialAlerts >= MISSED_PARTIAL_KILL) {
               s.killEngaged = true;
               try {
-                await AgentHub.closeNow(sessionId);
+                await AgentHub.closeNow(sessionId, 'missed_partial_kill_switch');
               } catch (error) {
                 recordOpsEvent({
                   level: 'warn',
