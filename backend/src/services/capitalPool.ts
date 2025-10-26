@@ -16,6 +16,8 @@ const defaultPaperBalance = () => ({
 
 const paperStore = { snapshot: defaultPaperBalance() };
 const paperProvider = new PaperBalanceProvider(paperStore);
+let paperManualBase = paperStore.snapshot.totalUSD;
+let paperManualFree = paperStore.snapshot.freeUSD;
 
 const liveStore = {
   snapshot: {
@@ -60,6 +62,9 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
   if (!force && now - lastPaperReconcile < RECONCILE_INTERVAL_MS) return;
   lastPaperReconcile = now;
 
+  const baseTotal = paperManualBase.toNumber();
+  const baseFree = paperManualFree.toNumber();
+
   try {
     const sessions = await prisma.agentSession.findMany({
       where: { mode: 'paper', stoppedAt: null },
@@ -75,27 +80,23 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
     });
 
     if (!sessions.length) {
-      await paperManager.reseedLedger({
-        snapshot: {
-          totalUSD: paperStore.snapshot.totalUSD,
-          freeUSD: paperStore.snapshot.freeUSD,
-          reservedUSD: paperStore.snapshot.reservedUSD,
-          inPositionsUSD: paperStore.snapshot.inPositionsUSD,
-          ts: now,
-        },
-        exposures: [],
-      });
+      const snapshot: BalanceSnapshot = {
+        totalUSD: paperManualBase,
+        freeUSD: paperManualFree,
+        reservedUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+        inPositionsUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+        ts: now,
+      };
+      await paperManager.reseedLedger({ snapshot, exposures: [] });
       return;
     }
 
-    let startSum = 0;
     let realizedSum = 0;
     let unrealizedSum = 0;
     const exposureMap = new Map<string, number>();
     let inPositionsTotal = 0;
 
     for (const session of sessions) {
-      startSum += Number(session.startBalanceUsd ?? 0);
       realizedSum += Number(session.kpi?.realizedPnlUsd ?? 0);
       unrealizedSum += Number(session.kpi?.unrealizedPnlUsd ?? 0);
       for (const position of session.positions) {
@@ -111,15 +112,24 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
       }
     }
 
-    const totalValue = Math.max(0, startSum + realizedSum + unrealizedSum);
-    const inPositionsValue = Math.min(totalValue, inPositionsTotal);
-    const freeValue = Math.max(0, totalValue - inPositionsValue);
+    let totalValue = Math.max(0, baseTotal + realizedSum + unrealizedSum);
+    if (totalValue < inPositionsTotal) {
+      totalValue = inPositionsTotal;
+    }
+    let freeValue = Math.max(0, totalValue - inPositionsTotal);
+    if (!Number.isFinite(freeValue)) {
+      freeValue = 0;
+    }
+    if (freeValue === 0 && totalValue === 0) {
+      freeValue = baseFree;
+      totalValue = baseFree;
+    }
 
     const snapshot: BalanceSnapshot = {
       totalUSD: toUSD(totalValue),
       freeUSD: toUSD(freeValue),
       reservedUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
-      inPositionsUSD: toUSD(inPositionsValue),
+      inPositionsUSD: toUSD(inPositionsTotal),
       ts: now,
     };
 
@@ -258,6 +268,8 @@ export async function setPaperBalance(amount: string | number | PreciseDecimal):
     ts: Date.now(),
   };
   paperStore.snapshot = snapshot;
+  paperManualBase = snapshot.totalUSD;
+  paperManualFree = snapshot.freeUSD;
   await paperManager.clearLedger();
   lastPaperReconcile = 0;
   return snapshot;

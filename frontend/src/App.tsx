@@ -55,7 +55,7 @@ function AuthenticatedApp() {
 
   React.useEffect(() => {
     void loadCapital();
-  }, [loadCapital]);
+  }, [mode, overview?.updatedAt, loadCapital]);
 
   const balanceValue = mode === 'live'
     ? Number(liveCapital?.totalUSD ?? 0)
