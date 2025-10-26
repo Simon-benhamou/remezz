@@ -387,6 +387,8 @@ class BinanceWebSocketManager {
   private rejectedSymbols = new Set<string>();
   private readonly shardReconnectSkewMs = 2_000;
   private readonly shardReconnectJitterMs = 700;
+  private klineZeroLogTs = new Map<string, number>();
+  private readonly klineZeroLogIntervalMs = 60_000;
 
   private readonly endpoints = BINANCE_ENDPOINTS;
 
@@ -1704,6 +1706,47 @@ class BinanceWebSocketManager {
     }
     
     const cache = this.klinesCache.get(key)!;
+    const issues: string[] = [];
+    const ohlc = [klineData.open, klineData.high, klineData.low, klineData.close];
+    const anyNonFiniteOhlc = ohlc.some((value) => !Number.isFinite(value));
+    const allZeroOhlc = ohlc.every((value) => Number.isFinite(value) && value === 0);
+    if (anyNonFiniteOhlc) {
+      issues.push('non_finite_ohlc');
+    }
+    if (allZeroOhlc) {
+      issues.push('ohlc_all_zero');
+    }
+    if (!Number.isFinite(klineData.volume)) {
+      issues.push('volume_non_finite');
+    } else if (klineData.volume === 0) {
+      issues.push('volume_zero');
+    }
+
+    if (issues.length) {
+      const now = Date.now();
+      const lastLog = this.klineZeroLogTs.get(key) || 0;
+      if (now - lastLog >= this.klineZeroLogIntervalMs) {
+        this.klineZeroLogTs.set(key, now);
+        console.warn('[WS][KLINE_ANOMALY]', {
+          stream,
+          symbol: klineData.symbol,
+          timeframe: klineData.timeframe,
+          timestamp: klineData.timestamp,
+          issues,
+          raw: {
+            open: k.o,
+            high: k.h,
+            low: k.l,
+            close: k.c,
+            volume: k.v,
+            isFinal: Boolean(k.x),
+            startTime: k.t,
+            closeTime: k.T,
+          },
+          cacheSize: cache.length,
+        });
+      }
+    }
     
     // Ajoute ou update la dernière candle
     const lastCandle = cache[cache.length - 1];
