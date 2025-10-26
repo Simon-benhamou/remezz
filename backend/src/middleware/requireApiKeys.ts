@@ -43,25 +43,3 @@ export const requireLiveApiKeys = async (req: AuthenticatedRequest, res: Respons
     });
   }
 };
-
-export const requireApiKeysForLiveSession = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  try {
-    // Check if this is a live session operation
-    const sessionId = req.params.sessionId || req.body?.sessionId;
-    
-    if (sessionId) {
-      // TODO: Check if session is in live mode by querying database
-      // For now, we'll skip this check and let the operation handler deal with it
-      return next();
-    }
-
-    // For session creation, use the existing requireLiveApiKeys middleware
-    return requireLiveApiKeys(req, res, next);
-  } catch (error) {
-    console.error('Session API keys check failed:', error);
-    res.status(500).json({
-      error: 'server_error',
-      message: 'Failed to validate session API keys'
-    });
-  }
-};

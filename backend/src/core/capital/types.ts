@@ -24,12 +24,6 @@ export function usdMin(a: USD, b: USD): USD {
   return a.raw <= b.raw ? a : b;
 }
 
-export function usdClamp(value: USD, min: USD, max: USD): USD {
-  if (value.raw <= min.raw) return min;
-  if (value.raw >= max.raw) return max;
-  return value;
-}
-
 export interface BalanceSnapshot {
   totalUSD: USD;
   freeUSD: USD;

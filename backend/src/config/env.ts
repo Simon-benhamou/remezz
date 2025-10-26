@@ -88,7 +88,3 @@ export function getEnv(): TradingEnv {
   cachedEnv = env;
   return env;
 }
-
-export function resetEnvCache(): void {
-  cachedEnv = null;
-}

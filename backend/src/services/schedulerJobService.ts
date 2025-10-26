@@ -173,15 +173,3 @@ export function startSchedulerWorker(options: { intervalMs?: number } = {}) {
   }, workerIntervalMs);
   processDueJobsOnce().catch((error) => console.error('[Scheduler] initial cycle error:', error));
 }
-
-export function stopSchedulerWorker() {
-  if (workerTimer) {
-    clearInterval(workerTimer);
-    workerTimer = null;
-  }
-  workerStarted = false;
-}
-
-export function getSchedulerWorkerId() {
-  return workerId;
-}

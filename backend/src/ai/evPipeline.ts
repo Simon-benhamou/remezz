@@ -10,9 +10,7 @@ import { scoreStrategies } from './routing/strategyScorer.js';
 import { expectedValue } from './ranking/evRanker.js';
 import { buildExecutionPlan } from './execution/planBuilder.js';
 import { passesHardGates, passesQuantile } from './kpi/perfGuards.js';
-import { Telemetry } from './kpi/telemetry.js';
 import type { LabeledRow } from './labeling/tripleBarrier.js';
-import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import { fetchPerformanceSnapshot, type PerformanceSnapshot } from './performance/memory.js';
 
 type ContextWithMulti = ContextFeatures & {
@@ -37,36 +35,8 @@ export interface OpportunityEvaluation {
 const probModel = new ProbModel();
 const conformal = new Conformal(probModel);
 const bandit = new ContextualBandit(1337);
-const telemetry = new Telemetry();
 let modelReady = false;
 
-class RollingPerformance {
-  private wins = new PreciseDecimal('0');
-  private losses = new PreciseDecimal('0');
-  private history: PreciseDecimal[] = [];
-  constructor(private readonly max = 30) {}
-  push(pnl: PreciseDecimal): void {
-    this.history.push(pnl);
-    if (this.history.length > this.max) this.history.shift();
-    this.recompute();
-  }
-  private recompute(): void {
-    this.wins = new PreciseDecimal('0');
-    this.losses = new PreciseDecimal('0');
-    for (const pnl of this.history) {
-      if (pnl.gt(0)) this.wins = this.wins.plus(pnl);
-      else this.losses = this.losses.plus(pnl);
-    }
-  }
-  value(): number {
-    const win = this.wins.toNumber();
-    const loss = Math.abs(this.losses.toNumber());
-    if (loss === 0) return win > 0 ? 2 : 1;
-    return win / loss;
-  }
-}
-
-const rollingPf = new RollingPerformance();
 
 export function fitProbabilityModel(dataset: LabeledRow[]): void {
   probModel.fit(dataset);
@@ -226,20 +196,13 @@ export async function evaluateOpportunity(
   }
 
   const regime = features.tf4h.trendBias as 'bull' | 'bear' | 'neutral';
-  const passesPolicy = passesQuantile(regime, p_win_cal, rollingPf.value(), {
+  const passesPolicy = passesQuantile(regime, p_win_cal, 1, {
     trend: cfg.ACCEPT_Q_TREND,
     range: cfg.ACCEPT_Q_RANGE,
     volatile: cfg.ACCEPT_Q_VOL,
     pfLow: cfg.THROTTLE_PF_LOW,
     pfHigh: cfg.THROTTLE_PF_HIGH,
     step: cfg.THROTTLE_STEP,
-  });
-
-  telemetry.record({
-    symbol,
-    regime,
-    probability: p_win_cal,
-    evEstimate: evEstimate.ev.toNumber(),
   });
 
   if (!passesPolicy) {
@@ -266,14 +229,6 @@ export async function evaluateOpportunity(
 export function updateBandit(symbol: string, ctx: ContextFeatures, action: StrategyAction['kind'], reward: number): void {
   const banditCtx = selectBanditContext(ctx);
   bandit.update(banditCtx, action, reward);
-}
-
-export function recordOutcome(pnl: PreciseDecimal): void {
-  rollingPf.push(pnl);
-}
-
-export function getTelemetrySummary() {
-  return telemetry.summary();
 }
 
 async function resolvePerformanceMemory(

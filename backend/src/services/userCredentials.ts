@@ -1,5 +1,5 @@
-import { prisma } from '../db/client.js';
-import { decryptApiKey } from '../utils/crypto.js';
+import { prisma as defaultPrisma } from '../db/client.js';
+import { decryptApiKey as defaultDecryptApiKey } from '../utils/crypto.js';
 import { AuthenticatedRequest } from '../middleware/auth.js';
 
 export interface UserCredentials {
@@ -10,11 +10,30 @@ export interface UserCredentials {
   exchange: string;
 }
 
+type PrismaClientLike = typeof defaultPrisma;
+type DecryptFn = typeof defaultDecryptApiKey;
+
+let prismaClient: PrismaClientLike = defaultPrisma;
+let decryptFn: DecryptFn = defaultDecryptApiKey;
+
+export function __setUserCredentialsTestOverrides(overrides?: {
+  prisma?: PrismaClientLike;
+  decryptApiKey?: DecryptFn;
+}): void {
+  prismaClient = overrides?.prisma ?? defaultPrisma;
+  decryptFn = overrides?.decryptApiKey ?? defaultDecryptApiKey;
+}
+
+export function __resetUserCredentialsTestOverrides(): void {
+  prismaClient = defaultPrisma;
+  decryptFn = defaultDecryptApiKey;
+}
+
 export async function getUserCredentials(userId: string, exchange?: string): Promise<UserCredentials | null> {
   try {
     // If exchange specified, get that specific one
     // Otherwise, get the ACTIVE one (regardless of exchange)
-    const apiKey = await prisma.userApiKey.findFirst({
+    const apiKey = await prismaClient.userApiKey.findFirst({
       where: {
         userId,
         ...(exchange ? { exchange } : {}), // Optional filter by exchange
@@ -32,9 +51,9 @@ export async function getUserCredentials(userId: string, exchange?: string): Pro
 
     try {
       return {
-        apiKey: decryptApiKey(apiKey.apiKey),
-        apiSecret: decryptApiKey(apiKey.apiSecret),
-        passphrase: apiKey.passphrase ? decryptApiKey(apiKey.passphrase) : undefined,
+        apiKey: decryptFn(apiKey.apiKey),
+        apiSecret: decryptFn(apiKey.apiSecret),
+        passphrase: apiKey.passphrase ? decryptFn(apiKey.passphrase) : undefined,
         testnet: apiKey.testnet,
         exchange: apiKey.exchange
       };

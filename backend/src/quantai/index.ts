@@ -1,12 +1,9 @@
 export { getQuantAIConfig, reloadQuantAIConfig } from './config.js';
 export { CircuitBreaker, DisabledCircuitBreaker } from './risk/circuitBreaker.js';
-export type { CircuitBreakerDecision, CircuitBreakerState, CircuitBreakerOptions } from './risk/circuitBreaker.js';
+export type { CircuitBreakerDecision, CircuitBreakerState } from './risk/circuitBreaker.js';
 export { PositionSizer } from './risk/positionSizing.js';
 export { EntryFilters } from './strategies/metaAdaptive/entryFilters.js';
 export { computeInitialBracket, maybeAdjustOrExit } from './strategies/metaAdaptive/exitManager.js';
-export type { TradeSide, ExitDirective, InitialBracket, ExitArchetype } from './strategies/metaAdaptive/exitManager.js';
-export { classifyRegime, selectMode } from './regime/regime.js';
-export { applyFeesAndSlippage, calculateFeeUsd } from './backtest/execution.js';
+export type { ExitArchetype } from './strategies/metaAdaptive/exitManager.js';
+export { calculateFeeUsd } from './backtest/execution.js';
 export type { LiquidityType } from './backtest/execution.js';
-export { StrategyHealth } from './services/strategyHealth.js';
-export type { StrategyHealthSnapshot } from './services/strategyHealth.js';

@@ -189,22 +189,6 @@ export async function resolveReusableStrategy(
   return { strategy: chosen, guardrail: health.guardrails };
 }
 
-export async function emitStrategyHealthTelemetry(
-  sessionId: string | undefined,
-  symbol: string,
-  health: SessionHealthSnapshot,
-): Promise<void> {
-  if (!health.guardrails) return;
-  recordOpsEvent({
-    level: 'info',
-    source: 'strategy_health',
-    message: 'session_guardrail_active',
-    sessionId: sessionId || undefined,
-    symbol,
-    details: health.guardrails,
-  });
-}
-
 export function mergeGuardrails(base: StrategyGuardrail | null, next: StrategyGuardrail | null): StrategyGuardrail | null {
   if (!base) return next ? { ...next } : null;
   if (!next) return { ...base };
@@ -261,4 +245,3 @@ export function buildPerformanceSummary(
     staleCount,
   };
 }
-

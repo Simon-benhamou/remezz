@@ -310,14 +310,6 @@ export function flattenFeatures(features: ContextFeatures): number[] {
   return vector;
 }
 
-export function computeAtrDistanceUsd(ohlcv: number[][], notional: number, atrMult: number): number {
-  if (!Number.isFinite(notional)) {
-    throw new Error('Notional must be finite');
-  }
-  const atrPct = computeAtrPct(ohlcv, 14);
-  return atrPct * atrMult * notional;
-}
-
 export function validateContextFeatures(features: ContextFeatures): void {
   flattenFeatures(features);
 }

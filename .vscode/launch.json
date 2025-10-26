@@ -10,9 +10,8 @@
       "runtimeExecutable": "node",
       "runtimeArgs": [
         "--inspect=9229",
-        "--loader",
-        "ts-node/esm",
-        "--experimental-specifier-resolution=node",
+        "--import",
+        "data:text/javascript,import { register } from 'node:module'; import { pathToFileURL } from 'node:url'; register('tsx', pathToFileURL('./'));",
         "src/server.ts"
       ],
       "console": "integratedTerminal",

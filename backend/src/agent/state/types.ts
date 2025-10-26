@@ -411,22 +411,3 @@ export type MarketContext = {
   strategyToken?: string | null;
   strategyFamily?: 'trend' | 'breakout' | 'mean_reversion' | 'momentum' | null;
 };
-
-export type StateDependencies = {
-  plan: ValidatedPlan | null;
-  broker: unknown;
-  pos: unknown;
-  adaptiveRisk: AdaptiveRiskResult | null;
-  profile: ActivationProfile | null;
-  tradeCadenceConfig: TradeCadenceConfig | null;
-  tradeCadenceState: TradeCadenceState;
-  quantConfigRisk: unknown;
-};
-
-export type TradeCadenceContext = {
-  config: TradeCadenceConfig | null;
-  state: TradeCadenceState;
-  modeParams: ModeParams;
-  aggressiveness: AgentAggressiveness;
-};
-

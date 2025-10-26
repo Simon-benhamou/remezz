@@ -200,11 +200,3 @@ export async function getHybridSentiment(symbol: string): Promise<HybridSentimen
 
   return combineSentiments(sentiments);
 }
-
-export function clearSentimentCache(symbol?: string) {
-  if (symbol) {
-    cache.delete(symbol.toUpperCase());
-  } else {
-    cache.clear();
-  }
-}

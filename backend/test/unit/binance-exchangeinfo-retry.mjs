@@ -61,10 +61,10 @@ const fetchStub = async (url) => {
   };
 };
 
-const { markets, count, source } = await __autoUniverseTestHooks.fetchBinanceMarkets({
+const { fetchBinanceMarketsForTests } = __autoUniverseTestHooks;
+const { markets, count, source } = await fetchBinanceMarketsForTests({
   fetchImpl: fetchStub,
   disableCache: true,
-  getWsTickers: async () => null,
   cacheKey: 'binance_retry_unit',
 });
 

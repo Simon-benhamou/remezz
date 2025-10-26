@@ -1,16 +1,6 @@
 import { prisma } from '../db/client.js';
 import { getConfig, getModeParams, type AgentAggressiveness } from '../utils/env.js';
-import { areAgentGuardsDisabled } from '../utils/agentGuards.js';
 import { resolveLeverageCap, type ResolvedLeverageCap } from './leverageCaps.js';
-
-export type RiskContext = {
-  sessionId: string;
-  dateKey: string; // YYYY-MM-DD
-  realizedPnlPctToday: number; // percent of start balance
-  consecutiveStops: number;
-  tradesToday: number;
-  aggressiveness?: AgentAggressiveness; // Agent mode for adaptive limits
-};
 
 export type RiskLimits = {
   riskPctPerTrade: { min: number; max: number };
@@ -41,19 +31,6 @@ export type RiskDecision = {
   reason?: string;
   action?: 'halt'|'cooldown'|'warn';
 };
-
-export async function assessRisk(ctx: RiskContext, limits?: RiskLimits): Promise<RiskDecision> {
-  if (areAgentGuardsDisabled()) {
-    return { ok: true };
-  }
-  // Use mode-specific limits if not provided
-  const effectiveLimits = limits || defaultLimits(ctx.aggressiveness);
-  
-  if (ctx.realizedPnlPctToday <= -effectiveLimits.dailyLossLimitPct) return { ok: false, reason: 'daily_loss_limit', action: 'halt' };
-  if (ctx.tradesToday >= effectiveLimits.maxTradesPerDay) return { ok: false, reason: 'trades_cap', action: 'cooldown' };
-  if (ctx.consecutiveStops >= effectiveLimits.maxConsecutiveStops) return { ok: false, reason: 'consecutive_stops', action: 'cooldown' };
-  return { ok: true };
-}
 
 export type SizingInput = {
   balanceUsd: number;

@@ -35,18 +35,3 @@ export function recordDiagnostic(symbol: string, key: IntradayDiagnosticKey, pay
   }
   console.info('intraday.diagnostic', logPayload);
 }
-
-export function getDiagnosticsSnapshot(): Record<string, Record<string, { count: number; lastAt: number }>> {
-  const snapshot: Record<string, Record<string, { count: number; lastAt: number }>> = {};
-  for (const [symbol, map] of counters.entries()) {
-    snapshot[symbol] = {};
-    for (const [key, value] of map.entries()) {
-      snapshot[symbol][key] = { count: value.count, lastAt: value.lastAt };
-    }
-  }
-  return snapshot;
-}
-
-export function resetDiagnostics(): void {
-  counters.clear();
-}

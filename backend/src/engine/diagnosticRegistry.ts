@@ -24,10 +24,6 @@ export function getTriggerSampleRate(symbol: string, fallback: number): number {
   return override.rate;
 }
 
-export function clearTriggerOverride(symbol?: string): void {
-  if (symbol) triggerOverrides.delete(symbol); else triggerOverrides.clear();
-}
-
 export function setRegimeDiagnostics(symbol: string, diagnostics: RegimeDiagnostics): void {
   regimeStore.set(symbol, { diagnostics, updatedAt: Date.now() });
 }
@@ -41,8 +37,3 @@ export function getRegimeDiagnostics(symbol: string, maxAgeMs = 5 * 60 * 1000): 
   }
   return entry.diagnostics;
 }
-
-export function clearRegimeDiagnostics(symbol?: string): void {
-  if (symbol) regimeStore.delete(symbol); else regimeStore.clear();
-}
-

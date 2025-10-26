@@ -216,10 +216,3 @@ export function startMarginMonitor(options?: MarginMonitorOptions) {
   }
   timer = setInterval(() => tick(thresholds), interval);
 }
-
-export function stopMarginMonitor() {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}

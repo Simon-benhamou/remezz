@@ -42,27 +42,6 @@ export class RollingWindow {
   }
 }
 
-export class RollingOBV {
-  private readonly lookback: number;
-  private obvSeries: number[] = [];
-
-  constructor(lookback: number) {
-    this.lookback = Math.max(1, lookback);
-  }
-
-  update(close: number, prevClose: number, volume: number): number {
-    const direction = close > prevClose ? 1 : close < prevClose ? -1 : 0;
-    const lastObv = this.obvSeries.length ? this.obvSeries[this.obvSeries.length - 1] : 0;
-    const newObv = lastObv + direction * volume;
-    this.obvSeries.push(newObv);
-    if (this.obvSeries.length > this.lookback) {
-      this.obvSeries.shift();
-    }
-    const first = this.obvSeries[0] ?? 0;
-    return newObv - first;
-  }
-}
-
 export class RollingAggression {
   private readonly lookbackMs: number;
   private samples: { timestamp: number; takerBuy: number; takerSell: number }[] = [];

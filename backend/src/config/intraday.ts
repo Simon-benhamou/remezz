@@ -58,8 +58,6 @@ const DEFAULTS: IntradayRuntimeConfig = {
   },
 };
 
-let overrideConfig: Partial<IntradayRuntimeConfig> | null = null;
-
 function parseBool(value: any, fallback: boolean): boolean {
   if (value === undefined || value === null) return fallback;
   if (typeof value === 'boolean') return value;
@@ -72,10 +70,6 @@ function parseBool(value: any, fallback: boolean): boolean {
 function parseNumber(value: any, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
-}
-
-export function setIntradayRuntimeOverride(config: Partial<IntradayRuntimeConfig> | null): void {
-  overrideConfig = config;
 }
 
 function parseBpsArray(value: any, fallback: number[]): number[] {
@@ -139,19 +133,10 @@ export function getIntradayRuntimeConfig(): IntradayRuntimeConfig {
     feesBps: Math.max(0, parseNumber(process.env.INTRADAY_EV_FEES_BPS, DEFAULTS.ev.feesBps)),
   };
   if (ev.slMaxBps < ev.slMinBps) {
-    const swap = ev.slMinBps;
-    ev.slMinBps = ev.slMaxBps;
-    ev.slMaxBps = swap;
+   const swap = ev.slMinBps;
+   ev.slMinBps = ev.slMaxBps;
+   ev.slMaxBps = swap;
   }
 
-  let runtime: IntradayRuntimeConfig = { slip, flags, qs, ev };
-  if (overrideConfig) {
-    runtime = {
-      slip: { ...runtime.slip, ...(overrideConfig.slip ?? {}) },
-      flags: { ...runtime.flags, ...(overrideConfig.flags ?? {}) },
-      qs: { ...runtime.qs, ...(overrideConfig.qs ?? {}) },
-      ev: { ...runtime.ev, ...(overrideConfig.ev ?? {}) },
-    };
-  }
-  return runtime;
+  return { slip, flags, qs, ev };
 }

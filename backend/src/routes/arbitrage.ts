@@ -62,5 +62,3 @@ router.post('/clear-cache', (req, res) => {
     res.status(500).json({ error: 'Failed to clear caches' });
   }
 });
-
-export default router;

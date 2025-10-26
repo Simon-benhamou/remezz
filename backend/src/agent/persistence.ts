@@ -91,32 +91,6 @@ export async function recordEnter(params: {
   }
 }
 
-export async function updateProtectiveSnapshot(params: {
-  sessionId: string;
-  symbol: string;
-  stopPrice?: number | null;
-  takeProfit?: number[] | null;
-  slOrderId?: string | null;
-  tpOrderId?: string | null;
-  status?: string;
-}) {
-  try {
-    const pos = await prisma.position.findFirst({ where: { sessionId: params.sessionId, symbol: params.symbol, qty: { gt: 0 } }, orderBy: { openedAt: 'desc' } });
-    if (!pos) return;
-    await prisma.position.update({
-      where: { id: pos.id },
-      data: {
-        stopPrice: params.stopPrice !== undefined ? params.stopPrice : pos.stopPrice,
-        takeProfit: params.takeProfit ? params.takeProfit as any : (params.takeProfit === null ? undefined : pos.takeProfit),
-        slOrderId: params.slOrderId !== undefined ? params.slOrderId || null : pos.slOrderId,
-        tpOrderId: params.tpOrderId !== undefined ? params.tpOrderId || null : pos.tpOrderId,
-        lastProtectiveSyncAt: new Date(),
-        protectiveStatus: params.status || 'synced',
-      }
-    });
-  } catch {}
-}
-
 export async function loadActivePosition(sessionId: string) {
   return prisma.position.findFirst({
     where: { sessionId, qty: { gt: 0 } },

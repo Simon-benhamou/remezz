@@ -287,23 +287,3 @@ export class FeaturePipeline {
     return this.lastSqueezeRatio;
   }
 }
-
-export function buildTickFeatures(input: TickInput): Record<Timeframe, TickFeatures> {
-  const pipeline = new FeaturePipeline();
-  if (input.aggression) {
-    pipeline.updateAggression({
-      timestamp: input.aggression.timestamp,
-      takerBuy: input.aggression.takerBuy,
-      takerSell: input.aggression.takerSell,
-    });
-  }
-  const result: Partial<Record<Timeframe, TickFeatures>> = {};
-  for (const timeframe of Object.keys(input.candles) as Timeframe[]) {
-    const candles = input.candles[timeframe];
-    if (!candles?.length) {
-      continue;
-    }
-    result[timeframe] = pipeline.compute(timeframe, candles, input.orderBook, input.price, input.symbol);
-  }
-  return result as Record<Timeframe, TickFeatures>;
-}

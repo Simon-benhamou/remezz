@@ -664,33 +664,3 @@ export async function getAIRankedOpportunities(
     throw error;
   }
 }
-
-/**
- * Get best opportunity from AI ranking (for auto-select agents)
- */
-export async function getBestAIOpportunity(excludeSessionId?: string): Promise<RankedOpportunity | null> {
-  try {
-    const ranked = await getAIRankedOpportunities({ 
-      useCache: true, 
-      excludeSessionId 
-    });
-    
-    if (ranked.length === 0) {
-      return null;
-    }
-    
-    // Return top ranked with score > 0.5 (relaxed from 0.6)
-    const best = ranked[0];
-    if (best.score < 0.65) {
-      console.log(`⚠️ Best opportunity score too low: ${best.score.toFixed(2)}`);
-      return null;
-    }
-    
-    console.log(`🏆 Best AI opportunity: ${best.symbol} (Score: ${best.score.toFixed(2)})`);
-    return best;
-    
-  } catch (error) {
-    console.error('Error getting best AI opportunity:', error);
-    return null;
-  }
-}

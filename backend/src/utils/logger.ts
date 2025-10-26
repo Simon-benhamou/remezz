@@ -82,10 +82,6 @@ export function setLogLevel(level: LogLevel) {
   currentLevel = level;
 }
 
-export function getLogLevel(): LogLevel {
-  return currentLevel;
-}
-
 export function configureLogging(level?: LogLevel): LogLevel {
   if (level) {
     setLogLevel(level);
@@ -115,4 +111,3 @@ const defaultLogger = createLogger('agent');
 
 export const log = (...args: unknown[]) => defaultLogger.info(...args);
 export const warn = (...args: unknown[]) => defaultLogger.warn(...args);
-export const err = (...args: unknown[]) => defaultLogger.error(...args);

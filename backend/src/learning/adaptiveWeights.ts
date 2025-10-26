@@ -12,10 +12,6 @@ type WeightRow = {
 const weightCache = new Map<string, { value: WeightRow; ts: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-export function getAdaptiveWeightsCache() {
-  return weightCache;
-}
-
 export async function refreshAdaptiveWeightsForFamily(family: string, force = false) {
   if (!force && weightCache.has(family)) return;
   try {

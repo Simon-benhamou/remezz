@@ -115,10 +115,3 @@ export function getIntegratedMonitor(): IntegratedPerformanceMonitor {
 export function startIntegratedMonitoring(): void {
   getIntegratedMonitor();
 }
-
-export function stopIntegratedMonitoring(): void {
-  if (globalMonitor) {
-    globalMonitor.cleanup();
-    globalMonitor = null;
-  }
-}

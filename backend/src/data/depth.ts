@@ -5,11 +5,8 @@ import { getConfig } from '../utils/env.js';
 export interface BookLevel { price: number; size: number }
 export interface DepthSnapshot { timestamp: number; bids: BookLevel[]; asks: BookLevel[] }
 
-type DepthOverride = (symbol: string, levels: number, userId?: string) => Promise<DepthSnapshot | null>;
-
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 
-let overrideFetcher: DepthOverride | null = null;
 const exchangeCache = new Map<string, any>();
 
 function inferMarketType(symbol?: string): 'spot' | 'swap' {
@@ -90,14 +87,7 @@ function buildUnitTestDepth(levels: number): DepthSnapshot {
   return { timestamp: Date.now(), bids, asks };
 }
 
-export function setDepthFetcherOverride(fn: DepthOverride | null) {
-  overrideFetcher = fn;
-}
-
 export async function fetchDepth(symbol: string, levels: number, userId?: string): Promise<DepthSnapshot | null> {
-  if (overrideFetcher) {
-    return overrideFetcher(symbol, levels, userId);
-  }
   if (UNIT_TEST_MODE) {
     return buildUnitTestDepth(levels);
   }

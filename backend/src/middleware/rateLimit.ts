@@ -163,7 +163,3 @@ export function createMonitorRateLimiters(overrides?: Partial<WindowConfig>): Re
     }),
   ];
 }
-
-export function resetRateLimitStores() {
-  (Object.keys(stores) as LimiterKind[]).forEach((key) => stores[key].clear());
-}

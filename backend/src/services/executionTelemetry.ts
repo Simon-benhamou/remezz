@@ -136,19 +136,6 @@ export function getExecutionTuning(symbol: string): ExecutionTuning {
   return tuning;
 }
 
-export function getExecutionTelemetryState(symbol: string): ExecutionTelemetryState | null {
-  const state = store.get(symbol);
-  return state ? { ...state } : null;
-}
-
-export function resetExecutionTelemetry(symbol?: string): void {
-  if (symbol) {
-    store.delete(symbol);
-    return;
-  }
-  store.clear();
-}
-
 export function reportExecutionAnomaly(symbol: string, context: Partial<ExecutionTelemetryPoint> & { reason: string }): void {
   recordOpsEvent({
     level: 'warn',
@@ -164,4 +151,3 @@ export function reportExecutionAnomaly(symbol: string, context: Partial<Executio
     },
   });
 }
-
