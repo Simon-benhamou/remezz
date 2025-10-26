@@ -25,6 +25,9 @@ export type Cfg = {
   TARGET_TP2_PCT: number;
   TARGET_TP3_PCT: number;
   TARGET_TP1_MIN_PNL_USD: number;
+  TARGET_TP1_MIN_PNL_RATIO: number;
+  SMALL_BALANCE_RISK_THRESHOLD_USD: number;
+  SMALL_BALANCE_MIN_RISK_PCT: number;
   USE_GROK: boolean;
   GROK_API_KEY?: string;
   GROK_BASE_URL?: string;
@@ -420,6 +423,9 @@ export function getConfig(): Cfg {
     TARGET_TP2_PCT: Number(e.TARGET_TP2_PCT || "3"),
     TARGET_TP3_PCT: Number(e.TARGET_TP3_PCT || "5"),
     TARGET_TP1_MIN_PNL_USD: Number(e.TARGET_TP1_MIN_PNL_USD || "30"),
+    TARGET_TP1_MIN_PNL_RATIO: Number(e.TARGET_TP1_MIN_PNL_RATIO || "0.03"),
+    SMALL_BALANCE_RISK_THRESHOLD_USD: Number(e.SMALL_BALANCE_RISK_THRESHOLD_USD || "500"),
+    SMALL_BALANCE_MIN_RISK_PCT: Number(e.SMALL_BALANCE_MIN_RISK_PCT || "3"),
     USE_GROK: (e.USE_GROK || "true") === "true",
     GROK_API_KEY: e.GROK_API_KEY || "",
     GROK_BASE_URL: e.GROK_BASE_URL || "https://api.x.ai/v1/chat/completions",

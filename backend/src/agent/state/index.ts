@@ -1727,11 +1727,13 @@ export class ReboundRejectionAgent {
     const targetTp1BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP1_PCT ?? targetSizingCfg.MIN_TP_PCT ?? 0));
     const targetTp2BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP2_PCT ?? 0));
     const targetTp3BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP3_PCT ?? 0));
-    const targetMinTp1PnlUsd = Math.max(0, Number(targetSizingCfg.TARGET_TP1_MIN_PNL_USD ?? 0));
-    const targetSizingEnabled = targetMinTp1PnlUsd > 0
-      || targetTp1BasePct > 0
+    let minPnLRatio = Math.max(0, Number(targetSizingCfg.TARGET_TP1_MIN_PNL_RATIO ?? 0));
+    if (minPnLRatio > 1) minPnLRatio = minPnLRatio / 100;
+    let targetMinTp1PnlUsd = Math.max(0, Number(targetSizingCfg.TARGET_TP1_MIN_PNL_USD ?? 0));
+    const targetSizingPercentEnabled = targetTp1BasePct > 0
       || targetTp2BasePct > 0
       || targetTp3BasePct > 0;
+    let targetSizingEnabled = targetMinTp1PnlUsd > 0 || targetSizingPercentEnabled;
     if (playbook === 'momentum_breakout') {
       const momentumTargets = [1.0, 2.0, 3.0];
       this.plan.plan.risk.tp = momentumTargets.map(value => ({ type: 'R', value }));
@@ -2292,6 +2294,10 @@ export class ReboundRejectionAgent {
         capBalance > 0 ? capBalance : freeNow,
       ),
     );
+    if (minPnLRatio > 0 && usableBalance > 0) {
+      targetMinTp1PnlUsd = Math.max(0, usableBalance * minPnLRatio);
+    }
+    targetSizingEnabled = targetMinTp1PnlUsd > 0 || targetSizingPercentEnabled;
     const planPosition: any = this.plan.plan?.position || {};
     let planRiskMinPct: number | undefined;
     let planRiskMaxPct: number | undefined;
@@ -2316,6 +2322,27 @@ export class ReboundRejectionAgent {
       }
     }
     let dynamicRiskPct = baseProfileRisk;
+    const smallBalThreshold = Number(targetSizingCfg.SMALL_BALANCE_RISK_THRESHOLD_USD ?? 0);
+    const smallBalMinRisk = Number(targetSizingCfg.SMALL_BALANCE_MIN_RISK_PCT ?? 0);
+    if (smallBalThreshold > 0 && smallBalMinRisk > 0 && usableBalance < smallBalThreshold) {
+      const boostedRisk = Math.max(dynamicRiskPct, smallBalMinRisk);
+      if (boostedRisk > dynamicRiskPct) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'position_sizing',
+          message: 'small_balance_risk_floor_applied',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            usableBalance,
+            threshold: smallBalThreshold,
+            previousRisk: dynamicRiskPct,
+            boostedRisk,
+          },
+        });
+        dynamicRiskPct = boostedRisk;
+      }
+    }
     let pendingKellyMultiplier = 1;
     let pendingKellyFloor = 0;
     let pendingKellyFraction = 0;
@@ -2420,6 +2447,23 @@ export class ReboundRejectionAgent {
       });
     } catch {
       qualityMultiplier = 1.0;
+    }
+
+    if (smallBalThreshold > 0 && smallBalMinRisk > 0 && usableBalance < smallBalThreshold && dynamicRiskPct + 1e-6 < smallBalMinRisk) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'position_sizing',
+        message: 'small_balance_risk_floor_enforced',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          usableBalance,
+          threshold: smallBalThreshold,
+          enforcedRisk: smallBalMinRisk,
+          previousRisk: dynamicRiskPct,
+        },
+      });
+      dynamicRiskPct = smallBalMinRisk;
     }
     
     try {
