@@ -10,7 +10,8 @@ import { recordOpsEvent } from '../monitor/ops.js';
 import { inspectExposure } from '../broker/live.js';
 import { extractPersistedPlan } from '../services/planStore.js';
 import { classifyRegime } from '../diagnostics/regime.js';
-import { getTriggerSampleRate, setRegimeDiagnostics } from './diagnosticRegistry.js';
+import { getRegimeDiagnostics, getTriggerSampleRate, setRegimeDiagnostics } from './diagnosticRegistry.js';
+import { detectStrategyShift, describeShift } from './strategyShift.js';
 
 let running = false;
 const NEAR_SR_PCT = Number(process.env.NEAR_SR_PCT || 0.4);   // 0.4%
@@ -21,8 +22,10 @@ const TRIGGER_RETENTION_DAYS = Math.max(0, Number(process.env.TRIGGER_RETENTION_
 let lastPurgeAt = 0;
 
 // Local throttling to limit LLM calls
-let lastStrategyAt: number | null = null;
-let lastStrategyZone: { min?: number | null; max?: number | null } | null = null;
+const lastStrategyAt: Record<string, number> = {};
+const lastStrategyZone: Record<string, { min?: number | null; max?: number | null } | null> = {};
+const lastStrategyPrice: Record<string, number | null> = {};
+const lastStrategyRegime: Record<string, { label: string | null; confidence: number | null }> = {};
 // Track last strategy bias per symbol and indicator refresh state
 const lastStrategyBias: Record<string, 'long' | 'short' | 'none' | null> = {};
 const lastRefreshAt: Record<string, number> = {};
@@ -273,18 +276,100 @@ async function reconcileExposure(sessionId: string, symbol: string, mode: string
  */
 async function maybeGenerateStrategy(sym: string, trigger: string, price: number, sessionId: string, force: boolean = false) {
   const minIntervalMin = Number(process.env.STRATEGY_MIN_INTERVAL_MIN || 60);
+  const priceShiftThreshold = Number(process.env.STRATEGY_FORCE_PRICE_PCT || 0.25);
+  const regimeShiftThreshold = Number(process.env.STRATEGY_FORCE_REGIME_CONF_DELTA || 0.15);
   const now = Date.now();
 
-  const canByTime = !lastStrategyAt || (now - lastStrategyAt) > minIntervalMin * 60 * 1000;
+  const lastAt = lastStrategyAt[sym] || 0;
+  const canByTime = !lastAt || (now - lastAt) > minIntervalMin * 60 * 1000;
   const canByZone = shouldEngineRegenerate(sym, price);
 
-  if (!force && !canByTime && !canByZone) return; // avoid excessive LLM calls unless forced by indicators
+  const lastZone = lastStrategyZone[sym] ?? null;
+  const lastPrice = lastStrategyPrice[sym] ?? null;
+  const previousRegime = lastStrategyRegime[sym] ?? { label: null, confidence: null };
+  const regimeDiagnostics = getRegimeDiagnostics(sym);
+  const regimeState = regimeDiagnostics
+    ? {
+        label: `${regimeDiagnostics.regime}:${regimeDiagnostics.direction}`,
+        confidence: (() => {
+          const momentum = Number(regimeDiagnostics.momentumScore ?? 0);
+          const volatility = Number(regimeDiagnostics.volatilityScore ?? 0);
+          const score = Math.max(Math.abs(momentum), Math.abs(volatility));
+          return Number.isFinite(score) ? score : null;
+        })(),
+      }
+    : null;
+  const shift = detectStrategyShift({
+    price,
+    lastPrice,
+    zone: lastZone,
+    priceThresholdPct: priceShiftThreshold,
+    regime: regimeState,
+    previousRegime,
+    confidenceThreshold: regimeShiftThreshold,
+  });
+  const significantChange = shift.priceShift || shift.regimeShift;
 
-  const { strategy: strat, levels: lvls, reused } = await requestStrategy({ symbol: sym, trigger, sessionId, priceHint: price, force });
+  if (!force && !canByTime && !canByZone && !significantChange) return; // avoid excessive LLM calls unless forced by indicators
+
+  const shouldForce = force || significantChange;
+  const { strategy: strat, levels: lvls, reused } = await requestStrategy({
+    symbol: sym,
+    trigger,
+    sessionId,
+    priceHint: price,
+    force: shouldForce,
+  });
+
   if (!reused) {
-    lastStrategyAt = now;
-    lastStrategyZone = (strat as any)?.entry?.zone || null;
+    lastStrategyAt[sym] = now;
+    lastStrategyZone[sym] = (strat as any)?.entry?.zone || null;
+    const entryRef = (strat as any)?.entry;
+    const entryPrice = Number(entryRef?.price ?? entryRef?.zone?.mid ?? entryRef?.zone?.min ?? entryRef?.zone?.max);
+    lastStrategyPrice[sym] = Number.isFinite(entryPrice) ? entryPrice : (Number.isFinite(price) ? price : (lastStrategyPrice[sym] ?? null));
+    const strategyRegime = (strat as any)?.regime;
+    let regimeLabel: string | null = null;
+    let regimeConfidence: number | null = null;
+    if (strategyRegime && typeof strategyRegime === 'object') {
+      const rawLabel = (strategyRegime as any).label ?? (strategyRegime as any).regime ?? null;
+      if (typeof rawLabel === 'string' && rawLabel.trim().length > 0) {
+        regimeLabel = rawLabel.trim();
+      }
+      const rawConfidence = (strategyRegime as any).confidence ?? (strategyRegime as any).score ?? null;
+      const numericConfidence = Number(rawConfidence);
+      if (Number.isFinite(numericConfidence)) {
+        regimeConfidence = numericConfidence;
+      }
+    } else if (typeof strategyRegime === 'string') {
+      regimeLabel = strategyRegime;
+    }
+    const finalRegimeState = {
+      label: regimeLabel ?? regimeState?.label ?? null,
+      confidence: regimeConfidence ?? regimeState?.confidence ?? null,
+    };
+    lastStrategyRegime[sym] = finalRegimeState; // keep last diagnostics
     try { lastStrategyBias[sym] = ((strat as any)?.bias as any) || null; } catch { lastStrategyBias[sym] = null; }
+  } else if (significantChange) {
+    // If we requested a refresh due to a significant change but reused the plan, keep the timestamp
+    // so that the engine can try again on the next tick instead of getting stuck.
+    lastStrategyAt[sym] = now;
+    if (regimeState) {
+      lastStrategyRegime[sym] = regimeState;
+    }
+  }
+
+  if (significantChange) {
+    const reason = describeShift(shift);
+    if (reason) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'strategy_regen',
+        message: 'Strategy regeneration triggered by shift',
+        sessionId,
+        symbol: sym,
+        details: { reason, price, lastPrice, zone: lastZone, regime: regimeState?.label ?? null },
+      });
+    }
   }
 
   // Push WS (classic strategy preview)

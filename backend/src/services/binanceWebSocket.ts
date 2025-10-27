@@ -1095,6 +1095,10 @@ class BinanceWebSocketManager {
         if (validation.dataAgeMs && validation.dataAgeMs > maxStaleAge) {
           maxStaleAge = validation.dataAgeMs;
         }
+        const reason = validation.ruleId || 'stale';
+        setFallbackState(rawSymbol, true, `ws_validation_${reason}`, { increment: false });
+        recordRestFallback(rawSymbol, `ws_${reason}`);
+        this.scheduleBookTickerRefresh(rawSymbol);
       }
 
       recordMarketFrame({
