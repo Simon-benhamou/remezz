@@ -3,6 +3,7 @@ import { loadIntradayConfig } from './config/index.js';
 import type { RegimeLabel } from './types.js';
 import type { Side } from './history.js';
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
+import { getConfig } from '../../../utils/env.js';
 
 export type PositionContext = {
   equityUsd: PreciseDecimal;
@@ -17,6 +18,8 @@ export type PositionContext = {
   riskScale?: number;
   baseRiskPct?: number;
   minNotionalUsd?: number;
+  confidenceScore?: number;
+  targetNotionalUsd?: number;
 };
 
 export type PositionSizingResult = {
@@ -24,6 +27,10 @@ export type PositionSizingResult = {
   riskUsd: PreciseDecimal;
   leverage: number;
   minNotionalApplied?: boolean;
+  riskPct: number;
+  confidenceTargetNotionalUsd?: number;
+  confidenceRiskFloorApplied?: boolean;
+  confidenceRiskBoostApplied?: boolean;
   droppedReason?: string;
 };
 
@@ -43,12 +50,66 @@ export class VolatilitySizer {
   private readonly cfg = loadIntradayConfig();
 
   compute(ctx: PositionContext): PositionSizingResult {
+    const clamp01 = (value: number | undefined): number => {
+      if (value == null || !Number.isFinite(value)) return 0;
+      if (value <= 0) return 0;
+      if (value >= 1) return 1;
+      return value;
+    };
     const stopPct = Math.max(1e-6, ctx.stopLossPct);
     const baseRiskPct = Math.max(1e-6, ctx.baseRiskPct ?? this.cfg.risk.baseRiskPct);
     const regimeMult = ctx.regime === 'BOM' ? this.cfg.risk.bomMultiplier : this.cfg.risk.mrMultiplier;
     const riskReduction = Math.max(0.1, Math.min(1, ctx.riskReduction ?? 1));
     const riskScale = Math.max(0.1, ctx.riskScale ?? 1);
-    const riskPct = baseRiskPct * riskScale * regimeMult * riskReduction;
+    const hasConfidenceInput = ctx.confidenceScore != null && Number.isFinite(ctx.confidenceScore);
+    const confidenceScore = clamp01(hasConfidenceInput ? ctx.confidenceScore : 0);
+    const envCfg = getConfig();
+    const minShare = Math.max(0, Math.min(1, Number(envCfg.CONFIDENCE_RISK_FLOOR_MIN_SHARE ?? 0.35)));
+    const maxShare = Math.max(minShare, Math.min(1.2, Number(envCfg.CONFIDENCE_RISK_FLOOR_MAX_SHARE ?? 0.85)));
+    const boostShare = Math.max(0, Number(envCfg.CONFIDENCE_RISK_BOOST_SHARE ?? 0.45));
+    const boostThreshold = Math.min(0.95, Math.max(0, Number(envCfg.CONFIDENCE_RISK_BOOST_THRESHOLD ?? 0.6)));
+    const baseRatio = Math.max(0.1, Number(envCfg.TARGET_NOTIONAL_BASE_RATIO ?? 0.5));
+    const bonusRatio = Math.max(0, Number(envCfg.TARGET_NOTIONAL_CONF_BONUS ?? 2));
+    const maxRatio = Math.max(baseRatio, Number(envCfg.TARGET_NOTIONAL_MAX_RATIO ?? 1.6));
+    let riskPct = baseRiskPct * riskScale * regimeMult * riskReduction;
+    let riskFloorApplied = false;
+    let riskBoostApplied = false;
+    const equityNumber = ctx.equityUsd.toNumber();
+    let confidenceTargetNotionalUsd = ctx.targetNotionalUsd;
+    if (hasConfidenceInput && !(confidenceTargetNotionalUsd != null && confidenceTargetNotionalUsd > 0) && equityNumber > 0) {
+      const ratio = baseRatio * (1 + bonusRatio * confidenceScore);
+      const cappedRatio = Math.max(baseRatio, Math.min(maxRatio, ratio));
+      confidenceTargetNotionalUsd = equityNumber * cappedRatio;
+    } else if (!hasConfidenceInput && confidenceTargetNotionalUsd == null) {
+      confidenceTargetNotionalUsd = 0;
+    }
+    if (hasConfidenceInput && confidenceScore > 0) {
+      const floorShare = minShare + (maxShare - minShare) * confidenceScore;
+      const riskFloorPct = baseRiskPct * floorShare;
+      if (riskFloorPct > riskPct + 1e-9) {
+        riskPct = riskFloorPct;
+        riskFloorApplied = true;
+      }
+      if (confidenceScore > boostThreshold) {
+        const progress = (confidenceScore - boostThreshold) / Math.max(1e-6, 1 - boostThreshold);
+        const boostedRiskPct = baseRiskPct * (1 + boostShare * Math.min(1, Math.max(0, progress)));
+        if (boostedRiskPct > riskPct + 1e-9) {
+          riskPct = boostedRiskPct;
+          riskBoostApplied = true;
+        }
+      }
+    }
+    if (
+      confidenceTargetNotionalUsd != null &&
+      confidenceTargetNotionalUsd > 0 &&
+      stopPct > 0 &&
+      equityNumber > 0
+    ) {
+      const requiredRiskPct = (confidenceTargetNotionalUsd * stopPct) / Math.max(equityNumber, 1e-9);
+      if (requiredRiskPct > riskPct + 1e-9) {
+        riskPct = requiredRiskPct;
+      }
+    }
     const riskUsd = ctx.equityUsd.times(new PreciseDecimal(riskPct.toString())).abs();
     const stopDecimal = new PreciseDecimal(stopPct);
     const sizeNotional = riskUsd.dividedBy(stopDecimal);
@@ -60,10 +121,13 @@ export class VolatilitySizer {
     let adjustedSize = sizeNotional.times(new PreciseDecimal(leverageScalar));
     let adjustedRiskUsd = riskUsd.times(new PreciseDecimal(leverageScalar));
     let leverage = cappedLeverage;
+    const baseMinNotionalUsd = ctx.minNotionalUsd ?? 0;
+    const hasConfidenceFloor = confidenceTargetNotionalUsd != null && confidenceTargetNotionalUsd > baseMinNotionalUsd + 1e-9;
+    const effectiveMinNotional = Math.max(baseMinNotionalUsd, confidenceTargetNotionalUsd ?? 0);
     let minNotionalApplied = false;
     const priceAbs = ctx.price.abs();
-    if (ctx.minNotionalUsd && ctx.minNotionalUsd > 0 && priceAbs.raw !== 0n) {
-      const minNotionalDec = new PreciseDecimal(ctx.minNotionalUsd);
+    if (effectiveMinNotional > 0 && priceAbs.raw !== 0n) {
+      const minNotionalDec = new PreciseDecimal(effectiveMinNotional);
       const currentNotional = adjustedSize.times(priceAbs).abs();
       if (currentNotional.lt(minNotionalDec)) {
         const minSize = minNotionalDec.dividedBy(priceAbs);
@@ -77,13 +141,46 @@ export class VolatilitySizer {
           adjustedRiskUsd = minNotionalDec.times(stopPctDec);
           leverage = Math.max(leverage, minLeverage);
           minNotionalApplied = true;
+          if (ctx.equityUsd.raw !== 0n) {
+            const recalculated = adjustedRiskUsd.dividedBy(ctx.equityUsd);
+            riskPct = Number(recalculated.toFixed(6));
+          }
         } else {
-          return {
-            size: PreciseDecimal.fromRaw(0n),
-            riskUsd: PreciseDecimal.fromRaw(0n),
-            leverage: 0,
-            droppedReason: 'below_min_notional',
-          };
+          if (!hasConfidenceFloor) {
+            return {
+              size: PreciseDecimal.fromRaw(0n),
+              riskUsd: PreciseDecimal.fromRaw(0n),
+              leverage: 0,
+              riskPct,
+              confidenceTargetNotionalUsd,
+              confidenceRiskFloorApplied: riskFloorApplied || undefined,
+              confidenceRiskBoostApplied: riskBoostApplied || undefined,
+              droppedReason: 'below_min_notional',
+            };
+          }
+          // Confidence-driven floor cannot be met — fall back to maximum allowed size.
+          const maxAllowedNotional = ctx.equityUsd.times(new PreciseDecimal(maxAllowedLeverage.toString()));
+          const fallbackNotional = maxAllowedNotional.lt(minNotionalDec) ? maxAllowedNotional : minNotionalDec;
+          if (fallbackNotional.raw <= 0n) {
+            return {
+              size: PreciseDecimal.fromRaw(0n),
+              riskUsd: PreciseDecimal.fromRaw(0n),
+              leverage: 0,
+              riskPct,
+              confidenceTargetNotionalUsd,
+              confidenceRiskFloorApplied: riskFloorApplied || undefined,
+              confidenceRiskBoostApplied: riskBoostApplied || undefined,
+              droppedReason: 'below_min_notional',
+            };
+          }
+          adjustedSize = fallbackNotional.dividedBy(priceAbs);
+          adjustedRiskUsd = fallbackNotional.times(stopPctDec);
+          leverage = Math.min(maxAllowedLeverage, Number(fallbackNotional.dividedBy(ctx.equityUsd).toFixed(6)));
+          minNotionalApplied = true;
+          if (ctx.equityUsd.raw !== 0n) {
+            const recalculated = adjustedRiskUsd.dividedBy(ctx.equityUsd);
+            riskPct = Number(recalculated.toFixed(6));
+          }
         }
       }
     }
@@ -92,6 +189,10 @@ export class VolatilitySizer {
       riskUsd: adjustedRiskUsd,
       leverage,
       minNotionalApplied,
+      riskPct,
+      confidenceTargetNotionalUsd,
+      confidenceRiskFloorApplied: riskFloorApplied || undefined,
+      confidenceRiskBoostApplied: riskBoostApplied || undefined,
     };
   }
 }

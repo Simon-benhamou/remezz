@@ -7,7 +7,10 @@ export type IntradayDiagnosticKey =
   | 'min_notional_skip'
   | 'min_notional_applied'
   | 'risk_scale_floor'
-  | 'ev_extreme';
+  | 'ev_extreme'
+  | 'confidence_risk_floor'
+  | 'confidence_risk_boost'
+  | 'confidence_target_notional';
 
 export type DiagnosticPayload = Record<string, unknown> | undefined;
 

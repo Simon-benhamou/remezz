@@ -514,6 +514,12 @@ export class IntradayDualStrategy {
     const tpMultiplier = tpFirstPctBase > 0 ? tpSecondPctBase / tpFirstPctBase : 2;
     const tpSecondPct = tpBasePct * tpMultiplier;
 
+    let confidence = regime.confidence;
+    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop?.regime === 'BOM' && adaptive.lastStop.side === side) {
+      confidence = Math.max(0, confidence * 0.95);
+    }
+    const adjustedConfidence = this.adjustConfidenceWithHistory(confidence, side, adaptive.qValues);
+
     const pyramidScale = isPyramidAdd ? this.cfg.entry.bom.pyramidScale ?? 0.3 : 1;
     const sized = this.sizer.compute({
       equityUsd: ctx.equityUsd,
@@ -528,6 +534,7 @@ export class IntradayDualStrategy {
       riskScale: quality.riskScale,
       baseRiskPct: this.runtimeCfg.qs.baseRiskPct,
       minNotionalUsd: ctx.minNotionalUsd,
+      confidenceScore: adjustedConfidence,
     });
     if (sized.droppedReason === 'below_min_notional') {
       recordDiagnostic(input.symbol, 'min_notional_skip', {
@@ -553,6 +560,27 @@ export class IntradayDualStrategy {
         price: signalCandle.close,
         minNotionalUsd: ctx.minNotionalUsd,
         regime: 'BOM',
+      });
+    }
+    if (sized.confidenceRiskFloorApplied) {
+      recordDiagnostic(input.symbol, 'confidence_risk_floor', {
+        regime: 'BOM',
+        confidence: adjustedConfidence,
+        riskPct: sized.riskPct,
+      });
+    }
+    if (sized.confidenceRiskBoostApplied) {
+      recordDiagnostic(input.symbol, 'confidence_risk_boost', {
+        regime: 'BOM',
+        confidence: adjustedConfidence,
+        riskPct: sized.riskPct,
+      });
+    }
+    if (sized.confidenceTargetNotionalUsd && sized.confidenceTargetNotionalUsd > (ctx.minNotionalUsd ?? 0)) {
+      recordDiagnostic(input.symbol, 'confidence_target_notional', {
+        regime: 'BOM',
+        confidence: adjustedConfidence,
+        targetNotionalUsd: sized.confidenceTargetNotionalUsd,
       });
     }
     const riskScaleAtFloor = quality.riskScale <= minRiskFloor + 1e-6;
@@ -588,11 +616,6 @@ export class IntradayDualStrategy {
       slippageBps: ctx.slippageBps,
     });
 
-    let confidence = regime.confidence;
-    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop?.regime === 'BOM' && adaptive.lastStop.side === side) {
-      confidence = Math.max(0, confidence * 0.95);
-    }
-    const adjustedConfidence = this.adjustConfidenceWithHistory(confidence, side, adaptive.qValues);
     this.logger.debug('intraday.history-bias', {
       symbol: input.symbol,
       regime: 'BOM',
@@ -640,6 +663,10 @@ export class IntradayDualStrategy {
         predictedSlippageBps: ctx.slippageBps,
         minNotionalApplied: sized.minNotionalApplied ? true : undefined,
         riskScaleFloor: riskScaleAtFloor ? true : undefined,
+        confidenceTargetUsd: sized.confidenceTargetNotionalUsd,
+        confidenceRiskPct: sized.riskPct,
+        confidenceRiskFloor: sized.confidenceRiskFloorApplied ? true : undefined,
+        confidenceRiskBoost: sized.confidenceRiskBoostApplied ? true : undefined,
       },
     };
   }
@@ -787,6 +814,15 @@ export class IntradayDualStrategy {
     const tpMultiplier = tpFirstPctBase > 0 ? tpSecondPctBase / tpFirstPctBase : 2;
     const tpSecondPct = tpBasePct * tpMultiplier;
 
+    let confidence = Math.max(regime.confidence, 0.6);
+    if (adaptive.recheckActive && adaptive.staleBias && lastStop?.regime === 'MR' && lastStop.side === side) {
+      confidence = Math.max(0.5, confidence * 0.95);
+    }
+    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop?.regime === 'BOM') {
+      confidence = Math.min(1, confidence * 1.05);
+    }
+    const adjustedConfidence = this.adjustConfidenceWithHistory(confidence, side, adaptive.qValues);
+
     const sized = this.sizer.compute({
       equityUsd: ctx.equityUsd,
       stopLossPct: stopPct,
@@ -800,6 +836,7 @@ export class IntradayDualStrategy {
       riskScale: quality.riskScale,
       baseRiskPct: this.runtimeCfg.qs.baseRiskPct,
       minNotionalUsd: ctx.minNotionalUsd,
+      confidenceScore: adjustedConfidence,
     });
     if (sized.droppedReason === 'below_min_notional') {
       recordDiagnostic(input.symbol, 'min_notional_skip', {
@@ -827,6 +864,27 @@ export class IntradayDualStrategy {
         regime: 'MR',
       });
     }
+    if (sized.confidenceRiskFloorApplied) {
+      recordDiagnostic(input.symbol, 'confidence_risk_floor', {
+        regime: 'MR',
+        confidence: adjustedConfidence,
+        riskPct: sized.riskPct,
+      });
+    }
+    if (sized.confidenceRiskBoostApplied) {
+      recordDiagnostic(input.symbol, 'confidence_risk_boost', {
+        regime: 'MR',
+        confidence: adjustedConfidence,
+        riskPct: sized.riskPct,
+      });
+    }
+    if (sized.confidenceTargetNotionalUsd && sized.confidenceTargetNotionalUsd > (ctx.minNotionalUsd ?? 0)) {
+      recordDiagnostic(input.symbol, 'confidence_target_notional', {
+        regime: 'MR',
+        confidence: adjustedConfidence,
+        targetNotionalUsd: sized.confidenceTargetNotionalUsd,
+      });
+    }
     const riskScaleAtFloor = quality.riskScale <= minRiskFloor + 1e-6;
     const entryPrice = new PreciseDecimal(input.price);
     const stopPrice = pctToPrice(entryPrice, stopPct, side, 'sl');
@@ -841,14 +899,6 @@ export class IntradayDualStrategy {
       slippageBps: ctx.slippageBps,
     });
 
-    let confidence = Math.max(regime.confidence, 0.6);
-    if (adaptive.recheckActive && adaptive.staleBias && lastStop?.regime === 'MR' && lastStop.side === side) {
-      confidence = Math.max(0.5, confidence * 0.95);
-    }
-    if (adaptive.recheckActive && adaptive.staleBias && adaptive.lastStop?.regime === 'BOM') {
-      confidence = Math.min(1, confidence * 1.05);
-    }
-    const adjustedConfidence = this.adjustConfidenceWithHistory(confidence, side, adaptive.qValues);
     this.logger.debug('intraday.history-bias', {
       symbol: input.symbol,
       regime: 'MR',
@@ -895,6 +945,10 @@ export class IntradayDualStrategy {
         predictedSlippageBps: ctx.slippageBps,
         minNotionalApplied: sized.minNotionalApplied ? true : undefined,
         riskScaleFloor: riskScaleAtFloor ? true : undefined,
+        confidenceTargetUsd: sized.confidenceTargetNotionalUsd,
+        confidenceRiskPct: sized.riskPct,
+        confidenceRiskFloor: sized.confidenceRiskFloorApplied ? true : undefined,
+        confidenceRiskBoost: sized.confidenceRiskBoostApplied ? true : undefined,
       },
     };
   }

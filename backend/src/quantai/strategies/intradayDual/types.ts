@@ -128,6 +128,10 @@ export type EntrySignal = {
     tp1Fraction?: number;
     minNotionalApplied?: boolean;
     riskScaleFloor?: boolean;
+    confidenceTargetUsd?: number;
+    confidenceRiskPct?: number;
+    confidenceRiskFloor?: boolean;
+    confidenceRiskBoost?: boolean;
   };
 };
 
