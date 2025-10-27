@@ -55,11 +55,55 @@ export type OpsEvent = {
 
 const MAX_EVENTS = 200;
 const opsEvents: OpsEvent[] = [];
+const DUPLICATE_COOLDOWN_MS = 60 * 1000;
+const opsEventDedupe = new Map<string, number>();
+
+function stableStringify(value: any): string {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString() : '';
+  if (typeof value !== 'object') {
+    if (typeof value === 'bigint') return `${value.toString()}n`;
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+  const entries = Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify((value as any)[key])}`);
+  return `{${entries.join(',')}}`;
+}
+
+function buildEventSignature(evt: { source: string; message: string; sessionId?: string; symbol?: string; details?: any }): string {
+  const sessionId = evt.sessionId ?? 'global';
+  const symbol = evt.symbol ?? 'nosym';
+  const detailsKey = stableStringify(evt.details);
+  return `${sessionId}|${symbol}|${evt.source}|${evt.message}|${detailsKey}`;
+}
+
+function pruneDedupeCache(now: number) {
+  if (opsEventDedupe.size <= 2048) return;
+  for (const [key, ts] of opsEventDedupe) {
+    if (now - ts > DUPLICATE_COOLDOWN_MS) {
+      opsEventDedupe.delete(key);
+    }
+  }
+}
 
 export function recordOpsEvent(evt: { level?: OpsEventLevel; source: string; message: string; sessionId?: string; symbol?: string; details?: any }) {
+  const now = Date.now();
+  try {
+    const signature = buildEventSignature(evt);
+    const lastTs = opsEventDedupe.get(signature);
+    if (lastTs != null && now - lastTs < DUPLICATE_COOLDOWN_MS) {
+      return;
+    }
+    opsEventDedupe.set(signature, now);
+    pruneDedupeCache(now);
+  } catch {}
   const row: OpsEvent = {
-    id: `ops_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
-    ts: Date.now(),
+    id: `ops_${now}_${Math.random().toString(36).slice(2,8)}`,
+    ts: now,
     level: evt.level || 'info',
     source: evt.source,
     message: evt.message,
