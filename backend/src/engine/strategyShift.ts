@@ -73,11 +73,11 @@ function computeRegimeShift(
   if (currentLabel && previousLabel && currentLabel !== previousLabel) {
     return true;
   }
-  if (!currentLabel && previousLabel) {
+  if (!previousLabel && currentLabel) {
     return true;
   }
-  if (currentLabel && !previousLabel) {
-    return true;
+  if (previousLabel && !currentLabel) {
+    return false;
   }
   const currentConfidence = resolveConfidence(regime);
   const previousConfidence = resolveConfidence(previous);
