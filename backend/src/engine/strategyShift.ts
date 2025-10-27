@@ -63,6 +63,13 @@ function resolveConfidence(regime: RegimeState): number | null {
   return value;
 }
 
+function confidenceBand(value: number | null): 'low' | 'mid' | 'high' | null {
+  if (value == null) return null;
+  if (value < 0.35) return 'low';
+  if (value < 0.65) return 'mid';
+  return 'high';
+}
+
 function computeRegimeShift(
   regime: RegimeState,
   previous: RegimeState,
@@ -83,7 +90,12 @@ function computeRegimeShift(
   const previousConfidence = resolveConfidence(previous);
   if (currentConfidence == null || previousConfidence == null) return false;
   const delta = Math.abs(currentConfidence - previousConfidence);
-  return delta >= Math.max(0, confidenceThreshold);
+  if (delta < Math.max(0, confidenceThreshold)) return false;
+  const currentBand = confidenceBand(currentConfidence);
+  const previousBand = confidenceBand(previousConfidence);
+  if (currentBand && previousBand && currentBand !== previousBand) return true;
+  // For cases where both bands are equal, require a larger swing (double threshold) to treat it as a shift.
+  return delta >= Math.max(0, confidenceThreshold * 2);
 }
 
 export function detectStrategyShift(options: StrategyShiftOptions): StrategyShiftResult {

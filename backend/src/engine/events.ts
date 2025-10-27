@@ -30,6 +30,7 @@ const lastStrategyRegime: Record<string, { label: string | null; confidence: num
 const lastStrategyBias: Record<string, 'long' | 'short' | 'none' | null> = {};
 const lastRefreshAt: Record<string, number> = {};
 const divergenceTicks: Record<string, number> = {};
+const lastRegimeShiftAt: Record<string, number> = {};
 const lastRsiBySym: Record<string, number> = {};
 const lastIndicatorSig: Record<string, { price: number; emaSpread: number; rsi: number; adx: number }> = {};
 let lastTick = { symbol: '', price: 0, ts: 0 };
@@ -308,7 +309,19 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     previousRegime,
     confidenceThreshold: regimeShiftThreshold,
   });
-  const significantChange = shift.priceShift || shift.regimeShift;
+  const regimeOnlyShift = shift.regimeShift && !shift.priceShift;
+  const regimeCooldownMin = Number(process.env.STRATEGY_REGIME_COOLDOWN_MIN || 5);
+  const lastRegime = lastRegimeShiftAt[sym] || 0;
+  const regimeCooldownPassed = !regimeOnlyShift || !lastRegime || (now - lastRegime) > regimeCooldownMin * 60 * 1000;
+  const significantChange = shift.priceShift || (shift.regimeShift && regimeCooldownPassed);
+  const suppressedRegimeShift = regimeOnlyShift && !regimeCooldownPassed;
+
+  if (suppressedRegimeShift && regimeState) {
+    lastStrategyRegime[sym] = {
+      label: regimeState.label ?? null,
+      confidence: regimeState.confidence ?? null,
+    };
+  }
 
   if (!force && !canByTime && !canByZone && !significantChange) return; // avoid excessive LLM calls unless forced by indicators
 
@@ -353,21 +366,47 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     // If we requested a refresh due to a significant change but reused the plan, keep the timestamp
     // so that the engine can try again on the next tick instead of getting stuck.
     lastStrategyAt[sym] = now;
+    if (shift.priceShift) {
+      lastStrategyZone[sym] = null;
+      if (Number.isFinite(price)) {
+        lastStrategyPrice[sym] = price;
+      }
+    }
     if (regimeState) {
       lastStrategyRegime[sym] = regimeState;
     }
   }
 
+  if (shift.regimeShift && regimeCooldownPassed) {
+    lastRegimeShiftAt[sym] = now;
+  }
+
   if (significantChange) {
     const reason = describeShift(shift);
     if (reason) {
+      const previousConfidence = previousRegime?.confidence ?? null;
+      const nextConfidence = regimeState?.confidence ?? null;
+      const confidenceDelta = previousConfidence != null && nextConfidence != null
+        ? nextConfidence - previousConfidence
+        : null;
       recordOpsEvent({
         level: 'info',
         source: 'strategy_regen',
         message: 'Strategy regeneration triggered by shift',
         sessionId,
         symbol: sym,
-        details: { reason, price, lastPrice, zone: lastZone, regime: regimeState?.label ?? null },
+        details: {
+          reason,
+          price,
+          lastPrice,
+          zone: lastZone,
+          regime: regimeState?.label ?? null,
+          previousRegime: previousRegime?.label ?? null,
+          previousConfidence,
+          nextConfidence,
+          confidenceDelta,
+          regimeCooldownMinutes: regimeOnlyShift ? regimeCooldownMin : null,
+        },
       });
     }
   }
