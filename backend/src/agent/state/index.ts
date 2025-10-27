@@ -7431,7 +7431,11 @@ export class ReboundRejectionAgent {
     if (lossStreak >= threshold) {
       const existingCooldown = state.cooldownUntil && state.cooldownUntil.getTime() > nowMs
         ? state.cooldownUntil
-        : this.circuitBreaker.enforceLossCooldown(new Date(nowMs));
+        : this.circuitBreaker.enforceLossCooldown(
+            new Date(nowMs),
+            undefined,
+            `Consecutive losses threshold reached (${lossStreak}/${threshold})`
+          );
       const cooldownMs = Math.max(60_000, existingCooldown.getTime() - nowMs);
 
       recordOpsEvent({
