@@ -4,6 +4,36 @@ import { recomputeKpi } from '../metrics/kpi.js';
 import { finalizeDecisionOutcome } from '../learning/decisionMemory.js';
 import type { CircuitBreakerState } from '../quantai/index.js';
 
+const ADAPTIVE_STATE_VERSION = 1;
+
+export type AdaptiveStateSnapshot = {
+  version: number;
+  tradeCadence?: {
+    stageIndex: number;
+    stageLabel: string;
+    maxTradesPerDay: number;
+    cooldownMs: number;
+    lastWinRate: number;
+    sampleSize: number;
+    lastUpdated: number;
+    reason: string;
+  };
+  qualityAdjustmentByTier?: Record<string, number>;
+  cooldownByTier?: Record<string, number>;
+  recentTradesByTier?: Record<string, AdaptiveStateTierTrade[]>;
+  recentTrades?: AdaptiveStateTierTrade[];
+  qualityThresholdAdjustment?: number;
+  lastDailyLossTriggerMarker?: number | null;
+  lastTradeWasWin?: boolean;
+};
+
+export type AdaptiveStateTierTrade = {
+  symbol: string;
+  win: boolean;
+  pnlPct: number;
+  timestamp: number;
+};
+
 const POSITION_QTY_EPSILON = 1e-6;
 
 export async function recordEnter(params: {
@@ -174,6 +204,84 @@ export async function persistCircuitBreakerState(sessionId: string, state: Circu
     });
   } catch (error) {
     console.warn('Failed to persist circuit breaker state:', error);
+  }
+}
+
+function sanitizeTrades(trades: AdaptiveStateTierTrade[] | undefined, limit = 30): AdaptiveStateTierTrade[] | undefined {
+  if (!Array.isArray(trades) || trades.length === 0) return undefined;
+  const pruned = trades
+    .filter((trade) => typeof trade === 'object' && trade != null)
+    .map((trade) => ({
+      symbol: typeof trade.symbol === 'string' ? trade.symbol : '',
+      win: Boolean(trade.win),
+      pnlPct: Number.isFinite(trade.pnlPct) ? Number(trade.pnlPct) : 0,
+      timestamp: Number.isFinite(trade.timestamp) ? Number(trade.timestamp) : Date.now(),
+    }))
+    .filter((trade) => trade.symbol.length > 0);
+  if (!pruned.length) return undefined;
+  return pruned.slice(-limit);
+}
+
+export async function persistAdaptiveState(sessionId: string, snapshot: AdaptiveStateSnapshot): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const payload: AdaptiveStateSnapshot = {
+      ...snapshot,
+      version: ADAPTIVE_STATE_VERSION,
+      tradeCadence: snapshot.tradeCadence
+        ? {
+            stageIndex: Math.max(0, Math.floor(snapshot.tradeCadence.stageIndex ?? 0)),
+            stageLabel: snapshot.tradeCadence.stageLabel ?? 'base',
+            maxTradesPerDay: Math.max(0, Math.floor(snapshot.tradeCadence.maxTradesPerDay ?? 0)),
+            cooldownMs: Math.max(0, Math.floor(snapshot.tradeCadence.cooldownMs ?? 0)),
+            lastWinRate: Number.isFinite(snapshot.tradeCadence.lastWinRate) ? snapshot.tradeCadence.lastWinRate : 0,
+            sampleSize: Math.max(0, Math.floor(snapshot.tradeCadence.sampleSize ?? 0)),
+            lastUpdated: Math.floor(snapshot.tradeCadence.lastUpdated ?? Date.now()),
+            reason: snapshot.tradeCadence.reason ?? 'unknown',
+          }
+        : undefined,
+      qualityAdjustmentByTier: snapshot.qualityAdjustmentByTier ?? undefined,
+      cooldownByTier: snapshot.cooldownByTier ?? undefined,
+      recentTradesByTier: snapshot.recentTradesByTier
+        ? Object.fromEntries(
+            Object.entries(snapshot.recentTradesByTier).map(([tier, trades]) => [
+              tier,
+              sanitizeTrades(trades) ?? [],
+            ]),
+          )
+        : undefined,
+      recentTrades: sanitizeTrades(snapshot.recentTrades, 25),
+      qualityThresholdAdjustment: snapshot.qualityThresholdAdjustment,
+      lastDailyLossTriggerMarker:
+        snapshot.lastDailyLossTriggerMarker != null && Number.isFinite(snapshot.lastDailyLossTriggerMarker)
+          ? snapshot.lastDailyLossTriggerMarker
+          : null,
+      lastTradeWasWin: snapshot.lastTradeWasWin ?? undefined,
+    };
+    await prisma.agentOpsTelemetry.upsert({
+      where: { sessionId },
+      update: { adaptiveState: payload },
+      create: { sessionId, adaptiveState: payload },
+    });
+  } catch (error) {
+    console.warn('Failed to persist adaptive state:', error);
+  }
+}
+
+export async function loadAdaptiveState(sessionId: string): Promise<AdaptiveStateSnapshot | null> {
+  if (!sessionId) return null;
+  try {
+    const row = await prisma.agentOpsTelemetry.findUnique({
+      where: { sessionId },
+      select: { adaptiveState: true },
+    });
+    if (!row?.adaptiveState || typeof row.adaptiveState !== 'object') return null;
+    const payload = row.adaptiveState as AdaptiveStateSnapshot;
+    if (payload.version !== ADAPTIVE_STATE_VERSION) return null;
+    return payload;
+  } catch (error) {
+    console.warn('Failed to load adaptive state:', error);
+    return null;
   }
 }
 

@@ -27,7 +27,17 @@ import { clampBudgetFraction, resolveBudgetFraction } from '../../utils/budget.j
 import { computeLeverageGuardForSymbol } from '../../utils/riskGuards.js';
 import { applyHysteresis, blendRR, DEFAULT_RR_EXPECTANCY_CONFIG, resolveRrExpectancyConfig, rrMinFromWinrate, type RRExpectancyConfig } from '../../risk/rrExpectancy.js';
 import { broadcast } from '../../ws/hub.js';
-import { loadActivePosition, recordEnter, recordExit, loadCircuitBreakerState, persistCircuitBreakerState } from '../persistence.js';
+import {
+  loadActivePosition,
+  recordEnter,
+  recordExit,
+  loadCircuitBreakerState,
+  persistCircuitBreakerState,
+  loadAdaptiveState,
+  persistAdaptiveState,
+  type AdaptiveStateSnapshot,
+  type AdaptiveStateTierTrade,
+} from '../persistence.js';
 import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
@@ -165,6 +175,7 @@ export class ReboundRejectionAgent {
   ]);
   private static readonly TIER_PERFORMANCE_RETENTION_MS = 72 * 60 * 60 * 1000; // 72h rolling window
   private static readonly TIER_PERFORMANCE_MAX = 30;
+  private static readonly ADAPTIVE_STATE_PERSIST_DEBOUNCE_MS = 4_000;
   state: AgentState = 'IDLE';
   profile: ActivationProfile | null = null;
   plan: ValidatedPlan | null = null;
@@ -198,6 +209,9 @@ export class ReboundRejectionAgent {
   public cooldownContext: { reason: string; guard?: RiskDecision; triggeredAt: number } | null = null;
   public lastExitCooldownMs = 0;
   public maxNotionalCapUsd = Infinity;
+  private adaptivePersistTimer: NodeJS.Timeout | null = null;
+  private pendingAdaptivePersistReason: string | null = null;
+  private lastAdaptivePersistAt = 0;
   private capitalAgentId: string | null = null;
   private restoredCapitalApplied = false;
   public orderAttemptLogCount = 0;
@@ -440,6 +454,7 @@ export class ReboundRejectionAgent {
     if (!tier) return;
     const marker = trigger?.getTime() ?? null;
     if (marker && this.lastDailyLossTriggerMarker === marker) return;
+    let persistScheduled = false;
 
     const currentAdj = this.qualityAdjustmentByTier.get(tier) ?? 0;
     const penalty = 10;
@@ -447,6 +462,7 @@ export class ReboundRejectionAgent {
 
     if (newAdj !== currentAdj) {
       this.qualityAdjustmentByTier.set(tier, newAdj);
+      persistScheduled = true;
       recordOpsEvent({
         level: 'warn',
         source: 'daily_loss_adaptation',
@@ -465,6 +481,10 @@ export class ReboundRejectionAgent {
 
     if (marker) {
       this.lastDailyLossTriggerMarker = marker;
+      persistScheduled = true;
+    }
+    if (persistScheduled) {
+      this.scheduleAdaptiveStatePersist('daily_loss_penalty');
     }
   }
 
@@ -676,7 +696,21 @@ export class ReboundRejectionAgent {
     };
     this.ensurePerformanceMetricsSkeleton(profile);
     this.syncCircuitBreakerTelemetry();
+    if (this.sessionId) {
+      try {
+        const restoredAdaptive = await loadAdaptiveState(this.sessionId);
+        if (restoredAdaptive) {
+          console.log(`♻️ Restored adaptive state for ${this.sessionId}`);
+          this.applyAdaptiveStateSnapshot(restoredAdaptive);
+        }
+      } catch (error) {
+        console.warn(`Failed to load adaptive state for session ${this.sessionId}:`, error);
+      }
+    }
     this.evaluateTradeCadence('activation');
+    if (this.sessionId) {
+      void this.persistAdaptiveStateSnapshot('activation');
+    }
     const existingCap = profile.leverageCap as ResolvedLeverageCap | undefined;
     const existingCategory = existingCap?.category ?? '';
     const requestedMaxLev = Math.max(1, Math.min(10, Number(profile.requestedMaxLeverage ?? profile.maxLeverage ?? existingCap?.requested ?? 1)));
@@ -7370,6 +7404,7 @@ export class ReboundRejectionAgent {
         },
       });
     }
+    this.scheduleAdaptiveStatePersist('trade_cadence_stage');
   }
 
   public evaluateTradeCadence(context: 'activation' | 'post_trade' | 'readiness' = 'readiness'): TradeCadenceState {
@@ -7411,6 +7446,7 @@ export class ReboundRejectionAgent {
         reason: context,
       };
       this.updateTradeCadenceTelemetry();
+      this.scheduleAdaptiveStatePersist('trade_cadence_update');
     }
 
     return this.getTradeCadenceSnapshot();
@@ -7471,6 +7507,142 @@ export class ReboundRejectionAgent {
         this.recentTradesByTier.set(key, pruned);
       }
     }
+    this.scheduleAdaptiveStatePersist('tier_performance');
+  }
+
+  private captureAdaptiveStateSnapshot(): AdaptiveStateSnapshot {
+    const toObject = (map: Map<string, number>) => {
+      const entries = Array.from(map.entries()).filter(([key]) => typeof key === 'string');
+      return entries.length ? Object.fromEntries(entries) : undefined;
+    };
+    const serializeTrades = (
+      trades: { symbol?: string; win: boolean; pnlPct: number; timestamp: number }[],
+      fallbackSymbol: string,
+    ): AdaptiveStateTierTrade[] =>
+      trades
+        .slice(-ReboundRejectionAgent.TIER_PERFORMANCE_MAX)
+        .map((trade) => ({
+          symbol:
+            typeof trade.symbol === 'string' && trade.symbol.trim().length > 0
+              ? trade.symbol
+              : fallbackSymbol,
+          win: Boolean(trade.win),
+          pnlPct: Number.isFinite(trade.pnlPct) ? trade.pnlPct : 0,
+          timestamp: trade.timestamp,
+        }));
+    const tierTrades: Record<string, AdaptiveStateTierTrade[]> = {};
+    for (const [tier, trades] of this.recentTradesByTier.entries()) {
+      if (trades.length === 0) continue;
+      tierTrades[tier] = serializeTrades(trades, tier);
+    }
+    const recentTrades = this.recentTrades.length
+      ? serializeTrades(
+          this.recentTrades.slice(-25),
+          this.profile?.symbol ?? (this.plan?.plan?.symbol ?? 'session'),
+        )
+      : undefined;
+    return {
+      version: 1,
+      tradeCadence: {
+        ...this.tradeCadenceState,
+        reason: this.tradeCadenceState.reason ?? 'snapshot',
+      },
+      qualityAdjustmentByTier: toObject(this.qualityAdjustmentByTier),
+      cooldownByTier: toObject(this.cooldownByTier),
+      recentTradesByTier: Object.keys(tierTrades).length ? tierTrades : undefined,
+      recentTrades,
+      qualityThresholdAdjustment: this.qualityThresholdAdjustment,
+      lastDailyLossTriggerMarker: this.lastDailyLossTriggerMarker,
+      lastTradeWasWin: this.lastTradeWasWin,
+    };
+  }
+
+  private applyAdaptiveStateSnapshot(snapshot: AdaptiveStateSnapshot | null): void {
+    if (!snapshot || snapshot.version !== 1) return;
+    if (snapshot.tradeCadence) {
+      this.tradeCadenceState = {
+        ...this.tradeCadenceState,
+        ...snapshot.tradeCadence,
+        lastUpdated: Date.now(),
+        reason: 'restored',
+      };
+      if (this.quantConfig?.risk) {
+        this.quantConfig.risk.dailyTradeLimit = this.tradeCadenceState.maxTradesPerDay;
+      }
+      this.updateTradeCadenceTelemetry();
+    }
+    if (snapshot.qualityAdjustmentByTier) {
+      this.qualityAdjustmentByTier = new Map<string, number>(Object.entries(snapshot.qualityAdjustmentByTier));
+    }
+    if (snapshot.cooldownByTier) {
+      this.cooldownByTier = new Map<string, number>(
+        Object.entries(snapshot.cooldownByTier).map(([tier, value]) => [tier, Number(value) || 0]),
+      );
+    }
+    if (snapshot.recentTradesByTier) {
+      this.recentTradesByTier = new Map(
+        Object.entries(snapshot.recentTradesByTier).map(([tier, trades]) => [
+          tier,
+          Array.isArray(trades)
+            ? trades
+                .filter((trade) => trade && typeof trade.symbol === 'string')
+                .map((trade) => ({
+                  symbol: trade.symbol,
+                  win: Boolean(trade.win),
+                  pnlPct: Number.isFinite(trade.pnlPct) ? trade.pnlPct : 0,
+                  timestamp: Number.isFinite(trade.timestamp) ? trade.timestamp : Date.now(),
+                }))
+            : [],
+        ]),
+      );
+    }
+    if (snapshot.recentTrades) {
+      this.recentTrades = snapshot.recentTrades
+        .filter((trade) => trade && typeof trade.symbol === 'string')
+        .map((trade) => ({
+          win: Boolean(trade.win),
+          pnlPct: Number.isFinite(trade.pnlPct) ? trade.pnlPct : 0,
+          timestamp: Number.isFinite(trade.timestamp) ? trade.timestamp : Date.now(),
+        }))
+        .slice(-25);
+    }
+    if (typeof snapshot.qualityThresholdAdjustment === 'number' && Number.isFinite(snapshot.qualityThresholdAdjustment)) {
+      this.qualityThresholdAdjustment = snapshot.qualityThresholdAdjustment;
+    }
+    if (snapshot.lastDailyLossTriggerMarker == null || Number.isFinite(snapshot.lastDailyLossTriggerMarker)) {
+      this.lastDailyLossTriggerMarker = snapshot.lastDailyLossTriggerMarker ?? null;
+    }
+    if (typeof snapshot.lastTradeWasWin === 'boolean') {
+      this.lastTradeWasWin = snapshot.lastTradeWasWin;
+    }
+  }
+
+  private scheduleAdaptiveStatePersist(reason: string): void {
+    if (!this.sessionId) return;
+    this.pendingAdaptivePersistReason = reason;
+    if (this.adaptivePersistTimer) return;
+    this.adaptivePersistTimer = setTimeout(() => {
+      this.adaptivePersistTimer = null;
+      const persistReason = this.pendingAdaptivePersistReason ?? 'scheduled';
+      this.pendingAdaptivePersistReason = null;
+      void this.persistAdaptiveStateSnapshot(persistReason);
+    }, ReboundRejectionAgent.ADAPTIVE_STATE_PERSIST_DEBOUNCE_MS);
+  }
+
+  private async persistAdaptiveStateSnapshot(reason: string): Promise<void> {
+    if (!this.sessionId) return;
+    try {
+      if (this.adaptivePersistTimer) {
+        clearTimeout(this.adaptivePersistTimer);
+        this.adaptivePersistTimer = null;
+        this.pendingAdaptivePersistReason = null;
+      }
+      const snapshot = this.captureAdaptiveStateSnapshot();
+      await persistAdaptiveState(this.sessionId, snapshot);
+      this.lastAdaptivePersistAt = Date.now();
+    } catch (error) {
+      console.warn(`Failed to persist adaptive state (${reason}) for session ${this.sessionId}:`, error);
+    }
   }
 
   /**
@@ -7478,6 +7650,7 @@ export class ReboundRejectionAgent {
    * Each tier learns independently: BTC losses don't affect ADA trading
    */
   public adjustQualityThresholds(): void {
+    let adjustmentsMade = false;
     // Process each tier independently
     for (const [tier, trades] of this.recentTradesByTier.entries()) {
       if (trades.length < 10) continue; // Need sufficient data per tier
@@ -7491,6 +7664,7 @@ export class ReboundRejectionAgent {
       if (recentWinRate < targetWinRate - 0.1 && avgPnlPct < 0) {
         const newAdj = Math.min(20, currentAdj + 5);
         this.qualityAdjustmentByTier.set(tier, newAdj);
+        adjustmentsMade = adjustmentsMade || newAdj !== currentAdj;
         
         recordOpsEvent({
           level: 'warn',
@@ -7546,10 +7720,17 @@ export class ReboundRejectionAgent {
       if (level === 'aggressive') targetWinRate = 0.52;
       
       if (recentWinRate < targetWinRate - 0.1 && avgPnlPct < 0) {
+        const before = this.qualityThresholdAdjustment;
         this.qualityThresholdAdjustment = Math.min(15, this.qualityThresholdAdjustment + 5);
+        adjustmentsMade = adjustmentsMade || before !== this.qualityThresholdAdjustment;
       } else if (recentWinRate > targetWinRate + 0.1 && avgPnlPct > 0.5) {
+        const before = this.qualityThresholdAdjustment;
         this.qualityThresholdAdjustment = Math.max(-10, this.qualityThresholdAdjustment - 3);
+        adjustmentsMade = adjustmentsMade || before !== this.qualityThresholdAdjustment;
       }
+    }
+    if (adjustmentsMade) {
+      this.scheduleAdaptiveStatePersist('quality_adjustments');
     }
   }
 
@@ -7564,6 +7745,7 @@ export class ReboundRejectionAgent {
     const window = Math.max(3, threshold);
     const tradeLossStreak = this.getLossStreak(window);
     const lossStreak = Math.max(state.consecutiveLosses, tradeLossStreak);
+    let persistScheduled = false;
 
     if (lossStreak <= 0) {
       this.lastLossStreakNotified = 0;
@@ -7590,6 +7772,7 @@ export class ReboundRejectionAgent {
 
       console.log(`🛑 Losing streak: ${lossStreak} losses → Quality threshold +${adjustment} (now ${this.qualityThresholdAdjustment})`);
       this.lastLossStreakNotified = lossStreak;
+      persistScheduled = true;
     }
 
     const nowMs = Date.now();
@@ -7618,6 +7801,10 @@ export class ReboundRejectionAgent {
 
       this.scheduleReactivation('losing_streak_circuit_breaker', cooldownMs);
       console.log(`🔴 CIRCUIT BREAKER: ${lossStreak} consecutive losses → trading pause until ${existingCooldown.toISOString()}`);
+      persistScheduled = true;
+    }
+    if (persistScheduled) {
+      this.scheduleAdaptiveStatePersist('losing_streak');
     }
   }
 
@@ -12474,6 +12661,9 @@ export class ReboundRejectionAgent {
     if (performance.killReason) return true;
     if (performance.consecutiveLosses >= 3) return true;
     if (performance.winRate < 0.3 && performance.profitRatio < 0.5) return true;
+    if (this.tradeCadenceState.sampleSize >= 4 && this.tradeCadenceState.lastWinRate < 0.35) return true;
+    const recentLosses = this.recentTrades.slice(-4).filter((trade) => trade && !trade.win).length;
+    if (recentLosses >= 3) return true;
 
     // Check if regime has changed
     if (this.regime && regime) {
@@ -12484,11 +12674,11 @@ export class ReboundRejectionAgent {
     // Check if market volatility has changed significantly
     const currentVolatility = snap.atrPct || 0;
     const previousVolatility = this.plan ? (this.plan as any).atrPct || 0 : 0;
-    if (Math.abs(currentVolatility - previousVolatility) / previousVolatility > 0.5) return true;
+    if (previousVolatility > 0 && Math.abs(currentVolatility - previousVolatility) / previousVolatility > 0.35) return true;
 
     // Generate fresh plan periodically (every few hours) or after significant drawdown
     const timeSinceLastPlan = this.plan ? Date.now() - (this.plan as any).timestamp || 0 : 0;
-    if (timeSinceLastPlan > 4 * 60 * 60 * 1000) return true; // 4 hours
+    if (timeSinceLastPlan > 90 * 60 * 1000) return true; // 90 minutes
 
     return false;
   }

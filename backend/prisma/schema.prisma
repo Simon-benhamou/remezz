@@ -275,6 +275,7 @@ model AgentOpsTelemetry {
   blockedByVos   Boolean      @default(false)
   lastBlockedAt  DateTime?
   circuitState   Json?
+  adaptiveState  Json?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
