@@ -44,6 +44,7 @@ export type SizingInput = {
   tp1DistanceAbs?: number | null;
   minTp1PnlUsd?: number;
   tp1RMultiple?: number | null;
+  minNotionalUsd?: number;
 };
 
 export type SizingResult = {
@@ -66,6 +67,7 @@ export async function computeQtyNotional({
   tp1DistanceAbs,
   minTp1PnlUsd,
   tp1RMultiple,
+  minNotionalUsd,
 }: SizingInput): Promise<SizingResult> {
   const leverageCap = inputCap ?? await resolveLeverageCap({ symbol, requestedMaxLeverage: requestedLeverage, mode });
   const riskDollar = balanceUsd * (riskPct/100);
@@ -89,7 +91,13 @@ export async function computeQtyNotional({
   const notionalByPnL = tp1Pct > 0 && minTargetUsd > 0 ? (minTargetUsd / (tp1Pct / 100)) : 0;
   const desiredNotional = Math.max(notionalByRisk, notionalByPnL);
   const maxNotional = balanceUsd * leverageCap.resolved;
-  const clamped = Math.max(0, Math.min(desiredNotional, maxNotional));
+  let clamped = Math.max(0, Math.min(desiredNotional, maxNotional));
+  if (typeof minNotionalUsd === 'number' && Number.isFinite(minNotionalUsd) && minNotionalUsd > 0) {
+    const floor = Math.min(maxNotional, Math.max(0, minNotionalUsd));
+    if (floor > clamped) {
+      clamped = floor;
+    }
+  }
   const minPnLNotional = notionalByPnL > 0 ? notionalByPnL : null;
   const meetsMinPnLTarget = !(minPnLNotional && minPnLNotional > 0) || clamped + 1e-6 >= (minPnLNotional as number);
   return { notional: clamped, leverageCap, desiredNotional, minPnLNotional, meetsMinPnLTarget };

@@ -31,4 +31,14 @@ const strongRr = computeAdaptiveEvThreshold({
 });
 assert.ok(strongRr < 6 && strongRr >= 1.5, 'High RR should relax EV requirement without violating floor');
 
+const riskAligned = computeAdaptiveEvThreshold({
+  baseThreshold: 4,
+  stopPct: 0.95,
+  effectiveAtr: 0.6,
+  minAtr: 0.6,
+  riskUsd: 8,
+  rewardMultiplier: 2.5,
+});
+assert.equal(riskAligned, 20, 'Risk-adjusted EV should respect risk floor even above base threshold');
+
 console.log('✅ ev-threshold-adaptive.mjs passed');

@@ -4,6 +4,8 @@ export interface AdaptiveEvThresholdParams {
   tp1RMultiple?: number | null;
   effectiveAtr?: number | null;
   minAtr: number;
+  riskUsd?: number | null;
+  rewardMultiplier?: number | null;
 }
 
 export function computeAdaptiveEvThreshold({
@@ -12,6 +14,8 @@ export function computeAdaptiveEvThreshold({
   tp1RMultiple,
   effectiveAtr,
   minAtr,
+  riskUsd,
+  rewardMultiplier,
 }: AdaptiveEvThresholdParams): number {
   if (!Number.isFinite(baseThreshold) || baseThreshold <= 0) {
     return 0;
@@ -44,5 +48,15 @@ export function computeAdaptiveEvThreshold({
     threshold *= 1 - atrDeficitRatio * 0.4;
   }
 
-  return Math.max(1.5, Math.min(baseThreshold, threshold));
+  const adjusted = Math.max(1.5, Math.min(baseThreshold, threshold));
+  const riskFloor = (() => {
+    if (riskUsd == null || rewardMultiplier == null) return null;
+    if (!Number.isFinite(riskUsd) || !Number.isFinite(rewardMultiplier)) return null;
+    if (riskUsd <= 0 || rewardMultiplier <= 0) return null;
+    return riskUsd * rewardMultiplier;
+  })();
+
+  return riskFloor != null && Number.isFinite(riskFloor)
+    ? Math.max(adjusted, riskFloor)
+    : adjusted;
 }

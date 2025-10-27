@@ -1724,6 +1724,7 @@ export class ReboundRejectionAgent {
     let stop = round4(stopRaw);
     const dir0 = side === 'buy' ? 1 : -1;
     const targetSizingCfg = getConfig();
+    const evRewardMultiplier = Math.max(0.1, Number(targetSizingCfg.EV_REWARD_MULTIPLIER ?? 0));
     const minFirstR = Math.max(1, Number(targetSizingCfg.MIN_FIRST_R ?? 1.5));
     const targetTp1BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP1_PCT ?? targetSizingCfg.MIN_TP_PCT ?? 0));
     const targetTp2BasePct = Math.max(0, Number(targetSizingCfg.TARGET_TP2_PCT ?? 0));
@@ -2208,6 +2209,39 @@ export class ReboundRejectionAgent {
     }
     this.registerFilterPass();
 
+    const confidenceScore = this.resolveEntryConfidence({
+      modelConfidence,
+      recognizedConfidence,
+      rrToTp1: typeof firstR === 'number' && Number.isFinite(firstR) ? firstR : null,
+      rrWeighted: typeof rrWeighted === 'number' && Number.isFinite(rrWeighted) ? rrWeighted : null,
+      qualityPreviewMultiplier: qualitySizingPreview,
+      strongFlow: filterEvaluation.meta?.strongFlow ?? false,
+      fastTrack: filterEvaluation.meta?.fastTrackApplied ?? false,
+      qualityHint: qualityPassHint === true ? true : qualityPassHint === false ? false : null,
+      adx: Number.isFinite(adxValue) ? adxValue : null,
+      slopePct: Number.isFinite(slopeDirectionalPct) ? slopeDirectionalPct : null,
+    });
+    planAny._entryConfidence = confidenceScore;
+    recordOpsEvent({
+      level: confidenceScore >= 0.75 ? 'info' : 'watch',
+      source: 'entry_context',
+      message: 'confidence_score_resolved',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile.symbol,
+      details: {
+        score: confidenceScore,
+        modelConfidence: typeof modelConfidence === 'number' ? modelConfidence : null,
+        recognizedConfidence,
+        strongFlow: filterEvaluation.meta?.strongFlow ?? false,
+        fastTrack: filterEvaluation.meta?.fastTrackApplied ?? false,
+        rrToTp1: typeof firstR === 'number' ? firstR : null,
+        rrWeighted: typeof rrWeighted === 'number' ? rrWeighted : null,
+        qualityPreviewMultiplier: qualitySizingPreview,
+        adx: Number.isFinite(adxValue) ? adxValue : null,
+        slopePct: Number.isFinite(slopeDirectionalPct) ? slopeDirectionalPct : null,
+      },
+    });
+
     // CRYPTO PROFIT FILTER: Minimum profit threshold
     const cfgProfit = getConfig();
     // Aggressiveness-aware min profitability
@@ -2295,6 +2329,13 @@ export class ReboundRejectionAgent {
         capBalance > 0 ? capBalance : freeNow,
       ),
     );
+    const confidenceTargetNotional = this.computeConfidenceNotionalTarget({
+      equityUsd: equityNow,
+      usableBalanceUsd: usableBalance,
+      confidenceScore,
+      maxLeverage: this.profile.maxLeverage,
+    });
+    planAny._confidenceNotionalTarget = confidenceTargetNotional;
     if (minPnLRatio > 0 && usableBalance > 0) {
       targetMinTp1PnlUsd = Math.max(0, usableBalance * minPnLRatio);
     }
@@ -2657,6 +2698,103 @@ export class ReboundRejectionAgent {
       }
       return null;
     })();
+
+    if (confidenceTargetNotional > 0 && stopPct > 0 && usableBalance > 0) {
+      const requiredRiskPct = (confidenceTargetNotional * (stopPct / 100)) / Math.max(usableBalance, 1e-6) * 100;
+      if (requiredRiskPct > dynamicRiskPct + 1e-6) {
+        const prevRisk = dynamicRiskPct;
+        const appliedRiskPct = Math.min(
+          Math.max(requiredRiskPct, dynamicRiskPct),
+          planRiskMaxPct != null ? planRiskMaxPct : Math.max(requiredRiskPct, dynamicRiskPct)
+        );
+        dynamicRiskPct = appliedRiskPct;
+        if (appliedRiskPct > prevRisk + 1e-6) {
+          recordOpsEvent({
+            level: 'watch',
+            source: 'position_sizing',
+            message: 'confidence_notional_floor_enforced',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              confidenceScore,
+              targetNotionalUsd: confidenceTargetNotional,
+              stopPct,
+              requiredRiskPct,
+              previousRiskPct: prevRisk,
+              appliedRiskPct,
+            },
+          });
+        }
+      }
+    }
+
+    if (confidenceScore > 0) {
+      const beforeConfidenceAdjust = dynamicRiskPct;
+      const cfgMinShare = Math.max(0, Math.min(1, Number(targetSizingCfg.CONFIDENCE_RISK_FLOOR_MIN_SHARE ?? 0.35)));
+      const cfgMaxShare = Math.max(cfgMinShare, Math.min(1.2, Number(targetSizingCfg.CONFIDENCE_RISK_FLOOR_MAX_SHARE ?? 0.85)));
+      const floorShare = cfgMinShare + (cfgMaxShare - cfgMinShare) * Math.min(1, Math.max(0, confidenceScore));
+      const riskFloorPct = baseProfileRisk * floorShare;
+      if (riskFloorPct > dynamicRiskPct) {
+        dynamicRiskPct = Math.min(
+          riskFloorPct,
+          planRiskMaxPct != null ? planRiskMaxPct : riskFloorPct
+        );
+        recordOpsEvent({
+          level: 'watch',
+          source: 'position_sizing',
+          message: 'confidence_risk_floor_applied',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            confidenceScore,
+            floorShare,
+            baseRiskPct: baseProfileRisk,
+             previousRiskPct: beforeConfidenceAdjust,
+            enforcedRiskPct: dynamicRiskPct,
+          },
+        });
+      }
+      const boostThreshold = Math.min(0.95, Math.max(0, Number(targetSizingCfg.CONFIDENCE_RISK_BOOST_THRESHOLD ?? 0.6)));
+      const boostShare = Math.max(0, Number(targetSizingCfg.CONFIDENCE_RISK_BOOST_SHARE ?? 0.45));
+      if (confidenceScore > boostThreshold) {
+        const progress = (confidenceScore - boostThreshold) / Math.max(1e-6, 1 - boostThreshold);
+        const boostedRisk = baseProfileRisk * (1 + boostShare * Math.min(1, Math.max(0, progress)));
+        if (boostedRisk > dynamicRiskPct + 1e-6) {
+          dynamicRiskPct = Math.min(
+            boostedRisk,
+            planRiskMaxPct != null ? planRiskMaxPct : boostedRisk
+          );
+          recordOpsEvent({
+            level: 'info',
+            source: 'position_sizing',
+            message: 'confidence_risk_boost_applied',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              confidenceScore,
+              boostThreshold,
+              boostShare,
+              baseRiskPct: baseProfileRisk,
+              previousRiskPct: beforeConfidenceAdjust,
+              enforcedRiskPct: dynamicRiskPct,
+            },
+          });
+        }
+      }
+      const circuitFloorShare = Math.max(cfgMinShare, Math.min(cfgMaxShare, 0.55 + 0.35 * confidenceScore));
+      const circuitFloorRisk = baseProfileRisk * circuitFloorShare;
+      if (dynamicRiskPct < circuitFloorRisk && circuitFloorRisk > beforeConfidenceAdjust) {
+        dynamicRiskPct = Math.min(
+          circuitFloorRisk,
+          planRiskMaxPct != null ? planRiskMaxPct : circuitFloorRisk
+        );
+      }
+    }
+
+    if (this.adaptiveRisk) {
+      this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
+    }
+
     const quantSizerResult = this.positionSizer.computeSize({
       equityUsd: Math.max(this.lastKnownEquityUsd, usableBalance),
       entryPrice: entry,
@@ -2838,6 +2976,7 @@ export class ReboundRejectionAgent {
       tp1DistanceAbs,
       minTp1PnlUsd: targetSizingEnabled ? targetMinTp1PnlUsd : undefined,
       tp1RMultiple,
+      minNotionalUsd: confidenceTargetNotional > 0 ? confidenceTargetNotional : undefined,
     });
     if (targetSizingEnabled && !sizing.meetsMinPnLTarget && targetMinTp1PnlUsd > 0) {
       minPnLTargetWarning = {
@@ -3123,9 +3262,29 @@ export class ReboundRejectionAgent {
     const equityCapNotional = Math.max(0, bal.equityUsd * (effectiveLev || 1));
     const budgetCapNotional = Math.max(0, capBalance * (effectiveLev || 1));
     const hardNotionalCap = Math.min(equityCapNotional || Infinity, budgetCapNotional || Infinity);
-    const configuredCapNotional = Number.isFinite(this.maxNotionalCapUsd) && this.maxNotionalCapUsd > 0
+    let configuredCapNotional = Number.isFinite(this.maxNotionalCapUsd) && this.maxNotionalCapUsd > 0
       ? this.maxNotionalCapUsd
       : Infinity;
+    if (confidenceTargetNotional > 0) {
+      const confidenceCap = confidenceTargetNotional * 1.15;
+      if (!Number.isFinite(configuredCapNotional) || configuredCapNotional < confidenceCap) {
+        if (Number.isFinite(configuredCapNotional) && configuredCapNotional > 0) {
+          recordOpsEvent({
+            level: 'info',
+            source: 'position_sizing',
+            message: 'confidence_notional_cap_expanded',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: {
+              previousCapUsd: configuredCapNotional,
+              expandedCapUsd: confidenceCap,
+              confidenceScore,
+            },
+          });
+        }
+        configuredCapNotional = confidenceCap;
+      }
+    }
     const effectiveNotionalCap = Math.min(
       hardNotionalCap > 0 ? hardNotionalCap : Infinity,
       configuredCapNotional > 0 ? configuredCapNotional : Infinity,
@@ -3269,6 +3428,8 @@ export class ReboundRejectionAgent {
         stopPct,
         effectiveLeverage: effectiveLev,
         budgetFraction: budgetFrac,
+        confidenceScore,
+        confidenceNotionalTargetUsd: confidenceTargetNotional > 0 ? confidenceTargetNotional : undefined,
         snapshot: sizingSnapshot,
       },
     });
@@ -3278,6 +3439,7 @@ export class ReboundRejectionAgent {
       const dir = side === 'buy' ? 1 : -1;
       const priceDiff = dir * (tp1ForEv - entry);
       const expectedPnL1 = qty > 0 && priceDiff > 0 ? qty * priceDiff : 0;
+      const riskUsd = qty > 0 ? qty * Math.abs(entry - stop) : 0;
       const minExpectedTp1PnlBase = targetSizingEnabled && targetMinTp1PnlUsd > 0 ? targetMinTp1PnlUsd : 3;
       const effectiveAtrForEv = typeof entryZoneMeta?.atrPct === 'number'
         ? entryZoneMeta.atrPct
@@ -3293,6 +3455,8 @@ export class ReboundRejectionAgent {
         tp1RMultiple: tp1RMultiple ?? null,
         effectiveAtr: effectiveAtrForEv ?? null,
         minAtr: minAtrForEv,
+        riskUsd,
+        rewardMultiplier: evRewardMultiplier > 0 ? evRewardMultiplier : undefined,
       });
       if (expectedPnL1 + 1e-6 < minExpectedTp1Pnl) {
         const notionalUsd = qty * entry;
@@ -3322,6 +3486,7 @@ export class ReboundRejectionAgent {
             minFloorUsd: sizingFloorUsd,
             expectedPnL1,
             evThresholdUsd: minExpectedTp1Pnl,
+            riskUsd,
             warnings: {
               minPnLTarget: minPnLTargetWarning,
             },
@@ -12177,6 +12342,122 @@ export class ReboundRejectionAgent {
       winRate,
       profitRatio
     };
+  }
+
+  private clamp01(value: number | null | undefined): number {
+    if (value == null || !Number.isFinite(value)) return 0;
+    if (value <= 0) return 0;
+    if (value >= 1) return 1;
+    return Number(value);
+  }
+
+  private resolveEntryConfidence({
+    modelConfidence,
+    recognizedConfidence,
+    rrToTp1,
+    rrWeighted,
+    qualityPreviewMultiplier,
+    strongFlow,
+    fastTrack,
+    qualityHint,
+    adx,
+    slopePct,
+  }: {
+    modelConfidence?: number;
+    recognizedConfidence?: number | null;
+    rrToTp1?: number | null;
+    rrWeighted?: number | null;
+    qualityPreviewMultiplier?: number;
+    strongFlow?: boolean;
+    fastTrack?: boolean;
+    qualityHint?: boolean | null;
+    adx?: number | null;
+    slopePct?: number | null;
+  }): number {
+    const inputs: number[] = [];
+    inputs.push(0.32); // baseline
+
+    if (typeof modelConfidence === 'number') {
+      inputs.push(this.clamp01(modelConfidence));
+    }
+    if (recognizedConfidence != null) {
+      inputs.push(this.clamp01(recognizedConfidence));
+    }
+    if (typeof qualityPreviewMultiplier === 'number' && Number.isFinite(qualityPreviewMultiplier)) {
+      const q = qualityPreviewMultiplier;
+      const mapped = q >= 1
+        ? Math.min(1, 0.58 + (q - 1) * 0.4)
+        : Math.max(0.15, 0.58 + (q - 1) * 0.6);
+      inputs.push(mapped);
+    }
+    if (typeof rrToTp1 === 'number' && Number.isFinite(rrToTp1)) {
+      const rr = Math.max(0, rrToTp1);
+      let mapped = 0.45;
+      if (rr >= 2.6) mapped = 0.85;
+      else if (rr >= 2.2) mapped = 0.78;
+      else if (rr >= 1.9) mapped = 0.72;
+      else if (rr >= 1.5) mapped = 0.63;
+      else if (rr >= 1.2) mapped = 0.55;
+      inputs.push(mapped);
+    }
+    if (typeof rrWeighted === 'number' && Number.isFinite(rrWeighted)) {
+      const rrw = Math.max(0, rrWeighted);
+      let mapped = 0.5;
+      if (rrw >= 3.5) mapped = 0.84;
+      else if (rrw >= 2.8) mapped = 0.78;
+      else if (rrw >= 2.2) mapped = 0.7;
+      else if (rrw >= 1.6) mapped = 0.6;
+      inputs.push(mapped);
+    }
+    if (strongFlow) inputs.push(0.8);
+    if (fastTrack) inputs.push(0.72);
+    if (qualityHint === true) inputs.push(0.7);
+    else if (qualityHint === false) inputs.push(0.42);
+    if (typeof adx === 'number' && Number.isFinite(adx)) {
+      let mapped = 0.45;
+      if (adx >= 50) mapped = 0.82;
+      else if (adx >= 40) mapped = 0.74;
+      else if (adx >= 30) mapped = 0.64;
+      inputs.push(mapped);
+    }
+    if (typeof slopePct === 'number' && Number.isFinite(slopePct)) {
+      const slopeAbs = Math.abs(slopePct);
+      if (slopeAbs >= 1.5) inputs.push(0.78);
+      else if (slopeAbs >= 1.0) inputs.push(0.7);
+      else if (slopeAbs >= 0.6) inputs.push(0.6);
+      else inputs.push(0.48);
+    }
+
+    const mean = inputs.reduce((acc, val) => acc + val, 0) / inputs.length;
+    return Math.max(0, Math.min(1, mean));
+  }
+
+  private computeConfidenceNotionalTarget({
+    equityUsd,
+    usableBalanceUsd,
+    confidenceScore,
+    maxLeverage,
+  }: {
+    equityUsd: number;
+    usableBalanceUsd: number;
+    confidenceScore: number;
+    maxLeverage?: number | null;
+  }): number {
+    const cfg = getConfig();
+    const baseRatio = Math.max(0.1, Number(cfg.TARGET_NOTIONAL_BASE_RATIO ?? 0.5));
+    const bonus = Math.max(0, Number(cfg.TARGET_NOTIONAL_CONF_BONUS ?? 0));
+    const maxRatio = Math.max(baseRatio, Number(cfg.TARGET_NOTIONAL_MAX_RATIO ?? 1.6));
+    const confidence = this.clamp01(confidenceScore);
+    const referenceCapital = Math.max(0, equityUsd > 0 ? equityUsd : usableBalanceUsd);
+    if (!(referenceCapital > 0)) return 0;
+    const ratio = baseRatio * (1 + bonus * confidence);
+    const cappedRatio = Math.max(baseRatio, Math.min(maxRatio, ratio));
+    const targetNotional = referenceCapital * cappedRatio;
+    if (maxLeverage && maxLeverage > 0) {
+      const leverageCap = referenceCapital * maxLeverage;
+      return Math.min(targetNotional, leverageCap);
+    }
+    return targetNotional;
   }
 
   public shouldGenerateFreshPlan(
