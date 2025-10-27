@@ -89,11 +89,14 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
     const stopPrice = entry ? entry.stopLossPrice.toNumber() : null;
     const tp1Price = entry ? entry.takeProfit1.toNumber() : null;
     const tp2Price = entry ? entry.takeProfit2.toNumber() : null;
+    const entryZone = entry
+      ? { min: entryPrice, max: entryPrice, mid: entryPrice }
+      : null;
     const entryJson = entry
       ? {
           type: entry.entryType,
           price: entryPrice,
-          zone: { min: entryPrice, max: entryPrice, mid: entryPrice },
+          zone: entryZone,
           stopLoss: stopPrice,
           takeProfit1: tp1Price,
           takeProfit2: tp2Price,
@@ -167,6 +170,8 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
     } catch (e: any) {
       if (e?.code !== 'P2002') throw e;
     }
+
+    updateZoneState(req.symbol, entryZone);
 
     return { strategy: strat, levels, reused: false };
   }
