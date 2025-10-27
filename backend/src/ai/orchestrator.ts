@@ -174,6 +174,15 @@ export function normalizeStrategyDraft(input: StrategyDraft, ctx: ZoneContext): 
   };
   ensureEntryZone(draft, ctx);
   applyConfidenceSizing(draft);
+  if (draft.risk) {
+    const risk: any = draft.risk;
+    const rawLev = Number(risk.max_leverage);
+    if (!Number.isFinite(rawLev)) {
+      risk.max_leverage = 5; // sensible default if LLM omits or mangles the value
+    } else {
+      risk.max_leverage = clamp(rawLev, 1, 50);
+    }
+  }
   return draft;
 }
 export type BiasDecisionInput = Pick<TechnicalSnapshot, 'trend'|'rsi14'|'atrPct'|'srBias'|'ema20'|'ema50'>;
