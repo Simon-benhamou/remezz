@@ -34,6 +34,7 @@ import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitB
 import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import { ZERO_USD } from '../../core/capital/types.js';
 import { computeAdaptiveEvThreshold } from './evThreshold.js';
+import { resolveMinTradeNotional } from './minTradeNotional.js';
 import type { LiquidityType } from '../../quantai/index.js';
 import {
   evaluateRecognizedStrategies,
@@ -2914,10 +2915,14 @@ export class ReboundRejectionAgent {
       notional = dynamicNotionalCap;
     }
     
+    const sizingFloorUsd = 30;
     const configMinNotional = Number(getConfig().MIN_ORDER_NOTIONAL_USD || 0);
-    const equityFloor = bal.equityUsd * 0.005;
-    const dynamicFloor = Math.max(500, equityFloor);
-    const minTradeNotional = Math.max(configMinNotional, dynamicFloor);
+    const equityUsd = Number.isFinite(bal?.equityUsd) ? Number(bal.equityUsd) : 0;
+    const minTradeNotional = resolveMinTradeNotional({
+      configMinNotionalUsd: configMinNotional,
+      equityUsd,
+      sizingFloorUsd,
+    });
     const HALT_CRITICAL = 90;
     const HALT_TARGET = 80;
     const ENTRY_PROJ_CAP = 85;
@@ -3213,7 +3218,6 @@ export class ReboundRejectionAgent {
       }
     }
 
-    const sizingFloorUsd = 30;
     if (sizingFloorUsd > 0 && entry > 0) {
       const notionalAfterFloors = qty * entry;
       if (notionalAfterFloors + 1e-6 < sizingFloorUsd) {
