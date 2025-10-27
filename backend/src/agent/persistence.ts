@@ -105,6 +105,7 @@ function serializeCircuitBreakerState(state: CircuitBreakerState) {
     tradesToday: state.tradesToday,
     equityStartDay: state.equityStartDay,
     cooldownUntil: state.cooldownUntil ? state.cooldownUntil.toISOString() : null,
+    cooldownReason: state.cooldownReason,
     lastTradeDay: state.lastTradeDay,
     dayStartAt: state.dayStartAt ? state.dayStartAt.toISOString() : null,
     dailyLossActive: state.dailyLossActive,
@@ -132,6 +133,9 @@ function deserializeCircuitBreakerState(raw: any): CircuitBreakerState | null {
       ? Number((raw as any).equityStartDay)
       : null,
     cooldownUntil: toDate((raw as any).cooldownUntil),
+    cooldownReason: typeof (raw as any).cooldownReason === 'string' && (raw as any).cooldownReason.trim().length > 0
+      ? (raw as any).cooldownReason
+      : null,
     lastTradeDay: typeof (raw as any).lastTradeDay === 'string'
       ? ((raw as any).lastTradeDay.trim().length > 0 ? (raw as any).lastTradeDay : null)
       : (raw as any).lastTradeDay != null && Number.isFinite(Number((raw as any).lastTradeDay))

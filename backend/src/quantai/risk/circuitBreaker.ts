@@ -19,6 +19,7 @@ export type CircuitBreakerState = {
   tradesToday: number;
   equityStartDay: number | null;
   cooldownUntil: Date | null;
+  cooldownReason: string | null;
   lastTradeDay: string | null;
   dayStartAt: Date | null;
   dailyLossActive: boolean;
@@ -45,6 +46,7 @@ export class CircuitBreaker {
   private tradesToday = 0;
   private equityStartDay: number | null = null;
   private cooldownUntil: Date | null = null;
+  private cooldownReason: string | null = null;
   private lastTradeDay: string | null = null;
   private dayStartAt: Date | null = null;
   private dailyLossActive = false;
@@ -83,6 +85,9 @@ export class CircuitBreaker {
       if (!Number.isNaN(parsed.getTime())) {
         this.cooldownUntil = parsed;
       }
+    }
+    if (typeof (state as any).cooldownReason === 'string' && (state as any).cooldownReason.trim().length > 0) {
+      this.cooldownReason = (state as any).cooldownReason;
     }
     if (state.dayStartAt) {
       const parsed = new Date(state.dayStartAt as Date | string);
@@ -196,9 +201,10 @@ export class CircuitBreaker {
     return new Date(now.getTime() + minutes * 60 * 1000);
   }
 
-  private startCooldown(now: Date, overrideMinutes?: number): Date {
+  private startCooldown(now: Date, overrideMinutes?: number, reason?: string): Date {
     const until = this.computeCooldownUntil(now, overrideMinutes);
     this.cooldownUntil = until;
+    this.cooldownReason = reason ?? null;
     this.emitStateChange();
     return until;
   }
@@ -206,9 +212,14 @@ export class CircuitBreaker {
   canOpenTrade(now: Date, equity: number): CircuitBreakerDecision {
     this.resetDayIfNeeded(now, equity);
     if (this.cooldownUntil && now < this.cooldownUntil) {
+      const reasonDetail = this.cooldownReason
+        ?? (this.consecutiveLosses > 0
+          ? `${this.consecutiveLosses} consecutive losses`
+          : null);
+      const suffix = reasonDetail ? ` (${reasonDetail})` : '';
       return {
         allowed: false,
-        reason: `Cooldown active until ${this.cooldownUntil.toISOString()} after ${this.consecutiveLosses} consecutive losses`,
+        reason: `Cooldown active until ${this.cooldownUntil.toISOString()}${suffix}`,
         cooldownUntil: this.cooldownUntil,
       };
     }
@@ -240,12 +251,13 @@ export class CircuitBreaker {
           const cooldownMinutes = Number.isFinite(this.cfg.dailyLossCooldownMinutes)
             ? Math.max(0, Math.floor(this.cfg.dailyLossCooldownMinutes ?? 0))
             : 0;
+          const message = `Daily loss limit hit (${drawdownPct.toFixed(2)}% <= -${this.cfg.dailyLossLimitPct}%)`;
           const until = cooldownMinutes > 0
-            ? this.startCooldown(now, cooldownMinutes)
-            : this.startCooldown(now);
+            ? this.startCooldown(now, cooldownMinutes, message)
+            : this.startCooldown(now, undefined, message);
           return {
             allowed: false,
-            reason: `Daily loss limit hit (${drawdownPct.toFixed(2)}% <= -${this.cfg.dailyLossLimitPct}%)`,
+            reason: message,
             cooldownUntil: until,
           };
         }
@@ -257,10 +269,11 @@ export class CircuitBreaker {
       }
     }
     if (this.consecutiveLosses >= this.cfg.maxConsecutiveLosses) {
-      const until = this.startCooldown(now);
+      const message = `Consecutive losses threshold reached (${this.consecutiveLosses}/${this.cfg.maxConsecutiveLosses})`;
+      const until = this.startCooldown(now, undefined, message);
       return {
         allowed: false,
-        reason: `Consecutive losses threshold reached (${this.consecutiveLosses}/${this.cfg.maxConsecutiveLosses})`,
+        reason: message,
         cooldownUntil: until,
       };
     }
@@ -281,7 +294,8 @@ export class CircuitBreaker {
       this.consecutiveWins = 0;
       changed = true;
       if (this.consecutiveLosses >= this.cfg.maxConsecutiveLosses) {
-        this.startCooldown(now);
+        const message = `Consecutive losses threshold reached (${this.consecutiveLosses}/${this.cfg.maxConsecutiveLosses})`;
+        this.startCooldown(now, undefined, message);
         changed = true;
       }
     } else {
@@ -303,6 +317,7 @@ export class CircuitBreaker {
       if (wasLoss || this.consecutiveWins > 0) changed = true;
       if (this.cooldownUntil) {
         this.cooldownUntil = null;
+        this.cooldownReason = null;
         changed = true;
       }
     }
@@ -311,7 +326,8 @@ export class CircuitBreaker {
         ? Math.max(0, Math.floor(this.cfg.dailyLossCooldownMinutes ?? 0))
         : 0;
       if (cooldownMinutes > 0) {
-        this.startCooldown(now, cooldownMinutes);
+        const message = 'Daily loss protection cooldown active';
+        this.startCooldown(now, cooldownMinutes, message);
       }
     }
     if (changed) this.emitStateChange();
@@ -353,13 +369,14 @@ export class CircuitBreaker {
     return Math.max(0.05, multiplier);
   }
 
-  enforceLossCooldown(now: Date, overrideMinutes?: number): Date {
-    return this.startCooldown(now, overrideMinutes);
+  enforceLossCooldown(now: Date, overrideMinutes?: number, reason?: string): Date {
+    return this.startCooldown(now, overrideMinutes, reason ?? 'Loss streak cooldown enforced');
   }
 
   clearCooldown() {
     if (this.cooldownUntil) {
       this.cooldownUntil = null;
+      this.cooldownReason = null;
       this.emitStateChange();
     }
   }
@@ -371,6 +388,7 @@ export class CircuitBreaker {
       tradesToday: this.tradesToday,
       equityStartDay: this.equityStartDay,
       cooldownUntil: this.cloneDate(this.cooldownUntil),
+      cooldownReason: this.cooldownReason,
       lastTradeDay: this.lastTradeDay,
       dayStartAt: this.cloneDate(this.dayStartAt),
       dailyLossActive: this.dailyLossActive,
@@ -411,6 +429,7 @@ export class DisabledCircuitBreaker extends CircuitBreaker {
       tradesToday: 0,
       equityStartDay: null,
       cooldownUntil: null,
+      cooldownReason: null,
       lastTradeDay: null,
       dayStartAt: null,
       dailyLossActive: false,
