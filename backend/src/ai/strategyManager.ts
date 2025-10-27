@@ -21,6 +21,40 @@ const COOL_MIN = Number(process.env.LLM_STRATEGY_COOLDOWN_MIN || 3); // minutes 
 const MAX_PER_HOUR = Number(process.env.LLM_STRATEGY_MAX_PER_HOUR || 15); // augmenté pour plus de flexibilité
 const ZONE_HYST_PCT = Number(process.env.ZONE_HYSTERESIS_PCT || 0.15);
 const ZONE_REQUIRED_TICKS = Number(process.env.ZONE_EXIT_REQUIRED_TICKS || 3);
+const ISO_8601_UTC_REGEX = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z$/;
+
+function parseIsoDate(raw: unknown): Date | undefined {
+  if (typeof raw !== 'string') return undefined;
+  if (!ISO_8601_UTC_REGEX.test(raw)) return undefined;
+  const parsed = new Date(raw);
+  if (!Number.isFinite(parsed.valueOf())) return undefined;
+  return parsed;
+}
+
+export function buildStrategyPersistenceData(
+  strat: any,
+  req: { sessionId?: string; trigger: string },
+) {
+  const validityToRaw = strat?.validity?.to;
+  const validityToCandidate = validityToRaw == null ? undefined : parseIsoDate(validityToRaw);
+  const validityTo = validityToCandidate && Number.isFinite(validityToCandidate.valueOf())
+    ? validityToCandidate
+    : undefined;
+
+  return {
+    id: strat?.strategyId,
+    sessionId: req.sessionId,
+    symbol: strat?.symbol,
+    bias: strat?.bias,
+    confidence: strat?.confidence,
+    entryJson: strat?.entry,
+    riskJson: strat?.risk,
+    validityFrom: strat?.validity?.from ? new Date(strat.validity.from) : undefined,
+    validityTo,
+    rationale: strat?.rationale,
+    trigger: req.trigger,
+  } as const;
+}
 
 export type Requested = {
   symbol: string;
@@ -201,19 +235,7 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
 
   try {
     await prisma.strategy.create({
-      data: {
-        id: (strat as any).strategyId,
-        sessionId: req.sessionId,
-        symbol: (strat as any).symbol,
-        bias: (strat as any).bias,
-        confidence: (strat as any).confidence,
-        entryJson: (strat as any).entry,
-        riskJson: (strat as any).risk,
-        validityFrom: (strat as any).validity?.from ? new Date((strat as any).validity.from) : undefined,
-        validityTo: (strat as any).validity?.to ? new Date((strat as any).validity.to) : undefined,
-        rationale: (strat as any).rationale,
-        trigger: req.trigger,
-      },
+      data: buildStrategyPersistenceData(strat, req),
     });
   } catch (e: any) {
     if (e?.code !== 'P2002') throw e;
