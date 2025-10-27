@@ -19,6 +19,41 @@ import { isInsufficientDataError, type InsufficientDataMeta } from '../data/erro
 const RANKING_CACHE = new Map<string, { ts: number; data: RankedOpportunity[] }>();
 const RANKING_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
+export function sanitizeBaseSymbol(rawBase: string): string | null {
+  if (!rawBase) {
+    return null;
+  }
+  const cleaned = rawBase.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  if (cleaned.length < 2) {
+    return null;
+  }
+  if (!/[A-Z]/.test(cleaned)) {
+    return null;
+  }
+  if (cleaned === 'USDT') {
+    return null;
+  }
+  return cleaned;
+}
+
+function buildVolumeEntry(
+  base: string,
+  crypto: { volumeUsd: number; change24h: number; price: number },
+  rank: number,
+): VolumeFilteredCrypto | null {
+  const sanitized = sanitizeBaseSymbol(base);
+  if (!sanitized) {
+    return null;
+  }
+  return {
+    symbol: `${sanitized}/USDT`,
+    volumeUsd24h: crypto.volumeUsd,
+    change24h: crypto.change24h,
+    price: crypto.price,
+    volumeRank: rank,
+  };
+}
+
 export interface RankedOpportunity {
   symbol: string;
   rank: number;
@@ -117,18 +152,31 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
           }
         }
         if (!wsMap || wsMap.size === 0) throw new Error('WebSocket tickers not ready');
-        const volumeData: Array<{ symbol: string; volumeUsd: number; change24h: number; price: number }>= [];
+        const volumeData: Array<{ symbol: string; volumeUsd: number; change24h: number; price: number }> = [];
+        const invalidSymbols: string[] = [];
         for (const t of wsMap.values()) {
           if (!t.symbol.endsWith('USDT')) continue; // keep USDT margined only
-          const base = t.symbol.replace('USDT','');
-          const unified = `${base}/USDT`;
+          const rawBase = t.symbol.slice(0, -4);
+          const sanitized = sanitizeBaseSymbol(rawBase);
+          if (!sanitized) {
+            invalidSymbols.push(t.symbol);
+            continue;
+          }
           const volumeUsd = Number(t.quoteVolume || 0);
           const currentPrice = Number(t.last || 0);
           const openPrice = Number(t.open || currentPrice);
           const realChange24h = openPrice > 0 ? ((currentPrice - openPrice) / openPrice) * 100 : 0;
           if (currentPrice > 0) {
-            volumeData.push({ symbol: unified, volumeUsd, change24h: realChange24h, price: currentPrice });
+            volumeData.push({
+              symbol: `${sanitized}/USDT`,
+              volumeUsd,
+              change24h: realChange24h,
+              price: currentPrice,
+            });
           }
+        }
+        if (invalidSymbols.length) {
+          console.warn('⚠️ Skipping invalid Binance WS symbols', { symbols: invalidSymbols.slice(0, 10), total: invalidSymbols.length });
         }
         const MIN_VOLUME_USD = 100_000;
         const qualified = volumeData.filter(x => x.volumeUsd >= MIN_VOLUME_USD);
@@ -296,17 +344,25 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
     });
     
     // Convert to spot format (SYMBOL/USDT) and add rank
-    const result: VolumeFilteredCrypto[] = top50.map((crypto, index) => {
+    const invalidSymbols: string[] = [];
+    const result: VolumeFilteredCrypto[] = [];
+    for (const crypto of top50) {
       const base = crypto.symbol.split('/')[0];
-      return {
-        symbol: `${base}/USDT`,
-        volumeUsd24h: crypto.volumeUsd,
-        change24h: crypto.change24h,
-        price: crypto.price,
-        volumeRank: index + 1
-      };
-    });
-    
+      const entry = buildVolumeEntry(base, crypto, result.length + 1);
+      if (!entry) {
+        invalidSymbols.push(crypto.symbol);
+        continue;
+      }
+      result.push(entry);
+    }
+
+    if (invalidSymbols.length) {
+      console.warn('⚠️ Dropping invalid perpetual symbols from volume filter', {
+        symbols: invalidSymbols.slice(0, 10),
+        total: invalidSymbols.length,
+      });
+    }
+
     return result;
     
   } catch (error) {
