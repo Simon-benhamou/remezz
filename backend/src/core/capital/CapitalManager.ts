@@ -78,7 +78,7 @@ export class CapitalManager {
 
   private effectivePerSymbolCap(totalPool: USD): USD {
     const cap = totalPool.times(this.cfg.perSymbolCapPct);
-    return usdMax(cap, ZERO_USD);
+    return usdMax(cap, this.cfg.minOrderUSD);
   }
 
   async reserve(req: {
