@@ -666,7 +666,26 @@ export class LiveBroker implements Broker {
       try { await ex.cancelOrder(params.tpOrderId, symbol).catch(()=>{}); } catch {}
     }
     const stopLossValid = params.stopLoss !== undefined && params.stopLoss !== null && Number.isFinite(Number(params.stopLoss));
-    if (stopLossValid && params.qty > 0) {
+    const wantsStop = stopLossValid && params.qty > 0;
+    const wantsTp = primaryTp !== undefined && params.qty > 0;
+    if (!wantsStop && !wantsTp) {
+      try {
+        const openOrders = await ex.fetchOpenOrders(symbol).catch(() => []);
+        if (Array.isArray(openOrders) && openOrders.length) {
+          for (const order of openOrders) {
+            const orderSide = String(order?.side || '').toLowerCase();
+            const type = String(order?.type || '').toLowerCase();
+            const isReduce = Boolean((order as any)?.reduceOnly || (order as any)?.reduce_only || (order?.info && ((order.info.reduceOnly ?? order.info.reduce_only) === true)));
+            const looksProtective = isReduce || type.includes('take') || type.includes('stop');
+            if (orderSide === reduceSide && looksProtective) {
+              try { await ex.cancelOrder(order.id, symbol).catch(()=>{}); } catch {}
+            }
+          }
+        }
+      } catch {}
+      return result;
+    }
+    if (wantsStop) {
       try {
         const slParams: any = { reduceOnly: true, stopPrice: params.stopLoss, triggerPrice: params.stopLoss };
         if (String(ex.id).toLowerCase() === 'cryptocom') slParams.type = 'stop_market';
@@ -674,7 +693,7 @@ export class LiveBroker implements Broker {
         result.slOrderId = String(slo?.id || slo?.clientOrderId || '');
       } catch {}
     }
-    if (primaryTp !== undefined && params.qty > 0) {
+    if (wantsTp) {
       try {
         const tpParams: any = { reduceOnly: true, takeProfitPrice: primaryTp };
         if (String(ex.id).toLowerCase() === 'cryptocom') tpParams.type = 'take_profit_limit';

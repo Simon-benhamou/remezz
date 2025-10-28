@@ -4072,6 +4072,7 @@ export class ReboundRejectionAgent {
       trailActivated: false,
       contextSatisfied: false,
       shouldExit: false,
+      exitCountdown: 0,
     };
 
     this.pos.tp = [];
@@ -4167,22 +4168,35 @@ export class ReboundRejectionAgent {
     }
 
     ctx.contextSatisfied = alignmentOk && adxOk;
-    if (ctx.trailActivated && previouslySatisfied && !ctx.contextSatisfied && unrealizedR > 0) {
-      if (!ctx.shouldExit) {
-        recordOpsEvent({
-          level: 'info',
-          source: 'context_trail',
-          message: 'context_trail_exit_triggered',
-          sessionId: this.sessionId || undefined,
-          symbol: this.profile?.symbol,
-          details: {
-            alignmentScore: alignment.score,
-            adx: adxValue,
-            unrealizedR: Number(unrealizedR.toFixed(3)),
-          },
-        });
+    if (ctx.trailActivated && previouslySatisfied && !ctx.contextSatisfied) {
+      ctx.exitCountdown = (ctx.exitCountdown ?? 0) + 1;
+      const exitTicks = 3;
+      const breakeven = this.pos.breakeven ?? this.pos.entry;
+      const belowBreakeven = this.pos.side === 'buy'
+        ? price <= breakeven * 0.999
+        : price >= breakeven * 1.001;
+      const shallowGain = unrealizedR <= 0.3;
+      if (ctx.exitCountdown >= exitTicks && (belowBreakeven || shallowGain)) {
+        if (!ctx.shouldExit) {
+          recordOpsEvent({
+            level: 'info',
+            source: 'context_trail',
+            message: 'context_trail_exit_triggered',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile?.symbol,
+            details: {
+              alignmentScore: alignment.score,
+              adx: adxValue,
+              unrealizedR: Number(unrealizedR.toFixed(3)),
+              belowBreakeven,
+              exitCountdown: ctx.exitCountdown,
+            },
+          });
+        }
+        ctx.shouldExit = true;
       }
-      ctx.shouldExit = true;
+    } else {
+      ctx.exitCountdown = 0;
     }
 
     this.pos.contextTrail = ctx;
@@ -10273,6 +10287,8 @@ export class ReboundRejectionAgent {
       }
 
       const primaryTp = Array.isArray(this.pos.tp) ? this.pos.tp.find(tp => typeof tp === 'number' && Number.isFinite(tp)) : this.pos.tp;
+      const wantsStop = Number.isFinite(this.pos.stop) && this.pos.qty > 0;
+      const wantsTp = typeof primaryTp === 'number' && Number.isFinite(primaryTp) && this.pos.qty > 0;
       const params = {
         symbol: this.profile.symbol,
         side: this.pos.side,
@@ -10291,10 +10307,14 @@ export class ReboundRejectionAgent {
       if (result.slOrderId) {
         this.pos.slOrderId = result.slOrderId;
         console.log(`Updated SL order ID: ${result.slOrderId}`);
+      } else if (!wantsStop) {
+        this.pos.slOrderId = undefined;
       }
       if (result.tpOrderId) {
         this.pos.tpOrderId = result.tpOrderId;
         console.log(`Updated TP order ID: ${result.tpOrderId}`);
+      } else if (!wantsTp) {
+        this.pos.tpOrderId = undefined;
       }
 
       // Log successful sync
@@ -10869,7 +10889,7 @@ export class ReboundRejectionAgent {
           await (this.broker as any).syncProtective?.({
             symbol: this.profile.symbol,
             side: protectiveSnapshot.side,
-            qty: protectiveSnapshot.qty,
+            qty: 0,
             stopLoss: undefined,
             takeProfit: undefined,
             slOrderId: protectiveSnapshot.slOrderId,
@@ -11273,8 +11293,11 @@ export class ReboundRejectionAgent {
     }
 
     const timeOpenMs = this.pos.openedAt ? now - this.pos.openedAt : Number.POSITIVE_INFINITY;
-    const minHoldMs = Math.max(60_000, Math.min(180_000, Math.floor((getConfig().MIN_HOLD_TIME_MS || 600_000) * 0.25)));
+    const minHoldMs = Math.max(120_000, Math.min(240_000, Math.floor((getConfig().MIN_HOLD_TIME_MS || 600_000) * 0.3)));
     const earlyGraceWindow = timeOpenMs < minHoldMs;
+    if (earlyGraceWindow && adverseMoveR < 0.8 && Math.abs(emaSpread) <= 1) {
+      return false;
+    }
 
     // 1. EMA Cross Reversal (bearish for long, bullish for short)
     const ema20 = typeof snap.ema20 === 'number' && Number.isFinite(snap.ema20) ? snap.ema20 : snap.last;
@@ -11288,7 +11311,7 @@ export class ReboundRejectionAgent {
     const confirmTicks = 3;
 
     if (this.pos.side === 'buy') {
-      if (emaBearish && unrealizedR <= -0.05) {
+      if (emaBearish && unrealizedR <= -0.05 && (adverseMoveR >= 0.8 || !earlyGraceWindow)) {
         const count = this.noteTrendReversalSignal('bearish', now);
         const reversalConfirmed = adverseMoveR >= minAdverseR || (!earlyGraceWindow && count >= confirmTicks && adverseMoveR >= bufferAdverseR);
         if (reversalConfirmed) {
@@ -11302,7 +11325,7 @@ export class ReboundRejectionAgent {
         return false;
       }
     } else if (this.pos.side === 'sell') {
-      if (emaBullish && unrealizedR <= -0.05) {
+      if (emaBullish && unrealizedR <= -0.05 && (adverseMoveR >= 0.8 || !earlyGraceWindow)) {
         const count = this.noteTrendReversalSignal('bullish', now);
         const reversalConfirmed = adverseMoveR >= minAdverseR || (!earlyGraceWindow && count >= confirmTicks && adverseMoveR >= bufferAdverseR);
         if (reversalConfirmed) {
@@ -11321,8 +11344,8 @@ export class ReboundRejectionAgent {
 
     // 2. Momentum Loss (RSI extreme + losing position)
     const rsi = snap.rsi14 || 50;
-    const momentumLoss = (this.pos.side === 'buy' && rsi < 35 && unrealizedR < -0.1) ||
-                         (this.pos.side === 'sell' && rsi > 65 && unrealizedR < -0.1);
+    const momentumLoss = !earlyGraceWindow && ((this.pos.side === 'buy' && rsi < 35 && unrealizedR < -0.1) ||
+                         (this.pos.side === 'sell' && rsi > 65 && unrealizedR < -0.1));
 
     if (momentumLoss) {
       console.log(`🔴 Exit: Momentum loss (RSI: ${rsi.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
@@ -11333,7 +11356,7 @@ export class ReboundRejectionAgent {
     const adx = snap.adx14 || 0;
     const adxWeak = adx < 15;
 
-    if (!earlyGraceWindow && adxWeak && unrealizedR < -0.4) {
+    if (!earlyGraceWindow && adxWeak && unrealizedR < -0.5) {
       console.log(`🔴 Exit: Weak trend + losing (ADX: ${adx.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
       return true;
     }
