@@ -1771,7 +1771,7 @@ export class ReboundRejectionAgent {
       || targetTp3BasePct > 0;
     let targetSizingEnabled = targetMinTp1PnlUsd > 0 || targetSizingPercentEnabled;
     if (playbook === 'momentum_breakout') {
-      const momentumTargets = [1.0, 2.0, 3.0];
+      const momentumTargets = [0.9, 1.6, 2.6];
       this.plan.plan.risk.tp = momentumTargets.map(value => ({ type: 'R', value }));
       this.plan.rPrices = momentumTargets.map(r => ({ r, price: round4(entry + dir0 * r * this.plan!.stopDistance) }));
     }
@@ -4422,9 +4422,9 @@ export class ReboundRejectionAgent {
 
   public resolvePartialFraction(): number {
     const tier = this.profile ? this.getTierForSymbol(this.profile.symbol) : 'tier3';
-    if (tier === 'tier1') return 0.8;
-    if (tier === 'tier2') return 0.82;
-    return 0.85;
+    if (tier === 'tier1') return 0.55;
+    if (tier === 'tier2') return 0.6;
+    return 0.65;
   }
 
   public resolveScaleInFraction(): number {
@@ -4459,9 +4459,9 @@ export class ReboundRejectionAgent {
 
   public resolveRunnerTrailPercent(): number {
     const aggressiveness = this.profile?.aggressiveness ?? 'conservative';
-    if (aggressiveness === 'aggressive') return 0.005;
-    if (aggressiveness === 'reactive') return 0.004;
-    return 0.0035;
+    if (aggressiveness === 'aggressive') return 0.0075;
+    if (aggressiveness === 'reactive') return 0.006;
+    return 0.005;
   }
 
   public async maybeScaleInAfterPartial(): Promise<void> {
@@ -11272,6 +11272,10 @@ export class ReboundRejectionAgent {
       this.trendReversalContext = null;
     }
 
+    const timeOpenMs = this.pos.openedAt ? now - this.pos.openedAt : Number.POSITIVE_INFINITY;
+    const minHoldMs = Math.max(60_000, Math.min(180_000, Math.floor((getConfig().MIN_HOLD_TIME_MS || 600_000) * 0.25)));
+    const earlyGraceWindow = timeOpenMs < minHoldMs;
+
     // 1. EMA Cross Reversal (bearish for long, bullish for short)
     const ema20 = typeof snap.ema20 === 'number' && Number.isFinite(snap.ema20) ? snap.ema20 : snap.last;
     const ema50 = typeof snap.ema50 === 'number' && Number.isFinite(snap.ema50) ? snap.ema50 : ema20;
@@ -11279,32 +11283,34 @@ export class ReboundRejectionAgent {
     const emaBearish = emaSpread < -0.5;
     const emaBullish = emaSpread > 0.5;
     const adverseMoveR = Math.max(0, -unrealizedR);
-    const minAdverseR = 0.35;
-    const bufferAdverseR = 0.25;
+    const minAdverseR = earlyGraceWindow ? 0.6 : 0.35;
+    const bufferAdverseR = earlyGraceWindow ? 0.45 : 0.25;
     const confirmTicks = 3;
 
     if (this.pos.side === 'buy') {
-      if (emaBearish && unrealizedR <= 0) {
+      if (emaBearish && unrealizedR <= -0.05) {
         const count = this.noteTrendReversalSignal('bearish', now);
-        if (adverseMoveR >= minAdverseR || (count >= confirmTicks && adverseMoveR >= bufferAdverseR)) {
+        const reversalConfirmed = adverseMoveR >= minAdverseR || (!earlyGraceWindow && count >= confirmTicks && adverseMoveR >= bufferAdverseR);
+        if (reversalConfirmed) {
           this.trendReversalContext = null;
           console.log(`🔴 Exit: EMA bearish cross confirmed (spread: ${emaSpread.toFixed(2)}%, adverseR: ${adverseMoveR.toFixed(2)})`);
           return true;
         }
-        if (count > 1) {
+        if (!earlyGraceWindow && count > 1) {
           console.log(`⚪️ Buffering bearish reversal signal (${count}/${confirmTicks}, adverseR=${adverseMoveR.toFixed(2)})`);
         }
         return false;
       }
     } else if (this.pos.side === 'sell') {
-      if (emaBullish && unrealizedR <= 0) {
+      if (emaBullish && unrealizedR <= -0.05) {
         const count = this.noteTrendReversalSignal('bullish', now);
-        if (adverseMoveR >= minAdverseR || (count >= confirmTicks && adverseMoveR >= bufferAdverseR)) {
+        const reversalConfirmed = adverseMoveR >= minAdverseR || (!earlyGraceWindow && count >= confirmTicks && adverseMoveR >= bufferAdverseR);
+        if (reversalConfirmed) {
           this.trendReversalContext = null;
           console.log(`🔴 Exit: EMA bullish cross confirmed (spread: ${emaSpread.toFixed(2)}%, adverseR: ${adverseMoveR.toFixed(2)})`);
           return true;
         }
-        if (count > 1) {
+        if (!earlyGraceWindow && count > 1) {
           console.log(`⚪️ Buffering bullish reversal signal (${count}/${confirmTicks}, adverseR=${adverseMoveR.toFixed(2)})`);
         }
         return false;
@@ -11315,8 +11321,8 @@ export class ReboundRejectionAgent {
 
     // 2. Momentum Loss (RSI extreme + losing position)
     const rsi = snap.rsi14 || 50;
-    const momentumLoss = (this.pos.side === 'buy' && rsi < 35 && unrealizedR < 0) ||
-                         (this.pos.side === 'sell' && rsi > 65 && unrealizedR < 0);
+    const momentumLoss = (this.pos.side === 'buy' && rsi < 35 && unrealizedR < -0.1) ||
+                         (this.pos.side === 'sell' && rsi > 65 && unrealizedR < -0.1);
 
     if (momentumLoss) {
       console.log(`🔴 Exit: Momentum loss (RSI: ${rsi.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
@@ -11327,7 +11333,7 @@ export class ReboundRejectionAgent {
     const adx = snap.adx14 || 0;
     const adxWeak = adx < 15;
 
-    if (adxWeak && unrealizedR < -0.3) {
+    if (!earlyGraceWindow && adxWeak && unrealizedR < -0.4) {
       console.log(`🔴 Exit: Weak trend + losing (ADX: ${adx.toFixed(1)}, R: ${unrealizedR.toFixed(2)})`);
       return true;
     }
@@ -11358,6 +11364,7 @@ export class ReboundRejectionAgent {
     if (!this.pos || !this.plan) return false;
     
     const cfg = getConfig();
+    const openMs = this.pos.openedAt ? Date.now() - this.pos.openedAt : Number.POSITIVE_INFINITY;
     const from = Math.min(this.plan.zone.from, this.plan.zone.to);
     const to = Math.max(this.plan.zone.from, this.plan.zone.to);
     const hysteresisPct = cfg.BREAKOUT_HYSTERESIS_PCT || 0.5;
@@ -11375,9 +11382,13 @@ export class ReboundRejectionAgent {
       if (!this.invalidationTicks) this.invalidationTicks = 0;
       this.invalidationTicks++;
       
-      const confirmTicks = Math.max(3, cfg.BREAKOUT_CONFIRM_TICKS || 2);
+      const confirmTicks = Math.max(6, cfg.BREAKOUT_CONFIRM_TICKS || 2);
+      const minHoldMs = Math.max(90_000, Math.min(240_000, Math.floor((cfg.MIN_HOLD_TIME_MS || 600_000) * 0.35)));
+      const breachDeepEnough = this.pos.side === 'buy'
+        ? price < Math.min(this.pos.entry * 0.995, from * (1 - hysteresisPct / 100))
+        : price > Math.max(this.pos.entry * 1.005, to * (1 + hysteresisPct / 100));
       
-      if (this.invalidationTicks >= confirmTicks) {
+      if (this.invalidationTicks >= confirmTicks && (openMs >= minHoldMs || breachDeepEnough)) {
         const direction = this.pos.side === 'buy' ? 'below' : 'above';
         console.log(`🚨 Late Invalidation Exit: Price ${price.toFixed(4)} ${direction} zone [${from.toFixed(4)}, ${to.toFixed(4)}] for ${this.invalidationTicks} ticks`);
         return true;

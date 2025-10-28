@@ -53,7 +53,20 @@ export function computeAdaptiveEvThreshold({
     if (riskUsd == null || rewardMultiplier == null) return null;
     if (!Number.isFinite(riskUsd) || !Number.isFinite(rewardMultiplier)) return null;
     if (riskUsd <= 0 || rewardMultiplier <= 0) return null;
-    return riskUsd * rewardMultiplier;
+    const atrScale = (() => {
+      if (
+        effectiveAtr != null &&
+        Number.isFinite(effectiveAtr) &&
+        effectiveAtr > 0 &&
+        minAtr > 0 &&
+        Number.isFinite(minAtr)
+      ) {
+        const ratio = effectiveAtr / minAtr;
+        return Math.max(0.6, Math.min(1.2, ratio));
+      }
+      return 1;
+    })();
+    return riskUsd * rewardMultiplier * atrScale;
   })();
 
   return riskFloor != null && Number.isFinite(riskFloor)

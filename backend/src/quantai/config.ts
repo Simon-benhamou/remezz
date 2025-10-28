@@ -367,10 +367,10 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     slAtrMult: 1.5,
     slAtrMultReversal: 1.2,
     slAtrMultImpulse: 1.5,
-    tpRMultiples: [2.0, 3.2, 4.6],
-    trailAfterR: 1.0,
-    trailAfterRReversal: 0.8,
-    trailAfterRImpulse: 1.0,
+    tpRMultiples: [1.4, 2.4, 3.5],
+    trailAfterR: 1.2,
+    trailAfterRReversal: 0.9,
+    trailAfterRImpulse: 1.2,
     trailAtrMult: 1.0,
     trailingAdaptive: {
       mode: 'atr',
@@ -931,8 +931,8 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     : DEFAULT_CONFIG.exits.tpRMultiples;
   const tpMultiples: number[] = [];
   const uniqueTpValues = Array.from(new Set<number>(tpRaw));
-  const minAllowedTp = Math.min(1.5, ...DEFAULT_CONFIG.exits.tpRMultiples);
-  const maxAllowedTp = Math.max(3.5, ...DEFAULT_CONFIG.exits.tpRMultiples);
+  const minAllowedTp = Math.min(1.1, ...DEFAULT_CONFIG.exits.tpRMultiples);
+  const maxAllowedTp = Math.max(4.2, ...DEFAULT_CONFIG.exits.tpRMultiples);
   for (const value of uniqueTpValues.sort((a, b) => a - b)) {
     if (tpMultiples.length >= 3) break;
     const clamped = Math.min(Math.max(value, minAllowedTp), maxAllowedTp);
