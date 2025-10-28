@@ -11295,10 +11295,6 @@ export class ReboundRejectionAgent {
     const timeOpenMs = this.pos.openedAt ? now - this.pos.openedAt : Number.POSITIVE_INFINITY;
     const minHoldMs = Math.max(120_000, Math.min(240_000, Math.floor((getConfig().MIN_HOLD_TIME_MS || 600_000) * 0.3)));
     const earlyGraceWindow = timeOpenMs < minHoldMs;
-    if (earlyGraceWindow && adverseMoveR < 0.8 && Math.abs(emaSpread) <= 1) {
-      return false;
-    }
-
     // 1. EMA Cross Reversal (bearish for long, bullish for short)
     const ema20 = typeof snap.ema20 === 'number' && Number.isFinite(snap.ema20) ? snap.ema20 : snap.last;
     const ema50 = typeof snap.ema50 === 'number' && Number.isFinite(snap.ema50) ? snap.ema50 : ema20;
@@ -11306,6 +11302,9 @@ export class ReboundRejectionAgent {
     const emaBearish = emaSpread < -0.5;
     const emaBullish = emaSpread > 0.5;
     const adverseMoveR = Math.max(0, -unrealizedR);
+    if (earlyGraceWindow && adverseMoveR < 0.8 && Math.abs(emaSpread) <= 1) {
+      return false;
+    }
     const minAdverseR = earlyGraceWindow ? 0.6 : 0.35;
     const bufferAdverseR = earlyGraceWindow ? 0.45 : 0.25;
     const confirmTicks = 3;

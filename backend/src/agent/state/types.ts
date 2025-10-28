@@ -122,6 +122,7 @@ export type ActivePosition = {
     trailActivated: boolean;
     contextSatisfied: boolean;
     shouldExit?: boolean;
+    exitCountdown?: number;
   };
   openLeverage?: number;
   equityAtEntryUsd?: number | null;
