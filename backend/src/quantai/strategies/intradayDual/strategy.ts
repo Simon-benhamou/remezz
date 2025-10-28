@@ -120,6 +120,34 @@ export class IntradayDualStrategy {
     createdAt: number;
   }>();
 
+  private resolveScratchThreshold(regime: RegimeLabel): number {
+    const scratchCfg = this.cfg.management?.scratch;
+    const raw = scratchCfg?.aggressionThreshold;
+    if (typeof raw === 'number') return raw;
+    if (!raw) return 0.25;
+    if (regime === 'BOM') {
+      return raw.bom ?? raw.default ?? 0.25;
+    }
+    if (regime === 'MR') {
+      return raw.mr ?? raw.default ?? 0.25;
+    }
+    return raw.default ?? 0.25;
+  }
+
+  private resolveScratchHoldMs(regime: RegimeLabel): number | null {
+    const scratchCfg = this.cfg.management?.scratch;
+    const raw = scratchCfg?.minHoldMs;
+    if (typeof raw === 'number') return raw;
+    if (!raw) return null;
+    if (regime === 'BOM') {
+      return raw.bom ?? raw.default ?? null;
+    }
+    if (regime === 'MR') {
+      return raw.mr ?? raw.default ?? null;
+    }
+    return raw.default ?? null;
+  }
+
   evaluateTick(input: TickInput, ctx: EvaluateContext): {
     regime: RegimeSignal;
     entries: EntrySignal[];
@@ -991,7 +1019,9 @@ export class IntradayDualStrategy {
       }
 
       if (!position.scratchTriggered && this.cfg.management?.scratch?.enabled) {
-        const threshold = this.cfg.management.scratch.aggressionThreshold;
+        const minHoldMs = this.resolveScratchHoldMs(position.regime);
+        const holdSatisfied = minHoldMs == null || input.timestamp - position.entryTime >= minHoldMs;
+        const threshold = this.resolveScratchThreshold(position.regime);
         const aggression = f1.orderBook.aggressionRatio;
         const imbalanceDelta = f1.orderBook.imbalanceDelta;
         const aggressionFlip = position.side === 'long'
@@ -1000,7 +1030,7 @@ export class IntradayDualStrategy {
         const imbalanceFlip = position.side === 'long'
           ? imbalanceDelta < 0
           : imbalanceDelta > 0;
-        if (aggressionFlip && imbalanceFlip) {
+        if (holdSatisfied && aggressionFlip && imbalanceFlip) {
           const feeBps = this.runtimeCfg.ev.feesBps;
           const feeDecimal = new PreciseDecimal(feeBps).dividedBy(new PreciseDecimal(10_000));
           const base = new PreciseDecimal(1);

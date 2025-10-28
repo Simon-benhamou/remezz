@@ -82,6 +82,23 @@ filters:
       min_rr_delta_per_step: -0.15
       confidence_delta_per_step: -0.03
       min_atr_pct_delta_per_step: -0.04
+  playbook_overrides:
+    trend_following:
+      min_rr: 1.35
+      min_adx: 18
+      min_atr_pct: 0.1
+      confidence_threshold: 0.58
+    momentum_breakout:
+      min_rr: 1.55
+      min_adx: 24
+      min_atr_pct: 0.14
+      max_spread_bps: 12
+      confidence_threshold: 0.6
+    mean_reversion:
+      min_rr: 1.1
+      min_atr_pct: 0.06
+      max_spread_bps: 20
+      confidence_threshold: 0.52
 
 entries:
   ema_fast: 20
@@ -110,10 +127,36 @@ exits:
     cmf_negative: true
     tighten_profit_r: 0.2          # tighten stops once 0.2R in profit if momentum fades
     cut_loss_r: 0.35               # exit earlier if -0.35R and momentum fails
+  strategy_overrides:
+    trend_following:
+      trail_after_r: 1.25
+      trail_atr_mult: 1.1
+      early_exit:
+        tighten_profit_r: 0.25
+        cut_loss_r: 0.45
+        min_hold_minutes: 25
+      max_holding_min: 120
+    momentum_breakout:
+      sl_atr_mult_impulse: 1.35
+      trail_after_r: 1.05
+      trail_atr_mult: 1.05
+      tp_r_multiples: [1.8, 3.0, 4.5]
+      early_exit:
+        tighten_profit_r: 0.22
+        cut_loss_r: 0.4
+        min_hold_minutes: 30
+      reentry_cooldown_min: 35
+    mean_reversion:
+      trail_after_r: 0.9
+      trail_atr_mult: 0.85
+      early_exit:
+        tighten_profit_r: 0.15
+        cut_loss_r: 0.3
+        min_hold_minutes: 15
+      max_holding_min: 45
 
 regime:
   ema_trend_period_fast: 50
   ema_trend_period_slow: 200
   adx_trend_min: 16
   neutral_band_bps: 10               # +-0.10% slope per period ~ neutral
-

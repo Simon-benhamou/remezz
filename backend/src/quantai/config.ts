@@ -58,6 +58,10 @@ export type QuantAISymbolEntryFilterOverride = Partial<EntryFilterThresholds> & 
   volatilityProfileOverrides?: Record<string, QuantAIVolatilityProfileOverride>;
 };
 
+export type QuantAIPlaybookEntryFilterOverride = Partial<EntryFilterThresholds> & {
+  spreadAtrRatioLimit?: number;
+};
+
 export type QuantAIDrySpellConfig = {
   enabled: boolean;
   minMinutesWithoutTrade: number;
@@ -124,6 +128,7 @@ export type QuantAIEntryFilterConfig = EntryFilterThresholds & {
   dynamic?: QuantAIEntryFilterDynamicConfig;
   volatilityProfileOverrides?: Record<string, QuantAIVolatilityProfileOverride>;
   symbolOverrides?: Record<string, QuantAISymbolEntryFilterOverride>;
+  playbookOverrides?: Record<string, QuantAIPlaybookEntryFilterOverride>;
 };
 
 export type QuantAIExitConfig = {
@@ -148,6 +153,7 @@ export type QuantAIExitConfig = {
   };
   maxHoldingMin?: number;
   reentryCooldownMin?: number;
+  strategyOverrides?: Record<string, QuantAIExitOverride>;
 };
 
 export type QuantAITrailingAtrBands = {
@@ -165,6 +171,32 @@ export type QuantAITrailingAdaptiveConfig = {
   percent?: number;
   atrBands?: QuantAITrailingAtrBands;
   clampMultiplier?: { min?: number; max?: number };
+};
+
+export type QuantAIExitOverride = {
+  slAtrMult?: number;
+  slAtrMultReversal?: number;
+  slAtrMultImpulse?: number;
+  tpRMultiples?: number[];
+  trailAfterR?: number;
+  trailAfterRReversal?: number;
+  trailAfterRImpulse?: number;
+  trailAtrMult?: number;
+  maxHoldingMin?: number;
+  reentryCooldownMin?: number;
+  earlyExit?: {
+    adxBelow?: number;
+    cmfNegative?: boolean;
+    tightenProfitR?: number;
+    cutLossR?: number;
+    tightenOnlyIfProfitGtR?: number;
+    cutIfLossGtR?: number;
+    minHoldMinutes?: number;
+  };
+  trailingAdaptive?: Partial<QuantAITrailingAdaptiveConfig> & {
+    atrBands?: Partial<QuantAITrailingAtrBands>;
+    clampMultiplier?: { min?: number; max?: number };
+  };
 };
 
 export type QuantAIRegimeConfig = {
@@ -360,6 +392,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         },
       },
     },
+    playbookOverrides: undefined,
     dynamic: DEFAULT_DYNAMIC_FILTERS,
   },
   exits: {
@@ -394,6 +427,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     },
     maxHoldingMin: 90,
     reentryCooldownMin: 25,
+    strategyOverrides: undefined,
   },
   regime: {
     emaFastPeriod: 50,
@@ -496,6 +530,17 @@ function cloneSymbolOverrides(
   return Object.keys(cloned).length ? cloned : undefined;
 }
 
+function clonePlaybookOverrides(
+  overrides?: Record<string, QuantAIPlaybookEntryFilterOverride>,
+): Record<string, QuantAIPlaybookEntryFilterOverride> | undefined {
+  if (!overrides) return undefined;
+  const cloned: Record<string, QuantAIPlaybookEntryFilterOverride> = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    cloned[key] = { ...value };
+  }
+  return Object.keys(cloned).length ? cloned : undefined;
+}
+
 function cloneDynamic(
   dynamic?: QuantAIEntryFilterDynamicConfig,
 ): QuantAIEntryFilterDynamicConfig | undefined {
@@ -538,6 +583,7 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
     dynamic: cloneDynamic(defaults.dynamic),
     volatilityProfileOverrides: cloneVolatilityProfileOverrides(defaults.volatilityProfileOverrides),
     symbolOverrides: cloneSymbolOverrides(defaults.symbolOverrides),
+    playbookOverrides: clonePlaybookOverrides(defaults.playbookOverrides),
   };
 
   if (!raw || typeof raw !== 'object') return cfg;
@@ -717,6 +763,41 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
   }
   if (cfg.symbolOverrides && Object.keys(cfg.symbolOverrides).length === 0) {
     cfg.symbolOverrides = undefined;
+  }
+
+  const playbookOverridesRaw = raw.playbook_overrides ?? raw.playbookOverrides;
+  if (playbookOverridesRaw && typeof playbookOverridesRaw === 'object') {
+    cfg.playbookOverrides = cfg.playbookOverrides ? { ...cfg.playbookOverrides } : {};
+    for (const [key, value] of Object.entries(playbookOverridesRaw)) {
+      if (!value || typeof value !== 'object') continue;
+      const obj = value as Record<string, any>;
+      const target: QuantAIPlaybookEntryFilterOverride = { ...(cfg.playbookOverrides?.[key] ?? {}) };
+      const minAdx = normalizeOptionalNumber(obj['min_adx'] ?? obj['minAdx']);
+      if (minAdx != null) target.minAdx = minAdx;
+      const minDollarVolume = normalizeOptionalNumber(obj['min_dollar_volume'] ?? obj['minDollarVolume']);
+      if (minDollarVolume != null) target.minDollarVolume = minDollarVolume;
+      const minRr = normalizeOptionalNumber(obj['min_rr'] ?? obj['minRr']);
+      if (minRr != null) target.minRr = minRr;
+      const minAtrPct = normalizeOptionalNumber(obj['min_atr_pct'] ?? obj['minAtrPct']);
+      if (minAtrPct != null) target.minAtrPct = minAtrPct;
+      const maxSpreadBps = normalizeOptionalNumber(obj['max_spread_bps'] ?? obj['maxSpreadBps']);
+      if (maxSpreadBps != null) target.maxSpreadBps = maxSpreadBps;
+      const confidenceThreshold = normalizeOptionalNumber(obj['confidence_threshold'] ?? obj['confidenceThreshold']);
+      if (confidenceThreshold != null) target.confidenceThreshold = confidenceThreshold;
+      if (obj['use_confidence_filter'] != null || obj['useConfidenceFilter'] != null) {
+        target.useConfidenceFilter = Boolean(obj['use_confidence_filter'] ?? obj['useConfidenceFilter']);
+      }
+      const maxAtrPctOverride = normalizeOptionalNumber(obj['max_atr_pct'] ?? obj['maxAtrPct']);
+      if (maxAtrPctOverride != null) target.maxAtrPct = maxAtrPctOverride;
+      const spreadLimit = normalizeOptionalNumber(obj['spread_atr_ratio_limit'] ?? obj['spreadAtrRatioLimit']);
+      if (spreadLimit != null) target.spreadAtrRatioLimit = spreadLimit;
+      if (Object.keys(target).length > 0) {
+        cfg.playbookOverrides![key] = target;
+      }
+    }
+  }
+  if (cfg.playbookOverrides && Object.keys(cfg.playbookOverrides).length === 0) {
+    cfg.playbookOverrides = undefined;
   }
 
   const dynamicRaw = raw.dynamic ?? raw.dynamic_adjustments ?? raw.adaptive;
@@ -1002,7 +1083,7 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     }
   }
 
-  return {
+  const cfg: QuantAIExitConfig = {
     atrPeriod: Number(raw.atr_period ?? raw.atrPeriod ?? DEFAULT_CONFIG.exits.atrPeriod),
     slAtrMult: slBase,
     slAtrMultReversal: slReversal,
@@ -1028,7 +1109,121 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     reentryCooldownMin: Number.isFinite(reentryCooldown)
       ? Math.max(0, Number(reentryCooldown))
       : (DEFAULT_CONFIG.exits.reentryCooldownMin ?? 0),
+    strategyOverrides: undefined,
   };
+
+  const normalizeExitOverride = (value: any): QuantAIExitOverride | null => {
+    if (!value || typeof value !== 'object') return null;
+    const out: QuantAIExitOverride = {};
+    const sl = normalizeOptionalNumber(value.sl_atr_mult ?? value.slAtrMult);
+    if (sl != null) out.slAtrMult = sl;
+    const slRev = normalizeOptionalNumber(value.sl_atr_mult_reversal ?? value.slAtrMultReversal);
+    if (slRev != null) out.slAtrMultReversal = slRev;
+    const slImp = normalizeOptionalNumber(value.sl_atr_mult_impulse ?? value.slAtrMultImpulse);
+    if (slImp != null) out.slAtrMultImpulse = slImp;
+    const trail = normalizeOptionalNumber(value.trail_after_r ?? value.trailAfterR);
+    if (trail != null) out.trailAfterR = trail;
+    const trailRev = normalizeOptionalNumber(value.trail_after_r_reversal ?? value.trailAfterRReversal);
+    if (trailRev != null) out.trailAfterRReversal = trailRev;
+    const trailImp = normalizeOptionalNumber(value.trail_after_r_impulse ?? value.trailAfterRImpulse);
+    if (trailImp != null) out.trailAfterRImpulse = trailImp;
+    const trailAtr = normalizeOptionalNumber(value.trail_atr_mult ?? value.trailAtrMult);
+    if (trailAtr != null) out.trailAtrMult = trailAtr;
+    const maxHold = normalizeOptionalNumber(value.max_holding_min ?? value.maxHoldingMin);
+    if (maxHold != null) out.maxHoldingMin = maxHold;
+    const reentry = normalizeOptionalNumber(value.reentry_cooldown_min ?? value.reentryCooldownMin);
+    if (reentry != null) out.reentryCooldownMin = reentry;
+    const tpOverrideRaw = value.tp_r_multiples ?? value.tpRMultiples;
+    if (Array.isArray(tpOverrideRaw)) {
+      const parsed = tpOverrideRaw
+        .map((v: any) => Number(v))
+        .filter((v: number) => Number.isFinite(v) && v > 0);
+      if (parsed.length) out.tpRMultiples = parsed;
+    }
+
+    const earlyRaw = value.early_exit ?? value.earlyExit;
+    if (earlyRaw && typeof earlyRaw === 'object') {
+      const early: QuantAIExitOverride['earlyExit'] = {};
+      const adx = normalizeOptionalNumber(earlyRaw.adx_below ?? earlyRaw.adxBelow);
+      if (adx != null) early.adxBelow = adx;
+      if (earlyRaw.cmf_negative != null || earlyRaw.cmfNegative != null) {
+        const cmfVal = earlyRaw.cmf_negative ?? earlyRaw.cmfNegative;
+        if (typeof cmfVal === 'boolean') early.cmfNegative = cmfVal;
+        else if (typeof cmfVal === 'string') early.cmfNegative = cmfVal.trim().toLowerCase() !== 'false';
+        else if (typeof cmfVal === 'number') early.cmfNegative = cmfVal !== 0;
+      }
+      const tighten = normalizeOptionalNumber(
+        earlyRaw.tighten_profit_r ?? earlyRaw.tightenProfitR ?? earlyRaw.tighten_only_if_profit_gt_r ?? earlyRaw.tightenOnlyIfProfitGtR,
+      );
+      if (tighten != null) early.tightenProfitR = tighten;
+      const cut = normalizeOptionalNumber(earlyRaw.cut_loss_r ?? earlyRaw.cutLossR ?? earlyRaw.cut_if_loss_gt_r ?? earlyRaw.cutIfLossGtR);
+      if (cut != null) early.cutLossR = cut;
+      const tightenOnly = normalizeOptionalNumber(earlyRaw.tighten_only_if_profit_gt_r ?? earlyRaw.tightenOnlyIfProfitGtR);
+      if (tightenOnly != null) early.tightenOnlyIfProfitGtR = tightenOnly;
+      const cutOnly = normalizeOptionalNumber(earlyRaw.cut_if_loss_gt_r ?? earlyRaw.cutIfLossGtR);
+      if (cutOnly != null) early.cutIfLossGtR = cutOnly;
+      const hold = normalizeOptionalNumber(earlyRaw.min_hold_minutes ?? earlyRaw.minHoldMinutes);
+      if (hold != null) early.minHoldMinutes = hold;
+      if (Object.keys(early).length) out.earlyExit = early;
+    }
+
+    const trailingRaw = value.trailing_adaptive ?? value.trailingAdaptive;
+    if (trailingRaw && typeof trailingRaw === 'object') {
+      const trailing: any = {};
+      const modeVal = trailingRaw.mode ?? trailingRaw.trail_mode ?? trailingRaw.trailMode;
+      if (modeVal != null) {
+        const normalized = String(modeVal).toLowerCase();
+        trailing.mode = normalized === 'percent' ? 'percent' : 'atr';
+      }
+      const percentVal = normalizeOptionalNumber(trailingRaw.percent ?? trailingRaw.percentTrail ?? trailingRaw.percentage);
+      if (percentVal != null) trailing.percent = percentVal;
+      const clampRaw = trailingRaw.clamp_multiplier ?? trailingRaw.clampMultiplier;
+      if (clampRaw && typeof clampRaw === 'object') {
+        const clamp: { min?: number; max?: number } = {};
+        const minClamp = normalizeOptionalNumber(clampRaw.min);
+        if (minClamp != null) clamp.min = minClamp;
+        const maxClamp = normalizeOptionalNumber(clampRaw.max);
+        if (maxClamp != null) clamp.max = maxClamp;
+        if (Object.keys(clamp).length) trailing.clampMultiplier = clamp;
+      }
+      const bandsRaw = trailingRaw.atr_bands ?? trailingRaw.atrBands ?? trailingRaw.bands;
+      if (bandsRaw && typeof bandsRaw === 'object') {
+        const bands: Partial<QuantAITrailingAtrBands> = {};
+        const low = normalizeOptionalNumber(bandsRaw.low);
+        if (low != null) bands.low = low;
+        const high = normalizeOptionalNumber(bandsRaw.high);
+        if (high != null) bands.high = high;
+        const extreme = normalizeOptionalNumber(bandsRaw.extreme);
+        if (extreme != null) bands.extreme = extreme;
+        const lowMult = normalizeOptionalNumber(bandsRaw.low_multiplier ?? bandsRaw.lowMultiplier);
+        if (lowMult != null) bands.lowMultiplier = lowMult;
+        const midMult = normalizeOptionalNumber(bandsRaw.mid_multiplier ?? bandsRaw.midMultiplier);
+        if (midMult != null) bands.midMultiplier = midMult;
+        const highMult = normalizeOptionalNumber(bandsRaw.high_multiplier ?? bandsRaw.highMultiplier);
+        if (highMult != null) bands.highMultiplier = highMult;
+        const extMult = normalizeOptionalNumber(bandsRaw.extreme_multiplier ?? bandsRaw.extremeMultiplier);
+        if (extMult != null) bands.extremeMultiplier = extMult;
+        if (Object.keys(bands).length) trailing.atrBands = bands;
+      }
+      if (Object.keys(trailing).length) out.trailingAdaptive = trailing;
+    }
+
+    return Object.keys(out).length ? out : null;
+  };
+
+  const strategyOverridesRaw = raw.strategy_overrides ?? raw.strategyOverrides;
+  if (strategyOverridesRaw && typeof strategyOverridesRaw === 'object') {
+    const overrides: Record<string, QuantAIExitOverride> = {};
+    for (const [key, value] of Object.entries(strategyOverridesRaw)) {
+      const normalized = normalizeExitOverride(value);
+      if (normalized) overrides[key.toLowerCase()] = normalized;
+    }
+    if (Object.keys(overrides).length) {
+      cfg.strategyOverrides = overrides;
+    }
+  }
+
+  return cfg;
 }
 
 function normalizeRegime(raw: any): QuantAIRegimeConfig {

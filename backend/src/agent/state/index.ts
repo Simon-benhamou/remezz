@@ -20,7 +20,6 @@ import { getAgentRecentWinRate } from '../../services/performance/winrate.js';
 import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
 import type { StrategyGuardrail } from '../../services/strategyHealth.js';
 import { triggerIntelligentReselection } from '../../services/intelligentAgent/strategies/core.js';
-import { requestAutoReselect } from '../../services/intelligentAgent/strategies/core.js';
 import { getConfig, getModeParams, type AgentAggressiveness, type ModeParams } from '../../utils/env.js';
 import { capitalConfig } from '../../config/capital.js';
 import { getCapitalManager } from '../../services/capitalPool.js';
@@ -29,6 +28,7 @@ import { clampBudgetFraction, resolveBudgetFraction } from '../../utils/budget.j
 import { computeLeverageGuardForSymbol } from '../../utils/riskGuards.js';
 import { applyHysteresis, blendRR, DEFAULT_RR_EXPECTANCY_CONFIG, resolveRrExpectancyConfig, rrMinFromWinrate, type RRExpectancyConfig } from '../../risk/rrExpectancy.js';
 import { broadcast } from '../../ws/hub.js';
+import type { QuantAIExitConfig, QuantAIExitOverride } from '../../quantai/config.js';
 import {
   loadActivePosition,
   recordEnter,
@@ -928,6 +928,7 @@ export class ReboundRejectionAgent {
     const { from, to, mid } = this.plan.zone;
     const { playbook, context } = this.getContextualPlaybook(snap, this.plan.bias ?? 'none');
     const normalizedPlaybook = String(playbook);
+    const exitConfigForPlaybook = this.getExitConfigForPlaybook(normalizedPlaybook);
     if (context && context.basePlaybook !== context.effectivePlaybook) {
       console.log(
         `🧭 Context shift: ${context.basePlaybook} → ${context.effectivePlaybook} | regime=${context.regime}` +
@@ -1414,6 +1415,7 @@ export class ReboundRejectionAgent {
     const qualityFilters = this.getQualityFiltersDiagnostics(snap);
     const mode = this.profile?.aggressiveness || 'reactive';
     const normalizedPlaybook = String(playbook);
+    const exitConfigForPlaybook = this.getExitConfigForPlaybook(normalizedPlaybook);
     const tierForQuality = this.profile ? this.getTierForSymbol(this.profile.symbol) : null;
     const qualityProfile = this.getQualityScoreProfile(normalizedPlaybook, mode);
     const quantArchetype: ExitArchetype = playbook === 'momentum_breakout' ? 'impulse' : 'reversal';
@@ -1785,7 +1787,7 @@ export class ReboundRejectionAgent {
           entry,
           atrForBracket,
           side === 'buy' ? 'long' : 'short',
-          this.quantConfig.exits,
+          exitConfigForPlaybook,
           quantArchetype,
         );
         let quantStopPrice = round4(bracket.stop);
@@ -1798,13 +1800,13 @@ export class ReboundRejectionAgent {
           this.plan.stopDistance = quantDistance;
           stop = quantStopPrice;
           const targets = momentumStopDistance != null && Math.abs(quantDistance - momentumStopDistance) <= 1e-8
-            ? this.quantConfig.exits.tpRMultiples.map((r) => round4(entry + dir0 * r * quantDistance))
+            ? exitConfigForPlaybook.tpRMultiples.map((r) => round4(entry + dir0 * r * quantDistance))
             : bracket.targets.map(target => round4(target));
           tp = targets;
           const stopForRLocal = Math.max(this.plan.stopDistance, 1e-9);
           this.plan.rPrices = tp.map((price, idx) => {
             const rRaw = Math.abs(price - entry) / stopForRLocal;
-            const fallback = this.quantConfig.exits.tpRMultiples[idx] ?? (idx + 1);
+            const fallback = exitConfigForPlaybook.tpRMultiples[idx] ?? (idx + 1);
             const r = Number.isFinite(rRaw) && rRaw > 0 ? rRaw : fallback;
             return { r: roundR(r), price };
           });
@@ -2151,6 +2153,7 @@ export class ReboundRejectionAgent {
       volatilityProfile: volatilityProfileForFilters,
       relaxation: drySpellRelaxation ?? undefined,
       bias: this.plan.bias ?? 'none',
+      playbook: normalizedPlaybook,
     });
     const entryFilterSizePenalty = typeof filterEvaluation.modifiers?.sizeMultiplier === 'number'
       ? filterEvaluation.modifiers.sizeMultiplier
@@ -10430,6 +10433,10 @@ export class ReboundRejectionAgent {
     const tradeSide: 'long' | 'short' = this.pos.side === 'buy' ? 'long' : 'short';
     const hitTargets = new Set<number>(this.pos.hitTargets ?? []);
     const minutesOpen = (Date.now() - this.pos.openedAt) / 60000;
+    const playbookContext = (this.plan?.plan?.meta?.playbook as string | undefined)
+      ?? this.regime?.playbook
+      ?? null;
+    const baseExitConfig = this.getExitConfigForPlaybook(playbookContext);
     const directive = maybeAdjustOrExit({
       side: tradeSide,
       entryPrice: this.pos.entry,
@@ -10439,7 +10446,7 @@ export class ReboundRejectionAgent {
       atr,
       adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : null,
       cmf: typeof (snap as any)?.cmf20 === 'number' ? Number((snap as any).cmf20) : null,
-      cfg: this.resolveDynamicExitConfig(),
+      cfg: this.resolveDynamicExitConfig(baseExitConfig),
       alreadyTriggeredTargets: hitTargets,
       archetype: this.pos.archetype,
       minutesOpen,
@@ -10488,8 +10495,82 @@ export class ReboundRejectionAgent {
     return false;
   }
 
-  public resolveDynamicExitConfig() {
-    const baseCfg = this.quantConfig.exits;
+  private mergeExitOverride(base: QuantAIExitConfig, override: QuantAIExitOverride): QuantAIExitConfig {
+    const next: QuantAIExitConfig = {
+      ...base,
+      tpRMultiples: [...base.tpRMultiples],
+      earlyExit: base.earlyExit ? { ...base.earlyExit } : { adxBelow: 0, cmfNegative: false, tightenProfitR: 0, cutLossR: 0 },
+      trailingAdaptive: base.trailingAdaptive
+        ? {
+            ...base.trailingAdaptive,
+            atrBands: base.trailingAdaptive.atrBands ? { ...base.trailingAdaptive.atrBands } : undefined,
+            clampMultiplier: base.trailingAdaptive.clampMultiplier ? { ...base.trailingAdaptive.clampMultiplier } : undefined,
+          }
+        : undefined,
+      strategyOverrides: base.strategyOverrides,
+    };
+
+    if (override.slAtrMult != null) next.slAtrMult = override.slAtrMult;
+    if (override.slAtrMultReversal != null) next.slAtrMultReversal = override.slAtrMultReversal;
+    if (override.slAtrMultImpulse != null) next.slAtrMultImpulse = override.slAtrMultImpulse;
+    if (override.trailAfterR != null) next.trailAfterR = override.trailAfterR;
+    if (override.trailAfterRReversal != null) next.trailAfterRReversal = override.trailAfterRReversal;
+    if (override.trailAfterRImpulse != null) next.trailAfterRImpulse = override.trailAfterRImpulse;
+    if (override.trailAtrMult != null) next.trailAtrMult = override.trailAtrMult;
+    if (override.maxHoldingMin != null) next.maxHoldingMin = override.maxHoldingMin;
+    if (override.reentryCooldownMin != null) next.reentryCooldownMin = override.reentryCooldownMin;
+
+    if (override.tpRMultiples && override.tpRMultiples.length) {
+      next.tpRMultiples = override.tpRMultiples.map((value) => Number(value));
+    }
+
+    if (override.earlyExit) {
+      const source = override.earlyExit;
+      const updated = next.earlyExit ?? { adxBelow: 0, cmfNegative: false, tightenProfitR: 0, cutLossR: 0 };
+      if (source.adxBelow != null) updated.adxBelow = source.adxBelow;
+      if (typeof source.cmfNegative === 'boolean') updated.cmfNegative = source.cmfNegative;
+      if (source.tightenProfitR != null) updated.tightenProfitR = source.tightenProfitR;
+      if (source.cutLossR != null) updated.cutLossR = source.cutLossR;
+      if (source.tightenOnlyIfProfitGtR != null) updated.tightenOnlyIfProfitGtR = source.tightenOnlyIfProfitGtR;
+      if (source.cutIfLossGtR != null) updated.cutIfLossGtR = source.cutIfLossGtR;
+      if (source.minHoldMinutes != null) updated.minHoldMinutes = source.minHoldMinutes;
+      next.earlyExit = updated;
+    }
+
+    if (override.trailingAdaptive) {
+      const baseTrailing = next.trailingAdaptive ?? {};
+      const overrideTrailing = override.trailingAdaptive;
+      const merged: any = { ...baseTrailing };
+      if (overrideTrailing.mode) merged.mode = overrideTrailing.mode;
+      if (overrideTrailing.percent != null) merged.percent = overrideTrailing.percent;
+      if (overrideTrailing.clampMultiplier) {
+        merged.clampMultiplier = {
+          ...(baseTrailing.clampMultiplier ?? {}),
+          ...overrideTrailing.clampMultiplier,
+        };
+      }
+      if (overrideTrailing.atrBands) {
+        merged.atrBands = {
+          ...(baseTrailing.atrBands ?? {}),
+          ...overrideTrailing.atrBands,
+        };
+      }
+      next.trailingAdaptive = merged;
+    }
+
+    return next;
+  }
+
+  private getExitConfigForPlaybook(playbook: string | null | undefined): QuantAIExitConfig {
+    const base = this.quantConfig.exits;
+    if (!playbook) return base;
+    const normalized = playbook.toLowerCase();
+    const override = base.strategyOverrides?.[normalized];
+    if (!override) return base;
+    return this.mergeExitOverride(base, override);
+  }
+
+  public resolveDynamicExitConfig(baseCfg: QuantAIExitConfig = this.quantConfig.exits) {
     const { context } = this.getContextualPlaybook(undefined, this.pos ? (this.pos.side === 'buy' ? 'long' : 'short') : 'none');
     if (!context) return baseCfg;
 

@@ -80,6 +80,7 @@ export class EntryFilters {
       volatilityProfile?: string | null;
       relaxation?: EntryRelaxation | null;
       bias?: 'long' | 'short' | 'none' | null;
+      playbook?: string | null;
     } = {},
   ): EntryEvaluation {
     const reasons: Record<string, string> = {};
@@ -110,6 +111,7 @@ export class EntryFilters {
     const relaxation = opts.relaxation ?? null;
     let deferredMinAdxDelta: number | null = null;
 
+    const playbookKey = opts.playbook ? opts.playbook.toLowerCase().replace(/\s+/g, '_') : null;
     const tierOverride = tier ? this.cfg.tierOverrides?.[tier] : undefined;
     if (tierOverride) {
       if (tierOverride.minAdx != null) minAdx = tierOverride.minAdx;
@@ -137,6 +139,27 @@ export class EntryFilters {
       }
       if (tierOverride.spreadAtrRatioLimit != null) {
         spreadAtrRatioLimit = tierOverride.spreadAtrRatioLimit;
+      }
+    }
+
+    const playbookOverride = playbookKey ? this.cfg.playbookOverrides?.[playbookKey] : undefined;
+    if (playbookOverride) {
+      if (playbookOverride.minAdx != null) minAdx = playbookOverride.minAdx;
+      if (playbookOverride.minDollarVolume != null) minDollarVolume = playbookOverride.minDollarVolume;
+      if (playbookOverride.minRr != null) minRr = Math.max(minRr ?? playbookOverride.minRr, playbookOverride.minRr);
+      if (playbookOverride.minAtrPct != null) minAtrPct = playbookOverride.minAtrPct;
+      if (playbookOverride.maxSpreadBps != null) maxSpreadBps = playbookOverride.maxSpreadBps;
+      if (playbookOverride.confidenceThreshold != null) {
+        confidenceThreshold = playbookOverride.confidenceThreshold;
+      }
+      if (playbookOverride.useConfidenceFilter != null) {
+        useConfidenceFilter = playbookOverride.useConfidenceFilter;
+      }
+      if (playbookOverride.maxAtrPct != null) {
+        maxAtrPct = Math.min(maxAtrPct, playbookOverride.maxAtrPct);
+      }
+      if (playbookOverride.spreadAtrRatioLimit != null) {
+        spreadAtrRatioLimit = playbookOverride.spreadAtrRatioLimit;
       }
     }
 

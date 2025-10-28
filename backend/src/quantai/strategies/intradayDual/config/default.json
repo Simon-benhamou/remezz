@@ -87,7 +87,15 @@
     },
     "scratch": {
       "enabled": true,
-      "aggressionThreshold": 0.25
+      "aggressionThreshold": {
+        "default": 0.24,
+        "bom": 0.18,
+        "mr": 0.26
+      },
+      "minHoldMs": {
+        "default": 45000,
+        "bom": 90000
+      }
     },
     "timeStop": {
       "minMinutes": 8,

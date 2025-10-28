@@ -65,6 +65,7 @@ type EvaluateOptions = {
   regime?: string | null;
   allowMomentumOverride?: boolean;
   favorMeanReversion?: boolean;
+  playbook?: string | null;
   micro?: {
     spreadBps?: number | null;
     depthUsd?: number | null;

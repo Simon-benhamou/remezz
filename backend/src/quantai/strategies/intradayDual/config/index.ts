@@ -94,7 +94,16 @@ export type ManagementConfig = {
   };
   scratch: {
     enabled: boolean;
-    aggressionThreshold: number;
+    aggressionThreshold: number | {
+      default?: number;
+      bom?: number;
+      mr?: number;
+    };
+    minHoldMs?: number | {
+      default?: number;
+      bom?: number;
+      mr?: number;
+    };
   };
   timeStop: {
     minMinutes: number;
