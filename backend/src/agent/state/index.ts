@@ -19,6 +19,8 @@ import { getUserCredentials } from '../../services/userCredentials.js';
 import { getAgentRecentWinRate } from '../../services/performance/winrate.js';
 import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
 import type { StrategyGuardrail } from '../../services/strategyHealth.js';
+import { triggerIntelligentReselection } from '../../services/intelligentAgent/strategies/core.js';
+import { requestAutoReselect } from '../../services/intelligentAgent/strategies/core.js';
 import { getConfig, getModeParams, type AgentAggressiveness, type ModeParams } from '../../utils/env.js';
 import { capitalConfig } from '../../config/capital.js';
 import { getCapitalManager } from '../../services/capitalPool.js';
@@ -2398,9 +2400,16 @@ export class ReboundRejectionAgent {
       }
     }
     let dynamicRiskPct = baseProfileRisk;
-    const smallBalThreshold = Number(targetSizingCfg.SMALL_BALANCE_RISK_THRESHOLD_USD ?? 0);
+    const smallBalThresholdUsdCfg = Number(targetSizingCfg.SMALL_BALANCE_RISK_THRESHOLD_USD ?? 0);
+    const smallBalThresholdPct = Math.max(0, Number(targetSizingCfg.SMALL_BALANCE_RISK_THRESHOLD_PCT ?? 0));
     const smallBalMinRisk = Number(targetSizingCfg.SMALL_BALANCE_MIN_RISK_PCT ?? 0);
-    if (smallBalThreshold > 0 && smallBalMinRisk > 0 && usableBalance < smallBalThreshold) {
+    const hasPctThreshold = smallBalThresholdPct > 0 && equityNow > 0;
+    let pctThresholdUsd = 0;
+    if (hasPctThreshold) {
+      pctThresholdUsd = (equityNow * smallBalThresholdPct) / 100;
+    }
+    const effectiveSmallBalThreshold = hasPctThreshold ? pctThresholdUsd : smallBalThresholdUsdCfg;
+    if (effectiveSmallBalThreshold > 0 && smallBalMinRisk > 0 && usableBalance < effectiveSmallBalThreshold) {
       const boostedRisk = Math.max(dynamicRiskPct, smallBalMinRisk);
       if (boostedRisk > dynamicRiskPct) {
         recordOpsEvent({
@@ -2411,7 +2420,10 @@ export class ReboundRejectionAgent {
           symbol: this.profile.symbol,
           details: {
             usableBalance,
-            threshold: smallBalThreshold,
+            thresholdUsd: effectiveSmallBalThreshold,
+            threshold: effectiveSmallBalThreshold,
+            thresholdPct: hasPctThreshold ? smallBalThresholdPct : undefined,
+            equityUsd: hasPctThreshold ? equityNow : undefined,
             previousRisk: dynamicRiskPct,
             boostedRisk,
           },
@@ -2525,7 +2537,7 @@ export class ReboundRejectionAgent {
       qualityMultiplier = 1.0;
     }
 
-    if (smallBalThreshold > 0 && smallBalMinRisk > 0 && usableBalance < smallBalThreshold && dynamicRiskPct + 1e-6 < smallBalMinRisk) {
+    if (effectiveSmallBalThreshold > 0 && smallBalMinRisk > 0 && usableBalance < effectiveSmallBalThreshold && dynamicRiskPct + 1e-6 < smallBalMinRisk) {
       recordOpsEvent({
         level: 'info',
         source: 'position_sizing',
@@ -2534,7 +2546,10 @@ export class ReboundRejectionAgent {
         symbol: this.profile.symbol,
         details: {
           usableBalance,
-          threshold: smallBalThreshold,
+          thresholdUsd: effectiveSmallBalThreshold,
+          threshold: effectiveSmallBalThreshold,
+          thresholdPct: hasPctThreshold ? smallBalThresholdPct : undefined,
+          equityUsd: hasPctThreshold ? equityNow : undefined,
           enforcedRisk: smallBalMinRisk,
           previousRisk: dynamicRiskPct,
         },
@@ -7789,36 +7804,88 @@ export class ReboundRejectionAgent {
       persistScheduled = true;
     }
 
-    const nowMs = Date.now();
     if (lossStreak >= threshold) {
-      const existingCooldown = state.cooldownUntil && state.cooldownUntil.getTime() > nowMs
-        ? state.cooldownUntil
-        : this.circuitBreaker.enforceLossCooldown(
-            new Date(nowMs),
-            undefined,
-            `Consecutive losses threshold reached (${lossStreak}/${threshold})`
-          );
-      const cooldownMs = Math.max(60_000, existingCooldown.getTime() - nowMs);
-
-      recordOpsEvent({
-        level: 'error',
-        source: 'circuit_breaker',
-        message: 'loss_streak_cooldown',
-        sessionId: this.sessionId || undefined,
-        symbol: this.profile?.symbol,
-        details: {
-          consecutiveLosses: lossStreak,
-          threshold,
-          cooldownUntil: existingCooldown.toISOString(),
-        },
-      });
-
-      this.scheduleReactivation('losing_streak_circuit_breaker', cooldownMs);
-      console.log(`🔴 CIRCUIT BREAKER: ${lossStreak} consecutive losses → trading pause until ${existingCooldown.toISOString()}`);
       persistScheduled = true;
+      if (this.sessionId) {
+        this.handleLossStreakFollowup(lossStreak, threshold).catch((error) => {
+          console.warn(`Loss-streak follow-up failed for ${this.sessionId}:`, error);
+        });
+      }
     }
     if (persistScheduled) {
       this.scheduleAdaptiveStatePersist('losing_streak');
+    }
+  }
+
+  private async handleLossStreakFollowup(lossStreak: number, threshold: number): Promise<void> {
+    if (!this.profile?.symbol) {
+      this.scheduleReactivation('losing_streak_throttle', Math.min(15 * 60_000, Math.max(5 * 60_000, lossStreak * 5 * 60_000)));
+      return;
+    }
+
+    const stability = await this.assessMarketStability(this.profile.symbol).catch(() => 'unknown');
+    if (stability === 'unstable' && this.sessionId) {
+      recordOpsEvent({
+        level: 'warn',
+        source: 'adaptive_learning',
+        message: 'loss_streak_auto_reselect',
+        sessionId: this.sessionId,
+        symbol: this.profile.symbol,
+        details: {
+          consecutiveLosses: lossStreak,
+          threshold,
+          stability,
+        },
+      });
+      try {
+        const result = await triggerIntelligentReselection(this.sessionId);
+        recordOpsEvent({
+          level: result.success ? 'info' : 'warn',
+          source: 'intelligent_rotation',
+          message: 'auto_reselect_on_loss_streak',
+          sessionId: this.sessionId,
+          symbol: this.profile.symbol,
+          details: result,
+        });
+      } catch (error) {
+        console.warn(`Auto reselect failed for ${this.sessionId}:`, error);
+      }
+      this.scheduleReactivation('loss_streak_auto_reselect', 30_000);
+      return;
+    }
+
+    const throttleMs = Math.min(15 * 60_000, Math.max(5 * 60_000, (lossStreak - threshold + 1) * 5 * 60_000));
+    recordOpsEvent({
+      level: 'info',
+      source: 'adaptive_learning',
+      message: 'loss_streak_throttle',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        consecutiveLosses: lossStreak,
+        threshold,
+        throttleMs,
+        stability,
+      },
+    });
+    this.scheduleReactivation('losing_streak_throttle', throttleMs);
+  }
+
+  private async assessMarketStability(symbol: string): Promise<'stable' | 'unstable' | 'unknown'> {
+    try {
+      const snap = await buildTechSnapshot(symbol, this.profile?.userId);
+      const adx = Number(snap?.adx14 ?? 0);
+      const atrPct = Number((snap as any)?.atrPct ?? (snap as any)?.atr14Pct ?? 0);
+      const volume = Number((snap as any)?.volume24h ?? (snap as any)?.volume ?? 0);
+      const volumeMA = Number((snap as any)?.volumeMA ?? (snap as any)?.volume24hMA ?? 0);
+      const volRatio = volumeMA > 0 ? volume / volumeMA : 1;
+      const choppy = adx < 16;
+      const highVol = atrPct > 4;
+      const illiquid = volRatio < 0.4;
+      return choppy || highVol || illiquid ? 'unstable' : 'stable';
+    } catch (error) {
+      console.warn(`Failed to assess market stability for ${symbol}:`, error);
+      return 'unknown';
     }
   }
 

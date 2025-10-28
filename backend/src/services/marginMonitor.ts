@@ -18,6 +18,7 @@ export type MarginSweepOutcome = {
   symbol?: string;
   snapshot: BrokerMarginSnapshot;
   assessment: MarginGuardResult;
+  accountKey: string;
 };
 
 export type MarginMonitorOptions = {
@@ -31,6 +32,14 @@ const ALERT_COOLDOWN_MS = 5 * 60 * 1000;
 const lastStatuses = new Map<string, { status: MarginGuardSeverity; ts: number }>();
 let timer: NodeJS.Timeout | null = null;
 let running = false;
+
+type MarginSessionRecord = { id: string; symbol: string | null; mode: string; userId?: string | null };
+
+function resolveAccountKey(session: MarginSessionRecord): string {
+  const baseId = session.userId && session.userId.trim().length > 0 ? session.userId.trim() : session.id;
+  const modePrefix = session.mode === 'paper' ? 'paper' : session.mode === 'live' ? 'live' : 'session';
+  return `${modePrefix}:${baseId}`;
+}
 
 function resolveThresholds(overrides?: Partial<MarginGuardThresholds>) {
   const cfg = getConfig();
@@ -48,6 +57,7 @@ async function persistSnapshot(
   symbol: string | undefined,
   snapshot: BrokerMarginSnapshot,
   assessment: MarginGuardResult,
+  accountKey: string,
 ) {
   const repo = (prisma as any).marginSnapshot;
   if (!repo) return;
@@ -63,7 +73,7 @@ async function persistSnapshot(
         worstLiquidationDistancePct: assessment.worstLiquidationDistancePct ?? null,
         concentration: assessment.concentration ?? [],
         recommendedActions: assessment.actions ?? [],
-        telemetry: { snapshot, assessment },
+        telemetry: { snapshot, assessment, accountKey },
       },
     });
   } catch (error) {
@@ -87,8 +97,8 @@ async function acquireBroker(session: { id: string; mode: string; userId?: strin
   return null;
 }
 
-function shouldEmit(sessionId: string, status: MarginGuardSeverity, now: number) {
-  const prev = lastStatuses.get(sessionId);
+function shouldEmit(accountKey: string, status: MarginGuardSeverity, now: number) {
+  const prev = lastStatuses.get(accountKey);
   if (!prev) return true;
   if (prev.status !== status) return true;
   if (status === 'ok') return false;
@@ -96,13 +106,14 @@ function shouldEmit(sessionId: string, status: MarginGuardSeverity, now: number)
 }
 
 async function emitSignals(
+  accountKey: string,
   sessionId: string,
   symbol: string | undefined,
   assessment: MarginGuardResult,
 ) {
   if (assessment.status === 'ok') return;
   const now = Date.now();
-  if (!shouldEmit(sessionId, assessment.status, now)) return;
+  if (!shouldEmit(accountKey, assessment.status, now)) return;
 
   recordOpsEvent({
     level: assessment.status === 'critical' ? 'error' : 'warn',
@@ -141,7 +152,7 @@ async function emitSignals(
     });
   }
 
-  lastStatuses.set(sessionId, { status: assessment.status, ts: now });
+  lastStatuses.set(accountKey, { status: assessment.status, ts: now });
 }
 
 export async function runMarginSweepOnce(opts?: { thresholds?: Partial<MarginGuardThresholds> }): Promise<MarginSweepOutcome[]> {
@@ -155,34 +166,46 @@ export async function runMarginSweepOnce(opts?: { thresholds?: Partial<MarginGua
   });
 
   const results: MarginSweepOutcome[] = [];
+  const accountCache = new Map<string, { snapshot: BrokerMarginSnapshot; assessment: MarginGuardResult }>();
 
   for (const session of sessions) {
-    const broker = await acquireBroker(session);
-    if (!broker?.balance) continue;
-
+    const accountKey = resolveAccountKey(session);
+    let cached = accountCache.get(accountKey);
     let snapshot: BrokerMarginSnapshot;
-    try {
-      snapshot = await broker.balance();
-    } catch (error) {
-      recordOpsEvent({
-        level: 'warn',
-        source: 'margin_monitor',
-        message: 'balance_fetch_failed',
-        sessionId: session.id,
-        symbol: session.symbol,
-        details: { error: String((error as Error)?.message || error) },
-      });
-      continue;
+    let assessment: MarginGuardResult;
+
+    if (!cached) {
+      const broker = await acquireBroker(session);
+      if (!broker?.balance) continue;
+
+      try {
+        snapshot = await broker.balance();
+      } catch (error) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'margin_monitor',
+          message: 'balance_fetch_failed',
+          sessionId: session.id,
+          symbol: session.symbol,
+          details: { error: String((error as Error)?.message || error) },
+        });
+        continue;
+      }
+
+      assessment = evaluateMarginSnapshot(snapshot, { thresholds, symbol: session.symbol });
+      accountCache.set(accountKey, { snapshot, assessment });
+    } else {
+      snapshot = cached.snapshot;
+      assessment = cached.assessment;
     }
 
-    const assessment = evaluateMarginSnapshot(snapshot, { thresholds, symbol: session.symbol });
-    await persistSnapshot(session.id, session.symbol, snapshot, assessment);
-    await emitSignals(session.id, session.symbol, assessment);
+    await persistSnapshot(session.id, session.symbol, snapshot, assessment, accountKey);
+    await emitSignals(accountKey, session.id, session.symbol, assessment);
     if (assessment.status === 'ok') {
-      lastStatuses.set(session.id, { status: 'ok', ts: Date.now() });
+      lastStatuses.set(accountKey, { status: 'ok', ts: Date.now() });
     }
 
-    results.push({ sessionId: session.id, symbol: session.symbol, snapshot, assessment });
+    results.push({ sessionId: session.id, symbol: session.symbol, snapshot, assessment, accountKey });
   }
 
   return results;
