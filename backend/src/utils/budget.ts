@@ -36,7 +36,8 @@ export function resolveBudgetFraction(
   const { min, max } = getBudgetFractionBounds(cfg);
   const numeric = toNumberOrNull(raw);
   const fallbackNumeric = toNumberOrNull(fallback);
-  const candidate = numeric ?? fallbackNumeric ?? max;
+  const defaultFraction = toNumberOrNull(cfg.DEFAULT_BUDGET_FRACTION) ?? max;
+  const candidate = numeric ?? fallbackNumeric ?? defaultFraction;
   return Math.max(min, Math.min(max, candidate));
 }
 
