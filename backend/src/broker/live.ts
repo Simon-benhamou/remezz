@@ -8,6 +8,119 @@ import { getIntradayRuntimeConfig } from '../config/intraday.js';
 import type { Cfg } from '../utils/env.js';
 import { logImprovementAuto } from '../monitor/backlog.js';
 import { getUserCredentials } from '../services/userCredentials.js';
+import type { UserCredentials as StoredUserCredentials } from '../services/userCredentials.js';
+
+type BrokerTestOverrides = {
+  getUserExchange?: (userId: string, credentials: StoredUserCredentials) => Promise<any>;
+  getUserCredentials?: (userId: string) => Promise<StoredUserCredentials | null>;
+  resolveSymbol?: (requested: string) => Promise<string>;
+};
+
+let brokerTestOverrides: BrokerTestOverrides | null = null;
+
+export function __setLiveBrokerTestOverrides(overrides?: BrokerTestOverrides | null): void {
+  brokerTestOverrides = overrides ?? null;
+}
+
+export function __resetLiveBrokerTestOverrides(): void {
+  brokerTestOverrides = null;
+}
+
+async function resolveUserCredentials(userId: string): Promise<StoredUserCredentials | null> {
+  if (brokerTestOverrides?.getUserCredentials) {
+    return brokerTestOverrides.getUserCredentials(userId);
+  }
+  return getUserCredentials(userId);
+}
+
+async function resolveUserExchange(userId: string, credentials: StoredUserCredentials): Promise<any> {
+  if (brokerTestOverrides?.getUserExchange) {
+    return brokerTestOverrides.getUserExchange(userId, credentials);
+  }
+  return getUserExchange(userId, credentials);
+}
+
+async function resolveSymbolWithOverrides(requested: string, userId?: string): Promise<string> {
+  if (brokerTestOverrides?.resolveSymbol) {
+    return brokerTestOverrides.resolveSymbol(requested);
+  }
+  return resolveSymbol(requested, userId);
+}
+
+function inferBaseQuote(symbol: string): { base?: string; quote?: string } {
+  if (!symbol) return {};
+  const trimmed = symbol.trim();
+  if (!trimmed) return {};
+
+  const normalized = trimmed.toUpperCase();
+  const [corePart, settlementPart] = normalized.split(':', 2);
+  const main = corePart;
+  let settlement = settlementPart;
+
+  if (settlement) {
+    settlement = settlement.split('-')[0]?.split('_')[0] ?? settlement;
+  }
+
+  let base: string | undefined;
+  let quote: string | undefined;
+
+  if (main.includes('/')) {
+    const [basePart, quotePartRaw] = main.split('/', 2);
+    base = basePart;
+    quote = quotePartRaw;
+  } else if (main.includes('-')) {
+    const [basePart, quotePartRaw] = main.split('-', 2);
+    base = basePart;
+    quote = quotePartRaw;
+  } else if (main.includes('_')) {
+    const [basePart, quotePartRaw] = main.split('_', 2);
+    base = basePart;
+    quote = quotePartRaw;
+  } else {
+    const suffixes = [
+      'USD_PERP',
+      'USDT',
+      'USDC',
+      'FDUSD',
+      'TUSD',
+      'USDP',
+      'BUSD',
+      'USD',
+      'BTC',
+      'ETH',
+      'BNB',
+      'EUR',
+      'TRY',
+      'GBP',
+    ];
+    for (const suffix of suffixes) {
+      if (main.endsWith(suffix)) {
+        base = main.slice(0, -suffix.length);
+        quote = suffix;
+        break;
+      }
+    }
+  }
+
+  if (!quote && settlement) {
+    quote = settlement;
+  }
+
+  const sanitize = (value?: string) => {
+    if (!value) return undefined;
+    const cleaned = value.replace(/[^A-Z0-9]/g, '');
+    return cleaned.length ? cleaned : undefined;
+  };
+
+  base = sanitize(base);
+  quote = sanitize(quote);
+
+  if (quote === 'USDPERP' || quote === 'USD_PERP') {
+    quote = 'USD';
+  }
+
+  return { base, quote };
+}
 
 const CAPACITY_LOG = new Map<string, number[]>();
 const BREACH_WINDOW_MS = 60 * 60 * 1000;
@@ -86,18 +199,18 @@ export class LiveBroker implements Broker {
   }
 
   private async getExchange() {
-    const userCredentials = await getUserCredentials(this.userId);
+    const userCredentials = await resolveUserCredentials(this.userId);
     if (!userCredentials) {
       throw new Error('User API credentials not found');
     }
-    return await getUserExchange(this.userId, userCredentials);
+    return await resolveUserExchange(this.userId, userCredentials);
   }
 
   async balance() {
     // 🚀 WebSocket for Binance (0 weight)
     let ex: any;
     let b: any;
-    const userCredentials = await getUserCredentials(this.userId);
+    const userCredentials = await resolveUserCredentials(this.userId);
 
     if (userCredentials?.exchange === 'binance') {
       try {
@@ -398,7 +511,7 @@ export class LiveBroker implements Broker {
 
   async place(o: NewOrder): Promise<PlacedOrder> {
     const ex = await this.getExchange();
-    const symbol = await resolveSymbol(o.symbol);
+    const symbol = await resolveSymbolWithOverrides(o.symbol);
     const startTs = Date.now();
     const { slip } = getIntradayRuntimeConfig();
     let estImpactBps: number | undefined;
@@ -575,7 +688,7 @@ export class LiveBroker implements Broker {
 
   async estimateFillableQty(params: { symbol: string; side: 'buy'|'sell'; desiredQty: number; maxImpactPct?: number }) {
     const ex = await this.getExchange();
-    const symbol = await resolveSymbol(params.symbol);
+    const symbol = await resolveSymbolWithOverrides(params.symbol);
     const { slip } = getIntradayRuntimeConfig();
     const maxImpactPct = params.maxImpactPct ?? Number(process.env.ORDER_MAX_IMPACT_PCT || '0.35');
     let market: any;
@@ -652,55 +765,194 @@ export class LiveBroker implements Broker {
 
   async syncProtective(params: { symbol: string; side: 'buy'|'sell'; qty: number; stopLoss?: number; takeProfit?: number | number[]; slOrderId?: string|null; tpOrderId?: string|null }) {
     const ex = await this.getExchange();
-    const symbol = await resolveSymbol(params.symbol);
+    const symbol = await resolveSymbolWithOverrides(params.symbol);
     const reduceSide = params.side === 'buy' ? 'sell' : 'buy';
-    const result: { slOrderId?: string; tpOrderId?: string } = {};
+    const result: { slOrderId?: string | null; tpOrderId?: string | null } = {};
     const tpLevels = Array.isArray(params.takeProfit)
       ? params.takeProfit.filter(v => typeof v === 'number' && Number.isFinite(v))
       : (typeof params.takeProfit === 'number' && Number.isFinite(params.takeProfit) ? [params.takeProfit] : []);
     const primaryTp = tpLevels[0];
-    if (params.slOrderId) {
-      try { await ex.cancelOrder(params.slOrderId, symbol).catch(()=>{}); } catch {}
-    }
-    if (params.tpOrderId) {
-      try { await ex.cancelOrder(params.tpOrderId, symbol).catch(()=>{}); } catch {}
-    }
-    const stopLossValid = params.stopLoss !== undefined && params.stopLoss !== null && Number.isFinite(Number(params.stopLoss));
+
+    const pickNum = (...values: any[]) => {
+      for (const value of values) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return undefined;
+    };
+
+    const normalizeId = (order: any) => String(order?.id || order?.clientOrderId || order?.orderId || order?.info?.orderId || '');
+    const toLower = (value: any) => String(value ?? '').toLowerCase();
+    const desiredStop = Number(params.stopLoss);
+    const stopLossValid = params.stopLoss !== undefined && params.stopLoss !== null && Number.isFinite(desiredStop);
     const wantsStop = stopLossValid && params.qty > 0;
     const wantsTp = primaryTp !== undefined && params.qty > 0;
-    if (!wantsStop && !wantsTp) {
-      try {
-        const openOrders = await ex.fetchOpenOrders(symbol).catch(() => []);
-        if (Array.isArray(openOrders) && openOrders.length) {
-          for (const order of openOrders) {
-            const orderSide = String(order?.side || '').toLowerCase();
-            const type = String(order?.type || '').toLowerCase();
-            const isReduce = Boolean((order as any)?.reduceOnly || (order as any)?.reduce_only || (order?.info && ((order.info.reduceOnly ?? order.info.reduce_only) === true)));
-            const looksProtective = isReduce || type.includes('take') || type.includes('stop');
-            if (orderSide === reduceSide && looksProtective) {
-              try { await ex.cancelOrder(order.id, symbol).catch(()=>{}); } catch {}
-            }
-          }
+
+    let openOrders: any[] = [];
+    try {
+      const fetched = await ex.fetchOpenOrders(symbol).catch(() => []);
+      if (Array.isArray(fetched)) openOrders = fetched;
+    } catch {}
+
+    const reduceOrders = openOrders.filter(order => {
+      const orderSide = toLower(order?.side ?? order?.info?.side);
+      if (orderSide && orderSide !== reduceSide) return false;
+      const reduceOnly = Boolean((order as any)?.reduceOnly || (order as any)?.reduce_only || (order?.info && ((order.info.reduceOnly ?? order.info.reduce_only) === true)));
+      return reduceOnly || orderSide === reduceSide;
+    });
+
+    const stopOrders = reduceOrders.filter(order => {
+      const type = toLower(order?.type ?? order?.info?.type);
+      const stopPrice = pickNum((order as any)?.stopPrice, (order as any)?.triggerPrice, order?.info?.stopPrice, order?.info?.triggerPrice);
+      return type.includes('stop') || type.includes('trigger') || stopPrice !== undefined;
+    });
+
+    const tpOrders = reduceOrders.filter(order => {
+      const type = toLower(order?.type ?? order?.info?.type);
+      if (type.includes('stop') || type.includes('trigger')) return false;
+      if (type.includes('take')) return true;
+      const limitPrice = pickNum(order?.price, order?.info?.price, order?.info?.avgPrice);
+      return type.includes('limit') && limitPrice !== undefined;
+    });
+
+    const cancelOrderSafe = async (order: any) => {
+      const id = normalizeId(order);
+      if (!id) return;
+      try { await ex.cancelOrder(id, symbol).catch(()=>{}); } catch {}
+    };
+
+    if (!wantsStop) {
+      for (const order of stopOrders) {
+        await cancelOrderSafe(order);
+      }
+      if (stopOrders.length) {
+        result.slOrderId = null;
+      }
+    }
+
+    if (!wantsTp) {
+      for (const order of tpOrders) {
+        await cancelOrderSafe(order);
+      }
+      if (tpOrders.length) {
+        result.tpOrderId = null;
+      }
+    }
+
+    const tolerate = (target: number) => Math.max(0.0001, Math.abs(target) * 0.001);
+
+    const selectStopOrder = () => {
+      if (!stopOrders.length) return null;
+      if (params.slOrderId) {
+        const match = stopOrders.find(order => normalizeId(order) === params.slOrderId);
+        if (match) return match;
+      }
+      if (!Number.isFinite(desiredStop)) return stopOrders[0] ?? null;
+      const tolerance = tolerate(desiredStop);
+      let candidate: any = null;
+      let bestGap = Number.POSITIVE_INFINITY;
+      for (const order of stopOrders) {
+        const maybePrice = pickNum((order as any)?.stopPrice, (order as any)?.triggerPrice, order?.info?.stopPrice, order?.info?.triggerPrice, order?.info?.price);
+        if (!Number.isFinite(maybePrice)) continue;
+        const orderPrice = Number(maybePrice);
+        const gap = Math.abs(orderPrice - desiredStop);
+        if (gap <= tolerance && gap < bestGap) {
+          bestGap = gap;
+          candidate = order;
         }
-      } catch {}
-      return result;
-    }
+      }
+      return candidate;
+    };
+
+    const selectTpOrder = () => {
+      if (!tpOrders.length) return null;
+      if (params.tpOrderId) {
+        const match = tpOrders.find(order => normalizeId(order) === params.tpOrderId);
+        if (match) return match;
+      }
+      if (!Number.isFinite(primaryTp)) return tpOrders[0] ?? null;
+      const tolerance = tolerate(primaryTp);
+      let candidate: any = null;
+      let bestGap = Number.POSITIVE_INFINITY;
+      for (const order of tpOrders) {
+        const maybePrice = pickNum(order?.price, order?.info?.price, order?.info?.avgPrice, order?.info?.takeProfitPrice);
+        if (!Number.isFinite(maybePrice)) continue;
+        const orderPrice = Number(maybePrice);
+        const gap = Math.abs(orderPrice - primaryTp);
+        if (gap <= tolerance && gap < bestGap) {
+          bestGap = gap;
+          candidate = order;
+        }
+      }
+      return candidate;
+    };
+
+    let retainedStop: any = null;
     if (wantsStop) {
-      try {
-        const slParams: any = { reduceOnly: true, stopPrice: params.stopLoss, triggerPrice: params.stopLoss };
-        if (String(ex.id).toLowerCase() === 'cryptocom') slParams.type = 'stop_market';
-        const slo = await ex.createOrder(symbol, 'market', reduceSide, params.qty, undefined, slParams);
-        result.slOrderId = String(slo?.id || slo?.clientOrderId || '');
-      } catch {}
+      const current = selectStopOrder();
+      const desiredPrice = Number.isFinite(desiredStop) ? desiredStop : undefined;
+      const tolerance = desiredPrice !== undefined ? tolerate(desiredPrice) : undefined;
+      const currentPrice = current ? pickNum((current as any)?.stopPrice, (current as any)?.triggerPrice, current?.info?.stopPrice, current?.info?.triggerPrice, current?.info?.price) : undefined;
+      const priceMatches = desiredPrice === undefined || (Number.isFinite(currentPrice) && Math.abs(currentPrice! - desiredPrice) <= (tolerance ?? 0));
+      for (const order of stopOrders) {
+        if (order === current) continue;
+        await cancelOrderSafe(order);
+      }
+      if (current && priceMatches) {
+        retainedStop = current;
+      } else {
+        if (current) {
+          await cancelOrderSafe(current);
+        }
+        if (Number.isFinite(desiredStop) && params.qty > 0) {
+          try {
+            const slParams: any = { reduceOnly: true, stopPrice: desiredStop, triggerPrice: desiredStop };
+            if (String(ex.id).toLowerCase() === 'cryptocom') slParams.type = 'stop_market';
+            const slo = await ex.createOrder(symbol, 'market', reduceSide, params.qty, undefined, slParams);
+            retainedStop = slo;
+          } catch {}
+        }
+      }
+      if (retainedStop) {
+        result.slOrderId = normalizeId(retainedStop) || null;
+      } else if (result.slOrderId === undefined && wantsStop) {
+        result.slOrderId = null;
+      }
     }
+
+    let retainedTp: any = null;
     if (wantsTp) {
-      try {
-        const tpParams: any = { reduceOnly: true, takeProfitPrice: primaryTp };
-        if (String(ex.id).toLowerCase() === 'cryptocom') tpParams.type = 'take_profit_limit';
-        const tpo = await ex.createOrder(symbol, 'limit', reduceSide, params.qty, primaryTp, tpParams);
-        result.tpOrderId = String(tpo?.id || tpo?.clientOrderId || '');
-      } catch {}
+      const current = selectTpOrder();
+      const desiredPrice = Number.isFinite(primaryTp) ? Number(primaryTp) : undefined;
+      const tolerance = desiredPrice !== undefined ? tolerate(desiredPrice) : undefined;
+      const currentPrice = current ? pickNum(current?.price, current?.info?.price, current?.info?.avgPrice, current?.info?.takeProfitPrice) : undefined;
+      const priceMatches = desiredPrice === undefined || (Number.isFinite(currentPrice) && Math.abs(currentPrice! - desiredPrice) <= (tolerance ?? 0));
+      for (const order of tpOrders) {
+        if (order === current) continue;
+        await cancelOrderSafe(order);
+      }
+      if (current && priceMatches) {
+        retainedTp = current;
+      } else {
+        if (current) {
+          await cancelOrderSafe(current);
+        }
+        if (desiredPrice !== undefined && params.qty > 0) {
+          try {
+            const tpParams: any = { reduceOnly: true, takeProfitPrice: desiredPrice };
+            if (String(ex.id).toLowerCase() === 'cryptocom') tpParams.type = 'take_profit_limit';
+            const tpo = await ex.createOrder(symbol, 'limit', reduceSide, params.qty, desiredPrice, tpParams);
+            retainedTp = tpo;
+          } catch {}
+        }
+      }
+      if (retainedTp) {
+        result.tpOrderId = normalizeId(retainedTp) || null;
+      } else if (result.tpOrderId === undefined && wantsTp) {
+        result.tpOrderId = null;
+      }
     }
+
     return result;
   }
 }
@@ -711,14 +963,14 @@ export async function inspectExposure(symbol: string, userId?: string): Promise<
   if (!userId) {
     return null; // No user specified, cannot access authenticated exchange
   }
-  
-  const userCredentials = await getUserCredentials(userId);
+
+  const userCredentials = await resolveUserCredentials(userId);
   if (!userCredentials) {
     return null;
   }
-  
-  const ex = await getUserExchange(userId, userCredentials);
-  const s = await resolveSymbol(symbol);
+
+  const ex = await resolveUserExchange(userId, userCredentials);
+  const s = await resolveSymbolWithOverrides(symbol, userId);
   try {
     // Try unified positions API (perps/swaps)
     if (typeof (ex as any).fetchPositions === 'function') {
@@ -741,45 +993,50 @@ export async function inspectExposure(symbol: string, userId?: string): Promise<
   // create "ghost" exposures when residual tokens sit in the wallet. Guard with market type.
   try {
     const marketType = String(process.env.MARKET_TYPE || 'spot').toLowerCase();
-    if (marketType === 'spot' && ex.markets && ex.markets[s]) {
-      const base = ex.markets[s].base;
-      
+    const market = ex?.markets?.[s];
+    const inferred = inferBaseQuote(s);
+    const base = market?.base?.toUpperCase() || inferred.base;
+    const quote = market?.quote?.toUpperCase() || inferred.quote;
+    if (marketType === 'spot' && base) {
+
       // 🚀 WebSocket for Binance (0 weight)
       let b: any;
-      if (userId && userCredentials?.exchange === 'binance' && base === 'USDT') {
+      if (userId && userCredentials?.exchange === 'binance' && quote === 'USDT') {
         try {
           const { getBalanceFromWebSocket, seedBalanceCache, runExclusiveBalanceFetch } = await import('../services/binanceWebSocket.js');
-          const wsBalance = await getBalanceFromWebSocket(userId, base);
+          const assetKey = base;
+          const wsBalance = await getBalanceFromWebSocket(userId, assetKey);
           if (wsBalance) {
             b = { total: { [base]: wsBalance.total }, free: { [base]: wsBalance.free } };
             console.log(`✅ [WebSocket] Balance for ghost exposure - 0 weight`);
           } else {
-            b = await runExclusiveBalanceFetch(userId, base, () => ex.fetchBalance());
+            b = await runExclusiveBalanceFetch(userId, assetKey, () => ex.fetchBalance());
             try {
               const total = Number(b?.total?.[base] ?? 0);
               const free = Number(b?.free?.[base] ?? 0);
               const locked = Number(b?.used?.[base] ?? 0);
               if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
-                seedBalanceCache(userId, base, { total, free, locked });
+                seedBalanceCache(userId, assetKey, { total, free, locked });
               }
             } catch {}
           }
         } catch (error) {
           const { runExclusiveBalanceFetch, seedBalanceCache } = await import('../services/binanceWebSocket.js');
-          b = await runExclusiveBalanceFetch(userId, base, () => ex.fetchBalance());
+          const assetKey = base;
+          b = await runExclusiveBalanceFetch(userId, assetKey, () => ex.fetchBalance());
           try {
             const total = Number(b?.total?.[base] ?? 0);
             const free = Number(b?.free?.[base] ?? 0);
             const locked = Number(b?.used?.[base] ?? 0);
             if (Number.isFinite(total) || Number.isFinite(free) || Number.isFinite(locked)) {
-              seedBalanceCache(userId, base, { total, free, locked });
+              seedBalanceCache(userId, assetKey, { total, free, locked });
             }
           } catch {}
         }
       } else {
         b = await ex.fetchBalance();
       }
-      
+
       const held = Number((b?.total?.[base] ?? b?.free?.[base] ?? 0));
       if (held > 0) return { side: 'buy', qty: held };
     }
