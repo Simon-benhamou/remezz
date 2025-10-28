@@ -1,6 +1,7 @@
 import type { ActivationProfile } from "./state.js";
 import { resolveRrExpectancyConfig } from "../risk/rrExpectancy.js";
 import { clampBudgetFraction } from "../utils/budget.js";
+import { getConfig, getModeParams } from "../utils/env.js";
 
 function parseMaybeNumber(value: unknown): number | undefined {
   if (typeof value === "number") {
@@ -90,7 +91,22 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
   const resolvedMaxLeverage = parseMaybeNumber(
     leverageCap?.resolved ?? stored?.maxLeverage ?? requestedMaxLeverage
   );
-  const riskPerTradePct = parseMaybeNumber(stored?.riskPerTradePct);
+  const aggressiveness =
+    stored?.aggressiveness === "conservative" || stored?.aggressiveness === "aggressive"
+      ? stored.aggressiveness
+      : "reactive";
+  const storedRiskPct = parseMaybeNumber(stored?.riskPerTradePct);
+  const modeDefaults = getModeParams(aggressiveness);
+  const fallbackRiskPctCandidate = Number.isFinite(modeDefaults?.riskPct)
+    ? modeDefaults.riskPct
+    : getConfig().DEFAULT_RISK_PCT;
+  const fallbackRiskPct = Number.isFinite(fallbackRiskPctCandidate)
+    ? fallbackRiskPctCandidate
+    : 1;
+  const defaultRiskPct = Math.max(0.5, Math.min(5, fallbackRiskPct));
+  const resolvedRiskPct = storedRiskPct != null
+    ? Math.max(0.5, Math.min(5, Math.min(storedRiskPct, defaultRiskPct)))
+    : defaultRiskPct;
   const dailyLossLimitPct = parseMaybeNumber(stored?.dailyLossLimitPct);
   const rrFloorRaw = parseMaybeNumber(stored?.rrFloor ?? (session as any).rrFloor);
   const rrCeilRaw = parseMaybeNumber(stored?.rrCeil ?? (session as any).rrCeil);
@@ -103,7 +119,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
     rrExpectancy: typeof rrExpectancyRaw === 'object' && rrExpectancyRaw !== null ? rrExpectancyRaw : undefined,
   });
 
-  if (!riskPerTradePct || !resolvedMaxLeverage || !dailyLossLimitPct) {
+  if (!resolvedRiskPct || !resolvedMaxLeverage || !dailyLossLimitPct) {
     return null;
   }
 
@@ -133,7 +149,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
     maxLeverage: Math.max(1, Math.min(10, resolvedMaxLeverage)),
     requestedMaxLeverage: Math.max(1, Math.min(10, requestedMaxLeverage ?? resolvedMaxLeverage)),
     leverageCap: leverageCap,
-    riskPerTradePct: Math.max(0.5, Math.min(5, riskPerTradePct)),
+    riskPerTradePct: resolvedRiskPct,
     dailyLossLimitPct: Math.max(3, Math.min(4, dailyLossLimitPct)),
     timestamp,
     startBalanceUsd: typeof stored?.startBalanceUsd === "number"
@@ -143,10 +159,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
       : undefined,
     capitalAllocationUsd: parseMaybeNumber(stored?.capitalAllocationUsd) ?? undefined,
     budgetFraction: budgetFraction ?? undefined,
-    aggressiveness:
-      stored?.aggressiveness === "conservative" || stored?.aggressiveness === "aggressive"
-        ? stored.aggressiveness
-        : "reactive",
+    aggressiveness,
     userId: session.userId ?? stored?.userId ?? undefined,
     sizingMode: stored?.sizingMode,
     dynamicLeverage: stored?.dynamicLeverage,
