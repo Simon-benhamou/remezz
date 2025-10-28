@@ -10457,9 +10457,39 @@ export class ReboundRejectionAgent {
       const hadPlan = !!this.plan;
       const hadProfile = !!this.profile;
       const symbol = this.profile?.symbol;
+      const cleanupSnapshot = this.pos
+        ? {
+            side: this.pos.side,
+            slOrderId: this.pos.slOrderId ?? null,
+            tpOrderId: this.pos.tpOrderId ?? null,
+          }
+        : null;
       this.entering = false;
       this.pos = null;
       this.trendReversalContext = null;
+
+      if (cleanupSnapshot && this.profile?.mode === 'live' && this.broker) {
+        try {
+          await (this.broker as any).syncProtective?.({
+            symbol,
+            side: cleanupSnapshot.side,
+            qty: 0,
+            stopLoss: undefined,
+            takeProfit: undefined,
+            slOrderId: cleanupSnapshot.slOrderId,
+            tpOrderId: cleanupSnapshot.tpOrderId,
+          });
+        } catch (cleanupError) {
+          recordOpsEvent({
+            level: 'warn',
+            source: 'protective_orders',
+            message: 'protective_orders_cleanup_failed',
+            sessionId: this.sessionId || undefined,
+            symbol,
+            details: { error: String(cleanupError) },
+          });
+        }
+      }
 
       console.warn(`⚠️  Agent in MANAGE state but missing position/plan/profile - resetting to SCAN`);
 
@@ -10509,6 +10539,28 @@ export class ReboundRejectionAgent {
         if (!exposure || exposure.qty <= 0) {
           // Position closed on exchange, clear local state and exit
           console.log(`Position closed on exchange for ${this.profile.symbol}, clearing local state`);
+          if (this.pos) {
+            try {
+              await (this.broker as any).syncProtective?.({
+                symbol: this.profile.symbol,
+                side: this.pos.side,
+                qty: 0,
+                stopLoss: undefined,
+                takeProfit: undefined,
+                slOrderId: this.pos.slOrderId ?? null,
+                tpOrderId: this.pos.tpOrderId ?? null,
+              });
+            } catch (cleanupError) {
+              recordOpsEvent({
+                level: 'warn',
+                source: 'protective_orders',
+                message: 'protective_orders_cleanup_failed',
+                sessionId: this.sessionId || undefined,
+                symbol: this.profile.symbol,
+                details: { error: String(cleanupError) },
+              });
+            }
+          }
           this.pos = null;
           this.trendReversalContext = null;
           this.state = 'EXIT';
