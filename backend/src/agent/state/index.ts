@@ -10374,15 +10374,25 @@ export class ReboundRejectionAgent {
       const result = await (this.broker as any).syncProtective(params);
 
       // Update position with new order IDs
-      if (result.slOrderId) {
-        this.pos.slOrderId = result.slOrderId;
-        console.log(`Updated SL order ID: ${result.slOrderId}`);
+      if (result.slOrderId !== undefined) {
+        if (result.slOrderId) {
+          this.pos.slOrderId = result.slOrderId;
+          console.log(`Updated SL order ID: ${result.slOrderId}`);
+        } else {
+          this.pos.slOrderId = undefined;
+          console.log(`Cleared SL order ID after protective sync`);
+        }
       } else if (!wantsStop) {
         this.pos.slOrderId = undefined;
       }
-      if (result.tpOrderId) {
-        this.pos.tpOrderId = result.tpOrderId;
-        console.log(`Updated TP order ID: ${result.tpOrderId}`);
+      if (result.tpOrderId !== undefined) {
+        if (result.tpOrderId) {
+          this.pos.tpOrderId = result.tpOrderId;
+          console.log(`Updated TP order ID: ${result.tpOrderId}`);
+        } else {
+          this.pos.tpOrderId = undefined;
+          console.log(`Cleared TP order ID after protective sync`);
+        }
       } else if (!wantsTp) {
         this.pos.tpOrderId = undefined;
       }

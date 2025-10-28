@@ -90,5 +90,5 @@ export interface Broker {
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore
   releaseCommitted?(usd: number): void;
-  syncProtective?(params: { symbol: string; side: OrderSide; qty: number; stopLoss?: number; takeProfit?: number | number[]; slOrderId?: string|null; tpOrderId?: string|null }): Promise<{ slOrderId?: string; tpOrderId?: string } | void>;
+  syncProtective?(params: { symbol: string; side: OrderSide; qty: number; stopLoss?: number; takeProfit?: number | number[]; slOrderId?: string|null; tpOrderId?: string|null }): Promise<{ slOrderId?: string | null; tpOrderId?: string | null } | void>;
 }
