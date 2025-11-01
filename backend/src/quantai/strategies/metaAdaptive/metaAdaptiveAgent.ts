@@ -171,6 +171,21 @@ export type AdaptiveSignal = StrategyScoreResult & {
   token: string | null;
 };
 
+export type AdaptiveTradeSnapshot = {
+  token: string;
+  symbol: string;
+  side: StrategyBias;
+  qty: number;
+  entryPrice: number;
+  riskPerUnit: number;
+  targets: number[];
+  entryAtr: number | null;
+  entryAtrPct: number | null;
+  riskUsd: number;
+  targetProfitUsd: number;
+  rr: number | null;
+};
+
 export type AdaptiveEvaluationInput = {
   sessionId?: string | null;
   symbol: string;
@@ -220,15 +235,20 @@ type ActiveTrade = {
   family: StrategyFamily;
   id: StrategyId;
   riskUsd: PreciseDecimal;
+  riskPerUnit: PreciseDecimal;
   atrPct: number;
   timestamp: number;
   symbol: string;
   side: StrategyBias;
   qty: PreciseDecimal;
   entryPrice: PreciseDecimal;
+  entryAtr: number | null;
+  entryAtrPct: number | null;
   planRiskPct: PreciseDecimal;
   targetProfitUsd: PreciseDecimal;
   medianTakeProfitR: PreciseDecimal;
+  targets: number[];
+  rr: number | null;
   trailingPolicy?: AdaptiveTrailingPolicy | null;
   pythonProbability?: number;
   pythonConfidence?: number;
@@ -1686,6 +1706,11 @@ class MetaAdaptiveStrategyAgent {
     qty: number;
     entryPrice: number;
     stopDistance: number;
+    entryAtr?: number | null;
+    entryAtrPct?: number | null;
+    riskPerUnit?: number | null;
+    targets?: number[] | null;
+    rr?: number | null;
     plan: AdaptiveStrategyPlan;
     side?: StrategyBias;
     predictorFeatures?: Record<string, number> | null;
@@ -1741,11 +1766,48 @@ class MetaAdaptiveStrategyAgent {
     }
 
     const qty = new PreciseDecimal(params.qty ?? 0);
+    const qtyAbs = qty.abs();
     const entryPrice = new PreciseDecimal(params.entryPrice ?? 0);
     const stopDistance = new PreciseDecimal(params.stopDistance ?? 0).abs();
+    const riskPerUnit = params.riskPerUnit != null && Number.isFinite(params.riskPerUnit)
+      ? new PreciseDecimal(params.riskPerUnit)
+      : stopDistance;
     const planRiskUsd = params.plan.riskUsd ?? new PreciseDecimal('0');
-    const computedRisk = stopDistance.times(qty);
+    const computedRisk = riskPerUnit.times(qtyAbs);
     const riskUsd = planRiskUsd.gt(0) ? planRiskUsd : computedRisk;
+    const normalizedTargets = Array.isArray(params.targets)
+      ? params.targets
+        .map((target) => Number(target))
+        .filter((value) => Number.isFinite(value))
+        .map((value) => Number(value.toFixed(6)))
+      : [];
+    const primaryTp = params.plan.takeProfitMultiples[0] ?? new PreciseDecimal('2');
+    let computedTargetUsd = riskPerUnit.times(qtyAbs).times(primaryTp);
+    if (normalizedTargets.length) {
+      const targetPrice = new PreciseDecimal(normalizedTargets[0]);
+      const diff = targetPrice.minus(entryPrice).abs();
+      computedTargetUsd = diff.times(qtyAbs);
+    }
+    const planTargetProfitUsd = params.plan.targetProfitUsd ?? new PreciseDecimal('0');
+    const targetProfitUsd = planTargetProfitUsd.gt(0) ? planTargetProfitUsd : computedTargetUsd;
+    const entryAtrValue = params.entryAtr != null && Number.isFinite(params.entryAtr) ? Number(params.entryAtr) : null;
+    const entryAtrPctValue = params.entryAtrPct != null && Number.isFinite(params.entryAtrPct)
+      ? Number(params.entryAtrPct)
+      : null;
+    const rr = (() => {
+      if (params.rr != null && Number.isFinite(params.rr)) {
+        return Number(params.rr);
+      }
+      if (!normalizedTargets.length || !riskPerUnit.gt(0)) {
+        return null;
+      }
+      const targetPrice = new PreciseDecimal(normalizedTargets[0]);
+      const diff = targetPrice.minus(entryPrice).abs();
+      if (riskPerUnit.equals(0)) {
+        return null;
+      }
+      return diff.dividedBy(riskPerUnit).toNumber();
+    })();
     const side = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
     const queue = this.activeTrades.get(params.sessionId) ?? [];
     const pythonTrackingKey = this.pythonTradeKey(params.sessionId ?? null, params.token ?? null, params.symbol);
@@ -1769,15 +1831,20 @@ class MetaAdaptiveStrategyAgent {
       family: params.family,
       id: params.id,
       riskUsd,
+      riskPerUnit,
       atrPct: params.plan.stopAtrMult.toNumber(),
       timestamp: Date.now(),
       symbol: params.symbol,
       side,
       qty,
       entryPrice,
+      entryAtr: entryAtrValue,
+      entryAtrPct: entryAtrPctValue,
       planRiskPct: params.plan.riskPct,
-      targetProfitUsd: params.plan.targetProfitUsd,
+      targetProfitUsd,
       medianTakeProfitR: params.plan.medianTakeProfitR,
+      targets: normalizedTargets,
+      rr,
       trailingPolicy: params.plan.trailingPolicy ?? null,
       pythonProbability: predictorProbability,
       pythonConfidence: predictorConfidence,
@@ -1846,6 +1913,9 @@ class MetaAdaptiveStrategyAgent {
       cumulativePnlUsd: cumulative.toFixed(6),
       riskUsd: trade.riskUsd.toFixed(6),
       targetProfitUsd: trade.targetProfitUsd.toFixed(6),
+      riskPerUnit: trade.riskPerUnit.toFixed(6),
+      rr: trade.rr != null ? Number(trade.rr.toFixed(4)) : null,
+      firstTarget: trade.targets.length ? Number(trade.targets[0].toFixed(6)) : null,
     }));
     if (this.reentryCooldownMs > 0 && normalized.lt(0)) {
       const now = Date.now();
@@ -1862,6 +1932,40 @@ class MetaAdaptiveStrategyAgent {
       }));
     }
     this.updateStats(params.symbol, trade.family, normalized);
+  }
+
+  getActiveTradeSnapshot(
+    sessionId: string | null | undefined,
+    token?: string | null,
+    symbol?: string | null,
+  ): AdaptiveTradeSnapshot | null {
+    if (!sessionId) return null;
+    const queue = this.activeTrades.get(sessionId);
+    if (!queue || queue.length === 0) return null;
+    let trade = token
+      ? queue.find(item => item.token === token && (!symbol || item.symbol === symbol))
+      : undefined;
+    if (!trade && symbol) {
+      trade = [...queue].reverse().find(item => item.symbol === symbol);
+    }
+    if (!trade) {
+      trade = queue[queue.length - 1];
+    }
+    if (!trade) return null;
+    return {
+      token: trade.token,
+      symbol: trade.symbol,
+      side: trade.side,
+      qty: trade.qty.toNumber(),
+      entryPrice: trade.entryPrice.toNumber(),
+      riskPerUnit: trade.riskPerUnit.toNumber(),
+      targets: trade.targets.map((target) => Number(target)),
+      entryAtr: trade.entryAtr ?? null,
+      entryAtrPct: trade.entryAtrPct ?? null,
+      riskUsd: trade.riskUsd.toNumber(),
+      targetProfitUsd: trade.targetProfitUsd.toNumber(),
+      rr: trade.rr ?? null,
+    };
   }
 
   private scalePlanByAtr(

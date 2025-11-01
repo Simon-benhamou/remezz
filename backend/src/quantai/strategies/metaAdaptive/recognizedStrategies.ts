@@ -1,4 +1,5 @@
 import { metaAdaptiveStrategyAgent, AdaptiveSignal, PreciseDecimal } from './metaAdaptiveAgent.js';
+import { computeInitialBracket } from './exitManager.js';
 import { getQuantAIConfig } from '../../config.js';
 import { TechnicalSnapshot } from '../../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../../ai/multiTimeframe.js';
@@ -70,6 +71,8 @@ export type RecognizedStrategySignal = {
       cooldown: { active: boolean; reason: string | null; seconds: number | null };
       meta?: Record<string, unknown> | null;
     } | null;
+    entryAtr?: number | null;
+    entryAtrPct?: number | null;
   };
 };
 
@@ -446,6 +449,8 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
             meta: signal.pythonSignal.meta ?? null,
           }
         : null,
+      entryAtr: Number.isFinite((snap as any)?.atr14) ? Number((snap as any).atr14) : null,
+      entryAtrPct: Number.isFinite((snap as any)?.atrPct) ? Number((snap as any).atrPct) : null,
     },
   };
 }
@@ -580,16 +585,131 @@ export async function registerAdaptiveTradeEntry(params: {
       },
     });
   }
-  const reentryCooldown = getQuantAIConfig().exits.reentryCooldownMin ?? 0;
+  const quantConfig = getQuantAIConfig();
+  const exitCfgBase = quantConfig.exits;
+  const reentryCooldown = exitCfgBase.reentryCooldownMin ?? 0;
   metaAdaptiveStrategyAgent.setReentryCooldownMinutes(reentryCooldown);
+
+  const rrThresholdRaw = process.env.META_ADAPTIVE_MIN_RR ?? process.env.META_ADAPTIVE_RR_MIN ?? '1.8';
+  const rrThreshold = Number.parseFloat(rrThresholdRaw);
+  const minRr = Number.isFinite(rrThreshold) && rrThreshold > 0 ? rrThreshold : 2;
+
+  const side: 'long' | 'short' = params.signal.bias === 'short' ? 'short' : 'long';
+  const entryAtrFromMeta = Number(params.signal.meta.entryAtr ?? Number.NaN);
+  const entryAtrPct = Number(params.signal.meta.entryAtrPct ?? Number.NaN);
+  let entryAtr = Number.isFinite(entryAtrFromMeta) && entryAtrFromMeta > 0 ? entryAtrFromMeta : Number.NaN;
+  if ((!Number.isFinite(entryAtr) || entryAtr <= 0) && Number.isFinite(entryAtrPct) && entryAtrPct > 0) {
+    entryAtr = (entryAtrPct / 100) * Math.max(Math.abs(params.entryPrice), 1);
+  }
+  if (!Number.isFinite(entryAtr) || entryAtr <= 0) {
+    entryAtr = Math.max(Math.abs(params.stopDistance), 1);
+  }
+  const resolvedEntryAtrPct = Number.isFinite(entryAtrPct) && entryAtrPct > 0
+    ? entryAtrPct
+    : entryAtr > 0 && Number.isFinite(params.entryPrice) && params.entryPrice !== 0
+      ? (entryAtr / Math.abs(params.entryPrice)) * 100
+      : null;
+
+  const rawMultipliers = Array.isArray((params.signal.meta as any)?.takeProfitMultiples)
+    ? (params.signal.meta as any).takeProfitMultiples
+    : [];
+  const metaMultipliers = rawMultipliers
+    .map((value: any) => Number(value))
+    .filter((value: number) => Number.isFinite(value) && value > 0);
+
+  let exitCfg = exitCfgBase;
+  if (metaMultipliers.length) {
+    exitCfg = { ...exitCfgBase, tpRMultiples: metaMultipliers };
+  } else if (!exitCfg.tpRMultiples.length) {
+    exitCfg = { ...exitCfgBase, tpRMultiples: [minRr] };
+  }
+  const tpMultipliers = exitCfg.tpRMultiples.length ? exitCfg.tpRMultiples.slice() : [minRr];
+  if (tpMultipliers[0] < minRr) {
+    tpMultipliers[0] = minRr;
+  }
+  exitCfg = { ...exitCfg, tpRMultiples: tpMultipliers };
+
+  const direction = side === 'short' ? -1 : 1;
+  let stopDistance = Math.max(1e-6, Math.abs(params.stopDistance));
+  let targets: number[] = [];
+  try {
+    const bracket = computeInitialBracket(
+      params.entryPrice,
+      entryAtr,
+      side,
+      exitCfg,
+      'impulse',
+    );
+    stopDistance = Math.max(bracket.riskPerUnit, 1e-6);
+    targets = Array.isArray(bracket.targets) ? [...bracket.targets] : [];
+  } catch (error) {
+    const fallbackRisk = entryAtr > 0
+      ? Math.max((exitCfg.minStopAtrMult ?? 0) * entryAtr, stopDistance)
+      : stopDistance;
+    stopDistance = Math.max(fallbackRisk, 1e-6);
+    if (process.env.UNIT_TEST_MODE !== 'true') {
+      console.warn('[meta-adaptive] computeInitialBracket failed, using fallback risk', {
+        symbol: params.symbol,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (!targets.length) {
+    targets = tpMultipliers.map((multiple) => params.entryPrice + direction * multiple * stopDistance);
+  }
+  const firstTarget = targets[0] ?? params.entryPrice;
+  const rrNumerator = Math.abs(firstTarget - params.entryPrice);
+  const rr = stopDistance > 0 ? rrNumerator / stopDistance : 0;
+  if (!(Number.isFinite(rr) && rr >= minRr)) {
+    const blockedReason = 'rr_below_min';
+    recordOpsEvent({
+      level: 'warn',
+      source: 'meta_adaptive_gate',
+      message: 'trade_blocked',
+      symbol: params.symbol,
+      details: {
+        strategy: params.signal.id,
+        blockedReason,
+        rr,
+        rrThreshold: minRr,
+      },
+    });
+    console.log(JSON.stringify({
+      level: 'info',
+      event: 'adaptive_trade_blocked_by_gate',
+      symbol: params.symbol,
+      sessionId: params.sessionId ?? null,
+      strategy: params.signal.id,
+      blockedReason,
+      rr,
+      rrThreshold: minRr,
+    }));
+    return;
+  }
+
+  const qtyAbs = Math.abs(params.qty);
+  const riskPerUnit = stopDistance;
+  const riskUsdValue = riskPerUnit * qtyAbs;
+  const targetProfitUsdValue = Math.abs(rrNumerator) * qtyAbs;
+  const stopAtrMultValue = entryAtr > 0 ? riskPerUnit / entryAtr : Number(params.signal.meta.stopAtrMult ?? 1);
+
   const planRiskPct = new PreciseDecimal(params.signal.meta.riskPct ?? '0');
-  const stopAtrMult = new PreciseDecimal(params.signal.meta.stopAtrMult ?? '1');
-  const planRiskUsd = new PreciseDecimal(params.signal.meta.riskUsd ?? '0');
-  const planTargetProfitUsd = new PreciseDecimal(params.signal.meta.targetProfitUsd ?? '0');
-  const tpList = params.signal.meta.takeProfitMultiples ?? [];
-  const medianIndex = tpList.length > 1 ? 1 : 0;
-  const medianTakeProfitR = new PreciseDecimal(tpList[medianIndex] ?? '1');
+  const stopAtrMult = new PreciseDecimal(Number.isFinite(stopAtrMultValue) ? stopAtrMultValue.toFixed(6) : (params.signal.meta.stopAtrMult ?? '1'));
+  const planRiskUsd = new PreciseDecimal(riskUsdValue.toFixed(6));
+  const planTargetProfitUsd = new PreciseDecimal(targetProfitUsdValue.toFixed(6));
+  const takeProfitMultiplesPrecise = tpMultipliers.map((multiple) => new PreciseDecimal(multiple.toFixed(6)));
+  const medianIndex = takeProfitMultiplesPrecise.length > 1 ? 1 : 0;
+  const medianTakeProfitR = takeProfitMultiplesPrecise[medianIndex] ?? new PreciseDecimal('1');
   const trailingMeta = params.signal.meta.trailingPolicy ?? null;
+
+  if (process.env.UNIT_TEST_MODE !== 'true' && (riskUsdValue <= 0 || targetProfitUsdValue <= 0)) {
+    console.warn('[meta-adaptive] Invalid risk/target computation', {
+      symbol: params.symbol,
+      riskUsdValue,
+      targetProfitUsdValue,
+      rr,
+    });
+  }
   await metaAdaptiveStrategyAgent.registerActiveTrade({
     sessionId: params.sessionId,
     symbol: params.symbol,
@@ -604,11 +724,16 @@ export async function registerAdaptiveTradeEntry(params: {
     token: params.signal.meta.token ?? null,
     qty: params.qty,
     entryPrice: params.entryPrice,
-    stopDistance: params.stopDistance,
+    stopDistance,
+    entryAtr,
+    entryAtrPct: resolvedEntryAtrPct != null && Number.isFinite(resolvedEntryAtrPct) ? resolvedEntryAtrPct : null,
+    riskPerUnit,
+    targets,
+    rr,
     plan: {
       riskPct: planRiskPct,
       stopAtrMult,
-      takeProfitMultiples: (params.signal.meta.takeProfitMultiples ?? []).map(v => new PreciseDecimal(v)),
+      takeProfitMultiples: takeProfitMultiplesPrecise,
       executionMode: params.signal.meta.executionMode ?? 'market',
       riskUsd: planRiskUsd,
       targetProfitUsd: planTargetProfitUsd,

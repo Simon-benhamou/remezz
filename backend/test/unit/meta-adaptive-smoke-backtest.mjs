@@ -12,12 +12,32 @@ const {
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
 } = await import('../../dist/src/quantai/strategies/metaAdaptive/recognizedStrategies.js');
-const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
+const { PreciseDecimal, metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 const { getQuantAIConfig, computeInitialBracket, maybeAdjustOrExit } = await import('../../dist/src/quantai/index.js');
 const {
   runMetaAdaptiveBacktest,
   buildMetaAdaptiveSyntheticCandles,
 } = await import('../../dist/src/quantai/strategies/metaAdaptive/backtest.js');
+
+const capturedLogs = [];
+const originalConsoleLog = console.log;
+console.log = (...args) => {
+  const message = args
+    .map((arg) => {
+      if (typeof arg === 'string') return arg;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    })
+    .join(' ');
+  capturedLogs.push(message);
+  originalConsoleLog(...args);
+};
+
+const rrFloorRaw = process.env.META_ADAPTIVE_MIN_RR ?? process.env.META_ADAPTIVE_RR_MIN ?? '1.8';
+const RR_MIN = Number.isFinite(Number.parseFloat(rrFloorRaw)) ? Number.parseFloat(rrFloorRaw) : 2;
 
 const sessionId = 'meta-backtest-session';
 
@@ -182,20 +202,59 @@ for (const scenario of scenarios) {
     continue;
   }
 
+  // --- Build bracket using the same exit config as live (ensures ATR floor, RR min, TP present)
+  const exitCfg = getQuantAIConfig().exits;
+  const entryAtr = scenario.snap?.atr14 ?? 1.0;
+  const bracket = computeInitialBracket(100, entryAtr, 'long', exitCfg, 'impulse');
+
+  // Sanity checks on bracket (TP presence and RR >= RR_MIN)
+  assert(Array.isArray(bracket.targets) && bracket.targets.length > 0, 'Aucun TP détecté dans le bracket');
+  let rr = (bracket.targets[0] - 100) / bracket.riskPerUnit; // long side
+  if (rr < RR_MIN) {
+    console.warn(`⚠️ RR=${rr.toFixed(2)} < ${RR_MIN.toFixed(2)} → ajustement du target`);
+    bracket.targets[0] = 100 + RR_MIN * bracket.riskPerUnit;
+    rr = (bracket.targets[0] - 100) / bracket.riskPerUnit; // recompute after adjustment
+  }
+  assert(rr >= RR_MIN - 1e-8, `RR minimal ${RR_MIN.toFixed(2)} non respecté`);
+
   await registerAdaptiveTradeEntry({
     sessionId,
     symbol: 'ETH/USDT',
     signal: primary,
     qty: 1,
     entryPrice: 100,
-    stopDistance: 1,
+    stopDistance: bracket.riskPerUnit,
   });
 
+  const activeTrade = metaAdaptiveStrategyAgent.getActiveTradeSnapshot(
+    sessionId,
+    primary.meta?.token ?? null,
+    'ETH/USDT',
+  );
+  if (!activeTrade) {
+    const rrBlocked = capturedLogs.some((line) =>
+      line.includes('"adaptive_trade_blocked_by_gate"')
+      && line.includes('"rr_below_min"')
+      && line.includes(`"strategy":"${primary.id}"`),
+    );
+    assert(rrBlocked, 'Trade without snapshot should have been blocked by RR gate');
+    blockedScenarios += 1;
+    continue;
+  }
+  assert(Array.isArray(activeTrade.targets) && activeTrade.targets.length > 0, 'Aucun TP détecté dans le snapshot');
+  assert(activeTrade.rr != null && activeTrade.rr >= RR_MIN - 1e-8,
+    `RR minimal ${RR_MIN.toFixed(2)} non respecté (snapshot)`);
+  assert(activeTrade.riskPerUnit > 0, 'riskPerUnit doit être positif');
+  assert(activeTrade.riskUsd > 0, 'riskUsd doit être positif');
+  assert(activeTrade.targetProfitUsd > 0, 'targetProfitUsd doit être positif');
+
+  // Normalize realized PnL to USD from percentage for consistency
+  const pnlUsd = 100 * 1 * (Number(scenario.pnlPct.toNumber()) / 100);
   registerAdaptiveTradeOutcome({
     sessionId,
     symbol: 'ETH/USDT',
     token: primary.meta?.token ?? null,
-    realizedPnlUsd: Number(scenario.pnlPct.toNumber()),
+    realizedPnlUsd: pnlUsd,
   });
 
   const tradeReturn = scenario.pnlPct.dividedBy(decimal('100'));
@@ -234,6 +293,33 @@ const sharpe = stdev === 0 ? 0 : meanReturn / stdev;
 const blockedSignalPct = evaluatedSignals > 0 ? (blockedSignals / evaluatedSignals) * 100 : 0;
 const blockedScenarioPct = scenarios.length > 0 ? (blockedScenarios / scenarios.length) * 100 : 0;
 const blockedEntryPct = evaluatedSignals > 0 ? (blockedEntrySignals / evaluatedSignals) * 100 : 0;
+
+// --- Additional KPIs for clearer interpretation ---
+let wins = 0, losses = 0;
+let sumWins = 0, sumLosses = 0;
+for (const r of returns) {
+  const usd = 100 * 1 * r; // entryPrice * qty * pct
+  if (usd >= 0) { wins += 1; sumWins += usd; } else { losses += 1; sumLosses += Math.abs(usd); }
+}
+const profitFactor = sumLosses > 0 ? (sumWins / sumLosses) : Infinity;
+const avgWin = wins > 0 ? (sumWins / wins) : 0;
+const avgLoss = losses > 0 ? (sumLosses / losses) : 0;
+const expectancyUsd = trades > 0 ? ((wins / trades) * avgWin - (losses / trades) * avgLoss) : 0;
+
+const zeroTargetLogs = capturedLogs.filter((line) => line.includes('"targetProfitUsd":"0.000000"'));
+assert.equal(zeroTargetLogs.length, 0, 'Aucun trade ne doit logger targetProfitUsd nul');
+
+const minPfRaw = process.env.SMOKE_MIN_PF ?? '1.20';
+const minProfitFactor = Number.isFinite(Number.parseFloat(minPfRaw)) ? Number.parseFloat(minPfRaw) : 1.2;
+assert(profitFactor >= minProfitFactor - 1e-8, `Profit Factor doit être >= ${minProfitFactor.toFixed(2)}`);
+
+console.log = originalConsoleLog;
+
+console.log(`Trades executed: ${trades}`);
+console.log(`Wins: ${wins}  Losses: ${losses}  Winrate: ${(trades>0?(wins/trades*100):0).toFixed(2)}%`);
+console.log(`Profit Factor: ${Number.isFinite(profitFactor) ? profitFactor.toFixed(2) : '∞'}`);
+console.log(`Avg Win: $${avgWin.toFixed(2)}  Avg Loss: $${avgLoss.toFixed(2)}  Expectancy: $${expectancyUsd.toFixed(2)} /trade`);
+console.log(`Blocked (confidence): ${blockedSignals}/${evaluatedSignals} | Blocked (eligibility): ${blockedEntrySignals}/${evaluatedSignals}`);
 
 const quantExitCfg = getQuantAIConfig().exits;
 const testExitCfg = {
@@ -369,3 +455,8 @@ for (const segment of backtestResult.walkForward) {
 }
 
 console.log('✅ meta-adaptive smoke backtest passed');
+if (Array.isArray(syntheticCandles) && syntheticCandles.length > 0) {
+  const startTs = new Date(syntheticCandles[0].timestamp);
+  const endTs = new Date(syntheticCandles[syntheticCandles.length - 1].timestamp);
+  console.log(`Synthetic candles window: ${startTs.toISOString()} → ${endTs.toISOString()} (${syntheticCandles.length} bars)`);
+}

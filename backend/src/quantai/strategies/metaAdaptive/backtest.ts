@@ -350,7 +350,6 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   // Aggregated indices retained for future extensions
   const strategyHealth = new StrategyHealth({ window: 20, minTradesForGuard: 6, refreshCooldownMs: 20 * 60 * 1000 });
   let healthCooldownUntil = 0;
-  let lastHealthGuardReason: string | null = null;
   let healthSnapshot = strategyHealth.snapshot();
 
   for (let i = DEFAULT_MIN_HISTORY; i < candles.length; i += 1) {
@@ -432,16 +431,15 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
         const pnlR = position.riskPerUnit > 0 ? priceDelta / position.riskPerUnit : 0;
         strategyHealth.recordTrade({ pnlR, timestamp: candle.timestamp, regime: position.signal.id });
         healthSnapshot = strategyHealth.snapshot();
-        if (healthSnapshot.guardrail) {
-          const guard = healthSnapshot.guardrail;
+        const guard = healthSnapshot.guardrail;
+        if (guard) {
           const cooldownEnd = guard.cooldownMs ? candle.timestamp + guard.cooldownMs : candle.timestamp;
           healthCooldownUntil = Math.max(healthCooldownUntil, cooldownEnd);
-          if (guard.reason !== lastHealthGuardReason) {
+          if (healthSnapshot.guardrailChanged) {
             console.log(`[StrategyHealth] cooldown applied (${guard.reason}) for ${(guard.cooldownMs ?? 0) / 60000} minutes`);
-            lastHealthGuardReason = guard.reason;
           }
-        } else {
-          lastHealthGuardReason = null;
+        } else if (healthSnapshot.guardrailChanged) {
+          console.log('[StrategyHealth] cooldown cleared');
         }
 
         const holdMs = Math.max(0, candle.timestamp - position.openedAt);
@@ -568,8 +566,10 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       rawNotionalUsd: qtyResult.rawNotionalUsd * healthRiskMultiplier,
     };
 
-    if (Math.abs(healthRiskMultiplier - 1) > 1e-3) {
-      console.log(`risk scaled by StrategyHealth x${healthRiskMultiplier.toFixed(2)}`);
+    if (Math.abs(healthRiskMultiplier - 1) > 1e-3 && healthSnapshot.riskMultiplierChanged) {
+      const reason = healthSnapshot.riskMultiplierReason ?? 'adjustment';
+      console.log(`risk scaled by StrategyHealth x${healthRiskMultiplier.toFixed(2)} (reason=${reason})`);
+      healthSnapshot = { ...healthSnapshot, riskMultiplierChanged: false };
     }
 
     attemptedEntries += 1;
