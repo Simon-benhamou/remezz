@@ -28,9 +28,10 @@ assert.equal(snapshot.trades, pnlSeries.length, 'Should track all trades');
 assert(snapshot.expectancy < 0, 'Expectancy should be negative with net losses');
 assert(snapshot.winRate < 0.5, 'Win rate should reflect majority losses');
 assert(snapshot.guardrail, 'Guardrail should trigger under poor performance');
-assert.equal(snapshot.guardrail.reason, 'health_critical');
+assert(snapshot.guardrail.reason.startsWith('strategy_health_'), 'Guardrail reason should reflect strategy health');
 assert(snapshot.refreshRecommended, 'Refresh should be recommended after sustained losses');
-assert(snapshot.aggressionMultiplier < 1, 'Aggression should be reduced when expectancy < 0');
+assert(snapshot.riskMultiplier < 1, 'Risk multiplier should be reduced when expectancy < 0');
+assert(snapshot.maxDrawdown <= 0, 'Max drawdown should be non-positive');
 assert.equal(snapshot.lastRegime, 'trend');
 
 const scaledReturns = pnlSeries.map((r) => r * 0.2);

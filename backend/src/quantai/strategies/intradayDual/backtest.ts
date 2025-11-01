@@ -2,6 +2,7 @@ import { IntradayDualStrategy } from './strategy.js';
 import type { Candle, TickInput, BacktestResult, EntrySignal, TradeLog, BacktestMetrics } from './types.js';
 import { PreciseDecimal } from '../metaAdaptive/metaAdaptiveAgent.js';
 import { getIntradayRuntimeConfig } from '../../../config/intraday.js';
+import { calculateExecutionCosts } from '../../executionCosts.js';
 
 export type BacktestOptions = {
   symbol: string;
@@ -84,10 +85,6 @@ function computeOrderBookMid(orderBook: TickInput['orderBook']): number {
   return (bid + ask) / 2;
 }
 
-function decimalFromBps(bps: number): PreciseDecimal {
-  return new PreciseDecimal((bps / 10_000).toFixed(8));
-}
-
 function simulateSegment(candles: Candle[], options: BacktestOptions): SimulationArtifacts {
   if (!candles.length) throw new Error('No candles provided');
   const strategy = new IntradayDualStrategy();
@@ -103,17 +100,10 @@ function simulateSegment(candles: Candle[], options: BacktestOptions): Simulatio
   const makerFeeBps = options.makerFeeBps ?? 1.8;
   const takerFeeBps = options.takerFeeBps ?? 5;
   const impactBpsPerMillion = options.impactBpsPerMillion ?? 0;
+  const fundingAnnualPct = options.fundingAnnualPct ?? 0;
   const latencyMs = options.latencyMs ?? 0;
   const slippageFallback = options.slippageBps ?? 3;
-  const makerFeeMultiplier = decimalFromBps(makerFeeBps);
-  const takerFeeMultiplier = decimalFromBps(takerFeeBps);
-  const impactMultiplier = impactBpsPerMillion > 0 ? decimalFromBps(impactBpsPerMillion) : null;
-  const million = new PreciseDecimal(1_000_000);
-  const fundingAnnualPct = options.fundingAnnualPct ?? 0;
-  const fundingPerMs = fundingAnnualPct > 0
-    ? (fundingAnnualPct / 100) / (365 * 24 * 60 * 60 * 1000)
-    : 0;
-  const fundingMultiplier = fundingPerMs > 0 ? new PreciseDecimal(fundingPerMs.toFixed(12)) : null;
+  const feeModel = { makerFeeBps, takerFeeBps };
 
   let attemptedEntries = 0;
   let filledEntries = 0;
@@ -178,22 +168,22 @@ function simulateSegment(candles: Candle[], options: BacktestOptions): Simulatio
           filledEntries += 1;
         }
         entries.push(entry);
-        const size = entry.size;
-        const feeMultiplier = entry.execution.mode === 'maker' ? makerFeeMultiplier : takerFeeMultiplier;
-        const feeCost = size.times(feeMultiplier);
-        equity = equity.minus(feeCost);
-        if (impactMultiplier) {
-          const ratio = size.dividedBy(million);
-          const impactCost = size.times(impactMultiplier.times(ratio));
-          equity = equity.minus(impactCost);
-        }
-        if (latencyMs > 0) {
-          const latencyPct = Math.max(0, (current.close - prior.close) / Math.max(prior.close, 1e-9));
-          if (latencyPct !== 0) {
-            const latencyCost = size.times(new PreciseDecimal((latencyPct * (latencyMs / 60_000)).toFixed(8)));
-            equity = equity.minus(latencyCost.abs());
-          }
-        }
+        const sizeNum = entry.size.toNumber();
+        const entryPrice = entry.triggerPrice.toNumber();
+        const costs = calculateExecutionCosts({
+          price: entryPrice,
+          qty: sizeNum,
+          side: entry.side === 'long' ? 'buy' : 'sell',
+          liquidity: entry.execution.mode === 'maker' ? 'maker' : 'taker',
+          fees: feeModel,
+          impactBpsPerMillion,
+          fundingAnnualPct: 0,
+          holdMs: 0,
+          latencyMs,
+          atr: Math.abs(current.close - prior.close),
+          lastPrice: prior.close,
+        });
+        equity = equity.minus(new PreciseDecimal(costs.totalUsd));
       }
     }
 
@@ -202,22 +192,24 @@ function simulateSegment(candles: Candle[], options: BacktestOptions): Simulatio
       tradeLogs.push(...newTrades);
       for (const trade of newTrades) {
         equity = equity.plus(trade.cumulativePnl);
-        const feeCost = trade.quantity.times(takerFeeMultiplier);
-        equity = equity.minus(feeCost);
-        if (impactMultiplier) {
-          const ratio = trade.quantity.dividedBy(million);
-          const impactCost = trade.quantity.times(impactMultiplier.times(ratio));
-          equity = equity.minus(impactCost);
-        }
-        if (fundingMultiplier && trade.holdDurationMs > 0) {
-          const fundingCost = trade.quantity.times(fundingMultiplier.times(new PreciseDecimal(trade.holdDurationMs.toString())));
-          equity = equity.minus(fundingCost);
-        }
-        if (latencyMs > 0 && trade.exitAtrPct > 0) {
-          const latencyPct = trade.exitAtrPct * (latencyMs / 60_000);
-          const latencyCost = trade.quantity.times(new PreciseDecimal(latencyPct.toFixed(8)));
-          equity = equity.minus(latencyCost.abs());
-        }
+        const qtyNum = trade.quantity.toNumber();
+        const exitPrice = trade.price.toNumber();
+        const atrPct = trade.exitAtrPct ?? 0;
+        const atrValue = atrPct > 0 ? (atrPct / 100) * exitPrice : Math.abs(exitPrice - exitPrice);
+        const costs = calculateExecutionCosts({
+          price: exitPrice,
+          qty: qtyNum,
+          side: trade.side === 'long' ? 'sell' : 'buy',
+          liquidity: 'taker',
+          fees: feeModel,
+          impactBpsPerMillion,
+          fundingAnnualPct,
+          holdMs: trade.holdDurationMs,
+          latencyMs,
+          atr: atrValue,
+          lastPrice: exitPrice,
+        });
+        equity = equity.minus(new PreciseDecimal(costs.totalUsd));
         pnlSeries.push(equity.toNumber());
       }
     }

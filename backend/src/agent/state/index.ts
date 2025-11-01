@@ -42,7 +42,7 @@ import {
 } from '../persistence.js';
 import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
-import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateFeeUsd, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
+import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateExecutionCosts, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
 import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import { ZERO_USD } from '../../core/capital/types.js';
 import { computeAdaptiveEvThreshold } from './evThreshold.js';
@@ -446,8 +446,32 @@ export class ReboundRejectionAgent {
       expiresAt: now + lifetime,
       reason: guardrail.reason,
     };
+    recordOpsEvent({
+      level: 'info',
+      source: 'strategy_health_guard',
+      message: 'risk_scaled_by_strategy_health',
+      sessionId: this.sessionId || undefined,
+      symbol: this.profile?.symbol,
+      details: {
+        multiplier: boundedRisk,
+        atrMultiplier: boundedAtr,
+        reason: guardrail.reason,
+        expiresAt: new Date(now + lifetime).toISOString(),
+      },
+    });
     if (guardrail.cooldownMs && guardrail.cooldownMs > 0) {
       this.scheduleReactivation(`strategy_health_${guardrail.reason}`, guardrail.cooldownMs);
+      recordOpsEvent({
+        level: 'info',
+        source: 'strategy_health_guard',
+        message: 'strategy_health_cooldown_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          reason: guardrail.reason,
+          cooldownMinutes: Number((guardrail.cooldownMs / 60000).toFixed(2)),
+        },
+      });
     }
   }
 
@@ -2608,8 +2632,27 @@ export class ReboundRejectionAgent {
     }
     if (planRiskMinPct != null) dynamicRiskPct = Math.max(planRiskMinPct, dynamicRiskPct);
     if (planRiskMaxPct != null) dynamicRiskPct = Math.min(planRiskMaxPct, dynamicRiskPct);
-    if (strategyHealthSnapshot.aggressionMultiplier !== 1) {
-      dynamicRiskPct *= strategyHealthSnapshot.aggressionMultiplier;
+    if (strategyHealthSnapshot.riskMultiplier !== 1) {
+      const multiplier = Number(strategyHealthSnapshot.riskMultiplier ?? 1);
+      if (Number.isFinite(multiplier) && multiplier > 0) {
+        const before = dynamicRiskPct;
+        dynamicRiskPct *= multiplier;
+        recordOpsEvent({
+          level: 'info',
+          source: 'strategy_health',
+          message: 'risk_scaled_by_strategy_health',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            before,
+            after: dynamicRiskPct,
+            multiplier,
+            expectancy: strategyHealthSnapshot.expectancy,
+            winRate: strategyHealthSnapshot.winRate,
+            maxDrawdown: strategyHealthSnapshot.maxDrawdown,
+          },
+        });
+      }
     }
     if (this.adaptiveRisk) this.adaptiveRisk = { ...this.adaptiveRisk, riskPct: dynamicRiskPct };
 
@@ -2637,7 +2680,7 @@ export class ReboundRejectionAgent {
       recordOpsEvent({
         level: 'info',
         source: 'strategy_health_guard',
-        message: 'risk_scaled_by_strategy_health',
+        message: 'strategy_health_guard_applied',
         sessionId: this.sessionId || undefined,
         symbol: this.profile.symbol,
         details: {
@@ -10985,7 +11028,14 @@ export class ReboundRejectionAgent {
         const exitPriceFilled = exitOrder.avgPrice || price;
         const exitQty = Number(exitOrder.filledQty ?? this.pos.qty ?? 0);
         const realizedPnl = this.calculateRealizedPnL(exitPriceFilled, exitQty);
-        const feesUsd = this.estimateTradeFees(exitPriceFilled, exitQty);
+        const holdMs = Math.max(0, Date.now() - this.pos.openedAt);
+        const feesUsd = this.estimateTradeFees(exitPriceFilled, exitQty, {
+          exitLiquidity: 'taker',
+          holdMs,
+          latencyMs: Number(exitOrder.latencyMs ?? 0),
+          atr: this.plan?.atr ?? this.pos.entryAtr ?? 0,
+          lastPrice: this.pos.entry,
+        });
         await this.settleCapital(this.profile.symbol, exitPriceFilled * exitQty);
         const balanceAfter = await this.broker.balance().catch(() => null as BrokerMarginSnapshot | null);
         let exitSnapshot: ExitDiagnosticsPayload | null = null;
@@ -11757,7 +11807,17 @@ export class ReboundRejectionAgent {
       return 0;
     }
     try {
-      return calculateFeeUsd(price, qty, this.quantConfig.feesSlippage, { side, liquidity });
+      const breakdown = calculateExecutionCosts({
+        price,
+        qty,
+        side,
+        liquidity: liquidity ?? 'taker',
+        fees: {
+          makerFeeBps: this.quantConfig.feesSlippage.makerFeeBps,
+          takerFeeBps: this.quantConfig.feesSlippage.takerFeeBps,
+        },
+      });
+      return breakdown.feeUsd;
     } catch {
       return 0;
     }
@@ -11778,7 +11838,16 @@ export class ReboundRejectionAgent {
   private estimateTradeFees(
     exitPrice: number,
     qty: number,
-    options?: { entryLiquidity?: LiquidityType; exitLiquidity?: LiquidityType },
+    options?: {
+      entryLiquidity?: LiquidityType;
+      exitLiquidity?: LiquidityType;
+      impactBpsPerMillion?: number;
+      fundingAnnualPct?: number;
+      holdMs?: number;
+      latencyMs?: number;
+      atr?: number;
+      lastPrice?: number;
+    },
   ): number {
     if (!this.pos || !(qty > 0)) {
       return 0;
@@ -11786,8 +11855,23 @@ export class ReboundRejectionAgent {
     const entryFeePerUnit = this.resolveEntryFeePerUnit(options?.entryLiquidity);
     const entryFeePortion = entryFeePerUnit * qty;
     const exitSide = this.pos.side === 'buy' ? 'sell' : 'buy';
-    const exitFee = this.estimateFillFeeUsd(exitPrice, qty, exitSide, options?.exitLiquidity);
-    const total = entryFeePortion + exitFee;
+    const breakdown = calculateExecutionCosts({
+      price: exitPrice,
+      qty,
+      side: exitSide,
+      liquidity: options?.exitLiquidity ?? 'taker',
+      fees: {
+        makerFeeBps: this.quantConfig.feesSlippage.makerFeeBps,
+        takerFeeBps: this.quantConfig.feesSlippage.takerFeeBps,
+      },
+      impactBpsPerMillion: options?.impactBpsPerMillion ?? 0,
+      fundingAnnualPct: options?.fundingAnnualPct ?? 0,
+      holdMs: options?.holdMs,
+      latencyMs: options?.latencyMs,
+      atr: options?.atr,
+      lastPrice: options?.lastPrice ?? this.pos.entry,
+    });
+    const total = entryFeePortion + breakdown.totalUsd;
     return Number.isFinite(total) && total > 0 ? total : 0;
   }
 

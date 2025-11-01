@@ -15,6 +15,8 @@ import {
 } from './recognizedStrategies.js';
 import { PreciseDecimal } from './metaAdaptiveAgent.js';
 import type { TechnicalSnapshot } from '../../../ai/tech.js';
+import { StrategyHealth } from '../../services/strategyHealth.js';
+import { calculateExecutionCosts } from '../../executionCosts.js';
 
 export type MetaAdaptiveBacktestOptions = {
   symbol: string;
@@ -128,10 +130,6 @@ function resolveTradeSide(signal: RecognizedStrategySignal, snap: TechnicalSnaps
     return 'long';
   }
   return null;
-}
-
-function decimalFromBps(bps: number): PreciseDecimal {
-  return new PreciseDecimal((bps / 10_000).toFixed(8));
 }
 
 function computeAtrPct(atrValue: number, price: number): number {
@@ -332,15 +330,7 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   const fundingAnnualPct = options.fundingAnnualPct ?? 0;
   const latencyMs = options.latencyMs ?? 0;
   const impactBpsPerMillion = options.impactBpsPerMillion ?? 0;
-
-  const makerFeeMultiplier = decimalFromBps(makerFeeBps);
-  const takerFeeMultiplier = decimalFromBps(takerFeeBps);
-  const impactMultiplier = impactBpsPerMillion > 0 ? decimalFromBps(impactBpsPerMillion) : null;
-  const million = new PreciseDecimal(1_000_000);
-  const fundingPerMs = fundingAnnualPct > 0
-    ? (fundingAnnualPct / 100) / (365 * 24 * 60 * 60 * 1000)
-    : 0;
-  const fundingMultiplier = fundingPerMs > 0 ? new PreciseDecimal(fundingPerMs.toFixed(12)) : null;
+  const feeModel = { makerFeeBps, takerFeeBps };
 
   const startEquity = new PreciseDecimal(options.equityUsd);
   let equity = startEquity;
@@ -358,6 +348,10 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
 
   let idx15 = 0;
   // Aggregated indices retained for future extensions
+  const strategyHealth = new StrategyHealth({ window: 20, minTradesForGuard: 6, refreshCooldownMs: 20 * 60 * 1000 });
+  let healthCooldownUntil = 0;
+  let lastHealthGuardReason: string | null = null;
+  let healthSnapshot = strategyHealth.snapshot();
 
   for (let i = DEFAULT_MIN_HISTORY; i < candles.length; i += 1) {
     const candle = candles[i];
@@ -435,28 +429,36 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
         const pnl = new PreciseDecimal(priceDelta * position.qty.toNumber());
         position.cumulativePnl = pnl;
         equity = equity.plus(pnl);
-
-        const feeMultiplier = takerFeeMultiplier;
-        const feeCost = position.qty.times(feeMultiplier);
-        equity = equity.minus(feeCost);
-
-        if (impactMultiplier) {
-          const ratio = position.qty.dividedBy(million);
-          const impactCost = position.qty.times(impactMultiplier.times(ratio));
-          equity = equity.minus(impactCost);
+        const pnlR = position.riskPerUnit > 0 ? priceDelta / position.riskPerUnit : 0;
+        strategyHealth.recordTrade({ pnlR, timestamp: candle.timestamp, regime: position.signal.id });
+        healthSnapshot = strategyHealth.snapshot();
+        if (healthSnapshot.guardrail) {
+          const guard = healthSnapshot.guardrail;
+          const cooldownEnd = guard.cooldownMs ? candle.timestamp + guard.cooldownMs : candle.timestamp;
+          healthCooldownUntil = Math.max(healthCooldownUntil, cooldownEnd);
+          if (guard.reason !== lastHealthGuardReason) {
+            console.log(`[StrategyHealth] cooldown applied (${guard.reason}) for ${(guard.cooldownMs ?? 0) / 60000} minutes`);
+            lastHealthGuardReason = guard.reason;
+          }
+        } else {
+          lastHealthGuardReason = null;
         }
 
-        if (fundingMultiplier) {
-          const holdMs = Math.max(0, candle.timestamp - position.openedAt);
-          const fundingCost = position.qty.times(fundingMultiplier.times(new PreciseDecimal(holdMs.toString())));
-          equity = equity.minus(fundingCost);
-        }
-
-        if (latencyMs > 0) {
-          const latencyPct = Math.abs((candle.close - prevCandle.close) / Math.max(prevCandle.close, 1e-9));
-          const latencyCost = position.qty.times(new PreciseDecimal((latencyPct * (latencyMs / 60_000)).toFixed(8)));
-          equity = equity.minus(latencyCost);
-        }
+        const holdMs = Math.max(0, candle.timestamp - position.openedAt);
+        const exitCosts = calculateExecutionCosts({
+          price: exitPrice,
+          qty: position.qty.toNumber(),
+          side: side === 'long' ? 'sell' : 'buy',
+          liquidity: 'taker',
+          fees: feeModel,
+          impactBpsPerMillion,
+          fundingAnnualPct,
+          holdMs,
+          latencyMs,
+          atr: snapshot.atr14,
+          lastPrice: prevCandle.close,
+        });
+        equity = equity.minus(new PreciseDecimal(exitCosts.totalUsd));
 
         pnlSeries.push(equity.toNumber());
 
@@ -483,6 +485,10 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       continue;
     }
 
+    if (candle.timestamp < healthCooldownUntil) {
+      continue;
+    }
+
     const directionalBias: 'long' | 'short' | 'none' = snapshot.trendBias === 'bullish'
       ? 'long'
       : snapshot.trendBias === 'bearish'
@@ -501,6 +507,9 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       ? rawVolume24h * snapshot.last
       : null;
 
+    const healthRiskMultiplier = Number.isFinite(healthSnapshot.riskMultiplier)
+      ? Number(healthSnapshot.riskMultiplier)
+      : 1;
     const signals = evaluateRecognizedStrategies(snapshot, {
       symbol: options.symbol,
       bias: directionalBias,
@@ -548,20 +557,40 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
 
     if (!(qtyResult.qty > 0)) continue;
 
+    const adjustedQty = qtyResult.qty * healthRiskMultiplier;
+    if (!(adjustedQty > 0)) continue;
+    const sizingSnapshot: PositionSizingResult = {
+      ...qtyResult,
+      qty: adjustedQty,
+      riskUsd: qtyResult.riskUsd * healthRiskMultiplier,
+      notionalUsd: qtyResult.notionalUsd * healthRiskMultiplier,
+      rawQty: qtyResult.rawQty * healthRiskMultiplier,
+      rawNotionalUsd: qtyResult.rawNotionalUsd * healthRiskMultiplier,
+    };
+
+    if (Math.abs(healthRiskMultiplier - 1) > 1e-3) {
+      console.log(`risk scaled by StrategyHealth x${healthRiskMultiplier.toFixed(2)}`);
+    }
+
     attemptedEntries += 1;
     filledEntries += 1;
     runtimeSlippage = slippageBpsDefault;
 
-    const qtyDecimal = new PreciseDecimal(qtyResult.qty);
-    const feeMultiplier = takerFeeMultiplier;
-    const feeCost = qtyDecimal.times(feeMultiplier);
-    equity = equity.minus(feeCost);
-
-    if (impactMultiplier) {
-      const ratio = qtyDecimal.dividedBy(million);
-      const impactCost = qtyDecimal.times(impactMultiplier.times(ratio));
-      equity = equity.minus(impactCost);
-    }
+    const qtyDecimal = new PreciseDecimal(adjustedQty);
+    const entryCosts = calculateExecutionCosts({
+      price: candle.close,
+      qty: adjustedQty,
+      side: side === 'long' ? 'buy' : 'sell',
+      liquidity: 'taker',
+      fees: feeModel,
+      impactBpsPerMillion,
+      fundingAnnualPct: 0,
+      holdMs: 0,
+      latencyMs,
+      atr: snapshot.atr14,
+      lastPrice: prevCandle.close,
+    });
+    equity = equity.minus(new PreciseDecimal(entryCosts.totalUsd));
 
     const entryAtrPct = snapshot.atrPct;
     position = {
@@ -577,7 +606,7 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       initialStopDistance: bracket.riskPerUnit,
       hitTargets: new Set<number>(),
       signal: chosen,
-      sizing: qtyResult,
+      sizing: sizingSnapshot,
       cumulativePnl: new PreciseDecimal(0),
     };
 
@@ -593,8 +622,8 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       takeProfit2: new PreciseDecimal(bracket.targets[1] ?? bracket.targets[0] ?? candle.close),
       runnerTrailAtrMult: baseExitConfig.trailAtrMult,
       size: qtyDecimal,
-      riskUsd: new PreciseDecimal(qtyResult.riskUsd),
-      leverage: qtyResult.notionalUsd / Math.max(options.equityUsd, 1e-9),
+      riskUsd: new PreciseDecimal(sizingSnapshot.riskUsd),
+      leverage: sizingSnapshot.notionalUsd / Math.max(options.equityUsd, 1e-9),
       confidence: chosen.confidence,
       rationale: chosen.reasons,
       execution: {
@@ -699,11 +728,11 @@ export function buildMetaAdaptiveSyntheticCandles(): Candle[] {
   let price = 1_900;
   for (let i = 0; i < 1_000; i += 1) {
     const timestamp = 1_700_700_000_000 + i * 60_000;
-    const drift = Math.sin(i / 96) * 0.18 + (Math.random() - 0.5) * 0.08;
+    const drift = Math.sin(i / 96) * 0.18 + Math.sin(i * 0.37) * 0.04;
     price = Math.max(50, price * (1 + drift * 0.0015));
     const high = price * (1 + Math.abs(drift) * 0.012);
     const low = price * (1 - Math.abs(drift) * 0.014);
-    const volume = 1_000_000 * (0.85 + Math.random() * 0.4);
+    const volume = 1_000_000 * (0.85 + 0.2 * (1 + Math.sin(i * 0.41)));
     candles.push({
       timestamp,
       open: price * (1 - drift * 0.0008),
