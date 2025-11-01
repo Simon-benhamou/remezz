@@ -16,6 +16,12 @@ export type RecognizedStrategySummary = {
   label: string;
   bias: 'long' | 'short' | 'both';
   confidence: number;
+  qualityScore: number;
+  confidenceGatePassed: boolean;
+  blockedReason: string | null;
+  entryEligibilityScore: number;
+  entryEligibilityGatePassed: boolean;
+  entryEligibilityReasons: string[];
   score: number;
   guardrail: string | null;
   penalties: string[];
@@ -112,6 +118,25 @@ function sanitizeRecognizedStrategy(signal: RecognizedStrategySignal): Recognize
     label: signal.label || STRATEGY_LABEL_FALLBACK[signal.id],
     bias: signal.bias,
     confidence: Number(signal.confidence ?? 0),
+    qualityScore: Number(
+      signal.qualityScore
+      ?? (typeof signal.metrics?.qualityScore === 'number' ? signal.metrics.qualityScore : signal.meta?.qualityScore)
+      ?? 0,
+    ),
+    confidenceGatePassed: Boolean(signal.confidenceGatePassed),
+    blockedReason: signal.blockedReason ?? signal.meta?.blockedReason ?? null,
+    entryEligibilityScore: Number(
+      signal.entryEligibilityScore
+      ?? (typeof signal.metrics?.entryEligibilityScore === 'number' ? signal.metrics.entryEligibilityScore : signal.meta?.entryEligibilityScore)
+      ?? 0,
+    ),
+    entryEligibilityGatePassed: signal.entryEligibilityGatePassed
+      ?? Boolean(signal.meta?.entryEligibilityGatePassed ?? true),
+    entryEligibilityReasons: Array.isArray(signal.entryEligibilityReasons)
+      ? signal.entryEligibilityReasons
+      : Array.isArray(signal.meta?.entryEligibilityReasons)
+        ? signal.meta!.entryEligibilityReasons!
+        : [],
     score: Number(signal.meta?.score ?? signal.confidence ?? 0),
     guardrail: signal.meta?.guardrail ?? (signal as any).guardrail ?? null,
     penalties: Array.isArray(signal.meta?.penalties) ? signal.meta!.penalties : [],

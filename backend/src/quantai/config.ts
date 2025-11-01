@@ -142,6 +142,16 @@ export type QuantAIExitConfig = {
   trailAfterRImpulse?: number;
   trailAtrMult: number;
   trailingAdaptive?: QuantAITrailingAdaptiveConfig;
+  minStopAtrMult?: number;
+  profitLock?: {
+    minRMultiple: number;
+    allowPartialBeforeMinR?: boolean;
+    preLockTrailMultiplier?: number;
+  };
+  volatilityExit?: {
+    atrPctSpikeThreshold: number;
+    widenMultiplier: number;
+  };
   earlyExit: {
     adxBelow: number;
     cmfNegative: boolean;
@@ -182,6 +192,16 @@ export type QuantAIExitOverride = {
   trailAfterRReversal?: number;
   trailAfterRImpulse?: number;
   trailAtrMult?: number;
+  minStopAtrMult?: number;
+  profitLock?: {
+    minRMultiple?: number;
+    allowPartialBeforeMinR?: boolean;
+    preLockTrailMultiplier?: number;
+  };
+  volatilityExit?: {
+    atrPctSpikeThreshold?: number;
+    widenMultiplier?: number;
+  };
   maxHoldingMin?: number;
   reentryCooldownMin?: number;
   earlyExit?: {
@@ -417,6 +437,16 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         extremeMultiplier: 0.65,
       },
       clampMultiplier: { min: 0.55, max: 1.75 },
+    },
+    minStopAtrMult: 0.9,
+    profitLock: {
+      minRMultiple: 1.0,
+      allowPartialBeforeMinR: false,
+      preLockTrailMultiplier: 1.35,
+    },
+    volatilityExit: {
+      atrPctSpikeThreshold: 0.35,
+      widenMultiplier: 1.25,
     },
     earlyExit: {
       adxBelow: 18,
@@ -977,6 +1007,40 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     DEFAULT_CONFIG.exits.trailAfterRImpulse ??
     trailBase,
   );
+  const minStopAtrMult = normalizeOptionalNumber(raw.min_stop_atr_mult ?? raw.minStopAtrMult)
+    ?? DEFAULT_CONFIG.exits.minStopAtrMult
+    ?? 0;
+  const profitLockDefaults = DEFAULT_CONFIG.exits.profitLock ?? { minRMultiple: 1, allowPartialBeforeMinR: false, preLockTrailMultiplier: 1.35 };
+  const profitLockRaw = (raw.profit_lock ?? raw.profitLock) && typeof (raw.profit_lock ?? raw.profitLock) === 'object'
+    ? (raw.profit_lock ?? raw.profitLock)
+    : undefined;
+  const profitLock = profitLockDefaults
+    ? {
+        minRMultiple: normalizeOptionalNumber(profitLockRaw?.min_r_multiple ?? profitLockRaw?.minRMultiple) ?? profitLockDefaults.minRMultiple,
+        allowPartialBeforeMinR: profitLockRaw?.allow_partial_before_min_r != null
+          ? Boolean(profitLockRaw.allow_partial_before_min_r)
+          : profitLockRaw?.allowPartialBeforeMinR != null
+            ? Boolean(profitLockRaw.allowPartialBeforeMinR)
+            : profitLockDefaults.allowPartialBeforeMinR ?? false,
+        preLockTrailMultiplier: normalizeOptionalNumber(
+          profitLockRaw?.pre_lock_trail_multiplier ?? profitLockRaw?.preLockTrailMultiplier,
+        ) ?? profitLockDefaults.preLockTrailMultiplier,
+      }
+    : undefined;
+  const volatilityDefaults = DEFAULT_CONFIG.exits.volatilityExit ?? { atrPctSpikeThreshold: 0.35, widenMultiplier: 1.25 };
+  const volatilityRaw = (raw.volatility_exit ?? raw.volatilityExit) && typeof (raw.volatility_exit ?? raw.volatilityExit) === 'object'
+    ? (raw.volatility_exit ?? raw.volatilityExit)
+    : undefined;
+  const volatilityExit = volatilityDefaults
+    ? {
+        atrPctSpikeThreshold: normalizeOptionalNumber(
+          volatilityRaw?.atr_pct_spike_threshold ?? volatilityRaw?.atrPctSpikeThreshold,
+        ) ?? volatilityDefaults.atrPctSpikeThreshold,
+        widenMultiplier: normalizeOptionalNumber(
+          volatilityRaw?.widen_multiplier ?? volatilityRaw?.widenMultiplier,
+        ) ?? volatilityDefaults.widenMultiplier,
+      }
+    : undefined;
   const tightenProfitR = Number(
     earlyExitRaw.tighten_profit_r ??
     earlyExitRaw.tightenProfitR ??
@@ -1094,6 +1158,9 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     trailAfterRImpulse: trailImpulse,
     trailAtrMult: Number(raw.trail_atr_mult ?? raw.trailAtrMult ?? DEFAULT_CONFIG.exits.trailAtrMult),
     trailingAdaptive,
+    minStopAtrMult,
+    profitLock,
+    volatilityExit,
     earlyExit: {
       adxBelow: Number(earlyExitRaw.adx_below ?? earlyExitRaw.adxBelow ?? DEFAULT_CONFIG.exits.earlyExit.adxBelow),
       cmfNegative: Boolean(earlyExitRaw.cmf_negative ?? earlyExitRaw.cmfNegative ?? DEFAULT_CONFIG.exits.earlyExit.cmfNegative),
@@ -1129,6 +1196,37 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     if (trailImp != null) out.trailAfterRImpulse = trailImp;
     const trailAtr = normalizeOptionalNumber(value.trail_atr_mult ?? value.trailAtrMult);
     if (trailAtr != null) out.trailAtrMult = trailAtr;
+    const minStop = normalizeOptionalNumber(value.min_stop_atr_mult ?? value.minStopAtrMult);
+    if (minStop != null) out.minStopAtrMult = minStop;
+    const profitLockOverride = value.profit_lock ?? value.profitLock;
+    if (profitLockOverride && typeof profitLockOverride === 'object') {
+      const pl: NonNullable<QuantAIExitOverride['profitLock']> = {};
+      const minR = normalizeOptionalNumber(profitLockOverride.min_r_multiple ?? profitLockOverride.minRMultiple);
+      if (minR != null) pl.minRMultiple = minR;
+      if (profitLockOverride.allow_partial_before_min_r != null) {
+        pl.allowPartialBeforeMinR = Boolean(profitLockOverride.allow_partial_before_min_r);
+      } else if (profitLockOverride.allowPartialBeforeMinR != null) {
+        pl.allowPartialBeforeMinR = Boolean(profitLockOverride.allowPartialBeforeMinR);
+      }
+      const preLockTrail = normalizeOptionalNumber(
+        profitLockOverride.pre_lock_trail_multiplier ?? profitLockOverride.preLockTrailMultiplier,
+      );
+      if (preLockTrail != null) pl.preLockTrailMultiplier = preLockTrail;
+      if (Object.keys(pl).length) out.profitLock = pl;
+    }
+    const volatilityOverride = value.volatility_exit ?? value.volatilityExit;
+    if (volatilityOverride && typeof volatilityOverride === 'object') {
+      const vol: NonNullable<QuantAIExitOverride['volatilityExit']> = {};
+      const spike = normalizeOptionalNumber(
+        volatilityOverride.atr_pct_spike_threshold ?? volatilityOverride.atrPctSpikeThreshold,
+      );
+      if (spike != null) vol.atrPctSpikeThreshold = spike;
+      const widen = normalizeOptionalNumber(
+        volatilityOverride.widen_multiplier ?? volatilityOverride.widenMultiplier,
+      );
+      if (widen != null) vol.widenMultiplier = widen;
+      if (Object.keys(vol).length) out.volatilityExit = vol;
+    }
     const maxHold = normalizeOptionalNumber(value.max_holding_min ?? value.maxHoldingMin);
     if (maxHold != null) out.maxHoldingMin = maxHold;
     const reentry = normalizeOptionalNumber(value.reentry_cooldown_min ?? value.reentryCooldownMin);

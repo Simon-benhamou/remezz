@@ -5,6 +5,7 @@ process.env.UNIT_TEST_MODE = 'true';
 process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
+process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD = process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD ?? '0.72';
 
 const {
   evaluateRecognizedStrategies,
@@ -81,6 +82,13 @@ for (const signal of result) {
   assert(signal.meta?.pythonSignal, 'Python predictor signal should be attached to strategy meta');
   assert(signal.meta?.pythonSignal?.probability >= 0 && signal.meta?.pythonSignal?.probability <= 1,
     'Python signal probability must be normalized');
+  assert(signal.confidence >= 0 && signal.confidence <= 1, 'Signal confidence should be normalized');
+  assert(signal.qualityScore >= 0 && signal.qualityScore <= 100, 'Signal quality should be bounded');
+  assert.equal(typeof signal.confidenceGatePassed, 'boolean', 'Signal should include confidence gate flag');
+  assert(signal.entryEligibilityScore >= 0 && signal.entryEligibilityScore <= 1,
+    'Signal should expose entry eligibility between 0 and 1');
+  assert.equal(typeof signal.entryEligibilityGatePassed, 'boolean', 'Signal should expose entry eligibility gate flag');
+  assert(Array.isArray(signal.entryEligibilityReasons), 'Signal should provide entry eligibility reasons');
 }
 
 assert.equal(result.length, 4, 'Expected four strategy signals');
@@ -89,6 +97,10 @@ assert(selected, 'Primary strategy should include token metadata');
 const acceptable = new Set(['classic_trend_following', 'momentum_scanner_focus']);
 assert(acceptable.has(selected.id), 'Trending context should select a trend-aware family');
 assert.equal(selected.active, true, 'Trend strategy should be active');
+assert.equal(selected.confidenceGatePassed, true, 'Trend strategy should pass the confidence gate');
+assert(selected.blockedReason === null, 'Selected trade should not have a blocked reason');
+assert.equal(selected.entryEligibilityGatePassed, true, 'Trend strategy should pass entry eligibility gate');
+assert(selected.entryEligibilityReasons.length > 0, 'Trend strategy should include entry eligibility context');
 
 // Simulate a run of consecutive losses to trigger guardrail logic
 for (let i = 0; i < 12; i += 1) {

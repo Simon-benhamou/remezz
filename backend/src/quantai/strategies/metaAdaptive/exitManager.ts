@@ -56,7 +56,10 @@ export function computeInitialBracket(
     archetype === 'reversal'
       ? cfg.slAtrMultReversal ?? cfg.slAtrMult
       : cfg.slAtrMultImpulse ?? cfg.slAtrMult;
-  const risk = (slMultOverride ?? cfg.slAtrMult) * atr;
+  const baseRisk = (slMultOverride ?? cfg.slAtrMult) * atr;
+  const minRiskCandidate = (cfg.minStopAtrMult ?? 0) * atr;
+  const minRisk = Number.isFinite(minRiskCandidate) && minRiskCandidate > 0 ? minRiskCandidate : 0;
+  const risk = Math.max(baseRisk, minRisk, 1e-9);
   const stop =
     side === 'long'
       ? entryPrice - risk
@@ -73,6 +76,9 @@ type AdjustmentParams = {
   targets: number[];
   lastPrice: number;
   atr?: number | null;
+  entryAtr?: number | null;
+  entryAtrPct?: number | null;
+  initialStopDistance?: number | null;
   adx?: number | null;
   cmf?: number | null;
   cfg: QuantAIExitConfig;
@@ -88,6 +94,9 @@ export function maybeAdjustOrExit({
   targets,
   lastPrice,
   atr,
+  entryAtr,
+  entryAtrPct,
+  initialStopDistance,
   adx,
   cmf,
   cfg,
@@ -96,7 +105,12 @@ export function maybeAdjustOrExit({
   minutesOpen,
 }: AdjustmentParams): ExitDirective {
   const riskPerUnit = Math.abs(entryPrice - stop);
-  const direction = side === 'long' ? 1 : -1;
+  const baselineRisk = initialStopDistance != null && Number.isFinite(initialStopDistance) && initialStopDistance > 0
+    ? Number(initialStopDistance)
+    : riskPerUnit;
+  const baselineStop = side === 'long'
+    ? entryPrice - baselineRisk
+    : entryPrice + baselineRisk;
   const triggered = alreadyTriggeredTargets ?? new Set<number>();
   const trailAfterBase = cfg.trailAfterR;
   const trailAfter =
@@ -113,10 +127,37 @@ export function maybeAdjustOrExit({
   const atrPctContext = atr != null && Number.isFinite(atr) && atr > 0 && lastPrice > 0
     ? (atr / lastPrice) * 100
     : null;
-  const effectiveTrailMult = resolveTrailMultiplier(cfg, atrPctContext);
-  const percentTrail = trailingMode === 'percent'
+  const trailMultiplierBase = resolveTrailMultiplier(cfg, atrPctContext);
+  let percentTrail = trailingMode === 'percent'
     ? Math.max(0.05, trailingCfg?.percent ?? 0.35)
     : null;
+  const entryAtrPctBaseline = entryAtrPct != null && Number.isFinite(entryAtrPct)
+    ? Number(entryAtrPct)
+    : entryAtr != null && Number.isFinite(entryAtr) && entryPrice > 0
+      ? (entryAtr / entryPrice) * 100
+      : null;
+  const rNow = baselineRisk > 0 ? PositionSizer.rMultiple(entryPrice, baselineStop, lastPrice, side) : 0;
+  const profitLockCfg = cfg.profitLock ?? { minRMultiple: 1, allowPartialBeforeMinR: false };
+  const minRMultiple = Number.isFinite(profitLockCfg.minRMultiple) ? profitLockCfg.minRMultiple! : 1;
+  const allowPartialBeforeMinR = profitLockCfg.allowPartialBeforeMinR ?? false;
+  const profitLockArmed = rNow >= minRMultiple;
+  let activeTrailMultiplier = trailMultiplierBase;
+  let volatilitySpike = false;
+  if (cfg.volatilityExit && atrPctContext != null && entryAtrPctBaseline != null) {
+    const spike = atrPctContext - entryAtrPctBaseline;
+    if (spike >= cfg.volatilityExit.atrPctSpikeThreshold) {
+      const widen = cfg.volatilityExit.widenMultiplier ?? 1;
+      if (Number.isFinite(widen) && widen > 0) {
+        volatilitySpike = widen > 1;
+        if (trailingMode === 'percent' && percentTrail != null) {
+          percentTrail = Math.max(percentTrail * widen, percentTrail);
+        } else {
+          activeTrailMultiplier *= widen;
+        }
+      }
+    }
+  }
+  const effectiveTrailMultiplier = activeTrailMultiplier;
 
   // Take profit detection (first non-triggered target)
   for (let i = 0; i < targets.length; i += 1) {
@@ -124,31 +165,62 @@ export function maybeAdjustOrExit({
     const target = targets[i];
     const hit = side === 'long' ? lastPrice >= target : lastPrice <= target;
     if (hit) {
+      if (!holdSatisfied) {
+        return { action: 'hold', reason: 'min_hold_active' };
+      }
+      if (!profitLockArmed && !allowPartialBeforeMinR) {
+        return { action: 'hold', reason: 'profit_lock_pending' };
+      }
       return { action: 'take_partial', reason: `TP${i + 1} hit at ${target.toFixed(4)}`, tpHitIndex: i };
     }
   }
 
-  const rNow = riskPerUnit > 0 ? PositionSizer.rMultiple(entryPrice, stop, lastPrice, side) : 0;
-
-  if (holdSatisfied && rNow >= trailAfter) {
-    let desiredStop: number | null = null;
+  const computeTrailCandidate = (options: { multiplier?: number; percent?: number }): number | null => {
     if (trailingMode === 'percent' && percentTrail != null) {
-      const distance = lastPrice * (percentTrail / 100);
-      desiredStop = side === 'long'
+      const pct = options.percent ?? percentTrail;
+      const distance = lastPrice * (pct / 100);
+      return side === 'long'
         ? lastPrice - distance
         : lastPrice + distance;
-    } else if (atr && atr > 0) {
-      desiredStop = side === 'long'
-        ? lastPrice - effectiveTrailMult * atr
-        : lastPrice + effectiveTrailMult * atr;
     }
-    if (desiredStop != null) {
-      const newStop = side === 'long'
-        ? Math.max(stop, desiredStop)
-        : Math.min(stop, desiredStop);
-      if ((side === 'long' && newStop > stop) || (side === 'short' && newStop < stop)) {
-        return { action: 'move_sl', reason: `Trailing after ${rNow.toFixed(2)}R`, stop: newStop };
+    if (atr && atr > 0 && options.multiplier != null) {
+      return side === 'long'
+        ? lastPrice - options.multiplier * atr
+        : lastPrice + options.multiplier * atr;
+    }
+    return null;
+  };
+
+  const applyStopCandidate = (candidate: number | null, allowLoosen: boolean): number | null => {
+    if (candidate == null || !Number.isFinite(candidate)) return null;
+    if (allowLoosen && baselineRisk > 0) {
+      if (side === 'long') {
+        const widened = Math.min(stop, Math.max(candidate, baselineStop));
+        if (widened < stop - 1e-8) return widened;
+      } else {
+        const widened = Math.max(stop, Math.min(candidate, baselineStop));
+        if (widened > stop + 1e-8) return widened;
       }
+      return null;
+    }
+    const tightened = side === 'long'
+      ? Math.max(stop, candidate)
+      : Math.min(stop, candidate);
+    if ((side === 'long' && tightened > stop + 1e-8) || (side === 'short' && tightened < stop - 1e-8)) {
+      return tightened;
+    }
+    return null;
+  };
+
+  if (holdSatisfied && profitLockArmed && rNow >= trailAfter) {
+    const desiredStop = computeTrailCandidate({
+      multiplier: trailingMode === 'percent' ? undefined : effectiveTrailMultiplier,
+      percent: trailingMode === 'percent' ? percentTrail ?? undefined : undefined,
+    });
+    const allowLoosen = volatilitySpike && (cfg.volatilityExit?.widenMultiplier ?? 1) > 1;
+    const newStop = applyStopCandidate(desiredStop, allowLoosen);
+    if (newStop != null) {
+      return { action: 'move_sl', reason: `Trailing after ${rNow.toFixed(2)}R`, stop: newStop };
     }
   }
 
@@ -161,25 +233,14 @@ export function maybeAdjustOrExit({
     return { action: 'exit', reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure` };
   }
 
-  if (holdSatisfied && rNow >= tightenThreshold && momentumFail) {
-    let tightenStop: number | null = null;
-    if (trailingMode === 'percent' && percentTrail != null) {
-      const distance = lastPrice * (percentTrail / 100) * 0.5;
-      tightenStop = side === 'long'
-        ? lastPrice - distance
-        : lastPrice + distance;
-    } else if (atr && atr > 0) {
-      tightenStop = side === 'long'
-        ? lastPrice - 0.5 * effectiveTrailMult * atr
-        : lastPrice + 0.5 * effectiveTrailMult * atr;
-    }
-    if (tightenStop != null) {
-      const newStop = side === 'long'
-        ? Math.max(stop, tightenStop)
-        : Math.min(stop, tightenStop);
-      if ((side === 'long' && newStop > stop) || (side === 'short' && newStop < stop)) {
-        return { action: 'move_sl', reason: 'Tighten stop due to momentum failure', stop: newStop };
-      }
+  if (holdSatisfied && profitLockArmed && rNow >= tightenThreshold && momentumFail) {
+    const tightenStop = computeTrailCandidate({
+      multiplier: trailingMode === 'percent' ? undefined : 0.5 * effectiveTrailMultiplier,
+      percent: trailingMode === 'percent' && percentTrail != null ? percentTrail * 0.5 : undefined,
+    });
+    const newStop = applyStopCandidate(tightenStop, false);
+    if (newStop != null) {
+      return { action: 'move_sl', reason: 'Tighten stop due to momentum failure', stop: newStop };
     }
   }
 

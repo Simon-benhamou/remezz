@@ -5,6 +5,7 @@ import {
   evaluateRecognizedStrategies,
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
+  metaAdaptiveConfidenceThreshold,
 } from './recognizedStrategies.js';
 import { PreciseDecimal, metaAdaptiveStrategyAgent } from './metaAdaptiveAgent.js';
 
@@ -20,6 +21,9 @@ export type StrategyComparisonReport = {
       sharpe: number;
       maxDrawdownPct: number;
       trades: number;
+      confidenceGateThreshold: number;
+      confidenceGateBlockedSignalsPct: number;
+      confidenceGateBlockedPrimaryPct: number;
     };
     trades: MetaAdaptiveTradeLog[];
   };
@@ -34,6 +38,14 @@ export type MetaAdaptiveTradeLog = {
   exitPrice: PreciseDecimal;
   pnlPct: PreciseDecimal;
   cumulativePnlPct: PreciseDecimal;
+  confidence: number;
+  qualityScore: number;
+  confidenceGatePassed: boolean;
+  confidenceThreshold: number;
+  blockedReason: string | null;
+  entryEligibilityScore: number | null;
+  entryEligibilityGatePassed: boolean;
+  entryEligibilityReasons: string[];
 };
 
 const ONE = new PreciseDecimal('1');
@@ -149,7 +161,16 @@ function createMetaAdaptiveScenarios() {
 }
 
 async function runMetaAdaptiveComparison(): Promise<{
-  metrics: { totalReturnPct: number; cagr: number; sharpe: number; maxDrawdownPct: number; trades: number };
+  metrics: {
+    totalReturnPct: number;
+    cagr: number;
+    sharpe: number;
+    maxDrawdownPct: number;
+    trades: number;
+    confidenceGateThreshold: number;
+    confidenceGateBlockedSignalsPct: number;
+    confidenceGateBlockedPrimaryPct: number;
+  };
   trades: MetaAdaptiveTradeLog[];
 }> {
   process.env.UNIT_TEST_MODE = process.env.UNIT_TEST_MODE ?? 'true';
@@ -165,6 +186,10 @@ async function runMetaAdaptiveComparison(): Promise<{
   const returns: number[] = [];
   const tradeLogs: MetaAdaptiveTradeLog[] = [];
   let equity = ONE;
+  let evaluatedSignals = 0;
+  let blockedSignals = 0;
+  let primaryEvaluations = 0;
+  let primaryBlocked = 0;
 
   for (let i = 0; i < scenarios.length; i += 1) {
     const scenario = scenarios[i];
@@ -177,7 +202,63 @@ async function runMetaAdaptiveComparison(): Promise<{
       favorMeanReversion: scenario.snap.trendStrength < 0.6,
     });
 
+    evaluatedSignals += signals.length;
+    blockedSignals += signals.filter(signal => !signal.confidenceGatePassed).length;
+
     const primary = signals.find((signal) => signal.meta?.token) ?? signals[0] ?? null;
+    if (!primary) continue;
+    primaryEvaluations += 1;
+
+    const timestamp = 1_700_600_000_000 + i * 600_000;
+
+    if (!primary.confidenceGatePassed) {
+      primaryBlocked += 1;
+      const zero = new PreciseDecimal('0');
+      const cumulativePct = equity.minus(ONE).times(HUNDRED);
+      tradeLogs.push({
+        timestamp,
+        label: scenario.label,
+        side: primary.bias === 'short' ? 'short' : 'long',
+        quantity: zero,
+        entryPrice: zero,
+        exitPrice: zero,
+        pnlPct: zero,
+        cumulativePnlPct: cumulativePct,
+        confidence: Number(primary.confidence.toFixed(4)),
+        qualityScore: primary.qualityScore,
+        confidenceGatePassed: false,
+        confidenceThreshold: metaAdaptiveConfidenceThreshold,
+        blockedReason: primary.blockedReason ?? 'low_confidence',
+        entryEligibilityScore: primary.entryEligibilityScore ?? null,
+        entryEligibilityGatePassed: Boolean(primary.entryEligibilityGatePassed),
+        entryEligibilityReasons: primary.entryEligibilityReasons ?? [],
+      });
+      continue;
+    }
+    if (!primary.entryEligibilityGatePassed) {
+      primaryBlocked += 1;
+      const zero = new PreciseDecimal('0');
+      const cumulativePct = equity.minus(ONE).times(HUNDRED);
+      tradeLogs.push({
+        timestamp,
+        label: scenario.label,
+        side: primary.bias === 'short' ? 'short' : 'long',
+        quantity: zero,
+        entryPrice: zero,
+        exitPrice: zero,
+        pnlPct: zero,
+        cumulativePnlPct: cumulativePct,
+        confidence: Number(primary.confidence.toFixed(4)),
+        qualityScore: primary.qualityScore,
+        confidenceGatePassed: true,
+        confidenceThreshold: metaAdaptiveConfidenceThreshold,
+        blockedReason: primary.blockedReason ?? 'weak_entry_context',
+        entryEligibilityScore: primary.entryEligibilityScore ?? null,
+        entryEligibilityGatePassed: false,
+        entryEligibilityReasons: primary.entryEligibilityReasons ?? [],
+      });
+      continue;
+    }
 
     await registerAdaptiveTradeEntry({
       sessionId,
@@ -205,7 +286,7 @@ async function runMetaAdaptiveComparison(): Promise<{
     const exitPrice = entryPrice.times(exitMultiplier);
     const cumulativePct = equity.minus(ONE).times(HUNDRED);
     tradeLogs.push({
-      timestamp: 1_700_600_000_000 + i * 600_000,
+      timestamp,
       label: scenario.label,
       side: scenario.pnlPct.gt(0) ? 'long' : 'short',
       quantity,
@@ -213,6 +294,14 @@ async function runMetaAdaptiveComparison(): Promise<{
       exitPrice,
       pnlPct: scenario.pnlPct,
       cumulativePnlPct: cumulativePct,
+      confidence: Number(primary.confidence.toFixed(4)),
+      qualityScore: primary.qualityScore,
+      confidenceGatePassed: true,
+      confidenceThreshold: metaAdaptiveConfidenceThreshold,
+      blockedReason: null,
+      entryEligibilityScore: primary.entryEligibilityScore ?? null,
+      entryEligibilityGatePassed: true,
+      entryEligibilityReasons: primary.entryEligibilityReasons ?? [],
     });
   }
 
@@ -240,15 +329,33 @@ async function runMetaAdaptiveComparison(): Promise<{
     : 0;
   const stdev = Math.sqrt(variance);
   const sharpe = stdev === 0 ? 0 : meanReturn / stdev;
+  const blockedSignalsPct = evaluatedSignals > 0 ? (blockedSignals / evaluatedSignals) * 100 : 0;
+  const primaryBlockedPct = primaryEvaluations > 0 ? (primaryBlocked / primaryEvaluations) * 100 : 0;
 
-  if (!Number.isFinite(totalReturnPct) || !Number.isFinite(cagr) || !Number.isFinite(sharpe) || !Number.isFinite(maxDrawdownPct)) {
+  if (
+    !Number.isFinite(totalReturnPct)
+    || !Number.isFinite(cagr)
+    || !Number.isFinite(sharpe)
+    || !Number.isFinite(maxDrawdownPct)
+    || !Number.isFinite(blockedSignalsPct)
+    || !Number.isFinite(primaryBlockedPct)
+  ) {
     throw new Error('Meta-adaptive metrics must be finite');
   }
 
   metaAdaptiveStrategyAgent.reset(sessionId);
 
   return {
-    metrics: { totalReturnPct, cagr, sharpe, maxDrawdownPct, trades },
+    metrics: {
+      totalReturnPct,
+      cagr,
+      sharpe,
+      maxDrawdownPct,
+      trades,
+      confidenceGateThreshold: metaAdaptiveConfidenceThreshold,
+      confidenceGateBlockedSignalsPct: Number(blockedSignalsPct.toFixed(2)),
+      confidenceGateBlockedPrimaryPct: Number(primaryBlockedPct.toFixed(2)),
+    },
     trades: tradeLogs,
   };
 }

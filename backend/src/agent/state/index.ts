@@ -3893,6 +3893,9 @@ export class ReboundRejectionAgent {
       Math.abs(executionPrice - stop) || Math.abs(entry - stop) || Math.abs(this.plan.stopDistance));
     const entryFeeUsd = this.estimateFillFeeUsd(executionPrice, placed.filledQty, side);
     const entryFeePerUnit = placed.filledQty > 0 ? entryFeeUsd / placed.filledQty : 0;
+    const entryAtrValue = typeof this.plan?.atr === 'number' ? this.plan.atr : null;
+    const entryAtrPctValue = typeof this.plan?.atrPct === 'number' ? this.plan.atrPct : null;
+    const minHoldMs = Math.max(0, (exitConfigForPlaybook.earlyExit.minHoldMinutes ?? 0) * 60000);
 
     try {
       updateExecutionTelemetry(this.profile.symbol, {
@@ -3945,6 +3948,10 @@ export class ReboundRejectionAgent {
       accountSnapshot: sizingSnapshot,
       entryFeePerUnit,
       riskUsd: quantSizerResult.riskUsd,
+      entryAtr: entryAtrValue,
+      entryAtrPct: entryAtrPctValue,
+      minHoldExpiry: minHoldMs > 0 ? openedAt + minHoldMs : null,
+      minHoldMinutes: exitConfigForPlaybook.earlyExit.minHoldMinutes ?? 0,
     };
     const primaryStrategy = this.marketContext?.primaryStrategy ?? null;
     if (this.pos) {
@@ -10296,6 +10303,13 @@ export class ReboundRejectionAgent {
         riskUsd: Math.abs(entry - stop) * qty,
         archetype: restoredArchetype,
         entryFeePerUnit: qty > 0 ? this.estimateFillFeeUsd(entry, qty, side) / qty : 0,
+        entryAtr: this.plan?.atr ?? null,
+        entryAtrPct: this.plan?.atrPct ?? null,
+        minHoldMinutes: this.quantConfig.exits.earlyExit.minHoldMinutes ?? 0,
+        minHoldExpiry: (() => {
+          const minutes = this.quantConfig.exits.earlyExit.minHoldMinutes ?? 0;
+          return minutes > 0 ? openedAt + minutes * 60000 : null;
+        })(),
       };
 
       await this.ensureCapitalForRestoredPosition(this.pos);
@@ -10454,6 +10468,9 @@ export class ReboundRejectionAgent {
       targets,
       lastPrice: price,
       atr,
+      entryAtr: this.pos.entryAtr ?? this.plan?.atr ?? atr,
+      entryAtrPct: this.pos.entryAtrPct ?? this.plan?.atrPct ?? null,
+      initialStopDistance: this.pos.initialStopDistance ?? Math.abs(this.pos.entry - this.pos.stop),
       adx: typeof (snap as any)?.adx14 === 'number' ? Number((snap as any).adx14) : null,
       cmf: typeof (snap as any)?.cmf20 === 'number' ? Number((snap as any).cmf20) : null,
       cfg: this.resolveDynamicExitConfig(baseExitConfig),
@@ -10517,6 +10534,9 @@ export class ReboundRejectionAgent {
             clampMultiplier: base.trailingAdaptive.clampMultiplier ? { ...base.trailingAdaptive.clampMultiplier } : undefined,
           }
         : undefined,
+      minStopAtrMult: base.minStopAtrMult,
+      profitLock: base.profitLock ? { ...base.profitLock } : undefined,
+      volatilityExit: base.volatilityExit ? { ...base.volatilityExit } : undefined,
       strategyOverrides: base.strategyOverrides,
     };
 
@@ -10527,6 +10547,7 @@ export class ReboundRejectionAgent {
     if (override.trailAfterRReversal != null) next.trailAfterRReversal = override.trailAfterRReversal;
     if (override.trailAfterRImpulse != null) next.trailAfterRImpulse = override.trailAfterRImpulse;
     if (override.trailAtrMult != null) next.trailAtrMult = override.trailAtrMult;
+    if (override.minStopAtrMult != null) next.minStopAtrMult = override.minStopAtrMult;
     if (override.maxHoldingMin != null) next.maxHoldingMin = override.maxHoldingMin;
     if (override.reentryCooldownMin != null) next.reentryCooldownMin = override.reentryCooldownMin;
 
@@ -10567,6 +10588,35 @@ export class ReboundRejectionAgent {
       }
       next.trailingAdaptive = merged;
     }
+    if (override.profitLock) {
+      const source = override.profitLock;
+      const baseProfit = next.profitLock
+        ?? this.quantConfig.exits.profitLock
+        ?? {
+          minRMultiple: 1,
+          allowPartialBeforeMinR: false,
+          preLockTrailMultiplier: undefined,
+        };
+      next.profitLock = {
+        ...baseProfit,
+        ...(source.minRMultiple != null ? { minRMultiple: source.minRMultiple } : {}),
+        ...(source.allowPartialBeforeMinR != null ? { allowPartialBeforeMinR: source.allowPartialBeforeMinR } : {}),
+        ...(source.preLockTrailMultiplier != null ? { preLockTrailMultiplier: source.preLockTrailMultiplier } : {}),
+      };
+    }
+    if (override.volatilityExit) {
+      const sourceVol = override.volatilityExit;
+      const fallbackVol = this.quantConfig.exits.volatilityExit ?? {
+        atrPctSpikeThreshold: 0.35,
+        widenMultiplier: 1.0,
+      };
+      const currentVol = next.volatilityExit ?? fallbackVol;
+      next.volatilityExit = {
+        ...currentVol,
+        ...(sourceVol.atrPctSpikeThreshold != null ? { atrPctSpikeThreshold: sourceVol.atrPctSpikeThreshold } : {}),
+        ...(sourceVol.widenMultiplier != null ? { widenMultiplier: sourceVol.widenMultiplier } : {}),
+      };
+    }
 
     return next;
   }
@@ -10587,6 +10637,8 @@ export class ReboundRejectionAgent {
     const dynamicCfg = {
       ...baseCfg,
       earlyExit: { ...baseCfg.earlyExit },
+      profitLock: baseCfg.profitLock ? { ...baseCfg.profitLock } : undefined,
+      volatilityExit: baseCfg.volatilityExit ? { ...baseCfg.volatilityExit } : undefined,
     };
 
     if (context.regime === 'trend_following') {

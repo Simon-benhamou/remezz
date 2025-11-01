@@ -5,6 +5,7 @@ process.env.UNIT_TEST_MODE = 'true';
 process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
+process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD = process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD ?? '0.72';
 
 const { registerAdaptiveTradeEntry, registerAdaptiveTradeOutcome } = await import('../../dist/src/quantai/strategies/metaAdaptive/recognizedStrategies.js');
 const { metaAdaptiveStrategyAgent } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
@@ -19,6 +20,12 @@ const recognizedSignal = {
   label: 'Trend',
   bias: 'long',
   confidence: 0.82,
+  qualityScore: 84.2,
+  confidenceGatePassed: true,
+  blockedReason: null,
+  entryEligibilityScore: 0.91,
+  entryEligibilityGatePassed: true,
+  entryEligibilityReasons: ['mtf=pass(3/3)', 'adx=pass(32.0>=18)', 'atr=pass(1.20>=0.80)', 'flow=pass(cmf=0.25,vol=1.40)'],
   active: true,
   reasons: ['test'],
   metrics: {},
@@ -46,6 +53,9 @@ const recognizedSignal = {
       cooldown: { active: false, reason: null, seconds: null },
       meta: { source: 'test' },
     },
+    entryEligibilityScore: 0.91,
+    entryEligibilityGatePassed: true,
+    entryEligibilityReasons: ['mtf=pass(3/3)', 'adx=pass(32.0>=18)', 'atr=pass(1.20>=0.80)', 'flow=pass(cmf=0.25,vol=1.40)'],
   },
 };
 

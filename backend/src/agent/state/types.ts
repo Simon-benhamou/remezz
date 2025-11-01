@@ -94,6 +94,10 @@ export type ActivePosition = {
   partialInfo?: { ts: number; price: number } | null;
   initialStopDistance?: number;
   riskUsd?: number;
+  entryAtr?: number | null;
+  entryAtrPct?: number | null;
+  minHoldExpiry?: number | null;
+  minHoldMinutes?: number;
   hitTargets?: number[];
   archetype?: ExitArchetype;
   tp1Fraction?: number;

@@ -5,6 +5,7 @@ process.env.UNIT_TEST_MODE = 'true';
 process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
+process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD = process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD ?? '0.72';
 
 const {
   evaluateRecognizedStrategies,
@@ -12,6 +13,7 @@ const {
   registerAdaptiveTradeOutcome,
 } = await import('../../dist/src/quantai/strategies/metaAdaptive/recognizedStrategies.js');
 const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
+const { getQuantAIConfig, computeInitialBracket, maybeAdjustOrExit } = await import('../../dist/src/quantai/index.js');
 
 const sessionId = 'meta-backtest-session';
 
@@ -78,11 +80,50 @@ const scenarios = [
   { label: 'momentum', snap: buildSnapshot({ adx14: 34, trendStrength: 1.1, cmf20: 0.45, volume: 1_500_000 }) , pnlPct: decimal('4.6') },
   { label: 'mean-loss', snap: buildSnapshot({ adx14: 8, rsi14: 35, srBias: 'nearSupport', emaBias: 0.0005 }) , pnlPct: decimal('-0.9') },
   { label: 'trend-loss', snap: buildSnapshot({ adx14: 22, trendStrength: 0.4, cmf20: -0.05, emaBias: -0.003 }) , pnlPct: decimal('-1.4') },
+  {
+    label: 'trend-entry-strong',
+    snap: buildSnapshot({
+      adx14: 32,
+      trendStrength: 1.05,
+      cmf20: 0.36,
+      volume: 2_200_000,
+      volumeMA: 900_000,
+      atrPct: 1.45,
+      bias4h: 'bullish',
+      bias1h: 'bullish',
+      bias15m: 'bullish',
+    }),
+    pnlPct: decimal('3.8'),
+    expectEntryGate: 'pass',
+    expectEntryReasons: ['mtf=pass', 'adx=pass', 'atr=pass', 'flow=pass'],
+  },
+  {
+    label: 'range-entry-weak',
+    snap: buildSnapshot({
+      adx14: 11,
+      trendStrength: 0.28,
+      cmf20: -0.02,
+      volume: 420_000,
+      volumeMA: 680_000,
+      atrPct: 0.38,
+      bias4h: 'neutral',
+      bias1h: 'bearish',
+      bias15m: 'neutral',
+      srBias: 'nearResistance',
+    }),
+    pnlPct: decimal('0.0'),
+    expectEntryGate: 'blocked',
+    expectEntryReasons: ['mtf', 'adx=fail', 'atr=fail', 'flow=fail'],
+  },
 ];
 
 let equity = decimal('1');
 let peak = equity;
 const returns = [];
+let blockedScenarios = 0;
+let evaluatedSignals = 0;
+let blockedSignals = 0;
+let blockedEntrySignals = 0;
 
 for (const scenario of scenarios) {
   const signals = evaluateRecognizedStrategies(scenario.snap, {
@@ -94,7 +135,48 @@ for (const scenario of scenarios) {
     favorMeanReversion: scenario.label.startsWith('mean'),
   });
 
+  evaluatedSignals += signals.length;
+  blockedSignals += signals.filter(signal => !signal.confidenceGatePassed).length;
+  blockedEntrySignals += signals.filter(signal => !signal.entryEligibilityGatePassed).length;
+
+  for (const signal of signals) {
+    assert(signal.confidence >= 0 && signal.confidence <= 1, 'Confidence must be normalized');
+    assert(signal.qualityScore >= 0 && signal.qualityScore <= 100, 'Quality score must be within 0-100');
+    assert.equal(typeof signal.confidenceGatePassed, 'boolean', 'Confidence gate flag must be provided');
+    assert(signal.blockedReason === null || typeof signal.blockedReason === 'string', 'Blocked reason must be null or a string');
+    assert(signal.entryEligibilityScore >= 0 && signal.entryEligibilityScore <= 1, 'Entry eligibility must be normalized between 0-1');
+    assert.equal(typeof signal.entryEligibilityGatePassed, 'boolean', 'Entry eligibility gate flag must be provided');
+    assert(Array.isArray(signal.entryEligibilityReasons), 'Entry eligibility reasons must be provided');
+  }
+
   const primary = signals.find(signal => signal.meta?.token) ?? signals[0];
+  if (!primary) continue;
+
+  if (scenario.expectEntryGate === 'blocked') {
+    assert.equal(primary.entryEligibilityGatePassed, false, `${scenario.label} should be blocked by entry eligibility`);
+    assert(primary.blockedReason?.includes('weak_entry_context'), 'Blocked scenario should include weak_entry_context');
+    for (const expected of scenario.expectEntryReasons ?? []) {
+      assert(primary.entryEligibilityReasons.some(reason => reason.includes(expected)),
+        `Entry eligibility reasons should mention ${expected}`);
+    }
+  } else if (scenario.expectEntryGate === 'pass') {
+    assert.equal(primary.entryEligibilityGatePassed, true, `${scenario.label} should pass entry eligibility`);
+    for (const expected of scenario.expectEntryReasons ?? []) {
+      assert(primary.entryEligibilityReasons.some(reason => reason.includes(expected)),
+        `Entry eligibility reasons should mention ${expected}`);
+    }
+  }
+
+  if (!primary.confidenceGatePassed) {
+    blockedScenarios += 1;
+    assert(primary.blockedReason?.includes('low_confidence'), 'Blocked trades should annotate low_confidence reason');
+    continue;
+  }
+  if (!primary.entryEligibilityGatePassed) {
+    blockedScenarios += 1;
+    assert(primary.blockedReason?.includes('weak_entry_context'), 'Blocked trades should annotate weak_entry_context reason');
+    continue;
+  }
 
   await registerAdaptiveTradeEntry({
     sessionId,
@@ -123,9 +205,10 @@ for (const scenario of scenarios) {
 
 const trades = returns.length;
 assert(trades > 0, 'Smoke backtest should create trades');
+assert(blockedScenarios >= 1, 'At least one scenario should be blocked by gating logic');
 
 const finalEquity = equity.toNumber();
-const cagrPerTrade = Math.pow(finalEquity, 1 / trades) - 1;
+const cagrPerTrade = trades > 0 ? Math.pow(finalEquity, 1 / trades) - 1 : 0;
 
 let runningPeak = equity.toNumber();
 let maxDrawdown = 0;
@@ -137,18 +220,130 @@ for (const r of returns) {
   if (dd > maxDrawdown) maxDrawdown = dd;
 }
 
-const meanReturn = returns.reduce((sum, r) => sum + r, 0) / trades;
-const variance = returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / trades;
+const meanReturn = trades > 0 ? returns.reduce((sum, r) => sum + r, 0) / trades : 0;
+const variance = trades > 1
+  ? returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / trades
+  : 0;
 const stdev = Math.sqrt(variance);
-const sharpe = stdev === 0 ? Infinity : meanReturn / stdev;
+const sharpe = stdev === 0 ? 0 : meanReturn / stdev;
+
+const blockedSignalPct = evaluatedSignals > 0 ? (blockedSignals / evaluatedSignals) * 100 : 0;
+const blockedScenarioPct = scenarios.length > 0 ? (blockedScenarios / scenarios.length) * 100 : 0;
+const blockedEntryPct = evaluatedSignals > 0 ? (blockedEntrySignals / evaluatedSignals) * 100 : 0;
+
+const quantExitCfg = getQuantAIConfig().exits;
+const testExitCfg = {
+  ...quantExitCfg,
+  earlyExit: {
+    ...quantExitCfg.earlyExit,
+    minHoldMinutes: Math.max(quantExitCfg.earlyExit.minHoldMinutes ?? 0, 15),
+  },
+};
+const bracket = computeInitialBracket(100, 1.0, 'long', testExitCfg, 'impulse');
+const expectedMinimumStop = (testExitCfg.minStopAtrMult ?? 0) * 1.0;
+assert(
+  bracket.riskPerUnit >= expectedMinimumStop - 1e-8,
+  'Initial stop distance should respect configured ATR floor',
+);
+
+const minHoldMinutesCfg = testExitCfg.earlyExit.minHoldMinutes ?? 0;
+const preHoldDirective = maybeAdjustOrExit({
+  side: 'long',
+  entryPrice: 100,
+  stop: 100 - bracket.riskPerUnit,
+  targets: bracket.targets,
+  lastPrice: (bracket.targets[0] ?? 100) + 0.01,
+  atr: 1.0,
+  entryAtr: 1.0,
+  entryAtrPct: 1.0,
+  initialStopDistance: bracket.riskPerUnit,
+  adx: 24,
+  cmf: 0.2,
+  cfg: testExitCfg,
+  alreadyTriggeredTargets: new Set(),
+  minutesOpen: Math.max(0.1, minHoldMinutesCfg / 2),
+});
+assert.equal(preHoldDirective.action, 'hold', 'Directive should hold prior to min-hold window');
+assert.equal(preHoldDirective.reason, 'min_hold_active', 'Hold reason should reference min-hold guard');
+
+const postHoldDirective = maybeAdjustOrExit({
+  side: 'long',
+  entryPrice: 100,
+  stop: 100 - bracket.riskPerUnit,
+  targets: bracket.targets,
+  lastPrice: (bracket.targets[0] ?? 100) + 0.02,
+  atr: 1.0,
+  entryAtr: 1.0,
+  entryAtrPct: 1.0,
+  initialStopDistance: bracket.riskPerUnit,
+  adx: 26,
+  cmf: 0.3,
+  cfg: testExitCfg,
+  alreadyTriggeredTargets: new Set(),
+  minutesOpen: minHoldMinutesCfg + 1,
+});
+assert.equal(postHoldDirective.action, 'take_partial', 'Partial takes should trigger after min hold elapses');
+
+const trailRMultiple = Math.max(testExitCfg.trailAfterR ?? 1.2, 1.35);
+const initialStopPrice = 100 - bracket.riskPerUnit;
+
+const baseTrailDirective = maybeAdjustOrExit({
+  side: 'long',
+  entryPrice: 100,
+  stop: initialStopPrice,
+  targets: bracket.targets,
+  lastPrice: 100 + trailRMultiple * bracket.riskPerUnit,
+  atr: 1.0,
+  entryAtr: 1.0,
+  entryAtrPct: 1.0,
+  initialStopDistance: bracket.riskPerUnit,
+  adx: 28,
+  cmf: 0.25,
+  cfg: testExitCfg,
+  alreadyTriggeredTargets: new Set([0]),
+  minutesOpen: minHoldMinutesCfg + 5,
+});
+const tightenedStopPrice = baseTrailDirective.action === 'move_sl' && typeof baseTrailDirective.stop === 'number'
+  ? baseTrailDirective.stop
+  : initialStopPrice;
+
+const volatileTrailDirective = maybeAdjustOrExit({
+  side: 'long',
+  entryPrice: 100,
+  stop: tightenedStopPrice,
+  targets: bracket.targets,
+  lastPrice: 100 + trailRMultiple * bracket.riskPerUnit,
+  atr: 1.7,
+  entryAtr: 1.0,
+  entryAtrPct: 1.0,
+  initialStopDistance: bracket.riskPerUnit,
+  adx: 28,
+  cmf: 0.25,
+  cfg: testExitCfg,
+  alreadyTriggeredTargets: new Set([0]),
+  minutesOpen: minHoldMinutesCfg + 5,
+});
+if (baseTrailDirective.action === 'move_sl' && volatileTrailDirective.action === 'move_sl') {
+  assert(
+    volatileTrailDirective.stop < baseTrailDirective.stop,
+    'Volatility spike should widen trailing stop distance',
+  );
+} else {
+  assert.fail('Expected trailing adjustments to be issued in volatility check');
+}
 
 console.log('📈 Smoke backtest metrics');
 console.log(`CAGR per trade: ${(cagrPerTrade * 100).toFixed(2)}%`);
 console.log(`Max drawdown: ${(maxDrawdown * 100).toFixed(2)}%`);
 console.log(`Sharpe-like: ${sharpe.toFixed(2)}`);
+console.log(`Confidence gate blocked ${blockedSignalPct.toFixed(2)}% of signals / ${blockedScenarioPct.toFixed(2)}% of primary selections`);
+console.log(`Entry eligibility gate blocked ${blockedEntryPct.toFixed(2)}% of signals`);
 
 assert(Number.isFinite(cagrPerTrade), 'CAGR must be finite');
 assert(Number.isFinite(maxDrawdown), 'Max drawdown must be finite');
 assert(Number.isFinite(sharpe), 'Sharpe must be finite');
+assert(Number.isFinite(blockedSignalPct), 'Blocked signal percentage must be finite');
+assert(Number.isFinite(blockedScenarioPct), 'Blocked scenario percentage must be finite');
+assert(Number.isFinite(blockedEntryPct), 'Entry eligibility percentage must be finite');
 
 console.log('✅ meta-adaptive smoke backtest passed');
