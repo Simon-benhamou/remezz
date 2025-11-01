@@ -351,6 +351,9 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   const strategyHealth = new StrategyHealth({ window: 20, minTradesForGuard: 6, refreshCooldownMs: 20 * 60 * 1000 });
   let healthCooldownUntil = 0;
   let healthSnapshot = strategyHealth.snapshot();
+  const unitTestMode = process.env.UNIT_TEST_MODE === 'true';
+  let lastRiskLogSignature: string | null = null;
+  let lastGuardLogSignature: string | null = null;
 
   for (let i = DEFAULT_MIN_HISTORY; i < candles.length; i += 1) {
     const candle = candles[i];
@@ -436,10 +439,21 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
           const cooldownEnd = guard.cooldownMs ? candle.timestamp + guard.cooldownMs : candle.timestamp;
           healthCooldownUntil = Math.max(healthCooldownUntil, cooldownEnd);
           if (healthSnapshot.guardrailChanged) {
-            console.log(`[StrategyHealth] cooldown applied (${guard.reason}) for ${(guard.cooldownMs ?? 0) / 60000} minutes`);
+            const guardSignature = `${guard.reason}:${Math.round(guard.cooldownMs ?? 0)}`;
+            const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
+            const expectancyStr = healthSnapshot.expectancy.toFixed(4);
+            if (!unitTestMode || guardSignature !== lastGuardLogSignature) {
+              console.log(`[StrategyHealth] cooldown applied (${guard.reason}) for ${(guard.cooldownMs ?? 0) / 60000} minutes (winrate20=${winratePct}%, exp20=${expectancyStr})`);
+            }
+            lastGuardLogSignature = guardSignature;
           }
         } else if (healthSnapshot.guardrailChanged) {
-          console.log('[StrategyHealth] cooldown cleared');
+          if (!unitTestMode || lastGuardLogSignature !== 'cleared') {
+            const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
+            const expectancyStr = healthSnapshot.expectancy.toFixed(4);
+            console.log(`[StrategyHealth] cooldown cleared (winrate20=${winratePct}%, exp20=${expectancyStr})`);
+          }
+          lastGuardLogSignature = 'cleared';
         }
 
         const holdMs = Math.max(0, candle.timestamp - position.openedAt);
@@ -568,7 +582,13 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
 
     if (Math.abs(healthRiskMultiplier - 1) > 1e-3 && healthSnapshot.riskMultiplierChanged) {
       const reason = healthSnapshot.riskMultiplierReason ?? 'adjustment';
-      console.log(`risk scaled by StrategyHealth x${healthRiskMultiplier.toFixed(2)} (reason=${reason})`);
+      const signature = `${reason}:${healthRiskMultiplier.toFixed(4)}`;
+      const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
+      const expectancyStr = healthSnapshot.expectancy.toFixed(4);
+      if (!unitTestMode || signature !== lastRiskLogSignature) {
+        console.log(`risk scaled by StrategyHealth x${healthRiskMultiplier.toFixed(2)} (reason=${reason}, winrate20=${winratePct}%, exp20=${expectancyStr})`);
+      }
+      lastRiskLogSignature = signature;
       healthSnapshot = { ...healthSnapshot, riskMultiplierChanged: false };
     }
 
@@ -722,11 +742,12 @@ function buildWalkForward(candles: Candle[], options: MetaAdaptiveBacktestOption
   });
 }
 
-export function buildMetaAdaptiveSyntheticCandles(): Candle[] {
+export function buildMetaAdaptiveSyntheticCandles(opts?: { minutes?: number }): Candle[] {
   const candles: Candle[] = [];
 
   let price = 1_900;
-  for (let i = 0; i < 1_000; i += 1) {
+  const minutes = Math.max(1, Math.floor(opts?.minutes ?? 60 * 24 * 10));
+  for (let i = 0; i < minutes; i += 1) {
     const timestamp = 1_700_700_000_000 + i * 60_000;
     const drift = Math.sin(i / 96) * 0.18 + Math.sin(i * 0.37) * 0.04;
     price = Math.max(50, price * (1 + drift * 0.0015));
@@ -744,6 +765,7 @@ export function buildMetaAdaptiveSyntheticCandles(): Candle[] {
   }
 
   const injectTrend = (start: number, length: number, pct: number, volumeBoost: number) => {
+    if (start >= candles.length) return;
     let localPrice = candles[start]?.close ?? price;
     for (let i = start; i < Math.min(candles.length, start + length); i += 1) {
       localPrice *= 1 + pct / 100;

@@ -141,7 +141,7 @@ export class StrategyHealth {
     const lowWinrateTrigger = trades >= this.minTradesForGuard && winRate < 0.35;
     const lowExpectancyTrigger = trades >= this.minTradesForGuard && expectancy <= 0;
     if (this.lowPerformanceActive) {
-      if (winRate > 0.42 && expectancy > 0) {
+      if (winRate > 0.45 && expectancy > 0) {
         this.lowPerformanceActive = false;
       }
     }
@@ -215,7 +215,7 @@ export class StrategyHealth {
         };
       }
     } else if (this.activeGuard) {
-      if (now >= this.activeGuard.activeUntil || (winRate > 0.42 && expectancy > 0)) {
+      if (now >= this.activeGuard.activeUntil || (winRate > 0.45 && expectancy > 0)) {
         guardrailChanged = true;
         this.activeGuard = null;
       } else {

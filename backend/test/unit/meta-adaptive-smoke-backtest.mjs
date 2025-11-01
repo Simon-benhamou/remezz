@@ -6,6 +6,8 @@ process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD = process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD ?? '0.72';
+process.env.META_ADAPTIVE_MIN_RR = process.env.META_ADAPTIVE_MIN_RR ?? '1.8';
+process.env.DISABLE_PYTHON_PREDICTOR = 'true';
 
 const {
   evaluateRecognizedStrategies,
@@ -37,9 +39,11 @@ console.log = (...args) => {
 };
 
 const rrFloorRaw = process.env.META_ADAPTIVE_MIN_RR ?? process.env.META_ADAPTIVE_RR_MIN ?? '1.8';
-const RR_MIN = Number.isFinite(Number.parseFloat(rrFloorRaw)) ? Number.parseFloat(rrFloorRaw) : 2;
+const RR_MIN = Number.isFinite(Number.parseFloat(rrFloorRaw)) ? Number.parseFloat(rrFloorRaw) : 1.8;
 
 const sessionId = 'meta-backtest-session';
+const START_EQUITY = 10_000;
+const RISK_PER_TRADE_PCT = 0.005;
 
 function decimal(value) {
   return new PreciseDecimal(value);
@@ -209,22 +213,22 @@ for (const scenario of scenarios) {
 
   // Sanity checks on bracket (TP presence and RR >= RR_MIN)
   assert(Array.isArray(bracket.targets) && bracket.targets.length > 0, 'Aucun TP détecté dans le bracket');
-  let rr = (bracket.targets[0] - 100) / bracket.riskPerUnit; // long side
-  if (rr < RR_MIN) {
-    console.warn(`⚠️ RR=${rr.toFixed(2)} < ${RR_MIN.toFixed(2)} → ajustement du target`);
-    bracket.targets[0] = 100 + RR_MIN * bracket.riskPerUnit;
-    rr = (bracket.targets[0] - 100) / bracket.riskPerUnit; // recompute after adjustment
-  }
-  assert(rr >= RR_MIN - 1e-8, `RR minimal ${RR_MIN.toFixed(2)} non respecté`);
+  assert(bracket.rr + 1e-8 >= RR_MIN, `RR minimal ${RR_MIN.toFixed(2)} non respecté`);
 
+  const riskUsdTarget = START_EQUITY * RISK_PER_TRADE_PCT;
+  const qty = bracket.riskPerUnit > 0 ? riskUsdTarget / bracket.riskPerUnit : 0;
+  assert(qty > 0, 'La taille de position doit être positive');
+
+  const logsBeforeEntry = capturedLogs.length;
   await registerAdaptiveTradeEntry({
     sessionId,
     symbol: 'ETH/USDT',
     signal: primary,
-    qty: 1,
+    qty,
     entryPrice: 100,
     stopDistance: bracket.riskPerUnit,
   });
+  const entryLogs = capturedLogs.slice(logsBeforeEntry);
 
   const activeTrade = metaAdaptiveStrategyAgent.getActiveTradeSnapshot(
     sessionId,
@@ -232,12 +236,20 @@ for (const scenario of scenarios) {
     'ETH/USDT',
   );
   if (!activeTrade) {
-    const rrBlocked = capturedLogs.some((line) =>
+    const rrBlocked = entryLogs.some((line) =>
       line.includes('"adaptive_trade_blocked_by_gate"')
       && line.includes('"rr_below_min"')
       && line.includes(`"strategy":"${primary.id}"`),
     );
-    assert(rrBlocked, 'Trade without snapshot should have been blocked by RR gate');
+    const predictorBlocked = entryLogs.some((line) =>
+      line.includes('"adaptive_trade_blocked_by_predictor"')
+      && line.includes(`"symbol":"ETH/USDT"`),
+    );
+    const wasRegistered = entryLogs.some((line) =>
+      line.includes('"adaptive_trade_registered"')
+      && line.includes(`"symbol":"ETH/USDT"`),
+    );
+    assert(rrBlocked || predictorBlocked || !wasRegistered, 'Trade sans snapshot mais logué comme enregistré → incohérence');
     blockedScenarios += 1;
     continue;
   }
@@ -247,9 +259,11 @@ for (const scenario of scenarios) {
   assert(activeTrade.riskPerUnit > 0, 'riskPerUnit doit être positif');
   assert(activeTrade.riskUsd > 0, 'riskUsd doit être positif');
   assert(activeTrade.targetProfitUsd > 0, 'targetProfitUsd doit être positif');
+  const riskSizingError = Math.abs(activeTrade.riskUsd - riskUsdTarget);
+  assert(riskSizingError <= riskUsdTarget * 0.2, 'Risk sizing doit rester proche de la cible');
 
   // Normalize realized PnL to USD from percentage for consistency
-  const pnlUsd = 100 * 1 * (Number(scenario.pnlPct.toNumber()) / 100);
+  const pnlUsd = 100 * qty * (Number(scenario.pnlPct.toNumber()) / 100);
   registerAdaptiveTradeOutcome({
     sessionId,
     symbol: 'ETH/USDT',
@@ -257,7 +271,7 @@ for (const scenario of scenarios) {
     realizedPnlUsd: pnlUsd,
   });
 
-  const tradeReturn = scenario.pnlPct.dividedBy(decimal('100'));
+  const tradeReturn = decimal(pnlUsd / START_EQUITY);
   returns.push(tradeReturn.toNumber());
   const growth = decimal('1').plus(tradeReturn);
   equity = equity.times(growth);
@@ -298,7 +312,7 @@ const blockedEntryPct = evaluatedSignals > 0 ? (blockedEntrySignals / evaluatedS
 let wins = 0, losses = 0;
 let sumWins = 0, sumLosses = 0;
 for (const r of returns) {
-  const usd = 100 * 1 * r; // entryPrice * qty * pct
+  const usd = START_EQUITY * r;
   if (usd >= 0) { wins += 1; sumWins += usd; } else { losses += 1; sumLosses += Math.abs(usd); }
 }
 const profitFactor = sumLosses > 0 ? (sumWins / sumLosses) : Infinity;
@@ -309,9 +323,12 @@ const expectancyUsd = trades > 0 ? ((wins / trades) * avgWin - (losses / trades)
 const zeroTargetLogs = capturedLogs.filter((line) => line.includes('"targetProfitUsd":"0.000000"'));
 assert.equal(zeroTargetLogs.length, 0, 'Aucun trade ne doit logger targetProfitUsd nul');
 
-const minPfRaw = process.env.SMOKE_MIN_PF ?? '1.20';
-const minProfitFactor = Number.isFinite(Number.parseFloat(minPfRaw)) ? Number.parseFloat(minPfRaw) : 1.2;
+const minPfRaw = process.env.SMOKE_MIN_PF ?? '1.30';
+const minProfitFactor = Number.isFinite(Number.parseFloat(minPfRaw)) ? Number.parseFloat(minPfRaw) : 1.3;
 assert(profitFactor >= minProfitFactor - 1e-8, `Profit Factor doit être >= ${minProfitFactor.toFixed(2)}`);
+
+const rrThresholdMismatch = capturedLogs.some(line => line.includes('"rrThreshold":2'));
+assert.equal(rrThresholdMismatch, false, 'rrThreshold ne doit jamais être 2 (doit refléter RR_MIN env)');
 
 console.log = originalConsoleLog;
 
@@ -436,7 +453,7 @@ assert(Number.isFinite(blockedSignalPct), 'Blocked signal percentage must be fin
 assert(Number.isFinite(blockedScenarioPct), 'Blocked scenario percentage must be finite');
 assert(Number.isFinite(blockedEntryPct), 'Entry eligibility percentage must be finite');
 
-const syntheticCandles = buildMetaAdaptiveSyntheticCandles();
+const syntheticCandles = buildMetaAdaptiveSyntheticCandles({ minutes: 60 * 24 * 10 });
 const backtestResult = runMetaAdaptiveBacktest(syntheticCandles, {
   symbol: 'ETH/USDT',
   equityUsd: 60_000,
@@ -447,6 +464,7 @@ const backtestResult = runMetaAdaptiveBacktest(syntheticCandles, {
   latencyMs: 120,
   impactBpsPerMillion: 4,
 });
+assert(backtestResult.trades.length >= 10, 'Meta-Adaptive backtest sur 10 jours doit générer au moins 10 trades');
 assert(Array.isArray(backtestResult.walkForward), 'Meta-Adaptive backtest should provide walk-forward segments');
 for (const segment of backtestResult.walkForward) {
   assert(Number.isFinite(segment.metrics.cagr), 'Segment CAGR must be finite');

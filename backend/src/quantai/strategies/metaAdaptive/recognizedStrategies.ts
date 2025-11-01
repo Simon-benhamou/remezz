@@ -142,6 +142,14 @@ const CONFIDENCE_THRESHOLD = parseConfidenceThreshold();
 export const metaAdaptiveConfidenceThreshold = CONFIDENCE_THRESHOLD;
 
 const ENTRY_ELIGIBILITY_THRESHOLD = 0.58;
+const RR_FLOOR_RAW = process.env.META_ADAPTIVE_MIN_RR
+  ?? process.env.META_ADAPTIVE_RR_MIN
+  ?? '1.8';
+function parseRrFloor(): number {
+  const parsed = Number.parseFloat(RR_FLOOR_RAW);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.8;
+}
+const RR_MIN = parseRrFloor();
 
 type EntryEligibilityBreakdown = {
   score: number;
@@ -590,10 +598,6 @@ export async function registerAdaptiveTradeEntry(params: {
   const reentryCooldown = exitCfgBase.reentryCooldownMin ?? 0;
   metaAdaptiveStrategyAgent.setReentryCooldownMinutes(reentryCooldown);
 
-  const rrThresholdRaw = process.env.META_ADAPTIVE_MIN_RR ?? process.env.META_ADAPTIVE_RR_MIN ?? '1.8';
-  const rrThreshold = Number.parseFloat(rrThresholdRaw);
-  const minRr = Number.isFinite(rrThreshold) && rrThreshold > 0 ? rrThreshold : 2;
-
   const side: 'long' | 'short' = params.signal.bias === 'short' ? 'short' : 'long';
   const entryAtrFromMeta = Number(params.signal.meta.entryAtr ?? Number.NaN);
   const entryAtrPct = Number(params.signal.meta.entryAtrPct ?? Number.NaN);
@@ -621,17 +625,18 @@ export async function registerAdaptiveTradeEntry(params: {
   if (metaMultipliers.length) {
     exitCfg = { ...exitCfgBase, tpRMultiples: metaMultipliers };
   } else if (!exitCfg.tpRMultiples.length) {
-    exitCfg = { ...exitCfgBase, tpRMultiples: [minRr] };
+    exitCfg = { ...exitCfgBase, tpRMultiples: [RR_MIN] };
   }
-  const tpMultipliers = exitCfg.tpRMultiples.length ? exitCfg.tpRMultiples.slice() : [minRr];
-  if (tpMultipliers[0] < minRr) {
-    tpMultipliers[0] = minRr;
+  const tpMultipliers = exitCfg.tpRMultiples.length ? exitCfg.tpRMultiples.slice() : [RR_MIN];
+  if (tpMultipliers[0] < RR_MIN) {
+    tpMultipliers[0] = RR_MIN;
   }
   exitCfg = { ...exitCfg, tpRMultiples: tpMultipliers };
 
   const direction = side === 'short' ? -1 : 1;
   let stopDistance = Math.max(1e-6, Math.abs(params.stopDistance));
   let targets: number[] = [];
+  let rr = 0;
   try {
     const bracket = computeInitialBracket(
       params.entryPrice,
@@ -642,11 +647,28 @@ export async function registerAdaptiveTradeEntry(params: {
     );
     stopDistance = Math.max(bracket.riskPerUnit, 1e-6);
     targets = Array.isArray(bracket.targets) ? [...bracket.targets] : [];
+    rr = Number.isFinite(bracket.rr) ? bracket.rr : 0;
   } catch (error) {
     const fallbackRisk = entryAtr > 0
       ? Math.max((exitCfg.minStopAtrMult ?? 0) * entryAtr, stopDistance)
       : stopDistance;
     stopDistance = Math.max(fallbackRisk, 1e-6);
+    targets = tpMultipliers.map((multiple) => params.entryPrice + direction * multiple * stopDistance);
+    if (!targets.length) {
+      targets = [params.entryPrice + direction * RR_MIN * stopDistance];
+    }
+    if (targets.length) {
+      if (side === 'long') {
+        targets[0] = Math.max(targets[0], params.entryPrice + RR_MIN * stopDistance);
+      } else {
+        targets[0] = Math.min(targets[0], params.entryPrice - RR_MIN * stopDistance);
+      }
+    }
+    rr = stopDistance > 0
+      ? (side === 'long'
+        ? (targets[0] - params.entryPrice) / stopDistance
+        : (params.entryPrice - targets[0]) / stopDistance)
+      : 0;
     if (process.env.UNIT_TEST_MODE !== 'true') {
       console.warn('[meta-adaptive] computeInitialBracket failed, using fallback risk', {
         symbol: params.symbol,
@@ -655,12 +677,17 @@ export async function registerAdaptiveTradeEntry(params: {
     }
   }
   if (!targets.length) {
-    targets = tpMultipliers.map((multiple) => params.entryPrice + direction * multiple * stopDistance);
+    targets = [params.entryPrice + direction * RR_MIN * stopDistance];
+    rr = RR_MIN;
+  } else {
+    const firstTarget = targets[0];
+    rr = stopDistance > 0
+      ? (side === 'long'
+        ? (firstTarget - params.entryPrice) / stopDistance
+        : (params.entryPrice - firstTarget) / stopDistance)
+      : 0;
   }
-  const firstTarget = targets[0] ?? params.entryPrice;
-  const rrNumerator = Math.abs(firstTarget - params.entryPrice);
-  const rr = stopDistance > 0 ? rrNumerator / stopDistance : 0;
-  if (!(Number.isFinite(rr) && rr >= minRr)) {
+  if (!(Number.isFinite(rr) && rr + 1e-9 >= RR_MIN)) {
     const blockedReason = 'rr_below_min';
     recordOpsEvent({
       level: 'warn',
@@ -671,7 +698,7 @@ export async function registerAdaptiveTradeEntry(params: {
         strategy: params.signal.id,
         blockedReason,
         rr,
-        rrThreshold: minRr,
+        rrThreshold: RR_MIN,
       },
     });
     console.log(JSON.stringify({
@@ -682,7 +709,7 @@ export async function registerAdaptiveTradeEntry(params: {
       strategy: params.signal.id,
       blockedReason,
       rr,
-      rrThreshold: minRr,
+      rrThreshold: RR_MIN,
     }));
     return;
   }
@@ -690,14 +717,20 @@ export async function registerAdaptiveTradeEntry(params: {
   const qtyAbs = Math.abs(params.qty);
   const riskPerUnit = stopDistance;
   const riskUsdValue = riskPerUnit * qtyAbs;
-  const targetProfitUsdValue = Math.abs(rrNumerator) * qtyAbs;
+  const primaryTarget = targets[0] ?? params.entryPrice;
+  const targetProfitUsdValue = Math.abs(primaryTarget - params.entryPrice) * qtyAbs;
   const stopAtrMultValue = entryAtr > 0 ? riskPerUnit / entryAtr : Number(params.signal.meta.stopAtrMult ?? 1);
 
   const planRiskPct = new PreciseDecimal(params.signal.meta.riskPct ?? '0');
   const stopAtrMult = new PreciseDecimal(Number.isFinite(stopAtrMultValue) ? stopAtrMultValue.toFixed(6) : (params.signal.meta.stopAtrMult ?? '1'));
   const planRiskUsd = new PreciseDecimal(riskUsdValue.toFixed(6));
   const planTargetProfitUsd = new PreciseDecimal(targetProfitUsdValue.toFixed(6));
-  const takeProfitMultiplesPrecise = tpMultipliers.map((multiple) => new PreciseDecimal(multiple.toFixed(6)));
+  const targetsClean = targets.map((target) => Number(target.toFixed(6)));
+  const takeProfitMultiplesPrecise = targetsClean.map((target) => {
+    const distance = Math.abs(target - params.entryPrice);
+    const multiple = riskPerUnit > 0 ? distance / riskPerUnit : 0;
+    return new PreciseDecimal(multiple.toFixed(6));
+  });
   const medianIndex = takeProfitMultiplesPrecise.length > 1 ? 1 : 0;
   const medianTakeProfitR = takeProfitMultiplesPrecise[medianIndex] ?? new PreciseDecimal('1');
   const trailingMeta = params.signal.meta.trailingPolicy ?? null;
@@ -728,7 +761,7 @@ export async function registerAdaptiveTradeEntry(params: {
     entryAtr,
     entryAtrPct: resolvedEntryAtrPct != null && Number.isFinite(resolvedEntryAtrPct) ? resolvedEntryAtrPct : null,
     riskPerUnit,
-    targets,
+    targets: targetsClean,
     rr,
     plan: {
       riskPct: planRiskPct,

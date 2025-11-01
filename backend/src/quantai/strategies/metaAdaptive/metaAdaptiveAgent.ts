@@ -1808,6 +1808,7 @@ class MetaAdaptiveStrategyAgent {
       }
       return diff.dividedBy(riskPerUnit).toNumber();
     })();
+    const rrValue = rr != null && Number.isFinite(rr) ? Number(rr.toFixed(6)) : null;
     const side = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
     const queue = this.activeTrades.get(params.sessionId) ?? [];
     const pythonTrackingKey = this.pythonTradeKey(params.sessionId ?? null, params.token ?? null, params.symbol);
@@ -1844,7 +1845,7 @@ class MetaAdaptiveStrategyAgent {
       targetProfitUsd,
       medianTakeProfitR: params.plan.medianTakeProfitR,
       targets: normalizedTargets,
-      rr,
+      rr: rrValue,
       trailingPolicy: params.plan.trailingPolicy ?? null,
       pythonProbability: predictorProbability,
       pythonConfidence: predictorConfidence,

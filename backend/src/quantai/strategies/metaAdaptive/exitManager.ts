@@ -8,6 +8,7 @@ export type InitialBracket = {
   stop: number;
   targets: number[];
   riskPerUnit: number;
+  rr: number;
 };
 
 export type ExitDirective =
@@ -15,6 +16,14 @@ export type ExitDirective =
   | { action: 'move_sl'; reason: string; stop: number }
   | { action: 'take_partial'; reason: string; tpHitIndex: number }
   | { action: 'exit'; reason: string };
+
+const rrFloorRaw = process.env.META_ADAPTIVE_MIN_RR
+  ?? process.env.META_ADAPTIVE_RR_MIN
+  ?? '1.8';
+const RR_MIN = (() => {
+  const parsed = Number.parseFloat(rrFloorRaw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.8;
+})();
 
 function resolveTrailMultiplier(cfg: QuantAIExitConfig, atrPct: number | null): number {
   const adaptive = cfg.trailingAdaptive;
@@ -66,7 +75,23 @@ export function computeInitialBracket(
       : entryPrice + risk;
   const dir = side === 'long' ? 1 : -1;
   const targets = cfg.tpRMultiples.map((r) => entryPrice + dir * r * risk);
-  return { stop, targets, riskPerUnit: risk };
+  if (targets.length > 0) {
+    if (side === 'long') {
+      targets[0] = Math.max(targets[0], entryPrice + RR_MIN * risk);
+    } else {
+      targets[0] = Math.min(targets[0], entryPrice - RR_MIN * risk);
+    }
+  } else {
+    targets.push(side === 'long'
+      ? entryPrice + RR_MIN * risk
+      : entryPrice - RR_MIN * risk);
+  }
+  const rr = risk > 0
+    ? (side === 'long'
+      ? (targets[0] - entryPrice) / risk
+      : (entryPrice - targets[0]) / risk)
+    : 0;
+  return { stop, targets, riskPerUnit: risk, rr };
 }
 
 type AdjustmentParams = {
