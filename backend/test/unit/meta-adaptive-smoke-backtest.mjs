@@ -14,6 +14,10 @@ const {
 } = await import('../../dist/src/quantai/strategies/metaAdaptive/recognizedStrategies.js');
 const { PreciseDecimal } = await import('../../dist/src/quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
 const { getQuantAIConfig, computeInitialBracket, maybeAdjustOrExit } = await import('../../dist/src/quantai/index.js');
+const {
+  runMetaAdaptiveBacktest,
+  buildMetaAdaptiveSyntheticCandles,
+} = await import('../../dist/src/quantai/strategies/metaAdaptive/backtest.js');
 
 const sessionId = 'meta-backtest-session';
 
@@ -345,5 +349,23 @@ assert(Number.isFinite(sharpe), 'Sharpe must be finite');
 assert(Number.isFinite(blockedSignalPct), 'Blocked signal percentage must be finite');
 assert(Number.isFinite(blockedScenarioPct), 'Blocked scenario percentage must be finite');
 assert(Number.isFinite(blockedEntryPct), 'Entry eligibility percentage must be finite');
+
+const syntheticCandles = buildMetaAdaptiveSyntheticCandles();
+const backtestResult = runMetaAdaptiveBacktest(syntheticCandles, {
+  symbol: 'ETH/USDT',
+  equityUsd: 60_000,
+  slippageBps: 5,
+  makerFeeBps: 2,
+  takerFeeBps: 5,
+  fundingAnnualPct: 6,
+  latencyMs: 120,
+  impactBpsPerMillion: 4,
+});
+assert(Array.isArray(backtestResult.walkForward), 'Meta-Adaptive backtest should provide walk-forward segments');
+for (const segment of backtestResult.walkForward) {
+  assert(Number.isFinite(segment.metrics.cagr), 'Segment CAGR must be finite');
+  assert(Number.isFinite(segment.metrics.maxDrawdownPct), 'Segment max drawdown must be finite');
+  assert(Number.isFinite(segment.metrics.sharpe), 'Segment Sharpe must be finite');
+}
 
 console.log('✅ meta-adaptive smoke backtest passed');

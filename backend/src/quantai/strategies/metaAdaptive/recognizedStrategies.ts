@@ -110,6 +110,7 @@ type EvaluateOptions = {
     volatilityPct?: number | null;
     momentumScore?: number | null;
   } | null;
+  volume24hUsd?: number | null;
 };
 
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.72;
@@ -471,7 +472,25 @@ export function evaluateRecognizedStrategies(
     sentiment: opts.sentiment ?? null,
     watchlist: opts.watchlist ?? null,
     ranking: opts.ranking ?? null,
+    volume24hUsd: opts.volume24hUsd ?? null,
   });
+
+  if (process.env.META_ADAPTIVE_BT_DEBUG === 'true' && evaluation.signals.length === 0) {
+    const metaSummary = {
+      atrPct: Number((snap as any)?.atrPct ?? 0),
+      adx: Number((snap as any)?.adx14 ?? 0),
+      cmf: Number((snap as any)?.cmf20 ?? 0),
+      volume: Number((snap as any)?.volume ?? 0),
+      volumeMA: Number((snap as any)?.volumeMA ?? 0),
+      trendStrength: Number((snap as any)?.trendStrength ?? 0),
+      srBias: (snap as any)?.srBias ?? 'n/a',
+    };
+    if (!(globalThis as any).__metaAdaptiveBacktestLogged) {
+      // eslint-disable-next-line no-console
+      console.log('[meta-adaptive-backtest] no_signals', metaSummary);
+      (globalThis as any).__metaAdaptiveBacktestLogged = true;
+    }
+  }
 
   return evaluation.signals
     .map(signal => toRecognizedSignal(signal, snap))

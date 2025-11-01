@@ -1,6 +1,7 @@
 import { runIntradayBacktest } from '../intradayDual/backtest.js';
 import type { Candle, BacktestResult, TradeLog as IntradayTradeLog } from '../intradayDual/types.js';
 import type { TechnicalSnapshot } from '../../../ai/tech.js';
+import { runMetaAdaptiveBacktest, buildMetaAdaptiveSyntheticCandles } from './backtest.js';
 import {
   evaluateRecognizedStrategies,
   registerAdaptiveTradeEntry,
@@ -27,6 +28,7 @@ export type StrategyComparisonReport = {
     };
     trades: MetaAdaptiveTradeLog[];
   };
+  metaAdaptiveWalkForward: { start: number; end: number; metrics: BacktestResult['metrics'] }[];
 };
 
 export type MetaAdaptiveTradeLog = {
@@ -372,8 +374,31 @@ function runIntradayComparison(): { metrics: BacktestResult['metrics']; trades: 
 export async function compareStrategies(): Promise<StrategyComparisonReport> {
   const intraday = runIntradayComparison();
   const metaAdaptive = await runMetaAdaptiveComparison();
+  const metaAdaptiveBtCandles = buildMetaAdaptiveSyntheticCandles();
+  const metaAdaptiveBt = runMetaAdaptiveBacktest(metaAdaptiveBtCandles, {
+    symbol: 'ETH/USDT',
+    equityUsd: 50_000,
+    slippageBps: 5,
+    makerFeeBps: 1.8,
+    takerFeeBps: 4.8,
+    fundingAnnualPct: 6,
+    latencyMs: 150,
+    impactBpsPerMillion: 4,
+  });
+  const walkForward = metaAdaptiveBt.walkForward ?? [];
+  for (const segment of walkForward) {
+    const { metrics } = segment;
+    if (
+      !Number.isFinite(metrics.cagr)
+      || !Number.isFinite(metrics.maxDrawdownPct)
+      || !Number.isFinite(metrics.sharpe)
+    ) {
+      throw new Error('Meta-Adaptive walk-forward metrics must be finite');
+    }
+  }
   return {
     intraday,
     metaAdaptive,
+    metaAdaptiveWalkForward: walkForward,
   };
 }
