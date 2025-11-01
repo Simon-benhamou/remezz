@@ -24,7 +24,8 @@
     "monitor:once": "tsx scripts/agent-performance-monitor.ts once",
     "monitor:stop": "tsx scripts/agent-performance-monitor.ts stop",
     "monitor:integrated": "tsx scripts/integrated-performance-monitor.ts",
-    "train-model": "python3 python/ccxt_xgboost_module.py"
+    "train-model": "python3 python/ccxt_xgboost_module.py",
+    "meta:rejections": "node scripts/meta-adaptive-rejection-summary.mjs"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",

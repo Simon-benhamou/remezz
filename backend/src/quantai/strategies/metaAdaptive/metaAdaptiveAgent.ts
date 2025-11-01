@@ -1715,8 +1715,8 @@ class MetaAdaptiveStrategyAgent {
     side?: StrategyBias;
     predictorFeatures?: Record<string, number> | null;
     pythonSignal?: PythonHybridSignal | null;
-  }): Promise<void> {
-    if (!params.sessionId || !params.token) return;
+  }): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
+    if (!params.sessionId || !params.token) return 'skipped';
 
     const pythonSignalMeta = params.pythonSignal ?? null;
     let predictorDecision: StrategyBias = pythonSignalMeta?.bias ?? 'both';
@@ -1762,7 +1762,7 @@ class MetaAdaptiveStrategyAgent {
         predictorConfidence: Number(predictorConfidence.toFixed(4)),
         intendedSide,
       }));
-      return;
+      return 'predictor_blocked';
     }
 
     const qty = new PreciseDecimal(params.qty ?? 0);
@@ -1867,6 +1867,7 @@ class MetaAdaptiveStrategyAgent {
       predictorConfidence: Number(predictorConfidence.toFixed(4)),
       intendedSide,
     }));
+    return 'registered';
   }
 
   registerOutcome(params: {

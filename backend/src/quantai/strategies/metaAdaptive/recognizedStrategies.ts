@@ -151,6 +151,135 @@ function parseRrFloor(): number {
 }
 const RR_MIN = parseRrFloor();
 
+type ChecklistComponentStatus = 'pass' | 'fail' | 'warn' | 'n/a';
+type ChecklistDecision = 'executed' | 'blocked';
+
+function parseReasonStatus(reasons: string[], key: string): { status: ChecklistComponentStatus; reason: string | null } {
+  const entry = reasons.find((reason) => reason.startsWith(`${key}=`));
+  if (!entry) return { status: 'n/a', reason: null };
+  const raw = entry.slice(key.length + 1);
+  const prefix = raw.split('(')[0];
+  if (prefix.startsWith('pass')) return { status: 'pass', reason: entry };
+  if (prefix.startsWith('fail')) return { status: 'fail', reason: entry };
+  if (prefix.startsWith('warn')) return { status: 'warn', reason: entry };
+  return { status: 'n/a', reason: entry };
+}
+
+type EntryChecklistParams = {
+  sessionId?: string | null;
+  symbol: string;
+  strategy: RecognizedStrategyId;
+  decision: ChecklistDecision;
+  blockedReason?: string | null;
+  registrationResult?: 'registered' | 'skipped' | 'predictor_blocked' | 'n/a';
+  entryReasons: string[];
+  confidencePassed: boolean;
+  confidence: number;
+  entryEligibilityPassed: boolean;
+  entryEligibilityScore: number | null;
+  entryEligibilityComponents?: EntryEligibilityBreakdown['components'] | undefined;
+  rrValue: number | null;
+  rrThreshold: number;
+  minHoldMinutes: number;
+};
+
+function logEntryChecklist(params: EntryChecklistParams): void {
+  const mtf = parseReasonStatus(params.entryReasons, 'mtf');
+  const adx = parseReasonStatus(params.entryReasons, 'adx');
+  const atr = parseReasonStatus(params.entryReasons, 'atr');
+  const flow = parseReasonStatus(params.entryReasons, 'flow');
+
+  const componentScores = params.entryEligibilityComponents ?? null;
+  const rrPassed = params.rrValue != null ? params.rrValue + 1e-9 >= params.rrThreshold : false;
+
+  const failedChecks: string[] = [];
+  const addFailure = (label: string, condition: boolean) => {
+    if (!condition) failedChecks.push(label);
+  };
+  addFailure('confidence', params.confidencePassed);
+  addFailure('entry_eligibility', params.entryEligibilityPassed);
+  if (mtf.status === 'fail') failedChecks.push('mtf');
+  if (adx.status === 'fail') failedChecks.push('adx');
+  if (atr.status === 'fail') failedChecks.push('atr');
+  if (flow.status === 'fail') failedChecks.push('flow');
+  addFailure('rr', rrPassed);
+
+  const checklist = {
+    decision: params.decision,
+    blockedReason: params.blockedReason ?? null,
+    registrationResult: params.registrationResult ?? 'n/a',
+    confidence: {
+      passed: params.confidencePassed,
+      value: Number.isFinite(params.confidence) ? Number(params.confidence.toFixed(4)) : null,
+      threshold: CONFIDENCE_THRESHOLD,
+    },
+    entryEligibility: {
+      passed: params.entryEligibilityPassed,
+      score: params.entryEligibilityScore != null && Number.isFinite(params.entryEligibilityScore)
+        ? Number(params.entryEligibilityScore.toFixed(4))
+        : null,
+      threshold: ENTRY_ELIGIBILITY_THRESHOLD,
+    },
+    components: {
+      mtf: {
+        status: mtf.status,
+        reason: mtf.reason,
+        score: componentScores?.mtf ?? null,
+      },
+      adx: {
+        status: adx.status,
+        reason: adx.reason,
+        score: componentScores?.adx ?? null,
+      },
+      atr: {
+        status: atr.status,
+        reason: atr.reason,
+        score: componentScores?.atr ?? null,
+      },
+      flow: {
+        status: flow.status,
+        reason: flow.reason,
+        score: componentScores?.flow ?? null,
+      },
+    },
+    rr: {
+      value: params.rrValue != null && Number.isFinite(params.rrValue) ? Number(params.rrValue.toFixed(4)) : null,
+      threshold: params.rrThreshold,
+      passed: rrPassed,
+    },
+    minHold: {
+      enabled: params.minHoldMinutes > 0,
+      minutes: params.minHoldMinutes,
+    },
+    failedChecks,
+    strategy: params.strategy,
+    timestamp: Date.now(),
+    entryReasons: params.entryReasons,
+  };
+
+  const eventDetails = {
+    ...checklist,
+    eventId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  };
+
+  recordOpsEvent({
+    level: params.decision === 'blocked' ? 'warn' : 'info',
+    source: 'meta_adaptive_entry',
+    message: 'meta_entry_checklist',
+    sessionId: params.sessionId ?? undefined,
+    symbol: params.symbol,
+    details: eventDetails,
+  });
+
+  console.log(JSON.stringify({
+    level: params.decision === 'blocked' ? 'warn' : 'info',
+    event: 'meta_entry_checklist',
+    sessionId: params.sessionId ?? null,
+    symbol: params.symbol,
+    ...eventDetails,
+  }));
+}
+
 type EntryEligibilityBreakdown = {
   score: number;
   passed: boolean;
@@ -535,6 +664,9 @@ export async function registerAdaptiveTradeEntry(params: {
   const entryReasons = (params.signal.entryEligibilityReasons?.length
     ? params.signal.entryEligibilityReasons
     : params.signal.meta?.entryEligibilityReasons) ?? [];
+  const quantConfig = getQuantAIConfig();
+  const exitCfgBase = quantConfig.exits;
+  const minHoldMinutes = exitCfgBase.earlyExit?.minHoldMinutes ?? 0;
   if (!confidenceGatePassed || !entryGatePassed) {
     const signalConfidence = Number.isFinite(params.signal.confidence) ? params.signal.confidence : 0;
     const qualityScore = Number.isFinite(params.signal.qualityScore) ? params.signal.qualityScore : null;
@@ -574,6 +706,23 @@ export async function registerAdaptiveTradeEntry(params: {
       entryEligibilityThreshold: ENTRY_ELIGIBILITY_THRESHOLD,
       entryReasons,
     }));
+    logEntryChecklist({
+      sessionId: params.sessionId ?? null,
+      symbol: params.symbol,
+      strategy: params.signal.id,
+      decision: 'blocked',
+      blockedReason,
+      registrationResult: 'n/a',
+      entryReasons,
+      confidencePassed: confidenceGatePassed,
+      confidence: signalConfidence,
+      entryEligibilityPassed: entryGatePassed,
+      entryEligibilityScore: entryScore,
+      entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
+      rrValue: null,
+      rrThreshold: RR_MIN,
+      minHoldMinutes,
+    });
     return;
   }
   if (process.env.UNIT_TEST_MODE !== 'true' || entryReasons.length > 0) {
@@ -593,8 +742,6 @@ export async function registerAdaptiveTradeEntry(params: {
       },
     });
   }
-  const quantConfig = getQuantAIConfig();
-  const exitCfgBase = quantConfig.exits;
   const reentryCooldown = exitCfgBase.reentryCooldownMin ?? 0;
   metaAdaptiveStrategyAgent.setReentryCooldownMinutes(reentryCooldown);
 
@@ -711,6 +858,25 @@ export async function registerAdaptiveTradeEntry(params: {
       rr,
       rrThreshold: RR_MIN,
     }));
+    logEntryChecklist({
+      sessionId: params.sessionId ?? null,
+      symbol: params.symbol,
+      strategy: params.signal.id,
+      decision: 'blocked',
+      blockedReason,
+      registrationResult: 'n/a',
+      entryReasons,
+      confidencePassed: confidenceGatePassed,
+      confidence: Number.isFinite(params.signal.confidence) ? params.signal.confidence : 0,
+      entryEligibilityPassed: entryGatePassed,
+      entryEligibilityScore: Number.isFinite(params.signal.entryEligibilityScore)
+        ? params.signal.entryEligibilityScore
+        : null,
+      entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
+      rrValue: Number.isFinite(rr) ? rr : null,
+      rrThreshold: RR_MIN,
+      minHoldMinutes,
+    });
     return;
   }
 
@@ -743,7 +909,7 @@ export async function registerAdaptiveTradeEntry(params: {
       rr,
     });
   }
-  await metaAdaptiveStrategyAgent.registerActiveTrade({
+  const registrationResult = await metaAdaptiveStrategyAgent.registerActiveTrade({
     sessionId: params.sessionId,
     symbol: params.symbol,
     family: params.signal.id === 'classic_trend_following'
@@ -795,10 +961,34 @@ export async function registerAdaptiveTradeEntry(params: {
           entryWeight: params.signal.meta.pythonSignal.entryWeight,
           riskMultiplier: params.signal.meta.pythonSignal.riskMultiplier,
           cooldown: params.signal.meta.pythonSignal.cooldown,
-          meta: params.signal.meta.pythonSignal.meta ?? null,
-        }
+      meta: params.signal.meta.pythonSignal.meta ?? null,
+    }
       : null,
   });
+
+  if (registrationResult === 'predictor_blocked') {
+    const blockedReason = 'predictor_blocked';
+    logEntryChecklist({
+      sessionId: params.sessionId ?? null,
+      symbol: params.symbol,
+      strategy: params.signal.id,
+      decision: 'blocked',
+      blockedReason,
+      registrationResult,
+      entryReasons,
+      confidencePassed: confidenceGatePassed,
+      confidence: Number.isFinite(params.signal.confidence) ? params.signal.confidence : 0,
+      entryEligibilityPassed: entryGatePassed,
+      entryEligibilityScore: Number.isFinite(params.signal.entryEligibilityScore)
+        ? params.signal.entryEligibilityScore
+        : null,
+      entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
+      rrValue: Number.isFinite(rr) ? rr : null,
+      rrThreshold: RR_MIN,
+      minHoldMinutes,
+    });
+    return;
+  }
 
   const executionMode = params.executionMode ?? params.signal.meta.executionMode ?? 'market';
   const fillRatio = Number.isFinite(params.fillRatio ?? NaN) ? Number(params.fillRatio) : null;
@@ -848,6 +1038,26 @@ export async function registerAdaptiveTradeEntry(params: {
       notionalUsd,
       passiveOffsetBps,
     },
+  });
+
+  logEntryChecklist({
+    sessionId: params.sessionId ?? null,
+    symbol: params.symbol,
+    strategy: params.signal.id,
+    decision: 'executed',
+    blockedReason: null,
+    registrationResult: registrationResult === 'registered' ? 'registered' : 'skipped',
+    entryReasons,
+    confidencePassed: confidenceGatePassed,
+    confidence: Number.isFinite(params.signal.confidence) ? params.signal.confidence : 0,
+    entryEligibilityPassed: entryGatePassed,
+    entryEligibilityScore: Number.isFinite(params.signal.entryEligibilityScore)
+      ? params.signal.entryEligibilityScore
+      : null,
+    entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
+    rrValue: Number.isFinite(rr) ? rr : null,
+    rrThreshold: RR_MIN,
+    minHoldMinutes,
   });
 }
 
