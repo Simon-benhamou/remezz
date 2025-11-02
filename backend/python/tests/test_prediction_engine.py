@@ -49,14 +49,21 @@ def build_features(prob: float = 0.62) -> dict[str, float]:
 
 def test_predict_hybrid_signature():
     prediction = predict_hybrid(build_features())
-    assert "probability" in prediction
+    assert "decision" in prediction
+    assert prediction["decision"] in ("long", "short", "none")
+    assert "probabilities" in prediction
+    probs = prediction["probabilities"]
+    assert isinstance(probs, dict)
+    assert {"long", "short", "none"}.issubset(probs.keys())
+    assert math.isclose(sum(probs.values()), 1.0, rel_tol=1e-6)
     assert "confidence" in prediction
     assert "entryWeight" in prediction
     assert "riskMultiplier" in prediction
     assert "cooldown" in prediction
     assert isinstance(prediction["cooldown"], dict)
-    assert 0 <= prediction["probability"] <= 1
-    assert math.isclose(prediction["probability"] + prediction["bearProbability"], 1, rel_tol=1e-6)
+    assert 0 <= prediction["probabilityLong"] <= 1
+    assert 0 <= prediction["probabilityShort"] <= 1
+    assert 0 <= prediction["probabilityNone"] <= 1
 
 
 def test_confidence_increases_with_signal_strength():
@@ -69,5 +76,8 @@ def test_confidence_increases_with_signal_strength():
 def test_engine_object_prediction():
     engine = HybridPredictionEngine(load_features())
     result = engine.predict(build_features())
-    assert result.prediction in (0, 1)
-    assert 0 <= result.bullish_probability <= 1
+    assert result.decision in ("long", "short", "none")
+    assert 0 <= result.prob_long <= 1
+    assert 0 <= result.prob_short <= 1
+    assert 0 <= result.prob_none <= 1
+    assert math.isclose(result.prob_long + result.prob_none + result.prob_short, 1.0, rel_tol=1e-6)

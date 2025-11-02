@@ -1,4 +1,9 @@
-import { metaAdaptiveStrategyAgent, AdaptiveSignal, PreciseDecimal } from './metaAdaptiveAgent.js';
+import {
+  metaAdaptiveStrategyAgent,
+  AdaptiveSignal,
+  PreciseDecimal,
+  type AdaptiveExitReason,
+} from './metaAdaptiveAgent.js';
 import { computeInitialBracket } from './exitManager.js';
 import { normalizeOrder } from './orderNormalization.js';
 import { getQuantAIConfig } from '../../config.js';
@@ -64,8 +69,16 @@ export type RecognizedStrategySignal = {
     predictorFeatures?: Record<string, number> | null;
     pythonSignal?: {
       bias: StrategyBias;
-      probability: number;
-      bearishProbability: number;
+      decision: 'long' | 'short' | 'none';
+      probabilities: {
+        long: number;
+        short: number;
+        none: number;
+      };
+      probabilityLong: number;
+      probabilityShort: number;
+      probabilityNone: number;
+      primaryProbability: number;
       confidence: number;
       entryWeight: number;
       riskMultiplier: number;
@@ -148,6 +161,16 @@ function parseConfidenceThreshold(): number {
 }
 
 const CONFIDENCE_THRESHOLD = parseConfidenceThreshold();
+const MAX_RISK_PER_UNIT_PRICE_RATIO = (() => {
+  const raw = process.env.META_ADAPTIVE_MAX_RISK_PRICE_RATIO;
+  const parsed = raw != null ? Number.parseFloat(raw) : Number.NaN;
+  return Number.isFinite(parsed) ? Math.max(parsed, 1e-6) : 0.2;
+})();
+const MAX_RISK_ATR_MULT = (() => {
+  const raw = process.env.META_ADAPTIVE_MAX_RISK_ATR_MULT;
+  const parsed = raw != null ? Number.parseFloat(raw) : Number.NaN;
+  return Number.isFinite(parsed) ? Math.max(parsed, 0) : 4;
+})();
 
 export const metaAdaptiveConfidenceThreshold = CONFIDENCE_THRESHOLD;
 
@@ -747,8 +770,12 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
       pythonSignal: signal.pythonSignal
         ? {
             bias: signal.pythonSignal.bias,
-            probability: signal.pythonSignal.probability,
-            bearishProbability: signal.pythonSignal.bearishProbability,
+            decision: signal.pythonSignal.decision,
+            probabilities: signal.pythonSignal.probabilities,
+            probabilityLong: signal.pythonSignal.probabilityLong,
+            probabilityShort: signal.pythonSignal.probabilityShort,
+            probabilityNone: signal.pythonSignal.probabilityNone,
+            primaryProbability: signal.pythonSignal.primaryProbability,
             confidence: signal.pythonSignal.confidence,
             entryWeight: signal.pythonSignal.entryWeight,
             riskMultiplier: signal.pythonSignal.riskMultiplier,
@@ -832,8 +859,8 @@ export async function registerAdaptiveTradeEntry(params: {
   passiveOffsetBps?: number | null;
   fallbackLatencyMs?: number | null;
   executionMode?: 'market' | 'limit' | 'twap';
-}): Promise<void> {
-  if (!params.signal || !params.signal.meta) return;
+}): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
+  if (!params.signal || !params.signal.meta) return 'skipped';
   const confidenceGatePassed = params.signal.confidenceGatePassed
     ?? (Number.isFinite(params.signal.confidence) ? params.signal.confidence >= CONFIDENCE_THRESHOLD : false);
   const entryGatePassed = params.signal.entryEligibilityGatePassed
@@ -902,7 +929,7 @@ export async function registerAdaptiveTradeEntry(params: {
       rrThreshold: RR_MIN,
       minHoldMinutes,
     });
-    return;
+    return 'skipped';
   }
   if (process.env.UNIT_TEST_MODE !== 'true' || entryReasons.length > 0) {
     recordOpsEvent({
@@ -1080,12 +1107,12 @@ export async function registerAdaptiveTradeEntry(params: {
       entryEligibilityScore: Number.isFinite(params.signal.entryEligibilityScore)
         ? params.signal.entryEligibilityScore
         : null,
-      entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
-      rrValue: Number.isFinite(rr) ? rr : null,
-      rrThreshold: RR_MIN,
-      minHoldMinutes,
-    });
-    return;
+    entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
+    rrValue: Number.isFinite(rr) ? rr : null,
+    rrThreshold: RR_MIN,
+    minHoldMinutes,
+  });
+  return 'skipped';
   }
 
   const qtyAbs = Math.abs(qtyAligned);
@@ -1108,6 +1135,20 @@ export async function registerAdaptiveTradeEntry(params: {
   const medianIndex = takeProfitMultiplesPrecise.length > 1 ? 1 : 0;
   const medianTakeProfitR = takeProfitMultiplesPrecise[medianIndex] ?? new PreciseDecimal('1');
   const trailingMeta = params.signal.meta.trailingPolicy ?? null;
+
+  const bracketIsValid = (() => {
+    if (!(riskPerUnit > 0)) return false;
+    const maxByPrice = entryPriceEffective * MAX_RISK_PER_UNIT_PRICE_RATIO;
+    if (Number.isFinite(maxByPrice) && riskPerUnit > maxByPrice) return false;
+    if (entryAtr > 0 && MAX_RISK_ATR_MULT > 0 && riskPerUnit > entryAtr * MAX_RISK_ATR_MULT) return false;
+    if (!targetsClean.length) return false;
+    const firstTarget = targetsClean[0];
+    if (!Number.isFinite(firstTarget)) return false;
+    const expectedSide = params.signal.bias === 'short' ? 'short' : 'long';
+    if (expectedSide === 'long' && firstTarget <= entryPriceEffective) return false;
+    if (expectedSide === 'short' && firstTarget >= entryPriceEffective) return false;
+    return true;
+  })();
 
   if (process.env.UNIT_TEST_MODE !== 'true' && (riskUsdValue <= 0 || targetProfitUsdValue <= 0)) {
     console.warn('[meta-adaptive] Invalid risk/target computation', {
@@ -1134,6 +1175,30 @@ export async function registerAdaptiveTradeEntry(params: {
   const mtfFramesMeta = params.signal.meta.mtfFramesEvaluated != null && Number.isFinite(params.signal.meta.mtfFramesEvaluated)
     ? Number(params.signal.meta.mtfFramesEvaluated)
     : null;
+
+  if (!bracketIsValid) {
+    const payload = {
+      level: 'warn',
+      event: 'invalid_bracket',
+      symbol: params.symbol,
+      sessionId: params.sessionId ?? null,
+      token: params.signal.meta?.token ?? null,
+      side: params.signal.bias,
+      entryPrice: Number(entryPriceEffective.toFixed(6)),
+      riskPerUnit: Number(riskPerUnit.toFixed(6)),
+      entryAtr: entryAtr ?? null,
+      entryAtrPct: entryAtrPct ?? null,
+      maxRiskPerUnitPrice: Number.isFinite(entryPriceEffective * MAX_RISK_PER_UNIT_PRICE_RATIO)
+        ? Number((entryPriceEffective * MAX_RISK_PER_UNIT_PRICE_RATIO).toFixed(6))
+        : null,
+      maxRiskAtr: entryAtr != null && MAX_RISK_ATR_MULT > 0
+        ? Number((entryAtr * MAX_RISK_ATR_MULT).toFixed(6))
+        : null,
+      firstTarget: targetsClean[0] ?? null,
+    };
+    console.log(JSON.stringify(payload));
+    return 'skipped';
+  }
 
   const registrationResult = await metaAdaptiveStrategyAgent.registerActiveTrade({
     sessionId: params.sessionId,
@@ -1181,14 +1246,18 @@ export async function registerAdaptiveTradeEntry(params: {
     pythonSignal: params.signal.meta.pythonSignal
       ? {
           bias: params.signal.meta.pythonSignal.bias,
-          probability: params.signal.meta.pythonSignal.probability,
-          bearishProbability: params.signal.meta.pythonSignal.bearishProbability,
+          decision: params.signal.meta.pythonSignal.decision,
+          probabilities: params.signal.meta.pythonSignal.probabilities,
+          probabilityLong: params.signal.meta.pythonSignal.probabilityLong,
+          probabilityShort: params.signal.meta.pythonSignal.probabilityShort,
+          probabilityNone: params.signal.meta.pythonSignal.probabilityNone,
+          primaryProbability: params.signal.meta.pythonSignal.primaryProbability,
           confidence: params.signal.meta.pythonSignal.confidence,
           entryWeight: params.signal.meta.pythonSignal.entryWeight,
           riskMultiplier: params.signal.meta.pythonSignal.riskMultiplier,
           cooldown: params.signal.meta.pythonSignal.cooldown,
-      meta: params.signal.meta.pythonSignal.meta ?? null,
-    }
+          meta: params.signal.meta.pythonSignal.meta ?? null,
+      }
       : null,
     flowCmf: flowCmfMeta,
     flowThreshold: flowThresholdMeta,
@@ -1196,6 +1265,7 @@ export async function registerAdaptiveTradeEntry(params: {
     mtfConsensus: mtfConsensusMeta,
     mtfMatches: mtfMatchesMeta,
     mtfFrames: mtfFramesMeta,
+    minHoldMinutes,
   });
 
   if (registrationResult === 'predictor_blocked') {
@@ -1214,13 +1284,13 @@ export async function registerAdaptiveTradeEntry(params: {
       entryEligibilityScore: Number.isFinite(params.signal.entryEligibilityScore)
         ? params.signal.entryEligibilityScore
         : null,
-      entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
-      rrValue: Number.isFinite(rr) ? rr : null,
-      rrThreshold: RR_MIN,
-      minHoldMinutes,
-    });
-    return;
-  }
+    entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
+    rrValue: Number.isFinite(rr) ? rr : null,
+    rrThreshold: RR_MIN,
+    minHoldMinutes,
+  });
+  return 'skipped';
+}
 
   const executionMode = params.executionMode ?? params.signal.meta.executionMode ?? 'market';
   const fillRatio = Number.isFinite(params.fillRatio ?? NaN) ? Number(params.fillRatio) : null;
@@ -1268,9 +1338,9 @@ export async function registerAdaptiveTradeEntry(params: {
       latencyMs,
       fallbackLatencyMs,
       notionalUsd,
-      passiveOffsetBps,
-    },
-  });
+    passiveOffsetBps,
+  },
+});
 
   logEntryChecklist({
     sessionId: params.sessionId ?? null,
@@ -1291,15 +1361,36 @@ export async function registerAdaptiveTradeEntry(params: {
     rrThreshold: RR_MIN,
     minHoldMinutes,
   });
+
+  return registrationResult;
 }
 
-export function registerAdaptiveTradeOutcome(params: {
+export type AdaptiveTradeOutcomeInput = {
   sessionId?: string | null;
   symbol: string;
   token?: string | null;
   realizedPnlUsd?: number | null;
-}): void {
+  exitReason?: AdaptiveExitReason | null;
+  rawExitReason?: string | null;
+  holdDurationMs?: number | null;
+  minHoldRequiredMs?: number | null;
+  sideEffective?: 'long' | 'short' | null;
+  minHoldGuardActive?: boolean | null;
+};
+
+export function registerAdaptiveTradeOutcome(params: AdaptiveTradeOutcomeInput): void {
   metaAdaptiveStrategyAgent.registerOutcome(params);
+}
+
+export function noteAdaptiveMinHoldGuard(params: {
+  sessionId?: string | null;
+  symbol: string;
+  token?: string | null;
+  reason?: string | null;
+  elapsedMs?: number | null;
+  requiredMs?: number | null;
+}): void {
+  metaAdaptiveStrategyAgent.noteMinHoldGuard(params);
 }
 
 export type { StrategyBias };

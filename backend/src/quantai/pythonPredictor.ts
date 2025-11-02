@@ -120,15 +120,24 @@ function getScriptPath(): string {
   return defaultScript;
 }
 
+export type PythonPredictionProbabilities = {
+  long: number;
+  short: number;
+  none: number;
+};
+
 export type PythonPredictionResult = {
-  prediction: 0 | 1;
-  probability: number;
-  bearishProbability: number;
+  decision: 'long' | 'short' | 'none';
+  probabilities: PythonPredictionProbabilities;
+  probabilityLong: number;
+  probabilityShort: number;
+  probabilityNone: number;
   confidence: number;
   entryWeight: number;
   riskMultiplier: number;
   cooldown: { active: boolean; reason: string | null; seconds: number | null };
   meta?: Record<string, unknown> | null;
+  classOrder?: string[] | null;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -157,15 +166,55 @@ function parsePrediction(payload: string): PythonPredictionResult {
     throw new Error('empty python output');
   }
   const parsed = JSON.parse(payload);
-  const value = parsed?.prediction;
-  if (value !== 0 && value !== 1) {
-    throw new Error(`unexpected prediction payload: ${payload}`);
+  const decisionRaw = typeof parsed?.decision === 'string' ? parsed.decision.toLowerCase() : null;
+  const predictionRaw = Number(parsed?.prediction);
+  let decision: 'long' | 'short' | 'none';
+  if (decisionRaw === 'long' || decisionRaw === 'short' || decisionRaw === 'none') {
+    decision = decisionRaw;
+  } else if (predictionRaw === 0) {
+    decision = 'short';
+  } else {
+    decision = 'long';
   }
-  const probabilityRaw = Number(parsed?.probability);
-  const probability = clamp(probabilityRaw, 0, 1);
-  const bearRaw = Number(parsed?.bearProbability);
-  const bearishProbability = clamp(Number.isFinite(bearRaw) ? bearRaw : 1 - probability, 0, 1);
-  const confidence = clamp(Number(parsed?.confidence ?? Math.abs(probability - 0.5) * 2), 0, 1);
+
+  const probabilitiesRaw = parsed?.probabilities;
+  let probabilities: PythonPredictionProbabilities = {
+    long: Number(parsed?.probabilityLong ?? parsed?.probability ?? (decision === 'short' ? 0.4 : 0.6)),
+    short: Number(parsed?.probabilityShort ?? parsed?.bearProbability ?? (decision === 'short' ? 0.6 : 0.4)),
+    none: Number(parsed?.probabilityNone ?? 0),
+  };
+  if (probabilitiesRaw && typeof probabilitiesRaw === 'object') {
+    const long = Number((probabilitiesRaw as Record<string, unknown>).long);
+    const short = Number((probabilitiesRaw as Record<string, unknown>).short);
+    const none = Number((probabilitiesRaw as Record<string, unknown>).none);
+    probabilities = {
+      long: Number.isFinite(long) ? long : probabilities.long,
+      short: Number.isFinite(short) ? short : probabilities.short,
+      none: Number.isFinite(none) ? none : probabilities.none,
+    };
+  }
+
+  const normaliser = probabilities.long + probabilities.short + probabilities.none;
+  if (normaliser > 0) {
+    probabilities = {
+      long: probabilities.long / normaliser,
+      short: probabilities.short / normaliser,
+      none: probabilities.none / normaliser,
+    };
+  } else {
+    probabilities = { long: 1 / 3, short: 1 / 3, none: 1 / 3 };
+  }
+
+  const bounded = {
+    long: clamp(probabilities.long, 0, 1),
+    short: clamp(probabilities.short, 0, 1),
+    none: clamp(probabilities.none, 0, 1),
+  };
+  const boundedSum = bounded.long + bounded.short + bounded.none;
+  const probabilityLong = boundedSum > 0 ? bounded.long / boundedSum : 1 / 3;
+  const probabilityShort = boundedSum > 0 ? bounded.short / boundedSum : 1 / 3;
+  const probabilityNone = boundedSum > 0 ? bounded.none / boundedSum : 1 / 3;
+  const confidence = clamp(Number(parsed?.confidence ?? Math.abs(probabilityLong - probabilityShort)), 0, 1);
   const entryWeight = clamp(Number(parsed?.entryWeight ?? 1), 0.2, 3);
   const riskMultiplier = clamp(Number(parsed?.riskMultiplier ?? 1), 0.2, 3);
   const cooldownParsed = parsed?.cooldown;
@@ -174,7 +223,23 @@ function parsePrediction(payload: string): PythonPredictionResult {
     reason: typeof cooldownParsed?.reason === 'string' ? cooldownParsed.reason : null,
     seconds: Number.isFinite(Number(cooldownParsed?.seconds)) ? Number(cooldownParsed.seconds) : null,
   };
-  return { prediction: value, probability, bearishProbability, confidence, entryWeight, riskMultiplier, cooldown, meta: parsed?.meta ?? null };
+  const classOrder = Array.isArray(parsed?.classOrder)
+    ? parsed.classOrder.filter((item: unknown): item is string => typeof item === 'string')
+    : null;
+
+  return {
+    decision,
+    probabilities: { long: probabilityLong, short: probabilityShort, none: probabilityNone },
+    probabilityLong,
+    probabilityShort,
+    probabilityNone,
+    confidence,
+    entryWeight,
+    riskMultiplier,
+    cooldown,
+    meta: parsed?.meta ?? null,
+    classOrder,
+  };
 }
 
 export async function getPrediction(features: Record<string, number>): Promise<PythonPredictionResult> {

@@ -9,12 +9,14 @@ from typing import Any, Dict, Sequence, Tuple
 
 import numpy as np
 
-from ccxt_xgboost_module import load_features, load_model
+from ccxt_xgboost_module import METADATA_PATH, load_features, load_model
 
 
 SEQUENCE_LENGTH = 20
 LSTM_HIDDEN_SIZE = 8
 ENGINE_STATE_PATH = Path(__file__).resolve().parent / "hybrid_state.json"
+DEFAULT_CLASS_ORDER = ["long", "none", "short"]
+DEFAULT_CALIBRATION = {"temperature": 1.0}
 
 
 def _sigmoid(x: float | np.ndarray) -> float | np.ndarray:
@@ -30,11 +32,43 @@ def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def _load_predictor_metadata() -> tuple[list[str], Dict[str, float]]:
+    if METADATA_PATH.exists():
+        try:
+            payload = json.loads(METADATA_PATH.read_text())
+            classes = payload.get("classOrder") or DEFAULT_CLASS_ORDER
+            calibration = payload.get("calibration") or DEFAULT_CALIBRATION
+            ordered = [str(label) for label in classes if isinstance(label, str)]
+            if not ordered:
+                ordered = list(DEFAULT_CLASS_ORDER)
+            temperature = float(calibration.get("temperature", 1.0))  # type: ignore[arg-type]
+            if not math.isfinite(temperature) or temperature <= 0:
+                temperature = DEFAULT_CALIBRATION["temperature"]
+            return ordered, {"temperature": temperature}
+        except json.JSONDecodeError:
+            pass
+    return list(DEFAULT_CLASS_ORDER), {"temperature": DEFAULT_CALIBRATION["temperature"]}
+
+
+def _apply_temperature(probabilities: np.ndarray, temperature: float) -> np.ndarray:
+    if temperature <= 0 or not math.isfinite(temperature):
+        return probabilities
+    stabilized = np.log(np.clip(probabilities, 1e-12, 1.0))
+    scaled = stabilized / temperature
+    scaled -= np.max(scaled)
+    exp_vals = np.exp(scaled)
+    total = np.sum(exp_vals)
+    if total <= 0:
+        return np.full_like(probabilities, 1.0 / max(probabilities.size, 1), dtype=float)
+    return exp_vals / total
+
+
 @dataclass
 class HybridPrediction:
-    prediction: int
-    bullish_probability: float
-    bearish_probability: float
+    decision: str
+    prob_long: float
+    prob_short: float
+    prob_none: float
     confidence: float
     entry_weight: float
     risk_multiplier: float
@@ -164,6 +198,13 @@ class HybridPredictionEngine:
         self.model = load_model()
         self.meta = MetaLearner()
         self.encoder = LSTMSequenceEncoder(input_size=4)
+        self.class_order, calibration = _load_predictor_metadata()
+        if not self.class_order:
+            self.class_order = list(DEFAULT_CLASS_ORDER)
+        self.class_to_index = {label: idx for idx, label in enumerate(self.class_order)}
+        self.temperature = float(calibration.get("temperature", 1.0))
+        if not math.isfinite(self.temperature) or self.temperature <= 0:
+            self.temperature = DEFAULT_CALIBRATION["temperature"]
         self._load_state()
 
     def _load_state(self) -> None:
@@ -195,19 +236,47 @@ class HybridPredictionEngine:
         stacked = np.stack([close_seq, volume_seq, rsi_seq, obi_seq], axis=1)
         return stacked.astype(float)
 
-    def _tabular_probability(self, features: Dict[str, float]) -> float:
-        row = []
-        for key in self.feature_order:
-            value = float(features.get(key, 0.0))
-            row.append(value)
+    def _tabular_probabilities(self, features: Dict[str, float]) -> Dict[str, float]:
+        row = [float(features.get(key, 0.0)) for key in self.feature_order]
         probs = self.model.predict_proba([row])
-        return float(probs[0][1])
+        if isinstance(probs, np.ndarray):
+            vector = probs[0]
+        else:
+            vector = np.asarray(probs)[0]
+        vector = np.asarray(vector, dtype=float)
+        if vector.ndim != 1:
+            vector = np.reshape(vector, (-1,))
+        if self.temperature:
+            vector = _apply_temperature(vector, self.temperature)
+        vector = np.clip(vector, 1e-9, None)
+        total = float(vector.sum())
+        if total <= 0:
+            vector = np.full_like(vector, 1.0 / max(len(vector), 1), dtype=float)
+        else:
+            vector = vector / total
+        probabilities: Dict[str, float] = {}
+        for label, idx in self.class_to_index.items():
+            if idx < vector.size:
+                probabilities[label] = float(vector[idx])
+        # Ensure all required labels exist even if model omitted them.
+        for label in DEFAULT_CLASS_ORDER:
+            probabilities.setdefault(label, 1.0 / len(DEFAULT_CLASS_ORDER))
+        # Re-normalise to guard against manual inserts.
+        normaliser = sum(probabilities.values()) or 1.0
+        for label in list(probabilities.keys()):
+            probabilities[label] = max(0.0, float(probabilities[label] / normaliser))
+        return probabilities
 
     def predict(self, features: Dict[str, float]) -> HybridPrediction:
         sequence = self._prepare_sequence_tensor(features)
         seq_prob, seq_confidence = self.encoder.encode(sequence)
 
-        xgb_prob = self._tabular_probability(features)
+        tabular_probs = self._tabular_probabilities(features)
+        prob_long = float(tabular_probs.get("long", 1 / len(DEFAULT_CLASS_ORDER)))
+        prob_none = float(tabular_probs.get("none", 1 / len(DEFAULT_CLASS_ORDER)))
+        prob_short = float(tabular_probs.get("short", 1 / len(DEFAULT_CLASS_ORDER)))
+        active_mass = max(1e-6, prob_long + prob_short)
+        prior_long_ratio = prob_long / active_mass if active_mass > 0 else 0.5
 
         micro_features = [
             features.get("order_flow_imbalance", 0.0),
@@ -219,15 +288,27 @@ class HybridPredictionEngine:
             features.get("price_velocity", 0.0),
         ]
 
-        meta_inputs = [1.0, xgb_prob, seq_prob, *micro_features]
-        blended_prob = self.meta.predict(np.array(meta_inputs, dtype=float))
+        meta_inputs = [1.0, prob_long, seq_prob, *micro_features]
+        meta_long_ratio = float(self.meta.predict(np.array(meta_inputs, dtype=float)))
+        meta_long_ratio = _clamp(meta_long_ratio, 0.0, 1.0)
 
-        bullish_prob = float(_clamp(blended_prob, 1e-6, 1 - 1e-6))
-        bearish_prob = 1.0 - bullish_prob
-        confidence = float(min(1.0, 0.55 * abs(bullish_prob - 0.5) * 2 + 0.45 * seq_confidence))
+        blended_ratio = _clamp(0.6 * meta_long_ratio + 0.4 * prior_long_ratio, 0.0, 1.0)
+        none_weight = _clamp(0.55 * prob_none + 0.45 * (1.0 - seq_confidence), 0.0, 0.95)
+        remaining_mass = max(1e-6, 1.0 - none_weight)
+        final_long = remaining_mass * blended_ratio
+        final_short = remaining_mass - final_long
 
-        entry_weight = _clamp(0.7 + confidence * 0.8, 0.6, 1.6)
-        risk_multiplier = _clamp(0.75 + confidence * 0.5, 0.6, 1.5)
+        raw_vector = np.array([final_long, none_weight, final_short], dtype=float)
+        raw_vector = np.clip(raw_vector, 1e-6, None)
+        prob_vector = raw_vector / raw_vector.sum()
+        prob_long, prob_none, prob_short = (float(prob_vector[idx]) for idx in range(3))
+
+        sorted_probs = np.sort(prob_vector)[::-1]
+        top_gap = float(sorted_probs[0] - sorted_probs[1])
+        confidence = float(_clamp(0.5 * seq_confidence + 0.5 * min(1.0, top_gap * 2.5), 0.0, 1.0))
+
+        entry_weight = _clamp(0.7 + confidence * 0.75, 0.6, 1.6)
+        risk_multiplier = _clamp(0.75 + confidence * 0.45, 0.6, 1.5)
 
         volatility = abs(features.get("micro_atr", 0.0))
         rsi_trend = features.get("delta_rsi", 0.0)
@@ -235,15 +316,19 @@ class HybridPredictionEngine:
         divergence = rsi_trend * obi_trend < 0 and abs(rsi_trend) > 0.05 and abs(obi_trend) > 0.05
         cooldown_active = volatility > 0.018 and divergence
         cooldown_seconds = 180 if cooldown_active else None
-        cooldown_reason = None
-        if cooldown_active:
-            cooldown_reason = "volatility_divergence"
+        cooldown_reason = "volatility_divergence" if cooldown_active else None
+
+        decision_index = int(np.argmax(prob_vector))
+        decision_label = ["long", "none", "short"][decision_index]
 
         meta = {
-            "xgb_prob": round(xgb_prob, 6),
-            "seq_prob": round(seq_prob, 6),
-            "seq_confidence": round(seq_confidence, 6),
-            "features_used": {
+            "tabular": tabular_probs,
+            "sequenceProb": round(seq_prob, 6),
+            "sequenceConfidence": round(seq_confidence, 6),
+            "metaBlendRatio": round(blended_ratio, 6),
+            "temperature": self.temperature,
+            "classOrder": list(self.class_order),
+            "featuresUsed": {
                 "order_flow_imbalance": features.get("order_flow_imbalance", 0.0),
                 "aggression_ratio": features.get("aggression_ratio", 0.0),
                 "delta_volume_slope": features.get("delta_volume_slope", 0.0),
@@ -254,12 +339,11 @@ class HybridPredictionEngine:
             },
         }
 
-        prediction = 1 if bullish_prob >= 0.5 else 0
-
         return HybridPrediction(
-            prediction=prediction,
-            bullish_probability=bullish_prob,
-            bearish_probability=bearish_prob,
+            decision=decision_label,
+            prob_long=prob_long,
+            prob_short=prob_short,
+            prob_none=prob_none,
             confidence=confidence,
             entry_weight=entry_weight,
             risk_multiplier=risk_multiplier,
@@ -285,9 +369,15 @@ def predict_hybrid(features: Dict[str, float]) -> Dict[str, Any]:
     engine = _get_engine()
     prediction = engine.predict(features)
     return {
-        "prediction": prediction.prediction,
-        "probability": prediction.bullish_probability,
-        "bearProbability": prediction.bearish_probability,
+        "decision": prediction.decision,
+        "probabilities": {
+            "long": prediction.prob_long,
+            "short": prediction.prob_short,
+            "none": prediction.prob_none,
+        },
+        "probabilityLong": prediction.prob_long,
+        "probabilityShort": prediction.prob_short,
+        "probabilityNone": prediction.prob_none,
         "confidence": prediction.confidence,
         "entryWeight": prediction.entry_weight,
         "riskMultiplier": prediction.risk_multiplier,
@@ -297,8 +387,8 @@ def predict_hybrid(features: Dict[str, float]) -> Dict[str, Any]:
             "seconds": prediction.cooldown_seconds,
         },
         "meta": prediction.meta,
+        "classOrder": list(engine.class_order),
     }
 
 
 __all__ = ["predict_hybrid", "HybridPredictionEngine", "LSTMSequenceEncoder", "MetaLearner"]
-

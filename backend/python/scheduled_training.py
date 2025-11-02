@@ -32,7 +32,7 @@ def refresh_cache(
     return collect_prepared_windows(exchange, symbols, window_specs, anchor=anchor)
 
 
-def retrain_from_cache(prepared_windows: Sequence[PreparedWindow]) -> dict[str, float]:
+def retrain_from_cache(prepared_windows: Sequence[PreparedWindow]) -> TrainingArtifacts:
     combined = assemble_training_dataframe(prepared_windows)
     artifacts = train_model(
         combined,
@@ -45,7 +45,7 @@ def retrain_from_cache(prepared_windows: Sequence[PreparedWindow]) -> dict[str, 
         },
     )
     save_model_and_features(artifacts)
-    return artifacts.metrics
+    return artifacts
 
 
 def main() -> None:
@@ -87,8 +87,14 @@ def main() -> None:
 
     _seed_everything()
     frames = refresh_cache(exchange, symbols, tuple(window_specs))
-    metrics = retrain_from_cache(frames)
-    print(json.dumps({"metrics": metrics}))
+    artifacts = retrain_from_cache(frames)
+    payload = {
+        "metrics": artifacts.metrics,
+        "classOrder": artifacts.class_order,
+        "calibration": artifacts.calibration,
+        "featureCount": len(artifacts.features),
+    }
+    print(json.dumps(payload))
 
 
 if __name__ == "__main__":

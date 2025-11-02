@@ -7,6 +7,7 @@ import {
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
   metaAdaptiveConfidenceThreshold,
+  type RecognizedStrategyId,
 } from './recognizedStrategies.js';
 import { PreciseDecimal, metaAdaptiveStrategyAgent } from './metaAdaptiveAgent.js';
 
@@ -31,6 +32,8 @@ export type StrategyComparisonReport = {
       confidenceGateBlockedPrimaryPct: number;
     };
     trades: MetaAdaptiveTradeLog[];
+    sideBreakdown: MetaAdaptiveSideMetrics[];
+    strategyBreakdown: StrategySideMetrics[];
   };
   metaAdaptiveBacktest: BacktestResult;
   metaAdaptiveWalkForward: { start: number; end: number; metrics: BacktestResult['metrics'] }[];
@@ -53,6 +56,7 @@ export type MetaAdaptiveTradeLog = {
   timestamp: number;
   label: string;
   side: 'long' | 'short';
+  strategyId: RecognizedStrategyId;
   quantity: PreciseDecimal;
   entryPrice: PreciseDecimal;
   exitPrice: PreciseDecimal;
@@ -66,10 +70,80 @@ export type MetaAdaptiveTradeLog = {
   entryEligibilityScore: number | null;
   entryEligibilityGatePassed: boolean;
   entryEligibilityReasons: string[];
+  predictorBlocked?: boolean;
+};
+
+export type MetaAdaptiveSideMetrics = {
+  side: 'long' | 'short';
+  attempts: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  hitRate: number;
+  profitFactor: number;
+  avgWin: number;
+  avgLoss: number;
+  predictorBlocked: number;
+};
+
+export type StrategySideMetrics = MetaAdaptiveSideMetrics & {
+  strategyId: RecognizedStrategyId;
 };
 
 const ONE = new PreciseDecimal('1');
 const HUNDRED = new PreciseDecimal('100');
+
+type SideAccumulator = {
+  attempts: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  winSum: number;
+  lossSum: number;
+  predictorBlocked: number;
+};
+
+function makeAccumulator(): SideAccumulator {
+  return {
+    attempts: 0,
+    trades: 0,
+    wins: 0,
+    losses: 0,
+    winSum: 0,
+    lossSum: 0,
+    predictorBlocked: 0,
+  };
+}
+
+function updateAccumulator(acc: SideAccumulator, pnl: number): void {
+  acc.trades += 1;
+  if (pnl > 0) {
+    acc.wins += 1;
+    acc.winSum += pnl;
+  } else if (pnl < 0) {
+    acc.losses += 1;
+    acc.lossSum += Math.abs(pnl);
+  }
+}
+
+function buildSideMetrics(side: 'long' | 'short', acc: SideAccumulator): MetaAdaptiveSideMetrics {
+  const hitRate = acc.trades > 0 ? acc.wins / acc.trades : 0;
+  const profitFactor = acc.lossSum > 0 ? acc.winSum / acc.lossSum : (acc.winSum > 0 && acc.lossSum === 0 ? Number.POSITIVE_INFINITY : 0);
+  const avgWin = acc.wins > 0 ? acc.winSum / acc.wins : 0;
+  const avgLoss = acc.losses > 0 ? -(acc.lossSum / acc.losses) : 0;
+  return {
+    side,
+    attempts: acc.attempts,
+    trades: acc.trades,
+    wins: acc.wins,
+    losses: acc.losses,
+    hitRate,
+    profitFactor: Number.isFinite(profitFactor) ? profitFactor : 0,
+    avgWin,
+    avgLoss,
+    predictorBlocked: acc.predictorBlocked,
+  };
+}
 
 function buildSummaryRow(label: string, metrics: {
   trades: number;
@@ -114,11 +188,21 @@ export function buildIntradayComparisonCandles(): Candle[] {
   return candles;
 }
 
-function buildSnapshot(config: {
+type ScenarioDefinition = {
   label: string;
-  bias4h?: 'bullish' | 'bearish';
-  bias1h?: 'bullish' | 'bearish';
-  bias15m?: 'bullish' | 'bearish';
+  strategyId: RecognizedStrategyId;
+  side: 'long' | 'short';
+  regime: 'trend_following' | 'range';
+  snap: TechnicalSnapshot;
+  pnlPct: PreciseDecimal;
+};
+
+type SnapshotOverrides = {
+  symbol?: string;
+  last?: number;
+  bias4h?: 'bullish' | 'bearish' | 'neutral';
+  bias1h?: 'bullish' | 'bearish' | 'neutral';
+  bias15m?: 'bullish' | 'bearish' | 'neutral';
   emaBias?: number;
   atrPct?: number;
   rsi14?: number;
@@ -126,24 +210,37 @@ function buildSnapshot(config: {
   cmf20?: number;
   realizedVol?: number;
   adx14?: number;
-  symbol?: string;
-}): { snap: TechnicalSnapshot; pnlPct: PreciseDecimal; label: string } {
-  const last = 100;
-  const emaBias = config.emaBias ?? 0.01;
-  const snap = {
-    symbol: config.symbol ?? 'ETH/USDT',
+  srBias?: TechnicalSnapshot['srBias'];
+  trendBias?: TechnicalSnapshot['trendBias'];
+};
+
+function buildSnapshot(overrides: SnapshotOverrides = {}): TechnicalSnapshot {
+  const last = overrides.last ?? 100;
+  const emaBias = overrides.emaBias ?? 0.01;
+  const atrPct = overrides.atrPct ?? 1.2;
+  const bias4h = overrides.bias4h ?? 'bullish';
+  const bias1h = overrides.bias1h ?? bias4h;
+  const bias15m = overrides.bias15m ?? bias1h;
+  const srBias = overrides.srBias ?? 'nearSupport';
+  const trendBias = overrides.trendBias ?? (emaBias >= 0 ? 'bullish' : 'bearish');
+  const trendStrength = overrides.trendStrength ?? 0.65;
+  const cmf20 = overrides.cmf20 ?? 0.22;
+  const adx14 = overrides.adx14 ?? 24;
+
+  return {
+    symbol: overrides.symbol ?? 'ETH/USDT',
     last,
     ema20: last * (1 + emaBias),
     ema50: last * (1 + emaBias / 2),
     ema100: last * (1 + emaBias / 3),
     ema200: last * (1 + emaBias / 4),
-    rsi14: config.rsi14 ?? 55,
-    atr14: last * (config.atrPct ?? 0.012),
-    atrPct: config.atrPct ?? 1.2,
-    adx14: config.adx14 ?? 24,
+    rsi14: overrides.rsi14 ?? 55,
+    atr14: last * (atrPct / 100),
+    atrPct,
+    adx14,
     ema20Slope: last * 0.0012,
-    support: last * 0.97,
-    resistance: last * 1.03,
+    support: srBias === 'nearSupport' ? last * 0.97 : last * 0.99,
+    resistance: srBias === 'nearResistance' ? last * 1.01 : last * 1.03,
     supports: [{ price: last * 0.97, label: 'S1', touches: 3, strength: 2 }],
     resistances: [{ price: last * 1.03, label: 'R1', touches: 2, strength: 2 }],
     pivots: {
@@ -154,52 +251,110 @@ function buildSnapshot(config: {
       R2: last * 1.02,
       refDay: new Date(1_700_000_000_000).toISOString().slice(0, 10),
     },
-    trend: 1.1,
-    srBias: emaBias > 0 ? 'nearSupport' : 'nearResistance',
+    trend: trendStrength,
+    srBias,
     meta: { tf: '15m', windowBars: 120, recentBarsFor24h: 96 },
-    realizedVol: config.realizedVol ?? 1.3,
+    realizedVol: overrides.realizedVol ?? 1.3,
     hurst: 0.55,
     adxSlope: 0.02,
-    trendStrength: config.trendStrength ?? 0.6,
-    trendBias: emaBias >= 0 ? 'bullish' : 'bearish',
+    trendStrength,
+    trendBias,
     volume: 800_000,
     volumeMA: 500_000,
     volume24h: 60_000_000,
-    cmf20: config.cmf20 ?? 0.18,
+    cmf20,
     multiTimeframe: {
       timeframes: {
-        '4h': { tf: '4h', bias: config.bias4h ?? 'bullish', momentumPct: 0.4, rsi: 55 },
-        '1h': { tf: '1h', bias: config.bias1h ?? 'bullish', momentumPct: 0.3, rsi: 53 },
-        '15m': { tf: '15m', bias: config.bias15m ?? 'bullish', momentumPct: 0.2, rsi: 52 },
+        '4h': { tf: '4h', bias: bias4h, momentumPct: bias4h === 'bullish' ? 0.4 : -0.38, rsi: bias4h === 'bullish' ? 55 : 45 },
+        '1h': { tf: '1h', bias: bias1h, momentumPct: bias1h === 'bullish' ? 0.3 : -0.28, rsi: bias1h === 'bullish' ? 53 : 47 },
+        '15m': { tf: '15m', bias: bias15m, momentumPct: bias15m === 'bullish' ? 0.2 : -0.2, rsi: bias15m === 'bullish' ? 52 : 48 },
       },
-      agreementScore: 3,
+      agreementScore: [bias4h, bias1h, bias15m].filter((bias) => bias === 'bullish').length,
       divergenceScore: 0,
     },
-  } as TechnicalSnapshot;
-
-  const pnlPct = config.label === 'mean-loss'
-    ? new PreciseDecimal('-0.9')
-    : config.label === 'trend-loss'
-      ? new PreciseDecimal('-1.4')
-      : config.label === 'mean'
-        ? new PreciseDecimal('1.1')
-        : config.label === 'breakout'
-          ? new PreciseDecimal('3.2')
-          : config.label === 'momentum'
-            ? new PreciseDecimal('4.6')
-            : new PreciseDecimal('2.5');
-
-  return { snap, pnlPct, label: config.label };
+  };
 }
 
-function createMetaAdaptiveScenarios() {
+function buildBearishSnapshot(overrides: SnapshotOverrides = {}): TechnicalSnapshot {
+  return buildSnapshot({
+    emaBias: overrides.emaBias ?? -0.01,
+    cmf20: overrides.cmf20 ?? -0.3,
+    bias4h: overrides.bias4h ?? 'bearish',
+    bias1h: overrides.bias1h ?? 'bearish',
+    bias15m: overrides.bias15m ?? 'bearish',
+    trendBias: overrides.trendBias ?? 'bearish',
+    srBias: overrides.srBias ?? 'nearResistance',
+    trendStrength: overrides.trendStrength ?? 0.8,
+    ...overrides,
+  });
+}
+
+function createMetaAdaptiveScenarios(): ScenarioDefinition[] {
   return [
-    buildSnapshot({ label: 'trend', adx14: 30, trendStrength: 0.95, cmf20: 0.4 }),
-    buildSnapshot({ label: 'breakout', adx14: 26, trendStrength: 0.75, cmf20: 0.32, realizedVol: 1.6 }),
-    buildSnapshot({ label: 'mean', adx14: 10, rsi14: 68, emaBias: -0.002 }),
-    buildSnapshot({ label: 'momentum', adx14: 34, trendStrength: 1.1, cmf20: 0.45 }),
-    buildSnapshot({ label: 'mean-loss', adx14: 8, rsi14: 35, emaBias: 0.0005 }),
-    buildSnapshot({ label: 'trend-loss', adx14: 22, trendStrength: 0.4, cmf20: -0.05, emaBias: -0.003 }),
+    {
+      label: 'trend-long',
+      strategyId: 'classic_trend_following',
+      side: 'long',
+      regime: 'trend_following',
+      snap: buildSnapshot({ bias4h: 'bullish', bias1h: 'bullish', bias15m: 'bullish', adx14: 32, trendStrength: 0.95, cmf20: 0.38 }),
+      pnlPct: new PreciseDecimal('3.2'),
+    },
+    {
+      label: 'trend-short',
+      strategyId: 'classic_trend_following',
+      side: 'short',
+      regime: 'trend_following',
+      snap: buildBearishSnapshot({ adx14: 30, trendStrength: 0.92, cmf20: -0.36 }),
+      pnlPct: new PreciseDecimal('2.4'),
+    },
+    {
+      label: 'momentum-long',
+      strategyId: 'momentum_scanner_focus',
+      side: 'long',
+      regime: 'trend_following',
+      snap: buildSnapshot({ adx14: 34, trendStrength: 1.05, cmf20: 0.45, bias4h: 'bullish', bias1h: 'bullish', realizedVol: 1.6 }),
+      pnlPct: new PreciseDecimal('4.4'),
+    },
+    {
+      label: 'momentum-short',
+      strategyId: 'momentum_scanner_focus',
+      side: 'short',
+      regime: 'trend_following',
+      snap: buildBearishSnapshot({ adx14: 33, trendStrength: 1.02, cmf20: -0.42, realizedVol: 1.7 }),
+      pnlPct: new PreciseDecimal('3.1'),
+    },
+    {
+      label: 'mean-long',
+      strategyId: 'bollinger_mean_reversion',
+      side: 'long',
+      regime: 'range',
+      snap: buildSnapshot({ adx14: 11, rsi14: 68, emaBias: -0.002, bias4h: 'neutral', bias1h: 'bearish', bias15m: 'neutral', srBias: 'nearSupport' }),
+      pnlPct: new PreciseDecimal('1.1'),
+    },
+    {
+      label: 'mean-short',
+      strategyId: 'bollinger_mean_reversion',
+      side: 'short',
+      regime: 'range',
+      snap: buildBearishSnapshot({ adx14: 10, rsi14: 32, srBias: 'nearResistance', emaBias: 0.002 }),
+      pnlPct: new PreciseDecimal('0.9'),
+    },
+    {
+      label: 'trend-loss-long',
+      strategyId: 'classic_trend_following',
+      side: 'long',
+      regime: 'trend_following',
+      snap: buildSnapshot({ adx14: 22, trendStrength: 0.4, cmf20: -0.05, emaBias: -0.003 }),
+      pnlPct: new PreciseDecimal('-1.4'),
+    },
+    {
+      label: 'trend-loss-short',
+      strategyId: 'classic_trend_following',
+      side: 'short',
+      regime: 'trend_following',
+      snap: buildBearishSnapshot({ adx14: 18, trendStrength: 0.38, cmf20: 0.04, emaBias: 0.002 }),
+      pnlPct: new PreciseDecimal('-1.1'),
+    },
   ];
 }
 
@@ -219,6 +374,8 @@ async function runMetaAdaptiveComparison(): Promise<{
     confidenceGateBlockedPrimaryPct: number;
   };
   trades: MetaAdaptiveTradeLog[];
+  sideBreakdown: MetaAdaptiveSideMetrics[];
+  strategyBreakdown: StrategySideMetrics[];
 }> {
   process.env.UNIT_TEST_MODE = process.env.UNIT_TEST_MODE ?? 'true';
   process.env.USE_IN_MEMORY_DB = process.env.USE_IN_MEMORY_DB ?? 'true';
@@ -238,34 +395,58 @@ async function runMetaAdaptiveComparison(): Promise<{
   let primaryEvaluations = 0;
   let primaryBlocked = 0;
 
-  for (let i = 0; i < scenarios.length; i += 1) {
-    const scenario = scenarios[i];
+  const perSideTotals: Record<'long' | 'short', SideAccumulator> = {
+    long: makeAccumulator(),
+    short: makeAccumulator(),
+  };
+  const perStrategyTotals = new Map<RecognizedStrategyId, Record<'long' | 'short', SideAccumulator>>();
+  const ensureStrategyAccumulator = (strategyId: RecognizedStrategyId): Record<'long' | 'short', SideAccumulator> => {
+    const existing = perStrategyTotals.get(strategyId);
+    if (existing) return existing;
+    const bucket: Record<'long' | 'short', SideAccumulator> = {
+      long: makeAccumulator(),
+      short: makeAccumulator(),
+    };
+    perStrategyTotals.set(strategyId, bucket);
+    return bucket;
+  };
+  const zero = new PreciseDecimal('0');
+
+  for (const scenario of scenarios) {
+    const loopSessionId = `${sessionId}-${scenario.label}`;
+    metaAdaptiveStrategyAgent.reset(loopSessionId);
+    const sideAccumulator = perSideTotals[scenario.side];
+    const strategyAccumulator = ensureStrategyAccumulator(scenario.strategyId)[scenario.side];
+    sideAccumulator.attempts += 1;
+    strategyAccumulator.attempts += 1;
+
     const signals = evaluateRecognizedStrategies(scenario.snap, {
-      sessionId,
-      symbol: 'ETH/USDT',
-      bias: 'long',
-      regime: scenario.snap.trendStrength > 0.7 ? 'trend_following' : 'range',
-      allowMomentumOverride: true,
-      favorMeanReversion: scenario.snap.trendStrength < 0.6,
+      sessionId: loopSessionId,
+      symbol: scenario.snap.symbol ?? 'ETH/USDT',
+      bias: scenario.side,
+      regime: scenario.regime === 'range' ? 'range' : 'trend_following',
+      allowMomentumOverride: scenario.strategyId === 'momentum_scanner_focus',
+      favorMeanReversion: scenario.strategyId === 'bollinger_mean_reversion',
     });
 
     evaluatedSignals += signals.length;
     blockedSignals += signals.filter(signal => !signal.confidenceGatePassed).length;
 
     const primary = signals.find((signal) => signal.meta?.token) ?? signals[0] ?? null;
-    if (!primary) continue;
+    if (!primary) {
+      metaAdaptiveStrategyAgent.reset(loopSessionId);
+      continue;
+    }
     primaryEvaluations += 1;
-
-    const timestamp = 1_700_600_000_000 + i * 600_000;
 
     if (!primary.confidenceGatePassed) {
       primaryBlocked += 1;
-      const zero = new PreciseDecimal('0');
       const cumulativePct = equity.minus(ONE).times(HUNDRED);
       tradeLogs.push({
-        timestamp,
+        timestamp: Date.now(),
         label: scenario.label,
-        side: primary.bias === 'short' ? 'short' : 'long',
+        side: scenario.side,
+        strategyId: scenario.strategyId,
         quantity: zero,
         entryPrice: zero,
         exitPrice: zero,
@@ -279,17 +460,19 @@ async function runMetaAdaptiveComparison(): Promise<{
         entryEligibilityScore: primary.entryEligibilityScore ?? null,
         entryEligibilityGatePassed: Boolean(primary.entryEligibilityGatePassed),
         entryEligibilityReasons: primary.entryEligibilityReasons ?? [],
+        predictorBlocked: false,
       });
+      metaAdaptiveStrategyAgent.reset(loopSessionId);
       continue;
     }
     if (!primary.entryEligibilityGatePassed) {
       primaryBlocked += 1;
-      const zero = new PreciseDecimal('0');
       const cumulativePct = equity.minus(ONE).times(HUNDRED);
       tradeLogs.push({
-        timestamp,
+        timestamp: Date.now(),
         label: scenario.label,
-        side: primary.bias === 'short' ? 'short' : 'long',
+        side: scenario.side,
+        strategyId: scenario.strategyId,
         quantity: zero,
         entryPrice: zero,
         exitPrice: zero,
@@ -303,12 +486,14 @@ async function runMetaAdaptiveComparison(): Promise<{
         entryEligibilityScore: primary.entryEligibilityScore ?? null,
         entryEligibilityGatePassed: false,
         entryEligibilityReasons: primary.entryEligibilityReasons ?? [],
+        predictorBlocked: false,
       });
+      metaAdaptiveStrategyAgent.reset(loopSessionId);
       continue;
     }
 
-    await registerAdaptiveTradeEntry({
-      sessionId,
+    const registrationResult = await registerAdaptiveTradeEntry({
+      sessionId: loopSessionId,
       symbol: 'ETH/USDT',
       signal: primary,
       qty: 1,
@@ -316,8 +501,37 @@ async function runMetaAdaptiveComparison(): Promise<{
       stopDistance: 1,
     });
 
+    if (registrationResult === 'predictor_blocked') {
+      primaryBlocked += 1;
+      sideAccumulator.predictorBlocked += 1;
+      strategyAccumulator.predictorBlocked += 1;
+      const cumulativePct = equity.minus(ONE).times(HUNDRED);
+      tradeLogs.push({
+        timestamp: Date.now(),
+        label: scenario.label,
+        side: scenario.side,
+        strategyId: scenario.strategyId,
+        quantity: zero,
+        entryPrice: zero,
+        exitPrice: zero,
+        pnlPct: zero,
+        cumulativePnlPct: cumulativePct,
+        confidence: Number(primary.confidence.toFixed(4)),
+        qualityScore: primary.qualityScore,
+        confidenceGatePassed: true,
+        confidenceThreshold: metaAdaptiveConfidenceThreshold,
+        blockedReason: 'predictor_disagrees',
+        entryEligibilityScore: primary.entryEligibilityScore ?? null,
+        entryEligibilityGatePassed: true,
+        entryEligibilityReasons: primary.entryEligibilityReasons ?? [],
+        predictorBlocked: true,
+      });
+      metaAdaptiveStrategyAgent.reset(loopSessionId);
+      continue;
+    }
+
     registerAdaptiveTradeOutcome({
-      sessionId,
+      sessionId: loopSessionId,
       symbol: 'ETH/USDT',
       token: primary?.meta?.token ?? null,
       realizedPnlUsd: scenario.pnlPct.toNumber(),
@@ -327,15 +541,19 @@ async function runMetaAdaptiveComparison(): Promise<{
     returns.push(tradeReturn.toNumber());
     equity = equity.times(ONE.plus(tradeReturn));
 
-    const exitMultiplier = ONE.plus(tradeReturn);
+    const pnlValue = scenario.pnlPct.toNumber();
+    updateAccumulator(sideAccumulator, pnlValue);
+    updateAccumulator(strategyAccumulator, pnlValue);
+
     const entryPrice = new PreciseDecimal('100');
+    const exitPrice = entryPrice.times(ONE.plus(tradeReturn));
     const quantity = new PreciseDecimal('1');
-    const exitPrice = entryPrice.times(exitMultiplier);
     const cumulativePct = equity.minus(ONE).times(HUNDRED);
     tradeLogs.push({
-      timestamp,
+      timestamp: Date.now(),
       label: scenario.label,
-      side: scenario.pnlPct.gt(0) ? 'long' : 'short',
+      side: scenario.side,
+      strategyId: scenario.strategyId,
       quantity,
       entryPrice,
       exitPrice,
@@ -349,26 +567,16 @@ async function runMetaAdaptiveComparison(): Promise<{
       entryEligibilityScore: primary.entryEligibilityScore ?? null,
       entryEligibilityGatePassed: true,
       entryEligibilityReasons: primary.entryEligibilityReasons ?? [],
+      predictorBlocked: false,
     });
+
+    metaAdaptiveStrategyAgent.reset(loopSessionId);
   }
 
   const trades = returns.length;
   const finalEquity = equity.toNumber();
   const totalReturnPct = (finalEquity - 1) * 100;
-  const cagr = trades > 0 ? Math.pow(finalEquity, 1 / trades) - 1 : 0;
-
-  const executedTrades = tradeLogs.filter((trade) => trade.quantity.gt(0));
-  const executedPnl = executedTrades.map((trade) => trade.pnlPct.toNumber());
-  const winningPnl = executedPnl.filter((value) => value > 0);
-  const losingPnl = executedPnl.filter((value) => value < 0);
-  const wins = winningPnl.length;
-  const losses = losingPnl.length;
-  const hitRate = executedTrades.length ? wins / executedTrades.length : 0;
-  const totalWinPct = winningPnl.reduce((sum, value) => sum + value, 0);
-  const totalLossPct = losingPnl.reduce((sum, value) => sum + Math.abs(value), 0);
-  const profitFactor = totalLossPct > 0 ? totalWinPct / totalLossPct : 0;
-  const avgWin = wins ? totalWinPct / wins : 0;
-  const avgLoss = losses ? -(totalLossPct / losses) : 0;
+  const cagr = trades > 0 ? Math.pow(finalEquity, 1 / Math.max(trades, 1)) - 1 : 0;
 
   let runningPeak = 1;
   let equityCursor = 1;
@@ -385,12 +593,40 @@ async function runMetaAdaptiveComparison(): Promise<{
 
   const meanReturn = trades > 0 ? returns.reduce((sum, value) => sum + value, 0) / trades : 0;
   const variance = trades > 0
-    ? returns.reduce((sum, value) => sum + Math.pow(value - meanReturn, 2), 0) / trades
+    ? returns.reduce((sum, value) => sum + (value - meanReturn) ** 2, 0) / trades
     : 0;
   const stdev = Math.sqrt(variance);
   const sharpe = stdev === 0 ? 0 : meanReturn / stdev;
   const blockedSignalsPct = evaluatedSignals > 0 ? (blockedSignals / evaluatedSignals) * 100 : 0;
   const primaryBlockedPct = primaryEvaluations > 0 ? (primaryBlocked / primaryEvaluations) * 100 : 0;
+
+  const sideBreakdown: MetaAdaptiveSideMetrics[] = (['long', 'short'] as const).map((side) =>
+    buildSideMetrics(side, perSideTotals[side]),
+  );
+  const strategyBreakdown: StrategySideMetrics[] = Array.from(perStrategyTotals.entries()).flatMap(([strategyId, bucket]) =>
+    (['long', 'short'] as const).map((side) => ({
+      strategyId,
+      ...buildSideMetrics(side, bucket[side]),
+    })),
+  );
+
+  const executedStats = (['long', 'short'] as const).reduce(
+    (acc, side) => {
+      const bucket = perSideTotals[side];
+      acc.trades += bucket.trades;
+      acc.wins += bucket.wins;
+      acc.losses += bucket.losses;
+      acc.winSum += bucket.winSum;
+      acc.lossSum += bucket.lossSum;
+      return acc;
+    },
+    { trades: 0, wins: 0, losses: 0, winSum: 0, lossSum: 0 },
+  );
+
+  const hitRate = executedStats.trades > 0 ? executedStats.wins / executedStats.trades : 0;
+  const profitFactor = executedStats.lossSum > 0 ? executedStats.winSum / executedStats.lossSum : 0;
+  const avgWin = executedStats.wins > 0 ? executedStats.winSum / executedStats.wins : 0;
+  const avgLoss = executedStats.losses > 0 ? -(executedStats.lossSum / executedStats.losses) : 0;
 
   if (
     !Number.isFinite(totalReturnPct)
@@ -425,6 +661,8 @@ async function runMetaAdaptiveComparison(): Promise<{
       confidenceGateBlockedPrimaryPct: Number(primaryBlockedPct.toFixed(2)),
     },
     trades: tradeLogs,
+    sideBreakdown,
+    strategyBreakdown,
   };
 }
 

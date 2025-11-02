@@ -9,6 +9,7 @@ import {
   getPythonResolutionError,
   isPythonPredictorAvailable,
 } from '../../pythonPredictor.js';
+import type { PythonPredictionProbabilities, PythonPredictionResult } from '../../pythonPredictor.js';
 import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
 import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
@@ -20,6 +21,9 @@ const BASE_PYTHON_BIAS_WEIGHT = pythonSignalTuning.biasWeight;
 const PYTHON_NEUTRAL_THRESHOLD = pythonSignalTuning.neutralThreshold;
 const PYTHON_GATE_THRESHOLD = pythonSignalTuning.gateThreshold;
 const DEFAULT_SHORT_CMF_THRESHOLD = 0.08;
+const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.58);
+const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.55);
+const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.35);
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
@@ -111,6 +115,12 @@ export class PreciseDecimal {
   }
 }
 
+function sanitizeProbabilityThreshold(raw: string | number | undefined, fallback: number): number {
+  const parsed = typeof raw === 'string' ? Number.parseFloat(raw) : typeof raw === 'number' ? raw : Number.NaN;
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, 0), 1);
+}
+
 export type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 
 type StrategyId =
@@ -145,14 +155,89 @@ export type AdaptiveStrategyPlan = {
 
 type PythonHybridSignal = {
   bias: StrategyBias;
-  probability: number;
-  bearishProbability: number;
+  decision: 'long' | 'short' | 'none';
+  probabilities: PythonPredictionProbabilities;
+  probabilityLong: number;
+  probabilityShort: number;
+  probabilityNone: number;
+  primaryProbability: number;
   confidence: number;
   entryWeight: number;
   riskMultiplier: number;
   cooldown: { active: boolean; reason: string | null; seconds: number | null };
   meta?: Record<string, unknown> | null;
 };
+
+type PredictorGateResult = {
+  bias: StrategyBias;
+  decision: 'long' | 'short' | 'none';
+  primaryProbability: number;
+  topLabel: 'long' | 'short' | 'none';
+};
+
+function evaluatePredictorGate(probabilities: PythonPredictionProbabilities, confidence: number): PredictorGateResult {
+  const entries: Array<{ label: 'long' | 'short' | 'none'; value: number }> = [
+    { label: 'long', value: clamp(probabilities.long, 0, 1) },
+    { label: 'short', value: clamp(probabilities.short, 0, 1) },
+    { label: 'none', value: clamp(probabilities.none, 0, 1) },
+  ];
+  entries.sort((a, b) => b.value - a.value);
+  const [top] = entries;
+  const meetsConfidence = confidence >= PREDICTOR_MIN_CONFIDENCE;
+
+  if (top.label === 'long' && top.value >= PREDICTOR_MIN_PROB_LONG && meetsConfidence) {
+    return { bias: 'long', decision: 'long', primaryProbability: top.value, topLabel: top.label };
+  }
+  if (top.label === 'short' && top.value >= PREDICTOR_MIN_PROB_SHORT && meetsConfidence) {
+    return { bias: 'short', decision: 'short', primaryProbability: top.value, topLabel: top.label };
+  }
+  return { bias: 'both', decision: 'none', primaryProbability: top.value, topLabel: top.label };
+}
+
+function buildHybridSignal(result: PythonPredictionResult): PythonHybridSignal {
+  const probabilities = {
+    long: clamp(result.probabilities.long, 0, 1),
+    short: clamp(result.probabilities.short, 0, 1),
+    none: clamp(result.probabilities.none, 0, 1),
+  };
+  const sum = probabilities.long + probabilities.short + probabilities.none;
+  if (sum > 0) {
+    probabilities.long /= sum;
+    probabilities.short /= sum;
+    probabilities.none /= sum;
+  } else {
+    probabilities.long = probabilities.short = probabilities.none = 1 / 3;
+  }
+
+  const gate = evaluatePredictorGate(probabilities, result.confidence);
+
+  const cooldownSeconds = typeof result.cooldown?.seconds === 'number' && Number.isFinite(result.cooldown.seconds)
+    ? result.cooldown.seconds
+    : null;
+
+  return {
+    bias: gate.bias,
+    decision: gate.decision,
+    probabilities,
+    probabilityLong: probabilities.long,
+    probabilityShort: probabilities.short,
+    probabilityNone: probabilities.none,
+    primaryProbability: gate.primaryProbability,
+    confidence: clamp(result.confidence, 0, 1),
+    entryWeight: clamp(result.entryWeight ?? 1, 0.2, 3),
+    riskMultiplier: clamp(result.riskMultiplier ?? 1, 0.2, 3),
+    cooldown: {
+      active: Boolean(result.cooldown?.active),
+      reason: result.cooldown?.reason ?? null,
+      seconds: cooldownSeconds,
+    },
+    meta: result.meta ?? null,
+  };
+}
+
+function computeProbabilityEdge(signal: Pick<PythonHybridSignal, 'probabilityLong' | 'probabilityShort'>): number {
+  return clamp(signal.probabilityLong - signal.probabilityShort, -1, 1);
+}
 
 type StrategyScoreResult = {
   family: StrategyFamily;
@@ -188,6 +273,15 @@ export type AdaptiveTradeSnapshot = {
   targetProfitUsd: number;
   rr: number | null;
 };
+
+export type AdaptiveExitReason =
+  | 'tp'
+  | 'sl'
+  | 'trailing'
+  | 'timeout'
+  | 'predictor_blocked'
+  | 'min_hold_violation_prevented'
+  | 'other';
 
 export type AdaptiveEvaluationInput = {
   sessionId?: string | null;
@@ -259,6 +353,13 @@ type ActiveTrade = {
   pythonRiskMultiplier?: number;
   pythonCooldownSeconds?: number | null;
   pythonTrackingKey?: string | null;
+  minHoldMinutes: number | null;
+  sideEffective: 'long' | 'short';
+  minHoldGuardActive: boolean;
+  minHoldGuardCount: number;
+  minHoldGuardLastTs: number | null;
+  lastExitReason?: AdaptiveExitReason | null;
+  lastExitDirective?: string | null;
 };
 
 type GuardrailHalt = {
@@ -1028,32 +1129,13 @@ class MetaAdaptiveStrategyAgent {
     if (pythonAvailable && predictorFeatures) {
       try {
         const prediction = getPythonPredictionSync(predictorFeatures);
-        const probabilityEdge = clamp(prediction.probability * 2 - 1, -1, 1);
-        pythonBias = clamp(probabilityEdge * (0.5 + prediction.confidence * 0.5), -1, 1);
-        const direction = Math.abs(pythonBias) < PYTHON_NEUTRAL_THRESHOLD
-          ? 'both'
-          : pythonBias > 0
-            ? 'long'
-            : 'short';
+        const hybridSignal = buildHybridSignal(prediction);
+        const probabilityEdge = computeProbabilityEdge(hybridSignal);
+        pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
+        const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
         pythonSignal = {
-          bias: direction,
-          probability: Number(prediction.probability),
-          bearishProbability: Number(
-            Number.isFinite(prediction.bearishProbability)
-              ? prediction.bearishProbability
-              : 1 - prediction.probability,
-          ),
-          confidence: clamp(Number(prediction.confidence ?? Math.abs(probabilityEdge)), 0, 1),
-          entryWeight: clamp(Number(prediction.entryWeight ?? 1), 0.2, 3),
-          riskMultiplier: clamp(Number(prediction.riskMultiplier ?? 1), 0.2, 3),
-          cooldown: {
-            active: Boolean(prediction.cooldown?.active),
-            reason: prediction.cooldown?.reason ?? null,
-            seconds: Number.isFinite(Number(prediction.cooldown?.seconds))
-              ? Number(prediction.cooldown?.seconds)
-              : null,
-          },
-          meta: prediction.meta ?? null,
+          ...hybridSignal,
+          bias: strongBias,
         };
         pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
       } catch (error) {
@@ -1091,6 +1173,8 @@ class MetaAdaptiveStrategyAgent {
     if (pythonSignal) {
       macroNotes.push(`python_bias=${pythonBias.toFixed(2)}`);
       macroNotes.push(`python_weight=${pythonWeight.toFixed(2)}`);
+      macroNotes.push(`python_decision=${pythonSignal.decision}`);
+      macroNotes.push(`python_prob_primary=${pythonSignal.primaryProbability.toFixed(2)}`);
       macroNotes.push(`python_conf=${pythonSignal.confidence.toFixed(2)}`);
       macroNotes.push(`python_entry=${pythonSignal.entryWeight.toFixed(2)}`);
       if (pythonSignal.cooldown.active) {
@@ -1724,28 +1808,40 @@ class MetaAdaptiveStrategyAgent {
     mtfConsensus?: MultiTimeframeConsensus | null;
     mtfMatches?: number | null;
     mtfFrames?: number | null;
+    minHoldMinutes?: number | null;
   }): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
     if (!params.sessionId || !params.token) return 'skipped';
 
     const pythonSignalMeta = params.pythonSignal ?? null;
+    let predictorProbabilities: PythonPredictionProbabilities | null = pythonSignalMeta?.probabilities ?? null;
     let predictorDecision: StrategyBias = pythonSignalMeta?.bias ?? 'both';
-    let predictorProbability = pythonSignalMeta?.probability ?? 0.5;
+    let predictorDecisionLabel: 'long' | 'short' | 'none' = pythonSignalMeta?.decision ?? 'none';
+    let predictorPrimaryProbability = pythonSignalMeta?.primaryProbability ?? 0.5;
+    let predictorConfidence = pythonSignalMeta?.confidence ?? 0;
     // The Python predictor (python/predict_service.py) loads the persisted XGBoost
-    // model and scores the latest indicator snapshot. A bullish prediction (1)
-    // permits long-biased strategies, whereas a bearish prediction (0) permits
-    // shorts. Updating the model means re-running `npm run train-model`, which
+    // model and scores the latest indicator snapshot. The classifier now emits
+    // calibrated probabilities for long/short/none; only confident sides above
+    // the configured thresholds are allowed to enforce a directional veto.
+    // Updating the model means re-running `npm run train-model`, which
     // refreshes python/xgboost_direction.json and python/features.txt – the
     // agent picks up the new artefacts on the next process spawn.
     const shouldQueryPython = params.predictorFeatures
       && process.env.DISABLE_PYTHON_PREDICTOR !== 'true'
       && isPythonPredictorAvailable()
-      && (!params.pythonSignal || Math.abs(predictorProbability - 0.5) * 2 < PYTHON_GATE_THRESHOLD);
+      && (!pythonSignalMeta
+        || pythonSignalMeta.bias === 'both'
+        || pythonSignalMeta.confidence < PREDICTOR_MIN_CONFIDENCE);
 
     if (shouldQueryPython && params.predictorFeatures) {
       try {
         const raw = await getPythonPrediction(params.predictorFeatures);
-        predictorProbability = raw.probability;
-        predictorDecision = raw.prediction === 1 ? 'long' : 'short';
+        const enriched = buildHybridSignal(raw);
+        predictorProbabilities = enriched.probabilities;
+        const probabilityEdge = computeProbabilityEdge(enriched);
+        predictorDecision = Math.abs(probabilityEdge) >= PYTHON_NEUTRAL_THRESHOLD ? enriched.bias : 'both';
+        predictorDecisionLabel = predictorDecision === 'both' ? 'none' : enriched.decision;
+        predictorPrimaryProbability = enriched.primaryProbability;
+        predictorConfidence = enriched.confidence;
       } catch (error) {
         if (process.env.UNIT_TEST_MODE !== 'true') {
           console.warn('python predictor failure during trade registration', error);
@@ -1753,8 +1849,31 @@ class MetaAdaptiveStrategyAgent {
       }
     }
 
-    const predictorConfidence = pythonSignalMeta?.confidence ?? Math.abs(predictorProbability - 0.5) * 2;
-    if (predictorConfidence < PYTHON_GATE_THRESHOLD) {
+    if (!Number.isFinite(predictorConfidence)) {
+      predictorConfidence = 0;
+    }
+    if (predictorProbabilities) {
+      const ranked = [
+        { label: 'long' as const, value: clamp(predictorProbabilities.long, 0, 1) },
+        { label: 'short' as const, value: clamp(predictorProbabilities.short, 0, 1) },
+        { label: 'none' as const, value: clamp(predictorProbabilities.none, 0, 1) },
+      ].sort((a, b) => b.value - a.value);
+      const top = ranked[0];
+      const second = ranked[1] ?? top;
+      predictorPrimaryProbability = top.value;
+      if (predictorDecisionLabel === 'none') {
+        predictorDecisionLabel = top.label;
+      }
+      const diff = Math.abs(top.value - second.value);
+      if (predictorConfidence < diff) {
+        predictorConfidence = diff;
+      }
+    }
+    if (predictorConfidence < PREDICTOR_MIN_CONFIDENCE) {
+      predictorDecision = 'both';
+      predictorDecisionLabel = 'none';
+    }
+    if (predictorDecision !== 'long' && predictorDecision !== 'short') {
       predictorDecision = 'both';
     }
 
@@ -1767,7 +1886,8 @@ class MetaAdaptiveStrategyAgent {
         sessionId: params.sessionId ?? null,
         token: params.token,
         predictorDecision,
-        predictorProbability: Number(predictorProbability.toFixed(4)),
+        predictorDecisionLabel,
+        predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
         predictorConfidence: Number(predictorConfidence.toFixed(4)),
         intendedSide,
       }));
@@ -1796,15 +1916,16 @@ class MetaAdaptiveStrategyAgent {
         console.log(JSON.stringify({
           level: 'info',
           event: 'adaptive_trade_blocked_by_predictor',
-          symbol: params.symbol,
-          sessionId: params.sessionId ?? null,
-          token: params.token,
-          predictorDecision,
-          predictorProbability: Number(predictorProbability.toFixed(4)),
-          predictorConfidence: Number(predictorConfidence.toFixed(4)),
-          intendedSide,
-          reason: 'short_guardrail',
-          guardReasons,
+        symbol: params.symbol,
+        sessionId: params.sessionId ?? null,
+        token: params.token,
+        predictorDecision,
+        predictorDecisionLabel,
+        predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
+        predictorConfidence: Number(predictorConfidence.toFixed(4)),
+        intendedSide,
+        reason: 'short_guardrail',
+        guardReasons,
           flowCmf: flowCmfValue != null && Number.isFinite(flowCmfValue) ? Number(flowCmfValue.toFixed(6)) : null,
           flowThreshold: -cmfThresholdAbs,
           flowVolumeRatio: flowVolumeRatioLogged,
@@ -1861,12 +1982,25 @@ class MetaAdaptiveStrategyAgent {
     })();
     const rrValue = rr != null && Number.isFinite(rr) ? Number(rr.toFixed(6)) : null;
     const side = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
+    const minHoldMinutesValue = params.minHoldMinutes != null && Number.isFinite(params.minHoldMinutes)
+      ? Number(params.minHoldMinutes)
+      : null;
+    const entryPriceNumber = entryPrice.toNumber();
+    const sideEffective: 'long' | 'short' = (() => {
+      if (side === 'short') return 'short';
+      if (side === 'long') return 'long';
+      const firstTarget = normalizedTargets[0];
+      if (Number.isFinite(firstTarget)) {
+        return firstTarget! < entryPriceNumber ? 'short' : 'long';
+      }
+      return 'long';
+    })();
     const queue = this.activeTrades.get(params.sessionId) ?? [];
     const pythonTrackingKey = this.pythonTradeKey(params.sessionId ?? null, params.token ?? null, params.symbol);
     if (pythonTrackingKey) {
       this.pythonPerformance.recordExpectation(
         pythonTrackingKey,
-        predictorProbability,
+        predictorPrimaryProbability,
         predictorConfidence,
       );
     }
@@ -1898,12 +2032,19 @@ class MetaAdaptiveStrategyAgent {
       targets: normalizedTargets,
       rr: rrValue,
       trailingPolicy: params.plan.trailingPolicy ?? null,
-      pythonProbability: predictorProbability,
+      pythonProbability: predictorPrimaryProbability,
       pythonConfidence: predictorConfidence,
       pythonEntryWeight,
       pythonRiskMultiplier: planRiskMultiplierDecimal.toNumber(),
       pythonCooldownSeconds: pythonSignalMeta?.cooldown.seconds ?? null,
       pythonTrackingKey,
+      minHoldMinutes: minHoldMinutesValue,
+      sideEffective,
+      minHoldGuardActive: false,
+      minHoldGuardCount: 0,
+      minHoldGuardLastTs: null,
+      lastExitReason: null,
+      lastExitDirective: null,
     });
     this.activeTrades.set(params.sessionId, queue);
 
@@ -1914,11 +2055,72 @@ class MetaAdaptiveStrategyAgent {
       sessionId: params.sessionId ?? null,
       token: params.token,
       predictorDecision,
-      predictorProbability: Number(predictorProbability.toFixed(4)),
+      predictorDecisionLabel,
+      predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
       predictorConfidence: Number(predictorConfidence.toFixed(4)),
       intendedSide,
     }));
     return 'registered';
+  }
+
+  noteMinHoldGuard(params: {
+    sessionId?: string | null;
+    symbol: string;
+    token?: string | null;
+    reason?: string | null;
+    elapsedMs?: number | null;
+    requiredMs?: number | null;
+  }): void {
+    if (!params.sessionId) return;
+    const queue = this.activeTrades.get(params.sessionId);
+    if (!queue || queue.length === 0) return;
+    let tradeIndex = 0;
+    const candidate = queue.findIndex(
+      trade => trade.symbol === params.symbol && (!params.token || trade.token === params.token),
+    );
+    if (candidate >= 0) {
+      tradeIndex = candidate;
+    } else if (params.token) {
+      const tokenOnlyIndex = queue.findIndex(trade => trade.token === params.token);
+      if (tokenOnlyIndex >= 0) {
+        tradeIndex = tokenOnlyIndex;
+      }
+    }
+    const trade = queue[tradeIndex];
+    if (!trade) return;
+    trade.minHoldGuardActive = true;
+    trade.minHoldGuardCount = (trade.minHoldGuardCount ?? 0) + 1;
+    trade.minHoldGuardLastTs = Date.now();
+    trade.lastExitDirective = params.reason ?? trade.lastExitDirective ?? 'min_hold_active';
+    const minutesElapsed = params.elapsedMs != null && Number.isFinite(params.elapsedMs)
+      ? Number((params.elapsedMs / 60000).toFixed(4))
+      : null;
+    const minutesRequired = (() => {
+      if (params.requiredMs != null && Number.isFinite(params.requiredMs)) {
+        return Number((params.requiredMs / 60000).toFixed(4));
+      }
+      if (trade.minHoldMinutes != null && Number.isFinite(trade.minHoldMinutes)) {
+        return Number(trade.minHoldMinutes.toFixed(4));
+      }
+      return null;
+    })();
+    queue[tradeIndex] = trade;
+    this.activeTrades.set(params.sessionId, queue);
+    console.log(JSON.stringify({
+      level: 'info',
+      event: 'adaptive_trade_min_hold_guard',
+      timestamp: new Date().toISOString(),
+      sessionId: params.sessionId ?? null,
+      symbol: params.symbol,
+      token: params.token ?? null,
+      side: trade.side,
+      side_effective: trade.sideEffective,
+      min_hold_guard_active: true,
+      activation_count: trade.minHoldGuardCount,
+      minutes_elapsed: minutesElapsed,
+      min_hold_minutes_required: minutesRequired,
+      reason: params.reason ?? 'min_hold_active',
+    }));
   }
 
   registerOutcome(params: {
@@ -1926,6 +2128,12 @@ class MetaAdaptiveStrategyAgent {
     symbol: string;
     token?: string | null;
     realizedPnlUsd?: number | null;
+    exitReason?: AdaptiveExitReason | null;
+    rawExitReason?: string | null;
+    holdDurationMs?: number | null;
+    minHoldRequiredMs?: number | null;
+    sideEffective?: 'long' | 'short' | null;
+    minHoldGuardActive?: boolean | null;
   }): void {
     if (!params.sessionId) return;
     const queue = this.activeTrades.get(params.sessionId);
@@ -1952,6 +2160,26 @@ class MetaAdaptiveStrategyAgent {
     if (trade.pythonTrackingKey) {
       this.pythonPerformance.recordOutcome(trade.pythonTrackingKey, normalized.toNumber());
     }
+    const holdElapsedMs = (() => {
+      if (params.holdDurationMs != null && Number.isFinite(params.holdDurationMs)) {
+        return Number(params.holdDurationMs);
+      }
+      return Math.max(0, Date.now() - trade.timestamp);
+    })();
+    const minHoldRequiredMs = (() => {
+      if (params.minHoldRequiredMs != null && Number.isFinite(params.minHoldRequiredMs)) {
+        return Math.max(0, Number(params.minHoldRequiredMs));
+      }
+      if (trade.minHoldMinutes != null && Number.isFinite(trade.minHoldMinutes)) {
+        return Math.max(0, trade.minHoldMinutes * 60000);
+      }
+      return null;
+    })();
+    const guardActive = Boolean(params.minHoldGuardActive ?? trade.minHoldGuardActive);
+    const guardCount = trade.minHoldGuardCount ?? (guardActive ? 1 : 0);
+    const sideEffective = params.sideEffective ?? trade.sideEffective ?? (trade.side === 'short' ? 'short' : 'long');
+    const exitReason = params.exitReason ?? trade.lastExitReason ?? (guardActive ? 'min_hold_violation_prevented' : 'other');
+    const rawExitReason = params.rawExitReason ?? trade.lastExitDirective ?? null;
     console.log(JSON.stringify({
       level: 'info',
       event: 'adaptive_trade_outcome',
@@ -1960,6 +2188,7 @@ class MetaAdaptiveStrategyAgent {
       symbol: params.symbol,
       token: params.token ?? null,
       side: trade.side,
+      side_effective: sideEffective,
       qty: trade.qty.toFixed(6),
       entryPrice: trade.entryPrice.toFixed(6),
       realizedPnlUsd: pnl.toFixed(6),
@@ -1969,6 +2198,13 @@ class MetaAdaptiveStrategyAgent {
       riskPerUnit: trade.riskPerUnit.toFixed(6),
       rr: trade.rr != null ? Number(trade.rr.toFixed(4)) : null,
       firstTarget: trade.targets.length ? Number(trade.targets[0].toFixed(6)) : null,
+      exit_reason: exitReason,
+      exit_reason_raw: rawExitReason,
+      min_hold_elapsed_ms: Math.max(0, Math.round(holdElapsedMs)),
+      min_hold_required_ms: minHoldRequiredMs != null ? Math.max(0, Math.round(minHoldRequiredMs)) : null,
+      min_hold_guard_active: guardActive,
+      min_hold_guard_count: guardCount,
+      min_hold_guard_last_ts: trade.minHoldGuardLastTs ? new Date(trade.minHoldGuardLastTs).toISOString() : null,
     }));
     if (this.reentryCooldownMs > 0 && normalized.lt(0)) {
       const now = Date.now();

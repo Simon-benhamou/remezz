@@ -82,6 +82,39 @@ async function main() {
   console.log(
     `  Threshold: ${report.metaAdaptive.metrics.confidenceGateThreshold.toFixed(2)} | Blocked signals: ${report.metaAdaptive.metrics.confidenceGateBlockedSignalsPct.toFixed(2)}% | Blocked primary: ${report.metaAdaptive.metrics.confidenceGateBlockedPrimaryPct.toFixed(2)}%`,
   );
+
+  if (report.metaAdaptive.sideBreakdown.length) {
+    console.log('\nMeta-Adaptive per-side performance:');
+    const sideTable = report.metaAdaptive.sideBreakdown.map((row) => ({
+      Side: row.side,
+      Attempts: row.attempts,
+      Trades: row.trades,
+      HitRate: formatPercent(row.hitRate),
+      ProfitFactor: Number.isFinite(row.profitFactor) ? row.profitFactor.toFixed(2) : '—',
+      AvgWin: `${row.avgWin.toFixed(2)}%`,
+      AvgLoss: `${row.avgLoss.toFixed(2)}%`,
+      PredictorBlocked: row.predictorBlocked,
+    }));
+    console.table(sideTable);
+  }
+
+  const focusStrategies = new Set(['classic_trend_following', 'momentum_scanner_focus']);
+  const strategyRows = report.metaAdaptive.strategyBreakdown.filter((row) => focusStrategies.has(row.strategyId));
+  if (strategyRows.length) {
+    console.log('\nMeta-Adaptive strategy-side metrics:');
+    const strategyTable = strategyRows.map((row) => ({
+      Strategy: row.strategyId,
+      Side: row.side,
+      Attempts: row.attempts,
+      Trades: row.trades,
+      HitRate: formatPercent(row.hitRate),
+      ProfitFactor: Number.isFinite(row.profitFactor) ? row.profitFactor.toFixed(2) : '—',
+      AvgWin: `${row.avgWin.toFixed(2)}%`,
+      AvgLoss: `${row.avgLoss.toFixed(2)}%`,
+      PredictorBlocked: row.predictorBlocked,
+    }));
+    console.table(strategyTable);
+  }
 }
 
 main()

@@ -15,6 +15,11 @@ const sampleFeatures = {
 };
 
 const prediction = await getPrediction(sampleFeatures);
-assert([0, 1].includes(prediction.prediction), 'Python predictor must return 0 or 1');
-assert(prediction.probability >= 0 && prediction.probability <= 1, 'Python probability must be within [0,1]');
-console.log(`✅ python predictor returned ${prediction.prediction} (${(prediction.probability * 100).toFixed(1)}% bull)`);
+assert(['long', 'short', 'none'].includes(prediction.decision), 'Python predictor must return a valid decision');
+const probs = prediction.probabilities;
+const totalProb = probs.long + probs.short + probs.none;
+assert(Math.abs(totalProb - 1) < 1e-6, 'Probabilities should sum to 1');
+assert(prediction.probabilityLong >= 0 && prediction.probabilityLong <= 1, 'Long probability must be within [0,1]');
+assert(prediction.probabilityShort >= 0 && prediction.probabilityShort <= 1, 'Short probability must be within [0,1]');
+assert(prediction.probabilityNone >= 0 && prediction.probabilityNone <= 1, 'None probability must be within [0,1]');
+console.log(`✅ python predictor decision=${prediction.decision} (P_long=${(prediction.probabilityLong * 100).toFixed(1)}%)`);

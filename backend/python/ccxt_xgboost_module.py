@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, getcontext
 from math import exp
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 try:  # pragma: no cover - optional dependency
     import ccxt  # type: ignore
@@ -28,7 +28,7 @@ try:  # Optional heavy deps
     import numpy as np
     import pandas as pd
     import ta  # type: ignore
-    from sklearn.metrics import accuracy_score, f1_score
+    from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, roc_auc_score
     HAVE_PANDAS = True
 except Exception:  # pragma: no cover - fallback path
     np = None  # type: ignore
@@ -36,6 +36,8 @@ except Exception:  # pragma: no cover - fallback path
     ta = None  # type: ignore
     accuracy_score = None  # type: ignore
     f1_score = None  # type: ignore
+    confusion_matrix = None  # type: ignore
+    roc_auc_score = None  # type: ignore
     HAVE_PANDAS = False
 
 try:  # pragma: no cover - optional dependency
@@ -56,53 +58,74 @@ class XGBClassifier:  # type: ignore
             self._bias = 0.0
         else:
             self._native = None
-            self._weights = None
-            self._bias = 0.0
+            self._classes: List[int] = []
+            self._centroids: Dict[int, List[float]] = {}
 
     def fit(self, X, y):
         if self._native is not None:
             return self._native.fit(X, y)
         rows = [list(map(float, row)) for row in X]
-        targets = [float(val) for val in y]
+        targets = [int(val) for val in y]
         if not rows:
-            self._weights = []
-            self._bias = 0.0
+            self._classes = []
+            self._centroids = {}
             return self
-        pos = [row for row, target in zip(rows, targets) if target >= 0.5]
-        neg = [row for row, target in zip(rows, targets) if target < 0.5]
-        if not pos:
-            pos = rows
-        if not neg:
-            neg = rows
+        self._classes = sorted({int(label) for label in targets})
+        if not self._classes:
+            self._classes = [0]
 
-        def mean_vector(samples):
+        def mean_vector(samples: List[List[float]]) -> List[float]:
+            if not samples:
+                return [0.0 for _ in rows[0]]
             return [sum(col) / len(samples) for col in zip(*samples)]
 
-        pos_mean = mean_vector(pos)
-        neg_mean = mean_vector(neg)
-        self._weights = [p - n for p, n in zip(pos_mean, neg_mean)]
-        self._bias = -0.5 * (
-            sum(p * p for p in pos_mean) - sum(n * n for n in neg_mean)
-        )
+        overall_mean = mean_vector(rows)
+        centroids: Dict[int, List[float]] = {}
+        for cls in self._classes:
+            samples = [row for row, target in zip(rows, targets) if target == cls]
+            if not samples:
+                centroids[cls] = list(overall_mean)
+            else:
+                centroids[cls] = mean_vector(samples)
+
+        # Ensure all expected classes are represented to keep probability vectors aligned.
+        for cls in range(len(CLASS_ORDER)):
+            if cls not in centroids:
+                centroids[cls] = list(overall_mean)
+        self._classes = sorted(centroids.keys())
+        self._centroids = centroids
         return self
 
     def predict_proba(self, X):
         if self._native is not None:
             return self._native.predict_proba(X)
-        if self._weights is None:
+        if not self._centroids:
             raise RuntimeError('Model not trained')
-        results = []
+        results: List[List[float]] = []
         for row in X:
             values = list(map(float, row))
-            logit = sum(w * v for w, v in zip(self._weights, values)) + self._bias
-            prob = 1 / (1 + exp(-logit))
-            prob = max(1e-6, min(1 - 1e-6, prob))
-            results.append((1 - prob, prob))
-        return results
+            scores: List[float] = []
+            for cls in self._classes:
+                centroid = self._centroids[cls]
+                # Negative squared distance for a softmax-friendly score.
+                diff = [v - c for v, c in zip(values, centroid)]
+                score = -sum(val * val for val in diff)
+                scores.append(score)
+            max_score = max(scores)
+            exp_scores = [exp(score - max_score) for score in scores]
+            total = sum(exp_scores)
+            if total <= 0:
+                probs = [1.0 / len(exp_scores) for _ in exp_scores]
+            else:
+                probs = [val / total for val in exp_scores]
+            results.append(probs)
+        return np.asarray(results)
 
     def predict(self, X):
         probs = self.predict_proba(X)
-        return [1 if pair[1] >= 0.5 else 0 for pair in probs]
+        if HAVE_XGBOOST:
+            return self._native.predict(X)  # type: ignore[attr-defined]
+        return [int(np.argmax(pair)) for pair in probs]
 
     def save_model(self, path: Path | str):
         path = Path(path)
@@ -110,8 +133,8 @@ class XGBClassifier:  # type: ignore
             self._native.save_model(path)
             return
         payload = {
-            "weights": list(self._weights) if self._weights is not None else [],
-            "bias": float(self._bias),
+            "classes": list(self._classes),
+            "centroids": {str(cls): list(values) for cls, values in self._centroids.items()},
         }
         path.write_text(json.dumps(payload))
 
@@ -121,13 +144,26 @@ class XGBClassifier:  # type: ignore
             self._native.load_model(path)
             return
         payload = json.loads(path.read_text())
-        self._weights = [float(x) for x in payload.get("weights", [])]
-        self._bias = float(payload.get("bias", 0.0))
+        classes = payload.get("classes", [])
+        if not isinstance(classes, list):
+            classes = []
+        self._classes = [int(cls) for cls in classes]
+        centroids_raw = payload.get("centroids", {})
+        mapped: Dict[int, List[float]] = {}
+        if isinstance(centroids_raw, dict):
+            for key, values in centroids_raw.items():
+                try:
+                    cls = int(key)
+                except (TypeError, ValueError):
+                    continue
+                mapped[cls] = [float(val) for val in values]
+        self._centroids = mapped
 
 CACHE_DIR = Path(__file__).resolve().parents[1] / "data" / "ccxt_cache"
 MODEL_PATH = Path(__file__).resolve().parent / "xgboost_direction.json"
 FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
+METADATA_PATH = Path(__file__).resolve().parent / "predictor_metadata.json"
 
 DEFAULT_EXCHANGE = "binance"
 DEFAULT_SYMBOLS = (
@@ -208,20 +244,24 @@ class PreparedWindow:
 
 
 DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
-    WindowSpec("15m", hours=24 * 45, offset_hours=0),
-    WindowSpec("15m", hours=24 * 30, offset_hours=24 * 30),
-    WindowSpec("1h", hours=24 * 180, offset_hours=0),
-    WindowSpec("4h", hours=24 * 365, offset_hours=0),
+    WindowSpec("15m", hours=24 * 90, offset_hours=0),
+    WindowSpec("1h", hours=24 * 365, offset_hours=0),
+    WindowSpec("4h", hours=24 * 365 * 2, offset_hours=0),
 )
 
 RANDOM_SEED = 42
 getcontext().prec = 28
+
+CLASS_ORDER = ["long", "none", "short"]
+CLASS_TO_INDEX = {label: idx for idx, label in enumerate(CLASS_ORDER)}
 
 
 @dataclass
 class TrainingArtifacts:
     model: XGBClassifier
     features: List[str]
+    class_order: List[str]
+    calibration: Dict[str, float]
     metrics: Dict[str, float]
 
 
@@ -536,9 +576,35 @@ def prepare_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["volumeZScore"] = (volume - volume.rolling(window=40, min_periods=1).mean()) / volume.rolling(window=40, min_periods=1).std(ddof=0)
     df["momentum3"] = close.pct_change(periods=3)
 
-    future_close = close.shift(-3)
+    # Multi-timeframe approximations (rolling over intra-series windows)
+    df["atrPct_1h"] = df["atrPct"].rolling(window=4, min_periods=1).mean()
+    df["atrPct_4h"] = df["atrPct"].rolling(window=16, min_periods=1).mean()
+    df["rsi14_1h"] = df["rsi14"].rolling(window=4, min_periods=1).mean()
+    df["rsi14_4h"] = df["rsi14"].rolling(window=16, min_periods=1).mean()
+    df["emaRatio_20_200"] = df["ema20"] / df["ema200"].replace(0, np.nan)
+    df["trendStrength"] = (df["ema20"] - df["ema100"]) / df["ema100"].replace(0, np.nan)
+    df["volatilityRegime"] = df["atrPct"].rolling(window=20, min_periods=1).mean()
+    df["spreadProxy"] = (df["high"] - df["low"]) / close.replace(0, np.nan)
+    df["microImbalance"] = df["momentum3"].rolling(window=5, min_periods=1).mean()
+    df["mtfAgreement"] = np.sign(df["ema20"] - df["ema50"]) + np.sign(df["ema50"] - df["ema100"]) + np.sign(df["ema100"] - df["ema200"])
+
+    horizon = int(os.environ.get("PREDICTOR_FUTURE_HORIZON", "12"))
+    horizon = max(1, min(64, horizon))
+    gamma = float(os.environ.get("PREDICTOR_LABEL_GAMMA", "0.45"))
+    future_close = close.shift(-horizon)
     df["futureClose"] = future_close
-    df["target"] = (future_close > close).astype(int)
+    future_return = (future_close - close) / close.replace(0, np.nan)
+    atr_threshold = df["atrPct"].rolling(window=horizon, min_periods=1).mean()
+    theta = gamma * atr_threshold
+    df["futureReturn"] = future_return
+
+    long_mask = future_return >= theta
+    short_mask = future_return <= -theta
+    target = np.full(len(df), 1, dtype=int)  # default none class index
+    target[long_mask] = 0
+    target[short_mask] = 2
+    df["target"] = target
+    df["targetLabel"] = np.where(long_mask, "long", np.where(short_mask, "short", "none"))
 
     df = df.dropna().copy()
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
@@ -557,12 +623,90 @@ def prepare_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
         "emaTrendSpread",
         "rsiSlope",
         "atrPct",
+        "atrPct_1h",
+        "atrPct_4h",
+        "rsi14_1h",
+        "rsi14_4h",
         "volumeZScore",
         "momentum3",
+        "emaRatio_20_200",
+        "trendStrength",
+        "volatilityRegime",
+        "spreadProxy",
+        "microImbalance",
+        "mtfAgreement",
     ]
 
-    dataset = df[["timestamp", "close", "futureClose"] + features + ["target"]]
+    dataset = df[["timestamp", "close", "futureClose", "futureReturn"] + features + ["target", "targetLabel"]]
     return dataset.reset_index()
+
+
+def _ensure_minimum_class_coverage(
+    X_train: "pd.DataFrame",
+    y_train: "pd.Series",
+) -> Tuple["pd.DataFrame", "pd.Series"]:
+    """Duplicate representative samples so each class is present at least once."""
+
+    unique_classes = set(int(label) for label in y_train.unique())
+    if len(unique_classes) == len(CLASS_ORDER):
+        return X_train, y_train
+    baseline_row = X_train.mean(axis=0)
+    if baseline_row.isnull().any():
+        baseline_row = X_train.fillna(0).iloc[0]
+    additions = []
+    targets: List[int] = []
+    for idx in range(len(CLASS_ORDER)):
+        if idx in unique_classes:
+            continue
+        additions.append(baseline_row)
+        targets.append(idx)
+    if additions:
+        synthetic = pd.DataFrame(additions, columns=X_train.columns)  # type: ignore[arg-type]
+        X_train = pd.concat([X_train, synthetic], ignore_index=True)
+        y_train = pd.concat([y_train, pd.Series(targets)], ignore_index=True)
+    return X_train, y_train
+
+
+def _apply_temperature_scaling(probabilities: "np.ndarray", temperature: float) -> "np.ndarray":
+    if temperature <= 0 or not np.isfinite(temperature):
+        return probabilities
+    logits = np.log(np.clip(probabilities, 1e-12, 1.0))
+    scaled = logits / temperature
+    max_vals = np.max(scaled, axis=1, keepdims=True)
+    exp_scaled = np.exp(scaled - max_vals)
+    sums = np.sum(exp_scaled, axis=1, keepdims=True)
+    return exp_scaled / np.clip(sums, 1e-12, None)
+
+
+def _temperature_search(
+    probabilities: "np.ndarray",
+    labels: "np.ndarray",
+) -> Tuple[float, float, "np.ndarray"]:
+    if len(probabilities) == 0:
+        return 1.0, float("nan"), probabilities
+    best_temperature = 1.0
+    best_nll = float("inf")
+    best_probs = probabilities
+    for temperature in np.linspace(0.5, 4.5, 41):
+        calibrated = _apply_temperature_scaling(probabilities, float(temperature))
+        nll = -float(
+            np.mean(
+                np.log(
+                    np.clip(
+                        calibrated[np.arange(len(labels)), labels],
+                        1e-12,
+                        1.0,
+                    )
+                )
+            )
+        )
+        if not np.isfinite(nll):
+            continue
+        if nll < best_nll:
+            best_nll = nll
+            best_temperature = float(temperature)
+            best_probs = calibrated
+    return best_temperature, best_nll, best_probs
 
 
 def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> TrainingArtifacts:
@@ -571,7 +715,15 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
     if data.empty:
         raise ValueError("Training dataset is empty")
 
-    feature_exclusions = {"timestamp", "target", "close", "futureClose", "index"}
+    feature_exclusions = {
+        "timestamp",
+        "target",
+        "targetLabel",
+        "close",
+        "futureClose",
+        "futureReturn",
+        "index",
+    }
     features = [col for col in data.columns if col not in feature_exclusions]
     X = data[features]
     y = data["target"]
@@ -591,15 +743,12 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
     if X_test.empty:
         raise ValueError("Insufficient samples for validation split")
 
-    if len(set(y_train)) < 2:
-        synthetic_target = 1 - int(y_train.iloc[0])
-        synthetic_features = X_train.iloc[[0]].copy()
-        X_train = pd.concat([X_train, synthetic_features], ignore_index=True)
-        y_train = pd.concat([y_train, pd.Series([synthetic_target])], ignore_index=True)
+    X_train, y_train = _ensure_minimum_class_coverage(X_train, y_train)
 
     model = XGBClassifier(
-        objective="binary:logistic",
-        eval_metric="logloss",
+        objective="multi:softprob",
+        eval_metric="mlogloss",
+        num_class=len(CLASS_ORDER),
         seed=RANDOM_SEED,
         **params,
     )
@@ -607,26 +756,85 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
 
     preds = model.predict(X_test)
     accuracy = float(accuracy_score(y_test, preds))
-    f1 = float(f1_score(y_test, preds))
-    if any(map(lambda value: value != value, (accuracy, f1))):  # NaN check without math dependency
+    f1_macro = float(f1_score(y_test, preds, average="macro", zero_division=0))
+    f1_per_class = f1_score(
+        y_test,
+        preds,
+        labels=list(range(len(CLASS_ORDER))),
+        average=None,
+        zero_division=0,
+    )
+    if any(value != value for value in (accuracy, f1_macro)):  # NaN guard
         raise ValueError("Training metrics produced NaN; aborting")
 
-    probs = model.predict_proba(X_test)[:, 1]
+    prob_matrix = model.predict_proba(X_test)
+    if not isinstance(prob_matrix, np.ndarray):
+        prob_matrix = np.asarray(prob_matrix)
+    if prob_matrix.ndim != 2 or prob_matrix.shape[1] != len(CLASS_ORDER):
+        raise ValueError(f"Expected probability matrix with {len(CLASS_ORDER)} columns, got {prob_matrix.shape}")
+    temperature, calibrated_nll, calibrated_probs = _temperature_search(prob_matrix, y_test.to_numpy(dtype=int))
+
+    try:
+        roc_auc = float(roc_auc_score(y_test, prob_matrix, multi_class="ovr"))
+    except Exception:
+        roc_auc = float("nan")
+
+    base_log_loss = -float(
+        np.mean(
+            np.log(
+                np.clip(
+                    prob_matrix[np.arange(len(y_test)), y_test.to_numpy(dtype=int)],
+                    1e-12,
+                    1.0,
+                )
+            )
+        )
+    )
+
+    confusion = confusion_matrix(
+        y_test,
+        preds,
+        labels=list(range(len(CLASS_ORDER))),
+    )
+
+    metrics: Dict[str, float] = {
+        "accuracy": accuracy,
+        "f1Macro": f1_macro,
+        "f1Long": float(f1_per_class[CLASS_TO_INDEX["long"]]) if len(f1_per_class) > CLASS_TO_INDEX["long"] else 0.0,
+        "f1None": float(f1_per_class[CLASS_TO_INDEX["none"]]) if len(f1_per_class) > CLASS_TO_INDEX["none"] else 0.0,
+        "f1Short": float(f1_per_class[CLASS_TO_INDEX["short"]]) if len(f1_per_class) > CLASS_TO_INDEX["short"] else 0.0,
+        "rocAucMacro": roc_auc if np.isfinite(roc_auc) else 0.0,
+        "logLoss": base_log_loss,
+        "calibratedLogLoss": calibrated_nll if np.isfinite(calibrated_nll) else base_log_loss,
+        "calibrationTemperature": temperature,
+    }
+
+    for actual_idx, actual_label in enumerate(CLASS_ORDER):
+        for pred_idx, pred_label in enumerate(CLASS_ORDER):
+            metrics[f"confusion_{actual_label}_pred_{pred_label}"] = float(confusion[actual_idx, pred_idx])
+
     backtest_metrics = compute_prediction_backtest_metrics(
         timestamps_test.reset_index(drop=True),
         closes_test.reset_index(drop=True),
         future_test.reset_index(drop=True),
         y_test.reset_index(drop=True),
-        probs,
+        calibrated_probs,
     )
 
-    metrics = {
-        "accuracy": accuracy,
-        "f1": f1,
-        **backtest_metrics,
-    }
+    metrics.update(backtest_metrics)
 
-    return TrainingArtifacts(model=model, features=features, metrics=metrics)
+    if any(value != value for value in metrics.values()):
+        raise ValueError("Training metrics produced NaN; aborting")
+
+    calibration_payload = {"temperature": float(temperature)}
+
+    return TrainingArtifacts(
+        model=model,
+        features=features,
+        class_order=list(CLASS_ORDER),
+        calibration=calibration_payload,
+        metrics=metrics,
+    )
 
 
 def compute_prediction_backtest_metrics(
@@ -635,13 +843,17 @@ def compute_prediction_backtest_metrics(
     future_closes: "pd.Series",
     targets: "pd.Series",
     probabilities,
-    long_threshold: float = 0.6,
-    short_threshold: float = 0.4,
+    long_threshold: float = 0.55,
+    short_threshold: float = 0.55,
     position_scale: float = 0.01,
 ) -> Dict[str, float]:
     """Evaluate sequential predictive performance and derive risk metrics."""
 
-    if len(probabilities) != len(closes):
+    prob_matrix = np.asarray(probabilities)
+    if prob_matrix.ndim != 2 or prob_matrix.shape[1] != len(CLASS_ORDER):
+        raise ValueError("compute_prediction_backtest_metrics expects probability matrix shaped (n_samples, n_classes)")
+
+    if len(prob_matrix) != len(closes):
         raise ValueError("Probabilities and price series length mismatch")
 
     equity = Decimal("1")
@@ -650,9 +862,14 @@ def compute_prediction_backtest_metrics(
     trade_returns: List[Decimal] = []
     wins = 0
     trade_count = 0
+    long_trades = 0
+    short_trades = 0
+    long_wins = 0
+    short_wins = 0
+    neutral_skips = 0
     directional_hits = 0
 
-    for idx, prob in enumerate(probabilities):
+    for idx, row_probs in enumerate(prob_matrix):
         close = float(closes.iloc[idx])
         future_close = float(future_closes.iloc[idx])
         ts = timestamps.iloc[idx]
@@ -662,25 +879,36 @@ def compute_prediction_backtest_metrics(
         future_decimal = Decimal(str(future_close))
         if price_decimal == 0:
             continue
-        if not np.isfinite(prob):
+        if not np.all(np.isfinite(row_probs)):
             continue
 
         scale = Decimal(str(position_scale))
-        if prob >= long_threshold:
+        prob_long = float(row_probs[CLASS_TO_INDEX["long"]])
+        prob_short = float(row_probs[CLASS_TO_INDEX["short"]])
+        if prob_long >= long_threshold and prob_long >= prob_short:
             ret = ((future_decimal - price_decimal) / price_decimal) * scale
             direction = 1
-        elif prob <= short_threshold:
+            long_trades += 1
+        elif prob_short >= short_threshold and prob_short > prob_long:
             ret = ((price_decimal - future_decimal) / price_decimal) * scale
             direction = -1
+            short_trades += 1
         else:
+            neutral_skips += 1
             continue
 
         trade_count += 1
         trade_returns.append(ret)
         if ret >= Decimal("0"):
             wins += 1
+            if direction == 1:
+                long_wins += 1
+            else:
+                short_wins += 1
         target_value = int(targets.iloc[idx]) if idx < len(targets) else 0
-        if (direction == 1 and target_value == 1) or (direction == -1 and target_value == 0):
+        if (direction == 1 and target_value == CLASS_TO_INDEX["long"]) or (
+            direction == -1 and target_value == CLASS_TO_INDEX["short"]
+        ):
             directional_hits += 1
         equity = equity * (Decimal("1") + ret)
         if equity > peak:
@@ -706,6 +934,8 @@ def compute_prediction_backtest_metrics(
     gain_loss_ratio = abs(avg_win / avg_loss) if losses_series else float("inf")
     win_rate = wins / trade_count if trade_count else 0.0
     directional_accuracy = directional_hits / trade_count if trade_count else 0.0
+    long_win_rate = long_wins / long_trades if long_trades else 0.0
+    short_win_rate = short_wins / short_trades if short_trades else 0.0
 
     start_time = pd.Timestamp(timestamps.iloc[0]).to_pydatetime()
     end_time = pd.Timestamp(timestamps.iloc[-1]).to_pydatetime()
@@ -738,6 +968,11 @@ def compute_prediction_backtest_metrics(
         "maxDrawdown": float(max_drawdown),
         "sharpe": float(sharpe if np.isfinite(sharpe) else 0.0),
         "directionalAccuracy": float(directional_accuracy),
+        "longTrades": float(long_trades),
+        "shortTrades": float(short_trades),
+        "longWinRate": float(long_win_rate),
+        "shortWinRate": float(short_win_rate),
+        "neutralDecisions": float(neutral_skips),
     }
 
     if any(value != value for value in metrics.values()):
@@ -750,6 +985,14 @@ def save_model_and_features(artifacts: TrainingArtifacts) -> None:
     artifacts.model.save_model(MODEL_PATH)
     FEATURE_PATH.write_text("\n".join(artifacts.features))
     METRICS_PATH.write_text(json.dumps(artifacts.metrics, indent=2))
+    metadata_payload = {
+        "classOrder": artifacts.class_order,
+        "calibration": artifacts.calibration,
+        "metrics": artifacts.metrics,
+        "features": artifacts.features,
+        "savedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    METADATA_PATH.write_text(json.dumps(metadata_payload, indent=2))
 
 
 def load_features() -> List[str]:
@@ -778,10 +1021,20 @@ def predict_direction(model: XGBClassifier, latest_row) -> dict:
     else:
         raise TypeError('latest_row must be a DataFrame or dict of features')
 
-    probs = model.predict_proba([ordered])
-    prob = float(probs[0][1])
-    direction = int(prob >= 0.5)
-    return {"prediction": direction, "probability": prob}
+    probabilities = model.predict_proba([ordered])
+    if not isinstance(probabilities, np.ndarray):
+        probabilities = np.asarray(probabilities)
+    row = probabilities[0]
+    prob_long = float(row[CLASS_TO_INDEX["long"]])
+    prob_short = float(row[CLASS_TO_INDEX["short"]])
+    decision = 1 if prob_long >= prob_short else 0
+    payload = {
+        "prediction": decision,
+        "probability": prob_long,
+        "bearProbability": prob_short,
+        "probabilities": {label: float(row[idx]) for label, idx in CLASS_TO_INDEX.items()},
+    }
+    return payload
 
 
 def run_training_workflow(

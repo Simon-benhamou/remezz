@@ -34,18 +34,34 @@ def main(argv: list[str] | None = None) -> int:
     try:
         features = _read_json_payload(parsed)
         pred = predict(features)
-        if not isinstance(pred, dict) or "prediction" not in pred:
-            raise TypeError("predict_hybrid must return a mapping with 'prediction'")
+        if not isinstance(pred, dict):
+            raise TypeError("predict_hybrid must return a mapping")
+        probabilities = pred.get("probabilities") or {
+            "long": float(pred.get("probability", 0.5)),
+            "short": float(pred.get("bearProbability", 0.5)),
+            "none": float(pred.get("probabilityNone", 0.0)),
+        }
+        decision = pred.get("decision")
+        if decision not in ("long", "short", "none"):
+            decision = "long" if float(probabilities.get("long", 0.5)) >= float(probabilities.get("short", 0.5)) else "short"
         payload = {
-            "prediction": int(pred.get("prediction", 0)),
-            "probability": float(pred.get("probability", 0.5)),
-            "bearProbability": float(pred.get("bearProbability", 1 - float(pred.get("probability", 0.5)))),
+            "decision": decision,
+            "probabilities": {
+                "long": float(probabilities.get("long", pred.get("probability", 0.5))),
+                "short": float(probabilities.get("short", pred.get("bearProbability", 0.5))),
+                "none": float(probabilities.get("none", pred.get("probabilityNone", 0.0))),
+            },
+            "probabilityLong": float(pred.get("probabilityLong", probabilities.get("long", 0.5))),
+            "probabilityShort": float(pred.get("probabilityShort", probabilities.get("short", 0.5))),
+            "probabilityNone": float(pred.get("probabilityNone", probabilities.get("none", 0.0))),
             "confidence": float(pred.get("confidence", 0.0)),
             "entryWeight": float(pred.get("entryWeight", 1.0)),
             "riskMultiplier": float(pred.get("riskMultiplier", 1.0)),
             "cooldown": pred.get("cooldown", {"active": False, "reason": None, "seconds": None}),
             "meta": pred.get("meta", {}),
+            "classOrder": pred.get("classOrder"),
         }
+        payload["prediction"] = payload["decision"]
         sys.stdout.write(json.dumps(payload))
         return 0
     except Exception as exc:  # pragma: no cover - surfaced to Node caller

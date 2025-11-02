@@ -11,6 +11,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from ccxt_xgboost_module import (
+    CLASS_ORDER,
+    CLASS_TO_INDEX,
     DEFAULT_LOOKBACK_HOURS,
     DEFAULT_TIMEFRAME,
     DEFAULT_WINDOW_SPECS,
@@ -74,7 +76,13 @@ class RunTrainingWorkflowTest(unittest.TestCase):
             features = [col for col in data.columns if col not in {"timestamp", "target"}]
             model = mock.Mock()
             model.save_model = mock.Mock()
-            return TrainingArtifacts(model=model, features=features, metrics={"accuracy": 0.88, "f1": 0.83})
+            return TrainingArtifacts(
+                model=model,
+                features=features,
+                class_order=list(CLASS_ORDER),
+                calibration={"temperature": 1.0},
+                metrics={"accuracy": 0.88, "f1Macro": 0.83},
+            )
 
         with (
             mock.patch("ccxt_xgboost_module.collect_prepared_windows", side_effect=fake_collect) as patched_collect,
@@ -183,7 +191,13 @@ class SyntheticFallbackTest(unittest.TestCase):
             features = [col for col in data.columns if col not in {"timestamp", "target"}]
             model = mock.Mock()
             model.save_model = mock.Mock()
-            return TrainingArtifacts(model=model, features=features, metrics={"accuracy": 0.9, "f1": 0.85})
+            return TrainingArtifacts(
+                model=model,
+                features=features,
+                class_order=list(CLASS_ORDER),
+                calibration={"temperature": 1.0},
+                metrics={"accuracy": 0.9, "f1Macro": 0.85},
+            )
 
         with (
             mock.patch("ccxt_xgboost_module.fetch_ohlcv", side_effect=fake_fetch) as patched_fetch,
@@ -232,8 +246,20 @@ class SyntheticFallbackTest(unittest.TestCase):
         timestamps = pd.date_range("2024-01-01", periods=40, freq="15min")
         closes = pd.Series(np.linspace(100, 102, 40))
         future = closes.shift(-1).fillna(closes.iloc[-1])
-        targets = pd.Series([1 if i % 2 == 0 else 0 for i in range(40)])
-        probabilities = np.array([0.7 if i % 3 == 0 else (0.3 if i % 3 == 1 else 0.5) for i in range(40)])
+        targets = pd.Series(
+            [
+                CLASS_TO_INDEX["long"] if i % 3 == 0 else CLASS_TO_INDEX["short"] if i % 3 == 1 else CLASS_TO_INDEX["none"]
+                for i in range(40)
+            ]
+        )
+        probabilities = np.zeros((40, len(CLASS_ORDER)))
+        for idx in range(40):
+            if idx % 3 == 0:
+                probabilities[idx] = [0.75, 0.15, 0.10]
+            elif idx % 3 == 1:
+                probabilities[idx] = [0.10, 0.15, 0.75]
+            else:
+                probabilities[idx] = [0.33, 0.34, 0.33]
 
         from ccxt_xgboost_module import compute_prediction_backtest_metrics
 
@@ -243,8 +269,8 @@ class SyntheticFallbackTest(unittest.TestCase):
             future,
             targets,
             probabilities,
-            long_threshold=0.6,
-            short_threshold=0.4,
+            long_threshold=0.55,
+            short_threshold=0.55,
         )
 
         self.assertGreaterEqual(metrics["trades"], 1.0)

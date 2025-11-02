@@ -43,7 +43,7 @@ import {
 import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateExecutionCosts, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
-import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal, type AdaptiveExitReason } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import { ZERO_USD } from '../../core/capital/types.js';
 import { computeAdaptiveEvThreshold } from './evThreshold.js';
 import { resolveMinTradeNotional } from './minTradeNotional.js';
@@ -54,6 +54,7 @@ import {
   RecognizedStrategyId,
   registerAdaptiveTradeEntry,
   registerAdaptiveTradeOutcome,
+  noteAdaptiveMinHoldGuard,
 } from '../../quantai/strategies/metaAdaptive/recognizedStrategies.js';
 import { chooseExecutionPlan, ExecutionPlan } from '../executionPlanner.js';
 import type { EntryRelaxation } from '../../quantai/strategies/metaAdaptive/entryFilters.js';
@@ -10562,6 +10563,24 @@ export class ReboundRejectionAgent {
       return false;
     }
 
+    if (directive.action === 'hold' && directive.reason === 'min_hold_active') {
+      if (this.profile?.symbol) {
+        const elapsedMs = this.pos ? Math.max(0, Date.now() - this.pos.openedAt) : null;
+        const requiredMs = this.pos?.minHoldMinutes != null
+          ? Math.max(0, this.pos.minHoldMinutes * 60000)
+          : null;
+        noteAdaptiveMinHoldGuard({
+          sessionId: this.sessionId ?? null,
+          symbol: this.profile.symbol,
+          token: this.pos?.strategyToken ?? this.marketContext?.strategyToken ?? null,
+          reason: directive.reason,
+          elapsedMs,
+          requiredMs,
+        });
+      }
+      return false;
+    }
+
     return false;
   }
 
@@ -11080,11 +11099,22 @@ export class ReboundRejectionAgent {
           });
         } catch {}
 
+        const exitReasonCategory = this.mapAdaptiveExitReason(reason);
+        const minHoldRequiredMs = this.pos?.minHoldMinutes != null
+          ? Math.max(0, this.pos.minHoldMinutes * 60000)
+          : null;
+        const minHoldGuardActive = minHoldRequiredMs != null ? holdMs < minHoldRequiredMs : undefined;
         registerAdaptiveTradeOutcome({
           sessionId: this.sessionId ?? null,
           symbol: this.profile.symbol,
           token: exitStrategyToken,
           realizedPnlUsd: realizedPnl,
+          exitReason: exitReasonCategory,
+          rawExitReason: reason,
+          holdDurationMs: holdMs,
+          minHoldRequiredMs,
+          sideEffective: this.pos.side === 'buy' ? 'long' : 'short',
+          minHoldGuardActive,
         });
 
         // Update performance tracking
@@ -11260,6 +11290,22 @@ export class ReboundRejectionAgent {
         details: { reason, error: String(error) }
       });
     }
+  }
+
+  private mapAdaptiveExitReason(raw: string | null | undefined): AdaptiveExitReason {
+    const reason = (raw ?? '').toLowerCase();
+    if (!reason) return 'other';
+    if (reason.includes('stop')) return 'sl';
+    if (reason.includes('tp') || reason.includes('take_profit') || reason.includes('target')) return 'tp';
+    if (reason.includes('trail') || reason.includes('runner') || reason.includes('quantai_directive')) return 'trailing';
+    if (reason.includes('max_hold') || reason.includes('timeout') || reason.includes('time')) return 'timeout';
+    if (reason.includes('predictor')) return 'predictor_blocked';
+    if (reason.includes('min_hold')) return 'min_hold_violation_prevented';
+    if (reason.includes('trend_reversal') || reason.includes('divergence') || reason.includes('volume_dump')) {
+      return 'trailing';
+    }
+    if (reason.includes('regime')) return 'timeout';
+    return 'other';
   }
 
   public async captureExitDiagnostics(params: {

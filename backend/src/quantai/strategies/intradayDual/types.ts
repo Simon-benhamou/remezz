@@ -159,6 +159,7 @@ export type TradeLog = {
   holdDurationMs: number;
   entryAtrPct: number;
   exitAtrPct: number;
+  meta?: Record<string, unknown> | null;
 };
 
 export type BacktestMetrics = {

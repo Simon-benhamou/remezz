@@ -27,6 +27,8 @@ export type MetaAdaptiveBacktestOptions = {
   fundingAnnualPct?: number;
   latencyMs?: number;
   impactBpsPerMillion?: number;
+  strategyHealthWarmupTrades?: number;
+  disableStrategyHealthRisk?: boolean;
 };
 
 type SimulationArtifacts = {
@@ -331,6 +333,18 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   const latencyMs = options.latencyMs ?? 0;
   const impactBpsPerMillion = options.impactBpsPerMillion ?? 0;
   const feeModel = { makerFeeBps, takerFeeBps };
+  const strategyHealthWarmupTrades = Math.max(0, options.strategyHealthWarmupTrades ?? 5);
+  const strategyHealthEnabled = options.disableStrategyHealthRisk !== true;
+
+  const neutralizeHealthSnapshot = (snapshot: ReturnType<StrategyHealth['snapshot']>): ReturnType<StrategyHealth['snapshot']> => ({
+    ...snapshot,
+    guardrail: null,
+    guardrailChanged: false,
+    guardrailReason: null,
+    riskMultiplier: 1,
+    riskMultiplierChanged: false,
+    riskMultiplierReason: null,
+  });
 
   const startEquity = new PreciseDecimal(options.equityUsd);
   let equity = startEquity;
@@ -351,6 +365,9 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   const strategyHealth = new StrategyHealth({ window: 20, minTradesForGuard: 6, refreshCooldownMs: 20 * 60 * 1000 });
   let healthCooldownUntil = 0;
   let healthSnapshot = strategyHealth.snapshot();
+  if (!strategyHealthEnabled) {
+    healthSnapshot = neutralizeHealthSnapshot(healthSnapshot);
+  }
   const unitTestMode = process.env.UNIT_TEST_MODE === 'true';
   const silentBenchmark = process.env.META_ADAPTIVE_BENCHMARK_SILENT === 'true';
   let lastRiskLogSignature: string | null = null;
@@ -433,25 +450,32 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
         position.cumulativePnl = pnl;
         equity = equity.plus(pnl);
         const pnlR = position.riskPerUnit > 0 ? priceDelta / position.riskPerUnit : 0;
-        strategyHealth.recordTrade({ pnlR, timestamp: candle.timestamp, regime: position.signal.id });
-        healthSnapshot = strategyHealth.snapshot();
-        const guard = healthSnapshot.guardrail;
+        if (strategyHealthEnabled) {
+          strategyHealth.recordTrade({ pnlR, timestamp: candle.timestamp, regime: position.signal.id });
+          healthSnapshot = strategyHealth.snapshot();
+        }
+        const tradesCompletedForGuard = tradeLogs.length;
+        const underWarmupForGuard = !strategyHealthEnabled || tradesCompletedForGuard < strategyHealthWarmupTrades;
+        const effectiveExitSnapshot = underWarmupForGuard
+          ? neutralizeHealthSnapshot(healthSnapshot)
+          : healthSnapshot;
+        const guard = effectiveExitSnapshot.guardrail;
         if (guard) {
           const cooldownEnd = guard.cooldownMs ? candle.timestamp + guard.cooldownMs : candle.timestamp;
           healthCooldownUntil = Math.max(healthCooldownUntil, cooldownEnd);
-          if (healthSnapshot.guardrailChanged) {
+          if (effectiveExitSnapshot.guardrailChanged) {
             const guardSignature = `${guard.reason}:${Math.round(guard.cooldownMs ?? 0)}`;
-            const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
-            const expectancyStr = healthSnapshot.expectancy.toFixed(4);
+            const winratePct = (effectiveExitSnapshot.winRate * 100).toFixed(2);
+            const expectancyStr = effectiveExitSnapshot.expectancy.toFixed(4);
             if (!silentBenchmark && (!unitTestMode || guardSignature !== lastGuardLogSignature)) {
               console.log(`[StrategyHealth] cooldown applied (${guard.reason}) for ${(guard.cooldownMs ?? 0) / 60000} minutes (winrate20=${winratePct}%, exp20=${expectancyStr})`);
             }
             lastGuardLogSignature = guardSignature;
           }
-        } else if (healthSnapshot.guardrailChanged) {
+        } else if (effectiveExitSnapshot.guardrailChanged) {
           if (!silentBenchmark && (!unitTestMode || lastGuardLogSignature !== 'cleared')) {
-            const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
-            const expectancyStr = healthSnapshot.expectancy.toFixed(4);
+            const winratePct = (effectiveExitSnapshot.winRate * 100).toFixed(2);
+            const expectancyStr = effectiveExitSnapshot.expectancy.toFixed(4);
             console.log(`[StrategyHealth] cooldown cleared (winrate20=${winratePct}%, exp20=${expectancyStr})`);
           }
           lastGuardLogSignature = 'cleared';
@@ -486,6 +510,10 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
           holdDurationMs: candle.timestamp - position.openedAt,
           entryAtrPct: position.entryAtrPct,
           exitAtrPct: snapshot.atrPct,
+          meta: {
+            strategyId: position.signal.id,
+            family: position.signal.id,
+          },
         };
         tradeLogs.push(trade);
         position = null;
@@ -520,8 +548,14 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       ? rawVolume24h * snapshot.last
       : null;
 
-    const healthRiskMultiplier = Number.isFinite(healthSnapshot.riskMultiplier)
-      ? Number(healthSnapshot.riskMultiplier)
+    const tradesCompleted = tradeLogs.length;
+    const underWarmup = !strategyHealthEnabled || tradesCompleted < strategyHealthWarmupTrades;
+    const effectiveSnapshot = underWarmup
+      ? neutralizeHealthSnapshot(healthSnapshot)
+      : healthSnapshot;
+
+    const healthRiskMultiplier = Number.isFinite(effectiveSnapshot.riskMultiplier)
+      ? Number(effectiveSnapshot.riskMultiplier)
       : 1;
     const signals = evaluateRecognizedStrategies(snapshot, {
       symbol: options.symbol,
@@ -581,11 +615,16 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       rawNotionalUsd: qtyResult.rawNotionalUsd * healthRiskMultiplier,
     };
 
-    if (Math.abs(healthRiskMultiplier - 1) > 1e-3 && healthSnapshot.riskMultiplierChanged) {
-      const reason = healthSnapshot.riskMultiplierReason ?? 'adjustment';
+    if (
+      strategyHealthEnabled
+      && !underWarmup
+      && Math.abs(healthRiskMultiplier - 1) > 1e-3
+      && effectiveSnapshot.riskMultiplierChanged
+    ) {
+      const reason = effectiveSnapshot.riskMultiplierReason ?? 'adjustment';
       const signature = `${reason}:${healthRiskMultiplier.toFixed(4)}`;
-      const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
-      const expectancyStr = healthSnapshot.expectancy.toFixed(4);
+      const winratePct = (effectiveSnapshot.winRate * 100).toFixed(2);
+      const expectancyStr = effectiveSnapshot.expectancy.toFixed(4);
       if (!silentBenchmark && (!unitTestMode || signature !== lastRiskLogSignature)) {
         console.log(`risk scaled by StrategyHealth x${healthRiskMultiplier.toFixed(2)} (reason=${reason}, winrate20=${winratePct}%, exp20=${expectancyStr})`);
       }
