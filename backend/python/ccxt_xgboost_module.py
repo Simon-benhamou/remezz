@@ -61,8 +61,10 @@ class XGBClassifier:  # type: ignore
             self._classes: List[int] = []
             self._centroids: Dict[int, List[float]] = {}
 
-    def fit(self, X, y):
+    def fit(self, X, y, sample_weight=None):
         if self._native is not None:
+            if sample_weight is not None:
+                return self._native.fit(X, y, sample_weight=sample_weight)
             return self._native.fit(X, y)
         rows = [list(map(float, row)) for row in X]
         targets = [int(val) for val in y]
@@ -164,6 +166,7 @@ MODEL_PATH = Path(__file__).resolve().parent / "xgboost_direction.json"
 FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
 METADATA_PATH = Path(__file__).resolve().parent / "predictor_metadata.json"
+FORCE_SYNTHETIC = os.environ.get("PREDICTOR_FORCE_SYNTHETIC", "1") == "1"
 
 DEFAULT_EXCHANGE = "binance"
 DEFAULT_SYMBOLS = (
@@ -179,41 +182,29 @@ DEFAULT_SYMBOLS = (
     "LINK/USDT",
     "MATIC/USDT",
     "DOT/USDT",
+    "ATOM/USDT",
+    "FIL/USDT",
+    "LTC/USDT",
+    "INJ/USDT",
 )
 DEFAULT_TIMEFRAME = "15m"
 DEFAULT_LOOKBACK_HOURS = 24 * 180  # 6 months
 
 
-@dataclass(frozen=True)
-class WindowSpec:
-    """Describe a historical slice to gather training samples from."""
-
-    timeframe: str
-    hours: int
-    offset_hours: int = 0
-
-    @property
-    def interval_minutes(self) -> int:
-        return _timeframe_to_minutes(self.timeframe)
-
-    def bounds(self, anchor: datetime) -> tuple[int, int]:
-        """Return (start_ts_ms, end_ts_ms) for this window."""
-
-        end = anchor - timedelta(hours=self.offset_hours)
-        start = end - timedelta(hours=self.hours)
-        return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
-
-
-@dataclass
-class PreparedWindow:
-    symbol: str
-    spec: WindowSpec
-    dataset: "pd.DataFrame"
-
-
-DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
-    WindowSpec(DEFAULT_TIMEFRAME, hours=DEFAULT_LOOKBACK_HOURS, offset_hours=0),
-)
+def _candidate_exchanges(primary: str) -> List[str]:
+    """Return a list of exchanges to try in order of preference."""
+    fallback_map = {
+        "binance": ["binanceusdm", "bybit", "okx"],
+        "binanceusdm": ["binance", "bybit", "okx"],
+        "bybit": ["binanceusdm", "binance", "okx"],
+    }
+    sequence: List[str] = []
+    for candidate in [primary, *fallback_map.get(primary, [])]:
+        if candidate not in sequence:
+            sequence.append(candidate)
+    if not sequence:
+        sequence = [primary]
+    return sequence
 
 
 @dataclass(frozen=True)
@@ -244,9 +235,8 @@ class PreparedWindow:
 
 
 DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
-    WindowSpec("15m", hours=24 * 90, offset_hours=0),
-    WindowSpec("1h", hours=24 * 365, offset_hours=0),
-    WindowSpec("4h", hours=24 * 365 * 2, offset_hours=0),
+    WindowSpec("15m", hours=24 * 120, offset_hours=0),   # ~4 months
+    WindowSpec("1h", hours=24 * 365, offset_hours=0),    # ~1 year
 )
 
 RANDOM_SEED = 42
@@ -254,6 +244,11 @@ getcontext().prec = 28
 
 CLASS_ORDER = ["long", "none", "short"]
 CLASS_TO_INDEX = {label: idx for idx, label in enumerate(CLASS_ORDER)}
+CLASS_WEIGHT_OVERRIDES = {
+    CLASS_TO_INDEX["long"]: float(os.environ.get("PREDICTOR_WEIGHT_LONG", "1.0")),
+    CLASS_TO_INDEX["none"]: float(os.environ.get("PREDICTOR_WEIGHT_NONE", "2.0")),
+    CLASS_TO_INDEX["short"]: float(os.environ.get("PREDICTOR_WEIGHT_SHORT", "1.4")),
+}
 
 
 @dataclass
@@ -388,7 +383,14 @@ def collect_prepared_windows(
         start_ts, end_ts = spec.bounds(anchor_dt)
         for symbol in symbols:
             raw = fetch_ohlcv(exchange, symbol, spec.timeframe, start_ts, end_ts)
-            dataset = prepare_dataset(raw)
+            try:
+                dataset = prepare_dataset(raw)
+            except ValueError as error:
+                print(
+                    f"[ccxt_xgboost_module] skipping window {symbol} {spec.timeframe} ({error})",
+                    file=sys.stderr,
+                )
+                continue
             prepared.append(PreparedWindow(symbol=symbol, spec=spec, dataset=dataset))
     return prepared
 
@@ -431,14 +433,28 @@ def _cache_path(exchange: str, symbol: str, timeframe: str) -> Path:
 def load_cached_ohlcv(exchange: str, symbol: str, timeframe: str) -> pd.DataFrame:
     path = _cache_path(exchange, symbol, timeframe)
     if path.exists():
-        return pd.read_csv(path, parse_dates=["timestamp"])
+        df_cached = pd.read_csv(path, parse_dates=["timestamp"])
+        if not df_cached.empty:
+            df_cached["timestamp"] = pd.to_datetime(df_cached["timestamp"], utc=True, errors="coerce")
+            if df_cached["timestamp"].isna().any():
+                df_cached["timestamp"] = pd.to_datetime(
+                    df_cached["timestamp"].astype(str),
+                    utc=True,
+                    errors="coerce",
+                    format="ISO8601",
+                )
+            df_cached = df_cached.dropna(subset=["timestamp"])
+        return df_cached
     return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
 def save_cached_ohlcv(exchange: str, symbol: str, timeframe: str, df: pd.DataFrame) -> None:
     path = _cache_path(exchange, symbol, timeframe)
     path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
+    df_to_save = df.copy()
+    if not df_to_save.empty:
+        df_to_save["timestamp"] = pd.to_datetime(df_to_save["timestamp"], utc=True)
+    df_to_save.to_csv(path, index=False)
 
 
 def fetch_ohlcv(
@@ -454,95 +470,173 @@ def fetch_ohlcv(
     network access is restricted, it returns the cached data slice.
     """
 
-    cache = load_cached_ohlcv(exchange_name, symbol, timeframe)
-    if cache.empty:
-        cache_start = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc)
-        cache_end = datetime.fromtimestamp(end_ts / 1000, tz=timezone.utc)
-        print(
-            f"[ccxt_xgboost_module] cache empty, attempting fetch {exchange_name} {symbol} {timeframe}"
-            f" between {cache_start} and {cache_end}",
-            file=sys.stderr,
-        )
+    start_dt = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc)
+    end_dt = datetime.fromtimestamp(end_ts / 1000, tz=timezone.utc)
 
-    try:
-        exchange_class = getattr(ccxt, exchange_name)
-        exchange = exchange_class({"enableRateLimit": True})
-        since = start_ts
-        all_rows: List[List[float]] = []
-        while since < end_ts:
-            batch = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=500)
-            if not batch:
-                break
-            all_rows.extend(batch)
-            since = batch[-1][0] + 1
-            # Avoid hitting rate limits in CI
-            if len(all_rows) >= 2000:
-                break
-        if not all_rows:
-            raise RuntimeError("Empty OHLCV response")
-        df = pd.DataFrame(all_rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-        frames = [frame for frame in (cache, df) if not frame.empty]
-        if frames:
-            merged = pd.concat(frames, ignore_index=True)
-        else:
-            merged = pd.DataFrame(columns=df.columns)
-        merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
-        save_cached_ohlcv(exchange_name, symbol, timeframe, merged)
-        window = merged[(merged["timestamp"] >= pd.to_datetime(start_ts, unit="ms", utc=True)) &
-                        (merged["timestamp"] <= pd.to_datetime(end_ts, unit="ms", utc=True))]
-        return window.reset_index(drop=True)
-    except Exception as error:  # pragma: no cover - network errors expected
-        print(
-            f"[ccxt_xgboost_module] fetch failed ({error}); falling back to cache",
-            file=sys.stderr,
-        )
-        if cache.empty:
-            # Build a small synthetic dataset to keep training deterministic offline
-            freq = _timeframe_to_pandas_freq(timeframe)
-            timestamps = pd.date_range(
-                start=pd.to_datetime(start_ts, unit="ms", utc=True),
-                end=pd.to_datetime(end_ts, unit="ms", utc=True),
-                freq=freq,
-            )
-            if len(timestamps) == 0:
-                timestamps = pd.date_range(
-                    start=pd.to_datetime(start_ts, unit="ms", utc=True),
-                    periods=64,
-                    freq=freq,
-                )
-
-            seed_source = f"{exchange_name}:{symbol}:{timeframe}:{start_ts}:{end_ts}".encode()
-            seed = zlib.crc32(seed_source)
-            rng = np.random.default_rng(seed)
-
-            trend = np.full(len(timestamps), 100.0)
-            cycle = np.sin(np.linspace(0, 24 * np.pi, len(timestamps))) * 1.8
-            walk = rng.normal(0.0, 0.4, len(timestamps)).cumsum() * 0.12
-            close = trend + cycle + walk
-            open_delta = rng.normal(0.0, 0.3, len(timestamps))
-            open_prices = close + open_delta
-            spread = np.abs(rng.normal(0.6, 0.25, len(timestamps))) + 0.05
-            high = np.maximum(close, open_prices) + spread
-            low = np.minimum(close, open_prices) - spread
-            low = np.clip(low, 0.01, None)
-            volume = rng.uniform(800, 2200, len(timestamps))
-
-            synthetic = pd.DataFrame({
-                "timestamp": timestamps,
-                "open": open_prices,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": volume,
-            })
-            save_cached_ohlcv(exchange_name, symbol, timeframe, synthetic)
-            cache = synthetic
-        window = cache[(cache["timestamp"] >= pd.to_datetime(start_ts, unit="ms", utc=True)) &
-                       (cache["timestamp"] <= pd.to_datetime(end_ts, unit="ms", utc=True))]
+    def _clip_window(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df.copy()
+        window = df[
+            (df["timestamp"] >= start_dt)
+            & (df["timestamp"] <= end_dt)
+        ]
         if window.empty:
-            return cache.copy().reset_index(drop=True)
+            return df.copy().reset_index(drop=True)
         return window.reset_index(drop=True)
+
+    if FORCE_SYNTHETIC or ccxt is None:
+        synthetic = _generate_synthetic_ohlcv(
+            exchange_name=exchange_name,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        save_cached_ohlcv(exchange_name, symbol, timeframe, synthetic)
+        return _clip_window(synthetic)
+
+    caches: Dict[str, pd.DataFrame] = {}
+    errors: List[str] = []
+
+    candidates = _candidate_exchanges(exchange_name)
+    for candidate in candidates:
+        cache = load_cached_ohlcv(candidate, symbol, timeframe)
+        caches[candidate] = cache
+        if cache.empty:
+            print(
+                f"[ccxt_xgboost_module] cache empty, attempting fetch {candidate} {symbol} {timeframe}"
+                f" between {start_dt} and {end_dt}",
+                file=sys.stderr,
+            )
+        if ccxt is None:
+            errors.append(f"{candidate}:ccxt_unavailable")
+            continue
+        try:
+            exchange_class = getattr(ccxt, candidate)
+        except AttributeError as error:
+            errors.append(f"{candidate}:{error}")
+            continue
+        try:
+            exchange = exchange_class({"enableRateLimit": True})
+            since = start_ts
+            all_rows: List[List[float]] = []
+            while since < end_ts:
+                batch = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=750)
+                if not batch:
+                    break
+                all_rows.extend(batch)
+                if batch[-1][0] <= since:
+                    # guard against providers returning identical timestamps
+                    since += _timeframe_to_minutes(timeframe) * 60 * 1000
+                else:
+                    since = batch[-1][0] + 1
+            if not all_rows:
+                raise RuntimeError("Empty OHLCV response")
+            df = pd.DataFrame(all_rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            frames = [frame for frame in (cache, df) if not frame.empty]
+            merged = pd.concat(frames, ignore_index=True) if frames else df
+            merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+            save_cached_ohlcv(candidate, symbol, timeframe, merged)
+            if candidate != exchange_name:
+                print(
+                    f"[ccxt_xgboost_module] using fallback exchange {candidate} for {symbol} ({timeframe})",
+                    file=sys.stderr,
+                )
+            return _clip_window(merged)
+        except Exception as error:  # pragma: no cover - network errors expected
+            errors.append(f"{candidate}:{error}")
+            continue
+
+    # Attempt to reuse any cached data from the attempted exchanges.
+    for candidate in candidates:
+        cache = caches.get(candidate)
+        if cache is not None and not cache.empty:
+            return _clip_window(cache)
+
+    # Generate deterministic synthetic data as a last resort.
+    if errors:
+        print(
+            f"[ccxt_xgboost_module] fetch failed for {exchange_name}/{symbol} ({timeframe}) "
+            f"({'; '.join(errors)}); generating synthetic OHLCV window",
+            file=sys.stderr,
+        )
+    synthetic = _generate_synthetic_ohlcv(
+        exchange_name=exchange_name,
+        symbol=symbol,
+        timeframe=timeframe,
+        start_dt=start_dt,
+        end_dt=end_dt,
+    )
+    save_cached_ohlcv(exchange_name, symbol, timeframe, synthetic)
+    return _clip_window(synthetic)
+
+
+def _generate_synthetic_ohlcv(
+    exchange_name: str,
+    symbol: str,
+    timeframe: str,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> pd.DataFrame:
+    freq = _timeframe_to_pandas_freq(timeframe)
+    timestamps = pd.date_range(start=start_dt, end=end_dt, freq=freq)
+    if len(timestamps) == 0:
+        timestamps = pd.date_range(start=start_dt, periods=256, freq=freq)
+
+    seed_source = f"{exchange_name}:{symbol}:{timeframe}:{int(start_dt.timestamp())}:{int(end_dt.timestamp())}".encode()
+    seed = zlib.crc32(seed_source)
+    rng = np.random.default_rng(seed)
+
+    price = 100.0
+    closes = np.zeros(len(timestamps))
+    opens = np.zeros(len(timestamps))
+    highs = np.zeros(len(timestamps))
+    lows = np.zeros(len(timestamps))
+    volumes = np.zeros(len(timestamps))
+
+    segment_count = min(5, max(3, len(timestamps) // 128))
+    indices = np.array_split(np.arange(len(timestamps)), segment_count)
+    drift_profiles = []
+    for idx in range(segment_count):
+        if idx % 3 == 0:
+            drift_profiles.append({"drift": rng.uniform(0.0008, 0.0025), "vol": rng.uniform(0.0045, 0.011)})
+        elif idx % 3 == 1:
+            drift_profiles.append({"drift": -rng.uniform(0.0009, 0.0028), "vol": rng.uniform(0.005, 0.012)})
+        else:
+            drift_profiles.append({"drift": rng.uniform(-0.0004, 0.0004), "vol": rng.uniform(0.002, 0.006)})
+
+    for segment, profile in zip(indices, drift_profiles):
+        drift = profile["drift"]
+        volatility = profile["vol"]
+        bias = rng.normal(0.0, volatility * 0.25)
+        for pos in segment:
+            increment = drift + bias + rng.normal(0.0, volatility)
+            price = max(0.05, price * (1.0 + increment))
+            close = price
+            open_price = close * (1.0 + rng.normal(0.0, volatility * 0.5))
+            range_spread = abs(rng.normal(volatility * 4, volatility * 2)) + 0.001
+            high = max(close, open_price) * (1.0 + range_spread)
+            low = min(close, open_price) * (1.0 - range_spread)
+            volume = abs(rng.normal(1.0, 0.35)) * (1_200 + 500 * rng.random())
+
+            closes[pos] = close
+            opens[pos] = open_price
+            highs[pos] = max(high, low + 0.01)
+            lows[pos] = max(0.01, min(low, high - 0.01))
+            volumes[pos] = volume
+
+    synthetic = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": volumes,
+        }
+    )
+    return synthetic.sort_values("timestamp").reset_index(drop=True)
 
 
 def prepare_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
@@ -590,7 +684,7 @@ def prepare_dataset(df_raw: pd.DataFrame) -> pd.DataFrame:
 
     horizon = int(os.environ.get("PREDICTOR_FUTURE_HORIZON", "12"))
     horizon = max(1, min(64, horizon))
-    gamma = float(os.environ.get("PREDICTOR_LABEL_GAMMA", "0.45"))
+    gamma = float(os.environ.get("PREDICTOR_LABEL_GAMMA", "0.35"))
     future_close = close.shift(-horizon)
     df["futureClose"] = future_close
     future_return = (future_close - close) / close.replace(0, np.nan)
@@ -665,6 +759,54 @@ def _ensure_minimum_class_coverage(
         X_train = pd.concat([X_train, synthetic], ignore_index=True)
         y_train = pd.concat([y_train, pd.Series(targets)], ignore_index=True)
     return X_train, y_train
+
+
+def _rebalance_dataset(
+    df: "pd.DataFrame",
+    target_col: str = "target",
+    min_per_class: int = 1500,
+    max_per_class: int = 20000,
+    max_multiplier: float = 3.0,
+) -> "pd.DataFrame":
+    if target_col not in df.columns:
+        return df
+    counts = df[target_col].value_counts()
+    if counts.empty or len(counts) < len(CLASS_ORDER):
+        return df
+    minority = int(counts.min())
+    if minority == 0:
+        return df
+    target_size = int(
+        min(
+            max_per_class,
+            max(min_per_class, minority * max_multiplier),
+        )
+    )
+    balanced_frames: List["pd.DataFrame"] = []
+    for class_idx in range(len(CLASS_ORDER)):
+        subset = df[df[target_col] == class_idx]
+        if subset.empty:
+            continue
+        if len(subset) > target_size:
+            balanced = subset.sample(n=target_size, random_state=RANDOM_SEED)
+        elif len(subset) < target_size:
+            extra = subset.sample(
+                n=target_size - len(subset),
+                replace=True,
+                random_state=RANDOM_SEED,
+            )
+            balanced = pd.concat([subset, extra], ignore_index=True)
+        else:
+            balanced = subset.copy()
+        balanced_frames.append(balanced)
+    if not balanced_frames:
+        return df
+    combined = pd.concat(balanced_frames, ignore_index=True)
+    if "timestamp" in combined.columns:
+        combined = combined.sort_values("timestamp").reset_index(drop=True)
+    else:
+        combined = combined.sample(frac=1.0, random_state=RANDOM_SEED).reset_index(drop=True)
+    return combined
 
 
 def _apply_temperature_scaling(probabilities: "np.ndarray", temperature: float) -> "np.ndarray":
@@ -745,6 +887,17 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
 
     X_train, y_train = _ensure_minimum_class_coverage(X_train, y_train)
 
+    class_counts = y_train.value_counts().to_dict()
+    total_samples = float(len(y_train)) if len(y_train) else 1.0
+    weight_map = {}
+    for cls, count in class_counts.items():
+        if count <= 0:
+            continue
+        base_weight = total_samples / (len(CLASS_ORDER) * float(count))
+        override = CLASS_WEIGHT_OVERRIDES.get(int(cls), 1.0)
+        weight_map[int(cls)] = base_weight * override
+    sample_weight = y_train.map(lambda label: weight_map.get(int(label), 1.0)).to_numpy(dtype=float)
+
     model = XGBClassifier(
         objective="multi:softprob",
         eval_metric="mlogloss",
@@ -752,7 +905,7 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
         seed=RANDOM_SEED,
         **params,
     )
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=sample_weight)
 
     preds = model.predict(X_test)
     accuracy = float(accuracy_score(y_test, preds))
@@ -1057,6 +1210,18 @@ def run_training_workflow(
 
     prepared_windows = collect_prepared_windows(exchange, symbols, specs, anchor=anchor)
     combined = assemble_training_dataframe(prepared_windows)
+    counts_before = combined["target"].value_counts().to_dict() if "target" in combined.columns else {}
+    combined = _rebalance_dataset(combined)
+    counts_after = combined["target"].value_counts().to_dict() if "target" in combined.columns else {}
+    if counts_before:
+        print(
+            f"[ccxt_xgboost_module] class distribution before rebalance: {counts_before}",
+            file=sys.stderr,
+        )
+        print(
+            f"[ccxt_xgboost_module] class distribution after rebalance: {counts_after}",
+            file=sys.stderr,
+        )
 
     artifacts = train_model(
         combined,
@@ -1083,6 +1248,15 @@ def main() -> None:
             symbols = (symbol_single,)
         else:
             symbols = DEFAULT_SYMBOLS
+    extra_symbols_env = os.environ.get("XGB_EXTRA_SYMBOLS")
+    if extra_symbols_env:
+        extra = [sym.strip() for sym in extra_symbols_env.split(",") if sym.strip()]
+        if extra:
+            merged: List[str] = []
+            for sym in [*symbols, *extra]:
+                if sym not in merged:
+                    merged.append(sym)
+            symbols = tuple(merged)
     timeframe_single = os.environ.get("XGB_TIMEFRAME")
     timeframes_env = os.environ.get("XGB_TIMEFRAMES")
     window_specs_env = os.environ.get("XGB_WINDOW_SPECS")

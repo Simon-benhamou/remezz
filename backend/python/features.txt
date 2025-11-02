@@ -10,5 +10,15 @@ volumeRatio
 emaTrendSpread
 rsiSlope
 atrPct
+atrPct_1h
+atrPct_4h
+rsi14_1h
+rsi14_4h
 volumeZScore
 momentum3
+emaRatio_20_200
+trendStrength
+volatilityRegime
+spreadProxy
+microImbalance
+mtfAgreement
