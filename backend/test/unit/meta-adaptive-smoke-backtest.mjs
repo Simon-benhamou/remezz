@@ -7,8 +7,12 @@ process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD = process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD ?? '0.72';
 process.env.META_ADAPTIVE_MIN_RR = process.env.META_ADAPTIVE_MIN_RR ?? '1.8';
-process.env.DISABLE_PYTHON_PREDICTOR = 'false';
+process.env.DISABLE_PYTHON_PREDICTOR = process.env.DISABLE_PYTHON_PREDICTOR ?? 'false';
+
 process.env.META_ADAPTIVE_SYMBOL_COOLDOWN_MINUTES = process.env.META_ADAPTIVE_SYMBOL_COOLDOWN_MINUTES ?? '0';
+
+const TEST_SYMBOL = process.env.SMOKE_SYMBOL ?? 'ETH/USDT';
+const TEST_LAST = Number.isFinite(Number.parseFloat(process.env.SMOKE_LAST ?? '')) ? Number.parseFloat(process.env.SMOKE_LAST) : 100;
 
 const {
   evaluateRecognizedStrategies,
@@ -49,14 +53,38 @@ const RISK_PER_TRADE_PCT = 0.005;
 function decimal(value) {
   return new PreciseDecimal(value);
 }
-
+function buildBearishSnapshot(overrides = {}) {
+  const last = overrides.last ?? TEST_LAST;
+  return buildSnapshot({
+    symbol: overrides.symbol ?? TEST_SYMBOL,
+    ...overrides,
+    emaBias: overrides.emaBias ?? -0.01,
+    adx14: overrides.adx14 ?? 28,
+    cmf20: overrides.cmf20 ?? -0.35,
+    trendStrength: overrides.trendStrength ?? 0.9,
+    trendBias: 'bearish',
+    bias4h: overrides.bias4h ?? 'bearish',
+    bias1h: overrides.bias1h ?? 'bearish',
+    bias15m: overrides.bias15m ?? 'bearish',
+    srBias: overrides.srBias ?? 'nearResistance',
+    // flip supports/resistances orientation relative to price
+    support: overrides.support ?? last * 0.97,
+    resistance: overrides.resistance ?? last * 0.99,
+    supports: overrides.supports ?? [{ price: last * 0.97, label: 'S1', touches: 2, strength: 2 }],
+    resistances: overrides.resistances ?? [{ price: last * 0.99, label: 'R1', touches: 3, strength: 2 }],
+    realizedVol: overrides.realizedVol ?? 1.4,
+    last,
+  });
+}
 function buildSnapshot(config) {
-  const last = config.last ?? 100;
+// Helper: build a bearish snapshot mirroring the bullish structure
+
+  const last = config.last ?? TEST_LAST;
   const bias4h = config.bias4h ?? 'bullish';
   const bias1h = config.bias1h ?? bias4h;
   const bias15m = config.bias15m ?? bias1h;
   return {
-    symbol: config.symbol ?? 'ETH/USDT',
+    symbol: config.symbol ?? TEST_SYMBOL,
     last,
     ema20: config.ema20 ?? last * (1 + (config.emaBias ?? 0.01)),
     ema50: config.ema50 ?? last * (1 + (config.emaBias ?? 0.005)),
@@ -103,12 +131,48 @@ function buildSnapshot(config) {
 }
 
 const scenarios = [
-  { label: 'trend', snap: buildSnapshot({ adx14: 30, trendStrength: 0.95, cmf20: 0.4 }) , pnlPct: decimal('2.5') },
-  { label: 'breakout', snap: buildSnapshot({ adx14: 26, trendStrength: 0.75, cmf20: 0.32, realizedVol: 1.6 }) , pnlPct: decimal('3.2') },
-  { label: 'mean', snap: buildSnapshot({ adx14: 10, rsi14: 68, srBias: 'nearResistance', emaBias: -0.002 }) , pnlPct: decimal('1.1') },
-  { label: 'momentum', snap: buildSnapshot({ adx14: 34, trendStrength: 1.1, cmf20: 0.45, volume: 1_500_000 }) , pnlPct: decimal('4.6') },
-  { label: 'mean-loss', snap: buildSnapshot({ adx14: 8, rsi14: 35, srBias: 'nearSupport', emaBias: 0.0005 }) , pnlPct: decimal('-0.9') },
-  { label: 'trend-loss', snap: buildSnapshot({ adx14: 22, trendStrength: 0.4, cmf20: -0.05, emaBias: -0.003 }) , pnlPct: decimal('-1.4') },
+  {
+    label: 'trend',
+    snap: buildSnapshot({ adx14: 30, trendStrength: 0.95, cmf20: 0.4 }),
+    bearSnap: buildBearishSnapshot({ adx14: 30, trendStrength: 0.95, cmf20: -0.40 }),
+    pnlPct: decimal('2.5'),
+    shortPnlPct: decimal('-2.5')
+  },
+  {
+    label: 'breakout',
+    snap: buildSnapshot({ adx14: 26, trendStrength: 0.75, cmf20: 0.32, realizedVol: 1.6 }),
+    bearSnap: buildBearishSnapshot({ adx14: 26, trendStrength: 0.75, cmf20: -0.32, realizedVol: 1.6 }),
+    pnlPct: decimal('3.2'),
+    shortPnlPct: decimal('-3.2')
+  },
+  {
+    label: 'mean',
+    snap: buildSnapshot({ adx14: 10, rsi14: 68, srBias: 'nearResistance', emaBias: -0.002 }),
+    bearSnap: buildBearishSnapshot({ adx14: 10, rsi14: 32, srBias: 'nearSupport', emaBias: 0.002 }),
+    pnlPct: decimal('1.1'),
+    shortPnlPct: decimal('-1.1')
+  },
+  {
+    label: 'momentum',
+    snap: buildSnapshot({ adx14: 34, trendStrength: 1.1, cmf20: 0.45, volume: 1_500_000 }),
+    bearSnap: buildBearishSnapshot({ adx14: 34, trendStrength: 1.1, cmf20: -0.45, volume: 1_500_000 }),
+    pnlPct: decimal('4.6'),
+    shortPnlPct: decimal('-4.6')
+  },
+  {
+    label: 'mean-loss',
+    snap: buildSnapshot({ adx14: 8, rsi14: 35, srBias: 'nearSupport', emaBias: 0.0005 }),
+    bearSnap: buildBearishSnapshot({ adx14: 8, rsi14: 65, srBias: 'nearResistance', emaBias: -0.0005 }),
+    pnlPct: decimal('-0.9'),
+    shortPnlPct: decimal('0.9')
+  },
+  {
+    label: 'trend-loss',
+    snap: buildSnapshot({ adx14: 22, trendStrength: 0.4, cmf20: -0.05, emaBias: -0.003 }),
+    bearSnap: buildBearishSnapshot({ adx14: 22, trendStrength: 0.4, cmf20: 0.05, emaBias: 0.003 }),
+    pnlPct: decimal('-1.4'),
+    shortPnlPct: decimal('1.4')
+  },
   {
     label: 'trend-entry-strong',
     snap: buildSnapshot({
@@ -122,7 +186,19 @@ const scenarios = [
       bias1h: 'bullish',
       bias15m: 'bullish',
     }),
+    bearSnap: buildBearishSnapshot({
+      adx14: 32,
+      trendStrength: 1.05,
+      cmf20: -0.36,
+      volume: 2_200_000,
+      volumeMA: 900_000,
+      atrPct: 1.45,
+      bias4h: 'bearish',
+      bias1h: 'bearish',
+      bias15m: 'bearish',
+    }),
     pnlPct: decimal('3.8'),
+    shortPnlPct: decimal('-3.8'),
     expectEntryGate: 'pass',
     expectEntryReasons: ['mtf=pass', 'adx=pass', 'atr=pass', 'flow=pass'],
   },
@@ -140,7 +216,20 @@ const scenarios = [
       bias15m: 'neutral',
       srBias: 'nearResistance',
     }),
+    bearSnap: buildBearishSnapshot({
+      adx14: 11,
+      trendStrength: 0.28,
+      cmf20: -0.18,
+      volume: 420_000,
+      volumeMA: 680_000,
+      atrPct: 0.38,
+      bias4h: 'bearish',
+      bias1h: 'bearish',
+      bias15m: 'neutral',
+      srBias: 'nearSupport',
+    }),
     pnlPct: decimal('0.0'),
+    shortPnlPct: decimal('0.0'),
     expectEntryGate: 'blocked',
     expectEntryReasons: ['mtf', 'adx=fail', 'atr=fail', 'flow=fail'],
   },
@@ -158,9 +247,10 @@ const SIDES = ['long', 'short'];
 for (const scenario of scenarios) {
   for (const side of SIDES) {
     const loopSessionId = `${sessionId}-${side}`;
-    const signals = evaluateRecognizedStrategies(scenario.snap, {
+    const snapForSide = (side === 'short' && scenario.bearSnap) ? scenario.bearSnap : scenario.snap;
+    const signals = evaluateRecognizedStrategies(snapForSide, {
       sessionId: loopSessionId,
-      symbol: 'ETH/USDT',
+      symbol: TEST_SYMBOL,
       bias: side,
       regime: scenario.label === 'mean' || scenario.label === 'mean-loss' ? 'range' : 'trend_following',
       allowMomentumOverride: true,
@@ -226,20 +316,32 @@ for (const scenario of scenarios) {
     assert(qty > 0, 'La taille de position doit être positive');
 
     const logsBeforeEntry = capturedLogs.length;
+
+    // Temporarily bypass the predictor veto for SHORT smoke scenarios only,
+    // so we can validate the short pipeline (gates, bracket, exits) symmetrically.
+    const prevDisablePred = process.env.DISABLE_PYTHON_PREDICTOR;
+    if (side === 'short') {
+      process.env.DISABLE_PYTHON_PREDICTOR = 'true';
+    }
+
     await registerAdaptiveTradeEntry({
       sessionId: loopSessionId,
-      symbol: 'ETH/USDT',
+      symbol: TEST_SYMBOL,
       signal: primary,
       qty,
       entryPrice: 100,
       stopDistance: bracket.riskPerUnit,
     });
+
+    if (side === 'short') {
+      process.env.DISABLE_PYTHON_PREDICTOR = prevDisablePred;
+    }
     const entryLogs = capturedLogs.slice(logsBeforeEntry);
 
     const activeTrade = metaAdaptiveStrategyAgent.getActiveTradeSnapshot(
       loopSessionId,
       primary.meta?.token ?? null,
-      'ETH/USDT',
+      TEST_SYMBOL,
     );
     if (!activeTrade) {
       const rrBlocked = entryLogs.some((line) =>
@@ -249,11 +351,11 @@ for (const scenario of scenarios) {
       );
       const predictorBlocked = entryLogs.some((line) =>
         line.includes('"adaptive_trade_blocked_by_predictor"')
-        && line.includes(`"symbol":"ETH/USDT"`),
+        && line.includes(`"symbol":"${TEST_SYMBOL}"`),
       );
       const wasRegistered = entryLogs.some((line) =>
         line.includes('"adaptive_trade_registered"')
-        && line.includes(`"symbol":"ETH/USDT"`),
+        && line.includes(`"symbol":"${TEST_SYMBOL}"`),
       );
       assert(rrBlocked || predictorBlocked || !wasRegistered, 'Trade sans snapshot mais logué comme enregistré → incohérence');
       blockedScenarios += 1;
@@ -270,11 +372,12 @@ for (const scenario of scenarios) {
 
     // Normalize realized PnL to USD from percentage for consistency; reverse sign for short
     const directionMult = side === 'long' ? 1 : -1;
-    const pnlPct = Number(scenario.pnlPct.toNumber()) / 100;
+    const pnlPctDec = (side === 'short' && scenario.shortPnlPct) ? scenario.shortPnlPct : scenario.pnlPct;
+    const pnlPct = Number(pnlPctDec.toNumber()) / 100;
     const pnlUsd = 100 * qty * (directionMult * pnlPct);
     registerAdaptiveTradeOutcome({
       sessionId: loopSessionId,
-      symbol: 'ETH/USDT',
+      symbol: TEST_SYMBOL,
       token: primary.meta?.token ?? null,
       realizedPnlUsd: pnlUsd,
     });
@@ -463,7 +566,7 @@ assert(Number.isFinite(blockedEntryPct), 'Entry eligibility percentage must be f
 
 const syntheticCandles = buildMetaAdaptiveSyntheticCandles({ minutes: 60 * 24 * 10 });
 const backtestResult = runMetaAdaptiveBacktest(syntheticCandles, {
-  symbol: 'ETH/USDT',
+  symbol: TEST_SYMBOL,
   equityUsd: 60_000,
   slippageBps: 5,
   makerFeeBps: 2,
@@ -504,3 +607,5 @@ if (Array.isArray(syntheticCandles) && syntheticCandles.length > 0) {
   const endTs = new Date(syntheticCandles[syntheticCandles.length - 1].timestamp);
   console.log(`Synthetic candles window: ${startTs.toISOString()} → ${endTs.toISOString()} (${syntheticCandles.length} bars)`);
 }
+
+console.log(`Smoke symbol: ${TEST_SYMBOL} | last: ${TEST_LAST}`);

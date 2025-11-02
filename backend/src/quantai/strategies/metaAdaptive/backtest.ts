@@ -352,6 +352,7 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   let healthCooldownUntil = 0;
   let healthSnapshot = strategyHealth.snapshot();
   const unitTestMode = process.env.UNIT_TEST_MODE === 'true';
+  const silentBenchmark = process.env.META_ADAPTIVE_BENCHMARK_SILENT === 'true';
   let lastRiskLogSignature: string | null = null;
   let lastGuardLogSignature: string | null = null;
 
@@ -442,13 +443,13 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
             const guardSignature = `${guard.reason}:${Math.round(guard.cooldownMs ?? 0)}`;
             const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
             const expectancyStr = healthSnapshot.expectancy.toFixed(4);
-            if (!unitTestMode || guardSignature !== lastGuardLogSignature) {
+            if (!silentBenchmark && (!unitTestMode || guardSignature !== lastGuardLogSignature)) {
               console.log(`[StrategyHealth] cooldown applied (${guard.reason}) for ${(guard.cooldownMs ?? 0) / 60000} minutes (winrate20=${winratePct}%, exp20=${expectancyStr})`);
             }
             lastGuardLogSignature = guardSignature;
           }
         } else if (healthSnapshot.guardrailChanged) {
-          if (!unitTestMode || lastGuardLogSignature !== 'cleared') {
+          if (!silentBenchmark && (!unitTestMode || lastGuardLogSignature !== 'cleared')) {
             const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
             const expectancyStr = healthSnapshot.expectancy.toFixed(4);
             console.log(`[StrategyHealth] cooldown cleared (winrate20=${winratePct}%, exp20=${expectancyStr})`);
@@ -585,7 +586,7 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
       const signature = `${reason}:${healthRiskMultiplier.toFixed(4)}`;
       const winratePct = (healthSnapshot.winRate * 100).toFixed(2);
       const expectancyStr = healthSnapshot.expectancy.toFixed(4);
-      if (!unitTestMode || signature !== lastRiskLogSignature) {
+      if (!silentBenchmark && (!unitTestMode || signature !== lastRiskLogSignature)) {
         console.log(`risk scaled by StrategyHealth x${healthRiskMultiplier.toFixed(2)} (reason=${reason}, winrate20=${winratePct}%, exp20=${expectancyStr})`);
       }
       lastRiskLogSignature = signature;

@@ -22,13 +22,31 @@ export type StrategyComparisonReport = {
       sharpe: number;
       maxDrawdownPct: number;
       trades: number;
+      hitRate: number;
+      profitFactor: number;
+      avgWin: number;
+      avgLoss: number;
       confidenceGateThreshold: number;
       confidenceGateBlockedSignalsPct: number;
       confidenceGateBlockedPrimaryPct: number;
     };
     trades: MetaAdaptiveTradeLog[];
   };
+  metaAdaptiveBacktest: BacktestResult;
   metaAdaptiveWalkForward: { start: number; end: number; metrics: BacktestResult['metrics'] }[];
+  summaryTable: StrategySummaryRow[];
+};
+
+export type StrategySummaryRow = {
+  label: string;
+  trades: number;
+  hitRate: number;
+  profitFactor: number;
+  avgWin: number;
+  avgLoss: number;
+  sharpe: number;
+  maxDrawdownPct: number;
+  cagr: number;
 };
 
 export type MetaAdaptiveTradeLog = {
@@ -52,6 +70,29 @@ export type MetaAdaptiveTradeLog = {
 
 const ONE = new PreciseDecimal('1');
 const HUNDRED = new PreciseDecimal('100');
+
+function buildSummaryRow(label: string, metrics: {
+  trades: number;
+  hitRate: number;
+  profitFactor: number;
+  avgWin: number;
+  avgLoss: number;
+  sharpe: number;
+  maxDrawdownPct: number;
+  cagr: number;
+}): StrategySummaryRow {
+  return {
+    label,
+    trades: Number(metrics.trades),
+    hitRate: Number(metrics.hitRate),
+    profitFactor: Number(metrics.profitFactor),
+    avgWin: Number(metrics.avgWin),
+    avgLoss: Number(metrics.avgLoss),
+    sharpe: Number(metrics.sharpe),
+    maxDrawdownPct: Number(metrics.maxDrawdownPct),
+    cagr: Number(metrics.cagr),
+  };
+}
 
 export function buildIntradayComparisonCandles(): Candle[] {
   const candles: Candle[] = [];
@@ -169,6 +210,10 @@ async function runMetaAdaptiveComparison(): Promise<{
     sharpe: number;
     maxDrawdownPct: number;
     trades: number;
+    hitRate: number;
+    profitFactor: number;
+    avgWin: number;
+    avgLoss: number;
     confidenceGateThreshold: number;
     confidenceGateBlockedSignalsPct: number;
     confidenceGateBlockedPrimaryPct: number;
@@ -312,6 +357,19 @@ async function runMetaAdaptiveComparison(): Promise<{
   const totalReturnPct = (finalEquity - 1) * 100;
   const cagr = trades > 0 ? Math.pow(finalEquity, 1 / trades) - 1 : 0;
 
+  const executedTrades = tradeLogs.filter((trade) => trade.quantity.gt(0));
+  const executedPnl = executedTrades.map((trade) => trade.pnlPct.toNumber());
+  const winningPnl = executedPnl.filter((value) => value > 0);
+  const losingPnl = executedPnl.filter((value) => value < 0);
+  const wins = winningPnl.length;
+  const losses = losingPnl.length;
+  const hitRate = executedTrades.length ? wins / executedTrades.length : 0;
+  const totalWinPct = winningPnl.reduce((sum, value) => sum + value, 0);
+  const totalLossPct = losingPnl.reduce((sum, value) => sum + Math.abs(value), 0);
+  const profitFactor = totalLossPct > 0 ? totalWinPct / totalLossPct : 0;
+  const avgWin = wins ? totalWinPct / wins : 0;
+  const avgLoss = losses ? -(totalLossPct / losses) : 0;
+
   let runningPeak = 1;
   let equityCursor = 1;
   let maxDrawdownPct = 0;
@@ -339,6 +397,10 @@ async function runMetaAdaptiveComparison(): Promise<{
     || !Number.isFinite(cagr)
     || !Number.isFinite(sharpe)
     || !Number.isFinite(maxDrawdownPct)
+    || !Number.isFinite(hitRate)
+    || !Number.isFinite(profitFactor)
+    || !Number.isFinite(avgWin)
+    || !Number.isFinite(avgLoss)
     || !Number.isFinite(blockedSignalsPct)
     || !Number.isFinite(primaryBlockedPct)
   ) {
@@ -354,6 +416,10 @@ async function runMetaAdaptiveComparison(): Promise<{
       sharpe,
       maxDrawdownPct,
       trades,
+      hitRate,
+      profitFactor,
+      avgWin,
+      avgLoss,
       confidenceGateThreshold: metaAdaptiveConfidenceThreshold,
       confidenceGateBlockedSignalsPct: Number(blockedSignalsPct.toFixed(2)),
       confidenceGateBlockedPrimaryPct: Number(primaryBlockedPct.toFixed(2)),
@@ -374,7 +440,7 @@ function runIntradayComparison(): { metrics: BacktestResult['metrics']; trades: 
 export async function compareStrategies(): Promise<StrategyComparisonReport> {
   const intraday = runIntradayComparison();
   const metaAdaptive = await runMetaAdaptiveComparison();
-  const metaAdaptiveBtCandles = buildMetaAdaptiveSyntheticCandles();
+  const metaAdaptiveBtCandles = buildMetaAdaptiveSyntheticCandles({ minutes: 60 * 24 * 3 });
   const metaAdaptiveBt = runMetaAdaptiveBacktest(metaAdaptiveBtCandles, {
     symbol: 'ETH/USDT',
     equityUsd: 50_000,
@@ -396,9 +462,43 @@ export async function compareStrategies(): Promise<StrategyComparisonReport> {
       throw new Error('Meta-Adaptive walk-forward metrics must be finite');
     }
   }
+  const summaryTable: StrategySummaryRow[] = [
+    buildSummaryRow('Intraday Dual', {
+      trades: intraday.trades.length,
+      hitRate: intraday.metrics.hitRate,
+      profitFactor: intraday.metrics.profitFactor,
+      avgWin: intraday.metrics.avgWin,
+      avgLoss: intraday.metrics.avgLoss,
+      sharpe: intraday.metrics.sharpe,
+      maxDrawdownPct: intraday.metrics.maxDrawdownPct,
+      cagr: intraday.metrics.cagr,
+    }),
+    buildSummaryRow('Meta-Adaptive (Scenarios)', {
+      trades: metaAdaptive.metrics.trades,
+      hitRate: metaAdaptive.metrics.hitRate,
+      profitFactor: metaAdaptive.metrics.profitFactor,
+      avgWin: metaAdaptive.metrics.avgWin,
+      avgLoss: metaAdaptive.metrics.avgLoss,
+      sharpe: metaAdaptive.metrics.sharpe,
+      maxDrawdownPct: metaAdaptive.metrics.maxDrawdownPct,
+      cagr: metaAdaptive.metrics.cagr,
+    }),
+    buildSummaryRow('Meta-Adaptive (Backtest)', {
+      trades: metaAdaptiveBt.trades.length,
+      hitRate: metaAdaptiveBt.metrics.hitRate,
+      profitFactor: metaAdaptiveBt.metrics.profitFactor,
+      avgWin: metaAdaptiveBt.metrics.avgWin,
+      avgLoss: metaAdaptiveBt.metrics.avgLoss,
+      sharpe: metaAdaptiveBt.metrics.sharpe,
+      maxDrawdownPct: metaAdaptiveBt.metrics.maxDrawdownPct,
+      cagr: metaAdaptiveBt.metrics.cagr,
+    }),
+  ];
   return {
     intraday,
     metaAdaptive,
+    metaAdaptiveBacktest: metaAdaptiveBt,
     metaAdaptiveWalkForward: walkForward,
+    summaryTable,
   };
 }
