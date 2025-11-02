@@ -19,6 +19,7 @@ const pythonSignalTuning = getPythonSignalTuning();
 const BASE_PYTHON_BIAS_WEIGHT = pythonSignalTuning.biasWeight;
 const PYTHON_NEUTRAL_THRESHOLD = pythonSignalTuning.neutralThreshold;
 const PYTHON_GATE_THRESHOLD = pythonSignalTuning.gateThreshold;
+const DEFAULT_SHORT_CMF_THRESHOLD = 0.08;
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
@@ -117,6 +118,8 @@ type StrategyId =
   | 'breakout_retest'
   | 'bollinger_mean_reversion'
   | 'momentum_scanner_focus';
+
+type MultiTimeframeConsensus = 'bullish' | 'bearish' | 'neutral' | 'mixed';
 
 export type AdaptiveTrailingPolicy = {
   breakevenArmR: PreciseDecimal;
@@ -1715,6 +1718,12 @@ class MetaAdaptiveStrategyAgent {
     side?: StrategyBias;
     predictorFeatures?: Record<string, number> | null;
     pythonSignal?: PythonHybridSignal | null;
+    flowCmf?: number | null;
+    flowThreshold?: number | null;
+    flowVolumeRatio?: number | null;
+    mtfConsensus?: MultiTimeframeConsensus | null;
+    mtfMatches?: number | null;
+    mtfFrames?: number | null;
   }): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
     if (!params.sessionId || !params.token) return 'skipped';
 
@@ -1763,6 +1772,48 @@ class MetaAdaptiveStrategyAgent {
         intendedSide,
       }));
       return 'predictor_blocked';
+    }
+
+    if (intendedSide === 'short') {
+      const predictorAllowsShort = predictorDecision === 'short' || predictorDecision === 'both';
+      const cmfThresholdAbs = params.flowThreshold != null && Number.isFinite(params.flowThreshold)
+        ? Math.abs(params.flowThreshold)
+        : DEFAULT_SHORT_CMF_THRESHOLD;
+      const cmfRequirement = -Math.abs(cmfThresholdAbs);
+      const flowCmfValue = params.flowCmf;
+      const flowPass = flowCmfValue != null && Number.isFinite(flowCmfValue) && flowCmfValue <= cmfRequirement;
+      const mtfConsensus = params.mtfConsensus ?? null;
+      const mtfPass = mtfConsensus === 'bearish';
+      const flowVolumeRatioValue = params.flowVolumeRatio;
+      const flowVolumeRatioLogged = flowVolumeRatioValue != null && Number.isFinite(flowVolumeRatioValue)
+        ? Number(flowVolumeRatioValue.toFixed(4))
+        : (flowVolumeRatioValue ?? null);
+      if (!predictorAllowsShort || !flowPass || !mtfPass) {
+        const guardReasons: string[] = [];
+        if (!predictorAllowsShort) guardReasons.push('predictor_disagrees');
+        if (!flowPass) guardReasons.push('flow_cmf_threshold');
+        if (!mtfPass) guardReasons.push('mtf_not_bearish');
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'adaptive_trade_blocked_by_predictor',
+          symbol: params.symbol,
+          sessionId: params.sessionId ?? null,
+          token: params.token,
+          predictorDecision,
+          predictorProbability: Number(predictorProbability.toFixed(4)),
+          predictorConfidence: Number(predictorConfidence.toFixed(4)),
+          intendedSide,
+          reason: 'short_guardrail',
+          guardReasons,
+          flowCmf: flowCmfValue != null && Number.isFinite(flowCmfValue) ? Number(flowCmfValue.toFixed(6)) : null,
+          flowThreshold: -cmfThresholdAbs,
+          flowVolumeRatio: flowVolumeRatioLogged,
+          mtfConsensus,
+          mtfMatches: params.mtfMatches ?? null,
+          mtfFrames: params.mtfFrames ?? null,
+        }));
+        return 'predictor_blocked';
+      }
     }
 
     const qty = new PreciseDecimal(params.qty ?? 0);

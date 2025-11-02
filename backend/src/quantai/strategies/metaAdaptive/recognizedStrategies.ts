@@ -1,5 +1,6 @@
 import { metaAdaptiveStrategyAgent, AdaptiveSignal, PreciseDecimal } from './metaAdaptiveAgent.js';
 import { computeInitialBracket } from './exitManager.js';
+import { normalizeOrder } from './orderNormalization.js';
 import { getQuantAIConfig } from '../../config.js';
 import { TechnicalSnapshot } from '../../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../../ai/multiTimeframe.js';
@@ -73,6 +74,15 @@ export type RecognizedStrategySignal = {
     } | null;
     entryAtr?: number | null;
     entryAtrPct?: number | null;
+    flowCmf?: number | null;
+    flowThreshold?: number | null;
+    flowVolumeRatio?: number | null;
+    mtfConsensus?: MultiTimeframeBias | null;
+    mtfMatches?: number | null;
+    mtfFramesEvaluated?: number | null;
+    tickSize?: number | null;
+    stepSize?: number | null;
+    minQty?: number | null;
   };
 };
 
@@ -365,6 +375,16 @@ type EntryEligibilityBreakdown = {
     atr: number;
     flow: number;
   };
+  mtfDetails: {
+    consensus: MultiTimeframeBias;
+    matches: number;
+    totalFrames: number;
+  };
+  flowDetails: {
+    cmf: number | null;
+    threshold: number | null;
+    volumeRatio: number | null;
+  };
 };
 
 type MultiTimeframeBias = 'bullish' | 'bearish' | 'neutral' | 'mixed';
@@ -386,15 +406,23 @@ function desiredDirectionalBias(strategyBias: StrategyBias): MultiTimeframeBias 
 function computeMtfComponent(
   bias: StrategyBias,
   snap: TechnicalSnapshot,
-): { score: number; reason: string } {
+): { score: number; reason: string; consensus: MultiTimeframeBias; matches: number; total: number } {
   const desired = desiredDirectionalBias(bias);
   const frames = (snap.multiTimeframe as any)?.timeframes ?? null;
   const ordered = ['4h', '1h', '15m'];
   let total = 0;
   let matches = 0;
   let partial = 0;
+  let bullish = 0;
+  let bearish = 0;
   if (!desired || !frames) {
-    return { score: 0.6, reason: 'mtf=neutral(no_direction)' };
+    return {
+      score: 0.6,
+      reason: 'mtf=neutral(no_direction)',
+      consensus: 'neutral',
+      matches: 0,
+      total: 0,
+    };
   }
   for (const tf of ordered) {
     const frameBias = frames?.[tf]?.bias ?? null;
@@ -404,6 +432,8 @@ function computeMtfComponent(
     }
     total += 1;
     const normalized = normalizeBiasLabel(frameBias);
+    if (normalized === 'bullish') bullish += 1;
+    if (normalized === 'bearish') bearish += 1;
     if (normalized === desired) {
       matches += 1;
       partial += 1;
@@ -414,7 +444,29 @@ function computeMtfComponent(
   const divisor = ordered.length;
   const score = divisor > 0 ? clampNumber(partial / divisor, 0, 1) : 0.6;
   const reason = `mtf=${matches >= 2 ? 'pass' : 'warn'}(${matches}/${ordered.length})`;
-  return { score, reason };
+  let consensus: MultiTimeframeBias = 'mixed';
+  if (bearish >= 2 && bearish > bullish) {
+    consensus = 'bearish';
+  } else if (bullish >= 2 && bullish > bearish) {
+    consensus = 'bullish';
+  } else if (bearish === 0 && bullish === 0) {
+    consensus = 'neutral';
+  } else if (bearish > bullish) {
+    consensus = 'bearish';
+  } else if (bullish > bearish) {
+    consensus = 'bullish';
+  } else if (matches >= 2) {
+    consensus = desired;
+  } else {
+    consensus = 'mixed';
+  }
+  return {
+    score,
+    reason,
+    consensus,
+    matches,
+    total,
+  };
 }
 
 function getStrategyFamilyFromId(id: RecognizedStrategyId): 'trend' | 'breakout' | 'mean' | 'momentum' {
@@ -464,7 +516,7 @@ function computeAtrComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot):
 function computeFlowComponent(
   bias: StrategyBias,
   snap: TechnicalSnapshot,
-): { score: number; reason: string } {
+): { score: number; reason: string; cmf: number | null; threshold: number | null; volumeRatio: number | null } {
   const volume = Number((snap as any)?.volume ?? NaN);
   const volumeMA = Number((snap as any)?.volumeMA ?? NaN);
   const cmfRaw = Number((snap as any)?.cmf20 ?? NaN);
@@ -486,7 +538,13 @@ function computeFlowComponent(
   const volumeScore = clampNumber((ratio - minVolumeRatio) / 0.6, 0, 1);
   const score = clampNumber(cmfScore * 0.6 + volumeScore * 0.4, 0, 1);
   const reason = `flow=${cmfMagnitude >= Math.abs(cmfThreshold) && ratio >= minVolumeRatio ? 'pass' : 'fail'}(cmf=${cmf.toFixed(2)},vol=${ratio.toFixed(2)})`;
-  return { score, reason };
+  return {
+    score,
+    reason,
+    cmf: Number.isFinite(cmfRaw) ? cmf : null,
+    threshold: cmfThreshold,
+    volumeRatio: Number.isFinite(ratio) ? ratio : null,
+  };
 }
 
 function computeEntryEligibility(
@@ -518,6 +576,16 @@ function computeEntryEligibility(
       adx: Number(adx.score.toFixed(4)),
       atr: Number(atr.score.toFixed(4)),
       flow: Number(flow.score.toFixed(4)),
+    },
+    mtfDetails: {
+      consensus: mtf.consensus,
+      matches: mtf.matches,
+      totalFrames: mtf.total,
+    },
+    flowDetails: {
+      cmf: flow.cmf,
+      threshold: flow.threshold,
+      volumeRatio: flow.volumeRatio,
     },
   };
 }
@@ -578,6 +646,24 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
   const calibratedConfidence = computeCalibratedConfidence(signal);
   const qualityScore = computeQualityScore(signal);
   const entryEligibility = computeEntryEligibility(signal, snap);
+  const flowDetails = entryEligibility.flowDetails;
+  const mtfDetails = entryEligibility.mtfDetails;
+  const flowCmf = flowDetails.cmf;
+  const flowVolumeRatio = flowDetails.volumeRatio;
+  const flowCmfMetric = flowCmf != null ? Number(flowCmf.toFixed(4)) : null;
+  const flowVolumeRatioMetric = flowVolumeRatio != null ? Number(flowVolumeRatio.toFixed(4)) : null;
+  const tickSizeRaw = Number((snap as any)?.tickSize ?? (snap as any)?.meta?.tickSize ?? Number.NaN);
+  const stepSizeRaw = Number(
+    (snap as any)?.stepSize
+      ?? (snap as any)?.meta?.stepSize
+      ?? (snap as any)?.lotSize
+      ?? (snap as any)?.meta?.lotSize
+      ?? Number.NaN,
+  );
+  const minQtyRaw = Number((snap as any)?.minQty ?? (snap as any)?.meta?.minQty ?? Number.NaN);
+  const tickSizeMeta = Number.isFinite(tickSizeRaw) && tickSizeRaw > 0 ? Number(tickSizeRaw) : null;
+  const stepSizeMeta = Number.isFinite(stepSizeRaw) && stepSizeRaw > 0 ? Number(stepSizeRaw) : null;
+  const minQtyMeta = Number.isFinite(minQtyRaw) && minQtyRaw > 0 ? Number(minQtyRaw) : null;
   const confidenceGatePassed = calibratedConfidence >= CONFIDENCE_THRESHOLD;
   const gateReasons: string[] = [];
   if (!confidenceGatePassed) gateReasons.push(BLOCKED_REASON_LOW_CONFIDENCE);
@@ -598,6 +684,15 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
     entryEligibilityAdx: entryEligibility.components.adx,
     entryEligibilityAtr: entryEligibility.components.atr,
     entryEligibilityFlow: entryEligibility.components.flow,
+    entryFlowCmf: flowCmfMetric,
+    entryFlowThreshold: flowDetails.threshold ?? null,
+    entryFlowVolumeRatio: flowVolumeRatioMetric,
+    entryMtfConsensus: mtfDetails.consensus,
+    entryMtfMatches: mtfDetails.matches,
+    entryMtfFrames: mtfDetails.totalFrames,
+    tickSize: tickSizeMeta,
+    stepSize: stepSizeMeta,
+    minQty: minQtyMeta,
     guardrail: signal.guardrail ?? null,
   };
 
@@ -663,6 +758,15 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
         : null,
       entryAtr: Number.isFinite((snap as any)?.atr14) ? Number((snap as any).atr14) : null,
       entryAtrPct: Number.isFinite((snap as any)?.atrPct) ? Number((snap as any).atrPct) : null,
+      flowCmf: entryEligibility.flowDetails.cmf ?? null,
+      flowThreshold: flowDetails.threshold ?? null,
+      flowVolumeRatio: flowDetails.volumeRatio ?? null,
+      mtfConsensus: mtfDetails.consensus,
+      mtfMatches: mtfDetails.matches,
+      mtfFramesEvaluated: mtfDetails.totalFrames,
+      tickSize: tickSizeMeta,
+      stepSize: stepSizeMeta,
+      minQty: minQtyMeta,
     },
   };
 }
@@ -909,6 +1013,35 @@ export async function registerAdaptiveTradeEntry(params: {
         : (params.entryPrice - firstTarget) / stopDistance)
       : 0;
   }
+
+  const normalizationMeta = {
+    tickSize: params.signal.meta.tickSize ?? null,
+    stepSize: params.signal.meta.stepSize ?? null,
+    minQty: params.signal.meta.minQty ?? null,
+  };
+  const rawStopPrice = side === 'long'
+    ? params.entryPrice - stopDistance
+    : params.entryPrice + stopDistance;
+  const normalized = normalizeOrder({
+    symbol: params.symbol,
+    entryPrice: params.entryPrice,
+    qty: params.qty,
+    stop: rawStopPrice,
+    targets,
+    side,
+    metadata: normalizationMeta,
+  });
+  const entryPriceEffective = normalized.entryPrice;
+  const stopPriceEffective = normalized.stop != null ? normalized.stop : rawStopPrice;
+  stopDistance = Math.max(1e-9, Math.abs(entryPriceEffective - stopPriceEffective));
+  const targetsAligned = normalized.targets ?? targets;
+  const qtyAligned = normalized.qty;
+  targets = targetsAligned.slice();
+  rr = stopDistance > 0
+    ? (side === 'long'
+      ? (targets[0] - entryPriceEffective) / stopDistance
+      : (entryPriceEffective - targets[0]) / stopDistance)
+    : 0;
   if (!(Number.isFinite(rr) && rr + 1e-9 >= RR_MIN)) {
     const blockedReason = 'rr_below_min';
     recordOpsEvent({
@@ -955,11 +1088,11 @@ export async function registerAdaptiveTradeEntry(params: {
     return;
   }
 
-  const qtyAbs = Math.abs(params.qty);
+  const qtyAbs = Math.abs(qtyAligned);
   const riskPerUnit = stopDistance;
   const riskUsdValue = riskPerUnit * qtyAbs;
-  const primaryTarget = targets[0] ?? params.entryPrice;
-  const targetProfitUsdValue = Math.abs(primaryTarget - params.entryPrice) * qtyAbs;
+  const primaryTarget = targets[0] ?? entryPriceEffective;
+  const targetProfitUsdValue = Math.abs(primaryTarget - entryPriceEffective) * qtyAbs;
   const stopAtrMultValue = entryAtr > 0 ? riskPerUnit / entryAtr : Number(params.signal.meta.stopAtrMult ?? 1);
 
   const planRiskPct = new PreciseDecimal(params.signal.meta.riskPct ?? '0');
@@ -968,7 +1101,7 @@ export async function registerAdaptiveTradeEntry(params: {
   const planTargetProfitUsd = new PreciseDecimal(targetProfitUsdValue.toFixed(6));
   const targetsClean = targets.map((target) => Number(target.toFixed(6)));
   const takeProfitMultiplesPrecise = targetsClean.map((target) => {
-    const distance = Math.abs(target - params.entryPrice);
+    const distance = Math.abs(target - entryPriceEffective);
     const multiple = riskPerUnit > 0 ? distance / riskPerUnit : 0;
     return new PreciseDecimal(multiple.toFixed(6));
   });
@@ -984,6 +1117,24 @@ export async function registerAdaptiveTradeEntry(params: {
       rr,
     });
   }
+  const flowCmfMeta = params.signal.meta.flowCmf != null && Number.isFinite(params.signal.meta.flowCmf)
+    ? Number(params.signal.meta.flowCmf)
+    : null;
+  const flowThresholdMeta = params.signal.meta.flowThreshold != null && Number.isFinite(params.signal.meta.flowThreshold)
+    ? Number(params.signal.meta.flowThreshold)
+    : null;
+  const flowVolumeRatioMeta = params.signal.meta.flowVolumeRatio != null
+    && Number.isFinite(params.signal.meta.flowVolumeRatio)
+    ? Number(params.signal.meta.flowVolumeRatio)
+    : null;
+  const mtfConsensusMeta = params.signal.meta.mtfConsensus ?? null;
+  const mtfMatchesMeta = params.signal.meta.mtfMatches != null && Number.isFinite(params.signal.meta.mtfMatches)
+    ? Number(params.signal.meta.mtfMatches)
+    : null;
+  const mtfFramesMeta = params.signal.meta.mtfFramesEvaluated != null && Number.isFinite(params.signal.meta.mtfFramesEvaluated)
+    ? Number(params.signal.meta.mtfFramesEvaluated)
+    : null;
+
   const registrationResult = await metaAdaptiveStrategyAgent.registerActiveTrade({
     sessionId: params.sessionId,
     symbol: params.symbol,
@@ -996,8 +1147,8 @@ export async function registerAdaptiveTradeEntry(params: {
           : 'momentum',
     id: params.signal.id,
     token: params.signal.meta.token ?? null,
-    qty: params.qty,
-    entryPrice: params.entryPrice,
+    qty: qtyAligned,
+    entryPrice: entryPriceEffective,
     stopDistance,
     entryAtr,
     entryAtrPct: resolvedEntryAtrPct != null && Number.isFinite(resolvedEntryAtrPct) ? resolvedEntryAtrPct : null,
@@ -1039,6 +1190,12 @@ export async function registerAdaptiveTradeEntry(params: {
       meta: params.signal.meta.pythonSignal.meta ?? null,
     }
       : null,
+    flowCmf: flowCmfMeta,
+    flowThreshold: flowThresholdMeta,
+    flowVolumeRatio: flowVolumeRatioMeta,
+    mtfConsensus: mtfConsensusMeta,
+    mtfMatches: mtfMatchesMeta,
+    mtfFrames: mtfFramesMeta,
   });
 
   if (registrationResult === 'predictor_blocked') {
@@ -1072,8 +1229,8 @@ export async function registerAdaptiveTradeEntry(params: {
   const latencyMs = Number.isFinite(params.latencyMs ?? NaN) ? Number(params.latencyMs) : null;
   const passiveOffsetBps = Number.isFinite(params.passiveOffsetBps ?? NaN) ? Number(params.passiveOffsetBps) : null;
   const fallbackLatencyMs = Number.isFinite(params.fallbackLatencyMs ?? NaN) ? Number(params.fallbackLatencyMs) : null;
-  const notionalUsd = Number.isFinite(params.entryPrice) && Number.isFinite(params.qty)
-    ? params.entryPrice * params.qty
+  const notionalUsd = Number.isFinite(entryPriceEffective) && Number.isFinite(qtyAligned)
+    ? entryPriceEffective * qtyAligned
     : null;
 
   updateExecutionTelemetry(params.symbol, {

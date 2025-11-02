@@ -163,6 +163,10 @@ export type QuantAIExitConfig = {
   };
   maxHoldingMin?: number;
   reentryCooldownMin?: number;
+  enforceHardMinHold?: boolean;
+  exitOnBarClose?: boolean;
+  trailingPriceSource?: 'last' | 'mid' | 'bid' | 'ask';
+  slipTicks?: number;
   strategyOverrides?: Record<string, QuantAIExitOverride>;
 };
 
@@ -193,6 +197,10 @@ export type QuantAIExitOverride = {
   trailAfterRImpulse?: number;
   trailAtrMult?: number;
   minStopAtrMult?: number;
+  enforceHardMinHold?: boolean;
+  exitOnBarClose?: boolean;
+  trailingPriceSource?: 'last' | 'mid' | 'bid' | 'ask';
+  slipTicks?: number;
   profitLock?: {
     minRMultiple?: number;
     allowPartialBeforeMinR?: boolean;
@@ -457,6 +465,10 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     },
     maxHoldingMin: 90,
     reentryCooldownMin: 25,
+    enforceHardMinHold: false,
+    exitOnBarClose: false,
+    trailingPriceSource: 'last',
+    slipTicks: 0,
     strategyOverrides: undefined,
   },
   regime: {
@@ -1147,6 +1159,28 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     }
   }
 
+  const enforceHardMinHoldRaw = raw.enforce_hard_min_hold ?? raw.enforceHardMinHold;
+  const enforceHardMinHold = enforceHardMinHoldRaw != null
+    ? Boolean(enforceHardMinHoldRaw)
+    : Boolean(DEFAULT_CONFIG.exits.enforceHardMinHold ?? false);
+  const exitOnBarCloseRaw = raw.exit_on_bar_close ?? raw.exitOnBarClose;
+  const exitOnBarClose = exitOnBarCloseRaw != null
+    ? Boolean(exitOnBarCloseRaw)
+    : Boolean(DEFAULT_CONFIG.exits.exitOnBarClose ?? false);
+  const trailingPriceSourceRaw = raw.trailing_price_source ?? raw.trailingPriceSource ?? DEFAULT_CONFIG.exits.trailingPriceSource ?? 'last';
+  const trailingPriceSourceNormalized = String(trailingPriceSourceRaw || '').toLowerCase();
+  const trailingPriceSource: QuantAIExitConfig['trailingPriceSource'] =
+    trailingPriceSourceNormalized === 'mid'
+      ? 'mid'
+      : trailingPriceSourceNormalized === 'bid'
+        ? 'bid'
+        : trailingPriceSourceNormalized === 'ask'
+          ? 'ask'
+          : 'last';
+  const slipTicks = normalizeOptionalNumber(raw.slip_ticks ?? raw.slipTicks)
+    ?? DEFAULT_CONFIG.exits.slipTicks
+    ?? 0;
+
   const cfg: QuantAIExitConfig = {
     atrPeriod: Number(raw.atr_period ?? raw.atrPeriod ?? DEFAULT_CONFIG.exits.atrPeriod),
     slAtrMult: slBase,
@@ -1176,6 +1210,10 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     reentryCooldownMin: Number.isFinite(reentryCooldown)
       ? Math.max(0, Number(reentryCooldown))
       : (DEFAULT_CONFIG.exits.reentryCooldownMin ?? 0),
+    enforceHardMinHold,
+    exitOnBarClose,
+    trailingPriceSource,
+    slipTicks,
     strategyOverrides: undefined,
   };
 
@@ -1198,6 +1236,21 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     if (trailAtr != null) out.trailAtrMult = trailAtr;
     const minStop = normalizeOptionalNumber(value.min_stop_atr_mult ?? value.minStopAtrMult);
     if (minStop != null) out.minStopAtrMult = minStop;
+    if (value.enforce_hard_min_hold != null || value.enforceHardMinHold != null) {
+      out.enforceHardMinHold = Boolean(value.enforce_hard_min_hold ?? value.enforceHardMinHold);
+    }
+    if (value.exit_on_bar_close != null || value.exitOnBarClose != null) {
+      out.exitOnBarClose = Boolean(value.exit_on_bar_close ?? value.exitOnBarClose);
+    }
+    const overridePriceSourceRaw = value.trailing_price_source ?? value.trailingPriceSource;
+    if (overridePriceSourceRaw != null) {
+      const normalized = String(overridePriceSourceRaw).toLowerCase();
+      if (normalized === 'mid' || normalized === 'bid' || normalized === 'ask' || normalized === 'last') {
+        out.trailingPriceSource = normalized as QuantAIExitOverride['trailingPriceSource'];
+      }
+    }
+    const overrideSlipTicks = normalizeOptionalNumber(value.slip_ticks ?? value.slipTicks);
+    if (overrideSlipTicks != null) out.slipTicks = overrideSlipTicks;
     const profitLockOverride = value.profit_lock ?? value.profitLock;
     if (profitLockOverride && typeof profitLockOverride === 'object') {
       const pl: NonNullable<QuantAIExitOverride['profitLock']> = {};
