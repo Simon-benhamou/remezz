@@ -191,6 +191,9 @@ function logEntryChecklist(params: EntryChecklistParams): void {
 
   const componentScores = params.entryEligibilityComponents ?? null;
   const rrPassed = params.rrValue != null ? params.rrValue + 1e-9 >= params.rrThreshold : false;
+  const confidenceRowStatus: ChecklistComponentStatus = params.confidencePassed ? 'pass' : 'fail';
+  const eligibilityRowStatus: ChecklistComponentStatus = params.entryEligibilityPassed ? 'pass' : 'fail';
+  const minHoldStatus: ChecklistComponentStatus = params.minHoldMinutes > 0 ? 'pass' : 'n/a';
 
   const failedChecks: string[] = [];
   const addFailure = (label: string, condition: boolean) => {
@@ -251,6 +254,78 @@ function logEntryChecklist(params: EntryChecklistParams): void {
       enabled: params.minHoldMinutes > 0,
       minutes: params.minHoldMinutes,
     },
+    table: [
+      {
+        key: 'mtf',
+        label: 'MTF Bias',
+        status: mtf.status,
+        detail: mtf.reason,
+        score: componentScores?.mtf ?? null,
+      },
+      {
+        key: 'adx',
+        label: 'ADX Min',
+        status: adx.status,
+        detail: adx.reason,
+        score: componentScores?.adx ?? null,
+      },
+      {
+        key: 'atr',
+        label: 'ATR Min',
+        status: atr.status,
+        detail: atr.reason,
+        score: componentScores?.atr ?? null,
+      },
+      {
+        key: 'flow',
+        label: 'CMF / Volume',
+        status: flow.status,
+        detail: flow.reason,
+        score: componentScores?.flow ?? null,
+      },
+      {
+        key: 'confidence_gate',
+        label: 'Confidence Gate',
+        status: confidenceRowStatus,
+        detail: `confidence=${Number.isFinite(params.confidence) ? params.confidence.toFixed(4) : 'n/a'}>=${CONFIDENCE_THRESHOLD}`,
+        score: null,
+      },
+      {
+        key: 'eligibility',
+        label: 'Eligibility Score',
+        status: eligibilityRowStatus,
+        detail: params.entryEligibilityScore != null && Number.isFinite(params.entryEligibilityScore)
+          ? `score=${params.entryEligibilityScore.toFixed(4)}>=${ENTRY_ELIGIBILITY_THRESHOLD}`
+          : 'score=n/a',
+        score: params.entryEligibilityScore != null && Number.isFinite(params.entryEligibilityScore)
+          ? Number(params.entryEligibilityScore.toFixed(4))
+          : null,
+      },
+      {
+        key: 'min_hold',
+        label: 'Min Hold',
+        status: minHoldStatus,
+        detail: params.minHoldMinutes > 0 ? `${params.minHoldMinutes}m lock` : 'disabled',
+        score: null,
+      },
+      {
+        key: 'rr',
+        label: 'Risk/Reward',
+        status: rrPassed ? 'pass' : params.rrValue == null ? 'n/a' : 'fail',
+        detail: params.rrValue != null && Number.isFinite(params.rrValue)
+          ? `rr=${params.rrValue.toFixed(3)}>=${params.rrThreshold}`
+          : 'rr=n/a',
+        score: params.rrValue != null && Number.isFinite(params.rrValue)
+          ? Number(params.rrValue.toFixed(4))
+          : null,
+      },
+    ] as Array<{
+      key: string;
+      label: string;
+      status: ChecklistComponentStatus;
+      detail: string | null;
+      score: number | null;
+    }>,
     failedChecks,
     strategy: params.strategy,
     timestamp: Date.now(),

@@ -1,4 +1,6 @@
 import os from 'os';
+import { createWriteStream, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { prisma } from '../db/client.js';
 import { AgentHub } from '../agent/hub.js';
 
@@ -57,6 +59,32 @@ const MAX_EVENTS = 200;
 const opsEvents: OpsEvent[] = [];
 const DUPLICATE_COOLDOWN_MS = 60 * 1000;
 const opsEventDedupe = new Map<string, number>();
+let opsLogStream: import('node:fs').WriteStream | null = null;
+
+function ensureOpsLogStream(): import('node:fs').WriteStream | null {
+  if (opsLogStream && !opsLogStream.closed) {
+    return opsLogStream;
+  }
+  try {
+    const logsDir = path.resolve(process.cwd(), 'logs');
+    mkdirSync(logsDir, { recursive: true });
+    const stream = createWriteStream(path.join(logsDir, 'ops_events.log'), {
+      flags: 'a',
+      encoding: 'utf8',
+    });
+    opsLogStream = stream;
+    stream.on('error', (error) => {
+      // eslint-disable-next-line no-console
+      console.warn('[ops] failed to write ops_events.log', error);
+    });
+    return stream;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('[ops] unable to initialize ops_events.log stream', error);
+    opsLogStream = null;
+    return null;
+  }
+}
 
 function stableStringify(value: any): string {
   if (value === null || value === undefined) return '';
@@ -113,6 +141,13 @@ export function recordOpsEvent(evt: { level?: OpsEventLevel; source: string; mes
   };
   opsEvents.push(row);
   if (opsEvents.length > MAX_EVENTS) opsEvents.splice(0, opsEvents.length - MAX_EVENTS);
+
+  const stream = ensureOpsLogStream();
+  if (stream) {
+    try {
+      stream.write(`${JSON.stringify(row)}\n`);
+    } catch {}
+  }
 }
 
 export function recentOpsEvents(limit = 50, opts: { sessionId?: string } = {}) {

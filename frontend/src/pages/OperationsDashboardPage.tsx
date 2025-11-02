@@ -83,6 +83,32 @@ type OpsEvent = {
   details?: any;
 };
 
+type ChecklistStatus = 'pass' | 'fail' | 'warn' | 'n/a';
+
+type MetaEntryChecklistRow = {
+  key: string;
+  label: string;
+  status: ChecklistStatus;
+  detail?: string | null;
+  score?: number | null;
+};
+
+type MetaEntryChecklistDetails = {
+  decision?: 'executed' | 'blocked';
+  blockedReason?: string | null;
+  registrationResult?: string;
+  confidence?: { passed?: boolean; value?: number | null; threshold?: number | null };
+  entryEligibility?: { passed?: boolean; score?: number | null; threshold?: number | null };
+  rr?: { value?: number | null; threshold?: number | null; passed?: boolean };
+  minHold?: { enabled?: boolean; minutes?: number };
+  table?: MetaEntryChecklistRow[];
+  failedChecks?: string[];
+  strategy?: string;
+  timestamp?: number;
+  entryReasons?: string[];
+  symbol?: string;
+};
+
 function formatPercent(value?: number | null, digits = 1) {
   if (value == null || Number.isNaN(value)) return '0%';
   return `${Number(value).toFixed(digits)}%`;
@@ -384,6 +410,12 @@ const OperationsDashboardPage: React.FC = () => {
     () => (Array.isArray(opsEvents) ? opsEvents.slice(0, 6) : []),
     [opsEvents],
   );
+  const metaChecklistEvents = React.useMemo(() => {
+    if (!Array.isArray(opsEvents)) return [];
+    return opsEvents
+      .filter((evt) => evt.message === 'meta_entry_checklist')
+      .slice(0, 4);
+  }, [opsEvents]);
 
   const aggressivenessStats = React.useMemo(() => {
     const rows = Array.isArray(agentHealthForDisplay?.agents)
@@ -930,6 +962,134 @@ const OperationsDashboardPage: React.FC = () => {
                       {evt.symbol && <Tag color='geekblue'>{formatDisplaySymbol(evt.symbol)}</Tag>}
                       <span>{evt.source}</span>
                     </Space>
+                  </div>
+                );
+              })
+            )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[24, 24]}>
+        <Col xs={24}>
+          <Card
+            title={<span style={{ color: '#e2e8f0' }}>Meta Explainability (last trades)</span>}
+            bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+            extra={
+              <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>
+                PASS/FAIL checklist par trade
+              </Text>
+            }
+          >
+            {metaChecklistEvents.length === 0 ? (
+              <Empty description='No recent Meta checklist entries.' style={{ margin: '32px 0', color: 'rgba(148, 163, 184, 0.78)' }} />
+            ) : (
+              metaChecklistEvents.map((evt) => {
+                const details = (evt.details ?? {}) as MetaEntryChecklistDetails;
+                const tableRows = Array.isArray(details.table) ? details.table : [];
+                const failedChecks = Array.isArray(details.failedChecks) ? details.failedChecks : [];
+                const statusPalette: Record<ChecklistStatus, { bg: string; fg: string; label: string }> = {
+                  pass: { bg: 'rgba(34, 197, 94, 0.12)', fg: '#34d399', label: 'PASS' },
+                  fail: { bg: 'rgba(248, 113, 113, 0.15)', fg: '#f87171', label: 'FAIL' },
+                  warn: { bg: 'rgba(251, 191, 36, 0.15)', fg: '#fbbf24', label: 'WARN' },
+                  'n/a': { bg: 'rgba(148, 163, 184, 0.12)', fg: '#94a3b8', label: 'N/A' },
+                };
+                const decisionTone = details.decision === 'blocked' ? '#f87171' : '#34d399';
+                const decisionLabel = details.decision === 'blocked' ? 'Blocked' : 'Executed';
+                const ts = details.timestamp ?? evt.ts;
+                const symbolLabel = details.symbol || evt.symbol;
+                return (
+                  <div
+                    key={evt.id}
+                    style={{
+                      borderRadius: 14,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      background: 'rgba(15, 23, 42, 0.75)',
+                      padding: 16,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                    }}
+                  >
+                    <Space size={12} align='center' wrap>
+                      <Tag color={decisionTone} style={{ color: '#0f172a', fontWeight: 600 }}>
+                        {decisionLabel.toUpperCase()}
+                      </Tag>
+                      {symbolLabel && (
+                        <Tag color='geekblue' style={{ fontWeight: 600 }}>
+                          {formatDisplaySymbol(symbolLabel)}
+                        </Tag>
+                      )}
+                      {details.strategy && (
+                        <Tag color='volcano' style={{ fontWeight: 600 }}>
+                          {formatOpsEventMessage(details.strategy)}
+                        </Tag>
+                      )}
+                      <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                        {formatRelative(ts)}
+                      </Text>
+                      {details.blockedReason && (
+                        <Text style={{ color: '#f87171', fontSize: 12 }}>
+                          {formatOpsEventMessage(details.blockedReason)}
+                        </Text>
+                      )}
+                    </Space>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '180px 90px 1fr',
+                        gap: 8,
+                        rowGap: 10,
+                      }}
+                    >
+                      {tableRows.map((row) => {
+                        const palette = statusPalette[row.status] ?? statusPalette['n/a'];
+                        return (
+                          <React.Fragment key={`${evt.id}-${row.key}`}>
+                            <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>{row.label}</Text>
+                            <div
+                              style={{
+                                background: palette.bg,
+                                color: palette.fg,
+                                padding: '2px 10px',
+                                borderRadius: 999,
+                                fontWeight: 600,
+                                fontSize: 12,
+                                textAlign: 'center',
+                              }}
+                            >
+                              {palette.label}
+                            </div>
+                            <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>
+                              <span>{row.detail || '—'}</span>
+                              {typeof row.score === 'number' && Number.isFinite(row.score) && (
+                                <Tag color='cyan'>{row.score.toFixed(3)}</Tag>
+                              )}
+                            </Space>
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                    {failedChecks.length > 0 && (
+                      <Space size={8} wrap>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                          Failed checks:
+                        </Text>
+                        {failedChecks.map((check) => (
+                          <Tag key={`${evt.id}-fail-${check}`} color='red'>
+                            {formatOpsEventMessage(check)}
+                          </Tag>
+                        ))}
+                      </Space>
+                    )}
+                    {Array.isArray(details.entryReasons) && details.entryReasons.length > 0 && (
+                      <Space direction='vertical' size={2} style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                        {details.entryReasons.slice(0, 3).map((reason, idx) => (
+                          <Text key={`${evt.id}-reason-${idx}`}>{formatOpsEventMessage(reason)}</Text>
+                        ))}
+                      </Space>
+                    )}
                   </div>
                 );
               })
