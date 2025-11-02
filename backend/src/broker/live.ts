@@ -47,6 +47,69 @@ async function resolveSymbolWithOverrides(requested: string, userId?: string): P
   return resolveSymbol(requested, userId);
 }
 
+type CommittedMarginInput = {
+  equityUsd?: number;
+  freeUsd?: number;
+  positionCost?: number;
+  openOrderMargin?: number;
+  positions?: BrokerPositionMargin[];
+};
+
+const toFiniteNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+export function computeCommittedMargin(input: CommittedMarginInput): number {
+  const equity = toFiniteNumber(input.equityUsd);
+  const free = toFiniteNumber(input.freeUsd);
+  const positionCost = toFiniteNumber(input.positionCost);
+  const openOrderMargin = toFiniteNumber(input.openOrderMargin);
+  const positions = Array.isArray(input.positions) ? input.positions : [];
+
+  let reportedInitial = 0;
+  let impliedInitial = 0;
+
+  for (const pos of positions) {
+    const initial = toFiniteNumber(pos?.initialMarginUsd);
+    if (initial !== undefined && initial > 0) {
+      reportedInitial += initial;
+      continue;
+    }
+
+    const notional = toFiniteNumber(pos?.notionalUsd);
+    const leverage = toFiniteNumber(pos?.leverage);
+    if (notional !== undefined && leverage !== undefined && leverage > 0) {
+      impliedInitial += notional / leverage;
+    }
+  }
+
+  let committed = 0;
+  if (reportedInitial > 0) {
+    committed = reportedInitial;
+  } else if (impliedInitial > 0) {
+    committed = impliedInitial;
+  } else if (positionCost !== undefined && positionCost > 0) {
+    committed = positionCost;
+  } else if (equity !== undefined && free !== undefined) {
+    committed = Math.max(0, equity - free);
+  }
+
+  if (openOrderMargin !== undefined && openOrderMargin > 0) {
+    committed += openOrderMargin;
+  }
+
+  if (equity !== undefined) {
+    committed = Math.min(Math.max(committed, 0), Math.max(0, equity));
+  }
+
+  if (!Number.isFinite(committed) || committed < 0) {
+    return 0;
+  }
+
+  return committed;
+}
+
 function inferBaseQuote(symbol: string): { base?: string; quote?: string } {
   if (!symbol) return {};
   const trimmed = symbol.trim();
@@ -338,14 +401,6 @@ export class LiveBroker implements Broker {
       : 0;
     const baseCommitted = positionCost ?? inferredCommit;
     const ordersCommitted = Number.isFinite(openOrderMargin) ? Math.max(openOrderMargin!, 0) : 0;
-    let committedUsd = Math.max(0, baseCommitted);
-    if (ordersCommitted > 0) {
-      committedUsd = Math.max(committedUsd, (positionCost ?? 0) + ordersCommitted);
-    }
-    if (Number.isFinite(equityUsd)) {
-      committedUsd = Math.min(committedUsd, Math.max(0, Number(equityUsd)));
-    }
-    if (!Number.isFinite(committedUsd)) committedUsd = 0;
 
     const normalizedFreeUsd = Number.isFinite(freeUsd) ? freeUsd : 0;
     const normalizedEquityUsd = Number.isFinite(equityUsd) ? equityUsd : 0;
@@ -467,6 +522,14 @@ export class LiveBroker implements Broker {
     } else if (Number.isFinite(maintenanceUsd) && maintenanceFromPositions > 0) {
       maintenanceUsd = Math.max(Number(maintenanceUsd), maintenanceFromPositions);
     }
+
+    const committedUsd = computeCommittedMargin({
+      equityUsd: normalizedEquityUsd,
+      freeUsd: normalizedFreeUsd,
+      positionCost: baseCommitted,
+      openOrderMargin: ordersCommitted,
+      positions,
+    });
 
     if ((marginRatio === undefined || Number.isNaN(Number(marginRatio))) && normalizedEquityUsd > 0) {
       if (Number.isFinite(maintenanceUsd)) {
