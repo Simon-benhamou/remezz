@@ -147,6 +147,9 @@ export type QuantAIExitConfig = {
     minRMultiple: number;
     allowPartialBeforeMinR?: boolean;
     preLockTrailMultiplier?: number;
+    preLockMinRMultiple?: number;
+    minHoldBypassRMultiple?: number;
+    breakevenOffsetR?: number;
   };
   volatilityExit?: {
     atrPctSpikeThreshold: number;
@@ -205,6 +208,9 @@ export type QuantAIExitOverride = {
     minRMultiple?: number;
     allowPartialBeforeMinR?: boolean;
     preLockTrailMultiplier?: number;
+    preLockMinRMultiple?: number;
+    minHoldBypassRMultiple?: number;
+    breakevenOffsetR?: number;
   };
   volatilityExit?: {
     atrPctSpikeThreshold?: number;
@@ -450,7 +456,10 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     profitLock: {
       minRMultiple: 1.0,
       allowPartialBeforeMinR: false,
-      preLockTrailMultiplier: 1.35,
+      preLockTrailMultiplier: 0.8,
+      preLockMinRMultiple: 0.35,
+      minHoldBypassRMultiple: 0.5,
+      breakevenOffsetR: 0,
     },
     volatilityExit: {
       atrPctSpikeThreshold: 0.35,
@@ -1022,7 +1031,14 @@ function normalizeExits(raw: any): QuantAIExitConfig {
   const minStopAtrMult = normalizeOptionalNumber(raw.min_stop_atr_mult ?? raw.minStopAtrMult)
     ?? DEFAULT_CONFIG.exits.minStopAtrMult
     ?? 0;
-  const profitLockDefaults = DEFAULT_CONFIG.exits.profitLock ?? { minRMultiple: 1, allowPartialBeforeMinR: false, preLockTrailMultiplier: 1.35 };
+  const profitLockDefaults = DEFAULT_CONFIG.exits.profitLock ?? {
+    minRMultiple: 1,
+    allowPartialBeforeMinR: false,
+    preLockTrailMultiplier: 0.8,
+    preLockMinRMultiple: 0.35,
+    minHoldBypassRMultiple: 0.5,
+    breakevenOffsetR: 0,
+  };
   const profitLockRaw = (raw.profit_lock ?? raw.profitLock) && typeof (raw.profit_lock ?? raw.profitLock) === 'object'
     ? (raw.profit_lock ?? raw.profitLock)
     : undefined;
@@ -1037,6 +1053,15 @@ function normalizeExits(raw: any): QuantAIExitConfig {
         preLockTrailMultiplier: normalizeOptionalNumber(
           profitLockRaw?.pre_lock_trail_multiplier ?? profitLockRaw?.preLockTrailMultiplier,
         ) ?? profitLockDefaults.preLockTrailMultiplier,
+        preLockMinRMultiple: normalizeOptionalNumber(
+          profitLockRaw?.pre_lock_min_r_multiple ?? profitLockRaw?.preLockMinRMultiple,
+        ) ?? profitLockDefaults.preLockMinRMultiple,
+        minHoldBypassRMultiple: normalizeOptionalNumber(
+          profitLockRaw?.min_hold_bypass_r_multiple ?? profitLockRaw?.minHoldBypassRMultiple,
+        ) ?? profitLockDefaults.minHoldBypassRMultiple,
+        breakevenOffsetR: normalizeOptionalNumber(
+          profitLockRaw?.breakeven_offset_r ?? profitLockRaw?.breakevenOffsetR,
+        ) ?? profitLockDefaults.breakevenOffsetR,
       }
     : undefined;
   const volatilityDefaults = DEFAULT_CONFIG.exits.volatilityExit ?? { atrPctSpikeThreshold: 0.35, widenMultiplier: 1.25 };
@@ -1265,6 +1290,18 @@ function normalizeExits(raw: any): QuantAIExitConfig {
         profitLockOverride.pre_lock_trail_multiplier ?? profitLockOverride.preLockTrailMultiplier,
       );
       if (preLockTrail != null) pl.preLockTrailMultiplier = preLockTrail;
+      const preLockMinR = normalizeOptionalNumber(
+        profitLockOverride.pre_lock_min_r_multiple ?? profitLockOverride.preLockMinRMultiple,
+      );
+      if (preLockMinR != null) pl.preLockMinRMultiple = preLockMinR;
+      const bypassR = normalizeOptionalNumber(
+        profitLockOverride.min_hold_bypass_r_multiple ?? profitLockOverride.minHoldBypassRMultiple,
+      );
+      if (bypassR != null) pl.minHoldBypassRMultiple = bypassR;
+      const breakevenOffset = normalizeOptionalNumber(
+        profitLockOverride.breakeven_offset_r ?? profitLockOverride.breakevenOffsetR,
+      );
+      if (breakevenOffset != null) pl.breakevenOffsetR = breakevenOffset;
       if (Object.keys(pl).length) out.profitLock = pl;
     }
     const volatilityOverride = value.volatility_exit ?? value.volatilityExit;

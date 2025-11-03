@@ -165,7 +165,21 @@ export function maybeAdjustOrExit({
   const profitLockCfg = cfg.profitLock ?? { minRMultiple: 1, allowPartialBeforeMinR: false };
   const minRMultiple = Number.isFinite(profitLockCfg.minRMultiple) ? profitLockCfg.minRMultiple! : 1;
   const allowPartialBeforeMinR = profitLockCfg.allowPartialBeforeMinR ?? false;
+  const preLockMinR = typeof profitLockCfg.preLockMinRMultiple === 'number' && Number.isFinite(profitLockCfg.preLockMinRMultiple)
+    ? profitLockCfg.preLockMinRMultiple
+    : null;
+  const minHoldBypassR = typeof profitLockCfg.minHoldBypassRMultiple === 'number' && Number.isFinite(profitLockCfg.minHoldBypassRMultiple)
+    ? profitLockCfg.minHoldBypassRMultiple
+    : null;
+  const breakevenOffsetR = typeof profitLockCfg.breakevenOffsetR === 'number' && Number.isFinite(profitLockCfg.breakevenOffsetR)
+    ? Math.max(0, profitLockCfg.breakevenOffsetR)
+    : 0;
+  const preLockTrailFactor = typeof profitLockCfg.preLockTrailMultiplier === 'number' && Number.isFinite(profitLockCfg.preLockTrailMultiplier)
+    ? Math.max(0, profitLockCfg.preLockTrailMultiplier)
+    : 0.8;
   const profitLockArmed = rNow >= minRMultiple;
+  const bypassHoldActive = minHoldBypassR != null && rNow >= minHoldBypassR;
+  const effectiveHoldSatisfied = holdSatisfied || bypassHoldActive;
   let activeTrailMultiplier = trailMultiplierBase;
   let volatilitySpike = false;
   if (cfg.volatilityExit && atrPctContext != null && entryAtrPctBaseline != null) {
@@ -190,10 +204,14 @@ export function maybeAdjustOrExit({
     const target = targets[i];
     const hit = side === 'long' ? lastPrice >= target : lastPrice <= target;
     if (hit) {
-      if (!holdSatisfied) {
+      if (!effectiveHoldSatisfied) {
         return { action: 'hold', reason: 'min_hold_active' };
       }
-      if (!profitLockArmed && !allowPartialBeforeMinR) {
+      const canPartial =
+        profitLockArmed ||
+        allowPartialBeforeMinR ||
+        bypassHoldActive;
+      if (!canPartial) {
         return { action: 'hold', reason: 'profit_lock_pending' };
       }
       return { action: 'take_partial', reason: `TP${i + 1} hit at ${target.toFixed(4)}`, tpHitIndex: i };
@@ -237,7 +255,35 @@ export function maybeAdjustOrExit({
     return null;
   };
 
-  if (holdSatisfied && profitLockArmed && rNow >= trailAfter) {
+  if (!profitLockArmed && preLockMinR != null && rNow >= preLockMinR) {
+    const desiredStop = computeTrailCandidate({
+      multiplier: trailingMode === 'percent' ? undefined : effectiveTrailMultiplier * preLockTrailFactor,
+      percent: trailingMode === 'percent' ? (percentTrail ?? 0.35) * preLockTrailFactor : undefined,
+    });
+    let newStop = applyStopCandidate(desiredStop, false);
+    if (baselineRisk > 0) {
+      const breakeven = side === 'long'
+        ? entryPrice + breakevenOffsetR * baselineRisk
+        : entryPrice - breakevenOffsetR * baselineRisk;
+      if (side === 'long' && breakeven > stop + 1e-8) {
+        const candidate = newStop != null ? Math.max(newStop, breakeven) : breakeven;
+        if (candidate > stop + 1e-8) {
+          newStop = candidate;
+        }
+      }
+      if (side === 'short' && breakeven < stop - 1e-8) {
+        const candidate = newStop != null ? Math.min(newStop, breakeven) : breakeven;
+        if (candidate < stop - 1e-8) {
+          newStop = candidate;
+        }
+      }
+    }
+    if (newStop != null) {
+      return { action: 'move_sl', reason: `Pre-lock trail at ${rNow.toFixed(2)}R`, stop: newStop };
+    }
+  }
+
+  if (effectiveHoldSatisfied && profitLockArmed && rNow >= trailAfter) {
     const desiredStop = computeTrailCandidate({
       multiplier: trailingMode === 'percent' ? undefined : effectiveTrailMultiplier,
       percent: trailingMode === 'percent' ? percentTrail ?? undefined : undefined,
@@ -254,11 +300,11 @@ export function maybeAdjustOrExit({
     (adx != null && adx < cfg.earlyExit.adxBelow) ||
     (cfg.earlyExit.cmfNegative && cmf != null && cmf < 0);
 
-  if (lossR >= cutThreshold && momentumFail && holdSatisfied) {
+  if (lossR >= cutThreshold && momentumFail && effectiveHoldSatisfied) {
     return { action: 'exit', reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure` };
   }
 
-  if (holdSatisfied && profitLockArmed && rNow >= tightenThreshold && momentumFail) {
+  if (effectiveHoldSatisfied && profitLockArmed && rNow >= tightenThreshold && momentumFail) {
     const tightenStop = computeTrailCandidate({
       multiplier: trailingMode === 'percent' ? undefined : 0.5 * effectiveTrailMultiplier,
       percent: trailingMode === 'percent' && percentTrail != null ? percentTrail * 0.5 : undefined,
@@ -271,7 +317,7 @@ export function maybeAdjustOrExit({
 
   const maxHolding = cfg.maxHoldingMin;
   if (maxHolding != null && Number.isFinite(maxHolding) && maxHolding > 0 && minutesOpen != null) {
-    if (minutesOpen >= maxHolding && lossR >= cutThreshold && holdSatisfied) {
+    if (minutesOpen >= maxHolding && lossR >= cutThreshold && effectiveHoldSatisfied) {
       return {
         action: 'exit',
         reason: `Time stop: drawdown ${lossR.toFixed(2)}R after ${minutesOpen.toFixed(1)}min`,

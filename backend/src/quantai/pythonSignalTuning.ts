@@ -19,6 +19,11 @@ export type PythonSignalTuning = {
   biasWeight: number;
   neutralThreshold: number;
   gateThreshold: number;
+  highConfidenceFloor: number;
+  highConfidenceProb: number;
+  highConfidenceConfidence: number;
+  highConfidenceRiskBoost: number;
+  minSamplesForBoost: number;
 };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,6 +32,11 @@ const fallbackTuning: PythonSignalTuning = {
   biasWeight: 0.6,
   neutralThreshold: 0.1,
   gateThreshold: 0.2,
+  highConfidenceFloor: 0.75,
+  highConfidenceProb: 0.68,
+  highConfidenceConfidence: 0.85,
+  highConfidenceRiskBoost: 1.15,
+  minSamplesForBoost: 35,
 };
 
 let cachedTuning: PythonSignalTuning | null = null;
@@ -86,11 +96,21 @@ function computeTuning(metrics: PythonTrainingMetrics | null): PythonSignalTunin
   const biasWeight = clamp(0.4 + quality * 0.45, 0.4, 0.9);
   const neutralThreshold = clamp(0.12 - quality * 0.05, 0.05, 0.12);
   const gateThreshold = clamp(0.24 - quality * 0.08, 0.14, 0.24);
+  const highConfidenceFloor = clamp(0.75 + quality * 0.2, 0.7, 1.0);
+  const highConfidenceProb = clamp(0.7 - quality * 0.08, 0.55, 0.72);
+  const highConfidenceConfidence = clamp(0.86 - quality * 0.08, 0.68, 0.9);
+  const highConfidenceRiskBoost = clamp(1.12 + quality * 0.35, 1.05, 1.5);
+  const minSamplesForBoost = Math.max(10, Math.round(25 + (1 - quality) * 45));
 
   return {
     biasWeight,
     neutralThreshold,
     gateThreshold,
+    highConfidenceFloor,
+    highConfidenceProb,
+    highConfidenceConfidence,
+    highConfidenceRiskBoost,
+    minSamplesForBoost,
   };
 }
 

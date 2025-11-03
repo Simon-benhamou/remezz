@@ -21,6 +21,11 @@ const BASE_PYTHON_BIAS_WEIGHT = pythonSignalTuning.biasWeight;
 const PYTHON_NEUTRAL_THRESHOLD = pythonSignalTuning.neutralThreshold;
 const PYTHON_GATE_THRESHOLD = pythonSignalTuning.gateThreshold;
 const DEFAULT_SHORT_CMF_THRESHOLD = 0.08;
+const PYTHON_BIAS_BOOST_FLOOR = pythonSignalTuning.highConfidenceFloor;
+const PYTHON_BOOST_PROB_THRESHOLD = pythonSignalTuning.highConfidenceProb;
+const PYTHON_BOOST_CONF_THRESHOLD = pythonSignalTuning.highConfidenceConfidence;
+const PYTHON_RISK_BOOST_MULTIPLIER = pythonSignalTuning.highConfidenceRiskBoost;
+const PYTHON_BOOST_MIN_SAMPLES = pythonSignalTuning.minSamplesForBoost;
 const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.58);
 const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.55);
 const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.35);
@@ -1149,6 +1154,30 @@ class MetaAdaptiveStrategyAgent {
       }
     }
 
+    const livePythonMetrics = this.pythonPerformance.getMetrics();
+    let pythonBoostApplied = false;
+    if (
+      pythonSignal
+      && Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD
+      && pythonSignal.primaryProbability >= PYTHON_BOOST_PROB_THRESHOLD
+      && pythonSignal.confidence >= PYTHON_BOOST_CONF_THRESHOLD
+      && livePythonMetrics.samples >= PYTHON_BOOST_MIN_SAMPLES
+      && livePythonMetrics.hitRate > 0.52
+      && livePythonMetrics.realizedEdge > 0
+    ) {
+      const edgeFactor = 1 + clamp(livePythonMetrics.realizedEdge * 2, 0, 0.4);
+      const weightFloor = Math.max(pythonWeight, PYTHON_BIAS_BOOST_FLOOR);
+      pythonWeight = clamp(weightFloor * edgeFactor, 0.35, 1.2);
+      const boostedEntry = clamp(pythonSignal.entryWeight * (PYTHON_RISK_BOOST_MULTIPLIER * edgeFactor), 0.2, 3);
+      const boostedRisk = clamp(pythonSignal.riskMultiplier * (PYTHON_RISK_BOOST_MULTIPLIER * edgeFactor), 0.2, 3);
+      pythonSignal = {
+        ...pythonSignal,
+        entryWeight: boostedEntry,
+        riskMultiplier: boostedRisk,
+      };
+      pythonBoostApplied = true;
+    }
+
     const regimeSignal = detectMarketRegime({
       snap,
       atr15mPct,
@@ -1177,6 +1206,9 @@ class MetaAdaptiveStrategyAgent {
       macroNotes.push(`python_prob_primary=${pythonSignal.primaryProbability.toFixed(2)}`);
       macroNotes.push(`python_conf=${pythonSignal.confidence.toFixed(2)}`);
       macroNotes.push(`python_entry=${pythonSignal.entryWeight.toFixed(2)}`);
+      if (pythonBoostApplied) {
+        macroNotes.push('python_boost_high_conf');
+      }
       if (pythonSignal.cooldown.active) {
         macroNotes.push('python_cooldown_active');
       }

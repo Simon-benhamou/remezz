@@ -99,9 +99,10 @@ export async function recordDecisionSnapshot(params: {
 }
 
 function normalizeFeature(value: number): number {
-  if (!Number.isFinite(value)) return 0;
+  if (!Number.isFinite(value) || value === 0) return 0;
   const abs = Math.abs(value);
-  return Math.log10(abs + 1);
+  const signedLog = Math.log10(abs + 1);
+  return value > 0 ? signedLog : -signedLog;
 }
 
 function buildFeatureVector(features: Partial<DecisionFeatures> | null | undefined): number[] {
@@ -234,7 +235,8 @@ export async function recomputeAdaptiveWeights(family: string) {
 
   const wins = samples.filter(s => s.outcome === 'win');
   const losses = samples.filter(s => s.outcome === 'loss');
-  const epsilon = 1e-6;
+  const sampleCount = samples.length;
+  const shrinkFactor = Math.max(0, Math.min(1, sampleCount / 60));
 
   function computeRatio(key: keyof DecisionFeatures) {
     const winAvg = wins.length
@@ -243,15 +245,18 @@ export async function recomputeAdaptiveWeights(family: string) {
     const lossAvg = losses.length
       ? losses.reduce((sum, item) => sum + normalizeFeature((item.features as any)?.[key] ?? 0), 0) / losses.length
       : 0;
-    const ratio = (winAvg + epsilon) / (lossAvg + epsilon);
-    return Math.max(0.7, Math.min(1.3, ratio));
+    const diff = winAvg - lossAvg;
+    const raw = 1 + diff * 0.4 * shrinkFactor;
+    return Math.max(0.85, Math.min(1.15, Number.isFinite(raw) ? raw : 1));
   }
 
   const momentumWeight = computeRatio('momentum');
   const volumeWeight = computeRatio('volume24h');
   const volatilityWeight = computeRatio('volatility');
-  const confidence = wins.length / samples.length;
   const winRate = wins.length / samples.length;
+  const PRIOR_ALPHA = 4;
+  const PRIOR_BETA = 4;
+  const confidence = (wins.length + PRIOR_ALPHA) / (samples.length + PRIOR_ALPHA + PRIOR_BETA);
 
   await prisma.adaptiveThreshold.upsert({
     where: { family },
