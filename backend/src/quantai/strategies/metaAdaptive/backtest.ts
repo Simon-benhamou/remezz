@@ -65,6 +65,30 @@ function clamp(value: number, min: number, max: number): number {
   return value;
 }
 
+const ONE_MINUTE_MS = 60_000;
+
+function inferBaseIntervalMs(candles: Candle[]): number {
+  for (let i = 1; i < candles.length; i += 1) {
+    const diff = candles[i].timestamp - candles[i - 1].timestamp;
+    if (Number.isFinite(diff) && diff > 0) {
+      return diff;
+    }
+  }
+  return ONE_MINUTE_MS;
+}
+
+function aggregateToMinutes(candles: Candle[], targetMinutes: number): Candle[] {
+  if (!candles.length || targetMinutes <= 1) return candles.slice();
+  const baseIntervalMs = inferBaseIntervalMs(candles);
+  const targetMs = targetMinutes * ONE_MINUTE_MS;
+  const factorRaw = targetMs / Math.max(baseIntervalMs, 1);
+  const factor = Math.max(1, Math.round(factorRaw));
+  if (factor === 1) {
+    return candles.slice();
+  }
+  return aggregateCandles(candles, factor);
+}
+
 function sumVolumes(candles: Candle[], bars: number): number {
   const look = Math.min(Math.max(bars, 1), candles.length);
   let total = 0;
@@ -324,7 +348,7 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   const baseExitConfig = quantConfig.exits;
   const positionSizer = new PositionSizer(quantConfig.risk.baseRiskPerTradePct);
 
-  const candles15m = aggregateCandles(candles, 15);
+  const candles15m = aggregateToMinutes(candles, 15);
 
   const makerFeeBps = options.makerFeeBps ?? 1.8;
   const takerFeeBps = options.takerFeeBps ?? 5;

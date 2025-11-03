@@ -12,6 +12,7 @@ import type { Diagnostics as MultiTimeframeDiagnostics } from '../../../ai/multi
 import { recordOpsEvent } from '../../../monitor/ops.js';
 import { updateExecutionTelemetry } from '../../../services/executionTelemetry.js';
 import type { PerpetualMetrics, OnChainMetrics, SentimentSnapshot, WatchlistMeta } from '../../../analytics/marketContext.js';
+import { classifySymbolFamily } from '../../../learning/symbolFamily.js';
 
 type StrategyBias = 'long' | 'short' | 'both';
 
@@ -142,6 +143,7 @@ type EvaluateOptions = {
 const DEFAULT_CONFIDENCE_THRESHOLD = 0.72;
 const BLOCKED_REASON_LOW_CONFIDENCE = 'low_confidence';
 const BLOCKED_REASON_WEAK_CONTEXT = 'weak_entry_context';
+const BLOCKED_REASON_SHORT_CONF_GUARD = 'short_confidence_guard';
 
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -952,6 +954,72 @@ export async function registerAdaptiveTradeEntry(params: {
   metaAdaptiveStrategyAgent.setReentryCooldownMinutes(reentryCooldown);
 
   const side: 'long' | 'short' = params.signal.bias === 'short' ? 'short' : 'long';
+  const symbolFamily = classifySymbolFamily(params.symbol);
+  if (side === 'short' && symbolFamily === 'major') {
+    const pythonConfidence = Number(params.signal.meta?.pythonSignal?.confidence ?? Number.NaN);
+    const pythonPrimary = Number(params.signal.meta?.pythonSignal?.primaryProbability ?? Number.NaN);
+    const trendStrengthRaw = params.signal.metrics?.trendStrength ?? null;
+    const trendStrengthMetric = typeof trendStrengthRaw === 'number'
+      ? trendStrengthRaw
+      : typeof trendStrengthRaw === 'string'
+        ? Number(trendStrengthRaw)
+        : Number.NaN;
+    const lowConfidence = Number.isFinite(pythonConfidence) && pythonConfidence < 0.62;
+    const weakPrimary = Number.isFinite(pythonPrimary) && pythonPrimary < 0.58;
+    const weakTrend = Number.isFinite(trendStrengthMetric) && trendStrengthMetric < 0.85;
+    if ((lowConfidence || weakPrimary) && weakTrend) {
+      const reason = BLOCKED_REASON_SHORT_CONF_GUARD;
+      recordOpsEvent({
+        level: 'info',
+        source: 'meta_adaptive_gate',
+        message: 'trade_blocked',
+        symbol: params.symbol,
+        details: {
+          strategy: params.signal.id,
+          blockedReason: reason,
+          confidence: Number(params.signal.confidence.toFixed(4)),
+          pythonConfidence,
+          pythonPrimary,
+          trendStrength: trendStrengthMetric,
+          entryReasons,
+        },
+      });
+      console.log(JSON.stringify({
+        level: 'info',
+        event: 'adaptive_trade_blocked_by_gate',
+        symbol: params.symbol,
+        sessionId: params.sessionId ?? null,
+        strategy: params.signal.id,
+        blockedReason: reason,
+        confidence: Number(params.signal.confidence.toFixed(4)),
+        pythonConfidence,
+        pythonPrimary,
+        trendStrength: trendStrengthMetric,
+        entryReasons,
+      }));
+      logEntryChecklist({
+        sessionId: params.sessionId ?? null,
+        symbol: params.symbol,
+        strategy: params.signal.id,
+        decision: 'blocked',
+        blockedReason: reason,
+        registrationResult: 'n/a',
+        entryReasons,
+        confidencePassed: true,
+        confidence: Number(params.signal.confidence),
+        entryEligibilityPassed: true,
+        entryEligibilityScore: Number.isFinite(params.signal.entryEligibilityScore)
+          ? params.signal.entryEligibilityScore
+          : null,
+        entryEligibilityComponents: params.signal.meta.entryEligibilityComponents,
+        rrValue: null,
+        rrThreshold: RR_MIN,
+        minHoldMinutes,
+      });
+      return 'skipped';
+    }
+  }
+
   const entryAtrFromMeta = Number(params.signal.meta.entryAtr ?? Number.NaN);
   const entryAtrPct = Number(params.signal.meta.entryAtrPct ?? Number.NaN);
   let entryAtr = Number.isFinite(entryAtrFromMeta) && entryAtrFromMeta > 0 ? entryAtrFromMeta : Number.NaN;

@@ -1,0 +1,210 @@
+{
+  "options": {
+    "symbol": "ETH/USDT",
+    "days": 1,
+    "timeframe": "1m",
+    "equityUsd": 60000,
+    "outputPath": "../eth_backtest.json"
+  },
+  "metadata": {
+    "datasource": "ccxt",
+    "exchange": "binanceusdm",
+    "maxGapMinutes": 0,
+    "startTimestamp": 1762118640000,
+    "endTimestamp": 1762205040000
+  },
+  "metrics": {
+    "totalReturnPct": 0.5531999999999999,
+    "cagr": 6.490349515365215,
+    "sharpe": 3.733659099191435,
+    "maxDrawdownPct": 0.4880072123546822,
+    "hitRate": 0.4444444444444444,
+    "profitFactor": 2.1316046984300754,
+    "avgWin": 213.9870795,
+    "avgLoss": -133.85038333333333,
+    "pnlSeries": [
+      59986.022776,
+      60036.071198,
+      60022.564302,
+      60153.301551,
+      60034.760314,
+      60621.616665,
+      60436.901624,
+      60302.392664,
+      60337.910628
+    ]
+  },
+  "trades": [
+    {
+      "timestamp": 1762146180000,
+      "side": "short",
+      "quantity": 3.729627,
+      "price": 3747.62,
+      "cumulativePnl": 0,
+      "reason": "stop",
+      "executionMode": "taker",
+      "holdDurationMs": 6000000,
+      "entryAtrPct": 1.4308991966830786,
+      "exitAtrPct": 1.4426949987043278,
+      "meta": {
+        "strategyId": "momentum_scanner_focus",
+        "family": "momentum_scanner_focus"
+      }
+    },
+    {
+      "timestamp": 1762154640000,
+      "side": "short",
+      "quantity": 3.703894,
+      "price": 3730.758235,
+      "cumulativePnl": 63.898705,
+      "reason": "stop",
+      "executionMode": "taker",
+      "holdDurationMs": 8460000,
+      "entryAtrPct": 1.4426949987043278,
+      "exitAtrPct": 1.4848199015288932,
+      "meta": {
+        "strategyId": "breakout_retest",
+        "family": "breakout_retest"
+      }
+    },
+    {
+      "timestamp": 1762160820000,
+      "side": "short",
+      "quantity": 3.621482,
+      "price": 3729.66,
+      "cumulativePnl": 0,
+      "reason": "stop",
+      "executionMode": "taker",
+      "holdDurationMs": 6180000,
+      "entryAtrPct": 1.4848199015288932,
+      "exitAtrPct": 1.4921378595491062,
+      "meta": {
+        "strategyId": "momentum_scanner_focus",
+        "family": "momentum_scanner_focus"
+      }
+    },
+    {
+      "timestamp": 1762167780000,
+      "side": "short",
+      "quantity": 3.606331,
+      "price": 3698.519346,
+      "cumulativePnl": 144.147407,
+      "reason": "stop",
+      "executionMode": "taker",
+      "holdDurationMs": 6960000,
+      "entryAtrPct": 1.4921378595491062,
+      "exitAtrPct": 0.6,
+      "meta": {
+        "strategyId": "momentum_scanner_focus",
+        "family": "momentum_scanner_focus"
+      }
+    },
+    {
+      "timestamp": 1762178700000,
+      "side": "short",
+      "quantity": 3.556763,
+      "price": 3733.21,
+      "cumulativePnl": -105.315752,
+      "reason": "runner",
+      "executionMode": "taker",
+      "holdDurationMs": 10620000,
+      "entryAtrPct": 1.522155998963462,
+      "exitAtrPct": 0.6,
+      "meta": {
+        "strategyId": "breakout_retest",
+        "family": "breakout_retest"
+      }
+    },
+    {
+      "timestamp": 1762185840000,
+      "side": "short",
+      "quantity": 3.689577,
+      "price": 3575.195552,
+      "cumulativePnl": 600.347484,
+      "reason": "tp1",
+      "executionMode": "taker",
+      "holdDurationMs": 6960000,
+      "entryAtrPct": 1.4510287639284791,
+      "exitAtrPct": 1.7458408914226486,
+      "meta": {
+        "strategyId": "breakout_retest",
+        "family": "breakout_retest"
+      }
+    },
+    {
+      "timestamp": 1762186740000,
+      "side": "short",
+      "quantity": 3.218979,
+      "price": 3620.01,
+      "cumulativePnl": -173.14888,
+      "reason": "runner",
+      "executionMode": "taker",
+      "holdDurationMs": 900000,
+      "entryAtrPct": 1.7458408914226486,
+      "exitAtrPct": 1.79775071261985,
+      "meta": {
+        "strategyId": "momentum_scanner_focus",
+        "family": "momentum_scanner_focus"
+      }
+    },
+    {
+      "timestamp": 1762190460000,
+      "side": "short",
+      "quantity": 3.138361,
+      "price": 3659.23,
+      "cumulativePnl": -123.086518,
+      "reason": "runner",
+      "executionMode": "taker",
+      "holdDurationMs": 3720000,
+      "entryAtrPct": 1.79775071261985,
+      "exitAtrPct": 1.6816169992225969,
+      "meta": {
+        "strategyId": "classic_trend_following",
+        "family": "classic_trend_following"
+      }
+    },
+    {
+      "timestamp": 1762197360000,
+      "side": "short",
+      "quantity": 3.295922,
+      "price": 3644.801648,
+      "cumulativePnl": 47.554722,
+      "reason": "stop",
+      "executionMode": "taker",
+      "holdDurationMs": 6900000,
+      "entryAtrPct": 1.6816169992225969,
+      "exitAtrPct": 1.6912982637989111,
+      "meta": {
+        "strategyId": "classic_trend_following",
+        "family": "classic_trend_following"
+      }
+    }
+  ],
+  "walkForward": [
+    {
+      "start": 1762118640000,
+      "end": 1762205040000,
+      "metrics": {
+        "totalReturnPct": 0.5531999999999999,
+        "cagr": 6.490349515365215,
+        "sharpe": 3.733659099191435,
+        "maxDrawdownPct": 0.4880072123546822,
+        "hitRate": 0.4444444444444444,
+        "profitFactor": 2.1316046984300754,
+        "avgWin": 213.9870795,
+        "avgLoss": -133.85038333333333,
+        "pnlSeries": [
+          59986.022776,
+          60036.071198,
+          60022.564302,
+          60153.301551,
+          60034.760314,
+          60621.616665,
+          60436.901624,
+          60302.392664,
+          60337.910628
+        ]
+      }
+    }
+  ]
+}
