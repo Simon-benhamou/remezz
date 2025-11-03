@@ -43,7 +43,7 @@ class RunTrainingWorkflowTest(unittest.TestCase):
             self.assertEqual([s.hours for s in specs], [s.hours for s in DEFAULT_WINDOW_SPECS])
             windows: list[PreparedWindow] = []
             for idx, symbol in enumerate(symbols):
-                timestamps = pd.date_range("2024-01-01", periods=rows_per_symbol, freq="15min")
+                timestamps = pd.date_range("2024-01-01", periods=rows_per_symbol, freq="1h")
                 base = idx * 0.1
                 frame = pd.DataFrame(
                     {
@@ -120,12 +120,23 @@ class SyntheticFallbackTest(unittest.TestCase):
     def test_fallback_dataset_produces_mixed_targets(self):
         start = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
         end = int(datetime(2024, 2, 1, tzinfo=timezone.utc).timestamp() * 1000)
-        raw = fetch_ohlcv("nonexistent", "TEST/USDT", "1h", start, end)
+        with mock.patch("ccxt_xgboost_module.FORCE_SYNTHETIC", True):
+            raw = fetch_ohlcv("nonexistent", "TEST/USDT", "1h", start, end)
         self.assertGreater(len(raw), 200)
 
         dataset = prepare_dataset(raw)
         self.assertGreater(len(dataset), 100)
         self.assertGreaterEqual(dataset["target"].nunique(), 2, "synthetic data should contain both classes")
+
+    def test_cached_dataset_used_for_real_data(self):
+        start = int(datetime(2024, 4, 5, tzinfo=timezone.utc).timestamp() * 1000)
+        end = int(datetime(2024, 4, 25, tzinfo=timezone.utc).timestamp() * 1000)
+        with mock.patch("ccxt_xgboost_module.FORCE_SYNTHETIC", False):
+            raw = fetch_ohlcv("binance", "BTC/USDT", "1h", start, end)
+        self.assertGreater(len(raw), 200)
+        self.assertLess(abs(raw["close"].pct_change().fillna(0)).mean(), 0.05)
+        self.assertTrue((raw["high"] >= raw[["open", "close"]].max(axis=1)).all())
+        self.assertTrue((raw["low"] <= raw[["open", "close"]].min(axis=1)).all())
 
     def test_run_training_aggregates_multiple_windows(self):
         specs = (

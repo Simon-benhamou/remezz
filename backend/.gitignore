@@ -29,4 +29,8 @@ test
 !test/unit/*.mjs
 
 # Model training cache
-data/ccxt_cache/
+data/ccxt_cache/*.json
+data/ccxt_cache/*.tmp
+data/ccxt_cache/*.pkl
+data/ccxt_cache/*.parquet
+data/ccxt_cache/nonexistent_*

@@ -8,6 +8,7 @@ model alongside the ordered feature list.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import sys
@@ -166,7 +167,7 @@ MODEL_PATH = Path(__file__).resolve().parent / "xgboost_direction.json"
 FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
 METADATA_PATH = Path(__file__).resolve().parent / "predictor_metadata.json"
-FORCE_SYNTHETIC = os.environ.get("PREDICTOR_FORCE_SYNTHETIC", "1") == "1"
+FORCE_SYNTHETIC = os.environ.get("PREDICTOR_FORCE_SYNTHETIC", "0") == "1"
 
 DEFAULT_EXCHANGE = "binance"
 DEFAULT_SYMBOLS = (
@@ -187,8 +188,8 @@ DEFAULT_SYMBOLS = (
     "LTC/USDT",
     "INJ/USDT",
 )
-DEFAULT_TIMEFRAME = "15m"
-DEFAULT_LOOKBACK_HOURS = 24 * 180  # 6 months
+DEFAULT_TIMEFRAME = "1h"
+DEFAULT_LOOKBACK_HOURS = 24 * 30  # 1 month
 
 
 def _candidate_exchanges(primary: str) -> List[str]:
@@ -235,8 +236,8 @@ class PreparedWindow:
 
 
 DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
-    WindowSpec("15m", hours=24 * 120, offset_hours=0),   # ~4 months
-    WindowSpec("1h", hours=24 * 365, offset_hours=0),    # ~1 year
+    WindowSpec("1h", hours=24 * 30, offset_hours=0),  # 1 month rolling window
+    WindowSpec("4h", hours=24 * 30, offset_hours=0),  # aligned range for higher timeframe context
 )
 
 RANDOM_SEED = 42
@@ -424,6 +425,33 @@ def assemble_training_dataframe(prepared_windows: Sequence[PreparedWindow]) -> "
     )
 
 
+def _infer_anchor_from_cache(
+    exchange: str,
+    symbols: Sequence[str],
+    window_specs: Sequence[WindowSpec],
+) -> datetime | None:
+    if not HAVE_PANDAS or pd is None:
+        return None
+    candidate: datetime | None = None
+    largest_interval = 0
+    for spec in window_specs:
+        largest_interval = max(largest_interval, spec.interval_minutes)
+        for symbol in symbols:
+            cache = load_cached_ohlcv(exchange, symbol, spec.timeframe)
+            if cache.empty or cache["timestamp"].isna().all():
+                continue
+            last_ts = cache["timestamp"].max()
+            if pd.isna(last_ts):
+                continue
+            last_dt = pd.Timestamp(last_ts).to_pydatetime()
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            candidate = last_dt if candidate is None else min(candidate, last_dt)
+    if candidate is None:
+        return None
+    return candidate + timedelta(minutes=largest_interval)
+
+
 def _cache_path(exchange: str, symbol: str, timeframe: str) -> Path:
     safe_symbol = symbol.replace("/", "_").replace(":", "_")
     filename = f"{exchange.lower()}_{safe_symbol}_{timeframe}.csv"
@@ -502,6 +530,11 @@ def fetch_ohlcv(
     for candidate in candidates:
         cache = load_cached_ohlcv(candidate, symbol, timeframe)
         caches[candidate] = cache
+        if not cache.empty:
+            first_ts = cache["timestamp"].min()
+            last_ts = cache["timestamp"].max()
+            if first_ts <= start_dt and last_ts >= end_dt:
+                return _clip_window(cache)
         if cache.empty:
             print(
                 f"[ccxt_xgboost_module] cache empty, attempting fetch {candidate} {symbol} {timeframe}"
@@ -561,6 +594,12 @@ def fetch_ohlcv(
             f"({'; '.join(errors)}); generating synthetic OHLCV window",
             file=sys.stderr,
         )
+    for cache in caches.values():
+        if not cache.empty:
+            window = _clip_window(cache)
+            if not window.empty:
+                return window
+
     synthetic = _generate_synthetic_ohlcv(
         exchange_name=exchange_name,
         symbol=symbol,
@@ -917,7 +956,7 @@ def train_model(data: pd.DataFrame, params: Dict[str, float | int | str]) -> Tra
         average=None,
         zero_division=0,
     )
-    if any(value != value for value in (accuracy, f1_macro)):  # NaN guard
+    if any((value != value) or (not math.isfinite(value)) for value in (accuracy, f1_macro)):  # NaN guard
         raise ValueError("Training metrics produced NaN; aborting")
 
     prob_matrix = model.predict_proba(X_test)
@@ -1096,7 +1135,13 @@ def compute_prediction_backtest_metrics(
     years = Decimal(str(duration_seconds)) / Decimal(str(365 * 24 * 3600))
     if years <= 0:
         years = Decimal("1") / Decimal("365")
-    cagr = float((equity_curve[-1] / equity_curve[0]) ** (Decimal("1") / years) - Decimal("1"))
+    ratio = equity_curve[-1] / equity_curve[0]
+    if ratio <= 0:
+        cagr = 0.0
+    else:
+        cagr = float(ratio ** (Decimal("1") / years) - Decimal("1"))
+        if not math.isfinite(cagr):
+            cagr = 0.0
 
     max_drawdown = Decimal("0")
     peak_value = equity_curve[0]
@@ -1128,7 +1173,7 @@ def compute_prediction_backtest_metrics(
         "neutralDecisions": float(neutral_skips),
     }
 
-    if any(value != value for value in metrics.values()):
+    if any((value != value) or (not math.isfinite(value)) for value in metrics.values()):
         raise ValueError("Backtest metrics produced NaN; aborting")
 
     return metrics
@@ -1207,6 +1252,9 @@ def run_training_workflow(
         specs = [WindowSpec(timeframe=timeframe, hours=lookback_hours, offset_hours=0)]
     else:
         specs = list(DEFAULT_WINDOW_SPECS)
+
+    if anchor is None:
+        anchor = _infer_anchor_from_cache(exchange, symbols, specs) or anchor
 
     prepared_windows = collect_prepared_windows(exchange, symbols, specs, anchor=anchor)
     combined = assemble_training_dataframe(prepared_windows)
