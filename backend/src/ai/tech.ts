@@ -358,8 +358,9 @@ const MIN_MEANINGFUL_VOLUME = 1e-8; // effectively zero in base currency units
 // Clean up old cache entries periodically
 function cleanupCache() {
   const now = Date.now();
-  const entriesToDelete: string[] = [];
   
+  // First, remove expired entries
+  const entriesToDelete: string[] = [];
   for (const [key, entry] of snapCache.entries()) {
     if (now - entry.ts > SNAP_TTL_MS * 2) {
       entriesToDelete.push(key);
@@ -370,10 +371,11 @@ function cleanupCache() {
     snapCache.delete(key);
   }
   
-  // If still too large, remove oldest entries
-  if (snapCache.size > MAX_CACHE_SIZE) {
+  // If still at or above 90% capacity, remove oldest entries
+  const targetSize = Math.floor(MAX_CACHE_SIZE * 0.8); // Clean down to 80%
+  if (snapCache.size >= Math.floor(MAX_CACHE_SIZE * 0.9)) {
     const sortedEntries = Array.from(snapCache.entries()).sort((a, b) => a[1].ts - b[1].ts);
-    const toDelete = sortedEntries.slice(0, snapCache.size - MAX_CACHE_SIZE);
+    const toDelete = sortedEntries.slice(0, Math.max(0, snapCache.size - targetSize));
     for (const [key] of toDelete) {
       snapCache.delete(key);
     }
@@ -747,7 +749,7 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
 
   try { 
     // Cleanup cache periodically to prevent memory leaks
-    if (snapCache.size > MAX_CACHE_SIZE * 0.9) {
+    if (snapCache.size >= Math.floor(MAX_CACHE_SIZE * 0.9)) {
       cleanupCache();
     }
     snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); 
