@@ -864,6 +864,8 @@ export class ReboundRejectionAgent {
       this.state = 'COOLDOWN';
       broadcast('agent_state', { state: this.state, plan: this.plan, reason: 'regime_standby' }, this.profile.symbol, this.sessionId || undefined);
       recordOpsEvent({ level: 'info', source: 'regime', message: 'Standby regime detected - pausing entries', sessionId: this.sessionId || undefined, symbol: this.profile.symbol, details: this.regime });
+      // Schedule reactivation to check if regime improves (5 minutes)
+      this.scheduleReactivation('regime_standby_check', 5 * 60 * 1000);
       return;
     }
     // If a position already exists, don't re-arm — keep managing
@@ -1035,8 +1037,8 @@ export class ReboundRejectionAgent {
     if (snap.regime) this.regime = snap.regime;
     if (this.regime && !this.regime.shouldTrade) {
       if (this.state === 'ARMED') {
-        this.state = 'COOLDOWN';
-        broadcast('agent_state', { state: this.state, plan: this.plan, reason: 'regime_standby' }, this.profile.symbol, this.sessionId || undefined);
+        // Schedule reactivation to check if regime improves (5 minutes)
+        this.scheduleReactivation('regime_no_trade_check', 5 * 60 * 1000);
       }
       return;
     }
@@ -4014,9 +4016,9 @@ export class ReboundRejectionAgent {
         requestedQty: qty,
         executionMode: plan.mode,
       });
-      this.state = 'COOLDOWN';
-      broadcast('agent_state', { state: this.state, reason: 'execution_failed' }, this.profile.symbol, this.sessionId || undefined);
       this.entering = false;
+      // Schedule reactivation after order rejection (2 minutes to avoid hammering)
+      this.scheduleReactivation('order_rejected_retry', 2 * 60 * 1000);
       return;
     }
 
@@ -10101,6 +10103,11 @@ export class ReboundRejectionAgent {
         utilisationPct: utilisation,
       },
     });
+
+    // Schedule reactivation to allow trading again after margin halt is cleared
+    if (this.state === 'HALT') {
+      this.scheduleReactivation('margin_halt_cleared', 30_000); // 30 seconds cooldown after halt cleared
+    }
   }
 
   public maybeReleaseMarginHalt(snapshot: BrokerMarginSnapshot): void {
