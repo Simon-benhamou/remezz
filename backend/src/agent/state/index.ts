@@ -1818,7 +1818,7 @@ export class ReboundRejectionAgent {
     if (momentumDetails?.recognizedOverrideConfidence != null) {
       const candidate = Number(momentumDetails.recognizedOverrideConfidence);
       recognizedConfidence = Number.isFinite(candidate) ? candidate : null;
-    } else if (Array.isArray(momentumDetails?.context?.recognizedStrategies)) {
+    } else if (Array.isArray(momentumDetails?.context?.recognizedStrategies) && momentumDetails.context.recognizedStrategies.length > 0) {
       const first = momentumDetails.context.recognizedStrategies[0];
       if (first && typeof first.confidence === 'number' && Number.isFinite(first.confidence)) {
         recognizedConfidence = first.confidence;
@@ -5045,13 +5045,15 @@ export class ReboundRejectionAgent {
     const resistances = snap.resistances || [];
     
     // Find nearest support and resistance
-    const nearestSupport = supports
+    const supportCandidates = supports
       .filter(s => s.price < currentPrice)
-      .sort((a, b) => Math.abs(currentPrice - b.price) - Math.abs(currentPrice - a.price))[0];
+      .sort((a, b) => Math.abs(currentPrice - b.price) - Math.abs(currentPrice - a.price));
+    const nearestSupport = supportCandidates.length > 0 ? supportCandidates[0] : undefined;
       
-    const nearestResistance = resistances
+    const resistanceCandidates = resistances
       .filter(r => r.price > currentPrice)
-      .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price))[0];
+      .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price));
+    const nearestResistance = resistanceCandidates.length > 0 ? resistanceCandidates[0] : undefined;
     
     const supportDistance = nearestSupport ? Math.abs(currentPrice - nearestSupport.price) / currentPrice : 1;
     const resistanceDistance = nearestResistance ? Math.abs(currentPrice - nearestResistance.price) / currentPrice : 1;
@@ -5258,8 +5260,9 @@ export class ReboundRejectionAgent {
           return true;
         });
 
-      const nearestSupport = validSupports
-        .sort((a, b) => Math.abs(currentPrice - b.price) - Math.abs(currentPrice - a.price))[0];
+      const sortedSupports = validSupports
+        .sort((a, b) => Math.abs(currentPrice - b.price) - Math.abs(currentPrice - a.price));
+      const nearestSupport = sortedSupports.length > 0 ? sortedSupports[0] : undefined;
       
       // Warn if price is very close to support (<1%) - might break through
       if (nearestSupport && Math.abs(currentPrice - nearestSupport.price) / currentPrice < 0.01) {
@@ -5384,8 +5387,9 @@ export class ReboundRejectionAgent {
           return true;
         });
 
-      const nearestResistance = validResistances
-        .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price))[0];
+      const sortedResistances = validResistances
+        .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price));
+      const nearestResistance = sortedResistances.length > 0 ? sortedResistances[0] : undefined;
       
       // Warn if price is very close to resistance (<1%) - might break through
       if (nearestResistance && Math.abs(currentPrice - nearestResistance.price) / currentPrice < 0.01) {
@@ -5484,7 +5488,8 @@ export class ReboundRejectionAgent {
    * Tier 3: Volatile alts (ENA, EIGEN, AVNT, etc.) - 45% target
    */
   public getTierForSymbol(symbol: string): string {
-    const baseCrypto = symbol.split('/')[0].toUpperCase();
+    const parts = symbol.split('/');
+    const baseCrypto = parts.length > 0 ? parts[0].toUpperCase() : symbol.toUpperCase();
     
     // Tier 1: Ultra stable majors - Blue chip cryptos
     const tier1 = ['BTC', 'ETH', 'SOL'];
