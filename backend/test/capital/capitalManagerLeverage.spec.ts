@@ -145,6 +145,7 @@ function createManager(balance: string | number = '1000') {
   const { manager, provider } = createManager('100');
   
   // With $100 capital and 10x leverage, can take $1000 notional position
+  // But 5% buffer means we only reserve 95% of free capital
   const reservation = await manager.reserve({
     agentId: 'agent1',
     symbol: 'BTC/USDT',
@@ -153,11 +154,11 @@ function createManager(balance: string | number = '1000') {
   });
   
   assert.ok(reservation, 'should allow high notional with leverage');
-  assert.equal(Number(reservation.grantedUSD.toNumber().toFixed(2)), 100, 'should reserve available margin');
+  assert.equal(Number(reservation.grantedUSD.toNumber().toFixed(2)), 95, 'should reserve 95% due to buffer');
   
   const snap = await provider.getSnapshot();
-  assert.equal(Number(snap.reservedUSD.toNumber().toFixed(2)), 100, 'all capital reserved as margin');
-  assert.equal(Number(snap.freeUSD.toNumber().toFixed(2)), 0, 'no free capital left');
+  assert.equal(Number(snap.reservedUSD.toNumber().toFixed(2)), 95, 'reserved capital with buffer');
+  assert.equal(Number(snap.freeUSD.toNumber().toFixed(2)), 5, 'buffer remains free');
   
   console.log('✅ Test 5 passed: High leverage enables larger positions');
 }

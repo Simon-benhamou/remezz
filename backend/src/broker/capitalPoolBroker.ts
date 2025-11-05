@@ -84,7 +84,7 @@ export class CapitalPoolBroker implements Broker {
         return placed;
       }
 
-      const filledMarginUsd = filledUsd.dividedBy(leverage);
+      const filledMarginUsd = new PreciseDecimal(filledUsd.toNumber() / leverage);
       await this.capital.commit(reservation.id, filledMarginUsd);
       return placed;
     } catch (error) {

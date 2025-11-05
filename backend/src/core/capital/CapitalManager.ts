@@ -105,7 +105,7 @@ export class CapitalManager {
     if (requestedNotionalUSD.raw <= ZERO_USD.raw) return null;
 
     // Calculate actual margin requirement based on leverage
-    const requestedMarginUSD = requestedNotionalUSD.dividedBy(leverage);
+    const requestedMarginUSD = new PreciseDecimal(requestedNotionalUSD.toNumber() / leverage);
 
     const snap = await this.provider.getSnapshot();
     const bufferFactor = ONE.minus(this.cfg.reserveBufferPct);
