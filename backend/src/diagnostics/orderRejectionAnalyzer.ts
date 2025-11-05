@@ -73,29 +73,42 @@ export class OrderRejectionAnalyzer {
         });
       }
 
-      // Check 2: Regime analysis
+      // Check 2: Regime analysis (with smart regime logic)
       if (snap.regime) {
-        if (snap.regime.playbook === 'standby') {
+        // Import smart regime analyzer
+        const { smartRegimeAnalyzer } = await import('../ai/smartRegime.js');
+        const regimeDecision = smartRegimeAnalyzer.evaluateRegime(snap.regime);
+        
+        if (!regimeDecision.canTrade) {
           rejections.push({
             category: 'regime',
-            code: 'REGIME_STANDBY',
-            message: 'Market regime indicates standby mode',
-            details: { regime: snap.regime },
+            code: 'REGIME_NO_TRADE',
+            message: `Market regime blocks trading: ${regimeDecision.reason}`,
+            details: { 
+              regime: snap.regime,
+              decision: regimeDecision
+            },
             severity: 'blocking',
             timestamp
           });
           recommendations.push('Wait for market regime to improve before trading');
-        }
-
-        if (!snap.regime.shouldTrade) {
+        } else if (regimeDecision.requireHigherQuality) {
+          // Regime allows trading but with restrictions
+          const explanation = smartRegimeAnalyzer.explainDecision(regimeDecision);
           rejections.push({
             category: 'regime',
-            code: 'REGIME_NO_TRADE',
-            message: 'Regime indicates should not trade',
-            details: { regime: snap.regime },
-            severity: 'blocking',
+            code: 'REGIME_RESTRICTED',
+            message: `Trading allowed with restrictions: ${explanation}`,
+            details: { 
+              regime: snap.regime,
+              decision: regimeDecision,
+              riskMultiplier: regimeDecision.riskMultiplier,
+              minQualityScore: regimeDecision.minQualityScore
+            },
+            severity: 'warning',
             timestamp
           });
+          recommendations.push(`Regime requires ${(regimeDecision.riskMultiplier * 100).toFixed(0)}% size and quality ≥${(regimeDecision.minQualityScore! * 100).toFixed(0)}%`);
         }
       }
 
@@ -270,20 +283,35 @@ export class OrderRejectionAnalyzer {
           recommendations.push('Too many consecutive losses - agent needs to recover or reset');
         }
 
-        // Check daily trade limit
+        // Check daily trade limit with smart limit logic
+        const recentTrades = agent.recentTrades || [];
+        const recentWinRate = recentTrades.length > 0
+          ? recentTrades.filter((t: any) => t.win).length / recentTrades.length
+          : 0.5;
+        
+        // Check if at base limit
         if (agent.tradesToday >= modeParams.maxTradesPerDay) {
           rejections.push({
             category: 'risk',
             code: 'DAILY_TRADE_LIMIT',
-            message: `Daily trade limit reached: ${agent.tradesToday}/${modeParams.maxTradesPerDay}`,
+            message: `Base daily trade limit reached: ${agent.tradesToday}/${modeParams.maxTradesPerDay}`,
             details: { 
               tradesToday: agent.tradesToday, 
-              maxTradesPerDay: modeParams.maxTradesPerDay 
+              baseLimit: modeParams.maxTradesPerDay,
+              recentWinRate: (recentWinRate * 100).toFixed(1) + '%',
+              recentTrades: recentTrades.length
             },
-            severity: 'blocking',
+            severity: 'warning',
             timestamp
           });
-          recommendations.push('Daily trade limit reached - wait for next trading day');
+          
+          if (recentWinRate >= 0.70 && recentTrades.length >= 5) {
+            recommendations.push(`Excellent win rate (${(recentWinRate * 100).toFixed(0)}%) - smart limits may allow additional high-quality trades`);
+          } else if (recentWinRate < 0.40 && recentTrades.length >= 5) {
+            recommendations.push(`Low win rate (${(recentWinRate * 100).toFixed(0)}%) - focus on improving quality before increasing trades`);
+          } else {
+            recommendations.push('Base daily trade limit reached - high quality opportunities may still be allowed with smart limits');
+          }
         }
 
         // Check if position already exists

@@ -1,6 +1,7 @@
 import { proposePlan } from '../../ai/planOrchestrator.js';
 import { predictor } from '../../ai/predictor.js';
 import type { RegimeProfile } from '../../ai/regime.js';
+import { smartRegimeAnalyzer, type SmartRegimeDecision } from '../../ai/smartRegime.js';
 import { buildTechSnapshot, TechnicalSnapshot } from '../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../ai/multiTimeframe.js';
 import { getCapacityPressure, inspectExposure, LiveBroker } from '../../broker/live.js';
@@ -43,6 +44,7 @@ import {
 import { PlanJson } from '../planSchema.js';
 import { ValidatedPlan, validatePlan } from '../validator.js';
 import { getQuantAIConfig, reloadQuantAIConfig, CircuitBreaker, DisabledCircuitBreaker, EntryFilters, PositionSizer, calculateExecutionCosts, maybeAdjustOrExit, computeInitialBracket } from '../../quantai/index.js';
+import { SmartTradeLimits, type SmartTradeLimitState } from '../../quantai/risk/smartTradeLimits.js';
 import { PreciseDecimal, type AdaptiveExitReason } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import { ZERO_USD } from '../../core/capital/types.js';
 import { computeAdaptiveEvThreshold } from './evThreshold.js';
@@ -551,6 +553,9 @@ export class ReboundRejectionAgent {
   public rrExpectancyConfig: RRExpectancyConfig = resolveRrExpectancyConfig();
   public rrExpectancyState: { lastEffective?: number; lastWinRate?: number } = {};
   public currentRrMin: number | null = null;
+  public smartTradeLimits = new SmartTradeLimits();
+  public lastSmartLimitState: SmartTradeLimitState | null = null;
+  public lastSmartRegimeDecision: SmartRegimeDecision | null = null;
   public lastRrSnapshot: {
     effective: number;
     dynamic?: number;
@@ -1035,17 +1040,40 @@ export class ReboundRejectionAgent {
 
     const snap = await buildTechSnapshot(this.profile.symbol);
     if (snap.regime) this.regime = snap.regime;
-    if (this.regime && !this.regime.shouldTrade) {
+    
+    // Smart regime check - allow trading with risk adjustments instead of blocking
+    const regimeDecision = smartRegimeAnalyzer.evaluateRegime(this.regime);
+    this.lastSmartRegimeDecision = regimeDecision;
+    
+    if (!regimeDecision.canTrade) {
       this.recordEntryRejection(
         'REGIME_NO_TRADE',
-        'Market regime indicates should not trade',
-        { regime: this.regime }
+        `Market regime blocks trading: ${regimeDecision.reason}`,
+        { regime: this.regime, decision: regimeDecision }
       );
       if (this.state === 'ARMED') {
         // Schedule reactivation to check if regime improves (5 minutes)
         this.scheduleReactivation('regime_no_trade_check', 5 * 60 * 1000);
       }
       return;
+    }
+    
+    // Log regime adjustments if significant
+    if (regimeDecision.requireHigherQuality || regimeDecision.riskMultiplier < 0.8) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'smart_regime',
+        message: 'regime_risk_adjustments_applied',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile.symbol,
+        details: {
+          explanation: smartRegimeAnalyzer.explainDecision(regimeDecision),
+          riskMultiplier: regimeDecision.riskMultiplier,
+          stopMultiplier: regimeDecision.stopMultiplier,
+          requireHigherQuality: regimeDecision.requireHigherQuality,
+          minQualityScore: regimeDecision.minQualityScore,
+        }
+      });
     }
     const price = snap.last;
     const { from, to, mid } = this.plan.zone;
