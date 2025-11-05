@@ -940,6 +940,97 @@ export class ReboundRejectionAgent {
   async onTick() {
     if (!this.profile || !this.plan) return;
     if (this.state !== 'ARMED' && this.state !== 'MANAGE') return;
+
+    // 🔥 FIX: Check for position closure in live mode BEFORE processing tick
+    // This ensures we detect when SL/TP orders execute on the exchange
+    if (this.profile.mode === 'live' && this.state === 'MANAGE' && this.pos) {
+      try {
+        const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
+        // Check for position closure: no exposure or quantity <= 0 (consistent with manage() method)
+        if (!exposure || exposure.qty <= 0) {
+          // Position closed on exchange (likely via SL/TP), clear local state
+          console.log(`✅ [Live Sync] Position closed on exchange for ${this.profile.symbol} (SL/TP executed), clearing local state`);
+          
+          // Cancel any remaining protective orders directly via broker
+          // Note: We call broker.syncProtective() directly because this.pos will be cleared
+          // and syncProtectiveOrders() requires this.pos to be set
+          if (this.pos && (this.pos.slOrderId || this.pos.tpOrderId)) {
+            try {
+              await (this.broker as any).syncProtective?.({
+                symbol: this.profile.symbol,
+                side: this.pos.side,
+                qty: 0,
+                stopLoss: undefined,
+                takeProfit: undefined,
+                slOrderId: this.pos.slOrderId ?? null,
+                tpOrderId: this.pos.tpOrderId ?? null,
+              });
+              
+              recordOpsEvent({
+                level: 'info',
+                source: 'protective_orders',
+                message: 'protective_orders_cleaned_up_after_exchange_closure',
+                sessionId: this.sessionId || undefined,
+                symbol: this.profile.symbol,
+                details: {
+                  slOrderId: this.pos.slOrderId,
+                  tpOrderId: this.pos.tpOrderId,
+                },
+              });
+            } catch (cleanupError) {
+              recordOpsEvent({
+                level: 'warn',
+                source: 'protective_orders',
+                message: 'protective_orders_cleanup_failed_after_exchange_closure',
+                sessionId: this.sessionId || undefined,
+                symbol: this.profile.symbol,
+                details: { 
+                  error: String(cleanupError),
+                  slOrderId: this.pos.slOrderId,
+                  tpOrderId: this.pos.tpOrderId,
+                },
+              });
+            }
+          }
+
+          // Clear position and transition to EXIT state
+          this.pos = null;
+          this.trendReversalContext = null;
+          this.state = 'EXIT';
+          this.lastExitTime = Date.now();
+          
+          recordOpsEvent({
+            level: 'info',
+            source: 'position_sync',
+            message: 'position_closed_on_exchange_detected',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: { 
+              reason: 'sltp_executed',
+              exposure: exposure ? { qty: exposure.qty, side: exposure.side } : null,
+            },
+          });
+          
+          broadcast('agent_state', { 
+            state: this.state, 
+            reason: 'position_closed_on_exchange_sltp_executed' 
+          }, this.profile.symbol, this.sessionId || undefined);
+          
+          this.scheduleReactivation('position_closed_on_exchange');
+          return;
+        }
+      } catch (error) {
+        recordOpsEvent({
+          level: 'warn',
+          source: 'position_sync',
+          message: 'position_sync_check_failed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: { error: String(error) },
+        });
+      }
+    }
+
     const snap = await buildTechSnapshot(this.profile.symbol);
     if (snap.regime) this.regime = snap.regime;
     if (this.regime && !this.regime.shouldTrade) {
