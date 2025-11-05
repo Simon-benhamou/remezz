@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticateUser, requireRole, type AuthenticatedRequest } from '../middleware/auth.js';
 import { listSchedulerJobs, replaySchedulerJob } from '../services/schedulerJobService.js';
 import { computeAgentHealth, computeOpsMetrics, recentOpsEvents } from '../monitor/ops.js';
+import { getRegenerationStats } from '../engine/events.js';
 
 export const router = Router();
 
@@ -30,6 +31,31 @@ router.get('/events', (req, res) => {
     : undefined;
   const rows = recentOpsEvents(Number.isFinite(limit) ? limit : 50, { sessionId });
   res.json(rows);
+});
+
+// Phase 2: Get regeneration learning stats
+router.get('/regeneration-stats', (req, res) => {
+  try {
+    const symbol = typeof req.query.symbol === 'string' ? req.query.symbol : undefined;
+    const stats = getRegenerationStats(symbol);
+    
+    if (symbol && !stats) {
+      return res.json({ symbol, stats: null, message: 'No history for this symbol' });
+    }
+    
+    if (symbol) {
+      res.json({ symbol, stats });
+    } else {
+      // Convert Map to object for JSON serialization
+      const statsObj: Record<string, any> = {};
+      (stats as Map<string, any>).forEach((value, key) => {
+        statsObj[key] = value;
+      });
+      res.json({ symbols: Object.keys(statsObj), stats: statsObj });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
 });
 
 router.get('/scheduler/jobs', authenticateUser, requireRole(['admin']), async (req: AuthenticatedRequest, res) => {

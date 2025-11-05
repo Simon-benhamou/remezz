@@ -69,6 +69,9 @@ export type TechnicalSnapshot = {
 
 // Utilities
 function last<T>(arr: T[]): T {
+  if (arr.length === 0) {
+    throw new Error('Cannot get last element of empty array');
+  }
   return arr[arr.length - 1];
 }
 
@@ -348,8 +351,36 @@ function dailyPivotsFromOHLCV(ohlcv: number[][]) {
 
 const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
 const SNAP_TTL_MS = 1000 * 15; // 15s
+const MAX_CACHE_SIZE = 1000; // Limit cache size to prevent memory leaks
 const cacheKey = (symbol: string) => `snap_${symbol}`;
 const MIN_MEANINGFUL_VOLUME = 1e-8; // effectively zero in base currency units
+
+// Clean up old cache entries periodically
+function cleanupCache() {
+  const now = Date.now();
+  
+  // First, remove expired entries
+  const entriesToDelete: string[] = [];
+  for (const [key, entry] of snapCache.entries()) {
+    if (now - entry.ts > SNAP_TTL_MS * 2) {
+      entriesToDelete.push(key);
+    }
+  }
+  
+  for (const key of entriesToDelete) {
+    snapCache.delete(key);
+  }
+  
+  // If still at or above 90% capacity, remove oldest entries
+  const targetSize = Math.floor(MAX_CACHE_SIZE * 0.8); // Clean down to 80%
+  if (snapCache.size >= Math.floor(MAX_CACHE_SIZE * 0.9)) {
+    const sortedEntries = Array.from(snapCache.entries()).sort((a, b) => a[1].ts - b[1].ts);
+    const toDelete = sortedEntries.slice(0, Math.max(0, snapCache.size - targetSize));
+    for (const [key] of toDelete) {
+      snapCache.delete(key);
+    }
+  }
+}
 
 export async function ensureRecentVolumeIntegrity(options: {
   symbol: string;
@@ -414,7 +445,9 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     if (cached && (Date.now() - cached.ts) < SNAP_TTL_MS) {
       return { ...(cached.data) };
     }
-  } catch {}
+  } catch (error) {
+    console.warn(`[buildTechSnapshot] Cache read failed for ${symbol}:`, error);
+  }
   const cfg = getConfig();
   const minBars15m = Math.max(50, Number(cfg.DIAGNOSTICS_MIN_BARS_15M || 100));
   // 15m window for reactivity (~2 days), 1h for pivots/daily
@@ -560,7 +593,9 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
         note: 'Entry confirmation compares the last closed 15m volume to its EMA20. Low ratio often indicates consolidation despite high 24h volume.'
       });
     }
-  } catch {}
+  } catch (error) {
+    console.warn(`[VOLUME CLARITY] Failed to log volume clarity for ${symbol}:`, error);
+  }
 
   // Enhanced volume logging for clarity
   if (latestVolRaw === undefined || latestVolRaw === null || latestVolRaw <= (volMA / 10)) {
@@ -712,6 +747,14 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
 
   snapshot.regime = classifyRegime(snapshot);
 
-  try { snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); } catch {}
+  try { 
+    // Cleanup cache periodically to prevent memory leaks
+    if (snapCache.size >= Math.floor(MAX_CACHE_SIZE * 0.9)) {
+      cleanupCache();
+    }
+    snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); 
+  } catch (error) {
+    console.warn(`[buildTechSnapshot] Cache write failed for ${symbol}:`, error);
+  }
   return snapshot;
 }
