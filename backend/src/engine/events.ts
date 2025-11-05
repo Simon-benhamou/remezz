@@ -220,7 +220,7 @@ async function tickOnce(sessionId: string, sym: string){
     }
     // Broadcast this trigger so UI can update live
     broadcast('trigger', created, sym, sessionId);
-    await maybeGenerateStrategy(sym, trigger, tech.last, sessionId);
+    await maybeGenerateStrategy(sym, trigger, tech.last, sessionId, false, tech);
   }
 
   // Periodic retention purge (hourly)
@@ -233,6 +233,68 @@ async function tickOnce(sessionId: string, sym: string){
   }
 
   return tech;
+}
+
+/**
+ * Calculate adaptive cooldown based on market volatility
+ * Higher volatility = shorter cooldown (more opportunities)
+ * Lower volatility = longer cooldown (avoid chop)
+ */
+function getAdaptiveCooldown(tech: TechnicalSnapshot | null, baselineCooldownMin: number): number {
+  // If tech snapshot not available, use baseline
+  if (!tech || typeof tech.atrPct !== 'number') {
+    return baselineCooldownMin;
+  }
+
+  const atrPct = tech.atrPct;
+  
+  // Very high volatility (>3%): reduce cooldown by 50%
+  if (atrPct > 3.0) {
+    return baselineCooldownMin * 0.5;
+  }
+  
+  // High volatility (2-3%): use baseline cooldown
+  if (atrPct > 2.0) {
+    return baselineCooldownMin;
+  }
+  
+  // Moderate volatility (1-2%): increase cooldown by 50%
+  if (atrPct > 1.0) {
+    return baselineCooldownMin * 1.5;
+  }
+  
+  // Low volatility (<1%): double cooldown to avoid chop
+  return baselineCooldownMin * 2.0;
+}
+
+/**
+ * Calculate composite regeneration score based on multiple factors
+ */
+function calculateRegenerationScore(
+  shift: { priceShift: boolean; regimeShift: boolean; priceShiftPct?: number },
+  confidenceDelta: number | null,
+  tech: TechnicalSnapshot | null
+): { priceScore: number; regimeScore: number; volatilityScore: number; composite: number } {
+  // Price score: larger moves = higher score (2% = max score of 1.0)
+  const priceMovePct = Math.abs(shift.priceShiftPct || 0);
+  const priceScore = Math.min(1.0, priceMovePct / 2.0);
+  
+  // Regime score: based on confidence change (absolute delta, capped at 1.0)
+  const regimeScore = confidenceDelta != null ? Math.min(1.0, Math.abs(confidenceDelta)) : 0;
+  
+  // Volatility score: significant ATR changes
+  const atrPct = tech?.atrPct ?? 1.0;
+  const volatilityScore = atrPct > 3.0 ? 0.8 : atrPct > 2.0 ? 0.5 : 0.2;
+  
+  // Composite: weighted combination
+  // Price changes matter most (50%), regime changes second (30%), volatility context (20%)
+  const composite = (
+    priceScore * 0.5 +
+    regimeScore * 0.3 +
+    volatilityScore * 0.2
+  );
+  
+  return { priceScore, regimeScore, volatilityScore, composite };
 }
 
 async function reconcileExposure(sessionId: string, symbol: string, mode: string) {
@@ -274,11 +336,18 @@ async function reconcileExposure(sessionId: string, symbol: string, mode: string
  * Possibly generate a new classic strategy and PlanZ based on:
  *  - rate limit (STRATEGY_MIN_INTERVAL_MIN)
  *  - leaving the previous strategy entry zone
+ *  - adaptive cooldown based on volatility
+ *  - confidence delta thresholds
+ *  - composite scoring
  */
-async function maybeGenerateStrategy(sym: string, trigger: string, price: number, sessionId: string, force: boolean = false) {
+async function maybeGenerateStrategy(sym: string, trigger: string, price: number, sessionId: string, force: boolean = false, tech: TechnicalSnapshot | null = null) {
   const minIntervalMin = Number(process.env.STRATEGY_MIN_INTERVAL_MIN || 60);
   const priceShiftThreshold = Number(process.env.STRATEGY_FORCE_PRICE_PCT || 0.25);
   const regimeShiftThreshold = Number(process.env.STRATEGY_FORCE_REGIME_CONF_DELTA || 0.15);
+  const minConfidenceDelta = Number(process.env.STRATEGY_MIN_CONFIDENCE_DELTA || 0.2);
+  const useCompositeScore = (process.env.STRATEGY_USE_COMPOSITE_SCORE || 'true') === 'true';
+  const compositeThreshold = Number(process.env.STRATEGY_COMPOSITE_THRESHOLD || 0.4);
+  const useAdaptiveCooldown = (process.env.STRATEGY_VOLATILITY_ADAPTIVE || 'true') === 'true';
   const now = Date.now();
 
   const lastAt = lastStrategyAt[sym] || 0;
@@ -309,12 +378,56 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     previousRegime,
     confidenceThreshold: regimeShiftThreshold,
   });
+  
+  // Calculate confidence delta for filtering
+  const previousConfidence = previousRegime?.confidence ?? null;
+  const nextConfidence = regimeState?.confidence ?? null;
+  const confidenceDelta = previousConfidence != null && nextConfidence != null
+    ? nextConfidence - previousConfidence
+    : null;
+  
+  // Apply minimum confidence delta threshold for regime shifts
   const regimeOnlyShift = shift.regimeShift && !shift.priceShift;
-  const regimeCooldownMin = Number(process.env.STRATEGY_REGIME_COOLDOWN_MIN || 5);
+  const meaningfulRegimeChange = !regimeOnlyShift || 
+    (confidenceDelta != null && Math.abs(confidenceDelta) >= minConfidenceDelta);
+  
+  // Adaptive cooldown based on volatility
+  const baselineCooldownMin = Number(process.env.STRATEGY_REGIME_COOLDOWN_MIN || 5);
+  const adaptiveCooldownMin = useAdaptiveCooldown 
+    ? getAdaptiveCooldown(tech, baselineCooldownMin)
+    : baselineCooldownMin;
+  
   const lastRegime = lastRegimeShiftAt[sym] || 0;
-  const regimeCooldownPassed = !regimeOnlyShift || !lastRegime || (now - lastRegime) > regimeCooldownMin * 60 * 1000;
-  const significantChange = shift.priceShift || (shift.regimeShift && regimeCooldownPassed);
-  const suppressedRegimeShift = regimeOnlyShift && !regimeCooldownPassed;
+  const cooldownPassed = !regimeOnlyShift || !lastRegime || 
+    (now - lastRegime) > adaptiveCooldownMin * 60 * 1000;
+  
+  // Calculate composite score if enabled
+  let shouldRegenerate = false;
+  let regenerationReason = '';
+  
+  if (useCompositeScore) {
+    const score = calculateRegenerationScore(
+      { ...shift, priceShiftPct: lastPrice && price ? Math.abs(price - lastPrice) / lastPrice * 100 : 0 },
+      confidenceDelta,
+      tech
+    );
+    
+    shouldRegenerate = score.composite >= compositeThreshold && cooldownPassed && meaningfulRegimeChange;
+    
+    if (shouldRegenerate) {
+      regenerationReason = `composite_score:${score.composite.toFixed(2)} (price:${score.priceScore.toFixed(2)}, regime:${score.regimeScore.toFixed(2)}, vol:${score.volatilityScore.toFixed(2)})`;
+    }
+  } else {
+    // Legacy logic: significant change if price shifted OR (regime shifted with cooldown passed and meaningful confidence change)
+    shouldRegenerate = shift.priceShift || (shift.regimeShift && cooldownPassed && meaningfulRegimeChange);
+    
+    if (shouldRegenerate) {
+      regenerationReason = shift.priceShift ? 'price_shift' : 'regime_shift';
+    }
+  }
+  
+  const significantChange = shouldRegenerate;
+  const suppressedRegimeShift = regimeOnlyShift && (!cooldownPassed || !meaningfulRegimeChange);
 
   if (suppressedRegimeShift && regimeState) {
     lastStrategyRegime[sym] = {
@@ -377,18 +490,14 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     }
   }
 
-  if (shift.regimeShift && regimeCooldownPassed) {
+  if (shift.regimeShift && cooldownPassed) {
     lastRegimeShiftAt[sym] = now;
   }
 
   if (significantChange) {
-    const reason = describeShift(shift);
+    const reason = regenerationReason || describeShift(shift);
     if (reason) {
-      const previousConfidence = previousRegime?.confidence ?? null;
-      const nextConfidence = regimeState?.confidence ?? null;
-      const confidenceDelta = previousConfidence != null && nextConfidence != null
-        ? nextConfidence - previousConfidence
-        : null;
+      const atrPct = tech?.atrPct ?? null;
       recordOpsEvent({
         level: 'info',
         source: 'strategy_regen',
@@ -405,7 +514,10 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
           previousConfidence,
           nextConfidence,
           confidenceDelta,
-          regimeCooldownMinutes: regimeOnlyShift ? regimeCooldownMin : null,
+          adaptiveCooldownMinutes: regimeOnlyShift ? adaptiveCooldownMin : null,
+          atrPct,
+          useCompositeScore,
+          minConfidenceDelta,
         },
       });
     }
@@ -635,6 +747,6 @@ async function maybeRefreshStrategyIndicators(sessionId: string, sym: string, te
   if (!shouldForce) return;
   lastRefreshAt[sym] = now;
   try {
-    await maybeGenerateStrategy(sym, reason, price, sessionId, true);
+    await maybeGenerateStrategy(sym, reason, price, sessionId, true, tech);
   } catch {}
 }
