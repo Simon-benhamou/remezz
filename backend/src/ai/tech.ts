@@ -69,6 +69,9 @@ export type TechnicalSnapshot = {
 
 // Utilities
 function last<T>(arr: T[]): T {
+  if (arr.length === 0) {
+    throw new Error('Cannot get last element of empty array');
+  }
   return arr[arr.length - 1];
 }
 
@@ -414,7 +417,9 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
     if (cached && (Date.now() - cached.ts) < SNAP_TTL_MS) {
       return { ...(cached.data) };
     }
-  } catch {}
+  } catch (error) {
+    console.warn(`[buildTechSnapshot] Cache read failed for ${symbol}:`, error);
+  }
   const cfg = getConfig();
   const minBars15m = Math.max(50, Number(cfg.DIAGNOSTICS_MIN_BARS_15M || 100));
   // 15m window for reactivity (~2 days), 1h for pivots/daily
@@ -560,7 +565,9 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
         note: 'Entry confirmation compares the last closed 15m volume to its EMA20. Low ratio often indicates consolidation despite high 24h volume.'
       });
     }
-  } catch {}
+  } catch (error) {
+    console.warn(`[VOLUME CLARITY] Failed to log volume clarity for ${symbol}:`, error);
+  }
 
   // Enhanced volume logging for clarity
   if (latestVolRaw === undefined || latestVolRaw === null || latestVolRaw <= (volMA / 10)) {
@@ -712,6 +719,10 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
 
   snapshot.regime = classifyRegime(snapshot);
 
-  try { snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); } catch {}
+  try { 
+    snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); 
+  } catch (error) {
+    console.warn(`[buildTechSnapshot] Cache write failed for ${symbol}:`, error);
+  }
   return snapshot;
 }

@@ -4664,7 +4664,11 @@ export class ReboundRejectionAgent {
 
     const leverageHint = Math.max(1, this.pos.openLeverage ?? this.profile.maxLeverage ?? 1);
     let ticker: any = null;
-    try { ticker = await getTicker(this.profile.symbol); } catch {}
+    try { 
+      ticker = await getTicker(this.profile.symbol); 
+    } catch (error) {
+      console.warn(`[ReboundRejectionAgent] Failed to get ticker for ${this.profile.symbol}:`, error);
+    }
     const price = ticker?.last && Number.isFinite(ticker.last) ? Number(ticker.last) : this.pos.entry;
     const additionalNotional = desiredQty * price;
     if (!(additionalNotional > 0)) return;
