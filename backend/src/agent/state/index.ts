@@ -940,6 +940,52 @@ export class ReboundRejectionAgent {
   async onTick() {
     if (!this.profile || !this.plan) return;
     if (this.state !== 'ARMED' && this.state !== 'MANAGE') return;
+
+    // 🔥 FIX: Check for position closure in live mode BEFORE processing tick
+    // This ensures we detect when SL/TP orders execute on the exchange
+    if (this.profile.mode === 'live' && this.state === 'MANAGE' && this.pos) {
+      try {
+        const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
+        if (!exposure || exposure.qty <= 0) {
+          // Position closed on exchange (likely via SL/TP), clear local state
+          console.log(`✅ [Live Sync] Position closed on exchange for ${this.profile.symbol} (SL/TP executed), clearing local state`);
+          
+          // Cancel any remaining protective orders
+          if (this.pos.slOrderId || this.pos.tpOrderId) {
+            try {
+              await (this.broker as any).syncProtective?.({
+                symbol: this.profile.symbol,
+                side: this.pos.side,
+                qty: 0,
+                stopLoss: undefined,
+                takeProfit: undefined,
+                slOrderId: this.pos.slOrderId ?? null,
+                tpOrderId: this.pos.tpOrderId ?? null,
+              });
+            } catch (cleanupError) {
+              console.warn(`⚠️  Failed to cleanup protective orders:`, cleanupError);
+            }
+          }
+
+          // Clear position and transition to EXIT state
+          this.pos = null;
+          this.trendReversalContext = null;
+          this.state = 'EXIT';
+          this.lastExitTime = Date.now();
+          
+          broadcast('agent_state', { 
+            state: this.state, 
+            reason: 'position_closed_on_exchange_sltp_executed' 
+          }, this.profile.symbol, this.sessionId || undefined);
+          
+          this.scheduleReactivation('position_closed_on_exchange');
+          return;
+        }
+      } catch (error) {
+        console.warn(`⚠️  Failed to check live exposure for ${this.profile.symbol}:`, error);
+      }
+    }
+
     const snap = await buildTechSnapshot(this.profile.symbol);
     if (snap.regime) this.regime = snap.regime;
     if (this.regime && !this.regime.shouldTrade) {
