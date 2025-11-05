@@ -71,7 +71,7 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
       select: {
         startBalanceUsd: true,
         positions: {
-          select: { symbol: true, qty: true, entryPrice: true },
+          select: { symbol: true, qty: true, entryPrice: true, leverage: true },
         },
         kpi: {
           select: { realizedPnlUsd: true, unrealizedPnlUsd: true },
@@ -102,12 +102,15 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
       for (const position of session.positions) {
         const qty = Math.abs(Number(position.qty ?? 0));
         const entryPrice = Math.abs(Number(position.entryPrice ?? 0));
+        const leverage = Math.max(1, Number(position.leverage ?? 1));
         if (!(qty > 0) || !(entryPrice > 0)) continue;
         const notional = qty * entryPrice;
-        inPositionsTotal += notional;
+        // Track margin requirement (notional / leverage), not full notional
+        const marginRequired = notional / leverage;
+        inPositionsTotal += marginRequired;
         exposureMap.set(
           position.symbol,
-          (exposureMap.get(position.symbol) ?? 0) + notional,
+          (exposureMap.get(position.symbol) ?? 0) + marginRequired,
         );
       }
     }
@@ -155,7 +158,7 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
       select: {
         startBalanceUsd: true,
         positions: {
-          select: { symbol: true, qty: true, entryPrice: true },
+          select: { symbol: true, qty: true, entryPrice: true, leverage: true },
         },
         kpi: {
           select: { realizedPnlUsd: true, unrealizedPnlUsd: true },
@@ -192,12 +195,15 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
       for (const position of session.positions) {
         const qty = Math.abs(Number(position.qty ?? 0));
         const entryPrice = Math.abs(Number(position.entryPrice ?? 0));
+        const leverage = Math.max(1, Number(position.leverage ?? 1));
         if (!(qty > 0) || !(entryPrice > 0)) continue;
         const notional = qty * entryPrice;
-        inPositionsTotal += notional;
+        // Track margin requirement (notional / leverage), not full notional
+        const marginRequired = notional / leverage;
+        inPositionsTotal += marginRequired;
         exposureMap.set(
           position.symbol,
-          (exposureMap.get(position.symbol) ?? 0) + notional,
+          (exposureMap.get(position.symbol) ?? 0) + marginRequired,
         );
       }
     }

@@ -86,6 +86,7 @@ export class CapitalManager {
     symbol: string;
     requestedUSD: USD | number | string;
     minUSD?: USD | number | string;
+    leverage?: number;
   }): Promise<Reservation | null> {
     return this.runExclusive(() => this.reserveInternal(req));
   }
@@ -95,10 +96,16 @@ export class CapitalManager {
     symbol: string;
     requestedUSD: USD | number | string;
     minUSD?: USD | number | string;
+    leverage?: number;
   }): Promise<Reservation | null> {
-    const requestedUSD = toUSD(req.requestedUSD);
+    const requestedNotionalUSD = toUSD(req.requestedUSD);
     const minUSD = toUSD(req.minUSD ?? this.cfg.minOrderUSD);
-    if (requestedUSD.raw <= ZERO_USD.raw) return null;
+    const leverage = Math.max(1, Number.isFinite(req.leverage) && (req.leverage ?? 0) > 0 ? req.leverage! : 1);
+    
+    if (requestedNotionalUSD.raw <= ZERO_USD.raw) return null;
+
+    // Calculate actual margin requirement based on leverage
+    const requestedMarginUSD = requestedNotionalUSD.dividedBy(leverage);
 
     const snap = await this.provider.getSnapshot();
     const bufferFactor = ONE.minus(this.cfg.reserveBufferPct);
@@ -109,32 +116,33 @@ export class CapitalManager {
     const symbolRoom = usdMax(symbolCap.minus(symbolUsed), ZERO_USD);
 
     const room = usdMin(freeEff, symbolRoom);
-    const grant = usdMin(requestedUSD, room);
-    if (grant.raw < minUSD.raw) {
+    const grantMargin = usdMin(requestedMarginUSD, room);
+    if (grantMargin.raw < minUSD.raw) {
       return null;
     }
 
     if (this.cfg.validateLiveBalance) {
       const liveSnap = await this.provider.getSnapshot();
       const liveFreeEff = usdMax(liveSnap.freeUSD.times(bufferFactor), ZERO_USD);
-      if (liveFreeEff.raw < grant.raw) {
+      if (liveFreeEff.raw < grantMargin.raw) {
         return null;
       }
     }
 
-    await this.provider.applyLedgerDelta({ freeUSD: usdNeg(grant), reservedUSD: grant });
+    await this.provider.applyLedgerDelta({ freeUSD: usdNeg(grantMargin), reservedUSD: grantMargin });
 
     const reservation: Reservation = {
       id: crypto.randomUUID(),
       agentId: req.agentId,
       symbol: req.symbol,
-      requestedUSD,
-      grantedUSD: grant,
+      requestedUSD: requestedNotionalUSD,
+      grantedUSD: grantMargin,
+      leverage,
       expiresAt: Date.now() + this.cfg.reserveTtlMs,
       state: 'reserved',
     };
     this.store.reservations.set(reservation.id, reservation);
-    this.incrementSymbolExposure(req.symbol, grant);
+    this.incrementSymbolExposure(req.symbol, grantMargin);
     return reservation;
   }
 
