@@ -177,8 +177,6 @@ Exit codes:
     console.error('\n❌ Analysis failed:');
     console.error(error);
     process.exit(2);
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
