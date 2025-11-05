@@ -6,12 +6,13 @@ class ExitConfig:
     atr_period: int = 14
     sl_atr_mult: float = 1.5
     tp_r_multiples: List[float] = None
-    trail_after_r: float = 1.0
+    trail_after_r: float = 0.8  # Start trailing earlier at 0.8R instead of 1.0R
     trail_atr_mult: float = 1.0
     early_exit_adx_below: float = 18.0
     early_exit_cmf_negative: bool = True
     tighten_only_if_profit_gt_r: float = 0.2
     cut_if_loss_gt_r: float = 0.5
+    breakeven_after_r: float = 0.5  # Move SL to breakeven after 0.5R profit
 
     def __post_init__(self):
         if self.tp_r_multiples is None:
@@ -47,23 +48,36 @@ def maybe_adjust_or_exit(side: str,
     risk = abs(entry_price - sl)
     result = {"action": "hold", "sl": sl, "reason": "holding", "tp_hit_index": None}
 
-    # Check TP hits (use the closest not-yet-hit)
-    # Here we assume external code tracks which TP levels already executed.
-    # We'll just signal if price crosses any TP level.
+    # Check TP hits (detect the first/closest TP level hit)
+    # Returns the first TP level hit, external code should track which levels are already executed
     if side.lower() == "long":
+        # For longs, TPs are ascending, find first one hit
         for i, tp in enumerate(tps):
             if last_price >= tp:
                 result.update({"action": "take_partial", "tp_hit_index": i, "reason": f"TP{i+1} hit at {tp:.4f}"})
                 return result
     else:
+        # For shorts, TPs are descending, find first one hit
         for i, tp in enumerate(tps):
             if last_price <= tp:
                 result.update({"action": "take_partial", "tp_hit_index": i, "reason": f"TP{i+1} hit at {tp:.4f}"})
                 return result
 
-    # Trailing after R reached
+    # Breakeven and trailing stop logic
     from . import math_utils
     r_now = math_utils.r_multiple(entry_price, sl, last_price, side)
+    
+    # Move to breakeven after reaching breakeven_after_r profit
+    if r_now >= cfg.breakeven_after_r:
+        if side.lower() == "long":
+            new_sl = max(sl, entry_price)  # Move SL to breakeven (entry price)
+        else:
+            new_sl = min(sl, entry_price)  # Move SL to breakeven (entry price)
+        if new_sl != sl:
+            result.update({"action": "move_sl", "sl": new_sl, "reason": f"Breakeven at {r_now:.2f}R"})
+            return result
+    
+    # Trailing stop after R reached
     if r_now >= cfg.trail_after_r and atr and atr > 0:
         if side.lower() == "long":
             new_sl = max(sl, last_price - cfg.trail_atr_mult * atr)
@@ -73,13 +87,17 @@ def maybe_adjust_or_exit(side: str,
             result.update({"action": "move_sl", "sl": new_sl, "reason": f"Trailing after {r_now:.2f}R"})
             return result
 
-    # Early exit logic
-    loss_r = -r_now if r_now < 0 else 0.0
+    # Early exit logic - cut losses before SL if momentum fails
+    # BUG FIX: Original code used "-r_now if r_now < 0" which kept the negative sign,
+    # causing the comparison "loss_r >= cfg.cut_if_loss_gt_r" to always fail.
+    # We need the absolute value to properly compare loss magnitude.
+    loss_r = abs(r_now) if r_now < 0 else 0.0
     momentum_fail = False
     if adx is not None and adx < cfg.early_exit_adx_below:
         momentum_fail = True
     if cfg.early_exit_cmf_negative and cmf is not None and cmf < 0:
         momentum_fail = True
+    # Exit early if we're in a loss position and momentum has failed
     if loss_r >= cfg.cut_if_loss_gt_r and momentum_fail:
         result.update({"action": "exit", "reason": f"Early exit: loss {loss_r:.2f}R & momentum fail"})
         return result

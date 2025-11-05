@@ -14,6 +14,9 @@ class CircuitBreaker:
     reduce_size_after_losses: bool = True
     size_reduction_after_n_losses: int = 2
     size_reduction_factor: float = 0.5
+    # Noise filtering thresholds
+    min_meaningful_loss_pct: float = 0.1  # Losses < this are considered noise
+    min_meaningful_win_pct: float = 0.1   # Wins < this don't reset loss counter
 
     # runtime state
     consecutive_losses: int = 0
@@ -84,11 +87,13 @@ class CircuitBreaker:
 
     def on_trade_result(self, now: datetime, pnl_pct: float, equity: float):
         self._reset_day_if_needed(now, equity)
-        if pnl_pct < 0:
+        # Only count meaningful losses to avoid noise triggering the breaker
+        if pnl_pct < -self.min_meaningful_loss_pct:
             self.consecutive_losses += 1
             if self.consecutive_losses >= self.max_consecutive_losses:
                 self.cooldown_until = now + timedelta(minutes=self.cooldown_minutes)
-        else:
+        elif pnl_pct > self.min_meaningful_win_pct:
+            # Only reset on meaningful wins to avoid noise resetting the counter
             self.consecutive_losses = 0
 
     def size_multiplier(self) -> float:

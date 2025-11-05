@@ -53,11 +53,16 @@ class SymbolGuardrails:
     def _reevaluate(self, symbol: str, state: GuardrailState, now: datetime) -> None:
         if len(state.trades) < self._min_samples:
             return
+        
+        # Use the most recent min_samples trades for evaluation
+        # This allows recovery after poor performance if recent trades improve
         recent = list(state.trades)[-self._min_samples:]
         wins = sum(1 for x in recent if x > 0)
         n = Decimal(len(recent))
         win_rate = Decimal(wins) / n
         expectancy = sum(recent) / n
+        
+        # Halt if win_rate is critically low OR expectancy is negative
         if win_rate < self._win_rate_floor or expectancy < self._expectancy_floor:
             state.halted_until = now + self._cooldown
             state.reason = 'win_rate' if win_rate < self._win_rate_floor else 'expectancy'
