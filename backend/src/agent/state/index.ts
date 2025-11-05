@@ -1036,6 +1036,11 @@ export class ReboundRejectionAgent {
     const snap = await buildTechSnapshot(this.profile.symbol);
     if (snap.regime) this.regime = snap.regime;
     if (this.regime && !this.regime.shouldTrade) {
+      this.recordEntryRejection(
+        'REGIME_NO_TRADE',
+        'Market regime indicates should not trade',
+        { regime: this.regime }
+      );
       if (this.state === 'ARMED') {
         // Schedule reactivation to check if regime improves (5 minutes)
         this.scheduleReactivation('regime_no_trade_check', 5 * 60 * 1000);
@@ -1122,7 +1127,10 @@ export class ReboundRejectionAgent {
         this.trendReversalContext = null;
         this.state = 'SCAN';
       }
-      if (this.plan.bias === 'none') return;
+      if (this.plan.bias === 'none') {
+        this.recordEntryRejection('NO_BIAS', 'Trading plan has no directional bias', { plan: this.plan.bias });
+        return;
+      }
       this.applyActiveAIBiasOverride(price, snap);
       // PHASE 3 FIX #1: Use epsilon tolerance for zone check
       const inZone = this.priceInZoneWithEpsilon(price, this.plan.zone);
@@ -1200,11 +1208,39 @@ export class ReboundRejectionAgent {
       // Entry filters: basic RSI/ADX gates to avoid weak/contrarian entries (aggressiveness-adjusted)
       const cfg = this.effectiveEntryThresholds();
       if (this.plan.bias === 'short') {
-        if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_SHORT_MIN_ADX) return;
-        if ((snap as any).rsi14 != null && (snap as any).rsi14 < cfg.ENTRY_SHORT_MIN_RSI) return;
+        if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_SHORT_MIN_ADX) {
+          this.recordEntryRejection('ADX_TOO_LOW', `ADX ${(snap as any).adx14.toFixed(2)} below minimum ${cfg.ENTRY_SHORT_MIN_ADX} for short`, {
+            adx: (snap as any).adx14,
+            minAdx: cfg.ENTRY_SHORT_MIN_ADX,
+            bias: 'short'
+          });
+          return;
+        }
+        if ((snap as any).rsi14 != null && (snap as any).rsi14 < cfg.ENTRY_SHORT_MIN_RSI) {
+          this.recordEntryRejection('RSI_OVERSOLD', `RSI ${(snap as any).rsi14.toFixed(2)} below minimum ${cfg.ENTRY_SHORT_MIN_RSI} for short`, {
+            rsi: (snap as any).rsi14,
+            minRsi: cfg.ENTRY_SHORT_MIN_RSI,
+            bias: 'short'
+          });
+          return;
+        }
       } else if (this.plan.bias === 'long') {
-        if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_LONG_MIN_ADX) return;
-        if ((snap as any).rsi14 != null && (snap as any).rsi14 > cfg.ENTRY_LONG_MAX_RSI) return;
+        if ((snap as any).adx14 != null && (snap as any).adx14 < cfg.ENTRY_LONG_MIN_ADX) {
+          this.recordEntryRejection('ADX_TOO_LOW', `ADX ${(snap as any).adx14.toFixed(2)} below minimum ${cfg.ENTRY_LONG_MIN_ADX} for long`, {
+            adx: (snap as any).adx14,
+            minAdx: cfg.ENTRY_LONG_MIN_ADX,
+            bias: 'long'
+          });
+          return;
+        }
+        if ((snap as any).rsi14 != null && (snap as any).rsi14 > cfg.ENTRY_LONG_MAX_RSI) {
+          this.recordEntryRejection('RSI_OVERBOUGHT', `RSI ${(snap as any).rsi14.toFixed(2)} above maximum ${cfg.ENTRY_LONG_MAX_RSI} for long`, {
+            rsi: (snap as any).rsi14,
+            maxRsi: cfg.ENTRY_LONG_MAX_RSI,
+            bias: 'long'
+          });
+          return;
+        }
       }
       if (playbook === 'momentum_breakout') {
         const upper = Math.max(from, to);
@@ -1229,7 +1265,15 @@ export class ReboundRejectionAgent {
         
         if (confirmationNeeded) {
           const confirm = (this.plan.bias === 'long' && price > mid) || (this.plan.bias === 'short' && price < mid);
-          if (!confirm) return; // No entry without confirmation
+          if (!confirm) {
+            this.recordEntryRejection('NO_CONFIRMATION', `Price ${price.toFixed(6)} needs confirmation (${this.plan.bias} bias, mid: ${mid.toFixed(6)})`, {
+              price,
+              mid,
+              bias: this.plan.bias,
+              marketRegime
+            });
+            return; // No entry without confirmation
+          }
         }
         
         // Additional quality check: price should be near zone edge for better R:R
@@ -10048,6 +10092,45 @@ export class ReboundRejectionAgent {
     this.filterRejectionStats.total = 0;
     this.filterRejectionStats.failCounts.clear();
     this.filterRejectionStats.lastLogTs = now;
+  }
+
+  /**
+   * Record a specific entry rejection reason with detailed context
+   * This helps diagnose why trades aren't being executed
+   */
+  private recordEntryRejection(
+    code: string,
+    message: string,
+    details?: Record<string, any>
+  ): void {
+    // Track in existing stats
+    this.filterRejectionStats.total += 1;
+    this.filterRejectionStats.failCounts.set(code, (this.filterRejectionStats.failCounts.get(code) ?? 0) + 1);
+    this.drySpellState.rejections += 1;
+
+    // Log detailed rejection every 10 rejections or every 10 minutes
+    const now = Date.now();
+    const threshold = 10;
+    const intervalMs = 10 * 60 * 1000;
+    const timeSinceLog = this.filterRejectionStats.lastLogTs > 0 ? now - this.filterRejectionStats.lastLogTs : 0;
+    const shouldLogDetail = this.filterRejectionStats.total % threshold === 0 || timeSinceLog >= intervalMs;
+
+    if (shouldLogDetail) {
+      recordOpsEvent({
+        level: 'info',
+        source: 'entry_rejection',
+        message: `entry_blocked_${code}`,
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          code,
+          message,
+          ...details,
+          totalRejections: this.filterRejectionStats.total,
+          rejectionsSinceTrade: this.drySpellState.rejections,
+        },
+      });
+    }
   }
 
   public isEntriesOnlyHaltActive(): boolean {
