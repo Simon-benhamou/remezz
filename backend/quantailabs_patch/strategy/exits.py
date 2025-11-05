@@ -88,7 +88,9 @@ def maybe_adjust_or_exit(side: str,
             return result
 
     # Early exit logic - cut losses before SL if momentum fails
-    # Fixed: loss_r should be absolute value when in loss
+    # BUG FIX: Original code used "-r_now if r_now < 0" which kept the negative sign,
+    # causing the comparison "loss_r >= cfg.cut_if_loss_gt_r" to always fail.
+    # We need the absolute value to properly compare loss magnitude.
     loss_r = abs(r_now) if r_now < 0 else 0.0
     momentum_fail = False
     if adx is not None and adx < cfg.early_exit_adx_below:

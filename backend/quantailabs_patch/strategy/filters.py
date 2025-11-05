@@ -11,6 +11,10 @@ class FilterConfig:
     confidence_threshold: float = 0.52  # Reduced from 0.58 to capture more quality setups
     use_confidence_filter: bool = True
     adaptive_confidence: bool = True  # Enable adaptive confidence based on other factors
+    # Adaptive confidence parameters
+    adaptive_threshold_floor: float = 0.45  # Minimum confidence threshold
+    adaptive_reduction_per_signal: float = 0.05  # Threshold reduction per strong signal
+    adaptive_max_signals: int = 2  # Maximum number of signals for reduction
 
 class EntryFilters:
     def __init__(self, cfg: FilterConfig):
@@ -71,8 +75,9 @@ class EntryFilters:
                 if dv is not None and dv >= self.cfg.min_dollar_volume * 1.5:
                     strong_signals += 1
                 
-                # Reduce threshold by 0.05 for each strong signal (max -0.10)
-                threshold = max(0.45, threshold - (0.05 * min(strong_signals, 2)))
+                # Reduce threshold based on configuration
+                reduction = self.cfg.adaptive_reduction_per_signal * min(strong_signals, self.cfg.adaptive_max_signals)
+                threshold = max(self.cfg.adaptive_threshold_floor, threshold - reduction)
             
             if conf is not None and conf < threshold:
                 ok = False; reasons["confidenceOk"] = f"FAIL (p={conf:.2f} < {threshold:.2f})"
