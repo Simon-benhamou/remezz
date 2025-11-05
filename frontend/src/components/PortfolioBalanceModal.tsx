@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, Typography, Statistic, Row, Col, Space, InputNumber, Button, Divider, message, Tag } from 'antd';
+import { Modal, Typography, Statistic, Row, Col, Space, InputNumber, Button, Divider, message, Tag, Tooltip, Table } from 'antd';
 import { api } from '../api';
 
 const formatUsd = (value?: number | null) => {
@@ -12,12 +12,28 @@ const formatUsd = (value?: number | null) => {
   }).format(value);
 };
 
+const formatLeverage = (value?: number | null) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '1x';
+  return `${value.toFixed(1)}x`;
+};
+
 type Snapshot = {
   totalUSD: number;
   freeUSD: number;
   reservedUSD: number;
   inPositionsUSD: number;
   ts: number;
+};
+
+type Reservation = {
+  id: string;
+  agentId: string;
+  symbol: string;
+  requestedUSD: number;
+  grantedUSD: number;
+  leverage?: number;
+  expiresAt: number;
+  state: 'reserved' | 'committed' | 'released';
 };
 
 type PortfolioBalanceModalProps = {
@@ -30,18 +46,23 @@ type PortfolioBalanceModalProps = {
 export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }: PortfolioBalanceModalProps) {
   const [paperSnapshot, setPaperSnapshot] = React.useState<Snapshot | null>(null);
   const [liveSnapshot, setLiveSnapshot] = React.useState<Snapshot | null>(null);
+  const [paperReservations, setPaperReservations] = React.useState<Reservation[]>([]);
+  const [liveReservations, setLiveReservations] = React.useState<Reservation[]>([]);
   const [paperBalance, setPaperBalance] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(false);
 
   const loadSnapshots = React.useCallback(async () => {
     try {
       setLoading(true);
-      const [paper, live] = await Promise.all([
+      const [paper, live, reservations] = await Promise.all([
         api.getCapitalSnapshot('paper').catch(() => null),
         api.getCapitalSnapshot('live').catch(() => null),
+        api.getCapitalReservations().catch(() => ({ paper: [], live: [] })),
       ]);
       setPaperSnapshot(paper);
       setLiveSnapshot(live);
+      setPaperReservations(reservations.paper.filter(r => r.state === 'reserved'));
+      setLiveReservations(reservations.live.filter(r => r.state === 'reserved'));
       if (paper?.totalUSD != null) {
         setPaperBalance(Number(paper.totalUSD));
       }
@@ -84,6 +105,8 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
   };
 
   const currentSnapshot = mode === 'paper' ? paperSnapshot : liveSnapshot;
+  const currentReservations = mode === 'paper' ? paperReservations : liveReservations;
+  
   const renderSnapshot = (snapshot: Snapshot | null, label: string) => (
     <Row gutter={[16, 16]} style={{ width: '100%' }}>
       <Col span={12}>
@@ -93,13 +116,62 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
         <Statistic title='Free' value={formatUsd(snapshot?.freeUSD)} />
       </Col>
       <Col span={12}>
-        <Statistic title='Reserved' value={formatUsd(snapshot?.reservedUSD)} />
+        <Tooltip title="Margin reserved by agents (with leverage applied)">
+          <Statistic title='Reserved (Margin)' value={formatUsd(snapshot?.reservedUSD)} />
+        </Tooltip>
       </Col>
       <Col span={12}>
-        <Statistic title='In Positions' value={formatUsd(snapshot?.inPositionsUSD)} />
+        <Tooltip title="Margin locked in open positions (with leverage applied)">
+          <Statistic title='In Positions (Margin)' value={formatUsd(snapshot?.inPositionsUSD)} />
+        </Tooltip>
       </Col>
     </Row>
   );
+
+  const reservationColumns = [
+    {
+      title: 'Symbol',
+      dataIndex: 'symbol',
+      key: 'symbol',
+      width: 100,
+    },
+    {
+      title: 'Agent',
+      dataIndex: 'agentId',
+      key: 'agentId',
+      width: 100,
+      render: (id: string) => id.slice(0, 8) + '...',
+    },
+    {
+      title: 'Notional',
+      dataIndex: 'requestedUSD',
+      key: 'requestedUSD',
+      width: 100,
+      render: (value: number) => formatUsd(value),
+    },
+    {
+      title: 'Leverage',
+      dataIndex: 'leverage',
+      key: 'leverage',
+      width: 80,
+      render: (value?: number) => (
+        <Tag color={!value || value === 1 ? 'default' : value >= 5 ? 'orange' : 'blue'}>
+          {formatLeverage(value)}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Margin',
+      dataIndex: 'grantedUSD',
+      key: 'grantedUSD',
+      width: 100,
+      render: (value: number, record: Reservation) => (
+        <Tooltip title={`${formatUsd(record.requestedUSD)} / ${formatLeverage(record.leverage)} = ${formatUsd(value)}`}>
+          <strong>{formatUsd(value)}</strong>
+        </Tooltip>
+      ),
+    },
+  ];
 
   const footer = mode === 'paper'
     ? [
@@ -131,6 +203,7 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
       footer={footer}
       maskClosable={!loading}
       centered
+      width={currentReservations.length > 0 ? 800 : 600}
     >
       <Space direction='vertical' size={24} style={{ width: '100%' }}>
         <Typography.Paragraph type='secondary'>
@@ -140,6 +213,26 @@ export default function PortfolioBalanceModal({ open, mode, onClose, onUpdated }
         </Typography.Paragraph>
 
         {renderSnapshot(currentSnapshot, mode === 'paper' ? 'Paper' : 'Live')}
+
+        {currentReservations.length > 0 && (
+          <>
+            <Divider />
+            <Space direction='vertical' size={8} style={{ width: '100%' }}>
+              <Typography.Text strong>Active Reservations with Leverage</Typography.Text>
+              <Typography.Paragraph type='secondary' style={{ marginBottom: 8 }}>
+                Agents reserve margin (not full notional) when using leverage. The "Margin" column shows the actual capital locked from the pool.
+              </Typography.Paragraph>
+              <Table
+                columns={reservationColumns}
+                dataSource={currentReservations}
+                rowKey='id'
+                size='small'
+                pagination={false}
+                scroll={{ x: 'max-content' }}
+              />
+            </Space>
+          </>
+        )}
 
         {mode === 'paper' && (
           <>
