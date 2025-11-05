@@ -952,6 +952,8 @@ export class ReboundRejectionAgent {
           console.log(`✅ [Live Sync] Position closed on exchange for ${this.profile.symbol} (SL/TP executed), clearing local state`);
           
           // Cancel any remaining protective orders directly via broker
+          // Note: We call broker.syncProtective() directly because this.pos will be cleared
+          // and syncProtectiveOrders() requires this.pos to be set
           if (this.pos && (this.pos.slOrderId || this.pos.tpOrderId)) {
             try {
               await (this.broker as any).syncProtective?.({
@@ -963,8 +965,31 @@ export class ReboundRejectionAgent {
                 slOrderId: this.pos.slOrderId ?? null,
                 tpOrderId: this.pos.tpOrderId ?? null,
               });
+              
+              recordOpsEvent({
+                level: 'info',
+                source: 'protective_orders',
+                message: 'protective_orders_cleaned_up_after_exchange_closure',
+                sessionId: this.sessionId || undefined,
+                symbol: this.profile.symbol,
+                details: {
+                  slOrderId: this.pos.slOrderId,
+                  tpOrderId: this.pos.tpOrderId,
+                },
+              });
             } catch (cleanupError) {
-              console.warn(`⚠️  Failed to cleanup protective orders:`, cleanupError);
+              recordOpsEvent({
+                level: 'warn',
+                source: 'protective_orders',
+                message: 'protective_orders_cleanup_failed_after_exchange_closure',
+                sessionId: this.sessionId || undefined,
+                symbol: this.profile.symbol,
+                details: { 
+                  error: String(cleanupError),
+                  slOrderId: this.pos.slOrderId,
+                  tpOrderId: this.pos.tpOrderId,
+                },
+              });
             }
           }
 
@@ -973,6 +998,18 @@ export class ReboundRejectionAgent {
           this.trendReversalContext = null;
           this.state = 'EXIT';
           this.lastExitTime = Date.now();
+          
+          recordOpsEvent({
+            level: 'info',
+            source: 'position_sync',
+            message: 'position_closed_on_exchange_detected',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: { 
+              reason: 'sltp_executed',
+              exposure: exposure ? { qty: exposure.qty, side: exposure.side } : null,
+            },
+          });
           
           broadcast('agent_state', { 
             state: this.state, 
@@ -983,7 +1020,14 @@ export class ReboundRejectionAgent {
           return;
         }
       } catch (error) {
-        console.warn(`⚠️  Failed to check live exposure for ${this.profile.symbol}:`, error);
+        recordOpsEvent({
+          level: 'warn',
+          source: 'position_sync',
+          message: 'position_sync_check_failed',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: { error: String(error) },
+        });
       }
     }
 
