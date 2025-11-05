@@ -386,9 +386,12 @@ type LiquidityTier = {
 
 const LIQUIDITY_GUARD = {
   tiers: [
-    { name: 'micro', maxVolumeUsd: 90_000_000, minVolumeUsd: 40_000_000, maxSpreadBps: 5, minDepthUsd: 50_000 },
-    { name: 'mid', maxVolumeUsd: 350_000_000, minVolumeUsd: 60_000_000, maxSpreadBps: 8, minDepthUsd: 35_000 },
-    { name: 'major', maxVolumeUsd: null, minVolumeUsd: 20_000_000, maxSpreadBps: 18, minDepthUsd: 25_000 },
+    // Micro tier: Very small volume, tightest spreads
+    { name: 'micro', maxVolumeUsd: 60_000_000, minVolumeUsd: 30_000_000, maxSpreadBps: 8, minDepthUsd: 40_000 },
+    // Mid tier: Mid-cap altcoins, more relaxed spreads (addresses issue with $40M-60M volume)
+    { name: 'mid', maxVolumeUsd: 200_000_000, minVolumeUsd: 40_000_000, maxSpreadBps: 15, minDepthUsd: 30_000 },
+    // Major tier: Large volume, most relaxed requirements
+    { name: 'major', maxVolumeUsd: null, minVolumeUsd: 20_000_000, maxSpreadBps: 22, minDepthUsd: 25_000 },
   ] as const,
   microPenaltyCap: 1,
 } as const;
@@ -1404,7 +1407,14 @@ class MetaAdaptiveStrategyAgent {
       : needsRiskReduction
         ? new PreciseDecimal('0.5')
         : new PreciseDecimal('1');
-    const riskAdjustmentFactor = riskAdjustmentFactorBase.times(volatilityRiskMultiplier);
+    
+    // Cap total risk multiplier at 0.5x-1.5x to prevent extreme stacking
+    const uncappedRiskFactor = riskAdjustmentFactorBase.times(volatilityRiskMultiplier);
+    const riskAdjustmentFactor = this.clampDecimal(
+      uncappedRiskFactor,
+      new PreciseDecimal('0.5'),
+      new PreciseDecimal('1.5')
+    );
 
     const trendRiskBase = context.conflict
       ? '0.45'
@@ -1940,11 +1950,24 @@ class MetaAdaptiveStrategyAgent {
       const flowVolumeRatioLogged = flowVolumeRatioValue != null && Number.isFinite(flowVolumeRatioValue)
         ? Number(flowVolumeRatioValue.toFixed(4))
         : (flowVolumeRatioValue ?? null);
-      if (!predictorAllowsShort || !flowPass || !mtfPass) {
+      
+      // NEW LOGIC: Allow shorts if 2 of 3 conditions are met + strong technical confirmation
+      // Get technical confirmation signals
+      const adxValue = params.plan?.stopAtrMult?.toNumber() ?? 0;
+      const alignmentScoreValue = params.plan?.entryWeight?.toNumber() ?? 0;
+      
+      // Count how many guardrail conditions pass
+      const passCount = [predictorAllowsShort, flowPass, mtfPass].filter(Boolean).length;
+      
+      // Strong technical confirmation: bearish stack or strong ADX with good alignment
+      const strongTechnical = passCount >= 2 || (passCount >= 1 && adxValue > 25);
+      
+      if (!strongTechnical) {
         const guardReasons: string[] = [];
         if (!predictorAllowsShort) guardReasons.push('predictor_disagrees');
         if (!flowPass) guardReasons.push('flow_cmf_threshold');
         if (!mtfPass) guardReasons.push('mtf_not_bearish');
+        guardReasons.push(`pass_count=${passCount}/3`);
         console.log(JSON.stringify({
           level: 'info',
           event: 'adaptive_trade_blocked_by_predictor',
@@ -1958,6 +1981,7 @@ class MetaAdaptiveStrategyAgent {
         intendedSide,
         reason: 'short_guardrail',
         guardReasons,
+          passCount,
           flowCmf: flowCmfValue != null && Number.isFinite(flowCmfValue) ? Number(flowCmfValue.toFixed(6)) : null,
           flowThreshold: -cmfThresholdAbs,
           flowVolumeRatio: flowVolumeRatioLogged,

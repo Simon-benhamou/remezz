@@ -163,6 +163,38 @@ function parseConfidenceThreshold(): number {
 }
 
 const CONFIDENCE_THRESHOLD = parseConfidenceThreshold();
+
+/**
+ * Compute dynamic confidence threshold based on confluence factors.
+ * Base threshold is 0.72, but can be reduced to 0.62 if:
+ * - Alignment score > 0.9 (strong multi-timeframe consensus)
+ * - Volume ratio > 2x (strong volume confirmation)
+ * This allows more high-quality setups while maintaining safety.
+ */
+function computeDynamicConfidenceThreshold(params: {
+  alignmentScore?: number | null;
+  volumeRatio?: number | null;
+}): number {
+  const baseThreshold = CONFIDENCE_THRESHOLD;
+  const alignmentScore = params.alignmentScore ?? 0;
+  const volumeRatio = params.volumeRatio ?? 0;
+  
+  // Strong confluence allows lower confidence threshold
+  const hasStrongAlignment = alignmentScore > 0.9;
+  const hasStrongVolume = volumeRatio > 2;
+  
+  if (hasStrongAlignment && hasStrongVolume) {
+    // Both factors present - use lowest threshold
+    return Math.max(0.62, baseThreshold - 0.1);
+  } else if (hasStrongAlignment || hasStrongVolume) {
+    // One factor present - moderate reduction
+    return Math.max(0.67, baseThreshold - 0.05);
+  }
+  
+  // No strong confluence - use base threshold
+  return baseThreshold;
+}
+
 const MAX_RISK_PER_UNIT_PRICE_RATIO = (() => {
   const raw = process.env.META_ADAPTIVE_MAX_RISK_PRICE_RATIO;
   const parsed = raw != null ? Number.parseFloat(raw) : Number.NaN;
@@ -689,7 +721,18 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
   const tickSizeMeta = Number.isFinite(tickSizeRaw) && tickSizeRaw > 0 ? Number(tickSizeRaw) : null;
   const stepSizeMeta = Number.isFinite(stepSizeRaw) && stepSizeRaw > 0 ? Number(stepSizeRaw) : null;
   const minQtyMeta = Number.isFinite(minQtyRaw) && minQtyRaw > 0 ? Number(minQtyRaw) : null;
-  const confidenceGatePassed = calibratedConfidence >= CONFIDENCE_THRESHOLD;
+  
+  // Extract alignment score from signal reasons
+  const alignmentMatch = signal.reasons.find(r => r.startsWith('alignment='));
+  const alignmentScore = alignmentMatch ? Number.parseFloat(alignmentMatch.split('=')[1]) : null;
+  
+  // Use dynamic confidence threshold based on confluence factors
+  const dynamicThreshold = computeDynamicConfidenceThreshold({
+    alignmentScore,
+    volumeRatio: flowVolumeRatio,
+  });
+  
+  const confidenceGatePassed = calibratedConfidence >= dynamicThreshold;
   const gateReasons: string[] = [];
   if (!confidenceGatePassed) gateReasons.push(BLOCKED_REASON_LOW_CONFIDENCE);
   if (!entryEligibility.passed) gateReasons.push(BLOCKED_REASON_WEAK_CONTEXT);
@@ -700,7 +743,8 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
     rawConfidence: Number(signal.confidence.toFixed(4)),
     confidence: calibratedConfidence,
     qualityScore,
-    confidenceThreshold: CONFIDENCE_THRESHOLD,
+    confidenceThreshold: dynamicThreshold,
+    confidenceThresholdBase: CONFIDENCE_THRESHOLD,
     confidenceGatePassed: confidenceGatePassed ? 1 : 0,
     entryEligibilityScore: entryEligibility.score,
     entryEligibilityGatePassed: entryEligibility.passed ? 1 : 0,
