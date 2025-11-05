@@ -45,7 +45,9 @@ export async function recomputeKpi(sessionId: string) {
         const dir = pos.side === 'buy' ? 1 : -1;
         unrealized = dir * (last - pos.entryPrice) * pos.qty;
       }
-    } catch {}
+    } catch (error) {
+      console.warn(`[recomputeKpi] Failed to get ticker for ${pos.symbol}:`, error);
+    }
   }
 
   const startBal = Number(session.startBalanceUsd || 0);

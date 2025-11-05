@@ -448,7 +448,11 @@ export class LiveBroker implements Broker {
     };
 
     if (!ex) {
-      try { ex = await this.getExchange(); } catch {}
+      try { 
+        ex = await this.getExchange(); 
+      } catch (error) {
+        console.warn('[LiveBroker] Failed to get exchange for exposure inspection:', error);
+      }
     }
 
     if (ex && typeof (ex as any).fetchPositions === 'function') {
@@ -602,7 +606,11 @@ export class LiveBroker implements Broker {
 
     // Try set leverage if available and provided
     if (o.leverage && typeof (ex as any).setLeverage === 'function') {
-      try { await (ex as any).setLeverage(o.leverage, symbol); } catch {}
+      try { 
+        await (ex as any).setLeverage(o.leverage, symbol); 
+      } catch (error) {
+        console.warn(`[LiveBroker] Failed to set leverage ${o.leverage}x for ${symbol}:`, error);
+      }
     }
 
     let order: any;
@@ -736,10 +744,14 @@ export class LiveBroker implements Broker {
             if (String(ex.id).toLowerCase() === 'cryptocom') tpParams.type = 'take_profit_limit';
             const tpo = await ex.createOrder(symbol, 'limit', reduceSide, placed.filledQty, o.takeProfit, tpParams);
             placed.tpOrderId = String(tpo?.id || tpo?.clientOrderId || '');
-          } catch {}
+          } catch (error) {
+            console.warn(`[LiveBroker] Failed to create take-profit order for ${symbol}:`, error);
+          }
         }
       }
-    } catch {}
+    } catch (error) {
+      console.warn(`[LiveBroker] Failed to place bracket order for ${symbol}:`, error);
+    }
 
     return placed;
   }

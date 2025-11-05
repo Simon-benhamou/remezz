@@ -351,8 +351,34 @@ function dailyPivotsFromOHLCV(ohlcv: number[][]) {
 
 const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
 const SNAP_TTL_MS = 1000 * 15; // 15s
+const MAX_CACHE_SIZE = 1000; // Limit cache size to prevent memory leaks
 const cacheKey = (symbol: string) => `snap_${symbol}`;
 const MIN_MEANINGFUL_VOLUME = 1e-8; // effectively zero in base currency units
+
+// Clean up old cache entries periodically
+function cleanupCache() {
+  const now = Date.now();
+  const entriesToDelete: string[] = [];
+  
+  for (const [key, entry] of snapCache.entries()) {
+    if (now - entry.ts > SNAP_TTL_MS * 2) {
+      entriesToDelete.push(key);
+    }
+  }
+  
+  for (const key of entriesToDelete) {
+    snapCache.delete(key);
+  }
+  
+  // If still too large, remove oldest entries
+  if (snapCache.size > MAX_CACHE_SIZE) {
+    const sortedEntries = Array.from(snapCache.entries()).sort((a, b) => a[1].ts - b[1].ts);
+    const toDelete = sortedEntries.slice(0, snapCache.size - MAX_CACHE_SIZE);
+    for (const [key] of toDelete) {
+      snapCache.delete(key);
+    }
+  }
+}
 
 export async function ensureRecentVolumeIntegrity(options: {
   symbol: string;
@@ -720,6 +746,10 @@ export async function buildTechSnapshot(symbol: string, userId?: string): Promis
   snapshot.regime = classifyRegime(snapshot);
 
   try { 
+    // Cleanup cache periodically to prevent memory leaks
+    if (snapCache.size > MAX_CACHE_SIZE * 0.9) {
+      cleanupCache();
+    }
     snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); 
   } catch (error) {
     console.warn(`[buildTechSnapshot] Cache write failed for ${symbol}:`, error);
