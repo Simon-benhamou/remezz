@@ -49,6 +49,7 @@ export interface Reservation {
   symbol: string;
   requestedUSD: USD;
   grantedUSD: USD;
+  leverage?: number; // leverage multiplier (e.g., 10 for 10x)
   expiresAt: number;
   state: 'reserved' | 'committed' | 'released';
 }

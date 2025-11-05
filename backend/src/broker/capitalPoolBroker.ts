@@ -62,11 +62,14 @@ export class CapitalPoolBroker implements Broker {
       return this.rejectOrder(order, 'invalid_desired_usd');
     }
 
+    const leverage = Math.max(1, Number.isFinite(order.leverage) && (order.leverage ?? 0) > 0 ? order.leverage! : 1);
+
     const reservation = await this.capital.reserve({
       agentId: this.agentId,
       symbol: order.symbol,
       requestedUSD: desiredUsd,
       minUSD: this.minOrderUsd,
+      leverage,
     });
 
     if (!reservation) {
@@ -81,7 +84,8 @@ export class CapitalPoolBroker implements Broker {
         return placed;
       }
 
-      await this.capital.commit(reservation.id, filledUsd);
+      const filledMarginUsd = new PreciseDecimal(filledUsd.toNumber() / leverage);
+      await this.capital.commit(reservation.id, filledMarginUsd);
       return placed;
     } catch (error) {
       await this.capital.release(reservation.id);

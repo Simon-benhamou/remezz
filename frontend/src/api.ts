@@ -167,6 +167,29 @@ export const api = {
       inPositionsUSD: number;
       ts: number;
     },
+  getCapitalReservations: async () =>
+    (await client.get('/api/capital/reservations')).data as {
+      paper: Array<{
+        id: string;
+        agentId: string;
+        symbol: string;
+        requestedUSD: number;
+        grantedUSD: number;
+        leverage?: number;
+        expiresAt: number;
+        state: 'reserved' | 'committed' | 'released';
+      }>;
+      live: Array<{
+        id: string;
+        agentId: string;
+        symbol: string;
+        requestedUSD: number;
+        grantedUSD: number;
+        leverage?: number;
+        expiresAt: number;
+        state: 'reserved' | 'committed' | 'released';
+      }>;
+    },
   setPaperCapitalBalance: async (initialUSD: number) =>
     (await client.post('/api/capital/paper/set-balance', { initialUSD })).data,
   getAdaptiveWeights: async (params?: { family?: string; limit?: number; decisionsLimit?: number }) =>
