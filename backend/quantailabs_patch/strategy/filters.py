@@ -3,13 +3,14 @@ from typing import Dict, Tuple
 
 @dataclass
 class FilterConfig:
-    min_adx: float = 18.0
+    min_adx: float = 15.0  # Reduced from 18.0 to capture more momentum setups
     min_dollar_volume: float = 500_000.0
-    min_rr: float = 1.3
+    min_rr: float = 1.1  # Reduced from 1.3 to allow more opportunities
     min_atr_pct: float = 0.2
-    max_spread_bps: float = 8.0
-    confidence_threshold: float = 0.58
+    max_spread_bps: float = 10.0  # Increased from 8.0 for more flexibility
+    confidence_threshold: float = 0.52  # Reduced from 0.58 to capture more quality setups
     use_confidence_filter: bool = True
+    adaptive_confidence: bool = True  # Enable adaptive confidence based on other factors
 
 class EntryFilters:
     def __init__(self, cfg: FilterConfig):
@@ -58,10 +59,25 @@ class EntryFilters:
 
         if self.cfg.use_confidence_filter:
             conf = facts.get("model_confidence")
-            if conf is not None and conf < self.cfg.confidence_threshold:
-                ok = False; reasons["confidenceOk"] = f"FAIL (p={conf:.2f} < {self.cfg.confidence_threshold})"
+            # Adaptive confidence threshold - reduce threshold when other signals are strong
+            threshold = self.cfg.confidence_threshold
+            if self.cfg.adaptive_confidence:
+                # Lower threshold if multiple strong signals present
+                strong_signals = 0
+                if adx is not None and adx >= 25.0:
+                    strong_signals += 1
+                if rr is not None and rr >= 2.0:
+                    strong_signals += 1
+                if dv is not None and dv >= self.cfg.min_dollar_volume * 1.5:
+                    strong_signals += 1
+                
+                # Reduce threshold by 0.05 for each strong signal (max -0.10)
+                threshold = max(0.45, threshold - (0.05 * min(strong_signals, 2)))
+            
+            if conf is not None and conf < threshold:
+                ok = False; reasons["confidenceOk"] = f"FAIL (p={conf:.2f} < {threshold:.2f})"
             else:
-                reasons["confidenceOk"] = "OK"
+                reasons["confidenceOk"] = f"OK (p={conf:.2f} >= {threshold:.2f})" if conf else "OK"
 
         reasons["summary"] = "OK" if ok else "BLOCKED"
         return ok, reasons

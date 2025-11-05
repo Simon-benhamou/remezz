@@ -9,6 +9,7 @@ class PositionSizer:
     base_risk_per_trade_pct: float = 0.5  # % of equity to risk if SL hit
     atr_reference_pct: float = 2.0        # baseline ATR% used for scaling risk
     atr_ceiling_pct: float = 6.0          # clamp to avoid overscaling in extreme volatility
+    max_position_pct: float = 15.0        # max position size as % of equity for safety
 
     def compute_size(
         self,
@@ -49,6 +50,13 @@ class PositionSizer:
             return 0.0
 
         qty = risk_usd / stop_distance
+        
+        # Apply max position size cap for safety
+        max_position_usd = equity * (Decimal(str(self.max_position_pct)) / Decimal('100'))
+        position_value = qty * entry
+        if position_value > max_position_usd:
+            qty = max_position_usd / entry
+        
         return float(max(Decimal('0'), qty))
 
     @staticmethod
