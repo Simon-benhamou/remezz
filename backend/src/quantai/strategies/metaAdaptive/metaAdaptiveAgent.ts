@@ -1419,7 +1419,7 @@ class MetaAdaptiveStrategyAgent {
     const trendRiskBase = context.conflict
       ? '0.45'
       : context.alignmentScore >= 0.92
-        ? '1.3'
+        ? '1.6'  // Increased from 1.3% to 1.6% for high-confidence trend trades
         : context.alignmentScore >= 0.8
           ? '1.05'
           : '0.75';
@@ -1461,8 +1461,9 @@ class MetaAdaptiveStrategyAgent {
         targetProfitUsd: new PreciseDecimal('0'),
         medianTakeProfitR: trendTargets[Math.min(1, trendTargets.length - 1)],
         trailingPolicy: {
-          breakevenArmR: new PreciseDecimal('1.6'),
-          trailActivationR: new PreciseDecimal('1.8'),
+          // Dynamic trailing starts earlier (1.2R vs 1.6R) for high-confidence setups
+          breakevenArmR: context.alignmentScore >= 0.92 ? new PreciseDecimal('1.2') : new PreciseDecimal('1.6'),
+          trailActivationR: context.alignmentScore >= 0.92 ? new PreciseDecimal('1.5') : new PreciseDecimal('1.8'),
           atrLookback: 'atr15m',
           atrMultiplier: new PreciseDecimal('1'),
           contextAlignmentThreshold: new PreciseDecimal('0.65'),
@@ -1609,7 +1610,16 @@ class MetaAdaptiveStrategyAgent {
 
     let weighted: StrategyScoreResult[] = familyScores.map(item => {
       const pythonSignalForItem = item.pythonSignal;
-      const planAdjusted = this.applyPythonPlanAdjustments(item.plan, pythonSignalForItem);
+      let planAdjusted = this.applyPythonPlanAdjustments(item.plan, pythonSignalForItem);
+      
+      // Reduce stop multiplier for shorts (they move faster and need tighter stops)
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        planAdjusted = {
+          ...planAdjusted,
+          stopAtrMult: planAdjusted.stopAtrMult.times(new PreciseDecimal('0.85')),
+        };
+      }
+      
       const penaltiesApplied = [...penalties];
       const reasonsAugmented = [...item.reasons, ...macroNotes];
       if (ranking.rank != null) reasonsAugmented.push(`rank=${ranking.rank}`);
@@ -1648,13 +1658,34 @@ class MetaAdaptiveStrategyAgent {
         effectiveScore = Math.min(1, effectiveScore * 1.15);
       }
       if (item.family === 'mean_reversion' && adx >= 22) {
-        effectiveScore *= 0.75;
-        penaltiesApplied.push('adx_too_high');
+        // Allow mean reversion in strong uptrends if near EMA20 (buy the dip)
+        const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.012 : false;
+        const inStrongUptrend = context.bullishStack && context.alignmentScore >= 0.92;
+        
+        if (inStrongUptrend && nearEma20) {
+          // Allow with moderate penalty instead of full disable
+          effectiveScore *= 0.85;
+          penaltiesApplied.push('mean_reversion_at_ema20_dip');
+        } else {
+          effectiveScore *= 0.75;
+          penaltiesApplied.push('adx_too_high');
+        }
       }
       if (item.family === 'mean_reversion' && context.alignmentScore >= 0.92 && adx >= 30) {
-        effectiveScore = 0;
-        if (!penaltiesApplied.includes('mean_disabled_strong_trend')) {
-          penaltiesApplied.push('mean_disabled_strong_trend');
+        // Check for "buy the dip" exception in strong uptrends
+        const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.012 : false;
+        const inStrongUptrend = context.bullishStack;
+        
+        if (inStrongUptrend && nearEma20) {
+          // Allow buy the dip strategy with 60% penalty
+          effectiveScore *= 0.4;
+          penaltiesApplied.push('mean_buy_dip_in_trend');
+        } else {
+          // Disable for other cases
+          effectiveScore = 0;
+          if (!penaltiesApplied.includes('mean_disabled_strong_trend')) {
+            penaltiesApplied.push('mean_disabled_strong_trend');
+          }
         }
       }
       if (item.family === 'momentum' && context.alignmentScore <= 0.45 && adx <= 14) {
