@@ -35,6 +35,32 @@ const lastRsiBySym: Record<string, number> = {};
 const lastIndicatorSig: Record<string, { price: number; emaSpread: number; rsi: number; adx: number }> = {};
 let lastTick = { symbol: '', price: 0, ts: 0 };
 const lastTickBySession = new Map<string, number>();
+
+// Phase 2: Learning system - Track regeneration history per symbol
+interface RegenerationHistoryEntry {
+  timestamp: number;
+  score: number;
+  reason: string;
+  sessionId: string;
+  leadToTrade: boolean;
+  tradeProfitable: boolean | null;
+  tradeCompletedAt: number | null;
+}
+
+interface SymbolRegenerationStats {
+  totalRegenerations: number;
+  recentRegenerations: RegenerationHistoryEntry[];
+  tradesGenerated: number;
+  profitableTrades: number;
+  unprofitableTrades: number;
+  successRate: number; // % of regenerations that led to profitable trades
+  lastCalculatedAt: number;
+}
+
+const regenerationHistory = new Map<string, SymbolRegenerationStats>();
+const MAX_HISTORY_PER_SYMBOL = 20; // Keep last 20 regenerations per symbol
+const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
 // Expose last tick info for health checks
 export function getLastTickAgeSec(sessionId: string): number | null {
   try {
@@ -297,6 +323,162 @@ function calculateRegenerationScore(
   return { priceScore, regimeScore, volatilityScore, composite };
 }
 
+/**
+ * Phase 2: Record a regeneration event for learning system
+ */
+function recordRegeneration(symbol: string, score: number, reason: string, sessionId: string) {
+  const now = Date.now();
+  
+  // Get or create stats for this symbol
+  let stats = regenerationHistory.get(symbol);
+  if (!stats) {
+    stats = {
+      totalRegenerations: 0,
+      recentRegenerations: [],
+      tradesGenerated: 0,
+      profitableTrades: 0,
+      unprofitableTrades: 0,
+      successRate: 0,
+      lastCalculatedAt: now,
+    };
+    regenerationHistory.set(symbol, stats);
+  }
+  
+  // Add new entry
+  const entry: RegenerationHistoryEntry = {
+    timestamp: now,
+    score,
+    reason,
+    sessionId,
+    leadToTrade: false, // Will be updated when trade occurs
+    tradeProfitable: null,
+    tradeCompletedAt: null,
+  };
+  
+  stats.recentRegenerations.push(entry);
+  stats.totalRegenerations++;
+  
+  // Prune old entries (keep last MAX_HISTORY_PER_SYMBOL and within time window)
+  const cutoffTime = now - HISTORY_WINDOW_MS;
+  stats.recentRegenerations = stats.recentRegenerations
+    .filter(e => e.timestamp > cutoffTime)
+    .slice(-MAX_HISTORY_PER_SYMBOL);
+}
+
+/**
+ * Phase 2: Update regeneration history when a trade occurs
+ */
+export function updateRegenerationWithTradeOutcome(
+  symbol: string, 
+  sessionId: string, 
+  profitable: boolean,
+  completedAt: number = Date.now()
+) {
+  const stats = regenerationHistory.get(symbol);
+  if (!stats) return;
+  
+  // Find the most recent regeneration for this session/symbol that hasn't been updated
+  const recentEntry = stats.recentRegenerations
+    .filter(e => e.sessionId === sessionId && !e.leadToTrade)
+    .sort((a, b) => b.timestamp - a.timestamp)[0];
+  
+  if (recentEntry) {
+    recentEntry.leadToTrade = true;
+    recentEntry.tradeProfitable = profitable;
+    recentEntry.tradeCompletedAt = completedAt;
+    
+    // Update stats
+    stats.tradesGenerated++;
+    if (profitable) {
+      stats.profitableTrades++;
+    } else {
+      stats.unprofitableTrades++;
+    }
+    
+    // Recalculate success rate
+    calculateSuccessRate(stats);
+  }
+}
+
+/**
+ * Phase 2: Calculate success rate for a symbol
+ */
+function calculateSuccessRate(stats: SymbolRegenerationStats) {
+  const now = Date.now();
+  
+  // Only consider regenerations from the last 7 days
+  const cutoffTime = now - HISTORY_WINDOW_MS;
+  const recentEntries = stats.recentRegenerations.filter(e => e.timestamp > cutoffTime);
+  
+  if (recentEntries.length === 0) {
+    stats.successRate = 0.5; // Neutral default
+    stats.lastCalculatedAt = now;
+    return;
+  }
+  
+  // Success = regenerations that led to profitable trades
+  const completedTrades = recentEntries.filter(e => e.leadToTrade && e.tradeProfitable !== null);
+  const profitableCount = completedTrades.filter(e => e.tradeProfitable === true).length;
+  
+  // If not enough data, use neutral rate
+  if (completedTrades.length < 3) {
+    stats.successRate = 0.5;
+  } else {
+    stats.successRate = profitableCount / completedTrades.length;
+  }
+  
+  stats.lastCalculatedAt = now;
+}
+
+/**
+ * Phase 2: Get history-adjusted cooldown based on past effectiveness
+ */
+function getHistoryAdjustedCooldown(symbol: string, baselineCooldown: number): number {
+  const useHistoryAdjustment = (process.env.STRATEGY_LEARN_FROM_HISTORY || 'true') === 'true';
+  
+  if (!useHistoryAdjustment) {
+    return baselineCooldown;
+  }
+  
+  const stats = regenerationHistory.get(symbol);
+  
+  // If no history, use baseline
+  if (!stats || stats.recentRegenerations.length < 5) {
+    return baselineCooldown;
+  }
+  
+  // Recalculate success rate if stale (older than 1 hour)
+  const now = Date.now();
+  if (now - stats.lastCalculatedAt > 60 * 60 * 1000) {
+    calculateSuccessRate(stats);
+  }
+  
+  const recentCount = stats.recentRegenerations.length;
+  
+  // If regenerations aren't helping (low success rate), increase cooldown
+  if (stats.successRate < 0.3 && recentCount > 5) {
+    return baselineCooldown * 2.0; // Double cooldown
+  }
+  
+  // If regenerations are working well, stay responsive
+  if (stats.successRate > 0.7 && recentCount > 5) {
+    return baselineCooldown * 0.8; // Reduce cooldown by 20%
+  }
+  
+  // Moderate success rate: use baseline
+  return baselineCooldown;
+}
+
+/**
+ * Phase 2: Get regeneration statistics for monitoring
+ */
+export function getRegenerationStats(symbol?: string): Map<string, SymbolRegenerationStats> | SymbolRegenerationStats | null {
+  if (symbol) {
+    return regenerationHistory.get(symbol) || null;
+  }
+  return regenerationHistory;
+}
+
 async function reconcileExposure(sessionId: string, symbol: string, mode: string) {
   if (mode !== 'live') return;
   const agent = AgentHub.get(sessionId) as any;
@@ -393,9 +575,12 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
   
   // Adaptive cooldown based on volatility
   const baselineCooldownMin = Number(process.env.STRATEGY_REGIME_COOLDOWN_MIN || 5);
-  const adaptiveCooldownMin = useAdaptiveCooldown 
+  let adaptiveCooldownMin = useAdaptiveCooldown 
     ? getAdaptiveCooldown(tech, baselineCooldownMin)
     : baselineCooldownMin;
+  
+  // Phase 2: Apply history-based adjustment to cooldown
+  adaptiveCooldownMin = getHistoryAdjustedCooldown(sym, adaptiveCooldownMin);
   
   const lastRegime = lastRegimeShiftAt[sym] || 0;
   const cooldownPassed = !regimeOnlyShift || !lastRegime || 
@@ -416,6 +601,9 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     
     if (shouldRegenerate) {
       regenerationReason = `composite_score:${score.composite.toFixed(2)} (price:${score.priceScore.toFixed(2)}, regime:${score.regimeScore.toFixed(2)}, vol:${score.volatilityScore.toFixed(2)})`;
+      
+      // Phase 2: Record this regeneration for learning
+      recordRegeneration(sym, score.composite, regenerationReason, sessionId);
     }
   } else {
     // Legacy logic: significant change if price shifted OR (regime shifted with cooldown passed and meaningful confidence change)
@@ -498,6 +686,15 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
     const reason = regenerationReason || describeShift(shift);
     if (reason) {
       const atrPct = tech?.atrPct ?? null;
+      
+      // Phase 2: Get history stats for this symbol
+      const historyStats = regenerationHistory.get(sym);
+      const historyInfo = historyStats ? {
+        totalRegenerations: historyStats.totalRegenerations,
+        successRate: historyStats.successRate,
+        recentCount: historyStats.recentRegenerations.length,
+      } : null;
+      
       recordOpsEvent({
         level: 'info',
         source: 'strategy_regen',
@@ -518,6 +715,7 @@ async function maybeGenerateStrategy(sym: string, trigger: string, price: number
           atrPct,
           useCompositeScore,
           minConfidenceDelta,
+          historyStats: historyInfo, // Phase 2: Learning system stats
         },
       });
     }
