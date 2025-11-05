@@ -946,21 +946,23 @@ export class ReboundRejectionAgent {
     if (this.profile.mode === 'live' && this.state === 'MANAGE' && this.pos) {
       try {
         const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
-        // Check for position closure: no exposure or quantity is exactly zero
-        // Note: We check for exactly 0 to avoid issues with negative quantities
-        if (!exposure || (exposure.qty !== undefined && exposure.qty === 0)) {
+        // Check for position closure: no exposure or quantity <= 0 (consistent with manage() method)
+        if (!exposure || exposure.qty <= 0) {
           // Position closed on exchange (likely via SL/TP), clear local state
           console.log(`✅ [Live Sync] Position closed on exchange for ${this.profile.symbol} (SL/TP executed), clearing local state`);
           
-          // Cancel any remaining protective orders using the centralized method
-          if (this.pos.slOrderId || this.pos.tpOrderId) {
+          // Cancel any remaining protective orders directly via broker
+          if (this.pos && (this.pos.slOrderId || this.pos.tpOrderId)) {
             try {
-              // Create temporary position with qty=0 to trigger order cancellation
-              const tempPos = { ...this.pos, qty: 0 };
-              const originalPos = this.pos;
-              this.pos = tempPos as any;
-              await this.syncProtectiveOrders('position_closed_on_exchange');
-              this.pos = originalPos;
+              await (this.broker as any).syncProtective?.({
+                symbol: this.profile.symbol,
+                side: this.pos.side,
+                qty: 0,
+                stopLoss: undefined,
+                takeProfit: undefined,
+                slOrderId: this.pos.slOrderId ?? null,
+                tpOrderId: this.pos.tpOrderId ?? null,
+              });
             } catch (cleanupError) {
               console.warn(`⚠️  Failed to cleanup protective orders:`, cleanupError);
             }
