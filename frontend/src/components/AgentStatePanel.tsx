@@ -1,6 +1,7 @@
 import React from 'react';
-import { Tag } from 'antd';
+import { Tag, Button, message } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, ExclamationCircleOutlined, InfoCircleOutlined } from '../icons';
+import { api } from '../api';
 
 type DiagnosticsCheck = {
   status?: string;
@@ -56,7 +57,9 @@ const asList = (value: unknown): string[] => {
   return [];
 };
 
-export default function AgentStatePanel({ agent, symbol, lastPrice, margin }: Props) {
+export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sessionId }: Props) {
+  const [clearingCooldown, setClearingCooldown] = React.useState(false);
+
   if (!agent) {
     return <div className='agent-diagnostics agent-diagnostics--empty'>No live diagnostics available.</div>;
   }
@@ -73,7 +76,31 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin }: Pr
     { key: 'momentum', label: 'Momentum gates', check: checks.momentumGates },
     { key: 'quality', label: 'Quality score', check: checks.qualityScore },
     { key: 'dailyLimit', label: 'Daily trade limit', check: checks.dailyTradeLimit },
+    { key: 'circuitBreaker', label: 'Circuit breaker', check: checks.circuitBreaker },
   ].filter((item) => item.check);
+
+  const handleClearCooldown = async () => {
+    if (!sessionId) {
+      message.error('Session ID not available');
+      return;
+    }
+    
+    setClearingCooldown(true);
+    try {
+      await api.clearCooldown(sessionId);
+      message.success('Circuit breaker cooldown cleared');
+      // Refresh the page or trigger a reload
+      window.location.reload();
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.message || 'Failed to clear cooldown';
+      message.error(errorMsg);
+    } finally {
+      setClearingCooldown(false);
+    }
+  };
+
+  const isCircuitBreakerBlocked = checks.circuitBreaker?.status === 'FAIL' || 
+                                   checks.circuitBreaker?.reason?.toLowerCase().includes('cooldown');
 
   const qualityChecks = checks.qualityFilters
     ? Object.entries(checks.qualityFilters).map(([key, value]) => ({
@@ -159,7 +186,21 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin }: Pr
       )}
 
       <section className='agent-diagnostics__section'>
-        <div className='agent-diagnostics__section-title'>Entry conditions</div>
+        <div className='agent-diagnostics__section-title' style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Entry conditions</span>
+          {isCircuitBreakerBlocked && sessionId && (
+            <Button 
+              size="small" 
+              type="primary" 
+              danger
+              loading={clearingCooldown}
+              onClick={handleClearCooldown}
+              style={{ marginLeft: 'auto' }}
+            >
+              Clear Cooldown
+            </Button>
+          )}
+        </div>
         <div className='agent-diagnostics__chips'>
           {primaryChecks.length === 0 && <span className='agent-diagnostics__empty'>No diagnostic signals available.</span>}
           {primaryChecks.map(({ key, label, check }) => {
