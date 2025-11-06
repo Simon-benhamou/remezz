@@ -879,6 +879,44 @@ router.post('/set-symbol', authenticateUser, async (req: AuthenticatedRequest, r
   res.json({ ok: true, session: upd });
 });
 
+// Clear circuit breaker cooldown for an agent
+router.post('/clear-cooldown', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return securityErrorResponse(res, 'auth_required', 'Authentication required', 401);
+  }
+
+  const { sessionId } = req.body as { sessionId: string };
+  if (!sessionId || typeof sessionId !== 'string') {
+    return res.status(400).json({ ok: false, code: 'session_id_required', message: 'sessionId is required' });
+  }
+
+  const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  if (!s) {
+    return res.status(404).json({ ok: false, code: 'session_not_found', message: 'Session not found' });
+  }
+
+  if (!canAccessSessionOwner(s, req.user)) {
+    logUnauthorizedSessionAccess(console, { action: 'agent.clear-cooldown', sessionId, user: req.user });
+    return securityErrorResponse(res, 'session_forbidden', 'You are not allowed to modify this session', 403);
+  }
+
+  const agent = AgentHub.get(sessionId);
+  if (!agent) {
+    return res.status(404).json({ ok: false, code: 'agent_not_active', message: 'Agent is not currently running' });
+  }
+
+  // Clear the cooldown
+  (agent as any).circuitBreaker?.clearCooldown();
+
+  const state = (agent as any).circuitBreaker?.getState() || {};
+  
+  res.json({ 
+    ok: true, 
+    message: 'Circuit breaker cooldown cleared',
+    circuitBreakerState: state
+  });
+});
+
 // AI calls count for current session
 router.get('/ai-calls', async (req,res)=>{
   const sessionId = String(req.query.sessionId || '');
