@@ -118,6 +118,8 @@ export type Cfg = {
   LEVERAGE_CAP_MAJOR: number;
   LEVERAGE_CAP_ALT: number;
   LEVERAGE_CAP_MEME: number;
+  CONFIDENCE_LEVERAGE_MIN: number;        // minimum leverage floor for confidence-based scaling (default: 2)
+  CONFIDENCE_LEVERAGE_LOG_THRESHOLD: number; // minimum confidence factor difference to log (default: 0.05)
   
   // Anti-whale / manipulation filters
   ANTI_WHALE_ENABLED: boolean;        // enable anti-whale entry filters
@@ -567,6 +569,8 @@ export function getConfig(): Cfg {
         || e.LEVERAGE_CAP_DEFAULT
         || Math.min(Number(e.DEFAULT_MAX_LEVERAGE || "3"), 3)
     ),
+    CONFIDENCE_LEVERAGE_MIN: Number(e.CONFIDENCE_LEVERAGE_MIN || "2"),
+    CONFIDENCE_LEVERAGE_LOG_THRESHOLD: Number(e.CONFIDENCE_LEVERAGE_LOG_THRESHOLD || "0.05"),
     // Anti-whale / manipulation filters
     ANTI_WHALE_ENABLED: (e.ANTI_WHALE_ENABLED || "true") === "true",
     ANTI_WHALE_VOL_SPIKE_MULT: Number(e.ANTI_WHALE_VOL_SPIKE_MULT || "2.2"),
