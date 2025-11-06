@@ -210,8 +210,38 @@ export class CircuitBreaker {
     this.emitStateChange();
   }
 
+  /**
+   * 🚀 ADAPTIVE COOLDOWN: Calcule un cooldown intelligent basé sur le contexte
+   * - 3 pertes: 5-15 min (court, marchés peuvent vite changer)
+   * - 4 pertes: 15-25 min (moyen)
+   * - 5+ pertes: 30-45 min (long, algo probablement désaligné)
+   * - Perte quotidienne: 30-60 min selon sévérité
+   */
+  private computeCooldownDuration(losses: number): number {
+    // Retourne la durée en millisecondes
+    const baseCooldown = Number(process.env.COOLDOWN_BASE_MINUTES ?? 5);
+    const escalationPerLoss = Number(process.env.COOLDOWN_ESCALATION_PER_LOSS ?? 10);
+    const maxCooldown = Number(process.env.COOLDOWN_MAX_MINUTES ?? 45);
+    
+    const escalation = Math.min(losses - 3, 5) * escalationPerLoss;
+    const minutes = Math.min(maxCooldown, baseCooldown + escalation);
+    return minutes * 60 * 1000;
+  }
+
   private computeCooldownUntil(now: Date, overrideMinutes?: number): Date {
-    const minutes = Math.max(1, overrideMinutes ?? this.cfg.cooldownMinutes ?? 0);
+    if (overrideMinutes !== undefined) {
+      const minutes = Math.max(1, overrideMinutes);
+      return new Date(now.getTime() + minutes * 60 * 1000);
+    }
+    
+    // Cooldown adaptatif basé sur consecutive losses
+    if (this.consecutiveLosses >= 3) {
+      const durationMs = this.computeCooldownDuration(this.consecutiveLosses);
+      return new Date(now.getTime() + durationMs);
+    }
+    
+    // Fallback pour autres cas (daily loss, etc.)
+    const minutes = this.cfg.cooldownMinutes ?? 60;
     return new Date(now.getTime() + minutes * 60 * 1000);
   }
 
@@ -226,11 +256,26 @@ export class CircuitBreaker {
   canOpenTrade(now: Date, equity: number): CircuitBreakerDecision {
     this.resetDayIfNeeded(now, equity);
     if (this.cooldownUntil && now < this.cooldownUntil) {
+      // 🚀 EARLY COOLDOWN EXIT: Permet sortie anticipée si X% du temps écoulé
+      const cooldownStartMs = this.cooldownUntil.getTime() - this.computeCooldownDuration(this.consecutiveLosses);
+      const elapsedPct = (now.getTime() - cooldownStartMs) / (this.cooldownUntil.getTime() - cooldownStartMs);
+      
+      // Configuration de la sortie anticipée (défaut 50%)
+      const minWaitPct = Number(process.env.COOLDOWN_EARLY_EXIT_PCT ?? 0.5);
+      if (elapsedPct >= minWaitPct) {
+        // Cooldown terminé prématurément - reset
+        this.cooldownUntil = null;
+        this.cooldownReason = null;
+        this.emitStateChange();
+        return { allowed: true, cooldownUntil: null };
+      }
+      
       const reasonDetail = this.cooldownReason
         ?? (this.consecutiveLosses > 0
           ? `${this.consecutiveLosses} consecutive losses`
           : null);
-      const suffix = reasonDetail ? ` (${reasonDetail})` : '';
+      const remainingMinutes = Math.ceil((this.cooldownUntil.getTime() - now.getTime()) / 60000);
+      const suffix = reasonDetail ? ` (${reasonDetail}) - ${remainingMinutes}min restantes` : '';
       return {
         allowed: false,
         reason: `Cooldown active until ${this.cooldownUntil.toISOString()}${suffix}`,
