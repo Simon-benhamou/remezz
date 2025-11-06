@@ -54,7 +54,7 @@ export type { AutoUniverseStatus } from '../autoUniverseScheduler.js';
 
 // HYBRID INTELLIGENT: ML local + IA ultra-conditionnelle
 const aiAnalysisCache = new Map<string, { result: any; timestamp: number }>();
-const AUTO_UNIVERSE_CACHE_DURATION_MS = 4 * 60 * 60 * 1000;
+const AUTO_UNIVERSE_CACHE_DURATION_MS = 45 * 60 * 1000; // 45 minutes - reduced from 4 hours for faster market adaptation
 
 type CachedDynamicUniverse = {
   kind: 'dynamic';
@@ -102,6 +102,66 @@ function storeAutoUniverseCache(key: string, result: CachedAutoUniverseResult): 
       autoUniverseCache.delete(oldestKey);
     }
   }
+}
+
+/**
+ * Enforce cache size limits using LRU eviction
+ */
+function enforceCacheSizeLimits(): void {
+  // Clean AI analysis cache
+  if (aiAnalysisCache.size > MAX_AI_CACHE_SIZE) {
+    const entries = Array.from(aiAnalysisCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toDelete = entries.slice(0, entries.length - MAX_AI_CACHE_SIZE);
+    toDelete.forEach(([key]) => aiAnalysisCache.delete(key));
+    console.log(`🧹 Cleaned ${toDelete.length} entries from aiAnalysisCache (size was ${entries.length})`);
+  }
+  
+  // Clean volatility cache
+  if (volatilityCache.size > MAX_VOLATILITY_CACHE_SIZE) {
+    const count = volatilityCache.size - MAX_VOLATILITY_CACHE_SIZE;
+    const keys = Array.from(volatilityCache.keys()).slice(0, count);
+    keys.forEach(key => volatilityCache.delete(key));
+    console.log(`🧹 Cleaned ${count} entries from volatilityCache`);
+  }
+  
+  // Clean ML prediction cache
+  if (mlPredictionCache.size > MAX_ML_PREDICTION_CACHE_SIZE) {
+    const entries = Array.from(mlPredictionCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toDelete = entries.slice(0, entries.length - MAX_ML_PREDICTION_CACHE_SIZE);
+    toDelete.forEach(([key]) => mlPredictionCache.delete(key));
+    console.log(`🧹 Cleaned ${toDelete.length} entries from mlPredictionCache (size was ${entries.length})`);
+  }
+}
+
+/**
+ * Clean expired cache entries
+ */
+function cleanExpiredCacheEntries(): void {
+  const now = Date.now();
+  
+  // Clean AI analysis cache
+  for (const [key, entry] of aiAnalysisCache.entries()) {
+    if (now - entry.timestamp > CACHE_DURATION_AI) {
+      aiAnalysisCache.delete(key);
+    }
+  }
+  
+  // Clean ML prediction cache
+  for (const [key, entry] of mlPredictionCache.entries()) {
+    if (now - entry.timestamp > CACHE_DURATION_ML) {
+      mlPredictionCache.delete(key);
+    }
+  }
+}
+
+// Run cache cleanup periodically (every 5 minutes)
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => {
+    enforceCacheSizeLimits();
+    cleanExpiredCacheEntries();
+  }, 5 * 60 * 1000);
 }
 
 async function resolveCachedAutoUniverse(
@@ -197,9 +257,14 @@ async function filterSymbolsByActivity(
 }
 const volatilityCache = new Map<string, boolean>();
 const mlPredictionCache = new Map<string, { confidence: number; prediction: string; reasoning: string; timestamp: number }>();
-const CACHE_DURATION_AI = 30 * 60 * 1000; // 30min cache IA (plus long)
-const CACHE_DURATION_VOLATILITY = 5 * 60 * 1000; // 5min cache volatilité
-const CACHE_DURATION_ML = 15 * 60 * 1000; // 15min cache ML
+const CACHE_DURATION_AI = 12 * 60 * 1000; // 12min cache IA - reduced from 30min for faster adaptation
+const CACHE_DURATION_VOLATILITY = 3 * 60 * 1000; // 3min cache volatilité - reduced from 5min
+const CACHE_DURATION_ML = 8 * 60 * 1000; // 8min cache ML - reduced from 15min
+
+// Cache size limits to prevent memory leaks
+const MAX_AI_CACHE_SIZE = 50;
+const MAX_VOLATILITY_CACHE_SIZE = 100;
+const MAX_ML_PREDICTION_CACHE_SIZE = 50;
 const waitFor = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 type FetchImpl = (input: any, init?: any) => Promise<Response>;

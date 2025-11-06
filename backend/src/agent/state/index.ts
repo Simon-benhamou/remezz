@@ -1167,6 +1167,7 @@ export class ReboundRejectionAgent {
         this.recordEntryRejection('NO_BIAS', 'Trading plan has no directional bias', { plan: this.plan.bias });
         return;
       }
+      this.enforceAIBiasOverrideExpiry();
       this.applyActiveAIBiasOverride(price, snap);
       // PHASE 3 FIX #1: Use epsilon tolerance for zone check
       const inZone = this.priceInZoneWithEpsilon(price, this.plan.zone);
@@ -11363,6 +11364,11 @@ export class ReboundRejectionAgent {
           pnlPct: tradePnlPct,
           timestamp: tradeTimestamp
         });
+        
+        // Prevent unbounded growth - keep only last 100 trades
+        if (this.recentTrades.length > 100) {
+          this.recentTrades = this.recentTrades.slice(-100);
+        }
         const tradeRiskUsd = (() => {
           const storedRisk = this.pos?.riskUsd;
           if (storedRisk != null && Number.isFinite(storedRisk) && storedRisk > 0) {
@@ -13434,6 +13440,37 @@ export class ReboundRejectionAgent {
     }
 
     return adjusted;
+  }
+
+  /**
+   * Enforce AI bias override expiry - prevent stale overrides from influencing decisions
+   */
+  public enforceAIBiasOverrideExpiry(): void {
+    if (!this.aiBiasOverride) return;
+    
+    const now = Date.now();
+    if (now > this.aiBiasOverride.expiresAt) {
+      const originalBias = this.aiBiasOverride.originalBias;
+      const duration = Math.round((now - this.aiBiasOverride.appliedAt) / 60000);
+      
+      console.log(`🧠 AI bias override EXPIRED after ${duration}min - restoring original bias ${originalBias}`);
+      
+      recordOpsEvent({
+        level: 'info',
+        source: 'ai_bias_override',
+        message: 'bias_override_expired',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          overrideBias: this.aiBiasOverride.bias,
+          originalBias,
+          durationMin: duration,
+          confidence: this.aiBiasOverride.confidence,
+        }
+      });
+      
+      this.clearAiBiasOverride('expired');
+    }
   }
 
   /**
