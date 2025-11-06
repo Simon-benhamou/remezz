@@ -807,7 +807,15 @@ export class ReboundRejectionAgent {
     this.maxNotionalCapUsd = perSymbolCap.raw > ZERO_USD.raw
       ? perSymbolCap.toNumber()
       : Infinity;
-    profile.startBalanceUsd = snapshot.totalUSD.toNumber();
+    
+    // Initialize agent's starting equity in the capital manager
+    // Use profile.startBalanceUsd if provided, otherwise use a portion of the pool
+    const agentStartingEquity = profile.startBalanceUsd && profile.startBalanceUsd > 0
+      ? profile.startBalanceUsd
+      : snapshot.totalUSD.toNumber();
+    await capitalManager.initializeAgentEquity(agentCapitalId, agentStartingEquity);
+    
+    profile.startBalanceUsd = agentStartingEquity;
     this.lastKnownEquityUsd = profile.startBalanceUsd;
 
     this.state = 'SCAN';

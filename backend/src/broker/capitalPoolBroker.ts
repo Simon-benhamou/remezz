@@ -42,10 +42,14 @@ export class CapitalPoolBroker implements Broker {
       this.capital.getBalance(),
     ]);
 
+    // Get per-agent equity if available, otherwise fall back to global equity
+    const agentEquity = this.capital.getAgentEquity(this.agentId);
+    const equityUsd = agentEquity ? agentEquity.currentEquity.toNumber() : snapshot.totalUSD.toNumber();
+
     return {
       ...inner,
       freeUsd: snapshot.freeUSD.toNumber(),
-      equityUsd: snapshot.totalUSD.toNumber(),
+      equityUsd: equityUsd,
       committedUsd: snapshot.reservedUSD.plus(snapshot.inPositionsUSD).toNumber(),
     };
   }
@@ -157,7 +161,7 @@ export class CapitalPoolBroker implements Broker {
     }
 
     if (Number.isFinite(pnlDelta) && pnlDelta !== 0) {
-      await this.capital.applyPnlDelta(order.symbol, new PreciseDecimal(pnlDelta));
+      await this.capital.applyPnlDelta(this.agentId, order.symbol, new PreciseDecimal(pnlDelta));
     }
   }
 }

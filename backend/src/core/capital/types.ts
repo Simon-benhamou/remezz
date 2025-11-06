@@ -54,6 +54,14 @@ export interface Reservation {
   state: 'reserved' | 'committed' | 'released';
 }
 
+export interface AgentEquitySnapshot {
+  agentId: string;
+  startingEquity: USD;
+  cumulativePnl: USD;
+  currentEquity: USD;
+  lastUpdated: number;
+}
+
 export interface CapitalManagerConfig {
   reserveTtlMs: number;
   reserveBufferPct: USD; // fraction 0..1

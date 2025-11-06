@@ -45,6 +45,7 @@ function createManager(options: ManagerFactoryOptions = {}) {
   }, {
     reservations: new Map(),
     symbolExposure: new Map(),
+    agentEquity: new Map(),
   });
   return { manager, provider };
 }
@@ -90,6 +91,7 @@ function createLiveManager(options: LiveManagerFactoryOptions = {}) {
   }, {
     reservations: new Map(),
     symbolExposure: new Map(),
+    agentEquity: new Map(),
   });
   return { manager, provider, exchangeState };
 }
@@ -181,6 +183,7 @@ function createLiveManager(options: LiveManagerFactoryOptions = {}) {
   }, {
     reservations: new Map(),
     symbolExposure: new Map(),
+    agentEquity: new Map(),
   });
   const result = await manager.reserve({ agentId: 'live', symbol: 'BNB/USDT', requestedUSD: decimal('200'), minUSD: decimal('50') });
   assert.equal(result, null);

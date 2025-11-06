@@ -46,11 +46,13 @@ const liveProvider = new LiveBalanceProvider(
 const paperManager = new CapitalManager(paperProvider, capitalConfig, {
   reservations: new Map<string, Reservation>(),
   symbolExposure: new Map<string, PreciseDecimal>(),
+  agentEquity: new Map(),
 });
 
 const liveManager = new CapitalManager(liveProvider, capitalConfig, {
   reservations: new Map<string, Reservation>(),
   symbolExposure: new Map<string, PreciseDecimal>(),
+  agentEquity: new Map(),
 });
 
 const RECONCILE_INTERVAL_MS = 10_000;
