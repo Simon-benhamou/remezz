@@ -91,6 +91,7 @@ import { applyPortfolioAllocation as applyPortfolioAllocationHelper, type Portfo
 import { entryZoneMethods } from './rebound/entryZone.js';
 import { liquidityMethods } from './rebound/liquidity.js';
 import { postTradeReview } from '../../jobs/postTradeReview.js';
+import { positionSyncService } from '../../services/positionSyncService.js';
 
 type ContextTrailPreference = {
   breakevenR: number;
@@ -830,6 +831,12 @@ export class ReboundRejectionAgent {
       this.updateAdaptiveATRCache(profile.symbol, 1.0).catch(err =>
         console.warn('Initial ATR cache update failed:', err)
       );
+    }
+    
+    // Start periodic position sync service for live mode
+    if (profile.mode === 'live' && this.sessionId) {
+      positionSyncService.startPeriodicSync(this);
+      console.log(`🔄 Position sync service started for live session ${this.sessionId}`);
     }
   }
 
@@ -10401,6 +10408,11 @@ export class ReboundRejectionAgent {
     this.setMarginHalt(mode, 'external_halt');
     if (mode === 'full') {
       console.log(`Agent ${this.profile?.symbol} halted`);
+      
+      // Stop position sync service when fully halted
+      if (this.sessionId) {
+        positionSyncService.stopPeriodicSync(this.sessionId);
+      }
     } else {
       console.log(`Agent ${this.profile?.symbol} margin-halt entries only`);
     }
