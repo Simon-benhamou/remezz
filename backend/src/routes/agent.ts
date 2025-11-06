@@ -1291,6 +1291,14 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
         
         if (hasPosition) {
           agentState = 'MANAGE'; // Managing active position
+        } else {
+          // Check if has a plan (armed and ready to enter)
+          const hasPlan = session.planJson && typeof session.planJson === 'object' 
+            && Object.keys(session.planJson).length > 0;
+          
+          if (hasPlan) {
+            agentState = 'ARMED'; // Has plan, waiting for entry signal
+          }
         }
       }
       
