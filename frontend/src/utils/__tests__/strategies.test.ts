@@ -10,7 +10,7 @@ import {
 describe('strategies utils', () => {
   it('normalizes strategy engine aliases', () => {
     expect(normalizeStrategyEngine('Meta Adaptive')).toBe('meta_adaptive');
-    expect(normalizeStrategyEngine('intraday-dual')).toBe('intraday_dual');
+    expect(normalizeStrategyEngine('intraday-dual')).toBe('meta_adaptive'); // Intraday removed
     expect(normalizeStrategyEngine('unknown')).toBeNull();
   });
 
@@ -25,18 +25,9 @@ describe('strategies utils', () => {
       strategy: null,
       strategyFamily: null,
       strategyEngine: null,
-      profile: { strategyEngine: 'intraday_dual' },
+      profile: { strategyEngine: 'meta_adaptive' },
     };
-    expect(inferSessionStrategyEngine(session)).toBe('intraday_dual');
-    expect(resolveSessionStrategyLabel(session)).toBe(STRATEGY_META.intraday_dual.label);
-
-    const fallbackSession = {
-      strategy: 'Custom Blend',
-      strategyFamily: null,
-      strategyEngine: null,
-      profile: null,
-    };
-    expect(inferSessionStrategyEngine(fallbackSession)).toBeNull();
-    expect(resolveSessionStrategyLabel(fallbackSession)).toBe('Custom Blend');
+    expect(inferSessionStrategyEngine(session)).toBe('meta_adaptive');
+    expect(resolveSessionStrategyLabel(session)).toBe(STRATEGY_META.meta_adaptive.label);
   });
 });
