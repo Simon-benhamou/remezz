@@ -1296,6 +1296,11 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
           const hasPlan = session.planJson && typeof session.planJson === 'object' 
             && Object.keys(session.planJson).length > 0;
           
+          // Debug logging for state detection
+          if (session.symbol === 'BTC/USDT') {
+            console.log(`🔍 BTC State Debug: planJson=${JSON.stringify(session.planJson)}, hasPlan=${hasPlan}, state will be=${hasPlan ? 'ARMED' : 'SCAN'}`);
+          }
+          
           if (hasPlan) {
             agentState = 'ARMED'; // Has plan, waiting for entry signal
           }
