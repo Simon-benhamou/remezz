@@ -1277,11 +1277,24 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     }
 
     // Format sessions data for frontend
-    const sessionsData = actives.map(session => {
-      // Get runtime state from AgentHub if available
-      const agent = AgentHub.get(session.id);
-      const agentState = (agent as any)?.state || 'UNKNOWN'; // Fix: use .state not .phase
-      const agentBias = (agent as any)?.bias || 'none';
+    const sessionsData = await Promise.all(actives.map(async (session) => {
+      // For meta-adaptive, derive state from session data
+      let agentState = 'SCAN'; // Default: scanning for opportunities
+      
+      // Check if halted (cooldown)
+      if (session.haltedAt && !session.stoppedAt) {
+        agentState = 'COOLDOWN';
+      } else {
+        // Check if has active position
+        const hasPosition = session.positions && session.positions.length > 0 
+          && session.positions.some((p: any) => p.qty && Number(p.qty) > 0);
+        
+        if (hasPosition) {
+          agentState = 'MANAGE'; // Managing active position
+        }
+      }
+      
+      const agentBias = 'none'; // Meta-adaptive doesn't use fixed bias
       const profile = (session.profileJson as any) || {};
       const leverageMeta = (profile.leverageCap as any) || null;
       const requestedMaxLev = Number(profile.requestedMaxLeverage ?? leverageMeta?.requested ?? profile.maxLeverage ?? 1);
@@ -1310,7 +1323,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
           cap: leverageMeta,
         },
       };
-    });
+    }));
 
     function serializeSnapshot(snapshot: BalanceSnapshot | null) {
       if (!snapshot) return null;
