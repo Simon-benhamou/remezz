@@ -11347,7 +11347,8 @@ export class ReboundRejectionAgent {
         const equityAfter = Number(balanceAfter?.equityUsd ?? this.lastKnownEquityUsd ?? this.profile.startBalanceUsd ?? 0);
         const baseEquity = this.lastKnownEquityUsd > 0 ? this.lastKnownEquityUsd : (this.profile.startBalanceUsd ?? equityAfter);
         const pnlPct = baseEquity > 0 ? (realizedPnl / baseEquity) * 100 : 0;
-        this.circuitBreaker.onTradeResult(new Date(), pnlPct, equityAfter);
+        // Pass realizedPnl (in USD) to track per-agent daily PnL
+        this.circuitBreaker.onTradeResult(new Date(), pnlPct, equityAfter, realizedPnl);
         this.lastKnownEquityUsd = equityAfter;
         this.syncCircuitBreakerTelemetry();
 

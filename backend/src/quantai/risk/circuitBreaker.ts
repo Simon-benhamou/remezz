@@ -25,6 +25,7 @@ export type CircuitBreakerState = {
   dailyLossActive: boolean;
   dailyLossTriggeredAt: Date | null;
   dailyLossRecoveryWinsRemaining: number;
+  dailyPnlUsd: number; // Track per-agent daily PnL
 };
 
 export type CircuitBreakerOptions = {
@@ -52,6 +53,7 @@ export class CircuitBreaker {
   private dailyLossActive = false;
   private dailyLossTriggeredAt: Date | null = null;
   private dailyLossRecoveryWinsRemaining = 0;
+  private dailyPnlUsd = 0; // Track per-agent daily PnL
   private readonly onStateChange?: (state: CircuitBreakerState) => void | Promise<void>;
 
   constructor(private readonly cfg: QuantAIRiskConfig, opts: CircuitBreakerOptions = {}) {
@@ -106,6 +108,9 @@ export class CircuitBreaker {
     }
     if (typeof (state as any).dailyLossRecoveryWinsRemaining === 'number' && Number.isFinite((state as any).dailyLossRecoveryWinsRemaining)) {
       this.dailyLossRecoveryWinsRemaining = Math.max(0, Math.floor((state as any).dailyLossRecoveryWinsRemaining));
+    }
+    if (typeof (state as any).dailyPnlUsd === 'number' && Number.isFinite((state as any).dailyPnlUsd)) {
+      this.dailyPnlUsd = Number((state as any).dailyPnlUsd);
     }
   }
 
@@ -188,6 +193,7 @@ export class CircuitBreaker {
     this.equityStartDay = Number.isFinite(equity) ? equity : null;
     this.lastTradeDay = currentDay;
     this.dayStartAt = startOfUtcDay(now);
+    this.dailyPnlUsd = 0; // Reset per-agent daily PnL
     if (this.dailyLossActive || this.dailyLossRecoveryWinsRemaining > 0 || this.dailyLossTriggeredAt) {
       this.dailyLossActive = false;
       this.dailyLossRecoveryWinsRemaining = 0;
@@ -246,9 +252,10 @@ export class CircuitBreaker {
         };
       }
     }
+    // Check daily loss limit using per-agent PnL instead of pool equity delta
     if (this.equityStartDay != null && this.equityStartDay > 0) {
-      const drawdownPct = ((equity - this.equityStartDay) / this.equityStartDay) * 100;
-      if (drawdownPct <= -Math.abs(this.cfg.dailyLossLimitPct)) {
+      const dailyLossPct = (this.dailyPnlUsd / this.equityStartDay) * 100;
+      if (dailyLossPct <= -Math.abs(this.cfg.dailyLossLimitPct)) {
         if (!this.dailyLossActive) {
           this.dailyLossActive = true;
           this.dailyLossTriggeredAt = new Date(now.getTime());
@@ -259,7 +266,7 @@ export class CircuitBreaker {
           const cooldownMinutes = Number.isFinite(this.cfg.dailyLossCooldownMinutes)
             ? Math.max(0, Math.floor(this.cfg.dailyLossCooldownMinutes ?? 0))
             : 0;
-          const message = `Daily loss limit hit (${drawdownPct.toFixed(2)}% <= -${this.cfg.dailyLossLimitPct}%)`;
+          const message = `Daily loss limit hit (agent PnL: ${this.dailyPnlUsd.toFixed(2)} USD, ${dailyLossPct.toFixed(2)}% <= -${this.cfg.dailyLossLimitPct}%)`;
           const until = cooldownMinutes > 0
             ? this.startCooldown(now, cooldownMinutes, message)
             : this.startCooldown(now, undefined, message);
@@ -294,9 +301,16 @@ export class CircuitBreaker {
     this.emitStateChange();
   }
 
-  onTradeResult(now: Date, pnlPct: number, equity: number) {
+  onTradeResult(now: Date, pnlPct: number, equity: number, pnlUsd?: number) {
     this.resetDayIfNeeded(now, equity);
     let changed = false;
+    
+    // Track per-agent daily PnL if provided
+    if (typeof pnlUsd === 'number' && Number.isFinite(pnlUsd)) {
+      this.dailyPnlUsd += pnlUsd;
+      changed = true;
+    }
+    
     if (pnlPct < 0) {
       this.consecutiveLosses += 1;
       this.consecutiveWins = 0;
@@ -402,6 +416,7 @@ export class CircuitBreaker {
       dailyLossActive: this.dailyLossActive,
       dailyLossTriggeredAt: this.cloneDate(this.dailyLossTriggeredAt),
       dailyLossRecoveryWinsRemaining: this.dailyLossRecoveryWinsRemaining,
+      dailyPnlUsd: this.dailyPnlUsd,
     };
   }
 }
@@ -443,6 +458,7 @@ export class DisabledCircuitBreaker extends CircuitBreaker {
       dailyLossActive: false,
       dailyLossTriggeredAt: null,
       dailyLossRecoveryWinsRemaining: 0,
+      dailyPnlUsd: 0,
     };
   }
 }
