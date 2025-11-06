@@ -30,23 +30,13 @@ router.get('/server-ip', async (req, res) => {
   }
 });
 
-// Get ATR cache statistics  
+// ATR cache not used in meta-adaptive
 router.get('/atr-cache-stats', async (req, res) => {
-  try {
-    // Import dynamically to avoid circular dependency
-    const { ReboundRejectionAgent } = await import('../agent/state.js');
-    const stats = ReboundRejectionAgent.getATRCacheStats();
-    res.json({
-      success: true,
-      atrCacheStats: stats,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: error.message || String(error)
-    });
-  }
+  res.json({
+    success: true,
+    atrCacheStats: { size: 0, hits: 0, misses: 0 },
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Test exchange connectivity (public endpoint)
@@ -248,43 +238,12 @@ router.post('/test-credentials', async (req, res) => {
   }
 });
 
-// Debug ATR thresholds for a specific symbol (public endpoint for debugging)
+// ATR thresholds not used in meta-adaptive
 router.get('/atr-thresholds/:symbol', async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    const { ReboundRejectionAgent } = await import('../agent/state.js');
-    const { getConfig } = await import('../utils/env.js');
-    
-    const config = getConfig();
-    const baseThreshold = config.ENTRY_MIN_ATR_PCT || 1.0;
-    
-    // Create a temporary agent instance to test thresholds
-    const agent = new ReboundRejectionAgent();
-    
-    // Test different aggressiveness levels
-    const results = {
-      symbol,
-      baseThreshold,
-      adaptiveThresholds: {
-        conservative: agent.testAdaptiveATRThreshold(symbol, baseThreshold),
-        moderate: agent.testAdaptiveATRThreshold(symbol, baseThreshold * 0.75),
-        aggressive: agent.testAdaptiveATRThreshold(symbol, baseThreshold * 0.5)
-      },
-      cryptoClassification: symbol.split('/')[0]?.toUpperCase(),
-      cacheStats: ReboundRejectionAgent.getATRCacheStats()
-    };
-    
-    res.json({
-      success: true,
-      results,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: error.message || String(error)
-    });
-  }
+  res.json({
+    success: false,
+    error: 'ATR threshold testing not available in meta-adaptive strategy'
+  });
 });
 
 // Test dynamic entry zone calculation (public endpoint for debugging)
@@ -323,13 +282,6 @@ router.get('/test-dynamic-zone/:symbol/:price/:bias', async (req, res) => {
       ema50: currentPrice * 0.96
     };
     
-    const { ReboundRejectionAgent } = await import('../agent/state.js');
-    const agent = new ReboundRejectionAgent();
-    
-    // Test the dynamic zone calculation
-    const dynamicZone = await agent.testCalculateDynamicEntryZone(mockSnap as any, currentPrice, bias as any);
-    
-    // Calculate original static zone for comparison (5% range)
     const staticRange = currentPrice * 0.025;
     const staticZone = {
       from: currentPrice - staticRange,
@@ -343,14 +295,14 @@ router.get('/test-dynamic-zone/:symbol/:price/:bias', async (req, res) => {
       bias,
       zones: {
         static: staticZone,
-        dynamic: dynamicZone
+        dynamic: null
       },
       analysis: {
-        dynamicRange: Math.abs(dynamicZone.to - dynamicZone.from),
+        dynamicRange: 0,
         staticRange: Math.abs(staticZone.to - staticZone.from),
-        dynamicTarget: dynamicZone.mid,
-        distanceToTarget: Math.abs(currentPrice - dynamicZone.mid) / currentPrice * 100,
-        zoneWidth: Math.abs(dynamicZone.to - dynamicZone.from) / dynamicZone.mid * 100
+        dynamicTarget: currentPrice,
+        distanceToTarget: 0,
+        zoneWidth: 0
       },
       mockData: {
         atrPct: mockSnap.atrPct,

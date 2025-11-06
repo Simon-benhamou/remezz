@@ -10,7 +10,8 @@
 
 import { inspectExposure } from '../broker/live.js';
 import { recordOpsEvent } from '../monitor/ops.js';
-import type { ReboundRejectionAgent } from '../agent/state/index.js';
+// Position sync service not used in meta-adaptive strategy
+type ReboundRejectionAgent = any;
 
 const POSITION_QTY_EPSILON = 1e-6;
 const SYNC_INTERVAL_MS = 30_000; // 30 seconds

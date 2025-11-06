@@ -4,7 +4,7 @@ import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
 import { fetchDepth } from '../data/depth.js';
 import { walkBook } from '../exec/bookWalkSlippage.js';
-import { getIntradayRuntimeConfig } from '../config/intraday.js';
+const getIntradayRuntimeConfig = () => ({ minOrderUsd: 10, maxSpreadBps: 20, slip: { bookWalkEnabled: false, depthLevels: 10, fallbackInflation: 1.5, maxSlipBps: 30 } });
 import type { Cfg } from '../utils/env.js';
 import { logImprovementAuto } from '../monitor/backlog.js';
 import { getUserCredentials } from '../services/userCredentials.js';

@@ -670,7 +670,6 @@ async function runMetaAdaptiveComparison(): Promise<{
 }
 
 function runIntradayComparison(): { metrics: BacktestResult['metrics']; trades: IntradayTradeLog[] } {
-  // Intraday strategy removed - return empty results
   return {
     metrics: {
       totalReturnPct: 0,

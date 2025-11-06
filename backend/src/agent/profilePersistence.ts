@@ -1,18 +1,6 @@
-// ActivationProfile type definition
-export type ActivationProfile = {
-  id: string;
-  symbol: string;
-  mode: string;
-  startBalanceUsd?: number | null;
-  userId?: string | null;
-  budgetFraction?: number;
-  maxLeverage?: number;
-  rrFloor?: number;
-  rrCeil?: number;
-  rrBaseMin?: number;
-  rrExpectancy?: number;
-  [key: string]: any;
-};
+// Re-export ActivationProfile from state/types.ts to avoid type conflicts
+import type { ActivationProfile } from './state/types.js';
+export type { ActivationProfile } from './state/types.js';
 import { resolveRrExpectancyConfig } from "../risk/rrExpectancy.js";
 import { clampBudgetFraction } from "../utils/budget.js";
 import { getConfig, getModeParams } from "../utils/env.js";
@@ -41,7 +29,7 @@ export function serializeActivationProfile(profile: ActivationProfile, extras: R
     rrFloor: profile.rrFloor,
     rrCeil: profile.rrCeil,
     rrBaseMin: profile.rrBaseMin,
-    rrExpectancy: profile.rrExpectancy,
+    rrExpectancy: profile.rrExpectancy as any,
   });
 
   return {
@@ -150,7 +138,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
   );
 
   const minLeverage = parseMaybeNumber(stored?.minLeverage);
-  const strategyEngine = stored?.strategyEngine === 'intraday_dual' ? 'intraday_dual' : 'meta_adaptive';
+  const strategyEngine = 'meta_adaptive';
   const timestamp = typeof stored?.timestamp === "string"
     ? stored.timestamp
     : session.startedAt instanceof Date
@@ -182,15 +170,7 @@ export function hydrateActivationProfile(session: SessionRecord): ActivationProf
     rrFloor: rrConfig.rrFloor,
     rrCeil: rrConfig.rrCeil,
     rrBaseMin: rrConfig.rrBaseMin,
-    rrExpectancy: {
-      enabled: rrConfig.enabled,
-      minTrades: rrConfig.minTrades,
-      lookbackDays: rrConfig.lookbackDays,
-      decay: rrConfig.decay,
-      safetyMult: rrConfig.safetyMult,
-      blend: rrConfig.blend,
-      hysteresis: rrConfig.hysteresis,
-    },
+    rrExpectancy: rrConfig as any,
     portfolioWeight: parseMaybeNumber(stored?.portfolioWeight) ?? undefined,
     portfolioScore: parseMaybeNumber(stored?.portfolioScore) ?? undefined,
     portfolioUpdatedAt: typeof stored?.portfolioUpdatedAt === "string" ? stored.portfolioUpdatedAt : undefined,

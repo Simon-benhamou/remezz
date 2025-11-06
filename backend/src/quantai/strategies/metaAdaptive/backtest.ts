@@ -9,11 +9,12 @@ export type BacktestMetrics = {
   cagr: number;
   sharpe: number;
   maxDrawdownPct: number;
-  trades: number;
+  trades?: number;
   hitRate: number;
   profitFactor: number;
   avgWin: number;
   avgLoss: number;
+  pnlSeries?: number[];
 };
 export type BacktestResult = {
   metrics: BacktestMetrics;
@@ -21,7 +22,7 @@ export type BacktestResult = {
   walkForward?: { start: number; end: number; metrics: BacktestMetrics }[];
 };
 
-function aggregateCandles(candles: Candle[], targetTimeframe: string): Candle[] {
+function aggregateCandles(candles: Candle[], targetTimeframe: string | number): Candle[] {
   // Simple aggregation stub
   return candles;
 }

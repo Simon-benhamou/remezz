@@ -614,7 +614,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       sizingMode?: 'risk'|'budget';
       dynamicLeverage?: boolean;
       minLeverage?: number;
-      strategyEngine?: 'intraday_dual' | 'meta_adaptive';
+      strategyEngine?: 'meta_adaptive';
     };
 
     const sessionId = body.sessionId;
@@ -661,10 +661,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       ? body.startBalanceUsd
       : Number(existing.startBalanceUsd ?? currentProfile.startBalanceUsd ?? 0) || undefined;
 
-    const requestedEngine = body.strategyEngine ?? currentProfile.strategyEngine ?? 'intraday_dual';
-    const strategyEngine: 'intraday_dual' | 'meta_adaptive' = requestedEngine === 'meta_adaptive'
-      ? 'meta_adaptive'
-      : 'intraday_dual';
+    const strategyEngine = 'meta_adaptive';
 
     const updatedProfileJson = {
       ...currentProfile,
@@ -736,14 +733,7 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
       }
     }
 
-    if (agent && plan) {
-      try {
-        await agent.propose(plan as any);
-        await agent.validateAndArm();
-      } catch (error) {
-        console.warn(`Failed to re-arm agent ${sessionId} with persisted plan:`, error);
-      }
-    }
+    // Skip plan restoration - not used in meta-adaptive
 
     if (updated.symbol) {
       try {
@@ -1455,8 +1445,6 @@ router.post('/propose', async (req,res) => {
     try { 
       await savePlan(sessionId, plan as any); 
     } catch {}
-    await a.propose(plan as any);
-    await a.validateAndArm();
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ error: String(e?.message || e) });

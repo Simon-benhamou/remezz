@@ -15,6 +15,7 @@ model User {
   passwordHash String
   role         String   @default("trader") // 'admin', 'trader', 'viewer'
   isActive     Boolean  @default(true)
+  isLegacy     Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   lastLoginAt  DateTime?

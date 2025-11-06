@@ -44,17 +44,7 @@ export async function rehydrateActiveAgentSessions() {
     try {
       const agent = await AgentHub.activate(session.id, profile);
 
-      const persistedPlan = extractPersistedPlan((session as any).planJson);
-      if (persistedPlan && agent && typeof agent.propose === 'function') {
-        try {
-          await agent.propose(persistedPlan as any);
-          if (typeof agent.validateAndArm === 'function') {
-            await agent.validateAndArm();
-          }
-        } catch (error) {
-          console.warn(`⚠️ Failed to restore persisted plan for ${session.id}:`, error);
-        }
-      }
+      // Plan restoration not used in meta-adaptive
 
       await prisma.agentSession.update({
         where: { id: session.id },

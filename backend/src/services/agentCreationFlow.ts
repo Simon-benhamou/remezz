@@ -107,7 +107,7 @@ type NormalizedStartConfig = {
   volumeThresholdUsd?: number;
   momentumThreshold?: number;
   userId?: string;
-  strategyEngine: 'intraday_dual' | 'meta_adaptive';
+  strategyEngine: 'meta_adaptive';
   rawPayload: StartPayload;
 };
 
@@ -1303,11 +1303,7 @@ function schedulePostActivationTasks(sessionId: string, symbol: string, config: 
     try {
       const plan = await proposePlan(symbol, { fresh: true, sessionId });
       await savePlan(sessionId, plan as any);
-      const agent = AgentHub.get(sessionId);
-      if (agent) {
-        await agent.propose(plan as any);
-        await agent.validateAndArm();
-      }
+      // Plan generation for persistence only
     } catch (error) {
       console.warn('⚠️ Failed to generate plan during post activation:', error);
     }

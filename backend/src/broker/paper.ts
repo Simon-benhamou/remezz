@@ -2,7 +2,7 @@ import { Broker, NewOrder, PlacedOrder, BrokerMarginSnapshot, BrokerPositionMarg
 import { getTicker, getOHLCV } from '../data/market.js';
 import { fetchDepth } from '../data/depth.js';
 import { walkBook } from '../exec/bookWalkSlippage.js';
-import { getIntradayRuntimeConfig } from '../config/intraday.js';
+const getIntradayRuntimeConfig = () => ({ minOrderUsd: 10, maxSpreadBps: 20, slip: { bookWalkEnabled: false, depthLevels: 10, fallbackInflation: 1.5, maxSlipBps: 30 } });
 import { getConfig } from '../utils/env.js';
 
 type SimulatedFill = {

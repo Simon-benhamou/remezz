@@ -1,4 +1,4 @@
-import { ReboundRejectionAgent, ActivationProfile } from './state.js';
+import type { ActivationProfile } from './state.js';
 import { prisma } from '../db/client.js';
 import { PaperBroker } from '../broker/paper.js';
 import { LiveBroker } from '../broker/live.js';
@@ -7,6 +7,9 @@ import { capitalConfig } from '../config/capital.js';
 import { getCapitalManager } from '../services/capitalPool.js';
 import type { Broker } from '../broker/types.js';
 import type { StrategyGuardrail } from '../services/strategyHealth.js';
+
+// AgentHub not used in meta-adaptive - kept for backward compatibility
+type ReboundRejectionAgent = any;
 
 export type StopAllSessionResult = {
   sessionId: string;
@@ -27,15 +30,14 @@ export type StopAllResult = {
 };
 
 export class AgentsHub {
-  private agents = new Map<string, ReboundRejectionAgent>(); // sessionId -> agent
+  private agents = new Map<string, any>(); // sessionId -> agent (not used in meta-adaptive)
 
   get(sessionId: string) { return this.agents.get(sessionId) || null; }
 
   async activate(sessionId: string, profile: ActivationProfile) {
-    let a = this.agents.get(sessionId);
-    if (!a) { a = new ReboundRejectionAgent(); this.agents.set(sessionId, a); }
-    (a as any).sessionId = sessionId;
-    await a.activate(profile);
+    // Meta-adaptive doesn't use agent instances
+    const a: any = { sessionId, profile };
+    this.agents.set(sessionId, a);
     return a;
   }
 
