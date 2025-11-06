@@ -226,4 +226,49 @@ function createLiveManager(options: LiveManagerFactoryOptions = {}) {
   assert.equal(Number(reconstructed.toFixed(2)), 650);
 }
 
+// Test: Per-agent equity tracking
+{
+  console.log('Test: Per-agent equity tracking');
+  const { manager } = createManager({ balance: '10000' });
+  
+  // Initialize two agents with different starting equities
+  await manager.initializeAgentEquity('agent1', decimal('1000'));
+  await manager.initializeAgentEquity('agent2', decimal('2000'));
+  
+  // Check initial equity
+  const agent1InitialEquity = manager.getAgentEquity('agent1');
+  const agent2InitialEquity = manager.getAgentEquity('agent2');
+  assert.equal(agent1InitialEquity?.currentEquity.toNumber(), 1000);
+  assert.equal(agent2InitialEquity?.currentEquity.toNumber(), 2000);
+  assert.equal(agent1InitialEquity?.cumulativePnl.toNumber(), 0);
+  assert.equal(agent2InitialEquity?.cumulativePnl.toNumber(), 0);
+  
+  // Agent 1 makes a profitable trade (+100)
+  await manager.applyPnlDelta('agent1', 'BTC/USDT', decimal('100'));
+  
+  // Agent 2 makes a losing trade (-50)
+  await manager.applyPnlDelta('agent2', 'ETH/USDT', decimal('-50'));
+  
+  // Check updated equities - each agent should have their own PnL
+  const agent1AfterTrade = manager.getAgentEquity('agent1');
+  const agent2AfterTrade = manager.getAgentEquity('agent2');
+  
+  assert.equal(agent1AfterTrade?.cumulativePnl.toNumber(), 100);
+  assert.equal(agent1AfterTrade?.currentEquity.toNumber(), 1100); // 1000 + 100
+  
+  assert.equal(agent2AfterTrade?.cumulativePnl.toNumber(), -50);
+  assert.equal(agent2AfterTrade?.currentEquity.toNumber(), 1950); // 2000 - 50
+  
+  // Verify that agent1's equity is NOT affected by agent2's loss
+  assert.equal(agent1AfterTrade?.currentEquity.toNumber(), 1100, 'Agent 1 equity should not be affected by Agent 2 loss');
+  
+  // Get all agent equities
+  const allEquities = manager.getAllAgentEquity();
+  assert.equal(allEquities.length, 2);
+  assert.ok(allEquities.some(e => e.agentId === 'agent1' && e.currentEquity.toNumber() === 1100));
+  assert.ok(allEquities.some(e => e.agentId === 'agent2' && e.currentEquity.toNumber() === 1950));
+  
+  console.log('✅ Per-agent equity tracking works correctly');
+}
+
 console.log('✅ capitalManager.spec passed');
