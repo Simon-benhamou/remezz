@@ -176,14 +176,20 @@ export async function computeAgentHealth(
   now = Date.now(),
   opts: { agentsSnapshot?: AgentSnapshot } = {},
 ): Promise<AgentHealthSnapshot> {
-  const agents = opts.agentsSnapshot ?? AgentHub.snapshot();
-  const agentById = new Map<string, AgentSnapshotEntry | undefined>(
-    agents.map((entry: AgentSnapshotEntry) => [entry.sessionId, entry]),
-  );
-
+  // Meta-adaptive doesn't use agent instances - derive everything from DB
+  
   const activeSessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null },
-    select: { id: true, symbol: true, mode: true, profileJson: true, isSmartAgent: true },
+    select: { 
+      id: true, 
+      symbol: true, 
+      mode: true, 
+      profileJson: true, 
+      isSmartAgent: true,
+      haltedAt: true,
+      planJson: true,
+      positions: true,
+    },
   });
   const sessionIds = activeSessions.map((session) => session.id);
 
@@ -269,7 +275,6 @@ export async function computeAgentHealth(
 
   const agentsHealth: AgentHealthRow[] = activeSessions.map((session) => {
     const telemetry = telemetryBySession.get(session.id) ?? null;
-    const agent = agentById.get(session.id) ?? null;
 
     const telemetryTradeCount = Number(telemetry?.tradeCount24h ?? 0);
     const fallbackTradeCount = fallbackCounts.get(session.id);
@@ -296,15 +301,15 @@ export async function computeAgentHealth(
     else if (isStale) status = 'stale';
     else if (tradeCount24h === 0) status = 'idle';
 
-    const runtimeAggressiveness = normalizeAggressiveness((agent as any)?.aggressiveness ?? (agent as any)?.profile?.aggressiveness);
+    // Get aggressiveness from session/telemetry (no agent runtime needed)
     let persistedAggressiveness: AgentAggressiveness | null = null;
     if (session.profileJson && typeof session.profileJson === 'object' && !Array.isArray(session.profileJson)) {
       persistedAggressiveness = normalizeAggressiveness((session.profileJson as Record<string, unknown>).aggressiveness);
     }
     const telemetryAggressiveness = normalizeAggressiveness((telemetry as any)?.profile?.aggressiveness);
-    const aggressiveness = runtimeAggressiveness || telemetryAggressiveness || persistedAggressiveness;
+    const aggressiveness = telemetryAggressiveness || persistedAggressiveness;
 
-    const runtimeStrategy = normalizeStrategyEngine((agent as any)?.profile?.strategyEngine ?? (agent as any)?.strategyEngine);
+    // Get strategy engine from session/telemetry (no agent runtime needed)
     let persistedStrategy: AgentStrategyEngine | null = null;
     if (session.profileJson && typeof session.profileJson === 'object' && !Array.isArray(session.profileJson)) {
       const profile = session.profileJson as Record<string, unknown>;
@@ -313,7 +318,7 @@ export async function computeAgentHealth(
       );
     }
     const telemetryStrategy = normalizeStrategyEngine((telemetry as any)?.profile?.strategyEngine ?? (telemetry as any)?.strategyEngine);
-    const strategyEngine = runtimeStrategy || telemetryStrategy || persistedStrategy;
+    const strategyEngine = telemetryStrategy || persistedStrategy;
 
     const performance = fillPerformance.get(session.id) ?? { wins: 0, losses: 0, breakeven: 0 };
 
@@ -323,12 +328,35 @@ export async function computeAgentHealth(
     );
     const isSmartAgent = Boolean((session as any).isSmartAgent || persistedSmart);
 
+    // Derive state from session data (meta-adaptive is stateless)
+    let derivedState = 'SCAN';
+    let hasPosition = false;
+    
+    if ((session as any).haltedAt && !(session as any).stoppedAt) {
+      derivedState = 'COOLDOWN';
+    } else {
+      hasPosition = Array.isArray((session as any).positions) && 
+        (session as any).positions.some((p: any) => p.qty && Number(p.qty) > 0);
+      
+      if (hasPosition) {
+        derivedState = 'MANAGE';
+      } else {
+        const planJson = (session as any).planJson;
+        const hasPlan = planJson && typeof planJson === 'object' 
+          && Object.keys(planJson).length > 0;
+        
+        if (hasPlan) {
+          derivedState = 'ARMED';
+        }
+      }
+    }
+
     return {
       sessionId: session.id,
       symbol: session.symbol,
       mode: session.mode,
-      state: agent?.state ?? null,
-      hasPosition: Boolean(agent?.hasPosition),
+      state: derivedState, // Use derived state instead of stub
+      hasPosition, // Use calculated value instead of agent stub
       tradeCount24h,
       wins24h: performance.wins,
       losses24h: performance.losses,
