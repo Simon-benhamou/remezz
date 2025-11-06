@@ -969,25 +969,37 @@ export class LiveBroker implements Broker {
       const tolerance = desiredPrice !== undefined ? tolerate(desiredPrice) : undefined;
       const currentPrice = current ? pickNum((current as any)?.stopPrice, (current as any)?.triggerPrice, current?.info?.stopPrice, current?.info?.triggerPrice, current?.info?.price) : undefined;
       const priceMatches = desiredPrice === undefined || (Number.isFinite(currentPrice) && Math.abs(currentPrice! - desiredPrice) <= (tolerance ?? 0));
-      for (const order of stopOrders) {
-        if (order === current) continue;
-        await cancelOrderSafe(order);
-      }
-      if (current && priceMatches) {
-        retainedStop = current;
-      } else {
-        if (current) {
-          await cancelOrderSafe(current);
+      
+      // 🚀 FIX: Cancel ALL stop orders first, then create new one if price doesn't match
+      // This prevents duplicate orders when stop is updated frequently
+      const needsUpdate = !current || !priceMatches;
+      
+      if (needsUpdate) {
+        // Cancel ALL existing stop orders (including current)
+        for (const order of stopOrders) {
+          await cancelOrderSafe(order);
         }
+        
+        // Create new stop order with desired price
         if (Number.isFinite(desiredStop) && params.qty > 0) {
           try {
             const slParams: any = { reduceOnly: true, stopPrice: desiredStop, triggerPrice: desiredStop };
             if (String(ex.id).toLowerCase() === 'cryptocom') slParams.type = 'stop_market';
             const slo = await ex.createOrder(symbol, 'market', reduceSide, params.qty, undefined, slParams);
             retainedStop = slo;
-          } catch {}
+          } catch (error) {
+            console.error(`Failed to create stop loss order at ${desiredStop}:`, error);
+          }
         }
+      } else {
+        // Price matches, keep current order and cancel others
+        for (const order of stopOrders) {
+          if (order === current) continue;
+          await cancelOrderSafe(order);
+        }
+        retainedStop = current;
       }
+      
       if (retainedStop) {
         result.slOrderId = normalizeId(retainedStop) || null;
       } else if (result.slOrderId === undefined && wantsStop) {

@@ -242,6 +242,9 @@ export class ReboundRejectionAgent {
         updatedAt: number;
       }
     | null = null;
+  
+  // 🚀 THROTTLE: Track last protective orders sync to avoid spamming exchange
+  private lastProtectiveOrdersSyncMs = 0;
 
   // Entry zone intelligence helpers
   public confirmEntrySignal = entryZoneMethods.confirmEntrySignal;
@@ -11160,9 +11163,60 @@ export class ReboundRejectionAgent {
     if (this.profile.mode === 'live') {
       try {
         const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
-        if (!exposure || exposure.qty <= 0) {
-          // Position closed on exchange, clear local state and exit
-          console.log(`Position closed on exchange for ${this.profile.symbol}, clearing local state`);
+        let protectiveOrderExecuted = false;
+        
+        // Check if protective orders (SL/TP) were executed on exchange
+        if (this.pos && (this.pos.slOrderId || this.pos.tpOrderId) && this.profile.userId) {
+          try {
+            const userCredentials = await getUserCredentials(this.profile.userId);
+            if (userCredentials) {
+              const ex = await getUserExchange(this.profile.userId, userCredentials);
+              const s = await resolveSymbol(this.profile.symbol, this.profile.userId);
+            
+              // Check if SL order was executed
+              if (this.pos.slOrderId) {
+              try {
+                const slOrder = await ex.fetchOrder(this.pos.slOrderId, s).catch(() => null);
+                if (slOrder && (slOrder.status === 'closed' || slOrder.status === 'filled')) {
+                  console.log(`✅ [Manage] SL order ${this.pos.slOrderId} executed (status: ${slOrder.status})`);
+                  protectiveOrderExecuted = true;
+                }
+              } catch (err) {
+                // Order not found might mean it executed and was removed
+                console.log(`⚠️  [Manage] SL order ${this.pos.slOrderId} not found (may have executed)`);
+              }
+            }
+            
+            // Check if TP order was executed
+            if (this.pos.tpOrderId && !protectiveOrderExecuted) {
+              try {
+                const tpOrder = await ex.fetchOrder(this.pos.tpOrderId, s).catch(() => null);
+                if (tpOrder && (tpOrder.status === 'closed' || tpOrder.status === 'filled')) {
+                  console.log(`✅ [Manage] TP order ${this.pos.tpOrderId} executed (status: ${tpOrder.status})`);
+                  protectiveOrderExecuted = true;
+                }
+              } catch (err) {
+                console.log(`⚠️  [Manage] TP order ${this.pos.tpOrderId} not found (may have executed)`);
+              }
+            }
+            }
+          } catch (orderCheckErr) {
+            console.warn(`Failed to check protective order status:`, orderCheckErr);
+          }
+        }
+        
+        // Position closed if: no exposure OR qty <= 0 OR protective order executed
+        if (!exposure || exposure.qty <= 0 || protectiveOrderExecuted) {
+          const closeReason = protectiveOrderExecuted ? 'protective_order_executed' : 'no_exchange_exposure';
+          console.log(`✅ [Manage] Position closed on exchange for ${this.profile.symbol} (reason: ${closeReason}), clearing local state`);
+          
+          // Store position details before clearing
+          const posDetails = this.pos ? {
+            slOrderId: this.pos.slOrderId,
+            tpOrderId: this.pos.tpOrderId,
+          } : null;
+          
+          // Cancel any remaining protective orders
           if (this.pos) {
             try {
               await (this.broker as any).syncProtective?.({
@@ -11185,11 +11239,29 @@ export class ReboundRejectionAgent {
               });
             }
           }
+          
+          // Clear position and schedule reactivation
           this.pos = null;
           this.trendReversalContext = null;
           this.state = 'EXIT';
           this.lastExitTime = Date.now();
-          broadcast('agent_state', { state: this.state, reason: 'position_closed_on_exchange' }, this.profile.symbol, this.sessionId || undefined);
+          
+          recordOpsEvent({
+            level: 'info',
+            source: 'position_sync',
+            message: 'position_closed_on_exchange_detected_in_manage',
+            sessionId: this.sessionId || undefined,
+            symbol: this.profile.symbol,
+            details: { 
+              reason: closeReason,
+              protectiveOrderExecuted,
+              slOrderId: posDetails?.slOrderId,
+              tpOrderId: posDetails?.tpOrderId,
+              exposure: exposure ? { qty: exposure.qty, side: exposure.side } : null,
+            },
+          });
+          
+          broadcast('agent_state', { state: this.state, reason: closeReason }, this.profile.symbol, this.sessionId || undefined);
           this.scheduleReactivation('position_closed_on_exchange');
           return;
         }
@@ -12403,8 +12475,20 @@ export class ReboundRejectionAgent {
 
     console.log(`Updated trailing stop: ${oldStop.toFixed(6)} → ${newTrailPrice.toFixed(6)}`);
 
-    // Update protective orders
-    await this.syncProtectiveOrders('trail_update');
+    // 🚀 THROTTLE: Only sync protective orders if stop moved significantly or enough time passed
+    const stopMovementPct = Math.abs((newTrailPrice - oldStop) / oldStop) * 100;
+    const timeSinceLastSync = Date.now() - this.lastProtectiveOrdersSyncMs;
+    const minSyncIntervalMs = Number(process.env.PROTECTIVE_ORDERS_SYNC_INTERVAL_MS ?? 30000); // 30 secondes par défaut
+    const significantMoveThreshold = Number(process.env.PROTECTIVE_ORDERS_MIN_MOVE_PCT ?? 0.5); // 0.5% par défaut
+    
+    const shouldSync = stopMovementPct >= significantMoveThreshold || timeSinceLastSync >= minSyncIntervalMs;
+    
+    if (shouldSync) {
+      await this.syncProtectiveOrders('trail_update');
+      this.lastProtectiveOrdersSyncMs = Date.now();
+    } else {
+      console.log(`⏭️ Skipping protective orders sync (movement: ${stopMovementPct.toFixed(3)}%, last sync: ${(timeSinceLastSync/1000).toFixed(1)}s ago)`);
+    }
   }
 
   public async checkPartialExits(price: number, snap: TechnicalSnapshot): Promise<void> {
