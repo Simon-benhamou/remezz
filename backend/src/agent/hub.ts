@@ -35,11 +35,11 @@ export class AgentsHub {
   get(sessionId: string) { return this.agents.get(sessionId) || null; }
 
   async activate(sessionId: string, profile: ActivationProfile) {
-    // Meta-adaptive doesn't use agent instances - create minimal stub with state
+    // Meta-adaptive doesn't use agent instances - create minimal stub with runtime state
     const a: any = { 
       sessionId, 
       profile,
-      state: 'OBSERVING', // Default state for meta-adaptive agents
+      state: 'ACTIVE', // Meta-adaptive agents are stateless - show as ACTIVE when running
       bias: 'none'
     };
     this.agents.set(sessionId, a);
