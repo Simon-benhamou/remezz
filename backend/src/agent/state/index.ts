@@ -3258,14 +3258,18 @@ export class ReboundRejectionAgent {
       })();
       
       const scaled = safeBase * qualFactor * stopFactor * riskFactor * confidenceFactor;
-      const leverageFloor = Math.max(2, minLevCfg); // Enforce minimum 2x leverage for low confidence trades
+      const leverageFloor = Math.max(
+        getConfig().CONFIDENCE_LEVERAGE_MIN,
+        minLevCfg
+      ); // Enforce minimum leverage for low confidence trades
       effectiveLev = Math.max(
         Math.min(levGuard, scaled),
         Math.min(levGuard, leverageFloor)
       );
       
       // Log confidence-based leverage adjustment
-      if (Math.abs(confidenceFactor - 1.0) > 0.05) {
+      const logThreshold = getConfig().CONFIDENCE_LEVERAGE_LOG_THRESHOLD;
+      if (Math.abs(confidenceFactor - 1.0) > logThreshold) {
         recordOpsEvent({
           level: 'info',
           source: 'leverage_confidence',

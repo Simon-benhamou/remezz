@@ -113,10 +113,21 @@ Unit tests validate the confidence-to-leverage mapping across different scenario
 
 ## Configuration
 
-The feature works with existing configuration:
+The feature works with existing configuration and new environment variables:
+
+### Agent Profile Settings
 - `profile.maxLeverage`: Sets the maximum leverage cap (e.g., 10)
 - `profile.minLeverage`: Sets the minimum leverage floor (default 2)
 - `profile.dynamicLeverage`: Must be enabled (default: true)
+
+### Environment Variables
+- `CONFIDENCE_LEVERAGE_MIN`: Minimum leverage floor for confidence-based scaling (default: 2)
+  - Can be set via environment variable to adjust risk policy
+  - Example: `CONFIDENCE_LEVERAGE_MIN=3` for more conservative minimum
+  
+- `CONFIDENCE_LEVERAGE_LOG_THRESHOLD`: Minimum confidence factor difference to trigger logging (default: 0.05)
+  - Reduces log noise when confidence factor is near 1.0
+  - Example: `CONFIDENCE_LEVERAGE_LOG_THRESHOLD=0.1` for less verbose logging
 
 ## Monitoring
 
