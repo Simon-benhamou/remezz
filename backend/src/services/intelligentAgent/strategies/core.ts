@@ -118,11 +118,14 @@ function enforceCacheSizeLimits(): void {
   }
   
   // Clean volatility cache
+  // Note: volatilityCache stores only booleans without timestamps
+  // Since we can't implement true LRU without timestamps, we keep oldest keys
+  // This is acceptable as volatility checks are frequent and uniform across symbols
   if (volatilityCache.size > MAX_VOLATILITY_CACHE_SIZE) {
     const count = volatilityCache.size - MAX_VOLATILITY_CACHE_SIZE;
     const keys = Array.from(volatilityCache.keys()).slice(0, count);
     keys.forEach(key => volatilityCache.delete(key));
-    console.log(`🧹 Cleaned ${count} entries from volatilityCache`);
+    console.log(`🧹 Cleaned ${count} entries from volatilityCache (FIFO eviction)`);
   }
   
   // Clean ML prediction cache
@@ -157,7 +160,8 @@ function cleanExpiredCacheEntries(): void {
 }
 
 // Run cache cleanup periodically (every 5 minutes)
-if (typeof setInterval !== 'undefined') {
+// Only run in Node.js environment (not during module bundling/analysis)
+if (typeof setInterval !== 'undefined' && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
   setInterval(() => {
     enforceCacheSizeLimits();
     cleanExpiredCacheEntries();

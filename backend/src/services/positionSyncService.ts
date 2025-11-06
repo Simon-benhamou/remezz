@@ -112,10 +112,10 @@ export class PositionSyncService {
       // Get exchange position with timeout
       const exchangePos = await Promise.race([
         inspectExposure(agent.profile.symbol, agent.profile.userId),
-        new Promise((_, reject) => 
+        new Promise<null>((_, reject) => 
           setTimeout(() => reject(new Error('Exchange position query timeout')), SYNC_TIMEOUT_MS)
         )
-      ]) as any;
+      ]);
 
       // Detect desync type
       const desyncType = this.detectDesyncType(localPos, exchangePos);
@@ -161,7 +161,10 @@ export class PositionSyncService {
   /**
    * Detect type of position desynchronization
    */
-  private detectDesyncType(localPos: any, exchangePos: any): PositionDesyncType {
+  private detectDesyncType(
+    localPos: { qty?: number } | null | undefined,
+    exchangePos: { qty?: number } | null | undefined
+  ): PositionDesyncType {
     const localQty = localPos?.qty || 0;
     const exchangeQty = exchangePos?.qty || 0;
 
@@ -193,8 +196,8 @@ export class PositionSyncService {
    */
   private async reconcileDesync(
     agent: ReboundRejectionAgent,
-    localPos: any,
-    exchangePos: any,
+    localPos: { qty?: number; side?: 'buy' | 'sell'; slOrderId?: string; tpOrderId?: string } | null | undefined,
+    exchangePos: { qty?: number; side?: 'buy' | 'sell'; entry?: number } | null | undefined,
     desyncType: PositionDesyncType
   ): Promise<SyncResult> {
     const sessionId = agent.sessionId!;
@@ -318,12 +321,17 @@ export class PositionSyncService {
   /**
    * Clean up protective orders (SL/TP) for a position
    */
-  private async cleanupProtectiveOrders(agent: ReboundRejectionAgent, localPos: any): Promise<void> {
+  private async cleanupProtectiveOrders(
+    agent: ReboundRejectionAgent, 
+    localPos: { side?: 'buy' | 'sell'; slOrderId?: string; tpOrderId?: string } | null | undefined
+  ): Promise<void> {
     if (!localPos || !agent.broker) return;
 
     try {
       // Call broker's syncProtective with zero quantity to cancel orders
-      const syncProtectiveMethod = (agent.broker as any).syncProtective;
+      // Type guard to check if method exists
+      const broker = agent.broker as any;
+      const syncProtectiveMethod = broker.syncProtective;
       
       if (typeof syncProtectiveMethod === 'function') {
         await syncProtectiveMethod({
