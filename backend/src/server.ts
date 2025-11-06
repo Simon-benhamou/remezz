@@ -9,6 +9,7 @@ import { authMiddleware } from "./utils/security.js";
 import { router as authRouter } from "./routes/auth.js";
 import { router as userRouter } from "./routes/user.js";
 import { router as debugRouter } from "./routes/debug.js";
+import { router as debugApiKeysRouter } from "./routes/debug-apikeys.js";
 import { router as statusRouter } from "./routes/status.js";
 import { router as strategyRouter } from "./routes/strategy.js";
 import { router as agentRouter } from "./routes/agent.js";
@@ -111,6 +112,7 @@ app.get("/api/health", (_req, res) =>
 app.use("/api/status", statusRouter);
 app.use("/api/user", userRouter);
 app.use("/api/debug", debugRouter);
+app.use("/api/debug-apikeys", debugApiKeysRouter);
 app.use("/api/debug-selection", debugSelectionRouter);
 app.use("/api/strategy", strategyRouter);
 app.use("/api/agent", ...agentRateLimiters, agentRouter);
