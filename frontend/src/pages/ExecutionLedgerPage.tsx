@@ -128,7 +128,7 @@ export default function ExecutionLedgerPage() {
 
       if (viewMode === 'global') {
         const sessionIds = sessions.map((session) => session.id).filter((id: string) => !!id);
-        const [allDataRaw, metricsListRaw] = await Promise.all([
+        const [allDataRaw, metricsListRaw, overviewData] = await Promise.all([
           Promise.all(
             sessions.map(async (session) => {
               try {
@@ -153,6 +153,7 @@ export default function ExecutionLedgerPage() {
             })
           ),
           sessionIds.length ? api.getSessionMetrics(sessionIds) : Promise.resolve<SessionMetrics[]>([]),
+          api.overview(mode),
         ]);
         const allData = allDataRaw as TradeRow[][];
         const flatData = allData
@@ -175,9 +176,13 @@ export default function ExecutionLedgerPage() {
           ? [metricsListRawTyped]
           : [];
         if (metricsList.length) {
+          // Get actual portfolio capital from overview instead of summing session allocations
+          const portfolioCapital = mode === 'paper'
+            ? (overviewData?.paperBalance?.equityUsd ?? overviewData?.paperBalance?.freeUsd ?? 0)
+            : (overviewData?.exchangeBalance?.totalUsd ?? 0);
+          
           const aggregated = metricsList.reduce<SessionMetrics>(
             (acc, metric) => {
-              acc.startingBalanceUsd += Number(metric?.startingBalanceUsd ?? 0);
               acc.realizedPnlUsd += Number(metric?.realizedPnlUsd ?? 0);
               acc.feesUsd += Number(metric?.feesUsd ?? 0);
               acc.netPnlUsd += Number(metric?.netPnlUsd ?? 0);
@@ -186,7 +191,7 @@ export default function ExecutionLedgerPage() {
             },
             {
               sessionId: 'global',
-              startingBalanceUsd: 0,
+              startingBalanceUsd: portfolioCapital,
               realizedPnlUsd: 0,
               feesUsd: 0,
               netPnlUsd: 0,
@@ -194,8 +199,8 @@ export default function ExecutionLedgerPage() {
               tradeCount: 0,
             }
           );
-          aggregated.roiPct = aggregated.startingBalanceUsd > 0
-            ? (aggregated.netPnlUsd / aggregated.startingBalanceUsd) * 100
+          aggregated.roiPct = portfolioCapital > 0
+            ? (aggregated.netPnlUsd / portfolioCapital) * 100
             : 0;
           setGlobalPerf(aggregated);
         } else {
@@ -203,9 +208,10 @@ export default function ExecutionLedgerPage() {
         }
         setSessionPerf(null);
       } else {
-        const [data, metricsResponse] = await Promise.all([
+        const [data, metricsResponse, overviewData] = await Promise.all([
           api.getTrades(sessionId, params),
           api.getSessionMetrics(sessionId),
+          api.overview(mode),
         ]);
         const meta = sessionMeta[sessionId];
         const decorated = data.map((trade: any) => ({
@@ -217,7 +223,20 @@ export default function ExecutionLedgerPage() {
         }));
         setRows(decorated as TradeRow[]);
         const metricsArray = Array.isArray(metricsResponse) ? metricsResponse : [metricsResponse];
-        const matched = metricsArray.find((metric: SessionMetrics) => metric.sessionId === sessionId) || null;
+        let matched = metricsArray.find((metric: SessionMetrics) => metric.sessionId === sessionId) || null;
+        
+        // Recalculate ROI based on portfolio capital pool instead of session startBalance
+        if (matched) {
+          const portfolioCapital = mode === 'paper'
+            ? (overviewData?.paperBalance?.equityUsd ?? overviewData?.paperBalance?.freeUsd ?? 0)
+            : (overviewData?.exchangeBalance?.totalUsd ?? 0);
+          matched = {
+            ...matched,
+            startingBalanceUsd: portfolioCapital,
+            roiPct: portfolioCapital > 0 ? (matched.netPnlUsd / portfolioCapital) * 100 : 0,
+          };
+        }
+        
         setSessionPerf(matched);
         setGlobalPerf(null);
       }

@@ -14,6 +14,10 @@ export type SessionPerformanceMetrics = {
  * Aggregate realized PnL/fees/ROI for one or multiple sessions using order/fill joins.
  * Some fills emitted by older agents never captured sessionId, so we fallback to the
  * parent order's session linkage to ensure metrics stay accurate.
+ * 
+ * Note: For capital pool systems (paper mode), the roiPct calculated here uses session.startBalanceUsd
+ * which is just an initial allocation. Frontend should recalculate ROI using actual portfolio capital
+ * to show each agent's contribution to the total pool ROI.
  */
 export async function getSessionPerformanceMetrics(
   sessionIds: string[]
