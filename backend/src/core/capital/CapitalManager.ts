@@ -11,12 +11,20 @@ import {
   usdMin,
   usdNeg,
   toUSD,
+  AgentEquitySnapshot,
 } from './types.js';
 import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+
+type AgentEquity = {
+  startingEquity: USD;
+  cumulativePnl: USD;
+  lastUpdated: number;
+};
 
 type CapitalStore = {
   reservations: Map<string, Reservation>;
   symbolExposure: Map<string, USD>;
+  agentEquity: Map<string, AgentEquity>;
 };
 
 export class CapitalManager {
@@ -54,7 +62,65 @@ export class CapitalManager {
     await this.runExclusive(async () => {
       this.store.reservations.clear();
       this.store.symbolExposure.clear();
+      this.store.agentEquity.clear();
     });
+  }
+
+  /**
+   * Initialize or update an agent's starting equity.
+   * This should be called when an agent starts or when we want to set their equity baseline.
+   */
+  async initializeAgentEquity(agentId: string, startingEquity: USD | number | string): Promise<void> {
+    await this.runExclusive(async () => {
+      const equity = toUSD(startingEquity);
+      const existing = this.store.agentEquity.get(agentId);
+      if (existing) {
+        // If agent already exists, update starting equity but preserve cumulative PnL
+        existing.startingEquity = equity;
+        existing.lastUpdated = Date.now();
+      } else {
+        // New agent, initialize with zero PnL
+        this.store.agentEquity.set(agentId, {
+          startingEquity: equity,
+          cumulativePnl: ZERO_USD,
+          lastUpdated: Date.now(),
+        });
+      }
+    });
+  }
+
+  /**
+   * Get an agent's current equity (starting equity + cumulative PnL).
+   * Returns null if agent has not been initialized.
+   */
+  getAgentEquity(agentId: string): AgentEquitySnapshot | null {
+    const equity = this.store.agentEquity.get(agentId);
+    if (!equity) return null;
+    
+    return {
+      agentId,
+      startingEquity: equity.startingEquity,
+      cumulativePnl: equity.cumulativePnl,
+      currentEquity: equity.startingEquity.plus(equity.cumulativePnl),
+      lastUpdated: equity.lastUpdated,
+    };
+  }
+
+  /**
+   * Get all agents' equity snapshots
+   */
+  getAllAgentEquity(): AgentEquitySnapshot[] {
+    const snapshots: AgentEquitySnapshot[] = [];
+    for (const [agentId, equity] of this.store.agentEquity.entries()) {
+      snapshots.push({
+        agentId,
+        startingEquity: equity.startingEquity,
+        cumulativePnl: equity.cumulativePnl,
+        currentEquity: equity.startingEquity.plus(equity.cumulativePnl),
+        lastUpdated: equity.lastUpdated,
+      });
+    }
+    return snapshots;
   }
 
   private currentSymbolExposureUSD(symbol: string): USD {
@@ -205,13 +271,27 @@ export class CapitalManager {
     this.setSymbolExposure(symbol, next);
   }
 
-  async applyPnlDelta(symbol: string, pnlUSD: USD | number | string): Promise<void> {
+  async applyPnlDelta(agentId: string, symbol: string, pnlUSD: USD | number | string): Promise<void> {
     const pnl = toUSD(pnlUSD);
     if (pnl.raw === 0n) return;
     await this.runExclusive(async () => {
       await this.provider.applyLedgerDelta({ freeUSD: pnl });
       const current = this.currentSymbolExposureUSD(symbol);
       this.setSymbolExposure(symbol, current);
+      
+      // Update agent's cumulative PnL
+      const agentEquity = this.store.agentEquity.get(agentId);
+      if (agentEquity) {
+        agentEquity.cumulativePnl = agentEquity.cumulativePnl.plus(pnl);
+        agentEquity.lastUpdated = Date.now();
+      } else {
+        // Agent not initialized, initialize with zero starting equity
+        this.store.agentEquity.set(agentId, {
+          startingEquity: ZERO_USD,
+          cumulativePnl: pnl,
+          lastUpdated: Date.now(),
+        });
+      }
     });
   }
 

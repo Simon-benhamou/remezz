@@ -34,6 +34,7 @@ function createManager(balance: string | number = '1000') {
   }, {
     reservations: new Map(),
     symbolExposure: new Map(),
+    agentEquity: new Map(),
   });
   return { manager, provider };
 }

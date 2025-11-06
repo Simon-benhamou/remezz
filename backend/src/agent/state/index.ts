@@ -807,7 +807,15 @@ export class ReboundRejectionAgent {
     this.maxNotionalCapUsd = perSymbolCap.raw > ZERO_USD.raw
       ? perSymbolCap.toNumber()
       : Infinity;
-    profile.startBalanceUsd = snapshot.totalUSD.toNumber();
+    
+    // Initialize agent's starting equity in the capital manager
+    // Use profile.startBalanceUsd if provided, otherwise use a portion of the pool
+    const agentStartingEquity = profile.startBalanceUsd && profile.startBalanceUsd > 0
+      ? profile.startBalanceUsd
+      : snapshot.totalUSD.toNumber();
+    await capitalManager.initializeAgentEquity(agentCapitalId, agentStartingEquity);
+    
+    profile.startBalanceUsd = agentStartingEquity;
     this.lastKnownEquityUsd = profile.startBalanceUsd;
 
     this.state = 'SCAN';
@@ -11339,7 +11347,8 @@ export class ReboundRejectionAgent {
         const equityAfter = Number(balanceAfter?.equityUsd ?? this.lastKnownEquityUsd ?? this.profile.startBalanceUsd ?? 0);
         const baseEquity = this.lastKnownEquityUsd > 0 ? this.lastKnownEquityUsd : (this.profile.startBalanceUsd ?? equityAfter);
         const pnlPct = baseEquity > 0 ? (realizedPnl / baseEquity) * 100 : 0;
-        this.circuitBreaker.onTradeResult(new Date(), pnlPct, equityAfter);
+        // Pass realizedPnl (in USD) to track per-agent daily PnL
+        this.circuitBreaker.onTradeResult(new Date(), pnlPct, equityAfter, realizedPnl);
         this.lastKnownEquityUsd = equityAfter;
         this.syncCircuitBreakerTelemetry();
 
