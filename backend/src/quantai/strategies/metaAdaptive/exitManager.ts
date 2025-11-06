@@ -198,23 +198,35 @@ export function maybeAdjustOrExit({
   }
   const effectiveTrailMultiplier = activeTrailMultiplier;
 
+  // 🚀 EXIT STRATEGY MODE: partial/trailing/hybrid
+  const exitStrategyMode = process.env.EXIT_STRATEGY_MODE ?? 'partial';
+  const shouldUsePartialExits = exitStrategyMode === 'partial' || 
+                                 (exitStrategyMode === 'hybrid' && triggered.size === 0);
+
   // Take profit detection (first non-triggered target)
-  for (let i = 0; i < targets.length; i += 1) {
-    if (triggered.has(i)) continue;
-    const target = targets[i];
-    const hit = side === 'long' ? lastPrice >= target : lastPrice <= target;
-    if (hit) {
-      if (!effectiveHoldSatisfied) {
-        return { action: 'hold', reason: 'min_hold_active' };
+  // OPTIMIZATION: Skip TPs if trailing mode enabled (let trailing capture all gains)
+  if (shouldUsePartialExits) {
+    for (let i = 0; i < targets.length; i += 1) {
+      if (triggered.has(i)) continue;
+      
+      // Hybrid mode: only take first TP at 2R (50%), rest trails
+      if (exitStrategyMode === 'hybrid' && i > 0) break;
+      
+      const target = targets[i];
+      const hit = side === 'long' ? lastPrice >= target : lastPrice <= target;
+      if (hit) {
+        if (!effectiveHoldSatisfied) {
+          return { action: 'hold', reason: 'min_hold_active' };
+        }
+        const canPartial =
+          profitLockArmed ||
+          allowPartialBeforeMinR ||
+          bypassHoldActive;
+        if (!canPartial) {
+          return { action: 'hold', reason: 'profit_lock_pending' };
+        }
+        return { action: 'take_partial', reason: `TP${i + 1} hit at ${target.toFixed(4)}`, tpHitIndex: i };
       }
-      const canPartial =
-        profitLockArmed ||
-        allowPartialBeforeMinR ||
-        bypassHoldActive;
-      if (!canPartial) {
-        return { action: 'hold', reason: 'profit_lock_pending' };
-      }
-      return { action: 'take_partial', reason: `TP${i + 1} hit at ${target.toFixed(4)}`, tpHitIndex: i };
     }
   }
 
@@ -255,16 +267,22 @@ export function maybeAdjustOrExit({
     return null;
   };
 
-  if (!profitLockArmed && preLockMinR != null && rNow >= preLockMinR) {
+  // 🚀 OPTIMIZED TRAILING: Start earlier for trailing/hybrid modes
+  const trailingStartR = exitStrategyMode !== 'partial' 
+    ? Number(process.env.TRAILING_START_R ?? 0.8)  // Démarre à 0.8R
+    : (preLockMinR ?? 1.2); // Mode partial garde 1.2R
+  
+  if (!profitLockArmed && rNow >= trailingStartR) {
     const desiredStop = computeTrailCandidate({
       multiplier: trailingMode === 'percent' ? undefined : effectiveTrailMultiplier * preLockTrailFactor,
       percent: trailingMode === 'percent' ? (percentTrail ?? 0.35) * preLockTrailFactor : undefined,
     });
     let newStop = applyStopCandidate(desiredStop, false);
     if (baselineRisk > 0) {
+      const breakevenR = Number(process.env.BREAKEVEN_AT_R ?? 1.2);
       const breakeven = side === 'long'
-        ? entryPrice + breakevenOffsetR * baselineRisk
-        : entryPrice - breakevenOffsetR * baselineRisk;
+        ? entryPrice + breakevenR * baselineRisk
+        : entryPrice - breakevenR * baselineRisk;
       if (side === 'long' && breakeven > stop + 1e-8) {
         const candidate = newStop != null ? Math.max(newStop, breakeven) : breakeven;
         if (candidate > stop + 1e-8) {
@@ -283,10 +301,20 @@ export function maybeAdjustOrExit({
     }
   }
 
+  // 🚀 MAIN TRAILING LOGIC: Active dès que profit locked
   if (effectiveHoldSatisfied && profitLockArmed && rNow >= trailAfter) {
+    // OPTIMIZATION: Mode trailing utilise distance plus serrée pour capturer plus
+    const trailingMultiplier = exitStrategyMode === 'trailing'
+      ? Math.min(effectiveTrailMultiplier, Number(process.env.TRAILING_ATR_MULT ?? 1.0))
+      : effectiveTrailMultiplier;
+    
+    const trailingPercent = exitStrategyMode === 'trailing'
+      ? Math.min(percentTrail ?? 0.35, Number(process.env.TRAILING_PERCENT_FALLBACK ?? 2.5) / 100)
+      : percentTrail;
+    
     const desiredStop = computeTrailCandidate({
-      multiplier: trailingMode === 'percent' ? undefined : effectiveTrailMultiplier,
-      percent: trailingMode === 'percent' ? percentTrail ?? undefined : undefined,
+      multiplier: trailingMode === 'percent' ? undefined : trailingMultiplier,
+      percent: trailingMode === 'percent' ? trailingPercent ?? undefined : undefined,
     });
     const allowLoosen = volatilitySpike && (cfg.volatilityExit?.widenMultiplier ?? 1) > 1;
     const newStop = applyStopCandidate(desiredStop, allowLoosen);

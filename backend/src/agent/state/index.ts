@@ -3281,30 +3281,33 @@ export class ReboundRejectionAgent {
       const minFactor = Math.min(1, Math.max(minLevCfg, 1) / safeBase);
       const qualityForLev = Math.max(0.8, Math.min(1.5, qualityMultiplier));
       const qNorm = (qualityForLev - 0.8) / (1.5 - 0.8);
-      const qualFactor = minFactor + (1 - minFactor) * Math.max(0, Math.min(1, qNorm));
-      const stopFactor = stopPct > 2.5 ? Math.max(0.6, 1 - (stopPct - 2.5) / 7.5) : 1;
+      // OPTIMISÉ: qualFactor moins punitif (0.85-1.0 au lieu de 0.8-1.0)
+      const qualFactor = Math.max(0.85, minFactor + (1 - minFactor) * Math.max(0, Math.min(1, qNorm)));
+      // OPTIMISÉ: stopFactor moins punitif (0.75 au lieu de 0.6)
+      const stopFactor = stopPct > 2.5 ? Math.max(0.75, 1 - (stopPct - 2.5) / 10) : 1;
       const baseRisk = Math.max(1e-6, this.profile.riskPerTradePct);
-      const riskFactor = Math.max(0.5, Math.min(1.1, dynamicRiskPct / baseRisk));
+      // OPTIMISÉ: riskFactor permet boost jusqu'à 1.3x (au lieu de 1.1x)
+      const riskFactor = Math.max(0.6, Math.min(1.3, dynamicRiskPct / baseRisk));
       
-      // Confidence-based leverage scaling: scale leverage based on trade confidence
-      // Low confidence (0.0-0.5): scale down to 20-50% of base leverage (min 2x)
-      // Medium confidence (0.5-0.75): scale to 50-85% of base leverage
-      // High confidence (0.75-0.9): scale to 85-100% of base leverage
-      // Very high confidence (0.9-1.0): allow full base leverage
+      // Confidence-based leverage scaling: OPTIMIZED pour amplifier les gains
+      // Low confidence (0.0-0.5): scale down to 50-70% of base leverage (plus agressif)
+      // Medium confidence (0.5-0.75): scale to 70-90% of base leverage
+      // High confidence (0.75-0.9): scale to 90-110% of base leverage (boost!)
+      // Very high confidence (0.9-1.0): allow 110-120% of base leverage (boost maximal)
       const confidenceFactor = (() => {
         const conf = Math.max(0, Math.min(1, confidenceScore));
         if (conf < 0.5) {
-          // Low confidence: 0.2 to 0.5 (20% to 50% of base leverage)
-          return 0.2 + (conf / 0.5) * 0.3;
+          // Low confidence: 0.5 to 0.7 (50% to 70% of base leverage) - AUGMENTÉ de 0.2→0.5
+          return 0.5 + (conf / 0.5) * 0.2;
         } else if (conf < 0.75) {
-          // Medium confidence: 0.5 to 0.85
-          return 0.5 + ((conf - 0.5) / 0.25) * 0.35;
+          // Medium confidence: 0.7 to 0.9 - AUGMENTÉ de 0.5→0.7
+          return 0.7 + ((conf - 0.5) / 0.25) * 0.2;
         } else if (conf < 0.9) {
-          // High confidence: 0.85 to 1.0
-          return 0.85 + ((conf - 0.75) / 0.15) * 0.15;
+          // High confidence: 0.9 to 1.1 - BOOST au-delà de 100%!
+          return 0.9 + ((conf - 0.75) / 0.15) * 0.2;
         } else {
-          // Very high confidence: full leverage
-          return 1.0;
+          // Very high confidence: 1.1 to 1.2 - BOOST MAXIMAL +20%
+          return 1.1 + ((conf - 0.9) / 0.1) * 0.1;
         }
       })();
       
@@ -3313,8 +3316,10 @@ export class ReboundRejectionAgent {
         getConfig().CONFIDENCE_LEVERAGE_MIN,
         minLevCfg
       ); // Enforce minimum leverage for low confidence trades
+      // OPTIMISÉ: On permet au scaled de dépasser baseLev si confidenceFactor > 1.0
+      const cappedScaled = Math.min(levGuard * 1.2, scaled); // Max 120% du guard
       effectiveLev = Math.max(
-        Math.min(levGuard, scaled),
+        Math.min(levGuard * 1.2, cappedScaled), // Permet boost jusqu'à 120%
         Math.min(levGuard, leverageFloor)
       );
       
@@ -10756,18 +10761,25 @@ export class ReboundRejectionAgent {
 
       const primaryTp = Array.isArray(this.pos.tp) ? this.pos.tp.find(tp => typeof tp === 'number' && Number.isFinite(tp)) : this.pos.tp;
       const wantsStop = Number.isFinite(this.pos.stop) && this.pos.qty > 0;
-      const wantsTp = typeof primaryTp === 'number' && Number.isFinite(primaryTp) && this.pos.qty > 0;
+      
+      // 🚀 MODE TRAILING: Désactive les ordres TP sur l'exchange
+      // Le trailing interne gérera la sortie complète
+      const exitStrategyMode = process.env.EXIT_STRATEGY_MODE ?? 'partial';
+      const shouldPlaceTpOrders = exitStrategyMode !== 'trailing';
+      const wantsTp = shouldPlaceTpOrders && typeof primaryTp === 'number' && Number.isFinite(primaryTp) && this.pos.qty > 0;
+      
       const params = {
         symbol: this.profile.symbol,
         side: this.pos.side,
         qty: this.pos.qty,
         stopLoss: this.pos.stop,
-        takeProfit: primaryTp,
+        takeProfit: wantsTp ? primaryTp : undefined, // undefined = pas d'ordre TP en mode trailing
         slOrderId: this.pos.slOrderId || null,
         tpOrderId: this.pos.tpOrderId || null
       };
 
-      console.log(`Syncing protective orders for ${this.profile.symbol} (${reason}): SL=${this.pos.stop}, TP=${this.pos.tp}`);
+      const tpDisplay = wantsTp ? this.pos.tp : 'DISABLED (trailing mode)';
+      console.log(`Syncing protective orders for ${this.profile.symbol} (${reason}): SL=${this.pos.stop}, TP=${tpDisplay}`);
 
       const result = await (this.broker as any).syncProtective(params);
 
@@ -12398,6 +12410,13 @@ export class ReboundRejectionAgent {
   public async checkPartialExits(price: number, snap: TechnicalSnapshot): Promise<void> {
     if (!this.pos || !this.plan || this.pos.partialTaken) return;
     if (this.pos.contextTrail?.enabled) return;
+    
+    // 🚀 MODE TRAILING: Désactive les sorties partielles
+    // On garde 100% de la position pour le trailing stop
+    const exitStrategyMode = process.env.EXIT_STRATEGY_MODE ?? 'partial';
+    if (exitStrategyMode === 'trailing') {
+      return; // Pas de sorties partielles en mode trailing
+    }
 
     const firstR = Number(this.plan?.plan?.risk?.tp?.[0]?.value ?? this.plan?.rPrices?.[0]?.r ?? 2.0) || 2.0;
     const baseDistance = Math.max(1e-12,
