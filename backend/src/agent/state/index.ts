@@ -1072,6 +1072,12 @@ export class ReboundRejectionAgent {
             tpOrderId: this.pos.tpOrderId,
           };
           
+          // 🚀 FIX: Settle capital BEFORE clearing position to release reserved capital
+          if (this.pos && this.profile?.symbol) {
+            const freedUsd = this.pos.qty * this.pos.entry;
+            await this.settleCapital(this.profile.symbol, freedUsd);
+          }
+          
           this.pos = null;
           this.trendReversalContext = null;
           this.lastExitTime = Date.now();
@@ -11240,6 +11246,12 @@ export class ReboundRejectionAgent {
             }
           }
           
+          // 🚀 FIX: Settle capital BEFORE clearing position to release reserved capital
+          if (this.pos && this.profile?.symbol) {
+            const freedUsd = this.pos.qty * this.pos.entry;
+            await this.settleCapital(this.profile.symbol, freedUsd);
+          }
+          
           // Clear position and schedule reactivation
           this.pos = null;
           this.trendReversalContext = null;
@@ -11275,6 +11287,13 @@ export class ReboundRejectionAgent {
         const currentQty = Number(this.pos?.qty ?? 0);
         if (!this.pos || !Number.isFinite(currentQty) || currentQty <= 1e-8) {
           console.log(`Paper position cleared for ${this.profile.symbol}, transitioning to EXIT`);
+          
+          // 🚀 FIX: Settle capital BEFORE clearing position to release reserved capital
+          if (this.pos && this.profile?.symbol) {
+            const freedUsd = this.pos.qty * this.pos.entry;
+            await this.settleCapital(this.profile.symbol, freedUsd);
+          }
+          
           this.pos = null;
           this.trendReversalContext = null;
           this.state = 'EXIT';

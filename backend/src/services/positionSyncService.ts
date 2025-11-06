@@ -212,6 +212,12 @@ export class PositionSyncService {
         // Clean up protective orders first
         await this.cleanupProtectiveOrders(agent, localPos);
 
+        // 🚀 FIX: Settle capital BEFORE clearing position to release reserved capital
+        if (agent.pos && agent.profile?.symbol) {
+          const freedUsd = agent.pos.qty * agent.pos.entry;
+          await (agent as any).settleCapital?.(agent.profile.symbol, freedUsd);
+        }
+
         // Clear agent position
         agent.pos = null;
         agent.trendReversalContext = null;
