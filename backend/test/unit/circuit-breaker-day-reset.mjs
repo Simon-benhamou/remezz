@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 const { CircuitBreaker } = await import('../../dist/src/quantai/index.js');
 
+const ONE_MINUTE_MS = 60_000;
+
 const riskConfig = {
   maxConsecutiveLosses: 3,
   cooldownMinutes: 60,
@@ -29,11 +31,11 @@ circuit.canOpenTrade(day1, 10_000);
 circuit.onBeforeOpen(day1, 10_000);
 circuit.onTradeResult(day1, -0.02, 9_800);
 
-const time2 = new Date(day1.getTime() + 60_000);
+const time2 = new Date(day1.getTime() + ONE_MINUTE_MS);
 circuit.onBeforeOpen(time2, 9_800);
 circuit.onTradeResult(time2, -0.03, 9_700);
 
-const time3 = new Date(day1.getTime() + 120_000);
+const time3 = new Date(day1.getTime() + 2 * ONE_MINUTE_MS);
 circuit.onBeforeOpen(time3, 9_700);
 circuit.onTradeResult(time3, -0.04, 9_600);
 
@@ -43,8 +45,8 @@ assert.equal(state1.consecutiveLosses, 3, 'Should have 3 consecutive losses');
 assert.equal(state1.tradesToday, 3, 'Should have 3 trades today');
 assert.ok(state1.cooldownUntil instanceof Date, 'Should have cooldown active');
 
-const stillDay1 = new Date(day1.getTime() + 180_000);
-const blocked = circuit.canOpenTrade(stillDay1, 9_600);
+const laterOnDay1 = new Date(day1.getTime() + 3 * ONE_MINUTE_MS);
+const blocked = circuit.canOpenTrade(laterOnDay1, 9_600);
 assert.equal(blocked.allowed, false, 'Should be blocked by cooldown on same day');
 assert.ok(blocked.reason?.includes('Cooldown active until'));
 
