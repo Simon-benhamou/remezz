@@ -1108,10 +1108,15 @@ function evaluateCandidateAgainstFilters(
     reasons.push('atr_missing');
   } else {
     const minAtr = strategy.targetTpPct * 0.5;
-    const maxAtr = strategy.targetTpPct * 3;
+    // 🔒 PROTECTION: Réduire maxAtr de 3x à 2x pour éviter les crashs rapides comme SAPIEN (-7.8% en minutes)
+    const maxAtr = strategy.targetTpPct * 2;
+    // 🔒 REACTIVE MODE: Hard cap at 2.5% ATR pour éviter les tokens ultra-volatils
+    const reactiveMaxAtr = strategy.aggressiveness === 'reactive' ? 2.5 : maxAtr;
+    const effectiveMaxAtr = Math.min(maxAtr, reactiveMaxAtr);
+    
     if (atrPct < minAtr) {
       reasons.push('atr_too_low');
-    } else if (atrPct > maxAtr) {
+    } else if (atrPct > effectiveMaxAtr) {
       reasons.push('atr_too_high');
     }
   }
@@ -4554,13 +4559,25 @@ export function isSymbolEligibleForAuto(base: string, params: { last: number; vo
   const vol = Number(params.volumeUsd || 0);
   const px = Number(params.last || 0);
   if (vol < minByLevel) return { ok: false, reason: 'min_usd_volume', minRequired: minByLevel };
-  // Sub-penny tokens must have substantial volume (relâché)
-  if (px > 0 && px < 0.01 && vol < 2_000_000) return { ok: false, reason: 'subpenny_low_volume', minRequired: 2_000_000 };
-  // Complex/long symbols (often micro-caps) must have higher volume (relâché)
-  const isComplex = base.length >= 6 || /[0-9]/.test(base);
-  if (isComplex && vol < 1_000_000) return { ok: false, reason: 'complex_symbol_low_volume', minRequired: 1_000_000 };
-  // Meme-like names must have extremely strong liquidity
+  
   const qualityContext = buildSymbolQualityContext(base);
+  
+  // 🔒 PROTECTION: Sub-penny tokens sont souvent très volatils (ex: SAPIEN à 0.44$ a chuté -7.8%)
+  // Exception pour les blue chips établies (ADA, XRP, etc.) avec volume massif
+  if (px > 0 && px < 1.0 && vol < 5_000_000) {
+    // Autoriser les majors/blue chips même sub-penny si volume > $100M
+    const isEstablished = qualityContext.isBlueChip || qualityContext.family === 'major';
+    const hasStrongVolume = vol >= 100_000_000; // $100M+
+    
+    if (!isEstablished || !hasStrongVolume) {
+      return { ok: false, reason: 'subpenny_volatile_low_volume', minRequired: 5_000_000 };
+    }
+  }
+  
+  // Complex/long symbols (often micro-caps) must have higher volume
+  const isComplex = base.length >= 6 || /[0-9]/.test(base);
+  if (isComplex && vol < 3_000_000) return { ok: false, reason: 'complex_symbol_low_volume', minRequired: 3_000_000 };
+  // Meme-like names must have extremely strong liquidity
   if (qualityContext.isMeme && vol < 50_000_000) {
     return { ok: false, reason: 'meme_low_volume', minRequired: 50_000_000 };
   }
