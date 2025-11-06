@@ -1,4 +1,4 @@
-export type StrategyEngineOption = 'intraday_dual' | 'meta_adaptive';
+export type StrategyEngineOption = 'meta_adaptive';
 
 export type StrategyChecklistItem = {
   key: string;

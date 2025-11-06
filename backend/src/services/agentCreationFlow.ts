@@ -665,9 +665,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
       : 'reactive';
 
   const rawStrategyEngine = typeof payload.strategyEngine === 'string' ? payload.strategyEngine.toLowerCase() : '';
-  const strategyEngine: 'intraday_dual' | 'meta_adaptive' = rawStrategyEngine.includes('meta')
-    ? 'meta_adaptive'
-    : 'intraday_dual';
+  const strategyEngine: 'meta_adaptive' = 'meta_adaptive'; // Only meta_adaptive supported
 
   const maxLeverage = Math.min(10, Math.max(1, Number(payload.maxLeverage ?? 4)));
   const dailyLossLimitPct = Math.min(4, Math.max(3, Number(payload.dailyLossLimitPct ?? 3.5)));

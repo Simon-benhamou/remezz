@@ -1,5 +1,8 @@
-import { runIntradayBacktest } from '../intradayDual/backtest.js';
-import type { Candle, BacktestResult, TradeLog as IntradayTradeLog } from '../intradayDual/types.js';
+// Intraday removed - keeping minimal type stubs for comparison report
+type IntradayTradeLog = { timestamp: number; pnl: number };
+type Candle = { timestamp: number; open: number; high: number; low: number; close: number; volume: number };
+type BacktestResult = { metrics: any; trades: IntradayTradeLog[] };
+
 import type { TechnicalSnapshot } from '../../../ai/tech.js';
 import { runMetaAdaptiveBacktest, buildMetaAdaptiveSyntheticCandles } from './backtest.js';
 import {
@@ -667,12 +670,21 @@ async function runMetaAdaptiveComparison(): Promise<{
 }
 
 function runIntradayComparison(): { metrics: BacktestResult['metrics']; trades: IntradayTradeLog[] } {
-  const candles = buildIntradayComparisonCandles();
-  const result = runIntradayBacktest(candles, { symbol: 'BTCUSDT', equityUsd: 50_000, slippageBps: 3 });
-  if (!Number.isFinite(result.metrics.cagr) || !Number.isFinite(result.metrics.maxDrawdownPct) || !Number.isFinite(result.metrics.sharpe)) {
-    throw new Error('Intraday metrics must be finite');
-  }
-  return { metrics: result.metrics, trades: result.trades };
+  // Intraday strategy removed - return empty results
+  return {
+    metrics: {
+      totalReturnPct: 0,
+      cagr: 0,
+      sharpe: 0,
+      maxDrawdownPct: 0,
+      trades: 0,
+      hitRate: 0,
+      profitFactor: 0,
+      avgWin: 0,
+      avgLoss: 0
+    },
+    trades: []
+  };
 }
 
 export async function compareStrategies(): Promise<StrategyComparisonReport> {

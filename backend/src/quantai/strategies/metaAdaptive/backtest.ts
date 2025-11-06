@@ -1,13 +1,30 @@
 import { getQuantAIConfig } from '../../config.js';
 import { PositionSizer, type PositionSizingResult } from '../../risk/positionSizing.js';
-import type {
-  BacktestMetrics,
-  BacktestResult,
-  Candle,
-  EntrySignal,
-  TradeLog,
-} from '../intradayDual/types.js';
-import { aggregateCandles } from '../intradayDual/backtest.js';
+// Intraday types - keeping minimal stubs
+export type Candle = { timestamp: number; open: number; high: number; low: number; close: number; volume: number };
+export type TradeLog = any;
+export type EntrySignal = any;
+export type BacktestMetrics = {
+  totalReturnPct: number;
+  cagr: number;
+  sharpe: number;
+  maxDrawdownPct: number;
+  trades: number;
+  hitRate: number;
+  profitFactor: number;
+  avgWin: number;
+  avgLoss: number;
+};
+export type BacktestResult = {
+  metrics: BacktestMetrics;
+  trades: TradeLog[];
+  walkForward?: { start: number; end: number; metrics: BacktestMetrics }[];
+};
+
+function aggregateCandles(candles: Candle[], targetTimeframe: string): Candle[] {
+  // Simple aggregation stub
+  return candles;
+}
 import { computeInitialBracket, maybeAdjustOrExit, type ExitDirective } from './exitManager.js';
 import {
   evaluateRecognizedStrategies,

@@ -15,7 +15,7 @@ import {
 } from '../services/strategyHealth.js';
 import { getRegimeDiagnostics } from '../engine/diagnosticRegistry.js';
 import { AgentHub } from '../agent/hub.js';
-import { evaluateIntradayStrategy } from '../quantai/strategies/intradayDual/live.js';
+// Intraday strategy removed
 
 const COOL_MIN = Number(process.env.LLM_STRATEGY_COOLDOWN_MIN || 3); // minutes - réduit pour réactivité
 const MAX_PER_HOUR = Number(process.env.LLM_STRATEGY_MAX_PER_HOUR || 15); // augmenté pour plus de flexibilité
@@ -108,14 +108,20 @@ export async function requestStrategy(req: Requested & { fresh?: boolean }) {
     }
   }
 
-  const strategyEngine = sessionProfile?.strategyEngine ?? 'intraday_dual';
+  const strategyEngine = sessionProfile?.strategyEngine ?? 'meta_adaptive';
   if (strategyEngine === 'intraday_dual') {
-    try { if (req.sessionId) await setActiveSession(req.sessionId); } catch {}
-    const evaluation = await evaluateIntradayStrategy({
-      symbol: req.symbol,
-      profile: sessionProfile,
-      price: req.priceHint,
-    });
+    // Intraday strategy removed - return empty strategy
+    return {
+      success: false,
+      data: {
+        bias: 'none',
+        confidence: 0,
+        entry: null,
+        risk: {},
+        validity: null,
+      },
+      error: 'Intraday strategy deprecated. Use meta_adaptive instead.'
+    };
     const entry = evaluation.entry;
     const bias: 'long' | 'short' | 'none' = entry ? (entry.side === 'long' ? 'long' : 'short') : 'none';
     const confidence = entry?.confidence ?? evaluation.regime.confidence ?? 0;

@@ -9,12 +9,6 @@ type StrategyMeta = {
 };
 
 export const STRATEGY_META: Record<StrategyEngineOption, StrategyMeta> = {
-  intraday_dual: {
-    label: 'Intraday Dual',
-    description:
-      'Momentum and mean-reversion tactics with rapid execution, tuned for scalping intraday orderflow.',
-    color: '#0ea5e9',
-  },
   meta_adaptive: {
     label: 'Meta Adaptive',
     description:
@@ -24,19 +18,19 @@ export const STRATEGY_META: Record<StrategyEngineOption, StrategyMeta> = {
 };
 
 export const STRATEGY_DESCRIPTIONS: Record<StrategyEngineOption, string> = {
-  intraday_dual: STRATEGY_META.intraday_dual.description,
   meta_adaptive: STRATEGY_META.meta_adaptive.description,
 };
 
-export function normalizeStrategyEngine(value?: string | null): StrategyEngineOption | null {
+export function normalizeStrategyEngine(value: unknown): StrategyEngineOption | null {
   if (!value || typeof value !== 'string') {
     return null;
   }
   const lower = value.toLowerCase();
-  if (lower === 'intraday_dual' || lower.includes('dual')) {
-    return 'intraday_dual';
+  if (lower === 'meta_adaptive' || lower.includes('meta') || lower.includes('adaptive')) {
+    return 'meta_adaptive';
   }
-  if (lower === 'meta_adaptive' || lower.includes('meta')) {
+  // Intraday removed - map to meta_adaptive
+  if (lower.includes('intraday') || lower.includes('dual')) {
     return 'meta_adaptive';
   }
   return null;

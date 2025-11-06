@@ -1,4 +1,18 @@
-import type { ActivationProfile } from "./state.js";
+// ActivationProfile type definition
+export type ActivationProfile = {
+  id: string;
+  symbol: string;
+  mode: string;
+  startBalanceUsd?: number | null;
+  userId?: string | null;
+  budgetFraction?: number;
+  maxLeverage?: number;
+  rrFloor?: number;
+  rrCeil?: number;
+  rrBaseMin?: number;
+  rrExpectancy?: number;
+  [key: string]: any;
+};
 import { resolveRrExpectancyConfig } from "../risk/rrExpectancy.js";
 import { clampBudgetFraction } from "../utils/budget.js";
 import { getConfig, getModeParams } from "../utils/env.js";
