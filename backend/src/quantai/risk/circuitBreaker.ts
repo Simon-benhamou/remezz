@@ -193,6 +193,14 @@ export class CircuitBreaker {
       this.dailyLossRecoveryWinsRemaining = 0;
       this.dailyLossTriggeredAt = null;
     }
+    // Reset consecutive loss streaks and cooldowns on new day
+    // This prevents indefinite blocking from previous day's losses
+    if (this.consecutiveLosses > 0 || this.consecutiveWins > 0 || this.cooldownUntil) {
+      this.consecutiveLosses = 0;
+      this.consecutiveWins = 0;
+      this.cooldownUntil = null;
+      this.cooldownReason = null;
+    }
     this.emitStateChange();
   }
 
