@@ -216,10 +216,10 @@ export class PositionSyncService {
         agent.pos = null;
         agent.trendReversalContext = null;
 
-        // Transition to EXIT state if currently in MANAGE
+        // Transition through cooldown to allow re-arming
         if (agent.state === 'MANAGE') {
-          agent.state = 'EXIT';
           agent.lastExitTime = Date.now();
+          // scheduleReactivation will handle state transition to COOLDOWN then back to ARMED
           (agent as any).scheduleReactivation?.('position_closed_on_exchange');
         }
 

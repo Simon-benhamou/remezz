@@ -141,6 +141,7 @@ function serializeCircuitBreakerState(state: CircuitBreakerState) {
     dailyLossActive: state.dailyLossActive,
     dailyLossTriggeredAt: state.dailyLossTriggeredAt ? state.dailyLossTriggeredAt.toISOString() : null,
     dailyLossRecoveryWinsRemaining: state.dailyLossRecoveryWinsRemaining,
+    dailyPnlUsd: state.dailyPnlUsd,
   };
 }
 
@@ -175,6 +176,7 @@ function deserializeCircuitBreakerState(raw: any): CircuitBreakerState | null {
     dailyLossActive: Boolean((raw as any).dailyLossActive),
     dailyLossTriggeredAt: toDate((raw as any).dailyLossTriggeredAt),
     dailyLossRecoveryWinsRemaining: Math.max(0, Math.floor(toNumber((raw as any).dailyLossRecoveryWinsRemaining, 0))),
+    dailyPnlUsd: toNumber((raw as any).dailyPnlUsd, 0),
   };
 }
 

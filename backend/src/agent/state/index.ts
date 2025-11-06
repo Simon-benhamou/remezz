@@ -17,6 +17,7 @@ import type { ResolvedLeverageCap } from '../../risk/leverageCaps.js';
 import { computeQtyNotional, defaultLimits, RiskDecision } from '../../risk/manager.js';
 import { assessCorrelationLoad } from '../../risk/correlation.js';
 import { getUserCredentials } from '../../services/userCredentials.js';
+import { getUserExchange, resolveSymbol } from '../../exchange/ccxtClient.js';
 import { getAgentRecentWinRate } from '../../services/performance/winrate.js';
 import { updateExecutionTelemetry } from '../../services/executionTelemetry.js';
 import type { StrategyGuardrail } from '../../services/strategyHealth.js';
@@ -968,10 +969,57 @@ export class ReboundRejectionAgent {
     if (this.profile.mode === 'live' && this.state === 'MANAGE' && this.pos) {
       try {
         const exposure = await inspectExposure(this.profile.symbol, this.profile.userId);
-        // Check for position closure: no exposure or quantity <= 0 (consistent with manage() method)
-        if (!exposure || exposure.qty <= 0) {
+        
+        // Additional check: verify protective orders haven't executed
+        let protectiveOrderExecuted = false;
+        if ((this.pos.slOrderId || this.pos.tpOrderId) && this.broker && this.profile.userId) {
+          try {
+            const userCredentials = await getUserCredentials(this.profile.userId);
+            if (userCredentials) {
+              const ex = await getUserExchange(this.profile.userId, userCredentials);
+              const s = await resolveSymbol(this.profile.symbol, this.profile.userId);
+              
+              // Check if SL order was executed
+              if (this.pos.slOrderId) {
+                try {
+                  const slOrder = await ex.fetchOrder(this.pos.slOrderId, s).catch(() => null);
+                  if (slOrder && (slOrder.status === 'closed' || slOrder.status === 'filled' || slOrder.status === 'canceled')) {
+                    console.log(`✅ [Order Check] SL order ${this.pos.slOrderId} status: ${slOrder.status}`);
+                    if (slOrder.status === 'filled' || slOrder.status === 'closed') {
+                      protectiveOrderExecuted = true;
+                    }
+                  }
+                } catch (err) {
+                  // Order not found might mean it executed and was removed
+                  console.log(`⚠️  [Order Check] SL order ${this.pos.slOrderId} not found (may have executed)`);
+                }
+              }
+              
+              // Check if TP order was executed
+              if (this.pos.tpOrderId && !protectiveOrderExecuted) {
+                try {
+                  const tpOrder = await ex.fetchOrder(this.pos.tpOrderId, s).catch(() => null);
+                  if (tpOrder && (tpOrder.status === 'closed' || tpOrder.status === 'filled' || tpOrder.status === 'canceled')) {
+                    console.log(`✅ [Order Check] TP order ${this.pos.tpOrderId} status: ${tpOrder.status}`);
+                    if (tpOrder.status === 'filled' || tpOrder.status === 'closed') {
+                      protectiveOrderExecuted = true;
+                    }
+                  }
+                } catch (err) {
+                  console.log(`⚠️  [Order Check] TP order ${this.pos.tpOrderId} not found (may have executed)`);
+                }
+              }
+            }
+          } catch (orderCheckErr) {
+            console.warn(`Failed to check protective order status:`, orderCheckErr);
+          }
+        }
+        
+        // Check for position closure: no exposure or quantity <= 0 OR protective order executed
+        if (!exposure || exposure.qty <= 0 || protectiveOrderExecuted) {
           // Position closed on exchange (likely via SL/TP), clear local state
-          console.log(`✅ [Live Sync] Position closed on exchange for ${this.profile.symbol} (SL/TP executed), clearing local state`);
+          const closeReason = protectiveOrderExecuted ? 'protective_order_executed' : 'no_exchange_exposure';
+          console.log(`✅ [Live Sync] Position closed on exchange for ${this.profile.symbol} (reason: ${closeReason}), clearing local state`);
           
           // Cancel any remaining protective orders directly via broker
           // Note: We call broker.syncProtective() directly because this.pos will be cleared
@@ -1015,10 +1063,14 @@ export class ReboundRejectionAgent {
             }
           }
 
-          // Clear position and transition to EXIT state
+          // Clear position and schedule reactivation (will transition through COOLDOWN to ARMED)
+          const posDetails = {
+            slOrderId: this.pos.slOrderId,
+            tpOrderId: this.pos.tpOrderId,
+          };
+          
           this.pos = null;
           this.trendReversalContext = null;
-          this.state = 'EXIT';
           this.lastExitTime = Date.now();
           
           recordOpsEvent({
@@ -1028,16 +1080,15 @@ export class ReboundRejectionAgent {
             sessionId: this.sessionId || undefined,
             symbol: this.profile.symbol,
             details: { 
-              reason: 'sltp_executed',
+              reason: closeReason,
+              protectiveOrderExecuted,
+              slOrderId: posDetails.slOrderId,
+              tpOrderId: posDetails.tpOrderId,
               exposure: exposure ? { qty: exposure.qty, side: exposure.side } : null,
             },
           });
           
-          broadcast('agent_state', { 
-            state: this.state, 
-            reason: 'position_closed_on_exchange_sltp_executed' 
-          }, this.profile.symbol, this.sessionId || undefined);
-          
+          // scheduleReactivation will handle state transition to COOLDOWN then ARMED
           this.scheduleReactivation('position_closed_on_exchange');
           return;
         }
