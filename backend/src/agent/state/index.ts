@@ -91,6 +91,7 @@ import { applyPortfolioAllocation as applyPortfolioAllocationHelper, type Portfo
 import { entryZoneMethods } from './rebound/entryZone.js';
 import { liquidityMethods } from './rebound/liquidity.js';
 import { postTradeReview } from '../../jobs/postTradeReview.js';
+import { positionSyncService } from '../../services/positionSyncService.js';
 
 type ContextTrailPreference = {
   breakevenR: number;
@@ -831,6 +832,12 @@ export class ReboundRejectionAgent {
         console.warn('Initial ATR cache update failed:', err)
       );
     }
+    
+    // Start periodic position sync service for live mode
+    if (profile.mode === 'live' && this.sessionId) {
+      positionSyncService.startPeriodicSync(this);
+      console.log(`🔄 Position sync service started for live session ${this.sessionId}`);
+    }
   }
 
   updateRrExpectancySettings(settings: Partial<Pick<ActivationProfile, 'rrFloor' | 'rrCeil' | 'rrBaseMin' | 'rrExpectancy'>>): void {
@@ -1167,6 +1174,7 @@ export class ReboundRejectionAgent {
         this.recordEntryRejection('NO_BIAS', 'Trading plan has no directional bias', { plan: this.plan.bias });
         return;
       }
+      this.enforceAIBiasOverrideExpiry();
       this.applyActiveAIBiasOverride(price, snap);
       // PHASE 3 FIX #1: Use epsilon tolerance for zone check
       const inZone = this.priceInZoneWithEpsilon(price, this.plan.zone);
@@ -10400,6 +10408,11 @@ export class ReboundRejectionAgent {
     this.setMarginHalt(mode, 'external_halt');
     if (mode === 'full') {
       console.log(`Agent ${this.profile?.symbol} halted`);
+      
+      // Stop position sync service when fully halted
+      if (this.sessionId) {
+        positionSyncService.stopPeriodicSync(this.sessionId);
+      }
     } else {
       console.log(`Agent ${this.profile?.symbol} margin-halt entries only`);
     }
@@ -11363,6 +11376,11 @@ export class ReboundRejectionAgent {
           pnlPct: tradePnlPct,
           timestamp: tradeTimestamp
         });
+        
+        // Prevent unbounded growth - keep only last 100 trades
+        if (this.recentTrades.length > 100) {
+          this.recentTrades = this.recentTrades.slice(-100);
+        }
         const tradeRiskUsd = (() => {
           const storedRisk = this.pos?.riskUsd;
           if (storedRisk != null && Number.isFinite(storedRisk) && storedRisk > 0) {
@@ -13434,6 +13452,37 @@ export class ReboundRejectionAgent {
     }
 
     return adjusted;
+  }
+
+  /**
+   * Enforce AI bias override expiry - prevent stale overrides from influencing decisions
+   */
+  public enforceAIBiasOverrideExpiry(): void {
+    if (!this.aiBiasOverride) return;
+    
+    const now = Date.now();
+    if (now > this.aiBiasOverride.expiresAt) {
+      const originalBias = this.aiBiasOverride.originalBias;
+      const duration = Math.round((now - this.aiBiasOverride.appliedAt) / 60000);
+      
+      console.log(`🧠 AI bias override EXPIRED after ${duration}min - restoring original bias ${originalBias}`);
+      
+      recordOpsEvent({
+        level: 'info',
+        source: 'ai_bias_override',
+        message: 'bias_override_expired',
+        sessionId: this.sessionId || undefined,
+        symbol: this.profile?.symbol,
+        details: {
+          overrideBias: this.aiBiasOverride.bias,
+          originalBias,
+          durationMin: duration,
+          confidence: this.aiBiasOverride.confidence,
+        }
+      });
+      
+      this.clearAiBiasOverride('expired');
+    }
   }
 
   /**
