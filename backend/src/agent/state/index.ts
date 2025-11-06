@@ -3234,8 +3234,54 @@ export class ReboundRejectionAgent {
       const stopFactor = stopPct > 2.5 ? Math.max(0.6, 1 - (stopPct - 2.5) / 7.5) : 1;
       const baseRisk = Math.max(1e-6, this.profile.riskPerTradePct);
       const riskFactor = Math.max(0.5, Math.min(1.1, dynamicRiskPct / baseRisk));
-      const scaled = safeBase * qualFactor * stopFactor * riskFactor;
-      effectiveLev = Math.max(Math.min(levGuard, scaled), Math.min(levGuard, Math.max(minLevCfg, 1)));
+      
+      // Confidence-based leverage scaling: scale leverage based on trade confidence
+      // Low confidence (0.0-0.5): scale down to 20-50% of base leverage (min 2x)
+      // Medium confidence (0.5-0.75): scale to 50-85% of base leverage
+      // High confidence (0.75-0.9): scale to 85-100% of base leverage
+      // Very high confidence (0.9-1.0): allow full base leverage
+      const confidenceFactor = (() => {
+        const conf = Math.max(0, Math.min(1, confidenceScore));
+        if (conf < 0.5) {
+          // Low confidence: 0.2 to 0.5 (20% to 50% of base leverage)
+          return 0.2 + (conf / 0.5) * 0.3;
+        } else if (conf < 0.75) {
+          // Medium confidence: 0.5 to 0.85
+          return 0.5 + ((conf - 0.5) / 0.25) * 0.35;
+        } else if (conf < 0.9) {
+          // High confidence: 0.85 to 1.0
+          return 0.85 + ((conf - 0.75) / 0.15) * 0.15;
+        } else {
+          // Very high confidence: full leverage
+          return 1.0;
+        }
+      })();
+      
+      const scaled = safeBase * qualFactor * stopFactor * riskFactor * confidenceFactor;
+      const leverageFloor = Math.max(2, minLevCfg); // Enforce minimum 2x leverage for low confidence trades
+      effectiveLev = Math.max(
+        Math.min(levGuard, scaled),
+        Math.min(levGuard, leverageFloor)
+      );
+      
+      // Log confidence-based leverage adjustment
+      if (Math.abs(confidenceFactor - 1.0) > 0.05) {
+        recordOpsEvent({
+          level: 'info',
+          source: 'leverage_confidence',
+          message: 'confidence_based_leverage_scaling',
+          sessionId: this.sessionId || undefined,
+          symbol: this.profile.symbol,
+          details: {
+            confidenceScore,
+            confidenceFactor,
+            baseLeverage: safeBase,
+            scaledLeverage: scaled,
+            effectiveLeverage: effectiveLev,
+            leverageFloor,
+          },
+        });
+      }
     }
     const sizingCfg = getConfig();
     const defaultSizing = (sizingCfg.SIZING_DEFAULT_MODE === 'risk' ? 'risk' : 'budget');
