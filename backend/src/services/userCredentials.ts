@@ -31,6 +31,8 @@ export function __resetUserCredentialsTestOverrides(): void {
 
 export async function getUserCredentials(userId: string, exchange?: string): Promise<UserCredentials | null> {
   try {
+    console.log('[getUserCredentials] Looking for API keys:', { userId, exchange });
+    
     // If exchange specified, get that specific one
     // Otherwise, get the ACTIVE one (regardless of exchange)
     const apiKey = await prismaClient.userApiKey.findFirst({
@@ -45,20 +47,25 @@ export async function getUserCredentials(userId: string, exchange?: string): Pro
       }
     });
 
+    console.log('[getUserCredentials] API key found:', !!apiKey, apiKey ? { exchange: apiKey.exchange, testnet: apiKey.testnet, isActive: apiKey.isActive } : null);
+
     if (!apiKey) {
+      console.log('[getUserCredentials] No API key found for user:', userId, 'exchange:', exchange);
       return null;
     }
 
     try {
-      return {
+      const decrypted = {
         apiKey: decryptFn(apiKey.apiKey),
         apiSecret: decryptFn(apiKey.apiSecret),
         passphrase: apiKey.passphrase ? decryptFn(apiKey.passphrase) : undefined,
         testnet: apiKey.testnet,
         exchange: apiKey.exchange
       };
+      console.log('[getUserCredentials] Successfully decrypted API keys for exchange:', apiKey.exchange);
+      return decrypted;
     } catch (decryptError) {
-      console.error('Failed to decrypt API keys for user:', userId, decryptError);
+      console.error('[getUserCredentials] Failed to decrypt API keys for user:', userId, decryptError);
       // API key exists but cannot be decrypted - probably due to encryption algorithm change
       return null;
     }

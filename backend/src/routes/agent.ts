@@ -1180,8 +1180,10 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     // Get live exchange balance for authenticated users
     let exchangeBalance: any = null;
     if (!req.user?.isLegacy && req.user?.id && (modeFilter === 'live' || !modeFilter)) {
+      console.log('[overview] Fetching live balance for user:', req.user.id, 'isLegacy:', req.user.isLegacy, 'modeFilter:', modeFilter);
       try {
         const userCredentials = await getUserCredentials(req.user.id);
+        console.log('[overview] User credentials found:', !!userCredentials, userCredentials ? { exchange: userCredentials.exchange } : null);
         if (userCredentials) {
           // 🚀 WebSocket for Binance (0 weight)
           let balance: any;
