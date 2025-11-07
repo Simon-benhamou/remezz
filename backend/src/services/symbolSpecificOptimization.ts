@@ -93,6 +93,9 @@ export async function upsertSymbolProfile(
   }
 }
 
+// Sharpe ratio threshold for optimization acceptance
+const MIN_SHARPE_FOR_OPTIMIZATION = Number(process.env.MIN_SHARPE_FOR_OPTIMIZATION || '0.3');
+
 /**
  * Optimize thresholds for a specific symbol based on performance
  */
@@ -111,8 +114,8 @@ export async function optimizeSymbolThresholds(
     // Get best performing threshold set
     const best = performances[0];
 
-    if (best.sharpeRatio < 0.3) {
-      console.log(`Best Sharpe for ${symbol} is ${best.sharpeRatio.toFixed(2)}, not confident in optimization`);
+    if (best.sharpeRatio < MIN_SHARPE_FOR_OPTIMIZATION) {
+      console.log(`Best Sharpe for ${symbol} is ${best.sharpeRatio.toFixed(2)}, not confident in optimization (min: ${MIN_SHARPE_FOR_OPTIMIZATION})`);
       return null;
     }
 

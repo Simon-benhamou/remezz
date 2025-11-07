@@ -37,8 +37,18 @@ router.get('/thresholds/:symbol', async (req, res) => {
     const { symbol } = req.params;
     const aggressiveness = (req.query.aggressiveness as any) || 'reactive';
 
-    // Get technical snapshot
-    const tech = await buildTechSnapshot(symbol);
+    // Get technical snapshot (with error handling)
+    let tech;
+    try {
+      tech = await buildTechSnapshot(symbol);
+    } catch (techError) {
+      console.error('Failed to build tech snapshot:', techError);
+      return res.status(500).json({
+        ok: false,
+        error: 'Failed to build technical snapshot',
+        details: techError instanceof Error ? techError.message : String(techError),
+      });
+    }
 
     // Calculate regime-aware thresholds
     const thresholds = getThresholdsForSymbol(symbol, tech, aggressiveness);

@@ -235,6 +235,14 @@ export async function getABTestResults(testId: string): Promise<ABTestResult[]> 
 
 /**
  * Compare A/B test variants and determine winner
+ * 
+ * Uses a simplified statistical confidence calculation based on:
+ * - Performance gap between variants (effect size)
+ * - Sample size (larger samples = higher confidence)
+ * - Formula: confidence = min(0.95, performanceGap * sqrt(sampleSize / 100))
+ * 
+ * Note: This is a heuristic approximation. For rigorous statistical testing,
+ * consider using proper t-tests or bootstrap methods.
  */
 export async function compareABTestVariants(testId: string): Promise<ABTestComparison> {
   const results = await getABTestResults(testId);
@@ -246,6 +254,10 @@ export async function compareABTestVariants(testId: string): Promise<ABTestCompa
 
   const testName = test.length > 0 ? test[0].name : testId;
   const minSampleSize = test.length > 0 ? test[0].minSampleSize : 30;
+
+  // Confidence calculation constants
+  const MAX_CONFIDENCE = 0.95; // Cap at 95% confidence
+  const SAMPLE_SIZE_NORMALIZER = 100; // Normalizes sample size impact
 
   // Determine winner based on Sharpe ratio (or average PnL if Sharpe not available)
   let winner: string | undefined;
@@ -272,7 +284,7 @@ export async function compareABTestVariants(testId: string): Promise<ABTestCompa
       );
       
       const avgSampleSize = (best.metrics.tradesExecuted + secondBest.metrics.tradesExecuted) / 2;
-      confidence = Math.min(0.95, performanceGap * Math.sqrt(avgSampleSize / 100));
+      confidence = Math.min(MAX_CONFIDENCE, performanceGap * Math.sqrt(avgSampleSize / SAMPLE_SIZE_NORMALIZER));
 
       if (confidence > 0.7) {
         winner = best.variantId;

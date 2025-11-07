@@ -31,10 +31,15 @@ export type TradeOutcome = {
 export type ThresholdPerformance = {
   thresholdKey: string;
   sampleSize: number;
+  /** Win rate as a decimal (0.0 - 1.0, where 0.6 = 60% win rate) */
   winRate: number;
+  /** Average profit/loss percentage per trade */
   avgPnlPct: number;
+  /** Average holding time in minutes */
   avgHoldTime: number;
+  /** Profit factor = gross profits / gross losses (higher is better, >1.0 is profitable) */
   profitFactor: number;
+  /** Sharpe ratio = return / volatility (higher is better, >1.0 is good, >2.0 is excellent) */
   sharpeRatio: number;
   lastUpdated: number;
 };
