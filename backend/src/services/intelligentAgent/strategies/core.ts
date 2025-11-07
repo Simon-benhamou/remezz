@@ -11,6 +11,8 @@ import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDia
 import { getAdaptiveWeightsForSymbol } from '../../../learning/adaptiveWeights.js';
 import { recordDecisionSnapshot, markDecisionCancelled, analyzeDecisionMemoryForSymbol } from '../../../learning/decisionMemory.js';
 import type { DecisionFeatures } from '../../../learning/decisionMemory.js';
+import { getPersonalityProfile, DEFAULT_PARAMS } from '../../../learning/personalityProfile.js';
+import { logTradeEvaluation } from '../../../learning/tradeEvaluationLogger.js';
 import { getHybridSentiment } from '../../../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../../binanceWebSocket.js';
 import type { BinanceTickerData } from '../../binanceWebSocket.js';
@@ -2810,79 +2812,7 @@ type CryptoPerformanceEntry = {
   lastPrice: number;
 };
 
-/**
- * Cryptocurrency category for adaptive scoring
- */
-type CryptoCategory = 'Major' | 'LargeCap' | 'Altcoin' | 'Exotic';
-
-/**
- * Category-specific parameters for adaptive trend confidence scoring
- */
-type CategoryParameters = {
-  weights: {
-    adx: number;
-    strength: number;
-    alignment: number;
-    slope: number;
-    flow: number;
-  };
-  thresholds: {
-    adx: number;
-    trendStrength: number;
-    cmf: number;
-  };
-  minConfidence: number;
-};
-
-/**
- * Determine cryptocurrency category based on symbol
- * Categories allow adaptive scoring that matches market characteristics:
- * - Major: BTC, ETH - High liquidity, lower volatility, reliable trends
- * - LargeCap: SOL, BNB, XRP, ADA - Good liquidity, moderate volatility
- * - Altcoin: Mid-to-low cap - Higher volatility, less reliable trends
- * - Exotic: Very new/low-cap/meme - Extreme volatility, momentum-driven
- */
-function getCryptoCategory(symbol: string): CryptoCategory {
-  const majors = new Set(['BTC/USDT', 'ETH/USDT']);
-  const largeCaps = new Set(['SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'ADA/USDT', 'AVAX/USDT', 'DOT/USDT']);
-  const exotics = new Set(['PEPE/USDT', 'SHIB/USDT', 'DOGE/USDT', 'FLOKI/USDT', 'WIF/USDT']);
-
-  if (majors.has(symbol)) return 'Major';
-  if (largeCaps.has(symbol)) return 'LargeCap';
-  if (exotics.has(symbol)) return 'Exotic';
-  
-  return 'Altcoin'; // Default category
-}
-
-/**
- * Category-specific adaptive parameters
- * Each category has tuned weights, thresholds, and confidence requirements
- * that match its market behavior and reliability
- */
-const categoryParams: Record<CryptoCategory, CategoryParameters> = {
-  Major: {
-    weights: { adx: 0.3, strength: 0.3, alignment: 0.2, slope: 0.1, flow: 0.1 },
-    thresholds: { adx: 18, trendStrength: 0.25, cmf: 0.05 },
-    minConfidence: 0.70
-  },
-  LargeCap: {
-    weights: { adx: 0.3, strength: 0.25, alignment: 0.2, slope: 0.15, flow: 0.1 },
-    thresholds: { adx: 18, trendStrength: 0.25, cmf: 0.05 },
-    minConfidence: 0.68
-  },
-  Altcoin: {
-    weights: { adx: 0.25, strength: 0.2, alignment: 0.15, slope: 0.3, flow: 0.1 }, // Heavier on momentum (slope)
-    thresholds: { adx: 15, trendStrength: 0.20, cmf: 0.0 }, // Relaxed thresholds
-    minConfidence: 0.65
-  },
-  Exotic: {
-    weights: { adx: 0.1, strength: 0.1, alignment: 0.1, slope: 0.5, flow: 0.2 }, // Focus heavily on momentum and short-term flow
-    thresholds: { adx: 12, trendStrength: 0.15, cmf: -0.05 }, // Very relaxed
-    minConfidence: 0.60
-  }
-};
-
-function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null): TrendAssessment {
+async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null): Promise<TrendAssessment> {
   if (!snap) {
     return {
       symbol,
@@ -2897,9 +2827,9 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
     };
   }
 
-  // 1. Get the category for the current symbol
-  const category = getCryptoCategory(symbol);
-  const params = categoryParams[category];
+  // Try to fetch learned personality profile for this symbol
+  const profile = await getPersonalityProfile(symbol).catch(() => null);
+  const params = profile || DEFAULT_PARAMS;
 
   const adx = Number(snap.adx14 ?? 0);
   const trendStrength = Number(snap.trendStrength ?? 0);
@@ -2927,7 +2857,7 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
   const slopeScore = Math.max(0, Math.min(1, slopeNorm * 220));
   const flowScore = Math.max(0, Math.min(1, (cmf + 0.2) / 0.6));
 
-  // 3. Apply category-specific weights
+  // Use learned weights from personality profile
   const weightedScore = 
     adxScore * params.weights.adx + 
     strengthScore * params.weights.strength + 
@@ -2938,8 +2868,9 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
 
   // 4. Apply category-specific thresholds for validation reasons
   const reasons: string[] = [];
-  if (adx < params.thresholds.adx) reasons.push(`adx_below_${category}_threshold`);
-  if (trendStrength < params.thresholds.trendStrength) reasons.push(`weak_trend_structure_for_${category}`);
+  // Use learned thresholds from personality profile
+  if (adx < params.thresholds.adx) reasons.push('adx_below_trend_threshold');
+  if (trendStrength < params.thresholds.trendStrength) reasons.push('weak_trend_structure');
   if (direction === 'bullish' && ema20 <= ema100) reasons.push('bullish_trend_missing_stack');
   if (direction === 'bearish' && ema20 >= ema100) reasons.push('bearish_trend_missing_stack');
   // CMF threshold: for positive thresholds check if abs(cmf) is below threshold (neutral flow)
@@ -2954,8 +2885,34 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
     if (distance < 0.4) reasons.push('price_near_ema200');
   }
 
-  // 5. Apply category-specific confidence threshold
-  const ok = score >= params.minConfidence && adx >= params.thresholds.adx && trendStrength >= params.thresholds.trendStrength;
+  // Use learned minimum confidence threshold
+  const ok = score >= params.thresholds.minConfidence && adx >= params.thresholds.adx && trendStrength >= params.thresholds.trendStrength;
+
+  // Log the trade evaluation for learning
+  const decision = ok ? 'executed' : 'blocked';
+  const blockedReason = ok ? undefined : reasons.join(', ');
+  
+  logTradeEvaluation({
+    symbol,
+    decision,
+    blockedReason,
+    confidenceScore: score,
+    inputMetrics: {
+      adx,
+      cmf,
+      atrPct,
+      slope,
+      trendStrength,
+      ema20,
+      ema50,
+      ema100,
+      ema200,
+      rsi14: snap.rsi14 ? Number(snap.rsi14) : undefined,
+    },
+  }).catch((error) => {
+    // Non-blocking: log error but don't fail the trade decision
+    console.warn('Failed to log trade evaluation:', error);
+  });
 
   return {
     symbol,
@@ -2976,7 +2933,7 @@ async function evaluateSymbolTrend(symbol: string): Promise<TrendAssessment> {
   for (const candidate of candidates) {
     try {
       const snap = await buildTechSnapshot(candidate);
-      return computeTrendConfidence(symbol, snap);
+      return await computeTrendConfidence(symbol, snap);
     } catch (error) {
       lastError = error;
     }
@@ -2984,7 +2941,7 @@ async function evaluateSymbolTrend(symbol: string): Promise<TrendAssessment> {
   if (lastError) {
     console.warn(`⚠️ Trend snapshot unavailable for ${symbol}:`, lastError);
   }
-  return computeTrendConfidence(symbol, null);
+  return await computeTrendConfidence(symbol, null);
 }
 
 async function applyTrendWeighting(

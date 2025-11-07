@@ -175,14 +175,23 @@ startSchedulerWorker();
 import { initializeAdaptiveLearning } from "./services/adaptiveThresholdLearning.js";
 import { initializeSymbolProfiles, startSymbolOptimizationScheduler } from "./services/symbolSpecificOptimization.js";
 import { initializeABTesting } from "./services/abTesting.js";
+import { initializeOptimizerScheduling } from "./learning/optimizerJob.js";
+import { startOutcomeUpdater } from "./learning/outcomeUpdater.js";
 
 Promise.all([
   initializeAdaptiveLearning(),
   initializeSymbolProfiles(),
   initializeABTesting(),
+  initializeOptimizerScheduling(),
 ]).catch((error) => {
   serverLogger.warn('⚠️ Failed to initialize learning services:', error);
 });
+
+// Start personality profile outcome updater worker
+if (process.env.OUTCOME_UPDATER_DISABLED !== 'true') {
+  startOutcomeUpdater();
+  serverLogger.info('📊 Personality profile outcome updater started');
+}
 
 // Start symbol optimization scheduler (runs daily)
 if (process.env.SYMBOL_OPTIMIZATION_DISABLED !== 'true') {

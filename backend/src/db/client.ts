@@ -28,11 +28,8 @@ const USE_IN_MEMORY = UNIT_TEST_MODE || (process.env.USE_IN_MEMORY_DB || '').toL
 
 const prismaInstance: any = USE_IN_MEMORY ? createInMemoryPrismaClient() : new PrismaClient();
 
-// Export with proper type that includes $queryRaw methods
-export const prisma = prismaInstance as PrismaClient & {
-  $queryRaw<T = unknown>(query: TemplateStringsArray | string, ...values: any[]): Promise<T>;
-  $queryRawUnsafe<T = unknown>(query: string, ...values: any[]): Promise<T>;
-};
+// Export the Prisma client instance with proper typing
+export const prisma = prismaInstance as PrismaClient;
 export const prismaIsInMemory = USE_IN_MEMORY;
 
 if (USE_IN_MEMORY && typeof prismaInstance.$reset !== 'function') {

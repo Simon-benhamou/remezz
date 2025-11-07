@@ -476,3 +476,29 @@ model AutoUniverseSchedule {
 
   @@map("auto_universe_schedule")
 }
+
+model TradeEvaluation {
+  id              String   @id @default(cuid())
+  symbol          String
+  timestamp       DateTime @default(now())
+  decision        String   // "executed" | "blocked"
+  blockedReason   String?
+  confidenceScore Float
+  inputMetrics    Json     // Snapshot of indicator values: adx, cmf, atr_pct, slope, trend_strength, etc.
+  marketOutcome   Json?    // Updated later: pnl_15m, pnl_1h, max_favorable_excursion_1h, max_adverse_excursion_1h
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([symbol, timestamp])
+  @@index([timestamp])
+  @@index([marketOutcome])
+}
+
+model CryptoPersonalityProfile {
+  symbol        String   @id
+  optimalParams Json     // Learned parameters: weights, thresholds, min_confidence
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  @@index([updatedAt])
+}
