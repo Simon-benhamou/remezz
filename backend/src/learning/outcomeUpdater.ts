@@ -9,6 +9,7 @@ import type { MarketOutcome } from './tradeEvaluationLogger.js';
 
 const WORKER_INTERVAL_MS = 5 * 60 * 1000; // Run every 5 minutes
 const OUTCOME_WAIT_MS = 60 * 60 * 1000; // Wait 1 hour after evaluation
+const OUTCOME_WINDOW_MINUTES = 70; // Fetch 70 minutes of data to ensure coverage
 
 let workerTimer: NodeJS.Timeout | null = null;
 let isRunning = false;
@@ -100,7 +101,7 @@ async function processOutcomeUpdates(): Promise<void> {
 
         // Fetch OHLCV data for the hour after evaluation
         // Note: We fetch recent data and filter by timestamp instead
-        const candles = await getOHLCV(evaluation.symbol, '1m', 70);
+        const candles = await getOHLCV(evaluation.symbol, '1m', OUTCOME_WINDOW_MINUTES);
 
         if (!candles || candles.length < 15) {
           console.warn(`⚠️ Insufficient data for ${evaluation.symbol} at ${evaluation.timestamp}`);

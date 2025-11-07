@@ -6,6 +6,9 @@
 import { prisma } from '../db/client.js';
 import { Prisma } from '@prisma/client';
 
+// Time constants
+const OUTCOME_WAIT_MS = 60 * 60 * 1000; // 1 hour in milliseconds
+
 export type InputMetrics = {
   adx?: number;
   cmf?: number;
@@ -90,7 +93,7 @@ export async function getEvaluationsPendingOutcome(limit = 100) {
     where: {
       marketOutcome: { equals: Prisma.DbNull },
       timestamp: {
-        lte: new Date(Date.now() - 60 * 60 * 1000), // At least 1 hour old
+        lte: new Date(Date.now() - OUTCOME_WAIT_MS),
       },
     },
     orderBy: { timestamp: 'asc' },

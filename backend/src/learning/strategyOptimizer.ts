@@ -7,6 +7,7 @@ import { getSymbolEvaluations } from './tradeEvaluationLogger.js';
 import { savePersonalityProfile, DEFAULT_PARAMS } from './personalityProfile.js';
 import type { OptimalParams } from './personalityProfile.js';
 import type { InputMetrics, MarketOutcome } from './tradeEvaluationLogger.js';
+import { prisma } from '../db/client.js';
 
 type EvaluationData = {
   inputMetrics: InputMetrics;
@@ -123,38 +124,53 @@ function calculateFitness(evaluations: EvaluationData[], params: OptimalParams):
 
 /**
  * Generate all parameter combinations for grid search
+ * Only generates combinations where weights sum to approximately 1.0
  */
 function* generateParamCombinations(): Generator<OptimalParams> {
+  // Pre-filter weight combinations that sum to 1.0
+  const validWeightCombos: Array<{
+    adx: number;
+    strength: number;
+    alignment: number;
+    slope: number;
+    flow: number;
+  }> = [];
+
   for (const adxWeight of PARAM_GRID.weights.adx) {
     for (const strengthWeight of PARAM_GRID.weights.strength) {
       for (const alignmentWeight of PARAM_GRID.weights.alignment) {
         for (const slopeWeight of PARAM_GRID.weights.slope) {
           for (const flowWeight of PARAM_GRID.weights.flow) {
-            // Ensure weights sum to approximately 1.0
             const total = adxWeight + strengthWeight + alignmentWeight + slopeWeight + flowWeight;
-            if (Math.abs(total - 1.0) > 0.01) continue;
-
-            for (const adxThresh of PARAM_GRID.thresholds.adx) {
-              for (const strengthThresh of PARAM_GRID.thresholds.trendStrength) {
-                for (const confThresh of PARAM_GRID.thresholds.minConfidence) {
-                  yield {
-                    weights: {
-                      adx: adxWeight,
-                      strength: strengthWeight,
-                      alignment: alignmentWeight,
-                      slope: slopeWeight,
-                      flow: flowWeight,
-                    },
-                    thresholds: {
-                      adx: adxThresh,
-                      trendStrength: strengthThresh,
-                      minConfidence: confThresh,
-                    },
-                  };
-                }
-              }
+            // Only keep combinations that sum to approximately 1.0
+            if (Math.abs(total - 1.0) <= 0.01) {
+              validWeightCombos.push({
+                adx: adxWeight,
+                strength: strengthWeight,
+                alignment: alignmentWeight,
+                slope: slopeWeight,
+                flow: flowWeight,
+              });
             }
           }
+        }
+      }
+    }
+  }
+
+  // Now generate full parameter combinations using only valid weights
+  for (const weights of validWeightCombos) {
+    for (const adxThresh of PARAM_GRID.thresholds.adx) {
+      for (const strengthThresh of PARAM_GRID.thresholds.trendStrength) {
+        for (const confThresh of PARAM_GRID.thresholds.minConfidence) {
+          yield {
+            weights,
+            thresholds: {
+              adx: adxThresh,
+              trendStrength: strengthThresh,
+              minConfidence: confThresh,
+            },
+          };
         }
       }
     }
@@ -250,13 +266,12 @@ export async function optimizeAllSymbols(): Promise<Map<string, OptimalParams>> 
  * Get distinct symbols from trade evaluations
  */
 async function getDistinctSymbols(): Promise<string[]> {
-  const result = await prisma.$queryRaw<Array<{ symbol: string }>>`
-    SELECT DISTINCT symbol 
-    FROM "TradeEvaluation" 
-    WHERE "marketOutcome" IS NOT NULL
-  `;
+  const result = await prisma.tradeEvaluation.findMany({
+    where: {
+      marketOutcome: { not: { equals: Prisma.DbNull } },
+    },
+    select: { symbol: true },
+    distinct: ['symbol'],
+  });
   return result.map((r) => r.symbol);
 }
-
-// Import prisma for the query
-import { prisma } from '../db/client.js';
