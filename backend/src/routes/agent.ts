@@ -1424,7 +1424,25 @@ router.get('/sessions/:id/diagnostics', async (req, res) => {
       return res.status(404).json({ error: 'Agent not found or not active' });
     }
     
-    let diagnostics = await (agent as any).getDiagnostics();
+    // Check if getDiagnostics method exists before calling it
+    let diagnostics;
+    if (typeof (agent as any).getDiagnostics === 'function') {
+      diagnostics = await (agent as any).getDiagnostics();
+    } else {
+      // Fallback for stub agents without getDiagnostics (e.g., meta-adaptive)
+      diagnostics = {
+        state: (agent as any).state || 'ACTIVE',
+        bias: (agent as any).bias || 'none',
+        sessionId: (agent as any).sessionId || id,
+        profile: (agent as any).profile || null,
+        canTrade: false,
+        reason: 'Meta-adaptive agent - diagnostics not available',
+        trigger: null,
+        checks: null,
+        blockers: [],
+      };
+    }
+    
     // Safety: ensure trigger.entryReady exists for integration tests
     try {
       const t = (diagnostics as any)?.trigger;
