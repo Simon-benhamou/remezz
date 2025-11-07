@@ -171,7 +171,7 @@ for (const paramTest of paramTests) {
         actual = params.weights.flow;
         break;
       default:
-        actual = -1;
+        throw new Error(`Unknown parameter name: ${check.param}`);
     }
     
     const isValid = Math.abs(actual - check.expected) < 0.001;
