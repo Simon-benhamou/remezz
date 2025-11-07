@@ -2810,6 +2810,78 @@ type CryptoPerformanceEntry = {
   lastPrice: number;
 };
 
+/**
+ * Cryptocurrency category for adaptive scoring
+ */
+type CryptoCategory = 'Major' | 'LargeCap' | 'Altcoin' | 'Exotic';
+
+/**
+ * Category-specific parameters for adaptive trend confidence scoring
+ */
+type CategoryParameters = {
+  weights: {
+    adx: number;
+    strength: number;
+    alignment: number;
+    slope: number;
+    flow: number;
+  };
+  thresholds: {
+    adx: number;
+    trendStrength: number;
+    cmf: number;
+  };
+  minConfidence: number;
+};
+
+/**
+ * Determine cryptocurrency category based on symbol
+ * Categories allow adaptive scoring that matches market characteristics:
+ * - Major: BTC, ETH - High liquidity, lower volatility, reliable trends
+ * - LargeCap: SOL, BNB, XRP, ADA - Good liquidity, moderate volatility
+ * - Altcoin: Mid-to-low cap - Higher volatility, less reliable trends
+ * - Exotic: Very new/low-cap/meme - Extreme volatility, momentum-driven
+ */
+function getCryptoCategory(symbol: string): CryptoCategory {
+  const majors = new Set(['BTC/USDT', 'ETH/USDT']);
+  const largeCaps = new Set(['SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'ADA/USDT', 'AVAX/USDT', 'DOT/USDT']);
+  const exotics = new Set(['PEPE/USDT', 'SHIB/USDT', 'DOGE/USDT', 'FLOKI/USDT', 'WIF/USDT']);
+
+  if (majors.has(symbol)) return 'Major';
+  if (largeCaps.has(symbol)) return 'LargeCap';
+  if (exotics.has(symbol)) return 'Exotic';
+  
+  return 'Altcoin'; // Default category
+}
+
+/**
+ * Category-specific adaptive parameters
+ * Each category has tuned weights, thresholds, and confidence requirements
+ * that match its market behavior and reliability
+ */
+const categoryParams: Record<CryptoCategory, CategoryParameters> = {
+  Major: {
+    weights: { adx: 0.3, strength: 0.3, alignment: 0.2, slope: 0.1, flow: 0.1 },
+    thresholds: { adx: 18, trendStrength: 0.25, cmf: 0.05 },
+    minConfidence: 0.70
+  },
+  LargeCap: {
+    weights: { adx: 0.3, strength: 0.25, alignment: 0.2, slope: 0.15, flow: 0.1 },
+    thresholds: { adx: 18, trendStrength: 0.25, cmf: 0.05 },
+    minConfidence: 0.68
+  },
+  Altcoin: {
+    weights: { adx: 0.25, strength: 0.2, alignment: 0.15, slope: 0.3, flow: 0.1 }, // Heavier on momentum (slope)
+    thresholds: { adx: 15, trendStrength: 0.20, cmf: 0.0 }, // Relaxed thresholds
+    minConfidence: 0.65
+  },
+  Exotic: {
+    weights: { adx: 0.1, strength: 0.1, alignment: 0.1, slope: 0.5, flow: 0.2 }, // Focus heavily on momentum and short-term flow
+    thresholds: { adx: 12, trendStrength: 0.15, cmf: -0.05 }, // Very relaxed
+    minConfidence: 0.60
+  }
+};
+
 function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null): TrendAssessment {
   if (!snap) {
     return {
@@ -2824,6 +2896,10 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
       reasons: ['no_snapshot'],
     };
   }
+
+  // 1. Get the category for the current symbol
+  const category = getCryptoCategory(symbol);
+  const params = categoryParams[category];
 
   const adx = Number(snap.adx14 ?? 0);
   const trendStrength = Number(snap.trendStrength ?? 0);
@@ -2842,6 +2918,7 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
       ? 'bearish'
       : 'neutral';
 
+  // 2. Compute component scores (normalized 0-1)
   const adxScore = Math.max(0, Math.min(1, (adx - 15) / 22));
   const strengthScore = Math.max(0, Math.min(1, (trendStrength - 0.2) / 0.8));
   const alignment = ema50 !== 0 ? Math.abs((ema20 - ema50) / ema50) : 0;
@@ -2850,21 +2927,29 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
   const slopeScore = Math.max(0, Math.min(1, slopeNorm * 220));
   const flowScore = Math.max(0, Math.min(1, (cmf + 0.2) / 0.6));
 
-  const weightedScore = adxScore * 0.3 + strengthScore * 0.3 + alignmentScore * 0.2 + slopeScore * 0.1 + flowScore * 0.1;
+  // 3. Apply category-specific weights
+  const weightedScore = 
+    adxScore * params.weights.adx + 
+    strengthScore * params.weights.strength + 
+    alignmentScore * params.weights.alignment + 
+    slopeScore * params.weights.slope + 
+    flowScore * params.weights.flow;
   const score = Number(weightedScore.toFixed(4));
 
+  // 4. Apply category-specific thresholds for validation reasons
   const reasons: string[] = [];
-  if (adx < 18) reasons.push('adx_below_trend_threshold');
-  if (trendStrength < 0.25) reasons.push('weak_trend_structure');
+  if (adx < params.thresholds.adx) reasons.push(`adx_below_${category}_threshold`);
+  if (trendStrength < params.thresholds.trendStrength) reasons.push(`weak_trend_structure_for_${category}`);
   if (direction === 'bullish' && ema20 <= ema100) reasons.push('bullish_trend_missing_stack');
   if (direction === 'bearish' && ema20 >= ema100) reasons.push('bearish_trend_missing_stack');
-  if (Math.abs(cmf) < 0.05) reasons.push('neutral_flow');
+  if (Math.abs(cmf) < params.thresholds.cmf) reasons.push(`neutral_flow_for_${category}`);
   if (ema200 !== 0) {
     const distance = Math.abs((last - ema200) / ema200) * 100;
     if (distance < 0.4) reasons.push('price_near_ema200');
   }
 
-  const ok = score >= 0.45 && adx >= 18 && trendStrength >= 0.25;
+  // 5. Apply category-specific confidence threshold
+  const ok = score >= params.minConfidence && adx >= params.thresholds.adx && trendStrength >= params.thresholds.trendStrength;
 
   return {
     symbol,
