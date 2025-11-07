@@ -61,12 +61,9 @@ export const RegimeAwareThresholdsDisplay: React.FC<Props> = ({
 
   const loadThresholds = async () => {
     try {
-      const response = await api.get(
-        `/entry-analytics/thresholds/${encodeURIComponent(symbol)}`,
-        { params: { aggressiveness } }
-      );
-      if (response.data.ok) {
-        setData(response.data);
+      const response = await api.getRegimeThresholds(symbol);
+      if (response.ok) {
+        setData(response);
       }
     } catch (error) {
       console.error('Failed to load thresholds:', error);
