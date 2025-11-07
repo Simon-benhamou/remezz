@@ -3898,9 +3898,12 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       && session.positions.some((p: any) => Number(p?.qty || 0) > POSITION_QTY_EPSILON);
     const hasOpenOrders = Array.isArray(session.orders)
       && session.orders.some((order: any) => OPEN_ORDER_STATUSES.has(String(order?.status || '').toLowerCase()));
-    const agentBusy = !!(agent && ((agent.pos && Number(agent.pos.qty || 0) > POSITION_QTY_EPSILON) || agent.entering));
-
-    if (hasOpenPosition || hasOpenOrders || agentBusy) {
+    
+    // FIX: For meta-adaptive agents (stateless stubs), only trust database state.
+    // The agent.entering flag is unreliable and causes false positives.
+    // Removed: agentBusy check that was blocking rotation when agent is armed.
+    
+    if (hasOpenPosition || hasOpenOrders) {
       const nextCheck = new Date(now.getTime() + 60 * 60 * 1000); // Re-evaluate in 1h
       console.log(
         `⏸️ Session ${session.id}: active trade detected (position=${hasOpenPosition}, orders=${hasOpenOrders}, state=${agent?.state}) — postponing reselection`
@@ -3927,7 +3930,12 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         details: {
           hasOpenPosition,
           hasOpenOrders,
-          agentState: agent?.state
+          agentState: agent?.state,
+          // Enhanced logging for debugging
+          dbPositions: session.positions?.length || 0,
+          dbOpenOrders: session.orders?.filter((o: any) => 
+            OPEN_ORDER_STATUSES.has(String(o?.status || '').toLowerCase())
+          ).length || 0
         }
       });
 
