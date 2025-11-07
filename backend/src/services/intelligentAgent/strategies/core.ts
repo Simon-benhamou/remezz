@@ -845,9 +845,14 @@ async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason:
       planMeta: { reason, source: 'intelligent_agent' },
     });
 
+    // Meta-adaptive agents are stateless stubs without propose/validateAndArm methods
     if (agent) {
-      await agent.propose(plan as any);
-      await agent.validateAndArm();
+      if (typeof agent.propose === 'function') {
+        await agent.propose(plan as any);
+      }
+      if (typeof agent.validateAndArm === 'function') {
+        await agent.validateAndArm();
+      }
     }
 
     try {
