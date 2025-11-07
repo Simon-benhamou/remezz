@@ -29,6 +29,7 @@ import { router as intelligentRouter } from "./routes/intelligent.js";
 import { router as arbitrageRouter } from "./routes/arbitrage.js";
 import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { router as capitalRouter } from "./routes/capital.js";
+import { router as entryAnalyticsRouter } from "./routes/entryAnalytics.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
 import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
@@ -132,6 +133,7 @@ app.use("/api/llm", llmTestRouter);
 app.use("/api/ops", opsRouter);
 app.use("/api/improvements", improvementsRouter);
 app.use("/api/capital", capitalRouter);
+app.use("/api/entry-analytics", entryAnalyticsRouter);
 app.post("/api/start-agent", async (req, res) => {
   try {
     const userId = typeof (req as any)?.user?.id === "string" ? (req as any).user.id : undefined;
@@ -168,6 +170,25 @@ restoreAutoUniverseRetrySchedule().catch((error) => {
 });
 
 startSchedulerWorker();
+
+// Initialize adaptive threshold learning and related services
+import { initializeAdaptiveLearning } from "./services/adaptiveThresholdLearning.js";
+import { initializeSymbolProfiles, startSymbolOptimizationScheduler } from "./services/symbolSpecificOptimization.js";
+import { initializeABTesting } from "./services/abTesting.js";
+
+Promise.all([
+  initializeAdaptiveLearning(),
+  initializeSymbolProfiles(),
+  initializeABTesting(),
+]).catch((error) => {
+  serverLogger.warn('⚠️ Failed to initialize learning services:', error);
+});
+
+// Start symbol optimization scheduler (runs daily)
+if (process.env.SYMBOL_OPTIMIZATION_DISABLED !== 'true') {
+  const optimizationHours = parseInt(process.env.SYMBOL_OPTIMIZATION_INTERVAL_HOURS || '24');
+  startSymbolOptimizationScheduler(optimizationHours);
+}
 
 const DEFAULT_LEVERAGE_REFRESH_MS = 15 * 60 * 1000;
 const LEVERAGE_REFRESH_INTERVAL_MS = Math.max(
