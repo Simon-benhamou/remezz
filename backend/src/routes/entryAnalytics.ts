@@ -239,6 +239,117 @@ router.post('/adaptive-learning/initialize', authenticateUser, async (req: Authe
 });
 
 /**
+ * Get symbol-specific optimization status
+ */
+router.get('/symbol-optimization/:symbol', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { symbol } = req.params;
+    
+    const { getSymbolProfile } = await import('../services/symbolSpecificOptimization.js');
+    const profile = await getSymbolProfile(symbol);
+
+    res.json({
+      ok: true,
+      symbol,
+      profile: profile || { message: 'No custom profile found - using regime-aware defaults' },
+    });
+  } catch (error) {
+    console.error('Failed to get symbol optimization:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to get symbol optimization',
+    });
+  }
+});
+
+/**
+ * Trigger symbol optimization (admin only)
+ */
+router.post('/symbol-optimization/:symbol/optimize', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ ok: false, error: 'Admin access required' });
+    }
+
+    const { symbol } = req.params;
+    const lookbackDays = parseInt(req.query.lookbackDays as string) || 30;
+
+    const { optimizeSymbolThresholds } = await import('../services/symbolSpecificOptimization.js');
+    const optimized = await optimizeSymbolThresholds(symbol, lookbackDays);
+
+    if (optimized) {
+      res.json({
+        ok: true,
+        symbol,
+        optimized,
+        message: 'Symbol thresholds optimized successfully',
+      });
+    } else {
+      res.json({
+        ok: false,
+        symbol,
+        message: 'Not enough data to optimize (need 10+ trades)',
+      });
+    }
+  } catch (error) {
+    console.error('Failed to optimize symbol:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to optimize symbol',
+    });
+  }
+});
+
+/**
+ * Create A/B test (admin only)
+ */
+router.post('/ab-test/create', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ ok: false, error: 'Admin access required' });
+    }
+
+    const { createABTest } = await import('../services/abTesting.js');
+    const testId = await createABTest(req.body);
+
+    res.json({
+      ok: true,
+      testId,
+      message: 'A/B test created successfully',
+    });
+  } catch (error) {
+    console.error('Failed to create A/B test:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to create A/B test',
+    });
+  }
+});
+
+/**
+ * Get A/B test results
+ */
+router.get('/ab-test/:testId/results', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { testId } = req.params;
+
+    const { compareABTestVariants } = await import('../services/abTesting.js');
+    const comparison = await compareABTestVariants(testId);
+
+    res.json({
+      ok: true,
+      comparison,
+    });
+  } catch (error) {
+    console.error('Failed to get A/B test results:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Failed to get A/B test results',
+    });
+  }
+});
+
+/**
  * Get comprehensive analytics dashboard data
  */
 router.get('/dashboard/:sessionId', authenticateUser, async (req: AuthenticatedRequest, res) => {
