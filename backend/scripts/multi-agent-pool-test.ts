@@ -5,6 +5,8 @@
  * Compares mode performance: stability, PnL, win rate, and combined results.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { buildMetaAdaptiveSyntheticCandles, runMetaAdaptiveBacktest } from '../src/quantai/strategies/metaAdaptive/backtest.js';
 import { configureLogging, createLogger } from '../src/utils/logger.js';
 import type { Candle, BacktestMetrics } from '../src/quantai/strategies/metaAdaptive/backtest.js';
@@ -132,7 +134,6 @@ function generateCandlesForDays(days: number): Candle[] {
     const changePercent = (Math.random() - 0.5) * 0.02; // +/- 1% max
     currentPrice = currentPrice * (1 + changePercent);
     
-    const volatility = currentPrice * 0.005; // 0.5% volatility
     const open = currentPrice;
     const close = currentPrice * (1 + (Math.random() - 0.5) * 0.01);
     const high = Math.max(open, close) * (1 + Math.random() * 0.005);
@@ -332,14 +333,19 @@ function runMultiAgentPoolTest(): PoolTestResult {
   const finalPoolUsd = poolSizeUsd + totalPnlUsd;
   const totalTrades = agentResults.reduce((sum, r) => sum + r.trades, 0);
   
-  // Calculate weighted win rate and profit factor
-  const totalWins = agentResults.reduce((sum, r) => sum + (r.trades * r.winRate / 100), 0);
-  const overallWinRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
+  // Calculate weighted win rate and profit factor (only if trades were executed)
+  let overallWinRate = 0;
+  let overallProfitFactor = 0;
   
-  const weightedProfitFactor = agentResults.reduce((sum, r) => {
-    const weight = r.trades / totalTrades;
-    return sum + (r.profitFactor * weight);
-  }, 0);
+  if (totalTrades > 0) {
+    const totalWins = agentResults.reduce((sum, r) => sum + (r.trades * r.winRate / 100), 0);
+    overallWinRate = (totalWins / totalTrades) * 100;
+    
+    overallProfitFactor = agentResults.reduce((sum, r) => {
+      const weight = r.trades / totalTrades;
+      return sum + (r.profitFactor * weight);
+    }, 0);
+  }
   
   return {
     poolSizeUsd,
@@ -351,8 +357,8 @@ function runMultiAgentPoolTest(): PoolTestResult {
       totalPnlPct: (totalPnlUsd / poolSizeUsd) * 100,
       finalPoolUsd,
       totalTrades,
-      overallWinRate: totalTrades > 0 ? overallWinRate : 0,
-      overallProfitFactor: totalTrades > 0 ? weightedProfitFactor : 0,
+      overallWinRate,
+      overallProfitFactor,
     },
   };
 }
@@ -437,8 +443,6 @@ try {
   printResults(results);
   
   // Also save results to JSON for further analysis
-  const fs = await import('fs');
-  const path = await import('path');
   const outputPath = path.join(process.cwd(), 'multi-agent-pool-test-results.json');
   fs.writeFileSync(outputPath, JSON.stringify(results, null, 2));
   logger.info(`\nResults saved to: ${outputPath}`);
