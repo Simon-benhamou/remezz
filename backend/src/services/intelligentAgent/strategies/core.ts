@@ -1244,7 +1244,10 @@ async function computeCandidateMetrics(
   }
 
   const volumeCents = numberToCents(performance.quoteVolume24h);
-  if (volumeCents == null) return null;
+  if (volumeCents == null) {
+    console.debug(`${requestSymbol}: Invalid volume data (${performance.quoteVolume24h})`);
+    return null;
+  }
 
   let spreadBps: number | null = null;
   const bid = Number(ticker?.bid ?? ticker?.info?.bid ?? NaN);
@@ -1262,7 +1265,7 @@ async function computeCandidateMetrics(
   try {
     const marketSymbol = resolveExchangeSymbol(exchange, requestSymbol);
     if (!marketSymbol) {
-      console.debug(`Skipping ${requestSymbol} - symbol not present in exchange markets`);
+      console.debug(`${requestSymbol}: Symbol not found in exchange markets - likely delisted or not available`);
       return null;
     }
 
@@ -1287,10 +1290,10 @@ async function computeCandidateMetrics(
   } catch (error) {
     if (isMissingSymbolError(error)) {
       const message = typeof (error as any)?.message === 'string' ? (error as any).message : String(error);
-      console.debug(`Skipping ${requestSymbol} - exchange rejected symbol`, message);
+      console.debug(`${requestSymbol}: Exchange validation failed - ${message}`);
       return null;
     }
-    console.debug(`Binance order book fetch warning for ${requestSymbol}:`, error);
+    console.debug(`${requestSymbol}: Order book fetch warning - ${error}`);
   }
 
   let snapshot: TechnicalSnapshot;
@@ -1298,7 +1301,7 @@ async function computeCandidateMetrics(
     snapshot = await buildTechSnapshot(symbol);
   } catch (error) {
     if (isUnusableMarketDataError(error) && error.meta?.timeframe === '15m' && error.meta?.invalidRatio === 1) {
-      console.warn(`Skipping ${symbol} due to invalid 15m market data (ratio=1).`);
+      console.debug(`${symbol}: All 15m market data invalid (ratio=1) - insufficient historical data or data quality issues`);
       recordOpsEvent({
         level: 'warn',
         source: 'tech_snapshot',
@@ -1308,6 +1311,7 @@ async function computeCandidateMetrics(
       });
       return null;
     }
+    // Re-throw other errors to be handled by the caller
     throw error;
   }
   let multiTimeframe: MultiTimeframeDiagnostics | undefined;
@@ -1711,7 +1715,9 @@ export async function getOptimizedCryptoList(
       try {
         const metrics = await computeCandidateMetrics(entry.symbol, entry, tickers[entry.symbol], exchange);
         if (!metrics) {
-          evaluationDiagnostics.push({ symbol: entry.symbol, reasons: ['metrics_unavailable'] });
+          // metrics is null - this typically means symbol validation failed, market data unavailable,
+          // or symbol not available on exchange. Individual debug logs are emitted by computeCandidateMetrics.
+          evaluationDiagnostics.push({ symbol: entry.symbol, reasons: ['metrics_computation_failed'] });
           continue;
         }
         const evaluation = evaluateCandidateAgainstFilters(metrics, strategyProfile, Date.now());
@@ -1738,9 +1744,30 @@ export async function getOptimizedCryptoList(
 
     if (!enriched.length) {
       console.warn('⚠️ Liquidity/performance filters rejected all candidates');
+      
+      // Group diagnostics by reason for better visibility
+      const reasonGroups = new Map<string, string[]>();
       evaluationDiagnostics.forEach((diag) => {
-        console.warn(`   ${diag.symbol}: ${diag.reasons.join(', ') || 'no_reason'}`);
+        const reason = diag.reasons.join(', ') || 'unknown';
+        if (!reasonGroups.has(reason)) {
+          reasonGroups.set(reason, []);
+        }
+        reasonGroups.get(reason)!.push(diag.symbol);
       });
+      
+      // Log grouped results
+      reasonGroups.forEach((symbols, reason) => {
+        console.warn(`   [${reason}]: ${symbols.length} symbols`);
+        if (symbols.length <= 5) {
+          // Show all symbols if <= 5
+          symbols.forEach(sym => console.warn(`      ${sym}`));
+        } else {
+          // Show first 3 and count
+          symbols.slice(0, 3).forEach(sym => console.warn(`      ${sym}`));
+          console.warn(`      ... and ${symbols.length - 3} more`);
+        }
+      });
+      
       const reason = 'filters_rejected_all';
       updateAutoUniverseStatus({
         source: 'fallback_dynamic',
