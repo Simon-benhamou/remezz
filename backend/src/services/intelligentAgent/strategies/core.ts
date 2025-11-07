@@ -3129,8 +3129,18 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
 async function scanIntelligentOpportunitiesLegacy(excludeSessionId?: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis[]> {
   console.log('🔍 Using LEGACY opportunity scan...');
   
+  // Create strategy profile from aggressiveness option
+  const aggressiveness = opts?.aggressiveness || 'reactive';
+  const strategyProfile: StrategyFilterProfile = {
+    aggressiveness,
+    targetTpPct: Math.max(1.2, Number(getConfig().TARGET_TP1_PCT ?? getConfig().MIN_TP_PCT ?? 1.2)),
+    stopLossPct: Math.max(0.4, Number(getConfig().MIN_STOP_PCT ?? 0.6)),
+  };
+  
+  console.log(`📊 Using ${aggressiveness} aggressiveness for crypto selection`);
+  
   // Get top 10-20 cryptos instead of all perpetuals, excluding current session
-  const symbols = await getOptimizedCryptoList(excludeSessionId);
+  const symbols = await getOptimizedCryptoList(excludeSessionId, 1, { strategy: strategyProfile });
   console.log(`📊 Analyzing ${symbols.length} top cryptos (legacy mode)...`);
   
   // Analyze in smaller batches for better performance
@@ -3331,6 +3341,17 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
   try {
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
+    // Fetch session to get aggressiveness level for meta-adaptive strategy
+    const session = await prisma.agentSession.findUnique({
+      where: { id: sessionId },
+      select: { profileJson: true }
+    });
+    const profileJson = (session?.profileJson as any) || {};
+    const aggressiveness: 'conservative' | 'reactive' | 'aggressive' = 
+      profileJson.aggressiveness || 'reactive';
+    
+    console.log(`📊 Using aggressiveness level: ${aggressiveness} for crypto selection`);
+    
     const testMode = !!opts?.testMode || (process.env.UNIT_TEST_MODE === 'true');
     const maxAttemptsEnv = Number(process.env.SMART_AGENT_INIT_MAX_ATTEMPTS || 4);
     const baseDelayEnv = Number(process.env.SMART_AGENT_INIT_RETRY_BASE_MS || 1500);
@@ -3344,7 +3365,10 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     if (!bestOpportunity) {
       for (let attempt = 1; attempt <= maxAttempts && !bestOpportunity; attempt++) {
         try {
-          bestOpportunity = await getBestIntelligentOpportunity(sessionId, { candidatesOverride: opts?.candidatesOverride });
+          bestOpportunity = await getBestIntelligentOpportunity(sessionId, { 
+            candidatesOverride: opts?.candidatesOverride,
+            aggressiveness 
+          });
         } catch (error) {
           console.warn(`⚠️ Attempt ${attempt} failed to fetch intelligent opportunity:`, error);
           bestOpportunity = null;
@@ -3396,7 +3420,7 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     
     if (currentAgentCount > 1 && !strongMomentum) {
       console.log(`🚫 Agent limit exceeded for ${bestOpportunity.symbol} (${currentAgentCount} active, momentum: ${bestOpportunity.metrics.momentum.toFixed(2)})`);
-      const retry = await getBestIntelligentOpportunity(sessionId);
+      const retry = await getBestIntelligentOpportunity(sessionId, { aggressiveness });
       if (!retry || retry.symbol === bestOpportunity.symbol) {
         // Enter short sleep and retry later to avoid churn
         const sleepConfig = {
@@ -3574,11 +3598,16 @@ async function maybeHandleDirectionalReversal(
   config: any,
   now: Date,
   minHoldHours: number,
-  hoursSinceSelection: number
+  hoursSinceSelection: number,
+  aggressiveness?: 'conservative' | 'reactive' | 'aggressive'
 ): Promise<boolean> {
   try {
     if (!session?.symbol || !config?.analysis) {
       return false;
+    }
+    
+    // Use provided aggressiveness or extract from config
+    const effectiveAggressiveness = aggressiveness || config?.aggressiveness || 'reactive';
     }
 
     const analysis = config.analysis as any;
@@ -3689,7 +3718,7 @@ async function maybeHandleDirectionalReversal(
       },
     });
 
-    const candidate = await getBestIntelligentOpportunity(session.id, { relaxSteps: 1 });
+    const candidate = await getBestIntelligentOpportunity(session.id, { relaxSteps: 1, aggressiveness: effectiveAggressiveness });
 
     if (!candidate) {
       const nextCheck = new Date(now.getTime() + 60 * 60 * 1000);
@@ -3847,6 +3876,11 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
   try {
     const config = session.profileJson as any;
     const now = new Date();
+    
+    // Extract aggressiveness from session profile for proper crypto selection
+    const aggressiveness: 'conservative' | 'reactive' | 'aggressive' = 
+      config?.aggressiveness || 'reactive';
+    
     // Configurable recent-activity window (hours). Default 3h (was 12h).
     const activityWindowHours = Math.max(1, Number(process.env.SMART_RECENT_ACTIVITY_HOURS || '3'));
     const activityWindowMs = activityWindowHours * 60 * 60 * 1000;
@@ -3918,7 +3952,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       });
       if (recentLossExits >= 3) {
         console.log(`🚨 Loss cluster detected for ${session.id} (${recentLossExits} exits < 60m) — forcing re-evaluation`);
-        const best = await getBestIntelligentOpportunity(session.id);
+        const best = await getBestIntelligentOpportunity(session.id, { aggressiveness });
         if (best && best.symbol && best.symbol !== session.symbol) {
           const existingHistory = normalizePlanContainer(session.planJson).intelligentHistory || [];
           const history = [...existingHistory, {
@@ -3994,7 +4028,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       // Adaptive relaxation after missed scans
       const miss = Math.max(0, Number((config?.sleepMisses ?? 0)));
       // Try to find opportunities after sleep (exclude current session) with relax
-      const bestOpportunity = await getBestIntelligentOpportunity(session.id, { relaxSteps: miss >= 2 ? 1 : 0 });
+      const bestOpportunity = await getBestIntelligentOpportunity(session.id, { relaxSteps: miss >= 2 ? 1 : 0, aggressiveness });
       
       if (!bestOpportunity) {
         const nextCheck = new Date(now.getTime() + 1 * 60 * 60 * 1000); // 1h sleep extension (was 2h)
@@ -4074,7 +4108,8 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         config,
         now,
         minHoldHours,
-        hoursSinceSelection
+        hoursSinceSelection,
+        aggressiveness
       );
       if (reversalHandled) {
         return;
@@ -4173,7 +4208,7 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     }
     
     // Get current best opportunity (cost-optimized scan, exclude current session)
-    const bestOpportunity = await getBestIntelligentOpportunity(session.id);
+    const bestOpportunity = await getBestIntelligentOpportunity(session.id, { aggressiveness });
     const currentAnalysis = config?.analysis;
     const currentScore = refreshedCurrent?.score ?? currentAnalysis?.score ?? 0;
     
@@ -4345,8 +4380,13 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
     const currentSymbol = session.symbol;
     console.log(`📊 Current symbol: ${currentSymbol}`);
     
+    // Extract aggressiveness from session profile
+    const profileJson = (session.profileJson as any) || {};
+    const aggressiveness: 'conservative' | 'reactive' | 'aggressive' = 
+      profileJson.aggressiveness || 'reactive';
+    
     // Compute best opportunity with confidence filter (exclude current session)
-    const best = await getBestIntelligentOpportunity(sessionId);
+    const best = await getBestIntelligentOpportunity(sessionId, { aggressiveness });
 
     if (!best) {
       return {
