@@ -203,7 +203,8 @@ async function executeEntryTrade(
     const sizer = new PositionSizer(config.risk.baseRiskPerTradePct);
     
     const entryPrice = tech.last;
-    const stopDistance = (tech.atr14 || tech.last * 0.01) * (config.exits.slAtrMult || 2); // Use ATR-based stop
+    const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
+    const stopDistance = (tech.atr14 || tech.last * DEFAULT_ATR_PCT) * (config.exits.slAtrMult || 2); // Use ATR-based stop
     
     const sizing = sizer.computeSize({
       equityUsd,
@@ -284,14 +285,16 @@ async function checkAndExecuteExit(
 
     // Check exit conditions using exitManager
     const config = getQuantAIConfig();
-    const minutesOpen = position.openedAt ? (Date.now() - position.openedAt) / 60000 : 0;
+    const MS_PER_MINUTE = 60000;
+    const minutesOpen = position.openedAt ? (Date.now() - position.openedAt) / MS_PER_MINUTE : 0;
+    const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
     const exitDirective = maybeAdjustOrExit({
       side: position.side === 'sell' ? 'short' : 'long',
       entryPrice: position.entry,
       lastPrice: currentPrice,
       stop: position.stop,
       targets: position.targets || [],
-      atr: tech.atr14 || (tech.last * 0.01),
+      atr: tech.atr14 || (tech.last * DEFAULT_ATR_PCT),
       cfg: config.exits,
       minutesOpen,
     });
