@@ -26,7 +26,8 @@
     "monitor:integrated": "tsx scripts/integrated-performance-monitor.ts",
     "train-model": "python3 python/ccxt_xgboost_module.py",
     "meta:rejections": "node scripts/meta-adaptive-rejection-summary.mjs",
-    "analyze:rejection": "tsx scripts/analyze-order-rejection.ts"
+    "analyze:rejection": "tsx scripts/analyze-order-rejection.ts",
+    "test:multi-agent": "tsx scripts/multi-agent-pool-test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.18.0",

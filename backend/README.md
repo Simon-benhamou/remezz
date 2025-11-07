@@ -5,6 +5,13 @@
 - `npm run test:integration` parcourt à la fois `backend/test/integration` et les fichiers `.mjs` à la racine de `backend/test`, tout en évitant les doublons et en prenant en charge les scénarios QA distants (`QA_ENABLE_REMOTE=true`).
 - Centraliser la découverte permet d'ajouter de nouveaux tests simplement en déposant le fichier dans l'emplacement adéquat sans modifier les scripts.
 
+### Multi-Agent Shared Pool Test
+- `npm run test:multi-agent` runs a comprehensive test simulating 9 trading agents (3 conservative, 3 reactive, 3 aggressive) sharing a $1000 pool over 10 days
+- Compares performance metrics across different risk profiles: PnL, stability, drawdown, Sharpe ratio
+- Results show aggressive mode generates highest returns (~55% avg), conservative mode offers best stability and risk-adjusted returns
+- See `MULTI_AGENT_TEST_README.md` for usage details and `MULTI_AGENT_TEST_ANALYSIS.md` for full results analysis
+- Test results are saved to `multi-agent-pool-test-results.json` (excluded from git via .gitignore)
+
 ## Python prediction integration
 
 ### Installation rapide
