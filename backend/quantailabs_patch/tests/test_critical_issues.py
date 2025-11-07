@@ -76,7 +76,7 @@ class CriticalIssuesTest(unittest.TestCase):
         """Test: Position sizing handles edge cases without crashing"""
         sizer = PositionSizer(base_risk_per_trade_pct=2.0)
         
-        # Test 1: Zero equity should return 0 size
+        # Test 1: Zero equity should return 0 size (no capital to risk)
         qty = sizer.compute_size(equity_usd=0, entry_price=100, stop_price=95)
         self.assertEqual(qty, 0.0, "Zero equity should produce zero position size")
         

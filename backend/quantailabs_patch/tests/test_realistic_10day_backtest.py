@@ -5,7 +5,7 @@ Simulates realistic market conditions with volatility, trends, and choppy period
 """
 import unittest
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import random
 import math
 
@@ -26,7 +26,7 @@ class MarketSimulator:
         self.volatility = volatility
         random.seed(seed)
         self.trend = 0.0
-        self.trend_duration = 0
+        self.trend_duration = 5  # Start with a small initial trend duration
         
     def next_candle(self, minutes: int = 15) -> Tuple[float, float, float, float, float]:
         """Generate OHLCV for next candle"""
@@ -163,7 +163,7 @@ class Realistic10DayBacktest(unittest.TestCase):
         # Track state
         candles = []
         trades: List[Trade] = []
-        active_trade: Trade | None = None
+        active_trade: Optional[Trade] = None
         now = datetime(2024, 1, 1, 0, 0)
         
         # Statistics
