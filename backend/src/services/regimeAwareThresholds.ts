@@ -248,7 +248,11 @@ export function getThresholdsForSymbol(
   aggressiveness: 'conservative' | 'reactive' | 'aggressive' = 'reactive'
 ): RegimeAwareThresholds & { regime: RegimeDiagnostics; tier: SymbolTier } {
   const tier = getSymbolTier(symbol);
-  const regime = classifyRegime(tech, {
+  
+  // Extract numeric fields only for regime classification
+  // The classifyRegime function safely handles non-numeric fields via safeNumber()
+  const { symbol: _, ...numericTech } = tech;
+  const regime = classifyRegime(numericTech as any, {
     spreadBps: tech.spreadBps,
     liquidityScore: tech.liquidityScore,
   });

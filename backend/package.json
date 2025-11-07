@@ -30,7 +30,7 @@
     "test:multi-agent": "tsx scripts/multi-agent-pool-test.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.18.0",
+    "@prisma/client": "^6.19.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "bcryptjs": "^3.0.2",
@@ -56,7 +56,7 @@
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
     "prettier": "^3.3.3",
-    "prisma": "^6.18.0",
+    "prisma": "^6.19.0",
     "ts-node-dev": "^2.0.0",
     "tsx": "^4.20.6",
     "typescript": "^5.4.5"

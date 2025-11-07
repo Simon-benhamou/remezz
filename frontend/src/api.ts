@@ -204,4 +204,10 @@ export const api = {
     (await client.put(`/api/improvements/${id}`, payload)).data,
   deleteImprovement: async (id: string) =>
     (await client.delete(`/api/improvements/${id}`)).data,
+  
+  // Entry analytics endpoints
+  getEntryDecisions: async (sessionId: string) =>
+    (await client.get(`/api/entry-analytics/entry-decisions/${sessionId}`)).data,
+  getRegimeThresholds: async (symbol: string) =>
+    (await client.get(`/api/entry-analytics/regime-thresholds/${symbol}`)).data,
 };

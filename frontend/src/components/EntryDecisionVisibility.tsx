@@ -15,7 +15,7 @@ import {
   FireOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons';
-import api from '../api';
+import { api } from '../api';
 
 type EntryCheckStatus = 'pass' | 'fail' | 'n/a' | 'warning';
 
@@ -58,10 +58,10 @@ export const EntryDecisionVisibility: React.FC<Props> = ({ sessionId }) => {
 
   const loadData = async () => {
     try {
-      const response = await api.get(`/entry-analytics/entry-decisions/${sessionId}`);
-      if (response.data.ok) {
-        setStats(response.data.stats);
-        setRecentDecisions(response.data.decisions || []);
+      const response = await api.getEntryDecisions(sessionId);
+      if (response.ok) {
+        setStats(response.stats);
+        setRecentDecisions(response.decisions || []);
       }
     } catch (error) {
       console.error('Failed to load entry decisions:', error);

@@ -57,12 +57,12 @@ export const useAuthStore = create<AuthStore>()(
       error: null,
 
       // Actions
-      setUser: (user) => set({ user, isAuthenticated: !!user }),
-      setApiKey: (apiKey) => set({ apiKey, isAuthenticated: !!apiKey }),
-      setLoading: (isLoading) => set({ isLoading }),
-      setError: (error) => set({ error, isLoading: false }),
+      setUser: (user: User | null) => set({ user, isAuthenticated: !!user }),
+      setApiKey: (apiKey: string | null) => set({ apiKey, isAuthenticated: !!apiKey }),
+      setLoading: (isLoading: boolean) => set({ isLoading }),
+      setError: (error: string | null) => set({ error, isLoading: false }),
 
-      login: (apiKey, user) => set({
+      login: (apiKey: string, user: User) => set({
         apiKey,
         user,
         isAuthenticated: true,
@@ -83,7 +83,7 @@ export const useAuthStore = create<AuthStore>()(
     {
       name: 'auth-storage',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
+      partialize: (state: AuthStore) => ({
         apiKey: state.apiKey,
         user: state.user,
         isAuthenticated: state.isAuthenticated,
@@ -110,15 +110,15 @@ export const useAppStore = create<AppStore>()(
       lastUpdate: null,
 
       // Actions
-      setMode: (mode) => set({ mode }),
-      setInitialized: (initialized) => set({ isInitialized: initialized }),
-      setGlobalLoading: (globalLoading) => set({ globalLoading }),
+      setMode: (mode: AppMode) => set({ mode }),
+      setInitialized: (initialized: boolean) => set({ isInitialized: initialized }),
+      setGlobalLoading: (globalLoading: boolean) => set({ globalLoading }),
       updateLastUpdate: () => set({ lastUpdate: Date.now() }),
     }),
     {
       name: 'app-storage',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
+      partialize: (state: AppStore) => ({
         mode: state.mode,
       }),
     }
@@ -150,7 +150,7 @@ export const useDashboardStore = create<DashboardStore>()(
       cacheValidityMs: 10000, // 10 seconds TTL
 
       // Actions
-      setOverview: (overview, mode) => {
+      setOverview: (overview: any, mode: AppMode) => {
         const cache = get().overviewCache;
         const newCache = {
           ...cache,
@@ -163,7 +163,7 @@ export const useDashboardStore = create<DashboardStore>()(
         });
       },
 
-      switchMode: (newMode) => {
+      switchMode: (newMode: AppMode) => {
         const cache = get().overviewCache;
         const cachedData = cache[newMode];
         if (cachedData && get().isCacheValid(newMode)) {
@@ -176,21 +176,21 @@ export const useDashboardStore = create<DashboardStore>()(
         }
       },
 
-      isCacheValid: (mode) => {
+      isCacheValid: (mode: AppMode) => {
         const cache = get().overviewCache;
         const cachedData = cache[mode];
         if (!cachedData) return false;
         return (Date.now() - cachedData.timestamp) < get().cacheValidityMs;
       },
 
-      getCachedOverview: (mode) => {
+      getCachedOverview: (mode: AppMode) => {
         if (get().isCacheValid(mode)) {
           return get().overviewCache[mode]?.data;
         }
         return null;
       },
 
-      invalidateCache: (mode) => {
+      invalidateCache: (mode?: AppMode) => {
         if (mode) {
           const cache = get().overviewCache;
           const newCache = { ...cache };
@@ -203,8 +203,8 @@ export const useDashboardStore = create<DashboardStore>()(
         }
       },
 
-      setOpsMetrics: (opsMetrics) => set({ opsMetrics }),
-      setOpsEvents: (opsEvents) => set({ opsEvents }),
+      setOpsMetrics: (opsMetrics: any) => set({ opsMetrics }),
+      setOpsEvents: (opsEvents: any[]) => set({ opsEvents }),
       updateLastFetched: () => set({ lastFetched: Date.now() }),
       reset: () => set({
         overviewCache: {},
@@ -217,7 +217,7 @@ export const useDashboardStore = create<DashboardStore>()(
     {
       name: 'dashboard-storage',
       storage: createJSONStorage(() => sessionStorage), // Use sessionStorage for dashboard data
-      partialize: (state) => ({
+      partialize: (state: DashboardStore) => ({
         overviewCache: state.overviewCache,
         currentOverview: state.currentOverview,
         lastFetched: state.lastFetched,
@@ -227,7 +227,7 @@ export const useDashboardStore = create<DashboardStore>()(
 );
 
 // Selectors for better performance
-export const useAuth = () => useAuthStore((state) => ({
+export const useAuth = () => useAuthStore((state: AuthStore) => ({
   user: state.user,
   apiKey: state.apiKey,
   isAuthenticated: state.isAuthenticated,
@@ -235,14 +235,14 @@ export const useAuth = () => useAuthStore((state) => ({
   error: state.error,
 }));
 
-export const useApp = () => useAppStore((state) => ({
+export const useApp = () => useAppStore((state: AppStore) => ({
   mode: state.mode,
   isInitialized: state.isInitialized,
   globalLoading: state.globalLoading,
   lastUpdate: state.lastUpdate,
 }));
 
-export const useDashboard = () => useDashboardStore((state) => ({
+export const useDashboard = () => useDashboardStore((state: DashboardStore) => ({
   overview: state.currentOverview,
   opsMetrics: state.opsMetrics,
   opsEvents: state.opsEvents,
