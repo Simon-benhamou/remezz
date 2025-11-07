@@ -4,7 +4,7 @@
  */
 
 import { prisma } from '../db/client.js';
-import { Prisma } from '.prisma/client';
+import { Prisma } from '@prisma/client';
 
 export type InputMetrics = {
   adx?: number;
