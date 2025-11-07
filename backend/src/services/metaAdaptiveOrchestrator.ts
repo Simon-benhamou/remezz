@@ -1,22 +1,41 @@
 /**
  * Meta-Adaptive Trading Orchestrator
  * 
- * Handles the execution loop for meta-adaptive agents:
+ * Handles the complete execution loop for meta-adaptive agents:
  * 1. Fetches market data for active sessions
- * 2. Evaluates meta-adaptive signals
- * 3. Executes trades based on signals
- * 4. Logs all activities
+ * 2. Evaluates meta-adaptive signals  
+ * 3. Executes entry trades based on signals
+ * 4. Monitors active positions
+ * 5. Executes exit trades with risk management
+ * 6. Logs all activities
  */
 
 import { prisma } from '../db/client.js';
 import { buildTechSnapshot, type TechnicalSnapshot } from '../ai/tech.js';
 import { computeMultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
 import { getMarketContext } from '../analytics/marketContext.js';
-import { evaluateRecognizedStrategies, type RecognizedStrategySignal } from '../quantai/strategies/metaAdaptive/recognizedStrategies.js';
+import {
+  evaluateRecognizedStrategies,
+  registerAdaptiveTradeEntry,
+  registerAdaptiveTradeOutcome,
+  type RecognizedStrategySignal
+} from '../quantai/strategies/metaAdaptive/recognizedStrategies.js';
+import { maybeAdjustOrExit, type ExitDirective } from '../quantai/strategies/metaAdaptive/exitManager.js';
+import { PositionSizer } from '../quantai/risk/positionSizing.js';
+import { getQuantAIConfig } from '../quantai/config.js';
 import { createLogger } from '../utils/logger.js';
 import { AgentHub } from '../agent/hub.js';
+import type { Broker } from '../broker/types.js';
+import { PaperBroker } from '../broker/paper.js';
+import { LiveBroker } from '../broker/live.js';
+import { CapitalPoolBroker } from '../broker/capitalPoolBroker.js';
+import { getCapitalManager } from '../services/capitalPool.js';
+import { capitalConfig } from '../config/capital.js';
 
 const logger = createLogger('meta-adaptive');
+
+// Track brokers per session to avoid recreating them
+const sessionBrokers = new Map<string, Broker>();
 
 type SessionContext = {
   sessionId: string;
@@ -24,7 +43,61 @@ type SessionContext = {
   mode: 'paper' | 'live';
   profileJson: any;
   accountBalanceUsd: number | null;
+  userId: string | null;
 };
+
+/**
+ * Get or create a broker for a session
+ */
+async function getBrokerForSession(session: SessionContext): Promise<Broker | null> {
+  // Check if broker already exists
+  const existing = sessionBrokers.get(session.sessionId);
+  if (existing) {
+    return existing;
+  }
+
+  // Check if agent has a broker
+  const agent = AgentHub.get(session.sessionId) as any;
+  if (agent?.broker) {
+    sessionBrokers.set(session.sessionId, agent.broker);
+    return agent.broker;
+  }
+
+  // Create new broker
+  let broker: Broker | null = null;
+  
+  if (session.mode === 'paper') {
+    const base = new PaperBroker(session.accountBalanceUsd ?? undefined);
+    const capital = getCapitalManager('paper');
+    broker = new CapitalPoolBroker({
+      agentId: session.sessionId,
+      mode: 'paper',
+      capital,
+      broker: base,
+      minOrderUsd: capitalConfig.minOrderUSD,
+    });
+  } else if (session.mode === 'live' && session.userId) {
+    const base = new LiveBroker(session.userId);
+    const capital = getCapitalManager('live');
+    broker = new CapitalPoolBroker({
+      agentId: session.sessionId,
+      mode: 'live',
+      capital,
+      broker: base,
+      minOrderUsd: capitalConfig.minOrderUSD,
+    });
+  }
+
+  if (broker) {
+    sessionBrokers.set(session.sessionId, broker);
+    // Also attach to agent if it exists
+    if (agent) {
+      agent.broker = broker;
+    }
+  }
+
+  return broker;
+}
 
 /**
  * Process a single session tick - evaluate signals and execute trades if needed
@@ -87,20 +160,12 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
             `[${session.sessionId}] Best entry signal: ${(bestSignal as any).strategyId} (${bestSignal.bias}) score=${bestSignal.meta?.score}`
           );
 
-          // TODO: Execute entry order using broker
-          // This is where actual trade execution would happen
-          // For now, we're just logging to confirm the orchestrator is working
+          await executeEntryTrade(session, bestSignal, tech);
         }
       } else {
-        // Has position - evaluate exit signals
-        const exitSignals = signals.filter(s => (s as any).isExit);
-        if (exitSignals.length > 0) {
-          logger.info(
-            `[${session.sessionId}] Found ${exitSignals.length} exit signal(s) for existing position`
-          );
-
-          // TODO: Execute exit order using broker
-        }
+        // Has position - check if we should exit
+        logger.debug(`[${session.sessionId}] Has position, checking exit conditions`);
+        await checkAndExecuteExit(session, agent, tech);
       }
     } else {
       logger.debug(`[${session.sessionId}] No signals generated for ${session.symbol}`);
