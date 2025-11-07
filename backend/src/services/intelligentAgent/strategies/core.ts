@@ -2848,6 +2848,7 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
       ? 'bearish'
       : 'neutral';
 
+  // 2. Compute component scores (normalized 0-1)
   const adxScore = Math.max(0, Math.min(1, (adx - 15) / 22));
   const strengthScore = Math.max(0, Math.min(1, (trendStrength - 0.2) / 0.8));
   const alignment = ema50 !== 0 ? Math.abs((ema20 - ema50) / ema50) : 0;
@@ -2865,13 +2866,20 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
     flowScore * params.weights.flow;
   const score = Number(weightedScore.toFixed(4));
 
+  // 4. Apply category-specific thresholds for validation reasons
   const reasons: string[] = [];
   // Use learned thresholds from personality profile
   if (adx < params.thresholds.adx) reasons.push('adx_below_trend_threshold');
   if (trendStrength < params.thresholds.trendStrength) reasons.push('weak_trend_structure');
   if (direction === 'bullish' && ema20 <= ema100) reasons.push('bullish_trend_missing_stack');
   if (direction === 'bearish' && ema20 >= ema100) reasons.push('bearish_trend_missing_stack');
-  if (Math.abs(cmf) < 0.05) reasons.push('neutral_flow');
+  // CMF threshold: for positive thresholds check if abs(cmf) is below threshold (neutral flow)
+  // for negative thresholds (Exotic), only flag if cmf is even more negative than threshold
+  if (params.thresholds.cmf >= 0 && Math.abs(cmf) < params.thresholds.cmf) {
+    reasons.push(`neutral_flow_for_${category}`);
+  } else if (params.thresholds.cmf < 0 && cmf < params.thresholds.cmf) {
+    reasons.push(`weak_flow_for_${category}`);
+  }
   if (ema200 !== 0) {
     const distance = Math.abs((last - ema200) / ema200) * 100;
     if (distance < 0.4) reasons.push('price_near_ema200');
