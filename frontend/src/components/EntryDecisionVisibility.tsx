@@ -15,7 +15,7 @@ import {
   FireOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons';
-import api from '../api';
+import { api } from '../api';
 
 type EntryCheckStatus = 'pass' | 'fail' | 'n/a' | 'warning';
 

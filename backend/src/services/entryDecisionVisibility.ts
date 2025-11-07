@@ -97,19 +97,14 @@ export async function getRecentEntryDecisions(
   limit: number = 20
 ): Promise<EntryHistoryEntry[]> {
   try {
-    const events = await prisma.opsTelemetry.findMany({
-      where: {
-        sessionId,
-        source: 'entry_decision_visibility',
-      },
-      orderBy: { ts: 'desc' },
-      take: limit,
-    });
+    const { recentOpsEvents } = await import('../monitor/ops.js');
+    const events = recentOpsEvents(limit * 2, { sessionId })
+      .filter(e => e.source === 'entry_decision_visibility');
 
-    return events.map(event => {
+    return events.slice(0, limit).map(event => {
       const details = event.details as any || {};
       return {
-        timestamp: event.ts.getTime(),
+        timestamp: event.ts,
         symbol: event.symbol || '',
         decision: event.message?.includes('blocked') ? 'blocked' : 'allowed',
         confidence: details.confidence || 0,
@@ -138,14 +133,9 @@ export async function getEntryDecisionStats(sessionId: string): Promise<{
   avgConfidenceBlocked: number;
 }> {
   try {
-    const events = await prisma.opsTelemetry.findMany({
-      where: {
-        sessionId,
-        source: 'entry_decision_visibility',
-      },
-      orderBy: { ts: 'desc' },
-      take: 100,
-    });
+    const { recentOpsEvents } = await import('../monitor/ops.js');
+    const events = recentOpsEvents(200, { sessionId })
+      .filter(e => e.source === 'entry_decision_visibility');
 
     const total = events.length;
     const allowed = events.filter(e => e.message?.includes('allowed')).length;

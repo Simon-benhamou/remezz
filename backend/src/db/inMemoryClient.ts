@@ -571,6 +571,19 @@ export class InMemoryPrismaClient {
     }
     return results;
   }
+
+  async $queryRaw(..._args: any[]): Promise<any[]> {
+    // In-memory implementation doesn't support raw queries
+    // Return empty array to avoid breaking code that uses $queryRaw
+    console.warn('$queryRaw is not supported in in-memory mode, returning empty array');
+    return [];
+  }
+
+  async $queryRawUnsafe(..._args: any[]): Promise<any[]> {
+    // In-memory implementation doesn't support raw queries
+    console.warn('$queryRawUnsafe is not supported in in-memory mode, returning empty array');
+    return [];
+  }
 }
 
 export function createInMemoryPrismaClient() {
