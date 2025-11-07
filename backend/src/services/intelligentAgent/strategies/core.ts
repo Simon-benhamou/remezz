@@ -3039,6 +3039,15 @@ function calculateConfidence(...scores: number[]): number {
 export async function scanIntelligentOpportunities(excludeSessionId?: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis[]> {
   console.log('🔍 Starting AI-powered opportunity scan (2-step pipeline)...');
   
+  // Note: AI ranking uses its own sophisticated filtering and doesn't currently
+  // use the aggressiveness parameter. The aggressiveness filtering is applied
+  // in the legacy path via getOptimizedCryptoList's strategy profile.
+  // Future enhancement: Pass aggressiveness to AI ranking for consistency.
+  const aggressiveness = opts?.aggressiveness || 'reactive';
+  if (aggressiveness !== 'reactive') {
+    console.log(`⚠️ AI ranking path currently uses built-in filtering (aggressiveness '${aggressiveness}' noted but not applied to AI selection)`);
+  }
+  
   try {
     // Use NEW AI ranking pipeline
     const aiRanked = await getAIRankedOpportunities({ 
@@ -3242,7 +3251,7 @@ export async function getBestIntelligentOpportunity(
     opts?.candidatesOverride ??
     (testMode
       ? await scanIntelligentOpportunitiesLegacy(excludeSessionId, opts)
-      : await scanIntelligentOpportunities(undefined, opts));
+      : await scanIntelligentOpportunities(excludeSessionId, opts));
 
   if (opportunities.length === 0) {
     console.log('😴 No qualified opportunities found (all below minimum score threshold) → SLEEP mode');
