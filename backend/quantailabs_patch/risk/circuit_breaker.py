@@ -64,6 +64,13 @@ class CircuitBreaker:
 
     def can_open_trade(self, now: datetime, equity: float) -> (bool, str):
         self._reset_day_if_needed(now, equity)
+        
+        # Check if cooldown has expired and reset consecutive losses
+        if self.cooldown_until and now >= self.cooldown_until:
+            self.cooldown_until = None
+            # Reset consecutive losses after cooldown period to allow fresh start
+            self.consecutive_losses = 0
+        
         if self.cooldown_until and now < self.cooldown_until:
             return False, f"Cooldown active until {self.cooldown_until} after losses streak={self.consecutive_losses}."
         if self.daily_trade_limit and self.trades_today >= self.daily_trade_limit:
