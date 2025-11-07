@@ -785,6 +785,20 @@ export async function startEventEngine(){
           const tech = await tickOnce(s.id, sym);
           lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
           try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
+          // Process meta-adaptive signals for this session
+          try {
+            const { processMetaAdaptiveTick } = await import('../services/metaAdaptiveOrchestrator.js');
+            await processMetaAdaptiveTick(s.id, sym, tech);
+          } catch (metaErr) {
+            recordOpsEvent({
+              level: 'error',
+              source: 'meta-adaptive',
+              message: 'Meta-adaptive tick processing failed',
+              sessionId: s.id,
+              symbol: sym,
+              details: { error: String((metaErr as any)?.message || metaErr) },
+            });
+          }
           await reconcileExposure(s.id, sym, s.mode as string);
         } catch (err) {
           recordOpsEvent({

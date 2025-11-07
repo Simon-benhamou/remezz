@@ -3617,7 +3617,6 @@ async function maybeHandleDirectionalReversal(
     
     // Use provided aggressiveness or extract from config
     const effectiveAggressiveness = aggressiveness || config?.aggressiveness || 'reactive';
-    }
 
     const analysis = config.analysis as any;
     const expectedBiasRaw = analysis?.autoBias?.bias ?? analysis?.opportunity?.direction ?? null;
