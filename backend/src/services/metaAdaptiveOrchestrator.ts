@@ -200,17 +200,16 @@ async function executeEntryTrade(
 
     // Calculate position size using PositionSizer
     const config = getQuantAIConfig();
-    const sizer = new PositionSizer(equityUsd, config.risk);
+    const sizer = new PositionSizer(config.risk.baseRiskPerTradePct);
     
     const entryPrice = tech.last;
-    const stopDistance = signal.meta?.stopDistance || (tech.last * 0.01); // 1% default
+    const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
+    const stopDistance = (tech.atr14 || tech.last * DEFAULT_ATR_PCT) * (config.exits.slAtrMult || 2); // Use ATR-based stop
     
-    const sizing = sizer.calculatePosition({
-      symbol: session.symbol,
-      side: signal.bias === 'short' ? 'short' : 'long',
+    const sizing = sizer.computeSize({
+      equityUsd,
       entryPrice,
-      stopDistance,
-      leverage: signal.meta?.leverage || config.risk.maxLeverage || 5,
+      stopDistanceAbs: stopDistance,
     });
 
     if (!sizing || sizing.qty <= 0) {
@@ -244,7 +243,6 @@ async function executeEntryTrade(
       side,
       type: 'market',
       qty: sizing.qty,
-      leverage: sizing.leverage,
       stopLoss: stopPrice,
       clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
     });
@@ -287,23 +285,26 @@ async function checkAndExecuteExit(
 
     // Check exit conditions using exitManager
     const config = getQuantAIConfig();
+    const MS_PER_MINUTE = 60000;
+    const minutesOpen = position.openedAt ? (Date.now() - position.openedAt) / MS_PER_MINUTE : 0;
+    const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
     const exitDirective = maybeAdjustOrExit({
       side: position.side === 'sell' ? 'short' : 'long',
       entryPrice: position.entry,
-      currentPrice,
+      lastPrice: currentPrice,
       stop: position.stop,
       targets: position.targets || [],
-      openedAt: position.openedAt,
-      atr: tech.atr14 || (tech.last * 0.01),
-      config: config.exits,
+      atr: tech.atr14 || (tech.last * DEFAULT_ATR_PCT),
+      cfg: config.exits,
+      minutesOpen,
     });
 
-    if (exitDirective?.action === 'exit' || exitDirective?.action === 'close') {
+    if (exitDirective?.action === 'exit') {
       logger.info(`[${session.sessionId}] Exit signal: ${exitDirective.reason}`);
       await executeExitTrade(session, agent, currentPrice, exitDirective.reason);
-    } else if (exitDirective?.action === 'adjust_stop' && exitDirective.newStop) {
-      logger.info(`[${session.sessionId}] Adjusting stop from ${position.stop} to ${exitDirective.newStop}`);
-      position.stop = exitDirective.newStop;
+    } else if (exitDirective?.action === 'move_sl') {
+      logger.info(`[${session.sessionId}] Adjusting stop from ${position.stop} to ${exitDirective.stop}`);
+      position.stop = exitDirective.stop;
     }
 
   } catch (error) {
@@ -360,13 +361,11 @@ async function executeExitTrade(
       await registerAdaptiveTradeOutcome({
         sessionId: session.sessionId,
         symbol: session.symbol,
-        strategyId: (position.signal as any).strategyId || (position.signal as any).id,
-        side: position.side === 'buy' ? 'long' : 'short',
-        entryPrice: position.entry,
-        exitPrice,
-        qty: position.qty,
-        pnlUsd: pnl,
-        reason,
+        token: (position.signal as any).meta?.token || null,
+        realizedPnlUsd: pnl,
+        exitReason: reason as any,
+        rawExitReason: reason,
+        sideEffective: position.side === 'buy' ? 'long' : 'short',
       });
     }
 
