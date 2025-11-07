@@ -11,6 +11,8 @@ import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDia
 import { getAdaptiveWeightsForSymbol } from '../../../learning/adaptiveWeights.js';
 import { recordDecisionSnapshot, markDecisionCancelled, analyzeDecisionMemoryForSymbol } from '../../../learning/decisionMemory.js';
 import type { DecisionFeatures } from '../../../learning/decisionMemory.js';
+import { getPersonalityProfile, DEFAULT_PARAMS } from '../../../learning/personalityProfile.js';
+import { logTradeEvaluation } from '../../../learning/tradeEvaluationLogger.js';
 import { getHybridSentiment } from '../../../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../../binanceWebSocket.js';
 import type { BinanceTickerData } from '../../binanceWebSocket.js';
@@ -2810,7 +2812,7 @@ type CryptoPerformanceEntry = {
   lastPrice: number;
 };
 
-function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null): TrendAssessment {
+async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null): Promise<TrendAssessment> {
   if (!snap) {
     return {
       symbol,
@@ -2824,6 +2826,10 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
       reasons: ['no_snapshot'],
     };
   }
+
+  // Try to fetch learned personality profile for this symbol
+  const profile = await getPersonalityProfile(symbol).catch(() => null);
+  const params = profile || DEFAULT_PARAMS;
 
   const adx = Number(snap.adx14 ?? 0);
   const trendStrength = Number(snap.trendStrength ?? 0);
@@ -2850,12 +2856,19 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
   const slopeScore = Math.max(0, Math.min(1, slopeNorm * 220));
   const flowScore = Math.max(0, Math.min(1, (cmf + 0.2) / 0.6));
 
-  const weightedScore = adxScore * 0.3 + strengthScore * 0.3 + alignmentScore * 0.2 + slopeScore * 0.1 + flowScore * 0.1;
+  // Use learned weights from personality profile
+  const weightedScore = 
+    adxScore * params.weights.adx + 
+    strengthScore * params.weights.strength + 
+    alignmentScore * params.weights.alignment + 
+    slopeScore * params.weights.slope + 
+    flowScore * params.weights.flow;
   const score = Number(weightedScore.toFixed(4));
 
   const reasons: string[] = [];
-  if (adx < 18) reasons.push('adx_below_trend_threshold');
-  if (trendStrength < 0.25) reasons.push('weak_trend_structure');
+  // Use learned thresholds from personality profile
+  if (adx < params.thresholds.adx) reasons.push('adx_below_trend_threshold');
+  if (trendStrength < params.thresholds.trendStrength) reasons.push('weak_trend_structure');
   if (direction === 'bullish' && ema20 <= ema100) reasons.push('bullish_trend_missing_stack');
   if (direction === 'bearish' && ema20 >= ema100) reasons.push('bearish_trend_missing_stack');
   if (Math.abs(cmf) < 0.05) reasons.push('neutral_flow');
@@ -2864,7 +2877,34 @@ function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | null):
     if (distance < 0.4) reasons.push('price_near_ema200');
   }
 
-  const ok = score >= 0.45 && adx >= 18 && trendStrength >= 0.25;
+  // Use learned minimum confidence threshold
+  const ok = score >= params.thresholds.minConfidence && adx >= params.thresholds.adx && trendStrength >= params.thresholds.trendStrength;
+
+  // Log the trade evaluation for learning
+  const decision = ok ? 'executed' : 'blocked';
+  const blockedReason = ok ? undefined : reasons.join(', ');
+  
+  logTradeEvaluation({
+    symbol,
+    decision,
+    blockedReason,
+    confidenceScore: score,
+    inputMetrics: {
+      adx,
+      cmf,
+      atrPct,
+      slope,
+      trendStrength,
+      ema20,
+      ema50,
+      ema100,
+      ema200,
+      rsi14: snap.rsi14 ? Number(snap.rsi14) : undefined,
+    },
+  }).catch((error) => {
+    // Non-blocking: log error but don't fail the trade decision
+    console.warn('Failed to log trade evaluation:', error);
+  });
 
   return {
     symbol,
@@ -2885,7 +2925,7 @@ async function evaluateSymbolTrend(symbol: string): Promise<TrendAssessment> {
   for (const candidate of candidates) {
     try {
       const snap = await buildTechSnapshot(candidate);
-      return computeTrendConfidence(symbol, snap);
+      return await computeTrendConfidence(symbol, snap);
     } catch (error) {
       lastError = error;
     }
@@ -2893,7 +2933,7 @@ async function evaluateSymbolTrend(symbol: string): Promise<TrendAssessment> {
   if (lastError) {
     console.warn(`⚠️ Trend snapshot unavailable for ${symbol}:`, lastError);
   }
-  return computeTrendConfidence(symbol, null);
+  return await computeTrendConfidence(symbol, null);
 }
 
 async function applyTrendWeighting(
