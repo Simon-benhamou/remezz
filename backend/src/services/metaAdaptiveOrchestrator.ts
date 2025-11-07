@@ -177,6 +177,208 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
 }
 
 /**
+ * Execute an entry trade based on a signal
+ */
+async function executeEntryTrade(
+  session: SessionContext,
+  signal: RecognizedStrategySignal,
+  tech: TechnicalSnapshot
+): Promise<void> {
+  try {
+    logger.info(`[${session.sessionId}] Executing entry trade for ${signal.bias} signal`);
+
+    // Get broker
+    const broker = await getBrokerForSession(session);
+    if (!broker) {
+      logger.error(`[${session.sessionId}] No broker available for session`);
+      return;
+    }
+
+    // Get account balance for position sizing
+    const balance = await broker.balance();
+    const equityUsd = balance.equityUsd || session.accountBalanceUsd || 1000;
+
+    // Calculate position size using PositionSizer
+    const config = getQuantAIConfig();
+    const sizer = new PositionSizer(equityUsd, config.risk);
+    
+    const entryPrice = tech.last;
+    const stopDistance = signal.meta?.stopDistance || (tech.last * 0.01); // 1% default
+    
+    const sizing = sizer.calculatePosition({
+      symbol: session.symbol,
+      side: signal.bias === 'short' ? 'short' : 'long',
+      entryPrice,
+      stopDistance,
+      leverage: signal.meta?.leverage || config.risk.maxLeverage || 5,
+    });
+
+    if (!sizing || sizing.qty <= 0) {
+      logger.warn(`[${session.sessionId}] Position sizing resulted in 0 quantity`);
+      return;
+    }
+
+    // Register the trade entry with meta-adaptive system
+    const registrationResult = await registerAdaptiveTradeEntry({
+      sessionId: session.sessionId,
+      symbol: session.symbol,
+      signal,
+      qty: sizing.qty,
+      entryPrice,
+      stopDistance,
+    });
+
+    if (registrationResult === 'skipped' || registrationResult === 'predictor_blocked') {
+      logger.info(`[${session.sessionId}] Trade registration ${registrationResult}`);
+      return;
+    }
+
+    // Place the actual order via broker
+    const side = signal.bias === 'short' ? 'sell' : 'buy';
+    const stopPrice = signal.bias === 'short'
+      ? entryPrice + stopDistance
+      : entryPrice - stopDistance;
+
+    const order = await broker.place({
+      symbol: session.symbol,
+      side,
+      type: 'market',
+      qty: sizing.qty,
+      leverage: sizing.leverage,
+      stopLoss: stopPrice,
+      clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
+    });
+
+    logger.info(`[${session.sessionId}] Entry order placed: ${order.id} ${side} ${sizing.qty} @ ${entryPrice}`);
+
+    // Update agent position state
+    const agent = AgentHub.get(session.sessionId) as any;
+    if (agent) {
+      agent.pos = {
+        side,
+        qty: sizing.qty,
+        entry: entryPrice,
+        stop: stopPrice,
+        signal,
+        openedAt: Date.now(),
+      };
+    }
+
+  } catch (error) {
+    logger.error(`[${session.sessionId}] Error executing entry trade:`, error);
+  }
+}
+
+/**
+ * Check if position should exit and execute if needed
+ */
+async function checkAndExecuteExit(
+  session: SessionContext,
+  agent: any,
+  tech: TechnicalSnapshot
+): Promise<void> {
+  try {
+    if (!agent?.pos) {
+      return;
+    }
+
+    const currentPrice = tech.last;
+    const position = agent.pos;
+
+    // Check exit conditions using exitManager
+    const config = getQuantAIConfig();
+    const exitDirective = maybeAdjustOrExit({
+      side: position.side === 'sell' ? 'short' : 'long',
+      entryPrice: position.entry,
+      currentPrice,
+      stop: position.stop,
+      targets: position.targets || [],
+      openedAt: position.openedAt,
+      atr: tech.atr14 || (tech.last * 0.01),
+      config: config.exits,
+    });
+
+    if (exitDirective?.action === 'exit' || exitDirective?.action === 'close') {
+      logger.info(`[${session.sessionId}] Exit signal: ${exitDirective.reason}`);
+      await executeExitTrade(session, agent, currentPrice, exitDirective.reason);
+    } else if (exitDirective?.action === 'adjust_stop' && exitDirective.newStop) {
+      logger.info(`[${session.sessionId}] Adjusting stop from ${position.stop} to ${exitDirective.newStop}`);
+      position.stop = exitDirective.newStop;
+    }
+
+  } catch (error) {
+    logger.error(`[${session.sessionId}] Error checking exit conditions:`, error);
+  }
+}
+
+/**
+ * Execute an exit trade
+ */
+async function executeExitTrade(
+  session: SessionContext,
+  agent: any,
+  exitPrice: number,
+  reason: string
+): Promise<void> {
+  try {
+    if (!agent?.pos) {
+      return;
+    }
+
+    logger.info(`[${session.sessionId}] Executing exit trade: ${reason}`);
+
+    const broker = await getBrokerForSession(session);
+    if (!broker) {
+      logger.error(`[${session.sessionId}] No broker available for exit`);
+      return;
+    }
+
+    const position = agent.pos;
+    const exitSide = position.side === 'buy' ? 'sell' : 'buy';
+
+    // Place exit order
+    const order = await broker.place({
+      symbol: session.symbol,
+      side: exitSide,
+      type: 'market',
+      qty: position.qty,
+      reduceOnly: true,
+      clientOrderId: `${session.sessionId}-exit-${Date.now()}`,
+    });
+
+    logger.info(`[${session.sessionId}] Exit order placed: ${order.id} ${exitSide} ${position.qty} @ ${exitPrice}`);
+
+    // Calculate P&L
+    const pnl = position.side === 'buy'
+      ? (exitPrice - position.entry) * position.qty
+      : (position.entry - exitPrice) * position.qty;
+
+    logger.info(`[${session.sessionId}] Trade closed. P&L: ${pnl.toFixed(2)} USD`);
+
+    // Register outcome
+    if (position.signal) {
+      await registerAdaptiveTradeOutcome({
+        sessionId: session.sessionId,
+        symbol: session.symbol,
+        strategyId: (position.signal as any).strategyId || (position.signal as any).id,
+        side: position.side === 'buy' ? 'long' : 'short',
+        entryPrice: position.entry,
+        exitPrice,
+        qty: position.qty,
+        pnlUsd: pnl,
+        reason,
+      });
+    }
+
+    // Clear position
+    agent.pos = null;
+
+  } catch (error) {
+    logger.error(`[${session.sessionId}] Error executing exit trade:`, error);
+  }
+}
+
+/**
  * Main orchestration function - called by event engine for each tick
  */
 export async function processMetaAdaptiveTick(sessionId: string, symbol: string, tech: TechnicalSnapshot): Promise<void> {
@@ -190,6 +392,7 @@ export async function processMetaAdaptiveTick(sessionId: string, symbol: string,
         mode: true,
         startBalanceUsd: true,
         profileJson: true,
+        userId: true,
       },
     });
 
@@ -206,6 +409,7 @@ export async function processMetaAdaptiveTick(sessionId: string, symbol: string,
       mode: session.mode as 'paper' | 'live',
       profileJson: session.profileJson || {},
       accountBalanceUsd: session.startBalanceUsd,
+      userId: session.userId,
     };
 
     await processSessionTick(sessionContext, tech);
