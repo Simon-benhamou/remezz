@@ -40,7 +40,33 @@ export class AgentsHub {
       sessionId, 
       profile,
       state: 'ACTIVE', // Meta-adaptive agents are stateless - show as ACTIVE when running
-      bias: 'none'
+      bias: 'none',
+      // Provide getDiagnostics method for meta-adaptive stub agents
+      getDiagnostics: async () => ({
+        state: 'ACTIVE',
+        bias: 'none',
+        sessionId,
+        profile,
+        canTrade: false,
+        reason: 'Meta-adaptive agent - stateless execution',
+        trigger: {
+          entryReady: false,
+          phase: 'meta_adaptive',
+          bias: 'none',
+          price: undefined,
+          zone: null,
+          inZone: false,
+          confirmationOk: false,
+          momentumOk: false,
+          qualityOk: false,
+          profitOk: false,
+          tp1ProfitPct: 0,
+          minProfitPct: 0,
+          dir: 0,
+        },
+        checks: null,
+        blockers: [],
+      })
     };
     this.agents.set(sessionId, a);
     return a;
