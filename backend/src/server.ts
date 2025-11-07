@@ -49,6 +49,7 @@ import {
 } from "./middleware/rateLimit.js";
 import { rehydrateActiveAgentSessions } from "./services/sessionRehydration.js";
 import { startSchedulerWorker } from "./services/schedulerJobService.js";
+import { initMetaAdaptiveOrchestrator } from "./services/metaAdaptiveOrchestrator.js";
 
 const logLevel = configureLogging();
 const serverLogger = createLogger("server");
@@ -157,6 +158,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 startWSHub(wss);
 startEventEngine();
+initMetaAdaptiveOrchestrator();
 startArbitrageMonitor();
 startIntegratedMonitoring();
 startMarginMonitor();
