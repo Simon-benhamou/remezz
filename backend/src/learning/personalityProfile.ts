@@ -8,6 +8,8 @@ import { prisma } from '../db/client.js';
 export type MarketRegime = 'bull_market' | 'bear_market' | 'choppy_market' | 'neutral';
 export type VolatilityRegime = 'low' | 'medium' | 'high';
 export type DirectionBias = 'long' | 'short' | 'neutral';
+export type VolumeRegime = 'low' | 'normal' | 'high';
+export type TrendingRanging = 'trending' | 'ranging';
 
 export type OptimalParams = {
   weights: {
@@ -37,6 +39,13 @@ export type RegimeAwareParams = {
   // Direction-specific
   long_bias?: OptimalParams;
   short_bias?: OptimalParams;
+  // Volume/Liquidity regimes
+  low_volume?: OptimalParams;
+  normal_volume?: OptimalParams;
+  high_volume?: OptimalParams;
+  // Trend vs Range
+  trending?: OptimalParams;
+  ranging?: OptimalParams;
 };
 
 /**
@@ -57,6 +66,67 @@ export function classifyDirectionBias(ema20?: number, ema50?: number): Direction
   if (ema20 > ema50 * 1.001) return 'long';   // Bullish with 0.1% buffer
   if (ema20 < ema50 * 0.999) return 'short';  // Bearish with 0.1% buffer
   return 'neutral';
+}
+
+/**
+ * Classify volume regime based on volume Z-score or volume ratio
+ * Uses volume compared to its moving average
+ */
+export function classifyVolumeRegime(
+  volume?: number,
+  volumeMA?: number,
+  volumeZScore?: number
+): VolumeRegime {
+  // Prefer Z-score if available (more statistical)
+  if (volumeZScore !== undefined && Number.isFinite(volumeZScore)) {
+    if (volumeZScore < -0.5) return 'low';      // Below average volume
+    if (volumeZScore > 0.5) return 'high';      // Above average volume
+    return 'normal';
+  }
+  
+  // Fall back to volume ratio
+  if (volume !== undefined && volumeMA !== undefined && 
+      Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0) {
+    const ratio = volume / volumeMA;
+    if (ratio < 0.7) return 'low';      // Low liquidity period
+    if (ratio > 1.3) return 'high';     // High liquidity period
+    return 'normal';
+  }
+  
+  // Default to normal if insufficient data
+  return 'normal';
+}
+
+/**
+ * Classify whether market is trending or ranging
+ * Uses ADX as primary indicator:
+ * - ADX > 25: Strong trend (trending)
+ * - ADX < 20: Weak trend (ranging)
+ * - ADX 20-25: Transitional (use volatility as secondary)
+ */
+export function classifyTrendingRanging(adx?: number, atrPct?: number): TrendingRanging {
+  if (!adx || !Number.isFinite(adx)) {
+    // Fallback: use volatility if ADX not available
+    if (atrPct !== undefined && Number.isFinite(atrPct)) {
+      // High volatility often indicates trending, low volatility indicates ranging
+      return atrPct > 4 ? 'trending' : 'ranging';
+    }
+    return 'ranging'; // Default to ranging if no data
+  }
+  
+  // Clear trend (ADX > 25)
+  if (adx > 25) return 'trending';
+  
+  // Clear range (ADX < 20)
+  if (adx < 20) return 'ranging';
+  
+  // Transitional zone (20-25): use volatility as tiebreaker
+  if (atrPct !== undefined && Number.isFinite(atrPct)) {
+    return atrPct > 4 ? 'trending' : 'ranging';
+  }
+  
+  // Default to ranging for uncertainty
+  return 'ranging';
 }
 
 export type PersonalityProfile = {
@@ -94,6 +164,8 @@ export async function getPersonalityProfile(
     volatilityRegime?: VolatilityRegime;
     directionBias?: DirectionBias;
     marketRegime?: MarketRegime;
+    volumeRegime?: VolumeRegime;
+    trendingRanging?: TrendingRanging;
   }
 ): Promise<OptimalParams | null> {
   try {
@@ -111,7 +183,13 @@ export async function getPersonalityProfile(
     if (params && typeof params === 'object' && 'default' in params) {
       const regimeParams = params as RegimeAwareParams;
       
-      // Priority order: volatility > direction > market regime > default
+      // Priority order: 
+      // 1. Volatility (most important for risk management)
+      // 2. Volume/Liquidity (affects execution quality)
+      // 3. Trending vs Ranging (affects strategy type)
+      // 4. Direction bias (asymmetric long/short)
+      // 5. Market regime (general market condition)
+      // 6. Default (fallback)
       
       // 1. Try volatility regime first (most important for risk management)
       if (options?.volatilityRegime) {
@@ -121,7 +199,22 @@ export async function getPersonalityProfile(
         }
       }
       
-      // 2. Try direction bias (asymmetric long/short)
+      // 2. Try volume regime (liquidity affects execution)
+      if (options?.volumeRegime) {
+        const volKey = `${options.volumeRegime}_volume` as keyof RegimeAwareParams;
+        if (regimeParams[volKey]) {
+          return regimeParams[volKey] as OptimalParams;
+        }
+      }
+      
+      // 3. Try trending vs ranging (strategy type selection)
+      if (options?.trendingRanging) {
+        if (regimeParams[options.trendingRanging]) {
+          return regimeParams[options.trendingRanging] as OptimalParams;
+        }
+      }
+      
+      // 4. Try direction bias (asymmetric long/short)
       if (options?.directionBias && options.directionBias !== 'neutral') {
         const dirKey = `${options.directionBias}_bias` as keyof RegimeAwareParams;
         if (regimeParams[dirKey]) {
@@ -129,12 +222,12 @@ export async function getPersonalityProfile(
         }
       }
       
-      // 3. Try market regime
+      // 5. Try market regime
       if (options?.marketRegime && regimeParams[options.marketRegime]) {
         return regimeParams[options.marketRegime] as OptimalParams;
       }
       
-      // 4. Fall back to default
+      // 6. Fall back to default
       return regimeParams.default;
     }
 

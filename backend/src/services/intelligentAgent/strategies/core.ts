@@ -11,7 +11,7 @@ import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDia
 import { getAdaptiveWeightsForSymbol } from '../../../learning/adaptiveWeights.js';
 import { recordDecisionSnapshot, markDecisionCancelled, analyzeDecisionMemoryForSymbol } from '../../../learning/decisionMemory.js';
 import type { DecisionFeatures } from '../../../learning/decisionMemory.js';
-import { getPersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias } from '../../../learning/personalityProfile.js';
+import { getPersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, classifyTrendingRanging } from '../../../learning/personalityProfile.js';
 import { logTradeEvaluation } from '../../../learning/tradeEvaluationLogger.js';
 import { getHybridSentiment } from '../../../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../../binanceWebSocket.js';
@@ -2828,21 +2828,28 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
   }
 
   // Try to fetch learned personality profile for this symbol
-  // Now with regime awareness for volatility and direction
+  // Now with regime awareness for volatility, direction, volume, and trending/ranging
   const atrPct = Number(snap.atrPct ?? 0);
   const ema20 = Number(snap.ema20 ?? 0);
   const ema50 = Number(snap.ema50 ?? 0);
+  const adx = Number(snap.adx14 ?? 0);
+  const volume = snap.volume ? Number(snap.volume) : undefined;
+  const volumeMA = snap.volumeMA ? Number(snap.volumeMA) : undefined;
+  const volumeZScore = snap.volumeZScore ? Number(snap.volumeZScore) : undefined;
   
   const volatilityRegime = classifyVolatilityRegime(atrPct);
   const directionBias = classifyDirectionBias(ema20, ema50);
+  const volumeRegime = classifyVolumeRegime(volume, volumeMA, volumeZScore);
+  const trendingRanging = classifyTrendingRanging(adx, atrPct);
   
   const profile = await getPersonalityProfile(symbol, {
     volatilityRegime,
     directionBias,
+    volumeRegime,
+    trendingRanging,
   }).catch(() => null);
   const params = profile || DEFAULT_PARAMS;
 
-  const adx = Number(snap.adx14 ?? 0);
   const trendStrength = Number(snap.trendStrength ?? 0);
   const ema100 = Number(snap.ema100 ?? 0);
   const ema200 = Number(snap.ema200 ?? 0);
@@ -2911,6 +2918,9 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
       ema100,
       ema200,
       rsi14: snap.rsi14 ? Number(snap.rsi14) : undefined,
+      volume,
+      volumeMA,
+      volumeZScore,
     },
   }).catch((error) => {
     // Non-blocking: log error but don't fail the trade decision
