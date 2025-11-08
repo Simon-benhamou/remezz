@@ -263,7 +263,10 @@ export async function getPrediction(features: Record<string, number>): Promise<P
   const scriptPath = getScriptPath();
   const payload = JSON.stringify(sanitized);
   const startTime = Date.now();
-
+  const logger = createIntegrationLogger({
+    component: 'PythonPredictor',
+    action: 'predict',
+  });
   logger.debug(`Calling Python | features=${Object.keys(sanitized).length} script=${scriptPath}`);
 
   return new Promise<PythonPredictionResult>((resolve, reject) => {
