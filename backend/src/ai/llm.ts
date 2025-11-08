@@ -139,7 +139,7 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
         const fallbackResponseTime = Date.now() - fallbackStartTime;
         recordServiceSuccess('llm', fallbackResponseTime);
         if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: fallback.text, provider: 'openai', model: fallback.modelUsed, tokensIn: fallback.tokensIn, tokensOut: fallback.tokensOut, costUsd: fallback.costUsd });
-        const fallbackDuration = Date.now() - fallbackStart;
+        const fallbackDuration = Date.now() - fallbackStartTime;
         logger.success(`Fallback succeeded`, fallbackDuration, {
           provider: 'openai',
           model: fallback.modelUsed,
