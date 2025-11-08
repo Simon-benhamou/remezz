@@ -9,6 +9,7 @@ import {
   Divider,
   Drawer,
   Empty,
+  Input,
   Row,
   Select,
   Space,
@@ -235,6 +236,8 @@ const OperationsDashboardPage: React.FC = () => {
   const [recentTradesLoading, setRecentTradesLoading] = React.useState(false);
   const [reselecting, setReselecting] = React.useState<Record<string, boolean>>({});
   const [strategyFilter, setStrategyFilter] = React.useState<'all' | StrategyEngineOption>('all');
+  const [optimizing, setOptimizing] = React.useState(false);
+  const [optimizingSymbol, setOptimizingSymbol] = React.useState('');
   const mode = useAppStore((state) => state.mode);
 
   const strategyOptions = React.useMemo(
@@ -344,6 +347,47 @@ const OperationsDashboardPage: React.FC = () => {
     },
     [refreshAll],
   );
+
+  const handleOptimizeSymbol = React.useCallback(async () => {
+    const symbol = optimizingSymbol.trim();
+    if (!symbol) {
+      message.warning('Please enter a symbol');
+      return;
+    }
+
+    setOptimizing(true);
+    try {
+      const result = await api.optimizeSymbol(symbol);
+      if (result?.success) {
+        message.success(result.message || `Optimized parameters for ${symbol}`);
+        setOptimizingSymbol('');
+      } else {
+        message.warning(result?.message || 'Optimization completed with no changes');
+      }
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || error?.message || 'Optimization failed';
+      message.error(msg);
+    } finally {
+      setOptimizing(false);
+    }
+  }, [optimizingSymbol]);
+
+  const handleOptimizeAll = React.useCallback(async () => {
+    setOptimizing(true);
+    try {
+      const result = await api.optimizeAllSymbols();
+      if (result?.success) {
+        message.success(result.message || `Optimized ${result.count} symbols`);
+      } else {
+        message.warning('No symbols were optimized');
+      }
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || error?.message || 'Batch optimization failed';
+      message.error(msg);
+    } finally {
+      setOptimizing(false);
+    }
+  }, []);
 
   const { token } = theme.useToken();
   const metricsTimestamp = opsMetrics?.timestamp
@@ -886,6 +930,84 @@ const OperationsDashboardPage: React.FC = () => {
                 <Badge color={item.tone} text={<span style={{ color: item.tone }}>{item.status}</span>} />
               </div>
             ))}
+          </Card>
+        </Col>
+        <Col xs={24} xl={14}>
+          <Card
+            title={<span style={{ color: '#e2e8f0' }}>Strategy Optimizer</span>}
+            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+            bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            <Alert
+              message='Machine Learning Parameter Optimization'
+              description={
+                <span style={{ color: 'rgba(226, 232, 240, 0.78)' }}>
+                  Analyze historical trade evaluations to find optimal strategy parameters for each symbol. 
+                  The optimizer uses grid search to maximize Sharpe ratio, win rate, and total PnL.
+                </span>
+              }
+              type='info'
+              showIcon
+              style={{
+                background: 'rgba(59, 130, 246, 0.1)',
+                borderRadius: 12,
+                border: `1px solid rgba(59, 130, 246, 0.3)`,
+              }}
+            />
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.7)',
+                padding: '20px',
+                borderRadius: 14,
+                border: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <Space direction='vertical' size={16} style={{ width: '100%' }}>
+                <div>
+                  <Text style={{ color: '#e2e8f0', fontWeight: 600, display: 'block', marginBottom: 8 }}>
+                    Optimize Single Symbol
+                  </Text>
+                  <Space.Compact style={{ width: '100%' }}>
+                    <Input
+                      placeholder='Enter symbol (e.g., BTC/USDT)'
+                      value={optimizingSymbol}
+                      onChange={(e) => setOptimizingSymbol(e.target.value)}
+                      onPressEnter={handleOptimizeSymbol}
+                      disabled={optimizing}
+                      style={{ flex: 1 }}
+                    />
+                    <Button
+                      type='primary'
+                      icon={<ThunderboltOutlined />}
+                      onClick={handleOptimizeSymbol}
+                      loading={optimizing}
+                      disabled={!optimizingSymbol.trim()}
+                    >
+                      Optimize
+                    </Button>
+                  </Space.Compact>
+                </div>
+                <Divider style={{ margin: 0, borderColor: token.colorBorderSecondary }} />
+                <div>
+                  <Text style={{ color: '#e2e8f0', fontWeight: 600, display: 'block', marginBottom: 8 }}>
+                    Batch Optimization
+                  </Text>
+                  <Button
+                    type='primary'
+                    icon={<ThunderboltOutlined />}
+                    onClick={handleOptimizeAll}
+                    loading={optimizing}
+                    block
+                    style={{ background: '#8b5cf6', borderColor: '#8b5cf6' }}
+                  >
+                    Optimize All Symbols with Sufficient Data
+                  </Button>
+                  <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12, display: 'block', marginTop: 8 }}>
+                    This will analyze all symbols that have at least 50 trade evaluations and update their personality profiles.
+                  </Text>
+                </div>
+              </Space>
+            </div>
           </Card>
         </Col>
         <Col xs={24} xl={24}>

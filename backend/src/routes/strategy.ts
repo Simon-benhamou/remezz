@@ -7,6 +7,8 @@ import { activeSession } from "../session/session.js";
 import { AgentHub } from "../agent/hub.js";
 import { requestStrategy } from "../ai/strategyManager.js";
 import { levels as calcLevels } from "../risk/brackets.js";
+import { optimizeSymbolParameters, optimizeAllSymbols } from "../learning/strategyOptimizer.js";
+import { savePersonalityProfile } from "../learning/personalityProfile.js";
 export const router = Router();
 router.post("/generate", async (req, res) => {
   const symbol = String(req.body?.symbol || "BTCUSDT");
@@ -82,4 +84,63 @@ router.post('/rank', async (req,res)=>{
   const perps = (req.body?.perps as string[]) ?? ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','AVAX/USDT'];
   const ranked = await selectBestPerp(perps);
   res.json(ranked);
+});
+
+// Optimize strategy parameters for a specific symbol
+router.post('/optimize-symbol', async (req, res) => {
+  try {
+    const symbol = String(req.body?.symbol);
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+
+    const optimalParams = await optimizeSymbolParameters(symbol);
+    
+    if (!optimalParams) {
+      return res.status(404).json({ 
+        error: 'Insufficient data',
+        message: `Not enough trade evaluation data available for ${symbol} to perform optimization` 
+      });
+    }
+
+    // Save the optimized parameters
+    await savePersonalityProfile(symbol, optimalParams);
+
+    res.json({
+      success: true,
+      symbol,
+      parameters: optimalParams,
+      message: `Successfully optimized and saved parameters for ${symbol}`
+    });
+  } catch (error: any) {
+    console.error('Strategy optimization error:', error);
+    res.status(500).json({ 
+      error: 'Optimization failed',
+      message: error?.message || String(error)
+    });
+  }
+});
+
+// Optimize strategy parameters for all symbols with sufficient data
+router.post('/optimize-all', async (req, res) => {
+  try {
+    const results = await optimizeAllSymbols();
+    
+    const symbolsOptimized = Array.from(results.keys());
+    const parameters = Object.fromEntries(results);
+
+    res.json({
+      success: true,
+      count: symbolsOptimized.length,
+      symbols: symbolsOptimized,
+      parameters,
+      message: `Successfully optimized parameters for ${symbolsOptimized.length} symbols`
+    });
+  } catch (error: any) {
+    console.error('Batch optimization error:', error);
+    res.status(500).json({ 
+      error: 'Batch optimization failed',
+      message: error?.message || String(error)
+    });
+  }
 });
