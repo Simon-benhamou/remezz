@@ -8,6 +8,7 @@ import {
   recordServiceFailure,
   recordFallbackTriggered 
 } from "../infra/serviceHealth.js";
+import { createIntegrationLogger } from '../utils/integrationLogger.js';
 
 export type LLMChoice = "openai" | "grok" | "none";
 type LLMContext = { sessionId?: string; symbol?: string; kind?: string };
@@ -34,8 +35,14 @@ function keyOf(prompt: string, opts?: LLMOpts) {
 }
 
 export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
+  const logger = createIntegrationLogger({
+    component: 'LLM',
+    action: 'call',
+    sessionId: opts?.context?.sessionId,
+    symbol: opts?.context?.symbol,
+  });
+
   const cfg = getConfig();
-  if (cfg.LLM_DISABLE) throw new Error('LLM disabled');
 
   // Check service health
   if (!isServiceAvailable('llm')) {
@@ -49,22 +56,27 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   const hit = opts?.noCache ? undefined : cache.get(key);
   const now = Date.now();
   if (hit && (now - hit.ts) < ttl) {
-    if (process.env.DEBUG_LLM === 'true') {
-      try {
-        console.log(`[llm] cache hit provider=${hit.provider} model=${hit.model}`);
-      } catch {}
-    }
+    const age = Math.floor((now - hit.ts) / 1000);
+    logger.debug(`Cache hit | provider=${hit.provider} model=${hit.model} age=${age}s`, {
+      tokensIn: hit.tokensIn,
+      tokensOut: hit.tokensOut,
+      costUsd: hit.costUsd,
+    });
     return hit.data;
   }
 
   // Single-flight
   const inF = opts?.noCache ? undefined : inFlight.get(key);
-  if (inF) return inF;
+  if (inF) {
+    logger.debug('Call in-flight, waiting for completion');
+    return inF;
+  }
 
   // Rate limit: enforce min spacing by waiting instead of throwing
   const delta = now - lastCallAt;
   if (!opts?.bypassRate && delta < cfg.LLM_MIN_INTERVAL_MS) {
     const waitMs = Math.max(0, cfg.LLM_MIN_INTERVAL_MS - delta);
+    logger.warn(`Rate limit wait | waitMs=${waitMs} lastCallDelta=${delta}`);
     await new Promise(r => setTimeout(r, waitMs));
   }
   lastCallAt = Date.now();
@@ -73,18 +85,21 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   if (provider === 'grok') {
     if (!cfg.GROK_API_KEY) {
       if (cfg.OPENAI_API_KEY) {
+        logger.warn('Grok key missing, switching to OpenAI');
         provider = 'openai';
-        if (process.env.DEBUG_LLM === 'true') {
-          try { console.log('[llm] switching provider from grok to openai (missing GROK_API_KEY)'); } catch {}
-        }
       } else {
+        logger.error('No LLM provider available (missing both Grok and OpenAI keys)');
         throw new Error('Grok provider requested but GROK_API_KEY missing and no OpenAI fallback available');
       }
     }
   }
   try { if (process.env.DEBUG_LLM === 'true') console.log(`[llm] provider=${provider} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} key=${(opts?.cacheKey||'auto')}`); } catch {}
   const startTime = Date.now();
+  
+  logger.info(`Calling LLM | provider=${provider} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} kind=${opts?.context?.kind || 'unknown'}`);
+  
   const p = (async () => {
+    const callStart = Date.now();
     try {
       let result: LLMCallResult;
       if (provider === 'openai') result = await callOpenAI(prompt);
@@ -110,8 +125,10 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
       if (!opts?.noCache) inFlight.delete(key);
     }
   })();
+  
   let finalPromise: Promise<string> = p.catch(async (err) => {
     if (provider === 'grok' && cfg.OPENAI_API_KEY) {
+      logger.warn('Grok call failed, attempting OpenAI fallback');
       try {
         if (process.env.DEBUG_LLM === 'true') {
           try { console.log('[llm] grok call failed, retrying with openai fallback'); } catch {}
@@ -122,6 +139,11 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
         const fallbackResponseTime = Date.now() - fallbackStartTime;
         recordServiceSuccess('llm', fallbackResponseTime);
         if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: fallback.text, provider: 'openai', model: fallback.modelUsed, tokensIn: fallback.tokensIn, tokensOut: fallback.tokensOut, costUsd: fallback.costUsd });
+        const fallbackDuration = Date.now() - fallbackStart;
+        logger.success(`Fallback succeeded`, fallbackDuration, {
+          provider: 'openai',
+          model: fallback.modelUsed,
+        });
         return fallback.text;
       } catch (fallbackErr) {
         recordServiceFailure('llm', fallbackErr as Error);

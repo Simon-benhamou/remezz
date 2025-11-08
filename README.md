@@ -1,155 +1,1059 @@
-Algorithme d’IA utilisé par l’agent
+# 🤖 QuantAI Trading Agent v3
 
-L’agent de trading de QuantAILabs n’emploie pas un algorithme de reinforcement learning standard pré-entraîné de type DQN ou PPO. À la place, il s’appuie sur une approche hybride mêlant des règles déterministes basées sur l’analyse technique et des ajustements en temps réel fondés sur les données (ML local adaptatif). Le code qualifie ce système d’« intelligence hybride : ML local + IA ultra-conditionnelle »
-GitHub
-. Concrètement, cela signifie que l’agent applique une stratégie programmée (logiciel classique) tout en ajustant certains seuils et pondérations de ses indicateurs en fonction des résultats récents, plutôt que de suivre aveuglément un modèle statistique figé. Par exemple, une composante d’auto-apprentissage adaptatif recalcule périodiquement des poids pour les filtres de momentum, volume, volatilité en comparant les caractéristiques des trades gagnants vs perdants sur un historique glissant (environ 200 derniers trades)
-GitHub
-. Il n’y a donc pas de réseau neuronal profond (pas de LSTM ou CNN entraîné hors-ligne) pilotant directement les décisions, mais une logique algorithmique adaptative renforcée par des analyses « IA » (classement d’opportunités multi-actifs, sentiment de marché, etc.). En résumé, l’agent utilise un algorithme maison orienté règles adaptatives plutôt qu’un modèle type boîte noire entraîné sur données historiques.
+**An intelligent, meta-adaptive cryptocurrency trading system powered by hybrid AI strategies**
 
-Structure de la stratégie de trading (entrées, sorties, SL/TP, fréquence)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.4+-blue.svg)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
+[![React](https://img.shields.io/badge/React-18+-61DAFB.svg)](https://reactjs.org/)
+[![License](https://img.shields.io/badge/license-Private-red.svg)]()
 
-La stratégie de trading implémentée est réactive et conçue pour des marchés crypto. L’agent surveille plusieurs paires crypto et ne prend position que lorsque divers critères techniques sont simultanément remplis. Lorsqu’une opportunité est détectée, un ordre bracket est placé, comportant une entrée en position, un stop-loss protecteur et un take-profit dès le départ
-GitHub
-. Par exemple, dans un cas de trade réel sur BTC/USDT, l’agent a créé un ordre d’achat dès qu’un signal de rebond a été détecté, la transaction s’exécutant au prix du marché, puis un stop-loss a été placé automatiquement environ 1% sous le prix d’entrée pour limiter la perte potentielle
-GitHub
-. De même, un ou plusieurs objectifs de gain (TP) sont définis – l’agent utilise en effet un système de ladder de take-profit qui permet de prendre des profits partiels à différents paliers. Ces niveaux peuvent être ajustés en cours de trade selon l’évolution des conditions : on observe par exemple que suite à un affaiblissement du momentum après l’entrée, l’agent a resserré le premier TP pour assurer un gain avant que le mouvement ne faiblisse
-GitHub
-.
+## 📋 Table of Contents
 
-Les signaux d’entrée combinent plusieurs indicateurs. Typiquement, l’agent cherche des configurations de retournement ou de cassure confirmées par des indicateurs de tendance et de momentum. Par exemple, un trade sur ETH/USDT a été déclenché dès que le RSI14 est remonté au-dessus d’un seuil (≈48) indiquant une reprise de momentum haussier, tout en respectant les autres filtres – l’ordre d’achat s’est exécuté instantanément et un stop-loss initial d’environ 0,82% sous le point d’entrée a été fixé
-GitHub
-. D’autres déclencheurs incluent des cassures de range (breakouts) ou des rebonds sur supports, couplés à des confirmations (ex: EMA courtes > EMA longues, volatilité adéquate, volumes en hausse). Une fois en position, l’agent peut sortir soit par atteinte du take-profit, soit par atteinte du stop-loss, soit par invalidation anticipée si les conditions de marché se détériorent (par exemple si un indicateur clé passe en dessous d’un seuil critique, l’agent peut clôturer avant le stop).
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Trading Strategy](#trading-strategy)
+- [Execution Flow](#execution-flow)
+- [Project Structure](#project-structure)
+- [Installation & Setup](#installation--setup)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Performance Monitoring](#performance-monitoring)
+- [API Documentation](#api-documentation)
 
-La stratégie impose de nombreux garde-fous (filtres) avant de valider une entrée ou pendant la position. Dans les journaux de diagnostics, on voit par exemple les statuts de plusieurs “gates” logiques : un gate momentumOk vérifie que le momentum est suffisant (ex: ADX au-dessus d’un minimum, RSI en zone favorable), un gate volumeOk exige un volume récent adéquat, un gate qualityOk mesure une sorte de score de qualité globale du plan, et un gate profitOk s’assure que le potentiel de gain (distance au TP1) dépasse un minimum par rapport au spread et à la volatilité
-GitHub
-. Si l’un de ces critères est en échec (FAIL), le trade est bloqué (pas exécuté) ou pourra être clôturé prématurément. Par exemple, dans un des trades étudiés, au moment de la sortie le gate momentumOk est passé à FAIL car l’ADX était retombé < 15, et profitOk était FAIL car le premier objectif de profit était devenu trop faible par rapport aux exigences – l’agent a ainsi constaté que les conditions n’étaient plus réunies pour rester en position
-GitHub
-.
+---
 
-En termes de gestion du risque et fréquence de trading, l’agent opère avec une taille de position prédéfinie en USD et limite strictement le nombre de trades et pertes consécutives. Par exemple, la configuration par défaut imposait un maximum d’environ 7 trades par jour par agent (gate dailyTradeLimit)
-GitHub
-. De plus, un coupe-circuit (circuit breaker) stoppe l’ouverture de nouvelles positions après un certain nombre de pertes consécutives – dans les logs, on voit un seuil de 3 pertes d’affilée (gate consecutiveStopsLimit) qui, une fois atteint, devrait suspendre l’agent
-GitHub
-. Cependant, nous verrons que ce coupe-circuit n’a pas empêché une série de 6 trades perdants consécutifs dans un cas récent, car il ne s’est déclenché qu’après coup et mérite un ajustement. En moyenne, l’agent ne prend donc que quelques trades par jour, uniquement lorsqu’il détecte des configurations à haute probabilité selon ses filtres. S’il manque des opportunités (filtres trop stricts) ou qu’au contraire il trade trop fréquemment en conditions défavorables, cela affectera fortement son taux de réussite.
+## 🎯 Overview
 
-Données d’entraînement et prétraitement des données de marché
+QuantAI Trading Agent is a sophisticated algorithmic trading platform designed specifically for cryptocurrency markets. The system combines traditional technical analysis with modern machine learning techniques to execute intelligent trades across multiple cryptocurrency pairs.
 
-L’agent est conçu pour trader le marché des cryptomonnaies exclusivement. Le code définit en dur une liste d’actifs crypto suivis, par exemple BTC, ETH, SOL, BNB, ADA, AVAX et autres tokens majeurs ou même « meme coins »
-GitHub
-. Les données de prix et volumes sont récupérées via l’API de l’exchange (Binance via ccxt) en temps réel, soit par WebSocket pour les mises à jour rapides, soit via des appels REST pour les chandeliers historiques. Pour chaque actif, l’agent agrège les données nécessaires afin de calculer une panoplie d’indicateurs techniques sur des horizons pertinents. Parmi ceux utilisés dans la logique backend on retrouve les moyennes mobiles exponentielles (EMA20, EMA50, EMA100, EMA200), le Relative Strength Index (RSI sur 14 périodes), l’Average True Range (ATR pour mesurer la volatilité), l’indicateur de tendance ADX (Average Directional Index) sur 14 périodes, ainsi que des indicateurs de volume et de flux de capitaux (ex: Chaikin Money Flow sur 20 périodes)
-GitHub
-GitHub
-.
+### What Makes This System Unique?
 
-Le prétraitement inclut aussi l’identification de niveaux de support et résistance significatifs. Le système calcule régulièrement les supports/résistances récents en détectant les points hauts/bas locaux sur une fenêtre donnée et en les agrégeant (avec une tolérance pour regrouper des niveaux proches)
-GitHub
-. Il en déduit le support et la résistance les plus proches du prix actuel, ainsi qu’un biais S/R (proche d’un support, d’une résistance ou neutre)
-GitHub
-. En parallèle, une analyse du régime de marché est effectuée: le code évalue la force de tendance et le biais de fond en comparant par exemple EMA100 vs EMA200 (pour déterminer si le marché est bull, bear ou neutre selon un band de neutralité)
-GitHub
-. Il calcule aussi un indicateur de force de tendance custom (trendStrength) combinant plusieurs facteurs, et peut estimer la volatilité réalisée sur 15 minutes annualisée
-GitHub
-. L’ensemble de ces features techniques est compilé dans un snapshot d’état du marché à chaque cycle de décision de l’agent.
+- **Meta-Adaptive Strategy Engine**: Dynamically recognizes and adapts to multiple market patterns (trend-following, breakouts, mean-reversion, momentum)
+- **Hybrid Intelligence**: Combines rule-based technical analysis with LLM-powered market sentiment analysis
+- **Intelligent Symbol Selection**: Automatically identifies the best trading opportunities across 50+ cryptocurrencies
+- **Multi-Timeframe Analysis**: Evaluates market conditions across 15m, 1h, and 4h timeframes for consensus
+- **Real-time Risk Management**: Advanced position sizing, stop-loss management, and circuit breakers
+- **Full-Stack Solution**: React frontend for monitoring + Node.js/TypeScript backend + WebSocket real-time updates
 
-Pour ce qui est de l’alignement temporel, l’agent prend soin de n’utiliser que les données disponibles jusqu’à l’instant présent pour éviter tout biais de regard sur le futur. Le système utilise un cache interne mis à jour en continu et dispose de garde-fous de validation: chaque tick de marché entrant est horodaté et vérifié, les données en retard ou incohérentes sont rejetées et éventuellement remplacées par une requête fallback au dernier prix connu
-GitHub
-. Ainsi, lors des calculs multi-timeframes (par ex. incorporer une tendance H1 dans une décision en M15), l’agent utilise la dernière bougie complète connue de chaque timeframe. Ce souci d’alignement et de qualité des données vise à garantir que l’entraînement en ligne de ses paramètres (et ses décisions) ne soit pas faussé par des informations non disponibles en temps réel. En résumé, les données d’entrée de l’agent sont purement le market data crypto (pas d’autres marchés ni indicateurs macro), soigneusement prétraitées: filtrage des anomalies, calcul des indicateurs techniques standardisés, synchronisation temporelle des différentes échelles, puis enrichissement par des scores ou catégorisations (ex: type de crypto – blue chip vs meme coin – pour adapter les exigences de volume)
-GitHub
-GitHub
-. Toute cette pipeline de données sert de base aux décisions de trading de l’agent.
+---
 
-Suivi des performances et métriques calculées
+## ✨ Key Features
 
-Plusieurs métriques de performance sont suivies pour évaluer le trading de l’agent. Chaque instance d’agent (session) enregistre ses résultats dans une base de données (table sessionKpi), mise à jour après chaque trade. On y retrouve notamment le nombre de trades effectués, le nombre de gains et de pertes, et des ratios dérivés importants. Le Win Rate (taux de réussite) est calculé simplement comme le pourcentage de trades clôturés en gain sur le total – par exemple si 20 trades sur 50 sont gagnants, le win rate sera 40%
-GitHub
-. L’expectancy (espérance de gain par trade) est également calculée, correspondant au gain moyen par trade en incluant gains et pertes (elle est positive seulement si la stratégie est profitable en moyenne)
-GitHub
-. Le système calcule aussi le Profit Factor, défini comme le ratio entre la somme des gains et la somme des pertes (en valeur absolue)
-GitHub
-. Un profit factor > 1 indique que globalement les gains dépassent les pertes – typiquement on considère >1.5 comme bon, <1 comme insuffisant.
+### 🧠 Intelligent Decision Making
+- **Recognized Strategy Framework**: 8+ pre-programmed trading strategies (breakouts, reversals, trend continuations)
+- **Confidence-Based Filtering**: Only executes trades above configurable confidence thresholds
+- **Entry Eligibility Gates**: Multi-factor quality checks (momentum, volume, flow, ATR)
+- **XGBoost Direction Predictor**: Machine learning model for directional bias validation
 
-D’autres indicateurs de risque/rentabilité sont suivis: le max drawdown (la baisse maximale en pourcentage du capital par rapport à un pic) est enregistré pour mesurer la pire perte en cours de route. De même, le rapport Sharpe est estimé pour tenir compte de la volatilité des résultats – dans le code il est approché en prenant la moyenne des profits par trade divisée par leur écart-type
-GitHub
- (ce qui correspond grossièrement au Sharpe Ratio si on assimile chaque trade à un rendement unitaire, bien que ce calcul ne convertisse pas en rendement annualisé). On retrouve aussi le Calmar Ratio (gain net sur drawdown max) dans les rapports. Le système suit la taille moyenne des gains vs pertes (average win / average loss), le taux de risque-rendement associé, ainsi que les séries de trades (streaks) – par ex. combien de gains consécutifs max, de pertes consécutives max, et la série en cours
-GitHub
-GitHub
-. Toutes ces métriques sont utilisées pour évaluer la santé de la stratégie. Par exemple, le code marque un problème si le win rate < 40% ou si le profit factor < 1.1, en générant des recommandations correspondantes
-GitHub
-GitHub
-. De même, un expectancy négatif ou un grand nombre de pertes consécutives déclenchent des alertes dans l’analyse de performance.
+### 📊 Advanced Technical Analysis
+- **30+ Technical Indicators**: EMA, RSI, ADX, ATR, CMF, Chaikin Money Flow, Volume analysis
+- **Support/Resistance Detection**: Automatic identification of key price levels
+- **Market Regime Classification**: Trend/ranging/volatile market detection
+- **Multi-Timeframe Consensus**: Confirms signals across multiple timeframes
 
-En pratique, les performances observées de l’agent sur la branche principale laissent à désirer : le win rate s’est avéré assez faible (souvent sous 40% gagnants) et de nombreux trades se soldent par des pertes modestes qui s’accumulent. Par exemple, sur une session récente étudiée (9 janvier 2025), l’agent a enchaîné six trades perdants consécutifs sur différents actifs, entraînant une baisse d’environ –1,8% sur le capital
-GitHub
-. Le profit factor semble être proche ou inférieur à 1 sur certains intervalles, signe que les pertes mangent la majorité des gains. Le ROI mensuel projeté n’était que d’environ +6% avec la configuration initiale malgré un marché offrant des opportunités, ce qui est relativement bas compte tenu du levier possible. Ces métriques décevantes ont motivé une analyse approfondie de la stratégie (score global initial 6,3/10) et la recherche de correctifs pour remonter la performance ciblée (objectif porté à 8,5/10 de score, ROI ~18% mensuel après optimisations)
-GitHub
-. Nous détaillons ci-dessous les causes identifiées pouvant expliquer ces pertes fréquentes et ce win rate faible, ainsi que les pistes d’amélioration correspondantes.
+### ⚡ Smart Execution
+- **Adaptive Order Routing**: Chooses between market, limit, and TWAP execution based on conditions
+- **Liquidity-Aware Sizing**: Adjusts position size based on order book depth
+- **Slippage Protection**: Real-time spread monitoring and rejection of poor fills
+- **Execution Telemetry**: Tracks fill rates, latency, and execution quality
 
+### 🛡️ Risk Management
+- **Per-Trade Risk Control**: Configurable risk percentage per trade (0.5-3%)
+- **Position Sizing**: Automatic calculation based on ATR-based stop distances
+- **Circuit Breakers**: Automatic pause after consecutive losses or daily loss limits
+- **Trailing Stops**: Dynamic stop-loss adjustment as trade becomes profitable
+- **Partial Profit Taking**: Multi-level take-profit targets with ladder exits
 
-Logique d’analyse implémentée (statistiques, IA, heuristiques)
+### 📈 Performance Tracking
+- **Real-Time KPIs**: Win rate, profit factor, expectancy, Sharpe ratio
+- **Trade Analytics**: Detailed logging of every decision, entry, and exit
+- **Session Management**: Track multiple agent instances simultaneously
+- **Adaptive Learning**: System learns from past trades to refine parameters
 
-La logique de l’agent d’analyse combine plusieurs approches :
+---
 
-Règles heuristiques basées sur l’analyse technique : À partir du snapshot technique évoqué, le système déduit un certain nombre de conditions de marché. Par exemple, la direction de la tendance est estimée via l’écart entre EMA20 et EMA50 (spread EMA) et la force de la tendance via l’ADX
-GitHub
-GitHub
-. De même, des règles sur le RSI indiquent un état de surachat, survente ou des conditions propices à des positions longues/courtes
-GitHub
-GitHub
-. Le code de test diagnostique donne un aperçu clair de ces règles : si le spread EMA20-50 dépasse +1% le marché est jugé fortement haussier, si au contraire il est en dessous de -1% c’est fortement baissier, avec des degrés intermédiaires (modéré/sideways)
-GitHub
-. Ensuite, l’ADX est utilisé pour qualifier la force (forte si ADX>25)
-GitHub
-, et l’on ajuste le bias (biais directionnel) de l’agent en conséquence. Ce dernier tient compte aussi de la volatilité (ATR%) : une volatilité trop haute classe le marché comme risqué, incitant l’agent à la prudence
-GitHub
-. Ces règles sont combinées pour simuler le comportement optimal d’un agent : par exemple, si tendance forte et volatilité modérée, l’agent passe en mode “ARMED” (prêt à trader) avec un biais long ou short selon la tendance; si la tendance est faible ou la volatilité excessive, l’agent reste “IDLE” (en attente)
-GitHub
-GitHub
-. On ajuste ensuite ce comportement par les signaux de RSI (éviter de prendre un long si RSI indique surachat, etc.)
-GitHub
- et par le niveau de volatilité (si volatilité très haute, on peut réduire la taille de position même si on trade)
-GitHub
-. L’ensemble de ces heuristiques constitue un système d’analyse technique expert qui essaye de traduire des indicateurs multiples en décisions de trading prudentes.
+## 🏗️ Architecture
 
-Analyse “Intelligente” multi-facteurs (IA) : Au-delà des règles fixes, QuantAILabs intègre une couche d’analyse qualifiée d’intelligente ou “AI-powered”. Cela inclut d’abord un filtre intelligent des opportunités : une fonction dédiée récupère le top 50 cryptos par volume (via WebSocket Binance pour éviter de surcharger l’API REST)
-GitHub
-GitHub
-, puis utilise une méthode rankCryptosWithAI pour classer ces actifs selon l’opportunité de trading sur un horizon 24h
-GitHub
-. Le résultat est une liste d’opportunités classées (type RankedOpportunity) avec pour chaque symbole un score de confiance (0-1), un type d’opportunité (breakout, reversal, momentum, etc.), une direction recommandée (long/short), et même un ensemble de raisons “AI reasoning” expliquant le classement
-GitHub
-GitHub
-. Comment ce classement est-il établi ? Le code fait appel à des fonctions llmJSON qui interrogent un modèle de langage IA (LLM) en lui fournissant le contexte technique et en demandant un résultat formaté en JSON
-GitHub
-. Concrètement, deux appels au LLM sont faits dans l’analyse complète : l’un pour estimer le sentiment de marché actuel sur l’actif (bullish, bearish ou neutre avec un score de confiance et quelques justifications)
-GitHub
-, l’autre pour résumer les nouvelles et narratives récentes susceptibles d’influer sur l’actif (nouvelles macro, ETF, news de développement, etc.)
-GitHub
-. Ces requêtes peuvent utiliser soit l’API OpenAI (ex: GPT) soit une alternative appelée “Grok” suivant la configuration, avec une mise en cache des résultats pour ne pas sursolliciter le modèle
-GitHub
-GitHub
-. Ainsi, l’agent incorpore une dimension d’actualité et de sentiment en plus des indicateurs purement quantitatifs, ce qui renforce son analyse du contexte.
+The system is built as a monorepo with three main components:
 
-Apprentissage adaptatif et mémoire : Le système comporte un module de reinforcement learning simplifié. Un composant nommé Adaptive Training recalcule périodiquement (toutes les 15 minutes par défaut) des “poids adaptatifs” associés aux familles de symboles traités
-GitHub
-GitHub
-. Bien que les détails soient cachés (via recomputeAdaptiveWeightsForFamilies), on peut déduire que l’algorithme ajuste certains paramètres de décision en fonction de la performance historique récente des stratégies sur différents groupes d’actifs (familles sectorielles ou types de coins, p. ex. blue-chip vs meme coins). Par ailleurs, un module de mémoire de décision enregistre les décisions prises et leur issue, afin d’alimenter potentiellement l’apprentissage (voir learning/decisionMemory.ts). On voit aussi qu’avant de prendre position, l’agent vérifie des garde-fous de qualité du symbole (ex: volume minimal en USD selon la catégorie de coin, exclusion des coins trop illiquides ou à nom trop complexe)
-GitHub
-GitHub
-, pour éviter des actifs “pièges” – ces règles étant modulées par le niveau d’agressivité de l’agent (conservateur vs agressif) afin d’être plus ou moins strictes
-GitHub
-GitHub
-. Toute cette logique adaptative indique qu’au-delà des règles fixes, l’agent cherche à faire évoluer sa stratégie en continu, en se basant sur l’historique de ses décisions et sur des analyses multi-dimensionnelles (technique + sentiment + qualité de marché).
+```
+trading-agent-ia-v3/
+├── backend/          # Node.js/TypeScript trading engine
+├── frontend/         # React dashboard
+├── docs/             # Documentation
+└── logs/             # Trade logs and analytics
+```
 
-En somme, le module d’analyse du marché est très sophistiqué : il mêle à la fois des heuristiques de trading bien établies (indicateurs techniques et règles de gestion de risques), des éléments d’intelligence artificielle (LLM pour sentiment/news, scorings automatisés), et des mécanismes d’apprentissage en boucle fermée (réajustement périodique via décisionMemory et adaptive weights). Cette combinaison vise à doter l’agent d’une compréhension riche du marché – non seulement les chiffres bruts, mais aussi le contexte plus global – et à optimiser ses décisions au fil du temps.
+### Technology Stack
 
-Niveau de sophistication de l’agent d’analyse
+**Backend:**
+- **Runtime**: Node.js 20+ with TypeScript 5.4+
+- **Exchange Integration**: CCXT (supports 100+ exchanges)
+- **Database**: PostgreSQL with Prisma ORM
+- **WebSocket**: Real-time market data and order updates
+- **AI/ML**: OpenAI GPT-4 for sentiment, Python XGBoost for predictions
 
-Compte tenu de ce qui précède, le niveau de sophistication de l’agent est élevé. Contrairement à un simple bot se basant sur un ou deux indicateurs (du type “RSI2 > 70 alors vendre”), QuantAILabs implémente une stratégie multi-critères intégrée. Il évalue la tendance (direction et force), le momentum, la volatilité, la position du prix dans son range, tout en considérant l’aspect actualités/sentiment et la qualité intrinsèque de l’actif. De plus, l’architecture prévoit des ajustements dynamiques : par exemple un Smart Agent peut automatiquement sélectionner le meilleur actif à trader du moment (logique d’auto-selection d’un symbole optimal) et même en changer si une meilleure opportunité apparaît, grâce à la fonction triggerIntelligentReselection qui peut être appelée manuellement ou automatiquement
-GitHub
-GitHub
-. Le statut d’un tel agent “intelligent” conserve l’historique des analyses effectuées, le symbole actuellement suivi, le prochain scan programmé, la dernière raison de changement, etc., pour donner de la transparence sur sa logique
-GitHub
-GitHub
-.
+**Frontend:**
+- **Framework**: React 18 with TypeScript
+- **UI Library**: Ant Design
+- **Charts**: Lightweight Charts by TradingView
+- **State Management**: Zustand
+- **Build Tool**: Vite
 
-En termes de sophistication algorithmique pure, il ne s’agit pas d’un algo haute fréquence ou mathématiquement très complexe (pas de réseau de neurones profond apparent, ni d’optimisation probabiliste en ligne). Néanmoins, le recours à un LLM pour contextualiser le trading et l’ensemble des règles de trading intègre une forme d’intelligence hybride (ML + règles expertes). On peut dire que c’est un système de trading algorithmique de niveau intermédiaire à avancé, comparable à ce qu’on pourrait attendre d’un assistant trading IA essayant de reproduire les analyses d’un trader humain compétent, tout en automatisant les actions.
+**Infrastructure:**
+- **Containerization**: Docker & Docker Compose
+- **Monitoring**: Console Ninja runtime logs
+- **Version Control**: Git with GitKraken integration
+
+### System Components
+
+#### 1. **Agent Hub** (`backend/src/agent/hub.ts`)
+Central registry for all active trading agents. Manages lifecycle, state, and communication.
+
+#### 2. **Meta-Adaptive Engine** (`backend/src/quantai/strategies/metaAdaptive/`)
+Core strategy evaluation engine that recognizes market patterns and generates signals.
+
+#### 3. **Market Data Pipeline** (`backend/src/data/`)
+Fetches, caches, and preprocesses market data (OHLCV, indicators, order books).
+
+#### 4. **Execution Engine** (`backend/src/exec/`)
+Handles order placement, execution monitoring, and fill management.
+
+#### 5. **Risk Manager** (`backend/src/risk/`)
+Enforces position limits, risk constraints, and circuit breakers.
+
+#### 6. **Performance Analytics** (`backend/src/metrics/`)
+Tracks and calculates trading performance metrics.
+
+#### 7. **WebSocket Server** (`backend/src/ws/`)
+Real-time updates to frontend clients (prices, positions, trades).
+
+#### 8. **Intelligent Selector** (`backend/src/services/intelligentAgent/`)
+Automatically selects optimal cryptocurrency to trade based on opportunity ranking.
+
+---
+
+## 📈 Trading Strategy
+
+### Meta-Adaptive Strategy Philosophy
+
+The trading system does not rely on a single fixed strategy. Instead, it employs a **meta-adaptive approach** that recognizes current market conditions and selects the most appropriate strategy from its toolkit.
+
+### Recognized Strategies
+
+The system evaluates **8 core strategy patterns** on every tick:
+
+1. **Trend Following** (`trend_ma_cross`, `trend_ema_momentum`)
+   - Detects strong directional moves
+   - Requires ADX > 20, aligned EMAs, increasing momentum
+
+2. **Breakout** (`breakout_consolidation`, `breakout_volatility`)
+   - Identifies range breakouts and volatility expansions
+   - Requires volume surge, ATR expansion, price beyond resistance
+
+3. **Mean Reversion** (`mean_bollinger`, `mean_rsi_oversold`)
+   - Trades oversold/overbought extremes
+   - Requires RSI < 30 or > 70, price at Bollinger bands, reversal signals
+
+4. **Momentum** (`momentum_surge`, `momentum_rsi_breakout`)
+   - Captures strong momentum shifts
+   - Requires RSI momentum divergence, volume confirmation, ADX rising
+
+### Signal Generation Process
+
+For each strategy, the system computes:
+
+**1. Confidence Score (0-100)**
+```typescript
+confidence = (
+  rawScore * 0.4 +           // Base technical score
+  qualityMultiplier * 0.3 +  // Market quality factors
+  calibrationBoost * 0.3     // Historical performance adjustment
+)
+```
+
+**2. Entry Eligibility Score (0-100)**
+```typescript
+entryEligibility = average([
+  momentumScore,    // ADX, RSI momentum
+  flowScore,        // CMF, volume quality
+  atrScore,         // Volatility appropriateness
+  qualityScore      // Symbol quality, liquidity
+])
+```
+
+**3. Risk/Reward Ratio**
+```typescript
+RR = (targetDistance / stopDistance)
+// Must be >= 1.5 for entry consideration
+```
+
+### Entry Criteria (All Must Pass)
+
+✅ **Confidence Gate**: `confidence >= 55%` (configurable)  
+✅ **Entry Eligibility Gate**: `entryEligibility >= 40%` (configurable)  
+✅ **Risk/Reward Gate**: `RR >= 1.5`  
+✅ **Symbol Quality**: Minimum volume, liquidity, no anomalies  
+✅ **Position Limits**: Max positions per symbol, total exposure  
+✅ **XGBoost Confirmation**: ML model agrees with directional bias (optional)
+
+### Position Sizing
+
+```typescript
+// ATR-based stop distance
+stopDistance = ATR14 * stopMultiplier (default 2.0)
+
+// Risk-based sizing
+riskAmount = accountBalance * riskPercentage
+positionSize = riskAmount / stopDistance
+
+// Capped by liquidity
+maxSize = orderBookDepth / 10  // Use max 10% of book depth
+finalSize = min(positionSize, maxSize)
+```
+
+### Exit Management
+
+The system uses **adaptive trailing stops** and **multi-level profit targets**:
+
+**Initial Bracket:**
+```typescript
+stopLoss = entryPrice ± (ATR * 2.0)
+takeProfit1 = entryPrice ± (ATR * 3.0)  // 1.5R
+takeProfit2 = entryPrice ± (ATR * 4.5)  // 2.25R
+takeProfit3 = entryPrice ± (ATR * 6.0)  // 3.0R
+```
+
+**Trailing Logic:**
+- **Starts trailing** after reaching 1.2R profit
+- **Trail distance**: 60% of initial stop distance
+- **Tightens** if momentum fails (ADX < 15 or CMF < 0)
+- **Breakeven move** at 1.2R to protect capital
+
+**Early Exit Conditions:**
+- Momentum failure before minimum hold time (5 minutes default)
+- Opposite signal from higher-confidence strategy
+- Adverse price movement > 1.5R before profit target
+- Market regime change (trend → volatile)
+
+### Aggressiveness Modes
+
+The system supports three risk profiles:
+
+**Conservative:**
+- Only trades BTC/ETH and top-tier assets
+- Volume requirement: $75M+
+- Tighter filters, lower position sizes
+- Target: 40-50% win rate, 1.3-1.5 profit factor
+
+**Reactive (Default):**
+- Trades top 20-30 cryptocurrencies
+- Volume requirement: $50M+
+- Balanced risk/reward
+- Target: 38-45% win rate, 1.4-1.7 profit factor
+
+**Aggressive:**
+- Trades up to 50 opportunities
+- Volume requirement: $35M+
+- Looser filters, higher risk tolerance
+- Target: 35-42% win rate, 1.5-2.0+ profit factor
+
+---
+
+## 🔄 Execution Flow
+
+Here's a detailed breakdown of how the trading system operates from market data to order execution:
+
+### 1. Market Data Ingestion (Every Tick)
+
+```
+WebSocket Stream (1s updates)
+    ↓
+Market Data Cache
+    ↓
+OHLCV Aggregation (15m, 1h, 4h)
+    ↓
+Technical Indicator Calculation
+```
+
+**Indicators Computed:**
+- EMAs: 20, 50, 100, 200
+- RSI: 14-period
+- ADX: 14-period  
+- ATR: 14-period
+- CMF: 20-period
+- Volume: Relative volume ratio
+- Support/Resistance: Recent pivots
+
+### 2. Strategy Evaluation (Every 15 seconds)
+
+```
+For each active session:
+    ↓
+1. Fetch latest technical snapshot
+    ↓
+2. Evaluate all 8 recognized strategies
+    ↓
+3. Calculate confidence + entry eligibility for each
+    ↓
+4. Filter: Keep only signals passing all gates
+    ↓
+5. Rank: Sort by confidence * entryEligibility
+    ↓
+6. Select: Choose highest-ranked signal
+```
+
+**Example Output:**
+```json
+{
+  "strategyId": "breakout_volatility",
+  "confidence": 68.5,
+  "entryEligibility": 72.3,
+  "bias": "long",
+  "riskReward": 2.1,
+  "entryPrice": 98432.50,
+  "stopDistance": 985.20,
+  "targets": [99910.45, 100895.70, 101880.95]
+}
+```
+
+### 3. Entry Decision (If Signal Exists)
+
+```
+Signal Received
+    ↓
+Check Position Limits
+    ↓
+Calculate Position Size
+    ↓
+Choose Execution Mode (market/limit/twap)
+    ↓
+Register Trade Entry (DB + Memory)
+    ↓
+Place Order via Exchange
+    ↓
+Monitor Fill Status
+    ↓
+Update Agent Position State
+```
+
+**Position State:**
+```typescript
+{
+  side: 'buy' | 'sell',
+  qty: 0.15,
+  entry: 98432.50,
+  stop: 97447.30,
+  targets: [99910.45, 100895.70, 101880.95],
+  signal: {...},
+  openedAt: 1699234567890,
+  triggeredTargets: new Set()
+}
+```
+
+### 4. Position Monitoring (Every Tick While In Position)
+
+```
+For each open position:
+    ↓
+Fetch current price
+    ↓
+Calculate current R-multiple
+    ↓
+Check exit conditions:
+    ├─ Stop loss hit?
+    ├─ Take profit hit?
+    ├─ Momentum failure?
+    ├─ Time-based exit?
+    └─ Opposite signal?
+    ↓
+If exit triggered:
+    ├─ Place exit order
+    ├─ Calculate P&L
+    ├─ Register outcome
+    ├─ Update KPIs
+    └─ Clear position state
+Else if trailing conditions met:
+    └─ Adjust stop loss upward
+```
+
+### 5. Performance Tracking (After Each Trade)
+
+```
+Trade Completed
+    ↓
+Calculate Metrics:
+    ├─ P&L (USD)
+    ├─ R-multiple
+    ├─ Hold time
+    ├─ Slippage
+    ├─ Fee impact
+    └─ Exit reason
+    ↓
+Update Session KPIs:
+    ├─ Win rate
+    ├─ Profit factor
+    ├─ Expectancy
+    ├─ Sharpe ratio
+    └─ Max drawdown
+    ↓
+Adaptive Learning:
+    ├─ Store trade features
+    ├─ Update strategy weights
+    └─ Adjust parameters
+```
+
+### 6. Intelligent Symbol Selection (Smart Agents Only)
+
+```
+Every 30 minutes (or on manual trigger):
+    ↓
+Scan Top 50 Cryptos by Volume
+    ↓
+For each symbol:
+    ├─ Fetch technical snapshot
+    ├─ Evaluate all strategies
+    ├─ Calculate opportunity score
+    └─ Check quality filters
+    ↓
+Rank by composite score:
+    = confidence * entryEligibility * qualityMultiplier
+    ↓
+Select Top Opportunity
+    ↓
+If better than current symbol:
+    ├─ Close existing position (if any)
+    ├─ Switch to new symbol
+    └─ Notify user
+```
+
+### 7. Risk Management (Continuous)
+
+**Per-Trade:**
+- Max risk per trade: 0.5-3% of account
+- Position size capped by liquidity
+- Stop loss always set on entry
+
+**Per-Session:**
+- Max daily trades: 7-15 (configurable)
+- Max consecutive losses: 3 (circuit breaker)
+- Daily loss limit: 5% of account
+
+**Global:**
+- Max concurrent positions: 5
+- Max exposure per symbol: 20% of account
+- Emergency stop on exchange errors
+
+---
+
+## 📁 Project Structure
+
+```
+trading-agent-ia-v3/
+│
+├── backend/
+│   ├── src/
+│   │   ├── agent/              # Agent lifecycle, hub, state management
+│   │   │   ├── hub.ts          # Central agent registry
+│   │   │   ├── state.ts        # Agent state machine
+│   │   │   ├── validator.ts    # Plan validation
+│   │   │   └── executionPlanner.ts  # Execution mode selection
+│   │   │
+│   │   ├── quantai/            # Meta-adaptive strategy engine
+│   │   │   └── strategies/
+│   │   │       └── metaAdaptive/
+│   │   │           ├── metaAdaptiveAgent.ts      # Main agent class
+│   │   │           ├── recognizedStrategies.ts   # 8 core strategies
+│   │   │           ├── exitManager.ts            # Exit logic
+│   │   │           └── backtest.ts               # Backtesting engine
+│   │   │
+│   │   ├── services/
+│   │   │   ├── metaAdaptiveOrchestrator.ts  # Main execution loop
+│   │   │   ├── intelligentAgent/            # Smart symbol selection
+│   │   │   ├── agentCreationFlow.ts         # Agent initialization
+│   │   │   └── positionSyncService.ts       # Position reconciliation
+│   │   │
+│   │   ├── data/               # Market data pipeline
+│   │   │   ├── market.ts       # OHLCV fetching
+│   │   │   ├── indicators.ts   # Technical indicators
+│   │   │   └── cache.ts        # Data caching layer
+│   │   │
+│   │   ├── ai/                 # AI/ML components
+│   │   │   ├── tech.ts         # Technical snapshot builder
+│   │   │   ├── multiTimeframe.ts  # MTF analysis
+│   │   │   └── planOrchestrator.ts  # LLM integration
+│   │   │
+│   │   ├── exec/               # Order execution
+│   │   │   ├── broker.ts       # Exchange interface
+│   │   │   └── orderManager.ts # Order lifecycle
+│   │   │
+│   │   ├── risk/               # Risk management
+│   │   │   ├── manager.ts      # Risk limits enforcement
+│   │   │   └── sizer.ts        # Position sizing
+│   │   │
+│   │   ├── metrics/            # Performance tracking
+│   │   │   ├── kpi.ts          # KPI calculations
+│   │   │   └── analytics.ts    # Trade analytics
+│   │   │
+│   │   ├── learning/           # Adaptive learning
+│   │   │   ├── decisionMemory.ts  # Trade history
+│   │   │   └── adaptiveWeights.ts # Parameter tuning
+│   │   │
+│   │   ├── routes/             # REST API endpoints
+│   │   │   ├── agent.ts        # Agent control
+│   │   │   ├── session.ts      # Session management
+│   │   │   └── analytics.ts    # Performance queries
+│   │   │
+│   │   ├── ws/                 # WebSocket server
+│   │   │   └── server.ts       # Real-time updates
+│   │   │
+│   │   ├── db/                 # Database
+│   │   │   └── client.ts       # Prisma client
+│   │   │
+│   │   └── server.ts           # Express app entry point
+│   │
+│   ├── prisma/
+│   │   └── schema.prisma       # Database schema
+│   │
+│   ├── python/                 # Python ML services
+│   │   ├── ccxt_xgboost_module.py     # Direction predictor
+│   │   ├── prediction_engine.py       # Prediction service
+│   │   └── scheduled_training.py      # Model retraining
+│   │
+│   ├── scripts/                # Utility scripts
+│   │   ├── multi-agent-pool-test.ts   # Multi-agent testing
+│   │   ├── meta-adaptive-candle-backtest.ts  # Backtesting
+│   │   └── agent-performance-analyzer.ts      # Analytics
+│   │
+│   ├── test/                   # Test suites
+│   ├── logs/                   # Log files
+│   └── data/                   # Cache & historical data
+│
+├── frontend/
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Dashboard.tsx   # Main dashboard
+│   │   │   ├── Trading.tsx     # Trading view
+│   │   │   ├── Analytics.tsx   # Performance analytics
+│   │   │   └── Settings.tsx    # Configuration
+│   │   │
+│   │   ├── components/
+│   │   │   ├── AgentCard.tsx   # Agent status card
+│   │   │   ├── TradingChart.tsx  # Price chart
+│   │   │   ├── PositionTable.tsx  # Open positions
+│   │   │   └── MetricsPanel.tsx   # KPI display
+│   │   │
+│   │   ├── hooks/
+│   │   │   ├── useWebSocket.ts  # WS connection
+│   │   │   └── useApi.ts        # API calls
+│   │   │
+│   │   ├── store.ts            # Zustand state
+│   │   ├── api.ts              # API client
+│   │   └── App.tsx             # Root component
+│   │
+│   └── package.json
+│
+├── docs/                       # Documentation
+│   ├── META_ADAPTIVE_CRYPTO_SELECTION.md
+│   ├── PHASE2_LEARNING_SYSTEM.md
+│   └── ADAPTIVE_COOLDOWN_IMPLEMENTATION.md
+│
+└── README.md                   # This file
+```
+
+---
+
+## 🚀 Installation & Setup
+
+### Prerequisites
+
+- **Node.js** 20+ and npm
+- **Python** 3.9+ (for ML predictor)
+- **PostgreSQL** 14+ (or Docker)
+- **Exchange API Keys** (Binance recommended)
+- **OpenAI API Key** (optional, for LLM sentiment)
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/Simon-benhamou/trading-agent-ia-v3.git
+cd trading-agent-ia-v3
+```
+
+### 2. Install Dependencies
+
+**Backend:**
+```bash
+cd backend
+npm install
+```
+
+**Frontend:**
+```bash
+cd frontend
+npm install
+```
+
+**Python (ML predictor):**
+```bash
+cd backend/python
+pip install -r ../requirements.txt
+```
+
+### 3. Database Setup
+
+**Option A: Using Docker**
+```bash
+docker-compose up -d postgres
+```
+
+**Option B: Local PostgreSQL**
+```bash
+createdb trading_agent_ia_v3
+```
+
+**Run Migrations:**
+```bash
+cd backend
+npx prisma migrate deploy
+npx prisma generate
+```
+
+### 4. Environment Configuration
+
+Create `.env` file in `backend/`:
+
+```bash
+# Database
+DATABASE_URL="postgresql://user:password@localhost:5432/trading_agent_ia_v3"
+
+# Exchange (Binance example)
+EXCHANGE_ID="binance"
+EXCHANGE_API_KEY="your_api_key"
+EXCHANGE_SECRET="your_secret"
+EXCHANGE_TESTNET=true  # Start with testnet!
+
+# AI/ML (optional)
+OPENAI_API_KEY="your_openai_key"
+GROK_API_KEY="your_grok_key"  # Alternative to OpenAI
+
+# Risk Management
+DEFAULT_RISK_PCT=1.0
+MAX_TRADES_PER_DAY=10
+MAX_CONSECUTIVE_LOSSES=3
+
+# Strategy
+CONFIDENCE_THRESHOLD=55
+ENTRY_ELIGIBILITY_THRESHOLD=40
+MIN_RISK_REWARD=1.5
+
+# Server
+PORT=3000
+FRONTEND_URL="http://localhost:5173"
+```
+
+### 5. Start the Services
+
+**Terminal 1 - Backend:**
+```bash
+cd backend
+npm run dev
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd frontend
+npm run dev
+```
+
+**Terminal 3 - Python Predictor (optional):**
+```bash
+cd backend/python
+python3 predict_service.py
+```
+
+### 6. Access the Application
+
+- **Frontend**: http://localhost:5173
+- **Backend API**: http://localhost:3000
+- **API Docs**: http://localhost:3000/api/docs
+
+---
+
+## ⚙️ Configuration
+
+### Agent Configuration
+
+Create an agent via the frontend or API:
+
+```typescript
+// POST /api/agent/create
+{
+  "symbol": "BTC/USDT",  // Or null for intelligent selection
+  "aggressiveness": "reactive",  // conservative | reactive | aggressive
+  "accountBalanceUsd": 10000,
+  "riskPercentage": 1.0,
+  "usePredictor": true,  // Use XGBoost ML predictor
+  "maxTradesPerDay": 10,
+  "mode": "live"  // live | paper
+}
+```
+
+### Strategy Tuning
+
+Key parameters in `.env`:
+
+```bash
+# Entry Gates
+CONFIDENCE_THRESHOLD=55          # 0-100, higher = stricter
+ENTRY_ELIGIBILITY_THRESHOLD=40   # 0-100, higher = stricter
+MIN_RISK_REWARD=1.5              # Minimum R:R ratio
+
+# Exit Management
+STOP_ATR_MULTIPLIER=2.0          # Stop distance in ATRs
+TRAIL_AFTER_R=1.2                # Start trailing at 1.2R
+TRAIL_DISTANCE_PCT=60            # Trail 60% of initial stop
+BREAKEVEN_AT_R=1.2               # Move to breakeven at 1.2R
+
+# Position Sizing
+DEFAULT_RISK_PCT=1.0             # Risk 1% per trade
+MAX_POSITION_SIZE_PCT=20         # Max 20% of account per position
+
+# Symbol Selection (Intelligent Agents)
+MIN_VOLUME_USD=50000000          # $50M minimum volume
+MIN_LIQUIDITY_USD=15000          # $15K order book depth
+RESCAN_INTERVAL_MIN=30           # Rescan every 30 minutes
+```
+
+---
+
+## 💻 Usage
+
+### Starting an Agent
+
+**Via Frontend:**
+1. Navigate to Dashboard
+2. Click "Create New Agent"
+3. Configure settings (symbol, risk, mode)
+4. Click "Start Agent"
+
+**Via API:**
+```bash
+curl -X POST http://localhost:3000/api/agent/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "ETH/USDT",
+    "aggressiveness": "reactive",
+    "accountBalanceUsd": 5000,
+    "mode": "paper"
+  }'
+```
+
+### Monitoring Performance
+
+**Real-time Dashboard:**
+- View open positions
+- Track P&L
+- Monitor win rate, profit factor
+- See trade history
+
+**API Queries:**
+```bash
+# Get session KPIs
+GET /api/session/:sessionId/kpi
+
+# Get recent trades
+GET /api/session/:sessionId/trades?limit=50
+
+# Get analytics
+GET /api/analytics/performance?sessionId=xxx
+```
+
+### Backtesting
+
+Run backtests on historical data:
+
+```bash
+cd backend
+npm run backtest -- --symbol BTC/USDT --from 2024-01-01 --to 2024-12-31
+```
+
+Or use the meta-adaptive backtest script:
+
+```bash
+npx tsx scripts/meta-adaptive-candle-backtest.ts
+```
+
+### Multi-Agent Pool Testing
+
+Test multiple agents simultaneously:
+
+```bash
+npx tsx scripts/multi-agent-pool-test.ts
+```
+
+---
+
+## 📊 Performance Monitoring
+
+### Key Metrics
+
+**Win Rate**: Percentage of profitable trades
+- Target: 38-50% depending on mode
+- Formula: `wins / totalTrades * 100`
+
+**Profit Factor**: Ratio of gross profit to gross loss
+- Target: > 1.5
+- Formula: `sumWins / sumLosses`
+
+**Expectancy**: Average profit per trade
+- Target: > 0
+- Formula: `(winRate * avgWin) - (lossRate * avgLoss)`
+
+**Sharpe Ratio**: Risk-adjusted returns
+- Target: > 1.0
+- Formula: `mean(returns) / stddev(returns)`
+
+**Max Drawdown**: Largest peak-to-trough decline
+- Target: < 10%
+- Formula: `max((peak - trough) / peak)`
+
+### Performance Analysis Tools
+
+```bash
+# Analyze agent performance
+npm run analyze:performance
+
+# Monitor fees impact
+npm run analyze:fees
+
+# Check rejection reasons
+npm run analyze:rejection
+
+# Continuous monitoring
+npm run monitor:integrated
+```
+
+### Logging
+
+Logs are stored in `backend/logs/`:
+
+- `agent.log` - Agent lifecycle events
+- `trades.log` - Trade execution details
+- `ops_events.log` - Operational events
+- `errors.log` - Error tracking
+
+---
+
+## 📡 API Documentation
+
+### Agent Management
+
+**Create Agent**
+```http
+POST /api/agent/create
+Content-Type: application/json
+
+{
+  "symbol": "BTC/USDT",
+  "aggressiveness": "reactive",
+  "accountBalanceUsd": 10000,
+  "mode": "paper"
+}
+```
+
+**Start Agent**
+```http
+POST /api/agent/start/:sessionId
+```
+
+**Stop Agent**
+```http
+POST /api/agent/stop/:sessionId
+```
+
+**Get Agent Status**
+```http
+GET /api/agent/status/:sessionId
+```
+
+### Trading Operations
+
+**Get Open Positions**
+```http
+GET /api/positions/:sessionId
+```
+
+**Force Exit Position**
+```http
+POST /api/positions/:sessionId/exit
+Content-Type: application/json
+
+{
+  "reason": "manual_exit"
+}
+```
+
+**Trigger Symbol Reselection**
+```http
+POST /api/agent/reselect/:sessionId
+```
+
+### Analytics
+
+**Get Session KPIs**
+```http
+GET /api/session/:sessionId/kpi
+```
+
+**Get Trade History**
+```http
+GET /api/session/:sessionId/trades?limit=100&offset=0
+```
+
+**Get Performance Analytics**
+```http
+GET /api/analytics/performance?sessionId=xxx&from=2024-01-01&to=2024-12-31
+```
+
+### WebSocket Events
+
+Subscribe to real-time updates:
+
+```javascript
+const ws = new WebSocket('ws://localhost:3000');
+
+ws.on('message', (data) => {
+  const event = JSON.parse(data);
+  
+  switch(event.type) {
+    case 'price_update':
+      // Handle price update
+      break;
+    case 'position_opened':
+      // Handle new position
+      break;
+    case 'position_closed':
+      // Handle position close
+      break;
+    case 'kpi_update':
+      // Handle KPI update
+      break;
+  }
+});
+```
+
+---
+
+## 🧪 Testing
+
+### Run Test Suites
+
+```bash
+cd backend
+
+# Unit tests
+npm run test:unit
+
+# Integration tests
+npm run test:integration
+
+# End-to-end tests
+npm run test:e2e
+
+# All tests
+npm test
+```
+
+### Frontend Tests
+
+```bash
+cd frontend
+
+# Component tests
+npm test
+
+# E2E tests with Cypress
+npm run test:e2e
+```
+
+---
+
+## 🛠️ Troubleshooting
+
+### Common Issues
+
+**Agent not executing trades:**
+1. Check if filters are too strict (lower `CONFIDENCE_THRESHOLD`)
+2. Verify exchange API keys are valid
+3. Check logs for rejection reasons: `grep "BLOCKED" logs/agent.log`
+
+**High rejection rate:**
+- Review rejection analysis: `npm run analyze:rejection`
+- Adjust aggressiveness mode or lower thresholds
+- Check if market conditions match strategy requirements
+
+**Poor performance:**
+- Run performance analysis: `npm run analyze:performance`
+- Check win rate and profit factor
+- Consider adjusting stop/target ratios
+- Review backtest results before going live
+
+**WebSocket disconnections:**
+- Check network stability
+- Verify firewall rules
+- Increase reconnection timeout in configuration
+
+---
+
+## 📚 Additional Documentation
+
+- [Meta-Adaptive Crypto Selection](docs/META_ADAPTIVE_CRYPTO_SELECTION.md)
+- [Phase 2 Learning System](docs/PHASE2_LEARNING_SYSTEM.md)
+- [Adaptive Cooldown Implementation](docs/ADAPTIVE_COOLDOWN_IMPLEMENTATION.md)
+- [Per-Agent Daily Loss Limit](docs/PER_AGENT_DAILY_LOSS_LIMIT.md)
+
+---
+
+## 🤝 Contributing
+
+This is a private project. For internal contributions:
+
+1. Create a feature branch: `git checkout -b feature/your-feature`
+2. Make changes and test thoroughly
+3. Commit with clear messages: `git commit -m "Add feature X"`
+4. Push and create a pull request
+
+---
+
+## ⚠️ Disclaimer
+
+**This software is for educational and research purposes only.**
+
+- Trading cryptocurrencies carries significant risk
+- Past performance does not guarantee future results
+- Only trade with capital you can afford to lose
+- Always test on paper/testnet before going live
+- The authors are not responsible for any financial losses
+
+---
+
+## 📞 Support
+
+For questions or issues:
+- Check documentation in `docs/`
+- Review logs in `backend/logs/`
+- Run diagnostic scripts: `npm run analyze:*`
+
+---
+
+## 📄 License
+
+Private - All Rights Reserved
+
+---
+
+**Built with ❤️ by the QuantAI Team**
+
+*Last Updated: November 2025*

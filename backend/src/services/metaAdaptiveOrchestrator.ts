@@ -24,6 +24,7 @@ import { maybeAdjustOrExit, type ExitDirective } from '../quantai/strategies/met
 import { PositionSizer } from '../quantai/risk/positionSizing.js';
 import { getQuantAIConfig } from '../quantai/config.js';
 import { createLogger } from '../utils/logger.js';
+import { createIntegrationLogger, withLogging, withRetry } from '../utils/integrationLogger.js';
 import { AgentHub } from '../agent/hub.js';
 import type { Broker } from '../broker/types.js';
 import { PaperBroker } from '../broker/paper.js';
@@ -184,19 +185,32 @@ async function executeEntryTrade(
   signal: RecognizedStrategySignal,
   tech: TechnicalSnapshot
 ): Promise<void> {
+  const integrationLogger = createIntegrationLogger({
+    component: 'Orchestrator',
+    action: 'entry',
+    sessionId: session.sessionId,
+    symbol: session.symbol,
+  });
+
   try {
-    logger.info(`[${session.sessionId}] Executing entry trade for ${signal.bias} signal`);
+    integrationLogger.info(`Executing entry trade | bias=${signal.bias} strategy=${(signal as any).strategyId || signal.id} confidence=${signal.confidence.toFixed(3)}`);
 
     // Get broker
     const broker = await getBrokerForSession(session);
     if (!broker) {
-      logger.error(`[${session.sessionId}] No broker available for session`);
+      integrationLogger.error('No broker available for session');
       return;
     }
 
     // Get account balance for position sizing
-    const balance = await broker.balance();
+    const balance = await withLogging(
+      integrationLogger,
+      'fetch broker balance',
+      () => broker.balance()
+    );
+    
     const equityUsd = balance.equityUsd || session.accountBalanceUsd || 1000;
+    integrationLogger.debug(`Broker balance | equity=${equityUsd.toFixed(2)} free=${balance.freeUsd?.toFixed(2)}`);
 
     // Calculate position size using PositionSizer
     const config = getQuantAIConfig();
@@ -213,9 +227,15 @@ async function executeEntryTrade(
     });
 
     if (!sizing || sizing.qty <= 0) {
-      logger.warn(`[${session.sessionId}] Position sizing resulted in 0 quantity`);
+      integrationLogger.warn('Position sizing resulted in 0 quantity', {
+        equityUsd,
+        entryPrice,
+        stopDistance,
+      });
       return;
     }
+
+    integrationLogger.info(`Position sized | qty=${sizing.qty} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)}`);
 
     // Register the trade entry with meta-adaptive system
     const registrationResult = await registerAdaptiveTradeEntry({
@@ -228,7 +248,7 @@ async function executeEntryTrade(
     });
 
     if (registrationResult === 'skipped' || registrationResult === 'predictor_blocked') {
-      logger.info(`[${session.sessionId}] Trade registration ${registrationResult}`);
+      integrationLogger.warn(`Trade registration ${registrationResult}`);
       return;
     }
 
@@ -238,16 +258,29 @@ async function executeEntryTrade(
       ? entryPrice + stopDistance
       : entryPrice - stopDistance;
 
-    const order = await broker.place({
-      symbol: session.symbol,
-      side,
-      type: 'market',
-      qty: sizing.qty,
-      stopLoss: stopPrice,
-      clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
-    });
+    const order = await withRetry(
+      integrationLogger,
+      'place entry order',
+      () => broker.place({
+        symbol: session.symbol,
+        side,
+        type: 'market',
+        qty: sizing.qty,
+        stopLoss: stopPrice,
+        clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
+      }),
+      3,
+      500
+    );
 
-    logger.info(`[${session.sessionId}] Entry order placed: ${order.id} ${side} ${sizing.qty} @ ${entryPrice}`);
+    integrationLogger.success(`Entry order placed`, undefined, {
+      orderId: order.id,
+      side,
+      qty: sizing.qty,
+      entryPrice,
+      stopPrice,
+      status: order.status,
+    });
 
     // Update agent position state
     const agent = AgentHub.get(session.sessionId) as any;
@@ -262,8 +295,8 @@ async function executeEntryTrade(
       };
     }
 
-  } catch (error) {
-    logger.error(`[${session.sessionId}] Error executing entry trade:`, error);
+  } catch (error: any) {
+    integrationLogger.error('Error executing entry trade', error);
   }
 }
 

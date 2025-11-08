@@ -7,6 +7,7 @@ import {
   recordServiceFailure,
   recordFallbackTriggered 
 } from '../infra/serviceHealth.js';
+import { createIntegrationLogger } from '../utils/integrationLogger.js';
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 
@@ -16,6 +17,8 @@ const defaultScript = join(projectRoot, 'python', 'predict_service.py');
 
 let cachedPythonExecutable: string | null = null;
 let cachedPythonResolutionError: Error | null = null;
+let pythonFailureCount = 0;
+const PYTHON_FAILURE_THRESHOLD = 5;
 
 function probePythonExecutable(): string {
   if (cachedPythonExecutable) {
@@ -261,6 +264,8 @@ export async function getPrediction(features: Record<string, number>): Promise<P
   const payload = JSON.stringify(sanitized);
   const startTime = Date.now();
 
+  logger.debug(`Calling Python | features=${Object.keys(sanitized).length} script=${scriptPath}`);
+
   return new Promise<PythonPredictionResult>((resolve, reject) => {
     let pythonCommand: string;
     try {
@@ -282,6 +287,13 @@ export async function getPrediction(features: Record<string, number>): Promise<P
     const timeoutMs = Number(process.env.PYTHON_PREDICT_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
+      pythonFailureCount++;
+      logger.error(`Prediction timeout | timeoutMs=${timeoutMs} failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`);
+      
+      if (pythonFailureCount >= PYTHON_FAILURE_THRESHOLD) {
+        logger.error('Python predictor failing repeatedly - consider disabling with DISABLE_PYTHON_PREDICTOR=true');
+      }
+      
       reject(new Error('python prediction timed out'));
     }, Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS);
 
@@ -331,6 +343,7 @@ export async function getPrediction(features: Record<string, number>): Promise<P
     child.on('close', code => {
       clearTimeout(timer);
       if (code !== 0) {
+        pythonFailureCount++;
         const details = stderr || stdout || '';
         const error = new Error(`python exited with code ${code}: ${details}`);
         recordServiceFailure('python_predictor', error);
@@ -352,7 +365,7 @@ export async function getPrediction(features: Record<string, number>): Promise<P
     try {
       child.stdin.write(payload);
       child.stdin.end();
-    } catch (error) {
+    } catch (error: any) {
       clearTimeout(timer);
       child.kill('SIGKILL');
       const writeError = new Error(`failed to send payload: ${(error as Error).message}`);
