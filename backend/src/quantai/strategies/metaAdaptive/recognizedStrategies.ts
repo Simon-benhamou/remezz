@@ -540,6 +540,9 @@ const MIN_ADX_BY_STRATEGY: Record<'trend' | 'breakout' | 'mean' | 'momentum', nu
   momentum: 20,
 };
 
+// Dynamic ATR threshold multiplier - volatility should be 20% above baseline
+const ATR_DYNAMIC_MULTIPLIER = 1.2;
+
 const MIN_ATR_BY_STRATEGY: Record<'trend' | 'breakout' | 'mean' | 'momentum', number> = {
   trend: 0.8,
   breakout: 0.7,
@@ -564,9 +567,20 @@ function computeAtrComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot):
   const minAtr = MIN_ATR_BY_STRATEGY[family];
   const atrRaw = Number((snap as any)?.atrPct ?? NaN);
   const atr = Number.isFinite(atrRaw) ? atrRaw : 0;
-  const normalized = (atr - minAtr) / (Math.max(minAtr, 0.01));
+  
+  // Dynamic ATR threshold: current ATR should be elevated above baseline
+  // Use realizedVol as a proxy for ATR baseline (smoothed volatility measure)
+  const baselineVol = Number((snap as any)?.realizedVol ?? NaN);
+  const hasDynamicBaseline = Number.isFinite(baselineVol) && baselineVol > 0;
+  
+  // If we have baseline data, use dynamic threshold: currentATR > 1.2 * baseline
+  // Otherwise fall back to static threshold
+  const dynamicThreshold = hasDynamicBaseline ? baselineVol * ATR_DYNAMIC_MULTIPLIER : minAtr;
+  const threshold = hasDynamicBaseline ? dynamicThreshold : minAtr;
+  
+  const normalized = (atr - threshold) / (Math.max(threshold, 0.01));
   const score = clampNumber(normalized, 0, 1);
-  const reason = `atr=${atr >= minAtr ? 'pass' : 'fail'}(${atr.toFixed(2)}>=${minAtr.toFixed(2)})`;
+  const reason = `atr=${atr >= threshold ? 'pass' : 'fail'}(${atr.toFixed(2)}>=${threshold.toFixed(2)}${hasDynamicBaseline ? ',dynamic' : ',static'})`;
   return { score, reason };
 }
 
@@ -581,10 +595,12 @@ function computeFlowComponent(
   const ratio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : 1;
   const minVolumeRatio = 1.1;
   const desired = desiredDirectionalBias(bias);
-  let cmfThreshold = 0.08;
+  
+  // Symmetric CMF thresholds: 0.05 for long, -0.05 for short
+  let cmfThreshold = 0.05;
   let cmfMagnitude = cmf;
   if (desired === 'bearish') {
-    cmfThreshold = -0.08;
+    cmfThreshold = -0.05;
     cmfMagnitude = -cmf;
   }
   if (!desired) {
@@ -612,12 +628,64 @@ function computeEntryEligibility(
   const adx = computeAdxComponent(signal.id, snap);
   const atr = computeAtrComponent(signal.id, snap);
   const flow = computeFlowComponent(signal.bias, snap);
+  
+  // Bias-adaptive weighting: increase MTF weight when it aligns with trade bias
+  const desired = desiredDirectionalBias(signal.bias);
+  const mtfAligned = desired && mtf.consensus === desired;
+  const mtfOpposed = desired && mtf.consensus !== 'neutral' && mtf.consensus !== 'mixed' && mtf.consensus !== desired;
+  
+  // If MTF opposes the trade bias, it's a blocker (score = 0)
+  // If MTF aligns, boost its weight from 0.35 to 0.45
+  // If neutral/mixed, keep baseline weight
+  let mtfWeight = 0.35;
+  let adxWeight = 0.25;
+  let atrWeight = 0.2;
+  let flowWeight = 0.2;
+  
+  if (mtfOpposed) {
+    // MTF opposition is a hard blocker - zero out the score
+    mtfWeight = 1.0;
+    adxWeight = 0;
+    atrWeight = 0;
+    flowWeight = 0;
+    const score = 0;
+    const passed = false;
+    const reasons = [mtf.reason, adx.reason, atr.reason, flow.reason];
+    return {
+      score,
+      passed,
+      reasons,
+      components: {
+        mtf: Number(mtf.score.toFixed(4)),
+        adx: Number(adx.score.toFixed(4)),
+        atr: Number(atr.score.toFixed(4)),
+        flow: Number(flow.score.toFixed(4)),
+      },
+      mtfDetails: {
+        consensus: mtf.consensus,
+        matches: mtf.matches,
+        totalFrames: mtf.total,
+      },
+      flowDetails: {
+        cmf: flow.cmf,
+        threshold: flow.threshold,
+        volumeRatio: flow.volumeRatio,
+      },
+    };
+  } else if (mtfAligned) {
+    // MTF alignment boosts its importance
+    mtfWeight = 0.45;
+    adxWeight = 0.22;
+    atrWeight = 0.18;
+    flowWeight = 0.15;
+  }
+  
   const score = Number(
     clampNumber(
-      mtf.score * 0.35
-        + adx.score * 0.25
-        + atr.score * 0.2
-        + flow.score * 0.2,
+      mtf.score * mtfWeight
+        + adx.score * adxWeight
+        + atr.score * atrWeight
+        + flow.score * flowWeight,
       0,
       1,
     ).toFixed(4),
