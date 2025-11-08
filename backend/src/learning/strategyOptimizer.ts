@@ -4,8 +4,8 @@
  */
 
 import { getSymbolEvaluations } from './tradeEvaluationLogger.js';
-import { savePersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias } from './personalityProfile.js';
-import type { OptimalParams, RegimeAwareParams, VolatilityRegime, DirectionBias } from './personalityProfile.js';
+import { savePersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, classifyTrendingRanging } from './personalityProfile.js';
+import type { OptimalParams, RegimeAwareParams, VolatilityRegime, DirectionBias, VolumeRegime, TrendingRanging } from './personalityProfile.js';
 import type { InputMetrics, MarketOutcome } from './tradeEvaluationLogger.js';
 import { prisma, Prisma } from '../db/client.js';
 
@@ -244,7 +244,7 @@ export async function optimizeSymbolParameters(
 }
 
 /**
- * Optimize parameters with regime awareness (volatility + direction)
+ * Optimize parameters with regime awareness (volatility + direction + volume + trending/ranging)
  */
 function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): RegimeAwareParams | null {
   console.log(`📊 Running regime-aware optimization for ${symbol}...`);
@@ -268,8 +268,29 @@ function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): Reg
     classifyDirectionBias(e.inputMetrics.ema20, e.inputMetrics.ema50) === 'short'
   );
 
+  // Split evaluations by volume regime
+  const lowVolumeEvals = evaluations.filter((e) =>
+    classifyVolumeRegime(e.inputMetrics.volume, e.inputMetrics.volumeMA, e.inputMetrics.volumeZScore) === 'low'
+  );
+  const normalVolumeEvals = evaluations.filter((e) =>
+    classifyVolumeRegime(e.inputMetrics.volume, e.inputMetrics.volumeMA, e.inputMetrics.volumeZScore) === 'normal'
+  );
+  const highVolumeEvals = evaluations.filter((e) =>
+    classifyVolumeRegime(e.inputMetrics.volume, e.inputMetrics.volumeMA, e.inputMetrics.volumeZScore) === 'high'
+  );
+
+  // Split evaluations by trending vs ranging
+  const trendingEvals = evaluations.filter((e) =>
+    classifyTrendingRanging(e.inputMetrics.adx, e.inputMetrics.atrPct) === 'trending'
+  );
+  const rangingEvals = evaluations.filter((e) =>
+    classifyTrendingRanging(e.inputMetrics.adx, e.inputMetrics.atrPct) === 'ranging'
+  );
+
   console.log(`   Low vol: ${lowVolEvals.length}, Medium: ${medVolEvals.length}, High: ${highVolEvals.length}`);
   console.log(`   Long: ${longEvals.length}, Short: ${shortEvals.length}`);
+  console.log(`   Low volume: ${lowVolumeEvals.length}, Normal: ${normalVolumeEvals.length}, High: ${highVolumeEvals.length}`);
+  console.log(`   Trending: ${trendingEvals.length}, Ranging: ${rangingEvals.length}`);
 
   // Optimize each regime (require minimum 20 samples)
   const MIN_REGIME_SAMPLES = 20;
@@ -296,6 +317,26 @@ function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): Reg
     ? optimizeSingleRegime(shortEvals, 'short_bias')
     : null;
 
+  const lowVolumeParams = lowVolumeEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(lowVolumeEvals, 'low_volume')
+    : null;
+
+  const normalVolumeParams = normalVolumeEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(normalVolumeEvals, 'normal_volume')
+    : null;
+
+  const highVolumeParams = highVolumeEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(highVolumeEvals, 'high_volume')
+    : null;
+
+  const trendingParams = trendingEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(trendingEvals, 'trending')
+    : null;
+
+  const rangingParams = rangingEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(rangingEvals, 'ranging')
+    : null;
+
   if (!defaultParams) {
     console.log(`⚠️ Failed to optimize default parameters for ${symbol}`);
     return null;
@@ -311,6 +352,11 @@ function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): Reg
   if (highVolParams) regimeParams.high_volatility = highVolParams;
   if (longParams) regimeParams.long_bias = longParams;
   if (shortParams) regimeParams.short_bias = shortParams;
+  if (lowVolumeParams) regimeParams.low_volume = lowVolumeParams;
+  if (normalVolumeParams) regimeParams.normal_volume = normalVolumeParams;
+  if (highVolumeParams) regimeParams.high_volume = highVolumeParams;
+  if (trendingParams) regimeParams.trending = trendingParams;
+  if (rangingParams) regimeParams.ranging = rangingParams;
 
   console.log(`✅ ${symbol}: Optimized ${Object.keys(regimeParams).length} regime parameters`);
   
@@ -353,7 +399,7 @@ export async function optimizeAllSymbols(
 ): Promise<Map<string, OptimalParams | RegimeAwareParams>> {
   console.log('🚀 Starting optimization for all symbols...');
   if (options?.regimeAware) {
-    console.log('   Using regime-aware optimization (volatility + direction)');
+    console.log('   Using regime-aware optimization (volatility + direction + volume + trending/ranging)');
   }
 
   // Get all distinct symbols from trade evaluations

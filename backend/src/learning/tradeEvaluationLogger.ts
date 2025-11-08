@@ -24,6 +24,9 @@ export type InputMetrics = {
   ema200?: number;
   rsi14?: number;
   volumeRatio?: number;
+  volume?: number;
+  volumeMA?: number;
+  volumeZScore?: number;
   [key: string]: number | undefined;
 };
 

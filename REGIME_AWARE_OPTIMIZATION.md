@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implemented comprehensive regime-aware parameter optimization to adapt strategy parameters based on market conditions and directional bias. The system now learns separate optimal parameters for different volatility regimes and long/short positions.
+Implemented comprehensive regime-aware parameter optimization to adapt strategy parameters based on market conditions, directional bias, volume/liquidity levels, and market structure (trending vs ranging). The system now learns separate optimal parameters for different market regimes.
 
 ## Problem Solved
 
@@ -10,12 +10,16 @@ Implemented comprehensive regime-aware parameter optimization to adapt strategy 
 - ❌ **Single parameter set** used for all market conditions
 - ❌ **Same parameters** for calm (ATR 2%) and volatile (ATR 8%) markets
 - ❌ **Same parameters** for long and short trades
+- ❌ **Same parameters** for high and low liquidity periods
+- ❌ **Same parameters** for trending and ranging markets
 - ❌ **No adaptation** when market regime changes
 - ⚠️ **Performance degradation** during regime shifts
 
 ### New Capabilities
 - ✅ **Volatility-aware**: Separate params for low/medium/high volatility
 - ✅ **Direction-aware**: Separate params for long vs short trades
+- ✅ **Volume/Liquidity-aware**: Separate params for low/normal/high volume periods
+- ✅ **Market structure-aware**: Separate params for trending vs ranging markets
 - ✅ **Automatic classification**: Real-time regime detection
 - ✅ **Graceful fallback**: Uses defaults when regime not optimized
 - ✅ **Backward compatible**: Standard optimization still available
@@ -38,6 +42,19 @@ Implemented comprehensive regime-aware parameter optimization to adapt strategy 
 - Neutral:     Within 0.1% buffer      (Choppy/ranging)
 ```
 
+**Volume/Liquidity Regimes** (based on Volume Z-score or ratio):
+```typescript
+- Low volume:    Z-score < -0.5 OR volume/volumeMA < 0.7  (Thin liquidity)
+- Normal volume: Z-score -0.5 to 0.5 OR ratio 0.7-1.3     (Standard conditions)
+- High volume:   Z-score > 0.5 OR volume/volumeMA > 1.3   (High participation)
+```
+
+**Market Structure** (based on ADX and volatility):
+```typescript
+- Trending:  ADX > 25 OR (ADX 20-25 AND ATR > 4%)  (Directional moves)
+- Ranging:   ADX < 20 OR (ADX 20-25 AND ATR ≤ 4%)  (Choppy/sideways)
+```
+
 ### 2. Data Structure
 
 **RegimeAwareParams** now includes:
@@ -49,6 +66,11 @@ Implemented comprehensive regime-aware parameter optimization to adapt strategy 
   high_volatility?: OptimalParams,     // Wild markets
   long_bias?: OptimalParams,           // Bullish setups
   short_bias?: OptimalParams,          // Bearish setups
+  low_volume?: OptimalParams,          // Thin liquidity
+  normal_volume?: OptimalParams,       // Standard volume
+  high_volume?: OptimalParams,         // High participation
+  trending?: OptimalParams,            // Directional markets
+  ranging?: OptimalParams,             // Choppy/sideways markets
 }
 ```
 
@@ -59,6 +81,11 @@ Implemented comprehensive regime-aware parameter optimization to adapt strategy 
 2. **Splits data by regime:**
    - Volatility: low/medium/high
    - Direction: long/short/neutral
+   - Volume: low/normal/high
+   - Market Structure: trending/ranging
+3. **Optimizes each subset separately** (minimum 20 samples)
+4. **Saves multi-regime profile** to database
+5. Requires ~100-200 total evaluations for good coverage across all regimes
 3. **Optimizes each subset separately** (minimum 20 samples)
 4. **Saves multi-regime profile** to database
 5. Requires ~50-100 total evaluations for good coverage
@@ -73,14 +100,18 @@ Implemented comprehensive regime-aware parameter optimization to adapt strategy 
 When fetching parameters during live trading:
 ```typescript
 1. Volatility regime (HIGHEST PRIORITY - risk management)
-2. Direction bias (long/short asymmetry)
-3. Market regime (bull/bear/choppy)
-4. Default parameters (FALLBACK)
+2. Volume regime (liquidity affects execution quality)
+3. Market structure (trending vs ranging strategy type)
+4. Direction bias (long/short asymmetry)
+5. Market regime (bull/bear/choppy)
+6. Default parameters (FALLBACK)
 ```
 
 **Example:**
-- Market is HIGH volatility + LONG bias
+- Market is HIGH volatility + HIGH volume + TRENDING + LONG bias
 - System tries: `high_volatility` params first
+- If not available: tries `high_volume` params
+- If not available: tries `trending` params
 - If not available: tries `long_bias` params
 - If not available: uses `default` params
 
@@ -92,15 +123,23 @@ When fetching parameters during live trading:
 const atrPct = Number(snap.atrPct ?? 0);
 const ema20 = Number(snap.ema20 ?? 0);
 const ema50 = Number(snap.ema50 ?? 0);
+const adx = Number(snap.adx14 ?? 0);
+const volume = snap.volume ? Number(snap.volume) : undefined;
+const volumeMA = snap.volumeMA ? Number(snap.volumeMA) : undefined;
+const volumeZScore = snap.volumeZScore ? Number(snap.volumeZScore) : undefined;
 
 // Classify current conditions
 const volatilityRegime = classifyVolatilityRegime(atrPct);  // 'low' | 'medium' | 'high'
 const directionBias = classifyDirectionBias(ema20, ema50);  // 'long' | 'short' | 'neutral'
+const volumeRegime = classifyVolumeRegime(volume, volumeMA, volumeZScore);  // 'low' | 'normal' | 'high'
+const trendingRanging = classifyTrendingRanging(adx, atrPct);  // 'trending' | 'ranging'
 
 // Fetch appropriate parameters
 const profile = await getPersonalityProfile(symbol, {
   volatilityRegime,
   directionBias,
+  volumeRegime,
+  trendingRanging,
 });
 const params = profile || DEFAULT_PARAMS;
 
@@ -208,44 +247,127 @@ short_bias: {
 ```
 ✅ Reflects market asymmetry (fear > greed)
 
+### Example 3: Volume/Liquidity Adaptation
+
+**Low Volume Period (Z-score -0.8):**
+```typescript
+low_volume: {
+  thresholds: {
+    minConfidence: 0.55,  // Higher confidence needed
+    adx: 20               // Stronger trend required
+  }
+}
+```
+✅ More conservative during thin liquidity (avoid slippage)
+
+**High Volume Period (Z-score 1.2):**
+```typescript
+high_volume: {
+  thresholds: {
+    minConfidence: 0.40,  // Can be more aggressive
+    adx: 16               // Lower ADX acceptable
+  }
+}
+```
+✅ More aggressive during high participation (better execution)
+
+### Example 4: Trending vs Ranging Markets
+
+**Trending Market (ADX 30):**
+```typescript
+trending: {
+  weights: {
+    adx: 0.35,            // Higher weight on trend strength
+    alignment: 0.25,      // More weight on EMA alignment
+    slope: 0.15           // More weight on momentum
+  },
+  thresholds: {
+    minConfidence: 0.42,  // Can enter with lower confidence
+    trendStrength: 0.22   // Lower threshold for momentum
+  }
+}
+```
+✅ Optimized for momentum strategies
+
+**Ranging Market (ADX 15):**
+```typescript
+ranging: {
+  weights: {
+    adx: 0.20,            // Lower weight on ADX (it's weak anyway)
+    flow: 0.20,           // More weight on money flow
+    alignment: 0.15       // Less weight on alignment
+  },
+  thresholds: {
+    minConfidence: 0.52,  // Higher confidence needed
+    trendStrength: 0.30,  // Higher threshold (avoid false signals)
+    cmf: 0.08             // Require stronger money flow confirmation
+  }
+}
+```
+✅ Optimized for mean-reversion strategies
+    minConfidence: 0.55   // Higher confidence needed
+  }
+}
+```
+✅ Fewer, higher-quality trades in wild conditions
+
+### Example 2: Long vs Short Asymmetry
+
+**Long Bias (Bullish Trend):**
+```typescript
+long_bias: {
+  thresholds: {
+    minConfidence: 0.45,  // Standard confidence
+    trendStrength: 0.25   // Can ride momentum
+  }
+}
+```
+
+**Short Bias (Bearish Trend):**
+```typescript
+short_bias: {
+  thresholds: {
+    minConfidence: 0.52,  // Higher confidence (shorts riskier)
+    trendStrength: 0.30   // Stronger trend needed
+  }
+}
+```
+✅ Reflects market asymmetry (fear > greed)
+
 ## Files Modified
 
 ### Backend
 1. `backend/src/learning/personalityProfile.ts`
-   - Added `VolatilityRegime`, `DirectionBias` types
-   - Added `classifyVolatilityRegime()` function
-   - Added `classifyDirectionBias()` function
-   - Updated `RegimeAwareParams` with volatility/direction keys
-   - Updated `getPersonalityProfile()` with priority selection
+   - Added `VolumeRegime`, `TrendingRanging` types
+   - Added `classifyVolumeRegime()` function (Z-score and ratio-based)
+   - Added `classifyTrendingRanging()` function (ADX-based)
+   - Updated `RegimeAwareParams` with volume and trending/ranging keys
+   - Updated `getPersonalityProfile()` with expanded priority selection
 
 2. `backend/src/learning/strategyOptimizer.ts`
-   - Added regime-aware optimization support
-   - Added `optimizeRegimeAware()` function
-   - Added `optimizeSingleRegime()` helper
-   - Updated `optimizeSymbolParameters()` with `regimeAware` option
-   - Updated `optimizeAllSymbols()` to pass through option
+   - Updated imports to include new regime classifiers
+   - Updated `optimizeRegimeAware()` to split by volume and trending/ranging
+   - Added optimization for low/normal/high volume regimes
+   - Added optimization for trending/ranging market structures
+   - Updated logging to show all regime counts
 
-3. `backend/src/routes/strategy.ts`
-   - Updated `/optimize-symbol` to accept `regimeAware` parameter
-   - Updated `/optimize-all` to accept `regimeAware` parameter
-   - Response includes regime-aware status
+3. `backend/src/learning/tradeEvaluationLogger.ts`
+   - Added `volume`, `volumeMA`, `volumeZScore` to `InputMetrics` type
+   - Enables capturing volume data for regime classification during optimization
 
 4. `backend/src/services/intelligentAgent/strategies/core.ts`
-   - Import regime classification functions
-   - Calculate volatility and direction regimes in real-time
-   - Pass regime context to `getPersonalityProfile()`
+   - Import new regime classification functions
+   - Calculate volume and trending/ranging regimes in real-time
+   - Pass all regime contexts to `getPersonalityProfile()`
+   - Updated `logTradeEvaluation()` to include volume metrics
 
-### Frontend
-1. `frontend/src/api.ts`
-   - Updated `optimizeSymbol()` to accept `regimeAware` parameter
-   - Updated `optimizeAllSymbols()` to accept `regimeAware` parameter
-
-2. `frontend/src/pages/OperationsDashboardPage.tsx`
-   - Added `Checkbox` import
-   - Added `regimeAwareOptimization` state (default: true)
-   - Added checkbox UI for regime-aware toggle
-   - Updated handlers to pass `regimeAware` to API
-   - Updated descriptions to reflect mode
+### Tests
+1. `backend/test/unit/regime-classification.spec.ts` (NEW)
+   - Unit tests for `classifyVolatilityRegime()`
+   - Unit tests for `classifyDirectionBias()`
+   - Unit tests for `classifyVolumeRegime()` (Z-score and ratio methods)
+   - Unit tests for `classifyTrendingRanging()` (ADX and volatility fallback)
+   - Integration tests for multi-regime scenarios
 
 ## Usage Guide
 
@@ -334,9 +456,9 @@ const regimeParams = await optimizeSymbolParameters('BTC/USDT', {
 
 ### Potential Improvements
 1. **Time-of-day regimes** (Asian/European/US sessions)
-2. **Trend vs range detection** (separate params)
+2. ~~**Trend vs range detection** (separate params)~~ ✅ **IMPLEMENTED**
 3. **Correlation regimes** (isolated vs correlated moves)
-4. **Volume regimes** (high/low participation)
+4. ~~**Volume regimes** (high/low participation)~~ ✅ **IMPLEMENTED**
 5. **Auto-regime rebalancing** (periodic re-optimization)
 
 ### Advanced Features
@@ -344,16 +466,18 @@ const regimeParams = await optimizeSymbolParameters('BTC/USDT', {
 - Regime probability weighting (blend parameters)
 - Multi-timeframe regime analysis
 - Symbol correlation clustering
+- Confidence scoring for regime classification
 
 ## Validation
 
 ### Test Checklist
 - ✅ Backend builds successfully
-- ✅ Frontend builds successfully
 - ✅ TypeScript types are correct
 - ✅ API endpoints accept new parameters
-- ✅ UI displays regime-aware option
 - ✅ Backward compatible (standard mode still works)
+- ✅ Unit tests for regime classification functions
+- ✅ Volume regime classification (Z-score and ratio methods)
+- ✅ Trending vs ranging classification (ADX-based)
 
 ### Next Steps
 1. **Test with real data**: Run on symbols with 100+ evaluations
