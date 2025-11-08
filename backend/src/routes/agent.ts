@@ -1542,7 +1542,6 @@ router.delete('/sessions/:id', async (req,res)=>{
   await prisma.position.deleteMany({ where: { sessionId: id } });
   await prisma.strategy.deleteMany({ where: { sessionId: id } });
   await prisma.triggerLog.deleteMany({ where: { sessionId: id } });
-  await prisma.sentimentSnapshot.deleteMany({ where: { sessionId: id } });
   await prisma.sessionKpi.deleteMany({ where: { sessionId: id } });
   await prisma.agentSession.delete({ where: { id } });
   res.json({ ok: true });
