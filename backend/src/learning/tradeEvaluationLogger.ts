@@ -8,6 +8,10 @@ import { Prisma } from '.prisma/client';
 
 // Time constants
 const OUTCOME_WAIT_MS = 60 * 60 * 1000; // 1 hour in milliseconds
+const DEDUP_WINDOW_MS = 60 * 1000; // 1 minute - prevent duplicate evaluations within this window
+
+// In-memory cache to prevent duplicate evaluations
+const recentEvaluations = new Map<string, number>(); // symbol -> last evaluation timestamp
 
 export type InputMetrics = {
   adx?: number;
@@ -41,9 +45,29 @@ export type TradeEvaluationParams = {
 
 /**
  * Log a trade evaluation with its context
+ * Includes deduplication to prevent logging the same decision multiple times within a short window
  */
 export async function logTradeEvaluation(params: TradeEvaluationParams): Promise<string | null> {
   try {
+    const now = Date.now();
+    const lastEvalTime = recentEvaluations.get(params.symbol);
+    
+    // Check if we recently logged an evaluation for this symbol
+    if (lastEvalTime && (now - lastEvalTime) < DEDUP_WINDOW_MS) {
+      // Skip this evaluation to avoid duplicates
+      return null;
+    }
+    
+    // Update the cache
+    recentEvaluations.set(params.symbol, now);
+    
+    // Clean up old entries from cache (keep only last 5 minutes worth)
+    for (const [symbol, timestamp] of recentEvaluations.entries()) {
+      if (now - timestamp > 5 * 60 * 1000) {
+        recentEvaluations.delete(symbol);
+      }
+    }
+    
     const record = await prisma.tradeEvaluation.create({
       data: {
         symbol: params.symbol,
