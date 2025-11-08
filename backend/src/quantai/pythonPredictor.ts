@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createIntegrationLogger } from '../utils/integrationLogger.js';
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 
@@ -10,6 +11,8 @@ const defaultScript = join(projectRoot, 'python', 'predict_service.py');
 
 let cachedPythonExecutable: string | null = null;
 let cachedPythonResolutionError: Error | null = null;
+let pythonFailureCount = 0;
+const PYTHON_FAILURE_THRESHOLD = 5;
 
 function probePythonExecutable(): string {
   if (cachedPythonExecutable) {
@@ -243,16 +246,28 @@ function parsePrediction(payload: string): PythonPredictionResult {
 }
 
 export async function getPrediction(features: Record<string, number>): Promise<PythonPredictionResult> {
+  const logger = createIntegrationLogger({
+    component: 'PythonPredictor',
+    action: 'predict',
+  });
+
   const sanitized = sanitizeFeatures(features);
 
   const scriptPath = getScriptPath();
   const payload = JSON.stringify(sanitized);
 
+  logger.debug(`Calling Python | features=${Object.keys(sanitized).length} script=${scriptPath}`);
+
   return new Promise<PythonPredictionResult>((resolve, reject) => {
     let pythonCommand: string;
     try {
       pythonCommand = resolvePythonExecutable();
-    } catch (error) {
+      // Log Python executable once on first successful resolution
+      if (pythonFailureCount === 0 && !cachedPythonExecutable) {
+        logger.info(`Resolved Python executable: ${pythonCommand}`);
+      }
+    } catch (error: any) {
+      logger.error('Failed to resolve Python executable', error);
       reject(error);
       return;
     }
@@ -268,6 +283,13 @@ export async function getPrediction(features: Record<string, number>): Promise<P
     const timeoutMs = Number(process.env.PYTHON_PREDICT_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
+      pythonFailureCount++;
+      logger.error(`Prediction timeout | timeoutMs=${timeoutMs} failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`);
+      
+      if (pythonFailureCount >= PYTHON_FAILURE_THRESHOLD) {
+        logger.error('Python predictor failing repeatedly - consider disabling with DISABLE_PYTHON_PREDICTOR=true');
+      }
+      
       reject(new Error('python prediction timed out'));
     }, Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS);
 
@@ -283,30 +305,60 @@ export async function getPrediction(features: Record<string, number>): Promise<P
 
     child.on('error', error => {
       clearTimeout(timer);
+      pythonFailureCount++;
+      logger.error(`Spawn failed | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, error);
+      
+      if (pythonFailureCount >= PYTHON_FAILURE_THRESHOLD) {
+        logger.error('Python predictor failing repeatedly - system should disable predictor');
+      }
+      
       reject(new Error(`python spawn failed: ${error.message}`));
     });
 
     child.on('close', code => {
       clearTimeout(timer);
       if (code !== 0) {
+        pythonFailureCount++;
         const details = stderr || stdout || '';
+        logger.error(`Exit code ${code} | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, {
+          stderr: details.slice(0, 200),
+        });
         reject(new Error(`python exited with code ${code}: ${details}`));
         return;
       }
       try {
-        resolve(parsePrediction(stdout.trim()));
-      } catch (error) {
-        reject(new Error(`failed to parse python output: ${(error as Error).message}`));
+        const result = parsePrediction(stdout.trim());
+        // Reset failure count on success
+        pythonFailureCount = 0;
+        
+        logger.success('Prediction result', undefined, {
+          decision: result.decision,
+          confidence: result.confidence.toFixed(3),
+          probLong: result.probabilityLong.toFixed(3),
+          probShort: result.probabilityShort.toFixed(3),
+          entryWeight: result.entryWeight.toFixed(2),
+          riskMultiplier: result.riskMultiplier.toFixed(2),
+        });
+        
+        resolve(result);
+      } catch (error: any) {
+        pythonFailureCount++;
+        logger.error(`Parse failed | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, error, {
+          stdout: stdout.slice(0, 200),
+        });
+        reject(new Error(`failed to parse python output: ${error.message}`));
       }
     });
 
     try {
       child.stdin.write(payload);
       child.stdin.end();
-    } catch (error) {
+    } catch (error: any) {
       clearTimeout(timer);
       child.kill('SIGKILL');
-      reject(new Error(`failed to send payload: ${(error as Error).message}`));
+      pythonFailureCount++;
+      logger.error(`Failed to send payload | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, error);
+      reject(new Error(`failed to send payload: ${error.message}`));
     }
   });
 }
