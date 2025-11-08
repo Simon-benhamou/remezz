@@ -17,6 +17,7 @@ export type OptimalParams = {
     adx: number;
     trendStrength: number;
     minConfidence: number;
+    cmf?: number;
   };
 };
 
@@ -42,6 +43,7 @@ export const DEFAULT_PARAMS: OptimalParams = {
     adx: 18,
     trendStrength: 0.25,
     minConfidence: 0.45,
+    cmf: 0.05,
   },
 };
 

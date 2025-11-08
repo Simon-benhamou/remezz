@@ -4,7 +4,7 @@
  */
 
 import { prisma } from '../db/client.js';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '.prisma/client';
 
 // Time constants
 const OUTCOME_WAIT_MS = 60 * 60 * 1000; // 1 hour in milliseconds

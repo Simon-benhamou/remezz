@@ -8,6 +8,7 @@ import { savePersonalityProfile, DEFAULT_PARAMS } from './personalityProfile.js'
 import type { OptimalParams } from './personalityProfile.js';
 import type { InputMetrics, MarketOutcome } from './tradeEvaluationLogger.js';
 import { prisma } from '../db/client.js';
+import { Prisma } from '.prisma/client';
 
 type EvaluationData = {
   inputMetrics: InputMetrics;
@@ -268,7 +269,7 @@ export async function optimizeAllSymbols(): Promise<Map<string, OptimalParams>> 
 async function getDistinctSymbols(): Promise<string[]> {
   const result = await prisma.tradeEvaluation.findMany({
     where: {
-      marketOutcome: { not: { equals: Prisma.DbNull } },
+      marketOutcome: { not: Prisma.JsonNull },
     },
     select: { symbol: true },
     distinct: ['symbol'],

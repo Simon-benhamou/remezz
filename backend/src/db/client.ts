@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '.prisma/client';
 
 type InMemoryFactory = typeof import('./inMemoryClient.js');
 
@@ -26,12 +26,15 @@ const createInMemoryPrismaClient = await loadInMemoryFactory();
 const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 const USE_IN_MEMORY = UNIT_TEST_MODE || (process.env.USE_IN_MEMORY_DB || '').toLowerCase() === 'true';
 
-const prismaInstance: any = USE_IN_MEMORY ? createInMemoryPrismaClient() : new PrismaClient();
+// Create properly typed instance
+const prismaInstance: PrismaClient = USE_IN_MEMORY 
+  ? (createInMemoryPrismaClient() as unknown as PrismaClient)
+  : new PrismaClient();
 
 // Export the Prisma client instance with proper typing
-export const prisma = prismaInstance as PrismaClient;
+export const prisma: PrismaClient = prismaInstance;
 export const prismaIsInMemory = USE_IN_MEMORY;
 
-if (USE_IN_MEMORY && typeof prismaInstance.$reset !== 'function') {
-  prismaInstance.$reset = async () => {};
+if (USE_IN_MEMORY && typeof (prismaInstance as any).$reset !== 'function') {
+  (prismaInstance as any).$reset = async () => {};
 }
