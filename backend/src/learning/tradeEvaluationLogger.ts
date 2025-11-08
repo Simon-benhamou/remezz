@@ -37,12 +37,21 @@ export type MarketOutcome = {
   max_adverse_excursion_1h?: number;
 };
 
+export type RegimeContext = {
+  volatilityRegime?: 'low' | 'medium' | 'high';
+  directionBias?: 'long' | 'short' | 'neutral';
+  volumeRegime?: 'low' | 'normal' | 'high';
+  trendingRanging?: 'trending' | 'ranging';
+  parameterSource?: string; // Which regime parameters were used (e.g., 'high_volatility', 'default')
+};
+
 export type TradeEvaluationParams = {
   symbol: string;
   decision: 'executed' | 'blocked';
   blockedReason?: string;
   confidenceScore: number;
   inputMetrics: InputMetrics;
+  regimeContext?: RegimeContext; // NEW: Track which regime parameters were used
 };
 
 /**
@@ -77,11 +86,18 @@ export async function logTradeEvaluation(params: TradeEvaluationParams): Promise
         blockedReason: params.blockedReason || null,
         confidenceScore: params.confidenceScore,
         inputMetrics: params.inputMetrics as any,
+        regimeContext: params.regimeContext as any, // NEW: Store regime context for traceability
         marketOutcome: Prisma.JsonNull,
         updatedAt: new Date(),
       },
       select: { id: true },
     });
+    
+    // Log parameter traceability for debugging
+    if (params.regimeContext?.parameterSource) {
+      console.log(`[TRACE] ${params.symbol} decision=${params.decision} regime=${params.regimeContext.parameterSource} confidence=${params.confidenceScore.toFixed(4)}`);
+    }
+    
     return record.id;
   } catch (error) {
     console.warn('Failed to log trade evaluation:', error);

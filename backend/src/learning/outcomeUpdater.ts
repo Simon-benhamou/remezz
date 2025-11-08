@@ -6,6 +6,7 @@
 import { getEvaluationsPendingOutcome, updateTradeOutcome } from './tradeEvaluationLogger.js';
 import { getOHLCV } from '../data/market.js';
 import type { MarketOutcome } from './tradeEvaluationLogger.js';
+import { trackOutcomeUpdate, checkOutcomeUpdaterLag } from '../monitoring/alerting.js';
 
 const WORKER_INTERVAL_MS = 5 * 60 * 1000; // Run every 5 minutes
 const OUTCOME_WAIT_MS = 60 * 60 * 1000; // Wait 1 hour after evaluation
@@ -131,6 +132,11 @@ async function processOutcomeUpdates(): Promise<void> {
     }
 
     console.log(`✅ Outcome updates: ${updated} updated, ${failed} failed`);
+    
+    // Track successful outcome update for alerting
+    if (updated > 0) {
+      trackOutcomeUpdate();
+    }
   } catch (error) {
     console.error('Error in outcome updater worker:', error);
   } finally {
@@ -156,6 +162,9 @@ export function startOutcomeUpdater(): void {
 
   // Then run on interval
   workerTimer = setInterval(() => {
+    // Check for lag before processing
+    checkOutcomeUpdaterLag();
+    
     processOutcomeUpdates().catch((error) => {
       console.error('Scheduled outcome update failed:', error);
     });

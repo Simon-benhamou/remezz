@@ -431,6 +431,7 @@ model TradeEvaluation {
   blockedReason   String?
   confidenceScore Float
   inputMetrics    Json     // Snapshot of indicator values: adx, cmf, atr_pct, slope, trend_strength, etc.
+  regimeContext   Json?    // NEW: Regime classification and parameter source for traceability
   marketOutcome   Json?    // Updated later: pnl_15m, pnl_1h, max_favorable_excursion_1h, max_adverse_excursion_1h
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
