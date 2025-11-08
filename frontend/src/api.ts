@@ -74,6 +74,12 @@ export const api = {
     (await client.post("/api/strategy/optimize-symbol", { symbol, regimeAware })).data,
   optimizeAllSymbols: async (regimeAware?: boolean) =>
     (await client.post("/api/strategy/optimize-all", { regimeAware })).data,
+  getSymbolProfile: async (symbol: string) =>
+    (await client.get(`/api/strategy/symbol-profile/${symbol}`)).data,
+  getAllSymbolProfiles: async () =>
+    (await client.get("/api/strategy/symbol-profiles")).data,
+  buildSymbolProfiles: async (lookbackDays?: number) =>
+    (await client.post("/api/strategy/build-symbol-profiles", { lookbackDays })).data,
   startSession: async (
     symbol: string,
     mode: "paper" | "live",

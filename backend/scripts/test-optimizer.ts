@@ -7,7 +7,7 @@
  * 3. Retrieving the profiles to verify they were created
  */
 
-import { prisma } from '../src/db/client.js';
+import { prisma, Prisma } from '../src/db/client.js';
 import { optimizeAllSymbols } from '../src/learning/strategyOptimizer.js';
 import { 
   optimizeAllActiveSymbols, 
@@ -23,7 +23,7 @@ async function main() {
     console.log('📊 Step 1: Checking available trade evaluation data...');
     const symbols = await prisma.tradeEvaluation.findMany({
       where: {
-        marketOutcome: { not: null },
+        marketOutcome: { not: Prisma.JsonNull },
       },
       select: { 
         symbol: true,
