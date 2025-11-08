@@ -399,7 +399,7 @@ export async function optimizeAllSymbols(
 ): Promise<Map<string, OptimalParams | RegimeAwareParams>> {
   console.log('🚀 Starting optimization for all symbols...');
   if (options?.regimeAware) {
-    console.log('   Using regime-aware optimization (volatility + direction)');
+    console.log('   Using regime-aware optimization (volatility + direction + volume + trending/ranging)');
   }
 
   // Get all distinct symbols from trade evaluations
