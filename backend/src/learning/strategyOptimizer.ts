@@ -8,6 +8,7 @@ import { savePersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, class
 import type { OptimalParams, RegimeAwareParams, VolatilityRegime, DirectionBias, VolumeRegime, TrendingRanging } from './personalityProfile.js';
 import type { InputMetrics, MarketOutcome } from './tradeEvaluationLogger.js';
 import { prisma, Prisma } from '../db/client.js';
+import { trackOptimizationFailure } from '../monitoring/alerting.js';
 
 type EvaluationData = {
   inputMetrics: InputMetrics;
@@ -219,8 +220,10 @@ export async function optimizeSymbolParameters(
   let bestParams: OptimalParams = DEFAULT_PARAMS;
   let bestFitness = -Infinity;
   let testedCount = 0;
+  let noImprovementCount = 0;
+  const EARLY_TERMINATION_PATIENCE = 100; // Stop if no improvement after 100 iterations
 
-  // Grid search
+  // Grid search with early termination
   for (const params of generateParamCombinations()) {
     const fitness = calculateFitness(evaluations, params);
     testedCount++;
@@ -228,6 +231,17 @@ export async function optimizeSymbolParameters(
     if (fitness > bestFitness) {
       bestFitness = fitness;
       bestParams = params;
+      noImprovementCount = 0; // Reset counter on improvement
+    } else {
+      noImprovementCount++;
+    }
+
+    // Early termination: stop if no improvement for PATIENCE iterations
+    if (noImprovementCount >= EARLY_TERMINATION_PATIENCE && testedCount >= 200) {
+      console.log(
+        `⚡ Early termination: No improvement after ${EARLY_TERMINATION_PATIENCE} iterations (tested ${testedCount} combinations)`
+      );
+      break;
     }
   }
 
@@ -418,6 +432,8 @@ export async function optimizeAllSymbols(
       }
     } catch (error) {
       console.error(`Failed to optimize ${symbol}:`, error);
+      // Track optimization failure for alerting
+      trackOptimizationFailure(symbol);
     }
   }
 

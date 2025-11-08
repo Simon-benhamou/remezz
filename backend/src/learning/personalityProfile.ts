@@ -157,6 +157,7 @@ export const DEFAULT_PARAMS: OptimalParams = {
 
 /**
  * Get the personality profile for a symbol, with optional regime and direction context
+ * Returns both the parameters and the source they came from for traceability
  */
 export async function getPersonalityProfile(
   symbol: string,
@@ -233,6 +234,105 @@ export async function getPersonalityProfile(
 
     // Return as simple OptimalParams
     return params as OptimalParams;
+  } catch (error) {
+    console.warn(`Failed to fetch personality profile for ${symbol}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Get the personality profile with parameter source for traceability
+ * Returns both the parameters and which regime they came from
+ */
+export async function getPersonalityProfileWithSource(
+  symbol: string,
+  options?: {
+    volatilityRegime?: VolatilityRegime;
+    directionBias?: DirectionBias;
+    marketRegime?: MarketRegime;
+    volumeRegime?: VolumeRegime;
+    trendingRanging?: TrendingRanging;
+  }
+): Promise<{ params: OptimalParams; source: string } | null> {
+  try {
+    const profile = await prisma.cryptoPersonalityProfile.findUnique({
+      where: { symbol },
+    });
+
+    if (!profile) {
+      return null;
+    }
+
+    const params = profile.optimalParams as OptimalParams | RegimeAwareParams;
+    
+    // Check if it's a regime-aware profile
+    if (params && typeof params === 'object' && 'default' in params) {
+      const regimeParams = params as RegimeAwareParams;
+      
+      // Priority order with source tracking
+      // 1. Volatility (most important for risk management)
+      if (options?.volatilityRegime) {
+        const volKey = `${options.volatilityRegime}_volatility` as keyof RegimeAwareParams;
+        if (regimeParams[volKey]) {
+          return { 
+            params: regimeParams[volKey] as OptimalParams, 
+            source: volKey 
+          };
+        }
+      }
+      
+      // 2. Volume regime (liquidity affects execution)
+      if (options?.volumeRegime) {
+        const volKey = `${options.volumeRegime}_volume` as keyof RegimeAwareParams;
+        if (regimeParams[volKey]) {
+          return { 
+            params: regimeParams[volKey] as OptimalParams, 
+            source: volKey 
+          };
+        }
+      }
+      
+      // 3. Trending vs ranging (strategy type selection)
+      if (options?.trendingRanging) {
+        if (regimeParams[options.trendingRanging]) {
+          return { 
+            params: regimeParams[options.trendingRanging] as OptimalParams, 
+            source: options.trendingRanging 
+          };
+        }
+      }
+      
+      // 4. Direction bias (asymmetric long/short)
+      if (options?.directionBias && options.directionBias !== 'neutral') {
+        const dirKey = `${options.directionBias}_bias` as keyof RegimeAwareParams;
+        if (regimeParams[dirKey]) {
+          return { 
+            params: regimeParams[dirKey] as OptimalParams, 
+            source: dirKey 
+          };
+        }
+      }
+      
+      // 5. Market regime
+      if (options?.marketRegime && regimeParams[options.marketRegime]) {
+        return { 
+          params: regimeParams[options.marketRegime] as OptimalParams, 
+          source: options.marketRegime 
+        };
+      }
+      
+      // 6. Fall back to default
+      return { 
+        params: regimeParams.default, 
+        source: 'default' 
+      };
+    }
+
+    // Return as simple OptimalParams
+    return { 
+      params: params as OptimalParams, 
+      source: 'single_profile' 
+    };
   } catch (error) {
     console.warn(`Failed to fetch personality profile for ${symbol}:`, error);
     return null;
