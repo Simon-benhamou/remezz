@@ -102,11 +102,8 @@ model AgentSession {
   positions  Position[]
   kpi        SessionKpi?
   triggers   TriggerLog[]
-  sentiments SentimentSnapshot[]   // back-rel from SentimentSnapshot.session
   alerts     Alert[]               // back-rel from Alert.session
   reports    DailyReport[]         // back-rel from DailyReport.session
-  prompts    AiPromptLog[]
-  marginSnapshots MarginSnapshot[]
   opsTelemetry      AgentOpsTelemetry?
 
   @@index([userId, stoppedAt, startedAt])
@@ -250,24 +247,6 @@ model Position {
   @@index([sessionId])
 }
 
-model MarginSnapshot {
-  id                           String        @id @default(cuid())
-  session                      AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId                    String
-  symbol                       String?
-  status                       String
-  utilisationPct               Float
-  maintenanceMarginUsd         Float?
-  marginRatio                  Float?
-  worstLiquidationDistancePct  Float?
-  concentration                Json?
-  recommendedActions           Json?
-  telemetry                    Json?
-  createdAt                    DateTime      @default(now())
-
-  @@index([sessionId, createdAt])
-}
-
 model AgentOpsTelemetry {
   session        AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId      String       @id
@@ -302,19 +281,6 @@ model SessionKpi {
   aiOutputTokens   Int    @default(0)
   aiCostUsd        Float  @default(0)
   aiByModel        Json?
-}
-
-model SentimentSnapshot {
-  id             String   @id @default(cuid())
-  session        AgentSession? @relation(fields: [sessionId], references: [id])
-  sessionId      String?
-  ts             DateTime @default(now())
-  fearGreed      Int?
-  twitterBullish Float?
-  newsScore      Float?
-  summary        String?
-
-  @@index([sessionId])
 }
 
 model TriggerLog {
@@ -360,26 +326,6 @@ model DailyReport {
   @@unique([sessionId, day])
   @@index([userId, day])
   @@index([sessionId, day])
-}
-
-model AiPromptLog {
-  id        String   @id @default(cuid())
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
-  sessionId String?
-  symbol    String?
-  kind      String?
-  provider  String
-  model     String?
-  prompt    String
-  response  Json?
-  cached    Boolean  @default(false)
-  tokensIn  Int?
-  tokensOut Int?
-  costUsd   Float?
-  error     String?
-  createdAt DateTime @default(now())
-
-  @@index([sessionId, createdAt])
 }
 
 model ImprovementItem {

@@ -24,6 +24,7 @@ declare module '@prisma/client' {
     $executeRaw: any;
     $transaction: any;
     dailyReport: any;
+    tradeEvaluation: any;
   }
 
   export interface LeverageConstraint {

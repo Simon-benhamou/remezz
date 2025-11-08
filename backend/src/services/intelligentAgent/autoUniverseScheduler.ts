@@ -1,4 +1,5 @@
 import { prisma } from '../../db/client.js';
+import { Prisma } from '.prisma/client';
 import { scheduleJob, registerSchedulerJobHandler, processSchedulerJobsOnce } from '../../services/schedulerJobService.js';
 
 type AutoUniverseStatus = {
@@ -65,12 +66,12 @@ function persistAutoUniverseRetryState(
         id: AUTO_UNIVERSE_SCHEDULE_ID,
         nextRetryAt: nextRetryDate,
         excludeSessionId: excludeSessionId ?? null,
-        metadata: jobId ? { schedulerJobId: jobId } : null,
+        metadata: jobId ? { schedulerJobId: jobId } : Prisma.JsonNull,
       },
       update: {
         nextRetryAt: nextRetryDate,
         excludeSessionId: excludeSessionId ?? null,
-        metadata: jobId === undefined ? undefined : jobId ? { schedulerJobId: jobId } : null,
+        metadata: jobId === undefined ? undefined : jobId ? { schedulerJobId: jobId } : Prisma.JsonNull,
       },
     })
     .catch((error) => {

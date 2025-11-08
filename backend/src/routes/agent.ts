@@ -271,7 +271,7 @@ router.patch('/:id', authenticateUser, async (req: AuthenticatedRequest, res) =>
     rrFloor: session.rrFloor ?? undefined,
     rrCeil: session.rrCeil ?? undefined,
     rrBaseMin: session.rrBaseMin ?? undefined,
-    rrExpectancy: session.rrExpectancy ?? undefined,
+    rrExpectancy: session.rrExpectancy as any ?? undefined,
   });
 
   const floorCandidate = body.rrFloor ?? currentConfig.rrFloor;
@@ -1542,7 +1542,6 @@ router.delete('/sessions/:id', async (req,res)=>{
   await prisma.position.deleteMany({ where: { sessionId: id } });
   await prisma.strategy.deleteMany({ where: { sessionId: id } });
   await prisma.triggerLog.deleteMany({ where: { sessionId: id } });
-  await prisma.sentimentSnapshot.deleteMany({ where: { sessionId: id } });
   await prisma.sessionKpi.deleteMany({ where: { sessionId: id } });
   await prisma.agentSession.delete({ where: { id } });
   res.json({ ok: true });
