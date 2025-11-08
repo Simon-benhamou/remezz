@@ -5,8 +5,7 @@
  * historical performance and market characteristics.
  */
 
-import { prisma } from '../db/client.js';
-import { Prisma } from '.prisma/client';
+import { prisma, Prisma } from '../db/client.js';
 import { analyzeThresholdPerformance, type ThresholdSnapshot } from './adaptiveThresholdLearning.js';
 import { getSymbolTier, type SymbolTier } from './regimeAwareThresholds.js';
 

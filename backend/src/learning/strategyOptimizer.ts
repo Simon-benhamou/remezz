@@ -7,8 +7,7 @@ import { getSymbolEvaluations } from './tradeEvaluationLogger.js';
 import { savePersonalityProfile, DEFAULT_PARAMS } from './personalityProfile.js';
 import type { OptimalParams } from './personalityProfile.js';
 import type { InputMetrics, MarketOutcome } from './tradeEvaluationLogger.js';
-import { prisma } from '../db/client.js';
-import { Prisma } from '.prisma/client';
+import { prisma, Prisma } from '../db/client.js';
 
 type EvaluationData = {
   inputMetrics: InputMetrics;

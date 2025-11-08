@@ -5,8 +5,7 @@
  * and gradually optimizes thresholds based on actual performance.
  */
 
-import { prisma } from '../db/client.js';
-import { Prisma } from '.prisma/client';
+import { prisma, Prisma } from '../db/client.js';
 
 export type ThresholdSnapshot = {
   confidence: number;

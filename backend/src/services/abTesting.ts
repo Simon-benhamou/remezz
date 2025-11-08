@@ -5,8 +5,7 @@
  * optimal settings through controlled experimentation.
  */
 
-import { prisma } from '../db/client.js';
-import { Prisma } from '.prisma/client';
+import { prisma, Prisma } from '../db/client.js';
 import type { ThresholdSnapshot } from './adaptiveThresholdLearning.js';
 
 export type ABTestVariant = {
