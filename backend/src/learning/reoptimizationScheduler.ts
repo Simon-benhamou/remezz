@@ -5,10 +5,13 @@
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
+
 import YAML from 'yaml';
+
 import { registerSchedulerJobHandler, scheduleJob } from '../services/schedulerJobService.js';
-import { optimizeSymbolParameters } from './strategyOptimizer.js';
+
 import { savePersonalityProfile } from './personalityProfile.js';
+import { optimizeSymbolParameters } from './strategyOptimizer.js';
 
 const JOB_TYPE_SYMBOL_REOPT = 'symbol_reoptimization';
 
