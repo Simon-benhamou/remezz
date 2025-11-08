@@ -71,6 +71,7 @@ export type AgentCreationResult = {
   sessionId: string;
   agentId?: string;
   symbol: string;
+  mode?: string;
   state: 'ready' | 'warming';
   warmup?: Record<string, { availableBars: number; minBarsNeeded: number; retryMs?: number }>;
   steps: AgentCreationStepSnapshot[];
@@ -634,6 +635,7 @@ export async function startAgentCreation(
     sessionId: sessionRecord.id,
     agentId: activation.agentId,
     symbol: sessionRecord.symbol,
+    mode: sessionRecord.mode,
     state: activation.state,
     warmup,
     steps,

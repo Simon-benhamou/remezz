@@ -6,6 +6,7 @@
  */
 
 import { prisma } from '../db/client.js';
+import { Prisma } from '.prisma/client';
 import { analyzeThresholdPerformance, type ThresholdSnapshot } from './adaptiveThresholdLearning.js';
 import { getSymbolTier, type SymbolTier } from './regimeAwareThresholds.js';
 

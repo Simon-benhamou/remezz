@@ -113,7 +113,7 @@ function ensurePositive(value: number | null | undefined, fallback: number): num
   return value;
 }
 
-type SessionWithKpi = Awaited<ReturnType<typeof prisma.agentSession.findMany>>[number];
+type SessionWithKpi = Awaited<ReturnType<typeof prisma.agentSession.findMany<{ include: { kpi: true } }>>>[number];
 
 type PerformanceContext = {
   roiPct: number;

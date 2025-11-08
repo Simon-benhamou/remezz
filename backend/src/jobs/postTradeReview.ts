@@ -25,7 +25,7 @@ export async function postTradeReview(input: ReviewInput): Promise<ReviewResult 
   if (!order) return null;
 
   const fill = order.fills?.[0] ?? null;
-  const slippageBps = Number(order.slippageBps ?? fill?.slippageBps ?? 0);
+  const slippageBps = Number(order.slippageBps ?? 0);
   const drawdownPct = order.error?.includes('drawdown:')
     ? Number(order.error.split('drawdown:')[1])
     : null;
@@ -37,7 +37,7 @@ export async function postTradeReview(input: ReviewInput): Promise<ReviewResult 
       reason: 'slippage_exceeded_plan',
       slippageBps,
       fillRatio: Number(order.fillRatio ?? 1),
-      passiveOffsetBps: Number(order.passiveOffsetBps ?? 0),
+      passiveOffsetBps: 0,
     });
     bumpTriggerSampleRate(input.symbol, 0.15, 2 * 60 * 60 * 1000);
   }
@@ -61,9 +61,9 @@ export async function postTradeReview(input: ReviewInput): Promise<ReviewResult 
     symbol: input.symbol,
     mode: execMode,
     slippageBps,
-    fillRatio: Number(order.fillRatio ?? (order.qty ? (order.filledQty ?? 0) / order.qty : 1)),
+    fillRatio: Number(order.fillRatio ?? 1),
     fallbackTriggered,
-    spreadBps: Number(order.spreadBps ?? null),
+    spreadBps: 0,
     notionalUsd: Number(order.price ?? 0) * Number(order.qty ?? 0),
   });
 

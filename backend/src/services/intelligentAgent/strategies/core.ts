@@ -2874,11 +2874,13 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
   if (direction === 'bullish' && ema20 <= ema100) reasons.push('bullish_trend_missing_stack');
   if (direction === 'bearish' && ema20 >= ema100) reasons.push('bearish_trend_missing_stack');
   // CMF threshold: for positive thresholds check if abs(cmf) is below threshold (neutral flow)
-  // for negative thresholds (Exotic), only flag if cmf is even more negative than threshold
-  if (params.thresholds.cmf >= 0 && Math.abs(cmf) < params.thresholds.cmf) {
-    reasons.push(`neutral_flow_for_${category}`);
-  } else if (params.thresholds.cmf < 0 && cmf < params.thresholds.cmf) {
-    reasons.push(`weak_flow_for_${category}`);
+  // for negative thresholds, only flag if cmf is even more negative than threshold
+  if (params.thresholds.cmf !== undefined) {
+    if (params.thresholds.cmf >= 0 && Math.abs(cmf) < params.thresholds.cmf) {
+      reasons.push(`neutral_flow`);
+    } else if (params.thresholds.cmf < 0 && cmf < params.thresholds.cmf) {
+      reasons.push(`weak_flow`);
+    }
   }
   if (ema200 !== 0) {
     const distance = Math.abs((last - ema200) / ema200) * 100;

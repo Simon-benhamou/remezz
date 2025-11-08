@@ -271,7 +271,7 @@ router.patch('/:id', authenticateUser, async (req: AuthenticatedRequest, res) =>
     rrFloor: session.rrFloor ?? undefined,
     rrCeil: session.rrCeil ?? undefined,
     rrBaseMin: session.rrBaseMin ?? undefined,
-    rrExpectancy: session.rrExpectancy ?? undefined,
+    rrExpectancy: session.rrExpectancy as any ?? undefined,
   });
 
   const floorCandidate = body.rrFloor ?? currentConfig.rrFloor;

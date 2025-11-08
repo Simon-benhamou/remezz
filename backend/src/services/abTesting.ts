@@ -6,6 +6,7 @@
  */
 
 import { prisma } from '../db/client.js';
+import { Prisma } from '.prisma/client';
 import type { ThresholdSnapshot } from './adaptiveThresholdLearning.js';
 
 export type ABTestVariant = {
