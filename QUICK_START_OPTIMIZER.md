@@ -2,15 +2,23 @@
 
 ## ⚡ Fastest Way to Test
 
+### Step 1: Initialize profiles (first time only)
 ```bash
 cd backend
-npm run tsx scripts/run-optimizer-manual.ts
+npm run init-profiles
+```
+
+### Step 2: Run the optimizer
+```bash
+cd backend
+npx tsx scripts/run-optimizer-manual.ts
 ```
 
 This will:
 - ✅ Check your data
 - ✅ Run the optimizer
 - ✅ Build symbol profiles
+- ✅ Update the database with new profiles
 - ✅ Show detailed results
 
 ## 📊 What You Need
@@ -30,7 +38,11 @@ GROUP BY symbol;
 ### 1. Command Line (Best for first test)
 ```bash
 cd backend
-npm run tsx scripts/run-optimizer-manual.ts
+# First time only: initialize base profiles
+npm run init-profiles
+
+# Run optimizer
+npx tsx scripts/run-optimizer-manual.ts
 ```
 
 ### 2. Frontend UI

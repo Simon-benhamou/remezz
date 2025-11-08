@@ -133,7 +133,7 @@ export async function updateTradeOutcome(
 export async function getEvaluationsPendingOutcome(limit = 100) {
   return prisma.tradeEvaluation.findMany({
     where: {
-      marketOutcome: { equals: Prisma.DbNull },
+      marketOutcome: { equals: Prisma.JsonNull },
       timestamp: {
         lte: new Date(Date.now() - OUTCOME_WAIT_MS),
       },
@@ -145,16 +145,31 @@ export async function getEvaluationsPendingOutcome(limit = 100) {
 
 /**
  * Get historical evaluations for a symbol
+ * Uses SQL to properly filter non-null market outcomes
  */
 export async function getSymbolEvaluations(symbol: string, limit = 1000) {
-  return prisma.tradeEvaluation.findMany({
-    where: {
-      symbol,
-      marketOutcome: { not: Prisma.DbNull },
-    },
-    orderBy: { timestamp: 'desc' },
-    take: limit,
-  });
+  // Use raw SQL to properly handle JSONB null vs SQL NULL
+  return prisma.$queryRaw<Array<{
+    id: string;
+    symbol: string;
+    timestamp: Date;
+    decision: string;
+    blockedReason: string | null;
+    confidenceScore: number;
+    inputMetrics: any;
+    regimeContext: any;
+    marketOutcome: any;
+    createdAt: Date;
+    updatedAt: Date;
+  }>>`
+    SELECT *
+    FROM "TradeEvaluation"
+    WHERE symbol = ${symbol}
+      AND "marketOutcome" IS NOT NULL
+      AND "marketOutcome" != 'null'::jsonb
+    ORDER BY timestamp DESC
+    LIMIT ${limit}
+  `;
 }
 
 /**
