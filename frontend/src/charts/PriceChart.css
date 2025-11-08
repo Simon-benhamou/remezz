@@ -1,0 +1,169 @@
+/* Price Chart Animations and Styles */
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.chart-container {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  border: 1px solid #e2e8f0;
+  transition: box-shadow 0.3s ease;
+}
+
+.chart-container:hover {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.chart-title {
+  flex: 1;
+  min-width: 200px;
+}
+
+.chart-symbol {
+  font-weight: 700;
+  font-size: 20px;
+  color: #0f172a;
+  margin-bottom: 4px;
+  letter-spacing: -0.01em;
+}
+
+.chart-status {
+  font-size: 13px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.status-dot.loading {
+  background: #94a3b8;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.status-dot.live {
+  background: #10b981;
+}
+
+.overlay-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.overlay-button {
+  border: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.overlay-button.active {
+  background: #3b82f6;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.25);
+}
+
+.overlay-button:not(.active) {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.overlay-button:not(.active):hover {
+  background: #e2e8f0;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.stat-card.neutral {
+  background: #f8fafc;
+}
+
+.stat-card.positive {
+  background: #f0fdf4;
+  border-color: #dcfce7;
+}
+
+.stat-card.negative {
+  background: #fef2f2;
+  border-color: #fee2e2;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.stat-value.green {
+  color: #16a34a;
+}
+
+.stat-value.red {
+  color: #dc2626;
+}
+
+.stat-secondary {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.chart-canvas {
+  min-height: 400px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+}

@@ -87,34 +87,81 @@ export default function PriceChart({
   React.useEffect(()=> {
     if (!ref.current) return;
     const chart = createChart(ref.current, {
-      height: 360,
+      height: 420,
       layout: {
         textColor: '#94a3b8',
-        background: { type: ColorType.Solid, color: '#0b1326' },
+        background: { type: ColorType.Solid, color: '#0f172a' },
+        fontSize: 12,
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
       },
       grid: {
-        vertLines: { color: 'rgba(148, 163, 184, 0.16)', style: LineStyle.Solid },
-        horzLines: { color: 'rgba(148, 163, 184, 0.12)', style: LineStyle.Solid },
+        vertLines: { 
+          color: 'rgba(148, 163, 184, 0.08)', 
+          style: LineStyle.Solid,
+          visible: true,
+        },
+        horzLines: { 
+          color: 'rgba(148, 163, 184, 0.08)', 
+          style: LineStyle.Solid,
+          visible: true,
+        },
       },
       crosshair: {
-        mode: 0,
-        vertLine: { color: 'rgba(148, 163, 184, 0.45)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
-        horzLine: { color: 'rgba(148, 163, 184, 0.45)', width: 1, style: LineStyle.Dashed, labelBackgroundColor: '#1d4ed8' },
+        mode: 1,
+        vertLine: { 
+          color: 'rgba(148, 163, 184, 0.5)', 
+          width: 1, 
+          style: LineStyle.Solid, 
+          labelBackgroundColor: '#1e40af',
+        },
+        horzLine: { 
+          color: 'rgba(148, 163, 184, 0.5)', 
+          width: 1, 
+          style: LineStyle.Solid, 
+          labelBackgroundColor: '#1e40af',
+        },
       },
       localization: {
         priceFormatter: (value: number) => value.toFixed(4),
       },
-      rightPriceScale: { borderVisible: false, textColor: '#cbd5f5' },
+      rightPriceScale: { 
+        borderVisible: false, 
+        textColor: '#cbd5e1',
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.1,
+        },
+      },
       timeScale: {
         borderVisible: false,
-        rightOffset: 12, // Add space on the right for live updates
-        barSpacing: 6,   // Adjust bar spacing for better live visualization
-      }
+        rightOffset: 15,
+        barSpacing: 8,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
     });
     const line = chart.addLineSeries({ 
       priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
-      lineWidth: 2, // Make line thicker for better visibility
-      color: '#60a5fa',
+      lineWidth: 3,
+      color: '#3b82f6',
+      lastValueVisible: true,
+      priceLineVisible: true,
+      priceLineWidth: 1,
+      priceLineColor: '#3b82f6',
+      priceLineStyle: LineStyle.Dashed,
     });
     const trailSeries = chart.addLineSeries({
       priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
@@ -152,18 +199,21 @@ export default function PriceChart({
     overlay.style.maxHeight = '360px'; // Match chart height
     const tooltip = document.createElement('div');
     tooltip.style.position = 'absolute';
-    tooltip.style.right = '16px';
+    tooltip.style.left = '16px';
     tooltip.style.top = '16px';
-    tooltip.style.padding = '8px 12px';
-    tooltip.style.borderRadius = '8px';
-    tooltip.style.background = 'rgba(8, 15, 35, 0.9)';
+    tooltip.style.padding = '12px 16px';
+    tooltip.style.borderRadius = '12px';
+    tooltip.style.background = 'rgba(15, 23, 42, 0.95)';
     tooltip.style.color = '#e2e8f0';
-    tooltip.style.fontSize = '12px';
-    tooltip.style.lineHeight = '1.4';
+    tooltip.style.fontSize = '13px';
+    tooltip.style.lineHeight = '1.5';
     tooltip.style.pointerEvents = 'none';
     tooltip.style.display = 'none';
-    tooltip.style.backdropFilter = 'blur(6px)';
-    tooltip.style.boxShadow = '0 6px 18px rgba(15,23,42,0.25)';
+    tooltip.style.backdropFilter = 'blur(12px)';
+    tooltip.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(148, 163, 184, 0.1)';
+    tooltip.style.border = '1px solid rgba(148, 163, 184, 0.1)';
+    tooltip.style.minWidth = '200px';
+    tooltip.style.zIndex = '1000';
 
     ref.current.style.position = 'relative';
     ref.current.style.overflow = 'hidden'; // Prevent any child overflow
@@ -186,19 +236,19 @@ export default function PriceChart({
         return;
       }
       const date = new Date((param.time as number) * 1000);
-      const formattedDate = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const formattedDate = `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
       const markerDetails = markerDetailsRef.current.get(param.time as number) || [];
       const markerRows = markerDetails
-        .map(item => `<div style="display:flex; align-items:center; gap:6px; font-size:12px;">
-            <span style="width:6px; height:6px; border-radius:9999px; background:${item.color}; display:inline-block;"></span>
-            <span>${item.label}</span>
+        .map(item => `<div style="display:flex; align-items:center; gap:8px; font-size:12px; margin-top:6px; padding:6px 8px; background:${item.color}15; border-radius:6px; border-left:2px solid ${item.color};">
+            <span style="width:8px; height:8px; border-radius:50%; background:${item.color}; display:inline-block; flex-shrink:0;"></span>
+            <span style="color:#cbd5e1;">${item.label}</span>
           </div>`)
         .join('');
 
       tooltipRef.current.innerHTML = `
-        <div style="font-weight:600; font-size:12px; margin-bottom:4px;">${symbol || ''}</div>
-        <div style="font-size:14px;">${Number(price).toFixed(4)}</div>
-        <div style="opacity:0.75; margin-bottom:${markerRows ? '6px' : '0'};">${formattedDate}</div>
+        <div style="font-weight:600; font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">${symbol || ''}</div>
+        <div style="font-size:20px; font-weight:700; color:#f1f5f9; margin-bottom:4px;">${Number(price).toFixed(4)}</div>
+        <div style="font-size:11px; color:#64748b; margin-bottom:${markerRows ? '8px' : '0'};">${formattedDate}</div>
         ${markerRows}
       `;
       tooltipRef.current.style.display = 'block';
@@ -751,28 +801,103 @@ export default function PriceChart({
       </div>
     </div>
 
-    <div style={{ display:'flex', gap:16, flexWrap:'wrap', marginBottom:16 }}>
-      <div style={{ minWidth:120 }}>
-        <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last price</div>
-        <div style={{ fontSize:18, fontWeight:600 }}>{latestPoint ? latestPoint.value.toFixed(4) : '—'}</div>
-      </div>
-      <div style={{ minWidth:120 }}>
-        <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>24h change</div>
-        <div style={{ fontSize:18, fontWeight:600, color: change != null && changePct != null ? (change >= 0 ? '#16a34a' : '#dc2626') : '#1e293b' }}>
-          {change != null && changePct != null ? `${change >= 0 ? '+' : ''}${change.toFixed(4)} (${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%)` : '—'}
+    <div style={{ 
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+      gap: 16,
+      marginBottom: 20,
+    }}>
+      <div style={{ 
+        padding: 16,
+        borderRadius: 12,
+        background: 'rgba(51, 65, 85, 0.3)',
+        border: '1px solid rgba(148, 163, 184, 0.1)',
+      }}>
+        <div style={{ 
+          fontSize: 11, 
+          color: '#64748b', 
+          marginBottom: 6,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          fontWeight: 600,
+        }}>
+          Last Price
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: '#f1f5f9' }}>
+          {latestPoint ? latestPoint.value.toFixed(4) : '—'}
         </div>
       </div>
-      <div style={{ minWidth:140 }}>
-        <div style={{ fontSize:11, color:'#64748b', marginBottom:4 }}>Last trade</div>
-        <div style={{ fontSize:16, fontWeight:600 }}>
-          {latestTrade?.exitPrice ? Number(latestTrade.exitPrice).toFixed(4) : latestTrade?.entryPrice ? Number(latestTrade.entryPrice).toFixed(4) : '—'}
+      <div style={{ 
+        padding: 16,
+        borderRadius: 12,
+        background: change != null && change >= 0 ? 'rgba(16, 185, 129, 0.1)' : change != null ? 'rgba(239, 68, 68, 0.1)' : 'rgba(51, 65, 85, 0.3)',
+        border: `1px solid ${change != null && change >= 0 ? 'rgba(16, 185, 129, 0.2)' : change != null ? 'rgba(239, 68, 68, 0.2)' : 'rgba(148, 163, 184, 0.1)'}`,
+      }}>
+        <div style={{ 
+          fontSize: 11, 
+          color: '#64748b', 
+          marginBottom: 6,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          fontWeight: 600,
+        }}>
+          24h Change
         </div>
-        <div style={{ fontSize:12, color:'#475569' }}>
-          {latestTrade?.realizedPnlUsd != null ? formatUsd(Number(latestTrade.realizedPnlUsd)) : ''}
+        <div style={{ 
+          fontSize: 22, 
+          fontWeight: 700, 
+          color: change != null && changePct != null ? (change >= 0 ? '#10b981' : '#ef4444') : '#f1f5f9',
+        }}>
+          {change != null && changePct != null 
+            ? `${change >= 0 ? '+' : ''}${changePct.toFixed(2)}%` 
+            : '—'}
         </div>
+        {change != null && (
+          <div style={{ fontSize: 12, color: change >= 0 ? '#10b981' : '#ef4444', marginTop: 2 }}>
+            {change >= 0 ? '+' : ''}{change.toFixed(4)}
+          </div>
+        )}
+      </div>
+      <div style={{ 
+        padding: 16,
+        borderRadius: 12,
+        background: 'rgba(51, 65, 85, 0.3)',
+        border: '1px solid rgba(148, 163, 184, 0.1)',
+      }}>
+        <div style={{ 
+          fontSize: 11, 
+          color: '#64748b', 
+          marginBottom: 6,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          fontWeight: 600,
+        }}>
+          Last Trade
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: '#f1f5f9' }}>
+          {latestTrade?.exitPrice 
+            ? Number(latestTrade.exitPrice).toFixed(4) 
+            : latestTrade?.entryPrice 
+            ? Number(latestTrade.entryPrice).toFixed(4) 
+            : '—'}
+        </div>
+        {latestTrade?.realizedPnlUsd != null && (
+          <div style={{ 
+            fontSize: 13, 
+            color: Number(latestTrade.realizedPnlUsd) >= 0 ? '#10b981' : '#ef4444',
+            fontWeight: 600,
+            marginTop: 4,
+          }}>
+            {formatUsd(Number(latestTrade.realizedPnlUsd))}
+          </div>
+        )}
       </div>
     </div>
 
-    <div ref={ref} style={{ minHeight:360 }} />
+    <div ref={ref} style={{ 
+      minHeight: 420,
+      borderRadius: 12,
+      overflow: 'hidden',
+    }} />
   </div>;
 }
