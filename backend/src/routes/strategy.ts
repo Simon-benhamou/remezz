@@ -9,6 +9,7 @@ import { requestStrategy } from "../ai/strategyManager.js";
 import { levels as calcLevels } from "../risk/brackets.js";
 import { optimizeSymbolParameters, optimizeAllSymbols } from "../learning/strategyOptimizer.js";
 import { savePersonalityProfile } from "../learning/personalityProfile.js";
+import { getSymbolProfile, optimizeAllActiveSymbols } from "../services/symbolSpecificOptimization.js";
 export const router = Router();
 router.post("/generate", async (req, res) => {
   const symbol = String(req.body?.symbol || "BTCUSDT");
@@ -90,13 +91,12 @@ router.post('/rank', async (req,res)=>{
 router.post('/optimize-symbol', async (req, res) => {
   try {
     const symbol = String(req.body?.symbol);
-    const regimeAware = req.body?.regimeAware === true || req.body?.regimeAware === 'true';
     
     if (!symbol) {
       return res.status(400).json({ error: 'Symbol is required' });
     }
 
-    const optimalParams = await optimizeSymbolParameters(symbol, { regimeAware });
+    const optimalParams = await optimizeSymbolParameters(symbol);
     
     if (!optimalParams) {
       return res.status(404).json({ 
@@ -112,8 +112,7 @@ router.post('/optimize-symbol', async (req, res) => {
       success: true,
       symbol,
       parameters: optimalParams,
-      regimeAware,
-      message: `Successfully optimized ${regimeAware ? 'regime-aware ' : ''}parameters for ${symbol}`
+      message: `Successfully optimized regime-aware parameters for ${symbol}`
     });
   } catch (error: any) {
     console.error('Strategy optimization error:', error);
@@ -127,25 +126,111 @@ router.post('/optimize-symbol', async (req, res) => {
 // Optimize strategy parameters for all symbols with sufficient data
 router.post('/optimize-all', async (req, res) => {
   try {
-    const regimeAware = req.body?.regimeAware === true || req.body?.regimeAware === 'true';
+    console.log('🚀 Starting optimize-all request (regime-aware)...');
     
-    const results = await optimizeAllSymbols({ regimeAware });
+    const results = await optimizeAllSymbols();
     
     const symbolsOptimized = Array.from(results.keys());
     const parameters = Object.fromEntries(results);
+
+    console.log(`✅ Optimization completed: ${symbolsOptimized.length} symbols optimized`);
 
     res.json({
       success: true,
       count: symbolsOptimized.length,
       symbols: symbolsOptimized,
       parameters,
-      regimeAware,
-      message: `Successfully optimized ${regimeAware ? 'regime-aware ' : ''}parameters for ${symbolsOptimized.length} symbols`
+      message: `Successfully optimized regime-aware parameters for ${symbolsOptimized.length} symbols`
     });
   } catch (error: any) {
-    console.error('Batch optimization error:', error);
+    console.error('❌ Batch optimization error:', error);
+    console.error('   Stack:', error?.stack);
     res.status(500).json({ 
       error: 'Batch optimization failed',
+      message: error?.message || String(error),
+      details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+    });
+  }
+});
+
+// Get symbol profile with custom thresholds and performance metrics
+router.get('/symbol-profile/:symbol', async (req, res) => {
+  try {
+    const symbol = String(req.params.symbol).toUpperCase();
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+
+    const profile = await getSymbolProfile(symbol);
+    
+    if (!profile) {
+      return res.status(404).json({ 
+        error: 'Profile not found',
+        message: `No symbol profile found for ${symbol}` 
+      });
+    }
+
+    res.json({
+      success: true,
+      profile,
+    });
+  } catch (error: any) {
+    console.error('Get symbol profile error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get symbol profile',
+      message: error?.message || String(error)
+    });
+  }
+});
+
+// Build symbol profiles for all active symbols with sufficient trade history
+router.post('/build-symbol-profiles', async (req, res) => {
+  try {
+    const lookbackDays = Number(req.body?.lookbackDays) || 30;
+    
+    console.log(`🏗️  Building symbol profiles (lookback: ${lookbackDays} days)...`);
+    const results = await optimizeAllActiveSymbols(lookbackDays);
+    
+    res.json({
+      success: true,
+      optimized: results.optimized,
+      skipped: results.skipped,
+      failed: results.failed,
+      summary: {
+        total: results.optimized.length + results.skipped.length + results.failed.length,
+        optimizedCount: results.optimized.length,
+        skippedCount: results.skipped.length,
+        failedCount: results.failed.length,
+      },
+      message: `Built symbol profiles: ${results.optimized.length} optimized, ${results.skipped.length} skipped, ${results.failed.length} failed`
+    });
+  } catch (error: any) {
+    console.error('Build symbol profiles error:', error);
+    res.status(500).json({ 
+      error: 'Failed to build symbol profiles',
+      message: error?.message || String(error)
+    });
+  }
+});
+
+// Get all symbol profiles
+router.get('/symbol-profiles', async (req, res) => {
+  try {
+    const profiles = await prisma.$queryRaw<any[]>`
+      SELECT * FROM symbol_profiles
+      ORDER BY last_optimized_at DESC NULLS LAST
+    `.catch(() => []);
+
+    res.json({
+      success: true,
+      profiles,
+      count: profiles.length,
+    });
+  } catch (error: any) {
+    console.error('Get symbol profiles error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get symbol profiles',
       message: error?.message || String(error)
     });
   }

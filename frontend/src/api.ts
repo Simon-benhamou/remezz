@@ -70,10 +70,16 @@ export const api = {
     (await client.post("/api/strategy/generate", { symbol, trigger })).data,
   proposePlan: async (symbol: string, opts?: { sessionId?: string; fresh?: boolean }) =>
     (await client.post("/api/strategy/propose-plan", { symbol, sessionId: opts?.sessionId, fresh: opts?.fresh })).data,
-  optimizeSymbol: async (symbol: string, regimeAware?: boolean) =>
-    (await client.post("/api/strategy/optimize-symbol", { symbol, regimeAware })).data,
-  optimizeAllSymbols: async (regimeAware?: boolean) =>
-    (await client.post("/api/strategy/optimize-all", { regimeAware })).data,
+  optimizeSymbol: async (symbol: string) =>
+    (await client.post("/api/strategy/optimize-symbol", { symbol })).data,
+  optimizeAllSymbols: async () =>
+    (await client.post("/api/strategy/optimize-all")).data,
+  getSymbolProfile: async (symbol: string) =>
+    (await client.get(`/api/strategy/symbol-profile/${symbol}`)).data,
+  getAllSymbolProfiles: async () =>
+    (await client.get("/api/strategy/symbol-profiles")).data,
+  buildSymbolProfiles: async (lookbackDays?: number) =>
+    (await client.post("/api/strategy/build-symbol-profiles", { lookbackDays })).data,
   startSession: async (
     symbol: string,
     mode: "paper" | "live",
