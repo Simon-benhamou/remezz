@@ -30,6 +30,7 @@ import { router as arbitrageRouter } from "./routes/arbitrage.js";
 import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { router as capitalRouter } from "./routes/capital.js";
 import { router as entryAnalyticsRouter } from "./routes/entryAnalytics.js";
+import validationRouter from "./routes/validation.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
 import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
@@ -136,6 +137,7 @@ app.use("/api/ops", opsRouter);
 app.use("/api/improvements", improvementsRouter);
 app.use("/api/capital", capitalRouter);
 app.use("/api/entry-analytics", entryAnalyticsRouter);
+app.use("/api/validation", validationRouter);
 app.post("/api/start-agent", async (req, res) => {
   try {
     const userId = typeof (req as any)?.user?.id === "string" ? (req as any).user.id : undefined;
