@@ -5,6 +5,8 @@
 
 import { prisma } from '../db/client.js';
 
+export type MarketRegime = 'bull_market' | 'bear_market' | 'choppy_market' | 'neutral';
+
 export type OptimalParams = {
   weights: {
     adx: number;
@@ -21,9 +23,16 @@ export type OptimalParams = {
   };
 };
 
+export type RegimeAwareParams = {
+  default: OptimalParams;
+  bull_market?: OptimalParams;
+  bear_market?: OptimalParams;
+  choppy_market?: OptimalParams;
+};
+
 export type PersonalityProfile = {
   symbol: string;
-  optimalParams: OptimalParams;
+  optimalParams: OptimalParams | RegimeAwareParams;
   updatedAt: Date;
   createdAt: Date;
 };
@@ -48,9 +57,12 @@ export const DEFAULT_PARAMS: OptimalParams = {
 };
 
 /**
- * Get the personality profile for a symbol
+ * Get the personality profile for a symbol, optionally for a specific regime
  */
-export async function getPersonalityProfile(symbol: string): Promise<OptimalParams | null> {
+export async function getPersonalityProfile(
+  symbol: string,
+  regime?: MarketRegime,
+): Promise<OptimalParams | null> {
   try {
     const profile = await prisma.cryptoPersonalityProfile.findUnique({
       where: { symbol },
@@ -60,7 +72,17 @@ export async function getPersonalityProfile(symbol: string): Promise<OptimalPara
       return null;
     }
 
-    return profile.optimalParams as OptimalParams;
+    const params = profile.optimalParams as OptimalParams | RegimeAwareParams;
+    
+    // Check if it's a regime-aware profile
+    if (regime && params && typeof params === 'object' && 'default' in params) {
+      const regimeParams = params as RegimeAwareParams;
+      // Return regime-specific params if available, otherwise default
+      return regimeParams[regime] ?? regimeParams.default;
+    }
+
+    // Return as simple OptimalParams
+    return params as OptimalParams;
   } catch (error) {
     console.warn(`Failed to fetch personality profile for ${symbol}:`, error);
     return null;
@@ -68,11 +90,11 @@ export async function getPersonalityProfile(symbol: string): Promise<OptimalPara
 }
 
 /**
- * Save or update a personality profile
+ * Save or update a personality profile (can be simple or regime-aware)
  */
 export async function savePersonalityProfile(
   symbol: string,
-  optimalParams: OptimalParams,
+  optimalParams: OptimalParams | RegimeAwareParams,
 ): Promise<boolean> {
   try {
     await prisma.cryptoPersonalityProfile.upsert({
@@ -106,7 +128,7 @@ export async function getAllPersonalityProfiles(): Promise<PersonalityProfile[]>
 
     return profiles.map((p) => ({
       symbol: p.symbol,
-      optimalParams: p.optimalParams as OptimalParams,
+      optimalParams: p.optimalParams as OptimalParams | RegimeAwareParams,
       updatedAt: p.updatedAt,
       createdAt: p.createdAt,
     }));

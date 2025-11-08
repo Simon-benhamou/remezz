@@ -26,7 +26,9 @@ type ModelName =
   | 'leverageConstraint'
   | 'auditLog'
   | 'autoUniverseSchedule'
-  | 'schedulerJob';
+  | 'schedulerJob'
+  | 'tradeEvaluation'
+  | 'cryptoPersonalityProfile';
 
 type ModelStore = Map<ModelName, any[]>;
 
@@ -520,6 +522,8 @@ export class InMemoryPrismaClient {
   auditLog: InMemoryModel;
   autoUniverseSchedule: InMemoryModel;
   schedulerJob: InMemoryModel;
+  tradeEvaluation: InMemoryModel;
+  cryptoPersonalityProfile: InMemoryModel;
 
   constructor() {
     this.store = new Map();
@@ -546,6 +550,8 @@ export class InMemoryPrismaClient {
     this.auditLog = new InMemoryModel('auditLog', this);
     this.autoUniverseSchedule = new InMemoryModel('autoUniverseSchedule', this);
     this.schedulerJob = new InMemoryModel('schedulerJob', this);
+    this.tradeEvaluation = new InMemoryModel('tradeEvaluation', this);
+    this.cryptoPersonalityProfile = new InMemoryModel('cryptoPersonalityProfile', this);
   }
 
   _getStore(name: ModelName): any[] {

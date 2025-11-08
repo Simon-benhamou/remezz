@@ -27,7 +27,8 @@
     "train-model": "python3 python/ccxt_xgboost_module.py",
     "meta:rejections": "node scripts/meta-adaptive-rejection-summary.mjs",
     "analyze:rejection": "tsx scripts/analyze-order-rejection.ts",
-    "test:multi-agent": "tsx scripts/multi-agent-pool-test.ts"
+    "test:multi-agent": "tsx scripts/multi-agent-pool-test.ts",
+    "init-profiles": "tsx scripts/init-personality-profiles.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
@@ -48,7 +49,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
-    "@types/node": "^20.11.30",
+    "@types/node": "^20.19.24",
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
