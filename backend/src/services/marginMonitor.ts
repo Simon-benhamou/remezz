@@ -12,6 +12,7 @@ import {
   MarginGuardSeverity,
 } from '../risk/marginGuard.js';
 import { getConfig } from '../utils/env.js';
+import { stateReconciler } from './stateReconciler.js';
 
 export type MarginSweepOutcome = {
   sessionId: string;
@@ -171,26 +172,54 @@ export async function runMarginSweepOnce(opts?: { thresholds?: Partial<MarginGua
   for (const session of sessions) {
     const accountKey = resolveAccountKey(session);
     let cached = accountCache.get(accountKey);
-    let snapshot: BrokerMarginSnapshot;
+    let snapshot: BrokerMarginSnapshot | undefined;
     let assessment: MarginGuardResult;
 
     if (!cached) {
-      const broker = await acquireBroker(session);
-      if (!broker?.balance) continue;
-
-      try {
-        snapshot = await broker.balance();
-      } catch (error) {
-        recordOpsEvent({
-          level: 'warn',
-          source: 'margin_monitor',
-          message: 'balance_fetch_failed',
-          sessionId: session.id,
-          symbol: session.symbol,
-          details: { error: String((error as Error)?.message || error) },
-        });
-        continue;
+      // 🚀 FIX: Use reconciled state for live sessions
+      let useReconciledState = false;
+      if (session.mode === 'live' && session.userId) {
+        const reconciledMargin = stateReconciler.getReconciledMarginSnapshot(session.userId);
+        if (reconciledMargin && !stateReconciler.getReconciledState(session.userId)?.isStale) {
+          snapshot = reconciledMargin;
+          useReconciledState = true;
+          
+          recordOpsEvent({
+            level: 'debug',
+            source: 'margin_monitor',
+            message: 'using_reconciled_state',
+            sessionId: session.id,
+            symbol: session.symbol,
+            details: { 
+              positionsCount: reconciledMargin.positions?.length || 0,
+              equityUsd: reconciledMargin.equityUsd,
+            },
+          });
+        }
       }
+
+      // Fallback to broker balance if no reconciled state available
+      if (!useReconciledState) {
+        const broker = await acquireBroker(session);
+        if (!broker?.balance) continue;
+
+        try {
+          snapshot = await broker.balance();
+        } catch (error) {
+          recordOpsEvent({
+            level: 'warn',
+            source: 'margin_monitor',
+            message: 'balance_fetch_failed',
+            sessionId: session.id,
+            symbol: session.symbol,
+            details: { error: String((error as Error)?.message || error) },
+          });
+          continue;
+        }
+      }
+
+      // Skip if we still don't have a snapshot
+      if (!snapshot) continue;
 
       assessment = evaluateMarginSnapshot(snapshot, { thresholds, symbol: session.symbol });
       accountCache.set(accountKey, { snapshot, assessment });
@@ -238,4 +267,15 @@ export function startMarginMonitor(options?: MarginMonitorOptions) {
     tick(thresholds);
   }
   timer = setInterval(() => tick(thresholds), interval);
+}
+
+/**
+ * Stop the margin monitor
+ */
+export function stopMarginMonitor() {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+    console.log('⏹️ Stopped margin monitor');
+  }
 }

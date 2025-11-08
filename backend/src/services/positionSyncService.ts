@@ -6,10 +6,13 @@
  * - Ghost positions (agent thinks position is open but exchange shows closed)
  * - Orphaned protective orders (SL/TP remain after position closed)
  * - Double entries (agent tries to enter when position already exists)
+ * 
+ * This service now leverages the StateReconciler for accurate position data.
  */
 
 import { inspectExposure } from '../broker/live.js';
 import { recordOpsEvent } from '../monitor/ops.js';
+import { stateReconciler } from './stateReconciler.js';
 // Position sync service not used in meta-adaptive strategy
 type ReboundRejectionAgent = any;
 
@@ -110,13 +113,42 @@ export class PositionSyncService {
 
       const localPos = agent.pos;
       
-      // Get exchange position with timeout
-      const exchangePos = await Promise.race([
-        inspectExposure(agent.profile.symbol, agent.profile.userId),
-        new Promise<null>((_, reject) => 
-          setTimeout(() => reject(new Error('Exchange position query timeout')), SYNC_TIMEOUT_MS)
-        )
-      ]);
+      // 🚀 FIX: Use reconciled state from StateReconciler for better accuracy
+      let exchangePos: { qty?: number; side?: 'buy' | 'sell'; entry?: number } | null = null;
+      
+      if (agent.profile.userId) {
+        const reconciledPos = stateReconciler.getReconciledPosition(agent.profile.userId, agent.profile.symbol);
+        if (reconciledPos) {
+          exchangePos = {
+            qty: reconciledPos.qty,
+            side: reconciledPos.side === 'long' ? 'buy' : 'sell',
+            entry: reconciledPos.entryPrice,
+          };
+          
+          recordOpsEvent({
+            level: 'debug',
+            source: 'position_sync',
+            message: 'using_reconciled_position',
+            sessionId: agent.sessionId,
+            symbol: agent.profile?.symbol,
+            details: {
+              qty: reconciledPos.qty,
+              side: reconciledPos.side,
+            },
+          });
+        }
+      }
+
+      // Fallback to direct exchange query if reconciled state not available
+      if (!exchangePos) {
+        // Get exchange position with timeout
+        exchangePos = await Promise.race([
+          inspectExposure(agent.profile.symbol, agent.profile.userId),
+          new Promise<null>((_, reject) => 
+            setTimeout(() => reject(new Error('Exchange position query timeout')), SYNC_TIMEOUT_MS)
+          )
+        ]);
+      }
 
       // Detect desync type
       const desyncType = this.detectDesyncType(localPos, exchangePos);
