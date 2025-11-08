@@ -217,6 +217,7 @@ import { initializeAdaptiveLearning } from "./services/adaptiveThresholdLearning
 import { initializeSymbolProfiles, startSymbolOptimizationScheduler } from "./services/symbolSpecificOptimization.js";
 import { initializeABTesting } from "./services/abTesting.js";
 import { initializeOptimizerScheduling } from "./learning/optimizerJob.js";
+import { initializeReoptimizationScheduling } from "./learning/reoptimizationScheduler.js";
 import { startOutcomeUpdater } from "./learning/outcomeUpdater.js";
 
 Promise.all([
@@ -224,6 +225,7 @@ Promise.all([
   initializeSymbolProfiles(),
   initializeABTesting(),
   initializeOptimizerScheduling(),
+  initializeReoptimizationScheduling(),
 ]).catch((error) => {
   serverLogger.warn('⚠️ Failed to initialize learning services:', error);
 });

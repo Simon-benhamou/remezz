@@ -160,3 +160,30 @@ regime:
   ema_trend_period_slow: 200
   adx_trend_min: 16
   neutral_band_bps: 10               # +-0.10% slope per period ~ neutral
+
+# Re-optimization scheduler configuration
+reoptimization:
+  # Default schedule for all symbols (if not specified individually)
+  default_schedule:
+    enabled: true
+    frequency: 'daily'     # 'daily', 'weekly', or 'custom'
+    run_hour: 2            # Hour of day (0-23) for daily schedules
+    run_day: 0             # Day of week (0=Sunday) for weekly schedules
+    interval_hours: null   # Custom interval in hours (overrides daily/weekly)
+  
+  # Symbol-specific schedules (override default)
+  symbol_schedules:
+    BTC/USDT:
+      enabled: true
+      frequency: 'daily'
+      run_hour: 1
+    ETH/USDT:
+      enabled: true
+      frequency: 'daily'
+      run_hour: 1
+    SOL/USDT:
+      enabled: true
+      frequency: 'weekly'
+      run_day: 1          # Monday
+      run_hour: 2
+    # Add more symbol-specific schedules as needed
