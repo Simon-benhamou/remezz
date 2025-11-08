@@ -39,6 +39,8 @@ import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
 import { refreshLeverageConstraintInputs } from "./risk/leverageCaps.js";
 import { startMarginMonitor } from "./services/marginMonitor.js";
+import { stateReconciler } from "./services/stateReconciler.js";
+import { prisma } from "./db/client.js";
 import {
   startAgentCreation,
   PhaseError,
@@ -138,6 +140,16 @@ app.post("/api/start-agent", async (req, res) => {
   try {
     const userId = typeof (req as any)?.user?.id === "string" ? (req as any).user.id : undefined;
     const result = await startAgentCreation(req.body ?? {}, userId);
+    
+    // 🚀 Start state reconciliation for live mode agents
+    if (result?.mode === 'live' && userId) {
+      const reconStatus = stateReconciler.getReconciliationStatus(userId);
+      if (!reconStatus.active) {
+        stateReconciler.startPeriodicReconciliation(userId);
+        serverLogger.info(`🔄 Started state reconciliation for new live agent (user: ${userId})`);
+      }
+    }
+    
     res.status(201).json(result);
   } catch (error) {
     if (error instanceof PhaseError) {
@@ -164,6 +176,35 @@ initMetaAdaptiveOrchestrator();
 startArbitrageMonitor();
 startIntegratedMonitoring();
 startMarginMonitor();
+
+// 🚀 Start state reconciliation for all active live sessions
+(async () => {
+  try {
+    const activeSessions = await prisma.agentSession.findMany({
+      where: { 
+        stoppedAt: null,
+        mode: 'live',
+        userId: { not: null }
+      },
+      select: { userId: true },
+      distinct: ['userId']
+    });
+    
+    const uniqueUserIds = new Set(activeSessions.map(s => s.userId).filter(Boolean) as string[]);
+    
+    for (const userId of uniqueUserIds) {
+      stateReconciler.startPeriodicReconciliation(userId);
+      serverLogger.info(`🔄 Started state reconciliation for user: ${userId}`);
+    }
+    
+    if (uniqueUserIds.size > 0) {
+      serverLogger.info(`✅ State reconciliation service initialized for ${uniqueUserIds.size} users`);
+    }
+  } catch (error) {
+    serverLogger.warn('⚠️ Failed to initialize state reconciliation:', error);
+  }
+})();
+
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
 restoreAutoUniverseRetrySchedule().catch((error) => {
   serverLogger.warn('⚠️ Failed to restore auto universe retry schedule:', error);
