@@ -375,17 +375,29 @@ const OperationsDashboardPage: React.FC = () => {
   }, [optimizingSymbol, regimeAwareOptimization]);
 
   const handleOptimizeAll = React.useCallback(async () => {
+    console.log('🚀 Starting optimize all symbols...');
     setOptimizing(true);
     try {
+      console.log('   Regime-aware:', regimeAwareOptimization);
       const result = await api.optimizeAllSymbols(regimeAwareOptimization);
+      console.log('✅ Optimization result:', result);
+      
       if (result?.success) {
         message.success(result.message || `Optimized ${result.count} symbols`);
       } else {
+        console.warn('⚠️ No symbols were optimized');
         message.warning('No symbols were optimized');
       }
     } catch (error: any) {
+      console.error('❌ Optimization error:', error);
+      console.error('   Response data:', error?.response?.data);
       const msg = error?.response?.data?.message || error?.message || 'Batch optimization failed';
       message.error(msg);
+      
+      // Show more details in development
+      if (error?.response?.data?.details) {
+        console.error('   Details:', error.response.data.details);
+      }
     } finally {
       setOptimizing(false);
     }

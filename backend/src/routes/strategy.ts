@@ -128,12 +128,17 @@ router.post('/optimize-symbol', async (req, res) => {
 // Optimize strategy parameters for all symbols with sufficient data
 router.post('/optimize-all', async (req, res) => {
   try {
+    console.log('🚀 Starting optimize-all request...');
     const regimeAware = req.body?.regimeAware === true || req.body?.regimeAware === 'true';
+    
+    console.log(`   Regime-aware: ${regimeAware}`);
     
     const results = await optimizeAllSymbols({ regimeAware });
     
     const symbolsOptimized = Array.from(results.keys());
     const parameters = Object.fromEntries(results);
+
+    console.log(`✅ Optimization completed: ${symbolsOptimized.length} symbols optimized`);
 
     res.json({
       success: true,
@@ -144,10 +149,12 @@ router.post('/optimize-all', async (req, res) => {
       message: `Successfully optimized ${regimeAware ? 'regime-aware ' : ''}parameters for ${symbolsOptimized.length} symbols`
     });
   } catch (error: any) {
-    console.error('Batch optimization error:', error);
+    console.error('❌ Batch optimization error:', error);
+    console.error('   Stack:', error?.stack);
     res.status(500).json({ 
       error: 'Batch optimization failed',
-      message: error?.message || String(error)
+      message: error?.message || String(error),
+      details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
     });
   }
 });
