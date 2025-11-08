@@ -180,13 +180,12 @@ function* generateParamCombinations(): Generator<OptimalParams> {
 
 /**
  * Optimize parameters for a symbol using grid search
- * Now supports regime-aware optimization (volatility and direction)
+ * Always uses regime-aware optimization (volatility, direction, volume, trending/ranging)
  */
 export async function optimizeSymbolParameters(
-  symbol: string,
-  options?: { regimeAware?: boolean }
-): Promise<OptimalParams | RegimeAwareParams | null> {
-  console.log(`🔍 Optimizing parameters for ${symbol}...`);
+  symbol: string
+): Promise<RegimeAwareParams | null> {
+  console.log(`🔍 Optimizing parameters for ${symbol} (regime-aware)...`);
 
   // Fetch historical evaluations
   const rawEvaluations = await getSymbolEvaluations(symbol, 1000);
@@ -209,52 +208,8 @@ export async function optimizeSymbolParameters(
     return null;
   }
 
-  // If regime-aware optimization is requested
-  if (options?.regimeAware) {
-    return optimizeRegimeAware(symbol, evaluations);
-  }
-
-  // Standard optimization (backward compatible)
-  console.log(`📊 Running grid search on ${evaluations.length} evaluations...`);
-
-  let bestParams: OptimalParams = DEFAULT_PARAMS;
-  let bestFitness = -Infinity;
-  let testedCount = 0;
-  let noImprovementCount = 0;
-  const EARLY_TERMINATION_PATIENCE = 100; // Stop if no improvement after 100 iterations
-
-  // Grid search with early termination
-  for (const params of generateParamCombinations()) {
-    const fitness = calculateFitness(evaluations, params);
-    testedCount++;
-
-    if (fitness > bestFitness) {
-      bestFitness = fitness;
-      bestParams = params;
-      noImprovementCount = 0; // Reset counter on improvement
-    } else {
-      noImprovementCount++;
-    }
-
-    // Early termination: stop if no improvement for PATIENCE iterations
-    if (noImprovementCount >= EARLY_TERMINATION_PATIENCE && testedCount >= 200) {
-      console.log(
-        `⚡ Early termination: No improvement after ${EARLY_TERMINATION_PATIENCE} iterations (tested ${testedCount} combinations)`
-      );
-      break;
-    }
-  }
-
-  console.log(
-    `✅ ${symbol}: Tested ${testedCount} combinations, best fitness: ${bestFitness.toFixed(4)}`,
-  );
-
-  // Only save if we found meaningful improvement
-  if (bestFitness > -Infinity) {
-    return bestParams;
-  }
-
-  return null;
+  // Always use regime-aware optimization
+  return optimizeRegimeAware(symbol, evaluations);
 }
 
 /**
@@ -407,24 +362,21 @@ function optimizeSingleRegime(
 
 /**
  * Run optimization for all symbols with sufficient data
+ * Always uses regime-aware optimization
  */
-export async function optimizeAllSymbols(
-  options?: { regimeAware?: boolean }
-): Promise<Map<string, OptimalParams | RegimeAwareParams>> {
-  console.log('🚀 Starting optimization for all symbols...');
-  if (options?.regimeAware) {
-    console.log('   Using regime-aware optimization (volatility + direction + volume + trending/ranging)');
-  }
+export async function optimizeAllSymbols(): Promise<Map<string, RegimeAwareParams>> {
+  console.log('🚀 Starting regime-aware optimization for all symbols...');
+  console.log('   Using volatility + direction + volume + trending/ranging regimes');
 
   // Get all distinct symbols from trade evaluations
   const symbols = await getDistinctSymbols();
   console.log(`Found ${symbols.length} symbols to optimize`);
 
-  const results = new Map<string, OptimalParams | RegimeAwareParams>();
+  const results = new Map<string, RegimeAwareParams>();
 
   for (const symbol of symbols) {
     try {
-      const optimalParams = await optimizeSymbolParameters(symbol, options);
+      const optimalParams = await optimizeSymbolParameters(symbol);
       if (optimalParams) {
         await savePersonalityProfile(symbol, optimalParams);
         results.set(symbol, optimalParams);

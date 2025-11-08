@@ -66,11 +66,11 @@ async function main() {
     console.log('   ✅ Symbol profiles table ready\n');
 
     // Step 3: Run strategy optimizer
-    console.log('🔍 STEP 3: Running strategy optimizer (regime-aware)...\n');
+    console.log('🔍 STEP 3: Running strategy optimizer (always regime-aware)...\n');
     console.log('   This may take a few minutes depending on the amount of data...\n');
     
     const startTime = Date.now();
-    const optimizerResults = await optimizeAllSymbols({ regimeAware: true });
+    const optimizerResults = await optimizeAllSymbols();
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     
     console.log(`\n   ✅ Strategy optimizer completed in ${duration}s`);

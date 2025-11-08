@@ -239,7 +239,6 @@ const OperationsDashboardPage: React.FC = () => {
   const [strategyFilter, setStrategyFilter] = React.useState<'all' | StrategyEngineOption>('all');
   const [optimizing, setOptimizing] = React.useState(false);
   const [optimizingSymbol, setOptimizingSymbol] = React.useState('');
-  const [regimeAwareOptimization, setRegimeAwareOptimization] = React.useState(true);
   const mode = useAppStore((state) => state.mode);
 
   const strategyOptions = React.useMemo(
@@ -359,7 +358,7 @@ const OperationsDashboardPage: React.FC = () => {
 
     setOptimizing(true);
     try {
-      const result = await api.optimizeSymbol(symbol, regimeAwareOptimization);
+      const result = await api.optimizeSymbol(symbol);
       if (result?.success) {
         message.success(result.message || `Optimized parameters for ${symbol}`);
         setOptimizingSymbol('');
@@ -372,14 +371,13 @@ const OperationsDashboardPage: React.FC = () => {
     } finally {
       setOptimizing(false);
     }
-  }, [optimizingSymbol, regimeAwareOptimization]);
+  }, [optimizingSymbol]);
 
   const handleOptimizeAll = React.useCallback(async () => {
-    console.log('🚀 Starting optimize all symbols...');
+    console.log('🚀 Starting optimize all symbols (regime-aware)...');
     setOptimizing(true);
     try {
-      console.log('   Regime-aware:', regimeAwareOptimization);
-      const result = await api.optimizeAllSymbols(regimeAwareOptimization);
+      const result = await api.optimizeAllSymbols();
       console.log('✅ Optimization result:', result);
       
       if (result?.success) {
@@ -401,7 +399,7 @@ const OperationsDashboardPage: React.FC = () => {
     } finally {
       setOptimizing(false);
     }
-  }, [regimeAwareOptimization]);
+  }, []);
 
   const { token } = theme.useToken();
   const metricsTimestamp = opsMetrics?.timestamp
@@ -956,13 +954,9 @@ const OperationsDashboardPage: React.FC = () => {
               message='Machine Learning Parameter Optimization'
               description={
                 <span style={{ color: 'rgba(226, 232, 240, 0.78)' }}>
-                  Analyze historical trade evaluations to find optimal strategy parameters for each symbol. 
-                  The optimizer uses grid search to maximize Sharpe ratio, win rate, and total PnL.
-                  {regimeAwareOptimization && (
-                    <strong style={{ display: 'block', marginTop: 8, color: '#60a5fa' }}>
-                      Regime-aware mode: Optimizes separately for volatility levels (low/medium/high) and direction (long/short).
-                    </strong>
-                  )}
+                  Analyze historical trade evaluations to find optimal strategy parameters for each symbol using regime-aware optimization.
+                  The optimizer uses grid search to maximize Sharpe ratio, win rate, and total PnL across different market regimes 
+                  (volatility levels, direction bias, volume, and trending/ranging conditions).
                 </span>
               }
               type='info'
@@ -982,19 +976,6 @@ const OperationsDashboardPage: React.FC = () => {
               }}
             >
               <Space direction='vertical' size={16} style={{ width: '100%' }}>
-                <Checkbox
-                  checked={regimeAwareOptimization}
-                  onChange={(e) => setRegimeAwareOptimization(e.target.checked)}
-                  style={{ color: '#e2e8f0' }}
-                >
-                  <Space direction='vertical' size={4}>
-                    <span style={{ fontWeight: 600 }}>Regime-Aware Optimization</span>
-                    <span style={{ fontSize: 12, color: 'rgba(148, 163, 184, 0.8)' }}>
-                      Adapts to market volatility and long/short asymmetry
-                    </span>
-                  </Space>
-                </Checkbox>
-                <Divider style={{ margin: 0, borderColor: token.colorBorderSecondary }} />
                 <div>
                   <Text style={{ color: '#e2e8f0', fontWeight: 600, display: 'block', marginBottom: 8 }}>
                     Optimize Single Symbol
@@ -1035,7 +1016,7 @@ const OperationsDashboardPage: React.FC = () => {
                     Optimize All Symbols with Sufficient Data
                   </Button>
                   <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12, display: 'block', marginTop: 8 }}>
-                    This will analyze all symbols that have at least {regimeAwareOptimization ? '20' : '50'} trade evaluations{regimeAwareOptimization ? ' per regime' : ''} and update their personality profiles.
+                    This will analyze all symbols that have at least 20 trade evaluations per regime and update their personality profiles with regime-aware parameters.
                   </Text>
                 </div>
               </Space>

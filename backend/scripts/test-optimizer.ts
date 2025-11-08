@@ -60,8 +60,8 @@ async function main() {
 
     // Step 3: Run strategy optimizer
     console.log('\n🔍 Step 3: Running strategy optimizer for all symbols...');
-    console.log('   (Using regime-aware optimization)');
-    const optimizerResults = await optimizeAllSymbols({ regimeAware: true });
+    console.log('   (Always regime-aware)');
+    const optimizerResults = await optimizeAllSymbols();
     
     console.log(`\n   ✅ Strategy optimizer completed:`);
     console.log(`      Symbols optimized: ${optimizerResults.size}`);

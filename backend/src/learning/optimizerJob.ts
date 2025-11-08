@@ -21,10 +21,17 @@ async function handleOptimizerJob(): Promise<void> {
     const pruned = await pruneOldEvaluations(90);
     console.log(`🧹 Pruned ${pruned} old trade evaluations`);
 
-    // Run the optimizer
-    await optimizeAllSymbols();
-
-    console.log('✅ Strategy optimizer job completed successfully');
+    // Run the optimizer (always regime-aware)
+    const results = await optimizeAllSymbols();
+    
+    console.log(`✅ Strategy optimizer job completed successfully`);
+    console.log(`   Optimized ${results.size} symbols with regime-aware parameters`);
+    
+    // Log optimized symbols for tracking
+    if (results.size > 0) {
+      const symbols = Array.from(results.keys());
+      console.log(`   Symbols: ${symbols.join(', ')}`);
+    }
   } catch (error) {
     console.error('❌ Strategy optimizer job failed:', error);
     throw error;
