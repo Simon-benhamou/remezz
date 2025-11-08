@@ -4,8 +4,8 @@
  */
 
 import { getSymbolEvaluations } from './tradeEvaluationLogger.js';
-import { savePersonalityProfile, DEFAULT_PARAMS } from './personalityProfile.js';
-import type { OptimalParams } from './personalityProfile.js';
+import { savePersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias } from './personalityProfile.js';
+import type { OptimalParams, RegimeAwareParams, VolatilityRegime, DirectionBias } from './personalityProfile.js';
 import type { InputMetrics, MarketOutcome } from './tradeEvaluationLogger.js';
 import { prisma, Prisma } from '../db/client.js';
 
@@ -179,8 +179,12 @@ function* generateParamCombinations(): Generator<OptimalParams> {
 
 /**
  * Optimize parameters for a symbol using grid search
+ * Now supports regime-aware optimization (volatility and direction)
  */
-export async function optimizeSymbolParameters(symbol: string): Promise<OptimalParams | null> {
+export async function optimizeSymbolParameters(
+  symbol: string,
+  options?: { regimeAware?: boolean }
+): Promise<OptimalParams | RegimeAwareParams | null> {
   console.log(`🔍 Optimizing parameters for ${symbol}...`);
 
   // Fetch historical evaluations
@@ -204,6 +208,12 @@ export async function optimizeSymbolParameters(symbol: string): Promise<OptimalP
     return null;
   }
 
+  // If regime-aware optimization is requested
+  if (options?.regimeAware) {
+    return optimizeRegimeAware(symbol, evaluations);
+  }
+
+  // Standard optimization (backward compatible)
   console.log(`📊 Running grid search on ${evaluations.length} evaluations...`);
 
   let bestParams: OptimalParams = DEFAULT_PARAMS;
@@ -234,20 +244,127 @@ export async function optimizeSymbolParameters(symbol: string): Promise<OptimalP
 }
 
 /**
+ * Optimize parameters with regime awareness (volatility + direction)
+ */
+function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): RegimeAwareParams | null {
+  console.log(`📊 Running regime-aware optimization for ${symbol}...`);
+
+  // Split evaluations by volatility regime
+  const lowVolEvals = evaluations.filter((e) =>
+    classifyVolatilityRegime(e.inputMetrics.atrPct) === 'low'
+  );
+  const medVolEvals = evaluations.filter((e) =>
+    classifyVolatilityRegime(e.inputMetrics.atrPct) === 'medium'
+  );
+  const highVolEvals = evaluations.filter((e) =>
+    classifyVolatilityRegime(e.inputMetrics.atrPct) === 'high'
+  );
+
+  // Split evaluations by direction
+  const longEvals = evaluations.filter((e) =>
+    classifyDirectionBias(e.inputMetrics.ema20, e.inputMetrics.ema50) === 'long'
+  );
+  const shortEvals = evaluations.filter((e) =>
+    classifyDirectionBias(e.inputMetrics.ema20, e.inputMetrics.ema50) === 'short'
+  );
+
+  console.log(`   Low vol: ${lowVolEvals.length}, Medium: ${medVolEvals.length}, High: ${highVolEvals.length}`);
+  console.log(`   Long: ${longEvals.length}, Short: ${shortEvals.length}`);
+
+  // Optimize each regime (require minimum 20 samples)
+  const MIN_REGIME_SAMPLES = 20;
+  
+  const defaultParams = optimizeSingleRegime(evaluations, 'default');
+  
+  const lowVolParams = lowVolEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(lowVolEvals, 'low_volatility')
+    : null;
+    
+  const medVolParams = medVolEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(medVolEvals, 'medium_volatility')
+    : null;
+    
+  const highVolParams = highVolEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(highVolEvals, 'high_volatility')
+    : null;
+
+  const longParams = longEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(longEvals, 'long_bias')
+    : null;
+    
+  const shortParams = shortEvals.length >= MIN_REGIME_SAMPLES
+    ? optimizeSingleRegime(shortEvals, 'short_bias')
+    : null;
+
+  if (!defaultParams) {
+    console.log(`⚠️ Failed to optimize default parameters for ${symbol}`);
+    return null;
+  }
+
+  // Build regime-aware params
+  const regimeParams: RegimeAwareParams = {
+    default: defaultParams,
+  };
+
+  if (lowVolParams) regimeParams.low_volatility = lowVolParams;
+  if (medVolParams) regimeParams.medium_volatility = medVolParams;
+  if (highVolParams) regimeParams.high_volatility = highVolParams;
+  if (longParams) regimeParams.long_bias = longParams;
+  if (shortParams) regimeParams.short_bias = shortParams;
+
+  console.log(`✅ ${symbol}: Optimized ${Object.keys(regimeParams).length} regime parameters`);
+  
+  return regimeParams;
+}
+
+/**
+ * Optimize parameters for a single regime
+ */
+function optimizeSingleRegime(
+  evaluations: EvaluationData[],
+  regimeName: string
+): OptimalParams | null {
+  let bestParams: OptimalParams = DEFAULT_PARAMS;
+  let bestFitness = -Infinity;
+  let testedCount = 0;
+
+  for (const params of generateParamCombinations()) {
+    const fitness = calculateFitness(evaluations, params);
+    testedCount++;
+
+    if (fitness > bestFitness) {
+      bestFitness = fitness;
+      bestParams = params;
+    }
+  }
+
+  console.log(
+    `   ${regimeName}: Tested ${testedCount} combinations, fitness: ${bestFitness.toFixed(4)}`
+  );
+
+  return bestFitness > -Infinity ? bestParams : null;
+}
+
+/**
  * Run optimization for all symbols with sufficient data
  */
-export async function optimizeAllSymbols(): Promise<Map<string, OptimalParams>> {
+export async function optimizeAllSymbols(
+  options?: { regimeAware?: boolean }
+): Promise<Map<string, OptimalParams | RegimeAwareParams>> {
   console.log('🚀 Starting optimization for all symbols...');
+  if (options?.regimeAware) {
+    console.log('   Using regime-aware optimization (volatility + direction)');
+  }
 
   // Get all distinct symbols from trade evaluations
   const symbols = await getDistinctSymbols();
   console.log(`Found ${symbols.length} symbols to optimize`);
 
-  const results = new Map<string, OptimalParams>();
+  const results = new Map<string, OptimalParams | RegimeAwareParams>();
 
   for (const symbol of symbols) {
     try {
-      const optimalParams = await optimizeSymbolParameters(symbol);
+      const optimalParams = await optimizeSymbolParameters(symbol, options);
       if (optimalParams) {
         await savePersonalityProfile(symbol, optimalParams);
         results.set(symbol, optimalParams);

@@ -11,7 +11,7 @@ import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDia
 import { getAdaptiveWeightsForSymbol } from '../../../learning/adaptiveWeights.js';
 import { recordDecisionSnapshot, markDecisionCancelled, analyzeDecisionMemoryForSymbol } from '../../../learning/decisionMemory.js';
 import type { DecisionFeatures } from '../../../learning/decisionMemory.js';
-import { getPersonalityProfile, DEFAULT_PARAMS } from '../../../learning/personalityProfile.js';
+import { getPersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias } from '../../../learning/personalityProfile.js';
 import { logTradeEvaluation } from '../../../learning/tradeEvaluationLogger.js';
 import { getHybridSentiment } from '../../../sentiment/index.js';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId } from '../../binanceWebSocket.js';
@@ -2828,18 +2828,26 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
   }
 
   // Try to fetch learned personality profile for this symbol
-  const profile = await getPersonalityProfile(symbol).catch(() => null);
+  // Now with regime awareness for volatility and direction
+  const atrPct = Number(snap.atrPct ?? 0);
+  const ema20 = Number(snap.ema20 ?? 0);
+  const ema50 = Number(snap.ema50 ?? 0);
+  
+  const volatilityRegime = classifyVolatilityRegime(atrPct);
+  const directionBias = classifyDirectionBias(ema20, ema50);
+  
+  const profile = await getPersonalityProfile(symbol, {
+    volatilityRegime,
+    directionBias,
+  }).catch(() => null);
   const params = profile || DEFAULT_PARAMS;
 
   const adx = Number(snap.adx14 ?? 0);
   const trendStrength = Number(snap.trendStrength ?? 0);
-  const ema20 = Number(snap.ema20 ?? 0);
-  const ema50 = Number(snap.ema50 ?? 0);
   const ema100 = Number(snap.ema100 ?? 0);
   const ema200 = Number(snap.ema200 ?? 0);
   const last = Number(snap.last ?? 0);
   const slope = Number(snap.ema20Slope ?? 0);
-  const atrPct = Number(snap.atrPct ?? 0);
   const cmf = Number(snap.cmf20 ?? 0);
 
   const direction: TrendAssessment['direction'] = ema20 > ema50

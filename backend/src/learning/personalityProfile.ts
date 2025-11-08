@@ -6,6 +6,8 @@
 import { prisma } from '../db/client.js';
 
 export type MarketRegime = 'bull_market' | 'bear_market' | 'choppy_market' | 'neutral';
+export type VolatilityRegime = 'low' | 'medium' | 'high';
+export type DirectionBias = 'long' | 'short' | 'neutral';
 
 export type OptimalParams = {
   weights: {
@@ -28,7 +30,34 @@ export type RegimeAwareParams = {
   bull_market?: OptimalParams;
   bear_market?: OptimalParams;
   choppy_market?: OptimalParams;
+  // Volatility regimes
+  low_volatility?: OptimalParams;
+  medium_volatility?: OptimalParams;
+  high_volatility?: OptimalParams;
+  // Direction-specific
+  long_bias?: OptimalParams;
+  short_bias?: OptimalParams;
 };
+
+/**
+ * Classify volatility regime based on ATR percentage
+ */
+export function classifyVolatilityRegime(atrPct?: number): VolatilityRegime {
+  if (!atrPct || !Number.isFinite(atrPct)) return 'medium';
+  if (atrPct < 3) return 'low';      // Calm market
+  if (atrPct > 6) return 'high';     // Wild market
+  return 'medium';                    // Normal volatility
+}
+
+/**
+ * Classify direction bias based on EMA positioning
+ */
+export function classifyDirectionBias(ema20?: number, ema50?: number): DirectionBias {
+  if (!ema20 || !ema50 || !Number.isFinite(ema20) || !Number.isFinite(ema50)) return 'neutral';
+  if (ema20 > ema50 * 1.001) return 'long';   // Bullish with 0.1% buffer
+  if (ema20 < ema50 * 0.999) return 'short';  // Bearish with 0.1% buffer
+  return 'neutral';
+}
 
 export type PersonalityProfile = {
   symbol: string;
@@ -57,11 +86,15 @@ export const DEFAULT_PARAMS: OptimalParams = {
 };
 
 /**
- * Get the personality profile for a symbol, optionally for a specific regime
+ * Get the personality profile for a symbol, with optional regime and direction context
  */
 export async function getPersonalityProfile(
   symbol: string,
-  regime?: MarketRegime,
+  options?: {
+    volatilityRegime?: VolatilityRegime;
+    directionBias?: DirectionBias;
+    marketRegime?: MarketRegime;
+  }
 ): Promise<OptimalParams | null> {
   try {
     const profile = await prisma.cryptoPersonalityProfile.findUnique({
@@ -75,10 +108,34 @@ export async function getPersonalityProfile(
     const params = profile.optimalParams as OptimalParams | RegimeAwareParams;
     
     // Check if it's a regime-aware profile
-    if (regime && params && typeof params === 'object' && 'default' in params) {
+    if (params && typeof params === 'object' && 'default' in params) {
       const regimeParams = params as RegimeAwareParams;
-      // Return regime-specific params if available, otherwise default
-      return regimeParams[regime] ?? regimeParams.default;
+      
+      // Priority order: volatility > direction > market regime > default
+      
+      // 1. Try volatility regime first (most important for risk management)
+      if (options?.volatilityRegime) {
+        const volKey = `${options.volatilityRegime}_volatility` as keyof RegimeAwareParams;
+        if (regimeParams[volKey]) {
+          return regimeParams[volKey] as OptimalParams;
+        }
+      }
+      
+      // 2. Try direction bias (asymmetric long/short)
+      if (options?.directionBias && options.directionBias !== 'neutral') {
+        const dirKey = `${options.directionBias}_bias` as keyof RegimeAwareParams;
+        if (regimeParams[dirKey]) {
+          return regimeParams[dirKey] as OptimalParams;
+        }
+      }
+      
+      // 3. Try market regime
+      if (options?.marketRegime && regimeParams[options.marketRegime]) {
+        return regimeParams[options.marketRegime] as OptimalParams;
+      }
+      
+      // 4. Fall back to default
+      return regimeParams.default;
     }
 
     // Return as simple OptimalParams

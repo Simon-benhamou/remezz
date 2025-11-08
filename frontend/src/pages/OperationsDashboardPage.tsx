@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Divider,
@@ -238,6 +239,7 @@ const OperationsDashboardPage: React.FC = () => {
   const [strategyFilter, setStrategyFilter] = React.useState<'all' | StrategyEngineOption>('all');
   const [optimizing, setOptimizing] = React.useState(false);
   const [optimizingSymbol, setOptimizingSymbol] = React.useState('');
+  const [regimeAwareOptimization, setRegimeAwareOptimization] = React.useState(true);
   const mode = useAppStore((state) => state.mode);
 
   const strategyOptions = React.useMemo(
@@ -357,7 +359,7 @@ const OperationsDashboardPage: React.FC = () => {
 
     setOptimizing(true);
     try {
-      const result = await api.optimizeSymbol(symbol);
+      const result = await api.optimizeSymbol(symbol, regimeAwareOptimization);
       if (result?.success) {
         message.success(result.message || `Optimized parameters for ${symbol}`);
         setOptimizingSymbol('');
@@ -370,12 +372,12 @@ const OperationsDashboardPage: React.FC = () => {
     } finally {
       setOptimizing(false);
     }
-  }, [optimizingSymbol]);
+  }, [optimizingSymbol, regimeAwareOptimization]);
 
   const handleOptimizeAll = React.useCallback(async () => {
     setOptimizing(true);
     try {
-      const result = await api.optimizeAllSymbols();
+      const result = await api.optimizeAllSymbols(regimeAwareOptimization);
       if (result?.success) {
         message.success(result.message || `Optimized ${result.count} symbols`);
       } else {
@@ -387,7 +389,7 @@ const OperationsDashboardPage: React.FC = () => {
     } finally {
       setOptimizing(false);
     }
-  }, []);
+  }, [regimeAwareOptimization]);
 
   const { token } = theme.useToken();
   const metricsTimestamp = opsMetrics?.timestamp
@@ -944,6 +946,11 @@ const OperationsDashboardPage: React.FC = () => {
                 <span style={{ color: 'rgba(226, 232, 240, 0.78)' }}>
                   Analyze historical trade evaluations to find optimal strategy parameters for each symbol. 
                   The optimizer uses grid search to maximize Sharpe ratio, win rate, and total PnL.
+                  {regimeAwareOptimization && (
+                    <strong style={{ display: 'block', marginTop: 8, color: '#60a5fa' }}>
+                      Regime-aware mode: Optimizes separately for volatility levels (low/medium/high) and direction (long/short).
+                    </strong>
+                  )}
                 </span>
               }
               type='info'
@@ -963,6 +970,19 @@ const OperationsDashboardPage: React.FC = () => {
               }}
             >
               <Space direction='vertical' size={16} style={{ width: '100%' }}>
+                <Checkbox
+                  checked={regimeAwareOptimization}
+                  onChange={(e) => setRegimeAwareOptimization(e.target.checked)}
+                  style={{ color: '#e2e8f0' }}
+                >
+                  <Space direction='vertical' size={4}>
+                    <span style={{ fontWeight: 600 }}>Regime-Aware Optimization</span>
+                    <span style={{ fontSize: 12, color: 'rgba(148, 163, 184, 0.8)' }}>
+                      Adapts to market volatility and long/short asymmetry
+                    </span>
+                  </Space>
+                </Checkbox>
+                <Divider style={{ margin: 0, borderColor: token.colorBorderSecondary }} />
                 <div>
                   <Text style={{ color: '#e2e8f0', fontWeight: 600, display: 'block', marginBottom: 8 }}>
                     Optimize Single Symbol
@@ -1003,7 +1023,7 @@ const OperationsDashboardPage: React.FC = () => {
                     Optimize All Symbols with Sufficient Data
                   </Button>
                   <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12, display: 'block', marginTop: 8 }}>
-                    This will analyze all symbols that have at least 50 trade evaluations and update their personality profiles.
+                    This will analyze all symbols that have at least {regimeAwareOptimization ? '20' : '50'} trade evaluations{regimeAwareOptimization ? ' per regime' : ''} and update their personality profiles.
                   </Text>
                 </div>
               </Space>

@@ -90,11 +90,13 @@ router.post('/rank', async (req,res)=>{
 router.post('/optimize-symbol', async (req, res) => {
   try {
     const symbol = String(req.body?.symbol);
+    const regimeAware = req.body?.regimeAware === true || req.body?.regimeAware === 'true';
+    
     if (!symbol) {
       return res.status(400).json({ error: 'Symbol is required' });
     }
 
-    const optimalParams = await optimizeSymbolParameters(symbol);
+    const optimalParams = await optimizeSymbolParameters(symbol, { regimeAware });
     
     if (!optimalParams) {
       return res.status(404).json({ 
@@ -110,7 +112,8 @@ router.post('/optimize-symbol', async (req, res) => {
       success: true,
       symbol,
       parameters: optimalParams,
-      message: `Successfully optimized and saved parameters for ${symbol}`
+      regimeAware,
+      message: `Successfully optimized ${regimeAware ? 'regime-aware ' : ''}parameters for ${symbol}`
     });
   } catch (error: any) {
     console.error('Strategy optimization error:', error);
@@ -124,7 +127,9 @@ router.post('/optimize-symbol', async (req, res) => {
 // Optimize strategy parameters for all symbols with sufficient data
 router.post('/optimize-all', async (req, res) => {
   try {
-    const results = await optimizeAllSymbols();
+    const regimeAware = req.body?.regimeAware === true || req.body?.regimeAware === 'true';
+    
+    const results = await optimizeAllSymbols({ regimeAware });
     
     const symbolsOptimized = Array.from(results.keys());
     const parameters = Object.fromEntries(results);
@@ -134,7 +139,8 @@ router.post('/optimize-all', async (req, res) => {
       count: symbolsOptimized.length,
       symbols: symbolsOptimized,
       parameters,
-      message: `Successfully optimized parameters for ${symbolsOptimized.length} symbols`
+      regimeAware,
+      message: `Successfully optimized ${regimeAware ? 'regime-aware ' : ''}parameters for ${symbolsOptimized.length} symbols`
     });
   } catch (error: any) {
     console.error('Batch optimization error:', error);
