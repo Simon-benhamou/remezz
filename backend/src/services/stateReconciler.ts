@@ -216,11 +216,11 @@ export class StateReconciler {
           },
         });
 
-        // Emit alert for orphaned positions
+        // Emit alert for orphaned positions (use 'stale_data' as it's about desynchronization)
         await emitAlert({
           sessionId: userId,
           symbol: changes.newPositions[0]?.symbol,
-          kind: 'position_desync',
+          kind: 'stale_data',
           severity: 'high',
           details: {
             message: 'Positions found on exchange not tracked locally',

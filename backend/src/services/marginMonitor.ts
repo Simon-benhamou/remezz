@@ -172,7 +172,7 @@ export async function runMarginSweepOnce(opts?: { thresholds?: Partial<MarginGua
   for (const session of sessions) {
     const accountKey = resolveAccountKey(session);
     let cached = accountCache.get(accountKey);
-    let snapshot: BrokerMarginSnapshot;
+    let snapshot: BrokerMarginSnapshot | undefined;
     let assessment: MarginGuardResult;
 
     if (!cached) {
@@ -217,6 +217,9 @@ export async function runMarginSweepOnce(opts?: { thresholds?: Partial<MarginGua
           continue;
         }
       }
+
+      // Skip if we still don't have a snapshot
+      if (!snapshot) continue;
 
       assessment = evaluateMarginSnapshot(snapshot, { thresholds, symbol: session.symbol });
       accountCache.set(accountKey, { snapshot, assessment });
