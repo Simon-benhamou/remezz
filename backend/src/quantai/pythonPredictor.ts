@@ -1,6 +1,12 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { 
+  isServiceAvailable, 
+  recordServiceSuccess, 
+  recordServiceFailure,
+  recordFallbackTriggered 
+} from '../infra/serviceHealth.js';
 import { createIntegrationLogger } from '../utils/integrationLogger.js';
 
 const DEFAULT_TIMEOUT_MS = 4_000;
@@ -246,15 +252,17 @@ function parsePrediction(payload: string): PythonPredictionResult {
 }
 
 export async function getPrediction(features: Record<string, number>): Promise<PythonPredictionResult> {
-  const logger = createIntegrationLogger({
-    component: 'PythonPredictor',
-    action: 'predict',
-  });
+  // Check service health
+  if (!isServiceAvailable('python_predictor')) {
+    recordFallbackTriggered('python_predictor', 'circuit_breaker_open');
+    throw new Error('Python predictor unavailable (circuit breaker open)');
+  }
 
   const sanitized = sanitizeFeatures(features);
 
   const scriptPath = getScriptPath();
   const payload = JSON.stringify(sanitized);
+  const startTime = Date.now();
 
   logger.debug(`Calling Python | features=${Object.keys(sanitized).length} script=${scriptPath}`);
 
@@ -262,12 +270,8 @@ export async function getPrediction(features: Record<string, number>): Promise<P
     let pythonCommand: string;
     try {
       pythonCommand = resolvePythonExecutable();
-      // Log Python executable once on first successful resolution
-      if (pythonFailureCount === 0 && !cachedPythonExecutable) {
-        logger.info(`Resolved Python executable: ${pythonCommand}`);
-      }
-    } catch (error: any) {
-      logger.error('Failed to resolve Python executable', error);
+    } catch (error) {
+      recordServiceFailure('python_predictor', error as Error, false);
       reject(error);
       return;
     }
@@ -305,13 +309,34 @@ export async function getPrediction(features: Record<string, number>): Promise<P
 
     child.on('error', error => {
       clearTimeout(timer);
-      pythonFailureCount++;
-      logger.error(`Spawn failed | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, error);
-      
-      if (pythonFailureCount >= PYTHON_FAILURE_THRESHOLD) {
-        logger.error('Python predictor failing repeatedly - system should disable predictor');
+      recordServiceFailure('python_predictor', error);
+      reject(new Error(`python spawn failed: ${error.message}`));
+    });
+
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        const details = stderr || stdout || '';
+        const error = new Error(`python exited with code ${code}: ${details}`);
+        recordServiceFailure('python_predictor', error);
+        reject(error);
+        return;
       }
-      
+      try {
+        const result = parsePrediction(stdout.trim());
+        const responseTime = Date.now() - startTime;
+        recordServiceSuccess('python_predictor', responseTime);
+        resolve(result);
+      } catch (error) {
+        const parseError = new Error(`failed to parse python output: ${(error as Error).message}`);
+        recordServiceFailure('python_predictor', parseError);
+        reject(parseError);
+      }
+    });
+
+    child.on('error', error => {
+      clearTimeout(timer);
+      recordServiceFailure('python_predictor', error);
       reject(new Error(`python spawn failed: ${error.message}`));
     });
 
@@ -320,33 +345,20 @@ export async function getPrediction(features: Record<string, number>): Promise<P
       if (code !== 0) {
         pythonFailureCount++;
         const details = stderr || stdout || '';
-        logger.error(`Exit code ${code} | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, {
-          stderr: details.slice(0, 200),
-        });
-        reject(new Error(`python exited with code ${code}: ${details}`));
+        const error = new Error(`python exited with code ${code}: ${details}`);
+        recordServiceFailure('python_predictor', error);
+        reject(error);
         return;
       }
       try {
         const result = parsePrediction(stdout.trim());
-        // Reset failure count on success
-        pythonFailureCount = 0;
-        
-        logger.success('Prediction result', undefined, {
-          decision: result.decision,
-          confidence: result.confidence.toFixed(3),
-          probLong: result.probabilityLong.toFixed(3),
-          probShort: result.probabilityShort.toFixed(3),
-          entryWeight: result.entryWeight.toFixed(2),
-          riskMultiplier: result.riskMultiplier.toFixed(2),
-        });
-        
+        const responseTime = Date.now() - startTime;
+        recordServiceSuccess('python_predictor', responseTime);
         resolve(result);
-      } catch (error: any) {
-        pythonFailureCount++;
-        logger.error(`Parse failed | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, error, {
-          stdout: stdout.slice(0, 200),
-        });
-        reject(new Error(`failed to parse python output: ${error.message}`));
+      } catch (error) {
+        const parseError = new Error(`failed to parse python output: ${(error as Error).message}`);
+        recordServiceFailure('python_predictor', parseError);
+        reject(parseError);
       }
     });
 
@@ -356,18 +368,25 @@ export async function getPrediction(features: Record<string, number>): Promise<P
     } catch (error: any) {
       clearTimeout(timer);
       child.kill('SIGKILL');
-      pythonFailureCount++;
-      logger.error(`Failed to send payload | failures=${pythonFailureCount}/${PYTHON_FAILURE_THRESHOLD}`, error);
-      reject(new Error(`failed to send payload: ${error.message}`));
+      const writeError = new Error(`failed to send payload: ${(error as Error).message}`);
+      recordServiceFailure('python_predictor', writeError);
+      reject(writeError);
     }
   });
 }
 
 export function getPredictionSync(features: Record<string, number>): PythonPredictionResult {
+  // Check service health
+  if (!isServiceAvailable('python_predictor')) {
+    recordFallbackTriggered('python_predictor', 'circuit_breaker_open');
+    throw new Error('Python predictor unavailable (circuit breaker open)');
+  }
+
   const sanitized = sanitizeFeatures(features);
   const scriptPath = getScriptPath();
   const payload = JSON.stringify(sanitized);
   const timeoutMs = Number(process.env.PYTHON_PREDICT_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+  const startTime = Date.now();
 
   const pythonCommand = resolvePythonExecutable();
 
@@ -379,17 +398,144 @@ export function getPredictionSync(features: Record<string, number>): PythonPredi
   });
 
   if (result.error) {
-    throw new Error(`python spawn failed: ${result.error.message}`);
+    const error = new Error(`python spawn failed: ${result.error.message}`);
+    recordServiceFailure('python_predictor', error);
+    throw error;
   }
 
   if (typeof result.status === 'number' && result.status !== 0) {
     const details = result.stderr || result.stdout || '';
-    throw new Error(`python exited with code ${result.status}: ${details}`);
+    const error = new Error(`python exited with code ${result.status}: ${details}`);
+    recordServiceFailure('python_predictor', error);
+    throw error;
   }
 
   try {
-    return parsePrediction((result.stdout ?? '').trim());
+    const prediction = parsePrediction((result.stdout ?? '').trim());
+    const responseTime = Date.now() - startTime;
+    recordServiceSuccess('python_predictor', responseTime);
+    return prediction;
   } catch (error) {
-    throw new Error(`failed to parse python output: ${(error as Error).message}`);
+    const parseError = new Error(`failed to parse python output: ${(error as Error).message}`);
+    recordServiceFailure('python_predictor', parseError);
+    throw parseError;
   }
 }
+
+/**
+ * Rule-based fallback when Python predictor is unavailable
+ * Uses technical indicators to make a simple prediction
+ */
+export function getRuleBasedPrediction(features: Record<string, number>): PythonPredictionResult {
+  // Extract key technical indicators
+  const rsi = features.rsi_14 ?? 50;
+  const macdSignal = features.macd_signal ?? 0;
+  const volumeRatio = features.volume_ratio ?? 1;
+  const atr = features.atr_14_pct ?? 1;
+  const priceChangePercent = features.price_change_1h_pct ?? 0;
+  
+  // Simple rule-based logic
+  let decision: 'long' | 'short' | 'none' = 'none';
+  let longProb = 0.33;
+  let shortProb = 0.33;
+  let noneProb = 0.34;
+  
+  // RSI-based signals
+  if (rsi < 30 && volumeRatio > 1.5) {
+    // Oversold with volume - potential long
+    longProb = 0.55;
+    shortProb = 0.20;
+    noneProb = 0.25;
+    decision = 'long';
+  } else if (rsi > 70 && volumeRatio > 1.5) {
+    // Overbought with volume - potential short
+    longProb = 0.20;
+    shortProb = 0.55;
+    noneProb = 0.25;
+    decision = 'short';
+  } else if (macdSignal > 0 && priceChangePercent > 0 && volumeRatio > 1.2) {
+    // Bullish momentum
+    longProb = 0.50;
+    shortProb = 0.25;
+    noneProb = 0.25;
+    decision = 'long';
+  } else if (macdSignal < 0 && priceChangePercent < 0 && volumeRatio > 1.2) {
+    // Bearish momentum
+    longProb = 0.25;
+    shortProb = 0.50;
+    noneProb = 0.25;
+    decision = 'short';
+  }
+  
+  // Calculate confidence based on signal strength
+  const confidence = Math.abs(longProb - shortProb);
+  
+  return {
+    decision,
+    probabilities: { long: longProb, short: shortProb, none: noneProb },
+    probabilityLong: longProb,
+    probabilityShort: shortProb,
+    probabilityNone: noneProb,
+    confidence: clamp(confidence, 0, 1),
+    entryWeight: 1,
+    riskMultiplier: 1,
+    cooldown: { active: false, reason: null, seconds: null },
+    meta: { source: 'rule_based_fallback' },
+    classOrder: null,
+  };
+}
+
+/**
+ * Safe wrapper for getPrediction that falls back to rule-based prediction
+ */
+export async function getPredictionSafe(
+  features: Record<string, number>,
+  options?: { allowFallback?: boolean }
+): Promise<PythonPredictionResult> {
+  const allowFallback = options?.allowFallback ?? true;
+  
+  try {
+    return await getPrediction(features);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    
+    if (allowFallback) {
+      recordFallbackTriggered('python_predictor', 'rule_based_fallback', {
+        error: errorMsg,
+        hasFeatures: Object.keys(features).length,
+      });
+      
+      return getRuleBasedPrediction(features);
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Safe synchronous wrapper for getPredictionSync that falls back to rule-based prediction
+ */
+export function getPredictionSyncSafe(
+  features: Record<string, number>,
+  options?: { allowFallback?: boolean }
+): PythonPredictionResult {
+  const allowFallback = options?.allowFallback ?? true;
+  
+  try {
+    return getPredictionSync(features);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    
+    if (allowFallback) {
+      recordFallbackTriggered('python_predictor', 'rule_based_fallback', {
+        error: errorMsg,
+        hasFeatures: Object.keys(features).length,
+      });
+      
+      return getRuleBasedPrediction(features);
+    }
+    
+    throw error;
+  }
+}
+

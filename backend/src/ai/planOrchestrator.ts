@@ -1,6 +1,6 @@
 import { PlanZ, PlanJson } from '../agent/planSchema.js';
 import { buildTechSnapshot, TechnicalSnapshot } from './tech.js';
-import { llmJSON } from './llm.js';
+import { llmJSON, llmJSONSafe } from './llm.js';
 import { emitAlert } from '../monitor/policy.js';
 import { getConfig } from '../utils/env.js';
 import { fullAnalysis } from './analysis.js';
@@ -8,6 +8,7 @@ import type { RegimeProfile } from './regime.js';
 import { recordOpsEvent } from '../monitor/ops.js';
 import { markPlanLLM, shouldAllowPlanLLM } from './guard.js';
 import { computeLeverageGuardForSymbol } from '../utils/riskGuards.js';
+import { recordFallbackTriggered } from '../infra/serviceHealth.js';
 
 function safeParse<T=any>(s: string): T { try { return JSON.parse(s) as T; } catch { throw new Error('LLM returned non-JSON'); } }
 
@@ -380,6 +381,12 @@ export async function proposePlan(symbol: string, opts?: { fresh?: boolean; sess
     if (/plan_schema_invalid|LLM returned non-JSON|plan_inconsistent/.test(errMsg)) {
       try { await emitAlert({ sessionId: opts?.sessionId, symbol, kind:'llm_invalid', severity:'med', details:{ where:'plan', error: errMsg } }); } catch {}
     }
+    
+    // Record fallback trigger for monitoring
+    if (errMsg.includes('circuit breaker') || errMsg.includes('unavailable') || errMsg.includes('disabled')) {
+      recordFallbackTriggered('llm', 'plan_orchestrator_fallback', { symbol, error: errMsg, context: opts?.context });
+    }
+    
     recordOpsEvent({ level: 'warn', source: 'plan_fallback', message: 'llm_plan_failure', sessionId: opts?.sessionId, symbol, details: { error: errMsg } });
     const cached = allowCache ? planCache.get(cacheKey) : undefined;
     if (cached && (Date.now() - cached.ts) < PLAN_CACHE_TTL_MS) {

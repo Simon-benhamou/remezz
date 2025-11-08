@@ -2,6 +2,12 @@ import OpenAI from "openai";
 import { getConfig } from "../utils/env.js";
 import { recordAICall } from "../metrics/aiCalls.js";
 import { createHash } from 'crypto';
+import { 
+  isServiceAvailable, 
+  recordServiceSuccess, 
+  recordServiceFailure,
+  recordFallbackTriggered 
+} from "../infra/serviceHealth.js";
 import { createIntegrationLogger } from '../utils/integrationLogger.js';
 
 export type LLMChoice = "openai" | "grok" | "none";
@@ -37,9 +43,11 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
   });
 
   const cfg = getConfig();
-  if (cfg.LLM_DISABLE) {
-    logger.warn('LLM disabled by config');
-    throw new Error('LLM disabled');
+
+  // Check service health
+  if (!isServiceAvailable('llm')) {
+    recordFallbackTriggered('llm', 'circuit_breaker_open', { context: opts?.context });
+    throw new Error('LLM service unavailable (circuit breaker open)');
   }
 
   // Cache hit
@@ -85,6 +93,8 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
       }
     }
   }
+  try { if (process.env.DEBUG_LLM === 'true') console.log(`[llm] provider=${provider} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} key=${(opts?.cacheKey||'auto')}`); } catch {}
+  const startTime = Date.now();
   
   logger.info(`Calling LLM | provider=${provider} bypassRate=${!!opts?.bypassRate} noCache=${!!opts?.noCache} kind=${opts?.context?.kind || 'unknown'}`);
   
@@ -96,22 +106,21 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
       else if (provider === 'grok') result = await callGrok(prompt);
       else throw new Error('No LLM configured (OPENAI_API_KEY or GROK_API_KEY missing).');
       
+      // Record success
+      const responseTime = Date.now() - startTime;
+      recordServiceSuccess('llm', responseTime);
+      
       if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: result.text, provider, model: result.modelUsed, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd });
-      
-      const durationMs = Date.now() - callStart;
-      logger.success(`Call completed`, durationMs, {
-        provider,
-        model: result.modelUsed,
-        tokensIn: result.tokensIn,
-        tokensOut: result.tokensOut,
-        costUsd: result.costUsd?.toFixed(4),
-      });
-      
+      if (process.env.DEBUG_LLM === 'true') {
+        try {
+          console.log(`[llm] call provider=${provider} model=${result.modelUsed} tokens_in=${result.tokensIn || 0} tokens_out=${result.tokensOut || 0} response_time=${responseTime}ms`);
+        } catch {}
+      }
       return result.text;
-    } catch (error: any) {
-      const durationMs = Date.now() - callStart;
-      logger.error(`Call failed after ${durationMs}ms | provider=${provider}`, error);
-      throw error;
+    } catch (err) {
+      // Record failure
+      recordServiceFailure('llm', err as Error);
+      throw err;
     } finally {
       if (!opts?.noCache) inFlight.delete(key);
     }
@@ -121,8 +130,14 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
     if (provider === 'grok' && cfg.OPENAI_API_KEY) {
       logger.warn('Grok call failed, attempting OpenAI fallback');
       try {
-        const fallbackStart = Date.now();
+        if (process.env.DEBUG_LLM === 'true') {
+          try { console.log('[llm] grok call failed, retrying with openai fallback'); } catch {}
+        }
+        recordFallbackTriggered('llm', 'provider_fallback_grok_to_openai', { context: opts?.context });
+        const fallbackStartTime = Date.now();
         const fallback = await callOpenAI(prompt);
+        const fallbackResponseTime = Date.now() - fallbackStartTime;
+        recordServiceSuccess('llm', fallbackResponseTime);
         if (!opts?.noCache) cache.set(key, { ts: Date.now(), data: fallback.text, provider: 'openai', model: fallback.modelUsed, tokensIn: fallback.tokensIn, tokensOut: fallback.tokensOut, costUsd: fallback.costUsd });
         const fallbackDuration = Date.now() - fallbackStart;
         logger.success(`Fallback succeeded`, fallbackDuration, {
@@ -130,8 +145,8 @@ export async function llmJSON(prompt: string, opts?: LLMOpts): Promise<string> {
           model: fallback.modelUsed,
         });
         return fallback.text;
-      } catch (fallbackErr: any) {
-        logger.error('Fallback also failed', fallbackErr);
+      } catch (fallbackErr) {
+        recordServiceFailure('llm', fallbackErr as Error);
         throw fallbackErr;
       }
     }
@@ -226,3 +241,28 @@ async function callGrok(prompt: string): Promise<LLMCallResult> {
   } catch {}
   return { text: content, modelUsed: 'grok-4-fast-reasoning', tokensIn: inTok, tokensOut: outTok, costUsd: cost };
 }
+
+/**
+ * Safe wrapper for llmJSON that returns null on failure instead of throwing
+ * Useful for non-critical LLM calls where degraded operation is acceptable
+ */
+export async function llmJSONSafe(prompt: string, opts?: LLMOpts): Promise<string | null> {
+  try {
+    return await llmJSON(prompt, opts);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    
+    // Only log if it's not a circuit breaker or disabled message
+    if (!errorMsg.includes('circuit breaker') && !errorMsg.includes('disabled')) {
+      console.warn('[llm] llmJSONSafe caught error:', errorMsg);
+    }
+    
+    recordFallbackTriggered('llm', 'safe_wrapper_caught_error', {
+      error: errorMsg,
+      context: opts?.context,
+    });
+    
+    return null;
+  }
+}
+

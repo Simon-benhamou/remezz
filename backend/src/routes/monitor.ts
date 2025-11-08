@@ -8,6 +8,7 @@ import { computeMonitorAnalytics } from '../monitor/analytics.js';
 import { getMarketMetrics } from '../monitor/marketMetrics.js';
 import { llmJSON } from '../ai/llm.js';
 import type { MarginGuardSeverity } from '../risk/marginGuard.js';
+import { getAllServiceHealth, getServiceFallbackMetrics } from '../infra/serviceHealth.js';
 
 export const router = Router();
 
@@ -350,3 +351,23 @@ router.post('/reports/daily', async (req,res)=>{
     res.status(500).json({ error: String(e?.message || e) });
   }
 });
+
+// Service health endpoint - monitors external dependencies (LLM, Python predictor)
+router.get('/service-health', (req, res) => {
+  try {
+    const health = getAllServiceHealth();
+    const fallbacks = {
+      llm: getServiceFallbackMetrics('llm'),
+      python_predictor: getServiceFallbackMetrics('python_predictor'),
+    };
+    
+    res.json({
+      services: health,
+      fallbacks,
+      timestamp: Date.now(),
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
