@@ -14,6 +14,7 @@ import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
 import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
+import { logMetaAdaptiveEvaluation } from './evaluationLogger.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 const pythonSignalTuning = getPythonSignalTuning();
@@ -1851,6 +1852,38 @@ class MetaAdaptiveStrategyAgent {
       exploration: selection != null && selection.id === signal.id ? selection.exploration : false,
       token: selection != null && selection.id === signal.id ? selection.token : null,
     }));
+    
+    // Log trade evaluation for learning system
+    // Create EntryFacts from the evaluation data
+    const entryFacts = {
+      price,
+      atr: atr15mPct * price / 100, // Convert back from percentage
+      atrPct: atr15mPct,
+      adx,
+      rsi: safeNumber(snap.rsi14, undefined),
+      cmf: safeNumber((snap as any)?.cmf20, undefined),
+      volumeRatio: safeNumber((snap as any)?.volumeRatio, undefined),
+      spreadBps,
+      modelConfidence: selection?.confidence,
+      slopeAbsPct: safeNumber((snap as any)?.ema20Slope, undefined),
+    };
+    
+    // Create synthetic EntryEvaluation from the selected signal
+    // Convert reasons array to Record format expected by EntryEvaluation
+    const reasonsList = selection ? selection.reasons : (enrichedSignals[0]?.reasons || []);
+    const reasonsRecord: Record<string, string> = {};
+    reasonsList.forEach((reason, idx) => {
+      reasonsRecord[`reason_${idx}`] = reason;
+    });
+    
+    const entryEvaluation = {
+      ok: selection != null && selection.active,
+      reasons: reasonsRecord,
+    };
+    
+    // Log asynchronously (non-blocking)
+    logMetaAdaptiveEvaluation(input.symbol, entryEvaluation, entryFacts);
+    
     return {
       signals: enrichedSignals,
       selection,
