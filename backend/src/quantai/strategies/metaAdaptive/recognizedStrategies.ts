@@ -140,7 +140,7 @@ type EvaluateOptions = {
   volume24hUsd?: number | null;
 };
 
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.72;
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.65;  // Lowered from 0.72 to accept more quality setups
 const BLOCKED_REASON_LOW_CONFIDENCE = 'low_confidence';
 const BLOCKED_REASON_WEAK_CONTEXT = 'weak_entry_context';
 const BLOCKED_REASON_SHORT_CONF_GUARD = 'short_confidence_guard';
@@ -166,9 +166,9 @@ const CONFIDENCE_THRESHOLD = parseConfidenceThreshold();
 
 /**
  * Compute dynamic confidence threshold based on confluence factors.
- * Base threshold is 0.72, but can be reduced to 0.62 if:
- * - Alignment score > 0.9 (strong multi-timeframe consensus)
- * - Volume ratio > 2x (strong volume confirmation)
+ * Base threshold is 0.65, but can be reduced to 0.55 if:
+ * - Alignment score > 0.85 (strong multi-timeframe consensus) - lowered from 0.9
+ * - Volume ratio > 1.8x (strong volume confirmation) - lowered from 2.0x
  * This allows more high-quality setups while maintaining safety.
  */
 function computeDynamicConfidenceThreshold(params: {
@@ -179,16 +179,16 @@ function computeDynamicConfidenceThreshold(params: {
   const alignmentScore = params.alignmentScore ?? 0;
   const volumeRatio = params.volumeRatio ?? 0;
   
-  // Strong confluence allows lower confidence threshold
-  const hasStrongAlignment = alignmentScore > 0.9;
-  const hasStrongVolume = volumeRatio > 2;
+  // Strong confluence allows lower confidence threshold - made more permissive
+  const hasStrongAlignment = alignmentScore > 0.85;  // Lowered from 0.9
+  const hasStrongVolume = volumeRatio > 1.8;          // Lowered from 2.0
   
   if (hasStrongAlignment && hasStrongVolume) {
     // Both factors present - use lowest threshold
-    return Math.max(0.62, baseThreshold - 0.1);
+    return Math.max(0.55, baseThreshold - 0.1);  // Lowered floor from 0.62
   } else if (hasStrongAlignment || hasStrongVolume) {
     // One factor present - moderate reduction
-    return Math.max(0.67, baseThreshold - 0.05);
+    return Math.max(0.60, baseThreshold - 0.05);  // Lowered floor from 0.67
   }
   
   // No strong confluence - use base threshold
@@ -208,7 +208,7 @@ const MAX_RISK_ATR_MULT = (() => {
 
 export const metaAdaptiveConfidenceThreshold = CONFIDENCE_THRESHOLD;
 
-const ENTRY_ELIGIBILITY_THRESHOLD = 0.58;
+const ENTRY_ELIGIBILITY_THRESHOLD = 0.52;  // Lowered from 0.58 to accept more setups
 const RR_FLOOR_RAW = process.env.META_ADAPTIVE_MIN_RR
   ?? process.env.META_ADAPTIVE_RR_MIN
   ?? '1.8';
@@ -534,20 +534,21 @@ function getStrategyFamilyFromId(id: RecognizedStrategyId): 'trend' | 'breakout'
 }
 
 const MIN_ADX_BY_STRATEGY: Record<'trend' | 'breakout' | 'mean' | 'momentum', number> = {
-  trend: 18,
-  breakout: 16,
-  mean: 12,
-  momentum: 20,
+  trend: 16,      // Lowered from 18 - accept slightly weaker trends
+  breakout: 14,   // Lowered from 16 - breakouts can occur in ranging markets
+  mean: 12,       // Unchanged - mean reversion works in low momentum
+  momentum: 18,   // Lowered from 20 - still require decent momentum
 };
 
-// Dynamic ATR threshold multiplier - volatility should be 20% above baseline
-const ATR_DYNAMIC_MULTIPLIER = 1.2;
+// Dynamic ATR threshold multiplier - volatility should be above baseline
+// Reduced from 1.2 to 1.0 to accept current volatility levels
+const ATR_DYNAMIC_MULTIPLIER = 1.0;
 
 const MIN_ATR_BY_STRATEGY: Record<'trend' | 'breakout' | 'mean' | 'momentum', number> = {
-  trend: 0.8,
-  breakout: 0.7,
-  mean: 0.5,
-  momentum: 0.75,
+  trend: 0.6,     // Lowered from 0.8 - accept quieter trends
+  breakout: 0.5,  // Lowered from 0.7 - breakouts can happen in consolidation
+  mean: 0.4,      // Lowered from 0.5 - mean reversion in low vol
+  momentum: 0.6,  // Lowered from 0.75 - moderate volatility acceptable
 };
 
 function computeAdxComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot): { score: number; reason: string } {
@@ -570,10 +571,17 @@ function computeAtrComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot):
   
   // Dynamic ATR threshold: current ATR should be elevated above baseline
   // Use realizedVol as a proxy for ATR baseline (smoothed volatility measure)
-  const baselineVol = Number((snap as any)?.realizedVol ?? NaN);
-  const hasDynamicBaseline = Number.isFinite(baselineVol) && baselineVol > 0;
+  const baselineVolRaw = Number((snap as any)?.realizedVol ?? NaN);
+  const hasDynamicBaseline = Number.isFinite(baselineVolRaw) && baselineVolRaw > 0;
   
-  // If we have baseline data, use dynamic threshold: currentATR > 1.2 * baseline
+  // realizedVol is annualized volatility in decimal form (0.5 = 50% annual)
+  // Convert to daily-equivalent percentage to match atrPct scale
+  // Annual vol * sqrt(1/252) * 100 = daily vol %
+  // For intraday (15m bars), further divide by sqrt(periods per day)
+  // Simplified: realizedVol * 0.4 gives approximate comparable scale
+  const baselineVol = hasDynamicBaseline ? baselineVolRaw * 0.4 : 0;
+  
+  // If we have baseline data, use dynamic threshold: currentATR should be above baseline * 1.2
   // Otherwise fall back to static threshold
   const dynamicThreshold = hasDynamicBaseline ? baselineVol * ATR_DYNAMIC_MULTIPLIER : minAtr;
   const threshold = hasDynamicBaseline ? dynamicThreshold : minAtr;
@@ -593,18 +601,18 @@ function computeFlowComponent(
   const cmfRaw = Number((snap as any)?.cmf20 ?? NaN);
   const cmf = Number.isFinite(cmfRaw) ? cmfRaw : 0;
   const ratio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : 1;
-  const minVolumeRatio = 1.1;
+  const minVolumeRatio = 0.9;  // Lowered from 1.1 - accept slightly below-average volume
   const desired = desiredDirectionalBias(bias);
   
-  // Symmetric CMF thresholds: 0.05 for long, -0.05 for short
-  let cmfThreshold = 0.05;
+  // More permissive CMF thresholds: 0.03 for long, -0.03 for short (lowered from 0.05)
+  let cmfThreshold = 0.03;  // Lowered from 0.05 to accept weaker flow
   let cmfMagnitude = cmf;
   if (desired === 'bearish') {
-    cmfThreshold = -0.05;
+    cmfThreshold = -0.03;  // Lowered from -0.05
     cmfMagnitude = -cmf;
   }
   if (!desired) {
-    cmfThreshold = 0.05;
+    cmfThreshold = 0.03;  // Lowered from 0.05
     cmfMagnitude = Math.abs(cmf);
   }
   const cmfScore = clampNumber((cmfMagnitude - Math.abs(cmfThreshold)) / 0.2, 0, 1);
