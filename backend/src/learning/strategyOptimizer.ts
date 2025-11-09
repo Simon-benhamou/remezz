@@ -261,8 +261,8 @@ function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): Reg
   console.log(`   Low volume: ${lowVolumeEvals.length}, Normal: ${normalVolumeEvals.length}, High: ${highVolumeEvals.length}`);
   console.log(`   Trending: ${trendingEvals.length}, Ranging: ${rangingEvals.length}`);
 
-  // Optimize each regime (require minimum 20 samples)
-  const MIN_REGIME_SAMPLES = 20;
+  // Optimize each regime (require minimum 10 samples - reduced from 20 for faster learning)
+  const MIN_REGIME_SAMPLES = 10;
   
   const defaultParams = optimizeSingleRegime(evaluations, 'default');
   

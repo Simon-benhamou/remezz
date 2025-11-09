@@ -51,7 +51,7 @@ router.get('/thresholds/:symbol', async (req, res) => {
     }
 
     // Calculate regime-aware thresholds
-    const thresholds = getThresholdsForSymbol(symbol, tech, aggressiveness);
+    const thresholds = await getThresholdsForSymbol(symbol, tech, aggressiveness);
 
     // Get explanation
     const explanation = explainThresholds(thresholds, symbol, aggressiveness);
@@ -167,7 +167,7 @@ router.get('/adaptive-learning/:symbol', authenticateUser, async (req: Authentic
 
     // Get technical snapshot for current thresholds
     const tech = await buildTechSnapshot(symbol);
-    const currentThresholds = getThresholdsForSymbol(symbol, tech, aggressiveness);
+    const currentThresholds = await getThresholdsForSymbol(symbol, tech, aggressiveness);
 
     // Get adaptive learning state
     const learningState = await getAdaptiveLearningState(
@@ -402,7 +402,7 @@ router.get('/dashboard/:sessionId', authenticateUser, async (req: AuthenticatedR
       ).catch(() => null),
     ]);
 
-    const currentThresholds = getThresholdsForSymbol(session.symbol, tech, aggressiveness);
+    const currentThresholds = await getThresholdsForSymbol(session.symbol, tech, aggressiveness);
     const recommendation = generateRecommendation(entryStats);
 
     res.json({

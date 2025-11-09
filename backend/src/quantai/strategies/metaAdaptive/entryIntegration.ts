@@ -35,10 +35,11 @@ export type EnhancedThresholds = {
 
 /**
  * Get enhanced thresholds with regime awareness
+ * Now async to support learned parameters
  */
-export function getEnhancedThresholds(context: EnhancedEntryContext): EnhancedThresholds {
+export async function getEnhancedThresholds(context: EnhancedEntryContext): Promise<EnhancedThresholds> {
   try {
-    const thresholds = getThresholdsForSymbol(
+    const thresholds = await getThresholdsForSymbol(
       context.symbol,
       context.tech,
       context.aggressiveness

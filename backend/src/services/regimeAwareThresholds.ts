@@ -3,10 +3,20 @@
  * 
  * Dynamically adjusts entry thresholds based on market regime to optimize
  * the balance between trade quality and frequency across different market conditions.
+ * 
+ * Now integrates with learned parameters from the strategy optimizer.
  */
 
 import { classifyRegime, type RegimeDiagnostics } from '../diagnostics/regime.js';
 import type { TechnicalSnapshot } from '../ai/tech.js';
+import { 
+  getParametersWithDefaults, 
+  classifyVolatilityRegime,
+  classifyDirectionBias,
+  classifyVolumeRegime,
+  classifyTrendingRanging,
+  type OptimalParams 
+} from '../learning/personalityProfile.js';
 
 export type SymbolTier = 'A' | 'B' | 'C';
 
@@ -241,12 +251,13 @@ export function calculateRegimeAwareThresholds(
 
 /**
  * Get regime-aware thresholds with technical snapshot
+ * Now integrates learned parameters from strategy optimizer
  */
-export function getThresholdsForSymbol(
+export async function getThresholdsForSymbol(
   symbol: string,
   tech: TechnicalSnapshot & { spreadBps?: number; liquidityScore?: number },
   aggressiveness: 'conservative' | 'reactive' | 'aggressive' = 'reactive'
-): RegimeAwareThresholds & { regime: RegimeDiagnostics; tier: SymbolTier } {
+): Promise<RegimeAwareThresholds & { regime: RegimeDiagnostics; tier: SymbolTier; source: string }> {
   const tier = getSymbolTier(symbol);
   
   // Extract numeric fields only for regime classification
@@ -257,17 +268,54 @@ export function getThresholdsForSymbol(
     liquidityScore: tech.liquidityScore,
   });
 
-  const thresholds = calculateRegimeAwareThresholds({
-    symbol,
-    tier,
-    regime,
-    aggressiveness,
+  // Classify current market regime
+  const atrPct = tech.atr14 && tech.last ? (tech.atr14 / tech.last) * 100 : undefined;
+  const volatilityRegime = classifyVolatilityRegime(atrPct);
+  const directionBias = classifyDirectionBias(tech.ema20, tech.ema50);
+  const volumeRegime = classifyVolumeRegime(
+    tech.volume,
+    tech.volumeMA,
+    (tech as any).volumeZScore
+  );
+  const trendingRanging = classifyTrendingRanging(tech.adx14, atrPct);
+
+  // Get learned or intelligent default parameters
+  const { params, source } = await getParametersWithDefaults(symbol, {
+    volatilityRegime,
+    directionBias,
+    volumeRegime,
+    trendingRanging,
   });
+
+  // Calculate regime adjustments
+  const regimeAdj = getRegimeAdjustments(regime);
+  const tierAdj = TIER_ADJUSTMENTS[tier];
+  
+  // Aggressiveness multipliers
+  const aggMult = aggressiveness === 'aggressive' ? 0.92 : aggressiveness === 'conservative' ? 1.08 : 1.0;
+
+  // Merge learned parameters with regime/tier adjustments
+  const thresholds: RegimeAwareThresholds = {
+    confidence: Math.max(0.55, Math.min(0.85, 
+      (params.thresholds.minConfidence ?? 0.62) * tierAdj.confidenceAdj * regimeAdj.confidenceAdj * aggMult
+    )),
+    atr: Math.max(0.25, Math.min(1.0, 
+      (params.thresholds.atr ?? 0.55) * tierAdj.atrAdj * regimeAdj.atrAdj * aggMult
+    )),
+    adx: Math.max(10, Math.min(25, 
+      (params.thresholds.adx ?? 18) * tierAdj.adxAdj * regimeAdj.adxAdj * aggMult
+    )),
+    eligibility: Math.max(0.50, Math.min(0.70, 
+      (params.thresholds.eligibility ?? 0.62) * regimeAdj.eligibilityAdj * aggMult
+    )),
+    rrMin: params.thresholds.rrMin ?? 1.8,
+  };
 
   return {
     ...thresholds,
     regime,
     tier,
+    source, // Track whether these came from learned data or intelligent defaults
   };
 }
 

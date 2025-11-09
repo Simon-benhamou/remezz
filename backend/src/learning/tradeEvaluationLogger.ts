@@ -50,21 +50,24 @@ export type TradeEvaluationParams = {
   /**
    * Decision outcome tracking the full execution flow:
    * 
-   * FILTER STAGE:
-   * - 'filter_passed': Entry filters PASSED (ADX, confidence, volatility checks OK)
-   * - 'filter_blocked': Entry filters FAILED (insufficient signal quality)
+   * FILTER STAGE (Analysis & Signal Quality):
+   * - 'filter_passed': Entry filters PASSED (ADX, confidence, volatility, predictor, cooldown all OK)
+   * - 'filter_blocked': Entry filters FAILED (insufficient signal quality, predictor confidence too low, cooldown active, etc.)
    * 
-   * EXECUTION STAGE (only reached if filters passed):
-   * - 'order_placed': Order successfully placed on exchange (ACTUAL TRADE)
+   * EXECUTION STAGE (Technical & Operational - only reached if filters passed):
+   * - 'order_placed': Order successfully placed on exchange (ACTUAL TRADE ✅)
    * - 'order_blocked_capital': Capital reservation failed (pool exhausted, symbol cap exceeded)
    * - 'order_blocked_sizing': Position sizing returned qty=0 (stop too wide, equity too low)
-   * - 'order_blocked_registration': Blocked by predictor confidence or active cooldown
-   * - 'order_rejected': Broker rejected order (exchange error, rate limit, etc.)
+   * - 'order_rejected': Broker rejected order (exchange error, rate limit, insufficient balance)
+   * 
+   * NOTE: Predictor confidence and cooldown are ANALYSIS FILTERS (filter_blocked), not execution blocks.
+   * They evaluate signal quality like ADX/CMF/trend strength.
    */
-  decision: 'filter_passed' | 'filter_blocked' | 'order_placed' | 'order_blocked_capital' | 'order_blocked_sizing' | 'order_blocked_registration' | 'order_rejected';
+  decision: 'filter_passed' | 'filter_blocked' | 'order_placed' | 'order_blocked_capital' | 'order_blocked_sizing' | 'order_rejected';
   /**
-   * Reason why entry filters blocked the signal (required when decision='blocked')
-   * Examples: 'adx_below_trend_threshold', 'weak_trend_structure', 'confidence_too_low'
+   * Reason why entry filters blocked the signal (required when decision='filter_blocked')
+   * Examples: 'adx_below_trend_threshold', 'weak_trend_structure', 'confidence_too_low', 
+   *           'predictor_confidence_too_low', 'cooldown_active'
    */
   blockedReason?: string;
   confidenceScore: number;

@@ -276,10 +276,11 @@ async function executeEntryTrade(
       integrationLogger.warn(`Trade registration ${registrationResult}`);
       console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: registration ${registrationResult}`);
       
-      // Log that order was blocked by registration (predictor or cooldown)
+      // Predictor and cooldown are ANALYSIS FILTERS, not execution blocks
+      // They evaluate signal quality, so they should be logged as filter_blocked
       await logTradeEvaluation({
         symbol: session.symbol,
-        decision: 'order_blocked_registration',
+        decision: 'filter_blocked',  // Changed from order_blocked_registration
         blockedReason: registrationResult === 'predictor_blocked' ? 'predictor_confidence_too_low' : 'cooldown_active',
         confidenceScore: signal.confidence,
         inputMetrics: {

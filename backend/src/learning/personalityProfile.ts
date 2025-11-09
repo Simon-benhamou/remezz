@@ -24,6 +24,12 @@ export type OptimalParams = {
     trendStrength: number;
     minConfidence: number;
     cmf?: number;
+    // Meta-adaptive specific thresholds
+    atr?: number;           // ATR percentage threshold
+    eligibility?: number;   // Entry eligibility score
+    rrMin?: number;         // Minimum risk/reward ratio
+    minAtrPct?: number;     // Minimum ATR percentage
+    maxAtrPct?: number;     // Maximum ATR percentage
   };
 };
 
@@ -47,6 +53,137 @@ export type RegimeAwareParams = {
   trending?: OptimalParams;
   ranging?: OptimalParams;
 };
+
+/**
+ * Get intelligent default parameters by regime
+ * Used when no learned data is available yet
+ */
+export function getDefaultParamsByRegime(regime: string): OptimalParams {
+  const baseWeights = { adx: 0.3, strength: 0.3, alignment: 0.2, slope: 0.1, flow: 0.1 };
+  
+  switch (regime) {
+    case 'low_volatility':
+      return {
+        weights: baseWeights,
+        thresholds: {
+          adx: 14,              // Lower ADX OK in calm markets
+          trendStrength: 0.2,   // Weaker trends acceptable
+          minConfidence: 0.40,  // Can be less strict
+          atr: 0.45,
+          eligibility: 0.55,
+          rrMin: 1.5,
+          minAtrPct: 1.5,
+          maxAtrPct: 3.0,
+        },
+      };
+    
+    case 'high_volatility':
+      return {
+        weights: { ...baseWeights, adx: 0.4, strength: 0.35, flow: 0.05 }, // Focus on momentum
+        thresholds: {
+          adx: 22,              // Need strong ADX in wild markets
+          trendStrength: 0.35,  // Strong trends required
+          minConfidence: 0.55,  // Be more selective
+          atr: 0.70,
+          eligibility: 0.70,
+          rrMin: 2.0,           // Higher RR needed for volatility
+          minAtrPct: 4.0,
+          maxAtrPct: 10.0,
+        },
+      };
+    
+    case 'trending':
+      return {
+        weights: { ...baseWeights, adx: 0.35, strength: 0.35, alignment: 0.15 },
+        thresholds: {
+          adx: 20,              // Strong ADX for trends
+          trendStrength: 0.30,
+          minConfidence: 0.48,
+          atr: 0.60,
+          eligibility: 0.65,
+          rrMin: 1.8,
+          minAtrPct: 2.5,
+          maxAtrPct: 8.0,
+        },
+      };
+    
+    case 'ranging':
+      return {
+        weights: { ...baseWeights, flow: 0.15, adx: 0.25 }, // Focus on CMF in ranges
+        thresholds: {
+          adx: 12,              // Lower ADX expected
+          trendStrength: 0.15,  // Weak trends OK
+          minConfidence: 0.50,  // Need good setup confirmation
+          atr: 0.50,
+          eligibility: 0.60,
+          rrMin: 2.0,           // Higher RR for range trades
+          minAtrPct: 2.0,
+          maxAtrPct: 5.0,
+        },
+      };
+    
+    case 'long_bias':
+    case 'short_bias':
+      return {
+        weights: { ...baseWeights, alignment: 0.25 }, // Focus on EMA alignment
+        thresholds: {
+          adx: 18,
+          trendStrength: 0.25,
+          minConfidence: 0.45,
+          atr: 0.55,
+          eligibility: 0.62,
+          rrMin: 1.8,
+          minAtrPct: 2.0,
+          maxAtrPct: 7.0,
+        },
+      };
+    
+    case 'low_volume':
+      return {
+        weights: baseWeights,
+        thresholds: {
+          adx: 20,              // Need stronger signals with low volume
+          trendStrength: 0.28,
+          minConfidence: 0.52,  // Be more cautious
+          atr: 0.65,
+          eligibility: 0.68,
+          rrMin: 2.0,
+          minAtrPct: 2.5,
+          maxAtrPct: 6.0,
+        },
+      };
+    
+    case 'high_volume':
+      return {
+        weights: { ...baseWeights, flow: 0.15 }, // CMF more reliable with volume
+        thresholds: {
+          adx: 16,              // Can accept lower ADX with good volume
+          trendStrength: 0.22,
+          minConfidence: 0.42,
+          atr: 0.50,
+          eligibility: 0.58,
+          rrMin: 1.6,
+          minAtrPct: 2.0,
+          maxAtrPct: 7.0,
+        },
+      };
+    
+    default: // medium_volatility, normal_volume, neutral, or unknown
+      return {
+        weights: baseWeights,
+        thresholds: {
+          adx: 18,
+          trendStrength: 0.25,
+          minConfidence: 0.45,
+          atr: 0.55,
+          eligibility: 0.62,
+          rrMin: 1.8,
+          minAtrPct: 2.0,
+          maxAtrPct: 8.0,
+        },
+      };
+  }
+}
 
 /**
  * Classify volatility regime based on ATR percentage
@@ -151,6 +288,11 @@ export const DEFAULT_PARAMS: OptimalParams = {
     adx: 18,
     trendStrength: 0.25,
     minConfidence: 0.45,
+    atr: 0.55,
+    eligibility: 0.62,
+    rrMin: 1.8,
+    minAtrPct: 2.0,
+    maxAtrPct: 8.0,
     cmf: 0.05,
   },
 };
@@ -238,6 +380,61 @@ export async function getPersonalityProfile(
     console.warn(`Failed to fetch personality profile for ${symbol}:`, error);
     return null;
   }
+}
+
+/**
+ * Get parameters for a symbol with intelligent fallback to regime defaults
+ * This ensures we ALWAYS have parameters, even without learned data
+ */
+export async function getParametersWithDefaults(
+  symbol: string,
+  options?: {
+    volatilityRegime?: VolatilityRegime;
+    directionBias?: DirectionBias;
+    marketRegime?: MarketRegime;
+    volumeRegime?: VolumeRegime;
+    trendingRanging?: TrendingRanging;
+  }
+): Promise<{ params: OptimalParams; source: string }> {
+  // Try to get learned profile
+  const learned = await getPersonalityProfile(symbol, options);
+  if (learned) {
+    return { params: learned, source: 'learned' };
+  }
+
+  // Fall back to intelligent defaults based on current regime
+  // Priority: volatility > trending/ranging > volume > direction > default
+  
+  if (options?.volatilityRegime && options.volatilityRegime !== 'medium') {
+    return {
+      params: getDefaultParamsByRegime(`${options.volatilityRegime}_volatility`),
+      source: `default_${options.volatilityRegime}_volatility`,
+    };
+  }
+  
+  if (options?.trendingRanging) {
+    return {
+      params: getDefaultParamsByRegime(options.trendingRanging),
+      source: `default_${options.trendingRanging}`,
+    };
+  }
+  
+  if (options?.volumeRegime && options.volumeRegime !== 'normal') {
+    return {
+      params: getDefaultParamsByRegime(`${options.volumeRegime}_volume`),
+      source: `default_${options.volumeRegime}_volume`,
+    };
+  }
+  
+  if (options?.directionBias && options.directionBias !== 'neutral') {
+    return {
+      params: getDefaultParamsByRegime(`${options.directionBias}_bias`),
+      source: `default_${options.directionBias}_bias`,
+    };
+  }
+
+  // Ultimate fallback
+  return { params: DEFAULT_PARAMS, source: 'default' };
 }
 
 /**
