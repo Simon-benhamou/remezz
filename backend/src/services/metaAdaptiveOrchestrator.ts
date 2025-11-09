@@ -34,6 +34,8 @@ import { CapitalPoolBroker } from '../broker/capitalPoolBroker.js';
 import { getCapitalManager } from '../services/capitalPool.js';
 import { capitalConfig } from '../config/capital.js';
 import { recordEnter, recordExit } from '../agent/persistence.js';
+import { computeQtyNotional } from '../risk/manager.js';
+import { getConfig } from '../utils/env.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -268,25 +270,41 @@ async function executeEntryTrade(
     integrationLogger.debug(`Broker balance | equity=${equityUsd.toFixed(2)} free=${balance.freeUsd?.toFixed(2)}`);
     console.log(`[MetaOrchestrator.executeEntryTrade] Balance: equity=${equityUsd.toFixed(2)}, free=${balance.freeUsd?.toFixed(2)}`);
 
-    // Calculate position size using PositionSizer
+    // Calculate position size with leverage support
     const config = getQuantAIConfig();
-    const sizer = new PositionSizer(config.risk.baseRiskPerTradePct);
+    const envConfig = getConfig();
     
     const entryPrice = tech.last;
     const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
     const stopDistance = (tech.atr14 || tech.last * DEFAULT_ATR_PCT) * (config.exits.slAtrMult || 2); // Use ATR-based stop
     
-    const sizing = sizer.computeSize({
-      equityUsd,
-      entryPrice,
+    // Get risk percentage from profile or use default
+    const riskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
+    
+    // Get requested leverage from profile or use DEFAULT_MAX_LEVERAGE
+    const requestedLeverage = session.profileJson?.maxLeverage ?? envConfig.DEFAULT_MAX_LEVERAGE;
+    
+    // Use computeQtyNotional which respects leverage caps per symbol category
+    const sizingResult = await computeQtyNotional({
+      balanceUsd: equityUsd,
+      riskPct,
       stopDistanceAbs: stopDistance,
+      entryPrice,
+      requestedLeverage,
+      symbol: session.symbol,
+      mode: session.mode,
     });
+    
+    const qty = entryPrice > 0 ? sizingResult.notional / entryPrice : 0;
+    const leverage = sizingResult.leverageCap.resolved;
 
-    if (!sizing || sizing.qty <= 0) {
+    if (!qty || qty <= 0) {
       integrationLogger.warn('Position sizing resulted in 0 quantity', {
         equityUsd,
         entryPrice,
         stopDistance,
+        requestedLeverage,
+        resolvedLeverage: leverage,
       });
       console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: sizing returned qty=0`);
       
@@ -294,7 +312,7 @@ async function executeEntryTrade(
       await logTradeEvaluation({
         symbol: session.symbol,
         decision: 'order_blocked_sizing',
-        blockedReason: `qty=0: equity=${equityUsd.toFixed(2)}, stop=${stopDistance.toFixed(4)}, entry=${entryPrice.toFixed(4)}`,
+        blockedReason: `qty=0: equity=${equityUsd.toFixed(2)}, stop=${stopDistance.toFixed(4)}, entry=${entryPrice.toFixed(4)}, leverage=${leverage}x`,
         confidenceScore: signal.confidence,
         inputMetrics: {
           adx: tech.adx14,
@@ -309,15 +327,15 @@ async function executeEntryTrade(
       return;
     }
 
-    integrationLogger.info(`Position sized | qty=${sizing.qty} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)}`);
-    console.log(`[MetaOrchestrator.executeEntryTrade] Sizing: qty=${sizing.qty}, entryPrice=${entryPrice.toFixed(4)}, stopDist=${stopDistance.toFixed(4)}`);
+    integrationLogger.info(`Position sized | qty=${qty.toFixed(8)} notional=${sizingResult.notional.toFixed(2)} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)} leverage=${leverage}x`);
+    console.log(`[MetaOrchestrator.executeEntryTrade] Sizing: qty=${qty.toFixed(8)}, notional=${sizingResult.notional.toFixed(2)}, entryPrice=${entryPrice.toFixed(4)}, stopDist=${stopDistance.toFixed(4)}, leverage=${leverage}x`);
 
     // Register the trade entry with meta-adaptive system
     const registrationResult = await registerAdaptiveTradeEntry({
       sessionId: session.sessionId,
       symbol: session.symbol,
       signal,
-      qty: sizing.qty,
+      qty,
       entryPrice,
       stopDistance,
     });
@@ -354,7 +372,7 @@ async function executeEntryTrade(
       ? entryPrice + stopDistance
       : entryPrice - stopDistance;
 
-    console.log(`[MetaOrchestrator.executeEntryTrade] Calling broker.place(): side=${side}, qty=${sizing.qty}, stopPrice=${stopPrice.toFixed(4)}`);
+    console.log(`[MetaOrchestrator.executeEntryTrade] Calling broker.place(): side=${side}, qty=${qty.toFixed(8)}, stopPrice=${stopPrice.toFixed(4)}, leverage=${leverage}x`);
 
     const order = await withRetry(
       integrationLogger,
@@ -363,8 +381,9 @@ async function executeEntryTrade(
         symbol: session.symbol,
         side,
         type: 'market',
-        qty: sizing.qty,
+        qty,
         stopLoss: stopPrice,
+        leverage,
         clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
         // Add evaluation context for better logging
         _evaluationContext: {
@@ -408,12 +427,12 @@ async function executeEntryTrade(
           sessionId: session.sessionId,
           symbol: session.symbol,
           side,
-          qty: order.filledQty ?? sizing.qty,
+          qty: order.filledQty ?? qty,
           entryPrice: order.avgPrice ?? entryPrice,
           stop: stopPrice,
           leverage: order.leverage,
           requestedPrice: entryPrice,
-          requestedQty: sizing.qty,
+          requestedQty: qty,
           latencyMs: order.latencyMs,
           slippageBps: order.slippageBps,
           fillRatio: order.fillRatio,
@@ -443,7 +462,7 @@ async function executeEntryTrade(
     integrationLogger.success(`Entry order placed`, undefined, {
       orderId: order.id,
       side,
-      qty: sizing.qty,
+      qty,
       entryPrice,
       stopPrice,
       status: order.status,
@@ -454,7 +473,7 @@ async function executeEntryTrade(
     if (agent) {
       agent.pos = {
         side,
-        qty: sizing.qty,
+        qty,
         entry: entryPrice,
         stop: stopPrice,
         signal,
