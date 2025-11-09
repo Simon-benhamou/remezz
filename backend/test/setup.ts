@@ -4,6 +4,8 @@
  * This file runs before all tests to configure the test environment.
  */
 
+import { jest, expect } from '@jest/globals';
+
 // Set test environment variables
 process.env.NODE_ENV = 'test';
 process.env.UNIT_TEST_MODE = 'true';
