@@ -275,6 +275,7 @@ export type PersonalityProfile = {
 
 /**
  * Default parameters (fallback for symbols without learned profiles)
+ * Now includes all regime variants with intelligent defaults
  */
 export const DEFAULT_PARAMS: OptimalParams = {
   weights: {
@@ -295,6 +296,24 @@ export const DEFAULT_PARAMS: OptimalParams = {
     maxAtrPct: 8.0,
     cmf: 0.05,
   },
+};
+
+/**
+ * Complete default regime-aware parameters
+ * Used as ultimate fallback when no learned data exists
+ */
+export const DEFAULT_REGIME_PARAMS: RegimeAwareParams = {
+  default: DEFAULT_PARAMS,
+  low_volatility: getDefaultParamsByRegime('low_volatility'),
+  medium_volatility: DEFAULT_PARAMS, // Same as default
+  high_volatility: getDefaultParamsByRegime('high_volatility'),
+  long_bias: getDefaultParamsByRegime('long_bias'),
+  short_bias: getDefaultParamsByRegime('short_bias'),
+  low_volume: getDefaultParamsByRegime('low_volume'),
+  normal_volume: DEFAULT_PARAMS, // Same as default
+  high_volume: getDefaultParamsByRegime('high_volume'),
+  trending: getDefaultParamsByRegime('trending'),
+  ranging: getDefaultParamsByRegime('ranging'),
 };
 
 /**
