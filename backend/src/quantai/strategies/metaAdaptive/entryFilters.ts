@@ -737,11 +737,20 @@ export class EntryFilters {
 
     reasons.summary = ok ? 'OK' : 'BLOCKED';
 
+    const regimeContext = {
+      volatilityRegime: classifyVolatilityRegime(facts.atrPct),
+      directionBias: classifyDirectionBias(facts.ema20, facts.ema50),
+      volumeRegime: classifyVolumeRegime(facts.volume, facts.volumeMA, facts.volumeZScore),
+      trendingRanging: classifyTrendingRanging(facts.adx, facts.atrPct),
+      parameterSource: learnedProfile ? learnedProfile.source : 'static_config',
+    };
+
     return {
       ok,
       reasons,
       modifiers: Object.keys(modifiers).length ? modifiers : undefined,
       meta,
+      regimeContext,
     };
   }
 }

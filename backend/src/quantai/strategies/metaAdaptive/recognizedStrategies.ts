@@ -975,8 +975,9 @@ export async function registerAdaptiveTradeEntry(params: {
   executionMode?: 'market' | 'limit' | 'twap';
 }): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
   if (!params.signal || !params.signal.meta) return 'skipped';
-  const confidenceGatePassed = params.signal.confidenceGatePassed
-    ?? (Number.isFinite(params.signal.confidence) ? params.signal.confidence >= CONFIDENCE_THRESHOLD : false);
+  const confidenceGatePassed =
+    params.signal.confidenceGatePassed ??
+    (Number.isFinite(params.signal.confidence) ? params.signal.confidence >= metaAdaptiveConfidenceThreshold : false);
   const entryGatePassed = params.signal.entryEligibilityGatePassed
     ?? (Number.isFinite(params.signal.entryEligibilityScore)
       ? params.signal.entryEligibilityScore >= ENTRY_ELIGIBILITY_THRESHOLD
