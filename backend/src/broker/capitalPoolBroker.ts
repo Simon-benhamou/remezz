@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getTicker } from '../data/market.js';
+import { logTradeEvaluation } from '../learning/tradeEvaluationLogger.js';
 import type { Broker, BrokerMarginSnapshot, NewOrder, PlacedOrder } from './types.js';
 import { CapitalManager } from '../core/capital/CapitalManager.js';
 import { USD, ZERO_USD } from '../core/capital/types.js';
@@ -63,10 +64,13 @@ export class CapitalPoolBroker implements Broker {
 
     const desiredUsd = await this.estimateDesiredUsd(order);
     if (desiredUsd.raw <= ZERO_USD.raw) {
+      console.log(`[CapitalPoolBroker] REJECTED - invalid_desired_usd: agentId=${this.agentId}, symbol=${order.symbol}, desiredUsd=${desiredUsd.toNumber()}`);
       return this.rejectOrder(order, 'invalid_desired_usd');
     }
 
     const leverage = Math.max(1, Number.isFinite(order.leverage) && (order.leverage ?? 0) > 0 ? order.leverage! : 1);
+
+    console.log(`[CapitalPoolBroker] Attempting reserve: agentId=${this.agentId}, symbol=${order.symbol}, desiredUsd=${desiredUsd.toNumber()}, leverage=${leverage}`);
 
     const reservation = await this.capital.reserve({
       agentId: this.agentId,
@@ -77,8 +81,24 @@ export class CapitalPoolBroker implements Broker {
     });
 
     if (!reservation) {
+      const snapshot = await this.capital.getBalance();
+      console.log(`[CapitalPoolBroker] REJECTED - capital_reservation_failed: agentId=${this.agentId}, symbol=${order.symbol}`);
+      console.log(`  Pool snapshot: total=${snapshot.totalUSD.toNumber()}, free=${snapshot.freeUSD.toNumber()}, reserved=${snapshot.reservedUSD.toNumber()}, inPositions=${snapshot.inPositionsUSD.toNumber()}`);
+      console.log(`  Requested: ${desiredUsd.toNumber()}, minOrder: ${this.minOrderUsd.toNumber()}, leverage: ${leverage}`);
+      
+      // Log capital reservation failure
+      logTradeEvaluation({
+        symbol: order.symbol,
+        decision: 'order_blocked_capital',
+        blockedReason: `capital_exhausted: free=${snapshot.freeUSD.toNumber().toFixed(2)}, requested=${desiredUsd.toNumber().toFixed(2)}`,
+        confidenceScore: 0.5, // Unknown at broker level
+        inputMetrics: {},
+      }).catch(err => console.warn('Failed to log capital block:', err));
+      
       return this.rejectOrder(order, 'capital_reservation_failed');
     }
+
+    console.log(`[CapitalPoolBroker] Reserved successfully: granted=${reservation.grantedUSD.toNumber()}, placing order...`);
 
     try {
       const placed = await this.broker.place(order);

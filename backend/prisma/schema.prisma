@@ -427,7 +427,7 @@ model TradeEvaluation {
   id              String   @id @default(cuid())
   symbol          String
   timestamp       DateTime @default(now())
-  decision        String   // "executed" | "blocked"
+  decision        String   // "filter_passed" | "filter_blocked" | "order_placed" | "order_blocked_capital" | "order_blocked_sizing" | "order_blocked_registration" | "order_rejected"
   blockedReason   String?
   confidenceScore Float
   inputMetrics    Json     // Snapshot of indicator values: adx, cmf, atr_pct, slope, trend_strength, etc.

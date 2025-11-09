@@ -43,6 +43,7 @@ import {
   registerUniverseFetcher,
   __autoUniverseSchedulerTesting,
 } from '../autoUniverseScheduler.js';
+import { ensureSymbolProfile } from '../../symbolSpecificOptimization.js';
 
 export {
   getAutoUniverseStatusSnapshot,
@@ -2899,8 +2900,9 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
   const ok = score >= params.thresholds.minConfidence && adx >= params.thresholds.adx && trendStrength >= params.thresholds.trendStrength;
 
   // Log the trade evaluation for learning
-  const decision = ok ? 'executed' : 'blocked';
-  const blockedReason = ok ? undefined : reasons.join(', ');
+  // 'filter_passed' means entry filters PASSED, 'filter_blocked' means FAILED
+  const decision = ok ? 'filter_passed' : 'filter_blocked';
+  const blockedReason = ok ? undefined : (reasons.length > 0 ? reasons.join(', ') : 'entry_filters_failed');
   
   logTradeEvaluation({
     symbol,
@@ -3515,6 +3517,14 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       console.log(`🔄 Switching allocation to alternative ${bestOpportunity.symbol}`);
     }
 
+    // Ensure symbol profile exists before proceeding
+    try {
+      await ensureSymbolProfile(bestOpportunity.symbol);
+    } catch (error) {
+      console.error(`Failed to ensure symbol profile for ${bestOpportunity.symbol}:`, error);
+      // Don't block agent initialization if profile creation fails
+    }
+
     let currentDecisionId: string | null = null;
     try {
       currentDecisionId = await recordDecisionSnapshot({
@@ -3823,6 +3833,12 @@ async function maybeHandleDirectionalReversal(
       };
 
       try {
+        await ensureSymbolProfile(candidate.symbol);
+      } catch (error) {
+        console.error(`Failed to ensure symbol profile for ${candidate.symbol}:`, error);
+      }
+
+      try {
         await prisma.$executeRaw`
           UPDATE "AgentSession"
           SET "symbol" = ${candidate.symbol}, "currentSymbol" = ${candidate.symbol}, "lastSymbolSwitchAt" = NOW()
@@ -4043,6 +4059,11 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
             recentLossExits
           }];
           try {
+            await ensureSymbolProfile(best.symbol);
+          } catch (error) {
+            console.error(`Failed to ensure symbol profile for ${best.symbol}:`, error);
+          }
+          try {
             await prisma.$executeRaw`
               UPDATE "AgentSession"
               SET "symbol" = ${best.symbol}, "currentSymbol" = ${best.symbol}, "lastSymbolSwitchAt" = NOW()
@@ -4146,6 +4167,13 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         reasoning: bestOpportunity.reasoning.summary,
         sleepDuration: Math.round((now.getTime() - new Date(config?.selectedAt || now).getTime()) / (1000 * 60 * 60)) + 'h'
       }];
+      
+      // Ensure symbol profile exists
+      try {
+        await ensureSymbolProfile(bestOpportunity.symbol);
+      } catch (error) {
+        console.error(`Failed to ensure symbol profile for ${bestOpportunity.symbol}:`, error);
+      }
       
       // Update session with selected symbol and wake up
       try {
@@ -4360,6 +4388,13 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         trades: recentTrades
       }];
       
+      // Ensure symbol profile exists
+      try {
+        await ensureSymbolProfile(bestOpportunity.symbol);
+      } catch (error) {
+        console.error(`Failed to ensure symbol profile for ${bestOpportunity.symbol}:`, error);
+      }
+      
       // Update both symbol and currentSymbol via SQL
       try {
         await prisma.$executeRaw`
@@ -4518,6 +4553,13 @@ export async function triggerIntelligentReselection(sessionId: string): Promise<
       reasoning: 'User-triggered manual re-selection',
       forced: true
     }]);
+    
+    // Ensure symbol profile exists
+    try {
+      await ensureSymbolProfile(best.symbol);
+    } catch (error) {
+      console.error(`Failed to ensure symbol profile for ${best.symbol}:`, error);
+    }
     
     // Update database
     await prisma.$executeRaw`

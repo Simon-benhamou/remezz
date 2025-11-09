@@ -34,8 +34,9 @@ export type SymbolProfile = {
 
 /**
  * Get symbol profile with custom thresholds
+ * Creates a default profile if none exists
  */
-export async function getSymbolProfile(symbol: string): Promise<SymbolProfile | null> {
+export async function getSymbolProfile(symbol: string, opts?: { createIfMissing?: boolean }): Promise<SymbolProfile | null> {
   try {
     const profile = await prisma.$queryRaw<SymbolProfile[]>`
       SELECT * FROM symbol_profiles
@@ -44,6 +45,18 @@ export async function getSymbolProfile(symbol: string): Promise<SymbolProfile | 
     `.catch(() => null);
 
     if (!profile || profile.length === 0) {
+      // Auto-create default profile if requested
+      if (opts?.createIfMissing !== false) {
+        console.log(`📝 Creating default profile for ${symbol}...`);
+        await ensureSymbolProfile(symbol);
+        // Try to fetch again
+        const retry = await prisma.$queryRaw<SymbolProfile[]>`
+          SELECT * FROM symbol_profiles
+          WHERE symbol = ${symbol}
+          LIMIT 1
+        `.catch(() => null);
+        return retry && retry.length > 0 ? retry[0] : null;
+      }
       return null;
     }
 
@@ -51,6 +64,55 @@ export async function getSymbolProfile(symbol: string): Promise<SymbolProfile | 
   } catch (error) {
     console.error('Failed to get symbol profile:', error);
     return null;
+  }
+}
+
+/**
+ * Ensure a symbol has a profile (create default if missing)
+ */
+export async function ensureSymbolProfile(symbol: string): Promise<void> {
+  try {
+    const existing = await prisma.$queryRaw<SymbolProfile[]>`
+      SELECT symbol FROM symbol_profiles
+      WHERE symbol = ${symbol}
+      LIMIT 1
+    `.catch(() => null);
+
+    if (existing && existing.length > 0) {
+      return; // Already exists
+    }
+
+    const tier = getSymbolTier(symbol);
+    const defaultMetrics = {
+      totalTrades: 0,
+      winRate: 0,
+      avgPnl: 0,
+      sharpeRatio: 0,
+      maxDrawdown: 0,
+    };
+
+    await prisma.$executeRaw`
+      INSERT INTO symbol_profiles (
+        symbol, tier, custom_thresholds, performance_metrics,
+        market_characteristics, optimization_status, last_optimized_at, notes
+      ) VALUES (
+        ${symbol},
+        ${tier},
+        NULL,
+        ${JSON.stringify(defaultMetrics)}::jsonb,
+        ${JSON.stringify({})}::jsonb,
+        'initial',
+        NULL,
+        'Auto-created default profile'
+      )
+      ON CONFLICT (symbol) DO NOTHING
+    `.catch(err => {
+      console.warn(`Failed to create default profile for ${symbol}:`, err.message);
+    });
+
+    console.log(`✅ Default profile created for ${symbol} (tier: ${tier})`);
+  } catch (error) {
+    console.error(`Failed to ensure profile for ${symbol}:`, error);
   }
 }
 
@@ -71,9 +133,9 @@ export async function upsertSymbolProfile(
       ) VALUES (
         ${symbol},
         ${tier},
-        ${JSON.stringify(updates.customThresholds || null)},
-        ${JSON.stringify(updates.performanceMetrics || {})},
-        ${JSON.stringify(updates.marketCharacteristics || {})},
+        ${JSON.stringify(updates.customThresholds || null)}::jsonb,
+        ${JSON.stringify(updates.performanceMetrics || {})}::jsonb,
+        ${JSON.stringify(updates.marketCharacteristics || {})}::jsonb,
         ${updates.optimizationStatus || 'initial'},
         ${new Date(updates.lastOptimizedAt || Date.now())},
         ${updates.notes || null}

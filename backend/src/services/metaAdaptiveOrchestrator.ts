@@ -25,6 +25,7 @@ import { PositionSizer } from '../quantai/risk/positionSizing.js';
 import { getQuantAIConfig } from '../quantai/config.js';
 import { createLogger } from '../utils/logger.js';
 import { createIntegrationLogger, withLogging, withRetry } from '../utils/integrationLogger.js';
+import { logTradeEvaluation } from '../learning/tradeEvaluationLogger.js';
 import { AgentHub } from '../agent/hub.js';
 import type { Broker } from '../broker/types.js';
 import { PaperBroker } from '../broker/paper.js';
@@ -161,6 +162,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
             `[${session.sessionId}] Best entry signal: ${(bestSignal as any).strategyId} (${bestSignal.bias}) score=${bestSignal.meta?.score}`
           );
 
+          console.log(`[MetaOrchestrator] Calling executeEntryTrade for agent=${session.sessionId}, symbol=${session.symbol}, bias=${bestSignal.bias}`);
           await executeEntryTrade(session, bestSignal, tech);
         }
       } else {
@@ -194,13 +196,17 @@ async function executeEntryTrade(
 
   try {
     integrationLogger.info(`Executing entry trade | bias=${signal.bias} strategy=${(signal as any).strategyId || signal.id} confidence=${signal.confidence.toFixed(3)}`);
+    console.log(`[MetaOrchestrator.executeEntryTrade] START: agent=${session.sessionId}, symbol=${session.symbol}, bias=${signal.bias}`);
 
     // Get broker
     const broker = await getBrokerForSession(session);
     if (!broker) {
       integrationLogger.error('No broker available for session');
+      console.log(`[MetaOrchestrator.executeEntryTrade] ERROR: No broker available`);
       return;
     }
+
+    console.log(`[MetaOrchestrator.executeEntryTrade] Got broker, fetching balance...`);
 
     // Get account balance for position sizing
     const balance = await withLogging(
@@ -211,6 +217,7 @@ async function executeEntryTrade(
     
     const equityUsd = balance.equityUsd || session.accountBalanceUsd || 1000;
     integrationLogger.debug(`Broker balance | equity=${equityUsd.toFixed(2)} free=${balance.freeUsd?.toFixed(2)}`);
+    console.log(`[MetaOrchestrator.executeEntryTrade] Balance: equity=${equityUsd.toFixed(2)}, free=${balance.freeUsd?.toFixed(2)}`);
 
     // Calculate position size using PositionSizer
     const config = getQuantAIConfig();
@@ -232,10 +239,28 @@ async function executeEntryTrade(
         entryPrice,
         stopDistance,
       });
+      console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: sizing returned qty=0`);
+      
+      // Log that order was blocked due to position sizing
+      await logTradeEvaluation({
+        symbol: session.symbol,
+        decision: 'order_blocked_sizing',
+        blockedReason: `qty=0: equity=${equityUsd.toFixed(2)}, stop=${stopDistance.toFixed(4)}, entry=${entryPrice.toFixed(4)}`,
+        confidenceScore: signal.confidence,
+        inputMetrics: {
+          adx: tech.adx14,
+          atrPct: (tech.atr14 / tech.last) * 100,
+          cmf: (tech as any).cmf20,
+          rsi14: tech.rsi14,
+          volumeRatio: (tech as any).volumeRatio,
+        },
+      }).catch(err => console.warn('Failed to log sizing block:', err));
+      
       return;
     }
 
     integrationLogger.info(`Position sized | qty=${sizing.qty} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)}`);
+    console.log(`[MetaOrchestrator.executeEntryTrade] Sizing: qty=${sizing.qty}, entryPrice=${entryPrice.toFixed(4)}, stopDist=${stopDistance.toFixed(4)}`);
 
     // Register the trade entry with meta-adaptive system
     const registrationResult = await registerAdaptiveTradeEntry({
@@ -249,14 +274,35 @@ async function executeEntryTrade(
 
     if (registrationResult === 'skipped' || registrationResult === 'predictor_blocked') {
       integrationLogger.warn(`Trade registration ${registrationResult}`);
+      console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: registration ${registrationResult}`);
+      
+      // Log that order was blocked by registration (predictor or cooldown)
+      await logTradeEvaluation({
+        symbol: session.symbol,
+        decision: 'order_blocked_registration',
+        blockedReason: registrationResult === 'predictor_blocked' ? 'predictor_confidence_too_low' : 'cooldown_active',
+        confidenceScore: signal.confidence,
+        inputMetrics: {
+          adx: tech.adx14,
+          atrPct: (tech.atr14 / tech.last) * 100,
+          cmf: (tech as any).cmf20,
+          rsi14: tech.rsi14,
+          volumeRatio: (tech as any).volumeRatio,
+        },
+      }).catch(err => console.warn('Failed to log registration block:', err));
+      
       return;
     }
+
+    console.log(`[MetaOrchestrator.executeEntryTrade] Registration OK, placing order...`);
 
     // Place the actual order via broker
     const side = signal.bias === 'short' ? 'sell' : 'buy';
     const stopPrice = signal.bias === 'short'
       ? entryPrice + stopDistance
       : entryPrice - stopDistance;
+
+    console.log(`[MetaOrchestrator.executeEntryTrade] Calling broker.place(): side=${side}, qty=${sizing.qty}, stopPrice=${stopPrice.toFixed(4)}`);
 
     const order = await withRetry(
       integrationLogger,
@@ -272,6 +318,40 @@ async function executeEntryTrade(
       3,
       500
     );
+
+    console.log(`[MetaOrchestrator.executeEntryTrade] Order placed! id=${order.id}, status=${order.status}, filledQty=${order.filledQty}`);
+
+    // Log successful order placement
+    if (order.status !== 'rejected') {
+      await logTradeEvaluation({
+        symbol: session.symbol,
+        decision: 'order_placed',
+        blockedReason: undefined,
+        confidenceScore: signal.confidence,
+        inputMetrics: {
+          adx: tech.adx14,
+          atrPct: (tech.atr14 / tech.last) * 100,
+          cmf: (tech as any).cmf20,
+          rsi14: tech.rsi14,
+          volumeRatio: (tech as any).volumeRatio,
+        },
+      }).catch(err => console.warn('Failed to log order placement:', err));
+    } else {
+      // Order was rejected by broker
+      await logTradeEvaluation({
+        symbol: session.symbol,
+        decision: 'order_rejected',
+        blockedReason: (order as any).error || 'broker_rejected',
+        confidenceScore: signal.confidence,
+        inputMetrics: {
+          adx: tech.adx14,
+          atrPct: (tech.atr14 / tech.last) * 100,
+          cmf: (tech as any).cmf20,
+          rsi14: tech.rsi14,
+          volumeRatio: (tech as any).volumeRatio,
+        },
+      }).catch(err => console.warn('Failed to log order rejection:', err));
+    }
 
     integrationLogger.success(`Entry order placed`, undefined, {
       orderId: order.id,

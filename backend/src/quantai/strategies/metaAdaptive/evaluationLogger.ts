@@ -37,15 +37,31 @@ export async function logMetaAdaptiveEvaluation(
     };
 
     // Determine decision
-    const decision = evaluation.ok ? 'executed' : 'blocked';
+    // 'filter_passed' means entry filters PASSED
+    // 'filter_blocked' means entry filters FAILED
+    const decision = evaluation.ok ? 'filter_passed' : 'filter_blocked';
     
     // Extract blocked reasons
     const blockedReasons: string[] = [];
     if (!evaluation.ok && evaluation.reasons) {
       for (const [key, value] of Object.entries(evaluation.reasons)) {
-        if (typeof value === 'string' && (value.includes('FAIL') || value.includes('BLOCKED'))) {
-          blockedReasons.push(`${key}: ${value}`);
+        if (typeof value === 'string') {
+          // Include all non-OK reasons
+          if (value !== 'OK' && value !== 'PASS') {
+            blockedReasons.push(`${key}=${value}`);
+          }
         }
+      }
+    }
+    
+    // If blocked but no specific reasons found, provide generic reason
+    if (!evaluation.ok && blockedReasons.length === 0) {
+      // Check meta object for more context
+      if (evaluation.meta) {
+        const metaStr = JSON.stringify(evaluation.meta);
+        blockedReasons.push(`entry_filters_failed (meta: ${metaStr.substring(0, 100)})`);
+      } else {
+        blockedReasons.push('entry_filters_failed');
       }
     }
 

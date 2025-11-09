@@ -1,4 +1,12 @@
 import { QuantAIEntryFilterConfig } from '../../config.js';
+import { 
+  getPersonalityProfile, 
+  classifyVolatilityRegime, 
+  classifyDirectionBias, 
+  classifyVolumeRegime, 
+  classifyTrendingRanging,
+  type OptimalParams 
+} from '../../../learning/personalityProfile.js';
 
 export type EntryFacts = {
   price?: number;
@@ -77,7 +85,7 @@ export type EntryRelaxation = {
 export class EntryFilters {
   constructor(private readonly cfg: QuantAIEntryFilterConfig) {}
 
-  evaluateEntry(
+  async evaluateEntry(
     facts: EntryFacts,
     opts: {
       minRr?: number | null;
@@ -91,7 +99,7 @@ export class EntryFilters {
       bias?: 'long' | 'short' | 'none' | null;
       playbook?: string | null;
     } = {},
-  ): EntryEvaluation {
+  ): Promise<EntryEvaluation> {
     const reasons: Record<string, string> = {};
     const modifiers: { sizeMultiplier?: number } = {};
     const meta: EntryEvaluation['meta'] = {};
@@ -119,6 +127,45 @@ export class EntryFilters {
     let spreadAtrRatioLimit = this.cfg.dynamic?.spreadAtrRatioLimit;
     const relaxation = opts.relaxation ?? null;
     let deferredMinAdxDelta: number | null = null;
+
+    // 🎯 Regime-aware adaptation using learned personality profiles
+    let learnedProfile: OptimalParams | null = null;
+    if (opts.symbol) {
+      try {
+        // Classify current market regime
+        const volatilityRegime = classifyVolatilityRegime(facts.atrPct);
+        const directionBias = classifyDirectionBias(facts.ema20, facts.ema50);
+        const volumeRegime = classifyVolumeRegime(facts.volume, facts.volumeMA, facts.volumeZScore);
+        const trendingRanging = classifyTrendingRanging(facts.adx, facts.atrPct);
+        
+        // Fetch learned profile for this symbol and regime
+        learnedProfile = await getPersonalityProfile(opts.symbol, {
+          volatilityRegime,
+          directionBias,
+          volumeRegime,
+          trendingRanging,
+        });
+        
+        // Apply learned thresholds if available (they override static config)
+        if (learnedProfile) {
+          if (learnedProfile.thresholds.adx != null) {
+            minAdx = learnedProfile.thresholds.adx;
+          }
+          if (learnedProfile.thresholds.minConfidence != null) {
+            confidenceThreshold = learnedProfile.thresholds.minConfidence;
+          }
+          // trendStrength threshold maps to our confidence filtering
+          if (learnedProfile.thresholds.trendStrength != null && facts.trendStrength != null) {
+            // If trendStrength is below learned threshold, increase confidence requirement
+            if (facts.trendStrength < learnedProfile.thresholds.trendStrength) {
+              confidenceThreshold = Math.max(confidenceThreshold, confidenceThreshold * 1.1);
+            }
+          }
+        }
+      } catch (error) {
+        // Silent fail - will use static config as fallback
+      }
+    }
 
     const playbookKey = opts.playbook ? opts.playbook.toLowerCase().replace(/\s+/g, '_') : null;
     const tierOverride = tier ? this.cfg.tierOverrides?.[tier] : undefined;

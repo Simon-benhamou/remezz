@@ -19,6 +19,7 @@ import { selectBestPerp } from '../ai/orchestrator.js';
 import { prisma } from '../db/client.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { requestStrategy } from '../ai/strategyManager.js';
+import { ensureSymbolProfile } from './symbolSpecificOptimization.js';
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan } from './planStore.js';
 import { getTicker, getOhlcvWarmupState } from '../data/market.js';
@@ -550,6 +551,16 @@ export async function startAgentCreation(
       error: formatError(error),
     });
     throw error;
+  }
+
+  // Ensure symbol profile exists before creating session
+  if (selection?.symbol) {
+    try {
+      await ensureSymbolProfile(selection.symbol);
+    } catch (error) {
+      console.error(`Failed to ensure symbol profile for ${selection.symbol}:`, error);
+      // Don't block agent creation if profile creation fails
+    }
   }
 
   const createStart = Date.now();
