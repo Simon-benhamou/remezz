@@ -19,6 +19,8 @@ const workerId = `scheduler-${process.pid}-${Math.random().toString(36).slice(2,
 let workerTimer: NodeJS.Timeout | null = null;
 let workerIntervalMs = 1000;
 let workerStarted = false;
+let dbConnectionFailed = false;
+let dbErrorReported = false;
 
 export function registerSchedulerJobHandler(type: string, handler: JobHandler) {
   handlers.set(type, handler);
@@ -88,72 +90,97 @@ export async function listSchedulerJobs({
 }
 
 async function processDueJobsOnce() {
-  const now = new Date();
-  const candidates = await prisma.schedulerJob.findMany({
-    where: {
-      status: 'pending',
-      runAt: { lte: now },
-    },
-    orderBy: { runAt: 'asc' },
-    take: 10,
-  });
+  // Skip if database connection previously failed
+  if (dbConnectionFailed) {
+    return;
+  }
 
-  for (const job of candidates) {
-    const claim = await prisma.schedulerJob.updateMany({
+  try {
+    const now = new Date();
+    const candidates = await prisma.schedulerJob.findMany({
       where: {
-        id: job.id,
         status: 'pending',
-        lockedBy: null,
+        runAt: { lte: now },
       },
-      data: {
-        status: 'running',
-        lockedBy: workerId,
-        lockedAt: new Date(),
-        attempts: { increment: 1 },
-        updatedAt: new Date(),
-      },
+      orderBy: { runAt: 'asc' },
+      take: 10,
     });
-    if (!claim.count) {
-      continue;
-    }
 
-    const handler = handlers.get(job.type);
-    if (!handler) {
-      console.error(`[Scheduler] No handler registered for job type ${job.type}`);
-      await prisma.schedulerJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'failed',
+    for (const job of candidates) {
+      const claim = await prisma.schedulerJob.updateMany({
+        where: {
+          id: job.id,
+          status: 'pending',
           lockedBy: null,
-          lockedAt: null,
-          lastError: 'no_handler_registered',
+        },
+        data: {
+          status: 'running',
+          lockedBy: workerId,
+          lockedAt: new Date(),
+          attempts: { increment: 1 },
+          updatedAt: new Date(),
         },
       });
-      continue;
-    }
+      if (!claim.count) {
+        continue;
+      }
 
-    try {
-      await handler(job as SchedulerJobRecord);
-      await prisma.schedulerJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'done',
-          lockedBy: null,
-          lockedAt: null,
-          lastError: null,
-        },
-      });
-    } catch (error) {
-      console.error(`[Scheduler] Job ${job.id} (${job.type}) failed:`, error);
-      await prisma.schedulerJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'failed',
-          lockedBy: null,
-          lockedAt: null,
-          lastError: error instanceof Error ? error.message : String(error),
-        },
-      });
+      const handler = handlers.get(job.type);
+      if (!handler) {
+        console.error(`[Scheduler] No handler registered for job type ${job.type}`);
+        await prisma.schedulerJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'failed',
+            lockedBy: null,
+            lockedAt: null,
+            lastError: 'no_handler_registered',
+          },
+        });
+        continue;
+      }
+
+      try {
+        await handler(job as SchedulerJobRecord);
+        await prisma.schedulerJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'done',
+            lockedBy: null,
+            lockedAt: null,
+            lastError: null,
+          },
+        });
+      } catch (error) {
+        console.error(`[Scheduler] Job ${job.id} (${job.type}) failed:`, error);
+        await prisma.schedulerJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'failed',
+            lockedBy: null,
+            lockedAt: null,
+            lastError: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    }
+  } catch (error) {
+    // Check if this is a database connection error
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorName = error instanceof Error ? error.constructor.name : '';
+    
+    if (errorName.includes('PrismaClientInitializationError') || 
+        errorMessage.includes("Can't reach database server") ||
+        errorMessage.includes('database server is running')) {
+      dbConnectionFailed = true;
+      if (!dbErrorReported) {
+        console.warn('⚠️ SchedulerJobService: Database connection unavailable. Job scheduling disabled.');
+        console.warn('💡 Please configure DATABASE_URL environment variable to enable scheduled jobs.');
+        dbErrorReported = true;
+      }
+    } else {
+      // Re-throw other errors to be caught by the interval handler
+      throw error;
     }
   }
 }
