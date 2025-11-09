@@ -167,7 +167,10 @@ export function startSchedulerWorker(options: { intervalMs?: number } = {}) {
     return;
   }
   workerStarted = true;
-  workerIntervalMs = Math.max(500, Number(options.intervalMs ?? process.env.SCHEDULER_WORKER_INTERVAL_MS ?? '1000'));
+  workerIntervalMs = Math.max(
+    500,
+    Number(options.intervalMs ?? process.env.SCHEDULER_WORKER_INTERVAL_MS ?? '15000'),
+  );
   workerTimer = setInterval(() => {
     processDueJobsOnce().catch((error) => console.error('[Scheduler] cycle error:', error));
   }, workerIntervalMs);
