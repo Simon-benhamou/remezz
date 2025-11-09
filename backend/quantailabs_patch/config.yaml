@@ -17,88 +17,88 @@ fees_slippage:
   default_slippage_bps: 2.0        # 0.02% avg slippage
 
 filters:
-  min_adx: 14                      # allow entries if ADX >= 14 (crypto momentum is noisier)
-  min_dollar_volume: 50000000        # $150k+ recent liquidity is enough for most pairs
-  min_rr: 1.15                     # baseline RR so we still target >=1.15R
-  min_atr_pct: 0.08                # accept quieter consolidations (ATR% of price)
-  max_spread_bps: 8               # crypto spreads can expand during chop
-  confidence_threshold: 0.55       # slightly more permissive confidence gate
+  min_adx: 12                      # allow entries if ADX >= 12 (crypto momentum is noisier, accept ranging markets)
+  min_dollar_volume: 150000        # $150k+ recent liquidity is enough for most pairs
+  min_rr: 1.05                     # baseline RR lowered to 1.05R for more opportunities
+  min_atr_pct: 0.05                # accept quieter consolidations (ATR% of price) - lowered for low volatility periods
+  max_spread_bps: 12               # crypto spreads can expand during chop - increased tolerance
+  confidence_threshold: 0.50       # more permissive confidence gate to capture quality setups
   use_confidence_filter: true
   max_atr_pct: 12.0                # keep trading until ATR% becomes extreme
   tier_overrides:
     tier1:
-      min_rr: 1.3
-      min_dollar_volume: 3000000
-      max_spread_bps: 8
-      confidence_threshold_delta: 0.01
+      min_rr: 1.2                  # lowered from 1.3
+      min_dollar_volume: 2000000   # lowered from 3M
+      max_spread_bps: 10           # increased from 8
+      confidence_threshold_delta: 0.00  # no additional confidence requirement
       max_atr_pct: 6.0
     tier2:
-      min_dollar_volume: 500000
-      min_rr: 1.2
-      max_spread_bps: 12
+      min_dollar_volume: 400000    # lowered from 500k
+      min_rr: 1.1                  # lowered from 1.2
+      max_spread_bps: 14           # increased from 12
     tier3:
-      min_adx: 18
-      min_rr: 1.4
-      min_dollar_volume: 150000
-      max_spread_bps: 18
-      confidence_threshold_delta: 0.02
-      min_atr_pct_multiplier: 0.6
+      min_adx: 14                  # lowered from 18 to accept weaker trends
+      min_rr: 1.25                 # lowered from 1.4
+      min_dollar_volume: 100000    # lowered from 150k
+      max_spread_bps: 20           # increased from 18
+      confidence_threshold_delta: 0.00  # removed additional confidence requirement
+      min_atr_pct_multiplier: 0.4  # lowered from 0.6 to accept lower volatility
       max_atr_pct: 12.0
-      spread_atr_ratio_limit: 0.6
+      spread_atr_ratio_limit: 0.7  # increased from 0.6
   dynamic:
-    baseline_atr_multiplier: 0.45    # require ATR to be at least 45% of baseline
-    atr_high_vol_threshold_pct: 1.5  # tighten ADX only when ATR% >= 1.5%
-    atr_high_vol_min_adx: 18
-    atr_extreme_vol_threshold_pct: 4.0
-    atr_extreme_vol_min_adx: 22
-    atr_extreme_vol_min_rr: 1.35
+    baseline_atr_multiplier: 0.35    # require ATR to be at least 35% of baseline (lowered from 0.45)
+    atr_high_vol_threshold_pct: 1.8  # tighten ADX only when ATR% >= 1.8% (raised from 1.5%)
+    atr_high_vol_min_adx: 16         # lowered from 18
+    atr_extreme_vol_threshold_pct: 4.5  # raised from 4.0
+    atr_extreme_vol_min_adx: 20      # lowered from 22
+    atr_extreme_vol_min_rr: 1.25     # lowered from 1.35
     atr_max_pct: 12.0
     atr_max_pct_by_tier:
       tier1: 6.0
       tier2: 9.0
       tier3: 12.0
-    spread_atr_ratio_limit: 0.35     # allow spreads up to 55% of ATR% before blocking
+    spread_atr_ratio_limit: 0.45     # allow spreads up to 45% of ATR% before blocking (raised from 0.35)
     confidence_tier_adjustments:
-      tier3: 0.02
+      tier3: 0.00                    # removed additional confidence requirement
     rr_tier_adjustments:
-      tier1: 0.15
-      tier3: 0.2
+      tier1: 0.10                    # lowered from 0.15
+      tier3: 0.15                    # lowered from 0.20
     aggressiveness_adjustments:
       conservative:
-        min_rr_delta: 0.05
-        confidence_delta: 0.015
+        min_rr_delta: 0.03           # lowered from 0.05
+        confidence_delta: 0.01       # lowered from 0.015
       aggressive:
-        min_rr_delta: -0.25
-        min_adx_delta: -3
-        confidence_delta: -0.04
-        min_atr_pct_delta: -0.06
+        min_rr_delta: -0.30          # more aggressive (from -0.25)
+        min_adx_delta: -4            # more aggressive (from -3)
+        confidence_delta: -0.06      # more aggressive (from -0.04)
+        min_atr_pct_delta: -0.08     # more aggressive (from -0.06)
     dry_spell:
       enabled: true
-      min_minutes_without_trade: 30
-      rejections_for_step: 4
-      relaxation_step_minutes: 20
-      max_steps: 4
-      min_adx_delta_per_step: -2.5
-      min_rr_delta_per_step: -0.15
-      confidence_delta_per_step: -0.03
-      min_atr_pct_delta_per_step: -0.04
+      min_minutes_without_trade: 20  # trigger relaxation sooner (from 30)
+      rejections_for_step: 3         # relax after fewer rejections (from 4)
+      relaxation_step_minutes: 15    # faster relaxation (from 20)
+      max_steps: 5                   # allow more relaxation steps (from 4)
+      min_adx_delta_per_step: -3.0   # more aggressive relaxation (from -2.5)
+      min_rr_delta_per_step: -0.18   # more aggressive relaxation (from -0.15)
+      confidence_delta_per_step: -0.04  # more aggressive relaxation (from -0.03)
+      min_atr_pct_delta_per_step: -0.05  # more aggressive relaxation (from -0.04)
   playbook_overrides:
     trend_following:
-      min_rr: 1.35
-      min_adx: 18
-      min_atr_pct: 0.1
-      confidence_threshold: 0.58
+      min_rr: 1.2                    # lowered from 1.35
+      min_adx: 15                    # lowered from 18
+      min_atr_pct: 0.07              # lowered from 0.1
+      confidence_threshold: 0.52     # lowered from 0.58
     momentum_breakout:
-      min_rr: 1.55
-      min_adx: 24
-      min_atr_pct: 0.14
-      max_spread_bps: 12
-      confidence_threshold: 0.6
+      min_rr: 1.35                   # lowered from 1.55
+      min_adx: 20                    # lowered from 24
+      min_atr_pct: 0.10              # lowered from 0.14
+      max_spread_bps: 15             # increased from 12
+      confidence_threshold: 0.55     # lowered from 0.6
     mean_reversion:
-      min_rr: 1.1
-      min_atr_pct: 0.06
-      max_spread_bps: 20
-      confidence_threshold: 0.52
+      min_rr: 1.0                    # lowered from 1.1
+      min_atr_pct: 0.04              # lowered from 0.06
+      max_spread_bps: 24             # increased from 20
+      confidence_threshold: 0.48     # lowered from 0.52
 
 entries:
   ema_fast: 20

@@ -249,11 +249,11 @@ export type QuantAIConfig = {
 };
 
 const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
-  baselineAtrMultiplier: 0.45,
-  atrHighVolThresholdPct: 1.5,
+  baselineAtrMultiplier: 0.35,
+  atrHighVolThresholdPct: 1.8,
   atrHighVolMinAdx: 16,
-  atrExtremeVolThresholdPct: 3.5,
-  atrExtremeVolMinAdx: 19,
+  atrExtremeVolThresholdPct: 4.5,
+  atrExtremeVolMinAdx: 20,
   atrExtremeVolMinRr: 1.25,
   atrMaxPct: 12,
   atrMaxPctByTier: {
@@ -261,7 +261,7 @@ const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
     tier2: 9,
     tier3: 12,
   },
-  spreadAtrRatioLimit: 0.55,
+  spreadAtrRatioLimit: 0.45,
   spreadSoftPenalty: 0.85,
   rrNearThresholdFactor: 0.9,
   momentumFastTrack: {
@@ -277,11 +277,11 @@ const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
     nearThresholdFactor: 0.9,
   },
   confidenceTierAdjustments: {
-    tier3: 0.02,
+    tier3: 0.00,
   },
   rrTierAdjustments: {
-    tier1: 0.15,
-    tier3: 0.2,
+    tier1: 0.10,
+    tier3: 0.15,
   },
   directionalFilter: {
     enabled: true,
@@ -296,27 +296,27 @@ const DEFAULT_DYNAMIC_FILTERS: QuantAIEntryFilterDynamicConfig = {
   },
   drySpell: {
     enabled: true,
-    minMinutesWithoutTrade: 30,
+    minMinutesWithoutTrade: 20,
     rejectionsForStep: 3,
     relaxationStepMinutes: 15,
-    maxSteps: 4,
+    maxSteps: 5,
     minAdxDeltaPerStep: -3,
     minRrDeltaPerStep: -0.18,
-    confidenceDeltaPerStep: -0.035,
+    confidenceDeltaPerStep: -0.04,
     minAtrPctDeltaPerStep: -0.05,
   },
 };
 
 DEFAULT_DYNAMIC_FILTERS.aggressivenessAdjustments = {
   conservative: {
-    minRrDelta: 0.05,
-    confidenceDelta: 0.015,
+    minRrDelta: 0.03,
+    confidenceDelta: 0.01,
   },
   aggressive: {
-    minRrDelta: -0.25,
-    minAdxDelta: -3,
-    confidenceDelta: -0.04,
-    minAtrPctDelta: -0.06,
+    minRrDelta: -0.30,
+    minAdxDelta: -4,
+    confidenceDelta: -0.06,
+    minAtrPctDelta: -0.08,
   },
 };
 
@@ -345,36 +345,36 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     defaultSlippageBps: 2.0,
   },
   filters: {
-    minAdx: 14,
+    minAdx: 12,
     minDollarVolume: 150_000,
-    minRr: 1.1,
-    minAtrPct: 0.08,
-    maxSpreadBps: 16,
-    confidenceThreshold: 0.55,
+    minRr: 1.05,
+    minAtrPct: 0.05,
+    maxSpreadBps: 12,
+    confidenceThreshold: 0.50,
     useConfidenceFilter: true,
     maxAtrPct: 12,
     tierOverrides: {
       tier1: {
-        minRr: 1.25,
-        minDollarVolume: 3_000_000,
-        maxSpreadBps: 8,
-        confidenceThresholdDelta: 0.01,
+        minRr: 1.2,
+        minDollarVolume: 2_000_000,
+        maxSpreadBps: 10,
+        confidenceThresholdDelta: 0.00,
         maxAtrPct: 6,
       },
       tier2: {
-        minDollarVolume: 500_000,
-        minRr: 1.15,
-        maxSpreadBps: 12,
+        minDollarVolume: 400_000,
+        minRr: 1.1,
+        maxSpreadBps: 14,
       },
       tier3: {
-        minAdx: 18,
-        minRr: 1.32,
-        minDollarVolume: 150_000,
-        maxSpreadBps: 18,
-        confidenceThresholdDelta: 0.02,
-        minAtrPctMultiplier: 0.6,
+        minAdx: 14,
+        minRr: 1.25,
+        minDollarVolume: 100_000,
+        maxSpreadBps: 20,
+        confidenceThresholdDelta: 0.00,
+        minAtrPctMultiplier: 0.4,
         maxAtrPct: 12,
-        spreadAtrRatioLimit: 0.6,
+        spreadAtrRatioLimit: 0.7,
       },
     },
     volatilityProfileOverrides: {

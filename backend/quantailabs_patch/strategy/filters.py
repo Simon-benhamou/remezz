@@ -3,16 +3,16 @@ from typing import Dict, Tuple
 
 @dataclass
 class FilterConfig:
-    min_adx: float = 15.0  # Reduced from 18.0 to capture more momentum setups
-    min_dollar_volume: float = 500_000.0
-    min_rr: float = 1.1  # Reduced from 1.3 to allow more opportunities
-    min_atr_pct: float = 0.2
-    max_spread_bps: float = 10.0  # Increased from 8.0 for more flexibility
-    confidence_threshold: float = 0.52  # Reduced from 0.58 to capture more quality setups
+    min_adx: float = 12.0  # Reduced from 15.0 to capture more momentum setups
+    min_dollar_volume: float = 150_000.0  # Fixed: was incorrectly very high
+    min_rr: float = 1.05  # Reduced from 1.1 to allow more opportunities
+    min_atr_pct: float = 0.05  # Reduced from 0.2 to accept lower volatility periods
+    max_spread_bps: float = 12.0  # Increased from 10.0 for more flexibility
+    confidence_threshold: float = 0.50  # Reduced from 0.52 to capture more quality setups
     use_confidence_filter: bool = True
     adaptive_confidence: bool = True  # Enable adaptive confidence based on other factors
     # Adaptive confidence parameters
-    adaptive_threshold_floor: float = 0.45  # Minimum confidence threshold
+    adaptive_threshold_floor: float = 0.42  # Minimum confidence threshold (lowered from 0.45)
     adaptive_reduction_per_signal: float = 0.05  # Threshold reduction per strong signal
     adaptive_max_signals: int = 2  # Maximum number of signals for reduction
 
