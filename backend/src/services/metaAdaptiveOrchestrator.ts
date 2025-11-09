@@ -174,7 +174,6 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
       const dbPosition = await prisma.position.findFirst({
         where: {
           sessionId: session.sessionId,
-          closedAt: null,
         },
       });
       const hasPosition = dbPosition !== null;
