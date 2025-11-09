@@ -423,7 +423,7 @@ async function runMetaAdaptiveComparison(): Promise<{
     sideAccumulator.attempts += 1;
     strategyAccumulator.attempts += 1;
 
-    const signals = evaluateRecognizedStrategies(scenario.snap, {
+    const signals = await evaluateRecognizedStrategies(scenario.snap, {
       sessionId: loopSessionId,
       symbol: scenario.snap.symbol ?? 'ETH/USDT',
       bias: scenario.side,
@@ -690,7 +690,7 @@ export async function compareStrategies(): Promise<StrategyComparisonReport> {
   const intraday = runIntradayComparison();
   const metaAdaptive = await runMetaAdaptiveComparison();
   const metaAdaptiveBtCandles = buildMetaAdaptiveSyntheticCandles({ minutes: 60 * 24 * 3 });
-  const metaAdaptiveBt = runMetaAdaptiveBacktest(metaAdaptiveBtCandles, {
+  const metaAdaptiveBt = await runMetaAdaptiveBacktest(metaAdaptiveBtCandles, {
     symbol: 'ETH/USDT',
     equityUsd: 50_000,
     slippageBps: 5,

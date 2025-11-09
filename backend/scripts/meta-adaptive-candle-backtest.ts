@@ -12,7 +12,7 @@ if (process.env.DISABLE_PYTHON_PREDICTOR !== 'false') {
 const candles = buildMetaAdaptiveSyntheticCandles();
 const equityUsd = 75_000;
 
-const result = runMetaAdaptiveBacktest(candles, {
+const result = await runMetaAdaptiveBacktest(candles, {
   symbol: 'ETH/USDT',
   equityUsd,
   slippageBps: 5,

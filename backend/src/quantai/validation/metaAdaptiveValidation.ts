@@ -67,7 +67,7 @@ export async function runCrossValidation(
     const fold = folds[i];
     
     // Run backtest on train set
-    const trainResult = runMetaAdaptiveBacktest(fold.train, options);
+    const trainResult = await runMetaAdaptiveBacktest(fold.train, options);
     const trainMetrics = convertMetrics(trainResult.metrics);
     
     segments.push({
@@ -78,7 +78,7 @@ export async function runCrossValidation(
     });
     
     // Run backtest on test set
-    const testResult = runMetaAdaptiveBacktest(fold.test, options);
+    const testResult = await runMetaAdaptiveBacktest(fold.test, options);
     const testMetrics = convertMetrics(testResult.metrics);
     
     segments.push({
@@ -140,11 +140,11 @@ export async function runOutOfSampleValidation(
   const { inSample, outOfSample } = createOutOfSampleSplit(candles, inSampleRatio);
 
   // Run backtest on in-sample data
-  const inSampleResult = runMetaAdaptiveBacktest(inSample, options);
+  const inSampleResult = await runMetaAdaptiveBacktest(inSample, options);
   const inSampleMetrics = convertMetrics(inSampleResult.metrics);
 
   // Run backtest on out-of-sample data
-  const outOfSampleResult = runMetaAdaptiveBacktest(outOfSample, options);
+  const outOfSampleResult = await runMetaAdaptiveBacktest(outOfSample, options);
   const outOfSampleMetrics = convertMetrics(outOfSampleResult.metrics);
 
   // Calculate degradation
@@ -198,7 +198,7 @@ export async function runComprehensiveValidation(
   console.log('[Validation] Running comprehensive validation for Meta-Adaptive strategy...');
 
   // 1. Run full backtest with walk-forward
-  const overall = runMetaAdaptiveBacktest(candles, options);
+  const overall = await runMetaAdaptiveBacktest(candles, options);
   const walkForward = overall.walkForward ?? [];
 
   // 2. Run cross-validation

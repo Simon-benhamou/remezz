@@ -163,18 +163,18 @@ function generateCandlesForDays(days: number): Candle[] {
  * we simulate different agent behaviors by adjusting equity and analyzing results
  * as if different risk profiles were applied.
  */
-function runAgentBacktest(
+async function runAgentBacktest(
   agentConfig: AgentConfig,
   candles: Candle[],
   equityPerAgent: number,
   symbol: string
-): AgentResult {
+): Promise<AgentResult> {
   logger.info(`Running backtest for agent ${agentConfig.id} (${agentConfig.mode})`);
   
   // Run the standard backtest
   // Note: All agents use the same strategy but with different equity allocations
   // to simulate different risk profiles in the shared pool
-  const result = runMetaAdaptiveBacktest(candles, {
+  const result = await runMetaAdaptiveBacktest(candles, {
     symbol,
     equityUsd: equityPerAgent,
     slippageBps: 5,
@@ -287,7 +287,7 @@ function calculateModeComparisons(results: AgentResult[]): ModeComparison[] {
 /**
  * Main test execution
  */
-function runMultiAgentPoolTest(): PoolTestResult {
+async function runMultiAgentPoolTest(): Promise<PoolTestResult> {
   const poolSizeUsd = 1000;
   const durationDays = 10;
   const agentCount = 9;
@@ -321,9 +321,9 @@ function runMultiAgentPoolTest(): PoolTestResult {
   })));
   
   // Run backtests for all agents
-  const agentResults: AgentResult[] = agentConfigs.map(config =>
+  const agentResults: AgentResult[] = await Promise.all(agentConfigs.map(config =>
     runAgentBacktest(config, candles, equityPerAgent, symbol)
-  );
+  ));
   
   // Calculate mode comparisons
   const modeComparisons = calculateModeComparisons(agentResults);
@@ -439,7 +439,7 @@ function printResults(results: PoolTestResult): void {
 
 // Run the test
 try {
-  const results = runMultiAgentPoolTest();
+  const results = await runMultiAgentPoolTest();
   printResults(results);
   
   // Also save results to JSON for further analysis

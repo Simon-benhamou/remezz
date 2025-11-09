@@ -343,7 +343,7 @@ function buildSnapshotFromHistory(params: {
   };
 }
 
-function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions): SimulationArtifacts {
+async function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions): Promise<SimulationArtifacts> {
   if (!candles.length) {
     return {
       metrics: {
@@ -599,7 +599,7 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
     const healthRiskMultiplier = Number.isFinite(effectiveSnapshot.riskMultiplier)
       ? Number(effectiveSnapshot.riskMultiplier)
       : 1;
-    const signals = evaluateRecognizedStrategies(snapshot, {
+    const signals = await evaluateRecognizedStrategies(snapshot, {
       symbol: options.symbol,
       bias: directionalBias,
       regime: snapshot.trendStrength > 0 ? 'trend_following' : 'range',
@@ -800,7 +800,7 @@ function simulateSegment(candles: Candle[], options: MetaAdaptiveBacktestOptions
   return { metrics, trades: tradeLogs, signals: entrySignals };
 }
 
-function buildWalkForward(candles: Candle[], options: MetaAdaptiveBacktestOptions): { start: number; end: number; metrics: BacktestMetrics }[] {
+async function buildWalkForward(candles: Candle[], options: MetaAdaptiveBacktestOptions): Promise<{ start: number; end: number; metrics: BacktestMetrics }[]> {
   const groups = new Map<string, Candle[]>();
   for (const candle of candles) {
     const date = new Date(candle.timestamp);
@@ -814,14 +814,14 @@ function buildWalkForward(candles: Candle[], options: MetaAdaptiveBacktestOption
   const segments = Array.from(groups.values()).filter((segment) => segment.length >= DEFAULT_MIN_HISTORY);
   segments.sort((a, b) => a[0].timestamp - b[0].timestamp);
 
-  return segments.map((segment) => {
-    const result = simulateSegment(segment, options);
+  return await Promise.all(segments.map(async (segment) => {
+    const result = await simulateSegment(segment, options);
     return {
       start: segment[0].timestamp,
       end: segment[segment.length - 1].timestamp,
       metrics: result.metrics,
     };
-  });
+  }));
 }
 
 export function buildMetaAdaptiveSyntheticCandles(opts?: { minutes?: number }): Candle[] {
@@ -866,8 +866,8 @@ export function buildMetaAdaptiveSyntheticCandles(opts?: { minutes?: number }): 
   return candles;
 }
 
-export function runMetaAdaptiveBacktest(candles: Candle[], options: MetaAdaptiveBacktestOptions): BacktestResult {
-  const overall = simulateSegment(candles, options);
-  const walkForward = buildWalkForward(candles, options);
+export async function runMetaAdaptiveBacktest(candles: Candle[], options: MetaAdaptiveBacktestOptions): Promise<BacktestResult> {
+  const overall = await simulateSegment(candles, options);
+  const walkForward = await buildWalkForward(candles, options);
   return { ...overall, walkForward };
 }

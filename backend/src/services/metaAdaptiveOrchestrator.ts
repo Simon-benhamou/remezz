@@ -143,7 +143,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
     }
 
     // Evaluate recognized strategy signals
-    const signals: RecognizedStrategySignal[] = evaluateRecognizedStrategies(tech, {
+    const signals: RecognizedStrategySignal[] = await evaluateRecognizedStrategies(tech, {
       sessionId: session.sessionId,
       symbol: session.symbol,
       bias: (session.profileJson as any)?.biasPreference || undefined,
