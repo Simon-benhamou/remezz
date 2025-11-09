@@ -1160,7 +1160,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       sessionWhere.userId = req.user.id;
     }
     const [actives, totalSessions] = await Promise.all([
-      prisma.agentSession.findMany({ where: sessionWhere, include: { SessionKpi: true, positions: true } }),
+      prisma.agentSession.findMany({ where: sessionWhere, include: { SessionKpi: true, Position: true } }),
       prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
     ]);
     const symbols = actives.map(a => a.symbol);
