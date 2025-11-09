@@ -13,6 +13,14 @@ import { recordOpsEvent } from '../../../monitor/ops.js';
 import { updateExecutionTelemetry } from '../../../services/executionTelemetry.js';
 import type { PerpetualMetrics, OnChainMetrics, SentimentSnapshot, WatchlistMeta } from '../../../analytics/marketContext.js';
 import { classifySymbolFamily } from '../../../learning/symbolFamily.js';
+import {
+  getPersonalityProfileWithSource,
+  classifyVolatilityRegime,
+  classifyDirectionBias,
+  classifyVolumeRegime,
+  classifyTrendingRanging,
+  type OptimalParams,
+} from '../../../learning/personalityProfile.js';
 
 type StrategyBias = 'long' | 'short' | 'both';
 
@@ -165,6 +173,84 @@ function parseConfidenceThreshold(): number {
 const CONFIDENCE_THRESHOLD = parseConfidenceThreshold();
 
 /**
+ * Get regime-aware thresholds for meta-adaptive strategy
+ * Integrates learned parameters from personality profiles and optimizer
+ */
+async function getRegimeAwareThresholds(
+  symbol: string,
+  snap: TechnicalSnapshot,
+): Promise<{
+  confidence: number;
+  adx: { trend: number; breakout: number; mean: number; momentum: number };
+  atr: { trend: number; breakout: number; mean: number; momentum: number };
+  eligibility: number;
+  cmf: number;
+  volumeRatio: number;
+  atrScaling: number;
+}> {
+  // Default thresholds (fallback if no learned profile)
+  const defaults = {
+    confidence: CONFIDENCE_THRESHOLD,
+    adx: { trend: 16, breakout: 14, mean: 12, momentum: 18 },
+    atr: { trend: 0.6, breakout: 0.5, mean: 0.4, momentum: 0.6 },
+    eligibility: 0.52,
+    cmf: 0.03,
+    volumeRatio: 0.9,
+    atrScaling: 0.4, // Scaling factor for realizedVol to intraday ATR%
+  };
+
+  try {
+    // Classify current market regime
+    const volatilityRegime = classifyVolatilityRegime((snap as any)?.atrPct);
+    const directionBias = classifyDirectionBias((snap as any)?.ema20, (snap as any)?.ema50);
+    const volumeRegime = classifyVolumeRegime(
+      (snap as any)?.volume,
+      (snap as any)?.volumeMA,
+      (snap as any)?.volumeZScore
+    );
+    const trendingRanging = classifyTrendingRanging((snap as any)?.adx14, (snap as any)?.atrPct);
+
+    // Fetch learned profile for this symbol and regime
+    const learnedProfile = await getPersonalityProfileWithSource(symbol, {
+      volatilityRegime,
+      directionBias,
+      volumeRegime,
+      trendingRanging,
+    });
+
+    if (learnedProfile && learnedProfile.params.thresholds) {
+      const t = learnedProfile.params.thresholds;
+      
+      // Use learned thresholds if available, otherwise fall back to defaults
+      return {
+        confidence: t.minConfidence ?? defaults.confidence,
+        adx: {
+          trend: t.adx ?? defaults.adx.trend,
+          breakout: t.adx ? t.adx - 2 : defaults.adx.breakout,
+          mean: t.adx ? t.adx - 4 : defaults.adx.mean,
+          momentum: t.adx ? t.adx + 2 : defaults.adx.momentum,
+        },
+        atr: {
+          trend: t.minAtrPct ?? defaults.atr.trend,
+          breakout: t.minAtrPct ? t.minAtrPct * 0.83 : defaults.atr.breakout,
+          mean: t.minAtrPct ? t.minAtrPct * 0.67 : defaults.atr.mean,
+          momentum: t.minAtrPct ?? defaults.atr.momentum,
+        },
+        eligibility: t.eligibility ?? defaults.eligibility,
+        cmf: t.cmf ?? defaults.cmf,
+        volumeRatio: defaults.volumeRatio, // Keep stable for now
+        atrScaling: defaults.atrScaling,
+      };
+    }
+  } catch (error) {
+    // Silent fail - use defaults
+    console.debug(`Failed to get regime-aware thresholds for ${symbol}:`, error);
+  }
+
+  return defaults;
+}
+
+/**
  * Compute dynamic confidence threshold based on confluence factors.
  * Base threshold is 0.65, but can be reduced to 0.55 if:
  * - Alignment score > 0.85 (strong multi-timeframe consensus) - lowered from 0.9
@@ -174,8 +260,9 @@ const CONFIDENCE_THRESHOLD = parseConfidenceThreshold();
 function computeDynamicConfidenceThreshold(params: {
   alignmentScore?: number | null;
   volumeRatio?: number | null;
+  baseThreshold?: number;
 }): number {
-  const baseThreshold = CONFIDENCE_THRESHOLD;
+  const baseThreshold = params.baseThreshold ?? CONFIDENCE_THRESHOLD;
   const alignmentScore = params.alignmentScore ?? 0;
   const volumeRatio = params.volumeRatio ?? 0;
   
@@ -533,27 +620,19 @@ function getStrategyFamilyFromId(id: RecognizedStrategyId): 'trend' | 'breakout'
   return 'momentum';
 }
 
-const MIN_ADX_BY_STRATEGY: Record<'trend' | 'breakout' | 'mean' | 'momentum', number> = {
-  trend: 16,      // Lowered from 18 - accept slightly weaker trends
-  breakout: 14,   // Lowered from 16 - breakouts can occur in ranging markets
-  mean: 12,       // Unchanged - mean reversion works in low momentum
-  momentum: 18,   // Lowered from 20 - still require decent momentum
-};
-
-// Dynamic ATR threshold multiplier - volatility should be above baseline
-// Reduced from 1.2 to 1.0 to accept current volatility levels
-const ATR_DYNAMIC_MULTIPLIER = 1.0;
-
-const MIN_ATR_BY_STRATEGY: Record<'trend' | 'breakout' | 'mean' | 'momentum', number> = {
-  trend: 0.6,     // Lowered from 0.8 - accept quieter trends
-  breakout: 0.5,  // Lowered from 0.7 - breakouts can happen in consolidation
-  mean: 0.4,      // Lowered from 0.5 - mean reversion in low vol
-  momentum: 0.6,  // Lowered from 0.75 - moderate volatility acceptable
-};
-
-function computeAdxComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot): { score: number; reason: string } {
+function computeAdxComponent(
+  id: RecognizedStrategyId,
+  snap: TechnicalSnapshot,
+  regimeThresholds?: { adx: { trend: number; breakout: number; mean: number; momentum: number } }
+): { score: number; reason: string } {
   const family = getStrategyFamilyFromId(id);
-  const minAdx = MIN_ADX_BY_STRATEGY[family];
+  const minAdxByStrategy = regimeThresholds?.adx || {
+    trend: 16,
+    breakout: 14,
+    mean: 12,
+    momentum: 18,
+  };
+  const minAdx = minAdxByStrategy[family];
   const adxRaw = Number((snap as any)?.adx14 ?? NaN);
   const adx = Number.isFinite(adxRaw) ? adxRaw : 0;
   const margin = 12;
@@ -563,9 +642,23 @@ function computeAdxComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot):
   return { score, reason };
 }
 
-function computeAtrComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot): { score: number; reason: string } {
+function computeAtrComponent(
+  id: RecognizedStrategyId,
+  snap: TechnicalSnapshot,
+  regimeThresholds?: {
+    atr: { trend: number; breakout: number; mean: number; momentum: number };
+    atrScaling: number;
+  }
+): { score: number; reason: string } {
   const family = getStrategyFamilyFromId(id);
-  const minAtr = MIN_ATR_BY_STRATEGY[family];
+  const minAtrByStrategy = regimeThresholds?.atr || {
+    trend: 0.6,
+    breakout: 0.5,
+    mean: 0.4,
+    momentum: 0.6,
+  };
+  const atrScaling = regimeThresholds?.atrScaling || 0.4;
+  const minAtr = minAtrByStrategy[family];
   const atrRaw = Number((snap as any)?.atrPct ?? NaN);
   const atr = Number.isFinite(atrRaw) ? atrRaw : 0;
   
@@ -576,13 +669,12 @@ function computeAtrComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot):
   
   // realizedVol is annualized volatility in decimal form (0.5 = 50% annual)
   // Convert to daily-equivalent percentage to match atrPct scale
-  // Annual vol * sqrt(1/252) * 100 = daily vol %
-  // For intraday (15m bars), further divide by sqrt(periods per day)
-  // Simplified: realizedVol * 0.4 gives approximate comparable scale
-  const baselineVol = hasDynamicBaseline ? baselineVolRaw * 0.4 : 0;
+  // Use regime-aware scaling factor (default 0.4)
+  const baselineVol = hasDynamicBaseline ? baselineVolRaw * atrScaling : 0;
   
-  // If we have baseline data, use dynamic threshold: currentATR should be above baseline * 1.2
+  // If we have baseline data, use dynamic threshold: currentATR should be above baseline
   // Otherwise fall back to static threshold
+  const ATR_DYNAMIC_MULTIPLIER = 1.0; // Accept current volatility levels
   const dynamicThreshold = hasDynamicBaseline ? baselineVol * ATR_DYNAMIC_MULTIPLIER : minAtr;
   const threshold = hasDynamicBaseline ? dynamicThreshold : minAtr;
   
@@ -595,24 +687,25 @@ function computeAtrComponent(id: RecognizedStrategyId, snap: TechnicalSnapshot):
 function computeFlowComponent(
   bias: StrategyBias,
   snap: TechnicalSnapshot,
+  regimeThresholds?: { cmf: number; volumeRatio: number }
 ): { score: number; reason: string; cmf: number | null; threshold: number | null; volumeRatio: number | null } {
   const volume = Number((snap as any)?.volume ?? NaN);
   const volumeMA = Number((snap as any)?.volumeMA ?? NaN);
   const cmfRaw = Number((snap as any)?.cmf20 ?? NaN);
   const cmf = Number.isFinite(cmfRaw) ? cmfRaw : 0;
   const ratio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : 1;
-  const minVolumeRatio = 0.9;  // Lowered from 1.1 - accept slightly below-average volume
+  const minVolumeRatio = regimeThresholds?.volumeRatio || 0.9;
   const desired = desiredDirectionalBias(bias);
   
-  // More permissive CMF thresholds: 0.03 for long, -0.03 for short (lowered from 0.05)
-  let cmfThreshold = 0.03;  // Lowered from 0.05 to accept weaker flow
+  // Use regime-aware CMF threshold (default 0.03)
+  let cmfThreshold = regimeThresholds?.cmf || 0.03;
   let cmfMagnitude = cmf;
   if (desired === 'bearish') {
-    cmfThreshold = -0.03;  // Lowered from -0.05
+    cmfThreshold = -(regimeThresholds?.cmf || 0.03);
     cmfMagnitude = -cmf;
   }
   if (!desired) {
-    cmfThreshold = 0.03;  // Lowered from 0.05
+    cmfThreshold = regimeThresholds?.cmf || 0.03;
     cmfMagnitude = Math.abs(cmf);
   }
   const cmfScore = clampNumber((cmfMagnitude - Math.abs(cmfThreshold)) / 0.2, 0, 1);
@@ -631,11 +724,12 @@ function computeFlowComponent(
 function computeEntryEligibility(
   signal: AdaptiveSignal,
   snap: TechnicalSnapshot,
+  regimeThresholds?: Awaited<ReturnType<typeof getRegimeAwareThresholds>>,
 ): EntryEligibilityBreakdown {
   const mtf = computeMtfComponent(signal.bias, snap);
-  const adx = computeAdxComponent(signal.id, snap);
-  const atr = computeAtrComponent(signal.id, snap);
-  const flow = computeFlowComponent(signal.bias, snap);
+  const adx = computeAdxComponent(signal.id, snap, regimeThresholds);
+  const atr = computeAtrComponent(signal.id, snap, regimeThresholds);
+  const flow = computeFlowComponent(signal.bias, snap, regimeThresholds);
   
   // Bias-adaptive weighting: increase MTF weight when it aligns with trade bias
   const desired = desiredDirectionalBias(signal.bias);
@@ -698,7 +792,8 @@ function computeEntryEligibility(
       1,
     ).toFixed(4),
   );
-  const passed = score >= ENTRY_ELIGIBILITY_THRESHOLD;
+  const eligibilityThreshold = regimeThresholds?.eligibility || 0.52;
+  const passed = score >= eligibilityThreshold;
   const reasons = [mtf.reason, adx.reason, atr.reason, flow.reason];
   return {
     score,
@@ -768,7 +863,11 @@ function computeCalibratedConfidence(signal: AdaptiveSignal): number {
   return Number(clampNumber(calibrated, 0, 1).toFixed(4));
 }
 
-function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): RecognizedStrategySignal {
+function toRecognizedSignal(
+  signal: AdaptiveSignal,
+  snap: TechnicalSnapshot,
+  regimeThresholds: Awaited<ReturnType<typeof getRegimeAwareThresholds>>,
+): RecognizedStrategySignal {
   const labelMap: Record<RecognizedStrategyId, string> = {
     classic_trend_following: 'Adaptive trend follower',
     breakout_retest: 'Adaptive breakout structure',
@@ -778,7 +877,7 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
 
   const calibratedConfidence = computeCalibratedConfidence(signal);
   const qualityScore = computeQualityScore(signal);
-  const entryEligibility = computeEntryEligibility(signal, snap);
+  const entryEligibility = computeEntryEligibility(signal, snap, regimeThresholds);
   const flowDetails = entryEligibility.flowDetails;
   const mtfDetails = entryEligibility.mtfDetails;
   const flowCmf = flowDetails.cmf;
@@ -802,10 +901,11 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
   const alignmentMatch = signal.reasons.find(r => r.startsWith('alignment='));
   const alignmentScore = alignmentMatch ? Number.parseFloat(alignmentMatch.split('=')[1]) : null;
   
-  // Use dynamic confidence threshold based on confluence factors
+  // Use dynamic confidence threshold based on confluence factors and regime-aware base
   const dynamicThreshold = computeDynamicConfidenceThreshold({
     alignmentScore,
     volumeRatio: flowVolumeRatio,
+    baseThreshold: regimeThresholds.confidence,
   });
   
   const confidenceGatePassed = calibratedConfidence >= dynamicThreshold;
@@ -920,13 +1020,18 @@ function toRecognizedSignal(signal: AdaptiveSignal, snap: TechnicalSnapshot): Re
   };
 }
 
-export function evaluateRecognizedStrategies(
+export async function evaluateRecognizedStrategies(
   snap: TechnicalSnapshot,
   opts: EvaluateOptions = {},
-): RecognizedStrategySignal[] {
+): Promise<RecognizedStrategySignal[]> {
+  const symbol = opts.symbol ?? (snap.symbol || 'UNKNOWN');
+  
+  // Get regime-aware thresholds for this symbol
+  const regimeThresholds = await getRegimeAwareThresholds(symbol, snap);
+  
   const evaluation = metaAdaptiveStrategyAgent.evaluate({
     sessionId: opts.sessionId ?? null,
-    symbol: opts.symbol ?? (snap.symbol || 'UNKNOWN'),
+    symbol,
     snap,
     biasHint: opts.bias,
     micro: opts.micro,
@@ -963,8 +1068,9 @@ export function evaluateRecognizedStrategies(
   }
 
   return evaluation.signals
-    .map(signal => toRecognizedSignal(signal, snap))
+    .map(signal => toRecognizedSignal(signal, snap, regimeThresholds))
     .sort((a, b) => b.meta!.score - a.meta!.score);
+}
 }
 
 export async function registerAdaptiveTradeEntry(params: {
