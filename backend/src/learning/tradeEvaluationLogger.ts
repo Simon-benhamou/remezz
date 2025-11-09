@@ -3,8 +3,9 @@
  * Records trade decisions and their context for learning
  */
 
-import { prisma, Prisma } from '../db/client.js';
 import { createId } from '@paralleldrive/cuid2';
+
+import { prisma, Prisma } from '../db/client.js';
 
 // Time constants
 const OUTCOME_WAIT_MS = 60 * 60 * 1000; // 1 hour in milliseconds
