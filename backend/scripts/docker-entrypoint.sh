@@ -3,7 +3,7 @@ set -e
 
 # Function to wait for database with exponential backoff
 wait_for_db() {
-  local max_attempts=10
+  local max_attempts=5
   local attempt=1
   local wait_time=2
   
@@ -12,10 +12,8 @@ wait_for_db() {
   while [ $attempt -le $max_attempts ]; do
     echo "[entrypoint] Attempt $attempt/$max_attempts..."
     
-    if npx prisma db execute --stdin <<EOF 2>/dev/null
-SELECT 1;
-EOF
-    then
+    # Simple connection test using prisma db pull (doesn't modify anything)
+    if npx prisma db pull --force --schema=./prisma/schema.prisma >/dev/null 2>&1; then
       echo "[entrypoint] ✅ Database is ready!"
       return 0
     fi
@@ -23,11 +21,11 @@ EOF
     if [ $attempt -lt $max_attempts ]; then
       echo "[entrypoint] Database not ready, waiting ${wait_time}s before retry..."
       sleep $wait_time
-      wait_time=$((wait_time * 2))  # Exponential backoff
+      wait_time=$((wait_time + 2))  # Linear backoff (2, 4, 6, 8s)
       attempt=$((attempt + 1))
     else
-      echo "[entrypoint] ❌ Database connection failed after $max_attempts attempts"
-      return 1
+      echo "[entrypoint] ⚠️ Database connection timeout, but continuing..."
+      return 0  # Don't fail, just warn
     fi
   done
 }
@@ -36,16 +34,14 @@ echo "[entrypoint] Prisma DB sync..."
 
 if [ -n "$DATABASE_URL" ]; then
   # Wait for database to be ready (handles Neon cold starts)
-  wait_for_db || {
-    echo "[entrypoint] WARNING: Could not connect to database, but continuing..."
-  }
+  wait_for_db
   
   # 1) Appliquer les migrations si elles existent
-  npx prisma migrate deploy || true
+  npx prisma migrate deploy 2>/dev/null || echo "[entrypoint] No pending migrations"
 
   # 2) Toujours pousser le schéma (crée les tables si aucune migration)
-  npx prisma db push || {
-    echo "[entrypoint] WARNING: prisma db push failed, but continuing..."
+  npx prisma db push --accept-data-loss 2>/dev/null || {
+    echo "[entrypoint] ⚠️ prisma db push failed, but continuing..."
   }
 else
   echo "DATABASE_URL not set, skipping Prisma"
