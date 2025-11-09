@@ -23,6 +23,15 @@ export type EntryFacts = {
   adxSlope?: number;
   diPlus?: number;
   diMinus?: number;
+  // Additional fields for optimizer
+  ema20?: number;
+  ema50?: number;
+  ema100?: number;
+  ema200?: number;
+  volume?: number;
+  volumeMA?: number;
+  volumeZScore?: number;
+  trendStrength?: number;
 };
 
 export type EntryEvaluation = {

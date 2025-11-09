@@ -1866,6 +1866,15 @@ class MetaAdaptiveStrategyAgent {
       spreadBps,
       modelConfidence: selection?.confidence,
       slopeAbsPct: safeNumber((snap as any)?.ema20Slope, undefined),
+      // Add fields needed for optimizer
+      ema20: safeNumber(snap.ema20, undefined),
+      ema50: safeNumber(snap.ema50, undefined),
+      ema100: safeNumber(snap.ema100, undefined),
+      ema200: safeNumber(snap.ema200, undefined),
+      volume: safeNumber((snap as any)?.volume, undefined),
+      volumeMA: safeNumber((snap as any)?.volumeMA, undefined),
+      volumeZScore: safeNumber((snap as any)?.volumeZScore, undefined),
+      trendStrength: safeNumber((snap as any)?.trendStrength, undefined),
     };
     
     // Create synthetic EntryEvaluation from the selected signal

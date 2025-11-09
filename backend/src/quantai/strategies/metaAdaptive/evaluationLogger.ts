@@ -25,6 +25,15 @@ export async function logMetaAdaptiveEvaluation(
       slope: facts.slopeAbsPct,
       // Additional meta-adaptive specific metrics
       spreadBps: facts.spreadBps,
+      // Fields needed for regime-aware optimization
+      ema20: facts.ema20,
+      ema50: facts.ema50,
+      ema100: facts.ema100,
+      ema200: facts.ema200,
+      volume: facts.volume,
+      volumeMA: facts.volumeMA,
+      volumeZScore: facts.volumeZScore,
+      trendStrength: facts.trendStrength,
     };
 
     // Determine decision
