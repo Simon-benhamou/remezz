@@ -59,7 +59,7 @@ export async function recomputeKpi(sessionId: string) {
 
   const orders = await prisma.order.findMany({
     where: { sessionId, source: 'agent' },
-    include: { fills: true },
+    include: { Fill: true },
     orderBy: { createdAt: 'asc' },
   });
 

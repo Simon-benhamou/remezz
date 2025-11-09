@@ -103,7 +103,7 @@ export async function computeAdaptiveRisk(sessionId: string | null | undefined, 
   }
   const exits = await prisma.order.findMany({
     where: { sessionId, clientOrderId: { endsWith: '.exit' } },
-    include: { fills: true },
+    include: { Fill: true },
     orderBy: { createdAt: 'desc' },
     take: 50,
   });

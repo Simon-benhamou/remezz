@@ -114,7 +114,7 @@ export class AdvancedRiskManager {
         status: 'closed',
         createdAt: { gte: lookbackDate },
       },
-      include: { fills: true },
+      include: { Fill: true },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -196,7 +196,7 @@ export class AdvancedRiskManager {
         status: 'closed',
         createdAt: { gte: today },
       },
-      include: { fills: true },
+      include: { Fill: true },
     });
 
     if (orders.length === 0) return false;

@@ -402,7 +402,7 @@ export class ExecutionModel {
         createdAt: { gte: lookbackDate },
         status: { in: ['closed', 'filled'] },
       },
-      include: { fills: true },
+      include: { Fill: true },
       orderBy: { createdAt: 'desc' },
     });
 
