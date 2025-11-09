@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "test -f prisma/schema.prisma && prisma generate || true",
     "dev": "tsx watch src/server.ts",
     "dev:debug": "tsx watch --inspect=9229 src/server.ts",
     "build": "npm run prisma:gen && tsc && node ./scripts/postbuild.mjs",
