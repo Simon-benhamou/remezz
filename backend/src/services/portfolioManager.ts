@@ -270,14 +270,16 @@ export async function rebalancePortfolio(params: {
     const kpiStats = extractStats(session.SessionKpi);
     const score = computePerformanceScore(kpiStats);
     const profile = ((session.profileJson ?? {}) as Record<string, any>) || {};
-    const baseMaxLeverage = Number(profile?.maxLeverage ?? (profile?.leverageCap?.resolved ?? 4));
+    const cfg = getConfig();
+    const defaultLeverage = Math.min(10, cfg.DEFAULT_MAX_LEVERAGE || 10);
+    const baseMaxLeverage = Number(profile?.maxLeverage ?? (profile?.leverageCap?.resolved ?? defaultLeverage));
     return {
       session,
       profile,
       score,
       weight: score,
       performance: kpiStats,
-      baseMaxLeverage: Number.isFinite(baseMaxLeverage) ? baseMaxLeverage : 4,
+      baseMaxLeverage: Number.isFinite(baseMaxLeverage) ? baseMaxLeverage : defaultLeverage,
       correlationKey: getCorrelationKey(session.symbol),
       correlationLimited: false,
     };

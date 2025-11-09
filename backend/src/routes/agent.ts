@@ -634,7 +634,9 @@ router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res)
     const currentProfile = ((existing as any).profileJson || {}) as Record<string, any>;
 
     const safeRiskPct = Math.min(5, Math.max(0.5, Number(body.riskPerTradePct ?? currentProfile.riskPerTradePct ?? 1.5)));
-    const safeMaxLev = Math.min(10, Math.max(1, Number(body.maxLeverage ?? currentProfile.maxLeverage ?? 4)));
+    // Use DEFAULT_MAX_LEVERAGE from config (12) but cap at 10 if not explicitly provided
+    const defaultLeverage = Math.min(10, getConfig().DEFAULT_MAX_LEVERAGE || 10);
+    const safeMaxLev = Math.min(10, Math.max(1, Number(body.maxLeverage ?? currentProfile.maxLeverage ?? defaultLeverage)));
     const safeDailyLoss = Math.min(4, Math.max(3, Number(body.dailyLossLimitPct ?? currentProfile.dailyLossLimitPct ?? 3.5)));
 
     const leverageCap = await resolveLeverageCap({

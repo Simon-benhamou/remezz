@@ -3,6 +3,7 @@ import type { ActivationProfile } from '../agent/state.js';
 import { DEFAULT_RR_EXPECTANCY_CONFIG } from '../risk/rrExpectancy.js';
 import { serializeActivationProfile } from '../agent/profilePersistence.js';
 import { getOptimizedCryptoList, getBestIntelligentOpportunity } from '../services/intelligentAgent.js';
+import { getConfig } from '../utils/env.js';
 
 export const router = Router();
 
@@ -84,11 +85,13 @@ router.post('/create-test-smart-agent', async (req, res) => {
     
     // Create session with temporary symbol
     const activationTimestamp = new Date().toISOString();
+    const cfg = getConfig();
+    const defaultLeverage = Math.min(10, cfg.DEFAULT_MAX_LEVERAGE || 10);
     const profile: ActivationProfile = {
       symbol: 'BTC/USDT',
       mode: 'paper',
-      maxLeverage: 4,
-      requestedMaxLeverage: 4,
+      maxLeverage: defaultLeverage,
+      requestedMaxLeverage: defaultLeverage,
       riskPerTradePct: 1.5,
       dailyLossLimitPct: 3.5,
       timestamp: activationTimestamp,

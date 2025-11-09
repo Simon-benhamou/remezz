@@ -97,8 +97,10 @@ function normalizePlanOutput(raw: any, symbol: string): any {
 
   const stopMult = clamp(Number.isFinite(stopMultRaw) ? stopMultRaw : 1, 0.4, 3);
   const maxHold = clamp(Number(risk.max_hold_hours ?? risk.maxHoldHours ?? 36) || 36, 6, 72);
-  const maxLevRaw = Number(position.max_leverage ?? position.leverage ?? 4);
-  const maxLeverage = clamp(Number.isFinite(maxLevRaw) ? maxLevRaw : 4, 1, 10);
+  const cfg = getConfig();
+  const defaultLeverage = Math.min(10, cfg.DEFAULT_MAX_LEVERAGE || 10);
+  const maxLevRaw = Number(position.max_leverage ?? position.leverage ?? defaultLeverage);
+  const maxLeverage = clamp(Number.isFinite(maxLevRaw) ? maxLevRaw : defaultLeverage, 1, 10);
 
   const confirmClose = entryRaw.confirm_close != null ? Boolean(entryRaw.confirm_close) : (entryType === 'rebound');
   const maxDistPct = clamp(Number(entryRaw.max_distance_pct ?? entryRaw.maxDistancePct ?? 0.4) || 0.4, 0.1, 5);
