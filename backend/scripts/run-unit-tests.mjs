@@ -36,8 +36,23 @@ for (const file of files) {
   console.log(`\n--- ${path.relative(process.cwd(), file)} ---`);
   const isTs = file.endsWith('.ts');
   const runnerArgs = isTs ? [tsxCli, file] : [file];
-  const res = spawnSync('node', runnerArgs, { stdio: 'inherit' });
-  if (res.status) code = res.status;
+  const res = spawnSync('node', runnerArgs, { 
+    stdio: 'inherit',
+    timeout: 30000, // 30 second timeout per test
+    killSignal: 'SIGKILL'
+  });
+  
+  if (res.error) {
+    if (res.error.code === 'ETIMEDOUT') {
+      console.error(`\n⚠️  Test timed out after 30s: ${path.basename(file)}`);
+      code = 1;
+    } else {
+      console.error(`\n❌ Test error: ${res.error.message}`);
+      code = 1;
+    }
+  } else if (res.status) {
+    code = res.status;
+  }
 }
 
 process.exit(code);

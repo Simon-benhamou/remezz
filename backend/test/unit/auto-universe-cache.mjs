@@ -49,3 +49,5 @@ assert.deepEqual(
 );
 
 __autoUniverseTestHooks.clearCache();
+
+process.exit(0);

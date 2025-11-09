@@ -200,3 +200,5 @@ const stateHandler = findRoute('get', '/state');
 }
 
 console.log('✅ agent-route-security tests passed');
+
+process.exit(0);

@@ -65,3 +65,5 @@ assert.equal(Math.round(payload.capitalPool.live.totalUsd ?? 0), 0);
 
 console.log('✅ capital overview aligns with shared pool snapshot');
 
+
+process.exit(0);

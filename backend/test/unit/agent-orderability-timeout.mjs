@@ -67,3 +67,5 @@ const available = await evaluateOrderability(
 
 assert.equal(available.orderable, true, 'fast ticker result should be orderable');
 console.log('✅ agent orderability timeout safeguards passed');
+
+process.exit(0);

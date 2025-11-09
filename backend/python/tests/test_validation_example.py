@@ -217,8 +217,9 @@ class TestDataValidation:
         # Check for NaN
         assert np.isnan(features).any()
         
-        # Replace NaN with mean
+        # Replace NaN with mean (or 0 if all NaN)
         col_mean = np.nanmean(features, axis=0)
+        col_mean = np.where(np.isnan(col_mean), 0, col_mean)  # Replace NaN means with 0
         features_clean = np.where(np.isnan(features), col_mean, features)
         
         # Verify no NaN remains

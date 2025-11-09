@@ -85,3 +85,5 @@ function createMockResponse() {
     },
   };
 }
+
+process.exit(0);

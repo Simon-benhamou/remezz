@@ -4,6 +4,7 @@ import 'dotenv/config';
 process.env.UNIT_TEST_MODE = 'true';
 
 const { __agentCreationTestHooks } = await import('../../dist/src/services/agentCreationFlow.js');
+const { prisma } = await import('../../dist/src/db/client.js');
 
 const { runWithTimeout } = __agentCreationTestHooks;
 
@@ -31,3 +32,6 @@ assert.equal(errorOutcome.timedOut, false, 'errors should not be reported as tim
 assert.ok(errorOutcome.error instanceof Error, 'error outcome should expose underlying error');
 
 console.log('✅ agent-creation-timeouts.mjs passed');
+
+await prisma.$disconnect();
+process.exit(0);
