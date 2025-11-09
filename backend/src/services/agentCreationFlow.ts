@@ -680,7 +680,9 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   const rawStrategyEngine = typeof payload.strategyEngine === 'string' ? payload.strategyEngine.toLowerCase() : '';
   const strategyEngine: 'meta_adaptive' = 'meta_adaptive'; // Only meta_adaptive supported
 
-  const maxLeverage = Math.min(10, Math.max(1, Number(payload.maxLeverage ?? 4)));
+  // Use DEFAULT_MAX_LEVERAGE from config (12) but cap at 10 if not explicitly provided
+  const defaultLeverage = Math.min(10, cfg.DEFAULT_MAX_LEVERAGE || 10);
+  const maxLeverage = Math.min(10, Math.max(1, Number(payload.maxLeverage ?? defaultLeverage)));
   const dailyLossLimitPct = Math.min(4, Math.max(3, Number(payload.dailyLossLimitPct ?? 3.5)));
   const rawRiskPct = payload.riskPerTradePct ?? cfg.DEFAULT_RISK_PCT ?? 1.5;
   const riskPerTradePct = Math.min(5, Math.max(0.5, Number(rawRiskPct)));
