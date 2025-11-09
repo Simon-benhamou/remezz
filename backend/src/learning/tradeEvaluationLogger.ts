@@ -4,6 +4,7 @@
  */
 
 import { prisma, Prisma } from '../db/client.js';
+import { createId } from '@paralleldrive/cuid2';
 
 // Time constants
 const OUTCOME_WAIT_MS = 60 * 60 * 1000; // 1 hour in milliseconds
@@ -100,8 +101,13 @@ export async function logTradeEvaluation(params: TradeEvaluationParams): Promise
       }
     }
     
+    // Generate ID explicitly to avoid Prisma validation error
+    // (database doesn't have DEFAULT constraint on id column)
+    const id = createId();
+    
     const record = await prisma.tradeEvaluation.create({
       data: {
+        id,
         symbol: params.symbol,
         decision: params.decision,
         blockedReason: params.blockedReason || null,
