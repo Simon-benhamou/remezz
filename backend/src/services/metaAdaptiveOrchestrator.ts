@@ -33,6 +33,7 @@ import { LiveBroker } from '../broker/live.js';
 import { CapitalPoolBroker } from '../broker/capitalPoolBroker.js';
 import { getCapitalManager } from '../services/capitalPool.js';
 import { capitalConfig } from '../config/capital.js';
+import { recordEnter, recordExit } from '../agent/persistence.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -400,6 +401,27 @@ async function executeEntryTrade(
         },
         regimeContext: calculateRegimeContext(tech),
       }).catch(err => console.warn('Failed to log order placement:', err));
+
+      // Persist order and position to database
+      try {
+        await recordEnter({
+          sessionId: session.sessionId,
+          symbol: session.symbol,
+          side,
+          qty: order.filledQty ?? sizing.qty,
+          entryPrice: order.avgPrice ?? entryPrice,
+          stop: stopPrice,
+          leverage: order.leverage,
+          requestedPrice: entryPrice,
+          requestedQty: sizing.qty,
+          latencyMs: order.latencyMs,
+          slippageBps: order.slippageBps,
+          fillRatio: order.fillRatio,
+        });
+        console.log(`[MetaOrchestrator.executeEntryTrade] Position persisted to database`);
+      } catch (err) {
+        console.error(`[MetaOrchestrator.executeEntryTrade] Failed to persist position:`, err);
+      }
     } else {
       // Order was rejected by broker
       await logTradeEvaluation({
@@ -550,6 +572,29 @@ async function executeExitTrade(
       : (position.entry - exitPrice) * position.qty;
 
     logger.info(`[${session.sessionId}] Trade closed. P&L: ${pnl.toFixed(2)} USD`);
+
+    // Persist exit order and update position in database
+    if (order.status !== 'rejected') {
+      try {
+        await recordExit({
+          sessionId: session.sessionId,
+          symbol: session.symbol,
+          side: position.side,
+          exitPrice: order.avgPrice ?? exitPrice,
+          qty: order.filledQty ?? position.qty,
+          realizedPnl: pnl,
+          requestedPrice: exitPrice,
+          requestedQty: position.qty,
+          latencyMs: order.latencyMs,
+          slippageBps: order.slippageBps,
+          fillRatio: order.fillRatio,
+          reason,
+        });
+        logger.info(`[${session.sessionId}] Exit persisted to database`);
+      } catch (err) {
+        logger.error(`[${session.sessionId}] Failed to persist exit:`, err);
+      }
+    }
 
     // Register outcome
     if (position.signal) {
