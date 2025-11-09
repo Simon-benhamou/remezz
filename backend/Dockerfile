@@ -43,6 +43,7 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
 COPY python ./python
+COPY quantailabs_patch ./quantailabs_patch
 
 # Build the application
 RUN npm run build
