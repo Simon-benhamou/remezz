@@ -31,6 +31,7 @@
     "init-profiles": "tsx scripts/init-personality-profiles.ts"
   },
   "dependencies": {
+    "@paralleldrive/cuid2": "^3.0.4",
     "@prisma/client": "^6.19.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",

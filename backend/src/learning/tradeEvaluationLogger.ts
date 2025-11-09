@@ -3,6 +3,8 @@
  * Records trade decisions and their context for learning
  */
 
+import { createId } from '@paralleldrive/cuid2';
+
 import { prisma, Prisma } from '../db/client.js';
 
 // Time constants
@@ -100,8 +102,13 @@ export async function logTradeEvaluation(params: TradeEvaluationParams): Promise
       }
     }
     
+    // Generate ID explicitly to avoid Prisma validation error
+    // (database doesn't have DEFAULT constraint on id column)
+    const id = createId();
+    
     const record = await prisma.tradeEvaluation.create({
       data: {
+        id,
         symbol: params.symbol,
         decision: params.decision,
         blockedReason: params.blockedReason || null,
