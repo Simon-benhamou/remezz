@@ -8,6 +8,12 @@ import type { EntryEvaluation, EntryFacts } from './entryFilters.js';
 
 /**
  * Log a meta-adaptive entry evaluation for learning
+ * 
+ * CRITICAL FIX: Only log filter_blocked when entry filters fail.
+ * DO NOT log filter_passed here - that should only be logged when the trade
+ * actually gets placed (after capital, sizing, predictor, and cooldown checks).
+ * This prevents the inconsistency where trade evaluations show "filter_passed"
+ * but ops logs show "blocked_trade" because later execution checks failed.
  */
 export async function logMetaAdaptiveEvaluation(
   symbol: string,
@@ -15,6 +21,15 @@ export async function logMetaAdaptiveEvaluation(
   facts: EntryFacts,
 ): Promise<void> {
   try {
+    // ONLY log when filters are blocked (evaluation.ok === false)
+    // If evaluation.ok === true, the signal will proceed to execution checks
+    // and those checks will log the appropriate outcome (filter_passed, order_placed, or various blocks)
+    if (evaluation.ok) {
+      // Signal passed initial entry filters - don't log yet
+      // The orchestrator will log the final outcome after execution checks
+      return;
+    }
+
     // Extract metrics from facts
     const inputMetrics: InputMetrics = {
       adx: facts.adx,
@@ -35,15 +50,10 @@ export async function logMetaAdaptiveEvaluation(
       volumeZScore: facts.volumeZScore,
       trendStrength: facts.trendStrength,
     };
-
-    // Determine decision
-    // 'filter_passed' means entry filters PASSED
-    // 'filter_blocked' means entry filters FAILED
-    const decision = evaluation.ok ? 'filter_passed' : 'filter_blocked';
     
     // Extract blocked reasons
     const blockedReasons: string[] = [];
-    if (!evaluation.ok && evaluation.reasons) {
+    if (evaluation.reasons) {
       for (const [key, value] of Object.entries(evaluation.reasons)) {
         if (typeof value === 'string') {
           // Include all non-OK reasons
@@ -55,7 +65,7 @@ export async function logMetaAdaptiveEvaluation(
     }
     
     // If blocked but no specific reasons found, provide generic reason
-    if (!evaluation.ok && blockedReasons.length === 0) {
+    if (blockedReasons.length === 0) {
       // Check meta object for more context
       if (evaluation.meta) {
         const metaStr = JSON.stringify(evaluation.meta);
@@ -68,11 +78,11 @@ export async function logMetaAdaptiveEvaluation(
     // Use model confidence as the confidence score if available, otherwise use a derived score
     const confidenceScore = facts.modelConfidence ?? 0.5;
 
-    // Log the evaluation (non-blocking)
+    // Log the blocked evaluation (non-blocking)
     await logTradeEvaluation({
       symbol,
-      decision,
-      blockedReason: blockedReasons.length > 0 ? blockedReasons.join('; ') : undefined,
+      decision: 'filter_blocked',
+      blockedReason: blockedReasons.join('; '),
       confidenceScore,
       inputMetrics,
       regimeContext: evaluation.regimeContext, // Pass regime context from evaluation
