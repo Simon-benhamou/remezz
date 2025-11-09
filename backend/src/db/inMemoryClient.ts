@@ -334,6 +334,25 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     createdAt: new Date(),
     updatedAt: new Date(),
   }),
+  tradeEvaluation: () => ({
+    id: randomUUID(),
+    symbol: 'TEST/USDT',
+    timestamp: new Date(),
+    decision: 'filter_passed',
+    blockedReason: null,
+    confidenceScore: 0.5,
+    inputMetrics: {},
+    regimeContext: null,
+    marketOutcome: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
+  cryptoPersonalityProfile: () => ({
+    symbol: 'TEST/USDT',
+    optimalParams: {},
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
 };
 
 class InMemoryModel {
@@ -363,8 +382,11 @@ class InMemoryModel {
       if (include.kpi || include.SessionKpi) {
         out.SessionKpi = this.client.sessionKpi.findFirst({ where: { sessionId: record.id } }) ?? null;
       }
-      if (include.positions) {
-        out.positions = this.client.position.findMany({ where: { sessionId: record.id } });
+      // Support both lowercase 'positions' and PascalCase 'Position' (correct Prisma convention)
+      if (include.positions || include.Position) {
+        const positions = this.client.position.findMany({ where: { sessionId: record.id } });
+        out.positions = positions;
+        out.Position = positions;
       }
       if (include.orders) {
         out.orders = this.client.order.findMany({ where: { sessionId: record.id } });
