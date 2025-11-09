@@ -1,6 +1,6 @@
 import { QuantAIEntryFilterConfig } from '../../config.js';
 import { 
-  getPersonalityProfile, 
+  getPersonalityProfileWithSource,
   classifyVolatilityRegime, 
   classifyDirectionBias, 
   classifyVolumeRegime, 
@@ -42,6 +42,14 @@ export type EntryFacts = {
   trendStrength?: number;
 };
 
+export type RegimeContext = {
+  volatilityRegime?: 'low' | 'medium' | 'high';
+  directionBias?: 'long' | 'short' | 'neutral';
+  volumeRegime?: 'low' | 'normal' | 'high';
+  trendingRanging?: 'trending' | 'ranging';
+  parameterSource?: string;
+};
+
 export type EntryEvaluation = {
   ok: boolean;
   reasons: Record<string, string>;
@@ -73,6 +81,7 @@ export type EntryEvaluation = {
     directionalBias?: 'long' | 'short' | 'none' | null;
     rsi?: number | null;
   };
+  regimeContext?: RegimeContext;
 };
 
 export type EntryRelaxation = {
@@ -129,7 +138,7 @@ export class EntryFilters {
     let deferredMinAdxDelta: number | null = null;
 
     // 🎯 Regime-aware adaptation using learned personality profiles
-    let learnedProfile: OptimalParams | null = null;
+    let learnedProfile: { params: OptimalParams; source: string } | null = null;
     if (opts.symbol) {
       try {
         // Classify current market regime
@@ -139,7 +148,7 @@ export class EntryFilters {
         const trendingRanging = classifyTrendingRanging(facts.adx, facts.atrPct);
         
         // Fetch learned profile for this symbol and regime
-        learnedProfile = await getPersonalityProfile(opts.symbol, {
+        learnedProfile = await getPersonalityProfileWithSource(opts.symbol, {
           volatilityRegime,
           directionBias,
           volumeRegime,
@@ -148,16 +157,16 @@ export class EntryFilters {
         
         // Apply learned thresholds if available (they override static config)
         if (learnedProfile) {
-          if (learnedProfile.thresholds.adx != null) {
-            minAdx = learnedProfile.thresholds.adx;
+          if (learnedProfile.params.thresholds.adx != null) {
+            minAdx = learnedProfile.params.thresholds.adx;
           }
-          if (learnedProfile.thresholds.minConfidence != null) {
-            confidenceThreshold = learnedProfile.thresholds.minConfidence;
+          if (learnedProfile.params.thresholds.minConfidence != null) {
+            confidenceThreshold = learnedProfile.params.thresholds.minConfidence;
           }
           // trendStrength threshold maps to our confidence filtering
-          if (learnedProfile.thresholds.trendStrength != null && facts.trendStrength != null) {
+          if (learnedProfile.params.thresholds.trendStrength != null && facts.trendStrength != null) {
             // If trendStrength is below learned threshold, increase confidence requirement
-            if (facts.trendStrength < learnedProfile.thresholds.trendStrength) {
+            if (facts.trendStrength < learnedProfile.params.thresholds.trendStrength) {
               confidenceThreshold = Math.max(confidenceThreshold, confidenceThreshold * 1.1);
             }
           }
