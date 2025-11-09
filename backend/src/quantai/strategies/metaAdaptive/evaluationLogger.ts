@@ -75,6 +75,7 @@ export async function logMetaAdaptiveEvaluation(
       blockedReason: blockedReasons.length > 0 ? blockedReasons.join('; ') : undefined,
       confidenceScore,
       inputMetrics,
+      regimeContext: evaluation.regimeContext, // Pass regime context from evaluation
     }).catch((error) => {
       console.warn(`Failed to log meta-adaptive evaluation for ${symbol}:`, error);
     });

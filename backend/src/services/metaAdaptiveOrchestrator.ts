@@ -25,7 +25,7 @@ import { PositionSizer } from '../quantai/risk/positionSizing.js';
 import { getQuantAIConfig } from '../quantai/config.js';
 import { createLogger } from '../utils/logger.js';
 import { createIntegrationLogger, withLogging, withRetry } from '../utils/integrationLogger.js';
-import { logTradeEvaluation } from '../learning/tradeEvaluationLogger.js';
+import { logTradeEvaluation, type RegimeContext } from '../learning/tradeEvaluationLogger.js';
 import { AgentHub } from '../agent/hub.js';
 import type { Broker } from '../broker/types.js';
 import { PaperBroker } from '../broker/paper.js';
@@ -38,6 +38,24 @@ const logger = createLogger('meta-adaptive');
 
 // Track brokers per session to avoid recreating them
 const sessionBrokers = new Map<string, Broker>();
+
+/**
+ * Helper to calculate regime context from technical data
+ */
+function calculateRegimeContext(tech: TechnicalSnapshot): RegimeContext {
+  const atrPct = (tech.atr14 / tech.last) * 100;
+  const ema20 = (tech as any).ema20;
+  const ema50 = (tech as any).ema50;
+  const volumeZScore = (tech as any).volumeZScore;
+  
+  return {
+    volatilityRegime: atrPct < 3 ? 'low' : atrPct > 6 ? 'high' : 'medium',
+    directionBias: ema20 && ema50 ? (ema20 > ema50 * 1.001 ? 'long' : ema20 < ema50 * 0.999 ? 'short' : 'neutral') : 'neutral',
+    volumeRegime: volumeZScore !== undefined ? (volumeZScore < -0.5 ? 'low' : volumeZScore > 0.5 ? 'high' : 'normal') : 'normal',
+    trendingRanging: tech.adx14 > 25 ? 'trending' : tech.adx14 < 20 ? 'ranging' : (atrPct > 4 ? 'trending' : 'ranging'),
+    parameterSource: 'runtime_calculated',
+  };
+}
 
 type SessionContext = {
   sessionId: string;
@@ -254,6 +272,7 @@ async function executeEntryTrade(
           rsi14: tech.rsi14,
           volumeRatio: (tech as any).volumeRatio,
         },
+        regimeContext: calculateRegimeContext(tech),
       }).catch(err => console.warn('Failed to log sizing block:', err));
       
       return;
@@ -290,6 +309,7 @@ async function executeEntryTrade(
           rsi14: tech.rsi14,
           volumeRatio: (tech as any).volumeRatio,
         },
+        regimeContext: calculateRegimeContext(tech),
       }).catch(err => console.warn('Failed to log registration block:', err));
       
       return;
@@ -336,6 +356,7 @@ async function executeEntryTrade(
           rsi14: tech.rsi14,
           volumeRatio: (tech as any).volumeRatio,
         },
+        regimeContext: calculateRegimeContext(tech),
       }).catch(err => console.warn('Failed to log order placement:', err));
     } else {
       // Order was rejected by broker
@@ -351,6 +372,7 @@ async function executeEntryTrade(
           rsi14: tech.rsi14,
           volumeRatio: (tech as any).volumeRatio,
         },
+        regimeContext: calculateRegimeContext(tech),
       }).catch(err => console.warn('Failed to log order rejection:', err));
     }
 

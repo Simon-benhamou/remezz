@@ -3,7 +3,7 @@
  * Records trade decisions and their context for learning
  */
 
-import { createId } from '@paralleldrive/cuid2';
+import { randomUUID } from 'crypto';
 
 import { prisma, Prisma } from '../db/client.js';
 
@@ -104,7 +104,7 @@ export async function logTradeEvaluation(params: TradeEvaluationParams): Promise
     
     // Generate ID explicitly to avoid Prisma validation error
     // (database doesn't have DEFAULT constraint on id column)
-    const id = createId();
+    const id = randomUUID();
     
     const record = await prisma.tradeEvaluation.create({
       data: {

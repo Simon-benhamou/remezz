@@ -2924,6 +2924,13 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
       volumeMA,
       volumeZScore,
     },
+    regimeContext: {
+      volatilityRegime: atrPct < 3 ? 'low' : atrPct > 6 ? 'high' : 'medium',
+      directionBias: ema20 && ema50 ? (ema20 > ema50 * 1.001 ? 'long' : ema20 < ema50 * 0.999 ? 'short' : 'neutral') : 'neutral',
+      volumeRegime: volumeZScore < -0.5 ? 'low' : volumeZScore > 0.5 ? 'high' : 'normal',
+      trendingRanging: adx > 25 ? 'trending' : adx < 20 ? 'ranging' : (atrPct > 4 ? 'trending' : 'ranging'),
+      parameterSource: 'static_config',
+    },
   }).catch((error) => {
     // Non-blocking: log error but don't fail the trade decision
     console.warn('Failed to log trade evaluation:', error);
