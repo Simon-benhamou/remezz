@@ -82,17 +82,62 @@ export class CapitalPoolBroker implements Broker {
 
     if (!reservation) {
       const snapshot = await this.capital.getBalance();
-      console.log(`[CapitalPoolBroker] REJECTED - capital_reservation_failed: agentId=${this.agentId}, symbol=${order.symbol}`);
-      console.log(`  Pool snapshot: total=${snapshot.totalUSD.toNumber()}, free=${snapshot.freeUSD.toNumber()}, reserved=${snapshot.reservedUSD.toNumber()}, inPositions=${snapshot.inPositionsUSD.toNumber()}`);
-      console.log(`  Requested: ${desiredUsd.toNumber()}, minOrder: ${this.minOrderUsd.toNumber()}, leverage: ${leverage}`);
       
-      // Log capital reservation failure
+      // Calculate detailed capital breakdown for debugging
+      const totalFree = snapshot.freeUSD.toNumber();
+      const reserved = snapshot.reservedUSD.toNumber();
+      const inPositions = snapshot.inPositionsUSD.toNumber();
+      const actuallyAvailable = totalFree - reserved - inPositions;
+      const requestedMargin = desiredUsd.toNumber() / leverage;
+      
+      // Get symbol-specific limits
+      const symbolExposureUsd = this.capital.getSymbolExposureUsd(order.symbol).toNumber();
+      const totalCapital = snapshot.totalUSD.toNumber();
+      const symbolCapPct = 0.50; // Default from capitalConfig
+      const symbolCap = totalCapital * symbolCapPct;
+      const symbolRoom = Math.max(0, symbolCap - symbolExposureUsd);
+      
+      console.log(`[CapitalPoolBroker] ❌ REJECTED - capital_reservation_failed`);
+      console.log(`  Agent: ${this.agentId}, Symbol: ${order.symbol}`);
+      console.log(`  Pool State:`);
+      console.log(`    Total:          $${totalFree.toFixed(2)}`);
+      console.log(`    Reserved:       $${reserved.toFixed(2)} (pending orders)`);
+      console.log(`    In Positions:   $${inPositions.toFixed(2)} (open trades)`);
+      console.log(`    Actually Free:  $${actuallyAvailable.toFixed(2)}`);
+      console.log(`  Request:`);
+      console.log(`    Notional:       $${desiredUsd.toNumber().toFixed(2)}`);
+      console.log(`    Leverage:       ${leverage}x`);
+      console.log(`    Margin Needed:  $${requestedMargin.toFixed(2)}`);
+      console.log(`    Min Order:      $${this.minOrderUsd.toNumber().toFixed(2)}`);
+      console.log(`  Symbol Limits (${order.symbol}):`);
+      console.log(`    Current Exposure: $${symbolExposureUsd.toFixed(2)}`);
+      console.log(`    Symbol Cap:       $${symbolCap.toFixed(2)} (${(symbolCapPct * 100).toFixed(0)}% of pool)`);
+      console.log(`    Symbol Room:      $${symbolRoom.toFixed(2)}`);
+      console.log(`  ❌ Rejection Reason:`);
+      
+      let blockedReason = '';
+      if (requestedMargin < this.minOrderUsd.toNumber()) {
+        console.log(`    Margin ($${requestedMargin.toFixed(2)}) < Min Order ($${this.minOrderUsd.toNumber().toFixed(2)})`);
+        blockedReason = `margin_below_minimum: margin=${requestedMargin.toFixed(2)}, min=${this.minOrderUsd.toNumber().toFixed(2)}`;
+      } else if (symbolRoom < requestedMargin) {
+        console.log(`    Symbol limit reached: room=$${symbolRoom.toFixed(2)} < needed=$${requestedMargin.toFixed(2)}`);
+        blockedReason = `symbol_cap_exceeded: exposure=${symbolExposureUsd.toFixed(2)}, cap=${symbolCap.toFixed(2)}, needed=${requestedMargin.toFixed(2)}`;
+      } else if (actuallyAvailable < requestedMargin) {
+        console.log(`    Insufficient free capital: available=$${actuallyAvailable.toFixed(2)} < needed=$${requestedMargin.toFixed(2)}`);
+        blockedReason = `insufficient_capital: available=${actuallyAvailable.toFixed(2)}, needed=${requestedMargin.toFixed(2)}, reserved=${reserved.toFixed(2)}, inPositions=${inPositions.toFixed(2)}`;
+      } else {
+        console.log(`    Unknown reason - this shouldn't happen!`);
+        blockedReason = `unknown: available=${actuallyAvailable.toFixed(2)}, needed=${requestedMargin.toFixed(2)}`;
+      }
+      
+      // Log capital reservation failure with detailed reason
       logTradeEvaluation({
         symbol: order.symbol,
         decision: 'order_blocked_capital',
-        blockedReason: `capital_exhausted: free=${snapshot.freeUSD.toNumber().toFixed(2)}, requested=${desiredUsd.toNumber().toFixed(2)}`,
-        confidenceScore: 0.5, // Unknown at broker level
-        inputMetrics: {},
+        blockedReason,
+        confidenceScore: order._evaluationContext?.confidence ?? 0.5,
+        inputMetrics: order._evaluationContext?.inputMetrics ?? {},
+        regimeContext: order._evaluationContext?.regimeContext,
       }).catch(err => console.warn('Failed to log capital block:', err));
       
       return this.rejectOrder(order, 'capital_reservation_failed');

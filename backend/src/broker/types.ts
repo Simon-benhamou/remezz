@@ -14,6 +14,24 @@ export type NewOrder = {
   reduceOnly?: boolean;
   timeInForce?: string;
   postOnly?: boolean;
+  // Optional context for trade evaluation logging
+  _evaluationContext?: {
+    confidence: number;
+    inputMetrics: {
+      adx?: number;
+      rsi14?: number;
+      cmf?: number;
+      atrPct?: number;
+      [key: string]: number | undefined;
+    };
+    regimeContext?: {
+      volatilityRegime?: 'low' | 'medium' | 'high';
+      directionBias?: 'long' | 'short' | 'neutral';
+      volumeRegime?: 'low' | 'normal' | 'high';
+      trendingRanging?: 'trending' | 'ranging';
+      parameterSource?: string;
+    };
+  };
 };
 
 export type PlacedOrder = NewOrder & {

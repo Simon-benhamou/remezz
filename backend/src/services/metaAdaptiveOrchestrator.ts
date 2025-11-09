@@ -365,6 +365,18 @@ async function executeEntryTrade(
         qty: sizing.qty,
         stopLoss: stopPrice,
         clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
+        // Add evaluation context for better logging
+        _evaluationContext: {
+          confidence: signal.confidence,
+          inputMetrics: {
+            adx: tech.adx14,
+            rsi14: tech.rsi14,
+            cmf: (tech as any).cmf20,
+            atrPct: (tech.atr14 / tech.last) * 100,
+            volumeRatio: (tech as any).volumeRatio,
+          },
+          regimeContext: calculateRegimeContext(tech),
+        },
       }),
       3,
       500
@@ -430,6 +442,23 @@ async function executeEntryTrade(
 
   } catch (error: any) {
     integrationLogger.error('Error executing entry trade', error);
+    console.log(`[MetaOrchestrator.executeEntryTrade] EXCEPTION: ${error.message}`);
+    
+    // Log the exception as an order rejection
+    await logTradeEvaluation({
+      symbol: session.symbol,
+      decision: 'order_rejected',
+      blockedReason: `exception: ${error.message || 'unknown error'}`,
+      confidenceScore: signal.confidence,
+      inputMetrics: {
+        adx: tech.adx14,
+        rsi14: tech.rsi14,
+        cmf: (tech as any).cmf20,
+        atrPct: (tech.atr14 / tech.last) * 100,
+        volumeRatio: (tech as any).volumeRatio,
+      },
+      regimeContext: calculateRegimeContext(tech),
+    }).catch(err => console.warn('Failed to log exception:', err));
   }
 }
 

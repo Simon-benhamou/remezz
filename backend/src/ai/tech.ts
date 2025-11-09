@@ -350,7 +350,7 @@ function dailyPivotsFromOHLCV(ohlcv: number[][]) {
 }
 
 const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
-const SNAP_TTL_MS = 1000 * 15; // 15s
+const SNAP_TTL_MS = 1000 * 10; // 10s - Reduced from 15s for more frequent updates
 const MAX_CACHE_SIZE = 1000; // Limit cache size to prevent memory leaks
 const cacheKey = (symbol: string) => `snap_${symbol}`;
 const MIN_MEANINGFUL_VOLUME = 1e-8; // effectively zero in base currency units
@@ -438,12 +438,15 @@ export async function ensureRecentVolumeIntegrity(options: {
 // - 24h S/R + swing S/R
 // - Daily pivots (P, S1, S2, R1, R2)
 // - srBias: nearSupport | nearResistance | neutral (~0.6% window)
-export async function buildTechSnapshot(symbol: string, userId?: string): Promise<TechnicalSnapshot>{
+export async function buildTechSnapshot(symbol: string, userId?: string, options?: { bypassCache?: boolean }): Promise<TechnicalSnapshot>{
   try {
-    const key = cacheKey(symbol);
-    const cached = snapCache.get(key);
-    if (cached && (Date.now() - cached.ts) < SNAP_TTL_MS) {
-      return { ...(cached.data) };
+    // Allow bypassing cache for critical evaluations
+    if (!options?.bypassCache) {
+      const key = cacheKey(symbol);
+      const cached = snapCache.get(key);
+      if (cached && (Date.now() - cached.ts) < SNAP_TTL_MS) {
+        return { ...(cached.data) };
+      }
     }
   } catch (error) {
     console.warn(`[buildTechSnapshot] Cache read failed for ${symbol}:`, error);
