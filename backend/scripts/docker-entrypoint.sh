@@ -36,13 +36,13 @@ if [ -n "$DATABASE_URL" ]; then
   # Wait for database to be ready (handles Neon cold starts)
   wait_for_db
   
-  # 1) Appliquer les migrations si elles existent
-  npx prisma migrate deploy 2>/dev/null || echo "[entrypoint] No pending migrations"
-
-  # 2) Toujours pousser le schéma (crée les tables si aucune migration)
-  npx prisma db push --accept-data-loss 2>/dev/null || {
+  # Synchronize schema with database (skips migration history)
+  echo "[entrypoint] Syncing Prisma schema with database..."
+  npx prisma db push --skip-generate --accept-data-loss 2>&1 || {
     echo "[entrypoint] ⚠️ prisma db push failed, but continuing..."
   }
+  
+  echo "[entrypoint] ✅ Schema synchronized"
 else
   echo "DATABASE_URL not set, skipping Prisma"
 fi
