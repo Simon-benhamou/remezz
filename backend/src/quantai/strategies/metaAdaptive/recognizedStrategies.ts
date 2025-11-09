@@ -1071,7 +1071,6 @@ export async function evaluateRecognizedStrategies(
     .map(signal => toRecognizedSignal(signal, snap, regimeThresholds))
     .sort((a, b) => b.meta!.score - a.meta!.score);
 }
-}
 
 export async function registerAdaptiveTradeEntry(params: {
   sessionId?: string | null;
