@@ -36,6 +36,7 @@ import { capitalConfig } from '../config/capital.js';
 import { recordEnter, recordExit } from '../agent/persistence.js';
 import { computeQtyNotional } from '../risk/manager.js';
 import { getConfig } from '../utils/env.js';
+import { calculateFeeUsd } from '../quantai/executionCosts.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -423,6 +424,18 @@ async function executeEntryTrade(
 
       // Persist order and position to database
       try {
+        // Calculate fee using Binance taker fee (market order = taker)
+        const feeUsd = calculateFeeUsd({
+          price: order.avgPrice ?? entryPrice,
+          qty: order.filledQty ?? qty,
+          side,
+          liquidity: 'taker', // Market orders are taker orders
+          fees: {
+            makerFeeBps: config.feesSlippage.makerFeeBps,
+            takerFeeBps: config.feesSlippage.takerFeeBps,
+          },
+        });
+
         await recordEnter({
           sessionId: session.sessionId,
           symbol: session.symbol,
@@ -436,6 +449,7 @@ async function executeEntryTrade(
           latencyMs: order.latencyMs,
           slippageBps: order.slippageBps,
           fillRatio: order.fillRatio,
+          feeUsd,
         });
         console.log(`[MetaOrchestrator.executeEntryTrade] Position persisted to database`);
       } catch (err) {
@@ -557,6 +571,8 @@ async function executeExitTrade(
   exitPrice: number,
   reason: string
 ): Promise<void> {
+  const config = getQuantAIConfig();
+  
   try {
     if (!agent?.pos) {
       return;
@@ -595,6 +611,18 @@ async function executeExitTrade(
     // Persist exit order and update position in database
     if (order.status !== 'rejected') {
       try {
+        // Calculate fee using Binance taker fee (market order = taker)
+        const feeUsd = calculateFeeUsd({
+          price: order.avgPrice ?? exitPrice,
+          qty: order.filledQty ?? position.qty,
+          side: exitSide,
+          liquidity: 'taker', // Market orders are taker orders
+          fees: {
+            makerFeeBps: config.feesSlippage.makerFeeBps,
+            takerFeeBps: config.feesSlippage.takerFeeBps,
+          },
+        });
+
         await recordExit({
           sessionId: session.sessionId,
           symbol: session.symbol,
@@ -602,6 +630,7 @@ async function executeExitTrade(
           exitPrice: order.avgPrice ?? exitPrice,
           qty: order.filledQty ?? position.qty,
           realizedPnl: pnl,
+          feeUsd,
           requestedPrice: exitPrice,
           requestedQty: position.qty,
           latencyMs: order.latencyMs,

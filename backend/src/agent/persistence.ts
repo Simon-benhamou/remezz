@@ -54,6 +54,7 @@ export async function recordEnter(params: {
   attempts?: number;
   slOrderId?: string;
   tpOrderId?: string;
+  feeUsd?: number;
 }) {
   const clientOrderId = `${params.sessionId}.${params.symbol}.${Date.now()}`;
   const round4 = (n:number|undefined)=> (typeof n==='number' ? Math.round(n*1e4)/1e4 : undefined);
@@ -82,13 +83,17 @@ export async function recordEnter(params: {
       source: 'agent',
     }
   });
+  const feeRounded = typeof params.feeUsd === 'number' && Number.isFinite(params.feeUsd)
+    ? Math.max(0, Math.round(params.feeUsd * 1e6) / 1e6)
+    : 0;
+
   await prisma.fill.create({
     data: {
       orderId: order.id,
       price: round4(params.entryPrice)!,
       qty: params.qty,
       side: params.side,
-      fee: 0,
+      fee: feeRounded,
       sessionId: params.sessionId,
     }
   });
