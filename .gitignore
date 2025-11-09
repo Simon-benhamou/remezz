@@ -1,1 +1,19 @@
 backend/test-logging-improvement.mjs
+
+# Test coverage and artifacts
+coverage/
+*.coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.nyc_output/
+test-results/
+junit.xml
+
+# Jest
+jest-coverage/
+
+# Cypress
+cypress/videos/
+cypress/screenshots/
+.cypress/
