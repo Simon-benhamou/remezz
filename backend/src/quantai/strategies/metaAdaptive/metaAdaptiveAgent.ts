@@ -15,6 +15,12 @@ import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 import { logMetaAdaptiveEvaluation } from './evaluationLogger.js';
+import {
+  classifyVolatilityRegime,
+  classifyDirectionBias,
+  classifyVolumeRegime,
+  classifyTrendingRanging,
+} from '../../../learning/personalityProfile.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 const pythonSignalTuning = getPythonSignalTuning();
@@ -1885,9 +1891,19 @@ class MetaAdaptiveStrategyAgent {
       reasonsRecord[`reason_${idx}`] = reason;
     });
     
+    // Calculate regime context for the evaluation
+    const regimeContext = {
+      volatilityRegime: classifyVolatilityRegime(entryFacts.atrPct),
+      directionBias: classifyDirectionBias(entryFacts.ema20, entryFacts.ema50),
+      volumeRegime: classifyVolumeRegime(entryFacts.volume, entryFacts.volumeMA, entryFacts.volumeZScore),
+      trendingRanging: classifyTrendingRanging(entryFacts.adx, entryFacts.atrPct),
+      parameterSource: 'meta_adaptive_agent',
+    };
+    
     const entryEvaluation = {
       ok: selection != null && selection.active,
       reasons: reasonsRecord,
+      regimeContext,
     };
     
     // Log asynchronously (non-blocking)
