@@ -42,6 +42,7 @@ import { refreshLeverageConstraintInputs } from "./risk/leverageCaps.js";
 import { startMarginMonitor } from "./services/marginMonitor.js";
 import { stateReconciler } from "./services/stateReconciler.js";
 import { prisma } from "./db/client.js";
+import { initializeDatabaseConnection, disconnectDatabase } from "./db/connection.js";
 import {
   startAgentCreation,
   PhaseError,
@@ -172,6 +173,30 @@ app.post("/api/start-agent", async (req, res) => {
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
+
+// Initialize database connection with retry logic (handles Neon cold starts)
+(async () => {
+  try {
+    serverLogger.info('🔌 Initializing database connection...');
+    const connected = await initializeDatabaseConnection(false); // Non-critical, won't crash
+    if (connected) {
+      serverLogger.info('✅ Database ready');
+    }
+  } catch (error) {
+    serverLogger.warn('⚠️ Database initialization warning:', error);
+  }
+})();
+
+// Handle graceful shutdown
+const shutdown = async () => {
+  serverLogger.info('🛑 Shutting down gracefully...');
+  await disconnectDatabase();
+  process.exit(0);
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
 startWSHub(wss);
 startEventEngine();
 initMetaAdaptiveOrchestrator();
