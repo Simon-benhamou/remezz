@@ -180,8 +180,15 @@ export async function computeAgentHealth(
   
   const activeSessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null },
-    include: { 
-      Position: true,
+    select: { 
+      id: true, 
+      symbol: true, 
+      mode: true, 
+      profileJson: true, 
+      isSmartAgent: true,
+      haltedAt: true,
+      planJson: true,
+      positions: true,
     },
   });
   const sessionIds = activeSessions.map((session) => session.id);
@@ -328,8 +335,8 @@ export async function computeAgentHealth(
     if ((session as any).haltedAt && !(session as any).stoppedAt) {
       derivedState = 'COOLDOWN';
     } else {
-      hasPosition = Array.isArray((session as any).Position) && 
-        (session as any).Position.some((p: any) => p.qty && Number(p.qty) > 0);
+      hasPosition = Array.isArray((session as any).positions) && 
+        (session as any).positions.some((p: any) => p.qty && Number(p.qty) > 0);
       
       if (hasPosition) {
         derivedState = 'MANAGE';

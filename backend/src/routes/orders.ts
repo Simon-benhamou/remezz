@@ -11,7 +11,7 @@ router.get("/", async (req, res) => {
     if (s?.id) where.sessionId = s.id;
   }
   const [rows, sess] = await Promise.all([
-    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { Fill: true } }),
+    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { fills: true } }),
     sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
   ]);
   const budgetPct = Number(((sess as any)?.profileJson?.budgetPct) ?? 100);

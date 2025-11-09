@@ -147,7 +147,7 @@ export class CorrelationAnalyzer {
         createdAt: { gte: lookbackDate },
         clientOrderId: { endsWith: '.exit' },
       },
-      include: { Fill: true },
+      include: { fills: true },
       orderBy: { createdAt: 'asc' },
     });
 

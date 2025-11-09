@@ -3636,11 +3636,11 @@ export async function checkIntelligentOpportunities(): Promise<void> {
         ]
       },
       include: {
-        Position: {
+        positions: {
           where: { qty: { gt: 0 } }, // Only open positions
           take: 5
         },
-        Order: {
+        orders: {
           where: {
             status: { in: OPEN_ORDER_STATUS_LIST }
           },
@@ -3971,10 +3971,10 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     const activityWindowMs = activityWindowHours * 60 * 60 * 1000;
 
     const agent = AgentHub.get(session.id) as any;
-    const hasOpenPosition = Array.isArray(session.Position)
-      && session.Position.some((p: any) => Number(p?.qty || 0) > POSITION_QTY_EPSILON);
-    const hasOpenOrders = Array.isArray(session.Order)
-      && session.Order.some((order: any) => OPEN_ORDER_STATUSES.has(String(order?.status || '').toLowerCase()));
+    const hasOpenPosition = Array.isArray(session.positions)
+      && session.positions.some((p: any) => Number(p?.qty || 0) > POSITION_QTY_EPSILON);
+    const hasOpenOrders = Array.isArray(session.orders)
+      && session.orders.some((order: any) => OPEN_ORDER_STATUSES.has(String(order?.status || '').toLowerCase()));
     
     // FIX: For meta-adaptive agents (stateless stubs), only trust database state.
     // The agent.entering flag is unreliable and causes false positives.

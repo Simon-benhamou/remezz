@@ -20,7 +20,7 @@ type ReviewResult = {
 export async function postTradeReview(input: ReviewInput): Promise<ReviewResult | null> {
   const order = await prisma.order.findUnique({
     where: { id: input.exitOrderId },
-    include: { Fill: true },
+    include: { fills: true },
   });
   if (!order) return null;
 

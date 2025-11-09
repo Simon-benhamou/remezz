@@ -58,7 +58,7 @@ async function loadStrategySamples(sessionId: string | undefined, symbol: string
       clientOrderId: { endsWith: '.exit' },
       ...(sessionId ? { sessionId } : {}),
     },
-    include: { Fill: true },
+    include: { fills: true },
     orderBy: { createdAt: 'desc' },
     take: 60,
   });
