@@ -184,7 +184,30 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
           await executeEntryTrade(session, bestSignal, tech);
         }
       } else {
-        // Has position - check if we should exit
+        // Has position - log that entry signal was blocked by existing position
+        const entrySignals = signals.filter(s => !(s as any).isExit);
+        if (entrySignals.length > 0) {
+          const bestSignal = entrySignals[0];
+          logger.info(`[${session.sessionId}] Entry signal blocked - existing position present`);
+          
+          // Log that order was blocked due to existing position
+          await logTradeEvaluation({
+            symbol: session.symbol,
+            decision: 'order_blocked_capital',
+            blockedReason: 'existing_position_present',
+            confidenceScore: bestSignal.confidence,
+            inputMetrics: {
+              adx: tech.adx14,
+              atrPct: (tech.atr14 / tech.last) * 100,
+              cmf: (tech as any).cmf20,
+              rsi14: tech.rsi14,
+              volumeRatio: (tech as any).volumeRatio,
+            },
+            regimeContext: calculateRegimeContext(tech),
+          }).catch(err => console.warn('Failed to log existing position block:', err));
+        }
+        
+        // Check if we should exit
         logger.debug(`[${session.sessionId}] Has position, checking exit conditions`);
         await checkAndExecuteExit(session, agent, tech);
       }
