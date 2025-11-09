@@ -12,6 +12,8 @@ export class IntegratedPerformanceMonitor {
   private isMonitoring = false;
   private checkInterval: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 30000; // Check every 30 seconds
+  private dbConnectionFailed = false;
+  private dbErrorReported = false;
 
   constructor() {
     this.startLifecycleMonitoring();
@@ -31,6 +33,11 @@ export class IntegratedPerformanceMonitor {
 
   private async checkAgentLifecycle(): Promise<void> {
     try {
+      // Skip if database connection previously failed
+      if (this.dbConnectionFailed) {
+        return;
+      }
+
       // Count active agents
       const activeAgentCount = await prisma.agentSession.count({
         where: { stoppedAt: null }
@@ -46,7 +53,23 @@ export class IntegratedPerformanceMonitor {
         await this.stopMonitoring();
       }
     } catch (error) {
-      console.error('❌ Error in lifecycle monitoring:', error);
+      // Check if this is a database connection error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorName = error instanceof Error ? error.constructor.name : '';
+      
+      if (errorName.includes('PrismaClientInitializationError') || 
+          errorMessage.includes("Can't reach database server") ||
+          errorMessage.includes('database server is running')) {
+        this.dbConnectionFailed = true;
+        if (!this.dbErrorReported) {
+          console.warn('⚠️ IntegratedPerformanceMonitor: Database connection unavailable. Monitoring disabled.');
+          console.warn('💡 Please configure DATABASE_URL environment variable to enable monitoring.');
+          this.dbErrorReported = true;
+        }
+      } else {
+        // Log other errors normally
+        console.error('❌ Error in lifecycle monitoring:', error);
+      }
     }
   }
 
