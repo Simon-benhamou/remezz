@@ -228,7 +228,7 @@ export async function updatePortfolioBalance(userId: string, mode: PortfolioMode
 export async function getPortfolioSnapshot(userId: string, mode: PortfolioMode): Promise<PortfolioSnapshot> {
   const settings = await loadSettings(userId, mode);
   const sessions = await prisma.agentSession.findMany({
-    where: { stoppedAt: null, mode, userId },
+    where: { stoppedAt: null, mode },
     include: { kpi: true },
   });
   return buildSnapshot(mode, settings, sessions);

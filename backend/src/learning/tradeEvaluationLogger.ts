@@ -109,7 +109,6 @@ export async function logTradeEvaluation(params: TradeEvaluationParams): Promise
         inputMetrics: params.inputMetrics as any,
         regimeContext: params.regimeContext as any, // NEW: Store regime context for traceability
         marketOutcome: Prisma.JsonNull,
-        updatedAt: new Date(),
       },
       select: { id: true },
     });
