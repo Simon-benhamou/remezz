@@ -113,7 +113,7 @@ function ensurePositive(value: number | null | undefined, fallback: number): num
   return value;
 }
 
-type SessionWithKpi = Awaited<ReturnType<typeof prisma.agentSession.findMany<{ include: { kpi: true } }>>>[number];
+type SessionWithKpi = Awaited<ReturnType<typeof prisma.agentSession.findMany<{ include: { SessionKpi: true } }>>>[number];
 
 type PerformanceContext = {
   roiPct: number;
@@ -149,14 +149,14 @@ function computePerformanceScore(ctx: PerformanceContext): number {
   return Math.max(0.2, score);
 }
 
-function extractStats(kpi: SessionWithKpi['kpi']): PerformanceContext {
-  const stats = (kpi?.stats as Record<string, any>) ?? {};
+function extractStats(SessionKpi: SessionWithKpi['SessionKpi']): PerformanceContext {
+  const stats = (SessionKpi?.stats as Record<string, any>) ?? {};
   const lossStreak = Number(stats.currentLossStreak ?? stats.lossStreak ?? stats.consecutiveStops ?? 0);
   return {
-    roiPct: Number(kpi?.roiPct ?? 0),
-    winRate: Number(kpi?.winRate ?? 0),
-    expectancy: Number(kpi?.expectancy ?? 0),
-    drawdownPct: Number(kpi?.maxDrawdownPct ?? 0),
+    roiPct: Number(SessionKpi?.roiPct ?? 0),
+    winRate: Number(SessionKpi?.winRate ?? 0),
+    expectancy: Number(SessionKpi?.expectancy ?? 0),
+    drawdownPct: Number(SessionKpi?.maxDrawdownPct ?? 0),
     lossStreak: Number.isFinite(lossStreak) ? lossStreak : 0,
   };
 }
@@ -177,7 +177,7 @@ function buildSnapshot(
     const rawBudgetFraction = allocation?.budgetFraction ?? profile?.budgetFraction;
     const budgetFraction = resolveBudgetFraction(rawBudgetFraction);
     const weightPct = balanceUsd > 0 ? (capitalUsd / balanceUsd) * 100 : 0;
-    const kpi = session.kpi;
+    const SessionKpi = session.SessionKpi;
     const tags: string[] = [];
     if (allocation?.correlationLimited) tags.push('correlation-limited');
     if (budgetFraction <= reducedThreshold) tags.push('capital-reduced');
@@ -189,10 +189,10 @@ function buildSnapshot(
       weightPct,
       budgetFraction,
       performanceScore,
-      roiPct: Number(kpi?.roiPct ?? 0),
-      winRate: Number(kpi?.winRate ?? 0),
-      expectancy: Number(kpi?.expectancy ?? 0),
-      drawdownPct: Number(kpi?.maxDrawdownPct ?? 0),
+      roiPct: Number(SessionKpi?.roiPct ?? 0),
+      winRate: Number(SessionKpi?.winRate ?? 0),
+      expectancy: Number(SessionKpi?.expectancy ?? 0),
+      drawdownPct: Number(SessionKpi?.maxDrawdownPct ?? 0),
       maxLeverage: Number(profile?.maxLeverage ?? allocation?.maxLeverage ?? 0),
       leverageCap: Number(((profile?.leverageCap as any)?.resolved ?? allocation?.maxLeverage ?? 0)),
       correlationKey: allocation?.correlationKey ?? getCorrelationKey(session.symbol),
@@ -229,7 +229,7 @@ export async function getPortfolioSnapshot(userId: string, mode: PortfolioMode):
   const settings = await loadSettings(userId, mode);
   const sessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null, mode },
-    include: { kpi: true },
+    include: { SessionKpi: true },
   });
   return buildSnapshot(mode, settings, sessions);
 }
@@ -253,7 +253,7 @@ export async function rebalancePortfolio(params: {
 
   const sessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null, mode, userId },
-    include: { kpi: true },
+    include: { SessionKpi: true },
   });
 
   if (!sessions.length) {
@@ -267,7 +267,7 @@ export async function rebalancePortfolio(params: {
   settings.balanceUsd = ensurePositive(settings.balanceUsd, ensurePositive(derivedBalance, 1000));
 
   const entries = sessions.map((session) => {
-    const kpiStats = extractStats(session.kpi);
+    const kpiStats = extractStats(session.SessionKpi);
     const score = computePerformanceScore(kpiStats);
     const profile = ((session.profileJson ?? {}) as Record<string, any>) || {};
     const baseMaxLeverage = Number(profile?.maxLeverage ?? (profile?.leverageCap?.resolved ?? 4));
@@ -390,7 +390,7 @@ export async function rebalancePortfolio(params: {
 
   const refreshedSessions = await prisma.agentSession.findMany({
     where: { stoppedAt: null, mode, userId },
-    include: { kpi: true },
+    include: { SessionKpi: true },
   });
   return buildSnapshot(mode, settings, refreshedSessions);
 }

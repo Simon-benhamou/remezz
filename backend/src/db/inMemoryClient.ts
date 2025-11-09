@@ -361,7 +361,7 @@ class InMemoryModel {
     if (this.name === 'agentSession') {
       // Support both lowercase 'kpi' (legacy) and PascalCase 'SessionKpi' (correct Prisma convention)
       if (include.kpi || include.SessionKpi) {
-        out.kpi = this.client.sessionKpi.findFirst({ where: { sessionId: record.id } }) ?? null;
+        out.SessionKpi = this.client.sessionKpi.findFirst({ where: { sessionId: record.id } }) ?? null;
       }
       if (include.positions) {
         out.positions = this.client.position.findMany({ where: { sessionId: record.id } });

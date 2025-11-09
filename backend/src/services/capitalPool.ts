@@ -75,7 +75,7 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
         positions: {
           select: { symbol: true, qty: true, entryPrice: true, leverage: true },
         },
-        kpi: {
+        SessionKpi: {
           select: { realizedPnlUsd: true, unrealizedPnlUsd: true },
         },
       },
@@ -99,8 +99,8 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
     let inPositionsTotal = 0;
 
     for (const session of sessions) {
-      realizedSum += Number(session.kpi?.realizedPnlUsd ?? 0);
-      unrealizedSum += Number(session.kpi?.unrealizedPnlUsd ?? 0);
+      realizedSum += Number(session.SessionKpi?.realizedPnlUsd ?? 0);
+      unrealizedSum += Number(session.SessionKpi?.unrealizedPnlUsd ?? 0);
       for (const position of session.positions) {
         const qty = Math.abs(Number(position.qty ?? 0));
         const entryPrice = Math.abs(Number(position.entryPrice ?? 0));
@@ -162,7 +162,7 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
         positions: {
           select: { symbol: true, qty: true, entryPrice: true, leverage: true },
         },
-        kpi: {
+        SessionKpi: {
           select: { realizedPnlUsd: true, unrealizedPnlUsd: true },
         },
       },
@@ -192,8 +192,8 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
 
     for (const session of sessions) {
       startSum += Number(session.startBalanceUsd ?? 0);
-      realizedSum += Number(session.kpi?.realizedPnlUsd ?? 0);
-      unrealizedSum += Number(session.kpi?.unrealizedPnlUsd ?? 0);
+      realizedSum += Number(session.SessionKpi?.realizedPnlUsd ?? 0);
+      unrealizedSum += Number(session.SessionKpi?.unrealizedPnlUsd ?? 0);
       for (const position of session.positions) {
         const qty = Math.abs(Number(position.qty ?? 0));
         const entryPrice = Math.abs(Number(position.entryPrice ?? 0));

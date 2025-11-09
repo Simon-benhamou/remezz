@@ -100,7 +100,7 @@ model AgentSession {
   orders     Order[]
   fills      Fill[]                // back-rel from Fill.session
   positions  Position[]
-  kpi        SessionKpi?
+  SessionKpi SessionKpi?           @relation("AgentSessionToSessionKpi")
   triggers   TriggerLog[]
   alerts     Alert[]               // back-rel from Alert.session
   reports    DailyReport[]         // back-rel from DailyReport.session
@@ -263,7 +263,7 @@ model AgentOpsTelemetry {
 }
 
 model SessionKpi {
-  session          AgentSession @relation(fields: [sessionId], references: [id])
+  session          AgentSession @relation("AgentSessionToSessionKpi", fields: [sessionId], references: [id])
   sessionId        String @id
   realizedPnlUsd   Float  @default(0)
   unrealizedPnlUsd Float  @default(0)

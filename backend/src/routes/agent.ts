@@ -1055,7 +1055,7 @@ router.get('/sessions', authenticateUser, async (req: AuthenticatedRequest, res)
       // Only include heavy data if requested
       ...(includeStats
         ? {
-            kpi: {
+            SessionKpi: {
               select: {
                 realizedPnlUsd: true,
                 unrealizedPnlUsd: true,
@@ -1096,17 +1096,17 @@ router.get('/sessions', authenticateUser, async (req: AuthenticatedRequest, res)
 
     // Only calculate stats if included
     let stats = {} as Record<string, unknown>;
-    if (includeStats && (r as any).kpi) {
-      const realized = Number((r as any).kpi?.realizedPnlUsd || 0);
-      const unrealized = Number((r as any).kpi?.unrealizedPnlUsd || 0);
+    if (includeStats && (r as any).SessionKpi) {
+      const realized = Number((r as any).SessionKpi?.realizedPnlUsd || 0);
+      const unrealized = Number((r as any).SessionKpi?.unrealizedPnlUsd || 0);
       const start = Number(r.startBalanceUsd || 0);
-      const realizedRoi = Number((r as any).kpi?.roiPct || (start > 0 ? (realized / start) * 100 : 0));
-      const netRoiPct = Number(((r as any).kpi?.stats as any)?.netRoiPct ?? (start > 0 ? ((realized + unrealized) / start) * 100 : realizedRoi));
+      const realizedRoi = Number((r as any).SessionKpi?.roiPct || (start > 0 ? (realized / start) * 100 : 0));
+      const netRoiPct = Number(((r as any).SessionKpi?.stats as any)?.netRoiPct ?? (start > 0 ? ((realized + unrealized) / start) * 100 : realizedRoi));
       stats = {
         pnlUsd: realized + unrealized,
         roiPct: realizedRoi,
         netRoiPct,
-        winRate: Number((r as any).kpi?.winRate || 0),
+        winRate: Number((r as any).SessionKpi?.winRate || 0),
         openPositions: ((r as any).positions || []).length,
       };
     }
@@ -1160,21 +1160,21 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       sessionWhere.userId = req.user.id;
     }
     const [actives, totalSessions] = await Promise.all([
-      prisma.agentSession.findMany({ where: sessionWhere, include: { kpi: true, positions: true } }),
+      prisma.agentSession.findMany({ where: sessionWhere, include: { SessionKpi: true, positions: true } }),
       prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
     ]);
     const symbols = actives.map(a => a.symbol);
-    const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.kpi?.aiCallsTotal || 0), 0);
-    const realizedUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.realizedPnlUsd || 0), 0);
-    const unrealizedUsd = actives.reduce((sum, a)=> sum + Number(a.kpi?.unrealizedPnlUsd || 0), 0);
+    const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.SessionKpi?.aiCallsTotal || 0), 0);
+    const realizedUsd = actives.reduce((sum, a)=> sum + Number(a.SessionKpi?.realizedPnlUsd || 0), 0);
+    const unrealizedUsd = actives.reduce((sum, a)=> sum + Number(a.SessionKpi?.unrealizedPnlUsd || 0), 0);
     const pnlUsd = realizedUsd + unrealizedUsd;
     const capitalStartUsd = actives.reduce((sum, a)=> sum + Number(a.startBalanceUsd || 0), 0);
     const roiPct = capitalStartUsd > 0 ? (realizedUsd / capitalStartUsd) * 100 : 0;
     const netRoiPct = capitalStartUsd > 0 ? (pnlUsd / capitalStartUsd) * 100 : roiPct;
 
     // Calculate global win rate across all agents (not average of individual win rates)
-    const totalWins = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.wins || 0), 0);
-    const totalTrades = actives.reduce((sum, a)=> sum + Number((a.kpi?.stats as any)?.trades || 0), 0);
+    const totalWins = actives.reduce((sum, a)=> sum + Number((a.SessionKpi?.stats as any)?.wins || 0), 0);
+    const totalTrades = actives.reduce((sum, a)=> sum + Number((a.SessionKpi?.stats as any)?.trades || 0), 0);
     const avgWinRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
 
     // Get live exchange balance for authenticated users
@@ -1263,7 +1263,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
       const paperSessions = actives.filter(session => session.mode === 'paper');
       if (paperSessions.length > 0) {
         const startSum = paperSessions.reduce((s, ps)=> s + Number(ps.startBalanceUsd || 0), 0);
-        const pnlSum = paperSessions.reduce((s, ps)=> s + Number(ps.kpi?.realizedPnlUsd || 0) + Number(ps.kpi?.unrealizedPnlUsd || 0), 0);
+        const pnlSum = paperSessions.reduce((s, ps)=> s + Number(ps.SessionKpi?.realizedPnlUsd || 0) + Number(ps.SessionKpi?.unrealizedPnlUsd || 0), 0);
         const eq = startSum + pnlSum;
         paperBalance = {
           equityUsd: eq,
@@ -1315,13 +1315,13 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
         state: agentState, // ✅ Now using correct state property
         bias: agentBias,
         aggressiveness: session.profileJson ? (session.profileJson as any)?.aggressiveness : 'conservative',
-        pnlUsd: Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0),
+        pnlUsd: Number(session.SessionKpi?.realizedPnlUsd || 0) + Number(session.SessionKpi?.unrealizedPnlUsd || 0),
         roiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ?
-          (Number(session.kpi?.realizedPnlUsd || 0) / Number(session.startBalanceUsd)) * 100 : 0,
+          (Number(session.SessionKpi?.realizedPnlUsd || 0) / Number(session.startBalanceUsd)) * 100 : 0,
         netRoiPct: (session.startBalanceUsd && session.startBalanceUsd > 0) ?
-          ((Number(session.kpi?.realizedPnlUsd || 0) + Number(session.kpi?.unrealizedPnlUsd || 0)) / Number(session.startBalanceUsd)) * 100 : 0,
-        winRate: Number(session.kpi?.winRate || 0),
-        trades: Number((session.kpi?.stats as any)?.tradesTotal || 0),
+          ((Number(session.SessionKpi?.realizedPnlUsd || 0) + Number(session.SessionKpi?.unrealizedPnlUsd || 0)) / Number(session.startBalanceUsd)) * 100 : 0,
+        winRate: Number(session.SessionKpi?.winRate || 0),
+        trades: Number((session.SessionKpi?.stats as any)?.tradesTotal || 0),
         createdAt: session.startedAt,
         lastActivity: new Date().toISOString(),
         leverage: {

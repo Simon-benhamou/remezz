@@ -189,7 +189,7 @@ async function tickOnce(sessionId: string, sym: string){
 
   // Broadcast a lightweight overview update for this session (live ROI/PnL)
   try {
-    const s = await prisma.agentSession.findUnique({ where:{ id: sessionId }, include: { kpi: true } });
+    const s = await prisma.agentSession.findUnique({ where:{ id: sessionId }, include: { SessionKpi: true } });
     if (s) {
       const a = AgentHub.get(sessionId) as any;
       let upnlUsd = 0;
@@ -197,10 +197,10 @@ async function tickOnce(sessionId: string, sym: string){
         const dir = a.pos.side === 'buy' ? 1 : -1;
         upnlUsd = dir * (tech.last - a.pos.entry) * a.pos.qty;
       }
-      const realized = Number((s as any)?.kpi?.realizedPnlUsd || 0);
-      const persistedUnrealized = Number((s as any)?.kpi?.unrealizedPnlUsd || 0);
+      const realized = Number((s as any)?.SessionKpi?.realizedPnlUsd || 0);
+      const persistedUnrealized = Number((s as any)?.SessionKpi?.unrealizedPnlUsd || 0);
       const capital = Number(s.startBalanceUsd || 0);
-      const realizedRoi = capital > 0 ? (realized / capital) * 100 : Number((s as any)?.kpi?.roiPct || 0);
+      const realizedRoi = capital > 0 ? (realized / capital) * 100 : Number((s as any)?.SessionKpi?.roiPct || 0);
       const totalUnrealized = persistedUnrealized + upnlUsd;
       const pnlUsd = realized + totalUnrealized;
       const netRoiPct = capital > 0 ? (pnlUsd / capital) * 100 : realizedRoi;

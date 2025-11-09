@@ -146,7 +146,7 @@ router.post('/create-test-smart-agent', async (req, res) => {
       // Get updated session
       const updatedSession = await prisma.agentSession.findUnique({ 
         where: { id: session.id },
-        include: { kpi: true }
+        include: { SessionKpi: true }
       });
       
       res.json({

@@ -70,7 +70,7 @@ class AgentPerformanceAnalyzer {
     const activeSessions = await prisma.agentSession.findMany({
       where: { stoppedAt: null },
       include: {
-        kpi: true,
+        SessionKpi: true,
         positions: { where: { qty: { gt: 0 } } },
         fills: { take: 100, orderBy: { ts: 'desc' } }
       }
@@ -93,8 +93,8 @@ class AgentPerformanceAnalyzer {
   }
 
   private async analyzeAgent(session: any): Promise<AgentMetrics> {
-    const kpi = session.kpi;
-    const stats = kpi?.stats as any || {};
+    const SessionKpi = session.SessionKpi;
+    const stats = SessionKpi?.stats as any || {};
 
     // Calculate advanced metrics
     const trades = stats.trades || 0;
@@ -149,10 +149,10 @@ class AgentPerformanceAnalyzer {
       totalPnL,
       avgWin,
       avgLoss,
-      maxDrawdown: kpi?.maxDrawdownPct || 0,
+      maxDrawdown: SessionKpi?.maxDrawdownPct || 0,
       expectancy,
       sharpeRatio: this.calculateSharpeRatio(recentFills),
-      calmarRatio: this.calculateCalmarRatio(totalPnL, kpi?.maxDrawdownPct || 0),
+      calmarRatio: this.calculateCalmarRatio(totalPnL, SessionKpi?.maxDrawdownPct || 0),
       currentStreak,
       maxConsecutiveWins,
       maxConsecutiveLosses,
