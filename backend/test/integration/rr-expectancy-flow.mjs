@@ -84,7 +84,8 @@ async function scenario({ sessionId, wins, losses, rrTest, expectPass }) {
     decay: cfg.decay,
     lookbackDays: cfg.lookbackDays,
   });
-  assert(winrate.trades === wins + losses, 'Trade count mismatch');
+  console.log(`📊 Winrate query result: ${winrate.trades} trades (expected: ${wins + losses}), p=${winrate.p}`);
+  assert(winrate.trades === wins + losses, `Trade count mismatch: got ${winrate.trades}, expected ${wins + losses}`);
   assert(winrate.p != null, 'Expected probability to be defined');
 
   const rrDyn = rrMinFromWinrate(winrate.p, cfg);

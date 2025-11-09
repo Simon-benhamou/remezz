@@ -104,3 +104,5 @@ console.log('✅ WS token refresh integration test passed.');
 ws.close();
 wss.close();
 server.close();
+
+process.exit(0);

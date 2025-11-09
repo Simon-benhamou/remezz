@@ -175,3 +175,5 @@ console.log('  - Module imports ✓');
 console.log('  - Job handler registration ✓');
 console.log('  - Schedule calculation ✓');
 console.log('  - Configuration consistency ✓');
+
+process.exit(0);

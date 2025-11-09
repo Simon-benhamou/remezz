@@ -72,8 +72,23 @@ let code = 0;
 const baseArgs = NODE_LOADER ? ['--loader', NODE_LOADER] : [];
 for (const file of files) {
   console.log(`\n--- ${path.relative(process.cwd(), file)} ---`);
-  const res = spawnSync(NODE_BIN, [...baseArgs, file], { stdio: 'inherit' });
-  if (res.status) code = res.status;
+  const res = spawnSync(NODE_BIN, [...baseArgs, file], { 
+    stdio: 'inherit',
+    timeout: 60000, // 60 second timeout per test
+    killSignal: 'SIGKILL'
+  });
+  
+  if (res.error) {
+    if (res.error.code === 'ETIMEDOUT') {
+      console.error(`\n⚠️  Test timed out after 60s: ${path.basename(file)}`);
+      code = 1;
+    } else {
+      console.error(`\n❌ Test error: ${res.error.message}`);
+      code = 1;
+    }
+  } else if (res.status) {
+    code = res.status;
+  }
 }
 
 process.exit(code);

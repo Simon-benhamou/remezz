@@ -10,6 +10,8 @@ process.env.LEVERAGE_CAP_MAJOR = '6';
 process.env.LEVERAGE_CAP_ALT = '4';
 process.env.LEVERAGE_CAP_MEME = '3';
 process.env.LEVERAGE_CONSTRAINT_REFRESH_DISABLED = 'true';
+process.env.BYPASS_LLM_CALLS = 'true'; // Skip LLM calls in tests
+process.env.DISABLE_PYTHON_PREDICTOR = 'true'; // Skip Python predictor
 
 console.log('🧪 Running leverage cap clamp integration test...');
 
@@ -104,6 +106,7 @@ try {
   if (typeof prisma.$disconnect === 'function') {
     await prisma.$disconnect();
   }
+  process.exit(0);
 } catch (error) {
   console.error('❌ Leverage cap clamp integration test failed:', error);
   process.exit(1);

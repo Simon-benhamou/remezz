@@ -169,7 +169,15 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
 
       // Get the agent to check current position state
       const agent = AgentHub.get(session.sessionId) as any;
-      const hasPosition = agent?.pos && agent.pos.qty > 0;
+      // Check for existing position from DATABASE, not just agent memory
+      // This prevents ghost position bugs when agent stub persists across restarts
+      const dbPosition = await prisma.position.findFirst({
+        where: {
+          sessionId: session.sessionId,
+          closedAt: null,
+        },
+      });
+      const hasPosition = dbPosition !== null;
 
       if (!hasPosition) {
         // No position - evaluate entry signals

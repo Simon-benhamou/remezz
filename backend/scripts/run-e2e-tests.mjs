@@ -53,8 +53,21 @@ for (const f of files) {
     continue;
   }
 
-  const res = spawnSync(NODE_BIN, [...baseArgs, f], { stdio: 'inherit' });
-  if (typeof res.status === 'number' && res.status !== 0) {
+  const res = spawnSync(NODE_BIN, [...baseArgs, f], { 
+    stdio: 'inherit',
+    timeout: 60000, // 60 second timeout per test
+    killSignal: 'SIGKILL'
+  });
+  
+  if (res.error) {
+    if (res.error.code === 'ETIMEDOUT') {
+      console.error(`\n⚠️  Test timed out after 60s: ${path.basename(f)}`);
+      code = 1;
+    } else {
+      console.error(`\n❌ Test error: ${res.error.message}`);
+      code = 1;
+    }
+  } else if (typeof res.status === 'number' && res.status !== 0) {
     code = res.status;
   }
 }

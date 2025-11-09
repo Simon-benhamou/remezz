@@ -41,6 +41,12 @@ export class AgentsHub {
       profile,
       state: 'ACTIVE', // Meta-adaptive agents are stateless - show as ACTIVE when running
       bias: 'none',
+      pos: null, // Initialize to prevent ghost position bugs
+      // Stub onTick for compatibility with tests
+      onTick: async () => {
+        // Meta-adaptive processing happens via tick routing, not agent.onTick
+        // This is just a no-op stub for backward compatibility
+      },
       // Provide getDiagnostics method for meta-adaptive stub agents
       getDiagnostics: async () => ({
         state: 'ACTIVE',
