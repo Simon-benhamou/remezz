@@ -3804,6 +3804,23 @@ async function maybeHandleDirectionalReversal(
       },
     });
 
+    // Broadcast directional reversal alert for real-time dashboard updates
+    broadcast('directional_reversal', {
+      previousBias: expectedBias,
+      newBias: consensusBias,
+      symbol: session.symbol,
+      timestamp: now.toISOString(),
+      confidence: consensusStrength / 3, // Normalize to 0-1 (3 indicators max)
+      metrics: {
+        change24h,
+        adx,
+        slopePct,
+        emaSpreadPct,
+        consensusStrength,
+      },
+      reasoning: `Consensus bias shifted from ${expectedBias} to ${consensusBias} with ${consensusStrength}/3 indicators aligned (ADX: ${adx.toFixed(1)}, Δ24h: ${change24h.toFixed(2)}%, EMA spread: ${emaSpreadPct.toFixed(2)}%)`,
+    }, session.symbol, session.id);
+
     const candidate = await getBestIntelligentOpportunity(session.id, { relaxSteps: 1, aggressiveness: effectiveAggressiveness });
 
     if (!candidate) {
