@@ -15,6 +15,7 @@ import {
   normalizeUnifiedSymbol,
   type StrategyFilterProfile,
 } from './intelligentAgent.js';
+import { selectBestOpportunity } from './smartSelectionOrchestrator.js';
 import { selectBestPerp } from '../ai/orchestrator.js';
 import { prisma } from '../db/client.js';
 import { buildTechSnapshot } from '../ai/tech.js';
@@ -782,14 +783,25 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
     minVolumeUsd: config.volumeThresholdUsd,
   });
 
+  // Use smart selection orchestrator for optimized selection
   const [listOutcome, prefetchedOutcome] = await Promise.all([
     runWithTimeout(() => getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile }), SMART_UNIVERSE_BUILD_TIMEOUT_MS),
     runWithTimeout(
-      () =>
-        getBestIntelligentOpportunity(undefined, {
-          aggressiveness: agg,
-          maxUsage: 0,
-        }),
+      async () => {
+        try {
+          // Try smart orchestrator first (cached, context-aware, faster)
+          const smartResult = await selectBestOpportunity(undefined);
+          // Return full analysis object as expected by caller
+          return smartResult.analysis;
+        } catch (error) {
+          console.warn('Smart orchestrator failed, falling back to legacy:', error);
+          // Fallback to legacy method
+          return getBestIntelligentOpportunity(undefined, {
+            aggressiveness: agg,
+            maxUsage: 0,
+          });
+        }
+      },
       SMART_PREFETCH_TIMEOUT_MS,
     ),
   ]);

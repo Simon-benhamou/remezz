@@ -2167,7 +2167,7 @@ function getFallbackSymbols(): string[] {
 /**
  * Optimized scoring algorithm - technical analysis first, minimal IA usage
  */
-async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive'; excludeSessionId?: string }): Promise<IntelligentAnalysis | null> {
+export async function calculateIntelligentScore(symbol: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive'; excludeSessionId?: string }): Promise<IntelligentAnalysis | null> {
   try {
     console.log(`🔍 Analyzing ${symbol}...`);
     let multiTimeframe: MultiTimeframeDiagnostics | null = null;
@@ -4336,8 +4336,30 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
       }
     }
     
-    // Get current best opportunity (cost-optimized scan, exclude current session)
-    const bestOpportunity = await getBestIntelligentOpportunity(session.id, { aggressiveness });
+    // Get current best opportunity using smart orchestrator (cost-optimized, context-aware)
+    let bestOpportunity: IntelligentAnalysis | null = null;
+    try {
+      const smartEval = await import('../../smartSelectionOrchestrator.js').then(m => 
+        m.evaluateSmartSwitch(session.id, session.symbol, session.id)
+      );
+      
+      if (smartEval.shouldSwitch && smartEval.targetSymbol) {
+        // Smart orchestrator found a better opportunity
+        const targetAnalysis = await calculateIntelligentScore(smartEval.targetSymbol);
+        if (targetAnalysis) {
+          bestOpportunity = targetAnalysis;
+          console.log(`🎯 Smart orchestrator recommended: ${smartEval.targetSymbol} (fast track: ${smartEval.fastTrack})`);
+        }
+      }
+    } catch (error) {
+      console.warn('Smart orchestrator failed, using legacy method:', error);
+    }
+    
+    // Fallback to legacy method if smart orchestrator didn't find better
+    if (!bestOpportunity) {
+      bestOpportunity = await getBestIntelligentOpportunity(session.id, { aggressiveness });
+    }
+    
     const currentAnalysis = config?.analysis;
     const currentScore = refreshedCurrent?.score ?? currentAnalysis?.score ?? 0;
     
