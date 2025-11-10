@@ -110,6 +110,7 @@ type AdjustmentParams = {
   alreadyTriggeredTargets?: Set<number>;
   archetype?: ExitArchetype;
   minutesOpen?: number;
+  peakPrice?: number | null;
 };
 
 export function maybeAdjustOrExit({
@@ -128,6 +129,7 @@ export function maybeAdjustOrExit({
   alreadyTriggeredTargets,
   archetype = 'impulse',
   minutesOpen,
+  peakPrice,
 }: AdjustmentParams): ExitDirective {
   const riskPerUnit = Math.abs(entryPrice - stop);
   const baselineRisk = initialStopDistance != null && Number.isFinite(initialStopDistance) && initialStopDistance > 0
@@ -266,6 +268,37 @@ export function maybeAdjustOrExit({
     }
     return null;
   };
+
+  // 🚀 PEAK DRAWDOWN PROTECTION: Exit if price drops significantly from peak
+  if (cfg.peakDrawdown?.enabled && peakPrice != null && rNow > 0) {
+    // Only check if we have a valid peak above entry (for longs) or below entry (for shorts)
+    const hasValidPeak = side === 'long' ? peakPrice > entryPrice : peakPrice < entryPrice;
+    if (hasValidPeak && baselineRisk > 0) {
+      // Calculate drawdown from peak
+      const drawdownPct = side === 'long'
+        ? (peakPrice - lastPrice) / peakPrice
+        : (lastPrice - peakPrice) / peakPrice;
+      
+      // Get applicable threshold based on R-multiple
+      const thresholds = cfg.peakDrawdown.thresholds;
+      const applicableRLevels = Object.keys(thresholds)
+        .map(Number)
+        .filter(r => rNow >= r)
+        .sort((a, b) => b - a); // Sort descending to get highest R first
+      
+      if (applicableRLevels.length > 0) {
+        const applicableR = applicableRLevels[0];
+        const threshold = thresholds[applicableR];
+        
+        if (drawdownPct > threshold) {
+          return {
+            action: 'exit',
+            reason: `Peak drawdown exit: ${(drawdownPct * 100).toFixed(1)}% from peak (threshold ${(threshold * 100).toFixed(1)}%) at ${rNow.toFixed(2)}R`,
+          };
+        }
+      }
+    }
+  }
 
   // 🚀 OPTIMIZED TRAILING: Start earlier for trailing/hybrid modes
   const trailingStartR = exitStrategyMode !== 'partial' 

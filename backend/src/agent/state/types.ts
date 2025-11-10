@@ -90,6 +90,7 @@ export type ActivePosition = {
   trail?: { ts: number; price: number }[];
   maeR?: number;
   mfeR?: number;
+  peakPrice?: number | null;
   breakeven?: number;
   partialInfo?: { ts: number; price: number } | null;
   initialStopDistance?: number;
