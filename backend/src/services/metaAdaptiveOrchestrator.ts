@@ -67,7 +67,6 @@ type SessionContext = {
   symbol: string;
   mode: 'paper' | 'live';
   profileJson: any;
-  accountBalanceUsd: number | null;
   userId: string | null;
 };
 
@@ -92,7 +91,8 @@ async function getBrokerForSession(session: SessionContext): Promise<Broker | nu
   let broker: Broker | null = null;
   
   if (session.mode === 'paper') {
-    const base = new PaperBroker(session.accountBalanceUsd ?? undefined);
+    // Don't pass session balance - use shared capital pool instead
+    const base = new PaperBroker();
     const capital = getCapitalManager('paper');
     broker = new CapitalPoolBroker({
       agentId: session.sessionId,
@@ -153,7 +153,6 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
       symbol: session.symbol,
       bias: (session.profileJson as any)?.biasPreference || undefined,
       multiTimeframe,
-      accountBalanceUsd: session.accountBalanceUsd,
       fundamental: marketContext?.fundamental || null,
       derivatives: marketContext?.derivatives || null,
       onChain: marketContext?.onChain || null,
@@ -291,14 +290,16 @@ async function executeEntryTrade(
 
     console.log(`[MetaOrchestrator.executeEntryTrade] Got broker, fetching balance...`);
 
-    // Get account balance for position sizing
+    // Get account balance for position sizing from capital pool
     const balance = await withLogging(
       integrationLogger,
       'fetch broker balance',
       () => broker.balance()
     );
     
-    const equityUsd = balance.equityUsd || session.accountBalanceUsd || 1000;
+    // Use broker equity directly - no fallback to session balance
+    // The broker gets its balance from the shared capital pool
+    const equityUsd = balance.equityUsd || 1000; // Only fallback to default if broker returns nothing
     integrationLogger.debug(`Broker balance | equity=${equityUsd.toFixed(2)} free=${balance.freeUsd?.toFixed(2)}`);
     console.log(`[MetaOrchestrator.executeEntryTrade] Balance: equity=${equityUsd.toFixed(2)}, free=${balance.freeUsd?.toFixed(2)}`);
 
@@ -313,8 +314,18 @@ async function executeEntryTrade(
     // Get risk percentage from profile or use default
     const riskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
     
-    // Get requested leverage from profile or use DEFAULT_MAX_LEVERAGE
-    const requestedLeverage = session.profileJson?.maxLeverage ?? envConfig.DEFAULT_MAX_LEVERAGE;
+    // Dynamic leverage based on confidence: high confidence = higher leverage
+    // confidence range: 0.50-1.0 (filters block below 0.50)
+    // leverage range: baseLeverage (e.g., 3x) to maxLeverage (e.g., 10x)
+    const maxLeverage = session.profileJson?.maxLeverage ?? envConfig.DEFAULT_MAX_LEVERAGE;
+    const baseLeverage = Math.max(2, Math.min(3, maxLeverage * 0.3)); // Minimum safe leverage (30% of max, or 2-3x)
+    
+    // Linear interpolation: confidence 0.50 → baseLeverage, confidence 1.0 → maxLeverage
+    const confidenceRange = 1.0 - 0.50; // 0.50 range
+    const normalizedConfidence = Math.max(0, Math.min(1, (signal.confidence - 0.50) / confidenceRange));
+    const confidenceAdjustedLeverage = baseLeverage + (maxLeverage - baseLeverage) * normalizedConfidence;
+    
+    integrationLogger.info(`Confidence-based leverage | confidence=${signal.confidence.toFixed(3)} base=${baseLeverage.toFixed(1)}x max=${maxLeverage.toFixed(1)}x → adjusted=${confidenceAdjustedLeverage.toFixed(2)}x`);
     
     // Use computeQtyNotional which respects leverage caps per symbol category
     const sizingResult = await computeQtyNotional({
@@ -322,7 +333,7 @@ async function executeEntryTrade(
       riskPct,
       stopDistanceAbs: stopDistance,
       entryPrice,
-      requestedLeverage,
+      requestedLeverage: confidenceAdjustedLeverage,
       symbol: session.symbol,
       mode: session.mode,
     });
@@ -335,7 +346,7 @@ async function executeEntryTrade(
         equityUsd,
         entryPrice,
         stopDistance,
-        requestedLeverage,
+        confidenceAdjustedLeverage,
         resolvedLeverage: leverage,
       });
       console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: sizing returned qty=0`);
@@ -883,7 +894,6 @@ export async function processMetaAdaptiveTick(sessionId: string, symbol: string,
       symbol: session.symbol,
       mode: session.mode as 'paper' | 'live',
       profileJson: session.profileJson || {},
-      accountBalanceUsd: session.startBalanceUsd,
       userId: session.userId,
     };
 
