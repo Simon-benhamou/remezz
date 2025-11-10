@@ -11,7 +11,7 @@
  */
 
 import { prisma } from '../db/client.js';
-import { buildTechSnapshot, type TechnicalSnapshot } from '../ai/tech.js';
+import { type TechnicalSnapshot } from '../ai/tech.js';
 import { computeMultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
 import { getMarketContext } from '../analytics/marketContext.js';
 import {
@@ -20,7 +20,7 @@ import {
   registerAdaptiveTradeOutcome,
   type RecognizedStrategySignal
 } from '../quantai/strategies/metaAdaptive/recognizedStrategies.js';
-import { maybeAdjustOrExit, type ExitDirective } from '../quantai/strategies/metaAdaptive/exitManager.js';
+import { maybeAdjustOrExit } from '../quantai/strategies/metaAdaptive/exitManager.js';
 import { PositionSizer } from '../quantai/risk/positionSizing.js';
 import { getQuantAIConfig } from '../quantai/config.js';
 import { createLogger } from '../utils/logger.js';
@@ -37,7 +37,7 @@ import { recordEnter, recordExit } from '../agent/persistence.js';
 import { computeQtyNotional } from '../risk/manager.js';
 import { getConfig } from '../utils/env.js';
 import { calculateFeeUsd } from '../quantai/executionCosts.js';
-import { canFlipPosition, recordPositionFlip, getFlipStats } from './positionFlipTracker.js';
+import { canFlipPosition, recordPositionFlip } from './positionFlipTracker.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -172,8 +172,6 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
         }))
       );
 
-      // Get the agent to check current position state
-      const agent = AgentHub.get(session.sessionId) as any;
       // Check for existing position from DATABASE, not just agent memory
       // This prevents ghost position bugs when agent stub persists across restarts
       const dbPosition = await prisma.position.findFirst({
@@ -199,7 +197,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
         // Has position - check for counter-signals and possible position flip
         const entrySignals = signals.filter(s => !(s as any).isExit);
         
-        // Get current position details
+        // Get current position details from agent
         const agent = AgentHub.get(session.sessionId) as any;
         const currentPositionSide = agent?.pos?.side === 'buy' ? 'long' : 'short';
         
