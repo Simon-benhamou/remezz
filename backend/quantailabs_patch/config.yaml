@@ -127,6 +127,36 @@ exits:
     cmf_negative: true
     tighten_profit_r: 0.2          # tighten stops once 0.2R in profit if momentum fades
     cut_loss_r: 0.35               # exit earlier if -0.35R and momentum fails
+  
+  # Hybrid Smart Exit Configuration
+  # Combines counter-signal awareness, adaptive peak drawdown protection, and technical reversal detection
+  # Works with trailing stop as the base strategy (EXIT_STRATEGY_MODE = trailing)
+  hybrid:
+    # Enable/disable specific features
+    enable_counter_signal_exits: true
+    enable_peak_drawdown_protection: true
+    enable_reversal_detection: true
+    
+    # Counter-signal awareness (rotation detection)
+    counter_signal_exit_confidence: 0.7    # Exit if counter-signal confidence >= 0.7 and R >= 2.0
+    counter_signal_exit_min_r: 2.0
+    counter_signal_tighten_confidence: 0.6  # Tighten if confidence >= 0.6 and R >= 1.0
+    counter_signal_tighten_min_r: 1.0
+    
+    # Adaptive peak drawdown protection (lock in gains)
+    # Thresholds by R-multiple achieved
+    peak_drawdown_thresholds:
+      1.0: 0.05   # Allow 5% drawdown from peak at 1R
+      2.0: 0.04   # Allow 4% drawdown from peak at 2R
+      3.0: 0.03   # Allow 3% drawdown from peak at 3R
+      5.0: 0.02   # Allow 2% drawdown from peak at 5R+
+    
+    # Technical reversal detection (multi-indicator)
+    reversal_exit_score: 75.0      # Exit if reversal score >= 75 and R >= 2.0
+    reversal_exit_min_r: 2.0
+    reversal_tighten_score: 60.0   # Tighten if reversal score >= 60 and R >= 1.0
+    reversal_tighten_min_r: 1.0
+  
   strategy_overrides:
     trend_following:
       trail_after_r: 1.25
