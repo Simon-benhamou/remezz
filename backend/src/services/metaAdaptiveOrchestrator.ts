@@ -11,7 +11,7 @@
  */
 
 import { prisma } from '../db/client.js';
-import { buildTechSnapshot, type TechnicalSnapshot } from '../ai/tech.js';
+import { type TechnicalSnapshot } from '../ai/tech.js';
 import { computeMultiTimeframeDiagnostics } from '../ai/multiTimeframe.js';
 import { getMarketContext } from '../analytics/marketContext.js';
 import {
@@ -20,7 +20,7 @@ import {
   registerAdaptiveTradeOutcome,
   type RecognizedStrategySignal
 } from '../quantai/strategies/metaAdaptive/recognizedStrategies.js';
-import { maybeAdjustOrExit, type ExitDirective } from '../quantai/strategies/metaAdaptive/exitManager.js';
+import { maybeAdjustOrExit } from '../quantai/strategies/metaAdaptive/exitManager.js';
 import { PositionSizer } from '../quantai/risk/positionSizing.js';
 import { getQuantAIConfig } from '../quantai/config.js';
 import { createLogger } from '../utils/logger.js';
@@ -37,6 +37,7 @@ import { recordEnter, recordExit } from '../agent/persistence.js';
 import { computeQtyNotional } from '../risk/manager.js';
 import { getConfig } from '../utils/env.js';
 import { calculateFeeUsd } from '../quantai/executionCosts.js';
+import { canFlipPosition, recordPositionFlip } from './positionFlipTracker.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -171,8 +172,6 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
         }))
       );
 
-      // Get the agent to check current position state
-      const agent = AgentHub.get(session.sessionId) as any;
       // Check for existing position from DATABASE, not just agent memory
       // This prevents ghost position bugs when agent stub persists across restarts
       const dbPosition = await prisma.position.findFirst({
@@ -195,17 +194,49 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
           await executeEntryTrade(session, bestSignal, tech);
         }
       } else {
-        // Has position - log that entry signal was blocked by existing position
+        // Has position - check for counter-signals and possible position flip
         const entrySignals = signals.filter(s => !(s as any).isExit);
+        
+        // Get current position details from agent
+        const agent = AgentHub.get(session.sessionId) as any;
+        const currentPositionSide = agent?.pos?.side === 'buy' ? 'long' : 'short';
+        
+        let flipResult: { flip: boolean; reason: string } | null = null;
+        
         if (entrySignals.length > 0) {
           const bestSignal = entrySignals[0];
-          logger.info(`[${session.sessionId}] Entry signal blocked - existing position present`);
           
-          // Log that order was blocked due to existing position
+          // Check if this is a counter-signal (opposite direction)
+          const isCounterSignal = 
+            (currentPositionSide === 'long' && bestSignal.bias === 'short') ||
+            (currentPositionSide === 'short' && bestSignal.bias === 'long');
+          
+          if (isCounterSignal) {
+            logger.info(
+              `[${session.sessionId}] Counter-signal detected: current=${currentPositionSide}, signal=${bestSignal.bias}, confidence=${bestSignal.confidence.toFixed(2)}`
+            );
+            
+            // Check if we should flip the position
+            flipResult = await shouldFlipPosition(session, agent, bestSignal, tech);
+            
+            if (flipResult.flip) {
+              logger.info(`[${session.sessionId}] Position flip conditions met: ${flipResult.reason}`);
+              await executePositionFlip(session, agent, bestSignal, tech);
+              return; // Exit early - flip handled the position
+            } else {
+              logger.debug(`[${session.sessionId}] Position flip rejected: ${flipResult.reason}`);
+            }
+          } else {
+            logger.info(`[${session.sessionId}] Entry signal blocked - existing position present`);
+          }
+          
+          // Log that order was blocked due to existing position (unless we just flipped)
           await logTradeEvaluation({
             symbol: session.symbol,
             decision: 'order_blocked_capital',
-            blockedReason: 'existing_position_present',
+            blockedReason: flipResult 
+              ? `counter_signal_flip_rejected: ${flipResult.reason}`
+              : 'existing_position_present',
             confidenceScore: bestSignal.confidence,
             inputMetrics: {
               adx: tech.adx14,
@@ -218,7 +249,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
           }).catch(err => console.warn('Failed to log existing position block:', err));
         }
         
-        // Check if we should exit
+        // Check if we should exit normally (if we didn't flip)
         logger.debug(`[${session.sessionId}] Has position, checking exit conditions`);
         await checkAndExecuteExit(session, agent, tech);
       }
@@ -515,6 +546,140 @@ async function executeEntryTrade(
       },
       regimeContext: calculateRegimeContext(tech),
     }).catch(err => console.warn('Failed to log exception:', err));
+  }
+}
+
+/**
+ * Check if position should be flipped based on counter-signal
+ */
+async function shouldFlipPosition(
+  session: SessionContext,
+  agent: any,
+  counterSignal: RecognizedStrategySignal,
+  tech: TechnicalSnapshot
+): Promise<{ flip: boolean; reason: string }> {
+  const config = getQuantAIConfig();
+  const flipConfig = config.exits.positionFlipping;
+  
+  // Check if position flipping is enabled
+  if (!flipConfig?.enabled) {
+    return { flip: false, reason: 'position_flipping_disabled' };
+  }
+  
+  if (!agent?.pos) {
+    return { flip: false, reason: 'no_position' };
+  }
+  
+  // Check counter-signal confidence
+  if (counterSignal.confidence < flipConfig.minCounterSignalConfidence) {
+    return {
+      flip: false,
+      reason: `confidence_too_low: ${counterSignal.confidence.toFixed(2)} < ${flipConfig.minCounterSignalConfidence}`,
+    };
+  }
+  
+  // Calculate current R-multiple
+  const position = agent.pos;
+  const currentPrice = tech.last;
+  const riskPerUnit = Math.abs(position.entry - position.stop);
+  const baselineStop = position.side === 'buy'
+    ? position.entry - riskPerUnit
+    : position.entry + riskPerUnit;
+  const positionSide = position.side === 'buy' ? 'long' : 'short';
+  const rNow = riskPerUnit > 0 
+    ? PositionSizer.rMultiple(position.entry, baselineStop, currentPrice, positionSide)
+    : 0;
+  
+  // Check minimum R-multiple requirement
+  if (rNow < flipConfig.minRMultiple) {
+    return {
+      flip: false,
+      reason: `r_multiple_too_low: ${rNow.toFixed(2)}R < ${flipConfig.minRMultiple}R required`,
+    };
+  }
+  
+  // Check flip cooldowns
+  const cooldownCheck = canFlipPosition(session.sessionId, {
+    cooldownMinutes: flipConfig.cooldownMinutes,
+    maxFlipsPerHour: flipConfig.maxFlipsPerHour,
+  });
+  
+  if (!cooldownCheck.allowed) {
+    return { flip: false, reason: cooldownCheck.reason || 'cooldown_active' };
+  }
+  
+  // All conditions met - flip is allowed
+  return {
+    flip: true,
+    reason: `strong_counter_signal: confidence=${counterSignal.confidence.toFixed(2)}, R=${rNow.toFixed(2)}`,
+  };
+}
+
+/**
+ * Execute a position flip: exit current position and immediately enter opposite position
+ */
+async function executePositionFlip(
+  session: SessionContext,
+  agent: any,
+  counterSignal: RecognizedStrategySignal,
+  tech: TechnicalSnapshot
+): Promise<void> {
+  const integrationLogger = createIntegrationLogger({
+    component: 'Orchestrator',
+    action: 'position_flip',
+    sessionId: session.sessionId,
+    symbol: session.symbol,
+  });
+  
+  try {
+    if (!agent?.pos) {
+      integrationLogger.error('No position to flip');
+      return;
+    }
+    
+    const position = agent.pos;
+    const currentPrice = tech.last;
+    const fromSide = position.side === 'buy' ? 'long' : 'short';
+    const toSide = counterSignal.bias === 'short' ? 'short' : 'long';
+    
+    // Calculate R-multiple for tracking
+    const riskPerUnit = Math.abs(position.entry - position.stop);
+    const baselineStop = position.side === 'buy'
+      ? position.entry - riskPerUnit
+      : position.entry + riskPerUnit;
+    const rNow = riskPerUnit > 0 
+      ? PositionSizer.rMultiple(position.entry, baselineStop, currentPrice, fromSide)
+      : 0;
+    
+    integrationLogger.info(
+      `Executing position flip | from=${fromSide} to=${toSide} price=${currentPrice.toFixed(4)} R=${rNow.toFixed(2)} confidence=${counterSignal.confidence.toFixed(2)}`
+    );
+    
+    // Step 1: Exit current position
+    await executeExitTrade(session, agent, currentPrice, `position_flip: ${fromSide} -> ${toSide}`);
+    
+    // Step 2: Wait a tiny bit to ensure exit is processed
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Step 3: Enter new position in opposite direction
+    await executeEntryTrade(session, counterSignal, tech);
+    
+    // Step 4: Record the flip
+    recordPositionFlip(session.sessionId, {
+      fromSide,
+      toSide,
+      price: currentPrice,
+      confidence: counterSignal.confidence,
+      rMultiple: rNow,
+    });
+    
+    integrationLogger.success(
+      `Position flip completed | from=${fromSide} to=${toSide} at ${currentPrice.toFixed(4)}`
+    );
+    
+  } catch (error: any) {
+    integrationLogger.error('Error executing position flip', error);
+    logger.error(`[${session.sessionId}] Position flip failed:`, error);
   }
 }
 

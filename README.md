@@ -64,6 +64,7 @@ QuantAI Trading Agent is a sophisticated algorithmic trading platform designed s
 - **Circuit Breakers**: Automatic pause after consecutive losses or daily loss limits
 - **Trailing Stops**: Dynamic stop-loss adjustment as trade becomes profitable
 - **Partial Profit Taking**: Multi-level take-profit targets with ladder exits
+- **Position Flipping**: Optional feature to reverse position direction on strong counter-signals (see [POSITION_FLIPPING_FEATURE.md](POSITION_FLIPPING_FEATURE.md))
 
 ### 📈 Performance Tracking
 - **Real-Time KPIs**: Win rate, profit factor, expectancy, Sharpe ratio
