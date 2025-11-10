@@ -70,6 +70,7 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
           trendStrength: 0.2,   // Weaker trends acceptable
           minConfidence: 0.40,  // Can be less strict
           atr: 0.45,
+          cmf: 0.05,
           eligibility: 0.55,
           rrMin: 1.5,
           minAtrPct: 1.5,
@@ -79,12 +80,13 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
     
     case 'high_volatility':
       return {
-        weights: { ...baseWeights, adx: 0.4, strength: 0.35, flow: 0.05 }, // Focus on momentum
+        weights: { ...baseWeights, adx: 0.4, strength: 0.35, alignment: 0.15, slope: 0.05, flow: 0.05 }, // Focus on momentum, reduce alignment and slope
         thresholds: {
           adx: 22,              // Need strong ADX in wild markets
           trendStrength: 0.35,  // Strong trends required
           minConfidence: 0.55,  // Be more selective
           atr: 0.70,
+          cmf: 0.05,
           eligibility: 0.70,
           rrMin: 2.0,           // Higher RR needed for volatility
           minAtrPct: 4.0,
@@ -94,12 +96,13 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
     
     case 'trending':
       return {
-        weights: { ...baseWeights, adx: 0.35, strength: 0.35, alignment: 0.15 },
+        weights: { ...baseWeights, adx: 0.35, strength: 0.35, alignment: 0.15, slope: 0.05, flow: 0.1 },
         thresholds: {
           adx: 20,              // Strong ADX for trends
           trendStrength: 0.30,
           minConfidence: 0.48,
           atr: 0.60,
+          cmf: 0.05,
           eligibility: 0.65,
           rrMin: 1.8,
           minAtrPct: 2.5,
@@ -115,6 +118,7 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
           trendStrength: 0.15,  // Weak trends OK
           minConfidence: 0.50,  // Need good setup confirmation
           atr: 0.50,
+          cmf: 0.05,
           eligibility: 0.60,
           rrMin: 2.0,           // Higher RR for range trades
           minAtrPct: 2.0,
@@ -125,12 +129,13 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
     case 'long_bias':
     case 'short_bias':
       return {
-        weights: { ...baseWeights, alignment: 0.25 }, // Focus on EMA alignment
+        weights: { ...baseWeights, alignment: 0.25, slope: 0.05 }, // Focus on EMA alignment, reduce slope
         thresholds: {
           adx: 18,
           trendStrength: 0.25,
           minConfidence: 0.45,
           atr: 0.55,
+          cmf: 0.05,
           eligibility: 0.62,
           rrMin: 1.8,
           minAtrPct: 2.0,
@@ -146,6 +151,7 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
           trendStrength: 0.28,
           minConfidence: 0.52,  // Be more cautious
           atr: 0.65,
+          cmf: 0.05,
           eligibility: 0.68,
           rrMin: 2.0,
           minAtrPct: 2.5,
@@ -155,12 +161,13 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
     
     case 'high_volume':
       return {
-        weights: { ...baseWeights, flow: 0.15 }, // CMF more reliable with volume
+        weights: { ...baseWeights, flow: 0.15, slope: 0.05 }, // CMF more reliable with volume, reduce slope
         thresholds: {
           adx: 16,              // Can accept lower ADX with good volume
           trendStrength: 0.22,
           minConfidence: 0.42,
           atr: 0.50,
+          cmf: 0.05,
           eligibility: 0.58,
           rrMin: 1.6,
           minAtrPct: 2.0,
@@ -176,6 +183,7 @@ export function getDefaultParamsByRegime(regime: string): OptimalParams {
           trendStrength: 0.25,
           minConfidence: 0.45,
           atr: 0.55,
+          cmf: 0.05,
           eligibility: 0.62,
           rrMin: 1.8,
           minAtrPct: 2.0,
