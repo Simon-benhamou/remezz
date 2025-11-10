@@ -5,10 +5,10 @@ from typing import Dict, List, Tuple, Optional
 class HybridExitConfig:
     """Configuration for hybrid smart exit logic"""
     # Counter-signal thresholds
-    counter_signal_exit_confidence: float = 0.7  # Exit if counter-signal confidence > 0.7 and R > 2
-    counter_signal_exit_min_r: float = 2.0
-    counter_signal_tighten_confidence: float = 0.6  # Tighten if confidence > 0.6 and R > 1
-    counter_signal_tighten_min_r: float = 1.0
+    counter_signal_exit_confidence: float = 0.7  # Exit if counter-signal confidence > 0.7 and R > 0.5
+    counter_signal_exit_min_r: float = 0.5
+    counter_signal_tighten_confidence: float = 0.6  # Tighten if confidence > 0.6 and R > 0.25
+    counter_signal_tighten_min_r: float = 0.25
     counter_signal_monitor_confidence: float = 0.5  # Monitor below this threshold
     
     # Adaptive peak drawdown thresholds by R-multiple
@@ -20,10 +20,10 @@ class HybridExitConfig:
     })
     
     # Technical reversal detection
-    reversal_exit_score: float = 75.0  # Exit if reversal score > 75 and R > 2
-    reversal_exit_min_r: float = 2.0
-    reversal_tighten_score: float = 60.0  # Tighten if score > 60 and R > 1
-    reversal_tighten_min_r: float = 1.0
+    reversal_exit_score: float = 75.0  # Exit if reversal score > 75 and R > 0.5
+    reversal_exit_min_r: float = 0.5
+    reversal_tighten_score: float = 60.0  # Tighten if score > 60 and R > 0.25
+    reversal_tighten_min_r: float = 0.25
     
     # Enable/disable hybrid exit features
     enable_counter_signal_exits: bool = True
