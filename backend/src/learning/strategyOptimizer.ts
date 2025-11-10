@@ -4,7 +4,7 @@
  */
 
 import { getSymbolEvaluations } from './tradeEvaluationLogger.js';
-import { savePersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, classifyTrendingRanging } from './personalityProfile.js';
+import { savePersonalityProfile, DEFAULT_PARAMS, classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, classifyTrendingRanging, getDefaultParamsByRegime } from './personalityProfile.js';
 import type { OptimalParams, RegimeAwareParams, VolatilityRegime, DirectionBias, VolumeRegime, TrendingRanging } from './personalityProfile.js';
 import type { InputMetrics, MarketOutcome } from './tradeEvaluationLogger.js';
 import { prisma, Prisma } from '../db/client.js';
@@ -339,7 +339,10 @@ function optimizeSingleRegime(
   evaluations: EvaluationData[],
   regimeName: string
 ): OptimalParams | null {
-  let bestParams: OptimalParams = DEFAULT_PARAMS;
+  // Get regime-specific defaults to use as baseline for non-optimized thresholds
+  const regimeDefaults = getDefaultParamsByRegime(regimeName);
+  
+  let bestParams: OptimalParams = regimeDefaults;
   let bestFitness = -Infinity;
   let testedCount = 0;
 
@@ -353,11 +356,30 @@ function optimizeSingleRegime(
     }
   }
 
+  // Merge optimized parameters with regime-specific defaults for non-optimized thresholds
+  // This ensures all meta-adaptive thresholds are present
+  const completeParams: OptimalParams = {
+    weights: bestParams.weights,
+    thresholds: {
+      // Optimized thresholds (from grid search)
+      adx: bestParams.thresholds.adx,
+      trendStrength: bestParams.thresholds.trendStrength,
+      minConfidence: bestParams.thresholds.minConfidence,
+      // Non-optimized meta-adaptive thresholds (from regime defaults)
+      atr: regimeDefaults.thresholds.atr,
+      cmf: regimeDefaults.thresholds.cmf,
+      eligibility: regimeDefaults.thresholds.eligibility,
+      rrMin: regimeDefaults.thresholds.rrMin,
+      minAtrPct: regimeDefaults.thresholds.minAtrPct,
+      maxAtrPct: regimeDefaults.thresholds.maxAtrPct,
+    },
+  };
+
   console.log(
     `   ${regimeName}: Tested ${testedCount} combinations, fitness: ${bestFitness.toFixed(4)}`
   );
 
-  return bestFitness > -Infinity ? bestParams : null;
+  return bestFitness > -Infinity ? completeParams : null;
 }
 
 /**
