@@ -394,13 +394,21 @@ export async function recordExit(params: {
     const adjustedQty = Math.abs(remaining) <= POSITION_QTY_EPSILON
       ? 0
       : Math.max(0, Math.round(remaining * 1e8) / 1e8);
-    await prisma.position.update({
-      where: { id: lastPos.id },
-      data: {
-        qty: adjustedQty,
-        updatedAt: new Date(),
-      }
-    });
+    
+    // Delete position if fully closed (qty=0), otherwise update qty
+    if (adjustedQty === 0) {
+      await prisma.position.delete({
+        where: { id: lastPos.id },
+      });
+    } else {
+      await prisma.position.update({
+        where: { id: lastPos.id },
+        data: {
+          qty: adjustedQty,
+          updatedAt: new Date(),
+        }
+      });
+    }
   }
 
   const rows = await prisma.order.findMany({ where: { sessionId: params.sessionId }, orderBy: { createdAt: 'desc' }, take: 200 });
