@@ -136,6 +136,14 @@ export type QuantAIPeakDrawdownConfig = {
   thresholds: Record<number, number>; // R-multiple -> drawdown threshold (e.g., { 1.0: 0.05, 2.0: 0.04, 3.0: 0.03 })
 };
 
+export type QuantAIPositionFlippingConfig = {
+  enabled: boolean;
+  minCounterSignalConfidence: number; // Minimum confidence required to flip (e.g., 0.7)
+  minRMultiple: number; // Minimum R-multiple profit required to flip (e.g., 2.0)
+  cooldownMinutes: number; // Time-based cooldown between flips (e.g., 30)
+  maxFlipsPerHour: number; // Maximum number of flips allowed per hour (e.g., 3)
+};
+
 export type QuantAIExitConfig = {
   atrPeriod: number;
   slAtrMult: number;
@@ -161,6 +169,7 @@ export type QuantAIExitConfig = {
     widenMultiplier: number;
   };
   peakDrawdown?: QuantAIPeakDrawdownConfig;
+  positionFlipping?: QuantAIPositionFlippingConfig;
   earlyExit: {
     adxBelow: number;
     cmfNegative: boolean;
@@ -479,6 +488,13 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         3.0: 0.03,  // 3% drawdown at 3R
         5.0: 0.02,  // 2% drawdown at 5R+
       },
+    },
+    positionFlipping: {
+      enabled: false,  // Disabled by default - must be explicitly enabled
+      minCounterSignalConfidence: 0.7,  // Require 70% confidence to flip
+      minRMultiple: 2.0,  // Require at least 2R profit before flipping
+      cooldownMinutes: 30,  // 30 minutes between flips
+      maxFlipsPerHour: 3,  // Maximum 3 flips per hour to avoid overtrading
     },
     earlyExit: {
       adxBelow: 18,
