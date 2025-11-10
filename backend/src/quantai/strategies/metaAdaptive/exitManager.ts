@@ -200,6 +200,44 @@ export function maybeAdjustOrExit({
   }
   const effectiveTrailMultiplier = activeTrailMultiplier;
 
+  // 🚀 PEAK DRAWDOWN PROTECTION: Exit if price drops significantly from peak (HIGH PRIORITY)
+  // This check happens BEFORE TP and trailing logic to protect profits from reversals
+  if (cfg.peakDrawdown?.enabled && peakPrice != null) {
+    // Only check if we have a valid peak above entry (for longs) or below entry (for shorts)
+    const hasValidPeak = side === 'long' ? peakPrice > entryPrice : peakPrice < entryPrice;
+    if (hasValidPeak && baselineRisk > 0) {
+      // Calculate R-multiple at peak to determine which threshold applies
+      const peakR = PositionSizer.rMultiple(entryPrice, baselineStop, peakPrice, side);
+      
+      // Only protect if peak was profitable (at least 1R)
+      if (peakR >= 1.0) {
+        // Calculate drawdown from peak
+        const drawdownPct = side === 'long'
+          ? (peakPrice - lastPrice) / peakPrice
+          : (lastPrice - peakPrice) / peakPrice;
+        
+        // Get applicable threshold based on PEAK R-multiple (not current)
+        const thresholds = cfg.peakDrawdown.thresholds;
+        const applicableRLevels = Object.keys(thresholds)
+          .map(Number)
+          .filter(r => peakR >= r)
+          .sort((a, b) => b - a); // Sort descending to get highest R first
+        
+        if (applicableRLevels.length > 0) {
+          const applicableR = applicableRLevels[0];
+          const threshold = thresholds[applicableR];
+          
+          if (drawdownPct >= threshold) {
+            return {
+              action: 'exit',
+              reason: `Peak drawdown exit: ${(drawdownPct * 100).toFixed(1)}% from peak (threshold ${(threshold * 100).toFixed(1)}%) at ${rNow.toFixed(2)}R current, peaked at ${peakR.toFixed(2)}R`,
+            };
+          }
+        }
+      }
+    }
+  }
+
   // 🚀 EXIT STRATEGY MODE: partial/trailing/hybrid
   const exitStrategyMode = process.env.EXIT_STRATEGY_MODE ?? 'partial';
   const shouldUsePartialExits = exitStrategyMode === 'partial' || 
@@ -268,37 +306,6 @@ export function maybeAdjustOrExit({
     }
     return null;
   };
-
-  // 🚀 PEAK DRAWDOWN PROTECTION: Exit if price drops significantly from peak
-  if (cfg.peakDrawdown?.enabled && peakPrice != null && rNow > 0) {
-    // Only check if we have a valid peak above entry (for longs) or below entry (for shorts)
-    const hasValidPeak = side === 'long' ? peakPrice > entryPrice : peakPrice < entryPrice;
-    if (hasValidPeak && baselineRisk > 0) {
-      // Calculate drawdown from peak
-      const drawdownPct = side === 'long'
-        ? (peakPrice - lastPrice) / peakPrice
-        : (lastPrice - peakPrice) / peakPrice;
-      
-      // Get applicable threshold based on R-multiple
-      const thresholds = cfg.peakDrawdown.thresholds;
-      const applicableRLevels = Object.keys(thresholds)
-        .map(Number)
-        .filter(r => rNow >= r)
-        .sort((a, b) => b - a); // Sort descending to get highest R first
-      
-      if (applicableRLevels.length > 0) {
-        const applicableR = applicableRLevels[0];
-        const threshold = thresholds[applicableR];
-        
-        if (drawdownPct > threshold) {
-          return {
-            action: 'exit',
-            reason: `Peak drawdown exit: ${(drawdownPct * 100).toFixed(1)}% from peak (threshold ${(threshold * 100).toFixed(1)}%) at ${rNow.toFixed(2)}R`,
-          };
-        }
-      }
-    }
-  }
 
   // 🚀 OPTIMIZED TRAILING: Start earlier for trailing/hybrid modes
   const trailingStartR = exitStrategyMode !== 'partial' 
