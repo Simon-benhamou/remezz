@@ -20,9 +20,12 @@ export interface AdvancedRiskConfig {
   maxDrawdownPct: number;              // Maximum drawdown before reducing exposure (default: 10%)
   drawdownLookbackDays: number;        // Days to look back for drawdown calculation (default: 30)
   drawdownRecoveryThreshold: number;   // Recovery threshold to restore full sizing (default: 5%)
+  hardDrawdownHaltPct: number;         // Hard halt threshold for critical drawdown (default: 20%)
   
   // Catastrophic loss detection
   catastrophicDailyLossPct: number;    // Single-day loss triggering halt (default: 5%)
+  flashCrashDetectionMinutes: number;  // Minutes to detect rapid crashes (default: 15)
+  flashCrashThresholdPct: number;      // Price drop % for flash crash (default: 8%)
   
   // Black swan detection
   blackSwanVolatilityThreshold: number; // Price move % in 1 hour (default: 15%)
@@ -33,6 +36,10 @@ export interface AdvancedRiskConfig {
   lowVolatilityMultiplier: number;     // Multiplier for low volatility (default: 1.2)
   highVolatilityMultiplier: number;    // Multiplier for high volatility (default: 0.6)
   extremeVolatilityMultiplier: number; // Multiplier for extreme volatility (default: 0.35)
+  
+  // Real-time monitoring
+  enableContinuousLiquidityCheck: boolean; // Enable liquidity monitoring during positions (default: true)
+  minLiquidityThreshold: number;       // Minimum 24h volume threshold (default: 1000000)
 }
 
 /**
@@ -44,6 +51,8 @@ export interface DrawdownState {
   isInDrawdown: boolean;
   sizeMultiplier: number;
   lastUpdated: Date;
+  hardHaltTriggered?: boolean;
+  hardHaltReason?: string;
 }
 
 /**
@@ -67,6 +76,9 @@ export interface AdvancedRiskDecision {
   blackSwanDetected?: boolean;
   regimeAdjustment?: number;
   circuitBreakerActive?: boolean;
+  hardHaltTriggered?: boolean;
+  flashCrashDetected?: boolean;
+  liquidityWarning?: boolean;
 }
 
 /**
@@ -76,13 +88,18 @@ export const DEFAULT_ADVANCED_RISK_CONFIG: AdvancedRiskConfig = {
   maxDrawdownPct: Number(process.env.ADV_RISK_MAX_DRAWDOWN_PCT ?? '10'),
   drawdownLookbackDays: Number(process.env.ADV_RISK_DRAWDOWN_LOOKBACK_DAYS ?? '30'),
   drawdownRecoveryThreshold: Number(process.env.ADV_RISK_DRAWDOWN_RECOVERY_PCT ?? '5'),
+  hardDrawdownHaltPct: Number(process.env.ADV_RISK_HARD_HALT_DRAWDOWN_PCT ?? '20'),
   catastrophicDailyLossPct: Number(process.env.ADV_RISK_CATASTROPHIC_DAILY_LOSS_PCT ?? '5'),
+  flashCrashDetectionMinutes: Number(process.env.ADV_RISK_FLASH_CRASH_MINUTES ?? '15'),
+  flashCrashThresholdPct: Number(process.env.ADV_RISK_FLASH_CRASH_THRESHOLD_PCT ?? '8'),
   blackSwanVolatilityThreshold: Number(process.env.ADV_RISK_BLACK_SWAN_VOL_THRESHOLD ?? '15'),
   blackSwanLookbackMinutes: Number(process.env.ADV_RISK_BLACK_SWAN_LOOKBACK_MIN ?? '60'),
   enableRegimeAwareSizing: process.env.ADV_RISK_ENABLE_REGIME_SIZING !== 'false',
   lowVolatilityMultiplier: Number(process.env.ADV_RISK_LOW_VOL_MULTIPLIER ?? '1.2'),
   highVolatilityMultiplier: Number(process.env.ADV_RISK_HIGH_VOL_MULTIPLIER ?? '0.6'),
   extremeVolatilityMultiplier: Number(process.env.ADV_RISK_EXTREME_VOL_MULTIPLIER ?? '0.35'),
+  enableContinuousLiquidityCheck: process.env.ADV_RISK_CONTINUOUS_LIQUIDITY_CHECK !== 'false',
+  minLiquidityThreshold: Number(process.env.ADV_RISK_MIN_LIQUIDITY_THRESHOLD ?? '1000000'),
 };
 
 /**
@@ -157,9 +174,19 @@ export class AdvancedRiskManager {
 
     const isInDrawdown = drawdownPct <= -this.config.maxDrawdownPct;
     
+    // Check for hard halt threshold
+    const hardHaltTriggered = drawdownPct <= -this.config.hardDrawdownHaltPct;
+    const hardHaltReason = hardHaltTriggered 
+      ? `Critical drawdown ${drawdownPct.toFixed(2)}% exceeds hard halt threshold ${this.config.hardDrawdownHaltPct}%` 
+      : undefined;
+    
     // Calculate size multiplier based on drawdown severity
     let sizeMultiplier = 1.0;
-    if (isInDrawdown) {
+    if (hardHaltTriggered) {
+      // Complete halt at critical drawdown
+      sizeMultiplier = 0;
+      console.error(`🚨 HARD HALT: Session ${sessionId} triggered critical drawdown halt at ${drawdownPct.toFixed(2)}%`);
+    } else if (isInDrawdown) {
       // Halve position sizes when in drawdown
       const excessDrawdown = Math.abs(drawdownPct) - this.config.maxDrawdownPct;
       const severityFactor = Math.min(excessDrawdown / this.config.maxDrawdownPct, 1);
@@ -177,6 +204,8 @@ export class AdvancedRiskManager {
       isInDrawdown,
       sizeMultiplier,
       lastUpdated: new Date(),
+      hardHaltTriggered,
+      hardHaltReason,
     };
 
     this.drawdownStates.set(sessionId, state);
@@ -314,6 +343,120 @@ export class AdvancedRiskManager {
   }
 
   /**
+   * Detect flash crash: rapid price drops in short timeframe
+   * This provides faster detection than black swan for immediate crashes
+   */
+  async detectFlashCrash(symbol: string): Promise<{ detected: boolean; priceMovePct?: number; reason?: string }> {
+    try {
+      const lookbackTime = new Date();
+      lookbackTime.setMinutes(lookbackTime.getMinutes() - this.config.flashCrashDetectionMinutes);
+
+      // Check recent order prices for rapid drops
+      const recentOrders = await prisma.order.findMany({
+        where: {
+          symbol,
+          status: { in: ['filled', 'closed'] },
+          price: { not: null },
+          createdAt: { gte: lookbackTime },
+        },
+        orderBy: { createdAt: 'asc' },
+        take: 50,
+        select: { price: true, createdAt: true },
+      });
+
+      if (recentOrders.length < 2) {
+        return { detected: false, reason: 'insufficient_data' };
+      }
+
+      const prices = recentOrders.map(o => Number(o.price || 0)).filter(p => p > 0);
+      if (prices.length < 2) {
+        return { detected: false, reason: 'insufficient_data' };
+      }
+
+      // Calculate max drop from any point to subsequent low
+      let maxDrop = 0;
+      for (let i = 0; i < prices.length - 1; i++) {
+        for (let j = i + 1; j < prices.length; j++) {
+          const drop = ((prices[i] - prices[j]) / prices[i]) * 100;
+          if (drop > maxDrop) {
+            maxDrop = drop;
+          }
+        }
+      }
+
+      const detected = maxDrop >= this.config.flashCrashThresholdPct;
+
+      if (detected) {
+        console.warn(`🚨 Flash crash detected on ${symbol}: ${maxDrop.toFixed(2)}% drop in ${this.config.flashCrashDetectionMinutes} minutes`);
+      }
+
+      return {
+        detected,
+        priceMovePct: maxDrop,
+        reason: detected ? `${maxDrop.toFixed(2)}% drop in ${this.config.flashCrashDetectionMinutes}min` : undefined,
+      };
+    } catch (error) {
+      console.error('Error detecting flash crash:', error);
+      return { detected: false, reason: 'error_checking' };
+    }
+  }
+
+  /**
+   * Check liquidity for a symbol to detect liquidity traps
+   * Returns true if liquidity is acceptable, false if too low
+   */
+  async checkLiquidity(symbol: string): Promise<{ adequate: boolean; volume24h?: number; reason?: string }> {
+    if (!this.config.enableContinuousLiquidityCheck) {
+      return { adequate: true, reason: 'liquidity_check_disabled' };
+    }
+
+    try {
+      // Get recent volume from database via orders
+      const oneDayAgo = new Date();
+      oneDayAgo.setHours(oneDayAgo.getHours() - 24);
+
+      const recentFills = await prisma.fill.findMany({
+        where: {
+          ts: { gte: oneDayAgo },
+          order: {
+            symbol,
+          },
+        },
+        select: {
+          qty: true,
+          price: true,
+        },
+      });
+
+      if (recentFills.length === 0) {
+        // No data available, assume adequate
+        return { adequate: true, reason: 'no_data_available' };
+      }
+
+      // Calculate approximate 24h volume in USD
+      const volume24h = recentFills.reduce((sum, fill) => {
+        return sum + (Number(fill.qty || 0) * Number(fill.price || 0));
+      }, 0);
+
+      const adequate = volume24h >= this.config.minLiquidityThreshold;
+
+      if (!adequate) {
+        console.warn(`⚠️ Low liquidity detected on ${symbol}: $${volume24h.toFixed(0)} (threshold: $${this.config.minLiquidityThreshold})`);
+      }
+
+      return {
+        adequate,
+        volume24h,
+        reason: adequate ? undefined : `Volume ${volume24h.toFixed(0)} below threshold ${this.config.minLiquidityThreshold}`,
+      };
+    } catch (error) {
+      console.error('Error checking liquidity:', error);
+      // On error, assume adequate to avoid false positives
+      return { adequate: true, reason: 'error_checking' };
+    }
+  }
+
+  /**
    * Comprehensive risk check combining all advanced risk controls
    */
   async checkRisk(params: {
@@ -345,7 +488,18 @@ export class AdvancedRiskManager {
       circuitBreakerActive = false;
     }
 
-    // 2. Check for catastrophic daily loss
+    // 2. Check for flash crash (faster than black swan)
+    const flashCrash = await this.detectFlashCrash(symbol);
+    if (flashCrash.detected) {
+      return {
+        allowed: false,
+        sizeMultiplier: 0,
+        reason: `Flash crash detected: ${flashCrash.reason}`,
+        flashCrashDetected: true,
+      };
+    }
+
+    // 3. Check for catastrophic daily loss
     const catastrophicLoss = await this.detectCatastrophicDailyLoss(sessionId, currentEquity);
     if (catastrophicLoss) {
       return {
@@ -355,7 +509,7 @@ export class AdvancedRiskManager {
       };
     }
 
-    // 3. Check for black swan volatility
+    // 4. Check for black swan volatility
     const blackSwan = await this.detectBlackSwan(symbol);
     if (blackSwan.detected) {
       return {
@@ -366,18 +520,39 @@ export class AdvancedRiskManager {
       };
     }
 
-    // 4. Calculate drawdown-based size adjustment
+    // 5. Calculate drawdown-based size adjustment
     const drawdownState = await this.calculateDrawdown(sessionId, currentEquity);
+    
+    // Check for hard halt condition
+    if (drawdownState.hardHaltTriggered) {
+      return {
+        allowed: false,
+        sizeMultiplier: 0,
+        reason: drawdownState.hardHaltReason,
+        drawdownState,
+        hardHaltTriggered: true,
+      };
+    }
+    
     let sizeMultiplier = drawdownState.sizeMultiplier;
 
-    // 5. Apply regime-aware sizing if technical snapshot provided
+    // 6. Check liquidity (warning only, doesn't block but reduces size)
+    const liquidityCheck = await this.checkLiquidity(symbol);
+    let liquidityWarning = false;
+    if (!liquidityCheck.adequate) {
+      liquidityWarning = true;
+      sizeMultiplier *= 0.5; // Reduce size by 50% in low liquidity
+      console.warn(`⚠️ Reducing position size by 50% due to low liquidity on ${symbol}`);
+    }
+
+    // 7. Apply regime-aware sizing if technical snapshot provided
     let regimeMultiplier = 1.0;
     if (technicalSnapshot) {
       regimeMultiplier = this.calculateRegimeMultiplierFromSnapshot(technicalSnapshot);
       sizeMultiplier *= regimeMultiplier;
     }
 
-    // 6. Apply circuit breaker size multiplier
+    // 8. Apply circuit breaker size multiplier
     if (circuitBreaker) {
       const cbSizeMultiplier = circuitBreaker.sizeMultiplier();
       sizeMultiplier *= cbSizeMultiplier;
@@ -393,6 +568,9 @@ export class AdvancedRiskManager {
     if (regimeMultiplier < 1.0) {
       reasons.push(`Regime adjustment: ${regimeMultiplier.toFixed(2)}x`);
     }
+    if (liquidityWarning) {
+      reasons.push(`Low liquidity warning: size reduced 50%`);
+    }
 
     return {
       allowed: true,
@@ -402,6 +580,9 @@ export class AdvancedRiskManager {
       blackSwanDetected: false,
       regimeAdjustment: regimeMultiplier,
       circuitBreakerActive,
+      hardHaltTriggered: false,
+      flashCrashDetected: false,
+      liquidityWarning,
     };
   }
 

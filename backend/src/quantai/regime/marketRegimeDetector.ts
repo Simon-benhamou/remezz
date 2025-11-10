@@ -161,10 +161,16 @@ export function detectMarketRegime(input: RegimeDetectionInput): MarketRegimeSig
     volatilityLevel = 'medium';
   }
 
+  // Enhanced extreme volatility detection with tighter constraints
   if (volatilityLevel === 'extreme') {
-    familyMultipliers.mean_reversion = clamp(familyMultipliers.mean_reversion * 0.5, 0, 0.6);
-    familyMultipliers.trend = clamp(familyMultipliers.trend * 0.85, 0.4, 1);
+    // Aggressively reduce exposure during extreme volatility
+    familyMultipliers.mean_reversion = clamp(familyMultipliers.mean_reversion * 0.35, 0, 0.5);
+    familyMultipliers.trend = clamp(familyMultipliers.trend * 0.7, 0.3, 0.9);
+    familyMultipliers.breakout = clamp(familyMultipliers.breakout * 0.6, 0.3, 0.8);
+    familyMultipliers.momentum = clamp(familyMultipliers.momentum * 0.65, 0.3, 0.85);
     if (!disableFamilies.includes('mean_reversion')) disableFamilies.push('mean_reversion');
+    // Log extreme volatility event for monitoring
+    console.warn(`⚠️ EXTREME VOLATILITY detected: ATR=${atrComposite.toFixed(2)}%, realizedVol=${realizedVol.toFixed(2)}%`);
   } else if (volatilityLevel === 'high' && dominant !== 'range') {
     familyMultipliers.mean_reversion = clamp(familyMultipliers.mean_reversion * 0.8, 0.4, 1);
   }
@@ -193,4 +199,43 @@ export function detectMarketRegime(input: RegimeDetectionInput): MarketRegimeSig
     highVolScore,
     notes,
   };
+}
+
+/**
+ * Quick check for extreme volatility without full regime detection
+ * Used for real-time risk monitoring during position holding
+ */
+export function isExtremeVolatilityDetected(input: {
+  atr15mPct: number;
+  atr1h?: number | null;
+  realizedVol?: number;
+  isMajor?: boolean;
+}): { extreme: boolean; level: 'low' | 'medium' | 'high' | 'extreme'; reason?: string } {
+  const isMajor = input.isMajor ?? false;
+  const volHighThreshold = isMajor ? 2.3 : 3.2;
+  const volExtremeThreshold = isMajor ? 3.4 : 4.6;
+  
+  const atr15mPct = Number.isFinite(input.atr15mPct) ? Math.max(0, input.atr15mPct) : 0;
+  const atr1hPct = input.atr1h != null && Number.isFinite(input.atr1h) ? input.atr1h : atr15mPct;
+  const realizedVol = input.realizedVol != null && Number.isFinite(input.realizedVol) ? input.realizedVol : 0;
+  
+  const atrComposite = Math.max(atr15mPct, atr1hPct);
+  
+  let level: 'low' | 'medium' | 'high' | 'extreme' = 'low';
+  let extreme = false;
+  let reason: string | undefined;
+  
+  if (atrComposite >= volExtremeThreshold || realizedVol >= 6.5) {
+    level = 'extreme';
+    extreme = true;
+    reason = `ATR ${atrComposite.toFixed(2)}% or realizedVol ${realizedVol.toFixed(2)}% exceeds extreme threshold`;
+  } else if (atrComposite >= volHighThreshold || realizedVol >= 4.5) {
+    level = 'high';
+    extreme = false;
+  } else if (atrComposite >= 1.1 || realizedVol >= 2.2) {
+    level = 'medium';
+    extreme = false;
+  }
+  
+  return { extreme, level, reason };
 }
