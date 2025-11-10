@@ -230,13 +230,16 @@ export class AgentsHub {
       }
 
       try {
-        const updated = await prisma.position.updateMany({
+        // Delete positions instead of setting qty to 0 to prevent ghost positions
+        const positions = await prisma.position.findMany({
           where: { sessionId: session.id, qty: { gt: 0 } },
-          data: { qty: 0, updatedAt: new Date(), protectiveStatus: 'halted_stop_all' },
+          select: { id: true },
         });
-        const closed = updated?.count ?? 0;
-        if (closed > 0) {
-          result.positionsClosed = closed;
+        if (positions.length > 0) {
+          await prisma.position.deleteMany({
+            where: { id: { in: positions.map(p => p.id) } },
+          });
+          result.positionsClosed = positions.length;
         }
       } catch (error) {
         result.errors.push(`positions_close_failed:${(error as any)?.message || error}`);
