@@ -17,13 +17,13 @@ class TestCounterSignalExit(unittest.TestCase):
     """Test counter-signal awareness logic"""
     
     def test_strong_counter_signal_triggers_exit_long(self):
-        """Strong counter-signal (short) should exit long position at 2R+"""
+        """Strong counter-signal (short) should exit long position at 0.5R+"""
         cfg = HybridExitConfig()
         should_exit, should_tighten, reason = check_counter_signal_exit(
             side='long',
             counter_signal_side='short',
             counter_signal_confidence=0.75,
-            r_now=2.5,
+            r_now=0.6,
             config=cfg
         )
         self.assertTrue(should_exit)
@@ -32,13 +32,13 @@ class TestCounterSignalExit(unittest.TestCase):
         self.assertIn('short', reason.lower())
     
     def test_strong_counter_signal_triggers_exit_short(self):
-        """Strong counter-signal (long) should exit short position at 2R+"""
+        """Strong counter-signal (long) should exit short position at 0.5R+"""
         cfg = HybridExitConfig()
         should_exit, should_tighten, reason = check_counter_signal_exit(
             side='short',
             counter_signal_side='long',
             counter_signal_confidence=0.8,
-            r_now=3.0,
+            r_now=0.7,
             config=cfg
         )
         self.assertTrue(should_exit)
@@ -46,13 +46,13 @@ class TestCounterSignalExit(unittest.TestCase):
         self.assertIn('Counter-signal exit', reason)
     
     def test_medium_counter_signal_tightens_stop(self):
-        """Medium confidence counter-signal should tighten stop at 1R+"""
+        """Medium confidence counter-signal should tighten stop at 0.25R+"""
         cfg = HybridExitConfig()
         should_exit, should_tighten, reason = check_counter_signal_exit(
             side='long',
             counter_signal_side='short',
             counter_signal_confidence=0.65,
-            r_now=1.5,
+            r_now=0.35,
             config=cfg
         )
         self.assertFalse(should_exit)
@@ -66,7 +66,7 @@ class TestCounterSignalExit(unittest.TestCase):
             side='long',
             counter_signal_side='short',
             counter_signal_confidence=0.75,
-            r_now=0.5,  # Below min_r threshold
+            r_now=0.2,  # Below min_r threshold (0.5R)
             config=cfg
         )
         self.assertFalse(should_exit)
@@ -353,7 +353,7 @@ class TestTechnicalReversalDetection(unittest.TestCase):
             side='long',
             current_snapshot=current,
             previous_snapshot=previous,
-            r_now=2.5,
+            r_now=0.6,
             config=cfg
         )
         self.assertTrue(should_exit)
@@ -380,7 +380,7 @@ class TestTechnicalReversalDetection(unittest.TestCase):
             side='long',
             current_snapshot=current,
             previous_snapshot=previous,
-            r_now=1.5,
+            r_now=0.35,
             config=cfg
         )
         self.assertFalse(should_exit)
@@ -404,7 +404,7 @@ class TestTechnicalReversalDetection(unittest.TestCase):
             side='long',
             current_snapshot=current,
             previous_snapshot=None,
-            r_now=2.5,
+            r_now=0.6,
             config=cfg
         )
         self.assertFalse(should_exit)
@@ -426,8 +426,8 @@ class TestHybridExitIntegration(unittest.TestCase):
         atr = 2.0
         sl, tps = compute_initial_sl_tp(entry, atr, 'long', cfg)
         
-        # At 2.5R profit with strong counter-signal
-        last_price = entry + 2.5 * abs(entry - sl)
+        # At 0.6R profit with strong counter-signal
+        last_price = entry + 0.6 * abs(entry - sl)
         
         decision = maybe_adjust_or_exit(
             'long', entry, sl, tps, last_price, atr, 
@@ -516,8 +516,8 @@ class TestHybridExitIntegration(unittest.TestCase):
         atr = 2.0
         sl, tps = compute_initial_sl_tp(entry, atr, 'long', cfg)
         
-        # At 2.5R with strong reversal signals
-        last_price = 107.5
+        # At 0.7R with strong reversal signals
+        last_price = 102.1
         
         current_snap = TechnicalSnapshot(
             ema_fast=98.0,
@@ -527,7 +527,7 @@ class TestHybridExitIntegration(unittest.TestCase):
             rsi=75.0,
             volume=30000,
             support_level=99.0,
-            price=107.5
+            price=102.1
         )
         previous_snap = TechnicalSnapshot(
             ema_fast=101.0,
@@ -585,8 +585,8 @@ class TestHybridExitIntegration(unittest.TestCase):
         atr = 2.0
         sl, tps = compute_initial_sl_tp(entry, atr, 'short', cfg)
         
-        # At 2.5R profit with counter-signal (long)
-        last_price = entry - 2.5 * abs(entry - sl)
+        # At 0.6R profit with counter-signal (long)
+        last_price = entry - 0.6 * abs(entry - sl)
         
         decision = maybe_adjust_or_exit(
             'short', entry, sl, tps, last_price, atr,
@@ -609,8 +609,8 @@ class TestHybridExitIntegration(unittest.TestCase):
         atr = 2.0
         sl, tps = compute_initial_sl_tp(entry, atr, 'long', cfg)
         
-        # At 1.5R with medium counter-signal
-        last_price = entry + 1.5 * abs(entry - sl)
+        # At 0.35R with medium counter-signal
+        last_price = entry + 0.35 * abs(entry - sl)
         
         decision = maybe_adjust_or_exit(
             'long', entry, sl, tps, last_price, atr,
@@ -661,30 +661,13 @@ class TestVolatileReversalScenarios(unittest.TestCase):
             counter_signal_confidence=0.75
         )
         
-        # Should not exit yet (R < 2.0 for counter-signal exit)
-        # But should tighten (R >= 1.0 and confidence >= 0.6... wait, R is 0.8)
-        # So no counter-signal action yet
+        # Should exit now (R = 0.8R >= 0.5R threshold for counter-signal exit)
+        self.assertEqual(decision['action'], 'exit')
+        self.assertIn('Counter-signal', decision['reason'])
         
-        # Let's test at the actual peak
-        current = 670.0
-        r_now = (current - entry) / risk  # 1.8R
-        
-        decision = maybe_adjust_or_exit(
-            'long', entry, sl, tps, current, atr,
-            adx=22.0, cmf=0.1, cfg=cfg,
-            peak_price=peak,
-            counter_signal_side='short',
-            counter_signal_confidence=0.75
-        )
-        
-        # At peak, no counter-signal should trigger yet (no drawdown)
-        # Should use trailing stop
-        self.assertIn(decision['action'], ['move_sl', 'hold', 'exit'])
-        
-        # Now test when it reverses with counter-signal at 2R+
-        current = 673.0  # Slightly higher, 2R
-        peak = 673.0
-        r_now = (current - entry) / risk  # 2.0R
+        # Also test that it triggers earlier at just above 0.5R
+        current = 650.5  # Just above 0.5R
+        r_now = (current - entry) / risk  # ~0.5R
         
         decision = maybe_adjust_or_exit(
             'long', entry, sl, tps, current, atr,
@@ -694,7 +677,7 @@ class TestVolatileReversalScenarios(unittest.TestCase):
             counter_signal_confidence=0.75
         )
         
-        # Should exit on counter-signal
+        # Should exit on counter-signal at 0.5R+
         self.assertEqual(decision['action'], 'exit')
         self.assertIn('Counter-signal', decision['reason'])
     
