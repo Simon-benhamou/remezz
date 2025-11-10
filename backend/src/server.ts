@@ -309,4 +309,13 @@ await rehydrateActiveAgentSessions().catch((error) => {
   serverLogger.error('❌ Failed to rehydrate active agent sessions during startup:', error);
 });
 
+// Initialize paper balance from database
+serverLogger.info('💰 Initializing paper balance from database...');
+try {
+  const { initializePaperBalance } = await import('./services/capitalPool.js');
+  await initializePaperBalance();
+} catch (error) {
+  serverLogger.warn('⚠️ Failed to initialize paper balance from database:', error);
+}
+
 server.listen(cfg.PORT, () => serverLogger.info(`[api] listening on :${cfg.PORT}`));

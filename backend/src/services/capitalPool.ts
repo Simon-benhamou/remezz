@@ -14,6 +14,29 @@ const defaultPaperBalance = () => ({
   ts: Date.now(),
 });
 
+// Load persisted paper balance from database on startup
+async function loadPersistedPaperBalance(): Promise<PreciseDecimal> {
+  try {
+    const setting = await prisma.systemSetting.findUnique({
+      where: { key: 'paper_balance_usd' },
+    });
+    
+    if (setting && setting.value) {
+      const value = parseFloat(setting.value);
+      if (Number.isFinite(value) && value > 0) {
+        console.log(`📥 Loaded persisted paper balance from database: $${value}`);
+        return new PreciseDecimal(value.toString());
+      }
+    }
+  } catch (error) {
+    console.warn('⚠️ Failed to load persisted paper balance from database:', error);
+  }
+  
+  // Return default if not found or error
+  console.log('📥 Using default paper balance: $1000');
+  return new PreciseDecimal('1000');
+}
+
 const paperStore = { snapshot: defaultPaperBalance() };
 const paperProvider = new PaperBalanceProvider(paperStore);
 let paperManualBase = paperStore.snapshot.totalUSD;
@@ -280,6 +303,25 @@ export async function setPaperBalance(amount: string | number | PreciseDecimal):
   paperManualFree = snapshot.freeUSD;
   await paperManager.clearLedger();
   lastPaperReconcile = 0;
+  
+  // Persist paper balance to database for restart resilience
+  try {
+    await prisma.systemSetting.upsert({
+      where: { key: 'paper_balance_usd' },
+      update: { 
+        value: next.toNumber().toString(),
+        updatedAt: new Date(),
+      },
+      create: {
+        key: 'paper_balance_usd',
+        value: next.toNumber().toString(),
+      },
+    });
+    console.log(`💾 Paper balance persisted to database: $${next.toNumber()}`);
+  } catch (error) {
+    console.warn('⚠️ Failed to persist paper balance to database:', error);
+  }
+  
   return snapshot;
 }
 
@@ -294,4 +336,25 @@ export function updateLiveExchangeBalance(params: { totalUsd: number; freeUsd: n
     ts: params.timestamp ?? Date.now(),
   };
   lastLiveReconcile = 0;
+}
+
+// Initialize paper balance from database (called on startup)
+export async function initializePaperBalance(): Promise<void> {
+  const persistedBalance = await loadPersistedPaperBalance();
+  
+  if (persistedBalance.toNumber() !== paperManualBase.toNumber()) {
+    const snapshot: BalanceSnapshot = {
+      totalUSD: persistedBalance,
+      freeUSD: persistedBalance,
+      reservedUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+      inPositionsUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+      ts: Date.now(),
+    };
+    
+    paperStore.snapshot = snapshot;
+    paperManualBase = persistedBalance;
+    paperManualFree = persistedBalance;
+    
+    console.log(`✅ Paper balance initialized from database: $${persistedBalance.toNumber()}`);
+  }
 }

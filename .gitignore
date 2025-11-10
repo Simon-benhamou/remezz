@@ -1,5 +1,10 @@
 backend/test-logging-improvement.mjs
 
+# Environment files
+.env
+.env.local
+.env.*.local
+
 # Test coverage and artifacts
 coverage/
 *.coverage
