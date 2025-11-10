@@ -131,6 +131,11 @@ export type QuantAIEntryFilterConfig = EntryFilterThresholds & {
   playbookOverrides?: Record<string, QuantAIPlaybookEntryFilterOverride>;
 };
 
+export type QuantAIPeakDrawdownConfig = {
+  enabled: boolean;
+  thresholds: Record<number, number>; // R-multiple -> drawdown threshold (e.g., { 1.0: 0.05, 2.0: 0.04, 3.0: 0.03 })
+};
+
 export type QuantAIExitConfig = {
   atrPeriod: number;
   slAtrMult: number;
@@ -155,6 +160,7 @@ export type QuantAIExitConfig = {
     atrPctSpikeThreshold: number;
     widenMultiplier: number;
   };
+  peakDrawdown?: QuantAIPeakDrawdownConfig;
   earlyExit: {
     adxBelow: number;
     cmfNegative: boolean;
@@ -464,6 +470,15 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     volatilityExit: {
       atrPctSpikeThreshold: 0.35,
       widenMultiplier: 1.25,
+    },
+    peakDrawdown: {
+      enabled: true,
+      thresholds: {
+        1.0: 0.05,  // 5% drawdown at 1R
+        2.0: 0.04,  // 4% drawdown at 2R
+        3.0: 0.03,  // 3% drawdown at 3R
+        5.0: 0.02,  // 2% drawdown at 5R+
+      },
     },
     earlyExit: {
       adxBelow: 18,
@@ -1078,6 +1093,30 @@ function normalizeExits(raw: any): QuantAIExitConfig {
         ) ?? volatilityDefaults.widenMultiplier,
       }
     : undefined;
+  const peakDrawdownDefaults = DEFAULT_CONFIG.exits.peakDrawdown ?? { enabled: true, thresholds: { 1.0: 0.05, 2.0: 0.04, 3.0: 0.03, 5.0: 0.02 } };
+  const peakDrawdownRaw = (raw.peak_drawdown ?? raw.peakDrawdown) && typeof (raw.peak_drawdown ?? raw.peakDrawdown) === 'object'
+    ? (raw.peak_drawdown ?? raw.peakDrawdown)
+    : undefined;
+  const peakDrawdown: QuantAIPeakDrawdownConfig | undefined = peakDrawdownDefaults
+    ? {
+        enabled: peakDrawdownRaw?.enabled != null ? Boolean(peakDrawdownRaw.enabled) : peakDrawdownDefaults.enabled,
+        thresholds: (() => {
+          const thresholdsRaw = peakDrawdownRaw?.thresholds;
+          if (thresholdsRaw && typeof thresholdsRaw === 'object') {
+            const result: Record<number, number> = {};
+            for (const [key, value] of Object.entries(thresholdsRaw)) {
+              const rKey = Number(key);
+              const threshold = normalizeOptionalNumber(value);
+              if (Number.isFinite(rKey) && threshold != null && threshold > 0 && threshold < 1) {
+                result[rKey] = threshold;
+              }
+            }
+            return Object.keys(result).length > 0 ? result : peakDrawdownDefaults.thresholds;
+          }
+          return peakDrawdownDefaults.thresholds;
+        })(),
+      }
+    : undefined;
   const tightenProfitR = Number(
     earlyExitRaw.tighten_profit_r ??
     earlyExitRaw.tightenProfitR ??
@@ -1220,6 +1259,7 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     minStopAtrMult,
     profitLock,
     volatilityExit,
+    peakDrawdown,
     earlyExit: {
       adxBelow: Number(earlyExitRaw.adx_below ?? earlyExitRaw.adxBelow ?? DEFAULT_CONFIG.exits.earlyExit.adxBelow),
       cmfNegative: Boolean(earlyExitRaw.cmf_negative ?? earlyExitRaw.cmfNegative ?? DEFAULT_CONFIG.exits.earlyExit.cmfNegative),

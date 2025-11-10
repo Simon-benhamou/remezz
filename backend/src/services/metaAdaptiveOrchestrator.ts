@@ -492,6 +492,7 @@ async function executeEntryTrade(
         stop: stopPrice,
         signal,
         openedAt: Date.now(),
+        peakPrice: entryPrice, // Initialize peak price at entry
       };
     }
 
@@ -533,6 +534,27 @@ async function checkAndExecuteExit(
     const currentPrice = tech.last;
     const position = agent.pos;
 
+    // Update peak price tracking
+    if (position.peakPrice == null) {
+      // Initialize peak price on first check
+      position.peakPrice = position.entry;
+    }
+    
+    // Update peak price based on position side
+    if (position.side === 'buy') {
+      // For longs, track highest price
+      if (currentPrice > position.peakPrice) {
+        position.peakPrice = currentPrice;
+        logger.debug(`[${session.sessionId}] Updated peak price (long): ${position.peakPrice.toFixed(4)}`);
+      }
+    } else {
+      // For shorts, track lowest price
+      if (currentPrice < position.peakPrice) {
+        position.peakPrice = currentPrice;
+        logger.debug(`[${session.sessionId}] Updated peak price (short): ${position.peakPrice.toFixed(4)}`);
+      }
+    }
+
     // Check exit conditions using exitManager
     const config = getQuantAIConfig();
     const MS_PER_MINUTE = 60000;
@@ -547,6 +569,7 @@ async function checkAndExecuteExit(
       atr: tech.atr14 || (tech.last * DEFAULT_ATR_PCT),
       cfg: config.exits,
       minutesOpen,
+      peakPrice: position.peakPrice,
     });
 
     if (exitDirective?.action === 'exit') {
