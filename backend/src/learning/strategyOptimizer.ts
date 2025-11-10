@@ -214,9 +214,10 @@ export async function optimizeSymbolParameters(
 
 /**
  * Optimize parameters with regime awareness (volatility + direction + volume + trending/ranging)
+ * Always returns all 11 regime types, using intelligent defaults when insufficient data
  */
 function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): RegimeAwareParams | null {
-  console.log(`📊 Running regime-aware optimization for ${symbol}...`);
+  console.log(`📊 Running regime-aware optimization for ${symbol} (ensuring all 11 regimes)...`);
 
   // Split evaluations by volatility regime
   const lowVolEvals = evaluations.filter((e) =>
@@ -311,23 +312,34 @@ function optimizeRegimeAware(symbol: string, evaluations: EvaluationData[]): Reg
     return null;
   }
 
-  // Build regime-aware params
+  // Build regime-aware params - ALWAYS include all regimes
+  // Use optimized params where available, otherwise fall back to intelligent defaults
   const regimeParams: RegimeAwareParams = {
     default: defaultParams,
+    // Volatility regimes (always present)
+    low_volatility: lowVolParams ?? getDefaultParamsByRegime('low_volatility'),
+    medium_volatility: medVolParams ?? getDefaultParamsByRegime('medium_volatility'),
+    high_volatility: highVolParams ?? getDefaultParamsByRegime('high_volatility'),
+    // Direction bias regimes (always present)
+    long_bias: longParams ?? getDefaultParamsByRegime('long_bias'),
+    short_bias: shortParams ?? getDefaultParamsByRegime('short_bias'),
+    // Volume regimes (always present)
+    low_volume: lowVolumeParams ?? getDefaultParamsByRegime('low_volume'),
+    normal_volume: normalVolumeParams ?? getDefaultParamsByRegime('normal_volume'),
+    high_volume: highVolumeParams ?? getDefaultParamsByRegime('high_volume'),
+    // Trending vs ranging regimes (always present)
+    trending: trendingParams ?? getDefaultParamsByRegime('trending'),
+    ranging: rangingParams ?? getDefaultParamsByRegime('ranging'),
   };
 
-  if (lowVolParams) regimeParams.low_volatility = lowVolParams;
-  if (medVolParams) regimeParams.medium_volatility = medVolParams;
-  if (highVolParams) regimeParams.high_volatility = highVolParams;
-  if (longParams) regimeParams.long_bias = longParams;
-  if (shortParams) regimeParams.short_bias = shortParams;
-  if (lowVolumeParams) regimeParams.low_volume = lowVolumeParams;
-  if (normalVolumeParams) regimeParams.normal_volume = normalVolumeParams;
-  if (highVolumeParams) regimeParams.high_volume = highVolumeParams;
-  if (trendingParams) regimeParams.trending = trendingParams;
-  if (rangingParams) regimeParams.ranging = rangingParams;
+  const optimizedCount = [
+    lowVolParams, medVolParams, highVolParams,
+    longParams, shortParams,
+    lowVolumeParams, normalVolumeParams, highVolumeParams,
+    trendingParams, rangingParams
+  ].filter(p => p !== null).length;
 
-  console.log(`✅ ${symbol}: Optimized ${Object.keys(regimeParams).length} regime parameters`);
+  console.log(`✅ ${symbol}: All 11 regimes present (${optimizedCount} optimized, ${10 - optimizedCount} using defaults)`);
   
   return regimeParams;
 }
