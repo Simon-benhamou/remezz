@@ -45,6 +45,76 @@ const logger = createLogger('meta-adaptive');
 const sessionBrokers = new Map<string, Broker>();
 
 /**
+ * Calculate capital usage and determine required confidence threshold
+ * 
+ * Adaptive Strategy based on capital size:
+ * 
+ * Small accounts (<$200): 
+ *   - 1 position max (80-100% per trade)
+ *   - Focused approach, no diversification needed
+ * 
+ * Medium accounts ($200-$1000):
+ *   - 2-3 positions max (40-50% per trade)
+ *   - Some diversification
+ * 
+ * Large accounts (>$1000):
+ *   - 4-5 positions max (20% per trade)
+ *   - Full diversification
+ *   - Progressive confidence: 80%+ usage requires 0.75 confidence
+ */
+async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promise<{
+  totalCapital: number;
+  usedCapital: number;
+  freeCapital: number;
+  usageRatio: number;
+  minConfidenceRequired: number;
+  maxAllocationPerPosition: number;
+  maxPositions: number;
+}> {
+  const capitalManager = getCapitalManager(mode);
+  const snapshot = await capitalManager.getBalance();
+  
+  const totalCapital = snapshot.totalUSD.toNumber();
+  const freeCapital = snapshot.freeUSD.toNumber();
+  const usedCapital = totalCapital - freeCapital;
+  const usageRatio = totalCapital > 0 ? usedCapital / totalCapital : 0;
+  
+  // Adaptive allocation based on capital size
+  let maxAllocationPerPosition: number;
+  let maxPositions: number;
+  let minConfidenceRequired: number;
+  
+  if (totalCapital < 200) {
+    // Small account: 1 big position (80-100%)
+    maxAllocationPerPosition = totalCapital * 0.90; // Use 90% for the single position
+    maxPositions = 1;
+    minConfidenceRequired = 0.50; // Normal threshold
+  } else if (totalCapital < 1000) {
+    // Medium account: 2-3 positions (40-50% each)
+    maxAllocationPerPosition = totalCapital * 0.45;
+    maxPositions = 2;
+    // Progressive threshold for 2nd position
+    minConfidenceRequired = usageRatio < 0.50 ? 0.50 : 0.65;
+  } else {
+    // Large account: 4-5 positions (20% each)
+    maxAllocationPerPosition = totalCapital * 0.20;
+    maxPositions = 5;
+    // Progressive threshold: last 20% requires high confidence
+    minConfidenceRequired = usageRatio < 0.80 ? 0.50 : 0.75;
+  }
+  
+  return {
+    totalCapital,
+    usedCapital,
+    freeCapital,
+    usageRatio,
+    minConfidenceRequired,
+    maxAllocationPerPosition,
+    maxPositions,
+  };
+}
+
+/**
  * Helper to calculate regime context from technical data
  */
 function calculateRegimeContext(tech: TechnicalSnapshot): RegimeContext {
@@ -314,6 +384,34 @@ async function executeEntryTrade(
     // Get risk percentage from profile or use default
     const riskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
     
+    // Check capital usage and determine confidence threshold
+    const capitalMetrics = await calculateCapitalUsageAndThresholds(session.mode);
+    
+    integrationLogger.info(`Capital usage | total=$${capitalMetrics.totalCapital.toFixed(0)} used=$${capitalMetrics.usedCapital.toFixed(0)} free=$${capitalMetrics.freeCapital.toFixed(0)} ratio=${(capitalMetrics.usageRatio * 100).toFixed(1)}% maxPos=${capitalMetrics.maxPositions} minConf=${capitalMetrics.minConfidenceRequired}`);
+    
+    // Progressive confidence check: reject if below threshold
+    if (signal.confidence < capitalMetrics.minConfidenceRequired) {
+      integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${capitalMetrics.minConfidenceRequired} (capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
+      
+      await logTradeEvaluation({
+        symbol: session.symbol,
+        decision: 'order_blocked_capital',
+        blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${capitalMetrics.minConfidenceRequired} (capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used)`,
+        confidenceScore: signal.confidence,
+        inputMetrics: {
+          capitalUsageRatio: capitalMetrics.usageRatio,
+          minConfidenceRequired: capitalMetrics.minConfidenceRequired,
+        },
+      });
+      
+      return;
+    }
+    
+    // Limit position size to max allocation
+    const maxPositionMargin = Math.min(equityUsd, capitalMetrics.maxAllocationPerPosition);
+    
+    integrationLogger.info(`Position sizing | equity=$${equityUsd.toFixed(0)} maxAllocation=$${maxPositionMargin.toFixed(0)} (${((capitalMetrics.maxAllocationPerPosition / capitalMetrics.totalCapital) * 100).toFixed(0)}% for ${capitalMetrics.maxPositions} max positions)`);
+    
     // Dynamic leverage based on confidence: high confidence = higher leverage
     // confidence range: 0.50-1.0 (filters block below 0.50)
     // leverage range: baseLeverage (e.g., 3x) to maxLeverage (e.g., 10x)
@@ -329,7 +427,7 @@ async function executeEntryTrade(
     
     // Use computeQtyNotional which respects leverage caps per symbol category
     const sizingResult = await computeQtyNotional({
-      balanceUsd: equityUsd,
+      balanceUsd: maxPositionMargin,
       riskPct,
       stopDistanceAbs: stopDistance,
       entryPrice,
