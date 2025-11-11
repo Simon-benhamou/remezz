@@ -236,8 +236,10 @@ class PreparedWindow:
 
 
 DEFAULT_WINDOW_SPECS: Sequence[WindowSpec] = (
+    WindowSpec("15m", hours=24 * 180, offset_hours=0),  # 6 mois 15m - TIMEFRAME PRODUCTION
     WindowSpec("1h", hours=24 * 180, offset_hours=0),   # 6 mois au lieu de 3 - 2x plus de données
     WindowSpec("4h", hours=24 * 180, offset_hours=0),   # 6 mois higher timeframe
+    WindowSpec("15m", hours=24 * 120, offset_hours=180),# 4 mois supplémentaires offset 15m
     WindowSpec("1h", hours=24 * 120, offset_hours=180), # 4 mois supplémentaires offset
     WindowSpec("4h", hours=24 * 120, offset_hours=180), # 4 mois supplémentaires offset  
 )

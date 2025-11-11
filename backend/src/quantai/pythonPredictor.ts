@@ -20,6 +20,82 @@ let cachedPythonResolutionError: Error | null = null;
 let pythonFailureCount = 0;
 const PYTHON_FAILURE_THRESHOLD = 5;
 
+// 🔴 PREDICTOR RELIABILITY METRICS
+type PredictorReliabilityMetrics = {
+  totalCalls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  lastErrorTimestamp: number | null;
+  lastErrorMessage: string | null;
+  consecutiveFailures: number;
+  reliabilityRate: number; // successfulCalls / totalCalls (target: 0.95+)
+  isReliable: boolean; // reliabilityRate >= 0.95
+};
+
+const predictorMetrics: PredictorReliabilityMetrics = {
+  totalCalls: 0,
+  successfulCalls: 0,
+  failedCalls: 0,
+  lastErrorTimestamp: null,
+  lastErrorMessage: null,
+  consecutiveFailures: 0,
+  reliabilityRate: 1.0,
+  isReliable: true,
+};
+
+export function getPredictorReliabilityMetrics(): Readonly<PredictorReliabilityMetrics> {
+  return { ...predictorMetrics };
+}
+
+export function resetPredictorMetrics(): void {
+  predictorMetrics.totalCalls = 0;
+  predictorMetrics.successfulCalls = 0;
+  predictorMetrics.failedCalls = 0;
+  predictorMetrics.lastErrorTimestamp = null;
+  predictorMetrics.lastErrorMessage = null;
+  predictorMetrics.consecutiveFailures = 0;
+  predictorMetrics.reliabilityRate = 1.0;
+  predictorMetrics.isReliable = true;
+}
+
+function recordPredictorSuccess(): void {
+  predictorMetrics.totalCalls += 1;
+  predictorMetrics.successfulCalls += 1;
+  predictorMetrics.consecutiveFailures = 0;
+  predictorMetrics.reliabilityRate = predictorMetrics.successfulCalls / predictorMetrics.totalCalls;
+  predictorMetrics.isReliable = predictorMetrics.reliabilityRate >= 0.95;
+}
+
+function recordPredictorFailure(errorMessage: string): void {
+  predictorMetrics.totalCalls += 1;
+  predictorMetrics.failedCalls += 1;
+  predictorMetrics.consecutiveFailures += 1;
+  predictorMetrics.lastErrorTimestamp = Date.now();
+  predictorMetrics.lastErrorMessage = errorMessage;
+  predictorMetrics.reliabilityRate = predictorMetrics.successfulCalls / predictorMetrics.totalCalls;
+  predictorMetrics.isReliable = predictorMetrics.reliabilityRate >= 0.95;
+  
+  // 🚨 Alert if reliability drops below 95%
+  if (!predictorMetrics.isReliable && predictorMetrics.totalCalls >= 20) {
+    console.error('🚨 PREDICTOR RELIABILITY BELOW 95%', {
+      reliabilityRate: predictorMetrics.reliabilityRate.toFixed(4),
+      successfulCalls: predictorMetrics.successfulCalls,
+      failedCalls: predictorMetrics.failedCalls,
+      totalCalls: predictorMetrics.totalCalls,
+      consecutiveFailures: predictorMetrics.consecutiveFailures,
+      lastError: errorMessage,
+    });
+  }
+  
+  // 🚫 Block all predictions if consecutive failures too high
+  if (predictorMetrics.consecutiveFailures >= 3) {
+    console.error('🚫 PREDICTOR CONSECUTIVE FAILURES - SYSTEM UNRELIABLE', {
+      consecutiveFailures: predictorMetrics.consecutiveFailures,
+      lastErrors: predictorMetrics.lastErrorMessage,
+    });
+  }
+}
+
 function probePythonExecutable(): string {
   if (cachedPythonExecutable) {
     return cachedPythonExecutable;
@@ -350,6 +426,7 @@ export async function getPrediction(features: Record<string, number>): Promise<P
         const details = stderr || stdout || '';
         const error = new Error(`python exited with code ${code}: ${details}`);
         recordServiceFailure('python_predictor', error);
+        recordPredictorFailure(error.message); // 🔴 Track reliability
         reject(error);
         return;
       }
@@ -417,10 +494,12 @@ export function getPredictionSync(features: Record<string, number>): PythonPredi
     const prediction = parsePrediction((result.stdout ?? '').trim());
     const responseTime = Date.now() - startTime;
     recordServiceSuccess('python_predictor', responseTime);
+    recordPredictorSuccess(); // 🔵 Track reliability
     return prediction;
   } catch (error) {
     const parseError = new Error(`failed to parse python output: ${(error as Error).message}`);
     recordServiceFailure('python_predictor', parseError);
+    recordPredictorFailure(parseError.message); // 🔴 Track reliability
     throw parseError;
   }
 }
@@ -522,7 +601,9 @@ export function getPredictionSyncSafe(
   features: Record<string, number>,
   options?: { allowFallback?: boolean }
 ): PythonPredictionResult {
-  const allowFallback = options?.allowFallback ?? true;
+  // 🚨 CHANGED: Default to NO fallback (require 95% reliability)
+  // Set allowFallback=true explicitly only for non-critical operations
+  const allowFallback = options?.allowFallback ?? false;
   
   try {
     return getPredictionSync(features);

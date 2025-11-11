@@ -12,6 +12,7 @@ import { prisma } from '../db/client.js';
 import { AgentHub } from '../agent/hub.js';
 import { classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, classifyTrendingRanging } from '../learning/personalityProfile.js';
 import type { TechnicalSnapshot } from '../ai/tech.js';
+import { getPredictorReliabilityMetrics } from '../quantai/pythonPredictor.js';
 
 export type AgentDiagnosticInfo = {
   sessionId: string;
@@ -46,6 +47,17 @@ export type AgentDiagnosticInfo = {
       active: boolean;
       reason: string | null;
       seconds: number | null;
+    };
+    // 🔴 Reliability Metrics
+    reliability: {
+      totalCalls: number;
+      successfulCalls: number;
+      failedCalls: number;
+      reliabilityRate: number;
+      isReliable: boolean;
+      consecutiveFailures: number;
+      lastErrorTimestamp: number | null;
+      lastErrorMessage: string | null;
     };
   } | null;
   
@@ -238,6 +250,9 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
     let predictorInfo: AgentDiagnosticInfo['predictor'] = null;
     const pythonSignal = agent.pythonSignal || (agent.lastSignal as any)?.pythonSignal || null;
     
+    // Get predictor reliability metrics
+    const reliabilityMetrics = getPredictorReliabilityMetrics();
+    
     if (pythonSignal) {
       predictorInfo = {
         available: true,
@@ -255,6 +270,16 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           active: Boolean(pythonSignal.cooldown?.active),
           reason: pythonSignal.cooldown?.reason || null,
           seconds: pythonSignal.cooldown?.seconds || null,
+        },
+        reliability: {
+          totalCalls: reliabilityMetrics.totalCalls,
+          successfulCalls: reliabilityMetrics.successfulCalls,
+          failedCalls: reliabilityMetrics.failedCalls,
+          reliabilityRate: Number(reliabilityMetrics.reliabilityRate.toFixed(4)),
+          isReliable: reliabilityMetrics.isReliable,
+          consecutiveFailures: reliabilityMetrics.consecutiveFailures,
+          lastErrorTimestamp: reliabilityMetrics.lastErrorTimestamp,
+          lastErrorMessage: reliabilityMetrics.lastErrorMessage,
         },
       };
     }

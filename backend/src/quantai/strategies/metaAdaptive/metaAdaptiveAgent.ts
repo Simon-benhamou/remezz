@@ -1156,13 +1156,18 @@ class MetaAdaptiveStrategyAgent {
         };
         pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
       } catch (error) {
-        pythonBias = 0;
-        if (process.env.UNIT_TEST_MODE !== 'true') {
-          console.warn('python predictor sync failed during evaluation', {
-            symbol: input.symbol,
-            error: (error as Error).message,
-          });
-        }
+        // 🚨 CRITICAL: No fallback - predictor failure BLOCKS all trading
+        // We rely 95% on predictor accuracy, cannot trade without it
+        const errorMsg = (error as Error).message;
+        console.error('🚨 PREDICTOR FAILURE - BLOCKING ALL TRADES', {
+          symbol: input.symbol,
+          error: errorMsg,
+          timestamp: new Date().toISOString(),
+          severity: 'CRITICAL',
+        });
+        
+        // Throw error to stop evaluation - no trades will be registered
+        throw new Error(`Predictor failure for ${input.symbol}: ${errorMsg}`);
       }
     }
 
