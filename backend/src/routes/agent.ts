@@ -601,6 +601,83 @@ router.post('/stop-all', authenticateUser, requireRole(['admin']), async (req: A
   }
 });
 
+// Close position manually without stopping agent
+router.post('/:sessionId/close-position', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { reason } = req.body as { reason?: string };
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'session_id_required' });
+    }
+
+    // Get session and check ownership
+    const session = await prisma.agentSession.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'session_not_found' });
+    }
+
+    if (!canAccessSessionOwner(session, req.user)) {
+      logUnauthorizedSessionAccess(console, { 
+        action: 'close_position', 
+        sessionId: session.id, 
+        user: req.user 
+      });
+      return securityErrorResponse(res, 'unauthorized', 'You do not have permission to close this position', 403);
+    }
+
+    // Check if session is active
+    if (session.stoppedAt) {
+      return res.status(400).json({ error: 'session_not_active', message: 'Cannot close position on stopped session' });
+    }
+
+    const closeReason = reason || 'manual_close_from_ui';
+    console.log(`🔴 Manual position close requested for session ${sessionId} - Reason: ${closeReason}`);
+
+    // Close position via AgentHub
+    try {
+      await AgentHub.closeNow(sessionId, closeReason);
+      
+      // Broadcast update
+      broadcast('agent_state', { 
+        sessionId,
+        pos: null,
+        closedReason: closeReason,
+        closedAt: new Date().toISOString()
+      }, session.symbol, sessionId);
+
+      console.log(`✅ Position closed successfully for session ${sessionId}`);
+      
+      return res.json({ 
+        ok: true, 
+        sessionId,
+        message: 'Position closed successfully',
+        reason: closeReason
+      });
+
+    } catch (closeError) {
+      const errorMsg = closeError instanceof Error ? closeError.message : String(closeError);
+      console.error(`❌ Failed to close position for session ${sessionId}:`, closeError);
+      
+      return res.status(500).json({
+        error: 'close_position_failed',
+        message: errorMsg,
+        sessionId
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Close position route error:', error);
+    return res.status(500).json({
+      error: 'internal_error',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
 router.post('/restart', authenticateUser, async (req: AuthenticatedRequest, res) => {
   try {
     const body = req.body as {
@@ -994,6 +1071,8 @@ router.get('/state', authenticateUser, async (req: AuthenticatedRequest, res) =>
       blend: rrConfig.blend,
       hysteresis: rrConfig.hysteresis,
     };
+    // Add exit strategy mode from environment
+    (profile as any).exitStrategyMode = process.env.EXIT_STRATEGY_MODE ?? 'hybrid';
   }
 
   res.json({

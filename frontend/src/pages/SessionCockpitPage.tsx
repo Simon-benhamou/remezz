@@ -34,6 +34,7 @@ import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
 import AgentStatePanel from '../components/AgentStatePanel';
 import StrategyChecklistCard from '../components/StrategyChecklistCard';
+import PositionInfoCard from '../components/PositionInfoCard';
 import type { StrategySnapshot } from '../types/strategies';
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
 import OrdersTable from '../components/OrdersTable';
@@ -1162,6 +1163,7 @@ export default function SessionCockpitPage() {
           )}
         </Card>
         <Row gutter={[24, 24]} className="session-grid">
+          <Col xs={24} lg={agent?.pos ? 17 : 24}>
             <Card
               className="session-section-card session-section-card--flush w-full"
               bordered={false}
@@ -1187,8 +1189,23 @@ export default function SessionCockpitPage() {
                 <Skeleton active paragraph={{ rows: 10 }} />
               )}
             </Card>
-          
-         
+          </Col>
+          {agent?.pos && (
+            <Col xs={24} lg={7}>
+              {shouldShowContent(LoadingPhase.CORE_DATA) ? (
+                <PositionInfoCard
+                  position={agent.pos}
+                  currentPrice={status?.price}
+                  symbol={status?.symbol}
+                  sessionId={sessionId}
+                  profile={agent?.profile}
+                  onClose={refreshAll}
+                />
+              ) : (
+                <Skeleton active paragraph={{ rows: 10 }} />
+              )}
+            </Col>
+          )}
         </Row>
 <Row>
   <Card title="Performance metrics" bordered={false} className="session-section-card">

@@ -144,16 +144,34 @@ export function maybeAdjustOrExit({
     archetype === 'reversal'
       ? cfg.trailAfterRReversal ?? trailAfterBase
       : cfg.trailAfterRImpulse ?? trailAfterBase;
-  const tightenThreshold = cfg.earlyExit.tightenProfitR ?? cfg.earlyExit.tightenOnlyIfProfitGtR ?? 0.2;
-  const cutThreshold = cfg.earlyExit.cutLossR ?? cfg.earlyExit.cutIfLossGtR ?? 0.5;
-  const minHoldMinutes = cfg.earlyExit.minHoldMinutes ?? 0;
-  const holdSatisfied =
-    minutesOpen == null || !Number.isFinite(minHoldMinutes) || minHoldMinutes <= 0 || minutesOpen >= minHoldMinutes;
+  
+  // Calculate ATR% context first (needed for volatility adjustment)
   const trailingCfg = cfg.trailingAdaptive;
   const trailingMode = trailingCfg?.mode ?? 'atr';
   const atrPctContext = atr != null && Number.isFinite(atr) && atr > 0 && lastPrice > 0
     ? (atr / lastPrice) * 100
     : null;
+  
+  // 🎯 ADAPTIVE EXIT THRESHOLDS based on crypto volatility
+  // High volatility cryptos (ATR > 5%) get more tolerant thresholds to avoid premature exits
+  const baseAtrPct = entryAtrPct ?? atrPctContext ?? 2.0; // Use entry ATR% or current, default 2%
+  const volatilityMultiplier = baseAtrPct > 5.0 
+    ? 1.5  // High vol (e.g., AERO 9%): 1.5x more tolerant
+    : baseAtrPct > 3.0
+    ? 1.25 // Medium vol: 1.25x more tolerant  
+    : 1.0; // Low vol: standard thresholds
+  
+  const baseTightenThreshold = cfg.earlyExit.tightenProfitR ?? cfg.earlyExit.tightenOnlyIfProfitGtR ?? 0.2;
+  const baseCutThreshold = cfg.earlyExit.cutLossR ?? cfg.earlyExit.cutIfLossGtR ?? 0.5;
+  const baseMinHoldMinutes = cfg.earlyExit.minHoldMinutes ?? 15;
+  
+  // Apply volatility adjustment
+  const tightenThreshold = baseTightenThreshold;
+  const cutThreshold = baseCutThreshold * volatilityMultiplier; // More tolerant for volatile cryptos
+  const minHoldMinutes = Math.ceil(baseMinHoldMinutes * volatilityMultiplier); // Hold longer for volatile
+  
+  const holdSatisfied =
+    minutesOpen == null || !Number.isFinite(minHoldMinutes) || minHoldMinutes <= 0 || minutesOpen >= minHoldMinutes;
   const trailMultiplierBase = resolveTrailMultiplier(cfg, atrPctContext);
   let percentTrail = trailingMode === 'percent'
     ? Math.max(0.05, trailingCfg?.percent ?? 0.35)
@@ -366,22 +384,42 @@ export function maybeAdjustOrExit({
   }
 
   const lossR = rNow < 0 ? -rNow : 0;
+  
+  // 🎯 ADAPTIVE MOMENTUM THRESHOLDS: Lower ADX requirement for volatile cryptos
+  // High volatility cryptos naturally have more erratic ADX, so we're more lenient
+  // Standard ADX threshold: 18, High vol (AERO): 15, Very high vol: 12
+  const baseAdxThreshold = cfg.earlyExit.adxBelow;
+  const adaptiveAdxThreshold = baseAtrPct > 7.0
+    ? Math.max(12, baseAdxThreshold - 6)  // Very high vol: much more lenient
+    : baseAtrPct > 5.0
+    ? Math.max(15, baseAdxThreshold - 3)  // High vol (AERO 9%): more lenient
+    : baseAdxThreshold;
+  
   const momentumFail =
-    (adx != null && adx < cfg.earlyExit.adxBelow) ||
+    (adx != null && adx < adaptiveAdxThreshold) ||
     (cfg.earlyExit.cmfNegative && cmf != null && cmf < 0);
 
-  // 🛡️ HARD STOP LOSS: Exit on significant loss regardless of momentum (0.5R or more)
-  // This prevents holding losing positions when price persistently moves against us
-  // Example: XRP/USDT position with 1.76R loss will exit even with good momentum
-  const hardStopLossR = 0.5;
+  // 🛡️ ADAPTIVE HARD STOP LOSS: Adjusted for crypto volatility
+  // High volatility cryptos get wider hard stop to avoid noise exits
+  // Low vol: 0.5R, Medium vol: 0.65R, High vol (AERO): 0.75R
+  const baseHardStopR = 0.5;
+  const hardStopLossR = baseHardStopR * volatilityMultiplier;
+  
   if (lossR >= hardStopLossR && effectiveHoldSatisfied) {
-    return { action: 'exit', reason: `Hard stop loss: ${lossR.toFixed(2)}R loss exceeded threshold` };
+    return { 
+      action: 'exit', 
+      reason: `Hard stop loss: ${lossR.toFixed(2)}R loss exceeded ${hardStopLossR.toFixed(2)}R threshold (volatility-adjusted)` 
+    };
   }
 
   // 🚨 EARLY EXIT: Exit on smaller loss (cutThreshold) if momentum fails
+  // cutThreshold is already volatility-adjusted above (more tolerant for high vol)
   // This catches losses early when technical indicators suggest continuation
   if (lossR >= cutThreshold && momentumFail && effectiveHoldSatisfied) {
-    return { action: 'exit', reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure` };
+    return { 
+      action: 'exit', 
+      reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure (threshold ${cutThreshold.toFixed(2)}R, ATR ${baseAtrPct.toFixed(1)}%)` 
+    };
   }
 
   if (effectiveHoldSatisfied && profitLockArmed && rNow >= tightenThreshold && momentumFail) {
