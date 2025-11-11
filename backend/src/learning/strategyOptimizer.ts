@@ -146,7 +146,7 @@ function calculateFitness(evaluations: EvaluationData[], params: OptimalParams):
   const totalPnl = allTrades.reduce((sum, pnl) => sum + pnl, 0);
 
   // Combined fitness: weighted combination of Sharpe, win rate, total PnL, and balance
-  const fitness = sharpe * 0.5 + winRate * 0.3 + totalPnl * 20 * 0.2;
+  const fitness = sharpe * 0.5 + combinedWinRate * 0.3 + totalPnl * 20 * 0.2;
 
   return fitness;
 }

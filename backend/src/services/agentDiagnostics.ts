@@ -110,10 +110,11 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
     // Extract symbol profile
     const atrPct = (snap.atr14 / snap.last) * 100;
     const volatilityRegime = classifyVolatilityRegime(atrPct);
-    const directionBias = classifyDirectionBias(snap);
-    const volumeRatio = ((snap as any).volume ?? 0) / Math.max((snap as any).volumeMA ?? 1, 1);
-    const volumeRegime = classifyVolumeRegime(volumeRatio);
-    const trendingRanging = classifyTrendingRanging(snap.adx14 ?? 0);
+    const directionBias = classifyDirectionBias((snap as any).ema20, (snap as any).ema50);
+    const volume = (snap as any).volume ?? 0;
+    const volumeMA = (snap as any).volumeMA ?? 1;
+    const volumeRegime = classifyVolumeRegime(volume, volumeMA);
+    const trendingRanging = classifyTrendingRanging(snap.adx14 ?? 0, atrPct);
 
     const symbolProfile = {
       volatilityRegime,
