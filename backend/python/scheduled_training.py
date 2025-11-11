@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Sequence
 
 from ccxt_xgboost_module import (
+    CACHE_DIR,
     DEFAULT_EXCHANGE,
     DEFAULT_SYMBOLS,
     DEFAULT_WINDOW_SPECS,
@@ -64,6 +67,9 @@ def main() -> None:
     window_specs_env = os.environ.get("XGB_WINDOW_SPECS")
     lookback_env = os.environ.get("XGB_LOOKBACK_HOURS")
     offset_env = os.environ.get("XGB_OFFSET_HOURS")
+    
+    # Option to cleanup cache after training
+    cleanup_cache = os.environ.get("XGB_CLEANUP_CACHE", "0") == "1"
 
     timeframe_values: tuple[str, ...] | None = None
     if timeframes_env:
@@ -88,6 +94,23 @@ def main() -> None:
     _seed_everything()
     frames = refresh_cache(exchange, symbols, tuple(window_specs))
     artifacts = retrain_from_cache(frames)
+    
+    # Cleanup cache if requested
+    if cleanup_cache and CACHE_DIR.exists():
+        try:
+            import sys
+            csv_files = list(CACHE_DIR.glob("*.csv"))
+            deleted_count = 0
+            deleted_bytes = 0
+            for csv_file in csv_files:
+                file_size = csv_file.stat().st_size
+                csv_file.unlink()
+                deleted_count += 1
+                deleted_bytes += file_size
+            print(f"🧹 Cache cleanup: {deleted_count} files deleted, {deleted_bytes // (1024*1024)} MB freed", file=sys.stderr)
+        except Exception as e:
+            print(f"⚠️  Cache cleanup failed: {e}", file=sys.stderr)
+    
     payload = {
         "metrics": artifacts.metrics,
         "classOrder": artifacts.class_order,

@@ -35,6 +35,7 @@ import validationRouter from "./routes/validation.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
 import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
+import { startPredictorRetrainingScheduler } from "./learning/predictorRetrainer.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
@@ -235,6 +236,13 @@ startMarginMonitor();
 })();
 
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
+
+// Start intelligent predictor retraining scheduler
+if (process.env.PREDICTOR_RETRAINING_DISABLED !== 'true') {
+  startPredictorRetrainingScheduler();
+  serverLogger.info('🤖 Predictor retraining scheduler started');
+}
+
 restoreAutoUniverseRetrySchedule().catch((error) => {
   serverLogger.warn('⚠️ Failed to restore auto universe retry schedule:', error);
 });

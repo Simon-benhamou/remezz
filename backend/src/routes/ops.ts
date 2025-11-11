@@ -3,6 +3,10 @@ import { authenticateUser, requireRole, type AuthenticatedRequest } from '../mid
 import { listSchedulerJobs, replaySchedulerJob } from '../services/schedulerJobService.js';
 import { computeAgentHealth, computeOpsMetrics, recentOpsEvents } from '../monitor/ops.js';
 import { getRegenerationStats } from '../engine/events.js';
+import { 
+  triggerManualRetraining, 
+  getRetrainingStatus 
+} from '../learning/predictorRetrainer.js';
 
 export const router = Router();
 
@@ -96,5 +100,59 @@ router.post('/scheduler/jobs/:id/replay', authenticateUser, requireRole(['admin'
     res.json({ ok: true, job });
   } catch (error) {
     res.status(500).json({ ok: false, code: 'scheduler_replay_error', message: String(error) });
+  }
+});
+
+// Predictor retraining endpoints
+router.get('/predictor/retrain-status', authenticateUser, requireRole(['admin']), (req: AuthenticatedRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ ok: false, code: 'auth_required', message: 'Authentication required' });
+    }
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ ok: false, code: 'forbidden', message: 'Admin role required' });
+    }
+    const status = getRetrainingStatus();
+    res.json({ ok: true, status });
+  } catch (error) {
+    res.status(500).json({ ok: false, code: 'retrain_status_error', message: String(error) });
+  }
+});
+
+router.post('/predictor/retrain', authenticateUser, requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ ok: false, code: 'auth_required', message: 'Authentication required' });
+    }
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ ok: false, code: 'forbidden', message: 'Admin role required' });
+    }
+    
+    const result = await triggerManualRetraining();
+    
+    if (result.success && result.deployed) {
+      res.json({ 
+        ok: true, 
+        deployed: true,
+        message: 'Model retrained and deployed successfully',
+        result 
+      });
+    } else if (result.success && !result.deployed) {
+      res.json({ 
+        ok: true, 
+        deployed: false,
+        message: 'Model retrained but validation failed - old model kept',
+        result 
+      });
+    } else {
+      res.status(500).json({ 
+        ok: false, 
+        code: 'retrain_failed',
+        message: result.reason,
+        result 
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ ok: false, code: 'retrain_error', message: String(error) });
   }
 });
