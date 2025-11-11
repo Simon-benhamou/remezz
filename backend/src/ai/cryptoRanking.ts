@@ -525,26 +525,26 @@ export async function rankCryptosWithAI(
 **TIER 1 - BLUE CHIPS** (Highest priority):
 - BTC, ETH, SOL
 - Characteristics: >$500M daily volume, highest liquidity, lowest risk
-- Accept movements: ≥0.3% (even small moves are significant)
-- Score adjustment: +2.0 bonus
+- Accept movements: ≥0.2% (even small moves are significant)
+- Score adjustment: +1.5 bonus
 
 **TIER 2 - MAJOR ESTABLISHED** (High priority):
-- XRP, BNB, ADA, DOGE, MATIC, TRX, LTC, DOT, SHIB, etc.
-- Characteristics: >$50M daily volume, well-established, good liquidity
-- Accept movements: ≥0.5%
-- Score adjustment: +1.0 bonus
+- XRP, BNB, ADA, DOGE, MATIC, TRX, LTC, DOT, SHIB, AVAX, LINK, UNI, ATOM, etc.
+- Characteristics: >$30M daily volume, well-established, good liquidity
+- Accept movements: ≥0.3%
+- Score adjustment: +0.8 bonus
 
 **TIER 3 - PROMISING ALTS** (Moderate priority):
-- AVAX, LINK, UNI, NEAR, SUI, APT, ARB, OP, etc.
-- Characteristics: >$10M daily volume, established projects, moderate risk
-- Accept movements: ≥1.0%
+- NEAR, SUI, APT, ARB, OP, AAVE, FET, ICP, HBAR, TAO, etc.
+- Characteristics: >$5M daily volume, established projects, moderate risk
+- Accept movements: ≥0.5%
 - Score adjustment: +0.3 bonus
 
-**TIER 4 - SMALL CAPS** (Lowest priority, high risk):
-- Unknown or new projects
-- Characteristics: <$10M volume, unproven, high risk
-- Accept ONLY if: ≥3% movement AND exceptional technicals AND score >8.5
-- Score adjustment: -1.0 penalty
+**TIER 4 - SMALL CAPS** (Accept if tradeable):
+- Smaller market cap coins with growth potential
+- Characteristics: <$5M volume but still liquid enough
+- Accept if: ≥0.8% movement AND good technicals (ADX >15, volumeRatio >0.7)
+- Score adjustment: 0 (neutral, evaluate on merit)
 
 🎯 RANKING CRITERIA (weighted by importance):
 
@@ -567,10 +567,10 @@ export async function rankCryptosWithAI(
    - CMF20 alignment with direction is a strong positive
 
 4. **Momentum** (10% weight)
-   - Tier 1: Accept ≥0.3% moves
-   - Tier 2: Accept ≥0.5% moves
-   - Tier 3: Accept ≥1.0% moves
-   - Tier 4: Require ≥3.0% moves
+   - Tier 1: Accept ≥0.2% moves
+   - Tier 2: Accept ≥0.3% moves
+   - Tier 3: Accept ≥0.5% moves
+   - Tier 4: Accept ≥0.8% moves
 
 📊 CRYPTOS DATA (Top candidates):
 ${JSON.stringify(aiInput, null, 2)}
@@ -595,12 +595,15 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
 }
 
 ⚠️ CRITICAL RULES:
-- BTC/ETH/SOL should ALWAYS rank in top 5 if they have ANY positive movement (>0.3%)
-- Tier 4 coins should be AVOIDED unless truly exceptional (score >8.5 AND volume >$20M)
-- Return TOP 20 opportunities ranked by QUALITY-ADJUSTED score
-- Score formula: baseScore + tierBonus - riskPenalty
-- Reasons must mention the TIER and why it matters
-- Quality > Movement: "Tier 1 at +0.5%" beats "Tier 4 at +5%"`;
+- Return AT LEAST 15-20 opportunities to ensure good selection
+- Blue chips (BTC/ETH/SOL) should rank highly if they have reasonable setups
+- Don't over-filter - we need OPTIONS for the agent to choose from
+- Tier 4 coins are OK if technicals are solid (ADX >15, volumeRatio >0.7)
+- Return TOP 20-25 opportunities ranked by QUALITY-ADJUSTED score
+- Score formula: baseScore + tierBonus
+- Reasons must be concise (1-2 sentences max per reason)
+- Include a MIX of tiers for diversity
+- IMPORTANT: Even if a crypto has low movement, include it if technicals are excellent`;
 
     console.log('🤖 Sending to AI for ranking...');
     
@@ -627,21 +630,34 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
       const mt = snapshot.multiTimeframe?.timeframes ?? {};
       const bias4h = String(mt['4h']?.bias ?? 'neutral');
       const bias1h = String(mt['1h']?.bias ?? 'neutral');
+      
+      // Pénalité légère pour conflits au lieu de rejet total
+      // Les cryptos avec conflit restent éligibles mais avec score réduit
       const conflicting =
         (bias4h === 'bullish' && bias1h === 'bearish') ||
         (bias4h === 'bearish' && bias1h === 'bullish');
-      if (conflicting) {
-        console.log(`⚠️ Skipping ${opp.symbol}: 4h(${bias4h}) vs 1h(${bias1h}) conflict.`);
-        return null;
-      }
-
+      
       const aligned = bias4h === 'neutral' || bias1h === 'neutral' || bias4h === bias1h;
-      const adjustedScore = aligned ? Number(opp.score || 0) : Number(opp.score || 0) * 0.85;
+      
+      // Ajustement du score:
+      // - Aligned: score complet
+      // - Conflicting: -15% (garde la crypto mais avec pénalité)
+      // - Autres: -10%
+      let adjustedScore = Number(opp.score || 0);
+      if (conflicting) {
+        adjustedScore *= 0.85; // -15% pour conflit
+        console.log(`⚠️ ${opp.symbol}: 4h(${bias4h}) vs 1h(${bias1h}) conflict - score reduced to ${adjustedScore.toFixed(2)}`);
+      } else if (!aligned) {
+        adjustedScore *= 0.90; // -10% pour non-alignement
+      }
+      
       const reasoning = Array.isArray(opp.reasons) ? [...opp.reasons] : [];
-      if (!aligned) {
+      if (conflicting) {
+        reasoning.push(`⚠️ HTF conflict: 4h=${bias4h} vs 1h=${bias1h} - trade with caution`);
+      } else if (!aligned) {
         reasoning.push(`Alignment caution: 4h=${bias4h}, 1h=${bias1h}`);
       } else {
-        reasoning.push(`HTF alignment confirmed: 4h=${bias4h}, 1h=${bias1h}`);
+        reasoning.push(`✅ HTF alignment confirmed: 4h=${bias4h}, 1h=${bias1h}`);
       }
 
       return {
@@ -668,6 +684,12 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
         aiReasoning: reasoning
       };
     }).filter(r => r !== null) as RankedOpportunity[];
+    
+    // Re-sort after score adjustments
+    ranked.sort((a, b) => b.score - a.score);
+    
+    // Update ranks after re-sort
+    ranked.forEach((r, i) => r.rank = i + 1);
     
     // Cache the results
     RANKING_CACHE.set(cacheKey, { ts: Date.now(), data: ranked });

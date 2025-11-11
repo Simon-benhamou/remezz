@@ -86,24 +86,82 @@ export type AgentDiagnosticInfo = {
 
 export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDiagnosticInfo | null> {
   try {
+    console.error(`[STDERR-DIAG] START getAgentDiagnosticInfo for sessionId: ${sessionId}`);
+    
     // Get session
     const session = await prisma.agentSession.findUnique({
       where: { id: sessionId },
+      include: {
+        orders: {
+          where: { status: { in: ['open', 'filled'] } },
+          orderBy: { createdAt: 'desc' },
+          take: 1
+        }
+      }
     });
 
+    console.error(`[STDERR-DIAG] Session found: ${!!session}, stopped: ${session?.stoppedAt}`);
+
     if (!session) {
+      console.log(`[getAgentDiagnosticInfo] Session ${sessionId} not found in database`);
       return null;
     }
 
-    // Get agent from hub
+    // Get agent from hub (may be null if backend restarted)
     const agent = AgentHub.get(sessionId) as any;
+    
+    console.error(`[STDERR-DIAG] Agent in hub: ${!!agent}`);
+    
+    // If agent not in hub, try to reconstruct diagnostics from DB/last known state
     if (!agent) {
-      return null;
+      console.log(`[getAgentDiagnosticInfo] Agent ${sessionId} not in AgentHub - returning DB-only diagnostics`);
+      
+      // Return limited diagnostics based on DB data only
+      const hasOpenOrder = session.orders && session.orders.length > 0;
+      
+      return {
+        sessionId,
+        symbol: session.symbol,
+        symbolProfile: {
+          volatilityRegime: 'unknown',
+          directionBias: 'unknown',
+          volumeRegime: 'unknown',
+          trendingRanging: 'unknown',
+          atrPct: 0,
+          adx: 0,
+          rsi: 50,
+          trendStrength: 0,
+        },
+        predictor: null,
+        strategy: null,
+        position: hasOpenOrder ? {
+          side: session.orders[0].side === 'buy' ? 'long' : 'short',
+          entryPrice: Number(session.orders[0].price || 0),
+          currentPrice: Number(session.orders[0].price || 0),
+          rMultiple: 0,
+          pnlUsd: 0,
+          pnlPct: 0,
+          minutesOpen: Math.floor((Date.now() - new Date(session.orders[0].createdAt).getTime()) / 60000),
+          stopPrice: 0,
+          targets: [],
+        } : null,
+        market: {
+          last: 0,
+          change24h: 0,
+          volume24h: 0,
+          volumeMA: 0,
+          volumeRatio: 0,
+        },
+        timestamp: Date.now(),
+      };
     }
 
     // Get latest snapshot from agent
     const snap: TechnicalSnapshot | null = agent.snap || agent.lastSnap || null;
+    console.error(`[STDERR-DIAG] Snapshot check: snap=${!!snap}, agent.snap=${!!agent.snap}, agent.lastSnap=${!!agent.lastSnap}`);
     if (!snap) {
+      console.error(`[STDERR-DIAG] NO SNAPSHOT - returning null`);
+      console.log(`[getAgentDiagnosticInfo] Agent ${sessionId} has no snapshot yet - waiting for first market data tick`);
       return null;
     }
 
