@@ -37,7 +37,8 @@
     "meta:rejections": "node scripts/meta-adaptive-rejection-summary.mjs",
     "analyze:rejection": "tsx scripts/analyze-order-rejection.ts",
     "test:multi-agent": "tsx scripts/multi-agent-pool-test.ts",
-    "init-profiles": "tsx scripts/init-personality-profiles.ts"
+    "init-profiles": "tsx scripts/init-personality-profiles.ts",
+    "report:bias": "tsx scripts/bias-statistics-report.ts"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.0.4",

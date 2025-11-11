@@ -44,6 +44,7 @@ import {
   __autoUniverseSchedulerTesting,
 } from '../autoUniverseScheduler.js';
 import { ensureSymbolProfile } from '../../symbolSpecificOptimization.js';
+import { logBiasDecision, logBiasStatistics, hasSignificantBias } from '../biasMonitor.js';
 
 export {
   getAutoUniverseStatusSnapshot,
@@ -523,7 +524,7 @@ const OPEN_ORDER_STATUS_LIST = [
 const OPEN_ORDER_STATUSES = new Set(OPEN_ORDER_STATUS_LIST.map((status) => status.toLowerCase()));
 const POSITION_QTY_EPSILON = 1e-6;
 
-// AUTO-DIRECTIONAL: Détection automatique du bias optimal (VERSION AGRESSIVE)
+// AUTO-DIRECTIONAL: Détection automatique du bias optimal (VERSION ÉQUILIBRÉE)
 function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 'short' | 'none'; confidence: number; reasoning: string } {
   const { rsi, adx, momentum, trendStrength, volume24h } = metrics;
   
@@ -531,88 +532,108 @@ function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 's
   let bearScore = 0;
   const signals: string[] = [];
   
-  // 🔥 CRYPTO EXTREME MOVES: Bonus pour gros mouvements (AVNT -21% = opportunité!)
-  const extremeMove = Math.abs(momentum);
-  if (extremeMove > 10) { // >10% mouvement = opportunité extrême
-    if (momentum < -5) {
-      bullScore += 40; // Oversold extreme = rebond possible
-      signals.push(`Extreme dump -${extremeMove.toFixed(1)}% (oversold bounce)`);
-    } else if (momentum > 5) {
-      bearScore += 40; // Overbought extreme = correction possible
-      signals.push(`Extreme pump +${extremeMove.toFixed(1)}% (overbought correction)`);
-    }
-  } else if (extremeMove > 5) { // >5% mouvement = opportunité forte
-    if (momentum < -2) {
-      bullScore += 25;
-      signals.push(`Strong selloff -${extremeMove.toFixed(1)}% (reversal chance)`);
-    } else if (momentum > 2) {
-      bearScore += 25;
-      signals.push(`Strong pump +${extremeMove.toFixed(1)}% (pullback chance)`);
-    }
-  }
-  
-  // Analyse RSI (plus permissif)
-  if (rsi < 40) { // Élargi de 35 à 40
-    bullScore += rsi < 25 ? 35 : 25; // Bonus si très oversold
-    signals.push(`RSI ${rsi.toFixed(0)} oversold`);
-  } else if (rsi > 60) { // Élargi de 65 à 60
-    bearScore += rsi > 75 ? 35 : 25; // Bonus si très overbought
-    signals.push(`RSI ${rsi.toFixed(0)} overbought`);
-  }
-  
-  // Analyse ADX (trend strength)
-  if (adx > 25) {
-    const adxBonus = Math.min(20, adx - 15); // Bonus progressif
+  // 🎯 TREND-FOLLOWING PRIMARY: Suivre la tendance principale (momentum)
+  // FIX: Favoriser trend-following plutôt que counter-trend pour équilibrer long/short
+  if (Math.abs(momentum) > 2) {
+    const trendBonus = Math.min(40, Math.abs(momentum) * 5);
     if (momentum < 0) {
-      // Trend baissier fort = soit continuation soit reversal imminent
-      if (rsi < 35) {
-        bullScore += adxBonus; // RSI oversold + trend fort = reversal
-        signals.push('Strong downtrend + oversold RSI (reversal setup)');
-      } else {
-        bearScore += adxBonus; // Continuation baissière
-        signals.push('Strong downtrend continuation');
-      }
+      // Momentum négatif = opportunité SHORT (trend-following)
+      bearScore += trendBonus;
+      signals.push(`Bearish momentum ${momentum.toFixed(1)}% (short trend-following)`);
     } else {
-      // Trend haussier fort
-      if (rsi > 65) {
-        bearScore += adxBonus; // Trend haut + RSI overbought = correction
-        signals.push('Strong uptrend + overbought RSI (correction setup)');
-      } else {
-        bullScore += adxBonus; // Continuation haussière
-        signals.push('Strong uptrend continuation');
-      }
+      // Momentum positif = opportunité LONG (trend-following)
+      bullScore += trendBonus;
+      signals.push(`Bullish momentum +${momentum.toFixed(1)}% (long trend-following)`);
     }
   }
   
-  // Volume confirmation (plus accessible)
-  if (volume24h > 100_000_000) { // Réduit de 500M à 100M
+  // 🔄 COUNTER-TREND SECONDARY: Opportunités de reversal (score réduit pour éviter biais)
+  // Uniquement si RSI extrême confirme le reversal
+  const extremeMove = Math.abs(momentum);
+  if (extremeMove > 10 && ((momentum < -8 && rsi < 25) || (momentum > 8 && rsi > 75))) {
+    const reversalBonus = 20; // Réduit de 40 à 20 pour donner priorité au trend-following
+    if (momentum < -8 && rsi < 25) {
+      bullScore += reversalBonus;
+      signals.push(`Extreme oversold reversal setup (RSI ${rsi.toFixed(0)})`);
+    } else if (momentum > 8 && rsi > 75) {
+      bearScore += reversalBonus;
+      signals.push(`Extreme overbought reversal setup (RSI ${rsi.toFixed(0)})`);
+    }
+  }
+  
+  // Analyse RSI (équilibré pour long/short)
+  if (rsi < 40) {
+    bullScore += rsi < 25 ? 25 : 15; // Réduit pour équilibrer
+    signals.push(`RSI ${rsi.toFixed(0)} oversold zone`);
+  } else if (rsi > 60) {
+    bearScore += rsi > 75 ? 25 : 15; // Symétrique avec oversold
+    signals.push(`RSI ${rsi.toFixed(0)} overbought zone`);
+  }
+  
+  // Analyse ADX (trend strength) - équilibré pour long/short
+  if (adx > 20) { // Abaissé de 25 à 20 pour capter plus de trends
+    const adxBonus = Math.min(25, adx - 10);
+    if (momentum < 0) {
+      // Downtrend fort = privilégier SHORT (trend-following)
+      bearScore += adxBonus;
+      signals.push(`Strong downtrend (ADX ${adx.toFixed(0)}) - short opportunity`);
+    } else if (momentum > 0) {
+      // Uptrend fort = privilégier LONG (trend-following)
+      bullScore += adxBonus;
+      signals.push(`Strong uptrend (ADX ${adx.toFixed(0)}) - long opportunity`);
+    }
+  }
+  
+  // Analyse trendStrength (confirmation directionnelle)
+  if (trendStrength) {
+    const tsBonus = Math.abs(trendStrength) * 15;
+    if (trendStrength < 0) {
+      bearScore += tsBonus;
+      signals.push(`Bearish trend strength ${trendStrength.toFixed(2)}`);
+    } else if (trendStrength > 0) {
+      bullScore += tsBonus;
+      signals.push(`Bullish trend strength ${trendStrength.toFixed(2)}`);
+    }
+  }
+  
+  // Volume confirmation (symétrique)
+  if (volume24h > 100_000_000) {
     const volumeBonus = Math.min(15, (volume24h / 100_000_000) * 5);
     if (extremeMove > 3) {
-      // Volume élevé + mouvement extrême = confirmation
-      if (momentum < 0) bullScore += volumeBonus;
-      else bearScore += volumeBonus;
-      signals.push('High volume + extreme move');
+      // Volume élevé confirme le mouvement en cours
+      if (momentum < 0) {
+        bearScore += volumeBonus; // Confirme bearish move
+        signals.push('High volume confirms bearish move');
+      } else {
+        bullScore += volumeBonus; // Confirme bullish move
+        signals.push('High volume confirms bullish move');
+      }
     }
   }
   
-  // CRYPTO MAJORS: Bonus pour cryptos connus
+  // CRYPTO MAJORS: Bonus symétrique (pas de biais long)
   const majorCryptos = ['BTC/USDT', 'ETH/USDT', 'AVNT/USDT', 'SOL/USDT', 'SUI/USDT', 'XRP/USDT', 'ADA/USDT'];
   if (majorCryptos.includes(symbol)) {
     const majorBonus = 10;
     if (bullScore > bearScore) bullScore += majorBonus;
-    else bearScore += majorBonus;
-    signals.push('Major crypto');
+    else if (bearScore > bullScore) bearScore += majorBonus; // FIX: Appliquer aussi au bearScore
+    signals.push('Major crypto liquidity bonus');
   }
   
-  // Determine bias et confidence (seuil réduit)
+  // Determine bias et confidence (seuil équilibré)
   const maxScore = Math.max(bullScore, bearScore);
-  const bias = maxScore < 35 ? 'none' : // Réduit de 50 à 35
+  const scoreMargin = Math.abs(bullScore - bearScore);
+  
+  // Require clear directional edge (15 points minimum margin)
+  const bias = scoreMargin < 15 ? 'none' : 
                bullScore > bearScore ? 'long' : 'short';
   
   const confidence = Math.min(maxScore, 100);
-  const reasoning = `${bias.toUpperCase()} bias (${confidence}%): ${signals.join(' + ')}`;
+  const reasoning = `${bias.toUpperCase()} bias (${confidence}%, margin: ${scoreMargin.toFixed(0)}): ${signals.join(' | ')}`;
   
-  console.log(`🎯 Auto-Bias for ${symbol}: ${reasoning}`);
+  // Log detailed bias decision for monitoring
+  logBiasDecision(symbol, bias, confidence, reasoning, { bullScore, bearScore });
+  
   return { bias, confidence, reasoning };
 }
 
@@ -2443,11 +2464,12 @@ export async function calculateIntelligentScore(symbol: string, opts?: { aggress
     
     // NEW RANKING SYSTEM: Never reject, just give low scores to poor quality cryptos
     
-    // Convert NONE bias to LONG for neutral markets
+    // FIX: DO NOT force NONE bias to LONG - this was causing the long bias!
+    // Skip symbols with no clear directional bias to avoid forcing longs
     if (autoBias.bias === 'none') {
-      console.log(`🔄 ${symbol}: Converting NONE bias (${autoBias.confidence}%) to LONG for neutral market trading`);
-      autoBias.bias = 'long';
-      autoBias.reasoning = `Neutral market → LONG bias (${autoBias.confidence}% confidence)`;
+      console.log(`⚠️ ${symbol}: No clear directional bias (${autoBias.confidence}%) - applying heavy penalty to score`);
+      // Don't force to long, just apply heavy penalty
+      autoBias.reasoning = `No clear trend → penalized score (margin too small)`;
     }
     
     // Apply confidence penalty to score instead of rejecting
@@ -4827,6 +4849,9 @@ export function isSymbolEligibleForAuto(base: string, params: { last: number; vo
 registerUniverseFetcher((excludeSessionId?: string, attempt: number = AUTO_UNIVERSE_MAX_ATTEMPTS) =>
   getOptimizedCryptoList(excludeSessionId, attempt),
 );
+
+// Export bias monitoring functions
+export { logBiasStatistics, hasSignificantBias, getBiasStatistics } from '../biasMonitor.js';
 
 export {
   evaluateOpportunity,
