@@ -633,6 +633,7 @@ async function executeEntryTrade(
         signal,
         openedAt: Date.now(),
         peakPrice: entryPrice, // Initialize peak price at entry
+        initialStopDistance: stopDistance, // Store original stop distance for R-multiple calculations
       };
     }
 
@@ -844,6 +845,7 @@ async function checkAndExecuteExit(
       cfg: config.exits,
       minutesOpen,
       peakPrice: position.peakPrice,
+      initialStopDistance: position.initialStopDistance, // Pass original stop distance for accurate R-multiple calculations
     });
 
     if (exitDirective?.action === 'exit') {
