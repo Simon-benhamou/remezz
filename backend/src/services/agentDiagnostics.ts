@@ -160,9 +160,46 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
     const snap: TechnicalSnapshot | null = agent.snap || agent.lastSnap || null;
     console.error(`[STDERR-DIAG] Snapshot check: snap=${!!snap}, agent.snap=${!!agent.snap}, agent.lastSnap=${!!agent.lastSnap}`);
     if (!snap) {
-      console.error(`[STDERR-DIAG] NO SNAPSHOT - returning null`);
-      console.log(`[getAgentDiagnosticInfo] Agent ${sessionId} has no snapshot yet - waiting for first market data tick`);
-      return null;
+      console.error(`[STDERR-DIAG] NO SNAPSHOT - returning DB-only diagnostics with orders`);
+      
+      // Return DB-only diagnostics when agent exists but has no snapshot yet
+      const hasOpenOrder = session.orders && session.orders.length > 0;
+      
+      return {
+        sessionId,
+        symbol: session.symbol,
+        symbolProfile: {
+          volatilityRegime: 'waiting_for_data',
+          directionBias: 'waiting_for_data',
+          volumeRegime: 'waiting_for_data',
+          trendingRanging: 'waiting_for_data',
+          atrPct: 0,
+          adx: 0,
+          rsi: 50,
+          trendStrength: 0,
+        },
+        predictor: null,
+        strategy: null,
+        position: hasOpenOrder ? {
+          side: session.orders[0].side === 'buy' ? 'long' : 'short',
+          entryPrice: Number(session.orders[0].price || 0),
+          currentPrice: Number(session.orders[0].price || 0),
+          rMultiple: 0,
+          pnlUsd: 0,
+          pnlPct: 0,
+          minutesOpen: Math.floor((Date.now() - new Date(session.orders[0].createdAt).getTime()) / 60000),
+          stopPrice: 0,
+          targets: [],
+        } : null,
+        market: {
+          last: 0,
+          change24h: 0,
+          volume24h: 0,
+          volumeMA: 0,
+          volumeRatio: 0,
+        },
+        timestamp: Date.now(),
+      };
     }
 
     // Extract symbol profile

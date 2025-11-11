@@ -1070,6 +1070,13 @@ export async function processMetaAdaptiveTick(sessionId: string, symbol: string,
       return;
     }
 
+    // Store snapshot in AgentHub for diagnostics API
+    const agent = AgentHub.get(sessionId);
+    if (agent) {
+      (agent as any).snap = tech;
+      (agent as any).lastSnap = tech;
+    }
+
     // Check if this is a meta-adaptive session (vs legacy agent type)
     // Meta-adaptive is the default now, so we process all sessions
     const sessionContext: SessionContext = {
