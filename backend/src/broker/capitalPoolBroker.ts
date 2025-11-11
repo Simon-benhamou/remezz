@@ -62,6 +62,30 @@ export class CapitalPoolBroker implements Broker {
       return placed;
     }
 
+    // CRITICAL: Strict capital validation - block all new orders if free capital is at or below zero
+    const preCheckSnapshot = await this.capital.getBalance();
+    const actualFreeCapital = preCheckSnapshot.freeUSD.toNumber() - preCheckSnapshot.reservedUSD.toNumber();
+    
+    if (actualFreeCapital <= 0) {
+      console.log(`[CapitalPoolBroker] ❌ CRITICAL BLOCK - zero_capital_available`);
+      console.log(`  Agent: ${this.agentId}, Symbol: ${order.symbol}`);
+      console.log(`  Free Capital: $${preCheckSnapshot.freeUSD.toNumber().toFixed(2)}`);
+      console.log(`  Reserved: $${preCheckSnapshot.reservedUSD.toNumber().toFixed(2)}`);
+      console.log(`  Actually Available: $${actualFreeCapital.toFixed(2)}`);
+      console.log(`  ⛔ BLOCKED: Cannot place new orders with zero available capital`);
+      
+      logTradeEvaluation({
+        symbol: order.symbol,
+        decision: 'order_blocked_capital',
+        blockedReason: `zero_capital: free=${preCheckSnapshot.freeUSD.toNumber().toFixed(2)}, reserved=${preCheckSnapshot.reservedUSD.toNumber().toFixed(2)}, available=${actualFreeCapital.toFixed(2)}`,
+        confidenceScore: order._evaluationContext?.confidence ?? 0.5,
+        inputMetrics: order._evaluationContext?.inputMetrics ?? {},
+        regimeContext: order._evaluationContext?.regimeContext,
+      }).catch(err => console.warn('Failed to log capital block:', err));
+      
+      return this.rejectOrder(order, 'zero_capital_available');
+    }
+
     const desiredUsd = await this.estimateDesiredUsd(order);
     if (desiredUsd.raw <= ZERO_USD.raw) {
       console.log(`[CapitalPoolBroker] REJECTED - invalid_desired_usd: agentId=${this.agentId}, symbol=${order.symbol}, desiredUsd=${desiredUsd.toNumber()}`);

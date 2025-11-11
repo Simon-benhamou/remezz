@@ -5,19 +5,36 @@ export const router = Router();
 router.get("/", async (req, res) => {
   const sessionId = String(req.query.sessionId || "");
   let where: any = {};
-  if (sessionId) where.sessionId = sessionId;
-  else {
-    const s = await prisma.agentSession.findFirst({ where: { stoppedAt: null }, orderBy: { startedAt: 'desc' } });
-    if (s?.id) where.sessionId = s.id;
+  let sess: any = null;
+  
+  if (sessionId) {
+    where.sessionId = sessionId;
+    sess = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  } else {
+    // Return orders from ALL active sessions, not just the most recent one
+    const activeSessions = await prisma.agentSession.findMany({ 
+      where: { stoppedAt: null }, 
+      select: { id: true } 
+    });
+    if (activeSessions.length > 0) {
+      where.sessionId = { in: activeSessions.map(s => s.id) };
+    }
   }
-  const [rows, sess] = await Promise.all([
-    prisma.order.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200, include: { fills: true } }),
-    sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
-  ]);
-  const budgetPct = Number(((sess as any)?.profileJson?.budgetPct) ?? 100);
-  const equity = Number((sess as any)?.startBalanceUsd || 0);
-  const equityAlloc = equity * (budgetPct > 1 ? (budgetPct/100) : (budgetPct||1));
+  
+  const rows = await prisma.order.findMany({ 
+    where, 
+    orderBy: { createdAt: 'desc' }, 
+    take: 200, 
+    include: { fills: true, session: true } 
+  });
+  
   const out = rows.map((o:any)=>{
+    // Use per-order session data for accurate calculations
+    const orderSession = o.session || sess;
+    const budgetPct = Number((orderSession?.profileJson?.budgetPct) ?? 100);
+    const equity = Number(orderSession?.startBalanceUsd || 0);
+    const equityAlloc = equity * (budgetPct > 1 ? (budgetPct/100) : (budgetPct||1));
+    
     const isExit = (o.clientOrderId || '').endsWith('.exit');
     const positionSide = isExit
       ? (o.side === 'buy' ? 'short' : 'long')
@@ -31,7 +48,7 @@ router.get("/", async (req, res) => {
     // Notional cap = allocated equity * configured leverage for the order
     const lev = Number(o.leverage || 0) || null;
     const notionalCapUsd = (equityAlloc > 0 && lev) ? (equityAlloc * lev) : null;
-    const { fills, ...rest } = o;
+    const { fills, session, ...rest } = o;
     return { ...rest, positionSide, realizedPnlUsd, feesUsd, roePct, estLev, notionalCapUsd };
   });
   res.json(out);
