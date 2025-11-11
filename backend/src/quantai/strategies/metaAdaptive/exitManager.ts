@@ -176,6 +176,16 @@ export function maybeAdjustOrExit({
   let percentTrail = trailingMode === 'percent'
     ? Math.max(0.05, trailingCfg?.percent ?? 0.35)
     : null;
+  
+  // 🎯 DYNAMIC TRAILING: Tighten trailing at higher R-multiples to protect big wins
+  const getDynamicTrailPercent = (currentR: number): number => {
+    const basePercent = percentTrail ?? 0.35;
+    if (currentR >= 5.0) return Math.min(basePercent, 0.15);  // 15% trail at 5R+ (tight protection)
+    if (currentR >= 3.0) return Math.min(basePercent, 0.20);  // 20% trail at 3R-5R
+    if (currentR >= 2.0) return Math.min(basePercent, 0.25);  // 25% trail at 2R-3R
+    return basePercent;  // 35% trail at 1R-2R (default)
+  };
+  
   const entryAtrPctBaseline = entryAtrPct != null && Number.isFinite(entryAtrPct)
     ? Number(entryAtrPct)
     : entryAtr != null && Number.isFinite(entryAtr) && entryPrice > 0
@@ -183,7 +193,10 @@ export function maybeAdjustOrExit({
       : null;
   const rNow = baselineRisk > 0 ? PositionSizer.rMultiple(entryPrice, baselineStop, lastPrice, side) : 0;
   const profitLockCfg = cfg.profitLock ?? { minRMultiple: 1, allowPartialBeforeMinR: false };
-  const minRMultiple = Number.isFinite(profitLockCfg.minRMultiple) ? profitLockCfg.minRMultiple! : 1;
+  // 🎯 ADAPTIVE PROFIT LOCK: Lock profit earlier for volatile cryptos
+  // BTC (1.0x): 1.0R, ETH (1.25x): 0.8R, AERO (1.5x): 0.67R
+  const baseMinRMultiple = Number.isFinite(profitLockCfg.minRMultiple) ? profitLockCfg.minRMultiple! : 1;
+  const minRMultiple = baseMinRMultiple / volatilityMultiplier;
   const allowPartialBeforeMinR = profitLockCfg.allowPartialBeforeMinR ?? false;
   const preLockMinR = typeof profitLockCfg.preLockMinRMultiple === 'number' && Number.isFinite(profitLockCfg.preLockMinRMultiple)
     ? profitLockCfg.preLockMinRMultiple
@@ -333,9 +346,10 @@ export function maybeAdjustOrExit({
     : (preLockMinR ?? 1.2); // Mode partial garde 1.2R
   
   if (!profitLockArmed && rNow >= trailingStartR) {
+    const dynamicPercent = getDynamicTrailPercent(rNow);
     const desiredStop = computeTrailCandidate({
       multiplier: trailingMode === 'percent' ? undefined : effectiveTrailMultiplier * preLockTrailFactor,
-      percent: trailingMode === 'percent' ? (percentTrail ?? 0.35) * preLockTrailFactor : undefined,
+      percent: trailingMode === 'percent' ? dynamicPercent * preLockTrailFactor : undefined,
     });
     let newStop = applyStopCandidate(desiredStop, false);
     if (baselineRisk > 0) {
@@ -368,9 +382,11 @@ export function maybeAdjustOrExit({
       ? Math.min(effectiveTrailMultiplier, Number(process.env.TRAILING_ATR_MULT ?? 1.0))
       : effectiveTrailMultiplier;
     
+    // 🎯 DYNAMIC TRAILING: Use tighter percentages at higher R-multiples
+    const dynamicPercent = getDynamicTrailPercent(rNow);
     const trailingPercent = exitStrategyMode === 'trailing'
-      ? Math.min(percentTrail ?? 0.35, Number(process.env.TRAILING_PERCENT_FALLBACK ?? 2.5) / 100)
-      : percentTrail;
+      ? Math.min(dynamicPercent, Number(process.env.TRAILING_PERCENT_FALLBACK ?? 2.5) / 100)
+      : dynamicPercent;
     
     const desiredStop = computeTrailCandidate({
       multiplier: trailingMode === 'percent' ? undefined : trailingMultiplier,
@@ -433,7 +449,12 @@ export function maybeAdjustOrExit({
     }
   }
 
-  const maxHolding = cfg.maxHoldingMin;
+  // 🎯 ADAPTIVE TIME STOP: Faster exits for volatile cryptos to cut dead capital
+  // BTC (1.0x): 90min, ETH (1.25x): 72min, AERO (1.5x): 60min
+  const baseMaxHolding = cfg.maxHoldingMin;
+  const maxHolding = baseMaxHolding != null && volatilityMultiplier > 1
+    ? Math.ceil(baseMaxHolding / volatilityMultiplier)
+    : baseMaxHolding;
   if (maxHolding != null && Number.isFinite(maxHolding) && maxHolding > 0 && minutesOpen != null) {
     if (minutesOpen >= maxHolding && lossR >= cutThreshold && effectiveHoldSatisfied) {
       return {
