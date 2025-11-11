@@ -85,39 +85,67 @@ function wouldExecute(metrics: InputMetrics, params: OptimalParams): boolean {
 /**
  * Calculate fitness score for a parameter combination
  * Uses Sharpe ratio-like metric: (average PnL) / (std dev of PnL)
+ * FIX: Considère SHORT et LONG séparément pour l'équilibrage
  */
 function calculateFitness(evaluations: EvaluationData[], params: OptimalParams): number {
-  const trades: number[] = [];
+  const longTrades: number[] = [];
+  const shortTrades: number[] = [];
 
   for (const evaluation of evaluations) {
     if (wouldExecute(evaluation.inputMetrics, params)) {
       const pnl = evaluation.marketOutcome.pnl_1h ?? 0;
-      trades.push(pnl);
+      // Déterminer la direction du trade basé sur le trendBias ou decision
+      const direction = (evaluation.inputMetrics as any).direction || 
+                       (evaluation.inputMetrics as any).trendBias ||
+                       'long'; // Default long si pas spécifié
+      
+      if (direction === 'short' || direction === 'bearish') {
+        shortTrades.push(pnl);
+      } else {
+        longTrades.push(pnl);
+      }
     }
   }
 
-  if (trades.length < 20) {
+  const totalTrades = longTrades.length + shortTrades.length;
+  if (totalTrades < 20) {
     // Not enough trades to be confident in the parameters
     return -Infinity;
   }
 
-  // Calculate average PnL
-  const avgPnl = trades.reduce((sum, pnl) => sum + pnl, 0) / trades.length;
+  // Calculate combined average PnL (weighted by direction)
+  const longAvg = longTrades.length > 0 
+    ? longTrades.reduce((sum, pnl) => sum + pnl, 0) / longTrades.length 
+    : 0;
+  const shortAvg = shortTrades.length > 0
+    ? shortTrades.reduce((sum, pnl) => sum + pnl, 0) / shortTrades.length
+    : 0;
+  
+  // Pénaliser si trop déséquilibré (favoriser 40/60 à 60/40)
+  const longRatio = totalTrades > 0 ? longTrades.length / totalTrades : 0.5;
+  const balancePenalty = Math.abs(longRatio - 0.5) > 0.3 ? 0.8 : 1.0;
+  
+  const avgPnl = (longAvg + shortAvg) / 2 * balancePenalty;
 
-  // Calculate standard deviation
+  // Calculate standard deviation (combined)
+  const allTrades = [...longTrades, ...shortTrades];
   const variance =
-    trades.reduce((sum, pnl) => sum + Math.pow(pnl - avgPnl, 2), 0) / trades.length;
+    allTrades.reduce((sum, pnl) => sum + Math.pow(pnl - avgPnl, 2), 0) / allTrades.length;
   const stdDev = Math.sqrt(variance);
 
-  // Sharpe-like ratio (annualized assuming 1h trades)
+  // Sharpe-like ratio
   const sharpe = stdDev > 0 ? avgPnl / stdDev : 0;
 
-  // Also consider win rate and total PnL
-  const wins = trades.filter((pnl) => pnl > 0).length;
-  const winRate = wins / trades.length;
-  const totalPnl = trades.reduce((sum, pnl) => sum + pnl, 0);
+  // Calculate win rates for both directions
+  const longWins = longTrades.filter((pnl) => pnl > 0).length;
+  const shortWins = shortTrades.filter((pnl) => pnl > 0).length;
+  const longWinRate = longTrades.length > 0 ? longWins / longTrades.length : 0;
+  const shortWinRate = shortTrades.length > 0 ? shortWins / shortTrades.length : 0;
+  const combinedWinRate = (longWinRate + shortWinRate) / 2;
+  
+  const totalPnl = allTrades.reduce((sum, pnl) => sum + pnl, 0);
 
-  // Combined fitness: weighted combination of Sharpe, win rate, and total PnL
+  // Combined fitness: weighted combination of Sharpe, win rate, total PnL, and balance
   const fitness = sharpe * 0.5 + winRate * 0.3 + totalPnl * 20 * 0.2;
 
   return fitness;

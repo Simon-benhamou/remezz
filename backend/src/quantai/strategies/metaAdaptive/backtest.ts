@@ -169,9 +169,9 @@ function resolveTradeSide(signal: RecognizedStrategySignal, snap: TechnicalSnaps
   if (signal.bias === 'long') return 'long';
   if (signal.bias === 'short') return 'short';
   if (signal.bias === 'both') {
-    if (snap.trendBias === 'bearish') return 'short';
-    if (snap.trendBias === 'bullish') return 'long';
-    return 'long';
+    // FIX: Ne pas trader si signal mixte (trop risqué)
+    // Si la stratégie ne peut pas décider, mieux vaut ne pas entrer
+    return null;
   }
   return null;
 }

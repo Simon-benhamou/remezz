@@ -149,7 +149,7 @@ export const api = {
   clearCooldown: async (sessionId: string) =>
     (await client.post('/api/agent/clear-cooldown', { sessionId })).data,
   getDiagnostics: async (sessionId: string) =>
-    (await client.get(`/api/agent/sessions/${sessionId}/diagnostics`)).data,
+    (await client.get(`/api/agent/${sessionId}/diagnostics`)).data,
   getTicker: async (symbol: string) =>
     (await client.post(`/api/market/ticker`, { symbol })).data,
   getHistory: async (symbol: string) =>

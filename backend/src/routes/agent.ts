@@ -29,6 +29,7 @@ import { getUserExchange } from '../exchange/ccxtClient.js';
 import { getUserCredentials } from '../services/userCredentials.js';
 import { stopAllAgents } from '../services/stopAllAgents.js';
 import { resolveRrExpectancyConfig } from '../risk/rrExpectancy.js';
+import { getAgentDiagnosticInfo } from '../services/agentDiagnostics.js';
 import { getPortfolioSnapshot, updatePortfolioBalance, rebalancePortfolio } from '../services/portfolioManager.js';
 import { resolveStrategySnapshot } from '../utils/strategySnapshot.js';
 import { getBalanceSnapshot, updateLiveExchangeBalance } from '../services/capitalPool.js';
@@ -1637,4 +1638,15 @@ router.post('/reselect', authenticateUser, async (req: AuthenticatedRequest, res
 // Backwards compatibility for legacy path
 router.post('/smart/:sessionId/reselect', authenticateUser, async (req: AuthenticatedRequest, res) => {
   return processSmartReselect(req.params.sessionId, res);
+});
+
+// NEW: Enhanced diagnostic info for monitoring
+router.get('/:sessionId/diagnostics', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { sessionId } = req.params;
+    const diagnostics = await getAgentDiagnosticInfo(sessionId);
+    return res.json({ ok: true, diagnostics });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
 });

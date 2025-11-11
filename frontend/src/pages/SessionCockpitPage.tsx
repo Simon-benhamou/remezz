@@ -35,6 +35,8 @@ import StrategyPanel from '../components/StrategyPanel';
 import AgentStatePanel from '../components/AgentStatePanel';
 import StrategyChecklistCard from '../components/StrategyChecklistCard';
 import PositionInfoCard from '../components/PositionInfoCard';
+import SymbolProfileCard from '../components/SymbolProfileCard';
+import PredictorResultsCard from '../components/PredictorResultsCard';
 import type { StrategySnapshot } from '../types/strategies';
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
 import OrdersTable from '../components/OrdersTable';
@@ -146,6 +148,7 @@ export default function SessionCockpitPage() {
   const [reselecting, setReselecting] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
   const [marginHealth, setMarginHealth] = React.useState<any>(null);
+  const [diagnostics, setDiagnostics] = React.useState<any>(null);
 
   const normalizedSymbol = React.useMemo(
     () => deriveSymbol(status?.symbol || symbol),
@@ -523,8 +526,8 @@ export default function SessionCockpitPage() {
 
         updateProgress(LoadingPhase.SECONDARY_DATA, 50, 'Loading trading data...');
 
-        // Phase 2: Trading data (orders, trades, strategy, analysis)
-        const [strategyData, analysisData, kpiData, ordersData, tradesData] =
+        // Phase 2: Trading data (orders, trades, strategy, analysis, diagnostics)
+        const [strategyData, analysisData, kpiData, ordersData, tradesData, diagnosticsData2] =
           await Promise.allSettled([
             sym
               ? api.strategyToday(sym).catch((e) => {
@@ -550,6 +553,10 @@ export default function SessionCockpitPage() {
               console.warn('Trades failed:', e);
               return [];
             }),
+            api.getDiagnostics(s.session.id).catch((e) => {
+              console.warn('Diagnostics failed:', e);
+              return null;
+            }),
           ]);
 
         if (strategyData.status === 'fulfilled' && strategyData.value)
@@ -559,6 +566,9 @@ export default function SessionCockpitPage() {
         if (kpiData.status === 'fulfilled') setKpi(kpiData.value);
         if (ordersData.status === 'fulfilled') setOrders(ordersData.value || []);
         if (tradesData.status === 'fulfilled') setTrades(tradesData.value || []);
+        if (diagnosticsData2.status === 'fulfilled' && diagnosticsData2.value?.ok) {
+          setDiagnostics(diagnosticsData2.value.diagnostics);
+        }
 
         clearTimeout(loadingTimeout);
         updateProgress(LoadingPhase.COMPLETE, 100, 'Monitor ready!');
@@ -591,6 +601,28 @@ export default function SessionCockpitPage() {
     return () => {
       cancelled = true;
       clearInterval(marginTimer);
+    };
+  }, [sessionId]);
+
+  // Periodic diagnostics refresh
+  React.useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const fetchDiagnostics = async () => {
+      try {
+        const result = await api.getDiagnostics(sessionId);
+        if (!cancelled && result?.ok && result.diagnostics) {
+          setDiagnostics(result.diagnostics);
+        }
+      } catch (e) {
+        console.warn('Diagnostics refresh failed:', e);
+      }
+    };
+    fetchDiagnostics();
+    const diagTimer = setInterval(fetchDiagnostics, 15000); // 15s refresh
+    return () => {
+      cancelled = true;
+      clearInterval(diagTimer);
     };
   }, [sessionId]);
 
@@ -1162,6 +1194,25 @@ export default function SessionCockpitPage() {
             <Skeleton active paragraph={{ rows: 4 }} />
           )}
         </Card>
+        
+        {/* Enhanced Monitoring: Symbol Profile & Predictor */}
+        <Row gutter={[24, 24]}>
+          <Col xs={24} md={12}>
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+              <SymbolProfileCard profile={diagnostics?.symbolProfile} loading={false} />
+            ) : (
+              <Skeleton active paragraph={{ rows: 6 }} />
+            )}
+          </Col>
+          <Col xs={24} md={12}>
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+              <PredictorResultsCard predictor={diagnostics?.predictor} loading={false} />
+            ) : (
+              <Skeleton active paragraph={{ rows: 6 }} />
+            )}
+          </Col>
+        </Row>
+        
         <Row gutter={[24, 24]} className="session-grid">
           <Col xs={24} lg={agent?.pos ? 17 : 24}>
             <Card

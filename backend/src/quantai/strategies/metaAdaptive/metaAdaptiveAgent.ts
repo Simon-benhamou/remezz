@@ -33,9 +33,11 @@ const PYTHON_BOOST_PROB_THRESHOLD = pythonSignalTuning.highConfidenceProb;
 const PYTHON_BOOST_CONF_THRESHOLD = pythonSignalTuning.highConfidenceConfidence;
 const PYTHON_RISK_BOOST_MULTIPLIER = pythonSignalTuning.highConfidenceRiskBoost;
 const PYTHON_BOOST_MIN_SAMPLES = pythonSignalTuning.minSamplesForBoost;
+// FIX: Équilibrer LONG/SHORT - SHORT légèrement plus facile (0.52 vs 0.58)
+// pour compenser le biais psychologique vers les longs
 const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.58);
-const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.55);
-const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.35);
+const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.52);
+const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.32);
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
@@ -1455,8 +1457,17 @@ class MetaAdaptiveStrategyAgent {
     const meanTargets = [new PreciseDecimal('1.5'), new PreciseDecimal('2.4'), new PreciseDecimal('3.5')];
     const momentumTargets = [new PreciseDecimal('2'), new PreciseDecimal('3.5'), new PreciseDecimal('5')];
 
+    // FIX: Réduire strictness pour shorts (90% -> 75%)
+    // Permet de shorter plus tôt quand 15m+1h sont bearish
     const allowLongStack = context.bullishStack && context.alignmentScore >= 0.9;
-    const allowShortStack = context.bearishStack && context.alignmentScore >= 0.9;
+    const allowShortStack = context.bearishStack && context.alignmentScore >= 0.75;
+
+    // FIX: Early short detection - permettre short si 15m+1h bearish (sans attendre 4h)
+    const multiTimeframes = input.multiTimeframe?.timeframes ?? {};
+    const tf15mBearish = multiTimeframes['15m']?.bias === 'bearish';
+    const tf1hBearish = multiTimeframes['1h']?.bias === 'bearish';
+    const earlyShortSignal = tf15mBearish && tf1hBearish && adx > 22 && rsi < 45;
+    const allowShortStackFinal = allowShortStack || earlyShortSignal;
 
     const basePlans: Record<StrategyFamily, AdaptiveStrategyPlan> = {
       trend: {
@@ -1549,7 +1560,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'trend',
           score: scoreTrend,
           confidence: scoreTrend,
-          bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
+          bias: allowLongStack ? 'long' : allowShortStackFinal ? 'short' : 'both',
           reasons: [
             `regime=${regimeSignal.dominant}`,
             `adx=${adx.toFixed(2)}`,
@@ -1565,7 +1576,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'breakout',
           score: scoreBreakout,
           confidence: scoreBreakout,
-          bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
+          bias: allowLongStack ? 'long' : allowShortStackFinal ? 'short' : 'both',
           reasons: [
             `regime=${regimeSignal.dominant}`,
             `compression=${compressionScore.toFixed(2)}`,
@@ -1598,7 +1609,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'momentum',
           score: scoreMomentum,
           confidence: scoreMomentum,
-          bias: allowLongStack ? 'long' : allowShortStack ? 'short' : 'both',
+          bias: allowLongStack ? 'long' : allowShortStackFinal ? 'short' : 'both',
           reasons: [
             `regime=${regimeSignal.dominant}`,
             `trend=${safeNumber((snap as any)?.trend, 0).toFixed(2)}`,
@@ -1646,7 +1657,7 @@ class MetaAdaptiveStrategyAgent {
         if (context.alignmentScore > 0.6) penaltiesApplied.push('htf_trend_dominant');
       }
       if (item.family !== 'mean_reversion') {
-        if (!allowLongStack && !allowShortStack) {
+        if (!allowLongStack && !allowShortStackFinal) {
           effectiveScore = 0;
           if (!penaltiesApplied.includes('htf_alignment_insufficient')) {
             penaltiesApplied.push('htf_alignment_insufficient');
@@ -1656,7 +1667,7 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore = 0;
           penaltiesApplied.push('long_blocked_by_stack');
         }
-        if (item.bias === 'short' && !allowShortStack) {
+        if (item.bias === 'short' && !allowShortStackFinal) {
           effectiveScore = 0;
           penaltiesApplied.push('short_blocked_by_stack');
         }
