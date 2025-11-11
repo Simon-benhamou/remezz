@@ -490,7 +490,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       },
     },
     positionFlipping: {
-      enabled: false,  // Disabled by default - must be explicitly enabled
+      enabled: true,  // Disabled by default - must be explicitly enabled
       minCounterSignalConfidence: 0.7,  // Require 70% confidence to flip
       minRMultiple: 1.5,  // Require at least 1.5R profit before flipping
       cooldownMinutes: 30,  // 30 minutes between flips
