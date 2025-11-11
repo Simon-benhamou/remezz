@@ -227,7 +227,9 @@ export function maybeAdjustOrExit({
           const applicableR = applicableRLevels[0];
           const threshold = thresholds[applicableR];
           
-          if (drawdownPct >= threshold) {
+          // Use epsilon tolerance for floating point comparison (avoid precision issues)
+          const EPSILON = 0.0001; // 0.01% tolerance
+          if (drawdownPct >= threshold - EPSILON) {
             return {
               action: 'exit',
               reason: `Peak drawdown exit: ${(drawdownPct * 100).toFixed(1)}% from peak (threshold ${(threshold * 100).toFixed(1)}%) at ${rNow.toFixed(2)}R current, peaked at ${peakR.toFixed(2)}R`,
