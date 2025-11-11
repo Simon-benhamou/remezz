@@ -108,22 +108,45 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
     // If agent not in hub, try to reconstruct diagnostics from DB/last known state
     if (!agent) {
       
-      // Return limited diagnostics based on DB data only
+      // FIX: Try to get real symbol profile from DB instead of defaults
+      let symbolProfileData: any = {
+        volatilityRegime: 'unknown',
+        directionBias: 'unknown',
+        volumeRegime: 'unknown',
+        trendingRanging: 'unknown',
+        atrPct: 0,
+        adx: 0,
+        rsi: 50,
+        trendStrength: 0,
+      };
+      
+      try {
+        const { getSymbolProfile } = await import('./symbolSpecificOptimization.js');
+        const profile = await getSymbolProfile(session.symbol);
+        if (profile?.marketCharacteristics) {
+          const mc = profile.marketCharacteristics as any;
+          symbolProfileData = {
+            volatilityRegime: mc.volatilityRegime || 'normal',
+            directionBias: mc.directionBias || 'neutral',
+            volumeRegime: mc.volumeRegime || 'normal',
+            trendingRanging: mc.trendingRanging || 'ranging',
+            atrPct: mc.atrPct || 0,
+            adx: mc.adx || 0,
+            rsi: mc.rsi || 50,
+            trendStrength: mc.trendStrength || 0,
+          };
+        }
+      } catch (error) {
+        console.warn(`[diagnostics] Could not load symbol profile for ${session.symbol}:`, error);
+      }
+      
+      // Return diagnostics based on DB data + symbol profile
       const hasOpenOrder = session.orders && session.orders.length > 0;
       
       return {
         sessionId,
         symbol: session.symbol,
-        symbolProfile: {
-          volatilityRegime: 'unknown',
-          directionBias: 'unknown',
-          volumeRegime: 'unknown',
-          trendingRanging: 'unknown',
-          atrPct: 0,
-          adx: 0,
-          rsi: 50,
-          trendStrength: 0,
-        },
+        symbolProfile: symbolProfileData,
         predictor: null,
         strategy: null,
         position: hasOpenOrder ? {

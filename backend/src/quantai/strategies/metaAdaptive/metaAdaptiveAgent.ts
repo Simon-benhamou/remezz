@@ -2076,6 +2076,24 @@ class MetaAdaptiveStrategyAgent {
       const adxValue = params.plan?.stopAtrMult?.toNumber() ?? 0;
       const alignmentScoreValue = params.plan?.entryWeight?.toNumber() ?? 0;
       
+      // FIX: Block trade if predictor confidence too low (market uncertainty)
+      // Even if guardrails pass, don't trade in uncertain market conditions
+      const MIN_CONFIDENCE_FOR_SHORT = 0.30; // 30% minimum confidence required
+      if (predictorConfidence < MIN_CONFIDENCE_FOR_SHORT) {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'adaptive_trade_blocked_by_predictor',
+          symbol: params.symbol,
+          sessionId: params.sessionId ?? null,
+          token: params.token,
+          predictorDecision: effectivePredictorDirection,
+          predictorConfidence: Number(predictorConfidence.toFixed(4)),
+          reason: 'market_uncertainty_too_low_confidence',
+          threshold: MIN_CONFIDENCE_FOR_SHORT,
+        }));
+        return 'predictor_blocked';
+      }
+      
       // Count how many guardrail conditions pass
       const passCount = [predictorAllowsShort, flowPass, mtfPass].filter(Boolean).length;
       
