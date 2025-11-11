@@ -62,8 +62,8 @@ describe('Peak Drawdown Exit Protection', () => {
     it('should exit long position when drawdown exceeds 4% threshold at 2R', () => {
       const entryPrice = 644;
       const stopDistance = 44; // Stop at 600
-      const peakPrice = 720;  // At 2R (entry + 2*stopDistance)
-      const currentPrice = 691; // ~4.0% down from peak at 720
+      const peakPrice = 732;  // At 2.0R (entry + 2*stopDistance = 644 + 88)
+      const currentPrice = 702.72; // Exactly 4.0% down from peak
       const stopPrice = entryPrice - stopDistance;
       const atr = 40;
 
@@ -81,7 +81,7 @@ describe('Peak Drawdown Exit Protection', () => {
 
       expect(directive.action).toBe('exit');
       expect(directive.reason).toContain('Peak drawdown exit');
-      expect(directive.reason).toContain('at 1.'); // Should show R-multiple ~1.06R
+      expect(directive.reason).toContain('peaked at 2.0'); // Should show peak at 2.0R
     });
 
     it('should exit long position when drawdown exceeds 3% threshold at 3R (ZEC case)', () => {
@@ -158,8 +158,8 @@ describe('Peak Drawdown Exit Protection', () => {
     it('should exit short position when drawdown exceeds threshold', () => {
       const entryPrice = 644;
       const stopDistance = 44;
-      const peakPrice = 600;  // Low for short (good)
-      const currentPrice = 625; // 4.2% up from peak (bad for short)
+      const peakPrice = 556;  // At 2.0R for short (entry - 2*stopDistance = 644 - 88)
+      const currentPrice = 578.24; // Exactly 4.0% up from peak (bad for short)
       const stopPrice = entryPrice + stopDistance;
       const atr = 40;
 
