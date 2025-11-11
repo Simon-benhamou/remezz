@@ -370,6 +370,16 @@ export function maybeAdjustOrExit({
     (adx != null && adx < cfg.earlyExit.adxBelow) ||
     (cfg.earlyExit.cmfNegative && cmf != null && cmf < 0);
 
+  // 🛡️ HARD STOP LOSS: Exit on significant loss regardless of momentum (0.5R or more)
+  // This prevents holding losing positions when price persistently moves against us
+  // Example: XRP/USDT position with 1.76R loss will exit even with good momentum
+  const hardStopLossR = 0.5;
+  if (lossR >= hardStopLossR && effectiveHoldSatisfied) {
+    return { action: 'exit', reason: `Hard stop loss: ${lossR.toFixed(2)}R loss exceeded threshold` };
+  }
+
+  // 🚨 EARLY EXIT: Exit on smaller loss (cutThreshold) if momentum fails
+  // This catches losses early when technical indicators suggest continuation
   if (lossR >= cutThreshold && momentumFail && effectiveHoldSatisfied) {
     return { action: 'exit', reason: `Early exit: loss ${lossR.toFixed(2)}R with momentum failure` };
   }

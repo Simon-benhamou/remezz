@@ -862,7 +862,7 @@ async function checkAndExecuteExit(
 }
 
 /**
- * Execute an exit trade
+ * Execute an exit trade with retry logic
  */
 async function executeExitTrade(
   session: SessionContext,
@@ -871,21 +871,50 @@ async function executeExitTrade(
   reason: string
 ): Promise<void> {
   const config = getQuantAIConfig();
+  const MAX_EXIT_RETRIES = 5;
+  const RETRY_DELAY_MS = 2000; // 2 seconds between retries
   
   try {
     if (!agent?.pos) {
       return;
     }
 
-    logger.info(`[${session.sessionId}] Executing exit trade: ${reason}`);
+    const position = agent.pos;
+    
+    // Initialize exit attempt tracking
+    if (!position.exitAttempts) {
+      position.exitAttempts = 0;
+      position.firstExitAttemptTime = Date.now();
+    }
+    
+    position.exitAttempts += 1;
+    const attemptNumber = position.exitAttempts;
+    
+    // Log retry attempt if not first
+    if (attemptNumber > 1) {
+      const timeSinceFirst = Date.now() - position.firstExitAttemptTime;
+      logger.warn(`[${session.sessionId}] Exit retry attempt ${attemptNumber}/${MAX_EXIT_RETRIES} (${(timeSinceFirst / 1000).toFixed(1)}s since first attempt)`);
+    } else {
+      logger.info(`[${session.sessionId}] Executing exit trade: ${reason}`);
+    }
 
     const broker = await getBrokerForSession(session);
     if (!broker) {
-      logger.error(`[${session.sessionId}] No broker available for exit`);
+      logger.error(`[${session.sessionId}] No broker available for exit (attempt ${attemptNumber})`);
+      
+      // Schedule retry if under max attempts
+      if (attemptNumber < MAX_EXIT_RETRIES) {
+        setTimeout(() => {
+          executeExitTrade(session, agent, exitPrice, reason).catch(err => {
+            logger.error(`[${session.sessionId}] Retry failed:`, err);
+          });
+        }, RETRY_DELAY_MS);
+      } else {
+        logger.error(`[${session.sessionId}] CRITICAL: Exit failed after ${MAX_EXIT_RETRIES} attempts. Position may be stuck!`);
+      }
       return;
     }
 
-    const position = agent.pos;
     const exitSide = position.side === 'buy' ? 'sell' : 'buy';
 
     // Place exit order
@@ -900,6 +929,23 @@ async function executeExitTrade(
 
     logger.info(`[${session.sessionId}] Exit order placed: ${order.id} ${exitSide} ${position.qty} @ ${exitPrice}`);
 
+    // Check if order was rejected
+    if (order.status === 'rejected') {
+      logger.error(`[${session.sessionId}] Exit order rejected (attempt ${attemptNumber})`);
+      
+      // Schedule retry if under max attempts
+      if (attemptNumber < MAX_EXIT_RETRIES) {
+        setTimeout(() => {
+          executeExitTrade(session, agent, exitPrice, reason).catch(err => {
+            logger.error(`[${session.sessionId}] Retry failed:`, err);
+          });
+        }, RETRY_DELAY_MS);
+      } else {
+        logger.error(`[${session.sessionId}] CRITICAL: Exit rejected after ${MAX_EXIT_RETRIES} attempts. Position may be stuck!`);
+      }
+      return;
+    }
+
     // Calculate P&L
     const pnl = position.side === 'buy'
       ? (exitPrice - position.entry) * position.qty
@@ -908,39 +954,38 @@ async function executeExitTrade(
     logger.info(`[${session.sessionId}] Trade closed. P&L: ${pnl.toFixed(2)} USD`);
 
     // Persist exit order and update position in database
-    if (order.status !== 'rejected') {
-      try {
-        // Calculate fee using Binance taker fee (market order = taker)
-        const feeUsd = calculateFeeUsd({
-          price: order.avgPrice ?? exitPrice,
-          qty: order.filledQty ?? position.qty,
-          side: exitSide,
-          liquidity: 'taker', // Market orders are taker orders
-          fees: {
-            makerFeeBps: config.feesSlippage.makerFeeBps,
-            takerFeeBps: config.feesSlippage.takerFeeBps,
-          },
-        });
+    try {
+      // Calculate fee using Binance taker fee (market order = taker)
+      const feeUsd = calculateFeeUsd({
+        price: order.avgPrice ?? exitPrice,
+        qty: order.filledQty ?? position.qty,
+        side: exitSide,
+        liquidity: 'taker', // Market orders are taker orders
+        fees: {
+          makerFeeBps: config.feesSlippage.makerFeeBps,
+          takerFeeBps: config.feesSlippage.takerFeeBps,
+        },
+      });
 
-        await recordExit({
-          sessionId: session.sessionId,
-          symbol: session.symbol,
-          side: position.side,
-          exitPrice: order.avgPrice ?? exitPrice,
-          qty: order.filledQty ?? position.qty,
-          realizedPnl: pnl,
-          feeUsd,
-          requestedPrice: exitPrice,
-          requestedQty: position.qty,
-          latencyMs: order.latencyMs,
-          slippageBps: order.slippageBps,
-          fillRatio: order.fillRatio,
-          reason,
-        });
-        logger.info(`[${session.sessionId}] Exit persisted to database`);
-      } catch (err) {
-        logger.error(`[${session.sessionId}] Failed to persist exit:`, err);
-      }
+      await recordExit({
+        sessionId: session.sessionId,
+        symbol: session.symbol,
+        side: position.side,
+        exitPrice: order.avgPrice ?? exitPrice,
+        qty: order.filledQty ?? position.qty,
+        realizedPnl: pnl,
+        feeUsd,
+        requestedPrice: exitPrice,
+        requestedQty: position.qty,
+        latencyMs: order.latencyMs,
+        slippageBps: order.slippageBps,
+        fillRatio: order.fillRatio,
+        reason,
+      });
+      logger.info(`[${session.sessionId}] Exit persisted to database`);
+    } catch (err) {
+      logger.error(`[${session.sessionId}] Failed to persist exit:`, err);
+      // Continue with position clearing even if persistence fails
     }
 
     // Register outcome
@@ -956,11 +1001,23 @@ async function executeExitTrade(
       });
     }
 
-    // Clear position
+    // Clear position - SUCCESS!
     agent.pos = null;
+    logger.info(`[${session.sessionId}] Position cleared after ${attemptNumber} attempt(s)`);
 
   } catch (error) {
-    logger.error(`[${session.sessionId}] Error executing exit trade:`, error);
+    logger.error(`[${session.sessionId}] Error executing exit trade (attempt ${agent?.pos?.exitAttempts || 1}):`, error);
+    
+    // Schedule retry if under max attempts and position still exists
+    if (agent?.pos && agent.pos.exitAttempts < MAX_EXIT_RETRIES) {
+      setTimeout(() => {
+        executeExitTrade(session, agent, exitPrice, reason).catch(err => {
+          logger.error(`[${session.sessionId}] Retry failed:`, err);
+        });
+      }, RETRY_DELAY_MS);
+    } else if (agent?.pos) {
+      logger.error(`[${session.sessionId}] CRITICAL: Exit failed after ${MAX_EXIT_RETRIES} attempts. Position may be stuck!`);
+    }
   }
 }
 
