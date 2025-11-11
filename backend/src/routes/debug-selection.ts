@@ -82,20 +82,28 @@ router.post('/create-test-smart-agent', async (req, res) => {
     const { startSession } = await import('../session/session.js');
     const { initializeIntelligentSmartAgent } = await import('../services/smartAgent.js');
     const { prisma } = await import('../db/client.js');
+    const { getBalanceSnapshot } = await import('../services/capitalPool.js');
     
-    // Create session with temporary symbol
+    // Get balance from capital pool instead of hardcoding
+    const poolSnapshot = await getBalanceSnapshot('paper');
+    const poolBalance = poolSnapshot.freeUSD.toNumber();
+    const startBalance = Math.max(100, poolBalance);
+    
+    console.log(`💰 Using capital pool balance: $${startBalance.toFixed(2)}`);
+    
+    // Create session - symbol will be set by smart selection
     const activationTimestamp = new Date().toISOString();
     const cfg = getConfig();
     const defaultLeverage = Math.min(10, cfg.DEFAULT_MAX_LEVERAGE || 10);
     const profile: ActivationProfile = {
-      symbol: 'BTC/USDT',
+      symbol: 'BTC/USDT', // Temporary - will be updated by smart selection
       mode: 'paper',
       maxLeverage: defaultLeverage,
       requestedMaxLeverage: defaultLeverage,
       riskPerTradePct: 1.5,
       dailyLossLimitPct: 3.5,
       timestamp: activationTimestamp,
-      startBalanceUsd: 1000,
+      startBalanceUsd: startBalance,
       budgetFraction: 1,
       aggressiveness: 'conservative',
       rrFloor: DEFAULT_RR_EXPECTANCY_CONFIG.rrFloor,
@@ -113,9 +121,9 @@ router.post('/create-test-smart-agent', async (req, res) => {
     };
 
     const session = await startSession(
-      'BTC/USDT',
+      'BTC/USDT', // Temporary - will be updated by smart selection
       'paper',
-      1000,
+      startBalance,
       serializeActivationProfile(profile, { budgetPct: 100 }),
       undefined,
       {

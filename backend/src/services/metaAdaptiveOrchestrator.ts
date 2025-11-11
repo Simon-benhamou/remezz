@@ -96,11 +96,37 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promi
     // Progressive threshold for 2nd position
     minConfidenceRequired = usageRatio < 0.50 ? 0.50 : 0.65;
   } else {
-    // Large account: 4-5 positions (20% each)
-    maxAllocationPerPosition = totalCapital * 0.20;
-    maxPositions = 5;
-    // Progressive threshold: last 20% requires high confidence
-    minConfidenceRequired = usageRatio < 0.80 ? 0.50 : 0.75;
+    // Large account: Dynamic position limit based on available capital
+    // Instead of fixed 5 positions at 20%, allow more smaller positions
+    // Minimum position size: $100 (ensures orderability)
+    // Maximum single position: 20% of total capital
+    const minPositionSize = 100;
+    const maxSinglePositionPct = 0.20;
+    
+    maxAllocationPerPosition = totalCapital * maxSinglePositionPct;
+    
+    // Calculate max positions based on free capital, not total capital
+    // This allows more positions if they're smaller than the max allocation
+    if (freeCapital >= minPositionSize) {
+      maxPositions = Math.floor(freeCapital / minPositionSize);
+    } else {
+      maxPositions = Math.floor(totalCapital / minPositionSize);
+    }
+    
+    // Cap at 10 positions maximum to avoid over-diversification
+    maxPositions = Math.min(10, Math.max(1, maxPositions));
+    
+    // Progressive threshold: higher confidence required as capital usage increases
+    // 0-60% used: normal threshold (0.50)
+    // 60-80% used: moderate threshold (0.60)
+    // 80%+ used: high threshold (0.70)
+    if (usageRatio < 0.60) {
+      minConfidenceRequired = 0.50;
+    } else if (usageRatio < 0.80) {
+      minConfidenceRequired = 0.60;
+    } else {
+      minConfidenceRequired = 0.70;
+    }
   }
   
   return {

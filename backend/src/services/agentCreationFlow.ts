@@ -694,11 +694,10 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   if (budgetFractionInput > 1) budgetFractionInput = budgetFractionInput / 100;
   const budgetFraction = resolveBudgetFraction(budgetFractionInput, cfg);
 
+  // For paper mode, get balance from capital pool; for live mode, fetch from exchange later
   const startBalanceUsd =
     typeof payload.startBalanceUsd === 'number' && payload.startBalanceUsd > 0
       ? Number(payload.startBalanceUsd)
-      : mode === 'paper'
-      ? 1000
       : 0;
 
   const requestedPortfolioBalance =
@@ -1194,6 +1193,20 @@ async function createSessionRecord(
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  } else if (config.mode === 'paper') {
+    // Use capital pool balance for paper mode
+    if (config.startBalanceUsd <= 0) {
+      try {
+        const { getBalanceSnapshot } = await import('./capitalPool.js');
+        const poolSnapshot = await getBalanceSnapshot('paper');
+        const poolBalance = poolSnapshot.freeUSD.toNumber();
+        config.startBalanceUsd = Math.max(100, poolBalance); // Minimum 100$ to ensure orderability
+        console.log(`💰 Using capital pool balance for paper session: $${config.startBalanceUsd.toFixed(2)}`);
+      } catch (error) {
+        console.warn('⚠️ Failed to fetch capital pool balance, using minimum:', error);
+        config.startBalanceUsd = 100; // Emergency fallback
+      }
+    }
   }
 
   const activationTimestamp = new Date().toISOString();
@@ -1288,7 +1301,11 @@ async function activateAgent(params: {
   const requestedMaxLev = normalized.requestedMaxLeverage;
   const minLeverage = Math.max(1, Math.min(effectiveMaxLev, Number(normalized.rawPayload?.minLeverage ?? 1)));
 
-  if (params.shouldActivate) {
+  // For smart agents, delay activation until after smart selection completes
+  // This prevents orders from being placed on temporary placeholder symbols
+  const shouldDelayActivation = normalized.isSmartAgent;
+
+  if (params.shouldActivate && !shouldDelayActivation) {
     await AgentHub.activate(session.id, {
       symbol: session.symbol,
       mode: normalized.mode,
@@ -1319,6 +1336,46 @@ async function activateAgent(params: {
     if (!success) {
       return { state: 'warming', agentId, reason: 'smart_agent_initialization_pending' };
     }
+    
+    // Fetch the updated session to get the correct symbol after smart selection
+    const updatedSession = await prisma.agentSession.findUnique({
+      where: { id: session.id },
+      select: { symbol: true, currentSymbol: true }
+    });
+    const finalSymbol = updatedSession?.currentSymbol || updatedSession?.symbol || session.symbol;
+    
+    // Now that smart selection is complete and symbol is set, activate the agent hub
+    // This ensures no orders are placed before the correct symbol is selected
+    console.log(`🚀 Smart selection complete (${finalSymbol}), activating agent hub for session ${session.id}`);
+    try {
+      await AgentHub.activate(session.id, {
+        symbol: finalSymbol,
+        mode: normalized.mode,
+        maxLeverage: effectiveMaxLev,
+        requestedMaxLeverage: requestedMaxLev,
+        leverageCap,
+        riskPerTradePct: normalized.riskPerTradePct,
+        dailyLossLimitPct: normalized.dailyLossLimitPct,
+        timestamp: new Date().toISOString(),
+        startBalanceUsd: normalized.startBalanceUsd,
+        budgetFraction: normalized.budgetFraction,
+        aggressiveness: normalized.aggressiveness,
+        userId: normalized.userId,
+        sizingMode: normalized.rawPayload?.sizingMode,
+        dynamicLeverage: normalized.rawPayload?.dynamicLeverage !== false,
+        minLeverage,
+        strategyEngine: normalized.strategyEngine,
+      } as any);
+      agentId = session.id;
+      
+      // Schedule post-activation tasks with the final symbol
+      schedulePostActivationTasks(session.id, finalSymbol, normalized);
+    } catch (error) {
+      console.error('❌ Failed to activate agent hub after smart selection:', error);
+      return { state: 'warming', agentId, reason: 'agent_activation_failed' };
+    }
+    
+    return { state: 'ready', agentId };
   }
 
   schedulePostActivationTasks(session.id, session.symbol, normalized);
