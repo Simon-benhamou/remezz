@@ -1655,12 +1655,10 @@ router.get('/:sessionId/diagnostics', authenticateUser, async (req: Authenticate
 router.get('/:sessionId/diagnostics-debug', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    console.error(`[STDERR-DEBUG] Diagnostics request for session: ${sessionId}`);
     const diagnostics = await getAgentDiagnosticInfo(sessionId);
-    console.error(`[STDERR-DEBUG] Diagnostics result:`, diagnostics ? 'OK' : 'NULL');
     return res.json({ ok: true, diagnostics, debug: { sessionId, diagnosticsIsNull: diagnostics === null } });
   } catch (error) {
-    console.error('[STDERR-DEBUG] Diagnostics error:', error);
+    console.error('[diagnostics-debug] Error:', error);
     return res.status(500).json({ ok: false, error: 'internal_error', details: error instanceof Error ? error.message : String(error) });
   }
 });

@@ -267,6 +267,14 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
         }))
       );
 
+      // Store pythonSignal from best signal in agent for diagnostics API
+      const agent = AgentHub.get(session.sessionId);
+      if (agent && signals.length > 0) {
+        const bestSignal = signals[0];
+        (agent as any).pythonSignal = (bestSignal as any).meta?.pythonSignal || null;
+        (agent as any).lastSignal = bestSignal;
+      }
+
       // Check for existing position from DATABASE, not just agent memory
       // This prevents ghost position bugs when agent stub persists across restarts
       const dbPosition = await prisma.position.findFirst({

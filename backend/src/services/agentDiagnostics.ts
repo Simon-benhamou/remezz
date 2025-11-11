@@ -86,8 +86,6 @@ export type AgentDiagnosticInfo = {
 
 export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDiagnosticInfo | null> {
   try {
-    console.error(`[STDERR-DIAG] START getAgentDiagnosticInfo for sessionId: ${sessionId}`);
-    
     // Get session
     const session = await prisma.agentSession.findUnique({
       where: { id: sessionId },
@@ -100,21 +98,15 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       }
     });
 
-    console.error(`[STDERR-DIAG] Session found: ${!!session}, stopped: ${session?.stoppedAt}`);
-
     if (!session) {
-      console.log(`[getAgentDiagnosticInfo] Session ${sessionId} not found in database`);
       return null;
     }
 
     // Get agent from hub (may be null if backend restarted)
     const agent = AgentHub.get(sessionId) as any;
     
-    console.error(`[STDERR-DIAG] Agent in hub: ${!!agent}`);
-    
     // If agent not in hub, try to reconstruct diagnostics from DB/last known state
     if (!agent) {
-      console.log(`[getAgentDiagnosticInfo] Agent ${sessionId} not in AgentHub - returning DB-only diagnostics`);
       
       // Return limited diagnostics based on DB data only
       const hasOpenOrder = session.orders && session.orders.length > 0;
@@ -158,10 +150,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
 
     // Get latest snapshot from agent
     const snap: TechnicalSnapshot | null = agent.snap || agent.lastSnap || null;
-    console.error(`[STDERR-DIAG] Snapshot check: snap=${!!snap}, agent.snap=${!!agent.snap}, agent.lastSnap=${!!agent.lastSnap}`);
     if (!snap) {
-      console.error(`[STDERR-DIAG] NO SNAPSHOT - returning DB-only diagnostics with orders`);
-      
       // Return DB-only diagnostics when agent exists but has no snapshot yet
       const hasOpenOrder = session.orders && session.orders.length > 0;
       

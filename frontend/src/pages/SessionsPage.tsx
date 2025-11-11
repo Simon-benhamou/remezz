@@ -542,18 +542,26 @@ export default function SessionsPage() {
         key: 'status',
         render: (_, record) => {
           const meta = statusMeta(record);
+          const hasPosition = (record as any).openPositions > 0;
           return (
-            <Tag
-              style={{
-                borderRadius: 10,
-                border: 'none',
-                background: meta.tone,
-                color: meta.color,
-                fontWeight: 600,
-              }}
-            >
-              {meta.label}
-            </Tag>
+            <Space direction="vertical" size={2}>
+              <Tag
+                style={{
+                  borderRadius: 10,
+                  border: 'none',
+                  background: meta.tone,
+                  color: meta.color,
+                  fontWeight: 600,
+                }}
+              >
+                {meta.label}
+              </Tag>
+              {isSessionActive(record) && (
+                <Text style={{ color: '#94a3b8', fontSize: 11 }}>
+                  {hasPosition ? '📈 In position' : '🔍 Scanning'}
+                </Text>
+              )}
+            </Space>
           );
         },
       },

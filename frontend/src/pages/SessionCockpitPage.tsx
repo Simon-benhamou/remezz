@@ -32,8 +32,8 @@ import {
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
-import AgentStatePanel from '../components/AgentStatePanel';
-import StrategyChecklistCard from '../components/StrategyChecklistCard';
+import MetaAdaptiveStatePanel from '../components/MetaAdaptiveStatePanel';
+import MarketContextCard from '../components/MarketContextCard';
 import PositionInfoCard from '../components/PositionInfoCard';
 import SymbolProfileCard from '../components/SymbolProfileCard';
 import PredictorResultsCard from '../components/PredictorResultsCard';
@@ -1268,33 +1268,28 @@ export default function SessionCockpitPage() {
               </Card>
 </Row>
         <Row gutter={[24, 24]}>
-          <Card title="Agent diagnostics" bordered={false} className="session-section-card">
-            {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
-              <AgentStatePanel
-                agent={agent}
-                symbol={status?.symbol}
-                lastPrice={status?.price}
-                sessionId={status?.session?.id}
-                margin={marginHealth?.snapshots?.[0]}
-                marginHistory={marginHealth?.snapshots}
-              />
-            ) : (
-              <Skeleton active paragraph={{ rows: 6 }} />
-            )}
-          </Card>
-        </Row>
-
-        <Row gutter={[24, 24]}>
-          <Col xs={24} lg={12}>
-            <Card title="Strategy monitoring" bordered={false} className="session-section-card">
-              {shouldShowContent(LoadingPhase.CORE_DATA) ? (
-                <StrategyChecklistCard strategy={agent?.strategy as StrategySnapshot | undefined} />
+          <Col xs={24} lg={14}>
+            <Card title="Meta-Adaptive State" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.CORE_DATA) && diagnostics ? (
+                <MetaAdaptiveStatePanel diagnostics={diagnostics} />
               ) : (
                 <Skeleton active paragraph={{ rows: 6 }} />
               )}
             </Card>
           </Col>
-          <Col xs={24} lg={12}>
+          <Col xs={24} lg={10}>
+            <Card title="Market Context" bordered={false} className="session-section-card">
+              {shouldShowContent(LoadingPhase.CORE_DATA) && diagnostics?.market ? (
+                <MarketContextCard market={diagnostics.market} symbol={status?.symbol || ''} />
+              ) : (
+                <Skeleton active paragraph={{ rows: 6 }} />
+              )}
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[24, 24]}>
+          <Col xs={24}>
             <Card title="Recent agent logs" bordered={false} className="session-section-card">
               {shouldShowContent(LoadingPhase.CORE_DATA) ? (
                 opsEvents.length > 0 ? (
