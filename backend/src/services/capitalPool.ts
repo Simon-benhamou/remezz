@@ -94,6 +94,7 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
     const sessions = await prisma.agentSession.findMany({
       where: { mode: 'paper', stoppedAt: null },
       select: {
+        id: true,
         startBalanceUsd: true,
         positions: {
           select: { symbol: true, qty: true, entryPrice: true, leverage: true },
@@ -120,10 +121,12 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
     let unrealizedSum = 0;
     const exposureMap = new Map<string, number>();
     let inPositionsTotal = 0;
+    let totalPositionsCount = 0;
 
     for (const session of sessions) {
       realizedSum += Number(session.SessionKpi?.realizedPnlUsd ?? 0);
       unrealizedSum += Number(session.SessionKpi?.unrealizedPnlUsd ?? 0);
+      totalPositionsCount += session.positions.length;
       for (const position of session.positions) {
         const qty = Math.abs(Number(position.qty ?? 0));
         const entryPrice = Math.abs(Number(position.entryPrice ?? 0));
@@ -151,6 +154,23 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
     if (freeValue === 0 && totalValue === 0) {
       freeValue = baseFree;
       totalValue = baseFree;
+    }
+
+    // DISCREPANCY WARNING: Check if there's a significant mismatch (>1 position)
+    const previousSnapshot = await paperProvider.getSnapshot();
+    const previousPositionsUsd = previousSnapshot.inPositionsUSD.toNumber();
+    const positionsDifference = Math.abs(inPositionsTotal - previousPositionsUsd);
+    
+    // Detect discrepancy if difference is more than the equivalent of 1 position at $10 margin
+    if (positionsDifference > 10 && totalPositionsCount > 0) {
+      console.warn('⚠️ CAPITAL SYNC WARNING [Paper Mode]:');
+      console.warn(`  Active Sessions: ${sessions.length}`);
+      console.warn(`  Total Positions: ${totalPositionsCount}`);
+      console.warn(`  Previous In-Position: $${previousPositionsUsd.toFixed(2)}`);
+      console.warn(`  New In-Position: $${inPositionsTotal.toFixed(2)}`);
+      console.warn(`  Difference: $${positionsDifference.toFixed(2)}`);
+      console.warn(`  Free Capital: $${freeValue.toFixed(2)}`);
+      console.warn('  ⚠️ Possible sync issue detected - verify order visibility in monitoring API');
     }
 
     const snapshot: BalanceSnapshot = {
@@ -181,6 +201,7 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
     const sessions = await prisma.agentSession.findMany({
       where: { mode: 'live', stoppedAt: null },
       select: {
+        id: true,
         startBalanceUsd: true,
         positions: {
           select: { symbol: true, qty: true, entryPrice: true, leverage: true },
@@ -212,11 +233,13 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
     let unrealizedSum = 0;
     const exposureMap = new Map<string, number>();
     let inPositionsTotal = 0;
+    let totalPositionsCount = 0;
 
     for (const session of sessions) {
       startSum += Number(session.startBalanceUsd ?? 0);
       realizedSum += Number(session.SessionKpi?.realizedPnlUsd ?? 0);
       unrealizedSum += Number(session.SessionKpi?.unrealizedPnlUsd ?? 0);
+      totalPositionsCount += session.positions.length;
       for (const position of session.positions) {
         const qty = Math.abs(Number(position.qty ?? 0));
         const entryPrice = Math.abs(Number(position.entryPrice ?? 0));
@@ -248,6 +271,23 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
     const inPositionsValue = Math.min(totalValue, inPositionsTotal);
     if (freeValue + inPositionsValue > totalValue) {
       freeValue = Math.max(0, totalValue - inPositionsValue);
+    }
+
+    // DISCREPANCY WARNING: Check if there's a significant mismatch (>1 position)
+    const previousSnapshot = await liveProvider.getSnapshot();
+    const previousPositionsUsd = previousSnapshot.inPositionsUSD.toNumber();
+    const positionsDifference = Math.abs(inPositionsValue - previousPositionsUsd);
+    
+    // Detect discrepancy if difference is more than the equivalent of 1 position at $10 margin
+    if (positionsDifference > 10 && totalPositionsCount > 0) {
+      console.warn('⚠️ CAPITAL SYNC WARNING [Live Mode]:');
+      console.warn(`  Active Sessions: ${sessions.length}`);
+      console.warn(`  Total Positions: ${totalPositionsCount}`);
+      console.warn(`  Previous In-Position: $${previousPositionsUsd.toFixed(2)}`);
+      console.warn(`  New In-Position: $${inPositionsValue.toFixed(2)}`);
+      console.warn(`  Difference: $${positionsDifference.toFixed(2)}`);
+      console.warn(`  Free Capital: $${freeValue.toFixed(2)}`);
+      console.warn('  ⚠️ Possible sync issue detected - verify order visibility in monitoring API');
     }
 
     const snapshot: BalanceSnapshot = {
