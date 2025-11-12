@@ -1972,12 +1972,11 @@ class MetaAdaptiveStrategyAgent {
     // Updating the model means re-running `npm run train-model`, which
     // refreshes python/xgboost_direction.json and python/features.txt – the
     // agent picks up the new artefacts on the next process spawn.
+    // 🐞 FIX: ALWAYS query predictor if available (don't trust cached pythonSignalMeta)
+    // Old logic allowed skipping predictor if pythonSignalMeta existed, causing silent failures
     const shouldQueryPython = params.predictorFeatures
       && process.env.DISABLE_PYTHON_PREDICTOR !== 'true'
-      && isPythonPredictorAvailable()
-      && (!pythonSignalMeta
-        || pythonSignalMeta.bias === 'both'
-        || pythonSignalMeta.confidence < PREDICTOR_MIN_CONFIDENCE);
+      && isPythonPredictorAvailable();
 
     if (shouldQueryPython && params.predictorFeatures) {
       try {
@@ -2040,6 +2039,25 @@ class MetaAdaptiveStrategyAgent {
 
     const intendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
     
+    // 🐞 FIX BUG 2: Block ALL trades (LONG + SHORT) if confidence < 30%
+    // Old code only checked SHORT trades, allowing risky LONG entries
+    const MIN_CONFIDENCE_FOR_TRADE = 0.30; // 30% minimum for ANY trade
+    if (predictorConfidence < MIN_CONFIDENCE_FOR_TRADE && intendedSide !== 'both') {
+      console.log(JSON.stringify({
+        level: 'info',
+        event: 'adaptive_trade_blocked_by_predictor',
+        symbol: params.symbol,
+        sessionId: params.sessionId ?? null,
+        token: params.token,
+        predictorDecision: effectivePredictorDirection,
+        predictorConfidence: Number(predictorConfidence.toFixed(4)),
+        intendedSide,
+        reason: 'market_uncertainty_too_low_confidence',
+        threshold: MIN_CONFIDENCE_FOR_TRADE,
+      }));
+      return 'predictor_blocked';
+    }
+    
     // Only block if there's a CLEAR contradiction between predictor and intended side
     const hasContradiction = (effectivePredictorDirection === 'long' && intendedSide === 'short') 
       || (effectivePredictorDirection === 'short' && intendedSide === 'long');
@@ -2057,6 +2075,25 @@ class MetaAdaptiveStrategyAgent {
         predictorConfidence: Number(predictorConfidence.toFixed(4)),
         intendedSide,
         reason: 'clear_contradiction',
+      }));
+      return 'predictor_blocked';
+    }
+    
+    // 🐞 FIX BUG 3: Block if predictor is uncertain (both/none)
+    // Only trade if predictor has CLEAR directional bias matching intended side
+    if (effectivePredictorDirection === 'both' && intendedSide !== 'both') {
+      console.log(JSON.stringify({
+        level: 'info',
+        event: 'adaptive_trade_blocked_by_predictor',
+        symbol: params.symbol,
+        sessionId: params.sessionId ?? null,
+        token: params.token,
+        predictorDecision: effectivePredictorDirection,
+        predictorDecisionLabel,
+        predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
+        predictorConfidence: Number(predictorConfidence.toFixed(4)),
+        intendedSide,
+        reason: 'predictor_uncertain_no_clear_direction',
       }));
       return 'predictor_blocked';
     }
@@ -2081,23 +2118,8 @@ class MetaAdaptiveStrategyAgent {
       const adxValue = params.plan?.stopAtrMult?.toNumber() ?? 0;
       const alignmentScoreValue = params.plan?.entryWeight?.toNumber() ?? 0;
       
-      // FIX: Block trade if predictor confidence too low (market uncertainty)
-      // Even if guardrails pass, don't trade in uncertain market conditions
-      const MIN_CONFIDENCE_FOR_SHORT = 0.30; // 30% minimum confidence required
-      if (predictorConfidence < MIN_CONFIDENCE_FOR_SHORT) {
-        console.log(JSON.stringify({
-          level: 'info',
-          event: 'adaptive_trade_blocked_by_predictor',
-          symbol: params.symbol,
-          sessionId: params.sessionId ?? null,
-          token: params.token,
-          predictorDecision: effectivePredictorDirection,
-          predictorConfidence: Number(predictorConfidence.toFixed(4)),
-          reason: 'market_uncertainty_too_low_confidence',
-          threshold: MIN_CONFIDENCE_FOR_SHORT,
-        }));
-        return 'predictor_blocked';
-      }
+      // NOTE: Confidence check moved to common section above (line ~2035)
+      // Now applies to BOTH long and short trades
       
       // Count how many guardrail conditions pass
       const passCount = [predictorAllowsShort, flowPass, mtfPass].filter(Boolean).length;

@@ -246,9 +246,34 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       trendStrength: Number(((snap as any).trendStrength ?? 0).toFixed(2)),
     };
 
-    // Extract predictor info (from agent state or last signal)
+    // Extract predictor info (from agent state, last signal, or DB profileJson)
     let predictorInfo: AgentDiagnosticInfo['predictor'] = null;
-    const pythonSignal = agent.pythonSignal || (agent.lastSignal as any)?.pythonSignal || null;
+    let pythonSignal = agent.pythonSignal || (agent.lastSignal as any)?.pythonSignal || null;
+    
+    // 🔴 FIX: Fallback to profileJson._diagnostics when agent has no live data
+    if (!pythonSignal) {
+      const profile = (session.profileJson as any) || {};
+      const diagnostics = profile._diagnostics || {};
+      if (diagnostics.lastPredictorData) {
+        const saved = diagnostics.lastPredictorData;
+        pythonSignal = {
+          decision: saved.decision,
+          confidence: saved.confidence,
+          probabilities: saved.probabilities,
+          probabilityLong: saved.probabilities?.long,
+          probabilityShort: saved.probabilities?.short,
+          probabilityNone: saved.probabilities?.none,
+          primaryProbability: Math.max(
+            saved.probabilities?.long || 0,
+            saved.probabilities?.short || 0,
+            saved.probabilities?.none || 0
+          ),
+          entryWeight: 1,
+          riskMultiplier: 1,
+          cooldown: { active: false, reason: null, seconds: null },
+        };
+      }
+    }
     
     // Get predictor reliability metrics
     const reliabilityMetrics = getPredictorReliabilityMetrics();
@@ -284,9 +309,31 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       };
     }
 
-    // Extract strategy info
+    // Extract strategy info (from agent state, last signal, or DB profileJson)
     let strategyInfo: AgentDiagnosticInfo['strategy'] = null;
-    const currentStrategy = agent.strategy || agent.plan || agent.lastSignal || null;
+    let currentStrategy = agent.strategy || agent.plan || agent.lastSignal || null;
+    
+    // 🔴 FIX: Fallback to profileJson._diagnostics when agent has no live data
+    if (!currentStrategy) {
+      const profile = (session.profileJson as any) || {};
+      const diagnostics = profile._diagnostics || {};
+      if (diagnostics.lastStrategyData) {
+        const saved = diagnostics.lastStrategyData;
+        currentStrategy = {
+          id: saved.id,
+          strategyId: saved.id,
+          label: saved.label,
+          strategyLabel: saved.label,
+          bias: saved.bias,
+          side: saved.bias,
+          confidence: saved.confidence,
+          score: saved.score,
+          family: saved.family,
+          strategyFamily: saved.family,
+          meta: { score: saved.score },
+        };
+      }
+    }
     
     if (currentStrategy) {
       strategyInfo = {

@@ -231,6 +231,24 @@ export function maybeAdjustOrExit({
   }
   const effectiveTrailMultiplier = activeTrailMultiplier;
 
+  // 🚨 CRITICAL FIX: Direct stop loss check (HIGHEST PRIORITY)
+  // This was MISSING causing positions to never exit on stop loss hit!
+  const stopHit = side === 'long'
+    ? lastPrice <= stop
+    : lastPrice >= stop;
+  
+  if (stopHit) {
+    // Calculate how much below stop we are
+    const stopPenetration = side === 'long'
+      ? ((stop - lastPrice) / stop) * 100
+      : ((lastPrice - stop) / stop) * 100;
+    
+    return {
+      action: 'exit',
+      reason: `Stop loss hit: price ${lastPrice.toFixed(4)} ${side === 'long' ? '≤' : '≥'} stop ${stop.toFixed(4)} (${stopPenetration.toFixed(2)}% penetration)`,
+    };
+  }
+
   // 🚀 PEAK DRAWDOWN PROTECTION: Exit if price drops significantly from peak (HIGH PRIORITY)
   // This check happens BEFORE TP and trailing logic to protect profits from reversals
   if (cfg.peakDrawdown?.enabled && peakPrice != null) {

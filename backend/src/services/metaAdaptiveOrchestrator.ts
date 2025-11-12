@@ -271,8 +271,41 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
       const agent = AgentHub.get(session.sessionId);
       if (agent && signals.length > 0) {
         const bestSignal = signals[0];
-        (agent as any).pythonSignal = (bestSignal as any).meta?.pythonSignal || null;
+        const pythonSignalData = (bestSignal as any).meta?.pythonSignal || null;
+        (agent as any).pythonSignal = pythonSignalData;
         (agent as any).lastSignal = bestSignal;
+        
+        // 🔴 FIX: Persist to profileJson for diagnostics API after restart
+        try {
+          const currentProfile = (session.profileJson || {}) as Record<string, any>;
+          await prisma.agentSession.update({
+            where: { id: session.sessionId },
+            data: {
+              profileJson: {
+                ...currentProfile,
+                _diagnostics: {
+                  lastPredictorData: pythonSignalData ? {
+                    decision: pythonSignalData.decision,
+                    confidence: pythonSignalData.confidence,
+                    probabilities: pythonSignalData.probabilities,
+                    updatedAt: Date.now(),
+                  } : null,
+                  lastStrategyData: {
+                    id: (bestSignal as any).strategyId || bestSignal.id,
+                    label: (bestSignal as any).strategyLabel || 'Unknown',
+                    bias: bestSignal.bias,
+                    confidence: bestSignal.confidence,
+                    score: bestSignal.meta?.score || 0,
+                    family: (bestSignal as any).strategyFamily || 'unknown',
+                    updatedAt: Date.now(),
+                  },
+                },
+              } as any,
+            },
+          });
+        } catch (dbError) {
+          logger.warn(`[${session.sessionId}] Failed to persist diagnostics to profileJson:`, dbError);
+        }
       }
 
       // Check for existing position from DATABASE, not just agent memory

@@ -14,6 +14,8 @@ import ccxt from 'ccxt';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId, waitForWsHealthy } from '../services/binanceWebSocket.js';
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 import { isInsufficientDataError, type InsufficientDataMeta } from '../data/errors.js';
+import { getPredictionSync, isPythonPredictorAvailable, type PythonPredictionResult } from '../quantai/pythonPredictor.js';
+import type { TechnicalSnapshot } from './tech.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
 const RANKING_CACHE = new Map<string, { ts: number; data: RankedOpportunity[] }>();
@@ -83,6 +85,90 @@ export interface VolumeFilteredCrypto {
   change24h: number;
   price: number;
   volumeRank: number;
+}
+
+/**
+ * Build predictor features from technical snapshot (same logic as metaAdaptiveAgent)
+ */
+function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number> | null {
+  const safeNum = (val: any, fallback: number = Number.NaN) => {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  
+  const ema20 = safeNum(snap.ema20);
+  const ema50 = safeNum(snap.ema50);
+  const ema100 = safeNum(snap.ema100);
+  const ema200 = safeNum(snap.ema200);
+  const rsi14 = safeNum(snap.rsi14);
+  const atr14 = safeNum(snap.atr14);
+  const adx14 = safeNum(snap.adx14);
+  const ema20Slope = safeNum((snap as any).ema20Slope, 0);
+  const volume = safeNum((snap as any).volume);
+  const volumeMA = safeNum((snap as any).volumeMA);
+  const lastPrice = safeNum(snap.last);
+  const atrPctPercent = safeNum(snap.atrPct);
+  
+  const trendSpreadFallback = Number.isFinite(ema50) && Math.abs(ema50) > 1e-9 ? (ema20 - ema50) / ema50 : 0;
+  const emaTrendSpread = safeNum((snap as any).emaTrendSpread, trendSpreadFallback);
+  const rsiSlope = safeNum((snap as any).rsiSlope, 0);
+  const volumeZScore = safeNum((snap as any).volumeZScore, 0);
+  const momentum3 = safeNum((snap as any).momentum3, 0);
+  
+  const atrPct = Number.isFinite(atr14) && Number.isFinite(lastPrice) && Math.abs(lastPrice) > 1e-9
+    ? atr14 / lastPrice
+    : Number.isFinite(atrPctPercent)
+      ? atrPctPercent / 100
+      : Number.NaN;
+  
+  if (!Number.isFinite(volume) || !Number.isFinite(volumeMA) || volumeMA <= 0) {
+    return null;
+  }
+  
+  return {
+    ema20,
+    ema50,
+    ema100,
+    ema200,
+    rsi14,
+    atr14,
+    adx14,
+    ema20Slope,
+    volumeRatio: volume / volumeMA,
+    emaTrendSpread,
+    rsiSlope,
+    atrPct,
+    volumeZScore,
+    momentum3,
+  };
+}
+
+/**
+ * Query XGBoost predictor for a crypto with snapshot
+ */
+async function getPredictorBias(
+  symbol: string,
+  snap: TechnicalSnapshot
+): Promise<{ decision: 'long' | 'short' | 'none'; confidence: number } | null> {
+  if (!isPythonPredictorAvailable()) {
+    return null;
+  }
+  
+  const features = buildPredictorFeatures(snap);
+  if (!features) {
+    return null;
+  }
+  
+  try {
+    const prediction = getPredictionSync(features);
+    return {
+      decision: prediction.decision,
+      confidence: prediction.confidence,
+    };
+  } catch (error) {
+    console.warn(`⚠️ Predictor failed for ${symbol}:`, error instanceof Error ? error.message : String(error));
+    return null;
+  }
 }
 
 // Lightweight entry readiness using 15m snapshot only (no agent state)
@@ -458,6 +544,49 @@ export async function rankCryptosWithAI(
     const validSnapshots = snapshots.filter(s => s !== null);
     console.log(`✅ Built ${validSnapshots.length} technical snapshots`);
 
+    // 🎯 PREDICTOR FILTER: Remove cryptos with bias 'none' or low confidence
+    console.log('🤖 Running XGBoost predictor on all candidates...');
+    const predictorFiltered: typeof validSnapshots = [];
+    let predictorSkipped = 0;
+    let predictorNone = 0;
+    let predictorLowConfidence = 0;
+    
+    for (const snap of validSnapshots) {
+      if (!snap) continue;
+      
+      const prediction = await getPredictorBias(snap.symbol, snap as any as TechnicalSnapshot);
+      
+      if (!prediction) {
+        predictorSkipped++;
+        console.log(`⚠️ ${snap.symbol}: Predictor unavailable - skipping`);
+        continue;
+      }
+      
+      // Filter: keep only if decision is NOT 'none' AND confidence >= 30%
+      const { decision, confidence } = prediction;
+      
+      if (decision === 'none') {
+        predictorNone++;
+        console.log(`🚫 ${snap.symbol}: Predictor decision '${decision}' - skipping`);
+        continue;
+      }
+      
+      if (confidence < 0.30) {
+        predictorLowConfidence++;
+        console.log(`🚫 ${snap.symbol}: Confidence ${(confidence * 100).toFixed(1)}% < 30% - skipping`);
+        continue;
+      }
+      
+      // Passed all filters - keep this crypto
+      predictorFiltered.push(snap);
+      console.log(`✅ ${snap.symbol}: decision=${decision}, confidence=${(confidence * 100).toFixed(1)}% - PASSED`);
+    }
+    
+    console.log(`🎯 Predictor filter results: ${predictorFiltered.length}/${validSnapshots.length} passed`);
+    console.log(`   - ${predictorNone} removed (decision=none)`);
+    console.log(`   - ${predictorLowConfidence} removed (confidence <30%)`);
+    console.log(`   - ${predictorSkipped} skipped (errors)`);
+
     if (zeroVolumeSymbols.length > 0) {
       console.warn('🚨 Zero-volume anomalies detected. Symbols will be retried after market data warmup.',
         zeroVolumeSymbols.map(entry => ({
@@ -470,8 +599,12 @@ export async function rankCryptosWithAI(
       );
     }
     
+    // Use predictor-filtered snapshots (or all if predictor failed entirely)
+    const snapshotsToRank = predictorFiltered.length > 0 ? predictorFiltered : validSnapshots;
+    console.log(`📊 Ranking ${snapshotsToRank.length} predictor-approved cryptos...`);
+    
     // Lightweight prefilter (liquidity + minimal momentum)
-    let minimallyTradable = validSnapshots.filter(s => {
+    let minimallyTradable = snapshotsToRank.filter(s => {
       const vma = Number(s!.technical.volumeMA || 0);
       const vr = vma > 0 ? Number((s!.technical.volume / vma)) : 0;
       const adx = Number(s!.technical.adx || 0);
@@ -480,7 +613,7 @@ export async function rankCryptosWithAI(
     });
     if (minimallyTradable.length === 0) {
       console.warn('⚠️ Prefilter removed all candidates; proceeding without prefilter to avoid empty ranking.');
-      minimallyTradable = validSnapshots as any;
+      minimallyTradable = snapshotsToRank as any;
     }
 
     // Prepare data for AI prompt

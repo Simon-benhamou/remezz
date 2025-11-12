@@ -31,7 +31,7 @@ import { resolveLeverageCap, type ResolvedLeverageCap } from '../risk/leverageCa
 import { DEFAULT_RR_EXPECTANCY_CONFIG } from '../risk/rrExpectancy.js';
 import { updatePortfolioBalance, rebalancePortfolio } from './portfolioManager.js';
 
-type StartPayload = Record<string, any>;
+export type StartPayload = Record<string, any>;
 
 export type AgentCreationStepKey = 'select_symbol' | 'create_session' | 'activate_agent';
 
