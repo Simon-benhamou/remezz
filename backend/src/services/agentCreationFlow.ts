@@ -20,7 +20,7 @@ import { selectBestPerp } from '../ai/orchestrator.js';
 import { prisma } from '../db/client.js';
 import { buildTechSnapshot } from '../ai/tech.js';
 import { requestStrategy } from '../ai/strategyManager.js';
-import { ensureSymbolProfile } from './symbolSpecificOptimization.js';
+
 import { proposePlan } from '../ai/planOrchestrator.js';
 import { savePlan } from './planStore.js';
 import { getTicker, getOhlcvWarmupState } from '../data/market.js';
@@ -332,7 +332,7 @@ function tryReserveSmartSymbol(symbol: string, token?: string): boolean {
   return true;
 }
 
-function isSmartSymbolReserved(symbol: string, excludeToken?: string): boolean {
+export function isSmartSymbolReserved(symbol: string, excludeToken?: string): boolean {
   cleanupSmartReservations();
   if (!symbol) return false;
   const normalized = normalizeReservationSymbol(symbol);
@@ -464,11 +464,6 @@ export async function activatePreparedAgent(creationId: string) {
 
   await finalizeSmartAgentMetadata(ctx.session.id, ctx.normalized);
 
-  // ✅ Ensure symbol profile exists BEFORE activation
-  const { ensureSymbolProfile } = await import('./symbolSpecificOptimization.js');
-  await ensureSymbolProfile(ctx.session.symbol);
-  console.log(`✅ Symbol profile ensured for ${ctx.session.symbol}`);
-
   const activation = await activateAgent({
     normalized: ctx.normalized,
     session: ctx.session,
@@ -560,16 +555,6 @@ export async function startAgentCreation(
       error: formatError(error),
     });
     throw error;
-  }
-
-  // Ensure symbol profile exists before creating session
-  if (selection?.symbol) {
-    try {
-      await ensureSymbolProfile(selection.symbol);
-    } catch (error) {
-      console.error(`Failed to ensure symbol profile for ${selection.symbol}:`, error);
-      // Don't block agent creation if profile creation fails
-    }
   }
 
   const createStart = Date.now();
@@ -1043,7 +1028,16 @@ async function selectSymbol(
     }
 
     if (!symbol && prefetched) {
-      if (reservationToken && isSmartSymbolReserved(prefetched.symbol, reservationToken)) {
+      // Filter out opportunities with unclear bias (none)
+      if (prefetched.autoBias?.bias === 'none' || !prefetched.autoBias || prefetched.autoBias.confidence < 0.5) {
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'warn',
+          message: `Prefetched opportunity ${prefetched.symbol} has unclear signal (bias: ${prefetched.autoBias?.bias || 'unknown'}, confidence: ${prefetched.autoBias?.confidence || 0})`,
+          context: 'selection',
+          meta: { reason: 'unclear_signal' },
+        });
+      } else if (reservationToken && isSmartSymbolReserved(prefetched.symbol, reservationToken)) {
         decisionLog.push({
           timestamp: Date.now(),
           level: 'warn',
@@ -1063,8 +1057,8 @@ async function selectSymbol(
             meta: { reason: 'reservation_conflict' },
           });
         } else {
-          // Only check DB after successful reservation
-          const usage = await getActiveAgentCountForSymbol(prefetched.symbol);
+          // Only check DB + in-memory reservations after successful reservation
+          const usage = await getActiveAgentCountForSymbol(prefetched.symbol, undefined, reservationToken);
           if (usage === 0) {
             symbol = prefetched.symbol;
             summary.autoSelected = true;
@@ -1120,8 +1114,8 @@ async function selectSymbol(
             continue;
           }
           
-          // Only check DB after successful reservation
-          const usage = await getActiveAgentCountForSymbol(candidate);
+          // Only check DB + in-memory reservations after successful reservation
+          const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken);
           if (usage === 0) {
             symbol = candidate;
             summary.autoSelected = true;
@@ -1440,6 +1434,17 @@ async function activateAgent(params: {
       } as any);
       agentId = session.id;
       
+      // Force first tick immediately to populate diagnostics
+      console.log(`⚡ Triggering immediate first tick for ${session.id}`);
+      setImmediate(async () => {
+        try {
+          await AgentHub.onTick(session.id);
+          console.log(`✅ First tick completed for ${session.id}`);
+        } catch (error) {
+          console.error(`⚠️ First tick failed for ${session.id}:`, error);
+        }
+      });
+      
       // Schedule post-activation tasks with the final symbol
       schedulePostActivationTasks(session.id, finalSymbol, normalized);
     } catch (error) {
@@ -1448,6 +1453,19 @@ async function activateAgent(params: {
     }
     
     return { state: 'ready', agentId };
+  }
+
+  // Force first tick for non-smart agents too
+  if (agentId) {
+    console.log(`⚡ Triggering immediate first tick for ${session.id}`);
+    setImmediate(async () => {
+      try {
+        await AgentHub.onTick(session.id);
+        console.log(`✅ First tick completed for ${session.id}`);
+      } catch (error) {
+        console.error(`⚠️ First tick failed for ${session.id}:`, error);
+      }
+    });
   }
 
   schedulePostActivationTasks(session.id, session.symbol, normalized);

@@ -359,6 +359,87 @@ export default function SessionsPage() {
     [currentMode, fetchSessions, invalidateCache]
   );
 
+  const handleCreate9Agents = React.useCallback(async () => {
+    Modal.confirm({
+      title: 'Create 9-Agent Portfolio?',
+      content: 'This will create 9 smart agents with different aggressiveness levels (3 conservative, 3 reactive, 3 aggressive), each with max leverage 7x and different symbols.',
+      okText: 'Create 9 Agents',
+      okButtonProps: { style: { background: '#10b981' } },
+      onOk: async () => {
+        setSubmitting(true);
+        const configs: Array<{ aggressiveness: AggressivenessLevel; maxLeverage: number }> = [
+          { aggressiveness: 'conservative', maxLeverage: 7 },
+          { aggressiveness: 'conservative', maxLeverage: 7 },
+          { aggressiveness: 'conservative', maxLeverage: 7 },
+          { aggressiveness: 'reactive', maxLeverage: 7 },
+          { aggressiveness: 'reactive', maxLeverage: 7 },
+          { aggressiveness: 'reactive', maxLeverage: 7 },
+          { aggressiveness: 'aggressive', maxLeverage: 7 },
+          { aggressiveness: 'aggressive', maxLeverage: 7 },
+          { aggressiveness: 'aggressive', maxLeverage: 7 },
+        ];
+
+        let succeeded = 0;
+        let failed = 0;
+        const usedSymbols = new Set<string>();
+
+        try {
+          for (const config of configs) {
+            try {
+              const payload = {
+                mode: currentMode,
+                smartAutoMode: true,
+                maxLeverage: config.maxLeverage,
+                aggressiveness: config.aggressiveness,
+                strategyEngine: 'meta_adaptive',
+              };
+
+              const prepare = await api.prepareAgentCreation(payload);
+              const creationId = prepare?.creationId;
+              const selectedSymbol = prepare?.selection?.symbol;
+
+              if (!creationId || !selectedSymbol) {
+                failed++;
+                continue;
+              }
+
+              // Check if symbol is already used
+              if (usedSymbols.has(selectedSymbol)) {
+                console.warn(`Symbol ${selectedSymbol} already used, skipping duplicate`);
+                failed++;
+                continue;
+              }
+
+              await api.createAgentSession(creationId, selectedSymbol);
+              await api.activateAgentCreation(creationId);
+              
+              usedSymbols.add(selectedSymbol);
+              succeeded++;
+              
+              // Small delay to avoid overwhelming the system
+              await new Promise(resolve => setTimeout(resolve, 500));
+            } catch (error) {
+              console.error('Failed to create agent:', error);
+              failed++;
+            }
+          }
+
+          if (succeeded > 0) {
+            message.success(`Created ${succeeded} agents successfully${failed > 0 ? `, ${failed} failed` : ''}`);
+            invalidateCache(currentMode);
+            await fetchSessions(true);
+          } else {
+            message.error('Failed to create any agents');
+          }
+        } catch (error: any) {
+          message.error('Portfolio creation failed: ' + (error?.message || 'Unknown error'));
+        } finally {
+          setSubmitting(false);
+        }
+      },
+    });
+  }, [currentMode, fetchSessions, invalidateCache]);
+
   const handleModalSubmit = React.useCallback(async () => {
     try {
       const values = await form.validateFields();
@@ -734,6 +815,14 @@ export default function SessionsPage() {
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
             Create Agent
+          </Button>
+          <Button 
+            type="primary" 
+            style={{ background: '#10b981' }}
+            onClick={handleCreate9Agents}
+            disabled={submitting}
+          >
+            Create 9 Agents Portfolio
           </Button>
         </Space>
       </div>

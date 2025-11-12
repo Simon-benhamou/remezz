@@ -3343,7 +3343,11 @@ async function scanIntelligentOpportunitiesLegacy(excludeSessionId?: string, opt
 /**
  * Compte le nombre d'agents actifs sur un symbole spécifique
  */
-export async function getActiveAgentCountForSymbol(symbol: string, excludeSessionId?: string): Promise<number> {
+export async function getActiveAgentCountForSymbol(
+  symbol: string, 
+  excludeSessionId?: string, 
+  excludeReservationToken?: string
+): Promise<number> {
   try {
     const norm = normalizeUnifiedSymbol(symbol);
     const base = norm.split('/')[0];
@@ -3361,6 +3365,11 @@ export async function getActiveAgentCountForSymbol(symbol: string, excludeSessio
       `${base}USD`,
       `${base}/USD`
     ]));
+    
+    // Check active reservations first
+    const { isSmartSymbolReserved } = await import('../../agentCreationFlow.js');
+    const hasActiveReservation = isSmartSymbolReserved(symbol, excludeReservationToken);
+    
     const where: any = {
       stoppedAt: null,
       OR: [
@@ -3370,7 +3379,9 @@ export async function getActiveAgentCountForSymbol(symbol: string, excludeSessio
     };
     if (excludeSessionId) where.id = { not: excludeSessionId };
     const count = await prisma.agentSession.count({ where });
-    return count;
+    
+    // Return DB count + 1 if there's an active reservation
+    return count + (hasActiveReservation ? 1 : 0);
   } catch (error) {
     console.error('Error counting active agents for symbol:', error);
     return 0;
