@@ -80,13 +80,23 @@ export async function ensureSymbolProfile(symbol: string): Promise<void> {
       return;
     }
     
+    // Check if profile already exists
     const existing = await prisma.$queryRaw<SymbolProfile[]>`
       SELECT symbol FROM symbol_profiles
       WHERE symbol = ${symbol}
       LIMIT 1
-    `.catch(() => null);
+    `.catch(err => {
+      console.error(`❌ Failed to check existing profile for ${symbol}:`, err.message);
+      // If table doesn't exist, try to create it
+      if (err.message?.includes('does not exist') || err.message?.includes('relation')) {
+        console.log(`📝 Symbol_profiles table doesn't exist, will need to initialize it`);
+        return null;
+      }
+      throw err;
+    });
 
     if (existing && existing.length > 0) {
+      console.log(`✓ Symbol profile already exists for ${symbol}`);
       return; // Already exists
     }
 
@@ -99,6 +109,8 @@ export async function ensureSymbolProfile(symbol: string): Promise<void> {
       maxDrawdown: 0,
     };
 
+    console.log(`📝 Creating default profile for ${symbol} (tier: ${tier})...`);
+    
     await prisma.$executeRaw`
       INSERT INTO symbol_profiles (
         symbol, tier, custom_thresholds, performance_metrics,
@@ -114,13 +126,49 @@ export async function ensureSymbolProfile(symbol: string): Promise<void> {
         'Auto-created default profile'
       )
       ON CONFLICT (symbol) DO NOTHING
-    `.catch(err => {
-      console.warn(`Failed to create default profile for ${symbol}:`, err.message);
-    });
+    `;
 
     console.log(`✅ Default profile created for ${symbol} (tier: ${tier})`);
-  } catch (error) {
-    console.error(`Failed to ensure profile for ${symbol}:`, error);
+  } catch (error: any) {
+    console.error(`❌ Failed to ensure profile for ${symbol}:`, error?.message || error);
+    // If table doesn't exist, try to initialize it once
+    if (error?.message?.includes('does not exist') || error?.message?.includes('relation')) {
+      console.log(`📝 Symbol_profiles table doesn't exist. Attempting to create it...`);
+      try {
+        await initializeSymbolProfiles();
+        console.log(`✅ Table created. Retrying profile creation for ${symbol}...`);
+        // Retry the profile creation (but only once to avoid infinite loop)
+        const tier = getSymbolTier(symbol);
+        const defaultMetrics = {
+          totalTrades: 0,
+          winRate: 0,
+          avgPnl: 0,
+          sharpeRatio: 0,
+          maxDrawdown: 0,
+        };
+        
+        await prisma.$executeRaw`
+          INSERT INTO symbol_profiles (
+            symbol, tier, custom_thresholds, performance_metrics,
+            market_characteristics, optimization_status, last_optimized_at, notes
+          ) VALUES (
+            ${symbol},
+            ${tier},
+            NULL,
+            ${JSON.stringify(defaultMetrics)}::jsonb,
+            ${JSON.stringify({})}::jsonb,
+            'initial',
+            NULL,
+            'Auto-created default profile'
+          )
+          ON CONFLICT (symbol) DO NOTHING
+        `;
+        console.log(`✅ Default profile created for ${symbol} after initializing table`);
+      } catch (retryError: any) {
+        console.error(`❌ Failed to create profile even after initializing table:`, retryError?.message || retryError);
+      }
+    }
+    // Don't throw - allow agent creation to continue even if profile creation fails
   }
 }
 

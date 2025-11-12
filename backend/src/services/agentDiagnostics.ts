@@ -246,9 +246,10 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       trendStrength: Number(((snap as any).trendStrength ?? 0).toFixed(2)),
     };
 
-    // Extract predictor info (from agent state, last signal, or DB profileJson)
+    // Extract predictor info (from agent state, last signal, DB profileJson, or global cache)
     let predictorInfo: AgentDiagnosticInfo['predictor'] = null;
     let pythonSignal = agent.pythonSignal || (agent.lastSignal as any)?.pythonSignal || null;
+    let predictionSource: 'live' | 'db' | 'cache' | 'none' = pythonSignal ? 'live' : 'none';
     
     // 🔴 FIX: Fallback to profileJson._diagnostics when agent has no live data
     if (!pythonSignal) {
@@ -272,6 +273,32 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           riskMultiplier: 1,
           cooldown: { active: false, reason: null, seconds: null },
         };
+        predictionSource = 'db';
+      }
+    }
+    
+    // 🆕 NEW: Fallback to global predictor cache if still no data
+    if (!pythonSignal) {
+      const { getCachedPrediction } = await import('../quantai/predictorCache.js');
+      const cached = getCachedPrediction(session.symbol);
+      if (cached) {
+        pythonSignal = {
+          decision: cached.decision,
+          confidence: cached.confidence,
+          probabilities: cached.probabilities,
+          probabilityLong: cached.probabilityLong,
+          probabilityShort: cached.probabilityShort,
+          probabilityNone: cached.probabilityNone,
+          primaryProbability: Math.max(
+            cached.probabilityLong,
+            cached.probabilityShort,
+            cached.probabilityNone
+          ),
+          entryWeight: cached.entryWeight,
+          riskMultiplier: cached.riskMultiplier,
+          cooldown: cached.cooldown,
+        };
+        predictionSource = 'cache';
       }
     }
     

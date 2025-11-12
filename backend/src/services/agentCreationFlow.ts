@@ -1000,10 +1000,20 @@ async function selectSymbol(
           meta: { reason: 'reserved' },
         });
       } else {
-        const usage = await getActiveAgentCountForSymbol(prefetched.symbol);
-        if (usage === 0) {
-          const reserved = tryReserveSmartSymbol(prefetched.symbol, reservationToken);
-          if (reserved) {
+        // Try to reserve FIRST to prevent race conditions
+        const reserved = tryReserveSmartSymbol(prefetched.symbol, reservationToken);
+        if (!reserved) {
+          decisionLog.push({
+            timestamp: Date.now(),
+            level: 'warn',
+            message: `Prefetched opportunity ${prefetched.symbol} reserved in parallel`,
+            context: 'selection',
+            meta: { reason: 'reservation_conflict' },
+          });
+        } else {
+          // Only check DB after successful reservation
+          const usage = await getActiveAgentCountForSymbol(prefetched.symbol);
+          if (usage === 0) {
             symbol = prefetched.symbol;
             summary.autoSelected = true;
             summary.source = 'prefetched';
@@ -1014,25 +1024,19 @@ async function selectSymbol(
               context: 'selection',
             });
           } else {
+            // Release reservation since symbol is already in use
+            releaseSmartReservation(reservationToken);
+            console.log(
+              `🚫 Prefetched opportunity ${prefetched.symbol} already has ${usage} active agent(s) – seeking alternative`
+            );
             decisionLog.push({
               timestamp: Date.now(),
               level: 'warn',
-              message: `Prefetched opportunity ${prefetched.symbol} reserved in parallel`,
+              message: `Prefetched opportunity ${prefetched.symbol} already used`,
               context: 'selection',
-              meta: { reason: 'reservation_conflict' },
+              meta: { activeAgents: usage },
             });
           }
-        } else {
-          console.log(
-            `🚫 Prefetched opportunity ${prefetched.symbol} already has ${usage} active agent(s) – seeking alternative`
-          );
-          decisionLog.push({
-            timestamp: Date.now(),
-            level: 'warn',
-            message: `Prefetched opportunity ${prefetched.symbol} already used`,
-            context: 'selection',
-            meta: { activeAgents: usage },
-          });
         }
       }
     }
@@ -1050,19 +1054,23 @@ async function selectSymbol(
             });
             continue;
           }
+          
+          // Try to reserve FIRST to prevent race conditions
+          const reserved = tryReserveSmartSymbol(candidate, reservationToken);
+          if (!reserved) {
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'info',
+              message: `Skipped ${candidate} due to simultaneous reservation conflict`,
+              context: 'selection',
+              meta: { reason: 'reservation_conflict' },
+            });
+            continue;
+          }
+          
+          // Only check DB after successful reservation
           const usage = await getActiveAgentCountForSymbol(candidate);
           if (usage === 0) {
-            const reserved = tryReserveSmartSymbol(candidate, reservationToken);
-            if (!reserved) {
-              decisionLog.push({
-                timestamp: Date.now(),
-                level: 'info',
-                message: `Skipped ${candidate} due to simultaneous reservation conflict`,
-                context: 'selection',
-                meta: { reason: 'reservation_conflict' },
-              });
-              continue;
-            }
             symbol = candidate;
             summary.autoSelected = true;
             summary.source = 'candidate';
@@ -1073,8 +1081,20 @@ async function selectSymbol(
               context: 'selection',
             });
             break;
+          } else {
+            // Release reservation since symbol is already in use
+            releaseSmartReservation(reservationToken);
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'info',
+              message: `Skipped ${candidate} because it has ${usage} active agent(s)`,
+              context: 'selection',
+              meta: { activeAgents: usage },
+            });
           }
         } catch (error) {
+          // Release reservation on error
+          releaseSmartReservation(reservationToken);
           console.warn(`⚠️ Failed to check active count for ${candidate}:`, error);
           decisionLog.push({
             timestamp: Date.now(),

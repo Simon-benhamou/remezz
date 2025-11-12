@@ -256,6 +256,7 @@ import { initializeABTesting } from "./services/abTesting.js";
 import { initializeOptimizerScheduling } from "./learning/optimizerJob.js";
 import { initializeReoptimizationScheduling } from "./learning/reoptimizationScheduler.js";
 import { startOutcomeUpdater } from "./learning/outcomeUpdater.js";
+import { warmupPredictorCache, startBackgroundRefresh } from "./quantai/predictorCache.js";
 
 Promise.all([
   initializeAdaptiveLearning(),
@@ -263,9 +264,16 @@ Promise.all([
   initializeABTesting(),
   initializeOptimizerScheduling(),
   initializeReoptimizationScheduling(),
+  warmupPredictorCache(), // Warmup predictor cache with active symbols
 ]).catch((error) => {
   serverLogger.warn('⚠️ Failed to initialize learning services:', error);
 });
+
+// Start background predictor cache refresh
+if (process.env.PREDICTOR_CACHE_DISABLED !== 'true') {
+  startBackgroundRefresh();
+  serverLogger.info('🔄 Predictor cache background refresh started');
+}
 
 // Start personality profile outcome updater worker
 if (process.env.OUTCOME_UPDATER_DISABLED !== 'true') {
