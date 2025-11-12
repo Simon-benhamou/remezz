@@ -1434,16 +1434,33 @@ async function activateAgent(params: {
       } as any);
       agentId = session.id;
       
-      // Force first tick immediately to populate diagnostics
-      console.log(`⚡ Triggering immediate first tick for ${session.id}`);
-      setImmediate(async () => {
+      // Force first tick in background and validate signal (fire-and-forget)
+      console.log(`⚡ Scheduling immediate first tick for ${session.id}`);
+      (async () => {
         try {
+          await new Promise(resolve => setTimeout(resolve, 500));
           await AgentHub.onTick(session.id);
           console.log(`✅ First tick completed for ${session.id}`);
+          
+          // Wait for predictor to update
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Validate signal clarity
+          const agent = AgentHub.get(session.id);
+          const signal = (agent as any)?.pythonSignal;
+          
+          if (signal?.decision === 'none' || 
+              !signal?.decision || 
+              (signal?.probabilities?.none ?? 0) > 0.7) {
+            console.log(`❌ Agent ${session.id} (${finalSymbol}) has unclear signal (decision: ${signal?.decision}, none: ${signal?.probabilities?.none}) - stopping agent`);
+            await AgentHub.closeNow(session.id, 'unclear_signal_after_first_tick');
+          } else {
+            console.log(`✅ Agent ${session.id} (${finalSymbol}) has clear signal: ${signal?.decision} (none: ${signal?.probabilities?.none})`);
+          }
         } catch (error) {
-          console.error(`⚠️ First tick failed for ${session.id}:`, error);
+          console.error(`⚠️ First tick or validation failed for ${session.id}:`, error);
         }
-      });
+      })().catch(err => console.error(`Background tick error for ${session.id}:`, err));
       
       // Schedule post-activation tasks with the final symbol
       schedulePostActivationTasks(session.id, finalSymbol, normalized);
@@ -1455,17 +1472,34 @@ async function activateAgent(params: {
     return { state: 'ready', agentId };
   }
 
-  // Force first tick for non-smart agents too
+  // Force first tick for non-smart agents too (fire-and-forget)
   if (agentId) {
-    console.log(`⚡ Triggering immediate first tick for ${session.id}`);
-    setImmediate(async () => {
+    console.log(`⚡ Scheduling immediate first tick for ${session.id}`);
+    (async () => {
       try {
+        await new Promise(resolve => setTimeout(resolve, 500));
         await AgentHub.onTick(session.id);
         console.log(`✅ First tick completed for ${session.id}`);
+        
+        // Wait for predictor to update
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Validate signal clarity
+        const agent = AgentHub.get(session.id);
+        const signal = (agent as any)?.pythonSignal;
+        
+        if (signal?.decision === 'none' || 
+            !signal?.decision || 
+            (signal?.probabilities?.none ?? 0) > 0.7) {
+          console.log(`❌ Agent ${session.id} (${session.symbol}) has unclear signal (decision: ${signal?.decision}, none: ${signal?.probabilities?.none}) - stopping agent`);
+          await AgentHub.closeNow(session.id, 'unclear_signal_after_first_tick');
+        } else {
+          console.log(`✅ Agent ${session.id} (${session.symbol}) has clear signal: ${signal?.decision} (none: ${signal?.probabilities?.none})`);
+        }
       } catch (error) {
-        console.error(`⚠️ First tick failed for ${session.id}:`, error);
+        console.error(`⚠️ First tick or validation failed for ${session.id}:`, error);
       }
-    });
+    })().catch(err => console.error(`Background tick error for ${session.id}:`, err));
   }
 
   schedulePostActivationTasks(session.id, session.symbol, normalized);
