@@ -15,6 +15,7 @@ import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 import { isInsufficientDataError, type InsufficientDataMeta } from '../data/errors.js';
 import { getPredictionSync, isPythonPredictorAvailable, type PythonPredictionResult } from '../quantai/pythonPredictor.js';
+import { getCachedPrediction, setCachedPrediction } from '../quantai/predictorCache.js';
 import type { TechnicalSnapshot } from './tech.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
@@ -77,6 +78,7 @@ export interface RankedOpportunity {
     confidence: number;
   };
   aiReasoning: string[];
+  predictor?: import('../quantai/pythonPredictor.js').PythonPredictionResult;  // XGBoost prediction from ranking time
 }
 
 export interface VolumeFilteredCrypto {
@@ -149,7 +151,7 @@ function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number>
 async function getPredictorBias(
   symbol: string,
   snap: TechnicalSnapshot
-): Promise<{ decision: 'long' | 'short' | 'none'; confidence: number } | null> {
+): Promise<import('../quantai/pythonPredictor.js').PythonPredictionResult | null> {
   if (!isPythonPredictorAvailable()) {
     return null;
   }
@@ -160,11 +162,16 @@ async function getPredictorBias(
   }
   
   try {
+    // 🎯 RANKING ALWAYS FETCHES FRESH: This is the SOURCE OF TRUTH that initializes the cache
+    console.log(`🔄 ${symbol}: Ranking fetching fresh predictor (will update cache)...`);
     const prediction = getPredictionSync(features);
-    return {
-      decision: prediction.decision,
-      confidence: prediction.confidence,
-    };
+    
+    // Cache for 5 minutes with longer TTL for stability
+    // Strategy/diagnostics will reuse THIS prediction from cache
+    setCachedPrediction(symbol, prediction, features, 5 * 60 * 1000);
+    console.log(`✅ ${symbol}: Cached predictor decision=${prediction.decision}, confidence=${(prediction.confidence * 100).toFixed(1)}%`);
+    
+    return prediction;
   } catch (error) {
     console.warn(`⚠️ Predictor failed for ${symbol}:`, error instanceof Error ? error.message : String(error));
     return null;
@@ -547,6 +554,7 @@ export async function rankCryptosWithAI(
     // 🎯 PREDICTOR FILTER: Remove cryptos with bias 'none' or low confidence
     console.log('🤖 Running XGBoost predictor on all candidates...');
     const predictorFiltered: typeof validSnapshots = [];
+    const predictorResults = new Map<string, import('../quantai/pythonPredictor.js').PythonPredictionResult>();  // Store predictions
     let predictorSkipped = 0;
     let predictorNone = 0;
     let predictorLowConfidence = 0;
@@ -577,8 +585,9 @@ export async function rankCryptosWithAI(
         continue;
       }
       
-      // Passed all filters - keep this crypto
+      // Passed all filters - keep this crypto AND store the prediction
       predictorFiltered.push(snap);
+      predictorResults.set(snap.symbol, prediction);  // Store for later
       console.log(`✅ ${snap.symbol}: decision=${decision}, confidence=${(confidence * 100).toFixed(1)}% - PASSED`);
     }
     
@@ -814,7 +823,8 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
           timeframe: '4h',
           confidence: Number(opp.confidence || 0)
         },
-        aiReasoning: reasoning
+        aiReasoning: reasoning,
+        predictor: predictorResults.get(opp.symbol)  // Include predictor result from ranking time
       };
     }).filter(r => r !== null) as RankedOpportunity[];
     

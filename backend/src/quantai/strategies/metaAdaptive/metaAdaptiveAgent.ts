@@ -2001,14 +2001,18 @@ class MetaAdaptiveStrategyAgent {
     // Updating the model means re-running `npm run train-model`, which
     // refreshes python/xgboost_direction.json and python/features.txt – the
     // agent picks up the new artefacts on the next process spawn.
-    // 🐞 FIX: ALWAYS query predictor if available (don't trust cached pythonSignalMeta)
-    // Old logic allowed skipping predictor if pythonSignalMeta existed, causing silent failures
-    const shouldQueryPython = params.predictorFeatures
+    // ✅ FIX PREDICTOR CONSISTENCY: Use existing pythonSignalMeta if available (from ranking/evaluate)
+    // This ensures the SAME prediction is used in ranking, strategy selection, and entry registration
+    // Only query predictor if no existing signal (fallback for legacy code paths)
+    const hasPythonSignal = pythonSignalMeta && pythonSignalMeta.confidence != null;
+    const shouldQueryPython = !hasPythonSignal
+      && params.predictorFeatures
       && process.env.DISABLE_PYTHON_PREDICTOR !== 'true'
       && isPythonPredictorAvailable();
 
     if (shouldQueryPython && params.predictorFeatures) {
       try {
+        console.log(`🔄 Querying predictor for ${params.symbol} (no existing signal)`);
         const raw = await getPythonPrediction(params.predictorFeatures);
         const enriched = buildHybridSignal(raw);
         predictorProbabilities = enriched.probabilities;
@@ -2022,6 +2026,8 @@ class MetaAdaptiveStrategyAgent {
           console.warn('python predictor failure during trade registration', error);
         }
       }
+    } else if (hasPythonSignal) {
+      console.log(`✅ Using existing predictor signal for ${params.symbol} from ranking/evaluate`);
     }
 
     if (!Number.isFinite(predictorConfidence)) {
