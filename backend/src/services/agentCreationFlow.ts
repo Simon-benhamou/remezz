@@ -464,6 +464,11 @@ export async function activatePreparedAgent(creationId: string) {
 
   await finalizeSmartAgentMetadata(ctx.session.id, ctx.normalized);
 
+  // ✅ Ensure symbol profile exists BEFORE activation
+  const { ensureSymbolProfile } = await import('./symbolSpecificOptimization.js');
+  await ensureSymbolProfile(ctx.session.symbol);
+  console.log(`✅ Symbol profile ensured for ${ctx.session.symbol}`);
+
   const activation = await activateAgent({
     normalized: ctx.normalized,
     session: ctx.session,
@@ -472,6 +477,7 @@ export async function activatePreparedAgent(creationId: string) {
   });
 
   ctx.activation = activation;
+  
   const warmup = gatherWarmupDiagnostics(ctx.session.symbol);
 
   releaseSmartReservation(ctx.reservationToken);
@@ -494,6 +500,8 @@ export async function startAgentCreation(
   userId?: string | null,
   options?: { onProgress?: (snapshot: AgentCreationStepSnapshot) => void }
 ): Promise<AgentCreationResult> {
+  console.log(`🚀 DEBUG: startAgentCreation called for userId=${userId}, isSmartAgent=${payload.isSmartAgent}`);
+  
   const steps: AgentCreationStepSnapshot[] = [
     { key: 'select_symbol', status: 'pending' },
     { key: 'create_session', status: 'pending' },
@@ -604,6 +612,12 @@ export async function startAgentCreation(
   report('activate_agent', { status: 'running', startedAt: activateStart });
   try {
     await finalizeSmartAgentMetadata(sessionRecord!.id, normalized!);
+    
+    // ✅ Ensure symbol profile exists BEFORE activation
+    const { ensureSymbolProfile } = await import('./symbolSpecificOptimization.js');
+    await ensureSymbolProfile(sessionRecord!.symbol);
+    console.log(`✅ Symbol profile ensured for ${sessionRecord!.symbol}`);
+    
     activation = await activateAgent({
       normalized: normalized!,
       session: sessionRecord!,
@@ -625,6 +639,44 @@ export async function startAgentCreation(
       error: formatError(error),
     });
     throw error;
+  }
+
+  console.log(`🎯 DEBUG: Reached code after activate_agent try-catch block`);
+
+  // Warmup predictor cache immediately after activation
+  // This ensures diagnostics API has data even before first tick
+  console.log(`🔍 DEBUG: After activate_agent step - selection=${selection?.symbol}, state=${activation.state}, normalized=${!!normalized}`);
+  
+  if (selection?.symbol) {
+    console.log(`🔥 DEBUG: Condition passed - triggering warmup for ${selection.symbol}`);
+    
+    // Fire and forget - don't await to avoid blocking agent creation
+    setImmediate(() => {
+      console.log(`🔥 DEBUG: Inside setImmediate - about to warmup ${selection.symbol}`);
+      (async () => {
+      try {
+        const { warmupSymbol } = await import('../quantai/predictorCache.js');
+        const { buildTechSnapshot } = await import('../ai/tech.js');
+        const { buildPredictorFeatures } = await import('../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
+        
+        console.log(`🔥 Fetching technical snapshot for ${selection.symbol}...`);
+        
+        // Get fresh technical snapshot for the symbol
+        const snapshot = await buildTechSnapshot(selection.symbol, normalized!.userId);
+        const features = buildPredictorFeatures(snapshot);
+        
+        if (features) {
+          await warmupSymbol(selection.symbol, features);
+          console.log(`✅ Predictor cache warmup completed for ${selection.symbol}`);
+        } else {
+          console.warn(`⚠️  Predictor cache warmup: No features generated for ${selection.symbol}`);
+        }
+      } catch (err) {
+        console.warn(`⚠️  Predictor cache warmup failed for ${selection?.symbol}:`, (err as Error).message);
+        // Don't block agent creation if warmup fails
+      }
+      })();
+    });
   }
 
   const warmup = gatherWarmupDiagnostics(sessionRecord.symbol);

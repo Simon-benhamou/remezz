@@ -455,7 +455,7 @@ function computeVolumeRatio(snap: TechnicalSnapshot): number {
   return clamp(current / ma, 0, 5);
 }
 
-function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number> | null {
+export function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number> | null {
   const ema20 = safeNumber((snap as any)?.ema20, Number.NaN);
   const ema50 = safeNumber((snap as any)?.ema50, Number.NaN);
   const ema100 = safeNumber((snap as any)?.ema100, Number.NaN);
