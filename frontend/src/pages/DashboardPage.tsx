@@ -5,7 +5,7 @@ import { api } from '../api';
 import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
-import SmartOpportunityScanner from '../components/SmartOpportunityScanner';
+// import SmartOpportunityScanner from '../components/SmartOpportunityScanner'; // TODO: Create component
 import { useMode } from '../contexts/ModeContext';
 import { 
   ArrowUpOutlined, 
@@ -201,22 +201,23 @@ export default function DashboardPage(){
       </Card>
 
       {/* Smart Opportunity Scanner */}
-      {showSmartScanner && (
+      {/* TODO: Implement SmartOpportunityScanner component */}
+      {/* {showSmartScanner && (
         <div style={{ marginBottom: 24 }}>
           <SmartOpportunityScanner 
-            onSymbolSelect={(symbol) => {
+            onSymbolSelect={(symbol: string) => {
               console.log('Selected symbol:', symbol);
               // Navigate to create new session with selected symbol
               navigate(`/sessions?symbol=${symbol}`);
             }}
-            onAutoTrade={(symbol) => {
+            onAutoTrade={(symbol: string) => {
               console.log('Auto trade selected for:', symbol);
               // Implement auto-trade logic - create session and start immediately
               navigate(`/sessions?symbol=${symbol}&autoStart=true`);
             }}
           />
         </div>
-      )}
+      )} */}
 
       {/* Main KPIs */}
       <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>

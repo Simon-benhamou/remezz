@@ -5,28 +5,28 @@ import { ReloadOutlined, ExpandOutlined, CompressOutlined, SyncOutlined, InfoCir
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
-import AnalysisTabs from '../components/AnalysisTabs';
+// import AnalysisTabs from '../components/AnalysisTabs'; // TODO: Create component
 import AgentStatePanel from '../components/AgentStatePanel';
 // Removed old PerfPanel/IndicatorsPanel row in favor of banners
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
-import TriggersPanel from '../components/TriggersPanel';
+// import TriggersPanel from '../components/TriggersPanel'; // TODO: Create component
 import OrdersTable from '../components/OrdersTable';
 import TradesTable from '../components/TradesTable';
-import HelpPanel from '../components/HelpPanel';
-import DailyReviewPanel from '../components/DailyReviewPanel';
-import AlertPanel from '../components/AlertPanel';
+// import HelpPanel from '../components/HelpPanel'; // TODO: Create component
+// import DailyReviewPanel from '../components/DailyReviewPanel'; // TODO: Create component
+// import AlertPanel from '../components/AlertPanel'; // TODO: Create component
 import { api, getApiKey } from '../api';
 import { openWS, wsSend } from '../ws';
-import MonitorHealthBanner from '../components/MonitorHealthBanner';
-import MonitorMiniPanels from '../components/MonitorMiniPanels';
-import MarketTriggersCard from '../components/MarketTriggersCard';
-import KeyMetricsCard from '../components/KeyMetricsCard';
-import RangeProjectionCard from '../components/RangeProjectionCard';
-import SRVisualizationCard from '../components/SRVisualizationCard';
-import AIInsightsCard from '../components/AIInsightsCard';
-import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel';
-import PerformanceBanner from '../components/PerformanceBanner';
-import PositionBanner from '../components/PositionBanner';
+// import MonitorHealthBanner from '../components/MonitorHealthBanner'; // TODO: Create component
+// import MonitorMiniPanels from '../components/MonitorMiniPanels'; // TODO: Create component
+// import MarketTriggersCard from '../components/MarketTriggersCard'; // TODO: Create component
+// import KeyMetricsCard from '../components/KeyMetricsCard'; // TODO: Create component
+// import RangeProjectionCard from '../components/RangeProjectionCard'; // TODO: Create component
+// import SRVisualizationCard from '../components/SRVisualizationCard'; // TODO: Create component
+// import AIInsightsCard from '../components/AIInsightsCard'; // TODO: Create component
+// import SmartAgentStatusPanel from '../components/SmartAgentStatusPanel'; // TODO: Create component
+// import PerformanceBanner from '../components/PerformanceBanner'; // TODO: Create component
+// import PositionBanner from '../components/PositionBanner'; // TODO: Create component
 
 const { Title, Text } = Typography;
 // Memoized heavy components to avoid needless re-renders
@@ -64,7 +64,7 @@ export default function MonitorPage(){
   
   const [wsConnected, setWsConnected] = React.useState(false);
   const [expandedView, setExpandedView] = React.useState(false);
-  const wsRef = React.useRef<WebSocket|null>(null);
+  const wsRef = React.useRef<any>(null); // ManagedWS type from openWS
   const [savingAgg, setSavingAgg] = React.useState(false);
   const [activeRightTab, setActiveRightTab] = React.useState<string>('agent');
   const rightTabsRef = React.useRef<HTMLDivElement|null>(null);
@@ -559,11 +559,12 @@ export default function MonitorPage(){
       </Card>
 
       {/* Performance Banner */}
-      {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (
+      {/* TODO: Re-enable when PerformanceBanner component is created */}
+      {/* {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (
         <div style={{ marginTop: -8, marginBottom: 16 }}>
           <PerformanceBanner kpi={kpi} session={status?.session} />
         </div>
-      )}
+      )} */}
 
       {/* Compact Scoreboard */}
       <Row style={{ marginTop: -16, marginBottom: 16 }}>
@@ -582,17 +583,19 @@ export default function MonitorPage(){
       {/* Health Banner */}
       <Row gutter={[24, 24]}>
         <Col xs={24}>
-          {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (analytics?.health || health) ? (
+          {/* TODO: Re-enable when MonitorHealthBanner component is created */}
+          {/* {shouldShowContent(LoadingPhase.SECONDARY_DATA) && (analytics?.health || health) ? (
             <MonitorHealthBanner health={analytics?.health || health} updatedAt={analytics?.updatedAt || health?.ts} />
-          ) : (
+          ) : ( */}
             <Skeleton.Button active style={{ width: '100%', height: 60 }} />
-          )}
+          {/* )} */}
         </Col>
         
         <Col xs={24}>
-          {shouldShowContent(LoadingPhase.SECONDARY_DATA) && analytics?.panels ? (
+          {/* TODO: Re-enable when MonitorMiniPanels component is created */}
+          {/* {shouldShowContent(LoadingPhase.SECONDARY_DATA) && analytics?.panels ? (
             <MonitorMiniPanels panels={analytics?.panels} />
-          ) : (
+          ) : ( */}
             <Row gutter={16}>
               {[1,2,3,4].map(i => (
                 <Col xs={6} key={i}>
@@ -600,7 +603,7 @@ export default function MonitorPage(){
                 </Col>
               ))}
             </Row>
-          )}
+          {/* )} */}
         </Col>
       </Row>
 
@@ -627,7 +630,6 @@ export default function MonitorPage(){
                 price={status?.price}
                 support={status?.sr?.support}
                 resistance={status?.sr?.resistance}
-                strategy={strategy}
                 agentPlan={agent?.plan}
                 agentPos={agent?.pos}
                 pivots={status?.pivots}
@@ -640,9 +642,10 @@ export default function MonitorPage(){
             )}
             
             {/* Position banner — only if position exists OR there is historical activity */}
-            {shouldShowContent(LoadingPhase.CORE_DATA) && ((agent?.pos) || (orders?.length || 0) > 0 || (trades?.length || 0) > 0) && (
+            {/* TODO: Re-enable when PositionBanner component is created */}
+            {/* {shouldShowContent(LoadingPhase.CORE_DATA) && ((agent?.pos) || (orders?.length || 0) > 0 || (trades?.length || 0) > 0) && (
               <PositionBanner agent={agent} price={status?.price} orders={orders} trades={trades} />
-            )}
+            )} */}
             
             {/* Orders/Trades Full Width Tabs */}
             <Card size="small" style={{ marginTop: 8 }}>
@@ -689,18 +692,18 @@ export default function MonitorPage(){
                     label: 'Agent',
                     children: (
                       <Space direction="vertical" style={{ width: '100%', padding: 12 }} size="middle">
-                        {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
+                        {/* TODO: Re-enable when SmartAgentStatusPanel component is created */}
+                        {/* {shouldShowContent(LoadingPhase.CORE_DATA) && status?.session?.id ? (
                           <SmartAgentStatusPanel sessionId={status.session.id} />
-                        ) : (
+                        ) : ( */}
                           <Card title="Smart Agent"><Skeleton active paragraph={{ rows: 3 }} /></Card>
-                        )}
+                        {/* )} */}
                         {shouldShowContent(LoadingPhase.CORE_DATA) && agent ? (
                           <AgentStatePanel 
                             agent={agent} 
                             symbol={status?.symbol} 
                             lastPrice={status?.price} 
                             sessionId={status?.session?.id} 
-                            onPlan={() => {}} 
                           />
                         ) : (
                           <Card title="Agent State"><Skeleton active paragraph={{ rows: 4 }} /></Card>
@@ -713,7 +716,8 @@ export default function MonitorPage(){
                     label: 'Market',
                     children: (
                       <Space direction="vertical" style={{ width: '100%', padding: 12 }} size="middle">
-                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                        {/* TODO: Re-enable when MarketTriggersCard component is created */}
+                        {/* {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
                           <MarketTriggersCard 
                             triggers={triggers.map(t => ({
                               id: t.id || String(Math.random()),
@@ -727,10 +731,11 @@ export default function MonitorPage(){
                               threshold: t.threshold
                             }))}
                           />
-                        ) : (
+                        ) : ( */}
                           <Card title="Market Triggers"><Skeleton active paragraph={{ rows: 3 }} /></Card>
-                        )}
-                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                        {/* )} */}
+                        {/* TODO: Re-enable when KeyMetricsCard component is created */}
+                        {/* {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
                           <KeyMetricsCard 
                             indicators={{
                               atrPct: Number(analysis?.technical?.atrPct || status?.indicators?.atrPct || 0),
@@ -743,9 +748,9 @@ export default function MonitorPage(){
                               price: Number(analysis?.technical?.last || status?.price || 0)
                             }}
                           />
-                        ) : (
+                        ) : ( */}
                           <Card title="Key Metrics"><Skeleton active paragraph={{ rows: 3 }} /></Card>
-                        )}
+                        {/* )} */}
                       </Space>
                     )
                   },
@@ -754,15 +759,16 @@ export default function MonitorPage(){
                     label: 'Projections',
                     children: (
                       <div style={{ padding: 12 }}>
-                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                        {/* TODO: Re-enable when RangeProjectionCard component is created */}
+                        {/* {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
                           <RangeProjectionCard
                             projection={analysis?.projection}
                             symbol={status?.symbol}
                             price={Number(status?.price ?? analysis?.technical?.last ?? 0)}
                           />
-                        ) : (
+                        ) : ( */}
                           <Card title="24h Range Forecast"><Skeleton active paragraph={{ rows: 4 }} /></Card>
-                        )}
+                        {/* )} */}
                       </div>
                     )
                   },
@@ -771,7 +777,8 @@ export default function MonitorPage(){
                     label: 'S/R Levels',
                     children: (
                       <div style={{ padding: 12 }}>
-                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                        {/* TODO: Re-enable when SRVisualizationCard component is created */}
+                        {/* {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
                           <SRVisualizationCard 
                             currentPrice={Number(status?.price || 0)}
                             support={status?.sr?.support ? { price: status.sr.support, strength: 75, touches: 3 } : undefined}
@@ -779,9 +786,9 @@ export default function MonitorPage(){
                             pivots={status?.pivots}
                             symbol={status?.symbol}
                           />
-                        ) : (
+                        ) : ( */}
                           <Card title="Support/Resistance"><Skeleton active paragraph={{ rows: 3 }} /></Card>
-                        )}
+                        {/* )} */}
                       </div>
                     )
                   }
@@ -798,7 +805,8 @@ export default function MonitorPage(){
           {/* AI Insights Section */}
           <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
             <Col xs={24} lg={16}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
+              {/* TODO: Re-enable when AIInsightsCard component is created */}
+              {/* {loadingState.phase === LoadingPhase.COMPLETE ? (
                 <AIInsightsCard 
                   sentiment={analysis?.sentiment ? {
                     score: analysis.sentiment.score || 0,
@@ -809,11 +817,11 @@ export default function MonitorPage(){
                   news={analysis?.news || []}
                   dailyReview={analysis?.dailyReview}
                 />
-              ) : (
+              ) : ( */}
                 <Card title="AI Insights">
                   <Skeleton active paragraph={{ rows: 6 }} />
                 </Card>
-              )}
+              {/* )} */}
             </Col>
             
             <Col xs={24} lg={8}>
@@ -827,7 +835,8 @@ export default function MonitorPage(){
             </Col>
           </Row>
           
-          <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+          {/* TODO: Implement AnalysisTabs component */}
+          {/* <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
             <Col xs={24}>
               {loadingState.phase === LoadingPhase.COMPLETE ? (
                 <AnalysisTabs analysis={analysis} />
@@ -837,7 +846,7 @@ export default function MonitorPage(){
                 </Card>
               )}
             </Col>
-          </Row>
+          </Row> */}
           
           <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
             <Col xs={24} lg={16}>
@@ -851,41 +860,48 @@ export default function MonitorPage(){
             </Col>
             
             <Col xs={24} lg={8}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
+              {/* TODO: Re-enable when AlertPanel component is created */}
+              {/* {loadingState.phase === LoadingPhase.COMPLETE ? (
                 <AlertPanel sessionId={status?.session?.id} />
-              ) : (
+              ) : ( */}
                 <Card title="Alerts">
                   <Skeleton active paragraph={{ rows: 6 }} />
                 </Card>
-              )}
+              {/* )} */}
             </Col>
           </Row>
           
           <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
             <Col xs={24}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
+              {/* TODO: Re-enable when TriggersPanel component is created */}
+              {/* {loadingState.phase === LoadingPhase.COMPLETE ? (
                 <TriggersPanel rows={triggers} />
-              ) : (
+              ) : ( */}
                 <Card title="Trading Triggers">
                   <Skeleton active paragraph={{ rows: 4 }} />
                 </Card>
-              )}
+              {/* )} */}
             </Col>
           </Row>
           
           <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
             <Col xs={24} lg={12}>
-              {loadingState.phase === LoadingPhase.COMPLETE ? (
+              {/* TODO: Re-enable when DailyReviewPanel component is created */}
+              {/* {loadingState.phase === LoadingPhase.COMPLETE ? (
                 <DailyReviewPanel sessionId={status?.session?.id} />
-              ) : (
+              ) : ( */}
                 <Card title="Daily Review">
                   <Skeleton active paragraph={{ rows: 6 }} />
                 </Card>
-              )}
+              {/* )} */}
             </Col>
             
             <Col xs={24} lg={12}>
-              <HelpPanel />
+              {/* TODO: Re-enable when HelpPanel component is created */}
+              {/* <HelpPanel /> */}
+              <Card title="Help">
+                <Skeleton active paragraph={{ rows: 6 }} />
+              </Card>
             </Col>
           </Row>
         </>
