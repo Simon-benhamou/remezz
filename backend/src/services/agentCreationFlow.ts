@@ -814,7 +814,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   }
   
   const selectionPolicy = {
-    requireSignalAtStart: rawPolicy.requireSignalAtStart !== false, // ✅ RE-ENABLED with adaptive thresholds
+    requireSignalAtStart: false, // ❌ DISABLED - Predictor timing unsuitable for selection (signals can appear later in day)
     minStartEdge: Math.min(Math.max(Number(rawPolicy.minStartEdge ?? baseEdge), 0), 1),
     minStartConfidence: Math.min(Math.max(Number(rawPolicy.minStartConfidence ?? baseConfidence), 0), 1),
     priorWeight: Math.min(Math.max(Number(rawPolicy.priorWeight ?? basePriorWeight), 0), 1),
@@ -1411,44 +1411,11 @@ async function selectSymbol(
   summary.symbol = symbol;
 
   if (config.symbol) {
-    // If manual symbol specified and selection requires signal at start, validate now
-    if (config.selectionPolicy.requireSignalAtStart) {
-      const evalRes = await (async () => {
-        try {
-          const snap = await buildTechSnapshot(symbol, config.userId);
-          const features = buildPredictorFeatures(snap);
-          if (!features) return { ok: false } as const;
-          const pred = getPredictionSyncSafe(features, { allowFallback: true });
-          const pLong = pred.probabilities.long;
-          const pShort = pred.probabilities.short;
-          const pNone = pred.probabilities.none;
-          const primary = Math.max(pLong, pShort);
-          const top: 'long' | 'short' | 'none' = pNone >= primary && pNone >= Math.max(pLong, pShort) ? 'none' : (pLong >= pShort ? 'long' : 'short');
-          const confidence = pred.confidence;
-          const ok = top !== 'none' && primary >= config.selectionPolicy.minStartEdge && confidence >= config.selectionPolicy.minStartConfidence;
-          return { ok } as const;
-        } catch {
-          return { ok: false } as const;
-        }
-      })();
-      if (!evalRes.ok) {
-        decisionLog.push({
-          timestamp: Date.now(),
-          level: 'error',
-          message: `Manual symbol ${symbol} failed start signal thresholds`,
-          context: 'selection',
-        });
-        throw new PhaseError('start.signal_not_ready', 'manual_symbol_signal_threshold_not_met', {
-          symbol,
-          minStartEdge: config.selectionPolicy.minStartEdge,
-          minStartConfidence: config.selectionPolicy.minStartConfidence,
-        });
-      }
-    }
+    // Manual symbol: SKIP predictor gate validation (user choice overrides AI)
     decisionLog.push({
       timestamp: Date.now(),
       level: 'info',
-      message: `Using manually specified symbol ${symbol}`,
+      message: `Using manually specified symbol ${symbol} (predictor gate skipped for manual selection)`,
       context: 'selection',
     });
   }
