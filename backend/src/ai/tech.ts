@@ -9,21 +9,46 @@ import { computeMultiTimeframeDiagnostics, type Diagnostics as MultiTimeframeDia
 export type TechnicalSnapshot = {
   symbol: string;
   last: number;
+  ema9?: number;
+  ema12?: number;
   ema20: number;
+  ema26?: number;
   ema50: number;
   ema100: number;
   ema200: number;
+  ema20Slope: number;
+  ema50Slope?: number;
+  emaTrendSpread?: number;
+  emaRatio9_20?: number;
+  emaRatio20_200?: number;
+  emaRatio50_200?: number;
   rsi14: number;
+  rsi7?: number;
+  rsi21?: number;
   atr14: number;
   atr14_1h?: number;
   atr14_4h?: number;
   atrPct: number;
   adx14: number;
+  adxPos14?: number;
+  adxNeg14?: number;
   diPlus14?: number;
   diMinus14?: number;
-  ema20Slope: number;
-  emaTrendSpread?: number;
+  stochK?: number;
+  stochD?: number;
+  macd?: number;
+  macdSignal?: number;
+  macdDiff?: number;
   rsiSlope?: number;
+  momentum3?: number;
+  momentum5?: number;
+  momentum10?: number;
+  momentum20?: number;
+  atr7?: number;
+  bbWidth?: number;
+  bbPosition?: number;
+  volatilityRegime?: number;
+  volumeRatio?: number;
   // Volume/flow
   support: number;          // primary support (closest/best)
   resistance: number;       // primary resistance
@@ -48,7 +73,20 @@ export type TechnicalSnapshot = {
   volume24hChangePct?: number;
   // Chaikin Money Flow 20 (15m)
   cmf20?: number;
-  momentum3?: number;
+  obvSlope?: number;
+  volPriceConfirmation?: number;
+  spreadProxy?: number;
+  distEma20?: number;
+  distEma50?: number;
+  distEma200?: number;
+  atrPct1h?: number;
+  atrPct4h?: number;
+  rsi14_1h?: number;
+  rsi14_4h?: number;
+  microImbalance?: number;
+  mtfAgreement?: number;
+  volAdjustedMomentum?: number;
+  rsiEmaDiv?: number;
   multiTimeframe?: MultiTimeframeDiagnostics;
   microstructure?: {
     orderFlowImbalance: number;
@@ -100,6 +138,47 @@ function pct(a: number, b: number) {
 }
 function near(a: number, b: number, pPct: number) {
   return Math.abs(a - b) <= Math.abs(b) * (pPct / 100);
+}
+
+function mean(values: number[]): number {
+  if (!values.length) return 0;
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return total / values.length;
+}
+
+function std(values: number[]): number {
+  if (values.length === 0) return 0;
+  const avg = mean(values);
+  const variance = values.reduce((sum, value) => sum + Math.pow(value - avg, 2), 0) / values.length;
+  return Math.sqrt(Math.max(variance, 0));
+}
+
+function computeStochasticSeries(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period = 14,
+  smooth = 3,
+): { k: number | null; d: number | null } {
+  if (highs.length < period || lows.length < period || closes.length < period) {
+    return { k: null, d: null };
+  }
+  const kValues: number[] = [];
+  for (let i = period - 1; i < closes.length; i += 1) {
+    const windowHigh = Math.max(...highs.slice(i - period + 1, i + 1));
+    const windowLow = Math.min(...lows.slice(i - period + 1, i + 1));
+    const close = closes[i];
+    const denom = windowHigh - windowLow;
+    const k = denom === 0 ? 50 : ((close - windowLow) / denom) * 100;
+    kValues.push(k);
+  }
+  if (!kValues.length) {
+    return { k: null, d: null };
+  }
+  const k = kValues.at(-1)!;
+  const dSlice = kValues.slice(-smooth);
+  const d = dSlice.length ? mean(dSlice) : k;
+  return { k, d };
 }
 
 export function computeSwingTolerancePct(params: {
@@ -545,44 +624,90 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
   }
 
   // Indicators
+  const ema9Arr = ema(closes15, 9);
+  const ema12Arr = ema(closes15, 12);
   const ema20Arr = ema(closes15, 20);
+  const ema26Arr = ema(closes15, 26);
   const ema50Arr = ema(closes15, 50);
   const ema100Arr = ema(closes15, 100);
   const ema200Arr = ema(closes15, 200);
+  const ema9v = ema9Arr.length ? ema9Arr.at(-1)! : lastPrice;
+  const ema12v = ema12Arr.length ? ema12Arr.at(-1)! : lastPrice;
   const ema20v = last(ema20Arr);
+  const ema26v = ema26Arr.length ? ema26Arr.at(-1)! : ema20v;
   const ema50v = last(ema50Arr);
   const ema100v = ema100Arr.length ? ema100Arr.at(-1)! : ema20v;
   const ema200v = ema200Arr.length ? ema200Arr.at(-1)! : ema50v;
   const ema20Slope = ema20Arr.length >= 2 ? ema20Arr.at(-1)! - ema20Arr.at(-2)! : 0;
+  const ema50Slope = ema50Arr.length >= 2 ? ema50Arr.at(-1)! - ema50Arr.at(-2)! : 0;
   const emaTrendSpread = Number.isFinite(ema20v) && Number.isFinite(ema50v) && Math.abs(ema50v) > 1e-9
     ? (ema20v - ema50v) / ema50v
     : 0;
+  const emaRatio9_20 = ema20v !== 0 ? ema9v / ema20v : 0;
+  const emaRatio20_200 = ema200v !== 0 ? ema20v / ema200v : 0;
+  const emaRatio50_200 = ema200v !== 0 ? ema50v / ema200v : 0;
   const rsi14Arr = rsi(closes15, 14);
   const rsi14v = rsi14Arr[rsi14Arr.length - 1] ?? 50;
   const rsiPrev = rsi14Arr.length >= 2 ? rsi14Arr[rsi14Arr.length - 2] ?? rsi14v : rsi14v;
   const rsiSlope = rsi14v - rsiPrev;
+  const rsi7Arr = rsi(closes15, 7);
+  const rsi21Arr = rsi(closes15, 21);
+  const rsi7v = rsi7Arr.length ? rsi7Arr.at(-1)! : rsi14v;
+  const rsi21v = rsi21Arr.length ? rsi21Arr.at(-1)! : rsi14v;
   const atr14Arr = atr(o15, 14);
   const atr14v = atr14Arr[atr14Arr.length - 1] ?? 0;
+  const atr7Arr = atr(o15, 7);
+  const atr7v = atr7Arr.length ? atr7Arr.at(-1)! : atr14v;
   const atrPct = (atr14v / lastPrice) * 100;
   const adx14Arr = adx(o15, 14);
   const adx14v = adx14Arr[adx14Arr.length - 1] ?? 0;
   const { plusDi: diPlusArr, minusDi: diMinusArr } = dmi(o15, 14);
   const { diPlus: diPlusVal, diMinus: diMinusVal } = resolveDirectionalIndicators(diPlusArr, diMinusArr);
+  const adxPos14 = diPlusArr.length ? diPlusArr.at(-1)! : diPlusVal ?? 0;
+  const adxNeg14 = diMinusArr.length ? diMinusArr.at(-1)! : diMinusVal ?? 0;
   // CMF20 (15m)
   const cmf20v = chaikinMoneyFlow(highs15, lows15, closes15, volumes15, 20);
   // Volume baseline: use EMA20 of 15m volumes for responsiveness
   const volEma20 = ema(volumes15, 20);
   const latestVol = volumes15.length ? volumes15[volumes15.length - 1] : 0;
   const volMA = volEma20.length ? volEma20[volEma20.length - 1] : 0;
+  const volumeRatio = volMA > 0 ? latestVol / volMA : 0;
   const volumeWindow = volumes15.slice(-40);
   const volumeMean40 = volumeWindow.reduce((sum, value) => sum + value, 0) / Math.max(1, volumeWindow.length);
   const volumeStd40 = Math.sqrt(
     volumeWindow.reduce((sum, value) => sum + Math.pow(value - volumeMean40, 2), 0) / Math.max(1, volumeWindow.length),
   );
   const volumeZScore = volumeStd40 > 1e-12 ? (latestVol - volumeMean40) / volumeStd40 : 0;
-  const momentum3 = closes15.length >= 4 && closes15[closes15.length - 4] !== 0
-    ? (lastPrice - closes15[closes15.length - 4]) / closes15[closes15.length - 4]
-    : 0;
+  function momentumOver(period: number): number {
+    if (closes15.length <= period) return 0;
+    const reference = closes15[closes15.length - period - 1];
+    if (!reference) return 0;
+    return (lastPrice - reference) / reference;
+  }
+
+  const momentum3 = momentumOver(3);
+  const momentum5 = momentumOver(5);
+  const momentum10 = momentumOver(10);
+  const momentum20 = momentumOver(20);
+
+  const bbPeriod = 20;
+  const bbWindow = closes15.slice(-bbPeriod);
+  const bbMean = bbWindow.length ? mean(bbWindow) : lastPrice;
+  const bbStd = bbWindow.length ? std(bbWindow) : 0;
+  const bbUpper = bbMean + 2 * bbStd;
+  const bbLower = bbMean - 2 * bbStd;
+  const bbWidth = bbMean !== 0 ? (bbUpper - bbLower) / bbMean : 0;
+  const bbPosition = bbUpper !== bbLower ? (lastPrice - bbLower) / (bbUpper - bbLower) : 0.5;
+
+  const macdSeries = ema12Arr.map((value, idx) => value - (ema26Arr[idx] ?? value));
+  const macdValue = macdSeries.length ? macdSeries.at(-1)! : 0;
+  const macdSignalSeries = macdSeries.length ? ema(macdSeries, 9) : [];
+  const macdSignalValue = macdSignalSeries.length ? macdSignalSeries.at(-1)! : 0;
+  const macdDiffValue = macdValue - macdSignalValue;
+
+  const stochastic = computeStochasticSeries(highs15, lows15, closes15, 14, 3);
+  const stochK = stochastic.k ?? 50;
+  const stochD = stochastic.d ?? stochK;
 
   // Enhanced volume logging for clarity when the last 15m bar volume is very low vs MA
   try {
@@ -633,6 +758,52 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
   }
   const realizedVol = realizedVolatility(logReturns);
 
+  const atrPctRatios: number[] = [];
+  const atr14Offset = closes15.length - atr14Arr.length;
+  for (let i = 0; i < atr14Arr.length; i += 1) {
+    const closeIdx = Math.min(closes15.length - 1, Math.max(0, atr14Offset + i));
+    const close = closes15[closeIdx] || lastPrice;
+    atrPctRatios.push(close ? atr14Arr[i] / close : 0);
+  }
+  const volatilityRegime = atrPctRatios.length ? mean(atrPctRatios.slice(-20)) * 100 : atrPct;
+
+  const obvSeries: number[] = [];
+  let obv = 0;
+  for (let i = 1; i < closes15.length; i += 1) {
+    const current = closes15[i];
+    const previous = closes15[i - 1];
+    const vol = volumes15[i] ?? 0;
+    if (current > previous) obv += vol;
+    else if (current < previous) obv -= vol;
+    obvSeries.push(obv);
+  }
+  const obvSlope = obvSeries.length ? obvSeries.at(-1)! - (obvSeries.at(-2) ?? 0) : 0;
+
+  const momentum3Series: number[] = [];
+  for (let i = 3; i < closes15.length; i += 1) {
+    const reference = closes15[i - 3];
+    const value = reference ? (closes15[i] - reference) / reference : 0;
+    momentum3Series.push(value);
+  }
+  const microImbalance = momentum3Series.length ? mean(momentum3Series.slice(-5)) : momentum3;
+
+  const atrPctRatio = atrPct / 100;
+  const volAdjustedMomentum = atrPctRatio !== 0 ? momentum10 / Math.max(Math.abs(atrPctRatio), 1e-6) : 0;
+  const rsiEmaDiv = (rsi14v - 50) * Math.sign(ema20Slope || 0);
+  const volPriceConfirmation = Math.sign(momentum3) * volumeRatio;
+  const spreadProxy = (() => {
+    const lastBar = o15.at(-1);
+    if (!lastBar || !lastPrice) return 0;
+    const high = Number(lastBar[2] || 0);
+    const low = Number(lastBar[3] || 0);
+    if (lastPrice === 0) return 0;
+    return (high - low) / lastPrice;
+  })();
+  const distEma20 = lastPrice ? (lastPrice - ema20v) / lastPrice : 0;
+  const distEma50 = lastPrice ? (lastPrice - ema50v) / lastPrice : 0;
+  const distEma200 = lastPrice ? (lastPrice - ema200v) / lastPrice : 0;
+  const mtfAgreement = Math.sign(ema20v - ema50v) + Math.sign(ema50v - ema100v) + Math.sign(ema100v - ema200v);
+
   // Swings (fractal)
   const swingTolerancePct = computeSwingTolerancePct({
     atrPct,
@@ -654,8 +825,20 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
   const [o1h, o4h] = await Promise.all([o1hPromise, o4hPromise]);
   const atr1hArr = atr(o1h || o15, 14);
   const atr1h = atr1hArr.at(-1) ?? undefined;
-  const atr4hArr = atr(o4h || o1h || o15, 14);              // 🆕 ATR 4h
+  const atr4hArr = atr(o4h || o1h || o15, 14);
   const atr4h = atr4hArr.at(-1) ?? undefined;
+  const ohlcv1hSource = Array.isArray(o1h) && o1h.length ? o1h : o15;
+  const closes1h = ohlcv1hSource.map(c => Number(c[4] ?? 0));
+  const rsi1hArr = rsi(closes1h, 14);
+  const rsi1h = rsi1hArr.at(-1) ?? undefined;
+  const ohlcv4hSource = Array.isArray(o4h) && o4h.length ? o4h : ohlcv1hSource;
+  const closes4h = ohlcv4hSource.map(c => Number(c[4] ?? 0));
+  const rsi4hArr = rsi(closes4h, 14);
+  const rsi4h = rsi4hArr.at(-1) ?? undefined;
+  const lastPrice1h = Number((o1h && o1h.length ? o1h.at(-1)?.[4] : undefined) ?? lastPrice) || lastPrice;
+  const lastPrice4h = Number((o4h && o4h.length ? o4h.at(-1)?.[4] : undefined) ?? lastPrice1h) || lastPrice1h;
+  const atrPct1h = atr1h && lastPrice1h ? (atr1h / lastPrice1h) * 100 : undefined;
+  const atrPct4h = atr4h && lastPrice4h ? (atr4h / lastPrice4h) * 100 : undefined;
   const pivots = dailyPivotsFromOHLCV(o1h || o15);
 
   let multiTimeframe: MultiTimeframeDiagnostics | undefined;
@@ -695,17 +878,29 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
   const snapshot: TechnicalSnapshot = {
     symbol,
     last: lastPrice,
+    ema9: ema9v,
+    ema12: ema12v,
     ema20: ema20v,
+    ema26: ema26v,
     ema50: ema50v,
     ema100: ema100v,
     ema200: ema200v,
     rsi14: rsi14v,
+    rsi7: rsi7v,
+    rsi21: rsi21v,
     atr14: atr14v,
     atr14_1h: atr1h,
     atr14_4h: atr4h,
     atrPct,
+    atrPct1h,
+    atrPct4h,
     adx14: adx14v,
     ema20Slope,
+    ema50Slope,
+    emaTrendSpread,
+    emaRatio9_20,
+    emaRatio20_200,
+    emaRatio50_200,
     diPlus14: diPlusVal,
     diMinus14: diMinusVal,
     support: primarySupport,
@@ -726,7 +921,6 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
     adxSlope,
     trendStrength,
     trendBias,
-    emaTrendSpread,
     rsiSlope,
     // Provide both instantaneous and smoothed volume for diagnostics
     volume: latestVol,
@@ -737,6 +931,31 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
     volume24hChangePct: volumeChangePct,
     cmf20: cmf20v,
     momentum3,
+    momentum5,
+    momentum10,
+    momentum20,
+    atr7: atr7v,
+    bbWidth,
+    bbPosition,
+    volatilityRegime,
+    volumeRatio,
+    stochK,
+    stochD,
+    macd: macdValue,
+    macdSignal: macdSignalValue,
+    macdDiff: macdDiffValue,
+    obvSlope,
+    volPriceConfirmation,
+    spreadProxy,
+    distEma20,
+    distEma50,
+    distEma200,
+    rsi14_1h: rsi1h,
+    rsi14_4h: rsi4h,
+    microImbalance,
+    mtfAgreement,
+    volAdjustedMomentum,
+    rsiEmaDiv,
     multiTimeframe,
   };
 

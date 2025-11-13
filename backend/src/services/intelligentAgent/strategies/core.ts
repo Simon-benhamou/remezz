@@ -47,6 +47,7 @@ import {
 } from '../autoUniverseScheduler.js';
 import { ensureSymbolProfile } from '../../symbolSpecificOptimization.js';
 import { logBiasDecision, logBiasStatistics, hasSignificantBias } from '../biasMonitor.js';
+import { buildPredictorFeatures as buildMetaAdaptivePredictorFeatures } from '../../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 
 export {
   getAutoUniverseStatusSnapshot,
@@ -641,14 +642,64 @@ function determineOptimalBias(symbol: string, metrics: any): { bias: 'long' | 's
 
 // Helper pour construire les features du predictor depuis technical snapshot
 function buildPredictorFeaturesFromTech(technical: TechnicalSnapshot): Record<string, number> {
+  const features = buildMetaAdaptivePredictorFeatures(technical);
+  if (features) {
+    return features;
+  }
+  console.warn('⚠️ Falling back to minimal predictor feature set (insufficient technical data)');
   return {
-    ema20: technical.ema20 || 0,
-    ema50: technical.ema50 || 0,
-    ema100: technical.ema100 || 0,
-    ema200: technical.ema200 || 0,
-    rsi14: technical.rsi14 || 50,
-    atr14: technical.atr14 || 0,
-    adx14: technical.adx14 || 0,
+    ema9: technical.ema9 ?? technical.ema20 ?? 0,
+    ema12: technical.ema12 ?? technical.ema20 ?? 0,
+    ema20: technical.ema20 ?? 0,
+    ema26: technical.ema26 ?? technical.ema20 ?? 0,
+    ema50: technical.ema50 ?? technical.ema20 ?? 0,
+    ema100: technical.ema100 ?? technical.ema200 ?? 0,
+    ema200: technical.ema200 ?? technical.ema100 ?? 0,
+    rsi7: technical.rsi7 ?? technical.rsi14 ?? 50,
+    rsi14: technical.rsi14 ?? 50,
+    rsi21: technical.rsi21 ?? technical.rsi14 ?? 50,
+    rsiSlope: technical.rsiSlope ?? 0,
+    stoch_k: technical.stochK ?? 50,
+    stoch_d: technical.stochD ?? 50,
+    macd: technical.macd ?? 0,
+    macd_signal: technical.macdSignal ?? 0,
+    macd_diff: technical.macdDiff ?? 0,
+    momentum3: technical.momentum3 ?? 0,
+    momentum5: technical.momentum5 ?? 0,
+    momentum10: technical.momentum10 ?? 0,
+    momentum20: technical.momentum20 ?? 0,
+    atr7: technical.atr7 ?? technical.atr14 ?? 0,
+    atr14: technical.atr14 ?? 0,
+    atrPct: (technical.atrPct ?? 0) / 100,
+    bb_width: technical.bbWidth ?? 0,
+    bb_position: technical.bbPosition ?? 0.5,
+    volatilityRegime: (technical.volatilityRegime ?? (technical.atrPct ?? 0)) / 100,
+    adx14: technical.adx14 ?? 0,
+    adx_pos: technical.diPlus14 ?? 0,
+    adx_neg: technical.diMinus14 ?? 0,
+    ema20Slope: technical.ema20Slope ?? 0,
+    ema50Slope: technical.ema50Slope ?? 0,
+    trendStrength: technical.trendStrength ?? 0,
+    volumeRatio: technical.volumeRatio ?? 0,
+    volumeZScore: technical.volumeZScore ?? 0,
+    obv_slope: technical.obvSlope ?? 0,
+    vol_price_conf: technical.volPriceConfirmation ?? 0,
+    spreadProxy: technical.spreadProxy ?? 0,
+    dist_ema20: technical.distEma20 ?? 0,
+    dist_ema50: technical.distEma50 ?? 0,
+    dist_ema200: technical.distEma200 ?? 0,
+    emaRatio_9_20: technical.emaRatio9_20 ?? (technical.ema9 && technical.ema20 ? technical.ema9 / technical.ema20 : 0),
+    emaRatio_20_200: technical.emaRatio20_200 ?? (technical.ema20 && technical.ema200 ? technical.ema20 / technical.ema200 : 0),
+    emaRatio_50_200: technical.emaRatio50_200 ?? (technical.ema50 && technical.ema200 ? technical.ema50 / technical.ema200 : 0),
+    emaTrendSpread: technical.emaTrendSpread ?? 0,
+    atrPct_1h: (technical.atrPct1h ?? technical.atrPct ?? 0) / 100,
+    atrPct_4h: (technical.atrPct4h ?? technical.atrPct ?? 0) / 100,
+    rsi14_1h: technical.rsi14_1h ?? technical.rsi14 ?? 50,
+    rsi14_4h: technical.rsi14_4h ?? technical.rsi14 ?? 50,
+    microImbalance: technical.microImbalance ?? 0,
+    mtfAgreement: technical.mtfAgreement ?? 0,
+    vol_adj_momentum: technical.volAdjustedMomentum ?? 0,
+    rsi_ema_div: technical.rsiEmaDiv ?? 0,
   };
 }
 

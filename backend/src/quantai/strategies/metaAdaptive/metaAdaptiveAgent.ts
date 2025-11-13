@@ -553,49 +553,131 @@ function computeVolumeRatio(snap: TechnicalSnapshot): number {
 }
 
 export function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number> | null {
+  const ema9 = safeNumber((snap as any)?.ema9, Number.NaN);
+  const ema12 = safeNumber((snap as any)?.ema12, Number.NaN);
   const ema20 = safeNumber((snap as any)?.ema20, Number.NaN);
+  const ema26 = safeNumber((snap as any)?.ema26, Number.NaN);
   const ema50 = safeNumber((snap as any)?.ema50, Number.NaN);
   const ema100 = safeNumber((snap as any)?.ema100, Number.NaN);
   const ema200 = safeNumber((snap as any)?.ema200, Number.NaN);
-  const rsi14 = safeNumber((snap as any)?.rsi14, Number.NaN);
-  const atr14 = safeNumber((snap as any)?.atr14 ?? Number.NaN, Number.NaN);
-  const adx14 = safeNumber((snap as any)?.adx14, Number.NaN);
-  const ema20Slope = safeNumber((snap as any)?.ema20Slope, Number.NaN);
-  const volume = safeNumber((snap as any)?.volume, Number.NaN);
-  const volumeMA = safeNumber((snap as any)?.volumeMA, Number.NaN);
+  const ema20Slope = safeNumber((snap as any)?.ema20Slope, 0);
+  const ema50Slope = safeNumber((snap as any)?.ema50Slope, 0);
   const trendSpreadFallback = Number.isFinite(ema50) && Math.abs(ema50) > 1e-9 ? (ema20 - ema50) / ema50 : 0;
   const emaTrendSpread = safeNumber((snap as any)?.emaTrendSpread, trendSpreadFallback);
+  const emaRatio9_20 = safeNumber((snap as any)?.emaRatio9_20, Number.isFinite(ema20) && ema20 !== 0 ? ema9 / ema20 : 0);
+  const emaRatio20_200 = safeNumber((snap as any)?.emaRatio20_200, Number.isFinite(ema200) && ema200 !== 0 ? ema20 / ema200 : 0);
+  const emaRatio50_200 = safeNumber((snap as any)?.emaRatio50_200, Number.isFinite(ema200) && ema200 !== 0 ? ema50 / ema200 : 0);
+  const rsi7 = safeNumber((snap as any)?.rsi7, Number.NaN);
+  const rsi14 = safeNumber((snap as any)?.rsi14, Number.NaN);
+  const rsi21 = safeNumber((snap as any)?.rsi21, Number.NaN);
   const rsiSlope = safeNumber((snap as any)?.rsiSlope, 0);
-  const volumeZScore = safeNumber((snap as any)?.volumeZScore, 0);
+  const stochK = safeNumber((snap as any)?.stochK, 50);
+  const stochD = safeNumber((snap as any)?.stochD, 50);
+  const macd = safeNumber((snap as any)?.macd, 0);
+  const macdSignal = safeNumber((snap as any)?.macdSignal, 0);
+  const macdDiff = safeNumber((snap as any)?.macdDiff, 0);
   const momentum3 = safeNumber((snap as any)?.momentum3, 0);
-  const lastPrice = safeNumber((snap as any)?.last, Number.NaN);
+  const momentum5 = safeNumber((snap as any)?.momentum5, 0);
+  const momentum10 = safeNumber((snap as any)?.momentum10, 0);
+  const momentum20 = safeNumber((snap as any)?.momentum20, 0);
+  const atr7 = safeNumber((snap as any)?.atr7, safeNumber((snap as any)?.atr14, Number.NaN));
+  const atr14 = safeNumber((snap as any)?.atr14, Number.NaN);
   const atrPctPercent = safeNumber((snap as any)?.atrPct, Number.NaN);
+  const lastPrice = safeNumber((snap as any)?.last, Number.NaN);
+  const bbWidth = safeNumber((snap as any)?.bbWidth, 0);
+  const bbPosition = safeNumber((snap as any)?.bbPosition, 0.5);
+  const volatilityRegimePct = safeNumber((snap as any)?.volatilityRegime, atrPctPercent);
+  const adx14 = safeNumber((snap as any)?.adx14, Number.NaN);
+  const adxPos = safeNumber((snap as any)?.adxPos14 ?? (snap as any)?.diPlus14, 0);
+  const adxNeg = safeNumber((snap as any)?.adxNeg14 ?? (snap as any)?.diMinus14, 0);
+  const trendStrength = safeNumber((snap as any)?.trendStrength, 0);
+  const volumeRatioSnap = safeNumber((snap as any)?.volumeRatio, Number.NaN);
+  const volume = safeNumber((snap as any)?.volume, Number.NaN);
+  const volumeMA = safeNumber((snap as any)?.volumeMA, Number.NaN);
+  const volumeZScore = safeNumber((snap as any)?.volumeZScore, 0);
+  const obvSlope = safeNumber((snap as any)?.obvSlope, 0);
+  const volPriceConfirmation = safeNumber((snap as any)?.volPriceConfirmation, 0);
+  const spreadProxy = safeNumber((snap as any)?.spreadProxy, 0);
+  const distEma20 = safeNumber((snap as any)?.distEma20, 0);
+  const distEma50 = safeNumber((snap as any)?.distEma50, 0);
+  const distEma200 = safeNumber((snap as any)?.distEma200, 0);
+  const atrPct1hPercent = safeNumber((snap as any)?.atrPct1h, atrPctPercent);
+  const atrPct4hPercent = safeNumber((snap as any)?.atrPct4h, atrPctPercent);
+  const rsi14_1h = safeNumber((snap as any)?.rsi14_1h, rsi14);
+  const rsi14_4h = safeNumber((snap as any)?.rsi14_4h, rsi14);
+  const microImbalance = safeNumber((snap as any)?.microImbalance, 0);
+  const mtfAgreement = safeNumber((snap as any)?.mtfAgreement, 0);
+  const volAdjustedMomentum = safeNumber((snap as any)?.volAdjustedMomentum, 0);
+  const rsiEmaDiv = safeNumber((snap as any)?.rsiEmaDiv, 0);
 
-  const atrPct = Number.isFinite(atr14) && Number.isFinite(lastPrice) && Math.abs(lastPrice) > 1e-9
-    ? atr14 / lastPrice
-    : Number.isFinite(atrPctPercent)
-      ? atrPctPercent / 100
-      : Number.NaN;
+  const atrPct = Number.isFinite(atrPctPercent)
+    ? atrPctPercent / 100
+    : (Number.isFinite(atr14) && Number.isFinite(lastPrice) && Math.abs(lastPrice) > 1e-9 ? atr14 / lastPrice : 0);
+  const volatilityRegime = Number.isFinite(volatilityRegimePct) ? volatilityRegimePct / 100 : atrPct;
+  const atrPct1h = Number.isFinite(atrPct1hPercent) ? atrPct1hPercent / 100 : atrPct;
+  const atrPct4h = Number.isFinite(atrPct4hPercent) ? atrPct4hPercent / 100 : atrPct;
 
-  if (!Number.isFinite(volume) || !Number.isFinite(volumeMA) || volumeMA <= 0) {
-    return null;
+  let volumeRatio = volumeRatioSnap;
+  if (!Number.isFinite(volumeRatio)) {
+    volumeRatio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : Number.NaN;
+  }
+  if (!Number.isFinite(volumeRatio)) {
+    volumeRatio = 0;
   }
 
   const features: Record<string, number> = {
+    ema9,
+    ema12,
     ema20,
+    ema26,
     ema50,
     ema100,
     ema200,
+    rsi7,
     rsi14,
-    atr14,
-    adx14,
-    ema20Slope,
-    volumeRatio: volume / volumeMA,
-    emaTrendSpread,
+    rsi21,
     rsiSlope,
-    atrPct,
-    volumeZScore,
+    stoch_k: stochK,
+    stoch_d: stochD,
+    macd,
+    macd_signal: macdSignal,
+    macd_diff: macdDiff,
     momentum3,
+    momentum5,
+    momentum10,
+    momentum20,
+    atr7,
+    atr14,
+    atrPct,
+    bb_width: bbWidth,
+    bb_position: bbPosition,
+    volatilityRegime,
+    adx14,
+    adx_pos: adxPos,
+    adx_neg: adxNeg,
+    ema20Slope,
+    ema50Slope,
+    trendStrength,
+    volumeRatio,
+    volumeZScore,
+    obv_slope: obvSlope,
+    vol_price_conf: volPriceConfirmation,
+    spreadProxy,
+    dist_ema20: distEma20,
+    dist_ema50: distEma50,
+    dist_ema200: distEma200,
+    emaRatio_9_20: emaRatio9_20,
+    emaRatio_20_200: emaRatio20_200,
+    emaRatio_50_200: emaRatio50_200,
+    emaTrendSpread,
+    atrPct_1h: atrPct1h,
+    atrPct_4h: atrPct4h,
+    rsi14_1h,
+    rsi14_4h,
+    microImbalance,
+    mtfAgreement,
+    vol_adj_momentum: volAdjustedMomentum,
+    rsi_ema_div: rsiEmaDiv,
   };
 
   const micro = (snap as any)?.microstructure as TechnicalSnapshot['microstructure'] | undefined;

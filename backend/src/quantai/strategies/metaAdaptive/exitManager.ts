@@ -192,6 +192,46 @@ export function maybeAdjustOrExit({
       ? (entryAtr / entryPrice) * 100
       : null;
   const rNow = baselineRisk > 0 ? PositionSizer.rMultiple(entryPrice, baselineStop, lastPrice, side) : 0;
+  const percentLockCfg = cfg.percentGainLock;
+  if (percentLockCfg?.enabled) {
+    const activation = Math.max(0, percentLockCfg.activationGainPct ?? 0);
+    const lockFraction = Math.min(Math.max(percentLockCfg.lockFraction ?? 0, 0), 1);
+    const minGainStepPct = Math.max(0, percentLockCfg.minGainStepPct ?? 0);
+    if (entryPrice > 0 && lockFraction > 0) {
+      const gainNumerator = side === 'long'
+        ? lastPrice - entryPrice
+        : entryPrice - lastPrice;
+      const gainPct = gainNumerator / entryPrice;
+      if (Number.isFinite(gainPct) && gainPct >= activation) {
+        const lockedGainPct = gainPct * lockFraction;
+        const currentLockedPct = (() => {
+          if (side === 'long') {
+            return stop > entryPrice ? Math.max(0, (stop - entryPrice) / entryPrice) : 0;
+          }
+          return stop < entryPrice ? Math.max(0, (entryPrice - stop) / entryPrice) : 0;
+        })();
+        const improvement = lockedGainPct - currentLockedPct;
+        if (improvement >= Math.max(minGainStepPct - 1e-9, 0)) {
+          const candidateStop = side === 'long'
+            ? entryPrice * (1 + lockedGainPct)
+            : entryPrice * (1 - lockedGainPct);
+          const improved = side === 'long'
+            ? candidateStop > stop + 1e-8
+            : candidateStop < stop - 1e-8;
+          const withinPrice = side === 'long'
+            ? candidateStop <= lastPrice + 1e-9
+            : candidateStop >= lastPrice - 1e-9;
+          if (improved && withinPrice) {
+            return {
+              action: 'move_sl',
+              reason: `Percent gain lock ${(lockedGainPct * 100).toFixed(2)}% with gain ${(gainPct * 100).toFixed(2)}%`,
+              stop: candidateStop,
+            };
+          }
+        }
+      }
+    }
+  }
   const profitLockCfg = cfg.profitLock ?? { minRMultiple: 1, allowPartialBeforeMinR: false };
   // 🎯 ADAPTIVE PROFIT LOCK: Lock profit earlier for volatile cryptos
   // BTC (1.0x): 1.0R, ETH (1.25x): 0.8R, AERO (1.5x): 0.67R

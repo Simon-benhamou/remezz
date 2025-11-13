@@ -30,6 +30,8 @@ import { getUserExchange } from '../exchange/ccxtClient.js';
 import { resolveLeverageCap, type ResolvedLeverageCap } from '../risk/leverageCaps.js';
 import { DEFAULT_RR_EXPECTANCY_CONFIG } from '../risk/rrExpectancy.js';
 import { updatePortfolioBalance, rebalancePortfolio } from './portfolioManager.js';
+import { getPredictionSyncSafe } from '../quantai/pythonPredictor.js';
+import { buildPredictorFeatures } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 
 export type StartPayload = Record<string, any>;
 
@@ -112,6 +114,12 @@ type NormalizedStartConfig = {
   userId?: string;
   strategyEngine: 'meta_adaptive';
   rawPayload: StartPayload;
+  selectionPolicy: {
+    requireSignalAtStart: boolean;
+    minStartEdge: number; // between 0 and 1
+    minStartConfidence: number; // between 0 and 1
+    priorWeight: number; // weighting factor for ranking candidates by predictor prior
+  };
 };
 
 type UniverseBuildResult = {
@@ -762,6 +770,20 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   const perps = Array.isArray(payload.perps) ? payload.perps.slice(0, 100) : undefined;
   const symbol = typeof payload.symbol === 'string' ? payload.symbol : undefined;
 
+  // Selection policy (optional)
+  const rawPolicy = (payload.selectionPolicy || {}) as Partial<{
+    requireSignalAtStart: boolean;
+    minStartEdge: number;
+    minStartConfidence: number;
+    priorWeight: number;
+  }>;
+  const selectionPolicy = {
+    requireSignalAtStart: Boolean(rawPolicy.requireSignalAtStart ?? false),
+    minStartEdge: Math.min(Math.max(Number(rawPolicy.minStartEdge ?? 0.02), 0), 1),
+    minStartConfidence: Math.min(Math.max(Number(rawPolicy.minStartConfidence ?? 0.55), 0), 1),
+    priorWeight: Math.max(0, Number(rawPolicy.priorWeight ?? 0)),
+  } as const;
+
   return {
     mode,
     startBalanceUsd,
@@ -782,6 +804,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
     userId: userId || undefined,
     strategyEngine,
     rawPayload: payload,
+    selectionPolicy,
   };
 }
 
@@ -1087,8 +1110,45 @@ async function selectSymbol(
       }
     }
 
+    // Helper to evaluate predictor start signal for a symbol
+    const evaluateStartSignal = async (sym: string) => {
+      try {
+        const snap = await buildTechSnapshot(sym, config.userId);
+        const features = buildPredictorFeatures(snap);
+        if (!features) return { ok: false, reason: 'features_unavailable' } as const;
+        const pred = getPredictionSyncSafe(features, { allowFallback: true });
+        const pLong = pred.probabilities.long;
+        const pShort = pred.probabilities.short;
+        const pNone = pred.probabilities.none;
+        const primary = Math.max(pLong, pShort);
+        const top: 'long' | 'short' | 'none' = pNone >= primary && pNone >= Math.max(pLong, pShort) ? 'none' : (pLong >= pShort ? 'long' : 'short');
+        const edge = Math.abs(pLong - pShort);
+        const confidence = pred.confidence;
+        const meets = top !== 'none' && primary >= config.selectionPolicy.minStartEdge && confidence >= config.selectionPolicy.minStartConfidence;
+        const priorScore = (primary - pNone) * Math.max(confidence, 0);
+        return { ok: true, top, primary, edge, confidence, priorScore } as const;
+      } catch (error) {
+        return { ok: false, reason: (error as Error).message || 'predict_failed' } as const;
+      }
+    };
+
     if (!symbol) {
-      for (const candidate of candidates) {
+      // Optionally reorder candidates by predictor prior if priorWeight > 0
+      let orderedCandidates = candidates.slice();
+      if (config.selectionPolicy.priorWeight > 0 && orderedCandidates.length) {
+        const sample = orderedCandidates.slice(0, Math.min(8, orderedCandidates.length));
+        const scored: Array<{ sym: string; score: number }> = [];
+        for (const sym of sample) {
+          const evalRes = await evaluateStartSignal(sym);
+          const score = evalRes.ok ? evalRes.priorScore : 0;
+          scored.push({ sym, score });
+        }
+        const byScore = scored.sort((a,b) => b.score - a.score).map(s => s.sym);
+        const rest = orderedCandidates.filter(s => !byScore.includes(s));
+        orderedCandidates = [...byScore, ...rest];
+      }
+
+      for (const candidate of orderedCandidates) {
         try {
           if (reservationToken && isSmartSymbolReserved(candidate, reservationToken)) {
             decisionLog.push({
@@ -1116,14 +1176,26 @@ async function selectSymbol(
           
           // Only check DB + in-memory reservations after successful reservation
           const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken);
-          if (usage === 0) {
+          let passSignal = true;
+          if (config.selectionPolicy.requireSignalAtStart) {
+            const evalRes = await evaluateStartSignal(candidate);
+            passSignal = evalRes.ok && evalRes.top !== 'none' && evalRes.primary >= config.selectionPolicy.minStartEdge && evalRes.confidence >= config.selectionPolicy.minStartConfidence;
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: passSignal ? 'info' : 'warn',
+              message: passSignal ? `Candidate ${candidate} meets start signal thresholds` : `Candidate ${candidate} failed start signal thresholds`,
+              context: 'selection',
+            });
+          }
+
+          if (usage === 0 && passSignal) {
             symbol = candidate;
             summary.autoSelected = true;
             summary.source = 'candidate';
             decisionLog.push({
               timestamp: Date.now(),
               level: 'success',
-              message: `Selected ${candidate} after availability scan`,
+              message: `Selected ${candidate} after availability and signal scan`,
               context: 'selection',
             });
             break;
@@ -1133,7 +1205,7 @@ async function selectSymbol(
             decisionLog.push({
               timestamp: Date.now(),
               level: 'info',
-              message: `Skipped ${candidate} because it has ${usage} active agent(s)`,
+              message: usage > 0 ? `Skipped ${candidate} because it has ${usage} active agent(s)` : `Skipped ${candidate} due to unmet signal thresholds`,
               context: 'selection',
               meta: { activeAgents: usage },
             });
@@ -1156,6 +1228,18 @@ async function selectSymbol(
     }
 
     if (!symbol) {
+      if (config.selectionPolicy.requireSignalAtStart) {
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'error',
+          message: 'No candidate met start signal thresholds',
+          context: 'selection',
+        });
+        throw new PhaseError('start.signal_not_ready', 'no_candidate_met_start_signal_thresholds', {
+          minStartEdge: config.selectionPolicy.minStartEdge,
+          minStartConfidence: config.selectionPolicy.minStartConfidence,
+        });
+      }
       const activeCount = await prisma.agentSession.count({ where: { stoppedAt: null } });
       decisionLog.push({
         timestamp: Date.now(),
@@ -1196,6 +1280,40 @@ async function selectSymbol(
   summary.symbol = symbol;
 
   if (config.symbol) {
+    // If manual symbol specified and selection requires signal at start, validate now
+    if (config.selectionPolicy.requireSignalAtStart) {
+      const evalRes = await (async () => {
+        try {
+          const snap = await buildTechSnapshot(symbol, config.userId);
+          const features = buildPredictorFeatures(snap);
+          if (!features) return { ok: false } as const;
+          const pred = getPredictionSyncSafe(features, { allowFallback: true });
+          const pLong = pred.probabilities.long;
+          const pShort = pred.probabilities.short;
+          const pNone = pred.probabilities.none;
+          const primary = Math.max(pLong, pShort);
+          const top: 'long' | 'short' | 'none' = pNone >= primary && pNone >= Math.max(pLong, pShort) ? 'none' : (pLong >= pShort ? 'long' : 'short');
+          const confidence = pred.confidence;
+          const ok = top !== 'none' && primary >= config.selectionPolicy.minStartEdge && confidence >= config.selectionPolicy.minStartConfidence;
+          return { ok } as const;
+        } catch {
+          return { ok: false } as const;
+        }
+      })();
+      if (!evalRes.ok) {
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'error',
+          message: `Manual symbol ${symbol} failed start signal thresholds`,
+          context: 'selection',
+        });
+        throw new PhaseError('start.signal_not_ready', 'manual_symbol_signal_threshold_not_met', {
+          symbol,
+          minStartEdge: config.selectionPolicy.minStartEdge,
+          minStartConfidence: config.selectionPolicy.minStartConfidence,
+        });
+      }
+    }
     decisionLog.push({
       timestamp: Date.now(),
       level: 'info',

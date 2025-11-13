@@ -17,6 +17,7 @@ import { isInsufficientDataError, type InsufficientDataMeta } from '../data/erro
 import { getPredictionSync, isPythonPredictorAvailable, type PythonPredictionResult } from '../quantai/pythonPredictor.js';
 import { setCachedPrediction } from '../quantai/predictorCache.js';
 import { recordPrediction, getStableSnapshot } from '../quantai/predictorStateStore.js';
+import { buildPredictorFeatures as buildMetaAdaptivePredictorFeatures } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 import type { PredictorSnapshot } from '../quantai/predictorStateStore.js';
 import type { TechnicalSnapshot } from './tech.js';
 
@@ -92,62 +93,6 @@ export interface VolumeFilteredCrypto {
 }
 
 /**
- * Build predictor features from technical snapshot (same logic as metaAdaptiveAgent)
- */
-function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number> | null {
-  const safeNum = (val: any, fallback: number = Number.NaN) => {
-    const n = Number(val);
-    return Number.isFinite(n) ? n : fallback;
-  };
-  
-  const ema20 = safeNum(snap.ema20);
-  const ema50 = safeNum(snap.ema50);
-  const ema100 = safeNum(snap.ema100);
-  const ema200 = safeNum(snap.ema200);
-  const rsi14 = safeNum(snap.rsi14);
-  const atr14 = safeNum(snap.atr14);
-  const adx14 = safeNum(snap.adx14);
-  const ema20Slope = safeNum((snap as any).ema20Slope, 0);
-  const volume = safeNum((snap as any).volume);
-  const volumeMA = safeNum((snap as any).volumeMA);
-  const lastPrice = safeNum(snap.last);
-  const atrPctPercent = safeNum(snap.atrPct);
-  
-  const trendSpreadFallback = Number.isFinite(ema50) && Math.abs(ema50) > 1e-9 ? (ema20 - ema50) / ema50 : 0;
-  const emaTrendSpread = safeNum((snap as any).emaTrendSpread, trendSpreadFallback);
-  const rsiSlope = safeNum((snap as any).rsiSlope, 0);
-  const volumeZScore = safeNum((snap as any).volumeZScore, 0);
-  const momentum3 = safeNum((snap as any).momentum3, 0);
-  
-  const atrPct = Number.isFinite(atr14) && Number.isFinite(lastPrice) && Math.abs(lastPrice) > 1e-9
-    ? atr14 / lastPrice
-    : Number.isFinite(atrPctPercent)
-      ? atrPctPercent / 100
-      : Number.NaN;
-  
-  if (!Number.isFinite(volume) || !Number.isFinite(volumeMA) || volumeMA <= 0) {
-    return null;
-  }
-  
-  return {
-    ema20,
-    ema50,
-    ema100,
-    ema200,
-    rsi14,
-    atr14,
-    adx14,
-    ema20Slope,
-    volumeRatio: volume / volumeMA,
-    emaTrendSpread,
-    rsiSlope,
-    atrPct,
-    volumeZScore,
-    momentum3,
-  };
-}
-
-/**
  * Query XGBoost predictor for a crypto with snapshot
  */
 async function getPredictorBias(
@@ -158,7 +103,7 @@ async function getPredictorBias(
     return null;
   }
   
-  const features = buildPredictorFeatures(snap);
+  const features = buildMetaAdaptivePredictorFeatures(snap);
   if (!features) {
     return null;
   }

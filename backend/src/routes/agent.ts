@@ -1645,7 +1645,7 @@ router.get('/:sessionId/diagnostics', authenticateUser, async (req: Authenticate
   try {
     const { sessionId } = req.params;
     const diagnostics = await getAgentDiagnosticInfo(sessionId);
-    return res.json({ ok: true, diagnostics });
+    return res.json(diagnostics);
   } catch (error) {
     return res.status(500).json({ ok: false, error: 'internal_error' });
   }

@@ -168,6 +168,7 @@ export type QuantAIExitConfig = {
     atrPctSpikeThreshold: number;
     widenMultiplier: number;
   };
+  percentGainLock?: QuantAIPercentGainLockConfig;
   peakDrawdown?: QuantAIPeakDrawdownConfig;
   positionFlipping?: QuantAIPositionFlippingConfig;
   earlyExit: {
@@ -246,6 +247,19 @@ export type QuantAIExitOverride = {
     atrBands?: Partial<QuantAITrailingAtrBands>;
     clampMultiplier?: { min?: number; max?: number };
   };
+  percentGainLock?: {
+    enabled?: boolean;
+    activationGainPct?: number;
+    lockFraction?: number;
+    minGainStepPct?: number;
+  };
+};
+
+export type QuantAIPercentGainLockConfig = {
+  enabled: boolean;
+  activationGainPct: number;
+  lockFraction: number;
+  minGainStepPct?: number;
 };
 
 export type QuantAIRegimeConfig = {
@@ -479,6 +493,12 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     volatilityExit: {
       atrPctSpikeThreshold: 0.35,
       widenMultiplier: 1.25,
+    },
+    percentGainLock: {
+      enabled: true,
+      activationGainPct: 0.01,
+      lockFraction: 0.7,
+      minGainStepPct: 0.001,
     },
     peakDrawdown: {
       enabled: true,
@@ -1109,6 +1129,49 @@ function normalizeExits(raw: any): QuantAIExitConfig {
         ) ?? volatilityDefaults.widenMultiplier,
       }
     : undefined;
+  const percentLockDefaults = DEFAULT_CONFIG.exits.percentGainLock ?? {
+    enabled: false,
+    activationGainPct: 0.01,
+    lockFraction: 0.7,
+    minGainStepPct: 0,
+  };
+  const percentLockRaw = (raw.percent_gain_lock ?? raw.percentGainLock) && typeof (raw.percent_gain_lock ?? raw.percentGainLock) === 'object'
+    ? (raw.percent_gain_lock ?? raw.percentGainLock)
+    : undefined;
+  const normalizePercentDecimal = (value: any, fallback: number): number => {
+    const parsed = normalizeOptionalNumber(value);
+    if (parsed == null) return fallback;
+    if (!Number.isFinite(parsed)) return fallback;
+    const decimal = parsed > 1 ? parsed / 100 : parsed;
+    if (!Number.isFinite(decimal) || decimal < 0) {
+      return fallback;
+    }
+    return decimal;
+  };
+  const percentGainLock = percentLockDefaults
+    ? {
+        enabled: percentLockRaw?.enabled != null ? Boolean(percentLockRaw.enabled) : percentLockDefaults.enabled,
+        activationGainPct: normalizePercentDecimal(
+          percentLockRaw?.activation_gain_pct ?? percentLockRaw?.activationGainPct,
+          percentLockDefaults.activationGainPct,
+        ),
+        lockFraction: (() => {
+          const rawValue = normalizeOptionalNumber(
+            percentLockRaw?.lock_fraction ?? percentLockRaw?.lockFraction,
+          );
+          if (rawValue == null) return percentLockDefaults.lockFraction;
+          const decimal = rawValue > 1 ? rawValue / 100 : rawValue;
+          if (!Number.isFinite(decimal)) return percentLockDefaults.lockFraction;
+          return Math.min(Math.max(decimal, 0), 1);
+        })(),
+        minGainStepPct: (() => {
+          const rawValue = percentLockRaw?.min_gain_step_pct ?? percentLockRaw?.minGainStepPct;
+          if (rawValue == null) return percentLockDefaults.minGainStepPct;
+          const decimal = normalizePercentDecimal(rawValue, percentLockDefaults.minGainStepPct ?? 0);
+          return Math.max(0, decimal);
+        })(),
+      }
+    : undefined;
   const peakDrawdownDefaults = DEFAULT_CONFIG.exits.peakDrawdown ?? { enabled: true, thresholds: { 1.0: 0.05, 2.0: 0.04, 3.0: 0.03, 5.0: 0.02 } };
   const peakDrawdownRaw = (raw.peak_drawdown ?? raw.peakDrawdown) && typeof (raw.peak_drawdown ?? raw.peakDrawdown) === 'object'
     ? (raw.peak_drawdown ?? raw.peakDrawdown)
@@ -1275,6 +1338,7 @@ function normalizeExits(raw: any): QuantAIExitConfig {
     minStopAtrMult,
     profitLock,
     volatilityExit,
+    percentGainLock,
     peakDrawdown,
     earlyExit: {
       adxBelow: Number(earlyExitRaw.adx_below ?? earlyExitRaw.adxBelow ?? DEFAULT_CONFIG.exits.earlyExit.adxBelow),
@@ -1372,6 +1436,34 @@ function normalizeExits(raw: any): QuantAIExitConfig {
       );
       if (widen != null) vol.widenMultiplier = widen;
       if (Object.keys(vol).length) out.volatilityExit = vol;
+    }
+    const percentLockOverride = value.percent_gain_lock ?? value.percentGainLock;
+    if (percentLockOverride && typeof percentLockOverride === 'object') {
+      const plock: NonNullable<QuantAIExitOverride['percentGainLock']> = {};
+      if (percentLockOverride.enabled != null) {
+        plock.enabled = Boolean(percentLockOverride.enabled);
+      }
+      const activation = normalizeOptionalNumber(
+        percentLockOverride.activation_gain_pct ?? percentLockOverride.activationGainPct,
+      );
+      if (activation != null) {
+        plock.activationGainPct = activation > 1 ? activation / 100 : activation;
+      }
+      const lockFraction = normalizeOptionalNumber(
+        percentLockOverride.lock_fraction ?? percentLockOverride.lockFraction,
+      );
+      if (lockFraction != null) {
+        const decimal = lockFraction > 1 ? lockFraction / 100 : lockFraction;
+        plock.lockFraction = Math.min(Math.max(decimal, 0), 1);
+      }
+      const minStep = normalizeOptionalNumber(
+        percentLockOverride.min_gain_step_pct ?? percentLockOverride.minGainStepPct,
+      );
+      if (minStep != null) {
+        const decimal = minStep > 1 ? minStep / 100 : minStep;
+        plock.minGainStepPct = Math.max(0, decimal);
+      }
+      if (Object.keys(plock).length) out.percentGainLock = plock;
     }
     const maxHold = normalizeOptionalNumber(value.max_holding_min ?? value.maxHoldingMin);
     if (maxHold != null) out.maxHoldingMin = maxHold;
