@@ -877,6 +877,25 @@ export async function getOHLCV(
     } catch {}
   }
   // Non-Binance exchanges or forced REST path: safe to use REST
+  // BUT: If Binance and WebSocket preferred, skip REST to avoid IP ban
+  if (preferBinanceWs) {
+    // WebSocket path - never fallback to REST to prevent IP ban
+    if (syntheticPrepared && syntheticPrepared.series.length && allowSyntheticFallback) {
+      console.log(`[getOHLCV] Using synthetic data for ${symbol} ${tf} to avoid REST IP ban`);
+      activateFallback('synthetic_warmup_avoid_ban', false);
+      setWarmupState(warmKey, {
+        pending: false,
+        fulfilled: false,
+        lastError: 'synthetic_warmup_avoid_ban',
+      });
+      return syntheticPrepared.series;
+    }
+    // If no synthetic available, return empty and let warmup retry later
+    console.warn(`[getOHLCV] No data available for ${symbol} ${tf}, waiting for WebSocket warmup`);
+    throw new Error(`websocket_warmup_pending: ${symbol} ${tf}`);
+  }
+  
+  // Non-Binance exchanges can safely use REST
   try {
     const restData = await fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials);
     const preparedRest = prepareOhlcvSeries(restData, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
