@@ -13,6 +13,8 @@ import OperationsDashboardPage from './pages/OperationsDashboardPage';
 import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
+// import MonitorPageRefactored from './pages/MonitorPageRefactored';
+import MonitorPageNew from './pages/MonitorPageNew';
 import { useAppStore } from './store';
 import { Activity, Bot, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
 import { api } from './api';
@@ -272,7 +274,8 @@ function AuthenticatedApp() {
             <Route path='/' element={<Navigate to='/operations' replace />} />
             <Route path='/operations' element={<OperationsDashboardPage />} />
             <Route path='/mission-control' element={<Navigate to='/operations' replace />} />
-            <Route path='/agents/:sessionId' element={<SessionCockpitPage />} />
+            <Route path='/agents/:sessionId' element={<MonitorPageNew />} />
+            {/* <Route path='/agents/:sessionId/old' element={<MonitorPageRefactored />} /> */}
             <Route path='/agents' element={<SessionsPage />} />
             <Route path='/ledger' element={<ExecutionLedgerPage />} />
             <Route path='/intelligence' element={<IntelligencePage />} />

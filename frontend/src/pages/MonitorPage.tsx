@@ -182,7 +182,8 @@ export default function MonitorPage(){
         // Load core data in parallel with timeout
         const [agentData, tickerData] = await Promise.allSettled([
           Promise.race([
-            api.getAgentState(s.session.id),
+            // Try diagnostics API first for richer data (predictor, symbolProfile)
+            api.getDiagnostics(s.session.id).catch(() => api.getAgentState(s.session.id)),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 10000)) // augmenté à 10s
           ]),
           sym ? Promise.race([
