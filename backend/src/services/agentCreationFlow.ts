@@ -771,6 +771,8 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   const symbol = typeof payload.symbol === 'string' ? payload.symbol : undefined;
 
   // Selection policy (optional)
+  // ⚠️  PREDICTOR DISABLED: Model returns 100% 'none' predictions - feature mismatch issue
+  // Until predictor is fixed, disable all gating to allow agents to trade
   const rawPolicy = (payload.selectionPolicy || {}) as Partial<{
     requireSignalAtStart: boolean;
     minStartEdge: number;
@@ -778,10 +780,10 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
     priorWeight: number;
   }>;
   const selectionPolicy = {
-    requireSignalAtStart: Boolean(rawPolicy.requireSignalAtStart ?? false),
-    minStartEdge: Math.min(Math.max(Number(rawPolicy.minStartEdge ?? 0.02), 0), 1),
-    minStartConfidence: Math.min(Math.max(Number(rawPolicy.minStartConfidence ?? 0.55), 0), 1),
-    priorWeight: Math.max(0, Number(rawPolicy.priorWeight ?? 0)),
+    requireSignalAtStart: false, // ❌ FORCE DISABLED - predictor unreliable
+    minStartEdge: Math.min(Math.max(Number(rawPolicy.minStartEdge ?? 0.01), 0), 1), // Lowered threshold
+    minStartConfidence: Math.min(Math.max(Number(rawPolicy.minStartConfidence ?? 0.30), 0), 1), // Lowered threshold
+    priorWeight: 0, // ❌ FORCE DISABLED - don't use predictor for ranking
   } as const;
 
   return {
