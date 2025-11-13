@@ -7,6 +7,10 @@ const MAX_KLINE_LIMIT = 1500;
 
 const ohlcvLimiter = createBinanceRestLimiter();
 
+// Track IP ban status to avoid spamming requests while banned
+let ipBannedUntil: number = 0;
+const IP_BAN_COOLDOWN_MS = 5 * 60 * 1000; // Extra 5 minutes after ban expires
+
 type FetchImpl = (input: string | URL, init?: any) => Promise<any>;
 
 interface FetchBinanceOhlcvOptions {
@@ -54,6 +58,16 @@ export async function fetchBinanceOhlcv(
     throw new Error('binance_rest_invalid_symbol');
   }
 
+  // Check if IP is currently banned
+  const now = Date.now();
+  if (ipBannedUntil > now) {
+    const waitSeconds = Math.ceil((ipBannedUntil - now) / 1000);
+    throw Object.assign(
+      new Error(`binance_rest_ip_banned_wait_${waitSeconds}s`),
+      { bannedUntil: ipBannedUntil }
+    );
+  }
+
   const params = new URLSearchParams({
     symbol: symbolId,
     interval: timeframe,
@@ -62,12 +76,33 @@ export async function fetchBinanceOhlcv(
   const url = `${BINANCE_REST_BASE_URL}/fapi/v1/klines?${params.toString()}`;
 
   const response = await ohlcvLimiter.run(() => fetchImpl(url, { signal: options?.signal }));
+  
   if (response.status === 429) {
     ohlcvLimiter.backoff(BINANCE_REST_429_BACKOFF_MS);
     throw new Error('binance_rest_rate_limited');
   }
-  if (!response.ok) {
+  
+  if (response.status === 418 || !response.ok) {
     const body = await response.text().catch(() => '');
+    
+    // Check for IP ban message
+    if (body.includes('"code":-1003') && body.includes('banned until')) {
+      try {
+        const parsed = JSON.parse(body);
+        const banMatch = parsed.msg?.match(/banned until (\d+)/);
+        if (banMatch) {
+          const banTimestamp = parseInt(banMatch[1], 10);
+          // Add cooldown period after ban expires
+          ipBannedUntil = banTimestamp + IP_BAN_COOLDOWN_MS;
+          console.error(`🚫 Binance IP ban detected until ${new Date(banTimestamp).toISOString()} (+ ${IP_BAN_COOLDOWN_MS/1000/60}min cooldown)`);
+        }
+      } catch (parseError) {
+        // Fallback: ban for 10 minutes if we can't parse the timestamp
+        ipBannedUntil = now + 10 * 60 * 1000;
+        console.error(`🚫 Binance IP ban detected (timestamp parse failed), waiting 10 minutes`);
+      }
+    }
+    
     const error = new Error(`binance_rest_http_${response.status}`);
     (error as any).body = body;
     throw error;

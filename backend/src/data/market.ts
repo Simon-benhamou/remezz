@@ -778,11 +778,25 @@ export async function getOHLCV(
               }
               throw new Error('rest_backfill_empty');
             } catch (error) {
-              const retryDelay = computeRetryDelayMs(attempts);
+              const errorMsg = String((error as any)?.message || error);
+              
+              // If IP is banned, use much longer retry delay
+              const isBanned = errorMsg.includes('binance_rest_ip_banned') || 
+                               errorMsg.includes('banned until') ||
+                               (error as any)?.bannedUntil;
+              
+              const retryDelay = isBanned 
+                ? 10 * 60 * 1000 // 10 minutes for IP ban
+                : computeRetryDelayMs(attempts);
+              
+              if (isBanned) {
+                console.warn(`🚫 Binance REST backfill blocked due to IP ban for ${symbol} ${tf}, retry in ${Math.ceil(retryDelay/1000/60)} minutes`);
+              }
+              
               scheduleWarmupRetry(warmKey, seedKey, retryDelay);
               setWarmupState(warmKey, {
                 pending: false,
-                lastError: String((error as any)?.message || error),
+                lastError: errorMsg,
                 nextRetryTs: Date.now() + retryDelay,
                 fulfilled: false,
               });

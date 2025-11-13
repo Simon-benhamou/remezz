@@ -429,6 +429,7 @@ function dailyPivotsFromOHLCV(ohlcv: number[][]) {
 }
 
 const snapCache = new Map<string, { ts: number; data: TechnicalSnapshot }>();
+const pendingSnaps = new Map<string, Promise<TechnicalSnapshot>>(); // Share pending requests
 const SNAP_TTL_MS = 1000 * 10; // 10s - Reduced from 15s for more frequent updates
 const MAX_CACHE_SIZE = 1000; // Limit cache size to prevent memory leaks
 const cacheKey = (symbol: string) => `snap_${symbol}`;
@@ -522,6 +523,14 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
     // Allow bypassing cache for critical evaluations
     if (!options?.bypassCache) {
       const key = cacheKey(symbol);
+      
+      // Check if already computing for this symbol (share the promise)
+      const pending = pendingSnaps.get(key);
+      if (pending) {
+        return pending;
+      }
+      
+      // Check cache
       const cached = snapCache.get(key);
       if (cached && (Date.now() - cached.ts) < SNAP_TTL_MS) {
         return { ...(cached.data) };
@@ -530,6 +539,25 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
   } catch (error) {
     console.warn(`[buildTechSnapshot] Cache read failed for ${symbol}:`, error);
   }
+  
+  // Create promise and store it to share with concurrent requests
+  const key = cacheKey(symbol);
+  const promise = buildTechSnapshotInternal(symbol, userId, options);
+  
+  // Store pending promise
+  if (!options?.bypassCache) {
+    pendingSnaps.set(key, promise);
+    
+    // Clean up when done (success or failure)
+    promise.finally(() => {
+      pendingSnaps.delete(key);
+    });
+  }
+  
+  return promise;
+}
+
+async function buildTechSnapshotInternal(symbol: string, userId?: string, options?: { bypassCache?: boolean }): Promise<TechnicalSnapshot>{
   const cfg = getConfig();
   const minBars15m = Math.max(50, Number(cfg.DIAGNOSTICS_MIN_BARS_15M || 100));
   // 15m window for reactivity (~2 days), 1h for pivots/daily
@@ -974,7 +1002,9 @@ export async function buildTechSnapshot(symbol: string, userId?: string, options
     if (snapCache.size >= Math.floor(MAX_CACHE_SIZE * 0.9)) {
       cleanupCache();
     }
-    snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); 
+    if (!options?.bypassCache) {
+      snapCache.set(cacheKey(symbol), { ts: Date.now(), data: snapshot }); 
+    }
   } catch (error) {
     console.warn(`[buildTechSnapshot] Cache write failed for ${symbol}:`, error);
   }
