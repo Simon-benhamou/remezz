@@ -272,6 +272,18 @@ export function getStableSnapshot(symbol: string): PredictorSnapshot | null {
   return state?.stableSnapshot ?? null;
 }
 
+export function isSnapshotStale(
+  snapshot: PredictorSnapshot,
+  options: { maxAgeMs?: number; now?: number } = {},
+): boolean {
+  const { maxAgeMs = STALE_AFTER_MS, now = Date.now() } = options;
+  if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) {
+    return false;
+  }
+  const age = Math.max(0, now - snapshot.timestamp);
+  return age > maxAgeMs;
+}
+
 export function getRawHistory(symbol: string): PredictorSnapshot[] {
   const state = store.get(normalizeSymbol(symbol));
   if (!state) {

@@ -11,7 +11,7 @@ import {
 } from '../../pythonPredictor.js';
 import type { PythonPredictionProbabilities, PythonPredictionResult } from '../../pythonPredictor.js';
 import { getCachedPrediction, setCachedPrediction } from '../../predictorCache.js';
-import { recordPrediction, getStableSnapshot } from '../../predictorStateStore.js';
+import { recordPrediction, getStableSnapshot, isSnapshotStale } from '../../predictorStateStore.js';
 import type { PredictorSnapshot } from '../../predictorStateStore.js';
 import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
 import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
@@ -41,6 +41,10 @@ const PYTHON_BOOST_MIN_SAMPLES = pythonSignalTuning.minSamplesForBoost;
 const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.45);  // 0.58 → 0.45
 const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.45); // 0.52 → 0.45
 const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.20);       // 0.32 → 0.20
+const MAX_REGISTRATION_SNAPSHOT_AGE_MS = Math.max(
+  30_000,
+  Number(process.env.PREDICTOR_REGISTRATION_MAX_AGE_MS ?? '240000'),
+);
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
@@ -1311,6 +1315,7 @@ class MetaAdaptiveStrategyAgent {
             bias: strongBias,
           };
           pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
+          pythonSignalMeta = hybridSignal;
         } else {
           console.error('🚨 PREDICTOR FAILURE - NO CACHE AVAILABLE - BLOCKING TRADES', {
             symbol: input.symbol,
@@ -2129,7 +2134,7 @@ class MetaAdaptiveStrategyAgent {
   }): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
     if (!params.sessionId || !params.token) return 'skipped';
 
-    const pythonSignalMeta = params.pythonSignal ?? null;
+    let pythonSignalMeta: PythonHybridSignal | null = params.pythonSignal ?? null;
     let predictorProbabilities: PythonPredictionProbabilities | null = pythonSignalMeta?.probabilities ?? null;
     let predictorDecision: StrategyBias = pythonSignalMeta?.bias ?? 'both';
     let predictorDecisionLabel: 'long' | 'short' | 'none' = pythonSignalMeta?.decision ?? 'none';
@@ -2154,14 +2159,29 @@ class MetaAdaptiveStrategyAgent {
     if (shouldQueryPython && params.predictorFeatures) {
       try {
         console.log(`🔄 Querying predictor for ${params.symbol} (no existing signal)`);
-        const raw = await getPythonPrediction(params.predictorFeatures);
-        const enriched = buildHybridSignal(raw);
-        predictorProbabilities = enriched.probabilities;
-        const probabilityEdge = computeProbabilityEdge(enriched);
-        predictorDecision = Math.abs(probabilityEdge) >= PYTHON_NEUTRAL_THRESHOLD ? enriched.bias : 'both';
-        predictorDecisionLabel = predictorDecision === 'both' ? 'none' : enriched.decision;
-        predictorPrimaryProbability = enriched.primaryProbability;
-        predictorConfidence = enriched.confidence;
+        const prediction = await getPythonPrediction(params.predictorFeatures);
+        const recordResult = recordPrediction({
+          symbol: params.symbol,
+          prediction,
+          features: params.predictorFeatures,
+          source: 'custom:register_active_trade',
+          meta: {
+            stage: 'register_active_trade',
+            predictionSource: 'fresh',
+          },
+        });
+        const snapshot = recordResult.stableSnapshot ?? recordResult.rawSnapshot;
+        const hybridSignal = buildHybridSignalFromSnapshot(snapshot, prediction, {
+          stableChanged: recordResult.stableChanged,
+          predictionSource: 'fresh',
+        });
+        pythonSignalMeta = hybridSignal;
+        predictorProbabilities = hybridSignal.probabilities;
+        const probabilityEdge = computeProbabilityEdge(hybridSignal);
+        predictorDecision = Math.abs(probabilityEdge) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
+        predictorDecisionLabel = predictorDecision === 'both' ? 'none' : hybridSignal.decision;
+        predictorPrimaryProbability = hybridSignal.primaryProbability;
+        predictorConfidence = hybridSignal.confidence;
       } catch (error) {
         if (process.env.UNIT_TEST_MODE !== 'true') {
           console.warn('python predictor failure during trade registration', error);
@@ -2169,6 +2189,34 @@ class MetaAdaptiveStrategyAgent {
       }
     } else if (hasPythonSignal) {
       console.log(`✅ Using existing predictor signal for ${params.symbol} from ranking/evaluate`);
+    }
+
+    if (!pythonSignalMeta) {
+      const stableSnapshot = getStableSnapshot(params.symbol);
+      if (stableSnapshot) {
+        const stale = isSnapshotStale(stableSnapshot, { maxAgeMs: MAX_REGISTRATION_SNAPSHOT_AGE_MS });
+        if (stale) {
+          console.log(JSON.stringify({
+            level: 'warn',
+            event: 'predictor_snapshot_stale_for_registration',
+            symbol: params.symbol,
+            snapshotAgeMs: Date.now() - stableSnapshot.timestamp,
+            maxAgeMs: MAX_REGISTRATION_SNAPSHOT_AGE_MS,
+          }));
+        } else {
+          const hybridSignal = buildHybridSignalFromSnapshot(stableSnapshot, null, {
+            predictionSource: 'stable_snapshot_fallback',
+            fallback: true,
+          });
+          pythonSignalMeta = hybridSignal;
+          predictorProbabilities = hybridSignal.probabilities;
+          const probabilityEdge = computeProbabilityEdge(hybridSignal);
+          predictorDecision = Math.abs(probabilityEdge) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
+          predictorDecisionLabel = predictorDecision === 'both' ? 'none' : hybridSignal.decision;
+          predictorPrimaryProbability = hybridSignal.primaryProbability;
+          predictorConfidence = Math.max(predictorConfidence, hybridSignal.confidence);
+        }
+      }
     }
 
     if (!Number.isFinite(predictorConfidence)) {
