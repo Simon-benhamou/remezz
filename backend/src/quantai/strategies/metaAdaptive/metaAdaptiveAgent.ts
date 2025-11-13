@@ -11,6 +11,8 @@ import {
 } from '../../pythonPredictor.js';
 import type { PythonPredictionProbabilities, PythonPredictionResult } from '../../pythonPredictor.js';
 import { getCachedPrediction, setCachedPrediction } from '../../predictorCache.js';
+import { recordPrediction, getStableSnapshot } from '../../predictorStateStore.js';
+import type { PredictorSnapshot } from '../../predictorStateStore.js';
 import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
 import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
@@ -181,6 +183,7 @@ type PythonHybridSignal = {
   riskMultiplier: number;
   cooldown: { active: boolean; reason: string | null; seconds: number | null };
   meta?: Record<string, unknown> | null;
+  snapshot: PredictorSnapshot | null;
 };
 
 type PredictorGateResult = {
@@ -247,6 +250,96 @@ function buildHybridSignal(result: PythonPredictionResult): PythonHybridSignal {
       seconds: cooldownSeconds,
     },
     meta: result.meta ?? null,
+    snapshot: null,
+  };
+}
+
+function buildHybridSignalFromSnapshot(
+  snapshot: PredictorSnapshot,
+  raw: PythonPredictionResult | null,
+  options: {
+    stableChanged?: boolean;
+    predictionSource?: string;
+    fallback?: boolean;
+  } = {},
+): PythonHybridSignal {
+  const entryWeight = Number.isFinite(snapshot.entryWeight)
+    ? snapshot.entryWeight
+    : raw?.entryWeight ?? 1;
+  const riskMultiplier = Number.isFinite(snapshot.riskMultiplier)
+    ? snapshot.riskMultiplier
+    : raw?.riskMultiplier ?? 1;
+  const fallbackCooldownSeconds = raw?.cooldown?.seconds ?? null;
+  const cooldownSeconds = Number.isFinite(snapshot.cooldown.seconds ?? NaN)
+    ? snapshot.cooldown.seconds
+    : (typeof fallbackCooldownSeconds === 'number' && Number.isFinite(fallbackCooldownSeconds)
+        ? fallbackCooldownSeconds
+        : null);
+  const cooldown = {
+    active: Boolean(snapshot.cooldown.active ?? raw?.cooldown?.active),
+    reason: snapshot.cooldown.reason ?? raw?.cooldown?.reason ?? null,
+    seconds: cooldownSeconds,
+  };
+  const classOrder = snapshot.classOrder
+    ? [...snapshot.classOrder]
+    : raw?.classOrder
+      ? [...raw.classOrder]
+      : null;
+
+  const mergedMeta = (() => {
+    const target: Record<string, unknown> = {};
+    if (raw?.meta && typeof raw.meta === 'object') {
+      Object.assign(target, raw.meta);
+    }
+    if (snapshot.meta && typeof snapshot.meta === 'object') {
+      Object.assign(target, snapshot.meta);
+    }
+    if (options.predictionSource) {
+      target.predictionSource = options.predictionSource;
+    }
+    if (typeof options.stableChanged === 'boolean') {
+      target.snapshotUpdated = options.stableChanged;
+    }
+    if (options.fallback) {
+      target.snapshotFallback = true;
+    }
+    target.snapshotSource = snapshot.source;
+    target.snapshotTimestamp = snapshot.timestamp;
+    target.snapshotAgeMs = Math.max(0, Date.now() - snapshot.timestamp);
+    if (raw) {
+      target.rawDecision = raw.decision;
+      target.rawConfidence = raw.confidence;
+    }
+    target.snapshotDecision = snapshot.decision;
+    target.snapshotConfidence = snapshot.confidence;
+    return Object.keys(target).length > 0 ? target : null;
+  })();
+
+  const synthetic: PythonPredictionResult = {
+    decision: snapshot.decision,
+    probabilities: { ...snapshot.probabilities },
+    probabilityLong: Number.isFinite(snapshot.probabilityLong)
+      ? snapshot.probabilityLong
+      : raw?.probabilityLong ?? snapshot.probabilities.long ?? 0,
+    probabilityShort: Number.isFinite(snapshot.probabilityShort)
+      ? snapshot.probabilityShort
+      : raw?.probabilityShort ?? snapshot.probabilities.short ?? 0,
+    probabilityNone: Number.isFinite(snapshot.probabilityNone)
+      ? snapshot.probabilityNone
+      : raw?.probabilityNone ?? snapshot.probabilities.none ?? 0,
+    confidence: Number.isFinite(snapshot.confidence) ? snapshot.confidence : raw?.confidence ?? 0,
+    entryWeight,
+    riskMultiplier,
+    cooldown,
+    meta: mergedMeta,
+    classOrder,
+  };
+
+  const hybrid = buildHybridSignal(synthetic);
+  return {
+    ...hybrid,
+    meta: synthetic.meta,
+    snapshot,
   };
 }
 
@@ -1148,19 +1241,34 @@ class MetaAdaptiveStrategyAgent {
     
     if (pythonAvailable && predictorFeatures) {
       try {
-        // Try cache first for instant response
+        const now = Date.now();
         let prediction = getCachedPrediction(input.symbol);
         if (prediction) {
           predictionSource = 'cache';
         } else {
-          // Cache miss - fetch fresh prediction
           prediction = getPythonPredictionSync(predictorFeatures);
           predictionSource = 'fresh';
-          // Cache the fresh prediction for next time
           setCachedPrediction(input.symbol, prediction, predictorFeatures);
         }
-        
-        const hybridSignal = buildHybridSignal(prediction);
+
+        const recordResult = recordPrediction({
+          symbol: input.symbol,
+          prediction,
+          features: predictorFeatures,
+          source: 'evaluate',
+          meta: {
+            stage: 'meta_adaptive_evaluation',
+            predictionSource,
+            evaluationTs: now,
+          },
+        });
+
+        const effectiveSnapshot = recordResult.stableSnapshot ?? recordResult.rawSnapshot;
+        const hybridSignal = buildHybridSignalFromSnapshot(effectiveSnapshot, prediction, {
+          stableChanged: recordResult.stableChanged,
+          predictionSource,
+        });
+
         const probabilityEdge = computeProbabilityEdge(hybridSignal);
         pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
         const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
@@ -1170,12 +1278,31 @@ class MetaAdaptiveStrategyAgent {
         };
         pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
       } catch (error) {
-        // Try to use cached prediction as fallback before blocking
+        const errorMsg = error instanceof Error ? error.message : String(error);
         const cachedFallback = getCachedPrediction(input.symbol);
         if (cachedFallback) {
-          console.warn(`⚠️ Predictor error, using cached fallback for ${input.symbol}`);
+          console.warn(`⚠️ Predictor error, using cached fallback for ${input.symbol}`, {
+            error: errorMsg,
+          });
           predictionSource = 'cache';
-          const hybridSignal = buildHybridSignal(cachedFallback);
+          const recordResult = recordPrediction({
+            symbol: input.symbol,
+            prediction: cachedFallback,
+            features: null,
+            source: 'evaluate',
+            meta: {
+              stage: 'meta_adaptive_evaluation',
+              predictionSource: 'cache_fallback',
+              evaluationTs: Date.now(),
+              error: errorMsg,
+            },
+          });
+          const effectiveSnapshot = recordResult.stableSnapshot ?? recordResult.rawSnapshot;
+          const hybridSignal = buildHybridSignalFromSnapshot(effectiveSnapshot, cachedFallback, {
+            stableChanged: recordResult.stableChanged,
+            predictionSource: 'cache_fallback',
+            fallback: true,
+          });
           const probabilityEdge = computeProbabilityEdge(hybridSignal);
           pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
           const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
@@ -1185,18 +1312,32 @@ class MetaAdaptiveStrategyAgent {
           };
           pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
         } else {
-          // 🚨 CRITICAL: No cache available - predictor failure BLOCKS trading
-          const errorMsg = (error as Error).message;
           console.error('🚨 PREDICTOR FAILURE - NO CACHE AVAILABLE - BLOCKING TRADES', {
             symbol: input.symbol,
             error: errorMsg,
             timestamp: new Date().toISOString(),
             severity: 'CRITICAL',
           });
-          
-          // Throw error to stop evaluation - no trades will be registered
           throw new Error(`Predictor failure for ${input.symbol}: ${errorMsg}`);
         }
+      }
+    }
+
+    if (!pythonSignal) {
+      const stableSnapshot = getStableSnapshot(input.symbol);
+      if (stableSnapshot) {
+        const hybridSignal = buildHybridSignalFromSnapshot(stableSnapshot, null, {
+          predictionSource: predictionSource !== 'none' ? predictionSource : 'stable_only',
+          fallback: true,
+        });
+        const probabilityEdge = computeProbabilityEdge(hybridSignal);
+        pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
+        const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
+        pythonSignal = {
+          ...hybridSignal,
+          bias: strongBias,
+        };
+        pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
       }
     }
 

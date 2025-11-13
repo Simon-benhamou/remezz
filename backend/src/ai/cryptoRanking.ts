@@ -15,7 +15,9 @@ import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 import { isInsufficientDataError, type InsufficientDataMeta } from '../data/errors.js';
 import { getPredictionSync, isPythonPredictorAvailable, type PythonPredictionResult } from '../quantai/pythonPredictor.js';
-import { getCachedPrediction, setCachedPrediction } from '../quantai/predictorCache.js';
+import { setCachedPrediction } from '../quantai/predictorCache.js';
+import { recordPrediction, getStableSnapshot } from '../quantai/predictorStateStore.js';
+import type { PredictorSnapshot } from '../quantai/predictorStateStore.js';
 import type { TechnicalSnapshot } from './tech.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
@@ -78,7 +80,7 @@ export interface RankedOpportunity {
     confidence: number;
   };
   aiReasoning: string[];
-  predictor?: import('../quantai/pythonPredictor.js').PythonPredictionResult;  // XGBoost prediction from ranking time
+  predictor?: PredictorSnapshot;  // Stable predictor snapshot captured during ranking
 }
 
 export interface VolumeFilteredCrypto {
@@ -169,8 +171,19 @@ async function getPredictorBias(
     // Cache for 5 minutes with longer TTL for stability
     // Strategy/diagnostics will reuse THIS prediction from cache
     setCachedPrediction(symbol, prediction, features, 5 * 60 * 1000);
-    console.log(`✅ ${symbol}: Cached predictor decision=${prediction.decision}, confidence=${(prediction.confidence * 100).toFixed(1)}%`);
-    
+
+    recordPrediction({
+      symbol,
+      prediction,
+      features,
+      source: 'ranking',
+      meta: { stage: 'ai_ranking' },
+    });
+
+    console.log(
+      `✅ ${symbol}: Cached predictor decision=${prediction.decision}, confidence=${(prediction.confidence * 100).toFixed(1)}%`
+    );
+
     return prediction;
   } catch (error) {
     console.warn(`⚠️ Predictor failed for ${symbol}:`, error instanceof Error ? error.message : String(error));
@@ -554,7 +567,7 @@ export async function rankCryptosWithAI(
     // 🎯 PREDICTOR FILTER: Remove cryptos with bias 'none' or low confidence
     console.log('🤖 Running XGBoost predictor on all candidates...');
     const predictorFiltered: typeof validSnapshots = [];
-    const predictorResults = new Map<string, import('../quantai/pythonPredictor.js').PythonPredictionResult>();  // Store predictions
+    const predictorResults = new Map<string, PredictorSnapshot>();  // Store stable predictor snapshots
     let predictorSkipped = 0;
     let predictorNone = 0;
     let predictorLowConfidence = 0;
@@ -587,7 +600,44 @@ export async function rankCryptosWithAI(
       
       // Passed all filters - keep this crypto AND store the prediction
       predictorFiltered.push(snap);
-      predictorResults.set(snap.symbol, prediction);  // Store for later
+      const stableSnapshot = getStableSnapshot(snap.symbol);
+      const snapshotForOpportunity: PredictorSnapshot = stableSnapshot
+        ? {
+            ...stableSnapshot,
+            probabilities: { ...stableSnapshot.probabilities },
+            features: stableSnapshot.features ? { ...stableSnapshot.features } : null,
+            cooldown: { ...stableSnapshot.cooldown },
+            classOrder: stableSnapshot.classOrder ? [...stableSnapshot.classOrder] : null,
+            meta: stableSnapshot.meta ? { ...stableSnapshot.meta } : null,
+          }
+        : {
+            symbol: snap.symbol.toUpperCase(),
+            decision,
+            confidence,
+            probabilities: { ...prediction.probabilities },
+            probabilityLong: prediction.probabilityLong,
+            probabilityShort: prediction.probabilityShort,
+            probabilityNone: prediction.probabilityNone,
+            entryWeight: prediction.entryWeight,
+            riskMultiplier: prediction.riskMultiplier,
+            cooldown: {
+              active: Boolean(prediction.cooldown?.active),
+              reason: prediction.cooldown?.reason ?? null,
+              seconds:
+                Number.isFinite(Number(prediction.cooldown?.seconds)) && prediction.cooldown?.seconds != null
+                  ? Number(prediction.cooldown.seconds)
+                  : null,
+            },
+            classOrder: Array.isArray(prediction.classOrder)
+              ? prediction.classOrder.filter((value): value is string => typeof value === 'string')
+              : null,
+            features: null,
+            featuresHash: null,
+            source: 'ranking',
+            timestamp: Date.now(),
+            meta: { fallback: true },
+          };
+      predictorResults.set(snap.symbol, snapshotForOpportunity);  // Store for later
       console.log(`✅ ${snap.symbol}: decision=${decision}, confidence=${(confidence * 100).toFixed(1)}% - PASSED`);
     }
     
