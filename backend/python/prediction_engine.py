@@ -293,7 +293,9 @@ class HybridPredictionEngine:
         meta_long_ratio = _clamp(meta_long_ratio, 0.0, 1.0)
 
         blended_ratio = _clamp(0.6 * meta_long_ratio + 0.4 * prior_long_ratio, 0.0, 1.0)
-        none_weight = _clamp(0.55 * prob_none + 0.45 * (1.0 - seq_confidence), 0.0, 0.95)
+        # REDUCED NONE BIAS: Use XGBoost prediction more directly, reduce LSTM influence
+        # Old formula gave ~95% none even with good signals
+        none_weight = _clamp(0.35 * prob_none + 0.15 * (1.0 - seq_confidence), 0.0, 0.70)
         remaining_mass = max(1e-6, 1.0 - none_weight)
         final_long = remaining_mass * blended_ratio
         final_short = remaining_mass - final_long

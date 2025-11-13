@@ -119,6 +119,7 @@ type NormalizedStartConfig = {
     minStartEdge: number; // between 0 and 1
     minStartConfidence: number; // between 0 and 1
     priorWeight: number; // weighting factor for ranking candidates by predictor prior
+    adaptiveThresholds: boolean; // whether to use adaptive thresholds based on aggressiveness
   };
 };
 
@@ -770,20 +771,54 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   const perps = Array.isArray(payload.perps) ? payload.perps.slice(0, 100) : undefined;
   const symbol = typeof payload.symbol === 'string' ? payload.symbol : undefined;
 
-  // Selection policy (optional)
-  // ⚠️  PREDICTOR DISABLED: Model returns 100% 'none' predictions - feature mismatch issue
-  // Until predictor is fixed, disable all gating to allow agents to trade
+  // Selection policy - adaptive thresholds based on aggressiveness and market conditions
   const rawPolicy = (payload.selectionPolicy || {}) as Partial<{
     requireSignalAtStart: boolean;
     minStartEdge: number;
     minStartConfidence: number;
     priorWeight: number;
+    adaptiveThresholds: boolean;
   }>;
+  
+  // Adaptive thresholds based on aggressiveness profile
+  const adaptiveMode = rawPolicy.adaptiveThresholds !== false;
+  let baseEdge: number, baseConfidence: number, basePriorWeight: number;
+  
+  if (adaptiveMode) {
+    switch (aggressiveness) {
+      case 'aggressive':
+        baseEdge = 0.03; // Lower threshold for aggressive (more opportunities)
+        baseConfidence = 0.40; // Lower confidence requirement
+        basePriorWeight = 0.25; // Moderate predictor influence
+        break;
+      case 'reactive':
+        baseEdge = 0.05; // Balanced threshold
+        baseConfidence = 0.50; // Balanced confidence
+        basePriorWeight = 0.40; // Higher predictor influence
+        break;
+      case 'conservative':
+        baseEdge = 0.08; // Higher threshold (fewer but better signals)
+        baseConfidence = 0.60; // Higher confidence requirement
+        basePriorWeight = 0.50; // Strong predictor influence
+        break;
+      default:
+        baseEdge = 0.05;
+        baseConfidence = 0.50;
+        basePriorWeight = 0.40;
+    }
+  } else {
+    // Manual thresholds from payload
+    baseEdge = 0.05;
+    baseConfidence = 0.50;
+    basePriorWeight = 0.40;
+  }
+  
   const selectionPolicy = {
-    requireSignalAtStart: false, // ❌ FORCE DISABLED - predictor unreliable
-    minStartEdge: Math.min(Math.max(Number(rawPolicy.minStartEdge ?? 0.01), 0), 1), // Lowered threshold
-    minStartConfidence: Math.min(Math.max(Number(rawPolicy.minStartConfidence ?? 0.30), 0), 1), // Lowered threshold
-    priorWeight: 0, // ❌ FORCE DISABLED - don't use predictor for ranking
+    requireSignalAtStart: rawPolicy.requireSignalAtStart !== false, // ✅ RE-ENABLED with adaptive thresholds
+    minStartEdge: Math.min(Math.max(Number(rawPolicy.minStartEdge ?? baseEdge), 0), 1),
+    minStartConfidence: Math.min(Math.max(Number(rawPolicy.minStartConfidence ?? baseConfidence), 0), 1),
+    priorWeight: Math.min(Math.max(Number(rawPolicy.priorWeight ?? basePriorWeight), 0), 1),
+    adaptiveThresholds: adaptiveMode,
   } as const;
 
   return {
@@ -1053,14 +1088,26 @@ async function selectSymbol(
     }
 
     if (!symbol && prefetched) {
-      // Filter out opportunities with unclear bias (none)
-      if (prefetched.autoBias?.bias === 'none' || !prefetched.autoBias || prefetched.autoBias.confidence < 0.5) {
+      // Evaluate prefetched opportunity with enhanced signal validation
+      const minPrefetchConfidence = config.selectionPolicy.adaptiveThresholds 
+        ? config.selectionPolicy.minStartConfidence * 0.85 // Slightly lower for prefetched (already analyzed)
+        : config.selectionPolicy.minStartConfidence;
+        
+      const hasValidSignal = prefetched.autoBias?.bias !== 'none' && 
+        prefetched.autoBias?.bias && 
+        (prefetched.autoBias.confidence ?? 0) >= minPrefetchConfidence;
+      
+      if (!hasValidSignal) {
         decisionLog.push({
           timestamp: Date.now(),
           level: 'warn',
           message: `Prefetched opportunity ${prefetched.symbol} has unclear signal (bias: ${prefetched.autoBias?.bias || 'unknown'}, confidence: ${prefetched.autoBias?.confidence || 0})`,
           context: 'selection',
-          meta: { reason: 'unclear_signal' },
+          meta: { 
+            reason: 'unclear_signal',
+            requiredConfidence: minPrefetchConfidence.toFixed(3),
+            actualConfidence: (prefetched.autoBias?.confidence || 0).toFixed(3)
+          },
         });
       } else if (reservationToken && isSmartSymbolReserved(prefetched.symbol, reservationToken)) {
         decisionLog.push({
@@ -1112,7 +1159,7 @@ async function selectSymbol(
       }
     }
 
-    // Helper to evaluate predictor start signal for a symbol
+    // Helper to evaluate predictor start signal for a symbol with enhanced scoring
     const evaluateStartSignal = async (sym: string) => {
       try {
         const snap = await buildTechSnapshot(sym, config.userId);
@@ -1126,28 +1173,81 @@ async function selectSymbol(
         const top: 'long' | 'short' | 'none' = pNone >= primary && pNone >= Math.max(pLong, pShort) ? 'none' : (pLong >= pShort ? 'long' : 'short');
         const edge = Math.abs(pLong - pShort);
         const confidence = pred.confidence;
-        const meets = top !== 'none' && primary >= config.selectionPolicy.minStartEdge && confidence >= config.selectionPolicy.minStartConfidence;
-        const priorScore = (primary - pNone) * Math.max(confidence, 0);
-        return { ok: true, top, primary, edge, confidence, priorScore } as const;
+        
+        // Enhanced quality scoring: considers directional clarity, edge strength, and confidence
+        const directionalClarity = top === 'none' ? 0 : (primary - pNone); // How much stronger is direction vs none
+        const edgeQuality = edge / (1 - pNone); // Edge relative to non-none probability
+        const qualityScore = directionalClarity * edgeQuality * confidence;
+        
+        // Adaptive threshold based on quality score
+        const meetsThreshold = top !== 'none' && 
+          primary >= config.selectionPolicy.minStartEdge && 
+          confidence >= config.selectionPolicy.minStartConfidence &&
+          directionalClarity >= 0.10; // At least 10% stronger than 'none'
+        
+        const priorScore = qualityScore; // Use quality score for ranking
+        return { ok: true, top, primary, edge, confidence, priorScore, qualityScore, directionalClarity } as const;
       } catch (error) {
         return { ok: false, reason: (error as Error).message || 'predict_failed' } as const;
       }
     };
 
     if (!symbol) {
-      // Optionally reorder candidates by predictor prior if priorWeight > 0
+      // Reorder candidates by predictor quality score if priorWeight > 0
       let orderedCandidates = candidates.slice();
       if (config.selectionPolicy.priorWeight > 0 && orderedCandidates.length) {
-        const sample = orderedCandidates.slice(0, Math.min(8, orderedCandidates.length));
-        const scored: Array<{ sym: string; score: number }> = [];
+        const sampleSize = Math.min(12, orderedCandidates.length); // Increased sample size
+        const sample = orderedCandidates.slice(0, sampleSize);
+        const scored: Array<{ sym: string; score: number; details?: any }> = [];
+        
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'info',
+          message: `Evaluating ${sample.length} candidates with predictor scoring`,
+          context: 'selection',
+          meta: { priorWeight: config.selectionPolicy.priorWeight },
+        });
+        
         for (const sym of sample) {
           const evalRes = await evaluateStartSignal(sym);
-          const score = evalRes.ok ? evalRes.priorScore : 0;
-          scored.push({ sym, score });
+          if (evalRes.ok) {
+            // Weighted score: combine quality with prior weight
+            const weightedScore = evalRes.priorScore * config.selectionPolicy.priorWeight +
+              (1 - config.selectionPolicy.priorWeight) * (evalRes.confidence || 0);
+            scored.push({ 
+              sym, 
+              score: weightedScore,
+              details: { 
+                top: evalRes.top, 
+                edge: evalRes.edge?.toFixed(3),
+                confidence: evalRes.confidence?.toFixed(3),
+                quality: evalRes.qualityScore?.toFixed(3)
+              }
+            });
+          } else {
+            scored.push({ sym, score: 0 });
+          }
         }
-        const byScore = scored.sort((a,b) => b.score - a.score).map(s => s.sym);
-        const rest = orderedCandidates.filter(s => !byScore.includes(s));
-        orderedCandidates = [...byScore, ...rest];
+        
+        const byScore = scored.sort((a, b) => b.score - a.score);
+        const topCandidates = byScore.slice(0, 5);
+        
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'info',
+          message: `Ranked candidates by quality score`,
+          context: 'selection',
+          meta: { 
+            topCandidates: topCandidates.map(c => ({ 
+              symbol: c.sym, 
+              score: c.score.toFixed(3),
+              ...c.details 
+            }))
+          },
+        });
+        
+        const rest = orderedCandidates.filter(s => !sample.includes(s));
+        orderedCandidates = [...byScore.map(s => s.sym), ...rest];
       }
 
       for (const candidate of orderedCandidates) {
@@ -1179,14 +1279,43 @@ async function selectSymbol(
           // Only check DB + in-memory reservations after successful reservation
           const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken);
           let passSignal = true;
+          let signalDetails: any = null;
+          
           if (config.selectionPolicy.requireSignalAtStart) {
             const evalRes = await evaluateStartSignal(candidate);
-            passSignal = evalRes.ok && evalRes.top !== 'none' && evalRes.primary >= config.selectionPolicy.minStartEdge && evalRes.confidence >= config.selectionPolicy.minStartConfidence;
+            
+            if (evalRes.ok) {
+              // Enhanced signal validation with quality checks
+              const meetsEdge = evalRes.primary >= config.selectionPolicy.minStartEdge;
+              const meetsConfidence = evalRes.confidence >= config.selectionPolicy.minStartConfidence;
+              const meetsClarity = (evalRes.directionalClarity ?? 0) >= 0.10; // Direction must be 10%+ stronger than 'none'
+              const isDirectional = evalRes.top !== 'none';
+              
+              passSignal = isDirectional && meetsEdge && meetsConfidence && meetsClarity;
+              
+              signalDetails = {
+                top: evalRes.top,
+                edge: evalRes.edge?.toFixed(3),
+                confidence: evalRes.confidence?.toFixed(3),
+                clarity: evalRes.directionalClarity?.toFixed(3),
+                quality: evalRes.qualityScore?.toFixed(3),
+                meetsEdge,
+                meetsConfidence,
+                meetsClarity
+              };
+            } else {
+              passSignal = false;
+              signalDetails = { error: evalRes.reason };
+            }
+            
             decisionLog.push({
               timestamp: Date.now(),
               level: passSignal ? 'info' : 'warn',
-              message: passSignal ? `Candidate ${candidate} meets start signal thresholds` : `Candidate ${candidate} failed start signal thresholds`,
+              message: passSignal 
+                ? `Candidate ${candidate} meets quality thresholds`
+                : `Candidate ${candidate} failed quality validation`,
               context: 'selection',
+              meta: signalDetails,
             });
           }
 

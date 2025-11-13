@@ -625,6 +625,8 @@ export function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, 
     volumeRatio = 0;
   }
 
+  // ⚠️  FEATURE ALIGNMENT: Return ONLY the 55 features used in model training
+  // DO NOT include microstructure sequences - model was trained WITHOUT them
   const features: Record<string, number> = {
     ema9,
     ema12,
@@ -679,38 +681,9 @@ export function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, 
     vol_adj_momentum: volAdjustedMomentum,
     rsi_ema_div: rsiEmaDiv,
   };
-
-  const micro = (snap as any)?.microstructure as TechnicalSnapshot['microstructure'] | undefined;
-  if (micro) {
-    features.order_flow_imbalance = safeNumber(micro.orderFlowImbalance, 0);
-    features.aggression_ratio = safeNumber(micro.aggressionRatio, 0);
-    features.delta_volume_slope = safeNumber(micro.deltaVolumeSlope, 0);
-    features.midprice_pressure = safeNumber(micro.midpricePressure, 0);
-    features.micro_atr = safeNumber(micro.microAtr, 0);
-    features.trend_strength = safeNumber(micro.trendStrength, 0);
-    features.price_velocity = safeNumber(micro.priceVelocity, 0);
-    features.delta_rsi = safeNumber(micro.deltaRsi, 0);
-    features.delta_obi = safeNumber(micro.deltaObi, 0);
-    const seqs: Array<[string, number[]]> = [
-      ['seq_close_', micro.normalizedCloses ?? []],
-      ['seq_volume_', micro.normalizedVolumes ?? []],
-      ['seq_rsi_', micro.rsiSequence ?? []],
-      ['seq_obi_', micro.obiSequence ?? []],
-    ];
-    for (const [prefix, values] of seqs) {
-      for (let idx = 0; idx < 20; idx += 1) {
-        const value = Number.isFinite(values[idx] ?? NaN) ? values[idx]! : 0;
-        features[`${prefix}${idx}`] = value;
-      }
-    }
-  } else {
-    const prefixes = ['seq_close_', 'seq_volume_', 'seq_rsi_', 'seq_obi_'];
-    for (const prefix of prefixes) {
-      for (let idx = 0; idx < 20; idx += 1) {
-        features[`${prefix}${idx}`] = 0;
-      }
-    }
-  }
+  
+  // Note: Microstructure features (sequences) are NOT included to match training data
+  // Model was trained on 55 features only (see python/features.txt)
 
   if (Object.values(features).some(value => !Number.isFinite(value))) {
     return null;
