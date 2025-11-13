@@ -1315,7 +1315,6 @@ class MetaAdaptiveStrategyAgent {
             bias: strongBias,
           };
           pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
-          pythonSignalMeta = hybridSignal;
         } else {
           console.error('🚨 PREDICTOR FAILURE - NO CACHE AVAILABLE - BLOCKING TRADES', {
             symbol: input.symbol,
