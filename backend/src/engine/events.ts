@@ -735,11 +735,13 @@ export async function startEventEngine(){
   if (running) return; running = true;
   const cfg = getConfig(); const pollMs = Number(cfg.POLL_MS || 2000);
   let booted = false;
+  console.log(`🚀 Event engine starting (pollMs=${pollMs})...`);
 
   async function loop(){
     try {
       if (!booted) {
         booted = true;
+        console.log('♻️ Event engine boot: rehydrating active sessions...');
         try {
           const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null } });
           for (const s of sessions) {
@@ -772,6 +774,12 @@ export async function startEventEngine(){
         } catch {}
       }
       const sessions = await prisma.agentSession.findMany({ where:{ stoppedAt:null }, orderBy:{ startedAt:'asc' } });
+      
+      // Log tick cycle start
+      if (sessions.length > 0 && !booted) {
+        console.log(`🔄 Event engine tick cycle: processing ${sessions.length} active agent(s)...`);
+      }
+      
       for (let i = 0; i < sessions.length; i++) {
         const s = sessions[i];
         // Use currentSymbol for Smart Agents, fallback to original symbol
@@ -784,6 +792,7 @@ export async function startEventEngine(){
           
           const tech = await tickOnce(s.id, sym);
           lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
+          console.log(`📊 [${s.id.slice(0,8)}] ${sym} @ $${tech.last.toFixed(2)} | RSI:${tech.rsi14?.toFixed(1)} ATR:${(tech.atrPct*100).toFixed(2)}%`);
           try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
           // Process meta-adaptive signals for this session
           try {
