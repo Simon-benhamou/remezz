@@ -40,6 +40,7 @@ const PYTHON_BOOST_MIN_SAMPLES = pythonSignalTuning.minSamplesForBoost;
 const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.45);  // 0.58 → 0.45
 const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.45); // 0.52 → 0.45
 const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.20);       // 0.32 → 0.20
+const PREDICTOR_GATE_ENABLED = process.env.PREDICTOR_GATE_ENABLED !== 'false'; // Bloque si decision=none
 const MAX_REGISTRATION_SNAPSHOT_AGE_MS = Math.max(
   30_000,
   Number(process.env.PREDICTOR_REGISTRATION_MAX_AGE_MS ?? '240000'),
@@ -2997,6 +2998,26 @@ class MetaAdaptiveStrategyAgent {
     if (!ordered.length) return null;
     if (!this.isSymbolEligibleForEntry(sessionId ?? null, symbol)) {
       return null;
+    }
+    
+    // 🔴 PREDICTOR GATE: Block entry if predictor says "none" (95%+ accuracy)
+    if (PREDICTOR_GATE_ENABLED && ordered.length > 0) {
+      const firstSignal = ordered[0];
+      const pythonSignal = firstSignal?.pythonSignal;
+      if (pythonSignal && pythonSignal.decision === 'none') {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'predictor_gate_block',
+          symbol,
+          sessionId: sessionId ?? null,
+          strategy: firstSignal.id,
+          strategyBias: firstSignal.bias,
+          predictorDecision: pythonSignal.decision,
+          predictorProbs: pythonSignal.probabilities,
+          reason: 'predictor_none_96pct_accuracy',
+        }));
+        return null;
+      }
     }
     const available = ordered.filter(signal => signal.active).length > 0
       ? ordered.filter(signal => signal.active)
