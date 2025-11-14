@@ -100,6 +100,29 @@ export type AgentDiagnosticInfo = {
     volumeRatio: number;
   };
   
+  // Orders
+  orders: Array<{
+    id: string;
+    side: 'long' | 'short';
+    type: string;
+    status: string;
+    price: number | null;
+    amount: number;
+    filled: number;
+    createdAt: string;
+  }>;
+  
+  // Fills (Trades)
+  fills: Array<{
+    id: string;
+    orderId: string;
+    side: 'long' | 'short';
+    price: number;
+    amount: number;
+    fee: number;
+    createdAt: string;
+  }>;
+  
   timestamp: number;
 };
 
@@ -289,6 +312,8 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           volumeMA: 0,
           volumeRatio: 0,
         },
+        orders: [],
+        fills: [],
         timestamp: Date.now(),
       };
     }
@@ -387,6 +412,8 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           volumeMA: 0,
           volumeRatio: 0,
         },
+        orders: [],
+        fills: [],
         timestamp: Date.now(),
       };
     }
@@ -631,6 +658,19 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       volumeRatio: Number((((snap as any).volume ?? 0) / Math.max((snap as any).volumeMA ?? 1, 1)).toFixed(2)),
     };
 
+    // Get orders and fills
+    const orders = await prisma.order.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    
+    const fills = await prisma.fill.findMany({
+      where: { sessionId },
+      orderBy: { ts: 'desc' },
+      take: 100,
+    });
+
     return {
       sessionId,
       symbol: session.symbol,
@@ -639,6 +679,25 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       strategy: strategyInfo,
       position: positionInfo,
       market,
+      orders: orders.map(o => ({
+        id: o.id,
+        side: (o.side || 'buy') as 'long' | 'short',
+        type: o.type || 'market',
+        status: o.status || 'unknown',
+        price: o.price ? Number(o.price.toString()) : null,
+        amount: o.qty ? Number(o.qty.toString()) : 0,
+        filled: o.qty ? Number(o.qty.toString()) : 0,
+        createdAt: o.createdAt.toISOString(),
+      })),
+      fills: fills.map(f => ({
+        id: f.id,
+        orderId: f.orderId,
+        side: (f.side || 'buy') as 'long' | 'short',
+        price: f.price ? Number(f.price.toString()) : 0,
+        amount: f.qty ? Number(f.qty.toString()) : 0,
+        fee: f.fee ? Number(f.fee.toString()) : 0,
+        createdAt: f.ts.toISOString(),
+      })),
       timestamp: Date.now(),
     };
   } catch (error) {
