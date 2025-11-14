@@ -149,10 +149,7 @@ export default function ProfessionalChart({ symbol, sessionId, orders = [], fill
       // Fetch OHLCV data from backend using API client
       const response = await api.getOHLCV(symbol, timeframe, candleCount);
       
-      console.log('[ProfessionalChart] API Response:', response);
-      
       if (!response.data || !Array.isArray(response.data)) {
-        console.error('[ProfessionalChart] Invalid response format:', response);
         throw new Error('Invalid data format received');
       }
 
@@ -169,7 +166,7 @@ export default function ProfessionalChart({ symbol, sessionId, orders = [], fill
       // Sort by time
       candles.sort((a, b) => a.time - b.time);
 
-      console.log(`[ProfessionalChart] Processed ${candles.length} candles for ${symbol}`);
+
       
       setChartData(candles);
       

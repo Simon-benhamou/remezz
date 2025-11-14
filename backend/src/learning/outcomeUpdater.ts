@@ -126,6 +126,15 @@ async function processOutcomeUpdates(): Promise<void> {
           failed++;
         }
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        
+        // Don't fail evaluations due to temporary warmup issues
+        if (errorMsg.includes('websocket_warmup_pending') || errorMsg.includes('Insufficient data')) {
+          console.log(`⏳ Skipping evaluation ${evaluation.id} - data not ready yet (${errorMsg.split(':')[0]})`);
+          // Don't increment failed counter - this is expected during warmup
+          continue;
+        }
+        
         console.warn(`Failed to process outcome for evaluation ${evaluation.id}:`, error);
         failed++;
       }

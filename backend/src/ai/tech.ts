@@ -509,7 +509,23 @@ export async function ensureRecentVolumeIntegrity(options: {
     }
 
     attempt += 1;
-    data = await refetch(data.length + 10, attempt);
+    try {
+      data = await refetch(data.length + 10, attempt);
+    } catch (refetchError) {
+      const errorMsg = refetchError instanceof Error ? refetchError.message : String(refetchError);
+      if (errorMsg.includes('websocket_warmup_pending')) {
+        throw new UnusableMarketDataError('Data source temporarily unavailable during warmup', {
+          symbol,
+          timeframe,
+          invalidRatio: ratio,
+          windowSize,
+          zeroCount,
+          nullCount,
+          attempts: attempt,
+        });
+      }
+      throw refetchError;
+    }
   }
 }
 
@@ -561,7 +577,26 @@ async function buildTechSnapshotInternal(symbol: string, userId?: string, option
   const cfg = getConfig();
   const minBars15m = Math.max(50, Number(cfg.DIAGNOSTICS_MIN_BARS_15M || 100));
   // 15m window for reactivity (~2 days), 1h for pivots/daily
-  let o15 = await getOHLCV(symbol, '15m', Math.max(300, minBars15m), userId); // [ts, o, h, l, c, v]
+  let o15: number[][];
+  try {
+    o15 = await getOHLCV(symbol, '15m', Math.max(300, minBars15m), userId); // [ts, o, h, l, c, v]
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    if (errorMsg.includes('websocket_warmup_pending')) {
+      const warmup = getOhlcvWarmupState(symbol, '15m');
+      throw new InsufficientDataError('WebSocket warmup in progress', {
+        symbol,
+        timeframe: '15m',
+        availableBars: 0,
+        minBarsNeeded: minBars15m,
+        firstBarAt: null,
+        lastBarAt: null,
+        warmupState: warmup,
+      });
+    }
+    throw error; // Re-throw other errors
+  }
+  
   if (!o15 || o15.length < minBars15m) {
     const warmup = getOhlcvWarmupState(symbol, '15m');
     throw new InsufficientDataError('Not enough data (15m)', {
@@ -597,8 +632,23 @@ async function buildTechSnapshotInternal(symbol: string, userId?: string, option
     },
   });
 
-  const o1hPromise = getOHLCV(symbol, '1h', 600, userId);
-  const o4hPromise = getOHLCV(symbol, '4h', 600, userId);
+  const o1hPromise = getOHLCV(symbol, '1h', 600, userId).catch(error => {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    if (errorMsg.includes('websocket_warmup_pending')) {
+      console.warn(`[buildTechSnapshot] 1h data not ready for ${symbol}, will fallback to 15m`);
+      return null;
+    }
+    throw error;
+  });
+  
+  const o4hPromise = getOHLCV(symbol, '4h', 600, userId).catch(error => {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    if (errorMsg.includes('websocket_warmup_pending')) {
+      console.warn(`[buildTechSnapshot] 4h data not ready for ${symbol}, will fallback to lower timeframe`);
+      return null;
+    }
+    throw error;
+  });
 
   // 🔍 DEBUG RAW OHLCV: Compare avec API publique
   console.log(`[RAW OHLCV DEBUG] ${symbol}: Last 5 candles from getOHLCV:`,
