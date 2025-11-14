@@ -12,6 +12,7 @@ import {
 import { api } from '../api';
 import PriceChart from '../charts/PriceChart';
 // Activity Feed component (optional)
+import ProfessionalChart from '../components/charts/ProfessionalChart';
 import { AgentStateCard } from '../components/monitor/AgentStateCard';
 import { StrategyCard } from '../components/monitor/StrategyCard';
 import { PredictorCard } from '../components/monitor/PredictorCard';
@@ -213,9 +214,14 @@ export function MonitorPageNew() {
             </Row>
           </Card>
 
-          {/* Price Chart - Full Width */}
-          <Card size="small" style={{ minHeight: '500px' }}>
-            <PriceChart symbol={symbol} />
+          {/* Professional Trading Chart - Full Width */}
+          <Card size="small" style={{ minHeight: '700px', padding: 0 }}>
+            <ProfessionalChart
+              symbol={symbol}
+              sessionId={sessionId!}
+              orders={data.orders}
+              fills={data.fills}
+            />
           </Card>
 
           {/* Agent Info Grid */}

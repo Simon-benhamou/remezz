@@ -1301,6 +1301,7 @@ class MetaAdaptiveStrategyAgent {
     if (pythonAvailable && predictorFeatures) {
       try {
         const now = Date.now();
+        // Check cache first (for diagnostics), but always compute fresh if expired
         let prediction = getCachedPrediction(input.symbol);
         if (prediction) {
           predictionSource = 'cache';

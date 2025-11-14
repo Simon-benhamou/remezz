@@ -242,6 +242,51 @@ router.post('/history', async (req, res) => {
   }
 });
 
+// Get OHLCV candlestick data for professional chart
+router.post('/ohlcv', async (req, res) => {
+  try {
+    const { symbol, timeframe = '15m', limit = 300 } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol parameter is required in request body' });
+    }
+    
+    const { getOHLCV } = await import('../data/market.js');
+    const { resolveSymbol } = await import('../exchange/ccxtClient.js');
+    
+    // Resolve symbol
+    const resolvedSymbol = await resolveSymbol(symbol);
+    
+    // Get OHLCV data
+    const ohlcv = await getOHLCV(resolvedSymbol, timeframe, limit);
+    
+    // Convert to candlestick format
+    const candleData = ohlcv.map((candle) => ({
+      timestamp: new Date(candle[0]).toISOString(),
+      open: candle[1],
+      high: candle[2],
+      low: candle[3],
+      close: candle[4],
+      volume: candle[5]
+    }));
+    
+    res.json({
+      symbol: resolvedSymbol,
+      timeframe,
+      data: candleData,
+      count: candleData.length,
+      timestamp: Date.now(),
+      lastUpdate: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Failed to get OHLCV data:', err);
+    res.status(502).json({
+      error: 'ohlcv_unavailable',
+      details: String((err as any)?.message || err)
+    });
+  }
+});
+
 // Keep GET method for backward compatibility (URL encode the symbol)
 router.get('/history/:symbol', async (req, res) => {
   try {
