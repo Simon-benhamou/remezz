@@ -179,3 +179,17 @@ export async function fetchBinanceOhlcv(
 
   return normalized;
 }
+
+/**
+ * Check if Binance REST API is currently IP banned
+ */
+export function isBinanceRestIpBanned(): boolean {
+  return ipBannedUntil > Date.now();
+}
+
+/**
+ * Get timestamp when IP ban will expire (0 if not banned)
+ */
+export function getBinanceIpBanExpiry(): number {
+  return ipBannedUntil;
+}

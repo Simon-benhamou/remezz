@@ -7,6 +7,7 @@ import { getEvaluationsPendingOutcome, updateTradeOutcome } from './tradeEvaluat
 import { getOHLCV } from '../data/market.js';
 import type { MarketOutcome } from './tradeEvaluationLogger.js';
 import { trackOutcomeUpdate, checkOutcomeUpdaterLag } from '../monitoring/alerting.js';
+import { isBinanceRestIpBanned, getBinanceIpBanExpiry } from '../services/binanceRest.js';
 
 const WORKER_INTERVAL_MS = 5 * 60 * 1000; // Run every 5 minutes
 const OUTCOME_WAIT_MS = 60 * 60 * 1000; // Wait 1 hour after evaluation
@@ -75,6 +76,21 @@ function calculateOutcome(
 async function processOutcomeUpdates(): Promise<void> {
   if (isRunning) {
     console.log('⏳ Outcome updater already running, skipping...');
+    return;
+  }
+
+  // Skip entirely if Binance REST is IP banned - prevents spam logs
+  if (isBinanceRestIpBanned()) {
+    const banExpiry = getBinanceIpBanExpiry();
+    const remainingSeconds = Math.ceil((banExpiry - Date.now()) / 1000);
+    // Log once per 5 minutes to avoid spam
+    const now = Date.now();
+    const lastLogKey = 'outcome_updater_ip_ban_log';
+    const lastLog = (global as any)[lastLogKey] || 0;
+    if (now - lastLog > 5 * 60 * 1000) {
+      console.log(`⏸️  Outcome updater paused due to IP ban (${remainingSeconds}s remaining)`);
+      (global as any)[lastLogKey] = now;
+    }
     return;
   }
 
