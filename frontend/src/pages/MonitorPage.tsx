@@ -175,25 +175,24 @@ export default function MonitorPage(){
         
         setStatus(s);
         const sym = s?.session?.symbol || s?.symbol || symbol;
-        if (sym) setSymbol(sym);
+        if (sym) {
+          setSymbol(sym);
+          // Load ticker IMMEDIATELY for header display (no await)
+          loadTicker(sym).catch(() => {});
+        }
         
         updateProgress(LoadingPhase.CORE_DATA, 30, 'Loading agent state...');
         
         // Load core data in parallel with timeout
-        const [agentData, tickerData] = await Promise.allSettled([
+        const [agentData] = await Promise.allSettled([
           Promise.race([
             // Try diagnostics API first for richer data (predictor, symbolProfile)
             api.getDiagnostics(s.session.id).catch(() => api.getAgentState(s.session.id)),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 10000)) // augmenté à 10s
-          ]),
-          sym ? Promise.race([
-            api.getTicker(sym),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Ticker timeout')), 10000)) // augmenté à 10s
-          ]) : Promise.resolve(null)
+          ])
         ]);
         
         if (agentData.status === 'fulfilled') setAgent(agentData.value);
-        if (tickerData.status === 'fulfilled' && tickerData.value) setTicker(tickerData.value);
         
         updateProgress(LoadingPhase.SECONDARY_DATA, 50, 'Loading trading data...');
         
@@ -296,6 +295,7 @@ export default function MonitorPage(){
         try { setAnalysis(await api.analysis(sym)); } catch {}
         try { setKpi(await api.getPerf(sessionId)); } catch {}
         try { setOrders(await api.getOrders(sessionId)); } catch {}
+        try { setTrades(await api.getTrades(sessionId)); } catch {}
         loadAnalytics();
       }
       if (msg.type === 'orders') {

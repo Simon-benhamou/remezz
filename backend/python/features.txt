@@ -1,7 +1,3 @@
-index
-close
-futureClose
-futureReturn
 ema9
 ema12
 ema20
@@ -54,4 +50,3 @@ microImbalance
 mtfAgreement
 vol_adj_momentum
 rsi_ema_div
-target
