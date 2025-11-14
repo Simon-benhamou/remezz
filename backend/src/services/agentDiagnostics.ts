@@ -469,32 +469,10 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       }
     }
     
-    // 🆕 NEW: Fallback to global predictor cache if still no data
-    if (!pythonSignal) {
-      const { getCachedPrediction } = await import('../quantai/predictorCache.js');
-      const cached = getCachedPrediction(session.symbol);
-      if (cached) {
-        pythonSignal = {
-          decision: cached.decision,
-          confidence: cached.confidence,
-          probabilities: cached.probabilities,
-          probabilityLong: cached.probabilityLong,
-          probabilityShort: cached.probabilityShort,
-          probabilityNone: cached.probabilityNone,
-          primaryProbability: Math.max(
-            cached.probabilityLong,
-            cached.probabilityShort,
-            cached.probabilityNone
-          ),
-          entryWeight: cached.entryWeight,
-          riskMultiplier: cached.riskMultiplier,
-          cooldown: cached.cooldown,
-        };
-        predictionSource = 'cache';
-      }
-    }
+    // 🔴 REMOVED: No more cache fallback - always compute fresh prediction
+    // Previously used predictorCache.getCachedPrediction() but user wants NO CACHE
 
-    // 🆕 NEW: As a last resort, compute a fresh prediction on-demand using the current snapshot
+    // 🆕 NEW: Compute a fresh prediction on-demand using the current snapshot
     if (!pythonSignal && snap) {
       try {
         const { buildPredictorFeatures } = await import('../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
