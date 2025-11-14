@@ -2317,30 +2317,37 @@ class MetaAdaptiveStrategyAgent {
 
     const intendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
     
-    // 🐞 FIX BUG 2: Block ALL trades (LONG + SHORT) if confidence < 30%
-    // Old code only checked SHORT trades, allowing risky LONG entries
-    const MIN_CONFIDENCE_FOR_TRADE = 0.30; // 30% minimum for ANY trade
-    if (predictorConfidence < MIN_CONFIDENCE_FOR_TRADE && intendedSide !== 'both') {
-      console.log(JSON.stringify({
-        level: 'info',
-        event: 'adaptive_trade_blocked_by_predictor',
-        symbol: params.symbol,
-        sessionId: params.sessionId ?? null,
-        token: params.token,
-        predictorDecision: effectivePredictorDirection,
-        predictorConfidence: Number(predictorConfidence.toFixed(4)),
-        intendedSide,
-        reason: 'market_uncertainty_too_low_confidence',
-        threshold: MIN_CONFIDENCE_FOR_TRADE,
-      }));
-      return 'predictor_blocked';
-    }
+    // 🔴 PREDICTOR GATE DISABLED: Too many false positives (LONG vs strategy)
+    // Strategy-only mode: predictor only logs, does NOT block trades
+    // Reason: Predictor trained on 1h/4h but applied to 15m → timing mismatch
+    // Example: ADA 61% LONG vs bearish strategy → lose money
+    const PREDICTOR_GATE_ENABLED = false;
     
-    // Only block if there's a CLEAR contradiction between predictor and intended side
-    const hasContradiction = (effectivePredictorDirection === 'long' && intendedSide === 'short') 
-      || (effectivePredictorDirection === 'short' && intendedSide === 'long');
-    
-    if (hasContradiction) {
+    if (PREDICTOR_GATE_ENABLED) {
+      // 🐞 FIX BUG 2: Block ALL trades (LONG + SHORT) if confidence < 30%
+      // Old code only checked SHORT trades, allowing risky LONG entries
+      const MIN_CONFIDENCE_FOR_TRADE = 0.30; // 30% minimum for ANY trade
+      if (predictorConfidence < MIN_CONFIDENCE_FOR_TRADE && intendedSide !== 'both') {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'adaptive_trade_blocked_by_predictor',
+          symbol: params.symbol,
+          sessionId: params.sessionId ?? null,
+          token: params.token,
+          predictorDecision: effectivePredictorDirection,
+          predictorConfidence: Number(predictorConfidence.toFixed(4)),
+          intendedSide,
+          reason: 'market_uncertainty_too_low_confidence',
+          threshold: MIN_CONFIDENCE_FOR_TRADE,
+        }));
+        return 'predictor_blocked';
+      }
+      
+      // Only block if there's a CLEAR contradiction between predictor and intended side
+      const hasContradiction = (effectivePredictorDirection === 'long' && intendedSide === 'short') 
+        || (effectivePredictorDirection === 'short' && intendedSide === 'long');
+      
+      if (hasContradiction) {
       console.log(JSON.stringify({
         level: 'info',
         event: 'adaptive_trade_blocked_by_predictor',
@@ -2375,8 +2382,24 @@ class MetaAdaptiveStrategyAgent {
       }));
       return 'predictor_blocked';
     }
+    } // End if (PREDICTOR_GATE_ENABLED)
+
+    // 📊 Log predictor signal for observability (even when gate disabled)
+    console.log(JSON.stringify({
+      level: 'debug',
+      event: 'predictor_signal_logged',
+      symbol: params.symbol,
+      sessionId: params.sessionId ?? null,
+      predictorDecision: effectivePredictorDirection,
+      predictorConfidence: Number(predictorConfidence.toFixed(4)),
+      intendedSide,
+      gateEnabled: PREDICTOR_GATE_ENABLED,
+    }));
 
     if (intendedSide === 'short') {
+      // 🔴 SHORT GUARDRAIL DISABLED (predictor gate off)
+      // All technical checks bypassed - strategy decides alone
+      if (PREDICTOR_GATE_ENABLED) {
       const predictorAllowsShort = effectivePredictorDirection === 'short' || effectivePredictorDirection === 'both';
       const cmfThresholdAbs = params.flowThreshold != null && Number.isFinite(params.flowThreshold)
         ? Math.abs(params.flowThreshold)
@@ -2435,6 +2458,7 @@ class MetaAdaptiveStrategyAgent {
         }));
         return 'predictor_blocked';
       }
+      } // End if (PREDICTOR_GATE_ENABLED)
     }
 
     const qty = new PreciseDecimal(params.qty ?? 0);
