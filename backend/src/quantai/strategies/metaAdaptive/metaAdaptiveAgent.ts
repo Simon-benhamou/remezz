@@ -1301,15 +1301,11 @@ class MetaAdaptiveStrategyAgent {
     if (pythonAvailable && predictorFeatures) {
       try {
         const now = Date.now();
-        // Check cache first (for diagnostics), but always compute fresh if expired
-        let prediction = getCachedPrediction(input.symbol);
-        if (prediction) {
-          predictionSource = 'cache';
-        } else {
-          prediction = getPythonPredictionSync(predictorFeatures);
-          predictionSource = 'fresh';
-          setCachedPrediction(input.symbol, prediction, predictorFeatures);
-        }
+        // ALWAYS use fresh predictions - no cache to avoid stale data
+        const prediction = getPythonPredictionSync(predictorFeatures);
+        predictionSource = 'fresh';
+        // Save to cache only for diagnostics API, but never read from it
+        setCachedPrediction(input.symbol, prediction, predictorFeatures);
 
         const recordResult = recordPrediction({
           symbol: input.symbol,

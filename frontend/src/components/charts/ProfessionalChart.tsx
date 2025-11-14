@@ -146,29 +146,18 @@ export default function ProfessionalChart({ symbol, sessionId, orders = [], fill
         '4h': 200,
       }[timeframe];
 
-      // Fetch OHLCV data from backend
-      const response = await fetch('/api/market/ohlcv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol,
-          timeframe,
-          limit: candleCount,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch data: ${response.statusText}`);
-      }
-
-      const result = await response.json();
+      // Fetch OHLCV data from backend using API client
+      const response = await api.getOHLCV(symbol, timeframe, candleCount);
       
-      if (!result.data || !Array.isArray(result.data)) {
+      console.log('[ProfessionalChart] API Response:', response);
+      
+      if (!response.data || !Array.isArray(response.data)) {
+        console.error('[ProfessionalChart] Invalid response format:', response);
         throw new Error('Invalid data format received');
       }
 
       // Transform data to lightweight-charts format
-      const candles: CandleData[] = result.data.map((candle: any) => ({
+      const candles: CandleData[] = response.data.map((candle: any) => ({
         time: (new Date(candle.timestamp).getTime() / 1000) as UTCTimestamp,
         open: Number(candle.open),
         high: Number(candle.high),
@@ -179,6 +168,8 @@ export default function ProfessionalChart({ symbol, sessionId, orders = [], fill
 
       // Sort by time
       candles.sort((a, b) => a.time - b.time);
+
+      console.log(`[ProfessionalChart] Processed ${candles.length} candles for ${symbol}`);
       
       setChartData(candles);
       

@@ -154,6 +154,8 @@ export const api = {
     (await client.post(`/api/market/ticker`, { symbol })).data,
   getHistory: async (symbol: string) =>
     (await client.post(`/api/market/history`, { symbol })).data,
+  getOHLCV: async (symbol: string, timeframe: string, limit: number) =>
+    (await client.post(`/api/market/ohlcv`, { symbol, timeframe, limit })).data,
   quicktest: async (symbol: string, hours: number, plan?: any) =>
     (await client.post('/api/sim/quicktest', { symbol, hours, plan })).data,
   getOpsMetrics: async () =>
