@@ -140,7 +140,8 @@ export function OrdersTradesPanel({
   };
 
   const getSideTag = (side: string) => {
-    return side?.toLowerCase() === 'buy' ? (
+    const normalized = side?.toLowerCase();
+    return (normalized === 'buy' || normalized === 'long') ? (
       <Tag color="green">LONG</Tag>
     ) : (
       <Tag color="red">SHORT</Tag>
@@ -150,12 +151,13 @@ export function OrdersTradesPanel({
   const orderColumns = [
     {
       title: 'Time',
-      dataIndex: 'timestamp',
-      key: 'timestamp',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
       width: 160,
-      render: (ts: number | string) => {
+      render: (ts: string) => {
+        if (!ts) return 'N/A';
         const date = new Date(ts);
-        return date.toLocaleString();
+        return isNaN(date.getTime()) ? 'Invalid Date' : date.toLocaleString();
       },
     },
     {
@@ -247,11 +249,143 @@ export function OrdersTradesPanel({
     },
   ];
 
+  // Group fills into completed trades (entry/exit pairs)
+  const groupedTrades = [];
+  const fillsByOrder = fills.reduce((acc, fill) => {
+    if (!acc[fill.orderId]) acc[fill.orderId] = [];
+    acc[fill.orderId].push(fill);
+    return acc;
+  }, {} as Record<string, any[]>);
+
+  // Match entry/exit pairs from filled orders
+  const filledOrders = orders.filter(o => o.status?.toLowerCase() === 'filled');
+  for (let i = 0; i < filledOrders.length; i++) {
+    const order = filledOrders[i];
+    // Find opposite side order close in time (exit)
+    const oppositeOrder = filledOrders.find((o, idx) => 
+      idx > i && 
+      ((order.side === 'buy' && o.side === 'sell') || (order.side === 'sell' && o.side === 'buy')) &&
+      Math.abs(new Date(o.createdAt).getTime() - new Date(order.createdAt).getTime()) < 24 * 3600 * 1000
+    );
+    
+    if (oppositeOrder) {
+      const isLong = order.side === 'buy' || order.side === 'long';
+      const entryPrice = order.price || 0;
+      const exitPrice = oppositeOrder.price || 0;
+      const amount = order.amount || 0;
+      const pnl = isLong ? (exitPrice - entryPrice) * amount : (entryPrice - exitPrice) * amount;
+      const roi = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice * 100 * (isLong ? 1 : -1)) : 0;
+      const fees = (order.fee || 0) + (oppositeOrder.fee || 0);
+      
+      groupedTrades.push({
+        id: `${order.id}-${oppositeOrder.id}`,
+        entryTime: order.createdAt,
+        exitTime: oppositeOrder.createdAt,
+        side: isLong ? 'LONG' : 'SHORT',
+        entryPrice,
+        exitPrice,
+        amount,
+        pnl,
+        roi,
+        fees,
+        duration: Math.floor((new Date(oppositeOrder.createdAt).getTime() - new Date(order.createdAt).getTime()) / 60000),
+      });
+      
+      // Remove processed order from future iterations
+      filledOrders.splice(filledOrders.indexOf(oppositeOrder), 1);
+    }
+  }
+
+  const tradeColumns = [
+    {
+      title: 'Entry Time',
+      dataIndex: 'entryTime',
+      key: 'entryTime',
+      width: 150,
+      render: (ts: string) => {
+        if (!ts) return 'N/A';
+        const date = new Date(ts);
+        return isNaN(date.getTime()) ? 'Invalid' : date.toLocaleString();
+      },
+    },
+    {
+      title: 'Side',
+      dataIndex: 'side',
+      key: 'side',
+      width: 80,
+      render: (side: string) => getSideTag(side),
+    },
+    {
+      title: 'Entry Price',
+      dataIndex: 'entryPrice',
+      key: 'entryPrice',
+      width: 110,
+      align: 'right' as const,
+      render: (price: number) => `$${price.toFixed(4)}`,
+    },
+    {
+      title: 'Exit Price',
+      dataIndex: 'exitPrice',
+      key: 'exitPrice',
+      width: 110,
+      align: 'right' as const,
+      render: (price: number) => `$${price.toFixed(4)}`,
+    },
+    {
+      title: 'Amount',
+      dataIndex: 'amount',
+      key: 'amount',
+      width: 100,
+      align: 'right' as const,
+      render: (amount: number) => amount?.toFixed(2),
+    },
+    {
+      title: 'PnL',
+      dataIndex: 'pnl',
+      key: 'pnl',
+      width: 100,
+      align: 'right' as const,
+      render: (pnl: number) => (
+        <span style={{ color: pnl >= 0 ? '#52c41a' : '#f5222d', fontWeight: 'bold' }}>
+          {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT
+        </span>
+      ),
+    },
+    {
+      title: 'ROI',
+      dataIndex: 'roi',
+      key: 'roi',
+      width: 90,
+      align: 'right' as const,
+      render: (roi: number) => (
+        <span style={{ color: roi >= 0 ? '#52c41a' : '#f5222d', fontWeight: 'bold' }}>
+          {roi >= 0 ? '+' : ''}{roi.toFixed(2)}%
+        </span>
+      ),
+    },
+    {
+      title: 'Duration',
+      dataIndex: 'duration',
+      key: 'duration',
+      width: 90,
+      align: 'right' as const,
+      render: (mins: number) => `${mins}m`,
+    },
+    {
+      title: 'Fees',
+      dataIndex: 'fees',
+      key: 'fees',
+      width: 80,
+      align: 'right' as const,
+      render: (fees: number) => fees > 0 ? `$${fees.toFixed(2)}` : '-',
+    },
+  ];
+
   const fillColumns = [
     {
       title: 'Time',
-      dataIndex: 'timestamp',
-      key: 'timestamp',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
       width: 160,
       render: (ts: number | string) => {
         const date = new Date(ts);
@@ -354,29 +488,54 @@ export function OrdersTradesPanel({
         />
       </Card>
 
-      {/* Trade History (Fills) */}
+      {/* Completed Trades */}
       <Card
         title={
           <Space>
             <CheckCircleOutlined />
-            <span>Trade History</span>
-            {fills.length > 0 && (
-              <Tag color="green">{fills.length}</Tag>
+            <span>Completed Trades</span>
+            {groupedTrades.length > 0 && (
+              <Tag color="green">{groupedTrades.length}</Tag>
             )}
           </Space>
         }
         size="small"
       >
         <Table
-          dataSource={fills}
-          columns={fillColumns}
+          dataSource={groupedTrades}
+          columns={tradeColumns}
           rowKey="id"
           size="small"
           pagination={{ pageSize: 10, showSizeChanger: false }}
-          scroll={{ x: 1000 }}
-          locale={{ emptyText: 'No trades yet' }}
+          scroll={{ x: 1200 }}
+          locale={{ emptyText: 'No completed trades' }}
         />
       </Card>
+
+      {/* Raw Fills (for debugging) */}
+      {fills.length > 0 && (
+        <Card
+          title={
+            <Space>
+              <CheckCircleOutlined />
+              <span>Raw Fills (Debug)</span>
+              <Tag color="default">{fills.length}</Tag>
+            </Space>
+          }
+          size="small"
+          style={{ opacity: 0.6 }}
+        >
+          <Table
+            dataSource={fills}
+            columns={fillColumns}
+            rowKey="id"
+            size="small"
+            pagination={{ pageSize: 10, showSizeChanger: false }}
+            scroll={{ x: 1000 }}
+            locale={{ emptyText: 'No fills' }}
+          />
+        </Card>
+      )}
     </Space>
   );
 }

@@ -165,7 +165,7 @@ export function MonitorPageNew() {
           {/* Market Snapshot - Slim Bar */}
           <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
             <Row gutter={16} align="middle">
-              <Col span={6}>
+              <Col span={5}>
                 <Statistic
                   title="Price"
                   value={market.last?.toFixed(4) || 'N/A'}
@@ -173,7 +173,7 @@ export function MonitorPageNew() {
                   valueStyle={{ fontSize: '18px' }}
                 />
               </Col>
-              <Col span={6}>
+              <Col span={5}>
                 <Statistic
                   title="24h Change"
                   value={`${market.change24h?.toFixed(2) || '0'}%`}
@@ -184,18 +184,30 @@ export function MonitorPageNew() {
                   }}
                 />
               </Col>
-              <Col span={6}>
+              <Col span={5}>
+                <Statistic
+                  title="Market Bias"
+                  value={data.symbolProfile?.directionBias || 'neutral'}
+                  valueStyle={{ 
+                    fontSize: '14px',
+                    textTransform: 'uppercase',
+                    color: data.symbolProfile?.directionBias === 'bullish' ? '#52c41a' : 
+                           data.symbolProfile?.directionBias === 'bearish' ? '#f5222d' : '#8c8c8c'
+                  }}
+                />
+              </Col>
+              <Col span={5}>
                 <Statistic
                   title="24h Volume"
                   value={market.volume24h ? `$${(market.volume24h / 1e6).toFixed(2)}M` : 'N/A'}
-                  valueStyle={{ fontSize: '16px' }}
+                  valueStyle={{ fontSize: '14px' }}
                 />
               </Col>
-              <Col span={6}>
+              <Col span={4}>
                 <Statistic
-                  title="Volume Ratio"
+                  title="Vol Ratio"
                   value={market.volumeRatio?.toFixed(2) || 'N/A'}
-                  valueStyle={{ fontSize: '16px' }}
+                  valueStyle={{ fontSize: '14px' }}
                 />
               </Col>
             </Row>

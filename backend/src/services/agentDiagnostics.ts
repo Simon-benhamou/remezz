@@ -650,9 +650,32 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
     }
 
     // Extract market context
+    // Calculate 24h change from historical data if available
+    let change24hPct = 0;
+    try {
+      const { getOHLCV } = await import('../data/market.js');
+      const result = await getOHLCV(session.symbol, '1h', 25).catch(() => null);
+      if (result && Array.isArray(result) && result.length >= 24) {
+        const current = snap.last;
+        const price24hAgo = result[0][4]; // close price 24h ago
+        if (price24hAgo > 0) {
+          change24hPct = ((current - price24hAgo) / price24hAgo) * 100;
+        }
+      } else if (result && typeof result === 'object' && 'series' in result) {
+        const series = (result as any).series;
+        if (Array.isArray(series) && series.length >= 24) {
+          const current = snap.last;
+          const price24hAgo = series[0][4];
+          if (price24hAgo > 0) {
+            change24hPct = ((current - price24hAgo) / price24hAgo) * 100;
+          }
+        }
+      }
+    } catch {}
+
     const market = {
       last: Number(snap.last.toFixed(4)),
-      change24h: Number(((snap as any).change24h ?? 0).toFixed(2)),
+      change24h: Number(change24hPct.toFixed(2)),
       volume24h: Number(((snap as any).volume24h ?? (snap as any).volume ?? 0).toFixed(0)),
       volumeMA: Number(((snap as any).volumeMA ?? 0).toFixed(0)),
       volumeRatio: Number((((snap as any).volume ?? 0) / Math.max((snap as any).volumeMA ?? 1, 1)).toFixed(2)),
