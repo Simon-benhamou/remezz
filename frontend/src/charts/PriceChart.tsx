@@ -307,7 +307,7 @@ export default function PriceChart({
             
             fallbackData.push({
               time: timestamp,
-              value: Number(basePrice.toFixed(2))
+              value: Number(basePrice.toFixed(4))
             });
           }
           
@@ -335,23 +335,27 @@ export default function PriceChart({
     loadHistory();
   }, [symbol]);
 
-  // Handle live price updates
+  // Handle live price updates - REAL-TIME with second precision
   React.useEffect(() => {
     if (typeof price === 'number' && isFinite(price) && seriesRef.current && !isLoadingHistory) {
       const timestamp = Math.floor(Date.now() / 1000);
-      const newPoint = { time: timestamp, value: price };
+      const newPoint = { time: timestamp, value: Number(price.toFixed(4)) };
       
       setChartData(prev => {
-        // Avoid duplicate timestamps
+        // Remove any points with same or newer timestamp to avoid duplicates
         const filtered = prev.filter(p => p.time < timestamp);
         const updated = [...filtered, newPoint];
         
         // Keep last 2000 points for performance
         const trimmed = updated.slice(-2000);
         
-        // Update chart with complete dataset
+        // Update chart immediately for real-time display
         if (seriesRef.current) {
           seriesRef.current.setData(trimmed);
+          // Auto-scroll to latest price
+          try {
+            chartRef.current?.timeScale().scrollToRealTime();
+          } catch {}
         }
         
         return trimmed;
