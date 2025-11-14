@@ -14,11 +14,6 @@ import ccxt from 'ccxt';
 import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId, waitForWsHealthy } from '../services/binanceWebSocket.js';
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 import { isInsufficientDataError, type InsufficientDataMeta } from '../data/errors.js';
-import { getPredictionSync, isPythonPredictorAvailable, type PythonPredictionResult } from '../quantai/pythonPredictor.js';
-import { setCachedPrediction } from '../quantai/predictorCache.js';
-import { recordPrediction, getStableSnapshot } from '../quantai/predictorStateStore.js';
-import { buildPredictorFeatures as buildMetaAdaptivePredictorFeatures } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
-import type { PredictorSnapshot } from '../quantai/predictorStateStore.js';
 import type { TechnicalSnapshot } from './tech.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
@@ -81,7 +76,6 @@ export interface RankedOpportunity {
     confidence: number;
   };
   aiReasoning: string[];
-  predictor?: PredictorSnapshot;  // Stable predictor snapshot captured during ranking
 }
 
 export interface VolumeFilteredCrypto {
@@ -90,50 +84,6 @@ export interface VolumeFilteredCrypto {
   change24h: number;
   price: number;
   volumeRank: number;
-}
-
-/**
- * Query XGBoost predictor for a crypto with snapshot
- */
-async function getPredictorBias(
-  symbol: string,
-  snap: TechnicalSnapshot
-): Promise<import('../quantai/pythonPredictor.js').PythonPredictionResult | null> {
-  if (!isPythonPredictorAvailable()) {
-    return null;
-  }
-  
-  const features = buildMetaAdaptivePredictorFeatures(snap);
-  if (!features) {
-    return null;
-  }
-  
-  try {
-    // 🎯 RANKING ALWAYS FETCHES FRESH: This is the SOURCE OF TRUTH that initializes the cache
-    console.log(`🔄 ${symbol}: Ranking fetching fresh predictor (will update cache)...`);
-    const prediction = getPredictionSync(features);
-    
-    // Cache for 5 minutes with longer TTL for stability
-    // Strategy/diagnostics will reuse THIS prediction from cache
-    setCachedPrediction(symbol, prediction, features, 5 * 60 * 1000);
-
-    recordPrediction({
-      symbol,
-      prediction,
-      features,
-      source: 'ranking',
-      meta: { stage: 'ai_ranking' },
-    });
-
-    console.log(
-      `✅ ${symbol}: Cached predictor decision=${prediction.decision}, confidence=${(prediction.confidence * 100).toFixed(1)}%`
-    );
-
-    return prediction;
-  } catch (error) {
-    console.warn(`⚠️ Predictor failed for ${symbol}:`, error instanceof Error ? error.message : String(error));
-    return null;
-  }
 }
 
 // Lightweight entry readiness using 15m snapshot only (no agent state)
@@ -509,103 +459,9 @@ export async function rankCryptosWithAI(
     const validSnapshots = snapshots.filter(s => s !== null);
     console.log(`✅ Built ${validSnapshots.length} technical snapshots`);
 
-    // 🎯 PREDICTOR FILTER: Remove cryptos with bias 'none' or low confidence
-    console.log('🤖 Running XGBoost predictor on all candidates...');
-    const predictorFiltered: typeof validSnapshots = [];
-    const predictorResults = new Map<string, PredictorSnapshot>();  // Store stable predictor snapshots
-    let predictorSkipped = 0;
-    let predictorNone = 0;
-    let predictorLowConfidence = 0;
-    
-    for (const snap of validSnapshots) {
-      if (!snap) continue;
-      
-      const prediction = await getPredictorBias(snap.symbol, snap as any as TechnicalSnapshot);
-      
-      if (!prediction) {
-        predictorSkipped++;
-        console.log(`⚠️ ${snap.symbol}: Predictor unavailable - skipping`);
-        continue;
-      }
-      
-      // Filter: keep only if decision is NOT 'none' AND confidence >= 30%
-      const { decision, confidence } = prediction;
-      
-      if (decision === 'none') {
-        predictorNone++;
-        console.log(`🚫 ${snap.symbol}: Predictor decision '${decision}' - skipping`);
-        continue;
-      }
-      
-      if (confidence < 0.30) {
-        predictorLowConfidence++;
-        console.log(`🚫 ${snap.symbol}: Confidence ${(confidence * 100).toFixed(1)}% < 30% - skipping`);
-        continue;
-      }
-      
-      // Passed all filters - keep this crypto AND store the prediction
-      predictorFiltered.push(snap);
-      const stableSnapshot = getStableSnapshot(snap.symbol);
-      const snapshotForOpportunity: PredictorSnapshot = stableSnapshot
-        ? {
-            ...stableSnapshot,
-            probabilities: { ...stableSnapshot.probabilities },
-            features: stableSnapshot.features ? { ...stableSnapshot.features } : null,
-            cooldown: { ...stableSnapshot.cooldown },
-            classOrder: stableSnapshot.classOrder ? [...stableSnapshot.classOrder] : null,
-            meta: stableSnapshot.meta ? { ...stableSnapshot.meta } : null,
-          }
-        : {
-            symbol: snap.symbol.toUpperCase(),
-            decision,
-            confidence,
-            probabilities: { ...prediction.probabilities },
-            probabilityLong: prediction.probabilityLong,
-            probabilityShort: prediction.probabilityShort,
-            probabilityNone: prediction.probabilityNone,
-            entryWeight: prediction.entryWeight,
-            riskMultiplier: prediction.riskMultiplier,
-            cooldown: {
-              active: Boolean(prediction.cooldown?.active),
-              reason: prediction.cooldown?.reason ?? null,
-              seconds:
-                Number.isFinite(Number(prediction.cooldown?.seconds)) && prediction.cooldown?.seconds != null
-                  ? Number(prediction.cooldown.seconds)
-                  : null,
-            },
-            classOrder: Array.isArray(prediction.classOrder)
-              ? prediction.classOrder.filter((value): value is string => typeof value === 'string')
-              : null,
-            features: null,
-            featuresHash: null,
-            source: 'ranking',
-            timestamp: Date.now(),
-            meta: { fallback: true },
-          };
-      predictorResults.set(snap.symbol, snapshotForOpportunity);  // Store for later
-      console.log(`✅ ${snap.symbol}: decision=${decision}, confidence=${(confidence * 100).toFixed(1)}% - PASSED`);
-    }
-    
-    console.log(`🎯 Predictor filter results: ${predictorFiltered.length}/${validSnapshots.length} passed`);
-    console.log(`   - ${predictorNone} removed (decision=none)`);
-    console.log(`   - ${predictorLowConfidence} removed (confidence <30%)`);
-    console.log(`   - ${predictorSkipped} skipped (errors)`);
-
-    if (zeroVolumeSymbols.length > 0) {
-      console.warn('🚨 Zero-volume anomalies detected. Symbols will be retried after market data warmup.',
-        zeroVolumeSymbols.map(entry => ({
-          symbol: entry.symbol,
-          timeframe: entry.meta.timeframe,
-          availableBars: entry.meta.availableBars,
-          nextRetryTs: entry.meta.warmupState?.nextRetryTs,
-          details: entry.meta.details,
-        }))
-      );
-    }
-    
-    // Use predictor-filtered snapshots (or all if predictor failed entirely)
-    const snapshotsToRank = predictorFiltered.length > 0 ? predictorFiltered : validSnapshots;
-    console.log(`📊 Ranking ${snapshotsToRank.length} predictor-approved cryptos...`);
+    // Skip predictor filtering - not relevant for selection, only for strategy
+    // Use all valid snapshots directly
+    const snapshotsToRank = validSnapshots;
     
     // Lightweight prefilter (liquidity + minimal momentum)
     let minimallyTradable = snapshotsToRank.filter(s => {
@@ -818,8 +674,7 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
           timeframe: '4h',
           confidence: Number(opp.confidence || 0)
         },
-        aiReasoning: reasoning,
-        predictor: predictorResults.get(opp.symbol)  // Include predictor result from ranking time
+        aiReasoning: reasoning
       };
     }).filter(r => r !== null) as RankedOpportunity[];
     

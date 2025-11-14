@@ -102,7 +102,19 @@ async function processOutcomeUpdates(): Promise<void> {
 
         // Fetch OHLCV data for the hour after evaluation
         // Note: We fetch recent data and filter by timestamp instead
-        const candles = await getOHLCV(evaluation.symbol, '1m', OUTCOME_WINDOW_MINUTES);
+        let candles;
+        try {
+          candles = await getOHLCV(evaluation.symbol, '1m', OUTCOME_WINDOW_MINUTES);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          // Skip silently during warmup or IP ban - will retry later
+          if (errorMsg.includes('websocket_warmup_pending') || errorMsg.includes('binance_rest_ip_banned')) {
+            continue; // Don't count as failed, just skip for now
+          }
+          console.warn(`⚠️ Error fetching data for ${evaluation.symbol}:`, errorMsg);
+          failed++;
+          continue;
+        }
 
         if (!candles || candles.length < 15) {
           console.warn(`⚠️ Insufficient data for ${evaluation.symbol} at ${evaluation.timestamp}`);

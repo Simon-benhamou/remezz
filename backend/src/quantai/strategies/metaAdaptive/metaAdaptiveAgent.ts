@@ -10,7 +10,6 @@ import {
   isPythonPredictorAvailable,
 } from '../../pythonPredictor.js';
 import type { PythonPredictionProbabilities, PythonPredictionResult } from '../../pythonPredictor.js';
-import { getCachedPrediction, setCachedPrediction } from '../../predictorCache.js';
 import { recordPrediction, getStableSnapshot, isSnapshotStale } from '../../predictorStateStore.js';
 import type { PredictorSnapshot } from '../../predictorStateStore.js';
 import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
@@ -1301,11 +1300,10 @@ class MetaAdaptiveStrategyAgent {
     if (pythonAvailable && predictorFeatures) {
       try {
         const now = Date.now();
-        // ALWAYS use fresh predictions - no cache to avoid stale data
+        // ALWAYS use fresh predictions - NO CACHE AT ALL
         const prediction = getPythonPredictionSync(predictorFeatures);
         predictionSource = 'fresh';
-        // Save to cache only for diagnostics API, but never read from it
-        setCachedPrediction(input.symbol, prediction, predictorFeatures);
+        // NO CACHE - removed completely, always fresh
 
         const recordResult = recordPrediction({
           symbol: input.symbol,
@@ -1335,47 +1333,14 @@ class MetaAdaptiveStrategyAgent {
         pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        const cachedFallback = getCachedPrediction(input.symbol);
-        if (cachedFallback) {
-          console.warn(`⚠️ Predictor error, using cached fallback for ${input.symbol}`, {
-            error: errorMsg,
-          });
-          predictionSource = 'cache';
-          const recordResult = recordPrediction({
-            symbol: input.symbol,
-            prediction: cachedFallback,
-            features: null,
-            source: 'evaluate',
-            meta: {
-              stage: 'meta_adaptive_evaluation',
-              predictionSource: 'cache_fallback',
-              evaluationTs: Date.now(),
-              error: errorMsg,
-            },
-          });
-          const effectiveSnapshot = recordResult.stableSnapshot ?? recordResult.rawSnapshot;
-          const hybridSignal = buildHybridSignalFromSnapshot(effectiveSnapshot, cachedFallback, {
-            stableChanged: recordResult.stableChanged,
-            predictionSource: 'cache_fallback',
-            fallback: true,
-          });
-          const probabilityEdge = computeProbabilityEdge(hybridSignal);
-          pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
-          const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
-          pythonSignal = {
-            ...hybridSignal,
-            bias: strongBias,
-          };
-          pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
-        } else {
-          console.error('🚨 PREDICTOR FAILURE - NO CACHE AVAILABLE - BLOCKING TRADES', {
-            symbol: input.symbol,
-            error: errorMsg,
-            timestamp: new Date().toISOString(),
-            severity: 'CRITICAL',
-          });
-          throw new Error(`Predictor failure for ${input.symbol}: ${errorMsg}`);
-        }
+        // NO FALLBACK - if predictor fails, we fail
+        console.error('🚨 PREDICTOR FAILURE - NO TRADES', {
+          symbol: input.symbol,
+          error: errorMsg,
+          timestamp: new Date().toISOString(),
+          severity: 'CRITICAL',
+        });
+        throw new Error(`Predictor failure for ${input.symbol}: ${errorMsg}`);
       }
     }
 

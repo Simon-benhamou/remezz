@@ -582,9 +582,10 @@ async function buildTechSnapshotInternal(symbol: string, userId?: string, option
     o15 = await getOHLCV(symbol, '15m', Math.max(300, minBars15m), userId); // [ts, o, h, l, c, v]
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    if (errorMsg.includes('websocket_warmup_pending')) {
+    if (errorMsg.includes('websocket_warmup_pending') || errorMsg.includes('binance_rest_ip_banned')) {
+      // During IP ban or warmup, return InsufficientDataError but don't crash
       const warmup = getOhlcvWarmupState(symbol, '15m');
-      throw new InsufficientDataError('WebSocket warmup in progress', {
+      throw new InsufficientDataError('Data temporarily unavailable (warmup or IP ban)', {
         symbol,
         timeframe: '15m',
         availableBars: 0,
@@ -594,7 +595,17 @@ async function buildTechSnapshotInternal(symbol: string, userId?: string, option
         warmupState: warmup,
       });
     }
-    throw error; // Re-throw other errors
+    // For other errors, still throw InsufficientDataError to prevent crashes
+    const warmup = getOhlcvWarmupState(symbol, '15m');
+    throw new InsufficientDataError(`Error fetching data: ${errorMsg}`, {
+      symbol,
+      timeframe: '15m',
+      availableBars: 0,
+      minBarsNeeded: minBars15m,
+      firstBarAt: null,
+      lastBarAt: null,
+      warmupState: warmup,
+    });
   }
   
   if (!o15 || o15.length < minBars15m) {
