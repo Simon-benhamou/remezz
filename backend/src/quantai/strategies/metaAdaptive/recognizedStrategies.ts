@@ -150,7 +150,7 @@ type EvaluateOptions = {
   volume24hUsd?: number | null;
 };
 
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.65;  // Lowered from 0.72 to accept more quality setups
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.45;  // FIX: Align with strategy optimizer config (was 0.65, too restrictive)
 const BLOCKED_REASON_LOW_CONFIDENCE = 'low_confidence';
 const BLOCKED_REASON_WEAK_CONTEXT = 'weak_entry_context';
 const BLOCKED_REASON_SHORT_CONF_GUARD = 'short_confidence_guard';
@@ -195,7 +195,7 @@ async function getRegimeAwareThresholds(
     confidence: CONFIDENCE_THRESHOLD,
     adx: { trend: 16, breakout: 14, mean: 12, momentum: 18 },
     atr: { trend: 0.6, breakout: 0.5, mean: 0.4, momentum: 0.6 },
-    eligibility: 0.52,
+    eligibility: 0.62,
     cmf: 0.03,
     volumeRatio: 0.9,
     atrScaling: 0.4, // Scaling factor for realizedVol to intraday ATR%
@@ -224,6 +224,8 @@ async function getRegimeAwareThresholds(
       const t = learnedProfile.params.thresholds;
       
       // Use learned thresholds if available, otherwise fall back to defaults
+      // FIX: Use 'atr' field directly as the minimum threshold (baseline volatility)
+      // minAtrPct and maxAtrPct define the acceptable RANGE but 'atr' is the gate threshold
       return {
         confidence: t.minConfidence ?? defaults.confidence,
         adx: {
@@ -233,10 +235,10 @@ async function getRegimeAwareThresholds(
           momentum: t.adx ? t.adx + 2 : defaults.adx.momentum,
         },
         atr: {
-          trend: t.minAtrPct ?? defaults.atr.trend,
-          breakout: t.minAtrPct ? t.minAtrPct * 0.83 : defaults.atr.breakout,
-          mean: t.minAtrPct ? t.minAtrPct * 0.67 : defaults.atr.mean,
-          momentum: t.minAtrPct ?? defaults.atr.momentum,
+          trend: t.atr ?? defaults.atr.trend,
+          breakout: t.atr ? t.atr * 0.83 : defaults.atr.breakout,
+          mean: t.atr ? t.atr * 0.67 : defaults.atr.mean,
+          momentum: t.atr ?? defaults.atr.momentum,
         },
         eligibility: t.eligibility ?? defaults.eligibility,
         cmf: t.cmf ?? defaults.cmf,
@@ -297,7 +299,7 @@ const MAX_RISK_ATR_MULT = (() => {
 
 export const metaAdaptiveConfidenceThreshold = CONFIDENCE_THRESHOLD;
 
-const ENTRY_ELIGIBILITY_THRESHOLD = 0.52;  // Lowered from 0.58 to accept more setups
+const ENTRY_ELIGIBILITY_THRESHOLD = 0.62;  // FIX: Align with strategy optimizer config (was 0.52, too low)
 const RR_FLOOR_RAW = process.env.META_ADAPTIVE_MIN_RR
   ?? process.env.META_ADAPTIVE_RR_MIN
   ?? '1.8';
@@ -337,6 +339,8 @@ type EntryChecklistParams = {
   rrValue: number | null;
   rrThreshold: number;
   minHoldMinutes: number;
+  actualConfidenceThreshold?: number;  // Dynamic threshold from regime profile
+  actualEligibilityThreshold?: number; // Dynamic threshold from regime profile
 };
 
 function logEntryChecklist(params: EntryChecklistParams): void {
@@ -370,14 +374,14 @@ function logEntryChecklist(params: EntryChecklistParams): void {
     confidence: {
       passed: params.confidencePassed,
       value: Number.isFinite(params.confidence) ? Number(params.confidence.toFixed(4)) : null,
-      threshold: CONFIDENCE_THRESHOLD,
+      threshold: params.actualConfidenceThreshold ?? CONFIDENCE_THRESHOLD,
     },
     entryEligibility: {
       passed: params.entryEligibilityPassed,
       score: params.entryEligibilityScore != null && Number.isFinite(params.entryEligibilityScore)
         ? Number(params.entryEligibilityScore.toFixed(4))
         : null,
-      threshold: ENTRY_ELIGIBILITY_THRESHOLD,
+      threshold: params.actualEligibilityThreshold ?? ENTRY_ELIGIBILITY_THRESHOLD,
     },
     components: {
       mtf: {
@@ -443,7 +447,7 @@ function logEntryChecklist(params: EntryChecklistParams): void {
         key: 'confidence_gate',
         label: 'Confidence Gate',
         status: confidenceRowStatus,
-        detail: `confidence=${Number.isFinite(params.confidence) ? params.confidence.toFixed(4) : 'n/a'}>=${CONFIDENCE_THRESHOLD}`,
+        detail: `confidence=${Number.isFinite(params.confidence) ? params.confidence.toFixed(4) : 'n/a'}>=${params.actualConfidenceThreshold ?? CONFIDENCE_THRESHOLD}`,
         score: null,
       },
       {
@@ -451,7 +455,7 @@ function logEntryChecklist(params: EntryChecklistParams): void {
         label: 'Eligibility Score',
         status: eligibilityRowStatus,
         detail: params.entryEligibilityScore != null && Number.isFinite(params.entryEligibilityScore)
-          ? `score=${params.entryEligibilityScore.toFixed(4)}>=${ENTRY_ELIGIBILITY_THRESHOLD}`
+          ? `score=${params.entryEligibilityScore.toFixed(4)}>=${params.actualEligibilityThreshold ?? ENTRY_ELIGIBILITY_THRESHOLD}`
           : 'score=n/a',
         score: params.entryEligibilityScore != null && Number.isFinite(params.entryEligibilityScore)
           ? Number(params.entryEligibilityScore.toFixed(4))
@@ -659,30 +663,21 @@ function computeAtrComponent(
     mean: 0.4,
     momentum: 0.6,
   };
-  const atrScaling = regimeThresholds?.atrScaling || 0.4;
   const minAtr = minAtrByStrategy[family];
   const atrRaw = Number((snap as any)?.atrPct ?? NaN);
   const atr = Number.isFinite(atrRaw) ? atrRaw : 0;
   
-  // Dynamic ATR threshold: current ATR should be elevated above baseline
-  // Use realizedVol as a proxy for ATR baseline (smoothed volatility measure)
-  const baselineVolRaw = Number((snap as any)?.realizedVol ?? NaN);
-  const hasDynamicBaseline = Number.isFinite(baselineVolRaw) && baselineVolRaw > 0;
+  // FIX: Use static threshold from strategy optimizer config
+  // minAtr from optimizer represents the baseline ATR threshold (e.g., 0.5%)
+  // This is the MINIMUM acceptable volatility for the strategy family
+  // No dynamic calculation - use learned thresholds directly
+  const threshold = minAtr;
   
-  // realizedVol is annualized volatility in decimal form (0.5 = 50% annual)
-  // Convert to daily-equivalent percentage to match atrPct scale
-  // Use regime-aware scaling factor (default 0.4)
-  const baselineVol = hasDynamicBaseline ? baselineVolRaw * atrScaling : 0;
-  
-  // If we have baseline data, use dynamic threshold: currentATR should be above baseline
-  // Otherwise fall back to static threshold
-  const ATR_DYNAMIC_MULTIPLIER = 1.0; // Accept current volatility levels
-  const dynamicThreshold = hasDynamicBaseline ? baselineVol * ATR_DYNAMIC_MULTIPLIER : minAtr;
-  const threshold = hasDynamicBaseline ? dynamicThreshold : minAtr;
-  
-  const normalized = (atr - threshold) / (Math.max(threshold, 0.01));
+  // Score: 0 if below threshold, scales up to 1.0 as ATR increases
+  // Give full score (1.0) when ATR is 2x threshold or higher
+  const normalized = (atr - threshold) / Math.max(threshold, 0.01);
   const score = clampNumber(normalized, 0, 1);
-  const reason = `atr=${atr >= threshold ? 'pass' : 'fail'}(${atr.toFixed(2)}>=${threshold.toFixed(2)}${hasDynamicBaseline ? ',dynamic' : ',static'})`;
+  const reason = `atr=${atr >= threshold ? 'pass' : 'fail'}(${atr.toFixed(2)}>=${threshold.toFixed(2)},static)`;
   return { score, reason };
 }
 
@@ -794,7 +789,7 @@ function computeEntryEligibility(
       1,
     ).toFixed(4),
   );
-  const eligibilityThreshold = regimeThresholds?.eligibility || 0.52;
+  const eligibilityThreshold = regimeThresholds?.eligibility || 0.62;
   const passed = score >= eligibilityThreshold;
   const reasons = [mtf.reason, adx.reason, atr.reason, flow.reason];
   return {
@@ -1106,6 +1101,13 @@ export async function registerAdaptiveTradeEntry(params: {
   executionMode?: 'market' | 'limit' | 'twap';
 }): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
   if (!params.signal || !params.signal.meta) return 'skipped';
+  
+  // Extract actual thresholds from signal meta (regime-aware) for accurate logging
+  const actualConfThreshold = params.signal.meta?.confidenceThreshold ?? CONFIDENCE_THRESHOLD;
+  const actualEligThreshold = params.signal.metrics?.entryEligibilityScore != null 
+    ? (params.signal.meta?.entryEligibilityComponents ? 0.62 : ENTRY_ELIGIBILITY_THRESHOLD)
+    : ENTRY_ELIGIBILITY_THRESHOLD;
+    
   const confidenceGatePassed =
     params.signal.confidenceGatePassed ??
     (Number.isFinite(params.signal.confidence) ? params.signal.confidence >= metaAdaptiveConfidenceThreshold : false);
@@ -1128,11 +1130,6 @@ export async function registerAdaptiveTradeEntry(params: {
     if (!entryGatePassed) blocked.push(BLOCKED_REASON_WEAK_CONTEXT);
     const fallbackReason = params.signal.blockedReason ?? BLOCKED_REASON_LOW_CONFIDENCE;
     const blockedReason = blocked.length > 0 ? blocked.join('|') : fallbackReason;
-    // Use actual thresholds from signal meta (regime-aware) for accurate logging
-    const actualConfThreshold = params.signal.meta?.confidenceThreshold ?? CONFIDENCE_THRESHOLD;
-    const actualEligThreshold = params.signal.metrics?.entryEligibilityScore != null 
-      ? (params.signal.meta?.entryEligibilityComponents ? 0.52 : ENTRY_ELIGIBILITY_THRESHOLD)
-      : ENTRY_ELIGIBILITY_THRESHOLD;
     recordOpsEvent({
       level: 'info',
       source: 'meta_adaptive_gate',
@@ -1179,6 +1176,8 @@ export async function registerAdaptiveTradeEntry(params: {
       rrValue: null,
       rrThreshold: RR_MIN,
       minHoldMinutes,
+      actualConfidenceThreshold: actualConfThreshold,
+      actualEligibilityThreshold: actualEligThreshold,
     });
     return 'skipped';
   }
@@ -1264,6 +1263,8 @@ export async function registerAdaptiveTradeEntry(params: {
         rrValue: null,
         rrThreshold: RR_MIN,
         minHoldMinutes,
+        actualConfidenceThreshold: actualConfThreshold,
+        actualEligibilityThreshold: actualEligThreshold,
       });
       return 'skipped';
     }
@@ -1428,6 +1429,8 @@ export async function registerAdaptiveTradeEntry(params: {
     rrValue: Number.isFinite(rr) ? rr : null,
     rrThreshold: RR_MIN,
     minHoldMinutes,
+    actualConfidenceThreshold: actualConfThreshold,
+    actualEligibilityThreshold: actualEligThreshold,
   });
   return 'skipped';
   }
@@ -1621,6 +1624,8 @@ export async function registerAdaptiveTradeEntry(params: {
     rrValue: Number.isFinite(rr) ? rr : null,
     rrThreshold: RR_MIN,
     minHoldMinutes,
+    actualConfidenceThreshold: actualConfThreshold,
+    actualEligibilityThreshold: actualEligThreshold,
   });
   return 'skipped';
 }
@@ -1693,6 +1698,8 @@ export async function registerAdaptiveTradeEntry(params: {
     rrValue: Number.isFinite(rr) ? rr : null,
     rrThreshold: RR_MIN,
     minHoldMinutes,
+    actualConfidenceThreshold: actualConfThreshold,
+    actualEligibilityThreshold: actualEligThreshold,
   });
 
   return registrationResult;
