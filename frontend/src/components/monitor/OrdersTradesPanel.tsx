@@ -1,4 +1,4 @@
-import { Card, Table, Tag, Button, Space, Dropdown, Modal, message, Tooltip } from 'antd';
+import { Card, Table, Tag, Button, Space, Dropdown, Modal, message, Tooltip, Segmented, Progress, Typography } from 'antd';
 import {
   ShoppingOutlined,
   CloseOutlined,
@@ -9,8 +9,10 @@ import {
   ClockCircleOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { MenuProps } from 'antd';
+
+const { Text } = Typography;
 
 interface OrdersTradesPanelProps {
   orders: any[];
@@ -21,6 +23,20 @@ interface OrdersTradesPanelProps {
   onStopSession?: () => Promise<void>;
   onDeleteSession?: () => Promise<void>;
 }
+
+type GroupedTrade = {
+  id: string;
+  entryTime: string;
+  exitTime: string;
+  side: string;
+  entryPrice: number;
+  exitPrice: number;
+  amount: number;
+  pnl: number;
+  roi: number;
+  fees: number;
+  duration: number;
+};
 
 export function OrdersTradesPanel({
   orders = [],
@@ -33,6 +49,7 @@ export function OrdersTradesPanel({
 }: OrdersTradesPanelProps) {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'orders' | 'trades' | 'fills'>('orders');
 
   const handleExitOrder = async (orderId: string) => {
     if (!onExitOrder) return;
@@ -139,13 +156,28 @@ export function OrdersTradesPanel({
     return <Tag color={config.color} icon={config.icon}>{status}</Tag>;
   };
 
-  const getSideTag = (side: string, info?: string) => {
+  const resolveOrderIntent = (record: any): 'entry' | 'exit' => {
+    if (!record) return 'entry';
+    if (record.reduceOnly) return 'exit';
+    const clientId = String(record.clientOrderId || '');
+    if (/\.?(exit|close)/i.test(clientId)) return 'exit';
+    if (record.intent === 'exit' || record.sideIntent === 'exit') return 'exit';
+    return 'entry';
+  };
+
+  const getSideTag = (side: string, intent: 'entry' | 'exit' = 'entry', info?: string) => {
     const normalized = side?.toLowerCase();
     const isBuy = normalized === 'buy' || normalized === 'long';
-    const isExit =  info && info === 'Exit/Close Position';
+    if (intent === 'exit') {
+      return (
+        <Tooltip title={info || 'Exit / reduce position'}>
+          <Tag color="volcano">EXIT</Tag>
+        </Tooltip>
+      );
+    }
     return (
       <Tooltip title={info}>
-        {isExit ?   <Tag color="red">EXIT</Tag>:  isBuy ? (
+        {isBuy ? (
           <Tag color="green">LONG</Tag>
         ) : (
           <Tag color="red">SHORT</Tag>
@@ -167,14 +199,28 @@ export function OrdersTradesPanel({
       },
     },
     {
+      title: 'Intent',
+      key: 'intent',
+      width: 90,
+      render: (_: any, record: any) => {
+        const intent = resolveOrderIntent(record);
+        const tone = intent === 'exit' ? { color: '#fb7185', bg: 'rgba(251, 113, 133, 0.12)' } : { color: '#22c55e', bg: 'rgba(34, 197, 94, 0.12)' };
+        return (
+          <Tag color={tone.color} style={{ background: tone.bg, border: 'none' }}>
+            {intent === 'exit' ? 'Exit' : 'Entry'}
+          </Tag>
+        );
+      },
+    },
+    {
       title: 'Side',
       dataIndex: 'side',
       key: 'side',
       width: 80,
       render: (side: string, record: any) => {
-        // Show correct side with context
-        const info = record.reduceOnly ? 'Exit/Close Position' : 'Open Position';
-        return getSideTag(side, info);
+        const intent = resolveOrderIntent(record);
+        const info = intent === 'exit' ? 'Exit/Close Position' : 'Open Position';
+        return getSideTag(side, intent, info);
       },
     },
     {
@@ -218,14 +264,27 @@ export function OrdersTradesPanel({
       },
     },
     {
-      title: 'Filled',
+      title: 'Fill Progress',
       dataIndex: 'filled',
       key: 'filled',
-      width: 120,
-      align: 'right' as const,
+      width: 160,
       render: (filled: number, record: any) => {
-        const percent = record.amount ? (filled / record.amount * 100).toFixed(1) : '0';
-        return `${filled?.toFixed(4) || '0'} (${percent}%)`;
+        const filledQty = filled ?? 0;
+        const total = record.amount || 0;
+        const percent = total ? Math.min(100, (filledQty / total) * 100) : 0;
+        return (
+          <div style={{ minWidth: 140 }}>
+            <Progress
+              percent={Number(percent.toFixed(1))}
+              size="small"
+              strokeColor={percent >= 100 ? '#22c55e' : '#60a5fa'}
+              showInfo={false}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {filledQty?.toFixed(4) || '0'} / {total?.toFixed(4) || '0'} ({percent.toFixed(1)}%)
+            </Text>
+          </div>
+        );
       },
     },
     {
@@ -270,7 +329,7 @@ export function OrdersTradesPanel({
   ];
 
   // Group fills into completed trades (entry/exit pairs)
-  const groupedTrades = [];
+  const groupedTrades: GroupedTrade[] = [];
   const fillsByOrder = fills.reduce((acc, fill) => {
     if (!acc[fill.orderId]) acc[fill.orderId] = [];
     acc[fill.orderId].push(fill);
@@ -333,7 +392,7 @@ export function OrdersTradesPanel({
       dataIndex: 'side',
       key: 'side',
       width: 80,
-      render: (side: string) => getSideTag(side, 'Trade Direction'),
+      render: (side: string) => getSideTag(side, 'entry', 'Trade Direction'),
     },
     {
       title: 'Entry Price',
@@ -499,87 +558,90 @@ export function OrdersTradesPanel({
 
   const activeOrders = orders.filter(o => o.status?.toLowerCase() === 'open');
 
+  const summaryCards = useMemo(
+    () => {
+      const totalPnl = groupedTrades.reduce((acc, trade) => acc + (Number(trade.pnl) || 0), 0);
+      return [
+        { key: 'orders', label: 'Active', value: activeOrders.length },
+        { key: 'trades', label: 'Completed', value: groupedTrades.length, extra: totalPnl },
+        { key: 'fills', label: 'Fills', value: fills.length },
+      ];
+    },
+    [activeOrders.length, groupedTrades, fills.length],
+  );
+
+  const currentColumns = viewMode === 'orders' ? orderColumns : viewMode === 'trades' ? tradeColumns : fillColumns;
+  const currentData = viewMode === 'orders' ? orders : viewMode === 'trades' ? groupedTrades : fills;
+  const emptyCopy = viewMode === 'orders'
+    ? 'No broker instructions yet'
+    : viewMode === 'trades'
+    ? 'No completed trades'
+    : 'No fills recorded';
+
+  const viewDescriptions: Record<typeof viewMode, string> = {
+    orders: 'Live orders currently managed by the agent (entry + exits).',
+    trades: 'Paired entry/exit executions with realized PnL and ROI.',
+    fills: 'Raw exchange fills (debug-level visibility).',
+  } as const;
+
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size="middle">
-      {/* Active Orders */}
-      <Card
-        title={
-          <Space>
-            <ShoppingOutlined />
-            <span>Active Orders</span>
-            {activeOrders.length > 0 && (
-              <Tag color="blue">{activeOrders.length}</Tag>
-            )}
-          </Space>
-        }
-        extra={
+    <Card
+      size="small"
+      title={
+        <Space size={12} align="center" wrap>
+          <ShoppingOutlined />
+          <span>Execution Console</span>
+          <Tag color="blue">{activeOrders.length} live</Tag>
+          <Tag color="green">{groupedTrades.length} trades</Tag>
+          {fills.length > 0 && <Tag color="default">{fills.length} fills</Tag>}
+        </Space>
+      }
+      extra={
+        <Space size={12} align="center" wrap>
+          <Segmented
+            size="small"
+            value={viewMode}
+            onChange={(value) => setViewMode(value as typeof viewMode)}
+            options={[
+              { label: 'Orders', value: 'orders' },
+              { label: 'Trades', value: 'trades' },
+              { label: 'Fills', value: 'fills', disabled: fills.length === 0 },
+            ]}
+          />
           <Dropdown menu={{ items: sessionActions }} trigger={['click']}>
             <Button icon={<MoreOutlined />} loading={loading}>
               Actions
             </Button>
           </Dropdown>
-        }
-        size="small"
-      >
+        </Space>
+      }
+    >
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space size={24} wrap>
+          {summaryCards.map((meta) => (
+            <div key={meta.key} style={{ minWidth: 120 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>{meta.label}</Text>
+              <div style={{ fontSize: 20, fontWeight: 600, color: '#e2e8f0' }}>{meta.value}</div>
+              {typeof meta.extra === 'number' && Number.isFinite(meta.extra) && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Net PnL: {meta.extra >= 0 ? '+' : ''}{meta.extra.toFixed(2)} USDT
+                </Text>
+              )}
+            </div>
+          ))}
+        </Space>
+        <Text type="secondary" style={{ fontSize: 12 }}>{viewDescriptions[viewMode]}</Text>
         <Table
-          dataSource={orders}
-          columns={orderColumns}
-          rowKey="id"
+          dataSource={currentData}
+          columns={currentColumns}
+          rowKey={viewMode === 'orders' ? 'id' : viewMode === 'trades' ? 'id' : 'id'}
           size="small"
-          pagination={false}
+          pagination={viewMode === 'orders' ? false : { pageSize: 10, showSizeChanger: false }}
           scroll={{ x: 1200 }}
-          locale={{ emptyText: 'No orders' }}
+          locale={{ emptyText: emptyCopy }}
+          style={{ borderRadius: 12 }}
         />
-      </Card>
-
-      {/* Completed Trades */}
-      <Card
-        title={
-          <Space>
-            <CheckCircleOutlined />
-            <span>Completed Trades</span>
-            {groupedTrades.length > 0 && (
-              <Tag color="green">{groupedTrades.length}</Tag>
-            )}
-          </Space>
-        }
-        size="small"
-      >
-        <Table
-          dataSource={groupedTrades}
-          columns={tradeColumns}
-          rowKey="id"
-          size="small"
-          pagination={{ pageSize: 10, showSizeChanger: false }}
-          scroll={{ x: 1200 }}
-          locale={{ emptyText: 'No completed trades' }}
-        />
-      </Card>
-
-      {/* Raw Fills (for debugging) */}
-      {fills.length > 0 && (
-        <Card
-          title={
-            <Space>
-              <CheckCircleOutlined />
-              <span>Raw Fills (Debug)</span>
-              <Tag color="default">{fills.length}</Tag>
-            </Space>
-          }
-          size="small"
-          style={{ opacity: 0.6 }}
-        >
-          <Table
-            dataSource={fills}
-            columns={fillColumns}
-            rowKey="id"
-            size="small"
-            pagination={{ pageSize: 10, showSizeChanger: false }}
-            scroll={{ x: 1000 }}
-            locale={{ emptyText: 'No fills' }}
-          />
-        </Card>
-      )}
-    </Space>
+      </Space>
+    </Card>
   );
 }

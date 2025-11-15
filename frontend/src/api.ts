@@ -136,6 +136,25 @@ export const api = {
     (await client.get(`/api/monitor/margin/${sessionId}`, { params: { limit } })).data,
   getHealth: async (sessionId?: string) =>
     (await client.get('/api/monitor/health', { params: { sessionId } })).data,
+  getIncoherenceFeed: async (params?: {
+    limit?: number;
+    sessionId?: string;
+    symbol?: string;
+    category?: string;
+    severity?: string;
+    since?: number;
+  }) => (await client.get('/api/monitor/incoherences', { params })).data,
+  getIncoherenceSummary: async (windowMs?: number) =>
+    (await client.get('/api/monitor/incoherences/summary', {
+      params: typeof windowMs === 'number' ? { windowMs } : undefined,
+    })).data,
+  exportIncoherences: async (payload: {
+    limit?: number;
+    windowMs?: number;
+    sessionId?: string;
+    persist?: boolean;
+    filePath?: string;
+  }) => (await client.post('/api/monitor/incoherences/export', payload)).data,
   getDailyReport: async (sessionId: string, date?: string, opts?: { refresh?: boolean }) =>
     (await client.get('/api/monitor/reports/daily', { params: { sessionId, date, refresh: opts?.refresh ? 'true' : undefined } })).data,
   listDailyReports: async (sessionId: string, limit = 30) =>
@@ -218,8 +237,11 @@ export const api = {
     (await client.delete(`/api/improvements/${id}`)).data,
   
   // Entry analytics endpoints
-  getEntryDecisions: async (sessionId: string) =>
-    (await client.get(`/api/entry-analytics/entry-decisions/${sessionId}`)).data,
+  getEntryDecisions: async (sessionId: string, limit?: number) =>
+    (await client.post('/api/entry-analytics/entry-decisions', {
+      sessionId,
+      limit,
+    })).data,
   getRegimeThresholds: async (symbol: string) =>
     (await client.get(`/api/entry-analytics/regime-thresholds/${symbol}`)).data,
 };

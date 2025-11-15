@@ -89,10 +89,14 @@ router.get('/thresholds/:symbol', async (req, res) => {
 /**
  * Get entry decision history for a session
  */
-router.get('/entry-decisions/:sessionId', authenticateUser, async (req: AuthenticatedRequest, res) => {
+router.post('/entry-decisions', authenticateUser, async (req: AuthenticatedRequest, res) => {
   try {
-    const { sessionId } = req.params;
-    const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
+    const { sessionId, limit: limitRaw } = req.body || {};
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ ok: false, error: 'sessionId required' });
+    }
+    const limitCandidate = typeof limitRaw === 'number' ? limitRaw : parseInt(limitRaw as string, 10);
+    const limit = Math.min(100, Number.isFinite(limitCandidate) ? limitCandidate : 20);
 
     // Verify session access
     const session = await prisma.agentSession.findUnique({

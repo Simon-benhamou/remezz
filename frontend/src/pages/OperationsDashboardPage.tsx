@@ -14,6 +14,7 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Statistic,
   Tag,
   Typography,
@@ -109,6 +110,34 @@ type MetaEntryChecklistDetails = {
   timestamp?: number;
   entryReasons?: string[];
   symbol?: string;
+};
+
+type IncoherenceSeverity = 'info' | 'low' | 'moderate' | 'high' | 'critical';
+type IncoherenceCategory = 'predictor' | 'strategy' | 'execution' | 'state' | 'data' | 'ops';
+
+type IncoherenceEvent = {
+  id: string;
+  ts: number;
+  severity: IncoherenceSeverity;
+  category: IncoherenceCategory;
+  code: string;
+  message: string;
+  sessionId?: string | null;
+  symbol?: string | null;
+  source?: string | null;
+  requiresAction?: boolean;
+  details?: Record<string, any> | null;
+  tags?: string[];
+};
+
+type IncoherenceSummary = {
+  total: number;
+  windowMs: number | null;
+  bySeverity: Record<IncoherenceSeverity, number>;
+  byCategory: Record<IncoherenceCategory, number>;
+  topSessions: Array<{ sessionId: string | null; symbol: string | null; count: number; lastEventTs: number }>;
+  topCodes: Array<{ code: string; count: number }>;
+  newest?: IncoherenceEvent | null;
 };
 
 function formatPercent(value?: number | null, digits = 1) {
@@ -219,6 +248,23 @@ const AGGRESSIVENESS_META: Record<AggressivenessLevel, { label: string; color: s
   aggressive: { label: 'Aggressive', color: '#ef4444' },
 };
 
+const incoherenceSeverityMeta: Record<IncoherenceSeverity, { label: string; color: string; bg: string }> = {
+  critical: { label: 'Critical', color: '#f87171', bg: 'rgba(248, 113, 113, 0.16)' },
+  high: { label: 'High', color: '#fb923c', bg: 'rgba(251, 146, 60, 0.16)' },
+  moderate: { label: 'Moderate', color: '#facc15', bg: 'rgba(250, 204, 21, 0.16)' },
+  low: { label: 'Low', color: '#34d399', bg: 'rgba(52, 211, 153, 0.16)' },
+  info: { label: 'Info', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.16)' },
+};
+
+const incoherenceCategoryMeta: Record<IncoherenceCategory, { label: string; color: string }> = {
+  predictor: { label: 'Predictor', color: '#60a5fa' },
+  strategy: { label: 'Strategy', color: '#a855f7' },
+  execution: { label: 'Execution', color: '#f97316' },
+  state: { label: 'State', color: '#f472b6' },
+  data: { label: 'Data', color: '#22d3ee' },
+  ops: { label: 'Ops', color: '#38bdf8' },
+};
+
 const OperationsDashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const {
@@ -239,6 +285,10 @@ const OperationsDashboardPage: React.FC = () => {
   const [strategyFilter, setStrategyFilter] = React.useState<'all' | StrategyEngineOption>('all');
   const [optimizing, setOptimizing] = React.useState(false);
   const [optimizingSymbol, setOptimizingSymbol] = React.useState('');
+  const [incoherenceEvents, setIncoherenceEvents] = React.useState<IncoherenceEvent[]>([]);
+  const [incoherenceSummary, setIncoherenceSummary] = React.useState<IncoherenceSummary | null>(null);
+  const [incoherenceLoading, setIncoherenceLoading] = React.useState(false);
+  const [incoherenceExporting, setIncoherenceExporting] = React.useState(false);
   const mode = useAppStore((state) => state.mode);
 
   const strategyOptions = React.useMemo(
@@ -285,6 +335,22 @@ const OperationsDashboardPage: React.FC = () => {
     return { ...agentHealth, agents: filtered };
   }, [agentHealth, strategyFilter]);
 
+  const loadIncoherenceData = React.useCallback(async () => {
+    setIncoherenceLoading(true);
+    try {
+      const [feedResp, summaryResp] = await Promise.all([
+        api.getIncoherenceFeed({ limit: 40 }),
+        api.getIncoherenceSummary(6 * 60 * 60 * 1000),
+      ]);
+      setIncoherenceEvents(Array.isArray(feedResp?.events) ? feedResp.events : []);
+      setIncoherenceSummary(summaryResp?.summary ?? null);
+    } catch (error) {
+      console.error('Failed to load incoherence feed:', error);
+    } finally {
+      setIncoherenceLoading(false);
+    }
+  }, []);
+
   const refreshAll = React.useCallback(async () => {
     setRefreshing(true);
     try {
@@ -292,6 +358,7 @@ const OperationsDashboardPage: React.FC = () => {
         loadOverview(true),
         loadOpsMetrics(),
         loadOpsEvents(),
+        loadIncoherenceData(),
         (async () => {
           setAgentHealthLoading(true);
           try {
@@ -314,11 +381,19 @@ const OperationsDashboardPage: React.FC = () => {
     } finally {
       setRefreshing(false);
     }
-  }, [loadOverview, loadOpsMetrics, loadOpsEvents]);
+  }, [loadOverview, loadOpsMetrics, loadOpsEvents, loadIncoherenceData]);
 
   React.useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
+
+  React.useEffect(() => {
+    void loadIncoherenceData();
+    const interval = setInterval(() => {
+      void loadIncoherenceData();
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [loadIncoherenceData]);
 
   const handleSmartReselect = React.useCallback(
     async (sessionId: string) => {
@@ -401,6 +476,28 @@ const OperationsDashboardPage: React.FC = () => {
     }
   }, []);
 
+  const handleExportIncoherences = React.useCallback(async () => {
+    setIncoherenceExporting(true);
+    try {
+      const bundle = await api.exportIncoherences({ limit: 400 });
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `incoherence-feed-${new Date().toISOString()}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      message.success('Incoherence feed exported');
+    } catch (error) {
+      console.error('Failed to export incoherences:', error);
+      message.error('Export failed');
+    } finally {
+      setIncoherenceExporting(false);
+    }
+  }, []);
+
   const { token } = theme.useToken();
   const metricsTimestamp = opsMetrics?.timestamp
     ? new Date(opsMetrics.timestamp).toLocaleTimeString()
@@ -460,6 +557,39 @@ const OperationsDashboardPage: React.FC = () => {
       lastTradeAt: lastTs || null,
     };
   }, [recentTrades]);
+
+  const highlightedIncoherenceEvents = React.useMemo(
+    () => (Array.isArray(incoherenceEvents) ? incoherenceEvents.slice(0, 8) : []),
+    [incoherenceEvents],
+  );
+
+  const incoherenceSeverityBreakdown = React.useMemo(() => {
+    if (!incoherenceSummary?.bySeverity) return [];
+    const order: IncoherenceSeverity[] = ['critical', 'high', 'moderate', 'low', 'info'];
+    return order.map((severity) => ({
+      severity,
+      count: incoherenceSummary.bySeverity[severity] ?? 0,
+    }));
+  }, [incoherenceSummary]);
+
+  const topIncoherenceSessions = React.useMemo(() => {
+    if (!Array.isArray(incoherenceSummary?.topSessions)) return [];
+    return incoherenceSummary.topSessions.slice(0, 4);
+  }, [incoherenceSummary]);
+
+  const topIncoherenceCodes = React.useMemo(() => {
+    if (!Array.isArray(incoherenceSummary?.topCodes)) return [];
+    return incoherenceSummary.topCodes.slice(0, 4);
+  }, [incoherenceSummary]);
+
+  const incoherenceWindowLabel = React.useMemo(() => {
+    const windowMs = incoherenceSummary?.windowMs;
+    if (!windowMs) return 'Full feed';
+    if (windowMs >= 86_400_000) return `${Math.round(windowMs / 86_400_000)}d window`;
+    if (windowMs >= 3_600_000) return `${Math.round(windowMs / 3_600_000)}h window`;
+    if (windowMs >= 60_000) return `${Math.round(windowMs / 60_000)}m window`;
+    return `${windowMs / 1000}s window`;
+  }, [incoherenceSummary]);
 
   const activitySeries = React.useMemo(() => buildActivitySeries(recentTrades), [recentTrades]);
   const latestEvents = React.useMemo(
@@ -1101,6 +1231,194 @@ const OperationsDashboardPage: React.FC = () => {
                 );
               })
             )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[24, 24]}>
+        <Col xs={24} xl={14}>
+          <Card
+            title={<span style={{ color: '#e2e8f0' }}>Predictor incoherence feed</span>}
+            extra={
+              <Space size={8}>
+                <Button
+                  type='link'
+                  icon={<ReloadOutlined />}
+                  onClick={() => void loadIncoherenceData()}
+                  loading={incoherenceLoading}
+                  style={{ padding: 0 }}
+                >
+                  Refresh
+                </Button>
+                <Button
+                  type='link'
+                  onClick={() => void handleExportIncoherences()}
+                  loading={incoherenceExporting}
+                  style={{ padding: 0 }}
+                >
+                  Export JSON
+                </Button>
+              </Space>
+            }
+            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+            bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            <Spin spinning={incoherenceLoading} tip='Loading feed...'>
+              {highlightedIncoherenceEvents.length === 0 ? (
+                <Empty
+                  description='No incoherence detected in the current window.'
+                  style={{ margin: '32px 0', color: 'rgba(148, 163, 184, 0.78)' }}
+                />
+              ) : (
+                highlightedIncoherenceEvents.map((evt) => {
+                  const severityMeta = incoherenceSeverityMeta[evt.severity];
+                  const categoryMeta = incoherenceCategoryMeta[evt.category];
+                  return (
+                    <div
+                      key={evt.id}
+                      style={{
+                        borderRadius: 14,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        padding: 16,
+                        background: 'rgba(15, 23, 42, 0.75)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 10,
+                      }}
+                    >
+                      <Space align='center' size={10} wrap>
+                        <Tag
+                          style={{
+                            border: 'none',
+                            background: severityMeta.bg,
+                            color: severityMeta.color,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {severityMeta.label}
+                        </Tag>
+                        <Tag
+                          style={{ borderColor: categoryMeta.color, color: categoryMeta.color }}
+                        >
+                          {categoryMeta.label}
+                        </Tag>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                          {formatRelative(evt.ts)}
+                        </Text>
+                        {evt.requiresAction && (
+                          <Badge color='#f97316' text={<span style={{ color: '#f97316' }}>Action required</span>} />
+                        )}
+                      </Space>
+                      <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>{evt.message}</Text>
+                      <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>
+                        {evt.symbol && <Tag color='geekblue'>{formatDisplaySymbol(evt.symbol)}</Tag>}
+                        {evt.sessionId && <Tag color='purple'>{evt.sessionId.slice(0, 6)}…</Tag>}
+                        {evt.code && <Tag color='magenta'>{evt.code}</Tag>}
+                        {evt.source && <span>Source: {evt.source}</span>}
+                      </Space>
+                      {Array.isArray(evt.tags) && evt.tags.length > 0 && (
+                        <Space size={6} wrap>
+                          {evt.tags.slice(0, 4).map((tag) => (
+                            <Tag key={`${evt.id}-${tag}`} color='default' style={{ border: '1px solid rgba(148, 163, 184, 0.3)' }}>
+                              {tag}
+                            </Tag>
+                          ))}
+                        </Space>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </Spin>
+          </Card>
+        </Col>
+        <Col xs={24} xl={10}>
+          <Card
+            title={<span style={{ color: '#e2e8f0' }}>Incoherence snapshot</span>}
+            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+            bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            <Spin spinning={incoherenceLoading}>
+              {!incoherenceSummary ? (
+                <Empty
+                  description='Waiting for incoherence telemetry.'
+                  style={{ margin: '32px 0', color: 'rgba(148, 163, 184, 0.78)' }}
+                />
+              ) : (
+                <Space direction='vertical' size={16} style={{ width: '100%' }}>
+                  <Space align='center' size={24}>
+                    <Statistic
+                      title={<span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>{incoherenceWindowLabel}</span>}
+                      value={incoherenceSummary.total}
+                      suffix='events'
+                      valueStyle={{ color: '#e2e8f0' }}
+                    />
+                    {incoherenceSummary.newest && (
+                      <Space direction='vertical' size={0}>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>Newest</Text>
+                        <Text style={{ color: '#e2e8f0' }}>{formatRelative(incoherenceSummary.newest.ts)}</Text>
+                      </Space>
+                    )}
+                  </Space>
+                  <Space size={8} wrap>
+                    {incoherenceSeverityBreakdown.map(({ severity, count }) => {
+                      const meta = incoherenceSeverityMeta[severity];
+                      return (
+                        <Tag
+                          key={severity}
+                          style={{ border: 'none', background: meta.bg, color: meta.color, fontWeight: 600 }}
+                        >
+                          {meta.label}: {count}
+                        </Tag>
+                      );
+                    })}
+                  </Space>
+                  {topIncoherenceSessions.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>Most impacted sessions</Text>
+                      {topIncoherenceSessions.map((session) => (
+                        <div
+                          key={`${session.sessionId || 'global'}-${session.symbol || 'global'}`}
+                          style={{
+                            borderRadius: 12,
+                            border: `1px solid ${token.colorBorderSecondary}`,
+                            padding: '10px 12px',
+                            background: 'rgba(15, 23, 42, 0.65)',
+                          }}
+                        >
+                          <Space size={8} wrap>
+                            {session.symbol && (
+                              <Tag color='geekblue'>{formatDisplaySymbol(session.symbol)}</Tag>
+                            )}
+                            <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>{session.count} events</Text>
+                            <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                              Last {formatRelative(session.lastEventTs)}
+                            </Text>
+                          </Space>
+                          {session.sessionId && (
+                            <Text style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: 12 }}>
+                              Session: {session.sessionId}
+                            </Text>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {topIncoherenceCodes.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>Top triggers</Text>
+                      <Space size={6} wrap>
+                        {topIncoherenceCodes.map((code) => (
+                          <Tag key={code.code} color='magenta'>
+                            {code.code} · {code.count}
+                          </Tag>
+                        ))}
+                      </Space>
+                    </div>
+                  )}
+                </Space>
+              )}
+            </Spin>
           </Card>
         </Col>
       </Row>

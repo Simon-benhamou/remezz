@@ -9,6 +9,12 @@ import { getMarketMetrics } from '../monitor/marketMetrics.js';
 import { llmJSON } from '../ai/llm.js';
 import type { MarginGuardSeverity } from '../risk/marginGuard.js';
 import { getAllServiceHealth, getServiceFallbackMetrics } from '../infra/serviceHealth.js';
+import {
+  getIncoherenceFeed,
+  getIncoherenceSummary,
+  exportIncoherenceBundle,
+  persistIncoherenceBundleToFile,
+} from '../monitor/incoherenceTracker.js';
 
 export const router = Router();
 
@@ -366,6 +372,66 @@ router.get('/service-health', (req, res) => {
       fallbacks,
       timestamp: Date.now(),
     });
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+router.get('/incoherences', (req, res) => {
+  try {
+    const limitRaw = Number(req.query.limit ?? 100);
+    const sinceRaw = Number(req.query.since ?? NaN);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(400, limitRaw)) : 100;
+    const events = getIncoherenceFeed({
+      limit,
+      sessionId: req.query.sessionId ? String(req.query.sessionId) : undefined,
+      symbol: req.query.symbol ? String(req.query.symbol) : undefined,
+      category: req.query.category ? String(req.query.category) as any : undefined,
+      severity: req.query.severity ? String(req.query.severity) as any : undefined,
+      since: Number.isFinite(sinceRaw) ? sinceRaw : undefined,
+    });
+    res.json({
+      events,
+      meta: {
+        limit,
+        returned: events.length,
+        ts: Date.now(),
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+router.get('/incoherences/summary', (req, res) => {
+  try {
+    const windowRaw = Number(req.query.windowMs ?? NaN);
+    const summary = getIncoherenceSummary({
+      windowMs: Number.isFinite(windowRaw) ? Math.max(1, windowRaw) : undefined,
+    });
+    res.json({ summary, ts: Date.now() });
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+router.post('/incoherences/export', async (req, res) => {
+  try {
+    const { limit, windowMs, sessionId, persist, filePath } = req.body || {};
+    if (persist) {
+      const bundle = await persistIncoherenceBundleToFile({
+        limit: Number.isFinite(Number(limit)) ? Number(limit) : undefined,
+        windowMs: Number.isFinite(Number(windowMs)) ? Number(windowMs) : undefined,
+        filePath: filePath ? String(filePath) : undefined,
+      });
+      return res.json({ ...bundle, persisted: true });
+    }
+    const bundle = exportIncoherenceBundle({
+      limit: Number.isFinite(Number(limit)) ? Number(limit) : undefined,
+      windowMs: Number.isFinite(Number(windowMs)) ? Number(windowMs) : undefined,
+      sessionId: sessionId ? String(sessionId) : undefined,
+    });
+    res.json({ ...bundle, persisted: false });
   } catch (error: any) {
     res.status(500).json({ error: String(error?.message || error) });
   }

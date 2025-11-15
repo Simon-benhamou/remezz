@@ -19,6 +19,7 @@ import { storePredictorDecisionIfChanged } from '../../predictorDecisionStore.js
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 import { logMetaAdaptiveEvaluation } from './evaluationLogger.js';
+import { recordIncoherenceEvent } from '../../../monitor/incoherenceTracker.js';
 import {
   classifyVolatilityRegime,
   classifyDirectionBias,
