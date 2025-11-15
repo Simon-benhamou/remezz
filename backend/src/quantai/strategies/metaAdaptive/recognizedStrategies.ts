@@ -566,6 +566,36 @@ function normalizeBiasLabel(label: string | null | undefined): MultiTimeframeBia
   return 'mixed';
 }
 
+function resolveTradeSideFromPredictor(signal: RecognizedStrategySignal): 'long' | 'short' {
+  if (signal.bias === 'short') return 'short';
+  if (signal.bias === 'long') return 'long';
+  const pythonSignal = signal.meta?.pythonSignal;
+  const decision = pythonSignal?.decision;
+  if (decision === 'short' || decision === 'long') {
+    return decision;
+  }
+  const predictorBias = pythonSignal?.bias;
+  if (predictorBias === 'short' || predictorBias === 'long') {
+    return predictorBias;
+  }
+  const toScore = (value: number | null | undefined): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+  const probabilityLong = toScore(pythonSignal?.probabilityLong);
+  const probabilityShort = toScore(pythonSignal?.probabilityShort);
+  const biasDeltaThreshold = 0.05;
+  if (probabilityLong != null && probabilityShort != null) {
+    if (probabilityShort - probabilityLong >= biasDeltaThreshold) return 'short';
+    if (probabilityLong - probabilityShort >= biasDeltaThreshold) return 'long';
+  }
+  const probabilities = pythonSignal?.probabilities;
+  const distLong = toScore(probabilities?.long);
+  const distShort = toScore(probabilities?.short);
+  if (distLong != null && distShort != null) {
+    if (distShort - distLong >= biasDeltaThreshold) return 'short';
+    if (distLong - distShort >= biasDeltaThreshold) return 'long';
+  }
+  return 'long';
+}
+
 function desiredDirectionalBias(strategyBias: StrategyBias): MultiTimeframeBias | null {
   if (strategyBias === 'both') return null;
   return strategyBias === 'short' ? 'bearish' : 'bullish';
@@ -1233,7 +1263,7 @@ export async function registerAdaptiveTradeEntry(params: {
   const reentryCooldown = exitCfgBase.reentryCooldownMin ?? 0;
   metaAdaptiveStrategyAgent.setReentryCooldownMinutes(reentryCooldown);
 
-  const side: 'long' | 'short' = params.signal.bias === 'short' ? 'short' : 'long';
+  const side: 'long' | 'short' = resolveTradeSideFromPredictor(params.signal);
   const symbolFamily = classifySymbolFamily(params.symbol);
   if (side === 'short' && symbolFamily === 'major') {
     const pythonConfidence = Number(params.signal.meta?.pythonSignal?.confidence ?? Number.NaN);
@@ -1507,7 +1537,7 @@ export async function registerAdaptiveTradeEntry(params: {
     if (!targetsClean.length) return false;
     const firstTarget = targetsClean[0];
     if (!Number.isFinite(firstTarget)) return false;
-    const expectedSide = params.signal.bias === 'short' ? 'short' : 'long';
+    const expectedSide = side;
     if (expectedSide === 'long' && firstTarget <= entryPriceEffective) return false;
     if (expectedSide === 'short' && firstTarget >= entryPriceEffective) return false;
     return true;
@@ -1546,7 +1576,7 @@ export async function registerAdaptiveTradeEntry(params: {
       symbol: params.symbol,
       sessionId: params.sessionId ?? null,
       token: params.signal.meta?.token ?? null,
-      side: params.signal.bias,
+      side,
       entryPrice: Number(entryPriceEffective.toFixed(6)),
       riskPerUnit: Number(riskPerUnit.toFixed(6)),
       entryAtr: entryAtr ?? null,
@@ -1604,7 +1634,7 @@ export async function registerAdaptiveTradeEntry(params: {
       entryWeight: new PreciseDecimal(params.signal.meta.entryWeight ?? '1'),
       pythonRiskMultiplier: new PreciseDecimal(params.signal.meta.pythonRiskMultiplier ?? '1'),
     },
-    side: params.signal.bias,
+    side,
     predictorFeatures: params.signal.meta.predictorFeatures ?? null,
     pythonSignal: params.signal.meta.pythonSignal
       ? {

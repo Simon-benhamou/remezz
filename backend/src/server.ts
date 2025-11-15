@@ -30,7 +30,7 @@ import { router as arbitrageRouter } from "./routes/arbitrage.js";
 import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { router as capitalRouter } from "./routes/capital.js";
 import { router as entryAnalyticsRouter } from "./routes/entryAnalytics.js";
-import { router as predictorRouter } from "./routes/predictor.js";
+import predictorRouter from "./routes/predictor.js";
 import smartSelectionRouter from "./routes/smart-selection.js";
 import validationRouter from "./routes/validation.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";

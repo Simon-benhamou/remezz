@@ -57,10 +57,13 @@ export function PredictorDecisionsPanel({ symbol }: PredictorDecisionsPanelProps
   const fetchDecisions = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/predictor/decisions/${encodeURIComponent(symbol)}`, {
+      const response = await fetch(`/api/predictor/decisions`, {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
+        body: JSON.stringify({ symbol, limit: 100 }),
       });
       
       if (!response.ok) {
