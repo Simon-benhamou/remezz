@@ -57,20 +57,7 @@ export function PredictorDecisionsPanel({ symbol }: PredictorDecisionsPanelProps
   const fetchDecisions = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/predictor/decisions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-        body: JSON.stringify({ symbol, limit: 100 }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch predictor decisions');
-      }
-
-      const data = await response.json();
+      const data = await api.getPredictorDecisions(symbol, { limit: 100 });
       setDecisions(data.decisions || []);
       setMetrics(data.metrics || null);
     } catch (error) {

@@ -136,6 +136,12 @@ export const api = {
     (await client.get(`/api/monitor/margin/${sessionId}`, { params: { limit } })).data,
   getHealth: async (sessionId?: string) =>
     (await client.get('/api/monitor/health', { params: { sessionId } })).data,
+  getPredictorDecisions: async (symbol: string, options?: { limit?: number; since?: string }) =>
+    (await client.post('/api/predictor/decisions', {
+      symbol,
+      limit: options?.limit ?? 100,
+      since: options?.since,
+    })).data,
   getIncoherenceFeed: async (params?: {
     limit?: number;
     sessionId?: string;
