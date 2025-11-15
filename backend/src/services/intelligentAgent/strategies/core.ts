@@ -956,6 +956,42 @@ async function enrichAnalysisWithMemory(analysis: IntelligentAnalysis): Promise<
 }
 
 const MAX_HISTORY_ENTRIES = 40;
+const FORCED_STRATEGY_REFRESH_COOLDOWN_MIN = Number(process.env.INTEL_FORCE_STRATEGY_COOLDOWN_MIN || 8);
+const FORCE_STRATEGY_REASON_WHITELIST = new Set([
+  'intelligent_init',
+  'manual_reselection',
+  'manual_switch',
+]);
+const forcedStrategyRefreshAt = new Map<string, number>();
+
+function shouldForceStrategyRequest(sessionId: string, reason: string): boolean {
+  const now = Date.now();
+  if (FORCE_STRATEGY_REASON_WHITELIST.has(reason) || reason.startsWith('manual_')) {
+    forcedStrategyRefreshAt.set(sessionId, now);
+    return true;
+  }
+  const cooldownMs = Math.max(1, FORCED_STRATEGY_REFRESH_COOLDOWN_MIN) * 60 * 1000;
+  const last = forcedStrategyRefreshAt.get(sessionId) ?? 0;
+  if (now - last >= cooldownMs) {
+    forcedStrategyRefreshAt.set(sessionId, now);
+    return true;
+  }
+  return false;
+}
+
+function noteSuppressedStrategyForce(sessionId: string, symbol: string, reason: string) {
+  recordOpsEvent({
+    level: 'info',
+    source: 'intelligent_agent',
+    message: 'strategy_force_suppressed',
+    sessionId,
+    symbol,
+    details: {
+      reason,
+      cooldownMin: FORCED_STRATEGY_REFRESH_COOLDOWN_MIN,
+    },
+  });
+}
 
 function clampHistory(history: any[] = []): any[] {
   if (!Array.isArray(history)) return [];
@@ -987,12 +1023,16 @@ async function refreshPlanAndStrategy(sessionId: string, symbol: string, reason:
     }
 
     try {
+      const allowForce = shouldForceStrategyRequest(sessionId, reason);
+      if (!allowForce && reason !== 'intelligent_init') {
+        noteSuppressedStrategyForce(sessionId, symbol, reason);
+      }
       const { strategy: strat, levels: lvls } = await requestStrategy({
         symbol,
         trigger: reason,
         sessionId,
         fresh: true,
-        force: true,
+        force: allowForce,
       });
       broadcast('strategy', { ...(strat as any), levels: lvls }, symbol, sessionId);
     } catch (err) {
