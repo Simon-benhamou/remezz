@@ -105,6 +105,7 @@ const commonSymbols = [
   'XRP/USDT',
   'BNB/USDT',
   'ADA/USDT',
+  'SUI/USDT',
   'AVAX/USDT',
   'DOGE/USDT',
   'TON/USDT',
