@@ -960,7 +960,7 @@ function toRecognizedSignal(
     meta: {
       score: Number(signal.score.toFixed(4)),
       confidenceCalibrated: calibratedConfidence,
-      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      confidenceThreshold: dynamicThreshold,  // Use actual dynamic threshold from regime profile
       qualityScore,
       confidenceGatePassed,
       blockedReason,
@@ -1128,6 +1128,11 @@ export async function registerAdaptiveTradeEntry(params: {
     if (!entryGatePassed) blocked.push(BLOCKED_REASON_WEAK_CONTEXT);
     const fallbackReason = params.signal.blockedReason ?? BLOCKED_REASON_LOW_CONFIDENCE;
     const blockedReason = blocked.length > 0 ? blocked.join('|') : fallbackReason;
+    // Use actual thresholds from signal meta (regime-aware) for accurate logging
+    const actualConfThreshold = params.signal.meta?.confidenceThreshold ?? CONFIDENCE_THRESHOLD;
+    const actualEligThreshold = params.signal.metrics?.entryEligibilityScore != null 
+      ? (params.signal.meta?.entryEligibilityComponents ? 0.52 : ENTRY_ELIGIBILITY_THRESHOLD)
+      : ENTRY_ELIGIBILITY_THRESHOLD;
     recordOpsEvent({
       level: 'info',
       source: 'meta_adaptive_gate',
@@ -1137,10 +1142,10 @@ export async function registerAdaptiveTradeEntry(params: {
         strategy: params.signal.id,
         blockedReason,
         confidence: Number(signalConfidence.toFixed(4)),
-        confidenceThreshold: CONFIDENCE_THRESHOLD,
+        confidenceThreshold: actualConfThreshold,
         qualityScore,
         entryEligibilityScore: entryScore,
-        entryEligibilityThreshold: ENTRY_ELIGIBILITY_THRESHOLD,
+        entryEligibilityThreshold: actualEligThreshold,
         entryReasons,
       },
     });
@@ -1152,10 +1157,10 @@ export async function registerAdaptiveTradeEntry(params: {
       strategy: params.signal.id,
       blockedReason,
       confidence: Number(signalConfidence.toFixed(4)),
-      confidenceThreshold: CONFIDENCE_THRESHOLD,
+      confidenceThreshold: actualConfThreshold,
       qualityScore,
       entryEligibilityScore: entryScore,
-      entryEligibilityThreshold: ENTRY_ELIGIBILITY_THRESHOLD,
+      entryEligibilityThreshold: actualEligThreshold,
       entryReasons,
     }));
     logEntryChecklist({

@@ -664,9 +664,26 @@ export default function PriceChart({
       const status = String(order.status || '').toUpperCase();
       const priceNum = Number(order.price);
       const priceLabel = Number.isFinite(priceNum) ? priceNum.toFixed(4) : '';
+      
+      // Determine marker position based on order side and type
+      // Exit sell (close LONG) → can be above or below depending on profit
+      // Exit buy (close SHORT) → can be above or below depending on profit
+      // Entry buy (open LONG) → below
+      // Entry sell (open SHORT) → above
+      const orderSide = String(order.side || '').toLowerCase();
+      let markerPosition: 'aboveBar' | 'belowBar';
+      
+      if (isExit) {
+        // Exit orders: sell=close LONG (show above), buy=close SHORT (show below)
+        markerPosition = orderSide === 'sell' ? 'aboveBar' : 'belowBar';
+      } else {
+        // Entry orders: buy=LONG (show below), sell=SHORT (show above)
+        markerPosition = orderSide === 'buy' ? 'belowBar' : 'aboveBar';
+      }
+      
       pushMarker({
         time: ts,
-        position: isExit ? 'aboveBar' : 'belowBar',
+        position: markerPosition,
         color: isExit ? '#f87171' : '#34d399',
         shape: 'circle',
         text: `${isExit ? 'Exit' : 'Entry'} ${priceLabel}`,
