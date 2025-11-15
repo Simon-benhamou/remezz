@@ -142,9 +142,10 @@ export function OrdersTradesPanel({
   const getSideTag = (side: string, info?: string) => {
     const normalized = side?.toLowerCase();
     const isBuy = normalized === 'buy' || normalized === 'long';
+    const isExit =  info && info === 'Exit/Close Position';
     return (
       <Tooltip title={info}>
-        {isBuy ? (
+        {isExit ?   <Tag color="red">EXIT</Tag>:  isBuy ? (
           <Tag color="green">LONG</Tag>
         ) : (
           <Tag color="red">SHORT</Tag>

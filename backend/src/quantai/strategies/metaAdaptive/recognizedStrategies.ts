@@ -3,6 +3,7 @@ import {
   AdaptiveSignal,
   PreciseDecimal,
   type AdaptiveExitReason,
+  type PredictorUsageSummary,
 } from './metaAdaptiveAgent.js';
 import { computeInitialBracket } from './exitManager.js';
 import { normalizeOrder } from './orderNormalization.js';
@@ -45,6 +46,7 @@ export type RecognizedStrategySignal = {
   active: boolean;
   reasons: string[];
   metrics: Record<string, number | string | null>;
+  predictorUsage?: PredictorUsageSummary | null;
   meta?: {
     score: number;
     confidenceCalibrated?: number;
@@ -107,6 +109,7 @@ export type RecognizedStrategySignal = {
     tickSize?: number | null;
     stepSize?: number | null;
     minQty?: number | null;
+    predictorUsage?: PredictorUsageSummary | null;
   };
 };
 
@@ -341,6 +344,7 @@ type EntryChecklistParams = {
   minHoldMinutes: number;
   actualConfidenceThreshold?: number;  // Dynamic threshold from regime profile
   actualEligibilityThreshold?: number; // Dynamic threshold from regime profile
+  predictorUsage?: PredictorUsageSummary | null;
 };
 
 function logEntryChecklist(params: EntryChecklistParams): void {
@@ -348,6 +352,7 @@ function logEntryChecklist(params: EntryChecklistParams): void {
   const adx = parseReasonStatus(params.entryReasons, 'adx');
   const atr = parseReasonStatus(params.entryReasons, 'atr');
   const flow = parseReasonStatus(params.entryReasons, 'flow');
+  const predictorUsage = params.predictorUsage ?? null;
 
   const componentScores = params.entryEligibilityComponents ?? null;
   const rrPassed = params.rrValue != null ? params.rrValue + 1e-9 >= params.rrThreshold : false;
@@ -414,6 +419,19 @@ function logEntryChecklist(params: EntryChecklistParams): void {
       enabled: params.minHoldMinutes > 0,
       minutes: params.minHoldMinutes,
     },
+    predictorUsage: predictorUsage
+      ? {
+          used: predictorUsage.used,
+          mode: predictorUsage.mode,
+          fallback: predictorUsage.fallback ?? false,
+          reason: predictorUsage.reason,
+          source: predictorUsage.source ?? null,
+          decision: predictorUsage.decision ?? null,
+          confidence: predictorUsage.confidence ?? null,
+          reliability: predictorUsage.reliability ?? null,
+          reliabilityStatus: predictorUsage.reliabilityStatus ?? null,
+        }
+      : null,
     table: [
       {
         key: 'mtf',
@@ -952,6 +970,7 @@ function toRecognizedSignal(
     active: signal.active && entryEligibility.passed && confidenceGatePassed,
     reasons: signal.reasons,
     metrics,
+    predictorUsage: signal.predictorUsage,
     meta: {
       score: Number(signal.score.toFixed(4)),
       confidenceCalibrated: calibratedConfidence,
@@ -1029,6 +1048,7 @@ function toRecognizedSignal(
       tickSize: tickSizeMeta,
       stepSize: stepSizeMeta,
       minQty: minQtyMeta,
+      predictorUsage: signal.predictorUsage,
     },
   };
 }
@@ -1118,6 +1138,7 @@ export async function registerAdaptiveTradeEntry(params: {
   const entryReasons = (params.signal.entryEligibilityReasons?.length
     ? params.signal.entryEligibilityReasons
     : params.signal.meta?.entryEligibilityReasons) ?? [];
+  const predictorUsage = params.signal.meta?.predictorUsage ?? params.signal.predictorUsage ?? null;
   const quantConfig = getQuantAIConfig();
   const exitCfgBase = quantConfig.exits;
   const minHoldMinutes = exitCfgBase.earlyExit?.minHoldMinutes ?? 0;
@@ -1144,6 +1165,15 @@ export async function registerAdaptiveTradeEntry(params: {
         entryEligibilityScore: entryScore,
         entryEligibilityThreshold: actualEligThreshold,
         entryReasons,
+        predictorUsage: predictorUsage
+          ? {
+              mode: predictorUsage.mode,
+              used: predictorUsage.used,
+              fallback: predictorUsage.fallback ?? false,
+              reason: predictorUsage.reason,
+              reliability: predictorUsage.reliability ?? null,
+            }
+          : null,
       },
     });
     console.log(JSON.stringify({
@@ -1159,6 +1189,7 @@ export async function registerAdaptiveTradeEntry(params: {
       entryEligibilityScore: entryScore,
       entryEligibilityThreshold: actualEligThreshold,
       entryReasons,
+      predictorUsage,
     }));
     logEntryChecklist({
       sessionId: params.sessionId ?? null,
@@ -1178,6 +1209,7 @@ export async function registerAdaptiveTradeEntry(params: {
       minHoldMinutes,
       actualConfidenceThreshold: actualConfThreshold,
       actualEligibilityThreshold: actualEligThreshold,
+      predictorUsage,
     });
     return 'skipped';
   }
@@ -1230,6 +1262,15 @@ export async function registerAdaptiveTradeEntry(params: {
           pythonPrimary,
           trendStrength: trendStrengthMetric,
           entryReasons,
+          predictorUsage: predictorUsage
+            ? {
+                mode: predictorUsage.mode,
+                used: predictorUsage.used,
+                fallback: predictorUsage.fallback ?? false,
+                reason: predictorUsage.reason,
+                reliability: predictorUsage.reliability ?? null,
+              }
+            : null,
         },
       });
       console.log(JSON.stringify({
@@ -1244,6 +1285,7 @@ export async function registerAdaptiveTradeEntry(params: {
         pythonPrimary,
         trendStrength: trendStrengthMetric,
         entryReasons,
+        predictorUsage,
       }));
       logEntryChecklist({
         sessionId: params.sessionId ?? null,
@@ -1265,6 +1307,7 @@ export async function registerAdaptiveTradeEntry(params: {
         minHoldMinutes,
         actualConfidenceThreshold: actualConfThreshold,
         actualEligibilityThreshold: actualEligThreshold,
+        predictorUsage,
       });
       return 'skipped';
     }
@@ -1606,6 +1649,7 @@ export async function registerAdaptiveTradeEntry(params: {
 
   if (registrationResult === 'predictor_blocked') {
     const blockedReason = 'predictor_blocked';
+    predictorUsage: params.signal.meta.predictorUsage ?? params.signal.predictorUsage ?? null,
     logEntryChecklist({
       sessionId: params.sessionId ?? null,
       symbol: params.symbol,
@@ -1626,6 +1670,7 @@ export async function registerAdaptiveTradeEntry(params: {
     minHoldMinutes,
     actualConfidenceThreshold: actualConfThreshold,
     actualEligibilityThreshold: actualEligThreshold,
+      predictorUsage,
   });
   return 'skipped';
 }
@@ -1677,6 +1722,15 @@ export async function registerAdaptiveTradeEntry(params: {
       fallbackLatencyMs,
       notionalUsd,
     passiveOffsetBps,
+      predictorUsage: predictorUsage
+        ? {
+            mode: predictorUsage.mode,
+            used: predictorUsage.used,
+            fallback: predictorUsage.fallback ?? false,
+            reason: predictorUsage.reason,
+            reliability: predictorUsage.reliability ?? null,
+          }
+        : null,
   },
 });
 
@@ -1700,6 +1754,7 @@ export async function registerAdaptiveTradeEntry(params: {
     minHoldMinutes,
     actualConfidenceThreshold: actualConfThreshold,
     actualEligibilityThreshold: actualEligThreshold,
+    predictorUsage,
   });
 
   return registrationResult;

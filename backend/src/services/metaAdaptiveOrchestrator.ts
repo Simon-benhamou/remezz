@@ -272,8 +272,10 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
       if (agent && signals.length > 0) {
         const bestSignal = signals[0];
         const pythonSignalData = (bestSignal as any).meta?.pythonSignal || null;
+        const predictorUsage = (bestSignal as any).predictorUsage || (bestSignal as any).meta?.predictorUsage || null;
         (agent as any).pythonSignal = pythonSignalData;
         (agent as any).lastSignal = bestSignal;
+        (agent as any).predictorUsage = predictorUsage;
         
         // 🔴 FIX: Persist to profileJson for diagnostics API after restart
         try {
@@ -289,6 +291,16 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
                     confidence: pythonSignalData.confidence,
                     probabilities: pythonSignalData.probabilities,
                     updatedAt: Date.now(),
+                    usage: predictorUsage
+                      ? {
+                          mode: predictorUsage.mode,
+                          used: predictorUsage.used,
+                          fallback: predictorUsage.fallback ?? false,
+                          reason: predictorUsage.reason,
+                          reliability: predictorUsage.reliability ?? null,
+                          reliabilityStatus: predictorUsage.reliabilityStatus ?? null,
+                        }
+                      : null,
                   } : null,
                   lastStrategyData: {
                     id: (bestSignal as any).strategyId || bestSignal.id,

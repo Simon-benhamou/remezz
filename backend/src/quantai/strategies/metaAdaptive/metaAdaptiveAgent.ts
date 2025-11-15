@@ -6,6 +6,7 @@ import { detectMarketRegime, type MarketRegimeSignal } from '../../regime/market
 import {
   getPrediction as getPythonPrediction,
   getPredictionSync as getPythonPredictionSync,
+  getPredictorReliabilityMetrics,
   getPythonResolutionError,
   isPythonPredictorAvailable,
 } from '../../pythonPredictor.js';
@@ -191,12 +192,62 @@ type PythonHybridSignal = {
   snapshot: PredictorSnapshot | null;
 };
 
+export type PredictorUsageMode =
+  | 'fresh'
+  | 'stable_snapshot'
+  | 'rule_based'
+  | 'disabled'
+  | 'unavailable'
+  | 'missing_snapshot';
+
+export type PredictorUsageSummary = {
+  used: boolean;
+  mode: PredictorUsageMode;
+  reason: string;
+  source?: string | null;
+  fallback?: boolean;
+  confidence?: number | null;
+  decision?: 'long' | 'short' | 'none';
+  bias?: StrategyBias;
+  reliability?: number | null;
+  reliabilityStatus?: 'healthy' | 'degraded';
+};
+
+function composePredictorUsageSummary(params: {
+  mode: PredictorUsageMode;
+  reason: string;
+  source?: string | null;
+  fallback?: boolean;
+  signal?: PythonHybridSignal | null;
+  reliability?: number | null;
+  reliabilityStatus?: 'healthy' | 'degraded';
+}): PredictorUsageSummary {
+  return {
+    used: Boolean(params.signal),
+    mode: params.mode,
+    reason: params.reason,
+    source: params.source ?? null,
+    fallback: Boolean(params.fallback),
+    confidence: params.signal?.confidence ?? null,
+    decision: params.signal?.decision ?? 'none',
+    bias: params.signal?.bias ?? 'both',
+    reliability: params.reliability ?? null,
+    reliabilityStatus: params.reliabilityStatus,
+  };
+}
+
 type PredictorGateResult = {
   bias: StrategyBias;
   decision: 'long' | 'short' | 'none';
   primaryProbability: number;
   topLabel: 'long' | 'short' | 'none';
 };
+
+type PredictorConstraintReason =
+  | 'disabled_env'
+  | 'interpreter_unavailable'
+  | 'missing_features'
+  | 'no_snapshot';
 
 function evaluatePredictorGate(probabilities: PythonPredictionProbabilities, confidence: number): PredictorGateResult {
   const entries: Array<{ label: 'long' | 'short' | 'none'; value: number }> = [
@@ -365,6 +416,7 @@ type StrategyScoreResult = {
   plan: AdaptiveStrategyPlan;
   predictorFeatures: Record<string, number> | null;
   pythonSignal: PythonHybridSignal | null;
+  predictorUsage: PredictorUsageSummary;
 };
 
 export type AdaptiveSignal = StrategyScoreResult & {
@@ -473,6 +525,7 @@ type ActiveTrade = {
   minHoldGuardLastTs: number | null;
   lastExitReason?: AdaptiveExitReason | null;
   lastExitDirective?: string | null;
+  predictorUsage?: PredictorUsageSummary | null;
 };
 
 type GuardrailHalt = {
@@ -1293,6 +1346,22 @@ class MetaAdaptiveStrategyAgent {
       this.pythonUnavailableLogged = false;
     }
     const predictorFeatures = pythonAvailable ? buildPredictorFeatures(snap) : null;
+    const reliabilityMetrics = getPredictorReliabilityMetrics();
+    const predictorReliability = Number.isFinite(reliabilityMetrics.reliabilityRate)
+      ? reliabilityMetrics.reliabilityRate
+      : null;
+    const predictorReliabilityStatus: 'healthy' | 'degraded' = reliabilityMetrics.isReliable ? 'healthy' : 'degraded';
+    let predictorConstraintReason: PredictorConstraintReason | null = null;
+    if (!pythonEnabled) {
+      predictorConstraintReason = 'disabled_env';
+    } else if (!pythonAvailable) {
+      predictorConstraintReason = 'interpreter_unavailable';
+    } else if (!predictorFeatures) {
+      predictorConstraintReason = 'missing_features';
+    }
+    let stableSnapshotUsed = false;
+    let stableSnapshotMissing = false;
+    let predictorUsage!: PredictorUsageSummary;
 
     let pythonBias = 0;
     let pythonSignal: PythonHybridSignal | null = null;
@@ -1349,6 +1418,7 @@ class MetaAdaptiveStrategyAgent {
     if (!pythonSignal) {
       const stableSnapshot = getStableSnapshot(input.symbol);
       if (stableSnapshot) {
+        stableSnapshotUsed = true;
         const hybridSignal = buildHybridSignalFromSnapshot(stableSnapshot, null, {
           predictionSource: predictionSource !== 'none' ? predictionSource : 'stable_only',
           fallback: true,
@@ -1361,6 +1431,11 @@ class MetaAdaptiveStrategyAgent {
           bias: strongBias,
         };
         pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
+      } else {
+        stableSnapshotMissing = true;
+        if (!predictorConstraintReason) {
+          predictorConstraintReason = 'no_snapshot';
+        }
       }
     }
 
@@ -1386,6 +1461,110 @@ class MetaAdaptiveStrategyAgent {
         riskMultiplier: boostedRisk,
       };
       pythonBoostApplied = true;
+    }
+
+    const describeConstraint = (reason: PredictorConstraintReason | null): string => {
+      switch (reason) {
+        case 'disabled_env':
+          return 'Python predictor disabled via DISABLE_PYTHON_PREDICTOR';
+        case 'interpreter_unavailable':
+          return 'Python interpreter unavailable';
+        case 'missing_features':
+          return 'Predictor features unavailable for current snapshot';
+        case 'no_snapshot':
+          return 'No cached predictor snapshot available';
+        default:
+          return 'Predictor unavailable';
+      }
+    };
+
+    const pythonMeta = pythonSignal?.meta && typeof pythonSignal.meta === 'object'
+      ? (pythonSignal.meta as Record<string, unknown>)
+      : null;
+    const metaPredictionSource = pythonMeta && typeof pythonMeta['predictionSource'] === 'string'
+      ? String(pythonMeta['predictionSource'])
+      : null;
+    const metaSource = pythonMeta && typeof pythonMeta['source'] === 'string'
+      ? String(pythonMeta['source'])
+      : null;
+    const metaSnapshotSource = pythonMeta && typeof pythonMeta['snapshotSource'] === 'string'
+      ? String(pythonMeta['snapshotSource'])
+      : null;
+    const snapshotFallbackMeta = Boolean(pythonMeta && pythonMeta['snapshotFallback']);
+    const derivedSource = metaPredictionSource
+      ?? metaSnapshotSource
+      ?? (pythonSignal?.snapshot?.source ?? null);
+    const ruleBasedSource = metaSource === 'rule_based_fallback';
+    const fallbackUsed = snapshotFallbackMeta || stableSnapshotUsed || Boolean(predictorConstraintReason);
+
+    if (pythonSignal) {
+      if (ruleBasedSource) {
+        predictorUsage = composePredictorUsageSummary({
+          mode: 'rule_based',
+          reason: 'Rule-based fallback executed after predictor failure',
+          source: derivedSource ?? 'rule_based_fallback',
+          fallback: true,
+          signal: pythonSignal,
+          reliability: predictorReliability,
+          reliabilityStatus: predictorReliabilityStatus,
+        });
+      } else if (predictionSource === 'fresh') {
+        predictorUsage = composePredictorUsageSummary({
+          mode: 'fresh',
+          reason: 'Fresh python prediction executed',
+          source: derivedSource ?? 'python_predictor',
+          fallback: false,
+          signal: pythonSignal,
+          reliability: predictorReliability,
+          reliabilityStatus: predictorReliabilityStatus,
+        });
+      } else {
+        const fallbackReasonParts: string[] = [];
+        if (predictorConstraintReason) {
+          fallbackReasonParts.push(describeConstraint(predictorConstraintReason));
+        } else if (snapshotFallbackMeta) {
+          fallbackReasonParts.push('Stable snapshot fallback');
+        }
+        const fallbackReason = fallbackReasonParts.length > 0
+          ? fallbackReasonParts.join(' | ')
+          : 'Stable snapshot reused';
+        predictorUsage = composePredictorUsageSummary({
+          mode: 'stable_snapshot',
+          reason: fallbackReason,
+          source: derivedSource ?? 'predictor_state_store',
+          fallback: fallbackUsed,
+          signal: pythonSignal,
+          reliability: predictorReliability,
+          reliabilityStatus: predictorReliabilityStatus,
+        });
+      }
+    } else {
+      const baseReason = describeConstraint(predictorConstraintReason);
+      if (predictorConstraintReason === 'disabled_env') {
+        predictorUsage = composePredictorUsageSummary({
+          mode: 'disabled',
+          reason: baseReason,
+          reliability: predictorReliability,
+          reliabilityStatus: predictorReliabilityStatus,
+        });
+      } else if (predictorConstraintReason === 'interpreter_unavailable') {
+        predictorUsage = composePredictorUsageSummary({
+          mode: 'unavailable',
+          reason: baseReason,
+          reliability: predictorReliability,
+          reliabilityStatus: predictorReliabilityStatus,
+        });
+      } else {
+        const reasonDetail = stableSnapshotMissing
+          ? `${baseReason} (no cached snapshot)`
+          : baseReason;
+        predictorUsage = composePredictorUsageSummary({
+          mode: 'missing_snapshot',
+          reason: reasonDetail,
+          reliability: predictorReliability,
+          reliabilityStatus: predictorReliabilityStatus,
+        });
+      }
     }
 
     const regimeSignal = detectMarketRegime({
@@ -1422,6 +1601,18 @@ class MetaAdaptiveStrategyAgent {
       if (pythonSignal.cooldown.active) {
         macroNotes.push('python_cooldown_active');
       }
+      void storePredictorDecisionIfChanged({
+        symbol: input.symbol,
+        decision: pythonSignal.decision,
+        probabilityLong: pythonSignal.probabilities.long ?? pythonSignal.probabilityLong ?? 0,
+        probabilityShort: pythonSignal.probabilities.short ?? pythonSignal.probabilityShort ?? 0,
+        confidence: pythonSignal.confidence,
+        entryWeight: pythonSignal.entryWeight,
+        riskMultiplier: pythonSignal.riskMultiplier,
+        price,
+      }).catch(error => {
+        console.error(`[MetaAdaptive:evaluate] Failed to store predictor decision for ${input.symbol}:`, error);
+      });
     }
 
     const emaAlignmentBull = ema20 >= ema50 && ema50 >= ema100 && ema100 >= ema200;
@@ -1994,6 +2185,7 @@ class MetaAdaptiveStrategyAgent {
         plan: planAdjusted,
         predictorFeatures: item.predictorFeatures,
         pythonSignal: item.pythonSignal,
+        predictorUsage,
       };
     });
 
@@ -2142,6 +2334,7 @@ class MetaAdaptiveStrategyAgent {
     side?: StrategyBias;
     predictorFeatures?: Record<string, number> | null;
     pythonSignal?: PythonHybridSignal | null;
+    predictorUsage?: PredictorUsageSummary | null;
     flowCmf?: number | null;
     flowThreshold?: number | null;
     flowVolumeRatio?: number | null;
@@ -2158,6 +2351,7 @@ class MetaAdaptiveStrategyAgent {
     let predictorDecisionLabel: 'long' | 'short' | 'none' = pythonSignalMeta?.decision ?? 'none';
     let predictorPrimaryProbability = pythonSignalMeta?.primaryProbability ?? 0.5;
     let predictorConfidence = pythonSignalMeta?.confidence ?? 0;
+    const predictorUsageSummary = params.predictorUsage ?? null;
     // The Python predictor (python/predict_service.py) loads the persisted XGBoost
     // model and scores the latest indicator snapshot. The classifier now emits
     // calibrated probabilities for long/short/none; only confident sides above
@@ -2547,6 +2741,7 @@ class MetaAdaptiveStrategyAgent {
       minHoldGuardLastTs: null,
       lastExitReason: null,
       lastExitDirective: null,
+      predictorUsage: predictorUsageSummary,
     });
     this.activeTrades.set(params.sessionId, queue);
 
@@ -2561,6 +2756,17 @@ class MetaAdaptiveStrategyAgent {
       predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
       predictorConfidence: Number(predictorConfidence.toFixed(4)),
       intendedSide,
+      predictorUsage: predictorUsageSummary
+        ? {
+            mode: predictorUsageSummary.mode,
+            used: predictorUsageSummary.used,
+            fallback: predictorUsageSummary.fallback ?? false,
+            reason: predictorUsageSummary.reason,
+            source: predictorUsageSummary.source ?? null,
+            reliability: predictorUsageSummary.reliability ?? null,
+            reliabilityStatus: predictorUsageSummary.reliabilityStatus ?? null,
+          }
+        : null,
     }));
     return 'registered';
   }
@@ -2707,6 +2913,19 @@ class MetaAdaptiveStrategyAgent {
       min_hold_guard_active: guardActive,
       min_hold_guard_count: guardCount,
       min_hold_guard_last_ts: trade.minHoldGuardLastTs ? new Date(trade.minHoldGuardLastTs).toISOString() : null,
+      predictorUsage: trade.predictorUsage
+        ? {
+            mode: trade.predictorUsage.mode,
+            used: trade.predictorUsage.used,
+            fallback: trade.predictorUsage.fallback ?? false,
+            reason: trade.predictorUsage.reason,
+            source: trade.predictorUsage.source ?? null,
+            reliability: trade.predictorUsage.reliability ?? null,
+            reliabilityStatus: trade.predictorUsage.reliabilityStatus ?? null,
+            decision: trade.predictorUsage.decision ?? null,
+            confidence: trade.predictorUsage.confidence ?? null,
+          }
+        : null,
     }));
     if (this.reentryCooldownMs > 0 && normalized.lt(0)) {
       const now = Date.now();
