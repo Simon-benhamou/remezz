@@ -459,3 +459,22 @@ model SystemSetting {
 
   @@map("system_setting")
 }
+
+// Predictor decisions (only store changes)
+model PredictorDecision {
+  id               String   @id @default(cuid())
+  symbol           String
+  decision         String   // 'long', 'short', 'none'
+  previousDecision String?  // previous decision before this change
+  probabilityLong  Float
+  probabilityShort Float
+  confidence       Float
+  entryWeight      Float?
+  riskMultiplier   Float?
+  price            Float    // price at decision time
+  createdAt        DateTime @default(now())
+
+  @@index([symbol, createdAt])
+  @@index([createdAt])
+  @@map("predictor_decision")
+}

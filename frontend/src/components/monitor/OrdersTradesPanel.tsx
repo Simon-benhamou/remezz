@@ -139,12 +139,17 @@ export function OrdersTradesPanel({
     return <Tag color={config.color} icon={config.icon}>{status}</Tag>;
   };
 
-  const getSideTag = (side: string) => {
+  const getSideTag = (side: string, info?: string) => {
     const normalized = side?.toLowerCase();
-    return (normalized === 'buy' || normalized === 'long') ? (
-      <Tag color="green">LONG</Tag>
-    ) : (
-      <Tag color="red">SHORT</Tag>
+    const isBuy = normalized === 'buy' || normalized === 'long';
+    return (
+      <Tooltip title={info}>
+        {isBuy ? (
+          <Tag color="green">LONG</Tag>
+        ) : (
+          <Tag color="red">SHORT</Tag>
+        )}
+      </Tooltip>
     );
   };
 
@@ -165,7 +170,11 @@ export function OrdersTradesPanel({
       dataIndex: 'side',
       key: 'side',
       width: 80,
-      render: (side: string) => getSideTag(side),
+      render: (side: string, record: any) => {
+        // Show correct side with context
+        const info = record.reduceOnly ? 'Exit/Close Position' : 'Open Position';
+        return getSideTag(side, info);
+      },
     },
     {
       title: 'Type',
@@ -193,9 +202,19 @@ export function OrdersTradesPanel({
       title: 'Amount',
       dataIndex: 'amount',
       key: 'amount',
-      width: 120,
+      width: 100,
       align: 'right' as const,
       render: (amount: number) => amount?.toFixed(4) || 'N/A',
+    },
+    {
+      title: 'Notional',
+      key: 'notional',
+      width: 110,
+      align: 'right' as const,
+      render: (_: any, record: any) => {
+        const notional = (record.price || 0) * (record.amount || 0);
+        return notional > 0 ? `$${notional.toFixed(2)}` : '-';
+      },
     },
     {
       title: 'Filled',
@@ -313,7 +332,7 @@ export function OrdersTradesPanel({
       dataIndex: 'side',
       key: 'side',
       width: 80,
-      render: (side: string) => getSideTag(side),
+      render: (side: string) => getSideTag(side, 'Trade Direction'),
     },
     {
       title: 'Entry Price',
@@ -340,28 +359,52 @@ export function OrdersTradesPanel({
       render: (amount: number) => amount?.toFixed(2),
     },
     {
+      title: 'Notional',
+      key: 'notional',
+      width: 110,
+      align: 'right' as const,
+      render: (_: any, record: any) => {
+        const notional = record.entryPrice * record.amount;
+        return `$${notional.toFixed(2)}`;
+      },
+    },
+    {
       title: 'PnL',
       dataIndex: 'pnl',
       key: 'pnl',
-      width: 100,
+      width: 110,
       align: 'right' as const,
       render: (pnl: number) => (
-        <span style={{ color: pnl >= 0 ? '#52c41a' : '#f5222d', fontWeight: 'bold' }}>
-          {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT
-        </span>
+        <Tooltip title="Profit & Loss">
+          <span style={{ color: pnl >= 0 ? '#52c41a' : '#f5222d', fontWeight: 'bold' }}>
+            {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT
+          </span>
+        </Tooltip>
       ),
     },
     {
-      title: 'ROI',
+      title: 'ROI %',
       dataIndex: 'roi',
       key: 'roi',
-      width: 90,
+      width: 100,
       align: 'right' as const,
-      render: (roi: number) => (
-        <span style={{ color: roi >= 0 ? '#52c41a' : '#f5222d', fontWeight: 'bold' }}>
-          {roi >= 0 ? '+' : ''}{roi.toFixed(2)}%
-        </span>
-      ),
+      render: (roi: number) => {
+        const color = roi >= 0 ? '#52c41a' : '#f5222d';
+        const bgColor = roi >= 0 ? 'rgba(82, 196, 26, 0.1)' : 'rgba(245, 34, 45, 0.1)';
+        return (
+          <Tooltip title="Return on Investment">
+            <span style={{ 
+              color, 
+              fontWeight: 'bold',
+              backgroundColor: bgColor,
+              padding: '2px 6px',
+              borderRadius: '4px',
+            }}>
+              {roi >= 0 ? '+' : ''}{roi.toFixed(2)}%
+            </span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Duration',

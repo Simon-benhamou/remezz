@@ -16,6 +16,7 @@ import ProfessionalChart from '../components/charts/ProfessionalChart';
 import { AgentStateCard } from '../components/monitor/AgentStateCard';
 import { StrategyCard } from '../components/monitor/StrategyCard';
 import { PredictorCard } from '../components/monitor/PredictorCard';
+import { PredictorDecisionsPanel } from '../components/monitor/PredictorDecisionsPanel';
 import { OrdersTradesPanel } from '../components/monitor/OrdersTradesPanel';
 
 const { Content } = Layout;
@@ -239,6 +240,9 @@ export function MonitorPageNew() {
             data={data.predictor}
             symbolProfile={data.symbolProfile}
           />
+
+          {/* Predictor Decision History */}
+          <PredictorDecisionsPanel symbol={symbol} />
 
           {/* Orders & Trades */}
           <OrdersTradesPanel

@@ -30,6 +30,7 @@ import { router as arbitrageRouter } from "./routes/arbitrage.js";
 import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { router as capitalRouter } from "./routes/capital.js";
 import { router as entryAnalyticsRouter } from "./routes/entryAnalytics.js";
+import { router as predictorRouter } from "./routes/predictor.js";
 import smartSelectionRouter from "./routes/smart-selection.js";
 import validationRouter from "./routes/validation.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
@@ -140,6 +141,7 @@ app.use("/api/ops", opsRouter);
 app.use("/api/improvements", improvementsRouter);
 app.use("/api/capital", capitalRouter);
 app.use("/api/entry-analytics", entryAnalyticsRouter);
+app.use("/api/predictor", predictorRouter);
 app.use("/api/smart-selection", smartSelectionRouter);
 app.use("/api/validation", validationRouter);
 app.post("/api/start-agent", async (req, res) => {
@@ -495,6 +497,15 @@ try {
   await initializePaperBalance();
 } catch (error) {
   serverLogger.warn('⚠️ Failed to initialize paper balance from database:', error);
+}
+
+// Initialize predictor decision cache
+serverLogger.info('🧠 Initializing predictor decision cache...');
+try {
+  const { initializePredictorDecisionCache } = await import('./quantai/predictorDecisionStore.js');
+  await initializePredictorDecisionCache();
+} catch (error) {
+  serverLogger.warn('⚠️ Failed to initialize predictor decision cache:', error);
 }
 
 server.listen(cfg.PORT, () => serverLogger.info(`[api] listening on :${cfg.PORT}`));

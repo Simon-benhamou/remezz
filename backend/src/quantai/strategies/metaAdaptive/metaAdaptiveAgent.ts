@@ -14,6 +14,7 @@ import { recordPrediction, getStableSnapshot, isSnapshotStale } from '../../pred
 import type { PredictorSnapshot } from '../../predictorStateStore.js';
 import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
 import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
+import { storePredictorDecisionIfChanged } from '../../predictorDecisionStore.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 import { logMetaAdaptiveEvaluation } from './evaluationLogger.js';
@@ -2280,11 +2281,25 @@ class MetaAdaptiveStrategyAgent {
 
     const intendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
     
-    // 🔴 PREDICTOR GATE DISABLED: Too many false positives (LONG vs strategy)
-    // Strategy-only mode: predictor only logs, does NOT block trades
-    // Reason: Predictor trained on 1h/4h but applied to 15m → timing mismatch
-    // Example: ADA 61% LONG vs bearish strategy → lose money
-    const PREDICTOR_GATE_ENABLED = false;
+    // ✅ PREDICTOR GATE ENABLED: Store decision changes and block uncertain trades
+    // Only logs decision changes to DB (none→long, long→short, etc.)
+    const PREDICTOR_GATE_ENABLED = true;
+    
+    // Store predictor decision if it changed
+    if (pythonSignalMeta && predictorProbabilities) {
+      await storePredictorDecisionIfChanged({
+        symbol: params.symbol,
+        decision: predictorDecisionLabel as 'long' | 'short' | 'none',
+        probabilityLong: predictorProbabilities.long ?? 0,
+        probabilityShort: predictorProbabilities.short ?? 0,
+        confidence: predictorConfidence,
+        entryWeight: pythonSignalMeta.entryWeight,
+        riskMultiplier: pythonSignalMeta.riskMultiplier,
+        price: params.entryPrice,
+      }).catch(err => {
+        console.error(`[MetaAdaptive] Failed to store predictor decision for ${params.symbol}:`, err);
+      });
+    }
     
     if (PREDICTOR_GATE_ENABLED) {
       // 🐞 FIX BUG 2: Block ALL trades (LONG + SHORT) if confidence < 30%
