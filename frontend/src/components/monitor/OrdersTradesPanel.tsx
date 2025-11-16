@@ -330,49 +330,58 @@ export function OrdersTradesPanel({
 
   // Group fills into completed trades (entry/exit pairs)
   const groupedTrades: GroupedTrade[] = [];
-  const fillsByOrder = fills.reduce((acc, fill) => {
-    if (!acc[fill.orderId]) acc[fill.orderId] = [];
-    acc[fill.orderId].push(fill);
-    return acc;
-  }, {} as Record<string, any[]>);
+  const filledOrders = orders
+    .filter(o => o.status?.toLowerCase() === 'filled')
+    .map(order => {
+      const intent = resolveOrderIntent(order);
+      const ts = new Date(order.createdAt).getTime();
+      return {
+        ...order,
+        intent,
+        ts: Number.isFinite(ts) ? ts : 0,
+      };
+    })
+    .sort((a, b) => a.ts - b.ts); // chronological order ensures entry precedes exit
 
-  // Match entry/exit pairs from filled orders
-  const filledOrders = orders.filter(o => o.status?.toLowerCase() === 'filled');
-  for (let i = 0; i < filledOrders.length; i++) {
-    const order = filledOrders[i];
-    // Find opposite side order close in time (exit)
-    const oppositeOrder = filledOrders.find((o, idx) => 
-      idx > i && 
-      ((order.side === 'buy' && o.side === 'sell') || (order.side === 'sell' && o.side === 'buy')) &&
-      Math.abs(new Date(o.createdAt).getTime() - new Date(order.createdAt).getTime()) < 24 * 3600 * 1000
-    );
-    
-    if (oppositeOrder) {
-      const isLong = order.side === 'buy' || order.side === 'long';
-      const entryPrice = order.price || 0;
-      const exitPrice = oppositeOrder.price || 0;
-      const amount = order.amount || 0;
-      const pnl = isLong ? (exitPrice - entryPrice) * amount : (entryPrice - exitPrice) * amount;
-      const roi = entryPrice > 0 ? ((exitPrice - entryPrice) / entryPrice * 100 * (isLong ? 1 : -1)) : 0;
-      const fees = (order.fee || 0) + (oppositeOrder.fee || 0);
-      
-      groupedTrades.push({
-        id: `${order.id}-${oppositeOrder.id}`,
-        entryTime: order.createdAt,
-        exitTime: oppositeOrder.createdAt,
-        side: isLong ? 'LONG' : 'SHORT',
-        entryPrice,
-        exitPrice,
-        amount,
-        pnl,
-        roi,
-        fees,
-        duration: Math.floor((new Date(oppositeOrder.createdAt).getTime() - new Date(order.createdAt).getTime()) / 60000),
-      });
-      
-      // Remove processed order from future iterations
-      filledOrders.splice(filledOrders.indexOf(oppositeOrder), 1);
-    }
+  const usedExitOrderIds = new Set<string>();
+
+  for (const order of filledOrders) {
+    if (order.intent !== 'entry') continue;
+    const isLong = order.side === 'buy' || order.side === 'long';
+    const entryPrice = order.price || 0;
+    const amount = order.amount || 0;
+    const entryTs = order.ts;
+
+    const exitOrder = filledOrders.find(candidate => {
+      if (candidate.intent !== 'exit') return false;
+      if (usedExitOrderIds.has(candidate.id)) return false;
+      if (candidate.ts <= entryTs) return false;
+      const oppositeSide = isLong ? (candidate.side === 'sell' || candidate.side === 'short') : (candidate.side === 'buy' || candidate.side === 'long');
+      return oppositeSide;
+    });
+
+    if (!exitOrder) continue;
+
+    usedExitOrderIds.add(exitOrder.id);
+    const exitPrice = exitOrder.price || 0;
+    const pnlPerUnit = isLong ? exitPrice - entryPrice : entryPrice - exitPrice;
+    const pnl = pnlPerUnit * amount;
+    const roi = entryPrice > 0 ? (pnlPerUnit / entryPrice) * 100 : 0;
+    const durationMinutes = Math.max(0, Math.floor((exitOrder.ts - entryTs) / 60000));
+
+    groupedTrades.push({
+      id: `${order.id}-${exitOrder.id}`,
+      entryTime: order.createdAt,
+      exitTime: exitOrder.createdAt,
+      side: isLong ? 'LONG' : 'SHORT',
+      entryPrice,
+      exitPrice,
+      amount,
+      pnl,
+      roi,
+      fees: (order.fee || 0) + (exitOrder.fee || 0),
+      duration: durationMinutes,
+    });
   }
 
   const tradeColumns = [
