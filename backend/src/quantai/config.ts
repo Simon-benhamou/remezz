@@ -374,12 +374,12 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     defaultSlippageBps: 2.0,
   },
   filters: {
-    minAdx: 12,
-    minDollarVolume: 150_000,
+    minAdx: 16,
+    minDollarVolume: 350_000,
     minRr: 1.05,
     minAtrPct: 0.05,
     maxSpreadBps: 12,
-    confidenceThreshold: 0.50,
+    confidenceThreshold: 0.62,
     useConfidenceFilter: true,
     maxAtrPct: 12,
     tierOverrides: {
@@ -387,7 +387,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         minRr: 1.2,
         minDollarVolume: 2_000_000,
         maxSpreadBps: 10,
-        confidenceThresholdDelta: 0.00,
+        confidenceThresholdDelta: 0.05,
         maxAtrPct: 6,
       },
       tier2: {
@@ -400,7 +400,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
         minRr: 1.25,
         minDollarVolume: 100_000,
         maxSpreadBps: 20,
-        confidenceThresholdDelta: 0.00,
+        confidenceThresholdDelta: 0.03,
         minAtrPctMultiplier: 0.4,
         maxAtrPct: 12,
         spreadAtrRatioLimit: 0.7,
@@ -519,9 +519,9 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     earlyExit: {
       adxBelow: 18,
       cmfNegative: true,
-      tightenProfitR: 0.2,
-      cutLossR: 0.35,
-      minHoldMinutes: 15,
+      tightenProfitR: 0.1,
+      cutLossR: 0.2,
+      minHoldMinutes: 3,
     },
     maxHoldingMin: 90,
     reentryCooldownMin: 25,
@@ -1014,6 +1014,32 @@ function normalizeFilters(raw: any): QuantAIEntryFilterConfig {
           cfg.dynamic!.aggressivenessAdjustments![key] = adj;
         }
       }
+    }
+    const momentumRaw = (dynamicRaw as Record<string, any>)['momentum_fast_track']
+      ?? (dynamicRaw as Record<string, any>)['momentumFastTrack'];
+    if (momentumRaw && typeof momentumRaw === 'object') {
+      const base = cfg.dynamic!.momentumFastTrack
+        ?? defaults.dynamic?.momentumFastTrack
+        ?? DEFAULT_DYNAMIC_FILTERS.momentumFastTrack
+        ?? {};
+      const next: NonNullable<QuantAIEntryFilterDynamicConfig['momentumFastTrack']> = { ...base };
+      if (momentumRaw.enabled != null) next.enabled = Boolean(momentumRaw.enabled);
+      const numericFields: Array<[keyof NonNullable<QuantAIEntryFilterDynamicConfig['momentumFastTrack']>, any]> = [
+        ['minAdx', momentumRaw.min_adx ?? momentumRaw.minAdx],
+        ['minVolumeRatio', momentumRaw.min_volume_ratio ?? momentumRaw.minVolumeRatio],
+        ['minSlopePct', momentumRaw.min_slope_pct ?? momentumRaw.minSlopePct],
+        ['minCmf', momentumRaw.min_cmf ?? momentumRaw.minCmf],
+        ['minWeightedRr', momentumRaw.min_weighted_rr ?? momentumRaw.minWeightedRr],
+        ['minRr', momentumRaw.min_rr ?? momentumRaw.minRr],
+        ['rrFloor', momentumRaw.rr_floor ?? momentumRaw.rrFloor],
+        ['minAtrPct', momentumRaw.min_atr_pct ?? momentumRaw.minAtrPct],
+        ['nearThresholdFactor', momentumRaw.near_threshold_factor ?? momentumRaw.nearThresholdFactor],
+      ];
+      for (const [key, rawVal] of numericFields) {
+        const num = normalizeOptionalNumber(rawVal);
+        if (num != null) (next as any)[key] = num;
+      }
+      cfg.dynamic!.momentumFastTrack = next;
     }
     const directionalRaw = (dynamicRaw as Record<string, any>)['directional_filter']
       ?? (dynamicRaw as Record<string, any>)['directionalFilter'];

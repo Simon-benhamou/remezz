@@ -9,7 +9,7 @@ risk:
   reduce_size_after_losses: true
   size_reduction_after_n_losses: 2 # reduce size after >= 2 losses in a row
   size_reduction_factor: 0.5       # 50% size during recovery
-  base_risk_per_trade_pct: 0.5     # % of equity risked per trade (target 0.25–0.75% typical)
+  base_risk_per_trade_pct: 1.0     # % of equity risked per trade (raised for larger per-trade PnL)
 
 fees_slippage:
   taker_fee_bps: 7.5               # 0.075%
@@ -63,6 +63,17 @@ filters:
     rr_tier_adjustments:
       tier1: 0.10                    # lowered from 0.15
       tier3: 0.15                    # lowered from 0.20
+    momentum_fast_track:
+      enabled: true
+      min_adx: 30                    # allow strong-flow boost sooner (was 35)
+      min_volume_ratio: 1.05         # accept lighter volume expansion (was 1.2)
+      min_slope_pct: 0.15            # lower slope requirement (was 0.2)
+      min_cmf: 0.02                  # require only mild positive CMF (~2%)
+      min_weighted_rr: 0.85          # allow RR relaxation when weighted RR >= 0.85
+      min_rr: 1.05                   # never drop below strategy baseline
+      rr_floor: 1.0                  # absolute RR floor when fast-track applies
+      min_atr_pct: 0.6               # ensure ATR > 0.6% before applying boost
+      near_threshold_factor: 0.88    # consider near-miss when within 12%
     aggressiveness_adjustments:
       conservative:
         min_rr_delta: 0.03           # lowered from 0.05
@@ -116,7 +127,7 @@ exits:
   sl_atr_mult: 1.5                 # base SL multiplier (fallback)
   sl_atr_mult_reversal: 1.2        # tighter SL for reversal setups
   sl_atr_mult_impulse: 1.5         # wider SL for impulse setups
-  tp_r_multiples: [2.0, 3.2, 4.6]  # enforce larger upside before scaling out
+  tp_r_multiples: [3.0, 4.5, 6.0]  # push for ≥3R winners so $10 risk yields $30-$50
   trail_after_r: 1.0               # default trailing threshold in R
   trail_after_r_reversal: 0.8      # start trailing earlier on reversals
   trail_after_r_impulse: 1.0       # keep base trailing threshold on impulses

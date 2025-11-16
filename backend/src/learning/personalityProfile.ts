@@ -5,6 +5,82 @@
 
 import { prisma } from '../db/client.js';
 
+const QUOTE_ASSETS = [
+  'USDT',
+  'USDC',
+  'BUSD',
+  'FDUSD',
+  'USD',
+  'BTC',
+  'ETH',
+  'BNB',
+  'EUR',
+  'TRY',
+  'BRL',
+];
+
+function extractBaseQuote(symbol: string): { base: string; quote: string } | null {
+  if (!symbol) return null;
+  const trimmed = symbol.trim();
+  if (!trimmed) return null;
+  const upper = trimmed.toUpperCase();
+  const slashIdx = upper.indexOf('/');
+  if (slashIdx >= 0) {
+    const base = upper.slice(0, slashIdx);
+    const rest = upper.slice(slashIdx + 1);
+    if (!base || !rest) return null;
+    const quote = rest.split(':')[0] ?? '';
+    if (!quote) return null;
+    return { base, quote };
+  }
+
+  for (const quote of QUOTE_ASSETS) {
+    if (upper.endsWith(quote) && upper.length > quote.length) {
+      return { base: upper.slice(0, -quote.length), quote };
+    }
+  }
+  return null;
+}
+
+function buildProfileSymbolCandidates(symbol: string): string[] {
+  const candidates = new Set<string>();
+  const raw = symbol?.trim();
+  if (!raw) return [];
+  candidates.add(raw);
+
+  const upper = raw.toUpperCase();
+  candidates.add(upper);
+
+  const parts = extractBaseQuote(raw);
+  if (parts && parts.base && parts.quote) {
+    const slash = `${parts.base}/${parts.quote}`;
+    candidates.add(slash);
+    const perp = `${slash}:${parts.quote}`;
+    candidates.add(perp);
+    const compact = `${parts.base}${parts.quote}`;
+    candidates.add(compact);
+  }
+
+  return Array.from(candidates).filter(Boolean);
+}
+
+async function fetchProfileRecord(symbol: string) {
+  const candidates = buildProfileSymbolCandidates(symbol);
+  if (!candidates.length) return null;
+  const records = await prisma.cryptoPersonalityProfile.findMany({
+    where: { symbol: { in: candidates } },
+  });
+
+  for (const candidate of candidates) {
+    const match = records.find((record) => record.symbol === candidate);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
 export type MarketRegime = 'bull_market' | 'bear_market' | 'choppy_market' | 'neutral';
 export type VolatilityRegime = 'low' | 'medium' | 'high';
 export type DirectionBias = 'long' | 'short' | 'neutral';
@@ -339,9 +415,7 @@ export async function getPersonalityProfile(
   }
 ): Promise<OptimalParams | null> {
   try {
-    const profile = await prisma.cryptoPersonalityProfile.findUnique({
-      where: { symbol },
-    });
+    const profile = await fetchProfileRecord(symbol);
 
     if (!profile) {
       return null;
@@ -479,9 +553,7 @@ export async function getPersonalityProfileWithSource(
   }
 ): Promise<{ params: OptimalParams; source: string } | null> {
   try {
-    const profile = await prisma.cryptoPersonalityProfile.findUnique({
-      where: { symbol },
-    });
+    const profile = await fetchProfileRecord(symbol);
 
     if (!profile) {
       return null;

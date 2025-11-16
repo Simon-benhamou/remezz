@@ -157,6 +157,41 @@ const DEFAULT_CONFIDENCE_THRESHOLD = 0.45;  // FIX: Align with strategy optimize
 const BLOCKED_REASON_LOW_CONFIDENCE = 'low_confidence';
 const BLOCKED_REASON_WEAK_CONTEXT = 'weak_entry_context';
 const BLOCKED_REASON_SHORT_CONF_GUARD = 'short_confidence_guard';
+const BLOCKED_REASON_NEUTRAL_BIAS = 'neutral_direction_bias';
+const DEFAULT_MIN_STOP_DISTANCE_PCT = 0.0045; // 0.45% floor to avoid paper cuts
+const DEFAULT_MIN_STOP_ATR_MULT = 1.0;        // Require full ATR for stop padding
+
+function parseMinStopDistancePct(): number {
+  const raw = process.env.META_ADAPTIVE_MIN_STOP_PCT;
+  if (!raw) return DEFAULT_MIN_STOP_DISTANCE_PCT;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_MIN_STOP_DISTANCE_PCT;
+  return Math.max(0, parsed);
+}
+
+const MIN_STOP_DISTANCE_PCT = parseMinStopDistancePct();
+function parseMinStopAtrMult(): number {
+  const raw = process.env.META_ADAPTIVE_MIN_STOP_ATR_MULT;
+  if (!raw) return DEFAULT_MIN_STOP_ATR_MULT;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MIN_STOP_ATR_MULT;
+  return parsed;
+}
+
+const MIN_STOP_ATR_MULT = parseMinStopAtrMult();
+
+function applyMinStopDistance(distance: number, price: number): number {
+  if (!Number.isFinite(distance) || distance <= 0) return distance;
+  if (!Number.isFinite(price) || price === 0) return distance;
+  const floor = Math.abs(price) * MIN_STOP_DISTANCE_PCT;
+  if (!Number.isFinite(floor) || floor <= 0) return distance;
+  return Math.max(distance, floor);
+}
+
+function computeAtrStopFloor(entryAtr: number | null | undefined): number {
+  if (!Number.isFinite(entryAtr) || (entryAtr ?? 0) <= 0) return 0;
+  return Math.max(0, (entryAtr as number) * MIN_STOP_ATR_MULT);
+}
 
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -198,7 +233,7 @@ async function getRegimeAwareThresholds(
     confidence: CONFIDENCE_THRESHOLD,
     adx: { trend: 16, breakout: 14, mean: 12, momentum: 18 },
     atr: { trend: 0.6, breakout: 0.5, mean: 0.4, momentum: 0.6 },
-    eligibility: 0.62,
+    eligibility: 0.55,
     cmf: 0.03,
     volumeRatio: 0.9,
     atrScaling: 0.4, // Scaling factor for realizedVol to intraday ATR%
@@ -279,10 +314,10 @@ function computeDynamicConfidenceThreshold(params: {
   
   if (hasStrongAlignment && hasStrongVolume) {
     // Both factors present - use lowest threshold
-    return Math.max(0.55, baseThreshold - 0.1);  // Lowered floor from 0.62
+    return Math.max(0.5, baseThreshold - 0.12);
   } else if (hasStrongAlignment || hasStrongVolume) {
     // One factor present - moderate reduction
-    return Math.max(0.60, baseThreshold - 0.05);  // Lowered floor from 0.67
+    return Math.max(0.55, baseThreshold - 0.07);
   }
   
   // No strong confluence - use base threshold
@@ -302,10 +337,19 @@ const MAX_RISK_ATR_MULT = (() => {
 
 export const metaAdaptiveConfidenceThreshold = CONFIDENCE_THRESHOLD;
 
-const ENTRY_ELIGIBILITY_THRESHOLD = 0.62;  // FIX: Align with strategy optimizer config (was 0.52, too low)
+const ENTRY_ELIGIBILITY_THRESHOLD = 0.5;  // Lower base so confident signals clear the gate more easily
+
+function eligibilityReliefFromConfidence(confidence: number | null | undefined): number {
+  if (!Number.isFinite(confidence ?? NaN)) return 0;
+  const value = Number(confidence);
+  if (value >= 0.85) return 0.08;
+  if (value >= 0.75) return 0.05;
+  if (value >= 0.65) return 0.03;
+  return 0;
+}
 const RR_FLOOR_RAW = process.env.META_ADAPTIVE_MIN_RR
   ?? process.env.META_ADAPTIVE_RR_MIN
-  ?? '1.8';
+  ?? '1.5';
 function parseRrFloor(): number {
   const parsed = Number.parseFloat(RR_FLOOR_RAW);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.8;
@@ -739,7 +783,7 @@ function computeFlowComponent(
   const cmfRaw = Number((snap as any)?.cmf20 ?? NaN);
   const cmf = Number.isFinite(cmfRaw) ? cmfRaw : 0;
   const ratio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : 1;
-  const minVolumeRatio = regimeThresholds?.volumeRatio || 0.9;
+  const minVolumeRatio = regimeThresholds?.volumeRatio || 0.85;
   const desired = desiredDirectionalBias(bias);
   
   // Use regime-aware CMF threshold (default 0.03)
@@ -753,8 +797,8 @@ function computeFlowComponent(
     cmfThreshold = regimeThresholds?.cmf || 0.03;
     cmfMagnitude = Math.abs(cmf);
   }
-  const cmfScore = clampNumber((cmfMagnitude - Math.abs(cmfThreshold)) / 0.2, 0, 1);
-  const volumeScore = clampNumber((ratio - minVolumeRatio) / 0.6, 0, 1);
+  const cmfScore = clampNumber((cmfMagnitude - Math.abs(cmfThreshold)) / 0.15, 0, 1);
+  const volumeScore = clampNumber((ratio - minVolumeRatio) / 0.5, 0, 1);
   const score = clampNumber(cmfScore * 0.6 + volumeScore * 0.4, 0, 1);
   const reason = `flow=${cmfMagnitude >= Math.abs(cmfThreshold) && ratio >= minVolumeRatio ? 'pass' : 'fail'}(cmf=${cmf.toFixed(2)},vol=${ratio.toFixed(2)})`;
   return {
@@ -837,9 +881,22 @@ function computeEntryEligibility(
       1,
     ).toFixed(4),
   );
-  const eligibilityThreshold = regimeThresholds?.eligibility || 0.62;
-  const passed = score >= eligibilityThreshold;
+  const eligibilityThreshold = regimeThresholds?.eligibility ?? ENTRY_ELIGIBILITY_THRESHOLD;
+  let passed = score >= eligibilityThreshold;
+  let softPassApplied = false;
+  if (!passed) {
+    const coreStrong = [mtf.score, adx.score, atr.score].filter((component) => component >= 0.7).length;
+    const flowAboveFloor = flow.score >= 0.15 || flow.reason.startsWith('flow=pass');
+    const nearMiss = score + 0.05 >= eligibilityThreshold;
+    if (nearMiss && coreStrong >= 2 && flowAboveFloor) {
+      passed = true;
+      softPassApplied = true;
+    }
+  }
   const reasons = [mtf.reason, adx.reason, atr.reason, flow.reason];
+  if (softPassApplied) {
+    reasons.push('eligibility=soft_pass(flow_support)');
+  }
   return {
     score,
     passed,
@@ -1154,16 +1211,18 @@ export async function registerAdaptiveTradeEntry(params: {
   
   // Extract actual thresholds from signal meta (regime-aware) for accurate logging
   const actualConfThreshold = params.signal.meta?.confidenceThreshold ?? CONFIDENCE_THRESHOLD;
-  const actualEligThreshold = params.signal.metrics?.entryEligibilityScore != null 
-    ? (params.signal.meta?.entryEligibilityComponents ? 0.62 : ENTRY_ELIGIBILITY_THRESHOLD)
+  const baseEligibilityThreshold = params.signal.metrics?.entryEligibilityScore != null
+    ? (params.signal.meta?.entryEligibilityComponents ? 0.56 : ENTRY_ELIGIBILITY_THRESHOLD)
     : ENTRY_ELIGIBILITY_THRESHOLD;
+  const eligibilityRelief = eligibilityReliefFromConfidence(params.signal.confidence);
+  const actualEligThreshold = Math.max(0.45, baseEligibilityThreshold - eligibilityRelief);
     
   const confidenceGatePassed =
     params.signal.confidenceGatePassed ??
     (Number.isFinite(params.signal.confidence) ? params.signal.confidence >= metaAdaptiveConfidenceThreshold : false);
   const entryGatePassed = params.signal.entryEligibilityGatePassed
     ?? (Number.isFinite(params.signal.entryEligibilityScore)
-      ? params.signal.entryEligibilityScore >= ENTRY_ELIGIBILITY_THRESHOLD
+      ? params.signal.entryEligibilityScore >= actualEligThreshold
       : true);
   const entryReasons = (params.signal.entryEligibilityReasons?.length
     ? params.signal.entryEligibilityReasons
@@ -1262,6 +1321,53 @@ export async function registerAdaptiveTradeEntry(params: {
   }
   const reentryCooldown = exitCfgBase.reentryCooldownMin ?? 0;
   metaAdaptiveStrategyAgent.setReentryCooldownMinutes(reentryCooldown);
+
+  if (params.signal.bias === 'both') {
+    const reason = BLOCKED_REASON_NEUTRAL_BIAS;
+    recordOpsEvent({
+      level: 'info',
+      source: 'meta_adaptive_gate',
+      message: 'trade_blocked',
+      symbol: params.symbol,
+      details: {
+        strategy: params.signal.id,
+        blockedReason: reason,
+        entryReasons,
+      },
+    });
+    console.log(JSON.stringify({
+      level: 'info',
+      event: 'adaptive_trade_blocked_by_gate',
+      symbol: params.symbol,
+      sessionId: params.sessionId ?? null,
+      strategy: params.signal.id,
+      blockedReason: reason,
+      entryReasons,
+    }));
+    logEntryChecklist({
+      sessionId: params.sessionId ?? null,
+      symbol: params.symbol,
+      strategy: params.signal.id,
+      decision: 'blocked',
+      blockedReason: reason,
+      registrationResult: 'n/a',
+      entryReasons,
+      confidencePassed: confidenceGatePassed,
+      confidence: Number(params.signal.confidence.toFixed(4)),
+      entryEligibilityPassed: entryGatePassed,
+      entryEligibilityScore: Number.isFinite(params.signal.entryEligibilityScore)
+        ? params.signal.entryEligibilityScore
+        : null,
+      entryEligibilityComponents: params.signal.meta?.entryEligibilityComponents,
+      rrValue: null,
+      rrThreshold: RR_MIN,
+      minHoldMinutes,
+      actualConfidenceThreshold: actualConfThreshold,
+      actualEligibilityThreshold: actualEligThreshold,
+      predictorUsage,
+    });
+    return 'skipped';
+  }
 
   const side: 'long' | 'short' = resolveTradeSideFromPredictor(params.signal);
   const symbolFamily = classifySymbolFamily(params.symbol);
@@ -1432,6 +1538,27 @@ export async function registerAdaptiveTradeEntry(params: {
       : 0;
   }
 
+  const originalMultipliers = stopDistance > 0
+    ? targets.map(target => (side === 'long'
+      ? (target - params.entryPrice) / stopDistance
+      : (params.entryPrice - target) / stopDistance))
+    : [];
+  const atrStopFloor = computeAtrStopFloor(entryAtr);
+  const enforceStopFloor = (nextDistance: number): void => {
+    if (!Number.isFinite(nextDistance) || nextDistance <= stopDistance) return;
+    stopDistance = nextDistance;
+    if (originalMultipliers.length) {
+      targets = originalMultipliers.map(mult => params.entryPrice + direction * mult * stopDistance);
+      rr = originalMultipliers[0] ?? rr;
+    }
+  };
+
+  if (atrStopFloor > 0) {
+    enforceStopFloor(atrStopFloor);
+  }
+  const adjustedStopDistance = applyMinStopDistance(stopDistance, params.entryPrice);
+  enforceStopFloor(adjustedStopDistance);
+
   const normalizationMeta = {
     tickSize: params.signal.meta.tickSize ?? null,
     stepSize: params.signal.meta.stepSize ?? null,
@@ -1449,12 +1576,47 @@ export async function registerAdaptiveTradeEntry(params: {
     side,
     metadata: normalizationMeta,
   });
-  const entryPriceEffective = normalized.entryPrice;
-  const stopPriceEffective = normalized.stop != null ? normalized.stop : rawStopPrice;
+  let entryPriceEffective = normalized.entryPrice;
+  let stopPriceEffective = normalized.stop != null ? normalized.stop : rawStopPrice;
   stopDistance = Math.max(1e-9, Math.abs(entryPriceEffective - stopPriceEffective));
+  let qtyAligned = normalized.qty;
   const targetsAligned = normalized.targets ?? targets;
-  const qtyAligned = normalized.qty;
+  const targetMultipliers = stopDistance > 0
+    ? targetsAligned.map(target => (side === 'long'
+      ? (target - entryPriceEffective) / stopDistance
+      : (entryPriceEffective - target) / stopDistance))
+    : [];
   targets = targetsAligned.slice();
+
+  const flooredPostNormalization = Math.max(
+    applyMinStopDistance(stopDistance, entryPriceEffective),
+    atrStopFloor,
+  );
+  if (flooredPostNormalization > stopDistance + 1e-12) {
+    const tickPadding = Math.max(0, normalizationMeta.tickSize ?? 0);
+    const enforcedDistance = flooredPostNormalization;
+    const paddedStopPrice = side === 'long'
+      ? entryPriceEffective - (enforcedDistance + tickPadding)
+      : entryPriceEffective + (enforcedDistance + tickPadding);
+    const rebuiltTargets = targetMultipliers.length
+      ? targetMultipliers.map(mult => entryPriceEffective + direction * mult * enforcedDistance)
+      : targets.slice();
+    const renormalized = normalizeOrder({
+      symbol: params.symbol,
+      entryPrice: entryPriceEffective,
+      qty: qtyAligned,
+      stop: paddedStopPrice,
+      targets: rebuiltTargets,
+      side,
+      metadata: normalizationMeta,
+    });
+    entryPriceEffective = renormalized.entryPrice;
+    stopPriceEffective = renormalized.stop != null ? renormalized.stop : paddedStopPrice;
+    stopDistance = Math.max(1e-9, Math.abs(entryPriceEffective - stopPriceEffective));
+    qtyAligned = renormalized.qty;
+    targets = (renormalized.targets ?? rebuiltTargets).slice();
+  }
+
   rr = stopDistance > 0
     ? (side === 'long'
       ? (targets[0] - entryPriceEffective) / stopDistance

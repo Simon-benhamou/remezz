@@ -6,7 +6,7 @@ process.env.USE_IN_MEMORY_DB = 'true';
 process.env.MARKET_TYPE = 'futures';
 process.env.EXCHANGE_ID = 'binanceusdm';
 process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD = process.env.META_ADAPTIVE_CONFIDENCE_THRESHOLD ?? '0.72';
-process.env.META_ADAPTIVE_MIN_RR = process.env.META_ADAPTIVE_MIN_RR ?? '1.8';
+process.env.META_ADAPTIVE_MIN_RR = process.env.META_ADAPTIVE_MIN_RR ?? '1.5';
 process.env.DISABLE_PYTHON_PREDICTOR = process.env.DISABLE_PYTHON_PREDICTOR ?? 'true';
 
 
@@ -64,7 +64,7 @@ console.log = (...args) => {
   originalConsoleLog(...args);
 };
 
-const rrFloorRaw = process.env.META_ADAPTIVE_MIN_RR ?? process.env.META_ADAPTIVE_RR_MIN ?? '1.8';
+const rrFloorRaw = process.env.META_ADAPTIVE_MIN_RR ?? process.env.META_ADAPTIVE_RR_MIN ?? '1.5';
 const RR_MIN = Number.isFinite(Number.parseFloat(rrFloorRaw)) ? Number.parseFloat(rrFloorRaw) : 1.8;
 
 const sessionId = 'meta-backtest-session';

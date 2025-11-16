@@ -19,11 +19,21 @@ export type ExitDirective =
 
 const rrFloorRaw = process.env.META_ADAPTIVE_MIN_RR
   ?? process.env.META_ADAPTIVE_RR_MIN
-  ?? '1.8';
+  ?? '1.5';
 const RR_MIN = (() => {
   const parsed = Number.parseFloat(rrFloorRaw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.8;
 })();
+
+const parseEnvNumber = (raw: string | undefined, fallback: number): number => {
+  if (!raw) return fallback;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const ONE_R_LOCK_ENABLED = process.env.META_ADAPTIVE_ONE_R_LOCK !== 'false';
+const ONE_R_LOCK_TRIGGER_R = Math.max(0.5, parseEnvNumber(process.env.META_ADAPTIVE_ONE_R_LOCK_TRIGGER_R, 1));
+const ONE_R_LOCK_RETAIN_R = Math.max(0.25, parseEnvNumber(process.env.META_ADAPTIVE_ONE_R_LOCK_RETAIN_R, 0.9));
 
 function resolveTrailMultiplier(cfg: QuantAIExitConfig, atrPct: number | null): number {
   const adaptive = cfg.trailingAdaptive;
@@ -192,6 +202,26 @@ export function maybeAdjustOrExit({
       ? (entryAtr / entryPrice) * 100
       : null;
   const rNow = baselineRisk > 0 ? PositionSizer.rMultiple(entryPrice, baselineStop, lastPrice, side) : 0;
+
+  if (ONE_R_LOCK_ENABLED && baselineRisk > 0 && Number.isFinite(rNow) && rNow >= ONE_R_LOCK_TRIGGER_R) {
+    const retainMultiple = Math.min(Math.max(ONE_R_LOCK_RETAIN_R, 0.25), rNow);
+    const candidateStop = side === 'long'
+      ? entryPrice + baselineRisk * retainMultiple
+      : entryPrice - baselineRisk * retainMultiple;
+    const improved = side === 'long'
+      ? candidateStop > stop + 1e-8
+      : candidateStop < stop - 1e-8;
+    const withinPrice = side === 'long'
+      ? candidateStop <= lastPrice + 1e-9
+      : candidateStop >= lastPrice - 1e-9;
+    if (improved && withinPrice) {
+      return {
+        action: 'move_sl',
+        reason: `one_r_lock_${retainMultiple.toFixed(2)}R`,
+        stop: candidateStop,
+      };
+    }
+  }
   const percentLockCfg = cfg.percentGainLock;
   if (percentLockCfg?.enabled) {
     const activation = Math.max(0, percentLockCfg.activationGainPct ?? 0);

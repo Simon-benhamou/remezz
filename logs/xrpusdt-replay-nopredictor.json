@@ -1,0 +1,26 @@
+{
+  "sessionId": "cmi1x62ma00008gt8n6ovjs49",
+  "symbol": "XRPUSDT",
+  "startedAt": "2025-11-16T16:17:48.993Z",
+  "stoppedAt": "2025-11-16T16:24:05.756Z",
+  "candlesProcessed": 550,
+  "trades": [],
+  "stats": {
+    "totalTrades": 0,
+    "wins": 0,
+    "losses": 0,
+    "winRatePct": 0,
+    "realizedPnlUsd": 0,
+    "expectancyR": 0,
+    "avgHoldingMin": 0
+  },
+  "kpi": {
+    "realizedPnlUsd": 0,
+    "unrealizedPnlUsd": 0,
+    "roiPct": 0,
+    "expectancy": 0,
+    "winRate": 0,
+    "maxDrawdownPct": 0,
+    "lastUpdated": "2025-11-16T16:17:49.287Z"
+  }
+}

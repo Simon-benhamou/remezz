@@ -55,6 +55,11 @@ const LONG_ENTER_CONFIDENCE = 0.32;
 const LONG_EXIT_CONFIDENCE = 0.20;
 const SHORT_EDGE_THRESHOLD = 0.25;
 const LONG_EDGE_THRESHOLD = 0.20;
+const DEFAULT_NEUTRAL_RESOLVE_THRESHOLD = 0.18;
+const NEUTRAL_RESOLVE_THRESHOLD = sanitizeProbabilityThreshold(
+  process.env.META_ADAPTIVE_NEUTRAL_RESOLVE_BIAS,
+  DEFAULT_NEUTRAL_RESOLVE_THRESHOLD,
+);
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
@@ -849,6 +854,24 @@ function computeContextAlignment(
   return { direction, alignmentScore, conflict, reasons, bullishStack, bearishStack };
 }
 
+const parsePositiveDecimal = (raw: string | undefined, fallback: string): PreciseDecimal => {
+  if (!raw) return new PreciseDecimal(fallback);
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return new PreciseDecimal(fallback);
+  }
+  return new PreciseDecimal(parsed.toString());
+};
+
+const parseNonNegativeDecimal = (raw: string | undefined, fallback: string): PreciseDecimal => {
+  if (!raw) return new PreciseDecimal(fallback);
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return new PreciseDecimal(fallback);
+  }
+  return new PreciseDecimal(parsed.toString());
+};
+
 class MetaAdaptiveStrategyAgent {
   private static instance: MetaAdaptiveStrategyAgent | null = null;
 
@@ -864,13 +887,23 @@ class MetaAdaptiveStrategyAgent {
   private readonly tradeLedgers = new Map<string, PreciseDecimal>();
   private readonly assetRankings = new Map<string, { score: number; updatedAt: number }>();
   private readonly symbolMeta = new Map<string, { firstSeen: number; lastSeen: number; volumeSurge: number; rankingScore: number; rankHint: number | null }>();
-  private readonly defaultCapital = new PreciseDecimal('1000');
-  private readonly desiredProfitUsd = new PreciseDecimal('30');
+  private readonly defaultCapital = parsePositiveDecimal(
+    process.env.META_ADAPTIVE_DEFAULT_CAPITAL_USD ?? process.env.META_ADAPTIVE_CAPITAL_BASE_USD,
+    '10000',
+  );
+  private readonly desiredProfitUsd = parsePositiveDecimal(
+    process.env.META_ADAPTIVE_TARGET_PROFIT_USD,
+    '50',
+  );
   private readonly defaultFeeBps = new PreciseDecimal('4');
+  private readonly minRiskPctFloor = parsePositiveDecimal(process.env.META_ADAPTIVE_MIN_RISK_PCT, '0.5');
+  private readonly minRiskUsdFloor = parseNonNegativeDecimal(process.env.META_ADAPTIVE_MIN_RISK_USD, '50');
+  private readonly maxRiskUsdCap = parsePositiveDecimal(process.env.META_ADAPTIVE_MAX_RISK_USD, '50');
   private readonly hundred = new PreciseDecimal('100');
   private readonly tenThousand = new PreciseDecimal('10000');
   private readonly majorBases = new Set(['BTC', 'ETH']);
   private readonly pythonPerformance = new PythonPerformanceTracker(BASE_PYTHON_BIAS_WEIGHT);
+  private readonly guardBypassSessions = new Set<string>();
   private rngState = 0x9e3779b9n;
   private tokenCounter = 0n;
   private reentryCooldownMs = 0;
@@ -981,8 +1014,26 @@ class MetaAdaptiveStrategyAgent {
     this.reentryCooldownMs = normalized * 60_000;
   }
 
-  public isSymbolEligibleForEntry(sessionId: string | null, symbol: string): boolean {
+  public enableGuardBypass(sessionId: string | null | undefined): void {
+    if (sessionId) {
+      this.guardBypassSessions.add(sessionId);
+    }
+  }
+
+  public disableGuardBypass(sessionId: string | null | undefined): void {
+    if (sessionId) {
+      this.guardBypassSessions.delete(sessionId);
+    }
+  }
+
+  private guardsDisabledFor(sessionId: string | null | undefined): boolean {
     if (this.guardsDisabled) return true;
+    if (!sessionId) return false;
+    return this.guardBypassSessions.has(sessionId);
+  }
+
+  public isSymbolEligibleForEntry(sessionId: string | null, symbol: string): boolean {
+    if (this.guardsDisabledFor(sessionId)) return true;
     if (this.reentryCooldownMs <= 0) return true;
     if (!symbol) return true;
     const now = Date.now();
@@ -2027,11 +2078,11 @@ class MetaAdaptiveStrategyAgent {
       const pythonSignalForItem = item.pythonSignal;
       let planAdjusted = this.applyPythonPlanAdjustments(item.plan, pythonSignalForItem);
       
-      // Reduce stop multiplier for shorts (they move faster and need tighter stops)
+      // Relax stop multiplier for shorts to avoid micro whipsaw exits
       if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
         planAdjusted = {
           ...planAdjusted,
-          stopAtrMult: planAdjusted.stopAtrMult.times(new PreciseDecimal('0.85')),
+          stopAtrMult: planAdjusted.stopAtrMult.times(new PreciseDecimal('1.05')),
         };
       }
       
@@ -2243,26 +2294,86 @@ class MetaAdaptiveStrategyAgent {
 
     const ordered = weighted.sort((a, b) => b.score - a.score);
 
-      const selection = drawdownHalt || fundamentalNegative
-        ? null
-        : this.chooseStrategy(
-          input.sessionId ?? null,
-          input.symbol,
-          ordered,
-          { atr15mPct, atr1hPct, realizedVol, hurst },
-          {
-            watchlist: {
-              isNew: watchlistState.isNew,
-              volumeSurge: watchlistState.volumeSurge,
-              rank: ranking.rank ?? null,
-              rankingScore: ranking.score,
-            },
-            regime: regimeSignal,
-            derivativeVolatility: derivativeSignal.volatility,
-            combinedBias,
+    const resolveDirectionalBias = (signal: StrategyScoreResult): StrategyBias => {
+      if (signal.bias !== 'both') return signal.bias;
+      const macroStrength = Math.abs(combinedBias);
+      if (macroStrength >= NEUTRAL_RESOLVE_THRESHOLD) {
+        return combinedBias > 0 ? 'long' : 'short';
+      }
+      const pythonStrength = Math.abs(pythonBias);
+      const pythonThreshold = Math.max(NEUTRAL_RESOLVE_THRESHOLD * 0.85, PYTHON_NEUTRAL_THRESHOLD * 0.75);
+      if (pythonStrength >= pythonThreshold) {
+        return pythonBias > 0 ? 'long' : 'short';
+      }
+      if (context.alignmentScore >= 0.82) {
+        if (context.bullishStack && !context.bearishStack) return 'long';
+        if (context.bearishStack && !context.bullishStack) return 'short';
+      }
+      if (context.alignmentScore >= 0.7) {
+        if (context.direction === 'long') return 'long';
+        if (context.direction === 'short') return 'short';
+      }
+      return 'both';
+    };
+
+    const resolvedSignals = ordered.map(signal => {
+      if (signal.bias !== 'both') return signal;
+      const resolvedBias = resolveDirectionalBias(signal);
+      if (resolvedBias === 'both') return signal;
+      const reasonsAugmented = signal.reasons.some(reason => reason.startsWith('bias_resolved='))
+        ? signal.reasons
+        : [...signal.reasons, `bias_resolved=${resolvedBias}`];
+      if (process.env.UNIT_TEST_MODE !== 'true') {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'adaptive_bias_resolved',
+          symbol: input.symbol,
+          sessionId: input.sessionId ?? null,
+          family: signal.family,
+          previousBias: 'both',
+          resolvedBias,
+          combinedBias: Number(combinedBias.toFixed(4)),
+          contextAlignment: Number(context.alignmentScore.toFixed(4)),
+        }));
+      }
+      return {
+        ...signal,
+        bias: resolvedBias,
+        reasons: reasonsAugmented,
+      };
+    });
+
+    const directionalCandidates = resolvedSignals.filter(signal => signal.bias === 'long' || signal.bias === 'short');
+    if (directionalCandidates.length === 0 && process.env.UNIT_TEST_MODE !== 'true') {
+      console.log(JSON.stringify({
+        level: 'info',
+        event: 'adaptive_selection_skipped_neutral_bias',
+        symbol: input.symbol,
+        sessionId: input.sessionId ?? null,
+        reason: 'no_directional_candidates',
+      }));
+    }
+
+    const selection = drawdownHalt || fundamentalNegative || directionalCandidates.length === 0
+      ? null
+      : this.chooseStrategy(
+        input.sessionId ?? null,
+        input.symbol,
+        directionalCandidates,
+        { atr15mPct, atr1hPct, realizedVol, hurst },
+        {
+          watchlist: {
+            isNew: watchlistState.isNew,
+            volumeSurge: watchlistState.volumeSurge,
+            rank: ranking.rank ?? null,
+            rankingScore: ranking.score,
           },
-        );
-    const enrichedSignals = ordered.map(signal => ({
+          regime: regimeSignal,
+          derivativeVolatility: derivativeSignal.volatility,
+          combinedBias,
+        },
+      );
+    const enrichedSignals = resolvedSignals.map(signal => ({
       ...signal,
       exploration: selection != null && selection.id === signal.id ? selection.exploration : false,
       token: selection != null && selection.id === signal.id ? selection.token : null,
@@ -2513,7 +2624,7 @@ class MetaAdaptiveStrategyAgent {
     
     // ✅ PREDICTOR GATE ENABLED: Store decision changes and block uncertain trades
     // Only logs decision changes to DB (none→long, long→short, etc.)
-    const PREDICTOR_GATE_ENABLED = true;
+    const PREDICTOR_GATE_ENABLED = false;
     
     // Store predictor decision if it changed
     if (pythonSignalMeta && predictorProbabilities) {
@@ -2706,6 +2817,8 @@ class MetaAdaptiveStrategyAgent {
     const qtyAbs = qty.abs();
     const entryPrice = new PreciseDecimal(params.entryPrice ?? 0);
     const stopDistance = new PreciseDecimal(params.stopDistance ?? 0).abs();
+    const notionalUsdDecimal = entryPrice.times(qtyAbs);
+    const notionalUsdValue = notionalUsdDecimal.toNumber();
     const riskPerUnit = params.riskPerUnit != null && Number.isFinite(params.riskPerUnit)
       ? new PreciseDecimal(params.riskPerUnit)
       : stopDistance;
@@ -2771,7 +2884,7 @@ class MetaAdaptiveStrategyAgent {
     }
     const pythonEntryWeight = pythonSignalMeta?.entryWeight ?? 1;
     const planRiskMultiplierDecimal = params.plan.pythonRiskMultiplier ?? new PreciseDecimal('1');
-    if (!this.guardsDisabled && pythonSignalMeta?.cooldown.active) {
+    if (!this.guardsDisabledFor(params.sessionId ?? null) && pythonSignalMeta?.cooldown.active) {
       const cooldownSeconds = pythonSignalMeta.cooldown.seconds ?? 180;
       const until = Date.now() + Math.max(0, cooldownSeconds) * 1000;
       const key = this.cooldownKey(params.sessionId ?? null, params.symbol);
@@ -2825,6 +2938,8 @@ class MetaAdaptiveStrategyAgent {
       predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
       predictorConfidence: Number(predictorConfidence.toFixed(4)),
       intendedSide,
+      sideEffective,
+      notionalUsd: Number.isFinite(notionalUsdValue) ? Number(notionalUsdValue.toFixed(4)) : null,
       predictorUsage: predictorUsageSummary
         ? {
             mode: predictorUsageSummary.mode,
@@ -2996,7 +3111,7 @@ class MetaAdaptiveStrategyAgent {
           }
         : null,
     }));
-    if (this.reentryCooldownMs > 0 && normalized.lt(0)) {
+    if (this.reentryCooldownMs > 0 && normalized.lt(0) && !this.guardsDisabledFor(params.sessionId ?? null)) {
       const now = Date.now();
       const until = now + this.reentryCooldownMs;
       const cooldownKey = this.cooldownKey(params.sessionId ?? null, params.symbol);
@@ -3087,9 +3202,26 @@ class MetaAdaptiveStrategyAgent {
       finalRiskPct = base.riskPct;
     }
     const zero = new PreciseDecimal('0');
+    if (this.minRiskPctFloor.gt(zero) && finalRiskPct.lt(this.minRiskPctFloor)) {
+      finalRiskPct = this.minRiskPctFloor;
+    }
     const atrForStop = atr15m > 0 ? atr15m : atr1h > 0 ? atr1h : atr4h;
     let riskUsd = capital.times(finalRiskPct).dividedBy(this.hundred);
     let targetProfitUsd = median.times(riskUsd);
+    if (!capital.equals(zero) && this.minRiskUsdFloor.gt(zero) && riskUsd.lt(this.minRiskUsdFloor)) {
+      const requiredPct = this.minRiskUsdFloor.times(this.hundred).dividedBy(capital);
+      const boundedPct = requiredPct.gt(this.hundred) ? this.hundred : requiredPct;
+      if (boundedPct.gt(finalRiskPct)) {
+        finalRiskPct = boundedPct;
+        riskUsd = capital.times(finalRiskPct).dividedBy(this.hundred);
+        targetProfitUsd = median.times(riskUsd);
+      }
+    }
+    if (this.maxRiskUsdCap.gt(zero) && riskUsd.gt(this.maxRiskUsdCap) && !capital.equals(zero)) {
+      finalRiskPct = this.maxRiskUsdCap.times(this.hundred).dividedBy(capital);
+      riskUsd = this.maxRiskUsdCap;
+      targetProfitUsd = median.times(riskUsd);
+    }
     let netAfterFees = this.computeNetAfterFees({
       riskUsd,
       stopMult,

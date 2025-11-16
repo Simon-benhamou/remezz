@@ -646,9 +646,15 @@ export class EntryFilters {
     const qualityHint = facts.qualityPassHint === undefined ? undefined : Boolean(facts.qualityPassHint);
     const adxVal = adx;
     const slopeRequirement = fastTrackCfg?.minSlopePct ?? 0.2;
-    const cmfRequirement = fastTrackCfg?.minCmf ?? 0;
+    const cmfRequirementAbs = Math.max(0, fastTrackCfg?.minCmf ?? 0);
     const slopePass = slopeDirectional != null && slopeDirectional >= slopeRequirement;
-    const cmfPass = cmfVal == null ? true : cmfVal >= cmfRequirement;
+    const cmfPass = (() => {
+      if (cmfVal == null) return true;
+      if (cmfRequirementAbs === 0) return true;
+      if (bias === 'short') return cmfVal <= -cmfRequirementAbs;
+      if (bias === 'long') return cmfVal >= cmfRequirementAbs;
+      return Math.abs(cmfVal) >= cmfRequirementAbs * 0.75;
+    })();
     const strongFlow = fastTrackEnabled
       && adxVal != null && adxVal >= (fastTrackCfg?.minAdx ?? 35)
       && volumeRatioVal != null && volumeRatioVal >= (fastTrackCfg?.minVolumeRatio ?? 1.2)

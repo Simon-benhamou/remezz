@@ -1,0 +1,47 @@
+{
+  "sessionId": "cmi25nzdr00008gfzarfix178",
+  "symbol": "XRPUSDT",
+  "startedAt": "2025-11-16T20:15:41.535Z",
+  "stoppedAt": "2025-11-16T20:20:38.111Z",
+  "candlesProcessed": 480,
+  "trades": [
+    {
+      "exitReason": "Stop loss hit: price 2.3952 ≥ stop 2.3915 (0.16% penetration)",
+      "realizedPnlUsd": 34.88441955731052,
+      "capturedAt": "2025-11-16T20:16:49.843Z"
+    },
+    {
+      "exitReason": "Stop loss hit: price 2.3893 ≥ stop 2.3802 (0.38% penetration)",
+      "realizedPnlUsd": 19.70432416561085,
+      "capturedAt": "2025-11-16T20:17:16.264Z"
+    },
+    {
+      "exitReason": "Stop loss hit: price 2.3757 ≥ stop 2.3607 (0.63% penetration)",
+      "realizedPnlUsd": -79.21822109686393,
+      "capturedAt": "2025-11-16T20:17:50.452Z"
+    },
+    {
+      "exitReason": "Stop loss hit: price 2.3275 ≥ stop 2.3138 (0.59% penetration)",
+      "realizedPnlUsd": 104.92701030919,
+      "capturedAt": "2025-11-16T20:18:55.268Z"
+    }
+  ],
+  "stats": {
+    "totalTrades": 4,
+    "wins": 3,
+    "losses": 1,
+    "winRatePct": 75,
+    "realizedPnlUsd": 80.29753293524743,
+    "expectancyR": 0.488034327650796,
+    "avgHoldingMin": 0.2377791666666667
+  },
+  "kpi": {
+    "realizedPnlUsd": 80.29753293524743,
+    "unrealizedPnlUsd": 0,
+    "roiPct": 0.8029753293524743,
+    "expectancy": 0.488034327650796,
+    "winRate": 75,
+    "maxDrawdownPct": 1.738684604883833,
+    "lastUpdated": "2025-11-16T20:18:56.499Z"
+  }
+}

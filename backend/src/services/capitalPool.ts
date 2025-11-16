@@ -6,9 +6,22 @@ import { capitalConfig } from '../config/capital.js';
 import { BalanceSnapshot, Reservation, ZERO_USD, toUSD } from '../core/capital/types.js';
 import { prisma } from '../db/client.js';
 
+const paperBalanceOverride = (() => {
+  const raw = process.env.META_ADAPTIVE_PAPER_BALANCE_USD ?? process.env.PAPER_BALANCE_USD;
+  if (!raw) return null;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return new PreciseDecimal(parsed.toString());
+})();
+
+const resolvePaperBalanceBaseline = (): PreciseDecimal => {
+  const baseline = paperBalanceOverride ?? new PreciseDecimal('10000');
+  return PreciseDecimal.fromRaw(baseline.raw);
+};
+
 const defaultPaperBalance = () => ({
-  totalUSD: new PreciseDecimal('1000'),
-  freeUSD: new PreciseDecimal('1000'),
+  totalUSD: resolvePaperBalanceBaseline(),
+  freeUSD: resolvePaperBalanceBaseline(),
   reservedUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
   inPositionsUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
   ts: Date.now(),
@@ -33,8 +46,9 @@ async function loadPersistedPaperBalance(): Promise<PreciseDecimal> {
   }
   
   // Return default if not found or error
-  console.log('📥 Using default paper balance: $1000');
-  return new PreciseDecimal('1000');
+  const fallback = resolvePaperBalanceBaseline();
+  console.log(`📥 Using default paper balance: $${fallback.toNumber()}`);
+  return fallback;
 }
 
 const paperStore = { snapshot: defaultPaperBalance() };

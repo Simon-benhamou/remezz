@@ -33,6 +33,7 @@
     "monitor:once": "tsx scripts/agent-performance-monitor.ts once",
     "monitor:stop": "tsx scripts/agent-performance-monitor.ts stop",
     "monitor:integrated": "tsx scripts/integrated-performance-monitor.ts",
+    "replay:historical": "tsx scripts/run-historical-replay.ts",
     "train-model": "python3 python/ccxt_xgboost_module.py",
     "meta:rejections": "node scripts/meta-adaptive-rejection-summary.mjs",
     "analyze:rejection": "tsx scripts/analyze-order-rejection.ts",

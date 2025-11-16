@@ -1,0 +1,7 @@
+{
+  "samples": 40,
+  "expectedHitRate": 0.5,
+  "hitRate": 0.475,
+  "realizedEdge": -0.025000000000000022,
+  "avgConfidence": 0
+}

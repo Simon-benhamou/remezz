@@ -45,6 +45,71 @@ const logger = createLogger('meta-adaptive');
 // Track brokers per session to avoid recreating them
 const sessionBrokers = new Map<string, Broker>();
 
+const clampNumber = (value: number, min: number, max: number): number => {
+  if (!Number.isFinite(value)) return min;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+};
+
+const parsePositionPct = (raw?: string | null): number | null => {
+  if (!raw) return null;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  const normalized = parsed > 1 ? parsed / 100 : parsed;
+  return clampNumber(normalized, 0.01, 1);
+};
+
+const capitalAllocationOverrides = {
+  paperMaxPositionPct: parsePositionPct(process.env.META_ADAPTIVE_PAPER_MAX_POSITION_PCT),
+  liveMaxPositionPct: parsePositionPct(process.env.META_ADAPTIVE_LIVE_MAX_POSITION_PCT),
+  globalMaxPositionPct: parsePositionPct(process.env.META_ADAPTIVE_MAX_POSITION_PCT),
+  minPositionPct: parsePositionPct(process.env.META_ADAPTIVE_MIN_POSITION_PCT),
+  minPositionUsd: (() => {
+    const raw = process.env.META_ADAPTIVE_MIN_POSITION_USD;
+    if (!raw) return 0;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  })(),
+};
+
+const pickMaxPositionPct = (mode: 'paper' | 'live'): number | null => {
+  if (mode === 'paper') {
+    return capitalAllocationOverrides.paperMaxPositionPct
+      ?? capitalAllocationOverrides.globalMaxPositionPct
+      ?? 1;
+  }
+  return capitalAllocationOverrides.liveMaxPositionPct ?? capitalAllocationOverrides.globalMaxPositionPct;
+};
+
+function pickExecutableSignal(signals: RecognizedStrategySignal[]): {
+  signal: RecognizedStrategySignal | null;
+  source: 'token' | 'fallback' | 'none';
+} {
+  if (!signals.length) {
+    return { signal: null, source: 'none' };
+  }
+  const tokenBacked = signals.find((candidate) => Boolean(candidate.meta?.token)) ?? null;
+  if (tokenBacked) {
+    return { signal: tokenBacked, source: 'token' };
+  }
+  return { signal: null, source: 'fallback' };
+}
+
+function describeSignalSuppression(signals: RecognizedStrategySignal[]): string | null {
+  const first = signals[0];
+  if (!first || !first.meta) {
+    return null;
+  }
+  if (first.meta.guardrail) {
+    return first.meta.guardrail;
+  }
+  if (Array.isArray(first.meta.penalties) && first.meta.penalties.length > 0) {
+    return first.meta.penalties.join('|');
+  }
+  return first.blockedReason ?? null;
+}
+
 /**
  * Calculate capital usage and determine required confidence threshold
  * 
@@ -79,6 +144,19 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promi
   const freeCapital = snapshot.freeUSD.toNumber();
   const usedCapital = totalCapital - freeCapital;
   const usageRatio = totalCapital > 0 ? usedCapital / totalCapital : 0;
+  const applyAllocationFloors = (proposed: number): number => {
+    let result = proposed;
+    if (capitalAllocationOverrides.minPositionPct && totalCapital > 0) {
+      result = Math.max(result, totalCapital * capitalAllocationOverrides.minPositionPct);
+    }
+    if (capitalAllocationOverrides.minPositionUsd > 0) {
+      result = Math.max(result, capitalAllocationOverrides.minPositionUsd);
+    }
+    if (totalCapital > 0) {
+      result = Math.min(result, totalCapital);
+    }
+    return result;
+  };
   
   // Adaptive allocation based on capital size
   let maxAllocationPerPosition: number;
@@ -87,12 +165,12 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promi
   
   if (totalCapital < 200) {
     // Small account: 1 big position (80-100%)
-    maxAllocationPerPosition = totalCapital * 0.90; // Use 90% for the single position
+    maxAllocationPerPosition = applyAllocationFloors(totalCapital * 0.90); // Use 90% for the single position
     maxPositions = 1;
     minConfidenceRequired = 0.50; // Normal threshold
   } else if (totalCapital < 1000) {
     // Medium account: 2-3 positions (40-50% each)
-    maxAllocationPerPosition = totalCapital * 0.45;
+    maxAllocationPerPosition = applyAllocationFloors(totalCapital * 0.45);
     maxPositions = 2;
     // Progressive threshold for 2nd position
     minConfidenceRequired = usageRatio < 0.50 ? 0.50 : 0.65;
@@ -102,9 +180,11 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promi
     // Minimum position size: $100 (ensures orderability)
     // Maximum single position: 20% of total capital
     const minPositionSize = 100;
-    const maxSinglePositionPct = 0.20;
+    const overridePct = pickMaxPositionPct(mode);
+    const defaultPct = totalCapital >= 5000 ? 0.40 : 0.30;
+    const maxSinglePositionPct = clampNumber(overridePct ?? defaultPct, 0.05, 1);
     
-    maxAllocationPerPosition = totalCapital * maxSinglePositionPct;
+    maxAllocationPerPosition = applyAllocationFloors(totalCapital * maxSinglePositionPct);
     
     // Calculate max positions based on free capital, not total capital
     // This allows more positions if they're smaller than the max allocation
@@ -121,12 +201,12 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promi
     // 0-60% used: normal threshold (0.50)
     // 60-80% used: moderate threshold (0.60)
     // 80%+ used: high threshold (0.70)
-    if (usageRatio < 0.60) {
-      minConfidenceRequired = 0.50;
-    } else if (usageRatio < 0.80) {
-      minConfidenceRequired = 0.60;
+    if (usageRatio < 0.55) {
+      minConfidenceRequired = 0.45;
+    } else if (usageRatio < 0.75) {
+      minConfidenceRequired = 0.54;
     } else {
-      minConfidenceRequired = 0.70;
+      minConfidenceRequired = 0.62;
     }
   }
   
@@ -422,7 +502,8 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
       // Store pythonSignal from best signal in agent for diagnostics API
       const agent = AgentHub.get(session.sessionId);
       if (agent && signals.length > 0) {
-        const bestSignal = signals[0];
+        const { signal: diagnosticSignal } = pickExecutableSignal(signals);
+        const bestSignal = diagnosticSignal ?? signals[0];
         const pythonSignalData = (bestSignal as any).meta?.pythonSignal || null;
         const predictorUsage = (bestSignal as any).predictorUsage || (bestSignal as any).meta?.predictorUsage || null;
         (agent as any).pythonSignal = pythonSignalData;
@@ -484,14 +565,19 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
       if (!hasPosition) {
         // No position - evaluate entry signals
         const entrySignals = signals.filter(s => !(s as any).isExit);
-        if (entrySignals.length > 0) {
-          const bestSignal = entrySignals[0]; // Already sorted by score
+        const { signal: executableSignal, source: selectionSource } = pickExecutableSignal(entrySignals);
+        if (selectionSource === 'token' && executableSignal) {
           logger.info(
-            `[${session.sessionId}] Best entry signal: ${(bestSignal as any).strategyId} (${bestSignal.bias}) score=${bestSignal.meta?.score}`
+            `[${session.sessionId}] Selected entry signal (token-backed): ${(executableSignal as any).strategyId} (${executableSignal.bias}) score=${executableSignal.meta?.score}`
           );
 
-          console.log(`[MetaOrchestrator] Calling executeEntryTrade for agent=${session.sessionId}, symbol=${session.symbol}, bias=${bestSignal.bias}`);
-          await executeEntryTrade(session, bestSignal, tech);
+          console.log(`[MetaOrchestrator] executeEntryTrade agent=${session.sessionId}, symbol=${session.symbol}, bias=${executableSignal.bias}, selection=token-backed`);
+          await executeEntryTrade(session, executableSignal, tech);
+        } else if (selectionSource === 'fallback' && entrySignals.length > 0) {
+          const suppression = describeSignalSuppression(entrySignals);
+          logger.info(
+            `[${session.sessionId}] Entry signals suppressed (no execution token${suppression ? `: ${suppression}` : ''})`
+          );
         }
       } else {
         // Has position - check for counter-signals and possible position flip
@@ -503,25 +589,26 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
         
         let flipResult: { flip: boolean; reason: string } | null = null;
         
-        if (entrySignals.length > 0) {
-          const bestSignal = entrySignals[0];
+        const { signal: counterSignalCandidate, source: counterSelectionSource } = pickExecutableSignal(entrySignals);
+        if (counterSignalCandidate && counterSelectionSource === 'token') {
+          const selectionLabel = 'token-backed';
           
           // Check if this is a counter-signal (opposite direction)
           const isCounterSignal = 
-            (currentPositionSide === 'long' && bestSignal.bias === 'short') ||
-            (currentPositionSide === 'short' && bestSignal.bias === 'long');
+            (currentPositionSide === 'long' && counterSignalCandidate.bias === 'short') ||
+            (currentPositionSide === 'short' && counterSignalCandidate.bias === 'long');
           
           if (isCounterSignal) {
             logger.info(
-              `[${session.sessionId}] Counter-signal detected: current=${currentPositionSide}, signal=${bestSignal.bias}, confidence=${bestSignal.confidence.toFixed(2)}`
+              `[${session.sessionId}] Counter-signal detected (${selectionLabel}): current=${currentPositionSide}, signal=${counterSignalCandidate.bias}, confidence=${counterSignalCandidate.confidence.toFixed(2)}`
             );
             
             // Check if we should flip the position
-            flipResult = await shouldFlipPosition(session, agent, bestSignal, tech);
+            flipResult = await shouldFlipPosition(session, agent, counterSignalCandidate, tech);
             
             if (flipResult.flip) {
               logger.info(`[${session.sessionId}] Position flip conditions met: ${flipResult.reason}`);
-              await executePositionFlip(session, agent, bestSignal, tech);
+              await executePositionFlip(session, agent, counterSignalCandidate, tech);
               return; // Exit early - flip handled the position
             } else {
               logger.debug(`[${session.sessionId}] Position flip rejected: ${flipResult.reason}`);
@@ -537,7 +624,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
             blockedReason: flipResult 
               ? `counter_signal_flip_rejected: ${flipResult.reason}`
               : 'existing_position_present',
-            confidenceScore: bestSignal.confidence,
+            confidenceScore: counterSignalCandidate.confidence,
             inputMetrics: {
               adx: tech.adx14,
               atrPct: (tech.atr14 / tech.last) * 100,
@@ -547,6 +634,9 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
             },
             regimeContext: calculateRegimeContext(tech),
           }).catch(err => console.warn('Failed to log existing position block:', err));
+        } else if (counterSelectionSource === 'fallback' && entrySignals.length > 0) {
+          const suppression = describeSignalSuppression(entrySignals);
+          logger.debug(`[${session.sessionId}] Counter-signal suppressed (no execution token${suppression ? `: ${suppression}` : ''})`);
         }
         
         // Check if we should exit normally (if we didn't flip)
@@ -610,11 +700,53 @@ async function executeEntryTrade(
     
     const entryPrice = tech.last;
     const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
-    const atrForStops = tech.atr14 || tech.last * DEFAULT_ATR_PCT;
-    const stopDistance = atrForStops * (config.exits.slAtrMult || 2); // Use ATR-based stop
+    const parseMetaNumber = (value: unknown): number | null => {
+      if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+      }
+      if (typeof value === 'string') {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    };
+    const planMeta = signal.meta ?? null;
+    const planRiskPct = parseMetaNumber(planMeta?.riskPct);
+    const planRiskUsd = parseMetaNumber(planMeta?.riskUsd);
+    const planTargetProfitUsd = parseMetaNumber(planMeta?.targetProfitUsd);
+    const planStopAtrMult = parseMetaNumber(planMeta?.stopAtrMult);
+    const entryAtrFromMeta = parseMetaNumber(planMeta?.entryAtr);
+    const tpMultiples = Array.isArray(planMeta?.takeProfitMultiples)
+      ? planMeta.takeProfitMultiples
+          .map((value) => {
+            if (typeof value === 'number') {
+              return Number.isFinite(value) ? value : Number.NaN;
+            }
+            if (typeof value === 'string') {
+              const parsed = Number.parseFloat(value);
+              return Number.isFinite(parsed) ? parsed : Number.NaN;
+            }
+            return Number.NaN;
+          })
+          .filter((val) => Number.isFinite(val))
+      : [];
+    const primaryTpMultiple = tpMultiples.length > 0 ? tpMultiples[0] : null;
+    const atrForStops = (() => {
+      const resolvedAtr = entryAtrFromMeta && entryAtrFromMeta > 0
+        ? entryAtrFromMeta
+        : tech.atr14;
+      return resolvedAtr && resolvedAtr > 0
+        ? resolvedAtr
+        : tech.last * DEFAULT_ATR_PCT;
+    })();
+    const resolvedStopMult = planStopAtrMult && planStopAtrMult > 0
+      ? planStopAtrMult
+      : (config.exits.slAtrMult || 2);
+    const stopDistance = atrForStops * resolvedStopMult; // Use plan-aware ATR stop
     
-    // Get risk percentage from profile or use default
-    const riskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
+    // Get risk percentage from plan, profile, or use default
+    const fallbackRiskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
+    const riskPct = planRiskPct && planRiskPct > 0 ? planRiskPct : fallbackRiskPct;
     
     // Check capital usage and determine confidence threshold
     const capitalMetrics = await calculateCapitalUsageAndThresholds(session.mode);
@@ -666,10 +798,35 @@ async function executeEntryTrade(
       requestedLeverage: confidenceAdjustedLeverage,
       symbol: session.symbol,
       mode: session.mode,
+      tp1DistanceAbs: primaryTpMultiple && primaryTpMultiple > 0 ? stopDistance * primaryTpMultiple : undefined,
+      minTp1PnlUsd: planTargetProfitUsd && planTargetProfitUsd > 0 ? planTargetProfitUsd : undefined,
+      tp1RMultiple: primaryTpMultiple && primaryTpMultiple > 0 ? primaryTpMultiple : undefined,
+      minNotionalUsd: capitalAllocationOverrides.minPositionUsd || undefined,
     });
     
-    const qty = entryPrice > 0 ? sizingResult.notional / entryPrice : 0;
+    let qty = entryPrice > 0 ? sizingResult.notional / entryPrice : 0;
     const leverage = sizingResult.leverageCap.resolved;
+    const riskPerUnit = stopDistance;
+    let notional = qty * entryPrice;
+    let computedRiskUsd = riskPerUnit * qty;
+
+    if (planRiskUsd && planRiskUsd > 0 && riskPerUnit > 0 && computedRiskUsd > planRiskUsd * 1.01) {
+      const scale = planRiskUsd / computedRiskUsd;
+      qty *= scale;
+      notional = qty * entryPrice;
+      computedRiskUsd = planRiskUsd;
+    }
+
+    const minOrderUsd = capitalConfig.minOrderUSD.toNumber();
+    if (minOrderUsd > 0 && notional > 0 && notional < minOrderUsd) {
+      integrationLogger.warn('Position sizing below min order after risk clamp', {
+        notional,
+        minOrderUsd,
+        planRiskUsd,
+      });
+      console.log('[MetaOrchestrator.executeEntryTrade] ABORTED: notional below min order after clamp');
+      return;
+    }
 
     if (!qty || qty <= 0) {
       integrationLogger.warn('Position sizing resulted in 0 quantity', {
@@ -700,8 +857,8 @@ async function executeEntryTrade(
       return;
     }
 
-    integrationLogger.info(`Position sized | qty=${qty.toFixed(8)} notional=${sizingResult.notional.toFixed(2)} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)} leverage=${leverage}x`);
-    console.log(`[MetaOrchestrator.executeEntryTrade] Sizing: qty=${qty.toFixed(8)}, notional=${sizingResult.notional.toFixed(2)}, entryPrice=${entryPrice.toFixed(4)}, stopDist=${stopDistance.toFixed(4)}, leverage=${leverage}x`);
+    integrationLogger.info(`Position sized | qty=${qty.toFixed(8)} notional=${notional.toFixed(2)} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)} leverage=${leverage}x riskUsd=${computedRiskUsd.toFixed(2)}`);
+    console.log(`[MetaOrchestrator.executeEntryTrade] Sizing: qty=${qty.toFixed(8)}, notional=${notional.toFixed(2)}, entryPrice=${entryPrice.toFixed(4)}, stopDist=${stopDistance.toFixed(4)}, leverage=${leverage}x`);
 
     // Register the trade entry with meta-adaptive system
     const registrationResult = await registerAdaptiveTradeEntry({

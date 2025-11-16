@@ -1,0 +1,784 @@
+[
+    {
+        "id": "ops_1763286367490_sbj763",
+        "ts": 1763286367490,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvzu7t0021nt57brv9smsy",
+        "symbol": "ZEC/USDT",
+        "details": {
+            "reason": "composite_score:0.72 (price:1.00, regime:0.41, vol:0.50)",
+            "price": 695.61,
+            "lastPrice": 643.50566,
+            "zone": {
+                "min": 643.50566,
+                "max": 651.2743399999999
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 1.2695969097497615,
+            "nextConfidence": 0.8565700185062544,
+            "confidenceDelta": -0.4130268912435071,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 2.3568783220597753,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286328189_kgotun",
+        "ts": 1763286328189,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvx4nz001tnt57tsuwkemj",
+        "symbol": "ADA/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.47 (price:0.86, regime:0.00, vol:0.20)",
+            "price": 0.5045,
+            "lastPrice": 0.513312868149741,
+            "zone": {
+                "min": 0.513312868149741,
+                "max": 0.514687131850259
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 0.5946287130991662,
+            "nextConfidence": 0.5966551301361994,
+            "confidenceDelta": 0.0020264170370332124,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.43618866423309866,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 2,
+                "successRate": 0,
+                "recentCount": 2
+            }
+        }
+    },
+    {
+        "id": "ops_1763286284592_ptgw1h",
+        "ts": 1763286284592,
+        "level": "warn",
+        "source": "meta_adaptive_entry",
+        "message": "meta_entry_checklist",
+        "sessionId": "cmhxvvnmy001lnt57cuas6aoz",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "decision": "blocked",
+            "blockedReason": "weak_entry_context",
+            "registrationResult": "n/a",
+            "confidence": {
+                "passed": true,
+                "value": 0.6038,
+                "threshold": 0.4
+            },
+            "entryEligibility": {
+                "passed": false,
+                "score": 0.423,
+                "threshold": 0.62
+            },
+            "components": {
+                "mtf": {
+                    "status": "n/a",
+                    "reason": "mtf=neutral(no_direction)",
+                    "score": 0.6
+                },
+                "adx": {
+                    "status": "pass",
+                    "reason": "adx=pass(15.2>=10)",
+                    "score": 0.8519
+                },
+                "atr": {
+                    "status": "fail",
+                    "reason": "atr=fail(0.22>=0.30,static)",
+                    "score": 0
+                },
+                "flow": {
+                    "status": "fail",
+                    "reason": "flow=fail(cmf=-0.02,vol=0.63)",
+                    "score": 0
+                }
+            },
+            "rr": {
+                "value": null,
+                "threshold": 1.8,
+                "passed": false
+            },
+            "minHold": {
+                "enabled": true,
+                "minutes": 15
+            },
+            "predictorUsage": {
+                "used": true,
+                "mode": "fresh",
+                "fallback": false,
+                "reason": "Fresh python prediction executed",
+                "source": "fresh",
+                "decision": "none",
+                "confidence": 0.19853218481069343,
+                "reliability": 1,
+                "reliabilityStatus": "healthy"
+            },
+            "table": [
+                {
+                    "key": "mtf",
+                    "label": "MTF Bias",
+                    "status": "n/a",
+                    "detail": "mtf=neutral(no_direction)",
+                    "score": 0.6
+                },
+                {
+                    "key": "adx",
+                    "label": "ADX Min",
+                    "status": "pass",
+                    "detail": "adx=pass(15.2>=10)",
+                    "score": 0.8519
+                },
+                {
+                    "key": "atr",
+                    "label": "ATR Min",
+                    "status": "fail",
+                    "detail": "atr=fail(0.22>=0.30,static)",
+                    "score": 0
+                },
+                {
+                    "key": "flow",
+                    "label": "CMF / Volume",
+                    "status": "fail",
+                    "detail": "flow=fail(cmf=-0.02,vol=0.63)",
+                    "score": 0
+                },
+                {
+                    "key": "confidence_gate",
+                    "label": "Confidence Gate",
+                    "status": "pass",
+                    "detail": "confidence=0.6038>=0.4",
+                    "score": null
+                },
+                {
+                    "key": "eligibility",
+                    "label": "Eligibility Score",
+                    "status": "fail",
+                    "detail": "score=0.4230>=0.62",
+                    "score": 0.423
+                },
+                {
+                    "key": "min_hold",
+                    "label": "Min Hold",
+                    "status": "pass",
+                    "detail": "15m lock",
+                    "score": null
+                },
+                {
+                    "key": "rr",
+                    "label": "Risk/Reward",
+                    "status": "n/a",
+                    "detail": "rr=n/a",
+                    "score": null
+                }
+            ],
+            "failedChecks": [
+                "entry_eligibility",
+                "atr",
+                "flow",
+                "rr"
+            ],
+            "strategy": "bollinger_mean_reversion",
+            "timestamp": 1763286284592,
+            "entryReasons": [
+                "mtf=neutral(no_direction)",
+                "adx=pass(15.2>=10)",
+                "atr=fail(0.22>=0.30,static)",
+                "flow=fail(cmf=-0.02,vol=0.63)"
+            ],
+            "eventId": "1763286284592_4phz30"
+        }
+    },
+    {
+        "id": "ops_1763286284591_lq2cem",
+        "ts": 1763286284591,
+        "level": "info",
+        "source": "meta_adaptive_gate",
+        "message": "trade_blocked",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "strategy": "bollinger_mean_reversion",
+            "blockedReason": "weak_entry_context",
+            "confidence": 0.6038,
+            "confidenceThreshold": 0.4,
+            "qualityScore": 56.69,
+            "entryEligibilityScore": 0.423,
+            "entryEligibilityThreshold": 0.62,
+            "entryReasons": [
+                "mtf=neutral(no_direction)",
+                "adx=pass(15.2>=10)",
+                "atr=fail(0.22>=0.30,static)",
+                "flow=fail(cmf=-0.02,vol=0.63)"
+            ],
+            "predictorUsage": {
+                "mode": "fresh",
+                "used": true,
+                "fallback": false,
+                "reason": "Fresh python prediction executed",
+                "reliability": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286279527_4kuxh8",
+        "ts": 1763286279527,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvvnmy001lnt57cuas6aoz",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.41 (price:0.74, regime:0.00, vol:0.20)",
+            "price": 96073.9,
+            "lastPrice": 94681.5,
+            "zone": {
+                "min": 94681.5,
+                "max": 94918.5
+            },
+            "regime": "range:bull",
+            "previousRegime": "range:bull",
+            "previousConfidence": 1.0687700359809238,
+            "nextConfidence": 1.0687700359809238,
+            "confidenceDelta": 0,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.22487816762408094,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 2,
+                "successRate": 0,
+                "recentCount": 2
+            }
+        }
+    },
+    {
+        "id": "ops_1763286226908_13h5yq",
+        "ts": 1763286226908,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvln4s0009nt57edlh8ak2",
+        "symbol": "ETH/USDT",
+        "details": {
+            "reason": "composite_score:0.54 (price:1.00, regime:0.00, vol:0.20)",
+            "price": 3214.5,
+            "lastPrice": 3126.0974875,
+            "zone": {
+                "min": 3126.0974875,
+                "max": 3133.9225125000003
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 1.4433028319736747,
+            "nextConfidence": 1.4433028319736747,
+            "confidenceDelta": 0,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.35862642565859326,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 2,
+                "successRate": 0,
+                "recentCount": 2
+            }
+        }
+    },
+    {
+        "id": "ops_1763286203299_mz3m99",
+        "ts": 1763286203299,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmi0ulgs1000jro57au2z80ly",
+        "symbol": "SUI/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.54 (price:1.00, regime:0.00, vol:0.20)",
+            "price": 1.7572,
+            "lastPrice": 1.7129419120497948,
+            "zone": {
+                "min": 1.7129419120497948,
+                "max": 1.7182580879502052
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 0.5791493835520762,
+            "nextConfidence": 0.5791493835520762,
+            "confidenceDelta": 0,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.5164544863226219,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286164751_vqm1xw",
+        "ts": 1763286164751,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvxxf7001xnt57qd360gj9",
+        "symbol": "LINK/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.54 (price:1.00, regime:0.00, vol:0.20)",
+            "price": 14.309,
+            "lastPrice": 13.822224719129217,
+            "zone": {
+                "min": 13.822224719129217,
+                "max": 13.861775280870784
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 0.5879944650675776,
+            "nextConfidence": 0.5838261540186019,
+            "confidenceDelta": -0.004168311048975637,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.49525638528874694,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286139860_477uw4",
+        "ts": 1763286139860,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvxgo0001vnt57s8qnnqtx",
+        "symbol": "BNB/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.55 (price:1.00, regime:0.03, vol:0.20)",
+            "price": 945.49,
+            "lastPrice": 920.64775,
+            "zone": {
+                "min": 920.64775,
+                "max": 922.9522499999999
+            },
+            "regime": "range:bull",
+            "previousRegime": "range:bull",
+            "previousConfidence": 1.1077559341493048,
+            "nextConfidence": 1.074746809332313,
+            "confidenceDelta": -0.03300912481699192,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.29788886681659354,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286102212_zt8y0s",
+        "ts": 1763286102212,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvx4nz001tnt57tsuwkemj",
+        "symbol": "ADA/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.54 (price:1.00, regime:0.01, vol:0.20)",
+            "price": 0.5042,
+            "lastPrice": 0.49158475,
+            "zone": {
+                "min": 0.49158475,
+                "max": 0.49281525000000004
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 0.604681643549813,
+            "nextConfidence": 0.5946287130991662,
+            "confidenceDelta": -0.010052930450646813,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.44561079783333407,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286076143_t0i72k",
+        "ts": 1763286076143,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvwote001pnt57hl4yns8y",
+        "symbol": "XRP/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.54 (price:1.00, regime:0.01, vol:0.20)",
+            "price": 2.2609,
+            "lastPrice": 2.184565875,
+            "zone": {
+                "min": 2.184565875,
+                "max": 2.190034125
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 0.6112661000310344,
+            "nextConfidence": 0.6000481489795156,
+            "confidenceDelta": -0.011217951051518793,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.42033274978985036,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286052975_s717vh",
+        "ts": 1763286052975,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvwbdq001nnt574pmgyo0d",
+        "symbol": "SOL/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.54 (price:1.00, regime:0.01, vol:0.20)",
+            "price": 141.98,
+            "lastPrice": 137.1084,
+            "zone": {
+                "min": 137.1084,
+                "max": 137.4516
+            },
+            "regime": "range:neutral",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 0.60139637596766,
+            "nextConfidence": 0.5952248946114057,
+            "confidenceDelta": -0.006171481356254338,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.4428424187505988,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286029438_umeeet",
+        "ts": 1763286029438,
+        "level": "warn",
+        "source": "meta_adaptive_entry",
+        "message": "meta_entry_checklist",
+        "sessionId": "cmhxvvnmy001lnt57cuas6aoz",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "decision": "blocked",
+            "blockedReason": "weak_entry_context",
+            "registrationResult": "n/a",
+            "confidence": {
+                "passed": true,
+                "value": 0.6038,
+                "threshold": 0.4
+            },
+            "entryEligibility": {
+                "passed": false,
+                "score": 0.423,
+                "threshold": 0.62
+            },
+            "components": {
+                "mtf": {
+                    "status": "n/a",
+                    "reason": "mtf=neutral(no_direction)",
+                    "score": 0.6
+                },
+                "adx": {
+                    "status": "pass",
+                    "reason": "adx=pass(15.2>=10)",
+                    "score": 0.8519
+                },
+                "atr": {
+                    "status": "fail",
+                    "reason": "atr=fail(0.22>=0.30,static)",
+                    "score": 0
+                },
+                "flow": {
+                    "status": "fail",
+                    "reason": "flow=fail(cmf=-0.02,vol=0.63)",
+                    "score": 0
+                }
+            },
+            "rr": {
+                "value": null,
+                "threshold": 1.8,
+                "passed": false
+            },
+            "minHold": {
+                "enabled": true,
+                "minutes": 15
+            },
+            "predictorUsage": {
+                "used": true,
+                "mode": "fresh",
+                "fallback": false,
+                "reason": "Fresh python prediction executed",
+                "source": "fresh",
+                "decision": "none",
+                "confidence": 0.19853218481069343,
+                "reliability": 1,
+                "reliabilityStatus": "healthy"
+            },
+            "table": [
+                {
+                    "key": "mtf",
+                    "label": "MTF Bias",
+                    "status": "n/a",
+                    "detail": "mtf=neutral(no_direction)",
+                    "score": 0.6
+                },
+                {
+                    "key": "adx",
+                    "label": "ADX Min",
+                    "status": "pass",
+                    "detail": "adx=pass(15.2>=10)",
+                    "score": 0.8519
+                },
+                {
+                    "key": "atr",
+                    "label": "ATR Min",
+                    "status": "fail",
+                    "detail": "atr=fail(0.22>=0.30,static)",
+                    "score": 0
+                },
+                {
+                    "key": "flow",
+                    "label": "CMF / Volume",
+                    "status": "fail",
+                    "detail": "flow=fail(cmf=-0.02,vol=0.63)",
+                    "score": 0
+                },
+                {
+                    "key": "confidence_gate",
+                    "label": "Confidence Gate",
+                    "status": "pass",
+                    "detail": "confidence=0.6038>=0.4",
+                    "score": null
+                },
+                {
+                    "key": "eligibility",
+                    "label": "Eligibility Score",
+                    "status": "fail",
+                    "detail": "score=0.4230>=0.62",
+                    "score": 0.423
+                },
+                {
+                    "key": "min_hold",
+                    "label": "Min Hold",
+                    "status": "pass",
+                    "detail": "15m lock",
+                    "score": null
+                },
+                {
+                    "key": "rr",
+                    "label": "Risk/Reward",
+                    "status": "n/a",
+                    "detail": "rr=n/a",
+                    "score": null
+                }
+            ],
+            "failedChecks": [
+                "entry_eligibility",
+                "atr",
+                "flow",
+                "rr"
+            ],
+            "strategy": "bollinger_mean_reversion",
+            "timestamp": 1763286029438,
+            "entryReasons": [
+                "mtf=neutral(no_direction)",
+                "adx=pass(15.2>=10)",
+                "atr=fail(0.22>=0.30,static)",
+                "flow=fail(cmf=-0.02,vol=0.63)"
+            ],
+            "eventId": "1763286029438_eqxz4q"
+        }
+    },
+    {
+        "id": "ops_1763286029437_p7tcuj",
+        "ts": 1763286029437,
+        "level": "info",
+        "source": "meta_adaptive_gate",
+        "message": "trade_blocked",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "strategy": "bollinger_mean_reversion",
+            "blockedReason": "weak_entry_context",
+            "confidence": 0.6038,
+            "confidenceThreshold": 0.4,
+            "qualityScore": 56.69,
+            "entryEligibilityScore": 0.423,
+            "entryEligibilityThreshold": 0.62,
+            "entryReasons": [
+                "mtf=neutral(no_direction)",
+                "adx=pass(15.2>=10)",
+                "atr=fail(0.22>=0.30,static)",
+                "flow=fail(cmf=-0.02,vol=0.63)"
+            ],
+            "predictorUsage": {
+                "mode": "fresh",
+                "used": true,
+                "fallback": false,
+                "reason": "Fresh python prediction executed",
+                "reliability": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763286026186_2e6i8r",
+        "ts": 1763286026186,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvvnmy001lnt57cuas6aoz",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "reason": "composite_score:0.56 (price:0.74, regime:0.50, vol:0.20)",
+            "price": 96073.9,
+            "lastPrice": 94681.5,
+            "zone": {
+                "min": 94681.5,
+                "max": 94918.5
+            },
+            "regime": "range:bull",
+            "previousRegime": "range:neutral",
+            "previousConfidence": 1.5713959152184065,
+            "nextConfidence": 1.0687700359809238,
+            "confidenceDelta": -0.5026258792374827,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.22487816762408094,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763285998805_m2htfj",
+        "ts": 1763285998805,
+        "level": "info",
+        "source": "strategy_regen",
+        "message": "Strategy regeneration triggered by shift",
+        "sessionId": "cmhxvln4s0009nt57edlh8ak2",
+        "symbol": "ETH/USDT",
+        "details": {
+            "reason": "composite_score:0.69 (price:1.00, regime:0.50, vol:0.20)",
+            "price": 3214.5,
+            "lastPrice": 3126.0974875,
+            "zone": {
+                "min": 3126.0974875,
+                "max": 3133.9225125000003
+            },
+            "regime": "range:neutral",
+            "previousRegime": "trend:bull",
+            "previousConfidence": 1.9465492147115109,
+            "nextConfidence": 1.4433028319736747,
+            "confidenceDelta": -0.5032463827378362,
+            "adaptiveCooldownMinutes": null,
+            "atrPct": 0.35862642565859326,
+            "useCompositeScore": true,
+            "minConfidenceDelta": 0.2,
+            "historyStats": {
+                "totalRegenerations": 1,
+                "successRate": 0,
+                "recentCount": 1
+            }
+        }
+    },
+    {
+        "id": "ops_1763285702261_d9a10j",
+        "ts": 1763285702261,
+        "level": "warn",
+        "source": "alert_mitigator",
+        "message": "session_inactive_watchdog",
+        "sessionId": "cmhxvwbdq001nnt574pmgyo0d",
+        "symbol": "SOL/USDT:USDT",
+        "details": {
+            "hoursInactive": 61.064637777777776,
+            "lastTradeAt": "2025-11-13T20:31:09.470Z",
+            "startedAt": "2025-11-13T20:31:09.470Z",
+            "mode": "paper"
+        }
+    },
+    {
+        "id": "ops_1763285702166_l3khis",
+        "ts": 1763285702166,
+        "level": "warn",
+        "source": "performance_monitor",
+        "message": "agent_inactivity",
+        "sessionId": "cmhxvwbdq001nnt574pmgyo0d",
+        "symbol": "SOL/USDT:USDT",
+        "details": {
+            "hoursInactive": 61.064637777777776,
+            "lastTradeAt": "2025-11-13T20:31:09.470Z",
+            "startedAt": "2025-11-13T20:31:09.470Z",
+            "mode": "paper"
+        }
+    },
+    {
+        "id": "ops_1763285701890_6szx0c",
+        "ts": 1763285701890,
+        "level": "warn",
+        "source": "alert_mitigator",
+        "message": "session_inactive_watchdog",
+        "sessionId": "cmhxvvnmy001lnt57cuas6aoz",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "hoursInactive": 61.073081944444446,
+            "lastTradeAt": "2025-11-13T20:30:38.698Z",
+            "startedAt": "2025-11-13T20:30:38.698Z",
+            "mode": "paper"
+        }
+    },
+    {
+        "id": "ops_1763285701793_u2c27z",
+        "ts": 1763285701793,
+        "level": "warn",
+        "source": "performance_monitor",
+        "message": "agent_inactivity",
+        "sessionId": "cmhxvvnmy001lnt57cuas6aoz",
+        "symbol": "BTC/USDT:USDT",
+        "details": {
+            "hoursInactive": 61.073081944444446,
+            "lastTradeAt": "2025-11-13T20:30:38.698Z",
+            "startedAt": "2025-11-13T20:30:38.698Z",
+            "mode": "paper"
+        }
+    }
+]
