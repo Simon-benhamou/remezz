@@ -99,6 +99,22 @@ export type AgentDiagnosticInfo = {
     volumeMA: number;
     volumeRatio: number;
   };
+
+  technicalLevels: {
+    support: number | null;
+    resistance: number | null;
+    supports: Array<{ price: number; touches: number; strength: number; label: string | null }>;
+    resistances: Array<{ price: number; touches: number; strength: number; label: string | null }>;
+    pivots: {
+      P: number | null;
+      S1: number | null;
+      S2: number | null;
+      R1: number | null;
+      R2: number | null;
+      refDay: string | null;
+    } | null;
+    srBias: 'nearSupport' | 'nearResistance' | 'neutral' | null;
+  } | null;
   
   // Orders
   orders: Array<{
@@ -312,6 +328,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           volumeMA: 0,
           volumeRatio: 0,
         },
+        technicalLevels: null,
         orders: [],
         fills: [],
         timestamp: Date.now(),
@@ -412,6 +429,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           volumeMA: 0,
           volumeRatio: 0,
         },
+        technicalLevels: null,
         orders: [],
         fills: [],
         timestamp: Date.now(),
@@ -659,6 +677,44 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       volumeRatio: Number((((snap as any).volume ?? 0) / Math.max((snap as any).volumeMA ?? 1, 1)).toFixed(2)),
     };
 
+    const formatPrice = (value: unknown): number | null => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return null;
+      }
+      return Number(value.toFixed(4));
+    };
+
+    const normalizeLevels = (levels?: Array<{ price?: number; touches?: number; strength?: number; label?: string }>) => {
+      if (!Array.isArray(levels)) return [];
+      return levels
+        .filter(level => typeof level?.price === 'number' && Number.isFinite(level.price as number))
+        .slice(0, 4)
+        .map(level => ({
+          price: Number((level.price ?? 0).toFixed(4)),
+          touches: Number(level.touches ?? 0),
+          strength: Number(level.strength ?? 0),
+          label: level.label ?? null,
+        }));
+    };
+
+    const pivots = snap.pivots ? {
+      P: formatPrice(snap.pivots.P),
+      S1: formatPrice(snap.pivots.S1),
+      S2: formatPrice(snap.pivots.S2),
+      R1: formatPrice(snap.pivots.R1),
+      R2: formatPrice(snap.pivots.R2),
+      refDay: snap.pivots.refDay || null,
+    } : null;
+
+    const technicalLevels = {
+      support: formatPrice(snap.support),
+      resistance: formatPrice(snap.resistance),
+      supports: normalizeLevels(snap.supports),
+      resistances: normalizeLevels(snap.resistances),
+      pivots,
+      srBias: snap.srBias || null,
+    };
+
     // Get orders and fills
     const orders = await prisma.order.findMany({
       where: { sessionId },
@@ -680,6 +736,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       strategy: strategyInfo,
       position: positionInfo,
       market,
+      technicalLevels,
       orders: orders.map(o => ({
         id: o.id,
         side: (o.side || 'buy') as 'long' | 'short',

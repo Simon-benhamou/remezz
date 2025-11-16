@@ -1,13 +1,45 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, LineStyle, UTCTimestamp } from 'lightweight-charts';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { createChart, ColorType, IChartApi, ISeriesApi, LineStyle, LineWidth, UTCTimestamp, IPriceLine } from 'lightweight-charts';
 import { api } from '../../api';
 import { Button, Space, Spin } from 'antd';
+
+interface PositionInfo {
+  entryPrice?: number;
+  stopPrice?: number;
+  targets?: number[];
+  side?: 'long' | 'short';
+}
+
+interface TechnicalLevels {
+  support: number | null;
+  resistance: number | null;
+  supports: Array<{ price: number; touches: number; strength: number; label: string | null }>;
+  resistances: Array<{ price: number; touches: number; strength: number; label: string | null }>;
+  pivots: {
+    P: number | null;
+    S1: number | null;
+    S2: number | null;
+    R1: number | null;
+    R2: number | null;
+    refDay: string | null;
+  } | null;
+  srBias: 'nearSupport' | 'nearResistance' | 'neutral' | null;
+}
+
+interface StrategyInfo {
+  label?: string;
+  bias?: 'long' | 'short' | 'both';
+  confidence?: number;
+}
 
 interface ProfessionalChartProps {
   symbol: string;
   sessionId?: string;
   orders?: any[];
   fills?: any[];
+  position?: PositionInfo | null;
+  technicalLevels?: TechnicalLevels | null;
+  strategy?: StrategyInfo | null;
 }
 
 type Timeframe = '1m' | '15m' | '1h' | '4h';
@@ -21,16 +53,33 @@ interface CandleData {
   volume?: number;
 }
 
-export default function ProfessionalChart({ symbol, sessionId, orders = [], fills = [] }: ProfessionalChartProps) {
+export default function ProfessionalChart({
+  symbol,
+  sessionId,
+  orders = [],
+  fills = [],
+  position = null,
+  technicalLevels = null,
+  strategy = null,
+}: ProfessionalChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const entryLineRef = useRef<IPriceLine | null>(null);
+  const stopLineRef = useRef<IPriceLine | null>(null);
+  const supportLineRef = useRef<IPriceLine | null>(null);
+  const resistanceLineRef = useRef<IPriceLine | null>(null);
+  const targetLinesRef = useRef<IPriceLine[]>([]);
   
   const [timeframe, setTimeframe] = useState<Timeframe>('15m');
   const [loading, setLoading] = useState(true);
   const [chartData, setChartData] = useState<CandleData[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const formatPriceLabel = useCallback((value?: number | null) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    return Number(value).toFixed(4);
+  }, []);
 
   // Initialize chart
   useEffect(() => {
@@ -127,6 +176,11 @@ export default function ProfessionalChart({ symbol, sessionId, orders = [], fill
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      entryLineRef.current = null;
+      stopLineRef.current = null;
+      supportLineRef.current = null;
+      resistanceLineRef.current = null;
+      targetLinesRef.current = [];
     };
   }, []);
 
@@ -201,6 +255,158 @@ export default function ProfessionalChart({ symbol, sessionId, orders = [], fill
   useEffect(() => {
     fetchHistoricalData();
   }, [fetchHistoricalData]);
+
+  // Overlay price lines for entry/stop/targets/support-resistance
+  useEffect(() => {
+    if (!candleSeriesRef.current) return;
+
+    const priceOrNull = (value?: number | null): number | null => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+      return Number(value.toFixed(4));
+    };
+
+    const ensureLine = (
+      ref: React.MutableRefObject<IPriceLine | null>,
+      price: number | null,
+      options: {
+        title: string;
+        color: string;
+        lineWidth?: LineWidth;
+        lineStyle?: LineStyle;
+      },
+    ) => {
+      if (!candleSeriesRef.current) return;
+      if (price != null) {
+        const baseOptions = {
+          axisLabelVisible: true,
+          lineWidth: (options.lineWidth ?? 2) as LineWidth,
+          lineStyle: options.lineStyle ?? LineStyle.Solid,
+          color: options.color,
+          title: options.title,
+          price,
+        } as const;
+        if (!ref.current) {
+          ref.current = candleSeriesRef.current.createPriceLine(baseOptions);
+        } else {
+          ref.current.applyOptions(baseOptions);
+        }
+      } else if (ref.current) {
+        try {
+          candleSeriesRef.current.removePriceLine(ref.current);
+        } catch {}
+        ref.current = null;
+      }
+    };
+
+    const primarySupport = technicalLevels?.support ?? technicalLevels?.supports?.[0]?.price ?? null;
+    const primaryResistance = technicalLevels?.resistance ?? technicalLevels?.resistances?.[0]?.price ?? null;
+
+    ensureLine(entryLineRef, priceOrNull(position?.entryPrice), {
+      title: 'Entry',
+      color: '#38bdf8',
+      lineWidth: 2,
+    });
+    ensureLine(stopLineRef, priceOrNull(position?.stopPrice), {
+      title: 'Stop',
+      color: '#ef4444',
+      lineWidth: 2,
+    });
+    ensureLine(supportLineRef, priceOrNull(primarySupport), {
+      title: 'Support',
+      color: '#f97316',
+      lineStyle: LineStyle.Dashed,
+      lineWidth: 1,
+    });
+    ensureLine(resistanceLineRef, priceOrNull(primaryResistance), {
+      title: 'Resistance',
+      color: '#a855f7',
+      lineStyle: LineStyle.Dashed,
+      lineWidth: 1,
+    });
+
+    // Refresh target lines
+    targetLinesRef.current.forEach(line => {
+      if (line && candleSeriesRef.current) {
+        try {
+          candleSeriesRef.current.removePriceLine(line);
+        } catch {}
+      }
+    });
+    targetLinesRef.current = [];
+
+    if (Array.isArray(position?.targets) && candleSeriesRef.current) {
+      position.targets.forEach((target, idx) => {
+        const price = priceOrNull(target);
+        if (price == null) return;
+        const line = candleSeriesRef.current!.createPriceLine({
+          price,
+          color: '#22c55e',
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: `TP${idx + 1}`,
+        });
+        targetLinesRef.current.push(line);
+      });
+    }
+
+  }, [position, technicalLevels]);
+
+  const infoItems = useMemo(() => {
+    const items: Array<{ label: string; value: string; color?: string }> = [];
+    const entryLabel = formatPriceLabel(position?.entryPrice);
+    if (entryLabel) items.push({ label: 'Entry', value: entryLabel, color: '#38bdf8' });
+
+    const stopLabel = formatPriceLabel(position?.stopPrice);
+    if (stopLabel) items.push({ label: 'Stop', value: stopLabel, color: '#ef4444' });
+
+    if (position?.side) {
+      items.push({
+        label: 'Side',
+        value: position.side.toUpperCase(),
+        color: position.side === 'long' ? '#22c55e' : '#f87171',
+      });
+    }
+
+    if (Array.isArray(position?.targets)) {
+      position.targets.slice(0, 3).forEach((target, idx) => {
+        const label = formatPriceLabel(target);
+        if (label) items.push({ label: `TP${idx + 1}`, value: label, color: '#22c55e' });
+      });
+    }
+
+    const supportValue = technicalLevels?.support ?? technicalLevels?.supports?.[0]?.price ?? null;
+    const supportLabel = formatPriceLabel(supportValue);
+    if (supportLabel) items.push({ label: 'Support', value: supportLabel, color: '#f97316' });
+
+    const resistanceValue = technicalLevels?.resistance ?? technicalLevels?.resistances?.[0]?.price ?? null;
+    const resistanceLabel = formatPriceLabel(resistanceValue);
+    if (resistanceLabel) items.push({ label: 'Resistance', value: resistanceLabel, color: '#a855f7' });
+
+    if (technicalLevels?.srBias) {
+      const srBiasLabel = technicalLevels.srBias === 'nearSupport'
+        ? 'Near support'
+        : technicalLevels.srBias === 'nearResistance'
+          ? 'Near resistance'
+          : 'Neutral';
+      items.push({ label: 'SR Bias', value: srBiasLabel });
+    }
+
+    if (strategy) {
+      const detailParts: string[] = [];
+      if (strategy.bias) detailParts.push(strategy.bias.toUpperCase());
+      if (typeof strategy.confidence === 'number') {
+        detailParts.push(`${Math.round(strategy.confidence * 100)}%`);
+      }
+      items.push({
+        label: strategy.label || 'Strategy',
+        value: detailParts.join(' • ') || 'Active',
+        color: '#0ea5e9',
+      });
+    }
+
+    return items;
+  }, [formatPriceLabel, position, technicalLevels, strategy]);
 
   // Add order/fill markers
   useEffect(() => {
@@ -324,8 +530,40 @@ export default function ProfessionalChart({ symbol, sessionId, orders = [], fill
         </Space>
       </div>
 
+      {infoItems.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '8px',
+            padding: '12px 16px',
+            background: 'rgba(15, 23, 42, 0.65)',
+            borderBottom: '1px solid rgba(148, 163, 184, 0.08)',
+          }}
+        >
+          {infoItems.map((item, idx) => (
+            <div
+              key={`${item.label}-${idx}`}
+              style={{
+                border: `1px solid ${item.color || 'rgba(148, 163, 184, 0.35)'}`,
+                borderRadius: 999,
+                padding: '4px 10px',
+                fontSize: '12px',
+                color: item.color || '#e2e8f0',
+                display: 'flex',
+                gap: '6px',
+                letterSpacing: '0.2px',
+              }}
+            >
+              <span style={{ opacity: 0.7 }}>{item.label}</span>
+              <span style={{ fontWeight: 600 }}>{item.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Chart container */}
-      <div style={{ position: 'relative', width: '100%', height: 'calc(100% - 70px)' }}>
+      <div style={{ position: 'relative', width: '100%', height: 600 }}>
         {loading && (
           <div style={{
             position: 'absolute',

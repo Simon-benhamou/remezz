@@ -222,6 +222,9 @@ export function MonitorPageNew() {
               sessionId={sessionId!}
               orders={data.orders}
               fills={data.fills}
+              position={data.position}
+              technicalLevels={data.technicalLevels}
+              strategy={data.strategy}
             />
           </Card>
 
