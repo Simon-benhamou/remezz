@@ -15,7 +15,8 @@ import { recordPrediction, getStableSnapshot, isSnapshotStale } from '../../pred
 import type { PredictorSnapshot } from '../../predictorStateStore.js';
 import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
 import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
-import { storePredictorDecisionIfChanged } from '../../predictorDecisionStore.js';
+import { storePredictorDecisionIfChanged, getCachedPredictorDecision } from '../../predictorDecisionStore.js';
+import { getPredictorSymbolStats } from '../../predictorSymbolStats.js';
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 import { logMetaAdaptiveEvaluation } from './evaluationLogger.js';
@@ -48,6 +49,12 @@ const MAX_REGISTRATION_SNAPSHOT_AGE_MS = Math.max(
   30_000,
   Number(process.env.PREDICTOR_REGISTRATION_MAX_AGE_MS ?? '240000'),
 );
+const SHORT_ENTER_CONFIDENCE = 0.38;
+const SHORT_EXIT_CONFIDENCE = 0.26;
+const LONG_ENTER_CONFIDENCE = 0.32;
+const LONG_EXIT_CONFIDENCE = 0.20;
+const SHORT_EDGE_THRESHOLD = 0.25;
+const LONG_EDGE_THRESHOLD = 0.20;
 
 function normalizeDecimalString(input: string): { sign: bigint; intPart: string; fracPart: string } {
   const trimmed = input.trim();
@@ -1046,7 +1053,7 @@ class MetaAdaptiveStrategyAgent {
     const vol = Number((snap as any)?.volume ?? NaN);
     const baseline = Number((snap as any)?.volumeMA ?? NaN);
     if (!Number.isFinite(vol) || !Number.isFinite(baseline) || baseline <= 0) {
-      return 0;
+        return 0;
     }
     return clamp(vol / baseline - 1, 0, 4);
   }
@@ -1062,7 +1069,7 @@ class MetaAdaptiveStrategyAgent {
       rankHint: watchlist?.rankHint ?? null,
     };
     entry.lastSeen = now;
-    if (watchlist?.addedAt != null && Number.isFinite(watchlist.addedAt)) {
+      if (watchlist?.addedAt != null && Number.isFinite(watchlist.addedAt)) {
       entry.firstSeen = Math.min(entry.firstSeen, Number(watchlist.addedAt));
     }
     if (watchlist?.firstSeenAt != null && Number.isFinite(watchlist.firstSeenAt)) {
@@ -2435,10 +2442,15 @@ class MetaAdaptiveStrategyAgent {
     if (!Number.isFinite(predictorConfidence)) {
       predictorConfidence = 0;
     }
+    let probabilityEdge = 0;
+    let probabilityGapLong = 0;
+    let probabilityGapShort = 0;
     if (predictorProbabilities) {
+      const probLong = clamp(predictorProbabilities.long, 0, 1);
+      const probShort = clamp(predictorProbabilities.short, 0, 1);
       const ranked = [
-        { label: 'long' as const, value: clamp(predictorProbabilities.long, 0, 1) },
-        { label: 'short' as const, value: clamp(predictorProbabilities.short, 0, 1) },
+        { label: 'long' as const, value: probLong },
+        { label: 'short' as const, value: probShort },
         { label: 'none' as const, value: clamp(predictorProbabilities.none, 0, 1) },
       ].sort((a, b) => b.value - a.value);
       const top = ranked[0];
@@ -2448,6 +2460,9 @@ class MetaAdaptiveStrategyAgent {
         predictorDecisionLabel = top.label;
       }
       const diff = Math.abs(top.value - second.value);
+      probabilityEdge = Math.abs(probShort - probLong);
+      probabilityGapShort = Math.max(0, probShort - probLong);
+      probabilityGapLong = Math.max(0, probLong - probShort);
       if (predictorConfidence < diff) {
         predictorConfidence = diff;
       }
@@ -2455,10 +2470,10 @@ class MetaAdaptiveStrategyAgent {
     // FIX: Use bias instead of decision if confidence is reasonable
     // This allows trades when predictor has a clear bias but decision=none due to low confidence
     let effectivePredictorDirection: StrategyBias = predictorDecision;
+    const biasFromSignal = pythonSignalMeta?.bias || 'both';
     
     if (predictorConfidence < PREDICTOR_MIN_CONFIDENCE) {
       // Low confidence: check if bias is still clear enough
-      const biasFromSignal = pythonSignalMeta?.bias || 'both';
       // OPTIMIZED: Predictor 95% accuracy - utiliser bias dès 15% confidence (vs 25% avant)
       if (predictorConfidence >= 0.15 && (biasFromSignal === 'long' || biasFromSignal === 'short')) {
         // Even moderate confidence (15-20%) + clear bias: trust the predictor
@@ -2474,7 +2489,27 @@ class MetaAdaptiveStrategyAgent {
       effectivePredictorDirection = 'both';
     }
 
-    const intendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
+    const cachedPredictorDecision = getCachedPredictorDecision(params.symbol);
+    if (
+      effectivePredictorDirection === 'both' &&
+      cachedPredictorDecision &&
+      cachedPredictorDecision !== 'none'
+    ) {
+      const exitThreshold = cachedPredictorDecision === 'short' ? SHORT_EXIT_CONFIDENCE : LONG_EXIT_CONFIDENCE;
+      const oppositeOfCached = cachedPredictorDecision === 'short' ? 'long' : 'short';
+      if (biasFromSignal !== oppositeOfCached && predictorConfidence >= exitThreshold) {
+        effectivePredictorDirection = cachedPredictorDecision;
+        predictorDecisionLabel = cachedPredictorDecision;
+      }
+    }
+
+    const symbolStats = await getPredictorSymbolStats(params.symbol).catch(err => {
+      console.error(`[MetaAdaptive] Failed to compute predictor stats for ${params.symbol}:`, err);
+      return null;
+    });
+
+    type IntendedSide = 'long' | 'short' | 'both';
+    const intendedSide: IntendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
     
     // ✅ PREDICTOR GATE ENABLED: Store decision changes and block uncertain trades
     // Only logs decision changes to DB (none→long, long→short, etc.)
@@ -2497,10 +2532,20 @@ class MetaAdaptiveStrategyAgent {
     }
     
     if (PREDICTOR_GATE_ENABLED) {
-      // 🐞 FIX BUG 2: Block ALL trades (LONG + SHORT) if confidence < 30%
-      // Old code only checked SHORT trades, allowing risky LONG entries
-      const MIN_CONFIDENCE_FOR_TRADE = 0.30; // 30% minimum for ANY trade
-      if (predictorConfidence < MIN_CONFIDENCE_FOR_TRADE && intendedSide !== 'both') {
+      const baseEnterConfidence = intendedSide === 'short' ? SHORT_ENTER_CONFIDENCE : LONG_ENTER_CONFIDENCE;
+      const winRateFloor = symbolStats?.winRate == null
+        ? 0.30
+        : Math.max(0.30, symbolStats.winRate < 0.45 ? 0.45 : 0.35);
+      const enterConfidenceTarget = Math.max(baseEnterConfidence, winRateFloor);
+      const relaxedConfidence = Math.max(0, enterConfidenceTarget - 0.05);
+      const edgeRequirement = intendedSide === 'short' ? SHORT_EDGE_THRESHOLD : LONG_EDGE_THRESHOLD;
+      const directionalEdge = intendedSide === 'short' ? probabilityGapShort : probabilityGapLong;
+      const meetsConfidenceEntry = predictorConfidence >= enterConfidenceTarget;
+      const meetsEdgeOverride = directionalEdge >= edgeRequirement && predictorConfidence >= relaxedConfidence;
+
+      const lowConfidenceShortLossStreak = symbolStats?.lowConfidenceShortLossStreak ?? 0;
+      const cooldownActive = intendedSide === 'short' && lowConfidenceShortLossStreak >= 2;
+      if (cooldownActive && predictorConfidence < 0.55) {
         console.log(JSON.stringify({
           level: 'info',
           event: 'adaptive_trade_blocked_by_predictor',
@@ -2509,9 +2554,36 @@ class MetaAdaptiveStrategyAgent {
           token: params.token,
           predictorDecision: effectivePredictorDirection,
           predictorConfidence: Number(predictorConfidence.toFixed(4)),
+          probabilityEdge: Number(directionalEdge.toFixed(4)),
           intendedSide,
-          reason: 'market_uncertainty_too_low_confidence',
-          threshold: MIN_CONFIDENCE_FOR_TRADE,
+          reason: 'short_cooldown_after_losses',
+          stats: {
+            lowConfidenceShortLossStreak,
+          },
+        }));
+        return 'predictor_blocked';
+      }
+
+      if (!meetsConfidenceEntry && !meetsEdgeOverride && intendedSide !== 'both') {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'adaptive_trade_blocked_by_predictor',
+          symbol: params.symbol,
+          sessionId: params.sessionId ?? null,
+          token: params.token,
+          predictorDecision: effectivePredictorDirection,
+          predictorConfidence: Number(predictorConfidence.toFixed(4)),
+          probabilityEdge: Number(directionalEdge.toFixed(4)),
+          intendedSide,
+          reason: 'insufficient_predictor_conviction',
+          thresholds: {
+            confidence: enterConfidenceTarget,
+            edge: edgeRequirement,
+          },
+          stats: {
+            winRate: symbolStats?.winRate ?? null,
+            completedTrades: symbolStats?.completedTrades ?? 0,
+          },
         }));
         return 'predictor_blocked';
       }
@@ -2595,19 +2667,14 @@ class MetaAdaptiveStrategyAgent {
       // NOTE: Confidence check moved to common section above (line ~2035)
       // Now applies to BOTH long and short trades
       
-      // Count how many guardrail conditions pass
-      const passCount = [predictorAllowsShort, flowPass, mtfPass].filter(Boolean).length;
+      const strongPredictor = predictorAllowsShort && predictorConfidence > 0.60;
+      const dualConfirmation = flowPass && mtfPass;
       
-      // Strong technical: predictor alone if high confidence (>60%), or 2/3 conditions, or 1 + strong ADX
-      const predictorHighConfidence = predictorAllowsShort && predictorConfidence > 0.60;
-      const strongTechnical = predictorHighConfidence || passCount >= 2 || (passCount >= 1 && adxValue > 25);
-      
-      if (!strongTechnical) {
+      if (!strongPredictor && !dualConfirmation) {
         const guardReasons: string[] = [];
         if (!predictorAllowsShort) guardReasons.push('predictor_disagrees');
         if (!flowPass) guardReasons.push('flow_cmf_threshold');
         if (!mtfPass) guardReasons.push('mtf_not_bearish');
-        guardReasons.push(`pass_count=${passCount}/3`);
         console.log(JSON.stringify({
           level: 'info',
           event: 'adaptive_trade_blocked_by_predictor',
@@ -2618,10 +2685,11 @@ class MetaAdaptiveStrategyAgent {
         predictorDecisionLabel,
         predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
         predictorConfidence: Number(predictorConfidence.toFixed(4)),
+        probabilityEdge: Number(probabilityEdge.toFixed(4)),
         intendedSide,
-        reason: 'short_guardrail',
+        reason: 'short_guardrail_high_conf_or_dual_required',
         guardReasons,
-          passCount,
+          passCount: [predictorAllowsShort, flowPass, mtfPass].filter(Boolean).length,
           flowCmf: flowCmfValue != null && Number.isFinite(flowCmfValue) ? Number(flowCmfValue.toFixed(6)) : null,
           flowThreshold: -cmfThresholdAbs,
           flowVolumeRatio: flowVolumeRatioLogged,

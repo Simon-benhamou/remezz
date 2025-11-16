@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import { prisma } from '../db/client.js';
 import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
+import { analyzePredictorDecisions } from '../quantai/predictorDecisionAnalytics.js';
 
 const router = Router();
 
@@ -27,78 +28,11 @@ async function buildDecisionPayload(symbol: string, limit: number, sinceDate?: D
     take: limit,
   });
 
-  const chronological = decisions.reverse();
-
-  const analyzed: Array<any> = [];
-  for (let i = 0; i < chronological.length; i++) {
-    const decision = chronological[i];
-    const nextDecision = chronological[i + 1];
-    let outcome: 'good' | 'bad' | 'neutral' | 'pending' = 'pending';
-    let priceChange: number | null = null;
-    let pnlEstimate: number | null = null;
-    let durationMinutes: number | null = null;
-
-    if (nextDecision && decision.decision !== 'none') {
-      const entryPrice = decision.price;
-      const exitPrice = nextDecision.price;
-      priceChange = ((exitPrice - entryPrice) / entryPrice) * 100;
-      durationMinutes = Math.floor((new Date(nextDecision.createdAt).getTime() - new Date(decision.createdAt).getTime()) / 60000);
-
-      if (decision.decision === 'long') {
-        pnlEstimate = priceChange;
-        outcome = priceChange > 0 ? 'good' : (priceChange < -0.1 ? 'bad' : 'neutral');
-      } else if (decision.decision === 'short') {
-        pnlEstimate = -priceChange;
-        outcome = priceChange < 0 ? 'good' : (priceChange > 0.1 ? 'bad' : 'neutral');
-      }
-    }
-
-    analyzed.push({
-      ...decision,
-      outcome,
-      priceChange,
-      pnlEstimate,
-      durationMinutes,
-      exitPrice: nextDecision?.price || null,
-      exitTime: nextDecision?.createdAt || null,
-    });
-  }
-
-  const completedTrades = analyzed.filter(d => d.outcome !== 'pending');
-  const goodTrades = completedTrades.filter(d => d.outcome === 'good');
-  const badTrades = completedTrades.filter(d => d.outcome === 'bad');
-  const neutralTrades = completedTrades.filter(d => d.outcome === 'neutral');
-
-  const winRate = completedTrades.length > 0
-    ? (goodTrades.length / completedTrades.length) * 100
-    : 0;
-
-  const avgPnl = completedTrades.length > 0
-    ? completedTrades.reduce((sum, t) => sum + (t.pnlEstimate || 0), 0) / completedTrades.length
-    : 0;
-
-  const totalPnl = completedTrades.reduce((sum, t) => sum + (t.pnlEstimate || 0), 0);
-
-  const avgDuration = completedTrades.length > 0
-    ? completedTrades.reduce((sum, t) => sum + (t.durationMinutes || 0), 0) / completedTrades.length
-    : 0;
-
-  const metrics = {
-    totalDecisions: analyzed.length,
-    completedTrades: completedTrades.length,
-    pendingTrades: analyzed.filter(d => d.outcome === 'pending').length,
-    goodTrades: goodTrades.length,
-    badTrades: badTrades.length,
-    neutralTrades: neutralTrades.length,
-    winRate: parseFloat(winRate.toFixed(2)),
-    avgPnl: parseFloat(avgPnl.toFixed(2)),
-    totalPnl: parseFloat(totalPnl.toFixed(2)),
-    avgDurationMinutes: parseFloat(avgDuration.toFixed(1)),
-  };
+  const { reverseChronological, metrics } = analyzePredictorDecisions(decisions);
 
   return {
     symbol,
-    decisions: analyzed.reverse(),
+    decisions: reverseChronological,
     metrics,
   };
 }

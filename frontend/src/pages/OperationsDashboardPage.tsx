@@ -242,6 +242,20 @@ const severityMeta: Record<string, { color: string; label: string }> = {
   error: { color: '#f87171', label: 'Action' },
 };
 
+const COMPLIANCE_KEYWORDS = [
+  'compliance',
+  'protective',
+  'security',
+  'guardrail',
+  'safeguard',
+  'telemetry',
+  'timeout',
+  'halt',
+  'lockdown',
+  'kill switch',
+  'risk',
+];
+
 const AGGRESSIVENESS_META: Record<AggressivenessLevel, { label: string; color: string }> = {
   conservative: { label: 'Conservative', color: '#0ea5e9' },
   reactive: { label: 'Reactive', color: '#a855f7' },
@@ -596,6 +610,26 @@ const OperationsDashboardPage: React.FC = () => {
     () => (Array.isArray(opsEvents) ? opsEvents.slice(0, 6) : []),
     [opsEvents],
   );
+  const complianceHighlights = React.useMemo(() => {
+    if (!Array.isArray(opsEvents)) return [] as OpsEvent[];
+    return opsEvents
+      .filter((evt) => {
+        const haystack = `${evt.message ?? ''} ${evt.source ?? ''} ${JSON.stringify(evt.details ?? {})}`.toLowerCase();
+        return COMPLIANCE_KEYWORDS.some((keyword) => haystack.includes(keyword));
+      })
+      .slice(0, 5);
+  }, [opsEvents]);
+  const safeguardSnapshot = React.useMemo(() => {
+    const protectiveIssues = Number(opsMetrics?.positions?.protectiveIssues ?? 0);
+    const haltedSessions = Number(opsMetrics?.sessions?.halted ?? 0);
+    const managingSessions = Number(opsMetrics?.sessions?.managing ?? 0);
+    return {
+      protectiveIssues,
+      haltedSessions,
+      managingSessions,
+      complianceSignals: complianceHighlights.length,
+    };
+  }, [opsMetrics, complianceHighlights]);
   const metaChecklistEvents = React.useMemo(() => {
     if (!Array.isArray(opsEvents)) return [];
     return opsEvents
@@ -1173,65 +1207,151 @@ const OperationsDashboardPage: React.FC = () => {
           />
         </Col>
         <Col xs={24} xl={10}>
-          <Card
-            title={<span style={{ color: '#e2e8f0' }}>Latest alerts</span>}
-            extra={<Button type='link' style={{ color: '#60a5fa', padding: 0 }} onClick={() => navigate('/backlog')}>Open feed</Button>}
-            style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
-            bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
-          >
-            {latestEvents.length === 0 ? (
-              <Empty description='No alerts captured.' style={{ margin: '32px 0', color: 'rgba(148, 163, 184, 0.78)' }} />
-            ) : (
-              latestEvents.map((evt: OpsEvent) => {
-                const meta = severityMeta[evt.level || 'info'] || severityMeta.info;
-                return (
-                  <div
-                    key={evt.id}
-                    style={{
-                      borderRadius: 14,
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      padding: 16,
-                      background: 'rgba(15, 23, 42, 0.75)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 8,
-                    }}
-                  >
-                    <Space align='center' size={8}>
-                      <Badge color={meta.color} />
-                      <Text style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</Text>
-                      <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>
-                        {formatRelative(evt.ts)}
+          <Space direction='vertical' size={18} style={{ width: '100%' }}>
+            <Card
+              title={<span style={{ color: '#e2e8f0' }}>Latest alerts</span>}
+              extra={<Button type='link' style={{ color: '#60a5fa', padding: 0 }} onClick={() => navigate('/backlog')}>Open feed</Button>}
+              style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+              bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+            >
+              {latestEvents.length === 0 ? (
+                <Empty description='No alerts captured.' style={{ margin: '32px 0', color: 'rgba(148, 163, 184, 0.78)' }} />
+              ) : (
+                latestEvents.map((evt: OpsEvent) => {
+                  const meta = severityMeta[evt.level || 'info'] || severityMeta.info;
+                  return (
+                    <div
+                      key={evt.id}
+                      style={{
+                        borderRadius: 14,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        padding: 16,
+                        background: 'rgba(15, 23, 42, 0.75)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                      }}
+                    >
+                      <Space align='center' size={8}>
+                        <Badge color={meta.color} />
+                        <Text style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</Text>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 12 }}>
+                          {formatRelative(evt.ts)}
+                        </Text>
+                      </Space>
+                      <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                        {formatOpsEventMessage(evt.message)}
                       </Text>
-                    </Space>
-                    <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
-                      {formatOpsEventMessage(evt.message)}
-                    </Text>
-                    {(() => {
-                      const reasons = collectOpsEventReasons(evt.details);
-                      if (!reasons.length) return null;
-                      return (
-                        <Space direction='vertical' size={4}>
-                          {reasons.slice(0, 2).map((reason, idx) => (
-                            <Text
-                              key={`${evt.id}-reason-${idx}`}
-                              style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}
-                            >
-                              {reason}
-                            </Text>
-                          ))}
-                        </Space>
-                      );
-                    })()}
-                    <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
-                      {evt.symbol && <Tag color='geekblue'>{formatDisplaySymbol(evt.symbol)}</Tag>}
-                      <span>{evt.source}</span>
-                    </Space>
-                  </div>
-                );
-              })
-            )}
-          </Card>
+                      {(() => {
+                        const reasons = collectOpsEventReasons(evt.details);
+                        if (!reasons.length) return null;
+                        return (
+                          <Space direction='vertical' size={4}>
+                            {reasons.slice(0, 2).map((reason, idx) => (
+                              <Text
+                                key={`${evt.id}-reason-${idx}`}
+                                style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}
+                              >
+                                {reason}
+                              </Text>
+                            ))}
+                          </Space>
+                        );
+                      })()}
+                      <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                        {evt.symbol && <Tag color='geekblue'>{formatDisplaySymbol(evt.symbol)}</Tag>}
+                        <span>{evt.source}</span>
+                      </Space>
+                    </div>
+                  );
+                })
+              )}
+            </Card>
+            <Card
+              title={<span style={{ color: '#e2e8f0' }}>Compliance & security guardrails</span>}
+              extra={<Tag color='magenta'>{safeguardSnapshot.complianceSignals} signals</Tag>}
+              style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
+              bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+            >
+              <Row gutter={[16, 16]}>
+                <Col xs={12}>
+                  <Statistic
+                    title={<span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>Protective coverage</span>}
+                    value={safeguardSnapshot.protectiveIssues}
+                    suffix='issues'
+                    valueStyle={{ color: safeguardSnapshot.protectiveIssues > 0 ? '#f87171' : '#34d399' }}
+                  />
+                </Col>
+                <Col xs={12}>
+                  <Statistic
+                    title={<span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>Halted sessions</span>}
+                    value={safeguardSnapshot.haltedSessions}
+                    suffix='active'
+                    valueStyle={{ color: safeguardSnapshot.haltedSessions > 0 ? '#fbbf24' : '#60a5fa' }}
+                  />
+                </Col>
+                <Col xs={12}>
+                  <Statistic
+                    title={<span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>Managing</span>}
+                    value={safeguardSnapshot.managingSessions}
+                    suffix='sessions'
+                    valueStyle={{ color: '#a855f7' }}
+                  />
+                </Col>
+                <Col xs={12}>
+                  <Statistic
+                    title={<span style={{ color: 'rgba(148, 163, 184, 0.72)' }}>Compliance signals</span>}
+                    value={safeguardSnapshot.complianceSignals}
+                    suffix='recent'
+                    valueStyle={{ color: safeguardSnapshot.complianceSignals > 0 ? '#f97316' : '#34d399' }}
+                  />
+                </Col>
+              </Row>
+              <Divider style={{ margin: '4px 0', borderColor: token.colorBorderSecondary }} />
+              {complianceHighlights.length === 0 ? (
+                <Empty
+                  description='No compliance or security constraints triggered.'
+                  style={{ margin: '16px 0', color: 'rgba(148, 163, 184, 0.78)' }}
+                />
+              ) : (
+                complianceHighlights.map((evt) => {
+                  const meta = severityMeta[evt.level || 'info'] || severityMeta.info;
+                  const topReason = collectOpsEventReasons(evt.details)?.[0];
+                  return (
+                    <div
+                      key={`compliance-${evt.id}`}
+                      style={{
+                        borderRadius: 12,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        padding: 12,
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                      }}
+                    >
+                      <Space align='center' size={8} wrap>
+                        <Badge color={meta.color} />
+                        <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                          {formatOpsEventMessage(evt.message)}
+                        </Text>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                          {formatRelative(evt.ts)}
+                        </Text>
+                      </Space>
+                      {topReason && (
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.84)', fontSize: 12 }}>{topReason}</Text>
+                      )}
+                      <Space size={8} wrap style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 12 }}>
+                        {evt.symbol && <Tag color='geekblue'>{formatDisplaySymbol(evt.symbol)}</Tag>}
+                        {evt.source && <Tag color='default'>{evt.source}</Tag>}
+                      </Space>
+                    </div>
+                  );
+                })
+              )}
+            </Card>
+          </Space>
         </Col>
       </Row>
 

@@ -23,6 +23,7 @@ import {
 import { maybeAdjustOrExit } from '../quantai/strategies/metaAdaptive/exitManager.js';
 import { PositionSizer } from '../quantai/risk/positionSizing.js';
 import { getQuantAIConfig } from '../quantai/config.js';
+import type { QuantAIExitConfig } from '../quantai/config.js';
 import { createLogger } from '../utils/logger.js';
 import { createIntegrationLogger, withLogging, withRetry } from '../utils/integrationLogger.js';
 import { logTradeEvaluation, type RegimeContext } from '../learning/tradeEvaluationLogger.js';
@@ -156,6 +157,157 @@ function calculateRegimeContext(tech: TechnicalSnapshot): RegimeContext {
     trendingRanging: tech.adx14 > 25 ? 'trending' : tech.adx14 < 20 ? 'ranging' : (atrPct > 4 ? 'trending' : 'ranging'),
     parameterSource: 'runtime_calculated',
   };
+}
+
+type PositionTelemetry = {
+  entryAtrPct: number | null;
+  expectedMinutesTo1R: number;
+  mfeR: number;
+  maeR: number;
+  lastR: number;
+  stagnationMinutes: number;
+  lastUpdateTs: number;
+  lastSignificantR: number;
+  lastSignificantUpdateTs: number;
+  atrDriftPct: number | null;
+  latestAtrPct: number | null;
+  minutesOpenSnapshot?: number;
+};
+
+const TELEMETRY_TIMEFRAME_MIN = 15;
+const STAGNATION_EPSILON_R = 0.12;
+
+function estimateMinutesToOneR(stopDistance: number, atrValue: number | null): number {
+  if (!(stopDistance > 0)) {
+    return 30;
+  }
+  const atr = atrValue && atrValue > 1e-9 ? atrValue : stopDistance;
+  const atrUnits = stopDistance / atr;
+  const rawMinutes = atrUnits * TELEMETRY_TIMEFRAME_MIN;
+  return Math.max(20, Math.min(240, Math.round(rawMinutes || 30)));
+}
+
+function buildPositionTelemetry(params: {
+  entryPrice: number;
+  stopDistance: number;
+  atrValue: number | null;
+}): PositionTelemetry {
+  const { entryPrice, stopDistance, atrValue } = params;
+  const entryAtrPct = atrValue && entryPrice > 0
+    ? (atrValue / entryPrice) * 100
+    : null;
+  const sanitizedAtrPct = entryAtrPct != null && Number.isFinite(entryAtrPct)
+    ? Number(entryAtrPct.toFixed(4))
+    : null;
+  const now = Date.now();
+  return {
+    entryAtrPct: sanitizedAtrPct,
+    expectedMinutesTo1R: estimateMinutesToOneR(stopDistance, atrValue),
+    mfeR: 0,
+    maeR: 0,
+    lastR: 0,
+    stagnationMinutes: 0,
+    lastUpdateTs: now,
+    lastSignificantR: 0,
+    lastSignificantUpdateTs: now,
+    atrDriftPct: null,
+    latestAtrPct: sanitizedAtrPct,
+  };
+}
+
+function updatePositionTelemetry(
+  position: any,
+  currentPrice: number,
+  tech: TechnicalSnapshot,
+  minutesOpen: number,
+): { telemetry: PositionTelemetry; rMultiple: number } | null {
+  const telemetry = position?.telemetry as PositionTelemetry | undefined;
+  if (!telemetry) {
+    return null;
+  }
+  const baselineRisk = typeof position.initialStopDistance === 'number' && position.initialStopDistance > 0
+    ? position.initialStopDistance
+    : Math.abs(position.entry - position.stop);
+  if (!(baselineRisk > 0)) {
+    return null;
+  }
+  const side = position.side === 'sell' ? 'short' : 'long';
+  const baselineStop = side === 'long'
+    ? position.entry - baselineRisk
+    : position.entry + baselineRisk;
+  const rMultiple = PositionSizer.rMultiple(position.entry, baselineStop, currentPrice, side);
+  telemetry.lastR = rMultiple;
+  telemetry.mfeR = Math.max(telemetry.mfeR, rMultiple);
+  telemetry.maeR = Math.min(telemetry.maeR, rMultiple);
+  const now = Date.now();
+  const elapsedMinutes = telemetry.lastUpdateTs ? (now - telemetry.lastUpdateTs) / 60000 : 0;
+  const moveDelta = Math.abs(rMultiple - telemetry.lastSignificantR);
+  if (moveDelta < STAGNATION_EPSILON_R) {
+    telemetry.stagnationMinutes += elapsedMinutes;
+  } else {
+    telemetry.stagnationMinutes = 0;
+    telemetry.lastSignificantR = rMultiple;
+    telemetry.lastSignificantUpdateTs = now;
+  }
+  telemetry.lastUpdateTs = now;
+  const atrValue = tech.atr14 ?? null;
+  const atrPct = atrValue && tech.last
+    ? (atrValue / tech.last) * 100
+    : null;
+  if (atrPct != null && Number.isFinite(atrPct)) {
+    const rounded = Number(atrPct.toFixed(4));
+    telemetry.latestAtrPct = rounded;
+    if (telemetry.entryAtrPct != null) {
+      telemetry.atrDriftPct = Number((rounded - telemetry.entryAtrPct).toFixed(4));
+    }
+  }
+  telemetry.minutesOpenSnapshot = minutesOpen;
+  return { telemetry, rMultiple };
+}
+
+function shouldTriggerTelemetryTimeout(params: {
+  telemetry: PositionTelemetry;
+  minutesOpen: number;
+  rMultiple: number;
+  exitConfig: QuantAIExitConfig;
+}): string | null {
+  const { telemetry, minutesOpen, rMultiple, exitConfig } = params;
+  const minHold = exitConfig.earlyExit?.minHoldMinutes ?? 0;
+  if (minutesOpen < minHold) {
+    return null;
+  }
+  const expectation = Math.max(20, telemetry.expectedMinutesTo1R);
+  if (telemetry.stagnationMinutes < expectation * 1.4) {
+    return null;
+  }
+  if (telemetry.mfeR >= 0.45) {
+    return null;
+  }
+  if (Math.abs(rMultiple) >= 0.3) {
+    return null;
+  }
+  const maxHolding = exitConfig.maxHoldingMin ?? null;
+  const nearMaxHold = maxHolding != null && minutesOpen >= maxHolding * 0.85;
+  const volatilityCollapse = telemetry.atrDriftPct != null && telemetry.atrDriftPct <= -1;
+  const extremeStagnation = telemetry.stagnationMinutes >= expectation * 1.8;
+  if (!volatilityCollapse && !nearMaxHold && !extremeStagnation) {
+    return null;
+  }
+  const details: string[] = [
+    `stagnation=${telemetry.stagnationMinutes.toFixed(1)}m`,
+    `expectation=${expectation.toFixed(1)}m`,
+    `mfe=${telemetry.mfeR.toFixed(2)}R`,
+  ];
+  if (volatilityCollapse) {
+    details.push(`atrDrift=${telemetry.atrDriftPct?.toFixed(2)}pp`);
+  }
+  if (nearMaxHold) {
+    details.push('maxHold');
+  }
+  if (extremeStagnation) {
+    details.push('extremeStagnation');
+  }
+  return `telemetry_timeout_flat(${details.join(',')})`;
 }
 
 type SessionContext = {
@@ -458,7 +610,8 @@ async function executeEntryTrade(
     
     const entryPrice = tech.last;
     const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
-    const stopDistance = (tech.atr14 || tech.last * DEFAULT_ATR_PCT) * (config.exits.slAtrMult || 2); // Use ATR-based stop
+    const atrForStops = tech.atr14 || tech.last * DEFAULT_ATR_PCT;
+    const stopDistance = atrForStops * (config.exits.slAtrMult || 2); // Use ATR-based stop
     
     // Get risk percentage from profile or use default
     const riskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
@@ -713,6 +866,11 @@ async function executeEntryTrade(
         openedAt: Date.now(),
         peakPrice: entryPrice, // Initialize peak price at entry
         initialStopDistance: stopDistance, // Store original stop distance for R-multiple calculations
+        telemetry: buildPositionTelemetry({
+          entryPrice,
+          stopDistance,
+          atrValue: atrForStops ?? null,
+        }),
       };
     }
 
@@ -913,6 +1071,20 @@ async function checkAndExecuteExit(
     const config = getQuantAIConfig();
     const MS_PER_MINUTE = 60000;
     const minutesOpen = position.openedAt ? (Date.now() - position.openedAt) / MS_PER_MINUTE : 0;
+    const telemetryUpdate = updatePositionTelemetry(position, currentPrice, tech, minutesOpen);
+    if (telemetryUpdate) {
+      const telemetryTimeoutReason = shouldTriggerTelemetryTimeout({
+        telemetry: telemetryUpdate.telemetry,
+        minutesOpen,
+        rMultiple: telemetryUpdate.rMultiple,
+        exitConfig: config.exits,
+      });
+      if (telemetryTimeoutReason) {
+        logger.info(`[${session.sessionId}] Telemetry timeout exit triggered: ${telemetryTimeoutReason}`);
+        await executeExitTrade(session, agent, currentPrice, telemetryTimeoutReason);
+        return;
+      }
+    }
     const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
     const exitDirective = maybeAdjustOrExit({
       side: position.side === 'sell' ? 'short' : 'long',

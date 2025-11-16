@@ -24,7 +24,7 @@ interface PredictorDecision {
   price: number;
   createdAt: Date;
   // Analysis fields
-  outcome: 'good' | 'bad' | 'neutral' | 'pending';
+  outcome: 'good' | 'bad' | 'neutral' | 'pending' | 'not_applicable';
   priceChange: number | null;
   pnlEstimate: number | null;
   durationMinutes: number | null;
@@ -36,6 +36,7 @@ interface PredictorMetrics {
   totalDecisions: number;
   completedTrades: number;
   pendingTrades: number;
+  notApplicableTrades: number;
   goodTrades: number;
   badTrades: number;
   neutralTrades: number;
@@ -98,6 +99,8 @@ export function PredictorDecisionsPanel({ symbol }: PredictorDecisionsPanelProps
         return <Tag color="warning" icon={<MinusCircleOutlined />}>~ Neutral</Tag>;
       case 'pending':
         return <Tag color="processing" icon={<ClockCircleOutlined />}>Pending</Tag>;
+      case 'not_applicable':
+        return <Tag icon={<MinusCircleOutlined />}>N/A</Tag>;
       default:
         return <Tag>{outcome}</Tag>;
     }

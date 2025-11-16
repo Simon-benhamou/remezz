@@ -61,6 +61,10 @@ export async function storePredictorDecisionIfChanged(data: PredictorDecisionDat
   }
 }
 
+export function getCachedPredictorDecision(symbol: string): 'long' | 'short' | 'none' | null {
+  return (lastDecisionCache.get(symbol) as 'long' | 'short' | 'none' | undefined) ?? null;
+}
+
 /**
  * Get last stored decision for a symbol (from DB)
  */
