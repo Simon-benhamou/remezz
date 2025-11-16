@@ -119,6 +119,8 @@ export type AgentDiagnosticInfo = {
   // Orders
   orders: Array<{
     id: string;
+    clientOrderId?: string | null;
+    intent?: 'entry' | 'exit';
     side: 'long' | 'short';
     type: string;
     status: string;
@@ -684,6 +686,16 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       return Number(value.toFixed(4));
     };
 
+    const inferOrderIntent = (order: { clientOrderId?: string | null }): 'entry' | 'exit' => {
+      const rawId = typeof order.clientOrderId === 'string' ? order.clientOrderId : '';
+      const clientId = rawId.toLowerCase();
+      if (!clientId) return 'entry';
+      if (clientId.includes('exit') || clientId.includes('close') || clientId.includes('reduce')) {
+        return 'exit';
+      }
+      return 'entry';
+    };
+
     const normalizeLevels = (levels?: Array<{ price?: number; touches?: number; strength?: number; label?: string }>) => {
       if (!Array.isArray(levels)) return [];
       return levels
@@ -739,6 +751,8 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       technicalLevels,
       orders: orders.map(o => ({
         id: o.id,
+        clientOrderId: o.clientOrderId,
+        intent: inferOrderIntent(o),
         side: (o.side || 'buy') as 'long' | 'short',
         type: o.type || 'market',
         status: o.status || 'unknown',
