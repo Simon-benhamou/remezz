@@ -187,7 +187,7 @@ function estimateMinutesToOneR(stopDistance: number, atrValue: number | null): n
   return Math.max(20, Math.min(240, Math.round(rawMinutes || 30)));
 }
 
-function buildPositionTelemetry(params: {
+export function buildPositionTelemetry(params: {
   entryPrice: number;
   stopDistance: number;
   atrValue: number | null;
