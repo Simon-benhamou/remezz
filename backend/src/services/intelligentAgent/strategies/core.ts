@@ -46,6 +46,7 @@ import {
   __autoUniverseSchedulerTesting,
 } from '../autoUniverseScheduler.js';
 import { ensureSymbolProfile } from '../../symbolSpecificOptimization.js';
+import { activateRotationLock, releaseRotationLock, isEntryLockActive } from '../../sessionLocks.js';
 import { logBiasDecision, logBiasStatistics, hasSignificantBias } from '../biasMonitor.js';
 import { buildPredictorFeatures as buildMetaAdaptivePredictorFeatures } from '../../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 
@@ -3593,6 +3594,7 @@ async function mergeSessionProfileJson(sessionId: string, patch: Record<string, 
  * Initialize intelligent agent for a session
  */
 export async function initializeIntelligentAgent(sessionId: string, preset?: IntelligentAnalysis | null, opts?: { candidatesOverride?: IntelligentAnalysis[]; testMode?: boolean }): Promise<boolean> {
+  let rotationLockAcquired = false;
   try {
     console.log(`🤖 Initializing Intelligent Agent for session ${sessionId}...`);
     
@@ -3606,6 +3608,15 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
       profileJson.aggressiveness || 'reactive';
     
     console.log(`📊 Using aggressiveness level: ${aggressiveness} for crypto selection`);
+
+    rotationLockAcquired = await activateRotationLock(sessionId, 'intelligent_init', 300_000, {
+      stage: 'initialization',
+      preset: !!preset,
+    });
+    if (!rotationLockAcquired) {
+      console.warn(`🚧 Skipping intelligent init for ${sessionId} - rotation lock already active`);
+      return false;
+    }
     
     const testMode = !!opts?.testMode || (process.env.UNIT_TEST_MODE === 'true');
     const maxAttemptsEnv = Number(process.env.SMART_AGENT_INIT_MAX_ATTEMPTS || 4);
@@ -3798,6 +3809,10 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
   } catch (error) {
     console.error('❌ Error initializing Intelligent Agent:', error);
     return false;
+  } finally {
+    if (rotationLockAcquired) {
+      await releaseRotationLock(sessionId, 'intelligent_init');
+    }
   }
 }
 
@@ -4158,6 +4173,7 @@ function shouldDeferDueToRecentActivity(params: { lastActivityAt: Date | null; w
 }
 
 async function checkSessionForBetterOpportunityOptimized(session: any): Promise<void> {
+  let rotationLockAcquired = false;
   try {
     const config = session.profileJson as any;
     const now = new Date();
@@ -4165,6 +4181,35 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     // Extract aggressiveness from session profile for proper crypto selection
     const aggressiveness: 'conservative' | 'reactive' | 'aggressive' = 
       config?.aggressiveness || 'reactive';
+
+    if (await isEntryLockActive(session.id)) {
+      const nextCheck = new Date(now.getTime() + 30 * 60 * 1000);
+      console.log(`🛡️ Session ${session.id}: entry lock active — deferring intelligent rotation until ${nextCheck.toISOString()}`);
+      try {
+        await mergeSessionProfileJson(session.id, {
+          lastScan: now.toISOString(),
+          nextScanDue: nextCheck.toISOString(),
+          pendingRotation: 'entry_lock_guard',
+          pendingRotationDetails: {
+            deferUntil: nextCheck.toISOString(),
+          },
+        });
+      } catch (err) {
+        console.warn(`⚠️ Failed to persist entry-lock guard for session ${session.id}:`, err);
+      }
+      await updateSessionNextCheck(session.id, nextCheck);
+      recordOpsEvent({
+        level: 'info',
+        source: 'intelligent_rotation',
+        message: 'skip_due_to_entry_lock',
+        sessionId: session.id,
+        symbol: session.symbol,
+        details: {
+          deferUntil: nextCheck.toISOString(),
+        },
+      });
+      return;
+    }
     
     // Configurable recent-activity window (hours). Default 3h (was 12h).
     const activityWindowHours = Math.max(1, Number(process.env.SMART_RECENT_ACTIVITY_HOURS || '3'));
@@ -4216,6 +4261,40 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
         }
       });
 
+      return;
+    }
+
+    rotationLockAcquired = await activateRotationLock(session.id, 'intelligent_rotation', 300_000, {
+      stage: 'rotation',
+      currentSymbol: session.symbol,
+      aggressiveness,
+    });
+    if (!rotationLockAcquired) {
+      const nextCheck = new Date(now.getTime() + 20 * 60 * 1000);
+      console.log(`🚧 Session ${session.id}: rotation already locked — delaying reselection until ${nextCheck.toISOString()}`);
+      try {
+        await mergeSessionProfileJson(session.id, {
+          lastScan: now.toISOString(),
+          nextScanDue: nextCheck.toISOString(),
+          pendingRotation: 'rotation_lock_guard',
+          pendingRotationDetails: {
+            deferUntil: nextCheck.toISOString(),
+          },
+        });
+      } catch (err) {
+        console.warn(`⚠️ Failed to persist rotation-lock guard for session ${session.id}:`, err);
+      }
+      await updateSessionNextCheck(session.id, nextCheck);
+      recordOpsEvent({
+        level: 'info',
+        source: 'intelligent_rotation',
+        message: 'skip_due_to_rotation_lock',
+        sessionId: session.id,
+        symbol: session.symbol,
+        details: {
+          deferUntil: nextCheck.toISOString(),
+        },
+      });
       return;
     }
 
@@ -4680,6 +4759,10 @@ async function checkSessionForBetterOpportunityOptimized(session: any): Promise<
     
   } catch (error) {
     console.error(`❌ Error checking opportunities for session ${session.id}:`, error);
+  } finally {
+    if (rotationLockAcquired) {
+      await releaseRotationLock(session.id, 'intelligent_rotation');
+    }
   }
 }
 

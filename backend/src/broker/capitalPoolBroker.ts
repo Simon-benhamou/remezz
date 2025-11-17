@@ -92,9 +92,11 @@ export class CapitalPoolBroker implements Broker {
       return this.rejectOrder(order, 'invalid_desired_usd');
     }
 
+    const desiredNotional = desiredUsd.toNumber();
     const leverage = Math.max(1, Number.isFinite(order.leverage) && (order.leverage ?? 0) > 0 ? order.leverage! : 1);
+    const requestedMargin = desiredNotional / leverage;
 
-    console.log(`[CapitalPoolBroker] Attempting reserve: agentId=${this.agentId}, symbol=${order.symbol}, desiredUsd=${desiredUsd.toNumber()}, leverage=${leverage}`);
+    console.log(`[CapitalPoolBroker] Attempting reserve: agentId=${this.agentId}, symbol=${order.symbol}, desiredUsd=${desiredNotional}, leverage=${leverage}`);
 
     const reservation = await this.capital.reserve({
       agentId: this.agentId,
@@ -112,8 +114,6 @@ export class CapitalPoolBroker implements Broker {
       const reserved = snapshot.reservedUSD.toNumber();
       const inPositions = snapshot.inPositionsUSD.toNumber();
       const actuallyAvailable = totalFree - reserved - inPositions;
-      const requestedMargin = desiredUsd.toNumber() / leverage;
-      
       // Get symbol-specific limits
       const symbolExposureUsd = this.capital.getSymbolExposureUsd(order.symbol).toNumber();
       const totalCapital = snapshot.totalUSD.toNumber();
@@ -167,11 +167,44 @@ export class CapitalPoolBroker implements Broker {
       return this.rejectOrder(order, 'capital_reservation_failed');
     }
 
-    console.log(`[CapitalPoolBroker] Reserved successfully: granted=${reservation.grantedUSD.toNumber()}, placing order...`);
+    const grantedMargin = reservation.grantedUSD.toNumber();
+    let workingOrder: NewOrder = order;
+    let workingNotional = desiredNotional;
+
+    if (grantedMargin + 1e-9 < requestedMargin) {
+      const maxNotional = grantedMargin * leverage;
+      const scale = maxNotional > 0 && workingNotional > 0 ? maxNotional / workingNotional : 0;
+
+      if (!(scale > 0)) {
+        await this.capital.release(reservation.id);
+        console.log(`[CapitalPoolBroker] ❌ Unable to scale order (scale=${scale}) — rejecting to avoid zero-size trade`);
+        return this.rejectOrder(order, 'capital_scale_failed');
+      }
+
+      const adjustedQty = Number(order.qty ?? 0) * scale;
+      if (!(adjustedQty > 0)) {
+        await this.capital.release(reservation.id);
+        console.log(`[CapitalPoolBroker] ❌ Adjusted quantity <= 0 (${adjustedQty}) — rejecting trade`);
+        return this.rejectOrder(order, 'capital_scale_zero_qty');
+      }
+
+      console.log(
+        `[CapitalPoolBroker] 🔄 Scaling order for ${order.symbol}: requestedNotional=${workingNotional.toFixed(2)}, ` +
+        `grantedMargin=${grantedMargin.toFixed(2)}, scale=${scale.toFixed(4)}, adjustedNotional=${maxNotional.toFixed(2)}`,
+      );
+
+      workingOrder = {
+        ...order,
+        qty: adjustedQty,
+      };
+      workingNotional = maxNotional;
+    }
+
+    console.log(`[CapitalPoolBroker] Reserved successfully: granted=${grantedMargin}, placing order (notional=${workingNotional})...`);
 
     try {
-      const placed = await this.broker.place(order);
-      const filledUsd = this.resolveFilledUsd(order, placed);
+      const placed = await this.broker.place(workingOrder);
+      const filledUsd = this.resolveFilledUsd(workingOrder, placed);
       if (!placed || placed.status === 'rejected' || filledUsd.raw <= ZERO_USD.raw) {
         await this.capital.release(reservation.id);
         return placed;

@@ -39,6 +39,7 @@ import { computeQtyNotional } from '../risk/manager.js';
 import { getConfig } from '../utils/env.js';
 import { calculateFeeUsd } from '../quantai/executionCosts.js';
 import { canFlipPosition, recordPositionFlip } from './positionFlipTracker.js';
+import { activateEntryLock, releaseEntryLock, isRotationLockActive } from './sessionLocks.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -671,366 +672,414 @@ async function executeEntryTrade(
     integrationLogger.info(`Executing entry trade | bias=${signal.bias} strategy=${(signal as any).strategyId || signal.id} confidence=${signal.confidence.toFixed(3)}`);
     console.log(`[MetaOrchestrator.executeEntryTrade] START: agent=${session.sessionId}, symbol=${session.symbol}, bias=${signal.bias}`);
 
-    // Get broker
-    const broker = await getBrokerForSession(session);
-    if (!broker) {
-      integrationLogger.error('No broker available for session');
-      console.log(`[MetaOrchestrator.executeEntryTrade] ERROR: No broker available`);
-      return;
-    }
-
-    console.log(`[MetaOrchestrator.executeEntryTrade] Got broker, fetching balance...`);
-
-    // Get account balance for position sizing from capital pool
-    const balance = await withLogging(
-      integrationLogger,
-      'fetch broker balance',
-      () => broker.balance()
-    );
-    
-    // Use broker equity directly - no fallback to session balance
-    // The broker gets its balance from the shared capital pool
-    const equityUsd = balance.equityUsd || 1000; // Only fallback to default if broker returns nothing
-    integrationLogger.debug(`Broker balance | equity=${equityUsd.toFixed(2)} free=${balance.freeUsd?.toFixed(2)}`);
-    console.log(`[MetaOrchestrator.executeEntryTrade] Balance: equity=${equityUsd.toFixed(2)}, free=${balance.freeUsd?.toFixed(2)}`);
-
-    // Calculate position size with leverage support
-    const config = getQuantAIConfig();
-    const envConfig = getConfig();
-    
-    const entryPrice = tech.last;
-    const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
-    const parseMetaNumber = (value: unknown): number | null => {
-      if (typeof value === 'number') {
-        return Number.isFinite(value) ? value : null;
-      }
-      if (typeof value === 'string') {
-        const parsed = Number.parseFloat(value);
-        return Number.isFinite(parsed) ? parsed : null;
-      }
-      return null;
-    };
-    const planMeta = signal.meta ?? null;
-    const planRiskPct = parseMetaNumber(planMeta?.riskPct);
-    const planRiskUsd = parseMetaNumber(planMeta?.riskUsd);
-    const planTargetProfitUsd = parseMetaNumber(planMeta?.targetProfitUsd);
-    const planStopAtrMult = parseMetaNumber(planMeta?.stopAtrMult);
-    const entryAtrFromMeta = parseMetaNumber(planMeta?.entryAtr);
-    const tpMultiples = Array.isArray(planMeta?.takeProfitMultiples)
-      ? planMeta.takeProfitMultiples
-          .map((value) => {
-            if (typeof value === 'number') {
-              return Number.isFinite(value) ? value : Number.NaN;
-            }
-            if (typeof value === 'string') {
-              const parsed = Number.parseFloat(value);
-              return Number.isFinite(parsed) ? parsed : Number.NaN;
-            }
-            return Number.NaN;
-          })
-          .filter((val) => Number.isFinite(val))
-      : [];
-    const primaryTpMultiple = tpMultiples.length > 0 ? tpMultiples[0] : null;
-    const atrForStops = (() => {
-      const resolvedAtr = entryAtrFromMeta && entryAtrFromMeta > 0
-        ? entryAtrFromMeta
-        : tech.atr14;
-      return resolvedAtr && resolvedAtr > 0
-        ? resolvedAtr
-        : tech.last * DEFAULT_ATR_PCT;
-    })();
-    const resolvedStopMult = planStopAtrMult && planStopAtrMult > 0
-      ? planStopAtrMult
-      : (config.exits.slAtrMult || 2);
-    const stopDistance = atrForStops * resolvedStopMult; // Use plan-aware ATR stop
-    
-    // Get risk percentage from plan, profile, or use default
-    const fallbackRiskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
-    const riskPct = planRiskPct && planRiskPct > 0 ? planRiskPct : fallbackRiskPct;
-    
-    // Check capital usage and determine confidence threshold
-    const capitalMetrics = await calculateCapitalUsageAndThresholds(session.mode);
-    
-    integrationLogger.info(`Capital usage | total=$${capitalMetrics.totalCapital.toFixed(0)} used=$${capitalMetrics.usedCapital.toFixed(0)} free=$${capitalMetrics.freeCapital.toFixed(0)} ratio=${(capitalMetrics.usageRatio * 100).toFixed(1)}% maxPos=${capitalMetrics.maxPositions} minConf=${capitalMetrics.minConfidenceRequired}`);
-    
-    // Progressive confidence check: reject if below threshold
-    if (signal.confidence < capitalMetrics.minConfidenceRequired) {
-      integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${capitalMetrics.minConfidenceRequired} (capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
-      
+    if (isRotationLockActive(session.profileJson)) {
+      integrationLogger.warn('Rotation lock active – blocking entry');
+      console.log(`[MetaOrchestrator.executeEntryTrade] BLOCKED: rotation lock active for ${session.sessionId}`);
       await logTradeEvaluation({
         symbol: session.symbol,
-        decision: 'order_blocked_capital',
-        blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${capitalMetrics.minConfidenceRequired} (capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used)`,
+        decision: 'order_blocked_rotation',
+        blockedReason: 'rotation_in_progress',
         confidenceScore: signal.confidence,
         inputMetrics: {
-          capitalUsageRatio: capitalMetrics.usageRatio,
-          minConfidenceRequired: capitalMetrics.minConfidenceRequired,
+          adx: tech.adx14,
+          atrPct: (tech.atr14 / tech.last) * 100,
+          cmf: (tech as any).cmf20,
+          rsi14: tech.rsi14,
+          volumeRatio: (tech as any).volumeRatio,
         },
-      });
-      
+        regimeContext: calculateRegimeContext(tech),
+      }).catch(err => console.warn('Failed to log rotation block:', err));
       return;
     }
-    
-    // Limit position size to max allocation
-    const maxPositionMargin = Math.min(equityUsd, capitalMetrics.maxAllocationPerPosition);
-    
-    integrationLogger.info(`Position sizing | equity=$${equityUsd.toFixed(0)} maxAllocation=$${maxPositionMargin.toFixed(0)} (${((capitalMetrics.maxAllocationPerPosition / capitalMetrics.totalCapital) * 100).toFixed(0)}% for ${capitalMetrics.maxPositions} max positions)`);
-    
-    // Dynamic leverage based on confidence: high confidence = higher leverage
-    // confidence range: 0.50-1.0 (filters block below 0.50)
-    // leverage range: baseLeverage (e.g., 3x) to maxLeverage (e.g., 10x)
-    const maxLeverage = session.profileJson?.maxLeverage ?? envConfig.DEFAULT_MAX_LEVERAGE;
-    const baseLeverage = Math.max(2, Math.min(3, maxLeverage * 0.3)); // Minimum safe leverage (30% of max, or 2-3x)
-    
-    // Linear interpolation: confidence 0.50 → baseLeverage, confidence 1.0 → maxLeverage
-    const confidenceRange = 1.0 - 0.50; // 0.50 range
-    const normalizedConfidence = Math.max(0, Math.min(1, (signal.confidence - 0.50) / confidenceRange));
-    const confidenceAdjustedLeverage = baseLeverage + (maxLeverage - baseLeverage) * normalizedConfidence;
-    
-    integrationLogger.info(`Confidence-based leverage | confidence=${signal.confidence.toFixed(3)} base=${baseLeverage.toFixed(1)}x max=${maxLeverage.toFixed(1)}x → adjusted=${confidenceAdjustedLeverage.toFixed(2)}x`);
-    
-    // Use computeQtyNotional which respects leverage caps per symbol category
-    const sizingResult = await computeQtyNotional({
-      balanceUsd: maxPositionMargin,
-      riskPct,
-      stopDistanceAbs: stopDistance,
-      entryPrice,
-      requestedLeverage: confidenceAdjustedLeverage,
+
+    const entryLockAcquired = await activateEntryLock(session.sessionId, 'placing_entry_order', 180_000, {
       symbol: session.symbol,
-      mode: session.mode,
-      tp1DistanceAbs: primaryTpMultiple && primaryTpMultiple > 0 ? stopDistance * primaryTpMultiple : undefined,
-      minTp1PnlUsd: planTargetProfitUsd && planTargetProfitUsd > 0 ? planTargetProfitUsd : undefined,
-      tp1RMultiple: primaryTpMultiple && primaryTpMultiple > 0 ? primaryTpMultiple : undefined,
-      minNotionalUsd: capitalAllocationOverrides.minPositionUsd || undefined,
+      strategyId: (signal as any).strategyId || signal.id,
     });
-    
-    let qty = entryPrice > 0 ? sizingResult.notional / entryPrice : 0;
-    const leverage = sizingResult.leverageCap.resolved;
-    const riskPerUnit = stopDistance;
-    let notional = qty * entryPrice;
-    let computedRiskUsd = riskPerUnit * qty;
 
-    if (planRiskUsd && planRiskUsd > 0 && riskPerUnit > 0 && computedRiskUsd > planRiskUsd * 1.01) {
-      const scale = planRiskUsd / computedRiskUsd;
-      qty *= scale;
-      notional = qty * entryPrice;
-      computedRiskUsd = planRiskUsd;
-    }
-
-    const minOrderUsd = capitalConfig.minOrderUSD.toNumber();
-    if (minOrderUsd > 0 && notional > 0 && notional < minOrderUsd) {
-      integrationLogger.warn('Position sizing below min order after risk clamp', {
-        notional,
-        minOrderUsd,
-        planRiskUsd,
-      });
-      console.log('[MetaOrchestrator.executeEntryTrade] ABORTED: notional below min order after clamp');
+    if (!entryLockAcquired) {
+      integrationLogger.warn('Entry lock already active – skipping duplicate entry');
+      console.log(`[MetaOrchestrator.executeEntryTrade] SKIP: entry lock already active for ${session.sessionId}`);
+      await logTradeEvaluation({
+        symbol: session.symbol,
+        decision: 'order_blocked_rotation',
+        blockedReason: 'entry_lock_active',
+        confidenceScore: signal.confidence,
+        inputMetrics: {
+          adx: tech.adx14,
+          atrPct: (tech.atr14 / tech.last) * 100,
+          cmf: (tech as any).cmf20,
+          rsi14: tech.rsi14,
+          volumeRatio: (tech as any).volumeRatio,
+        },
+        regimeContext: calculateRegimeContext(tech),
+      }).catch(err => console.warn('Failed to log entry-lock block:', err));
       return;
     }
 
-    if (!qty || qty <= 0) {
-      integrationLogger.warn('Position sizing resulted in 0 quantity', {
-        equityUsd,
+    try {
+      // Get broker
+      const broker = await getBrokerForSession(session);
+      if (!broker) {
+        integrationLogger.error('No broker available for session');
+        console.log(`[MetaOrchestrator.executeEntryTrade] ERROR: No broker available`);
+        return;
+      }
+
+      console.log(`[MetaOrchestrator.executeEntryTrade] Got broker, fetching balance...`);
+
+      // Get account balance for position sizing from capital pool
+      const balance = await withLogging(
+        integrationLogger,
+        'fetch broker balance',
+        () => broker.balance()
+      );
+      
+      // Use broker equity directly - no fallback to session balance
+      // The broker gets its balance from the shared capital pool
+      const equityUsd = balance.equityUsd || 1000; // Only fallback to default if broker returns nothing
+      integrationLogger.debug(`Broker balance | equity=${equityUsd.toFixed(2)} free=${balance.freeUsd?.toFixed(2)}`);
+      console.log(`[MetaOrchestrator.executeEntryTrade] Balance: equity=${equityUsd.toFixed(2)}, free=${balance.freeUsd?.toFixed(2)}`);
+
+      // Calculate position size with leverage support
+      const config = getQuantAIConfig();
+      const envConfig = getConfig();
+      
+      const entryPrice = tech.last;
+      const DEFAULT_ATR_PCT = 0.01; // 1% fallback when ATR not available
+      const parseMetaNumber = (value: unknown): number | null => {
+        if (typeof value === 'number') {
+          return Number.isFinite(value) ? value : null;
+        }
+        if (typeof value === 'string') {
+          const parsed = Number.parseFloat(value);
+          return Number.isFinite(parsed) ? parsed : null;
+        }
+        return null;
+      };
+      const planMeta = signal.meta ?? null;
+      const planRiskPct = parseMetaNumber(planMeta?.riskPct);
+      const planRiskUsd = parseMetaNumber(planMeta?.riskUsd);
+      const planTargetProfitUsd = parseMetaNumber(planMeta?.targetProfitUsd);
+      const planStopAtrMult = parseMetaNumber(planMeta?.stopAtrMult);
+      const entryAtrFromMeta = parseMetaNumber(planMeta?.entryAtr);
+      const tpMultiples = Array.isArray(planMeta?.takeProfitMultiples)
+        ? planMeta.takeProfitMultiples
+            .map((value) => {
+              if (typeof value === 'number') {
+                return Number.isFinite(value) ? value : Number.NaN;
+              }
+              if (typeof value === 'string') {
+                const parsed = Number.parseFloat(value);
+                return Number.isFinite(parsed) ? parsed : Number.NaN;
+              }
+              return Number.NaN;
+            })
+            .filter((val) => Number.isFinite(val))
+        : [];
+      const primaryTpMultiple = tpMultiples.length > 0 ? tpMultiples[0] : null;
+      const atrForStops = (() => {
+        const resolvedAtr = entryAtrFromMeta && entryAtrFromMeta > 0
+          ? entryAtrFromMeta
+          : tech.atr14;
+        return resolvedAtr && resolvedAtr > 0
+          ? resolvedAtr
+          : tech.last * DEFAULT_ATR_PCT;
+      })();
+      const resolvedStopMult = planStopAtrMult && planStopAtrMult > 0
+        ? planStopAtrMult
+        : (config.exits.slAtrMult || 2);
+      const stopDistance = atrForStops * resolvedStopMult; // Use plan-aware ATR stop
+      
+      // Get risk percentage from plan, profile, or use default
+      const fallbackRiskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
+      const riskPct = planRiskPct && planRiskPct > 0 ? planRiskPct : fallbackRiskPct;
+      
+      // Check capital usage and determine confidence threshold
+      const capitalMetrics = await calculateCapitalUsageAndThresholds(session.mode);
+      
+      integrationLogger.info(`Capital usage | total=$${capitalMetrics.totalCapital.toFixed(0)} used=$${capitalMetrics.usedCapital.toFixed(0)} free=$${capitalMetrics.freeCapital.toFixed(0)} ratio=${(capitalMetrics.usageRatio * 100).toFixed(1)}% maxPos=${capitalMetrics.maxPositions} minConf=${capitalMetrics.minConfidenceRequired}`);
+      
+      // Progressive confidence check: reject if below threshold
+      if (signal.confidence < capitalMetrics.minConfidenceRequired) {
+        integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${capitalMetrics.minConfidenceRequired} (capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
+        
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'order_blocked_capital',
+          blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${capitalMetrics.minConfidenceRequired} (capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used)`,
+          confidenceScore: signal.confidence,
+          inputMetrics: {
+            capitalUsageRatio: capitalMetrics.usageRatio,
+            minConfidenceRequired: capitalMetrics.minConfidenceRequired,
+          },
+        });
+        
+        return;
+      }
+      
+      // Limit position size to max allocation
+      const maxPositionMargin = Math.min(equityUsd, capitalMetrics.maxAllocationPerPosition);
+      
+      integrationLogger.info(`Position sizing | equity=$${equityUsd.toFixed(0)} maxAllocation=$${maxPositionMargin.toFixed(0)} (${((capitalMetrics.maxAllocationPerPosition / capitalMetrics.totalCapital) * 100).toFixed(0)}% for ${capitalMetrics.maxPositions} max positions)`);
+      
+      // Dynamic leverage based on confidence: high confidence = higher leverage
+      // confidence range: 0.50-1.0 (filters block below 0.50)
+      // leverage range: baseLeverage (e.g., 3x) to maxLeverage (e.g., 10x)
+      const maxLeverage = session.profileJson?.maxLeverage ?? envConfig.DEFAULT_MAX_LEVERAGE;
+      const baseLeverage = Math.max(2, Math.min(3, maxLeverage * 0.3)); // Minimum safe leverage (30% of max, or 2-3x)
+      
+      // Linear interpolation: confidence 0.50 → baseLeverage, confidence 1.0 → maxLeverage
+      const confidenceRange = 1.0 - 0.50; // 0.50 range
+      const normalizedConfidence = Math.max(0, Math.min(1, (signal.confidence - 0.50) / confidenceRange));
+      const confidenceAdjustedLeverage = baseLeverage + (maxLeverage - baseLeverage) * normalizedConfidence;
+      
+      integrationLogger.info(`Confidence-based leverage | confidence=${signal.confidence.toFixed(3)} base=${baseLeverage.toFixed(1)}x max=${maxLeverage.toFixed(1)}x → adjusted=${confidenceAdjustedLeverage.toFixed(2)}x`);
+      
+      // Use computeQtyNotional which respects leverage caps per symbol category
+      const sizingResult = await computeQtyNotional({
+        balanceUsd: maxPositionMargin,
+        riskPct,
+        stopDistanceAbs: stopDistance,
         entryPrice,
-        stopDistance,
-        confidenceAdjustedLeverage,
-        resolvedLeverage: leverage,
+        requestedLeverage: confidenceAdjustedLeverage,
+        symbol: session.symbol,
+        mode: session.mode,
+        tp1DistanceAbs: primaryTpMultiple && primaryTpMultiple > 0 ? stopDistance * primaryTpMultiple : undefined,
+        minTp1PnlUsd: planTargetProfitUsd && planTargetProfitUsd > 0 ? planTargetProfitUsd : undefined,
+        tp1RMultiple: primaryTpMultiple && primaryTpMultiple > 0 ? primaryTpMultiple : undefined,
+        minNotionalUsd: capitalAllocationOverrides.minPositionUsd || undefined,
       });
-      console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: sizing returned qty=0`);
       
-      // Log that order was blocked due to position sizing
-      await logTradeEvaluation({
-        symbol: session.symbol,
-        decision: 'order_blocked_sizing',
-        blockedReason: `qty=0: equity=${equityUsd.toFixed(2)}, stop=${stopDistance.toFixed(4)}, entry=${entryPrice.toFixed(4)}, leverage=${leverage}x`,
-        confidenceScore: signal.confidence,
-        inputMetrics: {
-          adx: tech.adx14,
-          atrPct: (tech.atr14 / tech.last) * 100,
-          cmf: (tech as any).cmf20,
-          rsi14: tech.rsi14,
-          volumeRatio: (tech as any).volumeRatio,
-        },
-        regimeContext: calculateRegimeContext(tech),
-      }).catch(err => console.warn('Failed to log sizing block:', err));
-      
-      return;
-    }
+      let qty = entryPrice > 0 ? sizingResult.notional / entryPrice : 0;
+      const leverage = sizingResult.leverageCap.resolved;
+      const riskPerUnit = stopDistance;
+      let notional = qty * entryPrice;
+      let computedRiskUsd = riskPerUnit * qty;
 
-    integrationLogger.info(`Position sized | qty=${qty.toFixed(8)} notional=${notional.toFixed(2)} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)} leverage=${leverage}x riskUsd=${computedRiskUsd.toFixed(2)}`);
-    console.log(`[MetaOrchestrator.executeEntryTrade] Sizing: qty=${qty.toFixed(8)}, notional=${notional.toFixed(2)}, entryPrice=${entryPrice.toFixed(4)}, stopDist=${stopDistance.toFixed(4)}, leverage=${leverage}x`);
+      if (planRiskUsd && planRiskUsd > 0 && riskPerUnit > 0 && computedRiskUsd > planRiskUsd * 1.01) {
+        const scale = planRiskUsd / computedRiskUsd;
+        qty *= scale;
+        notional = qty * entryPrice;
+        computedRiskUsd = planRiskUsd;
+      }
 
-    // Register the trade entry with meta-adaptive system
-    const registrationResult = await registerAdaptiveTradeEntry({
-      sessionId: session.sessionId,
-      symbol: session.symbol,
-      signal,
-      qty,
-      entryPrice,
-      stopDistance,
-    });
+      const minOrderUsd = capitalConfig.minOrderUSD.toNumber();
+      if (minOrderUsd > 0 && notional > 0 && notional < minOrderUsd) {
+        integrationLogger.warn('Position sizing below min order after risk clamp', {
+          notional,
+          minOrderUsd,
+          planRiskUsd,
+        });
+        console.log('[MetaOrchestrator.executeEntryTrade] ABORTED: notional below min order after clamp');
+        return;
+      }
 
-    if (registrationResult === 'skipped' || registrationResult === 'predictor_blocked') {
-      integrationLogger.warn(`Trade registration ${registrationResult}`);
-      console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: registration ${registrationResult}`);
-      
-      // Predictor and cooldown are ANALYSIS FILTERS, not execution blocks
-      // They evaluate signal quality, so they should be logged as filter_blocked
-      await logTradeEvaluation({
-        symbol: session.symbol,
-        decision: 'filter_blocked',  // Changed from order_blocked_registration
-        blockedReason: registrationResult === 'predictor_blocked' ? 'predictor_confidence_too_low' : 'cooldown_active',
-        confidenceScore: signal.confidence,
-        inputMetrics: {
-          adx: tech.adx14,
-          atrPct: (tech.atr14 / tech.last) * 100,
-          cmf: (tech as any).cmf20,
-          rsi14: tech.rsi14,
-          volumeRatio: (tech as any).volumeRatio,
-        },
-        regimeContext: calculateRegimeContext(tech),
-      }).catch(err => console.warn('Failed to log registration block:', err));
-      
-      return;
-    }
-
-    console.log(`[MetaOrchestrator.executeEntryTrade] Registration OK, placing order...`);
-
-    // Place the actual order via broker
-    const side = signal.bias === 'short' ? 'sell' : 'buy';
-    const stopPrice = signal.bias === 'short'
-      ? entryPrice + stopDistance
-      : entryPrice - stopDistance;
-
-    console.log(`[MetaOrchestrator.executeEntryTrade] Calling broker.place(): side=${side}, qty=${qty.toFixed(8)}, stopPrice=${stopPrice.toFixed(4)}, leverage=${leverage}x`);
-
-    const order = await withRetry(
-      integrationLogger,
-      'place entry order',
-      () => broker.place({
-        symbol: session.symbol,
-        side,
-        type: 'market',
-        qty,
-        stopLoss: stopPrice,
-        leverage,
-        clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
-        // Add evaluation context for better logging
-        _evaluationContext: {
-          confidence: signal.confidence,
+      if (!qty || qty <= 0) {
+        integrationLogger.warn('Position sizing resulted in 0 quantity', {
+          equityUsd,
+          entryPrice,
+          stopDistance,
+          confidenceAdjustedLeverage,
+          resolvedLeverage: leverage,
+        });
+        console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: sizing returned qty=0`);
+        
+        // Log that order was blocked due to position sizing
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'order_blocked_sizing',
+          blockedReason: `qty=0: equity=${equityUsd.toFixed(2)}, stop=${stopDistance.toFixed(4)}, entry=${entryPrice.toFixed(4)}, leverage=${leverage}x`,
+          confidenceScore: signal.confidence,
           inputMetrics: {
             adx: tech.adx14,
-            rsi14: tech.rsi14,
-            cmf: (tech as any).cmf20,
             atrPct: (tech.atr14 / tech.last) * 100,
+            cmf: (tech as any).cmf20,
+            rsi14: tech.rsi14,
             volumeRatio: (tech as any).volumeRatio,
           },
           regimeContext: calculateRegimeContext(tech),
-        },
-      }),
-      3,
-      500
-    );
+        }).catch(err => console.warn('Failed to log sizing block:', err));
+        
+        return;
+      }
 
-    console.log(`[MetaOrchestrator.executeEntryTrade] Order placed! id=${order.id}, status=${order.status}, filledQty=${order.filledQty}`);
+      integrationLogger.info(`Position sized | qty=${qty.toFixed(8)} notional=${notional.toFixed(2)} entryPrice=${entryPrice.toFixed(4)} stopDistance=${stopDistance.toFixed(4)} leverage=${leverage}x riskUsd=${computedRiskUsd.toFixed(2)}`);
+      console.log(`[MetaOrchestrator.executeEntryTrade] Sizing: qty=${qty.toFixed(8)}, notional=${notional.toFixed(2)}, entryPrice=${entryPrice.toFixed(4)}, stopDist=${stopDistance.toFixed(4)}, leverage=${leverage}x`);
 
-    // Log successful order placement
-    if (order.status !== 'rejected') {
-      await logTradeEvaluation({
+      // Register the trade entry with meta-adaptive system
+      const registrationResult = await registerAdaptiveTradeEntry({
+        sessionId: session.sessionId,
         symbol: session.symbol,
-        decision: 'order_placed',
-        blockedReason: undefined,
-        confidenceScore: signal.confidence,
-        inputMetrics: {
-          adx: tech.adx14,
-          atrPct: (tech.atr14 / tech.last) * 100,
-          cmf: (tech as any).cmf20,
-          rsi14: tech.rsi14,
-          volumeRatio: (tech as any).volumeRatio,
-        },
-        regimeContext: calculateRegimeContext(tech),
-      }).catch(err => console.warn('Failed to log order placement:', err));
+        signal,
+        qty,
+        entryPrice,
+        stopDistance,
+      });
 
-      // Persist order and position to database
-      try {
-        // Calculate fee using Binance taker fee (market order = taker)
-        const feeUsd = calculateFeeUsd({
-          price: order.avgPrice ?? entryPrice,
-          qty: order.filledQty ?? qty,
-          side,
-          liquidity: 'taker', // Market orders are taker orders
-          fees: {
-            makerFeeBps: config.feesSlippage.makerFeeBps,
-            takerFeeBps: config.feesSlippage.takerFeeBps,
+      if (registrationResult === 'skipped' || registrationResult === 'predictor_blocked') {
+        integrationLogger.warn(`Trade registration ${registrationResult}`);
+        console.log(`[MetaOrchestrator.executeEntryTrade] ABORTED: registration ${registrationResult}`);
+        
+        // Predictor and cooldown are ANALYSIS FILTERS, not execution blocks
+        // They evaluate signal quality, so they should be logged as filter_blocked
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'filter_blocked',  // Changed from order_blocked_registration
+          blockedReason: registrationResult === 'predictor_blocked' ? 'predictor_confidence_too_low' : 'cooldown_active',
+          confidenceScore: signal.confidence,
+          inputMetrics: {
+            adx: tech.adx14,
+            atrPct: (tech.atr14 / tech.last) * 100,
+            cmf: (tech as any).cmf20,
+            rsi14: tech.rsi14,
+            volumeRatio: (tech as any).volumeRatio,
           },
-        });
+          regimeContext: calculateRegimeContext(tech),
+        }).catch(err => console.warn('Failed to log registration block:', err));
+        
+        return;
+      }
 
-        await recordEnter({
-          sessionId: session.sessionId,
+      console.log(`[MetaOrchestrator.executeEntryTrade] Registration OK, placing order...`);
+
+      // Place the actual order via broker
+      const side = signal.bias === 'short' ? 'sell' : 'buy';
+      const stopPrice = signal.bias === 'short'
+        ? entryPrice + stopDistance
+        : entryPrice - stopDistance;
+
+      console.log(`[MetaOrchestrator.executeEntryTrade] Calling broker.place(): side=${side}, qty=${qty.toFixed(8)}, stopPrice=${stopPrice.toFixed(4)}, leverage=${leverage}x`);
+
+      const order = await withRetry(
+        integrationLogger,
+        'place entry order',
+        () => broker.place({
           symbol: session.symbol,
           side,
-          qty: order.filledQty ?? qty,
-          entryPrice: order.avgPrice ?? entryPrice,
-          stop: stopPrice,
-          leverage: order.leverage,
-          requestedPrice: entryPrice,
-          requestedQty: qty,
-          latencyMs: order.latencyMs,
-          slippageBps: order.slippageBps,
-          fillRatio: order.fillRatio,
-          feeUsd,
-        });
-        console.log(`[MetaOrchestrator.executeEntryTrade] Position persisted to database`);
-      } catch (err) {
-        console.error(`[MetaOrchestrator.executeEntryTrade] Failed to persist position:`, err);
+          type: 'market',
+          qty,
+          stopLoss: stopPrice,
+          leverage,
+          clientOrderId: `${session.sessionId}-entry-${Date.now()}`,
+          // Add evaluation context for better logging
+          _evaluationContext: {
+            confidence: signal.confidence,
+            inputMetrics: {
+              adx: tech.adx14,
+              rsi14: tech.rsi14,
+              cmf: (tech as any).cmf20,
+              atrPct: (tech.atr14 / tech.last) * 100,
+              volumeRatio: (tech as any).volumeRatio,
+            },
+            regimeContext: calculateRegimeContext(tech),
+          },
+        }),
+        3,
+        500
+      );
+
+      console.log(`[MetaOrchestrator.executeEntryTrade] Order placed! id=${order.id}, status=${order.status}, filledQty=${order.filledQty}`);
+
+      // Log successful order placement
+      if (order.status !== 'rejected') {
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'order_placed',
+          blockedReason: undefined,
+          confidenceScore: signal.confidence,
+          inputMetrics: {
+            adx: tech.adx14,
+            atrPct: (tech.atr14 / tech.last) * 100,
+            cmf: (tech as any).cmf20,
+            rsi14: tech.rsi14,
+            volumeRatio: (tech as any).volumeRatio,
+          },
+          regimeContext: calculateRegimeContext(tech),
+        }).catch(err => console.warn('Failed to log order placement:', err));
+
+        // Persist order and position to database
+        try {
+          // Calculate fee using Binance taker fee (market order = taker)
+          const feeUsd = calculateFeeUsd({
+            price: order.avgPrice ?? entryPrice,
+            qty: order.filledQty ?? qty,
+            side,
+            liquidity: 'taker', // Market orders are taker orders
+            fees: {
+              makerFeeBps: config.feesSlippage.makerFeeBps,
+              takerFeeBps: config.feesSlippage.takerFeeBps,
+            },
+          });
+
+          await recordEnter({
+            sessionId: session.sessionId,
+            symbol: session.symbol,
+            side,
+            qty: order.filledQty ?? qty,
+            entryPrice: order.avgPrice ?? entryPrice,
+            stop: stopPrice,
+            leverage: order.leverage,
+            requestedPrice: entryPrice,
+            requestedQty: qty,
+            latencyMs: order.latencyMs,
+            slippageBps: order.slippageBps,
+            fillRatio: order.fillRatio,
+            feeUsd,
+          });
+          console.log(`[MetaOrchestrator.executeEntryTrade] Position persisted to database`);
+        } catch (err) {
+          console.error(`[MetaOrchestrator.executeEntryTrade] Failed to persist position:`, err);
+        }
+      } else {
+        // Order was rejected by broker
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'order_rejected',
+          blockedReason: (order as any).error || 'broker_rejected',
+          confidenceScore: signal.confidence,
+          inputMetrics: {
+            adx: tech.adx14,
+            atrPct: (tech.atr14 / tech.last) * 100,
+            cmf: (tech as any).cmf20,
+            rsi14: tech.rsi14,
+            volumeRatio: (tech as any).volumeRatio,
+          },
+          regimeContext: calculateRegimeContext(tech),
+        }).catch(err => console.warn('Failed to log order rejection:', err));
       }
-    } else {
-      // Order was rejected by broker
-      await logTradeEvaluation({
-        symbol: session.symbol,
-        decision: 'order_rejected',
-        blockedReason: (order as any).error || 'broker_rejected',
-        confidenceScore: signal.confidence,
-        inputMetrics: {
-          adx: tech.adx14,
-          atrPct: (tech.atr14 / tech.last) * 100,
-          cmf: (tech as any).cmf20,
-          rsi14: tech.rsi14,
-          volumeRatio: (tech as any).volumeRatio,
-        },
-        regimeContext: calculateRegimeContext(tech),
-      }).catch(err => console.warn('Failed to log order rejection:', err));
-    }
 
-    integrationLogger.success(`Entry order placed`, undefined, {
-      orderId: order.id,
-      side,
-      qty,
-      entryPrice,
-      stopPrice,
-      status: order.status,
-    });
-
-    // Update agent position state
-    const agent = AgentHub.get(session.sessionId) as any;
-    if (agent) {
-      agent.pos = {
+      integrationLogger.success(`Entry order placed`, undefined, {
+        orderId: order.id,
         side,
         qty,
-        entry: entryPrice,
-        stop: stopPrice,
-        signal,
-        openedAt: Date.now(),
-        peakPrice: entryPrice, // Initialize peak price at entry
-        initialStopDistance: stopDistance, // Store original stop distance for R-multiple calculations
-        telemetry: buildPositionTelemetry({
-          entryPrice,
-          stopDistance,
-          atrValue: atrForStops ?? null,
-        }),
-      };
-    }
+        entryPrice,
+        stopPrice,
+        status: order.status,
+      });
 
+      // Update agent position state
+      const agent = AgentHub.get(session.sessionId) as any;
+      if (agent) {
+        agent.pos = {
+          side,
+          qty,
+          entry: entryPrice,
+          stop: stopPrice,
+          signal,
+          openedAt: Date.now(),
+          peakPrice: entryPrice, // Initialize peak price at entry
+          initialStopDistance: stopDistance, // Store original stop distance for R-multiple calculations
+          telemetry: buildPositionTelemetry({
+            entryPrice,
+            stopDistance,
+            atrValue: atrForStops ?? null,
+          }),
+        };
+      }
+    } finally {
+      await releaseEntryLock(session.sessionId, 'placing_entry_order');
+    }
   } catch (error: any) {
     integrationLogger.error('Error executing entry trade', error);
     console.log(`[MetaOrchestrator.executeEntryTrade] EXCEPTION: ${error.message}`);
