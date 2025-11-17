@@ -706,12 +706,19 @@ export async function getOHLCV(
 
   const activateFallback = (reason: string, increment = false) => {
     fallbackReason = reason;
+    const syntheticReason = reason.startsWith('synthetic_');
+    const shouldRecord = !syntheticReason;
     if (!fallbackActivated) {
       fallbackActivated = true;
-      setFallbackState(symbol, true, reason, { increment: true });
-      recordRestFallback(symbol, reason);
+      setFallbackState(symbol, true, reason, { increment: shouldRecord });
+      if (shouldRecord) {
+        recordRestFallback(symbol, reason);
+      }
     } else {
-      setFallbackState(symbol, true, reason, { increment });
+      setFallbackState(symbol, true, reason, { increment: shouldRecord && increment });
+      if (shouldRecord && increment) {
+        recordRestFallback(symbol, reason);
+      }
     }
   };
 
@@ -851,6 +858,10 @@ export async function getOHLCV(
             setFallbackState(symbol, false);
             return prepared.series;
           }
+          setWarmupState(warmKey, {
+            syntheticCount: (getWarmupState(warmKey).syntheticCount ?? 0) + 1,
+            lastSyntheticAt: Date.now(),
+          });
           activateFallback('ws_synthetic_series');
         }
       }
@@ -893,6 +904,7 @@ export async function getOHLCV(
     const now = Date.now();
     const syntheticCount = warmState.syntheticCount ?? 0;
     const lastSyntheticAt = warmState.lastSyntheticAt ?? 0;
+    const allowWsRestBridge = String((cfg as any)?.BINANCE_WS_ALLOW_REST_BRIDGE ?? '').toLowerCase() === 'true';
     const configuredAttempts = Number((cfg as any)?.BINANCE_SYNTHETIC_REST_THRESHOLD);
     const maxSyntheticAttempts = Number.isFinite(configuredAttempts) && configuredAttempts >= 1
       ? configuredAttempts
@@ -909,9 +921,10 @@ export async function getOHLCV(
     const syntheticCooldownReached =
       syntheticCount > 0 && syntheticRestCooldownMs > 0 && now - lastSyntheticAt >= syntheticRestCooldownMs;
 
-    const shouldForceRest =
+    const shouldForceRest = allowWsRestBridge && (
       restDueToPolicy ||
-      (syntheticStuck && (syntheticCount >= maxSyntheticAttempts || syntheticCooldownReached));
+      (syntheticStuck && (syntheticCount >= maxSyntheticAttempts || syntheticCooldownReached))
+    );
 
     if (shouldForceRest) {
       const restReason = restDueToPolicy
@@ -926,8 +939,14 @@ export async function getOHLCV(
           force: restDueToPolicy || syntheticCount >= maxSyntheticAttempts,
         },
       );
+      if (!forcedRest) {
+        console.warn(`[getOHLCV] REST warmup request suppressed for ${symbol} ${tf}`);
+      } else {
+        console.warn(`[getOHLCV] REST warmup fetched ${forcedRest.length} rows for ${symbol} ${tf}`);
+      }
       if (forcedRest && forcedRest.length) {
         const preparedRest = prepareOhlcvSeries(forcedRest, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+        console.warn(`[getOHLCV] REST warmup prepared synthetic=${preparedRest.synthetic} len=${preparedRest.series.length} for ${symbol} ${tf}`);
         if (preparedRest.series.length) {
           maybeLogOhlcvDebug(symbol, tf, preparedRest.series);
           if (!preparedRest.synthetic) {
@@ -946,6 +965,16 @@ export async function getOHLCV(
           syntheticPrepared = preparedRest;
         }
       }
+    } else if (syntheticStuck && (syntheticCount >= maxSyntheticAttempts || syntheticCooldownReached)) {
+      const retryDelay = computeRetryDelayMs(Math.min(syntheticCount + 1, 6));
+      console.warn(`[getOHLCV] Binance WS still synthetic for ${symbol} ${tf} after ${syntheticCount} frame(s); waiting ${Math.round(retryDelay / 1000)}s for live data`);
+      scheduleWarmupRetry(warmKey, seedKey, retryDelay);
+      setWarmupState(warmKey, {
+        pending: false,
+        lastError: 'ws_synthetic_pending',
+        nextRetryTs: Date.now() + retryDelay,
+        fulfilled: false,
+      });
     }
 
     if (syntheticPrepared && syntheticPrepared.series.length && allowSyntheticFallback) {
