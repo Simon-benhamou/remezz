@@ -1061,17 +1061,24 @@ async function executeEntryTrade(
       // Update agent position state
       const agent = AgentHub.get(session.sessionId) as any;
       if (agent) {
+        // CRITICAL FIX: Use actually filled quantity, not requested quantity
+        // This prevents exit qty mismatch when entry has partial fill
+        const actualFilledQty = order.filledQty ?? qty;
+        const actualEntryPrice = order.avgPrice ?? entryPrice;
+        
+        console.log(`[MetaOrchestrator.executeEntryTrade] Setting position: qty=${actualFilledQty} (requested=${qty}, fillRatio=${order.fillRatio})`);
+        
         agent.pos = {
           side,
-          qty,
-          entry: entryPrice,
+          qty: actualFilledQty, // Use filled quantity, not requested quantity
+          entry: actualEntryPrice,
           stop: stopPrice,
           signal,
           openedAt: Date.now(),
-          peakPrice: entryPrice, // Initialize peak price at entry
+          peakPrice: actualEntryPrice, // Initialize peak price at actual entry price
           initialStopDistance: stopDistance, // Store original stop distance for R-multiple calculations
           telemetry: buildPositionTelemetry({
-            entryPrice,
+            entryPrice: actualEntryPrice,
             stopDistance,
             atrValue: atrForStops ?? null,
           }),

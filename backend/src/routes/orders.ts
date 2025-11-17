@@ -49,7 +49,8 @@ router.get("/", async (req, res) => {
     const lev = Number(o.leverage || 0) || null;
     const notionalCapUsd = (equityAlloc > 0 && lev) ? (equityAlloc * lev) : null;
     const { fills, session, ...rest } = o;
-    return { ...rest, positionSide, realizedPnlUsd, feesUsd, roePct, estLev, notionalCapUsd };
+    // Add 'amount' field as alias for qty for frontend compatibility
+    return { ...rest, amount: o.qty, positionSide, realizedPnlUsd, feesUsd, roePct, estLev, notionalCapUsd };
   });
   res.json(out);
 });
