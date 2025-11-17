@@ -74,7 +74,7 @@ function seedAgentPositionFromRecord(agent: any, sessionId: string, position: Pe
     }),
   };
 
-  console.log(`✅ [SessionRehydration] Restored runtime position for session ${sessionId}`);
+  console.info(`✅ [SessionRehydration] Restored runtime position for session ${sessionId}`);
   return true;
 }
 
@@ -104,11 +104,11 @@ export async function rehydrateActiveAgentSessions() {
   });
 
   if (activeSessions.length === 0) {
-    console.log('♻️ No active agent sessions found for rehydration.');
+    console.info('♻️ No active agent sessions found for rehydration.');
     return;
   }
 
-  console.log(`♻️ Rehydrating ${activeSessions.length} active agent session(s) from persistence...`);
+  console.info(`♻️ Rehydrating ${activeSessions.length} active agent session(s) from persistence...`);
   const failures: { id: string; reason: string }[] = [];
   const successes: string[] = [];
 
@@ -159,7 +159,7 @@ export async function rehydrateActiveAgentSessions() {
     const details = missingAfterBoot.map((session) => `${session.id} (${session.symbol})`).join(', ');
     console.error(`🚨 AgentHub mismatch after boot. Missing ${missingAfterBoot.length} session(s): ${details}`);
   } else {
-    console.log('✅ AgentHub rehydration completed. All active sessions registered.');
+    console.info('✅ AgentHub rehydration completed. All active sessions registered.');
   }
 
   if (failures.length > 0) {
@@ -171,6 +171,6 @@ export async function rehydrateActiveAgentSessions() {
   }
 
   if (successes.length) {
-    console.log(`✅ Successfully rehydrated ${successes.length} session(s): ${successes.join(', ')}`);
+    console.info(`✅ Successfully rehydrated ${successes.length} session(s): ${successes.join(', ')}`);
   }
 }

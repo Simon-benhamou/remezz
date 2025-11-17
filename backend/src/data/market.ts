@@ -175,6 +175,104 @@ function timeframeToMinutes(tf: string): number {
   return ms > 0 ? ms / 60_000 : 0;
 }
 
+type AggregatedKline = {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  count: number;
+};
+
+function aggregateFromBaseTimeframe(
+  baseSeries: number[][],
+  baseTf: string,
+  targetTf: string,
+): number[][] {
+  const targetMs = timeframeToMs(targetTf);
+  const baseMs = timeframeToMs(baseTf);
+  if (!targetMs || !baseMs || targetMs <= baseMs || targetMs % baseMs !== 0) {
+    return [];
+  }
+
+  const buckets = new Map<number, AggregatedKline>();
+  for (const row of baseSeries) {
+    if (!Array.isArray(row) || row.length < 6) continue;
+    const ts = Number(row[0]);
+    const open = Number(row[1]);
+    const high = Number(row[2]);
+    const low = Number(row[3]);
+    const close = Number(row[4]);
+    const vol = Number(row[5]);
+    if (!Number.isFinite(ts) || !Number.isFinite(open) || !Number.isFinite(high)
+      || !Number.isFinite(low) || !Number.isFinite(close)) {
+      continue;
+    }
+    const bucketStart = Math.floor(ts / targetMs) * targetMs;
+    const existing = buckets.get(bucketStart);
+    if (!existing) {
+      buckets.set(bucketStart, {
+        open,
+        high,
+        low,
+        close,
+        volume: Number.isFinite(vol) ? vol : 0,
+        count: 1,
+      });
+    } else {
+      existing.high = Number.isFinite(high) ? Math.max(existing.high, high) : existing.high;
+      existing.low = Number.isFinite(low) ? Math.min(existing.low, low) : existing.low;
+      existing.close = close;
+      if (Number.isFinite(vol)) {
+        existing.volume += vol;
+      }
+      existing.count += 1;
+    }
+  }
+
+  const aggregated = Array.from(buckets.entries())
+    .filter(([, state]) => state.count > 0)
+    .sort((a, b) => a[0] - b[0])
+    .map(([bucketStart, state]) => [
+      bucketStart,
+      state.open,
+      state.high,
+      state.low,
+      state.close,
+      Number.isFinite(state.volume) ? Number(state.volume) : 0,
+    ]);
+
+  return aggregated;
+}
+
+function buildAggregatedSeriesFromFifteenMinuteWs(
+  symbol: string,
+  targetTf: string,
+  limit: number,
+): number[][] | null {
+  const targetMinutes = timeframeToMinutes(targetTf);
+  if (!targetMinutes || targetMinutes <= 15) {
+    return null;
+  }
+
+  const ws = getBinanceWebSocket();
+  try {
+    ws.subscribeToKline(symbol, '15m');
+  } catch {}
+
+  const baseSeries = getKlinesOhlcvFromWebSocket(symbol, '15m');
+  if (!baseSeries || baseSeries.length === 0) {
+    return null;
+  }
+
+  const aggregated = aggregateFromBaseTimeframe(baseSeries, '15m', targetTf);
+  if (!aggregated.length) {
+    return null;
+  }
+
+  return aggregated.slice(-limit);
+}
+
 function shouldUseWebsocketForTimeframe(tf: string): boolean {
   const normalized = tf.trim().toLowerCase();
   switch (normalized) {
@@ -182,6 +280,14 @@ function shouldUseWebsocketForTimeframe(tf: string): boolean {
     case '3m':
     case '5m':
     case '15m':
+    case '30m':
+    case '1h':
+    case '2h':
+    case '4h':
+    case '6h':
+    case '8h':
+    case '12h':
+    case '1d':
       return true;
     default:
       return false;
@@ -836,6 +942,14 @@ export async function getOHLCV(
           lastAttempt: Date.now(),
           attempts: getWarmupState(warmKey).attempts,
         });
+      }
+
+      if ((!wsData || wsData.length < normalizedLimit)) {
+        const aggregated = buildAggregatedSeriesFromFifteenMinuteWs(symbol, tf, normalizedLimit);
+        if (aggregated && aggregated.length) {
+          wsData = aggregated;
+          seededViaRest = null;
+        }
       }
 
       if (wsData && wsData.length) {

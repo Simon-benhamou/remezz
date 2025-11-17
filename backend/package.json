@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "postinstall": "test -f prisma/schema.prisma && prisma generate || true",
-    "dev": "tsx watch src/server.ts",
-    "dev:debug": "tsx watch --inspect=9229 src/server.ts",
+    "dev": "LOG_LEVEL=info tsx watch src/server.ts",
+    "dev:debug": "LOG_LEVEL=info tsx watch --inspect=9229 src/server.ts",
     "build": "npm run prisma:gen && tsc && node ./scripts/postbuild.mjs",
     "start": "node dist/src/server.js",
     "test:unit": "node ./scripts/run-unit-tests.mjs",
