@@ -74,6 +74,8 @@ type WarmupState = {
   fulfilled?: boolean;
   nextRetryTs?: number;
   lastSuccess?: number;
+  syntheticCount?: number;
+  lastSyntheticAt?: number;
 };
 
 const ohlcvWarmupState = new Map<string, WarmupState>();
@@ -84,12 +86,14 @@ function warmupStateKey(symbol: string, tf: string): string {
 }
 
 function getWarmupState(key: string): WarmupState {
-  return ohlcvWarmupState.get(key) || { attempts: 0, pending: false };
+  return ohlcvWarmupState.get(key) || { attempts: 0, pending: false, syntheticCount: 0 };
 }
 
 function setWarmupState(key: string, patch: Partial<WarmupState> & { attempts?: number }): WarmupState {
   const current = getWarmupState(key);
   const attempts = patch.attempts != null ? patch.attempts : current.attempts;
+  const syntheticCount = patch.syntheticCount != null ? patch.syntheticCount : current.syntheticCount ?? 0;
+  const lastSyntheticAt = patch.lastSyntheticAt !== undefined ? patch.lastSyntheticAt : current.lastSyntheticAt;
   const updated: WarmupState = {
     attempts,
     lastAttempt: current.lastAttempt,
@@ -98,6 +102,8 @@ function setWarmupState(key: string, patch: Partial<WarmupState> & { attempts?: 
     fulfilled: current.fulfilled,
     nextRetryTs: current.nextRetryTs,
     lastSuccess: current.lastSuccess,
+    syntheticCount,
+    lastSyntheticAt,
     ...patch,
   };
   ohlcvWarmupState.set(key, updated);
@@ -773,6 +779,8 @@ export async function getOHLCV(
                   lastError: undefined,
                   nextRetryTs: undefined,
                   lastSuccess: Date.now(),
+                  syntheticCount: 0,
+                  lastSyntheticAt: undefined,
                 });
                 return rest;
               }
@@ -835,6 +843,8 @@ export async function getOHLCV(
               lastError: undefined,
               nextRetryTs: undefined,
               lastSuccess: Date.now(),
+              syntheticCount: 0,
+              lastSyntheticAt: undefined,
             });
           }
           if (!prepared.synthetic) {
@@ -877,9 +887,67 @@ export async function getOHLCV(
     } catch {}
   }
   // Non-Binance exchanges or forced REST path: safe to use REST
-  // BUT: If Binance and WebSocket preferred, skip REST to avoid IP ban
+  // Prefer Binance WS, but allow controlled REST fallback when WS feed stays synthetic
   if (preferBinanceWs) {
-    // WebSocket path - never fallback to REST to prevent IP ban
+    const warmState = getWarmupState(warmKey);
+    const now = Date.now();
+    const syntheticCount = warmState.syntheticCount ?? 0;
+    const lastSyntheticAt = warmState.lastSyntheticAt ?? 0;
+    const configuredAttempts = Number((cfg as any)?.BINANCE_SYNTHETIC_REST_THRESHOLD);
+    const maxSyntheticAttempts = Number.isFinite(configuredAttempts) && configuredAttempts >= 1
+      ? configuredAttempts
+      : 3;
+    const configuredCooldown = Number((cfg as any)?.BINANCE_SYNTHETIC_REST_COOLDOWN_MS);
+    const syntheticRestCooldownMs = Number.isFinite(configuredCooldown) && configuredCooldown >= 0
+      ? configuredCooldown
+      : 45_000;
+    const hasSyntheticSeries = Boolean(syntheticPrepared?.series?.length);
+    const isSyntheticSeries = Boolean(syntheticPrepared?.synthetic);
+    const wsInsufficient = !wsData || wsData.length < normalizedLimit;
+    const restDueToPolicy = !allowSyntheticFallback && (wsInsufficient || !hasSyntheticSeries);
+    const syntheticStuck = wsInsufficient || !hasSyntheticSeries || isSyntheticSeries;
+    const syntheticCooldownReached =
+      syntheticCount > 0 && syntheticRestCooldownMs > 0 && now - lastSyntheticAt >= syntheticRestCooldownMs;
+
+    const shouldForceRest =
+      restDueToPolicy ||
+      (syntheticStuck && (syntheticCount >= maxSyntheticAttempts || syntheticCooldownReached));
+
+    if (shouldForceRest) {
+      const restReason = restDueToPolicy
+        ? 'no_synthetic_allowed'
+        : `synthetic_frames=${syntheticCount}`;
+      console.warn(`[getOHLCV] Forcing REST warmup for ${symbol} ${tf} (${restReason})`);
+      const forcedRest = await scheduleBinanceRestFallback(
+        symbol,
+        () => fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials),
+        {
+          reason: 'ws_synthetic_warmup',
+          force: restDueToPolicy || syntheticCount >= maxSyntheticAttempts,
+        },
+      );
+      if (forcedRest && forcedRest.length) {
+        const preparedRest = prepareOhlcvSeries(forcedRest, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+        if (preparedRest.series.length) {
+          maybeLogOhlcvDebug(symbol, tf, preparedRest.series);
+          if (!preparedRest.synthetic) {
+            setFallbackState(symbol, false);
+            setWarmupState(warmKey, {
+              pending: false,
+              fulfilled: true,
+              lastError: undefined,
+              nextRetryTs: undefined,
+              lastSuccess: Date.now(),
+              syntheticCount: 0,
+              lastSyntheticAt: undefined,
+            });
+            return preparedRest.series;
+          }
+          syntheticPrepared = preparedRest;
+        }
+      }
+    }
+
     if (syntheticPrepared && syntheticPrepared.series.length && allowSyntheticFallback) {
       console.log(`[getOHLCV] Using synthetic data for ${symbol} ${tf} to avoid REST IP ban`);
       activateFallback('synthetic_warmup_avoid_ban', false);
@@ -887,10 +955,12 @@ export async function getOHLCV(
         pending: false,
         fulfilled: false,
         lastError: 'synthetic_warmup_avoid_ban',
+        syntheticCount: (warmState.syntheticCount ?? 0) + 1,
+        lastSyntheticAt: now,
       });
       return syntheticPrepared.series;
     }
-    // If no synthetic available, return empty and let warmup retry later
+
     console.warn(`[getOHLCV] No data available for ${symbol} ${tf}, waiting for WebSocket warmup`);
     throw new Error(`websocket_warmup_pending: ${symbol} ${tf}`);
   }
