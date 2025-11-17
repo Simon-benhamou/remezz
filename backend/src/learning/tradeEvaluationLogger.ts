@@ -65,7 +65,7 @@ export type TradeEvaluationParams = {
    * NOTE: Predictor confidence and cooldown are ANALYSIS FILTERS (filter_blocked), not execution blocks.
    * They evaluate signal quality like ADX/CMF/trend strength.
    */
-  decision: 'filter_passed' | 'filter_blocked' | 'order_placed' | 'order_blocked_capital' | 'order_blocked_sizing' | 'order_rejected';
+  decision: 'filter_passed' | 'filter_blocked' | 'order_placed' | 'order_blocked_capital' | 'order_blocked_sizing' | 'order_rejected' | 'order_blocked_rotation';
   /**
    * Reason why entry filters blocked the signal (required when decision='filter_blocked')
    * Examples: 'adx_below_trend_threshold', 'weak_trend_structure', 'confidence_too_low', 
