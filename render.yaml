@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: trading-agent-backend
+    env: node
+    region: frankfurt
+    plan: starter
+    buildCommand: cd backend && npm ci && npm run build
+    startCommand: cd backend && node dist/src/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING
+        value: 1
+      - key: DATABASE_URL
+        sync: false
+      - key: HL_API_KEY
+        sync: false
+      - key: HL_API_SECRET
+        sync: false
+    autoDeploy: true
+    
+  - type: web
+    name: trading-agent-frontend
+    env: static
+    region: frankfurt
+    plan: starter
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://trading-agent-backend.onrender.com
+    autoDeploy: true
