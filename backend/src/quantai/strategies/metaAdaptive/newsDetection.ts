@@ -110,16 +110,53 @@ If no significant news in last 6 hours, return hasNews: false.`;
       ttlMin: 5, // Cache for 5 minutes
     }) as any; // Type assertion needed since llmJSONSafe returns string | null
     
-    if (!response || typeof response !== 'object') {
-      throw new Error('Invalid Grok response');
+    // Handle null or invalid response
+    if (!response) {
+      console.warn(`[News Detection] Grok returned null for ${symbol}`);
+      return {
+        hasNews: false,
+        impact: 'neutral',
+        confidence: 0,
+        summary: 'No response from Grok',
+        reasons: [],
+      };
+    }
+    
+    // Handle string response (try to parse)
+    let parsedResponse = response;
+    if (typeof response === 'string') {
+      try {
+        parsedResponse = JSON.parse(response);
+      } catch (parseError) {
+        console.warn(`[News Detection] Failed to parse Grok string response for ${symbol}:`, response.substring(0, 100));
+        return {
+          hasNews: false,
+          impact: 'neutral',
+          confidence: 0,
+          summary: 'Invalid response format',
+          reasons: [],
+        };
+      }
+    }
+    
+    // Validate response is an object
+    if (typeof parsedResponse !== 'object') {
+      console.warn(`[News Detection] Grok response is not an object for ${symbol}:`, typeof parsedResponse);
+      return {
+        hasNews: false,
+        impact: 'neutral',
+        confidence: 0,
+        summary: 'Invalid response type',
+        reasons: [],
+      };
     }
     
     return {
-      hasNews: Boolean(response.hasNews),
-      impact: response.impact || 'neutral',
-      confidence: Number(response.confidence || 0),
-      summary: String(response.summary || 'No summary'),
-      reasons: Array.isArray(response.reasons) ? response.reasons : [],
+      hasNews: Boolean(parsedResponse.hasNews),
+      impact: parsedResponse.impact || 'neutral',
+      confidence: Number(parsedResponse.confidence || 0),
+      summary: String(parsedResponse.summary || 'No summary'),
+      reasons: Array.isArray(parsedResponse.reasons) ? parsedResponse.reasons : [],
     };
   } catch (error) {
     console.error(`[News Detection] Grok API error for ${symbol}:`, error);
