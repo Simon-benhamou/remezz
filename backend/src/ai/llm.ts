@@ -224,7 +224,12 @@ async function callGrok(prompt: string): Promise<LLMCallResult> {
     }),
     signal: controller,
   });
-  if (!r.ok) throw new Error(`Grok HTTP ${r.status}`);
+  if (!r.ok) {
+    const errorBody = await r.text().catch(() => 'Unable to read error body');
+    const errorMsg = `Grok HTTP ${r.status}: ${errorBody.substring(0, 500)}`;
+    console.error(`[llm] Grok API call failed: ${errorMsg}`);
+    throw new Error(errorMsg);
+  }
   const j = await r.json();
   const content = j?.choices?.[0]?.message?.content?.trim() || "{}";
   let inTok = 0;

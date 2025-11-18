@@ -11,6 +11,7 @@ import { getQuantAIConfig } from '../../config.js';
 import { TechnicalSnapshot } from '../../../ai/tech.js';
 import type { Diagnostics as MultiTimeframeDiagnostics } from '../../../ai/multiTimeframe.js';
 import { recordOpsEvent } from '../../../monitor/ops.js';
+import { broadcast } from '../../../ws/hub.js';
 import { updateExecutionTelemetry } from '../../../services/executionTelemetry.js';
 import type { PerpetualMetrics, OnChainMetrics, SentimentSnapshot, WatchlistMeta } from '../../../analytics/marketContext.js';
 import { classifySymbolFamily } from '../../../learning/symbolFamily.js';
@@ -1320,7 +1321,7 @@ export async function registerAdaptiveTradeEntry(params: {
           : null,
       },
     });
-    console.log(JSON.stringify({
+    const eventData = {
       level: 'info',
       event: 'adaptive_trade_blocked_by_gate',
       symbol: params.symbol,
@@ -1334,7 +1335,9 @@ export async function registerAdaptiveTradeEntry(params: {
       entryEligibilityThreshold: actualEligThreshold,
       entryReasons,
       predictorUsage,
-    }));
+    };
+    console.log(JSON.stringify(eventData));
+    broadcast('trade_blocked', eventData, params.symbol, params.sessionId ?? undefined);
     logEntryChecklist({
       sessionId: params.sessionId ?? null,
       symbol: params.symbol,

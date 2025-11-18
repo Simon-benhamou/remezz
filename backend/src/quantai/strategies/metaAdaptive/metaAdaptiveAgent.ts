@@ -36,6 +36,7 @@ import { detectFlashEvent } from './flashCrashDetection.js';
 import { detectPortfolioExposureRisk } from './portfolioExposure.js';
 import { detectSessionAwareness } from './sessionAwareness.js';
 import { detectWhaleActivity } from './whaleActivity.js';
+import { broadcast } from '../../../ws/hub.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 const pythonSignalTuning = getPythonSignalTuning();
@@ -2119,7 +2120,7 @@ class MetaAdaptiveStrategyAgent {
       whaleActivityLong.shouldWarn || whaleActivityShort.shouldWarn;
     
     if (hasSignificantEvents) {
-      console.log(JSON.stringify({
+      const eventData = {
         event: 'market_context_signals',
         symbol: input.symbol,
         sessionId: input.sessionId,
@@ -2145,7 +2146,9 @@ class MetaAdaptiveStrategyAgent {
           long: whaleActivityLong.shouldWarn ? { imbalance: whaleActivityLong.imbalanceLevel, ratio: whaleActivityLong.bidAskImbalance.toFixed(2) } : null,
           short: whaleActivityShort.shouldWarn ? { imbalance: whaleActivityShort.imbalanceLevel, ratio: whaleActivityShort.bidAskImbalance.toFixed(2) } : null,
         },
-      }));
+      };
+      console.log(JSON.stringify(eventData));
+      broadcast('detection_modules', eventData, input.symbol, input.sessionId ?? undefined);
     }
 
     // 🎯 REBOUND DETECTION: Detect potential rebounds that would invalidate shorts
@@ -2158,7 +2161,7 @@ class MetaAdaptiveStrategyAgent {
     
     // Log rebound detection for diagnostics
     if (reboundSignal.probability >= 0.4 || reversalSignal.probability >= 0.4) {
-      console.log(JSON.stringify({
+      const eventData = {
         event: 'rebound_detection',
         symbol: input.symbol,
         sessionId: input.sessionId,
@@ -2175,12 +2178,14 @@ class MetaAdaptiveStrategyAgent {
           shouldBlock: reversalSignal.shouldBlock,
         },
         squeeze: squeezeSignal,
-      }));
+      };
+      console.log(JSON.stringify(eventData));
+      broadcast('rebound_signals', eventData, input.symbol, input.sessionId ?? undefined);
     }
     
     // Log accumulation/distribution detection
     if (accumulationSignal.phase !== 'none' && accumulationSignal.confidence >= 0.5) {
-      console.log(JSON.stringify({
+      const eventData = {
         event: 'accumulation_detection',
         symbol: input.symbol,
         sessionId: input.sessionId,
@@ -2193,7 +2198,9 @@ class MetaAdaptiveStrategyAgent {
         volumeGrowthRate: accumulationSignal.details.volumeGrowthRate.toFixed(2) + '%',
         priceStability: accumulationSignal.details.priceStability.toFixed(2),
         reason: accumulationSignal.reason,
-      }));
+      };
+      console.log(JSON.stringify(eventData));
+      broadcast('accumulation_signals', eventData, input.symbol, input.sessionId ?? undefined);
     }
 
     const calibrationAdjustments = this.calibrationProfile.familyScoreAdjustments;
