@@ -15,6 +15,7 @@ import { getAllTickersFromWebSocket, adaptBinanceTickerToCcxt, toBinanceSymbolId
 import type { BinanceTickerData } from '../services/binanceWebSocket.js';
 import { isInsufficientDataError, type InsufficientDataMeta } from '../data/errors.js';
 import type { TechnicalSnapshot } from './tech.js';
+import { evaluateStrategyCompatibility, filterByStrategyCompatibility, type StrategyCompatibility } from '../quantai/strategies/metaAdaptive/cryptoSelection.js';
 
 // Cache pour éviter de rescanner trop souvent (30 min)
 const RANKING_CACHE = new Map<string, { ts: number; data: RankedOpportunity[] }>();
@@ -58,7 +59,7 @@ function buildVolumeEntry(
 export interface RankedOpportunity {
   symbol: string;
   rank: number;
-  score: number; // 0-1 (AI confidence)
+  score: number; // 0-1 (Combined: AI + Strategy Compatibility)
   volumeUsd24h: number;
   change24h: number;
   technical: {
@@ -76,6 +77,7 @@ export interface RankedOpportunity {
     confidence: number;
   };
   aiReasoning: string[];
+  strategyCompatibility?: StrategyCompatibility; // NEW: Strategy fit assessment
 }
 
 export interface VolumeFilteredCrypto {
@@ -406,6 +408,7 @@ export async function rankCryptosWithAI(
             change24h: crypto.change24h,
             price: crypto.price,
             volumeRank: crypto.volumeRank,
+            fullSnapshot: snap, // Store full snapshot for strategy compatibility
             multiTimeframe: snap.multiTimeframe ?? null,
             technical: {
               rsi: snap.rsi14,
@@ -413,6 +416,7 @@ export async function rankCryptosWithAI(
               atrPct: snap.atrPct,
               ema20: snap.ema20,
               ema50: snap.ema50,
+              ema100: snap.ema100 || snap.ema50,
               trend: snap.ema20 > snap.ema50 ? (snap.ema20 - snap.ema50) / snap.ema50 * 100 : (snap.ema20 < snap.ema50 ? (snap.ema20 - snap.ema50) / snap.ema50 * 100 : 0),
               srBias: snap.srBias,
               volume: snap.volume || 0,
@@ -652,11 +656,35 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
       } else {
         reasoning.push(`✅ HTF alignment confirmed: 4h=${bias4h}, 1h=${bias1h}`);
       }
+      
+      // 🎯 EVALUATE STRATEGY COMPATIBILITY
+      // Check if this crypto will actually work with our meta-adaptive strategy
+      const cryptoInfo: VolumeFilteredCrypto = {
+        symbol: snapshot.symbol,
+        volumeUsd24h: snapshot.volumeUsd24h,
+        change24h: snapshot.change24h,
+        price: snapshot.price,
+        volumeRank: snapshot.volumeRank,
+      };
+      
+      // Use full snapshot for compatibility check
+      const techSnapshot: TechnicalSnapshot = (snapshot as any).fullSnapshot;
+      const compatibility = evaluateStrategyCompatibility(cryptoInfo, techSnapshot);
+      
+      // Blend AI score with strategy compatibility (60% AI, 40% compatibility)
+      const finalScore = adjustedScore * 0.60 + compatibility.score * 0.40;
+      
+      // Add compatibility insights to reasoning
+      if (!compatibility.compatible) {
+        reasoning.push(`⚠️ Strategy fit: ${compatibility.score.toFixed(2)} - ${compatibility.warnings[0] || 'suboptimal conditions'}`);
+      } else if (compatibility.estimatedWinRate >= 0.55) {
+        reasoning.push(`✅ Strategy fit: ${compatibility.score.toFixed(2)} (Est. WR: ${(compatibility.estimatedWinRate * 100).toFixed(0)}%)`);
+      }
 
       return {
         symbol: opp.symbol,
         rank: index + 1,
-        score: Number(adjustedScore),
+        score: Number(finalScore.toFixed(3)),
         volumeUsd24h: snapshot.volumeUsd24h,
         change24h: snapshot.change24h,
         technical: {
@@ -674,11 +702,12 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
           timeframe: '4h',
           confidence: Number(opp.confidence || 0)
         },
-        aiReasoning: reasoning
+        aiReasoning: reasoning,
+        strategyCompatibility: compatibility,
       };
     }).filter(r => r !== null) as RankedOpportunity[];
     
-    // Re-sort after score adjustments
+    // Re-sort after score adjustments (now includes strategy compatibility)
     ranked.sort((a, b) => b.score - a.score);
     
     // Update ranks after re-sort
@@ -687,10 +716,16 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
     // Cache the results
     RANKING_CACHE.set(cacheKey, { ts: Date.now(), data: ranked });
     
-    console.log('✅ AI Ranking complete. Top 5:');
-    ranked.slice(0, 5).forEach(r => {
-      console.log(`   ${r.rank}. ${r.symbol}: Score ${r.score.toFixed(2)}, ${r.opportunity.direction} ${r.opportunity.type}`);
-      console.log(`      Reasoning: ${r.aiReasoning[0]}`);
+    console.log('✅ AI Ranking complete (with Strategy Compatibility). Top 10:');
+    ranked.slice(0, 10).forEach(r => {
+      const compat = r.strategyCompatibility;
+      console.log(`   ${r.rank}. ${r.symbol}:`);
+      console.log(`      Score: ${r.score.toFixed(2)} (AI: ${(r.score / 0.60 * 0.6).toFixed(2)}, Strategy: ${compat?.score.toFixed(2)})`);
+      console.log(`      ${r.opportunity.direction} ${r.opportunity.type}`);
+      if (compat) {
+        console.log(`      Fit: Vol:${compat.volatilityFit}, Liq:${compat.liquidityFit}, Trend:${compat.trendQuality} | Est.WR: ${(compat.estimatedWinRate * 100).toFixed(0)}%`);
+      }
+      console.log(`      ${r.aiReasoning[0]}`);
     });
     
     return ranked;
