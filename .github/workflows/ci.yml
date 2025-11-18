@@ -26,6 +26,8 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    env:
+      CYPRESS_INSTALL_BINARY: 0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
