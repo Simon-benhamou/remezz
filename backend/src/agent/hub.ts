@@ -18,6 +18,7 @@ import type {
 } from './subagents/types.js';
 import type { AgentActionIntent, AgentActionType } from './actions/types.js';
 import { buildSupportDiagnostics } from './diagnostics/supportDiagnostics.js';
+import { activateEntryLock } from '../services/sessionLocks.js';
 
 // AgentHub not used in meta-adaptive - kept for backward compatibility
 type ReboundRejectionAgent = any;
@@ -71,6 +72,28 @@ export type AgentSupportState = {
   alerts: AgentSupportAlert[];
 };
 
+const HALT_ENTRY_LOCK_TTLS: Record<'entries_only' | 'full', number> = {
+  entries_only: 10 * 60_000,
+  full: 30 * 60_000,
+};
+
+async function applyHaltEntryLock(sessionId: string, mode: 'entries_only' | 'full'): Promise<void> {
+  const reason = mode === 'entries_only' ? 'agent_halt_entries_only' : 'agent_halt_full';
+  const ttl = HALT_ENTRY_LOCK_TTLS[mode] ?? HALT_ENTRY_LOCK_TTLS.entries_only;
+  try {
+    const acquired = await activateEntryLock(sessionId, reason, ttl, {
+      requestedMode: mode,
+      source: 'AgentHub.halt',
+    });
+    if (!acquired) {
+      console.info(`[AgentHub] Entry lock already active for ${sessionId} (mode=${mode})`);
+    }
+  } catch (error) {
+    console.warn(`[AgentHub] Failed to activate entry lock for ${sessionId} (mode=${mode})`, error);
+    throw error;
+  }
+}
+
 const MAX_ALERTS = 5;
 
 const createSupportState = (): AgentSupportState => ({ alerts: [] });
@@ -121,8 +144,20 @@ export class AgentsHub {
   }
 
   async halt(sessionId: string, mode: 'entries_only' | 'full' = 'full') {
-    const a = this.agents.get(sessionId);
-    if (a) a.halt(mode);
+    const agent = this.agents.get(sessionId);
+    if (!agent) return;
+
+    const supportsNativeHalt = typeof (agent as any).halt === 'function';
+    if (supportsNativeHalt) {
+      try {
+        await (agent as any).halt(mode);
+        return;
+      } catch (error) {
+        console.warn(`[AgentHub] Agent halt failed for ${sessionId} (mode=${mode})`, error);
+      }
+    }
+
+    await applyHaltEntryLock(sessionId, mode);
   }
 
   async closeNow(sessionId: string, reason = 'external_close_now') {
