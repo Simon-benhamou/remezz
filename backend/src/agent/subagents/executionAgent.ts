@@ -1,4 +1,5 @@
 import { getExecutionTuning } from '../../services/executionTelemetry.js';
+import { getSubagentTuning } from '../../services/subagentLearning.js';
 import type {
   ExecutionAgent,
   ExecutionPlan,
@@ -33,6 +34,7 @@ export class DefaultExecutionAgent implements ExecutionAgent {
     const impactUsd = Number.isFinite(marketQuality?.impactUsd ?? NaN) ? marketQuality?.impactUsd ?? null : null;
     const sizeBucket = this.pickSizeBucket(requestedSize);
     const tuning = getExecutionTuning(symbol);
+    const learning = await getSubagentTuning('execution', symbol);
 
     // Determine core execution strategy
     const baseStrategy = this.pickStrategy({
@@ -43,21 +45,47 @@ export class DefaultExecutionAgent implements ExecutionAgent {
       tuningOverride: tuning.modeOverride ?? null,
     });
 
-    const urgency = this.pickUrgency({ sizeBucket, qualityScore, strategy: baseStrategy });
-    const minFillUsd = this.computeMinFill(requestedSize, baseStrategy);
-    const maxSlippageBps = this.computeMaxSlippage(spreadBps, qualityScore, baseStrategy);
-    const passiveOffsetBps = baseStrategy === 'market'
+    let strategy = baseStrategy;
+    const learningNotes: string[] = [];
+    if (learning?.preferredMode) {
+      strategy = learning.preferredMode;
+      learningNotes.push(`learning_strategy_${learning.preferredMode}`);
+    }
+
+    const urgency = this.pickUrgency({ sizeBucket, qualityScore, strategy });
+    const minFillUsd = this.computeMinFill(requestedSize, strategy);
+    const maxSlippageBps = this.computeMaxSlippage(spreadBps, qualityScore, strategy);
+    let passiveOffsetBps = strategy === 'market'
       ? undefined
       : this.computePassiveOffset({ qualityScore, spreadBps, tuning });
-    const fallbackDelayMs = baseStrategy === 'market'
+    let fallbackDelayMs = strategy === 'market'
       ? undefined
       : this.computeFallbackDelay({ qualityScore, spreadBps, tuning });
-    const twapSlices = baseStrategy === 'twap'
+    let twapSlices = strategy === 'twap'
       ? this.computeTwapSlices({ requestedSize, depthUsd, tuning })
       : undefined;
-    const twapIntervalMs = baseStrategy === 'twap'
+    const twapIntervalMs = strategy === 'twap'
       ? this.computeTwapInterval({ spreadBps, qualityScore, tuning })
       : undefined;
+
+    if (learning) {
+      if (strategy !== 'market' && learning.fallbackMs) {
+        fallbackDelayMs = Math.max(1200, Math.round(learning.fallbackMs));
+        learningNotes.push('learning_fallback');
+      }
+      if (strategy === 'twap' && learning.twapSliceMultiplier) {
+        twapSlices = Math.max(
+          2,
+          Math.round((twapSlices ?? 2) * this.clamp(learning.twapSliceMultiplier, 0.6, 2.5)),
+        );
+        learningNotes.push('learning_twap_slices');
+      }
+      if (passiveOffsetBps != null && learning.passiveBias != null) {
+        const bias = this.clamp(learning.passiveBias, 0, 1);
+        const scale = bias >= 0.5 ? 1 + (bias - 0.5) * 0.6 : 1 - (0.5 - bias) * 0.6;
+        passiveOffsetBps = Math.max(1, Math.round(passiveOffsetBps * scale));
+      }
+    }
 
     const notes: string[] = [];
     if (depthRatio > 1.2) notes.push('depth_ratio_gt_1.2');
@@ -69,16 +97,23 @@ export class DefaultExecutionAgent implements ExecutionAgent {
     if (tuning.modeOverride) {
       notes.push(`telemetry_${tuning.modeOverride}`);
     }
+    if (learningNotes.length) {
+      notes.push(...learningNotes);
+    }
 
-    const preferPassive = tuning.preferPassive ?? (baseStrategy === 'iceberg' || baseStrategy === 'twap');
-    const preferAggressive = tuning.preferAggressive ?? (baseStrategy === 'market' || baseStrategy === 'sweep');
+    const preferPassive = learning?.passiveBias != null
+      ? learning.passiveBias >= 0.55
+      : tuning.preferPassive ?? (strategy === 'iceberg' || strategy === 'twap');
+    const preferAggressive = learning?.passiveBias != null
+      ? learning.passiveBias <= 0.45
+      : tuning.preferAggressive ?? (strategy === 'market' || strategy === 'sweep');
 
     const plan: ExecutionPlan = {
       symbol,
       side,
       sizeUsd: Math.round(requestedSize),
       urgency,
-      strategy: baseStrategy,
+      strategy,
       minFillUsd,
       maxSlippageBps,
       meta: {
@@ -90,7 +125,11 @@ export class DefaultExecutionAgent implements ExecutionAgent {
         preferAggressive,
         depthRatio: Number.isFinite(depthRatio) ? Number(depthRatio.toFixed(2)) : undefined,
         sizeBucket,
-        tuningSource: tuning.modeOverride ? 'executionTelemetry' : undefined,
+        tuningSource: learningNotes.length
+          ? 'subagentLearning'
+          : tuning.modeOverride
+            ? 'executionTelemetry'
+            : undefined,
         notes: notes.length ? notes : undefined,
         telemetry: {
           marketQualityScore: Number(qualityScore.toFixed(2)),

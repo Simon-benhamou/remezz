@@ -3,6 +3,7 @@ import { getPredictionWithCache } from '../../quantai/predictorCache.js';
 import { isPythonPredictorAvailable } from '../../quantai/pythonPredictor.js';
 import { loadPythonTrainingMetrics } from '../../quantai/pythonSignalTuning.js';
 import { storePredictorDecisionIfChanged } from '../../quantai/predictorDecisionStore.js';
+import { getSubagentTuning } from '../../services/subagentLearning.js';
 import type { PredictorAgent, PredictorInsight } from './types.js';
 
 const METRICS_REFRESH_MS = 10 * 60_000;
@@ -57,10 +58,16 @@ export class DefaultPredictorAgent implements PredictorAgent {
       return this.buildDisabledInsight(symbol, 'predictor_features_unavailable');
     }
 
+    const learning = await getSubagentTuning('predictor', symbol);
+    const ttlMultiplier = learning ? this.clamp(learning.cacheTtlMultiplier, 0.35, 1.5) : 1;
+    const ttlMs = Math.round(this.cacheTtlMs * ttlMultiplier);
+    const forceFresh =
+      process.env.META_ADAPTIVE_PREDICTOR_FORCE_FRESH === 'true' || Boolean(learning?.forceFresh);
+
     try {
       const prediction = await getPredictionWithCache(symbol, features, {
-        ttlMs: this.cacheTtlMs,
-        forceFresh: process.env.META_ADAPTIVE_PREDICTOR_FORCE_FRESH === 'true',
+        ttlMs,
+        forceFresh,
       });
 
       const bias: PredictorInsight['bias'] =
@@ -69,6 +76,10 @@ export class DefaultPredictorAgent implements PredictorAgent {
           : prediction.decision === 'short'
             ? 'short'
             : 'neutral';
+      const learningConfidence = learning ? this.clamp(learning.confidenceModifier, 0.5, 1.5) : 1;
+      const adjustedConfidence = Number(
+        this.clamp(prediction.confidence * learningConfidence, 0, 1).toFixed(3),
+      );
 
       const lastPrice = Number(snapshot.last ?? 0);
       void storePredictorDecisionIfChanged({
@@ -88,7 +99,7 @@ export class DefaultPredictorAgent implements PredictorAgent {
         symbol,
         enabled: true,
         bias,
-        confidence: Number(prediction.confidence.toFixed(3)),
+        confidence: adjustedConfidence,
         lastRetrainedAt: this.getLastRetrainedTimestamp(),
         details: {
           decision: prediction.decision,
@@ -100,6 +111,9 @@ export class DefaultPredictorAgent implements PredictorAgent {
           featuresCount: Object.keys(features).length,
           classOrder: prediction.classOrder ?? null,
           meta: prediction.meta ?? null,
+          learningAction: learning?.action,
+          learningReason: learning?.reason,
+          learningForceFresh: forceFresh || undefined,
         },
       };
     } catch (error) {
@@ -126,6 +140,15 @@ export class DefaultPredictorAgent implements PredictorAgent {
     }
 
     return this.cachedRetrainTimestamp;
+  }
+
+  private clamp(value: number, min: number, max: number): number {
+    if (!Number.isFinite(value)) {
+      return min;
+    }
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
   }
 
   private buildDisabledInsight(symbol: string, reason: string, error?: unknown): PredictorInsight {

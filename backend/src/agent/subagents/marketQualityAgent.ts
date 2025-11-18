@@ -1,9 +1,11 @@
 import { getTicker } from '../../data/market.js';
 import { fetchDepth, type DepthSnapshot } from '../../data/depth.js';
+import { getSubagentTuning, type MarketQualityLearningRecommendation } from '../../services/subagentLearning.js';
 import type { MarketQualityAgent, MarketQualityScore } from './types.js';
 
 const DEFAULT_TARGET_NOTIONAL_USD = 50_000;
 const DEFAULT_CACHE_TTL = 20_000;
+const DEFAULT_MAX_SPREAD = 16;
 const MIN_DEPTH_LEVELS = 10;
 
 type CacheEntry = {
@@ -26,6 +28,8 @@ export class DefaultMarketQualityAgent implements MarketQualityAgent {
       return cached.score;
     }
 
+    const learning = await getSubagentTuning('market_quality', symbol);
+
     const [ticker, depth] = await Promise.all([
       getTicker(symbol).catch((error) => {
         console.warn('[MarketQualityAgent] ticker failed', { symbol, error });
@@ -37,17 +41,38 @@ export class DefaultMarketQualityAgent implements MarketQualityAgent {
       }),
     ]);
 
-    const score = this.buildScore(symbol, ticker, depth);
-    this.cache.set(key, { score, expires: Date.now() + this.cacheTtlMs });
+    const score = this.buildScore(symbol, ticker, depth, {
+      targetNotionalUsd: learning?.liquidityFloorUsd,
+      spreadCeilBps: learning?.spreadCeilBps,
+      learning,
+    });
+    const ttlMs = Math.max(5_000, Math.round(this.cacheTtlMs * (learning?.confidence ?? 1)));
+    this.cache.set(key, { score, expires: Date.now() + ttlMs });
     return score;
   }
 
-  private buildScore(symbol: string, ticker: any, depth: DepthSnapshot | null): MarketQualityScore {
+  private buildScore(
+    symbol: string,
+    ticker: any,
+    depth: DepthSnapshot | null,
+    opts?: {
+      targetNotionalUsd?: number | null;
+      spreadCeilBps?: number | null;
+      learning?: MarketQualityLearningRecommendation | null;
+    },
+  ): MarketQualityScore {
     const midPrice = this.computeMidPrice(ticker);
-    const spreadBps = this.computeSpreadBps(ticker, midPrice);
+    const targetNotional = opts?.targetNotionalUsd && opts.targetNotionalUsd > 0
+      ? opts.targetNotionalUsd
+      : this.targetNotionalUsd;
+    const rawSpreadBps = this.computeSpreadBps(ticker, midPrice);
+    const spreadCap = opts?.spreadCeilBps && opts.spreadCeilBps > 0
+      ? opts.spreadCeilBps
+      : DEFAULT_MAX_SPREAD;
+    const spreadBps = Math.min(rawSpreadBps, spreadCap);
     const bookDepthUsd = this.computeBookDepth(depth, midPrice);
-    const impactUsd = this.computeImpactUsd(depth, midPrice);
-    const score = this.computeScore(spreadBps, bookDepthUsd, impactUsd);
+    const impactUsd = this.computeImpactUsd(depth, midPrice, targetNotional);
+    const score = this.computeScore(spreadBps, bookDepthUsd, impactUsd, targetNotional);
     return {
       symbol,
       spreadBps,
@@ -55,6 +80,14 @@ export class DefaultMarketQualityAgent implements MarketQualityAgent {
       impactUsd,
       score,
       timestamp: Date.now(),
+      tuning: opts?.learning
+        ? {
+            minScore: opts.learning.minScore,
+            liquidityFloorUsd: opts.learning.liquidityFloorUsd,
+            spreadCeilBps: opts.learning.spreadCeilBps,
+            confidence: opts.learning.confidence,
+          }
+        : undefined,
     };
   }
 
@@ -94,13 +127,14 @@ export class DefaultMarketQualityAgent implements MarketQualityAgent {
     return Number(Math.max(10_000, effectiveDepth).toFixed(0));
   }
 
-  private computeImpactUsd(depth: DepthSnapshot | null, midPrice: number): number {
+  private computeImpactUsd(depth: DepthSnapshot | null, midPrice: number, targetNotionalUsd: number): number {
     if (!depth || !(midPrice > 0)) {
       return 750;
     }
-    const buyImpact = this.simulateImpact(depth.asks, midPrice, this.targetNotionalUsd, 'buy');
-    const sellImpact = this.simulateImpact(depth.bids, midPrice, this.targetNotionalUsd, 'sell');
-    const fallbackImpact = this.targetNotionalUsd * 0.02;
+    const target = Math.max(10_000, targetNotionalUsd);
+    const buyImpact = this.simulateImpact(depth.asks, midPrice, target, 'buy');
+    const sellImpact = this.simulateImpact(depth.bids, midPrice, target, 'sell');
+    const fallbackImpact = target * 0.02;
     const worstImpact = Math.max(buyImpact ?? fallbackImpact, sellImpact ?? fallbackImpact);
     if (!Number.isFinite(worstImpact)) {
       return fallbackImpact;
@@ -143,10 +177,11 @@ export class DefaultMarketQualityAgent implements MarketQualityAgent {
     return impactUsd;
   }
 
-  private computeScore(spreadBps: number, depthUsd: number, impactUsd: number): number {
+  private computeScore(spreadBps: number, depthUsd: number, impactUsd: number, targetNotionalUsd: number): number {
+    const target = Math.max(10_000, targetNotionalUsd);
     const spreadScore = this.clamp(1 - spreadBps / 25);
-    const depthScore = this.clamp(depthUsd / (this.targetNotionalUsd * 6));
-    const impactScore = this.clamp(1 - impactUsd / (this.targetNotionalUsd * 0.01));
+    const depthScore = this.clamp(depthUsd / (target * 6));
+    const impactScore = this.clamp(1 - impactUsd / (target * 0.01));
     const blended = (spreadScore * 0.35) + (depthScore * 0.4) + (impactScore * 0.25);
     return Number(blended.toFixed(2));
   }

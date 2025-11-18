@@ -65,6 +65,7 @@ import { startAgentActionLoop } from "./agent/actions/index.js";
 import { startOpsJobsHeartbeat } from "./monitor/opsJobs.js";
 import { startAgentPerformanceLedgerLoop } from "./services/performanceLedger.js";
 import { startSelectorAgentLoop } from "./services/selectorAgent.js";
+import { startSubagentLearningLoop } from "./services/subagentLearning.js";
 
 const logLevel = configureLogging();
 const serverLogger = createLogger("server");
@@ -222,6 +223,7 @@ startAgentActionLoop();
 startOpsJobsHeartbeat();
 startAgentPerformanceLedgerLoop();
 startSelectorAgentLoop();
+startSubagentLearningLoop();
 
 // 🚀 Start state reconciliation for all active live sessions
 (async () => {

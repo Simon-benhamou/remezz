@@ -5,6 +5,12 @@ export type MarketQualityScore = {
   impactUsd: number;
   score: number;
   timestamp: number;
+  tuning?: {
+    minScore?: number;
+    liquidityFloorUsd?: number;
+    spreadCeilBps?: number;
+    confidence?: number;
+  };
 };
 
 export interface MarketQualityAgent {

@@ -10,6 +10,7 @@ import {
   getRetrainingStatus 
 } from '../learning/predictorRetrainer.js';
 import { getSelectorSnapshot, refreshSelectorSnapshot } from '../services/selectorAgent.js';
+import { getSubagentLearningSnapshot, refreshSubagentLearning } from '../services/subagentLearning.js';
 
 export const router = Router();
 
@@ -109,6 +110,40 @@ router.get('/selector', async (req: AuthenticatedRequest, res) => {
     res.status(500).json({
       ok: false,
       code: 'selector_snapshot_failed',
+      message: String(error?.message || error),
+    });
+  }
+});
+
+router.get('/subagent-learning', async (req: AuthenticatedRequest, res) => {
+  try {
+    const force = req.query.force === 'true';
+    const cached = getSubagentLearningSnapshot();
+    const snapshot = !force && cached
+      ? cached
+      : await refreshSubagentLearning(force ? 'ops_force' : 'ops_rest');
+    res.json({
+      ok: true,
+      snapshot,
+      fromCache: !force && Boolean(cached),
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      code: 'subagent_learning_failed',
+      message: String(error?.message || error),
+    });
+  }
+});
+
+router.post('/subagent-learning/refresh', requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+  try {
+    const snapshot = await refreshSubagentLearning('ops_manual');
+    res.json({ ok: true, snapshot, reason: 'manual' });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      code: 'subagent_learning_refresh_failed',
       message: String(error?.message || error),
     });
   }

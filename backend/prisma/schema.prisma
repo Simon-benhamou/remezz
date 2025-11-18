@@ -543,3 +543,21 @@ model AgentPerformanceLedger {
   @@index([sessionId, windowMinutes, bucketStart])
   @@unique([sessionId, symbol, mode, regime, windowMinutes, bucketStart], name: "agent_performance_window_unique")
 }
+
+model SubagentLearningState {
+  id          String   @id @default(cuid())
+  subagent    String
+  symbol      String
+  mode        String?
+  regime      String?
+  score       Float?
+  sampleCount Int      @default(0)
+  metrics     Json?
+  tuning      Json?
+  reason      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([subagent, symbol, mode, regime], name: "subagent_learning_unique")
+  @@index([symbol, subagent])
+}

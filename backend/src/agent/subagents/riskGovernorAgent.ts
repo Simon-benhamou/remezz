@@ -2,6 +2,7 @@ import { prisma } from '../../db/client.js';
 import { getCapitalManager } from '../../services/capitalPool.js';
 import { capitalConfig } from '../../config/capital.js';
 import { getConfig } from '../../utils/env.js';
+import { getSubagentTuning } from '../../services/subagentLearning.js';
 import type { RiskGovernorAgent, RiskLimits } from './types.js';
 
 const envConfig = getConfig();
@@ -80,6 +81,7 @@ export class DefaultRiskGovernorAgent implements RiskGovernorAgent {
     const startBalance = Number(session.startBalanceUsd ?? 0) || 0;
     const inferredEquity = Math.max(0, startBalance + realizedPnl + unrealizedPnl);
     const profile = ((session.profileJson ?? {}) as Record<string, unknown>) || {};
+    const regime = typeof profile?.regime === 'string' ? (profile.regime as string) : undefined;
 
     const profileMaxPositionUsd = (() => {
       const candidates = [
@@ -167,7 +169,24 @@ export class DefaultRiskGovernorAgent implements RiskGovernorAgent {
     const maxPositionCandidate = constraintValues.length
       ? Math.min(...constraintValues)
       : adjustedSessionCap;
-    const maxPositionUsd = Math.max(0, maxPositionCandidate);
+    let maxPositionUsd = Math.max(0, maxPositionCandidate);
+    let tunedMaxLeverage = maxLeverage;
+
+    const learning = await getSubagentTuning('risk_governor', symbol, {
+      mode: session.mode ?? 'paper',
+      regime,
+    });
+
+    if (learning) {
+      tunedMaxLeverage = clampNumber(
+        Math.min(maxLeverage, learning.recommendedMaxLeverage),
+        1,
+        Math.max(1, profileMaxLeverage),
+      );
+      const equityBasis = inferredEquity || startBalance || this.minPositionUsd;
+      const learningCap = Math.max(this.minPositionUsd, equityBasis * learning.recommendedMaxPositionPct);
+      maxPositionUsd = Math.min(maxPositionUsd, Math.round(learningCap));
+    }
 
     const sessionExposureUsd = positions.reduce(
       (acc, pos) => acc + sumNotional(pos.qty, pos.entryPrice),
@@ -216,10 +235,20 @@ export class DefaultRiskGovernorAgent implements RiskGovernorAgent {
     if (maxPositionUsd < this.minPositionUsd * 0.5 && sessionExposureUsd > 0) {
       hedgingReasons.push('budget_exhausted');
     }
+    if (learning) {
+      if (learning.hedgingTension > 0.65 && sessionExposureUsd > 0) {
+        hedgingReasons.push('learning_high_tension');
+      } else if (learning.hedgingTension > 0.4 && sessionExposureUsd > maxPositionUsd * 0.6) {
+        hedgingReasons.push('learning_tension_watch');
+      }
+      if (learning.confidence < 0.35) {
+        hedgingReasons.push('learning_low_confidence');
+      }
+    }
 
     return {
       sessionId,
-      maxLeverage: Number(maxLeverage.toFixed(2)),
+      maxLeverage: Number(tunedMaxLeverage.toFixed(2)),
       maxPositionUsd: Math.max(0, Math.round(maxPositionUsd)),
       clusterExposureUsd: Math.max(0, Math.round(clusterExposureCap)),
       hedgingRequired: hedgingReasons.length > 0,

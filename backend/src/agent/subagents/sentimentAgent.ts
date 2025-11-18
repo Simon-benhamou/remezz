@@ -1,5 +1,6 @@
 import { getHybridSentiment, type HybridSentiment } from '../../sentiment/index.js';
 import { detectWhaleActivity, type WhaleActivitySignal } from '../../quantai/strategies/metaAdaptive/whaleActivity.js';
+import { getSubagentTuning, type SentimentLearningRecommendation } from '../../services/subagentLearning.js';
 import type { SentimentAgent, SentimentSignal } from './types.js';
 
 const DEFAULT_CACHE_TTL_MS = 45_000;
@@ -28,6 +29,8 @@ export class DefaultSentimentAgent implements SentimentAgent {
       return cached.signal;
     }
 
+    const learning = await getSubagentTuning('sentiment', symbol);
+
     const [hybrid, whaleActivity] = await Promise.all([
       getHybridSentiment(symbol).catch((error) => {
         console.warn('[SentimentAgent] hybrid sentiment failed', { symbol, error });
@@ -39,8 +42,9 @@ export class DefaultSentimentAgent implements SentimentAgent {
       }),
     ]);
 
-    const signal = this.composeSignal(symbol, hybrid, whaleActivity);
-    this.cache.set(key, { signal, expires: Date.now() + this.ttlMs });
+    const signal = this.composeSignal(symbol, hybrid, whaleActivity, learning ?? null);
+    const ttlMs = Math.max(10_000, learning?.cooldownMs ?? this.ttlMs);
+    this.cache.set(key, { signal, expires: Date.now() + ttlMs });
     return signal;
   }
 
@@ -48,13 +52,14 @@ export class DefaultSentimentAgent implements SentimentAgent {
     symbol: string,
     hybrid: HybridSentiment | null,
     whale: WhaleActivitySignal | null,
+    learning: SentimentLearningRecommendation | null,
   ): SentimentSignal {
     const bias = this.deriveBias(hybrid, whale);
-    const confidence = this.deriveConfidence(hybrid, whale);
+    const confidence = this.deriveConfidence(hybrid, whale, learning);
     const signal: SentimentSignal = {
       symbol,
       whaleActivity: this.deriveWhaleActivity(whale),
-      newsHeat: this.deriveNewsHeat(hybrid),
+      newsHeat: this.deriveNewsHeat(hybrid, learning),
       bias,
       confidence,
       timestamp: Date.now(),
@@ -79,12 +84,17 @@ export class DefaultSentimentAgent implements SentimentAgent {
     return 'neutral';
   }
 
-  private deriveConfidence(hybrid: HybridSentiment | null, whale: WhaleActivitySignal | null): number {
+  private deriveConfidence(
+    hybrid: HybridSentiment | null,
+    whale: WhaleActivitySignal | null,
+    learning: SentimentLearningRecommendation | null,
+  ): number {
     const sentimentComponent = hybrid
       ? Math.max(0.2, Math.min(1, hybrid.confidence ?? Math.abs(hybrid.score - 0.5) * 2))
       : 0.35;
     const whaleComponent = whale ? SEVERITY_WEIGHT[whale.severity] : 0.3;
-    const combined = (sentimentComponent * 0.7) + (whaleComponent * 0.3);
+    const signalWeight = learning ? this.clamp(learning.signalWeight) : 0.7;
+    const combined = (sentimentComponent * signalWeight) + (whaleComponent * (1 - signalWeight));
     return Number(this.clamp(combined).toFixed(3));
   }
 
@@ -106,7 +116,10 @@ export class DefaultSentimentAgent implements SentimentAgent {
     return Number(this.clamp(normalized).toFixed(3));
   }
 
-  private deriveNewsHeat(hybrid: HybridSentiment | null): number {
+  private deriveNewsHeat(
+    hybrid: HybridSentiment | null,
+    learning: SentimentLearningRecommendation | null,
+  ): number {
     if (!hybrid) {
       return 0.3;
     }
@@ -115,8 +128,9 @@ export class DefaultSentimentAgent implements SentimentAgent {
     const keywordScore = Array.isArray(hybrid.keywords) && hybrid.keywords.length
       ? Math.min(1, hybrid.keywords.length / 6)
       : 0.25;
+    const weight = learning ? this.clamp(learning.newsHeatWeight) : 1;
     const newsHeat = (mentions * 0.5) + (velocity * 0.3) + (keywordScore * 0.2);
-    return Number(this.clamp(newsHeat).toFixed(3));
+    return Number(this.clamp(newsHeat * weight).toFixed(3));
   }
 
   private normalizeMentions(value?: number | null): number {
