@@ -29,6 +29,7 @@ import {
 } from '../../../learning/personalityProfile.js';
 import { detectReboundForShort, detectReversalForLong, detectVolatilitySqueeze } from './reboundDetection.js';
 import { detectBTCCorrelationImpact } from './btcCorrelation.js';
+import { detectAccumulationPattern, getAccumulationSignalForBias } from './accumulationDetection.js';
 import { detectNewsImpact } from './newsDetection.js';
 import { detectFundingRateImpact } from './fundingRateDetection.js';
 import { detectFlashEvent } from './flashCrashDetection.js';
@@ -2152,6 +2153,9 @@ class MetaAdaptiveStrategyAgent {
     const reversalSignal = detectReversalForLong(snap);
     const squeezeSignal = detectVolatilitySqueeze(snap);
     
+    // 📊 ACCUMULATION/DISTRIBUTION DETECTION: Detect progressive volume patterns
+    const accumulationSignal = detectAccumulationPattern(input.symbol, snap);
+    
     // Log rebound detection for diagnostics
     if (reboundSignal.probability >= 0.4 || reversalSignal.probability >= 0.4) {
       console.log(JSON.stringify({
@@ -2171,6 +2175,24 @@ class MetaAdaptiveStrategyAgent {
           shouldBlock: reversalSignal.shouldBlock,
         },
         squeeze: squeezeSignal,
+      }));
+    }
+    
+    // Log accumulation/distribution detection
+    if (accumulationSignal.phase !== 'none' && accumulationSignal.confidence >= 0.5) {
+      console.log(JSON.stringify({
+        event: 'accumulation_detection',
+        symbol: input.symbol,
+        sessionId: input.sessionId,
+        phase: accumulationSignal.phase,
+        confidence: accumulationSignal.confidence,
+        volumeTrend: accumulationSignal.volumeTrend.toFixed(2),
+        silentAccumulation: accumulationSignal.silentAccumulation,
+        breakoutLikelihood: accumulationSignal.breakoutLikelihood.toFixed(2),
+        consecutiveVolumeIncrease: accumulationSignal.details.consecutiveVolumeIncrease,
+        volumeGrowthRate: accumulationSignal.details.volumeGrowthRate.toFixed(2) + '%',
+        priceStability: accumulationSignal.details.priceStability.toFixed(2),
+        reason: accumulationSignal.reason,
       }));
     }
 
@@ -2418,6 +2440,44 @@ class MetaAdaptiveStrategyAgent {
       } else if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'moderate') {
         effectiveScore *= 0.7;
         penaltiesApplied.push('vol_squeeze');
+      }
+      
+      // 📊 ACCUMULATION/DISTRIBUTION GATE
+      // Detect smart money behavior BEFORE price moves
+      if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        const accSignal = getAccumulationSignalForBias(input.symbol, snap, 'long');
+        
+        if (accSignal.shouldBoost && accSignal.penalty > 1.0) {
+          // Accumulation detected → BOOST longs (smart money buying)
+          effectiveScore = Math.min(1, effectiveScore * accSignal.penalty);
+          reasonsAugmented.push(`accumulation_boost(${accSignal.phase})`);
+          reasonsAugmented.push(accSignal.reason);
+          
+          // Extra boost for breakout/momentum strategies during accumulation
+          if ((item.family === 'breakout' || item.family === 'momentum') && accumulationSignal.breakoutLikelihood > 0.7) {
+            effectiveScore = Math.min(1, effectiveScore * 1.1);
+            reasonsAugmented.push(`pre_breakout_setup(likelihood:${accumulationSignal.breakoutLikelihood.toFixed(2)})`);
+          }
+        } else if (accSignal.penalty < 1.0) {
+          // Distribution/markdown → Penalize longs
+          effectiveScore *= accSignal.penalty;
+          penaltiesApplied.push(`${accSignal.phase}_detected`);
+          reasonsAugmented.push(accSignal.reason);
+        }
+      } else if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        const accSignal = getAccumulationSignalForBias(input.symbol, snap, 'short');
+        
+        if (accSignal.shouldBoost && accSignal.penalty > 1.0) {
+          // Distribution detected → BOOST shorts (smart money selling)
+          effectiveScore = Math.min(1, effectiveScore * accSignal.penalty);
+          reasonsAugmented.push(`distribution_boost(${accSignal.phase})`);
+          reasonsAugmented.push(accSignal.reason);
+        } else if (accSignal.penalty < 1.0) {
+          // Accumulation/markup → Penalize shorts
+          effectiveScore *= accSignal.penalty;
+          penaltiesApplied.push(`${accSignal.phase}_detected`);
+          reasonsAugmented.push(accSignal.reason);
+        }
       }
 
       if (context.conflict && item.family !== 'mean_reversion') {
