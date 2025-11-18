@@ -14,9 +14,10 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { Activity, Brain, RefreshCcw, TrendingDown, TrendingUp } from 'lucide-react';
-import { useSelectorInsights } from '../hooks/useSelectorInsights';
+import { Activity, Brain, Cpu, Globe, MessageCircle, RefreshCcw, Shield, TrendingDown, TrendingUp, Zap } from 'lucide-react';
+import { useSelectorInsights, useSubagentLearningInsights } from '../hooks/useSelectorInsights';
 import type { SelectorDecision } from '../types/selector';
+import type { SubagentLearningRecord } from '../types/subagentLearning';
 import { formatDisplaySymbol } from '../utils/symbols';
 
 const { Title, Text } = Typography;
@@ -43,6 +44,16 @@ function formatUsd(value: number, digits = 0) {
 function formatPercent(value: number, digits = 1) {
   if (!Number.isFinite(value)) return '0%';
   return `${value.toFixed(digits)}%`;
+}
+
+function formatLatency(value: number | null | undefined) {
+  if (!Number.isFinite(value ?? Number.NaN)) return '—';
+  return `${Math.round(value ?? 0)} ms`;
+}
+
+function formatBps(value: number | null | undefined) {
+  if (!Number.isFinite(value ?? Number.NaN)) return '—';
+  return `${(value ?? 0).toFixed(1)} bps`;
 }
 
 type DecisionPanelProps = {
@@ -140,9 +151,163 @@ const DecisionRow: React.FC<DecisionRowProps> = ({ decision, accent, variant = '
   );
 };
 
+type GenericSubagentRecord = SubagentLearningRecord;
+
+type SubagentPanelProps = {
+  title: string;
+  accent: string;
+  icon?: React.ReactNode;
+  records: GenericSubagentRecord[];
+  emptyLabel: string;
+  renderTuning: (record: GenericSubagentRecord) => React.ReactNode;
+};
+
+const SubagentPanel: React.FC<SubagentPanelProps> = ({ title, accent, icon, records, emptyLabel, renderTuning }) => {
+  const { token } = theme.useToken();
+  const topRecords = records
+    .slice()
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+  return (
+    <Card
+      style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}`, height: '100%' }}
+      bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+      title={(
+        <Space size={8} align='center'>
+          {icon}
+          <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{title}</span>
+        </Space>
+      )}
+      extra={<Tag color={accent} style={{ borderRadius: 12 }}>{records.length}</Tag>}
+    >
+      {records.length === 0 ? (
+        <Empty description={emptyLabel} style={{ color: 'rgba(148,163,184,0.7)' }} />
+      ) : (
+        topRecords.map((record) => (
+          <div
+            key={`${record.subagent}-${record.symbol}-${record.mode}`}
+            style={{
+              borderRadius: 14,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              padding: 14,
+              background: 'rgba(15,23,42,0.6)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <Space size={8} wrap>
+              <Tag color={accent} style={{ borderRadius: 10 }}>{formatDisplaySymbol(record.symbol)}</Tag>
+              <Tag color='default'>{record.mode}</Tag>
+              <Tag color='purple'>{record.regime}</Tag>
+              <Tag color='default'>Trades {record.metrics.tradeCount}</Tag>
+              <Tag color='default'>Score {record.score.toFixed(2)}</Tag>
+            </Space>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+              <Statistic
+                title='Net PnL'
+                value={formatUsd(record.metrics.netPnlUsd)}
+                valueStyle={{ color: record.metrics.netPnlUsd >= 0 ? '#34d399' : '#f87171', fontSize: 16 }}
+              />
+              <Statistic
+                title='Win rate'
+                value={formatPercent(record.metrics.winRate * 100)}
+                valueStyle={{ color: record.metrics.winRate >= 0.5 ? '#34d399' : '#fbbf24', fontSize: 16 }}
+              />
+              <Statistic title='Latency' value={formatLatency(record.metrics.avgLatencyMs)} valueStyle={{ color: '#e2e8f0', fontSize: 16 }} />
+              <Statistic title='Slippage' value={formatBps(record.metrics.avgSlippageBps)} valueStyle={{ color: '#e2e8f0', fontSize: 16 }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Space size={6} wrap>
+                {renderTuning(record)}
+              </Space>
+              {record.reason && (
+                <Text style={{ color: 'rgba(148,163,184,0.8)', fontSize: 12 }}>Reason: {record.reason}</Text>
+              )}
+            </div>
+          </div>
+        ))
+      )}
+    </Card>
+  );
+};
+
+function renderRiskTuning(record: SubagentLearningRecord<'risk_governor'>) {
+  const tuning = record.tuning;
+  return (
+    <>
+      <Tag color='red' style={{ borderRadius: 10 }}>Max lev {tuning.recommendedMaxLeverage.toFixed(2)}x</Tag>
+      <Tag color='red' style={{ borderRadius: 10 }}>Pos {(tuning.recommendedMaxPositionPct * 100).toFixed(1)}%</Tag>
+      <Tag color='geekblue' style={{ borderRadius: 10 }}>Hedge {(tuning.hedgingTension * 100).toFixed(0)}%</Tag>
+      <Tag color='default' style={{ borderRadius: 10 }}>Confidence {(tuning.confidence * 100).toFixed(0)}%</Tag>
+    </>
+  );
+}
+
+function renderExecutionTuning(record: SubagentLearningRecord<'execution'>) {
+  const tuning = record.tuning;
+  return (
+    <>
+      {tuning.preferredMode && <Tag color='cyan' style={{ borderRadius: 10 }}>{tuning.preferredMode.toUpperCase()} mode</Tag>}
+      <Tag color='cyan' style={{ borderRadius: 10 }}>Passive {(tuning.passiveBias ?? 0).toFixed(2)}</Tag>
+      {tuning.fallbackMs && <Tag color='cyan' style={{ borderRadius: 10 }}>Fallback {Math.round(tuning.fallbackMs)} ms</Tag>}
+      <Tag color='cyan' style={{ borderRadius: 10 }}>TWAP x{(tuning.twapSliceMultiplier ?? 1).toFixed(2)}</Tag>
+      <Tag color='default' style={{ borderRadius: 10 }}>Confidence {(tuning.confidence * 100).toFixed(0)}%</Tag>
+    </>
+  );
+}
+
+function renderPredictorTuning(record: SubagentLearningRecord<'predictor'>) {
+  const tuning = record.tuning;
+  const actionColor = tuning.action === 'retrain' ? 'red' : tuning.action === 'monitor' ? 'gold' : 'green';
+  return (
+    <>
+      <Tag color={actionColor} style={{ borderRadius: 10 }}>Action {tuning.action}</Tag>
+      <Tag color='geekblue' style={{ borderRadius: 10 }}>Confidence x{tuning.confidenceModifier.toFixed(2)}</Tag>
+      <Tag color='geekblue' style={{ borderRadius: 10 }}>Cache {(tuning.cacheTtlMultiplier * 100).toFixed(0)}%</Tag>
+      <Tag color='default' style={{ borderRadius: 10 }}>{tuning.forceFresh ? 'Force fresh' : 'Cache ok'}</Tag>
+    </>
+  );
+}
+
+function renderSentimentTuning(record: SubagentLearningRecord<'sentiment'>) {
+  const tuning = record.tuning;
+  return (
+    <>
+      <Tag color='purple' style={{ borderRadius: 10 }}>Weight {(tuning.signalWeight * 100).toFixed(0)}%</Tag>
+      <Tag color='purple' style={{ borderRadius: 10 }}>Cooldown {Math.round(tuning.cooldownMs / 1000)}s</Tag>
+      <Tag color='purple' style={{ borderRadius: 10 }}>News {(tuning.newsHeatWeight * 100).toFixed(0)}%</Tag>
+      <Tag color='default' style={{ borderRadius: 10 }}>Confidence {(tuning.confidence * 100).toFixed(0)}%</Tag>
+    </>
+  );
+}
+
+function renderMarketQualityTuning(record: SubagentLearningRecord<'market_quality'>) {
+  const tuning = record.tuning;
+  return (
+    <>
+      <Tag color='blue' style={{ borderRadius: 10 }}>Score ≥ {tuning.minScore.toFixed(2)}</Tag>
+      <Tag color='blue' style={{ borderRadius: 10 }}>Liquidity ≥ ${tuning.liquidityFloorUsd.toLocaleString()}</Tag>
+      <Tag color='blue' style={{ borderRadius: 10 }}>Spread ≤ {tuning.spreadCeilBps} bps</Tag>
+      <Tag color='default' style={{ borderRadius: 10 }}>Confidence {(tuning.confidence * 100).toFixed(0)}%</Tag>
+    </>
+  );
+}
+
 const LearningInsightsPage: React.FC = () => {
   const { snapshot, loading, error, lastUpdated, lastReason, refresh } = useSelectorInsights({
     refreshIntervalMs: 60_000,
+    enableLive: true,
+  });
+  const {
+    snapshot: subagentSnapshot,
+    loading: subagentLoading,
+    error: subagentError,
+    lastUpdated: subagentUpdated,
+    lastReason: subagentReason,
+    refresh: refreshSubagents,
+  } = useSubagentLearningInsights({
+    refreshIntervalMs: 120_000,
     enableLive: true,
   });
   const { token } = theme.useToken();
@@ -192,6 +357,52 @@ const LearningInsightsPage: React.FC = () => {
     },
   ];
 
+  const riskRecords = subagentSnapshot?.data.risk ?? [];
+  const executionRecords = subagentSnapshot?.data.execution ?? [];
+  const predictorRecords = subagentSnapshot?.data.predictor ?? [];
+  const sentimentRecords = subagentSnapshot?.data.sentiment ?? [];
+  const marketRecords = subagentSnapshot?.data.marketQuality ?? [];
+  const totalLearningCombos = riskRecords.length + executionRecords.length + predictorRecords.length + sentimentRecords.length + marketRecords.length;
+  const predictorRetrains = predictorRecords.filter((record) => record.tuning.action === 'retrain').length;
+  const riskTightenings = riskRecords.filter((record) => record.tuning.recommendedMaxLeverage <= 2.5).length;
+  const executionModeShifts = executionRecords.filter((record) => record.tuning.preferredMode && record.tuning.preferredMode !== 'market').length;
+  const subagentLookbackLabel = subagentSnapshot
+    ? subagentSnapshot.lookbackMinutes >= 60
+      ? `${(subagentSnapshot.lookbackMinutes / 60).toFixed(1)}h rolling ledger`
+      : `${subagentSnapshot.lookbackMinutes}m rolling ledger`
+    : 'Awaiting learning pulse';
+
+  const subagentSummaryCards = [
+    {
+      key: 'learningCombos',
+      title: 'Subagent combos evaluated',
+      value: subagentSnapshot?.combosEvaluated ?? totalLearningCombos ?? '—',
+      helper: subagentLookbackLabel,
+      accent: '#60a5fa',
+    },
+    {
+      key: 'predictorRetrain',
+      title: 'Predictors flagged',
+      value: predictorRetrains,
+      helper: 'Action = retrain',
+      accent: '#f87171',
+    },
+    {
+      key: 'riskTighten',
+      title: 'Risk tightenings',
+      value: riskTightenings,
+      helper: 'Leverage capped ≤ 2.5x',
+      accent: '#f97316',
+    },
+    {
+      key: 'executionShift',
+      title: 'Execution mode shifts',
+      value: executionModeShifts,
+      helper: 'Prefers sweep/iceberg/twap',
+      accent: '#22d3ee',
+    },
+  ];
+
   return (
     <Space direction='vertical' size={24} style={{ width: '100%' }}>
       <Card
@@ -237,6 +448,14 @@ const LearningInsightsPage: React.FC = () => {
               >
                 Force recompute
               </Button>
+                <Button
+                  icon={<Zap size={16} />}
+                  onClick={() => void refreshSubagents({ force: true })}
+                  loading={subagentLoading}
+                  style={{ width: '100%', borderRadius: 12 }}
+                >
+                  Refresh subagent tunings
+                </Button>
               <Card
                 size='small'
                 style={{
@@ -257,6 +476,10 @@ const LearningInsightsPage: React.FC = () => {
                 <Text style={{ color: 'rgba(148,163,184,0.78)', fontSize: 12 }}>
                   Combos scanned: {snapshot?.combosEvaluated ?? '—'}
                 </Text>
+                <Text style={{ color: 'rgba(148,163,184,0.78)', fontSize: 12 }}>
+                  Subagents pulse: {subagentSnapshot?.generatedAt ? formatRelativeTime(subagentSnapshot.generatedAt) : 'pending'}
+                  {subagentReason ? ` · ${subagentReason}` : ''}
+                </Text>
               </Card>
             </Space>
           </Col>
@@ -268,6 +491,15 @@ const LearningInsightsPage: React.FC = () => {
           type='error'
           message='Failed to load learning insights'
           description={error}
+          showIcon
+        />
+      )}
+
+      {subagentError && (
+        <Alert
+          type='error'
+          message='Failed to load subagent telemetry'
+          description={subagentError}
           showIcon
         />
       )}
@@ -326,6 +558,96 @@ const LearningInsightsPage: React.FC = () => {
           />
         </Col>
       </Row>
+
+      <Divider style={{ borderColor: 'rgba(148,163,184,0.2)' }} />
+      <Space direction='vertical' size={12} style={{ width: '100%' }}>
+        <Space align='center' size={10} wrap>
+          <Tag color='purple' icon={<Cpu size={14} />} style={{ borderRadius: 999 }}>Subagent telemetry</Tag>
+          <Text style={{ color: 'rgba(226,232,240,0.78)' }}>
+            Learnings pushed by risk, execution, predictor, sentiment, and market-quality subagents to self-tune operations.
+          </Text>
+          {subagentUpdated && (
+            <Tag color='default' style={{ borderRadius: 10 }}>
+              Updated {formatRelativeTime(subagentUpdated)}
+            </Tag>
+          )}
+        </Space>
+        <Row gutter={[24, 24]}>
+          {subagentSummaryCards.map((card) => (
+            <Col xs={24} sm={12} lg={6} key={card.key}>
+              <Card
+                style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}`, height: '100%' }}
+                bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+              >
+                <Text style={{ color: 'rgba(148,163,184,0.78)', fontSize: 12 }}>{card.title}</Text>
+                <Title level={3} style={{ margin: 0, color: card.accent }}>{card.value}</Title>
+                <Text style={{ color: 'rgba(148,163,184,0.72)', fontSize: 12 }}>{card.helper}</Text>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+        <Row gutter={[24, 24]}>
+          <Col xs={24} md={12}>
+            <SubagentPanel
+              title='Risk governor'
+              accent='#f97316'
+              icon={<Shield size={16} color='#f97316' />}
+              records={riskRecords as GenericSubagentRecord[]}
+              emptyLabel='No risk deltas captured yet.'
+              renderTuning={(record) => renderRiskTuning(record as SubagentLearningRecord<'risk_governor'>)}
+            />
+          </Col>
+          <Col xs={24} md={12}>
+            <SubagentPanel
+              title='Execution router'
+              accent='#22d3ee'
+              icon={<Zap size={16} color='#22d3ee' />}
+              records={executionRecords as GenericSubagentRecord[]}
+              emptyLabel='Execution layer stable.'
+              renderTuning={(record) => renderExecutionTuning(record as SubagentLearningRecord<'execution'>)}
+            />
+          </Col>
+          <Col xs={24} md={12}>
+            <SubagentPanel
+              title='Predictor steward'
+              accent='#60a5fa'
+              icon={<Brain size={16} color='#60a5fa' />}
+              records={predictorRecords as GenericSubagentRecord[]}
+              emptyLabel='No predictor actions queued.'
+              renderTuning={(record) => renderPredictorTuning(record as SubagentLearningRecord<'predictor'>)}
+            />
+          </Col>
+          <Col xs={24} md={12}>
+            <SubagentPanel
+              title='Sentiment sentinel'
+              accent='#c084fc'
+              icon={<MessageCircle size={16} color='#c084fc' />}
+              records={sentimentRecords as GenericSubagentRecord[]}
+              emptyLabel='No sentiment adjustments pending.'
+              renderTuning={(record) => renderSentimentTuning(record as SubagentLearningRecord<'sentiment'>)}
+            />
+          </Col>
+          <Col xs={24}>
+            <SubagentPanel
+              title='Market quality gate'
+              accent='#38bdf8'
+              icon={<Globe size={16} color='#38bdf8' />}
+              records={marketRecords as GenericSubagentRecord[]}
+              emptyLabel='No market quality overrides.'
+              renderTuning={(record) => renderMarketQualityTuning(record as SubagentLearningRecord<'market_quality'>)}
+            />
+          </Col>
+        </Row>
+      </Space>
+
+      {subagentSnapshot?.data && totalLearningCombos === 0 && (
+        <Alert
+          type='info'
+          message='Subagent learning service active'
+          description='Awaiting the first completed ledger sweep to populate subagent tunings. This typically appears within ~5 minutes.'
+          showIcon
+        />
+      )}
     </Space>
   );
 };
