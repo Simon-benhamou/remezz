@@ -724,19 +724,34 @@ function computeAdxComponent(
   regimeThresholds?: { adx: { trend: number; breakout: number; mean: number; momentum: number } }
 ): { score: number; reason: string } {
   const family = getStrategyFamilyFromId(id);
+  
+  // 🎯 ENHANCED MOMENTUM REQUIREMENTS
+  // Require higher ADX for directional strategies to avoid choppy markets
   const minAdxByStrategy = regimeThresholds?.adx || {
-    trend: 16,
-    breakout: 14,
-    mean: 12,
-    momentum: 18,
+    trend: 18,     // Was 16, now 18 - need clear trend
+    breakout: 16,  // Was 14, now 16 - need momentum for breakout
+    mean: 12,      // Keep 12 for mean reversion (works in range)
+    momentum: 20,  // Was 18, now 20 - highest requirement for momentum
   };
+  
   const minAdx = minAdxByStrategy[family];
   const adxRaw = Number((snap as any)?.adx14 ?? NaN);
   const adx = Number.isFinite(adxRaw) ? adxRaw : 0;
-  const margin = 12;
+  
+  // Stronger penalty for low ADX in directional strategies
+  const margin = family === 'mean' ? 12 : 15; // Wider margin for trend/momentum
   const normalized = (adx - (minAdx - 5)) / margin;
   const score = clampNumber(normalized, 0, 1);
-  const reason = `adx=${adx >= minAdx ? 'pass' : 'fail'}(${adx.toFixed(1)}>=${minAdx})`;
+  
+  // More descriptive reason with severity
+  let severity = '';
+  if (adx < minAdx * 0.8) {
+    severity = '_critical'; // Very weak momentum
+  } else if (adx < minAdx) {
+    severity = '_weak'; // Below threshold
+  }
+  
+  const reason = `adx=${adx >= minAdx ? 'pass' : `fail${severity}`}(${adx.toFixed(1)}>=${minAdx})`;
   return { score, reason };
 }
 
@@ -788,6 +803,42 @@ function computeFlowComponent(
   
   // Use regime-aware CMF threshold (default 0.03)
   let cmfThreshold = regimeThresholds?.cmf || 0.03;
+  
+  // 🎯 ENHANCED VOLUME CONFIRMATION
+  // For SHORT positions, require SELLING pressure (negative CMF + strong volume)
+  // For LONG positions, require BUYING pressure (positive CMF + strong volume)
+  let volumeConfirmation = 1.0;
+  
+  if (bias === 'short') {
+    // Shorts need negative CMF (selling pressure)
+    cmfThreshold = -0.05; // Require at least -5% CMF for shorts
+    
+    // Strong selling pressure = high score
+    if (cmf < -0.1 && ratio >= 1.2) {
+      volumeConfirmation = 1.2; // Boost for strong selling
+    } else if (cmf < -0.05 && ratio >= 1.0) {
+      volumeConfirmation = 1.0; // Normal selling
+    } else if (cmf > 0) {
+      volumeConfirmation = 0.3; // Penalize positive CMF on shorts
+    } else {
+      volumeConfirmation = 0.7; // Weak selling
+    }
+  } else if (bias === 'long') {
+    // Longs need positive CMF (buying pressure)
+    cmfThreshold = 0.05; // Require at least +5% CMF for longs
+    
+    // Strong buying pressure = high score
+    if (cmf > 0.1 && ratio >= 1.2) {
+      volumeConfirmation = 1.2; // Boost for strong buying
+    } else if (cmf > 0.05 && ratio >= 1.0) {
+      volumeConfirmation = 1.0; // Normal buying
+    } else if (cmf < 0) {
+      volumeConfirmation = 0.3; // Penalize negative CMF on longs
+    } else {
+      volumeConfirmation = 0.7; // Weak buying
+    }
+  }
+  
   let cmfMagnitude = cmf;
   if (desired === 'bearish') {
     cmfThreshold = -(regimeThresholds?.cmf || 0.03);
@@ -797,10 +848,14 @@ function computeFlowComponent(
     cmfThreshold = regimeThresholds?.cmf || 0.03;
     cmfMagnitude = Math.abs(cmf);
   }
+  
   const cmfScore = clampNumber((cmfMagnitude - Math.abs(cmfThreshold)) / 0.15, 0, 1);
   const volumeScore = clampNumber((ratio - minVolumeRatio) / 0.5, 0, 1);
-  const score = clampNumber(cmfScore * 0.6 + volumeScore * 0.4, 0, 1);
-  const reason = `flow=${cmfMagnitude >= Math.abs(cmfThreshold) && ratio >= minVolumeRatio ? 'pass' : 'fail'}(cmf=${cmf.toFixed(2)},vol=${ratio.toFixed(2)})`;
+  
+  // Apply volume confirmation multiplier
+  const score = clampNumber((cmfScore * 0.6 + volumeScore * 0.4) * volumeConfirmation, 0, 1);
+  
+  const reason = `flow=${cmfMagnitude >= Math.abs(cmfThreshold) && ratio >= minVolumeRatio ? 'pass' : 'fail'}(cmf=${cmf.toFixed(2)},vol=${ratio.toFixed(2)},conf=${volumeConfirmation.toFixed(2)})`;
   return {
     score,
     reason,
@@ -1149,7 +1204,7 @@ export async function evaluateRecognizedStrategies(
   // Get regime-aware thresholds for this symbol
   const regimeThresholds = await getRegimeAwareThresholds(symbol, snap);
   
-  const evaluation = metaAdaptiveStrategyAgent.evaluate({
+  const evaluation = await metaAdaptiveStrategyAgent.evaluate({
     sessionId: opts.sessionId ?? null,
     symbol,
     snap,
@@ -1158,7 +1213,7 @@ export async function evaluateRecognizedStrategies(
     atr1h: opts.atr1h,
     atr4h: opts.atr4h,
     forceLiquidityGate: opts.forceLiquidityGate ?? false,
-    multiTimeframe: opts.multiTimeframe ?? (snap as any)?.multiTimeframe ?? null,
+    multiTimeframe: opts.multiTimeframe ?? (snap as any)?.multiTimeframe ?? (snap as any)?.multiTimeframe ?? null,
     accountBalanceUsd: opts.accountBalanceUsd ?? null,
     desiredProfitUsd: opts.desiredProfitUsd ?? null,
     fundamental: opts.fundamental ?? null,

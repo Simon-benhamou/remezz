@@ -178,7 +178,11 @@ export function maybeAdjustOrExit({
   // Apply volatility adjustment
   const tightenThreshold = baseTightenThreshold;
   const cutThreshold = baseCutThreshold * volatilityMultiplier; // More tolerant for volatile cryptos
-  const minHoldMinutes = Math.ceil(baseMinHoldMinutes * volatilityMultiplier); // Hold longer for volatile
+  
+  // 🎯 FIX: High vol cryptos move FASTER - need SHORTER minimum hold, not longer!
+  // Old logic: minHoldMinutes = base * multiplier (WRONG - made high vol wait longer)
+  // New logic: minHoldMinutes = base / multiplier (CORRECT - high vol waits less)
+  const minHoldMinutes = Math.max(5, Math.ceil(baseMinHoldMinutes / volatilityMultiplier));
   
   const holdSatisfied =
     minutesOpen == null || !Number.isFinite(minHoldMinutes) || minHoldMinutes <= 0 || minutesOpen >= minHoldMinutes;

@@ -27,6 +27,14 @@ import {
   classifyVolumeRegime,
   classifyTrendingRanging,
 } from '../../../learning/personalityProfile.js';
+import { detectReboundForShort, detectReversalForLong, detectVolatilitySqueeze } from './reboundDetection.js';
+import { detectBTCCorrelationImpact } from './btcCorrelation.js';
+import { detectNewsImpact } from './newsDetection.js';
+import { detectFundingRateImpact } from './fundingRateDetection.js';
+import { detectFlashEvent } from './flashCrashDetection.js';
+import { detectPortfolioExposureRisk } from './portfolioExposure.js';
+import { detectSessionAwareness } from './sessionAwareness.js';
+import { detectWhaleActivity } from './whaleActivity.js';
 
 const DECIMAL_SCALE = 1_000_000n;
 const pythonSignalTuning = getPythonSignalTuning();
@@ -1357,7 +1365,7 @@ class MetaAdaptiveStrategyAgent {
     return epsilon;
   }
 
-  evaluate(input: AdaptiveEvaluationInput): { signals: AdaptiveSignal[]; selection: AdaptiveSignal | null } {
+  async evaluate(input: AdaptiveEvaluationInput): Promise<{ signals: AdaptiveSignal[]; selection: AdaptiveSignal | null }> {
     const micro = input.micro ?? {};
     const snap = input.snap;
     const price = safeNumber(snap.last, 0);
@@ -2072,6 +2080,98 @@ class MetaAdaptiveStrategyAgent {
         },
       ];
 
+    // 🌐 BTC CORRELATION CHECK: Prevent alt coin entries during BTC dumps/pumps
+    const btcCorrelationLong = await detectBTCCorrelationImpact(input.symbol, 'long');
+    const btcCorrelationShort = await detectBTCCorrelationImpact(input.symbol, 'short');
+    
+    // 📰 NEWS DETECTION: Check for breaking news that could invalidate technical analysis
+    const newsSignalLong = await detectNewsImpact(input.symbol, 'long');
+    const newsSignalShort = await detectNewsImpact(input.symbol, 'short');
+    
+    // 💰 FUNDING RATE CHECK: Detect overheated perpetual futures markets
+    const fundingRateLong = await detectFundingRateImpact(input.symbol, 'long');
+    const fundingRateShort = await detectFundingRateImpact(input.symbol, 'short');
+    
+    // ⚡ FLASH CRASH DETECTION: Avoid entries during extreme volatility events
+    const flashEventSignal = detectFlashEvent(snap);
+    
+    // 📊 PORTFOLIO EXPOSURE: Check total risk across all agents
+    const portfolioExposureLong = await detectPortfolioExposureRisk('long');
+    const portfolioExposureShort = await detectPortfolioExposureRisk('short');
+    
+    // 🕐 SESSION AWARENESS: Adjust for time-of-day liquidity
+    // Will be applied per-strategy based on family type
+    
+    // 🐋 WHALE ACTIVITY: Detect order book imbalances
+    const whaleActivityLong = await detectWhaleActivity(input.symbol, 'long');
+    const whaleActivityShort = await detectWhaleActivity(input.symbol, 'short');
+    
+    // Log significant events from all detection modules
+    const hasSignificantEvents = 
+      btcCorrelationLong.impactLevel !== 'none' || btcCorrelationShort.impactLevel !== 'none' ||
+      newsSignalLong.hasBreakingNews || newsSignalShort.hasBreakingNews ||
+      fundingRateLong.severity !== 'none' || fundingRateShort.severity !== 'none' ||
+      flashEventSignal.isFlashEvent ||
+      portfolioExposureLong.severity !== 'none' || portfolioExposureShort.severity !== 'none' ||
+      whaleActivityLong.shouldWarn || whaleActivityShort.shouldWarn;
+    
+    if (hasSignificantEvents) {
+      console.log(JSON.stringify({
+        event: 'market_context_signals',
+        symbol: input.symbol,
+        sessionId: input.sessionId,
+        btcCorrelation: {
+          long: { momentum: btcCorrelationLong.momentum, impact: btcCorrelationLong.impactLevel, reason: btcCorrelationLong.reason },
+          short: { momentum: btcCorrelationShort.momentum, impact: btcCorrelationShort.impactLevel, reason: btcCorrelationShort.reason },
+        },
+        news: {
+          long: newsSignalLong.hasBreakingNews ? { impact: newsSignalLong.impact, severity: newsSignalLong.severity, summary: newsSignalLong.summary } : null,
+          short: newsSignalShort.hasBreakingNews ? { impact: newsSignalShort.impact, severity: newsSignalShort.severity, summary: newsSignalShort.summary } : null,
+        },
+        fundingRate: {
+          long: fundingRateLong.severity !== 'none' ? { sentiment: fundingRateLong.sentiment, costPerDay: fundingRateLong.costPerDay.toFixed(3) + '%' } : null,
+          short: fundingRateShort.severity !== 'none' ? { sentiment: fundingRateShort.sentiment, costPerDay: fundingRateShort.costPerDay.toFixed(3) + '%' } : null,
+        },
+        flashEvent: flashEventSignal.isFlashEvent ? { type: flashEventSignal.eventType, severity: flashEventSignal.severity, velocity5m: flashEventSignal.priceVelocity5m.toFixed(2) + '%' } : null,
+        portfolio: {
+          activePositions: portfolioExposureLong.activePositions,
+          netExposure: portfolioExposureLong.netExposure.toFixed(2),
+          severity: portfolioExposureLong.severity !== 'none' ? portfolioExposureLong.severity : null,
+        },
+        whaleActivity: {
+          long: whaleActivityLong.shouldWarn ? { imbalance: whaleActivityLong.imbalanceLevel, ratio: whaleActivityLong.bidAskImbalance.toFixed(2) } : null,
+          short: whaleActivityShort.shouldWarn ? { imbalance: whaleActivityShort.imbalanceLevel, ratio: whaleActivityShort.bidAskImbalance.toFixed(2) } : null,
+        },
+      }));
+    }
+
+    // 🎯 REBOUND DETECTION: Detect potential rebounds that would invalidate shorts
+    const reboundSignal = detectReboundForShort(snap);
+    const reversalSignal = detectReversalForLong(snap);
+    const squeezeSignal = detectVolatilitySqueeze(snap);
+    
+    // Log rebound detection for diagnostics
+    if (reboundSignal.probability >= 0.4 || reversalSignal.probability >= 0.4) {
+      console.log(JSON.stringify({
+        event: 'rebound_detection',
+        symbol: input.symbol,
+        sessionId: input.sessionId,
+        reboundForShort: {
+          probability: reboundSignal.probability,
+          severity: reboundSignal.severity,
+          shouldBlock: reboundSignal.shouldBlock,
+          tradeBias: reboundSignal.tradeBias,
+          reasons: reboundSignal.reasons,
+        },
+        reversalForLong: {
+          probability: reversalSignal.probability,
+          severity: reversalSignal.severity,
+          shouldBlock: reversalSignal.shouldBlock,
+        },
+        squeeze: squeezeSignal,
+      }));
+    }
+
     const calibrationAdjustments = this.calibrationProfile.familyScoreAdjustments;
 
     let weighted: StrategyScoreResult[] = familyScores.map(item => {
@@ -2094,6 +2194,229 @@ class MetaAdaptiveStrategyAgent {
       if (watchlistState.isNew) reasonsAugmented.push('watchlist_new');
 
       let effectiveScore = item.score * (1 - microPenalty * 0.3);
+      
+      // ⚡ FLASH CRASH GATE (applies to ALL strategies)
+      if (flashEventSignal.shouldBlock) {
+        effectiveScore = 0;
+        penaltiesApplied.push(flashEventSignal.reason);
+        reasonsAugmented.push(`flash_event(${flashEventSignal.eventType})`);
+      } else if (flashEventSignal.penalty < 1.0) {
+        effectiveScore *= flashEventSignal.penalty;
+        penaltiesApplied.push(flashEventSignal.reason);
+      }
+      
+      // 🕐 SESSION AWARENESS (breakout/momentum strategies affected most)
+      const sessionSignal = detectSessionAwareness(item.family);
+      if (sessionSignal.penalty < 1.0) {
+        effectiveScore *= sessionSignal.penalty;
+        penaltiesApplied.push(sessionSignal.reason);
+        if (sessionSignal.recommendations.length > 0) {
+          reasonsAugmented.push(sessionSignal.recommendations[0]);
+        }
+      }
+      
+      // 🌐 BTC CORRELATION GATE
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        const btcSignal = btcCorrelationShort;
+        if (btcSignal.shouldBlock) {
+          // BTC pumping hard - block shorts entirely
+          effectiveScore = 0;
+          penaltiesApplied.push(btcSignal.reason);
+          reasonsAugmented.push(`btc_correlation_block(${btcSignal.momentum})`);
+        } else if (btcSignal.penalty < 1.0) {
+          // BTC moving against shorts - apply penalty
+          effectiveScore *= btcSignal.penalty;
+          penaltiesApplied.push(btcSignal.reason);
+          reasonsAugmented.push(`btc_${btcSignal.momentum}`);
+        } else if (btcSignal.penalty > 1.0) {
+          // BTC moving with shorts - boost score
+          effectiveScore = Math.min(1, effectiveScore * btcSignal.penalty);
+          reasonsAugmented.push(`btc_tailwind(${btcSignal.reason})`);
+        }
+      } else if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        const btcSignal = btcCorrelationLong;
+        if (btcSignal.shouldBlock) {
+          // BTC dumping hard - block longs entirely
+          effectiveScore = 0;
+          penaltiesApplied.push(btcSignal.reason);
+          reasonsAugmented.push(`btc_correlation_block(${btcSignal.momentum})`);
+        } else if (btcSignal.penalty < 1.0) {
+          // BTC moving against longs - apply penalty
+          effectiveScore *= btcSignal.penalty;
+          penaltiesApplied.push(btcSignal.reason);
+          reasonsAugmented.push(`btc_${btcSignal.momentum}`);
+        } else if (btcSignal.penalty > 1.0) {
+          // BTC moving with longs - boost score
+          effectiveScore = Math.min(1, effectiveScore * btcSignal.penalty);
+          reasonsAugmented.push(`btc_tailwind(${btcSignal.reason})`);
+        }
+      }
+      
+      // 💰 FUNDING RATE GATE
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        const fundingSignal = fundingRateShort;
+        if (fundingSignal.shouldBlock) {
+          effectiveScore = 0;
+          penaltiesApplied.push(fundingSignal.reason);
+          reasonsAugmented.push(`funding_block(${fundingSignal.sentiment})`);
+        } else if (fundingSignal.penalty !== 1.0) {
+          effectiveScore *= fundingSignal.penalty;
+          if (fundingSignal.penalty < 1.0) {
+            penaltiesApplied.push(fundingSignal.reason);
+          }
+        }
+      } else if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        const fundingSignal = fundingRateLong;
+        if (fundingSignal.shouldBlock) {
+          effectiveScore = 0;
+          penaltiesApplied.push(fundingSignal.reason);
+          reasonsAugmented.push(`funding_block(${fundingSignal.sentiment})`);
+        } else if (fundingSignal.penalty !== 1.0) {
+          effectiveScore *= fundingSignal.penalty;
+          if (fundingSignal.penalty < 1.0) {
+            penaltiesApplied.push(fundingSignal.reason);
+          }
+        }
+      }
+      
+      // 📊 PORTFOLIO EXPOSURE GATE
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        const portfolioSignal = portfolioExposureShort;
+        if (portfolioSignal.shouldBlock) {
+          effectiveScore = 0;
+          penaltiesApplied.push(portfolioSignal.reason);
+          reasonsAugmented.push(`portfolio_block(${portfolioSignal.severity})`);
+        } else if (portfolioSignal.penalty < 1.0) {
+          effectiveScore *= portfolioSignal.penalty;
+          penaltiesApplied.push(portfolioSignal.reason);
+        }
+      } else if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        const portfolioSignal = portfolioExposureLong;
+        if (portfolioSignal.shouldBlock) {
+          effectiveScore = 0;
+          penaltiesApplied.push(portfolioSignal.reason);
+          reasonsAugmented.push(`portfolio_block(${portfolioSignal.severity})`);
+        } else if (portfolioSignal.penalty < 1.0) {
+          effectiveScore *= portfolioSignal.penalty;
+          penaltiesApplied.push(portfolioSignal.reason);
+        }
+      }
+      
+      // 🐋 WHALE ACTIVITY GATE
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        const whaleSignal = whaleActivityShort;
+        if (whaleSignal.penalty !== 1.0) {
+          effectiveScore *= whaleSignal.penalty;
+          if (whaleSignal.penalty < 1.0) {
+            penaltiesApplied.push(whaleSignal.reason);
+          } else if (whaleSignal.shouldWarn) {
+            reasonsAugmented.push(whaleSignal.recommendations[0] || 'whale_support');
+          }
+        }
+      } else if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        const whaleSignal = whaleActivityLong;
+        if (whaleSignal.penalty !== 1.0) {
+          effectiveScore *= whaleSignal.penalty;
+          if (whaleSignal.penalty < 1.0) {
+            penaltiesApplied.push(whaleSignal.reason);
+          } else if (whaleSignal.shouldWarn) {
+            reasonsAugmented.push(whaleSignal.recommendations[0] || 'whale_resistance');
+          }
+        }
+      }
+      
+      // 📰 NEWS IMPACT GATE
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        const newsSignal = newsSignalShort;
+        if (newsSignal.shouldBlock) {
+          // Breaking bullish news - block shorts entirely
+          effectiveScore = 0;
+          penaltiesApplied.push(`news_block(${newsSignal.impact})`);
+          reasonsAugmented.push(newsSignal.summary);
+          reasonsAugmented.push(...newsSignal.reasons.slice(0, 1));
+        } else if (newsSignal.penalty < 1.0) {
+          // Bullish news - penalize shorts
+          effectiveScore *= newsSignal.penalty;
+          penaltiesApplied.push(`news_${newsSignal.impact}`);
+          if (newsSignal.hasBreakingNews) {
+            reasonsAugmented.push(newsSignal.summary);
+          }
+        } else if (newsSignal.penalty > 1.0 && newsSignal.hasBreakingNews) {
+          // Bearish news - boost shorts
+          effectiveScore = Math.min(1, effectiveScore * newsSignal.penalty);
+          reasonsAugmented.push(`news_catalyst(${newsSignal.impact})`);
+          reasonsAugmented.push(newsSignal.summary);
+        }
+      } else if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        const newsSignal = newsSignalLong;
+        if (newsSignal.shouldBlock) {
+          // Breaking bearish news - block longs entirely
+          effectiveScore = 0;
+          penaltiesApplied.push(`news_block(${newsSignal.impact})`);
+          reasonsAugmented.push(newsSignal.summary);
+          reasonsAugmented.push(...newsSignal.reasons.slice(0, 1));
+        } else if (newsSignal.penalty < 1.0) {
+          // Bearish news - penalize longs
+          effectiveScore *= newsSignal.penalty;
+          penaltiesApplied.push(`news_${newsSignal.impact}`);
+          if (newsSignal.hasBreakingNews) {
+            reasonsAugmented.push(newsSignal.summary);
+          }
+        } else if (newsSignal.penalty > 1.0 && newsSignal.hasBreakingNews) {
+          // Bullish news - boost longs
+          effectiveScore = Math.min(1, effectiveScore * newsSignal.penalty);
+          reasonsAugmented.push(`news_catalyst(${newsSignal.impact})`);
+          reasonsAugmented.push(newsSignal.summary);
+        }
+      }
+      
+      // 🛡️ REBOUND PROTECTION FOR SHORTS
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        if (reboundSignal.shouldBlock) {
+          // Critical rebound risk - block shorts entirely
+          effectiveScore = 0;
+          penaltiesApplied.push(`rebound_block(${reboundSignal.severity})`);
+          reasonsAugmented.push(...reboundSignal.reasons);
+        } else if (reboundSignal.probability >= 0.45) {
+          // Moderate rebound risk - penalize shorts heavily
+          effectiveScore *= (1 - reboundSignal.probability * 0.7);
+          penaltiesApplied.push(`rebound_risk(${reboundSignal.severity})`);
+          reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2)); // Add top 2 reasons
+        } else if (reboundSignal.probability >= 0.3) {
+          // Low rebound risk - mild penalty
+          effectiveScore *= 0.85;
+          penaltiesApplied.push('rebound_caution');
+        }
+      }
+      
+      // 🎯 REBOUND OPPORTUNITY FOR LONGS
+      if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        if (reboundSignal.tradeBias === 'favor_long' && reboundSignal.probability >= 0.6) {
+          // High probability rebound - FAVOR long entries
+          effectiveScore = Math.min(1, effectiveScore * 1.25);
+          reasonsAugmented.push('rebound_opportunity');
+          reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
+        } else if (reversalSignal.shouldBlock) {
+          // Block longs if reversal risk is critical
+          effectiveScore = 0;
+          penaltiesApplied.push(`reversal_block(${reversalSignal.severity})`);
+        } else if (reversalSignal.probability >= 0.45) {
+          // Moderate reversal risk - penalize longs
+          effectiveScore *= (1 - reversalSignal.probability * 0.6);
+          penaltiesApplied.push('reversal_risk');
+        }
+      }
+      
+      // ⚠️ VOLATILITY SQUEEZE PROTECTION
+      if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'extreme') {
+        // Extreme squeeze - reduce all entries (direction unpredictable)
+        effectiveScore *= 0.4;
+        penaltiesApplied.push('extreme_vol_squeeze');
+        reasonsAugmented.push(...squeezeSignal.reasons);
+      } else if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'moderate') {
+        effectiveScore *= 0.7;
+        penaltiesApplied.push('vol_squeeze');
+      }
 
       if (context.conflict && item.family !== 'mean_reversion') {
         effectiveScore *= 0.45;
