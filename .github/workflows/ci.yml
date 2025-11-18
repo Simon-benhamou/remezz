@@ -10,6 +10,8 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    env:
+      PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING: 1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
