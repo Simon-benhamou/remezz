@@ -30,9 +30,13 @@ export type NewsSignal = {
   timestamp: number;
 };
 
-// Cache news checks for 5 minutes per symbol (news doesn't change that fast)
+// Cache news checks for 30 minutes per symbol
+// Breaking news doesn't change frequently enough to justify checking every 5 min
+// Cost: ~$0.0025 input + ~$0.01 output per 1M tokens
+// Typical call: ~500 input tokens + ~200 output tokens = ~$0.003 per call
+// With 30min cache: ~48 calls/day/symbol = ~$0.15/day/symbol
 const newsCache = new Map<string, { signal: NewsSignal; timestamp: number }>();
-const NEWS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const NEWS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 // Track Grok API usage to avoid rate limits
 let lastGrokCallTimestamp = 0;
@@ -107,7 +111,7 @@ If no significant news in last 6 hours, return hasNews: false.`;
 
     const response = await llmJSONSafe(prompt, {
       provider: 'grok',
-      ttlMin: 5, // Cache for 5 minutes
+      ttlMin: 30, // Cache for 30 minutes - news doesn't change that fast
     }) as any; // Type assertion needed since llmJSONSafe returns string | null
     
     // Handle null or invalid response

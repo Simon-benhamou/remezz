@@ -2085,8 +2085,10 @@ class MetaAdaptiveStrategyAgent {
     const btcCorrelationShort = await detectBTCCorrelationImpact(input.symbol, 'short');
     
     // 📰 NEWS DETECTION: Check for breaking news that could invalidate technical analysis
-    const newsSignalLong = await detectNewsImpact(input.symbol, 'long');
-    const newsSignalShort = await detectNewsImpact(input.symbol, 'short');
+    // Can be disabled via NEWS_DETECTION_ENABLED=false to avoid LLM calls
+    const newsEnabled = process.env.NEWS_DETECTION_ENABLED !== 'false';
+    const newsSignalLong = newsEnabled ? await detectNewsImpact(input.symbol, 'long') : { hasBreakingNews: false, impact: 'neutral' as const, severity: 'none' as const, confidence: 0, shouldBlock: false, penalty: 1.0, summary: 'News detection disabled', reasons: [], timestamp: Date.now() };
+    const newsSignalShort = newsEnabled ? await detectNewsImpact(input.symbol, 'short') : { hasBreakingNews: false, impact: 'neutral' as const, severity: 'none' as const, confidence: 0, shouldBlock: false, penalty: 1.0, summary: 'News detection disabled', reasons: [], timestamp: Date.now() };
     
     // 💰 FUNDING RATE CHECK: Detect overheated perpetual futures markets
     const fundingRateLong = await detectFundingRateImpact(input.symbol, 'long');

@@ -521,14 +521,35 @@ async function reconcileExposure(sessionId: string, symbol: string, mode: string
  *  - adaptive cooldown based on volatility
  *  - confidence delta thresholds
  *  - composite scoring
+ * 
+ * SMART DYNAMIC ADJUSTMENT:
+ * - STRATEGY_FORCE_PRICE_PCT (default: 1.5%): Minimum price move to trigger regeneration
+ *   * 1.5% = captures significant moves without micro-noise
+ *   * Lower = more responsive but more expensive (LLM calls)
+ *   * Higher = less responsive but cheaper
+ * 
+ * - STRATEGY_MIN_CONFIDENCE_DELTA (default: 0.35): Minimum regime confidence change
+ *   * 35% = only regenerates on meaningful market regime shifts
+ *   * Lower = more sensitive to regime changes
+ *   * Higher = only extreme regime changes trigger
+ * 
+ * - STRATEGY_COMPOSITE_THRESHOLD (default: 0.65): Combined score threshold
+ *   * Weighs price movement, regime change, AND volatility together
+ *   * 0.65 = balanced (significant but not extreme)
+ *   * 0.4-0.5 = aggressive (more frequent regenerations)
+ *   * 0.7-0.8 = conservative (only major events)
+ * 
+ * - STRATEGY_REGIME_COOLDOWN_MIN (default: 10min): Minimum time between regime-only regenerations
+ *   * Prevents spam when regime oscillates
+ *   * Adapts based on volatility (higher vol = shorter cooldown)
  */
 async function maybeGenerateStrategy(sym: string, trigger: string, price: number, sessionId: string, force: boolean = false, tech: TechnicalSnapshot | null = null) {
   const minIntervalMin = Number(process.env.STRATEGY_MIN_INTERVAL_MIN || 60);
-  const priceShiftThreshold = Number(process.env.STRATEGY_FORCE_PRICE_PCT || 0.25);
-  const regimeShiftThreshold = Number(process.env.STRATEGY_FORCE_REGIME_CONF_DELTA || 0.15);
-  const minConfidenceDelta = Number(process.env.STRATEGY_MIN_CONFIDENCE_DELTA || 0.2);
+  const priceShiftThreshold = Number(process.env.STRATEGY_FORCE_PRICE_PCT || 1.5);
+  const regimeShiftThreshold = Number(process.env.STRATEGY_FORCE_REGIME_CONF_DELTA || 0.25);
+  const minConfidenceDelta = Number(process.env.STRATEGY_MIN_CONFIDENCE_DELTA || 0.35);
   const useCompositeScore = (process.env.STRATEGY_USE_COMPOSITE_SCORE || 'true') === 'true';
-  const compositeThreshold = Number(process.env.STRATEGY_COMPOSITE_THRESHOLD || 0.4);
+  const compositeThreshold = Number(process.env.STRATEGY_COMPOSITE_THRESHOLD || 0.65);
   const useAdaptiveCooldown = (process.env.STRATEGY_VOLATILITY_ADAPTIVE || 'true') === 'true';
   const now = Date.now();
 
