@@ -63,6 +63,8 @@ import { startAgentPerceptionLoops } from "./agent/loops/index.js";
 import { startAgentDecisionLoop } from "./agent/decisions/index.js";
 import { startAgentActionLoop } from "./agent/actions/index.js";
 import { startOpsJobsHeartbeat } from "./monitor/opsJobs.js";
+import { startAgentPerformanceLedgerLoop } from "./services/performanceLedger.js";
+import { startSelectorAgentLoop } from "./services/selectorAgent.js";
 
 const logLevel = configureLogging();
 const serverLogger = createLogger("server");
@@ -218,6 +220,8 @@ startAgentPerceptionLoops();
 startAgentDecisionLoop();
 startAgentActionLoop();
 startOpsJobsHeartbeat();
+startAgentPerformanceLedgerLoop();
+startSelectorAgentLoop();
 
 // 🚀 Start state reconciliation for all active live sessions
 (async () => {

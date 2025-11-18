@@ -8,6 +8,7 @@ import { useDashboard } from './hooks/useDashboard';
 import BacklogPage from './pages/BacklogPage';
 import ExecutionLedgerPage from './pages/ExecutionLedgerPage';
 import IntelligencePage from './pages/IntelligencePage';
+import LearningInsightsPage from './pages/LearningInsightsPage';
 import LoginPage from './pages/LoginPage';
 import OperationsDashboardPage from './pages/OperationsDashboardPage';
 import RegisterPage from './pages/RegisterPage';
@@ -16,7 +17,7 @@ import SessionsPage from './pages/SessionsPage';
 // import MonitorPageRefactored from './pages/MonitorPageRefactored';
 import MonitorPageNew from './pages/MonitorPageNew';
 import { useAppStore } from './store';
-import { Activity, Bot, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
+import { Activity, Bot, Brain, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
 import { api } from './api';
 
 const resolveActiveMenuKey = (pathname: string) => {
@@ -25,6 +26,7 @@ const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/agents')) return '/agents';
   if (pathname.startsWith('/ledger')) return '/ledger';
   if (pathname.startsWith('/intelligence')) return '/intelligence';
+  if (pathname.startsWith('/learning')) return '/learning';
   if (pathname.startsWith('/backlog')) return '/backlog';
   return '/operations';
 };
@@ -92,6 +94,7 @@ function AuthenticatedApp() {
     { key: '/agents', label: 'Agents', icon: <Bot /> },
     { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
     { key: '/intelligence', label: 'Intelligence', icon: <Lightbulb /> },
+    { key: '/learning', label: 'Learning', icon: <Brain /> },
     { key: '/backlog', label: 'Feed Info', icon: <Radio /> },
   ];
 
@@ -279,6 +282,7 @@ function AuthenticatedApp() {
             <Route path='/agents' element={<SessionsPage />} />
             <Route path='/ledger' element={<ExecutionLedgerPage />} />
             <Route path='/intelligence' element={<IntelligencePage />} />
+            <Route path='/learning' element={<LearningInsightsPage />} />
             <Route path='/backlog' element={<BacklogPage />} />
             <Route path='*' element={<Navigate to='/operations' replace />} />
           </Routes>

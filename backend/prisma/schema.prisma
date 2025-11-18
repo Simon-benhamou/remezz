@@ -114,6 +114,7 @@ model AgentSession {
   reports      DailyReport[] // back-rel from DailyReport.session
   opsTelemetry AgentOpsTelemetry?
   actionIntents AgentActionIntent[]
+  performanceLedger AgentPerformanceLedger[]
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
@@ -508,4 +509,37 @@ model PredictorDecision {
   @@index([symbol, createdAt])
   @@index([createdAt])
   @@map("predictor_decision")
+}
+
+model AgentPerformanceLedger {
+  id             String        @id @default(cuid())
+  session        AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId      String
+  agentName      String
+  agentFamily    String?
+  symbol         String
+  mode           String
+  regime         String?
+  windowMinutes  Int           @default(1440)
+  bucketStart    DateTime
+  tradeCount     Int           @default(0)
+  winRate        Float         @default(0)
+  realizedPnlUsd Float         @default(0)
+  netPnlUsd      Float         @default(0)
+  feesUsd        Float         @default(0)
+  avgLatencyMs   Float?
+  avgSlippageBps Float?
+  avgHoldMinutes Float?
+  blockedCount   Int           @default(0)
+  complianceHits Int           @default(0)
+  score          Float?
+  volatilityPct  Float?
+  drawdownPct    Float?
+  stats          Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([symbol, mode, bucketStart])
+  @@index([sessionId, windowMinutes, bucketStart])
+  @@unique([sessionId, symbol, mode, regime, windowMinutes, bucketStart], name: "agent_performance_window_unique")
 }

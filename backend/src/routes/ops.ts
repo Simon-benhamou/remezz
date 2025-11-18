@@ -9,6 +9,7 @@ import {
   triggerManualRetraining, 
   getRetrainingStatus 
 } from '../learning/predictorRetrainer.js';
+import { getSelectorSnapshot, refreshSelectorSnapshot } from '../services/selectorAgent.js';
 
 export const router = Router();
 
@@ -87,6 +88,29 @@ router.get('/jobs', async (_req: AuthenticatedRequest, res) => {
     res.json(snapshot);
   } catch (error: any) {
     res.status(500).json({ error: 'ops_jobs_failed', message: String(error?.message || error) });
+  }
+});
+
+router.get('/selector', async (req: AuthenticatedRequest, res) => {
+  try {
+    const force = req.query.force === 'true';
+    const refreshReason = force ? 'rest_force' : 'rest';
+    const current = getSelectorSnapshot();
+    const snapshot = !current || force
+      ? await refreshSelectorSnapshot(refreshReason)
+      : current;
+    res.json({
+      ok: true,
+      snapshot,
+      refreshedAt: Date.now(),
+      reason: (!current || force) ? refreshReason : 'cached',
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      ok: false,
+      code: 'selector_snapshot_failed',
+      message: String(error?.message || error),
+    });
   }
 });
 

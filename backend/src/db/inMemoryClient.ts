@@ -28,7 +28,8 @@ type ModelName =
   | 'autoUniverseSchedule'
   | 'schedulerJob'
   | 'tradeEvaluation'
-  | 'cryptoPersonalityProfile';
+  | 'cryptoPersonalityProfile'
+  | 'agentPerformanceLedger';
 
 type ModelStore = Map<ModelName, any[]>;
 
@@ -353,6 +354,33 @@ const MODEL_DEFAULTS: Partial<Record<ModelName, DefaultFactory>> = {
     createdAt: new Date(),
     updatedAt: new Date(),
   }),
+  agentPerformanceLedger: () => ({
+    id: randomUUID(),
+    sessionId: randomUUID(),
+    agentName: 'Test Agent',
+    agentFamily: 'meta_adaptive',
+    symbol: 'TEST/USDT',
+    mode: 'paper',
+    regime: null,
+    windowMinutes: 1440,
+    bucketStart: new Date(),
+    tradeCount: 0,
+    winRate: 0,
+    realizedPnlUsd: 0,
+    netPnlUsd: 0,
+    feesUsd: 0,
+    avgLatencyMs: null,
+    avgSlippageBps: null,
+    avgHoldMinutes: null,
+    blockedCount: 0,
+    complianceHits: 0,
+    score: null,
+    volatilityPct: null,
+    drawdownPct: null,
+    stats: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
 };
 
 class InMemoryModel {
@@ -547,6 +575,7 @@ export class InMemoryPrismaClient {
   schedulerJob: InMemoryModel;
   tradeEvaluation: InMemoryModel;
   cryptoPersonalityProfile: InMemoryModel;
+  agentPerformanceLedger: InMemoryModel;
 
   constructor() {
     this.store = new Map();
@@ -575,6 +604,7 @@ export class InMemoryPrismaClient {
     this.schedulerJob = new InMemoryModel('schedulerJob', this);
     this.tradeEvaluation = new InMemoryModel('tradeEvaluation', this);
     this.cryptoPersonalityProfile = new InMemoryModel('cryptoPersonalityProfile', this);
+    this.agentPerformanceLedger = new InMemoryModel('agentPerformanceLedger', this);
   }
 
   _getStore(name: ModelName): any[] {

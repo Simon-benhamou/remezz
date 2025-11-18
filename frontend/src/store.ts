@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { OpsJobStatus } from './types/ops';
+import type { SelectorSnapshot } from './types/selector';
 
 // Types
 export type AppMode = 'live' | 'paper';
@@ -283,6 +284,39 @@ export const useOpsJobsStore = create<OpsJobsStore>()((set, get) => ({
     });
   },
   reset: () => set({ jobs: [], lastUpdated: null, loading: false, error: null }),
+}));
+
+type SelectorInsightsStore = {
+  snapshot: SelectorSnapshot | null;
+  lastUpdated: number | null;
+  lastReason: string | null;
+  loading: boolean;
+  error: string | null;
+  setSnapshot: (snapshot: SelectorSnapshot | null, meta?: { reason?: string; updatedAt?: number }) => void;
+  setLoading: (loading: boolean) => void;
+  setError: (error: string | null) => void;
+  reset: () => void;
+};
+
+export const useSelectorInsightsStore = create<SelectorInsightsStore>()((set) => ({
+  snapshot: null,
+  lastUpdated: null,
+  lastReason: null,
+  loading: false,
+  error: null,
+  setSnapshot: (snapshot, meta) => {
+    const updatedAt = meta?.updatedAt ?? Date.now();
+    set({
+      snapshot,
+      lastUpdated: updatedAt,
+      lastReason: meta?.reason ?? null,
+      loading: false,
+      error: null,
+    });
+  },
+  setLoading: (loading) => set({ loading }),
+  setError: (error) => set({ error, loading: false }),
+  reset: () => set({ snapshot: null, lastUpdated: null, lastReason: null, loading: false, error: null }),
 }));
 
 // Selectors for better performance

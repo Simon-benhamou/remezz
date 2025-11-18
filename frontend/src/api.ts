@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { OpsJobsResponse } from './types/ops';
+import type { SelectorSnapshotResponse } from './types/selector';
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 let TOKEN: string = localStorage.getItem('apiKey') || '';
 
@@ -192,6 +193,10 @@ export const api = {
     return (await client.get('/api/ops/events', { params })).data;
   },
   getOpsJobs: async () => (await client.get('/api/ops/jobs')).data as OpsJobsResponse,
+  getSelectorSnapshot: async (options?: { force?: boolean }) =>
+    (await client.get('/api/ops/selector', {
+      params: options?.force ? { force: 'true' } : undefined,
+    })).data as SelectorSnapshotResponse,
   getAgentHealth: async () =>
     (await client.get('/api/ops/agent-health')).data,
   getPortfolio: async (mode: 'paper' | 'live' = 'paper') =>
