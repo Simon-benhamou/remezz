@@ -6,8 +6,7 @@ WORKDIR /app
 COPY package*.json ./
 # Use flags to reduce external calls and speed up CI
 # Skip Cypress binary download (not needed for production build)
-ENV CYPRESS_INSTALL_BINARY=0
-RUN npm ci --no-audit --no-fund
+RUN CYPRESS_INSTALL_BINARY=0 npm ci --no-audit --no-fund --omit=optional
 # IMPORTANT: déclarer l'ARG pour l'injecter au build
 ARG VITE_API_BASE
 ENV VITE_API_BASE=${VITE_API_BASE}
