@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 import { api } from '../../api';
+import { formatPriceDisplay } from '../../utils/number';
 
 interface PredictorDecision {
   id: string;
@@ -187,7 +188,7 @@ export function PredictorDecisionsPanel({ symbol }: PredictorDecisionsPanelProps
       key: 'price',
       width: 110,
       align: 'right' as const,
-      render: (price: number) => `$${price.toFixed(4)}`,
+      render: (price: number) => `$${formatPriceDisplay(price)}`,
     },
     {
       title: 'Exit Price',
@@ -196,7 +197,7 @@ export function PredictorDecisionsPanel({ symbol }: PredictorDecisionsPanelProps
       width: 110,
       align: 'right' as const,
       render: (exitPrice: number | null) => 
-        exitPrice ? `$${exitPrice.toFixed(4)}` : <span style={{ color: '#8c8c8c' }}>-</span>,
+        exitPrice ? `$${formatPriceDisplay(exitPrice)}` : <span style={{ color: '#8c8c8c' }}>-</span>,
     },
     {
       title: 'Price Change',

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createChart, ColorType, IChartApi, ISeriesApi, LineStyle, LineWidth, UTCTimestamp, IPriceLine } from 'lightweight-charts';
 import { api } from '../../api';
 import { Button, Space, Spin } from 'antd';
+import { formatPriceDisplay } from '../../utils/number';
 
 interface PositionInfo {
   entryPrice?: number;
@@ -78,7 +79,7 @@ export default function ProfessionalChart({
   const [error, setError] = useState<string | null>(null);
   const formatPriceLabel = useCallback((value?: number | null) => {
     if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-    return Number(value).toFixed(4);
+    return formatPriceDisplay(value);
   }, []);
 
   // Initialize chart
@@ -428,7 +429,7 @@ export default function ProfessionalChart({
           position: 'belowBar',
           color: '#10b981',
           shape: 'arrowUp',
-          text: `Entry @ ${Number(order.price || 0).toFixed(4)}`,
+          text: `Entry @ ${formatPriceDisplay(Number(order.price || 0))}`,
         });
       }
     });
@@ -446,7 +447,7 @@ export default function ProfessionalChart({
           position: 'aboveBar',
           color: '#ef4444',
           shape: 'arrowDown',
-          text: `Exit @ ${Number(fill.price || 0).toFixed(4)}`,
+          text: `Exit @ ${formatPriceDisplay(Number(fill.price || 0))}`,
         });
       }
     });

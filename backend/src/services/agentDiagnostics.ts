@@ -304,7 +304,104 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       } catch {}
 
       // Return diagnostics based on DB data + symbol profile
+      // 🔴 FIX: Retrieve orders and fills from database even when agent is not in hub
+      const dbOrders = await prisma.order.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      });
+      
+      const dbFills = await prisma.fill.findMany({
+        where: { sessionId },
+        orderBy: { ts: 'desc' },
+        take: 100,
+      });
+
+      const dbPosition = await prisma.position.findFirst({
+        where: { 
+          sessionId,
+          qty: { not: 0 }
+        },
+        orderBy: { openedAt: 'desc' }
+      });
+
+      // Try to get current market price and volume data
+      let currentPrice = 0;
+      let volume24h = 0;
+      let volumeMA = 0;
+      let change24hPct = 0;
+      try {
+        const { getTicker } = await import('../data/market.js');
+        const ticker = await getTicker(session.symbol).catch(() => null);
+        currentPrice = ticker?.last ?? 0;
+        volume24h = (ticker as any)?.volume24h ?? (ticker as any)?.volume ?? 0;
+        volumeMA = (ticker as any)?.volumeMA ?? 0;
+        
+        // Try to get 24h change from OHLCV
+        try {
+          const { getOHLCV } = await import('../data/market.js');
+          const result = await getOHLCV(session.symbol, '1h', 24).catch(() => null);
+          if (result && Array.isArray(result) && result.length >= 24) {
+            const price24hAgo = result[0][4];
+            if (price24hAgo > 0 && currentPrice > 0) {
+              change24hPct = ((currentPrice - price24hAgo) / price24hAgo) * 100;
+            }
+          }
+        } catch {}
+      } catch {}
+
       const hasOpenOrder = session.orders && session.orders.length > 0;
+      let positionInfo: AgentDiagnosticInfo['position'] = null;
+      
+      if (dbPosition) {
+        const entryPrice = Number(dbPosition.entryPrice || 0);
+        const stopPrice = Number(dbPosition.stopPrice || 0);
+        const side = dbPosition.side === 'buy' ? 'long' : 'short';
+        const riskPerUnit = Math.abs(entryPrice - stopPrice);
+        const pnlPerUnit = side === 'long' 
+          ? currentPrice - entryPrice 
+          : entryPrice - currentPrice;
+        const rMultiple = riskPerUnit > 0 ? pnlPerUnit / riskPerUnit : 0;
+        const pnlPct = entryPrice > 0 ? (pnlPerUnit / entryPrice) * 100 : 0;
+        const pnlUsd = pnlPerUnit * Number(dbPosition.qty || 0);
+        const minutesOpen = dbPosition.openedAt 
+          ? Math.floor((Date.now() - new Date(dbPosition.openedAt).getTime()) / 60000)
+          : 0;
+
+        positionInfo = {
+          side,
+          entryPrice,
+          currentPrice,
+          rMultiple: Number(rMultiple.toFixed(2)),
+          pnlUsd: Number(pnlUsd.toFixed(2)),
+          pnlPct: Number(pnlPct.toFixed(2)),
+          minutesOpen,
+          stopPrice,
+          targets: [], // TODO: extract targets from orders
+        };
+      } else if (hasOpenOrder) {
+        positionInfo = {
+          side: session.orders[0].side === 'buy' ? 'long' : 'short',
+          entryPrice: Number(session.orders[0].price || 0),
+          currentPrice: currentPrice || Number(session.orders[0].price || 0),
+          rMultiple: 0,
+          pnlUsd: 0,
+          pnlPct: 0,
+          minutesOpen: Math.floor((Date.now() - new Date(session.orders[0].createdAt).getTime()) / 60000),
+          stopPrice: 0,
+          targets: [],
+        };
+      }
+
+      const inferOrderIntent = (order: { clientOrderId?: string | null }): 'entry' | 'exit' => {
+        const rawId = typeof order.clientOrderId === 'string' ? order.clientOrderId : '';
+        const clientId = rawId.toLowerCase();
+        if (!clientId) return 'entry';
+        if (clientId.includes('exit') || clientId.includes('close') || clientId.includes('reduce')) {
+          return 'exit';
+        }
+        return 'entry';
+      };
 
       return {
         sessionId,
@@ -312,27 +409,36 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         symbolProfile: symbolProfileData,
         predictor: onDemandPredictor,
         strategy: null,
-        position: hasOpenOrder ? {
-          side: session.orders[0].side === 'buy' ? 'long' : 'short',
-          entryPrice: Number(session.orders[0].price || 0),
-          currentPrice: Number(session.orders[0].price || 0),
-          rMultiple: 0,
-          pnlUsd: 0,
-          pnlPct: 0,
-          minutesOpen: Math.floor((Date.now() - new Date(session.orders[0].createdAt).getTime()) / 60000),
-          stopPrice: 0,
-          targets: [],
-        } : null,
+        position: positionInfo,
         market: {
-          last: 0,
-          change24h: 0,
-          volume24h: 0,
-          volumeMA: 0,
-          volumeRatio: 0,
+          last: currentPrice,
+          change24h: Number(change24hPct.toFixed(2)),
+          volume24h: Number(volume24h.toFixed(0)),
+          volumeMA: Number(volumeMA.toFixed(0)),
+          volumeRatio: Number((volume24h / Math.max(volumeMA, 1)).toFixed(2)),
         },
         technicalLevels: null,
-        orders: [],
-        fills: [],
+        orders: dbOrders.map(o => ({
+          id: o.id,
+          clientOrderId: o.clientOrderId,
+          intent: inferOrderIntent(o),
+          side: (o.side || 'buy') as 'long' | 'short',
+          type: o.type || 'market',
+          status: o.status || 'unknown',
+          price: o.price ? Number(o.price.toString()) : null,
+          amount: o.qty ? Number(o.qty.toString()) : 0,
+          filled: o.qty ? Number(o.qty.toString()) : 0,
+          createdAt: o.createdAt.toISOString(),
+        })),
+        fills: dbFills.map(f => ({
+          id: f.id,
+          orderId: f.orderId,
+          side: (f.side || 'buy') as 'long' | 'short',
+          price: f.price ? Number(f.price.toString()) : 0,
+          amount: f.qty ? Number(f.qty.toString()) : 0,
+          fee: f.fee ? Number(f.fee.toString()) : 0,
+          createdAt: f.ts.toISOString(),
+        })),
         timestamp: Date.now(),
       };
     }
@@ -397,7 +503,105 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       } catch {}
 
       // Return diagnostics even if we couldn't compute a snapshot
+      // 🔴 FIX: Retrieve orders and fills from database
+      const dbOrders = await prisma.order.findMany({
+        where: { sessionId },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      });
+      
+      const dbFills = await prisma.fill.findMany({
+        where: { sessionId },
+        orderBy: { ts: 'desc' },
+        take: 100,
+      });
+
+      const dbPosition = await prisma.position.findFirst({
+        where: { 
+          sessionId,
+          qty: { not: 0 }
+        },
+        orderBy: { openedAt: 'desc' }
+      });
+
+      // Try to get current market price and volume data
+      let currentPrice = 0;
+      let volume24h = 0;
+      let volumeMA = 0;
+      let change24hPct = 0;
+      try {
+        const { getTicker } = await import('../data/market.js');
+        const ticker = await getTicker(session.symbol).catch(() => null);
+        currentPrice = ticker?.last ?? 0;
+        volume24h = (ticker as any)?.volume24h ?? (ticker as any)?.volume ?? 0;
+        volumeMA = (ticker as any)?.volumeMA ?? 0;
+        
+        // Try to get 24h change from OHLCV
+        try {
+          const { getOHLCV } = await import('../data/market.js');
+          const result = await getOHLCV(session.symbol, '1h', 24).catch(() => null);
+          if (result && Array.isArray(result) && result.length >= 24) {
+            const price24hAgo = result[0][4];
+            if (price24hAgo > 0 && currentPrice > 0) {
+              change24hPct = ((currentPrice - price24hAgo) / price24hAgo) * 100;
+            }
+          }
+        } catch {}
+      } catch {}
+
       const hasOpenOrder = session.orders && session.orders.length > 0;
+      let positionInfo: AgentDiagnosticInfo['position'] = null;
+      
+      if (dbPosition) {
+        const entryPrice = Number(dbPosition.entryPrice || 0);
+        const stopPrice = Number(dbPosition.stopPrice || 0);
+        const side = dbPosition.side === 'buy' ? 'long' : 'short';
+        const riskPerUnit = Math.abs(entryPrice - stopPrice);
+        const pnlPerUnit = side === 'long' 
+          ? currentPrice - entryPrice 
+          : entryPrice - currentPrice;
+        const rMultiple = riskPerUnit > 0 ? pnlPerUnit / riskPerUnit : 0;
+        const pnlPct = entryPrice > 0 ? (pnlPerUnit / entryPrice) * 100 : 0;
+        const pnlUsd = pnlPerUnit * Number(dbPosition.qty || 0);
+        const minutesOpen = dbPosition.openedAt 
+          ? Math.floor((Date.now() - new Date(dbPosition.openedAt).getTime()) / 60000)
+          : 0;
+
+        positionInfo = {
+          side,
+          entryPrice,
+          currentPrice,
+          rMultiple: Number(rMultiple.toFixed(2)),
+          pnlUsd: Number(pnlUsd.toFixed(2)),
+          pnlPct: Number(pnlPct.toFixed(2)),
+          minutesOpen,
+          stopPrice,
+          targets: [],
+        };
+      } else if (hasOpenOrder) {
+        positionInfo = {
+          side: session.orders[0].side === 'buy' ? 'long' : 'short',
+          entryPrice: Number(session.orders[0].price || 0),
+          currentPrice: currentPrice || Number(session.orders[0].price || 0),
+          rMultiple: 0,
+          pnlUsd: 0,
+          pnlPct: 0,
+          minutesOpen: Math.floor((Date.now() - new Date(session.orders[0].createdAt).getTime()) / 60000),
+          stopPrice: 0,
+          targets: [],
+        };
+      }
+
+      const inferOrderIntent = (order: { clientOrderId?: string | null }): 'entry' | 'exit' => {
+        const rawId = typeof order.clientOrderId === 'string' ? order.clientOrderId : '';
+        const clientId = rawId.toLowerCase();
+        if (!clientId) return 'entry';
+        if (clientId.includes('exit') || clientId.includes('close') || clientId.includes('reduce')) {
+          return 'exit';
+        }
+        return 'entry';
+      };
+
       return {
         sessionId,
         symbol: session.symbol,
@@ -413,27 +617,36 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         },
         predictor: onDemandPredictor,
         strategy: null,
-        position: hasOpenOrder ? {
-          side: session.orders[0].side === 'buy' ? 'long' : 'short',
-          entryPrice: Number(session.orders[0].price || 0),
-          currentPrice: Number(session.orders[0].price || 0),
-          rMultiple: 0,
-          pnlUsd: 0,
-          pnlPct: 0,
-          minutesOpen: Math.floor((Date.now() - new Date(session.orders[0].createdAt).getTime()) / 60000),
-          stopPrice: 0,
-          targets: [],
-        } : null,
+        position: positionInfo,
         market: {
-          last: 0,
-          change24h: 0,
-          volume24h: 0,
-          volumeMA: 0,
-          volumeRatio: 0,
+          last: currentPrice,
+          change24h: Number(change24hPct.toFixed(2)),
+          volume24h: Number(volume24h.toFixed(0)),
+          volumeMA: Number(volumeMA.toFixed(0)),
+          volumeRatio: Number((volume24h / Math.max(volumeMA, 1)).toFixed(2)),
         },
         technicalLevels: null,
-        orders: [],
-        fills: [],
+        orders: dbOrders.map(o => ({
+          id: o.id,
+          clientOrderId: o.clientOrderId,
+          intent: inferOrderIntent(o),
+          side: (o.side || 'buy') as 'long' | 'short',
+          type: o.type || 'market',
+          status: o.status || 'unknown',
+          price: o.price ? Number(o.price.toString()) : null,
+          amount: o.qty ? Number(o.qty.toString()) : 0,
+          filled: o.qty ? Number(o.qty.toString()) : 0,
+          createdAt: o.createdAt.toISOString(),
+        })),
+        fills: dbFills.map(f => ({
+          id: f.id,
+          orderId: f.orderId,
+          side: (f.side || 'buy') as 'long' | 'short',
+          price: f.price ? Number(f.price.toString()) : 0,
+          amount: f.qty ? Number(f.qty.toString()) : 0,
+          fee: f.fee ? Number(f.fee.toString()) : 0,
+          createdAt: f.ts.toISOString(),
+        })),
         timestamp: Date.now(),
       };
     }

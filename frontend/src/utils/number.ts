@@ -56,3 +56,35 @@ export function safeLeverage(value: any): string {
   const num = safeNumber(value, 1);
   return `${safeToFixed(num, 1)}x`;
 }
+
+/**
+ * Intelligently formats a price based on its magnitude
+ * - >= $1000: 2 decimals (e.g., $1,234.56)
+ * - >= $1: 4 decimals (e.g., $12.3456)
+ * - >= $0.01: 6 decimals (e.g., $0.123456)
+ * - < $0.01: 8 decimals (e.g., $0.00384280)
+ */
+export function formatPriceDisplay(value: any): string {
+  const num = safeNumber(value);
+  
+  if (num === 0) return '0.00';
+  
+  const absNum = Math.abs(num);
+  
+  if (absNum >= 1000) {
+    return num.toFixed(2);
+  } else if (absNum >= 1) {
+    return num.toFixed(4);
+  } else if (absNum >= 0.01) {
+    return num.toFixed(6);
+  } else {
+    return num.toFixed(8);
+  }
+}
+
+/**
+ * Formats price with appropriate decimals and adds $ prefix
+ */
+export function formatPriceWithCurrency(value: any, currency: string = '$'): string {
+  return `${currency}${formatPriceDisplay(value)}`;
+}

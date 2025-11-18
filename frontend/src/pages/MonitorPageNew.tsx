@@ -18,6 +18,7 @@ import { StrategyCard } from '../components/monitor/StrategyCard';
 import { PredictorCard } from '../components/monitor/PredictorCard';
 import { PredictorDecisionsPanel } from '../components/monitor/PredictorDecisionsPanel';
 import { OrdersTradesPanel } from '../components/monitor/OrdersTradesPanel';
+import { formatPriceDisplay } from '../utils/number';
 
 const { Content } = Layout;
 
@@ -170,7 +171,7 @@ export function MonitorPageNew() {
               <Col span={5}>
                 <Statistic
                   title="Price"
-                  value={market.last?.toFixed(4) || 'N/A'}
+                  value={formatPriceDisplay(market.last) || 'N/A'}
                   prefix={<DollarOutlined />}
                   valueStyle={{ fontSize: '18px' }}
                 />

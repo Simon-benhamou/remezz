@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, Row, Col, Statistic, Tag, Space, Alert } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined } from '../icons';
+import { formatPriceDisplay } from '../utils/number';
 
 type Props = {
   symbol?: string;
@@ -57,12 +58,6 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate, status 
     return vol.toFixed(0);
   };
 
-  const formatPrice = (price: number) => {
-    if (price >= 100) return price.toFixed(2);
-    if (price >= 1) return price.toFixed(4);
-    return price.toFixed(6);
-  };
-
   const isPositive = percentage24h >= 0;
   const changeColor = isPositive ? '#3f8600' : '#cf1322';
   const changeIcon = isPositive ? <ArrowUpOutlined /> : <ArrowDownOutlined />;
@@ -97,7 +92,7 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate, status 
               {symbol || 'Unknown'}
             </div>
             <div style={{ fontSize: 20, fontWeight: 'bold', color: '#1890ff' }}>
-              ${formatPrice(currentPrice)}
+              ${formatPriceDisplay(currentPrice)}
             </div>
           </div>
         </Col>
@@ -113,7 +108,7 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate, status 
             prefix={changeIcon}
           />
           <div style={{ color: changeColor, fontSize: 12, marginTop: 4 }}>
-            {isPositive ? '+' : ''}{formatPrice(change24h)}
+            {isPositive ? '+' : ''}{formatPriceDisplay(change24h)}
           </div>
         </Col>
 
@@ -122,10 +117,10 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate, status 
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 12, color: '#666', marginBottom: 2 }}>24h Range</div>
             <div style={{ color: '#cf1322', fontSize: 14, fontWeight: 'bold' }}>
-              H: ${formatPrice(high24h)}
+              H: ${formatPriceDisplay(high24h)}
             </div>
             <div style={{ color: '#3f8600', fontSize: 14, fontWeight: 'bold' }}>
-              L: ${formatPrice(low24h)}
+              L: ${formatPriceDisplay(low24h)}
             </div>
           </div>
         </Col>
@@ -148,9 +143,9 @@ export default function LiveMetrics({ symbol, price, ticker, lastUpdate, status 
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 12, color: '#666', marginBottom: 2 }}>Bid/Ask</div>
             <div style={{ fontSize: 13 }}>
-              <span style={{ color: '#3f8600' }}>{formatPrice(bid)}</span>
+              <span style={{ color: '#3f8600' }}>{formatPriceDisplay(bid)}</span>
               {' / '}
-              <span style={{ color: '#cf1322' }}>{formatPrice(ask)}</span>
+              <span style={{ color: '#cf1322' }}>{formatPriceDisplay(ask)}</span>
             </div>
             <div style={{ fontSize: 11, color: '#666' }}>
               Spread: {spread.toFixed(3)}%

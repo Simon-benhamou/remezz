@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import { useMemo, useState } from 'react';
 import type { MenuProps } from 'antd';
+import { formatPriceDisplay } from '../../utils/number';
 
 const { Text } = Typography;
 
@@ -243,7 +244,7 @@ export function OrdersTradesPanel({
       key: 'price',
       width: 120,
       align: 'right' as const,
-      render: (price: number) => price ? `$${price.toFixed(4)}` : 'Market',
+      render: (price: number) => price ? `$${formatPriceDisplay(price)}` : 'Market',
     },
     {
       title: 'Amount',
