@@ -17,10 +17,7 @@ export default {
       'ts-jest',
       {
         useESM: true,
-        tsconfig: {
-          module: 'esnext',
-          moduleResolution: 'node',
-        },
+        tsconfig: './tsconfig.test.json',
       },
     ],
   },

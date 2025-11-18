@@ -7,6 +7,17 @@ import { capitalConfig } from '../config/capital.js';
 import { getCapitalManager } from '../services/capitalPool.js';
 import type { Broker } from '../broker/types.js';
 import type { StrategyGuardrail } from '../services/strategyHealth.js';
+import { agentServiceRegistry } from './subagents/serviceRegistry.js';
+import { agentEventBus } from './bus/index.js';
+import type {
+  ExecutionPlan,
+  MarketQualityScore,
+  PredictorInsight,
+  RiskLimits,
+  SentimentSignal,
+} from './subagents/types.js';
+import type { AgentActionIntent, AgentActionType } from './actions/types.js';
+import { buildSupportDiagnostics } from './diagnostics/supportDiagnostics.js';
 
 // AgentHub not used in meta-adaptive - kept for backward compatibility
 type ReboundRejectionAgent = any;
@@ -29,52 +40,83 @@ export type StopAllResult = {
   sessions: StopAllSessionResult[];
 };
 
+type SupportSnapshot<T> = {
+  data: T;
+  updatedAt: number;
+};
+
+type AgentSupportAlert = {
+  reason: string;
+  limits: RiskLimits;
+  symbol: string;
+  timestamp: number;
+};
+
+type AgentActionSnapshot = {
+  intentId: string;
+  type: AgentActionType;
+  status: 'completed' | 'failed' | 'skipped';
+  failureReason?: string | null;
+  details?: Record<string, unknown> | null;
+};
+
+export type AgentSupportState = {
+  marketQuality?: SupportSnapshot<MarketQualityScore>;
+  sentiment?: SupportSnapshot<SentimentSignal>;
+  riskLimits?: SupportSnapshot<RiskLimits>;
+  executionPlan?: SupportSnapshot<ExecutionPlan>;
+  predictor?: SupportSnapshot<PredictorInsight>;
+  decisions?: SupportSnapshot<{ intents: AgentActionIntent[] }>;
+  actions?: SupportSnapshot<AgentActionSnapshot>;
+  alerts: AgentSupportAlert[];
+};
+
+const MAX_ALERTS = 5;
+
+const createSupportState = (): AgentSupportState => ({ alerts: [] });
+
 export class AgentsHub {
   private agents = new Map<string, any>(); // sessionId -> agent (not used in meta-adaptive)
+  private symbolToSessions = new Map<string, Set<string>>();
+
+  constructor() {
+    this.registerEventSubscriptions();
+  }
 
   get(sessionId: string) { return this.agents.get(sessionId) || null; }
 
+  getSupportState(sessionId: string): AgentSupportState | null {
+    const agent = this.agents.get(sessionId);
+    return (agent?.supportState as AgentSupportState | undefined) ?? null;
+  }
+
   async activate(sessionId: string, profile: ActivationProfile) {
     // Meta-adaptive doesn't use agent instances - create minimal stub with runtime state
+    const supportState = createSupportState();
     const a: any = { 
       sessionId, 
       profile,
       state: 'ACTIVE', // Meta-adaptive agents are stateless - show as ACTIVE when running
       bias: 'none',
       pos: null, // Initialize to prevent ghost position bugs
+      supportState,
       // Stub onTick for compatibility with tests
       onTick: async () => {
         // Meta-adaptive processing happens via tick routing, not agent.onTick
         // This is just a no-op stub for backward compatibility
       },
       // Provide getDiagnostics method for meta-adaptive stub agents
-      getDiagnostics: async () => ({
+      getDiagnostics: async () => buildSupportDiagnostics({
+        sessionId,
+        symbol: profile?.symbol ?? null,
+        profile,
         state: 'ACTIVE',
         bias: 'none',
-        sessionId,
-        profile,
-        canTrade: false,
-        reason: 'Meta-adaptive agent - stateless execution',
-        trigger: {
-          entryReady: false,
-          phase: 'meta_adaptive',
-          bias: 'none',
-          price: undefined,
-          zone: null,
-          inZone: false,
-          confirmationOk: false,
-          momentumOk: false,
-          qualityOk: false,
-          profitOk: false,
-          tp1ProfitPct: 0,
-          minProfitPct: 0,
-          dir: 0,
-        },
-        checks: null,
-        blockers: [],
+        supportState,
       })
     };
     this.agents.set(sessionId, a);
+    this.trackSymbolSession(profile?.symbol ?? null, sessionId);
     return a;
   }
 
@@ -255,6 +297,8 @@ export class AgentsHub {
       }
 
       results.push(result);
+
+      this.deactivate(session.id);
     }
 
     return { sessions: results };
@@ -267,6 +311,16 @@ export class AgentsHub {
 
   listActiveIds() { return Array.from(this.agents.keys()); }
 
+  deactivate(sessionId: string): void {
+    const agent = this.agents.get(sessionId);
+    if (!agent) return;
+    const symbol = agent?.profile?.symbol ?? null;
+    this.agents.delete(sessionId);
+    this.untrackSymbolSession(symbol, sessionId);
+  }
+
+  getServices() { return agentServiceRegistry; }
+
   snapshot() {
     return Array.from(this.agents.entries()).map(([sessionId, agent]) => ({
       sessionId,
@@ -275,7 +329,126 @@ export class AgentsHub {
       symbol: agent.profile?.symbol,
       hasPosition: !!agent.pos,
       aggressiveness: agent.profile?.aggressiveness ?? null,
+      support: agent.supportState
+        ? {
+            marketQualityScore: agent.supportState.marketQuality?.data.score ?? null,
+            sentimentBias: agent.supportState.sentiment?.data.bias ?? null,
+            sentimentConfidence: agent.supportState.sentiment?.data.confidence ?? null,
+            riskMaxPositionUsd: agent.supportState.riskLimits?.data.maxPositionUsd ?? null,
+            predictorConfidence: agent.supportState.predictor?.data.confidence ?? null,
+            executionStrategy: agent.supportState.executionPlan?.data.strategy ?? null,
+            decisionIntentCount: agent.supportState.decisions?.data.intents.length ?? 0,
+            lastActionStatus: agent.supportState.actions?.data ?? null,
+            lastAlert: agent.supportState.alerts.at(-1) ?? null,
+          }
+        : null,
     }));
+  }
+
+  private registerEventSubscriptions(): void {
+    agentEventBus.subscribe('marketQuality.updated', ({ sessionIds, snapshot }) => {
+      sessionIds.forEach((sessionId) => {
+        this.updateSupportState(sessionId, (state) => {
+          state.marketQuality = { data: snapshot, updatedAt: Date.now() };
+        });
+      });
+    });
+
+    agentEventBus.subscribe('sentiment.updated', ({ symbol, snapshot }) => {
+      this.updateSupportStateForSymbol(symbol, (state) => {
+        state.sentiment = { data: snapshot, updatedAt: Date.now() };
+      });
+    });
+
+    agentEventBus.subscribe('riskGovernor.updated', ({ sessionId, limits }) => {
+      this.updateSupportState(sessionId, (state) => {
+        state.riskLimits = { data: limits, updatedAt: Date.now() };
+      });
+    });
+
+    agentEventBus.subscribe('riskGovernor.alert', ({ sessionId, symbol, reason, limits }) => {
+      this.updateSupportState(sessionId, (state) => {
+        state.alerts = [...state.alerts.slice(-(MAX_ALERTS - 1)), {
+          reason,
+          limits,
+          symbol,
+          timestamp: Date.now(),
+        }];
+      });
+    });
+
+    agentEventBus.subscribe('execution.plan.ready', ({ sessionId, plan }) => {
+      this.updateSupportState(sessionId, (state) => {
+        state.executionPlan = { data: plan, updatedAt: Date.now() };
+      });
+    });
+
+    agentEventBus.subscribe('predictor.insight', ({ symbol, insight }) => {
+      this.updateSupportStateForSymbol(symbol, (state) => {
+        state.predictor = { data: insight, updatedAt: Date.now() };
+      });
+    });
+
+    agentEventBus.subscribe('decisions.intent', ({ sessionId, intents }) => {
+      this.updateSupportState(sessionId, (state) => {
+        state.decisions = {
+          data: { intents },
+          updatedAt: Date.now(),
+        };
+      });
+    });
+
+    agentEventBus.subscribe('actions.executed', ({ sessionId, intentId, type, status, details, failureReason }) => {
+      this.updateSupportState(sessionId, (state) => {
+        state.actions = {
+          data: {
+            intentId,
+            type,
+            status,
+            failureReason: failureReason ?? null,
+            details: details ?? null,
+          },
+          updatedAt: Date.now(),
+        };
+      });
+    });
+  }
+
+  private trackSymbolSession(symbol: string | null | undefined, sessionId: string): void {
+    if (!symbol) return;
+    const existing = this.symbolToSessions.get(symbol) ?? new Set<string>();
+    existing.add(sessionId);
+    this.symbolToSessions.set(symbol, existing);
+  }
+
+  private untrackSymbolSession(symbol: string | null | undefined, sessionId: string): void {
+    if (!symbol) return;
+    const existing = this.symbolToSessions.get(symbol);
+    if (!existing) return;
+    existing.delete(sessionId);
+    if (existing.size === 0) {
+      this.symbolToSessions.delete(symbol);
+    }
+  }
+
+  private updateSupportState(sessionId: string, updater: (state: AgentSupportState) => void): void {
+    const agent = this.agents.get(sessionId);
+    if (!agent) return;
+    if (!agent.supportState) {
+      agent.supportState = createSupportState();
+    }
+    updater(agent.supportState as AgentSupportState);
+  }
+
+  private updateSupportStateForSymbol(
+    symbol: string,
+    updater: (state: AgentSupportState, sessionId: string) => void,
+  ): void {
+    const sessionIds = this.symbolToSessions.get(symbol);
+    if (!sessionIds) return;
+    sessionIds.forEach((sessionId) => {
+      this.updateSupportState(sessionId, (state) => updater(state, sessionId));
+    });
   }
 }
 

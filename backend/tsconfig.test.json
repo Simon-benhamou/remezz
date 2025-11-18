@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "jest"],
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "node",
+    "isolatedModules": true
+  },
+  "include": [
+    "src",
+    "test"
+  ]
+}

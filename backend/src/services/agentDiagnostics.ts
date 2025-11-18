@@ -13,6 +13,8 @@ import { AgentHub } from '../agent/hub.js';
 import { classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, classifyTrendingRanging } from '../learning/personalityProfile.js';
 import type { TechnicalSnapshot } from '../ai/tech.js';
 import { getPredictorReliabilityMetrics } from '../quantai/pythonPredictor.js';
+import type { ExecutionPlan, MarketQualityScore, RiskLimits, SentimentSignal } from '../agent/subagents/types.js';
+import { agentServiceRegistry } from '../agent/subagents/serviceRegistry.js';
 
 export type AgentDiagnosticInfo = {
   sessionId: string;
@@ -90,6 +92,13 @@ export type AgentDiagnosticInfo = {
     stopPrice: number;
     targets: number[];
   } | null;
+  
+  supportAgents: {
+    marketQuality: MarketQualityScore;
+    sentiment: SentimentSignal;
+    riskLimits: RiskLimits;
+    executionPlan: ExecutionPlan | null;
+  };
   
   // Market Context
   market: {
@@ -327,15 +336,15 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
 
       // Try to get current market price and volume data
       let currentPrice = 0;
-      let volume24h = 0;
-      let volumeMA = 0;
-      let change24hPct = 0;
+      let fallbackVolume24h = 0;
+      let fallbackVolumeMA = 0;
+      let fallbackChange24hPct = 0;
       try {
         const { getTicker } = await import('../data/market.js');
         const ticker = await getTicker(session.symbol).catch(() => null);
         currentPrice = ticker?.last ?? 0;
-        volume24h = (ticker as any)?.volume24h ?? (ticker as any)?.volume ?? 0;
-        volumeMA = (ticker as any)?.volumeMA ?? 0;
+        fallbackVolume24h = (ticker as any)?.volume24h ?? (ticker as any)?.volume ?? 0;
+        fallbackVolumeMA = (ticker as any)?.volumeMA ?? 0;
         
         // Try to get 24h change from OHLCV
         try {
@@ -344,7 +353,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           if (result && Array.isArray(result) && result.length >= 24) {
             const price24hAgo = result[0][4];
             if (price24hAgo > 0 && currentPrice > 0) {
-              change24hPct = ((currentPrice - price24hAgo) / price24hAgo) * 100;
+              fallbackChange24hPct = ((currentPrice - price24hAgo) / price24hAgo) * 100;
             }
           }
         } catch {}
@@ -403,6 +412,10 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         return 'entry';
       };
 
+      const supportAgents = await buildSupportAgentsSnapshot(sessionId, session.symbol, {
+        side: positionInfo?.side === 'long' ? 'buy' : 'sell',
+      });
+
       return {
         sessionId,
         symbol: session.symbol,
@@ -410,12 +423,13 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         predictor: onDemandPredictor,
         strategy: null,
         position: positionInfo,
+        supportAgents,
         market: {
           last: currentPrice,
-          change24h: Number(change24hPct.toFixed(2)),
-          volume24h: Number(volume24h.toFixed(0)),
-          volumeMA: Number(volumeMA.toFixed(0)),
-          volumeRatio: Number((volume24h / Math.max(volumeMA, 1)).toFixed(2)),
+          change24h: Number(fallbackChange24hPct.toFixed(2)),
+          volume24h: Number(fallbackVolume24h.toFixed(0)),
+          volumeMA: Number(fallbackVolumeMA.toFixed(0)),
+          volumeRatio: Number((fallbackVolume24h / Math.max(fallbackVolumeMA, 1)).toFixed(2)),
         },
         technicalLevels: null,
         orders: dbOrders.map(o => ({
@@ -526,15 +540,15 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
 
       // Try to get current market price and volume data
       let currentPrice = 0;
-      let volume24h = 0;
-      let volumeMA = 0;
-      let change24hPct = 0;
+      let fallbackVolume24h = 0;
+      let fallbackVolumeMA = 0;
+      let fallbackChange24hPct = 0;
       try {
         const { getTicker } = await import('../data/market.js');
         const ticker = await getTicker(session.symbol).catch(() => null);
         currentPrice = ticker?.last ?? 0;
-        volume24h = (ticker as any)?.volume24h ?? (ticker as any)?.volume ?? 0;
-        volumeMA = (ticker as any)?.volumeMA ?? 0;
+        fallbackVolume24h = (ticker as any)?.volume24h ?? (ticker as any)?.volume ?? 0;
+        fallbackVolumeMA = (ticker as any)?.volumeMA ?? 0;
         
         // Try to get 24h change from OHLCV
         try {
@@ -543,7 +557,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           if (result && Array.isArray(result) && result.length >= 24) {
             const price24hAgo = result[0][4];
             if (price24hAgo > 0 && currentPrice > 0) {
-              change24hPct = ((currentPrice - price24hAgo) / price24hAgo) * 100;
+              fallbackChange24hPct = ((currentPrice - price24hAgo) / price24hAgo) * 100;
             }
           }
         } catch {}
@@ -602,6 +616,10 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         return 'entry';
       };
 
+      const supportAgents = await buildSupportAgentsSnapshot(sessionId, session.symbol, {
+        side: positionInfo?.side === 'long' ? 'buy' : 'sell',
+      });
+
       return {
         sessionId,
         symbol: session.symbol,
@@ -618,12 +636,13 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         predictor: onDemandPredictor,
         strategy: null,
         position: positionInfo,
+        supportAgents,
         market: {
           last: currentPrice,
-          change24h: Number(change24hPct.toFixed(2)),
-          volume24h: Number(volume24h.toFixed(0)),
-          volumeMA: Number(volumeMA.toFixed(0)),
-          volumeRatio: Number((volume24h / Math.max(volumeMA, 1)).toFixed(2)),
+          change24h: Number(fallbackChange24hPct.toFixed(2)),
+          volume24h: Number(fallbackVolume24h.toFixed(0)),
+          volumeMA: Number(fallbackVolumeMA.toFixed(0)),
+          volumeRatio: Number((fallbackVolume24h / Math.max(fallbackVolumeMA, 1)).toFixed(2)),
         },
         technicalLevels: null,
         orders: dbOrders.map(o => ({
@@ -940,6 +959,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       srBias: snap.srBias || null,
     };
 
+
     // Get orders and fills
     const orders = await prisma.order.findMany({
       where: { sessionId },
@@ -953,6 +973,10 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       take: 100,
     });
 
+    const supportAgents = await buildSupportAgentsSnapshot(sessionId, session.symbol, {
+      side: positionInfo?.side === 'long' ? 'buy' : 'sell',
+    });
+
     return {
       sessionId,
       symbol: session.symbol,
@@ -960,6 +984,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       predictor: predictorInfo,
       strategy: strategyInfo,
       position: positionInfo,
+      supportAgents,
       market,
       technicalLevels,
       orders: orders.map(o => ({
@@ -989,4 +1014,28 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
     console.error(`[getAgentDiagnosticInfo] Error for session ${sessionId}:`, error);
     return null;
   }
+}
+
+async function buildSupportAgentsSnapshot(
+  sessionId: string,
+  symbol: string,
+  params: { side: 'buy' | 'sell' | undefined },
+) {
+  const services = agentServiceRegistry;
+  const marketQuality = await services.marketQuality.assess(symbol);
+  const sentiment = await services.sentiment.getSignal(symbol);
+  const riskLimits = await services.riskGovernor.getLimits(sessionId, symbol);
+  let executionPlan: ExecutionPlan | null = null;
+  if (params.side) {
+    executionPlan = await services.execution.plan({
+      symbol,
+      side: params.side,
+      sizeUsd: riskLimits.maxPositionUsd,
+      spreadBps: marketQuality.spreadBps,
+      marketQualityScore: marketQuality.score,
+      marketQuality,
+      riskLimits,
+    });
+  }
+  return { marketQuality, sentiment, riskLimits, executionPlan };
 }

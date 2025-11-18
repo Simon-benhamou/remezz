@@ -1,5 +1,5 @@
 import { getEnv } from '../../config/env.js';
-import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/preciseDecimal.js';
 import { estimateCosts } from '../ranking/costModel.js';
 
 export interface ExecutionLeg {

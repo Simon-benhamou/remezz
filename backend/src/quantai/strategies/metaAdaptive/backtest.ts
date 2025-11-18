@@ -31,7 +31,7 @@ import {
   evaluateRecognizedStrategies,
   type RecognizedStrategySignal,
 } from './recognizedStrategies.js';
-import { PreciseDecimal } from './metaAdaptiveAgent.js';
+import { PreciseDecimal } from './preciseDecimal.js';
 import type { TechnicalSnapshot } from '../../../ai/tech.js';
 import { StrategyHealth } from '../../services/strategyHealth.js';
 import { calculateExecutionCosts } from '../../executionCosts.js';

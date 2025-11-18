@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/preciseDecimal.js';
 import { CapitalManager } from '../core/capital/CapitalManager.js';
 import { PaperBalanceProvider } from '../core/capital/PaperBalanceProvider.js';
 import { LiveBalanceProvider } from '../core/capital/LiveBalanceProvider.js';

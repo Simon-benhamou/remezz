@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/preciseDecimal.js';
 import { CapitalManagerConfig } from '../core/capital/types.js';
 import { getConfig } from '../utils/env.js';
 

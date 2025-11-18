@@ -3,6 +3,9 @@ import { createWriteStream, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { prisma } from '../db/client.js';
 import { AgentHub } from '../agent/hub.js';
+import type { AgentSupportState } from '../agent/hub.js';
+import type { ActivationProfile } from '../agent/state.js';
+import { buildSupportDiagnostics } from '../agent/diagnostics/supportDiagnostics.js';
 
 const TRADE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const STALE_ACTIVITY_MS = 6 * 60 * 60 * 1000;
@@ -150,11 +153,17 @@ export function recordOpsEvent(evt: { level?: OpsEventLevel; source: string; mes
   }
 }
 
-export function recentOpsEvents(limit = 50, opts: { sessionId?: string } = {}) {
+export function recentOpsEvents(limit = 50, opts: { sessionId?: string; allowedSessionIds?: Set<string> } = {}) {
   const windowSize = Math.max(1, Math.min(limit, MAX_EVENTS));
-  const slice = opsEvents.slice(-windowSize);
-  const filtered = opts.sessionId ? slice.filter((row) => row.sessionId === opts.sessionId) : slice;
-  return filtered.reverse();
+  let slice = opsEvents.slice(-windowSize);
+  if (opts.sessionId) {
+    slice = slice.filter((row) => row.sessionId === opts.sessionId);
+  }
+  const allowedSessionIds = opts.allowedSessionIds;
+  if (allowedSessionIds && allowedSessionIds.size > 0) {
+    slice = slice.filter((row) => !row.sessionId || allowedSessionIds.has(row.sessionId));
+  }
+  return slice.reverse();
 }
 
 export function clearOpsEvents() {
@@ -174,12 +183,19 @@ function toTimestampMs(value: any): number | null {
 
 export async function computeAgentHealth(
   now = Date.now(),
-  opts: { agentsSnapshot?: AgentSnapshot } = {},
+  opts: { agentsSnapshot?: AgentSnapshot; userId?: string; includeAll?: boolean } = {},
 ): Promise<AgentHealthSnapshot> {
   // Meta-adaptive doesn't use agent instances - derive everything from DB
-  
+
+  const includeAll = Boolean(opts.includeAll);
+  const scopedUserId = includeAll ? undefined : opts.userId;
+  const sessionWhere: Record<string, unknown> = { stoppedAt: null };
+  if (scopedUserId) {
+    sessionWhere.userId = scopedUserId;
+  }
+
   const activeSessions = await prisma.agentSession.findMany({
-    where: { stoppedAt: null },
+    where: sessionWhere,
     select: { 
       id: true, 
       symbol: true, 
@@ -390,46 +406,48 @@ function formatMemory() {
   };
 }
 
-async function countAlertsBySeverity(since: Date) {
+async function countAlertsBySeverity(since: Date, userId?: string) {
+  const userFilter = userId ? { userId } : {};
   const [high, med, low] = await Promise.all([
-    prisma.alert.count({ where: { severity: 'high', createdAt: { gte: since } } }),
-    prisma.alert.count({ where: { severity: 'med', createdAt: { gte: since } } }),
-    prisma.alert.count({ where: { severity: 'low', createdAt: { gte: since } } }),
+    prisma.alert.count({ where: { severity: 'high', createdAt: { gte: since }, ...userFilter } }),
+    prisma.alert.count({ where: { severity: 'med', createdAt: { gte: since }, ...userFilter } }),
+    prisma.alert.count({ where: { severity: 'low', createdAt: { gte: since }, ...userFilter } }),
   ]);
   return { high, med, low, total: high + med + low };
 }
 
-export async function computeOpsMetrics() {
+export async function computeOpsMetrics(opts: { userId?: string; includeAll?: boolean } = {}) {
+  const includeAll = Boolean(opts.includeAll);
+  const scopedUserId = includeAll ? undefined : opts.userId;
   const now = Date.now();
   const uptimeSec = Math.round(process.uptime());
   const loadAvg = os.loadavg()[0];
   const memory = formatMemory();
 
   const marginRepo = (prisma as any).marginSnapshot as any;
+  const agentSnapshot = AgentHub.snapshot();
 
-  const agents = AgentHub.snapshot();
-  const agentStates = agents.reduce((acc: Record<string, number>, a) => {
-    const state = a.state || 'UNKNOWN';
-    acc[state] = (acc[state] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-  const haltedAgents = agents.filter((a) => a.state === 'HALT').length;
-  const managingAgents = agents.filter((a) => a.state === 'MANAGE').length;
+  const sessionWhere: Record<string, unknown> = { stoppedAt: null };
+  if (scopedUserId) {
+    sessionWhere.userId = scopedUserId;
+  }
+
+  const sessionRelationFilter = scopedUserId ? { session: { userId: scopedUserId } } : {};
+  const alertUserId = scopedUserId;
 
   const [
-    activeSessions,
+    sessionRows,
     openPositions,
     protectiveIssues,
     alerts1h,
     alerts24h,
     kpiAgg,
     marginRows,
-    agentHealth,
     tradeStats,
     profitableStats,
   ] = await Promise.all([
-    prisma.agentSession.count({ where: { stoppedAt: null } }),
-    prisma.position.count({ where: { qty: { gt: 0 } } }),
+    prisma.agentSession.findMany({ where: sessionWhere, select: { id: true, symbol: true, profileJson: true } }),
+    prisma.position.count({ where: { qty: { gt: 0 }, ...sessionRelationFilter } }),
     prisma.position.count({
       where: {
         qty: { gt: 0 },
@@ -438,30 +456,61 @@ export async function computeOpsMetrics() {
           { protectiveStatus: { contains: 'error' } },
           { lastProtectiveSyncAt: { lt: new Date(now - 10 * 60 * 1000) } },
         ],
+        ...sessionRelationFilter,
       },
     }),
-    countAlertsBySeverity(new Date(now - 60 * 60 * 1000)),
-    countAlertsBySeverity(new Date(now - 24 * 60 * 60 * 1000)),
-    prisma.sessionKpi.aggregate({ _sum: { aiCallsTotal: true } }),
+    countAlertsBySeverity(new Date(now - 60 * 60 * 1000), alertUserId),
+    countAlertsBySeverity(new Date(now - 24 * 60 * 60 * 1000), alertUserId),
+    prisma.sessionKpi.aggregate({
+      where: scopedUserId ? { session: { userId: scopedUserId } } : undefined,
+      _sum: { aiCallsTotal: true },
+    }),
     marginRepo ? marginRepo.findMany({ orderBy: { createdAt: 'desc' }, take: 120 }) : [],
-    computeAgentHealth(now, { agentsSnapshot: agents }),
     prisma.fill.groupBy({
       by: ['sessionId'],
-      where: { sessionId: { not: null }, realizedPnl: { not: null } },
+      where: {
+        sessionId: { not: null },
+        realizedPnl: { not: null },
+        ...sessionRelationFilter,
+      },
       _count: { _all: true },
       _max: { ts: true },
     }),
     prisma.fill.groupBy({
       by: ['sessionId'],
-      where: { sessionId: { not: null }, realizedPnl: { gt: 0 } },
+      where: {
+        sessionId: { not: null },
+        realizedPnl: { gt: 0 },
+        ...sessionRelationFilter,
+      },
       _max: { ts: true },
     }),
   ]);
 
+  const sessionIds = sessionRows.map((row) => row.id);
+  const sessionIdSet = new Set(sessionIds);
+  const scopedAgents = scopedUserId
+    ? agentSnapshot.filter((agent) => agent.sessionId && sessionIdSet.has(agent.sessionId))
+    : agentSnapshot;
+
+  const agentStates = scopedAgents.reduce((acc: Record<string, number>, a) => {
+    const state = a.state || 'UNKNOWN';
+    acc[state] = (acc[state] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  const haltedAgents = scopedAgents.filter((a) => a.state === 'HALT').length;
+  const managingAgents = scopedAgents.filter((a) => a.state === 'MANAGE').length;
+
+  const agentHealth = await computeAgentHealth(now, { userId: scopedUserId, includeAll });
+
+  const scopedMarginRows = scopedUserId && sessionIdSet.size
+    ? (marginRows as any[]).filter((row) => row.sessionId && sessionIdSet.has(row.sessionId))
+    : marginRows;
+
   let marginSummary: any = null;
-  if (Array.isArray(marginRows) && marginRows.length) {
+  if (Array.isArray(scopedMarginRows) && scopedMarginRows.length) {
     const latestBySession = new Map<string, any>();
-    for (const row of marginRows) {
+    for (const row of scopedMarginRows) {
       if (!latestBySession.has(row.sessionId)) {
         latestBySession.set(row.sessionId, row);
       }
@@ -491,18 +540,22 @@ export async function computeOpsMetrics() {
       critical: criticalCount,
       averageUtilisationPct,
       worstSessions,
-      lastUpdated: marginRows[0]?.createdAt ?? null,
+      lastUpdated: scopedMarginRows[0]?.createdAt ?? null,
     };
   }
 
-  const agentSymbolMap = agents.reduce((acc: Map<string, string | null>, agent) => {
+  const agentSymbolMap = scopedAgents.reduce((acc: Map<string, string | null>, agent) => {
     if (agent.sessionId) {
       acc.set(agent.sessionId, agent.symbol || null);
     }
     return acc;
   }, new Map<string, string | null>());
 
-  const vosEvents = opsEvents.filter((evt) => evt.message === 'validator_of_signal_block');
+  const scopedOpsEvents = scopedUserId
+    ? opsEvents.filter((evt) => !evt.sessionId || sessionIdSet.has(evt.sessionId))
+    : opsEvents;
+
+  const vosEvents = scopedOpsEvents.filter((evt) => evt.message === 'validator_of_signal_block');
   const vosBySession = new Map<string, { sessionId: string; symbol: string | null; count: number; lastEvent: OpsEvent | null }>();
 
   for (const evt of vosEvents) {
@@ -568,13 +621,97 @@ export async function computeOpsMetrics() {
 
   const flaggedSessions = entryGateSessions.filter((row) => row.flagged);
 
+  const agentBySession = scopedAgents.reduce((acc, agent) => {
+    if (agent.sessionId) acc.set(agent.sessionId, agent);
+    return acc;
+  }, new Map<string, AgentSnapshotEntry>());
+
+  const supportSessions = sessionRows
+    .map((session) => {
+      const runtime = agentBySession.get(session.id);
+      const supportState = AgentHub.getSupportState(session.id);
+      if (!runtime && !supportState) {
+        return null;
+      }
+
+      const profile = (session.profileJson as ActivationProfile | null) ?? null;
+      const derivedBias = (runtime?.support as any)?.sentimentBias
+        ?? (profile && typeof profile === 'object' ? (profile as Record<string, any>)?.bias : null)
+        ?? 'none';
+
+      const diagnostics = buildSupportDiagnostics({
+        sessionId: session.id,
+        symbol: session.symbol,
+        profile,
+        state: runtime?.state ?? 'UNKNOWN',
+        bias: derivedBias,
+        supportState,
+      });
+
+      const summarizeSnapshot = (snapshot: { status: string; ageMs: number | null; staleAfterMs: number }) => ({
+        status: snapshot.status,
+        ageMs: snapshot.ageMs,
+        staleAfterMs: snapshot.staleAfterMs,
+      });
+
+      const perception = Object.fromEntries(
+        Object.entries(diagnostics.perception).map(([key, snapshot]) => [
+          key,
+          summarizeSnapshot(snapshot as any),
+        ]),
+      );
+
+      return {
+        sessionId: diagnostics.sessionId,
+        symbol: diagnostics.symbol,
+        canTrade: diagnostics.canTrade,
+        reason: diagnostics.reason,
+        blockers: diagnostics.blockers,
+        perception,
+        decisions: {
+          status: diagnostics.decisions.status,
+          ageMs: diagnostics.decisions.ageMs,
+          summary: diagnostics.decisions.summary,
+        },
+        actions: {
+          status: diagnostics.actions.status,
+          ageMs: diagnostics.actions.ageMs,
+          details: diagnostics.actions.data ?? null,
+        },
+        alerts: diagnostics.alerts,
+      };
+    })
+    .filter(Boolean) as Array<{
+      sessionId: string;
+      symbol: string | null;
+      canTrade: boolean;
+      reason: string;
+      blockers: Array<{ key: string; code?: string; message?: string; reason?: string; status?: string }>;
+      perception: Record<string, { status: string; ageMs: number | null; staleAfterMs: number }>;
+      decisions: {
+        status: string;
+        ageMs: number | null;
+        summary: { intentCount: number; lastIntentId: string | null; lastIntentType: string | null; lastReason: string | null };
+      };
+      actions: { status: string; ageMs: number | null; details: Record<string, unknown> | null };
+      alerts: AgentSupportState['alerts'];
+    }>;
+
+  const supportBlockers = supportSessions.flatMap((session) =>
+    session.blockers.map((blocker) => ({
+      ...blocker,
+      sessionId: session.sessionId,
+      symbol: session.symbol,
+    })),
+  );
+
   return {
     timestamp: now,
     uptimeSec,
     loadAvg,
     memory,
     sessions: {
-      active: activeSessions,
+      active: sessionRows.length,
       halted: haltedAgents,
       managing: managingAgents,
     },
@@ -583,7 +720,7 @@ export async function computeOpsMetrics() {
       protectiveIssues,
     },
     agents: {
-      total: agents.length,
+      total: scopedAgents.length,
       states: agentStates,
     },
     alerts: {
@@ -595,6 +732,10 @@ export async function computeOpsMetrics() {
     },
     margin: marginSummary,
     agentHealth,
+    support: {
+      sessions: supportSessions,
+      blockers: supportBlockers,
+    },
     ops: {
       entryGateBlocks: {
         total: vosEvents.length,

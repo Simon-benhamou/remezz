@@ -13,7 +13,7 @@ import {
   toUSD,
   AgentEquitySnapshot,
 } from './types.js';
-import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/preciseDecimal.js';
 
 type AgentEquity = {
   startingEquity: USD;

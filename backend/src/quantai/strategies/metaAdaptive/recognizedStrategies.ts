@@ -1,10 +1,10 @@
 import {
   metaAdaptiveStrategyAgent,
   AdaptiveSignal,
-  PreciseDecimal,
   type AdaptiveExitReason,
   type PredictorUsageSummary,
 } from './metaAdaptiveAgent.js';
+import { PreciseDecimal } from './preciseDecimal.js';
 import { computeInitialBracket } from './exitManager.js';
 import { normalizeOrder } from './orderNormalization.js';
 import { getQuantAIConfig } from '../../config.js';

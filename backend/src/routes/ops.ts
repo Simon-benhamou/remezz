@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticateUser, requireRole, type AuthenticatedRequest } from '../middleware/auth.js';
+import { prisma } from '../db/client.js';
 import { listSchedulerJobs, replaySchedulerJob } from '../services/schedulerJobService.js';
 import { computeAgentHealth, computeOpsMetrics, recentOpsEvents } from '../monitor/ops.js';
 import { getRegenerationStats } from '../engine/events.js';
@@ -10,31 +11,73 @@ import {
 
 export const router = Router();
 
-router.get('/metrics', async (_req, res) => {
+router.use(authenticateUser);
+
+const hasGlobalScope = (user?: AuthenticatedRequest['user']) => Boolean(user?.isLegacy || user?.role === 'admin');
+
+router.get('/metrics', async (req: AuthenticatedRequest, res) => {
   try {
-    const snapshot = await computeOpsMetrics();
+    const includeAll = hasGlobalScope(req.user);
+    if (!includeAll && !req.user?.id) {
+      return res.status(401).json({ error: 'auth_required' });
+    }
+    const snapshot = await computeOpsMetrics({
+      includeAll,
+      userId: includeAll ? undefined : req.user?.id,
+    });
     res.json(snapshot);
   } catch (e: any) {
     res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
-router.get('/agent-health', async (_req, res) => {
+router.get('/agent-health', async (req: AuthenticatedRequest, res) => {
   try {
-    const snapshot = await computeAgentHealth();
+    const includeAll = hasGlobalScope(req.user);
+    if (!includeAll && !req.user?.id) {
+      return res.status(401).json({ error: 'auth_required' });
+    }
+    const snapshot = await computeAgentHealth(undefined, {
+      userId: includeAll ? undefined : req.user?.id,
+      includeAll,
+    });
     res.json(snapshot);
   } catch (e: any) {
     res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
-router.get('/events', (req, res) => {
-  const limit = Number(req.query.limit ?? 50);
-  const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim().length
-    ? req.query.sessionId
-    : undefined;
-  const rows = recentOpsEvents(Number.isFinite(limit) ? limit : 50, { sessionId });
-  res.json(rows);
+router.get('/events', async (req: AuthenticatedRequest, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 50);
+    const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId.trim().length
+      ? req.query.sessionId
+      : undefined;
+    const includeAll = hasGlobalScope(req.user);
+    let allowedSessionIds: Set<string> | undefined;
+
+    if (!includeAll) {
+      if (!req.user?.id) {
+        return res.status(401).json({ error: 'auth_required' });
+      }
+      const ownedSessions = await prisma.agentSession.findMany({
+        where: { userId: req.user.id },
+        select: { id: true },
+      });
+      allowedSessionIds = new Set(ownedSessions.map((row) => row.id));
+      if (sessionId && !allowedSessionIds.has(sessionId)) {
+        return res.status(403).json({ error: 'session_forbidden' });
+      }
+    }
+
+    const rows = recentOpsEvents(Number.isFinite(limit) ? limit : 50, {
+      sessionId,
+      allowedSessionIds,
+    });
+    res.json(rows);
+  } catch (error: any) {
+    res.status(500).json({ error: String(error?.message || error) });
+  }
 });
 
 // Phase 2: Get regeneration learning stats
@@ -62,7 +105,7 @@ router.get('/regeneration-stats', (req, res) => {
   }
 });
 
-router.get('/scheduler/jobs', authenticateUser, requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+router.get('/scheduler/jobs', requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user) {
       return res.status(401).json({ ok: false, code: 'auth_required', message: 'Authentication required' });
@@ -84,7 +127,7 @@ router.get('/scheduler/jobs', authenticateUser, requireRole(['admin']), async (r
   }
 });
 
-router.post('/scheduler/jobs/:id/replay', authenticateUser, requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+router.post('/scheduler/jobs/:id/replay', requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user) {
       return res.status(401).json({ ok: false, code: 'auth_required', message: 'Authentication required' });
@@ -104,7 +147,7 @@ router.post('/scheduler/jobs/:id/replay', authenticateUser, requireRole(['admin'
 });
 
 // Predictor retraining endpoints
-router.get('/predictor/retrain-status', authenticateUser, requireRole(['admin']), (req: AuthenticatedRequest, res) => {
+router.get('/predictor/retrain-status', requireRole(['admin']), (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user) {
       return res.status(401).json({ ok: false, code: 'auth_required', message: 'Authentication required' });
@@ -119,7 +162,7 @@ router.get('/predictor/retrain-status', authenticateUser, requireRole(['admin'])
   }
 });
 
-router.post('/predictor/retrain', authenticateUser, requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+router.post('/predictor/retrain', requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user) {
       return res.status(401).json({ ok: false, code: 'auth_required', message: 'Authentication required' });

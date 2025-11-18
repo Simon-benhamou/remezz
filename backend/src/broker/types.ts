@@ -1,3 +1,5 @@
+import type { ExecutionPlan } from '../agent/subagents/types.js';
+
 export type OrderSide = 'buy'|'sell';
 export type OrderType = 'market'|'limit';
 
@@ -32,6 +34,7 @@ export type NewOrder = {
       parameterSource?: string;
     };
   };
+  executionPlan?: ExecutionPlan;
 };
 
 export type PlacedOrder = NewOrder & {

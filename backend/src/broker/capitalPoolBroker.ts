@@ -4,7 +4,7 @@ import { logTradeEvaluation } from '../learning/tradeEvaluationLogger.js';
 import type { Broker, BrokerMarginSnapshot, NewOrder, PlacedOrder } from './types.js';
 import { CapitalManager } from '../core/capital/CapitalManager.js';
 import { USD, ZERO_USD } from '../core/capital/types.js';
-import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/preciseDecimal.js';
 
 type CapitalPoolBrokerParams = {
   agentId: string;

@@ -59,6 +59,9 @@ import { rehydrateActiveAgentSessions } from "./services/sessionRehydration.js";
 import { startSchedulerWorker } from "./services/schedulerJobService.js";
 import { initMetaAdaptiveOrchestrator } from "./services/metaAdaptiveOrchestrator.js";
 import { startAgentStateWatchdog } from "./services/agentStateWatchdog.js";
+import { startAgentPerceptionLoops } from "./agent/loops/index.js";
+import { startAgentDecisionLoop } from "./agent/decisions/index.js";
+import { startAgentActionLoop } from "./agent/actions/index.js";
 
 const logLevel = configureLogging();
 const serverLogger = createLogger("server");
@@ -210,6 +213,9 @@ startArbitrageMonitor();
 startIntegratedMonitoring();
 startMarginMonitor();
 startAgentStateWatchdog({ intervalMs: 45_000 });
+startAgentPerceptionLoops();
+startAgentDecisionLoop();
+startAgentActionLoop();
 
 // 🚀 Start state reconciliation for all active live sessions
 (async () => {

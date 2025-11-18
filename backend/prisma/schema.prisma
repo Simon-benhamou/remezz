@@ -7,6 +7,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum AgentActionStatus {
+  pending
+  in_progress
+  completed
+  failed
+  skipped
+}
+
 // User authentication model
 model User {
   id           String    @id @default(cuid())
@@ -105,10 +113,33 @@ model AgentSession {
   alerts       Alert[] // back-rel from Alert.session
   reports      DailyReport[] // back-rel from DailyReport.session
   opsTelemetry AgentOpsTelemetry?
+  actionIntents AgentActionIntent[]
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
   @@index([isSmartAgent, nextRescanAt])
+}
+
+model AgentActionIntent {
+  id            String             @id
+  session       AgentSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId     String
+  symbol        String
+  type          String
+  priority      String
+  confidence    Float
+  reason        String
+  payload       Json?
+  status        AgentActionStatus  @default(pending)
+  result        Json?
+  failureReason String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  startedAt     DateTime?
+  executedAt    DateTime?
+
+  @@index([status, createdAt])
+  @@index([sessionId, status])
 }
 
 model SchedulerJob {

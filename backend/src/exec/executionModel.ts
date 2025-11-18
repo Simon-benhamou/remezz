@@ -8,7 +8,7 @@
  */
 
 import { prisma } from '../db/client.js';
-import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/preciseDecimal.js';
 import { walkBook, BookWalkResult } from './bookWalkSlippage.js';
 import type { DepthSnapshot } from '../data/depth.js';
 

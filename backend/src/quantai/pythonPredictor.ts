@@ -11,8 +11,8 @@ import { createIntegrationLogger } from '../utils/integrationLogger.js';
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const projectRoot = dirname(dirname(dirname(__dirname)));
+const moduleDirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = dirname(dirname(dirname(moduleDirname)));
 const defaultScript = join(projectRoot, 'python', 'predict_service.py');
 
 let cachedPythonExecutable: string | null = null;

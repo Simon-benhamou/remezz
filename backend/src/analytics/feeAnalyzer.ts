@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../quantai/strategies/metaAdaptive/preciseDecimal.js';
 
 const BPS_FACTOR = new PreciseDecimal('10000');
 

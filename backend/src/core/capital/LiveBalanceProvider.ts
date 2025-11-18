@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/preciseDecimal.js';
 import { BalanceProvider, BalanceSnapshot, LedgerDelta, ZERO_USD, toUSD } from './types.js';
 
 type ExchangeBalanceReader = () => Promise<{ total: string | number | PreciseDecimal; free: string | number | PreciseDecimal }>;

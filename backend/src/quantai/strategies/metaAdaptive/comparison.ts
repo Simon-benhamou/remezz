@@ -12,7 +12,8 @@ import {
   metaAdaptiveConfidenceThreshold,
   type RecognizedStrategyId,
 } from './recognizedStrategies.js';
-import { PreciseDecimal, metaAdaptiveStrategyAgent } from './metaAdaptiveAgent.js';
+import { metaAdaptiveStrategyAgent } from './metaAdaptiveAgent.js';
+import { PreciseDecimal } from './preciseDecimal.js';
 
 export type StrategyComparisonReport = {
   intraday: {

@@ -1,4 +1,4 @@
-import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
+import { PreciseDecimal } from '../../quantai/strategies/metaAdaptive/preciseDecimal.js';
 import { estimateCosts } from './costModel.js';
 
 export interface ExpectedValueParams {

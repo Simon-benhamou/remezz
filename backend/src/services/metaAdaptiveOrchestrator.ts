@@ -28,6 +28,10 @@ import { createLogger } from '../utils/logger.js';
 import { createIntegrationLogger, withLogging, withRetry } from '../utils/integrationLogger.js';
 import { logTradeEvaluation, type RegimeContext } from '../learning/tradeEvaluationLogger.js';
 import { AgentHub } from '../agent/hub.js';
+import { getAgentContext } from '../agent/context.js';
+import { agentMemoryStore } from '../agent/memory/store.js';
+import { getExecutionModeDirective } from '../agent/actions/directives.js';
+import type { ExecutionPlan, MarketQualityScore, PredictorInsight, RiskLimits, SentimentSignal } from '../agent/subagents/types.js';
 import type { Broker } from '../broker/types.js';
 import { PaperBroker } from '../broker/paper.js';
 import { LiveBroker } from '../broker/live.js';
@@ -51,6 +55,50 @@ const clampNumber = (value: number, min: number, max: number): number => {
   if (value < min) return min;
   if (value > max) return max;
   return value;
+};
+
+const agentServices = getAgentContext().services;
+const SENTIMENT_PRESSURE_THRESHOLD = 0.55;
+const MARKET_QUALITY_HARD_FLOOR = 0.2;
+
+const sentimentSupportsSide = (sentiment: SentimentSignal, side: 'buy' | 'sell'): boolean => {
+  if (!sentiment) return false;
+  if (sentiment.bias === 'neutral') return false;
+  if (sentiment.bias === 'bullish') {
+    return side === 'buy';
+  }
+  if (sentiment.bias === 'bearish') {
+    return side === 'sell';
+  }
+  return false;
+};
+
+const computeSupportAllocationScale = (
+  marketQuality: MarketQualityScore,
+  sentiment: SentimentSignal,
+  side: 'buy' | 'sell',
+): number => {
+  const qualityBase = 0.65 + marketQuality.score * 0.45;
+  const sentimentFactor = sentiment.bias === 'neutral'
+    ? 1
+    : sentimentSupportsSide(sentiment, side)
+      ? 1 + sentiment.confidence * 0.2
+      : 1 - sentiment.confidence * 0.3;
+  return clampNumber(qualityBase * sentimentFactor, 0.5, 1.3);
+};
+
+const marketLooksHostile = (
+  marketQuality: MarketQualityScore,
+  sentiment: SentimentSignal,
+  side: 'buy' | 'sell',
+  executionPlan: ExecutionPlan,
+): boolean => {
+  const alignment = sentimentSupportsSide(sentiment, side);
+  const oppositePressure = !alignment && sentiment.confidence >= SENTIMENT_PRESSURE_THRESHOLD;
+  const depthInsufficient = marketQuality.bookDepthUsd < executionPlan.minFillUsd * 1.5;
+  const spreadWide = marketQuality.spreadBps > executionPlan.maxSlippageBps * 2;
+  const qualityFloorBreach = marketQuality.score < MARKET_QUALITY_HARD_FLOOR;
+  return oppositePressure && (qualityFloorBreach || depthInsufficient || spreadWide);
 };
 
 const parsePositionPct = (raw?: string | null): number | null => {
@@ -668,9 +716,20 @@ async function executeEntryTrade(
     symbol: session.symbol,
   });
 
+  let predictorConfidenceForMetrics: number | undefined;
+  const buildSupportInputMetrics = () => ({
+    adx: tech.adx14,
+    atrPct: (tech.atr14 / tech.last) * 100,
+    cmf: (tech as any).cmf20,
+    rsi14: tech.rsi14,
+    volumeRatio: (tech as any).volumeRatio,
+    predictorConfidence: predictorConfidenceForMetrics,
+  });
+
   try {
     integrationLogger.info(`Executing entry trade | bias=${signal.bias} strategy=${(signal as any).strategyId || signal.id} confidence=${signal.confidence.toFixed(3)}`);
     console.log(`[MetaOrchestrator.executeEntryTrade] START: agent=${session.sessionId}, symbol=${session.symbol}, bias=${signal.bias}`);
+    const side: 'buy' | 'sell' = signal.bias === 'short' ? 'sell' : 'buy';
 
     if (isRotationLockActive(session.profileJson)) {
       integrationLogger.warn('Rotation lock active – blocking entry');
@@ -795,9 +854,67 @@ async function executeEntryTrade(
       const fallbackRiskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
       const riskPct = planRiskPct && planRiskPct > 0 ? planRiskPct : fallbackRiskPct;
       
+      // Gather capital usage plus support-agent insights concurrently
+      const cachedMarketQuality = agentMemoryStore.get<MarketQualityScore>('marketQuality', session.symbol)?.data ?? null;
+      const cachedSentiment = agentMemoryStore.get<SentimentSignal>('sentiment', session.symbol)?.data ?? null;
+      const cachedRisk = agentMemoryStore.get<RiskLimits>('riskGovernor', session.sessionId)?.data ?? null;
+
+      const [
+        capitalMetrics,
+        marketQualitySnapshot,
+        sentimentSignal,
+        riskLimits,
+      ] = await Promise.all([
+        calculateCapitalUsageAndThresholds(session.mode),
+        cachedMarketQuality
+          ? Promise.resolve(cachedMarketQuality)
+          : agentServices.marketQuality.assess(session.symbol).then((snapshot) => {
+              agentMemoryStore.update('marketQuality', session.symbol, snapshot);
+              return snapshot;
+            }),
+        cachedSentiment
+          ? Promise.resolve(cachedSentiment)
+          : agentServices.sentiment.getSignal(session.symbol).then((snapshot) => {
+              agentMemoryStore.update('sentiment', session.symbol, snapshot);
+              return snapshot;
+            }),
+        cachedRisk
+          ? Promise.resolve(cachedRisk)
+          : agentServices.riskGovernor.getLimits(session.sessionId, session.symbol).then((limits) => {
+              agentMemoryStore.update('riskGovernor', session.sessionId, limits);
+              return limits;
+            }),
+      ]);
+
+      integrationLogger.info(
+        `Support agents | mqScore=${marketQualitySnapshot.score.toFixed(2)} spread=${marketQualitySnapshot.spreadBps.toFixed(1)}bps depth=$${marketQualitySnapshot.bookDepthUsd.toFixed(0)} sentiment=${sentimentSignal.bias}(${(sentimentSignal.confidence * 100).toFixed(0)}%) riskMax=$${riskLimits.maxPositionUsd.toFixed(0)}`,
+      );
+
+      const predictorInsight = agentMemoryStore.get<PredictorInsight>('predictor', session.symbol)?.data ?? null;
+      if (predictorInsight?.enabled) {
+        integrationLogger.info(
+          `Predictor insight | bias=${predictorInsight.bias} confidence=${predictorInsight.confidence.toFixed(2)} lastRetrained=${predictorInsight.lastRetrainedAt ?? 'n/a'}`,
+        );
+      }
+      predictorConfidenceForMetrics = predictorInsight?.enabled ? predictorInsight.confidence : undefined;
+
+      if (riskLimits.hedgingRequired) {
+        const reason = riskLimits.reason ?? 'risk_governor_requires_hedge';
+        integrationLogger.warn(`Entry blocked by risk governor: ${reason}`);
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'filter_blocked',
+          blockedReason: reason,
+          confidenceScore: signal.confidence,
+          inputMetrics: {
+            riskMaxPositionUsd: riskLimits.maxPositionUsd,
+            hedgingRequired: 1,
+          },
+        }).catch(err => console.warn('Failed to log risk block:', err));
+        return;
+      }
+
       // Check capital usage and determine confidence threshold
-      const capitalMetrics = await calculateCapitalUsageAndThresholds(session.mode);
-      
       integrationLogger.info(`Capital usage | total=$${capitalMetrics.totalCapital.toFixed(0)} used=$${capitalMetrics.usedCapital.toFixed(0)} free=$${capitalMetrics.freeCapital.toFixed(0)} ratio=${(capitalMetrics.usageRatio * 100).toFixed(1)}% maxPos=${capitalMetrics.maxPositions} minConf=${capitalMetrics.minConfidenceRequired}`);
       
       // Progressive confidence check: reject if below threshold
@@ -810,6 +927,7 @@ async function executeEntryTrade(
           blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${capitalMetrics.minConfidenceRequired} (capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used)`,
           confidenceScore: signal.confidence,
           inputMetrics: {
+            ...buildSupportInputMetrics(),
             capitalUsageRatio: capitalMetrics.usageRatio,
             minConfidenceRequired: capitalMetrics.minConfidenceRequired,
           },
@@ -817,16 +935,84 @@ async function executeEntryTrade(
         
         return;
       }
-      
-      // Limit position size to max allocation
-      const maxPositionMargin = Math.min(equityUsd, capitalMetrics.maxAllocationPerPosition);
-      
-      integrationLogger.info(`Position sizing | equity=$${equityUsd.toFixed(0)} maxAllocation=$${maxPositionMargin.toFixed(0)} (${((capitalMetrics.maxAllocationPerPosition / capitalMetrics.totalCapital) * 100).toFixed(0)}% for ${capitalMetrics.maxPositions} max positions)`);
+
+      const supportScale = computeSupportAllocationScale(marketQualitySnapshot, sentimentSignal, side);
+      const allocationCaps = [capitalMetrics.maxAllocationPerPosition, riskLimits.maxPositionUsd];
+      if (riskLimits.clusterExposureUsd && riskLimits.clusterExposureUsd > 0) {
+        allocationCaps.push(riskLimits.clusterExposureUsd);
+      }
+      const baseAllocationCap = Math.min(...allocationCaps);
+      const supportAdjustedAllocation = Math.max(
+        capitalAllocationOverrides.minPositionUsd || 0,
+        baseAllocationCap * supportScale,
+      );
+      const maxPositionMargin = Math.min(equityUsd, supportAdjustedAllocation);
+      if (!(maxPositionMargin > 0)) {
+        integrationLogger.warn('Support-scaled allocation produced zero budget', {
+          baseAllocationCap,
+          supportScale,
+        });
+        return;
+      }
+
+      const cachedPlan = agentMemoryStore.get<ExecutionPlan>('executionPlan', session.sessionId)?.data ?? null;
+      const executionPlan = cachedPlan ?? await agentServices.execution.plan({
+        symbol: session.symbol,
+        side,
+        sizeUsd: Math.max(maxPositionMargin, capitalConfig.minOrderUSD.toNumber()),
+        spreadBps: marketQualitySnapshot.spreadBps,
+        marketQualityScore: marketQualitySnapshot.score,
+        marketQuality: marketQualitySnapshot,
+        riskLimits,
+      });
+
+      const actionDirective = getExecutionModeDirective(session.sessionId);
+      if (actionDirective) {
+        const forcedStrategy = actionDirective.mode === 'limit'
+          ? 'sweep'
+          : actionDirective.mode === 'twap'
+          ? 'twap'
+          : 'market';
+        executionPlan.strategy = forcedStrategy as typeof executionPlan.strategy;
+        integrationLogger.info('Execution strategy forced by action directive', {
+          intentId: actionDirective.intentId,
+          forcedStrategy,
+          reason: actionDirective.reason,
+        });
+      }
+
+      if (!cachedPlan) {
+        agentMemoryStore.update('executionPlan', session.sessionId, executionPlan);
+      }
+
+      if (marketLooksHostile(marketQualitySnapshot, sentimentSignal, side, executionPlan)) {
+        const reason = 'support_agents_blocked_low_quality_flow';
+        integrationLogger.warn('Trade rejected: hostile market per support agents', { reason });
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'filter_blocked',
+          blockedReason: reason,
+          confidenceScore: signal.confidence,
+          inputMetrics: {
+            ...buildSupportInputMetrics(),
+            marketQualityScore: marketQualitySnapshot.score,
+            sentimentConfidence: sentimentSignal.confidence,
+            executionMinFillUsd: executionPlan.minFillUsd,
+          },
+          regimeContext: calculateRegimeContext(tech),
+        }).catch(err => console.warn('Failed to log quality block:', err));
+        return;
+      }
+
+      integrationLogger.info(
+        `Position sizing | equity=$${equityUsd.toFixed(0)} baseCap=$${baseAllocationCap.toFixed(0)} supportScale=${supportScale.toFixed(2)} adjCap=$${maxPositionMargin.toFixed(0)} strategy=${executionPlan.strategy}`,
+      );
       
       // Dynamic leverage based on confidence: high confidence = higher leverage
       // confidence range: 0.50-1.0 (filters block below 0.50)
       // leverage range: baseLeverage (e.g., 3x) to maxLeverage (e.g., 10x)
-      const maxLeverage = session.profileJson?.maxLeverage ?? envConfig.DEFAULT_MAX_LEVERAGE;
+      const profileMaxLeverage = session.profileJson?.maxLeverage ?? envConfig.DEFAULT_MAX_LEVERAGE;
+      const maxLeverage = Math.max(1, Math.min(profileMaxLeverage, riskLimits.maxLeverage));
       const baseLeverage = Math.max(2, Math.min(3, maxLeverage * 0.3)); // Minimum safe leverage (30% of max, or 2-3x)
       
       // Linear interpolation: confidence 0.50 → baseLeverage, confidence 1.0 → maxLeverage
@@ -864,7 +1050,7 @@ async function executeEntryTrade(
         computedRiskUsd = planRiskUsd;
       }
 
-      const minOrderUsd = capitalConfig.minOrderUSD.toNumber();
+      const minOrderUsd = Math.max(capitalConfig.minOrderUSD.toNumber(), executionPlan.minFillUsd);
       if (minOrderUsd > 0 && notional > 0 && notional < minOrderUsd) {
         integrationLogger.warn('Position sizing below min order after risk clamp', {
           notional,
@@ -891,13 +1077,7 @@ async function executeEntryTrade(
           decision: 'order_blocked_sizing',
           blockedReason: `qty=0: equity=${equityUsd.toFixed(2)}, stop=${stopDistance.toFixed(4)}, entry=${entryPrice.toFixed(4)}, leverage=${leverage}x`,
           confidenceScore: signal.confidence,
-          inputMetrics: {
-            adx: tech.adx14,
-            atrPct: (tech.atr14 / tech.last) * 100,
-            cmf: (tech as any).cmf20,
-            rsi14: tech.rsi14,
-            volumeRatio: (tech as any).volumeRatio,
-          },
+          inputMetrics: buildSupportInputMetrics(),
           regimeContext: calculateRegimeContext(tech),
         }).catch(err => console.warn('Failed to log sizing block:', err));
         
@@ -928,13 +1108,7 @@ async function executeEntryTrade(
           decision: 'filter_blocked',  // Changed from order_blocked_registration
           blockedReason: registrationResult === 'predictor_blocked' ? 'predictor_confidence_too_low' : 'cooldown_active',
           confidenceScore: signal.confidence,
-          inputMetrics: {
-            adx: tech.adx14,
-            atrPct: (tech.atr14 / tech.last) * 100,
-            cmf: (tech as any).cmf20,
-            rsi14: tech.rsi14,
-            volumeRatio: (tech as any).volumeRatio,
-          },
+          inputMetrics: buildSupportInputMetrics(),
           regimeContext: calculateRegimeContext(tech),
         }).catch(err => console.warn('Failed to log registration block:', err));
         
@@ -944,7 +1118,6 @@ async function executeEntryTrade(
       console.log(`[MetaOrchestrator.executeEntryTrade] Registration OK, placing order...`);
 
       // Place the actual order via broker
-      const side = signal.bias === 'short' ? 'sell' : 'buy';
       const stopPrice = signal.bias === 'short'
         ? entryPrice + stopDistance
         : entryPrice - stopDistance;
@@ -966,14 +1139,13 @@ async function executeEntryTrade(
           _evaluationContext: {
             confidence: signal.confidence,
             inputMetrics: {
-              adx: tech.adx14,
-              rsi14: tech.rsi14,
-              cmf: (tech as any).cmf20,
-              atrPct: (tech.atr14 / tech.last) * 100,
-              volumeRatio: (tech as any).volumeRatio,
+              ...buildSupportInputMetrics(),
+              executionPlanMaxSlippage: executionPlan.maxSlippageBps,
+              executionPlanMinFillUsd: executionPlan.minFillUsd,
             },
             regimeContext: calculateRegimeContext(tech),
           },
+          executionPlan,
         }),
         3,
         500
@@ -989,14 +1161,19 @@ async function executeEntryTrade(
           blockedReason: undefined,
           confidenceScore: signal.confidence,
           inputMetrics: {
-            adx: tech.adx14,
-            atrPct: (tech.atr14 / tech.last) * 100,
-            cmf: (tech as any).cmf20,
-            rsi14: tech.rsi14,
-            volumeRatio: (tech as any).volumeRatio,
+            ...buildSupportInputMetrics(),
+            executionPlanMaxSlippage: executionPlan.maxSlippageBps,
+            executionPlanMinFillUsd: executionPlan.minFillUsd,
           },
           regimeContext: calculateRegimeContext(tech),
         }).catch(err => console.warn('Failed to log order placement:', err));
+
+        if (order.slippageBps != null && order.slippageBps > executionPlan.maxSlippageBps) {
+          integrationLogger.warn(
+            `Slippage ${order.slippageBps.toFixed(2)}bps exceeded plan allowance ${executionPlan.maxSlippageBps}bps`,
+            { orderId: order.id },
+          );
+        }
 
         // Persist order and position to database
         try {
@@ -1038,13 +1215,7 @@ async function executeEntryTrade(
           decision: 'order_rejected',
           blockedReason: (order as any).error || 'broker_rejected',
           confidenceScore: signal.confidence,
-          inputMetrics: {
-            adx: tech.adx14,
-            atrPct: (tech.atr14 / tech.last) * 100,
-            cmf: (tech as any).cmf20,
-            rsi14: tech.rsi14,
-            volumeRatio: (tech as any).volumeRatio,
-          },
+          inputMetrics: buildSupportInputMetrics(),
           regimeContext: calculateRegimeContext(tech),
         }).catch(err => console.warn('Failed to log order rejection:', err));
       }
@@ -1097,13 +1268,7 @@ async function executeEntryTrade(
       decision: 'order_rejected',
       blockedReason: `exception: ${error.message || 'unknown error'}`,
       confidenceScore: signal.confidence,
-      inputMetrics: {
-        adx: tech.adx14,
-        rsi14: tech.rsi14,
-        cmf: (tech as any).cmf20,
-        atrPct: (tech.atr14 / tech.last) * 100,
-        volumeRatio: (tech as any).volumeRatio,
-      },
+      inputMetrics: buildSupportInputMetrics(),
       regimeContext: calculateRegimeContext(tech),
     }).catch(err => console.warn('Failed to log exception:', err));
   }

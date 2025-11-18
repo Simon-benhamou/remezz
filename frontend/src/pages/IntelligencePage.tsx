@@ -14,6 +14,7 @@ import {
 import { BulbOutlined, ReloadOutlined, WarningOutlined } from '../icons';
 import dayjs from 'dayjs';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
+import SupportDiagnosticsPanel from '../components/SupportDiagnosticsPanel';
 import { api } from '../api';
 import { formatDisplaySymbol } from '../utils/symbols';
 
@@ -135,54 +136,57 @@ const IntelligencePage: React.FC = () => {
           <AdaptiveWeightsPanel data={adaptiveData} loading={adaptiveLoading} onRefresh={() => void loadIntelligence()} />
         </Col>
         <Col xs={24} xl={8}>
-          <Card
-            title={<Space><WarningOutlined style={{ color: '#f97316' }} />Policy interventions</Space>}
-            loading={opsLoading}
-            style={{ borderRadius: 12 }}
-          >
-            <Space direction='vertical' size={12} style={{ width: '100%' }}>
-              <div>
-                <Text strong style={{ display: 'block' }}>Validator & entry gate</Text>
-                {entryGateBlocks ? (
-                  <Space size={8} wrap>
-                    <Tag color='geekblue'>Total blocks {entryGateBlocks.total || 0}</Tag>
-                    <Tag color='purple'>Sessions impacted {entryGateBlocks.sessions?.length || 0}</Tag>
-                  </Space>
-                ) : (
-                  <Text type='secondary'>No entry gate anomalies reported.</Text>
-                )}
-              </div>
-              <div>
-                <Text strong style={{ display: 'block' }}>Sessions under review</Text>
-                {flaggedSessions.length ? (
-                  <List
-                    size='small'
-                    dataSource={flaggedSessions.slice(0, 5)}
-                    renderItem={(item: any) => (
-                      <List.Item>
-                        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                          <Space size={8}>
-                            <Badge status='error' />
-                            <Text>{formatDisplaySymbol(item.symbol)}</Text>
+          <Space direction='vertical' size={24} style={{ width: '100%' }}>
+            <Card
+              title={<Space><WarningOutlined style={{ color: '#f97316' }} />Policy interventions</Space>}
+              loading={opsLoading}
+              style={{ borderRadius: 12 }}
+            >
+              <Space direction='vertical' size={12} style={{ width: '100%' }}>
+                <div>
+                  <Text strong style={{ display: 'block' }}>Validator & entry gate</Text>
+                  {entryGateBlocks ? (
+                    <Space size={8} wrap>
+                      <Tag color='geekblue'>Total blocks {entryGateBlocks.total || 0}</Tag>
+                      <Tag color='purple'>Sessions impacted {entryGateBlocks.sessions?.length || 0}</Tag>
+                    </Space>
+                  ) : (
+                    <Text type='secondary'>No entry gate anomalies reported.</Text>
+                  )}
+                </div>
+                <div>
+                  <Text strong style={{ display: 'block' }}>Sessions under review</Text>
+                  {flaggedSessions.length ? (
+                    <List
+                      size='small'
+                      dataSource={flaggedSessions.slice(0, 5)}
+                      renderItem={(item: any) => (
+                        <List.Item>
+                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                            <Space size={8}>
+                              <Badge status='error' />
+                              <Text>{formatDisplaySymbol(item.symbol)}</Text>
+                            </Space>
+                            <Space size={8}>
+                              <Tag color='red'>{item.count} blocks</Tag>
+                              {item.lastBlockedAt && (
+                                <Text type='secondary' style={{ fontSize: 12 }}>
+                                  Last block {new Date(item.lastBlockedAt).toLocaleTimeString()}
+                                </Text>
+                              )}
+                            </Space>
                           </Space>
-                          <Space size={8}>
-                            <Tag color='red'>{item.count} blocks</Tag>
-                            {item.lastBlockedAt && (
-                              <Text type='secondary' style={{ fontSize: 12 }}>
-                                Last block {new Date(item.lastBlockedAt).toLocaleTimeString()}
-                              </Text>
-                            )}
-                          </Space>
-                        </Space>
-                      </List.Item>
-                    )}
-                  />
-                ) : (
-                  <Text type='secondary'>No agents require manual intervention.</Text>
-                )}
-              </div>
-            </Space>
-          </Card>
+                        </List.Item>
+                      )}
+                    />
+                  ) : (
+                    <Text type='secondary'>No agents require manual intervention.</Text>
+                  )}
+                </div>
+              </Space>
+            </Card>
+            <SupportDiagnosticsPanel data={opsMetrics?.support} loading={opsLoading} />
+          </Space>
         </Col>
       </Row>
 
