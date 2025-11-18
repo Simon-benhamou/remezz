@@ -21,7 +21,7 @@
     "test:python:integration": "cd python && pytest -m integration",
     "test:python:coverage": "cd python && pytest --cov=. --cov-report=html --cov-report=term",
     "test:all": "npm run test && npm run test:python",
-    "prisma:gen": "prisma generate",
+    "prisma:gen": "PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 prisma generate",
     "db:push": "prisma db push",
     "migrate": "prisma migrate deploy",
     "lint": "eslint 'src/**/*.{ts,tsx}'",
