@@ -34,6 +34,7 @@ RUN npm ci --no-audit --no-fund
 
 # Prisma schema and migrations
 COPY prisma ./prisma
+ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
 RUN npm run prisma:gen
 
 # TypeScript config
