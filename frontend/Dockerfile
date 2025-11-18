@@ -3,11 +3,10 @@ FROM ${NODE_IMAGE}
 WORKDIR /app
 
 # Install dependencies
-# CACHE_BUST: 2025-11-18-12:05 - Force rebuild to apply CYPRESS_INSTALL_BINARY fix
-COPY package*.json ./
-# First install ALL deps (including devDeps needed for build like TypeScript, Vite)
-# but skip Cypress binary download
-RUN CYPRESS_INSTALL_BINARY=0 npm ci --no-audit --no-fund
+# CACHE_BUST: 2025-11-18-12:10 - Use .npmrc to skip Cypress
+COPY package*.json .npmrc ./
+# npm ci will respect .npmrc settings
+RUN npm ci
 # IMPORTANT: déclarer l'ARG pour l'injecter au build
 ARG VITE_API_BASE
 ENV VITE_API_BASE=${VITE_API_BASE}
