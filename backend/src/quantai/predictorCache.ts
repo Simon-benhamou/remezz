@@ -33,6 +33,9 @@ const predictorCache = new Map<string, PredictorCacheEntry>();
 // Background refresh state
 let refreshIntervalHandle: NodeJS.Timeout | null = null;
 let isWarmupComplete = false;
+let lastWarmupAt: number | null = null;
+let lastRefreshAt: number | null = null;
+let lastRefreshError: string | null = null;
 
 /**
  * Normalize symbol for consistent cache keys
@@ -124,6 +127,10 @@ export function getPredictorCacheStats() {
     symbols: entries.map(e => e.symbol),
     isWarmupComplete,
     backgroundRefreshActive: refreshIntervalHandle !== null,
+    lastWarmupAt,
+    lastRefreshAt,
+    lastRefreshError,
+    refreshIntervalMs: BACKGROUND_REFRESH_INTERVAL_MS,
   };
 }
 
@@ -219,9 +226,13 @@ export async function warmupPredictorCache(): Promise<void> {
     }
     
     isWarmupComplete = true;
+    lastWarmupAt = Date.now();
+    lastRefreshError = null;
     console.log(`✅ Cache warmup complete: ${predictorCache.size} symbol(s) cached`);
   } catch (error) {
     console.error('❌ Cache warmup failed:', error);
+    lastWarmupAt = Date.now();
+    lastRefreshError = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -244,22 +255,37 @@ async function refreshPredictorCache(): Promise<void> {
     .slice(0, WARMUP_BATCH_SIZE); // Limit batch size
   
   if (entriesToRefresh.length === 0) {
+    lastRefreshAt = now;
+    lastRefreshError = null;
     return;
   }
-  
+
   console.log(`🔄 Background refresh: ${entriesToRefresh.length} prediction(s)`);
-  
-  await Promise.allSettled(
-    entriesToRefresh.map(async (entry) => {
-      try {
-        const prediction = await getPrediction(entry.features);
-        setCachedPrediction(entry.symbol, prediction, entry.features);
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        console.warn(`   ⚠️  Failed to refresh ${entry.symbol}:`, errorMsg);
-      }
-    })
-  );
+
+  let hadError = false;
+  try {
+    await Promise.allSettled(
+      entriesToRefresh.map(async (entry) => {
+        try {
+          const prediction = await getPrediction(entry.features);
+          setCachedPrediction(entry.symbol, prediction, entry.features);
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          console.warn(`   ⚠️  Failed to refresh ${entry.symbol}:`, errorMsg);
+          hadError = true;
+          lastRefreshError = errorMsg;
+        }
+      })
+    );
+    lastRefreshAt = Date.now();
+    if (!hadError) {
+      lastRefreshError = null;
+    }
+  } catch (error) {
+    lastRefreshAt = Date.now();
+    lastRefreshError = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import type { OpsJobStatus } from './types/ops';
 
 // Types
 export type AppMode = 'live' | 'paper';
@@ -225,6 +226,64 @@ export const useDashboardStore = create<DashboardStore>()(
     }
   )
 );
+
+// Ops jobs store
+type OpsJobsStore = {
+  jobs: OpsJobStatus[];
+  lastUpdated: number | null;
+  loading: boolean;
+  error: string | null;
+  setJobs: (jobs: OpsJobStatus[], opts?: { lastUpdated?: number | string | null }) => void;
+  setLoading: (loading: boolean) => void;
+  setError: (error: string | null) => void;
+  upsertJob: (job: OpsJobStatus) => void;
+  reset: () => void;
+};
+
+function toTimestamp(value?: number | string | null): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+export const useOpsJobsStore = create<OpsJobsStore>()((set, get) => ({
+  jobs: [],
+  lastUpdated: null,
+  loading: false,
+  error: null,
+  setJobs: (jobs, opts) => {
+    const ts = toTimestamp(opts?.lastUpdated) ?? Date.now();
+    set({ jobs, lastUpdated: ts, loading: false, error: null });
+  },
+  setLoading: (loading) => set({ loading }),
+  setError: (error) => set({ error, loading: false }),
+  upsertJob: (job) => {
+    if (!job?.id) return;
+    set((state) => {
+      const idx = state.jobs.findIndex((row) => row.id === job.id);
+      if (idx === -1) {
+        return {
+          jobs: [...state.jobs, job],
+          lastUpdated: Date.now(),
+          loading: false,
+          error: null,
+        };
+      }
+      const next = state.jobs.slice();
+      next[idx] = { ...next[idx], ...job };
+      return {
+        jobs: next,
+        lastUpdated: Date.now(),
+         loading: false,
+         error: null,
+      };
+    });
+  },
+  reset: () => set({ jobs: [], lastUpdated: null, loading: false, error: null }),
+}));
 
 // Selectors for better performance
 export const useAuth = () => useAuthStore((state: AuthStore) => ({

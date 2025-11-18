@@ -3,6 +3,7 @@ import { authenticateUser, requireRole, type AuthenticatedRequest } from '../mid
 import { prisma } from '../db/client.js';
 import { listSchedulerJobs, replaySchedulerJob } from '../services/schedulerJobService.js';
 import { computeAgentHealth, computeOpsMetrics, recentOpsEvents } from '../monitor/ops.js';
+import { getOpsJobsSnapshot } from '../monitor/opsJobs.js';
 import { getRegenerationStats } from '../engine/events.js';
 import { 
   triggerManualRetraining, 
@@ -77,6 +78,15 @@ router.get('/events', async (req: AuthenticatedRequest, res) => {
     res.json(rows);
   } catch (error: any) {
     res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+router.get('/jobs', async (_req: AuthenticatedRequest, res) => {
+  try {
+    const snapshot = await getOpsJobsSnapshot({ force: true });
+    res.json(snapshot);
+  } catch (error: any) {
+    res.status(500).json({ error: 'ops_jobs_failed', message: String(error?.message || error) });
   }
 });
 

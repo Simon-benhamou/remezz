@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { OpsJobsResponse } from './types/ops';
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 let TOKEN: string = localStorage.getItem('apiKey') || '';
 
@@ -190,6 +191,7 @@ export const api = {
     if (sessionId) params.sessionId = sessionId;
     return (await client.get('/api/ops/events', { params })).data;
   },
+  getOpsJobs: async () => (await client.get('/api/ops/jobs')).data as OpsJobsResponse,
   getAgentHealth: async () =>
     (await client.get('/api/ops/agent-health')).data,
   getPortfolio: async (mode: 'paper' | 'live' = 'paper') =>

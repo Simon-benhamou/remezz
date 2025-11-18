@@ -50,6 +50,8 @@ import { formatDisplaySymbol } from '../utils/symbols';
 import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import { useDashboard } from '../hooks/useDashboard';
 import { useAppStore } from '../store';
+import JobsStatusPanel from '../components/JobsStatusPanel';
+import { useOpsJobs } from '../hooks/useOpsJobs';
 import { collectOpsEventReasons, formatOpsEventMessage } from '../utils/opsEvents';
 import {
   STRATEGY_META,
@@ -304,6 +306,7 @@ const OperationsDashboardPage: React.FC = () => {
   const [incoherenceLoading, setIncoherenceLoading] = React.useState(false);
   const [incoherenceExporting, setIncoherenceExporting] = React.useState(false);
   const mode = useAppStore((state) => state.mode);
+  const { jobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsUpdatedAt } = useOpsJobs({ autoRefreshMs: 45000, enableLive: true });
 
   const strategyOptions = React.useMemo(
     () => {
@@ -899,6 +902,18 @@ const OperationsDashboardPage: React.FC = () => {
           </Col>
         </Row>
       </Card>
+
+      <Row gutter={[24, 24]}>
+        <Col span={24}>
+          <JobsStatusPanel
+            jobs={jobs}
+            loading={jobsLoading}
+            onRefresh={refreshJobs}
+            title='Background jobs'
+            updatedAt={jobsUpdatedAt}
+          />
+        </Col>
+      </Row>
 
       <Row gutter={[24, 24]}>
         {summaryCards.map((card) => (

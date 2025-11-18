@@ -5,8 +5,10 @@ import { api } from '../api';
 import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
 import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
+import JobsStatusPanel from '../components/JobsStatusPanel';
 // import SmartOpportunityScanner from '../components/SmartOpportunityScanner'; // TODO: Create component
 import { useMode } from '../contexts/ModeContext';
+import { useOpsJobs } from '../hooks/useOpsJobs';
 import { 
   ArrowUpOutlined, 
   ArrowDownOutlined, 
@@ -38,6 +40,7 @@ export default function DashboardPage(){
   const loadedRef = React.useRef(false);
   const navigate = useNavigate();
   const { mode } = useMode();
+  const { jobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsUpdatedAt } = useOpsJobs({ autoRefreshMs: 30000, enableLive: true });
   
   // Compute global health status
   const getGlobalHealth = () => {
@@ -199,6 +202,18 @@ export default function DashboardPage(){
           </Col>
         </Row>
       </Card>
+
+      <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
+        <Col span={24}>
+          <JobsStatusPanel
+            jobs={jobs}
+            loading={jobsLoading}
+            onRefresh={refreshJobs}
+            condensed
+            updatedAt={jobsUpdatedAt}
+          />
+        </Col>
+      </Row>
 
       {/* Smart Opportunity Scanner */}
       {/* TODO: Implement SmartOpportunityScanner component */}
