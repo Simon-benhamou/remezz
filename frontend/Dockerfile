@@ -5,6 +5,8 @@ WORKDIR /app
 # Install dependencies
 COPY package*.json ./
 # Use flags to reduce external calls and speed up CI
+# Skip Cypress binary download (not needed for production build)
+ENV CYPRESS_INSTALL_BINARY=0
 RUN npm ci --no-audit --no-fund
 # IMPORTANT: déclarer l'ARG pour l'injecter au build
 ARG VITE_API_BASE
