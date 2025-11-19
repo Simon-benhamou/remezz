@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
+import { authenticateUser, AuthenticatedRequest, requireRole } from '../middleware/auth.js';
 import { prisma } from '../db/client.js';
 import { encryptApiKey, decryptApiKey } from '../utils/crypto.js';
 import { getUserExchange, validateUserCredentials } from '../exchange/ccxtClient.js';
@@ -441,6 +441,88 @@ router.get('/api-keys/status', async (req: AuthenticatedRequest, res) => {
     });
   } catch (error) {
     console.error('API keys status check error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// ============================================
+// SYSTEM SETTINGS (Global, read-only for users, admin can modify)
+// ============================================
+
+// Get all system settings (available to all authenticated users)
+router.get('/system-settings', async (req: AuthenticatedRequest, res) => {
+  try {
+    const settings = await prisma.systemSetting.findMany({
+      orderBy: { key: 'asc' }
+    });
+
+    res.json({ settings });
+  } catch (error) {
+    console.error('Get system settings error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Get specific system setting
+router.get('/system-settings/:key', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { key } = req.params;
+    
+    const setting = await prisma.systemSetting.findUnique({
+      where: { key }
+    });
+
+    if (!setting) {
+      return res.status(404).json({ error: 'setting_not_found' });
+    }
+
+    res.json({ setting });
+  } catch (error) {
+    console.error('Get system setting error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Update system setting (admin only)
+router.put('/system-settings/:key', requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { key } = req.params;
+    const { value } = req.body;
+
+    if (value === undefined) {
+      return res.status(400).json({ error: 'value_required' });
+    }
+
+    const setting = await prisma.systemSetting.upsert({
+      where: { key },
+      update: {
+        value: String(value)
+      },
+      create: {
+        key,
+        value: String(value)
+      }
+    });
+
+    res.json({ setting });
+  } catch (error) {
+    console.error('Update system setting error:', error);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Delete system setting (admin only)
+router.delete('/system-settings/:key', requireRole(['admin']), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { key } = req.params;
+
+    await prisma.systemSetting.delete({
+      where: { key }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete system setting error:', error);
     res.status(500).json({ error: 'server_error' });
   }
 });

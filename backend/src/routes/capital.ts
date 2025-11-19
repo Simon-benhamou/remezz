@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getCapitalManager, getBalanceSnapshot, setPaperBalance, listReservations } from '../services/capitalPool.js';
 import { BalanceSnapshot, Reservation } from '../core/capital/types.js';
+import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -22,36 +23,57 @@ function serializeReservation(reservation: Reservation) {
   };
 }
 
-router.post('/paper/set-balance', async (req, res) => {
+router.post('/paper/set-balance', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+
   const value = req.body?.initialUSD;
   if (value === undefined || value === null) {
     return res.status(400).json({ error: 'missing_initial_usd' });
   }
-  const snapshot = await setPaperBalance(value);
+  
+  const snapshot = await setPaperBalance(value, req.user.id);
   res.json(serializeSnapshot(snapshot));
 });
 
-router.get('/paper/snapshot', async (_req, res) => {
-  const snapshot = await getBalanceSnapshot('paper');
+router.get('/paper/snapshot', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+
+  const snapshot = await getBalanceSnapshot('paper', req.user.id);
   res.json(serializeSnapshot(snapshot));
 });
 
-router.get('/live/snapshot', async (_req, res) => {
-  const snapshot = await getBalanceSnapshot('live');
+router.get('/live/snapshot', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+
+  const snapshot = await getBalanceSnapshot('live', req.user.id);
   res.json(serializeSnapshot(snapshot));
 });
 
-router.get('/snapshot', async (_req, res) => {
+router.get('/snapshot', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+
   const [paper, live] = await Promise.all([
-    getBalanceSnapshot('paper'),
-    getBalanceSnapshot('live'),
+    getBalanceSnapshot('paper', req.user.id),
+    getBalanceSnapshot('live', req.user.id),
   ]);
   res.json({ paper: serializeSnapshot(paper), live: serializeSnapshot(live) });
 });
 
-router.get('/reservations', (_req, res) => {
-  const paper = listReservations('paper').map(serializeReservation);
-  const live = listReservations('live').map(serializeReservation);
+router.get('/reservations', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+
+  const paper = listReservations('paper', req.user.id).map(serializeReservation);
+  const live = listReservations('live', req.user.id).map(serializeReservation);
   res.json({ paper, live });
 });
 

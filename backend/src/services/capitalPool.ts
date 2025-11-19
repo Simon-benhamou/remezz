@@ -28,17 +28,38 @@ const defaultPaperBalance = () => ({
 });
 
 // Load persisted paper balance from database on startup
-async function loadPersistedPaperBalance(): Promise<PreciseDecimal> {
+async function loadPersistedPaperBalance(userId?: string): Promise<PreciseDecimal> {
   try {
-    const setting = await prisma.systemSetting.findUnique({
-      where: { key: 'paper_balance_usd' },
-    });
-    
-    if (setting && setting.value) {
-      const value = parseFloat(setting.value);
-      if (Number.isFinite(value) && value > 0) {
-        console.log(`📥 Loaded persisted paper balance from database: $${value}`);
-        return new PreciseDecimal(value.toString());
+    if (userId) {
+      // Load from UserSetting (per-user balance)
+      const setting = await prisma.userSetting.findUnique({
+        where: { 
+          userId_key: {
+            userId,
+            key: 'paper_balance_usd'
+          }
+        },
+      });
+      
+      if (setting && setting.value) {
+        const value = parseFloat(setting.value);
+        if (Number.isFinite(value) && value > 0) {
+          console.log(`📥 Loaded persisted paper balance for user ${userId}: $${value}`);
+          return new PreciseDecimal(value.toString());
+        }
+      }
+    } else {
+      // Fallback: load from SystemSetting (legacy global balance)
+      const setting = await prisma.systemSetting.findUnique({
+        where: { key: 'paper_balance_usd' },
+      });
+      
+      if (setting && setting.value) {
+        const value = parseFloat(setting.value);
+        if (Number.isFinite(value) && value > 0) {
+          console.log(`📥 Loaded persisted paper balance from database: $${value}`);
+          return new PreciseDecimal(value.toString());
+        }
       }
     }
   } catch (error) {
@@ -96,7 +117,7 @@ const RECONCILE_INTERVAL_MS = 10_000;
 let lastPaperReconcile = 0;
 let lastLiveReconcile = 0;
 
-async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
+async function reconcilePaperCapitalFromDb(force = false, userId?: string): Promise<void> {
   const now = Date.now();
   if (!force && now - lastPaperReconcile < RECONCILE_INTERVAL_MS) return;
   lastPaperReconcile = now;
@@ -105,8 +126,13 @@ async function reconcilePaperCapitalFromDb(force = false): Promise<void> {
   const baseFree = paperManualFree.toNumber();
 
   try {
+    const sessionWhere: any = { mode: 'paper', stoppedAt: null };
+    if (userId) {
+      sessionWhere.userId = userId;
+    }
+
     const sessions = await prisma.agentSession.findMany({
-      where: { mode: 'paper', stoppedAt: null },
+      where: sessionWhere,
       select: {
         id: true,
         startBalanceUsd: true,
@@ -327,21 +353,22 @@ export function getCapitalManager(mode: 'paper' | 'live'): CapitalManager {
   return mode === 'paper' ? paperManager : liveManager;
 }
 
-export async function getBalanceSnapshot(mode: 'paper' | 'live'): Promise<BalanceSnapshot> {
+export async function getBalanceSnapshot(mode: 'paper' | 'live', userId?: string): Promise<BalanceSnapshot> {
   if (mode === 'paper') {
-    await reconcilePaperCapitalFromDb();
+    await reconcilePaperCapitalFromDb(false, userId);
     return paperProvider.getSnapshot();
   }
   await reconcileLiveCapitalFromDb();
   return liveProvider.getSnapshot();
 }
 
-export function listReservations(mode: 'paper' | 'live'): Reservation[] {
+export function listReservations(mode: 'paper' | 'live', userId?: string): Reservation[] {
   const manager = mode === 'paper' ? paperManager : liveManager;
+  // TODO: Filter reservations by userId when we have multi-user capital managers
   return manager.listReservations();
 }
 
-export async function setPaperBalance(amount: string | number | PreciseDecimal): Promise<BalanceSnapshot> {
+export async function setPaperBalance(amount: string | number | PreciseDecimal, userId?: string): Promise<BalanceSnapshot> {
   const nextRaw = toUSD(amount);
   const normalized = nextRaw.raw >= ZERO_USD.raw ? nextRaw : ZERO_USD;
   const next = PreciseDecimal.fromRaw(normalized.raw);
@@ -360,18 +387,41 @@ export async function setPaperBalance(amount: string | number | PreciseDecimal):
   
   // Persist paper balance to database for restart resilience
   try {
-    await prisma.systemSetting.upsert({
-      where: { key: 'paper_balance_usd' },
-      update: { 
-        value: next.toNumber().toString(),
-        updatedAt: new Date(),
-      },
-      create: {
-        key: 'paper_balance_usd',
-        value: next.toNumber().toString(),
-      },
-    });
-    console.log(`💾 Paper balance persisted to database: $${next.toNumber()}`);
+    if (userId) {
+      // Save to UserSetting (per-user)
+      await prisma.userSetting.upsert({
+        where: { 
+          userId_key: {
+            userId,
+            key: 'paper_balance_usd'
+          }
+        },
+        update: { 
+          value: next.toNumber().toString(),
+        },
+        create: {
+          userId,
+          key: 'paper_balance_usd',
+          value: next.toNumber().toString(),
+          category: 'trading',
+        },
+      });
+      console.log(`💾 Paper balance persisted to user settings (${userId}): $${next.toNumber()}`);
+    } else {
+      // Fallback: save to SystemSetting (legacy)
+      await prisma.systemSetting.upsert({
+        where: { key: 'paper_balance_usd' },
+        update: { 
+          value: next.toNumber().toString(),
+          updatedAt: new Date(),
+        },
+        create: {
+          key: 'paper_balance_usd',
+          value: next.toNumber().toString(),
+        },
+      });
+      console.log(`💾 Paper balance persisted to database: $${next.toNumber()}`);
+    }
   } catch (error) {
     console.warn('⚠️ Failed to persist paper balance to database:', error);
   }
