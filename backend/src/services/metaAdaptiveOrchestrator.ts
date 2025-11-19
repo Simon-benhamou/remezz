@@ -916,6 +916,13 @@ async function executeEntryTrade(
           // In production, this would check actual bar closes
           const updated = await pendingIntentService.incrementConfirmationTicks(pendingEntry.id);
           
+          if (!updated) {
+            // Intent was already executed or cancelled by another process
+            integrationLogger.warn('Pending intent no longer active', { symbol: session.symbol });
+            await releaseEntryLock(session.sessionId);
+            return;
+          }
+          
           if (updated.confirmationTicks >= 2) {
             integrationLogger.info('Confirmation complete - entering', { symbol: session.symbol });
             await pendingIntentService.markExecuted(pendingEntry.id);

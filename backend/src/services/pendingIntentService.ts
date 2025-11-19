@@ -88,26 +88,57 @@ class PendingIntentService {
   /**
    * Update confirmation ticks for wait_confirmation intent
    */
-  async incrementConfirmationTicks(intentId: string): Promise<PendingIntentData> {
-    const intent = await prisma.pendingIntent.update({
-      where: { id: intentId },
+  async incrementConfirmationTicks(intentId: string): Promise<PendingIntentData | null> {
+    // First verify the intent exists and is still active
+    const existing = await prisma.pendingIntent.findFirst({
+      where: {
+        id: intentId,
+        status: 'active',
+      },
+    });
+    
+    if (!existing) return null;
+    
+    // Use updateMany to avoid unique constraint issues
+    await prisma.pendingIntent.updateMany({
+      where: {
+        id: intentId,
+        sessionId: existing.sessionId,
+        status: 'active',
+      },
       data: {
-        confirmationTicks: {
-          increment: 1,
-        },
+        confirmationTicks: existing.confirmationTicks + 1,
         updatedAt: new Date(),
       },
     });
+    
+    // Fetch and return the updated intent
+    const updated = await prisma.pendingIntent.findUnique({
+      where: { id: intentId },
+    });
 
-    return intent as PendingIntentData;
+    return updated as PendingIntentData | null;
   }
 
   /**
    * Mark intent as executed
    */
   async markExecuted(intentId: string): Promise<void> {
-    await prisma.pendingIntent.update({
+    // First get the intent to know its sessionId
+    const intent = await prisma.pendingIntent.findUnique({
       where: { id: intentId },
+      select: { sessionId: true, status: true },
+    });
+    
+    if (!intent) return;
+    
+    // Update using the unique constraint fields to avoid conflicts
+    await prisma.pendingIntent.updateMany({
+      where: {
+        id: intentId,
+        sessionId: intent.sessionId,
+        status: intent.status, // Only update if status hasn't changed
+      },
       data: {
         status: 'executed',
         executedAt: new Date(),
@@ -120,8 +151,21 @@ class PendingIntentService {
    * Mark intent as expired
    */
   async markExpired(intentId: string): Promise<void> {
-    await prisma.pendingIntent.update({
+    // First get the intent to know its sessionId
+    const intent = await prisma.pendingIntent.findUnique({
       where: { id: intentId },
+      select: { sessionId: true, status: true },
+    });
+    
+    if (!intent) return;
+    
+    // Update using the unique constraint fields to avoid conflicts
+    await prisma.pendingIntent.updateMany({
+      where: {
+        id: intentId,
+        sessionId: intent.sessionId,
+        status: intent.status, // Only update if status hasn't changed
+      },
       data: {
         status: 'expired',
         updatedAt: new Date(),
