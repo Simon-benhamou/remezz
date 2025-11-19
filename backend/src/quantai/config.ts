@@ -460,9 +460,9 @@ const DEFAULT_CONFIG: QuantAIConfig = {
   },
   exits: {
     atrPeriod: 14,
-    slAtrMult: 1.5,
-    slAtrMultReversal: 1.2,
-    slAtrMultImpulse: 1.5,
+    slAtrMult: 2.5,  // FIXED: Was 1.5 (too tight!) - now 2.5x ATR for safer stops
+    slAtrMultReversal: 2.0,  // FIXED: Was 1.2 - increased for reversal patterns
+    slAtrMultImpulse: 2.5,  // FIXED: Was 1.5 - impulse moves need room
     tpRMultiples: [1.4, 2.4, 3.5],
     trailAfterR: 1.2,
     trailAfterRReversal: 0.9,
@@ -481,7 +481,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       },
       clampMultiplier: { min: 0.55, max: 1.75 },
     },
-    minStopAtrMult: 0.9,
+    minStopAtrMult: 1.5,  // FIXED: Was 0.9 (too tight!) - minimum stop distance increased
     profitLock: {
       minRMultiple: 1.0,
       allowPartialBeforeMinR: false,
