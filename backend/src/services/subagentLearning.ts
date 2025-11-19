@@ -272,6 +272,19 @@ function buildMetricsPayload(agg: SymbolAggregate): Record<string, unknown> {
   };
 }
 
+/**
+ * Returns neutral/conservative defaults for symbols without historical data.
+ * These values allow trading while being cautious until performance data accumulates.
+ */
+function getNeutralRiskDefaults(): RiskLearningRecommendation {
+  return {
+    recommendedMaxLeverage: 3.5,        // Conservative leverage
+    recommendedMaxPositionPct: 0.18,    // 18% position sizing (moderate)
+    hedgingTension: 0.30,               // Low tension - won't force hedge
+    confidence: 0.50,                    // Neutral confidence
+  };
+}
+
 function deriveRiskRecommendation(agg: SymbolAggregate): { tuning: RiskLearningRecommendation; reason: string } {
   const drawdownPenalty = agg.avgDrawdownPct != null ? clamp(1 - agg.avgDrawdownPct / 140, 0.35, 1) : 1;
   const compliancePenalty = clamp(1 - agg.complianceRate * 1.4, 0.4, 1);
@@ -650,7 +663,15 @@ export async function getSubagentTuning<K extends SubagentKind>(
     return null;
   }
 
-  if (!row) return null;
+  if (!row) {
+    // Return neutral defaults for symbols without historical data
+    // This allows new symbols to trade while being conservative
+    if (subagent === 'risk_governor') {
+      return getNeutralRiskDefaults() as SubagentLearningRecommendations[K];
+    }
+    // For other subagents, return null and let them use their own defaults
+    return null;
+  }
 
   const rowMode = normalizeMode(row.mode);
   const rowRegime = normalizeRegime(row.regime);

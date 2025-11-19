@@ -34,6 +34,27 @@ class AgentMemoryStore {
   getAll(agent: string): AgentMemoryEntry[] {
     return Array.from(this.snapshots.values()).filter((entry) => entry.agent === agent);
   }
+
+  /**
+   * Get cached entry only if it's fresh (within maxAge)
+   */
+  getFresh<T>(agent: string, identifier: string, maxAgeMs: number): AgentMemoryEntry<T> | null {
+    const entry = this.get<T>(agent, identifier);
+    if (!entry) return null;
+    if (Date.now() - entry.updatedAt > maxAgeMs) return null;
+    return entry;
+  }
+
+  /**
+   * Clear all entries for a specific agent
+   */
+  clearAgent(agent: string): void {
+    for (const [key, entry] of this.snapshots.entries()) {
+      if (entry.agent === agent) {
+        this.snapshots.delete(key);
+      }
+    }
+  }
 }
 
 export const agentMemoryStore = new AgentMemoryStore();

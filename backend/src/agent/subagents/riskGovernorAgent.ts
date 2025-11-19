@@ -226,7 +226,9 @@ export class DefaultRiskGovernorAgent implements RiskGovernorAgent {
     if (Math.abs(netExposureUsd) > adjustedSessionCap * 1.1 && sessionExposureUsd > 0) {
       hedgingReasons.push('net_directional_imbalance');
     }
-    if (poolFreeRatio < 0.08 && sessionExposureUsd > 0) {
+    // BUG FIX: Reduced pool stress threshold from 8% to 3% to avoid blocking all agents prematurely
+    // Only trigger if there are actual positions to hedge
+    if (poolFreeRatio < 0.03 && sessionExposureUsd > this.minPositionUsd) {
       hedgingReasons.push('capital_pool_stress');
     }
     if (symbolExposureUsd > Math.max(this.minPositionUsd, maxPositionUsd * 0.9) && positions.length > 1) {
@@ -235,13 +237,15 @@ export class DefaultRiskGovernorAgent implements RiskGovernorAgent {
     if (maxPositionUsd < this.minPositionUsd * 0.5 && sessionExposureUsd > 0) {
       hedgingReasons.push('budget_exhausted');
     }
+    // Learning-based hedge conditions with neutral defaults for new symbols
+    // Symbols without historical data get hedgingTension=0.30 (won't trigger) and confidence=0.50 (neutral)
     if (learning) {
-      if (learning.hedgingTension > 0.65 && sessionExposureUsd > 0) {
+      // Only trigger on very high tension (>90%) indicating consistent bad performance
+      if (learning.hedgingTension > 0.90 && sessionExposureUsd > this.minPositionUsd * 2) {
         hedgingReasons.push('learning_high_tension');
-      } else if (learning.hedgingTension > 0.4 && sessionExposureUsd > maxPositionUsd * 0.6) {
-        hedgingReasons.push('learning_tension_watch');
       }
-      if (learning.confidence < 0.35) {
+      // Only trigger on very low confidence (<15%) with significant exposure
+      if (learning.confidence < 0.15 && sessionExposureUsd > maxPositionUsd) {
         hedgingReasons.push('learning_low_confidence');
       }
     }

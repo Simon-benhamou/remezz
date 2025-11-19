@@ -104,6 +104,15 @@ const handleAdjustAllocation: ActionHandler = async (record, payload) => {
   if (!payload || typeof payload !== 'object') {
     return { status: 'skipped', details: { reason: 'missing_payload' } };
   }
+  
+  // BUG FIX: Verify position still exists before adjusting allocation
+  const dbPosition = await prisma.position.findFirst({
+    where: { sessionId: record.sessionId },
+  });
+  if (!dbPosition) {
+    return { status: 'skipped', details: { reason: 'position_closed' } };
+  }
+  
   const payloadRecord = payload as Record<string, unknown> | null;
   const allowedFields = ['capitalUsd', 'budgetFraction', 'maxLeverage', 'weight', 'score'] as const;
   const updatePayload: Record<string, number> = {};

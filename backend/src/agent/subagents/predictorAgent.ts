@@ -1,5 +1,5 @@
 import { buildTechSnapshot } from '../../ai/tech.js';
-import { getPredictionWithCache } from '../../quantai/predictorCache.js';
+import { getPrediction } from '../../quantai/pythonPredictor.js';
 import { isPythonPredictorAvailable } from '../../quantai/pythonPredictor.js';
 import { loadPythonTrainingMetrics } from '../../quantai/pythonSignalTuning.js';
 import { storePredictorDecisionIfChanged } from '../../quantai/predictorDecisionStore.js';
@@ -59,16 +59,11 @@ export class DefaultPredictorAgent implements PredictorAgent {
     }
 
     const learning = await getSubagentTuning('predictor', symbol);
-    const ttlMultiplier = learning ? this.clamp(learning.cacheTtlMultiplier, 0.35, 1.5) : 1;
-    const ttlMs = Math.round(this.cacheTtlMs * ttlMultiplier);
-    const forceFresh =
-      process.env.META_ADAPTIVE_PREDICTOR_FORCE_FRESH === 'true' || Boolean(learning?.forceFresh);
+    // BUG FIX: Remove personal predictor cache, always use fresh data
+    // This ensures predictions are always up-to-date with latest market conditions
 
     try {
-      const prediction = await getPredictionWithCache(symbol, features, {
-        ttlMs,
-        forceFresh,
-      });
+      const prediction = await getPrediction(symbol, features);
 
       const bias: PredictorInsight['bias'] =
         prediction.decision === 'long'

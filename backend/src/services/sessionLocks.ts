@@ -128,6 +128,49 @@ export async function releaseEntryLock(sessionId: string, reason?: string | null
   }
 }
 
+/**
+ * BUG FIX: Cleanup stale entry locks that may have been orphaned by crashes
+ * Should be called periodically (e.g., every 5 minutes)
+ */
+export async function cleanupStaleEntryLocks(maxAgeMs = 5 * 60_000): Promise<number> {
+  try {
+    const sessions = await prisma.agentSession.findMany({
+      where: { status: 'ACTIVE' },
+      select: { id: true, profileJson: true },
+    });
+    
+    let cleaned = 0;
+    const now = Date.now();
+    
+    for (const session of sessions) {
+      const profile = cloneProfile((session.profileJson as any) ?? {});
+      const entryLock = profile.entryLock as SessionLockSnapshot | undefined;
+      
+      if (entryLock && entryLock.active) {
+        // Check if lock is expired or too old
+        const expiresAt = entryLock.expiresAt ? Date.parse(entryLock.expiresAt) : null;
+        const sinceTs = entryLock.since ? Date.parse(entryLock.since) : null;
+        const age = sinceTs ? now - sinceTs : 0;
+        
+        if (expiresAt && expiresAt <= now) {
+          // Expired lock
+          await releaseLock(session.id, 'entryLock', 'cleanup_expired');
+          cleaned++;
+        } else if (age > maxAgeMs) {
+          // Too old, likely orphaned
+          await releaseLock(session.id, 'entryLock', 'cleanup_stale');
+          cleaned++;
+        }
+      }
+    }
+    
+    return cleaned;
+  } catch (error) {
+    console.warn('[SessionLocks] Failed to cleanup stale entry locks:', error);
+    return 0;
+  }
+}
+
 export async function activateRotationLock(sessionId: string, reason: string, ttlMs?: number, meta?: Record<string, any>): Promise<boolean> {
   try {
     return await activateLock(sessionId, 'rotationLock', reason, ttlMs, meta);

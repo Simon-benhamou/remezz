@@ -73,7 +73,7 @@ export type AgentSupportState = {
 };
 
 const HALT_ENTRY_LOCK_TTLS: Record<'entries_only' | 'full', number> = {
-  entries_only: 10 * 60_000,
+  entries_only: 3 * 60_000,  // BUG FIX: Reduced from 10min to 3min to avoid long blocks
   full: 30 * 60_000,
 };
 
@@ -141,6 +141,33 @@ export class AgentsHub {
     this.agents.set(sessionId, a);
     this.trackSymbolSession(profile?.symbol ?? null, sessionId);
     return a;
+  }
+
+  /**
+   * BUG FIX: Cleanup inactive agent stubs to prevent memory leaks
+   */
+  async cleanupInactiveSessions(): Promise<number> {
+    try {
+      const activeSessions = await prisma.agentSession.findMany({
+        where: { status: 'ACTIVE' },
+        select: { id: true },
+      });
+      const activeIds = new Set(activeSessions.map(s => s.id));
+      
+      let cleaned = 0;
+      for (const [sessionId, agent] of this.agents.entries()) {
+        if (!activeIds.has(sessionId)) {
+          this.agents.delete(sessionId);
+          this.removeSymbolSession(agent?.profile?.symbol ?? null, sessionId);
+          cleaned++;
+        }
+      }
+      
+      return cleaned;
+    } catch (error) {
+      console.warn('[AgentHub] Failed to cleanup inactive sessions:', error);
+      return 0;
+    }
   }
 
   async halt(sessionId: string, mode: 'entries_only' | 'full' = 'full') {

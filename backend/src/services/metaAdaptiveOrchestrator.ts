@@ -787,6 +787,21 @@ async function executeEntryTrade(
 
       console.log(`[MetaOrchestrator.executeEntryTrade] Got broker, fetching balance...`);
 
+      // BUG FIX: Check if market conditions are hostile before placing order
+      if (cachedMarketQuality && cachedSentiment && executionPlan && marketLooksHostile(cachedMarketQuality, cachedSentiment, side, executionPlan)) {
+        integrationLogger.warn('Market conditions hostile - blocking trade');
+        console.log(`[MetaOrchestrator.executeEntryTrade] BLOCKED: hostile market conditions`);
+        await logTradeEvaluation({
+          symbol: session.symbol,
+          decision: 'order_blocked_capital',
+          blockedReason: 'hostile_market_conditions',
+          confidenceScore: signal.confidence,
+          inputMetrics: buildSupportInputMetrics(),
+          regimeContext: calculateRegimeContext(tech),
+        }).catch(err => console.warn('Failed to log hostile market block:', err));
+        return;
+      }
+
       // Get account balance for position sizing from capital pool
       const balance = await withLogging(
         integrationLogger,
@@ -855,9 +870,24 @@ async function executeEntryTrade(
       const riskPct = planRiskPct && planRiskPct > 0 ? planRiskPct : fallbackRiskPct;
       
       // Gather capital usage plus support-agent insights concurrently
-      const cachedMarketQuality = agentMemoryStore.get<MarketQualityScore>('marketQuality', session.symbol)?.data ?? null;
-      const cachedSentiment = agentMemoryStore.get<SentimentSignal>('sentiment', session.symbol)?.data ?? null;
-      const cachedRisk = agentMemoryStore.get<RiskLimits>('riskGovernor', session.sessionId)?.data ?? null;
+      // BUG FIX: Check cache freshness and fallback to direct fetch if stale
+      const MAX_CACHE_AGE_MS = 45_000; // 45 seconds max
+      const now = Date.now();
+      
+      const mqEntry = agentMemoryStore.get<MarketQualityScore>('marketQuality', session.symbol);
+      const cachedMarketQuality = (mqEntry && now - mqEntry.updatedAt < MAX_CACHE_AGE_MS)
+        ? mqEntry.data
+        : await agentServices.marketQuality.assess(session.symbol).catch(() => null);
+      
+      const sentEntry = agentMemoryStore.get<SentimentSignal>('sentiment', session.symbol);
+      const cachedSentiment = (sentEntry && now - sentEntry.updatedAt < MAX_CACHE_AGE_MS)
+        ? sentEntry.data
+        : await agentServices.sentiment.getSignal(session.symbol).catch(() => null);
+      
+      const riskEntry = agentMemoryStore.get<RiskLimits>('riskGovernor', session.sessionId);
+      const cachedRisk = (riskEntry && now - riskEntry.updatedAt < MAX_CACHE_AGE_MS)
+        ? riskEntry.data
+        : await agentServices.riskGovernor.getLimits(session.sessionId, session.symbol).catch(() => null);
 
       const [
         capitalMetrics,
@@ -1546,12 +1576,30 @@ async function executeExitTrade(
 
     const exitSide = position.side === 'buy' ? 'sell' : 'buy';
 
+    // BUG FIX: Fetch actual position quantity from database to avoid using stale agent.pos.qty
+    // This fixes issues where exit uses wrong quantity due to partial fills or state desync
+    let actualQty = position.qty;
+    try {
+      const dbPosition = await prisma.position.findFirst({
+        where: { sessionId: session.sessionId },
+        select: { qty: true },
+      });
+      if (dbPosition && dbPosition.qty > 0) {
+        actualQty = dbPosition.qty;
+        if (Math.abs(actualQty - position.qty) > 0.0001) {
+          logger.warn(`[${session.sessionId}] Position qty mismatch: agent.pos=${position.qty}, db=${actualQty}, using db value`);
+        }
+      }
+    } catch (error) {
+      logger.warn(`[${session.sessionId}] Failed to fetch position from DB, using agent.pos.qty:`, error);
+    }
+
     // Place exit order
     const order = await broker.place({
       symbol: session.symbol,
       side: exitSide,
       type: 'market',
-      qty: position.qty,
+      qty: actualQty,
       reduceOnly: true,
       clientOrderId: `${session.sessionId}-exit-${Date.now()}`,
     });

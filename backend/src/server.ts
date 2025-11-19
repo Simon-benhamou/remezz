@@ -66,6 +66,8 @@ import { startOpsJobsHeartbeat } from "./monitor/opsJobs.js";
 import { startAgentPerformanceLedgerLoop } from "./services/performanceLedger.js";
 import { startSelectorAgentLoop } from "./services/selectorAgent.js";
 import { startSubagentLearningLoop } from "./services/subagentLearning.js";
+import { cleanupStaleEntryLocks } from "./services/sessionLocks.js";
+import { AgentHub } from "./agent/hub.js";
 
 const logLevel = configureLogging();
 const serverLogger = createLogger("server");
@@ -224,6 +226,29 @@ startOpsJobsHeartbeat();
 startAgentPerformanceLedgerLoop();
 startSelectorAgentLoop();
 startSubagentLearningLoop();
+
+// BUG FIX: Start periodic cleanup of stale locks and agent stubs
+setInterval(async () => {
+  try {
+    const cleanedLocks = await cleanupStaleEntryLocks();
+    if (cleanedLocks > 0) {
+      serverLogger.info(`🧹 Cleaned ${cleanedLocks} stale entry locks`);
+    }
+  } catch (error) {
+    serverLogger.warn('⚠️ Failed to cleanup stale entry locks:', error);
+  }
+}, 5 * 60_000); // Every 5 minutes
+
+setInterval(async () => {
+  try {
+    const cleaned = await AgentHub.cleanupInactiveSessions();
+    if (cleaned > 0) {
+      serverLogger.info(`🧹 Cleaned ${cleaned} inactive agent stubs`);
+    }
+  } catch (error) {
+    serverLogger.warn('⚠️ Failed to cleanup inactive agent stubs:', error);
+  }
+}, 10 * 60_000); // Every 10 minutes
 
 // 🚀 Start state reconciliation for all active live sessions
 (async () => {
