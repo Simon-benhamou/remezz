@@ -144,21 +144,21 @@ const statusMeta = (session: AgentSession) => {
   if (session.haltedAt) {
     return {
       label: 'Paused',
-      tone: 'linear-gradient(135deg, rgba(251, 191, 36, 0.25), rgba(251, 146, 60, 0.35))',
+      tone: 'linear-gradient(135deg, rgba(251, 191, 36, 0.22), rgba(251, 146, 60, 0.32))',
       color: '#fbbf24',
     };
   }
   if (session.stoppedAt) {
     return {
       label: 'Stopped',
-      tone: 'linear-gradient(135deg, rgba(148, 163, 184, 0.18), rgba(100, 116, 139, 0.32))',
+      tone: 'linear-gradient(135deg, rgba(148, 163, 184, 0.15), rgba(100, 116, 139, 0.28))',
       color: '#cbd5f5',
     };
   }
   return {
     label: 'Active',
-    tone: 'linear-gradient(135deg, rgba(34, 197, 94, 0.25), rgba(74, 222, 128, 0.35))',
-    color: '#4ade80',
+    tone: 'linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(99, 102, 241, 0.32))',
+    color: '#60a5fa',
   };
 };
 
@@ -228,12 +228,12 @@ const cardGridStyle: React.CSSProperties = {
 };
 
 const cardStyle: React.CSSProperties = {
-  background: 'linear-gradient(145deg, rgba(15, 23, 42, 0.98) 0%, rgba(20, 30, 54, 0.92) 100%)',
-  border: '1px solid rgba(71, 107, 176, 0.28)',
-  borderRadius: 20,
-  boxShadow: '0 20px 48px -28px rgba(15, 23, 42, 0.85), 0 0 1px rgba(71, 107, 176, 0.35)',
-  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+  background: 'linear-gradient(145deg, rgba(30, 41, 59, 0.72) 0%, rgba(15, 23, 42, 0.85) 100%)',
+  borderRadius: 18,
+  border: '1px solid rgba(71, 107, 176, 0.32)',
   overflow: 'hidden',
+  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+  boxShadow: '0 24px 56px -32px rgba(0, 0, 0, 0.6), 0 0 1px rgba(71, 107, 176, 0.4)',
 };
 
 export default function SessionsPage() {
@@ -385,20 +385,26 @@ export default function SessionsPage() {
               maxLeverage: values.maxLeverage,
               aggressiveness: values.aggressiveness,
               strategyEngine: 'meta_adaptive',
+              excludedSymbols: Array.from(usedSymbols), // Pass already used symbols
             };
 
+            console.log(`[Agent ${i+1}/${agentCount}] Creating with excluded symbols:`, Array.from(usedSymbols));
+            
             const prepare = await api.prepareAgentCreation(payload);
             const creationId = prepare?.creationId;
             const selectedSymbol = prepare?.selection?.symbol;
 
+            console.log(`[Agent ${i+1}/${agentCount}] Selected symbol:`, selectedSymbol);
+
             if (!creationId || !selectedSymbol) {
+              console.warn(`[Agent ${i+1}/${agentCount}] No creationId or symbol returned`);
               failed++;
               continue;
             }
 
             // Check if symbol is already used in this batch
             if (usedSymbols.has(selectedSymbol)) {
-              console.warn(`Symbol ${selectedSymbol} already used in this batch, skipping duplicate`);
+              console.warn(`[Agent ${i+1}/${agentCount}] Symbol ${selectedSymbol} already used in this batch, skipping duplicate`);
               failed++;
               continue;
             }
@@ -409,9 +415,11 @@ export default function SessionsPage() {
             usedSymbols.add(selectedSymbol);
             succeeded++;
             
+            console.log(`[Agent ${i+1}/${agentCount}] Successfully created with symbol ${selectedSymbol}`);
+            
             // Small delay to avoid overwhelming the system
             if (i < agentCount - 1) {
-              await new Promise(resolve => setTimeout(resolve, 500));
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Increased to 1 second
             }
           } catch (error) {
             console.error('Failed to create agent:', error);
@@ -755,7 +763,7 @@ export default function SessionsPage() {
           </Text>
           <div style={{ marginTop: 12, display: 'flex', gap: 20, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80' }} />
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#60a5fa' }} />
               <Text style={{ color: 'rgba(148, 163, 184, 0.88)', fontSize: 13 }}>
                 {sessions.filter(s => isSessionActive(s)).length} Active
               </Text>
@@ -874,14 +882,14 @@ export default function SessionsPage() {
                       flexDirection: 'column',
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'translateY(-4px)';
-                      e.currentTarget.style.borderColor = 'rgba(71, 107, 176, 0.45)';
-                      e.currentTarget.style.boxShadow = '0 24px 56px -32px rgba(15, 23, 42, 0.95), 0 0 1px rgba(71, 107, 176, 0.5)';
+                      e.currentTarget.style.transform = 'translateY(-6px)';
+                      e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.55)';
+                      e.currentTarget.style.boxShadow = '0 32px 64px -32px rgba(59, 130, 246, 0.35), 0 0 1px rgba(59, 130, 246, 0.6)';
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.borderColor = 'rgba(71, 107, 176, 0.28)';
-                      e.currentTarget.style.boxShadow = '0 20px 48px -28px rgba(15, 23, 42, 0.85), 0 0 1px rgba(71, 107, 176, 0.35)';
+                      e.currentTarget.style.borderColor = 'rgba(71, 107, 176, 0.32)';
+                      e.currentTarget.style.boxShadow = '0 24px 56px -32px rgba(0, 0, 0, 0.6), 0 0 1px rgba(71, 107, 176, 0.4)';
                     }}
                     onClick={() => navigate(`/agents/${session.id}`)}
                   >
@@ -992,20 +1000,20 @@ export default function SessionsPage() {
                         }}
                       >
                         <div style={{
-                          background: 'rgba(30, 41, 59, 0.45)',
-                          borderRadius: 12,
-                          padding: '14px 16px',
-                          border: '1px solid rgba(71, 107, 176, 0.12)',
+                          background: 'rgba(30, 41, 59, 0.55)',
+                          borderRadius: 14,
+                          padding: '16px 18px',
+                          border: '1px solid rgba(71, 107, 176, 0.18)',
                         }}>
-                          <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+                          <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
                             P&L
                           </Text>
                           <div
                             style={{
                               color: Number(session.pnlUsd ?? 0) >= 0 ? '#4ade80' : '#f87171',
                               fontWeight: 700,
-                              fontSize: 20,
-                              marginTop: 6,
+                              fontSize: 22,
+                              marginTop: 8,
                               letterSpacing: '-0.02em',
                             }}
                           >
@@ -1013,20 +1021,20 @@ export default function SessionsPage() {
                           </div>
                         </div>
                         <div style={{
-                          background: 'rgba(30, 41, 59, 0.45)',
-                          borderRadius: 12,
-                          padding: '14px 16px',
-                          border: '1px solid rgba(71, 107, 176, 0.12)',
+                          background: 'rgba(30, 41, 59, 0.55)',
+                          borderRadius: 14,
+                          padding: '16px 18px',
+                          border: '1px solid rgba(71, 107, 176, 0.18)',
                         }}>
-                          <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+                          <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
                             ROI
                           </Text>
-                          <div style={{ marginTop: 6 }}>
+                          <div style={{ marginTop: 8 }}>
                             <div
                               style={{
                                 color: Number(session.roiPct ?? 0) >= 0 ? '#38bdf8' : '#f87171',
                                 fontWeight: 700,
-                                fontSize: 20,
+                                fontSize: 22,
                                 letterSpacing: '-0.02em',
                               }}
                             >
@@ -1040,28 +1048,28 @@ export default function SessionsPage() {
                           </div>
                         </div>
                         <div style={{
-                          background: 'rgba(30, 41, 59, 0.45)',
-                          borderRadius: 12,
-                          padding: '14px 16px',
-                          border: '1px solid rgba(71, 107, 176, 0.12)',
+                          background: 'rgba(30, 41, 59, 0.55)',
+                          borderRadius: 14,
+                          padding: '16px 18px',
+                          border: '1px solid rgba(71, 107, 176, 0.18)',
                         }}>
-                          <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+                          <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
                             Win Rate
                           </Text>
-                          <div style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 20, marginTop: 6, letterSpacing: '-0.02em' }}>
+                          <div style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 22, marginTop: 8, letterSpacing: '-0.02em' }}>
                             {formatPercent(session.winRate)}
                           </div>
                         </div>
                         <div style={{
-                          background: 'rgba(30, 41, 59, 0.45)',
-                          borderRadius: 12,
-                          padding: '14px 16px',
-                          border: '1px solid rgba(71, 107, 176, 0.12)',
+                          background: 'rgba(30, 41, 59, 0.55)',
+                          borderRadius: 14,
+                          padding: '16px 18px',
+                          border: '1px solid rgba(71, 107, 176, 0.18)',
                         }}>
-                          <Text style={{ color: 'rgba(148, 163, 184, 0.72)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+                          <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
                             Trades
                           </Text>
-                          <div style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 20, marginTop: 6, letterSpacing: '-0.02em' }}>
+                          <div style={{ color: '#cbd5f5', fontWeight: 700, fontSize: 22, marginTop: 8, letterSpacing: '-0.02em' }}>
                             {Number(session.totalTrades ?? 0)}
                           </div>
                         </div>

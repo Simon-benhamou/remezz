@@ -379,7 +379,10 @@ export async function prepareAgentCreation(payload: StartPayload, userId?: strin
   const normalized = await validateAndNormalize(payload, userId);
   const universe = normalized.isSmartAgent ? await buildSmartUniverse(normalized) : null;
   const reservationToken = normalized.isSmartAgent ? randomUUID() : undefined;
-  const selection = await selectSymbol(normalized, universe, { reservationToken });
+  const selection = await selectSymbol(normalized, universe, { 
+    reservationToken,
+    excludedSymbols: payload.excludedSymbols || [],
+  });
 
   if (reservationToken && !selection.autoSelected) {
     releaseSmartReservation(reservationToken);
@@ -1049,8 +1052,9 @@ function deriveStrategyFilterProfile(config: NormalizedStartConfig): StrategyFil
 async function selectSymbol(
   config: NormalizedStartConfig,
   universe: UniverseBuildResult | null,
-  options?: { reservationToken?: string }
+  options?: { reservationToken?: string; excludedSymbols?: string[] }
 ): Promise<AgentCreationSelectionSummary> {
+  const excludedSymbols = options?.excludedSymbols || [];
   let symbol = config.symbol;
   const reservationToken = options?.reservationToken;
   const decisionLog: AgentCreationLogEntry[] = [];
@@ -1108,6 +1112,14 @@ async function selectSymbol(
             requiredConfidence: minPrefetchConfidence.toFixed(3),
             actualConfidence: (prefetched.autoBias?.confidence || 0).toFixed(3)
           },
+        });
+      } else if (excludedSymbols.includes(prefetched.symbol)) {
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'warn',
+          message: `Prefetched opportunity ${prefetched.symbol} excluded by batch creation`,
+          context: 'selection',
+          meta: { reason: 'excluded_in_batch' },
         });
       } else if (reservationToken && isSmartSymbolReserved(prefetched.symbol, reservationToken)) {
         decisionLog.push({

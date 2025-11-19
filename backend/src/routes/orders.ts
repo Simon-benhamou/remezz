@@ -1,8 +1,13 @@
 import { Router } from "express";
 import { prisma } from "../db/client.js";
 import { listAggregatedTrades } from "../services/performance/tradeLedger.js";
+import { authenticateUser, AuthenticatedRequest } from "../middleware/auth.js";
 export const router = Router();
-router.get("/", async (req, res) => {
+router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+
   const sessionId = String(req.query.sessionId || "");
   let where: any = {};
   let sess: any = null;
@@ -10,10 +15,18 @@ router.get("/", async (req, res) => {
   if (sessionId) {
     where.sessionId = sessionId;
     sess = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+    // Security: verify session belongs to user
+    if (sess && sess.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+      return res.status(403).json({ error: 'session_forbidden' });
+    }
   } else {
-    // Return orders from ALL active sessions, not just the most recent one
+    // Return orders from user's active sessions only
+    const sessionWhere: any = { stoppedAt: null };
+    if (req.user.role !== 'admin' && !req.user.isLegacy) {
+      sessionWhere.userId = req.user.id;
+    }
     const activeSessions = await prisma.agentSession.findMany({ 
-      where: { stoppedAt: null }, 
+      where: sessionWhere, 
       select: { id: true } 
     });
     if (activeSessions.length > 0) {
@@ -56,7 +69,11 @@ router.get("/", async (req, res) => {
 });
 
 // Aggregated trades: one row per exit (partial or full), with reconstructed entry price from realized PnL
-router.get('/trades', async (req, res) => {
+router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ error: 'auth_required' });
+  }
+
   const sessionId = String(req.query.sessionId || "").trim();
   const limitRaw = Number(req.query.limit ?? 200);
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
@@ -66,12 +83,21 @@ router.get('/trades', async (req, res) => {
   const from = fromStr ? new Date(fromStr) : null;
   const to = toStr ? new Date(toStr) : null;
 
+  // Security: verify session belongs to user if sessionId is provided
+  if (sessionId) {
+    const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+    if (session && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+      return res.status(403).json({ error: 'session_forbidden' });
+    }
+  }
+
   const [trades, session] = await Promise.all([
     listAggregatedTrades({
       sessionId,
       from: from && !Number.isNaN(from.getTime()) ? from : undefined,
       to: to && !Number.isNaN(to.getTime()) ? to : undefined,
       limit,
+      userId: req.user.role === 'admin' || req.user.isLegacy ? undefined : req.user.id,
     }),
     sessionId ? prisma.agentSession.findUnique({ where: { id: sessionId } }) : null,
   ]);

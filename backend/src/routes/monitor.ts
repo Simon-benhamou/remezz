@@ -15,18 +15,36 @@ import {
   exportIncoherenceBundle,
   persistIncoherenceBundleToFile,
 } from '../monitor/incoherenceTracker.js';
+import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 
 export const router = Router();
 
 // Recent policy alerts (in-memory)
 // source param controls where alerts are fetched: 'db' | 'mem' | 'auto'
-router.get('/alerts', async (req,res)=>{
+router.get('/alerts', authenticateUser, async (req: AuthenticatedRequest, res)=>{
   const sessionId = String(req.query.sessionId || '');
   const source = String(req.query.source || 'auto');
+  
+  // Security: if sessionId provided, verify it belongs to user
+  if (sessionId && req.user?.id) {
+    const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+    if (session && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+      return res.status(403).json({ error: 'session_forbidden' });
+    }
+  }
+  
   if (source === 'mem') return res.json(recentAlerts(sessionId || undefined));
   if (source === 'db') {
     try {
       const where: any = sessionId ? { sessionId } : {};
+      // Filter by user's sessions if not admin
+      if (!sessionId && req.user?.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+        const userSessions = await prisma.agentSession.findMany({
+          where: { userId: req.user.id },
+          select: { id: true },
+        });
+        where.sessionId = { in: userSessions.map(s => s.id) };
+      }
       const rows = await prisma.alert.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 });
       return res.json(rows.map(r => ({ id: r.id, sessionId: r.sessionId, symbol: r.symbol, kind: r.kind, severity: r.severity, details: r.details, ts: new Date(r.createdAt).getTime() })));
     } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }); }
@@ -35,6 +53,14 @@ router.get('/alerts', async (req,res)=>{
 
   try {
     const where: any = sessionId ? { sessionId } : {};
+    // Filter by user's sessions if not admin
+    if (!sessionId && req.user?.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+      const userSessions = await prisma.agentSession.findMany({
+        where: { userId: req.user.id },
+        select: { id: true },
+      });
+      where.sessionId = { in: userSessions.map(s => s.id) };
+    }
     const rows = await prisma.alert.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 });
     return res.json(rows.map(r => ({ id: r.id, sessionId: r.sessionId, symbol: r.symbol, kind: r.kind, severity: r.severity, details: r.details, ts: new Date(r.createdAt).getTime() })));
   } catch {}

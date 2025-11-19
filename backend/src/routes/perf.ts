@@ -3,22 +3,37 @@ import { prisma } from "../db/client.js";
 import { getSessionPerformanceMetrics } from "../services/performance.js";
 import { computeAdaptiveRisk } from "../risk/adaptive.js";
 import type { AdaptiveRiskResult } from "../risk/adaptive.js";
+import { authenticateUser, AuthenticatedRequest } from "../middleware/auth.js";
 
 export const router = Router();
 
 // Basic KPIs row (existing)
-router.get("/", async (req, res) => {
+router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
   const sessionId = String(req.query.sessionId || "");
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
+  
+  // Security: verify session belongs to user
+  if (req.user?.id) {
+    const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+    if (session && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+      return res.status(403).json({ error: 'session_forbidden' });
+    }
+  }
+  
   res.json(await prisma.sessionKpi.findUnique({ where: { sessionId } }));
 });
 
 // Rich breakdown by position direction (long/short) and by symbol
-router.get("/breakdown", async (req, res) => {
+router.get("/breakdown", authenticateUser, async (req: AuthenticatedRequest, res) => {
   const sessionId = String(req.query.sessionId || "");
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
 
+  // Security: verify session belongs to user
   const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+  if (!session) return res.status(404).json({ error: "session not found" });
+  if (req.user?.id && session.userId !== req.user.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+    return res.status(403).json({ error: 'session_forbidden' });
+  }
   const profileJson: any = session?.profileJson && typeof session.profileJson === 'object' ? session.profileJson : {};
   const baseRiskPct = Number(profileJson?.riskPerTradePct ?? profileJson?.risk_per_trade_pct ?? 1) || 1;
   let adaptiveRisk: AdaptiveRiskResult | null = null;
@@ -95,7 +110,7 @@ router.get("/breakdown", async (req, res) => {
   });
 });
 
-router.get("/session-metrics", async (req, res) => {
+router.get("/session-metrics", authenticateUser, async (req: AuthenticatedRequest, res) => {
   const rawIds = (req.query.sessionId ?? (req.query["sessionId[]"] as any)) as
     | string
     | string[]
@@ -111,12 +126,28 @@ router.get("/session-metrics", async (req, res) => {
         .filter((id) => id.length > 0)
     : [];
   if (!requested.length) {
-    return res.status(400).json({ error: "sessionId required" });
+    return res.status(400).json({ error: "sessionId(s) required" });
   }
 
+  // Security: filter to only user's sessions
+  if (req.user?.id && req.user.role !== 'admin' && !req.user.isLegacy) {
+    const userSessions = await prisma.agentSession.findMany({
+      where: { userId: req.user.id, id: { in: requested } },
+      select: { id: true },
+    });
+    const allowedIds = new Set(userSessions.map(s => s.id));
+    const filtered = requested.filter(id => allowedIds.has(id));
+    if (filtered.length === 0) {
+      return res.status(403).json({ error: 'no_authorized_sessions' });
+    }
+    const metrics = await getSessionPerformanceMetrics(filtered);
+    return res.json({ metrics });
+  }
+
+  // Admin/legacy users: return all requested sessions
   try {
     const metrics = await getSessionPerformanceMetrics(requested);
-    res.json(metrics);
+    res.json({ metrics });
   } catch (error) {
     console.error("Failed to load session metrics", error);
     res.status(500).json({ error: "failed_to_compute_metrics" });

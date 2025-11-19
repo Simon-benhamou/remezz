@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../db/client.js';
+import { authenticateUser, AuthenticatedRequest } from '../middleware/auth.js';
 
 export const router = Router();
 
@@ -7,16 +8,25 @@ export const router = Router();
  * PHASE 3: GET /api/portfolio/correlation
  * Returns correlation matrix for active positions
  */
-router.get('/correlation', async (req, res) => {
+router.get('/correlation', authenticateUser, async (req: AuthenticatedRequest, res) => {
   try {
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'auth_required' });
+    }
+
     const mode = (req.query.mode as 'paper' | 'live') || 'paper';
     
-    // Get all active sessions with positions
+    // Get active sessions with positions for this user
+    const sessionWhere: any = {
+      stoppedAt: null,
+      mode,
+    };
+    if (req.user.role !== 'admin' && !req.user.isLegacy) {
+      sessionWhere.userId = req.user.id;
+    }
+
     const activeSessions = await prisma.agentSession.findMany({
-      where: {
-        stoppedAt: null,
-        mode,
-      },
+      where: sessionWhere,
       include: {
         positions: {
           where: {
@@ -131,16 +141,25 @@ router.get('/correlation', async (req, res) => {
  * PHASE 3: GET /api/portfolio/risk-distribution
  * Returns risk distribution across positions
  */
-router.get('/risk-distribution', async (req, res) => {
+router.get('/risk-distribution', authenticateUser, async (req: AuthenticatedRequest, res) => {
   try {
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'auth_required' });
+    }
+
     const mode = (req.query.mode as 'paper' | 'live') || 'paper';
     
-    // Get all active sessions with positions
+    // Get active sessions with positions for this user
+    const sessionWhere: any = {
+      stoppedAt: null,
+      mode,
+    };
+    if (req.user.role !== 'admin' && !req.user.isLegacy) {
+      sessionWhere.userId = req.user.id;
+    }
+
     const activeSessions = await prisma.agentSession.findMany({
-      where: {
-        stoppedAt: null,
-        mode,
-      },
+      where: sessionWhere,
       include: {
         positions: {
           where: {

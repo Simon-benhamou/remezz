@@ -7,6 +7,7 @@ type TradeAggregationOptions = {
   from?: Date | null;
   to?: Date | null;
   limit?: number;
+  userId?: string;
 };
 
 type FillRecord = {
@@ -241,9 +242,28 @@ export async function listAggregatedTrades(opts: TradeAggregationOptions): Promi
   const limit = Number.isFinite(opts.limit) ? Math.max(1, Math.min(500, Math.floor(Number(opts.limit)))) : 200;
   const fromDate = opts.from instanceof Date ? opts.from : opts.from ? new Date(opts.from) : null;
   const toDate = opts.to instanceof Date ? opts.to : opts.to ? new Date(opts.to) : null;
+  const userId = opts.userId?.trim() ? opts.userId.trim() : undefined;
+
+  // If userId is provided, first get all user's session IDs
+  let allowedSessionIds: string[] | undefined;
+  if (userId) {
+    const userSessions = await prisma.agentSession.findMany({
+      where: { userId },
+      select: { id: true },
+    });
+    allowedSessionIds = userSessions.map(s => s.id);
+    if (allowedSessionIds.length === 0) {
+      // User has no sessions, return empty array
+      return [];
+    }
+  }
 
   const where: any = {};
-  if (sessionId) where.sessionId = sessionId;
+  if (sessionId) {
+    where.sessionId = sessionId;
+  } else if (allowedSessionIds) {
+    where.sessionId = { in: allowedSessionIds };
+  }
   if (fromDate || toDate) {
     where.ts = {};
     if (fromDate && !Number.isNaN(fromDate.getTime())) where.ts.gte = fromDate;
