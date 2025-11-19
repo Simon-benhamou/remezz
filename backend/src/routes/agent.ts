@@ -1662,3 +1662,269 @@ router.get('/:sessionId/diagnostics-debug', async (req, res) => {
     return res.status(500).json({ ok: false, error: 'internal_error', details: error instanceof Error ? error.message : String(error) });
   }
 });
+
+// PHASE 2: Decision Timeline - Get recent agent decisions with reasoning
+router.get('/sessions/:id/decisions', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const limit = parseInt(req.query.limit as string) || 20;
+    
+    // Fetch recent action intents with decision context
+    const intents = await prisma.agentActionIntent.findMany({
+      where: { sessionId: id },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        type: true,
+        priority: true,
+        confidence: true,
+        reason: true,
+        status: true,
+        payload: true,
+        result: true,
+        createdAt: true,
+        startedAt: true,
+        executedAt: true,
+      }
+    });
+    
+    // Transform into decision timeline format
+    const timeline = intents.map(intent => ({
+      id: intent.id,
+      timestamp: intent.createdAt,
+      phase: intent.status === 'pending' ? 'SCANNING' :
+             intent.status === 'in_progress' ? 'EVALUATING' :
+             intent.status === 'completed' ? (intent.type.includes('enter') ? 'ENTERED' : 'EXITED') :
+             intent.status === 'failed' ? 'FAILED' : 'WAITING',
+      action: intent.type,
+      confidence: intent.confidence,
+      reasoning: intent.reason,
+      payload: intent.payload,
+      result: intent.result,
+      duration: intent.executedAt && intent.startedAt 
+        ? (new Date(intent.executedAt).getTime() - new Date(intent.startedAt).getTime()) 
+        : null,
+    }));
+    
+    return res.json({ ok: true, timeline });
+  } catch (error) {
+    console.error('[decisions] Error:', error);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+// PHASE 2: Exit Plan - Get current exit strategy for active position
+router.get('/sessions/:id/exit-plan', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get session info
+    const session = await prisma.agentSession.findUnique({
+      where: { id },
+      select: { symbol: true }
+    });
+    
+    if (!session) {
+      return res.status(404).json({ ok: false, error: 'session_not_found' });
+    }
+    
+    // Get active position
+    const position = await prisma.position.findFirst({
+      where: { 
+        sessionId: id,
+        // No status field in Position model - check if qty > 0
+      },
+      orderBy: { openedAt: 'desc' }
+    });
+    
+    if (!position || !position.qty || position.qty <= 0) {
+      return res.json({ ok: true, hasPosition: false, exitPlan: null });
+    }
+    
+    // Calculate current R-multiple
+    const entryPrice = position.entryPrice || 0;
+    const currentPrice = position.markPrice || entryPrice;
+    const stopLoss = position.stopPrice || entryPrice;
+    const risk = Math.abs(entryPrice - stopLoss);
+    const currentR = risk > 0 ? (currentPrice - entryPrice) / risk : 0;
+    
+    // Get exit learning recommendations
+    const { getExitStrategyAgent } = await import('../agent/subagents/exitStrategyAgent.js');
+    const exitAgent = getExitStrategyAgent();
+    
+    // Get real market data
+    const techSnapshot = await buildTechSnapshot(session.symbol).catch(() => ({
+      last: currentPrice,
+      atr14: risk,
+      rsi14: 50,
+      macd: 0,
+      macdSignal: 0,
+      macdHist: 0,
+      bb: { upper: currentPrice * 1.02, middle: currentPrice, lower: currentPrice * 0.98 },
+      volume24h: 0,
+    }));
+    
+    const timeInPosition = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : 0;
+    const volatility = techSnapshot.atr14 ? (techSnapshot.atr14 / currentPrice) * 100 : 3;
+    
+    const strategy = await exitAgent.generateExitStrategy(
+      session.symbol,
+      techSnapshot as any,
+      currentR,
+      timeInPosition,
+      volatility
+    );
+    
+    // Calculate targets
+    const targets = strategy.scaleOutPlan.map(exit => ({
+      rMultiple: exit.rMultiple,
+      exitPct: exit.exitPct,
+      targetPrice: entryPrice + (risk * exit.rMultiple),
+      reached: currentR >= exit.rMultiple,
+    }));
+    
+    // Calculate trailing stop
+    const trailingStopDistance = risk * strategy.trailingStopAtrMultiplier;
+    const trailingStopActive = currentR >= strategy.trailingStopActivationR;
+    const trailingStopPrice = trailingStopActive ? currentPrice - trailingStopDistance : null;
+    
+    // Get partial exits already taken (fills on opposite side)
+    const fills = await prisma.fill.findMany({
+      where: {
+        sessionId: id,
+        side: position.side === 'long' ? 'sell' : 'buy', // Opposite side = exit
+      },
+      orderBy: { ts: 'desc' }
+    });
+    
+    const totalExitQty = fills.reduce((sum, fill) => sum + (fill.qty || 0), 0);
+    const originalQty = position.qty || 0;
+    const percentClosed = originalQty > 0 ? (totalExitQty / originalQty) * 100 : 0;
+    
+    const realizedPnl = fills.reduce((sum, fill) => {
+      const fillPrice = fill.price || 0;
+      const fillQty = fill.qty || 0;
+      const pnl = position.side === 'long' 
+        ? (fillPrice - entryPrice) * fillQty
+        : (entryPrice - fillPrice) * fillQty;
+      return sum + pnl;
+    }, 0);
+    
+    return res.json({
+      ok: true,
+      hasPosition: true,
+      exitPlan: {
+        currentR: currentR,
+        targets: targets,
+        trailingStop: {
+          active: trailingStopActive,
+          activationR: strategy.trailingStopActivationR,
+          distance: trailingStopDistance,
+          price: trailingStopPrice,
+        },
+        progress: {
+          percentClosed: percentClosed,
+          realizedPnl: realizedPnl,
+          remainingQty: originalQty - totalExitQty,
+        },
+        strategy: {
+          confidence: strategy.confidence,
+          reason: strategy.reason,
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[exit-plan] Error:', error);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});
+
+// PHASE 2: Entry Analysis - Get entry timing recommendation
+router.get('/sessions/:id/entry-analysis', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get session info
+    const session = await prisma.agentSession.findUnique({
+      where: { id },
+      select: { symbol: true }
+    });
+    
+    if (!session) {
+      return res.status(404).json({ ok: false, error: 'session_not_found' });
+    }
+    
+    // Get latest strategy/bias
+    const strategy = await prisma.strategy.findFirst({
+      where: { sessionId: id },
+      orderBy: { createdAt: 'desc' }
+    });
+    
+    if (!strategy) {
+      return res.json({ ok: true, hasSignal: false, analysis: null });
+    }
+    
+    // Get entry timing agent
+    const { getEntryTimingAgent } = await import('../agent/subagents/entryTimingAgent.js');
+    const entryAgent = getEntryTimingAgent();
+    
+    // Get real market data
+    const techSnapshot = await buildTechSnapshot(session.symbol).catch(() => ({
+      last: 100,
+      atr14: 2,
+      rsi14: 55,
+      macd: 0.5,
+      macdSignal: 0.3,
+      macdHist: 0.2,
+      bb: { upper: 102, middle: 100, lower: 98 },
+      volume24h: 1000000,
+    }));
+    
+    const signalStrength = parseFloat(strategy.confidence?.toString() || '0.5');
+    
+    const recommendation = await entryAgent.evaluateEntryTiming(
+      session.symbol,
+      techSnapshot as any,
+      signalStrength
+    );
+    
+    // Get recent entry quality stats
+    const recentFills = await prisma.fill.findMany({
+      where: {
+        sessionId: id,
+        side: strategy.bias === 'bullish' ? 'buy' : 'sell',
+      },
+      orderBy: { ts: 'desc' },
+      take: 10,
+    });
+    
+    // Calculate entry quality (simplified)
+    const entryQualityStats = {
+      immediate: { count: 0, avgQuality: 0 },
+      pullback: { count: 0, avgQuality: 0 },
+      confirmation: { count: 0, avgQuality: 0 },
+    };
+    
+    // This would need actual tracking of entry types in production
+    // For now, return placeholder stats
+    
+    return res.json({
+      ok: true,
+      hasSignal: true,
+      analysis: {
+        recommendation: recommendation.action,
+        aggressiveness: recommendation.aggressiveness,
+        patience: recommendation.action === 'immediate' ? 0 : 
+                 recommendation.action === 'wait_pullback' ? 0.7 : 0.9,
+        optimalEntryOffset: recommendation.optimalEntryOffset,
+        confidence: recommendation.confidence,
+        reasoning: recommendation.reason,
+        entryQualityStats: entryQualityStats,
+      }
+    });
+  } catch (error) {
+    console.error('[entry-analysis] Error:', error);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
+});

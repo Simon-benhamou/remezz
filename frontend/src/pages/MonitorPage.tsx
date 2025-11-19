@@ -12,6 +12,11 @@ import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
 // import TriggersPanel from '../components/TriggersPanel'; // TODO: Create component
 import OrdersTable from '../components/OrdersTable';
 import TradesTable from '../components/TradesTable';
+// Phase 2 Decision Transparency components
+import DecisionTimeline from '../components/monitor/DecisionTimeline';
+import ExitStrategyPanel from '../components/monitor/ExitStrategyPanel';
+import EntryTimingPanel from '../components/monitor/EntryTimingPanel';
+import PredictorModelStatus from '../components/monitor/PredictorModelStatus';
 // import HelpPanel from '../components/HelpPanel'; // TODO: Create component
 // import DailyReviewPanel from '../components/DailyReviewPanel'; // TODO: Create component
 // import AlertPanel from '../components/AlertPanel'; // TODO: Create component
@@ -87,6 +92,13 @@ export default function MonitorPage(){
   const [alerts, setAlerts] = React.useState<any[]>([]);
   const [analytics, setAnalytics] = React.useState<any>(null);
   const [health, setHealth] = React.useState<any>(null);
+  
+  // Phase 2 Decision Transparency states
+  const [decisions, setDecisions] = React.useState<any[]>([]);
+  const [exitPlan, setExitPlan] = React.useState<any>(null);
+  const [entryAnalysis, setEntryAnalysis] = React.useState<any>(null);
+  const [hasPosition, setHasPosition] = React.useState(false);
+  const [hasSignal, setHasSignal] = React.useState(false);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
   const currentAggressiveness = React.useMemo(() => {
@@ -183,26 +195,19 @@ export default function MonitorPage(){
         
         updateProgress(LoadingPhase.CORE_DATA, 30, 'Loading agent state...');
         
-        // Load core data in parallel with timeout
-        const [agentData] = await Promise.allSettled([
-          Promise.race([
-            // Try diagnostics API first for richer data (predictor, symbolProfile)
-            api.getDiagnostics(s.session.id).catch(() => api.getAgentState(s.session.id)),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Agent timeout')), 10000)) // augmenté à 10s
-          ])
-        ]);
-        
-        if (agentData.status === 'fulfilled') setAgent(agentData.value);
-        
         updateProgress(LoadingPhase.SECONDARY_DATA, 50, 'Loading trading data...');
         
-        // Phase 2: Trading data (orders, trades, strategy, analysis)
-        const [strategyData, analysisData, kpiData, ordersData, tradesData] = await Promise.allSettled([
+        // Phase 2: Trading data (orders, trades, strategy, analysis) + Phase 2 Decision Transparency
+        const [strategyData, analysisData, kpiData, ordersData, tradesData, decisionsData, exitPlanData, entryAnalysisData] = await Promise.allSettled([
           sym ? api.strategyToday(sym).catch(e => { console.warn('Strategy failed:', e); return null; }) : Promise.resolve(null),
           sym ? api.analysis(sym).catch(e => { console.warn('Analysis failed:', e); return null; }) : Promise.resolve(null),
           api.getPerf(s.session.id).catch(e => { console.warn('Perf failed:', e); return null; }),
           api.getOrders(s.session.id).catch(e => { console.warn('Orders failed:', e); return []; }),
-          api.getTrades(s.session.id).catch(e => { console.warn('Trades failed:', e); return []; })
+          api.getTrades(s.session.id).catch(e => { console.warn('Trades failed:', e); return []; }),
+          // Phase 2 API calls
+          api.getDecisions(s.session.id).catch(e => { console.warn('Decisions failed:', e); return { timeline: [] }; }),
+          api.getExitPlan(s.session.id).catch(e => { console.warn('Exit plan failed:', e); return { hasPosition: false, exitPlan: null }; }),
+          api.getEntryAnalysis(s.session.id).catch(e => { console.warn('Entry analysis failed:', e); return { hasSignal: false, analysis: null }; })
         ]);
         
         if (strategyData.status === 'fulfilled' && strategyData.value) setStrategy(strategyData.value);
@@ -210,6 +215,16 @@ export default function MonitorPage(){
         if (kpiData.status === 'fulfilled') setKpi(kpiData.value);
         if (ordersData.status === 'fulfilled') setOrders(ordersData.value || []);
         if (tradesData.status === 'fulfilled') setTrades(tradesData.value || []);
+        // Phase 2 state updates
+        if (decisionsData.status === 'fulfilled' && decisionsData.value) setDecisions(decisionsData.value.timeline || []);
+        if (exitPlanData.status === 'fulfilled' && exitPlanData.value) {
+          setHasPosition(exitPlanData.value.hasPosition || false);
+          setExitPlan(exitPlanData.value.exitPlan || null);
+        }
+        if (entryAnalysisData.status === 'fulfilled' && entryAnalysisData.value) {
+          setHasSignal(entryAnalysisData.value.hasSignal || false);
+          setEntryAnalysis(entryAnalysisData.value.analysis || null);
+        }
         
         updateProgress(LoadingPhase.SECONDARY_DATA, 80, 'Loading monitoring data...');
         
@@ -308,6 +323,36 @@ export default function MonitorPage(){
       if (msg.type === 'alert') {
         setAlerts((prev:any[])=> [msg.data, ...prev].slice(0,50));
         loadAnalytics();
+      }
+      // Phase 2: Decision Transparency WebSocket events
+      if (msg.type === 'decision.made') {
+        // New decision made - refresh decision timeline
+        try {
+          const decisionsData = await api.getDecisions(sessionId, 20);
+          setDecisions(decisionsData.timeline || []);
+        } catch (e) {
+          console.warn('Failed to refresh decisions:', e);
+        }
+      }
+      if (msg.type === 'exit.target.updated' || msg.type === 'position.updated') {
+        // Exit targets changed or position updated - refresh exit plan
+        try {
+          const exitPlanData = await api.getExitPlan(sessionId);
+          setHasPosition(exitPlanData.hasPosition || false);
+          setExitPlan(exitPlanData.exitPlan || null);
+        } catch (e) {
+          console.warn('Failed to refresh exit plan:', e);
+        }
+      }
+      if (msg.type === 'entry.signal' || msg.type === 'strategy') {
+        // New entry signal - refresh entry analysis
+        try {
+          const entryAnalysisData = await api.getEntryAnalysis(sessionId);
+          setHasSignal(entryAnalysisData.hasSignal || false);
+          setEntryAnalysis(entryAnalysisData.analysis || null);
+        } catch (e) {
+          console.warn('Failed to refresh entry analysis:', e);
+        }
       }
     }, (ok)=> setWsConnected(ok), (next)=> { wsRef.current = next; }, sessionId);
     wsRef.current = ws;
@@ -709,6 +754,36 @@ export default function MonitorPage(){
                         ) : (
                           <Card title="Agent State"><Skeleton active paragraph={{ rows: 4 }} /></Card>
                         )}
+                        {/* Phase 2: Decision Timeline */}
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) && decisions && decisions.length > 0 ? (
+                          <DecisionTimeline 
+                            sessionId={status?.session?.id} 
+                            decisions={decisions}
+                            loading={loadingState.phase !== LoadingPhase.COMPLETE}
+                          />
+                        ) : null}
+                        {/* Phase 2: Exit Strategy */}
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) && hasPosition ? (
+                          <ExitStrategyPanel 
+                            sessionId={status?.session?.id} 
+                            exitPlan={exitPlan}
+                            hasPosition={hasPosition}
+                            loading={loadingState.phase !== LoadingPhase.COMPLETE}
+                          />
+                        ) : null}
+                        {/* Phase 2: Entry Timing */}
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) && hasSignal && !hasPosition ? (
+                          <EntryTimingPanel 
+                            sessionId={status?.session?.id} 
+                            analysis={entryAnalysis}
+                            hasSignal={hasSignal}
+                            loading={loadingState.phase !== LoadingPhase.COMPLETE}
+                          />
+                        ) : null}
+                        {/* Phase 3: Predictor Model Status */}
+                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+                          <PredictorModelStatus />
+                        ) : null}
                       </Space>
                     )
                   },

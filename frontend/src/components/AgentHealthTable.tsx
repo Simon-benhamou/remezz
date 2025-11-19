@@ -3,6 +3,7 @@ import { Badge, Button, Card, Col, Row, Space, Statistic, Table, Tag, Tooltip, T
 import type { ColumnsType } from 'antd/es/table';
 import { SyncOutlined } from '../icons';
 import { formatDisplaySymbol } from '../utils/symbols';
+import { useNavigate } from 'react-router-dom';
 import {
   STRATEGY_META,
   normalizeStrategyEngine,
@@ -83,6 +84,7 @@ function formatRelative(ts: number | null, reference: number): string {
 }
 
 export default function AgentHealthTable({ data, loading, onRefresh, onReselect, reselecting }: AgentHealthTableProps) {
+  const navigate = useNavigate();
   const referenceTs = data?.timestamp ?? Date.now();
   const agents = data?.agents ?? [];
   const { token } = theme.useToken();
@@ -277,6 +279,10 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
         size="small"
         style={{ color: headingColor }}
         locale={{ emptyText: loading ? 'Loading agents…' : 'No active agents' }}
+        onRow={(record) => ({
+          onClick: () => navigate(`/agents/${record.sessionId}`),
+          style: { cursor: 'pointer' },
+        })}
       />
     </Card>
   );

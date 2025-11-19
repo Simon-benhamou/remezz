@@ -262,4 +262,29 @@ export const api = {
     })).data,
   getRegimeThresholds: async (symbol: string) =>
     (await client.get(`/api/entry-analytics/regime-thresholds/${symbol}`)).data,
+  
+  // Phase 2: Decision Transparency endpoints
+  getDecisions: async (sessionId: string, limit?: number) =>
+    (await client.get(`/api/agent/sessions/${sessionId}/decisions`, {
+      params: { limit }
+    })).data,
+  getExitPlan: async (sessionId: string) =>
+    (await client.get(`/api/agent/sessions/${sessionId}/exit-plan`)).data,
+  getEntryAnalysis: async (sessionId: string) =>
+    (await client.get(`/api/agent/sessions/${sessionId}/entry-analysis`)).data,
+  
+  // Learning endpoints (for LearningProgressPanel and SubagentStatusCards)
+  getLearningSession: async (sessionId: string) =>
+    (await client.get(`/api/learning/sessions/${sessionId}`)).data,
+  
+  // Phase 3: Advanced Features endpoints
+  getLearningInsights: async () =>
+    (await client.get('/api/learning/insights')).data,
+  getPortfolioCorrelation: async () =>
+    (await client.get('/api/portfolio/correlation')).data,
+  getPortfolioRiskDistribution: async () =>
+    (await client.get('/api/portfolio/risk-distribution')).data,
+  getPredictorStatus: async () =>
+    (await client.get('/api/predictor/status')).data,
 };
+

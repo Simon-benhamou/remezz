@@ -11,6 +11,7 @@ import {
   Drawer,
   Empty,
   Input,
+  Modal,
   Row,
   Select,
   Space,
@@ -38,7 +39,10 @@ import {
   CloudOutlined,
   DatabaseOutlined,
   ExclamationCircleOutlined,
+  PlusOutlined,
   ReloadOutlined,
+  SettingOutlined,
+  StopOutlined,
   ThunderboltOutlined,
   WarningOutlined,
 } from '../icons';
@@ -305,6 +309,7 @@ const OperationsDashboardPage: React.FC = () => {
   const [incoherenceSummary, setIncoherenceSummary] = React.useState<IncoherenceSummary | null>(null);
   const [incoherenceLoading, setIncoherenceLoading] = React.useState(false);
   const [incoherenceExporting, setIncoherenceExporting] = React.useState(false);
+  const [viewMode, setViewMode] = React.useState<'overview' | 'positions' | 'agents' | 'performance'>('overview');
   const mode = useAppStore((state) => state.mode);
   const { jobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsUpdatedAt } = useOpsJobs({ autoRefreshMs: 45000, enableLive: true });
 
@@ -368,6 +373,16 @@ const OperationsDashboardPage: React.FC = () => {
     }
   }, []);
 
+  const loadRecentTrades = React.useCallback(async () => {
+    setRecentTradesLoading(true);
+    try {
+      const trades = await api.getTrades(undefined, { limit: 120 });
+      setRecentTrades(Array.isArray(trades) ? trades : []);
+    } finally {
+      setRecentTradesLoading(false);
+    }
+  }, []);
+
   const refreshAll = React.useCallback(async () => {
     setRefreshing(true);
     try {
@@ -385,15 +400,7 @@ const OperationsDashboardPage: React.FC = () => {
             setAgentHealthLoading(false);
           }
         })(),
-        (async () => {
-          setRecentTradesLoading(true);
-          try {
-            const trades = await api.getTrades(undefined, { limit: 120 });
-            setRecentTrades(Array.isArray(trades) ? trades : []);
-          } finally {
-            setRecentTradesLoading(false);
-          }
-        })(),
+        loadRecentTrades(),
       ]);
     } finally {
       setRefreshing(false);
@@ -403,6 +410,14 @@ const OperationsDashboardPage: React.FC = () => {
   React.useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
+
+  // Auto-refresh recent trades every 10 seconds
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      void loadRecentTrades();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [loadRecentTrades]);
 
   React.useEffect(() => {
     void loadIncoherenceData();
@@ -553,7 +568,14 @@ const OperationsDashboardPage: React.FC = () => {
 
   const tradesSummary = React.useMemo(() => {
     if (!recentTrades.length) {
-      return { totalPnl: 0, winRate: 0, lastTradeAt: null as number | null };
+      return {
+        totalPnl: 0,
+        winRate: 0,
+        lastTradeAt: null as number | null,
+        closedTrades: 0,
+        profitableTrades: 0,
+        unprofitableTrades: 0,
+      };
     }
     let wins = 0;
     let losses = 0;
@@ -572,6 +594,9 @@ const OperationsDashboardPage: React.FC = () => {
       totalPnl: totalPnlAcc,
       winRate: total > 0 ? (wins / total) * 100 : 0,
       lastTradeAt: lastTs || null,
+      closedTrades: total,
+      profitableTrades: wins,
+      unprofitableTrades: losses,
     };
   }, [recentTrades]);
 
@@ -903,38 +928,462 @@ const OperationsDashboardPage: React.FC = () => {
         </Row>
       </Card>
 
+      {/* Hero Section with Key Metrics */}
+      <Card
+        style={{
+          borderRadius: 18,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(139, 92, 246, 0.05))',
+          marginBottom: 24,
+        }}
+        bodyStyle={{ padding: '32px 24px' }}
+      >
+        <Row gutter={[24, 24]}>
+          {/* Net P&L Card */}
+          <Col xs={24} sm={12} lg={8}>
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.7)',
+                padding: 24,
+                borderRadius: 16,
+                border: `1px solid ${pnlUsd >= 0 ? 'rgba(52, 211, 153, 0.3)' : 'rgba(248, 113, 113, 0.3)'}`,
+              }}
+            >
+              <Space direction='vertical' size={4} style={{ width: '100%' }}>
+                <Text style={{ color: 'rgba(148, 163, 184, 0.85)', fontSize: 13 }}>Net P&L</Text>
+                <Title level={2} style={{ margin: 0, color: pnlUsd >= 0 ? '#34d399' : '#f87171' }}>
+                  {formatUsd(pnlUsd)}
+                </Title>
+                <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 12 }}>
+                  {tradesSummary.closedTrades > 0 ? (
+                    <>Realized: {formatUsd(tradesSummary.totalPnl)} · Unrealized: {formatUsd(pnlUsd - tradesSummary.totalPnl)}</>
+                  ) : (
+                    <>No closed trades yet</>
+                  )}
+                </Text>
+              </Space>
+            </div>
+          </Col>
+
+          {/* Win Rate Card */}
+          <Col xs={24} sm={12} lg={8}>
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.7)',
+                padding: 24,
+                borderRadius: 16,
+                border: `1px solid rgba(96, 165, 250, 0.3)`,
+              }}
+            >
+              <Space direction='vertical' size={4} style={{ width: '100%' }}>
+                <Text style={{ color: 'rgba(148, 163, 184, 0.85)', fontSize: 13 }}>Win Rate</Text>
+                <Title level={2} style={{ margin: 0, color: '#60a5fa' }}>
+                  {formatPercent(tradesSummary.winRate, 1)}
+                </Title>
+                <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 12 }}>
+                  {tradesSummary.closedTrades > 0 ? (
+                    <>
+                      {tradesSummary.profitableTrades}W / {tradesSummary.unprofitableTrades}L of {tradesSummary.closedTrades} trades
+                    </>
+                  ) : (
+                    <>No closed trades yet</>
+                  )}
+                </Text>
+              </Space>
+            </div>
+          </Col>
+
+          {/* Risk Exposure Card */}
+          <Col xs={24} sm={12} lg={8}>
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.7)',
+                padding: 24,
+                borderRadius: 16,
+                border: `1px solid rgba(168, 85, 247, 0.3)`,
+              }}
+            >
+              <Space direction='vertical' size={4} style={{ width: '100%' }}>
+                <Text style={{ color: 'rgba(148, 163, 184, 0.85)', fontSize: 13 }}>Risk Exposure</Text>
+                <Title level={2} style={{ margin: 0, color: '#a855f7' }}>
+                  {formatUsd(reservedCapitalUsd + inPositionsUsd)}
+                </Title>
+                <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 12 }}>
+                  Reserved: {formatUsd(reservedCapitalUsd)} · In positions: {formatUsd(inPositionsUsd)}
+                </Text>
+              </Space>
+            </div>
+          </Col>
+        </Row>
+
+        {/* Quick Actions Bar */}
+        <Row style={{ marginTop: 24 }} gutter={[12, 12]}>
+          <Col xs={24} sm={12} lg={6}>
+            <Button
+              danger
+              icon={<StopOutlined />}
+              size='large'
+              block
+              style={{ borderRadius: 12, height: 48 }}
+              onClick={() => {
+                Modal.confirm({
+                  title: 'Stop all agents?',
+                  content: 'This will gracefully stop all active trading agents. Positions will be closed according to exit strategies.',
+                  okText: 'Stop All',
+                  okType: 'danger',
+                  onOk: () => {
+                    message.info('Stop all agents feature coming soon');
+                  },
+                });
+              }}
+            >
+              Stop All Agents
+            </Button>
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <Button
+              type='primary'
+              icon={<PlusOutlined />}
+              size='large'
+              block
+              style={{ borderRadius: 12, height: 48, background: '#8b5cf6', borderColor: '#8b5cf6' }}
+              onClick={() => navigate('/launch')}
+            >
+              Start New Agent
+            </Button>
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <Button
+              icon={<ReloadOutlined />}
+              size='large'
+              block
+              style={{ borderRadius: 12, height: 48 }}
+              onClick={() => void refreshAll()}
+              loading={refreshing || recentTradesLoading || agentHealthLoading}
+            >
+              Refresh All
+            </Button>
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <Button
+              icon={<SettingOutlined />}
+              size='large'
+              block
+              style={{ borderRadius: 12, height: 48 }}
+              onClick={() => navigate('/settings')}
+            >
+              Settings
+            </Button>
+          </Col>
+        </Row>
+      </Card>
+
+      {/* View Mode Selector */}
+      <Card
+        style={{
+          borderRadius: 16,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          marginBottom: 24,
+        }}
+        bodyStyle={{ padding: '16px 24px' }}
+      >
+        <Space size={12}>
+          <Text style={{ color: 'rgba(148, 163, 184, 0.85)', fontWeight: 600 }}>View:</Text>
+          <Button
+            type={viewMode === 'overview' ? 'primary' : 'default'}
+            onClick={() => setViewMode('overview')}
+            style={{ borderRadius: 8 }}
+          >
+            Overview
+          </Button>
+          <Button
+            type={viewMode === 'positions' ? 'primary' : 'default'}
+            onClick={() => setViewMode('positions')}
+            style={{ borderRadius: 8 }}
+          >
+            Positions
+          </Button>
+          <Button
+            type={viewMode === 'agents' ? 'primary' : 'default'}
+            onClick={() => setViewMode('agents')}
+            style={{ borderRadius: 8 }}
+          >
+            Agents
+          </Button>
+          <Button
+            type={viewMode === 'performance' ? 'primary' : 'default'}
+            onClick={() => setViewMode('performance')}
+            style={{ borderRadius: 8 }}
+          >
+            Performance
+          </Button>
+        </Space>
+      </Card>
+
+      {/* Conditional Alerts Section - Only shows when there are active alerts/risks */}
+      {(() => {
+        const alerts = opsMetrics?.alerts?.lastHour ?? {};
+        const protectiveIssues = Number(opsMetrics?.positions?.protectiveIssues || 0);
+        const halted = Number(opsMetrics?.sessions?.halted || 0);
+        const circuitBreaker = opsMetrics?.circuitBreaker || null;
+        const hasHighAlerts = (alerts.high ?? 0) > 0;
+        const hasMediumAlerts = (alerts.med ?? 0) > 0;
+        const hasIssues = protectiveIssues > 0 || halted > 0;
+        const circuitBreakerTripped = circuitBreaker?.tripped === true;
+
+        // Only show if there are actual issues
+        if (!hasHighAlerts && !hasMediumAlerts && !hasIssues && !circuitBreakerTripped) {
+          return null;
+        }
+
+        return (
+          <Alert
+            type={hasHighAlerts || protectiveIssues > 0 ? 'error' : 'warning'}
+            showIcon
+            style={{
+              marginBottom: 24,
+              borderRadius: 16,
+              border: `1px solid ${hasHighAlerts || protectiveIssues > 0 ? 'rgba(248, 113, 113, 0.5)' : 'rgba(251, 191, 36, 0.5)'}`,
+              background: hasHighAlerts || protectiveIssues > 0 ? 'rgba(248, 113, 113, 0.1)' : 'rgba(251, 191, 36, 0.1)',
+            }}
+            message={
+              <Space>
+                <Text style={{ color: '#e2e8f0', fontWeight: 600, fontSize: 15 }}>
+                  {hasHighAlerts || protectiveIssues > 0 ? '⚠️ Critical Issues Detected' : '⚡ Attention Required'}
+                </Text>
+              </Space>
+            }
+            description={
+              <Space direction='vertical' size={12} style={{ width: '100%', marginTop: 8 }}>
+                {hasHighAlerts && (
+                  <div style={{ padding: '12px 16px', background: 'rgba(248, 113, 113, 0.15)', borderRadius: 12 }}>
+                    <Space direction='vertical' size={4}>
+                      <Text style={{ color: '#fca5a5', fontWeight: 600 }}>High Severity Alerts: {alerts.high}</Text>
+                      <Text style={{ color: 'rgba(226, 232, 240, 0.85)', fontSize: 13 }}>
+                        Immediate action required. Check the backlog for details.
+                      </Text>
+                    </Space>
+                  </div>
+                )}
+                {protectiveIssues > 0 && (
+                  <div style={{ padding: '12px 16px', background: 'rgba(248, 113, 113, 0.15)', borderRadius: 12 }}>
+                    <Space direction='vertical' size={4}>
+                      <Text style={{ color: '#fca5a5', fontWeight: 600 }}>Protective Issues: {protectiveIssues}</Text>
+                      <Text style={{ color: 'rgba(226, 232, 240, 0.85)', fontSize: 13 }}>
+                        Risk management systems have detected positions requiring attention.
+                      </Text>
+                    </Space>
+                  </div>
+                )}
+                {halted > 0 && (
+                  <div style={{ padding: '12px 16px', background: 'rgba(251, 191, 36, 0.15)', borderRadius: 12 }}>
+                    <Space direction='vertical' size={4}>
+                      <Text style={{ color: '#fbbf24', fontWeight: 600 }}>Halted Agents: {halted}</Text>
+                      <Text style={{ color: 'rgba(226, 232, 240, 0.85)', fontSize: 13 }}>
+                        Some agents have been automatically halted due to risk conditions.
+                      </Text>
+                    </Space>
+                  </div>
+                )}
+                {circuitBreakerTripped && (
+                  <div style={{ padding: '12px 16px', background: 'rgba(248, 113, 113, 0.2)', borderRadius: 12 }}>
+                    <Space direction='vertical' size={4}>
+                      <Text style={{ color: '#f87171', fontWeight: 600 }}>🛑 Circuit Breaker Activated</Text>
+                      <Text style={{ color: 'rgba(226, 232, 240, 0.85)', fontSize: 13 }}>
+                        Trading has been automatically paused. {circuitBreaker?.reason || 'Review system status before resuming.'}
+                      </Text>
+                    </Space>
+                  </div>
+                )}
+                {hasMediumAlerts && !hasHighAlerts && (
+                  <div style={{ padding: '12px 16px', background: 'rgba(251, 191, 36, 0.15)', borderRadius: 12 }}>
+                    <Space direction='vertical' size={4}>
+                      <Text style={{ color: '#fbbf24', fontWeight: 600 }}>Medium Severity Alerts: {alerts.med}</Text>
+                      <Text style={{ color: 'rgba(226, 232, 240, 0.85)', fontSize: 13 }}>
+                        Monitor these alerts to prevent escalation.
+                      </Text>
+                    </Space>
+                  </div>
+                )}
+                <Button
+                  type='primary'
+                  danger={hasHighAlerts || protectiveIssues > 0}
+                  onClick={() => navigate('/backlog')}
+                  style={{ marginTop: 8 }}
+                >
+                  View All Alerts & Details
+                </Button>
+              </Space>
+            }
+          />
+        );
+      })()}
+
+      {/* Active Positions Overview */}
+      {(() => {
+        const activePositions = (agentHealthForDisplay?.agents as any[] || [])
+          .filter((agent: any) => {
+            const positions = agent.positions as any[] || [];
+            return positions.some((pos: any) => Number(pos?.qty || 0) > 0);
+          })
+          .flatMap((agent: any) => {
+            const positions = agent.positions as any[] || [];
+            return positions
+              .filter((pos: any) => Number(pos?.qty || 0) > 0)
+              .map((pos: any) => ({
+                sessionId: agent.sessionId,
+                agentId: agent.agentId || agent.sessionId?.slice(0, 8) || 'N/A',
+                symbol: pos.symbol || agent.symbol || 'UNKNOWN',
+                side: pos.side || 'UNKNOWN',
+                leverage: Number(pos.leverage || 1),
+                qty: Number(pos.qty || 0),
+                entryPrice: Number(pos.entryPrice || 0),
+                unrealizedPnl: Number(pos.unrealizedPnl || 0),
+                healthStatus: agent.status || 'unknown',
+              }));
+          });
+
+        if (activePositions.length === 0) return null;
+
+        return (
+          <Card
+            title={
+              <Space>
+                <Text style={{ color: '#e2e8f0', fontSize: 16, fontWeight: 600 }}>
+                  Active Positions ({activePositions.length})
+                </Text>
+              </Space>
+            }
+            style={{
+              borderRadius: 18,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              marginBottom: 24,
+            }}
+            bodyStyle={{ padding: 16 }}
+          >
+            <Row gutter={[16, 16]}>
+              {activePositions.map((pos: any, idx: number) => {
+                const pnlColor = pos.unrealizedPnl >= 0 ? '#34d399' : '#f87171';
+                const pnlPercent = pos.entryPrice > 0 ? (pos.unrealizedPnl / (pos.entryPrice * pos.qty)) * 100 : 0;
+                const healthColor = pos.healthStatus === 'ok' ? '#34d399' :
+                                    pos.healthStatus === 'idle' ? '#60a5fa' :
+                                    pos.healthStatus === 'stale' ? '#fbbf24' :
+                                    pos.healthStatus === 'blocked' ? '#f87171' : '#94a3b8';
+
+                return (
+                  <Col xs={24} sm={12} lg={8} key={`${pos.sessionId}-${idx}`}>
+                    <div
+                      onClick={() => navigate(`/agents/${pos.sessionId}`)}
+                      style={{
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        padding: 16,
+                        borderRadius: 14,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = '#60a5fa';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = token.colorBorderSecondary;
+                        e.currentTarget.style.transform = 'translateY(0)';
+                      }}
+                    >
+                      <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                          <Space size={8}>
+                            <Tag color={pos.side === 'LONG' ? 'green' : pos.side === 'SHORT' ? 'red' : 'default'}>
+                              {pos.side}
+                            </Tag>
+                            <Text style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                              {formatDisplaySymbol(pos.symbol)}
+                            </Text>
+                            {pos.leverage > 1 && (
+                              <Tag color='purple' style={{ borderRadius: 6 }}>
+                                {pos.leverage}x
+                              </Tag>
+                            )}
+                          </Space>
+                          <div
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: '50%',
+                              background: healthColor,
+                            }}
+                          />
+                        </Space>
+                        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                          <Space direction='vertical' size={2}>
+                            <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 11 }}>P&L</Text>
+                            <Text style={{ color: pnlColor, fontWeight: 600, fontSize: 14 }}>
+                              {formatUsd(pos.unrealizedPnl)}
+                            </Text>
+                          </Space>
+                          <Space direction='vertical' size={2} align='end'>
+                            <Text style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 11 }}>%</Text>
+                            <Text style={{ color: pnlColor, fontWeight: 600, fontSize: 14 }}>
+                              {formatPercent(pnlPercent, 2)}
+                            </Text>
+                          </Space>
+                        </Space>
+                        <Text style={{ color: 'rgba(148, 163, 184, 0.7)', fontSize: 11 }}>
+                          Agent: {pos.agentId}
+                        </Text>
+                      </Space>
+                    </div>
+                  </Col>
+                );
+              })}
+            </Row>
+          </Card>
+        );
+      })()}
+
+      {/* Overview Mode: Jobs + Summary Cards */}
+      {(viewMode === 'overview') && (
+        <>
+          <Row gutter={[24, 24]}>
+            <Col span={24}>
+              <JobsStatusPanel
+                jobs={jobs}
+                loading={jobsLoading}
+                onRefresh={refreshJobs}
+                title='Background jobs'
+                updatedAt={jobsUpdatedAt}
+              />
+            </Col>
+          </Row>
+
+          <Row gutter={[24, 24]}>
+            {summaryCards.map((card) => (
+              <Col xs={24} sm={12} xl={8} xxl={4} key={card.key}>
+                <Card
+                  style={{
+                    borderRadius: 18,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    background: 'rgba(15, 23, 42, 0.92)',
+                    height: '100%',
+                  }}
+                  bodyStyle={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}
+                >
+                  <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{card.title}</Text>
+                  <Title level={3} style={{ margin: 0, color: card.accent }}>{card.value}</Title>
+                  <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{card.helper}</Text>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </>
+      )}
+
+      {/* Performance Mode: Aggressiveness Chart */}
+      {(viewMode === 'performance' || viewMode === 'overview') && (
+      <>
       <Row gutter={[24, 24]}>
         <Col span={24}>
-          <JobsStatusPanel
-            jobs={jobs}
-            loading={jobsLoading}
-            onRefresh={refreshJobs}
-            title='Background jobs'
-            updatedAt={jobsUpdatedAt}
-          />
-        </Col>
-      </Row>
-
-      <Row gutter={[24, 24]}>
-        {summaryCards.map((card) => (
-          <Col xs={24} sm={12} xl={8} xxl={4} key={card.key}>
-            <Card
-              style={{
-                borderRadius: 18,
-                border: `1px solid ${token.colorBorderSecondary}`,
-                background: 'rgba(15, 23, 42, 0.92)',
-                height: '100%',
-              }}
-              bodyStyle={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}
-            >
-              <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{card.title}</Text>
-              <Title level={3} style={{ margin: 0, color: card.accent }}>{card.value}</Title>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>{card.helper}</Text>
-            </Card>
-          </Col>
-        ))}
-      </Row>
-
       <Card
         title={<span style={{ color: '#e2e8f0' }}>Execution success by aggressiveness</span>}
         extra={(
@@ -1030,6 +1479,8 @@ const OperationsDashboardPage: React.FC = () => {
           </Row>
         )}
       </Card>
+        </Col>
+      </Row>
 
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={14}>
@@ -1076,7 +1527,11 @@ const OperationsDashboardPage: React.FC = () => {
           </Card>
         </Col>
       </Row>
+      </>
+      )}
 
+      {/* Overview Mode: System Status + Strategy Optimizer */}
+      {(viewMode === 'overview') && (
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={10}>
           <Card
@@ -1212,7 +1667,25 @@ const OperationsDashboardPage: React.FC = () => {
           />
         </Col>
       </Row>
+      )}
 
+      {/* Agents Mode: Agent Health Table */}
+      {(viewMode === 'agents' || viewMode === 'overview') && (
+      <Row gutter={[24, 24]}>
+        <Col xs={24} xl={24}>
+          <AgentHealthTable
+            data={agentHealthForDisplay ?? agentHealth}
+            loading={agentHealthLoading || refreshing}
+            onRefresh={() => void refreshAll()}
+            onReselect={handleSmartReselect}
+            reselecting={reselecting}
+          />
+        </Col>
+      </Row>
+      )}
+
+      {/* Positions Mode: Recent Trades + Latest Alerts */}
+      {(viewMode === 'positions' || viewMode === 'overview') && (
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={14}>
           <RecentTradesTable
@@ -1369,7 +1842,11 @@ const OperationsDashboardPage: React.FC = () => {
           </Space>
         </Col>
       </Row>
+      )}
 
+      {/* Overview Mode: Predictor Incoherence Feed + Compliance Signals */}
+      {(viewMode === 'overview') && (
+      <>
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={14}>
           <Card
@@ -1685,6 +2162,8 @@ const OperationsDashboardPage: React.FC = () => {
           </Card>
         </Col>
       </Row>
+      </>
+      )}
     </Space>
   );
 };

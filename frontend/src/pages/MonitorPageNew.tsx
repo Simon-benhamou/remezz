@@ -19,6 +19,8 @@ import { PredictorCard } from '../components/monitor/PredictorCard';
 import { PredictorDecisionsPanel } from '../components/monitor/PredictorDecisionsPanel';
 import { OrdersTradesPanel } from '../components/monitor/OrdersTradesPanel';
 import { formatPriceDisplay } from '../utils/number';
+import LearningProgressPanel from '../components/LearningProgressPanel';
+import SubagentStatusCards from '../components/SubagentStatusCards';
 
 const { Content } = Layout;
 
@@ -238,6 +240,14 @@ export function MonitorPageNew() {
               <StrategyCard data={data.strategy} />
             </Col>
           </Row>
+
+          {/* Learning Progress - NEW */}
+          <LearningProgressPanel sessionId={sessionId!} />
+
+          {/* Subagent Status Cards - NEW */}
+          <Card title="Subagent Status" size="small">
+            <SubagentStatusCards sessionId={sessionId!} />
+          </Card>
 
           {/* Predictor Analysis */}
           <PredictorCard

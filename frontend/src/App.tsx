@@ -6,9 +6,10 @@ import PortfolioBalanceModal from './components/PortfolioBalanceModal';
 import { useAuth } from './hooks/useAuth';
 import { useDashboard } from './hooks/useDashboard';
 import BacklogPage from './pages/BacklogPage';
-import ExecutionLedgerPage from './pages/ExecutionLedgerPage';
+import ExecutionLedgerPageNew from './pages/ExecutionLedgerPageNew';
 import IntelligencePage from './pages/IntelligencePage';
 import LearningInsightsPage from './pages/LearningInsightsPage';
+import PortfolioViewPage from './pages/PortfolioViewPage';
 import LoginPage from './pages/LoginPage';
 import OperationsDashboardPage from './pages/OperationsDashboardPage';
 import RegisterPage from './pages/RegisterPage';
@@ -27,6 +28,7 @@ const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/ledger')) return '/ledger';
   if (pathname.startsWith('/intelligence')) return '/intelligence';
   if (pathname.startsWith('/learning')) return '/learning';
+  if (pathname.startsWith('/portfolio')) return '/portfolio';
   if (pathname.startsWith('/backlog')) return '/backlog';
   return '/operations';
 };
@@ -95,6 +97,7 @@ function AuthenticatedApp() {
     { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
     { key: '/intelligence', label: 'Intelligence', icon: <Lightbulb /> },
     { key: '/learning', label: 'Learning', icon: <Brain /> },
+    { key: '/portfolio', label: 'Portfolio', icon: <Zap /> },
     { key: '/backlog', label: 'Feed Info', icon: <Radio /> },
   ];
 
@@ -280,9 +283,10 @@ function AuthenticatedApp() {
             <Route path='/agents/:sessionId' element={<MonitorPageNew />} />
             {/* <Route path='/agents/:sessionId/old' element={<MonitorPageRefactored />} /> */}
             <Route path='/agents' element={<SessionsPage />} />
-            <Route path='/ledger' element={<ExecutionLedgerPage />} />
+            <Route path='/ledger' element={<ExecutionLedgerPageNew />} />
             <Route path='/intelligence' element={<IntelligencePage />} />
             <Route path='/learning' element={<LearningInsightsPage />} />
+            <Route path='/portfolio' element={<PortfolioViewPage />} />
             <Route path='/backlog' element={<BacklogPage />} />
             <Route path='*' element={<Navigate to='/operations' replace />} />
           </Routes>
