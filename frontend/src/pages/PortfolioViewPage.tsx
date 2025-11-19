@@ -82,6 +82,20 @@ const PortfolioViewPage: React.FC = () => {
     );
   }
 
+  // Check if matrix data is available
+  if (!correlationData.matrix || !Array.isArray(correlationData.matrix) || correlationData.matrix.length === 0) {
+    return (
+      <div style={{ padding: 20 }}>
+        <Alert 
+          message="No Portfolio Data" 
+          description="No active positions to display correlation data. Create some agents with positions to see portfolio analytics." 
+          type="info" 
+          showIcon 
+        />
+      </div>
+    );
+  }
+
   // Build correlation matrix for heatmap visualization
   const symbols = [...new Set(correlationData.matrix.flatMap((m) => [m.symbol1, m.symbol2]))];
   const matrixData = symbols.map((sym1) => {

@@ -85,29 +85,42 @@ router.get('/correlation', async (req, res) => {
     // Check if hedging should be recommended
     const needsHedging = portfolioHeat > heatLimit * 0.85; // 85% of limit
     
+    // Build matrix format expected by frontend
+    const matrix: { symbol1: string; symbol2: string; correlation: number }[] = [];
+    for (let i = 0; i < symbols.length; i++) {
+      for (let j = i + 1; j < symbols.length; j++) {
+        matrix.push({
+          symbol1: symbols[i],
+          symbol2: symbols[j],
+          correlation: correlationMatrix[symbols[i]]?.[symbols[j]] || 0,
+        });
+      }
+    }
+    
+    const hedgingRecommendations: string[] = [];
+    if (needsHedging) {
+      hedgingRecommendations.push('Portfolio correlation approaching limit - consider hedging or reducing exposure');
+      // Find highly correlated pairs
+      matrix
+        .filter(m => m.correlation > 0.75)
+        .forEach(m => {
+          hedgingRecommendations.push(`High correlation between ${m.symbol1} and ${m.symbol2} (${(m.correlation * 100).toFixed(0)}%)`);
+        });
+    }
+    
     res.json({
-      mode,
-      positions: positions.map(p => ({
-        symbol: p.symbol,
-        side: p.side,
-        exposure: p.qty * p.entryPrice * p.leverage,
-        heat: Math.min(1.0, portfolioHeat * 1.2), // Scaled heat per position
-      })),
-      correlationMatrix,
-      portfolioMetrics: {
-        portfolioHeat,
+      matrix,
+      portfolioHeat,
+      hedgingRecommendations,
+      // Additional data for debugging
+      metadata: {
+        mode,
+        positionCount: positions.length,
+        totalExposure,
         heatLimit,
         heatPercentage: (portfolioHeat / heatLimit) * 100,
-        needsHedging,
-        totalExposure,
-        positionCount: positions.length,
+        timestamp: new Date().toISOString(),
       },
-      hedging: {
-        active: false, // TODO: Check if any hedges are active
-        recommended: needsHedging,
-        reason: needsHedging ? 'Portfolio correlation approaching limit' : 'Portfolio correlation within acceptable range',
-      },
-      timestamp: new Date().toISOString(),
     });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch portfolio correlation', details: error.message });
@@ -180,18 +193,24 @@ router.get('/risk-distribution', async (req, res) => {
       high: riskBySymbol.filter(r => r.leverage > 5).length,
     };
     
+    // Format response to match frontend expectations
     res.json({
-      mode,
-      riskBySymbol,
-      summary: {
-        totalRisk,
-        totalValue,
-        portfolioRiskPercentage: totalValue > 0 ? (totalRisk / totalValue) * 100 : 0,
-        positionCount: positions.length,
-        avgLeverage: riskBySymbol.reduce((sum, r) => sum + r.leverage, 0) / (riskBySymbol.length || 1),
-      },
-      leverageDistribution,
-      timestamp: new Date().toISOString(),
+      bySymbol: riskBySymbol.map(r => ({
+        symbol: r.symbol,
+        riskAmount: r.riskAmount,
+        positionValue: r.positionValue,
+        leverage: r.leverage,
+        stopDistance: r.riskAmount / (r.positionValue > 0 ? r.positionValue : 1),
+        portfolioRiskPercent: totalValue > 0 ? (r.riskAmount / totalValue) * 100 : 0,
+      })),
+      leverageDistribution: [
+        { leverage: 1, count: leverageDistribution.low, totalValue: riskBySymbol.filter(r => r.leverage <= 2).reduce((sum, r) => sum + r.positionValue, 0) },
+        { leverage: 3, count: leverageDistribution.medium, totalValue: riskBySymbol.filter(r => r.leverage > 2 && r.leverage <= 5).reduce((sum, r) => sum + r.positionValue, 0) },
+        { leverage: 7, count: leverageDistribution.high, totalValue: riskBySymbol.filter(r => r.leverage > 5).reduce((sum, r) => sum + r.positionValue, 0) },
+      ],
+      totalPortfolioValue: totalValue,
+      totalRiskAmount: totalRisk,
+      avgLeverage: riskBySymbol.reduce((sum, r) => sum + r.leverage, 0) / (riskBySymbol.length || 1),
     });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch risk distribution', details: error.message });

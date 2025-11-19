@@ -48,21 +48,32 @@ class PendingIntentService {
    * Create a new pending intent (cancels any existing active intent for the session)
    */
   async create(params: CreatePendingIntentParams): Promise<PendingIntentData> {
-    // Cancel any existing active intent for this session
-    await this.cancelActiveIntent(params.sessionId);
+    // Use a transaction to atomically cancel existing and create new
+    const intent = await prisma.$transaction(async (tx) => {
+      // First, delete any existing active intents for this session
+      await tx.pendingIntent.deleteMany({
+        where: {
+          sessionId: params.sessionId,
+          status: 'active',
+        },
+      });
 
-    const intent = await prisma.pendingIntent.create({
-      data: {
-        sessionId: params.sessionId,
-        symbol: params.symbol,
-        action: params.action,
-        targetOffset: params.targetOffset,
-        originalPrice: params.originalPrice,
-        originalSignal: params.originalSignal as any,
-        expiresAt: params.expiresAt,
-        status: 'active',
-        confirmationTicks: 0,
-      },
+      // Now create the new intent
+      const newIntent = await tx.pendingIntent.create({
+        data: {
+          sessionId: params.sessionId,
+          symbol: params.symbol,
+          action: params.action,
+          targetOffset: params.targetOffset,
+          originalPrice: params.originalPrice,
+          originalSignal: params.originalSignal as any,
+          expiresAt: params.expiresAt,
+          status: 'active',
+          confirmationTicks: 0,
+        },
+      });
+
+      return newIntent;
     });
 
     return intent as PendingIntentData;
@@ -124,25 +135,11 @@ class PendingIntentService {
    * Mark intent as executed
    */
   async markExecuted(intentId: string): Promise<void> {
-    // First get the intent to know its sessionId
-    const intent = await prisma.pendingIntent.findUnique({
-      where: { id: intentId },
-      select: { sessionId: true, status: true },
-    });
-    
-    if (!intent) return;
-    
-    // Update using the unique constraint fields to avoid conflicts
-    await prisma.pendingIntent.updateMany({
+    // Simply delete the intent - no need to keep executed intents
+    await prisma.pendingIntent.deleteMany({
       where: {
         id: intentId,
-        sessionId: intent.sessionId,
-        status: intent.status, // Only update if status hasn't changed
-      },
-      data: {
-        status: 'executed',
-        executedAt: new Date(),
-        updatedAt: new Date(),
+        status: 'active', // Only delete if still active
       },
     });
   }
@@ -151,24 +148,11 @@ class PendingIntentService {
    * Mark intent as expired
    */
   async markExpired(intentId: string): Promise<void> {
-    // First get the intent to know its sessionId
-    const intent = await prisma.pendingIntent.findUnique({
-      where: { id: intentId },
-      select: { sessionId: true, status: true },
-    });
-    
-    if (!intent) return;
-    
-    // Update using the unique constraint fields to avoid conflicts
-    await prisma.pendingIntent.updateMany({
+    // Simply delete expired intents - no need to keep them
+    await prisma.pendingIntent.deleteMany({
       where: {
         id: intentId,
-        sessionId: intent.sessionId,
-        status: intent.status, // Only update if status hasn't changed
-      },
-      data: {
-        status: 'expired',
-        updatedAt: new Date(),
+        status: 'active', // Only delete if still active
       },
     });
   }
@@ -177,14 +161,11 @@ class PendingIntentService {
    * Cancel active intent for a session
    */
   async cancelActiveIntent(sessionId: string): Promise<void> {
-    await prisma.pendingIntent.updateMany({
+    // Delete active intents instead of updating status
+    await prisma.pendingIntent.deleteMany({
       where: {
         sessionId,
         status: 'active',
-      },
-      data: {
-        status: 'cancelled',
-        updatedAt: new Date(),
       },
     });
   }
