@@ -48,6 +48,8 @@ import { applyCorrelationConstraints } from './correlationManager.js';
 import { getEntryTimingAgent } from '../agent/subagents/entryTimingAgent.js';
 import { getExitStrategyAgent } from '../agent/subagents/exitStrategyAgent.js';
 import { getSubagentTuning } from './subagentLearning.js';
+import { pendingIntentService } from './pendingIntentService.js';
+import { orderReconciliationService } from './orderReconciliationService.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -781,27 +783,27 @@ async function executeEntryTrade(
     }
 
     try {
-      // Check for pending entry timing intents
-      const pendingEntry = agentMemoryStore.get<any>('pendingEntry', session.sessionId)?.data;
+      // 🔴 FIX: Check for pending entry timing intents from DATABASE (not in-memory)
+      const pendingEntry = await pendingIntentService.getActive(session.sessionId);
       
       if (pendingEntry) {
         const now = Date.now();
         
         // Check expiration
-        if (now > pendingEntry.expiresAt) {
-          agentMemoryStore.update('pendingEntry', session.sessionId, null);
+        if (now > pendingEntry.expiresAt.getTime()) {
+          await pendingIntentService.markExpired(pendingEntry.id);
           integrationLogger.info('Pending entry expired, proceeding with current price', { symbol: session.symbol });
         } else if (pendingEntry.action === 'wait_pullback') {
           // Check if we got the pullback
           const currentPrice = tech.last;
           const priceDiffBps = ((currentPrice - pendingEntry.originalPrice) / pendingEntry.originalPrice) * 10000;
           
-          if (Math.abs(priceDiffBps) >= Math.abs(pendingEntry.targetOffset)) {
+          if (Math.abs(priceDiffBps) >= Math.abs(pendingEntry.targetOffset ?? 0)) {
             integrationLogger.info(
               `Pullback achieved: ${priceDiffBps.toFixed(1)}bps >= ${pendingEntry.targetOffset}bps - entering`,
               { symbol: session.symbol }
             );
-            agentMemoryStore.update('pendingEntry', session.sessionId, null);
+            await pendingIntentService.markExecuted(pendingEntry.id);
             // Continue with entry
           } else {
             integrationLogger.debug(
@@ -813,15 +815,14 @@ async function executeEntryTrade(
         } else if (pendingEntry.action === 'wait_confirmation') {
           // Simple confirmation: wait for 2 ticks showing consistent signal
           // In production, this would check actual bar closes
-          pendingEntry.confirmationTicks = (pendingEntry.confirmationTicks || 0) + 1;
-          agentMemoryStore.update('pendingEntry', session.sessionId, pendingEntry);
+          const updated = await pendingIntentService.incrementConfirmationTicks(pendingEntry.id);
           
-          if (pendingEntry.confirmationTicks >= 2) {
+          if (updated.confirmationTicks >= 2) {
             integrationLogger.info('Confirmation complete - entering', { symbol: session.symbol });
-            agentMemoryStore.update('pendingEntry', session.sessionId, null);
+            await pendingIntentService.markExecuted(pendingEntry.id);
             // Continue with entry
           } else {
-            integrationLogger.debug(`Waiting for confirmation: ${pendingEntry.confirmationTicks}/2 ticks`);
+            integrationLogger.debug(`Waiting for confirmation: ${updated.confirmationTicks}/2 ticks`);
             await releaseEntryLock(session.sessionId);
             return; // Still waiting for confirmation
           }
@@ -1109,19 +1110,21 @@ async function executeEntryTrade(
       
       // Check if we should wait for better entry conditions
       if (entryTiming.action === 'wait_pullback' || entryTiming.action === 'wait_confirmation') {
-        const pendingIntent = {
+        // 🔴 FIX: Store pending intent in DATABASE (not in-memory)
+        const expiresAt = new Date(Date.now() + (entryTiming.action === 'wait_pullback' ? 300_000 : 600_000));
+        
+        await pendingIntentService.create({
+          sessionId: session.sessionId,
+          symbol: session.symbol,
           action: entryTiming.action,
           targetOffset: entryTiming.optimalEntryOffset,
           originalPrice: entryPrice,
           originalSignal: signal,
-          expiresAt: Date.now() + (entryTiming.action === 'wait_pullback' ? 300_000 : 600_000), // 5min for pullback, 10min for confirmation
-          createdAt: Date.now(),
-        };
-        
-        agentMemoryStore.update('pendingEntry', session.sessionId, pendingIntent);
+          expiresAt,
+        });
         
         integrationLogger.info(
-          `Entry deferred: ${entryTiming.action} | waiting ${Math.round(pendingIntent.expiresAt - Date.now()) / 60000}min`,
+          `Entry deferred: ${entryTiming.action} | waiting ${Math.round((expiresAt.getTime() - Date.now()) / 60000)}min`,
         );
         
         return; // Don't enter yet, wait for better conditions
@@ -1329,8 +1332,27 @@ async function executeEntryTrade(
             slippageBps: order.slippageBps,
             fillRatio: order.fillRatio,
             feeUsd,
+            slOrderId: order.slOrderId, // Track SL order ID from broker
+            tpOrderId: order.tpOrderId, // Track TP order ID from broker
           });
           console.log(`[MetaOrchestrator.executeEntryTrade] Position persisted to database`);
+          
+          // 🔴 FIX: Reconcile protective orders immediately after entry
+          if (session.mode === 'live') {
+            try {
+              const reconciliationResult = await orderReconciliationService.reconcilePosition(
+                session.sessionId,
+                broker
+              );
+              if (!reconciliationResult.synchronized) {
+                integrationLogger.warn(
+                  `Protective order sync issues after entry: ${reconciliationResult.issues.join(', ')}`,
+                );
+              }
+            } catch (reconcileError) {
+              integrationLogger.error('Failed to reconcile protective orders after entry:', reconcileError);
+            }
+          }
           
           // IMPROVEMENT: Generate exit strategy for this position
           const exitStrategyAgent = getExitStrategyAgent();

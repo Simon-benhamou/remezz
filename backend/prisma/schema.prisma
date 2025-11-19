@@ -114,6 +114,7 @@ model AgentSession {
   reports      DailyReport[] // back-rel from DailyReport.session
   opsTelemetry AgentOpsTelemetry?
   actionIntents AgentActionIntent[]
+  pendingIntents PendingIntent[]
   performanceLedger AgentPerformanceLedger[]
 
   @@index([userId, stoppedAt, startedAt])
@@ -141,6 +142,27 @@ model AgentActionIntent {
 
   @@index([status, createdAt])
   @@index([sessionId, status])
+}
+
+model PendingIntent {
+  id                String        @id @default(cuid())
+  session           AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId         String
+  symbol            String
+  action            String // 'wait_pullback' | 'wait_confirmation'
+  targetOffset      Float?
+  originalPrice     Float
+  originalSignal    Json
+  expiresAt         DateTime
+  confirmationTicks Int           @default(0)
+  status            String        @default("active") // 'active' | 'executed' | 'expired' | 'cancelled'
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  executedAt        DateTime?
+
+  @@unique([sessionId, status], name: "one_active_per_session")
+  @@index([sessionId, status])
+  @@index([status, expiresAt])
 }
 
 model SchedulerJob {
