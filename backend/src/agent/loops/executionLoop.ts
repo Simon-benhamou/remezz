@@ -6,7 +6,7 @@ import { agentEventBus } from '../bus/index.js';
 import type { MarketQualityScore, RiskLimits } from '../subagents/types.js';
 
 export class ExecutionPlanningLoop extends AgentLoop {
-  constructor(intervalMs = 75_000) {
+  constructor(intervalMs = 30_000) { // Reduced from 75s to 30s for faster plan generation
     super(intervalMs, false);
   }
 

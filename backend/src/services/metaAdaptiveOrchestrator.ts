@@ -45,6 +45,9 @@ import { calculateFeeUsd } from '../quantai/executionCosts.js';
 import { canFlipPosition, recordPositionFlip } from './positionFlipTracker.js';
 import { activateEntryLock, releaseEntryLock, isRotationLockActive } from './sessionLocks.js';
 import { applyCorrelationConstraints } from './correlationManager.js';
+import { getEntryTimingAgent } from '../agent/subagents/entryTimingAgent.js';
+import { getExitStrategyAgent } from '../agent/subagents/exitStrategyAgent.js';
+import { getSubagentTuning } from './subagentLearning.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -778,6 +781,53 @@ async function executeEntryTrade(
     }
 
     try {
+      // Check for pending entry timing intents
+      const pendingEntry = agentMemoryStore.get<any>('pendingEntry', session.sessionId)?.data;
+      
+      if (pendingEntry) {
+        const now = Date.now();
+        
+        // Check expiration
+        if (now > pendingEntry.expiresAt) {
+          agentMemoryStore.update('pendingEntry', session.sessionId, null);
+          integrationLogger.info('Pending entry expired, proceeding with current price', { symbol: session.symbol });
+        } else if (pendingEntry.action === 'wait_pullback') {
+          // Check if we got the pullback
+          const currentPrice = tech.last;
+          const priceDiffBps = ((currentPrice - pendingEntry.originalPrice) / pendingEntry.originalPrice) * 10000;
+          
+          if (Math.abs(priceDiffBps) >= Math.abs(pendingEntry.targetOffset)) {
+            integrationLogger.info(
+              `Pullback achieved: ${priceDiffBps.toFixed(1)}bps >= ${pendingEntry.targetOffset}bps - entering`,
+              { symbol: session.symbol }
+            );
+            agentMemoryStore.update('pendingEntry', session.sessionId, null);
+            // Continue with entry
+          } else {
+            integrationLogger.debug(
+              `Waiting for pullback: ${priceDiffBps.toFixed(1)}bps / ${pendingEntry.targetOffset}bps`,
+            );
+            await releaseEntryLock(session.sessionId);
+            return; // Still waiting for pullback
+          }
+        } else if (pendingEntry.action === 'wait_confirmation') {
+          // Simple confirmation: wait for 2 ticks showing consistent signal
+          // In production, this would check actual bar closes
+          pendingEntry.confirmationTicks = (pendingEntry.confirmationTicks || 0) + 1;
+          agentMemoryStore.update('pendingEntry', session.sessionId, pendingEntry);
+          
+          if (pendingEntry.confirmationTicks >= 2) {
+            integrationLogger.info('Confirmation complete - entering', { symbol: session.symbol });
+            agentMemoryStore.update('pendingEntry', session.sessionId, null);
+            // Continue with entry
+          } else {
+            integrationLogger.debug(`Waiting for confirmation: ${pendingEntry.confirmationTicks}/2 ticks`);
+            await releaseEntryLock(session.sessionId);
+            return; // Still waiting for confirmation
+          }
+        }
+      }
+      
       // Get broker
       const broker = await getBrokerForSession(session);
       if (!broker) {
@@ -1044,6 +1094,46 @@ async function executeEntryTrade(
         }
       }
       
+      // IMPROVEMENT: Apply entry timing optimization
+      const entryTimingAgent = getEntryTimingAgent();
+      
+      const entryTiming = await entryTimingAgent.evaluateEntryTiming(
+        session.symbol,
+        tech,
+        signal.confidence
+      );
+      
+      integrationLogger.info(
+        `Entry timing | action=${entryTiming.action} aggr=${entryTiming.aggressiveness.toFixed(2)}x confidence=${entryTiming.confidence.toFixed(2)} offset=${entryTiming.optimalEntryOffset}bps`,
+      );
+      
+      // Check if we should wait for better entry conditions
+      if (entryTiming.action === 'wait_pullback' || entryTiming.action === 'wait_confirmation') {
+        const pendingIntent = {
+          action: entryTiming.action,
+          targetOffset: entryTiming.optimalEntryOffset,
+          originalPrice: entryPrice,
+          originalSignal: signal,
+          expiresAt: Date.now() + (entryTiming.action === 'wait_pullback' ? 300_000 : 600_000), // 5min for pullback, 10min for confirmation
+          createdAt: Date.now(),
+        };
+        
+        agentMemoryStore.update('pendingEntry', session.sessionId, pendingIntent);
+        
+        integrationLogger.info(
+          `Entry deferred: ${entryTiming.action} | waiting ${Math.round(pendingIntent.expiresAt - Date.now()) / 60000}min`,
+        );
+        
+        return; // Don't enter yet, wait for better conditions
+      }
+      
+      // Apply aggressiveness multiplier to position size
+      maxPositionMargin = maxPositionMargin * entryTiming.aggressiveness;
+      
+      integrationLogger.info(
+        `Entry timing: immediate with aggr=${entryTiming.aggressiveness.toFixed(2)}x | adjusted_margin=$${maxPositionMargin.toFixed(0)}`,
+      );
+      
       // Dynamic leverage based on confidence: high confidence = higher leverage
       // confidence range: 0.50-1.0 (filters block below 0.50)
       // leverage range: baseLeverage (e.g., 3x) to maxLeverage (e.g., 10x)
@@ -1241,6 +1331,32 @@ async function executeEntryTrade(
             feeUsd,
           });
           console.log(`[MetaOrchestrator.executeEntryTrade] Position persisted to database`);
+          
+          // IMPROVEMENT: Generate exit strategy for this position
+          const exitStrategyAgent = getExitStrategyAgent();
+          
+          const volatility = (tech.atr14 / tech.last) * 100;
+          const exitStrategy = await exitStrategyAgent.generateExitStrategy(
+            session.symbol,
+            tech,
+            0, // Initial R-multiple
+            0, // Just opened
+            volatility
+          );
+          
+          // Store strategy with position
+          agentMemoryStore.update('exitStrategy', session.sessionId, {
+            strategy: exitStrategy,
+            entryPrice: order.avgPrice ?? entryPrice,
+            initialStop: stopPrice,
+            rMultipleAtEntry: 0,
+            exitedPct: 0,
+            createdAt: Date.now(),
+          });
+          
+          integrationLogger.info(
+            `Exit strategy set | first=${exitStrategy.scaleOutPlan[0].rMultiple}R/${(exitStrategy.scaleOutPlan[0].exitPct * 100).toFixed(0)}% trail=${exitStrategy.trailingStopAtrMultiplier}xATR max_hold=${(exitStrategy.maxHoldTimeMs / 3600000).toFixed(1)}h`,
+          );
         } catch (err) {
           console.error(`[MetaOrchestrator.executeEntryTrade] Failed to persist position:`, err);
         }
@@ -1452,6 +1568,13 @@ async function checkAndExecuteExit(
   agent: any,
   tech: TechnicalSnapshot
 ): Promise<void> {
+  const integrationLogger = createIntegrationLogger({
+    component: 'MetaAdaptiveOrchestrator',
+    action: 'checkAndExecuteExit',
+    sessionId: session.sessionId,
+    symbol: session.symbol,
+  });
+  
   try {
     if (!agent?.pos) {
       return;
@@ -1459,6 +1582,128 @@ async function checkAndExecuteExit(
 
     const currentPrice = tech.last;
     const position = agent.pos;
+    
+    // IMPROVEMENT: Check for exit strategy and apply it
+    const exitStrategyData = agentMemoryStore.get<any>('exitStrategy', session.sessionId)?.data;
+    
+    if (exitStrategyData) {
+      const exitStrategyAgent = getExitStrategyAgent();
+      const exitStrategy = exitStrategyData.strategy;
+      const entryPrice = exitStrategyData.entryPrice;
+      const initialStop = exitStrategyData.initialStop;
+      const timeInPosition = Date.now() - (exitStrategyData.createdAt || Date.now());
+      
+      // Calculate current R-multiple
+      const riskPerUnit = Math.abs(entryPrice - initialStop);
+      const currentR = position.side === 'buy'
+        ? (currentPrice - entryPrice) / riskPerUnit
+        : (entryPrice - currentPrice) / riskPerUnit;
+      
+      // Check for partial exits
+      const partialExit = exitStrategyAgent.shouldTakePartialProfit(
+        currentR,
+        exitStrategy,
+        exitStrategyData.exitedPct
+      );
+      
+      if (partialExit.shouldExit && partialExit.exitPct > 0) {
+        integrationLogger.info(
+          `🎯 Partial exit triggered | R=${currentR.toFixed(2)} exit=${(partialExit.exitPct * 100).toFixed(0)}% reason=${partialExit.reason}`,
+        );
+        
+        // Calculate exit quantity
+        const currentQty = Math.abs(position.qty ?? 0);
+        const exitQty = currentQty * partialExit.exitPct;
+        
+        if (exitQty > 0) {
+          try {
+            // Execute partial exit
+            const broker = await getBrokerForSession(session);
+            if (broker) {
+              const order = await broker.place({
+                symbol: session.symbol,
+                side: position.side === 'buy' ? 'sell' : 'buy',
+                qty: exitQty,
+                type: 'market',
+                reduceOnly: true,
+              });
+              
+              if (order.status === 'filled') {
+                // Update exited percentage
+                exitStrategyData.exitedPct += partialExit.exitPct;
+                agentMemoryStore.update('exitStrategy', session.sessionId, exitStrategyData);
+                
+                // Update position quantity
+                position.qty = position.side === 'buy' ? currentQty - exitQty : -(currentQty - exitQty);
+                
+                integrationLogger.info(
+                  `✅ Partial exit executed | qty=${exitQty.toFixed(4)} total_exited=${(exitStrategyData.exitedPct * 100).toFixed(0)}%`,
+                );
+              }
+            }
+          } catch (error) {
+            integrationLogger.error('Failed to execute partial exit', { error });
+          }
+        }
+        
+        // If fully exited, clean up
+        if (exitStrategyData.exitedPct >= 0.99) {
+          agentMemoryStore.update('exitStrategy', session.sessionId, null);
+          return;
+        }
+      }
+      
+      // Check for profit locking (tighten stop)
+      const currentStopDistance = position.stop ? Math.abs(currentPrice - position.stop) : null;
+      const lockProfit = exitStrategyAgent.shouldLockProfits(
+        currentR,
+        exitStrategy,
+        currentStopDistance ?? 0 // Use 0 if no stop is set
+      );
+      
+      if (lockProfit.shouldTighten) {
+        const newStop = position.side === 'buy'
+          ? currentPrice - lockProfit.newStopDistance
+          : currentPrice + lockProfit.newStopDistance;
+        
+        integrationLogger.info(
+          `🔒 Locking profits | R=${currentR.toFixed(2)} old_stop=${position.stop?.toFixed(4)} new_stop=${newStop.toFixed(4)} reason=${lockProfit.reason}`,
+        );
+        
+        position.stop = newStop;
+      }
+      
+      // Check max hold time
+      if (timeInPosition > exitStrategy.maxHoldTimeMs) {
+        integrationLogger.info(
+          `⏰ Max hold time exceeded | held=${(timeInPosition / 3600000).toFixed(1)}h max=${(exitStrategy.maxHoldTimeMs / 3600000).toFixed(1)}h`,
+        );
+        
+        await executeExitTrade(session, agent, currentPrice, 'max_hold_time_exceeded');
+        agentMemoryStore.update('exitStrategy', session.sessionId, null);
+        return;
+      }
+      
+      // Apply adaptive trailing stop
+      if (currentR >= exitStrategy.trailingStopActivationR) {
+        const trailingStop = position.side === 'buy'
+          ? currentPrice - (tech.atr14 * exitStrategy.trailingStopAtrMultiplier)
+          : currentPrice + (tech.atr14 * exitStrategy.trailingStopAtrMultiplier);
+        
+        // Only update if new trailing stop is better than current stop
+        const shouldUpdate = position.side === 'buy'
+          ? trailingStop > (position.stop ?? -Infinity)
+          : trailingStop < (position.stop ?? Infinity);
+        
+        if (shouldUpdate) {
+          integrationLogger.info(
+            `📈 Trailing stop update | R=${currentR.toFixed(2)} new_stop=${trailingStop.toFixed(4)} ATR_mult=${exitStrategy.trailingStopAtrMultiplier}`,
+          );
+          
+          position.stop = trailingStop;
+        }
+      }
+    }
 
     // Update peak price tracking
     if (position.peakPrice == null) {
