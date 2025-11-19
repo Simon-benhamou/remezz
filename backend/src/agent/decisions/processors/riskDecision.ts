@@ -56,21 +56,23 @@ export class RiskGovernorDecisionProcessor implements DecisionProcessor {
       );
     }
 
-    if (limits.reason) {
-      intents.push(
-        buildActionIntent({
-          sessionId: context.session.id,
-          symbol: context.session.symbol,
-          type: 'publish_alert',
-          priority: limits.hedgingRequired ? 'high' : 'medium',
-          confidence: 0.6,
-          reason: 'risk_governor_reason',
-          data: {
-            reason: limits.reason,
-          },
-        }),
-      );
-    }
+    // DISABLED: Creates spam every time risk limits are checked (routine monitoring)
+    // Risk governor data is logged and stored - doesn't need alerts
+    // if (limits.reason) {
+    //   intents.push(
+    //     buildActionIntent({
+    //       sessionId: context.session.id,
+    //       symbol: context.session.symbol,
+    //       type: 'publish_alert',
+    //       priority: limits.hedgingRequired ? 'high' : 'medium',
+    //       confidence: 0.6,
+    //       reason: 'risk_governor_reason',
+    //       data: {
+    //         reason: limits.reason,
+    //       },
+    //     }),
+    //   );
+    // }
 
     if (!intents.length) {
       return null;

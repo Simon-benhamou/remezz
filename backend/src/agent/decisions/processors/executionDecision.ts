@@ -103,22 +103,24 @@ export class ExecutionPlanDecisionProcessor implements DecisionProcessor {
       );
     }
 
-    if (plan.strategy === 'twap' && (meta.twapSlices ?? 0) >= 8) {
-      intents.push(
-        buildActionIntent({
-          sessionId: context.session.id,
-          symbol: context.session.symbol,
-          type: 'publish_alert',
-          priority: 'medium',
-          confidence: 0.55,
-          reason: 'twap_plan_many_slices',
-          data: {
-            twapSlices: meta.twapSlices,
-            twapIntervalMs: meta.twapIntervalMs,
-          },
-        }),
-      );
-    }
+    // DISABLED: Creates spam for TWAP execution plans (routine)
+    // Execution plan details are logged - doesn't need alerts
+    // if (plan.strategy === 'twap' && (meta.twapSlices ?? 0) >= 8) {
+    //   intents.push(
+    //     buildActionIntent({
+    //       sessionId: context.session.id,
+    //       symbol: context.session.symbol,
+    //       type: 'publish_alert',
+    //       priority: 'medium',
+    //       confidence: 0.55,
+    //       reason: 'twap_plan_many_slices',
+    //       data: {
+    //         twapSlices: meta.twapSlices,
+    //         twapIntervalMs: meta.twapIntervalMs,
+    //       },
+    //     }),
+    //   );
+    // }
 
     if (!intents.length) {
       return null;

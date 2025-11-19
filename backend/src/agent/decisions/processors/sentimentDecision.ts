@@ -15,24 +15,26 @@ export class SentimentDecisionProcessor implements DecisionProcessor {
     const executionPlan = context.perception.executionPlan;
     const intents: AgentActionIntent[] = [];
 
-    if (signal.bias !== 'neutral' && signal.confidence >= 0.65) {
-      intents.push(
-        buildActionIntent({
-          sessionId: context.session.id,
-          symbol: context.session.symbol,
-          type: 'publish_alert',
-          priority: signal.confidence > 0.8 ? 'high' : 'medium',
-          confidence: signal.confidence,
-          reason: `sentiment_${signal.bias}_pressure`,
-          data: {
-            bias: signal.bias,
-            confidence: signal.confidence,
-            whaleActivity: signal.whaleActivity,
-            newsHeat: signal.newsHeat,
-          },
-        }),
-      );
-    }
+    // DISABLED: Creates 1920 alerts/day per symbol (too noisy!)
+    // Sentiment is logged and stored in memory - doesn't need alerts
+    // if (signal.bias !== 'neutral' && signal.confidence >= 0.65) {
+    //   intents.push(
+    //     buildActionIntent({
+    //       sessionId: context.session.id,
+    //       symbol: context.session.symbol,
+    //       type: 'publish_alert',
+    //       priority: signal.confidence > 0.8 ? 'high' : 'medium',
+    //       confidence: signal.confidence,
+    //       reason: `sentiment_${signal.bias}_pressure`,
+    //       data: {
+    //         bias: signal.bias,
+    //         confidence: signal.confidence,
+    //         whaleActivity: signal.whaleActivity,
+    //         newsHeat: signal.newsHeat,
+    //       },
+    //     }),
+    //   );
+    // }
 
     if (signal.bias === 'bearish' && (signal.confidence > 0.8 || signal.whaleActivity > 0.75)) {
       intents.push(
@@ -88,21 +90,22 @@ export class SentimentDecisionProcessor implements DecisionProcessor {
       );
     }
 
-    if (signal.newsHeat >= 0.85) {
-      intents.push(
-        buildActionIntent({
-          sessionId: context.session.id,
-          symbol: context.session.symbol,
-          type: 'publish_alert',
-          priority: 'high',
-          confidence: 0.7,
-          reason: 'news_heat_extreme',
-          data: {
-            newsHeat: signal.newsHeat,
-          },
-        }),
-      );
-    }
+    // DISABLED: Creates spam when news is hot (routine monitoring)
+    // if (signal.newsHeat >= 0.85) {
+    //   intents.push(
+    //     buildActionIntent({
+    //       sessionId: context.session.id,
+    //       symbol: context.session.symbol,
+    //       type: 'publish_alert',
+    //       priority: 'high',
+    //       confidence: 0.7,
+    //       reason: 'news_heat_extreme',
+    //       data: {
+    //         newsHeat: signal.newsHeat,
+    //       },
+    //     }),
+    //   );
+    // }
 
     if (!intents.length) {
       return null;

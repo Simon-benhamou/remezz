@@ -28,22 +28,24 @@ export class PredictorDecisionProcessor implements DecisionProcessor {
           reason: 'predictor_disabled',
         }),
       );
-    } else if (predictor.confidence < 0.45) {
-      intents.push(
-        buildActionIntent({
-          sessionId: context.session.id,
-          symbol: context.session.symbol,
-          type: 'publish_alert',
-          priority: 'low',
-          confidence: predictor.confidence,
-          reason: 'predictor_confidence_low',
-          data: {
-            predictorBias: predictor.bias,
-            confidence: predictor.confidence,
-            lastRetrainedAt: predictor.lastRetrainedAt ?? null,
-          },
-        }),
-      );
+    // DISABLED: Creates spam when predictor has low confidence (routine)
+    // Predictor state is logged - doesn't need alerts
+    // } else if (predictor.confidence < 0.45) {
+    //   intents.push(
+    //     buildActionIntent({
+    //       sessionId: context.session.id,
+    //       symbol: context.session.symbol,
+    //       type: 'publish_alert',
+    //       priority: 'low',
+    //       confidence: predictor.confidence,
+    //       reason: 'predictor_confidence_low',
+    //       data: {
+    //         predictorBias: predictor.bias,
+    //         confidence: predictor.confidence,
+    //         lastRetrainedAt: predictor.lastRetrainedAt ?? null,
+    //       },
+    //     }),
+    //   );
     }
 
     if (predictor.enabled && cooldown?.active) {
