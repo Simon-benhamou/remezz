@@ -861,6 +861,41 @@ export async function getActiveAgentSymbols(excludeSessionId?: string): Promise<
   }
 }
 
+/**
+ * Get symbol usage distribution across active agents
+ * Returns map of symbol -> count of agents using it
+ */
+export async function getSymbolUsageDistribution(excludeSessionId?: string): Promise<Map<string, number>> {
+  try {
+    const whereClause: any = { stoppedAt: null };
+    if (excludeSessionId) {
+      whereClause.id = { not: excludeSessionId };
+    }
+
+    const activeSessions = await prisma.agentSession.findMany({
+      where: whereClause,
+      select: { symbol: true, currentSymbol: true }
+    });
+
+    const usage = new Map<string, number>();
+    for (const session of activeSessions) {
+      const candidates = [session.symbol, session.currentSymbol];
+      for (const raw of candidates) {
+        if (!raw) continue;
+        const unified = normalizeUnifiedSymbol(raw);
+        if (unified) {
+          usage.set(unified, (usage.get(unified) || 0) + 1);
+        }
+      }
+    }
+
+    return usage;
+  } catch (error) {
+    console.error('Error fetching symbol usage:', error);
+    return new Map();
+  }
+}
+
 export interface IntelligentAnalysis {
   symbol: string;
   score: number;
@@ -2268,47 +2303,67 @@ async function getTopCryptos(excludeSessionId?: string): Promise<string[]> {
 
 async function applyActiveFilter(symbols: string[], excludeSessionId?: string): Promise<string[]> {
   try {
-    const activeSymbols = await getActiveAgentSymbols(excludeSessionId);
-    const activeSet = new Set(activeSymbols.map((s) => normalizeUnifiedSymbol(s)));
+    const usage = await getSymbolUsageDistribution(excludeSessionId);
     const seen = new Set<string>();
     const available: string[] = [];
+
+    // Define max agents per symbol tier
+    const MAJOR_CRYPTOS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'];
+    const MAX_AGENTS_MAJOR = 3;  // Allow 3 agents on BTC/ETH/SOL
+    const MAX_AGENTS_MIDCAP = 2; // Allow 2 agents on mid-caps
+    const MAX_AGENTS_SMALL = 1;  // Only 1 agent on small caps
 
     for (const symbol of symbols) {
       if (!symbol) continue;
       const unified = normalizeUnifiedSymbol(symbol);
-      if (!unified || activeSet.has(unified) || seen.has(unified)) {
-        continue;
-      }
+      if (!unified || seen.has(unified)) continue;
+      
       seen.add(unified);
-      available.push(symbol);
+      const currentUsage = usage.get(unified) || 0;
+      
+      // Determine max allowed based on symbol tier
+      let maxAllowed = MAX_AGENTS_SMALL;
+      if (MAJOR_CRYPTOS.includes(unified)) {
+        maxAllowed = MAX_AGENTS_MAJOR;
+      } else if (currentUsage === 0) {
+        // For new symbols, check if they're established coins
+        const base = unified.split('/')[0];
+        const ESTABLISHED = ['XRP', 'BNB', 'ADA', 'DOGE', 'MATIC', 'DOT', 'AVAX', 'LINK', 'UNI', 'ATOM'];
+        if (ESTABLISHED.includes(base)) {
+          maxAllowed = MAX_AGENTS_MIDCAP;
+        }
+      }
+      
+      // Allow symbol if under limit
+      if (currentUsage < maxAllowed) {
+        available.push(symbol);
+      }
     }
 
     if (available.length > 0) {
-      console.log(`📊 Fallback list after conflict filter: ${available.length} available (${symbols.length - available.length} filtered)`);
+      console.log(`📊 Portfolio diversity filter: ${available.length} available (allowed multiple agents on majors)`);
       return available;
     }
 
-    console.log('⚠️ All candidates currently active - probing static fallback universe');
-    const fallbackSeen = new Set(seen);
-    const fallback: string[] = [];
-    for (const fallbackSymbol of getFallbackSymbols()) {
-      if (!fallbackSymbol) continue;
-      const preferred = ensurePreferredPerpSymbol(fallbackSymbol);
-      const unified = normalizeUnifiedSymbol(preferred);
-      if (!unified || activeSet.has(unified) || fallbackSeen.has(unified)) continue;
-      fallbackSeen.add(unified);
-      fallback.push(preferred);
+    console.log('⚠️ All symbols at capacity - allowing overflow on majors');
+    // If all at capacity, allow majors anyway (emergency fallback)
+    const emergencyFallback: string[] = [];
+    for (const symbol of MAJOR_CRYPTOS) {
+      const unified = normalizeUnifiedSymbol(symbol);
+      if (unified && !seen.has(unified)) {
+        emergencyFallback.push(symbol);
+      }
     }
 
-    if (fallback.length > 0) {
-      console.log(`✅ Static fallback supplied ${fallback.length} alternate symbols`);
-      return fallback;
+    if (emergencyFallback.length > 0) {
+      console.log(`✅ Emergency fallback: allowing overflow on ${emergencyFallback.length} major(s)`);
+      return emergencyFallback;
     }
 
-    console.log('🚫 No alternate symbols available after filtering');
+    console.log('🚫 No symbols available');
     return [];
   } catch (error) {
-    console.error('Error filtering fallback symbols:', error);
+    console.error('Error in diversity filter:', error);
     return symbols;
   }
 }
@@ -3285,10 +3340,11 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
   }
   
   try {
-    // Use NEW AI ranking pipeline
+    // Use NEW AI ranking pipeline with aggressiveness
     const aiRanked = await getAIRankedOpportunities({ 
       useCache: true, 
-      excludeSessionId 
+      excludeSessionId,
+      aggressiveness
     });
     
     if (aiRanked.length === 0) {

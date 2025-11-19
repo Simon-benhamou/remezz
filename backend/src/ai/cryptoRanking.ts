@@ -380,15 +380,20 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
  */
 export async function rankCryptosWithAI(
   top50: VolumeFilteredCrypto[],
-  opts?: { useCache?: boolean; forceRefresh?: boolean }
+  opts?: { 
+    useCache?: boolean; 
+    forceRefresh?: boolean;
+    excludeSessionId?: string;
+    aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+  }
 ): Promise<RankedOpportunity[]> {
   try {
     console.log('🤖 ÉTAPE 2: Analyse IA des top 50 cryptos...');
     
     // Check cache
-    const cacheKey = 'ai_ranking';
+    const rankingCacheKey = 'ai_ranking';
     if (opts?.useCache !== false && !opts?.forceRefresh) {
-      const cached = RANKING_CACHE.get(cacheKey);
+      const cached = RANKING_CACHE.get(rankingCacheKey);
       if (cached && Date.now() - cached.ts < RANKING_CACHE_TTL) {
         console.log('💾 Using cached AI ranking');
         return cached.data;
@@ -713,11 +718,142 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
     // Update ranks after re-sort
     ranked.forEach((r, i) => r.rank = i + 1);
     
-    // Cache the results
-    RANKING_CACHE.set(cacheKey, { ts: Date.now(), data: ranked });
+    // ÉTAPE 3A: Apply learning-based performance adjustment
+    console.log('🧠 Applying learning-based performance adjustments...');
+    const { prisma } = await import('../db/client.js');
     
-    console.log('✅ AI Ranking complete (with Strategy Compatibility). Top 10:');
-    ranked.slice(0, 10).forEach(r => {
+    // Get historical symbol performance from decision memory (last 30 days)
+    const symbolPerformance = new Map<string, { trades: number; winRate: number }>();
+    
+    for (const r of ranked) {
+      try {
+        const decisions = await prisma.decisionMemory.findMany({
+          where: {
+            symbol: r.symbol,
+            createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+            outcome: { not: null }
+          },
+          select: { outcome: true }
+        });
+        
+        if (decisions.length >= 5) {
+          const wins = decisions.filter(d => d.outcome === 'win').length;
+          const winRate = wins / decisions.length;
+          symbolPerformance.set(r.symbol, { trades: decisions.length, winRate });
+        }
+      } catch (error) {
+        // Skip symbols without history
+        continue;
+      }
+    }
+    
+    ranked.forEach(r => {
+      const perf = symbolPerformance.get(r.symbol);
+      if (perf) {
+        const oldScore = r.score;
+        
+        // Adjust based on win rate:
+        // Win rate > 55%: +10% to +20% boost
+        // Win rate 45-55%: neutral
+        // Win rate < 45%: -10% to -25% penalty
+        let learningMultiplier = 1.0;
+        if (perf.winRate >= 0.55) {
+          learningMultiplier = 1.10 + (perf.winRate - 0.55) * 0.5; // Up to +20%
+        } else if (perf.winRate < 0.45) {
+          learningMultiplier = 0.90 - (0.45 - perf.winRate) * 0.75; // Down to -25%
+        }
+        
+        r.score = Number((r.score * learningMultiplier).toFixed(3));
+        const change = ((learningMultiplier - 1) * 100).toFixed(0);
+        console.log(`   ${r.symbol}: WR ${(perf.winRate * 100).toFixed(0)}% (${perf.trades} trades) → ${change > '0' ? '+' : ''}${change}% (${oldScore.toFixed(2)} → ${r.score.toFixed(2)})`);
+      }
+    });
+    
+    // ÉTAPE 3B: Apply diversity scoring - penalize over-represented symbols
+    console.log('🎯 Applying portfolio diversity adjustments...');
+    const { getSymbolUsageDistribution } = await import('../services/intelligentAgent/strategies/core.js');
+    const usage = await getSymbolUsageDistribution(opts?.excludeSessionId);
+    
+    ranked.forEach(r => {
+      const currentUsage = usage.get(r.symbol) || 0;
+      if (currentUsage > 0) {
+        // Penalize based on current usage:
+        // 1 agent: -5%, 2 agents: -12%, 3+ agents: -20%
+        const diversityPenalty = currentUsage === 1 ? 0.95 : 
+                                currentUsage === 2 ? 0.88 : 0.80;
+        const oldScore = r.score;
+        r.score = Number((r.score * diversityPenalty).toFixed(3));
+        console.log(`   ${r.symbol}: ${currentUsage} active agents → ${((1-diversityPenalty)*100).toFixed(0)}% penalty (${oldScore.toFixed(2)} → ${r.score.toFixed(2)})`);
+      }
+    });
+    
+    // Re-sort after diversity adjustments
+    ranked.sort((a, b) => b.score - a.score);
+    ranked.forEach((r, i) => r.rank = i + 1);
+    
+    // ÉTAPE 4: Apply aggressiveness filtering
+    const aggressiveness = opts?.aggressiveness || 'reactive';
+    console.log(`🎯 Applying ${aggressiveness} aggressiveness filter...`);
+    const TIER_CONFIGS = {
+      conservative: {
+        minVolume: 100_000_000, // $100M+
+        maxATR: 1.5,            // Cap volatility
+        preferTiers: ['tier1', 'tier2'], // Only blue chips and majors
+        description: 'Blue chips only (BTC, ETH, SOL, major established)'
+      },
+      reactive: {
+        minVolume: 30_000_000,  // $30M+
+        maxATR: 2.5,            // Moderate volatility
+        preferTiers: ['tier1', 'tier2', 'tier3'], // Majors + promising alts
+        description: 'Balanced: majors and quality alts'
+      },
+      aggressive: {
+        minVolume: 5_000_000,   // $5M+
+        maxATR: 5.0,            // High volatility OK
+        preferTiers: ['tier1', 'tier2', 'tier3', 'tier4'], // All tiers
+        description: 'All quality opportunities including small caps'
+      }
+    };
+    
+    const config = TIER_CONFIGS[aggressiveness];
+    console.log(`   Filter: ${config.description}`);
+    
+    const filtered = ranked.filter(r => {
+      const compat = r.strategyCompatibility;
+      if (!compat) return true; // Keep if no compatibility data
+      
+      // Check volume threshold
+      if (r.volumeUsd24h < config.minVolume) {
+        console.log(`   ❌ ${r.symbol}: Volume $${(r.volumeUsd24h/1e6).toFixed(1)}M < $${(config.minVolume/1e6).toFixed(0)}M threshold`);
+        return false;
+      }
+      
+      // Check ATR threshold
+      if (r.technical.atrPct > config.maxATR) {
+        console.log(`   ❌ ${r.symbol}: ATR ${r.technical.atrPct.toFixed(2)}% > ${config.maxATR}% threshold`);
+        return false;
+      }
+      
+      // Check tier preference
+      if (!config.preferTiers.includes(compat.tier)) {
+        console.log(`   ❌ ${r.symbol}: Tier ${compat.tier} not in preferred tiers [${config.preferTiers.join(', ')}]`);
+        return false;
+      }
+      
+      return true;
+    });
+    
+    console.log(`📊 After aggressiveness filter: ${filtered.length}/${ranked.length} opportunities`);
+    
+    // Update ranks
+    filtered.forEach((r, i) => r.rank = i + 1);
+    
+    // Cache the results
+    const cacheKey = `ai_ranking_${aggressiveness}_${opts?.excludeSessionId || 'all'}`;
+    RANKING_CACHE.set(cacheKey, { ts: Date.now(), data: filtered });
+    
+    console.log('✅ AI Ranking complete with aggressiveness & diversity. Top 10:');
+    filtered.slice(0, 10).forEach(r => {
       const compat = r.strategyCompatibility;
       console.log(`   ${r.rank}. ${r.symbol}:`);
       console.log(`      Score: ${r.score.toFixed(2)} (AI: ${(r.score / 0.60 * 0.6).toFixed(2)}, Strategy: ${compat?.score.toFixed(2)})`);
@@ -728,7 +864,7 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
       console.log(`      ${r.aiReasoning[0]}`);
     });
     
-    return ranked;
+    return filtered;
     
   } catch (error) {
     console.error('❌ Error ranking cryptos with AI:', error);
@@ -740,12 +876,20 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
  * FONCTION PRINCIPALE: Pipeline complet
  * 1. Filtre par volume → Top 50
  * 2. Analyse IA → Ranking par opportunité 24h
+ * 3. Apply aggressiveness filtering
+ * 4. Apply diversity scoring
  */
 export async function getAIRankedOpportunities(
-  opts?: { useCache?: boolean; forceRefresh?: boolean; excludeSessionId?: string }
+  opts?: { 
+    useCache?: boolean; 
+    forceRefresh?: boolean; 
+    excludeSessionId?: string;
+    aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+  }
 ): Promise<RankedOpportunity[]> {
   try {
-    console.log('🚀 Starting AI-powered crypto ranking pipeline...');
+    const aggressiveness = opts?.aggressiveness || 'reactive';
+    console.log(`🚀 Starting AI-powered crypto ranking pipeline (aggressiveness: ${aggressiveness})...`);
     
     // ÉTAPE 1: Filtrage volume
     const top50 = await getTop50CryptosByVolume(opts?.excludeSessionId);

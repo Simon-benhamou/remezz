@@ -192,11 +192,13 @@ export default function SubagentStatusCards({ sessionId }: SubagentStatusCardsPr
                 {subagent.recommendation && subagent.active && (
                   <div
                     style={{
-                      background: '#f0f2f5',
+                      background: 'rgba(30, 41, 59, 0.65)',
+                      border: '1px solid rgba(148, 163, 184, 0.22)',
                       padding: 8,
                       borderRadius: 4,
                       fontSize: 12,
                       marginTop: 8,
+                      color: '#e2e8f0',
                     }}
                   >
                     {renderRecommendation(subagent.subagent, subagent.recommendation)}
@@ -206,12 +208,13 @@ export default function SubagentStatusCards({ sessionId }: SubagentStatusCardsPr
                 {!subagent.active && (
                   <div
                     style={{
-                      background: '#f0f2f5',
+                      background: 'rgba(30, 41, 59, 0.65)',
+                      border: '1px solid rgba(148, 163, 184, 0.22)',
                       padding: 8,
                       borderRadius: 4,
                       fontSize: 12,
                       marginTop: 8,
-                      color: '#999',
+                      color: '#94a3b8',
                     }}
                   >
                     No data yet. Will activate after first trades.

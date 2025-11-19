@@ -21,6 +21,7 @@ import {
   type RecognizedStrategySignal
 } from '../quantai/strategies/metaAdaptive/recognizedStrategies.js';
 import { maybeAdjustOrExit } from '../quantai/strategies/metaAdaptive/exitManager.js';
+import { detectReboundForShort, detectReversalForLong } from '../quantai/strategies/metaAdaptive/reboundDetection.js';
 import { PositionSizer } from '../quantai/risk/positionSizing.js';
 import { getQuantAIConfig } from '../quantai/config.js';
 import type { QuantAIExitConfig } from '../quantai/config.js';
@@ -616,11 +617,109 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
         },
       });
       const hasPosition = dbPosition !== null;
+      
+      // POST-EXIT REVERSAL DETECTION: Check if we should re-enter after recent stop-loss
+      if (!hasPosition) {
+        const postExitMonitoring = agentMemoryStore.get<any>('postExitMonitoring', session.sessionId)?.data;
+        
+        if (postExitMonitoring && Date.now() < postExitMonitoring.monitorUntil) {
+          const exitedSide = postExitMonitoring.exitSide;
+          const timeSinceExit = (Date.now() - postExitMonitoring.exitTime) / 1000;
+          
+          // Check for reversal in opposite direction
+          let reversalDetected = false;
+          let reversalProbability = 0;
+          let reversalReasons: string[] = [];
+          
+          if (exitedSide === 'long') {
+            // We were stopped out of a long - check if market is now bouncing (favor new long)
+            const reboundSignal = detectReboundForShort(tech);
+            if (reboundSignal.probability >= 0.7) {
+              reversalDetected = true;
+              reversalProbability = reboundSignal.probability;
+              reversalReasons = reboundSignal.reasons;
+              
+              logger.info(
+                `[${session.sessionId}] POST-STOP REVERSAL: Stopped from LONG ${timeSinceExit.toFixed(0)}s ago, now strong rebound detected (prob=${reversalProbability.toFixed(2)}) - could re-enter LONG`
+              );
+            }
+          } else if (exitedSide === 'short') {
+            // We were stopped out of a short - check if market is now dumping (favor new short)
+            const reversalSignal = detectReversalForLong(tech);
+            if (reversalSignal.probability >= 0.7) {
+              reversalDetected = true;
+              reversalProbability = reversalSignal.probability;
+              reversalReasons = reversalSignal.reasons;
+              
+              logger.info(
+                `[${session.sessionId}] POST-STOP REVERSAL: Stopped from SHORT ${timeSinceExit.toFixed(0)}s ago, now strong reversal detected (prob=${reversalProbability.toFixed(2)}) - could re-enter SHORT`
+              );
+            }
+          }
+          
+          // If reversal detected, allow normal signal evaluation to potentially re-enter
+          // The reversal detection in entry evaluation will NOT block same-direction re-entry
+          if (reversalDetected) {
+            logger.info(
+              `[${session.sessionId}] Post-stop reversal confirmed: ${reversalReasons.slice(0, 3).join(', ')} - allowing signal evaluation`
+            );
+          }
+          
+          // Clean up monitoring after time expires
+          if (Date.now() >= postExitMonitoring.monitorUntil) {
+            agentMemoryStore.update('postExitMonitoring', session.sessionId, null);
+            logger.debug(`[${session.sessionId}] Post-exit monitoring expired`);
+          }
+        }
+      }
 
       if (!hasPosition) {
         // No position - evaluate entry signals
         const entrySignals = signals.filter(s => !(s as any).isExit);
         const { signal: executableSignal, source: selectionSource } = pickExecutableSignal(entrySignals);
+        
+        // REVERSAL DETECTION: Block entries if strong reversal signal opposes our direction
+        if (executableSignal && selectionSource === 'token') {
+          const entryBias = executableSignal.bias;
+          let blockEntry = false;
+          let blockReason = '';
+          
+          if (entryBias === 'long') {
+            const reversalSignal = detectReversalForLong(tech);
+            if (reversalSignal.probability >= 0.65) {
+              blockEntry = true;
+              blockReason = `reversal_against_long: ${reversalSignal.severity} probability=${reversalSignal.probability.toFixed(2)} [${reversalSignal.reasons.slice(0, 2).join(', ')}]`;
+            }
+          } else if (entryBias === 'short') {
+            const reboundSignal = detectReboundForShort(tech);
+            if (reboundSignal.probability >= 0.65) {
+              blockEntry = true;
+              blockReason = `rebound_against_short: ${reboundSignal.severity} probability=${reboundSignal.probability.toFixed(2)} [${reboundSignal.reasons.slice(0, 2).join(', ')}]`;
+            }
+          }
+          
+          if (blockEntry) {
+            logger.warn(`[${session.sessionId}] Entry blocked by reversal detection: ${blockReason}`);
+            await logTradeEvaluation({
+              symbol: session.symbol,
+              decision: 'order_blocked_capital',
+              blockedReason: blockReason,
+              confidenceScore: executableSignal.confidence,
+              inputMetrics: {
+                adx: tech.adx14,
+                atrPct: (tech.atr14 / tech.last) * 100,
+                cmf: (tech as any).cmf20,
+                rsi14: tech.rsi14,
+                volumeRatio: (tech as any).volumeRatio,
+              },
+              regimeContext: calculateRegimeContext(tech),
+            }).catch(err => console.warn('Failed to log reversal block:', err));
+            
+            // Skip entry execution
+            return;
+          }
+        }
+        
         if (selectionSource === 'token' && executableSignal) {
           logger.info(
             `[${session.sessionId}] Selected entry signal (token-backed): ${(executableSignal as any).strategyId} (${executableSignal.bias}) score=${executableSignal.meta?.score}`
@@ -1477,8 +1576,46 @@ async function shouldFlipPosition(
     };
   }
   
-  // Calculate current R-multiple
+  // Get position details for validation
   const position = agent.pos;
+  
+  // ENHANCEMENT: Use reversal detection to validate counter-signal
+  const currentSide = position.side === 'buy' ? 'long' : 'short';
+  const targetSide = counterSignal.bias === 'short' ? 'short' : 'long';
+  
+  if (currentSide === 'long' && targetSide === 'short') {
+    // Flipping long -> short: check for reversal signal
+    const reversalSignal = detectReversalForLong(tech);
+    if (reversalSignal.probability >= 0.6) {
+      // Strong reversal detected - boost confidence
+      logger.info(
+        `[${session.sessionId}] Reversal detection supports flip: ${reversalSignal.severity} probability=${reversalSignal.probability.toFixed(2)} reasons=[${reversalSignal.reasons.join(', ')}]`
+      );
+    } else if (reversalSignal.probability < 0.3) {
+      // No reversal detected - counter-signal may be premature
+      return {
+        flip: false,
+        reason: `weak_reversal_signal: probability=${reversalSignal.probability.toFixed(2)} < 0.3 required`,
+      };
+    }
+  } else if (currentSide === 'short' && targetSide === 'long') {
+    // Flipping short -> long: check for rebound signal
+    const reboundSignal = detectReboundForShort(tech);
+    if (reboundSignal.probability >= 0.6) {
+      // Strong rebound detected - boost confidence
+      logger.info(
+        `[${session.sessionId}] Rebound detection supports flip: ${reboundSignal.severity} probability=${reboundSignal.probability.toFixed(2)} reasons=[${reboundSignal.reasons.join(', ')}]`
+      );
+    } else if (reboundSignal.probability < 0.3) {
+      // No rebound detected - counter-signal may be premature
+      return {
+        flip: false,
+        reason: `weak_rebound_signal: probability=${reboundSignal.probability.toFixed(2)} < 0.3 required`,
+      };
+    }
+  }
+  
+  // Calculate current R-multiple
   const currentPrice = tech.last;
   const riskPerUnit = Math.abs(position.entry - position.stop);
   const baselineStop = position.side === 'buy'
@@ -1604,6 +1741,36 @@ async function checkAndExecuteExit(
 
     const currentPrice = tech.last;
     const position = agent.pos;
+    const positionSide = position.side === 'buy' ? 'long' : 'short';
+    
+    // REVERSAL DETECTION: Check if market is reversing against our position
+    if (positionSide === 'long') {
+      const reversalSignal = detectReversalForLong(tech);
+      if (reversalSignal.probability >= 0.7) {
+        integrationLogger.warn(
+          `⚠️ Strong reversal detected against LONG | probability=${reversalSignal.probability.toFixed(2)} severity=${reversalSignal.severity} reasons=[${reversalSignal.reasons.join(', ')}]`
+        );
+        
+        // Exit immediately on critical reversals
+        if (reversalSignal.severity === 'critical' || reversalSignal.probability >= 0.8) {
+          await executeExitTrade(session, agent, currentPrice, `reversal_detected: ${reversalSignal.severity} (${reversalSignal.reasons[0]})`);
+          return;
+        }
+      }
+    } else if (positionSide === 'short') {
+      const reboundSignal = detectReboundForShort(tech);
+      if (reboundSignal.probability >= 0.7) {
+        integrationLogger.warn(
+          `⚠️ Strong rebound detected against SHORT | probability=${reboundSignal.probability.toFixed(2)} severity=${reboundSignal.severity} reasons=[${reboundSignal.reasons.join(', ')}]`
+        );
+        
+        // Exit immediately on critical rebounds
+        if (reboundSignal.severity === 'critical' || reboundSignal.probability >= 0.8) {
+          await executeExitTrade(session, agent, currentPrice, `rebound_detected: ${reboundSignal.severity} (${reboundSignal.reasons[0]})`);
+          return;
+        }
+      }
+    }
     
     // IMPROVEMENT: Check for exit strategy and apply it
     const exitStrategyData = agentMemoryStore.get<any>('exitStrategy', session.sessionId)?.data;
@@ -1954,6 +2121,20 @@ async function executeExitTrade(
     // Clear position - SUCCESS!
     agent.pos = null;
     logger.info(`[${session.sessionId}] Position cleared after ${attemptNumber} attempt(s)`);
+    
+    // POST-EXIT REVERSAL MONITORING: Watch for immediate reversals after stop-loss
+    if (reason.includes('Stop loss hit') || reason.includes('stop_loss')) {
+      logger.info(`[${session.sessionId}] Stop-loss exit detected - activating reversal monitoring`);
+      
+      // Store exit context for reversal detection
+      agentMemoryStore.update('postExitMonitoring', session.sessionId, {
+        exitPrice,
+        exitTime: Date.now(),
+        exitReason: reason,
+        exitSide: position.side === 'buy' ? 'long' : 'short',
+        monitorUntil: Date.now() + (10 * 60 * 1000), // Monitor for 10 minutes
+      });
+    }
 
   } catch (error) {
     logger.error(`[${session.sessionId}] Error executing exit trade (attempt ${agent?.pos?.exitAttempts || 1}):`, error);
