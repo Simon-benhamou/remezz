@@ -787,21 +787,6 @@ async function executeEntryTrade(
 
       console.log(`[MetaOrchestrator.executeEntryTrade] Got broker, fetching balance...`);
 
-      // BUG FIX: Check if market conditions are hostile before placing order
-      if (cachedMarketQuality && cachedSentiment && executionPlan && marketLooksHostile(cachedMarketQuality, cachedSentiment, side, executionPlan)) {
-        integrationLogger.warn('Market conditions hostile - blocking trade');
-        console.log(`[MetaOrchestrator.executeEntryTrade] BLOCKED: hostile market conditions`);
-        await logTradeEvaluation({
-          symbol: session.symbol,
-          decision: 'order_blocked_capital',
-          blockedReason: 'hostile_market_conditions',
-          confidenceScore: signal.confidence,
-          inputMetrics: buildSupportInputMetrics(),
-          regimeContext: calculateRegimeContext(tech),
-        }).catch(err => console.warn('Failed to log hostile market block:', err));
-        return;
-      }
-
       // Get account balance for position sizing from capital pool
       const balance = await withLogging(
         integrationLogger,
@@ -1584,7 +1569,7 @@ async function executeExitTrade(
         where: { sessionId: session.sessionId },
         select: { qty: true },
       });
-      if (dbPosition && dbPosition.qty > 0) {
+      if (dbPosition && dbPosition.qty !== null && dbPosition.qty > 0) {
         actualQty = dbPosition.qty;
         if (Math.abs(actualQty - position.qty) > 0.0001) {
           logger.warn(`[${session.sessionId}] Position qty mismatch: agent.pos=${position.qty}, db=${actualQty}, using db value`);

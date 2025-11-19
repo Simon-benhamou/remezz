@@ -149,7 +149,6 @@ export class AgentsHub {
   async cleanupInactiveSessions(): Promise<number> {
     try {
       const activeSessions = await prisma.agentSession.findMany({
-        where: { status: 'ACTIVE' },
         select: { id: true },
       });
       const activeIds = new Set(activeSessions.map(s => s.id));
@@ -158,7 +157,6 @@ export class AgentsHub {
       for (const [sessionId, agent] of this.agents.entries()) {
         if (!activeIds.has(sessionId)) {
           this.agents.delete(sessionId);
-          this.removeSymbolSession(agent?.profile?.symbol ?? null, sessionId);
           cleaned++;
         }
       }

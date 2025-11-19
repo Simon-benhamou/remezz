@@ -135,7 +135,6 @@ export async function releaseEntryLock(sessionId: string, reason?: string | null
 export async function cleanupStaleEntryLocks(maxAgeMs = 5 * 60_000): Promise<number> {
   try {
     const sessions = await prisma.agentSession.findMany({
-      where: { status: 'ACTIVE' },
       select: { id: true, profileJson: true },
     });
     

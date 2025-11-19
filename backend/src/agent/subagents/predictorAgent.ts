@@ -61,9 +61,10 @@ export class DefaultPredictorAgent implements PredictorAgent {
     const learning = await getSubagentTuning('predictor', symbol);
     // BUG FIX: Remove personal predictor cache, always use fresh data
     // This ensures predictions are always up-to-date with latest market conditions
+    const forceFresh = learning?.forceFresh ?? false;
 
     try {
-      const prediction = await getPrediction(symbol, features);
+      const prediction = await getPrediction(features);
 
       const bias: PredictorInsight['bias'] =
         prediction.decision === 'long'
