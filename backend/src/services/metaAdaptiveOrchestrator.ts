@@ -44,6 +44,7 @@ import { getConfig } from '../utils/env.js';
 import { calculateFeeUsd } from '../quantai/executionCosts.js';
 import { canFlipPosition, recordPositionFlip } from './positionFlipTracker.js';
 import { activateEntryLock, releaseEntryLock, isRotationLockActive } from './sessionLocks.js';
+import { applyCorrelationConstraints } from './correlationManager.js';
 
 const logger = createLogger('meta-adaptive');
 
@@ -961,7 +962,7 @@ async function executeEntryTrade(
         capitalAllocationOverrides.minPositionUsd || 0,
         baseAllocationCap * supportScale,
       );
-      const maxPositionMargin = Math.min(equityUsd, supportAdjustedAllocation);
+      let maxPositionMargin = Math.min(equityUsd, supportAdjustedAllocation);
       if (!(maxPositionMargin > 0)) {
         integrationLogger.warn('Support-scaled allocation produced zero budget', {
           baseAllocationCap,
@@ -1022,6 +1023,26 @@ async function executeEntryTrade(
       integrationLogger.info(
         `Position sizing | equity=$${equityUsd.toFixed(0)} baseCap=$${baseAllocationCap.toFixed(0)} supportScale=${supportScale.toFixed(2)} adjCap=$${maxPositionMargin.toFixed(0)} strategy=${executionPlan.strategy}`,
       );
+      
+      // IMPROVEMENT: Apply correlation constraints to prevent over-concentration in correlated assets
+      const correlationResult = await applyCorrelationConstraints(
+        session.symbol,
+        maxPositionMargin,
+        riskLimits.maxPositionUsd
+      );
+      
+      if (correlationResult.totalReduction > 0) {
+        integrationLogger.info(
+          `Correlation constraint applied | original=$${maxPositionMargin.toFixed(0)} adjusted=$${correlationResult.adjustedAllocationUsd.toFixed(0)} reduction=$${correlationResult.totalReduction.toFixed(0)} constraints=${correlationResult.constraints.length}`,
+        );
+        // Apply the reduction
+        maxPositionMargin = correlationResult.adjustedAllocationUsd;
+        
+        // Log constraints
+        for (const constraint of correlationResult.constraints) {
+          integrationLogger.info(`  - ${constraint.reason}`);
+        }
+      }
       
       // Dynamic leverage based on confidence: high confidence = higher leverage
       // confidence range: 0.50-1.0 (filters block below 0.50)

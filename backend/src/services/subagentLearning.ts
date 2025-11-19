@@ -11,7 +11,7 @@ const WINDOW_WEIGHTS: Record<number, number> = { 60: 3, 360: 2, 1440: 1 };
 const DEFAULT_WINDOW_WEIGHT = 1;
 const SUBAGENT_EVENT = 'learning.subagents';
 
-export type SubagentKind = 'risk_governor' | 'execution' | 'predictor' | 'sentiment' | 'market_quality';
+export type SubagentKind = 'risk_governor' | 'execution' | 'predictor' | 'sentiment' | 'market_quality' | 'entry_timing' | 'exit_strategy';
 
 type LedgerRow = NonNullable<Awaited<ReturnType<typeof prisma.agentPerformanceLedger.findFirst>>>;
 
@@ -68,12 +68,34 @@ export type MarketQualityLearningRecommendation = {
   confidence: number;
 };
 
+export type EntryTimingLearningRecommendation = {
+  defaultAction: 'immediate' | 'wait_pullback' | 'wait_confirmation';
+  aggressivenessMultiplier: number;
+  pullbackThresholdBps: number;
+  confirmationBars: number;
+  confidence: number;
+};
+
+export type ExitStrategyLearningRecommendation = {
+  firstExitR: number;
+  firstExitPct: number;
+  secondExitR: number;
+  secondExitPct: number;
+  trailingAtrMult: number;
+  trailingActivationR: number;
+  maxHoldHours: number;
+  lockProfitR: number;
+  confidence: number;
+};
+
 export type SubagentLearningRecommendations = {
   risk_governor: RiskLearningRecommendation;
   execution: ExecutionLearningRecommendation;
   predictor: PredictorLearningRecommendation;
   sentiment: SentimentLearningRecommendation;
   market_quality: MarketQualityLearningRecommendation;
+  entry_timing: EntryTimingLearningRecommendation;
+  exit_strategy: ExitStrategyLearningRecommendation;
 };
 
 type SubagentLearningRecord<K extends SubagentKind> = {
@@ -98,6 +120,8 @@ export type SubagentLearningSnapshot = {
     predictor: Array<SubagentLearningRecord<'predictor'>>;
     sentiment: Array<SubagentLearningRecord<'sentiment'>>;
     marketQuality: Array<SubagentLearningRecord<'market_quality'>>;
+    entryTiming: Array<SubagentLearningRecord<'entry_timing'>>;
+    exitStrategy: Array<SubagentLearningRecord<'exit_strategy'>>;
   };
 };
 
@@ -388,6 +412,96 @@ function deriveMarketQualityRecommendation(agg: SymbolAggregate): { tuning: Mark
   };
 }
 
+function deriveEntryTimingRecommendation(agg: SymbolAggregate): { tuning: EntryTimingLearningRecommendation; reason: string } {
+  // Analyze entry timing patterns from performance data
+  // High win rate + low drawdown = aggressive immediate entries work well
+  // Low win rate or high drawdown = more caution needed
+  
+  let defaultAction: 'immediate' | 'wait_pullback' | 'wait_confirmation';
+  if (agg.winRate > 0.6 && agg.normalizedScore > 0.2) {
+    defaultAction = 'immediate';
+  } else if (agg.winRate < 0.5 || (agg.avgDrawdownPct ?? 0) > 12) {
+    defaultAction = 'wait_confirmation';
+  } else {
+    defaultAction = 'wait_pullback';
+  }
+  
+  // Aggressiveness based on performance: better performance = more aggressive sizing
+  const aggressivenessMultiplier = Number(clamp(0.8 + agg.normalizedScore * 0.5, 0.5, 1.5).toFixed(2));
+  
+  // Pullback threshold: higher slippage = wait for bigger pullbacks
+  const pullbackThresholdBps = Math.round(clamp(15 + (agg.avgSlippageBps ?? 0) * 0.5, 10, 30));
+  
+  // Confirmation bars: lower win rate = need more confirmation
+  const confirmationBars = agg.winRate > 0.55 ? 1 : 2;
+  
+  const confidence = Number(clamp(agg.tradeCount / 30, 0.2, 1).toFixed(3));
+  const reason = `action=${defaultAction}|aggr=${aggressivenessMultiplier.toFixed(2)}x|winRate=${(agg.winRate * 100).toFixed(1)}%`;
+  
+  return {
+    tuning: {
+      defaultAction,
+      aggressivenessMultiplier,
+      pullbackThresholdBps,
+      confirmationBars,
+      confidence,
+    },
+    reason,
+  };
+}
+
+function deriveExitStrategyRecommendation(agg: SymbolAggregate): { tuning: ExitStrategyLearningRecommendation; reason: string } {
+  // Analyze optimal exit strategies from historical performance
+  // High win rate + good score = let winners run (higher R-multiples)
+  // Lower win rate = take profits earlier
+  
+  // First partial exit: scale based on performance
+  const firstExitR = Number(clamp(agg.winRate > 0.6 ? 2.5 : 2.0, 1.5, 3.5).toFixed(1));
+  const firstExitPct = 0.33; // Always exit 33% on first target
+  
+  // Second partial exit: winners go higher
+  const secondExitR = Number(clamp(agg.normalizedScore > 0.2 ? 4.5 : 3.5, 3.0, 6.0).toFixed(1));
+  const secondExitPct = 0.33; // Exit another 33%
+  
+  // Trailing stop: wider in volatile markets, tighter in stable
+  const trailingAtrMult = Number(clamp(
+    (agg.avgDrawdownPct ?? 0) > 15 ? 1.5 : 1.0,
+    0.8,
+    2.0
+  ).toFixed(1));
+  
+  // Activate trailing stop after first target hit
+  const trailingActivationR = Number(clamp(firstExitR * 0.9, 1.5, 3.0).toFixed(1));
+  
+  // Max hold time: extend for winning symbols, reduce for losers
+  const maxHoldHours = Math.round(clamp(
+    agg.normalizedScore > 0.15 ? 48 : agg.normalizedScore < -0.1 ? 18 : 24,
+    12,
+    72
+  ));
+  
+  // Lock profit threshold: tighten stop when this R-multiple reached
+  const lockProfitR = Number(clamp(firstExitR * 1.2, 2.0, 4.0).toFixed(1));
+  
+  const confidence = Number(clamp(agg.tradeCount / 40, 0.25, 1).toFixed(3));
+  const reason = `exits=${firstExitR}R/${secondExitR}R|trail=${trailingAtrMult}xATR|maxHold=${maxHoldHours}h`;
+  
+  return {
+    tuning: {
+      firstExitR,
+      firstExitPct,
+      secondExitR,
+      secondExitPct,
+      trailingAtrMult,
+      trailingActivationR,
+      maxHoldHours,
+      lockProfitR,
+      confidence,
+    },
+    reason,
+  };
+}
+
 async function persistLearning(records: Array<SubagentLearningRecord<SubagentKind>>) {
   if (!records.length) return;
   const chunkSize = 25;
@@ -451,6 +565,8 @@ export async function refreshSubagentLearning(reason = 'manual'): Promise<Subage
   const predictorRecords: Array<SubagentLearningRecord<'predictor'>> = [];
   const sentimentRecords: Array<SubagentLearningRecord<'sentiment'>> = [];
   const marketRecords: Array<SubagentLearningRecord<'market_quality'>> = [];
+  const entryTimingRecords: Array<SubagentLearningRecord<'entry_timing'>> = [];
+  const exitStrategyRecords: Array<SubagentLearningRecord<'exit_strategy'>> = [];
 
   for (const agg of aggregates) {
     const normalizedSymbol = agg.symbol.toUpperCase();
@@ -522,6 +638,32 @@ export async function refreshSubagentLearning(reason = 'manual'): Promise<Subage
       tuning: market.tuning,
       reason: market.reason,
     });
+
+    const entryTiming = deriveEntryTimingRecommendation(agg);
+    entryTimingRecords.push({
+      subagent: 'entry_timing',
+      symbol: normalizedSymbol,
+      mode: normalizedMode,
+      regime: normalizedRegime,
+      score: agg.normalizedScore,
+      sampleCount: agg.tradeCount,
+      metrics,
+      tuning: entryTiming.tuning,
+      reason: entryTiming.reason,
+    });
+
+    const exitStrategy = deriveExitStrategyRecommendation(agg);
+    exitStrategyRecords.push({
+      subagent: 'exit_strategy',
+      symbol: normalizedSymbol,
+      mode: normalizedMode,
+      regime: normalizedRegime,
+      score: agg.normalizedScore,
+      sampleCount: agg.tradeCount,
+      metrics,
+      tuning: exitStrategy.tuning,
+      reason: exitStrategy.reason,
+    });
   }
 
   const allRecords: Array<SubagentLearningRecord<SubagentKind>> = [
@@ -530,6 +672,8 @@ export async function refreshSubagentLearning(reason = 'manual'): Promise<Subage
     ...predictorRecords,
     ...sentimentRecords,
     ...marketRecords,
+    ...entryTimingRecords,
+    ...exitStrategyRecords,
   ];
 
   await persistLearning(allRecords);
@@ -545,6 +689,8 @@ export async function refreshSubagentLearning(reason = 'manual'): Promise<Subage
       predictor: predictorRecords.slice(0, 24),
       sentiment: sentimentRecords.slice(0, 24),
       marketQuality: marketRecords.slice(0, 24),
+      entryTiming: entryTimingRecords.slice(0, 24),
+      exitStrategy: exitStrategyRecords.slice(0, 24),
     },
   };
 
