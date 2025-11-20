@@ -1,10 +1,9 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Space, Button, Tag, List, Badge, Typography, Alert } from 'antd';
+import { Card, Row, Col, Statistic, Space, Button, Tag, List, Badge, Typography, Alert, Table, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import JobsStatusPanel from '../components/JobsStatusPanel';
 import { useMode } from '../contexts/ModeContext';
-import { useOpsJobs } from '../hooks/useOpsJobs';
+import PerformanceChart from '../components/PerformanceChart';
 import { 
   RobotOutlined, 
   DollarOutlined, 
@@ -15,7 +14,10 @@ import {
   PlusOutlined,
   EyeOutlined,
   FireOutlined,
-  BulbOutlined
+  BulbOutlined,
+  LineChartOutlined,
+  ThunderboltFilled,
+  SwapOutlined
 } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
@@ -23,19 +25,36 @@ const { Title, Text } = Typography;
 export default function DashboardPageCompact(){
   const [ov, setOv] = React.useState<any>({});
   const [loading, setLoading] = React.useState<boolean>(true);
+  const [trades, setTrades] = React.useState<any[]>([]);
+  const [optimizing, setOptimizing] = React.useState<boolean>(false);
   const navigate = useNavigate();
   const { mode } = useMode();
-  const { jobs, loading: jobsLoading, refresh: refreshJobs } = useOpsJobs({ autoRefreshMs: 30000, enableLive: true });
   
   async function load(){
     setLoading(true);
     try {
-      const res = await api.overview(mode);
-      setOv(res || {});
+      const [overviewRes, tradesRes] = await Promise.all([
+        api.overview(mode),
+        api.get('/trades/recent?limit=20').catch(() => ({ data: [] }))
+      ]);
+      setOv(overviewRes || {});
+      setTrades(tradesRes?.data || []);
     } catch(err){
       console.error(err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runOptimizer(){
+    setOptimizing(true);
+    try {
+      await api.post('/optimizer/run-all');
+      message.success('Optimizer launched for all symbols!');
+    } catch(err: any){
+      message.error(err?.response?.data?.error || 'Failed to run optimizer');
+    } finally {
+      setOptimizing(false);
     }
   }
 
@@ -68,6 +87,14 @@ export default function DashboardPageCompact(){
           </Tag>
         </Title>
         <Space>
+          <Button 
+            icon={<ThunderboltFilled />} 
+            onClick={runOptimizer} 
+            loading={optimizing}
+            type="default"
+          >
+            Run Optimizer (All Symbols)
+          </Button>
           <Button onClick={load} loading={loading}>Refresh</Button>
           <Button type="primary" onClick={() => navigate('/sessions')}>
             <PlusOutlined /> New Agent
@@ -118,6 +145,118 @@ export default function DashboardPageCompact(){
               title={<Text type="secondary" style={{ fontSize: 11 }}><BulbOutlined /> AI Calls</Text>}
               value={Number(ov?.aiCallsTotal || 0)}
               valueStyle={{ fontSize: 22, color: '#722ed1' }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      {/* Performance Chart */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col span={24}>
+          <Card 
+            size="small"
+            title={<Space><LineChartOutlined /> Performance Chart</Space>}
+          >
+            <PerformanceChart mode={mode} height={300} />
+          </Card>
+        </Col>
+      </Row>
+
+      {/* Recent Trades Table */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col span={24}>
+          <Card 
+            size="small"
+            title={<Space><SwapOutlined /> Recent Trades ({trades.length})</Space>}
+          >
+            <Table
+              size="small"
+              dataSource={trades}
+              loading={loading}
+              pagination={{ pageSize: 10, showSizeChanger: false }}
+              scroll={{ x: 800 }}
+              columns={[
+                {
+                  title: 'Symbol',
+                  dataIndex: 'symbol',
+                  key: 'symbol',
+                  width: 120,
+                  render: (symbol: string) => <Text strong>{symbol}</Text>
+                },
+                {
+                  title: 'Side',
+                  dataIndex: 'side',
+                  key: 'side',
+                  width: 80,
+                  render: (side: string) => (
+                    <Tag color={side === 'long' ? 'green' : 'red'}>
+                      {side?.toUpperCase()}
+                    </Tag>
+                  )
+                },
+                {
+                  title: 'Entry',
+                  dataIndex: 'entryPrice',
+                  key: 'entryPrice',
+                  width: 100,
+                  render: (price: number) => `$${price?.toFixed(2) || 0}`
+                },
+                {
+                  title: 'Exit',
+                  dataIndex: 'exitPrice',
+                  key: 'exitPrice',
+                  width: 100,
+                  render: (price: number) => price ? `$${price.toFixed(2)}` : '-'
+                },
+                {
+                  title: 'PnL',
+                  dataIndex: 'pnlUsd',
+                  key: 'pnlUsd',
+                  width: 120,
+                  render: (pnl: number) => (
+                    <Text style={{ color: pnl >= 0 ? '#52c41a' : '#ff4d4f', fontWeight: 'bold' }}>
+                      ${pnl?.toFixed(2) || 0} ({((pnl / (pnl >= 0 ? 1 : -1)) * 100).toFixed(1)}%)
+                    </Text>
+                  ),
+                  sorter: (a: any, b: any) => (a.pnlUsd || 0) - (b.pnlUsd || 0)
+                },
+                {
+                  title: 'Duration',
+                  dataIndex: 'duration',
+                  key: 'duration',
+                  width: 100,
+                  render: (_: any, record: any) => {
+                    if (!record.exitedAt) return '-';
+                    const ms = new Date(record.exitedAt).getTime() - new Date(record.enteredAt).getTime();
+                    const hours = Math.floor(ms / 3600000);
+                    const mins = Math.floor((ms % 3600000) / 60000);
+                    return `${hours}h ${mins}m`;
+                  }
+                },
+                {
+                  title: 'Status',
+                  dataIndex: 'status',
+                  key: 'status',
+                  width: 100,
+                  render: (status: string) => (
+                    <Tag color={status === 'closed' ? 'default' : status === 'stopped' ? 'orange' : 'blue'}>
+                      {status?.toUpperCase()}
+                    </Tag>
+                  )
+                },
+                {
+                  title: 'Time',
+                  dataIndex: 'enteredAt',
+                  key: 'enteredAt',
+                  width: 120,
+                  render: (time: string) => new Date(time).toLocaleString('en-US', { 
+                    month: 'short', 
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })
+                }
+              ]}
             />
           </Card>
         </Col>
@@ -268,20 +407,6 @@ export default function DashboardPageCompact(){
           </Space>
         </Col>
       </Row>
-
-      {/* Jobs Status - Condensed */}
-      {jobs.length > 0 && (
-        <Row gutter={[16, 16]}>
-          <Col span={24}>
-            <JobsStatusPanel
-              jobs={jobs}
-              loading={jobsLoading}
-              onRefresh={refreshJobs}
-              condensed
-            />
-          </Col>
-        </Row>
-      )}
 
       {/* Quick Actions Footer */}
       <Card size="small" style={{ marginTop: 16, textAlign: 'center' }}>
