@@ -309,7 +309,7 @@ const OperationsDashboardPage: React.FC = () => {
   const [incoherenceSummary, setIncoherenceSummary] = React.useState<IncoherenceSummary | null>(null);
   const [incoherenceLoading, setIncoherenceLoading] = React.useState(false);
   const [incoherenceExporting, setIncoherenceExporting] = React.useState(false);
-  const [viewMode, setViewMode] = React.useState<'overview' | 'positions' | 'agents' | 'performance'>('overview');
+  const [viewMode, setViewMode] = React.useState<'overview' | 'positions' | 'agents' | 'performance' | 'optimizer'>('overview');
   const mode = useAppStore((state) => state.mode);
   const { jobs, loading: jobsLoading, refresh: refreshJobs, lastUpdated: jobsUpdatedAt } = useOpsJobs({ autoRefreshMs: 45000, enableLive: true });
 
@@ -1117,6 +1117,14 @@ const OperationsDashboardPage: React.FC = () => {
           >
             Performance
           </Button>
+          <Button
+            type={viewMode === 'optimizer' ? 'primary' : 'default'}
+            onClick={() => setViewMode('optimizer')}
+            style={{ borderRadius: 8 }}
+            icon={<ThunderboltOutlined />}
+          >
+            Optimizer
+          </Button>
         </Space>
       </Card>
 
@@ -1530,9 +1538,10 @@ const OperationsDashboardPage: React.FC = () => {
       </>
       )}
 
-      {/* Overview Mode: System Status + Strategy Optimizer */}
-      {(viewMode === 'overview') && (
+      {/* Optimizer Mode: Strategy Optimizer */}
+      {(viewMode === 'optimizer' || viewMode === 'overview') && (
       <Row gutter={[24, 24]}>
+        {viewMode === 'overview' && (
         <Col xs={24} xl={10}>
           <Card
             title={<span style={{ color: '#e2e8f0' }}>System status</span>}
@@ -1578,7 +1587,8 @@ const OperationsDashboardPage: React.FC = () => {
             ))}
           </Card>
         </Col>
-        <Col xs={24} xl={14}>
+        )}
+        <Col xs={24} xl={viewMode === 'optimizer' ? 24 : 14}>
           <Card
             title={<span style={{ color: '#e2e8f0' }}>Strategy Optimizer</span>}
             style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
