@@ -136,7 +136,7 @@ export default function DashboardPageCompact(){
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
                 <RobotOutlined style={{ fontSize: 48, marginBottom: 16 }} />
                 <div>No active agents</div>
-                <Button type="primary" style={{ marginTop: 16 }} onClick={() => navigate('/sessions')}>
+                <Button type="primary" style={{ marginTop: 16 }} onClick={() => navigate('/agents')}>
                   Create Agent
                 </Button>
               </div>
@@ -155,7 +155,7 @@ export default function DashboardPageCompact(){
                           transition: 'background 0.2s',
                           border: '1px solid rgba(255, 255, 255, 0.08)'
                         }}
-                        onClick={() => navigate(`/monitor/${session.id}`)}
+                        onClick={() => navigate(`/agents/${session.id}`)}
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)'}
                       >
