@@ -149,14 +149,15 @@ export default function DashboardPageCompact(){
                         style={{ 
                           padding: 12,
                           borderLeft: `3px solid ${session.bias === 'long' ? '#52c41a' : session.bias === 'short' ? '#ff4d4f' : '#d9d9d9'}`,
-                          backgroundColor: '#fafafa',
+                          backgroundColor: 'rgba(255, 255, 255, 0.04)',
                           borderRadius: 4,
                           cursor: 'pointer',
-                          transition: 'background 0.2s'
+                          transition: 'background 0.2s',
+                          border: '1px solid rgba(255, 255, 255, 0.08)'
                         }}
                         onClick={() => navigate(`/monitor/${session.id}`)}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f0f0f0'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#fafafa'}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)'}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                           <Text strong>{session.symbol}</Text>
