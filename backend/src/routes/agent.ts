@@ -1328,7 +1328,7 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
           };
 
           if (Number.isFinite(totalUsd) && Number.isFinite(freeUsd)) {
-            updateLiveExchangeBalance({ totalUsd, freeUsd, timestamp: Date.now() });
+            updateLiveExchangeBalance({ totalUsd, freeUsd, timestamp: Date.now() }, req.user.id);
           }
 
           console.log(`📊 Live balance for user ${req.user.id}: $${totalUsd.toFixed(2)} USD`);

@@ -216,7 +216,7 @@ export class AgentsHub {
     }
   }
 
-  private async resolveBroker(
+  private async _resolveBroker(
     session: { id: string; mode: string; startBalanceUsd: number | null; userId: string | null },
     agent: ReboundRejectionAgent | undefined | null,
     needsBroker: boolean,
@@ -230,7 +230,7 @@ export class AgentsHub {
     }
     if (session.mode === 'paper') {
       const base = new PaperBroker(session.startBalanceUsd ?? undefined);
-      const capital = getCapitalManager('paper');
+      const capital = getCapitalManager('paper', session.userId ?? undefined);
       const broker = new CapitalPoolBroker({
         agentId: session.id,
         mode: 'paper',
@@ -242,7 +242,7 @@ export class AgentsHub {
     }
     if (session.mode === 'live' && session.userId) {
       const base = new LiveBroker(session.userId);
-      const capital = getCapitalManager('live');
+      const capital = getCapitalManager('live', session.userId);
       const broker = new CapitalPoolBroker({
         agentId: session.id,
         mode: 'live',
@@ -297,7 +297,7 @@ export class AgentsHub {
         select: { id: true, exchangeOrderId: true, clientOrderId: true },
       });
       const needsBroker = openOrders.length > 0;
-      const { broker, source } = await this.resolveBroker(
+      const { broker, source } = await this._resolveBroker(
         {
           id: session.id,
           mode: session.mode,

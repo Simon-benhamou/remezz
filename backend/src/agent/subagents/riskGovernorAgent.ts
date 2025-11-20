@@ -55,6 +55,7 @@ export class DefaultRiskGovernorAgent implements RiskGovernorAgent {
       select: {
         id: true,
         mode: true,
+        userId: true,
         startBalanceUsd: true,
         profileJson: true,
         positions: {
@@ -114,7 +115,7 @@ export class DefaultRiskGovernorAgent implements RiskGovernorAgent {
             (profilePositionPct ?? this.defaultMaxPositionPct),
         );
 
-    const capitalManager = getCapitalManager(session.mode === 'live' ? 'live' : 'paper');
+    const capitalManager = getCapitalManager(session.mode === 'live' ? 'live' : 'paper', session.userId ?? undefined);
     const poolSnapshot = await capitalManager.getBalance();
     const poolTotalUsd = poolSnapshot.totalUSD.toNumber();
     const poolFreeUsd = poolSnapshot.freeUSD.toNumber();

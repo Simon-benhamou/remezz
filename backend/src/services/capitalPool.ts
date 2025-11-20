@@ -72,12 +72,118 @@ async function loadPersistedPaperBalance(userId?: string): Promise<PreciseDecima
   return fallback;
 }
 
-const paperStore = { snapshot: defaultPaperBalance() };
-const paperProvider = new PaperBalanceProvider(paperStore);
-let paperManualBase = paperStore.snapshot.totalUSD;
-let paperManualFree = paperStore.snapshot.freeUSD;
+// ============================================
+// PER-USER CAPITAL POOL SYSTEM
+// ============================================
 
-const liveStore = {
+type UserCapitalPool = {
+  paperStore: { snapshot: BalanceSnapshot };
+  paperProvider: PaperBalanceProvider;
+  paperManager: CapitalManager;
+  paperManualBase: PreciseDecimal;
+  paperManualFree: PreciseDecimal;
+  liveStore: { snapshot: BalanceSnapshot };
+  liveProvider: LiveBalanceProvider;
+  liveManager: CapitalManager;
+  liveExchangeSnapshot: { totalUSD: PreciseDecimal; freeUSD: PreciseDecimal; ts: number } | null;
+  lastPaperReconcile: number;
+  lastLiveReconcile: number;
+};
+
+const userCapitalPools = new Map<string, UserCapitalPool>();
+
+// Get or create capital pool for a user
+function getUserCapitalPool(userId: string): UserCapitalPool {
+  let pool = userCapitalPools.get(userId);
+  
+  if (!pool) {
+    // Create new capital pool for this user
+    const paperStore = { snapshot: defaultPaperBalance() };
+    const paperProvider = new PaperBalanceProvider(paperStore);
+    
+    const liveStore = {
+      snapshot: {
+        totalUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+        freeUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+        reservedUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+        inPositionsUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+        ts: Date.now(),
+      },
+    };
+    
+    const liveProvider = new LiveBalanceProvider(
+      {
+        getUsdBalance: async () => {
+          const userPool = userCapitalPools.get(userId);
+          if (userPool?.liveExchangeSnapshot) {
+            return { 
+              total: userPool.liveExchangeSnapshot.totalUSD, 
+              free: userPool.liveExchangeSnapshot.freeUSD 
+            };
+          }
+          return { total: ZERO_USD, free: ZERO_USD };
+        },
+      },
+      liveStore,
+    );
+    
+    pool = {
+      paperStore,
+      paperProvider,
+      paperManager: new CapitalManager(paperProvider, capitalConfig, {
+        reservations: new Map<string, Reservation>(),
+        symbolExposure: new Map<string, PreciseDecimal>(),
+        agentEquity: new Map(),
+      }),
+      paperManualBase: paperStore.snapshot.totalUSD,
+      paperManualFree: paperStore.snapshot.freeUSD,
+      liveStore,
+      liveProvider,
+      liveManager: new CapitalManager(liveProvider, capitalConfig, {
+        reservations: new Map<string, Reservation>(),
+        symbolExposure: new Map<string, PreciseDecimal>(),
+        agentEquity: new Map(),
+      }),
+      liveExchangeSnapshot: null,
+      lastPaperReconcile: 0,
+      lastLiveReconcile: 0,
+    };
+    
+    userCapitalPools.set(userId, pool);
+    
+    // Load persisted balance asynchronously
+    loadPersistedPaperBalance(userId).then((balance) => {
+      const userPool = userCapitalPools.get(userId);
+      if (userPool && balance.toNumber() !== userPool.paperManualBase.toNumber()) {
+        const snapshot: BalanceSnapshot = {
+          totalUSD: balance,
+          freeUSD: balance,
+          reservedUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+          inPositionsUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
+          ts: Date.now(),
+        };
+        
+        userPool.paperStore.snapshot = snapshot;
+        userPool.paperManualBase = balance;
+        userPool.paperManualFree = balance;
+        
+        console.log(`✅ Paper balance initialized for user ${userId}: $${balance.toNumber()}`);
+      }
+    }).catch((err) => {
+      console.warn(`⚠️ Failed to initialize paper balance for user ${userId}:`, err);
+    });
+  }
+  
+  return pool;
+}
+
+// Legacy support: global pool for backward compatibility (no userId)
+const legacyPaperStore = { snapshot: defaultPaperBalance() };
+const legacyPaperProvider = new PaperBalanceProvider(legacyPaperStore);
+let legacyPaperManualBase = legacyPaperStore.snapshot.totalUSD;
+let legacyPaperManualFree = legacyPaperStore.snapshot.freeUSD;
+
+const legacyLiveStore = {
   snapshot: {
     totalUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
     freeUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
@@ -87,40 +193,55 @@ const liveStore = {
   },
 };
 
-let liveExchangeSnapshot: { totalUSD: PreciseDecimal; freeUSD: PreciseDecimal; ts: number } | null = null;
+let legacyLiveExchangeSnapshot: { totalUSD: PreciseDecimal; freeUSD: PreciseDecimal; ts: number } | null = null;
 
-const liveProvider = new LiveBalanceProvider(
+const legacyLiveProvider = new LiveBalanceProvider(
   {
     getUsdBalance: async () => {
-      if (liveExchangeSnapshot) {
-        return { total: liveExchangeSnapshot.totalUSD, free: liveExchangeSnapshot.freeUSD };
+      if (legacyLiveExchangeSnapshot) {
+        return { total: legacyLiveExchangeSnapshot.totalUSD, free: legacyLiveExchangeSnapshot.freeUSD };
       }
       return { total: ZERO_USD, free: ZERO_USD };
     },
   },
-  liveStore,
+  legacyLiveStore,
 );
 
-const paperManager = new CapitalManager(paperProvider, capitalConfig, {
+const legacyPaperManager = new CapitalManager(legacyPaperProvider, capitalConfig, {
   reservations: new Map<string, Reservation>(),
   symbolExposure: new Map<string, PreciseDecimal>(),
   agentEquity: new Map(),
 });
 
-const liveManager = new CapitalManager(liveProvider, capitalConfig, {
+const legacyLiveManager = new CapitalManager(legacyLiveProvider, capitalConfig, {
   reservations: new Map<string, Reservation>(),
   symbolExposure: new Map<string, PreciseDecimal>(),
   agentEquity: new Map(),
 });
+
+let legacyLastPaperReconcile = 0;
+let legacyLastLiveReconcile = 0;
 
 const RECONCILE_INTERVAL_MS = 10_000;
-let lastPaperReconcile = 0;
-let lastLiveReconcile = 0;
 
 async function reconcilePaperCapitalFromDb(force = false, userId?: string): Promise<void> {
+  // Use user-specific pool or legacy pool
+  const pool = userId ? getUserCapitalPool(userId) : null;
+  const paperManager = pool?.paperManager ?? legacyPaperManager;
+  const paperProvider = pool?.paperProvider ?? legacyPaperProvider;
+  const paperManualBase = pool?.paperManualBase ?? legacyPaperManualBase;
+  const paperManualFree = pool?.paperManualFree ?? legacyPaperManualFree;
+  
   const now = Date.now();
-  if (!force && now - lastPaperReconcile < RECONCILE_INTERVAL_MS) return;
-  lastPaperReconcile = now;
+  const lastReconcile = pool?.lastPaperReconcile ?? legacyLastPaperReconcile;
+  
+  if (!force && now - lastReconcile < RECONCILE_INTERVAL_MS) return;
+  
+  if (pool) {
+    pool.lastPaperReconcile = now;
+  } else {
+    legacyLastPaperReconcile = now;
+  }
 
   const baseTotal = paperManualBase.toNumber();
   const baseFree = paperManualFree.toNumber();
@@ -203,7 +324,7 @@ async function reconcilePaperCapitalFromDb(force = false, userId?: string): Prom
     
     // Detect discrepancy if difference is more than the equivalent of 1 position at $10 margin
     if (positionsDifference > 10 && totalPositionsCount > 0) {
-      console.warn('⚠️ CAPITAL SYNC WARNING [Paper Mode]:');
+      console.warn(`⚠️ CAPITAL SYNC WARNING [Paper Mode${userId ? ` - User: ${userId}` : ''}]:`);
       console.warn(`  Active Sessions: ${sessions.length}`);
       console.warn(`  Total Positions: ${totalPositionsCount}`);
       console.warn(`  Previous In-Position: $${previousPositionsUsd.toFixed(2)}`);
@@ -228,18 +349,36 @@ async function reconcilePaperCapitalFromDb(force = false, userId?: string): Prom
 
     await paperManager.reseedLedger({ snapshot, exposures });
   } catch (error) {
-    console.warn('⚠️ Failed to reconcile paper capital pool from DB:', error);
+    console.warn(`⚠️ Failed to reconcile paper capital pool${userId ? ` for user ${userId}` : ''} from DB:`, error);
   }
 }
 
-async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
+async function reconcileLiveCapitalFromDb(force = false, userId?: string): Promise<void> {
+  // Use user-specific pool or legacy pool
+  const pool = userId ? getUserCapitalPool(userId) : null;
+  const liveManager = pool?.liveManager ?? legacyLiveManager;
+  const liveProvider = pool?.liveProvider ?? legacyLiveProvider;
+  const liveExchangeSnapshot = pool?.liveExchangeSnapshot ?? legacyLiveExchangeSnapshot;
+  
   const now = Date.now();
-  if (!force && now - lastLiveReconcile < RECONCILE_INTERVAL_MS) return;
-  lastLiveReconcile = now;
+  const lastReconcile = pool?.lastLiveReconcile ?? legacyLastLiveReconcile;
+  
+  if (!force && now - lastReconcile < RECONCILE_INTERVAL_MS) return;
+  
+  if (pool) {
+    pool.lastLiveReconcile = now;
+  } else {
+    legacyLastLiveReconcile = now;
+  }
 
   try {
+    const sessionWhere: any = { mode: 'live', stoppedAt: null };
+    if (userId) {
+      sessionWhere.userId = userId;
+    }
+
     const sessions = await prisma.agentSession.findMany({
-      where: { mode: 'live', stoppedAt: null },
+      where: sessionWhere,
       select: {
         id: true,
         startBalanceUsd: true,
@@ -320,7 +459,7 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
     
     // Detect discrepancy if difference is more than the equivalent of 1 position at $10 margin
     if (positionsDifference > 10 && totalPositionsCount > 0) {
-      console.warn('⚠️ CAPITAL SYNC WARNING [Live Mode]:');
+      console.warn(`⚠️ CAPITAL SYNC WARNING [Live Mode${userId ? ` - User: ${userId}` : ''}]:`);
       console.warn(`  Active Sessions: ${sessions.length}`);
       console.warn(`  Total Positions: ${totalPositionsCount}`);
       console.warn(`  Previous In-Position: $${previousPositionsUsd.toFixed(2)}`);
@@ -345,26 +484,42 @@ async function reconcileLiveCapitalFromDb(force = false): Promise<void> {
 
     await liveManager.reseedLedger({ snapshot, exposures });
   } catch (error) {
-    console.warn('⚠️ Failed to reconcile live capital pool from DB:', error);
+    console.warn(`⚠️ Failed to reconcile live capital pool${userId ? ` for user ${userId}` : ''} from DB:`, error);
   }
 }
 
-export function getCapitalManager(mode: 'paper' | 'live'): CapitalManager {
-  return mode === 'paper' ? paperManager : liveManager;
+export function getCapitalManager(mode: 'paper' | 'live', userId?: string): CapitalManager {
+  if (!userId) {
+    return mode === 'paper' ? legacyPaperManager : legacyLiveManager;
+  }
+  const pool = getUserCapitalPool(userId);
+  return mode === 'paper' ? pool.paperManager : pool.liveManager;
 }
 
 export async function getBalanceSnapshot(mode: 'paper' | 'live', userId?: string): Promise<BalanceSnapshot> {
   if (mode === 'paper') {
     await reconcilePaperCapitalFromDb(false, userId);
-    return paperProvider.getSnapshot();
+    if (!userId) {
+      return legacyPaperProvider.getSnapshot();
+    }
+    const pool = getUserCapitalPool(userId);
+    return pool.paperProvider.getSnapshot();
   }
-  await reconcileLiveCapitalFromDb();
-  return liveProvider.getSnapshot();
+  await reconcileLiveCapitalFromDb(false, userId);
+  if (!userId) {
+    return legacyLiveProvider.getSnapshot();
+  }
+  const pool = getUserCapitalPool(userId);
+  return pool.liveProvider.getSnapshot();
 }
 
 export function listReservations(mode: 'paper' | 'live', userId?: string): Reservation[] {
-  const manager = mode === 'paper' ? paperManager : liveManager;
-  // TODO: Filter reservations by userId when we have multi-user capital managers
+  if (!userId) {
+    const manager = mode === 'paper' ? legacyPaperManager : legacyLiveManager;
+    return manager.listReservations();
+  }
+  const pool = getUserCapitalPool(userId);
+  const manager = mode === 'paper' ? pool.paperManager : pool.liveManager;
   return manager.listReservations();
 }
 
@@ -379,11 +534,22 @@ export async function setPaperBalance(amount: string | number | PreciseDecimal, 
     inPositionsUSD: PreciseDecimal.fromRaw(ZERO_USD.raw),
     ts: Date.now(),
   };
-  paperStore.snapshot = snapshot;
-  paperManualBase = snapshot.totalUSD;
-  paperManualFree = snapshot.freeUSD;
-  await paperManager.clearLedger();
-  lastPaperReconcile = 0;
+  
+  // Update user-specific pool or legacy pool
+  if (userId) {
+    const pool = getUserCapitalPool(userId);
+    pool.paperStore.snapshot = snapshot;
+    pool.paperManualBase = snapshot.totalUSD;
+    pool.paperManualFree = snapshot.freeUSD;
+    await pool.paperManager.clearLedger();
+    pool.lastPaperReconcile = 0;
+  } else {
+    legacyPaperStore.snapshot = snapshot;
+    legacyPaperManualBase = snapshot.totalUSD;
+    legacyPaperManualFree = snapshot.freeUSD;
+    await legacyPaperManager.clearLedger();
+    legacyLastPaperReconcile = 0;
+  }
   
   // Persist paper balance to database for restart resilience
   try {
@@ -429,24 +595,32 @@ export async function setPaperBalance(amount: string | number | PreciseDecimal, 
   return snapshot;
 }
 
-export function updateLiveExchangeBalance(params: { totalUsd: number; freeUsd: number; timestamp?: number }): void {
+export function updateLiveExchangeBalance(params: { totalUsd: number; freeUsd: number; timestamp?: number }, userId?: string): void {
   const totalUsd = Math.max(0, Number(params.totalUsd ?? 0));
   const freeUsd = Math.max(0, Number(params.freeUsd ?? 0));
   if (!Number.isFinite(totalUsd) || !Number.isFinite(freeUsd)) return;
 
-  liveExchangeSnapshot = {
+  const snapshot = {
     totalUSD: toUSD(totalUsd),
     freeUSD: toUSD(Math.min(totalUsd, freeUsd)),
     ts: params.timestamp ?? Date.now(),
   };
-  lastLiveReconcile = 0;
+  
+  if (userId) {
+    const pool = getUserCapitalPool(userId);
+    pool.liveExchangeSnapshot = snapshot;
+    pool.lastLiveReconcile = 0;
+  } else {
+    legacyLiveExchangeSnapshot = snapshot;
+    legacyLastLiveReconcile = 0;
+  }
 }
 
 // Initialize paper balance from database (called on startup)
 export async function initializePaperBalance(): Promise<void> {
   const persistedBalance = await loadPersistedPaperBalance();
   
-  if (persistedBalance.toNumber() !== paperManualBase.toNumber()) {
+  if (persistedBalance.toNumber() !== legacyPaperManualBase.toNumber()) {
     const snapshot: BalanceSnapshot = {
       totalUSD: persistedBalance,
       freeUSD: persistedBalance,
@@ -455,9 +629,9 @@ export async function initializePaperBalance(): Promise<void> {
       ts: Date.now(),
     };
     
-    paperStore.snapshot = snapshot;
-    paperManualBase = persistedBalance;
-    paperManualFree = persistedBalance;
+    legacyPaperStore.snapshot = snapshot;
+    legacyPaperManualBase = persistedBalance;
+    legacyPaperManualFree = persistedBalance;
     
     console.log(`✅ Paper balance initialized from database: $${persistedBalance.toNumber()}`);
   }

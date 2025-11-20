@@ -184,7 +184,7 @@ function describeSignalSuppression(signals: RecognizedStrategySignal[]): string 
  *   - Full diversification
  *   - Progressive confidence: 80%+ usage requires 0.75 confidence
  */
-async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promise<{
+async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live', userId?: string): Promise<{
   totalCapital: number;
   usedCapital: number;
   freeCapital: number;
@@ -193,7 +193,7 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live'): Promi
   maxAllocationPerPosition: number;
   maxPositions: number;
 }> {
-  const capitalManager = getCapitalManager(mode);
+  const capitalManager = getCapitalManager(mode, userId);
   const snapshot = await capitalManager.getBalance();
   
   const totalCapital = snapshot.totalUSD.toNumber();
@@ -477,7 +477,7 @@ async function getBrokerForSession(session: SessionContext): Promise<Broker | nu
   if (session.mode === 'paper') {
     // Don't pass session balance - use shared capital pool instead
     const base = new PaperBroker();
-    const capital = getCapitalManager('paper');
+    const capital = getCapitalManager('paper', session.userId ?? undefined);
     broker = new CapitalPoolBroker({
       agentId: session.sessionId,
       mode: 'paper',
@@ -487,7 +487,7 @@ async function getBrokerForSession(session: SessionContext): Promise<Broker | nu
     });
   } else if (session.mode === 'live' && session.userId) {
     const base = new LiveBroker(session.userId);
-    const capital = getCapitalManager('live');
+    const capital = getCapitalManager('live', session.userId);
     broker = new CapitalPoolBroker({
       agentId: session.sessionId,
       mode: 'live',
@@ -1038,7 +1038,7 @@ async function executeEntryTrade(
         sentimentSignal,
         riskLimits,
       ] = await Promise.all([
-        calculateCapitalUsageAndThresholds(session.mode),
+        calculateCapitalUsageAndThresholds(session.mode, session.userId ?? undefined),
         cachedMarketQuality
           ? Promise.resolve(cachedMarketQuality)
           : agentServices.marketQuality.assess(session.symbol).then((snapshot) => {
