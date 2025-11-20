@@ -60,7 +60,7 @@ export type AgentCreationLogEntry = {
 export type AgentCreationSelectionSummary = {
   symbol: string;
   autoSelected: boolean;
-  source: 'manual' | 'prefetched' | 'candidate' | 'perp_ranking';
+  source: 'manual' | 'prefetched' | 'candidate' | 'perp_ranking' | 'fallback_ranked';
   candidates: string[];
   prefetchedSymbol?: string | null;
   candidateCount?: number;
@@ -386,6 +386,18 @@ export async function prepareAgentCreation(payload: StartPayload, userId?: strin
 
   if (reservationToken && !selection.autoSelected) {
     releaseSmartReservation(reservationToken);
+  }
+
+  // FIX: Invalidate cache after successful selection to force fresh ranking for next agent
+  // This prevents multiple agents from sharing the same exhausted pool
+  if (selection.autoSelected && normalized.isSmartAgent && selection.symbol) {
+    try {
+      const { invalidateAutoUniverseCache } = await import('./intelligentAgent/strategies/core.js');
+      invalidateAutoUniverseCache();
+    } catch (error) {
+      // Non-critical: cache invalidation failure should not block agent creation
+      console.warn('Failed to invalidate auto universe cache:', error);
+    }
   }
 
   const creationId = randomUUID();
@@ -1191,11 +1203,20 @@ async function selectSymbol(
         const edgeQuality = edge / (1 - pNone); // Edge relative to non-none probability
         const qualityScore = directionalClarity * edgeQuality * confidence;
         
-        // Adaptive threshold based on quality score
-        const meetsThreshold = top !== 'none' && 
-          primary >= config.selectionPolicy.minStartEdge && 
-          confidence >= config.selectionPolicy.minStartConfidence &&
-          directionalClarity >= 0.10; // At least 10% stronger than 'none'
+        // FIX: Allow 'none' if confidence is very high (market neutral but confident)
+        // This prevents rejecting BTC/ETH/SOL when predictor is uncertain about direction
+        // but has high confidence in the analysis
+        const allowNeutral = top === 'none' && confidence >= 0.60;
+        
+        // FIX: Reduced directionalClarity threshold from 0.10 (10%) to 0.05 (5%)
+        // More permissive for high-quality majors (BTC/ETH/SOL)
+        const meetsThreshold = (
+          (top !== 'none' && 
+           primary >= config.selectionPolicy.minStartEdge && 
+           confidence >= config.selectionPolicy.minStartConfidence &&
+           directionalClarity >= 0.05) // Reduced from 0.10 to 0.05
+          || allowNeutral // Allow neutral if confidence is high
+        );
         
         const priorScore = qualityScore; // Use quality score for ranking
         return { ok: true, top, primary, edge, confidence, priorScore, qualityScore, directionalClarity } as const;
@@ -1300,10 +1321,13 @@ async function selectSymbol(
               // Enhanced signal validation with quality checks
               const meetsEdge = evalRes.primary >= config.selectionPolicy.minStartEdge;
               const meetsConfidence = evalRes.confidence >= config.selectionPolicy.minStartConfidence;
-              const meetsClarity = (evalRes.directionalClarity ?? 0) >= 0.10; // Direction must be 10%+ stronger than 'none'
+              const meetsClarity = (evalRes.directionalClarity ?? 0) >= 0.05; // FIX: Reduced from 0.10 to 0.05 (5% threshold)
               const isDirectional = evalRes.top !== 'none';
               
-              passSignal = isDirectional && meetsEdge && meetsConfidence && meetsClarity;
+              // FIX: Allow neutral signals if confidence is high (>= 0.60)
+              const allowNeutral = evalRes.top === 'none' && evalRes.confidence >= 0.60;
+              
+              passSignal = (isDirectional && meetsEdge && meetsConfidence && meetsClarity) || allowNeutral;
               
               signalDetails = {
                 top: evalRes.top,
@@ -1366,6 +1390,80 @@ async function selectSymbol(
               error: error instanceof Error ? error.message : String(error),
             },
           });
+        }
+      }
+
+      // FIX 3: Fallback to ranked list without signal check if all candidates rejected
+      // This ensures at least one agent is created with top-ranked crypto (BTC/ETH/SOL)
+      if (!symbol && orderedCandidates.length > 0) {
+        decisionLog.push({
+          timestamp: Date.now(),
+          level: 'warn',
+          message: 'No candidate passed signal quality check. Falling back to ranked list without signal validation...',
+          context: 'selection',
+          meta: { reason: 'all_signals_rejected', candidatesEvaluated: orderedCandidates.length },
+        });
+        
+        for (const candidate of orderedCandidates) {
+          if (excludedSymbols.includes(candidate)) {
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'info',
+              message: `Fallback: Skipped ${candidate} (excluded by batch creation)`,
+              context: 'selection',
+            });
+            continue;
+          }
+          
+          if (reservationToken && isSmartSymbolReserved(candidate, reservationToken)) {
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'info',
+              message: `Fallback: Skipped ${candidate} (reserved)`,
+              context: 'selection',
+            });
+            continue;
+          }
+          
+          const reserved = tryReserveSmartSymbol(candidate, reservationToken);
+          if (!reserved) {
+            decisionLog.push({
+              timestamp: Date.now(),
+              level: 'info',
+              message: `Fallback: Skipped ${candidate} (reservation conflict)`,
+              context: 'selection',
+            });
+            continue;
+          }
+          
+          try {
+            const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken);
+            if (usage === 0) {
+              symbol = candidate;
+              summary.autoSelected = true;
+              summary.source = 'fallback_ranked';
+              decisionLog.push({
+                timestamp: Date.now(),
+                level: 'success',
+                message: `Fallback: Selected ${candidate} from ranked list (no signal validation)`,
+                context: 'selection',
+                meta: { reason: 'fallback_after_rejections', usage },
+              });
+              break;
+            } else {
+              releaseSmartReservation(reservationToken);
+              decisionLog.push({
+                timestamp: Date.now(),
+                level: 'info',
+                message: `Fallback: Skipped ${candidate} (already used by ${usage} agent(s))`,
+                context: 'selection',
+                meta: { usage },
+              });
+            }
+          } catch (error) {
+            releaseSmartReservation(reservationToken);
+            console.warn(`⚠️ Fallback: Failed to check active count for ${candidate}:`, error);
+          }
         }
       }
     }
