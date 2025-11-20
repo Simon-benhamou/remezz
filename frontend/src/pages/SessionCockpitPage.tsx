@@ -1127,7 +1127,7 @@ export default function SessionCockpitPage() {
                   <div className="session-hero-metric">
                     <Statistic
                       title="ROI (realized)"
-                      value={roi}
+                      value={roi*100}
                       precision={2}
                       suffix="%"
                       valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}

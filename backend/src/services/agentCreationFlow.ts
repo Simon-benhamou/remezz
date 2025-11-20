@@ -377,7 +377,7 @@ function getContextOrThrow(creationId: string): AgentCreationContext {
 
 export async function prepareAgentCreation(payload: StartPayload, userId?: string | null) {
   const normalized = await validateAndNormalize(payload, userId);
-  const universe = normalized.isSmartAgent ? await buildSmartUniverse(normalized) : null;
+  const universe = normalized.isSmartAgent ? await buildSmartUniverse(normalized, userId) : null;
   const reservationToken = normalized.isSmartAgent ? randomUUID() : undefined;
   const selection = await selectSymbol(normalized, universe, { 
     reservationToken,
@@ -860,7 +860,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   };
 }
 
-async function buildSmartUniverse(config: NormalizedStartConfig): Promise<UniverseBuildResult> {
+async function buildSmartUniverse(config: NormalizedStartConfig, userId?: string | null): Promise<UniverseBuildResult> {
   const agg = config.aggressiveness;
   let candidateSymbols: string[] = [];
   const diagnostics: AgentCreationLogEntry[] = [];
@@ -896,12 +896,12 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
 
   // Use smart selection orchestrator for optimized selection
   const [listOutcome, prefetchedOutcome] = await Promise.all([
-    runWithTimeout(() => getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile }), SMART_UNIVERSE_BUILD_TIMEOUT_MS),
+    runWithTimeout(() => getOptimizedCryptoList(undefined, 1, { strategy: strategyProfile, userId: userId || undefined }), SMART_UNIVERSE_BUILD_TIMEOUT_MS),
     runWithTimeout(
       async () => {
         try {
           // Try smart orchestrator first (cached, context-aware, faster)
-          const smartResult = await selectBestOpportunity(undefined);
+          const smartResult = await selectBestOpportunity(undefined, { userId: userId || undefined });
           // Return full analysis object as expected by caller
           return smartResult.analysis;
         } catch (error) {
@@ -910,6 +910,7 @@ async function buildSmartUniverse(config: NormalizedStartConfig): Promise<Univer
           return getBestIntelligentOpportunity(undefined, {
             aggressiveness: agg,
             maxUsage: 0,
+            userId: userId || undefined,
           });
         }
       },
@@ -1154,7 +1155,7 @@ async function selectSymbol(
           });
         } else {
           // Only check DB + in-memory reservations after successful reservation
-          const usage = await getActiveAgentCountForSymbol(prefetched.symbol, undefined, reservationToken);
+          const usage = await getActiveAgentCountForSymbol(prefetched.symbol, undefined, reservationToken, config.userId);
           if (usage === 0) {
             symbol = prefetched.symbol;
             summary.autoSelected = true;
@@ -1310,7 +1311,7 @@ async function selectSymbol(
           }
           
           // Only check DB + in-memory reservations after successful reservation
-          const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken);
+          const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken, config.userId);
           let passSignal = true;
           let signalDetails: any = null;
           
@@ -1437,7 +1438,7 @@ async function selectSymbol(
           }
           
           try {
-            const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken);
+            const usage = await getActiveAgentCountForSymbol(candidate, undefined, reservationToken, config.userId);
             if (usage === 0) {
               symbol = candidate;
               summary.autoSelected = true;

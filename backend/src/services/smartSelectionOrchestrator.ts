@@ -111,6 +111,7 @@ async function detectMarketRegime(): Promise<MarketRegime> {
 
 export async function getAdaptiveUniverse(
   excludeSessionId?: string,
+  userId?: string,
   forceRefresh = false
 ): Promise<string[]> {
   const cacheKey = 'main_universe';
@@ -134,7 +135,7 @@ export async function getAdaptiveUniverse(
   logger.info(`Refreshing universe (regime: ${currentRegime}, TTL: ${(ttl / 60000).toFixed(0)}min)`);
   
   // Fetch new universe
-  const symbols = await getOptimizedCryptoList(excludeSessionId);
+  const symbols = await getOptimizedCryptoList(excludeSessionId, 1, { userId });
   
   // Store in cache with regime-specific TTL
   universeCache.set(cacheKey, {
@@ -363,7 +364,10 @@ async function batchAnalyzeOpportunities(
 /**
  * Get best opportunity for a new agent
  */
-export async function selectBestOpportunity(excludeSessionId?: string): Promise<{
+export async function selectBestOpportunity(
+  excludeSessionId?: string,
+  opts?: { userId?: string }
+): Promise<{
   symbol: string;
   score: number;
   confidence: number;
@@ -374,7 +378,7 @@ export async function selectBestOpportunity(excludeSessionId?: string): Promise<
   logger.info('🎯 Selecting best opportunity...');
   
   // Get adaptive universe
-  const universe = await getAdaptiveUniverse(excludeSessionId);
+  const universe = await getAdaptiveUniverse(excludeSessionId, opts?.userId);
   const marketRegime = await detectMarketRegime();
   
   // Batch analyze top opportunities
@@ -484,7 +488,7 @@ export async function evaluateSmartSwitch(
  */
 export async function forceUniverseRefresh(excludeSessionId?: string): Promise<string[]> {
   logger.info('🔄 Force refreshing universe...');
-  return getAdaptiveUniverse(excludeSessionId, true);
+  return getAdaptiveUniverse(excludeSessionId, undefined, true);
 }
 
 /**

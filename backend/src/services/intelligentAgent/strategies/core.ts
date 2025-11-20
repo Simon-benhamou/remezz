@@ -113,6 +113,21 @@ function storeAutoUniverseCache(key: string, result: CachedAutoUniverseResult): 
 }
 
 /**
+ * Invalidate auto universe cache to force fresh ranking for next agent
+ * Used during batch agent creation to prevent pool exhaustion
+ */
+export function invalidateAutoUniverseCache(cacheKey?: string): void {
+  if (cacheKey) {
+    autoUniverseCache.delete(cacheKey);
+    console.log(`🗑️ Invalidated auto universe cache for key: ${cacheKey}`);
+  } else {
+    const size = autoUniverseCache.size;
+    autoUniverseCache.clear();
+    console.log(`🗑️ Cleared entire auto universe cache (${size} entries)`);
+  }
+}
+
+/**
  * Enforce cache size limits using LRU eviction
  */
 function enforceCacheSizeLimits(): void {
@@ -827,9 +842,14 @@ export function normalizeUnifiedSymbol(sym: string): string {
   }
 }
 
-export async function getActiveAgentSymbols(excludeSessionId?: string): Promise<string[]> {
+export async function getActiveAgentSymbols(excludeSessionId?: string, userId?: string): Promise<string[]> {
   try {
     const whereClause: any = { stoppedAt: null };
+
+    // Filter by userId to isolate per-user symbol usage
+    if (userId) {
+      whereClause.userId = userId;
+    }
 
     // Exclude current session being created to avoid self-conflict
     if (excludeSessionId) {
@@ -864,10 +884,18 @@ export async function getActiveAgentSymbols(excludeSessionId?: string): Promise<
 /**
  * Get symbol usage distribution across active agents
  * Returns map of symbol -> count of agents using it
+ * @param excludeSessionId - Session ID to exclude from count
+ * @param userId - Filter by specific user (for per-user isolation)
  */
-export async function getSymbolUsageDistribution(excludeSessionId?: string): Promise<Map<string, number>> {
+export async function getSymbolUsageDistribution(excludeSessionId?: string, userId?: string): Promise<Map<string, number>> {
   try {
     const whereClause: any = { stoppedAt: null };
+    
+    // Filter by userId to isolate per-user symbol usage
+    if (userId) {
+      whereClause.userId = userId;
+    }
+    
     if (excludeSessionId) {
       whereClause.id = { not: excludeSessionId };
     }
@@ -1548,7 +1576,7 @@ async function computeCandidateMetrics(
 export async function getOptimizedCryptoList(
   excludeSessionId?: string,
   attempt: number = 1,
-  options?: { strategy?: StrategyFilterProfile },
+  options?: { strategy?: StrategyFilterProfile; userId?: string },
 ): Promise<string[]> {
   const maxAttempts = AUTO_UNIVERSE_MAX_ATTEMPTS;
   const retryDelayMs = 2000;
@@ -1582,7 +1610,7 @@ export async function getOptimizedCryptoList(
     console.log('📊 Fetching top performing cryptos from last 24h...');
     
     // 🚫 ÉVITER LES CONFLITS: Récupérer les cryptos déjà actives (excluding current session)
-    const activeSymbols = await getActiveAgentSymbols(excludeSessionId);
+    const activeSymbols = await getActiveAgentSymbols(excludeSessionId, options?.userId);
     if (activeSymbols.length > 0) {
       console.log(`🚫 Symbols already active: ${activeSymbols.join(', ')}`);
     }
@@ -3327,7 +3355,7 @@ function calculateConfidence(...scores: number[]): number {
  * 1. Filter by volume → Top 50
  * 2. AI ranking → Best opportunities for 24h
  */
-export async function scanIntelligentOpportunities(excludeSessionId?: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive' }): Promise<IntelligentAnalysis[]> {
+export async function scanIntelligentOpportunities(excludeSessionId?: string, opts?: { aggressiveness?: 'conservative'|'reactive'|'aggressive'; userId?: string }): Promise<IntelligentAnalysis[]> {
   console.log('🔍 Starting AI-powered opportunity scan (2-step pipeline)...');
   
   // Note: AI ranking uses its own sophisticated filtering and doesn't currently
@@ -3344,7 +3372,8 @@ export async function scanIntelligentOpportunities(excludeSessionId?: string, op
     const aiRanked = await getAIRankedOpportunities({ 
       useCache: true, 
       excludeSessionId,
-      aggressiveness
+      aggressiveness,
+      userId: opts?.userId
     });
     
     if (aiRanked.length === 0) {
@@ -3490,11 +3519,16 @@ async function scanIntelligentOpportunitiesLegacy(excludeSessionId?: string, opt
  */
 /**
  * Compte le nombre d'agents actifs sur un symbole spécifique
+ * @param symbol - Symbol to check
+ * @param excludeSessionId - Session ID to exclude from count
+ * @param excludeReservationToken - Reservation token to exclude
+ * @param userId - Filter by specific user (for per-user isolation)
  */
 export async function getActiveAgentCountForSymbol(
   symbol: string, 
   excludeSessionId?: string, 
-  excludeReservationToken?: string
+  excludeReservationToken?: string,
+  userId?: string
 ): Promise<number> {
   try {
     const norm = normalizeUnifiedSymbol(symbol);
@@ -3525,6 +3559,12 @@ export async function getActiveAgentCountForSymbol(
         { currentSymbol: { in: forms } },
       ],
     };
+    
+    // Filter by userId for per-user isolation
+    if (userId) {
+      where.userId = userId;
+    }
+    
     if (excludeSessionId) where.id = { not: excludeSessionId };
     const count = await prisma.agentSession.count({ where });
     
@@ -3543,6 +3583,7 @@ export async function getBestIntelligentOpportunity(
     candidatesOverride?: IntelligentAnalysis[];
     aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
     maxUsage?: number;
+    userId?: string;
   }
 ): Promise<IntelligentAnalysis | null> {
   const testMode = process.env.UNIT_TEST_MODE === 'true';
@@ -3566,7 +3607,7 @@ export async function getBestIntelligentOpportunity(
   // Get usage count for each symbol (how many agents are already active on it)
   const symbolUsageMap = new Map<string, number>();
   for (const opp of opportunities) {
-    const count = await getActiveAgentCountForSymbol(opp.symbol, excludeSessionId);
+    const count = await getActiveAgentCountForSymbol(opp.symbol, excludeSessionId, undefined, opts?.userId);
     symbolUsageMap.set(opp.symbol, count);
   }
   

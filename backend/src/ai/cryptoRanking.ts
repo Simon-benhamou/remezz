@@ -385,6 +385,7 @@ export async function rankCryptosWithAI(
     forceRefresh?: boolean;
     excludeSessionId?: string;
     aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+    userId?: string;
   }
 ): Promise<RankedOpportunity[]> {
   try {
@@ -776,7 +777,7 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
     // ÉTAPE 3B: Apply diversity scoring - penalize over-represented symbols
     console.log('🎯 Applying portfolio diversity adjustments...');
     const { getSymbolUsageDistribution } = await import('../services/intelligentAgent/strategies/core.js');
-    const usage = await getSymbolUsageDistribution(opts?.excludeSessionId);
+    const usage = await getSymbolUsageDistribution(opts?.excludeSessionId, opts?.userId);
     
     ranked.forEach(r => {
       const currentUsage = usage.get(r.symbol) || 0;
@@ -889,6 +890,7 @@ export async function getAIRankedOpportunities(
     forceRefresh?: boolean; 
     excludeSessionId?: string;
     aggressiveness?: 'conservative' | 'reactive' | 'aggressive';
+    userId?: string;
   }
 ): Promise<RankedOpportunity[]> {
   try {
