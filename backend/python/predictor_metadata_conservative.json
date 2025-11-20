@@ -1,0 +1,16 @@
+{
+  "trained_at": "2025-11-20T21:15:17.372616",
+  "n_samples": 411238,
+  "n_features": 17,
+  "label_distribution": {
+    "none": 296541,
+    "short": 57367,
+    "long": 57330
+  },
+  "test_accuracy": 0.6707640307363097,
+  "conservative_thresholds": {
+    "min_movement_pct": 1.2,
+    "lookforward": 5
+  },
+  "usage": "confidence_only_no_gate"
+}

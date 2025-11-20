@@ -1090,19 +1090,48 @@ async function executeEntryTrade(
       // Check capital usage and determine confidence threshold
       integrationLogger.info(`Capital usage | total=$${capitalMetrics.totalCapital.toFixed(0)} used=$${capitalMetrics.usedCapital.toFixed(0)} free=$${capitalMetrics.freeCapital.toFixed(0)} ratio=${(capitalMetrics.usageRatio * 100).toFixed(1)}% maxPos=${capitalMetrics.maxPositions} minConf=${capitalMetrics.minConfidenceRequired}`);
       
+      // 🔥 EXTREME CONDITIONS OVERRIDE
+      // When market shows extreme oversold/overbought conditions, reduce threshold
+      // to allow entry even with lower predictor confidence
+      let adjustedThreshold = capitalMetrics.minConfidenceRequired;
+      const rsi = tech.rsi14;
+      const atrPct = (tech.atr14 / tech.last) * 100;
+      
+      if (rsi < 25 || rsi > 75) {
+        // Extreme RSI: reduce threshold by 35%
+        const originalThreshold = adjustedThreshold;
+        adjustedThreshold = adjustedThreshold * 0.65;
+        integrationLogger.info(`🔥 Extreme RSI override: RSI=${rsi.toFixed(1)} → threshold ${originalThreshold.toFixed(3)} → ${adjustedThreshold.toFixed(3)} (-35%)`);
+      } else if (rsi < 30 || rsi > 70) {
+        // Very oversold/overbought: reduce threshold by 20%
+        const originalThreshold = adjustedThreshold;
+        adjustedThreshold = adjustedThreshold * 0.80;
+        integrationLogger.info(`⚡ Strong RSI override: RSI=${rsi.toFixed(1)} → threshold ${originalThreshold.toFixed(3)} → ${adjustedThreshold.toFixed(3)} (-20%)`);
+      }
+      
+      // Additional volatility boost: if ATR > 100%, conditions are explosive
+      if (atrPct > 100) {
+        const originalThreshold = adjustedThreshold;
+        adjustedThreshold = adjustedThreshold * 0.85;
+        integrationLogger.info(`💥 Extreme volatility boost: ATR=${atrPct.toFixed(1)}% → threshold ${originalThreshold.toFixed(3)} → ${adjustedThreshold.toFixed(3)} (-15%)`);
+      }
+      
       // Progressive confidence check: reject if below threshold
-      if (signal.confidence < capitalMetrics.minConfidenceRequired) {
-        integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${capitalMetrics.minConfidenceRequired} (capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
+      if (signal.confidence < adjustedThreshold) {
+        integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${adjustedThreshold.toFixed(3)} (base=${capitalMetrics.minConfidenceRequired.toFixed(3)}, capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
         
         await logTradeEvaluation({
           symbol: session.symbol,
           decision: 'order_blocked_capital',
-          blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${capitalMetrics.minConfidenceRequired} (capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used)`,
+          blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${adjustedThreshold.toFixed(3)} (base ${capitalMetrics.minConfidenceRequired.toFixed(3)}, capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used, RSI=${rsi.toFixed(1)})`,
           confidenceScore: signal.confidence,
           inputMetrics: {
             ...buildSupportInputMetrics(),
             capitalUsageRatio: capitalMetrics.usageRatio,
             minConfidenceRequired: capitalMetrics.minConfidenceRequired,
+            adjustedThreshold,
+            rsi,
+            atrPct,
           },
         });
         

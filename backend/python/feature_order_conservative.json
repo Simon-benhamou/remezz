@@ -1,0 +1,19 @@
+[
+  "ema9",
+  "ema12",
+  "ema20",
+  "ema26",
+  "ema50",
+  "ema200",
+  "rsi7",
+  "rsi14",
+  "rsiSlope",
+  "macd",
+  "macd_signal",
+  "atr14",
+  "atrPct",
+  "volumeRatio",
+  "momentum10",
+  "adx14",
+  "ema20Slope"
+]

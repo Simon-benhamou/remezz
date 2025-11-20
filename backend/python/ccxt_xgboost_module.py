@@ -163,8 +163,16 @@ class XGBClassifier:  # type: ignore
         self._centroids = mapped
 
 CACHE_DIR = Path(__file__).resolve().parents[1] / "data" / "ccxt_cache"
-MODEL_PATH = Path(__file__).resolve().parent / "xgboost_direction.json"
-FEATURE_PATH = Path(__file__).resolve().parent / "features.txt"
+
+# Priority loading: conservative -> direction (standard)
+_MODEL_CONSERVATIVE = Path(__file__).resolve().parent / "xgboost_model_conservative.json"
+_MODEL_STANDARD = Path(__file__).resolve().parent / "xgboost_direction.json"
+MODEL_PATH = _MODEL_CONSERVATIVE if _MODEL_CONSERVATIVE.exists() else _MODEL_STANDARD
+
+_FEATURE_CONSERVATIVE = Path(__file__).resolve().parent / "feature_order_conservative.json"
+_FEATURE_STANDARD = Path(__file__).resolve().parent / "features.txt"
+FEATURE_PATH = _FEATURE_CONSERVATIVE if _FEATURE_CONSERVATIVE.exists() else _FEATURE_STANDARD
+
 METRICS_PATH = Path(__file__).resolve().parent / "training_metrics.json"
 METADATA_PATH = Path(__file__).resolve().parent / "predictor_metadata.json"
 FORCE_SYNTHETIC = os.environ.get("PREDICTOR_FORCE_SYNTHETIC", "0") == "1"
@@ -1295,8 +1303,13 @@ def save_model_and_features(artifacts: TrainingArtifacts) -> None:
 
 def load_features() -> List[str]:
     if FEATURE_PATH.exists():
+        # If it's a JSON file (conservative), parse it
+        if FEATURE_PATH.suffix == '.json':
+            import json
+            return json.loads(FEATURE_PATH.read_text())
+        # Otherwise it's a text file (standard)
         return [line.strip() for line in FEATURE_PATH.read_text().splitlines() if line.strip()]
-    raise FileNotFoundError("features.txt not found")
+    raise FileNotFoundError(f"Feature file not found: {FEATURE_PATH}")
 
 
 def load_model() -> XGBClassifier:
