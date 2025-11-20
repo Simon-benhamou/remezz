@@ -1241,9 +1241,17 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     if (!req.user?.isLegacy && req.user?.id) {
       sessionWhere.userId = req.user.id;
     }
+    
+    // Count only user's sessions (both active and stopped) for the selected mode
+    const countWhere: any = {};
+    if (modeFilter) countWhere.mode = modeFilter;
+    if (!req.user?.isLegacy && req.user?.id) {
+      countWhere.userId = req.user.id;
+    }
+    
     const [actives, totalSessions] = await Promise.all([
       prisma.agentSession.findMany({ where: sessionWhere, include: { SessionKpi: true, positions: true } }),
-      prisma.agentSession.count({ where: modeFilter ? { mode: modeFilter } : undefined }),
+      prisma.agentSession.count({ where: countWhere }),
     ]);
     const symbols = actives.map(a => a.symbol);
     const aiCallsTotal = actives.reduce((sum, a)=> sum + Number(a.SessionKpi?.aiCallsTotal || 0), 0);

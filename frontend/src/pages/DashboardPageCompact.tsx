@@ -80,9 +80,9 @@ export default function DashboardPageCompact(){
         <Col xs={12} sm={6}>
           <Card size="small" style={{ borderLeft: '3px solid #52c41a' }} hoverable onClick={() => navigate('/sessions')}>
             <Statistic
-              title={<Text type="secondary" style={{ fontSize: 11 }}><RobotOutlined /> Agents</Text>}
+              title={<Text type="secondary" style={{ fontSize: 11 }}><RobotOutlined /> Active Agents</Text>}
               value={ov?.activeCount || 0}
-              suffix={<Text type="secondary" style={{ fontSize: 11 }}>/ {ov?.sessionsCount || 0}</Text>}
+              suffix={<Text type="secondary" style={{ fontSize: 11 }}>active</Text>}
               valueStyle={{ fontSize: 22, color: '#52c41a' }}
             />
           </Card>
