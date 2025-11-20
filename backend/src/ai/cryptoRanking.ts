@@ -517,36 +517,40 @@ export async function rankCryptosWithAI(
       };
     });
     
-    // AI Prompt for ranking - TIER-BASED with quality focus
-    const prompt = `You are a PROFESSIONAL crypto trading selector. Your goal: return a ranked list of symbols that are LIQUID and NEAR ENTRY, balancing quality and opportunity.
+    // AI Prompt for ranking - TIER-BASED with HEAVY bias toward majors
+    const prompt = `You are a PROFESSIONAL crypto trading selector. Your goal: return a ranked list of symbols that are LIQUID and NEAR ENTRY, HEAVILY FAVORING ESTABLISHED MAJORS.
 
-🎯 CRITICAL: Prioritize QUALITY and REPUTATION over raw movement percentage.
+🎯 CRITICAL PRIORITY RULES:
+1. BTC/ETH/SOL should ALWAYS rank in top 5 if they have ANY reasonable setup
+2. XRP/BNB/ADA/AVAX should rank in top 10 if conditions are acceptable
+3. Unknown tier4 coins (PUMP, ALLO, MET, etc.) should be HEAVILY PENALIZED
+4. Quality and reliability >>> raw movement percentage
 
 📊 TIER SYSTEM (Quality-based classification):
 
-**TIER 1 - BLUE CHIPS** (Highest priority):
+**TIER 1 - BLUE CHIPS** (ALWAYS PRIORITIZE):
 - BTC, ETH, SOL
 - Characteristics: >$500M daily volume, highest liquidity, lowest risk
-- Accept movements: ≥0.2% (even small moves are significant)
-- Score adjustment: +1.5 bonus
+- Accept movements: ≥0.15% (even tiny moves are tradeable)
+- Score adjustment: +3.0 MASSIVE bonus (basically guaranteed top 3)
 
-**TIER 2 - MAJOR ESTABLISHED** (High priority):
+**TIER 2 - MAJOR ESTABLISHED** (STRONG PREFERENCE):
 - XRP, BNB, ADA, DOGE, MATIC, TRX, LTC, DOT, SHIB, AVAX, LINK, UNI, ATOM, etc.
 - Characteristics: >$30M daily volume, well-established, good liquidity
-- Accept movements: ≥0.3%
-- Score adjustment: +0.8 bonus
+- Accept movements: ≥0.25%
+- Score adjustment: +1.5 strong bonus (target top 10)
 
-**TIER 3 - PROMISING ALTS** (Moderate priority):
+**TIER 3 - PROMISING ALTS** (ACCEPTABLE):
 - NEAR, SUI, APT, ARB, OP, AAVE, FET, ICP, HBAR, TAO, etc.
 - Characteristics: >$5M daily volume, established projects, moderate risk
 - Accept movements: ≥0.5%
-- Score adjustment: +0.3 bonus
+- Score adjustment: +0.5 moderate bonus
 
-**TIER 4 - SMALL CAPS** (Accept if tradeable):
-- Smaller market cap coins with growth potential
-- Characteristics: <$5M volume but still liquid enough
-- Accept if: ≥0.8% movement AND good technicals (ADX >15, volumeRatio >0.7)
-- Score adjustment: 0 (neutral, evaluate on merit)
+**TIER 4 - SMALL CAPS** (AVOID UNLESS EXCEPTIONAL):
+- Unknown/exotic coins (PUMP, ALLO, PIEVERSE, etc.)
+- Characteristics: <$10M volume, high risk, low reliability
+- Accept ONLY if: ≥1.5% movement AND excellent technicals (ADX >25, volumeRatio >1.2)
+- Score adjustment: -2.0 PENALTY (push to bottom of list)
 
 🎯 RANKING CRITERIA (weighted by importance):
 
@@ -597,15 +601,15 @@ RESPOND WITH STRICT JSON (array of top 20 opportunities):
 }
 
 ⚠️ CRITICAL RULES:
-- Return AT LEAST 15-20 opportunities to ensure good selection
-- Blue chips (BTC/ETH/SOL) should rank highly if they have reasonable setups
-- Don't over-filter - we need OPTIONS for the agent to choose from
-- Tier 4 coins are OK if technicals are solid (ADX >15, volumeRatio >0.7)
-- Return TOP 20-25 opportunities ranked by QUALITY-ADJUSTED score
-- Score formula: baseScore + tierBonus
+- Return AT LEAST 15-20 opportunities
+- BTC/ETH/SOL MUST be in top 5 if they have ANY tradeable setup (even 0.2% move)
+- XRP/BNB/ADA should be in top 10 if conditions are reasonable
+- Tier 4 coins should rank BELOW 15th place unless EXCEPTIONAL (ADX >30, volumeRatio >1.5, movement >2%)
+- Return TOP 20-25 opportunities ranked by QUALITY-FIRST approach
+- Score formula: baseScore + MASSIVE_tierBonus (tier1=+3.0, tier2=+1.5, tier4=-2.0)
 - Reasons must be concise (1-2 sentences max per reason)
-- Include a MIX of tiers for diversity
-- IMPORTANT: Even if a crypto has low movement, include it if technicals are excellent`;
+- BIAS heavily toward tier1/tier2, tier4 is last resort only
+- A tier1 with weak technicals >>> tier4 with strong technicals`;
 
     console.log('🤖 Sending to AI for ranking...');
     

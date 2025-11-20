@@ -11,7 +11,7 @@ import IntelligencePage from './pages/IntelligencePage';
 import LearningInsightsPage from './pages/LearningInsightsPage';
 import PortfolioViewPage from './pages/PortfolioViewPage';
 import LoginPage from './pages/LoginPage';
-import OperationsDashboardPage from './pages/OperationsDashboardPage';
+import OperationsDashboardPage from './pages/DashboardPageCompact';
 import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';

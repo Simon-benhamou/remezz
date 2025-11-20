@@ -38,20 +38,21 @@ export type StrategyCompatibility = {
 };
 
 // Crypto tiers based on liquidity and reliability
+// HEAVILY FAVOR MAJORS: BTC/ETH/SOL get massive boost, tier4 gets penalty
 const TIER_DEFINITIONS = {
   tier1: {
     symbols: ['BTC', 'ETH', 'SOL'],
     minVolume: 500_000_000, // $500M+
     description: 'Blue chips - highest quality',
-    scoreBonus: 0.15,
-    minATR: 0.5, // Lower requirement for blue chips
+    scoreBonus: 0.35, // INCREASED from 0.15 → 0.35 (huge advantage)
+    minATR: 0.4, // Lower requirement for blue chips
   },
   tier2: {
     symbols: ['XRP', 'BNB', 'ADA', 'DOGE', 'MATIC', 'TRX', 'LTC', 'DOT', 'SHIB', 
               'AVAX', 'LINK', 'UNI', 'ATOM', 'BCH', 'XLM', 'ETC', 'ICP'],
     minVolume: 30_000_000, // $30M+
     description: 'Major established coins',
-    scoreBonus: 0.08,
+    scoreBonus: 0.20, // INCREASED from 0.08 → 0.20 (strong preference)
     minATR: 0.8,
   },
   tier3: {
@@ -59,15 +60,15 @@ const TIER_DEFINITIONS = {
               'RENDER', 'INJ', 'SEI', 'TIA', 'WLD', 'PEPE', 'FTM', 'ALGO'],
     minVolume: 10_000_000, // $10M+
     description: 'Promising alts',
-    scoreBonus: 0.03,
+    scoreBonus: 0.05, // Slight bump from 0.03
     minATR: 1.0,
   },
   tier4: {
-    symbols: [], // Everything else
-    minVolume: 5_000_000, // $5M+ minimum
+    symbols: [], // Everything else (PUMP, ALLO, etc.)
+    minVolume: 8_000_000, // $8M+ minimum (stricter)
     description: 'Small caps - high risk',
-    scoreBonus: 0,
-    minATR: 1.2,
+    scoreBonus: -0.15, // PENALTY: tier4 gets negative score
+    minATR: 1.5, // Higher volatility requirement
   },
 };
 

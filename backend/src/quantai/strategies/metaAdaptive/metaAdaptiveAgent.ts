@@ -2403,9 +2403,73 @@ class MetaAdaptiveStrategyAgent {
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
       }
       if (!context.conflict && item.family === 'mean_reversion') {
-        const suppress = clamp(1 - context.alignmentScore * 0.5, 0.4, 1);
-        effectiveScore *= suppress;
-        if (context.alignmentScore > 0.6) penaltiesApplied.push('htf_trend_dominant');
+        // Mean reversion suppressed in aligned trends UNLESS it's a "buy the dip" setup
+        // Buy the dip: strong uptrend + price near EMA20 (pullback in uptrend)
+        const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.015 : false;
+        const nearEma50 = price > 0 && ema50 > 0 ? Math.abs((price - ema50) / price) < 0.02 : false;
+        const inStrongUptrend = context.bullishStack && context.alignmentScore >= 0.88;
+        const inStrongDowntrend = !context.bullishStack && context.alignmentScore >= 0.88;
+        
+        // 🛡️ ADDITIONAL SAFETY CHECKS: Avoid knife catching during corrections
+        // 1. RSI must show oversold (buy) or overbought (sell) - confirms correction depth
+        const rsiOversold = rsi != null && rsi < 35;  // Deep pullback in uptrend
+        const rsiOverbought = rsi != null && rsi > 65; // Rally in downtrend
+        
+        // 2. Price must be ABOVE EMAs for buy (structure intact), BELOW for sell
+        const structureIntact = inStrongUptrend 
+          ? (price > ema20 || Math.abs((price - ema20) / price) < 0.008) // At or just above EMA20
+          : (price < ema20 || Math.abs((price - ema20) / price) < 0.008); // At or just below EMA20
+        
+        // 3. Volume confirmation: Current volume should be declining (correction exhaustion)
+        //    OR strong volume spike on reversal candle (accumulation/distribution)
+        const volumeExhaustion = volumeRatio < 0.8; // Volume declining (computed earlier in evaluate)
+        const volumeReversal = volumeRatio > 1.3;  // Strong reversal volume
+        const volumeConfirmed = volumeExhaustion || volumeReversal;
+        
+        // 4. ADX must be in "correction range" (8-16) - not too weak, not too strong
+        const adxInCorrectionRange = adx >= 8 && adx <= 16;
+        
+        const isBuyTheDip = inStrongUptrend 
+          && (nearEma20 || nearEma50) 
+          && item.bias === 'long'
+          && (rsiOversold || adx < 20) // RSI oversold OR low ADX
+          && structureIntact
+          && volumeConfirmed;
+          
+        const isSellTheRally = inStrongDowntrend 
+          && (nearEma20 || nearEma50) 
+          && item.bias === 'short'
+          && (rsiOverbought || adx < 20)
+          && structureIntact
+          && volumeConfirmed;
+        
+        if (isBuyTheDip || isSellTheRally) {
+          // Allow mean reversion for confirmed "buy the dip" / "sell the rally" setups
+          // Multiple confirmations reduce risk of knife catching
+          let boost = 1.0;
+          
+          // Higher confidence = higher boost
+          if (rsiOversold && volumeExhaustion && adxInCorrectionRange) {
+            boost = 1.15; // Perfect setup: RSI oversold + volume exhaustion + correction ADX
+            penaltiesApplied.push('mean_rev_perfect_dip');
+          } else if ((rsiOversold || rsiOverbought) && volumeConfirmed) {
+            boost = 1.1; // Good setup: RSI + volume confirmed
+            penaltiesApplied.push('mean_rev_confirmed_dip');
+          } else if (adxInCorrectionRange && volumeConfirmed) {
+            boost = 1.05; // Moderate setup: ADX range + volume
+            penaltiesApplied.push('mean_rev_moderate_dip');
+          } else {
+            boost = 0.95; // Weak setup: only price near EMA - slightly penalize
+            penaltiesApplied.push('mean_rev_weak_dip_signal');
+          }
+          
+          effectiveScore *= boost;
+        } else {
+          // Standard suppression: trend is strong and price not at key level
+          const suppress = clamp(1 - context.alignmentScore * 0.5, 0.4, 1);
+          effectiveScore *= suppress;
+          if (context.alignmentScore > 0.6) penaltiesApplied.push('htf_trend_dominant');
+        }
       }
       if (item.family !== 'mean_reversion') {
         if (!allowLongStack && !allowShortStackFinal) {
@@ -2426,31 +2490,13 @@ class MetaAdaptiveStrategyAgent {
       if (context.alignmentScore >= 0.9 && (item.family === 'trend' || item.family === 'momentum')) {
         effectiveScore = Math.min(1, effectiveScore * 1.15);
       }
-      if (item.family === 'mean_reversion' && adx >= 22) {
-        // Allow mean reversion in strong uptrends if near EMA20 (buy the dip)
+      if (item.family === 'mean_reversion' && adx >= 30 && context.alignmentScore >= 0.92) {
+        // Disable mean reversion in VERY strong trends (ADX >= 30) unless near EMA20
         const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.012 : false;
-        const inStrongUptrend = context.bullishStack && context.alignmentScore >= 0.92;
+        const inStrongTrend = context.bullishStack || (!context.bullishStack && context.alignmentScore >= 0.92);
         
-        if (inStrongUptrend && nearEma20) {
-          // Allow with moderate penalty instead of full disable
-          effectiveScore *= 0.85;
-          penaltiesApplied.push('mean_reversion_at_ema20_dip');
-        } else {
-          effectiveScore *= 0.75;
-          penaltiesApplied.push('adx_too_high');
-        }
-      }
-      if (item.family === 'mean_reversion' && context.alignmentScore >= 0.92 && adx >= 30) {
-        // Check for "buy the dip" exception in strong uptrends
-        const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.012 : false;
-        const inStrongUptrend = context.bullishStack;
-        
-        if (inStrongUptrend && nearEma20) {
-          // Allow buy the dip strategy with 60% penalty
-          effectiveScore *= 0.4;
-          penaltiesApplied.push('mean_buy_dip_in_trend');
-        } else {
-          // Disable for other cases
+        if (inStrongTrend && !nearEma20) {
+          // Disable for strong trends away from support
           effectiveScore = 0;
           if (!penaltiesApplied.includes('mean_disabled_strong_trend')) {
             penaltiesApplied.push('mean_disabled_strong_trend');

@@ -163,7 +163,7 @@ router.post('/ws-token', async (req, res) => {
     });
 
     recordOpsEvent({
-      level: 'info',
+      level: 'debug', // Changed from 'info' to reduce frontend noise
       source: 'ws_auth',
       message: 'ws_token_issued',
       details: {

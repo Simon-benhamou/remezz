@@ -4,9 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Alert, Spin, Table, Progress, Tag } from 'antd';
+import { Card, Row, Col, Alert, Spin, Table, Progress, Tag, Button, Space } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { api } from '../api';
+import { EyeOutlined, RobotOutlined } from '@ant-design/icons';
 
 interface CorrelationData {
   matrix: {
@@ -42,6 +44,7 @@ const PortfolioViewPage: React.FC = () => {
   const [riskData, setRiskData] = useState<RiskDistribution | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchPortfolioData();
@@ -87,8 +90,30 @@ const PortfolioViewPage: React.FC = () => {
     return (
       <div style={{ padding: 20 }}>
         <Alert 
-          message="No Portfolio Data" 
-          description="No active positions to display correlation data. Create some agents with positions to see portfolio analytics." 
+          message="No Open Positions" 
+          description={
+            <div>
+              <p style={{ marginBottom: 8 }}>
+                ✅ Your agents are running, but currently have <strong>no open trades</strong>.
+              </p>
+              <p style={{ marginBottom: 8 }}>
+                This portfolio view shows <strong>correlation analysis</strong> between active positions. 
+                It will populate automatically when agents enter trades.
+              </p>
+              <p style={{ marginBottom: 12, color: '#666' }}>
+                💡 Agents are likely in <strong>ARMED</strong> mode, scanning for opportunities. 
+                Check the <strong>Monitor</strong> page to see what they're evaluating.
+              </p>
+              <Space>
+                <Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents')}>
+                  View All Agents
+                </Button>
+                <Button icon={<EyeOutlined />} onClick={() => navigate('/operations')}>
+                  Dashboard Overview
+                </Button>
+              </Space>
+            </div>
+          }
           type="info" 
           showIcon 
         />

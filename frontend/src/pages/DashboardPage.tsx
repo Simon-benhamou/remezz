@@ -203,94 +203,37 @@ export default function DashboardPage(){
         </Row>
       </Card>
 
-      <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
-        <Col span={24}>
-          <JobsStatusPanel
-            jobs={jobs}
-            loading={jobsLoading}
-            onRefresh={refreshJobs}
-            condensed
-            updatedAt={jobsUpdatedAt}
-          />
-        </Col>
-      </Row>
-
-      {/* Smart Opportunity Scanner */}
-      {/* TODO: Implement SmartOpportunityScanner component */}
-      {/* {showSmartScanner && (
-        <div style={{ marginBottom: 24 }}>
-          <SmartOpportunityScanner 
-            onSymbolSelect={(symbol: string) => {
-              console.log('Selected symbol:', symbol);
-              // Navigate to create new session with selected symbol
-              navigate(`/sessions?symbol=${symbol}`);
-            }}
-            onAutoTrade={(symbol: string) => {
-              console.log('Auto trade selected for:', symbol);
-              // Implement auto-trade logic - create session and start immediately
-              navigate(`/sessions?symbol=${symbol}&autoStart=true`);
-            }}
-          />
-        </div>
-      )} */}
-
-      {/* Main KPIs */}
-      <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} lg={6}>
+      {/* Main KPIs - Compact Row */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={24} sm={12} md={6}>
           <Card 
-            style={{ 
-              borderLeft: '4px solid #52c41a',
-              transition: 'all 0.3s ease',
-              cursor: 'pointer'
-            }}
+            size="small"
+            style={{ borderLeft: '3px solid #52c41a', cursor: 'pointer' }}
             hoverable
             onClick={() => navigate('/sessions')}
           >
             <Statistic
-              title={
-                <Space>
-                  <RobotOutlined style={{ color: '#52c41a' }} />
-                  Active Agents
-                </Space>
-              }
+              title={<Text type="secondary" style={{ fontSize: 12 }}><RobotOutlined /> Agents</Text>}
               value={ov?.activeCount || 0}
-              suffix={
-                <div style={{ fontSize: 12, color: '#666' }}>
-                  / {ov?.sessionsCount || 0} total
-                </div>
-              }
-              valueStyle={{ color: '#52c41a', fontSize: 28 }}
+              suffix={<Text type="secondary" style={{ fontSize: 12 }}>/ {ov?.sessionsCount || 0}</Text>}
+              valueStyle={{ color: '#52c41a', fontSize: 24 }}
             />
           </Card>
         </Col>
         
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} md={6}>
           <Card 
-            style={{ 
-              borderLeft: `4px solid ${(ov?.pnlUsd || 0) >= 0 ? '#52c41a' : '#ff4d4f'}`,
-              transition: 'all 0.3s ease'
-            }}
+            size="small"
+            style={{ borderLeft: `3px solid ${(ov?.pnlUsd || 0) >= 0 ? '#52c41a' : '#ff4d4f'}` }}
             hoverable
           >
             <Statistic
-              title={
-                <Space>
-                  <DollarOutlined style={{ color: (ov?.pnlUsd || 0) >= 0 ? '#52c41a' : '#ff4d4f' }} />
-                  Total PnL
-                </Space>
-              }
+              title={<Text type="secondary" style={{ fontSize: 12 }}><DollarOutlined /> PnL</Text>}
               value={Number(ov?.pnlUsd || 0)}
               precision={2}
               prefix="$"
-              valueStyle={{ 
-                color: (ov?.pnlUsd || 0) >= 0 ? '#52c41a' : '#ff4d4f',
-                fontSize: 28
-              }}
-              suffix={
-                <div style={{ fontSize: 12, color: '#666' }}>
-                  ROI: {(ov?.roiPct || 0).toFixed(1)}%
-                </div>
-              }
+              valueStyle={{ color: (ov?.pnlUsd || 0) >= 0 ? '#52c41a' : '#ff4d4f', fontSize: 24 }}
+              suffix={<Text type="secondary" style={{ fontSize: 12 }}>{(ov?.roiPct || 0).toFixed(1)}%</Text>}
             />
           </Card>
         </Col>

@@ -98,7 +98,7 @@ export function startWSHub(wss: WebSocketServer) {
             }
             send(ws, { type: 'hello_ok', expiresAt: new Date(expMs).toISOString() });
             recordOpsEvent({
-              level: 'info',
+              level: 'debug', // Changed from 'info' to reduce frontend noise
               source: 'ws_auth',
               message: 'ws_hello_ok',
               details: {
@@ -142,7 +142,7 @@ export function startWSHub(wss: WebSocketServer) {
             }
             send(ws, { type: 'refresh_ok', expiresAt: new Date(expMs).toISOString() });
             recordOpsEvent({
-              level: 'info',
+              level: 'debug', // Changed from 'info' to reduce frontend noise
               source: 'ws_auth',
               message: 'ws_token_refreshed',
               details: {

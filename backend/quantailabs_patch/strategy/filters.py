@@ -20,20 +20,31 @@ class EntryFilters:
     def __init__(self, cfg: FilterConfig):
         self.cfg = cfg
 
-    def evaluate_entry(self, facts: Dict) -> Tuple[bool, Dict]:
+    def evaluate_entry(self, facts: Dict, strategy_family: str = None) -> Tuple[bool, Dict]:
         """
         facts keys expected (as available): 
          price, atr, adx, spread_bps, dollar_volume, rr_to_tp1, model_confidence (0..1)
+        strategy_family: 'trend', 'breakout', 'mean_reversion', 'momentum' (optional)
         Returns (ok, reasons)
         """
         reasons = {}
         ok = True
 
+        # 🎯 FAMILY-BASED ADX ADJUSTMENTS: Allow mean_reversion during corrections (low ADX)
+        min_adx_threshold = self.cfg.min_adx
+        if strategy_family == 'mean_reversion':
+            # Mean reversion trades CORRECTIONS/PULLBACKS (low-ADX environments: 10-14)
+            # Lower threshold to capture rebound opportunities
+            min_adx_threshold = max(8.0, self.cfg.min_adx - 6.0)  # 12 → 6, allows ADX down to 8
+        elif strategy_family == 'momentum':
+            # Momentum requires strong directional movement (high ADX)
+            min_adx_threshold = min(25.0, self.cfg.min_adx + 4.0)  # 12 → 16, requires stronger trend
+
         adx = facts.get("adx")
-        if adx is None or adx < self.cfg.min_adx:
-            ok = False; reasons["momentumOk"] = f"FAIL (ADX={adx})"
+        if adx is None or adx < min_adx_threshold:
+            ok = False; reasons["momentumOk"] = f"FAIL (ADX={adx} < {min_adx_threshold:.1f})"
         else:
-            reasons["momentumOk"] = f"OK (ADX={adx})"
+            reasons["momentumOk"] = f"OK (ADX={adx} >= {min_adx_threshold:.1f})"
 
         atr = facts.get("atr"); price = facts.get("price")
         if atr and price:

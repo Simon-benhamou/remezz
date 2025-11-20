@@ -107,6 +107,7 @@ export class EntryFilters {
       relaxation?: EntryRelaxation | null;
       bias?: 'long' | 'short' | 'none' | null;
       playbook?: string | null;
+      strategyFamily?: 'trend' | 'breakout' | 'mean_reversion' | 'momentum' | null;
     } = {},
   ): Promise<EntryEvaluation> {
     const reasons: Record<string, string> = {};
@@ -434,6 +435,24 @@ export class EntryFilters {
     if (deferredMinAdxDelta != null && deferredMinAdxDelta !== 0) {
       minAdx = Math.max(0, minAdx + deferredMinAdxDelta);
     }
+
+    // 🎯 FAMILY-BASED ADX ADJUSTMENTS: Allow mean_reversion to enter during corrections (low ADX)
+    const strategyFamily = opts.strategyFamily ?? null;
+    if (strategyFamily === 'mean_reversion') {
+      // Mean reversion trades CORRECTIONS/PULLBACKS which are low-ADX environments (10-14)
+      // Lower threshold significantly to capture rebound opportunities
+      minAdx = Math.max(8, minAdx - 6); // Reduces from 16 → 10, or 14 → 8
+      
+      // 🛡️ SAFETY: Require higher R/R for mean reversion to compensate for ambiguity risk
+      // Corrections in low ADX = less directional clarity = need better reward
+      if (minRr != null) {
+        minRr = Math.max(minRr, minRr * 1.15); // +15% R/R requirement (1.2 → 1.38)
+      }
+    } else if (strategyFamily === 'momentum') {
+      // Momentum requires strong directional movement (high ADX)
+      minAdx = Math.min(25, minAdx + 4); // Increases from 16 → 20
+    }
+    // trend/breakout keep base thresholds (16 for tier1/2, 14 for tier3)
 
     const adx = facts.adx;
     const volumeRatioVal = typeof facts.volumeRatio === 'number' && Number.isFinite(facts.volumeRatio)
