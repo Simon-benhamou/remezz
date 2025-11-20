@@ -1,12 +1,13 @@
 #!/usr/bin/env tsx
 /**
  * Generate Base Personality Profiles Script
- * 
+ *
  * Creates initial personality profiles for all active trading symbols.
  * This serves as a starting point for the learning system.
- * 
+ *
  * Usage: npm run init-profiles
  */
+import 'dotenv/config';
 
 import { prisma } from '../src/db/client.js';
 import { savePersonalityProfile, DEFAULT_PARAMS } from '../src/learning/personalityProfile.js';

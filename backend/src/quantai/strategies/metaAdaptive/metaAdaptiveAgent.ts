@@ -1760,8 +1760,9 @@ class MetaAdaptiveStrategyAgent {
     );
 
     const rankingInput = input.ranking ?? null;
+    const change24hPct = rankingInput?.change24hPct ?? this.estimateChange24h(snap);
     const ranking = this.updateAssetRanking(input.symbol, {
-      change24hPct: rankingInput?.change24hPct ?? this.estimateChange24h(snap),
+      change24hPct,
       volumeUsd: rankingInput?.volumeUsd ?? (Number.isFinite(volume24hUsd) ? Number(volume24hUsd) : Number((snap as any)?.volume24h ?? 0)),
       volatilityPct: rankingInput?.volatilityPct ?? realizedVol,
       momentumScore: rankingInput?.momentumScore ?? scoreMomentum,
@@ -2000,8 +2001,16 @@ class MetaAdaptiveStrategyAgent {
     // 📰 NEWS DETECTION: Check for breaking news that could invalidate technical analysis
     // Can be disabled via NEWS_DETECTION_ENABLED=false to avoid LLM calls
     const newsEnabled = process.env.NEWS_DETECTION_ENABLED !== 'false';
-    const newsSignalLong = newsEnabled ? await detectNewsImpact(input.symbol, 'long') : { hasBreakingNews: false, impact: 'neutral' as const, severity: 'none' as const, confidence: 0, shouldBlock: false, penalty: 1.0, summary: 'News detection disabled', reasons: [], timestamp: Date.now() };
-    const newsSignalShort = newsEnabled ? await detectNewsImpact(input.symbol, 'short') : { hasBreakingNews: false, impact: 'neutral' as const, severity: 'none' as const, confidence: 0, shouldBlock: false, penalty: 1.0, summary: 'News detection disabled', reasons: [], timestamp: Date.now() };
+    
+    // Market-driven triggers to reduce API costs
+    const newsMarketData = {
+      priceChange24hPct: change24hPct ?? 0,
+      volumeZScore: snap.volumeZScore ?? 0,
+      volatilityRegime: snap.volatilityRegime ?? 0
+    };
+
+    const newsSignalLong = newsEnabled ? await detectNewsImpact(input.symbol, 'long', newsMarketData) : { hasBreakingNews: false, impact: 'neutral' as const, severity: 'none' as const, confidence: 0, shouldBlock: false, penalty: 1.0, summary: 'News detection disabled', reasons: [], timestamp: Date.now() };
+    const newsSignalShort = newsEnabled ? await detectNewsImpact(input.symbol, 'short', newsMarketData) : { hasBreakingNews: false, impact: 'neutral' as const, severity: 'none' as const, confidence: 0, shouldBlock: false, penalty: 1.0, summary: 'News detection disabled', reasons: [], timestamp: Date.now() };
     
     // 💰 FUNDING RATE CHECK: Detect overheated perpetual futures markets
     const fundingRateLong = await detectFundingRateImpact(input.symbol, 'long');

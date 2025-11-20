@@ -1551,6 +1551,17 @@ async function createSessionRecord(
   );
 
   await setActiveSession(session.id);
+  // Ensure personality profile exists for initial symbol
+  try {
+    const { getPersonalityProfile, savePersonalityProfile, DEFAULT_REGIME_PARAMS } = await import('../learning/personalityProfile.js');
+    const existingPersonality = await getPersonalityProfile(symbol);
+    if (!existingPersonality) {
+      await savePersonalityProfile(symbol, DEFAULT_REGIME_PARAMS);
+      console.log(`✅ Created default personality profile during session creation for ${symbol}`);
+    }
+  } catch (personalityError) {
+    console.warn(`⚠️ Failed to ensure personality profile for ${symbol} on creation:`, (personalityError as any)?.message || personalityError);
+  }
   return { session, symbol };
 }
 

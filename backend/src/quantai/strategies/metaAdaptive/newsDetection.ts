@@ -265,11 +265,17 @@ function calculatePenalty(
  * 
  * @param symbol - Trading pair symbol (e.g., "ETH/USDT")
  * @param bias - Trade direction ('long' or 'short')
+ * @param marketData - Optional market metrics to trigger "market-driven" checks
  * @returns NewsSignal with penalty and blocking decision
  */
 export async function detectNewsImpact(
   symbol: string,
-  bias: 'long' | 'short' | 'both'
+  bias: 'long' | 'short' | 'both',
+  marketData?: {
+    priceChange24hPct: number;
+    volumeZScore: number;
+    volatilityRegime?: number;
+  }
 ): Promise<NewsSignal> {
   const now = Date.now();
   const cacheKey = `${symbol}:${bias}`;
@@ -278,6 +284,45 @@ export async function detectNewsImpact(
   const cached = newsCache.get(cacheKey);
   if (cached && (now - cached.timestamp) < NEWS_CACHE_TTL_MS) {
     return cached.signal;
+  }
+
+  // Market-Driven Trigger Logic
+  // If market data is provided, we only call the LLM if the market is showing significant activity.
+  // This drastically reduces API costs by avoiding checks during calm periods.
+  if (marketData) {
+    const { priceChange24hPct, volumeZScore, volatilityRegime } = marketData;
+    
+    // Thresholds for "significant activity"
+    const SIGNIFICANT_PRICE_MOVE = 4.0; // 4% change in 24h
+    const SIGNIFICANT_VOLUME = 2.0;     // 2 sigma volume anomaly
+    const HIGH_VOLATILITY = 2.5;        // High ATR%
+    
+    const isPriceMoving = Math.abs(priceChange24hPct) > SIGNIFICANT_PRICE_MOVE;
+    const isVolumeHigh = volumeZScore > SIGNIFICANT_VOLUME;
+    const isVolatile = (volatilityRegime || 0) > HIGH_VOLATILITY;
+    
+    if (!isPriceMoving && !isVolumeHigh && !isVolatile) {
+      // Market is calm, skip LLM call
+      // We cache this "calm" state for a shorter period (e.g. 5 mins) or standard time?
+      // Let's use standard time but mark it as "market_calm"
+      const calmSignal: NewsSignal = {
+        hasBreakingNews: false,
+        impact: 'neutral',
+        severity: 'none',
+        confidence: 0,
+        shouldBlock: false,
+        penalty: 1.0,
+        summary: 'Market calm - skipped news check',
+        reasons: ['price_stable', 'volume_normal'],
+        timestamp: now,
+      };
+      
+      // Cache it so we don't re-evaluate immediately
+      newsCache.set(cacheKey, { signal: calmSignal, timestamp: now });
+      return calmSignal;
+    }
+    
+    console.log(`[News Detection] Market trigger for ${symbol}: Price=${priceChange24hPct.toFixed(2)}%, VolZ=${volumeZScore.toFixed(2)}`);
   }
   
   try {

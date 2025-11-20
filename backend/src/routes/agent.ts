@@ -33,6 +33,7 @@ import { getAgentDiagnosticInfo } from '../services/agentDiagnostics.js';
 import { getPortfolioSnapshot, updatePortfolioBalance, rebalancePortfolio } from '../services/portfolioManager.js';
 import { resolveStrategySnapshot } from '../utils/strategySnapshot.js';
 import { getBalanceSnapshot, updateLiveExchangeBalance } from '../services/capitalPool.js';
+import { getPersonalityProfile, savePersonalityProfile, DEFAULT_PARAMS } from '../learning/personalityProfile.js';
 import type { BalanceSnapshot } from '../core/capital/types.js';
 
 export const router = Router();
@@ -944,6 +945,16 @@ router.post('/set-symbol', authenticateUser, async (req: AuthenticatedRequest, r
   }
 
   const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
+  // Ensure personality profile exists for new symbol after symbol change
+  try {
+    const profile = await getPersonalityProfile(symbol);
+    if (!profile) {
+      await savePersonalityProfile(symbol, DEFAULT_PARAMS);
+      console.log(`✅ Created default personality profile for ${symbol} after symbol change`);
+    }
+  } catch (error) {
+    console.warn(`⚠️ Failed to ensure personality profile for changed symbol ${symbol}:`, error);
+  }
   broadcast('session', upd, upd.symbol, upd.id);
   invalidateOverviewCaches();
   res.json({ ok: true, session: upd });

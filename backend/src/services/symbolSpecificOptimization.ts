@@ -97,7 +97,7 @@ export async function ensureSymbolProfile(symbol: string): Promise<void> {
 
     if (existing && existing.length > 0) {
       console.log(`✓ Symbol profile already exists for ${symbol}`);
-      return; // Already exists
+      // Even if symbol profile exists, still ensure personality profile below
     }
 
     const tier = getSymbolTier(symbol);
@@ -129,6 +129,20 @@ export async function ensureSymbolProfile(symbol: string): Promise<void> {
     `;
 
     console.log(`✅ Default profile created for ${symbol} (tier: ${tier})`);
+
+    // Ensure personality (learning) profile exists (regime-aware defaults)
+    try {
+      const { getPersonalityProfile, savePersonalityProfile, DEFAULT_REGIME_PARAMS } = await import('../learning/personalityProfile.js');
+      const personality = await getPersonalityProfile(symbol);
+      if (!personality) {
+        await savePersonalityProfile(symbol, DEFAULT_REGIME_PARAMS);
+        console.log(`✅ Default personality profile created for ${symbol}`);
+      } else {
+        console.log(`✓ Personality profile already exists for ${symbol}`);
+      }
+    } catch (personalityError) {
+      console.warn(`⚠️ Failed ensuring personality profile for ${symbol}:`, (personalityError as any)?.message || personalityError);
+    }
   } catch (error: any) {
     console.error(`❌ Failed to ensure profile for ${symbol}:`, error?.message || error);
     // If table doesn't exist, try to initialize it once
@@ -164,6 +178,18 @@ export async function ensureSymbolProfile(symbol: string): Promise<void> {
           ON CONFLICT (symbol) DO NOTHING
         `;
         console.log(`✅ Default profile created for ${symbol} after initializing table`);
+
+        // Ensure personality profile after table creation retry
+        try {
+          const { getPersonalityProfile, savePersonalityProfile, DEFAULT_REGIME_PARAMS } = await import('../learning/personalityProfile.js');
+          const personality = await getPersonalityProfile(symbol);
+          if (!personality) {
+            await savePersonalityProfile(symbol, DEFAULT_REGIME_PARAMS);
+            console.log(`✅ Default personality profile created for ${symbol} (post-table-init)`);
+          }
+        } catch (personalityRetryError) {
+          console.warn(`⚠️ Failed creating personality profile for ${symbol} after table init:`, (personalityRetryError as any)?.message || personalityRetryError);
+        }
       } catch (retryError: any) {
         console.error(`❌ Failed to create profile even after initializing table:`, retryError?.message || retryError);
       }

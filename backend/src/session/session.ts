@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { getPersonalityProfile, savePersonalityProfile, DEFAULT_PARAMS } from '../learning/personalityProfile.js';
 export async function startSession(
   symbol: string,
   mode: "paper" | "live",
@@ -21,6 +22,15 @@ export async function startSession(
     },
   });
   await prisma.sessionKpi.create({ data: { sessionId: s.id } });
+  // Ensure a personality profile exists for this symbol
+  try {
+    const existing = await getPersonalityProfile(symbol);
+    if (!existing) {
+      await savePersonalityProfile(symbol, DEFAULT_PARAMS);
+    }
+  } catch (error) {
+    console.warn(`⚠️ Failed to ensure personality profile for ${symbol}:`, error);
+  }
   return s;
 }
 export async function stopSession(sessionId: string) {
