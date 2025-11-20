@@ -829,7 +829,7 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
   }
   
   const selectionPolicy = {
-    requireSignalAtStart: false, // ❌ DISABLED - Predictor timing unsuitable for selection (signals can appear later in day)
+    requireSignalAtStart: true, // ✅ ENABLED - Require valid signal before starting (prevents bad timing)
     minStartEdge: Math.min(Math.max(Number(rawPolicy.minStartEdge ?? baseEdge), 0), 1),
     minStartConfidence: Math.min(Math.max(Number(rawPolicy.minStartConfidence ?? baseConfidence), 0), 1),
     priorWeight: Math.min(Math.max(Number(rawPolicy.priorWeight ?? basePriorWeight), 0), 1),

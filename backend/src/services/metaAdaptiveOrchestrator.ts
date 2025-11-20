@@ -834,6 +834,28 @@ async function executeEntryTrade(
   try {
     integrationLogger.info(`Executing entry trade | bias=${signal.bias} strategy=${(signal as any).strategyId || signal.id} confidence=${signal.confidence.toFixed(3)}`);
     console.log(`[MetaOrchestrator.executeEntryTrade] START: agent=${session.sessionId}, symbol=${session.symbol}, bias=${signal.bias}`);
+    
+    // 🛡️ SAFETY: Prevent immediate entry after session start (wait for market observation)
+    const fullSession = await prisma.agentSession.findUnique({
+      where: { id: session.sessionId },
+      select: { startedAt: true }
+    });
+    
+    if (fullSession) {
+      const sessionAgeMs = Date.now() - fullSession.startedAt.getTime();
+      const MIN_SESSION_AGE_MS = 5 * 60 * 1000; // 5 minutes warmup period
+      
+      if (sessionAgeMs < MIN_SESSION_AGE_MS) {
+        const waitMinutes = Math.ceil((MIN_SESSION_AGE_MS - sessionAgeMs) / 60000);
+        integrationLogger.info(
+          `Session too young (${Math.floor(sessionAgeMs / 60000)}min) - waiting ${waitMinutes}min before first entry to observe market`,
+          { symbol: session.symbol, sessionAge: sessionAgeMs }
+        );
+        console.log(`[MetaOrchestrator.executeEntryTrade] SKIP: Session age ${sessionAgeMs}ms < ${MIN_SESSION_AGE_MS}ms`);
+        return;
+      }
+    }
+    
     const side: 'buy' | 'sell' = signal.bias === 'short' ? 'sell' : 'buy';
 
     if (isRotationLockActive(session.profileJson)) {
