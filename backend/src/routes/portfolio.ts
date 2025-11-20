@@ -16,7 +16,7 @@ router.get('/correlation', authenticateUser, async (req: AuthenticatedRequest, r
 
     const mode = (req.query.mode as 'paper' | 'live') || 'paper';
     
-    // Get active sessions with positions for this user
+    // Get active sessions with orders to reconstruct positions
     const sessionWhere: any = {
       stoppedAt: null,
       mode,
@@ -28,26 +28,72 @@ router.get('/correlation', authenticateUser, async (req: AuthenticatedRequest, r
     const activeSessions = await prisma.agentSession.findMany({
       where: sessionWhere,
       include: {
-        positions: {
-          where: {
-            qty: { gt: 0 },
-          },
+        orders: {
+          where: { status: 'filled' },
+          orderBy: { createdAt: 'asc' },
         },
       },
     });
     
-    // Get performance ledger for correlation calculation (simplified)
-    const positions = activeSessions
-      .flatMap(session => session.positions.map(pos => ({
-        sessionId: session.id,
-        symbol: pos.symbol || session.symbol,
-        side: pos.side,
-        qty: pos.qty || 0,
-        entryPrice: pos.entryPrice || 0,
-        unrealizedPnl: pos.unrealizedPnl || 0,
-        leverage: pos.leverage || 1,
-      })))
-      .filter(pos => pos.qty > 0);
+    // Reconstruct open positions from filled orders (like analyze-all-positions.mjs)
+    const positions: Array<{
+      sessionId: string;
+      symbol: string;
+      side: string;
+      qty: number;
+      entryPrice: number;
+      unrealizedPnl: number;
+      leverage: number;
+    }> = [];
+    
+    for (const session of activeSessions) {
+      // Group orders by symbol for multi-symbol agents
+      const ordersBySymbol: Record<string, any[]> = {};
+      for (const order of session.orders) {
+        if (!ordersBySymbol[order.symbol]) {
+          ordersBySymbol[order.symbol] = [];
+        }
+        ordersBySymbol[order.symbol].push(order);
+      }
+      
+      // Reconstruct positions from order pairs
+      for (const [symbol, orders] of Object.entries(ordersBySymbol)) {
+        let currentTrade: any = null;
+        
+        for (const order of orders) {
+          if (order.side === 'buy' || order.side === 'long') {
+            // Entry
+            currentTrade = {
+              sessionId: session.id,
+              symbol: order.symbol,
+              side: order.side,
+              entryPrice: order.price,
+              qty: order.qty,
+            };
+          } else if ((order.side === 'sell' || order.side === 'short') && currentTrade) {
+            // Exit closes the position
+            currentTrade = null;
+          }
+        }
+        
+        // If currentTrade exists, it's an open position
+        if (currentTrade) {
+          const leverage = typeof session.profileJson === 'object' && session.profileJson !== null 
+            ? (session.profileJson as any).leverage || 1 
+            : 1;
+            
+          positions.push({
+            sessionId: currentTrade.sessionId,
+            symbol: currentTrade.symbol,
+            side: currentTrade.side,
+            qty: currentTrade.qty,
+            entryPrice: currentTrade.entryPrice,
+            unrealizedPnl: 0, // Would need current price from Binance
+            leverage,
+          });
+        }
+      }
+    }
     
     // Calculate correlation matrix (simplified - in production use actual price data)
     const symbols = Array.from(new Set(positions.map(p => p.symbol)));
