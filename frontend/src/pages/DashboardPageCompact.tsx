@@ -30,8 +30,8 @@ export default function DashboardPageCompact(){
   async function load(){
     setLoading(true);
     try {
-      const res = await api.get(`/api/overview?mode=${mode}`);
-      setOv(res.data || {});
+      const res = await api.overview(mode);
+      setOv(res || {});
     } catch(err){
       console.error(err);
     } finally {
@@ -160,7 +160,7 @@ export default function DashboardPageCompact(){
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                           <Text strong>{session.symbol}</Text>
-                          <Tag size="small" color={session.state === 'ARMED' ? 'green' : session.state === 'MANAGE' ? 'blue' : 'default'}>
+                          <Tag color={session.state === 'ARMED' ? 'green' : session.state === 'MANAGE' ? 'blue' : 'default'}>
                             {session.state}
                           </Tag>
                         </div>
@@ -216,7 +216,7 @@ export default function DashboardPageCompact(){
                     dataSource={(ov?.alerts?.recent || []).slice(0, 3)}
                     renderItem={(alert: any) => (
                       <List.Item style={{ padding: '4px 0', fontSize: 11 }}>
-                        <Tag size="small" color={alert.severity === 'high' ? 'red' : alert.severity === 'med' ? 'orange' : 'blue'}>
+                        <Tag color={alert.severity === 'high' ? 'red' : alert.severity === 'med' ? 'orange' : 'blue'}>
                           {alert.kind}
                         </Tag>
                         <Text type="secondary">{alert.symbol}</Text>
