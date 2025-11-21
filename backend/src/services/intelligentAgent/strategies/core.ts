@@ -3154,6 +3154,7 @@ async function computeTrendConfidence(symbol: string, snap: TechnicalSnapshot | 
   const blockedReason = ok ? undefined : (reasons.length > 0 ? reasons.join(', ') : 'entry_filters_failed');
   
   logTradeEvaluation({
+    userId: null, // No session context available in core strategy
     symbol,
     decision,
     blockedReason,

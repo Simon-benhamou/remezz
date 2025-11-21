@@ -80,6 +80,7 @@ export async function logMetaAdaptiveEvaluation(
 
     // Log the blocked evaluation (non-blocking)
     await logTradeEvaluation({
+      userId: null, // No session context available in evaluationLogger
       symbol,
       decision: 'filter_blocked',
       blockedReason: blockedReasons.join('; '),

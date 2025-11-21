@@ -75,6 +75,7 @@ export class CapitalPoolBroker implements Broker {
       console.log(`  ⛔ BLOCKED: Cannot place new orders with zero available capital`);
       
       logTradeEvaluation({
+        userId: null, // No session context available in broker
         symbol: order.symbol,
         decision: 'order_blocked_capital',
         blockedReason: `zero_capital: free=${preCheckSnapshot.freeUSD.toNumber().toFixed(2)}, reserved=${preCheckSnapshot.reservedUSD.toNumber().toFixed(2)}, available=${actualFreeCapital.toFixed(2)}`,
@@ -156,6 +157,7 @@ export class CapitalPoolBroker implements Broker {
       
       // Log capital reservation failure with detailed reason
       logTradeEvaluation({
+        userId: null, // No session context available in broker
         symbol: order.symbol,
         decision: 'order_blocked_capital',
         blockedReason,

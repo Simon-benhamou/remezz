@@ -33,12 +33,14 @@ model User {
   settings UserSetting[]
 
   // User's trading sessions and activities
-  sessions         AgentSession[]
-  alerts           Alert[]
-  reports          DailyReport[]
-  improvements     ImprovementItem[]
-  diagnosticsCache DiagnosticsCache[]
-  auditLogs        AuditLog[]
+  sessions            AgentSession[]
+  alerts              Alert[]
+  reports             DailyReport[]
+  improvements        ImprovementItem[]
+  diagnosticsCache    DiagnosticsCache[]
+  auditLogs           AuditLog[]
+  tradeEvaluations    TradeEvaluation[]
+  learningStates      SubagentLearningState[]
 
   @@index([username])
   @@index([email])
@@ -479,6 +481,7 @@ model AutoUniverseSchedule {
 
 model TradeEvaluation {
   id              String   @id @default(cuid())
+  userId          String?  // User who owns this evaluation (for multi-user isolation)
   symbol          String
   timestamp       DateTime @default(now())
   decision        String // "filter_passed" | "filter_blocked" | "order_placed" | "order_blocked_capital" | "order_blocked_sizing" | "order_rejected" (predictor/cooldown = filter_blocked)
@@ -489,7 +492,10 @@ model TradeEvaluation {
   marketOutcome   Json? // Updated later: pnl_15m, pnl_1h, max_favorable_excursion_1h, max_adverse_excursion_1h
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  
+  user            User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, symbol, timestamp])
   @@index([symbol, timestamp])
   @@index([timestamp])
   @@index([marketOutcome])
@@ -568,6 +574,7 @@ model AgentPerformanceLedger {
 
 model SubagentLearningState {
   id          String   @id @default(cuid())
+  userId      String?  // User who owns this learning state (for multi-user isolation)
   subagent    String
   symbol      String
   mode        String?
@@ -579,7 +586,10 @@ model SubagentLearningState {
   reason      String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([subagent, symbol, mode, regime], name: "subagent_learning_unique")
+  @@unique([userId, subagent, symbol, mode, regime], name: "subagent_learning_user_unique")
+  @@index([userId, symbol, subagent])
   @@index([symbol, subagent])
 }

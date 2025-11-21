@@ -502,7 +502,7 @@ function deriveExitStrategyRecommendation(agg: SymbolAggregate): { tuning: ExitS
   };
 }
 
-async function persistLearning(records: Array<SubagentLearningRecord<SubagentKind>>) {
+async function persistLearning(records: Array<SubagentLearningRecord<SubagentKind>>, userId?: string | null) {
   if (!records.length) return;
   const chunkSize = 25;
   for (let i = 0; i < records.length; i += chunkSize) {
@@ -511,7 +511,8 @@ async function persistLearning(records: Array<SubagentLearningRecord<SubagentKin
       slice.map((record) =>
         prisma.subagentLearningState.upsert({
           where: {
-            subagent_learning_unique: {
+            subagent_learning_user_unique: {
+              userId: userId ?? '__no_user__', // Use placeholder for null to satisfy unique constraint
               subagent: record.subagent,
               symbol: record.symbol,
               mode: record.mode,
@@ -519,6 +520,7 @@ async function persistLearning(records: Array<SubagentLearningRecord<SubagentKin
             },
           },
           create: {
+            userId: userId || null,
             subagent: record.subagent,
             symbol: record.symbol,
             mode: record.mode,

@@ -48,6 +48,7 @@ export type RegimeContext = {
 };
 
 export type TradeEvaluationParams = {
+  userId: string | null | undefined; // User ID for multi-user isolation
   symbol: string;
   /**
    * Decision outcome tracking the full execution flow:
@@ -109,6 +110,7 @@ export async function logTradeEvaluation(params: TradeEvaluationParams): Promise
     const record = await prisma.tradeEvaluation.create({
       data: {
         id,
+        userId: params.userId || null, // Multi-user isolation: associate with user
         symbol: params.symbol,
         decision: params.decision,
         blockedReason: params.blockedReason || null,

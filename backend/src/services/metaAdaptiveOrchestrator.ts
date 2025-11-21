@@ -701,6 +701,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
           if (blockEntry) {
             logger.warn(`[${session.sessionId}] Entry blocked by reversal detection: ${blockReason}`);
             await logTradeEvaluation({
+              userId: session.userId,
               symbol: session.symbol,
               decision: 'order_blocked_capital',
               blockedReason: blockReason,
@@ -773,6 +774,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
           
           // Log that order was blocked due to existing position (unless we just flipped)
           await logTradeEvaluation({
+            userId: session.userId,
             symbol: session.symbol,
             decision: 'order_blocked_capital',
             blockedReason: flipResult 
@@ -862,6 +864,7 @@ async function executeEntryTrade(
       integrationLogger.warn('Rotation lock active – blocking entry');
       console.log(`[MetaOrchestrator.executeEntryTrade] BLOCKED: rotation lock active for ${session.sessionId}`);
       await logTradeEvaluation({
+        userId: session.userId,
         symbol: session.symbol,
         decision: 'order_blocked_rotation',
         blockedReason: 'rotation_in_progress',
@@ -887,6 +890,7 @@ async function executeEntryTrade(
       integrationLogger.warn('Entry lock already active – skipping duplicate entry');
       console.log(`[MetaOrchestrator.executeEntryTrade] SKIP: entry lock already active for ${session.sessionId}`);
       await logTradeEvaluation({
+        userId: session.userId,
         symbol: session.symbol,
         decision: 'order_blocked_rotation',
         blockedReason: 'entry_lock_active',
@@ -1097,6 +1101,7 @@ async function executeEntryTrade(
         const reason = riskLimits.reason ?? 'risk_governor_requires_hedge';
         integrationLogger.warn(`Entry blocked by risk governor: ${reason}`);
         await logTradeEvaluation({
+          userId: session.userId,
           symbol: session.symbol,
           decision: 'filter_blocked',
           blockedReason: reason,
@@ -1143,6 +1148,7 @@ async function executeEntryTrade(
         integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${adjustedThreshold.toFixed(3)} (base=${capitalMetrics.minConfidenceRequired.toFixed(3)}, capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
         
         await logTradeEvaluation({
+          userId: session.userId,
           symbol: session.symbol,
           decision: 'order_blocked_capital',
           blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${adjustedThreshold.toFixed(3)} (base ${capitalMetrics.minConfidenceRequired.toFixed(3)}, capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used, RSI=${rsi.toFixed(1)})`,
@@ -1213,6 +1219,7 @@ async function executeEntryTrade(
         const reason = 'support_agents_blocked_low_quality_flow';
         integrationLogger.warn('Trade rejected: hostile market per support agents', { reason });
         await logTradeEvaluation({
+          userId: session.userId,
           symbol: session.symbol,
           decision: 'filter_blocked',
           blockedReason: reason,
@@ -1359,6 +1366,7 @@ async function executeEntryTrade(
         
         // Log that order was blocked due to position sizing
         await logTradeEvaluation({
+          userId: session.userId,
           symbol: session.symbol,
           decision: 'order_blocked_sizing',
           blockedReason: `qty=0: equity=${equityUsd.toFixed(2)}, stop=${stopDistance.toFixed(4)}, entry=${entryPrice.toFixed(4)}, leverage=${leverage}x`,
@@ -1390,6 +1398,7 @@ async function executeEntryTrade(
         // Predictor and cooldown are ANALYSIS FILTERS, not execution blocks
         // They evaluate signal quality, so they should be logged as filter_blocked
         await logTradeEvaluation({
+          userId: session.userId,
           symbol: session.symbol,
           decision: 'filter_blocked',  // Changed from order_blocked_registration
           blockedReason: registrationResult === 'predictor_blocked' ? 'predictor_confidence_too_low' : 'cooldown_active',
@@ -1442,6 +1451,7 @@ async function executeEntryTrade(
       // Log successful order placement
       if (order.status !== 'rejected') {
         await logTradeEvaluation({
+          userId: session.userId,
           symbol: session.symbol,
           decision: 'order_placed',
           blockedReason: undefined,
@@ -1542,6 +1552,7 @@ async function executeEntryTrade(
       } else {
         // Order was rejected by broker
         await logTradeEvaluation({
+          userId: session.userId,
           symbol: session.symbol,
           decision: 'order_rejected',
           blockedReason: (order as any).error || 'broker_rejected',
@@ -1595,6 +1606,7 @@ async function executeEntryTrade(
     
     // Log the exception as an order rejection
     await logTradeEvaluation({
+      userId: session.userId,
       symbol: session.symbol,
       decision: 'order_rejected',
       blockedReason: `exception: ${error.message || 'unknown error'}`,
