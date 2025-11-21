@@ -2940,38 +2940,10 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   const klines = ws.getKlines(symbol, interval);
   if (!klines?.length) return null;
   
-  // 🔥 FIX: Only check if LAST kline is fresh (not the whole history)
-  // Historical klines can be old, but the latest one should be recent
-  const lastKline = klines[klines.length - 1];
-  const now = Date.now();
-  const lastKlineAge = now - lastKline.timestamp;
-  
-  // Calculate max acceptable age for the LAST kline based on interval
-  const intervalMs = parseIntervalToMs(interval);
-  const maxLastKlineAge = intervalMs * 3; // Allow 3x interval (e.g., 45min for 15m chart)
-  
-  // If last kline is too old, data is stale
-  if (lastKlineAge > maxLastKlineAge) {
-    console.warn(`[WS][STALE_KLINE] ${symbol} ${interval}: Last kline age ${Math.round(lastKlineAge / 1000)}s > ${Math.round(maxLastKlineAge / 1000)}s`);
-    return null;
-  }
-  
-  // Return ALL klines (including historical) if last kline is fresh
+  // ✅ Return ALL klines (historical + recent)
+  // The seeding system handles backfill if cache is empty
+  // The WebSocket updates keep the latest bars fresh
   return klines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
-}
-
-function parseIntervalToMs(interval: string): number {
-  const match = interval.match(/^(\d+)([smhd])$/);
-  if (!match) return 900_000; // Default 15m
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-  switch (unit) {
-    case 's': return value * 1000;
-    case 'm': return value * 60_000;
-    case 'h': return value * 3600_000;
-    case 'd': return value * 86400_000;
-    default: return 900_000;
-  }
 }
 
 /**
