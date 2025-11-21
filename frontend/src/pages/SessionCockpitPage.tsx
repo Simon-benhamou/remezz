@@ -718,6 +718,14 @@ export default function SessionCockpitPage() {
             setTickerStatus('live');
             setTickerError(null);
             lastTickerUpdateRef.current = Date.now();
+            
+            // ✅ FIX: Update status.price for LiveMetrics header & charts
+            if (tech.last) {
+              setStatus((s: any) => ({
+                ...s,
+                price: tech.last,
+              }));
+            }
           }
         }
         if (msg.type === 'strategy') setStrategy(msg.data);
