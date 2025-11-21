@@ -173,6 +173,9 @@ async function tickOnce(sessionId: string, sym: string){
       diagnostics,
     }, sym, sessionId);
     
+    // 🔥 REAL-TIME FIX: Broadcast technical analysis for live price updates
+    broadcast('analysis', { symbol: sym, technical: tech }, sym, sessionId);
+    
   } catch (error) {
     // Even on error, update timestamp to prevent stale_data cascade
     lastTickBySession.set(sessionId, Date.now());

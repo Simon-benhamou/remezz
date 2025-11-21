@@ -698,7 +698,28 @@ export default function SessionCockpitPage() {
             pivots: msg.data.pivots,
           }));
         }
-        if (msg.type === 'analysis') setAnalysis(msg.data);
+        if (msg.type === 'analysis') {
+          setAnalysis(msg.data);
+          // 🔥 REAL-TIME FIX: Update ticker from technical snapshot
+          if (msg.data?.technical) {
+            const tech = msg.data.technical;
+            setTicker((prev: any) => ({
+              ...prev,
+              last: tech.last ?? prev?.last,
+              bid: tech.bid ?? prev?.bid,
+              ask: tech.ask ?? prev?.ask,
+              high: tech.high24h ?? prev?.high,
+              low: tech.low24h ?? prev?.low,
+              baseVolume: tech.baseVolume24h ?? prev?.baseVolume,
+              quoteVolume: tech.quoteVolume24h ?? prev?.quoteVolume,
+              change: tech.change24h ?? prev?.change,
+              percentage: tech.percentage24h ?? prev?.percentage,
+            }));
+            setTickerStatus('live');
+            setTickerError(null);
+            lastTickerUpdateRef.current = Date.now();
+          }
+        }
         if (msg.type === 'strategy') setStrategy(msg.data);
         if (msg.type === 'agent_state') {
           setAgent((prev: any) => ({ ...prev, ...msg.data }));

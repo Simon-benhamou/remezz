@@ -58,7 +58,7 @@ export type OpsEvent = {
   details?: any;
 };
 
-const MAX_EVENTS = 200;
+const MAX_EVENTS = 5000; // Increased from 200 to support multi-user operations
 const opsEvents: OpsEvent[] = [];
 const DUPLICATE_COOLDOWN_MS = 60 * 1000;
 const opsEventDedupe = new Map<string, number>();

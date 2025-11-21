@@ -122,7 +122,12 @@ export default function PriceChart({
         },
       },
       localization: {
-        priceFormatter: (value: number) => value.toFixed(4),
+        priceFormatter: (value: number) => {
+          // Smart precision: more decimals for lower prices
+          if (value >= 1000) return value.toFixed(2);
+          if (value >= 100) return value.toFixed(3);
+          return value.toFixed(4);
+        },
       },
       rightPriceScale: { 
         borderVisible: false, 

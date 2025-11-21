@@ -85,7 +85,8 @@ router.post('/create-test-smart-agent', async (req, res) => {
     const { getBalanceSnapshot } = await import('../services/capitalPool.js');
     
     // Get balance from capital pool instead of hardcoding
-    const poolSnapshot = await getBalanceSnapshot('paper');
+    // Note: debug endpoint has no userId, use legacy pool
+    const poolSnapshot = await getBalanceSnapshot('paper', undefined);
     const poolBalance = poolSnapshot.freeUSD.toNumber();
     const startBalance = Math.max(100, poolBalance);
     

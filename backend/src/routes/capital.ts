@@ -78,6 +78,8 @@ router.get('/reservations', authenticateUser, async (req: AuthenticatedRequest, 
 });
 
 router.post('/expire', async (_req, res) => {
+  // Expire reservations for legacy pools only
+  // User-specific pools expire via their own managers when accessed
   await Promise.all([
     getCapitalManager('paper').expireReservations(),
     getCapitalManager('live').expireReservations(),

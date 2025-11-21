@@ -1448,9 +1448,10 @@ router.get('/overview', authenticateUser, async (req: AuthenticatedRequest, res)
     let paperCapital: ReturnType<typeof serializeSnapshot> | null = null;
     let liveCapital: ReturnType<typeof serializeSnapshot> | null = null;
     try {
+      const userId = (!req.user?.isLegacy && req.user?.id) ? req.user.id : undefined;
       const [paperSnap, liveSnap] = await Promise.all([
-        getBalanceSnapshot('paper'),
-        getBalanceSnapshot('live'),
+        getBalanceSnapshot('paper', userId),
+        getBalanceSnapshot('live', userId),
       ]);
       paperCapital = serializeSnapshot(paperSnap);
       liveCapital = serializeSnapshot(liveSnap);

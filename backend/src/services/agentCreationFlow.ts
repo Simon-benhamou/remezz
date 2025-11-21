@@ -1591,7 +1591,7 @@ async function createSessionRecord(
     if (config.startBalanceUsd <= 0) {
       try {
         const { getBalanceSnapshot } = await import('./capitalPool.js');
-        const poolSnapshot = await getBalanceSnapshot('paper');
+        const poolSnapshot = await getBalanceSnapshot('paper', config.userId);
         const poolBalance = poolSnapshot.freeUSD.toNumber();
         config.startBalanceUsd = Math.max(100, poolBalance); // Minimum 100$ to ensure orderability
         console.log(`💰 Using capital pool balance for paper session: $${config.startBalanceUsd.toFixed(2)}`);
