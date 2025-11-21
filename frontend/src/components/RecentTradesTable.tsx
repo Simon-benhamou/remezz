@@ -40,7 +40,9 @@ function formatNumber(value?: number | null, digits = 2) {
 function formatTimestamp(ts?: string) {
   if (!ts) return '—';
   const date = new Date(ts);
-  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+  const month = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${month} ${time}`;
 }
 
 const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
@@ -62,68 +64,79 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
   const columns = React.useMemo(
     () => [
       {
-        title: 'Symbol',
+        title: 'SYMBOL',
         dataIndex: 'symbol',
         key: 'symbol',
+        width: 110,
         render: (symbol: string, row: TradeRow) => (
-          <Space>
-            <Badge color={row.positionSide === 'long' ? 'green' : 'volcano'} />
-            <span style={{ fontWeight: 600 }}>{symbol || '—'}</span>
-          </Space>
+          <Text strong style={{ fontSize: 13 }}>{symbol?.replace('/USDT', '') || '—'}</Text>
         ),
       },
       {
-        title: 'Qty',
+        title: 'QTY',
         dataIndex: 'qty',
         key: 'qty',
-        render: (value: number) => formatNumber(value, 3),
+        width: 90,
+        align: 'right' as const,
+        render: (value: number) => <Text style={{ fontSize: 12 }}>{formatNumber(value, 1)}</Text>,
       },
       {
-        title: 'Entry',
+        title: 'ENTRY',
         dataIndex: 'entryPrice',
         key: 'entryPrice',
-        render: (value: number | null) => formatNumber(value, 4),
+        width: 90,
+        align: 'right' as const,
+        render: (value: number | null) => <Text style={{ fontSize: 12 }}>{formatNumber(value, 4)}</Text>,
       },
       {
-        title: 'Exit',
+        title: 'EXIT',
         dataIndex: 'exitPrice',
         key: 'exitPrice',
-        render: (value: number | null) => formatNumber(value, 4),
+        width: 90,
+        align: 'right' as const,
+        render: (value: number | null) => <Text style={{ fontSize: 12 }}>{formatNumber(value, 4)}</Text>,
       },
       {
         title: 'ROE',
         dataIndex: 'roePct',
         key: 'roePct',
-        render: (value: number | null, row: TradeRow) => {
+        width: 80,
+        align: 'right' as const,
+        render: (value: number | null) => {
           const color = value != null && value >= 0 ? '#34d399' : '#f87171';
           return value != null ? (
-            <span style={{ color, fontWeight: 600 }}>{formatNumber(value, 2)}%</span>
-          ) : '—';
+            <Text style={{ color, fontWeight: 600, fontSize: 13 }}>{formatNumber(value, 1)}%</Text>
+          ) : <Text style={{ fontSize: 12 }}>—</Text>;
         },
       },
       {
-        title: 'PnL',
+        title: 'PNL',
         dataIndex: 'realizedPnlUsd',
         key: 'realizedPnlUsd',
+        width: 100,
+        align: 'right' as const,
         render: (value: number) => (
-          <Space>
-            {value >= 0 ? <ArrowUpOutlined style={{ color: '#34d399' }} /> : <ArrowDownOutlined style={{ color: '#f87171' }} />}
-            <span style={{ color: value >= 0 ? '#34d399' : '#f87171', fontWeight: 600 }}>{formatUsd(value)}</span>
+          <Space size={4}>
+            {value >= 0 ? <ArrowUpOutlined style={{ color: '#34d399', fontSize: 11 }} /> : <ArrowDownOutlined style={{ color: '#f87171', fontSize: 11 }} />}
+            <Text style={{ color: value >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 13 }}>{formatUsd(value)}</Text>
           </Space>
         ),
       },
       {
-        title: 'Leverage',
+        title: 'LEVERAGE',
         dataIndex: 'estLev',
         key: 'estLev',
-        render: (value: number | null) => (value != null ? `${formatNumber(value, 2)}×` : '—'),
+        width: 85,
+        align: 'center' as const,
+        render: (value: number | null) => <Text style={{ fontSize: 12 }}>{value != null ? `${formatNumber(value, 1)}×` : '—'}</Text>,
       },
       {
-        title: 'Time',
+        title: 'TIME',
         dataIndex: 'createdAt',
         key: 'createdAt',
+        width: 120,
         render: (value: string) => (
-          <Text style={{ color: mutedText }}>{formatTimestamp(value)}</Text>
+          <Text style={{ color: mutedText, fontSize: 12, whiteSpace: 'nowrap' }}>{formatTimestamp(value)}</Text>
         ),
       },
     ],
@@ -136,11 +149,11 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
       bodyStyle={{ padding: 0 }}
       title={
         <Space size={12}>
-          <span style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>Recent trades</span>
+          <span style={{ color: isDarkTheme ? '#f8fafc' : token.colorText, fontSize: 15, fontWeight: 600 }}>Recent trades</span>
           <Tag color='blue'>{sortedTrades.length}</Tag>
         </Space>
       }
-      extra={onRefresh ? <a onClick={onRefresh}>Refresh</a> : undefined}
+      extra={onRefresh ? <a onClick={onRefresh} style={{ fontSize: 13 }}>Refresh</a> : undefined}
     >
       {sortedTrades.length === 0 && !loading ? (
         <Empty
@@ -164,8 +177,29 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
           pagination={false}
           loading={loading}
           style={{ color: isDarkTheme ? '#e2e8f0' : token.colorText }}
+          className="compact-trades-table"
         />
       )}
+      <style>{`
+        .compact-trades-table .ant-table-thead > tr > th {
+          padding: 8px 12px !important;
+          font-size: 11px !important;
+          font-weight: 700 !important;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: ${isDarkTheme ? 'rgba(148, 163, 184, 0.8)' : token.colorTextSecondary} !important;
+        }
+        .compact-trades-table .ant-table-tbody > tr > td {
+          padding: 6px 12px !important;
+          line-height: 1.4;
+        }
+        .compact-trades-table .ant-table-tbody > tr {
+          transition: background 0.2s;
+        }
+        .compact-trades-table .ant-table-tbody > tr:hover {
+          background: ${isDarkTheme ? 'rgba(59, 130, 246, 0.08)' : 'rgba(59, 130, 246, 0.04)'} !important;
+        }
+      `}</style>
     </Card>
   );
 };

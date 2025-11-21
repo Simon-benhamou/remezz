@@ -237,25 +237,37 @@ export default function SubagentStatusCards({ sessionId }: SubagentStatusCardsPr
 }
 
 function renderRecommendation(subagent: string, recommendation: any): React.ReactNode {
-  if (!recommendation) return <Text type="secondary">No recommendation</Text>;
+  if (!recommendation || typeof recommendation !== 'object') {
+    return <Text type="secondary">No recommendation</Text>;
+  }
+
+  const formatPercent = (val: any) => {
+    if (val === null || val === undefined || isNaN(val)) return 'N/A';
+    return `${(val * 100).toFixed(0)}%`;
+  };
+
+  const formatNumber = (val: any, decimals = 1) => {
+    if (val === null || val === undefined || isNaN(val)) return 'N/A';
+    return Number(val).toFixed(decimals);
+  };
 
   switch (subagent) {
     case 'risk_governor':
       return (
         <>
           <div>
-            <ThunderboltOutlined /> Leverage: <strong>{recommendation.recommendedMaxLeverage?.toFixed(1)}x</strong>
+            <ThunderboltOutlined /> Leverage: <strong>{formatNumber(recommendation.recommendedMaxLeverage)}x</strong>
           </div>
-          <div>Position: <strong>{(recommendation.recommendedMaxPositionPct * 100)?.toFixed(0)}%</strong></div>
+          <div>Position: <strong>{formatPercent(recommendation.recommendedMaxPositionPct)}</strong></div>
         </>
       );
 
     case 'predictor':
-      const bias = recommendation.directionBias || 'neutral';
+      const bias = recommendation.directionBias || 'NEUTRAL';
       return (
         <>
           <div>Direction: <Tag color={bias === 'bullish' ? 'green' : bias === 'bearish' ? 'red' : 'default'}>{bias.toUpperCase()}</Tag></div>
-          <div>Threshold: <strong>{(recommendation.confidenceThreshold * 100)?.toFixed(0)}%</strong></div>
+          <div>Threshold: <strong>{formatPercent(recommendation.confidenceThreshold)}</strong></div>
         </>
       );
 
@@ -263,31 +275,31 @@ function renderRecommendation(subagent: string, recommendation: any): React.Reac
       return (
         <>
           <div>Strategy: <strong>{recommendation.executionStrategy || 'market'}</strong></div>
-          <div>Slippage Tol: <strong>{(recommendation.slippageTolerance * 100)?.toFixed(2)}%</strong></div>
+          <div>Slippage Tol: <strong>{formatPercent(recommendation.slippageTolerance)}</strong></div>
         </>
       );
 
     case 'sentiment':
       return (
         <>
-          <div>News Weight: <strong>{(recommendation.newsWeight * 100)?.toFixed(0)}%</strong></div>
-          <div>Whale Weight: <strong>{(recommendation.whaleWeight * 100)?.toFixed(0)}%</strong></div>
+          <div>News Weight: <strong>{formatPercent(recommendation.newsWeight)}</strong></div>
+          <div>Whale Weight: <strong>{formatPercent(recommendation.whaleWeight)}</strong></div>
         </>
       );
 
     case 'market_quality':
       return (
         <>
-          <div>Min Liquidity: <strong>{(recommendation.minLiquidityScore * 100)?.toFixed(0)}%</strong></div>
-          <div>Max Spread: <strong>{(recommendation.maxSpreadPct * 100)?.toFixed(2)}%</strong></div>
+          <div>Min Liquidity: <strong>{formatPercent(recommendation.minLiquidityScore)}</strong></div>
+          <div>Max Spread: <strong>{formatPercent(recommendation.maxSpreadPct)}</strong></div>
         </>
       );
 
     case 'entry_timing':
       return (
         <>
-          <div>Patience: <strong>{(recommendation.patience * 100)?.toFixed(0)}%</strong></div>
-          <div>Recommendation: <strong>{recommendation.recommendation}</strong></div>
+          <div>Patience: <strong>{formatPercent(recommendation.patience)}</strong></div>
+          <div>Recommendation: <strong>{recommendation.recommendation || 'N/A'}</strong></div>
         </>
       );
 
@@ -295,7 +307,7 @@ function renderRecommendation(subagent: string, recommendation: any): React.Reac
       return (
         <>
           <div>Scale-Out: <strong>{recommendation.scaleOutPlan?.length || 4} levels</strong></div>
-          <div>Trailing Stop: <strong>{(recommendation.trailingStopDistance * 100)?.toFixed(1)}%</strong></div>
+          <div>Trailing Stop: <strong>{formatPercent(recommendation.trailingStopDistance)}</strong></div>
         </>
       );
 

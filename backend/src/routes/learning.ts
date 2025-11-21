@@ -84,6 +84,11 @@ router.get('/sessions/:sessionId', async (req, res) => {
     }).length;
     const winRate = totalTrades > 0 ? winningTrades / totalTrades : 0;
     
+    // Calculate avgConfidence safely (default to 0.5 if no states)
+    const avgConfidence = learningStates.length > 0
+      ? learningStates.reduce((sum, s) => sum + s.confidence, 0) / learningStates.length
+      : 0.5;
+    
     res.json({
       sessionId,
       symbol: session.symbol,
@@ -93,7 +98,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
         totalTrades,
         winningTrades,
         winRate,
-        avgConfidence: learningStates.reduce((sum, s) => sum + s.confidence, 0) / learningStates.length,
+        avgConfidence,
       },
       timestamp: new Date().toISOString(),
     });
