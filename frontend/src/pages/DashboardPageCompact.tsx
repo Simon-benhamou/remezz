@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import RecentTradesTable from '../components/RecentTradesTable';
+import PerformanceOverviewCard from '../components/PerformanceOverviewCard';
 import { 
   RobotOutlined, 
   DollarOutlined, 
@@ -33,9 +34,18 @@ export default function DashboardPageCompact(){
   async function loadTrades(){
     setTradesLoading(true);
     try {
-      // Fetch recent trades across all sessions
+      // Fetch only CLOSED trades across all sessions for accurate display
       const result = await api.getTrades(undefined, { limit: 50 });
-      setTrades(Array.isArray(result) ? result : []);
+      // Filter to only show closed trades with valid data
+      const closedTrades = Array.isArray(result) 
+        ? result.filter((t: any) => 
+            t.status === 'closed' && 
+            t.exitPrice != null && 
+            t.entryPrice != null &&
+            t.realizedPnlUsd != null
+          )
+        : [];
+      setTrades(closedTrades);
     } catch(err){
       console.error('Failed to load trades:', err);
       setTrades([]);
@@ -164,9 +174,18 @@ export default function DashboardPageCompact(){
         </Col>
       </Row>
 
-      {/* Recent Trades Table */}
+      {/* Performance Chart & Recent Trades */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col span={24}>
+        <Col xs={24} lg={12}>
+          <PerformanceOverviewCard
+            trades={trades}
+            loading={tradesLoading}
+            title="Performance Overview"
+            subtitle="Cumulative PnL across all sessions"
+            tagLabel={mode.toUpperCase()}
+          />
+        </Col>
+        <Col xs={24} lg={12}>
           <RecentTradesTable
             trades={trades}
             loading={tradesLoading}

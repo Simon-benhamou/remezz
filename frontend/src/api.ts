@@ -76,8 +76,8 @@ export const api = {
   optimizeSymbol: async (symbol: string) =>
     (await client.post("/api/strategy/optimize-symbol", { symbol })).data,
   optimizeAllSymbols: async () =>
-    (await client.post("/api/strategy/optimize-all")).data,
-  getSymbolProfile: async (symbol: string) =>
+    (await client.post("/api/strategy/optimize-all")).data,  getCryptoRanking: async (opts?: { limit?: number; refresh?: boolean }) =>
+    (await client.get('/api/crypto/ranking', { params: opts })).data,  getSymbolProfile: async (symbol: string) =>
     (await client.get(`/api/strategy/symbol-profile/${symbol}`)).data,
   getAllSymbolProfiles: async () =>
     (await client.get("/api/strategy/symbol-profiles")).data,

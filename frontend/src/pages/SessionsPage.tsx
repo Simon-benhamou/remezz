@@ -33,6 +33,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { useSessionsCache } from '../hooks/useSessionsCache';
+import AgentCreationModal from '../components/AgentCreationModal';
 import type { AppMode } from '../store';
 import type { StrategySnapshot } from '../types/strategies';
 import {
@@ -46,8 +47,6 @@ import {
 const { Text, Title } = Typography;
 
 type ViewMode = 'cards' | 'table';
-
-type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
 
 type AgentSession = {
   id: string;
@@ -70,47 +69,6 @@ type AgentSession = {
   strategyEngine?: StrategyEngineOption | null;
   strategy?: StrategySnapshot | string | null;
 };
-
-type CreationFormShape = {
-  agentCount: number;
-  maxLeverage: number;
-  aggressiveness: AggressivenessLevel;
-  mode: AppMode;
-};
-
-const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyLoss: number; note: string }> = {
-  conservative: {
-    risk: 1.0,
-    dailyLoss: 3.0,
-    note: 'Tight exposure for steadier growth.',
-  },
-  reactive: {
-    risk: 1.5,
-    dailyLoss: 3.5,
-    note: 'Balanced risk profile for most agents.',
-  },
-  aggressive: {
-    risk: 2.2,
-    dailyLoss: 3.8,
-    note: 'Higher swings allowed for faster compounding.',
-  },
-};
-
-const commonSymbols = [
-  'BTC/USDT',
-  'ETH/USDT',
-  'SOL/USDT',
-  'XRP/USDT',
-  'BNB/USDT',
-  'ADA/USDT',
-  'SUI/USDT',
-  'AVAX/USDT',
-  'DOGE/USDT',
-  'TON/USDT',
-  'LINK/USDT',
-  'MATIC/USDT',
-  'DOT/USDT',
-];
 
 const isSessionActive = (session: AgentSession) => !session.haltedAt && !session.stoppedAt;
 
@@ -246,13 +204,6 @@ export default function SessionsPage() {
   const [loading, setLoading] = React.useState(false);
   const [viewMode, setViewMode] = React.useState<ViewMode>('cards');
   const [modalOpen, setModalOpen] = React.useState(false);
-  const [editingSession, setEditingSession] = React.useState<AgentSession | null>(null);
-  const [submitting, setSubmitting] = React.useState(false);
-  const [form] = Form.useForm<CreationFormShape>();
-
-  const agentCount = Form.useWatch('agentCount', form) ?? 1;
-  const aggressiveness = (Form.useWatch('aggressiveness', form) as AggressivenessLevel) ?? 'conservative';
-  const riskPreset = AGGRESSIVENESS_PRESETS[aggressiveness];
 
   const fetchSessions = React.useCallback(
     async (forceRefresh = false) => {
@@ -277,38 +228,17 @@ export default function SessionsPage() {
   }, [fetchSessions]);
 
   const openCreateModal = React.useCallback(() => {
-    setEditingSession(null);
-    form.resetFields();
-    form.setFieldsValue({
-      agentCount: 1,
-      maxLeverage: 4,
-      aggressiveness: 'reactive',
-      mode: currentMode,
-    });
     setModalOpen(true);
-  }, [currentMode, form]);
-
-  const openEditModal = React.useCallback(
-    (session: AgentSession) => {
-      setEditingSession(session);
-      form.resetFields();
-      form.setFieldsValue({
-        agentCount: 1,
-        maxLeverage:
-          Number((session.profile as any)?.requestedMaxLeverage ?? (session.profile as any)?.maxLeverage ?? 4) || 4,
-        aggressiveness: ((session.profile as any)?.aggressiveness as AggressivenessLevel) ?? 'reactive',
-        mode: session.mode,
-      });
-      setModalOpen(true);
-    },
-    [form]
-  );
+  }, []);
 
   const closeModal = React.useCallback(() => {
     setModalOpen(false);
-    setEditingSession(null);
-    form.resetFields();
-  }, [form]);
+  }, []);
+
+  const handleAgentCreated = React.useCallback(async () => {
+    invalidateCache(currentMode);
+    await fetchSessions(true);
+  }, [currentMode, fetchSessions, invalidateCache]);
 
   const handleStopSession = React.useCallback(
     (session: AgentSession) => {
@@ -354,107 +284,37 @@ export default function SessionsPage() {
     [currentMode, fetchSessions, invalidateCache]
   );
 
-  const handleModalSubmit = React.useCallback(async () => {
-    try {
-      const values = await form.validateFields();
-      setSubmitting(true);
-      
-      if (editingSession) {
-        // Edit single session
-        const payload = {
-          mode: values.mode ?? currentMode,
-          smartAutoMode: true, // Always smart mode now
-          maxLeverage: values.maxLeverage,
-          aggressiveness: values.aggressiveness,
-          strategyEngine: 'meta_adaptive', // Fixed strategy
-        };
-        await api.restartSession(editingSession.id, payload);
-        message.success('Agent settings updated');
-      } else {
-        // Create multiple agents
-        const agentCount = values.agentCount || 1;
-        let succeeded = 0;
-        let failed = 0;
-        const usedSymbols = new Set<string>(); // Track symbols to prevent duplicates
-
-        for (let i = 0; i < agentCount; i++) {
-          try {
-            const payload = {
-              mode: currentMode,
-              smartAutoMode: true,
-              maxLeverage: values.maxLeverage,
-              aggressiveness: values.aggressiveness,
-              strategyEngine: 'meta_adaptive',
-              excludedSymbols: Array.from(usedSymbols), // Pass already used symbols
-            };
-
-            console.log(`[Agent ${i+1}/${agentCount}] Creating with excluded symbols:`, Array.from(usedSymbols));
-            
-            const prepare = await api.prepareAgentCreation(payload);
-            const creationId = prepare?.creationId;
-            const selectedSymbol = prepare?.selection?.symbol;
-
-            console.log(`[Agent ${i+1}/${agentCount}] Selected symbol:`, selectedSymbol);
-
-            if (!creationId || !selectedSymbol) {
-              console.warn(`[Agent ${i+1}/${agentCount}] No creationId or symbol returned`);
-              failed++;
-              continue;
-            }
-
-            // Check if symbol is already used in this batch
-            if (usedSymbols.has(selectedSymbol)) {
-              console.warn(`[Agent ${i+1}/${agentCount}] Symbol ${selectedSymbol} already used in this batch, skipping duplicate`);
-              failed++;
-              continue;
-            }
-
-            await api.createAgentSession(creationId, selectedSymbol);
-            await api.activateAgentCreation(creationId);
-            
-            usedSymbols.add(selectedSymbol);
-            succeeded++;
-            
-            console.log(`[Agent ${i+1}/${agentCount}] Successfully created with symbol ${selectedSymbol}`);
-            
-            // Small delay to avoid overwhelming the system
-            if (i < agentCount - 1) {
-              await new Promise(resolve => setTimeout(resolve, 1000)); // Increased to 1 second
-            }
-          } catch (error) {
-            console.error('Failed to create agent:', error);
-            failed++;
-          }
-        }
-
-        if (succeeded > 0) {
-          message.success(`Created ${succeeded} agent${succeeded > 1 ? 's' : ''} successfully${failed > 0 ? `, ${failed} failed` : ''}`);
-        } else {
-          message.error('Failed to create any agents');
-        }
-      }
-
-      invalidateCache(currentMode);
-      await fetchSessions(true);
-      closeModal();
-    } catch (error: any) {
-      const detail = error?.response?.data?.message || error?.message || error;
-      message.error(typeof detail === 'string' ? detail : 'Unable to save agent');
-    } finally {
-      setSubmitting(false);
-      setEditingSession(null);
-    }
-  }, [closeModal, currentMode, editingSession, fetchSessions, form, invalidateCache]);
-
   const handlePrimaryAction = React.useCallback(
     (session: AgentSession) => {
       if (isSessionActive(session)) {
         handleStopSession(session);
         return;
       }
-      openEditModal(session);
+      // For restarting paused agents, open a confirmation modal instead
+      Modal.confirm({
+        title: `Restart ${resolveAgentLabel(session)}?`,
+        content: 'The agent will resume trading with its current configuration.',
+        okText: 'Restart Agent',
+        okButtonProps: { type: 'primary' },
+        onOk: async () => {
+          try {
+            const payload = {
+              mode: session.mode,
+              maxLeverage: Number((session.profile as any)?.requestedMaxLeverage ?? (session.profile as any)?.maxLeverage ?? 4) || 4,
+              aggressiveness: ((session.profile as any)?.aggressiveness) ?? 'reactive',
+              strategyEngine: 'meta_adaptive',
+            };
+            await api.restartSession(session.id, payload);
+            message.success('Agent restarted');
+            invalidateCache(currentMode);
+            await fetchSessions(true);
+          } catch (error: any) {
+            message.error(error?.response?.data?.message || 'Failed to restart agent');
+          }
+        },
+      });
     },
-    [handleStopSession, openEditModal]
+    [handleStopSession, currentMode, fetchSessions, invalidateCache]
   );
 
   const handleRefresh = React.useCallback(() => {
@@ -1149,123 +1009,12 @@ export default function SessionsPage() {
         </Card>
       )}
 
-      <Modal
-        open={modalOpen}
-        onCancel={closeModal}
-        onOk={handleModalSubmit}
-        okText={editingSession ? 'Save Changes' : agentCount > 1 ? `Create ${agentCount} Agents` : 'Create Agent'}
-        confirmLoading={submitting}
-        title={editingSession ? 'Adjust agent settings' : 'Create AI trading agents'}
-        destroyOnClose
-        maskClosable={false}
-        styles={{
-          body: {
-            background: 'linear-gradient(155deg, rgba(15, 23, 42, 0.95) 0%, rgba(15, 23, 42, 0.85) 100%)',
-            padding: 24,
-            borderRadius: 16,
-          },
-          header: {
-            background: 'rgba(15, 23, 42, 0.92)',
-            borderBottom: '1px solid rgba(148, 163, 184, 0.18)',
-          },
-          footer: {
-            background: 'rgba(15, 23, 42, 0.92)',
-            borderTop: '1px solid rgba(148, 163, 184, 0.18)',
-          },
-        }}
-      >
-        <Form<CreationFormShape>
-          layout="vertical"
-          form={form}
-          initialValues={{
-            agentCount: 1,
-            maxLeverage: 4,
-            aggressiveness: 'reactive',
-            mode: currentMode,
-          }}
-        >
-          {!editingSession && (
-            <Form.Item
-              label={<Text style={{ color: '#e2e8f0' }}>Number of agents to create</Text>}
-              name="agentCount"
-            >
-              <Slider 
-                min={1} 
-                max={12} 
-                marks={{
-                  1: '1',
-                  3: '3',
-                  6: '6',
-                  9: '9',
-                  12: '12'
-                }}
-                tooltip={{ formatter: (value) => `${value || 1} agent${(value || 1) > 1 ? 's' : ''}` }} 
-              />
-            </Form.Item>
-          )}
-
-          <Alert
-            type="info"
-            showIcon
-            message="🤖 Autonomous Portfolio Management"
-            description="The AI will intelligently select optimal crypto pairs for each agent, ensuring portfolio diversity and adapting based on historical performance. No manual symbol selection needed."
-            style={{
-              background: 'rgba(59, 130, 246, 0.08)',
-              border: '1px solid rgba(59, 130, 246, 0.24)',
-              borderRadius: 12,
-              color: '#e2e8f0',
-              marginBottom: 16,
-            }}
-          />
-
-          <Form.Item label={<Text style={{ color: '#e2e8f0' }}>Max leverage</Text>} name="maxLeverage">
-            <Slider min={1} max={10} tooltip={{ formatter: (value) => `${value}x` }} />
-          </Form.Item>
-
-          <Form.Item
-            label={<Text style={{ color: '#e2e8f0' }}>Risk Profile</Text>}
-            name="aggressiveness"
-            rules={[{ required: true }]}
-            extra={
-              <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>
-                {riskPreset.note}
-              </Text>
-            }
-          >
-            <Select
-              options={[
-                { value: 'conservative', label: 'Conservative - Blue chips only' },
-                { value: 'reactive', label: 'Reactive - Balanced approach (Recommended)' },
-                { value: 'aggressive', label: 'Aggressive - High volatility opportunities' },
-              ]}
-            />
-          </Form.Item>
-
-          <div
-            style={{
-              background: 'rgba(30, 41, 59, 0.65)',
-              border: '1px solid rgba(148, 163, 184, 0.22)',
-              borderRadius: 12,
-              padding: 16,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-            }}
-          >
-            <Text style={{ color: '#f8fafc', fontWeight: 600 }}>Risk parameters</Text>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>
-              Risk per trade: <strong>{riskPreset.risk.toFixed(1)}%</strong>
-            </Text>
-            <Text style={{ color: 'rgba(148, 163, 184, 0.78)' }}>
-              Daily loss cap: <strong>{riskPreset.dailyLoss.toFixed(1)}%</strong>
-            </Text>
-          </div>
-
-          <Form.Item name="mode" hidden initialValue={currentMode}>
-            <input type="hidden" />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <AgentCreationModal
+        visible={modalOpen}
+        mode={currentMode}
+        onClose={closeModal}
+        onSuccess={handleAgentCreated}
+      />
     </div>
   );
 }

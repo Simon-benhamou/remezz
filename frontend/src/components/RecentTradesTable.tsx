@@ -31,7 +31,10 @@ function formatUsd(value?: number | null) {
 
 function formatNumber(value?: number | null, digits = 2) {
   if (value == null || Number.isNaN(value)) return '—';
-  return Number(value).toFixed(digits);
+  // Format with proper precision to avoid rounding issues
+  const formatted = Number(value).toFixed(digits);
+  // Remove trailing zeros after decimal point for cleaner display
+  return parseFloat(formatted).toString();
 }
 
 function formatTimestamp(ts?: string) {
@@ -47,6 +50,15 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
   const cardBg = isDarkTheme ? '#0f172a' : token.colorBgContainer;
   const borderColor = isDarkTheme ? 'rgba(148, 163, 184, 0.2)' : token.colorBorderSecondary;
   const mutedText = isDarkTheme ? 'rgba(226, 232, 240, 0.6)' : token.colorTextSecondary;
+  
+  // Sort trades by most recent first
+  const sortedTrades = React.useMemo(() => {
+    if (!Array.isArray(trades)) return [];
+    return [...trades].sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [trades]);
+  
   const columns = React.useMemo(
     () => [
       {
@@ -70,19 +82,24 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
         title: 'Entry',
         dataIndex: 'entryPrice',
         key: 'entryPrice',
-        render: (value: number | null) => formatNumber(value),
+        render: (value: number | null) => formatNumber(value, 4),
       },
       {
         title: 'Exit',
         dataIndex: 'exitPrice',
         key: 'exitPrice',
-        render: (value: number | null) => formatNumber(value),
+        render: (value: number | null) => formatNumber(value, 4),
       },
       {
         title: 'ROE',
         dataIndex: 'roePct',
         key: 'roePct',
-        render: (value: number | null) => (value != null ? `${formatNumber(value, 2)}%` : '—'),
+        render: (value: number | null, row: TradeRow) => {
+          const color = value != null && value >= 0 ? '#34d399' : '#f87171';
+          return value != null ? (
+            <span style={{ color, fontWeight: 600 }}>{formatNumber(value, 2)}%</span>
+          ) : '—';
+        },
       },
       {
         title: 'PnL',
@@ -120,12 +137,12 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
       title={
         <Space size={12}>
           <span style={{ color: isDarkTheme ? '#f8fafc' : token.colorText }}>Recent trades</span>
-          <Tag color='blue'>{trades.length}</Tag>
+          <Tag color='blue'>{sortedTrades.length}</Tag>
         </Space>
       }
       extra={onRefresh ? <a onClick={onRefresh}>Refresh</a> : undefined}
     >
-      {trades.length === 0 && !loading ? (
+      {sortedTrades.length === 0 && !loading ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description='No trades yet.'
@@ -135,7 +152,7 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
         <Table
           size='small'
           columns={columns}
-          dataSource={trades.slice(0, 10)}
+          dataSource={sortedTrades.slice(0, 10)}
           rowKey={(row) => row.id}
           pagination={false}
           loading={loading}
