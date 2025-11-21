@@ -355,12 +355,27 @@ if (process.env.LEVERAGE_CONSTRAINT_REFRESH_DISABLED !== 'true') {
 }
 
 // Prime Binance WS early so UI/API has data immediately
-try {
-  if (getConfig().EXCHANGE_ID.toLowerCase().includes('binance')) {
-    serverLogger.info('📡 Priming Binance WebSocket at server startup...');
-    getBinanceWebSocket();
-  }
-} catch (e) { serverLogger.warn('WS prime failed:', e); }
+(async () => {
+  try {
+    if (getConfig().EXCHANGE_ID.toLowerCase().includes('binance')) {
+      serverLogger.info('📡 Priming Binance WebSocket at server startup...');
+      const binanceWs = getBinanceWebSocket();
+      
+      // 🔥 REAL-TIME PRICE BROADCAST: Forward ticker updates to all connected clients
+      const { broadcast } = await import('./ws/hub.js');
+      binanceWs.onTicker((ticker) => {
+        // Broadcast price updates in real-time (0 weight, instant)
+        broadcast('price_update', {
+          symbol: ticker.symbol,
+          last: ticker.last,
+          bid: ticker.bid,
+          ask: ticker.ask,
+          timestamp: ticker.timestamp,
+        }, ticker.symbol);
+      });
+    }
+  } catch (e) { serverLogger.warn('WS prime failed:', e); }
+})();
 
 // Start Smart Agent background jobs with EVENT-DRIVEN monitoring
 serverLogger.info('🤖 Starting Smart Agent intelligent monitoring system...');

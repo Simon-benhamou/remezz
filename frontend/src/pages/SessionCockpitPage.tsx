@@ -698,6 +698,21 @@ export default function SessionCockpitPage() {
             pivots: msg.data.pivots,
           }));
         }
+        // 🔥 REAL-TIME PRICE: High-frequency price updates from Binance WebSocket
+        if (msg.type === 'price_update') {
+          const { last, bid, ask, timestamp } = msg.data;
+          if (last) {
+            setStatus((s: any) => ({ ...s, price: last }));
+            setTicker((prev: any) => ({
+              ...prev,
+              last,
+              bid: bid ?? prev?.bid,
+              ask: ask ?? prev?.ask,
+            }));
+            setTickerStatus('live');
+            lastTickerUpdateRef.current = Date.now();
+          }
+        }
         if (msg.type === 'analysis') {
           setAnalysis(msg.data);
           // 🔥 REAL-TIME FIX: Update ticker from technical snapshot
