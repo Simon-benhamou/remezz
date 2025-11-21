@@ -34,18 +34,17 @@ export default function DashboardPageCompact(){
   async function loadTrades(){
     setTradesLoading(true);
     try {
-      // Fetch only CLOSED trades across all sessions for accurate display
-      const result = await api.getTrades(undefined, { limit: 50 });
-      // Filter to only show closed trades with valid data
-      const closedTrades = Array.isArray(result) 
+      // Fetch ALL closed trades across all user sessions (no sessionId = all sessions)
+      const result = await api.getTrades(undefined, { limit: 200 });
+      // Filter to only show valid trades with complete data
+      const validTrades = Array.isArray(result) 
         ? result.filter((t: any) => 
-            t.status === 'closed' && 
             t.exitPrice != null && 
             t.entryPrice != null &&
             t.realizedPnlUsd != null
           )
         : [];
-      setTrades(closedTrades);
+      setTrades(validTrades);
     } catch(err){
       console.error('Failed to load trades:', err);
       setTrades([]);

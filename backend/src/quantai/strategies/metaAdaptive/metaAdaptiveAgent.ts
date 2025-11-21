@@ -1827,17 +1827,25 @@ class MetaAdaptiveStrategyAgent {
     const meanTargets = [new PreciseDecimal('1.5'), new PreciseDecimal('2.4'), new PreciseDecimal('3.5')];
     const momentumTargets = [new PreciseDecimal('2'), new PreciseDecimal('3.5'), new PreciseDecimal('5')];
 
-    // FIX: Réduire strictness pour shorts (90% -> 75%)
-    // Permet de shorter plus tôt quand 15m+1h sont bearish
-    const allowLongStack = context.bullishStack && context.alignmentScore >= 0.9;
+    // 🎯 BALANCED LONG/SHORT DETECTION
+    // Long: 85% alignment (reduced from 90% to capture rebounds)
+    // Short: 75% alignment (kept for early correction detection)
+    const allowLongStack = context.bullishStack && context.alignmentScore >= 0.85;
     const allowShortStack = context.bearishStack && context.alignmentScore >= 0.75;
 
-    // FIX: Early short detection - permettre short si 15m+1h bearish (sans attendre 4h)
+    // 📈 Early LONG detection - permettre long si 15m+1h bullish (rebounds pendant corrections)
+    // 📉 Early SHORT detection - permettre short si 15m+1h bearish (sans attendre 4h)
     const multiTimeframes = input.multiTimeframe?.timeframes ?? {};
     const tf15mBearish = multiTimeframes['15m']?.bias === 'bearish';
     const tf1hBearish = multiTimeframes['1h']?.bias === 'bearish';
+    const tf15mBullish = multiTimeframes['15m']?.bias === 'bullish';
+    const tf1hBullish = multiTimeframes['1h']?.bias === 'bullish';
+    
     const earlyShortSignal = tf15mBearish && tf1hBearish && adx > 22 && rsi < 45;
+    const earlyLongSignal = tf15mBullish && tf1hBullish && adx > 22 && rsi > 55;
+    
     const allowShortStackFinal = allowShortStack || earlyShortSignal;
+    const allowLongStackFinal = allowLongStack || earlyLongSignal;
 
     const basePlans: Record<StrategyFamily, AdaptiveStrategyPlan> = {
       trend: {
@@ -1930,7 +1938,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'trend',
           score: scoreTrend,
           confidence: scoreTrend,
-          bias: allowLongStack ? 'long' : allowShortStackFinal ? 'short' : 'both',
+          bias: allowLongStackFinal ? 'long' : allowShortStackFinal ? 'short' : 'both',
           reasons: [
             `regime=${regimeSignal.dominant}`,
             `adx=${adx.toFixed(2)}`,
@@ -1946,7 +1954,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'breakout',
           score: scoreBreakout,
           confidence: scoreBreakout,
-          bias: allowLongStack ? 'long' : allowShortStackFinal ? 'short' : 'both',
+          bias: allowLongStackFinal ? 'long' : allowShortStackFinal ? 'short' : 'both',
           reasons: [
             `regime=${regimeSignal.dominant}`,
             `compression=${compressionScore.toFixed(2)}`,
@@ -1979,7 +1987,7 @@ class MetaAdaptiveStrategyAgent {
           family: 'momentum',
           score: scoreMomentum,
           confidence: scoreMomentum,
-          bias: allowLongStack ? 'long' : allowShortStackFinal ? 'short' : 'both',
+          bias: allowLongStackFinal ? 'long' : allowShortStackFinal ? 'short' : 'both',
           reasons: [
             `regime=${regimeSignal.dominant}`,
             `trend=${safeNumber((snap as any)?.trend, 0).toFixed(2)}`,

@@ -145,7 +145,14 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
       {sortedTrades.length === 0 && !loading ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description='No trades yet.'
+          description={
+            <Space direction="vertical" size={4}>
+              <span style={{ color: mutedText }}>No closed trades yet</span>
+              <span style={{ color: mutedText, fontSize: 12, opacity: 0.7 }}>
+                Trades will appear here once positions are closed
+              </span>
+            </Space>
+          }
           style={{ margin: '32px 0', color: mutedText }}
         />
       ) : (

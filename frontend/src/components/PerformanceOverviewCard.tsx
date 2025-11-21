@@ -205,12 +205,15 @@ const PerformanceOverviewCard: React.FC<Props> = ({
                 style={{
                   height: '100%',
                   display: 'flex',
+                  flexDirection: 'column',
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: mutedText,
+                  gap: 8,
                 }}
               >
-                No realized trades yet.
+                <div style={{ fontSize: 16, fontWeight: 500 }}>No closed trades yet</div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Trades will appear here once positions are closed</div>
               </div>
             ) : (
               <ResponsiveContainer width='100%' height='100%'>
