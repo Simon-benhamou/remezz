@@ -2940,9 +2940,12 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   const klines = ws.getKlines(symbol, interval);
   if (!klines?.length) return null;
   
-  // 🔥 FIX: Filter out stale klines (older than WS_KLINE_MAX_AGE_MS)
-  const maxAgeMs = Number(process.env.WS_KLINE_MAX_AGE_MS) || 120_000; // Default 2 min
+  // 🔥 FIX: Calculate max age based on interval (kline can be up to interval duration old)
+  const intervalMs = parseIntervalToMs(interval);
+  const baseMaxAge = Number(process.env.WS_KLINE_MAX_AGE_MS) || 120_000; // Default 2 min for short intervals
+  const maxAgeMs = Math.max(baseMaxAge, intervalMs * 2); // Allow 2x interval duration for safety
   const now = Date.now();
+  
   const freshKlines = klines.filter(k => {
     const age = now - k.timestamp;
     return age <= maxAgeMs;
@@ -2950,6 +2953,20 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   
   if (!freshKlines.length) return null;
   return freshKlines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
+}
+
+function parseIntervalToMs(interval: string): number {
+  const match = interval.match(/^(\d+)([smhd])$/);
+  if (!match) return 900_000; // Default 15m
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  switch (unit) {
+    case 's': return value * 1000;
+    case 'm': return value * 60_000;
+    case 'h': return value * 3600_000;
+    case 'd': return value * 86400_000;
+    default: return 900_000;
+  }
 }
 
 /**
