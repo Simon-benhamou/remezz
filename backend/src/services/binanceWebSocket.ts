@@ -347,8 +347,8 @@ class BinanceWebSocketManager {
   private readonly staleBurstAgeThresholdMs = 4_000;
   private readonly timestampDriftBurstWindowMs = 12_000;
   private readonly timestampDriftBurstThreshold = 4;
-  private timestampDriftForceAgeMs = 5_000;
-  private readonly forcedReconnectCooldownMs = 45_000;
+  private timestampDriftForceAgeMs = 90_000;
+  private readonly forcedReconnectCooldownMs = 180_000;  // 3 min cooldown for forced reconnects (was 45s)
   private readonly forcedReconnectDelayMs = 400;
   private serverTimeOffsetMs = 0;
   private serverTimeOffsetSamples: number[] = [];
@@ -1467,8 +1467,8 @@ class BinanceWebSocketManager {
   }
 
   private noteTimestampDrift(symbol: string, receivedTs: number, ageMs: number): void {
-    const windowMs = 15_000;
-    const threshold = 3;
+    const windowMs = 30_000;
+    const threshold = 5;
     const stats = this.timestampDriftCounters.get(symbol);
     let count = 1;
     let firstTs = receivedTs;
@@ -2939,7 +2939,17 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   const ws = getBinanceWebSocket();
   const klines = ws.getKlines(symbol, interval);
   if (!klines?.length) return null;
-  return klines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
+  
+  // 🔥 FIX: Filter out stale klines (older than WS_KLINE_MAX_AGE_MS)
+  const maxAgeMs = Number(process.env.WS_KLINE_MAX_AGE_MS) || 120_000; // Default 2 min
+  const now = Date.now();
+  const freshKlines = klines.filter(k => {
+    const age = now - k.timestamp;
+    return age <= maxAgeMs;
+  });
+  
+  if (!freshKlines.length) return null;
+  return freshKlines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
 }
 
 /**
