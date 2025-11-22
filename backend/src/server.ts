@@ -75,6 +75,26 @@ import { AgentHub } from "./agent/hub.js";
 const logLevel = configureLogging();
 const serverLogger = createLogger("server");
 serverLogger.debug("Logging initialized", { level: logLevel });
+
+// 🛡️ CRITICAL: Process-level error handlers to prevent crashes
+// These catch any unhandled errors that slip through try/catch blocks
+process.on('uncaughtException', (error) => {
+  serverLogger.error('🚨 Uncaught Exception - Process continuing', {
+    error: error.message,
+    stack: error.stack,
+    name: error.name,
+  });
+  // Don't exit - log and continue (trading must not stop)
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  serverLogger.error('🚨 Unhandled Promise Rejection - Process continuing', {
+    reason: String(reason),
+    promise: String(promise),
+  });
+  // Don't exit - log and continue
+});
+
 const cfg = getConfig();
 // Build allowed origins from env (comma-separated) plus safe defaults
 const allowedFromEnv = (cfg.CORS_ORIGIN || "")

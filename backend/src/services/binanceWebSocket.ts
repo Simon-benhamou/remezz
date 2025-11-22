@@ -2940,9 +2940,19 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   const klines = ws.getKlines(symbol, interval);
   if (!klines?.length) return null;
   
-  // ✅ Return ALL klines (historical + recent)
-  // The seeding system handles backfill if cache is empty
-  // The WebSocket updates keep the latest bars fresh
+  // ✅ Smart staleness check: Only reject if last bar is VERY old (>5min)
+  // This protects against WebSocket disconnections while allowing historical data
+  const lastKline = klines[klines.length - 1];
+  const lastBarAge = Date.now() - lastKline.timestamp;
+  const MAX_STALE_MS = 300_000; // 5 minutes - works for any interval
+  
+  if (lastBarAge > MAX_STALE_MS) {
+    // Data is stale (WebSocket likely disconnected), force REST fallback
+    console.warn(`[WS][STALE_CACHE] ${symbol} ${interval}: Last bar is ${Math.round(lastBarAge / 1000)}s old (>5min), cache stale`);
+    return null;
+  }
+  
+  // Return ALL klines (historical + recent) if last bar is fresh
   return klines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
 }
 

@@ -839,14 +839,18 @@ export async function startEventEngine(){
           }
           await reconcileExposure(s.id, sym, s.mode as string);
         } catch (err) {
+          // 🔥 CRITICAL FIX: Skip session on tick failure (IP ban, insufficient data, etc.)
+          // This prevents cascading crashes when buildTechSnapshot fails
           recordOpsEvent({
             level: 'error',
             source: 'heartbeat',
-            message: 'Tick processing failed',
+            message: 'Tick processing failed - skipping session cycle',
             sessionId: s.id,
             symbol: sym,
             details: { error: String((err as any)?.message || err) },
           });
+          // Continue to next session instead of crashing
+          continue;
         }
       }
       // Stale data monitoring
