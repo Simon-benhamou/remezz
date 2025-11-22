@@ -116,9 +116,11 @@ const RecentTradesTable: React.FC<Props> = ({ trades, loading, onRefresh }) => {
         width: 100,
         align: 'right' as const,
         render: (value: number) => (
-          <Space size={4}>
+          <Space size={4} style={{ flexWrap: 'nowrap' }}>
             {value >= 0 ? <ArrowUpOutlined style={{ color: '#34d399', fontSize: 11 }} /> : <ArrowDownOutlined style={{ color: '#f87171', fontSize: 11 }} />}
-            <Text style={{ color: value >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 13 }}>{formatUsd(value)}</Text>
+            <Text style={{ color: value >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>
+              {value == null || Number.isNaN(value) ? '$0' : `${value >= 0 ? '' : '-'}$${Math.round(Math.abs(value))}`}
+            </Text>
           </Space>
         ),
       },

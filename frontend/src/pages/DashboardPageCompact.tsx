@@ -34,16 +34,33 @@ export default function DashboardPageCompact(){
   async function loadTrades(){
     setTradesLoading(true);
     try {
-      // Fetch ALL closed trades across all user sessions (no sessionId = all sessions)
-      const result = await api.getTrades(undefined, { limit: 200 });
-      // Filter to only show valid trades with complete data
-      const validTrades = Array.isArray(result) 
-        ? result.filter((t: any) => 
-            t.exitPrice != null && 
-            t.entryPrice != null &&
-            t.realizedPnlUsd != null
-          )
-        : [];
+      // Fetch all sessions to ensure we get trades from stopped sessions too
+      // This matches the logic in ExecutionLedgerPage to ensure consistency
+      const sessions = await api.listSessions(mode);
+      
+      // Fetch trades for each session in parallel
+      const results = await Promise.all(
+        sessions.map(async (session: any) => {
+          try {
+            // Fetch recent trades for this session
+            return await api.getTrades(session.id, { limit: 20 });
+          } catch {
+            return [];
+          }
+        })
+      );
+      
+      // Flatten, filter, and sort
+      const allTrades = results.flat();
+      const validTrades = allTrades
+        .filter((t: any) => 
+          t.exitPrice != null && 
+          t.entryPrice != null &&
+          t.realizedPnlUsd != null
+        )
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 100); // Keep top 100
+
       setTrades(validTrades);
     } catch(err){
       console.error('Failed to load trades:', err);
