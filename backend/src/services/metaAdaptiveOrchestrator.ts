@@ -1842,6 +1842,71 @@ async function checkAndExecuteExit(
       }
     }
     
+    // 🎯 SMART S/R TRAILING: Tighten trailing stop near support/resistance
+    // Instead of manual exit, let trailing stop handle breakouts vs rejections automatically
+    const entryPrice = Number(position.entryPrice ?? 0);
+    const currentStop = agent.exitStrategy?.stop ?? position.stopLoss ?? 0;
+    const currentPnl = position.side === 'buy'
+      ? ((currentPrice - entryPrice) / entryPrice) * 100
+      : ((entryPrice - currentPrice) / entryPrice) * 100;
+    
+    // Only adjust trailing if we have profit (> 1.0%) and haven't already tightened
+    if (currentPnl > 1.0 && entryPrice > 0) {
+      const atr = tech.atr14;
+      const atrPct = atr > 0 && currentPrice > 0 ? (atr / currentPrice) * 100 : 2.0;
+      
+      if (positionSide === 'long') {
+        // LONG approaching resistance → tighten trailing stop
+        const nearResistance = tech.srBias === 'nearResistance';
+        const rsi = Number((tech as any)?.rsi14 ?? 50);
+        const reversalSignal = detectReversalForLong(tech);
+        
+        // Tighten if approaching resistance with ANY rejection signs
+        if (nearResistance && reversalSignal.probability >= 0.35) {
+          // Calculate tighter trailing: 1.0 ATR instead of default 2.0 ATR
+          const tightTrailDistance = atr * 1.0; // 1x ATR = tight protection
+          const newStop = currentPrice - tightTrailDistance;
+          
+          // Only move stop UP (never down)
+          if (newStop > currentStop && newStop < currentPrice) {
+            integrationLogger.info(
+              `🎯 Tightening trailing near resistance | pnl=${currentPnl.toFixed(2)}% stop=${currentStop.toFixed(4)}→${newStop.toFixed(4)} trail=${tightTrailDistance.toFixed(4)} (1.0 ATR) rsi=${rsi.toFixed(1)} reversal=${reversalSignal.probability.toFixed(2)}`
+            );
+            
+            // Update stop in agent's exit strategy
+            if (agent.exitStrategy) {
+              agent.exitStrategy.stop = newStop;
+            }
+          }
+        }
+        
+      } else if (positionSide === 'short') {
+        // SHORT approaching support → tighten trailing stop
+        const nearSupport = tech.srBias === 'nearSupport';
+        const rsi = Number((tech as any)?.rsi14 ?? 50);
+        const reboundSignal = detectReboundForShort(tech);
+        
+        // Tighten if approaching support with ANY rebound signs
+        if (nearSupport && reboundSignal.probability >= 0.35) {
+          // Calculate tighter trailing: 1.0 ATR instead of default 2.0 ATR
+          const tightTrailDistance = atr * 1.0; // 1x ATR = tight protection
+          const newStop = currentPrice + tightTrailDistance;
+          
+          // Only move stop DOWN (never up)
+          if (newStop < currentStop && newStop > currentPrice) {
+            integrationLogger.info(
+              `🎯 Tightening trailing near support | pnl=${currentPnl.toFixed(2)}% stop=${currentStop.toFixed(4)}→${newStop.toFixed(4)} trail=${tightTrailDistance.toFixed(4)} (1.0 ATR) rsi=${rsi.toFixed(1)} rebound=${reboundSignal.probability.toFixed(2)}`
+            );
+            
+            // Update stop in agent's exit strategy
+            if (agent.exitStrategy) {
+              agent.exitStrategy.stop = newStop;
+            }
+          }
+        }
+      }
+    }
+    
     // IMPROVEMENT: Check for exit strategy and apply it
     const exitStrategyData = agentMemoryStore.get<any>('exitStrategy', session.sessionId)?.data;
     

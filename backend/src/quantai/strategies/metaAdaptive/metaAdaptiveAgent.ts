@@ -2376,6 +2376,22 @@ class MetaAdaptiveStrategyAgent {
         const predictorConf = Number(pythonSignalForItem?.confidence ?? 0);
         const predictorConfirmsLong = predictorBias === 'long' && predictorConf >= 0.50;
         
+        // 🎯 SUPPORT BOUNCE DETECTION: Prix near support + conditions techniques favorables
+        const nearSupport = snap.srBias === 'nearSupport';
+        const rsi = Number((snap as any)?.rsi14 ?? 50);
+        const rsiOversold = rsi < 40; // RSI oversold indique selling exhaustion
+        const price = snap.last;
+        const ema20 = Number((snap as any)?.ema20 ?? price);
+        const ema50 = Number((snap as any)?.ema50 ?? price);
+        
+        // Price near EMAs (support dynamique)
+        const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.02 : false; // ±2%
+        const nearEma50 = price > 0 && ema50 > 0 ? Math.abs((price - ema50) / price) < 0.025 : false; // ±2.5%
+        
+        // Volume confirmation (avoid fake bounces)
+        const volumeRatio = Number((snap as any)?.volumeRatio ?? 1);
+        const volumeConfirmed = volumeRatio > 0.5; // Au moins 50% du volume moyen
+        
         // 🚀 STRONG BOOST: High probability rebound + Predictor confirms LONG
         if (reboundSignal.tradeBias === 'favor_long' && reboundSignal.probability >= 0.6) {
           if (predictorConfirmsLong) {
@@ -2389,6 +2405,34 @@ class MetaAdaptiveStrategyAgent {
             reasonsAugmented.push('rebound_opportunity');
           }
           reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
+        }
+        // 🎯 SUPPORT BOUNCE BOOST: Prix near support + RSI oversold + volume OK
+        // ↪️ SEUIL PLUS BAS (40%) pour saisir les rebonds modérés comme XRP
+        else if (reboundSignal.probability >= 0.40 && nearSupport && rsiOversold && volumeConfirmed) {
+          // Multi-confirmation: Support + RSI + Volume → Safe bounce setup
+          if (predictorConfirmsLong) {
+            // 🔥 PREDICTOR ALIGNS: Very strong signal
+            effectiveScore = Math.min(1, effectiveScore * 1.35);
+            reasonsAugmented.push('support_bounce_predictor_confirmed');
+            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
+          } else {
+            // ✅ NO PREDICTOR: Still good setup (technical confluence)
+            effectiveScore = Math.min(1, effectiveScore * 1.20);
+            reasonsAugmented.push('support_bounce_setup');
+            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
+          }
+        }
+        // 📈 EMA BOUNCE BOOST: Prix near EMAs + RSI oversold
+        else if (reboundSignal.probability >= 0.35 && (nearEma20 || nearEma50) && rsiOversold && volumeConfirmed) {
+          // EMA acting as support
+          const emaLevel = nearEma20 ? 'ema20' : 'ema50';
+          if (predictorConfirmsLong) {
+            effectiveScore = Math.min(1, effectiveScore * 1.25);
+            reasonsAugmented.push(`${emaLevel}_bounce_predictor_aligned`);
+          } else {
+            effectiveScore = Math.min(1, effectiveScore * 1.12);
+            reasonsAugmented.push(`${emaLevel}_bounce_setup`);
+          }
         }
         // 📈 MODERATE BOOST: Medium rebound probability + Strong predictor
         else if (reboundSignal.probability >= 0.40 && predictorConfirmsLong) {
@@ -2404,6 +2448,79 @@ class MetaAdaptiveStrategyAgent {
           // Moderate reversal risk - penalize longs
           effectiveScore *= (1 - reversalSignal.probability * 0.6);
           penaltiesApplied.push('reversal_risk');
+        }
+      }
+      
+      // 🎯 RESISTANCE REJECTION FOR SHORTS (MIRROR OF SUPPORT BOUNCE)
+      if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+        const predictorBias = pythonSignalForItem?.bias;
+        const predictorConf = Number(pythonSignalForItem?.confidence ?? 0);
+        const predictorConfirmsShort = predictorBias === 'short' && predictorConf >= 0.50;
+        
+        // 🎯 RESISTANCE REJECTION DETECTION: Prix near resistance + conditions techniques favorables
+        const nearResistance = snap.srBias === 'nearResistance';
+        const rsi = Number((snap as any)?.rsi14 ?? 50);
+        const rsiOverbought = rsi > 60; // RSI overbought indique buying exhaustion
+        const price = snap.last;
+        const ema20 = Number((snap as any)?.ema20 ?? price);
+        const ema50 = Number((snap as any)?.ema50 ?? price);
+        
+        // Price near EMAs (resistance dynamique)
+        const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.02 : false; // ±2%
+        const nearEma50 = price > 0 && ema50 > 0 ? Math.abs((price - ema50) / price) < 0.025 : false; // ±2.5%
+        
+        // Volume confirmation (avoid fake rejections)
+        const volumeRatio = Number((snap as any)?.volumeRatio ?? 1);
+        const volumeConfirmed = volumeRatio > 0.5; // Au moins 50% du volume moyen
+        
+        // 🚀 STRONG BOOST: High probability reversal + Predictor confirms SHORT
+        if (reversalSignal.tradeBias === 'favor_short' && reversalSignal.probability >= 0.6) {
+          if (predictorConfirmsShort) {
+            // Double confirmation: Reversal + Predictor → VERY strong signal
+            effectiveScore = Math.min(1, effectiveScore * 1.40);
+            reasonsAugmented.push('resistance_rejection_confirmed');
+            reasonsAugmented.push(`predictor_aligned(${predictorConf.toFixed(2)})`);
+          } else {
+            // Reversal only (no predictor) → Standard boost
+            effectiveScore = Math.min(1, effectiveScore * 1.25);
+            reasonsAugmented.push('resistance_rejection');
+          }
+          reasonsAugmented.push(...reversalSignal.reasons.slice(0, 2));
+        }
+        // 🎯 RESISTANCE REJECTION BOOST: Prix near resistance + RSI overbought + volume OK
+        else if (reversalSignal.probability >= 0.40 && nearResistance && rsiOverbought && volumeConfirmed) {
+          // Multi-confirmation: Resistance + RSI + Volume → Safe rejection setup
+          if (predictorConfirmsShort) {
+            // 🔥 PREDICTOR ALIGNS: Very strong signal
+            effectiveScore = Math.min(1, effectiveScore * 1.35);
+            reasonsAugmented.push('resistance_rejection_predictor_confirmed');
+            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
+          } else {
+            // ✅ NO PREDICTOR: Still good setup (technical confluence)
+            effectiveScore = Math.min(1, effectiveScore * 1.20);
+            reasonsAugmented.push('resistance_rejection_setup');
+            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
+          }
+        }
+        // 📉 EMA REJECTION BOOST: Prix near EMAs + RSI overbought
+        else if (reversalSignal.probability >= 0.35 && (nearEma20 || nearEma50) && rsiOverbought && volumeConfirmed) {
+          // EMA acting as resistance
+          const emaLevel = nearEma20 ? 'ema20' : 'ema50';
+          if (predictorConfirmsShort) {
+            effectiveScore = Math.min(1, effectiveScore * 1.25);
+            reasonsAugmented.push(`${emaLevel}_rejection_predictor_aligned`);
+          } else {
+            effectiveScore = Math.min(1, effectiveScore * 1.12);
+            reasonsAugmented.push(`${emaLevel}_rejection_setup`);
+          }
+        }
+        // 🛑 REBOUND PROTECTION (block shorts if bounce risk)
+        else if (reboundSignal.shouldBlock) {
+          effectiveScore = 0;
+          penaltiesApplied.push(`rebound_block(${reboundSignal.severity})`);
+        } else if (reboundSignal.probability >= 0.45) {
+          effectiveScore *= (1 - reboundSignal.probability * 0.6);
+          penaltiesApplied.push('rebound_risk');
         }
       }
       

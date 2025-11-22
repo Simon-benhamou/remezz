@@ -13,7 +13,7 @@ export type ReboundSignal = {
   severity: 'low' | 'medium' | 'high' | 'critical';
   reasons: string[];
   shouldBlock: boolean;
-  tradeBias: 'avoid_short' | 'favor_long' | 'neutral';
+  tradeBias: 'avoid_short' | 'favor_long' | 'neutral' | 'avoid_long' | 'favor_short';
   components: {
     rsi: number;
     priceStructure: number;
@@ -296,13 +296,14 @@ export function detectReversalForLong(snap: TechnicalSnapshot): ReboundSignal {
   
   const shouldBlock = probability >= 0.6 || (rsi14 > 75 && components.priceStructure >= 0.6);
   
-  let tradeBias: 'avoid_short' | 'favor_long' | 'neutral';
+  // TRADE BIAS for reversal (favors shorts when probability is high)
+  let tradeBias: 'avoid_long' | 'favor_short' | 'neutral';
   if (probability >= 0.65) {
-    tradeBias = 'avoid_short'; // Should be 'favor_short' but keeping API consistent
+    tradeBias = 'favor_short'; // Actually favor short entries on reversals
   } else if (probability >= 0.45) {
-    tradeBias = 'neutral';
+    tradeBias = 'avoid_long'; // Avoid longs, but not ready for shorts
   } else {
-    tradeBias = 'favor_long';
+    tradeBias = 'neutral';
   }
   
   return {

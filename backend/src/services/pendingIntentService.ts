@@ -172,20 +172,21 @@ class PendingIntentService {
 
   /**
    * Cleanup expired intents (should be run periodically)
+   * 
+   * 🔧 FIX: Delete expired intents instead of updating status
+   * The unique constraint on (sessionId, status) prevents multiple
+   * expired intents per session when using updateMany.
    */
   async cleanupExpired(): Promise<number> {
     const now = new Date();
     
-    const result = await prisma.pendingIntent.updateMany({
+    // Delete expired intents directly (consistent with markExpired)
+    const result = await prisma.pendingIntent.deleteMany({
       where: {
         status: 'active',
         expiresAt: {
           lt: now,
         },
-      },
-      data: {
-        status: 'expired',
-        updatedAt: now,
       },
     });
 
