@@ -2329,33 +2329,74 @@ class MetaAdaptiveStrategyAgent {
         }
       }
       
-      // 🛡️ REBOUND PROTECTION FOR SHORTS
+      // 🛡️ REBOUND PROTECTION FOR SHORTS (STRENGTHENED + CONTEXTUAL)
       if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
         if (reboundSignal.shouldBlock) {
           // Critical rebound risk - block shorts entirely
           effectiveScore = 0;
           penaltiesApplied.push(`rebound_block(${reboundSignal.severity})`);
           reasonsAugmented.push(...reboundSignal.reasons);
-        } else if (reboundSignal.probability >= 0.45) {
-          // Moderate rebound risk - penalize shorts heavily
-          effectiveScore *= (1 - reboundSignal.probability * 0.7);
-          penaltiesApplied.push(`rebound_risk(${reboundSignal.severity})`);
-          reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2)); // Add top 2 reasons
-        } else if (reboundSignal.probability >= 0.3) {
-          // Low rebound risk - mild penalty
+        } else if (reboundSignal.probability >= 0.35) {
+          // 🎯 CONTEXTUAL LOGIC: Only block if AGAINST trend or predictor confirms
+          const isTrendBearish = context.bearishStack && context.alignmentScore >= 0.7;
+          const predictorBias = pythonSignalForItem?.bias;
+          const predictorConf = Number(pythonSignalForItem?.confidence ?? 0);
+          const predictorConfirmsRebound = predictorBias === 'long' && predictorConf >= 0.45;
+          
+          // 🚫 HARD BLOCK: Predictor says LONG + Rebound detected (clear contradiction)
+          if (predictorConfirmsRebound) {
+            effectiveScore = 0;
+            penaltiesApplied.push('predictor_rebound_contradiction');
+            reasonsAugmented.push(`predictor_favors_long(${predictorConf.toFixed(2)})`);
+            reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
+          }
+          // ⚠️ SOFT PENALTY: Rebound in strong downtrend (counter-trend bounce risk)
+          else if (!isTrendBearish || reboundSignal.probability >= 0.5) {
+            // Not in strong downtrend OR high rebound probability → Penalize heavily
+            const reboundPenalty = Math.min(0.95, reboundSignal.probability * 1.3);
+            effectiveScore *= (1 - reboundPenalty);
+            penaltiesApplied.push(`rebound_risk(${reboundSignal.severity})`);
+            reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
+          }
+          // ✅ ALLOW: Strong downtrend + low rebound prob (35-50%) → Reduced penalty only
+          else {
+            effectiveScore *= 0.8; // Mild 20% penalty (was blocking)
+            penaltiesApplied.push('rebound_caution_in_trend');
+          }
+        } else if (reboundSignal.probability >= 0.25) {
+          // Low rebound risk (25-35%) - very mild penalty
           effectiveScore *= 0.85;
-          penaltiesApplied.push('rebound_caution');
+          penaltiesApplied.push('rebound_watch');
         }
       }
       
-      // 🎯 REBOUND OPPORTUNITY FOR LONGS
+      // 🎯 REBOUND OPPORTUNITY FOR LONGS (ENHANCED)
       if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+        const predictorBias = pythonSignalForItem?.bias;
+        const predictorConf = Number(pythonSignalForItem?.confidence ?? 0);
+        const predictorConfirmsLong = predictorBias === 'long' && predictorConf >= 0.50;
+        
+        // 🚀 STRONG BOOST: High probability rebound + Predictor confirms LONG
         if (reboundSignal.tradeBias === 'favor_long' && reboundSignal.probability >= 0.6) {
-          // High probability rebound - FAVOR long entries
-          effectiveScore = Math.min(1, effectiveScore * 1.25);
-          reasonsAugmented.push('rebound_opportunity');
+          if (predictorConfirmsLong) {
+            // Double confirmation: Rebound + Predictor → VERY strong signal
+            effectiveScore = Math.min(1, effectiveScore * 1.40); // Boosted from 1.25
+            reasonsAugmented.push('rebound_opportunity_confirmed');
+            reasonsAugmented.push(`predictor_aligned(${predictorConf.toFixed(2)})`);
+          } else {
+            // Rebound only (no predictor) → Standard boost
+            effectiveScore = Math.min(1, effectiveScore * 1.25);
+            reasonsAugmented.push('rebound_opportunity');
+          }
           reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
-        } else if (reversalSignal.shouldBlock) {
+        }
+        // 📈 MODERATE BOOST: Medium rebound probability + Strong predictor
+        else if (reboundSignal.probability >= 0.40 && predictorConfirmsLong) {
+          effectiveScore = Math.min(1, effectiveScore * 1.15);
+          reasonsAugmented.push('moderate_rebound_predictor_aligned');
+        }
+        // 🛑 REVERSAL PROTECTION (block longs if dump risk)
+        else if (reversalSignal.shouldBlock) {
           // Block longs if reversal risk is critical
           effectiveScore = 0;
           penaltiesApplied.push(`reversal_block(${reversalSignal.severity})`);

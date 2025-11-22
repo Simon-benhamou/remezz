@@ -36,30 +36,35 @@ export function detectReboundForShort(snap: TechnicalSnapshot): ReboundSignal {
   
   const reasons: string[] = [];
   
-  // 1. RSI OVERSOLD DETECTION
+  // 1. RSI OVERSOLD DETECTION (STRENGTHENED)
   const rsi14 = Number((snap as any)?.rsi14 ?? 50);
   const rsi7 = Number((snap as any)?.rsi7 ?? rsi14);
   
   if (rsi14 < 25) {
-    components.rsi = 0.9; // Extreme oversold - very high rebound risk
+    components.rsi = 0.95; // Extreme oversold - VERY high rebound risk (was 0.9)
     reasons.push(`rsi14_extreme_oversold(${rsi14.toFixed(1)})`);
   } else if (rsi14 < 30) {
-    components.rsi = 0.7; // Oversold - high rebound risk
+    components.rsi = 0.75; // Oversold - high rebound risk (was 0.7)
     reasons.push(`rsi14_oversold(${rsi14.toFixed(1)})`);
   } else if (rsi14 < 35) {
-    components.rsi = 0.5; // Approaching oversold
+    components.rsi = 0.55; // Approaching oversold (was 0.5)
     reasons.push(`rsi14_low(${rsi14.toFixed(1)})`);
   } else if (rsi14 < 40) {
-    components.rsi = 0.3; // Mild weakness
+    components.rsi = 0.35; // Mild weakness (was 0.3)
     reasons.push(`rsi14_weak(${rsi14.toFixed(1)})`);
+  } else if (rsi14 < 45) {
+    // 🔥 NEW TIER: Early warning for potential rebounds
+    components.rsi = 0.2;
+    reasons.push(`rsi14_bearish_weakening(${rsi14.toFixed(1)})`);
   } else {
-    components.rsi = 0.1; // No RSI concern
+    components.rsi = 0.05; // No RSI concern (was 0.1)
   }
   
   // RSI divergence: price making lower lows but RSI making higher lows = bullish divergence
   const rsiSlope = Number((snap as any)?.rsiSlope ?? 0);
-  if (rsi14 < 35 && rsiSlope > 1.5) {
-    components.rsi = Math.min(1, components.rsi + 0.2);
+  if (rsi14 < 40 && rsiSlope > 1.5) {
+    // 🔥 EXPANDED: Detect divergence earlier (was rsi14 < 35)
+    components.rsi = Math.min(1, components.rsi + 0.25); // Stronger signal (was 0.2)
     reasons.push('rsi_bullish_divergence_detected');
   }
   
