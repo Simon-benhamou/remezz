@@ -517,6 +517,48 @@ async function reconcileExposure(sessionId: string, symbol: string, mode: string
     recordOpsEvent({ level: 'error', source: 'reconciliation', message: 'inspectExposure failed', sessionId, symbol, details: { error: String((e as any)?.message || e) } });
   }
 }
+
+/**
+ * Process a single session tick
+ * Extracted from main loop to support batched parallel execution
+ */
+async function processSession(s: any, cfg: any) {
+  // Use currentSymbol for Smart Agents, fallback to original symbol
+  const sym = (s as any).currentSymbol || s.symbol || cfg.SYMBOL;
+  try {
+    const tech = await tickOnce(s.id, sym);
+    lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
+    console.info(`📊 [${s.id.slice(0,8)}] ${sym} @ $${tech.last.toFixed(2)} | RSI:${tech.rsi14?.toFixed(1)} ATR:${(tech.atrPct*100).toFixed(2)}%`);
+    try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
+    // Process meta-adaptive signals for this session
+    try {
+      const { processMetaAdaptiveTick } = await import('../services/metaAdaptiveOrchestrator.js');
+      await processMetaAdaptiveTick(s.id, sym, tech);
+    } catch (metaErr) {
+      recordOpsEvent({
+        level: 'error',
+        source: 'meta-adaptive',
+        message: 'Meta-adaptive tick processing failed',
+        sessionId: s.id,
+        symbol: sym,
+        details: { error: String((metaErr as any)?.message || metaErr) },
+      });
+    }
+    await reconcileExposure(s.id, sym, s.mode as string);
+  } catch (err) {
+    // 🔥 CRITICAL FIX: Skip session on tick failure (IP ban, insufficient data, etc.)
+    // This prevents cascading crashes when buildTechSnapshot fails
+    recordOpsEvent({
+      level: 'error',
+      source: 'heartbeat',
+      message: 'Tick processing failed - skipping session cycle',
+      sessionId: s.id,
+      symbol: sym,
+      details: { error: String((err as any)?.message || err) },
+    });
+  }
+}
+
 /**
  * Possibly generate a new classic strategy and PlanZ based on:
  *  - rate limit (STRATEGY_MIN_INTERVAL_MIN)
@@ -809,50 +851,25 @@ export async function startEventEngine(){
         }
       }
       
-      for (let i = 0; i < sessions.length; i++) {
-        const s = sessions[i];
-        // Use currentSymbol for Smart Agents, fallback to original symbol
-        const sym = (s as any).currentSymbol || s.symbol || cfg.SYMBOL;
-        try {
-          // Add progressive delay between sessions to spread API load
-          if (i > 0) {
-            await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay between sessions
-          }
-          
-          const tech = await tickOnce(s.id, sym);
-          lastTick = { symbol: sym, price: tech.last, ts: Date.now() };
-          console.info(`📊 [${s.id.slice(0,8)}] ${sym} @ $${tech.last.toFixed(2)} | RSI:${tech.rsi14?.toFixed(1)} ATR:${(tech.atrPct*100).toFixed(2)}%`);
-          try { await (await import('../agent/hub.js')).AgentHub.onTick(s.id); } catch {}
-          // Process meta-adaptive signals for this session
-          try {
-            const { processMetaAdaptiveTick } = await import('../services/metaAdaptiveOrchestrator.js');
-            await processMetaAdaptiveTick(s.id, sym, tech);
-          } catch (metaErr) {
-            recordOpsEvent({
-              level: 'error',
-              source: 'meta-adaptive',
-              message: 'Meta-adaptive tick processing failed',
-              sessionId: s.id,
-              symbol: sym,
-              details: { error: String((metaErr as any)?.message || metaErr) },
-            });
-          }
-          await reconcileExposure(s.id, sym, s.mode as string);
-        } catch (err) {
-          // 🔥 CRITICAL FIX: Skip session on tick failure (IP ban, insufficient data, etc.)
-          // This prevents cascading crashes when buildTechSnapshot fails
-          recordOpsEvent({
-            level: 'error',
-            source: 'heartbeat',
-            message: 'Tick processing failed - skipping session cycle',
-            sessionId: s.id,
-            symbol: sym,
-            details: { error: String((err as any)?.message || err) },
-          });
-          // Continue to next session instead of crashing
-          continue;
+      // Batch processing to optimize throughput while respecting rate limits
+      // Default: 5 concurrent agents, 200ms delay between batches
+      // For 100 agents: 20 batches * 200ms = 4s total cycle time (vs 50s previously)
+      const BATCH_SIZE = Number(process.env.EVENT_LOOP_BATCH_SIZE || 5);
+      const BATCH_DELAY_MS = Number(process.env.EVENT_LOOP_BATCH_DELAY_MS || 200);
+
+      for (let i = 0; i < sessions.length; i += BATCH_SIZE) {
+        const batch = sessions.slice(i, i + BATCH_SIZE);
+        
+        // Process batch in parallel
+        // Promise.all ensures we wait for all agents in the batch to finish before moving on
+        await Promise.all(batch.map(s => processSession(s, cfg)));
+        
+        // Small delay between batches to prevent API spikes (IP ban protection)
+        if (i + BATCH_SIZE < sessions.length) {
+          await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
         }
       }
+
       // Stale data monitoring
       try {
         const { STALE_TICK_SEC } = getConfig();
