@@ -445,20 +445,37 @@ export function maybeAdjustOrExit({
     });
     let newStop = applyStopCandidate(desiredStop, false);
     if (baselineRisk > 0) {
-      const breakevenR = Number(process.env.BREAKEVEN_AT_R ?? 1.2);
-      const breakeven = side === 'long'
-        ? entryPrice + breakevenR * baselineRisk
-        : entryPrice - breakevenR * baselineRisk;
-      if (side === 'long' && breakeven > stop + 1e-8) {
-        const candidate = newStop != null ? Math.max(newStop, breakeven) : breakeven;
-        if (candidate > stop + 1e-8) {
-          newStop = candidate;
-        }
+      // 🎯 OPTIMIZED BREAKEVEN: Don't choke the trade too early!
+      // Step 1: "Soft Breakeven" at 1.2R -> Move stop to -0.5R (halve the risk)
+      // Step 2: "Hard Breakeven" at 2.0R -> Move stop to Entry (risk free)
+      
+      const hardBreakevenR = Number(process.env.BREAKEVEN_AT_R ?? 2.0); // Default raised to 2.0R
+      const softBreakevenR = 1.2;
+      
+      let candidateBreakevenStop: number | null = null;
+      
+      if (rNow >= hardBreakevenR) {
+        // Full breakeven (Entry Price)
+        candidateBreakevenStop = entryPrice;
+      } else if (rNow >= softBreakevenR) {
+        // Soft breakeven (Half Risk)
+        candidateBreakevenStop = side === 'long'
+          ? entryPrice - (baselineRisk * 0.5)
+          : entryPrice + (baselineRisk * 0.5);
       }
-      if (side === 'short' && breakeven < stop - 1e-8) {
-        const candidate = newStop != null ? Math.min(newStop, breakeven) : breakeven;
-        if (candidate < stop - 1e-8) {
-          newStop = candidate;
+
+      if (candidateBreakevenStop !== null) {
+        if (side === 'long' && candidateBreakevenStop > stop + 1e-8) {
+          const candidate = newStop != null ? Math.max(newStop, candidateBreakevenStop) : candidateBreakevenStop;
+          if (candidate > stop + 1e-8) {
+            newStop = candidate;
+          }
+        }
+        if (side === 'short' && candidateBreakevenStop < stop - 1e-8) {
+          const candidate = newStop != null ? Math.min(newStop, candidateBreakevenStop) : candidateBreakevenStop;
+          if (candidate < stop - 1e-8) {
+            newStop = candidate;
+          }
         }
       }
     }

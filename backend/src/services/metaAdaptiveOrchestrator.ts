@@ -663,6 +663,36 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
             logger.info(
               `[${session.sessionId}] Post-stop reversal confirmed: ${reversalReasons.slice(0, 3).join(', ')} - allowing signal evaluation`
             );
+
+            // 🚀 VENGEANCE MODE: Force re-entry on strong liquidity grab
+            // If we were stopped out and price immediately reverses with high probability,
+            // we assume it was a liquidity grab and re-enter aggressively.
+            if (reversalProbability >= 0.75) {
+               logger.info(`[${session.sessionId}] 🚀 VENGEANCE MODE ACTIVATED: Liquidity grab detected (prob=${reversalProbability.toFixed(2)}) - Forcing re-entry!`);
+               
+               // Create synthetic signal
+               const vengeanceSignal: RecognizedStrategySignal = {
+                 id: `vengeance_${Date.now()}`,
+                 strategyId: 'liquidity_grab_reentry',
+                 bias: exitedSide === 'long' ? 'long' : 'short', // Re-enter same direction
+                 confidence: 0.85, // High confidence
+                 timestamp: Date.now(),
+                 meta: {
+                   score: 95,
+                   token: 'vengeance_override',
+                   guardrail: 'none',
+                   riskPct: 1.0, // Standard risk
+                   stopAtrMult: 2.5, // Wider stop for safety
+                 }
+               };
+               
+               // Execute immediately
+               await executeEntryTrade(session, vengeanceSignal, tech);
+               
+               // Clear monitoring to prevent double entry
+               agentMemoryStore.update('postExitMonitoring', session.sessionId, null);
+               return; // Done for this tick
+            }
           }
           
           // Clean up monitoring after time expires

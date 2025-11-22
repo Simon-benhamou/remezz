@@ -3149,6 +3149,7 @@ class MetaAdaptiveStrategyAgent {
     // ✅ PREDICTOR GATE ENABLED: Store decision changes and block uncertain trades
     // Only logs decision changes to DB (none→long, long→short, etc.)
     const PREDICTOR_GATE_ENABLED = false;
+    const PREDICTOR_SHADOW_MODE = true; // Enable shadow mode to log what WOULD have been blocked
     
     // Store predictor decision if it changed
     if (pythonSignalMeta && predictorProbabilities) {
@@ -3166,7 +3167,7 @@ class MetaAdaptiveStrategyAgent {
       });
     }
     
-    if (PREDICTOR_GATE_ENABLED) {
+    if (PREDICTOR_GATE_ENABLED || PREDICTOR_SHADOW_MODE) {
       const baseEnterConfidence = intendedSide === 'short' ? SHORT_ENTER_CONFIDENCE : LONG_ENTER_CONFIDENCE;
       const winRateFloor = symbolStats?.winRate == null
         ? 0.30
@@ -3183,7 +3184,7 @@ class MetaAdaptiveStrategyAgent {
       if (cooldownActive && predictorConfidence < 0.55) {
         console.log(JSON.stringify({
           level: 'info',
-          event: 'adaptive_trade_blocked_by_predictor',
+          event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
           symbol: params.symbol,
           sessionId: params.sessionId ?? null,
           token: params.token,
@@ -3196,13 +3197,13 @@ class MetaAdaptiveStrategyAgent {
             lowConfidenceShortLossStreak,
           },
         }));
-        return 'predictor_blocked';
+        if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
       }
 
       if (!meetsConfidenceEntry && !meetsEdgeOverride && intendedSide !== 'both') {
         console.log(JSON.stringify({
           level: 'info',
-          event: 'adaptive_trade_blocked_by_predictor',
+          event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
           symbol: params.symbol,
           sessionId: params.sessionId ?? null,
           token: params.token,
@@ -3220,7 +3221,7 @@ class MetaAdaptiveStrategyAgent {
             completedTrades: symbolStats?.completedTrades ?? 0,
           },
         }));
-        return 'predictor_blocked';
+        if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
       }
       
       // Only block if there's a CLEAR contradiction between predictor and intended side
@@ -3230,7 +3231,7 @@ class MetaAdaptiveStrategyAgent {
       if (hasContradiction) {
       console.log(JSON.stringify({
         level: 'info',
-        event: 'adaptive_trade_blocked_by_predictor',
+        event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
         symbol: params.symbol,
         sessionId: params.sessionId ?? null,
         token: params.token,
@@ -3241,7 +3242,7 @@ class MetaAdaptiveStrategyAgent {
         intendedSide,
         reason: 'clear_contradiction',
       }));
-      return 'predictor_blocked';
+      if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
     }
     
     // 🐞 FIX BUG 3: Block if predictor is uncertain (both/none)
@@ -3249,7 +3250,7 @@ class MetaAdaptiveStrategyAgent {
     if (effectivePredictorDirection === 'both' && intendedSide !== 'both') {
       console.log(JSON.stringify({
         level: 'info',
-        event: 'adaptive_trade_blocked_by_predictor',
+        event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
         symbol: params.symbol,
         sessionId: params.sessionId ?? null,
         token: params.token,
@@ -3260,7 +3261,7 @@ class MetaAdaptiveStrategyAgent {
         intendedSide,
         reason: 'predictor_uncertain_no_clear_direction',
       }));
-      return 'predictor_blocked';
+      if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
     }
     } // End if (PREDICTOR_GATE_ENABLED)
 
@@ -3279,7 +3280,7 @@ class MetaAdaptiveStrategyAgent {
     if (intendedSide === 'short') {
       // 🔴 SHORT GUARDRAIL DISABLED (predictor gate off)
       // All technical checks bypassed - strategy decides alone
-      if (PREDICTOR_GATE_ENABLED) {
+      if (PREDICTOR_GATE_ENABLED || PREDICTOR_SHADOW_MODE) {
       const predictorAllowsShort = effectivePredictorDirection === 'short' || effectivePredictorDirection === 'both';
       const cmfThresholdAbs = params.flowThreshold != null && Number.isFinite(params.flowThreshold)
         ? Math.abs(params.flowThreshold)
@@ -3312,7 +3313,7 @@ class MetaAdaptiveStrategyAgent {
         if (!mtfPass) guardReasons.push('mtf_not_bearish');
         console.log(JSON.stringify({
           level: 'info',
-          event: 'adaptive_trade_blocked_by_predictor',
+          event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
         symbol: params.symbol,
         sessionId: params.sessionId ?? null,
         token: params.token,
@@ -3332,7 +3333,7 @@ class MetaAdaptiveStrategyAgent {
           mtfMatches: params.mtfMatches ?? null,
           mtfFrames: params.mtfFrames ?? null,
         }));
-        return 'predictor_blocked';
+        if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
       }
       } // End if (PREDICTOR_GATE_ENABLED)
     }
