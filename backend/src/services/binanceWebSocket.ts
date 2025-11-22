@@ -2940,19 +2940,36 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   const klines = ws.getKlines(symbol, interval);
   if (!klines?.length) return null;
   
-  // ✅ Smart staleness check: Only reject if last bar is VERY old (>5min)
-  // This protects against WebSocket disconnections while allowing historical data
+  // 🎯 ADAPTIVE staleness check: Adjust threshold based on candle timeframe
+  // - 1m/5m/15m candles: max 5 min age (fast moving)
+  // - 1h candles: max 90 min age (1.5 bars)
+  // - 4h candles: max 6 hours age (1.5 bars)
+  // This ensures we detect WebSocket disconnections WITHOUT rejecting valid historical data
   const lastKline = klines[klines.length - 1];
   const lastBarAge = Date.now() - lastKline.timestamp;
-  const MAX_STALE_MS = 300_000; // 5 minutes - works for any interval
+  
+  // Map interval to max acceptable age (in milliseconds)
+  const intervalToMaxAge: Record<string, number> = {
+    '1m': 5 * 60_000,      // 5 minutes
+    '3m': 6 * 60_000,      // 6 minutes
+    '5m': 10 * 60_000,     // 10 minutes
+    '15m': 25 * 60_000,    // 25 minutes
+    '30m': 50 * 60_000,    // 50 minutes
+    '1h': 90 * 60_000,     // 90 minutes (1.5 bars)
+    '2h': 3 * 60 * 60_000, // 3 hours (1.5 bars)
+    '4h': 6 * 60 * 60_000, // 6 hours (1.5 bars)
+    '1d': 36 * 60 * 60_000, // 36 hours (1.5 bars)
+  };
+  
+  const MAX_STALE_MS = intervalToMaxAge[interval] || 5 * 60_000; // Default: 5 minutes
   
   if (lastBarAge > MAX_STALE_MS) {
     // Data is stale (WebSocket likely disconnected), force REST fallback
-    console.warn(`[WS][STALE_CACHE] ${symbol} ${interval}: Last bar is ${Math.round(lastBarAge / 1000)}s old (>5min), cache stale`);
+    console.warn(`[WS][STALE_CACHE] ${symbol} ${interval}: Last bar is ${Math.round(lastBarAge / 60_000)}min old (max: ${Math.round(MAX_STALE_MS / 60_000)}min), cache stale`);
     return null;
   }
   
-  // Return ALL klines (historical + recent) if last bar is fresh
+  // ✅ Data is fresh - return ALL klines (historical + recent)
   return klines.map(k => [k.timestamp, k.open, k.high, k.low, k.close, k.volume]);
 }
 
