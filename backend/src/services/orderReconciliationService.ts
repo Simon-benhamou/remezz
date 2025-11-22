@@ -139,7 +139,7 @@ class OrderReconciliationService {
   /**
    * Periodic reconciliation for all active positions
    */
-  async reconcileAllActiveSessions(getBrokerForSession: (sessionId: string) => Promise<Broker | null>): Promise<void> {
+  async reconcileAllActiveSessions(getBrokerForSession: (session: { id: string; userId: string | null; mode: string }) => Promise<Broker | null>): Promise<void> {
     try {
       // Get all active sessions with positions
       const activeSessions = await prisma.agentSession.findMany({
@@ -169,7 +169,7 @@ class OrderReconciliationService {
 
       for (const session of activeSessions) {
         try {
-          const broker = await getBrokerForSession(session.id);
+          const broker = await getBrokerForSession({ id: session.id, userId: session.userId, mode: session.mode });
           if (!broker) {
             console.warn(`[OrderReconciliation] No broker for session ${session.id}`);
             continue;

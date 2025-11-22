@@ -513,6 +513,15 @@ async function getBrokerForSession(session: SessionContext): Promise<Broker | nu
  */
 async function processSessionTick(session: SessionContext, tech: TechnicalSnapshot): Promise<void> {
   try {
+    // 🛡️ SAFETY: Check data freshness
+    if (tech.timestamp) {
+      const dataAge = Date.now() - tech.timestamp;
+      if (dataAge > 15000) { // 15 seconds max age
+        logger.warn(`[${session.sessionId}] Skipping tick with stale data (${dataAge}ms old)`);
+        return;
+      }
+    }
+
     logger.info(`[${session.sessionId}] Processing tick for ${session.symbol} @ ${tech.last}`);
     
     // Get multi-timeframe diagnostics for better signal evaluation
@@ -672,17 +681,30 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
                
                // Create synthetic signal
                const vengeanceSignal: RecognizedStrategySignal = {
-                 id: `vengeance_${Date.now()}`,
-                 strategyId: 'liquidity_grab_reentry',
+                 id: `vengeance_${Date.now()}` as any,
+                 label: 'Vengeance Mode (Liquidity Grab)',
                  bias: exitedSide === 'long' ? 'long' : 'short', // Re-enter same direction
                  confidence: 0.85, // High confidence
-                 timestamp: Date.now(),
+                 qualityScore: 95,
+                 confidenceGatePassed: true,
+                 blockedReason: null,
+                 entryEligibilityScore: 1.0,
+                 entryEligibilityGatePassed: true,
+                 entryEligibilityReasons: ['vengeance_mode_active'],
+                 active: true,
+                 reasons: ['liquidity_grab_detected', 'vengeance_mode'],
+                 metrics: {
+                    score: 0.85,
+                    rawConfidence: 0.85,
+                 },
                  meta: {
                    score: 95,
                    token: 'vengeance_override',
                    guardrail: 'none',
-                   riskPct: 1.0, // Standard risk
-                   stopAtrMult: 2.5, // Wider stop for safety
+                   riskPct: '1.0', // Standard risk
+                   stopAtrMult: '2.5', // Wider stop for safety
+                   penalties: [],
+                   exploration: false,
                  }
                };
                
@@ -1648,6 +1670,38 @@ async function executeEntryTrade(
 }
 
 /**
+ * Start the periodic order reconciliation loop
+ * Ensures that exchange orders (SL/TP) match the application state
+ */
+export function startOrderReconciliationLoop() {
+  logger.info('Starting order reconciliation loop (every 30s)');
+  
+  setInterval(async () => {
+    try {
+      await orderReconciliationService.reconcileAllActiveSessions(async (sessionInfo) => {
+        // Try to get existing broker
+        if (sessionBrokers.has(sessionInfo.id)) {
+          return sessionBrokers.get(sessionInfo.id)!;
+        }
+        
+        // Recreate broker if missing (using the info passed from DB)
+        const context: SessionContext = {
+          sessionId: sessionInfo.id,
+          symbol: '', // Not needed for broker creation
+          mode: sessionInfo.mode as 'paper' | 'live',
+          userId: sessionInfo.userId,
+          profileJson: {}, // Not needed for broker creation
+        };
+        
+        return getBrokerForSession(context);
+      });
+    } catch (err) {
+      logger.error('Order reconciliation loop error', err);
+    }
+  }, 30_000); // Every 30 seconds
+}
+
+/**
  * Check if position should be flipped based on counter-signal
  */
 async function shouldFlipPosition(
@@ -1906,6 +1960,16 @@ async function checkAndExecuteExit(
             // Update stop in agent's exit strategy
             if (agent.exitStrategy) {
               agent.exitStrategy.stop = newStop;
+              
+              // 🚀 SYNC: Immediately sync new stop with exchange
+              if (session.mode === 'live') {
+                getBrokerForSession(session).then(broker => {
+                  if (broker) {
+                    orderReconciliationService.reconcilePosition(session.sessionId, broker)
+                      .catch(err => logger.warn(`[${session.sessionId}] Failed to sync trailing stop:`, err));
+                  }
+                });
+              }
             }
           }
         }
@@ -1931,6 +1995,16 @@ async function checkAndExecuteExit(
             // Update stop in agent's exit strategy
             if (agent.exitStrategy) {
               agent.exitStrategy.stop = newStop;
+              
+              // 🚀 SYNC: Immediately sync new stop with exchange
+              if (session.mode === 'live') {
+                getBrokerForSession(session).then(broker => {
+                  if (broker) {
+                    orderReconciliationService.reconcilePosition(session.sessionId, broker)
+                      .catch(err => logger.warn(`[${session.sessionId}] Failed to sync trailing stop:`, err));
+                  }
+                });
+              }
             }
           }
         }
@@ -2286,6 +2360,21 @@ async function executeExitTrade(
     // Clear position - SUCCESS!
     agent.pos = null;
     logger.info(`[${session.sessionId}] Position cleared after ${attemptNumber} attempt(s)`);
+    
+    // 🛡️ SAFETY: Explicitly cancel any remaining protective orders (SL/TP)
+    // The reconciliation loop might miss this if it skips closed positions
+    try {
+      if (broker.syncProtective) {
+        logger.info(`[${session.sessionId}] Cleaning up protective orders for closed position`);
+        await broker.syncProtective({
+          symbol: session.symbol,
+          side: position.side === 'buy' ? 'sell' : 'buy', // Side doesn't matter for cancellation
+          qty: 0, // 0 qty signals to cancel all
+        });
+      }
+    } catch (cleanupError) {
+      logger.warn(`[${session.sessionId}] Failed to cleanup protective orders:`, cleanupError);
+    }
     
     // POST-EXIT REVERSAL MONITORING: Watch for immediate reversals after stop-loss
     if (reason.includes('Stop loss hit') || reason.includes('stop_loss')) {

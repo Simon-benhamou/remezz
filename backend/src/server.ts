@@ -60,7 +60,7 @@ import {
 } from "./middleware/rateLimit.js";
 import { rehydrateActiveAgentSessions } from "./services/sessionRehydration.js";
 import { startSchedulerWorker } from "./services/schedulerJobService.js";
-import { initMetaAdaptiveOrchestrator } from "./services/metaAdaptiveOrchestrator.js";
+import { initMetaAdaptiveOrchestrator, startOrderReconciliationLoop } from "./services/metaAdaptiveOrchestrator.js";
 import { startAgentStateWatchdog } from "./services/agentStateWatchdog.js";
 import { startAgentPerceptionLoops } from "./agent/loops/index.js";
 import { startAgentDecisionLoop } from "./agent/decisions/index.js";
@@ -241,6 +241,7 @@ process.on('SIGINT', shutdown);
 startWSHub(wss);
 startEventEngine();
 initMetaAdaptiveOrchestrator();
+startOrderReconciliationLoop();
 startArbitrageMonitor();
 startIntegratedMonitoring();
 startMarginMonitor();

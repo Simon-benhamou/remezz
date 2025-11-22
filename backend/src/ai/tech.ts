@@ -88,6 +88,7 @@ export type TechnicalSnapshot = {
   volAdjustedMomentum?: number;
   rsiEmaDiv?: number;
   multiTimeframe?: MultiTimeframeDiagnostics;
+  timestamp?: number; // Added for data freshness verification
   microstructure?: {
     orderFlowImbalance: number;
     aggressionRatio: number;
@@ -1046,6 +1047,7 @@ async function buildTechSnapshotInternal(symbol: string, userId?: string, option
     volAdjustedMomentum,
     rsiEmaDiv,
     multiTimeframe,
+    timestamp: Date.now(),
   };
 
   snapshot.microstructure = computeMicrostructureFeatures({
