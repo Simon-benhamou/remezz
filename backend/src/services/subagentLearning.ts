@@ -507,41 +507,60 @@ async function persistLearning(records: Array<SubagentLearningRecord<SubagentKin
   const chunkSize = 25;
   for (let i = 0; i < records.length; i += chunkSize) {
     const slice = records.slice(i, i + chunkSize);
-    await prisma.$transaction(
-      slice.map((record) =>
-        prisma.subagentLearningState.upsert({
-          where: {
-            subagent_learning_user_unique: {
-              userId: userId ?? '__no_user__', // Use placeholder for null to satisfy unique constraint
-              subagent: record.subagent,
-              symbol: record.symbol,
-              mode: record.mode,
-              regime: record.regime,
-            },
-          },
-          create: {
-            userId: userId || null,
-            subagent: record.subagent,
-            symbol: record.symbol,
-            mode: record.mode,
-            regime: record.regime,
-            score: record.score,
-            sampleCount: record.sampleCount,
-            metrics: record.metrics as any,
-            tuning: record.tuning as any,
-            reason: record.reason,
-          },
-          update: {
-            score: record.score,
-            sampleCount: record.sampleCount,
-            metrics: record.metrics as any,
-            tuning: record.tuning as any,
-            reason: record.reason,
-            updatedAt: new Date(),
-          },
-        }),
-      ),
-    );
+    
+    // 🛡️ RETRY LOGIC: Handle unique constraint violations from concurrent upserts
+    let attempt = 0;
+    const maxAttempts = 3;
+    while (attempt < maxAttempts) {
+      try {
+        await prisma.$transaction(
+          slice.map((record) =>
+            prisma.subagentLearningState.upsert({
+              where: {
+                subagent_learning_user_unique: {
+                  userId: userId ?? '__no_user__', // Use placeholder for null to satisfy unique constraint
+                  subagent: record.subagent,
+                  symbol: record.symbol,
+                  mode: record.mode,
+                  regime: record.regime,
+                },
+              },
+              create: {
+                userId: userId || null,
+                subagent: record.subagent,
+                symbol: record.symbol,
+                mode: record.mode,
+                regime: record.regime,
+                score: record.score,
+                sampleCount: record.sampleCount,
+                metrics: record.metrics as any,
+                tuning: record.tuning as any,
+                reason: record.reason,
+              },
+              update: {
+                score: record.score,
+                sampleCount: record.sampleCount,
+                metrics: record.metrics as any,
+                tuning: record.tuning as any,
+                reason: record.reason,
+                updatedAt: new Date(),
+              },
+            }),
+          ),
+        );
+        break; // Success - exit retry loop
+      } catch (error: any) {
+        attempt++;
+        // Only retry on unique constraint violation
+        if (error?.code === 'P2002' && attempt < maxAttempts) {
+          const backoffMs = Math.min(100 * Math.pow(2, attempt - 1), 500);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          continue;
+        }
+        // Re-throw if not a P2002 error or max attempts reached
+        throw error;
+      }
+    }
   }
 }
 
