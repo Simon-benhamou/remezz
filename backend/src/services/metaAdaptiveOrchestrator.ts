@@ -557,10 +557,10 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
       logger.info(
         `[${session.sessionId}] Found ${signals.length} signal(s):`,
         signals.map(s => ({
-          strategy: (s as any).strategyId,
+          strategy: s.id,  // FIX: Use "id" field, not "strategyId"
           bias: s.bias,
           score: s.meta?.score,
-          confidence: (s.meta as any)?.confidence
+          confidence: s.confidence  // FIX: Use top-level confidence, not nested
         }))
       );
 
