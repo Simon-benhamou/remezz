@@ -36,6 +36,7 @@ import smartSelectionRouter from "./routes/smart-selection.js";
 import validationRouter from "./routes/validation.js";
 import learningRouter from "./routes/learning.js";
 import portfolioRouter from "./routes/portfolio.js";
+import { router as strategyPerformanceRouter } from "./routes/strategy-performance.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
 import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
@@ -180,6 +181,7 @@ app.use("/api/smart-selection", smartSelectionRouter);
 app.use("/api/validation", validationRouter);
 app.use("/api/learning", learningRouter);
 app.use("/api/portfolio", portfolioRouter);
+app.use("/api/strategy-performance", strategyPerformanceRouter);
 app.post("/api/start-agent", async (req, res) => {
   try {
     const userId = typeof (req as any)?.user?.id === "string" ? (req as any).user.id : undefined;

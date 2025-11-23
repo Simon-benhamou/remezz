@@ -185,6 +185,7 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
         const qualified = volumeData.filter(x => x.volumeUsd >= MIN_VOLUME_USD);
         qualified.sort((a,b)=> b.volumeUsd - a.volumeUsd);
         const top50 = qualified.slice(0, 50);
+        
         console.log(`✅ Binance WS volume filter: ${top50.length} symbols`);
         wsTop = top50.map((crypto, index) => ({
           symbol: crypto.symbol,
@@ -356,11 +357,15 @@ export async function getTop50CryptosByVolume(excludeSessionId?: string): Promis
         invalidSymbols.push(crypto.symbol);
         continue;
       }
+      
+      // Strategy compatibility is now evaluated dynamically in evaluateStrategyCompatibility()
+      // No more static blacklist filtering
+      
       result.push(entry);
     }
 
     if (invalidSymbols.length) {
-      console.warn('⚠️ Dropping invalid perpetual symbols from volume filter', {
+      console.warn('⚠️ Dropping invalid/blacklisted perpetual symbols from volume filter', {
         symbols: invalidSymbols.slice(0, 10),
         total: invalidSymbols.length,
       });

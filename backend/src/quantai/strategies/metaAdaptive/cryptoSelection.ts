@@ -91,6 +91,66 @@ export function getCryptoTier(symbol: string, volumeUsd24h: number): CryptoTier 
 }
 
 /**
+ * 🚫 INTELLIGENT RANGE-BOUND DETECTION
+ * Dynamically identifies choppy/range-bound cryptos via technical indicators
+ * Based on empirical analysis: ADA/DOGE (range-bound) vs SOL/ETH/BCH (trending)
+ * 
+ * Detection criteria (from database analysis):
+ * - Range-bound ATR: 0.46% avg, 100% under 0.6%
+ * - Trending ATR: 1.09% avg, 0% under 0.6%
+ * - Range-bound EMA compression: 100%
+ * - Trending EMA compression: 0%
+ */
+function detectRangeBound(
+  atrPct: number,
+  ema20: number,
+  ema50: number,
+  ema100: number
+): { isRangeBound: boolean; reason: string } {
+  
+  // 1. Extreme squeeze: ATR < 0.5% is definitive range-bound
+  if (atrPct < 0.5) {
+    return {
+      isRangeBound: true,
+      reason: `Extreme squeeze (ATR ${atrPct.toFixed(2)}% < 0.5%) - range-bound`
+    };
+  }
+  
+  // 2. Low ATR: ATR < 0.6% is strong indicator
+  if (atrPct < 0.6) {
+    return {
+      isRangeBound: true,
+      reason: `Low volatility (ATR ${atrPct.toFixed(2)}% < 0.6%) - likely range-bound`
+    };
+  }
+  
+  // 3. EMA compression: All EMAs within 2% = no trend structure
+  const emaRange = Math.max(ema20, ema50, ema100) - Math.min(ema20, ema50, ema100);
+  const emaAvg = (ema20 + ema50 + ema100) / 3;
+  const emaCompressionPct = (emaRange / emaAvg) * 100;
+  
+  if (emaCompressionPct < 2.0 && atrPct < 0.75) {
+    return {
+      isRangeBound: true,
+      reason: `EMA compression (${emaCompressionPct.toFixed(2)}% < 2%) + low ATR (${atrPct.toFixed(2)}%) - range-bound`
+    };
+  }
+  
+  // 4. Borderline case: ATR 0.6-0.8% with compressed EMAs
+  if (atrPct < 0.8 && emaCompressionPct < 3.0) {
+    return {
+      isRangeBound: true,
+      reason: `Borderline ATR (${atrPct.toFixed(2)}%) + EMA compression (${emaCompressionPct.toFixed(2)}%) - likely choppy`
+    };
+  }
+  
+  return {
+    isRangeBound: false,
+    reason: `Trending structure (ATR ${atrPct.toFixed(2)}%, EMA spread ${emaCompressionPct.toFixed(2)}%)`
+  };
+}
+
+/**
  * Check if crypto has sufficient volatility for our ATR-based strategy
  */
 function assessVolatilityFit(
@@ -381,8 +441,29 @@ export function evaluateStrategyCompatibility(
   const reasons: string[] = [];
   const warnings: string[] = [];
   
-  // 1. Assess volatility fit
+  // 🚫 INTELLIGENT RANGE-BOUND DETECTION
   const atrPct = Number(snap.atrPct || 0);
+  const ema20 = Number(snap.ema20 || 0);
+  const ema50 = Number(snap.ema50 || 0);
+  const ema100 = Number(snap.ema100 || 0);
+  
+  const rangeBoundCheck = detectRangeBound(atrPct, ema20, ema50, ema100);
+  if (rangeBoundCheck.isRangeBound) {
+    return {
+      compatible: false,
+      score: 0,
+      reasons: [`🚫 ${rangeBoundCheck.reason}`],
+      warnings: ['Range-bound cryptos fail HTF alignment and have 100% block rate in trend-following strategy. Use mean reversion instead.'],
+      tier,
+      volatilityFit: 'poor',
+      liquidityFit: 'poor',
+      trendQuality: 'poor',
+      accumulationDetectable: false,
+      estimatedWinRate: 0,
+    };
+  }
+  
+  // 1. Assess volatility fit
   const realizedVol = Number((snap as any).realizedVol || 0);
   const volatility = assessVolatilityFit(atrPct, tier, realizedVol);
   reasons.push(volatility.reason);
@@ -395,9 +476,6 @@ export function evaluateStrategyCompatibility(
   
   // 3. Assess trend quality
   const adx = Number(snap.adx14 || 0);
-  const ema20 = Number(snap.ema20 || 0);
-  const ema50 = Number(snap.ema50 || 0);
-  const ema100 = Number(snap.ema100 || 0);
   const trendStrength = Number((snap as any).trendStrength || 0);
   const trend = assessTrendQuality(adx, ema20, ema50, ema100, trendStrength, (snap as any).multiTimeframe);
   reasons.push(trend.reason);

@@ -4,6 +4,7 @@ import { SearchOutlined, DownloadOutlined, ReloadOutlined } from '../icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
+import StrategyBadge from '../components/StrategyBadge';
 
 const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
@@ -35,6 +36,8 @@ type TradeRow = {
   sessionMode?: string;
   sessionId?: string;
   aggressiveness?: AggressivenessLevel;
+  strategyUsed?: string | null;
+  strategyConfidence?: number | null;
 };
 
 type SessionMetrics = {
@@ -443,6 +446,18 @@ export default function ExecutionLedgerPage() {
       ),
     }] : []),
     { title: 'Symbol', dataIndex: 'symbol', width: 110 },
+    {
+      title: 'Strategy',
+      dataIndex: 'strategyUsed',
+      width: 160,
+      render: (strategy: string | null, row: TradeRow) => (
+        <StrategyBadge 
+          strategy={strategy} 
+          confidence={row.strategyConfidence}
+          size="small"
+        />
+      ),
+    },
     {
       title: 'Aggressiveness',
       dataIndex: 'aggressiveness',

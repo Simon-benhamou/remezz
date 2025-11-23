@@ -1,12 +1,14 @@
 import React from 'react';
-import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message } from 'antd';
+import { Card, Table, Space, Button, DatePicker, Typography, Statistic, Row, Col, message, Tabs } from 'antd';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import StrategyPerformanceDashboard from '../components/StrategyPerformanceDashboard';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
+const { TabPane } = Tabs;
 
 function pct(val?: number | null, digits = 2) {
   if (val == null || Number.isNaN(Number(val))) return '-';
@@ -191,130 +193,140 @@ export default function ReportsPage() {
   ];
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size="large">
-      <Card>
-        <Title level={3}>📊 Global Trading Reports</Title>
-        <Text type="secondary">
-          Comprehensive dashboard with performance metrics across all agents
-        </Text>
-      </Card>
-
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} md={6}>
+    <Tabs defaultActiveKey="daily" style={{ padding: '20px' }}>
+      <TabPane tab="📊 Daily Reports" key="daily">
+        <Space direction="vertical" style={{ width: '100%' }} size="large">
           <Card>
-            <Statistic
-              title="Total Trades"
-              value={globalStats.totalTrades}
-              valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic
-              title="Average Win Rate"
-              value={globalStats.avgWinRate}
-              formatter={(value) => pct(value as number)}
-              valueStyle={{ color: globalStats.avgWinRate > 0.5 ? '#52c41a' : '#ff4d4f' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic
-              title="Total P&L"
-              value={globalStats.totalPnl}
-              prefix="$"
-              precision={2}
-              valueStyle={{ color: globalStats.totalPnl >= 0 ? '#52c41a' : '#ff4d4f' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic
-              title="Max Drawdown"
-              value={globalStats.maxDrawdown}
-              prefix="$"
-              precision={2}
-              valueStyle={{ color: '#ff4d4f' }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      <Card title="📊 Daily Reports" loading={loading} extra={
-        <Button onClick={loadReports} loading={loading}>
-          Refresh Reports
-        </Button>
-      }>
-        {reports.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <Title level={3}>📊 Global Trading Reports</Title>
             <Text type="secondary">
-              {sessions.length === 0 ? 'No trading sessions found' : 'No daily reports available yet'}
+              Comprehensive dashboard with performance metrics across all agents
             </Text>
-          </div>
-        ) : (
-          <Table
-            dataSource={reports}
-            columns={columns}
-            rowKey="date"
-            pagination={{ pageSize: 10 }}
-            expandable={{
-              expandedRowRender: (record) => (
-                <div style={{ margin: 0 }}>
-                  <Text strong>Sessions for {dayjs(record.date).format('MMM DD, YYYY')}:</Text>
-                  <Row gutter={[16, 8]} style={{ marginTop: 8 }}>
-                    {record.sessions?.map((session: any, index: number) => (
-                      <Col xs={24} sm={12} md={8} key={index}>
-                        <Card size="small" style={{ marginBottom: 8 }}>
-                          <Text strong>{session.symbol}</Text>
-                          <br />
-                          <Text type="secondary">Trades: {session.totalTrades}</Text>
-                          <br />
-                          <Text type="secondary">WR: {pct(session.winRate)}</Text>
-                          <br />
-                          <Text type="secondary">PnL: ${session.totalPnl.toFixed(2)}</Text>
-                          {session.llmSummary && (
-                            <>
-                              <br />
-                              <Text type="secondary" style={{ fontSize: '11px' }}>
-                                {session.llmSummary.substring(0, 100)}
-                                {session.llmSummary.length > 100 ? '...' : ''}
-                              </Text>
-                            </>
-                          )}
-                        </Card>
-                      </Col>
-                    ))}
-                  </Row>
-                </div>
-              ),
-              rowExpandable: (record) => record.sessions && record.sessions.length > 0,
-            }}
-          />
-        )}
-      </Card>
+          </Card>
 
-      <Card title="Active Sessions" size="small">
-        <Row gutter={[16, 16]}>
-          {sessions.filter((s: any) => !s.stoppedAt).map((session: any) => (
-            <Col xs={24} sm={12} md={8} key={session.id}>
-              <Card size="small">
-                <Text strong>{session.symbol}</Text>
-                <br />
-                <Text type="secondary">
-                  Mode: {session.mode?.toUpperCase()}
-                </Text>
-                <br />
-                <Text type="secondary">
-                  Started: {dayjs(session.startedAt).format('MM-DD HH:mm')}
-                </Text>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic
+                  title="Total Trades"
+                  value={globalStats.totalTrades}
+                  valueStyle={{ color: '#1890ff' }}
+                />
               </Card>
             </Col>
-          ))}
-        </Row>
-      </Card>
-    </Space>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic
+                  title="Average Win Rate"
+                  value={globalStats.avgWinRate}
+                  formatter={(value) => pct(value as number)}
+                  valueStyle={{ color: globalStats.avgWinRate > 0.5 ? '#52c41a' : '#ff4d4f' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic
+                  title="Total P&L"
+                  value={globalStats.totalPnl}
+                  prefix="$"
+                  precision={2}
+                  valueStyle={{ color: globalStats.totalPnl >= 0 ? '#52c41a' : '#ff4d4f' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card>
+                <Statistic
+                  title="Max Drawdown"
+                  value={globalStats.maxDrawdown}
+                  prefix="$"
+                  precision={2}
+                  valueStyle={{ color: '#ff4d4f' }}
+                />
+              </Card>
+            </Col>
+          </Row>
+
+          <Card title="📊 Daily Reports" loading={loading} extra={
+            <Button onClick={loadReports} loading={loading}>
+              Refresh Reports
+            </Button>
+          }>
+            {reports.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <Text type="secondary">
+                  {sessions.length === 0 ? 'No trading sessions found' : 'No daily reports available yet'}
+                </Text>
+              </div>
+            ) : (
+              <Table
+                dataSource={reports}
+                columns={columns}
+                rowKey="date"
+                pagination={{ pageSize: 10 }}
+                expandable={{
+                  expandedRowRender: (record) => (
+                    <div style={{ margin: 0 }}>
+                      <Text strong>Sessions for {dayjs(record.date).format('MMM DD, YYYY')}:</Text>
+                      <Row gutter={[16, 8]} style={{ marginTop: 8 }}>
+                        {record.sessions?.map((session: any, index: number) => (
+                          <Col xs={24} sm={12} md={8} key={index}>
+                            <Card size="small" style={{ marginBottom: 8 }}>
+                              <Text strong>{session.symbol}</Text>
+                              <br />
+                              <Text type="secondary">Trades: {session.totalTrades}</Text>
+                              <br />
+                              <Text type="secondary">WR: {pct(session.winRate)}</Text>
+                              <br />
+                              <Text type="secondary">PnL: ${session.totalPnl.toFixed(2)}</Text>
+                              {session.llmSummary && (
+                                <>
+                                  <br />
+                                  <Text type="secondary" style={{ fontSize: '11px' }}>
+                                    {session.llmSummary.substring(0, 100)}
+                                    {session.llmSummary.length > 100 ? '...' : ''}
+                                  </Text>
+                                </>
+                              )}
+                            </Card>
+                          </Col>
+                        ))}
+                      </Row>
+                    </div>
+                  ),
+                  rowExpandable: (record) => record.sessions && record.sessions.length > 0,
+                }}
+              />
+            )}
+          </Card>
+
+          <Card title="Active Sessions" size="small">
+            <Row gutter={[16, 16]}>
+              {sessions.filter((s: any) => !s.stoppedAt).map((session: any) => (
+                <Col xs={24} sm={12} md={8} key={session.id}>
+                  <Card size="small">
+                    <Text strong>{session.symbol}</Text>
+                    <br />
+                    <Text type="secondary">
+                      Mode: {session.mode?.toUpperCase()}
+                    </Text>
+                    <br />
+                    <Text type="secondary">
+                      Started: {dayjs(session.startedAt).format('MM-DD HH:mm')}
+                    </Text>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          </Card>
+        </Space>
+      </TabPane>
+
+      <TabPane tab="🎯 Strategy Performance" key="strategy">
+        <StrategyPerformanceDashboard 
+          apiBaseUrl={import.meta.env.VITE_API_URL || 'http://localhost:3030'} 
+        />
+      </TabPane>
+    </Tabs>
   );
 }

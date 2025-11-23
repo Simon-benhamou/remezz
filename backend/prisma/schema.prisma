@@ -251,6 +251,11 @@ model Order {
   source          String        @default("agent")
   status          String?
   error           String?
+  
+  // 🎯 NEW: Strategy tracking for learning which strategy works best
+  strategyUsed    String?       // "trend_following" | "mean_reversion" | "breakout" | "momentum"
+  strategyConfidence Float?     // Confidence score when strategy was selected (0-1)
+  
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -258,6 +263,7 @@ model Order {
 
   @@index([sessionId, createdAt])
   @@index([sessionId, status])
+  @@index([strategyUsed, status]) // For strategy performance analysis
 }
 
 model Fill {
@@ -271,6 +277,9 @@ model Fill {
   side        String
   realizedPnl Float?
   ts          DateTime @default(now())
+  
+  // 🎯 NEW: Copy strategy info from Order for easier querying
+  strategyUsed String? // Denormalized from Order for performance
 
   // Support AgentSession.fills relation
   session   AgentSession? @relation(fields: [sessionId], references: [id])
@@ -278,6 +287,7 @@ model Fill {
 
   @@index([sessionId])
   @@index([orderId])
+  @@index([strategyUsed]) // For strategy PnL analysis
 }
 
 model Position {
@@ -490,6 +500,12 @@ model TradeEvaluation {
   inputMetrics    Json // Snapshot of indicator values: adx, cmf, atr_pct, slope, trend_strength, etc.
   regimeContext   Json? // NEW: Regime classification and parameter source for traceability
   marketOutcome   Json? // Updated later: pnl_15m, pnl_1h, max_favorable_excursion_1h, max_adverse_excursion_1h
+  
+  // 🎯 NEW: Strategy selection tracking for learning
+  selectedStrategy String? // "trend_following" | "mean_reversion" | "breakout" | "momentum"
+  strategyConfidence Float? // Confidence that this was the right strategy choice (0-1)
+  alternativeStrategies Json? // Other strategies considered with their scores
+  
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   
@@ -499,6 +515,7 @@ model TradeEvaluation {
   @@index([symbol, timestamp])
   @@index([timestamp])
   @@index([marketOutcome])
+  @@index([selectedStrategy, decision]) // For strategy performance analysis
 }
 
 model CryptoPersonalityProfile {
