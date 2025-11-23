@@ -73,16 +73,16 @@ export default function StrategyPerformanceDashboard({ apiBaseUrl }: StrategyPer
   }
 
   // Stats globales (with safety checks for empty data)
-  const totalTrades = summary.global.reduce((sum, s) => sum + (s.totalTrades || 0), 0);
-  const totalPnl = summary.global.reduce((sum, s) => sum + (s.totalPnlUsd || 0), 0);
+  const totalTrades = summary.global.reduce((sum, s) => sum + (s?.totalTrades || 0), 0);
+  const totalPnl = summary.global.reduce((sum, s) => sum + (s?.totalPnlUsd || 0), 0);
   const avgWinRate = summary.global.length > 0
-    ? summary.global.reduce((sum, s) => sum + (s.winRate || 0), 0) / summary.global.length
+    ? summary.global.reduce((sum, s) => sum + (s?.winRate || 0), 0) / summary.global.length
     : 0;
 
   // Best performer (with null check)
   const bestStrategy = summary.global.length > 0
     ? summary.global.reduce((best, current) =>
-        (current.totalPnlUsd || 0) > (best.totalPnlUsd || 0) ? current : best
+        (current?.totalPnlUsd || 0) > (best?.totalPnlUsd || 0) ? current : best
       , summary.global[0])
     : null;
 
@@ -91,8 +91,8 @@ export default function StrategyPerformanceDashboard({ apiBaseUrl }: StrategyPer
     strategy: STRATEGY_LABELS[s.strategy] || s.strategy,
     winRate: (s.winRate || 0) * 100,
     profitFactor: s.profitFactor || 0,
-    trades: s.totalTrades || 0,
-    pnl: s.totalPnlUsd || 0,
+    trades: s?.totalTrades || 0,
+    pnl: s?.totalPnlUsd || 0,
   }));
 
   // Données pour le pie chart des trades
@@ -105,8 +105,8 @@ export default function StrategyPerformanceDashboard({ apiBaseUrl }: StrategyPer
   // Top cryptos par stratégie
   const topCryptosByStrategy = summary.bySymbol
     .sort((a, b) => {
-      const aPnl = a.strategies.reduce((sum, s) => sum + (s.totalPnlUsd || 0), 0);
-      const bPnl = b.strategies.reduce((sum, s) => sum + (s.totalPnlUsd || 0), 0);
+      const aPnl = a.strategies.reduce((sum, s) => sum + (s?.totalPnlUsd || 0), 0);
+      const bPnl = b.strategies.reduce((sum, s) => sum + (s?.totalPnlUsd || 0), 0);
       return bPnl - aPnl;
     })
     .slice(0, 10);
@@ -171,7 +171,7 @@ export default function StrategyPerformanceDashboard({ apiBaseUrl }: StrategyPer
             <Card>
               <Statistic
                 title="Meilleure Stratégie"
-                value={bestStrategy ? bestStrategy.totalPnlUsd : 0}
+                value={bestStrategy ? bestStrategy?.totalPnlUsd : 0}
                 precision={2}
                 prefix={<TrophyOutlined />}
                 suffix="$"
