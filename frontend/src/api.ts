@@ -292,6 +292,15 @@ export const api = {
     (await client.post('/api/market-health', { symbol })).data,
   getMarketHealthDecisions: async (symbol: string, limit?: number) =>
     (await client.post('/api/market-health/decisions', { symbol, limit })).data,
+  
+  // Strategy Performance endpoints
+  getStrategyPerformanceSummary: async (days: number) =>
+    (await client.get('/api/strategy-performance/summary', { params: { days } })).data,
+  getStrategyPerformanceDetailed: async (days: number) =>
+    (await client.get('/api/strategy-performance/detailed', { params: { days } })).data,
+  getStrategyPerformanceHeatmap: async (days: number) =>
+    (await client.get('/api/strategy-performance/heatmap', { params: { days } })).data,
+  
   getAgentActivity: async () =>
     (await client.get('/api/market-health/agent-activity')).data,
 };

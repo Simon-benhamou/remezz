@@ -1,7 +1,3 @@
-/**
- * Tableau de bord des performances par stratégie
- */
-
 import React, { useEffect, useState } from 'react';
 import { Card, Row, Col, Statistic, Table, Select, Spin, Typography, Space, Tag } from 'antd';
 import {
@@ -29,6 +25,7 @@ import {
 } from '../types/strategy';
 import StrategyBadge from './StrategyBadge';
 import { TrophyOutlined, RiseOutlined, FallOutlined } from '@ant-design/icons';
+import { api } from '../api';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -52,9 +49,9 @@ export default function StrategyPerformanceDashboard({ apiBaseUrl }: StrategyPer
     setLoading(true);
     try {
       const [summaryRes, detailedRes, heatmapRes] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/strategy-performance/summary?days=${days}`).then(r => r.json()),
-        fetch(`${apiBaseUrl}/api/strategy-performance/detailed?days=${days}`).then(r => r.json()),
-        fetch(`${apiBaseUrl}/api/strategy-performance/heatmap?days=${days}`).then(r => r.json()),
+        api.getStrategyPerformanceSummary(days),
+        api.getStrategyPerformanceDetailed(days),
+        api.getStrategyPerformanceHeatmap(days),
       ]);
 
       setSummary(summaryRes);
