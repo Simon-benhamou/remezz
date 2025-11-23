@@ -255,6 +255,30 @@ function MarketHealthDashboard({ symbol }: Props) {
       ),
     },
     {
+      title: 'Predictor',
+      key: 'predictor',
+      width: 120,
+      render: (_: any, record: Decision) => {
+        const metrics = record.inputMetrics || {};
+        const bias = metrics.predictorBias || 'N/A';
+        const confidence = metrics.predictorConfidence;
+        const decision = metrics.predictorDecision || 'none';
+        
+        if (!confidence || decision === 'none') {
+          return <Tag color="default">NO DATA</Tag>;
+        }
+        
+        const color = bias === 'long' ? 'green' : bias === 'short' ? 'red' : 'blue';
+        return (
+          <Tooltip title={`Decision: ${decision}, Confidence: ${(confidence * 100).toFixed(1)}%`}>
+            <Tag color={color}>
+              {bias.toUpperCase()} {(confidence * 100).toFixed(0)}%
+            </Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: 'Eligibility',
       dataIndex: 'entryEligibilityScore',
       key: 'eligibility',
