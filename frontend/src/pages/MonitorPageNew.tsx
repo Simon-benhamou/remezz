@@ -252,7 +252,7 @@ export function MonitorPageNew() {
 
           {/* Market Health & Transparency Dashboard */}
           <Card title="🔍 Market Transparency & Decision Analysis" size="small">
-            <MarketHealthDashboard symbol={symbol.replace('/', '-')} />
+            <MarketHealthDashboard symbol={symbol} />
           </Card>
 
           {/* Predictor Analysis */}

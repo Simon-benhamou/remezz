@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Card, Tag, Progress, Timeline, Statistic, Row, Col, Table, Badge, Tooltip } from 'antd';
+import { Card, Tag, Progress, Timeline, Statistic, Row, Col, Table, Badge, Tooltip, Alert, Button } from 'antd';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -103,18 +103,32 @@ function MarketHealthDashboard({ symbol }: Props) {
   const [health, setHealth] = useState<MarketHealth | null>(null);
   const [decisions, setDecisions] = useState<DecisionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // Encode symbol for URL (ETH/USDT -> ETH%2FUSDT)
+        const encodedSymbol = encodeURIComponent(symbol);
+        
         const [healthRes, decisionsRes] = await Promise.all([
-          axios.get(`/api/market-health/${symbol}`),
-          axios.get(`/api/market-health/${symbol}/decisions?limit=30`),
+          axios.get(`/api/market-health/${encodedSymbol}`),
+          axios.get(`/api/market-health/${encodedSymbol}/decisions?limit=30`),
         ]);
+        
+        console.log('Market Health Response:', healthRes.data);
+        console.log('Decisions Response:', decisionsRes.data);
+        
         setHealth(healthRes.data);
         setDecisions(decisionsRes.data);
-      } catch (error) {
+        setError(null);
+      } catch (error: any) {
         console.error('Error fetching market health:', error);
+        const errorMsg = error.response?.data?.error || error.message || 'Failed to fetch market health';
+        setError(errorMsg);
+        // Set null to trigger error state
+        setHealth(null);
+        setDecisions(null);
       } finally {
         setLoading(false);
       }
@@ -125,13 +139,58 @@ function MarketHealthDashboard({ symbol }: Props) {
     return () => clearInterval(interval);
   }, [symbol]);
 
-  if (loading || !health || !decisions) {
+  if (loading) {
     return (
       <Card loading={loading}>
         <div style={{ textAlign: 'center', padding: '40px' }}>
           <SyncOutlined spin style={{ fontSize: 32 }} />
           <p style={{ marginTop: 16 }}>Loading market health...</p>
         </div>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <Alert
+          message="Error Loading Market Health"
+          description={error}
+          type="error"
+          showIcon
+          action={
+            <Button size="small" onClick={() => setLoading(true)}>
+              Retry
+            </Button>
+          }
+        />
+      </Card>
+    );
+  }
+
+  if (!health || !decisions) {
+    return (
+      <Card>
+        <Alert
+          message="No Data Available"
+          description="Market health data could not be loaded. The backend may not be running or the symbol format may be incorrect."
+          type="warning"
+          showIcon
+        />
+      </Card>
+    );
+  }
+
+  // Safety checks for data structure
+  if (!health.strategyCompatibility || !health.marketRegime || !health.recentActivity || !health.technicals) {
+    return (
+      <Card>
+        <Alert
+          message="Incomplete Data"
+          description="Market health data is incomplete. The API may not be returning all required fields."
+          type="warning"
+          showIcon
+        />
       </Card>
     );
   }
