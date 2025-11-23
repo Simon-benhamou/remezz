@@ -18,7 +18,7 @@ import {
   FireOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import axios from 'axios';
+import { api } from '../api';
 
 type MarketHealth = {
   symbol: string;
@@ -108,19 +108,16 @@ function MarketHealthDashboard({ symbol }: Props) {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Encode symbol for URL (ETH/USDT -> ETH%2FUSDT)
-        const encodedSymbol = encodeURIComponent(symbol);
-        
         const [healthRes, decisionsRes] = await Promise.all([
-          axios.get(`/api/market-health/${encodedSymbol}`),
-          axios.get(`/api/market-health/${encodedSymbol}/decisions?limit=30`),
+          api.getMarketHealth(symbol),
+          api.getMarketHealthDecisions(symbol, 30),
         ]);
         
-        console.log('Market Health Response:', healthRes.data);
-        console.log('Decisions Response:', decisionsRes.data);
+        console.log('Market Health Response:', healthRes);
+        console.log('Decisions Response:', decisionsRes);
         
-        setHealth(healthRes.data);
-        setDecisions(decisionsRes.data);
+        setHealth(healthRes);
+        setDecisions(decisionsRes);
         setError(null);
       } catch (error: any) {
         console.error('Error fetching market health:', error);

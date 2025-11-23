@@ -17,7 +17,7 @@ import { detectMarketRegime } from '../quantai/regime/marketRegimeDetector.js';
 const router = Router();
 
 /**
- * GET /api/market-health/:symbol
+ * POST /api/market-health
  * 
  * Retourne si les conditions sont favorables pour trader ce symbol:
  * - Strategy compatibility score
@@ -26,9 +26,13 @@ const router = Router();
  * - Liquidity fit
  * - Why no trades are happening (if applicable)
  */
-router.get('/:symbol', async (req, res) => {
+router.post('/', async (req, res) => {
   try {
-    const { symbol } = req.params;
+    const { symbol } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
     
     // 1. Get technical snapshot
     const tech = await buildTechSnapshot(symbol);
@@ -173,7 +177,7 @@ router.get('/:symbol', async (req, res) => {
 });
 
 /**
- * GET /api/market-health/:symbol/decisions
+ * POST /api/market-health/decisions
  * 
  * Retourne tous les signaux récents (last 100) avec raisons de rejet:
  * - Strategy analyzed
@@ -181,10 +185,15 @@ router.get('/:symbol', async (req, res) => {
  * - Why rejected (low confidence, weak context, predictor blocked, etc.)
  * - Entry eligibility details
  */
-router.get('/:symbol/decisions', async (req, res) => {
+router.post('/decisions', async (req, res) => {
   try {
-    const { symbol } = req.params;
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const { symbol, limit: reqLimit } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+    
+    const limit = Math.min(Number(reqLimit) || 50, 200);
     
     const decisions = await prisma.tradeEvaluation.findMany({
       where: { symbol },

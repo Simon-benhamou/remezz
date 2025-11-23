@@ -286,5 +286,12 @@ export const api = {
     (await client.get('/api/portfolio/risk-distribution')).data,
   getPredictorStatus: async () =>
     (await client.get('/api/predictor/status')).data,
+  
+  // Market Health & Transparency endpoints
+  getMarketHealth: async (symbol: string) =>
+    (await client.post('/api/market-health', { symbol })).data,
+  getMarketHealthDecisions: async (symbol: string, limit?: number) =>
+    (await client.post('/api/market-health/decisions', { symbol, limit })).data,
+  getAgentActivity: async () =>
+    (await client.get('/api/market-health/agent-activity')).data,
 };
-

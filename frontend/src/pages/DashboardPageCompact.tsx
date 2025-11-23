@@ -28,8 +28,18 @@ export default function DashboardPageCompact(){
   const [trades, setTrades] = React.useState<any[]>([]);
   const [tradesLoading, setTradesLoading] = React.useState<boolean>(false);
   const [optimizing, setOptimizing] = React.useState<boolean>(false);
+  const [agentActivity, setAgentActivity] = React.useState<any>(null);
   const navigate = useNavigate();
   const { mode } = useMode();
+  
+  async function loadAgentActivity(){
+    try {
+      const activity = await api.getAgentActivity();
+      setAgentActivity(activity);
+    } catch(err){
+      console.error('Failed to load agent activity:', err);
+    }
+  }
   
   async function loadTrades(){
     setTradesLoading(true);
@@ -97,9 +107,11 @@ export default function DashboardPageCompact(){
   React.useEffect(() => {
     load();
     loadTrades();
+    loadAgentActivity();
     const iv = setInterval(() => {
       load();
       loadTrades();
+      loadAgentActivity();
     }, 30000); // Auto-refresh every 30s
     return () => clearInterval(iv);
   }, [mode]);
@@ -352,6 +364,43 @@ export default function DashboardPageCompact(){
                 </Space>
               )}
             </Card>
+            
+            {/* Agent Activity */}
+            {agentActivity && (
+              <Card 
+                size="small"
+                title={<Space><LineChartOutlined /> Agent Activity</Space>}
+              >
+                <Space direction="vertical" style={{ width: '100%', fontSize: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Text type="secondary">Analysis Rate:</Text>
+                    <Text strong>{agentActivity.analysis?.ratePerMinute || 0}/min</Text>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Text type="secondary">Last 5min:</Text>
+                    <Text>{agentActivity.analysis?.last5min || 0} analyses</Text>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Text type="secondary">Symbols:</Text>
+                    <Text>{agentActivity.analysis?.symbolsAnalyzed || 0} active</Text>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Text type="secondary">Active Sessions:</Text>
+                    <Badge 
+                      count={agentActivity.activeSessions?.count || 0} 
+                      style={{ backgroundColor: '#52c41a' }}
+                    />
+                  </div>
+                  {agentActivity.serviceHealth?.recentActivity && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #f0f0f0' }}>
+                      <Tag color="green">
+                        <CheckCircleOutlined /> System Active
+                      </Tag>
+                    </div>
+                  )}
+                </Space>
+              </Card>
+            )}
           </Space>
         </Col>
       </Row>
