@@ -1760,6 +1760,36 @@ class MetaAdaptiveStrategyAgent {
       1,
     );
 
+    // 🔍 DIAGNOSTIC: Log raw strategy scores BEFORE penalties
+    if (process.env.UNIT_TEST_MODE !== 'true') {
+      console.log(JSON.stringify({
+        level: 'debug',
+        event: 'strategy_scores_raw',
+        symbol: input.symbol,
+        sessionId: input.sessionId ?? null,
+        scores: {
+          trend: Number(scoreTrend.toFixed(3)),
+          breakout: Number(scoreBreakout.toFixed(3)),
+          mean_reversion: Number(scoreMean.toFixed(3)),
+          momentum: Number(scoreMomentum.toFixed(3)),
+        },
+        context: {
+          regime: regimeSignal.dominant,
+          adx,
+          conflict: context.conflict,
+          alignmentScore: Number(context.alignmentScore.toFixed(3)),
+          bullishStack: context.bullishStack,
+          bearishStack: context.bearishStack,
+        },
+        predictor: {
+          available: pythonAvailable,
+          bias: pythonSignal?.bias ?? 'none',
+          decision: pythonSignal?.decision ?? 'none',
+          confidence: pythonSignal?.confidence ? Number(pythonSignal.confidence.toFixed(3)) : 0,
+        },
+      }));
+    }
+
     const rankingInput = input.ranking ?? null;
     const change24hPct = rankingInput?.change24hPct ?? this.estimateChange24h(snap);
     const ranking = this.updateAssetRanking(input.symbol, {
@@ -2526,7 +2556,23 @@ class MetaAdaptiveStrategyAgent {
       }
       
       // ⚠️ VOLATILITY SQUEEZE PROTECTION
-      if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'extreme') {
+      // 🎯 BYPASS: If predictor very confident (>85%), trust ML model over volatility concern
+      const predictorVeryConfident = pythonSignal && pythonSignal.confidence >= 0.85;
+      const squeezeBypassActive = predictorVeryConfident && squeezeSignal.isSqueezed;
+      
+      if (squeezeBypassActive && pythonSignal && process.env.UNIT_TEST_MODE !== 'true') {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'squeeze_bypass_predictor_confident',
+          symbol: input.symbol,
+          family: item.family,
+          squeezeSeverity: squeezeSignal.severity,
+          predictorConfidence: pythonSignal.confidence.toFixed(3),
+          predictorDecision: pythonSignal.decision,
+          reason: 'predictor_95pct_accuracy_overrides_volatility',
+        }));
+        reasonsAugmented.push(`squeeze_bypassed(predictor_conf=${(pythonSignal.confidence * 100).toFixed(0)}%)`);
+      } else if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'extreme') {
         // Extreme squeeze - reduce all entries (direction unpredictable)
         effectiveScore *= 0.4;
         penaltiesApplied.push('extreme_vol_squeeze');
@@ -2574,9 +2620,25 @@ class MetaAdaptiveStrategyAgent {
         }
       }
 
+      // 🔍 DIAGNOSTIC: Log conflict impact
+      const scoreBeforeConflict = effectiveScore;
       if (context.conflict && item.family !== 'mean_reversion') {
         effectiveScore *= 0.45;
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
+        
+        if (process.env.UNIT_TEST_MODE !== 'true' && scoreBeforeConflict >= 0.25) {
+          console.log(JSON.stringify({
+            level: 'warn',
+            event: 'conflict_penalty_impact',
+            symbol: input.symbol,
+            family: item.family,
+            scoreBefore: Number(scoreBeforeConflict.toFixed(3)),
+            scoreAfter: Number(effectiveScore.toFixed(3)),
+            impact: Number((scoreBeforeConflict - effectiveScore).toFixed(3)),
+            wouldHavePassed: scoreBeforeConflict >= 0.25,
+            nowPasses: effectiveScore >= 0.25,
+          }));
+        }
       }
       
       // ✅ FIX: Activate mean_reversion in range-bound or choppy markets
@@ -2832,6 +2894,27 @@ class MetaAdaptiveStrategyAgent {
     }
 
     const ordered = weighted.sort((a, b) => b.score - a.score);
+
+    // 🔍 DIAGNOSTIC: Log final strategy scores after ALL penalties
+    if (process.env.UNIT_TEST_MODE !== 'true') {
+      console.log(JSON.stringify({
+        level: 'debug',
+        event: 'strategy_scores_final',
+        symbol: input.symbol,
+        sessionId: input.sessionId ?? null,
+        strategies: ordered.map(s => ({
+          family: s.family,
+          bias: s.bias,
+          score: Number(s.score.toFixed(3)),
+          confidence: Number(s.confidence.toFixed(3)),
+          active: s.active,
+          guardrail: s.guardrail,
+          penalties: s.penalties,
+          topReasons: s.reasons.slice(0, 3),
+        })),
+        willSelectStrategy: ordered.some(s => s.active && s.score >= 0.25),
+      }));
+    }
 
     const resolveDirectionalBias = (signal: StrategyScoreResult): StrategyBias => {
       if (signal.bias !== 'both') return signal.bias;

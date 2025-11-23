@@ -83,10 +83,11 @@ function calculateSessionPenalty(
   let basePenalty = 1.0;
   let reason = 'session_normal';
   
-  // Weekend penalty (mild)
+  // 🔄 CRYPTO MARKETS: 24/7 trading, no weekend penalty needed
+  // Weekend often MORE volatile (retail traders active)
+  // Removed: basePenalty *= 0.9 for weekends
   if (isWeekend) {
-    basePenalty *= 0.9;
-    recommendations.push('Weekend trading - lower institutional participation');
+    recommendations.push('Weekend trading - retail activity may increase volatility');
   }
   
   // Session-specific penalties
