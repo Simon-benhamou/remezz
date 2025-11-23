@@ -279,8 +279,10 @@ model Fill {
   realizedPnl Float?
   ts          DateTime @default(now())
   
-  // 🎯 NEW: Copy strategy info from Order for easier querying
-  strategyUsed String? // Denormalized from Order for performance
+  // 🎯 Strategy tracking for performance analysis
+  strategyUsed   String? // Denormalized from Order for performance
+  strategyFamily String? // Strategy family (trend, breakout, mean_reversion, momentum)
+  strategyId     String? // Specific strategy ID (classic_trend_following, bollinger_mean_reversion, etc.)
 
   // Support AgentSession.fills relation
   session   AgentSession? @relation(fields: [sessionId], references: [id])
@@ -290,6 +292,7 @@ model Fill {
   @@index([orderId])
   @@index([symbol, ts]) // For daily report queries
   @@index([strategyUsed]) // For strategy PnL analysis
+  @@index([strategyFamily, strategyId]) // For detailed strategy analysis
 }
 
 model Position {

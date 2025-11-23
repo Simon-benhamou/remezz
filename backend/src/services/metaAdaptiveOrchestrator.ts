@@ -54,6 +54,14 @@ import { orderReconciliationService } from './orderReconciliationService.js';
 
 const logger = createLogger('meta-adaptive');
 
+// Helper function to derive strategy family from strategy ID
+function deriveStrategyFamily(id: string): string {
+  if (id === 'classic_trend_following') return 'trend';
+  if (id === 'breakout_retest') return 'breakout';
+  if (id === 'bollinger_mean_reversion') return 'mean_reversion';
+  return 'momentum';
+}
+
 // Track brokers per session to avoid recreating them
 const sessionBrokers = new Map<string, Broker>();
 
@@ -223,13 +231,13 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live', userId
     // Small account: 1 big position (80-100%)
     maxAllocationPerPosition = applyAllocationFloors(totalCapital * 0.90); // Use 90% for the single position
     maxPositions = 1;
-    minConfidenceRequired = 0.50; // Normal threshold
+    minConfidenceRequired = 0.35; // 🎯 CRYPTO OPTIMIZED: Lowered from 0.50
   } else if (totalCapital < 1000) {
     // Medium account: 2-3 positions (40-50% each)
     maxAllocationPerPosition = applyAllocationFloors(totalCapital * 0.45);
     maxPositions = 2;
-    // Progressive threshold for 2nd position
-    minConfidenceRequired = usageRatio < 0.50 ? 0.50 : 0.65;
+    // 🎯 CRYPTO OPTIMIZED: Progressive threshold for 2nd position (lowered)
+    minConfidenceRequired = usageRatio < 0.50 ? 0.30 : 0.40;
   } else {
     // Large account: Dynamic position limit based on available capital
     // Instead of fixed 5 positions at 20%, allow more smaller positions
@@ -253,17 +261,18 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live', userId
     // Cap at 10 positions maximum to avoid over-diversification
     maxPositions = Math.min(10, Math.max(1, maxPositions));
     
-    // CRYPTO OPPORTUNISTIC THRESHOLDS: Lower thresholds to capture more opportunities
-    // Volatility = opportunity in crypto, strict risk management handles downside
-    // 0-55% used: opportunistic threshold (0.32)
-    // 55-75% used: moderate threshold (0.38)
-    // 75%+ used: conservative threshold (0.45)
+    // 🎯 CRYPTO OPTIMIZED THRESHOLDS: Further lowered to capture volatile opportunities
+    // Crypto markets move fast - need to enter quality setups quickly
+    // Filters (ADX, ATR, timeframes) already protect against bad trades
+    // 0-55% used: very opportunistic (0.25) - capture breakouts early
+    // 55-75% used: opportunistic (0.30) - still aggressive but selective
+    // 75%+ used: moderate (0.35) - preserve capital for best setups
     if (usageRatio < 0.55) {
-      minConfidenceRequired = 0.32;
+      minConfidenceRequired = 0.25;
     } else if (usageRatio < 0.75) {
-      minConfidenceRequired = 0.38;
+      minConfidenceRequired = 0.30;
     } else {
-      minConfidenceRequired = 0.45;
+      minConfidenceRequired = 0.35;
     }
   }
   
@@ -1584,6 +1593,8 @@ async function executeEntryTrade(
             feeUsd,
             slOrderId: order.slOrderId, // Track SL order ID from broker
             tpOrderId: order.tpOrderId, // Track TP order ID from broker
+            strategyFamily: deriveStrategyFamily(signal.id),
+            strategyId: signal.id,
           });
           console.log(`[MetaOrchestrator.executeEntryTrade] Position persisted to database`);
           

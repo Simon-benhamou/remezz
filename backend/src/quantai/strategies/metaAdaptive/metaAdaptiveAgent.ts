@@ -1283,6 +1283,26 @@ class MetaAdaptiveStrategyAgent {
     const micro = input.micro ?? {};
     const snap = input.snap;
     const price = safeNumber(snap.last, 0);
+    
+    // 🛡️ VOLUME SPIKE FILTER (Option C - Stop Hunt Detection)
+    // Block entries during abnormal volume spikes (likely stop hunts)
+    const volumeZScoreCheck = safeNumber((snap as any)?.volumeZScore, 0);
+    const volumeRatioCheck = safeNumber((snap as any)?.volumeRatio, 1);
+    if (volumeZScoreCheck > 2.5 && volumeRatioCheck > 2.0) {
+      if (process.env.UNIT_TEST_MODE !== 'true') {
+        console.log(JSON.stringify({
+          level: 'info',
+          event: 'volume_spike_detected',
+          symbol: input.symbol,
+          volumeZScore: Number(volumeZScoreCheck.toFixed(2)),
+          volumeRatio: Number(volumeRatioCheck.toFixed(2)),
+          reason: 'probable_stop_hunt',
+          decision: 'blocked',
+        }));
+      }
+      return { signals: [], selection: null };
+    }
+    
     const fundamental = input.fundamental ?? null;
     const fundamentalSeverity = fundamental?.severity ?? 'neutral';
     const fundamentalActive = fundamental != null
@@ -1422,11 +1442,14 @@ class MetaAdaptiveStrategyAgent {
 
     const livePythonMetrics = this.pythonPerformance.getMetrics();
     let pythonBoostApplied = false;
+    // 🎯 STRICTER PREDICTOR THRESHOLD (Option C: 85% → 90%)
+    // Require higher confidence before bypassing squeeze gate
+    const PREDICTOR_BYPASS_THRESHOLD = 0.90; // Was 0.85
     if (
       pythonSignal
       && Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD
       && pythonSignal.primaryProbability >= PYTHON_BOOST_PROB_THRESHOLD
-      && pythonSignal.confidence >= PYTHON_BOOST_CONF_THRESHOLD
+      && pythonSignal.confidence >= PREDICTOR_BYPASS_THRESHOLD  // Increased from 0.85
       && livePythonMetrics.samples >= PYTHON_BOOST_MIN_SAMPLES
       && livePythonMetrics.hitRate > 0.52
       && livePythonMetrics.realizedEdge > 0

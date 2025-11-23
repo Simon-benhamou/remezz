@@ -232,7 +232,7 @@ export async function generateStrategyReport(days: number = 30): Promise<string>
     for (const strat of rec.strategies) {
       report += `  - ${strat.strategy}:\n`;
       report += `      Trades: ${strat.totalTrades}, Win Rate: ${(strat.winRate * 100).toFixed(0)}%\n`;
-      report += `      Avg PnL: $${strat.avgPnlUsd.toFixed(2)}, Total: $${strat.totalPnlUsd.toFixed(2)}\n`;
+      report += `      Avg PnL: $${strat.avgPnlUsd.toFixed(2)}, Total: $${strat?.totalPnlUsd?.toFixed(2)}\n`;
       report += `      Avg Confidence: ${(strat.avgConfidence * 100).toFixed(0)}%\n`;
     }
     report += '\n';

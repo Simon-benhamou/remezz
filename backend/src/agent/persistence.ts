@@ -55,6 +55,8 @@ export async function recordEnter(params: {
   slOrderId?: string;
   tpOrderId?: string;
   feeUsd?: number;
+  strategyFamily?: string;
+  strategyId?: string;
 }) {
   const clientOrderId = `${params.sessionId}.${params.symbol}.${Date.now()}`;
   const round4 = (n:number|undefined)=> (typeof n==='number' ? Math.round(n*1e4)/1e4 : undefined);
@@ -96,6 +98,8 @@ export async function recordEnter(params: {
       side: params.side,
       fee: feeRounded,
       sessionId: params.sessionId,
+      strategyFamily: params.strategyFamily,
+      strategyId: params.strategyId,
     }
   });
   await prisma.position.create({

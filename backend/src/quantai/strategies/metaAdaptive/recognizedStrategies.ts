@@ -1010,8 +1010,10 @@ function computeCalibratedConfidence(signal: AdaptiveSignal): number {
   if (pythonBlend != null) {
     blended = blended * 0.7 + pythonBlend * 0.3;
   }
-  let calibrated = 0.35 + blended * 0.55;
-  const penaltyImpact = Math.min(signal.penalties.length * 0.02, 0.2);
+  // 🎯 CRYPTO OPTIMIZED: Higher base (0.50) for more opportunities in volatile markets
+  let calibrated = 0.50 + blended * 0.45;
+  // 🎯 CRYPTO OPTIMIZED: Reduced penalty impact (0.01) to be less aggressive
+  const penaltyImpact = Math.min(signal.penalties.length * 0.01, 0.15);
   const guardrailImpact = signal.guardrail ? 0.12 : 0;
   const explorationImpact = signal.exploration ? 0.04 : 0;
   calibrated -= penaltyImpact + guardrailImpact + explorationImpact;
