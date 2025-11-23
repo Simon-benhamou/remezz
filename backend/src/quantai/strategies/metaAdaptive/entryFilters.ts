@@ -40,6 +40,11 @@ export type EntryFacts = {
   volumeMA?: number;
   volumeZScore?: number;
   trendStrength?: number;
+  // Predictor fields for transparency
+  predictorBias?: 'long' | 'short' | 'neutral' | 'both';
+  predictorConfidence?: number;
+  predictorEnabled?: boolean;
+  predictorDecision?: string;
 };
 
 export type RegimeContext = {

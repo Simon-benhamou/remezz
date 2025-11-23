@@ -29,7 +29,12 @@ export type InputMetrics = {
   volume?: number;
   volumeMA?: number;
   volumeZScore?: number;
-  [key: string]: number | undefined;
+  // Predictor fields for transparency
+  predictorBias?: string;
+  predictorConfidence?: number;
+  predictorEnabled?: boolean;
+  predictorDecision?: string;
+  [key: string]: number | string | boolean | undefined;
 };
 
 export type MarketOutcome = {

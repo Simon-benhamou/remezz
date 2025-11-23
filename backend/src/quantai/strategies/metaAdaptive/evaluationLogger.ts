@@ -49,6 +49,11 @@ export async function logMetaAdaptiveEvaluation(
       volumeMA: facts.volumeMA,
       volumeZScore: facts.volumeZScore,
       trendStrength: facts.trendStrength,
+      // Predictor fields for transparency
+      predictorBias: facts.predictorBias,
+      predictorConfidence: facts.predictorConfidence,
+      predictorEnabled: facts.predictorEnabled,
+      predictorDecision: facts.predictorDecision,
     };
     
     // Extract blocked reasons

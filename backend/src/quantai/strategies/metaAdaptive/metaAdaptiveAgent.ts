@@ -2578,7 +2578,12 @@ class MetaAdaptiveStrategyAgent {
         effectiveScore *= 0.45;
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
       }
-      if (!context.conflict && item.family === 'mean_reversion') {
+      
+      // ✅ FIX: Activate mean_reversion in range-bound or choppy markets
+      const isRangeBoundMarket = regimeSignal.dominant === 'range' 
+        || (regimeSignal.dominant === 'high_vol' && adx < 20);
+      
+      if (!context.conflict && item.family === 'mean_reversion' && !isRangeBoundMarket) {
         // Mean reversion suppressed in aligned trends UNLESS it's a "buy the dip" setup
         // Buy the dip: strong uptrend + price near EMA20 (pullback in uptrend)
         const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.015 : false;
@@ -2666,6 +2671,15 @@ class MetaAdaptiveStrategyAgent {
       if (context.alignmentScore >= 0.9 && (item.family === 'trend' || item.family === 'momentum')) {
         effectiveScore = Math.min(1, effectiveScore * 1.15);
       }
+      
+      // ✅ BOOST mean_reversion in range-bound markets
+      if (item.family === 'mean_reversion' && isRangeBoundMarket) {
+        // Range-bound = mean reversion is the PRIMARY strategy
+        effectiveScore = Math.min(1, effectiveScore * 1.25);
+        penaltiesApplied.push('range_bound_boost');
+        reasonsAugmented.push(`regime=${regimeSignal.dominant}`);
+      }
+      
       if (item.family === 'mean_reversion' && adx >= 30 && context.alignmentScore >= 0.92) {
         // Disable mean reversion in VERY strong trends (ADX >= 30) unless near EMA20
         const nearEma20 = price > 0 && ema20 > 0 ? Math.abs((price - ema20) / price) < 0.012 : false;
@@ -2926,6 +2940,11 @@ class MetaAdaptiveStrategyAgent {
       volumeMA: safeNumber((snap as any)?.volumeMA, undefined),
       volumeZScore: safeNumber((snap as any)?.volumeZScore, undefined),
       trendStrength: safeNumber((snap as any)?.trendStrength, undefined),
+      // Add predictor fields for transparency
+      predictorBias: pythonSignal?.bias,
+      predictorConfidence: pythonSignal?.confidence,
+      predictorEnabled: pythonAvailable,
+      predictorDecision: pythonSignal?.decision,
     };
     
     // Create synthetic EntryEvaluation from the selected signal
