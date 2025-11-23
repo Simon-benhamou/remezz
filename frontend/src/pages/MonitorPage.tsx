@@ -17,6 +17,7 @@ import DecisionTimeline from '../components/monitor/DecisionTimeline';
 import ExitStrategyPanel from '../components/monitor/ExitStrategyPanel';
 import EntryTimingPanel from '../components/monitor/EntryTimingPanel';
 import PredictorModelStatus from '../components/monitor/PredictorModelStatus';
+import MarketHealthDashboard from '../components/MarketHealthDashboard';
 // import HelpPanel from '../components/HelpPanel'; // TODO: Create component
 // import DailyReviewPanel from '../components/DailyReviewPanel'; // TODO: Create component
 // import AlertPanel from '../components/AlertPanel'; // TODO: Create component
@@ -865,6 +866,19 @@ export default function MonitorPage(){
                         ) : ( */}
                           <Card title="Support/Resistance"><Skeleton active paragraph={{ rows: 3 }} /></Card>
                         {/* )} */}
+                      </div>
+                    )
+                  },
+                  {
+                    key: 'transparency',
+                    label: '🔍 Transparency',
+                    children: (
+                      <div style={{ padding: 12 }}>
+                        {shouldShowContent(LoadingPhase.CORE_DATA) && symbol ? (
+                          <MarketHealthDashboard symbol={symbol.replace('/', '-')} />
+                        ) : (
+                          <Card title="Market Transparency"><Skeleton active paragraph={{ rows: 6 }} /></Card>
+                        )}
                       </div>
                     )
                   }
