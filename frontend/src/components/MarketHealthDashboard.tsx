@@ -223,13 +223,15 @@ function MarketHealthDashboard({ symbol }: Props) {
       key: 'decision',
       width: 120,
       render: (decision: string) => {
-        const isAccepted = decision === 'order_placed';
+        // filter_passed = Signal passed all filters (gates OK)
+        // order_placed = Order successfully placed on exchange
+        const isAccepted = decision === 'filter_passed' || decision === 'order_placed';
         return (
           <Tag
             icon={isAccepted ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
             color={isAccepted ? 'success' : 'error'}
           >
-            {isAccepted ? 'ACCEPTED' : 'REJECTED'}
+            {isAccepted ? 'PASSED' : 'BLOCKED'}
           </Tag>
         );
       },
