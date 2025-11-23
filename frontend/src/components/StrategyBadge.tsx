@@ -10,7 +10,7 @@ import {
   STRATEGY_LABELS 
 } from '../types/strategy';
 import { 
-  TrendingUpOutlined, 
+  LineChartOutlined, 
   SwapOutlined, 
   ThunderboltOutlined, 
   RocketOutlined 
@@ -24,7 +24,7 @@ interface StrategyBadgeProps {
 }
 
 const STRATEGY_ICONS: Record<StrategyType, React.ReactNode> = {
-  trend_following: <TrendingUpOutlined />,
+  trend_following: <LineChartOutlined />,
   mean_reversion: <SwapOutlined />,
   breakout: <ThunderboltOutlined />,
   momentum: <RocketOutlined />,
