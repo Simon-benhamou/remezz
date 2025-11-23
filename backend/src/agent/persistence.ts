@@ -90,6 +90,7 @@ export async function recordEnter(params: {
   await prisma.fill.create({
     data: {
       orderId: order.id,
+      symbol: params.symbol,
       price: round4(params.entryPrice)!,
       qty: params.qty,
       side: params.side,
@@ -355,6 +356,7 @@ export async function recordExit(params: {
   await prisma.fill.create({
     data: {
       orderId: order.id,
+      symbol: params.symbol,
       price: round4(params.exitPrice),
       qty: params.qty,
       side: order.side,

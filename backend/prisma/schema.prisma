@@ -271,6 +271,7 @@ model Fill {
   order       Order    @relation(fields: [orderId], references: [id])
   orderId     String
   tradeId     String?
+  symbol      String?  // Symbol for the fill (e.g., "BTC/USDT:USDT")
   price       Float
   qty         Float
   fee         Float?
@@ -287,6 +288,7 @@ model Fill {
 
   @@index([sessionId])
   @@index([orderId])
+  @@index([symbol, ts]) // For daily report queries
   @@index([strategyUsed]) // For strategy PnL analysis
 }
 
