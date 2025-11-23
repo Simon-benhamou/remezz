@@ -502,9 +502,10 @@ model TradeEvaluation {
   marketOutcome   Json? // Updated later: pnl_15m, pnl_1h, max_favorable_excursion_1h, max_adverse_excursion_1h
   
   // 🎯 NEW: Strategy selection tracking for learning
-  selectedStrategy String? // "trend_following" | "mean_reversion" | "breakout" | "momentum"
-  strategyConfidence Float? // Confidence that this was the right strategy choice (0-1)
-  alternativeStrategies Json? // Other strategies considered with their scores
+  strategyFamily String? // "trend" | "breakout" | "mean_reversion" | "momentum"
+  strategyId String? // "classic_trend_following" | "breakout_retest" | "bollinger_mean_reversion" | "momentum_scanner_focus"
+  eligibilityScore Float? // Combined score after all penalties (0-1)
+  finalScore Float? // Final score used for selection (0-1)
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -515,7 +516,8 @@ model TradeEvaluation {
   @@index([symbol, timestamp])
   @@index([timestamp])
   @@index([marketOutcome])
-  @@index([selectedStrategy, decision]) // For strategy performance analysis
+  @@index([strategyFamily, decision]) // For strategy performance analysis
+  @@index([strategyId, decision]) // For specific strategy tracking
 }
 
 model CryptoPersonalityProfile {

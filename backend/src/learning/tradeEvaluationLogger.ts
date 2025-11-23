@@ -81,6 +81,11 @@ export type TradeEvaluationParams = {
   confidenceScore: number;
   inputMetrics: InputMetrics;
   regimeContext?: RegimeContext; // NEW: Track which regime parameters were used
+  // Strategy selection tracking (for dashboard display)
+  strategyFamily?: string; // 'trend' | 'breakout' | 'mean_reversion' | 'momentum'
+  strategyId?: string; // 'classic_trend_following' | 'breakout_retest' | etc.
+  eligibilityScore?: number; // Score after penalties (0-1)
+  finalScore?: number; // Final score used for selection (0-1)
 };
 
 /**
@@ -123,6 +128,11 @@ export async function logTradeEvaluation(params: TradeEvaluationParams): Promise
         inputMetrics: params.inputMetrics as any,
         regimeContext: params.regimeContext as any, // NEW: Store regime context for traceability
         marketOutcome: Prisma.JsonNull,
+        // Strategy tracking for dashboard (using new schema fields)
+        strategyFamily: params.strategyFamily || null,
+        strategyId: params.strategyId || null,
+        eligibilityScore: params.eligibilityScore ?? null,
+        finalScore: params.finalScore ?? null,
       },
       select: { id: true },
     });

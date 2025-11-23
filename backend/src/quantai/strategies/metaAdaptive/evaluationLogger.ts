@@ -17,6 +17,7 @@ export async function logMetaAdaptiveEvaluation(
   symbol: string,
   evaluation: EntryEvaluation,
   facts: EntryFacts,
+  strategyInfo?: { family?: string; id?: string; eligibilityScore?: number; finalScore?: number }, // Strategy selection tracking
 ): Promise<void> {
   try {
     // Extract metrics from facts (for both accepted and rejected signals)
@@ -84,6 +85,10 @@ export async function logMetaAdaptiveEvaluation(
       confidenceScore,
       inputMetrics,
       regimeContext: evaluation.regimeContext, // Pass regime context from evaluation
+      strategyFamily: strategyInfo?.family,
+      strategyId: strategyInfo?.id,
+      eligibilityScore: strategyInfo?.eligibilityScore,
+      finalScore: strategyInfo?.finalScore,
     }).catch((error) => {
       console.warn(`Failed to log meta-adaptive evaluation for ${symbol}:`, error);
     });

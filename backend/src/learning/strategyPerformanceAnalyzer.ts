@@ -122,16 +122,16 @@ export async function analyzeStrategyPerformance(
     }
     
     // Sort by total PnL
-    strategies.sort((a, b) => b.totalPnlUsd - a.totalPnlUsd);
+    strategies?.sort((a, b) => b?.totalPnlUsd - a?.totalPnlUsd);
     
     const best = strategies[0];
     const confidence = best.totalTrades >= 5 ? Math.min(0.95, best.winRate * 0.7 + (best.totalTrades / 50) * 0.3) : 0.3;
-    
+    if(!best) continue;
     recommendations.push({
       symbol: sym,
       recommendedStrategy: best.strategy,
       confidence,
-      reason: `Best performer: ${best.totalTrades} trades, ${(best.winRate * 100).toFixed(0)}% win rate, $${best.totalPnlUsd.toFixed(2)} total PnL`,
+      reason: `Best performer: ${best.totalTrades} trades, ${(best.winRate * 100).toFixed(0)}% win rate, $${best?.totalPnlUsd?.toFixed(2)} total PnL`,
       strategies,
     });
   }

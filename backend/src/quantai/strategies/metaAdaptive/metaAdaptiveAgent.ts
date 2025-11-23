@@ -3054,7 +3054,17 @@ class MetaAdaptiveStrategyAgent {
     };
     
     // Log asynchronously (non-blocking)
-    logMetaAdaptiveEvaluation(input.symbol, entryEvaluation, entryFacts);
+    logMetaAdaptiveEvaluation(
+      input.symbol, 
+      entryEvaluation, 
+      entryFacts,
+      selection ? { 
+        family: selection.family, 
+        id: selection.id,
+        eligibilityScore: selection.score,
+        finalScore: selection.confidence,
+      } : undefined
+    );
     
     return {
       signals: enrichedSignals,

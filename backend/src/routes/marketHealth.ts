@@ -209,13 +209,13 @@ router.post('/decisions', async (req, res) => {
       return {
         timestamp: d.createdAt.toISOString(),
         decision: d.decision,
-        strategy: d.selectedStrategy || 'unknown',
-        strategyLabel: d.selectedStrategy || 'Unknown',
+        strategy: d.strategyId || 'unknown',
+        strategyLabel: d.strategyFamily || 'Unknown',
         
         // Scores
         confidenceScore: d.confidenceScore,
         qualityScore: inputMetrics.qualityScore,
-        entryEligibilityScore: inputMetrics.entryEligibilityScore,
+        entryEligibilityScore: d.eligibilityScore ?? inputMetrics.entryEligibilityScore,
         
         // Gates
         confidencePassed: inputMetrics.confidenceGatePassed ?? null,
