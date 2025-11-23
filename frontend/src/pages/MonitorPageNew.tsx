@@ -21,6 +21,7 @@ import { OrdersTradesPanel } from '../components/monitor/OrdersTradesPanel';
 import { formatPriceDisplay } from '../utils/number';
 import LearningProgressPanel from '../components/LearningProgressPanel';
 import SubagentStatusCards from '../components/SubagentStatusCards';
+import MarketHealthDashboard from '../components/MarketHealthDashboard';
 
 const { Content } = Layout;
 
@@ -247,6 +248,11 @@ export function MonitorPageNew() {
           {/* Subagent Status Cards - NEW */}
           <Card title="Subagent Status" size="small">
             <SubagentStatusCards sessionId={sessionId!} />
+          </Card>
+
+          {/* Market Health & Transparency Dashboard */}
+          <Card title="🔍 Market Transparency & Decision Analysis" size="small">
+            <MarketHealthDashboard symbol={symbol.replace('/', '-')} />
           </Card>
 
           {/* Predictor Analysis */}
