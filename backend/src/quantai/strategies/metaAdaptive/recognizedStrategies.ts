@@ -1516,6 +1516,7 @@ export async function registerAdaptiveTradeEntry(params: {
   if (!Number.isFinite(entryAtr) || entryAtr <= 0) {
     entryAtr = Math.max(Math.abs(params.stopDistance), 1);
   }
+
   const resolvedEntryAtrPct = Number.isFinite(entryAtrPct) && entryAtrPct > 0
     ? entryAtrPct
     : entryAtr > 0 && Number.isFinite(params.entryPrice) && params.entryPrice !== 0

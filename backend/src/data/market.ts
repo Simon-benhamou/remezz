@@ -397,7 +397,12 @@ function prepareOhlcvSeries(
   allowPartial: boolean,
 ): PreparedOhlcvSeries {
   if (!Array.isArray(raw)) return { series: [], synthetic: false };
-  const sorted = raw.slice().filter(Boolean).sort((a, b) => Number(a[0]) - Number(b[0]));
+  
+  // 🛡️ SAFETY: Filter out invalid candles (price <= 0) to prevent indicator corruption
+  const sorted = raw.slice()
+    .filter(r => Array.isArray(r) && r.length >= 5 && Number(r[4]) > 0)
+    .sort((a, b) => Number(a[0]) - Number(b[0]));
+    
   if (!sorted.length) return { series: [], synthetic: false };
   const trimmed = dropPartialLastBar(sorted, tf, allowPartial);
   const clipped = trimmed.slice(-limit);
@@ -998,16 +1003,27 @@ export async function getOHLCV(
       const { getTickerFromWebSocket } = await import('../services/binanceWebSocket.js');
       const wsTicker = await getTickerFromWebSocket(symbol);
       const last = Number(wsTicker?.last || 0);
-      const now = Date.now();
-      const intervalMs = timeframeToMs(tf) || 900_000;
-      const out: number[][] = [];
-      for (let i = normalizedLimit; i > 0; i--) {
-        const ts = now - i * intervalMs;
-        out.push([ts, last, last, last, last, 0]);
-      }
-      syntheticPrepared = prepareOhlcvSeries(out, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
-      if (syntheticPrepared.series.length) {
-        maybeLogOhlcvDebug(symbol, tf, syntheticPrepared.series);
+      
+      // 🛡️ SAFETY: Don't generate synthetic data with zero price
+      // This prevents "ATR: 49%" spikes caused by 0-price candles
+      if (last > 0) {
+        const now = Date.now();
+        const intervalMs = timeframeToMs(tf) || 900_000;
+        const out: number[][] = [];
+        for (let i = normalizedLimit; i > 0; i--) {
+          const ts = now - i * intervalMs;
+          out.push([ts, last, last, last, last, 0]);
+        }
+        syntheticPrepared = prepareOhlcvSeries(out, tf, normalizedLimit, cfg.DIAGNOSTICS_ALLOW_PARTIAL_CANDLE);
+        if (syntheticPrepared.series.length) {
+          maybeLogOhlcvDebug(symbol, tf, syntheticPrepared.series);
+        }
+      } else {
+        // If we can't get a valid price, we can't synthesize data
+        // Better to throw warmup_pending than return corrupt 0-price data
+        if (wsTicker) {
+           console.warn(`[getOHLCV] Cannot generate synthetic data for ${symbol}: invalid price ${last}`);
+        }
       }
     } catch {}
   }
@@ -1020,9 +1036,10 @@ export async function getOHLCV(
     const lastSyntheticAt = warmState.lastSyntheticAt ?? 0;
     const allowWsRestBridge = String((cfg as any)?.BINANCE_WS_ALLOW_REST_BRIDGE ?? '').toLowerCase() === 'true';
     const configuredAttempts = Number((cfg as any)?.BINANCE_SYNTHETIC_REST_THRESHOLD);
-    const maxSyntheticAttempts = Number.isFinite(configuredAttempts) && configuredAttempts >= 1
+    // FIX: Increase threshold to 2 to avoid twitchy fallbacks, but keep it low enough to be responsive
+    const maxSyntheticAttempts = Number.isFinite(configuredAttempts) && configuredAttempts >= 0
       ? configuredAttempts
-      : 3;
+      : 2;
     const configuredCooldown = Number((cfg as any)?.BINANCE_SYNTHETIC_REST_COOLDOWN_MS);
     const syntheticRestCooldownMs = Number.isFinite(configuredCooldown) && configuredCooldown >= 0
       ? configuredCooldown
@@ -1030,6 +1047,10 @@ export async function getOHLCV(
     const hasSyntheticSeries = Boolean(syntheticPrepared?.series?.length);
     const isSyntheticSeries = Boolean(syntheticPrepared?.synthetic);
     const wsInsufficient = !wsData || wsData.length < normalizedLimit;
+    
+    // If we failed to generate synthetic data (e.g. price=0), we treat it as "stuck" and force REST
+    const syntheticGenerationFailed = preferBinanceWs && allowSyntheticFallback && !hasSyntheticSeries && wsInsufficient;
+
     const restDueToPolicy = !allowSyntheticFallback && (wsInsufficient || !hasSyntheticSeries);
     const syntheticStuck = wsInsufficient || !hasSyntheticSeries || isSyntheticSeries;
     const syntheticCooldownReached =
@@ -1037,6 +1058,7 @@ export async function getOHLCV(
 
     const shouldForceRest = allowWsRestBridge && (
       restDueToPolicy ||
+      syntheticGenerationFailed || // Force REST if we can't even make synthetic data
       (syntheticStuck && (syntheticCount >= maxSyntheticAttempts || syntheticCooldownReached))
     );
 
@@ -1050,7 +1072,10 @@ export async function getOHLCV(
         () => fetchOhlcvRest(symbol, tf, normalizedLimit, userId, userCredentials),
         {
           reason: 'ws_synthetic_warmup',
-          force: restDueToPolicy || syntheticCount >= maxSyntheticAttempts,
+          // 🛡️ SAFETY: Only force if strictly required by policy.
+          // For normal "stuck" warmup or failed synthesis, we MUST respect the global rate limiter
+          // to avoid IP bans when multiple agents fail simultaneously.
+          force: restDueToPolicy,
         },
       );
       if (!forcedRest) {

@@ -341,12 +341,12 @@ class BinanceWebSocketManager {
   private timestampDriftBurstEvents: number[] = [];
   private forcingReconnect = false;
   private lastForcedReconnectTs = 0;
-  private readonly staleBurstWindowMs = 15_000;
-  private readonly staleBurstThreshold = 3;
-  private readonly staleBurstRatio = 0.6;
-  private readonly staleBurstAgeThresholdMs = 4_000;
-  private readonly timestampDriftBurstWindowMs = 12_000;
-  private readonly timestampDriftBurstThreshold = 4;
+  private readonly staleBurstWindowMs = 45_000; // Increased from 15s to 45s to reduce jitter
+  private readonly staleBurstThreshold = 12;    // Increased from 3 to 12 to tolerate more stale frames
+  private readonly staleBurstRatio = 0.8;       // Increased from 0.6 to 0.8 (require 80% stale to trigger)
+  private readonly staleBurstAgeThresholdMs = 8_000; // Increased from 4s to 8s
+  private readonly timestampDriftBurstWindowMs = 30_000; // Increased from 12s to 30s
+  private readonly timestampDriftBurstThreshold = 10;    // Increased from 4 to 10
   private timestampDriftForceAgeMs = 90_000;
   private readonly forcedReconnectCooldownMs = 180_000;  // 3 min cooldown for forced reconnects (was 45s)
   private readonly forcedReconnectDelayMs = 400;
@@ -1551,7 +1551,7 @@ class BinanceWebSocketManager {
     this.forcingReconnect = hasSocket;
     this.staleFrameBursts = [];
     this.timestampDriftBurstEvents = [];
-    console.warn(`🔄 Forcing Binance WebSocket reconnect due to ${reason}`);
+    console.warn(`🔄 Forcing Binance WebSocket reconnect due to ${reason} (staleThreshold=${this.staleBurstThreshold}, driftThreshold=${this.timestampDriftBurstThreshold})`);
 
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
