@@ -15,10 +15,11 @@ import OperationsDashboardPage from './pages/DashboardPageCompact';
 import RegisterPage from './pages/RegisterPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
+import ReportsPage from './pages/ReportsPage';
 // import MonitorPageRefactored from './pages/MonitorPageRefactored';
 import MonitorPageNew from './pages/MonitorPageNew';
 import { useAppStore } from './store';
-import { Activity, Bot, Brain, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
+import { Activity, BarChart, Bot, Brain, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
 import { api } from './api';
 
 const resolveActiveMenuKey = (pathname: string) => {
@@ -26,6 +27,7 @@ const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/agents/')) return '/agents';
   if (pathname.startsWith('/agents')) return '/agents';
   if (pathname.startsWith('/ledger')) return '/ledger';
+  if (pathname.startsWith('/reports')) return '/reports';
   if (pathname.startsWith('/intelligence')) return '/intelligence';
   if (pathname.startsWith('/learning')) return '/learning';
   if (pathname.startsWith('/portfolio')) return '/portfolio';
@@ -95,6 +97,7 @@ function AuthenticatedApp() {
     { key: '/operations', label: 'Control', icon: <Activity /> },
     { key: '/agents', label: 'Agents', icon: <Bot /> },
     { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
+    { key: '/reports', label: 'Reports', icon: <BarChart /> },
     { key: '/intelligence', label: 'Intelligence', icon: <Lightbulb /> },
     { key: '/learning', label: 'Learning', icon: <Brain /> },
     { key: '/portfolio', label: 'Portfolio', icon: <Zap /> },
@@ -284,6 +287,7 @@ function AuthenticatedApp() {
             {/* <Route path='/agents/:sessionId/old' element={<MonitorPageRefactored />} /> */}
             <Route path='/agents' element={<SessionsPage />} />
             <Route path='/ledger' element={<ExecutionLedgerPageNew />} />
+            <Route path='/reports' element={<ReportsPage />} />
             <Route path='/intelligence' element={<IntelligencePage />} />
             <Route path='/learning' element={<LearningInsightsPage />} />
             <Route path='/portfolio' element={<PortfolioViewPage />} />
