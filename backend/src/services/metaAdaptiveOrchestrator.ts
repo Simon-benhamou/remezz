@@ -253,16 +253,17 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live', userId
     // Cap at 10 positions maximum to avoid over-diversification
     maxPositions = Math.min(10, Math.max(1, maxPositions));
     
-    // Progressive threshold: higher confidence required as capital usage increases
-    // 0-60% used: normal threshold (0.50)
-    // 60-80% used: moderate threshold (0.60)
-    // 80%+ used: high threshold (0.70)
+    // CRYPTO OPPORTUNISTIC THRESHOLDS: Lower thresholds to capture more opportunities
+    // Volatility = opportunity in crypto, strict risk management handles downside
+    // 0-55% used: opportunistic threshold (0.32)
+    // 55-75% used: moderate threshold (0.38)
+    // 75%+ used: conservative threshold (0.45)
     if (usageRatio < 0.55) {
-      minConfidenceRequired = 0.45;
+      minConfidenceRequired = 0.32;
     } else if (usageRatio < 0.75) {
-      minConfidenceRequired = 0.54;
+      minConfidenceRequired = 0.38;
     } else {
-      minConfidenceRequired = 0.62;
+      minConfidenceRequired = 0.45;
     }
   }
   
@@ -412,21 +413,32 @@ function shouldTriggerTelemetryTimeout(params: {
   if (minutesOpen < minHold) {
     return null;
   }
+  
+  // 🌬️ CRYPTO BREATHING ROOM: Allow longer consolidation periods before timeout
+  // Crypto often consolidates 30-60min before breakouts - don't exit during accumulation
   const expectation = Math.max(20, telemetry.expectedMinutesTo1R);
-  if (telemetry.stagnationMinutes < expectation * 1.4) {
+  if (telemetry.stagnationMinutes < expectation * 2.0) { // Increased from 1.4x to 2.0x
     return null;
   }
+  
+  // Don't exit if we've seen good profit (MFE) - let winners run
   if (telemetry.mfeR >= 0.45) {
     return null;
   }
+  
+  // Don't exit if position is moving (even if slowly)
   if (Math.abs(rMultiple) >= 0.3) {
     return null;
   }
+  
   const maxHolding = exitConfig.maxHoldingMin ?? null;
   const nearMaxHold = maxHolding != null && minutesOpen >= maxHolding * 0.85;
-  const volatilityCollapse = telemetry.atrDriftPct != null && telemetry.atrDriftPct <= -1;
-  const extremeStagnation = telemetry.stagnationMinutes >= expectation * 1.8;
-  if (!volatilityCollapse && !nearMaxHold && !extremeStagnation) {
+  
+  // ✅ REMOVED volatilityCollapse check - ATR drop after explosive move is NORMAL in crypto
+  // Don't penalize natural volatility compression after expansion
+  const extremeStagnation = telemetry.stagnationMinutes >= expectation * 2.5; // Increased from 1.8x
+  
+  if (!nearMaxHold && !extremeStagnation) {
     return null;
   }
   const details: string[] = [
@@ -434,9 +446,6 @@ function shouldTriggerTelemetryTimeout(params: {
     `expectation=${expectation.toFixed(1)}m`,
     `mfe=${telemetry.mfeR.toFixed(2)}R`,
   ];
-  if (volatilityCollapse) {
-    details.push(`atrDrift=${telemetry.atrDriftPct?.toFixed(2)}pp`);
-  }
   if (nearMaxHold) {
     details.push('maxHold');
   }
@@ -1081,10 +1090,22 @@ async function executeEntryTrade(
           ? resolvedAtr
           : tech.last * DEFAULT_ATR_PCT;
       })();
-      const resolvedStopMult = planStopAtrMult && planStopAtrMult > 0
+      // 🛡️ VOLATILITY-AWARE STOP DISTANCE: Wider stops in high volatility to avoid premature liquidation
+      // Base multiplier from config or plan, then adjust for current volatility regime
+      const baseStopMult = planStopAtrMult && planStopAtrMult > 0
         ? planStopAtrMult
         : (config.exits.slAtrMult || 2);
-      const stopDistance = atrForStops * resolvedStopMult; // Use plan-aware ATR stop
+      
+      // If ATR > 10%, widen stop to avoid liquidation from normal noise
+      const volatilityAdjustedMult = atrPct > 10 
+        ? baseStopMult * (1 + Math.min(0.5, (atrPct - 10) / 40)) // Max +50% wider at ATR>30%
+        : baseStopMult;
+      
+      const stopDistance = atrForStops * volatilityAdjustedMult;
+      
+      if (volatilityAdjustedMult > baseStopMult) {
+        integrationLogger.info(`Volatility-adjusted stop | atr=${atrPct.toFixed(1)}% baseMult=${baseStopMult.toFixed(2)}x adjMult=${volatilityAdjustedMult.toFixed(2)}x`);
+      }
       
       // Get risk percentage from plan, profile, or use default
       const fallbackRiskPct = session.profileJson?.riskPerTradePct ?? config.risk.baseRiskPerTradePct;
@@ -1169,12 +1190,18 @@ async function executeEntryTrade(
       // Check capital usage and determine confidence threshold
       integrationLogger.info(`Capital usage | total=$${capitalMetrics.totalCapital.toFixed(0)} used=$${capitalMetrics.usedCapital.toFixed(0)} free=$${capitalMetrics.freeCapital.toFixed(0)} ratio=${(capitalMetrics.usageRatio * 100).toFixed(1)}% maxPos=${capitalMetrics.maxPositions} minConf=${capitalMetrics.minConfidenceRequired}`);
       
-      // 🔥 EXTREME CONDITIONS OVERRIDE
-      // When market shows extreme oversold/overbought conditions, reduce threshold
-      // to allow entry even with lower predictor confidence
+      // 🔥 CRYPTO OPPORTUNITY DETECTION
+      // Reduce thresholds for high-conviction setups while maintaining strict risk management
       let adjustedThreshold = capitalMetrics.minConfidenceRequired;
       const rsi = tech.rsi14;
       const atrPct = (tech.atr14 / tech.last) * 100;
+      
+      // 🚀 VOLATILITY BONUS: High ATR = explosive moves = opportunities (if risk managed properly)
+      if (atrPct > 8) {
+        const volatilityBonus = Math.min(0.85, 1 - (atrPct - 8) / 50); // Max -15% threshold at ATR>8%
+        adjustedThreshold = adjustedThreshold * volatilityBonus;
+        integrationLogger.info(`Volatility bonus applied | atr=${atrPct.toFixed(1)}% bonus=${(volatilityBonus * 100).toFixed(0)}% newThreshold=${adjustedThreshold.toFixed(2)}`);
+      }
       
       if (rsi < 25 || rsi > 75) {
         // Extreme RSI: reduce threshold by 35%
@@ -1897,10 +1924,31 @@ async function checkAndExecuteExit(
     const position = agent.pos;
     const positionSide = position.side === 'buy' ? 'long' : 'short';
     
+    // 🎯 FALSE BREAKOUT DETECTION: Exit fast if trade immediately goes wrong
+    // If position opened recently (<10min) and already losing badly, likely false breakout
+    if (minutesOpen < 10 && position.entry) {
+      const immediateLoss = positionSide === 'long'
+        ? (position.entry - currentPrice) / position.entry
+        : (currentPrice - position.entry) / position.entry;
+      
+      if (immediateLoss > 0.015) { // -1.5% immediate loss = likely false breakout
+        integrationLogger.info(`False breakout detected | side=${positionSide} loss=${(immediateLoss * 100).toFixed(2)}% age=${minutesOpen.toFixed(1)}m`);
+        await executeExitTrade(session, agent, currentPrice, `false_breakout: ${(immediateLoss * 100).toFixed(2)}% loss in ${minutesOpen.toFixed(1)}m`);
+        return;
+      }
+    }
+    
     // REVERSAL DETECTION: Check if market is reversing against our position
+    // 🔄 CRYPTO BREATHING ROOM: Only exit on VERY strong reversal signals (0.82+)
+    // But only for PROFITABLE trades - losers should exit on weaker signals
     if (positionSide === 'long') {
       const reversalSignal = detectReversalForLong(tech);
-      if (reversalSignal.probability >= 0.7) {
+      const currentR = position.entry && position.stop
+        ? PositionSizer.rMultiple(position.entry, position.stop, currentPrice, positionSide)
+        : 0;
+      const reversalThreshold = currentR > 0.5 ? 0.82 : 0.65; // Lower threshold for losers
+      
+      if (reversalSignal.probability >= reversalThreshold) {
         integrationLogger.warn(
           `⚠️ Strong reversal detected against LONG | probability=${reversalSignal.probability.toFixed(2)} severity=${reversalSignal.severity} reasons=[${reversalSignal.reasons.join(', ')}]`
         );
@@ -1913,7 +1961,12 @@ async function checkAndExecuteExit(
       }
     } else if (positionSide === 'short') {
       const reboundSignal = detectReboundForShort(tech);
-      if (reboundSignal.probability >= 0.7) {
+      const currentR = position.entry && position.stop
+        ? PositionSizer.rMultiple(position.entry, position.stop, currentPrice, positionSide)
+        : 0;
+      const reboundThreshold = currentR > 0.5 ? 0.82 : 0.65; // Lower threshold for losers
+      
+      if (reboundSignal.probability >= reboundThreshold) {
         integrationLogger.warn(
           `⚠️ Strong rebound detected against SHORT | probability=${reboundSignal.probability.toFixed(2)} severity=${reboundSignal.severity} reasons=[${reboundSignal.reasons.join(', ')}]`
         );
@@ -2160,12 +2213,27 @@ async function checkAndExecuteExit(
     const minutesOpen = position.openedAt ? (Date.now() - position.openedAt) / MS_PER_MINUTE : 0;
     const telemetryUpdate = updatePositionTelemetry(position, currentPrice, tech, minutesOpen);
     if (telemetryUpdate) {
-      const telemetryTimeoutReason = shouldTriggerTelemetryTimeout({
-        telemetry: telemetryUpdate.telemetry,
-        minutesOpen,
-        rMultiple: telemetryUpdate.rMultiple,
-        exitConfig: config.exits,
-      });
+      // ⚖️ ASYMMETRIC RISK: Protect winners, cut losers fast
+      // Winners (>0.5R): Let breathe during consolidation
+      // Losers (<-0.3R): Cut quickly if no recovery momentum
+      const isWinner = telemetryUpdate.rMultiple > 0.5;
+      const isLoser = telemetryUpdate.rMultiple < -0.3;
+      
+      // 🔪 FAST CUT FOR LOSERS: If losing AND stagnating, exit faster
+      let telemetryTimeoutReason: string | null = null;
+      if (isLoser && telemetryUpdate.telemetry.stagnationMinutes > 15) {
+        // Losing position stagnating = no recovery momentum, cut it
+        telemetryTimeoutReason = `fast_cut_loser: R=${telemetryUpdate.rMultiple.toFixed(2)}, stagnation=${telemetryUpdate.telemetry.stagnationMinutes.toFixed(1)}m`;
+      } else if (!isWinner) {
+        // Not a winner: apply normal telemetry timeout rules
+        telemetryTimeoutReason = shouldTriggerTelemetryTimeout({
+          telemetry: telemetryUpdate.telemetry,
+          minutesOpen,
+          rMultiple: telemetryUpdate.rMultiple,
+          exitConfig: config.exits,
+        });
+      }
+      // else: isWinner = let it breathe, skip telemetry timeout
       if (telemetryTimeoutReason) {
         logger.info(`[${session.sessionId}] Telemetry timeout exit triggered: ${telemetryTimeoutReason}`);
         await executeExitTrade(session, agent, currentPrice, telemetryTimeoutReason);
