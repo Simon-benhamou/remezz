@@ -19,8 +19,8 @@ export interface PredictorDecisionData {
 }
 
 /**
- * Store predictor decision if it has changed from previous
- * Returns true if decision was stored (changed), false if same as before
+ * Store predictor decision ONLY if it has changed from previous
+ * Returns true if decision was stored, false if skipped
  */
 export async function storePredictorDecisionIfChanged(data: PredictorDecisionData): Promise<boolean> {
   const { symbol, decision } = data;
@@ -28,7 +28,7 @@ export async function storePredictorDecisionIfChanged(data: PredictorDecisionDat
   // Get last decision for this symbol
   const lastDecision = lastDecisionCache.get(symbol);
   
-  // If decision hasn't changed, don't store
+  // Skip if decision unchanged
   if (lastDecision === decision) {
     return false;
   }
@@ -52,7 +52,11 @@ export async function storePredictorDecisionIfChanged(data: PredictorDecisionDat
     // Update cache
     lastDecisionCache.set(symbol, decision);
     
-    console.log(`📊 [PredictorDecision] ${symbol}: ${lastDecision || 'initial'} → ${decision} (conf=${(data.confidence * 100).toFixed(1)}%)`);
+    const transition = lastDecision 
+      ? `${lastDecision} → ${decision}` 
+      : `initial: ${decision}`;
+    
+    console.log(`📊 [PredictorDecision] ${symbol}: ${transition} (conf=${(data.confidence * 100).toFixed(1)}%)`);
     
     return true;
   } catch (error) {

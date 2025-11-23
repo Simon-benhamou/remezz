@@ -9,11 +9,9 @@ import type { EntryEvaluation, EntryFacts } from './entryFilters.js';
 /**
  * Log a meta-adaptive entry evaluation for learning
  * 
- * CRITICAL FIX: Only log filter_blocked when entry filters fail.
- * DO NOT log filter_passed here - that should only be logged when the trade
- * actually gets placed (after capital, sizing, predictor, and cooldown checks).
- * This prevents the inconsistency where trade evaluations show "filter_passed"
- * but ops logs show "blocked_trade" because later execution checks failed.
+ * ✅ FIX: Log ALL evaluations (accepted + rejected) so dashboard shows predictor data
+ * Previously: Only logged rejections → predictor column showed "NO DATA"
+ * Now: Logs all evaluations → predictor data always visible in dashboard
  */
 export async function logMetaAdaptiveEvaluation(
   symbol: string,
@@ -21,16 +19,7 @@ export async function logMetaAdaptiveEvaluation(
   facts: EntryFacts,
 ): Promise<void> {
   try {
-    // ONLY log when filters are blocked (evaluation.ok === false)
-    // If evaluation.ok === true, the signal will proceed to execution checks
-    // and those checks will log the appropriate outcome (filter_passed, order_placed, or various blocks)
-    if (evaluation.ok) {
-      // Signal passed initial entry filters - don't log yet
-      // The orchestrator will log the final outcome after execution checks
-      return;
-    }
-
-    // Extract metrics from facts
+    // Extract metrics from facts (for both accepted and rejected signals)
     const inputMetrics: InputMetrics = {
       adx: facts.adx,
       atrPct: facts.atrPct,
@@ -49,16 +38,19 @@ export async function logMetaAdaptiveEvaluation(
       volumeMA: facts.volumeMA,
       volumeZScore: facts.volumeZScore,
       trendStrength: facts.trendStrength,
-      // Predictor fields for transparency
+      // Predictor fields for transparency (CRITICAL for dashboard visibility)
       predictorBias: facts.predictorBias,
       predictorConfidence: facts.predictorConfidence,
       predictorEnabled: facts.predictorEnabled,
       predictorDecision: facts.predictorDecision,
     };
     
-    // Extract blocked reasons
+    // Determine decision type based on evaluation outcome
+    const decision = evaluation.ok ? 'filter_passed' : 'filter_blocked';
+    
+    // Extract blocked reasons (only for rejections)
     const blockedReasons: string[] = [];
-    if (evaluation.reasons) {
+    if (!evaluation.ok && evaluation.reasons) {
       for (const [key, value] of Object.entries(evaluation.reasons)) {
         if (typeof value === 'string') {
           // Include all non-OK reasons
@@ -70,7 +62,7 @@ export async function logMetaAdaptiveEvaluation(
     }
     
     // If blocked but no specific reasons found, provide generic reason
-    if (blockedReasons.length === 0) {
+    if (!evaluation.ok && blockedReasons.length === 0) {
       // Check meta object for more context
       if (evaluation.meta) {
         const metaStr = JSON.stringify(evaluation.meta);
@@ -83,12 +75,12 @@ export async function logMetaAdaptiveEvaluation(
     // Use model confidence as the confidence score if available, otherwise use a derived score
     const confidenceScore = facts.modelConfidence ?? 0.5;
 
-    // Log the blocked evaluation (non-blocking)
+    // Log the evaluation (both accepted and rejected)
     await logTradeEvaluation({
       userId: null, // No session context available in evaluationLogger
       symbol,
-      decision: 'filter_blocked',
-      blockedReason: blockedReasons.join('; '),
+      decision,
+      blockedReason: blockedReasons.length > 0 ? blockedReasons.join('; ') : undefined,
       confidenceScore,
       inputMetrics,
       regimeContext: evaluation.regimeContext, // Pass regime context from evaluation
