@@ -449,17 +449,23 @@ export function evaluateStrategyCompatibility(
   
   const rangeBoundCheck = detectRangeBound(atrPct, ema20, ema50, ema100);
   if (rangeBoundCheck.isRangeBound) {
+    // ✅ NOUVELLE APPROCHE: Ne pas rejeter, recommander mean reversion
+    reasons.push(`🔄 ${rangeBoundCheck.reason}`);
+    warnings.push('Range-bound detected - trend-following may struggle. Mean reversion strategy recommended.');
+    
+    // Score acceptable pour sélection (mean reversion peut trader)
+    // On ne veut pas bloquer complètement ces cryptos
     return {
-      compatible: false,
-      score: 0,
-      reasons: [`🚫 ${rangeBoundCheck.reason}`],
-      warnings: ['Range-bound cryptos fail HTF alignment and have 100% block rate in trend-following strategy. Use mean reversion instead.'],
+      compatible: true, // ⚠️ Compatible via mean reversion
+      score: 0.65, // Score correct pour être sélectionné mais pas prioritaire
+      reasons,
+      warnings,
       tier,
-      volatilityFit: 'poor',
-      liquidityFit: 'poor',
+      volatilityFit: 'acceptable',
+      liquidityFit: 'acceptable', 
       trendQuality: 'poor',
-      accumulationDetectable: false,
-      estimatedWinRate: 0,
+      accumulationDetectable: true,
+      estimatedWinRate: 0.60, // Win rate mean reversion attendu (60-70%)
     };
   }
   

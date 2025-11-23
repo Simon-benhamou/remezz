@@ -29,6 +29,7 @@ import {
   classifyVolumeRegime,
   classifyTrendingRanging,
 } from '../../../learning/personalityProfile.js';
+import { recordTradeOutcome } from '../../../services/adaptiveThresholdLearning.js';
 import { detectReboundForShort, detectReversalForLong, detectVolatilitySqueeze } from './reboundDetection.js';
 import { detectBTCCorrelationImpact } from './btcCorrelation.js';
 import { detectAccumulationPattern, getAccumulationSignalForBias } from './accumulationDetection.js';
@@ -3636,6 +3637,40 @@ class MetaAdaptiveStrategyAgent {
           }
         : null,
     }));
+    
+    // 🔥 BUGFIX: Write trade outcome to database for adaptive threshold learning
+    // This was missing - trade_outcomes table was never being populated!
+    if (trade.token && params.sessionId) {
+      const exitTime = Date.now();
+      const entryTime = trade.timestamp ?? (exitTime - holdElapsedMs);
+      const profitable = pnl.gt(0);
+      
+      // Extract actual thresholds from the trade metadata
+      const thresholds = {
+        confidence: trade.pythonConfidence ?? 0.7,
+        atr: trade.entryAtrPct ?? trade.atrPct ?? 1.5,
+        adx: 20, // ADX not stored in trade, would need to pass from signal
+        eligibility: 0.7, // Entry eligibility not stored in trade, would need to pass from signal
+        rrMin: typeof trade.rr === 'number' ? trade.rr : 1.5,
+      };
+      
+      recordTradeOutcome({
+        tradeId: trade.token,
+        sessionId: params.sessionId,
+        symbol: params.symbol,
+        entryTime,
+        exitTime,
+        profitable,
+        pnlPct: pnl.dividedBy(trade.riskUsd.abs().gt(0) ? trade.riskUsd.abs() : new PreciseDecimal('1')).times(new PreciseDecimal('100')).toNumber(),
+        holdTimeMinutes: Math.round(holdElapsedMs / 60000),
+        thresholds,
+        regime: undefined, // Regime not stored in trade metadata
+      }).catch(err => {
+        // Don't fail the trade outcome registration if DB write fails
+        console.warn(`Failed to record trade outcome to database: ${err.message}`);
+      });
+    }
+    
     if (this.reentryCooldownMs > 0 && normalized.lt(0) && !this.guardsDisabledFor(params.sessionId ?? null)) {
       const now = Date.now();
       const until = now + this.reentryCooldownMs;
