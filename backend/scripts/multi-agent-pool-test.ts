@@ -400,14 +400,14 @@ function printResults(results: PoolTestResult): void {
   
   for (const mode of results.modeComparisons) {
     logger.info(`\n${mode.mode.toUpperCase()} (${mode.agentCount} agents)`);
-    logger.info(`  Total PnL:      $${mode.totalPnlUsd.toFixed(2)}`);
-    logger.info(`  Avg PnL:        $${mode.avgPnlUsd.toFixed(2)} (${mode.avgPnlPct.toFixed(2)}%)`);
-    logger.info(`  Total Trades:   ${mode.totalTrades}`);
-    logger.info(`  Avg Win Rate:   ${mode.avgWinRate.toFixed(2)}%`);
-    logger.info(`  Avg Profit Factor: ${mode.avgProfitFactor.toFixed(2)}`);
-    logger.info(`  Avg Drawdown:   ${mode.avgMaxDrawdown.toFixed(2)}%`);
-    logger.info(`  Avg Sharpe:     ${mode.avgSharpe.toFixed(4)}`);
-    logger.info(`  Stability:      ${mode.stability.toFixed(2)}/100`);
+    logger.info(`  Total PnL:      $${mode?.totalPnlUsd?.toFixed(2)}`);
+    logger.info(`  Avg PnL:        $${mode?.avgPnlUsd?.toFixed(2)} (${mode?.avgPnlPct?.toFixed(2)}%)`);
+    logger.info(`  Total Trades:   ${mode?.totalTrades}`);
+    logger.info(`  Avg Win Rate:   ${mode?.avgWinRate?.toFixed(2)}%`);
+    logger.info(`  Avg Profit Factor: ${mode?.avgProfitFactor?.toFixed(2)}`);
+    logger.info(`  Avg Drawdown:   ${mode?.avgMaxDrawdown?.toFixed(2)}%`);
+    logger.info(`  Avg Sharpe:     ${mode?.avgSharpe?.toFixed(4)}`);
+    logger.info(`  Stability:      ${mode?.stability?.toFixed(2)}/100`);
   }
   
   // Combined results
@@ -416,7 +416,7 @@ function printResults(results: PoolTestResult): void {
   logger.info('-'.repeat(80));
   logger.info(`  Initial Pool:   $${results.poolSizeUsd.toFixed(2)}`);
   logger.info(`  Final Pool:     $${results.combined.finalPoolUsd.toFixed(2)}`);
-  logger.info(`  Total PnL:      $${results.combined.totalPnlUsd.toFixed(2)} (${results.combined.totalPnlPct.toFixed(2)}%)`);
+  logger.info(`  Total PnL:      $${results.combined?.totalPnlUsd?.toFixed(2)} (${results.combined?.totalPnlPct?.toFixed(2)}%)`);
   logger.info(`  Total Trades:   ${results.combined.totalTrades}`);
   logger.info(`  Overall Win Rate: ${results.combined.overallWinRate.toFixed(2)}%`);
   logger.info(`  Overall Profit Factor: ${results.combined.overallProfitFactor.toFixed(2)}`);
@@ -426,12 +426,12 @@ function printResults(results: PoolTestResult): void {
   logger.info('WINNER ANALYSIS');
   logger.info('-'.repeat(80));
   
-  const bestMode = [...results.modeComparisons].sort((a, b) => b.totalPnlUsd - a.totalPnlUsd)[0];
-  const bestAgent = [...results.agents].sort((a, b) => b.pnlUsd - a.pnlUsd)[0];
+  const bestMode = [...results.modeComparisons].sort((a, b) => b?.totalPnlUsd - a?.totalPnlUsd)[0];
+  const bestAgent = [...results.agents].sort((a, b) => b?.pnlUsd - a?.pnlUsd)[0];
   const mostStableMode = [...results.modeComparisons].sort((a, b) => b.stability - a.stability)[0];
   
-  logger.info(`  Best Mode (PnL):      ${bestMode.mode} (+$${bestMode.totalPnlUsd.toFixed(2)})`);
-  logger.info(`  Best Agent:           ${bestAgent.id} (+$${bestAgent.pnlUsd.toFixed(2)})`);
+  logger.info(`  Best Mode (PnL):      ${bestMode.mode} (+$${bestMode?.totalPnlUsd?.toFixed(2)})`);
+  logger.info(`  Best Agent:           ${bestAgent.id} (+$${bestAgent.pnlUsd?.toFixed(2)})`);
   logger.info(`  Most Stable Mode:     ${mostStableMode.mode} (${mostStableMode.stability.toFixed(2)}/100)`);
   
   logger.info('\n' + '='.repeat(80));
