@@ -1090,6 +1090,10 @@ async function executeEntryTrade(
           ? resolvedAtr
           : tech.last * DEFAULT_ATR_PCT;
       })();
+      
+      // Calculate ATR percentage for volatility awareness
+      const atrPct = (tech.atr14 / tech.last) * 100;
+      
       // 🛡️ VOLATILITY-AWARE STOP DISTANCE: Wider stops in high volatility to avoid premature liquidation
       // Base multiplier from config or plan, then adjust for current volatility regime
       const baseStopMult = planStopAtrMult && planStopAtrMult > 0
@@ -1194,7 +1198,7 @@ async function executeEntryTrade(
       // Reduce thresholds for high-conviction setups while maintaining strict risk management
       let adjustedThreshold = capitalMetrics.minConfidenceRequired;
       const rsi = tech.rsi14;
-      const atrPct = (tech.atr14 / tech.last) * 100;
+      // atrPct already calculated above for stop distance
       
       // 🚀 VOLATILITY BONUS: High ATR = explosive moves = opportunities (if risk managed properly)
       if (atrPct > 8) {
@@ -1924,6 +1928,10 @@ async function checkAndExecuteExit(
     const position = agent.pos;
     const positionSide = position.side === 'buy' ? 'long' : 'short';
     
+    // Calculate position age
+    const MS_PER_MINUTE = 60000;
+    const minutesOpen = position.openedAt ? (Date.now() - position.openedAt) / MS_PER_MINUTE : 0;
+    
     // 🎯 FALSE BREAKOUT DETECTION: Exit fast if trade immediately goes wrong
     // If position opened recently (<10min) and already losing badly, likely false breakout
     if (minutesOpen < 10 && position.entry) {
@@ -2209,8 +2217,6 @@ async function checkAndExecuteExit(
 
     // Check exit conditions using exitManager
     const config = getQuantAIConfig();
-    const MS_PER_MINUTE = 60000;
-    const minutesOpen = position.openedAt ? (Date.now() - position.openedAt) / MS_PER_MINUTE : 0;
     const telemetryUpdate = updatePositionTelemetry(position, currentPrice, tech, minutesOpen);
     if (telemetryUpdate) {
       // ⚖️ ASYMMETRIC RISK: Protect winners, cut losers fast
