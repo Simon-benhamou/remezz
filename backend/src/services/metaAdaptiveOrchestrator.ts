@@ -601,7 +601,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
                       : null,
                   } : null,
                   lastStrategyData: {
-                    id: (bestSignal as any).strategyId || bestSignal.id,
+                    id: bestSignal.id,
                     label: (bestSignal as any).strategyLabel || 'Unknown',
                     bias: bestSignal.bias,
                     confidence: bestSignal.confidence,
@@ -775,7 +775,7 @@ async function processSessionTick(session: SessionContext, tech: TechnicalSnapsh
         
         if (selectionSource === 'token' && executableSignal) {
           logger.info(
-            `[${session.sessionId}] Selected entry signal (token-backed): ${(executableSignal as any).strategyId} (${executableSignal.bias}) score=${executableSignal.meta?.score}`
+            `[${session.sessionId}] Selected entry signal (token-backed): ${executableSignal.id} (${executableSignal.bias}) score=${executableSignal.meta?.score}`
           );
 
           console.log(`[MetaOrchestrator] executeEntryTrade agent=${session.sessionId}, symbol=${session.symbol}, bias=${executableSignal.bias}, selection=token-backed`);
@@ -886,7 +886,7 @@ async function executeEntryTrade(
   });
 
   try {
-    integrationLogger.info(`Executing entry trade | bias=${signal.bias} strategy=${(signal as any).strategyId || signal.id} confidence=${signal.confidence.toFixed(3)}`);
+    integrationLogger.info(`Executing entry trade | bias=${signal.bias} strategy=${signal.id} confidence=${signal.confidence.toFixed(3)}`);
     console.log(`[MetaOrchestrator.executeEntryTrade] START: agent=${session.sessionId}, symbol=${session.symbol}, bias=${signal.bias}`);
     
     // 🛡️ SAFETY: Prevent immediate entry after session start (wait for market observation)
@@ -935,7 +935,7 @@ async function executeEntryTrade(
 
     const entryLockAcquired = await activateEntryLock(session.sessionId, 'placing_entry_order', 180_000, {
       symbol: session.symbol,
-      strategyId: (signal as any).strategyId || signal.id,
+      strategyId: signal.id,
     });
 
     if (!entryLockAcquired) {
