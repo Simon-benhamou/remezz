@@ -483,10 +483,10 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     },
     minStopAtrMult: 1.5,  // FIXED: Was 0.9 (too tight!) - minimum stop distance increased
     profitLock: {
-      minRMultiple: 1.0,
-      allowPartialBeforeMinR: false,
+      minRMultiple: 1.8,  // CRYPTO: Lock profit at 1.8R (was 1.0R) - let winners run
+      allowPartialBeforeMinR: true,  // Allow tactical partial exits before profit lock
       preLockTrailMultiplier: 0.8,
-      preLockMinRMultiple: 0.35,
+      preLockMinRMultiple: 0.6,  // CRYPTO: Trail at 0.6R (was 0.35R) - don't trail too early
       minHoldBypassRMultiple: 0.5,
       breakevenOffsetR: 0,
     },
@@ -503,10 +503,10 @@ const DEFAULT_CONFIG: QuantAIConfig = {
     peakDrawdown: {
       enabled: true,
       thresholds: {
-        1.0: 0.05,  // 5% drawdown at 1R
-        2.0: 0.04,  // 4% drawdown at 2R
-        3.0: 0.03,  // 3% drawdown at 3R
-        5.0: 0.02,  // 2% drawdown at 5R+
+        1.0: 0.12,  // CRYPTO: 12% drawdown at 1R (was 5%) - allow normal consolidation
+        2.0: 0.10,  // CRYPTO: 10% drawdown at 2R (was 4%) - winners need breathing room
+        3.0: 0.08,  // CRYPTO: 8% drawdown at 3R (was 3%) - protect big winners
+        5.0: 0.06,  // CRYPTO: 6% drawdown at 5R+ (was 2%) - let runners breathe
       },
     },
     positionFlipping: {
@@ -517,13 +517,13 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       maxFlipsPerHour: 3,  // Maximum 3 flips per hour to avoid overtrading
     },
     earlyExit: {
-      adxBelow: 18,
-      cmfNegative: true,
-      tightenProfitR: 0.1,
-      cutLossR: 0.2,
-      minHoldMinutes: 3,
+      adxBelow: 12,  // CRYPTO: Exit only if ADX < 12 (was 18) - ADX 12-18 is normal consolidation
+      cmfNegative: false,  // CRYPTO: Don't exit on CMF negative (too noisy in crypto)
+      tightenProfitR: 0.4,  // CRYPTO: Trail at 0.4R (was 0.1R) - don't trail too early
+      cutLossR: 0.5,  // CRYPTO: Cut loss at -0.5R (was 0.2R) - let positions breathe
+      minHoldMinutes: 12,  // CRYPTO: 12 minutes minimum (was 3) - wait for moves to develop
     },
-    maxHoldingMin: 90,
+    maxHoldingMin: undefined,  // CRYPTO: Disabled - let trailing stop decide exit, not hard time cap
     reentryCooldownMin: 25,
     enforceHardMinHold: false,
     exitOnBarClose: false,
