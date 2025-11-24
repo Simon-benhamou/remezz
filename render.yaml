@@ -14,6 +14,8 @@ services:
         value: 4000
       - key: PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING
         value: 1
+      - key: PYTHON_PREDICT_TIMEOUT_MS
+        value: 15000
       - key: DATABASE_URL
         sync: false
       - key: HL_API_KEY

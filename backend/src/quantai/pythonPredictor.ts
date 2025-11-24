@@ -9,7 +9,9 @@ import {
 } from '../infra/serviceHealth.js';
 import { createIntegrationLogger } from '../utils/integrationLogger.js';
 
-const DEFAULT_TIMEOUT_MS = 4_000;
+// 🔧 Increased timeout to handle XGBoost model loading (205MB)
+// First prediction can take 10-15s on cold start
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 const moduleDirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = dirname(dirname(dirname(moduleDirname)));
