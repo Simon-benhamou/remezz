@@ -174,7 +174,7 @@ export default function AdaptiveLearningCard({
               {buckets.high_conf.trades > 0 && (
                 <Card 
                   size="small" 
-                  style={{ marginBottom: 12, background: '#f6ffed', border: '1px solid #b7eb8f' }}
+                  style={{ marginBottom: 12, background: 'rgba(82, 196, 26, 0.1)', border: '1px solid rgba(82, 196, 26, 0.3)' }}
                 >
                   <Row gutter={16} align="middle">
                     <Col span={8}>
@@ -221,7 +221,7 @@ export default function AdaptiveLearningCard({
               {buckets.medium_conf.trades > 0 && (
                 <Card 
                   size="small" 
-                  style={{ marginBottom: 12, background: '#e6f7ff', border: '1px solid #91d5ff' }}
+                  style={{ marginBottom: 12, background: 'rgba(24, 144, 255, 0.1)', border: '1px solid rgba(24, 144, 255, 0.3)' }}
                 >
                   <Row gutter={16} align="middle">
                     <Col span={8}>
@@ -268,7 +268,7 @@ export default function AdaptiveLearningCard({
               {buckets.low_conf.trades > 0 && (
                 <Card 
                   size="small" 
-                  style={{ background: '#fff1f0', border: '1px solid #ffa39e' }}
+                  style={{ background: 'rgba(255, 77, 79, 0.1)', border: '1px solid rgba(255, 77, 79, 0.3)' }}
                 >
                   <Row gutter={16} align="middle">
                     <Col span={8}>

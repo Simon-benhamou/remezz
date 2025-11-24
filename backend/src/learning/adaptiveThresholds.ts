@@ -81,6 +81,10 @@ function calculateSharpe(pnls: number[]): number {
 
 /**
  * Get historical performance for similar market conditions
+ * NOW USING: TradeEvaluation (strategy decisions) instead of PredictorDecision
+ * This tracks ACTUAL trades placed, not just predictor signals
+ * 
+ * ALSO: Checks recent blockages to detect if system is stuck
  */
 export async function getHistoricalPerformance(
   condition: MarketCondition,
@@ -89,21 +93,50 @@ export async function getHistoricalPerformance(
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
   
   try {
-    // Get predictor decisions with outcomes calculated
-    const decisions = await prisma.predictorDecision.findMany({
+    // Get ACTUAL strategy decisions (trades placed)
+    const trades = await prisma.tradeEvaluation.findMany({
       where: {
-        createdAt: { gte: since },
-        decision: { not: 'none' }, // Only actual trades
+        timestamp: { gte: since },
+        decision: 'order_placed', // Only actual placed orders
         // Match symbol if specified
         ...(condition.symbol ? { symbol: condition.symbol } : {}),
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { timestamp: 'asc' },
       take: 500, // Limit for performance
     });
     
-    if (decisions.length === 0) return null;
+    // 🚨 REACTIVE BLOCKAGE DETECTION: Check recent blocks
+    const recentBlockages = await prisma.tradeEvaluation.findMany({
+      where: {
+        timestamp: { gte: new Date(Date.now() - 2 * 60 * 60 * 1000) }, // Last 2 hours
+        decision: { in: ['filter_blocked', 'order_blocked_capital'] },
+        ...(condition.symbol ? { symbol: condition.symbol } : {}),
+      },
+    });
     
-    // Calculate outcomes by looking at next decision
+    const blockedCount = recentBlockages.length;
+    
+    // If NO trades but MANY blocks → we're stuck, return special signal
+    if (trades.length === 0 && blockedCount > 5) {
+      return {
+        totalTrades: 0,
+        wins: 0,
+        losses: 0,
+        neutrals: 0,
+        winRate: 0,
+        avgPnl: 0,
+        avgDuration: 0,
+        sharpeRatio: 0,
+        confidence: 'low',
+        // @ts-ignore - Add custom flag
+        isStuck: true,
+        blockedCount,
+      } as PerformanceStats;
+    }
+    
+    if (trades.length === 0) return null;
+    
+    // Calculate outcomes from marketOutcome data
     const analyzed: Array<{
       confidence: number;
       outcome: 'good' | 'bad' | 'neutral';
@@ -111,35 +144,28 @@ export async function getHistoricalPerformance(
       duration: number;
     }> = [];
     
-    for (let i = 0; i < decisions.length - 1; i++) {
-      const curr = decisions[i];
-      const next = decisions[i + 1];
+    for (const trade of trades) {
+      const outcome = trade.marketOutcome as any;
+      if (!outcome) continue; // Skip trades without outcome data
       
-      const entryPrice = curr.price;
-      const exitPrice = next.price;
-      const priceChange = ((exitPrice - entryPrice) / entryPrice) * 100;
-      const duration = Math.floor((next.createdAt.getTime() - curr.createdAt.getTime()) / 60000);
+      // Extract PnL from marketOutcome
+      const pnl1h = outcome.pnl_1h || outcome.pnl_15m || 0;
+      const confidence = trade.confidenceScore;
       
-      // Calculate PnL based on direction
-      let pnl: number;
-      let outcome: 'good' | 'bad' | 'neutral';
+      // Determine outcome quality
+      let outcomeType: 'good' | 'bad' | 'neutral';
+      if (pnl1h > 0.3) outcomeType = 'good'; // > 0.3% profit
+      else if (pnl1h < -0.3) outcomeType = 'bad'; // > 0.3% loss
+      else outcomeType = 'neutral';
       
-      if (curr.decision === 'long') {
-        pnl = priceChange;
-        outcome = pnl > 0 ? 'good' : (pnl < -0.1 ? 'bad' : 'neutral');
-      } else {
-        pnl = -priceChange;
-        outcome = pnl > 0 ? 'good' : (pnl < -0.1 ? 'bad' : 'neutral');
-      }
-      
-      // Filter by confidence range
-      const confDiff = Math.abs(curr.confidence - condition.predictorConfidence);
-      if (confDiff <= 0.2) { // Within 20% confidence range
+      // Filter by confidence range (±20%)
+      const confDiff = Math.abs(confidence - condition.predictorConfidence);
+      if (confDiff <= 0.2) {
         analyzed.push({
-          confidence: curr.confidence,
-          outcome,
-          pnl,
-          duration,
+          confidence,
+          outcome: outcomeType,
+          pnl: pnl1h,
+          duration: 60, // Approximate 1h
         });
       }
     }
@@ -182,7 +208,13 @@ export async function getHistoricalPerformance(
 }
 
 /**
- * Calculate adaptive thresholds based on performance
+ * 🎯 WIN-FIRST ADAPTIVE LEARNING
+ * 
+ * Philosophy: Only trade when there's PROVEN edge, not just to "get data"
+ * - Cold start: Use conservative defaults, wait for quality setups
+ * - Historical wins: Relax thresholds to capture more profitable opportunities
+ * - Historical losses: Tighten thresholds to protect capital
+ * - Blockages: DON'T blindly lower - check if predictor is reliable first
  */
 export function calculateAdaptiveThresholds(
   condition: MarketCondition,
@@ -190,12 +222,37 @@ export function calculateAdaptiveThresholds(
   baseCompatibilityThreshold: number = 0.60,
   basePredictorThreshold: number = 0.70
 ): AdaptiveThreshold {
-  // 🚀 COLD START MODE: No historical data → LOWER thresholds to enable exploration
-  // This creates an "exploration phase" where the system can gather initial data
+  
+  // 🔍 COLD START: No historical trades yet
   if (!performance || performance.totalTrades === 0) {
-    const explorationCompatibility = baseCompatibilityThreshold * 0.85; // -15%
-    const explorationPredictor = basePredictorThreshold * 0.90; // -10%
+    // @ts-ignore - Check custom flag
+    const isStuck = performance?.isStuck;
+    // @ts-ignore
+    const blockedCount = performance?.blockedCount || 0;
     
+    // 🚫 BLOCKED + NO DATA = Market probably bad, DON'T force trades
+    if (isStuck && blockedCount > 5) {
+      return {
+        condition,
+        performance: {
+          totalTrades: 0,
+          wins: 0,
+          losses: 0,
+          neutrals: 0,
+          winRate: 0,
+          avgPnl: 0,
+          avgDuration: 0,
+          sharpeRatio: 0,
+          confidence: 'low',
+        },
+        recommendedMinCompatibility: baseCompatibilityThreshold,
+        recommendedMinPredictorConf: basePredictorThreshold,
+        shouldAllow: false, // Block everything until proven edge
+        reasoning: `🚫 NO PROVEN EDGE (${blockedCount} blocks, 0 historical wins) - Waiting for quality setup. Market conditions unfavorable.`,
+      };
+    }
+    
+    // Normal cold start: Conservative defaults, wait for HIGH confidence signals
     return {
       condition,
       performance: {
@@ -209,71 +266,92 @@ export function calculateAdaptiveThresholds(
         sharpeRatio: 0,
         confidence: 'low',
       },
-      recommendedMinCompatibility: explorationCompatibility,
-      recommendedMinPredictorConf: explorationPredictor,
-      shouldAllow: condition.compatibilityScore >= explorationCompatibility &&
-                   condition.predictorConfidence >= explorationPredictor,
-      reasoning: `🔍 Exploration mode (no data yet) - LOWERED thresholds to ${(explorationCompatibility * 100).toFixed(0)}% compat, ${(explorationPredictor * 100).toFixed(0)}% predictor to gather initial data`,
+      recommendedMinCompatibility: baseCompatibilityThreshold,
+      recommendedMinPredictorConf: basePredictorThreshold,
+      shouldAllow: condition.compatibilityScore >= baseCompatibilityThreshold &&
+                   condition.predictorConfidence >= basePredictorThreshold,
+      reasoning: `🔍 Cold start - Using conservative defaults (${(baseCompatibilityThreshold * 100).toFixed(0)}% compat, ${(basePredictorThreshold * 100).toFixed(0)}% predictor). Will trade only high-confidence setups.`,
     };
   }
   
-  // 🌱 EARLY LEARNING MODE: Few trades (< 10) → Keep relaxed thresholds
-  if (performance.confidence === 'low' && performance.totalTrades < 10) {
-    const learningCompatibility = baseCompatibilityThreshold * 0.90; // -10%
-    const learningPredictor = basePredictorThreshold * 0.95; // -5%
+  // 🌱 EARLY LEARNING: Few trades (1-9) - Check if they're WINNING
+  if (performance.totalTrades < 10) {
+    // 🎯 WIN-FIRST CHECK: Are early trades profitable?
+    const isProfitable = performance.winRate >= 0.55 && performance.avgPnl > 0;
     
-    return {
-      condition,
-      performance,
-      recommendedMinCompatibility: learningCompatibility,
-      recommendedMinPredictorConf: learningPredictor,
-      shouldAllow: condition.compatibilityScore >= learningCompatibility &&
-                   condition.predictorConfidence >= learningPredictor,
-      reasoning: `🌱 Early learning (${performance.totalTrades} trades) - Relaxed thresholds to gather more data. WR: ${(performance.winRate * 100).toFixed(0)}%`,
-    };
+    if (isProfitable) {
+      // ✅ Good start → Relax thresholds to capture more opportunities
+      const learningCompatibility = baseCompatibilityThreshold * 0.85; // -15%
+      const learningPredictor = basePredictorThreshold * 0.90; // -10%
+      
+      return {
+        condition,
+        performance,
+        recommendedMinCompatibility: learningCompatibility,
+        recommendedMinPredictorConf: learningPredictor,
+        shouldAllow: condition.compatibilityScore >= learningCompatibility &&
+                     condition.predictorConfidence >= learningPredictor,
+        reasoning: `✅ Early wins detected (${performance.totalTrades} trades, ${(performance.winRate * 100).toFixed(0)}% WR, avg PnL: ${performance.avgPnl.toFixed(2)}%) - Relaxing thresholds to capture more profitable setups`,
+      };
+    } else {
+      // ❌ Poor start → TIGHTEN thresholds, be more selective
+      const cautiousCompatibility = baseCompatibilityThreshold * 1.05; // +5% stricter
+      const cautiousPredictor = basePredictorThreshold * 1.05; // +5% stricter
+      
+      return {
+        condition,
+        performance,
+        recommendedMinCompatibility: cautiousCompatibility,
+        recommendedMinPredictorConf: cautiousPredictor,
+        shouldAllow: condition.compatibilityScore >= cautiousCompatibility &&
+                     condition.predictorConfidence >= cautiousPredictor,
+        reasoning: `⚠️ Poor early results (${performance.totalTrades} trades, ${(performance.winRate * 100).toFixed(0)}% WR) - TIGHTENING thresholds to ${(cautiousCompatibility * 100).toFixed(0)}% compat, ${(cautiousPredictor * 100).toFixed(0)}% predictor for quality`,
+      };
+    }
   }
   
-  // ADAPTIVE LOGIC: Adjust thresholds based on proven performance
+  // 🎯 ADAPTIVE MODE: 10+ trades - Adjust based on PROVEN performance
   let compatibilityAdjustment = 0;
   let predictorAdjustment = 0;
   let reasoning = '';
   
-  // Strong performance → relax thresholds
-  if (performance.winRate >= 0.60 && performance.sharpeRatio > 0.5) {
-    compatibilityAdjustment = -0.15; // Allow 0.15 lower compatibility
-    predictorAdjustment = -0.10; // Allow 0.10 lower predictor conf
-    reasoning = `🚀 Strong performance (${(performance.winRate * 100).toFixed(0)}% WR, Sharpe ${performance.sharpeRatio.toFixed(2)}) - relaxed thresholds`;
+  // 🏆 EXCELLENT PERFORMANCE (60%+ WR, positive Sharpe) → Relax thresholds
+  if (performance.winRate >= 0.60 && performance.sharpeRatio > 0.5 && performance.avgPnl > 0.5) {
+    compatibilityAdjustment = -0.15; // -15% allows more trades
+    predictorAdjustment = -0.10; // -10% 
+    reasoning = `🏆 PROVEN EDGE (${performance.totalTrades} trades, ${(performance.winRate * 100).toFixed(0)}% WR, +${performance.avgPnl.toFixed(2)}% avg PnL, Sharpe ${performance.sharpeRatio.toFixed(2)}) - Capturing more profitable setups`;
   }
-  // Good performance → moderate relaxation
-  else if (performance.winRate >= 0.50 && performance.avgPnl > 0) {
+  // ✅ GOOD PERFORMANCE (50-60% WR, positive PnL) → Slight relaxation
+  else if (performance.winRate >= 0.50 && performance.avgPnl > 0.3) {
     compatibilityAdjustment = -0.08;
     predictorAdjustment = -0.05;
-    reasoning = `✅ Good performance (${(performance.winRate * 100).toFixed(0)}% WR) - slightly relaxed`;
+    reasoning = `✅ Profitable track record (${(performance.winRate * 100).toFixed(0)}% WR, +${performance.avgPnl.toFixed(2)}% avg) - Slightly relaxed`;
   }
-  // Mediocre performance → keep defaults
-  else if (performance.winRate >= 0.40) {
+  // ⚠️ BREAKEVEN (40-50% WR) → Keep strict standards
+  else if (performance.winRate >= 0.40 && performance.avgPnl >= -0.1) {
     compatibilityAdjustment = 0;
     predictorAdjustment = 0;
-    reasoning = `⚠️ Mediocre performance (${(performance.winRate * 100).toFixed(0)}% WR) - standard thresholds`;
+    reasoning = `⚠️ Breakeven performance (${(performance.winRate * 100).toFixed(0)}% WR) - Maintaining strict thresholds`;
   }
-  // Poor performance → tighten thresholds
+  // ❌ LOSING (< 40% WR or negative PnL) → TIGHTEN significantly
   else {
-    compatibilityAdjustment = 0.10;
-    predictorAdjustment = 0.10;
-    reasoning = `❌ Poor performance (${(performance.winRate * 100).toFixed(0)}% WR) - tightened thresholds`;
+    compatibilityAdjustment = 0.15; // +15% STRICTER
+    predictorAdjustment = 0.15; // +15% STRICTER
+    reasoning = `❌ LOSING TRADES (${performance.totalTrades} trades, ${(performance.winRate * 100).toFixed(0)}% WR, ${performance.avgPnl.toFixed(2)}% avg PnL) - TIGHTENING to ${((baseCompatibilityThreshold + compatibilityAdjustment) * 100).toFixed(0)}% to stop losses!`;
   }
   
-  // Special boost for high predictor confidence (proven edge)
+  // 🎯 HIGH CONFIDENCE OVERRIDE: If predictor is very confident AND historically accurate
   if (condition.predictorConfidence >= 0.85 && performance.winRate >= 0.55) {
-    compatibilityAdjustment -= 0.10; // Extra relaxation for high-confidence trades
-    reasoning += ' + high predictor confidence boost';
+    compatibilityAdjustment -= 0.10; // Extra -10% for high-confidence proven trades
+    reasoning += ` + High confidence override (${(condition.predictorConfidence * 100).toFixed(0)}% predictor)`;
   }
   
-  const recommendedMinCompatibility = Math.max(0.30, Math.min(0.80, 
+  // Apply adjustments with safety bounds
+  const recommendedMinCompatibility = Math.max(0.40, Math.min(0.85, 
     baseCompatibilityThreshold + compatibilityAdjustment
   ));
   
-  const recommendedMinPredictorConf = Math.max(0.50, Math.min(0.90,
+  const recommendedMinPredictorConf = Math.max(0.55, Math.min(0.90,
     basePredictorThreshold + predictorAdjustment
   ));
   
