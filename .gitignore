@@ -22,3 +22,8 @@ jest-coverage/
 cypress/videos/
 cypress/screenshots/
 .cypress/
+
+# ML Models (too large for git, generated on server)
+backend/python/xgboost_model_*.json
+backend/python/feature_order_*.json
+backend/python/predictor_metadata_*.json
