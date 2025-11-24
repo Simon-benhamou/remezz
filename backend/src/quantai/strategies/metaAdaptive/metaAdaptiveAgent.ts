@@ -1397,6 +1397,15 @@ class MetaAdaptiveStrategyAgent {
 
         const probabilityEdge = computeProbabilityEdge(hybridSignal);
         pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
+        
+        // 🚨 EXTREME RSI OVERRIDE: Ignore predictor on crypto parabolic moves
+        // RSI >85 or <15 are normal during 20-50% crypto rallies/crashes
+        const rsi = predictorFeatures.rsi14 ?? 50;
+        if (rsi > 85 || rsi < 15) {
+          pythonBias = 0; // Neutralize predictor bias
+          console.warn(`⚡ EXTREME RSI OVERRIDE: RSI=${rsi.toFixed(1)}, predictor disabled for ${input.symbol}`);
+        }
+        
         const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
         pythonSignal = {
           ...hybridSignal,
@@ -1426,6 +1435,14 @@ class MetaAdaptiveStrategyAgent {
         });
         const probabilityEdge = computeProbabilityEdge(hybridSignal);
         pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
+        
+        // 🚨 EXTREME RSI OVERRIDE: Ignore predictor on crypto parabolic moves (fallback case)
+        const rsi = predictorFeatures?.rsi14 ?? 50;
+        if (rsi > 85 || rsi < 15) {
+          pythonBias = 0;
+          console.warn(`⚡ EXTREME RSI OVERRIDE (fallback): RSI=${rsi.toFixed(1)}, predictor disabled for ${input.symbol}`);
+        }
+        
         const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
         pythonSignal = {
           ...hybridSignal,
