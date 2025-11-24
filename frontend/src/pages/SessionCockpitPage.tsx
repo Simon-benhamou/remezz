@@ -1240,25 +1240,18 @@ export default function SessionCockpitPage() {
           )}
         </Card>
         
-        {/* Enhanced Monitoring: Symbol Profile, Predictor & Adaptive Learning */}
+        {/* Enhanced Monitoring: Symbol Profile & Predictor */}
         <Row gutter={[24, 24]}>
-          <Col xs={24} md={12} lg={8}>
+          <Col xs={24} md={12}>
             {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
               <SymbolProfileCard profile={diagnostics?.symbolProfile} loading={false} />
             ) : (
               <Skeleton active paragraph={{ rows: 6 }} />
             )}
           </Col>
-          <Col xs={24} md={12} lg={8}>
+          <Col xs={24} md={12}>
             {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
               <PredictorResultsCard predictor={diagnostics?.predictor} loading={false} />
-            ) : (
-              <Skeleton active paragraph={{ rows: 6 }} />
-            )}
-          </Col>
-          <Col xs={24} md={12} lg={8}>
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) && symbol ? (
-              <AdaptiveLearningCard symbol={symbol} lookbackDays={30} />
             ) : (
               <Skeleton active paragraph={{ rows: 6 }} />
             )}

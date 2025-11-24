@@ -22,6 +22,7 @@ import { formatPriceDisplay } from '../utils/number';
 import LearningProgressPanel from '../components/LearningProgressPanel';
 import SubagentStatusCards from '../components/SubagentStatusCards';
 import MarketHealthDashboard from '../components/MarketHealthDashboard';
+import AdaptiveLearningCard from '../components/AdaptiveLearningCard';
 
 const { Content } = Layout;
 
@@ -254,6 +255,9 @@ export function MonitorPageNew() {
           <Card title="🔍 Market Transparency & Decision Analysis" size="small">
             <MarketHealthDashboard symbol={symbol} />
           </Card>
+
+          {/* Adaptive Learning Performance */}
+          <AdaptiveLearningCard symbol={symbol} lookbackDays={7} />
 
           {/* Predictor Analysis */}
           <PredictorCard
