@@ -27,10 +27,10 @@ except ImportError as e:
     print("Installation requise: pip install pandas numpy scikit-learn imbalanced-learn xgboost")
     sys.exit(1)
 
-def calculate_conservative_labels(df, min_movement_pct=0.6, lookforward=3):
+def calculate_conservative_labels(df, min_movement_pct=0.7, lookforward=3):
     """
-    Labeling OPTIMISÉ pour 60-65% accuracy ET recall
-    - Mouvement minimum: 0.6% (balance precision/recall)
+    Labeling OPTIMISÉ pour 70%+ accuracy ET recall
+    - Mouvement minimum: 0.7% (balance precision/recall)
     - Lookforward: 3 candles (réactivité crypto)
     - RSI extreme awareness (85+/15- = opportunités)
     - Momentum confirmation pour réduire faux signaux
@@ -216,11 +216,11 @@ def calculate_features(df):
 
 
 def train_model(df):
-    """Entraîner le modèle XGBoost optimisé pour 65%+ partout"""
+    """Entraîner le modèle XGBoost optimisé pour 70%+ partout"""
     print("\n🤖 Entraînement du modèle OPTIMISÉ...")
     
     # Calculer les labels avec seuil adaptatif
-    df['label'] = calculate_conservative_labels(df, min_movement_pct=0.6, lookforward=3)
+    df['label'] = calculate_conservative_labels(df, min_movement_pct=0.7, lookforward=3)
     
     # Distribution des labels
     label_counts = df['label'].value_counts()
@@ -280,9 +280,8 @@ def train_model(df):
     # Prendre min entre les classes minoritaires
     target_size = min(len(idx_0), len(idx_2))
     
-    # Sous-échantillonner none à 3x les minorités (prouvé optimal)
-    none_size = min(int(target_size * 3.0), len(idx_1))
-    np.random.seed(42)  # FIX: seed pour reproductibilité
+    # Sous-échantillonner none à 2.5x les minorités (balance recall/precision)
+    none_size = min(int(target_size * 2.5), len(idx_1))
     idx_1_sample = np.random.choice(idx_1, none_size, replace=False)
     
     # Combiner
@@ -292,25 +291,25 @@ def train_model(df):
     X_train_balanced = X_train[balanced_idx]
     y_train_balanced = y_train[balanced_idx]
     
-    # Sample weights pour renforcer long/short (8x - optimal prouvé)
+    # Sample weights pour renforcer long/short (10x)
     sample_weights = np.ones(len(y_train_balanced))
-    sample_weights[y_train_balanced == 0] = 8.0  # short
-    sample_weights[y_train_balanced == 2] = 8.0  # long
+    sample_weights[y_train_balanced == 0] = 10.0  # short
+    sample_weights[y_train_balanced == 2] = 10.0  # long
     
     balanced_counts = pd.Series(y_train_balanced).value_counts()
     print(f"   Après balancing:")
     for label, count in balanced_counts.items():
         label_name = {0: 'short', 1: 'none', 2: 'long'}[label]
-        weight = 8.0 if label in [0, 2] else 1.0
+        weight = 10.0 if label in [0, 2] else 1.0
         print(f"      {label_name}: {count} (weight={weight}x)")
     
     # Entraînement XGBoost avec hyperparamètres optimisés
-    print("\n⚙️  Entraînement XGBoost (65%+ objectif)...")
+    print("\n⚙️  Entraînement XGBoost (70%+ objectif)...")
     
     model = XGBClassifier(
-        n_estimators=700,  # Optimal équilibré
-        max_depth=12,  # Balance généralisation
-        learning_rate=0.018,  # LR équilibré
+        n_estimators=600,  # Plus d'arbres pour capturer patterns complexes
+        max_depth=14,  # Profondeur augmentée pour features avancées
+        learning_rate=0.015,  # LR réduit pour convergence fine
         subsample=0.85,
         colsample_bytree=0.85,
         min_child_weight=2,
@@ -319,7 +318,7 @@ def train_model(df):
         reg_lambda=0.8,
         random_state=42,
         eval_metric='mlogloss',
-        early_stopping_rounds=75,  # Plus patient
+        early_stopping_rounds=50,
         tree_method='hist'  # Plus rapide
     )
     
@@ -390,21 +389,21 @@ def train_model(df):
         'recall_short': float(recall_short),
         'recall_none': float(recall_none),
         'recall_long': float(recall_long),
-        'optimized_for': '65%+ accuracy and recall',
+        'optimized_for': '70%+ accuracy and recall',
         'thresholds': {
-            'min_movement_pct': 0.6,
+            'min_movement_pct': 0.7,
             'lookforward': 3,
             'adaptive': True
         },
         'balancing': {
             'method': 'hybrid_undersampling',
-            'none_ratio': 3.0,
-            'sample_weights_long_short': 8.0
+            'none_ratio': 2.5,
+            'sample_weights_long_short': 10.0
         },
         'hyperparameters': {
-            'n_estimators': 700,
-            'max_depth': 12,
-            'learning_rate': 0.018
+            'n_estimators': 600,
+            'max_depth': 14,
+            'learning_rate': 0.015
         }
     }
     
@@ -419,31 +418,29 @@ def train_model(df):
     
     # Alerte si objectif non atteint
     min_recall = min(recall_short, recall_none, recall_long)
-    if min_recall < 0.60:
-        print(f"\n⚠️  Objectif 60% non atteint (min recall: {min_recall:.1%})")
+    if min_recall < 0.70:
+        print(f"\n⚠️  Objectif 70% non atteint (min recall: {min_recall:.1%})")
         print("   Suggestions:")
-        print("   - Augmenter sample_weights à 9-10x")
-        print("   - Ajuster none_ratio à 2.8x")
-        print("   - Réduire min_movement_pct à 0.55%")
-    elif min_recall >= 0.65:
-        print(f"\n🎉 EXCELLENT! 65%+ atteint (min recall: {min_recall:.1%})")
+        print("   - Augmenter n_estimators à 800")
+        print("   - Ajuster sample_weights (essayer 12-15x)")
+        print("   - Réduire min_movement_pct à 0.6%")
     else:
-        print(f"\n✅ OBJECTIF ATTEINT! 60-65% (min recall: {min_recall:.1%})")
+        print(f"\n🎉 Objectif 70%+ ATTEINT! (min recall: {min_recall:.1%})")
     
     return model, feature_cols, metadata
 
 
 def main():
     print("=" * 70)
-    print("🚀 RÉENTRAÎNEMENT OPTIMISÉ - OBJECTIF 60-65%")
+    print("🚀 RÉENTRAÎNEMENT OPTIMISÉ - OBJECTIF 70%+")
     print("=" * 70)
     print("\nOptimisations:")
     print("  ✓ 41 features avancées (momentum, divergences, BB, patterns)")
-    print("  ✓ Seuil adaptatif 0.6% (RSI extreme → 0.3%)")
+    print("  ✓ Seuil adaptatif 0.7% (RSI extreme → 0.35%)")
     print("  ✓ Lookforward 3 candles (réactivité crypto)")
-    print("  ✓ Sample weights 8x pour long/short")
-    print("  ✓ Balancing hybride (3:1 none ratio)")
-    print("  ✓ XGBoost: 700 trees, depth 12, LR 0.018")
+    print("  ✓ Sample weights 10x pour long/short")
+    print("  ✓ Balancing hybride (2.5:1 none ratio)")
+    print("  ✓ XGBoost: 600 trees, depth 14, LR 0.015")
     print("  ✓ Early stopping avec validation set")
     print()
     
@@ -462,10 +459,10 @@ def main():
     print("✅ ENTRAÎNEMENT COMPLÉTÉ!")
     print("=" * 70)
     print("\nProchaines étapes:")
-    print("  1. Vérifier les recall (objectif 65%+ partout)")
+    print("  1. Vérifier les recall (objectif 70%+ partout)")
     print("  2. Si objectif atteint → commit & push")
-    print("  3. Render auto-déploie et génère le modèle")
-    print("  4. Le predictor amélioré sera actif en prod!")
+    print("  3. Si non atteint → ajuster hyperparamètres")
+    print("  4. Render auto-déploie et génère le modèle")
     print()
 
 
