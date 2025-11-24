@@ -20,6 +20,57 @@ const UNIT_TEST_MODE = (process.env.UNIT_TEST_MODE || 'false') === 'true';
 const SYNTHETIC_WARN_INTERVAL_MS = 60_000;
 const syntheticWarnedAt = new Map<string, number>();
 
+// Global rate limiter for REST backfill to prevent IP bans
+// When multiple agents start simultaneously, queue their backfills
+const REST_BACKFILL_MIN_DELAY_MS = 3000; // 3 seconds between backfills
+let lastRestBackfillTime = 0;
+const backfillQueue: Array<() => void> = [];
+let backfillQueueProcessing = false;
+
+async function queueRestBackfill<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const queuePosition = backfillQueue.length;
+    
+    backfillQueue.push(async () => {
+      try {
+        const now = Date.now();
+        const timeSinceLastBackfill = now - lastRestBackfillTime;
+        
+        if (timeSinceLastBackfill < REST_BACKFILL_MIN_DELAY_MS) {
+          const waitTime = REST_BACKFILL_MIN_DELAY_MS - timeSinceLastBackfill;
+          if (queuePosition > 0) {
+            console.log(`⏳ Backfill queued (position ${queuePosition}, wait ${Math.round(waitTime/1000)}s)`);
+          }
+          await new Promise(r => setTimeout(r, waitTime));
+        }
+        
+        lastRestBackfillTime = Date.now();
+        const result = await fn();
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      } finally {
+        processBackfillQueue();
+      }
+    });
+    
+    if (!backfillQueueProcessing) {
+      processBackfillQueue();
+    }
+  });
+}
+
+function processBackfillQueue(): void {
+  if (backfillQueue.length === 0) {
+    backfillQueueProcessing = false;
+    return;
+  }
+  
+  backfillQueueProcessing = true;
+  const next = backfillQueue.shift();
+  if (next) next();
+}
+
 function recordSyntheticWarning(tf: string, sample: number[][]): void {
   const now = Date.now();
   const lastWarn = syntheticWarnedAt.get(tf) || 0;
@@ -882,7 +933,12 @@ export async function getOHLCV(
                 normalizedLimit,
                 Math.max(1, cfg.DIAGNOSTICS_BACKFILL_DAYS || 1),
               );
-              const rest = await fetchOhlcvRest(symbol, tf, backfillLimit, userId, userCredentials);
+              
+              // Queue REST backfill to prevent multiple simultaneous requests causing IP ban
+              const rest = await queueRestBackfill(async () => {
+                console.log(`📥 Backfilling ${symbol} ${tf} (queued, limit: ${backfillLimit})`);
+                return await fetchOhlcvRest(symbol, tf, backfillLimit, userId, userCredentials);
+              });
               if (rest && rest.length) {
                 seedKlinesFromWebSocket(symbol, tf, rest);
                 binanceKlineSeeded.add(seedKey);
