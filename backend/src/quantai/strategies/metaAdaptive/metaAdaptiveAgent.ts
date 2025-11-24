@@ -753,9 +753,19 @@ function computeContextAlignment(
   } else if (bias4h !== 'neutral') {
     const matches = [bias1h, bias15m].filter(b => b === bias4h).length;
     const mismatches = [bias1h, bias15m].filter(b => b !== 'neutral' && b !== bias4h).length;
-    if (mismatches > 0) {
+    
+    // 🔄 V-SHAPED RECOVERY DETECTION: Ignore HTF conflict on violent reversals
+    // When 1h+15m are strongly aligned but 4h is opposite (post-crash recovery scenario)
+    const lowerTfAligned = bias1h === bias15m && bias1h !== 'neutral';
+    const strongReversal = lowerTfAligned && mismatches > 0;
+    
+    if (mismatches > 0 && !strongReversal) {
       conflict = true;
       alignmentScore = 0.22 + matches * 0.08;
+    } else if (strongReversal) {
+      // Lower timeframes aligned strongly = early reversal signal, ignore HTF lag
+      alignmentScore = 0.75; // Good alignment despite HTF conflict
+      reasons.push('reversal_early');
     } else if (matches === 2) {
       alignmentScore = 0.9;
     } else if (matches === 1) {
