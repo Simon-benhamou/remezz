@@ -91,7 +91,12 @@ export async function fetchBinanceOhlcv(
         const parsed = JSON.parse(body);
         const banMatch = parsed.msg?.match(/banned until (\d+)/);
         if (banMatch) {
-          const banTimestamp = parseInt(banMatch[1], 10);
+          let banTimestamp = parseInt(banMatch[1], 10);
+          // Binance returns timestamp in milliseconds, ensure it's in the future
+          // If timestamp looks like seconds (< year 2100), convert to milliseconds
+          if (banTimestamp < 4000000000000) {
+            banTimestamp = banTimestamp * 1000;
+          }
           // Add cooldown period after ban expires
           ipBannedUntil = banTimestamp + IP_BAN_COOLDOWN_MS;
           console.error(`🚫 Binance IP ban detected until ${new Date(banTimestamp).toISOString()} (+ ${IP_BAN_COOLDOWN_MS/1000/60}min cooldown)`);
