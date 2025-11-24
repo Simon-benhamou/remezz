@@ -36,6 +36,15 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Verify critical packages are installed (fail fast if missing)
 RUN python3 -c "import xgboost; import pandas; import numpy; import sklearn; print('✅ All Python dependencies installed')"
 
+# 🤖 TRAIN PREDICTOR MODEL during build
+# This generates xgboost_model_conservative.json (205MB) which is too large for git
+COPY python/train_conservative.py ./python/
+RUN echo "🤖 Training XGBoost predictor model..." && \
+    cd python && \
+    python3 train_conservative.py 2>&1 | tail -100 && \
+    cd .. && \
+    echo "✅ Predictor training completed"
+
 # Install Node.js deps
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
