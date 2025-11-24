@@ -36,6 +36,24 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Verify critical packages are installed (fail fast if missing)
 RUN python3 -c "import xgboost; import pandas; import numpy; import sklearn; print('✅ All Python dependencies installed')"
 
+# 🤖 CRITICAL: TRAIN PREDICTOR MODEL during build (modèle non versionné git)
+# Le modèle fait 350-450MB et DOIT être généré pendant le build Docker
+# Copy training data (CSV files from ccxt_cache)
+RUN mkdir -p ./data/ccxt_cache
+COPY data/ccxt_cache/*.csv ./data/ccxt_cache/ 2>/dev/null || echo "⚠️ No CSV files in local cache"
+
+# Train the model (conservative version with 70%+ target)
+RUN echo "🤖 Training XGBoost predictor model (this generates ~450MB file)..." && \
+    cd python && \
+    python3 train_conservative.py 2>&1 | tail -100 && \
+    cd .. && \
+    echo "" && \
+    echo "📊 Checking generated model files:" && \
+    ls -lh python/xgboost_model_conservative.json 2>/dev/null && \
+    ls -lh python/feature_order_conservative.json 2>/dev/null && \
+    ls -lh python/predictor_metadata_conservative.json 2>/dev/null && \
+    echo "✅ Predictor training completed - model will be cached in memory on first load"
+
 # Install Node.js deps
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund

@@ -176,6 +176,62 @@ export function isPythonPredictorAvailable(): boolean {
   }
 }
 
+/**
+ * 🔥 WARMUP: Test Python predictor on startup to prevent circuit breaker issues
+ * 
+ * The XGBoost model is 350MB+ and takes 2-5s to load on first prediction.
+ * This warmup ensures the model is cached in memory before any real trades.
+ */
+export async function warmupPythonPredictor(): Promise<boolean> {
+  const logger = createIntegrationLogger({
+    component: 'PythonPredictor',
+    action: 'warmup',
+  });
+  
+  logger.info('🔥 Warming up Python predictor (loading 350MB+ XGBoost model)...');
+  
+  if (!isPythonPredictorAvailable()) {
+    logger.warn('⚠️  Python predictor not available - skipping warmup');
+    return false;
+  }
+  
+  try {
+    // Create minimal test features
+    const testFeatures: Record<string, number> = {
+      close: 100,
+      ema9: 100,
+      ema20: 100,
+      ema50: 100,
+      rsi14: 50,
+      macd: 0,
+      atr14: 1,
+      volumeRatio: 1,
+      // Add more required features as needed
+    };
+    
+    const startTime = Date.now();
+    const result = await getPrediction(testFeatures);
+    const duration = Date.now() - startTime;
+    
+    logger.info(`✅ Python predictor warmed up successfully in ${duration}ms`, {
+      decision: result.decision,
+      confidence: result.confidence,
+      modelCachedInMemory: true,
+    });
+    
+    // Record success to prevent circuit breaker
+    recordPredictorSuccess();
+    
+    return true;
+  } catch (error) {
+    logger.error('❌ Python predictor warmup failed:', error);
+    logger.warn('⚠️  Predictions may be slow on first call (model loading)');
+    
+    // Don't record failure during warmup - give it a chance
+    return false;
+  }
+}
+
 export function __resetPythonExecutableCacheForTests(): void {
   cachedPythonExecutable = null;
   cachedPythonResolutionError = null;

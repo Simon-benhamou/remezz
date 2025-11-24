@@ -331,6 +331,20 @@ import { initializeOptimizerScheduling } from "./learning/optimizerJob.js";
 import { initializeReoptimizationScheduling } from "./learning/reoptimizationScheduler.js";
 import { startOutcomeUpdater } from "./learning/outcomeUpdater.js";
 import { warmupPredictorCache, startBackgroundRefresh } from "./quantai/predictorCache.js";
+import { warmupPythonPredictor } from "./quantai/pythonPredictor.js";
+
+// 🔥 CRITICAL: Warmup Python predictor FIRST to cache the 350MB+ model
+warmupPythonPredictor()
+  .then((success) => {
+    if (success) {
+      serverLogger.info('✅ Python predictor ready - model cached in memory');
+    } else {
+      serverLogger.warn('⚠️  Python predictor warmup failed - first predictions will be slow');
+    }
+  })
+  .catch((error) => {
+    serverLogger.error('❌ Python predictor warmup error:', error);
+  });
 
 Promise.all([
   initializeAdaptiveLearning(),

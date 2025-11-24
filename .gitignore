@@ -23,7 +23,12 @@ cypress/videos/
 cypress/screenshots/
 .cypress/
 
-# ML Models (too large for git, generated on server)
-backend/python/xgboost_model_*.json
-backend/python/feature_order_*.json
-backend/python/predictor_metadata_*.json
+# ML Models (too large for git, generated during Docker build)
+# Les modèles font 350-450MB et sont générés via train_conservative.py
+**/xgboost_model_*.json
+**/feature_order_*.json
+**/predictor_metadata_*.json
+**/hybrid_state.json
+**/training_metrics.json
+
+.DS_Store

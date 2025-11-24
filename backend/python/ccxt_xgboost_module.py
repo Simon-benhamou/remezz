@@ -1312,9 +1312,46 @@ def load_features() -> List[str]:
     raise FileNotFoundError(f"Feature file not found: {FEATURE_PATH}")
 
 
-def load_model() -> XGBClassifier:
+# 🚀 GLOBAL MODEL CACHE - évite de recharger le modèle 350MB+ à chaque prédiction
+_CACHED_MODEL: XGBClassifier | None = None
+_MODEL_LOAD_TIMESTAMP: float = 0
+
+def load_model(force_reload: bool = False) -> XGBClassifier:
+    """Load XGBoost model with intelligent in-memory caching.
+    
+    First load takes ~2-5s for 350MB+ model.
+    Subsequent calls return cached instance instantly (<1ms).
+    
+    Args:
+        force_reload: Force reload from disk (for retraining scenarios)
+    
+    Returns:
+        Cached or freshly loaded XGBClassifier instance
+    """
+    global _CACHED_MODEL, _MODEL_LOAD_TIMESTAMP
+    
+    # Return cached model if available and not forcing reload
+    if _CACHED_MODEL is not None and not force_reload:
+        return _CACHED_MODEL
+    
+    # Load model from disk (slow operation)
+    import time
+    start_time = time.time()
+    
     model = XGBClassifier()
     model.load_model(MODEL_PATH)
+    
+    # Cache globally
+    _CACHED_MODEL = model
+    _MODEL_LOAD_TIMESTAMP = time.time()
+    
+    load_duration = time.time() - start_time
+    print(
+        f"[ccxt_xgboost_module] Model loaded and cached in {load_duration:.2f}s "
+        f"(path: {MODEL_PATH}, size: ~350MB+)",
+        file=sys.stderr
+    )
+    
     return model
 
 

@@ -356,14 +356,42 @@ class HybridPredictionEngine:
         )
 
 
+# 🚀 GLOBAL ENGINE CACHE - singleton pattern for fast predictions
 _ENGINE: HybridPredictionEngine | None = None
+_ENGINE_INIT_TIME: float = 0
 
 
 def _get_engine() -> HybridPredictionEngine:
-    global _ENGINE
+    """Get or initialize the hybrid prediction engine (cached singleton).
+    
+    First call loads the 350MB+ XGBoost model (~2-5s on cold start).
+    Subsequent calls return the cached instance instantly (<1ms).
+    
+    This is critical for production performance where we may predict
+    hundreds of times per minute across multiple symbols.
+    
+    Returns:
+        Cached HybridPredictionEngine instance
+    """
+    global _ENGINE, _ENGINE_INIT_TIME
+    
     if _ENGINE is None:
+        import time
+        start_time = time.time()
+        
         feature_order = load_features()
         _ENGINE = HybridPredictionEngine(feature_order)
+        
+        _ENGINE_INIT_TIME = time.time()
+        init_duration = time.time() - start_time
+        
+        import sys
+        print(
+            f"[prediction_engine] Engine initialized and cached in {init_duration:.2f}s "
+            f"(includes XGBoost model load ~350MB+)",
+            file=sys.stderr
+        )
+    
     return _ENGINE
 
 
