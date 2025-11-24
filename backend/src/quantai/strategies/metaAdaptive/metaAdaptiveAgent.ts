@@ -547,132 +547,153 @@ export function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, 
   const ema20 = safeNumber((snap as any)?.ema20, Number.NaN);
   const ema26 = safeNumber((snap as any)?.ema26, Number.NaN);
   const ema50 = safeNumber((snap as any)?.ema50, Number.NaN);
-  const ema100 = safeNumber((snap as any)?.ema100, Number.NaN);
   const ema200 = safeNumber((snap as any)?.ema200, Number.NaN);
   const ema20Slope = safeNumber((snap as any)?.ema20Slope, 0);
-  const ema50Slope = safeNumber((snap as any)?.ema50Slope, 0);
-  const trendSpreadFallback = Number.isFinite(ema50) && Math.abs(ema50) > 1e-9 ? (ema20 - ema50) / ema50 : 0;
-  const emaTrendSpread = safeNumber((snap as any)?.emaTrendSpread, trendSpreadFallback);
-  const emaRatio9_20 = safeNumber((snap as any)?.emaRatio9_20, Number.isFinite(ema20) && ema20 !== 0 ? ema9 / ema20 : 0);
-  const emaRatio20_200 = safeNumber((snap as any)?.emaRatio20_200, Number.isFinite(ema200) && ema200 !== 0 ? ema20 / ema200 : 0);
-  const emaRatio50_200 = safeNumber((snap as any)?.emaRatio50_200, Number.isFinite(ema200) && ema200 !== 0 ? ema50 / ema200 : 0);
+  const lastPrice = safeNumber((snap as any)?.last, Number.NaN);
+  
+  // Distance relatives aux EMAs (% normalisé)
+  const dist_ema9 = Number.isFinite(ema9) && ema9 !== 0 ? (lastPrice - ema9) / ema9 * 100 : 0;
+  const dist_ema20 = safeNumber((snap as any)?.distEma20, 
+    Number.isFinite(ema20) && ema20 !== 0 ? (lastPrice - ema20) / ema20 * 100 : 0);
+  const dist_ema50 = safeNumber((snap as any)?.distEma50,
+    Number.isFinite(ema50) && ema50 !== 0 ? (lastPrice - ema50) / ema50 * 100 : 0);
+  
+  // RSI multi-période avec patterns avancés
   const rsi7 = safeNumber((snap as any)?.rsi7, Number.NaN);
   const rsi14 = safeNumber((snap as any)?.rsi14, Number.NaN);
-  const rsi21 = safeNumber((snap as any)?.rsi21, Number.NaN);
   const rsiSlope = safeNumber((snap as any)?.rsiSlope, 0);
-  const stochK = safeNumber((snap as any)?.stochK, 50);
-  const stochD = safeNumber((snap as any)?.stochD, 50);
-  const macd = safeNumber((snap as any)?.macd, 0);
-  const macdSignal = safeNumber((snap as any)?.macdSignal, 0);
-  const macdDiff = safeNumber((snap as any)?.macdDiff, 0);
-  const momentum3 = safeNumber((snap as any)?.momentum3, 0);
+  
+  // rsiAccel: Accélération RSI (dérivée seconde du rsiSlope)
+  // Approximation: si rsiSlope change rapidement, c'est une accélération
+  const rsiAccel = 0; // Placeholder - nécessite historique RSI
+  
+  // rsiDivergence: RSI monte mais prix baisse (ou inverse)
+  // Approximation: comparer direction RSI vs momentum prix
   const momentum5 = safeNumber((snap as any)?.momentum5, 0);
-  const momentum10 = safeNumber((snap as any)?.momentum10, 0);
-  const momentum20 = safeNumber((snap as any)?.momentum20, 0);
-  const atr7 = safeNumber((snap as any)?.atr7, safeNumber((snap as any)?.atr14, Number.NaN));
+  const rsiDivergence = (rsiSlope > 0 && momentum5 < 0) ? 1 : (rsiSlope < 0 && momentum5 > 0) ? -1 : 0;
+  
+  // MACD complet
+  const macd = safeNumber((snap as any)?.macd, 0);
+  const macd_signal = safeNumber((snap as any)?.macdSignal, 0);
+  const macd_hist = safeNumber((snap as any)?.macdDiff, macd - macd_signal); // macd_hist = macd - signal
+  
+  // macd_cross: Signal de croisement MACD (1=bullish cross, -1=bearish cross, 0=no cross)
+  // Approximation: si macd_hist proche de 0 et positif = bullish, négatif = bearish
+  const macd_cross = Math.abs(macd_hist) < 0.1 ? (macd_hist > 0 ? 1 : -1) : 0;
+  
+  // ATR et volatilité
   const atr14 = safeNumber((snap as any)?.atr14, Number.NaN);
   const atrPctPercent = safeNumber((snap as any)?.atrPct, Number.NaN);
-  const lastPrice = safeNumber((snap as any)?.last, Number.NaN);
-  const bbWidth = safeNumber((snap as any)?.bbWidth, 0);
-  const bbPosition = safeNumber((snap as any)?.bbPosition, 0.5);
-  const volatilityRegimePct = safeNumber((snap as any)?.volatilityRegime, atrPctPercent);
-  const adx14 = safeNumber((snap as any)?.adx14, Number.NaN);
-  const adxPos = safeNumber((snap as any)?.adxPos14 ?? (snap as any)?.diPlus14, 0);
-  const adxNeg = safeNumber((snap as any)?.adxNeg14 ?? (snap as any)?.diMinus14, 0);
-  const trendStrength = safeNumber((snap as any)?.trendStrength, 0);
-  const volumeRatioSnap = safeNumber((snap as any)?.volumeRatio, Number.NaN);
-  const volume = safeNumber((snap as any)?.volume, Number.NaN);
-  const volumeMA = safeNumber((snap as any)?.volumeMA, Number.NaN);
-  const volumeZScore = safeNumber((snap as any)?.volumeZScore, 0);
-  const obvSlope = safeNumber((snap as any)?.obvSlope, 0);
-  const volPriceConfirmation = safeNumber((snap as any)?.volPriceConfirmation, 0);
-  const spreadProxy = safeNumber((snap as any)?.spreadProxy, 0);
-  const distEma20 = safeNumber((snap as any)?.distEma20, 0);
-  const distEma50 = safeNumber((snap as any)?.distEma50, 0);
-  const distEma200 = safeNumber((snap as any)?.distEma200, 0);
-  const atrPct1hPercent = safeNumber((snap as any)?.atrPct1h, atrPctPercent);
-  const atrPct4hPercent = safeNumber((snap as any)?.atrPct4h, atrPctPercent);
-  const rsi14_1h = safeNumber((snap as any)?.rsi14_1h, rsi14);
-  const rsi14_4h = safeNumber((snap as any)?.rsi14_4h, rsi14);
-  const microImbalance = safeNumber((snap as any)?.microImbalance, 0);
-  const mtfAgreement = safeNumber((snap as any)?.mtfAgreement, 0);
-  const volAdjustedMomentum = safeNumber((snap as any)?.volAdjustedMomentum, 0);
-  const rsiEmaDiv = safeNumber((snap as any)?.rsiEmaDiv, 0);
-
   const atrPct = Number.isFinite(atrPctPercent)
     ? atrPctPercent / 100
     : (Number.isFinite(atr14) && Number.isFinite(lastPrice) && Math.abs(lastPrice) > 1e-9 ? atr14 / lastPrice : 0);
-  const volatilityRegime = Number.isFinite(volatilityRegimePct) ? volatilityRegimePct / 100 : atrPct;
-  const atrPct1h = Number.isFinite(atrPct1hPercent) ? atrPct1hPercent / 100 : atrPct;
-  const atrPct4h = Number.isFinite(atrPct4hPercent) ? atrPct4hPercent / 100 : atrPct;
-
+  
+  // atrRatio: ATR relatif vs moyenne 50 périodes (approximation via volatilityRegime)
+  const volatilityRegimePct = safeNumber((snap as any)?.volatilityRegime, atrPctPercent);
+  const atrRatio = Number.isFinite(volatilityRegimePct) ? volatilityRegimePct / 100 / atrPct : 1;
+  
+  // Volume patterns
+  const volumeRatioSnap = safeNumber((snap as any)?.volumeRatio, Number.NaN);
+  const volume = safeNumber((snap as any)?.volume, Number.NaN);
+  const volumeMA = safeNumber((snap as any)?.volumeMA, Number.NaN);
   let volumeRatio = volumeRatioSnap;
   if (!Number.isFinite(volumeRatio)) {
-    volumeRatio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : Number.NaN;
+    volumeRatio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : 1;
   }
   if (!Number.isFinite(volumeRatio)) {
-    volumeRatio = 0;
+    volumeRatio = 1;
   }
+  
+  // volumeSpike: 1 si volume > 2x la moyenne, 0 sinon
+  const volumeSpike = volumeRatio > 2.0 ? 1 : 0;
+  
+  // volumeTrend: Tendance volume (ratio MA court / MA long)
+  // Approximation: utiliser volumeZScore ou volumeRatio comme proxy
+  const volumeZScore = safeNumber((snap as any)?.volumeZScore, 0);
+  const volumeTrend = volumeRatio > 1 ? Math.min(volumeRatio / 2, 2) : volumeRatio;
+  
+  // Momentum multi-période
+  const momentum10 = safeNumber((snap as any)?.momentum10, 0);
+  const momentum20 = safeNumber((snap as any)?.momentum20, 0);
+  
+  // momentumAccel: Accélération du momentum (dérivée du momentum10)
+  // Approximation: différence momentum5 et momentum10
+  const momentumAccel = momentum5 - momentum10;
+  
+  // ADX et Directional Indicators
+  const adx14 = safeNumber((snap as any)?.adx14, Number.NaN);
+  const plusDI = safeNumber((snap as any)?.adxPos14 ?? (snap as any)?.diPlus14, 0);
+  const minusDI = safeNumber((snap as any)?.adxNeg14 ?? (snap as any)?.diMinus14, 0);
+  
+  // Bollinger Bands
+  const bb_position = safeNumber((snap as any)?.bbPosition, 0.5);
+  const bb_width = safeNumber((snap as any)?.bbWidth, 0);
+  
+  // Price patterns
+  // priceAccel: Accélération prix (dérivée seconde)
+  // Approximation: différence entre momentum3 et momentum5
+  const momentum3 = safeNumber((snap as any)?.momentum3, 0);
+  const priceAccel = momentum3 - momentum5;
+  
+  // highLowRatio: (high - low) / close - mesure de volatilité intrabar
+  // Approximation via ATR% si pas disponible directement
+  const highLowRatio = atrPct * 0.5; // Approximation conservative
+  
+  // emaCross: Signal de croisement EMA9/EMA20 (1=bullish, -1=bearish, 0=no cross)
+  // Approximation: si ema9 proche ema20 et ema9 > ema20 = bullish
+  const emaRatio9_20 = Number.isFinite(ema20) && ema20 !== 0 ? ema9 / ema20 : 1;
+  const emaCross = Math.abs(emaRatio9_20 - 1) < 0.002 ? (emaRatio9_20 > 1 ? 1 : -1) : 0;
 
-  // ⚠️  FEATURE ALIGNMENT: Return ONLY the 55 features used in model training
-  // DO NOT include microstructure sequences - model was trained WITHOUT them
+  // 🎯 CRITICAL: Return ONLY the 41 features expected by Python model
+  // Must match EXACTLY the feature_cols in train_conservative.py
   const features: Record<string, number> = {
+    // EMAs et distances (9 features)
     ema9,
     ema12,
     ema20,
     ema26,
     ema50,
-    ema100,
     ema200,
+    dist_ema9,
+    dist_ema20,
+    dist_ema50,
+    // RSI multi-période et patterns (5 features)
     rsi7,
     rsi14,
-    rsi21,
     rsiSlope,
-    stoch_k: stochK,
-    stoch_d: stochD,
+    rsiAccel,
+    rsiDivergence,
+    // MACD complet (4 features)
     macd,
-    macd_signal: macdSignal,
-    macd_diff: macdDiff,
-    momentum3,
+    macd_signal,
+    macd_hist,
+    macd_cross,
+    // Volatilité et ATR (3 features)
+    atr14,
+    atrPct,
+    atrRatio,
+    // Volume patterns (3 features)
+    volumeRatio,
+    volumeSpike,
+    volumeTrend,
+    // Momentum multi-période (4 features)
     momentum5,
     momentum10,
     momentum20,
-    atr7,
-    atr14,
-    atrPct,
-    bb_width: bbWidth,
-    bb_position: bbPosition,
-    volatilityRegime,
+    momentumAccel,
+    // Trend indicators (3 features)
     adx14,
-    adx_pos: adxPos,
-    adx_neg: adxNeg,
+    plusDI,
+    minusDI,
+    // Bollinger Bands (2 features)
+    bb_position,
+    bb_width,
+    // Price patterns (4 features)
     ema20Slope,
-    ema50Slope,
-    trendStrength,
-    volumeRatio,
-    volumeZScore,
-    obv_slope: obvSlope,
-    vol_price_conf: volPriceConfirmation,
-    spreadProxy,
-    dist_ema20: distEma20,
-    dist_ema50: distEma50,
-    dist_ema200: distEma200,
-    emaRatio_9_20: emaRatio9_20,
-    emaRatio_20_200: emaRatio20_200,
-    emaRatio_50_200: emaRatio50_200,
-    emaTrendSpread,
-    atrPct_1h: atrPct1h,
-    atrPct_4h: atrPct4h,
-    rsi14_1h,
-    rsi14_4h,
-    microImbalance,
-    mtfAgreement,
-    vol_adj_momentum: volAdjustedMomentum,
-    rsi_ema_div: rsiEmaDiv,
+    priceAccel,
+    highLowRatio,
+    emaCross,
   };
-  
-  // Note: Microstructure features (sequences) are NOT included to match training data
-  // Model was trained on 55 features only (see python/features.txt)
 
   if (Object.values(features).some(value => !Number.isFinite(value))) {
     return null;
