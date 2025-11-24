@@ -13,6 +13,7 @@ import { buildTechSnapshot } from '../ai/tech.js';
 import { getMarketContext } from '../analytics/marketContext.js';
 import { evaluateStrategyCompatibility } from '../quantai/strategies/metaAdaptive/cryptoSelection.js';
 import { detectMarketRegime } from '../quantai/regime/marketRegimeDetector.js';
+import { evaluateAdaptiveEntry, getAdaptiveThresholdSummary } from '../learning/adaptiveThresholds.js';
 
 const router = Router();
 
@@ -79,33 +80,63 @@ router.post('/', async (req, res) => {
     const rejectedCount = recentAttempts.filter(t => t.decision === 'order_blocked' || t.decision === 'order_blocked_rotation').length;
     const acceptedCount = recentAttempts.filter(t => t.decision === 'order_placed').length;
     
-    // 5. Determine if conditions are favorable
-    const isFavorable = 
-      compatibility.compatible &&
-      compatibility.score >= 0.60 &&
-      regime.dominant !== 'high_vol' &&
-      compatibility.volatilityFit !== 'poor' &&
-      compatibility.liquidityFit !== 'poor';
+    // 5. 🧠 ADAPTIVE EVALUATION: Learn from historical performance
+    const latestDecision = await prisma.aiDecision.findFirst({
+      where: { symbol },
+      orderBy: { createdAt: 'desc' },
+      select: { confidence: true },
+    });
     
-    // 5. Build reasons for unfavorable conditions
+    const predictorConfidence = latestDecision?.confidence || 0.5;
+    const atrPct = Number((tech as any).atrPct || 1.0);
+    const volumeRatio = Number((tech as any).volumeRatio || 1.0);
+    
+    const adaptiveEval = await evaluateAdaptiveEntry({
+      symbol,
+      compatibilityScore: compatibility.score,
+      predictorConfidence,
+      atrPct,
+      volumeRatio,
+      volumeUsd: volumeUsd24h,
+      trendQuality: compatibility.trendQuality,
+    });
+    
+    // 6. Determine if conditions are favorable (ADAPTIVE)
+    // Old rigid rule: compatibility.score >= 0.60
+    // New adaptive: Use learned thresholds from performance data
+    const isFavorable = adaptiveEval.allowed;
+    
+    // 7. Build reasons for unfavorable conditions
     const unfavorableReasons: string[] = [];
-    if (!compatibility.compatible) {
-      unfavorableReasons.push('Strategy compatibility too low');
+    
+    // Show adaptive reasoning
+    if (!adaptiveEval.allowed) {
+      unfavorableReasons.push(adaptiveEval.threshold.reasoning);
+      unfavorableReasons.push(`Required compatibility: ${adaptiveEval.threshold.recommendedMinCompatibility.toFixed(2)} (actual: ${compatibility.score.toFixed(2)})`);
+      unfavorableReasons.push(`Required predictor conf: ${adaptiveEval.threshold.recommendedMinPredictorConf.toFixed(2)} (actual: ${predictorConfidence.toFixed(2)})`);
     }
-    if (compatibility.score < 0.60) {
-      unfavorableReasons.push(`Compatibility score ${compatibility.score.toFixed(2)} < 0.60`);
+    
+    // Show override if present
+    if (adaptiveEval.override) {
+      unfavorableReasons.length = 0; // Clear other reasons
+      unfavorableReasons.push(adaptiveEval.override);
+    }
+    
+    // Add traditional warnings as context
+    if (!compatibility.compatible) {
+      unfavorableReasons.push('⚠️ Base compatibility check failed');
     }
     if (regime.dominant === 'high_vol') {
-      unfavorableReasons.push('Market is high volatility - strategy may be risky');
+      unfavorableReasons.push('⚠️ High volatility regime detected');
     }
     if (compatibility.volatilityFit === 'poor') {
-      unfavorableReasons.push('Volatility too low for ATR-based stops');
+      unfavorableReasons.push('⚠️ Volatility may be suboptimal');
     }
     if (compatibility.liquidityFit === 'poor') {
-      unfavorableReasons.push('Insufficient liquidity for execution');
+      unfavorableReasons.push('⚠️ Liquidity concerns');
     }
     if (compatibility.trendQuality === 'poor') {
-      unfavorableReasons.push('No clear trend structure');
+      unfavorableReasons.push('⚠️ Weak trend structure');
     }
     
     // 7. Check if predictor is blocking
@@ -122,6 +153,22 @@ router.post('/', async (req, res) => {
       isFavorable,
       healthScore: compatibility.score,
       unfavorableReasons,
+      
+      // 🧠 ADAPTIVE LEARNING DATA
+      adaptiveLearning: {
+        allowed: adaptiveEval.allowed,
+        recommendedMinCompatibility: adaptiveEval.threshold.recommendedMinCompatibility,
+        recommendedMinPredictorConf: adaptiveEval.threshold.recommendedMinPredictorConf,
+        reasoning: adaptiveEval.threshold.reasoning,
+        override: adaptiveEval.override,
+        historicalPerformance: adaptiveEval.threshold.performance.totalTrades > 0 ? {
+          trades: adaptiveEval.threshold.performance.totalTrades,
+          winRate: (adaptiveEval.threshold.performance.winRate * 100).toFixed(1) + '%',
+          avgPnl: adaptiveEval.threshold.performance.avgPnl.toFixed(3),
+          sharpe: adaptiveEval.threshold.performance.sharpeRatio.toFixed(2),
+          confidence: adaptiveEval.threshold.performance.confidence,
+        } : null,
+      },
       
       // Strategy compatibility
       strategyCompatibility: {
@@ -349,6 +396,32 @@ router.get('/agent-activity', async (req, res) => {
     console.error('Error fetching agent activity:', error);
     res.status(500).json({
       error: 'Failed to fetch agent activity',
+      details: String((error as any)?.message || error),
+    });
+  }
+});
+
+/**
+ * POST /api/market-health/adaptive-summary
+ * 
+ * Get adaptive learning summary for a specific symbol
+ */
+router.post('/adaptive-summary', async (req, res) => {
+  try {
+    const { symbol, lookbackDays } = req.body;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+    
+    const days = lookbackDays || 30;
+    const summary = await getAdaptiveThresholdSummary(symbol, days);
+    
+    res.json(summary);
+  } catch (error) {
+    console.error('Error fetching adaptive summary:', error);
+    res.status(500).json({
+      error: 'Failed to fetch adaptive summary',
       details: String((error as any)?.message || error),
     });
   }

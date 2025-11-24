@@ -292,6 +292,8 @@ export const api = {
     (await client.post('/api/market-health', { symbol })).data,
   getMarketHealthDecisions: async (symbol: string, limit?: number) =>
     (await client.post('/api/market-health/decisions', { symbol, limit })).data,
+  getAdaptiveSummary: async (symbol: string, lookbackDays?: number) =>
+    (await client.post('/api/market-health/adaptive-summary', { symbol, lookbackDays })).data,
   
   // Strategy Performance endpoints
   getStrategyPerformanceSummary: async (days: number) =>

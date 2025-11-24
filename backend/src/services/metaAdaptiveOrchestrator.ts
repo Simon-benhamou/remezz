@@ -49,6 +49,7 @@ import { applyCorrelationConstraints } from './correlationManager.js';
 import { getEntryTimingAgent } from '../agent/subagents/entryTimingAgent.js';
 import { getExitStrategyAgent } from '../agent/subagents/exitStrategyAgent.js';
 import { getSubagentTuning } from './subagentLearning.js';
+import { evaluateAdaptiveEntry } from '../learning/adaptiveThresholds.js';
 import { pendingIntentService } from './pendingIntentService.js';
 import { orderReconciliationService } from './orderReconciliationService.js';
 
@@ -1203,11 +1204,36 @@ async function executeEntryTrade(
       // Check capital usage and determine confidence threshold
       integrationLogger.info(`Capital usage | total=$${capitalMetrics.totalCapital.toFixed(0)} used=$${capitalMetrics.usedCapital.toFixed(0)} free=$${capitalMetrics.freeCapital.toFixed(0)} ratio=${(capitalMetrics.usageRatio * 100).toFixed(1)}% maxPos=${capitalMetrics.maxPositions} minConf=${capitalMetrics.minConfidenceRequired}`);
       
+      // 🧠 ADAPTIVE LEARNING: Use historical performance to determine thresholds
+      const volumeRatio = Number((tech as any).volumeRatio || 1.0);
+      const volumeUsd = Number((tech as any).volumeUsd24h || 10_000_000);
+      const trendQuality = marketQualitySnapshot.trendQuality || 'acceptable';
+      
+      const adaptiveEval = await evaluateAdaptiveEntry({
+        symbol: session.symbol,
+        compatibilityScore: marketQualitySnapshot.score,
+        predictorConfidence: predictorInsight?.confidence || signal.confidence,
+        atrPct,
+        volumeRatio,
+        volumeUsd,
+        trendQuality: trendQuality as any,
+      });
+      
+      // Log adaptive decision
+      integrationLogger.info(`🧠 Adaptive eval | allowed=${adaptiveEval.allowed} minCompat=${adaptiveEval.threshold.recommendedMinCompatibility.toFixed(2)} minPred=${adaptiveEval.threshold.recommendedMinPredictorConf.toFixed(2)} ${adaptiveEval.threshold.reasoning}`);
+      
+      if (adaptiveEval.override) {
+        integrationLogger.info(`✨ ${adaptiveEval.override}`);
+      }
+      
       // 🔥 CRYPTO OPPORTUNITY DETECTION
       // Reduce thresholds for high-conviction setups while maintaining strict risk management
-      let adjustedThreshold = capitalMetrics.minConfidenceRequired;
+      let adjustedThreshold = Math.min(
+        capitalMetrics.minConfidenceRequired,
+        adaptiveEval.threshold.recommendedMinPredictorConf
+      );
+      
       const rsi = tech.rsi14;
-      // atrPct already calculated above for stop distance
       
       // 🚀 VOLATILITY BONUS: High ATR = explosive moves = opportunities (if risk managed properly)
       if (atrPct > 8) {
@@ -1235,9 +1261,12 @@ async function executeEntryTrade(
         integrationLogger.info(`💥 Extreme volatility boost: ATR=${atrPct.toFixed(1)}% → threshold ${originalThreshold.toFixed(3)} → ${adjustedThreshold.toFixed(3)} (-15%)`);
       }
       
-      // Progressive confidence check: reject if below threshold
-      if (signal.confidence < adjustedThreshold) {
-        integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${adjustedThreshold.toFixed(3)} (base=${capitalMetrics.minConfidenceRequired.toFixed(3)}, capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
+      // 🎯 ADAPTIVE OVERRIDE: Allow entry if adaptive learning says so, regardless of other factors
+      const shouldAllowByAdaptive = adaptiveEval.allowed || adaptiveEval.override;
+      
+      // Progressive confidence check: reject if below threshold (unless adaptive override)
+      if (!shouldAllowByAdaptive && signal.confidence < adjustedThreshold) {
+        integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${adjustedThreshold.toFixed(3)} (base=${capitalMetrics.minConfidenceRequired.toFixed(3)}, adaptive=${adaptiveEval.threshold.recommendedMinPredictorConf.toFixed(3)}, capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
         
         await logTradeEvaluation({
           userId: session.userId,
