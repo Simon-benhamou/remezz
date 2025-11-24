@@ -3,7 +3,8 @@
  * Adjusts RSI thresholds based on volume and market conditions
  */
 
-import { getConfig } from '../utils/env.js';
+import { getConfig } from "../../../utils/env.js";
+
 
 const cfg = getConfig();
 
