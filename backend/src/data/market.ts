@@ -11,7 +11,7 @@ import {
   toBinanceSymbolId,
   scheduleBinanceRestFallback,
 } from '../services/binanceWebSocket.js';
-import { fetchBinanceOhlcv } from '../services/binanceRest.js';
+import { fetchBinanceOhlcv, isBinanceRestIpBanned } from '../services/binanceRest.js';
 import { recordMarketFrame, recordRestFallback, setFallbackState } from '../monitor/marketMetrics.js';
 import { evaluateTickerFrame } from './tickerValidation.js';
 
@@ -933,6 +933,15 @@ export async function getOHLCV(
                 normalizedLimit,
                 Math.max(1, cfg.DIAGNOSTICS_BACKFILL_DAYS || 1),
               );
+              
+              // Skip REST backfill if IP is currently banned
+              if (isBinanceRestIpBanned()) {
+                console.warn(`🚫 Binance REST backfill blocked due to IP ban for ${symbol} ${tf}, retry in 10 minutes`);
+                throw Object.assign(
+                  new Error('binance_rest_ip_banned_skip_backfill'),
+                  { skipBackfill: true }
+                );
+              }
               
               // Queue REST backfill to prevent multiple simultaneous requests causing IP ban
               const rest = await queueRestBackfill(async () => {
