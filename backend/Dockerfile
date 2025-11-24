@@ -21,14 +21,22 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Python dependencies for the prediction engine (installed in isolated venv)
+# ⚠️ CRITICAL: Copy python folder BEFORE installing requirements to ensure proper paths
+COPY python ./python
+COPY requirements.txt ./requirements.txt
+
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv ${VIRTUAL_ENV}
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
-COPY requirements.txt ./requirements.txt
+
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Install deps
+# Verify critical packages are installed (fail fast if missing)
+RUN python3 -c "import xgboost; import pandas; import numpy; import sklearn; print('✅ All Python dependencies installed')"
+
+# Install Node.js deps
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 
@@ -42,7 +50,6 @@ COPY tsconfig.json ./
 # App source code (excluding test files via .dockerignore)
 COPY src ./src
 COPY scripts ./scripts
-COPY python ./python
 COPY quantailabs_patch ./quantailabs_patch
 
 # Build the application

@@ -2539,6 +2539,7 @@ export async function processMetaAdaptiveTick(sessionId: string, symbol: string,
       select: {
         id: true,
         symbol: true,
+        currentSymbol: true, // ✅ NEW: Use currentSymbol for active trading
         mode: true,
         startBalanceUsd: true,
         profileJson: true,
@@ -2548,6 +2549,13 @@ export async function processMetaAdaptiveTick(sessionId: string, symbol: string,
 
     if (!session) {
       logger.warn(`[${sessionId}] Session not found in database`);
+      return;
+    }
+
+    // 🛡️ SAFETY: Ensure we have a valid trading symbol
+    const tradingSymbol = session.currentSymbol || session.symbol;
+    if (!tradingSymbol) {
+      logger.error(`[${sessionId}] No currentSymbol or symbol set - cannot process tick`);
       return;
     }
 
@@ -2562,7 +2570,7 @@ export async function processMetaAdaptiveTick(sessionId: string, symbol: string,
     // Meta-adaptive is the default now, so we process all sessions
     const sessionContext: SessionContext = {
       sessionId: session.id,
-      symbol: session.symbol,
+      symbol: tradingSymbol, // ✅ FIXED: Use currentSymbol instead of NULL symbol
       mode: session.mode as 'paper' | 'live',
       profileJson: session.profileJson || {},
       userId: session.userId,

@@ -874,13 +874,14 @@ export async function startEventEngine(){
       try {
         const { STALE_TICK_SEC } = getConfig();
         const now = Date.now();
-        for (const s of await prisma.agentSession.findMany({ where:{ stoppedAt:null }, select:{ id:true, symbol:true } })) {
+        for (const s of await prisma.agentSession.findMany({ where:{ stoppedAt:null }, select:{ id:true, symbol:true, currentSymbol:true } })) {
           const ts = lastTickBySession.get(s.id) || 0;
           if (ts > 0 && (now - ts) > STALE_TICK_SEC * 1000) {
             try {
               const { emitAlert } = await import('../monitor/policy.js');
-              await emitAlert({ sessionId: s.id, symbol: s.symbol, kind:'stale_data', severity:'med', details:{ lastTickSec: Math.round((now-ts)/1000) } });
-              recordOpsEvent({ level: 'warn', source: 'heartbeat', message: 'Stale data detected', sessionId: s.id, symbol: s.symbol, details: { staleSec: Math.round((now - ts)/1000) } });
+              const tradingSymbol = s.currentSymbol || s.symbol;
+              await emitAlert({ sessionId: s.id, symbol: tradingSymbol, kind:'stale_data', severity:'med', details:{ lastTickSec: Math.round((now-ts)/1000) } });
+              recordOpsEvent({ level: 'warn', source: 'heartbeat', message: 'Stale data detected', sessionId: s.id, symbol: tradingSymbol, details: { staleSec: Math.round((now - ts)/1000) } });
               lastTickBySession.set(s.id, now); // avoid spamming; emit at most once per window
             } catch {}
           }

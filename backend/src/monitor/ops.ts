@@ -446,7 +446,7 @@ export async function computeOpsMetrics(opts: { userId?: string; includeAll?: bo
     tradeStats,
     profitableStats,
   ] = await Promise.all([
-    prisma.agentSession.findMany({ where: sessionWhere, select: { id: true, symbol: true, profileJson: true } }),
+    prisma.agentSession.findMany({ where: sessionWhere, select: { id: true, symbol: true, currentSymbol: true, profileJson: true } }),
     prisma.position.count({ where: { qty: { gt: 0 }, ...sessionRelationFilter } }),
     prisma.position.count({
       where: {
