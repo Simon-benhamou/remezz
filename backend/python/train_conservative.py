@@ -19,12 +19,11 @@ try:
     import numpy as np
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import classification_report, confusion_matrix
-    from imblearn.over_sampling import SMOTE
     from xgboost import XGBClassifier
     print("✅ Dépendances importées avec succès")
 except ImportError as e:
     print(f"❌ Erreur d'import: {e}")
-    print("Installation requise: pip install pandas numpy scikit-learn imbalanced-learn xgboost")
+    print("Installation requise: pip install pandas numpy scikit-learn xgboost")
     sys.exit(1)
 
 def calculate_conservative_labels(df, min_movement_pct=0.7, lookforward=3):
