@@ -108,19 +108,19 @@ function detectRangeBound(
   ema100: number
 ): { isRangeBound: boolean; reason: string } {
   
-  // 1. Extreme squeeze: ATR < 0.5% is definitive range-bound
-  if (atrPct < 0.5) {
+  // 1. Extreme squeeze: ATR < 0.35% is definitive range-bound (🎯 FIX: Lowered from 0.5%)
+  if (atrPct < 0.35) {
     return {
       isRangeBound: true,
-      reason: `Extreme squeeze (ATR ${atrPct.toFixed(2)}% < 0.5%) - range-bound`
+      reason: `Extreme squeeze (ATR ${atrPct.toFixed(2)}% < 0.35%) - range-bound`
     };
   }
   
-  // 2. Low ATR: ATR < 0.6% is strong indicator
-  if (atrPct < 0.6) {
+  // 2. Low ATR: ATR < 0.45% is strong indicator (🎯 FIX: Lowered from 0.6%)
+  if (atrPct < 0.45) {
     return {
       isRangeBound: true,
-      reason: `Low volatility (ATR ${atrPct.toFixed(2)}% < 0.6%) - likely range-bound`
+      reason: `Low volatility (ATR ${atrPct.toFixed(2)}% < 0.45%) - likely range-bound`
     };
   }
   
@@ -136,8 +136,8 @@ function detectRangeBound(
     };
   }
   
-  // 4. Borderline case: ATR 0.6-0.8% with compressed EMAs
-  if (atrPct < 0.8 && emaCompressionPct < 3.0) {
+  // 4. Borderline case: ATR 0.45-0.6% with compressed EMAs (🎯 FIX: Adjusted from 0.6-0.8%)
+  if (atrPct < 0.6 && emaCompressionPct < 3.0) {
     return {
       isRangeBound: true,
       reason: `Borderline ATR (${atrPct.toFixed(2)}%) + EMA compression (${emaCompressionPct.toFixed(2)}%) - likely choppy`

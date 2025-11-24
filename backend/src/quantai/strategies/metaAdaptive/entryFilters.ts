@@ -455,9 +455,12 @@ export class EntryFilters {
       }
     } else if (strategyFamily === 'momentum') {
       // Momentum requires strong directional movement (high ADX)
-      minAdx = Math.min(25, minAdx + 4); // Increases from 16 → 20
+      minAdx = Math.min(25, minAdx + 2); // 🎯 FIX: Reduced from +4 to +2 (16 → 18 instead of 20)
+    } else if (strategyFamily === 'trend') {
+      // 🎯 FIX: Trend can start earlier - reduce minimum from 16 to 12
+      minAdx = Math.max(12, minAdx - 4); // Reduces from 16 → 12 for early trend capture
     }
-    // trend/breakout keep base thresholds (16 for tier1/2, 14 for tier3)
+    // breakout keeps base thresholds (16 for tier1/2, 14 for tier3)
 
     const adx = facts.adx;
     const volumeRatioVal = typeof facts.volumeRatio === 'number' && Number.isFinite(facts.volumeRatio)

@@ -1442,9 +1442,9 @@ class MetaAdaptiveStrategyAgent {
 
     const livePythonMetrics = this.pythonPerformance.getMetrics();
     let pythonBoostApplied = false;
-    // 🎯 STRICTER PREDICTOR THRESHOLD (Option C: 85% → 90%)
-    // Require higher confidence before bypassing squeeze gate
-    const PREDICTOR_BYPASS_THRESHOLD = 0.90; // Was 0.85
+    // 🎯 BALANCED PREDICTOR THRESHOLD (75% to trust 95% accuracy model)
+    // Allow bypass at reasonable confidence given predictor's proven accuracy
+    const PREDICTOR_BYPASS_THRESHOLD = 0.75; // 🎯 FIX: Lowered from 0.90 to trust ML model more
     if (
       pythonSignal
       && Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD
@@ -2390,7 +2390,7 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore = 0;
           penaltiesApplied.push(`rebound_block(${reboundSignal.severity})`);
           reasonsAugmented.push(...reboundSignal.reasons);
-        } else if (reboundSignal.probability >= 0.35) {
+        } else if (reboundSignal.probability >= 0.50) {  // 🎯 FIX: Raised from 0.35 to 0.50 to reduce false blocks
           // 🎯 CONTEXTUAL LOGIC: Only block if AGAINST trend or predictor confirms
           const isTrendBearish = context.bearishStack && context.alignmentScore >= 0.7;
           const predictorBias = pythonSignalForItem?.bias;
@@ -2417,9 +2417,9 @@ class MetaAdaptiveStrategyAgent {
             effectiveScore *= 0.8; // Mild 20% penalty (was blocking)
             penaltiesApplied.push('rebound_caution_in_trend');
           }
-        } else if (reboundSignal.probability >= 0.25) {
-          // Low rebound risk (25-35%) - very mild penalty
-          effectiveScore *= 0.85;
+        } else if (reboundSignal.probability >= 0.35) {  // 🎯 FIX: Raised from 0.25 to 0.35 for consistency
+          // Low rebound risk (35-50%) - very mild penalty
+          effectiveScore *= 0.90;  // 🎯 FIX: Reduced penalty from 0.85 to 0.90
           penaltiesApplied.push('rebound_watch');
         }
       }
@@ -2579,8 +2579,8 @@ class MetaAdaptiveStrategyAgent {
       }
       
       // ⚠️ VOLATILITY SQUEEZE PROTECTION
-      // 🎯 BYPASS: If predictor very confident (>85%), trust ML model over volatility concern
-      const predictorVeryConfident = pythonSignal && pythonSignal.confidence >= 0.85;
+      // 🎯 BYPASS: If predictor very confident (>75%), trust ML model over volatility concern
+      const predictorVeryConfident = pythonSignal && pythonSignal.confidence >= 0.75;  // 🎯 FIX: Lowered from 0.85 to 0.75
       const squeezeBypassActive = predictorVeryConfident && squeezeSignal.isSqueezed;
       
       if (squeezeBypassActive && pythonSignal && process.env.UNIT_TEST_MODE !== 'true') {
@@ -2646,7 +2646,7 @@ class MetaAdaptiveStrategyAgent {
       // 🔍 DIAGNOSTIC: Log conflict impact
       const scoreBeforeConflict = effectiveScore;
       if (context.conflict && item.family !== 'mean_reversion') {
-        effectiveScore *= 0.45;
+        effectiveScore *= 0.80;  // 🎯 FIX: Reduced from 0.45 (55% penalty) to 0.80 (20% penalty)
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
         
         if (process.env.UNIT_TEST_MODE !== 'true' && scoreBeforeConflict >= 0.25) {
