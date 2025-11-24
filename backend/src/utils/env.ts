@@ -69,8 +69,18 @@ export type Cfg = {
   // Entry filters (optional)
   ENTRY_SHORT_MIN_ADX: number;
   ENTRY_SHORT_MIN_RSI: number;
+  ENTRY_SHORT_MIN_RSI_NORMAL: number;
+  ENTRY_SHORT_MIN_RSI_HIGH_VOLUME: number;
+  ENTRY_SHORT_MIN_RSI_EXTREME_VOLUME: number;
   ENTRY_LONG_MIN_ADX: number;
   ENTRY_LONG_MAX_RSI: number;
+  // Dynamic RSI limits
+  ENTRY_LONG_MAX_RSI_NORMAL: number;
+  ENTRY_LONG_MAX_RSI_HIGH_VOLUME: number;
+  ENTRY_LONG_MAX_RSI_EXTREME_VOLUME: number;
+  RSI_VOLUME_THRESHOLD_HIGH: number;
+  RSI_VOLUME_THRESHOLD_EXTREME: number;
+  USE_DYNAMIC_RSI_LIMITS: boolean;
   // Market data validation thresholds
   WS_MAX_TIMESTAMP_DRIFT_MS: number;   // reject WS frames if |ts_recv - ts_frame| exceeds this
   REST_MAX_TIMESTAMP_DRIFT_MS: number; // reject REST frames if |ts_recv - ts_frame| exceeds this
@@ -476,8 +486,18 @@ export function getConfig(): Cfg {
     // Slightly more permissive by default to avoid idle agents on moderate-trend days
     ENTRY_SHORT_MIN_ADX: Number(e.ENTRY_SHORT_MIN_ADX || "6"),
     ENTRY_SHORT_MIN_RSI: Number(e.ENTRY_SHORT_MIN_RSI || "45"),
+    ENTRY_SHORT_MIN_RSI_NORMAL: Number(e.ENTRY_SHORT_MIN_RSI_NORMAL || "45"),
+    ENTRY_SHORT_MIN_RSI_HIGH_VOLUME: Number(e.ENTRY_SHORT_MIN_RSI_HIGH_VOLUME || "15"),
+    ENTRY_SHORT_MIN_RSI_EXTREME_VOLUME: Number(e.ENTRY_SHORT_MIN_RSI_EXTREME_VOLUME || "5"),
     ENTRY_LONG_MIN_ADX: Number(e.ENTRY_LONG_MIN_ADX || "4"),
     ENTRY_LONG_MAX_RSI: Number(e.ENTRY_LONG_MAX_RSI || "65"),
+    // Dynamic RSI limits
+    ENTRY_LONG_MAX_RSI_NORMAL: Number(e.ENTRY_LONG_MAX_RSI_NORMAL || "65"),
+    ENTRY_LONG_MAX_RSI_HIGH_VOLUME: Number(e.ENTRY_LONG_MAX_RSI_HIGH_VOLUME || "85"),
+    ENTRY_LONG_MAX_RSI_EXTREME_VOLUME: Number(e.ENTRY_LONG_MAX_RSI_EXTREME_VOLUME || "95"),
+    RSI_VOLUME_THRESHOLD_HIGH: Number(e.RSI_VOLUME_THRESHOLD_HIGH || "3.0"),
+    RSI_VOLUME_THRESHOLD_EXTREME: Number(e.RSI_VOLUME_THRESHOLD_EXTREME || "5.0"),
+    USE_DYNAMIC_RSI_LIMITS: (e.USE_DYNAMIC_RSI_LIMITS || "true") === "true",
     WS_MAX_TIMESTAMP_DRIFT_MS: Number(e.WS_MAX_TIMESTAMP_DRIFT_MS || "10000"),
     REST_MAX_TIMESTAMP_DRIFT_MS: Number(
       e.REST_MAX_TIMESTAMP_DRIFT_MS ||
