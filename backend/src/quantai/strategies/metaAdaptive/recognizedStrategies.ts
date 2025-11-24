@@ -154,7 +154,7 @@ type EvaluateOptions = {
   volume24hUsd?: number | null;
 };
 
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.45;  // FIX: Align with strategy optimizer config (was 0.65, too restrictive)
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.40;  // FIX: Align with strategy optimizer config (was 0.65, too restrictive)
 const BLOCKED_REASON_LOW_CONFIDENCE = 'low_confidence';
 const BLOCKED_REASON_WEAK_CONTEXT = 'weak_entry_context';
 const BLOCKED_REASON_SHORT_CONF_GUARD = 'short_confidence_guard';
@@ -232,11 +232,11 @@ async function getRegimeAwareThresholds(
   // Default thresholds (fallback if no learned profile)
   const defaults = {
     confidence: CONFIDENCE_THRESHOLD,
-    adx: { trend: 16, breakout: 14, mean: 12, momentum: 18 },
-    atr: { trend: 0.6, breakout: 0.5, mean: 0.4, momentum: 0.6 },
-    eligibility: 0.55,
-    cmf: 0.03,
-    volumeRatio: 0.9,
+    adx: { trend: 14, breakout: 12, mean: 10, momentum: 16 }, // 🎯 RÉACTIF: Réduit de 2 points partout
+    atr: { trend: 0.5, breakout: 0.4, mean: 0.35, momentum: 0.5 }, // 🎯 RÉACTIF: Réduit de ~0.1
+    eligibility: 0.50, // 🎯 RÉACTIF: Réduit de 0.55 à 0.50
+    cmf: 0.02, // 🎯 RÉACTIF: Réduit de 0.03 à 0.02
+    volumeRatio: 0.85, // 🎯 RÉACTIF: Réduit de 0.9 à 0.85
     atrScaling: 0.4, // Scaling factor for realizedVol to intraday ATR%
   };
 
@@ -310,8 +310,8 @@ function computeDynamicConfidenceThreshold(params: {
   const volumeRatio = params.volumeRatio ?? 0;
   
   // Strong confluence allows lower confidence threshold - made more permissive
-  const hasStrongAlignment = alignmentScore > 0.85;  // Lowered from 0.9
-  const hasStrongVolume = volumeRatio > 1.8;          // Lowered from 2.0
+  const hasStrongAlignment = alignmentScore > 0.80;  // Lowered from 0.9
+  const hasStrongVolume = volumeRatio > 1.5;          // Lowered from 2.0
   
   if (hasStrongAlignment && hasStrongVolume) {
     // Both factors present - use lowest threshold
@@ -726,13 +726,13 @@ function computeAdxComponent(
 ): { score: number; reason: string } {
   const family = getStrategyFamilyFromId(id);
   
-  // 🎯 ENHANCED MOMENTUM REQUIREMENTS
-  // Require higher ADX for directional strategies to avoid choppy markets
+  // 🎯 RÉACTIF: Seuils ADX réduits pour capturer plus d'opportunités sans sacrifier la qualité
+  // Les filtres de volatilité (ATR) et de volume (CMF) protègent contre les faux signaux
   const minAdxByStrategy = regimeThresholds?.adx || {
-    trend: 18,     // Was 16, now 18 - need clear trend
-    breakout: 16,  // Was 14, now 16 - need momentum for breakout
-    mean: 12,      // Keep 12 for mean reversion (works in range)
-    momentum: 20,  // Was 18, now 20 - highest requirement for momentum
+    trend: 14,     // 🎯 RÉACTIF: Réduit de 18 à 14 - permet trends modérés
+    breakout: 12,  // 🎯 RÉACTIF: Réduit de 16 à 12 - permet breakouts précoces
+    mean: 10,      // 🎯 RÉACTIF: Réduit de 12 à 10 - mean reversion fonctionne en range calme
+    momentum: 16,  // 🎯 RÉACTIF: Réduit de 20 à 16 - équilibre réactivité/qualité
   };
   
   const minAdx = minAdxByStrategy[family];
@@ -820,7 +820,7 @@ function computeFlowComponent(
     } else if (cmf < -0.05 && ratio >= 1.0) {
       volumeConfirmation = 1.0; // Normal selling
     } else if (cmf > 0) {
-      volumeConfirmation = 0.3; // Penalize positive CMF on shorts
+      volumeConfirmation = 0.6; // 🎯 RÉACTIF: Réduit pénalité de 0.3 à 0.6 (CMF positif ok parfois en crypto)
     } else {
       volumeConfirmation = 0.7; // Weak selling
     }
@@ -834,7 +834,7 @@ function computeFlowComponent(
     } else if (cmf > 0.05 && ratio >= 1.0) {
       volumeConfirmation = 1.0; // Normal buying
     } else if (cmf < 0) {
-      volumeConfirmation = 0.3; // Penalize negative CMF on longs
+      volumeConfirmation = 0.6; // 🎯 RÉACTIF: Réduit pénalité de 0.3 à 0.6 (symétrique avec shorts)
     } else {
       volumeConfirmation = 0.7; // Weak buying
     }
