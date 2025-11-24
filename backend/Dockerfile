@@ -37,7 +37,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN python3 -c "import xgboost; import pandas; import numpy; import sklearn; print('✅ All Python dependencies installed')"
 
 # 🤖 TRAIN PREDICTOR MODEL during build
-# This generates xgboost_model_conservative.json (205MB) which is too large for git
+# Copy training data (CSV files from ccxt_cache)
+COPY data/ccxt_cache/*.csv ./data/ccxt_cache/
+# Copy training script
 COPY python/train_conservative.py ./python/
 RUN echo "🤖 Training XGBoost predictor model..." && \
     cd python && \

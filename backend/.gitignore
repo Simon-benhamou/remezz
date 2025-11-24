@@ -40,7 +40,8 @@ data/ccxt_cache/*.tmp
 data/ccxt_cache/*.pkl
 data/ccxt_cache/*.parquet
 data/ccxt_cache/nonexistent_*
-data/ccxt_cache/*.csv
+# Keep CSV files for model training
+# data/ccxt_cache/*.csv
 
 # Multi-agent test output (changes on each run)
 multi-agent-pool-test-results.json
