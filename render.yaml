@@ -4,7 +4,8 @@ services:
     env: node
     region: frankfurt
     plan: starter
-    buildCommand: cd backend && npm ci && npm run build
+    buildCommand: |
+      cd backend && npm ci && npm run build && chmod +x setup-predictor.sh && ./setup-predictor.sh
     startCommand: cd backend && node dist/src/server.js
     envVars:
       - key: NODE_ENV
