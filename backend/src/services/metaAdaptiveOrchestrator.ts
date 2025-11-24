@@ -1207,7 +1207,9 @@ async function executeEntryTrade(
       // 🧠 ADAPTIVE LEARNING: Use historical performance to determine thresholds
       const volumeRatio = Number((tech as any).volumeRatio || 1.0);
       const volumeUsd = Number((tech as any).volumeUsd24h || 10_000_000);
-      const trendQuality = compatibility.trendQuality || 'acceptable';
+      // Derive trend quality from market quality score
+      const trendQuality = marketQualitySnapshot.score >= 0.70 ? 'good' : 
+                           marketQualitySnapshot.score >= 0.50 ? 'acceptable' : 'poor';
       
       const adaptiveEval = await evaluateAdaptiveEntry({
         symbol: session.symbol,

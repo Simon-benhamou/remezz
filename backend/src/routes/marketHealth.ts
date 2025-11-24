@@ -52,7 +52,7 @@ router.post('/', async (req, res) => {
     const compatibility = evaluateStrategyCompatibility(cryptoInfo, tech);
     
     // 3. Detect market regime
-    const regime = detectMarketRegime({ast) * 100;
+    const atrPct = (tech.atr14 / tech.last) * 100;
     const regime = detectMarketRegime({
       snap: tech,
       atr15mPct: atrPct,
