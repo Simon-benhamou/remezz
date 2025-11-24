@@ -38,9 +38,10 @@ RUN python3 -c "import xgboost; import pandas; import numpy; import sklearn; pri
 
 # 🤖 CRITICAL: TRAIN PREDICTOR MODEL during build (modèle non versionné git)
 # Le modèle fait 350-450MB et DOIT être généré pendant le build Docker
-# Copy training data (CSV files from ccxt_cache)
+# Copy training data (CSV files from ccxt_cache) - use COPY with wildcard to avoid failure
 RUN mkdir -p ./data/ccxt_cache
-COPY data/ccxt_cache/*.csv ./data/ccxt_cache/ 2>/dev/null || echo "⚠️ No CSV files in local cache"
+# Note: COPY with wildcard pattern that might not match any files needs special handling
+COPY --chown=root:root data/ccxt_cache/ ./data/ccxt_cache/ || true
 
 # Train the model (conservative version with 70%+ target)
 RUN echo "🤖 Training XGBoost predictor model (this generates ~450MB file)..." && \
