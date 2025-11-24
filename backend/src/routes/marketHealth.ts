@@ -52,7 +52,7 @@ router.post('/', async (req, res) => {
     const compatibility = evaluateStrategyCompatibility(cryptoInfo, tech);
     
     // 3. Detect market regime
-    const atrPct = (tech.atr14 / tech.last) * 100;
+    const regime = detectMarketRegime({ast) * 100;
     const regime = detectMarketRegime({
       snap: tech,
       atr15mPct: atrPct,
@@ -81,14 +81,13 @@ router.post('/', async (req, res) => {
     const acceptedCount = recentAttempts.filter(t => t.decision === 'order_placed').length;
     
     // 5. 🧠 ADAPTIVE EVALUATION: Learn from historical performance
-    const latestDecision = await prisma.aiDecision.findFirst({
+    const latestDecision = await prisma.predictorDecision.findFirst({
       where: { symbol },
       orderBy: { createdAt: 'desc' },
       select: { confidence: true },
     });
     
     const predictorConfidence = latestDecision?.confidence || 0.5;
-    const atrPct = Number((tech as any).atrPct || 1.0);
     const volumeRatio = Number((tech as any).volumeRatio || 1.0);
     
     const adaptiveEval = await evaluateAdaptiveEntry({

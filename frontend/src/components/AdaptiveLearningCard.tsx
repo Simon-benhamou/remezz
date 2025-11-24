@@ -54,11 +54,11 @@ export default function AdaptiveLearningCard({
     }
   }, [symbol, lookbackDays]);
 
-  const getRecommendationColor = (recommendation: string) => {
+  const getRecommendationColor = (recommendation: string): 'success' | 'info' | 'warning' | 'error' => {
     if (recommendation.includes('✅')) return 'success';
     if (recommendation.includes('⚠️')) return 'warning';
     if (recommendation.includes('❌')) return 'error';
-    return 'default';
+    return 'info';
   };
 
   const getWinRateColor = (winRate: number) => {
