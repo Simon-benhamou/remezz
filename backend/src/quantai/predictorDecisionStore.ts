@@ -6,6 +6,15 @@ import { prisma } from '../db/client.js';
 
 // In-memory cache of last decision per symbol
 const lastDecisionCache = new Map<string, string>();
+// Track last confidence to detect significant changes
+const lastConfidenceCache = new Map<string, number>();
+// Track last update timestamp to force periodic updates
+const lastUpdateTimestamp = new Map<string, number>();
+
+// Force update every 30 minutes even if no change
+const FORCE_UPDATE_INTERVAL_MS = 30 * 60 * 1000;
+// Store if confidence changes by more than this threshold
+const CONFIDENCE_CHANGE_THRESHOLD = 0.10; // 10%
 
 export interface PredictorDecisionData {
   symbol: string;
@@ -20,18 +29,33 @@ export interface PredictorDecisionData {
 
 /**
  * Store predictor decision ONLY if it has changed from previous
+ * Also stores if confidence changes significantly or after timeout
  * Returns true if decision was stored, false if skipped
  */
 export async function storePredictorDecisionIfChanged(data: PredictorDecisionData): Promise<boolean> {
-  const { symbol, decision } = data;
+  const { symbol, decision, confidence } = data;
   
-  // Get last decision for this symbol
+  // Get last decision and confidence for this symbol
   const lastDecision = lastDecisionCache.get(symbol);
+  const lastConfidence = lastConfidenceCache.get(symbol) ?? 0;
+  const lastUpdate = lastUpdateTimestamp.get(symbol) ?? 0;
+  const now = Date.now();
   
-  // Skip if decision unchanged
-  if (lastDecision === decision) {
+  // Check if we should store this decision
+  const decisionChanged = lastDecision !== decision;
+  const confidenceChanged = Math.abs(confidence - lastConfidence) >= CONFIDENCE_CHANGE_THRESHOLD;
+  const forceUpdate = (now - lastUpdate) >= FORCE_UPDATE_INTERVAL_MS;
+  
+  // Skip if nothing significant changed
+  if (!decisionChanged && !confidenceChanged && !forceUpdate) {
     return false;
   }
+  
+  // Determine update reason
+  let updateReason = '';
+  if (decisionChanged) updateReason = 'decision_changed';
+  else if (confidenceChanged) updateReason = 'confidence_changed';
+  else if (forceUpdate) updateReason = 'periodic_update';
   
   // Decision changed - store it
   try {
@@ -49,14 +73,20 @@ export async function storePredictorDecisionIfChanged(data: PredictorDecisionDat
       },
     });
     
-    // Update cache
+    // Update caches
     lastDecisionCache.set(symbol, decision);
+    lastConfidenceCache.set(symbol, confidence);
+    lastUpdateTimestamp.set(symbol, now);
     
     const transition = lastDecision 
       ? `${lastDecision} → ${decision}` 
       : `initial: ${decision}`;
     
-    console.log(`📊 [PredictorDecision] ${symbol}: ${transition} (conf=${(data.confidence * 100).toFixed(1)}%)`);
+    const confChange = lastConfidence 
+      ? ` (${(lastConfidence * 100).toFixed(1)}% → ${(confidence * 100).toFixed(1)}%)`
+      : ` (${(confidence * 100).toFixed(1)}%)`;
+    
+    console.log(`📊 [PredictorDecision] ${symbol}: ${transition}${confChange} [${updateReason}]`);
     
     return true;
   } catch (error) {
@@ -133,6 +163,8 @@ export async function initializePredictorDecisionCache() {
       
       if (last) {
         lastDecisionCache.set(symbol, last.decision);
+        lastConfidenceCache.set(symbol, last.confidence);
+        lastUpdateTimestamp.set(symbol, last.createdAt.getTime());
       }
     }
     
