@@ -531,22 +531,22 @@ function MarketHealthDashboard({ symbol }: Props) {
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <FireOutlined />
-            Strategy Decisions (Last 30)
+            Trade Pipeline (Last 30)
             <Badge
               count={decisions.stats.accepted}
               style={{ backgroundColor: '#52c41a', marginLeft: 8 }}
-              title="Accepted"
+              title="Order Placed"
             />
             <Badge
               count={decisions.stats.rejected}
               style={{ backgroundColor: '#f5222d' }}
-              title="Rejected"
+              title="Blocked"
             />
           </div>
         }
         extra={
           <span style={{ fontSize: 12 }}>
-            Acceptance Rate: <strong>{decisions.stats.acceptanceRate}</strong>
+            Success Rate: <strong>{decisions.stats.acceptanceRate}</strong>
           </span>
         }
       >

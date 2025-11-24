@@ -1270,20 +1270,26 @@ async function executeEntryTrade(
       if (!shouldAllowByAdaptive && signal.confidence < adjustedThreshold) {
         integrationLogger.warn(`⚠️ Trade rejected: confidence ${signal.confidence.toFixed(3)} below threshold ${adjustedThreshold.toFixed(3)} (base=${capitalMetrics.minConfidenceRequired.toFixed(3)}, adaptive=${adaptiveEval.threshold.recommendedMinPredictorConf.toFixed(3)}, capital usage: ${(capitalMetrics.usageRatio * 100).toFixed(1)}%)`);
         
+        // 🔴 LOG THE REAL REJECTION (overrides the "filter_passed" logged by strategy)
         await logTradeEvaluation({
           userId: session.userId,
           symbol: session.symbol,
-          decision: 'order_blocked_capital',
-          blockedReason: `confidence ${signal.confidence.toFixed(3)} < required ${adjustedThreshold.toFixed(3)} (base ${capitalMetrics.minConfidenceRequired.toFixed(3)}, capital ${(capitalMetrics.usageRatio * 100).toFixed(1)}% used, RSI=${rsi.toFixed(1)})`,
+          decision: 'filter_blocked', // Changed from order_blocked_capital to filter_blocked
+          blockedReason: `Adaptive threshold: confidence ${signal.confidence.toFixed(3)} < required ${adjustedThreshold.toFixed(3)} (${adaptiveEval.threshold.reasoning})`,
           confidenceScore: signal.confidence,
           inputMetrics: {
             ...buildSupportInputMetrics(),
             capitalUsageRatio: capitalMetrics.usageRatio,
             minConfidenceRequired: capitalMetrics.minConfidenceRequired,
             adjustedThreshold,
+            adaptiveMinPredictor: adaptiveEval.threshold.recommendedMinPredictorConf,
+            adaptiveMinCompat: adaptiveEval.threshold.recommendedMinCompatibility,
+            adaptiveReasoning: adaptiveEval.threshold.reasoning,
             rsi,
             atrPct,
           },
+          strategyFamily: signal.id.split('_')[0], // Extract family from strategy id
+          strategyId: signal.id,
         });
         
         return;

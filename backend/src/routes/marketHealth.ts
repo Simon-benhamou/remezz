@@ -241,13 +241,39 @@ router.post('/decisions', async (req, res) => {
     
     const limit = Math.min(Number(reqLimit) || 50, 200);
     
+    // Get all decisions, but group by timestamp to show only final decision
     const decisions = await prisma.tradeEvaluation.findMany({
       where: { symbol },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: limit * 2, // Get more to account for duplicates
     });
     
-    const formatted = decisions.map(d => {
+    // Deduplicate: For decisions within 2 seconds, keep the LAST one (most complete)
+    const deduplicated: any[] = [];
+    const seenTimestamps = new Map<number, any>();
+    
+    for (const d of decisions) {
+      const timestampKey = Math.floor(d.createdAt.getTime() / 2000); // 2-second buckets
+      
+      const existing = seenTimestamps.get(timestampKey);
+      if (!existing) {
+        seenTimestamps.set(timestampKey, d);
+        deduplicated.push(d);
+      } else {
+        // Keep the one that's NOT filter_passed (more informative)
+        if (existing.decision === 'filter_passed' && d.decision !== 'filter_passed') {
+          const idx = deduplicated.indexOf(existing);
+          if (idx >= 0) {
+            deduplicated[idx] = d;
+            seenTimestamps.set(timestampKey, d);
+          }
+        }
+      }
+    }
+    
+    const finalDecisions = deduplicated.slice(0, limit);
+    
+    const formatted = finalDecisions.map(d => {
       // TradeEvaluation has inputMetrics, regimeContext, but no metadata field
       const inputMetrics = (d.inputMetrics as any) || {};
       const regimeContext = (d.regimeContext as any) || {};
