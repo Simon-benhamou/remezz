@@ -3876,16 +3876,19 @@ export async function initializeIntelligentAgent(sessionId: string, preset?: Int
     
     console.log(`🔄 Updating session ${sessionId} with symbol: ${bestOpportunity.symbol}`);
     
-    // Try direct SQL to update both symbol and currentSymbol
+    // Update both symbol and currentSymbol using Prisma
     try {
-      await prisma.$executeRaw`
-        UPDATE "AgentSession" 
-        SET "symbol" = ${bestOpportunity.symbol}, "currentSymbol" = ${bestOpportunity.symbol}, "lastSymbolSwitchAt" = NOW()
-        WHERE id = ${sessionId}
-      `;
-      console.log(`✅ symbol and currentSymbol updated via SQL to: ${bestOpportunity.symbol}`);
+      await prisma.agentSession.update({
+        where: { id: sessionId },
+        data: {
+          symbol: bestOpportunity.symbol,
+          currentSymbol: bestOpportunity.symbol, // ✅ Use Prisma instead of raw SQL
+          lastSymbolSwitchAt: new Date(),
+        },
+      });
+      console.log(`✅ symbol and currentSymbol updated to: ${bestOpportunity.symbol}`);
     } catch (error) {
-      console.error(`❌ SQL update failed:`, error);
+      console.error(`❌ Prisma update failed:`, error);
     }
     
     await mergeSessionProfileJson(sessionId, {

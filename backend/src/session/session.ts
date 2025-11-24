@@ -11,6 +11,7 @@ export async function startSession(
   const s = await prisma.agentSession.create({
     data: {
       symbol,
+      currentSymbol: symbol, // ✅ Initialize currentSymbol with symbol
       mode,
       startBalanceUsd,
       profileJson: profile || undefined,

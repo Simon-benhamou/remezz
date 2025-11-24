@@ -233,7 +233,14 @@ export function startWSHub(wss: WebSocketServer) {
           if (!sessionId) return send(ws, { type: 'error', data: 'sessionId_required' });
           const s = await prisma.agentSession.findUnique({ where: { id: sessionId } });
           if (!s) return send(ws, { type: 'error', data: 'no_session' });
-          const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
+          const upd = await prisma.agentSession.update({ 
+            where: { id: s.id }, 
+            data: { 
+              symbol,
+              currentSymbol: symbol, // ✅ Keep currentSymbol in sync
+              lastSymbolSwitchAt: new Date(),
+            } 
+          });
           state.symbol = upd.symbol; state.sessionId = upd.id;
           broadcast('session', upd, upd.symbol, upd.id);
           return;

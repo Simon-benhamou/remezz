@@ -944,7 +944,14 @@ router.post('/set-symbol', authenticateUser, async (req: AuthenticatedRequest, r
     }
   }
 
-  const upd = await prisma.agentSession.update({ where: { id: s.id }, data: { symbol } });
+  const upd = await prisma.agentSession.update({ 
+    where: { id: s.id }, 
+    data: { 
+      symbol,
+      currentSymbol: symbol, // ✅ Keep currentSymbol in sync
+      lastSymbolSwitchAt: new Date(),
+    } 
+  });
   // Ensure personality profile exists for new symbol after symbol change
   try {
     const profile = await getPersonalityProfile(symbol);
