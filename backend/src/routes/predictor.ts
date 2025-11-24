@@ -219,4 +219,67 @@ router.get('/status', authenticateUser, async (req: AuthenticatedRequest, res) =
   }
 });
 
+// GET /api/predictor/model-status - Check if model files exist and are valid
+router.get('/model-status', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { readFileSync, existsSync } = await import('fs');
+    const { join, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    
+    const moduleDirname = dirname(fileURLToPath(import.meta.url));
+    const projectRoot = dirname(dirname(moduleDirname));
+    const pythonDir = join(projectRoot, 'python');
+    
+    const modelPath = join(pythonDir, 'xgboost_model_conservative.json');
+    const featurePath = join(pythonDir, 'feature_order_conservative.json');
+    const metadataPath = join(pythonDir, 'predictor_metadata_conservative.json');
+    
+    const modelExists = existsSync(modelPath);
+    const featureExists = existsSync(featurePath);
+    const metadataExists = existsSync(metadataPath);
+    
+    let metadata = null;
+    let featureCount = 0;
+    let modelSize = 0;
+    
+    if (metadataExists) {
+      const metadataContent = readFileSync(metadataPath, 'utf-8');
+      metadata = JSON.parse(metadataContent);
+    }
+    
+    if (featureExists) {
+      const featuresContent = readFileSync(featurePath, 'utf-8');
+      const features = JSON.parse(featuresContent);
+      featureCount = Array.isArray(features) ? features.length : 0;
+    }
+    
+    if (modelExists) {
+      const { statSync } = await import('fs');
+      const stats = statSync(modelPath);
+      modelSize = stats.size;
+    }
+    
+    res.json({
+      modelExists,
+      featureExists,
+      metadataExists,
+      allFilesPresent: modelExists && featureExists && metadataExists,
+      modelSizeMB: modelSize > 0 ? (modelSize / 1024 / 1024).toFixed(2) : 0,
+      featureCount,
+      metadata,
+      paths: {
+        model: modelPath,
+        features: featurePath,
+        metadata: metadataPath,
+      },
+    });
+  } catch (error) {
+    console.error('Error checking model status:', error);
+    res.status(500).json({
+      error: 'Failed to check model status',
+      details: String((error as any)?.message || error),
+    });
+  }
+});
+
 export default router;
