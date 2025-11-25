@@ -1222,8 +1222,10 @@ class MetaAdaptiveStrategyAgent {
     //    - volumeRatio >= 1.5 (was 1.0) for real breakout momentum
     //    - ADX >= 25 for trend confirmation
     //    - CMF confirmation (flow aligned with breakout direction)
+    //    - RSI not at extremes (30-70 range) for healthy breakout
     const cmfConfirmsBreakout = ((snap as any)?.trend ?? 0) > 0 ? cmf > 0 : cmf < 0;
-    const isSqueezing = atr15mPct < 1.5 && volumeRatio >= 1.5 && adx >= 25 && cmfConfirmsBreakout;
+    const rsiHealthyForSqueeze = rsi >= 30 && rsi <= 70;
+    const isSqueezing = atr15mPct < 1.5 && volumeRatio >= 1.5 && adx >= 25 && cmfConfirmsBreakout && rsiHealthyForSqueeze;
     const squeezeBoost = isSqueezing ? 0.20 : 0;
     
     // ⚠️ BACKTEST FIX: Require minimum volume confirmation for breakout
@@ -2373,6 +2375,39 @@ class MetaAdaptiveStrategyAgent {
       if (item.family === 'momentum' && volumeRatio < 1.2) {
         effectiveScore *= 0.95; // Very soft penalty
         penaltiesApplied.push('volume_low');
+      }
+      
+      // 🎯 BACKTEST-PROVEN RSI FILTER (Nov 2025):
+      // LONGS with volume surge at overbought RSI have 24% WR - heavy penalty
+      // SHORTS with volume surge at oversold RSI have 58% WR - this works!
+      const rsiForFilter = Number((snap as any)?.rsi14 ?? 50);
+      const volumeRatioForFilter = Number((snap as any)?.volumeRatio ?? 1);
+      const isVolumeSurge = volumeRatioForFilter >= 2.0;
+      
+      if (isVolumeSurge) {
+        if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
+          // LONG with volume surge at overbought RSI = BAD (24% WR)
+          if (rsiForFilter >= 65) {
+            effectiveScore *= 0.60; // Heavy penalty - don't chase pumps
+            penaltiesApplied.push('rsi_overbought_long_volume_surge');
+            reasonsAugmented.push(`rsi=${rsiForFilter.toFixed(1)}_overbought_avoid`);
+          } else if (rsiForFilter >= 58) {
+            effectiveScore *= 0.82; // Moderate penalty
+            penaltiesApplied.push('rsi_high_long_caution');
+          }
+          // RSI < 58 = good entry zone for longs
+        }
+        if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
+          // SHORT with volume surge at oversold RSI = GOOD (58% WR in backtest)
+          if (rsiForFilter <= 30) {
+            // Oversold + volume surge often = exhaustion, good for shorts
+            effectiveScore = Math.min(1, effectiveScore * 1.12);
+            reasonsAugmented.push(`rsi=${rsiForFilter.toFixed(1)}_oversold_short_boost`);
+          } else if (rsiForFilter >= 35 && rsiForFilter <= 65) {
+            // Neutral RSI with volume surge = standard confidence
+            // Keep as-is
+          }
+        }
       }
 
       const guardrailBase = this.guardrailReason(input.symbol, item.family);
