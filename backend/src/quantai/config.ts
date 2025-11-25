@@ -521,7 +521,7 @@ const DEFAULT_CONFIG: QuantAIConfig = {
       cmfNegative: false,  // CRYPTO: Don't exit on CMF negative (too noisy in crypto)
       tightenProfitR: 0.4,  // CRYPTO: Trail at 0.4R (was 0.1R) - don't trail too early
       cutLossR: 0.5,  // CRYPTO: Cut loss at -0.5R (was 0.2R) - let positions breathe
-      minHoldMinutes: 12,  // CRYPTO: 12 minutes minimum (was 3) - wait for moves to develop
+      minHoldMinutes: 3,  // FIX #6b: Reduced from 12 to 3 minutes - crypto moves fast, exit fast on bad trades
     },
     maxHoldingMin: undefined,  // CRYPTO: Disabled - let trailing stop decide exit, not hard time cap
     reentryCooldownMin: 25,

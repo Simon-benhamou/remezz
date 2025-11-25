@@ -282,4 +282,51 @@ router.get('/model-status', authenticateUser, async (req: AuthenticatedRequest, 
   }
 });
 
+// POST /api/predictor/test - Test predictor with custom features (admin/testing)
+router.post('/test', authenticateUser, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { features } = req.body;
+    
+    if (!features || typeof features !== 'object') {
+      return res.status(400).json({ 
+        error: 'Features object is required',
+        example: {
+          features: {
+            close: 100,
+            ema9: 100,
+            ema20: 100,
+            rsi14: 50,
+            macd: 0,
+            atr14: 1,
+            volumeRatio: 1
+          }
+        }
+      });
+    }
+
+    const { getPrediction } = await import('../quantai/pythonPredictor.js');
+    const startTime = Date.now();
+    
+    const prediction = await getPrediction(features);
+    const duration = Date.now() - startTime;
+
+    res.json({
+      success: true,
+      prediction,
+      performance: {
+        durationMs: duration,
+        cached: duration < 500,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Predictor test error:', error);
+    res.status(500).json({
+      error: 'Prediction failed',
+      details: String((error as any)?.message || error),
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 export default router;

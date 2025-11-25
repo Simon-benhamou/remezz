@@ -51,11 +51,11 @@ const PYTHON_BOOST_PROB_THRESHOLD = pythonSignalTuning.highConfidenceProb;
 const PYTHON_BOOST_CONF_THRESHOLD = pythonSignalTuning.highConfidenceConfidence;
 const PYTHON_RISK_BOOST_MULTIPLIER = pythonSignalTuning.highConfidenceRiskBoost;
 const PYTHON_BOOST_MIN_SAMPLES = pythonSignalTuning.minSamplesForBoost;
-// OPTIMIZED: Predictor accuracy 95% - seuils réduits pour accepter plus de signaux
-// Le modèle étant très fiable, on peut être moins strict sur les probabilités
-const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.45);  // 0.58 → 0.45
-const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.45); // 0.52 → 0.45
-const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.20);       // 0.32 → 0.20
+// FIX #6: Predictor as ADVISORY not VETO - lowered thresholds significantly
+// Model is 95% accurate - trust it more, gate less aggressively
+const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.35);  // FIX: 0.45 → 0.35 (more permissive)
+const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.35); // FIX: 0.45 → 0.35 (more permissive)
+const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.15);       // FIX: 0.20 → 0.15 (more permissive)
 const PREDICTOR_GATE_ENABLED = process.env.PREDICTOR_GATE_ENABLED !== 'false'; // Bloque si decision=none
 const MAX_REGISTRATION_SNAPSHOT_AGE_MS = Math.max(
   30_000,
@@ -496,7 +496,7 @@ const GUARDRAIL_CONFIG = {
   minSamples: 6,
   winRateFloor: 0.5,
   expectancyFloor: 0.01,
-  cooldownMs: 6 * 60 * 60 * 1000,
+  cooldownMs: 1 * 60 * 60 * 1000,  // FIX #8b: Reduced from 6 hours to 1 hour - faster recovery from bad trades
 } as const;
 
 function resolveLiquidityTier(volume24hUsd: number | null | undefined): LiquidityTier {
@@ -1315,23 +1315,25 @@ class MetaAdaptiveStrategyAgent {
     const snap = input.snap;
     const price = safeNumber(snap.last, 0);
     
-    // 🛡️ VOLUME SPIKE FILTER (Option C - Stop Hunt Detection)
-    // Block entries during abnormal volume spikes (likely stop hunts)
+    // FIX #5: Volume spike = OPPORTUNITY (momentum breakouts) instead of block
+    // High volume often signals START of big moves, not stop hunts
     const volumeZScoreCheck = safeNumber((snap as any)?.volumeZScore, 0);
     const volumeRatioCheck = safeNumber((snap as any)?.volumeRatio, 1);
+    let volumeSpikeBoost = 1.0;
     if (volumeZScoreCheck > 2.5 && volumeRatioCheck > 2.0) {
+      // BOOST signals instead of blocking - volume confirms momentum
+      volumeSpikeBoost = 1.15; // +15% confidence boost for volume confirmation
       if (process.env.UNIT_TEST_MODE !== 'true') {
         console.log(JSON.stringify({
           level: 'info',
-          event: 'volume_spike_detected',
+          event: 'volume_spike_boost',
           symbol: input.symbol,
           volumeZScore: Number(volumeZScoreCheck.toFixed(2)),
           volumeRatio: Number(volumeRatioCheck.toFixed(2)),
-          reason: 'probable_stop_hunt',
-          decision: 'blocked',
+          boost: volumeSpikeBoost,
+          reason: 'momentum_confirmation',
         }));
       }
-      return { signals: [], selection: null };
     }
     
     const fundamental = input.fundamental ?? null;
@@ -2694,7 +2696,7 @@ class MetaAdaptiveStrategyAgent {
       // 🔍 DIAGNOSTIC: Log conflict impact
       const scoreBeforeConflict = effectiveScore;
       if (context.conflict && item.family !== 'mean_reversion') {
-        effectiveScore *= 0.80;  // 🎯 FIX: Reduced from 0.45 (55% penalty) to 0.80 (20% penalty)
+        effectiveScore *= 0.90;  // FIX #7: Reduced from 0.80 (20% penalty) to 0.90 (10% penalty) - less aggressive
         if (!penaltiesApplied.includes('htf_conflict')) penaltiesApplied.push('htf_conflict');
         
         if (process.env.UNIT_TEST_MODE !== 'true' && scoreBeforeConflict >= 0.25) {

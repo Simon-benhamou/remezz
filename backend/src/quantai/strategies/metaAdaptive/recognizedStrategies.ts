@@ -154,7 +154,7 @@ type EvaluateOptions = {
   volume24hUsd?: number | null;
 };
 
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.40;  // FIX: Align with strategy optimizer config (was 0.65, too restrictive)
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.30;  // FIX #1: Unified lower threshold (was 0.40, still too restrictive)
 const BLOCKED_REASON_LOW_CONFIDENCE = 'low_confidence';
 const BLOCKED_REASON_WEAK_CONTEXT = 'weak_entry_context';
 const BLOCKED_REASON_SHORT_CONF_GUARD = 'short_confidence_guard';
@@ -338,7 +338,7 @@ const MAX_RISK_ATR_MULT = (() => {
 
 export const metaAdaptiveConfidenceThreshold = CONFIDENCE_THRESHOLD;
 
-const ENTRY_ELIGIBILITY_THRESHOLD = 0.5;  // Lower base so confident signals clear the gate more easily
+const ENTRY_ELIGIBILITY_THRESHOLD = 0.40;  // FIX #3: Lowered from 0.50 to reduce gate blocking
 
 function eligibilityReliefFromConfidence(confidence: number | null | undefined): number {
   if (!Number.isFinite(confidence ?? NaN)) return 0;
@@ -890,35 +890,13 @@ function computeEntryEligibility(
   let flowWeight = 0.2;
   
   if (mtfOpposed) {
-    // MTF opposition is a hard blocker - zero out the score
-    mtfWeight = 1.0;
-    adxWeight = 0;
-    atrWeight = 0;
-    flowWeight = 0;
-    const score = 0;
-    const passed = false;
-    const reasons = [mtf.reason, adx.reason, atr.reason, flow.reason];
-    return {
-      score,
-      passed,
-      reasons,
-      components: {
-        mtf: Number(mtf.score.toFixed(4)),
-        adx: Number(adx.score.toFixed(4)),
-        atr: Number(atr.score.toFixed(4)),
-        flow: Number(flow.score.toFixed(4)),
-      },
-      mtfDetails: {
-        consensus: mtf.consensus,
-        matches: mtf.matches,
-        totalFrames: mtf.total,
-      },
-      flowDetails: {
-        cmf: flow.cmf,
-        threshold: flow.threshold,
-        volumeRatio: flow.volumeRatio,
-      },
-    };
+    // FIX #2: MTF opposition is now a SOFT PENALTY (50% reduction) instead of hard block
+    // This allows high-confidence counter-trend setups while still penalizing lack of alignment
+    mtfWeight = 0.50;  // Heavy penalty but not blocking
+    adxWeight = 0.20;
+    atrWeight = 0.15;
+    flowWeight = 0.15;
+    // Continue with weighted calculation instead of returning early
   } else if (mtfAligned) {
     // MTF alignment boosts its importance
     mtfWeight = 0.45;

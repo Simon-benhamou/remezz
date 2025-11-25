@@ -262,18 +262,17 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live', userId
     // Cap at 10 positions maximum to avoid over-diversification
     maxPositions = Math.min(10, Math.max(1, maxPositions));
     
-    // 🎯 CRYPTO OPTIMIZED THRESHOLDS: Base thresholds LOWERED
-    // These are BASE thresholds - will be further adjusted by adaptive system
-    // based on RSI extremes, ADX trend strength, and volatility
-    // 0-55% used: very opportunistic (0.23) - capture breakouts early
-    // 55-75% used: opportunistic (0.28) - still aggressive but selective  
-    // 75%+ used: moderate (0.30) - preserve capital for best setups
-    if (usageRatio < 0.55) {
-      minConfidenceRequired = 0.23;
-    } else if (usageRatio < 0.75) {
-      minConfidenceRequired = 0.28;
+    // FIX #8: ULTRA-AGGRESSIVE THRESHOLDS for maximum opportunity capture
+    // Trust the adaptive learning + predictor to filter bad trades
+    // 0-60% used: very opportunistic (0.18) - capture ALL breakouts
+    // 60-80% used: opportunistic (0.22) - still aggressive
+    // 80%+ used: moderate (0.25) - preserve some capital for best setups
+    if (usageRatio < 0.60) {
+      minConfidenceRequired = 0.18;
+    } else if (usageRatio < 0.80) {
+      minConfidenceRequired = 0.22;
     } else {
-      minConfidenceRequired = 0.30;
+      minConfidenceRequired = 0.25;
     }
   }
   
@@ -916,12 +915,12 @@ async function executeEntryTrade(
     
     if (fullSession) {
       const sessionAgeMs = Date.now() - fullSession.startedAt.getTime();
-      const MIN_SESSION_AGE_MS = 5 * 60 * 1000; // 5 minutes warmup period
+      const MIN_SESSION_AGE_MS = 1 * 60 * 1000; // FIX #4: Reduced from 5 minutes to 1 minute warmup
       
       if (sessionAgeMs < MIN_SESSION_AGE_MS) {
-        const waitMinutes = Math.ceil((MIN_SESSION_AGE_MS - sessionAgeMs) / 60000);
+        const waitSeconds = Math.ceil((MIN_SESSION_AGE_MS - sessionAgeMs) / 1000);
         integrationLogger.info(
-          `Session too young (${Math.floor(sessionAgeMs / 60000)}min) - waiting ${waitMinutes}min before first entry to observe market`,
+          `Session too young (${Math.floor(sessionAgeMs / 1000)}s) - waiting ${waitSeconds}s before first entry`,
           { symbol: session.symbol, sessionAge: sessionAgeMs }
         );
         console.log(`[MetaOrchestrator.executeEntryTrade] SKIP: Session age ${sessionAgeMs}ms < ${MIN_SESSION_AGE_MS}ms`);
