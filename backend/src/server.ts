@@ -9,7 +9,7 @@ import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { configureLogging, createLogger } from "./utils/logger.js";
 import { getConfig } from "./utils/env.js";
-import { authMiddleware } from "./utils/security.js";
+import { authMiddleware, AuthenticatedRequest } from "./utils/security.js";
 import { prisma } from "./db/client.js";
 import { initializeDatabaseConnection, disconnectDatabase } from "./db/connection.js";
 import { getUserExchange } from "./exchange/ccxtClient.js";
