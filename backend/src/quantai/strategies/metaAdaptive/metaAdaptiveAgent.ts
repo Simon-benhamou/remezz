@@ -1189,9 +1189,17 @@ class MetaAdaptiveStrategyAgent {
     const breakoutImpulse = clamp((volumeRatio - 1) / 1.5, 0, 1) * 0.8;
     const breakoutCmf = clamp((cmf + 0.3) / 0.8, 0, 1);
     const breakoutContext = Math.max(context.alignmentScore, 0.5);
+    
+    // 🚀 VOLUME SURGE BOOST: 2.5x+ volume = strong breakout signal
+    const volumeSurgeBoost = volumeRatio >= 2.5 ? 0.25 : volumeRatio >= 2.0 ? 0.15 : 0;
+    
+    // 🔥 SQUEEZE DETECTION: Low ATR% (< 1.2%) with any volume = compression before explosion
+    const isSqueezing = atr15mPct < 1.2 && volumeRatio >= 1.0;
+    const squeezeBoost = isSqueezing ? 0.20 : 0;
+    
     const breakoutWeight = 1.25 + 1.15 + 0.8 + 1 + 1 + 1;
     const scoreBreakout = clamp(
-      (breakoutCompression + breakoutAdx + breakoutVolume + breakoutImpulse + breakoutCmf + breakoutContext) / breakoutWeight,
+      (breakoutCompression + breakoutAdx + breakoutVolume + breakoutImpulse + breakoutCmf + breakoutContext) / breakoutWeight + volumeSurgeBoost + squeezeBoost,
       0,
       1,
     );
@@ -1214,6 +1222,13 @@ class MetaAdaptiveStrategyAgent {
     const momentumCmf = clamp((cmf + 0.2) / 0.6, 0, 1);
     const momentumContext = Math.max(context.alignmentScore, 0.55);
     const momentumSlope = clamp(slope * 1.1, 0, 1);
+    
+    // 🚀 STRONG CMF BOOST: |CMF| > 0.20 = strong institutional flow
+    const strongCmfBoost = Math.abs(cmf) >= 0.20 ? 0.18 : Math.abs(cmf) >= 0.15 ? 0.10 : 0;
+    
+    // 🔥 VOLUME + TREND ALIGNMENT BOOST: High volume WITH trend = confirmation
+    const volumeTrendBoost = volumeRatio >= 2.0 && Math.abs((snap as any)?.trend ?? 0) >= 0.4 ? 0.15 : 0;
+    
     const momentumWeight = 1 + 1 + 1.05 + 1 + 1 + 1 + 1;
     const scoreMomentum = clamp(
       (
@@ -1224,7 +1239,7 @@ class MetaAdaptiveStrategyAgent {
         + momentumCmf
         + momentumContext
         + momentumSlope
-      ) / momentumWeight,
+      ) / momentumWeight + strongCmfBoost + volumeTrendBoost,
       0,
       1,
     );
@@ -1585,7 +1600,7 @@ class MetaAdaptiveStrategyAgent {
     const reversalSignal = detectReversalForLong(snap, change24hPct);
     const squeezeSignal = detectVolatilitySqueeze(snap);
     
-    // � BIG MOVE MODE DETECTION: When daily change > 10%, extreme RSI = opportunity
+    // 🚀 BIG MOVE MODE DETECTION: When daily change > 10%, extreme RSI = opportunity
     const bigMoveSignal = detectBigMoveMode(snap, change24hPct);
     
     // Log big move mode for diagnostics
@@ -1894,11 +1909,31 @@ class MetaAdaptiveStrategyAgent {
         const volumeRatio = Number((snap as any)?.volumeRatio ?? 1);
         const volumeConfirmed = volumeRatio > 0.5; // Au moins 50% du volume moyen
         
+        // � RSI DIVERGENCE DETECTION: RSI slope positive while price falling = bullish divergence
+        const rsiSlope = Number((snap as any)?.rsiSlope ?? 0);
+        const hasBullishDivergence = rsi < 40 && rsiSlope > 1.5;
+        
+        // 🔥 STRONG CMF SIGNAL: Positive CMF = institutional buying
+        const cmfLocal = Number((snap as any)?.cmf20 ?? 0);
+        const strongPositiveCmf = cmfLocal >= 0.15;
+        
+        // 🚀 BULLISH DIVERGENCE AT SUPPORT: Very strong signal
+        if (hasBullishDivergence && (nearSupport || nearEma50) && volumeConfirmed) {
+          effectiveScore = Math.min(1, effectiveScore * 1.30);
+          reasonsAugmented.push('🔥 bullish_divergence_at_support');
+          reasonsAugmented.push(`rsi=${rsi.toFixed(1)}_slope=${rsiSlope.toFixed(1)}`);
+        }
         // 🚀 STRONG BOOST: High probability rebound
-        if (reboundSignal.tradeBias === 'favor_long' && reboundSignal.probability >= 0.6) {
+        else if (reboundSignal.tradeBias === 'favor_long' && reboundSignal.probability >= 0.6) {
           effectiveScore = Math.min(1, effectiveScore * 1.25);
           reasonsAugmented.push('rebound_opportunity');
           reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
+        }
+        // 💰 CMF ACCUMULATION: Strong positive CMF + oversold = smart money buying
+        else if (strongPositiveCmf && rsiOversold && volumeConfirmed) {
+          effectiveScore = Math.min(1, effectiveScore * 1.22);
+          reasonsAugmented.push('cmf_accumulation_signal');
+          reasonsAugmented.push(`cmf=${cmfLocal.toFixed(2)}`);
         }
         // 🎯 SUPPORT BOUNCE BOOST: Prix near support + RSI oversold + volume OK
         else if (reboundSignal.probability >= 0.40 && nearSupport && rsiOversold && volumeConfirmed) {
@@ -1914,7 +1949,7 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore = Math.min(1, effectiveScore * 1.12);
           reasonsAugmented.push(`${emaLevel}_bounce_setup`);
         }
-        // � OPPORTUNITY-FIRST: Reversal = soft penalty, not blocker
+        // 🔻 OPPORTUNITY-FIRST: Reversal = soft penalty, not blocker
         // Crypto can pump further when overbought - let trailing stop handle
         else if (reversalSignal.shouldBlock) {
           // Only on EXTREME reversal (prob >= 0.85 + RSI > 80) - very rare
@@ -1950,11 +1985,31 @@ class MetaAdaptiveStrategyAgent {
         const volumeRatio = Number((snap as any)?.volumeRatio ?? 1);
         const volumeConfirmed = volumeRatio > 0.5; // Au moins 50% du volume moyen
         
+        // � RSI DIVERGENCE DETECTION: RSI slope negative while price rising = bearish divergence
+        const rsiSlope = Number((snap as any)?.rsiSlope ?? 0);
+        const hasBearishDivergence = rsi > 60 && rsiSlope < -1.5;
+        
+        // 🔥 STRONG CMF SIGNAL: Negative CMF = institutional selling
+        const cmfLocal = Number((snap as any)?.cmf20 ?? 0);
+        const strongNegativeCmf = cmfLocal <= -0.15;
+        
+        // 🚀 BEARISH DIVERGENCE AT RESISTANCE: Very strong signal
+        if (hasBearishDivergence && (nearResistance || nearEma50) && volumeConfirmed) {
+          effectiveScore = Math.min(1, effectiveScore * 1.30);
+          reasonsAugmented.push('🔥 bearish_divergence_at_resistance');
+          reasonsAugmented.push(`rsi=${rsi.toFixed(1)}_slope=${rsiSlope.toFixed(1)}`);
+        }
         // 🚀 STRONG BOOST: High probability reversal
-        if (reversalSignal.tradeBias === 'favor_short' && reversalSignal.probability >= 0.6) {
+        else if (reversalSignal.tradeBias === 'favor_short' && reversalSignal.probability >= 0.6) {
           effectiveScore = Math.min(1, effectiveScore * 1.25);
           reasonsAugmented.push('resistance_rejection');
           reasonsAugmented.push(...reversalSignal.reasons.slice(0, 2));
+        }
+        // 💸 CMF DISTRIBUTION: Strong negative CMF + overbought = smart money selling
+        else if (strongNegativeCmf && rsiOverbought && volumeConfirmed) {
+          effectiveScore = Math.min(1, effectiveScore * 1.22);
+          reasonsAugmented.push('cmf_distribution_signal');
+          reasonsAugmented.push(`cmf=${cmfLocal.toFixed(2)}`);
         }
         // 🎯 RESISTANCE REJECTION BOOST: Prix near resistance + RSI overbought + volume OK
         else if (reversalSignal.probability >= 0.40 && nearResistance && rsiOverbought && volumeConfirmed) {
@@ -1970,22 +2025,39 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore = Math.min(1, effectiveScore * 1.12);
           reasonsAugmented.push(`${emaLevel}_rejection_setup`);
         }
-        // � OPPORTUNITY-FIRST: Rebound on shorts = soft penalty only
+        // 🔻 OPPORTUNITY-FIRST: Rebound on shorts = soft penalty only
         // Already handled above with softer logic
       }
       
       // ⚠️ VOLATILITY SQUEEZE = OPPORTUNITY (breakout incoming!)
+      // 🔥 IMPROVED: Also detect moderate squeeze with volume building
       if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'extreme') {
         // Extreme squeeze - BOOST breakout/momentum, caution on others
-        if (item.family === "breakout" || item.family === "momentum") { effectiveScore = Math.min(1, effectiveScore * 1.15); reasonsAugmented.push("squeeze_breakout_setup"); } else { effectiveScore *= 0.85; }
-        penaltiesApplied.push('squeeze_direction_unclear');
+        if (item.family === "breakout" || item.family === "momentum") { 
+          effectiveScore = Math.min(1, effectiveScore * 1.25); // Increased from 1.15
+          reasonsAugmented.push("🔥 extreme_squeeze_breakout_setup"); 
+        } else { 
+          effectiveScore *= 0.85; 
+        }
         reasonsAugmented.push(...squeezeSignal.reasons);
       } else if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'moderate') {
-        effectiveScore *= 0.95; // Very soft penalty
-        penaltiesApplied.push('vol_squeeze');
+        // Moderate squeeze - still favor breakout/momentum
+        if (item.family === "breakout" || item.family === "momentum") {
+          const volRatioLocal = Number((snap as any)?.volumeRatio ?? 1);
+          if (volRatioLocal >= 1.2) {
+            // Volume building during squeeze = breakout imminent
+            effectiveScore = Math.min(1, effectiveScore * 1.18);
+            reasonsAugmented.push("squeeze_with_volume_building");
+          } else {
+            effectiveScore = Math.min(1, effectiveScore * 1.08);
+            reasonsAugmented.push("moderate_squeeze_setup");
+          }
+        } else {
+          effectiveScore *= 0.92; // Very soft penalty for non-breakout
+        }
       }
       
-      // � BIG MOVE MODE: 20%+ daily move with extreme RSI = TREND STRENGTH, not reversal!
+      // 🚀 BIG MOVE MODE: 20%+ daily move with extreme RSI = TREND STRENGTH, not reversal!
       // In crypto, RSI 95 during +20% day = strong pump in progress (long opportunity)
       // RSI 5 during -20% day = strong dump in progress (short opportunity)
       if (bigMoveSignal.isBigMove) {
