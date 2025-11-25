@@ -5,21 +5,15 @@ import UserDropdown from './components/UserDropdown';
 import PortfolioBalanceModal from './components/PortfolioBalanceModal';
 import { useAuth } from './hooks/useAuth';
 import { useDashboard } from './hooks/useDashboard';
-import BacklogPage from './pages/BacklogPage';
 import ExecutionLedgerPageNew from './pages/ExecutionLedgerPageNew';
-import IntelligencePage from './pages/IntelligencePage';
-import LearningInsightsPage from './pages/LearningInsightsPage';
-import PortfolioViewPage from './pages/PortfolioViewPage';
 import LoginPage from './pages/LoginPage';
 import OperationsDashboardPage from './pages/DashboardPageCompact';
 import RegisterPage from './pages/RegisterPage';
-import SessionCockpitPage from './pages/SessionCockpitPage';
 import SessionsPage from './pages/SessionsPage';
 import ReportsPage from './pages/ReportsPage';
-// import MonitorPageRefactored from './pages/MonitorPageRefactored';
-import MonitorPageNew from './pages/MonitorPageNew';
+import SessionCockpitPage from './pages/SessionCockpitPage';
 import { useAppStore } from './store';
-import { Activity, BarChart, Bot, Brain, Lightbulb, ListChecks, Radio, Zap } from 'lucide-react';
+import { Activity, BarChart, Bot, ListChecks, Zap } from 'lucide-react';
 import { api } from './api';
 
 const resolveActiveMenuKey = (pathname: string) => {
@@ -28,10 +22,7 @@ const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/agents')) return '/agents';
   if (pathname.startsWith('/ledger')) return '/ledger';
   if (pathname.startsWith('/reports')) return '/reports';
-  if (pathname.startsWith('/intelligence')) return '/intelligence';
-  if (pathname.startsWith('/learning')) return '/learning';
   if (pathname.startsWith('/portfolio')) return '/portfolio';
-  if (pathname.startsWith('/backlog')) return '/backlog';
   return '/operations';
 };
 
@@ -98,10 +89,7 @@ function AuthenticatedApp() {
     { key: '/agents', label: 'Agents', icon: <Bot /> },
     { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
     { key: '/reports', label: 'Reports', icon: <BarChart /> },
-    { key: '/intelligence', label: 'Intelligence', icon: <Lightbulb /> },
-    { key: '/learning', label: 'Learning', icon: <Brain /> },
     { key: '/portfolio', label: 'Portfolio', icon: <Zap /> },
-    { key: '/backlog', label: 'Feed Info', icon: <Radio /> },
   ];
 
   return (
@@ -283,15 +271,10 @@ function AuthenticatedApp() {
             <Route path='/' element={<Navigate to='/operations' replace />} />
             <Route path='/operations' element={<OperationsDashboardPage />} />
             <Route path='/mission-control' element={<Navigate to='/operations' replace />} />
-            <Route path='/agents/:sessionId' element={<MonitorPageNew />} />
-            {/* <Route path='/agents/:sessionId/old' element={<MonitorPageRefactored />} /> */}
+            <Route path='/agents/:sessionId' element={<SessionCockpitPage />} />
             <Route path='/agents' element={<SessionsPage />} />
             <Route path='/ledger' element={<ExecutionLedgerPageNew />} />
             <Route path='/reports' element={<ReportsPage />} />
-            <Route path='/intelligence' element={<IntelligencePage />} />
-            <Route path='/learning' element={<LearningInsightsPage />} />
-            <Route path='/portfolio' element={<PortfolioViewPage />} />
-            <Route path='/backlog' element={<BacklogPage />} />
             <Route path='*' element={<Navigate to='/operations' replace />} />
           </Routes>
         </Content>

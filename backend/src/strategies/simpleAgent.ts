@@ -1,0 +1,879 @@
+/**
+ * Simple Agent - Remplace 15,000 lignes de code complexe
+ * 
+ * Stratégie validée: Vol 5x + BTC MA50 + 6h momentum > 0.75%
+ * Performance: 91% mois positifs (10/11)
+ * 
+ * Features:
+ * - Capital Pool partagé entre agents
+ * - Trailing Stop intelligent
+ * - Support Long ET Short
+ * - Market Conditions Status
+ */
+
+import { PrismaClient } from '@prisma/client';
+import { 
+  MomentumConfig, 
+  checkMomentumSignal, 
+  shouldExitPosition, 
+  calculatePositionSize,
+  updatePositionWaterMarks,
+  getMarketConditions,
+  type Candle,
+  type Position,
+  type MarketConditions,
+} from './momentumSimple.js';
+
+// Type for exchange (we avoid importing ccxt directly to reduce bundle size)
+type Exchange = {
+  fetchOHLCV: (symbol: string, timeframe: string, since?: number, limit?: number) => Promise<number[][]>;
+  setLeverage: (leverage: number, symbol: string) => Promise<void>;
+  createMarketBuyOrder: (symbol: string, qty: number, params?: Record<string, any>) => Promise<any>;
+  createMarketSellOrder: (symbol: string, qty: number, params?: Record<string, any>) => Promise<any>;
+  createOrder: (symbol: string, type: string, side: string, qty: number, price?: number, params?: Record<string, any>) => Promise<any>;
+};
+
+// ============================================================================
+// CAPITAL POOL - Shared between all agents
+// ============================================================================
+
+export class CapitalPool {
+  private totalCapitalUsd: number;
+  private reservedByAgent: Map<string, number> = new Map();
+  private inPositionByAgent: Map<string, number> = new Map();
+  
+  constructor(initialCapitalUsd: number) {
+    this.totalCapitalUsd = initialCapitalUsd;
+  }
+  
+  /**
+   * Get available capital for new positions
+   */
+  getAvailableCapital(): number {
+    let reserved = 0;
+    let inPosition = 0;
+    this.reservedByAgent.forEach(v => reserved += v);
+    this.inPositionByAgent.forEach(v => inPosition += v);
+    return Math.max(0, this.totalCapitalUsd - reserved - inPosition);
+  }
+  
+  /**
+   * Reserve capital for a potential trade
+   */
+  reserve(agentId: string, amountUsd: number): boolean {
+    const available = this.getAvailableCapital();
+    if (amountUsd > available) {
+      console.log(`[CapitalPool] Cannot reserve $${amountUsd} for ${agentId}, only $${available} available`);
+      return false;
+    }
+    
+    const current = this.reservedByAgent.get(agentId) || 0;
+    this.reservedByAgent.set(agentId, current + amountUsd);
+    console.log(`[CapitalPool] Reserved $${amountUsd} for ${agentId}`);
+    return true;
+  }
+  
+  /**
+   * Commit reserved capital to a position
+   */
+  commit(agentId: string, amountUsd: number): void {
+    // Move from reserved to in-position
+    const reserved = this.reservedByAgent.get(agentId) || 0;
+    this.reservedByAgent.set(agentId, Math.max(0, reserved - amountUsd));
+    
+    const inPos = this.inPositionByAgent.get(agentId) || 0;
+    this.inPositionByAgent.set(agentId, inPos + amountUsd);
+    console.log(`[CapitalPool] Committed $${amountUsd} for ${agentId}`);
+  }
+  
+  /**
+   * Release capital when position is closed
+   */
+  release(agentId: string, amountUsd: number, pnlUsd: number = 0): void {
+    const inPos = this.inPositionByAgent.get(agentId) || 0;
+    this.inPositionByAgent.set(agentId, Math.max(0, inPos - amountUsd));
+    
+    // Add PnL to total capital
+    this.totalCapitalUsd += pnlUsd;
+    console.log(`[CapitalPool] Released $${amountUsd} for ${agentId}, PnL: $${pnlUsd.toFixed(2)}, Total: $${this.totalCapitalUsd.toFixed(2)}`);
+  }
+  
+  /**
+   * Cancel a reservation
+   */
+  cancelReservation(agentId: string): void {
+    this.reservedByAgent.delete(agentId);
+  }
+  
+  /**
+   * Get pool status
+   */
+  getStatus(): {
+    totalUsd: number;
+    availableUsd: number;
+    reservedUsd: number;
+    inPositionsUsd: number;
+    byAgent: Record<string, { reserved: number; inPosition: number }>;
+  } {
+    let reservedTotal = 0;
+    let inPositionTotal = 0;
+    const byAgent: Record<string, { reserved: number; inPosition: number }> = {};
+    
+    this.reservedByAgent.forEach((v, k) => {
+      reservedTotal += v;
+      if (!byAgent[k]) byAgent[k] = { reserved: 0, inPosition: 0 };
+      byAgent[k].reserved = v;
+    });
+    
+    this.inPositionByAgent.forEach((v, k) => {
+      inPositionTotal += v;
+      if (!byAgent[k]) byAgent[k] = { reserved: 0, inPosition: 0 };
+      byAgent[k].inPosition = v;
+    });
+    
+    return {
+      totalUsd: this.totalCapitalUsd,
+      availableUsd: this.getAvailableCapital(),
+      reservedUsd: reservedTotal,
+      inPositionsUsd: inPositionTotal,
+      byAgent,
+    };
+  }
+}
+
+// Global capital pool instance (singleton)
+let globalCapitalPool: CapitalPool | null = null;
+
+export function getCapitalPool(initialCapital?: number): CapitalPool {
+  if (!globalCapitalPool) {
+    globalCapitalPool = new CapitalPool(initialCapital || 10000);
+  }
+  return globalCapitalPool;
+}
+
+export function resetCapitalPool(initialCapital: number): CapitalPool {
+  globalCapitalPool = new CapitalPool(initialCapital);
+  return globalCapitalPool;
+}
+
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+export interface SimpleAgentConfig {
+  // Exchange
+  exchange: Exchange;
+  
+  // Database - use any to avoid type conflicts between different prisma versions
+  prisma: any;
+  
+  // Session
+  userId: string;
+  sessionId: string;
+  
+  // Capital - Use shared pool
+  capitalPool: CapitalPool;
+  riskPerTradePct: number;  // Ex: 1 = 1%
+  
+  // Symbol for this agent
+  symbol: string;  // Ex: 'BTC/USDT:USDT'
+  
+  // Mode
+  mode: 'paper' | 'live';
+  
+  // Optionnel: callbacks
+  onSignal?: (signal: SignalEvent) => void;
+  onTrade?: (trade: TradeEvent) => void;
+  onError?: (error: Error) => void;
+  onMarketConditions?: (conditions: MarketConditions) => void;
+}
+
+export interface SignalEvent {
+  symbol: string;
+  side: 'long' | 'short';
+  reason: string;
+  timestamp: Date;
+}
+
+export interface TradeEvent {
+  symbol: string;
+  side: 'buy' | 'sell';
+  qty: number;
+  price: number;
+  orderId: string;
+  timestamp: Date;
+}
+
+// ============================================================================
+// SIMPLE AGENT CLASS
+// ============================================================================
+
+export class SimpleAgent {
+  private config: SimpleAgentConfig;
+  private position: Position | null = null;
+  private running = false;
+  private tickIntervalId: NodeJS.Timeout | null = null;
+  private lastMarketConditions: MarketConditions | null = null;
+  
+  // Cache pour éviter trop d'appels API
+  private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
+  private btcCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
+  private readonly CACHE_TTL_MS = 60_000; // 1 minute
+  
+  constructor(config: SimpleAgentConfig) {
+    this.config = config;
+  }
+  
+  // ==========================================================================
+  // LIFECYCLE
+  // ==========================================================================
+  
+  async start(): Promise<void> {
+    if (this.running) {
+      console.log(`[SimpleAgent:${this.config.symbol}] Already running`);
+      return;
+    }
+    
+    this.running = true;
+    console.log(`[SimpleAgent:${this.config.symbol}] ✅ Started`);
+    console.log(`  Mode: ${this.config.mode}`);
+    console.log(`  Symbol: ${this.config.symbol}`);
+    console.log(`  Risk/trade: ${this.config.riskPerTradePct}%`);
+    console.log(`  Capital Pool: $${this.config.capitalPool.getAvailableCapital().toFixed(2)} available`);
+    
+    // Charger les positions existantes depuis la DB
+    await this.loadExistingPosition();
+    
+    // Tick toutes les minutes
+    this.tickIntervalId = setInterval(() => this.tick(), 60_000);
+    
+    // Premier tick immédiat
+    await this.tick();
+  }
+  
+  async stop(): Promise<void> {
+    this.running = false;
+    
+    if (this.tickIntervalId) {
+      clearInterval(this.tickIntervalId);
+      this.tickIntervalId = null;
+    }
+    
+    console.log(`[SimpleAgent:${this.config.symbol}] ⏹️ Stopped`);
+  }
+  
+  // ==========================================================================
+  // PUBLIC GETTERS
+  // ==========================================================================
+  
+  getSymbol(): string {
+    return this.config.symbol;
+  }
+  
+  getMode(): 'paper' | 'live' {
+    return this.config.mode;
+  }
+  
+  getPosition(): Position | null {
+    return this.position;
+  }
+  
+  getMarketConditions(): MarketConditions | null {
+    return this.lastMarketConditions;
+  }
+  
+  // ==========================================================================
+  // MAIN TICK LOOP
+  // ==========================================================================
+  
+  private async tick(): Promise<void> {
+    if (!this.running) return;
+    
+    const now = new Date();
+    const symbol = this.config.symbol;
+    
+    try {
+      // Fetch BTC candles for market conditions
+      const btcCandles = await this.fetchBtcCandles();
+      
+      // Update and broadcast market conditions
+      this.lastMarketConditions = getMarketConditions(btcCandles);
+      this.config.onMarketConditions?.(this.lastMarketConditions);
+      
+      // 1. Si on a une position, checker l'exit avec trailing
+      if (this.position) {
+        await this.checkExit(this.position);
+        return; // Don't look for new entries while in position
+      }
+      
+      // 2. Sinon, chercher une entrée
+      await this.checkEntry();
+      
+    } catch (error) {
+      console.error(`[SimpleAgent:${symbol}] Tick error:`, error);
+      this.config.onError?.(error as Error);
+    }
+  }
+  
+  // ==========================================================================
+  // ENTRY LOGIC
+  // ==========================================================================
+  
+  private async checkEntry(): Promise<void> {
+    const symbol = this.config.symbol;
+    
+    try {
+      // Fetch candles pour le symbol
+      const candles = await this.fetchCandles();
+      if (candles.length < 60) {
+        console.log(`[SimpleAgent:${symbol}] Not enough candles (${candles.length})`);
+        return;
+      }
+      
+      // Fetch BTC candles pour corrélation
+      const btcCandles = await this.fetchBtcCandles();
+      
+      // Check signal (returns side: 'long' or 'short')
+      const signal = checkMomentumSignal(symbol, candles, btcCandles);
+      
+      if (signal.valid && signal.side) {
+        console.log(`[SimpleAgent:${symbol}] ✅ SIGNAL ${signal.side.toUpperCase()}: ${signal.reason}`);
+        
+        // Notify
+        this.config.onSignal?.({
+          symbol,
+          side: signal.side,
+          reason: signal.reason || 'momentum_signal',
+          timestamp: new Date(),
+        });
+        
+        // Execute trade
+        await this.openPosition(signal.side, candles);
+      }
+      
+    } catch (error) {
+      console.error(`[SimpleAgent:${symbol}] Error checking entry:`, error);
+    }
+  }
+  
+  private async openPosition(side: 'long' | 'short', candles: Candle[]): Promise<void> {
+    const symbol = this.config.symbol;
+    const lastCandle = candles[candles.length - 1];
+    const currentPrice = lastCandle.close;
+    
+    // Get available capital from pool
+    const availableCapital = this.config.capitalPool.getAvailableCapital();
+    
+    // Calculate position size
+    const sizing = calculatePositionSize({
+      symbol,
+      currentPrice,
+      totalCapitalUsd: availableCapital,
+      riskPerTradePct: this.config.riskPerTradePct,
+      stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
+    });
+    
+    // Try to reserve capital
+    if (!this.config.capitalPool.reserve(this.config.sessionId, sizing.notionalUsd)) {
+      console.log(`[SimpleAgent:${symbol}] Cannot open position - insufficient capital`);
+      return;
+    }
+    
+    console.log(`[SimpleAgent:${symbol}] Opening ${side.toUpperCase()} position:`);
+    console.log(`  Price: $${currentPrice.toFixed(4)}`);
+    console.log(`  Qty: ${sizing.qty}`);
+    console.log(`  Notional: $${sizing.notionalUsd.toFixed(2)}`);
+    console.log(`  Leverage: ${sizing.suggestedLeverage}x`);
+    
+    if (this.config.mode === 'paper') {
+      // Paper trade
+      const position: Position = {
+        symbol,
+        side,
+        entryPrice: currentPrice,
+        qty: sizing.qty,
+        entryTime: Date.now(),
+        stopLoss: side === 'long' 
+          ? currentPrice * (1 - MomentumConfig.EXIT.STOP_LOSS_PCT / 100)
+          : currentPrice * (1 + MomentumConfig.EXIT.STOP_LOSS_PCT / 100),
+        highWaterMark: side === 'long' ? currentPrice : undefined,
+        lowWaterMark: side === 'short' ? currentPrice : undefined,
+      };
+      
+      this.position = position;
+      
+      // Commit capital
+      this.config.capitalPool.commit(this.config.sessionId, sizing.notionalUsd);
+      
+      // Save to DB
+      await this.savePositionToDb(position, 'paper_entry');
+      
+      console.log(`[SimpleAgent:${symbol}] 📝 Paper ${side} position opened`);
+      
+    } else {
+      // Live trade
+      try {
+        // Set leverage
+        await this.config.exchange.setLeverage(sizing.suggestedLeverage, symbol);
+        
+        // Place market order
+        const order = side === 'long'
+          ? await this.config.exchange.createMarketBuyOrder(symbol, sizing.qty, { reduceOnly: false })
+          : await this.config.exchange.createMarketSellOrder(symbol, sizing.qty, { reduceOnly: false });
+        
+        const filledPrice = order.average || order.price || currentPrice;
+        const filledQty = order.filled || sizing.qty;
+        
+        const position: Position = {
+          symbol,
+          side,
+          entryPrice: filledPrice,
+          qty: filledQty,
+          entryTime: Date.now(),
+          stopLoss: side === 'long'
+            ? filledPrice * (1 - MomentumConfig.EXIT.STOP_LOSS_PCT / 100)
+            : filledPrice * (1 + MomentumConfig.EXIT.STOP_LOSS_PCT / 100),
+          orderId: order.id,
+          highWaterMark: side === 'long' ? filledPrice : undefined,
+          lowWaterMark: side === 'short' ? filledPrice : undefined,
+        };
+        
+        this.position = position;
+        
+        // Commit capital
+        this.config.capitalPool.commit(this.config.sessionId, sizing.notionalUsd);
+        
+        // Save to DB
+        await this.savePositionToDb(position, 'live_entry');
+        
+        // Set stop loss on exchange
+        await this.setStopLossOnExchange(position);
+        
+        console.log(`[SimpleAgent:${symbol}] 🟢 Live ${side} position opened @ $${filledPrice}`);
+        
+        this.config.onTrade?.({
+          symbol,
+          side: side === 'long' ? 'buy' : 'sell',
+          qty: filledQty,
+          price: filledPrice,
+          orderId: order.id,
+          timestamp: new Date(),
+        });
+        
+      } catch (error) {
+        console.error(`[SimpleAgent:${symbol}] Failed to open live position:`, error);
+        // Cancel reservation on failure
+        this.config.capitalPool.cancelReservation(this.config.sessionId);
+      }
+    }
+  }
+  
+  // ==========================================================================
+  // EXIT LOGIC WITH TRAILING STOP
+  // ==========================================================================
+  
+  private async checkExit(position: Position): Promise<void> {
+    const symbol = this.config.symbol;
+    
+    try {
+      const candles = await this.fetchCandles();
+      if (candles.length === 0) return;
+      
+      const currentPrice = candles[candles.length - 1].close;
+      
+      // Update water marks for trailing stop
+      this.position = updatePositionWaterMarks(position, currentPrice);
+      
+      const exitSignal = shouldExitPosition(this.position!, currentPrice);
+      
+      if (exitSignal.shouldExit) {
+        console.log(`[SimpleAgent:${symbol}] 🔴 EXIT (${exitSignal.reason}): PnL ${exitSignal.pnlPct?.toFixed(2)}%`);
+        await this.closePosition(this.position!, currentPrice, exitSignal.reason || 'unknown');
+      } else if (exitSignal.newStopLoss) {
+        // Update trailing stop in DB if needed
+        console.log(`[SimpleAgent:${symbol}] 📈 Trailing stop updated: $${exitSignal.newStopLoss.toFixed(4)}`);
+      }
+      
+    } catch (error) {
+      console.error(`[SimpleAgent:${symbol}] Error checking exit:`, error);
+    }
+  }
+  
+  private async closePosition(
+    position: Position, 
+    currentPrice: number,
+    reason: string
+  ): Promise<void> {
+    const symbol = this.config.symbol;
+    
+    // Calculate PnL based on side
+    let pnlPct: number;
+    let pnlUsd: number;
+    
+    if (position.side === 'long') {
+      pnlPct = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+      pnlUsd = position.qty * (currentPrice - position.entryPrice);
+    } else {
+      pnlPct = ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+      pnlUsd = position.qty * (position.entryPrice - currentPrice);
+    }
+    
+    const notionalUsd = position.qty * position.entryPrice;
+    
+    console.log(`[SimpleAgent:${symbol}] Closing ${position.side} position:`);
+    console.log(`  Entry: $${position.entryPrice.toFixed(4)}`);
+    console.log(`  Exit: $${currentPrice.toFixed(4)}`);
+    console.log(`  PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`);
+    console.log(`  Reason: ${reason}`);
+    
+    if (this.config.mode === 'paper') {
+      // Paper close
+      this.position = null;
+      
+      // Release capital with PnL
+      this.config.capitalPool.release(this.config.sessionId, notionalUsd, pnlUsd);
+      
+      await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd);
+      console.log(`[SimpleAgent:${symbol}] 📝 Paper position closed`);
+      
+    } else {
+      // Live close
+      try {
+        const closeSide = position.side === 'long' ? 'sell' : 'buy';
+        const order = position.side === 'long'
+          ? await this.config.exchange.createMarketSellOrder(symbol, position.qty, { reduceOnly: true })
+          : await this.config.exchange.createMarketBuyOrder(symbol, position.qty, { reduceOnly: true });
+        
+        const exitPrice = order.average || order.price || currentPrice;
+        
+        // Recalculate actual PnL
+        let actualPnlPct: number;
+        let actualPnlUsd: number;
+        if (position.side === 'long') {
+          actualPnlPct = ((exitPrice - position.entryPrice) / position.entryPrice) * 100;
+          actualPnlUsd = position.qty * (exitPrice - position.entryPrice);
+        } else {
+          actualPnlPct = ((position.entryPrice - exitPrice) / position.entryPrice) * 100;
+          actualPnlUsd = position.qty * (position.entryPrice - exitPrice);
+        }
+        
+        this.position = null;
+        
+        // Release capital with PnL
+        this.config.capitalPool.release(this.config.sessionId, notionalUsd, actualPnlUsd);
+        
+        await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd);
+        
+        console.log(`[SimpleAgent:${symbol}] 🔴 Live position closed @ $${exitPrice}`);
+        
+        this.config.onTrade?.({
+          symbol,
+          side: closeSide,
+          qty: position.qty,
+          price: exitPrice,
+          orderId: order.id,
+          timestamp: new Date(),
+        });
+        
+      } catch (error) {
+        console.error(`[SimpleAgent:${symbol}] Failed to close live position:`, error);
+      }
+    }
+  }
+  
+  // ==========================================================================
+  // EXCHANGE HELPERS
+  // ==========================================================================
+  
+  private async fetchCandles(): Promise<Candle[]> {
+    const symbol = this.config.symbol;
+    
+    if (this.candleCache && Date.now() - this.candleCache.fetchedAt < this.CACHE_TTL_MS) {
+      return this.candleCache.candles;
+    }
+    
+    try {
+      const ohlcv = await this.config.exchange.fetchOHLCV(symbol, '15m', undefined, 100);
+      
+      const candles: Candle[] = ohlcv.map(c => ({
+        timestamp: c[0] as number,
+        open: c[1] as number,
+        high: c[2] as number,
+        low: c[3] as number,
+        close: c[4] as number,
+        volume: c[5] as number,
+      }));
+      
+      this.candleCache = { candles, fetchedAt: Date.now() };
+      
+      return candles;
+      
+    } catch (error) {
+      console.error(`[SimpleAgent:${symbol}] Failed to fetch candles:`, error);
+      return this.candleCache?.candles || [];
+    }
+  }
+  
+  private async fetchBtcCandles(): Promise<Candle[]> {
+    if (this.btcCandleCache && Date.now() - this.btcCandleCache.fetchedAt < this.CACHE_TTL_MS) {
+      return this.btcCandleCache.candles;
+    }
+    
+    const btcSymbol = 'BTC/USDT:USDT';
+    
+    try {
+      const ohlcv = await this.config.exchange.fetchOHLCV(btcSymbol, '15m', undefined, 100);
+      
+      const candles: Candle[] = ohlcv.map(c => ({
+        timestamp: c[0] as number,
+        open: c[1] as number,
+        high: c[2] as number,
+        low: c[3] as number,
+        close: c[4] as number,
+        volume: c[5] as number,
+      }));
+      
+      this.btcCandleCache = { candles, fetchedAt: Date.now() };
+      
+      return candles;
+      
+    } catch (error) {
+      console.error('[SimpleAgent] Failed to fetch BTC candles:', error);
+      return this.btcCandleCache?.candles || [];
+    }
+  }
+  
+  private async setStopLossOnExchange(position: Position): Promise<void> {
+    if (!position.stopLoss) return;
+    
+    const symbol = this.config.symbol;
+    const side = position.side === 'long' ? 'sell' : 'buy';
+    
+    try {
+      await this.config.exchange.createOrder(
+        symbol,
+        'market',
+        side,
+        position.qty,
+        undefined,
+        {
+          stopPrice: position.stopLoss,
+          triggerPrice: position.stopLoss,
+          reduceOnly: true,
+        }
+      );
+      console.log(`[SimpleAgent:${symbol}] Stop loss set at $${position.stopLoss.toFixed(4)}`);
+    } catch (error) {
+      console.warn(`[SimpleAgent:${symbol}] Failed to set stop loss on exchange:`, error);
+    }
+  }
+  
+  // ==========================================================================
+  // DATABASE HELPERS
+  // ==========================================================================
+  
+  private async loadExistingPosition(): Promise<void> {
+    try {
+      const dbPosition = await this.config.prisma.position.findFirst({
+        where: {
+          sessionId: this.config.sessionId,
+          symbol: this.config.symbol,
+        },
+      });
+      
+      if (dbPosition && dbPosition.entryPrice && dbPosition.qty) {
+        this.position = {
+          symbol: dbPosition.symbol,
+          side: (dbPosition.side as 'long' | 'short') || 'long',
+          entryPrice: dbPosition.entryPrice,
+          qty: dbPosition.qty,
+          entryTime: dbPosition.openedAt?.getTime() || Date.now(),
+          stopLoss: dbPosition.stopPrice || undefined,
+          orderId: dbPosition.slOrderId || undefined,
+          highWaterMark: dbPosition.side === 'long' ? dbPosition.entryPrice : undefined,
+          lowWaterMark: dbPosition.side === 'short' ? dbPosition.entryPrice : undefined,
+        };
+        
+        console.log(`[SimpleAgent:${this.config.symbol}] Loaded existing position`);
+      }
+      
+    } catch (error) {
+      console.error(`[SimpleAgent:${this.config.symbol}] Failed to load position:`, error);
+    }
+  }
+  
+  private async savePositionToDb(position: Position, action: string): Promise<void> {
+    try {
+      await this.config.prisma.position.create({
+        data: {
+          sessionId: this.config.sessionId,
+          symbol: position.symbol,
+          side: position.side,
+          entryPrice: position.entryPrice,
+          qty: position.qty,
+          leverage: MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] || 3,
+          stopPrice: position.stopLoss,
+          openedAt: new Date(position.entryTime),
+        },
+      });
+    } catch (error) {
+      console.error(`[SimpleAgent:${this.config.symbol}] Failed to save position to DB:`, error);
+    }
+  }
+  
+  private async saveExitToDb(
+    position: Position, 
+    exitPrice: number, 
+    reason: string,
+    pnlPct: number,
+    pnlUsd: number
+  ): Promise<void> {
+    try {
+      // First create an order for the exit
+      const clientOrderId = `paper_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      
+      const order = await this.config.prisma.order.create({
+        data: {
+          clientOrderId,
+          sessionId: this.config.sessionId,
+          symbol: position.symbol,
+          side: 'sell',
+          type: 'market',
+          qty: position.qty,
+          price: exitPrice,
+          status: 'filled',
+          source: 'simple_agent',
+          strategyUsed: 'momentum_simple',
+        },
+      });
+      
+      // Log exit as a Fill record linked to the order (using order.id, not clientOrderId)
+      await this.config.prisma.fill.create({
+        data: {
+          orderId: order.id,  // Use the generated Order ID
+          sessionId: this.config.sessionId,
+          symbol: position.symbol,
+          price: exitPrice,
+          qty: position.qty,
+          side: 'sell',
+          realizedPnl: pnlUsd,
+          strategyUsed: 'momentum_simple',
+          strategyFamily: 'momentum',
+          ts: new Date(),
+        },
+      });
+      
+      // Delete the position (it's closed)
+      await this.config.prisma.position.deleteMany({
+        where: {
+          sessionId: this.config.sessionId,
+          symbol: position.symbol,
+        },
+      });
+      
+      console.log(`[SimpleAgent:${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)`);
+      
+    } catch (error) {
+      console.error(`[SimpleAgent:${this.config.symbol}] Failed to save exit to DB:`, error);
+    }
+  }
+  
+  // ==========================================================================
+  // PUBLIC API
+  // ==========================================================================
+  
+  getStatus(): { 
+    running: boolean; 
+    hasPosition: boolean; 
+    symbol: string;
+    marketConditions: MarketConditions | null;
+    capitalPoolStatus: ReturnType<CapitalPool['getStatus']>;
+  } {
+    return {
+      running: this.running,
+      hasPosition: this.position !== null,
+      symbol: this.config.symbol,
+      marketConditions: this.lastMarketConditions,
+      capitalPoolStatus: this.config.capitalPool.getStatus(),
+    };
+  }
+  
+  async forceCheck(): Promise<void> {
+    await this.tick();
+  }
+}
+
+// ============================================================================
+// FACTORY FUNCTION - Creates 4 agents sharing the same capital pool
+// ============================================================================
+
+export async function createSimpleAgent(params: {
+  exchange: Exchange;
+  prisma: any;
+  userId: string;
+  sessionId: string;
+  symbol: string;
+  capitalPool?: CapitalPool;
+  mode?: 'paper' | 'live';
+}): Promise<SimpleAgent> {
+  // Use provided pool or get/create global pool
+  const pool = params.capitalPool || getCapitalPool(10000);
+  
+  const agent = new SimpleAgent({
+    exchange: params.exchange,
+    prisma: params.prisma,
+    userId: params.userId,
+    sessionId: params.sessionId,
+    capitalPool: pool,
+    riskPerTradePct: 1,  // 1% risk per trade
+    symbol: params.symbol,
+    mode: params.mode || 'paper',
+  });
+  
+  return agent;
+}
+
+/**
+ * Create all 4 agents sharing the same capital pool
+ */
+export async function createAllAgents(params: {
+  exchange: Exchange;
+  prisma: any;
+  userId: string;
+  sessionIds: { btc: string; eth: string; sol: string; xrp: string };
+  totalCapitalUsd: number;
+  mode?: 'paper' | 'live';
+}): Promise<{
+  agents: SimpleAgent[];
+  capitalPool: CapitalPool;
+}> {
+  // Create shared capital pool
+  const capitalPool = resetCapitalPool(params.totalCapitalUsd);
+  
+  const symbols = MomentumConfig.SYMBOLS;
+  const sessionIdMap: Record<string, string> = {
+    'BTC/USDT:USDT': params.sessionIds.btc,
+    'ETH/USDT:USDT': params.sessionIds.eth,
+    'SOL/USDT:USDT': params.sessionIds.sol,
+    'XRP/USDT:USDT': params.sessionIds.xrp,
+  };
+  
+  const agents: SimpleAgent[] = [];
+  
+  for (const symbol of symbols) {
+    const agent = await createSimpleAgent({
+      exchange: params.exchange,
+      prisma: params.prisma,
+      userId: params.userId,
+      sessionId: sessionIdMap[symbol],
+      symbol,
+      capitalPool,
+      mode: params.mode,
+    });
+    agents.push(agent);
+  }
+  
+  console.log(`[AgentFactory] Created ${agents.length} agents with shared capital pool of $${params.totalCapitalUsd}`);
+  
+  return { agents, capitalPool };
+}

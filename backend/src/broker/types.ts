@@ -1,115 +1,132 @@
-import type { ExecutionPlan } from '../agent/subagents/types.js';
+/**
+ * Broker Types - Complete
+ */
 
-export type OrderSide = 'buy'|'sell';
-export type OrderType = 'market'|'limit';
-
-export type NewOrder = {
+export interface OrderResult {
+  id: string;
   symbol: string;
-  side: OrderSide;
-  type: OrderType;
-  qty: number; // base units (e.g. BTC)
-  price?: number; // for limit
-  leverage?: number;
-  clientOrderId?: string;
-  takeProfit?: number;
-  stopLoss?: number;
-  reduceOnly?: boolean;
-  timeInForce?: string;
-  postOnly?: boolean;
-  // Optional context for trade evaluation logging
-  _evaluationContext?: {
-    confidence: number;
-    inputMetrics: {
-      adx?: number;
-      rsi14?: number;
-      cmf?: number;
-      atrPct?: number;
-      [key: string]: number | undefined;
-    };
-    regimeContext?: {
-      volatilityRegime?: 'low' | 'medium' | 'high';
-      directionBias?: 'long' | 'short' | 'neutral';
-      volumeRegime?: 'low' | 'normal' | 'high';
-      trendingRanging?: 'trending' | 'ranging';
-      parameterSource?: string;
-    };
-  };
-  executionPlan?: ExecutionPlan;
-};
+  side: 'buy' | 'sell';
+  amount: number;
+  price?: number;
+  filled: number;
+  status: 'open' | 'closed' | 'canceled';
+  timestamp: number;
+}
 
-export type PlacedOrder = NewOrder & {
-  id: string; // broker id
-  status: 'new'|'open'|'partially_filled'|'filled'|'canceled'|'rejected';
-  avgPrice?: number;
-  filledQty?: number;
-  ts: number;
-  // Optional protective orders identifiers (live broker)
-  slOrderId?: string;
-  tpOrderId?: string;
-  attempts?: number;
-  cancelCount?: number;
-  latencyMs?: number;
-  slippageBps?: number;
-  fillRatio?: number;
-  requestedQty?: number;
-  requestedPrice?: number;
-  simImpactBps?: number;
-  estImpactBps?: number;
-  usedDepth?: boolean;
-  depthFallback?: boolean;
-  releasedNotionalUsd?: number;
-  realizedPnlUsd?: number;
-};
-
-export type BrokerPositionMargin = {
+export interface Position {
   symbol: string;
-  side: 'long'|'short';
-  qty: number;
-  notionalUsd?: number;
-  entryPrice?: number;
-  markPrice?: number;
+  side: 'long' | 'short';
+  contracts: number;
+  entryPrice: number;
+  unrealizedPnl: number;
+  leverage: number;
   liquidationPrice?: number;
-  maintenanceMarginUsd?: number;
-  initialMarginUsd?: number;
-  leverage?: number;
-  unrealizedPnlUsd?: number;
-  marginRatio?: number;
-  raw?: any;
-};
+  timestamp: number;
+}
 
-export type BrokerCorrelatedExposure = {
-  key: string;
-  base?: string;
-  quote?: string;
+export interface Balance {
+  total: number;
+  free: number;
+  used: number;
+}
+
+export interface Ticker {
+  symbol: string;
+  last: number;
+  bid: number;
+  ask: number;
+  high: number;
+  low: number;
+  volume: number;
+  quoteVolume: number;
+  percentage: number;
+  timestamp: number;
+}
+
+export interface SubAgentMessage {
+  type: string;
+  payload: any;
+  timestamp: number;
+}
+
+// ============================================
+// NEW ORDER TYPES
+// ============================================
+
+export interface NewOrder {
+  symbol: string;
+  side: 'buy' | 'sell';
+  qty: number;
+  type?: 'market' | 'limit';
+  price?: number;
+  reduceOnly?: boolean;
+  stopLoss?: number;
+  takeProfit?: number;
+  slippage?: number;
+}
+
+export interface PlacedOrder {
+  id: string;
+  clientOrderId?: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  qty: number;
+  filled: number;
+  avgPrice: number;
+  status: 'open' | 'filled' | 'canceled' | 'rejected';
+  timestamp: number;
+  fee?: number;
+}
+
+// ============================================
+// MARGIN TYPES
+// ============================================
+
+export interface BrokerMarginSnapshot {
+  totalEquityUsd: number;
+  availableBalanceUsd: number;
+  usedMarginUsd: number;
+  unrealizedPnl: number;
+  marginRatio: number;
+  timestamp: number;
+}
+
+export interface BrokerPositionMargin {
+  symbol: string;
+  side: 'long' | 'short';
+  notionalUsd: number;
+  marginUsd: number;
+  leverage: number;
+  liquidationPrice?: number;
+}
+
+export interface BrokerCorrelatedExposure {
+  family: string;
+  symbols: string[];
   totalNotionalUsd: number;
-  longNotionalUsd: number;
-  shortNotionalUsd: number;
-  positions: string[];
-  concentrationPct?: number;
-};
+  correlationFactor: number;
+}
 
-export type BrokerMarginSnapshot = {
-  freeUsd: number;
-  equityUsd: number;
-  committedUsd: number;
-  maintenanceMarginUsd?: number;
-  marginRatio?: number;
-  marginLevel?: number;
-  marginMode?: string;
-  positions?: BrokerPositionMargin[];
-  correlatedExposure?: Record<string, BrokerCorrelatedExposure>;
-  timestamp?: number;
-};
+// ============================================
+// BROKER INTERFACE
+// ============================================
 
 export interface Broker {
-  mode: 'paper'|'live';
+  mode: 'paper' | 'live';
+  
+  // Balance
   balance(): Promise<BrokerMarginSnapshot>;
-  place(o: NewOrder): Promise<PlacedOrder>;
-  cancel(id: string): Promise<void>;
-  estimateFillableQty?(params: { symbol: string; side: OrderSide; desiredQty: number; maxImpactPct?: number }): Promise<{ fillableQty: number; impactPct?: number; minQty?: number }>;
-  // optional: paper-specific reserve release
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
-  releaseCommitted?(usd: number): void;
-  syncProtective?(params: { symbol: string; side: OrderSide; qty: number; stopLoss?: number; takeProfit?: number | number[]; slOrderId?: string|null; tpOrderId?: string|null }): Promise<{ slOrderId?: string | null; tpOrderId?: string | null } | void>;
+  
+  // Orders
+  placeOrder(order: NewOrder): Promise<PlacedOrder>;
+  cancelOrder(orderId: string, symbol: string): Promise<boolean>;
+  getOrder(orderId: string, symbol: string): Promise<PlacedOrder | null>;
+  
+  // Positions
+  getPositions(): Promise<BrokerPositionMargin[]>;
+  closePosition(symbol: string, side?: 'long' | 'short'): Promise<PlacedOrder | null>;
+  
+  // Optional
+  estimateFillableQty?(params: { symbol: string; side: string; notionalUsd: number }): Promise<number>;
+  syncProtective?(params: { symbol: string; stopLoss?: number; takeProfit?: number }): Promise<void>;
 }

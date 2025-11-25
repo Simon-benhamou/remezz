@@ -1,7 +1,6 @@
 import axios from "axios";
 import type { OpsJobsResponse } from './types/ops';
 import type { SelectorSnapshotResponse } from './types/selector';
-import type { SubagentLearningResponse } from './types/subagentLearning';
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
 let TOKEN: string = localStorage.getItem('apiKey') || '';
 
@@ -184,8 +183,6 @@ export const api = {
     (await client.post(`/api/market/history`, { symbol })).data,
   getOHLCV: async (symbol: string, timeframe: string, limit: number) =>
     (await client.post(`/api/market/ohlcv`, { symbol, timeframe, limit })).data,
-  quicktest: async (symbol: string, hours: number, plan?: any) =>
-    (await client.post('/api/sim/quicktest', { symbol, hours, plan })).data,
   getOpsMetrics: async () =>
     (await client.get('/api/ops/metrics')).data,
   getOpsEvents: async (limit = 50, sessionId?: string) => {
@@ -198,10 +195,6 @@ export const api = {
     (await client.get('/api/ops/selector', {
       params: options?.force ? { force: 'true' } : undefined,
     })).data as SelectorSnapshotResponse,
-  getSubagentLearningSnapshot: async (options?: { force?: boolean }) =>
-    (await client.get('/api/ops/subagent-learning', {
-      params: options?.force ? { force: 'true' } : undefined,
-    })).data as SubagentLearningResponse,
   getAgentHealth: async () =>
     (await client.get('/api/ops/agent-health')).data,
   getPortfolio: async (mode: 'paper' | 'live' = 'paper') =>
@@ -243,66 +236,22 @@ export const api = {
     },
   setPaperCapitalBalance: async (initialUSD: number) =>
     (await client.post('/api/capital/paper/set-balance', { initialUSD })).data,
-  getAdaptiveWeights: async (params?: { family?: string; limit?: number; decisionsLimit?: number }) =>
-    (await client.get('/api/monitor/adaptive-weights', { params })).data,
-  listImprovements: async (status?: string) =>
-    (await client.get('/api/improvements', { params: { status } })).data,
-  createImprovement: async (payload: any) =>
-    (await client.post('/api/improvements', payload)).data,
-  updateImprovement: async (id: string, payload: any) =>
-    (await client.put(`/api/improvements/${id}`, payload)).data,
-  deleteImprovement: async (id: string) =>
-    (await client.delete(`/api/improvements/${id}`)).data,
-  
-  // Entry analytics endpoints
-  getEntryDecisions: async (sessionId: string, limit?: number) =>
-    (await client.post('/api/entry-analytics/entry-decisions', {
-      sessionId,
-      limit,
-    })).data,
-  getRegimeThresholds: async (symbol: string) =>
-    (await client.get(`/api/entry-analytics/regime-thresholds/${symbol}`)).data,
-  
-  // Phase 2: Decision Transparency endpoints
-  getDecisions: async (sessionId: string, limit?: number) =>
-    (await client.get(`/api/agent/sessions/${sessionId}/decisions`, {
-      params: { limit }
-    })).data,
-  getExitPlan: async (sessionId: string) =>
-    (await client.get(`/api/agent/sessions/${sessionId}/exit-plan`)).data,
-  getEntryAnalysis: async (sessionId: string) =>
-    (await client.get(`/api/agent/sessions/${sessionId}/entry-analysis`)).data,
-  
-  // Learning endpoints (for LearningProgressPanel and SubagentStatusCards)
-  getLearningSession: async (sessionId: string) =>
-    (await client.get(`/api/learning/sessions/${sessionId}`)).data,
-  
-  // Phase 3: Advanced Features endpoints
-  getLearningInsights: async () =>
-    (await client.get('/api/learning/insights')).data,
-  getPortfolioCorrelation: async () =>
-    (await client.get('/api/portfolio/correlation')).data,
-  getPortfolioRiskDistribution: async () =>
-    (await client.get('/api/portfolio/risk-distribution')).data,
-  getPredictorStatus: async () =>
-    (await client.get('/api/predictor/status')).data,
-  
-  // Market Health & Transparency endpoints
-  getMarketHealth: async (symbol: string) =>
-    (await client.post('/api/market-health', { symbol })).data,
-  getMarketHealthDecisions: async (symbol: string, limit?: number) =>
-    (await client.post('/api/market-health/decisions', { symbol, limit })).data,
-  getAdaptiveSummary: async (symbol: string, lookbackDays?: number) =>
-    (await client.post('/api/market-health/adaptive-summary', { symbol, lookbackDays })).data,
-  
-  // Strategy Performance endpoints
-  getStrategyPerformanceSummary: async (days: number) =>
-    (await client.get('/api/strategy-performance/summary', { params: { days } })).data,
-  getStrategyPerformanceDetailed: async (days: number) =>
-    (await client.get('/api/strategy-performance/detailed', { params: { days } })).data,
-  getStrategyPerformanceHeatmap: async (days: number) =>
-    (await client.get('/api/strategy-performance/heatmap', { params: { days } })).data,
-  
-  getAgentActivity: async () =>
-    (await client.get('/api/market-health/agent-activity')).data,
+  // Market conditions - shows if trading conditions are favorable
+  getMarketConditions: async () =>
+    (await client.get('/api/market-conditions')).data as {
+      status: 'favorable_long' | 'favorable_short' | 'neutral' | 'unfavorable' | 'unknown';
+      btcAboveMa50: boolean | null;
+      btcMomentum6h: number | null;
+      btcTrend: 'bullish' | 'bearish' | 'neutral' | null;
+      isTradingDay: boolean | null;
+      reason: string;
+      tradingRecommended: boolean;
+    },
+  // Agent start/stop with new 4-agent system
+  startAgents: async (mode: 'paper' | 'live', capitalUsd: number) =>
+    (await client.post('/api/agent/start', { mode, capitalUsd })).data,
+  stopAgents: async () =>
+    (await client.post('/api/agent/stop')).data,
+  getAgentStatus: async () =>
+    (await client.get('/api/agent/status')).data,
 };

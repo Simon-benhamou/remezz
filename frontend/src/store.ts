@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { OpsJobStatus } from './types/ops';
 import type { SelectorSnapshot } from './types/selector';
-import type { SubagentLearningSnapshot } from './types/subagentLearning';
 
 // Types
 export type AppMode = 'live' | 'paper';
@@ -300,39 +299,6 @@ type SelectorInsightsStore = {
 };
 
 export const useSelectorInsightsStore = create<SelectorInsightsStore>()((set) => ({
-  snapshot: null,
-  lastUpdated: null,
-  lastReason: null,
-  loading: false,
-  error: null,
-  setSnapshot: (snapshot, meta) => {
-    const updatedAt = meta?.updatedAt ?? Date.now();
-    set({
-      snapshot,
-      lastUpdated: updatedAt,
-      lastReason: meta?.reason ?? null,
-      loading: false,
-      error: null,
-    });
-  },
-  setLoading: (loading) => set({ loading }),
-  setError: (error) => set({ error, loading: false }),
-  reset: () => set({ snapshot: null, lastUpdated: null, lastReason: null, loading: false, error: null }),
-}));
-
-type SubagentLearningStore = {
-  snapshot: SubagentLearningSnapshot | null;
-  lastUpdated: number | null;
-  lastReason: string | null;
-  loading: boolean;
-  error: string | null;
-  setSnapshot: (snapshot: SubagentLearningSnapshot | null, meta?: { reason?: string; updatedAt?: number }) => void;
-  setLoading: (loading: boolean) => void;
-  setError: (error: string | null) => void;
-  reset: () => void;
-};
-
-export const useSubagentLearningStore = create<SubagentLearningStore>()((set) => ({
   snapshot: null,
   lastUpdated: null,
   lastReason: null,

@@ -1,93 +1,114 @@
-const DECIMAL_SCALE = 1_000_000n;
+/**
+ * Simple PreciseDecimal implementation
+ * Replaces the removed complex version from metaAdaptive
+ */
 
-type NormalizedDecimal = { sign: bigint; intPart: string; fracPart: string };
-
-const normalizeDecimalString = (input: string): NormalizedDecimal => {
-  const trimmed = input.trim();
-  if (!trimmed) return { sign: 1n, intPart: '0', fracPart: '000000' };
-  const negative = trimmed.startsWith('-');
-  const cleaned = trimmed.replace(/[^0-9.]/g, '');
-  if (!cleaned) return { sign: negative ? -1n : 1n, intPart: '0', fracPart: '000000' };
-  const [intRaw, fracRaw = ''] = cleaned.split('.');
-  const intPart = intRaw === '' ? '0' : intRaw;
-  const fracPart = (fracRaw + '000000').slice(0, 6);
-  return { sign: negative ? -1n : 1n, intPart, fracPart };
-};
-
-const toBigIntScaled = (value: string | number | PreciseDecimal): bigint => {
-  if (value instanceof PreciseDecimal) return value.raw;
-  if (typeof value === 'number') {
-    const fixed = Number.isFinite(value) ? value.toFixed(8) : '0';
-    const { sign, intPart, fracPart } = normalizeDecimalString(fixed);
-    return sign * (BigInt(intPart || '0') * DECIMAL_SCALE + BigInt(fracPart));
-  }
-  const { sign, intPart, fracPart } = normalizeDecimalString(value);
-  return sign * (BigInt(intPart || '0') * DECIMAL_SCALE + BigInt(fracPart));
-};
+// Use built-in math instead of decimal.js to avoid dependency issues
+// For trading we use number with careful rounding
 
 export class PreciseDecimal {
-  public raw: bigint;
+  private readonly value: number;
 
   constructor(value: string | number | PreciseDecimal) {
-    this.raw = toBigIntScaled(value);
+    if (value instanceof PreciseDecimal) {
+      this.value = value.value;
+    } else {
+      this.value = typeof value === 'string' ? parseFloat(value) : value;
+    }
   }
 
-  static fromRaw(raw: bigint): PreciseDecimal {
-    const decimal = Object.create(PreciseDecimal.prototype) as PreciseDecimal;
-    decimal.raw = raw;
-    return decimal;
+  static from(value: string | number | PreciseDecimal): PreciseDecimal {
+    return new PreciseDecimal(value);
   }
 
-  plus(other: PreciseDecimal): PreciseDecimal {
-    return PreciseDecimal.fromRaw(this.raw + other.raw);
+  static fromRaw(value: number): PreciseDecimal {
+    return new PreciseDecimal(value);
   }
 
-  minus(other: PreciseDecimal): PreciseDecimal {
-    return PreciseDecimal.fromRaw(this.raw - other.raw);
+  static zero(): PreciseDecimal {
+    return new PreciseDecimal(0);
   }
 
-  times(other: PreciseDecimal): PreciseDecimal {
-    return PreciseDecimal.fromRaw((this.raw * other.raw) / DECIMAL_SCALE);
+  plus(other: string | number | PreciseDecimal): PreciseDecimal {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return new PreciseDecimal(this.value + otherVal);
   }
 
-  dividedBy(other: PreciseDecimal): PreciseDecimal {
-    if (other.raw === 0n) return PreciseDecimal.fromRaw(0n);
-    return PreciseDecimal.fromRaw((this.raw * DECIMAL_SCALE) / other.raw);
+  minus(other: string | number | PreciseDecimal): PreciseDecimal {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return new PreciseDecimal(this.value - otherVal);
+  }
+
+  times(other: string | number | PreciseDecimal): PreciseDecimal {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return new PreciseDecimal(this.value * otherVal);
+  }
+
+  dividedBy(other: string | number | PreciseDecimal): PreciseDecimal {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return new PreciseDecimal(this.value / otherVal);
   }
 
   abs(): PreciseDecimal {
-    return PreciseDecimal.fromRaw(this.raw < 0 ? -this.raw : this.raw);
+    return new PreciseDecimal(Math.abs(this.value));
   }
 
-  gt(other: number | PreciseDecimal): boolean {
-    const rhs = other instanceof PreciseDecimal ? other.raw : toBigIntScaled(other);
-    return this.raw > rhs;
+  negated(): PreciseDecimal {
+    return new PreciseDecimal(-this.value);
   }
 
-  lt(other: number | PreciseDecimal): boolean {
-    const rhs = other instanceof PreciseDecimal ? other.raw : toBigIntScaled(other);
-    return this.raw < rhs;
+  isZero(): boolean {
+    return this.value === 0;
   }
 
-  equals(other: number | PreciseDecimal): boolean {
-    const rhs = other instanceof PreciseDecimal ? other.raw : toBigIntScaled(other);
-    return this.raw === rhs;
+  isNegative(): boolean {
+    return this.value < 0;
+  }
+
+  isPositive(): boolean {
+    return this.value > 0;
+  }
+
+  lessThan(other: string | number | PreciseDecimal): boolean {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return this.value < otherVal;
+  }
+
+  lessThanOrEqualTo(other: string | number | PreciseDecimal): boolean {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return this.value <= otherVal;
+  }
+
+  greaterThan(other: string | number | PreciseDecimal): boolean {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return this.value > otherVal;
+  }
+
+  greaterThanOrEqualTo(other: string | number | PreciseDecimal): boolean {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return this.value >= otherVal;
+  }
+
+  equals(other: string | number | PreciseDecimal): boolean {
+    const otherVal = other instanceof PreciseDecimal ? other.value : (typeof other === 'string' ? parseFloat(other) : other);
+    return this.value === otherVal;
   }
 
   toNumber(): number {
-    return Number(this.raw) / Number(DECIMAL_SCALE);
+    return this.value;
   }
 
-  toFixed(decimals: number): string {
-    const sign = this.raw < 0 ? '-' : '';
-    const absRaw = this.raw < 0 ? -this.raw : this.raw;
-    const intPart = absRaw / DECIMAL_SCALE;
-    const fracPart = absRaw % DECIMAL_SCALE;
-    const fracStr = fracPart.toString().padStart(6, '0');
-    if (decimals <= 0) {
-      return `${sign}${intPart.toString()}`;
-    }
-    const trimmed = fracStr.slice(0, Math.min(6, decimals));
-    return `${sign}${intPart.toString()}.${trimmed.padEnd(decimals, '0')}`;
+  toString(): string {
+    return String(this.value);
+  }
+
+  toFixed(dp?: number): string {
+    return this.value.toFixed(dp);
+  }
+
+  get raw(): number {
+    return this.value;
   }
 }
+
+export default PreciseDecimal;

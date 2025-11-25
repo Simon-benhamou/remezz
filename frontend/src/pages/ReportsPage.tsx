@@ -4,7 +4,6 @@ import dayjs from 'dayjs';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import StrategyPerformanceDashboard from '../components/StrategyPerformanceDashboard';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -320,12 +319,6 @@ export default function ReportsPage() {
             </Row>
           </Card>
         </Space>
-      </TabPane>
-
-      <TabPane tab="🎯 Strategy Performance" key="strategy">
-        <StrategyPerformanceDashboard 
-          apiBaseUrl={import.meta.env.VITE_API_URL || 'http://localhost:3030'} 
-        />
       </TabPane>
     </Tabs>
   );

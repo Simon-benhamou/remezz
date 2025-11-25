@@ -32,12 +32,8 @@ import {
 import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
-import MetaAdaptiveStatePanel from '../components/MetaAdaptiveStatePanel';
-import ScoringBreakdownPanel from '../components/ScoringBreakdownPanel';
 import MarketContextCard from '../components/MarketContextCard';
 import PositionInfoCard from '../components/PositionInfoCard';
-import SymbolProfileCard from '../components/SymbolProfileCard';
-import AdaptiveLearningCard from '../components/AdaptiveLearningCard';
 import type { StrategySnapshot } from '../types/strategies';
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
 import OrdersTable from '../components/OrdersTable';
@@ -1239,18 +1235,7 @@ export default function SessionCockpitPage() {
             <Skeleton active paragraph={{ rows: 4 }} />
           )}
         </Card>
-        
-        {/* Enhanced Monitoring: Symbol Profile */}
-        <Row gutter={[24, 24]}>
-          <Col xs={24} md={12}>
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <SymbolProfileCard profile={diagnostics?.symbolProfile} loading={false} />
-            ) : (
-              <Skeleton active paragraph={{ rows: 6 }} />
-            )}
-          </Col>
-        </Row>
-        
+
         <Row gutter={[24, 24]} className="session-grid">
           <Col xs={24} lg={agent?.pos ? 17 : 24}>
             <Card
@@ -1306,15 +1291,6 @@ export default function SessionCockpitPage() {
               </Card>
 </Row>
         <Row gutter={[24, 24]}>
-          <Col xs={24} lg={14}>
-            <Card title="Meta-Adaptive State" bordered={false} className="session-section-card">
-              {shouldShowContent(LoadingPhase.CORE_DATA) && diagnostics ? (
-                <MetaAdaptiveStatePanel diagnostics={diagnostics} />
-              ) : (
-                <Skeleton active paragraph={{ rows: 6 }} />
-              )}
-            </Card>
-          </Col>
           <Col xs={24} lg={10}>
             <Card title="Market Context" bordered={false} className="session-section-card">
               {shouldShowContent(LoadingPhase.CORE_DATA) && diagnostics?.market ? (
@@ -1323,15 +1299,6 @@ export default function SessionCockpitPage() {
                 <Skeleton active paragraph={{ rows: 6 }} />
               )}
             </Card>
-          </Col>
-        </Row>
-
-        {/* New Scoring Breakdown Panel for strategy transparency */}
-        <Row gutter={[24, 24]}>
-          <Col xs={24}>
-            {shouldShowContent(LoadingPhase.CORE_DATA) && diagnostics?.scoringBreakdown ? (
-              <ScoringBreakdownPanel breakdown={diagnostics.scoringBreakdown} />
-            ) : null}
           </Col>
         </Row>
 

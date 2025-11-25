@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { openWS } from '../ws';
 import OpsMetricsPanel from '../components/OpsMetricsPanel';
-import AdaptiveWeightsPanel from '../components/AdaptiveWeightsPanel';
 import JobsStatusPanel from '../components/JobsStatusPanel';
+import MarketConditionsCard from '../components/MarketConditionsCard';
 // import SmartOpportunityScanner from '../components/SmartOpportunityScanner'; // TODO: Create component
 import { useMode } from '../contexts/ModeContext';
 import { useOpsJobs } from '../hooks/useOpsJobs';
@@ -34,8 +34,6 @@ export default function DashboardPage(){
   const [loading, setLoading] = React.useState<boolean>(true);
   const [opsMetrics, setOpsMetrics] = React.useState<any>(null);
   const [opsLoading, setOpsLoading] = React.useState<boolean>(true);
-  const [adaptiveData, setAdaptiveData] = React.useState<any>(null);
-  const [adaptiveLoading, setAdaptiveLoading] = React.useState<boolean>(true);
   const [showSmartScanner, setShowSmartScanner] = React.useState(false);
   const loadedRef = React.useRef(false);
   const navigate = useNavigate();
@@ -111,16 +109,10 @@ export default function DashboardPage(){
   const loadOps = React.useCallback(async ()=>{
     try {
       setOpsLoading(true);
-      setAdaptiveLoading(true);
-      const [metrics, adaptive] = await Promise.all([
-        api.getOpsMetrics().catch(()=>null),
-        api.getAdaptiveWeights().catch(()=>null),
-      ]);
+      const metrics = await api.getOpsMetrics().catch(()=>null);
       if (metrics) setOpsMetrics(metrics);
-      if (adaptive) setAdaptiveData(adaptive);
     } finally {
       setOpsLoading(false);
-      setAdaptiveLoading(false);
     }
   }, []);
   React.useEffect(()=>{
@@ -202,6 +194,13 @@ export default function DashboardPage(){
           </Col>
         </Row>
       </Card>
+
+      {/* Market Conditions - Shows if trading conditions are favorable */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={24}>
+          <MarketConditionsCard />
+        </Col>
+      </Row>
 
       {/* Main KPIs - Compact Row */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
@@ -507,12 +506,6 @@ export default function DashboardPage(){
       <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
         <Col xs={24}>
           <OpsMetricsPanel metrics={opsMetrics} loading={opsLoading} />
-        </Col>
-      </Row>
-
-      <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
-        <Col xs={24}>
-          <AdaptiveWeightsPanel data={adaptiveData} loading={adaptiveLoading} onRefresh={loadOps} />
         </Col>
       </Row>
 
