@@ -31,6 +31,10 @@ type Exchange = {
   createMarketBuyOrder: (symbol: string, qty: number, params?: Record<string, any>) => Promise<any>;
   createMarketSellOrder: (symbol: string, qty: number, params?: Record<string, any>) => Promise<any>;
   createOrder: (symbol: string, type: string, side: string, qty: number, price?: number, params?: Record<string, any>) => Promise<any>;
+  // For live sync
+  fetchPositions?: (symbols?: string[]) => Promise<any[]>;
+  fetchMyTrades?: (symbol: string, since?: number, limit?: number) => Promise<any[]>;
+  cancelAllOrders?: (symbol: string) => Promise<any>;
 };
 
 // ============================================================================
@@ -244,6 +248,12 @@ export class SimpleAgent {
     // Charger les positions existantes depuis la DB
     await this.loadExistingPosition();
     
+    // 🔄 LIVE MODE: Initial sync with exchange to catch any missed stop losses
+    if (this.config.mode === 'live') {
+      console.log(`[SimpleAgent:${this.config.symbol}] 🔄 Initial exchange sync...`);
+      await this.syncWithExchange();
+    }
+    
     // Tick toutes les minutes
     this.tickIntervalId = setInterval(() => this.tick(), 60_000);
     
@@ -293,6 +303,11 @@ export class SimpleAgent {
     const symbol = this.config.symbol;
     
     try {
+      // 🔄 LIVE MODE: Sync with exchange first to detect stop loss executions
+      if (this.config.mode === 'live') {
+        await this.syncWithExchange();
+      }
+      
       // Fetch BTC candles for market conditions
       const btcCandles = await this.fetchBtcCandles();
       
@@ -699,6 +714,119 @@ export class SimpleAgent {
       
     } catch (error) {
       console.error(`[SimpleAgent:${this.config.symbol}] Failed to load position:`, error);
+    }
+  }
+  
+  /**
+   * 🔄 SYNC WITH EXCHANGE (Live Mode Only)
+   * Fetches real positions from Binance and detects if stop losses were executed
+   */
+  private async syncWithExchange(): Promise<void> {
+    const symbol = this.config.symbol;
+    
+    if (!this.config.exchange.fetchPositions) {
+      console.log(`[SimpleAgent:${symbol}] ⚠️ Exchange does not support fetchPositions`);
+      return;
+    }
+    
+    try {
+      // Fetch all positions from exchange
+      const exchangePositions = await this.config.exchange.fetchPositions([symbol]);
+      
+      // Find position for our symbol
+      const exchangePos = exchangePositions.find((p: any) => 
+        p.symbol === symbol || 
+        p.info?.symbol === symbol.replace('/', '').replace(':USDT', '')
+      );
+      
+      const exchangeQty = Math.abs(parseFloat(exchangePos?.contracts || exchangePos?.info?.positionAmt || '0'));
+      const exchangeSide = parseFloat(exchangePos?.info?.positionAmt || '0') > 0 ? 'long' : 'short';
+      
+      // Case 1: We think we have a position but exchange says NO
+      if (this.position && exchangeQty === 0) {
+        console.log(`[SimpleAgent:${symbol}] 🔴 SYNC MISMATCH: Position closed on exchange (likely stop loss hit)`);
+        
+        // Try to get the last trade to find exit price
+        let exitPrice = this.position.entryPrice;
+        let reason = 'stop_loss_exchange';
+        
+        try {
+          if (this.config.exchange.fetchMyTrades) {
+            const trades = await this.config.exchange.fetchMyTrades(symbol, Date.now() - 3600000, 10);
+            if (trades && trades.length > 0) {
+              const lastTrade = trades[trades.length - 1];
+              exitPrice = lastTrade.price || exitPrice;
+              console.log(`[SimpleAgent:${symbol}] Found exit trade: $${exitPrice}`);
+            }
+          }
+        } catch (tradeError) {
+          console.warn(`[SimpleAgent:${symbol}] Could not fetch trades:`, tradeError);
+        }
+        
+        // Calculate PnL
+        let pnlPct: number;
+        let pnlUsd: number;
+        if (this.position.side === 'long') {
+          pnlPct = ((exitPrice - this.position.entryPrice) / this.position.entryPrice) * 100;
+          pnlUsd = this.position.qty * (exitPrice - this.position.entryPrice);
+        } else {
+          pnlPct = ((this.position.entryPrice - exitPrice) / this.position.entryPrice) * 100;
+          pnlUsd = this.position.qty * (this.position.entryPrice - exitPrice);
+        }
+        
+        const notionalUsd = this.position.qty * this.position.entryPrice;
+        
+        // Release capital
+        this.config.capitalPool.release(this.config.sessionId, notionalUsd, pnlUsd);
+        
+        // Save exit to DB
+        await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd);
+        
+        console.log(`[SimpleAgent:${symbol}] ✅ Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%`);
+        
+        this.position = null;
+      }
+      
+      // Case 2: Exchange has position but we don't know about it
+      else if (!this.position && exchangeQty > 0) {
+        console.log(`[SimpleAgent:${symbol}] ⚠️ SYNC: Found unexpected position on exchange`);
+        
+        // Load from exchange
+        const entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
+        
+        if (entryPrice > 0) {
+          this.position = {
+            symbol,
+            side: exchangeSide,
+            entryPrice,
+            qty: exchangeQty,
+            entryTime: Date.now(),
+            highWaterMark: exchangeSide === 'long' ? entryPrice : undefined,
+            lowWaterMark: exchangeSide === 'short' ? entryPrice : undefined,
+          };
+          
+          // Commit capital for this position
+          const notionalUsd = exchangeQty * entryPrice;
+          this.config.capitalPool.commit(this.config.sessionId, notionalUsd);
+          
+          // Save to DB
+          await this.savePositionToDb(this.position, 'synced_from_exchange');
+          
+          console.log(`[SimpleAgent:${symbol}] ✅ Position synced from exchange: ${exchangeSide} @ $${entryPrice}`);
+        }
+      }
+      
+      // Case 3: Both have position - verify they match
+      else if (this.position && exchangeQty > 0) {
+        // Just log for now, could add reconciliation logic
+        const entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
+        const unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
+        
+        console.log(`[SimpleAgent:${symbol}] ✅ Position verified on exchange: ${exchangeQty} @ $${entryPrice}, uPnL: $${unrealizedPnl.toFixed(2)}`);
+      }
+      
+    } catch (error) {
+      console.error(`[SimpleAgent:${symbol}] Failed to sync with exchange:`, error);
     }
   }
   
