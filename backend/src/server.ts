@@ -477,14 +477,62 @@ app.get("/api/agent/:sessionId/diagnostics", async (req, res) => {
 app.get("/api/agent/portfolio", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
-    const { mode = 'paper' } = req.query;
+    const mode = (req.query.mode as string) || 'paper';
     
+    // For LIVE mode, fetch real balance from exchange
+    if (mode === 'live' && userId) {
+      try {
+        const exchange = await getExchangeForUser(userId);
+        if (exchange && exchange.fetchBalance) {
+          const balance = await exchange.fetchBalance({ type: 'future' });
+          const usdtTotal = balance?.USDT || balance?.total?.USDT || 0;
+          const usdtFree = balance?.free?.USDT || 0;
+          const usdtUsed = balance?.used?.USDT || 0;
+          
+          // Also fetch positions from exchange
+          let exchangePositions: any[] = [];
+          if (exchange.fetchPositions) {
+            try {
+              const positions = await exchange.fetchPositions();
+              exchangePositions = positions.filter((p: any) => {
+                const qty = Math.abs(parseFloat(p?.contracts || p?.info?.positionAmt || '0'));
+                return qty > 0;
+              }).map((p: any) => ({
+                symbol: p.symbol,
+                side: parseFloat(p?.info?.positionAmt || '0') > 0 ? 'long' : 'short',
+                qty: Math.abs(parseFloat(p?.contracts || p?.info?.positionAmt || '0')),
+                entryPrice: parseFloat(p?.entryPrice || p?.info?.entryPrice || '0'),
+                unrealizedPnl: parseFloat(p?.unrealizedPnl || p?.info?.unRealizedProfit || '0'),
+              }));
+            } catch (posError) {
+              logger.warn('Failed to fetch positions from exchange:', posError);
+            }
+          }
+          
+          return res.json({
+            balance: typeof usdtTotal === 'number' ? usdtTotal : parseFloat(usdtTotal) || 0,
+            freeBalance: typeof usdtFree === 'number' ? usdtFree : parseFloat(usdtFree) || 0,
+            inPositions: typeof usdtUsed === 'number' ? usdtUsed : parseFloat(usdtUsed) || 0,
+            positions: exchangePositions,
+            mode: 'live',
+            source: 'exchange',
+          });
+        }
+      } catch (exchangeError) {
+        logger.warn('Failed to fetch live portfolio from exchange:', exchangeError);
+      }
+    }
+    
+    // For paper mode or if exchange fetch fails
     const userAgentData = userAgents.get(userId);
     if (!userAgentData) {
       return res.json({
-        balance: 0,
+        balance: mode === 'paper' ? 10000 : 0,
+        freeBalance: mode === 'paper' ? 10000 : 0,
+        inPositions: 0,
         positions: [],
         mode,
+        source: 'default',
       });
     }
     
@@ -497,6 +545,7 @@ app.get("/api/agent/portfolio", async (req, res) => {
       inPositions: capitalStatus.inPositionsUsd,
       positions: agentStatuses.filter(s => s.hasPosition),
       mode,
+      source: 'capital_pool',
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to get portfolio" });
@@ -533,14 +582,41 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
     const userId = (req as any)?.user?.id;
     const { mode } = req.params;
     
+    // For LIVE mode, fetch real balance from exchange
+    if (mode === 'live' && userId) {
+      try {
+        const exchange = await getExchangeForUser(userId);
+        if (exchange && exchange.fetchBalance) {
+          const balance = await exchange.fetchBalance({ type: 'future' });
+          const usdtBalance = balance?.USDT || balance?.total?.USDT || 0;
+          const freeUsdt = balance?.free?.USDT || 0;
+          const usedUsdt = balance?.used?.USDT || 0;
+          
+          return res.json({
+            totalUSD: typeof usdtBalance === 'number' ? usdtBalance : parseFloat(usdtBalance) || 0,
+            freeUSD: typeof freeUsdt === 'number' ? freeUsdt : parseFloat(freeUsdt) || 0,
+            reservedUSD: 0,
+            inPositionsUSD: typeof usedUsdt === 'number' ? usedUsdt : parseFloat(usedUsdt) || 0,
+            ts: Date.now(),
+            source: 'exchange',
+          });
+        }
+      } catch (exchangeError) {
+        logger.warn('Failed to fetch live balance from exchange:', exchangeError);
+        // Fall through to return agent data or zeros
+      }
+    }
+    
+    // For paper mode or if exchange fetch fails, use agent capital pool
     const userAgentData = userAgents.get(userId);
     if (!userAgentData) {
       return res.json({
-        totalUSD: 0,
-        freeUSD: 0,
+        totalUSD: mode === 'paper' ? 10000 : 0, // Default paper balance
+        freeUSD: mode === 'paper' ? 10000 : 0,
         reservedUSD: 0,
         inPositionsUSD: 0,
         ts: Date.now(),
+        source: 'default',
       });
     }
     
@@ -551,8 +627,10 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
       reservedUSD: status.reservedUsd,
       inPositionsUSD: status.inPositionsUsd,
       ts: Date.now(),
+      source: 'capital_pool',
     });
   } catch (error) {
+    logger.error('Failed to get capital snapshot:', error);
     res.status(500).json({ error: "Failed to get capital snapshot" });
   }
 });
@@ -587,22 +665,67 @@ app.post("/api/capital/paper/set-balance", async (req, res) => {
     const userId = (req as any)?.user?.id;
     const { initialUSD } = req.body;
     
-    // For now just acknowledge - would need to restart agents with new capital
-    res.json({ success: true, initialUSD });
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+    
+    // If agents exist, stop them and restart with new capital
+    const existingAgents = userAgents.get(userId);
+    if (existingAgents) {
+      // Stop existing agents
+      for (const agent of existingAgents.agents) {
+        await agent.stop();
+      }
+      userAgents.delete(userId);
+      
+      logger.info(`Paper balance reset requested: $${initialUSD}. Agents stopped, restart required.`);
+    }
+    
+    // Store the new initial balance for next agent start
+    // Will be used when /api/agent/start is called
+    res.json({ 
+      success: true, 
+      initialUSD,
+      message: existingAgents ? "Agents stopped. Call /api/agent/start with capitalUsd to restart with new balance." : "Balance set. Call /api/agent/start to create agents."
+    });
   } catch (error) {
     res.status(500).json({ error: "Failed to set balance" });
   }
 });
 
-// Agent creation routes (for backward compatibility)
+// Agent creation routes (for backward compatibility with old frontend flow)
+// These now actually create the agents using the new 4-agent system
+const pendingCreations = new Map<string, { userId: string; mode: string; capitalUsd: number; symbol?: string }>();
+
 app.post("/api/agent/creation/prepare", async (req, res) => {
   try {
-    // Return a creation ID for the new multi-agent system
-    const creationId = `creation_${Date.now()}`;
+    const userId = (req as any)?.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+    
+    const { mode = 'paper', capitalUsd = 10000, maxLeverage, aggressiveness, symbol } = req.body;
+    
+    // Check if agents already exist
+    const existingAgents = userAgents.get(userId);
+    if (existingAgents) {
+      return res.status(409).json({ 
+        error: "Agents already running. Stop them first.",
+        symbols: MomentumConfig.SYMBOLS,
+      });
+    }
+    
+    // Store creation params for later activation
+    const creationId = `creation_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    pendingCreations.set(creationId, { userId, mode, capitalUsd, symbol });
+    
+    // Auto-expire after 5 minutes
+    setTimeout(() => pendingCreations.delete(creationId), 5 * 60 * 1000);
+    
     res.json({
       creationId,
       symbols: MomentumConfig.SYMBOLS,
-      message: "Use /api/agent/start to start all agents",
+      message: "Creation prepared. Call activate to start agents.",
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to prepare creation" });
@@ -611,10 +734,17 @@ app.post("/api/agent/creation/prepare", async (req, res) => {
 
 app.post("/api/agent/creation/create-session", async (req, res) => {
   try {
-    // Redirect to new start endpoint
+    const { creationId, symbol } = req.body;
+    
+    const creation = pendingCreations.get(creationId);
+    if (creation) {
+      creation.symbol = symbol;
+    }
+    
     res.json({
-      message: "Use /api/agent/start to start all agents",
-      symbols: MomentumConfig.SYMBOLS,
+      success: true,
+      symbol,
+      message: "Symbol selected. Call activate to start.",
     });
   } catch (error) {
     res.status(500).json({ error: "Failed" });
@@ -623,11 +753,70 @@ app.post("/api/agent/creation/create-session", async (req, res) => {
 
 app.post("/api/agent/creation/activate", async (req, res) => {
   try {
+    const { creationId } = req.body;
+    const userId = (req as any)?.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+    
+    const creation = pendingCreations.get(creationId);
+    if (!creation || creation.userId !== userId) {
+      return res.status(404).json({ error: "Creation not found or expired" });
+    }
+    
+    // Actually create the agents now
+    const { mode, capitalUsd } = creation;
+    
+    // Get exchange
+    const exchange = await getExchangeForUser(userId);
+    
+    // Create sessions for each symbol
+    const sessionIds: { btc: string; eth: string; sol: string; xrp: string } = {
+      btc: '', eth: '', sol: '', xrp: '',
+    };
+    
+    const symbolToKey: Record<string, keyof typeof sessionIds> = {
+      'BTC/USDT:USDT': 'btc', 'ETH/USDT:USDT': 'eth', 'SOL/USDT:USDT': 'sol', 'XRP/USDT:USDT': 'xrp',
+    };
+    
+    for (const symbol of MomentumConfig.SYMBOLS) {
+      const session = await prisma.agentSession.create({
+        data: { userId, symbol, mode, profileJson: { capitalUsd, symbol } }
+      });
+      const key = symbolToKey[symbol];
+      if (key) sessionIds[key] = session.id;
+    }
+    
+    // Create all agents with shared capital pool
+    const { agents, capitalPool } = await createAllAgents({
+      exchange, prisma, userId, sessionIds,
+      totalCapitalUsd: capitalUsd,
+      mode: mode as 'paper' | 'live',
+    });
+    
+    // Store and start all agents
+    userAgents.set(userId, { agents, capitalPool });
+    
+    for (const agent of agents) {
+      await agent.start();
+    }
+    
+    // Clean up pending creation
+    pendingCreations.delete(creationId);
+    
+    logger.info(`✅ Created ${agents.length} agents for ${userId} via creation flow`);
+    
     res.json({
-      message: "Use /api/agent/start to start all agents",
+      success: true,
+      agentsCount: agents.length,
+      symbols: MomentumConfig.SYMBOLS,
+      capitalUsd,
+      mode,
     });
   } catch (error) {
-    res.status(500).json({ error: "Failed" });
+    logger.error('Failed to activate creation:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to activate" });
   }
 });
 
