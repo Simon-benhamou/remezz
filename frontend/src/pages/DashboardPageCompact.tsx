@@ -36,14 +36,16 @@ export default function DashboardPageCompact(){
     try {
       // Fetch all sessions to ensure we get trades from stopped sessions too
       // This matches the logic in ExecutionLedgerPage to ensure consistency
-      const sessions = await api.listSessions(mode);
+      const sessionsRes = await api.listSessions(mode);
+      const sessions = Array.isArray(sessionsRes) ? sessionsRes : (sessionsRes?.sessions || []);
       
       // Fetch trades for each session in parallel
       const results = await Promise.all(
         sessions.map(async (session: any) => {
           try {
             // Fetch recent trades for this session
-            return await api.getTrades(session.id, { limit: 20 });
+            const tradesRes = await api.getTrades(session.id, { limit: 20 });
+            return Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []);
           } catch {
             return [];
           }

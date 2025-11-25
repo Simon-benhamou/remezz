@@ -135,7 +135,8 @@ export default function ExecutionLedgerPage() {
           Promise.all(
             sessions.map(async (session) => {
               try {
-                const data = await api.getTrades(session.id, params);
+                const res = await api.getTrades(session.id, params);
+                const data = Array.isArray(res) ? res : (res?.trades || []);
                 return data.map((trade: any) => {
                   const meta = sessionMeta[session.id] ?? {
                     symbol: session.symbol,
@@ -211,11 +212,12 @@ export default function ExecutionLedgerPage() {
         }
         setSessionPerf(null);
       } else {
-        const [data, metricsResponse, overviewData] = await Promise.all([
+        const [tradesRes, metricsResponse, overviewData] = await Promise.all([
           api.getTrades(sessionId, params),
           api.getSessionMetrics(sessionId),
           api.overview(mode),
         ]);
+        const data = Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []);
         const meta = sessionMeta[sessionId];
         const decorated = data.map((trade: any) => ({
           ...trade,

@@ -59,7 +59,10 @@ export function useSessionsCache() {
 
     try {
       console.log(`🔄 Fetching fresh sessions for ${key}`);
-      const sessions = await api.listSessions(mode, includeStats);
+      const response = await api.listSessions(mode, includeStats);
+      
+      // Handle both formats: direct array or { sessions: [...] }
+      const sessions = Array.isArray(response) ? response : (response?.sessions || []);
       
       // Cache the result
       cacheRef.current[key] = {

@@ -561,8 +561,14 @@ export default function SessionCockpitPage() {
         if (analysisData.status === 'fulfilled' && analysisData.value)
           setAnalysis(analysisData.value);
         if (kpiData.status === 'fulfilled') setKpi(kpiData.value);
-        if (ordersData.status === 'fulfilled') setOrders(ordersData.value || []);
-        if (tradesData.status === 'fulfilled') setTrades(tradesData.value || []);
+        if (ordersData.status === 'fulfilled') {
+          const o = ordersData.value;
+          setOrders(Array.isArray(o) ? o : (o?.orders || []));
+        }
+        if (tradesData.status === 'fulfilled') {
+          const t = tradesData.value;
+          setTrades(Array.isArray(t) ? t : (t?.trades || []));
+        }
         if (diagnosticsData2.status === 'fulfilled' && diagnosticsData2.value?.ok) {
           setDiagnostics(diagnosticsData2.value.diagnostics);
         }
@@ -775,13 +781,18 @@ export default function SessionCockpitPage() {
             setKpi(await api.getPerf(sessionId));
           } catch {}
           try {
-            setOrders(await api.getOrders(sessionId));
+            const ordersRes = await api.getOrders(sessionId);
+            setOrders(Array.isArray(ordersRes) ? ordersRes : (ordersRes?.orders || []));
           } catch {}
         }
         if (msg.type === 'orders') {
-          setOrders(msg.data);
+          const ordersData = msg.data;
+          setOrders(Array.isArray(ordersData) ? ordersData : (ordersData?.orders || []));
           try {
-            if (sessionId) setTrades(await api.getTrades(sessionId));
+            if (sessionId) {
+              const tradesRes = await api.getTrades(sessionId);
+              setTrades(Array.isArray(tradesRes) ? tradesRes : (tradesRes?.trades || []));
+            }
           } catch {}
           try {
             setAgent(await api.getAgentState(sessionId));

@@ -339,7 +339,8 @@ app.get("/api/agent/sessions", async (req, res) => {
       take: 100,
     });
     
-    res.json({ sessions });
+    // Return array directly, not wrapped in object
+    res.json(sessions);
   } catch (error) {
     res.status(500).json({ error: "Failed to list sessions" });
   }

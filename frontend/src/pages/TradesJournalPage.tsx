@@ -78,7 +78,8 @@ export default function TradesJournalPage() {
         const allData = await Promise.all(
           sessions.map(async (session) => {
             try {
-              const data = await api.getTrades(session.id, params);
+              const res = await api.getTrades(session.id, params);
+              const data = Array.isArray(res) ? res : (res?.trades || []);
               return data.map((trade: any) => ({ ...trade, sessionSymbol: session.symbol, sessionMode: session.mode }));
             } catch {
               return [];
@@ -90,7 +91,8 @@ export default function TradesJournalPage() {
         setRows(flatData);
       } else {
         // Load data from selected session only
-        const data = await api.getTrades(sessionId, params);
+        const res = await api.getTrades(sessionId, params);
+        const data = Array.isArray(res) ? res : (res?.trades || []);
         setRows(data);
       }
     } catch (e: any) {

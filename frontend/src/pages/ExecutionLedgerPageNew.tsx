@@ -97,7 +97,8 @@ export default function ExecutionLedgerPageNew() {
       // Load trades from all active and recent sessions
       for (const session of sessionsList.slice(0, 20)) {
         try {
-          const sessionTrades = await api.getTrades(session.id, { limit: 100 });
+          const res = await api.getTrades(session.id, { limit: 100 });
+          const sessionTrades = Array.isArray(res) ? res : (res?.trades || []);
           const decorated = sessionTrades.map((trade: any) => ({
             ...trade,
             sessionId: session.id,
