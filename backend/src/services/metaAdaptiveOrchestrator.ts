@@ -232,13 +232,13 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live', userId
     // Small account: 1 big position (80-100%)
     maxAllocationPerPosition = applyAllocationFloors(totalCapital * 0.90); // Use 90% for the single position
     maxPositions = 1;
-    minConfidenceRequired = 0.35; // 🎯 CRYPTO OPTIMIZED: Lowered from 0.50
+    minConfidenceRequired = 0.30; // 🎯 CRYPTO OPTIMIZED: Lowered from 0.35
   } else if (totalCapital < 1000) {
     // Medium account: 2-3 positions (40-50% each)
     maxAllocationPerPosition = applyAllocationFloors(totalCapital * 0.45);
     maxPositions = 2;
     // 🎯 CRYPTO OPTIMIZED: Progressive threshold for 2nd position (lowered)
-    minConfidenceRequired = usageRatio < 0.50 ? 0.30 : 0.40;
+    minConfidenceRequired = usageRatio < 0.50 ? 0.28 : 0.35;
   } else {
     // Large account: Dynamic position limit based on available capital
     // Instead of fixed 5 positions at 20%, allow more smaller positions
@@ -262,18 +262,18 @@ async function calculateCapitalUsageAndThresholds(mode: 'paper' | 'live', userId
     // Cap at 10 positions maximum to avoid over-diversification
     maxPositions = Math.min(10, Math.max(1, maxPositions));
     
-    // 🎯 CRYPTO OPTIMIZED THRESHOLDS: Further lowered to capture volatile opportunities
-    // Crypto markets move fast - need to enter quality setups quickly
-    // Filters (ADX, ATR, timeframes) already protect against bad trades
-    // 0-55% used: very opportunistic (0.25) - capture breakouts early
-    // 55-75% used: opportunistic (0.30) - still aggressive but selective
-    // 75%+ used: moderate (0.35) - preserve capital for best setups
+    // 🎯 CRYPTO OPTIMIZED THRESHOLDS: Base thresholds LOWERED
+    // These are BASE thresholds - will be further adjusted by adaptive system
+    // based on RSI extremes, ADX trend strength, and volatility
+    // 0-55% used: very opportunistic (0.23) - capture breakouts early
+    // 55-75% used: opportunistic (0.28) - still aggressive but selective  
+    // 75%+ used: moderate (0.30) - preserve capital for best setups
     if (usageRatio < 0.55) {
-      minConfidenceRequired = 0.25;
+      minConfidenceRequired = 0.23;
     } else if (usageRatio < 0.75) {
-      minConfidenceRequired = 0.30;
+      minConfidenceRequired = 0.28;
     } else {
-      minConfidenceRequired = 0.35;
+      minConfidenceRequired = 0.30;
     }
   }
   

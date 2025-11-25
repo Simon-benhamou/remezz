@@ -1,4 +1,5 @@
 import { createBinanceRestLimiter, toBinanceSymbolId, BINANCE_REST_BASE_URL, BINANCE_REST_429_BACKOFF_MS } from './binanceWebSocket.js';
+import { globalRestCircuitBreaker } from './globalRestCircuitBreaker.js';
 
 const REST_ZERO_LOG_INTERVAL_MS = 60_000;
 const restZeroLogTs = new Map<string, number>();
@@ -68,6 +69,17 @@ export async function fetchBinanceOhlcv(
     );
   }
 
+  // 🔥 Check global REST circuit breaker (coordinates across ALL agents)
+  if (!globalRestCircuitBreaker.canMakeRequest()) {
+    const state = globalRestCircuitBreaker.getState();
+    const remainingMs = globalRestCircuitBreaker.getRemainingCooldown();
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
+    throw Object.assign(
+      new Error(`global_rest_circuit_open_wait_${remainingSeconds}s`),
+      { circuitState: state, remainingMs }
+    );
+  }
+
   const params = new URLSearchParams({
     symbol: symbolId,
     interval: timeframe,
@@ -79,6 +91,8 @@ export async function fetchBinanceOhlcv(
   
   if (response.status === 429) {
     ohlcvLimiter.backoff(BINANCE_REST_429_BACKOFF_MS);
+    // Record failure in global circuit breaker
+    globalRestCircuitBreaker.recordFailure('ohlcv', symbolId, 'rate_limited_429');
     throw new Error('binance_rest_rate_limited');
   }
   
@@ -100,11 +114,15 @@ export async function fetchBinanceOhlcv(
           // Add cooldown period after ban expires
           ipBannedUntil = banTimestamp + IP_BAN_COOLDOWN_MS;
           console.error(`🚫 Binance IP ban detected until ${new Date(banTimestamp).toISOString()} (+ ${IP_BAN_COOLDOWN_MS/1000/60}min cooldown)`);
+          // Record IP ban in global circuit breaker (force open)
+          globalRestCircuitBreaker.forceOpen(`ip_ban_until_${new Date(ipBannedUntil).toISOString()}`);
         }
       } catch (parseError) {
         // Fallback: ban for 10 minutes if we can't parse the timestamp
         ipBannedUntil = now + 10 * 60 * 1000;
         console.error(`🚫 Binance IP ban detected (timestamp parse failed), waiting 10 minutes`);
+        // Force open circuit breaker for fallback ban
+        globalRestCircuitBreaker.forceOpen('ip_ban_parse_failed_10min');
       }
     }
     
