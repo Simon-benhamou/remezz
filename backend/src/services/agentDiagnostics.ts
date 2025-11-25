@@ -4,6 +4,7 @@
  * - Symbol profile (volatility, direction, volume, trend)
  * - Strategy metrics (current strategy, score, confidence)
  * - Position state (entry, R-multiple, time open)
+ * - Scoring breakdown (trend/breakout/mean/momentum scores) for transparency
  */
 
 import type { Request, Response } from 'express';
@@ -13,6 +14,7 @@ import { classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, 
 import type { TechnicalSnapshot } from '../ai/tech.js';
 import type { ExecutionPlan, MarketQualityScore, RiskLimits, SentimentSignal } from '../agent/subagents/types.js';
 import { agentServiceRegistry } from '../agent/subagents/serviceRegistry.js';
+import { getLastScoringBreakdown, type ScoringBreakdown } from '../quantai/strategies/metaAdaptive/recognizedStrategies.js';
 
 export type AgentDiagnosticInfo = {
   sessionId: string;
@@ -39,6 +41,9 @@ export type AgentDiagnosticInfo = {
     score: number;
     family: string;
   } | null;
+  
+  // 🆕 Scoring Breakdown - shows WHY agent chose a strategy
+  scoringBreakdown: ScoringBreakdown | null;
   
   // Position State
   position: {
@@ -278,6 +283,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         symbol: session.symbol,
         symbolProfile: symbolProfileData,
         strategy: null,
+        scoringBreakdown: getLastScoringBreakdown(session.symbol),
         position: positionInfo,
         supportAgents,
         market: {
@@ -434,6 +440,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           trendStrength: 0,
         },
         strategy: null,
+        scoringBreakdown: getLastScoringBreakdown(session.symbol),
         position: positionInfo,
         supportAgents,
         market: {
@@ -664,6 +671,7 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       symbol: session.symbol,
       symbolProfile,
       strategy: strategyInfo,
+      scoringBreakdown: getLastScoringBreakdown(session.symbol),
       position: positionInfo,
       supportAgents,
       market,

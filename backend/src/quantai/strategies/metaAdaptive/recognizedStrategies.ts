@@ -29,6 +29,42 @@ type PredictorSnapshot = null;
 
 type StrategyBias = 'long' | 'short' | 'both';
 
+// ==========================================
+// SCORING BREAKDOWN CACHE - for diagnostics
+// ==========================================
+export type ScoringBreakdown = {
+  scores: { trend: number; breakout: number; meanReversion: number; momentum: number };
+  components: {
+    adx: number;
+    rsi: number;
+    cmf: number;
+    volumeRatio: number;
+    trendStrength: number;
+    compressionScore: number;
+    alignmentScore: number;
+    emaAlignment: 'bullish' | 'bearish' | 'mixed';
+  };
+  detections: {
+    btcCorrelation: { long: string; short: string } | null;
+    flashEvent: string | null;
+    rebound: { probability: number; reasons: string[] } | null;
+    reversal: { probability: number; reasons: string[] } | null;
+  };
+  entryBlockers: string[];
+  winner: { family: string; score: number; confidence: number; bias: string } | null;
+};
+
+// Per-symbol cache for last scoring breakdown
+const lastScoringBreakdownCache = new Map<string, { breakdown: ScoringBreakdown; timestamp: number }>();
+
+export function getLastScoringBreakdown(symbol: string): ScoringBreakdown | null {
+  const cached = lastScoringBreakdownCache.get(symbol);
+  if (!cached) return null;
+  // Cache valid for 60 seconds
+  if (Date.now() - cached.timestamp > 60_000) return null;
+  return cached.breakdown;
+}
+
 export type RecognizedStrategyId =
   | 'classic_trend_following'
   | 'bollinger_mean_reversion'
@@ -1192,6 +1228,14 @@ export async function evaluateRecognizedStrategies(
     ranking: opts.ranking ?? null,
     volume24hUsd: opts.volume24hUsd ?? null,
   });
+
+  // Store scoring breakdown in cache for diagnostics
+  if (evaluation.scoringBreakdown) {
+    lastScoringBreakdownCache.set(symbol, {
+      breakdown: evaluation.scoringBreakdown,
+      timestamp: Date.now(),
+    });
+  }
 
   if (process.env.META_ADAPTIVE_BT_DEBUG === 'true' && evaluation.signals.length === 0) {
     const metaSummary = {

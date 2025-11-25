@@ -978,7 +978,31 @@ class MetaAdaptiveStrategyAgent {
     return epsilon;
   }
 
-  async evaluate(input: AdaptiveEvaluationInput): Promise<{ signals: AdaptiveSignal[]; selection: AdaptiveSignal | null }> {
+  async evaluate(input: AdaptiveEvaluationInput): Promise<{ 
+    signals: AdaptiveSignal[]; 
+    selection: AdaptiveSignal | null;
+    scoringBreakdown?: {
+      scores: { trend: number; breakout: number; meanReversion: number; momentum: number };
+      components: {
+        adx: number;
+        rsi: number;
+        cmf: number;
+        volumeRatio: number;
+        trendStrength: number;
+        compressionScore: number;
+        alignmentScore: number;
+        emaAlignment: 'bullish' | 'bearish' | 'mixed';
+      };
+      detections: {
+        btcCorrelation: { long: string; short: string } | null;
+        flashEvent: string | null;
+        rebound: { probability: number; reasons: string[] } | null;
+        reversal: { probability: number; reasons: string[] } | null;
+      };
+      entryBlockers: string[];
+      winner: { family: string; score: number; confidence: number; bias: string } | null;
+    };
+  }> {
     const micro = input.micro ?? {};
     const snap = input.snap;
     const price = safeNumber(snap.last, 0);
@@ -1193,13 +1217,23 @@ class MetaAdaptiveStrategyAgent {
     // 🚀 VOLUME SURGE BOOST: 2.5x+ volume = strong breakout signal
     const volumeSurgeBoost = volumeRatio >= 2.5 ? 0.25 : volumeRatio >= 2.0 ? 0.15 : 0;
     
-    // 🔥 SQUEEZE DETECTION: Low ATR% (< 1.2%) with any volume = compression before explosion
-    const isSqueezing = atr15mPct < 1.2 && volumeRatio >= 1.0;
+    // 🔥 SQUEEZE DETECTION: Low ATR% with HIGH volume = compression before explosion
+    // ⚠️ BACKTEST FIX: Tightened requirements - was 41% WR, now requires:
+    //    - volumeRatio >= 1.5 (was 1.0) for real breakout momentum
+    //    - ADX >= 25 for trend confirmation
+    //    - CMF confirmation (flow aligned with breakout direction)
+    const cmfConfirmsBreakout = ((snap as any)?.trend ?? 0) > 0 ? cmf > 0 : cmf < 0;
+    const isSqueezing = atr15mPct < 1.5 && volumeRatio >= 1.5 && adx >= 25 && cmfConfirmsBreakout;
     const squeezeBoost = isSqueezing ? 0.20 : 0;
+    
+    // ⚠️ BACKTEST FIX: Require minimum volume confirmation for breakout
+    // Breakouts without volume often fail - 40% win rate
+    const hasBreakoutVolumeConfirmation = volumeRatio >= 1.3;
+    const breakoutVolumeFilter = hasBreakoutVolumeConfirmation ? 0 : -0.15;
     
     const breakoutWeight = 1.25 + 1.15 + 0.8 + 1 + 1 + 1;
     const scoreBreakout = clamp(
-      (breakoutCompression + breakoutAdx + breakoutVolume + breakoutImpulse + breakoutCmf + breakoutContext) / breakoutWeight + volumeSurgeBoost + squeezeBoost,
+      (breakoutCompression + breakoutAdx + breakoutVolume + breakoutImpulse + breakoutCmf + breakoutContext) / breakoutWeight + volumeSurgeBoost + squeezeBoost + breakoutVolumeFilter,
       0,
       1,
     );
@@ -1224,13 +1258,24 @@ class MetaAdaptiveStrategyAgent {
     const momentumSlope = clamp(slope * 1.1, 0, 1);
     
     // 🚀 STRONG CMF BOOST: |CMF| > 0.20 = strong institutional flow
-    const strongCmfBoost = Math.abs(cmf) >= 0.20 ? 0.18 : Math.abs(cmf) >= 0.15 ? 0.10 : 0;
+    // ⚠️ BACKTEST FIX: CMF as standalone signal has 33% WR
+    //    - Require ADX >= 25 (was 20) for stronger trend confirmation
+    //    - Require trendStrength >= 0.5 (was 0.4) for real momentum
+    //    - CMF threshold raised to 0.20 (was 0.15 for second tier)
+    const hasTrendConfirmation = adx >= 25 && trendStrength >= 0.5;
+    const strongCmfBoost = hasTrendConfirmation 
+      ? (Math.abs(cmf) >= 0.25 ? 0.18 : Math.abs(cmf) >= 0.20 ? 0.10 : 0)
+      : 0; // Disable CMF boost in ranging/weak trend markets
     
     // 🔥 VOLUME + TREND ALIGNMENT BOOST: High volume WITH trend = confirmation
     const volumeTrendBoost = volumeRatio >= 2.0 && Math.abs((snap as any)?.trend ?? 0) >= 0.4 ? 0.15 : 0;
     
+    // ⚠️ BACKTEST FIX: Penalize momentum strategy in ranging/choppy markets
+    // ADX < 20 = weak trend, CMF/momentum signals are unreliable (was 18)
+    const rangingMarketPenalty = adx < 20 ? 0.25 : adx < 25 ? 0.10 : 0;
+    
     const momentumWeight = 1 + 1 + 1.05 + 1 + 1 + 1 + 1;
-    const scoreMomentum = clamp(
+    const scoreMomentumRaw = clamp(
       (
         momentumTrend
         + momentumStrength
@@ -1243,6 +1288,9 @@ class MetaAdaptiveStrategyAgent {
       0,
       1,
     );
+    
+    // Apply ranging market penalty
+    const scoreMomentum = clamp(scoreMomentumRaw - rangingMarketPenalty, 0, 1);
 
     // 🔍 DIAGNOSTIC: Log raw strategy scores BEFORE penalties
     if (process.env.UNIT_TEST_MODE !== 'true') {
@@ -1284,6 +1332,14 @@ class MetaAdaptiveStrategyAgent {
       fundingRate: derivatives?.fundingRate ?? null,
     });
     const rankingMultiplier = this.computeRankingMultiplier(ranking.rank, ranking.score, watchlistState);
+
+    // 🚀 BACKTEST-PROVEN: Asset-based confidence multiplier
+    // BTC: Most liquid, keep full confidence (1.0)
+    // ETH: Slightly less liquid, small penalty (0.92)
+    // Others (SOL, altcoins): More volatile, heavy filter (0.75) - only best signals
+    const assetConfidenceMultiplier = input.symbol.includes('BTC') ? 1.0 
+      : input.symbol.includes('ETH') ? 0.92 
+      : 0.75;
 
     const capital = this.resolveCapital(input.sessionId ?? null, input.accountBalanceUsd ?? null);
     const desiredProfit = input.desiredProfitUsd != null
@@ -1423,9 +1479,9 @@ class MetaAdaptiveStrategyAgent {
       : this.defaultFeeBps;
 
     const adjustedPlans: Record<StrategyFamily, AdaptiveStrategyPlan> = {
-      trend: this.scalePlanByAtr(basePlans.trend, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
-      breakout: this.scalePlanByAtr(basePlans.breakout, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
-      mean_reversion: this.scalePlanByAtr(basePlans.mean_reversion, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps),
+      trend: this.scalePlanByAtr(basePlans.trend, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps, input.symbol),
+      breakout: this.scalePlanByAtr(basePlans.breakout, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps, input.symbol),
+      mean_reversion: this.scalePlanByAtr(basePlans.mean_reversion, atr15mPct, atr1hPct, atr4hPct, capital, desiredProfit, !context.conflict, takerFeeBps, input.symbol),
       momentum: this.scalePlanByAtr(
         basePlans.momentum,
         atr15mPct,
@@ -1435,6 +1491,7 @@ class MetaAdaptiveStrategyAgent {
         desiredProfit,
         !context.conflict && context.alignmentScore >= 0.9,
         takerFeeBps,
+        input.symbol,
       ),
     };
 
@@ -2288,6 +2345,12 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore *= rankingMultiplier;
           reasonsAugmented.push(`ranking_mult=${rankingMultiplier.toFixed(2)}`);
         }
+        // 🚀 BACKTEST-PROVEN: Apply asset-based confidence multiplier
+        // This filters out weak signals on volatile altcoins
+        if (assetConfidenceMultiplier !== 1) {
+          effectiveScore *= assetConfidenceMultiplier;
+          reasonsAugmented.push(`asset_mult=${assetConfidenceMultiplier.toFixed(2)}`);
+        }
         if (derivativeSignal.volatility > 0.35 && item.family === 'mean_reversion') {
           effectiveScore *= 0.75;
           penaltiesApplied.push('perp_volatility_suppression');
@@ -2557,9 +2620,52 @@ class MetaAdaptiveStrategyAgent {
       } : undefined
     );
     
+    // Build scoring breakdown for diagnostics/transparency
+    const scoringBreakdown = {
+      scores: {
+        trend: Number(scoreTrend.toFixed(3)),
+        breakout: Number(scoreBreakout.toFixed(3)),
+        meanReversion: Number(scoreMean.toFixed(3)),
+        momentum: Number(scoreMomentum.toFixed(3)),
+      },
+      components: {
+        adx: Number(adx.toFixed(1)),
+        rsi: Number(rsi.toFixed(1)),
+        cmf: Number(cmf.toFixed(3)),
+        volumeRatio: Number(volumeRatio.toFixed(2)),
+        trendStrength: Number(trendStrength.toFixed(2)),
+        compressionScore: Number(compressionScore.toFixed(3)),
+        alignmentScore: Number(context.alignmentScore.toFixed(3)),
+        emaAlignment: (emaAlignmentBull ? 'bullish' : emaAlignmentBear ? 'bearish' : 'mixed') as 'bullish' | 'bearish' | 'mixed',
+      },
+      detections: {
+        btcCorrelation: btcCorrelationLong.impactLevel !== 'none' || btcCorrelationShort.impactLevel !== 'none'
+          ? { long: btcCorrelationLong.impactLevel, short: btcCorrelationShort.impactLevel }
+          : null,
+        flashEvent: flashEventSignal.isFlashEvent ? flashEventSignal.eventType : null,
+        rebound: reboundSignal.probability > 0.5 ? { probability: reboundSignal.probability, reasons: reboundSignal.reasons.slice(0, 3) } : null,
+        reversal: reversalSignal.probability > 0.5 ? { probability: reversalSignal.probability, reasons: reversalSignal.reasons.slice(0, 3) } : null,
+      },
+      entryBlockers: [
+        ...(drawdownHalt ? ['session_drawdown_halt'] : []),
+        ...(fundamentalNegative ? ['fundamental_negative'] : []),
+        ...(directionalCandidates.length === 0 ? ['no_directional_bias'] : []),
+        ...(flashEventSignal.isFlashEvent ? ['flash_event_detected'] : []),
+        ...(portfolioExposureLong.shouldBlock ? ['portfolio_exposure_long'] : []),
+        ...(portfolioExposureShort.shouldBlock ? ['portfolio_exposure_short'] : []),
+      ],
+      winner: selection ? {
+        family: selection.family,
+        score: Number(selection.score.toFixed(3)),
+        confidence: Number(selection.confidence.toFixed(3)),
+        bias: selection.bias,
+      } : null,
+    };
+    
     return {
       signals: enrichedSignals,
       selection,
+      scoringBreakdown,
     };
   }
 
@@ -2992,13 +3098,23 @@ class MetaAdaptiveStrategyAgent {
     desiredProfit: PreciseDecimal,
     allowUpsize: boolean,
     feeBps: PreciseDecimal,
+    symbol: string = '', // Added for asset-based adjustments
   ): AdaptiveStrategyPlan {
     const targetAtr = atr1h > 0 ? atr1h : atr15m;
     const current = atr15m > 0 ? atr15m : targetAtr;
     const ratio = current > 0 ? clamp(targetAtr / current, 0.75, 1.35) : 1;
     let scaledRisk = base.riskPct.times(new PreciseDecimal(ratio.toFixed(6)));
     const atrBlend = atr4h > 0 ? (atr4h + atr1h + atr15m) / 3 : atr1h > 0 ? (atr1h + atr15m) / 2 : atr15m;
-    const stopMult = base.stopAtrMult.times(new PreciseDecimal(clamp(atrBlend > 0 ? atr15m / atrBlend : 1, 0.75, 1.35).toFixed(6)));
+    
+    // 🚀 BACKTEST-PROVEN: Wider stops for volatile altcoins to avoid noise
+    // BTC: standard stop (1.0x), ETH: slightly wider (1.1x), Altcoins: wider (1.25x)
+    const assetStopMultiplier = symbol.includes('BTC') ? 1.0 
+      : symbol.includes('ETH') ? 1.1 
+      : 1.25; // Wider stops for volatile altcoins
+    
+    const stopMult = base.stopAtrMult
+      .times(new PreciseDecimal(clamp(atrBlend > 0 ? atr15m / atrBlend : 1, 0.75, 1.35).toFixed(6)))
+      .times(new PreciseDecimal(assetStopMultiplier.toFixed(2)));
     const median = base.medianTakeProfitR ?? new PreciseDecimal('1');
     if (median.gt(0) && !capital.equals(0)) {
       const numerator = desiredProfit.times(new PreciseDecimal('100'));

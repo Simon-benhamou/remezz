@@ -33,6 +33,7 @@ import PriceChart from '../charts/PriceChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
 import MetaAdaptiveStatePanel from '../components/MetaAdaptiveStatePanel';
+import ScoringBreakdownPanel from '../components/ScoringBreakdownPanel';
 import MarketContextCard from '../components/MarketContextCard';
 import PositionInfoCard from '../components/PositionInfoCard';
 import SymbolProfileCard from '../components/SymbolProfileCard';
@@ -1322,6 +1323,15 @@ export default function SessionCockpitPage() {
                 <Skeleton active paragraph={{ rows: 6 }} />
               )}
             </Card>
+          </Col>
+        </Row>
+
+        {/* New Scoring Breakdown Panel for strategy transparency */}
+        <Row gutter={[24, 24]}>
+          <Col xs={24}>
+            {shouldShowContent(LoadingPhase.CORE_DATA) && diagnostics?.scoringBreakdown ? (
+              <ScoringBreakdownPanel breakdown={diagnostics.scoringBreakdown} />
+            ) : null}
           </Col>
         </Row>
 
