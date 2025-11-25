@@ -22,7 +22,7 @@ import {
   classifyTrendingRanging,
 } from '../../../learning/personalityProfile.js';
 import { recordTradeOutcome } from '../../../services/adaptiveThresholdLearning.js';
-import { detectReboundForShort, detectReversalForLong, detectVolatilitySqueeze } from './reboundDetection.js';
+import { detectReboundForShort, detectReversalForLong, detectVolatilitySqueeze, detectBigMoveMode } from './reboundDetection.js';
 import { detectBTCCorrelationImpact } from './btcCorrelation.js';
 import { detectAccumulationPattern, getAccumulationSignalForBias } from './accumulationDetection.js';
 import { detectNewsImpact } from './newsDetection.js';
@@ -1580,11 +1580,35 @@ class MetaAdaptiveStrategyAgent {
     }
 
     // 🎯 REBOUND DETECTION: Detect potential rebounds that would invalidate shorts
-    const reboundSignal = detectReboundForShort(snap);
-    const reversalSignal = detectReversalForLong(snap);
+    // Pass change24hPct to enable BIG MOVE MODE detection
+    const reboundSignal = detectReboundForShort(snap, change24hPct);
+    const reversalSignal = detectReversalForLong(snap, change24hPct);
     const squeezeSignal = detectVolatilitySqueeze(snap);
     
-    // 📊 ACCUMULATION/DISTRIBUTION DETECTION: Detect progressive volume patterns
+    // � BIG MOVE MODE DETECTION: When daily change > 10%, extreme RSI = opportunity
+    const bigMoveSignal = detectBigMoveMode(snap, change24hPct);
+    
+    // Log big move mode for diagnostics
+    if (bigMoveSignal.isBigMove) {
+      const eventData = {
+        event: 'big_move_mode',
+        symbol: input.symbol,
+        sessionId: input.sessionId,
+        direction: bigMoveSignal.direction,
+        strength: bigMoveSignal.strength,
+        reasons: bigMoveSignal.reasons,
+        rsi14: Number((snap as any)?.rsi14 ?? 50),
+        adx14: snap.adx14,
+        change24hPct: change24hPct,
+        message: bigMoveSignal.direction === 'pump' 
+          ? '🚀 BIG PUMP: Extreme RSI = trend strength, favor LONGS'
+          : '📉 BIG DUMP: Extreme RSI = trend strength, favor SHORTS',
+      };
+      console.log(JSON.stringify(eventData));
+      broadcast('big_move_mode', eventData, input.symbol, input.sessionId ?? undefined);
+    }
+    
+    // �📊 ACCUMULATION/DISTRIBUTION DETECTION: Detect progressive volume patterns
     const accumulationSignal = detectAccumulationPattern(input.symbol, snap);
     
     // Log rebound detection for diagnostics
@@ -1829,35 +1853,27 @@ class MetaAdaptiveStrategyAgent {
         }
       }
       
-      // 🛡️ REBOUND PROTECTION FOR SHORTS (STRENGTHENED + CONTEXTUAL)
+      // � OPPORTUNITY-FIRST: Rebound/Reversal = SIGNAL, not blocker
+      // In crypto, oversold can dump more, overbought can pump more
+      // Use these signals to BOOST aligned trades, soft penalty on counter-trades
+      
+      // 🎯 REBOUND LOGIC FOR SHORTS (softened - crypto can dump further when oversold)
       if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
         if (reboundSignal.shouldBlock) {
-          // Critical rebound risk - block shorts entirely
-          effectiveScore = 0;
-          penaltiesApplied.push(`rebound_block(${reboundSignal.severity})`);
-          reasonsAugmented.push(...reboundSignal.reasons);
-        } else if (reboundSignal.probability >= 0.50) {  // 🎯 FIX: Raised from 0.35 to 0.50 to reduce false blocks
-          // 🎯 CONTEXTUAL LOGIC: Only block if AGAINST trend
-          const isTrendBearish = context.bearishStack && context.alignmentScore >= 0.7;
-          
-          // ⚠️ SOFT PENALTY: Rebound in strong downtrend (counter-trend bounce risk)
-          if (!isTrendBearish || reboundSignal.probability >= 0.5) {
-            // Not in strong downtrend OR high rebound probability → Penalize heavily
-            const reboundPenalty = Math.min(0.95, reboundSignal.probability * 1.3);
-            effectiveScore *= (1 - reboundPenalty);
-            penaltiesApplied.push(`rebound_risk(${reboundSignal.severity})`);
-            reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
-          }
-          // ✅ ALLOW: Strong downtrend + low rebound prob (35-50%) → Reduced penalty only
-          else {
-            effectiveScore *= 0.8; // Mild 20% penalty (was blocking)
-            penaltiesApplied.push('rebound_caution_in_trend');
-          }
-        } else if (reboundSignal.probability >= 0.35) {  // 🎯 FIX: Raised from 0.25 to 0.35 for consistency
-          // Low rebound risk (35-50%) - very mild penalty
-          effectiveScore *= 0.90;  // 🎯 FIX: Reduced penalty from 0.85 to 0.90
+          // Only on EXTREME rebound (prob >= 0.85 + RSI < 20) - very rare
+          effectiveScore *= 0.3;  // Heavy penalty but NOT zero
+          penaltiesApplied.push(`rebound_extreme(${reboundSignal.severity})`);
+          reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
+        } else if (reboundSignal.probability >= 0.60) {
+          // High rebound probability - moderate penalty
+          effectiveScore *= 0.75;
+          penaltiesApplied.push('rebound_caution');
+        } else if (reboundSignal.probability >= 0.45) {
+          // Moderate rebound - very soft penalty
+          effectiveScore *= 0.90;
           penaltiesApplied.push('rebound_watch');
         }
+        // Below 0.45 = no penalty on shorts
       }
       
       // 🎯 REBOUND OPPORTUNITY FOR LONGS (Technical analysis based)
@@ -1898,16 +1914,22 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore = Math.min(1, effectiveScore * 1.12);
           reasonsAugmented.push(`${emaLevel}_bounce_setup`);
         }
-        // 🛑 REVERSAL PROTECTION (block longs if dump risk)
+        // � OPPORTUNITY-FIRST: Reversal = soft penalty, not blocker
+        // Crypto can pump further when overbought - let trailing stop handle
         else if (reversalSignal.shouldBlock) {
-          // Block longs if reversal risk is critical
-          effectiveScore = 0;
-          penaltiesApplied.push(`reversal_block(${reversalSignal.severity})`);
+          // Only on EXTREME reversal (prob >= 0.85 + RSI > 80) - very rare
+          effectiveScore *= 0.3;  // Heavy penalty but NOT zero
+          penaltiesApplied.push(`reversal_extreme(${reversalSignal.severity})`);
+        } else if (reversalSignal.probability >= 0.60) {
+          // High reversal probability - moderate penalty
+          effectiveScore *= 0.75;
+          penaltiesApplied.push('reversal_caution');
         } else if (reversalSignal.probability >= 0.45) {
-          // Moderate reversal risk - penalize longs
-          effectiveScore *= (1 - reversalSignal.probability * 0.6);
-          penaltiesApplied.push('reversal_risk');
+          // Moderate reversal - very soft penalty
+          effectiveScore *= 0.90;
+          penaltiesApplied.push('reversal_watch');
         }
+        // Below 0.45 = no penalty on longs
       }
       
       // 🎯 RESISTANCE REJECTION FOR SHORTS (Technical analysis based)
@@ -1948,28 +1970,48 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore = Math.min(1, effectiveScore * 1.12);
           reasonsAugmented.push(`${emaLevel}_rejection_setup`);
         }
-        // 🛑 REBOUND PROTECTION (block shorts if bounce risk)
-        else if (reboundSignal.shouldBlock) {
-          effectiveScore = 0;
-          penaltiesApplied.push(`rebound_block(${reboundSignal.severity})`);
-        } else if (reboundSignal.probability >= 0.45) {
-          effectiveScore *= (1 - reboundSignal.probability * 0.6);
-          penaltiesApplied.push('rebound_risk');
-        }
+        // � OPPORTUNITY-FIRST: Rebound on shorts = soft penalty only
+        // Already handled above with softer logic
       }
       
-      // ⚠️ VOLATILITY SQUEEZE PROTECTION
+      // ⚠️ VOLATILITY SQUEEZE = OPPORTUNITY (breakout incoming!)
       if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'extreme') {
-        // Extreme squeeze - reduce all entries (direction unpredictable)
-        effectiveScore *= 0.4;
-        penaltiesApplied.push('extreme_vol_squeeze');
+        // Extreme squeeze - BOOST breakout/momentum, caution on others
+        if (item.family === "breakout" || item.family === "momentum") { effectiveScore = Math.min(1, effectiveScore * 1.15); reasonsAugmented.push("squeeze_breakout_setup"); } else { effectiveScore *= 0.85; }
+        penaltiesApplied.push('squeeze_direction_unclear');
         reasonsAugmented.push(...squeezeSignal.reasons);
       } else if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'moderate') {
-        effectiveScore *= 0.7;
+        effectiveScore *= 0.95; // Very soft penalty
         penaltiesApplied.push('vol_squeeze');
       }
       
-      // 📊 ACCUMULATION/DISTRIBUTION GATE
+      // � BIG MOVE MODE: 20%+ daily move with extreme RSI = TREND STRENGTH, not reversal!
+      // In crypto, RSI 95 during +20% day = strong pump in progress (long opportunity)
+      // RSI 5 during -20% day = strong dump in progress (short opportunity)
+      if (bigMoveSignal.isBigMove) {
+        const isMomentumFamily = item.family === 'momentum' || item.family === 'breakout' || item.family === 'trend';
+        const isAlignedBias = (bigMoveSignal.direction === 'pump' && (item.bias === 'long' || (item.bias === 'both' && context.bullishStack))) ||
+                              (bigMoveSignal.direction === 'dump' && (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)));
+        
+        if (isMomentumFamily && isAlignedBias) {
+          // 🔥 MASSIVE BOOST: Momentum/trend strategies aligned with big move
+          const bigMoveBoost = 1.0 + (bigMoveSignal.strength * 0.35); // Up to +52% boost at strength 1.5
+          effectiveScore = Math.min(1, effectiveScore * bigMoveBoost);
+          reasonsAugmented.push(`🚀big_move_${bigMoveSignal.direction}_boost(${(bigMoveBoost * 100 - 100).toFixed(0)}%)`);
+          reasonsAugmented.push(...bigMoveSignal.reasons.slice(0, 2));
+        } else if (isAlignedBias) {
+          // Normal boost for aligned but non-momentum strategies
+          const alignedBoost = 1.0 + (bigMoveSignal.strength * 0.20); // Up to +30% boost
+          effectiveScore = Math.min(1, effectiveScore * alignedBoost);
+          reasonsAugmented.push(`big_move_aligned(${bigMoveSignal.direction})`);
+        } else if (!isAlignedBias && isMomentumFamily) {
+          // Counter-trend during big move = DANGEROUS, soft penalty
+          effectiveScore *= 0.75;
+          penaltiesApplied.push(`counter_${bigMoveSignal.direction}_caution`);
+        }
+      }
+      
+      // �📊 ACCUMULATION/DISTRIBUTION GATE
       // Detect smart money behavior BEFORE price moves
       if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
         const accSignal = getAccumulationSignalForBias(input.symbol, snap, 'long');
@@ -2143,7 +2185,7 @@ class MetaAdaptiveStrategyAgent {
         }
       }
       if (item.family === 'momentum' && context.alignmentScore <= 0.45 && adx <= 14) {
-        effectiveScore *= 0.7;
+        effectiveScore *= 0.95; // Very soft penalty
         penaltiesApplied.push('momentum_suppressed_range');
       }
       if (fundamentalNegative) {
@@ -2194,7 +2236,7 @@ class MetaAdaptiveStrategyAgent {
         penaltiesApplied.push('trend_score_low');
       }
       if (item.family === 'momentum' && volumeRatio < 1.2) {
-        effectiveScore *= 0.7;
+        effectiveScore *= 0.95; // Very soft penalty
         penaltiesApplied.push('volume_low');
       }
 

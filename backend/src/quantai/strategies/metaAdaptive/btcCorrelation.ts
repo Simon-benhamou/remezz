@@ -179,44 +179,55 @@ export async function detectBTCCorrelationImpact(
     let reason = 'btc_neutral';
     let impactLevel: BTCCorrelationSignal['impactLevel'] = 'none';
     
-    // LONG BIAS: Block longs when BTC is dumping (high correlation = alts dump too)
+    // 🚀 OPPORTUNITY-FIRST: BTC correlation = directional signal, not blocker!
+    // BTC moves WITH your trade = BOOST, against = soft penalty (not block)
+    
+    // LONG BIAS: BTC pump = tailwind (boost), BTC dump = headwind (soft penalty)
     if (bias === 'long' || bias === 'both') {
-      if (momentum === 'strong_down') {
-        // BTC dumping hard → Block alt longs entirely
-        shouldBlock = true;
-        penalty = 0.0;
-        reason = `btc_dump_critical(${change5m.toFixed(2)}%)`;
-        impactLevel = 'critical';
-      } else if (momentum === 'moderate_down') {
-        // BTC declining → Heavy penalty on alt longs
-        penalty = 0.3;
-        reason = `btc_dump_high(${change5m.toFixed(2)}%)`;
-        impactLevel = 'high';
-      } else if (momentum === 'strong_up') {
-        // BTC pumping → Slight boost to alt longs (correlation works in our favor)
-        penalty = 1.1;
+      if (momentum === 'strong_up') {
+        // BTC pumping hard → STRONG BOOST for alt longs (ride the wave!)
+        penalty = 1.35;
+        reason = `btc_pump_tailwind_strong(${change5m.toFixed(2)}%)`;
+        impactLevel = 'low';
+      } else if (momentum === 'moderate_up') {
+        // BTC rising → Moderate boost for alt longs
+        penalty = 1.15;
         reason = `btc_pump_tailwind(${change5m.toFixed(2)}%)`;
+        impactLevel = 'low';
+      } else if (momentum === 'strong_down') {
+        // BTC dumping hard → Soft penalty, NOT block (still tradeable with good signal)
+        penalty = 0.65;
+        reason = `btc_dump_headwind(${change5m.toFixed(2)}%)`;
+        impactLevel = 'medium';
+      } else if (momentum === 'moderate_down') {
+        // BTC declining → Very soft penalty
+        penalty = 0.85;
+        reason = `btc_dip_caution(${change5m.toFixed(2)}%)`;
         impactLevel = 'low';
       }
     }
     
-    // SHORT BIAS: Block shorts when BTC is pumping (alts pump too)
+    // SHORT BIAS: BTC dump = tailwind (boost), BTC pump = headwind (soft penalty)
     if (bias === 'short' || bias === 'both') {
-      if (momentum === 'strong_up') {
-        // BTC pumping hard → Block alt shorts entirely
-        shouldBlock = true;
-        penalty = 0.0;
-        reason = `btc_pump_critical(${change5m.toFixed(2)}%)`;
-        impactLevel = 'critical';
-      } else if (momentum === 'moderate_up') {
-        // BTC rising → Heavy penalty on alt shorts
-        penalty = 0.3;
-        reason = `btc_pump_high(${change5m.toFixed(2)}%)`;
-        impactLevel = 'high';
-      } else if (momentum === 'strong_down') {
-        // BTC dumping → Slight boost to alt shorts (correlation works in our favor)
-        penalty = 1.1;
+      if (momentum === 'strong_down') {
+        // BTC dumping hard → STRONG BOOST for alt shorts (ride the dump!)
+        penalty = 1.35;
+        reason = `btc_dump_tailwind_strong(${change5m.toFixed(2)}%)`;
+        impactLevel = 'low';
+      } else if (momentum === 'moderate_down') {
+        // BTC declining → Moderate boost for alt shorts
+        penalty = 1.15;
         reason = `btc_dump_tailwind(${change5m.toFixed(2)}%)`;
+        impactLevel = 'low';
+      } else if (momentum === 'strong_up') {
+        // BTC pumping hard → Soft penalty, NOT block (still tradeable with good signal)
+        penalty = 0.65;
+        reason = `btc_pump_headwind(${change5m.toFixed(2)}%)`;
+        impactLevel = 'medium';
+      } else if (momentum === 'moderate_up') {
+        // BTC rising → Very soft penalty
+        penalty = 0.85;
+        reason = `btc_rise_caution(${change5m.toFixed(2)}%)`;
         impactLevel = 'low';
       }
     }

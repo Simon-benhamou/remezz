@@ -4,6 +4,10 @@
  * Detects potential price rebounds that could invalidate short positions
  * or provide long opportunities. Uses RSI, price structure, volume, and
  * momentum indicators to assess rebound probability.
+ * 
+ * 🚀 BIG MOVE MODE: When 24h change > 10%, extreme RSI indicates trend 
+ * strength (momentum), NOT exhaustion. In crypto, RSI can stay at 95 or 5 
+ * for hours during a strong move - these are OPPORTUNITIES.
  */
 
 import type { TechnicalSnapshot } from '../../../ai/tech.js';
@@ -14,27 +18,131 @@ export type ReboundSignal = {
   reasons: string[];
   shouldBlock: boolean;
   tradeBias: 'avoid_short' | 'favor_long' | 'neutral' | 'avoid_long' | 'favor_short';
+  isBigMoveMode: boolean; // NEW: True when extreme RSI is trend continuation
+  bigMoveDirection: 'pump' | 'dump' | null; // NEW: Direction of big move
   components: {
     rsi: number;
     priceStructure: number;
     volume: number;
     momentum: number;
+    bigMoveBoost: number; // NEW: Boost when in big move mode
   };
 };
 
 /**
+ * Detect if we're in a "big move" day where extreme RSI = momentum, not exhaustion
+ * Returns true when 24h change is significant AND ADX confirms strong trend
+ */
+export function detectBigMoveMode(
+  snap: TechnicalSnapshot, 
+  change24hPct?: number
+): { isBigMove: boolean; direction: 'pump' | 'dump' | null; strength: number; reasons: string[] } {
+  const reasons: string[] = [];
+  const adx = snap.adx14;
+  const volumeRatio = Number((snap as any)?.volumeRatio ?? 1);
+  
+  // Estimate 24h change from price vs EMA200 if not provided
+  const price = snap.last;
+  const ema200 = Number((snap as any)?.ema200 ?? price);
+  const estimatedChange = change24hPct ?? (ema200 > 0 ? ((price - ema200) / ema200) * 100 : 0);
+  const absChange = Math.abs(estimatedChange);
+  
+  // 🔥 BIG MOVE DETECTION CRITERIA:
+  // 1. Daily change > 10% (significant move)
+  // 2. ADX > 30 (strong trend in progress)
+  // 3. Volume confirmation (above average)
+  
+  let isBigMove = false;
+  let strength = 0;
+  let direction: 'pump' | 'dump' | null = null;
+  
+  if (absChange >= 10) {
+    direction = estimatedChange > 0 ? 'pump' : 'dump';
+    strength = Math.min(absChange / 20, 1); // Normalize: 20% = strength 1.0
+    reasons.push(`24h_change_${absChange.toFixed(1)}%_${direction}`);
+    
+    // ADX confirms trending market
+    if (adx >= 30) {
+      strength += 0.3;
+      reasons.push(`strong_trend_adx_${adx.toFixed(1)}`);
+      isBigMove = true;
+    } else if (adx >= 25) {
+      strength += 0.15;
+      reasons.push(`moderate_trend_adx_${adx.toFixed(1)}`);
+      // Still consider it big move if change is huge
+      isBigMove = absChange >= 15;
+    }
+    
+    // Volume confirmation
+    if (volumeRatio >= 1.5) {
+      strength += 0.2;
+      reasons.push(`high_volume_${volumeRatio.toFixed(1)}x`);
+      isBigMove = true;
+    } else if (volumeRatio >= 1.2) {
+      strength += 0.1;
+      reasons.push(`elevated_volume_${volumeRatio.toFixed(1)}x`);
+    }
+    
+    // If change > 20%, it's definitely a big move regardless of ADX
+    if (absChange >= 20) {
+      isBigMove = true;
+      strength = Math.min(strength + 0.3, 1.5);
+      reasons.push('extreme_move_override');
+    }
+  }
+  
+  return { isBigMove, direction, strength: Number(strength.toFixed(2)), reasons };
+}
+
+/**
  * Detect potential rebounds for SHORT positions
  * Returns high probability when conditions favor a bounce that would hurt shorts
+ * 
+ * 🚀 BIG MOVE MODE: When in a dump (-10%+ daily), extreme oversold RSI is
+ * confirmation of trend strength - SHORT opportunity, not rebound warning!
  */
-export function detectReboundForShort(snap: TechnicalSnapshot): ReboundSignal {
+export function detectReboundForShort(snap: TechnicalSnapshot, change24hPct?: number): ReboundSignal {
+  // Check for big move mode FIRST
+  const bigMove = detectBigMoveMode(snap, change24hPct);
+  
   const components = {
     rsi: 0,
     priceStructure: 0,
     volume: 0,
     momentum: 0,
+    bigMoveBoost: 0,
   };
   
   const reasons: string[] = [];
+  
+  // 🔥 BIG MOVE MODE: If we're in a DUMP, extreme RSI is an OPPORTUNITY
+  if (bigMove.isBigMove && bigMove.direction === 'dump') {
+    reasons.push('🚀 BIG_MOVE_MODE: Dump in progress - extreme RSI = trend continuation');
+    reasons.push(...bigMove.reasons);
+    
+    // In a dump, low RSI confirms the move - this is a SHORT opportunity
+    const rsi14 = Number((snap as any)?.rsi14 ?? 50);
+    if (rsi14 < 30) {
+      // RSI < 30 during a dump = trend is STRONG, not exhausted
+      components.bigMoveBoost = -0.5 * bigMove.strength; // Negative = reduces rebound probability
+      reasons.push(`extreme_RSI_${rsi14.toFixed(0)}_confirms_dump_strength`);
+    }
+    
+    // Return immediately with low rebound probability
+    const probability = Math.max(0, 0.15 - (bigMove.strength * 0.1));
+    return {
+      probability: Number(probability.toFixed(4)),
+      severity: 'low',
+      reasons,
+      shouldBlock: false, // NEVER block during big moves
+      tradeBias: 'favor_short', // Favor shorts during dumps!
+      isBigMoveMode: true,
+      bigMoveDirection: 'dump',
+      components,
+    };
+  }
+  
+  // === NORMAL MODE (no big move) - original logic ===
   
   // 1. RSI OVERSOLD DETECTION (STRENGTHENED)
   const rsi14 = Number((snap as any)?.rsi14 ?? 50);
@@ -173,18 +281,18 @@ export function detectReboundForShort(snap: TechnicalSnapshot): ReboundSignal {
     severity = 'low';
   }
   
-  // BLOCKING DECISION
-  // Block shorts when rebound probability is high
-  const shouldBlock = probability >= 0.6 || (rsi14 < 25 && components.priceStructure >= 0.6);
+  // 🚀 OPPORTUNITY-FIRST: Only block on EXTREME rebound probability
+  // Crypto can dump further even when oversold - let trailing stop handle it
+  const shouldBlock = probability >= 0.85 && rsi14 < 20 && components.priceStructure >= 0.8;
   
-  // TRADE BIAS
+  // TRADE BIAS - use for signal boosting, not blocking
   let tradeBias: 'avoid_short' | 'favor_long' | 'neutral';
-  if (probability >= 0.65) {
-    tradeBias = 'favor_long'; // Actually favor long entries on rebounds
-  } else if (probability >= 0.45) {
-    tradeBias = 'avoid_short'; // Avoid shorts, but not ready for longs
+  if (probability >= 0.70) {
+    tradeBias = 'favor_long'; // Strong rebound signal - boost longs
+  } else if (probability >= 0.55) {
+    tradeBias = 'avoid_short'; // Moderate caution on shorts
   } else {
-    tradeBias = 'neutral';
+    tradeBias = 'neutral'; // Let technical signals decide
   }
   
   return {
@@ -193,6 +301,8 @@ export function detectReboundForShort(snap: TechnicalSnapshot): ReboundSignal {
     reasons,
     shouldBlock,
     tradeBias,
+    isBigMoveMode: false, // Normal mode
+    bigMoveDirection: null,
     components,
   };
 }
@@ -200,13 +310,57 @@ export function detectReboundForShort(snap: TechnicalSnapshot): ReboundSignal {
 /**
  * Detect potential reversals for LONG positions
  * Returns high probability when conditions favor a dump that would hurt longs
+ * 
+ * 🚀 BIG MOVE MODE: When in a pump (+10%+ daily), extreme overbought RSI is
+ * confirmation of trend strength - LONG opportunity, not reversal warning!
  */
-export function detectReversalForLong(snap: TechnicalSnapshot): ReboundSignal {
+export function detectReversalForLong(snap: TechnicalSnapshot, change24hPct?: number): ReboundSignal {
+  // Check for big move mode FIRST
+  const bigMove = detectBigMoveMode(snap, change24hPct);
+  
+  // 🔥 BIG MOVE MODE: If we're in a PUMP, extreme RSI is an OPPORTUNITY
+  if (bigMove.isBigMove && bigMove.direction === 'pump') {
+    const reasons = ['🚀 BIG_MOVE_MODE: Pump in progress - extreme RSI = trend continuation'];
+    reasons.push(...bigMove.reasons);
+    
+    const components = {
+      rsi: 0,
+      priceStructure: 0,
+      volume: 0,
+      momentum: 0,
+      bigMoveBoost: 0,
+    };
+    
+    // In a pump, high RSI confirms the move - this is a LONG opportunity
+    const rsi14 = Number((snap as any)?.rsi14 ?? 50);
+    if (rsi14 > 70) {
+      // RSI > 70 during a pump = trend is STRONG, not exhausted
+      components.bigMoveBoost = -0.5 * bigMove.strength; // Negative = reduces reversal probability
+      reasons.push(`extreme_RSI_${rsi14.toFixed(0)}_confirms_pump_strength`);
+    }
+    
+    // Return immediately with low reversal probability
+    const probability = Math.max(0, 0.15 - (bigMove.strength * 0.1));
+    return {
+      probability: Number(probability.toFixed(4)),
+      severity: 'low',
+      reasons,
+      shouldBlock: false, // NEVER block during big moves
+      tradeBias: 'favor_long', // Favor longs during pumps!
+      isBigMoveMode: true,
+      bigMoveDirection: 'pump',
+      components,
+    };
+  }
+  
+  // === NORMAL MODE (no big move) - original logic ===
+  
   const components = {
     rsi: 0,
     priceStructure: 0,
     volume: 0,
     momentum: 0,
+    bigMoveBoost: 0,
   };
   
   const reasons: string[] = [];
@@ -294,16 +448,18 @@ export function detectReversalForLong(snap: TechnicalSnapshot): ReboundSignal {
   else if (probability >= 0.4) severity = 'medium';
   else severity = 'low';
   
-  const shouldBlock = probability >= 0.6 || (rsi14 > 75 && components.priceStructure >= 0.6);
+  // 🚀 OPPORTUNITY-FIRST: Only block on EXTREME reversal probability
+  // Crypto can pump further even when overbought - let trailing stop handle it
+  const shouldBlock = probability >= 0.85 && rsi14 > 80 && components.priceStructure >= 0.8;
   
-  // TRADE BIAS for reversal (favors shorts when probability is high)
+  // TRADE BIAS for reversal - use for signal boosting, not blocking
   let tradeBias: 'avoid_long' | 'favor_short' | 'neutral';
-  if (probability >= 0.65) {
-    tradeBias = 'favor_short'; // Actually favor short entries on reversals
-  } else if (probability >= 0.45) {
-    tradeBias = 'avoid_long'; // Avoid longs, but not ready for shorts
+  if (probability >= 0.70) {
+    tradeBias = 'favor_short'; // Strong reversal signal - boost shorts
+  } else if (probability >= 0.55) {
+    tradeBias = 'avoid_long'; // Moderate caution on longs
   } else {
-    tradeBias = 'neutral';
+    tradeBias = 'neutral'; // Let technical signals decide
   }
   
   return {
@@ -312,6 +468,8 @@ export function detectReversalForLong(snap: TechnicalSnapshot): ReboundSignal {
     reasons,
     shouldBlock,
     tradeBias,
+    isBigMoveMode: false, // Normal mode
+    bigMoveDirection: null,
     components,
   };
 }

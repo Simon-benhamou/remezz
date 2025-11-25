@@ -156,7 +156,7 @@ type EvaluateOptions = {
   volume24hUsd?: number | null;
 };
 
-const DEFAULT_CONFIDENCE_THRESHOLD = 0.30;  // FIX #1: Unified lower threshold (was 0.40, still too restrictive)
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.22;  // OPPORTUNITY-FIRST: Lowered from 0.30 to capture more crypto moves
 const BLOCKED_REASON_LOW_CONFIDENCE = 'low_confidence';
 const BLOCKED_REASON_WEAK_CONTEXT = 'weak_entry_context';
 const BLOCKED_REASON_SHORT_CONF_GUARD = 'short_confidence_guard';
@@ -340,7 +340,7 @@ const MAX_RISK_ATR_MULT = (() => {
 
 export const metaAdaptiveConfidenceThreshold = CONFIDENCE_THRESHOLD;
 
-const ENTRY_ELIGIBILITY_THRESHOLD = 0.40;  // FIX #3: Lowered from 0.50 to reduce gate blocking
+const ENTRY_ELIGIBILITY_THRESHOLD = 0.32;  // OPPORTUNITY-FIRST: Lowered from 0.40 to capture more setups
 
 function eligibilityReliefFromConfidence(confidence: number | null | undefined): number {
   if (!Number.isFinite(confidence ?? NaN)) return 0;

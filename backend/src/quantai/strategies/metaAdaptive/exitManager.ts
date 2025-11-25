@@ -19,10 +19,10 @@ export type ExitDirective =
 
 const rrFloorRaw = process.env.META_ADAPTIVE_MIN_RR
   ?? process.env.META_ADAPTIVE_RR_MIN
-  ?? '1.5';
+  ?? '1.3';  // OPPORTUNITY-FIRST: Allow 1.3R minimum (was 1.5) for faster crypto trades
 const RR_MIN = (() => {
   const parsed = Number.parseFloat(rrFloorRaw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.8;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.3;  // Default 1.3R
 })();
 
 const parseEnvNumber = (raw: string | undefined, fallback: number): number => {
