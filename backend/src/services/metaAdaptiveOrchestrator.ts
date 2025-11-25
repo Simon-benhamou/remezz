@@ -32,7 +32,7 @@ import { AgentHub } from '../agent/hub.js';
 import { getAgentContext } from '../agent/context.js';
 import { agentMemoryStore } from '../agent/memory/store.js';
 import { getExecutionModeDirective } from '../agent/actions/directives.js';
-import type { ExecutionPlan, MarketQualityScore, PredictorInsight, RiskLimits, SentimentSignal } from '../agent/subagents/types.js';
+import type { ExecutionPlan, MarketQualityScore, RiskLimits, SentimentSignal } from '../agent/subagents/types.js';
 import type { Broker } from '../broker/types.js';
 import { PaperBroker } from '../broker/paper.js';
 import { LiveBroker } from '../broker/live.js';
@@ -1175,13 +1175,8 @@ async function executeEntryTrade(
         `Support agents | mqScore=${marketQualitySnapshot.score.toFixed(2)} spread=${marketQualitySnapshot.spreadBps.toFixed(1)}bps depth=$${marketQualitySnapshot.bookDepthUsd.toFixed(0)} sentiment=${sentimentSignal.bias}(${(sentimentSignal.confidence * 100).toFixed(0)}%) riskMax=$${riskLimits.maxPositionUsd.toFixed(0)}`,
       );
 
-      const predictorInsight = agentMemoryStore.get<PredictorInsight>('predictor', session.symbol)?.data ?? null;
-      if (predictorInsight?.enabled) {
-        integrationLogger.info(
-          `Predictor insight | bias=${predictorInsight.bias} confidence=${predictorInsight.confidence.toFixed(2)} lastRetrained=${predictorInsight.lastRetrainedAt ?? 'n/a'}`,
-        );
-      }
-      predictorConfidenceForMetrics = predictorInsight?.enabled ? predictorInsight.confidence : undefined;
+      // Predictor is disabled - no longer used
+      predictorConfidenceForMetrics = undefined;
 
       if (riskLimits.hedgingRequired) {
         const reason = riskLimits.reason ?? 'risk_governor_requires_hedge';
@@ -1213,7 +1208,7 @@ async function executeEntryTrade(
       const adaptiveEval = await evaluateAdaptiveEntry({
         symbol: session.symbol,
         compatibilityScore: marketQualitySnapshot.score,
-        predictorConfidence: predictorInsight?.confidence || signal.confidence,
+        predictorConfidence: signal.confidence, // Predictor disabled - use signal confidence
         atrPct,
         volumeRatio,
         volumeUsd,

@@ -4,8 +4,7 @@ services:
     env: node
     region: frankfurt
     plan: starter
-    buildCommand: |
-      cd backend && npm ci && npm run build && chmod +x setup-predictor.sh && ./setup-predictor.sh
+    buildCommand: cd backend && npm ci && npm run build
     startCommand: cd backend && node dist/src/server.js
     envVars:
       - key: NODE_ENV
@@ -14,8 +13,6 @@ services:
         value: 4000
       - key: PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING
         value: 1
-      - key: PYTHON_PREDICT_TIMEOUT_MS
-        value: 15000
       - key: DATABASE_URL
         sync: false
       - key: HL_API_KEY

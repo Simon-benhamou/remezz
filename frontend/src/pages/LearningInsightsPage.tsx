@@ -257,19 +257,6 @@ function renderExecutionTuning(record: SubagentLearningRecord<'execution'>) {
   );
 }
 
-function renderPredictorTuning(record: SubagentLearningRecord<'predictor'>) {
-  const tuning = record.tuning;
-  const actionColor = tuning.action === 'retrain' ? 'red' : tuning.action === 'monitor' ? 'gold' : 'green';
-  return (
-    <>
-      <Tag color={actionColor} style={{ borderRadius: 10 }}>Action {tuning.action}</Tag>
-      <Tag color='geekblue' style={{ borderRadius: 10 }}>Confidence x{tuning.confidenceModifier.toFixed(2)}</Tag>
-      <Tag color='geekblue' style={{ borderRadius: 10 }}>Cache {(tuning.cacheTtlMultiplier * 100).toFixed(0)}%</Tag>
-      <Tag color='default' style={{ borderRadius: 10 }}>{tuning.forceFresh ? 'Force fresh' : 'Cache ok'}</Tag>
-    </>
-  );
-}
-
 function renderSentimentTuning(record: SubagentLearningRecord<'sentiment'>) {
   const tuning = record.tuning;
   return (
@@ -359,11 +346,9 @@ const LearningInsightsPage: React.FC = () => {
 
   const riskRecords = subagentSnapshot?.data.risk ?? [];
   const executionRecords = subagentSnapshot?.data.execution ?? [];
-  const predictorRecords = subagentSnapshot?.data.predictor ?? [];
   const sentimentRecords = subagentSnapshot?.data.sentiment ?? [];
   const marketRecords = subagentSnapshot?.data.marketQuality ?? [];
-  const totalLearningCombos = riskRecords.length + executionRecords.length + predictorRecords.length + sentimentRecords.length + marketRecords.length;
-  const predictorRetrains = predictorRecords.filter((record) => record.tuning.action === 'retrain').length;
+  const totalLearningCombos = riskRecords.length + executionRecords.length + sentimentRecords.length + marketRecords.length;
   const riskTightenings = riskRecords.filter((record) => record.tuning.recommendedMaxLeverage <= 2.5).length;
   const executionModeShifts = executionRecords.filter((record) => record.tuning.preferredMode && record.tuning.preferredMode !== 'market').length;
   const subagentLookbackLabel = subagentSnapshot
@@ -379,13 +364,6 @@ const LearningInsightsPage: React.FC = () => {
       value: subagentSnapshot?.combosEvaluated ?? totalLearningCombos ?? '—',
       helper: subagentLookbackLabel,
       accent: '#60a5fa',
-    },
-    {
-      key: 'predictorRetrain',
-      title: 'Predictors flagged',
-      value: predictorRetrains,
-      helper: 'Action = retrain',
-      accent: '#f87171',
     },
     {
       key: 'riskTighten',
@@ -564,7 +542,7 @@ const LearningInsightsPage: React.FC = () => {
         <Space align='center' size={10} wrap>
           <Tag color='purple' icon={<Cpu size={14} />} style={{ borderRadius: 999 }}>Subagent telemetry</Tag>
           <Text style={{ color: 'rgba(226,232,240,0.78)' }}>
-            Learnings pushed by risk, execution, predictor, sentiment, and market-quality subagents to self-tune operations.
+            Learnings pushed by risk, execution, sentiment, and market-quality subagents to self-tune operations.
           </Text>
           {subagentUpdated && (
             <Tag color='default' style={{ borderRadius: 10 }}>
@@ -605,16 +583,6 @@ const LearningInsightsPage: React.FC = () => {
               records={executionRecords as GenericSubagentRecord[]}
               emptyLabel='Execution layer stable.'
               renderTuning={(record) => renderExecutionTuning(record as SubagentLearningRecord<'execution'>)}
-            />
-          </Col>
-          <Col xs={24} md={12}>
-            <SubagentPanel
-              title='Predictor steward'
-              accent='#60a5fa'
-              icon={<Brain size={16} color='#60a5fa' />}
-              records={predictorRecords as GenericSubagentRecord[]}
-              emptyLabel='No predictor actions queued.'
-              renderTuning={(record) => renderPredictorTuning(record as SubagentLearningRecord<'predictor'>)}
             />
           </Col>
           <Col xs={24} md={12}>

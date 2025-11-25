@@ -1,6 +1,5 @@
 import { prisma } from '../db/client.js';
 import { getAutoUniverseStatusSnapshot } from '../services/intelligentAgent/autoUniverseScheduler.js';
-import { getPredictorCacheStats } from '../quantai/predictorCache.js';
 import { broadcast } from '../ws/hub.js';
 
 export type OpsJobStatus = {
@@ -120,27 +119,6 @@ function summarizeSchedulerType(
   };
 }
 
-function buildPredictorCacheJob(): OpsJobStatus {
-  const stats = getPredictorCacheStats();
-  return {
-    id: 'predictor_cache_refresh',
-    label: 'Predictor Cache Refresh',
-    status: stats.backgroundRefreshActive ? 'running' : 'paused',
-    lastRunAt: stats.lastRefreshAt ?? stats.lastWarmupAt ?? null,
-    lastSuccessAt: stats.isWarmupComplete ? stats.lastRefreshAt ?? stats.lastWarmupAt ?? null : null,
-    nextRunEta: stats.backgroundRefreshActive ? Date.now() + (stats.refreshIntervalMs ?? 20_000) : null,
-    lastError: stats.lastRefreshError ?? null,
-    healthy: stats.backgroundRefreshActive && !stats.lastRefreshError,
-    tags: ['predictor', 'python'],
-    meta: {
-      totalEntries: stats.totalEntries,
-      validEntries: stats.validEntries,
-      isWarmupComplete: stats.isWarmupComplete,
-      refreshIntervalMs: stats.refreshIntervalMs,
-    },
-  };
-}
-
 function buildAutoUniverseJob(): OpsJobStatus {
   const state = getAutoUniverseStatusSnapshot();
   const status: OpsJobStatus['status'] = state.nextRetryAt ? 'scheduled' : 'idle';
@@ -192,7 +170,6 @@ export async function computeOpsJobsSnapshot(): Promise<OpsJobsSnapshot> {
 
   const jobs: OpsJobStatus[] = [
     ...schedulerJobs,
-    buildPredictorCacheJob(),
     buildAutoUniverseJob(),
   ];
 

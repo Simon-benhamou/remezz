@@ -23,7 +23,9 @@ import {
   classifyTrendingRanging,
   type OptimalParams,
 } from '../../../learning/personalityProfile.js';
-import type { PredictorSnapshot } from '../../predictorStateStore.js';
+
+// Predictor removed - stub type for compatibility
+type PredictorSnapshot = null;
 
 type StrategyBias = 'long' | 'short' | 'both';
 
@@ -1142,22 +1144,7 @@ function toRecognizedSignal(
             riskMultiplier: signal.pythonSignal.riskMultiplier,
             cooldown: signal.pythonSignal.cooldown,
             meta: signal.pythonSignal.meta ?? null,
-            snapshot: signal.pythonSignal.snapshot
-              ? {
-                  ...signal.pythonSignal.snapshot,
-                  probabilities: { ...signal.pythonSignal.snapshot.probabilities },
-                  cooldown: { ...signal.pythonSignal.snapshot.cooldown },
-                  features: signal.pythonSignal.snapshot.features
-                    ? { ...signal.pythonSignal.snapshot.features }
-                    : null,
-                  classOrder: signal.pythonSignal.snapshot.classOrder
-                    ? [...signal.pythonSignal.snapshot.classOrder]
-                    : null,
-                  meta: signal.pythonSignal.snapshot.meta
-                    ? { ...signal.pythonSignal.snapshot.meta }
-                    : null,
-                }
-              : null,
+            snapshot: null, // Predictor removed
           }
         : null,
       entryAtr: Number.isFinite((snap as any)?.atr14) ? Number((snap as any).atr14) : null,
@@ -1851,22 +1838,7 @@ export async function registerAdaptiveTradeEntry(params: {
           riskMultiplier: params.signal.meta.pythonSignal.riskMultiplier,
           cooldown: params.signal.meta.pythonSignal.cooldown,
           meta: params.signal.meta.pythonSignal.meta ?? null,
-          snapshot: params.signal.meta.pythonSignal.snapshot
-            ? {
-                ...params.signal.meta.pythonSignal.snapshot,
-                probabilities: { ...params.signal.meta.pythonSignal.snapshot.probabilities },
-                cooldown: { ...params.signal.meta.pythonSignal.snapshot.cooldown },
-                features: params.signal.meta.pythonSignal.snapshot.features
-                  ? { ...params.signal.meta.pythonSignal.snapshot.features }
-                  : null,
-                classOrder: params.signal.meta.pythonSignal.snapshot.classOrder
-                  ? [...params.signal.meta.pythonSignal.snapshot.classOrder]
-                  : null,
-                meta: params.signal.meta.pythonSignal.snapshot.meta
-                  ? { ...params.signal.meta.pythonSignal.snapshot.meta }
-                  : null,
-              }
-            : null,
+          snapshot: null, // Predictor removed
       }
       : null,
     flowCmf: flowCmfMeta,

@@ -78,16 +78,3 @@ export interface ExecutionAgent {
     riskLimits?: RiskLimits | null;
   }): Promise<ExecutionPlan>;
 }
-
-export type PredictorInsight = {
-  symbol: string;
-  enabled: boolean;
-  confidence: number;
-  bias: 'long' | 'short' | 'neutral';
-  lastRetrainedAt?: number | null;
-  details?: Record<string, unknown>;
-};
-
-export interface PredictorAgent {
-  analyze(symbol: string): Promise<PredictorInsight>;
-}

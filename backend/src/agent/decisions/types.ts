@@ -4,7 +4,6 @@ import type { ActiveSession } from '../loops/helpers.js';
 import type {
   ExecutionPlan,
   MarketQualityScore,
-  PredictorInsight,
   RiskLimits,
   SentimentSignal,
 } from '../subagents/types.js';
@@ -14,7 +13,6 @@ export type PerceptionSnapshots = {
   sentiment?: SentimentSignal | null;
   riskLimits?: RiskLimits | null;
   executionPlan?: ExecutionPlan | null;
-  predictor?: PredictorInsight | null;
 };
 
 export type DecisionContext = {

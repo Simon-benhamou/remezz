@@ -183,13 +183,7 @@ export function buildSupportDiagnostics(params: {
     }, 'warning'));
   }
 
-  if (perception.predictor.status === 'stale' && perception.predictor.data?.enabled) {
-    blockers.push(buildBlocker({
-      key: 'predictor',
-      code: 'predictor_stale',
-      message: 'Predictor insight stale, awaiting refresh',
-    }, 'warning'));
-  }
+  // Predictor is disabled - no longer check for staleness
 
   const canTrade = blockers.length === 0;
   const reason = canTrade
@@ -205,12 +199,12 @@ export function buildSupportDiagnostics(params: {
     zone: null as unknown,
     inZone: false,
     confirmationOk: perception.sentiment.status !== 'missing',
-    momentumOk: perception.predictor.status === 'fresh',
+    momentumOk: true, // Predictor disabled - always OK
     qualityOk: perception.marketQuality.status === 'fresh',
     profitOk: true,
     tp1ProfitPct: 0,
     minProfitPct: cfg.MIN_TRADE_PROFIT_PCT,
-    dir: perception.predictor.data?.bias === 'short' ? -1 : 1,
+    dir: 1, // Predictor disabled - default to long
   };
 
   return {

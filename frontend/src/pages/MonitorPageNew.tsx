@@ -15,8 +15,6 @@ import PriceChart from '../charts/PriceChart';
 import ProfessionalChart from '../components/charts/ProfessionalChart';
 import { AgentStateCard } from '../components/monitor/AgentStateCard';
 import { StrategyCard } from '../components/monitor/StrategyCard';
-import { PredictorCard } from '../components/monitor/PredictorCard';
-import { PredictorDecisionsPanel } from '../components/monitor/PredictorDecisionsPanel';
 import { OrdersTradesPanel } from '../components/monitor/OrdersTradesPanel';
 import { formatPriceDisplay } from '../utils/number';
 import LearningProgressPanel from '../components/LearningProgressPanel';
@@ -258,15 +256,6 @@ export function MonitorPageNew() {
 
           {/* Adaptive Learning Performance */}
           <AdaptiveLearningCard symbol={symbol} lookbackDays={7} />
-
-          {/* Predictor Analysis */}
-          <PredictorCard
-            data={data.predictor}
-            symbolProfile={data.symbolProfile}
-          />
-
-          {/* Predictor Decision History */}
-          <PredictorDecisionsPanel symbol={symbol} />
 
           {/* Orders & Trades */}
           <OrdersTradesPanel

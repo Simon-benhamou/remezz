@@ -16,7 +16,6 @@ import TradesTable from '../components/TradesTable';
 import DecisionTimeline from '../components/monitor/DecisionTimeline';
 import ExitStrategyPanel from '../components/monitor/ExitStrategyPanel';
 import EntryTimingPanel from '../components/monitor/EntryTimingPanel';
-import PredictorModelStatus from '../components/monitor/PredictorModelStatus';
 import MarketHealthDashboard from '../components/MarketHealthDashboard';
 // import HelpPanel from '../components/HelpPanel'; // TODO: Create component
 // import DailyReviewPanel from '../components/DailyReviewPanel'; // TODO: Create component
@@ -780,10 +779,6 @@ export default function MonitorPage(){
                             hasSignal={hasSignal}
                             loading={loadingState.phase !== LoadingPhase.COMPLETE}
                           />
-                        ) : null}
-                        {/* Phase 3: Predictor Model Status */}
-                        {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-                          <PredictorModelStatus />
                         ) : null}
                       </Space>
                     )

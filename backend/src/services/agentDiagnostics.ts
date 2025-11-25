@@ -2,7 +2,6 @@
  * Enhanced Agent Diagnostic Info API
  * Returns comprehensive data for monitoring page including:
  * - Symbol profile (volatility, direction, volume, trend)
- * - Predictor results (probabilities, confidence, decision)
  * - Strategy metrics (current strategy, score, confidence)
  * - Position state (entry, R-multiple, time open)
  */
@@ -12,7 +11,6 @@ import { prisma } from '../db/client.js';
 import { AgentHub } from '../agent/hub.js';
 import { classifyVolatilityRegime, classifyDirectionBias, classifyVolumeRegime, classifyTrendingRanging } from '../learning/personalityProfile.js';
 import type { TechnicalSnapshot } from '../ai/tech.js';
-import { getPredictorReliabilityMetrics } from '../quantai/pythonPredictor.js';
 import type { ExecutionPlan, MarketQualityScore, RiskLimits, SentimentSignal } from '../agent/subagents/types.js';
 import { agentServiceRegistry } from '../agent/subagents/serviceRegistry.js';
 
@@ -31,44 +29,6 @@ export type AgentDiagnosticInfo = {
     rsi: number;
     trendStrength: number;
   };
-  
-  // Predictor (Python ML Model)
-  predictor: {
-    available: boolean;
-    decision: 'long' | 'short' | 'none';
-    bias: 'long' | 'short' | 'both';
-    direction: 'bullish' | 'bearish' | 'neutral';
-    confidence: number;
-    probabilities: {
-      long: number;
-      short: number;
-      none: number;
-    };
-    primaryProbability: number;
-    probLong: number;
-    probShort: number;
-    probNone: number;
-    edge: number;
-    entryWeight: number;
-    riskMultiplier: number;
-    source: string | null;
-    cooldown: {
-      active: boolean;
-      reason: string | null;
-      seconds: number | null;
-    };
-    // 🔴 Reliability Metrics
-    reliability: {
-      totalCalls: number;
-      successfulCalls: number;
-      failedCalls: number;
-      reliabilityRate: number;
-      isReliable: boolean;
-      consecutiveFailures: number;
-      lastErrorTimestamp: number | null;
-      lastErrorMessage: string | null;
-    };
-  } | null;
   
   // Current Strategy
   strategy: {
@@ -208,109 +168,6 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       } catch (error) {
         console.warn(`[diagnostics] Could not load symbol profile for ${session.symbol}:`, error);
       }
-      
-      // Try an on-demand predictor using a temporary snapshot even when agent is not yet in hub
-      let onDemandPredictor: AgentDiagnosticInfo['predictor'] | null = null;
-      try {
-        const { buildTechSnapshot } = await import('../ai/tech.js');
-        const tempSnap = await buildTechSnapshot(session.symbol, session.userId || undefined, { bypassCache: true }).catch(()=>null);
-        if (tempSnap) {
-          const { buildPredictorFeatures } = await import('../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
-          const { getPredictionSyncSafe, getPredictorReliabilityMetrics } = await import('../quantai/pythonPredictor.js');
-          const features = buildPredictorFeatures(tempSnap as any);
-          if (features && Object.keys(features).length > 0) {
-            const pred = getPredictionSyncSafe(features, { allowFallback: true });
-            const rel = getPredictorReliabilityMetrics();
-            const probabilityEdgeRaw = (pred.probabilityLong ?? 0) - (pred.probabilityShort ?? 0);
-            const meta = pred.meta && typeof pred.meta === 'object' ? (pred.meta as Record<string, unknown>) : null;
-            const rawSource: unknown = meta ? (meta['predictionSource'] ?? meta['source'] ?? 'on_demand') : 'on_demand';
-            const source = typeof rawSource === 'string' ? rawSource : rawSource != null ? String(rawSource) : 'on_demand';
-            const dir = (pred as any).bias === 'long' ? 'bullish' : ( (pred as any).bias === 'short' ? 'bearish' : 'neutral');
-            onDemandPredictor = {
-              available: true,
-              decision: pred.decision || 'none',
-              bias: (pred as any).bias ?? (pred.decision as any) ?? 'both',
-              direction: dir as any,
-              confidence: Number((pred.confidence ?? 0).toFixed(2)),
-              probabilities: {
-                long: Number((pred.probabilityLong ?? pred.probabilities?.long ?? 0).toFixed(2)),
-                short: Number((pred.probabilityShort ?? pred.probabilities?.short ?? 0).toFixed(2)),
-                none: Number((pred.probabilityNone ?? pred.probabilities?.none ?? 0).toFixed(2)),
-              },
-              primaryProbability: Number((Math.max(pred.probabilityLong ?? 0, pred.probabilityShort ?? 0, pred.probabilityNone ?? 0)).toFixed(2)),
-              probLong: Number((pred.probabilityLong ?? pred.probabilities?.long ?? 0).toFixed(4)),
-              probShort: Number((pred.probabilityShort ?? pred.probabilities?.short ?? 0).toFixed(4)),
-              probNone: Number((pred.probabilityNone ?? pred.probabilities?.none ?? 0).toFixed(4)),
-              edge: Number(probabilityEdgeRaw.toFixed(4)),
-              entryWeight: Number((pred.entryWeight ?? 1).toFixed(2)),
-              riskMultiplier: Number((pred.riskMultiplier ?? 1).toFixed(2)),
-              source,
-              cooldown: {
-                active: Boolean(pred.cooldown?.active),
-                reason: pred.cooldown?.reason || null,
-                seconds: pred.cooldown?.seconds || null,
-              },
-              reliability: {
-                totalCalls: rel.totalCalls,
-                successfulCalls: rel.successfulCalls,
-                failedCalls: rel.failedCalls,
-                reliabilityRate: Number(rel.reliabilityRate.toFixed(4)),
-                isReliable: rel.isReliable,
-                consecutiveFailures: rel.consecutiveFailures,
-                lastErrorTimestamp: rel.lastErrorTimestamp,
-                lastErrorMessage: rel.lastErrorMessage,
-              },
-            };
-          }
-        }
-        else {
-          // Minimal neutral features for rule-based fallback
-          const { getPredictionSyncSafe, getPredictorReliabilityMetrics } = await import('../quantai/pythonPredictor.js');
-          const neutral = { rsi_14: 50, macd_signal: 0, volume_ratio: 1, atr_14_pct: 1, price_change_1h_pct: 0 } as Record<string, number>;
-          const pred = getPredictionSyncSafe(neutral, { allowFallback: true });
-          const rel = getPredictorReliabilityMetrics();
-          const probabilityEdgeRaw = (pred.probabilityLong ?? 0) - (pred.probabilityShort ?? 0);
-          const meta = pred.meta && typeof pred.meta === 'object' ? (pred.meta as Record<string, unknown>) : null;
-          const rawSource: unknown = meta ? (meta['predictionSource'] ?? meta['source'] ?? 'on_demand_minimal') : 'on_demand_minimal';
-          const source = typeof rawSource === 'string' ? rawSource : rawSource != null ? String(rawSource) : 'on_demand_minimal';
-          const dir = (pred as any).bias === 'long' ? 'bullish' : ( (pred as any).bias === 'short' ? 'bearish' : 'neutral');
-          onDemandPredictor = {
-            available: true,
-            decision: pred.decision || 'none',
-            bias: (pred as any).bias ?? (pred.decision as any) ?? 'both',
-            direction: dir as any,
-            confidence: Number((pred.confidence ?? 0).toFixed(2)),
-            probabilities: {
-              long: Number((pred.probabilityLong ?? pred.probabilities?.long ?? 0).toFixed(2)),
-              short: Number((pred.probabilityShort ?? pred.probabilities?.short ?? 0).toFixed(2)),
-              none: Number((pred.probabilityNone ?? pred.probabilities?.none ?? 0).toFixed(2)),
-            },
-            primaryProbability: Number((Math.max(pred.probabilityLong ?? 0, pred.probabilityShort ?? 0, pred.probabilityNone ?? 0)).toFixed(2)),
-            probLong: Number((pred.probabilityLong ?? pred.probabilities?.long ?? 0).toFixed(4)),
-            probShort: Number((pred.probabilityShort ?? pred.probabilities?.short ?? 0).toFixed(4)),
-            probNone: Number((pred.probabilityNone ?? pred.probabilities?.none ?? 0).toFixed(4)),
-            edge: Number(probabilityEdgeRaw.toFixed(4)),
-            entryWeight: Number((pred.entryWeight ?? 1).toFixed(2)),
-            riskMultiplier: Number((pred.riskMultiplier ?? 1).toFixed(2)),
-            source,
-            cooldown: {
-              active: Boolean(pred.cooldown?.active),
-              reason: pred.cooldown?.reason || null,
-              seconds: pred.cooldown?.seconds || null,
-            },
-            reliability: {
-              totalCalls: rel.totalCalls,
-              successfulCalls: rel.successfulCalls,
-              failedCalls: rel.failedCalls,
-              reliabilityRate: Number(rel.reliabilityRate.toFixed(4)),
-              isReliable: rel.isReliable,
-              consecutiveFailures: rel.consecutiveFailures,
-              lastErrorTimestamp: rel.lastErrorTimestamp,
-              lastErrorMessage: rel.lastErrorMessage,
-            },
-          };
-        }
-      } catch {}
 
       // Return diagnostics based on DB data + symbol profile
       // 🔴 FIX: Retrieve orders and fills from database even when agent is not in hub
@@ -420,7 +277,6 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
         sessionId,
         symbol: session.symbol,
         symbolProfile: symbolProfileData,
-        predictor: onDemandPredictor,
         strategy: null,
         position: positionInfo,
         supportAgents,
@@ -460,62 +316,6 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
     // Get latest snapshot from agent
     const snap: TechnicalSnapshot | null = agent.snap || agent.lastSnap || null;
     if (!snap) {
-      // Try to build a one-off snapshot and compute an immediate prediction
-      let onDemandPredictor: AgentDiagnosticInfo['predictor'] | null = null;
-      try {
-        const { buildTechSnapshot } = await import('../ai/tech.js');
-        const tempSnap = await buildTechSnapshot(session.symbol, session.userId || undefined, { bypassCache: true }).catch(()=>null);
-        if (tempSnap) {
-          const { buildPredictorFeatures } = await import('../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
-          const { getPredictionSyncSafe, getPredictorReliabilityMetrics } = await import('../quantai/pythonPredictor.js');
-          const features = buildPredictorFeatures(tempSnap as any);
-          if (features && Object.keys(features).length > 0) {
-            const pred = getPredictionSyncSafe(features, { allowFallback: true });
-            const rel = getPredictorReliabilityMetrics();
-            const probabilityEdgeRaw = (pred.probabilityLong ?? 0) - (pred.probabilityShort ?? 0);
-            const meta = pred.meta && typeof pred.meta === 'object' ? (pred.meta as Record<string, unknown>) : null;
-            const rawSource: unknown = meta ? (meta['predictionSource'] ?? meta['source'] ?? 'on_demand') : 'on_demand';
-            const source = typeof rawSource === 'string' ? rawSource : rawSource != null ? String(rawSource) : 'on_demand';
-            const dir = (pred as any).bias === 'long' ? 'bullish' : ( (pred as any).bias === 'short' ? 'bearish' : 'neutral');
-            onDemandPredictor = {
-              available: true,
-              decision: pred.decision || 'none',
-              bias: (pred as any).bias ?? (pred.decision as any) ?? 'both',
-              direction: dir as any,
-              confidence: Number((pred.confidence ?? 0).toFixed(2)),
-              probabilities: {
-                long: Number((pred.probabilityLong ?? pred.probabilities?.long ?? 0).toFixed(2)),
-                short: Number((pred.probabilityShort ?? pred.probabilities?.short ?? 0).toFixed(2)),
-                none: Number((pred.probabilityNone ?? pred.probabilities?.none ?? 0).toFixed(2)),
-              },
-              primaryProbability: Number((Math.max(pred.probabilityLong ?? 0, pred.probabilityShort ?? 0, pred.probabilityNone ?? 0)).toFixed(2)),
-              probLong: Number((pred.probabilityLong ?? pred.probabilities?.long ?? 0).toFixed(4)),
-              probShort: Number((pred.probabilityShort ?? pred.probabilities?.short ?? 0).toFixed(4)),
-              probNone: Number((pred.probabilityNone ?? pred.probabilities?.none ?? 0).toFixed(4)),
-              edge: Number(probabilityEdgeRaw.toFixed(4)),
-              entryWeight: Number((pred.entryWeight ?? 1).toFixed(2)),
-              riskMultiplier: Number((pred.riskMultiplier ?? 1).toFixed(2)),
-              source,
-              cooldown: {
-                active: Boolean(pred.cooldown?.active),
-                reason: pred.cooldown?.reason || null,
-                seconds: pred.cooldown?.seconds || null,
-              },
-              reliability: {
-                totalCalls: rel.totalCalls,
-                successfulCalls: rel.successfulCalls,
-                failedCalls: rel.failedCalls,
-                reliabilityRate: Number(rel.reliabilityRate.toFixed(4)),
-                isReliable: rel.isReliable,
-                consecutiveFailures: rel.consecutiveFailures,
-                lastErrorTimestamp: rel.lastErrorTimestamp,
-                lastErrorMessage: rel.lastErrorMessage,
-              },
-            };
-          }
-        }
-      } catch {}
-
       // Return diagnostics even if we couldn't compute a snapshot
       // 🔴 FIX: Retrieve orders and fills from database
       const dbOrders = await prisma.order.findMany({
@@ -633,7 +433,6 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
           rsi: 50,
           trendStrength: 0,
         },
-        predictor: onDemandPredictor,
         strategy: null,
         position: positionInfo,
         supportAgents,
@@ -689,123 +488,6 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       rsi: Number((snap.rsi14 ?? 50).toFixed(1)),
       trendStrength: Number(((snap as any).trendStrength ?? 0).toFixed(2)),
     };
-
-    // Extract predictor info (from agent state, last signal, DB profileJson, or global cache)
-    let predictorInfo: AgentDiagnosticInfo['predictor'] = null;
-    let pythonSignal = agent.pythonSignal || (agent.lastSignal as any)?.pythonSignal || null;
-    let predictionSource: 'live' | 'db' | 'cache' | 'none' = pythonSignal ? 'live' : 'none';
-    
-    // 🔴 FIX: Fallback to profileJson._diagnostics when agent has no live data
-    if (!pythonSignal) {
-      const profile = (session.profileJson as any) || {};
-      const diagnostics = profile._diagnostics || {};
-      if (diagnostics.lastPredictorData) {
-        const saved = diagnostics.lastPredictorData;
-        pythonSignal = {
-          decision: saved.decision,
-          confidence: saved.confidence,
-          probabilities: saved.probabilities,
-          probabilityLong: saved.probabilities?.long,
-          probabilityShort: saved.probabilities?.short,
-          probabilityNone: saved.probabilities?.none,
-          primaryProbability: Math.max(
-            saved.probabilities?.long || 0,
-            saved.probabilities?.short || 0,
-            saved.probabilities?.none || 0
-          ),
-          entryWeight: 1,
-          riskMultiplier: 1,
-          cooldown: { active: false, reason: null, seconds: null },
-        };
-        predictionSource = 'db';
-      }
-    }
-    
-    // 🔴 REMOVED: No more cache fallback - always compute fresh prediction
-    // Previously used predictorCache.getCachedPrediction() but user wants NO CACHE
-
-    // 🆕 NEW: Compute a fresh prediction on-demand using the current snapshot
-    if (!pythonSignal && snap) {
-      try {
-        const { buildPredictorFeatures } = await import('../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
-        const { getPredictionSyncSafe } = await import('../quantai/pythonPredictor.js');
-        const features = buildPredictorFeatures(snap as any);
-        if (features && Object.keys(features).length > 0) {
-          const pred = getPredictionSyncSafe(features, { allowFallback: true });
-          pythonSignal = {
-            decision: pred.decision,
-            confidence: pred.confidence,
-            probabilities: pred.probabilities,
-            probabilityLong: pred.probabilityLong,
-            probabilityShort: pred.probabilityShort,
-            probabilityNone: pred.probabilityNone,
-            primaryProbability: Math.max(pred.probabilityLong, pred.probabilityShort, pred.probabilityNone),
-            entryWeight: pred.entryWeight ?? 1,
-            riskMultiplier: pred.riskMultiplier ?? 1,
-            cooldown: pred.cooldown ?? { active: false, reason: null, seconds: null },
-            meta: pred.meta || { source: 'diagnostics_on_demand' },
-          } as any;
-          predictionSource = 'live';
-        }
-      } catch (e) {
-        // Swallow errors to keep diagnostics resilient
-      }
-    }
-    // Get predictor reliability metrics
-    const reliabilityMetrics = getPredictorReliabilityMetrics();
-    
-    if (pythonSignal) {
-      const predictorDirection = pythonSignal.bias === 'long'
-        ? 'bullish'
-        : pythonSignal.bias === 'short'
-          ? 'bearish'
-          : 'neutral';
-      const probabilityEdgeRaw = (pythonSignal.probabilityLong ?? pythonSignal.probabilities?.long ?? 0)
-        - (pythonSignal.probabilityShort ?? pythonSignal.probabilities?.short ?? 0);
-      const meta = pythonSignal.meta && typeof pythonSignal.meta === 'object' ? pythonSignal.meta : null;
-      let rawSource: unknown = null;
-      if (meta) {
-        const metaRecord = meta as Record<string, unknown>;
-        rawSource = metaRecord['predictionSource'] ?? metaRecord['source'] ?? null;
-      }
-      const source = typeof rawSource === 'string' ? rawSource : rawSource != null ? String(rawSource) : null;
-
-      predictorInfo = {
-        available: true,
-        decision: pythonSignal.decision || pythonSignal.bias || 'none',
-        bias: pythonSignal.bias ?? 'both',
-        direction: predictorDirection,
-        confidence: Number((pythonSignal.confidence ?? 0).toFixed(2)),
-        probabilities: {
-          long: Number((pythonSignal.probabilityLong ?? pythonSignal.probabilities?.long ?? 0).toFixed(2)),
-          short: Number((pythonSignal.probabilityShort ?? pythonSignal.probabilities?.short ?? 0).toFixed(2)),
-          none: Number((pythonSignal.probabilityNone ?? pythonSignal.probabilities?.none ?? 0).toFixed(2)),
-        },
-        primaryProbability: Number((pythonSignal.primaryProbability ?? 0).toFixed(2)),
-        probLong: Number((pythonSignal.probabilityLong ?? pythonSignal.probabilities?.long ?? 0).toFixed(4)),
-        probShort: Number((pythonSignal.probabilityShort ?? pythonSignal.probabilities?.short ?? 0).toFixed(4)),
-        probNone: Number((pythonSignal.probabilityNone ?? pythonSignal.probabilities?.none ?? 0).toFixed(4)),
-        edge: Number(probabilityEdgeRaw.toFixed(4)),
-        entryWeight: Number((pythonSignal.entryWeight ?? 1).toFixed(2)),
-        riskMultiplier: Number((pythonSignal.riskMultiplier ?? 1).toFixed(2)),
-        source,
-        cooldown: {
-          active: Boolean(pythonSignal.cooldown?.active),
-          reason: pythonSignal.cooldown?.reason || null,
-          seconds: pythonSignal.cooldown?.seconds || null,
-        },
-        reliability: {
-          totalCalls: reliabilityMetrics.totalCalls,
-          successfulCalls: reliabilityMetrics.successfulCalls,
-          failedCalls: reliabilityMetrics.failedCalls,
-          reliabilityRate: Number(reliabilityMetrics.reliabilityRate.toFixed(4)),
-          isReliable: reliabilityMetrics.isReliable,
-          consecutiveFailures: reliabilityMetrics.consecutiveFailures,
-          lastErrorTimestamp: reliabilityMetrics.lastErrorTimestamp,
-          lastErrorMessage: reliabilityMetrics.lastErrorMessage,
-        },
-      };
-    }
 
     // Extract strategy info (from agent state, last signal, or DB profileJson)
     let strategyInfo: AgentDiagnosticInfo['strategy'] = null;
@@ -981,7 +663,6 @@ export async function getAgentDiagnosticInfo(sessionId: string): Promise<AgentDi
       sessionId,
       symbol: session.symbol,
       symbolProfile,
-      predictor: predictorInfo,
       strategy: strategyInfo,
       position: positionInfo,
       supportAgents,

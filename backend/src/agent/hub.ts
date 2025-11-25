@@ -12,7 +12,6 @@ import { agentEventBus } from './bus/index.js';
 import type {
   ExecutionPlan,
   MarketQualityScore,
-  PredictorInsight,
   RiskLimits,
   SentimentSignal,
 } from './subagents/types.js';
@@ -66,10 +65,11 @@ export type AgentSupportState = {
   sentiment?: SupportSnapshot<SentimentSignal>;
   riskLimits?: SupportSnapshot<RiskLimits>;
   executionPlan?: SupportSnapshot<ExecutionPlan>;
-  predictor?: SupportSnapshot<PredictorInsight>;
   decisions?: SupportSnapshot<{ intents: AgentActionIntent[] }>;
   actions?: SupportSnapshot<AgentActionSnapshot>;
   alerts: AgentSupportAlert[];
+  /** @deprecated Predictor is disabled - kept for type compatibility */
+  predictor?: SupportSnapshot<{ enabled: false; bias: null }>;
 };
 
 const HALT_ENTRY_LOCK_TTLS: Record<'entries_only' | 'full', number> = {
@@ -395,7 +395,6 @@ export class AgentsHub {
             sentimentBias: agent.supportState.sentiment?.data.bias ?? null,
             sentimentConfidence: agent.supportState.sentiment?.data.confidence ?? null,
             riskMaxPositionUsd: agent.supportState.riskLimits?.data.maxPositionUsd ?? null,
-            predictorConfidence: agent.supportState.predictor?.data.confidence ?? null,
             executionStrategy: agent.supportState.executionPlan?.data.strategy ?? null,
             decisionIntentCount: agent.supportState.decisions?.data.intents.length ?? 0,
             lastActionStatus: agent.supportState.actions?.data ?? null,
@@ -440,12 +439,6 @@ export class AgentsHub {
     agentEventBus.subscribe('execution.plan.ready', ({ sessionId, plan }) => {
       this.updateSupportState(sessionId, (state) => {
         state.executionPlan = { data: plan, updatedAt: Date.now() };
-      });
-    });
-
-    agentEventBus.subscribe('predictor.insight', ({ symbol, insight }) => {
-      this.updateSupportStateForSymbol(symbol, (state) => {
-        state.predictor = { data: insight, updatedAt: Date.now() };
       });
     });
 

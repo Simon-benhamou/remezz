@@ -1,5 +1,5 @@
 import type { AgentActionIntent, AgentActionType } from '../actions/types.js';
-import type { ExecutionPlan, MarketQualityScore, PredictorInsight, RiskLimits, SentimentSignal } from '../subagents/types.js';
+import type { ExecutionPlan, MarketQualityScore, RiskLimits, SentimentSignal } from '../subagents/types.js';
 
 export type AgentEventMap = {
   'marketQuality.updated': {
@@ -26,10 +26,6 @@ export type AgentEventMap = {
     sessionId: string;
     symbol: string;
     plan: ExecutionPlan;
-  };
-  'predictor.insight': {
-    symbol: string;
-    insight: PredictorInsight;
   };
   'decisions.intent': {
     sessionId: string;

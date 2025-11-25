@@ -30,8 +30,6 @@ import { getUserExchange } from '../exchange/ccxtClient.js';
 import { resolveLeverageCap, type ResolvedLeverageCap } from '../risk/leverageCaps.js';
 import { DEFAULT_RR_EXPECTANCY_CONFIG } from '../risk/rrExpectancy.js';
 import { updatePortfolioBalance, rebalancePortfolio } from './portfolioManager.js';
-import { getPredictionSyncSafe } from '../quantai/pythonPredictor.js';
-import { buildPredictorFeatures } from '../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js';
 
 export type StartPayload = Record<string, any>;
 
@@ -118,7 +116,7 @@ type NormalizedStartConfig = {
     requireSignalAtStart: boolean;
     minStartEdge: number; // between 0 and 1
     minStartConfidence: number; // between 0 and 1
-    priorWeight: number; // weighting factor for ranking candidates by predictor prior
+    priorWeight: number; // deprecated - kept for API compatibility
     adaptiveThresholds: boolean; // whether to use adaptive thresholds based on aggressiveness
   };
 };
@@ -652,42 +650,6 @@ export async function startAgentCreation(
 
   console.log(`🎯 DEBUG: Reached code after activate_agent try-catch block`);
 
-  // Warmup predictor cache immediately after activation
-  // This ensures diagnostics API has data even before first tick
-  console.log(`🔍 DEBUG: After activate_agent step - selection=${selection?.symbol}, state=${activation.state}, normalized=${!!normalized}`);
-  
-  if (selection?.symbol) {
-    console.log(`🔥 DEBUG: Condition passed - triggering warmup for ${selection.symbol}`);
-    
-    // Fire and forget - don't await to avoid blocking agent creation
-    setImmediate(() => {
-      console.log(`🔥 DEBUG: Inside setImmediate - about to warmup ${selection.symbol}`);
-      (async () => {
-      try {
-        const { warmupSymbol } = await import('../quantai/predictorCache.js');
-        const { buildTechSnapshot } = await import('../ai/tech.js');
-        const { buildPredictorFeatures } = await import('../quantai/strategies/metaAdaptive/metaAdaptiveAgent.js');
-        
-        console.log(`🔥 Fetching technical snapshot for ${selection.symbol}...`);
-        
-        // Get fresh technical snapshot for the symbol
-        const snapshot = await buildTechSnapshot(selection.symbol, normalized!.userId);
-        const features = buildPredictorFeatures(snapshot);
-        
-        if (features) {
-          await warmupSymbol(selection.symbol, features);
-          console.log(`✅ Predictor cache warmup completed for ${selection.symbol}`);
-        } else {
-          console.warn(`⚠️  Predictor cache warmup: No features generated for ${selection.symbol}`);
-        }
-      } catch (err) {
-        console.warn(`⚠️  Predictor cache warmup failed for ${selection?.symbol}:`, (err as Error).message);
-        // Don't block agent creation if warmup fails
-      }
-      })();
-    });
-  }
-
   const warmup = gatherWarmupDiagnostics(sessionRecord.symbol);
 
   if (userId && normalized) {
@@ -804,17 +766,17 @@ async function validateAndNormalize(payload: StartPayload, userId?: string | nul
       case 'aggressive':
         baseEdge = 0.03; // Lower threshold for aggressive (more opportunities)
         baseConfidence = 0.40; // Lower confidence requirement
-        basePriorWeight = 0.25; // Moderate predictor influence
+        basePriorWeight = 0.25; // Deprecated - predictor removed
         break;
       case 'reactive':
         baseEdge = 0.05; // Balanced threshold
         baseConfidence = 0.50; // Balanced confidence
-        basePriorWeight = 0.40; // Higher predictor influence
+        basePriorWeight = 0.40; // Deprecated - predictor removed
         break;
       case 'conservative':
         baseEdge = 0.08; // Higher threshold (fewer but better signals)
         baseConfidence = 0.60; // Higher confidence requirement
-        basePriorWeight = 0.50; // Strong predictor influence
+        basePriorWeight = 0.50; // Deprecated - predictor removed
         break;
       default:
         baseEdge = 0.05;
@@ -1184,50 +1146,14 @@ async function selectSymbol(
       }
     }
 
-    // Helper to evaluate predictor start signal for a symbol with enhanced scoring
-    const evaluateStartSignal = async (sym: string) => {
-      try {
-        const snap = await buildTechSnapshot(sym, config.userId);
-        const features = buildPredictorFeatures(snap);
-        if (!features) return { ok: false, reason: 'features_unavailable' } as const;
-        const pred = getPredictionSyncSafe(features, { allowFallback: true });
-        const pLong = pred.probabilities.long;
-        const pShort = pred.probabilities.short;
-        const pNone = pred.probabilities.none;
-        const primary = Math.max(pLong, pShort);
-        const top: 'long' | 'short' | 'none' = pNone >= primary && pNone >= Math.max(pLong, pShort) ? 'none' : (pLong >= pShort ? 'long' : 'short');
-        const edge = Math.abs(pLong - pShort);
-        const confidence = pred.confidence;
-        
-        // Enhanced quality scoring: considers directional clarity, edge strength, and confidence
-        const directionalClarity = top === 'none' ? 0 : (primary - pNone); // How much stronger is direction vs none
-        const edgeQuality = edge / (1 - pNone); // Edge relative to non-none probability
-        const qualityScore = directionalClarity * edgeQuality * confidence;
-        
-        // FIX: Allow 'none' if confidence is very high (market neutral but confident)
-        // This prevents rejecting BTC/ETH/SOL when predictor is uncertain about direction
-        // but has high confidence in the analysis
-        const allowNeutral = top === 'none' && confidence >= 0.60;
-        
-        // FIX: Reduced directionalClarity threshold from 0.10 (10%) to 0.05 (5%)
-        // More permissive for high-quality majors (BTC/ETH/SOL)
-        const meetsThreshold = (
-          (top !== 'none' && 
-           primary >= config.selectionPolicy.minStartEdge && 
-           confidence >= config.selectionPolicy.minStartConfidence &&
-           directionalClarity >= 0.05) // Reduced from 0.10 to 0.05
-          || allowNeutral // Allow neutral if confidence is high
-        );
-        
-        const priorScore = qualityScore; // Use quality score for ranking
-        return { ok: true, top, primary, edge, confidence, priorScore, qualityScore, directionalClarity } as const;
-      } catch (error) {
-        return { ok: false, reason: (error as Error).message || 'predict_failed' } as const;
-      }
+    // Predictor removed - always pass signal validation
+    const evaluateStartSignal = async (_sym: string): Promise<{ ok: true; top: 'long' | 'short' | 'none'; primary: number; edge: number; confidence: number; priorScore: number; qualityScore: number; directionalClarity: number } | { ok: false; reason: string }> => {
+      // With predictor removed, always allow selection
+      return { ok: true, top: 'long' as const, primary: 1.0, edge: 0.5, confidence: 1.0, priorScore: 1.0, qualityScore: 1.0, directionalClarity: 0.5 };
     };
 
     if (!symbol) {
-      // Reorder candidates by predictor quality score if priorWeight > 0
+      // Score candidates (predictor removed - uses static scoring)
       let orderedCandidates = candidates.slice();
       if (config.selectionPolicy.priorWeight > 0 && orderedCandidates.length) {
         const sampleSize = Math.min(12, orderedCandidates.length); // Increased sample size
@@ -1237,7 +1163,7 @@ async function selectSymbol(
         decisionLog.push({
           timestamp: Date.now(),
           level: 'info',
-          message: `Evaluating ${sample.length} candidates with predictor scoring`,
+          message: `Evaluating ${sample.length} candidates`,
           context: 'selection',
           meta: { priorWeight: config.selectionPolicy.priorWeight },
         });
@@ -1522,11 +1448,11 @@ async function selectSymbol(
   summary.symbol = symbol;
 
   if (config.symbol) {
-    // Manual symbol: SKIP predictor gate validation (user choice overrides AI)
+    // Manual symbol: directly use user choice
     decisionLog.push({
       timestamp: Date.now(),
       level: 'info',
-      message: `Using manually specified symbol ${symbol} (predictor gate skipped for manual selection)`,
+      message: `Using manually specified symbol ${symbol}`,
       context: 'selection',
     });
   }
@@ -1772,31 +1698,15 @@ async function activateAgent(params: {
       } as any);
       agentId = session.id;
       
-      // Force first tick in background and validate signal (fire-and-forget)
+      // Force first tick in background (fire-and-forget)
       console.log(`⚡ Scheduling immediate first tick for ${session.id}`);
       (async () => {
         try {
           await new Promise(resolve => setTimeout(resolve, 500));
           await AgentHub.onTick(session.id);
           console.log(`✅ First tick completed for ${session.id}`);
-          
-          // Wait for predictor to update
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          
-          // Validate signal clarity
-          const agent = AgentHub.get(session.id);
-          const signal = (agent as any)?.pythonSignal;
-          
-          if (signal?.decision === 'none' || 
-              !signal?.decision || 
-              (signal?.probabilities?.none ?? 0) > 0.7) {
-            console.log(`❌ Agent ${session.id} (${finalSymbol}) has unclear signal (decision: ${signal?.decision}, none: ${signal?.probabilities?.none}) - stopping agent`);
-            await AgentHub.closeNow(session.id, 'unclear_signal_after_first_tick');
-          } else {
-            console.log(`✅ Agent ${session.id} (${finalSymbol}) has clear signal: ${signal?.decision} (none: ${signal?.probabilities?.none})`);
-          }
         } catch (error) {
-          console.error(`⚠️ First tick or validation failed for ${session.id}:`, error);
+          console.error(`⚠️ First tick failed for ${session.id}:`, error);
         }
       })().catch(err => console.error(`Background tick error for ${session.id}:`, err));
       
@@ -1818,24 +1728,8 @@ async function activateAgent(params: {
         await new Promise(resolve => setTimeout(resolve, 500));
         await AgentHub.onTick(session.id);
         console.log(`✅ First tick completed for ${session.id}`);
-        
-        // Wait for predictor to update
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Validate signal clarity
-        const agent = AgentHub.get(session.id);
-        const signal = (agent as any)?.pythonSignal;
-        
-        if (signal?.decision === 'none' || 
-            !signal?.decision || 
-            (signal?.probabilities?.none ?? 0) > 0.7) {
-          console.log(`❌ Agent ${session.id} (${session.symbol}) has unclear signal (decision: ${signal?.decision}, none: ${signal?.probabilities?.none}) - stopping agent`);
-          await AgentHub.closeNow(session.id, 'unclear_signal_after_first_tick');
-        } else {
-          console.log(`✅ Agent ${session.id} (${session.symbol}) has clear signal: ${signal?.decision} (none: ${signal?.probabilities?.none})`);
-        }
       } catch (error) {
-        console.error(`⚠️ First tick or validation failed for ${session.id}:`, error);
+        console.error(`⚠️ First tick failed for ${session.id}:`, error);
       }
     })().catch(err => console.error(`Background tick error for ${session.id}:`, err));
   }

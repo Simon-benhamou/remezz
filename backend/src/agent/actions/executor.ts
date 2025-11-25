@@ -3,7 +3,6 @@ import { recordOpsEvent } from '../../monitor/ops.js';
 import { activateEntryLock } from '../../services/sessionLocks.js';
 import { prisma } from '../../db/client.js';
 import { broadcast } from '../../ws/hub.js';
-import { invalidateCachedPrediction } from '../../quantai/predictorCache.js';
 import type { ActionIntentRecord } from './store.js';
 import { saveExecutionModeDirective } from './directives.js';
 
@@ -198,22 +197,6 @@ const handlePublishAlert: ActionHandler = async (record, payload) => {
   };
 };
 
-const handlePredictorRefresh: ActionHandler = async (record) => {
-  try {
-    invalidateCachedPrediction(record.symbol);
-  } catch (error) {
-    return {
-      status: 'failed',
-      failureReason: (error as Error).message,
-      details: { reason: 'cache_invalidate_failed' },
-    };
-  }
-  return {
-    status: 'completed',
-    details: { action: 'cache_invalidated' },
-  };
-};
-
 const handleEnforceHedge: ActionHandler = async (record) => {
   try {
     await AgentHub.halt(record.sessionId, 'entries_only');
@@ -242,7 +225,6 @@ const ACTION_HANDLERS: Record<string, ActionHandler> = {
   switch_execution_mode: handleSwitchExecutionMode,
   adjust_allocation: handleAdjustAllocation,
   publish_alert: handlePublishAlert,
-  request_predictor_refresh: handlePredictorRefresh,
   enforce_hedge: handleEnforceHedge,
 };
 

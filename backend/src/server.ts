@@ -31,7 +31,6 @@ import { router as debugSelectionRouter } from "./routes/debug-selection.js";
 import { router as capitalRouter } from "./routes/capital.js";
 import { router as entryAnalyticsRouter } from "./routes/entryAnalytics.js";
 import cryptoRouter from "./routes/crypto.js";
-import predictorRouter from "./routes/predictor.js";
 import smartSelectionRouter from "./routes/smart-selection.js";
 import validationRouter from "./routes/validation.js";
 import learningRouter from "./routes/learning.js";
@@ -41,7 +40,6 @@ import marketHealthRouter from "./routes/marketHealth.js";
 import { checkSmartOpportunities } from "./services/smartAgent.js";
 import { startIntegratedMonitoring } from "./services/integrated-performance-monitor.js";
 import { startAdaptiveTrainingScheduler } from "./learning/trainer.js";
-import { startPredictorRetrainingScheduler } from "./learning/predictorRetrainer.js";
 import { startWSHub } from "./ws/hub.js";
 import { startEventEngine } from "./engine/events.js";
 import { startArbitrageMonitor } from "./services/arbitrageMonitor.js";
@@ -177,7 +175,6 @@ app.use("/api/improvements", improvementsRouter);
 app.use("/api/capital", capitalRouter);
 app.use("/api/entry-analytics", entryAnalyticsRouter);
 app.use("/api/crypto", cryptoRouter);
-app.use("/api/predictor", predictorRouter);
 app.use("/api/smart-selection", smartSelectionRouter);
 app.use("/api/validation", validationRouter);
 app.use("/api/learning", learningRouter);
@@ -311,12 +308,6 @@ setInterval(async () => {
 
 startAdaptiveTrainingScheduler({ intervalMs: 15 * 60 * 1000, familiesPerBatch: 12, runOnStart: true });
 
-// Start intelligent predictor retraining scheduler
-if (process.env.PREDICTOR_RETRAINING_DISABLED !== 'true') {
-  startPredictorRetrainingScheduler();
-  serverLogger.info('🤖 Predictor retraining scheduler started');
-}
-
 restoreAutoUniverseRetrySchedule().catch((error) => {
   serverLogger.warn('⚠️ Failed to restore auto universe retry schedule:', error);
 });
@@ -330,21 +321,6 @@ import { initializeABTesting } from "./services/abTesting.js";
 import { initializeOptimizerScheduling } from "./learning/optimizerJob.js";
 import { initializeReoptimizationScheduling } from "./learning/reoptimizationScheduler.js";
 import { startOutcomeUpdater } from "./learning/outcomeUpdater.js";
-import { warmupPredictorCache, startBackgroundRefresh } from "./quantai/predictorCache.js";
-import { warmupPythonPredictor } from "./quantai/pythonPredictor.js";
-
-// 🔥 CRITICAL: Warmup Python predictor FIRST to cache the 350MB+ model
-warmupPythonPredictor()
-  .then((success) => {
-    if (success) {
-      serverLogger.info('✅ Python predictor ready - model cached in memory');
-    } else {
-      serverLogger.warn('⚠️  Python predictor warmup failed - first predictions will be slow');
-    }
-  })
-  .catch((error) => {
-    serverLogger.error('❌ Python predictor warmup error:', error);
-  });
 
 Promise.all([
   initializeAdaptiveLearning(),
@@ -352,16 +328,9 @@ Promise.all([
   initializeABTesting(),
   initializeOptimizerScheduling(),
   initializeReoptimizationScheduling(),
-  warmupPredictorCache(), // Warmup predictor cache with active symbols
 ]).catch((error) => {
   serverLogger.warn('⚠️ Failed to initialize learning services:', error);
 });
-
-// Start background predictor cache refresh
-if (process.env.PREDICTOR_CACHE_DISABLED !== 'true') {
-  startBackgroundRefresh();
-  serverLogger.info('🔄 Predictor cache background refresh started');
-}
 
 // Start personality profile outcome updater worker
 if (process.env.OUTCOME_UPDATER_DISABLED !== 'true') {
@@ -598,15 +567,6 @@ try {
   await initializePaperBalance();
 } catch (error) {
   serverLogger.warn('⚠️ Failed to initialize paper balance from database:', error);
-}
-
-// Initialize predictor decision cache
-serverLogger.info('🧠 Initializing predictor decision cache...');
-try {
-  const { initializePredictorDecisionCache } = await import('./quantai/predictorDecisionStore.js');
-  await initializePredictorDecisionCache();
-} catch (error) {
-  serverLogger.warn('⚠️ Failed to initialize predictor decision cache:', error);
 }
 
 server.listen(cfg.PORT, () => serverLogger.info(`[api] listening on :${cfg.PORT}`));

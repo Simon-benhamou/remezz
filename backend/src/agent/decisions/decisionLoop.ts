@@ -10,7 +10,6 @@ import { persistActionIntents } from '../actions/store.js';
 import type {
   ExecutionPlan,
   MarketQualityScore,
-  PredictorInsight,
   RiskLimits,
   SentimentSignal,
 } from '../subagents/types.js';
@@ -52,7 +51,6 @@ export class AgentDecisionLoop extends AgentLoop {
       sentiment: this.getSnapshot<SentimentSignal>('sentiment', session.symbol),
       riskLimits: this.getSnapshot<RiskLimits>('riskGovernor', session.id),
       executionPlan: this.getSnapshot<ExecutionPlan>('executionPlan', session.id),
-      predictor: this.getSnapshot<PredictorInsight>('predictor', session.symbol),
     };
 
     const hasPerception = Object.values(perception).some(Boolean);

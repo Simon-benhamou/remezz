@@ -5,21 +5,13 @@ import { getMarketContext, type MarketContextSnapshot, type PerpetualMetrics, ty
 import { detectMarketRegime, type MarketRegimeSignal } from '../../regime/marketRegimeDetector.js';
 import { PreciseDecimal } from './preciseDecimal.js';
 export { PreciseDecimal } from './preciseDecimal.js';
-import {
-  getPrediction as getPythonPrediction,
-  getPredictionSync as getPythonPredictionSync,
-  getPredictorReliabilityMetrics,
-  getPythonResolutionError,
-  isPythonPredictorAvailable,
-} from '../../pythonPredictor.js';
-import type { PythonPredictionProbabilities, PythonPredictionResult } from '../../pythonPredictor.js';
-import { recordPrediction, getStableSnapshot, isSnapshotStale } from '../../predictorStateStore.js';
-import type { PredictorSnapshot } from '../../predictorStateStore.js';
-import { getPythonSignalTuning } from '../../pythonSignalTuning.js';
-import { PythonPerformanceTracker } from '../../pythonPerformanceTracker.js';
-import { storePredictorDecisionIfChanged, getCachedPredictorDecision } from '../../predictorDecisionStore.js';
-import { getPredictorSymbolStats } from '../../predictorSymbolStats.js';
+// Predictor imports removed - XGBoost Python predictor deprecated (58% accuracy insufficient)
 import type { StrategyFamily, StrategyBias } from './strategyTypes.js';
+
+// Stub types for backward compatibility (predictor removed)
+export type PredictorSnapshot = null;
+export type PythonPredictionProbabilities = { long: number; short: number; none: number };
+export type PythonPredictionResult = { decision: string; probabilities: PythonPredictionProbabilities; confidence: number; entryWeight?: number; riskMultiplier?: number; cooldown?: { active: boolean; reason: string | null; seconds: number | null }; meta?: Record<string, unknown> | null; classOrder?: string[] | null; probabilityLong?: number; probabilityShort?: number; probabilityNone?: number };
 import { areAgentGuardsDisabled } from '../../../utils/agentGuards.js';
 import { logMetaAdaptiveEvaluation } from './evaluationLogger.js';
 import { recordIncoherenceEvent } from '../../../monitor/incoherenceTracker.js';
@@ -41,26 +33,10 @@ import { detectSessionAwareness } from './sessionAwareness.js';
 import { detectWhaleActivity } from './whaleActivity.js';
 import { broadcast } from '../../../ws/hub.js';
 
-const pythonSignalTuning = getPythonSignalTuning();
-const BASE_PYTHON_BIAS_WEIGHT = pythonSignalTuning.biasWeight;
-const PYTHON_NEUTRAL_THRESHOLD = pythonSignalTuning.neutralThreshold;
-const PYTHON_GATE_THRESHOLD = pythonSignalTuning.gateThreshold;
+// Predictor constants removed - XGBoost Python predictor deprecated
 const DEFAULT_SHORT_CMF_THRESHOLD = 0.08;
-const PYTHON_BIAS_BOOST_FLOOR = pythonSignalTuning.highConfidenceFloor;
-const PYTHON_BOOST_PROB_THRESHOLD = pythonSignalTuning.highConfidenceProb;
-const PYTHON_BOOST_CONF_THRESHOLD = pythonSignalTuning.highConfidenceConfidence;
-const PYTHON_RISK_BOOST_MULTIPLIER = pythonSignalTuning.highConfidenceRiskBoost;
-const PYTHON_BOOST_MIN_SAMPLES = pythonSignalTuning.minSamplesForBoost;
-// FIX #6: Predictor as ADVISORY not VETO - lowered thresholds significantly
-// Model is 95% accurate - trust it more, gate less aggressively
-const PREDICTOR_MIN_PROB_LONG = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_LONG, 0.35);  // FIX: 0.45 → 0.35 (more permissive)
-const PREDICTOR_MIN_PROB_SHORT = sanitizeProbabilityThreshold(process.env.PRED_MIN_PROB_SHORT, 0.35); // FIX: 0.45 → 0.35 (more permissive)
-const PREDICTOR_MIN_CONFIDENCE = sanitizeProbabilityThreshold(process.env.PRED_MIN_CONF, 0.15);       // FIX: 0.20 → 0.15 (more permissive)
-const PREDICTOR_GATE_ENABLED = process.env.PREDICTOR_GATE_ENABLED !== 'false'; // Bloque si decision=none
-const MAX_REGISTRATION_SNAPSHOT_AGE_MS = Math.max(
-  30_000,
-  Number(process.env.PREDICTOR_REGISTRATION_MAX_AGE_MS ?? '240000'),
-);
+// Predictor gate always disabled since predictor removed
+const PREDICTOR_GATE_ENABLED = false;
 const SHORT_ENTER_CONFIDENCE = 0.38;
 const SHORT_EXIT_CONFIDENCE = 0.26;
 const LONG_ENTER_CONFIDENCE = 0.32;
@@ -127,30 +103,26 @@ type PythonHybridSignal = {
   snapshot: PredictorSnapshot | null;
 };
 
-export type PredictorUsageMode =
-  | 'fresh'
-  | 'stable_snapshot'
-  | 'rule_based'
-  | 'disabled'
-  | 'unavailable'
-  | 'missing_snapshot';
+// Predictor types - simplified (predictor removed)
+export type PredictorUsageMode = 'disabled';
 
 export type PredictorUsageSummary = {
-  used: boolean;
-  mode: PredictorUsageMode;
+  used: false;
+  mode: 'disabled';
   reason: string;
-  source?: string | null;
-  fallback?: boolean;
-  confidence?: number | null;
-  decision?: 'long' | 'short' | 'none';
-  bias?: StrategyBias;
-  reliability?: number | null;
-  reliabilityStatus?: 'healthy' | 'degraded';
+  source?: null;
+  fallback?: false;
+  confidence?: null;
+  decision?: 'none';
+  bias?: 'both';
+  reliability?: null;
+  reliabilityStatus?: undefined;
 };
 
-function composePredictorUsageSummary(params: {
-  mode: PredictorUsageMode;
-  reason: string;
+// Stub function for backward compatibility
+function composePredictorUsageSummary(_params: {
+  mode?: string;
+  reason?: string;
   source?: string | null;
   fallback?: boolean;
   signal?: PythonHybridSignal | null;
@@ -158,184 +130,36 @@ function composePredictorUsageSummary(params: {
   reliabilityStatus?: 'healthy' | 'degraded';
 }): PredictorUsageSummary {
   return {
-    used: Boolean(params.signal),
-    mode: params.mode,
-    reason: params.reason,
-    source: params.source ?? null,
-    fallback: Boolean(params.fallback),
-    confidence: params.signal?.confidence ?? null,
-    decision: params.signal?.decision ?? 'none',
-    bias: params.signal?.bias ?? 'both',
-    reliability: params.reliability ?? null,
-    reliabilityStatus: params.reliabilityStatus,
+    used: false,
+    mode: 'disabled',
+    reason: 'Predictor removed from project',
+    source: null,
+    fallback: false,
+    confidence: null,
+    decision: 'none',
+    bias: 'both',
+    reliability: null,
+    reliabilityStatus: undefined,
   };
 }
 
-type PredictorGateResult = {
-  bias: StrategyBias;
-  decision: 'long' | 'short' | 'none';
-  primaryProbability: number;
-  topLabel: 'long' | 'short' | 'none';
-};
-
-type PredictorConstraintReason =
-  | 'disabled_env'
-  | 'interpreter_unavailable'
-  | 'missing_features'
-  | 'no_snapshot';
-
-function evaluatePredictorGate(probabilities: PythonPredictionProbabilities, confidence: number): PredictorGateResult {
-  const entries: Array<{ label: 'long' | 'short' | 'none'; value: number }> = [
-    { label: 'long', value: clamp(probabilities.long, 0, 1) },
-    { label: 'short', value: clamp(probabilities.short, 0, 1) },
-    { label: 'none', value: clamp(probabilities.none, 0, 1) },
-  ];
-  entries.sort((a, b) => b.value - a.value);
-  const [top] = entries;
-  const meetsConfidence = confidence >= PREDICTOR_MIN_CONFIDENCE;
-
-  if (top.label === 'long' && top.value >= PREDICTOR_MIN_PROB_LONG && meetsConfidence) {
-    return { bias: 'long', decision: 'long', primaryProbability: top.value, topLabel: top.label };
-  }
-  if (top.label === 'short' && top.value >= PREDICTOR_MIN_PROB_SHORT && meetsConfidence) {
-    return { bias: 'short', decision: 'short', primaryProbability: top.value, topLabel: top.label };
-  }
-  return { bias: 'both', decision: 'none', primaryProbability: top.value, topLabel: top.label };
-}
-
-function buildHybridSignal(result: PythonPredictionResult): PythonHybridSignal {
-  const probabilities = {
-    long: clamp(result.probabilities.long, 0, 1),
-    short: clamp(result.probabilities.short, 0, 1),
-    none: clamp(result.probabilities.none, 0, 1),
-  };
-  const sum = probabilities.long + probabilities.short + probabilities.none;
-  if (sum > 0) {
-    probabilities.long /= sum;
-    probabilities.short /= sum;
-    probabilities.none /= sum;
-  } else {
-    probabilities.long = probabilities.short = probabilities.none = 1 / 3;
-  }
-
-  const gate = evaluatePredictorGate(probabilities, result.confidence);
-
-  const cooldownSeconds = typeof result.cooldown?.seconds === 'number' && Number.isFinite(result.cooldown.seconds)
-    ? result.cooldown.seconds
-    : null;
-
+// Predictor functions removed - return neutral signals
+function buildNeutralHybridSignal(): PythonHybridSignal {
   return {
-    bias: gate.bias,
-    decision: gate.decision,
-    probabilities,
-    probabilityLong: probabilities.long,
-    probabilityShort: probabilities.short,
-    probabilityNone: probabilities.none,
-    primaryProbability: gate.primaryProbability,
-    confidence: clamp(result.confidence, 0, 1),
-    entryWeight: clamp(result.entryWeight ?? 1, 0.2, 3),
-    riskMultiplier: clamp(result.riskMultiplier ?? 1, 0.2, 3),
-    cooldown: {
-      active: Boolean(result.cooldown?.active),
-      reason: result.cooldown?.reason ?? null,
-      seconds: cooldownSeconds,
-    },
-    meta: result.meta ?? null,
+    bias: 'both',
+    decision: 'none',
+    probabilities: { long: 0.33, short: 0.33, none: 0.34 },
+    probabilityLong: 0.33,
+    probabilityShort: 0.33,
+    probabilityNone: 0.34,
+    primaryProbability: 0.34,
+    confidence: 0,
+    entryWeight: 1,
+    riskMultiplier: 1,
+    cooldown: { active: false, reason: null, seconds: null },
+    meta: { source: 'predictor_disabled' },
     snapshot: null,
   };
-}
-
-function buildHybridSignalFromSnapshot(
-  snapshot: PredictorSnapshot,
-  raw: PythonPredictionResult | null,
-  options: {
-    stableChanged?: boolean;
-    predictionSource?: string;
-    fallback?: boolean;
-  } = {},
-): PythonHybridSignal {
-  const entryWeight = Number.isFinite(snapshot.entryWeight)
-    ? snapshot.entryWeight
-    : raw?.entryWeight ?? 1;
-  const riskMultiplier = Number.isFinite(snapshot.riskMultiplier)
-    ? snapshot.riskMultiplier
-    : raw?.riskMultiplier ?? 1;
-  const fallbackCooldownSeconds = raw?.cooldown?.seconds ?? null;
-  const cooldownSeconds = Number.isFinite(snapshot.cooldown.seconds ?? NaN)
-    ? snapshot.cooldown.seconds
-    : (typeof fallbackCooldownSeconds === 'number' && Number.isFinite(fallbackCooldownSeconds)
-        ? fallbackCooldownSeconds
-        : null);
-  const cooldown = {
-    active: Boolean(snapshot.cooldown.active ?? raw?.cooldown?.active),
-    reason: snapshot.cooldown.reason ?? raw?.cooldown?.reason ?? null,
-    seconds: cooldownSeconds,
-  };
-  const classOrder = snapshot.classOrder
-    ? [...snapshot.classOrder]
-    : raw?.classOrder
-      ? [...raw.classOrder]
-      : null;
-
-  const mergedMeta = (() => {
-    const target: Record<string, unknown> = {};
-    if (raw?.meta && typeof raw.meta === 'object') {
-      Object.assign(target, raw.meta);
-    }
-    if (snapshot.meta && typeof snapshot.meta === 'object') {
-      Object.assign(target, snapshot.meta);
-    }
-    if (options.predictionSource) {
-      target.predictionSource = options.predictionSource;
-    }
-    if (typeof options.stableChanged === 'boolean') {
-      target.snapshotUpdated = options.stableChanged;
-    }
-    if (options.fallback) {
-      target.snapshotFallback = true;
-    }
-    target.snapshotSource = snapshot.source;
-    target.snapshotTimestamp = snapshot.timestamp;
-    target.snapshotAgeMs = Math.max(0, Date.now() - snapshot.timestamp);
-    if (raw) {
-      target.rawDecision = raw.decision;
-      target.rawConfidence = raw.confidence;
-    }
-    target.snapshotDecision = snapshot.decision;
-    target.snapshotConfidence = snapshot.confidence;
-    return Object.keys(target).length > 0 ? target : null;
-  })();
-
-  const synthetic: PythonPredictionResult = {
-    decision: snapshot.decision,
-    probabilities: { ...snapshot.probabilities },
-    probabilityLong: Number.isFinite(snapshot.probabilityLong)
-      ? snapshot.probabilityLong
-      : raw?.probabilityLong ?? snapshot.probabilities.long ?? 0,
-    probabilityShort: Number.isFinite(snapshot.probabilityShort)
-      ? snapshot.probabilityShort
-      : raw?.probabilityShort ?? snapshot.probabilities.short ?? 0,
-    probabilityNone: Number.isFinite(snapshot.probabilityNone)
-      ? snapshot.probabilityNone
-      : raw?.probabilityNone ?? snapshot.probabilities.none ?? 0,
-    confidence: Number.isFinite(snapshot.confidence) ? snapshot.confidence : raw?.confidence ?? 0,
-    entryWeight,
-    riskMultiplier,
-    cooldown,
-    meta: mergedMeta,
-    classOrder,
-  };
-
-  const hybrid = buildHybridSignal(synthetic);
-  return {
-    ...hybrid,
-    meta: synthetic.meta,
-    snapshot,
-  };
-}
-
-function computeProbabilityEdge(signal: Pick<PythonHybridSignal, 'probabilityLong' | 'probabilityShort'>): number {
-  return clamp(signal.probabilityLong - signal.probabilityShort, -1, 1);
 }
 
 type StrategyScoreResult = {
@@ -541,165 +365,9 @@ function computeVolumeRatio(snap: TechnicalSnapshot): number {
   return clamp(current / ma, 0, 5);
 }
 
-export function buildPredictorFeatures(snap: TechnicalSnapshot): Record<string, number> | null {
-  const ema9 = safeNumber((snap as any)?.ema9, Number.NaN);
-  const ema12 = safeNumber((snap as any)?.ema12, Number.NaN);
-  const ema20 = safeNumber((snap as any)?.ema20, Number.NaN);
-  const ema26 = safeNumber((snap as any)?.ema26, Number.NaN);
-  const ema50 = safeNumber((snap as any)?.ema50, Number.NaN);
-  const ema200 = safeNumber((snap as any)?.ema200, Number.NaN);
-  const ema20Slope = safeNumber((snap as any)?.ema20Slope, 0);
-  const lastPrice = safeNumber((snap as any)?.last, Number.NaN);
-  
-  // Distance relatives aux EMAs (% normalisé)
-  const dist_ema9 = Number.isFinite(ema9) && ema9 !== 0 ? (lastPrice - ema9) / ema9 * 100 : 0;
-  const dist_ema20 = safeNumber((snap as any)?.distEma20, 
-    Number.isFinite(ema20) && ema20 !== 0 ? (lastPrice - ema20) / ema20 * 100 : 0);
-  const dist_ema50 = safeNumber((snap as any)?.distEma50,
-    Number.isFinite(ema50) && ema50 !== 0 ? (lastPrice - ema50) / ema50 * 100 : 0);
-  
-  // RSI multi-période avec patterns avancés
-  const rsi7 = safeNumber((snap as any)?.rsi7, Number.NaN);
-  const rsi14 = safeNumber((snap as any)?.rsi14, Number.NaN);
-  const rsiSlope = safeNumber((snap as any)?.rsiSlope, 0);
-  
-  // rsiAccel: Accélération RSI (dérivée seconde du rsiSlope)
-  // Approximation: si rsiSlope change rapidement, c'est une accélération
-  const rsiAccel = 0; // Placeholder - nécessite historique RSI
-  
-  // rsiDivergence: RSI monte mais prix baisse (ou inverse)
-  // Approximation: comparer direction RSI vs momentum prix
-  const momentum5 = safeNumber((snap as any)?.momentum5, 0);
-  const rsiDivergence = (rsiSlope > 0 && momentum5 < 0) ? 1 : (rsiSlope < 0 && momentum5 > 0) ? -1 : 0;
-  
-  // MACD complet
-  const macd = safeNumber((snap as any)?.macd, 0);
-  const macd_signal = safeNumber((snap as any)?.macdSignal, 0);
-  const macd_hist = safeNumber((snap as any)?.macdDiff, macd - macd_signal); // macd_hist = macd - signal
-  
-  // macd_cross: Signal de croisement MACD (1=bullish cross, -1=bearish cross, 0=no cross)
-  // Approximation: si macd_hist proche de 0 et positif = bullish, négatif = bearish
-  const macd_cross = Math.abs(macd_hist) < 0.1 ? (macd_hist > 0 ? 1 : -1) : 0;
-  
-  // ATR et volatilité
-  const atr14 = safeNumber((snap as any)?.atr14, Number.NaN);
-  const atrPctPercent = safeNumber((snap as any)?.atrPct, Number.NaN);
-  const atrPct = Number.isFinite(atrPctPercent)
-    ? atrPctPercent / 100
-    : (Number.isFinite(atr14) && Number.isFinite(lastPrice) && Math.abs(lastPrice) > 1e-9 ? atr14 / lastPrice : 0);
-  
-  // atrRatio: ATR relatif vs moyenne 50 périodes (approximation via volatilityRegime)
-  const volatilityRegimePct = safeNumber((snap as any)?.volatilityRegime, atrPctPercent);
-  const atrRatio = Number.isFinite(volatilityRegimePct) ? volatilityRegimePct / 100 / atrPct : 1;
-  
-  // Volume patterns
-  const volumeRatioSnap = safeNumber((snap as any)?.volumeRatio, Number.NaN);
-  const volume = safeNumber((snap as any)?.volume, Number.NaN);
-  const volumeMA = safeNumber((snap as any)?.volumeMA, Number.NaN);
-  let volumeRatio = volumeRatioSnap;
-  if (!Number.isFinite(volumeRatio)) {
-    volumeRatio = Number.isFinite(volume) && Number.isFinite(volumeMA) && volumeMA > 0 ? volume / volumeMA : 1;
-  }
-  if (!Number.isFinite(volumeRatio)) {
-    volumeRatio = 1;
-  }
-  
-  // volumeSpike: 1 si volume > 2x la moyenne, 0 sinon
-  const volumeSpike = volumeRatio > 2.0 ? 1 : 0;
-  
-  // volumeTrend: Tendance volume (ratio MA court / MA long)
-  // Approximation: utiliser volumeZScore ou volumeRatio comme proxy
-  const volumeZScore = safeNumber((snap as any)?.volumeZScore, 0);
-  const volumeTrend = volumeRatio > 1 ? Math.min(volumeRatio / 2, 2) : volumeRatio;
-  
-  // Momentum multi-période
-  const momentum10 = safeNumber((snap as any)?.momentum10, 0);
-  const momentum20 = safeNumber((snap as any)?.momentum20, 0);
-  
-  // momentumAccel: Accélération du momentum (dérivée du momentum10)
-  // Approximation: différence momentum5 et momentum10
-  const momentumAccel = momentum5 - momentum10;
-  
-  // ADX et Directional Indicators
-  const adx14 = safeNumber((snap as any)?.adx14, Number.NaN);
-  const plusDI = safeNumber((snap as any)?.adxPos14 ?? (snap as any)?.diPlus14, 0);
-  const minusDI = safeNumber((snap as any)?.adxNeg14 ?? (snap as any)?.diMinus14, 0);
-  
-  // Bollinger Bands
-  const bb_position = safeNumber((snap as any)?.bbPosition, 0.5);
-  const bb_width = safeNumber((snap as any)?.bbWidth, 0);
-  
-  // Price patterns
-  // priceAccel: Accélération prix (dérivée seconde)
-  // Approximation: différence entre momentum3 et momentum5
-  const momentum3 = safeNumber((snap as any)?.momentum3, 0);
-  const priceAccel = momentum3 - momentum5;
-  
-  // highLowRatio: (high - low) / close - mesure de volatilité intrabar
-  // Approximation via ATR% si pas disponible directement
-  const highLowRatio = atrPct * 0.5; // Approximation conservative
-  
-  // emaCross: Signal de croisement EMA9/EMA20 (1=bullish, -1=bearish, 0=no cross)
-  // Approximation: si ema9 proche ema20 et ema9 > ema20 = bullish
-  const emaRatio9_20 = Number.isFinite(ema20) && ema20 !== 0 ? ema9 / ema20 : 1;
-  const emaCross = Math.abs(emaRatio9_20 - 1) < 0.002 ? (emaRatio9_20 > 1 ? 1 : -1) : 0;
-
-  // 🎯 CRITICAL: Return ONLY the 41 features expected by Python model
-  // Must match EXACTLY the feature_cols in train_conservative.py
-  const features: Record<string, number> = {
-    // EMAs et distances (9 features)
-    ema9,
-    ema12,
-    ema20,
-    ema26,
-    ema50,
-    ema200,
-    dist_ema9,
-    dist_ema20,
-    dist_ema50,
-    // RSI multi-période et patterns (5 features)
-    rsi7,
-    rsi14,
-    rsiSlope,
-    rsiAccel,
-    rsiDivergence,
-    // MACD complet (4 features)
-    macd,
-    macd_signal,
-    macd_hist,
-    macd_cross,
-    // Volatilité et ATR (3 features)
-    atr14,
-    atrPct,
-    atrRatio,
-    // Volume patterns (3 features)
-    volumeRatio,
-    volumeSpike,
-    volumeTrend,
-    // Momentum multi-période (4 features)
-    momentum5,
-    momentum10,
-    momentum20,
-    momentumAccel,
-    // Trend indicators (3 features)
-    adx14,
-    plusDI,
-    minusDI,
-    // Bollinger Bands (2 features)
-    bb_position,
-    bb_width,
-    // Price patterns (4 features)
-    ema20Slope,
-    priceAccel,
-    highLowRatio,
-    emaCross,
-  };
-
-  if (Object.values(features).some(value => !Number.isFinite(value))) {
-    return null;
-  }
-
-  return features;
+export function buildPredictorFeatures(_snap: TechnicalSnapshot): Record<string, number> | null {
+  // Predictor removed - XGBoost Python predictor has been deprecated (58% accuracy insufficient)
+  return null;
 }
 
 function computeDistancePct(price: number, level: number | null | undefined): number | null {
@@ -855,7 +523,7 @@ class MetaAdaptiveStrategyAgent {
   private readonly hundred = new PreciseDecimal('100');
   private readonly tenThousand = new PreciseDecimal('10000');
   private readonly majorBases = new Set(['BTC', 'ETH']);
-  private readonly pythonPerformance = new PythonPerformanceTracker(BASE_PYTHON_BIAS_WEIGHT);
+  // Predictor removed - pythonPerformance tracker disabled
   private readonly guardBypassSessions = new Set<string>();
   private rngState = 0x9e3779b9n;
   private tokenCounter = 0n;
@@ -894,7 +562,7 @@ class MetaAdaptiveStrategyAgent {
       this.symbolCooldowns.clear();
       this.setRandomSeed(0x9e3779b9);
       this.calibrationProfile = defaultCalibrationProfile;
-      this.pythonPerformance.reset();
+      // Predictor reset removed
       return;
     }
     this.stats.delete(sessionId);
@@ -1362,264 +1030,18 @@ class MetaAdaptiveStrategyAgent {
     const watchlistState = this.updateSymbolMeta(input.symbol, snap, watchlistMeta);
     const isMajor = this.isMajorSymbol(input.symbol);
 
-    const pythonEnabled = process.env.DISABLE_PYTHON_PREDICTOR !== 'true';
-    const pythonAvailable = pythonEnabled && isPythonPredictorAvailable();
-    if (
-      pythonEnabled
-      && !pythonAvailable
-      && !this.pythonUnavailableLogged
-      && process.env.UNIT_TEST_MODE !== 'true'
-    ) {
-      const resolutionError = getPythonResolutionError();
-      console.warn('python predictor disabled: interpreter unavailable', {
-        error: resolutionError?.message ?? 'unknown error',
-      });
-      this.pythonUnavailableLogged = true;
-    }
-    if (pythonAvailable) {
-      this.pythonUnavailableLogged = false;
-    }
-    const predictorFeatures = pythonAvailable ? buildPredictorFeatures(snap) : null;
-    const reliabilityMetrics = getPredictorReliabilityMetrics();
-    const predictorReliability = Number.isFinite(reliabilityMetrics.reliabilityRate)
-      ? reliabilityMetrics.reliabilityRate
-      : null;
-    const predictorReliabilityStatus: 'healthy' | 'degraded' = reliabilityMetrics.isReliable ? 'healthy' : 'degraded';
-    let predictorConstraintReason: PredictorConstraintReason | null = null;
-    if (!pythonEnabled) {
-      predictorConstraintReason = 'disabled_env';
-    } else if (!pythonAvailable) {
-      predictorConstraintReason = 'interpreter_unavailable';
-    } else if (!predictorFeatures) {
-      predictorConstraintReason = 'missing_features';
-    }
-    let stableSnapshotUsed = false;
-    let stableSnapshotMissing = false;
-    let predictorUsage!: PredictorUsageSummary;
-
-    let pythonBias = 0;
-    let pythonSignal: PythonHybridSignal | null = null;
-    let pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
-    let predictionSource: 'cache' | 'fresh' | 'none' = 'none';
+    // Predictor completely removed - always use neutral signal
+    const pythonAvailable = false;
+    const predictorFeatures: Record<string, number> | null = null;
+    const predictorReliability: number | null = null;
+    const predictorReliabilityStatus: 'healthy' | 'degraded' = 'degraded';
     
-    if (pythonAvailable && predictorFeatures) {
-      try {
-        const now = Date.now();
-        // ALWAYS use fresh predictions - NO CACHE AT ALL
-        const prediction = getPythonPredictionSync(predictorFeatures);
-        predictionSource = 'fresh';
-        // NO CACHE - removed completely, always fresh
-
-        const recordResult = recordPrediction({
-          symbol: input.symbol,
-          prediction,
-          features: predictorFeatures,
-          source: 'evaluate',
-          meta: {
-            stage: 'meta_adaptive_evaluation',
-            predictionSource,
-            evaluationTs: now,
-          },
-        });
-
-        const effectiveSnapshot = recordResult.stableSnapshot ?? recordResult.rawSnapshot;
-        const hybridSignal = buildHybridSignalFromSnapshot(effectiveSnapshot, prediction, {
-          stableChanged: recordResult.stableChanged,
-          predictionSource,
-        });
-
-        const probabilityEdge = computeProbabilityEdge(hybridSignal);
-        pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
-        
-        // 🚨 EXTREME RSI OVERRIDE: Ignore predictor on crypto parabolic moves
-        // RSI >85 or <15 are normal during 20-50% crypto rallies/crashes
-        const rsi = predictorFeatures.rsi14 ?? 50;
-        if (rsi > 85 || rsi < 15) {
-          pythonBias = 0; // Neutralize predictor bias
-          console.warn(`⚡ EXTREME RSI OVERRIDE: RSI=${rsi.toFixed(1)}, predictor disabled for ${input.symbol}`);
-        }
-        
-        const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
-        pythonSignal = {
-          ...hybridSignal,
-          bias: strongBias,
-        };
-        pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        // NO FALLBACK - if predictor fails, we fail
-        console.error('🚨 PREDICTOR FAILURE - NO TRADES', {
-          symbol: input.symbol,
-          error: errorMsg,
-          timestamp: new Date().toISOString(),
-          severity: 'CRITICAL',
-        });
-        throw new Error(`Predictor failure for ${input.symbol}: ${errorMsg}`);
-      }
-    }
-
-    if (!pythonSignal) {
-      const stableSnapshot = getStableSnapshot(input.symbol);
-      if (stableSnapshot) {
-        stableSnapshotUsed = true;
-        const hybridSignal = buildHybridSignalFromSnapshot(stableSnapshot, null, {
-          predictionSource: predictionSource !== 'none' ? predictionSource : 'stable_only',
-          fallback: true,
-        });
-        const probabilityEdge = computeProbabilityEdge(hybridSignal);
-        pythonBias = clamp(probabilityEdge * (0.55 + hybridSignal.confidence * 0.45), -1, 1);
-        
-        // 🚨 EXTREME RSI OVERRIDE: Ignore predictor on crypto parabolic moves (fallback case)
-        const rsi = predictorFeatures?.rsi14 ?? 50;
-        if (rsi > 85 || rsi < 15) {
-          pythonBias = 0;
-          console.warn(`⚡ EXTREME RSI OVERRIDE (fallback): RSI=${rsi.toFixed(1)}, predictor disabled for ${input.symbol}`);
-        }
-        
-        const strongBias = Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
-        pythonSignal = {
-          ...hybridSignal,
-          bias: strongBias,
-        };
-        pythonWeight = this.pythonPerformance.getBiasWeight(BASE_PYTHON_BIAS_WEIGHT);
-      } else {
-        stableSnapshotMissing = true;
-        if (!predictorConstraintReason) {
-          predictorConstraintReason = 'no_snapshot';
-        }
-      }
-    }
-
-    const livePythonMetrics = this.pythonPerformance.getMetrics();
-    let pythonBoostApplied = false;
-    // 🎯 BALANCED PREDICTOR THRESHOLD (75% to trust 95% accuracy model)
-    // Allow bypass at reasonable confidence given predictor's proven accuracy
-    const PREDICTOR_BYPASS_THRESHOLD = 0.75; // 🎯 FIX: Lowered from 0.90 to trust ML model more
-    if (
-      pythonSignal
-      && Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD
-      && pythonSignal.primaryProbability >= PYTHON_BOOST_PROB_THRESHOLD
-      && pythonSignal.confidence >= PREDICTOR_BYPASS_THRESHOLD  // Increased from 0.85
-      && livePythonMetrics.samples >= PYTHON_BOOST_MIN_SAMPLES
-      && livePythonMetrics.hitRate > 0.52
-      && livePythonMetrics.realizedEdge > 0
-    ) {
-      const edgeFactor = 1 + clamp(livePythonMetrics.realizedEdge * 2, 0, 0.4);
-      const weightFloor = Math.max(pythonWeight, PYTHON_BIAS_BOOST_FLOOR);
-      pythonWeight = clamp(weightFloor * edgeFactor, 0.35, 1.2);
-      const boostedEntry = clamp(pythonSignal.entryWeight * (PYTHON_RISK_BOOST_MULTIPLIER * edgeFactor), 0.2, 3);
-      const boostedRisk = clamp(pythonSignal.riskMultiplier * (PYTHON_RISK_BOOST_MULTIPLIER * edgeFactor), 0.2, 3);
-      pythonSignal = {
-        ...pythonSignal,
-        entryWeight: boostedEntry,
-        riskMultiplier: boostedRisk,
-      };
-      pythonBoostApplied = true;
-    }
-
-    const describeConstraint = (reason: PredictorConstraintReason | null): string => {
-      switch (reason) {
-        case 'disabled_env':
-          return 'Python predictor disabled via DISABLE_PYTHON_PREDICTOR';
-        case 'interpreter_unavailable':
-          return 'Python interpreter unavailable';
-        case 'missing_features':
-          return 'Predictor features unavailable for current snapshot';
-        case 'no_snapshot':
-          return 'No cached predictor snapshot available';
-        default:
-          return 'Predictor unavailable';
-      }
-    };
-
-    const pythonMeta = pythonSignal?.meta && typeof pythonSignal.meta === 'object'
-      ? (pythonSignal.meta as Record<string, unknown>)
-      : null;
-    const metaPredictionSource = pythonMeta && typeof pythonMeta['predictionSource'] === 'string'
-      ? String(pythonMeta['predictionSource'])
-      : null;
-    const metaSource = pythonMeta && typeof pythonMeta['source'] === 'string'
-      ? String(pythonMeta['source'])
-      : null;
-    const metaSnapshotSource = pythonMeta && typeof pythonMeta['snapshotSource'] === 'string'
-      ? String(pythonMeta['snapshotSource'])
-      : null;
-    const snapshotFallbackMeta = Boolean(pythonMeta && pythonMeta['snapshotFallback']);
-    const derivedSource = metaPredictionSource
-      ?? metaSnapshotSource
-      ?? (pythonSignal?.snapshot?.source ?? null);
-    const ruleBasedSource = metaSource === 'rule_based_fallback';
-    const fallbackUsed = snapshotFallbackMeta || stableSnapshotUsed || Boolean(predictorConstraintReason);
-
-    if (pythonSignal) {
-      if (ruleBasedSource) {
-        predictorUsage = composePredictorUsageSummary({
-          mode: 'rule_based',
-          reason: 'Rule-based fallback executed after predictor failure',
-          source: derivedSource ?? 'rule_based_fallback',
-          fallback: true,
-          signal: pythonSignal,
-          reliability: predictorReliability,
-          reliabilityStatus: predictorReliabilityStatus,
-        });
-      } else if (predictionSource === 'fresh') {
-        predictorUsage = composePredictorUsageSummary({
-          mode: 'fresh',
-          reason: 'Fresh python prediction executed',
-          source: derivedSource ?? 'python_predictor',
-          fallback: false,
-          signal: pythonSignal,
-          reliability: predictorReliability,
-          reliabilityStatus: predictorReliabilityStatus,
-        });
-      } else {
-        const fallbackReasonParts: string[] = [];
-        if (predictorConstraintReason) {
-          fallbackReasonParts.push(describeConstraint(predictorConstraintReason));
-        } else if (snapshotFallbackMeta) {
-          fallbackReasonParts.push('Stable snapshot fallback');
-        }
-        const fallbackReason = fallbackReasonParts.length > 0
-          ? fallbackReasonParts.join(' | ')
-          : 'Stable snapshot reused';
-        predictorUsage = composePredictorUsageSummary({
-          mode: 'stable_snapshot',
-          reason: fallbackReason,
-          source: derivedSource ?? 'predictor_state_store',
-          fallback: fallbackUsed,
-          signal: pythonSignal,
-          reliability: predictorReliability,
-          reliabilityStatus: predictorReliabilityStatus,
-        });
-      }
-    } else {
-      const baseReason = describeConstraint(predictorConstraintReason);
-      if (predictorConstraintReason === 'disabled_env') {
-        predictorUsage = composePredictorUsageSummary({
-          mode: 'disabled',
-          reason: baseReason,
-          reliability: predictorReliability,
-          reliabilityStatus: predictorReliabilityStatus,
-        });
-      } else if (predictorConstraintReason === 'interpreter_unavailable') {
-        predictorUsage = composePredictorUsageSummary({
-          mode: 'unavailable',
-          reason: baseReason,
-          reliability: predictorReliability,
-          reliabilityStatus: predictorReliabilityStatus,
-        });
-      } else {
-        const reasonDetail = stableSnapshotMissing
-          ? `${baseReason} (no cached snapshot)`
-          : baseReason;
-        predictorUsage = composePredictorUsageSummary({
-          mode: 'missing_snapshot',
-          reason: reasonDetail,
-          reliability: predictorReliability,
-          reliabilityStatus: predictorReliabilityStatus,
-        });
-      }
-    }
+    // Predictor always disabled
+    const pythonBias = 0;
+    const pythonSignal: PythonHybridSignal | null = buildNeutralHybridSignal();
+    const pythonWeight = 0;
+    const pythonBoostApplied = false;
+    const predictorUsage: PredictorUsageSummary = composePredictorUsageSummary({});
 
     const regimeSignal = detectMarketRegime({
       snap,
@@ -1642,32 +1064,6 @@ class MetaAdaptiveStrategyAgent {
       1.5,
     );
     const macroNotes = [...derivativeSignal.notes, ...onChainSignal.notes, ...sentimentSignal.notes, ...regimeSignal.notes];
-    if (pythonSignal) {
-      macroNotes.push(`python_bias=${pythonBias.toFixed(2)}`);
-      macroNotes.push(`python_weight=${pythonWeight.toFixed(2)}`);
-      macroNotes.push(`python_decision=${pythonSignal.decision}`);
-      macroNotes.push(`python_prob_primary=${pythonSignal.primaryProbability.toFixed(2)}`);
-      macroNotes.push(`python_conf=${pythonSignal.confidence.toFixed(2)}`);
-      macroNotes.push(`python_entry=${pythonSignal.entryWeight.toFixed(2)}`);
-      if (pythonBoostApplied) {
-        macroNotes.push('python_boost_high_conf');
-      }
-      if (pythonSignal.cooldown.active) {
-        macroNotes.push('python_cooldown_active');
-      }
-      void storePredictorDecisionIfChanged({
-        symbol: input.symbol,
-        decision: pythonSignal.decision,
-        probabilityLong: pythonSignal.probabilities.long ?? pythonSignal.probabilityLong ?? 0,
-        probabilityShort: pythonSignal.probabilities.short ?? pythonSignal.probabilityShort ?? 0,
-        confidence: pythonSignal.confidence,
-        entryWeight: pythonSignal.entryWeight,
-        riskMultiplier: pythonSignal.riskMultiplier,
-        price,
-      }).catch(error => {
-        console.error(`[MetaAdaptive:evaluate] Failed to store predictor decision for ${input.symbol}:`, error);
-      });
-    }
 
     const emaAlignmentBull = ema20 >= ema50 && ema50 >= ema100 && ema100 >= ema200;
     const emaAlignmentBear = ema20 <= ema50 && ema50 <= ema100 && ema100 <= ema200;
@@ -2441,21 +1837,11 @@ class MetaAdaptiveStrategyAgent {
           penaltiesApplied.push(`rebound_block(${reboundSignal.severity})`);
           reasonsAugmented.push(...reboundSignal.reasons);
         } else if (reboundSignal.probability >= 0.50) {  // 🎯 FIX: Raised from 0.35 to 0.50 to reduce false blocks
-          // 🎯 CONTEXTUAL LOGIC: Only block if AGAINST trend or predictor confirms
+          // 🎯 CONTEXTUAL LOGIC: Only block if AGAINST trend
           const isTrendBearish = context.bearishStack && context.alignmentScore >= 0.7;
-          const predictorBias = pythonSignalForItem?.bias;
-          const predictorConf = Number(pythonSignalForItem?.confidence ?? 0);
-          const predictorConfirmsRebound = predictorBias === 'long' && predictorConf >= 0.45;
           
-          // 🚫 HARD BLOCK: Predictor says LONG + Rebound detected (clear contradiction)
-          if (predictorConfirmsRebound) {
-            effectiveScore = 0;
-            penaltiesApplied.push('predictor_rebound_contradiction');
-            reasonsAugmented.push(`predictor_favors_long(${predictorConf.toFixed(2)})`);
-            reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
-          }
           // ⚠️ SOFT PENALTY: Rebound in strong downtrend (counter-trend bounce risk)
-          else if (!isTrendBearish || reboundSignal.probability >= 0.5) {
+          if (!isTrendBearish || reboundSignal.probability >= 0.5) {
             // Not in strong downtrend OR high rebound probability → Penalize heavily
             const reboundPenalty = Math.min(0.95, reboundSignal.probability * 1.3);
             effectiveScore *= (1 - reboundPenalty);
@@ -2474,12 +1860,8 @@ class MetaAdaptiveStrategyAgent {
         }
       }
       
-      // 🎯 REBOUND OPPORTUNITY FOR LONGS (ENHANCED)
+      // 🎯 REBOUND OPPORTUNITY FOR LONGS (Technical analysis based)
       if (item.bias === 'long' || (item.bias === 'both' && context.bullishStack)) {
-        const predictorBias = pythonSignalForItem?.bias;
-        const predictorConf = Number(pythonSignalForItem?.confidence ?? 0);
-        const predictorConfirmsLong = predictorBias === 'long' && predictorConf >= 0.50;
-        
         // 🎯 SUPPORT BOUNCE DETECTION: Prix near support + conditions techniques favorables
         const nearSupport = snap.srBias === 'nearSupport';
         const rsi = Number((snap as any)?.rsi14 ?? 50);
@@ -2496,52 +1878,25 @@ class MetaAdaptiveStrategyAgent {
         const volumeRatio = Number((snap as any)?.volumeRatio ?? 1);
         const volumeConfirmed = volumeRatio > 0.5; // Au moins 50% du volume moyen
         
-        // 🚀 STRONG BOOST: High probability rebound + Predictor confirms LONG
+        // 🚀 STRONG BOOST: High probability rebound
         if (reboundSignal.tradeBias === 'favor_long' && reboundSignal.probability >= 0.6) {
-          if (predictorConfirmsLong) {
-            // Double confirmation: Rebound + Predictor → VERY strong signal
-            effectiveScore = Math.min(1, effectiveScore * 1.40); // Boosted from 1.25
-            reasonsAugmented.push('rebound_opportunity_confirmed');
-            reasonsAugmented.push(`predictor_aligned(${predictorConf.toFixed(2)})`);
-          } else {
-            // Rebound only (no predictor) → Standard boost
-            effectiveScore = Math.min(1, effectiveScore * 1.25);
-            reasonsAugmented.push('rebound_opportunity');
-          }
+          effectiveScore = Math.min(1, effectiveScore * 1.25);
+          reasonsAugmented.push('rebound_opportunity');
           reasonsAugmented.push(...reboundSignal.reasons.slice(0, 2));
         }
         // 🎯 SUPPORT BOUNCE BOOST: Prix near support + RSI oversold + volume OK
-        // ↪️ SEUIL PLUS BAS (40%) pour saisir les rebonds modérés comme XRP
         else if (reboundSignal.probability >= 0.40 && nearSupport && rsiOversold && volumeConfirmed) {
           // Multi-confirmation: Support + RSI + Volume → Safe bounce setup
-          if (predictorConfirmsLong) {
-            // 🔥 PREDICTOR ALIGNS: Very strong signal
-            effectiveScore = Math.min(1, effectiveScore * 1.35);
-            reasonsAugmented.push('support_bounce_predictor_confirmed');
-            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
-          } else {
-            // ✅ NO PREDICTOR: Still good setup (technical confluence)
-            effectiveScore = Math.min(1, effectiveScore * 1.20);
-            reasonsAugmented.push('support_bounce_setup');
-            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
-          }
+          effectiveScore = Math.min(1, effectiveScore * 1.20);
+          reasonsAugmented.push('support_bounce_setup');
+          reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
         }
         // 📈 EMA BOUNCE BOOST: Prix near EMAs + RSI oversold
         else if (reboundSignal.probability >= 0.35 && (nearEma20 || nearEma50) && rsiOversold && volumeConfirmed) {
           // EMA acting as support
           const emaLevel = nearEma20 ? 'ema20' : 'ema50';
-          if (predictorConfirmsLong) {
-            effectiveScore = Math.min(1, effectiveScore * 1.25);
-            reasonsAugmented.push(`${emaLevel}_bounce_predictor_aligned`);
-          } else {
-            effectiveScore = Math.min(1, effectiveScore * 1.12);
-            reasonsAugmented.push(`${emaLevel}_bounce_setup`);
-          }
-        }
-        // 📈 MODERATE BOOST: Medium rebound probability + Strong predictor
-        else if (reboundSignal.probability >= 0.40 && predictorConfirmsLong) {
-          effectiveScore = Math.min(1, effectiveScore * 1.15);
-          reasonsAugmented.push('moderate_rebound_predictor_aligned');
+          effectiveScore = Math.min(1, effectiveScore * 1.12);
+          reasonsAugmented.push(`${emaLevel}_bounce_setup`);
         }
         // 🛑 REVERSAL PROTECTION (block longs if dump risk)
         else if (reversalSignal.shouldBlock) {
@@ -2555,12 +1910,8 @@ class MetaAdaptiveStrategyAgent {
         }
       }
       
-      // 🎯 RESISTANCE REJECTION FOR SHORTS (MIRROR OF SUPPORT BOUNCE)
+      // 🎯 RESISTANCE REJECTION FOR SHORTS (Technical analysis based)
       if (item.bias === 'short' || (item.bias === 'both' && context.bearishStack)) {
-        const predictorBias = pythonSignalForItem?.bias;
-        const predictorConf = Number(pythonSignalForItem?.confidence ?? 0);
-        const predictorConfirmsShort = predictorBias === 'short' && predictorConf >= 0.50;
-        
         // 🎯 RESISTANCE REJECTION DETECTION: Prix near resistance + conditions techniques favorables
         const nearResistance = snap.srBias === 'nearResistance';
         const rsi = Number((snap as any)?.rsi14 ?? 50);
@@ -2577,46 +1928,25 @@ class MetaAdaptiveStrategyAgent {
         const volumeRatio = Number((snap as any)?.volumeRatio ?? 1);
         const volumeConfirmed = volumeRatio > 0.5; // Au moins 50% du volume moyen
         
-        // 🚀 STRONG BOOST: High probability reversal + Predictor confirms SHORT
+        // 🚀 STRONG BOOST: High probability reversal
         if (reversalSignal.tradeBias === 'favor_short' && reversalSignal.probability >= 0.6) {
-          if (predictorConfirmsShort) {
-            // Double confirmation: Reversal + Predictor → VERY strong signal
-            effectiveScore = Math.min(1, effectiveScore * 1.40);
-            reasonsAugmented.push('resistance_rejection_confirmed');
-            reasonsAugmented.push(`predictor_aligned(${predictorConf.toFixed(2)})`);
-          } else {
-            // Reversal only (no predictor) → Standard boost
-            effectiveScore = Math.min(1, effectiveScore * 1.25);
-            reasonsAugmented.push('resistance_rejection');
-          }
+          effectiveScore = Math.min(1, effectiveScore * 1.25);
+          reasonsAugmented.push('resistance_rejection');
           reasonsAugmented.push(...reversalSignal.reasons.slice(0, 2));
         }
         // 🎯 RESISTANCE REJECTION BOOST: Prix near resistance + RSI overbought + volume OK
         else if (reversalSignal.probability >= 0.40 && nearResistance && rsiOverbought && volumeConfirmed) {
           // Multi-confirmation: Resistance + RSI + Volume → Safe rejection setup
-          if (predictorConfirmsShort) {
-            // 🔥 PREDICTOR ALIGNS: Very strong signal
-            effectiveScore = Math.min(1, effectiveScore * 1.35);
-            reasonsAugmented.push('resistance_rejection_predictor_confirmed');
-            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
-          } else {
-            // ✅ NO PREDICTOR: Still good setup (technical confluence)
-            effectiveScore = Math.min(1, effectiveScore * 1.20);
-            reasonsAugmented.push('resistance_rejection_setup');
-            reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
-          }
+          effectiveScore = Math.min(1, effectiveScore * 1.20);
+          reasonsAugmented.push('resistance_rejection_setup');
+          reasonsAugmented.push(`rsi=${rsi.toFixed(1)}`);
         }
         // 📉 EMA REJECTION BOOST: Prix near EMAs + RSI overbought
         else if (reversalSignal.probability >= 0.35 && (nearEma20 || nearEma50) && rsiOverbought && volumeConfirmed) {
           // EMA acting as resistance
           const emaLevel = nearEma20 ? 'ema20' : 'ema50';
-          if (predictorConfirmsShort) {
-            effectiveScore = Math.min(1, effectiveScore * 1.25);
-            reasonsAugmented.push(`${emaLevel}_rejection_predictor_aligned`);
-          } else {
-            effectiveScore = Math.min(1, effectiveScore * 1.12);
-            reasonsAugmented.push(`${emaLevel}_rejection_setup`);
-          }
+          effectiveScore = Math.min(1, effectiveScore * 1.12);
+          reasonsAugmented.push(`${emaLevel}_rejection_setup`);
         }
         // 🛑 REBOUND PROTECTION (block shorts if bounce risk)
         else if (reboundSignal.shouldBlock) {
@@ -2629,23 +1959,7 @@ class MetaAdaptiveStrategyAgent {
       }
       
       // ⚠️ VOLATILITY SQUEEZE PROTECTION
-      // 🎯 BYPASS: If predictor very confident (>75%), trust ML model over volatility concern
-      const predictorVeryConfident = pythonSignal && pythonSignal.confidence >= 0.75;  // 🎯 FIX: Lowered from 0.85 to 0.75
-      const squeezeBypassActive = predictorVeryConfident && squeezeSignal.isSqueezed;
-      
-      if (squeezeBypassActive && pythonSignal && process.env.UNIT_TEST_MODE !== 'true') {
-        console.log(JSON.stringify({
-          level: 'info',
-          event: 'squeeze_bypass_predictor_confident',
-          symbol: input.symbol,
-          family: item.family,
-          squeezeSeverity: squeezeSignal.severity,
-          predictorConfidence: pythonSignal.confidence.toFixed(3),
-          predictorDecision: pythonSignal.decision,
-          reason: 'predictor_95pct_accuracy_overrides_volatility',
-        }));
-        reasonsAugmented.push(`squeeze_bypassed(predictor_conf=${(pythonSignal.confidence * 100).toFixed(0)}%)`);
-      } else if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'extreme') {
+      if (squeezeSignal.isSqueezed && squeezeSignal.severity === 'extreme') {
         // Extreme squeeze - reduce all entries (direction unpredictable)
         effectiveScore *= 0.4;
         penaltiesApplied.push('extreme_vol_squeeze');
@@ -2850,13 +2164,7 @@ class MetaAdaptiveStrategyAgent {
           effectiveScore *= regimeMultiplier;
           reasonsAugmented.push(`regime_mult=${regimeMultiplier.toFixed(2)}`);
         }
-        if (pythonSignalForItem && Math.abs(pythonBias) >= PYTHON_NEUTRAL_THRESHOLD) {
-          const pythonMultiplier = this.computeDirectionalMultiplier(item.bias, pythonBias);
-          if (pythonMultiplier !== 1) {
-            effectiveScore *= pythonMultiplier;
-            reasonsAugmented.push(`python_mult=${pythonMultiplier.toFixed(2)}`);
-          }
-        }
+        // Predictor multiplier removed - pythonSignal always neutral
         const directionalMultiplier = this.computeDirectionalMultiplier(item.bias, combinedBias);
         if (directionalMultiplier !== 1) {
           effectiveScore *= directionalMultiplier;
@@ -2995,11 +2303,7 @@ class MetaAdaptiveStrategyAgent {
       if (macroStrength >= NEUTRAL_RESOLVE_THRESHOLD) {
         return combinedBias > 0 ? 'long' : 'short';
       }
-      const pythonStrength = Math.abs(pythonBias);
-      const pythonThreshold = Math.max(NEUTRAL_RESOLVE_THRESHOLD * 0.85, PYTHON_NEUTRAL_THRESHOLD * 0.75);
-      if (pythonStrength >= pythonThreshold) {
-        return pythonBias > 0 ? 'long' : 'short';
-      }
+      // Predictor-based bias resolution removed
       if (context.alignmentScore >= 0.82) {
         if (context.bullishStack && !context.bearishStack) return 'long';
         if (context.bearishStack && !context.bullishStack) return 'short';
@@ -3174,355 +2478,21 @@ class MetaAdaptiveStrategyAgent {
   }): Promise<'registered' | 'predictor_blocked' | 'skipped'> {
     if (!params.sessionId || !params.token) return 'skipped';
 
-    let pythonSignalMeta: PythonHybridSignal | null = params.pythonSignal ?? null;
-    let predictorProbabilities: PythonPredictionProbabilities | null = pythonSignalMeta?.probabilities ?? null;
-    let predictorDecision: StrategyBias = pythonSignalMeta?.bias ?? 'both';
-    let predictorDecisionLabel: 'long' | 'short' | 'none' = pythonSignalMeta?.decision ?? 'none';
-    let predictorPrimaryProbability = pythonSignalMeta?.primaryProbability ?? 0.5;
-    let predictorConfidence = pythonSignalMeta?.confidence ?? 0;
-    const predictorUsageSummary = params.predictorUsage ?? null;
-    // The Python predictor (python/predict_service.py) loads the persisted XGBoost
-    // model and scores the latest indicator snapshot. The classifier now emits
-    // calibrated probabilities for long/short/none; only confident sides above
-    // the configured thresholds are allowed to enforce a directional veto.
-    // Updating the model means re-running `npm run train-model`, which
-    // refreshes python/xgboost_direction.json and python/features.txt – the
-    // agent picks up the new artefacts on the next process spawn.
-    // ✅ FIX PREDICTOR CONSISTENCY: Use existing pythonSignalMeta if available (from ranking/evaluate)
-    // This ensures the SAME prediction is used in ranking, strategy selection, and entry registration
-    // Only query predictor if no existing signal (fallback for legacy code paths)
-    const hasPythonSignal = pythonSignalMeta && pythonSignalMeta.confidence != null;
-    const shouldQueryPython = !hasPythonSignal
-      && params.predictorFeatures
-      && process.env.DISABLE_PYTHON_PREDICTOR !== 'true'
-      && isPythonPredictorAvailable();
+    // Predictor completely removed - always use neutral signal
+    const pythonSignalMeta: PythonHybridSignal | null = params.pythonSignal ?? buildNeutralHybridSignal();
+    const predictorProbabilities: PythonPredictionProbabilities | null = pythonSignalMeta?.probabilities ?? null;
+    const predictorDecision: StrategyBias = pythonSignalMeta?.bias ?? 'both';
+    const predictorDecisionLabel: 'long' | 'short' | 'none' = pythonSignalMeta?.decision ?? 'none';
+    const predictorPrimaryProbability = pythonSignalMeta?.primaryProbability ?? 0.5;
+    const predictorConfidence = pythonSignalMeta?.confidence ?? 0;
+    const predictorUsageSummary = params.predictorUsage ?? composePredictorUsageSummary({});
 
-    if (shouldQueryPython && params.predictorFeatures) {
-      try {
-        console.log(`🔄 Querying predictor for ${params.symbol} (no existing signal)`);
-        const prediction = await getPythonPrediction(params.predictorFeatures);
-        const recordResult = recordPrediction({
-          symbol: params.symbol,
-          prediction,
-          features: params.predictorFeatures,
-          source: 'custom:register_active_trade',
-          meta: {
-            stage: 'register_active_trade',
-            predictionSource: 'fresh',
-          },
-        });
-        const snapshot = recordResult.stableSnapshot ?? recordResult.rawSnapshot;
-        const hybridSignal = buildHybridSignalFromSnapshot(snapshot, prediction, {
-          stableChanged: recordResult.stableChanged,
-          predictionSource: 'fresh',
-        });
-        pythonSignalMeta = hybridSignal;
-        predictorProbabilities = hybridSignal.probabilities;
-        const probabilityEdge = computeProbabilityEdge(hybridSignal);
-        predictorDecision = Math.abs(probabilityEdge) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
-        predictorDecisionLabel = predictorDecision === 'both' ? 'none' : hybridSignal.decision;
-        predictorPrimaryProbability = hybridSignal.primaryProbability;
-        predictorConfidence = hybridSignal.confidence;
-      } catch (error) {
-        if (process.env.UNIT_TEST_MODE !== 'true') {
-          console.warn('python predictor failure during trade registration', error);
-        }
-      }
-    } else if (hasPythonSignal) {
-      console.log(`✅ Using existing predictor signal for ${params.symbol} from ranking/evaluate`);
-    }
-
-    if (!pythonSignalMeta) {
-      const stableSnapshot = getStableSnapshot(params.symbol);
-      if (stableSnapshot) {
-        const stale = isSnapshotStale(stableSnapshot, { maxAgeMs: MAX_REGISTRATION_SNAPSHOT_AGE_MS });
-        if (stale) {
-          console.log(JSON.stringify({
-            level: 'warn',
-            event: 'predictor_snapshot_stale_for_registration',
-            symbol: params.symbol,
-            snapshotAgeMs: Date.now() - stableSnapshot.timestamp,
-            maxAgeMs: MAX_REGISTRATION_SNAPSHOT_AGE_MS,
-          }));
-        } else {
-          const hybridSignal = buildHybridSignalFromSnapshot(stableSnapshot, null, {
-            predictionSource: 'stable_snapshot_fallback',
-            fallback: true,
-          });
-          pythonSignalMeta = hybridSignal;
-          predictorProbabilities = hybridSignal.probabilities;
-          const probabilityEdge = computeProbabilityEdge(hybridSignal);
-          predictorDecision = Math.abs(probabilityEdge) >= PYTHON_NEUTRAL_THRESHOLD ? hybridSignal.bias : 'both';
-          predictorDecisionLabel = predictorDecision === 'both' ? 'none' : hybridSignal.decision;
-          predictorPrimaryProbability = hybridSignal.primaryProbability;
-          predictorConfidence = Math.max(predictorConfidence, hybridSignal.confidence);
-        }
-      }
-    }
-
-    if (!Number.isFinite(predictorConfidence)) {
-      predictorConfidence = 0;
-    }
-    let probabilityEdge = 0;
-    let probabilityGapLong = 0;
-    let probabilityGapShort = 0;
-    if (predictorProbabilities) {
-      const probLong = clamp(predictorProbabilities.long, 0, 1);
-      const probShort = clamp(predictorProbabilities.short, 0, 1);
-      const ranked = [
-        { label: 'long' as const, value: probLong },
-        { label: 'short' as const, value: probShort },
-        { label: 'none' as const, value: clamp(predictorProbabilities.none, 0, 1) },
-      ].sort((a, b) => b.value - a.value);
-      const top = ranked[0];
-      const second = ranked[1] ?? top;
-      predictorPrimaryProbability = top.value;
-      if (predictorDecisionLabel === 'none') {
-        predictorDecisionLabel = top.label;
-      }
-      const diff = Math.abs(top.value - second.value);
-      probabilityEdge = Math.abs(probShort - probLong);
-      probabilityGapShort = Math.max(0, probShort - probLong);
-      probabilityGapLong = Math.max(0, probLong - probShort);
-      if (predictorConfidence < diff) {
-        predictorConfidence = diff;
-      }
-    }
-    // FIX: Use bias instead of decision if confidence is reasonable
-    // This allows trades when predictor has a clear bias but decision=none due to low confidence
-    let effectivePredictorDirection: StrategyBias = predictorDecision;
-    const biasFromSignal = pythonSignalMeta?.bias || 'both';
-    
-    if (predictorConfidence < PREDICTOR_MIN_CONFIDENCE) {
-      // Low confidence: check if bias is still clear enough
-      // OPTIMIZED: Predictor 95% accuracy - utiliser bias dès 15% confidence (vs 25% avant)
-      if (predictorConfidence >= 0.15 && (biasFromSignal === 'long' || biasFromSignal === 'short')) {
-        // Even moderate confidence (15-20%) + clear bias: trust the predictor
-        effectivePredictorDirection = biasFromSignal;
-      } else {
-        // Very low confidence (<15%): neutral
-        effectivePredictorDirection = 'both';
-      }
-      predictorDecisionLabel = 'none';
-    }
-    
-    if (effectivePredictorDirection !== 'long' && effectivePredictorDirection !== 'short') {
-      effectivePredictorDirection = 'both';
-    }
-
-    const cachedPredictorDecision = getCachedPredictorDecision(params.symbol);
-    if (
-      effectivePredictorDirection === 'both' &&
-      cachedPredictorDecision &&
-      cachedPredictorDecision !== 'none'
-    ) {
-      const exitThreshold = cachedPredictorDecision === 'short' ? SHORT_EXIT_CONFIDENCE : LONG_EXIT_CONFIDENCE;
-      const oppositeOfCached = cachedPredictorDecision === 'short' ? 'long' : 'short';
-      if (biasFromSignal !== oppositeOfCached && predictorConfidence >= exitThreshold) {
-        effectivePredictorDirection = cachedPredictorDecision;
-        predictorDecisionLabel = cachedPredictorDecision;
-      }
-    }
-
-    const symbolStats = await getPredictorSymbolStats(params.symbol).catch(err => {
-      console.error(`[MetaAdaptive] Failed to compute predictor stats for ${params.symbol}:`, err);
-      return null;
-    });
-
+    // Predictor gate always disabled
     type IntendedSide = 'long' | 'short' | 'both';
     const intendedSide: IntendedSide = params.side ?? (params.family === 'mean_reversion' ? 'both' : 'long');
-    
-    // ✅ PREDICTOR GATE ENABLED: Store decision changes and block uncertain trades
-    // Only logs decision changes to DB (none→long, long→short, etc.)
-    const PREDICTOR_GATE_ENABLED = false;
-    const PREDICTOR_SHADOW_MODE = true; // Enable shadow mode to log what WOULD have been blocked
-    
-    // Store predictor decision if it changed
-    if (pythonSignalMeta && predictorProbabilities) {
-      await storePredictorDecisionIfChanged({
-        symbol: params.symbol,
-        decision: predictorDecisionLabel as 'long' | 'short' | 'none',
-        probabilityLong: predictorProbabilities.long ?? 0,
-        probabilityShort: predictorProbabilities.short ?? 0,
-        confidence: predictorConfidence,
-        entryWeight: pythonSignalMeta.entryWeight,
-        riskMultiplier: pythonSignalMeta.riskMultiplier,
-        price: params.entryPrice,
-      }).catch(err => {
-        console.error(`[MetaAdaptive] Failed to store predictor decision for ${params.symbol}:`, err);
-      });
-    }
-    
-    if (PREDICTOR_GATE_ENABLED || PREDICTOR_SHADOW_MODE) {
-      const baseEnterConfidence = intendedSide === 'short' ? SHORT_ENTER_CONFIDENCE : LONG_ENTER_CONFIDENCE;
-      const winRateFloor = symbolStats?.winRate == null
-        ? 0.30
-        : Math.max(0.30, symbolStats.winRate < 0.45 ? 0.45 : 0.35);
-      const enterConfidenceTarget = Math.max(baseEnterConfidence, winRateFloor);
-      const relaxedConfidence = Math.max(0, enterConfidenceTarget - 0.05);
-      const edgeRequirement = intendedSide === 'short' ? SHORT_EDGE_THRESHOLD : LONG_EDGE_THRESHOLD;
-      const directionalEdge = intendedSide === 'short' ? probabilityGapShort : probabilityGapLong;
-      const meetsConfidenceEntry = predictorConfidence >= enterConfidenceTarget;
-      const meetsEdgeOverride = directionalEdge >= edgeRequirement && predictorConfidence >= relaxedConfidence;
 
-      const lowConfidenceShortLossStreak = symbolStats?.lowConfidenceShortLossStreak ?? 0;
-      const cooldownActive = intendedSide === 'short' && lowConfidenceShortLossStreak >= 2;
-      if (cooldownActive && predictorConfidence < 0.55) {
-        console.log(JSON.stringify({
-          level: 'info',
-          event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
-          symbol: params.symbol,
-          sessionId: params.sessionId ?? null,
-          token: params.token,
-          predictorDecision: effectivePredictorDirection,
-          predictorConfidence: Number(predictorConfidence.toFixed(4)),
-          probabilityEdge: Number(directionalEdge.toFixed(4)),
-          intendedSide,
-          reason: 'short_cooldown_after_losses',
-          stats: {
-            lowConfidenceShortLossStreak,
-          },
-        }));
-        if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
-      }
-
-      if (!meetsConfidenceEntry && !meetsEdgeOverride && intendedSide !== 'both') {
-        console.log(JSON.stringify({
-          level: 'info',
-          event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
-          symbol: params.symbol,
-          sessionId: params.sessionId ?? null,
-          token: params.token,
-          predictorDecision: effectivePredictorDirection,
-          predictorConfidence: Number(predictorConfidence.toFixed(4)),
-          probabilityEdge: Number(directionalEdge.toFixed(4)),
-          intendedSide,
-          reason: 'insufficient_predictor_conviction',
-          thresholds: {
-            confidence: enterConfidenceTarget,
-            edge: edgeRequirement,
-          },
-          stats: {
-            winRate: symbolStats?.winRate ?? null,
-            completedTrades: symbolStats?.completedTrades ?? 0,
-          },
-        }));
-        if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
-      }
-      
-      // Only block if there's a CLEAR contradiction between predictor and intended side
-      const hasContradiction = (effectivePredictorDirection === 'long' && intendedSide === 'short') 
-        || (effectivePredictorDirection === 'short' && intendedSide === 'long');
-      
-      if (hasContradiction) {
-      console.log(JSON.stringify({
-        level: 'info',
-        event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
-        symbol: params.symbol,
-        sessionId: params.sessionId ?? null,
-        token: params.token,
-        predictorDecision: effectivePredictorDirection,
-        predictorDecisionLabel,
-        predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
-        predictorConfidence: Number(predictorConfidence.toFixed(4)),
-        intendedSide,
-        reason: 'clear_contradiction',
-      }));
-      if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
-    }
-    
-    // 🐞 FIX BUG 3: Block if predictor is uncertain (both/none)
-    // Only trade if predictor has CLEAR directional bias matching intended side
-    if (effectivePredictorDirection === 'both' && intendedSide !== 'both') {
-      console.log(JSON.stringify({
-        level: 'info',
-        event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
-        symbol: params.symbol,
-        sessionId: params.sessionId ?? null,
-        token: params.token,
-        predictorDecision: effectivePredictorDirection,
-        predictorDecisionLabel,
-        predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
-        predictorConfidence: Number(predictorConfidence.toFixed(4)),
-        intendedSide,
-        reason: 'predictor_uncertain_no_clear_direction',
-      }));
-      if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
-    }
-    } // End if (PREDICTOR_GATE_ENABLED)
-
-    // 📊 Log predictor signal for observability (even when gate disabled)
-    console.log(JSON.stringify({
-      level: 'debug',
-      event: 'predictor_signal_logged',
-      symbol: params.symbol,
-      sessionId: params.sessionId ?? null,
-      predictorDecision: effectivePredictorDirection,
-      predictorConfidence: Number(predictorConfidence.toFixed(4)),
-      intendedSide,
-      gateEnabled: PREDICTOR_GATE_ENABLED,
-    }));
-
-    if (intendedSide === 'short') {
-      // 🔴 SHORT GUARDRAIL DISABLED (predictor gate off)
-      // All technical checks bypassed - strategy decides alone
-      if (PREDICTOR_GATE_ENABLED || PREDICTOR_SHADOW_MODE) {
-      const predictorAllowsShort = effectivePredictorDirection === 'short' || effectivePredictorDirection === 'both';
-      const cmfThresholdAbs = params.flowThreshold != null && Number.isFinite(params.flowThreshold)
-        ? Math.abs(params.flowThreshold)
-        : DEFAULT_SHORT_CMF_THRESHOLD;
-      const cmfRequirement = -Math.abs(cmfThresholdAbs);
-      const flowCmfValue = params.flowCmf;
-      const flowPass = flowCmfValue != null && Number.isFinite(flowCmfValue) && flowCmfValue <= cmfRequirement;
-      const mtfConsensus = params.mtfConsensus ?? null;
-      const mtfPass = mtfConsensus === 'bearish';
-      const flowVolumeRatioValue = params.flowVolumeRatio;
-      const flowVolumeRatioLogged = flowVolumeRatioValue != null && Number.isFinite(flowVolumeRatioValue)
-        ? Number(flowVolumeRatioValue.toFixed(4))
-        : (flowVolumeRatioValue ?? null);
-      
-      // OPTIMIZED: Predictor 95% accuracy - prioritize predictor signal
-      // Get technical confirmation signals
-      const adxValue = params.plan?.stopAtrMult?.toNumber() ?? 0;
-      const alignmentScoreValue = params.plan?.entryWeight?.toNumber() ?? 0;
-      
-      // NOTE: Confidence check moved to common section above (line ~2035)
-      // Now applies to BOTH long and short trades
-      
-      const strongPredictor = predictorAllowsShort && predictorConfidence > 0.60;
-      const dualConfirmation = flowPass && mtfPass;
-      
-      if (!strongPredictor && !dualConfirmation) {
-        const guardReasons: string[] = [];
-        if (!predictorAllowsShort) guardReasons.push('predictor_disagrees');
-        if (!flowPass) guardReasons.push('flow_cmf_threshold');
-        if (!mtfPass) guardReasons.push('mtf_not_bearish');
-        console.log(JSON.stringify({
-          level: 'info',
-          event: PREDICTOR_GATE_ENABLED ? 'adaptive_trade_blocked_by_predictor' : 'SHADOW_PREDICTOR_BLOCK',
-        symbol: params.symbol,
-        sessionId: params.sessionId ?? null,
-        token: params.token,
-        predictorDecision: effectivePredictorDirection,
-        predictorDecisionLabel,
-        predictorProbability: Number(predictorPrimaryProbability.toFixed(4)),
-        predictorConfidence: Number(predictorConfidence.toFixed(4)),
-        probabilityEdge: Number(probabilityEdge.toFixed(4)),
-        intendedSide,
-        reason: 'short_guardrail_high_conf_or_dual_required',
-        guardReasons,
-          passCount: [predictorAllowsShort, flowPass, mtfPass].filter(Boolean).length,
-          flowCmf: flowCmfValue != null && Number.isFinite(flowCmfValue) ? Number(flowCmfValue.toFixed(6)) : null,
-          flowThreshold: -cmfThresholdAbs,
-          flowVolumeRatio: flowVolumeRatioLogged,
-          mtfConsensus,
-          mtfMatches: params.mtfMatches ?? null,
-          mtfFrames: params.mtfFrames ?? null,
-        }));
-        if (PREDICTOR_GATE_ENABLED) return 'predictor_blocked';
-      }
-      } // End if (PREDICTOR_GATE_ENABLED)
-    }
+    // Predictor gate completely removed - all trades pass through
+    // Predictor was deprecated due to 58% accuracy (insufficient)
 
     const qty = new PreciseDecimal(params.qty ?? 0);
     const qtyAbs = qty.abs();
@@ -3586,13 +2556,7 @@ class MetaAdaptiveStrategyAgent {
     })();
     const queue = this.activeTrades.get(params.sessionId) ?? [];
     const pythonTrackingKey = this.pythonTradeKey(params.sessionId ?? null, params.token ?? null, params.symbol);
-    if (pythonTrackingKey) {
-      this.pythonPerformance.recordExpectation(
-        pythonTrackingKey,
-        predictorPrimaryProbability,
-        predictorConfidence,
-      );
-    }
+    // Predictor tracking disabled - pythonPerformance removed
     const pythonEntryWeight = pythonSignalMeta?.entryWeight ?? 1;
     const planRiskMultiplierDecimal = params.plan.pythonRiskMultiplier ?? new PreciseDecimal('1');
     if (!this.guardsDisabledFor(params.sessionId ?? null) && pythonSignalMeta?.cooldown.active) {
@@ -3760,9 +2724,7 @@ class MetaAdaptiveStrategyAgent {
     const previous = this.tradeLedgers.get(ledgerKey) ?? new PreciseDecimal('0');
     const cumulative = previous.plus(pnl);
     this.tradeLedgers.set(ledgerKey, cumulative);
-    if (trade.pythonTrackingKey) {
-      this.pythonPerformance.recordOutcome(trade.pythonTrackingKey, normalized.toNumber());
-    }
+    // Predictor tracking disabled - pythonPerformance removed
     const holdElapsedMs = (() => {
       if (params.holdDurationMs != null && Number.isFinite(params.holdDurationMs)) {
         return Number(params.holdDurationMs);
