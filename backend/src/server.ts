@@ -986,7 +986,28 @@ app.post("/api/agent/creation/prepare", async (req, res) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
     
-    const { mode = 'paper', capitalUsd = 10000, maxLeverage, aggressiveness, symbol } = req.body;
+    // Read user's saved paper balance from UserSettings (default 10000)
+    let defaultCapital = 10000;
+    try {
+      const userSetting = await prisma.userSetting.findUnique({
+        where: {
+          userId_key: {
+            userId: userId,
+            key: 'paperTradingCapital'
+          }
+        }
+      });
+      if (userSetting?.value) {
+        const parsed = parseFloat(userSetting.value);
+        if (parsed > 0) {
+          defaultCapital = parsed;
+        }
+      }
+    } catch (err) {
+      console.warn('Could not read user paper trading capital:', err);
+    }
+    
+    const { mode = 'paper', capitalUsd = defaultCapital, maxLeverage, aggressiveness, symbol } = req.body;
     
     // Get existing agents (if any) - we allow adding more agents
     const existingAgents = userAgents.get(userId);

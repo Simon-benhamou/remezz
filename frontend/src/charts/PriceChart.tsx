@@ -320,12 +320,29 @@ export default function PriceChart({
         }
         
         if (historyResult?.data && Array.isArray(historyResult.data)) {
-          const historicalData = historyResult.data;
-          setChartData(historicalData);
+          // Filter out invalid data points (null, 0, NaN, etc.)
+          const historicalData = historyResult.data.filter((p: any) => 
+            p && 
+            typeof p.time === 'number' && 
+            typeof p.value === 'number' && 
+            isFinite(p.value) && 
+            p.value > 0
+          );
           
-          // Set initial data on chart
-          if (seriesRef.current && historicalData.length > 0) {
-            seriesRef.current.setData(historicalData);
+          if (historicalData.length > 0) {
+            setChartData(historicalData);
+            
+            // Set initial data on chart
+            if (seriesRef.current) {
+              try {
+                seriesRef.current.setData(historicalData);
+              } catch (err) {
+                console.warn('Failed to set historical data:', err);
+              }
+            }
+          } else {
+            console.warn('No valid historical data points after filtering');
+            setChartData([]);
           }
         }
       } catch (err) {
@@ -342,30 +359,43 @@ export default function PriceChart({
 
   // Handle live price updates - REAL-TIME with second precision
   React.useEffect(() => {
-    if (typeof price === 'number' && isFinite(price) && seriesRef.current && !isLoadingHistory) {
-      const timestamp = Math.floor(Date.now() / 1000);
-      const newPoint = { time: timestamp, value: Number(price.toFixed(4)) };
+    // Validate price is a reasonable number (not 0, not too small, not NaN)
+    if (typeof price !== 'number' || !isFinite(price) || price <= 0) {
+      return;
+    }
+    if (!seriesRef.current || isLoadingHistory) {
+      return;
+    }
+    
+    const timestamp = Math.floor(Date.now() / 1000);
+    const newPoint = { time: timestamp, value: Number(price.toFixed(4)) };
+    
+    setChartData(prev => {
+      // Filter out any invalid points and points with same/newer timestamp
+      const filtered = prev.filter(p => 
+        p.time < timestamp && 
+        typeof p.value === 'number' && 
+        isFinite(p.value) && 
+        p.value > 0
+      );
+      const updated = [...filtered, newPoint];
       
-      setChartData(prev => {
-        // Remove any points with same or newer timestamp to avoid duplicates
-        const filtered = prev.filter(p => p.time < timestamp);
-        const updated = [...filtered, newPoint];
-        
-        // Keep last 2000 points for performance
-        const trimmed = updated.slice(-2000);
-        
-        // Update chart immediately for real-time display
-        if (seriesRef.current) {
+      // Keep last 2000 points for performance
+      const trimmed = updated.slice(-2000);
+      
+      // Update chart immediately for real-time display
+      if (seriesRef.current && trimmed.length > 0) {
+        try {
           seriesRef.current.setData(trimmed);
           // Auto-scroll to latest price
-          try {
-            chartRef.current?.timeScale().scrollToRealTime();
-          } catch {}
+          chartRef.current?.timeScale().scrollToRealTime();
+        } catch (err) {
+          console.warn('Chart setData error:', err);
         }
-        
-        return trimmed;
-      });
-    }
+      }
+      
+      return trimmed;
+    });
   }, [price, isLoadingHistory]);
 
   React.useEffect(()=> {
