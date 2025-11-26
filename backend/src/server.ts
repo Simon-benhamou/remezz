@@ -513,7 +513,7 @@ app.get("/api/agent/sessions", async (req, res) => {
   }
 });
 
-// Delete session
+// Delete session - also stops agent in memory if running
 app.delete("/api/agent/sessions/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -527,9 +527,28 @@ app.delete("/api/agent/sessions/:id", async (req, res) => {
       return res.status(404).json({ error: "Session not found" });
     }
     
+    // ✅ Stop agent in memory if running
+    const userAgentData = userAgents.get(userId);
+    if (userAgentData) {
+      const agentIndex = userAgentData.agents.findIndex(a => a.getStatus().sessionId === id);
+      if (agentIndex !== -1) {
+        const agent = userAgentData.agents[agentIndex];
+        await agent.stop();
+        userAgentData.agents.splice(agentIndex, 1);
+        logger.info(`🗑️ Stopped and removed agent for session ${id}`);
+        
+        // If no more agents, clean up user entry
+        if (userAgentData.agents.length === 0) {
+          userAgents.delete(userId);
+        }
+      }
+    }
+    
+    // Delete from database
     await prisma.agentSession.delete({ where: { id } });
     res.json({ success: true });
   } catch (error) {
+    logger.error('Failed to delete session:', error);
     res.status(500).json({ error: "Failed to delete session" });
   }
 });
@@ -1008,7 +1027,22 @@ app.post("/api/agent/creation/activate", async (req, res) => {
         userId, 
         symbol: selectedSymbol, 
         mode, 
+        startBalanceUsd: capitalUsd,
         profileJson: { capitalUsd, symbol: selectedSymbol } 
+      }
+    });
+    
+    // ✅ Create SessionKpi to track performance
+    await prisma.sessionKpi.create({
+      data: {
+        sessionId: session.id,
+        realizedPnlUsd: 0,
+        unrealizedPnlUsd: 0,
+        roiPct: 0,
+        winRate: 0,
+        expectancy: 0,
+        maxDrawdownPct: 0,
+        avgHoldingMin: 0,
       }
     });
     
