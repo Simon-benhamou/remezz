@@ -171,8 +171,6 @@ export const api = {
     (await client.post('/api/monitor/reports/daily', { sessionId, date, stats: report?.stats, llm: report?.llm })).data,
   analysis: async (symbol: string) =>
     (await client.get("/api/analysis", { params: { symbol } })).data,
-  setAggressiveness: async (sessionId: string, level: 'conservative'|'reactive'|'aggressive') =>
-    (await client.post('/api/agent/aggressiveness', { sessionId, level })).data,
   clearCooldown: async (sessionId: string) =>
     (await client.post('/api/agent/clear-cooldown', { sessionId })).data,
   getDiagnostics: async (sessionId: string) =>

@@ -301,7 +301,6 @@ export default function SessionsPage() {
             const payload = {
               mode: session.mode,
               maxLeverage: Number((session.profile as any)?.requestedMaxLeverage ?? (session.profile as any)?.maxLeverage ?? 4) || 4,
-              aggressiveness: ((session.profile as any)?.aggressiveness) ?? 'reactive',
               strategyEngine: 'meta_adaptive',
             };
             await api.restartSession(session.id, payload);

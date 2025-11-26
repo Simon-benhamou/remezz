@@ -12,7 +12,6 @@ import {
 } from '../utils/strategies';
 type AgentHealthStatus = 'ok' | 'idle' | 'stale' | 'blocked';
 type AgentHealthFlag = 'no_trades' | 'vos_block' | 'stale';
-type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
 
 export type AgentHealthRow = {
   sessionId: string;
@@ -29,7 +28,6 @@ export type AgentHealthRow = {
   lastBlockedAt: number | null;
   status: AgentHealthStatus;
   flags: AgentHealthFlag[];
-  aggressiveness?: AggressivenessLevel | null;
   isSmartAgent?: boolean;
   strategyEngine?: StrategyEngineOption | null;
 };
@@ -62,12 +60,6 @@ const FLAG_META: Record<AgentHealthRow['flags'][number], { color: string; label:
   vos_block: { color: 'magenta', label: 'VOS Block' },
   no_trades: { color: 'volcano', label: 'No Trades' },
   stale: { color: 'geekblue', label: 'Stale' },
-};
-
-const AGGRESSIVENESS_META: Record<AggressivenessLevel, { label: string; color: string }> = {
-  conservative: { label: 'Conservative', color: 'geekblue' },
-  reactive: { label: 'Reactive', color: 'purple' },
-  aggressive: { label: 'Aggressive', color: 'volcano' },
 };
 
 function formatRelative(ts: number | null, reference: number): string {
@@ -168,21 +160,6 @@ export default function AgentHealthTable({ data, loading, onRefresh, onReselect,
           );
         }
         return <Text style={{ color: mutedText }}>Manual</Text>;
-      },
-    },
-    {
-      title: 'Aggressiveness',
-      dataIndex: 'aggressiveness',
-      key: 'aggressiveness',
-      filters: (Object.keys(AGGRESSIVENESS_META) as AggressivenessLevel[]).map((level) => ({
-        text: AGGRESSIVENESS_META[level].label,
-        value: level,
-      })),
-      onFilter: (value, record) => record.aggressiveness === value,
-      render: (value: AggressivenessLevel | undefined) => {
-        if (!value) return <Text style={{ color: mutedText }}>Unspecified</Text>;
-        const meta = AGGRESSIVENESS_META[value];
-        return <Tag color={meta.color}>{meta.label}</Tag>;
       },
     },
     {

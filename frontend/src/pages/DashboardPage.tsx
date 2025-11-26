@@ -341,8 +341,8 @@ export default function DashboardPage(){
                         </Avatar>
                         <Text strong>{session.symbol}</Text>
                       </Space>
-                      <Tag color={session.aggressiveness === 'aggressive' ? 'red' : session.aggressiveness === 'reactive' ? 'orange' : 'blue'}>
-                        {session.aggressiveness || 'conservative'}
+                      <Tag color={session.mode === 'live' ? 'gold' : 'blue'}>
+                        {session.mode?.toUpperCase() || 'PAPER'}
                       </Tag>
                     </div>
                     

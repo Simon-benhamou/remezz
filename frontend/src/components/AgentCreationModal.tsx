@@ -34,30 +34,9 @@ import type { AppMode } from '../store';
 
 const { Text } = Typography;
 
-type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
-
 type CreationFormShape = {
   maxLeverage: number;
-  aggressiveness: AggressivenessLevel;
   mode: AppMode;
-};
-
-const AGGRESSIVENESS_PRESETS: Record<AggressivenessLevel, { risk: number; dailyLoss: number; note: string }> = {
-  conservative: {
-    risk: 1.0,
-    dailyLoss: 3.0,
-    note: 'Tight exposure for steadier growth.',
-  },
-  reactive: {
-    risk: 1.5,
-    dailyLoss: 3.5,
-    note: 'Balanced risk profile for most agents.',
-  },
-  aggressive: {
-    risk: 2.2,
-    dailyLoss: 3.8,
-    note: 'Higher swings allowed for faster compounding.',
-  },
 };
 
 // Cryptos classiques qui marchent bien avec le système meta-adaptive
@@ -119,9 +98,6 @@ export default function AgentCreationModal({
   const [rankedCryptos, setRankedCryptos] = React.useState<RankedCrypto[]>([]);
   const [loadingRanking, setLoadingRanking] = React.useState(false);
 
-  const aggressiveness = (Form.useWatch('aggressiveness', form) as AggressivenessLevel) ?? 'reactive';
-  const riskPreset = AGGRESSIVENESS_PRESETS[aggressiveness];
-
   // Load crypto ranking when AI tab is opened
   React.useEffect(() => {
     if (visible && activeTab === 'ai' && rankedCryptos.length === 0) {
@@ -156,7 +132,6 @@ export default function AgentCreationModal({
         mode,
         symbol: selectedSymbol,
         maxLeverage: values.maxLeverage,
-        aggressiveness: values.aggressiveness,
         strategyEngine: 'meta_adaptive',
       };
 
@@ -487,12 +462,11 @@ export default function AgentCreationModal({
         form={form}
         initialValues={{
           maxLeverage: 4,
-          aggressiveness: 'reactive',
           mode,
         }}
       >
         <Row gutter={16}>
-          <Col xs={24} md={12}>
+          <Col xs={24} md={24}>
             <Form.Item
               label={
                 <Space>
@@ -516,34 +490,6 @@ export default function AgentCreationModal({
               />
             </Form.Item>
           </Col>
-
-          <Col xs={24} md={12}>
-            <Form.Item
-              label={
-                <Space>
-                  <Text style={{ color: '#e2e8f0' }}>Risk Profile</Text>
-                  <Tooltip title="Defines the agent's risk tolerance and trading behavior">
-                    <InfoCircleOutlined style={{ color: '#94a3b8' }} />
-                  </Tooltip>
-                </Space>
-              }
-              name="aggressiveness"
-              rules={[{ required: true }]}
-              extra={
-                <Text style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 12 }}>
-                  {riskPreset.note}
-                </Text>
-              }
-            >
-              <Select
-                options={[
-                  { value: 'conservative', label: '🛡️ Conservative - Blue chips only' },
-                  { value: 'reactive', label: '⚖️ Reactive - Balanced approach (Recommended)' },
-                  { value: 'aggressive', label: '🚀 Aggressive - High volatility opportunities' },
-                ]}
-              />
-            </Form.Item>
-          </Col>
         </Row>
 
         <div
@@ -562,15 +508,15 @@ export default function AgentCreationModal({
               Risk per trade
             </Text>
             <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 18 }}>
-              {riskPreset.risk.toFixed(1)}%
+              1.0%
             </Text>
           </div>
           <div style={{ flex: 1 }}>
             <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
-              Daily loss cap
+              Stop Loss
             </Text>
             <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 18 }}>
-              {riskPreset.dailyLoss.toFixed(1)}%
+              2.0%
             </Text>
           </div>
           <div style={{ flex: 1 }}>
@@ -578,7 +524,7 @@ export default function AgentCreationModal({
               Strategy
             </Text>
             <Text style={{ color: '#4ade80', fontWeight: 600, fontSize: 18 }}>
-              Meta-Adaptive
+              Momentum Simple
             </Text>
           </div>
         </div>

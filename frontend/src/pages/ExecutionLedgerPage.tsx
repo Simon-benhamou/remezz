@@ -10,13 +10,6 @@ const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
 
 type Outcome = 'win' | 'loss' | 'breakeven';
-type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
-
-const AGGRESSIVENESS_META: Record<AggressivenessLevel, { label: string; color: string }> = {
-  conservative: { label: 'Conservative', color: '#0ea5e9' },
-  reactive: { label: 'Reactive', color: '#a855f7' },
-  aggressive: { label: 'Aggressive', color: '#ef4444' },
-};
 
 type TradeRow = {
   id: string;
@@ -35,7 +28,6 @@ type TradeRow = {
   sessionSymbol?: string;
   sessionMode?: string;
   sessionId?: string;
-  aggressiveness?: AggressivenessLevel;
   strategyUsed?: string | null;
   strategyConfidence?: number | null;
 };
@@ -87,30 +79,24 @@ export default function ExecutionLedgerPage() {
   const [filterOutcome, setFilterOutcome] = React.useState<'all' | Outcome>('all');
   const [filterSymbol, setFilterSymbol] = React.useState<string>('all');
   const [filterSessionMode, setFilterSessionMode] = React.useState<'all' | 'paper' | 'live'>('all');
-  const [aggressivenessFilter, setAggressivenessFilter] = React.useState<'all' | AggressivenessLevel>('all');
   const [searchText, setSearchText] = React.useState<string>('');
   const [range, setRange] = React.useState<[Dayjs | null, Dayjs | null]>([dayjs().subtract(14, 'day'), dayjs()]);
   const [limit, setLimit] = React.useState<number>(200);
   const [viewMode, setViewMode] = React.useState<'session' | 'global'>('session');
   const { mode } = useMode();
-  const [sessionMeta, setSessionMeta] = React.useState<Record<string, { symbol?: string; mode?: string; aggressiveness: AggressivenessLevel }>>({});
+  const [sessionMeta, setSessionMeta] = React.useState<Record<string, { symbol?: string; mode?: string }>>({});
 
   React.useEffect(() => {
     (async () => {
       try {
         const list = await api.listSessions(mode);
         setSessions(list);
-        const map: Record<string, { symbol?: string; mode?: string; aggressiveness: AggressivenessLevel }> = {};
+        const map: Record<string, { symbol?: string; mode?: string }> = {};
         list.forEach((session: any) => {
           if (!session?.id) return;
-          const rawLevel =
-            (session?.aggressiveness as AggressivenessLevel | undefined)
-            ?? (session?.profileJson?.aggressiveness as AggressivenessLevel | undefined)
-            ?? (session?.profile?.aggressiveness as AggressivenessLevel | undefined);
           map[session.id] = {
             symbol: session.symbol,
             mode: session.mode,
-            aggressiveness: rawLevel ?? 'reactive',
           };
         });
         setSessionMeta(map);
@@ -141,14 +127,12 @@ export default function ExecutionLedgerPage() {
                   const meta = sessionMeta[session.id] ?? {
                     symbol: session.symbol,
                     mode: session.mode,
-                    aggressiveness: 'reactive' as AggressivenessLevel,
                   };
                   return {
                     ...trade,
                     sessionId: session.id,
                     sessionSymbol: session.symbol ?? meta.symbol,
                     sessionMode: session.mode ?? meta.mode,
-                    aggressiveness: (trade?.aggressiveness as AggressivenessLevel | undefined) ?? meta.aggressiveness,
                   } as TradeRow;
                 });
               } catch {
@@ -162,14 +146,6 @@ export default function ExecutionLedgerPage() {
         const allData = allDataRaw as TradeRow[][];
         const flatData = allData
           .flat()
-          .map((trade) => {
-            if (trade.aggressiveness) return trade;
-            const meta = trade.sessionId ? sessionMeta[trade.sessionId] : undefined;
-            return {
-              ...trade,
-              aggressiveness: (trade.aggressiveness as AggressivenessLevel | undefined) ?? meta?.aggressiveness ?? 'reactive',
-            };
-          })
           .sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
         setAllSessionData(flatData);
         setRows(flatData);
@@ -224,7 +200,6 @@ export default function ExecutionLedgerPage() {
           sessionId,
           sessionSymbol: trade.sessionSymbol ?? meta?.symbol,
           sessionMode: trade.sessionMode ?? meta?.mode,
-          aggressiveness: (trade?.aggressiveness as AggressivenessLevel | undefined) ?? meta?.aggressiveness ?? 'reactive',
         }));
         setRows(decorated as TradeRow[]);
         const metricsArray = Array.isArray(metricsResponse) ? metricsResponse : [metricsResponse];
@@ -255,17 +230,6 @@ export default function ExecutionLedgerPage() {
     if (viewMode === 'session' && sessionId) loadTrades();
     else if (viewMode === 'global' && sessions.length) loadTrades();
   }, [sessionId, loadTrades, viewMode, sessions.length]);
-
-  const resolveAggressiveness = React.useCallback(
-    (row: TradeRow): AggressivenessLevel | undefined => {
-      if (row.aggressiveness) return row.aggressiveness;
-      if (row.sessionId && sessionMeta[row.sessionId]) {
-        return sessionMeta[row.sessionId].aggressiveness;
-      }
-      return 'reactive';
-    },
-    [sessionMeta],
-  );
 
   const resolveMode = React.useCallback(
     (row: TradeRow): string | undefined => {
@@ -306,12 +270,8 @@ export default function ExecutionLedgerPage() {
       mapped = mapped.filter((row) => resolveMode(row) === filterSessionMode);
     }
 
-    if (aggressivenessFilter !== 'all') {
-      mapped = mapped.filter((row) => resolveAggressiveness(row) === aggressivenessFilter);
-    }
-
     return mapped;
-  }, [rows, filterOutcome, filterSymbol, searchText, filterSessionMode, aggressivenessFilter, resolveMode, resolveAggressiveness]);
+  }, [rows, filterOutcome, filterSymbol, searchText, filterSessionMode, resolveMode]);
 
   // Get unique symbols for filter
   const symbols = React.useMemo(() => {
@@ -331,15 +291,6 @@ export default function ExecutionLedgerPage() {
     });
     return Array.from(set) as Array<'paper' | 'live'>;
   }, [rows, resolveMode]);
-
-  const availableAggressiveness = React.useMemo(() => {
-    const set = new Set<AggressivenessLevel>();
-    rows.forEach((row) => {
-      const level = resolveAggressiveness(row);
-      if (level) set.add(level);
-    });
-    return Array.from(set);
-  }, [rows, resolveAggressiveness]);
 
   const summary = React.useMemo(() => {
     const metrics = viewMode === 'global' ? globalPerf : sessionPerf;
@@ -401,7 +352,7 @@ export default function ExecutionLedgerPage() {
 
   const exportCsv = React.useCallback(() => {
     if (!data.length) return;
-    const headers = ['Date', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'PnL_USD', 'PnL_%', 'Leverage', 'EstLev', 'Aggressiveness', 'Mode', 'Outcome'];
+    const headers = ['Date', 'Session', 'Symbol', 'Side', 'Qty', 'Entry', 'Exit', 'PnL_USD', 'PnL_%', 'Leverage', 'EstLev', 'Mode', 'Outcome'];
     const lines = data.map((row) => [
       dayjs(row.createdAt).format('YYYY-MM-DD HH:mm:ss'),
       row.sessionSymbol ?? '',
@@ -414,7 +365,6 @@ export default function ExecutionLedgerPage() {
       row.pctChange != null ? Number(row.pctChange).toFixed(2) : '',
       row.leverage != null ? Number(row.leverage).toFixed(2) : '',
       row.estLev != null ? Number(row.estLev).toFixed(2) : '',
-      resolveAggressiveness(row) ?? '',
       resolveMode(row) ?? '',
       asOutcome(row),
     ].join(','));
@@ -426,7 +376,7 @@ export default function ExecutionLedgerPage() {
     a.download = `journal_${sessionId}_${dayjs().format('YYYYMMDD_HHmm')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [data, resolveAggressiveness, resolveMode, sessionId]);
+  }, [data, resolveMode, sessionId]);
 
   const columns = React.useMemo(() => ([
     {
@@ -459,15 +409,6 @@ export default function ExecutionLedgerPage() {
           size="small"
         />
       ),
-    },
-    {
-      title: 'Aggressiveness',
-      dataIndex: 'aggressiveness',
-      width: 150,
-      render: (value: AggressivenessLevel) => {
-        const meta = value ? AGGRESSIVENESS_META[value] : undefined;
-        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : '—';
-      },
     },
     {
       title: 'Side',
@@ -579,22 +520,6 @@ export default function ExecutionLedgerPage() {
                   })),
                 ]}
                 disabled={!availableModes.length}
-              />
-
-              {/* Aggressiveness Filter */}
-              <Select<'all' | AggressivenessLevel>
-                placeholder="Aggressiveness"
-                style={{ minWidth: 160 }}
-                value={aggressivenessFilter}
-                onChange={(val) => setAggressivenessFilter(val)}
-                options={[
-                  { label: 'All Levels', value: 'all' },
-                  ...availableAggressiveness.map((level) => ({
-                    label: AGGRESSIVENESS_META[level].label,
-                    value: level,
-                  })),
-                ]}
-                disabled={!availableAggressiveness.length}
               />
 
               {/* Search */}

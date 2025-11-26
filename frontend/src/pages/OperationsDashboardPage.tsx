@@ -71,8 +71,6 @@ type ActivityPoint = {
   trades: number;
 };
 
-type AggressivenessLevel = 'conservative' | 'reactive' | 'aggressive';
-
 type GlobalHealth = {
   tone: 'success' | 'warning' | 'error' | 'info';
   icon: React.ReactNode;
@@ -261,12 +259,6 @@ const COMPLIANCE_KEYWORDS = [
   'kill switch',
   'risk',
 ];
-
-const AGGRESSIVENESS_META: Record<AggressivenessLevel, { label: string; color: string }> = {
-  conservative: { label: 'Conservative', color: '#0ea5e9' },
-  reactive: { label: 'Reactive', color: '#a855f7' },
-  aggressive: { label: 'Aggressive', color: '#ef4444' },
-};
 
 const incoherenceSeverityMeta: Record<IncoherenceSeverity, { label: string; color: string; bg: string }> = {
   critical: { label: 'Critical', color: '#f87171', bg: 'rgba(248, 113, 113, 0.16)' },
@@ -664,95 +656,6 @@ const OperationsDashboardPage: React.FC = () => {
       .filter((evt) => evt.message === 'meta_entry_checklist')
       .slice(0, 4);
   }, [opsEvents]);
-
-  const aggressivenessStats = React.useMemo(() => {
-    const rows = Array.isArray(agentHealthForDisplay?.agents)
-      ? (agentHealthForDisplay.agents as AgentHealthRow[])
-      : [];
-    if (!rows.length)
-      return [] as Array<{
-        level: AggressivenessLevel;
-        label: string;
-        successRate: number;
-        totalAgents: number;
-        profitableAgents: number;
-        winTrades: number;
-        lossTrades: number;
-        breakevenTrades: number;
-        avgTrades: number;
-      }>;
-    const order: AggressivenessLevel[] = ['conservative', 'reactive', 'aggressive'];
-    const buckets: Record<
-      AggressivenessLevel,
-      {
-        totalAgents: number;
-        tradeCount: number;
-        winTrades: number;
-        lossTrades: number;
-        breakevenTrades: number;
-        profitableAgents: number;
-      }
-    > = {
-      conservative: { totalAgents: 0, tradeCount: 0, winTrades: 0, lossTrades: 0, breakevenTrades: 0, profitableAgents: 0 },
-      reactive: { totalAgents: 0, tradeCount: 0, winTrades: 0, lossTrades: 0, breakevenTrades: 0, profitableAgents: 0 },
-      aggressive: { totalAgents: 0, tradeCount: 0, winTrades: 0, lossTrades: 0, breakevenTrades: 0, profitableAgents: 0 },
-    };
-    rows.forEach((row: AgentHealthRow) => {
-      const raw = (row.aggressiveness ?? (row as any)?.profile?.aggressiveness ?? (row as any)?.profileJson?.aggressiveness) as AggressivenessLevel | undefined;
-      const level = raw && AGGRESSIVENESS_META[raw] ? raw : row.aggressiveness === null ? null : 'reactive';
-      if (!level) return;
-      const bucket = buckets[level];
-      bucket.totalAgents += 1;
-      bucket.tradeCount += Number(row.tradeCount24h || 0);
-      const wins = Number(row.wins24h || 0);
-      const losses = Number(row.losses24h || 0);
-      const breakeven = Number(row.breakeven24h || 0);
-      bucket.winTrades += wins;
-      bucket.lossTrades += losses;
-      bucket.breakevenTrades += breakeven;
-      if (wins > losses) {
-        bucket.profitableAgents += 1;
-      }
-    });
-
-    return order
-      .map((level) => {
-        const bucket = buckets[level];
-        if (!bucket || bucket.totalAgents === 0) {
-          return null;
-        }
-        const tradeDecisions = bucket.winTrades + bucket.lossTrades;
-        const successRate = tradeDecisions ? Number(((bucket.winTrades / tradeDecisions) * 100).toFixed(1)) : 0;
-        const avgTrades = bucket.totalAgents ? Number((bucket.tradeCount / bucket.totalAgents).toFixed(1)) : 0;
-        return {
-          level,
-          label: AGGRESSIVENESS_META[level].label,
-          successRate,
-          totalAgents: bucket.totalAgents,
-          profitableAgents: bucket.profitableAgents,
-          winTrades: bucket.winTrades,
-          lossTrades: bucket.lossTrades,
-          breakevenTrades: bucket.breakevenTrades,
-          avgTrades,
-        };
-      })
-      .filter(Boolean) as Array<{
-        level: AggressivenessLevel;
-        label: string;
-        successRate: number;
-        totalAgents: number;
-        profitableAgents: number;
-        winTrades: number;
-        lossTrades: number;
-        breakevenTrades: number;
-        avgTrades: number;
-      }>;
-  }, [agentHealthForDisplay]);
-
-  const bestAggressiveness = React.useMemo(() => {
-    if (!aggressivenessStats.length) return null;
-    return aggressivenessStats.reduce((best, entry) => (entry.successRate > best.successRate ? entry : best), aggressivenessStats[0]);
-  }, [aggressivenessStats]);
 
   const globalHealth = resolveGlobalHealth(opsMetrics);
 
@@ -1387,109 +1290,9 @@ const OperationsDashboardPage: React.FC = () => {
         </>
       )}
 
-      {/* Performance Mode: Aggressiveness Chart */}
+      {/* Performance Mode: Portfolio Performance */}
       {(viewMode === 'performance' || viewMode === 'overview') && (
       <>
-      <Row gutter={[24, 24]}>
-        <Col span={24}>
-      <Card
-        title={<span style={{ color: '#e2e8f0' }}>Execution success by aggressiveness</span>}
-        extra={(
-          <Space size={12}>
-            <Select
-              size='small'
-              style={{ minWidth: 180 }}
-              value={strategyFilter}
-              onChange={(value) => setStrategyFilter(value as 'all' | StrategyEngineOption)}
-              options={strategySelectOptions}
-              disabled={strategySelectOptions.length <= 1}
-              dropdownMatchSelectWidth={false}
-            />
-            {bestAggressiveness ? (
-              <Tag color={AGGRESSIVENESS_META[bestAggressiveness.level].color}>
-                Top: {bestAggressiveness.label} · {bestAggressiveness.successRate}%
-              </Tag>
-            ) : null}
-          </Space>
-        )}
-        style={{ borderRadius: 18, border: `1px solid ${token.colorBorderSecondary}` }}
-        bodyStyle={{ padding: 24 }}
-      >
-        {aggressivenessStats.length === 0 ? (
-          <Empty description='No agent activity captured yet.' style={{ color: 'rgba(148, 163, 184, 0.7)' }} />
-        ) : (
-          <Row gutter={[24, 24]} align='middle'>
-            <Col xs={24} lg={14} style={{ height: 260 }}>
-              <ResponsiveContainer width='100%' height='100%'>
-                <BarChart data={aggressivenessStats} barSize={38}>
-                  <CartesianGrid stroke='rgba(148, 163, 184, 0.15)' vertical={false} />
-                  <XAxis dataKey='label' stroke='rgba(148, 163, 184, 0.7)' tickLine={false} axisLine={false} />
-                  <YAxis stroke='rgba(148, 163, 184, 0.7)' tickFormatter={(value) => `${value}%`} tickLine={false} axisLine={false} domain={[0, 100]} />
-                  <RechartsTooltip
-                    contentStyle={{
-                      background: 'rgba(15, 23, 42, 0.92)',
-                      borderRadius: 12,
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      color: '#e2e8f0',
-                    }}
-                    formatter={(value: number, _name, entry) => {
-                      const stat = entry?.payload as typeof aggressivenessStats[number];
-                      return [
-                        `${value}% success`,
-                        `${stat.totalAgents} agents · ${stat.avgTrades} trades/agent · ${stat.winTrades} wins / ${stat.lossTrades} losses`,
-                      ];
-                    }}
-                  />
-                  <Bar dataKey='successRate' radius={[8, 8, 0, 0]}>
-                    {aggressivenessStats.map((entry) => (
-                      <Cell key={entry.level} fill={AGGRESSIVENESS_META[entry.level].color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </Col>
-            <Col xs={24} lg={10}>
-              <Space direction='vertical' size={16} style={{ width: '100%' }}>
-                {aggressivenessStats.map((entry) => (
-                  <div
-                    key={entry.level}
-                    style={{
-                      borderRadius: 14,
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      padding: 16,
-                      background: 'rgba(15, 23, 42, 0.6)',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Space direction='vertical' size={4}>
-                      <Space size={8}>
-                        <Tag color={AGGRESSIVENESS_META[entry.level].color} style={{ borderRadius: 8 }}>
-                          {entry.label}
-                        </Tag>
-                        <Text style={{ color: 'rgba(148, 163, 184, 0.75)' }}>{entry.totalAgents} agents</Text>
-                      </Space>
-                      <Text style={{ color: '#e2e8f0' }}>
-                        Success {entry.successRate}% · Avg trades {entry.avgTrades} · {entry.winTrades} wins
-                      </Text>
-                    </Space>
-                    <Statistic
-                      title={<span style={{ color: 'rgba(148, 163, 184, 0.75)' }}>Profitable agents</span>}
-                      value={entry.profitableAgents}
-                      valueStyle={{ color: '#34d399', fontSize: 24 }}
-                      suffix={<span style={{ color: 'rgba(148, 163, 184, 0.75)', fontSize: 12 }}>/{entry.totalAgents}</span>}
-                    />
-                  </div>
-                ))}
-              </Space>
-            </Col>
-          </Row>
-        )}
-      </Card>
-        </Col>
-      </Row>
-
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={14}>
           <PerformanceOverviewCard

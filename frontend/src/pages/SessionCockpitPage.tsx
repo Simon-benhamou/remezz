@@ -116,7 +116,6 @@ export default function SessionCockpitPage() {
 
   const [wsConnected, setWsConnected] = React.useState(false);
   const wsRef = React.useRef<ReturnType<typeof openWS> | null>(null);
-  const [savingAgg, setSavingAgg] = React.useState(false);
 
   // Core data states (Phase 1)
   const [symbol, setSymbol] = React.useState<string>('');
@@ -181,11 +180,6 @@ export default function SessionCockpitPage() {
       ),
     [filteredOrders],
   );
-  const currentAggressiveness = React.useMemo(() => {
-    const runtime = (agent as any)?.profile?.aggressiveness;
-    const persisted = (status?.session as any)?.profileJson?.aggressiveness;
-    return (runtime || persisted || 'reactive') as 'conservative' | 'reactive' | 'aggressive';
-  }, [agent, status]);
   const statusSummary = React.useMemo(() => {
     const items: Array<{ label: string; value: string }> = [
       {
@@ -197,8 +191,8 @@ export default function SessionCockpitPage() {
         value: agent?.state || status?.session?.state || '—',
       },
       {
-        label: 'Aggressiveness',
-        value: currentAggressiveness ? currentAggressiveness.toUpperCase() : '—',
+        label: 'Strategy',
+        value: 'Momentum Simple',
       },
     ];
     items.push({ label: 'Capital source', value: 'Shared pool' });
@@ -211,23 +205,9 @@ export default function SessionCockpitPage() {
       items.push({ label: 'Daily PnL', value: formatUsd(todaysPnl) });
     }
     return items;
-  }, [status?.session, agent, currentAggressiveness, kpi]);
+  }, [status?.session, agent, kpi]);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
-
-  const handleAggressivenessChange = async (val: 'conservative' | 'reactive' | 'aggressive') => {
-    if (!status?.session?.id) return;
-    try {
-      setSavingAgg(true);
-      await api.setAggressiveness(status.session.id, val);
-      message.success(`Aggressiveness set to ${val}`);
-    } catch (e) {
-      console.error('Failed to set aggressiveness:', e);
-      message.error('Failed to update aggressiveness');
-    } finally {
-      setSavingAgg(false);
-    }
-  };
 
   const handleRearm = async () => {
     if (!status?.session?.id) {
@@ -1140,11 +1120,6 @@ export default function SessionCockpitPage() {
                   <Tag className="session-monitor-chip" color={wsConnected ? 'green' : 'red'}>
                     {wsConnected ? 'LIVE DATA' : 'PAUSED'}
                   </Tag>
-                  {status?.session?.profileJson?.aggressiveness && (
-                    <Tag className="session-monitor-chip" color="purple">
-                      {(status.session.profileJson.aggressiveness as string).toUpperCase()}
-                    </Tag>
-                  )}
                 </Space>
               </Space>
               <Space
@@ -1158,17 +1133,6 @@ export default function SessionCockpitPage() {
                   <Button icon={<ReloadOutlined />} onClick={refreshAll} loading={refreshing} />
                 </Tooltip>
                 <Button onClick={() => setActivityOpen(true)}>Activity feed</Button>
-                <Select
-                  value={currentAggressiveness}
-                  loading={savingAgg}
-                  onChange={handleAggressivenessChange}
-                  options={[
-                    { value: 'conservative', label: 'Conservative' },
-                    { value: 'reactive', label: 'Reactive' },
-                    { value: 'aggressive', label: 'Aggressive' },
-                  ]}
-                  style={{ minWidth: 160 }}
-                />
                 <Button icon={<SyncOutlined />} onClick={handleReselect} loading={reselecting}>
                   Auto-select agent
                 </Button>

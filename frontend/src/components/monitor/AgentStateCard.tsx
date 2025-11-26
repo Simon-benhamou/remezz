@@ -94,8 +94,8 @@ export function AgentStateCard({ data }: AgentStateCardProps) {
 
         <Col xs={24} sm={12} md={6}>
           <Statistic
-            title="Aggressiveness"
-            value={data.profile?.aggressiveness || 'N/A'}
+            title="Strategy"
+            value="Momentum Simple"
             valueStyle={{ fontSize: '14px', textTransform: 'capitalize' }}
           />
         </Col>
