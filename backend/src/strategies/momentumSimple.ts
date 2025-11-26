@@ -69,22 +69,53 @@ export const MomentumConfig = {
   RISK: {
     RISK_PCT_PER_TRADE: 1.0,     // 1% du capital par trade
     POSITION_SIZE_PCT: 0.5,      // 50% du capital disponible par position
-    MAX_POSITIONS: 2,            // Max 2 positions (ETH + XRP)
+    MAX_POSITIONS: 4,            // Max 4 positions
   },
   
-  // Assets tradés V5 - Focus sur ETH et XRP (les plus performants)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ASSETS V5 - Classés par compatibilité avec la stratégie
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // ✅ COMPATIBLES V5 (backtest +ROI, profil XRP-like)
+  SYMBOLS_V5_COMPATIBLE: [
+    'SEI/USDT:USDT',   // 🏆 BEST: +143.9% ROI, 53.8% WR - Découplage 10.6%
+    'XRP/USDT:USDT',   // +54.2% ROI, 49.8% WR - Skewness 0.88, découplage 9.1%
+    'ETH/USDT:USDT',   // +45.8% ROI - Stable mais corrélé BTC
+    'IMX/USDT:USDT',   // +40.1% ROI, 50.8% WR - Découplage 15.4%
+    'DOT/USDT:USDT',   // +7.7% ROI, 52.3% WR - Kurtosis 1055
+  ],
+  
+  // ❌ NON COMPATIBLES V5 (backtest -ROI)
+  SYMBOLS_NOT_COMPATIBLE: [
+    'BTC/USDT:USDT',   // -12% ROI - Trop efficace, pas d'edge
+    'SOL/USDT:USDT',   // -96.7% ROI - CATASTROPHE
+    'DOGE/USDT:USDT',  // -95.5% ROI
+    'ADA/USDT:USDT',   // -51.7% ROI
+    'AVAX/USDT:USDT',  // -43.8% ROI
+    'LINK/USDT:USDT',  // -92.6% ROI
+    'ATOM/USDT:USDT',  // -90.5% ROI
+    'UNI/USDT:USDT',   // -55.4% ROI
+    'LTC/USDT:USDT',   // -94.5% ROI
+    'BCH/USDT:USDT',   // -77.8% ROI
+  ],
+  
+  // Default: utiliser les compatibles
   SYMBOLS: [
-    'XRP/USDT:USDT',  // Best performer: +112% ROI
-    'ETH/USDT:USDT',  // Second best: +19% ROI
-    // BTC et SOL retirés car moins performants sur cette stratégie
+    'SEI/USDT:USDT',   // 🏆 BEST
+    'XRP/USDT:USDT',
+    'ETH/USDT:USDT',
+    'IMX/USDT:USDT',
   ],
   
   // Leverage par asset V5
   LEVERAGE: {
-    'BTC/USDT:USDT': 3,   // Gardé pour compatibilité
-    'ETH/USDT:USDT': 5,   // 5x leverage
-    'SOL/USDT:USDT': 5,   // Gardé pour compatibilité
-    'XRP/USDT:USDT': 4,   // 4x leverage
+    'BTC/USDT:USDT': 3,
+    'ETH/USDT:USDT': 5,
+    'SOL/USDT:USDT': 5,
+    'XRP/USDT:USDT': 4,
+    'SEI/USDT:USDT': 5,   // Nouveau
+    'IMX/USDT:USDT': 5,   // Nouveau
+    'DOT/USDT:USDT': 4,   // Nouveau
   } as Record<string, number>,
 };
 
@@ -150,7 +181,8 @@ export interface MarketConditions {
   dayOfWeek: number;
   btcTrend: 'bullish' | 'bearish' | 'neutral';
   btcMomentum6h: number;
-  btcAboveMa50: boolean;
+  btcAboveMa50: boolean;       // V5: Set to btcAboveSma200 for dashboard compatibility
+  btcAboveSma200?: boolean;    // V5: Explicit SMA200 regime
   overallStatus: 'favorable_long' | 'favorable_short' | 'neutral' | 'unfavorable';
   reason: string;
   checkedAt: number;
@@ -219,7 +251,8 @@ export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
     dayOfWeek,
     btcTrend,
     btcMomentum6h,
-    btcAboveMa50,
+    btcAboveMa50: btcAboveSma200,  // V5: Use SMA200 for regime (dashboard displays this)
+    btcAboveSma200,                 // V5: Explicit field for clarity
     overallStatus,
     reason,
     checkedAt: Date.now(),

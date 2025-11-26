@@ -25,12 +25,13 @@ import {
 
 const { Title, Text } = Typography;
 
-// Market Conditions types
+// Market Conditions types V5
 type MarketConditionsStatus = 'favorable_long' | 'favorable_short' | 'neutral' | 'unfavorable' | 'unknown';
 
 interface MarketConditions {
   status: MarketConditionsStatus;
-  btcAboveMa50: boolean | null;
+  btcAboveMa50: boolean | null;  // Legacy - still returned by API but dashboard uses SMA200
+  btcAboveSma200?: boolean | null;  // V5: Primary regime filter
   btcMomentum6h: number | null;
   btcTrend: 'bullish' | 'bearish' | 'neutral' | null;
   isTradingDay: boolean | null;
@@ -282,14 +283,14 @@ export default function DashboardPageCompact(){
               </div>
               
               <div style={{ borderLeft: '1px solid rgba(148, 163, 184, 0.2)', paddingLeft: 16 }}>
-                <Text type="secondary" style={{ fontSize: 11 }}>BTC vs MA50</Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>BTC vs SMA200 (V5)</Text>
                 <div style={{ 
                   color: marketConditions.btcAboveMa50 ? '#22c55e' : '#ef4444',
                   fontSize: 16,
                   fontWeight: 600,
                   marginTop: 4
                 }}>
-                  {marketConditions.btcAboveMa50 ? 'ABOVE' : 'BELOW'}
+                  {marketConditions.btcAboveMa50 ? '🐂 BULL' : '🐻 BEAR'}
                 </div>
               </div>
               

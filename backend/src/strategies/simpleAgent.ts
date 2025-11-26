@@ -27,6 +27,15 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('agent');
 
+// ============================================================================
+// GLOBAL BTC CACHE - Shared between all agents to reduce API calls
+// ============================================================================
+// This prevents rate limiting when multiple agents run simultaneously
+
+const GLOBAL_BTC_CACHE_TTL_MS = 120_000; // 2 minutes
+let globalBtcCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
+let globalBtcCacheFetchingPromise: Promise<Candle[]> | null = null;
+
 // Type for exchange (we avoid importing ccxt directly to reduce bundle size)
 type Exchange = {
   fetchOHLCV: (symbol: string, timeframe: string, since?: number, limit?: number) => Promise<number[][]>;
@@ -260,10 +269,9 @@ export class SimpleAgent {
   } | null = null;
   private lastExit: { ts: number; price: number; reason: string } | null = null;
   
-  // Cache pour éviter trop d'appels API
+  // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
-  private btcCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
-  private readonly CACHE_TTL_MS = 60_000; // 1 minute
+  private readonly CACHE_TTL_MS = 120_000; // 2 minutes (increased to reduce API calls)
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
@@ -745,32 +753,52 @@ export class SimpleAgent {
   }
   
   private async fetchBtcCandles(): Promise<Candle[]> {
-    if (this.btcCandleCache && Date.now() - this.btcCandleCache.fetchedAt < this.CACHE_TTL_MS) {
-      return this.btcCandleCache.candles;
+    // 1. Check global cache first (shared between all agents)
+    if (globalBtcCandleCache && Date.now() - globalBtcCandleCache.fetchedAt < GLOBAL_BTC_CACHE_TTL_MS) {
+      return globalBtcCandleCache.candles;
     }
     
+    // 2. If another agent is already fetching, wait for it
+    if (globalBtcCacheFetchingPromise) {
+      try {
+        return await globalBtcCacheFetchingPromise;
+      } catch {
+        // Fall through to fetch ourselves
+      }
+    }
+    
+    // 3. We need to fetch - set up promise so other agents wait
     const btcSymbol = 'BTC/USDT:USDT';
     
-    try {
-      const ohlcv = await this.config.exchange.fetchOHLCV(btcSymbol, '15m', undefined, 100);
-      
-      const candles: Candle[] = ohlcv.map(c => ({
-        timestamp: c[0] as number,
-        open: c[1] as number,
-        high: c[2] as number,
-        low: c[3] as number,
-        close: c[4] as number,
-        volume: c[5] as number,
-      }));
-      
-      this.btcCandleCache = { candles, fetchedAt: Date.now() };
-      
-      return candles;
-      
-    } catch (error) {
-      logger.error(`❌ [BTC] Failed to fetch BTC candles:`, error);
-      return this.btcCandleCache?.candles || [];
-    }
+    const fetchPromise = (async () => {
+      try {
+        // V5: Need 220 candles for SMA200 regime filter with some buffer
+        const ohlcv = await this.config.exchange.fetchOHLCV(btcSymbol, '15m', undefined, 220);
+        
+        const candles: Candle[] = ohlcv.map(c => ({
+          timestamp: c[0] as number,
+          open: c[1] as number,
+          high: c[2] as number,
+          low: c[3] as number,
+          close: c[4] as number,
+          volume: c[5] as number,
+        }));
+        
+        // Update global cache
+        globalBtcCandleCache = { candles, fetchedAt: Date.now() };
+        
+        return candles;
+        
+      } catch (error) {
+        logger.error(`❌ [BTC] Failed to fetch BTC candles:`, error);
+        return globalBtcCandleCache?.candles || [];
+      } finally {
+        globalBtcCacheFetchingPromise = null;
+      }
+    })();
+    
+    globalBtcCacheFetchingPromise = fetchPromise;
+    return fetchPromise;
   }
   
   private async setStopLossOnExchange(position: Position): Promise<void> {
