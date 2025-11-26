@@ -232,6 +232,8 @@ export class SimpleAgent {
   private tickIntervalId: NodeJS.Timeout | null = null;
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
+  private lastTickAt: number = 0;
+  private lastPrice: number = 0;
   
   // Current trading state for frontend display
   private currentBias: 'long' | 'short' | null = null;
@@ -326,12 +328,11 @@ export class SimpleAgent {
     const now = new Date();
     const symbol = this.config.symbol;
     this.tickCount = (this.tickCount || 0) + 1;
+    this.lastTickAt = Date.now();
     
-    // Log every 5 minutes (5 ticks) to show agent is alive
-    if (this.tickCount % 5 === 1) {
-      const hasPosition = this.position ? `📊 IN ${this.position.side.toUpperCase()}` : '👀 Watching';
-      console.log(`[SimpleAgent:${symbol}] 🔄 Tick #${this.tickCount} | ${hasPosition} | ${now.toISOString()}`);
-    }
+    // Log every tick to confirm agent is alive
+    const hasPosition = this.position ? `📊 IN ${this.position.side.toUpperCase()} @ $${this.position.entryPrice.toFixed(2)}` : '👀 Watching';
+    console.log(`[SimpleAgent:${symbol}] 🔄 Tick #${this.tickCount} | ${hasPosition} | ${now.toISOString()}`);
     
     try {
       // 🔄 LIVE MODE: Sync with exchange first to detect stop loss executions
@@ -376,6 +377,10 @@ export class SimpleAgent {
         return;
       }
       
+      // Store last price for frontend
+      const currentPrice = candles[candles.length - 1].close;
+      this.lastPrice = currentPrice;
+      
       // Fetch BTC candles pour corrélation
       const btcCandles = await this.fetchBtcCandles();
       
@@ -387,7 +392,6 @@ export class SimpleAgent {
         
         // Store signal info for frontend display
         this.currentBias = signal.side;
-        const currentPrice = candles[candles.length - 1].close;
         this.lastSignal = {
           entryZone: [
             currentPrice * (signal.side === 'long' ? 0.998 : 1.002),
@@ -543,9 +547,16 @@ export class SimpleAgent {
       if (candles.length === 0) return;
       
       const currentPrice = candles[candles.length - 1].close;
+      this.lastPrice = currentPrice;
       
       // Update water marks for trailing stop
       this.position = updatePositionWaterMarks(position, currentPrice);
+      
+      // Log position status every tick when in position
+      const pnlPct = position.side === 'long'
+        ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+        : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+      console.log(`[SimpleAgent:${symbol}] 📊 Position: ${position.side.toUpperCase()} | Entry: $${position.entryPrice.toFixed(2)} | Now: $${currentPrice.toFixed(2)} | PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | SL: $${this.position?.stopLoss?.toFixed(2) || 'N/A'}`);
       
       const exitSignal = shouldExitPosition(this.position!, currentPrice);
       
@@ -974,6 +985,8 @@ export class SimpleAgent {
     sessionId: string;
     marketConditions: MarketConditions | null;
     capitalPoolStatus: ReturnType<CapitalPool['getStatus']>;
+    lastTickAt: number;
+    tickCount: number;
   } {
     return {
       running: this.running,
@@ -982,6 +995,8 @@ export class SimpleAgent {
       sessionId: this.config.sessionId,
       marketConditions: this.lastMarketConditions,
       capitalPoolStatus: this.config.capitalPool.getStatus(),
+      lastTickAt: this.lastTickAt,
+      tickCount: this.tickCount,
     };
   }
   
@@ -989,7 +1004,14 @@ export class SimpleAgent {
    * Get detailed agent state for frontend display
    */
   getAgentState(): {
-    pos: Position | null;
+    pos: (Position & { 
+      currentPrice?: number;
+      pnlPct?: number;
+      pnlUsd?: number;
+      notionalUsd?: number;
+      duration?: number;
+      trailDistance?: number;
+    }) | null;
     plan: { 
       bias?: 'long' | 'short' | null; 
       zone?: { from: number; to: number; mid: number } | null;
@@ -1008,9 +1030,50 @@ export class SimpleAgent {
       freeUsd: number;
       totalUsd: number;
     };
+    lastTickAt: number;
+    tickCount: number;
   } {
+    // Calculate live position metrics
+    let posWithMetrics: (Position & { 
+      currentPrice: number;
+      pnlPct: number;
+      pnlUsd: number;
+      notionalUsd: number;
+      duration: number;
+      trailDistance: number;
+    }) | null = null;
+    
+    if (this.position) {
+      const currentPrice = this.lastPrice || this.position.entryPrice;
+      const pnlPct = this.position.side === 'long'
+        ? ((currentPrice - this.position.entryPrice) / this.position.entryPrice) * 100
+        : ((this.position.entryPrice - currentPrice) / this.position.entryPrice) * 100;
+      const pnlUsd = this.position.side === 'long'
+        ? this.position.qty * (currentPrice - this.position.entryPrice)
+        : this.position.qty * (this.position.entryPrice - currentPrice);
+      const notionalUsd = this.position.qty * this.position.entryPrice;
+      const duration = Date.now() - this.position.entryTime;
+      
+      // Trail distance from current price to stop
+      const trailDistance = this.position.stopLoss
+        ? this.position.side === 'long'
+          ? ((currentPrice - this.position.stopLoss) / currentPrice) * 100
+          : ((this.position.stopLoss - currentPrice) / currentPrice) * 100
+        : 0;
+      
+      posWithMetrics = {
+        ...this.position,
+        currentPrice,
+        pnlPct,
+        pnlUsd,
+        notionalUsd,
+        duration,
+        trailDistance,
+      };
+    }
+    
     return {
-      pos: this.position,
+      pos: posWithMetrics,
       plan: this.currentBias ? {
         bias: this.currentBias,
         zone: this.lastSignal?.entryZone ? {
@@ -1037,6 +1100,8 @@ export class SimpleAgent {
         freeUsd: this.config.capitalPool.getAvailableCapital(),
         totalUsd: this.config.capitalPool.getStatus().totalUsd,
       },
+      lastTickAt: this.lastTickAt,
+      tickCount: this.tickCount,
     };
   }
   
