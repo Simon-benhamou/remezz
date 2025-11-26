@@ -703,9 +703,10 @@ export class SimpleAgent {
         // Release capital with PnL
         this.config.capitalPool.release(this.config.sessionId, notionalUsd, actualPnlUsd);
         
-        await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd);
+        // Pass the real exchange orderId for proper tracking
+        await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id);
         
-        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)})`);
+        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | orderId=${order.id}`)
         
         this.config.onTrade?.({
           symbol,
@@ -971,9 +972,10 @@ export class SimpleAgent {
       if (this.position && exchangeQty === 0) {
         logger.info(`🔴 [${symbol}] SYNC MISMATCH: Position closed on exchange (likely stop loss hit)`);
         
-        // Try to get the last trade to find exit price
+        // Try to get the last trade to find exit price and orderId
         let exitPrice = this.position.entryPrice;
         let reason = 'stop_loss_exchange';
+        let exchangeOrderId: string | undefined;
         
         try {
           if (this.config.exchange.fetchMyTrades) {
@@ -981,7 +983,8 @@ export class SimpleAgent {
             if (trades && trades.length > 0) {
               const lastTrade = trades[trades.length - 1];
               exitPrice = lastTrade.price || exitPrice;
-              logger.info(`📈 [${symbol}] Found exit trade: $${exitPrice}`);
+              exchangeOrderId = lastTrade.order || lastTrade.info?.orderId;
+              logger.info(`📈 [${symbol}] Found exit trade: $${exitPrice} orderId=${exchangeOrderId}`);
             }
           }
         } catch (tradeError) {
@@ -1004,8 +1007,8 @@ export class SimpleAgent {
         // Release capital
         this.config.capitalPool.release(this.config.sessionId, notionalUsd, pnlUsd);
         
-        // Save exit to DB
-        await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd);
+        // Save exit to DB with exchange orderId if available
+        await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId);
         
         logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%`);
         
@@ -1058,7 +1061,9 @@ export class SimpleAgent {
   private async savePositionToDb(position: Position, action: string): Promise<void> {
     try {
       // First create an order for the entry (BUY for long, SELL for short)
-      const clientOrderId = `paper_entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const isLive = this.config.mode === 'live';
+      // For live mode, use the orderId from exchange if available, otherwise generate one
+      const clientOrderId = position.orderId || `${isLive ? 'live' : 'paper'}_entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const entrySide = position.side === 'long' ? 'buy' : 'sell';
       
       const order = await this.config.prisma.order.create({
@@ -1117,12 +1122,14 @@ export class SimpleAgent {
     exitPrice: number, 
     reason: string,
     pnlPct: number,
-    pnlUsd: number
+    pnlUsd: number,
+    exchangeOrderId?: string  // Optional: real orderId from exchange (for live mode)
   ): Promise<void> {
     try {
       // Exit side is opposite of position side (SELL to close LONG, BUY to close SHORT)
       const exitSide = position.side === 'long' ? 'sell' : 'buy';
-      const clientOrderId = `paper_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const isLive = this.config.mode === 'live';
+      const clientOrderId = exchangeOrderId || `${isLive ? 'live' : 'paper'}_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       
       const order = await this.config.prisma.order.create({
         data: {
@@ -1163,10 +1170,119 @@ export class SimpleAgent {
         },
       });
       
+      // Update SessionKpi with new performance metrics
+      await this.updateSessionKpi(pnlUsd, pnlPct);
+      
       logger.info(`💾 [${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)`);
       
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Failed to save exit to DB:`, error);
+    }
+  }
+  
+  /**
+   * Update SessionKpi after each trade exit
+   * Calculates: realizedPnlUsd, winRate, expectancy, maxDrawdownPct, etc.
+   */
+  private async updateSessionKpi(tradePnlUsd: number, tradePnlPct: number): Promise<void> {
+    try {
+      const sessionId = this.config.sessionId;
+      
+      // Aggregate all fills with realized PnL for this session
+      const fills = await this.config.prisma.fill.findMany({
+        where: { 
+          sessionId,
+          realizedPnl: { not: null }
+        },
+        orderBy: { ts: 'asc' }
+      });
+      
+      // Calculate metrics from fills
+      const exitFills = fills.filter(f => f.realizedPnl !== null && f.realizedPnl !== 0);
+      const tradeCount = exitFills.length;
+      const wins = exitFills.filter(f => (f.realizedPnl || 0) > 0).length;
+      const losses = exitFills.filter(f => (f.realizedPnl || 0) < 0).length;
+      
+      const totalRealizedPnl = exitFills.reduce((sum, f) => sum + (f.realizedPnl || 0), 0);
+      const totalFees = fills.reduce((sum, f) => sum + (f.fee || 0), 0);
+      const netRealizedPnl = totalRealizedPnl - totalFees;
+      
+      const winRate = tradeCount > 0 ? (wins / tradeCount) * 100 : 0;
+      
+      // Calculate expectancy (average PnL per trade)
+      const expectancy = tradeCount > 0 ? netRealizedPnl / tradeCount : 0;
+      
+      // Calculate max drawdown from cumulative PnL
+      let peak = 0;
+      let cumulative = 0;
+      let maxDrawdown = 0;
+      
+      for (const fill of exitFills) {
+        cumulative += (fill.realizedPnl || 0);
+        if (cumulative > peak) peak = cumulative;
+        const drawdown = peak > 0 ? (cumulative - peak) / peak * 100 : 0;
+        if (drawdown < maxDrawdown) maxDrawdown = drawdown;
+      }
+      
+      // Get session start balance for ROI calculation
+      const session = await this.config.prisma.agentSession.findUnique({
+        where: { id: sessionId },
+        select: { startBalanceUsd: true }
+      });
+      const startBalance = session?.startBalanceUsd || 1000; // Default 1000 if not set
+      const roiPct = startBalance > 0 ? (netRealizedPnl / startBalance) * 100 : 0;
+      
+      // Get current unrealized PnL from open position
+      let unrealizedPnlUsd = 0;
+      if (this.position && this.lastPrice) {
+        if (this.position.side === 'long') {
+          unrealizedPnlUsd = this.position.qty * (this.lastPrice - this.position.entryPrice);
+        } else {
+          unrealizedPnlUsd = this.position.qty * (this.position.entryPrice - this.lastPrice);
+        }
+      }
+      
+      // Build stats JSON
+      const stats = {
+        trades: tradeCount,
+        wins,
+        losses,
+        totalFees,
+        netRealizedPnl,
+        lastTradeAt: new Date().toISOString(),
+        avgWinUsd: wins > 0 ? exitFills.filter(f => (f.realizedPnl || 0) > 0).reduce((s, f) => s + (f.realizedPnl || 0), 0) / wins : 0,
+        avgLossUsd: losses > 0 ? exitFills.filter(f => (f.realizedPnl || 0) < 0).reduce((s, f) => s + (f.realizedPnl || 0), 0) / losses : 0,
+      };
+      
+      // Upsert SessionKpi
+      await this.config.prisma.sessionKpi.upsert({
+        where: { sessionId },
+        update: {
+          realizedPnlUsd: netRealizedPnl,
+          unrealizedPnlUsd,
+          roiPct,
+          winRate,
+          expectancy,
+          maxDrawdownPct: Math.abs(maxDrawdown),
+          stats,
+          lastUpdated: new Date(),
+        },
+        create: {
+          sessionId,
+          realizedPnlUsd: netRealizedPnl,
+          unrealizedPnlUsd,
+          roiPct,
+          winRate,
+          expectancy,
+          maxDrawdownPct: Math.abs(maxDrawdown),
+          stats,
+        },
+      });
+      
+      logger.info(`📊 [${this.config.symbol}] KPI updated: ${tradeCount} trades, ${winRate.toFixed(1)}% WR, $${netRealizedPnl.toFixed(2)} PnL, ${roiPct.toFixed(2)}% ROI`);
+      
+    } catch (error) {
+      logger.error(`❌ [${this.config.symbol}] Failed to update SessionKpi:`, error);
     }
   }
   
