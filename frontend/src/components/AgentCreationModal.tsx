@@ -39,24 +39,36 @@ type CreationFormShape = {
   mode: AppMode;
 };
 
-// Cryptos classiques qui marchent bien avec le système meta-adaptive
-const CLASSIC_CRYPTOS = [
-  { symbol: 'BTC/USDT', name: 'Bitcoin', category: 'Blue Chip', icon: '₿' },
-  { symbol: 'ETH/USDT', name: 'Ethereum', category: 'Blue Chip', icon: 'Ξ' },
-  { symbol: 'SOL/USDT', name: 'Solana', category: 'Layer 1', icon: '◎' },
-  { symbol: 'XRP/USDT', name: 'Ripple', category: 'Payment', icon: '✕' },
-  { symbol: 'BNB/USDT', name: 'Binance Coin', category: 'Exchange', icon: '🔶' },
-  { symbol: 'ADA/USDT', name: 'Cardano', category: 'Layer 1', icon: '₳' },
-  { symbol: 'AVAX/USDT', name: 'Avalanche', category: 'Layer 1', icon: '🔺' },
-  { symbol: 'DOGE/USDT', name: 'Dogecoin', category: 'Meme', icon: '🐕' },
-  { symbol: 'DOT/USDT', name: 'Polkadot', category: 'Layer 0', icon: '⬤' },
-  { symbol: 'MATIC/USDT', name: 'Polygon', category: 'Layer 2', icon: '🟣' },
-  { symbol: 'LINK/USDT', name: 'Chainlink', category: 'Oracle', icon: '🔗' },
-  { symbol: 'UNI/USDT', name: 'Uniswap', category: 'DeFi', icon: '🦄' },
-  { symbol: 'TON/USDT', name: 'Toncoin', category: 'Layer 1', icon: '💎' },
-  { symbol: 'SUI/USDT', name: 'Sui', category: 'Layer 1', icon: '💧' },
-  { symbol: 'ATOM/USDT', name: 'Cosmos', category: 'Layer 0', icon: '⚛️' },
+// ═══════════════════════════════════════════════════════════════════════════
+// CRYPTOS V5 - Classées par compatibilité avec la stratégie Momentum Simple
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ✅ RECOMMANDÉES V5 - Backtest ROI positif, profil XRP-like
+// Ces cryptos ont: skewness positive, décorrélation BTC, kurtosis élevé
+const V5_RECOMMENDED_CRYPTOS = [
+  { symbol: 'SEI/USDT', name: 'Sei', category: '🏆 V5 BEST', icon: '🌊', roi: '+143.9%', badge: 'gold', recommended: true },
+  { symbol: 'XRP/USDT', name: 'Ripple', category: '✅ V5 Confirmé', icon: '✕', roi: '+54.2%', badge: 'green', recommended: true },
+  { symbol: 'ETH/USDT', name: 'Ethereum', category: '✅ V5 Bonus', icon: 'Ξ', roi: '+45.8%', badge: 'green', recommended: true },
+  { symbol: 'IMX/USDT', name: 'Immutable X', category: '✅ V5 Alternatif', icon: '🔷', roi: '+40.1%', badge: 'blue', recommended: true },
+  { symbol: 'DOT/USDT', name: 'Polkadot', category: '⚡ V5 OK', icon: '⬤', roi: '+7.7%', badge: 'cyan', recommended: true },
 ];
+
+// ⚠️ NON RECOMMANDÉES - Backtest ROI négatif avec stratégie V5
+// Ces cryptos ont des caractéristiques incompatibles (trop corrélées BTC, etc.)
+const NON_RECOMMENDED_CRYPTOS = [
+  { symbol: 'BTC/USDT', name: 'Bitcoin', category: '⚠️ Non V5', icon: '₿', roi: '-12%', badge: 'default', recommended: false },
+  { symbol: 'SOL/USDT', name: 'Solana', category: '❌ Éviter', icon: '◎', roi: '-96.7%', badge: 'red', recommended: false },
+  { symbol: 'DOGE/USDT', name: 'Dogecoin', category: '❌ Éviter', icon: '🐕', roi: '-95.5%', badge: 'red', recommended: false },
+  { symbol: 'ADA/USDT', name: 'Cardano', category: '⚠️ Non V5', icon: '₳', roi: '-51.7%', badge: 'default', recommended: false },
+  { symbol: 'AVAX/USDT', name: 'Avalanche', category: '⚠️ Non V5', icon: '🔺', roi: '-43.8%', badge: 'default', recommended: false },
+  { symbol: 'LINK/USDT', name: 'Chainlink', category: '❌ Éviter', icon: '🔗', roi: '-92.6%', badge: 'red', recommended: false },
+  { symbol: 'BNB/USDT', name: 'Binance Coin', category: '⚠️ Non V5', icon: '🔶', roi: 'N/A', badge: 'default', recommended: false },
+  { symbol: 'ATOM/USDT', name: 'Cosmos', category: '❌ Éviter', icon: '⚛️', roi: '-90.5%', badge: 'red', recommended: false },
+  { symbol: 'UNI/USDT', name: 'Uniswap', category: '⚠️ Non V5', icon: '🦄', roi: '-55.4%', badge: 'default', recommended: false },
+];
+
+// Combiner les deux listes (recommandées d'abord)
+const ALL_CRYPTOS = [...V5_RECOMMENDED_CRYPTOS, ...NON_RECOMMENDED_CRYPTOS];
 
 interface RankedCrypto {
   symbol: string;
@@ -318,21 +330,30 @@ export default function AgentCreationModal({
             children: (
               <div>
                 <Alert
-                  type="info"
+                  type="success"
                   showIcon
                   icon={<TrophyOutlined />}
-                  message="Battle-Tested Cryptos"
-                  description="These are proven cryptocurrencies that work well with the Meta-Adaptive strategy. Select one to create a focused agent."
+                  message="🎯 Cryptos Recommandées V5"
+                  description={
+                    <span>
+                      Ces cryptos sont <strong>backtestées positivement</strong> avec la stratégie V5 (Momentum Simple).
+                      Elles ont un profil "XRP-like": skewness positive, décorrélation BTC, kurtosis élevé.
+                    </span>
+                  }
                   style={{
-                    background: 'rgba(59, 130, 246, 0.08)',
-                    border: '1px solid rgba(59, 130, 246, 0.24)',
+                    background: 'rgba(34, 197, 94, 0.12)',
+                    border: '1px solid rgba(34, 197, 94, 0.35)',
                     borderRadius: 12,
-                    marginBottom: 24,
+                    marginBottom: 16,
                   }}
                 />
 
+                {/* V5 RECOMMENDED */}
+                <Text style={{ color: '#4ade80', fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 12 }}>
+                  ✅ RECOMMANDÉES POUR V5 (ROI Positif en Backtest)
+                </Text>
                 <Row gutter={[12, 12]} style={{ marginBottom: 24 }}>
-                  {CLASSIC_CRYPTOS.map((crypto) => {
+                  {V5_RECOMMENDED_CRYPTOS.map((crypto) => {
                     const isSelected = selectedSymbol === crypto.symbol;
                     return (
                       <Col xs={12} sm={8} md={6} key={crypto.symbol}>
@@ -341,36 +362,114 @@ export default function AgentCreationModal({
                           onClick={() => setSelectedSymbol(crypto.symbol)}
                           style={{
                             background: isSelected
-                              ? 'linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(37, 99, 235, 0.15))'
-                              : 'rgba(30, 41, 59, 0.55)',
+                              ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(22, 163, 74, 0.2))'
+                              : 'linear-gradient(135deg, rgba(34, 197, 94, 0.08), rgba(30, 41, 59, 0.55))',
                             border: isSelected
-                              ? '2px solid #3b82f6'
-                              : '1px solid rgba(71, 107, 176, 0.18)',
+                              ? '2px solid #22c55e'
+                              : '1px solid rgba(34, 197, 94, 0.3)',
                             borderRadius: 12,
                             textAlign: 'center',
                             cursor: 'pointer',
                             transition: 'all 0.3s',
                           }}
-                          bodyStyle={{ padding: 16 }}
+                          bodyStyle={{ padding: 14 }}
                         >
-                          <div style={{ fontSize: 32, marginBottom: 8 }}>{crypto.icon}</div>
-                          <Text strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>
+                          <div style={{ fontSize: 28, marginBottom: 6 }}>{crypto.icon}</div>
+                          <Text strong style={{ color: '#f8fafc', display: 'block', marginBottom: 2 }}>
                             {crypto.symbol.replace('/USDT', '')}
                           </Text>
-                          <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 8 }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 11, display: 'block', marginBottom: 6 }}>
                             {crypto.name}
                           </Text>
                           <Tag
+                            color={crypto.badge as any}
                             style={{
                               borderRadius: 6,
-                              border: 'none',
-                              background: 'rgba(59, 130, 246, 0.15)',
-                              color: '#93c5fd',
                               fontSize: 10,
+                              marginBottom: 4,
                             }}
                           >
                             {crypto.category}
                           </Tag>
+                          <div>
+                            <Text style={{ 
+                              color: crypto.roi.startsWith('+') ? '#4ade80' : '#f87171', 
+                              fontSize: 13, 
+                              fontWeight: 700 
+                            }}>
+                              {crypto.roi}
+                            </Text>
+                          </div>
+                        </Card>
+                      </Col>
+                    );
+                  })}
+                </Row>
+
+                {/* NON RECOMMENDED */}
+                <Alert
+                  type="warning"
+                  showIcon
+                  icon={<InfoCircleOutlined />}
+                  message="⚠️ Cryptos Non Recommandées"
+                  description="Ces cryptos ont un ROI négatif en backtest V5. Utilisez-les à vos risques."
+                  style={{
+                    background: 'rgba(250, 173, 20, 0.08)',
+                    border: '1px solid rgba(250, 173, 20, 0.24)',
+                    borderRadius: 12,
+                    marginBottom: 12,
+                    marginTop: 16,
+                  }}
+                />
+                <Row gutter={[12, 12]} style={{ marginBottom: 24 }}>
+                  {NON_RECOMMENDED_CRYPTOS.map((crypto) => {
+                    const isSelected = selectedSymbol === crypto.symbol;
+                    return (
+                      <Col xs={12} sm={8} md={6} key={crypto.symbol}>
+                        <Card
+                          hoverable
+                          onClick={() => setSelectedSymbol(crypto.symbol)}
+                          style={{
+                            background: isSelected
+                              ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.25), rgba(185, 28, 28, 0.15))'
+                              : 'rgba(30, 41, 59, 0.4)',
+                            border: isSelected
+                              ? '2px solid #ef4444'
+                              : '1px solid rgba(71, 107, 176, 0.12)',
+                            borderRadius: 12,
+                            textAlign: 'center',
+                            cursor: 'pointer',
+                            transition: 'all 0.3s',
+                            opacity: 0.7,
+                          }}
+                          bodyStyle={{ padding: 14 }}
+                        >
+                          <div style={{ fontSize: 28, marginBottom: 6 }}>{crypto.icon}</div>
+                          <Text strong style={{ color: '#94a3b8', display: 'block', marginBottom: 2 }}>
+                            {crypto.symbol.replace('/USDT', '')}
+                          </Text>
+                          <Text style={{ color: '#64748b', fontSize: 11, display: 'block', marginBottom: 6 }}>
+                            {crypto.name}
+                          </Text>
+                          <Tag
+                            color={crypto.badge as any}
+                            style={{
+                              borderRadius: 6,
+                              fontSize: 10,
+                              marginBottom: 4,
+                            }}
+                          >
+                            {crypto.category}
+                          </Tag>
+                          <div>
+                            <Text style={{ 
+                              color: '#f87171', 
+                              fontSize: 12, 
+                              fontWeight: 600 
+                            }}>
+                              {crypto.roi}
+                            </Text>
+                          </div>
                         </Card>
                       </Col>
                     );
@@ -505,18 +604,32 @@ export default function AgentCreationModal({
         >
           <div style={{ flex: 1 }}>
             <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
-              Risk per trade
+              Position Size
             </Text>
             <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 18 }}>
-              1.0%
+              40%
             </Text>
           </div>
           <div style={{ flex: 1 }}>
             <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
               Stop Loss
             </Text>
-            <Text style={{ color: '#f8fafc', fontWeight: 600, fontSize: 18 }}>
-              2.0%
+            <Text style={{ color: '#f87171', fontWeight: 600, fontSize: 18 }}>
+              1.5%
+            </Text>
+            <Text style={{ color: '#64748b', fontSize: 10, display: 'block' }}>
+              ≈7.5% avec 5x lev
+            </Text>
+          </div>
+          <div style={{ flex: 1 }}>
+            <Text style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>
+              Take Profit
+            </Text>
+            <Text style={{ color: '#4ade80', fontWeight: 600, fontSize: 18 }}>
+              3.0%
+            </Text>
+            <Text style={{ color: '#64748b', fontSize: 10, display: 'block' }}>
+              ≈15% avec 5x lev
             </Text>
           </div>
           <div style={{ flex: 1 }}>
@@ -524,7 +637,7 @@ export default function AgentCreationModal({
               Strategy
             </Text>
             <Text style={{ color: '#4ade80', fontWeight: 600, fontSize: 18 }}>
-              Momentum Simple
+              V5 Momentum
             </Text>
           </div>
         </div>

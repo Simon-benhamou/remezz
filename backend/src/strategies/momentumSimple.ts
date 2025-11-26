@@ -47,28 +47,33 @@ export const MomentumConfig = {
   },
   
   // Exit V5 - Optimized exits
+  // ⚠️ MATH DU RISQUE:
+  // - Stop Loss 1.5% × Leverage 5x = 7.5% du capital par position
+  // - Take Profit 3% × Leverage 5x = 15% gain
+  // - Ratio R:R = 1:2 (pour chaque perte, besoin de 0.5 gain pour compenser)
   EXIT: {
     HOLD_PERIOD_MAX_MIN: 2880,   // 48 heures max hold (vs 6h avant)
-    STOP_LOSS_PCT: 2.0,          // Stop Loss 2%
-    PROFIT_TARGET_PCT: 2.5,      // Take Profit 2.5%
+    STOP_LOSS_PCT: 1.5,          // Stop Loss 1.5% (was 2%) → 7.5% avec 5x
+    PROFIT_TARGET_PCT: 3.0,      // Take Profit 3% (was 2.5%) → 15% avec 5x
     
-    // Trailing Stop V5
-    TRAILING_ACTIVATION_PCT: 1.5, // Active trailing à +1.5%
-    TRAILING_DISTANCE_PCT: 0.8,   // Trail de 0.8%
-    TRAILING_TIGHTEN_AT_PCT: 2.5, // Resserre à 0.5% à partir de +2.5%
-    TRAILING_TIGHT_DISTANCE_PCT: 0.5,
+    // Trailing Stop V5 - Plus agressif pour capturer les gains
+    TRAILING_ACTIVATION_PCT: 1.2, // Active trailing à +1.2% (was 1.5%)
+    TRAILING_DISTANCE_PCT: 0.6,   // Trail de 0.6% (was 0.8%) - plus serré
+    TRAILING_TIGHTEN_AT_PCT: 2.0, // Resserre à 0.4% à partir de +2%
+    TRAILING_TIGHT_DISTANCE_PCT: 0.4,
     
     // Smart Exits
-    MOMENTUM_FADE_PROFIT_MIN: 2.0,  // Exit si profit > 2%...
+    MOMENTUM_FADE_PROFIT_MIN: 1.5,  // Exit si profit > 1.5%...
     MOMENTUM_FADE_ROC_MAX: 0.005,   // ...et ROC5 < 0.5%
     VOLUME_DRY_PROFIT_MIN: 0.5,     // Exit si profit > 0.5%...
     VOLUME_DRY_RATIO: 0.5,          // ...et volume < 0.5x avg
   },
   
-  // Risk V5 - Conservative sizing
+  // Risk V5 - Sizing ajusté pour le risque
+  // ⚠️ MATH: Avec SL 1.5% × Lev 5x × Position 40% = 3% du capital total par trade
   RISK: {
     RISK_PCT_PER_TRADE: 1.0,     // 1% du capital par trade
-    POSITION_SIZE_PCT: 0.5,      // 50% du capital disponible par position
+    POSITION_SIZE_PCT: 0.4,      // 40% du capital disponible par position (was 50%)
     MAX_POSITIONS: 4,            // Max 4 positions
   },
   
