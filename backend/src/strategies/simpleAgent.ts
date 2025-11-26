@@ -24,17 +24,19 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
+import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket } from '../services/binanceWebSocket.js';
 
 const logger = createLogger('agent');
 
 // ============================================================================
 // GLOBAL BTC CACHE - Shared between all agents to reduce API calls
 // ============================================================================
-// This prevents rate limiting when multiple agents run simultaneously
+// Uses WebSocket first (0 API weight), falls back to REST with cache
 
-const GLOBAL_BTC_CACHE_TTL_MS = 120_000; // 2 minutes
+const GLOBAL_BTC_CACHE_TTL_MS = 300_000; // 5 minutes (longer TTL since WS is primary)
 let globalBtcCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
 let globalBtcCacheFetchingPromise: Promise<Candle[]> | null = null;
+let btcWsSubscribed = false;
 
 // Type for exchange (we avoid importing ccxt directly to reduce bundle size)
 type Exchange = {
@@ -272,6 +274,7 @@ export class SimpleAgent {
   // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
   private readonly CACHE_TTL_MS = 120_000; // 2 minutes (increased to reduce API calls)
+  private wsSubscribed = false; // Track if WebSocket kline subscription is active
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
@@ -725,12 +728,50 @@ export class SimpleAgent {
   
   private async fetchCandles(): Promise<Candle[]> {
     const symbol = this.config.symbol;
+    // Convert CCXT symbol to Binance format: "ETH/USDT:USDT" -> "ETHUSDT"
+    const binanceSymbol = symbol.split('/')[0] + 'USDT';
     
+    // 1. Subscribe to WebSocket stream for this symbol (only once per agent)
+    if (!this.wsSubscribed) {
+      try {
+        const ws = getBinanceWebSocket();
+        ws.subscribeToKline(binanceSymbol, '15m');
+        this.wsSubscribed = true;
+        logger.info(`📡 [${symbol}] Subscribed to WebSocket kline stream (0 API weight)`);
+      } catch (error) {
+        logger.warn(`⚠️ [${symbol}] Failed to subscribe to WebSocket, will use REST`);
+      }
+    }
+    
+    // 2. Try WebSocket cache first (0 API weight!)
+    try {
+      const wsKlines = getKlinesOhlcvFromWebSocket(binanceSymbol, '15m');
+      if (wsKlines && wsKlines.length >= 50) {
+        const candles: Candle[] = wsKlines.map(c => ({
+          timestamp: c[0] as number,
+          open: c[1] as number,
+          high: c[2] as number,
+          low: c[3] as number,
+          close: c[4] as number,
+          volume: c[5] as number,
+        }));
+        
+        // Update local cache with WS data
+        this.candleCache = { candles, fetchedAt: Date.now() };
+        return candles;
+      }
+    } catch (error) {
+      // WebSocket not ready, fall through to REST
+    }
+    
+    // 3. Check local REST cache
     if (this.candleCache && Date.now() - this.candleCache.fetchedAt < this.CACHE_TTL_MS) {
       return this.candleCache.candles;
     }
     
+    // 4. REST API fallback
     try {
+      logger.info(`🌐 [${symbol}] Fetching via REST API (WebSocket not ready)`);
       const ohlcv = await this.config.exchange.fetchOHLCV(symbol, '15m', undefined, 100);
       
       const candles: Candle[] = ohlcv.map(c => ({
@@ -741,6 +782,9 @@ export class SimpleAgent {
         close: c[4] as number,
         volume: c[5] as number,
       }));
+      
+      // Seed WebSocket cache with REST data for future use
+      seedKlinesFromWebSocket(binanceSymbol, '15m', ohlcv);
       
       this.candleCache = { candles, fetchedAt: Date.now() };
       
@@ -753,12 +797,48 @@ export class SimpleAgent {
   }
   
   private async fetchBtcCandles(): Promise<Candle[]> {
-    // 1. Check global cache first (shared between all agents)
+    const btcSymbol = 'BTCUSDT'; // Binance format for WebSocket
+    const btcSymbolCcxt = 'BTC/USDT:USDT'; // CCXT format for REST fallback
+    
+    // 1. Subscribe to BTC WebSocket stream (only once, shared globally)
+    if (!btcWsSubscribed) {
+      try {
+        const ws = getBinanceWebSocket();
+        ws.subscribeToKline(btcSymbol, '15m');
+        btcWsSubscribed = true;
+        logger.info('📡 [BTC] Subscribed to WebSocket kline stream (0 API weight)');
+      } catch (error) {
+        logger.warn('⚠️ [BTC] Failed to subscribe to WebSocket, will use REST');
+      }
+    }
+    
+    // 2. Try WebSocket cache first (0 API weight!) 
+    try {
+      const wsKlines = getKlinesOhlcvFromWebSocket(btcSymbol, '15m');
+      if (wsKlines && wsKlines.length >= 200) {
+        const candles: Candle[] = wsKlines.map(c => ({
+          timestamp: c[0] as number,
+          open: c[1] as number,
+          high: c[2] as number,
+          low: c[3] as number,
+          close: c[4] as number,
+          volume: c[5] as number,
+        }));
+        
+        // Update global cache with WS data
+        globalBtcCandleCache = { candles, fetchedAt: Date.now() };
+        return candles;
+      }
+    } catch (error) {
+      logger.warn('⚠️ [BTC] WebSocket cache miss, checking REST cache');
+    }
+    
+    // 3. Check global REST cache (shared between all agents)
     if (globalBtcCandleCache && Date.now() - globalBtcCandleCache.fetchedAt < GLOBAL_BTC_CACHE_TTL_MS) {
       return globalBtcCandleCache.candles;
     }
     
-    // 2. If another agent is already fetching, wait for it
+    // 4. If another agent is already fetching via REST, wait for it
     if (globalBtcCacheFetchingPromise) {
       try {
         return await globalBtcCacheFetchingPromise;
@@ -767,13 +847,12 @@ export class SimpleAgent {
       }
     }
     
-    // 3. We need to fetch - set up promise so other agents wait
-    const btcSymbol = 'BTC/USDT:USDT';
-    
+    // 5. REST API fallback - set up promise so other agents wait
     const fetchPromise = (async () => {
       try {
+        logger.info('🌐 [BTC] Fetching via REST API (WebSocket not ready)');
         // V5: Need 220 candles for SMA200 regime filter with some buffer
-        const ohlcv = await this.config.exchange.fetchOHLCV(btcSymbol, '15m', undefined, 220);
+        const ohlcv = await this.config.exchange.fetchOHLCV(btcSymbolCcxt, '15m', undefined, 220);
         
         const candles: Candle[] = ohlcv.map(c => ({
           timestamp: c[0] as number,
@@ -784,13 +863,16 @@ export class SimpleAgent {
           volume: c[5] as number,
         }));
         
+        // Seed WebSocket cache with REST data for future use
+        seedKlinesFromWebSocket(btcSymbol, '15m', ohlcv);
+        
         // Update global cache
         globalBtcCandleCache = { candles, fetchedAt: Date.now() };
         
         return candles;
         
       } catch (error) {
-        logger.error(`❌ [BTC] Failed to fetch BTC candles:`, error);
+        logger.error(`❌ [BTC] Failed to fetch BTC candles via REST:`, error);
         return globalBtcCandleCache?.candles || [];
       } finally {
         globalBtcCacheFetchingPromise = null;
