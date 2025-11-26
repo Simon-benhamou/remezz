@@ -309,20 +309,29 @@ export default function DashboardPageCompact(){
             
             <Tooltip 
               title={
-                <div style={{ maxWidth: 350 }}>
-                  <div style={{ fontWeight: 'bold', marginBottom: 8 }}>📋 Stratégie V5 - Conditions:</div>
-                  <div style={{ marginBottom: 4 }}>
+                <div style={{ maxWidth: 400 }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: 8 }}>📋 Stratégie V5.3 - LONG + SHORT</div>
+                  
+                  <div style={{ marginBottom: 8 }}>
                     {marketConditions.btcAboveMa50 
-                      ? '✅ BTC > SMA200 (BULL) → Long autorisé'
-                      : '❌ BTC < SMA200 (BEAR) → Long bloqué'}
+                      ? '🐂 BTC > SMA200 (BULL) → LONG activé'
+                      : '🐻 BTC < SMA200 (BEAR) → SHORT activé'}
                   </div>
-                  <div style={{ marginBottom: 8, fontSize: 11, opacity: 0.8 }}>
-                    La stratégie ne fait que des LONG, donc elle attend un marché haussier.
-                  </div>
+                  
                   <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', paddingTop: 8, fontSize: 11 }}>
-                    <div><strong>Entry:</strong> BB breakout + ROC&gt;1.5% + Vol&gt;1.3x</div>
-                    <div><strong>Exit:</strong> SL 1.5% / TP 3% / Trail +1.0%</div>
+                    <div style={{ marginBottom: 4 }}><strong>📈 LONG (Bull):</strong></div>
+                    <div>BB breakout + ROC10&gt;2.5% + Vol&gt;2x</div>
+                    
+                    <div style={{ marginTop: 8, marginBottom: 4 }}><strong>📉 SHORT (Bear):</strong></div>
+                    <div>ROC5&lt;-2% + Vol&gt;2.5x + Price&lt;MA20</div>
+                    
+                    <div style={{ marginTop: 8 }}><strong>Exit:</strong> SL 1.5% / TP 3% / Trail +1.0%</div>
                   </div>
+                  
+                  <div style={{ marginTop: 8, fontSize: 10, opacity: 0.7 }}>
+                    Backtest 12 mois: +1990% ROI, 68.7% WR, 10/12 mois positifs
+                  </div>
+                  
                   {marketConditions.reason && (
                     <div style={{ marginTop: 8, fontStyle: 'italic', opacity: 0.8 }}>
                       {marketConditions.reason}

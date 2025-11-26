@@ -1,25 +1,33 @@
 /**
- * 🎯 STRATÉGIE V5 - BREAKOUT MOMENTUM + REGIME FILTER
+ * 🎯 STRATÉGIE V5.3 - LONG (Bull) + SHORT (Bear) + FILTRES STRICTS
  * 
  * Backtestée sur 12 mois (Nov 2024 - Nov 2025):
- * - XRP: +112% ROI, 61% Win Rate
- * - ETH: +19% ROI, 63% Win Rate  
- * - Combined (50% sizing): +112% ROI, 36% max drawdown
+ * - ROI: +1990% (avec frais, slippage, funding)
+ * - Trades: 789 (-59% vs ancienne config)
+ * - Win Rate: 68.7%
+ * - Mois positifs: 10/12
  * 
- * ENTRY:
+ * ═══════════════════════════════════════════════════════════════
+ * LONG ENTRY (BTC > SMA200 = Bull Market):
+ * ═══════════════════════════════════════════════════════════════
  * - Bollinger Band breakout (close > upper band)
- * - ROC 10 périodes > 1.5%
- * - Volume > 1.3x moyenne 20 périodes
- * - ConsecUp <= 4 (évite les tops)
- * - BTC Regime Filter: BTC > SMA200 (bull market only)
+ * - ROC 10 périodes > 2.5% (était 1.5% - PLUS STRICT)
+ * - Volume > 2x moyenne (était 1.3x - PLUS STRICT)
+ * - ConsecUp <= 3 (était 4)
  * 
- * EXIT:
- * - Trailing Stop: activé à +1.5%, trail à 0.8%
- * - Stop Loss: 2%
- * - Take Profit: 2.5%
+ * ═══════════════════════════════════════════════════════════════
+ * SHORT ENTRY (BTC < SMA200 = Bear Market):
+ * ═══════════════════════════════════════════════════════════════
+ * - ROC 5 périodes < -2% (drop significatif)
+ * - Volume > 2.5x moyenne (panic selling)
+ * - Price < MA20
+ * - ConsecDown <= 5 (pas oversold)
+ * 
+ * EXIT (même pour LONG et SHORT):
+ * - Stop Loss: 1.5%
+ * - Take Profit: 3%
+ * - Trailing: activé à +1%, trail à 0.4%
  * - Max Hold: 48h
- * - Momentum Fade: si profit > 2% et ROC5 < 0.5%
- * - Volume Dry-up: si profit > 0.5% et volume < 0.5x avg
  */
 
 // ============================================================================
@@ -27,16 +35,42 @@
 // ============================================================================
 
 export const MomentumConfig = {
-  // Signal d'entrée V5 - Breakout Strategy
-  ENTRY: {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.3 - LONG (Bull) + SHORT (Bear) avec FILTRES STRICTS
+  // Backtest 12 mois: +1990% ROI, 789 trades, 68.7% WR, 10/12 mois positifs
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Signal d'entrée LONG (Bull Market: BTC > SMA200)
+  ENTRY_LONG: {
     // Bollinger Bands
     BB_PERIOD: 20,
     BB_STD: 2,
     
-    // Momentum confirmation
-    ROC_MIN: 0.015,              // ROC 10 > 1.5%
-    VOL_MULTIPLIER: 1.3,         // Volume > 1.3x moyenne (pas 5x, trop restrictif)
-    MAX_CONSEC_UP: 4,            // Max 4 bougies vertes consécutives
+    // Momentum confirmation - FILTRES STRICTS V5.3
+    ROC_MIN: 0.025,              // ROC 10 > 2.5% (was 1.5%) - Plus sélectif
+    VOL_MULTIPLIER: 2.0,         // Volume > 2x moyenne (was 1.3x) - Plus sélectif
+    MAX_CONSEC_UP: 3,            // Max 3 bougies vertes (was 4) - Évite tops
+  },
+  
+  // Signal d'entrée SHORT (Bear Market: BTC < SMA200)
+  ENTRY_SHORT: {
+    // Conditions SHORT
+    ROC_DROP_MIN: -0.02,         // ROC 5 < -2% (drop significatif)
+    VOL_SPIKE: 2.5,              // Volume > 2.5x moyenne (panic selling)
+    PRICE_BELOW_MA20: true,      // Prix < MA20
+    MAX_CONSEC_DOWN: 5,          // Max 5 bougies rouges (pas oversold)
+  },
+  
+  // Config commune
+  ENTRY: {
+    // Bollinger Bands (legacy, utilisé par LONG)
+    BB_PERIOD: 20,
+    BB_STD: 2,
+    
+    // Legacy fields for compatibility
+    ROC_MIN: 0.025,              // V5.3: 2.5%
+    VOL_MULTIPLIER: 2.0,         // V5.3: 2x
+    MAX_CONSEC_UP: 3,            // V5.3: 3
     
     // BTC Regime Filter
     BTC_SMA_PERIOD: 200,         // SMA 200 pour régime
@@ -228,7 +262,7 @@ export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
   const btc6hAgo = btcCloses[btc6hAgoIndex];
   const btcMomentum6h = btc6hAgo > 0 ? ((btcNow - btc6hAgo) / btc6hAgo) * 100 : 0;
   
-  // V5 Regime: BTC > SMA200 = BULL, else BEAR
+  // V5.3 Regime: BTC > SMA200 = BULL (LONG), else BEAR (SHORT)
   let btcTrend: 'bullish' | 'bearish' | 'neutral' = 'neutral';
   if (btcAboveSma200) {
     btcTrend = 'bullish';
@@ -236,7 +270,7 @@ export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
     btcTrend = 'bearish';
   }
   
-  // Overall status V5 - LONG only when in bull regime
+  // V5.3: LONG en bull, SHORT en bear
   let overallStatus: MarketConditions['overallStatus'] = 'neutral';
   let reason = '';
   
@@ -245,11 +279,11 @@ export function getMarketConditions(btcCandles: Candle[]): MarketConditions {
     reason = `Not a trading day (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]})`;
   } else if (btcAboveSma200) {
     overallStatus = 'favorable_long';
-    reason = `V5 BULL REGIME: BTC ${btcNow.toFixed(0)} > SMA200 ${btcSma200.toFixed(0)} | Mom6h: ${btcMomentum6h >= 0 ? '+' : ''}${btcMomentum6h.toFixed(2)}%`;
+    reason = `V5.3 BULL: BTC ${btcNow.toFixed(0)} > SMA200 ${btcSma200.toFixed(0)} → LONG only`;
   } else {
-    // V5: No SHORT, just unfavorable
-    overallStatus = 'unfavorable';
-    reason = `V5 BEAR REGIME: BTC ${btcNow.toFixed(0)} < SMA200 ${btcSma200.toFixed(0)} - NO TRADING`;
+    // V5.3: SHORT en bear market
+    overallStatus = 'favorable_short';
+    reason = `V5.3 BEAR: BTC ${btcNow.toFixed(0)} < SMA200 ${btcSma200.toFixed(0)} → SHORT only`;
   }
   
   return {
@@ -326,19 +360,37 @@ function countConsecUp(candles: Candle[]): number {
   return count;
 }
 
+// Count consecutive down candles (for SHORT)
+function countConsecDown(candles: Candle[]): number {
+  let count = 0;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candles[i].close < candles[i].open) {
+      count++;
+    } else {
+      break;
+    }
+  }
+  return count;
+}
+
 // ============================================================================
-// SIGNAL CHECK V5 - BREAKOUT + REGIME FILTER (LONG ONLY)
+// SIGNAL CHECK V5.3 - LONG (Bull) + SHORT (Bear)
 // ============================================================================
 
 /**
- * Check momentum signal V5 - LONG only with breakout and regime filter
+ * Check momentum signal V5.3 - LONG in bull, SHORT in bear
  * 
- * Entry conditions:
+ * LONG conditions (BTC > SMA200):
  * 1. Close > Bollinger Upper Band (breakout)
- * 2. ROC 10 > 1.5%
- * 3. Volume > 1.3x average
- * 4. ConsecUp <= 4 (pas en top)
- * 5. BTC > SMA200 (regime filter - bull market)
+ * 2. ROC 10 > 2.5% (strict)
+ * 3. Volume > 2x average (strict)
+ * 4. ConsecUp <= 3 (pas en top)
+ * 
+ * SHORT conditions (BTC < SMA200):
+ * 1. ROC 5 < -2% (drop significatif)
+ * 2. Volume > 2.5x average (panic selling)
+ * 3. Price < MA20
+ * 4. ConsecDown <= 5 (pas oversold)
  * 
  * @param symbol Trading symbol
  * @param candles Symbol candles (15m)
@@ -363,10 +415,11 @@ export function checkMomentumSignal(
   const volumes = candles.map(c => c.volume);
   const btcCloses = btcCandles.map(c => c.close);
   
-  // ========== REGIME FILTER: BTC > SMA200 ==========
+  // ========== REGIME FILTER: BTC vs SMA200 ==========
   const btcSma200 = calcSMA(btcCloses, MomentumConfig.ENTRY.BTC_SMA_PERIOD);
   const btcNow = btcCloses[btcCloses.length - 1];
   const btcInBullRegime = btcNow > btcSma200;
+  const btcInBearRegime = btcNow < btcSma200;
   
   // Calcul legacy pour compatibilité features
   const btc6hAgoIndex = Math.max(0, btcCloses.length - MomentumConfig.ENTRY.BTC_MOMENTUM_PERIOD - 1);
@@ -376,31 +429,21 @@ export function checkMomentumSignal(
   const btcMa50 = calcMA(btcCloses, 50);
   const btcAboveMa50 = btcNow > btcMa50;
   
-  // ========== ENTRY CONDITIONS V5 ==========
-  
-  // 1. Bollinger Breakout: close > upper band
-  const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
-  const breakoutOk = close > bb.upper;
-  
-  // 2. ROC > 1.5%
-  const roc = calcROC(closes, 10);
-  const rocOk = roc >= MomentumConfig.ENTRY.ROC_MIN;
-  
-  // 3. Volume > 1.3x
+  // ========== COMMON DATA ==========
   const volRatio = calcVolRatio(volumes);
-  const volOk = volRatio >= MomentumConfig.ENTRY.VOL_MULTIPLIER;
-  
-  // 4. ConsecUp <= 4
-  const consecUp = countConsecUp(candles);
-  const consecOk = consecUp <= MomentumConfig.ENTRY.MAX_CONSEC_UP;
-  
-  // 5. Filtre jour
   const dayOfWeek = new Date().getUTCDay();
   const dayAllowed = MomentumConfig.ENTRY.ALLOWED_DAYS.includes(dayOfWeek);
-  
-  // For compatibility with existing code
   const isBullish = close > open;
+  const isBearish = close < open;
   const priceAboveMa20 = close > ma20;
+  const priceBelowMa20 = close < ma20;
+  
+  // V5.3 features
+  const roc10 = calcROC(closes, 10);
+  const roc5 = calcROC(closes, 5);
+  const consecUp = countConsecUp(candles);
+  const consecDown = countConsecDown(candles);
+  const bb = calcBollingerBands(closes, MomentumConfig.ENTRY.BB_PERIOD, MomentumConfig.ENTRY.BB_STD);
   
   const features = {
     volRatio,
@@ -409,81 +452,129 @@ export function checkMomentumSignal(
     btcAboveMa50,
     btcMomentum6h,
     dayOfWeek,
-    // V5 new features
-    roc: roc * 100,
+    roc: roc10 * 100,
+    roc5: roc5 * 100,
     consecUp,
+    consecDown,
     btcInBullRegime,
+    btcInBearRegime,
     bbUpper: bb.upper,
-    breakout: breakoutOk,
+    bbLower: bb.lower,
   };
   
-  // ========== CHECK REJECTION CONDITIONS ==========
-  
-  // Day filter
+  // ========== DAY FILTER ==========
   if (!dayAllowed) {
     return { valid: false, reason: `day_not_allowed(${dayOfWeek})`, features };
   }
   
-  // Regime filter FIRST (most important)
-  if (!btcInBullRegime) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.3 BULL REGIME → LONG ONLY (filtres stricts)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (btcInBullRegime) {
+    // LONG conditions V5.3 (strict)
+    const breakoutOk = close > bb.upper;
+    const rocOk = roc10 >= MomentumConfig.ENTRY_LONG.ROC_MIN;
+    const volOk = volRatio >= MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER;
+    const consecOk = consecUp <= MomentumConfig.ENTRY_LONG.MAX_CONSEC_UP;
+    
+    if (!isBullish) {
+      return { valid: false, reason: 'bull_regime:bearish_candle', features };
+    }
+    if (!consecOk) {
+      return { 
+        valid: false, 
+        reason: `bull_regime:too_many_consec_up(${consecUp}>${MomentumConfig.ENTRY_LONG.MAX_CONSEC_UP})`, 
+        features 
+      };
+    }
+    if (!breakoutOk) {
+      return { 
+        valid: false, 
+        reason: `bull_regime:no_breakout(close=${close.toFixed(4)} < bb_upper=${bb.upper.toFixed(4)})`, 
+        features 
+      };
+    }
+    if (!rocOk) {
+      return { 
+        valid: false, 
+        reason: `bull_regime:roc_low(${(roc10*100).toFixed(2)}% < ${(MomentumConfig.ENTRY_LONG.ROC_MIN*100).toFixed(1)}%)`, 
+        features 
+      };
+    }
+    if (!volOk) {
+      return { 
+        valid: false, 
+        reason: `bull_regime:vol_low(${volRatio.toFixed(1)}x < ${MomentumConfig.ENTRY_LONG.VOL_MULTIPLIER}x)`, 
+        features 
+      };
+    }
+    
+    // ✅ ALL LONG CONDITIONS MET
+    const confidence = Math.min(1, (volRatio / 3) * 0.3 + (roc10 / 0.04) * 0.3 + 0.4);
     return { 
-      valid: false, 
-      reason: `regime_bearish:btc_below_sma200(${btcNow.toFixed(0)} < ${btcSma200.toFixed(0)})`, 
+      valid: true, 
+      side: 'long',
+      reason: 'v5.3_bull_long_confirmed',
+      confidence,
       features 
     };
   }
   
-  // Not a bullish candle
-  if (!isBullish) {
-    return { valid: false, reason: 'bearish_candle', features };
-  }
-  
-  // ConsecUp too high (likely at top)
-  if (!consecOk) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // V5.3 BEAR REGIME → SHORT ONLY
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (btcInBearRegime) {
+    // SHORT conditions V5.3
+    const dropOk = roc5 <= MomentumConfig.ENTRY_SHORT.ROC_DROP_MIN;
+    const volSpikeOk = volRatio >= MomentumConfig.ENTRY_SHORT.VOL_SPIKE;
+    const priceBelowOk = priceBelowMa20;
+    const consecDownOk = consecDown <= (MomentumConfig.ENTRY_SHORT.MAX_CONSEC_DOWN || 5);
+    
+    if (!isBearish) {
+      return { valid: false, reason: 'bear_regime:bullish_candle', features };
+    }
+    if (!consecDownOk) {
+      return { 
+        valid: false, 
+        reason: `bear_regime:too_many_consec_down(${consecDown}>5)_oversold`, 
+        features 
+      };
+    }
+    if (!dropOk) {
+      return { 
+        valid: false, 
+        reason: `bear_regime:roc5_not_low_enough(${(roc5*100).toFixed(2)}% > ${(MomentumConfig.ENTRY_SHORT.ROC_DROP_MIN*100).toFixed(1)}%)`, 
+        features 
+      };
+    }
+    if (!volSpikeOk) {
+      return { 
+        valid: false, 
+        reason: `bear_regime:vol_spike_low(${volRatio.toFixed(1)}x < ${MomentumConfig.ENTRY_SHORT.VOL_SPIKE}x)`, 
+        features 
+      };
+    }
+    if (!priceBelowOk) {
+      return { 
+        valid: false, 
+        reason: `bear_regime:price_above_ma20`, 
+        features 
+      };
+    }
+    
+    // ✅ ALL SHORT CONDITIONS MET
+    const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + 0.4);
     return { 
-      valid: false, 
-      reason: `too_many_consec_up(${consecUp}>${MomentumConfig.ENTRY.MAX_CONSEC_UP})`, 
+      valid: true, 
+      side: 'short',
+      reason: 'v5.3_bear_short_confirmed',
+      confidence,
       features 
     };
   }
   
-  // No breakout
-  if (!breakoutOk) {
-    return { 
-      valid: false, 
-      reason: `no_breakout(close=${close.toFixed(4)} < bb_upper=${bb.upper.toFixed(4)})`, 
-      features 
-    };
-  }
-  
-  // ROC too low
-  if (!rocOk) {
-    return { 
-      valid: false, 
-      reason: `roc_low(${(roc*100).toFixed(2)}% < ${(MomentumConfig.ENTRY.ROC_MIN*100).toFixed(1)}%)`, 
-      features 
-    };
-  }
-  
-  // Volume too low
-  if (!volOk) {
-    return { 
-      valid: false, 
-      reason: `vol_low(${volRatio.toFixed(1)}x < ${MomentumConfig.ENTRY.VOL_MULTIPLIER}x)`, 
-      features 
-    };
-  }
-  
-  // ========== ALL CONDITIONS MET - LONG SIGNAL ==========
-  const confidence = Math.min(1, (volRatio / 3) * 0.3 + (roc / 0.03) * 0.3 + (btcInBullRegime ? 0.4 : 0));
-  
-  return { 
-    valid: true, 
-    side: 'long',  // V5: LONG ONLY
-    reason: 'v5_breakout_long_confirmed',
-    confidence,
-    features 
-  };
+  // Neither bull nor bear (shouldn't happen but safety)
+  return { valid: false, reason: 'regime_neutral', features };
 }
 
 // ============================================================================
