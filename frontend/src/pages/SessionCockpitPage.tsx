@@ -32,7 +32,6 @@ import {
 import ProfessionalChart from '../components/charts/ProfessionalChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
-import MarketContextCard from '../components/MarketContextCard';
 import PositionInfoCard from '../components/PositionInfoCard';
 import type { StrategySnapshot } from '../types/strategies';
 import PerfBreakdownPanel from '../components/PerfBreakdownPanel';
@@ -1295,19 +1294,7 @@ export default function SessionCockpitPage() {
                 )}
               </Card>
 </Row>
-        <Row gutter={[24, 24]}>
-          <Col xs={24} lg={10}>
-            <Card title="Market Context" bordered={false} className="session-section-card">
-              {shouldShowContent(LoadingPhase.CORE_DATA) && diagnostics?.market ? (
-                <MarketContextCard market={diagnostics.market} symbol={status?.symbol || ''} />
-              ) : (
-                <Skeleton active paragraph={{ rows: 6 }} />
-              )}
-            </Card>
-          </Col>
-        </Row>
-
-        <Row gutter={[24, 24]}>
+<Row gutter={[24, 24]}>
           <Col xs={24}>
             <Card title="Recent agent logs" bordered={false} className="session-section-card">
               {shouldShowContent(LoadingPhase.CORE_DATA) ? (
