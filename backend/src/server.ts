@@ -108,8 +108,52 @@ app.use("/api/portfolio", portfolioRouter);
 // AGENT MANAGEMENT
 // ============================================
 
-// Store all agents per user (4 agents sharing capital pool)
-const userAgents = new Map<string, { agents: SimpleAgent[]; capitalPool: CapitalPool }>();
+// Store agents per user+mode (allows Paper + Live simultaneously)
+// Key format: "userId_paper" or "userId_live"
+const userAgents = new Map<string, { agents: SimpleAgent[]; capitalPool: CapitalPool; mode: 'paper' | 'live' }>();
+
+// Helper to get agent key
+function getAgentKey(userId: string, mode: 'paper' | 'live'): string {
+  return `${userId}_${mode}`;
+}
+
+// Helper to get all agent data for a user (both paper and live)
+function getAllUserAgents(userId: string): { paper?: { agents: SimpleAgent[]; capitalPool: CapitalPool }; live?: { agents: SimpleAgent[]; capitalPool: CapitalPool } } {
+  const paper = userAgents.get(getAgentKey(userId, 'paper'));
+  const live = userAgents.get(getAgentKey(userId, 'live'));
+  return {
+    paper: paper ? { agents: paper.agents, capitalPool: paper.capitalPool } : undefined,
+    live: live ? { agents: live.agents, capitalPool: live.capitalPool } : undefined,
+  };
+}
+
+// Helper to find an agent by sessionId across both modes
+function findAgentBySessionId(userId: string, sessionId: string): { agent: SimpleAgent; mode: 'paper' | 'live' } | null {
+  const allAgents = getAllUserAgents(userId);
+  
+  // Check paper agents
+  if (allAgents.paper) {
+    const agent = allAgents.paper.agents.find(a => a.getStatus().sessionId === sessionId);
+    if (agent) return { agent, mode: 'paper' };
+  }
+  
+  // Check live agents
+  if (allAgents.live) {
+    const agent = allAgents.live.agents.find(a => a.getStatus().sessionId === sessionId);
+    if (agent) return { agent, mode: 'live' };
+  }
+  
+  return null;
+}
+
+// Helper to get all running agents for a user (combined paper + live)
+function getAllRunningAgents(userId: string): SimpleAgent[] {
+  const allAgents = getAllUserAgents(userId);
+  const agents: SimpleAgent[] = [];
+  if (allAgents.paper) agents.push(...allAgents.paper.agents);
+  if (allAgents.live) agents.push(...allAgents.live.agents);
+  return agents;
+}
 
 // Helper to get exchange for user
 async function getExchangeForUser(userId: string): Promise<any> {
@@ -128,12 +172,11 @@ app.get("/api/status", async (req, res) => {
     
     // If sessionId provided, return session-specific status
     if (sessionId && typeof sessionId === 'string') {
-      // First try to find running agent with this session
-      const userAgentData = userId ? userAgents.get(userId) : null;
-      const runningAgent = userAgentData?.agents.find(a => a.getStatus().sessionId === sessionId);
+      // First try to find running agent with this session (checks both paper + live)
+      const found = userId ? findAgentBySessionId(userId, sessionId) : null;
       
-      if (runningAgent) {
-        const agentStatus = runningAgent.getStatus();
+      if (found) {
+        const agentStatus = found.agent.getStatus();
         const state = agentStatus.running 
           ? (agentStatus.hasPosition ? 'IN_POSITION' : 'WATCHING') 
           : 'STOPPED';
@@ -143,7 +186,7 @@ app.get("/api/status", async (req, res) => {
           session: {
             id: sessionId,
             symbol: agentStatus.symbol,
-            mode: runningAgent.getMode(),
+            mode: found.mode,
             state: state,
             running: agentStatus.running,
             hasPosition: agentStatus.hasPosition,
@@ -186,29 +229,40 @@ app.get("/api/status", async (req, res) => {
       });
     }
     
-    // No sessionId - return general status
-    const userAgentData = userId ? userAgents.get(userId) : null;
+    // No sessionId - return general status (combines both paper + live)
+    const allAgentData = userId ? getAllUserAgents(userId) : null;
+    const allAgents = userId ? getAllRunningAgents(userId) : [];
     
-    if (!userAgentData) {
+    if (!allAgentData || allAgents.length === 0) {
       return res.json({
         server: "ok",
         database: "connected",
         agent: null,
+        paper: allAgentData?.paper ? { running: true, count: allAgentData.paper.agents.length } : null,
+        live: allAgentData?.live ? { running: true, count: allAgentData.live.agents.length } : null,
       });
     }
     
-    const { agents, capitalPool } = userAgentData;
-    const positions = agents.map(a => a.getStatus());
+    const positions = allAgents.map(a => a.getStatus());
     
     res.json({
       server: "ok",
       database: "connected",
       agent: {
-        running: agents.some(a => a.getStatus().running),
+        running: allAgents.some(a => a.getStatus().running),
         symbols: MomentumConfig.SYMBOLS,
         positions: positions.filter(p => p.hasPosition).map(p => p.symbol),
-        capitalPool: capitalPool.getStatus(),
       },
+      paper: allAgentData.paper ? {
+        running: true,
+        count: allAgentData.paper.agents.length,
+        capitalPool: allAgentData.paper.capitalPool.getStatus(),
+      } : null,
+      live: allAgentData.live ? {
+        running: true,
+        count: allAgentData.live.agents.length,
+        capitalPool: allAgentData.live.capitalPool.getStatus(),
+      } : null,
     });
   } catch (error) {
     res.status(500).json({ error: "Status check failed" });
@@ -220,10 +274,10 @@ app.get("/api/market-conditions", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
     
-    // First check if any agent has cached market conditions
-    const userAgentData = userId ? userAgents.get(userId) : null;
-    if (userAgentData && userAgentData.agents.length > 0) {
-      const firstAgent = userAgentData.agents[0];
+    // First check if any agent has cached market conditions (check both paper + live)
+    const allAgents = userId ? getAllRunningAgents(userId) : [];
+    if (allAgents.length > 0) {
+      const firstAgent = allAgents[0];
       const agentStatus = firstAgent.getStatus();
       const conditions = agentStatus.marketConditions;
       
@@ -338,13 +392,15 @@ app.post("/api/agent/start", async (req, res) => {
     }
     
     const { mode = "paper", capitalUsd = 10000 } = req.body;
+    const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
     
-    // Check for existing agents - show ACTUAL running symbols
-    const existingAgents = userAgents.get(userId);
+    // Check for existing agents FOR THIS MODE ONLY - allows Paper + Live simultaneously
+    const existingAgents = userAgents.get(agentKey);
     if (existingAgents && existingAgents.agents.length > 0) {
       const runningSymbols = existingAgents.agents.map(a => a.getStatus().symbol);
       return res.status(409).json({ 
-        error: "Agents already running. Stop them first.",
+        error: `${mode.toUpperCase()} agents already running. Stop them first.`,
+        mode,
         symbols: runningSymbols,
       });
     }
@@ -390,8 +446,8 @@ app.post("/api/agent/start", async (req, res) => {
       mode: mode as 'paper' | 'live',
     });
     
-    // Store and start all agents
-    userAgents.set(userId, { agents, capitalPool });
+    // Store and start all agents (keyed by userId_mode)
+    userAgents.set(agentKey, { agents, capitalPool, mode: mode as 'paper' | 'live' });
     
     for (const agent of agents) {
       // Configure tick broadcast callback
@@ -433,21 +489,23 @@ app.post("/api/agent/stop", async (req, res) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
     
-    const { sessionId, closePosition } = req.body;
-    
-    const userAgentData = userAgents.get(userId);
-    if (!userAgentData) {
-      return res.status(404).json({ error: "No agents found" });
-    }
+    const { sessionId, closePosition, mode } = req.body;
     
     // If sessionId provided, stop only that specific agent
     if (sessionId) {
-      const agentIndex = userAgentData.agents.findIndex(a => a.getStatus().sessionId === sessionId);
-      if (agentIndex === -1) {
+      const found = findAgentBySessionId(userId, sessionId);
+      if (!found) {
         return res.status(404).json({ error: "Agent not found for this session" });
       }
       
-      const agent = userAgentData.agents[agentIndex];
+      const agentKey = getAgentKey(userId, found.mode);
+      const agentData = userAgents.get(agentKey);
+      if (!agentData) {
+        return res.status(404).json({ error: "Agent data not found" });
+      }
+      
+      const agentIndex = agentData.agents.findIndex(a => a.getStatus().sessionId === sessionId);
+      const agent = agentData.agents[agentIndex];
       await agent.stop();
       
       // Update session to mark as halted
@@ -457,26 +515,35 @@ app.post("/api/agent/stop", async (req, res) => {
       });
       
       // Remove agent from array
-      userAgentData.agents.splice(agentIndex, 1);
+      agentData.agents.splice(agentIndex, 1);
       
-      // If no more agents, delete user entry
-      if (userAgentData.agents.length === 0) {
-        userAgents.delete(userId);
+      // If no more agents for this mode, delete entry
+      if (agentData.agents.length === 0) {
+        userAgents.delete(agentKey);
       }
       
-      logger.info(`⏸️ Agent for session ${sessionId} paused`);
-      return res.json({ success: true, message: "Agent paused" });
+      logger.info(`⏸️ Agent for session ${sessionId} paused (${found.mode})`);
+      return res.json({ success: true, message: "Agent paused", mode: found.mode });
     }
     
-    // No sessionId: stop all agents
-    for (const agent of userAgentData.agents) {
-      await agent.stop();
+    // No sessionId: stop all agents for specified mode (or all if no mode)
+    const modesToStop: ('paper' | 'live')[] = mode ? [mode as 'paper' | 'live'] : ['paper', 'live'];
+    let stoppedCount = 0;
+    
+    for (const m of modesToStop) {
+      const agentKey = getAgentKey(userId, m);
+      const agentData = userAgents.get(agentKey);
+      if (agentData) {
+        for (const agent of agentData.agents) {
+          await agent.stop();
+          stoppedCount++;
+        }
+        userAgents.delete(agentKey);
+      }
     }
     
-    userAgents.delete(userId);
-    
-    logger.info(`🛑 All agents stopped for ${userId}`);
-    res.json({ success: true });
+    logger.info(`🛑 Stopped ${stoppedCount} agents for ${userId} (modes: ${modesToStop.join(', ')})`);
+    res.json({ success: true, stoppedCount, modes: modesToStop });
   } catch (error) {
     logger.error("Failed to stop agents", error);
     res.status(500).json({ error: error instanceof Error ? error.message : "Unknown error" });
@@ -491,23 +558,37 @@ app.get("/api/agent/status", async (req, res) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
     
-    const userAgentData = userAgents.get(userId);
-    if (!userAgentData) {
-      return res.json({ running: false });
-    }
+    const allAgentData = getAllUserAgents(userId);
+    const paperData = allAgentData.paper;
+    const liveData = allAgentData.live;
     
-    const { agents, capitalPool } = userAgentData;
-    const agentStatuses = agents.map(a => a.getStatus());
+    // Build response with both paper and live status
+    const paperStatus = paperData ? {
+      running: paperData.agents.some(a => a.getStatus().running),
+      agents: paperData.agents.map(a => a.getStatus()),
+      capitalPool: paperData.capitalPool.getStatus(),
+    } : null;
+    
+    const liveStatus = liveData ? {
+      running: liveData.agents.some(a => a.getStatus().running),
+      agents: liveData.agents.map(a => a.getStatus()),
+      capitalPool: liveData.capitalPool.getStatus(),
+    } : null;
+    
+    const allAgents = getAllRunningAgents(userId);
+    const allStatuses = allAgents.map(a => a.getStatus());
     
     res.json({
-      running: agentStatuses.some(s => s.running),
+      running: allStatuses.some(s => s.running),
       symbols: MomentumConfig.SYMBOLS,
-      positions: agentStatuses.filter(s => s.hasPosition).map(s => ({
+      positions: allStatuses.filter(s => s.hasPosition).map(s => ({
         symbol: s.symbol,
         hasPosition: s.hasPosition,
+        mode: allAgentData.paper?.agents.some(a => a.getStatus().sessionId === s.sessionId) ? 'paper' : 'live',
       })),
-      capitalPool: capitalPool.getStatus(),
-      marketConditions: agentStatuses[0]?.marketConditions || null,
+      paper: paperStatus,
+      live: liveStatus,
+      marketConditions: allStatuses[0]?.marketConditions || null,
     });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "Unknown error" });
@@ -537,10 +618,11 @@ app.get("/api/agent/sessions", async (req, res) => {
       },
     });
     
-    // Enrich sessions with runtime state from memory
-    const userAgentData = userAgents.get(userId);
+    // Enrich sessions with runtime state from memory (search both paper and live)
+    const allUserAgents = getAllUserAgents(userId);
+    const allAgentsList = getAllRunningAgents(userId);
     const enrichedSessions = sessions.map(session => {
-      const agent = userAgentData?.agents.find(a => a.getStatus().sessionId === session.id);
+      const agent = allAgentsList.find(a => a.getStatus().sessionId === session.id);
       
       let state = 'STOPPED';
       let hasPosition = false;
@@ -589,19 +671,23 @@ app.delete("/api/agent/sessions/:id", async (req, res) => {
       return res.status(404).json({ error: "Session not found" });
     }
     
-    // ✅ Stop agent in memory if running
-    const userAgentData = userAgents.get(userId);
-    if (userAgentData) {
-      const agentIndex = userAgentData.agents.findIndex(a => a.getStatus().sessionId === id);
-      if (agentIndex !== -1) {
-        const agent = userAgentData.agents[agentIndex];
-        await agent.stop();
-        userAgentData.agents.splice(agentIndex, 1);
-        logger.info(`🗑️ Stopped and removed agent for session ${id}`);
-        
-        // If no more agents, clean up user entry
-        if (userAgentData.agents.length === 0) {
-          userAgents.delete(userId);
+    // ✅ Stop agent in memory if running (check both paper + live)
+    const found = findAgentBySessionId(userId, id);
+    if (found) {
+      const agentKey = getAgentKey(userId, found.mode);
+      const agentData = userAgents.get(agentKey);
+      if (agentData) {
+        const agentIndex = agentData.agents.findIndex(a => a.getStatus().sessionId === id);
+        if (agentIndex !== -1) {
+          const agent = agentData.agents[agentIndex];
+          await agent.stop();
+          agentData.agents.splice(agentIndex, 1);
+          logger.info(`🗑️ Stopped and removed agent for session ${id} (${found.mode})`);
+          
+          // If no more agents for this mode, clean up entry
+          if (agentData.agents.length === 0) {
+            userAgents.delete(agentKey);
+          }
         }
       }
     }
@@ -656,13 +742,28 @@ app.get("/api/agent/overview", async (req, res) => {
       },
     });
     
-    const userAgentData = userAgents.get(userId);
-    const capitalPoolStatus = userAgentData?.capitalPool.getStatus() || null;
+    // Get agent data for both modes
+    const allAgentData = getAllUserAgents(userId);
+    const allAgents = getAllRunningAgents(userId);
+    
+    // Build capital pool status for requested mode or combined
+    let capitalPoolStatus: any = null;
+    if (mode === 'paper' && allAgentData.paper) {
+      capitalPoolStatus = allAgentData.paper.capitalPool.getStatus();
+    } else if (mode === 'live' && allAgentData.live) {
+      capitalPoolStatus = allAgentData.live.capitalPool.getStatus();
+    } else {
+      // Combined status
+      capitalPoolStatus = {
+        paper: allAgentData.paper?.capitalPool.getStatus() || null,
+        live: allAgentData.live?.capitalPool.getStatus() || null,
+      };
+    }
     
     // Enrich sessions with runtime state from memory
     const enrichedSessions = sessions.map(session => {
-      // Find running agent for this session
-      const agent = userAgentData?.agents.find(a => a.getStatus().sessionId === session.id);
+      // Find running agent for this session (in either paper or live)
+      const agent = allAgents.find(a => a.getStatus().sessionId === session.id);
       
       let state = 'STOPPED';
       let hasPosition = false;
@@ -701,7 +802,7 @@ app.get("/api/agent/overview", async (req, res) => {
     res.json({
       sessions: enrichedSessions,
       capitalPool: capitalPoolStatus,
-      activeSymbols: userAgentData ? MomentumConfig.SYMBOLS : [],
+      activeSymbols: allAgents.length > 0 ? MomentumConfig.SYMBOLS : [],
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to get overview" });
@@ -731,18 +832,14 @@ app.get("/api/agent/state", async (req, res) => {
     const userId = (req as any)?.user?.id;
     const { sessionId } = req.query;
     
-    const userAgentData = userAgents.get(userId);
-    if (!userAgentData) {
-      return res.json(null);
-    }
-    
     // If sessionId provided, return state for that specific agent
     if (sessionId && typeof sessionId === 'string') {
-      const agent = userAgentData.agents.find(a => a.getStatus().sessionId === sessionId);
+      const found = findAgentBySessionId(userId, sessionId);
       
-      if (agent) {
-        const agentStatus = agent.getStatus();
-        const agentState = agent.getAgentState?.() || {};
+      if (found) {
+        const agentStatus = found.agent.getStatus();
+        const agentState = found.agent.getAgentState?.() || {};
+        const agentData = userAgents.get(getAgentKey(userId, found.mode));
         
         return res.json({
           running: agentStatus.running,
@@ -752,6 +849,7 @@ app.get("/api/agent/state", async (req, res) => {
           hasPosition: agentStatus.hasPosition,
           symbol: agentStatus.symbol,
           sessionId: agentStatus.sessionId,
+          mode: found.mode,
           marketConditions: agentStatus.marketConditions,
           tickCount: agentStatus.tickCount,
           lastTickAt: agentStatus.lastTickAt,
@@ -761,7 +859,7 @@ app.get("/api/agent/state", async (req, res) => {
           exit: agentState.exit,
           profile: agentState.profile,
           balance: {
-            freeUsd: userAgentData.capitalPool.getAvailableCapital(),
+            freeUsd: agentData?.capitalPool.getAvailableCapital() || 0,
           },
         });
       }
@@ -808,8 +906,15 @@ app.get("/api/agent/state", async (req, res) => {
       return res.json(null);
     }
     
-    // No sessionId - return overview of all agents
-    const agentStatuses = userAgentData.agents.map(a => a.getStatus());
+    // No sessionId - return overview of all agents (both paper + live)
+    const allAgentData = getAllUserAgents(userId);
+    const allAgents = getAllRunningAgents(userId);
+    
+    if (allAgents.length === 0) {
+      return res.json({ running: false, agents: [] });
+    }
+    
+    const agentStatuses = allAgents.map(a => a.getStatus());
     
     res.json({ 
       running: agentStatuses.some(s => s.running),
@@ -818,8 +923,10 @@ app.get("/api/agent/state", async (req, res) => {
         sessionId: s.sessionId,
         running: s.running,
         hasPosition: s.hasPosition,
+        mode: allAgentData.paper?.agents.some(a => a.getStatus().sessionId === s.sessionId) ? 'paper' : 'live',
       })),
-      capitalPool: userAgentData.capitalPool.getStatus(),
+      paper: allAgentData.paper ? { capitalPool: allAgentData.paper.capitalPool.getStatus() } : null,
+      live: allAgentData.live ? { capitalPool: allAgentData.live.capitalPool.getStatus() } : null,
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to get agent state" });
@@ -905,9 +1012,11 @@ app.get("/api/agent/portfolio", async (req, res) => {
       }
     }
     
-    // For paper mode or if exchange fetch fails
-    const userAgentData = userAgents.get(userId);
-    if (!userAgentData) {
+    // For paper mode or if exchange fetch fails - use mode-specific pool
+    const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
+    const agentData = userAgents.get(agentKey);
+    
+    if (!agentData) {
       return res.json({
         balance: mode === 'paper' ? 10000 : 0,
         freeBalance: mode === 'paper' ? 10000 : 0,
@@ -918,8 +1027,8 @@ app.get("/api/agent/portfolio", async (req, res) => {
       });
     }
     
-    const capitalStatus = userAgentData.capitalPool.getStatus();
-    const agentStatuses = userAgentData.agents.map(a => a.getStatus());
+    const capitalStatus = agentData.capitalPool.getStatus();
+    const agentStatuses = agentData.agents.map(a => a.getStatus());
     
     res.json({
       balance: capitalStatus.totalUsd,
@@ -995,10 +1104,12 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
       }
     }
     
-    // For paper mode or if exchange fetch fails, use agent capital pool
-    const userAgentData = userAgents.get(userId);
-    if (!userAgentData) {
-      // No agent running - read from UserSettings database
+    // For paper mode or if exchange fetch fails, use mode-specific capital pool
+    const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
+    const agentData = userAgents.get(agentKey);
+    
+    if (!agentData) {
+      // No agent running for this mode - read from UserSettings database
       let paperBalance = 10000; // default
       if (mode === 'paper' && userId) {
         try {
@@ -1027,7 +1138,7 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
       });
     }
     
-    const status = userAgentData.capitalPool.getStatus();
+    const status = agentData.capitalPool.getStatus();
     res.json({
       totalUSD: status.totalUsd,
       freeUSD: status.availableUsd,
@@ -1046,21 +1157,33 @@ app.get("/api/capital/reservations", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
     
-    const userAgentData = userAgents.get(userId);
-    if (!userAgentData) {
-      return res.json({ paper: [], live: [] });
+    const allAgentData = getAllUserAgents(userId);
+    
+    // Get reservations from paper pool
+    let paperReservations: any[] = [];
+    if (allAgentData.paper) {
+      const status = allAgentData.paper.capitalPool.getStatus();
+      paperReservations = Object.entries(status.byAgent).map(([agentId, data]) => ({
+        agentId,
+        reserved: data.reserved,
+        inPosition: data.inPosition,
+      }));
     }
     
-    const status = userAgentData.capitalPool.getStatus();
-    // Convert byAgent to array format for frontend
-    const reservations = Object.entries(status.byAgent).map(([agentId, data]) => ({
-      agentId,
-      reserved: data.reserved,
-      inPosition: data.inPosition,
-    }));
+    // Get reservations from live pool
+    let liveReservations: any[] = [];
+    if (allAgentData.live) {
+      const status = allAgentData.live.capitalPool.getStatus();
+      liveReservations = Object.entries(status.byAgent).map(([agentId, data]) => ({
+        agentId,
+        reserved: data.reserved,
+        inPosition: data.inPosition,
+      }));
+    }
+    
     res.json({
-      paper: reservations,
-      live: [],
+      paper: paperReservations,
+      live: liveReservations,
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to get reservations" });
@@ -1100,7 +1223,7 @@ app.post("/api/capital/paper/set-balance", async (req, res) => {
     });
     
     // 2. Update the capital pool directly if agents are running
-    const existingAgents = userAgents.get(userId);
+    const existingAgents = userAgents.get(getAgentKey(userId, 'paper'));
     if (existingAgents && existingAgents.capitalPool) {
       existingAgents.capitalPool.setTotalCapital(initialUSD);
       logger.info(`Paper balance updated to $${initialUSD} for user ${userId} (in-memory + DB)`);
@@ -1156,7 +1279,8 @@ app.post("/api/agent/creation/prepare", async (req, res) => {
     const { mode = 'paper', capitalUsd = defaultCapital, maxLeverage, aggressiveness, symbol } = req.body;
     
     // Get existing agents (if any) - we allow adding more agents
-    const existingAgents = userAgents.get(userId);
+    const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
+    const existingAgents = userAgents.get(agentKey);
     const runningSymbols = existingAgents?.agents.map(a => a.getStatus().symbol) || [];
     
     // Store creation params for later activation
@@ -1223,13 +1347,14 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     // Normalize symbol to futures format (BTC/USDT -> BTC/USDT:USDT)
     const selectedSymbol = rawSymbol.includes(':') ? rawSymbol : `${rawSymbol}:USDT`;
     
-    // Check if this symbol is already running
-    const existingAgents = userAgents.get(userId);
+    // Check if this symbol is already running in this mode
+    const modeAgentKey = getAgentKey(userId, mode as 'paper' | 'live');
+    const existingAgents = userAgents.get(modeAgentKey);
     if (existingAgents) {
       const alreadyRunning = existingAgents.agents.find(a => a.getStatus().symbol === selectedSymbol);
       if (alreadyRunning) {
         return res.status(409).json({ 
-          error: `Agent for ${selectedSymbol} is already running`,
+          error: `Agent for ${selectedSymbol} is already running in ${mode} mode`,
           symbol: selectedSymbol,
         });
       }
@@ -1284,12 +1409,13 @@ app.post("/api/agent/creation/activate", async (req, res) => {
       riskPerTradePct: 1,
     });
     
-    // Get existing agents or create new array
-    const existingData = userAgents.get(userId);
+    // Get existing agents for this mode or create new entry
+    const agentKey = getAgentKey(userId, modeTyped);
+    const existingData = userAgents.get(agentKey);
     if (existingData) {
       existingData.agents.push(agent);
     } else {
-      userAgents.set(userId, { agents: [agent], capitalPool });
+      userAgents.set(agentKey, { agents: [agent], capitalPool, mode: modeTyped });
     }
     
     // Start the single agent
@@ -1318,39 +1444,52 @@ app.post("/api/agent/creation/activate", async (req, res) => {
 app.post("/api/agent/restart", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
+    const { mode } = req.body;
     
-    // Stop existing agents
-    const existingAgents = userAgents.get(userId);
-    if (existingAgents) {
-      for (const agent of existingAgents.agents) {
-        await agent.stop();
+    // Stop agents for specified mode (or all if no mode)
+    const modesToStop: ('paper' | 'live')[] = mode ? [mode as 'paper' | 'live'] : ['paper', 'live'];
+    
+    for (const m of modesToStop) {
+      const agentKey = getAgentKey(userId, m);
+      const agentData = userAgents.get(agentKey);
+      if (agentData) {
+        for (const agent of agentData.agents) {
+          await agent.stop();
+        }
+        userAgents.delete(agentKey);
       }
-      userAgents.delete(userId);
     }
     
     res.json({
       success: true,
       message: "Agents stopped. Use /api/agent/start to restart.",
+      modes: modesToStop,
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to restart" });
   }
 });
 
-// Stop all agents
+// Stop all agents (both paper + live)
 app.post("/api/agent/stop-all", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
+    let stoppedCount = 0;
     
-    const userAgentData = userAgents.get(userId);
-    if (userAgentData) {
-      for (const agent of userAgentData.agents) {
-        await agent.stop();
+    // Stop both paper and live
+    for (const mode of ['paper', 'live'] as const) {
+      const agentKey = getAgentKey(userId, mode);
+      const agentData = userAgents.get(agentKey);
+      if (agentData) {
+        for (const agent of agentData.agents) {
+          await agent.stop();
+          stoppedCount++;
+        }
+        userAgents.delete(agentKey);
       }
-      userAgents.delete(userId);
     }
     
-    res.json({ success: true });
+    res.json({ success: true, stoppedCount });
   } catch (error) {
     res.status(500).json({ error: "Failed to stop all" });
   }
@@ -1395,14 +1534,14 @@ app.post("/api/agent/propose", async (req, res) => {
 app.get("/api/agent/triggers", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
-    const userAgentData = userAgents.get(userId);
+    const allAgents = getAllRunningAgents(userId);
     
-    if (!userAgentData) {
+    if (allAgents.length === 0) {
       return res.json({ triggers: [] });
     }
     
     // Each agent has its own thresholds
-    const triggers = userAgentData.agents.map(a => {
+    const triggers = allAgents.map(a => {
       const status = a.getStatus();
       return {
         symbol: status.symbol,
@@ -1565,11 +1704,11 @@ app.get("/api/analysis", async (req, res) => {
       return res.status(400).json({ error: "Symbol required" });
     }
     
-    // Try to get real analysis from running agent
-    const userAgentData = userAgents.get(userId);
-    if (userAgentData) {
+    // Try to get real analysis from running agent (check both paper + live)
+    const allAgents = getAllRunningAgents(userId);
+    if (allAgents.length > 0) {
       const normalizedSymbol = String(symbol).toUpperCase().replace(/[/:]/g, '');
-      const agent = userAgentData.agents.find(a => {
+      const agent = allAgents.find(a => {
         const agentSymbol = a.getStatus().symbol.toUpperCase().replace(/[/:]/g, '');
         return agentSymbol === normalizedSymbol;
       });
@@ -1590,6 +1729,7 @@ app.get("/api/analysis", async (req, res) => {
           marketConditions: status.marketConditions,
           lastTickAt: status.lastTickAt,
           tickCount: status.tickCount,
+          mode: agent.getMode(),
         });
       }
     }
@@ -1644,11 +1784,14 @@ app.get("/api/monitor/margin/:sessionId", async (req, res) => {
 app.get("/api/monitor/health", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
-    const userAgentData = userAgents.get(userId);
+    const allAgents = getAllRunningAgents(userId);
+    const allAgentData = getAllUserAgents(userId);
     
     res.json({
       healthy: true,
-      agentsRunning: userAgentData ? userAgentData.agents.length : 0,
+      agentsRunning: allAgents.length,
+      paper: allAgentData.paper ? { count: allAgentData.paper.agents.length } : null,
+      live: allAgentData.live ? { count: allAgentData.live.agents.length } : null,
       database: "connected",
     });
   } catch (error) {
@@ -1824,10 +1967,13 @@ app.post("/api/predictor/decisions", async (req, res) => {
 app.get("/api/ops/metrics", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
-    const userAgentData = userAgents.get(userId);
+    const allAgents = getAllRunningAgents(userId);
+    const allAgentData = getAllUserAgents(userId);
     
     res.json({
-      agentsRunning: userAgentData ? userAgentData.agents.length : 0,
+      agentsRunning: allAgents.length,
+      paper: allAgentData.paper ? { count: allAgentData.paper.agents.length } : null,
+      live: allAgentData.live ? { count: allAgentData.live.agents.length } : null,
       symbols: MomentumConfig.SYMBOLS,
       uptime: process.uptime(),
     });
@@ -1866,23 +2012,31 @@ app.get("/api/ops/selector", async (req, res) => {
 app.get("/api/ops/agent-health", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
-    const userAgentData = userAgents.get(userId);
+    const allAgents = getAllRunningAgents(userId);
+    const allAgentData = getAllUserAgents(userId);
     
-    if (!userAgentData) {
-      return res.json({ agents: [] });
+    if (allAgents.length === 0) {
+      return res.json({ agents: [], paper: null, live: null });
     }
     
-    const agents = userAgentData.agents.map(a => {
+    const agents = allAgents.map(a => {
       const status = a.getStatus();
+      // Determine mode
+      const mode = allAgentData.paper?.agents.some(pa => pa.getStatus().sessionId === status.sessionId) ? 'paper' : 'live';
       return {
         symbol: status.symbol,
         running: status.running,
         hasPosition: status.hasPosition,
         health: "healthy",
+        mode,
       };
     });
     
-    res.json({ agents });
+    res.json({ 
+      agents,
+      paper: allAgentData.paper ? { count: allAgentData.paper.agents.length } : null,
+      live: allAgentData.live ? { count: allAgentData.live.agents.length } : null,
+    });
   } catch (error) {
     res.status(500).json({ error: "Failed" });
   }
@@ -2102,8 +2256,9 @@ process.on('SIGINT', shutdown);
           agents.push(agent);
         }
         
-        // Store and start agents
-        userAgents.set(userId, { agents, capitalPool });
+        // Store and start agents (by mode)
+        const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
+        userAgents.set(agentKey, { agents, capitalPool, mode: mode as 'paper' | 'live' });
         
         for (const agent of agents) {
           // Configure tick broadcast callback
