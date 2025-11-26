@@ -271,7 +271,7 @@ app.get("/api/market-conditions", async (req, res) => {
       
       // Check if trading day (Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6)
       const dayOfWeek = new Date().getUTCDay();
-      const ALLOWED_DAYS = [0, 1, 3, 4]; // Sun, Mon, Wed, Thu
+      const ALLOWED_DAYS = [0, 1, 2, 3, 4, 5, 6]; // All days
       const isTradingDay = ALLOWED_DAYS.includes(dayOfWeek);
       
       // Determine trend

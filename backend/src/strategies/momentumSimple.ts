@@ -22,7 +22,7 @@ export const MomentumConfig = {
     VOL_MULTIPLIER: 5,           // Volume > 5x moyenne 20 périodes
     BTC_MOMENTUM_MIN: 0.75,      // BTC momentum 6h > 0.75% (long) ou < -0.75% (short)
     BTC_MOMENTUM_PERIOD: 24,     // 24 bougies 15m = 6h
-    ALLOWED_DAYS: [0, 1, 3, 4],  // Dim, Lun, Mer, Jeu (UTC)
+    ALLOWED_DAYS: [0, 1, 2, 3, 4, 5, 6],  // All days (UTC)
   },
   
   // Exit avec Trailing Stop
