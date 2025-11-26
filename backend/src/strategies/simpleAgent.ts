@@ -203,6 +203,18 @@ export interface SimpleAgentConfig {
   onTrade?: (trade: TradeEvent) => void;
   onError?: (error: Error) => void;
   onMarketConditions?: (conditions: MarketConditions) => void;
+  onTick?: (tick: TickEvent) => void;
+}
+
+export interface TickEvent {
+  symbol: string;
+  price: number;
+  hasPosition: boolean;
+  positionSide?: 'long' | 'short';
+  support?: number;
+  resistance?: number;
+  tickCount: number;
+  timestamp: Date;
 }
 
 export interface SignalEvent {
@@ -299,6 +311,14 @@ export class SimpleAgent {
   }
   
   // ==========================================================================
+  // PUBLIC SETTERS FOR CALLBACKS
+  // ==========================================================================
+  
+  setOnTick(callback: (tick: TickEvent) => void): void {
+    this.config.onTick = callback;
+  }
+  
+  // ==========================================================================
   // PUBLIC GETTERS
   // ==========================================================================
   
@@ -346,6 +366,27 @@ export class SimpleAgent {
       // Update and broadcast market conditions
       this.lastMarketConditions = getMarketConditions(btcCandles);
       this.config.onMarketConditions?.(this.lastMarketConditions);
+      
+      // Fetch current candles for price and S/R
+      const candles = await this.fetchCandles();
+      const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : this.lastPrice;
+      this.lastPrice = currentPrice;
+      
+      // Calculate basic S/R from recent highs/lows
+      const recentHigh = Math.max(...candles.slice(-20).map(c => c.high));
+      const recentLow = Math.min(...candles.slice(-20).map(c => c.low));
+      
+      // 🔔 Broadcast tick to frontend via callback
+      this.config.onTick?.({
+        symbol,
+        price: currentPrice,
+        hasPosition: !!this.position,
+        positionSide: this.position?.side,
+        support: recentLow,
+        resistance: recentHigh,
+        tickCount: this.tickCount,
+        timestamp: now,
+      });
       
       // 1. Si on a une position, checker l'exit avec trailing
       if (this.position) {

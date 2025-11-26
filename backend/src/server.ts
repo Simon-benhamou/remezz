@@ -390,6 +390,20 @@ app.post("/api/agent/start", async (req, res) => {
     userAgents.set(userId, { agents, capitalPool });
     
     for (const agent of agents) {
+      // Configure tick broadcast callback
+      agent.setOnTick((tick) => {
+        broadcast('tick', {
+          sessionId: agent.getStatus().sessionId,
+          symbol: tick.symbol,
+          price: tick.price,
+          hasPosition: tick.hasPosition,
+          positionSide: tick.positionSide,
+          support: tick.support,
+          resistance: tick.resistance,
+          tickCount: tick.tickCount,
+          timestamp: tick.timestamp.toISOString(),
+        }, tick.symbol);
+      });
       await agent.start();
     }
     
@@ -659,6 +673,8 @@ app.get("/api/agent/state", async (req, res) => {
           symbol: agentStatus.symbol,
           sessionId: agentStatus.sessionId,
           marketConditions: agentStatus.marketConditions,
+          tickCount: agentStatus.tickCount,
+          lastTickAt: agentStatus.lastTickAt,
           // Agent state from getAgentState() method
           pos: agentState.pos,
           plan: agentState.plan,
@@ -1878,6 +1894,20 @@ process.on('SIGINT', shutdown);
         userAgents.set(userId, { agents, capitalPool });
         
         for (const agent of agents) {
+          // Configure tick broadcast callback
+          agent.setOnTick((tick) => {
+            broadcast('tick', {
+              sessionId: agent.getStatus().sessionId,
+              symbol: tick.symbol,
+              price: tick.price,
+              hasPosition: tick.hasPosition,
+              positionSide: tick.positionSide,
+              support: tick.support,
+              resistance: tick.resistance,
+              tickCount: tick.tickCount,
+              timestamp: tick.timestamp.toISOString(),
+            }, tick.symbol);
+          });
           await agent.start();
         }
         
