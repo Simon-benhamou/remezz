@@ -366,8 +366,8 @@ export default function DashboardPage(){
                     
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Text type="secondary" style={{ fontSize: 12 }}>State:</Text>
-                      <Tag color={session.state === 'ARMED' ? 'green' : session.state === 'MANAGE' ? 'blue' : 'default'}>
-                        {session.state}
+                      <Tag color={session.state === 'IN_POSITION' ? 'blue' : session.state === 'WATCHING' ? 'green' : 'default'}>
+                        {session.state === 'IN_POSITION' ? '📊 IN POSITION' : session.state === 'WATCHING' ? '👀 WATCHING' : session.state || 'STOPPED'}
                       </Tag>
                     </div>
                   </Card>

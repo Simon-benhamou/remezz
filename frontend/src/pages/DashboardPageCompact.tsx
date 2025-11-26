@@ -409,8 +409,8 @@ export default function DashboardPageCompact(){
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                           <Text strong>{session.symbol}</Text>
-                          <Tag color={session.state === 'ARMED' ? 'green' : session.state === 'MANAGE' ? 'blue' : 'default'}>
-                            {session.state}
+                          <Tag color={session.state === 'IN_POSITION' ? 'blue' : session.state === 'WATCHING' ? 'green' : 'default'}>
+                            {session.state === 'IN_POSITION' ? '📊 IN POSITION' : session.state === 'WATCHING' ? '👀 WATCHING' : session.state || 'STOPPED'}
                           </Tag>
                         </div>
                         <Space style={{ width: '100%', justifyContent: 'space-between', fontSize: 12 }}>

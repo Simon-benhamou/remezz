@@ -134,6 +134,9 @@ app.get("/api/status", async (req, res) => {
       
       if (runningAgent) {
         const agentStatus = runningAgent.getStatus();
+        const state = agentStatus.running 
+          ? (agentStatus.hasPosition ? 'IN_POSITION' : 'WATCHING') 
+          : 'STOPPED';
         return res.json({
           server: "ok",
           database: "connected",
@@ -141,8 +144,9 @@ app.get("/api/status", async (req, res) => {
             id: sessionId,
             symbol: agentStatus.symbol,
             mode: runningAgent.getMode(),
-            state: agentStatus.running ? 'running' : 'stopped',
+            state: state,
             running: agentStatus.running,
+            hasPosition: agentStatus.hasPosition,
           },
           agent: agentStatus,
           symbol: agentStatus.symbol,
@@ -527,10 +531,45 @@ app.get("/api/agent/sessions", async (req, res) => {
       where,
       orderBy: { startedAt: 'desc' },
       take: 100,
+      include: {
+        SessionKpi: true,
+        positions: true,
+      },
+    });
+    
+    // Enrich sessions with runtime state from memory
+    const userAgentData = userAgents.get(userId);
+    const enrichedSessions = sessions.map(session => {
+      const agent = userAgentData?.agents.find(a => a.getStatus().sessionId === session.id);
+      
+      let state = 'STOPPED';
+      let hasPosition = false;
+      let bias: 'long' | 'short' | null = null;
+      
+      if (agent) {
+        const status = agent.getStatus();
+        const agentState = agent.getAgentState?.();
+        state = status.running 
+          ? (status.hasPosition ? 'IN_POSITION' : 'WATCHING') 
+          : 'STOPPED';
+        hasPosition = status.hasPosition;
+        bias = agentState?.plan?.bias || null;
+      } else if (!session.stoppedAt) {
+        state = 'WATCHING'; // Session active but agent not in memory
+      }
+      
+      return {
+        ...session,
+        state,
+        hasPosition,
+        bias,
+        pnlUsd: session.SessionKpi?.realizedPnlUsd || 0,
+        winRate: session.SessionKpi?.winRate || 0,
+      };
     });
     
     // Return array directly, not wrapped in object
-    res.json(sessions);
+    res.json(enrichedSessions);
   } catch (error) {
     res.status(500).json({ error: "Failed to list sessions" });
   }
@@ -612,14 +651,55 @@ app.get("/api/agent/overview", async (req, res) => {
           orderBy: { createdAt: 'desc' },
           take: 10,
         },
+        SessionKpi: true,
+        positions: true,
       },
     });
     
     const userAgentData = userAgents.get(userId);
     const capitalPoolStatus = userAgentData?.capitalPool.getStatus() || null;
     
+    // Enrich sessions with runtime state from memory
+    const enrichedSessions = sessions.map(session => {
+      // Find running agent for this session
+      const agent = userAgentData?.agents.find(a => a.getStatus().sessionId === session.id);
+      
+      let state = 'STOPPED';
+      let hasPosition = false;
+      let pnlUsd = session.SessionKpi?.realizedPnlUsd || 0;
+      let winRate = session.SessionKpi?.winRate || 0;
+      let bias: 'long' | 'short' | null = null;
+      
+      if (agent) {
+        const status = agent.getStatus();
+        const agentState = agent.getAgentState?.();
+        state = status.running 
+          ? (status.hasPosition ? 'IN_POSITION' : 'WATCHING') 
+          : 'STOPPED';
+        hasPosition = status.hasPosition;
+        bias = agentState?.plan?.bias || null;
+        
+        // Add unrealized PnL if in position
+        if (agentState?.pos?.pnlUsd) {
+          pnlUsd += agentState.pos.pnlUsd;
+        }
+      } else if (!session.stoppedAt) {
+        // Session not stopped but agent not running - it crashed or was restarted
+        state = 'WATCHING';
+      }
+      
+      return {
+        ...session,
+        state,
+        hasPosition,
+        bias,
+        pnlUsd,
+        winRate,
+      };
+    });
+    
     res.json({
-      sessions,
+      sessions: enrichedSessions,
       capitalPool: capitalPoolStatus,
       activeSymbols: userAgentData ? MomentumConfig.SYMBOLS : [],
     });

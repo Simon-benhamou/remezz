@@ -1057,6 +1057,44 @@ export class SimpleAgent {
   
   private async savePositionToDb(position: Position, action: string): Promise<void> {
     try {
+      // First create an order for the entry (BUY for long, SELL for short)
+      const clientOrderId = `paper_entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const entrySide = position.side === 'long' ? 'buy' : 'sell';
+      
+      const order = await this.config.prisma.order.create({
+        data: {
+          clientOrderId,
+          sessionId: this.config.sessionId,
+          symbol: position.symbol,
+          side: entrySide,
+          type: 'market',
+          qty: position.qty,
+          price: position.entryPrice,
+          status: 'filled',
+          source: 'simple_agent',
+          strategyUsed: 'momentum_simple',
+        },
+      });
+      
+      // Log entry as a Fill record linked to the order
+      await this.config.prisma.fill.create({
+        data: {
+          orderId: order.id,
+          sessionId: this.config.sessionId,
+          symbol: position.symbol,
+          price: position.entryPrice,
+          qty: position.qty,
+          side: entrySide,
+          realizedPnl: 0, // No PnL on entry
+          strategyUsed: 'momentum_simple',
+          strategyFamily: 'momentum',
+          ts: new Date(position.entryTime),
+        },
+      });
+      
+      logger.info(`💾 [${this.config.symbol}] Entry order logged: ${entrySide.toUpperCase()} @ $${position.entryPrice.toFixed(4)}`);
+      
+      // Then create the position record
       await this.config.prisma.position.create({
         data: {
           sessionId: this.config.sessionId,
@@ -1082,7 +1120,8 @@ export class SimpleAgent {
     pnlUsd: number
   ): Promise<void> {
     try {
-      // First create an order for the exit
+      // Exit side is opposite of position side (SELL to close LONG, BUY to close SHORT)
+      const exitSide = position.side === 'long' ? 'sell' : 'buy';
       const clientOrderId = `paper_exit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       
       const order = await this.config.prisma.order.create({
@@ -1090,7 +1129,7 @@ export class SimpleAgent {
           clientOrderId,
           sessionId: this.config.sessionId,
           symbol: position.symbol,
-          side: 'sell',
+          side: exitSide,
           type: 'market',
           qty: position.qty,
           price: exitPrice,
@@ -1108,7 +1147,7 @@ export class SimpleAgent {
           symbol: position.symbol,
           price: exitPrice,
           qty: position.qty,
-          side: 'sell',
+          side: exitSide,
           realizedPnl: pnlUsd,
           strategyUsed: 'momentum_simple',
           strategyFamily: 'momentum',
@@ -1168,6 +1207,10 @@ export class SimpleAgent {
       notionalUsd?: number;
       duration?: number;
       trailDistance?: number;
+      // Frontend aliases
+      stopPrice?: number;
+      stop?: number;
+      targets?: number[];
     }) | null;
     plan: { 
       bias?: 'long' | 'short' | null; 
@@ -1198,6 +1241,9 @@ export class SimpleAgent {
       notionalUsd: number;
       duration: number;
       trailDistance: number;
+      stopPrice?: number;
+      stop?: number;
+      targets?: number[];
     }) | null = null;
     
     if (this.position) {
@@ -1220,6 +1266,11 @@ export class SimpleAgent {
       
       posWithMetrics = {
         ...this.position,
+        // Add stopPrice as alias for frontend compatibility
+        stopPrice: this.position.stopLoss,
+        stop: this.position.stopLoss,
+        // Add targets from lastSignal
+        targets: this.lastSignal?.targets || [],
         currentPrice,
         pnlPct,
         pnlUsd,
