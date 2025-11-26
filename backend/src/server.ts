@@ -1263,12 +1263,13 @@ app.post("/api/agent/creation/activate", async (req, res) => {
       }
     });
     
-    // Get or create capital pool for this user
-    let capitalPool = getCapitalPool(userId);
+    // Get or create capital pool for this user (separate pools for paper/live)
+    const modeTyped = mode as 'paper' | 'live';
+    let capitalPool = getCapitalPool(userId, undefined, modeTyped);
     if (!capitalPool) {
       // Initialize new capital pool
-      resetCapitalPool(userId, capitalUsd, mode as 'paper' | 'live');
-      capitalPool = getCapitalPool(userId)!;
+      resetCapitalPool(userId, capitalUsd, modeTyped);
+      capitalPool = getCapitalPool(userId, undefined, modeTyped)!;
     }
     
     // Create SINGLE agent for the selected symbol
@@ -1279,7 +1280,7 @@ app.post("/api/agent/creation/activate", async (req, res) => {
       userId,
       sessionId: session.id,
       capitalPool,
-      mode: mode as 'paper' | 'live',
+      mode: modeTyped,
       riskPerTradePct: 1,
     });
     
@@ -2080,9 +2081,9 @@ process.on('SIGINT', shutdown);
         
         const mode = sessions[0]?.mode as 'paper' | 'live' || 'paper';
         
-        // Create capital pool for this user
+        // Create capital pool for this user (separate for paper/live)
         resetCapitalPool(userId, capitalUsd, mode);
-        const capitalPool = getCapitalPool(userId)!;
+        const capitalPool = getCapitalPool(userId, undefined, mode)!;
         
         // Create agents ONLY for existing sessions
         const agents: SimpleAgent[] = [];

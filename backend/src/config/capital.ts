@@ -18,7 +18,8 @@ const configuredMinNotional = (() => {
   if (rawValue > 0) {
     return new PreciseDecimal(rawValue.toString());
   }
-  return new PreciseDecimal('40');
+  // Default to $10 - Binance Futures typically accepts $5-10 minimum
+  return new PreciseDecimal('10');
 })();
 
 const perSymbolCapOverride = (() => {

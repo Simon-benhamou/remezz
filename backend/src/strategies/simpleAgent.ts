@@ -24,7 +24,7 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
-import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket } from '../services/binanceWebSocket.js';
+import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket } from '../services/binanceWebSocket.js';
 
 const logger = createLogger('agent');
 
@@ -60,12 +60,22 @@ export class CapitalPool {
   private reservedByAgent: Map<string, number> = new Map();
   private inPositionByAgent: Map<string, number> = new Map();
   
-  constructor(initialCapitalUsd: number) {
+  // Live mode: sync with real Binance balance
+  private mode: 'paper' | 'live';
+  private userId: string | null = null;
+  private lastBalanceSync: number = 0;
+  private readonly BALANCE_SYNC_INTERVAL_MS = 30_000; // Sync every 30s max
+  
+  constructor(initialCapitalUsd: number, mode: 'paper' | 'live' = 'paper', userId?: string) {
     this.totalCapitalUsd = initialCapitalUsd;
+    this.mode = mode;
+    this.userId = userId || null;
+    console.log(`[CapitalPool] Created ${mode} pool with $${initialCapitalUsd}${mode === 'live' ? ' (will sync with Binance)' : ''}`);
   }
   
   /**
    * Get available capital for new positions
+   * In live mode: uses real Binance balance minus our reservations
    */
   getAvailableCapital(): number {
     let reserved = 0;
@@ -76,18 +86,44 @@ export class CapitalPool {
   }
   
   /**
+   * Sync total capital with real Binance balance (live mode only)
+   */
+  async syncWithExchange(): Promise<void> {
+    if (this.mode !== 'live' || !this.userId) return;
+    
+    const now = Date.now();
+    if (now - this.lastBalanceSync < this.BALANCE_SYNC_INTERVAL_MS) return;
+    
+    try {
+      const balance = await getBalanceFromWebSocket(this.userId, 'USDT');
+      if (balance && balance.total > 0) {
+        const oldTotal = this.totalCapitalUsd;
+        // Use wallet balance (free + locked/margin)
+        this.totalCapitalUsd = balance.total;
+        this.lastBalanceSync = now;
+        
+        if (Math.abs(oldTotal - this.totalCapitalUsd) > 0.01) {
+          console.log(`[CapitalPool] Live balance synced: $${oldTotal.toFixed(2)} -> $${this.totalCapitalUsd.toFixed(2)}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[CapitalPool] Failed to sync balance:`, err);
+    }
+  }
+  
+  /**
    * Reserve capital for a potential trade
    */
   reserve(agentId: string, amountUsd: number): boolean {
     const available = this.getAvailableCapital();
     if (amountUsd > available) {
-      console.log(`[CapitalPool] Cannot reserve $${amountUsd} for ${agentId}, only $${available} available`);
+      console.log(`[CapitalPool] Cannot reserve $${amountUsd} for ${agentId}, only $${available.toFixed(2)} available`);
       return false;
     }
     
     const current = this.reservedByAgent.get(agentId) || 0;
     this.reservedByAgent.set(agentId, current + amountUsd);
-    console.log(`[CapitalPool] Reserved $${amountUsd} for ${agentId}`);
+    console.log(`[CapitalPool] Reserved $${amountUsd.toFixed(2)} for ${agentId} (available: $${(available - amountUsd).toFixed(2)})`);
     return true;
   }
   
@@ -165,25 +201,42 @@ export class CapitalPool {
     this.totalCapitalUsd = newTotalUsd;
     console.log(`[CapitalPool] Total capital set to $${newTotalUsd}`);
   }
+  
+  /**
+   * Get current mode
+   */
+  getMode(): 'paper' | 'live' {
+    return this.mode;
+  }
 }
 
-// Per-user capital pools (not a global singleton anymore)
+// Per-user capital pools - separate pools for paper and live
 const userCapitalPools = new Map<string, CapitalPool>();
 
-export function getCapitalPool(userId: string, initialCapital?: number): CapitalPool | null {
+/**
+ * Get pool key - includes mode to allow paper + live simultaneously
+ */
+function getPoolKey(userId: string, mode?: 'paper' | 'live'): string {
+  return mode ? `${userId}_${mode}` : userId;
+}
+
+export function getCapitalPool(userId: string, initialCapital?: number, mode?: 'paper' | 'live'): CapitalPool | null {
   if (!userId) return null;
   
-  let pool = userCapitalPools.get(userId);
+  const key = getPoolKey(userId, mode);
+  let pool = userCapitalPools.get(key);
   if (!pool && initialCapital !== undefined) {
-    pool = new CapitalPool(initialCapital);
-    userCapitalPools.set(userId, pool);
+    pool = new CapitalPool(initialCapital, mode || 'paper', userId);
+    userCapitalPools.set(key, pool);
   }
   return pool || null;
 }
 
-export function resetCapitalPool(userId: string, initialCapital: number, _mode?: 'paper' | 'live'): CapitalPool {
-  const pool = new CapitalPool(initialCapital);
-  userCapitalPools.set(userId, pool);
+export function resetCapitalPool(userId: string, initialCapital: number, mode: 'paper' | 'live' = 'paper'): CapitalPool {
+  const key = getPoolKey(userId, mode);
+  const pool = new CapitalPool(initialCapital, mode, userId);
+  userCapitalPools.set(key, pool);
+  console.log(`[CapitalPool] Reset ${mode} pool for user ${userId} with $${initialCapital}`);
   return pool;
 }
 
@@ -493,6 +546,11 @@ export class SimpleAgent {
     const symbol = this.config.symbol;
     const lastCandle = candles[candles.length - 1];
     const currentPrice = lastCandle.close;
+    
+    // Sync with exchange balance before checking capital (live mode)
+    if (this.config.mode === 'live') {
+      await this.config.capitalPool.syncWithExchange();
+    }
     
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();
