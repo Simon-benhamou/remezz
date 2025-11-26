@@ -48,6 +48,7 @@ type Exchange = {
   // For live sync
   fetchPositions?: (symbols?: string[]) => Promise<any[]>;
   fetchMyTrades?: (symbol: string, since?: number, limit?: number) => Promise<any[]>;
+  cancelOrder?: (orderId: string, symbol: string) => Promise<any>;
   cancelAllOrders?: (symbol: string) => Promise<any>;
 };
 
@@ -683,9 +684,9 @@ export class SimpleAgent {
       if (exitSignal.shouldExit) {
         logger.info(`🔴 [${symbol}] EXIT SIGNAL: reason=${exitSignal.reason} | PnL=${exitSignal.pnlPct?.toFixed(2)}% | holdMin=${exitSignal.holdMinutes?.toFixed(0)}`);
         await this.closePosition(this.position!, currentPrice, exitSignal.reason || 'unknown');
-      } else if (exitSignal.newStopLoss) {
-        // Update trailing stop in DB if needed
-        logger.info(`📈 [${symbol}] Trailing stop updated: $${exitSignal.newStopLoss.toFixed(4)}`);
+      } else if (exitSignal.newStopLoss && exitSignal.newStopLoss !== this.position?.stopLoss) {
+        // Update trailing stop on exchange (live mode) or just log (paper mode)
+        await this.updateTrailingStopOnExchange(exitSignal.newStopLoss);
       }
       
     } catch (error) {
@@ -738,6 +739,9 @@ export class SimpleAgent {
     } else {
       // Live close
       try {
+        // FIRST: Cancel any open SL/TP orders to avoid orphaned orders
+        await this.cancelStopLossOnExchange();
+        
         const closeSide = position.side === 'long' ? 'sell' : 'buy';
         const order = position.side === 'long'
           ? await this.config.exchange.createMarketSellOrder(symbol, position.qty, { reduceOnly: true })
@@ -942,29 +946,113 @@ export class SimpleAgent {
     return fetchPromise;
   }
   
-  private async setStopLossOnExchange(position: Position): Promise<void> {
+  /**
+   * Cancel existing stop loss order on exchange
+   */
+  private async cancelStopLossOnExchange(): Promise<void> {
+    if (this.config.mode === 'paper') return;
+    
+    const symbol = this.config.symbol;
+    
+    // If we have a specific SL order ID, cancel just that order
+    if (this.position?.stopLossOrderId) {
+      try {
+        await this.config.exchange.cancelOrder?.(this.position.stopLossOrderId, symbol);
+        logger.info(`🗑️ [${symbol}] Cancelled SL order ${this.position.stopLossOrderId}`);
+        if (this.position) {
+          this.position.stopLossOrderId = undefined;
+        }
+      } catch (error: any) {
+        // Order might already be filled or cancelled
+        if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
+          logger.warn(`⚠️ [${symbol}] Failed to cancel SL order:`, error);
+        }
+      }
+    }
+    
+    // Also cancel all open orders for safety (in case of orphaned orders)
+    if (this.config.exchange.cancelAllOrders) {
+      try {
+        await this.config.exchange.cancelAllOrders(symbol);
+        logger.info(`🗑️ [${symbol}] Cancelled all open orders`);
+      } catch (error) {
+        logger.warn(`⚠️ [${symbol}] Failed to cancel all orders:`, error);
+      }
+    }
+  }
+  
+  /**
+   * Set or update stop loss on exchange
+   * Cancels existing SL first if present
+   */
+  private async setStopLossOnExchange(position: Position, isUpdate: boolean = false): Promise<void> {
     if (!position.stopLoss) return;
+    if (this.config.mode === 'paper') return;
     
     const symbol = this.config.symbol;
     const side = position.side === 'long' ? 'sell' : 'buy';
     
     try {
-      await this.config.exchange.createOrder(
+      // Cancel existing SL order first if updating
+      if (isUpdate && this.position?.stopLossOrderId) {
+        try {
+          await this.config.exchange.cancelOrder?.(this.position.stopLossOrderId, symbol);
+          logger.info(`🔄 [${symbol}] Cancelled old SL order for update`);
+        } catch (error: any) {
+          // Ignore if order doesn't exist
+          if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
+            logger.warn(`⚠️ [${symbol}] Failed to cancel old SL:`, error);
+          }
+        }
+      }
+      
+      // Create new SL order
+      const slOrder = await this.config.exchange.createOrder(
         symbol,
-        'market',
+        'STOP_MARKET',  // Use STOP_MARKET for Binance futures
         side,
         position.qty,
         undefined,
         {
           stopPrice: position.stopLoss,
-          triggerPrice: position.stopLoss,
           reduceOnly: true,
+          workingType: 'MARK_PRICE',  // Use mark price to avoid manipulation
         }
       );
-      logger.info(`🛡️ [${symbol}] Stop loss set at $${position.stopLoss.toFixed(4)}`);
+      
+      // Store the SL order ID for later cancellation/update
+      if (this.position) {
+        this.position.stopLossOrderId = slOrder.id;
+      }
+      
+      const action = isUpdate ? 'UPDATED' : 'SET';
+      logger.info(`🛡️ [${symbol}] Stop loss ${action} at $${position.stopLoss.toFixed(4)} (order: ${slOrder.id})`);
     } catch (error) {
       logger.warn(`⚠️ [${symbol}] Failed to set stop loss on exchange:`, error);
     }
+  }
+  
+  /**
+   * Update trailing stop on exchange when price moves favorably
+   */
+  private async updateTrailingStopOnExchange(newStopPrice: number): Promise<void> {
+    if (this.config.mode === 'paper') return;
+    if (!this.position) return;
+    
+    const symbol = this.config.symbol;
+    const oldSL = this.position.stopLoss;
+    
+    // Only update if the new stop is better (higher for long, lower for short)
+    if (this.position.side === 'long' && newStopPrice <= (oldSL || 0)) return;
+    if (this.position.side === 'short' && newStopPrice >= (oldSL || Infinity)) return;
+    
+    // Update position with new SL
+    this.position.stopLoss = newStopPrice;
+    
+    // Update on exchange
+    await this.setStopLossOnExchange(this.position, true);
+    
+    logger.info(`📈 [${symbol}] Trailing stop moved: $${oldSL?.toFixed(4)} → $${newStopPrice.toFixed(4)}`);
   }
   
   // ==========================================================================

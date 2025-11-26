@@ -185,6 +185,7 @@ export interface Position {
   entryTime: number;
   stopLoss?: number;
   orderId?: string;
+  stopLossOrderId?: string;  // Track SL order ID for updates/cancellation
   // Trailing stop tracking
   highWaterMark?: number;  // Highest price since entry (for long)
   lowWaterMark?: number;   // Lowest price since entry (for short)
