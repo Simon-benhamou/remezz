@@ -29,7 +29,7 @@ import {
   SyncOutlined,
   InfoCircleOutlined,
 } from '../icons';
-import PriceChart from '../charts/PriceChart';
+import ProfessionalChart from '../components/charts/ProfessionalChart';
 import LiveMetrics from '../components/LiveMetrics';
 import StrategyPanel from '../components/StrategyPanel';
 import MarketContextCard from '../components/MarketContextCard';
@@ -1274,18 +1274,30 @@ export default function SessionCockpitPage() {
             >
               {shouldShowContent(LoadingPhase.CORE_DATA) ? (
                 <div className="session-chart-card w-full">
-                  <PriceChart
+                  <ProfessionalChart
                     symbol={status?.symbol}
-                    price={status?.price}
-                    support={status?.sr?.support}
-                    resistance={status?.sr?.resistance}
-                    agentPlan={agent?.plan}
-                    agentPos={agent?.pos}
-                    pivots={status?.pivots}
-                    agentExit={agent?.exit}
+                    sessionId={sessionId}
                     orders={filteredOrders}
-                    trades={filteredTrades}
-                    projection={analysis?.projection}
+                    fills={filteredTrades}
+                    position={agent?.pos ? {
+                      entryPrice: agent.pos.entryPrice,
+                      stopPrice: agent.pos.stopPrice || agent.pos.stop,
+                      targets: agent.pos.targets || [],
+                      side: agent.pos.side,
+                    } : null}
+                    technicalLevels={{
+                      support: status?.sr?.support ?? null,
+                      resistance: status?.sr?.resistance ?? null,
+                      supports: [],
+                      resistances: [],
+                      pivots: status?.pivots || null,
+                      srBias: null,
+                    }}
+                    strategy={strategy ? {
+                      label: strategy.label || strategy.strategy,
+                      bias: strategy.bias,
+                      confidence: strategy.confidence,
+                    } : null}
                   />
                 </div>
               ) : (

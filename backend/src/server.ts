@@ -6,6 +6,7 @@ import "dotenv/config";
 import http from "http";
 import express from "express";
 import cors from "cors";
+import jwt from "jsonwebtoken";
 import { WebSocketServer, WebSocket } from "ws";
 import { configureLogging, createLogger } from "./utils/logger.js";
 import { getConfig } from "./utils/env.js";
@@ -1436,18 +1437,53 @@ app.get("/api/crypto/ranking", async (req, res) => {
 // Analysis
 app.get("/api/analysis", async (req, res) => {
   try {
+    const userId = (req as any)?.user?.id;
     const { symbol } = req.query;
+    
+    if (!symbol) {
+      return res.status(400).json({ error: "Symbol required" });
+    }
+    
+    // Try to get real analysis from running agent
+    const userAgentData = userAgents.get(userId);
+    if (userAgentData) {
+      const normalizedSymbol = String(symbol).toUpperCase().replace(/[/:]/g, '');
+      const agent = userAgentData.agents.find(a => {
+        const agentSymbol = a.getStatus().symbol.toUpperCase().replace(/[/:]/g, '');
+        return agentSymbol === normalizedSymbol;
+      });
+      
+      if (agent) {
+        const status = agent.getStatus();
+        const state = agent.getAgentState?.() || {};
+        
+        return res.json({
+          symbol,
+          technical: {
+            last: state.pos?.currentPrice || null,
+            momentum: status.marketConditions?.btcMomentum6h || 0,
+            btcAboveMa50: status.marketConditions?.btcAboveMa50,
+          },
+          plan: state.plan,
+          position: state.pos,
+          marketConditions: status.marketConditions,
+          lastTickAt: status.lastTickAt,
+          tickCount: status.tickCount,
+        });
+      }
+    }
+    
+    // Fallback for symbol not being traded
     res.json({
       symbol,
-      analysis: {
-        trend: "bullish",
-        momentum: "positive",
-        volatility: "high",
-        recommendation: "wait_for_signal",
-      },
+      technical: null,
+      plan: null,
+      position: null,
+      marketConditions: null,
+      message: "No active agent for this symbol",
     });
   } catch (error) {
-    res.status(500).json({ error: "Failed" });
+    res.status(500).json({ error: "Failed to get analysis" });
   }
 });
 
@@ -1630,22 +1666,91 @@ app.get("/api/ops/agent-health", async (req, res) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
-const wsClients = new Set<WebSocket>();
+// ✅ Enhanced WebSocket client tracking with user/symbol subscription
+interface WsClientData {
+  ws: WebSocket;
+  userId?: string;
+  sessionId?: string;
+  subscribedSymbol?: string;
+  authenticated: boolean;
+}
+
+const wsClients = new Map<WebSocket, WsClientData>();
 
 wss.on("connection", (ws) => {
-  wsClients.add(ws);
+  // Initialize client data
+  wsClients.set(ws, { ws, authenticated: false });
   logger.debug("WebSocket client connected");
+  
+  ws.on("message", async (rawMsg) => {
+    try {
+      const msg = JSON.parse(rawMsg.toString());
+      const clientData = wsClients.get(ws);
+      if (!clientData) return;
+      
+      // Handle authentication
+      if (msg.type === 'hello' && msg.token) {
+        try {
+          const decoded = jwt.verify(msg.token, cfg.JWT_SECRET || cfg.APP_API_KEY || 'default-secret') as any;
+          if (decoded.userId) {
+            clientData.userId = decoded.userId;
+            clientData.authenticated = true;
+            ws.send(JSON.stringify({ type: 'hello_ok', expiresAt: new Date(Date.now() + 3600000).toISOString() }));
+            logger.debug(`WS authenticated for user ${decoded.userId}`);
+          }
+        } catch (err) {
+          ws.send(JSON.stringify({ type: 'error', code: 'ws.auth.invalid' }));
+        }
+        return;
+      }
+      
+      // Handle subscription
+      if (msg.type === 'sub') {
+        if (msg.symbol) clientData.subscribedSymbol = msg.symbol;
+        if (msg.sessionId) clientData.sessionId = msg.sessionId;
+        ws.send(JSON.stringify({ type: 'sub_ok', symbol: msg.symbol, sessionId: msg.sessionId }));
+        logger.debug(`WS subscribed to ${msg.symbol || 'all'} for session ${msg.sessionId || 'none'}`);
+        return;
+      }
+      
+      // Handle token refresh
+      if (msg.type === 'refresh' && msg.token) {
+        try {
+          const decoded = jwt.verify(msg.token, cfg.JWT_SECRET || cfg.APP_API_KEY || 'default-secret') as any;
+          if (decoded.userId) {
+            clientData.userId = decoded.userId;
+            clientData.authenticated = true;
+            ws.send(JSON.stringify({ type: 'refresh_ok', expiresAt: new Date(Date.now() + 3600000).toISOString() }));
+          }
+        } catch {
+          ws.send(JSON.stringify({ type: 'error', code: 'ws.auth.refresh_failed' }));
+        }
+        return;
+      }
+    } catch {
+      // Ignore malformed messages
+    }
+  });
   
   ws.on("close", () => wsClients.delete(ws));
   ws.on("error", () => wsClients.delete(ws));
 });
 
-function broadcast(type: string, data: any) {
+// ✅ Broadcast with optional symbol filtering - only sends to clients subscribed to that symbol
+function broadcast(type: string, data: any, symbol?: string) {
   const message = JSON.stringify({ type, data, timestamp: Date.now() });
-  for (const ws of wsClients) {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(message);
+  for (const [ws, clientData] of wsClients) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    
+    // If symbol provided, only send to clients subscribed to that symbol
+    if (symbol && clientData.subscribedSymbol) {
+      // Normalize symbols for comparison (remove slashes and colons)
+      const normalizedSub = clientData.subscribedSymbol.toUpperCase().replace(/[/:]/g, '');
+      const normalizedData = symbol.toUpperCase().replace(/[/:]/g, '');
+      if (normalizedSub !== normalizedData) continue;
     }
+    
+    ws.send(message);
   }
 }
 
@@ -1687,12 +1792,13 @@ process.on('SIGINT', shutdown);
       logger.info('📡 Initializing Binance WebSocket...');
       const binanceWs = getBinanceWebSocket();
       binanceWs.onTicker((ticker) => {
+        // ✅ Pass symbol to broadcast for filtering
         broadcast('price_update', {
           symbol: ticker.symbol,
           last: ticker.last,
           bid: ticker.bid,
           ask: ticker.ask,
-        });
+        }, ticker.symbol);
       });
     }
   } catch (e) { 
