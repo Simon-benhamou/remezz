@@ -368,25 +368,45 @@ export default function PriceChart({
     }
     
     const timestamp = Math.floor(Date.now() / 1000);
-    const newPoint = { time: timestamp, value: Number(price.toFixed(4)) };
+    const newValue = Number(price.toFixed(4));
+    
+    // Extra validation for the new value
+    if (!isFinite(newValue) || newValue <= 0 || newValue === null) {
+      console.warn('Invalid price value:', price, '→', newValue);
+      return;
+    }
+    
+    const newPoint = { time: timestamp, value: newValue };
     
     setChartData(prev => {
       // Filter out any invalid points and points with same/newer timestamp
       const filtered = prev.filter(p => 
+        p && 
+        p.time != null && 
         p.time < timestamp && 
         typeof p.value === 'number' && 
         isFinite(p.value) && 
-        p.value > 0
+        p.value > 0 &&
+        p.value !== null
       );
       const updated = [...filtered, newPoint];
       
       // Keep last 2000 points for performance
       const trimmed = updated.slice(-2000);
       
+      // Final validation before setting data
+      const validData = trimmed.filter(p => 
+        p && 
+        typeof p.time === 'number' && 
+        typeof p.value === 'number' && 
+        isFinite(p.value) && 
+        p.value > 0
+      );
+      
       // Update chart immediately for real-time display
-      if (seriesRef.current && trimmed.length > 0) {
+      if (seriesRef.current && validData.length > 0) {
         try {
-          seriesRef.current.setData(trimmed);
+          seriesRef.current.setData(validData);
           // Auto-scroll to latest price
           chartRef.current?.timeScale().scrollToRealTime();
         } catch (err) {
@@ -394,7 +414,7 @@ export default function PriceChart({
         }
       }
       
-      return trimmed;
+      return validData;
     });
   }, [price, isLoadingHistory]);
 
@@ -405,11 +425,29 @@ export default function PriceChart({
       trailSeriesRef.current.setData([]);
       return;
     }
-    const data = hist.map((p:any)=> ({ time: Math.floor(p.ts / 1000), value: p.price }));
-    if (typeof agentPos?.stop === 'number' && isFinite(agentPos.stop)) {
+    // Filter and validate trail data
+    const data = hist
+      .filter((p: any) => p && typeof p.ts === 'number' && typeof p.price === 'number' && isFinite(p.price) && p.price > 0)
+      .map((p: any) => ({ time: Math.floor(p.ts / 1000), value: p.price }));
+    
+    if (typeof agentPos?.stop === 'number' && isFinite(agentPos.stop) && agentPos.stop > 0) {
       data.push({ time: Math.floor(Date.now() / 1000), value: agentPos.stop });
     }
-    trailSeriesRef.current.setData(data);
+    
+    // Final validation
+    const validData = data.filter((p: any) => 
+      p && 
+      typeof p.time === 'number' && 
+      typeof p.value === 'number' && 
+      isFinite(p.value) && 
+      p.value > 0
+    );
+    
+    try {
+      trailSeriesRef.current.setData(validData);
+    } catch (err) {
+      console.warn('Trail series setData error:', err);
+    }
   }, [agentPos?.trail, agentPos?.stop]);
 
   // ✅ FIX: Support/Resistance depuis status (backend calcule)
