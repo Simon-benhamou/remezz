@@ -53,11 +53,13 @@ export const MomentumConfig = {
   },
   
   // Signal d'entrée SHORT (Bear Market: BTC < SMA200)
+  // V5.4: BB Breakdown - Plus stable (10/12 mois positifs)
   ENTRY_SHORT: {
-    // Conditions SHORT
-    ROC_DROP_MIN: -0.02,         // ROC 5 < -2% (drop significatif)
-    VOL_SPIKE: 2.5,              // Volume > 2.5x moyenne (panic selling)
+    // Conditions SHORT optimisées
+    ROC_DROP_MIN: -0.015,        // ROC 5 < -1.5% (était -2%)
+    VOL_SPIKE: 2.0,              // Volume > 2x moyenne (était 2.5x)
     PRICE_BELOW_MA20: true,      // Prix < MA20
+    PRICE_BELOW_BB_LOWER: true,  // Prix < BB Lower (nouveau filtre)
     MAX_CONSEC_DOWN: 5,          // Max 5 bougies rouges (pas oversold)
   },
   
@@ -521,14 +523,19 @@ export function checkMomentumSignal(
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // V5.3 BEAR REGIME → SHORT ONLY
+  // V5.4 BEAR REGIME → SHORT ONLY (BB Breakdown)
   // ═══════════════════════════════════════════════════════════════════════════
   if (btcInBearRegime) {
-    // SHORT conditions V5.3
+    // SHORT conditions V5.4 - BB Breakdown
     const dropOk = roc5 <= MomentumConfig.ENTRY_SHORT.ROC_DROP_MIN;
     const volSpikeOk = volRatio >= MomentumConfig.ENTRY_SHORT.VOL_SPIKE;
-    const priceBelowOk = priceBelowMa20;
+    const priceBelowMa20Ok = priceBelowMa20;
     const consecDownOk = consecDown <= (MomentumConfig.ENTRY_SHORT.MAX_CONSEC_DOWN || 5);
+    
+    // V5.4: BB Breakdown filter
+    const priceBelowBBLower = MomentumConfig.ENTRY_SHORT.PRICE_BELOW_BB_LOWER 
+      ? close < bb.lower 
+      : true;
     
     if (!isBearish) {
       return { valid: false, reason: 'bear_regime:bullish_candle', features };
@@ -554,15 +561,22 @@ export function checkMomentumSignal(
         features 
       };
     }
-    if (!priceBelowOk) {
+    if (!priceBelowMa20Ok) {
       return { 
         valid: false, 
         reason: `bear_regime:price_above_ma20`, 
         features 
       };
     }
+    if (!priceBelowBBLower) {
+      return { 
+        valid: false, 
+        reason: `bear_regime:price_above_bb_lower(${close.toFixed(4)} >= ${bb.lower.toFixed(4)})`, 
+        features 
+      };
+    }
     
-    // ✅ ALL SHORT CONDITIONS MET
+    // ✅ ALL SHORT CONDITIONS MET (V5.4 BB Breakdown)
     const confidence = Math.min(1, (volRatio / 4) * 0.3 + (Math.abs(roc5) / 0.04) * 0.3 + 0.4);
     return { 
       valid: true, 

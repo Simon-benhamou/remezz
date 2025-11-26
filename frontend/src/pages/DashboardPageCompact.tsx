@@ -310,7 +310,7 @@ export default function DashboardPageCompact(){
             <Tooltip 
               title={
                 <div style={{ maxWidth: 400 }}>
-                  <div style={{ fontWeight: 'bold', marginBottom: 8 }}>📋 Stratégie V5.3 - LONG + SHORT</div>
+                  <div style={{ fontWeight: 'bold', marginBottom: 8 }}>📋 Stratégie V5.4 - LONG + SHORT</div>
                   
                   <div style={{ marginBottom: 8 }}>
                     {marketConditions.btcAboveMa50 
@@ -323,13 +323,13 @@ export default function DashboardPageCompact(){
                     <div>BB breakout + ROC10&gt;2.5% + Vol&gt;2x</div>
                     
                     <div style={{ marginTop: 8, marginBottom: 4 }}><strong>📉 SHORT (Bear):</strong></div>
-                    <div>ROC5&lt;-2% + Vol&gt;2.5x + Price&lt;MA20</div>
+                    <div>BB breakdown + ROC5&lt;-1.5% + Vol&gt;2x</div>
                     
                     <div style={{ marginTop: 8 }}><strong>Exit:</strong> SL 1.5% / TP 3% / Trail +1.0%</div>
                   </div>
                   
                   <div style={{ marginTop: 8, fontSize: 10, opacity: 0.7 }}>
-                    Backtest 12 mois: +1990% ROI, 68.7% WR, 10/12 mois positifs
+                    Backtest 12 mois: +2022% ROI, 67.8% WR, 9/12 mois positifs
                   </div>
                   
                   {marketConditions.reason && (
