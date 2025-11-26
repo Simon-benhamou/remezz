@@ -41,7 +41,7 @@ const CONFIG = {
     VOL_MULTIPLIER: 5,
     BTC_MOMENTUM_MIN: 0.75,
     BTC_MOMENTUM_PERIOD: 24,
-    ALLOWED_DAYS: [0, 1, 3, 4],
+    ALLOWED_DAYS: [0, 1, 2, 3, 4, 5, 6], // ALL DAYS for this test
   },
   
   // Exit
