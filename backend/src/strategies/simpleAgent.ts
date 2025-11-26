@@ -231,6 +231,7 @@ export class SimpleAgent {
   private running = false;
   private tickIntervalId: NodeJS.Timeout | null = null;
   private lastMarketConditions: MarketConditions | null = null;
+  private tickCount: number = 0;
   
   // Cache pour éviter trop d'appels API
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
@@ -314,6 +315,13 @@ export class SimpleAgent {
     
     const now = new Date();
     const symbol = this.config.symbol;
+    this.tickCount = (this.tickCount || 0) + 1;
+    
+    // Log every 5 minutes (5 ticks) to show agent is alive
+    if (this.tickCount % 5 === 1) {
+      const hasPosition = this.position ? `📊 IN ${this.position.side.toUpperCase()}` : '👀 Watching';
+      console.log(`[SimpleAgent:${symbol}] 🔄 Tick #${this.tickCount} | ${hasPosition} | ${now.toISOString()}`);
+    }
     
     try {
       // 🔄 LIVE MODE: Sync with exchange first to detect stop loss executions

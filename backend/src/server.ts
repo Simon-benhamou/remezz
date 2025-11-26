@@ -115,6 +115,65 @@ async function getExchangeForUser(userId: string): Promise<any> {
 app.get("/api/status", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
+    const { sessionId } = req.query;
+    
+    // If sessionId provided, return session-specific status
+    if (sessionId && typeof sessionId === 'string') {
+      // First try to find running agent with this session
+      const userAgentData = userId ? userAgents.get(userId) : null;
+      const runningAgent = userAgentData?.agents.find(a => a.getStatus().sessionId === sessionId);
+      
+      if (runningAgent) {
+        const agentStatus = runningAgent.getStatus();
+        return res.json({
+          server: "ok",
+          database: "connected",
+          session: {
+            id: sessionId,
+            symbol: agentStatus.symbol,
+            mode: runningAgent.getMode(),
+            state: agentStatus.running ? 'running' : 'stopped',
+            running: agentStatus.running,
+          },
+          agent: agentStatus,
+          symbol: agentStatus.symbol,
+        });
+      }
+      
+      // If not running, try to load from database
+      const dbSession = await prisma.agentSession.findUnique({
+        where: { id: sessionId },
+      });
+      
+      if (dbSession) {
+        return res.json({
+          server: "ok",
+          database: "connected",
+          session: {
+            id: dbSession.id,
+            symbol: dbSession.symbol,
+            mode: dbSession.mode,
+            state: dbSession.stoppedAt ? 'stopped' : (dbSession.haltedAt ? 'halted' : 'idle'),
+            running: false,
+            startedAt: dbSession.startedAt,
+            stoppedAt: dbSession.stoppedAt,
+            haltedAt: dbSession.haltedAt,
+          },
+          agent: null,
+          symbol: dbSession.symbol,
+        });
+      }
+      
+      // Session not found
+      return res.json({
+        server: "ok",
+        database: "connected",
+        session: null,
+        error: "Session not found",
+      });
+    }
+    
+    // No sessionId - return general status
     const userAgentData = userId ? userAgents.get(userId) : null;
     
     if (!userAgentData) {

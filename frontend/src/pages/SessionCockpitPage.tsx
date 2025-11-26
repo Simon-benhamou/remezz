@@ -814,12 +814,13 @@ export default function SessionCockpitPage() {
     };
   }, [API_BASE, sessionId, symbol]);
 
-  if (!sessionId) return <Navigate to="/sessions" replace />;
+  if (!sessionId) return <Navigate to="/agents" replace />;
   const hasSession = !!status?.session?.id;
   const isLoading = loadingState.phase !== LoadingPhase.COMPLETE;
 
-  // Don't redirect while loading; only redirect if definitively no session
-  if (!isLoading && !hasSession) return <Navigate to="/sessions" replace />;
+  // Don't redirect while loading; only redirect if definitively no session after 5 seconds
+  // Give the API time to respond before redirecting
+  if (!isLoading && !hasSession && loadingState.errors.length > 0) return <Navigate to="/agents" replace />;
 
   // Hide loading on user interaction
   React.useEffect(() => {
