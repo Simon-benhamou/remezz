@@ -613,17 +613,67 @@ app.get("/api/agent/state", async (req, res) => {
     
     const userAgentData = userAgents.get(userId);
     if (!userAgentData) {
-      return res.json({ state: null });
+      return res.json(null);
     }
     
+    // If sessionId provided, return state for that specific agent
+    if (sessionId && typeof sessionId === 'string') {
+      const agent = userAgentData.agents.find(a => a.getStatus().sessionId === sessionId);
+      
+      if (agent) {
+        const agentStatus = agent.getStatus();
+        const agentState = agent.getAgentState?.() || {};
+        
+        return res.json({
+          running: agentStatus.running,
+          state: agentStatus.running 
+            ? (agentStatus.hasPosition ? 'MANAGE' : 'ARMED') 
+            : 'STOPPED',
+          hasPosition: agentStatus.hasPosition,
+          symbol: agentStatus.symbol,
+          sessionId: agentStatus.sessionId,
+          marketConditions: agentStatus.marketConditions,
+          // Agent state from getAgentState() method
+          pos: agentState.pos,
+          plan: agentState.plan,
+          exit: agentState.exit,
+          profile: agentState.profile,
+          balance: {
+            freeUsd: userAgentData.capitalPool.getAvailableCapital(),
+          },
+        });
+      }
+      
+      // Agent not running, check database
+      const dbSession = await prisma.agentSession.findUnique({
+        where: { id: sessionId },
+      });
+      
+      if (dbSession) {
+        return res.json({
+          running: false,
+          state: dbSession.stoppedAt ? 'STOPPED' : (dbSession.haltedAt ? 'HALT' : 'IDLE'),
+          hasPosition: false,
+          symbol: dbSession.symbol,
+          sessionId: dbSession.id,
+        });
+      }
+      
+      return res.json(null);
+    }
+    
+    // No sessionId - return overview of all agents
     const agentStatuses = userAgentData.agents.map(a => a.getStatus());
     
     res.json({ 
-      state: {
-        running: agentStatuses.some(s => s.running),
-        positions: agentStatuses,
-        capitalPool: userAgentData.capitalPool.getStatus(),
-      }
+      running: agentStatuses.some(s => s.running),
+      agents: agentStatuses.map(s => ({
+        symbol: s.symbol,
+        sessionId: s.sessionId,
+        running: s.running,
+        hasPosition: s.hasPosition,
+      })),
+      capitalPool: userAgentData.capitalPool.getStatus(),
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to get agent state" });

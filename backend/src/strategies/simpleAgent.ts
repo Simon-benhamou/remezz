@@ -233,6 +233,16 @@ export class SimpleAgent {
   private lastMarketConditions: MarketConditions | null = null;
   private tickCount: number = 0;
   
+  // Current trading state for frontend display
+  private currentBias: 'long' | 'short' | null = null;
+  private lastSignal: {
+    entryZone?: [number, number];
+    stopDistance?: number;
+    targets?: number[];
+    targetPcts?: number[];
+  } | null = null;
+  private lastExit: { ts: number; price: number; reason: string } | null = null;
+  
   // Cache pour éviter trop d'appels API
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
   private btcCandleCache: { candles: Candle[]; fetchedAt: number } | null = null;
@@ -374,6 +384,23 @@ export class SimpleAgent {
       
       if (signal.valid && signal.side) {
         console.log(`[SimpleAgent:${symbol}] ✅ SIGNAL ${signal.side.toUpperCase()}: ${signal.reason}`);
+        
+        // Store signal info for frontend display
+        this.currentBias = signal.side;
+        const currentPrice = candles[candles.length - 1].close;
+        this.lastSignal = {
+          entryZone: [
+            currentPrice * (signal.side === 'long' ? 0.998 : 1.002),
+            currentPrice * (signal.side === 'long' ? 1.002 : 0.998),
+          ],
+          stopDistance: currentPrice * MomentumConfig.EXIT.STOP_LOSS_PCT / 100,
+          targets: [
+            currentPrice * (signal.side === 'long' ? 1.01 : 0.99),
+            currentPrice * (signal.side === 'long' ? 1.02 : 0.98),
+            currentPrice * (signal.side === 'long' ? 1.03 : 0.97),
+          ],
+          targetPcts: [1, 2, 3],
+        };
         
         // Notify
         this.config.onSignal?.({
@@ -561,6 +588,15 @@ export class SimpleAgent {
     console.log(`  Exit: $${currentPrice.toFixed(4)}`);
     console.log(`  PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`);
     console.log(`  Reason: ${reason}`);
+    
+    // Store exit info for frontend display
+    this.lastExit = {
+      ts: Date.now(),
+      price: currentPrice,
+      reason,
+    };
+    this.currentBias = null;
+    this.lastSignal = null;
     
     if (this.config.mode === 'paper') {
       // Paper close
@@ -946,6 +982,61 @@ export class SimpleAgent {
       sessionId: this.config.sessionId,
       marketConditions: this.lastMarketConditions,
       capitalPoolStatus: this.config.capitalPool.getStatus(),
+    };
+  }
+  
+  /**
+   * Get detailed agent state for frontend display
+   */
+  getAgentState(): {
+    pos: Position | null;
+    plan: { 
+      bias?: 'long' | 'short' | null; 
+      zone?: { from: number; to: number; mid: number } | null;
+      stopDistance?: number;
+      rPrices?: Array<{ r: number; price: number; pct: number }>;
+    } | null;
+    exit: { ts: number; price: number; reason: string } | null;
+    profile: {
+      riskPerTradePct: number;
+      dailyLossLimitPct: number;
+      maxLeverage: number;
+      aggressiveness: string;
+      availableUsd: number;
+    };
+    balance: {
+      freeUsd: number;
+      totalUsd: number;
+    };
+  } {
+    return {
+      pos: this.position,
+      plan: this.currentBias ? {
+        bias: this.currentBias,
+        zone: this.lastSignal?.entryZone ? {
+          from: this.lastSignal.entryZone[0],
+          to: this.lastSignal.entryZone[1],
+          mid: (this.lastSignal.entryZone[0] + this.lastSignal.entryZone[1]) / 2,
+        } : null,
+        stopDistance: this.lastSignal?.stopDistance,
+        rPrices: this.lastSignal?.targets?.map((t, i) => ({
+          r: i + 1,
+          price: t,
+          pct: this.lastSignal?.targetPcts?.[i] || (i + 1) * 0.5,
+        })),
+      } : null,
+      exit: this.lastExit,
+      profile: {
+        riskPerTradePct: this.config.riskPerTradePct,
+        dailyLossLimitPct: 3, // Default
+        maxLeverage: MomentumConfig.LEVERAGE[this.config.symbol] || 4,
+        aggressiveness: 'reactive', // Default
+        availableUsd: this.config.capitalPool.getAvailableCapital(),
+      },
+      balance: {
+        freeUsd: this.config.capitalPool.getAvailableCapital(),
+        totalUsd: this.config.capitalPool.getStatus().totalUsd,
+      },
     };
   }
   
