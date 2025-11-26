@@ -723,13 +723,32 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
     // For paper mode or if exchange fetch fails, use agent capital pool
     const userAgentData = userAgents.get(userId);
     if (!userAgentData) {
+      // No agent running - read from UserSettings database
+      let paperBalance = 10000; // default
+      if (mode === 'paper' && userId) {
+        try {
+          const setting = await prisma.userSetting.findUnique({
+            where: {
+              userId_key: {
+                userId: userId,
+                key: 'paperTradingCapital'
+              }
+            }
+          });
+          if (setting && setting.value) {
+            paperBalance = parseFloat(setting.value) || 10000;
+          }
+        } catch (dbError) {
+          logger.warn('Failed to read paper balance from DB:', dbError);
+        }
+      }
       return res.json({
-        totalUSD: mode === 'paper' ? 10000 : 0, // Default paper balance
-        freeUSD: mode === 'paper' ? 10000 : 0,
+        totalUSD: mode === 'paper' ? paperBalance : 0,
+        freeUSD: mode === 'paper' ? paperBalance : 0,
         reservedUSD: 0,
         inPositionsUSD: 0,
         ts: Date.now(),
-        source: 'default',
+        source: 'database',
       });
     }
     
@@ -786,23 +805,40 @@ app.post("/api/capital/paper/set-balance", async (req, res) => {
       return res.status(400).json({ error: "Invalid initialUSD value" });
     }
     
-    // Update the capital pool directly - this is a GLOBAL setting for the user
-    // No need to restart agents as they pull from the shared pool
+    // 1. Save to database (UserSettings) for persistence
+    await prisma.userSetting.upsert({
+      where: {
+        userId_key: {
+          userId: userId,
+          key: 'paperTradingCapital'
+        }
+      },
+      update: {
+        value: String(initialUSD)
+      },
+      create: {
+        userId: userId,
+        key: 'paperTradingCapital',
+        value: String(initialUSD),
+        category: 'trading'
+      }
+    });
+    
+    // 2. Update the capital pool directly if agents are running
     const existingAgents = userAgents.get(userId);
     if (existingAgents && existingAgents.capitalPool) {
-      // Update existing capital pool with new balance
       existingAgents.capitalPool.setTotalCapital(initialUSD);
-      logger.info(`Paper balance updated to $${initialUSD} for user ${userId}`);
+      logger.info(`Paper balance updated to $${initialUSD} for user ${userId} (in-memory + DB)`);
     } else {
       // Create new capital pool for this user (agents will use it when started)
       resetCapitalPool(userId, initialUSD, 'paper');
-      logger.info(`Paper capital pool initialized with $${initialUSD} for user ${userId}`);
+      logger.info(`Paper capital pool initialized with $${initialUSD} for user ${userId} (in DB)`);
     }
     
     res.json({ 
       success: true, 
       initialUSD,
-      message: "Paper balance updated successfully. Active agents will use the new balance."
+      message: "Paper balance updated successfully."
     });
   } catch (error) {
     logger.error('Failed to set paper balance:', error);
