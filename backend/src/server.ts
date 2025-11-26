@@ -267,12 +267,13 @@ app.post("/api/agent/start", async (req, res) => {
     
     const { mode = "paper", capitalUsd = 10000 } = req.body;
     
-    // Check for existing agents
+    // Check for existing agents - show ACTUAL running symbols
     const existingAgents = userAgents.get(userId);
-    if (existingAgents) {
+    if (existingAgents && existingAgents.agents.length > 0) {
+      const runningSymbols = existingAgents.agents.map(a => a.getStatus().symbol);
       return res.status(409).json({ 
-        error: "Agents already running", 
-        symbols: MomentumConfig.SYMBOLS,
+        error: "Agents already running. Stop them first.",
+        symbols: runningSymbols,
       });
     }
     
@@ -859,14 +860,9 @@ app.post("/api/agent/creation/prepare", async (req, res) => {
     
     const { mode = 'paper', capitalUsd = 10000, maxLeverage, aggressiveness, symbol } = req.body;
     
-    // Check if agents already exist
+    // Get existing agents (if any) - we allow adding more agents
     const existingAgents = userAgents.get(userId);
-    if (existingAgents) {
-      return res.status(409).json({ 
-        error: "Agents already running. Stop them first.",
-        symbols: MomentumConfig.SYMBOLS,
-      });
-    }
+    const runningSymbols = existingAgents?.agents.map(a => a.getStatus().symbol) || [];
     
     // Store creation params for later activation
     const creationId = `creation_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -875,10 +871,14 @@ app.post("/api/agent/creation/prepare", async (req, res) => {
     // Auto-expire after 5 minutes
     setTimeout(() => pendingCreations.delete(creationId), 5 * 60 * 1000);
     
+    // Return available symbols (exclude already running ones)
+    const availableSymbols = MomentumConfig.SYMBOLS.filter(s => !runningSymbols.includes(s));
+    
     res.json({
       creationId,
-      symbols: MomentumConfig.SYMBOLS,
-      message: "Creation prepared. Call activate to start agents.",
+      symbols: availableSymbols,
+      runningSymbols,
+      message: "Creation prepared. Select a symbol and call activate.",
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to prepare creation" });
@@ -927,6 +927,18 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     
     // Normalize symbol to futures format (BTC/USDT -> BTC/USDT:USDT)
     const selectedSymbol = rawSymbol.includes(':') ? rawSymbol : `${rawSymbol}:USDT`;
+    
+    // Check if this symbol is already running
+    const existingAgents = userAgents.get(userId);
+    if (existingAgents) {
+      const alreadyRunning = existingAgents.agents.find(a => a.getStatus().symbol === selectedSymbol);
+      if (alreadyRunning) {
+        return res.status(409).json({ 
+          error: `Agent for ${selectedSymbol} is already running`,
+          symbol: selectedSymbol,
+        });
+      }
+    }
     
     // Get exchange
     const exchange = await getExchangeForUser(userId);
