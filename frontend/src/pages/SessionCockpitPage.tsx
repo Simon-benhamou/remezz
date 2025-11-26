@@ -457,7 +457,7 @@ export default function SessionCockpitPage() {
         }
 
         if (!s?.session?.id) {
-          navigate('/sessions');
+          navigate('/agents');
           return;
         }
 
@@ -1060,7 +1060,7 @@ export default function SessionCockpitPage() {
               >
                 Continue with available data
               </Button>
-              <Button type="default" onClick={() => navigate('/sessions')}>
+              <Button type="default" onClick={() => navigate('/agents')}>
                 ← Back to Sessions
               </Button>
             </div>

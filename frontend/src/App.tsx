@@ -275,6 +275,7 @@ function AuthenticatedApp() {
             <Route path='/agents' element={<SessionsPage />} />
             <Route path='/ledger' element={<ExecutionLedgerPageNew />} />
             <Route path='/reports' element={<ReportsPage />} />
+            <Route path='/portfolio' element={<SessionsPage />} />
             <Route path='*' element={<Navigate to='/operations' replace />} />
           </Routes>
         </Content>

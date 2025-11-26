@@ -143,21 +143,34 @@ export class CapitalPool {
       byAgent,
     };
   }
-}
-
-// Global capital pool instance (singleton)
-let globalCapitalPool: CapitalPool | null = null;
-
-export function getCapitalPool(initialCapital?: number): CapitalPool {
-  if (!globalCapitalPool) {
-    globalCapitalPool = new CapitalPool(initialCapital || 10000);
+  
+  /**
+   * Set total capital (used when user updates paper balance)
+   */
+  setTotalCapital(newTotalUsd: number): void {
+    this.totalCapitalUsd = newTotalUsd;
+    console.log(`[CapitalPool] Total capital set to $${newTotalUsd}`);
   }
-  return globalCapitalPool;
 }
 
-export function resetCapitalPool(initialCapital: number): CapitalPool {
-  globalCapitalPool = new CapitalPool(initialCapital);
-  return globalCapitalPool;
+// Per-user capital pools (not a global singleton anymore)
+const userCapitalPools = new Map<string, CapitalPool>();
+
+export function getCapitalPool(userId: string, initialCapital?: number): CapitalPool | null {
+  if (!userId) return null;
+  
+  let pool = userCapitalPools.get(userId);
+  if (!pool && initialCapital !== undefined) {
+    pool = new CapitalPool(initialCapital);
+    userCapitalPools.set(userId, pool);
+  }
+  return pool || null;
+}
+
+export function resetCapitalPool(userId: string, initialCapital: number, _mode?: 'paper' | 'live'): CapitalPool {
+  const pool = new CapitalPool(initialCapital);
+  userCapitalPools.set(userId, pool);
+  return pool;
 }
 
 // ============================================================================
@@ -914,6 +927,7 @@ export class SimpleAgent {
     running: boolean; 
     hasPosition: boolean; 
     symbol: string;
+    sessionId: string;
     marketConditions: MarketConditions | null;
     capitalPoolStatus: ReturnType<CapitalPool['getStatus']>;
   } {
@@ -921,6 +935,7 @@ export class SimpleAgent {
       running: this.running,
       hasPosition: this.position !== null,
       symbol: this.config.symbol,
+      sessionId: this.config.sessionId,
       marketConditions: this.lastMarketConditions,
       capitalPoolStatus: this.config.capitalPool.getStatus(),
     };
@@ -944,8 +959,11 @@ export async function createSimpleAgent(params: {
   capitalPool?: CapitalPool;
   mode?: 'paper' | 'live';
 }): Promise<SimpleAgent> {
-  // Use provided pool or get/create global pool
-  const pool = params.capitalPool || getCapitalPool(10000);
+  // Use provided pool or get/create pool for this user
+  const pool = params.capitalPool || getCapitalPool(params.userId, 10000);
+  if (!pool) {
+    throw new Error('Capital pool not available');
+  }
   
   const agent = new SimpleAgent({
     exchange: params.exchange,
@@ -975,8 +993,8 @@ export async function createAllAgents(params: {
   agents: SimpleAgent[];
   capitalPool: CapitalPool;
 }> {
-  // Create shared capital pool
-  const capitalPool = resetCapitalPool(params.totalCapitalUsd);
+  // Create shared capital pool for this user
+  const capitalPool = resetCapitalPool(params.userId, params.totalCapitalUsd, params.mode);
   
   const symbols = MomentumConfig.SYMBOLS;
   const sessionIdMap: Record<string, string> = {
@@ -1001,7 +1019,7 @@ export async function createAllAgents(params: {
     agents.push(agent);
   }
   
-  console.log(`[AgentFactory] Created ${agents.length} agents with shared capital pool of $${params.totalCapitalUsd}`);
+  console.log(`[AgentFactory] Created ${agents.length} agents for user ${params.userId} with shared capital pool of $${params.totalCapitalUsd}`);
   
   return { agents, capitalPool };
 }

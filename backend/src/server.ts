@@ -261,7 +261,7 @@ app.post("/api/agent/start", async (req, res) => {
   }
 });
 
-// Stop agent
+// Stop agent (specific session or all)
 app.post("/api/agent/stop", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
@@ -269,12 +269,42 @@ app.post("/api/agent/stop", async (req, res) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
     
+    const { sessionId, closePosition } = req.body;
+    
     const userAgentData = userAgents.get(userId);
     if (!userAgentData) {
       return res.status(404).json({ error: "No agents found" });
     }
     
-    // Stop all agents
+    // If sessionId provided, stop only that specific agent
+    if (sessionId) {
+      const agentIndex = userAgentData.agents.findIndex(a => a.getStatus().sessionId === sessionId);
+      if (agentIndex === -1) {
+        return res.status(404).json({ error: "Agent not found for this session" });
+      }
+      
+      const agent = userAgentData.agents[agentIndex];
+      await agent.stop();
+      
+      // Update session to mark as halted
+      await prisma.agentSession.update({
+        where: { id: sessionId },
+        data: { haltedAt: new Date() }
+      });
+      
+      // Remove agent from array
+      userAgentData.agents.splice(agentIndex, 1);
+      
+      // If no more agents, delete user entry
+      if (userAgentData.agents.length === 0) {
+        userAgents.delete(userId);
+      }
+      
+      logger.info(`⏸️ Agent for session ${sessionId} paused`);
+      return res.json({ success: true, message: "Agent paused" });
+    }
+    
+    // No sessionId: stop all agents
     for (const agent of userAgentData.agents) {
       await agent.stop();
     }
@@ -588,15 +618,21 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
         const exchange = await getExchangeForUser(userId);
         if (exchange && exchange.fetchBalance) {
           const balance = await exchange.fetchBalance({ type: 'future' });
-          const usdtBalance = balance?.USDT || balance?.total?.USDT || 0;
-          const freeUsdt = balance?.free?.USDT || 0;
-          const usedUsdt = balance?.used?.USDT || 0;
+          
+          // CCXT returns balance in different formats depending on exchange
+          // For Binance Futures: balance.USDT, balance.total.USDT, balance.free.USDT
+          const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
+          const usedUsdt = parseFloat(balance?.used?.USDT || balance?.USDT?.used || '0') || 0;
+          // Total = free + used (in positions)
+          const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || (freeUsdt + usedUsdt);
+          
+          logger.debug('Live balance fetched:', { totalUsdt, freeUsdt, usedUsdt, raw: balance?.USDT });
           
           return res.json({
-            totalUSD: typeof usdtBalance === 'number' ? usdtBalance : parseFloat(usdtBalance) || 0,
-            freeUSD: typeof freeUsdt === 'number' ? freeUsdt : parseFloat(freeUsdt) || 0,
+            totalUSD: totalUsdt,
+            freeUSD: freeUsdt,
             reservedUSD: 0,
-            inPositionsUSD: typeof usedUsdt === 'number' ? usedUsdt : parseFloat(usedUsdt) || 0,
+            inPositionsUSD: usedUsdt,
             ts: Date.now(),
             source: 'exchange',
           });
@@ -669,26 +705,30 @@ app.post("/api/capital/paper/set-balance", async (req, res) => {
       return res.status(401).json({ error: "User not authenticated" });
     }
     
-    // If agents exist, stop them and restart with new capital
-    const existingAgents = userAgents.get(userId);
-    if (existingAgents) {
-      // Stop existing agents
-      for (const agent of existingAgents.agents) {
-        await agent.stop();
-      }
-      userAgents.delete(userId);
-      
-      logger.info(`Paper balance reset requested: $${initialUSD}. Agents stopped, restart required.`);
+    if (typeof initialUSD !== 'number' || initialUSD <= 0) {
+      return res.status(400).json({ error: "Invalid initialUSD value" });
     }
     
-    // Store the new initial balance for next agent start
-    // Will be used when /api/agent/start is called
+    // Update the capital pool directly - this is a GLOBAL setting for the user
+    // No need to restart agents as they pull from the shared pool
+    const existingAgents = userAgents.get(userId);
+    if (existingAgents && existingAgents.capitalPool) {
+      // Update existing capital pool with new balance
+      existingAgents.capitalPool.setTotalCapital(initialUSD);
+      logger.info(`Paper balance updated to $${initialUSD} for user ${userId}`);
+    } else {
+      // Create new capital pool for this user (agents will use it when started)
+      resetCapitalPool(userId, initialUSD, 'paper');
+      logger.info(`Paper capital pool initialized with $${initialUSD} for user ${userId}`);
+    }
+    
     res.json({ 
       success: true, 
       initialUSD,
-      message: existingAgents ? "Agents stopped. Call /api/agent/start with capitalUsd to restart with new balance." : "Balance set. Call /api/agent/start to create agents."
+      message: "Paper balance updated successfully. Active agents will use the new balance."
     });
   } catch (error) {
+    logger.error('Failed to set paper balance:', error);
     res.status(500).json({ error: "Failed to set balance" });
   }
 });
@@ -765,52 +805,70 @@ app.post("/api/agent/creation/activate", async (req, res) => {
       return res.status(404).json({ error: "Creation not found or expired" });
     }
     
-    // Actually create the agents now
-    const { mode, capitalUsd } = creation;
+    // Get the SINGLE symbol selected by user
+    const { mode, capitalUsd, symbol: rawSymbol } = creation;
+    
+    if (!rawSymbol) {
+      return res.status(400).json({ error: "No symbol selected" });
+    }
+    
+    // Normalize symbol to futures format (BTC/USDT -> BTC/USDT:USDT)
+    const selectedSymbol = rawSymbol.includes(':') ? rawSymbol : `${rawSymbol}:USDT`;
     
     // Get exchange
     const exchange = await getExchangeForUser(userId);
     
-    // Create sessions for each symbol
-    const sessionIds: { btc: string; eth: string; sol: string; xrp: string } = {
-      btc: '', eth: '', sol: '', xrp: '',
-    };
-    
-    const symbolToKey: Record<string, keyof typeof sessionIds> = {
-      'BTC/USDT:USDT': 'btc', 'ETH/USDT:USDT': 'eth', 'SOL/USDT:USDT': 'sol', 'XRP/USDT:USDT': 'xrp',
-    };
-    
-    for (const symbol of MomentumConfig.SYMBOLS) {
-      const session = await prisma.agentSession.create({
-        data: { userId, symbol, mode, profileJson: { capitalUsd, symbol } }
-      });
-      const key = symbolToKey[symbol];
-      if (key) sessionIds[key] = session.id;
-    }
-    
-    // Create all agents with shared capital pool
-    const { agents, capitalPool } = await createAllAgents({
-      exchange, prisma, userId, sessionIds,
-      totalCapitalUsd: capitalUsd,
-      mode: mode as 'paper' | 'live',
+    // Create a SINGLE session for the selected symbol only
+    const session = await prisma.agentSession.create({
+      data: { 
+        userId, 
+        symbol: selectedSymbol, 
+        mode, 
+        profileJson: { capitalUsd, symbol: selectedSymbol } 
+      }
     });
     
-    // Store and start all agents
-    userAgents.set(userId, { agents, capitalPool });
-    
-    for (const agent of agents) {
-      await agent.start();
+    // Get or create capital pool for this user
+    let capitalPool = getCapitalPool(userId);
+    if (!capitalPool) {
+      // Initialize new capital pool
+      resetCapitalPool(userId, capitalUsd, mode as 'paper' | 'live');
+      capitalPool = getCapitalPool(userId)!;
     }
+    
+    // Create SINGLE agent for the selected symbol
+    const agent = new SimpleAgent({
+      symbol: selectedSymbol,
+      exchange,
+      prisma,
+      userId,
+      sessionId: session.id,
+      capitalPool,
+      mode: mode as 'paper' | 'live',
+      riskPerTradePct: 1,
+    });
+    
+    // Get existing agents or create new array
+    const existingData = userAgents.get(userId);
+    if (existingData) {
+      existingData.agents.push(agent);
+    } else {
+      userAgents.set(userId, { agents: [agent], capitalPool });
+    }
+    
+    // Start the single agent
+    await agent.start();
     
     // Clean up pending creation
     pendingCreations.delete(creationId);
     
-    logger.info(`✅ Created ${agents.length} agents for ${userId} via creation flow`);
+    logger.info(`✅ Created 1 agent for ${selectedSymbol} for ${userId}`);
     
     res.json({
       success: true,
-      agentsCount: agents.length,
-      symbols: MomentumConfig.SYMBOLS,
+      agentsCount: 1,
+      symbol: selectedSymbol,
+      sessionId: session.id,
       capitalUsd,
       mode,
     });
