@@ -23,6 +23,9 @@ import {
   type Position,
   type MarketConditions,
 } from './momentumSimple.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('agent');
 
 // Type for exchange (we avoid importing ccxt directly to reduce bundle size)
 type Exchange = {
@@ -272,23 +275,19 @@ export class SimpleAgent {
   
   async start(): Promise<void> {
     if (this.running) {
-      console.log(`[SimpleAgent:${this.config.symbol}] Already running`);
+      logger.info(`⚠️ [${this.config.symbol}] Already running`);
       return;
     }
     
     this.running = true;
-    console.log(`[SimpleAgent:${this.config.symbol}] ✅ Started`);
-    console.log(`  Mode: ${this.config.mode}`);
-    console.log(`  Symbol: ${this.config.symbol}`);
-    console.log(`  Risk/trade: ${this.config.riskPerTradePct}%`);
-    console.log(`  Capital Pool: $${this.config.capitalPool.getAvailableCapital().toFixed(2)} available`);
+    logger.info(`✅ [${this.config.symbol}] STARTED | mode=${this.config.mode} | risk=${this.config.riskPerTradePct}% | capital=$${this.config.capitalPool.getAvailableCapital().toFixed(2)}`);
     
     // Charger les positions existantes depuis la DB
     await this.loadExistingPosition();
     
     // 🔄 LIVE MODE: Initial sync with exchange to catch any missed stop losses
     if (this.config.mode === 'live') {
-      console.log(`[SimpleAgent:${this.config.symbol}] 🔄 Initial exchange sync...`);
+      logger.info(`🔄 [${this.config.symbol}] Initial exchange sync...`);
       await this.syncWithExchange();
     }
     
@@ -307,7 +306,7 @@ export class SimpleAgent {
       this.tickIntervalId = null;
     }
     
-    console.log(`[SimpleAgent:${this.config.symbol}] ⏹️ Stopped`);
+    logger.info(`⏹️ [${this.config.symbol}] STOPPED`);
   }
   
   // ==========================================================================
@@ -351,8 +350,10 @@ export class SimpleAgent {
     this.lastTickAt = Date.now();
     
     // Log every tick to confirm agent is alive
-    const hasPosition = this.position ? `📊 IN ${this.position.side.toUpperCase()} @ $${this.position.entryPrice.toFixed(2)}` : '👀 Watching';
-    console.log(`[SimpleAgent:${symbol}] 🔄 Tick #${this.tickCount} | ${hasPosition} | ${now.toISOString()}`);
+    const positionStatus = this.position 
+      ? `IN_${this.position.side.toUpperCase()} @ $${this.position.entryPrice.toFixed(2)}` 
+      : 'WATCHING';
+    logger.info(`🔄 [${symbol}] Tick #${this.tickCount} | ${positionStatus} | mode=${this.config.mode}`);
     
     try {
       // 🔄 LIVE MODE: Sync with exchange first to detect stop loss executions
@@ -366,6 +367,10 @@ export class SimpleAgent {
       // Update and broadcast market conditions
       this.lastMarketConditions = getMarketConditions(btcCandles);
       this.config.onMarketConditions?.(this.lastMarketConditions);
+      
+      // Log market conditions for decision visibility
+      const mc = this.lastMarketConditions;
+      logger.info(`📊 [${symbol}] Market: ${mc.overallStatus} | BTC trend=${mc.btcTrend} mom6h=${mc.btcMomentum6h.toFixed(2)}% | Day=${mc.dayOfWeek} trading=${mc.isTradingDay}`);
       
       // Fetch current candles for price and S/R
       const candles = await this.fetchCandles();
@@ -398,7 +403,7 @@ export class SimpleAgent {
       await this.checkEntry();
       
     } catch (error) {
-      console.error(`[SimpleAgent:${symbol}] Tick error:`, error);
+      logger.error(`❌ [${symbol}] Tick error:`, error);
       this.config.onError?.(error as Error);
     }
   }
@@ -414,7 +419,7 @@ export class SimpleAgent {
       // Fetch candles pour le symbol
       const candles = await this.fetchCandles();
       if (candles.length < 60) {
-        console.log(`[SimpleAgent:${symbol}] Not enough candles (${candles.length})`);
+        logger.info(`⚠️ [${symbol}] Not enough candles (${candles.length}/60)`);
         return;
       }
       
@@ -428,8 +433,14 @@ export class SimpleAgent {
       // Check signal (returns side: 'long' or 'short')
       const signal = checkMomentumSignal(symbol, candles, btcCandles);
       
+      // Log signal analysis result
+      const f = signal.features;
+      if (f) {
+        logger.info(`🔍 [${symbol}] Signal check @ $${currentPrice.toFixed(2)} | vol=${f.volRatio.toFixed(1)}x | bullish=${f.isBullish} | >MA20=${f.priceAboveMa20} | BTC>MA50=${f.btcAboveMa50} | btcMom=${f.btcMomentum6h.toFixed(2)}% | day=${f.dayOfWeek}`);
+      }
+      
       if (signal.valid && signal.side) {
-        console.log(`[SimpleAgent:${symbol}] ✅ SIGNAL ${signal.side.toUpperCase()}: ${signal.reason}`);
+        logger.info(`✅ [${symbol}] SIGNAL ${signal.side.toUpperCase()} CONFIRMED: ${signal.reason} | confidence=${(signal.confidence || 0).toFixed(2)}`);
         
         // Store signal info for frontend display
         this.currentBias = signal.side;
@@ -457,10 +468,13 @@ export class SimpleAgent {
         
         // Execute trade
         await this.openPosition(signal.side, candles);
+      } else {
+        // Log why signal was rejected
+        logger.info(`❌ [${symbol}] No signal: ${signal.reason}`);
       }
       
     } catch (error) {
-      console.error(`[SimpleAgent:${symbol}] Error checking entry:`, error);
+      logger.error(`❌ [${symbol}] Error checking entry:`, error);
     }
   }
   
@@ -483,15 +497,11 @@ export class SimpleAgent {
     
     // Try to reserve capital
     if (!this.config.capitalPool.reserve(this.config.sessionId, sizing.notionalUsd)) {
-      console.log(`[SimpleAgent:${symbol}] Cannot open position - insufficient capital`);
+      logger.info(`⚠️ [${symbol}] Cannot open position - insufficient capital (need $${sizing.notionalUsd.toFixed(2)}, available $${availableCapital.toFixed(2)})`);
       return;
     }
     
-    console.log(`[SimpleAgent:${symbol}] Opening ${side.toUpperCase()} position:`);
-    console.log(`  Price: $${currentPrice.toFixed(4)}`);
-    console.log(`  Qty: ${sizing.qty}`);
-    console.log(`  Notional: $${sizing.notionalUsd.toFixed(2)}`);
-    console.log(`  Leverage: ${sizing.suggestedLeverage}x`);
+    logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x`);
     
     if (this.config.mode === 'paper') {
       // Paper trade
@@ -516,7 +526,7 @@ export class SimpleAgent {
       // Save to DB
       await this.savePositionToDb(position, 'paper_entry');
       
-      console.log(`[SimpleAgent:${symbol}] 📝 Paper ${side} position opened`);
+      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | SL=$${position.stopLoss?.toFixed(4)}`);
       
     } else {
       // Live trade
@@ -557,7 +567,7 @@ export class SimpleAgent {
         // Set stop loss on exchange
         await this.setStopLossOnExchange(position);
         
-        console.log(`[SimpleAgent:${symbol}] 🟢 Live ${side} position opened @ $${filledPrice}`);
+        logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | SL=$${position.stopLoss?.toFixed(4)}`);
         
         this.config.onTrade?.({
           symbol,
@@ -569,7 +579,7 @@ export class SimpleAgent {
         });
         
       } catch (error) {
-        console.error(`[SimpleAgent:${symbol}] Failed to open live position:`, error);
+        logger.error(`❌ [${symbol}] Failed to open live position:`, error);
         // Cancel reservation on failure
         this.config.capitalPool.cancelReservation(this.config.sessionId);
       }
@@ -597,20 +607,20 @@ export class SimpleAgent {
       const pnlPct = position.side === 'long'
         ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
         : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
-      console.log(`[SimpleAgent:${symbol}] 📊 Position: ${position.side.toUpperCase()} | Entry: $${position.entryPrice.toFixed(2)} | Now: $${currentPrice.toFixed(2)} | PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | SL: $${this.position?.stopLoss?.toFixed(2) || 'N/A'}`);
+      logger.info(`📊 [${symbol}] POSITION ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(2)} | now=$${currentPrice.toFixed(2)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | SL=$${this.position?.stopLoss?.toFixed(2) || 'N/A'}`);
       
       const exitSignal = shouldExitPosition(this.position!, currentPrice);
       
       if (exitSignal.shouldExit) {
-        console.log(`[SimpleAgent:${symbol}] 🔴 EXIT (${exitSignal.reason}): PnL ${exitSignal.pnlPct?.toFixed(2)}%`);
+        logger.info(`🔴 [${symbol}] EXIT SIGNAL: reason=${exitSignal.reason} | PnL=${exitSignal.pnlPct?.toFixed(2)}% | holdMin=${exitSignal.holdMinutes?.toFixed(0)}`);
         await this.closePosition(this.position!, currentPrice, exitSignal.reason || 'unknown');
       } else if (exitSignal.newStopLoss) {
         // Update trailing stop in DB if needed
-        console.log(`[SimpleAgent:${symbol}] 📈 Trailing stop updated: $${exitSignal.newStopLoss.toFixed(4)}`);
+        logger.info(`📈 [${symbol}] Trailing stop updated: $${exitSignal.newStopLoss.toFixed(4)}`);
       }
       
     } catch (error) {
-      console.error(`[SimpleAgent:${symbol}] Error checking exit:`, error);
+      logger.error(`❌ [${symbol}] Error checking exit:`, error);
     }
   }
   
@@ -635,11 +645,7 @@ export class SimpleAgent {
     
     const notionalUsd = position.qty * position.entryPrice;
     
-    console.log(`[SimpleAgent:${symbol}] Closing ${position.side} position:`);
-    console.log(`  Entry: $${position.entryPrice.toFixed(4)}`);
-    console.log(`  Exit: $${currentPrice.toFixed(4)}`);
-    console.log(`  PnL: ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`);
-    console.log(`  Reason: ${reason}`);
+    logger.info(`🚪 [${symbol}] CLOSING ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(4)} | exit=$${currentPrice.toFixed(4)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}) | reason=${reason}`);
     
     // Store exit info for frontend display
     this.lastExit = {
@@ -658,7 +664,7 @@ export class SimpleAgent {
       this.config.capitalPool.release(this.config.sessionId, notionalUsd, pnlUsd);
       
       await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd);
-      console.log(`[SimpleAgent:${symbol}] 📝 Paper position closed`);
+      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | Capital released $${notionalUsd.toFixed(2)}`);
       
     } else {
       // Live close
@@ -688,7 +694,7 @@ export class SimpleAgent {
         
         await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd);
         
-        console.log(`[SimpleAgent:${symbol}] 🔴 Live position closed @ $${exitPrice}`);
+        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)})`);
         
         this.config.onTrade?.({
           symbol,
@@ -700,7 +706,7 @@ export class SimpleAgent {
         });
         
       } catch (error) {
-        console.error(`[SimpleAgent:${symbol}] Failed to close live position:`, error);
+        logger.error(`❌ [${symbol}] Failed to close live position:`, error);
       }
     }
   }
@@ -733,7 +739,7 @@ export class SimpleAgent {
       return candles;
       
     } catch (error) {
-      console.error(`[SimpleAgent:${symbol}] Failed to fetch candles:`, error);
+      logger.error(`❌ [${symbol}] Failed to fetch candles:`, error);
       return this.candleCache?.candles || [];
     }
   }
@@ -762,7 +768,7 @@ export class SimpleAgent {
       return candles;
       
     } catch (error) {
-      console.error('[SimpleAgent] Failed to fetch BTC candles:', error);
+      logger.error(`❌ [BTC] Failed to fetch BTC candles:`, error);
       return this.btcCandleCache?.candles || [];
     }
   }
@@ -786,9 +792,9 @@ export class SimpleAgent {
           reduceOnly: true,
         }
       );
-      console.log(`[SimpleAgent:${symbol}] Stop loss set at $${position.stopLoss.toFixed(4)}`);
+      logger.info(`🛡️ [${symbol}] Stop loss set at $${position.stopLoss.toFixed(4)}`);
     } catch (error) {
-      console.warn(`[SimpleAgent:${symbol}] Failed to set stop loss on exchange:`, error);
+      logger.warn(`⚠️ [${symbol}] Failed to set stop loss on exchange:`, error);
     }
   }
   
@@ -818,11 +824,11 @@ export class SimpleAgent {
           lowWaterMark: dbPosition.side === 'short' ? dbPosition.entryPrice : undefined,
         };
         
-        console.log(`[SimpleAgent:${this.config.symbol}] Loaded existing position`);
+        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice}`);
       }
       
     } catch (error) {
-      console.error(`[SimpleAgent:${this.config.symbol}] Failed to load position:`, error);
+      logger.error(`❌ [${this.config.symbol}] Failed to load position:`, error);
     }
   }
   
@@ -834,7 +840,7 @@ export class SimpleAgent {
     const symbol = this.config.symbol;
     
     if (!this.config.exchange.fetchPositions) {
-      console.log(`[SimpleAgent:${symbol}] ⚠️ Exchange does not support fetchPositions`);
+      logger.info(`⚠️ [${symbol}] Exchange does not support fetchPositions`);
       return;
     }
     
@@ -853,7 +859,7 @@ export class SimpleAgent {
       
       // Case 1: We think we have a position but exchange says NO
       if (this.position && exchangeQty === 0) {
-        console.log(`[SimpleAgent:${symbol}] 🔴 SYNC MISMATCH: Position closed on exchange (likely stop loss hit)`);
+        logger.info(`🔴 [${symbol}] SYNC MISMATCH: Position closed on exchange (likely stop loss hit)`);
         
         // Try to get the last trade to find exit price
         let exitPrice = this.position.entryPrice;
@@ -865,11 +871,11 @@ export class SimpleAgent {
             if (trades && trades.length > 0) {
               const lastTrade = trades[trades.length - 1];
               exitPrice = lastTrade.price || exitPrice;
-              console.log(`[SimpleAgent:${symbol}] Found exit trade: $${exitPrice}`);
+              logger.info(`📈 [${symbol}] Found exit trade: $${exitPrice}`);
             }
           }
         } catch (tradeError) {
-          console.warn(`[SimpleAgent:${symbol}] Could not fetch trades:`, tradeError);
+          logger.warn(`⚠️ [${symbol}] Could not fetch trades:`, tradeError);
         }
         
         // Calculate PnL
@@ -891,14 +897,14 @@ export class SimpleAgent {
         // Save exit to DB
         await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd);
         
-        console.log(`[SimpleAgent:${symbol}] ✅ Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%`);
+        logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%`);
         
         this.position = null;
       }
       
       // Case 2: Exchange has position but we don't know about it
       else if (!this.position && exchangeQty > 0) {
-        console.log(`[SimpleAgent:${symbol}] ⚠️ SYNC: Found unexpected position on exchange`);
+        logger.info(`⚠️ [${symbol}] SYNC: Found unexpected position on exchange (${exchangeSide} ${exchangeQty})`);
         
         // Load from exchange
         const entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
@@ -921,7 +927,7 @@ export class SimpleAgent {
           // Save to DB
           await this.savePositionToDb(this.position, 'synced_from_exchange');
           
-          console.log(`[SimpleAgent:${symbol}] ✅ Position synced from exchange: ${exchangeSide} @ $${entryPrice}`);
+          logger.info(`✅ [${symbol}] Position synced from exchange: ${exchangeSide} @ $${entryPrice}`);
         }
       }
       
@@ -931,11 +937,11 @@ export class SimpleAgent {
         const entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
         const unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
         
-        console.log(`[SimpleAgent:${symbol}] ✅ Position verified on exchange: ${exchangeQty} @ $${entryPrice}, uPnL: $${unrealizedPnl.toFixed(2)}`);
+        logger.info(`✅ [${symbol}] Position verified on exchange: qty=${exchangeQty} entry=$${entryPrice} uPnL=$${unrealizedPnl.toFixed(2)}`);
       }
       
     } catch (error) {
-      console.error(`[SimpleAgent:${symbol}] Failed to sync with exchange:`, error);
+      logger.error(`❌ [${symbol}] Failed to sync with exchange:`, error);
     }
   }
   
@@ -954,7 +960,7 @@ export class SimpleAgent {
         },
       });
     } catch (error) {
-      console.error(`[SimpleAgent:${this.config.symbol}] Failed to save position to DB:`, error);
+      logger.error(`❌ [${this.config.symbol}] Failed to save position to DB:`, error);
     }
   }
   
@@ -1008,10 +1014,10 @@ export class SimpleAgent {
         },
       });
       
-      console.log(`[SimpleAgent:${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)`);
+      logger.info(`💾 [${this.config.symbol}] Exit logged: ${reason}, PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(2)}%)`);
       
     } catch (error) {
-      console.error(`[SimpleAgent:${this.config.symbol}] Failed to save exit to DB:`, error);
+      logger.error(`❌ [${this.config.symbol}] Failed to save exit to DB:`, error);
     }
   }
   
