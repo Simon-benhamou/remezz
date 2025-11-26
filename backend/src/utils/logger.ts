@@ -46,9 +46,8 @@ function resolveInitialLevel(): LogLevel {
   if (raw && raw in LEVEL_MAP) {
     return raw as LogLevel;
   }
-  if ((process.env.NODE_ENV ?? '').toLowerCase() === 'production') {
-    return 'warn';
-  }
+  // Always default to 'info' to see tick processing logs etc.
+  // Use LOG_LEVEL=warn in env if you want to reduce logging
   return 'info';
 }
 
