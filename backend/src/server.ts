@@ -766,18 +766,42 @@ app.get("/api/agent/state", async (req, res) => {
         });
       }
       
-      // Agent not running, check database
+      // Agent not running, check database for session and position
       const dbSession = await prisma.agentSession.findUnique({
         where: { id: sessionId },
       });
       
       if (dbSession) {
+        // Also fetch any open position from DB
+        const dbPosition = await prisma.position.findFirst({
+          where: { sessionId },
+        });
+        
+        let pos: any = null;
+        if (dbPosition) {
+          pos = {
+            symbol: dbPosition.symbol,
+            side: dbPosition.side,
+            entryPrice: dbPosition.entryPrice,
+            qty: dbPosition.qty,
+            stopLoss: dbPosition.stopPrice,
+            stopPrice: dbPosition.stopPrice,
+            stop: dbPosition.stopPrice,
+            leverage: dbPosition.leverage,
+            entryTime: dbPosition.openedAt?.getTime() || Date.now(),
+            openedAt: dbPosition.openedAt?.getTime() || Date.now(),
+            // Frontend expects 'entry' as alias
+            entry: dbPosition.entryPrice,
+          };
+        }
+        
         return res.json({
           running: false,
           state: dbSession.stoppedAt ? 'STOPPED' : (dbSession.haltedAt ? 'HALT' : 'STOPPED'),
-          hasPosition: false,
+          hasPosition: !!dbPosition,
           symbol: dbSession.symbol,
           sessionId: dbSession.id,
+          pos,
         });
       }
       
@@ -1655,27 +1679,134 @@ app.post("/api/monitor/incoherences/export", async (req, res) => {
   }
 });
 
+// Get daily report for a specific session and date
 app.get("/api/monitor/reports/daily", async (req, res) => {
   try {
-    res.json({ report: null });
+    const sessionId = String(req.query.sessionId || "").trim();
+    const dateStr = String(req.query.date || "").trim();
+    const refresh = req.query.refresh === 'true';
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: "sessionId required" });
+    }
+    
+    // Default to today if no date provided
+    const day = dateStr || new Date().toISOString().split('T')[0];
+    
+    // Check for existing report
+    let report = await prisma.dailyReport.findUnique({
+      where: { sessionId_day: { sessionId, day } },
+    });
+    
+    // If refresh requested or no report exists, generate new stats
+    if (refresh || !report) {
+      // Calculate stats from fills for this day
+      const dayStart = new Date(day + 'T00:00:00Z');
+      const dayEnd = new Date(day + 'T23:59:59.999Z');
+      
+      const fills = await prisma.fill.findMany({
+        where: {
+          sessionId,
+          ts: { gte: dayStart, lte: dayEnd },
+          realizedPnl: { not: null },
+        },
+        orderBy: { ts: 'asc' },
+      });
+      
+      const exitFills = fills.filter(f => f.realizedPnl !== null && f.realizedPnl !== 0);
+      const trades = exitFills.length;
+      const wins = exitFills.filter(f => (f.realizedPnl || 0) > 0).length;
+      const losses = exitFills.filter(f => (f.realizedPnl || 0) < 0).length;
+      const pnlUsd = exitFills.reduce((sum, f) => sum + (f.realizedPnl || 0), 0);
+      const fees = fills.reduce((sum, f) => sum + (f.fee || 0), 0);
+      const winRate = trades > 0 ? wins / trades : 0;
+      
+      const winPnls = exitFills.filter(f => (f.realizedPnl || 0) > 0).map(f => f.realizedPnl || 0);
+      const lossPnls = exitFills.filter(f => (f.realizedPnl || 0) < 0).map(f => f.realizedPnl || 0);
+      const avgWin = winPnls.length > 0 ? winPnls.reduce((a, b) => a + b, 0) / winPnls.length : 0;
+      const avgLoss = lossPnls.length > 0 ? Math.abs(lossPnls.reduce((a, b) => a + b, 0) / lossPnls.length) : 0;
+      const expectancy = trades > 0 ? (pnlUsd - fees) / trades : 0;
+      
+      // Get session start balance for ROI calculation
+      const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+      const startBalance = session?.startBalanceUsd || 1000;
+      const roiPct = startBalance > 0 ? ((pnlUsd - fees) / startBalance) * 100 : 0;
+      
+      const stats = {
+        trades,
+        wins,
+        losses,
+        winRate,
+        pnlUsd,
+        fees,
+        netPnl: pnlUsd - fees,
+        avgWin,
+        avgLoss,
+        expectancy,
+        roiPct,
+      };
+      
+      // Upsert report
+      report = await prisma.dailyReport.upsert({
+        where: { sessionId_day: { sessionId, day } },
+        update: { stats },
+        create: { sessionId, day, stats, userId: session?.userId },
+      });
+    }
+    
+    res.json(report);
   } catch (error) {
-    res.status(500).json({ error: "Failed" });
+    logger.error("Failed to get daily report:", error);
+    res.status(500).json({ error: "Failed to get daily report" });
   }
 });
 
+// List daily reports for a session
 app.get("/api/monitor/reports/daily/list", async (req, res) => {
   try {
-    res.json({ reports: [] });
+    const sessionId = String(req.query.sessionId || "").trim();
+    const limitRaw = Number(req.query.limit ?? 30);
+    const limit = Math.max(1, Math.min(365, Math.floor(limitRaw)));
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: "sessionId required" });
+    }
+    
+    const reports = await prisma.dailyReport.findMany({
+      where: { sessionId },
+      orderBy: { day: 'desc' },
+      take: limit,
+    });
+    
+    res.json(reports);
   } catch (error) {
-    res.status(500).json({ error: "Failed" });
+    logger.error("Failed to list daily reports:", error);
+    res.status(500).json({ error: "Failed to list daily reports" });
   }
 });
 
+// Save/update daily report
 app.post("/api/monitor/reports/daily", async (req, res) => {
   try {
-    res.json({ success: true });
+    const userId = (req as any)?.user?.id;
+    const { sessionId, date, stats, llm } = req.body;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: "sessionId required" });
+    }
+    
+    const day = date || new Date().toISOString().split('T')[0];
+    
+    const report = await prisma.dailyReport.upsert({
+      where: { sessionId_day: { sessionId, day } },
+      update: { stats, llm },
+      create: { sessionId, day, stats, llm, userId },
+    });
+    
+    res.json({ success: true, report });
   } catch (error) {
-    res.status(500).json({ error: "Failed" });
+    logger.error("Failed to save daily report:", error);
+    res.status(500).json({ error: "Failed to save daily report" });
   }
 });
 

@@ -1324,6 +1324,9 @@ export class SimpleAgent {
       duration?: number;
       trailDistance?: number;
       // Frontend aliases
+      entry?: number;
+      leverage?: number;
+      openedAt?: number;
       stopPrice?: number;
       stop?: number;
       targets?: number[];
@@ -1350,17 +1353,7 @@ export class SimpleAgent {
     tickCount: number;
   } {
     // Calculate live position metrics
-    let posWithMetrics: (Position & { 
-      currentPrice: number;
-      pnlPct: number;
-      pnlUsd: number;
-      notionalUsd: number;
-      duration: number;
-      trailDistance: number;
-      stopPrice?: number;
-      stop?: number;
-      targets?: number[];
-    }) | null = null;
+    let posWithMetrics: any = null;
     
     if (this.position) {
       const currentPrice = this.lastPrice || this.position.entryPrice;
@@ -1382,6 +1375,12 @@ export class SimpleAgent {
       
       posWithMetrics = {
         ...this.position,
+        // Add entry as alias for frontend compatibility (PositionInfoCard expects 'entry')
+        entry: this.position.entryPrice,
+        // Add leverage for frontend display
+        leverage: MomentumConfig.LEVERAGE[this.position.symbol] || 5,
+        // Add openedAt for frontend time-held calculation
+        openedAt: this.position.entryTime,
         // Add stopPrice as alias for frontend compatibility
         stopPrice: this.position.stopLoss,
         stop: this.position.stopLoss,
