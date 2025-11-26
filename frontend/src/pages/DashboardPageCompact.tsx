@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Space, Button, Tag, List, Badge, Typography, Alert, Table, message } from 'antd';
+import { Card, Row, Col, Statistic, Space, Button, Tag, List, Badge, Typography, Alert, Table, message, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useMode } from '../contexts/ModeContext';
@@ -17,10 +17,26 @@ import {
   FireOutlined,
   BulbOutlined,
   LineChartOutlined,
-  ThunderboltFilled
+  ThunderboltFilled,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
+  MinusOutlined
 } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
+
+// Market Conditions types
+type MarketConditionsStatus = 'favorable_long' | 'favorable_short' | 'neutral' | 'unfavorable' | 'unknown';
+
+interface MarketConditions {
+  status: MarketConditionsStatus;
+  btcAboveMa50: boolean | null;
+  btcMomentum6h: number | null;
+  btcTrend: 'bullish' | 'bearish' | 'neutral' | null;
+  isTradingDay: boolean | null;
+  reason: string;
+  tradingRecommended: boolean;
+}
 
 export default function DashboardPageCompact(){
   const [ov, setOv] = React.useState<any>({});
@@ -28,6 +44,7 @@ export default function DashboardPageCompact(){
   const [trades, setTrades] = React.useState<any[]>([]);
   const [tradesLoading, setTradesLoading] = React.useState<boolean>(false);
   const [optimizing, setOptimizing] = React.useState<boolean>(false);
+  const [marketConditions, setMarketConditions] = React.useState<MarketConditions | null>(null);
   const navigate = useNavigate();
   const { mode } = useMode();
   
@@ -75,8 +92,12 @@ export default function DashboardPageCompact(){
   async function load(){
     setLoading(true);
     try {
-      const overviewRes = await api.overview(mode);
+      const [overviewRes, conditionsRes] = await Promise.all([
+        api.overview(mode),
+        api.getMarketConditions().catch(() => null),
+      ]);
       setOv(overviewRes || {});
+      setMarketConditions(conditionsRes);
     } catch(err){
       console.error(err);
     } finally {
@@ -191,6 +212,111 @@ export default function DashboardPageCompact(){
           </Card>
         </Col>
       </Row>
+
+      {/* Market Conditions Banner */}
+      {marketConditions && (
+        <Card 
+          size="small" 
+          style={{ 
+            marginBottom: 16,
+            background: marketConditions.tradingRecommended 
+              ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(34, 197, 94, 0.05))'
+              : marketConditions.status === 'unfavorable'
+              ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.05))'
+              : 'linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.05))',
+            border: marketConditions.tradingRecommended 
+              ? '1px solid rgba(34, 197, 94, 0.3)'
+              : marketConditions.status === 'unfavorable'
+              ? '1px solid rgba(239, 68, 68, 0.3)'
+              : '1px solid rgba(59, 130, 246, 0.3)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <Space size={16}>
+              <div>
+                <Text type="secondary" style={{ fontSize: 11 }}>MARKET CONDITIONS</Text>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                  {marketConditions.status === 'favorable_long' && (
+                    <>
+                      <ArrowUpOutlined style={{ color: '#22c55e', fontSize: 20 }} />
+                      <Text strong style={{ fontSize: 16, color: '#22c55e' }}>FAVORABLE LONG</Text>
+                    </>
+                  )}
+                  {marketConditions.status === 'favorable_short' && (
+                    <>
+                      <ArrowDownOutlined style={{ color: '#ef4444', fontSize: 20 }} />
+                      <Text strong style={{ fontSize: 16, color: '#ef4444' }}>FAVORABLE SHORT</Text>
+                    </>
+                  )}
+                  {marketConditions.status === 'neutral' && (
+                    <>
+                      <MinusOutlined style={{ color: '#3b82f6', fontSize: 20 }} />
+                      <Text strong style={{ fontSize: 16, color: '#3b82f6' }}>NEUTRAL</Text>
+                    </>
+                  )}
+                  {marketConditions.status === 'unfavorable' && (
+                    <>
+                      <WarningOutlined style={{ color: '#ef4444', fontSize: 20 }} />
+                      <Text strong style={{ fontSize: 16, color: '#ef4444' }}>UNFAVORABLE</Text>
+                    </>
+                  )}
+                  {marketConditions.status === 'unknown' && (
+                    <>
+                      <ExclamationCircleOutlined style={{ color: '#94a3b8', fontSize: 20 }} />
+                      <Text strong style={{ fontSize: 16, color: '#94a3b8' }}>UNKNOWN</Text>
+                    </>
+                  )}
+                </div>
+              </div>
+              
+              <div style={{ borderLeft: '1px solid rgba(148, 163, 184, 0.2)', paddingLeft: 16 }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>BTC 6H MOMENTUM</Text>
+                <div style={{ 
+                  color: (marketConditions.btcMomentum6h || 0) > 0 ? '#22c55e' : (marketConditions.btcMomentum6h || 0) < 0 ? '#ef4444' : '#94a3b8',
+                  fontSize: 16,
+                  fontWeight: 600,
+                  marginTop: 4
+                }}>
+                  {(marketConditions.btcMomentum6h || 0) > 0 ? '+' : ''}{(marketConditions.btcMomentum6h || 0).toFixed(2)}%
+                </div>
+              </div>
+              
+              <div style={{ borderLeft: '1px solid rgba(148, 163, 184, 0.2)', paddingLeft: 16 }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>BTC vs MA50</Text>
+                <div style={{ 
+                  color: marketConditions.btcAboveMa50 ? '#22c55e' : '#ef4444',
+                  fontSize: 16,
+                  fontWeight: 600,
+                  marginTop: 4
+                }}>
+                  {marketConditions.btcAboveMa50 ? 'ABOVE' : 'BELOW'}
+                </div>
+              </div>
+              
+              <div style={{ borderLeft: '1px solid rgba(148, 163, 184, 0.2)', paddingLeft: 16 }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>TRADING DAY</Text>
+                <div style={{ 
+                  color: marketConditions.isTradingDay ? '#22c55e' : '#94a3b8',
+                  fontSize: 16,
+                  fontWeight: 600,
+                  marginTop: 4
+                }}>
+                  {marketConditions.isTradingDay ? 'YES ✓' : 'NO'}
+                </div>
+              </div>
+            </Space>
+            
+            <Tooltip title={marketConditions.reason}>
+              <Tag 
+                color={marketConditions.tradingRecommended ? 'success' : marketConditions.status === 'unfavorable' ? 'error' : 'default'}
+                style={{ fontSize: 12, padding: '4px 12px' }}
+              >
+                {marketConditions.tradingRecommended ? '✅ TRADING RECOMMENDED' : '⏳ WAIT FOR SIGNAL'}
+              </Tag>
+            </Tooltip>
+          </div>
+        </Card>
+      )}
 
       {/* Performance Chart & Recent Trades */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>

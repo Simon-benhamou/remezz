@@ -147,33 +147,110 @@ app.get("/api/status", async (req, res) => {
 app.get("/api/market-conditions", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
-    if (!userId) {
-      return res.status(401).json({ error: "User not authenticated" });
+    
+    // First check if any agent has cached market conditions
+    const userAgentData = userId ? userAgents.get(userId) : null;
+    if (userAgentData && userAgentData.agents.length > 0) {
+      const firstAgent = userAgentData.agents[0];
+      const agentStatus = firstAgent.getStatus();
+      const conditions = agentStatus.marketConditions;
+      
+      if (conditions) {
+        return res.json({
+          status: conditions.overallStatus || 'unknown',
+          btcAboveMa50: conditions.btcAboveMa50 ?? null,
+          btcMomentum6h: conditions.btcMomentum6h ?? null,
+          btcTrend: conditions.btcTrend ?? null,
+          isTradingDay: conditions.isTradingDay ?? null,
+          reason: conditions.reason || 'Not analyzed yet',
+          tradingRecommended: conditions.overallStatus === 'favorable_long' || conditions.overallStatus === 'favorable_short',
+        });
+      }
     }
     
-    const userAgentData = userAgents.get(userId);
-    if (!userAgentData) {
+    // If no agent running, fetch BTC candles directly to compute market conditions
+    try {
+      const ccxt = await import('ccxt');
+      const publicExchange = new ccxt.default.binance({
+        enableRateLimit: true,
+        options: { defaultType: 'future' },
+      });
+      
+      // Fetch 100 15m BTC candles (about 25 hours of data)
+      const btcCandles = await publicExchange.fetchOHLCV('BTC/USDT:USDT', '15m', undefined, 100);
+      
+      if (btcCandles.length < 50) {
+        return res.json({
+          status: 'unknown',
+          reason: 'Insufficient data',
+          tradingRecommended: false,
+        });
+      }
+      
+      // Calculate indicators
+      const btcCloses = btcCandles.map((c: any) => c[4]);
+      const btcNow = btcCloses[btcCloses.length - 1];
+      
+      // MA50
+      const ma50Slice = btcCloses.slice(-50);
+      const btcMa50 = ma50Slice.reduce((a: number, b: number) => a + b, 0) / 50;
+      const btcAboveMa50 = btcNow > btcMa50;
+      
+      // 6h momentum (24 candles of 15m)
+      const btc6hAgoIndex = Math.max(0, btcCloses.length - 25);
+      const btc6hAgo = btcCloses[btc6hAgoIndex];
+      const btcMomentum6h = btc6hAgo > 0 ? ((btcNow - btc6hAgo) / btc6hAgo) * 100 : 0;
+      
+      // Check if trading day (Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6)
+      const dayOfWeek = new Date().getUTCDay();
+      const ALLOWED_DAYS = [0, 1, 3, 4]; // Sun, Mon, Wed, Thu
+      const isTradingDay = ALLOWED_DAYS.includes(dayOfWeek);
+      
+      // Determine trend
+      let btcTrend: 'bullish' | 'bearish' | 'neutral' = 'neutral';
+      const MIN_MOMENTUM = 0.75;
+      if (btcMomentum6h > MIN_MOMENTUM && btcAboveMa50) {
+        btcTrend = 'bullish';
+      } else if (btcMomentum6h < -MIN_MOMENTUM && !btcAboveMa50) {
+        btcTrend = 'bearish';
+      }
+      
+      // Overall status
+      let status: string = 'neutral';
+      let reason = '';
+      
+      if (!isTradingDay) {
+        status = 'unfavorable';
+        reason = `Not a trading day (${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dayOfWeek]})`;
+      } else if (btcTrend === 'bullish') {
+        status = 'favorable_long';
+        reason = `BTC bullish: +${btcMomentum6h.toFixed(2)}% (6h), above MA50`;
+      } else if (btcTrend === 'bearish') {
+        status = 'favorable_short';
+        reason = `BTC bearish: ${btcMomentum6h.toFixed(2)}% (6h), below MA50`;
+      } else {
+        status = 'neutral';
+        reason = `BTC sideways: ${btcMomentum6h.toFixed(2)}% (6h) - waiting for momentum`;
+      }
+      
+      return res.json({
+        status,
+        btcAboveMa50,
+        btcMomentum6h,
+        btcTrend,
+        isTradingDay,
+        reason,
+        tradingRecommended: status === 'favorable_long' || status === 'favorable_short',
+      });
+      
+    } catch (fetchError) {
+      logger.warn('Failed to fetch BTC candles for market conditions:', fetchError);
       return res.json({
         status: 'unknown',
-        reason: 'No agent running',
+        reason: 'Unable to fetch market data',
         tradingRecommended: false,
       });
     }
-    
-    // Get conditions from first agent (they all use BTC conditions)
-    const firstAgent = userAgentData.agents[0];
-    const agentStatus = firstAgent.getStatus();
-    const conditions = agentStatus.marketConditions;
-    
-    res.json({
-      status: conditions?.overallStatus || 'unknown',
-      btcAboveMa50: conditions?.btcAboveMa50 ?? null,
-      btcMomentum6h: conditions?.btcMomentum6h ?? null,
-      btcTrend: conditions?.btcTrend ?? null,
-      isTradingDay: conditions?.isTradingDay ?? null,
-      reason: conditions?.reason || 'Not analyzed yet',
-      tradingRecommended: conditions?.overallStatus === 'favorable_long' || conditions?.overallStatus === 'favorable_short',
-    });
   } catch (error) {
     logger.error("Failed to get market conditions", error);
     res.status(500).json({ error: "Failed to get market conditions" });
