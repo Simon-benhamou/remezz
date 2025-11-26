@@ -56,9 +56,10 @@ export const MomentumConfig = {
     STOP_LOSS_PCT: 1.5,          // Stop Loss 1.5% (was 2%) → 7.5% avec 5x
     PROFIT_TARGET_PCT: 3.0,      // Take Profit 3% (was 2.5%) → 15% avec 5x
     
-    // Trailing Stop V5 - Plus agressif pour capturer les gains
-    TRAILING_ACTIVATION_PCT: 1.2, // Active trailing à +1.2% (was 1.5%)
-    TRAILING_DISTANCE_PCT: 0.6,   // Trail de 0.6% (was 0.8%) - plus serré
+    // Trailing Stop V5.2 - Optimisé pour protéger les gains plus tôt
+    // Backtest: 32.2% ROI vs 16.0% avec ancienne config
+    TRAILING_ACTIVATION_PCT: 1.0, // Active trailing à +1.0% (was 1.2%)
+    TRAILING_DISTANCE_PCT: 0.4,   // Trail de 0.4% (was 0.6%) - plus serré
     TRAILING_TIGHTEN_AT_PCT: 2.0, // Resserre à 0.4% à partir de +2%
     TRAILING_TIGHT_DISTANCE_PCT: 0.4,
     

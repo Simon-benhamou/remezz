@@ -307,10 +307,33 @@ export default function DashboardPageCompact(){
               </div>
             </Space>
             
-            <Tooltip title={marketConditions.reason}>
+            <Tooltip 
+              title={
+                <div style={{ maxWidth: 350 }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: 8 }}>📋 Stratégie V5 - Conditions:</div>
+                  <div style={{ marginBottom: 4 }}>
+                    {marketConditions.btcAboveMa50 
+                      ? '✅ BTC > SMA200 (BULL) → Long autorisé'
+                      : '❌ BTC < SMA200 (BEAR) → Long bloqué'}
+                  </div>
+                  <div style={{ marginBottom: 8, fontSize: 11, opacity: 0.8 }}>
+                    La stratégie ne fait que des LONG, donc elle attend un marché haussier.
+                  </div>
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.2)', paddingTop: 8, fontSize: 11 }}>
+                    <div><strong>Entry:</strong> BB breakout + ROC&gt;1.5% + Vol&gt;1.3x</div>
+                    <div><strong>Exit:</strong> SL 1.5% / TP 3% / Trail +1.0%</div>
+                  </div>
+                  {marketConditions.reason && (
+                    <div style={{ marginTop: 8, fontStyle: 'italic', opacity: 0.8 }}>
+                      {marketConditions.reason}
+                    </div>
+                  )}
+                </div>
+              }
+            >
               <Tag 
                 color={marketConditions.tradingRecommended ? 'success' : marketConditions.status === 'unfavorable' ? 'error' : 'default'}
-                style={{ fontSize: 12, padding: '4px 12px' }}
+                style={{ fontSize: 12, padding: '4px 12px', cursor: 'help' }}
               >
                 {marketConditions.tradingRecommended ? '✅ TRADING RECOMMENDED' : '⏳ WAIT FOR SIGNAL'}
               </Tag>
