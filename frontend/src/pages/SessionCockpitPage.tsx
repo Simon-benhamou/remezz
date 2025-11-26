@@ -693,6 +693,14 @@ export default function SessionCockpitPage() {
           return;
         }
         if (msg.type === 'tick') {
+          // ✅ FIX: Only update if symbol matches current session
+          const msgSymbol = msg.data?.symbol?.toUpperCase().replace(/[/:]/g, '');
+          const currentSym = symbol?.toUpperCase().replace(/[/:]/g, '');
+          
+          if (!currentSym || !msgSymbol || msgSymbol !== currentSym) {
+            return; // Skip tick for different symbol
+          }
+          
           setStatus((s: any) => ({
             ...s,
             symbol: msg.data.symbol,
@@ -703,7 +711,16 @@ export default function SessionCockpitPage() {
         }
         // 🔥 REAL-TIME PRICE: High-frequency price updates from Binance WebSocket
         if (msg.type === 'price_update') {
-          const { last, bid, ask, timestamp } = msg.data;
+          const { symbol: msgSymbol, last, bid, ask, timestamp } = msg.data;
+          
+          // ✅ FIX: Only update price if symbol matches current session
+          const currentSymbol = symbol?.toUpperCase().replace(/[/:]/g, '');
+          const receivedSymbol = msgSymbol?.toUpperCase().replace(/[/:]/g, '');
+          
+          if (!currentSymbol || !receivedSymbol || currentSymbol !== receivedSymbol) {
+            return; // Skip price update for different symbol
+          }
+          
           if (last) {
             setStatus((s: any) => ({ ...s, price: last }));
             setTicker((prev: any) => ({
