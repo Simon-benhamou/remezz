@@ -1570,14 +1570,22 @@ process.on('SIGINT', shutdown);
   }
 })();
 
-// Restore active sessions
+// Restore active sessions - ONLY restore sessions that exist in DB, don't create new ones
 (async () => {
   try {
-    // Group sessions by userId
+    // Get only active sessions (not stopped)
     const activeSessions = await prisma.agentSession.findMany({
-      where: { stoppedAt: null },
+      where: { 
+        stoppedAt: null,
+        haltedAt: null, // Also exclude halted sessions
+      },
       include: { user: true }
     });
+    
+    if (activeSessions.length === 0) {
+      logger.info('📋 No active sessions to restore');
+      return;
+    }
     
     // Group by user
     const sessionsByUser = new Map<string, any[]>();
@@ -1588,69 +1596,57 @@ process.on('SIGINT', shutdown);
       sessionsByUser.set(session.userId, existing);
     }
     
-    // Restore each user's agents
+    // Restore each user's agents - ONLY the ones that exist
     for (const [userId, sessions] of sessionsByUser) {
       try {
         const exchange = await getExchangeForUser(userId);
         
-        // Get capital from first session profile
+        // Get capital from first session profile or user settings
         const firstProfile = sessions[0]?.profileJson as any;
-        const capitalUsd = firstProfile?.capitalUsd || 10000;
+        let capitalUsd = firstProfile?.capitalUsd || 10000;
         
-        // Build session IDs map
-        const sessionIds: { btc: string; eth: string; sol: string; xrp: string } = {
-          btc: '',
-          eth: '',
-          sol: '',
-          xrp: '',
-        };
-        
-        const symbolToKey: Record<string, keyof typeof sessionIds> = {
-          'BTC/USDT:USDT': 'btc',
-          'ETH/USDT:USDT': 'eth',
-          'SOL/USDT:USDT': 'sol',
-          'XRP/USDT:USDT': 'xrp',
-        };
-        
-        for (const session of sessions) {
-          const key = symbolToKey[session.symbol];
-          if (key) sessionIds[key] = session.id;
-        }
-        
-        // Fill in missing session IDs by creating new sessions
-        for (const symbol of MomentumConfig.SYMBOLS) {
-          const key = symbolToKey[symbol];
-          if (key && !sessionIds[key]) {
-            const newSession = await prisma.agentSession.create({
-              data: {
-                userId,
-                symbol,
-                mode: sessions[0]?.mode || 'paper',
-                profileJson: { capitalUsd, symbol },
-              }
-            });
-            sessionIds[key] = newSession.id;
+        // Try to get from user settings
+        try {
+          const setting = await prisma.userSetting.findUnique({
+            where: { userId_key: { userId, key: 'paperTradingCapital' } }
+          });
+          if (setting?.value) {
+            capitalUsd = parseFloat(setting.value) || capitalUsd;
           }
-        }
+        } catch {}
         
         const mode = sessions[0]?.mode as 'paper' | 'live' || 'paper';
         
-        const { agents, capitalPool } = await createAllAgents({
-          exchange,
-          prisma,
-          userId,
-          sessionIds,
-          totalCapitalUsd: capitalUsd,
-          mode,
-        });
+        // Create capital pool for this user
+        resetCapitalPool(userId, capitalUsd, mode);
+        const capitalPool = getCapitalPool(userId)!;
         
+        // Create agents ONLY for existing sessions
+        const agents: SimpleAgent[] = [];
+        
+        for (const session of sessions) {
+          const agent = new SimpleAgent({
+            symbol: session.symbol,
+            exchange,
+            prisma,
+            userId,
+            sessionId: session.id,
+            capitalPool,
+            mode,
+            riskPerTradePct: 1,
+          });
+          agents.push(agent);
+        }
+        
+        // Store and start agents
         userAgents.set(userId, { agents, capitalPool });
         
         for (const agent of agents) {
           await agent.start();
         }
         
-        logger.info(`♻️ Restored ${agents.length} agents for ${userId}`);
+        const symbols = sessions.map((s: any) => s.symbol).join(', ');
+        logger.info(`♻️ Restored ${agents.length} agent(s) for ${userId}: ${symbols}`);
       } catch (error) {
         logger.warn(`Failed to restore sessions for ${userId}:`, error);
       }
