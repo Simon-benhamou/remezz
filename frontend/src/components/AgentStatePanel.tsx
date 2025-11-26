@@ -172,9 +172,9 @@ export default function AgentStatePanel({ agent, symbol, lastPrice, margin, sess
         </div>
         {agent.state && (
           <Tag className='agent-diagnostics__state' color={
-            agent.state === 'ARMED' ? 'green' :
-            agent.state === 'MANAGE' ? 'blue' :
-            agent.state === 'COOLDOWN' ? 'orange' : 'red'
+            agent.state === 'WATCHING' ? 'blue' :
+            agent.state === 'IN_POSITION' ? 'green' :
+            agent.state === 'HALT' ? 'red' : 'default'
           }>
             {agent.state}
           </Tag>

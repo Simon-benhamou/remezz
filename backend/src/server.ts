@@ -627,7 +627,7 @@ app.get("/api/agent/state", async (req, res) => {
         return res.json({
           running: agentStatus.running,
           state: agentStatus.running 
-            ? (agentStatus.hasPosition ? 'MANAGE' : 'ARMED') 
+            ? (agentStatus.hasPosition ? 'IN_POSITION' : 'WATCHING') 
             : 'STOPPED',
           hasPosition: agentStatus.hasPosition,
           symbol: agentStatus.symbol,
@@ -652,7 +652,7 @@ app.get("/api/agent/state", async (req, res) => {
       if (dbSession) {
         return res.json({
           running: false,
-          state: dbSession.stoppedAt ? 'STOPPED' : (dbSession.haltedAt ? 'HALT' : 'IDLE'),
+          state: dbSession.stoppedAt ? 'STOPPED' : (dbSession.haltedAt ? 'HALT' : 'STOPPED'),
           hasPosition: false,
           symbol: dbSession.symbol,
           sessionId: dbSession.id,

@@ -1108,13 +1108,13 @@ export default function SessionCockpitPage() {
                     <Tag
                       className="session-monitor-chip"
                       color={
-                        status.session.state === 'MANAGE'
+                        status.session.state === 'IN_POSITION'
                           ? 'green'
-                          : status.session.state === 'COOLDOWN'
-                            ? 'orange'
+                          : status.session.state === 'WATCHING'
+                            ? 'blue'
                             : status.session.state === 'HALT'
                               ? 'red'
-                              : 'blue'
+                              : 'default'
                       }
                     >
                       {status.session.state}
