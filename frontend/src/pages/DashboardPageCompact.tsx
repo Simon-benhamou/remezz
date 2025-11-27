@@ -353,8 +353,8 @@ export default function DashboardPageCompact(){
                 </Button>
               </div>
             ) : (
-              <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-                <Row gutter={[12, 12]} style={{marginLeft:"0px"}}>
+              <div style={{ maxHeight: 400, overflowY: 'auto' , overflowX: 'hidden' }}>
+                <Row gutter={[12, 12]}>
                   {(ov?.sessions || []).map((session: any) => (
                     <Col xs={24} sm={12} key={session.id}>
                       <div 
@@ -394,6 +394,7 @@ export default function DashboardPageCompact(){
       </Row>
       {/* Performance Chart & Recent Trades */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} lg={12}>
           <PerformanceOverviewCard
             trades={trades}
             loading={tradesLoading}
@@ -401,13 +402,15 @@ export default function DashboardPageCompact(){
             subtitle="Cumulative PnL across all sessions"
             tagLabel={mode.toUpperCase()}
           />
-          </Row>
-        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        </Col>
+        <Col xs={24} lg={12}>
+     
           <RecentTradesTable
             trades={trades}
             loading={tradesLoading}
             onRefresh={loadTrades}
           />
+        </Col>
       </Row>
 
     
