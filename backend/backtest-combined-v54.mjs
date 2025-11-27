@@ -1,7 +1,7 @@
 /**
  * 🔬 BACKTEST COMBINÉ V5.4 - LONG (Bull) + SHORT (Bear)
  * 
- * Simulation réaliste avec $1000 sur 12 mois
+ * Simulation réaliste avec $1000 sur 24 mois
  * - Détecte automatiquement le régime (BTC vs SMA200)
  * - Applique LONG en Bull, SHORT en Bear
  * - Frais réalistes: trading, slippage, funding
@@ -238,23 +238,25 @@ async function main() {
   console.log(`💸 Frais: Trading ${COSTS.TRADING_FEE_PCT}%, Slippage ${COSTS.SLIPPAGE_PCT}%, Funding ${COSTS.FUNDING_RATE_PCT}%/8h`);
   
   // Fetch data
-  console.log('\n📊 Fetching 12 months of data...');
-  const btcCandles = await fetchCandles('BTC/USDT:USDT', 12);
+  console.log('\n📊 Fetching 24 months of data...');
+  const btcCandles = await fetchCandles('BTC/USDT:USDT', 24);
   const btcCloses = btcCandles.map(c => c.close);
   console.log(`   BTC: ${btcCandles.length} candles`);
   
   const allData = {};
   for (const symbol of SYMBOLS) {
-    allData[symbol] = await fetchCandles(symbol, 12);
+    allData[symbol] = await fetchCandles(symbol, 24);
     console.log(`   ${symbol}: ${allData[symbol].length} candles`);
   }
   
   // Initialize tracking
   let capital = INITIAL_CAPITAL;
+  let capitalInUse = 0;  // Track capital locked in positions
   const trades = [];
   let totalCosts = 0;
   const monthlyPnl = {};
   const dailyEquity = [];
+  let rejectedOrders = 0;  // Track rejected orders due to insufficient capital
   
   const positions = {};
   const cooldowns = {};
@@ -350,6 +352,7 @@ async function main() {
         if (exitReason) {
           const pnl = calculatePnl(pos.entryPrice, exitPrice, pos.side, pos.capitalUsed, holdBars);
           capital += pnl.netPnlUsd;
+          capitalInUse -= pos.capitalUsed;  // Release capital back
           totalCosts += pnl.costsUsd;
           
           trades.push({
@@ -382,31 +385,44 @@ async function main() {
       // CHECK FOR NEW ENTRY
       // ═══════════════════════════════════════════════════════════════════════
       if (!positions[symbol] && cooldowns[symbol] <= 0 && capital > 100) {
-        const capitalToUse = capital * CONFIG.POSITION_SIZE_PCT;
+        const availableCapital = capital - capitalInUse;
+        const capitalToUse = capital * CONFIG.POSITION_SIZE_PCT;  // 40% of current capital
         
-        // BULL REGIME → LONG
-        if (isBullRegime && checkLongEntry(windowCandles)) {
-          longSignals++;
-          positions[symbol] = {
-            side: 'long',
-            entryPrice: current.close,
-            entryIdx: idx,
-            entryTime: btcCandle.timestamp,
-            capitalUsed: capitalToUse,
-            hwm: current.close
-          };
-        }
-        // BEAR REGIME → SHORT
-        else if (isBearRegime && checkShortEntry(windowCandles)) {
-          shortSignals++;
-          positions[symbol] = {
-            side: 'short',
-            entryPrice: current.close,
-            entryIdx: idx,
-            entryTime: btcCandle.timestamp,
-            capitalUsed: capitalToUse,
-            lwm: current.close
-          };
+        // Check if we have enough available capital
+        if (capitalToUse > availableCapital) {
+          // Not enough capital - order would be rejected
+          if (isBullRegime && checkLongEntry(windowCandles)) {
+            rejectedOrders++;
+          } else if (isBearRegime && checkShortEntry(windowCandles)) {
+            rejectedOrders++;
+          }
+        } else {
+          // BULL REGIME → LONG
+          if (isBullRegime && checkLongEntry(windowCandles)) {
+            longSignals++;
+            capitalInUse += capitalToUse;  // Lock capital
+            positions[symbol] = {
+              side: 'long',
+              entryPrice: current.close,
+              entryIdx: idx,
+              entryTime: btcCandle.timestamp,
+              capitalUsed: capitalToUse,
+              hwm: current.close
+            };
+          }
+          // BEAR REGIME → SHORT
+          else if (isBearRegime && checkShortEntry(windowCandles)) {
+            shortSignals++;
+            capitalInUse += capitalToUse;  // Lock capital
+            positions[symbol] = {
+              side: 'short',
+              entryPrice: current.close,
+              entryIdx: idx,
+              entryTime: btcCandle.timestamp,
+              capitalUsed: capitalToUse,
+              lwm: current.close
+            };
+          }
         }
       }
       
@@ -455,6 +471,7 @@ async function main() {
 │  💰 Capital: $${INITIAL_CAPITAL} → $${capital.toFixed(2).padStart(10)}                                       │
 │  📈 ROI:     ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%                                                          │
 │  🎯 Trades:  ${String(trades.length).padStart(4)} total (${longTrades.length} LONG + ${shortTrades.length} SHORT)                          │
+│  🚫 Rejected: ${rejectedOrders} (insufficient capital)                                       │
 │  ✅ Win Rate: ${winRate.toFixed(1)}% global                                                    │
 │  📉 Max DD:  ${maxDrawdown.toFixed(1)}%                                                         │
 │  💸 Frais:   $${totalCosts.toFixed(2)} (${(totalCosts/INITIAL_CAPITAL*100).toFixed(1)}% du capital initial)                       │
@@ -519,7 +536,7 @@ async function main() {
   console.log('💡 RÉSUMÉ V5.4');
   console.log('═'.repeat(80));
   console.log(`
-   ✅ ROI sur 12 mois: ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%
+   ✅ ROI sur 24 mois: ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%
    ✅ Win Rate global: ${winRate.toFixed(1)}%
    ✅ Mois positifs: ${positiveMonths.length}/${months.length}
    ✅ Max Drawdown: ${maxDrawdown.toFixed(1)}%
