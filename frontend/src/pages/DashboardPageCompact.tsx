@@ -150,20 +150,7 @@ export default function DashboardPageCompact(){
             {mode.toUpperCase()}
           </Tag>
         </Title>
-        <Space>
-          <Button 
-            icon={<ThunderboltFilled />} 
-            onClick={runOptimizer} 
-            loading={optimizing}
-            type="default"
-          >
-            Run Optimizer (All Symbols)
-          </Button>
-          <Button onClick={load} loading={loading}>Refresh</Button>
-          <Button type="primary" onClick={() => navigate('/sessions')}>
-            <PlusOutlined /> New Agent
-          </Button>
-        </Space>
+ 
       </div>
 
       {/* KPIs Row - Compact */}

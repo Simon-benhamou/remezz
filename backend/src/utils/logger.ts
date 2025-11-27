@@ -41,12 +41,15 @@ function extractSymbol(message: string): string | undefined {
 }
 
 function extractKind(message: string): LogEntry['kind'] {
+  // Order matters: more specific checks first
   if (message.includes('Tick #') || message.includes('🔄')) return 'tick';
-  if (message.includes('SIGNAL') || message.includes('Signal check') || message.includes('🔍')) return 'signal';
   if (message.includes('OPENING') || message.includes('OPENED') || message.includes('🚀') || message.includes('🟢')) return 'entry';
   if (message.includes('CLOSING') || message.includes('CLOSED') || message.includes('EXIT') || message.includes('🔴') || message.includes('🚪')) return 'exit';
-  if (message.includes('Market:') || message.includes('📊')) return 'market';
-  if (message.includes('❌') || message.includes('Error') || message.includes('Failed')) return 'error';
+  if (message.includes('Market:') || message.includes('📊') || message.includes('favorable_')) return 'market';
+  // "No signal" is informational, not an error - check before error detection
+  if (message.includes('No signal') || message.includes('SIGNAL') || message.includes('Signal check') || message.includes('🔍')) return 'signal';
+  // Only real errors
+  if (message.includes('Error') || message.includes('Failed') || message.includes('error:')) return 'error';
   return 'info';
 }
 

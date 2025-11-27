@@ -177,7 +177,8 @@ function AuthenticatedApp() {
             overflow: 'hidden',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 24, height: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, height: '100%' }}>
+            {/* Equity compact chip */}
             <div
               role='button'
               tabIndex={0}
@@ -190,55 +191,30 @@ function AuthenticatedApp() {
               }}
               style={{
                 cursor: 'pointer',
-                padding: '10px 16px',
-                borderRadius: 18,
-                border: '1px solid rgba(96, 165, 250, 0.32)',
-                background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(59, 130, 246, 0.38))',
-                boxShadow: '0 24px 58px -32px rgba(59, 130, 246, 0.65)',
-                minWidth: 200,
-                display: 'grid',
-                gridAutoRows: 'max-content',
-                rowGap: 4,
-                alignContent: 'center',
+                padding: '6px 14px',
+                borderRadius: 10,
+                border: '1px solid rgba(96, 165, 250, 0.25)',
+                background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.22), rgba(59, 130, 246, 0.28))',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
               }}
             >
-              <div style={{ fontSize: 11, color: 'rgba(226, 232, 240, 0.78)', letterSpacing: 0.6, textTransform: 'uppercase' }}>
-                {balanceSubtitle}
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: '#f8fafc', lineHeight: 1 }}>{formattedBalance}</div>
-              <div style={{ fontSize: 12, color: 'rgba(226, 232, 240, 0.7)' }}>
-                {freeSubtitle}: {formattedFree}
-              </div>
+              <span style={{ fontSize: 10, color: 'rgba(226, 232, 240, 0.7)', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                {mode === 'live' ? 'LIVE' : 'PAPER'}
+              </span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: '#f8fafc' }}>{formattedBalance}</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>
-                <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                  ROI (realized)
-                </div>
-                <div style={{ color: roiValue >= 0 ? '#34d399' : '#f87171', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>
-                  {roiValue >= 0 ? '+' : '-'}{Math.abs(roiValue).toFixed(1)}%
-                </div>
-                {showNetRoi && (
-                  <div style={{ color: netRoiValue >= 0 ? '#0ea5e9' : '#f87171', fontSize: 11, fontWeight: 500 }}>
-                    Net {netRoiValue >= 0 ? '+' : '-'}{Math.abs(netRoiValue).toFixed(1)}%
-                  </div>
-                )}
+            {/* Inline stats */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                <span style={{ color: pnlValue >= 0 ? '#60a5fa' : '#f87171', fontWeight: 600, fontSize: 15, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {pnlValue >= 0 ? '+' : ''}{pnlValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}$
+                </span>
+                <span style={{ color: roiValue >= 0 ? '#34d399' : '#f87171', fontSize: 13, fontWeight: 500 }}>
+                  ({roiValue >= 0 ? '+' : ''}{roiValue.toFixed(1)}%)
+                </span>
               </div>
-              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 100, display: 'grid', rowGap: 2 }}>
-                <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                  PnL
-                </div>
-                <div style={{ color: pnlValue >= 0 ? '#60a5fa' : '#f87171', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>
-                  {pnlValue >= 0 ? '+' : '-'}${Math.abs(pnlValue).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </div>
-              </div>
-              <div style={{ background: 'rgba(8, 15, 35, 0.78)', borderRadius: 14, padding: '8px 12px', minWidth: 80, display: 'grid', rowGap: 2 }}>
-                <div style={{ color: 'rgba(148, 163, 184, 0.78)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                  Active
-                </div>
-                <div style={{ color: '#f8fafc', fontWeight: 600, fontSize: 15, lineHeight: 1.1 }}>{activeAgents}</div>
-              </div>
-          
             </div>
           </div>
           <Space size={18} align='center'>
