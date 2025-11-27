@@ -202,7 +202,7 @@ export default function SessionsPage() {
 
   const [sessions, setSessions] = React.useState<AgentSession[]>([]);
   const [loading, setLoading] = React.useState(false);
-  const [viewMode, setViewMode] = React.useState<ViewMode>('cards');
+  const [viewMode, setViewMode] = React.useState<ViewMode>('table');
   const [modalOpen, setModalOpen] = React.useState(false);
 
   const fetchSessions = React.useCallback(
@@ -367,16 +367,7 @@ export default function SessionsPage() {
                 </Tag>
               </Space>
               <Space size={6} wrap>
-                <Tag
-                  style={{
-                    borderRadius: 10,
-                    border: 'none',
-                    background: strategyBackground,
-                    color: strategyColor,
-                  }}
-                >
-                  {resolveSessionStrategyLabel(record)}
-                </Tag>
+              
                 {biasMeta && (
                   <Tag
                     style={{
@@ -409,12 +400,7 @@ export default function SessionsPage() {
           );
         },
       },
-      {
-        title: 'Pair',
-        dataIndex: 'symbol',
-        key: 'symbol',
-        render: (value: string) => <Text style={{ color: '#cbd5f5' }}>{value || '—'}</Text>,
-      },
+   
       {
         title: 'Selection',
         key: 'selectionMode',
@@ -438,24 +424,12 @@ export default function SessionsPage() {
         title: 'Status',
         key: 'status',
         render: (_, record) => {
-          const meta = statusMeta(record);
           const hasPosition = (record as any).openPositions > 0;
           return (
             <Space direction="vertical" size={2}>
-              <Tag
-                style={{
-                  borderRadius: 10,
-                  border: 'none',
-                  background: meta.tone,
-                  color: meta.color,
-                  fontWeight: 600,
-                }}
-              >
-                {meta.label}
-              </Tag>
               {isSessionActive(record) && (
                 <Text style={{ color: '#94a3b8', fontSize: 11 }}>
-                  {hasPosition ? '📈 In position' : '🔍 Scanning'}
+                  {hasPosition ? 'In position' : ' Watching'}
                 </Text>
               )}
             </Space>
@@ -775,25 +749,7 @@ export default function SessionsPage() {
                             )}
                           </div>
                           <Space size={6} wrap>
-                            <Tag
-                              style={{
-                                borderRadius: 8,
-                                border: 'none',
-                                background: strategySnapshot?.engine
-                                  ? `${STRATEGY_META[strategySnapshot.engine].color}22`
-                                  : 'rgba(148, 163, 184, 0.14)',
-                                color: strategySnapshot?.engine
-                                  ? STRATEGY_META[strategySnapshot.engine].color
-                                  : '#cbd5f5',
-                                fontSize: 11,
-                                fontWeight: 600,
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.3px',
-                                padding: '2px 10px',
-                              }}
-                            >
-                              {resolveSessionStrategyLabel(session)}
-                            </Tag>
+                            
                             {biasMeta && (
                               <Tag
                                 style={{
