@@ -1098,6 +1098,32 @@ export default function SessionCockpitPage() {
             </Col>
           )}
         </Row>
+         <Row gutter={[24, 24]}>
+          <Card title="Orders & trades" bordered={false} className="session-section-card  w-full">
+            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
+              <div className="session-trade-card">
+                <Segmented
+                  value={ordersView}
+                  onChange={(value) => setOrdersView(value as 'trades' | 'orders')}
+                  options={[
+                    { label: `Recent trades (${filteredTrades.length})`, value: 'trades' },
+                    { label: `Active orders (${activeOrders.length})`, value: 'orders' },
+                  ]}
+                  className="session-trade-card__toggle"
+                />
+                <div className="session-trade-card__table">
+                  {ordersView === 'trades' ? (
+                    <MemoTradesTable rows={trades} />
+                  ) : (
+                    <MemoOrdersTable rows={orders} />
+                  )}
+                </div>
+              </div>
+            ) : (
+              <Skeleton active paragraph={{ rows: 6 }} />
+            )}
+          </Card>
+        </Row>
 <Row>
                 {shouldShowContent(LoadingPhase.SECONDARY_DATA) && status?.session?.id ? (
                   <PerfBreakdownPanel sessionId={status?.session?.id} api={api} />
@@ -1105,6 +1131,7 @@ export default function SessionCockpitPage() {
                   <Skeleton active paragraph={{ rows: 8 }} />
                 )}
 </Row>
+
 <Row gutter={[24, 24]}>
           <Col xs={24}>
             <Card 
@@ -1198,32 +1225,7 @@ export default function SessionCockpitPage() {
           </Col>
         </Row>
 
-        <Row gutter={[24, 24]}>
-          <Card title="Orders & trades" bordered={false} className="session-section-card  w-full">
-            {shouldShowContent(LoadingPhase.SECONDARY_DATA) ? (
-              <div className="session-trade-card">
-                <Segmented
-                  value={ordersView}
-                  onChange={(value) => setOrdersView(value as 'trades' | 'orders')}
-                  options={[
-                    { label: `Recent trades (${filteredTrades.length})`, value: 'trades' },
-                    { label: `Active orders (${activeOrders.length})`, value: 'orders' },
-                  ]}
-                  className="session-trade-card__toggle"
-                />
-                <div className="session-trade-card__table">
-                  {ordersView === 'trades' ? (
-                    <MemoTradesTable rows={trades} />
-                  ) : (
-                    <MemoOrdersTable rows={orders} />
-                  )}
-                </div>
-              </div>
-            ) : (
-              <Skeleton active paragraph={{ rows: 6 }} />
-            )}
-          </Card>
-        </Row>
+       
       </Space>
     </div>
   );
