@@ -342,7 +342,6 @@ export default function SessionsPage() {
           const confidenceText = formatConfidenceTag(primary?.confidence);
           const guardrail = primary?.guardrail;
           return (
-            <Space direction="vertical" size={2}>
               <Space size={8}>
                 <Text style={{ color: '#f8fafc', fontWeight: 600 }}>{resolveAgentLabel(record)}</Text>
                 <Tag
@@ -354,49 +353,9 @@ export default function SessionsPage() {
                   }}
                 >
                   {record.mode?.toUpperCase?.()}
-                </Tag>
-                <Tag
-                  style={{
-                    borderRadius: 10,
-                    border: 'none',
-                    background: selectionBadgeMeta(record.isSmartAgent).background,
-                    color: selectionBadgeMeta(record.isSmartAgent).color,
-                  }}
-                >
-                  {selectionBadgeMeta(record.isSmartAgent).label}
-                </Tag>
+                </Tag>             
               </Space>
-              <Space size={6} wrap>
-              
-                {biasMeta && (
-                  <Tag
-                    style={{
-                      borderRadius: 10,
-                      border: 'none',
-                      background: biasMeta.background,
-                      color: biasMeta.color,
-                    }}
-                  >
-                    {biasMeta.label}
-                  </Tag>
-                )}
-                {guardrail && (
-                  <Tag
-                    style={{
-                      borderRadius: 10,
-                      border: 'none',
-                      background: 'rgba(251, 191, 36, 0.16)',
-                      color: '#fbbf24',
-                    }}
-                  >
-                    Guardrail active
-                  </Tag>
-                )}
-              </Space>
-              {confidenceText && (
-                <Text style={{ color: '#94a3b8', fontSize: 12 }}>{confidenceText}</Text>
-              )}
-            </Space>
+            
           );
         },
       },
@@ -627,7 +586,7 @@ export default function SessionsPage() {
             options={[
               {
                 label: (
-                  <Space size={6}>
+                  <Space size={6} align='center'>
                     <AppstoreOutlined />
                     <span>Cards</span>
                   </Space>
@@ -636,7 +595,7 @@ export default function SessionsPage() {
               },
               {
                 label: (
-                  <Space size={6}>
+                  <Space size={6}  align='center'>
                     <BarsOutlined />
                     <span>Table</span>
                   </Space>
