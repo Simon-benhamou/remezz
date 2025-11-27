@@ -252,4 +252,27 @@ export const api = {
     (await client.post('/api/agent/stop')).data,
   getAgentStatus: async () =>
     (await client.get('/api/agent/status')).data,
+  // Agent logs for feed page
+  getAgentLogs: async (mode?: 'paper' | 'live', limit = 100) =>
+    (await client.get('/api/agent/logs', { params: { mode, limit } })).data as {
+      logs: Array<{
+        timestamp: string;
+        sessionId: string;
+        symbol: string;
+        kind: string;
+        message: string;
+        level: 'info' | 'warn' | 'error';
+        details?: Record<string, any>;
+      }>;
+      agentStates: Array<{
+        sessionId: string;
+        symbol: string;
+        running: boolean;
+        hasPosition: boolean;
+        bias: 'long' | 'short' | null;
+        lastDecision: string | null;
+        marketConditions: any;
+      }>;
+      activeSessions: number;
+    },
 };

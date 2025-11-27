@@ -13,8 +13,6 @@ import {
   Tooltip,
   Select,
   message,
-  Drawer,
-  Empty,
   List,
   Statistic,
   Segmented,
@@ -26,7 +24,6 @@ import {
   ReloadOutlined,
   ExpandOutlined,
   CompressOutlined,
-  SyncOutlined,
   InfoCircleOutlined,
 } from '../icons';
 import ProfessionalChart from '../components/charts/ProfessionalChart';
@@ -138,9 +135,7 @@ export default function SessionCockpitPage() {
   // Tertiary data states (Phase 3)
   const [alerts, setAlerts] = React.useState<any[]>([]);
   const [opsEvents, setOpsEvents] = React.useState<any[]>([]);
-  const [activityOpen, setActivityOpen] = React.useState(false);
-  const [rearming, setRearming] = React.useState(false);
-  const [reselecting, setReselecting] = React.useState(false);
+  const [feedLogs, setFeedLogs] = React.useState<any[]>([]);
   const [refreshing, setRefreshing] = React.useState(false);
   const [marginHealth, setMarginHealth] = React.useState<any>(null);
   const [diagnostics, setDiagnostics] = React.useState<any>(null);
@@ -207,50 +202,6 @@ export default function SessionCockpitPage() {
   }, [status?.session, agent, kpi]);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
-
-  const handleRearm = async () => {
-    if (!status?.session?.id) {
-      message.error('No active session');
-      return;
-    }
-
-    const rawPlan = (agent as any)?.plan?.plan || (agent as any)?.plan;
-    if (!rawPlan) {
-      message.warning('No trading plan available to rearm');
-      return;
-    }
-
-    try {
-      setRearming(true);
-      await api.proposeAgentPlan(status.session.id, rawPlan);
-      message.success('Agent rearmed with current plan');
-    } catch (err: any) {
-      const detail =
-        err?.response?.data?.error || err?.response?.data?.message || err?.message || String(err);
-      message.error(detail);
-    } finally {
-      setRearming(false);
-    }
-  };
-
-  const handleReselect = async () => {
-    if (!status?.session?.id) {
-      message.error('No active session');
-      return;
-    }
-
-    try {
-      setReselecting(true);
-      await api.triggerSmartReselect(status.session.id);
-      message.success('Auto-select request sent');
-    } catch (err: any) {
-      const detail =
-        err?.response?.data?.error || err?.response?.data?.message || err?.message || String(err);
-      message.error(detail);
-    } finally {
-      setReselecting(false);
-    }
-  };
 
   const refreshAll = React.useCallback(async () => {
     if (!sessionId) return;
@@ -655,6 +606,34 @@ export default function SessionCockpitPage() {
     };
   }, [sessionId]);
 
+  // Load feed logs filtered by session symbol
+  React.useEffect(() => {
+    if (!sessionId || !symbol) return;
+    let cancelled = false;
+    const loadFeedLogs = async () => {
+      try {
+        const res = await api.getAgentLogs(undefined, 50) as any;
+        if (!cancelled && res?.logs) {
+          // Filter logs by this session's symbol
+          const filtered = res.logs.filter((log: any) => 
+            log.sessionId === sessionId || 
+            log.symbol === symbol ||
+            log.symbol?.toUpperCase().includes(symbol?.replace('/USDT:USDT', '').toUpperCase())
+          );
+          setFeedLogs(filtered.slice(0, 20));
+        }
+      } catch (err) {
+        console.warn('Feed logs fetch failed:', err);
+      }
+    };
+    loadFeedLogs();
+    const timer = setInterval(loadFeedLogs, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [sessionId, symbol]);
+
   // WS subscription dedicated to this monitor
   React.useEffect(() => {
     if (!sessionId || !symbol) return; // wait until symbol known to subscribe correctly
@@ -856,86 +835,6 @@ export default function SessionCockpitPage() {
     return currentOrder >= requiredOrder;
   };
 
-  const activityItems = React.useMemo(() => {
-    const items: Array<{
-      id: string;
-      ts: number;
-      title: string;
-      description?: string;
-      meta?: string;
-      tone?: 'info' | 'warn' | 'error' | 'success';
-    }> = [];
-    const toTs = (value: any) => {
-      if (!value) return null;
-      if (typeof value === 'number' && Number.isFinite(value)) return value;
-      const parsed = Date.parse(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    };
-
-    (alerts || []).forEach((alert: any, index: number) => {
-      const ts = toTs(alert?.ts || alert?.createdAt);
-      if (!ts) return;
-      items.push({
-        id: `alert-${alert?.id ?? index}-${ts}`,
-        ts,
-        title: alert?.kind || 'Policy alert',
-        description: alert?.details?.message || alert?.details?.error || alert?.message || '',
-        meta: alert?.symbol || status?.symbol,
-        tone: alert?.severity === 'high' ? 'error' : alert?.severity === 'med' ? 'warn' : 'info',
-      });
-    });
-
-    filteredTrades.forEach((trade: any, index: number) => {
-      const ts = toTs(trade?.createdAt || trade?.ts);
-      if (!ts) return;
-      items.push({
-        id: `trade-${trade?.id ?? index}-${ts}`,
-        ts,
-        title:
-          `${String(trade?.side || '').toUpperCase()} ${trade?.symbol || status?.symbol || ''}`.trim(),
-        description: trade?.qty ? `${trade.qty} @ ${trade.price}` : undefined,
-        meta:
-          typeof trade?.pnlUsd === 'number'
-            ? `${trade.pnlUsd >= 0 ? '+' : ''}$${Math.abs(trade.pnlUsd).toFixed(2)}`
-            : undefined,
-        tone: trade?.pnlUsd > 0 ? 'success' : trade?.pnlUsd < 0 ? 'error' : 'info',
-      });
-    });
-
-    filteredOrders.forEach((order: any, index: number) => {
-      const ts = toTs(order?.createdAt || order?.ts);
-      if (!ts) return;
-      items.push({
-        id: `order-${order?.id ?? index}-${ts}`,
-        ts,
-        title: `Order ${order?.status || ''}`.trim(),
-        description: order?.symbol
-          ? `${order.symbol} · ${order.side || ''} ${order.amount || ''}`.trim()
-          : undefined,
-        meta: order?.type,
-        tone:
-          order?.status === 'closed' ? 'success' : order?.status === 'canceled' ? 'warn' : 'info',
-      });
-    });
-
-    (opsEvents || []).forEach((evt: any, index: number) => {
-      const ts = toTs(evt?.ts || evt?.createdAt);
-      if (!ts) return;
-      const level = String(evt?.level || '').toLowerCase();
-      const tone = level === 'error' ? 'error' : level === 'warn' ? 'warn' : level === 'success' ? 'success' : 'info';
-      items.push({
-        id: `log-${evt?.id ?? index}-${ts}`,
-        ts,
-        title: evt?.source || 'Agent log',
-        description: evt?.message || evt?.details?.message || '',
-        meta: level ? level.toUpperCase() : undefined,
-        tone,
-      });
-    });
-
-    return items.sort((a, b) => b.ts - a.ts).slice(0, 60);
-  }, [alerts, filteredOrders, filteredTrades, opsEvents, status?.symbol]);
-
   const startBalance = Number(status?.session?.startBalanceUsd ?? status?.session?.startBalance ?? 0);
   const statsMeta = (kpi?.stats ?? {}) as Record<string, any>;
   const realizedPnl = Number(kpi?.realizedPnlUsd ?? 0);
@@ -950,11 +849,6 @@ export default function SessionCockpitPage() {
   const maxDrawdown = Number(kpi?.maxDrawdownPct ?? 0);
   const netPnl = realizedPnl + unrealizedPnl;
   const showNetRoi = Number.isFinite(netRoi) && Math.abs(netRoi - roi) > 0.05;
-  const canRearm = React.useMemo(() => {
-    const payload = (agent as any)?.plan;
-    if (!payload) return false;
-    return Boolean(payload?.plan || payload);
-  }, [agent]);
 
   // Modern Loading UI that respects sidebar on desktop, full screen on mobile
   const LoadingOverlay = () => {
@@ -1129,15 +1023,11 @@ export default function SessionCockpitPage() {
                 style={{ justifyContent: 'flex-end' }}
               >
                 <Tooltip title="Refresh session data">
-                  <Button icon={<ReloadOutlined />} onClick={refreshAll} loading={refreshing} />
+                  <Button icon={<ReloadOutlined />} onClick={refreshAll} loading={refreshing}>
+                    Refresh
+                  </Button>
                 </Tooltip>
-                <Button onClick={() => setActivityOpen(true)}>Activity feed</Button>
-                <Button icon={<SyncOutlined />} onClick={handleReselect} loading={reselecting}>
-                  Auto-select agent
-                </Button>
-                <Button type="primary" onClick={handleRearm} loading={rearming} disabled={!canRearm}>
-                  Rearm plan
-                </Button>
+                <Button onClick={() => navigate('/feed')}>View full feed</Button>
               </Space>
             </Flex>
             <Row gutter={[24, 24]} align="top">
@@ -1238,7 +1128,7 @@ export default function SessionCockpitPage() {
               {shouldShowContent(LoadingPhase.CORE_DATA) ? (
                 <div className="session-chart-card w-full">
                   <ProfessionalChart
-                    symbol={status?.symbol}
+                    symbol={symbol || status?.symbol}
                     sessionId={sessionId}
                     orders={filteredOrders}
                     fills={filteredTrades}
@@ -1296,9 +1186,55 @@ export default function SessionCockpitPage() {
 </Row>
 <Row gutter={[24, 24]}>
           <Col xs={24}>
-            <Card title="Recent agent logs" bordered={false} className="session-section-card">
+            <Card 
+              title={`Activity feed (${symbol || 'Agent'})`} 
+              bordered={false} 
+              className="session-section-card"
+              extra={
+                <Button size="small" onClick={() => navigate('/feed')}>
+                  View all
+                </Button>
+              }
+            >
               {shouldShowContent(LoadingPhase.CORE_DATA) ? (
-                opsEvents.length > 0 ? (
+                feedLogs.length > 0 ? (
+                  <List
+                    dataSource={feedLogs.slice(0, 10)}
+                    renderItem={(log: any, idx: number) => {
+                      const ts = log?.timestamp ? new Date(log.timestamp) : null;
+                      const timeLabel = ts && !Number.isNaN(ts.getTime())
+                        ? ts.toLocaleTimeString(undefined, { hour12: false })
+                        : '';
+                      const kind = log?.kind || 'info';
+                      const level = log?.level || 'info';
+                      const color = level === 'error'
+                        ? 'red'
+                        : level === 'warn'
+                          ? 'orange'
+                          : kind === 'entry'
+                            ? 'green'
+                            : kind === 'exit'
+                              ? 'blue'
+                              : kind === 'order'
+                                ? 'purple'
+                                : 'default';
+                      return (
+                        <List.Item key={`${log.timestamp}-${idx}`} style={{ padding: '8px 0' }}>
+                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                            <Space size={8} align="center" wrap>
+                              <Tag color={color}>{kind.toUpperCase()}</Tag>
+                              <Tag>{log?.symbol || symbol}</Tag>
+                              {timeLabel && <Text type="secondary" style={{ fontSize: 12 }}>{timeLabel}</Text>}
+                            </Space>
+                            <Text style={{ color: '#e2e8f0' }}>
+                              {log?.message || '—'}
+                            </Text>
+                          </Space>
+                        </List.Item>
+                      );
+                    }}
+                  />
+                ) : opsEvents.length > 0 ? (
                   <List
                     dataSource={opsEvents.slice(0, 8)}
                     renderItem={(evt: any) => {
@@ -1332,7 +1268,7 @@ export default function SessionCockpitPage() {
                     }}
                   />
                 ) : (
-                  <Text type="secondary">No recent logs captured.</Text>
+                  <Text type="secondary">No activity for this agent yet. Waiting for market events...</Text>
                 )
               ) : (
                 <Skeleton active paragraph={{ rows: 5 }} />
@@ -1368,55 +1304,6 @@ export default function SessionCockpitPage() {
           </Card>
         </Row>
       </Space>
-
-      <Drawer
-        title="Activity feed"
-        open={activityOpen}
-        onClose={() => setActivityOpen(false)}
-        width={420}
-      >
-        {activityItems.length > 0 ? (
-          <List
-            itemLayout="vertical"
-            dataSource={activityItems}
-            renderItem={(item) => (
-              <List.Item key={item.id}>
-                <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                  <Space align="center" size={8} wrap>
-                    <Tag
-                      color={
-                        item.tone === 'error'
-                          ? 'red'
-                          : item.tone === 'warn'
-                            ? 'orange'
-                            : item.tone === 'success'
-                              ? 'green'
-                              : 'blue'
-                      }
-                    >
-                      {item.tone === 'error'
-                        ? 'Alert'
-                        : item.tone === 'warn'
-                          ? 'Warning'
-                          : item.tone === 'success'
-                            ? 'Success'
-                            : 'Info'}
-                    </Tag>
-                    <Text strong>{item.title}</Text>
-                  </Space>
-                  {item.description && <Text>{item.description}</Text>}
-                  <Space size={8} wrap align="center">
-                    <Text type="secondary">{new Date(item.ts).toLocaleString()}</Text>
-                    {item.meta && <Tag>{item.meta}</Tag>}
-                  </Space>
-                </Space>
-              </List.Item>
-            )}
-          />
-        ) : (
-          <Empty description="No recent activity" />
-        )}
-      </Drawer>
     </div>
   );
 }

@@ -427,104 +427,19 @@ export default function DashboardPageCompact(){
             )}
           </Card>
         </Col>
-        
-        {/* RIGHT: Health + Balance */}
-        <Col xs={24} lg={10}>
-          <Space direction="vertical" style={{ width: '100%' }} size={16}>
-            {/* Health */}
-            <Card 
-              size="small"
-              title={<Space>{globalHealth.icon} System Health</Space>}
-            >
-              <div style={{ textAlign: 'center', marginBottom: 12 }}>
-                <div style={{ fontSize: 18, fontWeight: 'bold', color: globalHealth.color }}>
-                  {globalHealth.status.toUpperCase()}
-                </div>
-              </div>
-              
-              <Space direction="vertical" style={{ width: '100%', fontSize: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Text>Critical:</Text>
-                  <Badge count={ov?.alerts?.severityCounts?.high || 0} style={{ backgroundColor: '#ff4d4f' }} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Text>Warning:</Text>
-                  <Badge count={ov?.alerts?.severityCounts?.med || 0} style={{ backgroundColor: '#faad14' }} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Text>Info:</Text>
-                  <Badge count={ov?.alerts?.severityCounts?.low || 0} style={{ backgroundColor: '#1890ff' }} />
-                </div>
-              </Space>
-
-              {(ov?.alerts?.recent || []).length > 0 && (
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
-                  <Text type="secondary" style={{ fontSize: 11 }}>Recent Alerts:</Text>
-                  <List
-                    size="small"
-                    dataSource={(ov?.alerts?.recent || []).slice(0, 3)}
-                    renderItem={(alert: any) => (
-                      <List.Item style={{ padding: '4px 0', fontSize: 11 }}>
-                        <Tag color={alert.severity === 'high' ? 'red' : alert.severity === 'med' ? 'orange' : 'blue'}>
-                          {alert.kind}
-                        </Tag>
-                        <Text type="secondary">{alert.symbol}</Text>
-                      </List.Item>
-                    )}
-                  />
-                </div>
-              )}
-            </Card>
-
-            {/* Balance */}
-            <Card 
-              size="small"
-              title={<Space><DollarOutlined /> {mode === 'live' ? 'Live Balance' : 'Paper Balance'}</Space>}
-            >
-              {mode === 'live' ? (
-                <Space direction="vertical" style={{ width: '100%', fontSize: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Text strong>Equity:</Text>
-                    <Text strong style={{ color: '#1890ff' }}>${(ov?.exchangeBalance?.totalUsd || 0).toFixed(2)}</Text>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Text type="secondary">Free:</Text>
-                    <Text>${(ov?.exchangeBalance?.freeUsd || 0).toFixed(2)}</Text>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Text type="secondary">Used:</Text>
-                    <Text>${(ov?.exchangeBalance?.usedUsd || 0).toFixed(2)}</Text>
-                  </div>
-                </Space>
-              ) : (
-                <Space direction="vertical" style={{ width: '100%', fontSize: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Text strong>Equity:</Text>
-                    <Text strong style={{ color: '#52c41a' }}>${(ov?.paperBalance?.equityUsd || 0).toFixed(2)}</Text>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Text type="secondary">Free:</Text>
-                    <Text>${(ov?.paperBalance?.freeUsd || 0).toFixed(2)}</Text>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Text type="secondary">Committed:</Text>
-                    <Text>${(ov?.paperBalance?.committedUsd || 0).toFixed(2)}</Text>
-                  </div>
-                </Space>
-              )}
-            </Card>
-          </Space>
-        </Col>
       </Row>
 
       {/* Quick Actions Footer */}
       <Card size="small" style={{ marginTop: 16, textAlign: 'center' }}>
         <Space>
-          <Button onClick={() => navigate('/sessions')}>
+          <Button onClick={() => navigate('/agents')}>
             <EyeOutlined /> All Sessions
           </Button>
-          <Button type="primary" onClick={() => navigate('/sessions')}>
+          <Button type="primary" onClick={() => navigate('/agents')}>
             <PlusOutlined /> New Agent
+          </Button>
+          <Button onClick={() => navigate('/feed')}>
+            <BulbOutlined /> Agent Feed
           </Button>
         </Space>
       </Card>

@@ -13,7 +13,10 @@ type Props = {
 };
 
 export default function LiveMetrics({ symbol, price, ticker, lastUpdate, status = 'loading', errorMessage }: Props) {
-  if (status === 'loading') {
+  // If we have no data at all and status is loading, show loading state
+  const hasAnyData = (price && price > 0) || (ticker?.last && Number(ticker.last) > 0);
+  
+  if (status === 'loading' && !hasAnyData) {
     return (
       <Card size="small" style={{ marginBottom: 16 }}>
         <div style={{ textAlign: 'center', color: '#666' }}>

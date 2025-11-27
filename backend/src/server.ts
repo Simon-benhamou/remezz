@@ -595,6 +595,156 @@ app.get("/api/agent/status", async (req, res) => {
   }
 });
 
+// Get agent activity logs for Feed page
+app.get("/api/agent/logs", async (req, res) => {
+  try {
+    const userId = (req as any)?.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+    
+    const mode = req.query.mode as 'paper' | 'live' | undefined;
+    const limit = Math.min(parseInt(String(req.query.limit || '100')), 500);
+    
+    // Get active sessions for this user
+    const sessionsWhere: any = { userId };
+    if (mode) sessionsWhere.mode = mode;
+    
+    const activeSessions = await prisma.agentSession.findMany({
+      where: {
+        ...sessionsWhere,
+        stoppedAt: null,
+      },
+      select: { id: true, symbol: true, mode: true },
+    });
+    
+    const sessionIds = activeSessions.map(s => s.id);
+    const sessionMap = new Map(activeSessions.map(s => [s.id, s]));
+    
+    // Get recent trigger logs from active sessions
+    const triggerLogs = await prisma.triggerLog.findMany({
+      where: sessionIds.length > 0 ? { sessionId: { in: sessionIds } } : {},
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    
+    // Get recent orders for trade activity
+    const recentOrders = await prisma.order.findMany({
+      where: sessionIds.length > 0 ? { sessionId: { in: sessionIds } } : { session: { userId } },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: { fills: true },
+    });
+    
+    // Combine and format logs
+    const logs: Array<{
+      timestamp: string;
+      sessionId: string;
+      symbol: string;
+      kind: string;
+      message: string;
+      level: 'info' | 'warn' | 'error';
+      details?: Record<string, any>;
+    }> = [];
+    
+    // Add trigger logs
+    for (const tl of triggerLogs) {
+      logs.push({
+        timestamp: tl.createdAt.toISOString(),
+        sessionId: tl.sessionId || '',
+        symbol: tl.symbol,
+        kind: tl.kind,
+        message: formatTriggerMessage(tl.kind, tl.payload as any),
+        level: 'info',
+        details: tl.payload as any,
+      });
+    }
+    
+    // Add order events with fills
+    for (const order of recentOrders) {
+      // Calculate average fill price if filled
+      const avgFillPrice = order.fills.length > 0 
+        ? order.fills.reduce((sum, f) => sum + (f.price * f.qty), 0) / order.fills.reduce((sum, f) => sum + f.qty, 0)
+        : order.price;
+      
+      logs.push({
+        timestamp: order.createdAt.toISOString(),
+        sessionId: order.sessionId || '',
+        symbol: order.symbol,
+        kind: 'order',
+        message: `${order.side} ${order.type} order: ${order.qty} @ ${order.status === 'filled' ? avgFillPrice?.toFixed(4) : order.price?.toFixed(4)}`,
+        level: order.status === 'filled' ? 'info' : (order.status === 'canceled' ? 'warn' : 'info'),
+        details: { orderId: order.id, status: order.status, fills: order.fills.length },
+      });
+      
+      // Add fill events for significant fills
+      for (const fill of order.fills) {
+        if (fill.realizedPnl != null && fill.realizedPnl !== 0) {
+          logs.push({
+            timestamp: fill.ts.toISOString(),
+            sessionId: order.sessionId || '',
+            symbol: fill.symbol || order.symbol,
+            kind: fill.realizedPnl >= 0 ? 'exit' : 'exit',
+            message: `Trade filled: ${fill.qty} @ $${fill.price.toFixed(4)} | PnL: ${fill.realizedPnl >= 0 ? '+' : ''}$${fill.realizedPnl.toFixed(2)}`,
+            level: fill.realizedPnl >= 0 ? 'info' : 'warn',
+            details: { fillId: fill.id, orderId: fill.orderId, realizedPnl: fill.realizedPnl },
+          });
+        }
+      }
+    }
+    
+    // Sort by timestamp descending and limit
+    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    
+    // Get live agent states for current activity
+    const allAgents = getAllRunningAgents(userId);
+    const agentStates = allAgents
+      .filter(a => !mode || (a.getStatus() as any).mode === mode)
+      .map(a => {
+        const status = a.getStatus();
+        const state = a.getAgentState?.();
+        return {
+          sessionId: status.sessionId,
+          symbol: status.symbol,
+          running: status.running,
+          hasPosition: status.hasPosition,
+          bias: state?.plan?.bias || null,
+          lastDecision: (state as any)?.lastDecision || null,
+          marketConditions: status.marketConditions,
+        };
+      });
+    
+    res.json({ 
+      logs: logs.slice(0, limit),
+      agentStates,
+      activeSessions: activeSessions.length,
+    });
+  } catch (error) {
+    logger.error("Failed to get agent logs:", error);
+    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to get logs" });
+  }
+});
+
+// Helper function to format trigger messages
+function formatTriggerMessage(kind: string, payload: any): string {
+  switch (kind) {
+    case 'support-touch':
+      return `Price touched support at ${payload?.support || payload?.price}`;
+    case 'resistance-touch':
+      return `Price touched resistance at ${payload?.resistance || payload?.price}`;
+    case 'sudden-move':
+      return `Sudden price movement detected: ${payload?.changePercent ? payload.changePercent.toFixed(2) + '%' : ''}`;
+    case 'volume-spike':
+      return `Volume spike: ${payload?.volumeRatio ? payload.volumeRatio.toFixed(1) + 'x' : ''} average`;
+    case 'news-spike':
+      return `News/sentiment spike detected`;
+    case 'tick':
+      return `Tick: ${payload?.price || ''}`;
+    default:
+      return `${kind}: ${JSON.stringify(payload).slice(0, 100)}`;
+  }
+}
+
 // ============================================
 // MISSING ROUTES - RESTORE FOR FRONTEND COMPATIBILITY
 // ============================================

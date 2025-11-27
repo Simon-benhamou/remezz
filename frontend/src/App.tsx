@@ -12,8 +12,9 @@ import RegisterPage from './pages/RegisterPage';
 import SessionsPage from './pages/SessionsPage';
 import ReportsPage from './pages/ReportsPage';
 import SessionCockpitPage from './pages/SessionCockpitPage';
+import FeedPage from './pages/FeedPage';
 import { useAppStore } from './store';
-import { Activity, BarChart, Bot, ListChecks, Zap } from 'lucide-react';
+import { Activity, BarChart, Bot, ListChecks, Radio, Zap } from 'lucide-react';
 import { api } from './api';
 
 const resolveActiveMenuKey = (pathname: string) => {
@@ -22,7 +23,7 @@ const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/agents')) return '/agents';
   if (pathname.startsWith('/ledger')) return '/ledger';
   if (pathname.startsWith('/reports')) return '/reports';
-  if (pathname.startsWith('/portfolio')) return '/portfolio';
+  if (pathname.startsWith('/feed')) return '/feed';
   return '/operations';
 };
 
@@ -89,7 +90,7 @@ function AuthenticatedApp() {
     { key: '/agents', label: 'Agents', icon: <Bot /> },
     { key: '/ledger', label: 'Execution', icon: <ListChecks /> },
     { key: '/reports', label: 'Reports', icon: <BarChart /> },
-    { key: '/portfolio', label: 'Portfolio', icon: <Zap /> },
+    { key: '/feed', label: 'Feed', icon: <Radio /> },
   ];
 
   return (
@@ -275,6 +276,7 @@ function AuthenticatedApp() {
             <Route path='/agents' element={<SessionsPage />} />
             <Route path='/ledger' element={<ExecutionLedgerPageNew />} />
             <Route path='/reports' element={<ReportsPage />} />
+            <Route path='/feed' element={<FeedPage />} />
             <Route path='*' element={<Navigate to='/operations' replace />} />
           </Routes>
         </Content>
