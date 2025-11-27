@@ -337,35 +337,12 @@ export default function DashboardPageCompact(){
           </div>
         </Card>
       )}
-
-      {/* Performance Chart & Recent Trades */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} lg={12}>
-          <PerformanceOverviewCard
-            trades={trades}
-            loading={tradesLoading}
-            title="Performance Overview"
-            subtitle="Cumulative PnL across all sessions"
-            tagLabel={mode.toUpperCase()}
-          />
-        </Col>
-        <Col xs={24} lg={12}>
-          <RecentTradesTable
-            trades={trades}
-            loading={tradesLoading}
-            onRefresh={loadTrades}
-          />
-        </Col>
-      </Row>
-
-      {/* Main Content: 2 Columns */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        {/* LEFT: Active Agents */}
-        <Col xs={24} lg={14}>
+      <Row gutter={[12, 12]}>
+        <Col xs={24}>
           <Card 
             size="small"
             title={<Space><FireOutlined style={{ color: '#ff4d4f' }} /> Active Agents ({ov?.activeCount || 0})</Space>}
-            style={{ height: '100%' }}
+            style={{ height: '100%', width: '100%' }}
           >
             {(ov?.sessions || []).length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
@@ -415,6 +392,28 @@ export default function DashboardPageCompact(){
           </Card>
         </Col>
       </Row>
+      {/* Performance Chart & Recent Trades */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} lg={12}>
+          <PerformanceOverviewCard
+            trades={trades}
+            loading={tradesLoading}
+            title="Performance Overview"
+            subtitle="Cumulative PnL across all sessions"
+            tagLabel={mode.toUpperCase()}
+          />
+        </Col>
+        <Col xs={24} lg={12}>
+     
+          <RecentTradesTable
+            trades={trades}
+            loading={tradesLoading}
+            onRefresh={loadTrades}
+          />
+        </Col>
+      </Row>
+
+    
 
       {/* Quick Actions Footer */}
       <Card size="small" style={{ marginTop: 16, textAlign: 'center' }}>
