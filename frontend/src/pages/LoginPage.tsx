@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
 import { AUTH_FEATURES, HERO_METRICS } from './authContent';
+import { Zap } from 'lucide-react';
 
 const { Title, Text } = Typography;
 
@@ -37,7 +38,20 @@ export default function LoginPage() {
   return (
     <div className='auth-layout'>
       <div className='auth-panel'>
-        <div className='auth-panel__badge'>⚡</div>
+       <div style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#ffffff',
+                fontSize: 14,
+                fontWeight: 600
+              }}>
+               <Zap className='w-5 h-5' />
+              </div>
         <h1 className='auth-panel__title'>QuantAI</h1>
         <p className='auth-panel__subtitle'>
           Trade smarter with AI agents that monitor markets 24/7, react instantly to volatility, and keep risk under control.
