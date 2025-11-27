@@ -960,7 +960,23 @@ export default function SessionCockpitPage() {
                       status?.symbol ||
                       'Trading session'}
                   </Title>
-                  <Text type="secondary">{status?.symbol || '—'}</Text>
+                  <Space direction="vertical" size={8} style={{ alignItems: 'flex-start' }}>
+                    <Statistic
+                      title={<span style={{ fontSize: 12 }}>Net P&L</span>}
+                      value={netPnl}
+                      precision={2}
+                      prefix={netPnl >= 0 ? '💰' : '📉'}
+                      valueStyle={{ color: netPnl >= 0 ? '#3f8600' : '#cf1322', fontWeight: 600, fontSize: 14 }}
+                      suffix={<span style={{ fontSize: 12 }}>{`${netRoi.toFixed(2)}%${showNetRoi ? ' net' : ''}`}</span>}
+                    />
+                    <Statistic
+                      title={<span style={{ fontSize: 12 }}>Win Rate</span>}
+                      value={winRate}
+                      precision={2}
+                      suffix={<span style={{ fontSize: 12 }}>%</span>}
+                      valueStyle={{ color: winRate >= 50 ? '#1677ff' : '#fa8c16', fontWeight: 600, fontSize: 14 }}
+                    />
+                  </Space>
                 </div>
                 <Space size={[8, 8]} wrap className="session-hero-tags">
                   {status?.session?.mode && (
@@ -1004,154 +1020,11 @@ export default function SessionCockpitPage() {
                 <Button onClick={() => navigate('/feed')}>View full feed</Button>
               </Space>
             </Flex>
-            {/* Compact metrics bar */}
-            <Flex gap={16} wrap="wrap" align="stretch">
-              {/* Paper Equity - clickable */}
-              <div 
-                className="session-equity-card"
-                onClick={() => setEquityModalOpen(true)}
-                style={{ cursor: 'pointer' }}
-              >
-                <div className="session-equity-label">
-                  {status?.session?.mode === 'paper' ? 'PAPER EQUITY' : 'EQUITY'}
-                </div>
-                <div className="session-equity-value">
-                  {formatUsd(startBalance + netPnl, 0)}
-                </div>
-                <div className="session-equity-sub">
-                  Start: {formatUsd(startBalance, 0)}
-                </div>
-              </div>
-              {/* Combined PnL + ROI */}
-              <div className="session-metric-pill">
-                <span className="session-metric-pill__label">PNL</span>
-                <span className="session-metric-pill__value" style={{ color: netPnl >= 0 ? '#22c55e' : '#ef4444' }}>
-                  {netPnl >= 0 ? '+' : ''}{formatUsd(netPnl)}
-                  <span className="session-metric-pill__pct">({formatPercent(roi * 100)})</span>
-                </span>
-              </div>
-              {/* Win Rate */}
-              <div className="session-metric-pill">
-                <span className="session-metric-pill__label">WIN RATE</span>
-                <span className="session-metric-pill__value" style={{ color: '#3b82f6' }}>
-                  {winRate.toFixed(1)}%
-                </span>
-              </div>
-              {/* Max Drawdown */}
-              <div className="session-metric-pill">
-                <span className="session-metric-pill__label">MAX DD</span>
-                <span className="session-metric-pill__value" style={{ color: maxDrawdown > 5 ? '#ef4444' : '#3b82f6' }}>
-                  {Math.abs(maxDrawdown).toFixed(1)}%
-                </span>
-              </div>
-            </Flex>
+             
           </Space>
         </Card>
 
-        {/* Equity Modal */}
-        <Modal
-          title="Equity Details"
-          open={equityModalOpen}
-          onCancel={() => setEquityModalOpen(false)}
-          footer={null}
-          width={480}
-        >
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Row gutter={[16, 16]}>
-              <Col span={12}>
-                <Statistic 
-                  title="Starting Balance" 
-                  value={startBalance} 
-                  precision={2} 
-                  prefix="$" 
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic 
-                  title="Current Equity" 
-                  value={startBalance + netPnl} 
-                  precision={2} 
-                  prefix="$"
-                  valueStyle={{ color: netPnl >= 0 ? '#16a34a' : '#dc2626' }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic 
-                  title="Realized PnL" 
-                  value={Math.abs(realizedPnl)} 
-                  precision={2} 
-                  prefix={realizedPnl >= 0 ? '+$' : '-$'}
-                  valueStyle={{ color: realizedPnl >= 0 ? '#16a34a' : '#dc2626' }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic 
-                  title="Unrealized PnL" 
-                  value={Math.abs(unrealizedPnl)} 
-                  precision={2} 
-                  prefix={unrealizedPnl >= 0 ? '+$' : '-$'}
-                  valueStyle={{ color: unrealizedPnl >= 0 ? '#0ea5e9' : '#dc2626' }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic 
-                  title="ROI (Realized)" 
-                  value={roi * 100} 
-                  precision={2} 
-                  suffix="%"
-                  valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic 
-                  title="Win Rate" 
-                  value={winRate} 
-                  precision={1} 
-                  suffix="%"
-                  valueStyle={{ color: '#3b82f6' }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic 
-                  title="Max Drawdown" 
-                  value={Math.abs(maxDrawdown)} 
-                  precision={1} 
-                  suffix="%"
-                  valueStyle={{ color: maxDrawdown > 5 ? '#dc2626' : '#3b82f6' }}
-                />
-              </Col>
-              <Col span={12}>
-                <Statistic 
-                  title="Mode" 
-                  value={status?.session?.mode?.toUpperCase() || '—'}
-                />
-              </Col>
-            </Row>
-            {marginHealth && (
-              <>
-                <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16 }}>
-                  <Text strong style={{ marginBottom: 8, display: 'block' }}>Margin Health</Text>
-                  <Row gutter={[16, 8]}>
-                    <Col span={12}>
-                      <Text type="secondary">Free Margin:</Text>
-                      <Text style={{ float: 'right' }}>{formatUsd(marginHealth.freeMargin)}</Text>
-                    </Col>
-                    <Col span={12}>
-                      <Text type="secondary">Used Margin:</Text>
-                      <Text style={{ float: 'right' }}>{formatUsd(marginHealth.usedMargin)}</Text>
-                    </Col>
-                    <Col span={12}>
-                      <Text type="secondary">Margin Level:</Text>
-                      <Text style={{ float: 'right' }}>{marginHealth.marginLevel?.toFixed(1)}%</Text>
-                    </Col>
-                  </Row>
-                </div>
-              </>
-            )}
-          </Space>
-        </Modal>
-
-        <Card title="Market snapshot" bordered={false} className="session-section-card">
+   
           {shouldShowContent(LoadingPhase.CORE_DATA) ? (
             <LiveMetrics
               symbol={status?.symbol}
@@ -1167,7 +1040,6 @@ export default function SessionCockpitPage() {
           ) : (
             <Skeleton active paragraph={{ rows: 4 }} />
           )}
-        </Card>
 
         <Row gutter={[24, 24]} className="session-grid">
           <Col xs={24} lg={agent?.pos ? 17 : 24}>
@@ -1227,13 +1099,11 @@ export default function SessionCockpitPage() {
           )}
         </Row>
 <Row>
-  <Card title="Performance metrics" bordered={false} className="session-section-card">
                 {shouldShowContent(LoadingPhase.SECONDARY_DATA) && status?.session?.id ? (
                   <PerfBreakdownPanel sessionId={status?.session?.id} api={api} />
                 ) : (
                   <Skeleton active paragraph={{ rows: 8 }} />
                 )}
-              </Card>
 </Row>
 <Row gutter={[24, 24]}>
           <Col xs={24}>
