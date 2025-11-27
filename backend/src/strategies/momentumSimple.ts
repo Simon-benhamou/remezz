@@ -786,8 +786,22 @@ export function calculatePositionSize(input: PositionSizeInput): PositionSizeRes
   const leverage = MomentumConfig.LEVERAGE[symbol] || 4;
   const stopPrice = currentPrice * (1 - stopLossPct / 100);
   
-  // V5: Use POSITION_SIZE_PCT (50%) of available capital
-  const positionValue = totalCapitalUsd * MomentumConfig.RISK.POSITION_SIZE_PCT;
+  // V5.5: Use POSITION_SIZE_PCT (40%) of available capital
+  // BUT if less capital is available, use ALL remaining capital (smart allocation)
+  const targetPositionValue = totalCapitalUsd * MomentumConfig.RISK.POSITION_SIZE_PCT;
+  
+  // Minimum position size to avoid micro-positions ($20 minimum)
+  const MIN_POSITION_USD = 20;
+  
+  // Use target (40%) or all available if less than target, but at least MIN
+  let positionValue: number;
+  if (totalCapitalUsd < targetPositionValue) {
+    // Less capital available than target - use all of it (if above minimum)
+    positionValue = totalCapitalUsd >= MIN_POSITION_USD ? totalCapitalUsd : 0;
+  } else {
+    positionValue = targetPositionValue;
+  }
+  
   const qty = positionValue / currentPrice;
   const riskUsd = positionValue * (stopLossPct / 100); // Risk in USD
   

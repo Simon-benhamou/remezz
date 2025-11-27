@@ -556,7 +556,7 @@ export class SimpleAgent {
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();
     
-    // Calculate position size
+    // Calculate position size (will use all available if < 40%, with $50 minimum)
     const sizing = calculatePositionSize({
       symbol,
       currentPrice,
@@ -565,9 +565,15 @@ export class SimpleAgent {
       stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
     });
     
+    // Check if position size is valid (minimum $20)
+    if (sizing.notionalUsd < 20) {
+      logger.info(`⚠️ [${symbol}] Cannot open position - insufficient capital (available $${availableCapital.toFixed(2)}, min $20 required)`);
+      return;
+    }
+    
     // Try to reserve capital
     if (!this.config.capitalPool.reserve(this.config.sessionId, sizing.notionalUsd)) {
-      logger.info(`⚠️ [${symbol}] Cannot open position - insufficient capital (need $${sizing.notionalUsd.toFixed(2)}, available $${availableCapital.toFixed(2)})`);
+      logger.info(`⚠️ [${symbol}] Cannot open position - failed to reserve $${sizing.notionalUsd.toFixed(2)}`);
       return;
     }
     
