@@ -101,6 +101,86 @@
   color: #f8fafc !important;
 }
 
+/* Compact Equity Card */
+.session-equity-card {
+  background: linear-gradient(135deg, #1e40af, #0c4a6e);
+  border-radius: 12px;
+  padding: 12px 20px;
+  min-width: 140px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  transition: all 0.2s ease;
+}
+
+.session-equity-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(30, 64, 175, 0.4);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.session-equity-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.8);
+  margin-bottom: 2px;
+}
+
+.session-equity-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #f8fafc;
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  line-height: 1.2;
+}
+
+.session-equity-sub {
+  font-size: 11px;
+  color: rgba(226, 232, 240, 0.6);
+  margin-top: 2px;
+}
+
+/* Compact Metric Pills */
+.session-metric-pill {
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 10px;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  min-width: 100px;
+}
+
+.session-metric-pill__label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.65);
+}
+
+.session-metric-pill__value {
+  font-size: 16px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  color: #f8fafc;
+}
+
+.session-metric-pill__pct {
+  font-size: 12px;
+  margin-left: 4px;
+  opacity: 0.8;
+}
+
+@media (max-width: 640px) {
+  .session-equity-card {
+    flex: 1 1 100%;
+  }
+  
+  .session-metric-pill {
+    flex: 1 1 calc(50% - 8px);
+  }
+}
+
 .session-monitor-hero .ant-typography,
 .session-monitor-hero .ant-statistic-title,
 .session-monitor-hero .ant-statistic-content,

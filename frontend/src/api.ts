@@ -253,8 +253,8 @@ export const api = {
   getAgentStatus: async () =>
     (await client.get('/api/agent/status')).data,
   // Agent logs for feed page
-  getAgentLogs: async (mode?: 'paper' | 'live', limit = 100) =>
-    (await client.get('/api/agent/logs', { params: { mode, limit } })).data as {
+  getAgentLogs: async (mode?: 'paper' | 'live', limit = 100, source: 'memory' | 'db' | 'all' = 'memory', symbol?: string) =>
+    (await client.get('/api/agent/logs', { params: { mode, limit, source, symbol } })).data as {
       logs: Array<{
         timestamp: string;
         sessionId: string;

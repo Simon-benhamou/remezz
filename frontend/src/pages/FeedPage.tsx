@@ -40,9 +40,13 @@ interface AgentState {
 
 function getLogIcon(kind: string) {
   switch (kind) {
+    case 'tick': return <SyncOutlined style={{ color: '#8c8c8c' }} />;
+    case 'signal': return <EyeOutlined style={{ color: '#faad14' }} />;
     case 'entry': return <ThunderboltOutlined style={{ color: '#52c41a' }} />;
     case 'exit': return <DollarOutlined style={{ color: '#1890ff' }} />;
     case 'order': return <SyncOutlined style={{ color: '#722ed1' }} />;
+    case 'market': return <LineChartOutlined style={{ color: '#13c2c2' }} />;
+    case 'error': return <CloseCircleOutlined style={{ color: '#ff4d4f' }} />;
     case 'support-touch':
     case 'resistance-touch': return <LineChartOutlined style={{ color: '#faad14' }} />;
     case 'volume-spike':
@@ -55,9 +59,13 @@ function getLogColor(kind: string, level: string) {
   if (level === 'error') return '#ff4d4f';
   if (level === 'warn') return '#faad14';
   switch (kind) {
+    case 'tick': return '#8c8c8c';
+    case 'signal': return '#faad14';
     case 'entry': return '#52c41a';
     case 'exit': return '#1890ff';
     case 'order': return '#722ed1';
+    case 'market': return '#13c2c2';
+    case 'error': return '#ff4d4f';
     case 'support-touch':
     case 'resistance-touch': return '#faad14';
     default: return '#8c8c8c';
@@ -72,11 +80,13 @@ export default function FeedPage() {
   const [autoRefresh, setAutoRefresh] = React.useState(true);
   const [filterKind, setFilterKind] = React.useState<string>('all');
   const [filterSymbol, setFilterSymbol] = React.useState<string>('all');
+  const [logSource, setLogSource] = React.useState<'memory' | 'db' | 'all'>('memory');
   const { mode } = useMode();
   
   const loadLogs = React.useCallback(async () => {
     try {
-      const res = await api.getAgentLogs(mode, 100) as any;
+      // Use memory source for real-time agent logs
+      const res = await api.getAgentLogs(mode, 100, logSource) as any;
       if (res) {
         setLogs(res.logs || []);
         setAgentStates(res.agentStates || []);
@@ -87,7 +97,7 @@ export default function FeedPage() {
     } finally {
       setLoading(false);
     }
-  }, [mode]);
+  }, [mode, logSource]);
   
   React.useEffect(() => {
     loadLogs();
@@ -95,9 +105,10 @@ export default function FeedPage() {
   
   React.useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(loadLogs, 5000); // Refresh every 5s
+    // Refresh every 3s for memory logs (real-time), 10s for DB logs
+    const interval = setInterval(loadLogs, logSource === 'memory' ? 3000 : 10000);
     return () => clearInterval(interval);
-  }, [autoRefresh, loadLogs]);
+  }, [autoRefresh, loadLogs, logSource]);
   
   const symbols = React.useMemo(() => {
     const unique = new Set(logs.map(l => l.symbol));
@@ -221,17 +232,27 @@ export default function FeedPage() {
           <FilterOutlined />
           <Select
             style={{ width: 150 }}
+            value={logSource}
+            onChange={setLogSource}
+            options={[
+              { value: 'memory', label: '🔴 Live Logs' },
+              { value: 'db', label: '💾 Trade History' },
+              { value: 'all', label: '📋 All Logs' },
+            ]}
+          />
+          <Select
+            style={{ width: 150 }}
             value={filterKind}
             onChange={setFilterKind}
             options={[
               { value: 'all', label: 'All Types' },
+              { value: 'tick', label: '🔄 Tick' },
+              { value: 'signal', label: '🔍 Signal' },
               { value: 'entry', label: '🚀 Entry' },
               { value: 'exit', label: '💰 Exit' },
+              { value: 'market', label: '📊 Market' },
               { value: 'order', label: '📋 Order' },
-              { value: 'support-touch', label: '📉 Support' },
-              { value: 'resistance-touch', label: '📈 Resistance' },
-              { value: 'volume-spike', label: '📊 Volume' },
-              { value: 'sudden-move', label: '⚡ Move' },
+              { value: 'error', label: '❌ Error' },
             ]}
           />
           <Select

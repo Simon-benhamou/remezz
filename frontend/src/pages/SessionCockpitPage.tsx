@@ -19,6 +19,7 @@ import {
   Progress,
   theme,
   Flex,
+  Modal,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -139,6 +140,7 @@ export default function SessionCockpitPage() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [marginHealth, setMarginHealth] = React.useState<any>(null);
   const [diagnostics, setDiagnostics] = React.useState<any>(null);
+  const [equityModalOpen, setEquityModalOpen] = React.useState(false);
 
   const normalizedSymbol = React.useMemo(
     () => deriveSymbol(status?.symbol || symbol),
@@ -174,32 +176,6 @@ export default function SessionCockpitPage() {
       ),
     [filteredOrders],
   );
-  const statusSummary = React.useMemo(() => {
-    const items: Array<{ label: string; value: string }> = [
-      {
-        label: 'Mode',
-        value: status?.session?.mode ? String(status.session.mode).toUpperCase() : '—',
-      },
-      {
-        label: 'Agent state',
-        value: agent?.state || status?.session?.state || '—',
-      },
-      {
-        label: 'Strategy',
-        value: 'Momentum Simple',
-      },
-    ];
-    items.push({ label: 'Capital source', value: 'Shared pool' });
-    const available = agent?.profile?.availableUsd ?? agent?.balance?.freeUsd;
-    if (Number.isFinite(Number(available))) {
-      items.push({ label: 'Available', value: formatUsd(available) });
-    }
-    const todaysPnl = kpi?.today?.netPnlUsd ?? kpi?.today?.pnlUsd ?? kpi?.netPnlUsd ?? kpi?.pnlUsd;
-    if (Number.isFinite(Number(todaysPnl))) {
-      items.push({ label: 'Daily PnL', value: formatUsd(todaysPnl) });
-    }
-    return items;
-  }, [status?.session, agent, kpi]);
 
   const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
@@ -606,28 +582,26 @@ export default function SessionCockpitPage() {
     };
   }, [sessionId]);
 
-  // Load feed logs filtered by session symbol
+  // Load feed logs filtered by session symbol - uses in-memory logs from backend
   React.useEffect(() => {
     if (!sessionId || !symbol) return;
     let cancelled = false;
     const loadFeedLogs = async () => {
       try {
-        const res = await api.getAgentLogs(undefined, 50) as any;
+        // Extract base symbol (e.g., "ETH" from "ETH/USDT:USDT")
+        const baseSymbol = symbol.split('/')[0];
+        // Fetch from memory source for real-time agent logs
+        const res = await api.getAgentLogs(undefined, 50, 'memory', baseSymbol) as any;
         if (!cancelled && res?.logs) {
-          // Filter logs by this session's symbol
-          const filtered = res.logs.filter((log: any) => 
-            log.sessionId === sessionId || 
-            log.symbol === symbol ||
-            log.symbol?.toUpperCase().includes(symbol?.replace('/USDT:USDT', '').toUpperCase())
-          );
-          setFeedLogs(filtered.slice(0, 20));
+          setFeedLogs(res.logs.slice(0, 30));
         }
       } catch (err) {
         console.warn('Feed logs fetch failed:', err);
       }
     };
     loadFeedLogs();
-    const timer = setInterval(loadFeedLogs, 10000);
+    // Refresh every 5 seconds for near real-time updates
+    const timer = setInterval(loadFeedLogs, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -1030,76 +1004,153 @@ export default function SessionCockpitPage() {
                 <Button onClick={() => navigate('/feed')}>View full feed</Button>
               </Space>
             </Flex>
-            <Row gutter={[24, 24]} align="top">
-              <Col xs={24} lg={10} xl={8}>
-                <div className="session-hero-summary">
-                  {statusSummary.length > 0 ? (
-                    statusSummary.map((item) => (
-                      <div key={item.label} className="session-hero-summary__item">
-                        <span>{item.label}</span>
-                        <strong>{item.value}</strong>
-                      </div>
-                    ))
-                  ) : (
-                    <Text type="secondary">Session diagnostics will appear here once available.</Text>
-                  )}
+            {/* Compact metrics bar */}
+            <Flex gap={16} wrap="wrap" align="stretch">
+              {/* Paper Equity - clickable */}
+              <div 
+                className="session-equity-card"
+                onClick={() => setEquityModalOpen(true)}
+                style={{ cursor: 'pointer' }}
+              >
+                <div className="session-equity-label">
+                  {status?.session?.mode === 'paper' ? 'PAPER EQUITY' : 'EQUITY'}
                 </div>
-              </Col>
-              <Col xs={24} lg={14} xl={16}>
-                <div className="session-hero-metrics-grid">
-                  <div className="session-hero-metric">
-                    <Statistic
-                      title="ROI (realized)"
-                      value={roi*100}
-                      precision={2}
-                      suffix="%"
-                      valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
-                    />
-                  </div>
-                  {showNetRoi && (
-                    <div className="session-hero-metric">
-                      <Statistic
-                        title="ROI (net)"
-                        value={netRoi}
-                        precision={2}
-                        suffix="%"
-                        valueStyle={{ color: netRoi >= 0 ? '#0ea5e9' : '#dc2626' }}
-                      />
-                    </div>
-                  )}
-                  <div className="session-hero-metric">
-                    <Statistic
-                      title="Win rate"
-                      value={winRate}
-                      precision={1}
-                      suffix="%"
-                      valueStyle={{ color: '#2563eb' }}
-                    />
-                  </div>
-                  <div className="session-hero-metric">
-                    <Statistic
-                      title="Max drawdown"
-                      value={Math.abs(maxDrawdown)}
-                      precision={1}
-                      suffix="%"
-                      valueStyle={{ color: maxDrawdown <= 0 ? '#2563eb' : '#dc2626' }}
-                    />
-                  </div>
-                  <div className="session-hero-metric">
-                    <Statistic
-                      title="Net PnL"
-                      value={Math.abs(netPnl)}
-                      precision={2}
-                      prefix={netPnl >= 0 ? '+' : '-'}
-                      suffix=" USD"
-                      valueStyle={{ color: netPnl >= 0 ? '#16a34a' : '#dc2626' }}
-                    />
-                  </div>
+                <div className="session-equity-value">
+                  {formatUsd(startBalance + netPnl, 0)}
                 </div>
-              </Col>
-            </Row>
+                <div className="session-equity-sub">
+                  Start: {formatUsd(startBalance, 0)}
+                </div>
+              </div>
+              {/* Combined PnL + ROI */}
+              <div className="session-metric-pill">
+                <span className="session-metric-pill__label">PNL</span>
+                <span className="session-metric-pill__value" style={{ color: netPnl >= 0 ? '#22c55e' : '#ef4444' }}>
+                  {netPnl >= 0 ? '+' : ''}{formatUsd(netPnl)}
+                  <span className="session-metric-pill__pct">({formatPercent(roi * 100)})</span>
+                </span>
+              </div>
+              {/* Win Rate */}
+              <div className="session-metric-pill">
+                <span className="session-metric-pill__label">WIN RATE</span>
+                <span className="session-metric-pill__value" style={{ color: '#3b82f6' }}>
+                  {winRate.toFixed(1)}%
+                </span>
+              </div>
+              {/* Max Drawdown */}
+              <div className="session-metric-pill">
+                <span className="session-metric-pill__label">MAX DD</span>
+                <span className="session-metric-pill__value" style={{ color: maxDrawdown > 5 ? '#ef4444' : '#3b82f6' }}>
+                  {Math.abs(maxDrawdown).toFixed(1)}%
+                </span>
+              </div>
+            </Flex>
           </Space>
         </Card>
+
+        {/* Equity Modal */}
+        <Modal
+          title="Equity Details"
+          open={equityModalOpen}
+          onCancel={() => setEquityModalOpen(false)}
+          footer={null}
+          width={480}
+        >
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Row gutter={[16, 16]}>
+              <Col span={12}>
+                <Statistic 
+                  title="Starting Balance" 
+                  value={startBalance} 
+                  precision={2} 
+                  prefix="$" 
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic 
+                  title="Current Equity" 
+                  value={startBalance + netPnl} 
+                  precision={2} 
+                  prefix="$"
+                  valueStyle={{ color: netPnl >= 0 ? '#16a34a' : '#dc2626' }}
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic 
+                  title="Realized PnL" 
+                  value={Math.abs(realizedPnl)} 
+                  precision={2} 
+                  prefix={realizedPnl >= 0 ? '+$' : '-$'}
+                  valueStyle={{ color: realizedPnl >= 0 ? '#16a34a' : '#dc2626' }}
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic 
+                  title="Unrealized PnL" 
+                  value={Math.abs(unrealizedPnl)} 
+                  precision={2} 
+                  prefix={unrealizedPnl >= 0 ? '+$' : '-$'}
+                  valueStyle={{ color: unrealizedPnl >= 0 ? '#0ea5e9' : '#dc2626' }}
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic 
+                  title="ROI (Realized)" 
+                  value={roi * 100} 
+                  precision={2} 
+                  suffix="%"
+                  valueStyle={{ color: roi >= 0 ? '#16a34a' : '#dc2626' }}
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic 
+                  title="Win Rate" 
+                  value={winRate} 
+                  precision={1} 
+                  suffix="%"
+                  valueStyle={{ color: '#3b82f6' }}
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic 
+                  title="Max Drawdown" 
+                  value={Math.abs(maxDrawdown)} 
+                  precision={1} 
+                  suffix="%"
+                  valueStyle={{ color: maxDrawdown > 5 ? '#dc2626' : '#3b82f6' }}
+                />
+              </Col>
+              <Col span={12}>
+                <Statistic 
+                  title="Mode" 
+                  value={status?.session?.mode?.toUpperCase() || '—'}
+                />
+              </Col>
+            </Row>
+            {marginHealth && (
+              <>
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16 }}>
+                  <Text strong style={{ marginBottom: 8, display: 'block' }}>Margin Health</Text>
+                  <Row gutter={[16, 8]}>
+                    <Col span={12}>
+                      <Text type="secondary">Free Margin:</Text>
+                      <Text style={{ float: 'right' }}>{formatUsd(marginHealth.freeMargin)}</Text>
+                    </Col>
+                    <Col span={12}>
+                      <Text type="secondary">Used Margin:</Text>
+                      <Text style={{ float: 'right' }}>{formatUsd(marginHealth.usedMargin)}</Text>
+                    </Col>
+                    <Col span={12}>
+                      <Text type="secondary">Margin Level:</Text>
+                      <Text style={{ float: 'right' }}>{marginHealth.marginLevel?.toFixed(1)}%</Text>
+                    </Col>
+                  </Row>
+                </div>
+              </>
+            )}
+          </Space>
+        </Modal>
+
         <Card title="Market snapshot" bordered={false} className="session-section-card">
           {shouldShowContent(LoadingPhase.CORE_DATA) ? (
             <LiveMetrics

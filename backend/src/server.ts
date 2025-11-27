@@ -8,7 +8,7 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import { WebSocketServer, WebSocket } from "ws";
-import { configureLogging, createLogger } from "./utils/logger.js";
+import { configureLogging, createLogger, getRecentLogs } from "./utils/logger.js";
 import { getConfig } from "./utils/env.js";
 import { authMiddleware, AuthenticatedRequest } from "./utils/security.js";
 import { prisma } from "./db/client.js";
@@ -605,6 +605,8 @@ app.get("/api/agent/logs", async (req, res) => {
     
     const mode = req.query.mode as 'paper' | 'live' | undefined;
     const limit = Math.min(parseInt(String(req.query.limit || '100')), 500);
+    const symbol = req.query.symbol as string | undefined;
+    const source = req.query.source as 'memory' | 'db' | 'all' | undefined;
     
     // Get active sessions for this user
     const sessionsWhere: any = { userId };
@@ -619,8 +621,65 @@ app.get("/api/agent/logs", async (req, res) => {
     });
     
     const sessionIds = activeSessions.map(s => s.id);
-    const sessionMap = new Map(activeSessions.map(s => [s.id, s]));
     
+    // =========================================================================
+    // IN-MEMORY LOGS (from logger buffer) - Real-time agent activity
+    // =========================================================================
+    const memoryLogs = getRecentLogs({
+      limit: limit,
+      scope: 'agent',
+      symbol: symbol,
+    }).map(log => ({
+      timestamp: log.timestamp,
+      sessionId: '', // Memory logs don't have session ID, will be matched by symbol
+      symbol: log.symbol || '',
+      kind: log.kind || 'info',
+      message: log.message,
+      level: log.level as 'info' | 'warn' | 'error',
+      details: { source: 'memory', logId: log.id },
+    }));
+    
+    // Return early if only memory logs requested
+    if (source === 'memory') {
+      // Get live agent states for current activity
+      const allAgents = getAllRunningAgents(userId);
+      const agentStates = allAgents
+        .filter(a => !mode || (a.getStatus() as any).mode === mode)
+        .map(a => {
+          const status = a.getStatus();
+          const state = a.getAgentState?.();
+          return {
+            sessionId: status.sessionId,
+            symbol: status.symbol,
+            running: status.running,
+            hasPosition: status.hasPosition,
+            bias: state?.plan?.bias || null,
+            lastDecision: (state as any)?.lastDecision || null,
+            marketConditions: status.marketConditions,
+          };
+        });
+      
+      return res.json({ 
+        logs: memoryLogs.slice(0, limit),
+        agentStates,
+        activeSessions: activeSessions.length,
+      });
+    }
+    
+    // =========================================================================
+    // DB LOGS (TriggerLogs, Orders, Fills) - Historical trade activity
+    // =========================================================================
+    const logs: Array<{
+      timestamp: string;
+      sessionId: string;
+      symbol: string;
+      kind: string;
+      message: string;
+      level: 'info' | 'warn' | 'error';
+      details?: Record<string, any>;
+    }> = [];
+    
+    // At this point, source is 'db', 'all', or undefined (not 'memory' due to early return above)
     // Get recent trigger logs from active sessions
     const triggerLogs = await prisma.triggerLog.findMany({
       where: sessionIds.length > 0 ? { sessionId: { in: sessionIds } } : {},
@@ -636,17 +695,6 @@ app.get("/api/agent/logs", async (req, res) => {
       include: { fills: true },
     });
     
-    // Combine and format logs
-    const logs: Array<{
-      timestamp: string;
-      sessionId: string;
-      symbol: string;
-      kind: string;
-      message: string;
-      level: 'info' | 'warn' | 'error';
-      details?: Record<string, any>;
-    }> = [];
-    
     // Add trigger logs
     for (const tl of triggerLogs) {
       logs.push({
@@ -656,7 +704,7 @@ app.get("/api/agent/logs", async (req, res) => {
         kind: tl.kind,
         message: formatTriggerMessage(tl.kind, tl.payload as any),
         level: 'info',
-        details: tl.payload as any,
+        details: { ...tl.payload as any, source: 'db' },
       });
     }
     
@@ -674,7 +722,7 @@ app.get("/api/agent/logs", async (req, res) => {
         kind: 'order',
         message: `${order.side} ${order.type} order: ${order.qty} @ ${order.status === 'filled' ? avgFillPrice?.toFixed(4) : order.price?.toFixed(4)}`,
         level: order.status === 'filled' ? 'info' : (order.status === 'canceled' ? 'warn' : 'info'),
-        details: { orderId: order.id, status: order.status, fills: order.fills.length },
+        details: { orderId: order.id, status: order.status, fills: order.fills.length, source: 'db' },
       });
       
       // Add fill events for significant fills
@@ -687,14 +735,17 @@ app.get("/api/agent/logs", async (req, res) => {
             kind: fill.realizedPnl >= 0 ? 'exit' : 'exit',
             message: `Trade filled: ${fill.qty} @ $${fill.price.toFixed(4)} | PnL: ${fill.realizedPnl >= 0 ? '+' : ''}$${fill.realizedPnl.toFixed(2)}`,
             level: fill.realizedPnl >= 0 ? 'info' : 'warn',
-            details: { fillId: fill.id, orderId: fill.orderId, realizedPnl: fill.realizedPnl },
+            details: { fillId: fill.id, orderId: fill.orderId, realizedPnl: fill.realizedPnl, source: 'db' },
           });
         }
       }
     }
     
+    // Combine memory logs with DB logs
+    const allLogs = [...memoryLogs, ...logs];
+    
     // Sort by timestamp descending and limit
-    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    allLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     
     // Get live agent states for current activity
     const allAgents = getAllRunningAgents(userId);
@@ -715,7 +766,7 @@ app.get("/api/agent/logs", async (req, res) => {
       });
     
     res.json({ 
-      logs: logs.slice(0, limit),
+      logs: allLogs.slice(0, limit),
       agentStates,
       activeSessions: activeSessions.length,
     });
