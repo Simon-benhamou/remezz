@@ -47,7 +47,19 @@ const CONFIG = {
   
   // Risk
   POSITION_SIZE_PCT: 0.4,  // 40% du capital par trade
-  LEVERAGE: 5,
+  
+  // V5.7: Leverage par actif (plus conservateur pour volatiles)
+  LEVERAGE_BY_SYMBOL: {
+    'BTC/USDT:USDT': 4.5,   // BTC - test 4.5x
+    'ETH/USDT:USDT': 4.5,   // ETH
+    'XRP/USDT:USDT': 4.5,   // XRP
+    'SOL/USDT:USDT': 4.5,   // SOL
+    'SEI/USDT:USDT': 4.5,   // SEI - test 4.5x
+    'IMX/USDT:USDT': 4.5,   // IMX - test 4.5x
+    'DOT/USDT:USDT': 4.5,   // DOT
+    'DOGE/USDT:USDT': 4.5,  // DOGE
+  },
+  LEVERAGE: 4.5,  // Default fallback
   
   // V5.6: Liquidation Protection
   LIQUIDATION: {
@@ -570,9 +582,12 @@ async function main() {
       if (!positions[symbol] && cooldowns[symbol] <= 0 && capital > 100) {
         const availableCapital = capital - capitalInUse;
         
-        // V5.6: Calculate safe leverage FIRST (based on ATR volatility)
-        const safeLeverage = calcSafeLeverage(windowCandles, CONFIG.LEVERAGE);
-        const leverageReduced = safeLeverage < CONFIG.LEVERAGE;
+        // V5.7: Get base leverage for this symbol
+        const baseLeverage = CONFIG.LEVERAGE_BY_SYMBOL[symbol] || CONFIG.LEVERAGE;
+        
+        // V5.6: Calculate safe leverage (may reduce further based on ATR volatility)
+        const safeLeverage = calcSafeLeverage(windowCandles, baseLeverage);
+        const leverageReduced = safeLeverage < baseLeverage;
         
         // Step 1: Calculate target margin (40% of capital)
         const targetMargin = capital * CONFIG.POSITION_SIZE_PCT;
