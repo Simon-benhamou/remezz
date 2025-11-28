@@ -20,6 +20,8 @@ import {
   updatePositionWaterMarks,
   getMarketConditions,
   getLiquidityTier,
+  calcSafeLeverage,
+  LIQUIDATION_CONFIG,
   type Candle,
   type Position,
   type MarketConditions,
@@ -605,7 +607,15 @@ export class SimpleAgent {
       logger.warn(`⚠️ [${symbol}] Could not fetch 24h volume for sizing - using tier-based caps`);
     }
     
-    // Calculate position size V5.5 - now with liquidity awareness
+    // V5.6: Calculate safe leverage based on ATR volatility
+    const baseLeverage = MomentumConfig.LEVERAGE[symbol] || 4;
+    const leverageCalc = calcSafeLeverage(candles, baseLeverage);
+    
+    if (leverageCalc.wasReduced) {
+      logger.warn(`⚡ [${symbol}] HIGH VOLATILITY DETECTED! ATR=${leverageCalc.atrPct?.toFixed(2)}% > ${LIQUIDATION_CONFIG.HIGH_VOLATILITY_ATR_PCT}% threshold | Leverage reduced: ${baseLeverage}x → ${leverageCalc.leverage}x`);
+    }
+    
+    // Calculate position size V5.6 - now with liquidity awareness AND dynamic leverage
     const sizing = calculatePositionSize({
       symbol,
       currentPrice,
@@ -613,29 +623,31 @@ export class SimpleAgent {
       riskPerTradePct: this.config.riskPerTradePct,
       stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
       volume24h, // V5.5: Pass volume for liquidity-aware sizing
+      safeLeverage: leverageCalc.leverage, // V5.6: Pass ATR-adjusted leverage
     });
     
     // V5.5: Log if position was capped due to liquidity
     if (sizing.wasLiquidityCapped) {
-      logger.warn(`🚨 [${symbol}] Position CAPPED by liquidity! Target=$${(availableCapital * MomentumConfig.RISK.POSITION_SIZE_PCT).toFixed(0)} → Capped=$${sizing.notionalUsd.toFixed(0)} (max safe=$${sizing.maxSafePosition?.toFixed(0)}, tier=${sizing.liquidityTier})`);
+      const targetNotional = availableCapital * MomentumConfig.RISK.POSITION_SIZE_PCT * sizing.suggestedLeverage;
+      logger.warn(`🚨 [${symbol}] Position CAPPED by liquidity! Target notional=$${targetNotional.toFixed(0)} → Capped=$${sizing.notionalUsd.toFixed(0)} (max safe=$${sizing.maxSafePosition?.toFixed(0)}, tier=${sizing.liquidityTier})`);
     }
     
-    // Check if position size is valid (minimum $20)
+    // Check if position size is valid (minimum $20 notional)
     if (sizing.notionalUsd < 20) {
-      logger.info(`⚠️ [${symbol}] Cannot open position - insufficient capital (available $${availableCapital.toFixed(2)}, min $20 required)`);
+      logger.info(`⚠️ [${symbol}] Cannot open position - insufficient capital (available $${availableCapital.toFixed(2)}, min $20 notional required)`);
       return;
     }
     
-    // Try to reserve capital
-    if (!this.config.capitalPool.reserve(this.config.sessionId, sizing.notionalUsd)) {
-      logger.info(`⚠️ [${symbol}] Cannot open position - failed to reserve $${sizing.notionalUsd.toFixed(2)}`);
+    // Try to reserve MARGIN (not notional) - this is what we actually risk
+    if (!this.config.capitalPool.reserve(this.config.sessionId, sizing.marginUsd)) {
+      logger.info(`⚠️ [${symbol}] Cannot open position - failed to reserve margin $${sizing.marginUsd.toFixed(2)}`);
       return;
     }
     
     // V5.5: Include liquidity info in log
     const slippageInfo = sizing.estimatedSlippage ? ` | est.slip=${sizing.estimatedSlippage.toFixed(3)}%` : '';
     const liquidityInfo = sizing.liquidityTier ? ` | tier=${sizing.liquidityTier}` : '';
-    logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x${liquidityInfo}${slippageInfo}`);
+    logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x${liquidityInfo}${slippageInfo}`);
     
     if (this.config.mode === 'paper') {
       // Paper trade
@@ -645,6 +657,8 @@ export class SimpleAgent {
         entryPrice: currentPrice,
         qty: sizing.qty,
         entryTime: Date.now(),
+        leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
+        marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
         stopLoss: side === 'long' 
           ? currentPrice * (1 - MomentumConfig.EXIT.STOP_LOSS_PCT / 100)
           : currentPrice * (1 + MomentumConfig.EXIT.STOP_LOSS_PCT / 100),
@@ -654,13 +668,13 @@ export class SimpleAgent {
       
       this.position = position;
       
-      // Commit capital
-      this.config.capitalPool.commit(this.config.sessionId, sizing.notionalUsd);
+      // Commit MARGIN (not notional)
+      this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
       
       // Save to DB
       await this.savePositionToDb(position, 'paper_entry');
       
-      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | SL=$${position.stopLoss?.toFixed(4)}`);
+      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | SL=$${position.stopLoss?.toFixed(4)}`);
       
     } else {
       // Live trade
@@ -682,6 +696,8 @@ export class SimpleAgent {
           entryPrice: filledPrice,
           qty: filledQty,
           entryTime: Date.now(),
+          leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
+          marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
           stopLoss: side === 'long'
             ? filledPrice * (1 - MomentumConfig.EXIT.STOP_LOSS_PCT / 100)
             : filledPrice * (1 + MomentumConfig.EXIT.STOP_LOSS_PCT / 100),
@@ -692,8 +708,8 @@ export class SimpleAgent {
         
         this.position = position;
         
-        // Commit capital
-        this.config.capitalPool.commit(this.config.sessionId, sizing.notionalUsd);
+        // Commit MARGIN (not notional)
+        this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
         
         // Save to DB
         await this.savePositionToDb(position, 'live_entry');
@@ -778,6 +794,8 @@ export class SimpleAgent {
     }
     
     const notionalUsd = position.qty * position.entryPrice;
+    // V5.6: Use stored margin for capital release, fallback to notional/leverage or notional
+    const marginToRelease = position.marginUsd ?? (position.leverage ? notionalUsd / position.leverage : notionalUsd);
     
     logger.info(`🚪 [${symbol}] CLOSING ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(4)} | exit=$${currentPrice.toFixed(4)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}) | reason=${reason}`);
     
@@ -794,11 +812,11 @@ export class SimpleAgent {
       // Paper close
       this.position = null;
       
-      // Release capital with PnL
-      this.config.capitalPool.release(this.config.sessionId, notionalUsd, pnlUsd);
+      // Release MARGIN (not notional) with PnL
+      this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
       
       await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd);
-      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | Capital released $${notionalUsd.toFixed(2)}`);
+      logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | notional=$${notionalUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)}`);
       
     } else {
       // Live close
@@ -826,13 +844,13 @@ export class SimpleAgent {
         
         this.position = null;
         
-        // Release capital with PnL
-        this.config.capitalPool.release(this.config.sessionId, notionalUsd, actualPnlUsd);
+        // Release MARGIN (not notional) with PnL
+        this.config.capitalPool.release(this.config.sessionId, marginToRelease, actualPnlUsd);
         
         // Pass the real exchange orderId for proper tracking
         await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id);
         
-        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | orderId=${order.id}`)
+        logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
         
         this.config.onTrade?.({
           symbol,
@@ -1213,14 +1231,16 @@ export class SimpleAgent {
         }
         
         const notionalUsd = this.position.qty * this.position.entryPrice;
+        // V5.6: Use stored margin, fallback to notional/leverage or notional
+        const marginToRelease = this.position.marginUsd ?? (this.position.leverage ? notionalUsd / this.position.leverage : notionalUsd);
         
-        // Release capital
-        this.config.capitalPool.release(this.config.sessionId, notionalUsd, pnlUsd);
+        // Release MARGIN (not notional)
+        this.config.capitalPool.release(this.config.sessionId, marginToRelease, pnlUsd);
         
         // Save exit to DB with exchange orderId if available
         await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId);
         
-        logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%`);
+        logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%, margin released: $${marginToRelease.toFixed(2)}`);
         
         this.position = null;
       }
@@ -1233,19 +1253,25 @@ export class SimpleAgent {
         const entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
         
         if (entryPrice > 0) {
+          // V5.6: Estimate margin - use asset-specific leverage or default to 5x
+          const notionalUsd = exchangeQty * entryPrice;
+          const estimatedLeverage = MomentumConfig.LEVERAGE[symbol] || 5;
+          const estimatedMargin = notionalUsd / estimatedLeverage;
+          
           this.position = {
             symbol,
             side: exchangeSide,
             entryPrice,
             qty: exchangeQty,
             entryTime: Date.now(),
+            leverage: estimatedLeverage,      // V5.6: Estimated
+            marginUsd: estimatedMargin,       // V5.6: Estimated
             highWaterMark: exchangeSide === 'long' ? entryPrice : undefined,
             lowWaterMark: exchangeSide === 'short' ? entryPrice : undefined,
           };
           
-          // Commit capital for this position
-          const notionalUsd = exchangeQty * entryPrice;
-          this.config.capitalPool.commit(this.config.sessionId, notionalUsd);
+          // Commit MARGIN (not notional) for this position
+          this.config.capitalPool.commit(this.config.sessionId, estimatedMargin);
           
           // Save to DB
           await this.savePositionToDb(this.position, 'synced_from_exchange');

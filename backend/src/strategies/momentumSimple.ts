@@ -186,6 +186,9 @@ export interface Position {
   stopLoss?: number;
   orderId?: string;
   stopLossOrderId?: string;  // Track SL order ID for updates/cancellation
+  // V5.6: Store leverage and margin for proper capital management
+  leverage?: number;         // The leverage used for this position
+  marginUsd?: number;        // The margin blocked in capital pool
   // Trailing stop tracking
   highWaterMark?: number;  // Highest price since entry (for long)
   lowWaterMark?: number;   // Lowest price since entry (for short)
@@ -770,6 +773,85 @@ export function updatePositionWaterMarks(position: Position, currentPrice: numbe
 // ============================================================================
 
 /**
+ * V5.6 Liquidation Protection Configuration
+ * Dynamic leverage based on market volatility
+ */
+export const LIQUIDATION_CONFIG = {
+  // Enable dynamic leverage reduction
+  DYNAMIC_LEVERAGE: true,
+  
+  // ATR configuration
+  ATR_PERIOD: 14,
+  
+  // If ATR/price > this threshold, reduce leverage
+  HIGH_VOLATILITY_ATR_PCT: 2,  // ATR > 2% = high volatility
+  
+  // Reduced leverage in high volatility
+  REDUCED_LEVERAGE: 3,
+  
+  // Max simulated gap for safety checks
+  MAX_SIMULATED_GAP_PCT: 5,
+  
+  // Liquidation threshold (% loss on margin before liquidation)
+  LIQUIDATION_THRESHOLD_PCT: 80,
+};
+
+/**
+ * Calculate ATR (Average True Range) from candles
+ */
+export function calcATR(candles: { high: number; low: number; close: number }[], period = 14): number | null {
+  if (candles.length < period + 1) return null;
+  
+  let atrSum = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevClose = candles[i - 1]?.close || candles[i].high;
+    
+    const tr = Math.max(
+      high - low,
+      Math.abs(high - prevClose),
+      Math.abs(low - prevClose)
+    );
+    atrSum += tr;
+  }
+  
+  return atrSum / period;
+}
+
+/**
+ * V5.6: Calculate safe leverage based on volatility
+ * Returns reduced leverage if ATR indicates high volatility
+ */
+export function calcSafeLeverage(
+  candles: { high: number; low: number; close: number }[],
+  baseLeverage: number
+): { leverage: number; wasReduced: boolean; atrPct: number | null } {
+  if (!LIQUIDATION_CONFIG.DYNAMIC_LEVERAGE) {
+    return { leverage: baseLeverage, wasReduced: false, atrPct: null };
+  }
+  
+  const atr = calcATR(candles, LIQUIDATION_CONFIG.ATR_PERIOD);
+  if (!atr || candles.length === 0) {
+    return { leverage: baseLeverage, wasReduced: false, atrPct: null };
+  }
+  
+  const currentPrice = candles[candles.length - 1].close;
+  const atrPct = (atr / currentPrice) * 100;
+  
+  // High volatility = reduce leverage
+  if (atrPct > LIQUIDATION_CONFIG.HIGH_VOLATILITY_ATR_PCT) {
+    return { 
+      leverage: LIQUIDATION_CONFIG.REDUCED_LEVERAGE, 
+      wasReduced: true, 
+      atrPct 
+    };
+  }
+  
+  return { leverage: baseLeverage, wasReduced: false, atrPct };
+}
+
+/**
  * V5.5 Liquidity Configuration
  * Max position as % of 24h volume to avoid market impact
  */
@@ -846,12 +928,14 @@ export interface PositionSizeInput {
   totalCapitalUsd: number;
   riskPerTradePct: number;
   stopLossPct: number;
-  volume24h?: number;  // V5.5: Optional 24h volume for liquidity-aware sizing
+  volume24h?: number;    // V5.5: Optional 24h volume for liquidity-aware sizing
+  safeLeverage?: number; // V5.6: Optional ATR-adjusted leverage (from calcSafeLeverage)
 }
 
 export interface PositionSizeResult {
   qty: number;
-  notionalUsd: number;
+  notionalUsd: number;      // Position size (margin × leverage)
+  marginUsd: number;        // Capital blocked (what we reserve)
   riskUsd: number;
   leverage: number;
   suggestedLeverage: number;
@@ -864,54 +948,89 @@ export interface PositionSizeResult {
 }
 
 /**
- * Calculate position size V5.5 - LIQUIDITY-AWARE
+ * Calculate position size V5.6 - LIQUIDITY-AWARE + DYNAMIC LEVERAGE
  * 
  * This version caps position size based on:
- * 1. Available capital (40% rule)
+ * 1. Available capital (40% rule) - this is the MARGIN we use
  * 2. Symbol liquidity tier
  * 3. Actual 24h volume (if provided)
+ * 4. V5.6: Dynamic leverage based on ATR volatility
+ * 
+ * IMPORTANT: With leverage, the NOTIONAL = margin × leverage
+ * - margin = what we block from capital pool
+ * - notional = actual position size (what we trade on exchange)
+ * 
+ * V5.6 LOGIC:
+ * - If position is capped by liquidity, effective leverage may be lower
+ * - Example: $500K capital, SEI cap $25K notional
+ *   → margin = $200K (40% of $500K), but notional capped at $25K
+ *   → effective leverage = $25K / margin_used = ~0.125x (no leverage needed!)
+ *   → We only block margin_used = $25K / base_leverage = $5K
  * 
  * This prevents market impact problems when scaling up capital
  */
 export function calculatePositionSize(input: PositionSizeInput): PositionSizeResult {
-  const { symbol, currentPrice, totalCapitalUsd, stopLossPct, volume24h } = input;
+  const { symbol, currentPrice, totalCapitalUsd, stopLossPct, volume24h, safeLeverage } = input;
   
-  const leverage = MomentumConfig.LEVERAGE[symbol] || 4;
+  // V5.6: Use safe leverage if provided (from ATR calculation), otherwise use base leverage
+  const baseLeverage = MomentumConfig.LEVERAGE[symbol] || 4;
+  const leverage = safeLeverage ?? baseLeverage;
   const stopPrice = currentPrice * (1 - stopLossPct / 100);
   
-  // Step 1: Calculate target position (40% of capital)
-  const targetPositionValue = totalCapitalUsd * MomentumConfig.RISK.POSITION_SIZE_PCT;
+  // Step 1: Calculate target margin (40% of capital) - this is what we'd LIKE to use
+  const targetMargin = totalCapitalUsd * MomentumConfig.RISK.POSITION_SIZE_PCT;
   
-  // Step 2: Get liquidity-based maximum
+  // Step 2: Calculate target notional (margin × leverage) - this is the TARGET position size
+  const targetNotional = targetMargin * leverage;
+  
+  // Step 3: Get liquidity-based maximum (for NOTIONAL)
   const liquidityTier = getLiquidityTier(symbol);
-  const maxSafePosition = getMaxSafePositionSize(symbol, volume24h);
+  const maxSafeNotional = getMaxSafePositionSize(symbol, volume24h);
   
-  // Step 3: Apply liquidity cap
-  let positionValue = Math.min(targetPositionValue, maxSafePosition);
-  const wasLiquidityCapped = targetPositionValue > maxSafePosition;
+  // Step 4: Apply liquidity cap to NOTIONAL
+  const wasLiquidityCapped = targetNotional > maxSafeNotional;
+  let notional = Math.min(targetNotional, maxSafeNotional);
   
-  // Step 4: Apply minimum threshold
-  const MIN_POSITION_USD = 20;
-  if (positionValue < MIN_POSITION_USD) {
-    positionValue = totalCapitalUsd >= MIN_POSITION_USD ? Math.min(totalCapitalUsd, MIN_POSITION_USD) : 0;
+  // Step 5: Calculate actual margin needed
+  // If capped, margin = notional / leverage (we use less margin)
+  // This is key: with big capital and liquidity cap, we don't need full margin
+  let actualMargin = notional / leverage;
+  
+  // Step 6: Cap margin to available capital (safety check)
+  if (actualMargin > totalCapitalUsd * 0.95) {
+    actualMargin = totalCapitalUsd * 0.95;
+    notional = actualMargin * leverage;
   }
   
-  // Step 5: Calculate estimated slippage
-  const estimatedSlippage = volume24h ? estimateSlippage(positionValue, volume24h) : undefined;
+  // Step 7: Apply minimum threshold
+  const MIN_NOTIONAL_USD = 20;
+  if (notional < MIN_NOTIONAL_USD) {
+    notional = totalCapitalUsd >= MIN_NOTIONAL_USD / leverage ? MIN_NOTIONAL_USD : 0;
+    actualMargin = notional / leverage;
+  }
   
-  const qty = positionValue / currentPrice;
-  const riskUsd = positionValue * (stopLossPct / 100);
+  // Step 8: Calculate estimated slippage (based on notional)
+  const estimatedSlippage = volume24h ? estimateSlippage(notional, volume24h) : undefined;
+  
+  // qty = notional / price (NOT margin / price)
+  const qty = notional / currentPrice;
+  const riskUsd = actualMargin * (stopLossPct / 100) * leverage;  // Risk on margin, amplified by leverage
+  
+  // V5.6: Calculate effective leverage (may be lower if capped)
+  // This is informational - shows the "real" amplification we're getting
+  const effectiveLeverage = actualMargin > 0 ? notional / actualMargin : leverage;
   
   return { 
     qty, 
-    notionalUsd: positionValue,
+    notionalUsd: notional,      // The actual position size
+    marginUsd: actualMargin,    // What we block from capital pool
     riskUsd, 
-    leverage,
+    leverage,                   // The leverage we're USING
     suggestedLeverage: leverage,
     stopPrice,
     // V5.5 liquidity info
     liquidityTier,
-    maxSafePosition,
+    maxSafePosition: maxSafeNotional,
     estimatedSlippage,
     wasLiquidityCapped,
   };

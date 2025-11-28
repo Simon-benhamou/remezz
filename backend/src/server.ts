@@ -36,7 +36,7 @@ import {
   resetCapitalPool,
   type CapitalPool 
 } from "./strategies/simpleAgent.js";
-import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
+import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, LIQUIDATION_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
 
 const logLevel = configureLogging();
 const logger = createLogger("server");
@@ -448,6 +448,15 @@ app.get("/api/liquidity-info", async (req, res) => {
       warning: capital > totalMaxDeployable 
         ? `Your capital ($${capital.toLocaleString()}) exceeds safe deployment capacity ($${totalMaxDeployable.toLocaleString()}). Consider using fewer symbols or accepting slippage.`
         : null,
+      // V5.6: Liquidation protection config
+      leverageProtection: {
+        enabled: LIQUIDATION_CONFIG.DYNAMIC_LEVERAGE,
+        baseLeverage: 5,
+        reducedLeverage: LIQUIDATION_CONFIG.REDUCED_LEVERAGE,
+        atrThreshold: LIQUIDATION_CONFIG.HIGH_VOLATILITY_ATR_PCT,
+        atrPeriod: LIQUIDATION_CONFIG.ATR_PERIOD,
+        description: `Leverage is automatically reduced from 5x to ${LIQUIDATION_CONFIG.REDUCED_LEVERAGE}x when ATR > ${LIQUIDATION_CONFIG.HIGH_VOLATILITY_ATR_PCT}% (high volatility periods)`,
+      },
     });
   } catch (error) {
     logger.error("Failed to get liquidity info", error);
