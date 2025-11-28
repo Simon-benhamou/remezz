@@ -1,10 +1,12 @@
 /**
- * 🔬 BACKTEST COMBINÉ V5.4 - LONG (Bull) + SHORT (Bear)
+ * 🔬 BACKTEST COMBINÉ V5.6 - LONG (Bull) + SHORT (Bear) + LIQUIDITY + ANTI-LIQUIDATION
  * 
- * Simulation réaliste avec $1000 sur 24 mois
+ * Simulation réaliste avec capital variable sur 24 mois
  * - Détecte automatiquement le régime (BTC vs SMA200)
  * - Applique LONG en Bull, SHORT en Bear
  * - Frais réalistes: trading, slippage, funding
+ * - V5.5: Position sizing limité par liquidité du marché
+ * - V5.6: Dynamic leverage based on ATR volatility (anti-liquidation)
  */
 
 import ccxt from 'ccxt';
@@ -12,7 +14,7 @@ import ccxt from 'ccxt';
 const exchange = new ccxt.binanceusdm({ enableRateLimit: true });
 
 // ============================================================================
-// CONFIGURATION V5.4 (exactement comme dans momentumSimple.ts)
+// CONFIGURATION V5.6 (exactement comme dans momentumSimple.ts)
 // ============================================================================
 
 const CONFIG = {
@@ -46,16 +48,92 @@ const CONFIG = {
   // Risk
   POSITION_SIZE_PCT: 0.4,  // 40% du capital par trade
   LEVERAGE: 5,
+  
+  // V5.6: Liquidation Protection
+  LIQUIDATION: {
+    // Binance liquidation threshold (maintenance margin ~0.4% = liquidation at ~80% loss on margin)
+    LIQUIDATION_THRESHOLD_PCT: 80,  // Liquidated if margin loss > 80%
+    
+    // Safety margin: don't allow positions where SL is > X% of distance to liquidation
+    // With 5x leverage, liquidation = -20% price move
+    // SL at 1.5% = 7.5% of 20% = 37.5% of liquidation distance ✅
+    // If volatility high, reduce leverage to keep this ratio safe
+    MAX_SL_TO_LIQUIDATION_RATIO: 0.5,  // SL should be max 50% of liquidation distance
+    
+    // Max acceptable gap (for simulation of worst case)
+    MAX_SIMULATED_GAP_PCT: 5,  // Simulate 5% gaps to test robustness
+    
+    // Dynamic leverage based on ATR (volatility)
+    DYNAMIC_LEVERAGE: true,
+    ATR_PERIOD: 14,
+    // If ATR/price > this threshold, reduce leverage
+    HIGH_VOLATILITY_ATR_PCT: 2,   // ATR > 2% = high volatility (was 3%)
+    REDUCED_LEVERAGE: 3,          // Use 3x instead of 5x in high volatility
+  },
 };
+
+// ============================================================================
+// V5.5: LIQUIDITY-AWARE POSITION SIZING CONFIG
+// ============================================================================
+
+const LIQUIDITY_CONFIG = {
+  // Maximum position as percentage of symbol's 24h volume
+  MAX_POSITION_PCT_OF_VOLUME: 0.5,  // 0.5% of 24h volume max
+  
+  // Absolute caps per symbol tier based on typical liquidity
+  POSITION_CAPS: {
+    HIGH: {
+      symbols: ['BTC/USDT:USDT', 'ETH/USDT:USDT'],
+      maxPositionUsd: 500_000,
+    },
+    MEDIUM: {
+      symbols: ['XRP/USDT:USDT', 'SOL/USDT:USDT', 'DOGE/USDT:USDT'],
+      maxPositionUsd: 100_000,
+    },
+    LOW: {
+      symbols: ['SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT'],
+      maxPositionUsd: 25_000,
+    },
+  },
+  
+  SLIPPAGE_FACTOR: 50,  // 0.5% slippage for 1% of volume
+};
+
+function getLiquidityTier(symbol) {
+  if (LIQUIDITY_CONFIG.POSITION_CAPS.HIGH.symbols.includes(symbol)) return 'HIGH';
+  if (LIQUIDITY_CONFIG.POSITION_CAPS.MEDIUM.symbols.includes(symbol)) return 'MEDIUM';
+  return 'LOW';
+}
+
+function getMaxSafePositionSize(symbol, volume24h) {
+  const tier = getLiquidityTier(symbol);
+  const config = LIQUIDITY_CONFIG.POSITION_CAPS[tier];
+  
+  if (volume24h && volume24h > 0) {
+    const volumeBasedMax = volume24h * (LIQUIDITY_CONFIG.MAX_POSITION_PCT_OF_VOLUME / 100);
+    return Math.min(volumeBasedMax, config.maxPositionUsd);
+  }
+  
+  return config.maxPositionUsd;
+}
+
+function estimateSlippage(positionUsd, volume24h) {
+  if (volume24h <= 0) return 0.5;
+  const pctOfVolume = (positionUsd / volume24h) * 100;
+  return pctOfVolume * (LIQUIDITY_CONFIG.SLIPPAGE_FACTOR / 100);
+}
 
 const COSTS = {
   TRADING_FEE_PCT: 0.04,      // 0.04% per side
-  SLIPPAGE_PCT: 0.05,         // 0.05% per side  
+  SLIPPAGE_PCT: 0.05,         // 0.05% per side (base slippage)
   FUNDING_RATE_PCT: 0.01,     // 0.01% every 8h
   FUNDING_INTERVAL_BARS: 32,  // 32 × 15min = 8h
 };
 
-const INITIAL_CAPITAL = 1000;
+// V5.5: Test with multiple capital levels
+const TEST_CAPITALS = [1_000, 10_000, 100_000, 500_000, 1_000_000];
+const INITIAL_CAPITAL = parseInt(process.env.INITIAL_CAPITAL) || 1000;
+
 const SYMBOLS = ['SEI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT', 'IMX/USDT:USDT'];
 
 // ============================================================================
@@ -102,6 +180,73 @@ function countConsecDown(candles) {
     else break;
   }
   return count;
+}
+
+// ============================================================================
+// V5.6: ATR CALCULATION FOR VOLATILITY-BASED LEVERAGE
+// ============================================================================
+
+function calcATR(candles, period = 14) {
+  if (candles.length < period + 1) return null;
+  
+  let atrSum = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevClose = candles[i - 1]?.close || candles[i].open;
+    
+    const tr = Math.max(
+      high - low,
+      Math.abs(high - prevClose),
+      Math.abs(low - prevClose)
+    );
+    atrSum += tr;
+  }
+  
+  return atrSum / period;
+}
+
+// V5.6: Calculate safe leverage based on volatility
+function calcSafeLeverage(candles, baseLeverage = 5) {
+  if (!CONFIG.LIQUIDATION.DYNAMIC_LEVERAGE) return baseLeverage;
+  
+  const atr = calcATR(candles, CONFIG.LIQUIDATION.ATR_PERIOD);
+  if (!atr) return baseLeverage;
+  
+  const currentPrice = candles[candles.length - 1].close;
+  const atrPct = (atr / currentPrice) * 100;
+  
+  // High volatility = reduce leverage
+  if (atrPct > CONFIG.LIQUIDATION.HIGH_VOLATILITY_ATR_PCT) {
+    return CONFIG.LIQUIDATION.REDUCED_LEVERAGE;
+  }
+  
+  return baseLeverage;
+}
+
+// V5.6: Check if position is safe from liquidation with gap scenarios
+function checkLiquidationSafety(entryPrice, side, leverage, slPct) {
+  // Calculate liquidation price (simplified: ~100/leverage % move)
+  const liquidationDistance = 100 / leverage;  // e.g., 5x = 20% move
+  
+  // SL distance with leverage
+  const slDistanceFromEntry = slPct;  // e.g., 1.5%
+  
+  // Ratio of SL to liquidation distance
+  const ratio = slDistanceFromEntry / liquidationDistance;
+  
+  // Also simulate a gap scenario
+  const gapPct = CONFIG.LIQUIDATION.MAX_SIMULATED_GAP_PCT;
+  const gapLoss = gapPct * leverage;  // 5% gap × 5x = 25% loss
+  const wouldSurviveGap = gapLoss < CONFIG.LIQUIDATION.LIQUIDATION_THRESHOLD_PCT;
+  
+  return {
+    safe: ratio <= CONFIG.LIQUIDATION.MAX_SL_TO_LIQUIDATION_RATIO && wouldSurviveGap,
+    ratio,
+    liquidationDistance,
+    gapSurvival: wouldSurviveGap,
+    recommendedLeverage: wouldSurviveGap ? leverage : Math.floor(CONFIG.LIQUIDATION.LIQUIDATION_THRESHOLD_PCT / gapPct / 1.5),
+  };
 }
 
 // ============================================================================
@@ -171,23 +316,25 @@ function checkShortEntry(candles) {
 }
 
 // ============================================================================
-// PNL CALCULATOR WITH ALL COSTS
+// PNL CALCULATOR WITH ALL COSTS (V5.6: Dynamic slippage + dynamic leverage)
 // ============================================================================
 
-function calculatePnl(entryPrice, exitPrice, side, capitalUsed, holdBars) {
+function calculatePnl(entryPrice, exitPrice, side, capitalUsed, holdBars, extraSlippage = 0, leverage = CONFIG.LEVERAGE) {
   // Gross PnL
   let pnlPct = side === 'long'
     ? ((exitPrice - entryPrice) / entryPrice) * 100
     : ((entryPrice - exitPrice) / entryPrice) * 100;
   
-  const leveragedPnlPct = pnlPct * CONFIG.LEVERAGE;
+  const leveragedPnlPct = pnlPct * leverage;  // V5.6: Use dynamic leverage
   
-  // Costs
-  const entryFee = COSTS.TRADING_FEE_PCT * CONFIG.LEVERAGE;
-  const exitFee = COSTS.TRADING_FEE_PCT * CONFIG.LEVERAGE;
-  const totalSlippage = COSTS.SLIPPAGE_PCT * 2 * CONFIG.LEVERAGE;
+  // Costs (V5.5: Add dynamic slippage based on position size vs volume)
+  const entryFee = COSTS.TRADING_FEE_PCT * leverage;
+  const exitFee = COSTS.TRADING_FEE_PCT * leverage;
+  const baseSlippage = COSTS.SLIPPAGE_PCT * 2 * leverage;
+  const dynamicSlippage = extraSlippage * 2 * leverage;  // Entry + exit
+  const totalSlippage = baseSlippage + dynamicSlippage;
   const fundingPeriods = Math.floor(holdBars / COSTS.FUNDING_INTERVAL_BARS);
-  const totalFunding = fundingPeriods * COSTS.FUNDING_RATE_PCT * CONFIG.LEVERAGE;
+  const totalFunding = fundingPeriods * COSTS.FUNDING_RATE_PCT * leverage;
   
   const totalCosts = entryFee + exitFee + totalSlippage + totalFunding;
   const netPnlPct = leveragedPnlPct - totalCosts;
@@ -200,12 +347,14 @@ function calculatePnl(entryPrice, exitPrice, side, capitalUsed, holdBars) {
     netPnlPct, 
     netPnlUsd, 
     costsUsd,
-    totalCostsPct: totalCosts
+    totalCostsPct: totalCosts,
+    slippagePct: totalSlippage / leverage,  // Per-side equivalent
+    leverageUsed: leverage,  // V5.6: Track what leverage was actually used
   };
 }
 
 // ============================================================================
-// DATA FETCHING
+// DATA FETCHING (V5.5: Also fetch volume data)
 // ============================================================================
 
 async function fetchCandles(symbol, months = 12) {
@@ -225,17 +374,36 @@ async function fetchCandles(symbol, months = 12) {
   return allCandles;
 }
 
+// V5.5: Calculate 24h volume from candles (96 × 15min bars)
+function calc24hVolume(candles, idx) {
+  const bars24h = 96;  // 24h × 4 bars/hour
+  const startIdx = Math.max(0, idx - bars24h);
+  let volume = 0;
+  for (let i = startIdx; i <= idx; i++) {
+    // Volume in quote currency (USDT) = volume × close price
+    volume += candles[i].volume * candles[i].close;
+  }
+  return volume;
+}
+
 // ============================================================================
-// MAIN BACKTEST
+// MAIN BACKTEST V5.5
 // ============================================================================
 
 async function main() {
   console.log('═'.repeat(80));
-  console.log('🔬 BACKTEST COMBINÉ V5.4 - LONG (Bull) + SHORT (Bear)');
+  console.log('🔬 BACKTEST COMBINÉ V5.6 - LONG + SHORT + LIQUIDITY + ANTI-LIQUIDATION');
   console.log('═'.repeat(80));
-  console.log(`\n💰 Capital initial: $${INITIAL_CAPITAL}`);
-  console.log(`📊 Leverage: ${CONFIG.LEVERAGE}x | Position Size: ${CONFIG.POSITION_SIZE_PCT * 100}%`);
-  console.log(`💸 Frais: Trading ${COSTS.TRADING_FEE_PCT}%, Slippage ${COSTS.SLIPPAGE_PCT}%, Funding ${COSTS.FUNDING_RATE_PCT}%/8h`);
+  console.log(`\n💰 Capital initial: $${INITIAL_CAPITAL.toLocaleString()}`);
+  console.log(`📊 Leverage: ${CONFIG.LEVERAGE}x (dynamic: ${CONFIG.LIQUIDATION.REDUCED_LEVERAGE}x in high ATR)`);
+  console.log(`💸 Frais: Trading ${COSTS.TRADING_FEE_PCT}%, Slippage ${COSTS.SLIPPAGE_PCT}%+dynamic, Funding ${COSTS.FUNDING_RATE_PCT}%/8h`);
+  console.log(`\n🔒 V5.5 LIQUIDITY CAPS:`);
+  console.log(`   HIGH (BTC, ETH): Max $${LIQUIDITY_CONFIG.POSITION_CAPS.HIGH.maxPositionUsd.toLocaleString()}/position`);
+  console.log(`   MEDIUM (XRP, SOL): Max $${LIQUIDITY_CONFIG.POSITION_CAPS.MEDIUM.maxPositionUsd.toLocaleString()}/position`);
+  console.log(`   LOW (SEI, IMX): Max $${LIQUIDITY_CONFIG.POSITION_CAPS.LOW.maxPositionUsd.toLocaleString()}/position`);
+  console.log(`\n⚡ V5.6 ANTI-LIQUIDATION:`);
+  console.log(`   ATR threshold: ${CONFIG.LIQUIDATION.HIGH_VOLATILITY_ATR_PCT}% → Reduce to ${CONFIG.LIQUIDATION.REDUCED_LEVERAGE}x`);
+  console.log(`   Gap simulation: ${CONFIG.LIQUIDATION.MAX_SIMULATED_GAP_PCT}% max gap scenario`);
   
   // Fetch data
   console.log('\n📊 Fetching 24 months of data...');
@@ -246,7 +414,7 @@ async function main() {
   const allData = {};
   for (const symbol of SYMBOLS) {
     allData[symbol] = await fetchCandles(symbol, 24);
-    console.log(`   ${symbol}: ${allData[symbol].length} candles`);
+    console.log(`   ${symbol}: ${allData[symbol].length} candles (Tier: ${getLiquidityTier(symbol)})`);
   }
   
   // Initialize tracking
@@ -257,6 +425,12 @@ async function main() {
   const monthlyPnl = {};
   const dailyEquity = [];
   let rejectedOrders = 0;  // Track rejected orders due to insufficient capital
+  
+  // V5.5: Track liquidity-related stats
+  let liquidityCappedTrades = 0;
+  let totalSlippageCost = 0;
+  const liquidityStats = {};
+  SYMBOLS.forEach(s => { liquidityStats[s] = { trades: 0, capped: 0, avgSlippage: 0, totalSlippage: 0 }; });
   
   const positions = {};
   const cooldowns = {};
@@ -350,10 +524,12 @@ async function main() {
         
         // Execute exit
         if (exitReason) {
-          const pnl = calculatePnl(pos.entryPrice, exitPrice, pos.side, pos.capitalUsed, holdBars);
+          // V5.6: Include dynamic slippage + dynamic leverage from position
+          const pnl = calculatePnl(pos.entryPrice, exitPrice, pos.side, pos.capitalUsed, holdBars, pos.extraSlippage || 0, pos.leverage || CONFIG.LEVERAGE);
           capital += pnl.netPnlUsd;
           capitalInUse -= pos.capitalUsed;  // Release capital back
           totalCosts += pnl.costsUsd;
+          totalSlippageCost += (pnl.slippagePct / 100) * pos.capitalUsed;
           
           trades.push({
             symbol,
@@ -369,7 +545,14 @@ async function main() {
             costsUsd: pnl.costsUsd,
             exitReason,
             capitalAfter: capital,
-            month
+            month,
+            // V5.5: Liquidity info
+            wasCapped: pos.wasCapped || false,
+            positionSize: pos.capitalUsed,
+            slippagePct: pnl.slippagePct,
+            // V5.6: Leverage info
+            leverage: pos.leverage || CONFIG.LEVERAGE,
+            leverageReduced: pos.leverageReduced || false,
           });
           
           monthlyPnl[month].pnl += pnl.netPnlUsd;
@@ -382,14 +565,45 @@ async function main() {
       }
       
       // ═══════════════════════════════════════════════════════════════════════
-      // CHECK FOR NEW ENTRY
+      // CHECK FOR NEW ENTRY (V5.6: With liquidity-aware sizing + dynamic leverage)
       // ═══════════════════════════════════════════════════════════════════════
       if (!positions[symbol] && cooldowns[symbol] <= 0 && capital > 100) {
         const availableCapital = capital - capitalInUse;
-        const capitalToUse = capital * CONFIG.POSITION_SIZE_PCT;  // 40% of current capital
         
-        // Check if we have enough available capital
-        if (capitalToUse > availableCapital) {
+        // V5.6: Calculate safe leverage FIRST (based on ATR volatility)
+        const safeLeverage = calcSafeLeverage(windowCandles, CONFIG.LEVERAGE);
+        const leverageReduced = safeLeverage < CONFIG.LEVERAGE;
+        
+        // Step 1: Calculate target margin (40% of capital)
+        const targetMargin = capital * CONFIG.POSITION_SIZE_PCT;
+        
+        // Step 2: Calculate target notional (margin × leverage)
+        const targetNotional = targetMargin * safeLeverage;
+        
+        // Step 3: Get liquidity cap (applies to NOTIONAL)
+        const volume24h = calc24hVolume(candles, idx);
+        const maxSafeNotional = getMaxSafePositionSize(symbol, volume24h);
+        
+        // Step 4: Apply liquidity cap to notional
+        const wasCapped = targetNotional > maxSafeNotional;
+        const notional = Math.min(targetNotional, maxSafeNotional);
+        
+        // Step 5: Calculate actual margin needed (margin = notional / leverage)
+        const marginToUse = notional / safeLeverage;
+        
+        // V5.5: Calculate dynamic slippage based on notional vs volume
+        const extraSlippage = volume24h > 0 ? estimateSlippage(notional, volume24h) : 0;
+        
+        // V5.6: Verify liquidation safety before entry
+        const liquidationCheck = checkLiquidationSafety(
+          current.close, 
+          isBullRegime ? 'long' : 'short',
+          safeLeverage,
+          CONFIG.EXIT.STOP_LOSS
+        );
+        
+        // Check if we have enough available capital (compare margin to available)
+        if (marginToUse > availableCapital) {
           // Not enough capital - order would be rejected
           if (isBullRegime && checkLongEntry(windowCandles)) {
             rejectedOrders++;
@@ -400,27 +614,51 @@ async function main() {
           // BULL REGIME → LONG
           if (isBullRegime && checkLongEntry(windowCandles)) {
             longSignals++;
-            capitalInUse += capitalToUse;  // Lock capital
+            if (wasCapped) liquidityCappedTrades++;
+            liquidityStats[symbol].trades++;
+            if (wasCapped) liquidityStats[symbol].capped++;
+            liquidityStats[symbol].totalSlippage += extraSlippage;
+            
+            capitalInUse += marginToUse;  // Lock MARGIN (not notional)
             positions[symbol] = {
               side: 'long',
               entryPrice: current.close,
               entryIdx: idx,
               entryTime: btcCandle.timestamp,
-              capitalUsed: capitalToUse,
-              hwm: current.close
+              capitalUsed: marginToUse,   // Store MARGIN used
+              notionalUsed: notional,     // Store NOTIONAL for reference
+              leverage: safeLeverage,     // V5.6: Store actual leverage used
+              leverageReduced,
+              wasCapped,
+              extraSlippage,
+              volume24h,
+              hwm: current.close,
+              liquidationSafe: liquidationCheck.safe,
             };
           }
           // BEAR REGIME → SHORT
           else if (isBearRegime && checkShortEntry(windowCandles)) {
             shortSignals++;
-            capitalInUse += capitalToUse;  // Lock capital
+            if (wasCapped) liquidityCappedTrades++;
+            liquidityStats[symbol].trades++;
+            if (wasCapped) liquidityStats[symbol].capped++;
+            liquidityStats[symbol].totalSlippage += extraSlippage;
+            
+            capitalInUse += marginToUse;  // Lock MARGIN (not notional)
             positions[symbol] = {
               side: 'short',
               entryPrice: current.close,
               entryIdx: idx,
               entryTime: btcCandle.timestamp,
-              capitalUsed: capitalToUse,
-              lwm: current.close
+              capitalUsed: marginToUse,   // Store MARGIN used
+              notionalUsed: notional,     // Store NOTIONAL for reference
+              leverage: safeLeverage,     // V5.6: Store actual leverage used
+              leverageReduced,
+              wasCapped,
+              extraSlippage,
+              volume24h,
+              lwm: current.close,
+              liquidationSafe: liquidationCheck.safe,
             };
           }
         }
@@ -442,6 +680,15 @@ async function main() {
   const longWins = longTrades.filter(t => t.netPnlPct > 0);
   const shortWins = shortTrades.filter(t => t.netPnlPct > 0);
   
+  // V5.5: Count capped trades
+  const cappedTrades = trades.filter(t => t.wasCapped);
+  
+  // V5.6: Count leverage-reduced trades
+  const leverageReducedTrades = trades.filter(t => t.leverageReduced);
+  const avgLeverage = trades.length > 0 
+    ? trades.reduce((sum, t) => sum + (t.leverage || CONFIG.LEVERAGE), 0) / trades.length 
+    : CONFIG.LEVERAGE;
+  
   const roi = ((capital - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100);
   const winRate = trades.length > 0 ? (wins.length / trades.length * 100) : 0;
   const longWR = longTrades.length > 0 ? (longWins.length / longTrades.length * 100) : 0;
@@ -456,19 +703,24 @@ async function main() {
     if (dd > maxDrawdown) maxDrawdown = dd;
   }
   
+  // V5.5: Calculate average slippage
+  const avgSlippage = trades.length > 0 
+    ? trades.reduce((sum, t) => sum + (t.slippagePct || 0), 0) / trades.length 
+    : 0;
+  
   // Monthly stats
   const months = Object.keys(monthlyPnl).sort();
   const positiveMonths = months.filter(m => monthlyPnl[m].pnl > 0);
   
   console.log('\n' + '═'.repeat(80));
-  console.log('📊 RÉSULTATS V5.4 - LONG (Bull) + SHORT (Bear)');
+  console.log('📊 RÉSULTATS V5.6 - LONG + SHORT + LIQUIDITY + DYNAMIC LEVERAGE');
   console.log('═'.repeat(80));
   
   console.log(`
 ┌────────────────────────────────────────────────────────────────────────────────┐
 │                              PERFORMANCE GLOBALE                                │
 ├────────────────────────────────────────────────────────────────────────────────┤
-│  💰 Capital: $${INITIAL_CAPITAL} → $${capital.toFixed(2).padStart(10)}                                       │
+│  💰 Capital: $${INITIAL_CAPITAL.toLocaleString()} → $${capital.toFixed(0).padStart(10)}                                       │
 │  📈 ROI:     ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%                                                          │
 │  🎯 Trades:  ${String(trades.length).padStart(4)} total (${longTrades.length} LONG + ${shortTrades.length} SHORT)                          │
 │  🚫 Rejected: ${rejectedOrders} (insufficient capital)                                       │
@@ -477,6 +729,40 @@ async function main() {
 │  💸 Frais:   $${totalCosts.toFixed(2)} (${(totalCosts/INITIAL_CAPITAL*100).toFixed(1)}% du capital initial)                       │
 └────────────────────────────────────────────────────────────────────────────────┘
 `);
+
+  // V5.5: Liquidity stats
+  console.log(`
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                       🔒 V5.5 LIQUIDITY-AWARE STATS                             │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  📏 Positions cappées: ${String(cappedTrades.length).padStart(4)}/${trades.length} (${(cappedTrades.length/trades.length*100).toFixed(1)}%)                                │
+│  📉 Slippage moyen:    ${avgSlippage.toFixed(3)}% per trade                                       │
+│  💸 Coût slippage:     $${totalSlippageCost.toFixed(2)}                                            │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  Par Symbole:                                                                   │`);
+  
+  for (const symbol of SYMBOLS) {
+    const stats = liquidityStats[symbol];
+    const tier = getLiquidityTier(symbol);
+    const tierIcon = tier === 'HIGH' ? '🟢' : tier === 'MEDIUM' ? '🟡' : '🔴';
+    const cappedPct = stats.trades > 0 ? (stats.capped / stats.trades * 100).toFixed(0) : '0';
+    const avgSlip = stats.trades > 0 ? (stats.totalSlippage / stats.trades).toFixed(3) : '0.000';
+    console.log(`│  ${tierIcon} ${symbol.padEnd(16)} │ ${String(stats.trades).padStart(3)} trades │ ${String(stats.capped).padStart(3)} capped (${cappedPct.padStart(3)}%) │ avg slip ${avgSlip}%  │`);
+  }
+  console.log(`└────────────────────────────────────────────────────────────────────────────────┘`);
+
+  // V5.6: Leverage protection stats
+  console.log(`
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                  ⚡ V5.6 LEVERAGE PROTECTION STATS                              │
+├────────────────────────────────────────────────────────────────────────────────┤
+│  📊 Base Leverage:     ${CONFIG.LEVERAGE}x | Reduced Leverage: ${CONFIG.LIQUIDATION.REDUCED_LEVERAGE}x              │
+│  🔄 Trades reduced:    ${String(leverageReducedTrades.length).padStart(4)}/${trades.length} (${(leverageReducedTrades.length/trades.length*100).toFixed(1)}%)                              │
+│  📈 Avg leverage used: ${avgLeverage.toFixed(2)}x                                                 │
+│                                                                                 │
+│  ⚠️  ATR threshold:    ${CONFIG.LIQUIDATION.HIGH_VOLATILITY_ATR_PCT}% (ATR > ${CONFIG.LIQUIDATION.HIGH_VOLATILITY_ATR_PCT}% = reduce leverage)           │
+│  🛡️  Liquidation:      Gap ${CONFIG.LIQUIDATION.MAX_SIMULATED_GAP_PCT}% simulated, threshold ${CONFIG.LIQUIDATION.LIQUIDATION_THRESHOLD_PCT}%                  │
+└────────────────────────────────────────────────────────────────────────────────┘`);
 
   console.log(`
 ┌────────────────────────────────────────────────────────────────────────────────┐
@@ -503,10 +789,11 @@ async function main() {
     const data = monthlyPnl[m];
     cumulCapital += data.pnl;
     const pnlStr = data.pnl >= 0 ? `+$${data.pnl.toFixed(0)}` : `-$${Math.abs(data.pnl).toFixed(0)}`;
+    const barScale = INITIAL_CAPITAL >= 100000 ? 5000 : 200;  // Scale bars based on capital
     const bar = data.pnl > 0 
-      ? '█'.repeat(Math.min(15, Math.floor(data.pnl / 200)))
-      : '░'.repeat(Math.min(15, Math.floor(Math.abs(data.pnl) / 200)));
-    console.log(`  ${m}  │ ${pnlStr.padStart(9)} │    ${String(data.longTrades).padStart(3)}   │    ${String(data.shortTrades).padStart(3)}   │ $${cumulCapital.toFixed(0).padStart(8)} ${bar}`);
+      ? '█'.repeat(Math.min(15, Math.floor(data.pnl / barScale)))
+      : '░'.repeat(Math.min(15, Math.floor(Math.abs(data.pnl) / barScale)));
+    console.log(`  ${m}  │ ${pnlStr.padStart(9)} │    ${String(data.longTrades).padStart(3)}   │    ${String(data.shortTrades).padStart(3)}   │ $${cumulCapital.toFixed(0).padStart(10)} ${bar}`);
   }
   console.log('─'.repeat(80));
   console.log(`  TOTAL     │ ${roi >= 0 ? '+' : ''}$${(capital - INITIAL_CAPITAL).toFixed(0).padStart(8)} │    ${String(longTrades.length).padStart(3)}   │    ${String(shortTrades.length).padStart(3)}   │ $${capital.toFixed(0).padStart(8)}`);
@@ -523,17 +810,19 @@ async function main() {
   const sortedByPnl = [...trades].sort((a, b) => b.netPnlUsd - a.netPnlUsd);
   console.log('\n🏆 TOP 5 TRADES:');
   for (const t of sortedByPnl.slice(0, 5)) {
-    console.log(`   ${t.side.toUpperCase().padEnd(5)} ${t.symbol.padEnd(16)} +$${t.netPnlUsd.toFixed(2)} (${t.netPnlPct.toFixed(1)}%) - ${t.exitReason}`);
+    const cappedTag = t.wasCapped ? ' 🔒' : '';
+    console.log(`   ${t.side.toUpperCase().padEnd(5)} ${t.symbol.padEnd(16)} +$${t.netPnlUsd.toFixed(2)} (${t.netPnlPct.toFixed(1)}%) - ${t.exitReason}${cappedTag}`);
   }
   
   console.log('\n💀 WORST 5 TRADES:');
   for (const t of sortedByPnl.slice(-5).reverse()) {
-    console.log(`   ${t.side.toUpperCase().padEnd(5)} ${t.symbol.padEnd(16)} $${t.netPnlUsd.toFixed(2)} (${t.netPnlPct.toFixed(1)}%) - ${t.exitReason}`);
+    const cappedTag = t.wasCapped ? ' 🔒' : '';
+    console.log(`   ${t.side.toUpperCase().padEnd(5)} ${t.symbol.padEnd(16)} $${t.netPnlUsd.toFixed(2)} (${t.netPnlPct.toFixed(1)}%) - ${t.exitReason}${cappedTag}`);
   }
   
   // Summary
   console.log('\n' + '═'.repeat(80));
-  console.log('💡 RÉSUMÉ V5.4');
+  console.log('💡 RÉSUMÉ V5.5 - LIQUIDITY-AWARE');
   console.log('═'.repeat(80));
   console.log(`
    ✅ ROI sur 24 mois: ${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%
@@ -545,6 +834,17 @@ async function main() {
    📉 SHORT: ${shortTrades.length} trades, ${shortWR.toFixed(1)}% WR (${(bearBars/(bullBars+bearBars)*100).toFixed(1)}% du temps en Bear)
    
    💸 Coûts totaux: $${totalCosts.toFixed(2)} (${(totalCosts/trades.length).toFixed(2)}$/trade en moyenne)
+   
+   🔒 V5.5 LIQUIDITY IMPACT:
+   - Positions cappées: ${cappedTrades.length}/${trades.length} (${(cappedTrades.length/trades.length*100).toFixed(1)}%)
+   - Slippage additionnel moyen: ${avgSlippage.toFixed(3)}%
+   - Coût slippage total: $${totalSlippageCost.toFixed(2)}
+   ${INITIAL_CAPITAL >= 100000 ? `
+   ⚠️  ATTENTION: Avec $${INITIAL_CAPITAL.toLocaleString()} de capital:
+   - Les positions sur SEI/IMX (LOW tier) sont cappées à $25K max
+   - Les positions sur XRP (MEDIUM tier) sont cappées à $100K max
+   - Seul ETH (HIGH tier) peut avoir des positions jusqu'à $500K
+   ` : ''}
 `);
 }
 
