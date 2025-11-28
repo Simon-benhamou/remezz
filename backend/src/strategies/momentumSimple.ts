@@ -149,15 +149,16 @@ export const MomentumConfig = {
     'IMX/USDT:USDT',
   ],
   
-  // Leverage par asset V5
+  // V5.7: Leverage par asset (plus conservateur pour volatiles)
   LEVERAGE: {
-    'BTC/USDT:USDT': 3,
-    'ETH/USDT:USDT': 5,
-    'SOL/USDT:USDT': 5,
-    'XRP/USDT:USDT': 4,
-    'SEI/USDT:USDT': 5,   // Nouveau
-    'IMX/USDT:USDT': 5,   // Nouveau
-    'DOT/USDT:USDT': 4,   // Nouveau
+    'BTC/USDT:USDT': 3,   // BTC stable mais gros montant
+    'ETH/USDT:USDT': 4,   // ETH stable
+    'SOL/USDT:USDT': 4,   // SOL moyen
+    'XRP/USDT:USDT': 4,   // XRP moyen
+    'SEI/USDT:USDT': 3,   // SEI volatile → réduit de 5x à 3x
+    'IMX/USDT:USDT': 3,   // IMX volatile → réduit de 5x à 3x
+    'DOT/USDT:USDT': 3,   // DOT volatile → réduit de 5x à 3x
+    'DOGE/USDT:USDT': 3,  // DOGE volatile
   } as Record<string, number>,
 };
 
