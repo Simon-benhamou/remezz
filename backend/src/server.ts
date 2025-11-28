@@ -36,7 +36,7 @@ import {
   resetCapitalPool,
   type CapitalPool 
 } from "./strategies/simpleAgent.js";
-import { getMarketConditions, MomentumConfig } from "./strategies/momentumSimple.js";
+import { getMarketConditions, MomentumConfig, LIQUIDITY_CONFIG, getLiquidityTier, getMaxSafePositionSize } from "./strategies/momentumSimple.js";
 
 const logLevel = configureLogging();
 const logger = createLogger("server");
@@ -290,6 +290,9 @@ app.get("/api/market-conditions", async (req, res) => {
           isTradingDay: conditions.isTradingDay ?? null,
           reason: conditions.reason || 'Not analyzed yet',
           tradingRecommended: conditions.overallStatus === 'favorable_long' || conditions.overallStatus === 'favorable_short',
+          // V5.5: Market quality
+          marketQuality: conditions.marketQuality ?? 'unknown',
+          qualityReason: conditions.qualityReason ?? null,
         });
       }
     }
@@ -367,6 +370,9 @@ app.get("/api/market-conditions", async (req, res) => {
         isTradingDay,
         reason,
         tradingRecommended: status === 'favorable_long' || status === 'favorable_short',
+        // V5.5: No market quality without agent (need altcoin data)
+        marketQuality: 'unknown',
+        qualityReason: 'No agent running - cannot assess altcoin momentum',
       });
       
     } catch (fetchError) {
@@ -375,11 +381,77 @@ app.get("/api/market-conditions", async (req, res) => {
         status: 'unknown',
         reason: 'Unable to fetch market data',
         tradingRecommended: false,
+        marketQuality: 'unknown',
+        qualityReason: null,
       });
     }
   } catch (error) {
     logger.error("Failed to get market conditions", error);
     res.status(500).json({ error: "Failed to get market conditions" });
+  }
+});
+
+// V5.5: Liquidity-aware position sizing info
+app.get("/api/liquidity-info", async (req, res) => {
+  try {
+    const userId = (req as any)?.user?.id;
+    const capital = parseFloat(req.query.capital as string) || 10000;
+    
+    // Import getTicker for volume info
+    const { getTicker } = await import('./data/market.js');
+    
+    const symbols = Object.keys(MomentumConfig.LEVERAGE);
+    const results = await Promise.all(
+      symbols.map(async (symbol) => {
+        const tier = getLiquidityTier(symbol);
+        const tierConfig = LIQUIDITY_CONFIG.POSITION_CAPS[tier];
+        
+        // Get 24h volume
+        let volume24h = 0;
+        try {
+          const ticker = await getTicker(symbol, { userId });
+          volume24h = ticker?.quoteVolume || 0;
+        } catch {}
+        
+        const maxSafe = getMaxSafePositionSize(symbol, volume24h);
+        const targetPosition = capital * MomentumConfig.RISK.POSITION_SIZE_PCT;
+        const wouldBeCapped = targetPosition > maxSafe;
+        const effectivePosition = Math.min(targetPosition, maxSafe);
+        
+        return {
+          symbol: symbol.replace('/USDT:USDT', ''),
+          tier,
+          volume24h,
+          volume24hFormatted: volume24h >= 1_000_000_000 
+            ? `$${(volume24h / 1_000_000_000).toFixed(1)}B`
+            : `$${(volume24h / 1_000_000).toFixed(1)}M`,
+          maxSafePosition: maxSafe,
+          targetPosition,
+          effectivePosition,
+          wouldBeCapped,
+          cappedReason: wouldBeCapped 
+            ? `Limited to ${tier === 'HIGH' ? '$500K' : tier === 'MEDIUM' ? '$100K' : '$25K'} (${tier} liquidity tier)` 
+            : null,
+        };
+      })
+    );
+    
+    // Calculate total deployment capacity
+    const totalMaxDeployable = results.reduce((sum, r) => sum + r.maxSafePosition, 0);
+    
+    res.json({
+      capitalUsd: capital,
+      positionPct: MomentumConfig.RISK.POSITION_SIZE_PCT * 100,
+      maxVolumeImpactPct: LIQUIDITY_CONFIG.MAX_POSITION_PCT_OF_VOLUME,
+      symbols: results,
+      totalMaxDeployable,
+      warning: capital > totalMaxDeployable 
+        ? `Your capital ($${capital.toLocaleString()}) exceeds safe deployment capacity ($${totalMaxDeployable.toLocaleString()}). Consider using fewer symbols or accepting slippage.`
+        : null,
+    });
+  } catch (error) {
+    logger.error("Failed to get liquidity info", error);
+    res.status(500).json({ error: "Failed to get liquidity info" });
   }
 });
 

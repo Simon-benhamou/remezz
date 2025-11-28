@@ -37,6 +37,9 @@ interface MarketConditions {
   isTradingDay: boolean | null;
   reason: string;
   tradingRecommended: boolean;
+  // V5.5: Market quality
+  marketQuality?: 'momentum' | 'consolidation' | 'unknown';
+  qualityReason?: string;
 }
 
 export default function DashboardPageCompact(){
@@ -291,6 +294,26 @@ export default function DashboardPageCompact(){
                 }}>
                   {marketConditions.isTradingDay ? 'YES ✓' : 'NO'}
                 </div>
+              </div>
+              
+              {/* V5.5: Market Quality indicator */}
+              <div style={{ borderLeft: '1px solid rgba(148, 163, 184, 0.2)', paddingLeft: 16 }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>MARKET QUALITY</Text>
+                <Tooltip title={marketConditions.qualityReason || 'Analyzing...'}>
+                  <div style={{ 
+                    color: marketConditions.marketQuality === 'momentum' ? '#22c55e' 
+                         : marketConditions.marketQuality === 'consolidation' ? '#f59e0b' 
+                         : '#94a3b8',
+                    fontSize: 16,
+                    fontWeight: 600,
+                    marginTop: 4,
+                    cursor: 'help'
+                  }}>
+                    {marketConditions.marketQuality === 'momentum' && '🚀 MOMENTUM'}
+                    {marketConditions.marketQuality === 'consolidation' && '😴 RANGE'}
+                    {(!marketConditions.marketQuality || marketConditions.marketQuality === 'unknown') && '⏳ ANALYZING'}
+                  </div>
+                </Tooltip>
               </div>
             </Space>
             

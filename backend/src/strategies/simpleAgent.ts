@@ -19,12 +19,13 @@ import {
   calculatePositionSize,
   updatePositionWaterMarks,
   getMarketConditions,
+  getLiquidityTier,
   type Candle,
   type Position,
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
-import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket } from '../services/binanceWebSocket.js';
+import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket } from '../services/binanceWebSocket.js';
 
 const logger = createLogger('agent');
 
@@ -325,6 +326,14 @@ export class SimpleAgent {
   } | null = null;
   private lastExit: { ts: number; price: number; reason: string } | null = null;
   
+  // V5.5: Track signal features for market quality assessment
+  private lastSignalFeatures: {
+    volRatio: number;
+    roc: number;
+    bbDistance: number;  // % distance from BB upper/lower
+    reason: string;
+  } | null = null;
+  
   // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
   private readonly CACHE_TTL_MS = 120_000; // 2 minutes (increased to reduce API calls)
@@ -502,6 +511,33 @@ export class SimpleAgent {
       const f = signal.features;
       if (f) {
         logger.info(`🔍 [${symbol}] Signal check @ $${currentPrice.toFixed(2)} | vol=${f.volRatio.toFixed(1)}x | bullish=${f.isBullish} | >MA20=${f.priceAboveMa20} | BTC>MA50=${f.btcAboveMa50} | btcMom=${f.btcMomentum6h.toFixed(2)}% | day=${f.dayOfWeek}`);
+        
+        // V5.5: Store features for market quality assessment
+        const bbDistance = f.btcInBullRegime 
+          ? ((currentPrice - (f.bbUpper || currentPrice)) / currentPrice) * 100
+          : (((f.bbLower || currentPrice) - currentPrice) / currentPrice) * 100;
+        
+        this.lastSignalFeatures = {
+          volRatio: f.volRatio,
+          roc: f.roc || 0,
+          bbDistance,
+          reason: signal.reason || '',
+        };
+        
+        // Update market quality in conditions
+        if (this.lastMarketConditions) {
+          const isLowVolume = f.volRatio < 1.5;
+          const isNearBB = Math.abs(bbDistance) < 0.5; // Within 0.5% of BB
+          const isConsolidating = isLowVolume && isNearBB;
+          
+          this.lastMarketConditions = {
+            ...this.lastMarketConditions,
+            marketQuality: isConsolidating ? 'consolidation' : 'momentum',
+            qualityReason: isConsolidating 
+              ? `Low vol (${f.volRatio.toFixed(1)}x) + price near BB (${bbDistance.toFixed(2)}%)`
+              : `Vol ${f.volRatio.toFixed(1)}x, BB dist ${bbDistance.toFixed(2)}%`,
+          };
+        }
       }
       
       if (signal.valid && signal.side) {
@@ -556,14 +592,33 @@ export class SimpleAgent {
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();
     
-    // Calculate position size (will use all available if < 40%, with $50 minimum)
+    // V5.5: Get 24h volume for liquidity-aware position sizing
+    let volume24h: number | undefined;
+    try {
+      const wsTicker = await getTickerFromWebSocket(symbol);
+      volume24h = wsTicker?.quoteVolume || undefined;
+      if (volume24h) {
+        const tier = getLiquidityTier(symbol);
+        logger.info(`📊 [${symbol}] 24h Volume: $${(volume24h / 1_000_000).toFixed(1)}M | Liquidity Tier: ${tier}`);
+      }
+    } catch (e) {
+      logger.warn(`⚠️ [${symbol}] Could not fetch 24h volume for sizing - using tier-based caps`);
+    }
+    
+    // Calculate position size V5.5 - now with liquidity awareness
     const sizing = calculatePositionSize({
       symbol,
       currentPrice,
       totalCapitalUsd: availableCapital,
       riskPerTradePct: this.config.riskPerTradePct,
       stopLossPct: MomentumConfig.EXIT.STOP_LOSS_PCT,
+      volume24h, // V5.5: Pass volume for liquidity-aware sizing
     });
+    
+    // V5.5: Log if position was capped due to liquidity
+    if (sizing.wasLiquidityCapped) {
+      logger.warn(`🚨 [${symbol}] Position CAPPED by liquidity! Target=$${(availableCapital * MomentumConfig.RISK.POSITION_SIZE_PCT).toFixed(0)} → Capped=$${sizing.notionalUsd.toFixed(0)} (max safe=$${sizing.maxSafePosition?.toFixed(0)}, tier=${sizing.liquidityTier})`);
+    }
     
     // Check if position size is valid (minimum $20)
     if (sizing.notionalUsd < 20) {
@@ -577,7 +632,10 @@ export class SimpleAgent {
       return;
     }
     
-    logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x`);
+    // V5.5: Include liquidity info in log
+    const slippageInfo = sizing.estimatedSlippage ? ` | est.slip=${sizing.estimatedSlippage.toFixed(3)}%` : '';
+    const liquidityInfo = sizing.liquidityTier ? ` | tier=${sizing.liquidityTier}` : '';
+    logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x${liquidityInfo}${slippageInfo}`);
     
     if (this.config.mode === 'paper') {
       // Paper trade

@@ -204,6 +204,15 @@ export interface SignalResult {
     btcAboveMa50: boolean;
     btcMomentum6h: number;
     dayOfWeek: number;
+    // V5.3+ additional features
+    roc?: number;
+    roc5?: number;
+    consecUp?: number;
+    consecDown?: number;
+    btcInBullRegime?: boolean;
+    btcInBearRegime?: boolean;
+    bbUpper?: number;
+    bbLower?: number;
   };
 }
 
@@ -229,6 +238,9 @@ export interface MarketConditions {
   overallStatus: 'favorable_long' | 'favorable_short' | 'neutral' | 'unfavorable';
   reason: string;
   checkedAt: number;
+  // V5.5: Market quality tracking
+  marketQuality?: 'momentum' | 'consolidation' | 'unknown';
+  qualityReason?: string;
 }
 
 /**
@@ -754,8 +766,79 @@ export function updatePositionWaterMarks(position: Position, currentPrice: numbe
 }
 
 // ============================================================================
-// POSITION SIZING V5
+// POSITION SIZING V5.5 - LIQUIDITY-AWARE
 // ============================================================================
+
+/**
+ * V5.5 Liquidity Configuration
+ * Max position as % of 24h volume to avoid market impact
+ */
+export const LIQUIDITY_CONFIG = {
+  // Maximum position as percentage of symbol's 24h volume
+  // Above this, slippage becomes significant (>0.5%)
+  MAX_POSITION_PCT_OF_VOLUME: 0.5,  // 0.5% of 24h volume max
+  
+  // Absolute caps per symbol tier based on typical liquidity
+  POSITION_CAPS: {
+    // Tier 1: High liquidity (BTC, ETH) - $5M+ daily volume on futures
+    HIGH: {
+      symbols: ['BTC/USDT:USDT', 'ETH/USDT:USDT'],
+      maxPositionUsd: 500_000,  // $500K max per position
+      minVolume24h: 1_000_000_000,  // $1B minimum
+    },
+    // Tier 2: Medium liquidity (XRP, SOL) - $500M-$5B daily volume
+    MEDIUM: {
+      symbols: ['XRP/USDT:USDT', 'SOL/USDT:USDT', 'DOGE/USDT:USDT'],
+      maxPositionUsd: 100_000,  // $100K max
+      minVolume24h: 500_000_000,
+    },
+    // Tier 3: Low liquidity (SEI, IMX, etc) - <$500M daily volume
+    LOW: {
+      symbols: ['SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT'],
+      maxPositionUsd: 25_000,  // $25K max - beyond this, massive slippage
+      minVolume24h: 50_000_000,
+    },
+  } as Record<string, { symbols: string[]; maxPositionUsd: number; minVolume24h: number }>,
+  
+  // Slippage model: estimated slippage based on position size vs volume
+  // slippage% = (positionUsd / volume24h) * SLIPPAGE_FACTOR
+  SLIPPAGE_FACTOR: 50,  // 0.5% slippage for 1% of volume
+};
+
+/**
+ * Get liquidity tier for a symbol
+ */
+export function getLiquidityTier(symbol: string): 'HIGH' | 'MEDIUM' | 'LOW' {
+  if (LIQUIDITY_CONFIG.POSITION_CAPS.HIGH.symbols.includes(symbol)) return 'HIGH';
+  if (LIQUIDITY_CONFIG.POSITION_CAPS.MEDIUM.symbols.includes(symbol)) return 'MEDIUM';
+  return 'LOW';
+}
+
+/**
+ * Calculate maximum safe position size based on liquidity
+ */
+export function getMaxSafePositionSize(symbol: string, volume24h?: number): number {
+  const tier = getLiquidityTier(symbol);
+  const config = LIQUIDITY_CONFIG.POSITION_CAPS[tier];
+  
+  // If we have actual volume data, use it
+  if (volume24h && volume24h > 0) {
+    const volumeBasedMax = volume24h * (LIQUIDITY_CONFIG.MAX_POSITION_PCT_OF_VOLUME / 100);
+    return Math.min(volumeBasedMax, config.maxPositionUsd);
+  }
+  
+  // Otherwise use tier-based cap
+  return config.maxPositionUsd;
+}
+
+/**
+ * Estimate slippage for a given position size
+ */
+export function estimateSlippage(positionUsd: number, volume24h: number): number {
+  if (volume24h <= 0) return 0.5; // Default 0.5% if no volume data
+  const pctOfVolume = (positionUsd / volume24h) * 100;
+  return pctOfVolume * (LIQUIDITY_CONFIG.SLIPPAGE_FACTOR / 100);
+}
 
 export interface PositionSizeInput {
   symbol: string;
@@ -763,6 +846,7 @@ export interface PositionSizeInput {
   totalCapitalUsd: number;
   riskPerTradePct: number;
   stopLossPct: number;
+  volume24h?: number;  // V5.5: Optional 24h volume for liquidity-aware sizing
 }
 
 export interface PositionSizeResult {
@@ -772,38 +856,51 @@ export interface PositionSizeResult {
   leverage: number;
   suggestedLeverage: number;
   stopPrice: number;
+  // V5.5: Liquidity info
+  liquidityTier?: 'HIGH' | 'MEDIUM' | 'LOW';
+  maxSafePosition?: number;
+  estimatedSlippage?: number;
+  wasLiquidityCapped?: boolean;
 }
 
 /**
- * Calculate position size V5 - using 50% of available capital
+ * Calculate position size V5.5 - LIQUIDITY-AWARE
  * 
- * V5 uses fixed 50% position sizing instead of risk-based sizing
- * This proved more profitable in backtests (+112% vs +66% with 100%)
+ * This version caps position size based on:
+ * 1. Available capital (40% rule)
+ * 2. Symbol liquidity tier
+ * 3. Actual 24h volume (if provided)
+ * 
+ * This prevents market impact problems when scaling up capital
  */
 export function calculatePositionSize(input: PositionSizeInput): PositionSizeResult {
-  const { symbol, currentPrice, totalCapitalUsd, stopLossPct } = input;
+  const { symbol, currentPrice, totalCapitalUsd, stopLossPct, volume24h } = input;
   
   const leverage = MomentumConfig.LEVERAGE[symbol] || 4;
   const stopPrice = currentPrice * (1 - stopLossPct / 100);
   
-  // V5.5: Use POSITION_SIZE_PCT (40%) of available capital
-  // BUT if less capital is available, use ALL remaining capital (smart allocation)
+  // Step 1: Calculate target position (40% of capital)
   const targetPositionValue = totalCapitalUsd * MomentumConfig.RISK.POSITION_SIZE_PCT;
   
-  // Minimum position size to avoid micro-positions ($20 minimum)
-  const MIN_POSITION_USD = 20;
+  // Step 2: Get liquidity-based maximum
+  const liquidityTier = getLiquidityTier(symbol);
+  const maxSafePosition = getMaxSafePositionSize(symbol, volume24h);
   
-  // Use target (40%) or all available if less than target, but at least MIN
-  let positionValue: number;
-  if (totalCapitalUsd < targetPositionValue) {
-    // Less capital available than target - use all of it (if above minimum)
-    positionValue = totalCapitalUsd >= MIN_POSITION_USD ? totalCapitalUsd : 0;
-  } else {
-    positionValue = targetPositionValue;
+  // Step 3: Apply liquidity cap
+  let positionValue = Math.min(targetPositionValue, maxSafePosition);
+  const wasLiquidityCapped = targetPositionValue > maxSafePosition;
+  
+  // Step 4: Apply minimum threshold
+  const MIN_POSITION_USD = 20;
+  if (positionValue < MIN_POSITION_USD) {
+    positionValue = totalCapitalUsd >= MIN_POSITION_USD ? Math.min(totalCapitalUsd, MIN_POSITION_USD) : 0;
   }
   
+  // Step 5: Calculate estimated slippage
+  const estimatedSlippage = volume24h ? estimateSlippage(positionValue, volume24h) : undefined;
+  
   const qty = positionValue / currentPrice;
-  const riskUsd = positionValue * (stopLossPct / 100); // Risk in USD
+  const riskUsd = positionValue * (stopLossPct / 100);
   
   return { 
     qty, 
@@ -811,7 +908,12 @@ export function calculatePositionSize(input: PositionSizeInput): PositionSizeRes
     riskUsd, 
     leverage,
     suggestedLeverage: leverage,
-    stopPrice 
+    stopPrice,
+    // V5.5 liquidity info
+    liquidityTier,
+    maxSafePosition,
+    estimatedSlippage,
+    wasLiquidityCapped,
   };
 }
 
