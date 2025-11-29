@@ -505,7 +505,7 @@ app.post("/api/agent/start", async (req, res) => {
           }
         });
         accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
-        logger.info(`[Capital Restore] Found accumulated PnL for user ${userId}: $${accumulatedPnl.toFixed(2)}`);
+        logger.info(`[Capital Restore] Found ${pastKpis.length} sessions with accumulated PnL for user ${userId}: $${accumulatedPnl.toFixed(2)}`);
       } catch (err) {
         logger.warn('[Capital Restore] Failed to fetch accumulated PnL:', err);
       }
@@ -513,7 +513,8 @@ app.post("/api/agent/start", async (req, res) => {
     
     // Actual capital = initial capital + accumulated PnL
     const actualCapital = capitalUsd + accumulatedPnl;
-    logger.info(`[Capital Restore] Starting with capital: $${capitalUsd} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${actualCapital.toFixed(2)}`);
+    logger.info(`[Capital Restore] Starting agents with capital: $${capitalUsd} (initial from settings) + $${accumulatedPnl.toFixed(2)} (accumulated PnL) = $${actualCapital.toFixed(2)} (actual)`);
+    logger.info(`[Capital Restore] Mode: ${mode}, User: ${userId}`);
     
     // Get exchange
     const exchange = await getExchangeForUser(userId);
