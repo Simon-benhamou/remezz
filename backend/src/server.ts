@@ -488,6 +488,33 @@ app.post("/api/agent/start", async (req, res) => {
       });
     }
     
+    // 🔧 FIX: Calculate accumulated PnL from past sessions to restore actual capital
+    // This ensures capital is not reset after redeployment
+    let accumulatedPnl = 0;
+    if (mode === 'paper') {
+      try {
+        const pastKpis = await prisma.sessionKpi.findMany({
+          where: {
+            session: {
+              userId,
+              mode: 'paper',
+            }
+          },
+          select: {
+            realizedPnlUsd: true,
+          }
+        });
+        accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+        logger.info(`[Capital Restore] Found accumulated PnL for user ${userId}: $${accumulatedPnl.toFixed(2)}`);
+      } catch (err) {
+        logger.warn('[Capital Restore] Failed to fetch accumulated PnL:', err);
+      }
+    }
+    
+    // Actual capital = initial capital + accumulated PnL
+    const actualCapital = capitalUsd + accumulatedPnl;
+    logger.info(`[Capital Restore] Starting with capital: $${capitalUsd} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${actualCapital.toFixed(2)}`);
+    
     // Get exchange
     const exchange = await getExchangeForUser(userId);
     
@@ -512,20 +539,20 @@ app.post("/api/agent/start", async (req, res) => {
           userId,
           symbol,
           mode,
-          profileJson: { capitalUsd, symbol },
+          profileJson: { capitalUsd: actualCapital, symbol },
         }
       });
       const key = symbolToKey[symbol];
       if (key) sessionIds[key] = session.id;
     }
     
-    // Create all agents with shared capital pool
+    // Create all agents with shared capital pool (using actual capital with PnL)
     const { agents, capitalPool } = await createAllAgents({
       exchange,
       prisma,
       userId,
       sessionIds,
-      totalCapitalUsd: capitalUsd,
+      totalCapitalUsd: actualCapital,
       mode: mode as 'paper' | 'live',
     });
     
@@ -550,12 +577,14 @@ app.post("/api/agent/start", async (req, res) => {
       await agent.start();
     }
     
-    logger.info(`✅ Started ${agents.length} agents for ${userId} with $${capitalUsd} capital (${mode})`);
+    logger.info(`✅ Started ${agents.length} agents for ${userId} with $${actualCapital.toFixed(2)} capital (${mode}) [initial: $${capitalUsd}, pnl: $${accumulatedPnl.toFixed(2)}]`);
     res.status(201).json({ 
       success: true, 
       agentsCount: agents.length,
       symbols: MomentumConfig.SYMBOLS,
-      capitalUsd,
+      capitalUsd: actualCapital,
+      initialCapitalUsd: capitalUsd,
+      accumulatedPnlUsd: accumulatedPnl,
       mode,
     });
   } catch (error) {
@@ -1393,10 +1422,13 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
     const agentData = userAgents.get(agentKey);
     
     if (!agentData) {
-      // No agent running for this mode - read from UserSettings database
+      // No agent running for this mode - read from UserSettings database + accumulated PnL
       let paperBalance = 10000; // default
+      let accumulatedPnl = 0;
+      
       if (mode === 'paper' && userId) {
         try {
+          // Get initial capital setting
           const setting = await prisma.userSetting.findUnique({
             where: {
               userId_key: {
@@ -1408,17 +1440,36 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
           if (setting && setting.value) {
             paperBalance = parseFloat(setting.value) || 10000;
           }
+          
+          // 🔧 FIX: Add accumulated PnL from past sessions
+          const pastKpis = await prisma.sessionKpi.findMany({
+            where: {
+              session: {
+                userId,
+                mode: 'paper',
+              }
+            },
+            select: {
+              realizedPnlUsd: true,
+            }
+          });
+          accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+          logger.debug(`[Capital] Paper balance for ${userId}: $${paperBalance} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${(paperBalance + accumulatedPnl).toFixed(2)}`);
         } catch (dbError) {
           logger.warn('Failed to read paper balance from DB:', dbError);
         }
       }
+      
+      const actualBalance = paperBalance + accumulatedPnl;
       return res.json({
-        totalUSD: mode === 'paper' ? paperBalance : 0,
-        freeUSD: mode === 'paper' ? paperBalance : 0,
+        totalUSD: mode === 'paper' ? actualBalance : 0,
+        freeUSD: mode === 'paper' ? actualBalance : 0,
         reservedUSD: 0,
         inPositionsUSD: 0,
         ts: Date.now(),
         source: 'database',
+        initialCapitalUsd: paperBalance,
+        accumulatedPnlUsd: accumulatedPnl,
       });
     }
     
@@ -1647,14 +1698,49 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     // Get exchange
     const exchange = await getExchangeForUser(userId);
     
+    // 🔧 FIX: Calculate actual starting balance based on mode
+    let actualStartBalance = capitalUsd;
+    
+    if (mode === 'live') {
+      // In LIVE mode: fetch real balance from Binance
+      try {
+        const balance = await exchange.fetchBalance({ type: 'future' });
+        const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+        if (totalUsdt > 0) {
+          actualStartBalance = totalUsdt;
+          logger.info(`[Live] Using actual Binance balance: $${actualStartBalance.toFixed(2)}`);
+        }
+      } catch (err) {
+        logger.warn('[Live] Failed to fetch Binance balance, using provided capital:', err);
+      }
+    } else {
+      // In PAPER mode: add accumulated PnL from past sessions
+      try {
+        const pastKpis = await prisma.sessionKpi.findMany({
+          where: {
+            session: {
+              userId,
+              mode: 'paper',
+            }
+          },
+          select: { realizedPnlUsd: true }
+        });
+        const accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+        actualStartBalance = capitalUsd + accumulatedPnl;
+        logger.info(`[Paper] Actual balance: $${capitalUsd} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${actualStartBalance.toFixed(2)}`);
+      } catch (err) {
+        logger.warn('[Paper] Failed to fetch accumulated PnL:', err);
+      }
+    }
+    
     // Create a SINGLE session for the selected symbol only
     const session = await prisma.agentSession.create({
       data: { 
         userId, 
         symbol: selectedSymbol, 
         mode, 
-        startBalanceUsd: capitalUsd,
-        profileJson: { capitalUsd, symbol: selectedSymbol } 
+        startBalanceUsd: actualStartBalance,
+        profileJson: { capitalUsd: actualStartBalance, symbol: selectedSymbol } 
       }
     });
     
@@ -1676,8 +1762,8 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     const modeTyped = mode as 'paper' | 'live';
     let capitalPool = getCapitalPool(userId, undefined, modeTyped);
     if (!capitalPool) {
-      // Initialize new capital pool
-      resetCapitalPool(userId, capitalUsd, modeTyped);
+      // Initialize new capital pool with actual balance (includes PnL for paper, real balance for live)
+      resetCapitalPool(userId, actualStartBalance, modeTyped);
       capitalPool = getCapitalPool(userId, undefined, modeTyped)!;
     }
     
