@@ -1113,10 +1113,60 @@ app.get("/api/agent/overview", async (req, res) => {
       };
     });
     
+    // 🔧 FIX: Calculate total PnL and ROI from all sessions for this mode
+    // This ensures correct values are shown in the header after redeployment
+    let totalPnlUsd = 0;
+    let initialCapital = 10000;
+    
+    if (mode === 'paper' && userId) {
+      // Get initial capital setting
+      const setting = await prisma.userSetting.findUnique({
+        where: {
+          userId_key: {
+            userId: userId,
+            key: 'paperTradingCapital'
+          }
+        }
+      });
+      initialCapital = parseFloat(setting?.value || '10000') || 10000;
+      
+      // Sum ALL realized PnL from paper sessions (from DB, not in-memory)
+      const allPaperKpis = await prisma.sessionKpi.findMany({
+        where: {
+          session: {
+            userId,
+            mode: 'paper',
+          }
+        },
+        select: { realizedPnlUsd: true }
+      });
+      totalPnlUsd = allPaperKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+    } else {
+      // For live mode or combined, sum from enriched sessions
+      totalPnlUsd = enrichedSessions.reduce((sum, s) => sum + (s.pnlUsd || 0), 0);
+    }
+    
+    // Add unrealized PnL from running agents
+    const unrealizedPnl = allAgents.reduce((sum, agent) => {
+      const agentState = agent.getAgentState?.();
+      return sum + (agentState?.pos?.pnlUsd || 0);
+    }, 0);
+    
+    const netPnlUsd = totalPnlUsd + unrealizedPnl;
+    const roiPct = initialCapital > 0 ? (totalPnlUsd / initialCapital) * 100 : 0;
+    const netRoiPct = initialCapital > 0 ? (netPnlUsd / initialCapital) * 100 : 0;
+    
     res.json({
       sessions: enrichedSessions,
       capitalPool: capitalPoolStatus,
       activeSymbols: allAgents.length > 0 ? MomentumConfig.SYMBOLS : [],
+      // Add totals for header display
+      pnlUsd: totalPnlUsd,
+      roiPct,
+      netRoiPct,
+      initialCapitalUsd: initialCapital,
+      activeCount: allAgents.length,
+      symbols: allAgents.map(a => a.getStatus().symbol),
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to get overview" });
