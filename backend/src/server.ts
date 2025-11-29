@@ -1385,6 +1385,7 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
     const { mode } = req.params;
+    logger.info(`[Capital] Snapshot request - userId: ${userId}, mode: ${mode}`);
     
     // For LIVE mode, fetch real balance from exchange
     if (mode === 'live' && userId) {
@@ -1420,6 +1421,7 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
     // For paper mode or if exchange fetch fails, use mode-specific capital pool
     const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
     const agentData = userAgents.get(agentKey);
+    logger.info(`[Capital] Agent lookup - key: ${agentKey}, agentExists: ${!!agentData}`);
     
     if (!agentData) {
       // No agent running for this mode - read from UserSettings database + accumulated PnL
@@ -1454,7 +1456,7 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
             }
           });
           accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
-          logger.debug(`[Capital] Paper balance for ${userId}: $${paperBalance} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${(paperBalance + accumulatedPnl).toFixed(2)}`);
+          logger.info(`[Capital] Paper balance for ${userId}: $${paperBalance} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${(paperBalance + accumulatedPnl).toFixed(2)}`);
         } catch (dbError) {
           logger.warn('Failed to read paper balance from DB:', dbError);
         }
