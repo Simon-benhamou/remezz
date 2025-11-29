@@ -1,0 +1,908 @@
+import React, { useState, useMemo } from 'react';
+import {
+  Card,
+  Form,
+  DatePicker,
+  InputNumber,
+  Select,
+  Button,
+  Typography,
+  Spin,
+  Table,
+  Statistic,
+  Row,
+  Col,
+  Tag,
+  Tabs,
+  Space,
+  message,
+  Progress,
+  Tooltip,
+  Empty,
+  Alert,
+} from 'antd';
+import {
+  LineChartOutlined,
+  DollarOutlined,
+  PercentageOutlined,
+  ThunderboltOutlined,
+  WarningOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  FilterOutlined,
+  DownloadOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
+import { ArrowUpRight, ArrowDownRight, TrendingUp, TrendingDown } from 'lucide-react';
+import dayjs from 'dayjs';
+import type { Dayjs } from 'dayjs';
+import type { ColumnsType } from 'antd/es/table';
+import { api } from '../api';
+
+const { Title, Text, Paragraph } = Typography;
+const { RangePicker } = DatePicker;
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+interface BacktestTrade {
+  id: string;
+  symbol: string;
+  side: 'long' | 'short';
+  entryTime: string;
+  exitTime: string;
+  entryPrice: number;
+  exitPrice: number;
+  qty: number;
+  notionalUsd: number;
+  marginUsd: number;
+  leverage: number;
+  holdMinutes: number;
+  grossPnlPct: number;
+  netPnlPct: number;
+  netPnlUsd: number;
+  feesUsd: number;
+  exitReason: string;
+  capitalBefore: number;
+  capitalAfter: number;
+  month: string;
+  day: string;
+  wasCapped: boolean;
+  slippagePct: number;
+}
+
+interface MonthlyStats {
+  month: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  pnlUsd: number;
+  pnlPct: number;
+  longTrades: number;
+  shortTrades: number;
+  avgTradeUsd: number;
+  maxWinUsd: number;
+  maxLossUsd: number;
+  capitalStart: number;
+  capitalEnd: number;
+}
+
+interface BacktestResult {
+  params: {
+    startDate: string;
+    endDate: string;
+    initialCapital: number;
+    symbols: string[];
+    leverage: number;
+  };
+  summary: {
+    totalTrades: number;
+    wins: number;
+    losses: number;
+    winRate: number;
+    totalPnlUsd: number;
+    totalPnlPct: number;
+    maxDrawdownPct: number;
+    avgTradeUsd: number;
+    avgWinUsd: number;
+    avgLossUsd: number;
+    profitFactor: number;
+    sharpeRatio: number;
+    finalCapital: number;
+    longTrades: number;
+    shortTrades: number;
+    avgHoldMinutes: number;
+    totalFeesUsd: number;
+  };
+  trades: BacktestTrade[];
+  monthlyStats: MonthlyStats[];
+  equityCurve: { date: string; equity: number }[];
+  drawdownCurve: { date: string; drawdown: number }[];
+}
+
+// ============================================================================
+// HELPER COMPONENTS
+// ============================================================================
+
+const formatCurrency = (value: number) => {
+  const sign = value >= 0 ? '+' : '';
+  return `${sign}$${Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const formatPercent = (value: number) => {
+  const sign = value >= 0 ? '+' : '';
+  return `${sign}${value.toFixed(2)}%`;
+};
+
+const SideTag: React.FC<{ side: 'long' | 'short' }> = ({ side }) => (
+  <Tag color={side === 'long' ? 'green' : 'red'} style={{ margin: 0 }}>
+    {side === 'long' ? (
+      <><ArrowUpRight size={12} style={{ marginRight: 2 }} />LONG</>
+    ) : (
+      <><ArrowDownRight size={12} style={{ marginRight: 2 }} />SHORT</>
+    )}
+  </Tag>
+);
+
+const ExitReasonTag: React.FC<{ reason: string }> = ({ reason }) => {
+  const colorMap: Record<string, string> = {
+    'SL': 'red',
+    'TP': 'green',
+    'TRAIL': 'blue',
+    'TIME': 'orange',
+    'END': 'default',
+  };
+  return <Tag color={colorMap[reason] || 'default'}>{reason}</Tag>;
+};
+
+const PnlText: React.FC<{ value: number; showCurrency?: boolean }> = ({ value, showCurrency = true }) => (
+  <Text style={{ color: value >= 0 ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+    {showCurrency ? formatCurrency(value) : formatPercent(value)}
+  </Text>
+);
+
+// ============================================================================
+// CHART COMPONENTS (Simple SVG)
+// ============================================================================
+
+const MiniEquityChart: React.FC<{ data: { date: string; equity: number }[] }> = ({ data }) => {
+  if (!data || data.length < 2) return null;
+  
+  const width = 600;
+  const height = 200;
+  const padding = { top: 20, right: 20, bottom: 30, left: 60 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  
+  const values = data.map(d => d.equity);
+  const minVal = Math.min(...values) * 0.95;
+  const maxVal = Math.max(...values) * 1.05;
+  
+  const xScale = (i: number) => padding.left + (i / (data.length - 1)) * chartWidth;
+  const yScale = (val: number) => padding.top + (1 - (val - minVal) / (maxVal - minVal)) * chartHeight;
+  
+  const pathD = data.map((d, i) => `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScale(d.equity)}`).join(' ');
+  const areaD = pathD + ` L ${xScale(data.length - 1)} ${height - padding.bottom} L ${padding.left} ${height - padding.bottom} Z`;
+  
+  return (
+    <svg width={width} height={height} style={{ background: '#0f172a', borderRadius: 8 }}>
+      {/* Grid lines */}
+      {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
+        <g key={i}>
+          <line
+            x1={padding.left}
+            x2={width - padding.right}
+            y1={padding.top + pct * chartHeight}
+            y2={padding.top + pct * chartHeight}
+            stroke="#1e293b"
+            strokeDasharray="3,3"
+          />
+          <text
+            x={padding.left - 5}
+            y={padding.top + pct * chartHeight + 4}
+            fill="#64748b"
+            fontSize={10}
+            textAnchor="end"
+          >
+            ${((maxVal - minVal) * (1 - pct) + minVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </text>
+        </g>
+      ))}
+      
+      {/* Area fill */}
+      <defs>
+        <linearGradient id="equityGradient" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={areaD} fill="url(#equityGradient)" />
+      
+      {/* Line */}
+      <path d={pathD} fill="none" stroke="#10b981" strokeWidth={2} />
+      
+      {/* Final value dot */}
+      <circle
+        cx={xScale(data.length - 1)}
+        cy={yScale(data[data.length - 1].equity)}
+        r={4}
+        fill="#10b981"
+      />
+    </svg>
+  );
+};
+
+const MiniDrawdownChart: React.FC<{ data: { date: string; drawdown: number }[] }> = ({ data }) => {
+  if (!data || data.length < 2) return null;
+  
+  const width = 600;
+  const height = 150;
+  const padding = { top: 10, right: 20, bottom: 30, left: 60 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  
+  const maxDD = Math.max(...data.map(d => d.drawdown), 5);
+  
+  const xScale = (i: number) => padding.left + (i / (data.length - 1)) * chartWidth;
+  const yScale = (val: number) => padding.top + (val / maxDD) * chartHeight;
+  
+  const pathD = data.map((d, i) => `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScale(d.drawdown)}`).join(' ');
+  const areaD = `M ${padding.left} ${padding.top} ` + pathD.substring(2) + ` L ${xScale(data.length - 1)} ${padding.top} Z`;
+  
+  return (
+    <svg width={width} height={height} style={{ background: '#0f172a', borderRadius: 8 }}>
+      {/* Area fill */}
+      <defs>
+        <linearGradient id="ddGradient" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="#ef4444" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#ef4444" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={areaD} fill="url(#ddGradient)" />
+      
+      {/* Line */}
+      <path d={pathD} fill="none" stroke="#ef4444" strokeWidth={2} />
+      
+      {/* Max DD line */}
+      <line
+        x1={padding.left}
+        x2={width - padding.right}
+        y1={yScale(maxDD)}
+        y2={yScale(maxDD)}
+        stroke="#ef4444"
+        strokeDasharray="5,5"
+        opacity={0.5}
+      />
+      <text
+        x={width - padding.right}
+        y={yScale(maxDD) - 5}
+        fill="#ef4444"
+        fontSize={10}
+        textAnchor="end"
+      >
+        Max DD: {maxDD.toFixed(1)}%
+      </text>
+    </svg>
+  );
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
+export default function BacktestPage() {
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState<string | 'all'>('all');
+  const [selectedSymbol, setSelectedSymbol] = useState<string | 'all'>('all');
+  const [selectedSide, setSelectedSide] = useState<'all' | 'long' | 'short'>('all');
+
+  const defaultSymbols = ['SEI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT', 'IMX/USDT:USDT'];
+  const symbolOptions = [
+    { value: 'SEI/USDT:USDT', label: 'SEI/USDT' },
+    { value: 'XRP/USDT:USDT', label: 'XRP/USDT' },
+    { value: 'ETH/USDT:USDT', label: 'ETH/USDT' },
+    { value: 'IMX/USDT:USDT', label: 'IMX/USDT' },
+    { value: 'SOL/USDT:USDT', label: 'SOL/USDT' },
+    { value: 'DOT/USDT:USDT', label: 'DOT/USDT' },
+  ];
+
+  const handleRunBacktest = async (values: any) => {
+    setLoading(true);
+    setResult(null);
+    
+    try {
+      const [startDate, endDate] = values.dateRange;
+      const params = {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        initialCapital: values.initialCapital,
+        symbols: values.symbols,
+        leverage: values.leverage,
+      };
+      
+      message.info('Starting backtest... This may take a few minutes.');
+      const data = await api.backtest.run(params);
+      setResult(data);
+      message.success(`Backtest completed! ${data.trades.length} trades analyzed.`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || 'Backtest failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filter trades
+  const filteredTrades = useMemo(() => {
+    if (!result) return [];
+    return result.trades.filter(t => {
+      if (selectedMonth !== 'all' && t.month !== selectedMonth) return false;
+      if (selectedSymbol !== 'all' && t.symbol !== selectedSymbol) return false;
+      if (selectedSide !== 'all' && t.side !== selectedSide) return false;
+      return true;
+    });
+  }, [result, selectedMonth, selectedSymbol, selectedSide]);
+
+  // Calculate filtered stats
+  const filteredStats = useMemo(() => {
+    if (filteredTrades.length === 0) return null;
+    const wins = filteredTrades.filter(t => t.netPnlUsd > 0);
+    const pnl = filteredTrades.reduce((sum, t) => sum + t.netPnlUsd, 0);
+    return {
+      trades: filteredTrades.length,
+      wins: wins.length,
+      losses: filteredTrades.length - wins.length,
+      winRate: (wins.length / filteredTrades.length) * 100,
+      pnlUsd: pnl,
+    };
+  }, [filteredTrades]);
+
+  // Months for filter
+  const months = useMemo(() => {
+    if (!result) return [];
+    return [...new Set(result.trades.map(t => t.month))].sort();
+  }, [result]);
+
+  // Table columns
+  const tradeColumns: ColumnsType<BacktestTrade> = [
+    {
+      title: 'Date',
+      dataIndex: 'entryTime',
+      key: 'entryTime',
+      width: 140,
+      render: (v: string) => dayjs(v).format('DD/MM/YY HH:mm'),
+    },
+    {
+      title: 'Symbol',
+      dataIndex: 'symbol',
+      key: 'symbol',
+      width: 120,
+      render: (v: string) => v.replace('/USDT:USDT', ''),
+    },
+    {
+      title: 'Side',
+      dataIndex: 'side',
+      key: 'side',
+      width: 80,
+      render: (v: 'long' | 'short') => <SideTag side={v} />,
+    },
+    {
+      title: 'Entry',
+      dataIndex: 'entryPrice',
+      key: 'entryPrice',
+      width: 100,
+      align: 'right',
+      render: (v: number) => `$${v.toFixed(4)}`,
+    },
+    {
+      title: 'Exit',
+      dataIndex: 'exitPrice',
+      key: 'exitPrice',
+      width: 100,
+      align: 'right',
+      render: (v: number) => `$${v.toFixed(4)}`,
+    },
+    {
+      title: 'Notional',
+      dataIndex: 'notionalUsd',
+      key: 'notionalUsd',
+      width: 100,
+      align: 'right',
+      render: (v: number) => `$${v.toFixed(0)}`,
+    },
+    {
+      title: 'Hold',
+      dataIndex: 'holdMinutes',
+      key: 'holdMinutes',
+      width: 80,
+      align: 'right',
+      render: (v: number) => v >= 60 ? `${(v / 60).toFixed(1)}h` : `${v}m`,
+    },
+    {
+      title: 'PnL $',
+      dataIndex: 'netPnlUsd',
+      key: 'netPnlUsd',
+      width: 100,
+      align: 'right',
+      render: (v: number) => <PnlText value={v} />,
+      sorter: (a, b) => a.netPnlUsd - b.netPnlUsd,
+    },
+    {
+      title: 'PnL %',
+      dataIndex: 'netPnlPct',
+      key: 'netPnlPct',
+      width: 80,
+      align: 'right',
+      render: (v: number) => <PnlText value={v} showCurrency={false} />,
+    },
+    {
+      title: 'Exit',
+      dataIndex: 'exitReason',
+      key: 'exitReason',
+      width: 70,
+      render: (v: string) => <ExitReasonTag reason={v} />,
+    },
+    {
+      title: 'Capital',
+      dataIndex: 'capitalAfter',
+      key: 'capitalAfter',
+      width: 100,
+      align: 'right',
+      render: (v: number) => `$${v.toFixed(0)}`,
+    },
+  ];
+
+  const monthlyColumns: ColumnsType<MonthlyStats> = [
+    {
+      title: 'Month',
+      dataIndex: 'month',
+      key: 'month',
+      width: 100,
+      render: (v: string) => dayjs(v).format('MMM YYYY'),
+    },
+    {
+      title: 'Trades',
+      dataIndex: 'trades',
+      key: 'trades',
+      width: 80,
+      align: 'right',
+    },
+    {
+      title: 'W/L',
+      key: 'wl',
+      width: 80,
+      render: (_, r) => (
+        <span>
+          <Text style={{ color: '#10b981' }}>{r.wins}</Text>
+          {' / '}
+          <Text style={{ color: '#ef4444' }}>{r.losses}</Text>
+        </span>
+      ),
+    },
+    {
+      title: 'Win Rate',
+      dataIndex: 'winRate',
+      key: 'winRate',
+      width: 90,
+      align: 'right',
+      render: (v: number) => (
+        <Text style={{ color: v >= 50 ? '#10b981' : '#ef4444' }}>
+          {v.toFixed(1)}%
+        </Text>
+      ),
+    },
+    {
+      title: 'PnL',
+      dataIndex: 'pnlUsd',
+      key: 'pnlUsd',
+      width: 100,
+      align: 'right',
+      render: (v: number) => <PnlText value={v} />,
+      sorter: (a, b) => a.pnlUsd - b.pnlUsd,
+    },
+    {
+      title: 'ROI',
+      dataIndex: 'pnlPct',
+      key: 'pnlPct',
+      width: 80,
+      align: 'right',
+      render: (v: number) => <PnlText value={v} showCurrency={false} />,
+    },
+    {
+      title: 'Long/Short',
+      key: 'ls',
+      width: 100,
+      render: (_, r) => `${r.longTrades}L / ${r.shortTrades}S`,
+    },
+    {
+      title: 'Best',
+      dataIndex: 'maxWinUsd',
+      key: 'maxWinUsd',
+      width: 90,
+      align: 'right',
+      render: (v: number) => <Text style={{ color: '#10b981' }}>${v.toFixed(0)}</Text>,
+    },
+    {
+      title: 'Worst',
+      dataIndex: 'maxLossUsd',
+      key: 'maxLossUsd',
+      width: 90,
+      align: 'right',
+      render: (v: number) => <Text style={{ color: '#ef4444' }}>${Math.abs(v).toFixed(0)}</Text>,
+    },
+    {
+      title: 'Capital End',
+      dataIndex: 'capitalEnd',
+      key: 'capitalEnd',
+      width: 110,
+      align: 'right',
+      render: (v: number) => `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+    },
+  ];
+
+  return (
+    <div style={{ padding: 24, maxWidth: 1600, margin: '0 auto' }}>
+      <Title level={2} style={{ color: '#e2e8f0', marginBottom: 24 }}>
+        <LineChartOutlined style={{ marginRight: 12 }} />
+        Strategy Backtester
+      </Title>
+      
+      {/* Form */}
+      <Card 
+        style={{ marginBottom: 24, background: '#1e293b', border: '1px solid #334155' }}
+        bodyStyle={{ padding: 24 }}
+      >
+        <Form
+          form={form}
+          layout="inline"
+          onFinish={handleRunBacktest}
+          initialValues={{
+            initialCapital: 2000,
+            leverage: 4.5,
+            symbols: defaultSymbols,
+            dateRange: [dayjs().subtract(3, 'month'), dayjs()],
+          }}
+          style={{ gap: 16, flexWrap: 'wrap' }}
+        >
+          <Form.Item
+            name="dateRange"
+            label={<Text style={{ color: '#94a3b8' }}>Period</Text>}
+            rules={[{ required: true }]}
+          >
+            <RangePicker 
+              style={{ width: 280 }}
+              disabledDate={(d) => d.isAfter(dayjs())}
+            />
+          </Form.Item>
+          
+          <Form.Item
+            name="initialCapital"
+            label={<Text style={{ color: '#94a3b8' }}>Capital ($)</Text>}
+            rules={[{ required: true }]}
+          >
+            <InputNumber
+              min={100}
+              max={1000000}
+              step={1000}
+              style={{ width: 120 }}
+              formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+            />
+          </Form.Item>
+          
+          <Form.Item
+            name="leverage"
+            label={<Text style={{ color: '#94a3b8' }}>Leverage</Text>}
+            rules={[{ required: true }]}
+          >
+            <Select style={{ width: 80 }}>
+              <Select.Option value={3}>3x</Select.Option>
+              <Select.Option value={4}>4x</Select.Option>
+              <Select.Option value={4.5}>4.5x</Select.Option>
+              <Select.Option value={5}>5x</Select.Option>
+            </Select>
+          </Form.Item>
+          
+          <Form.Item
+            name="symbols"
+            label={<Text style={{ color: '#94a3b8' }}>Symbols</Text>}
+            rules={[{ required: true }]}
+          >
+            <Select
+              mode="multiple"
+              style={{ minWidth: 300 }}
+              options={symbolOptions}
+              maxTagCount={2}
+            />
+          </Form.Item>
+          
+          <Form.Item>
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={loading}
+              icon={<ThunderboltOutlined />}
+              size="large"
+            >
+              Run Backtest
+            </Button>
+          </Form.Item>
+        </Form>
+      </Card>
+      
+      {/* Loading */}
+      {loading && (
+        <Card style={{ marginBottom: 24, background: '#1e293b', border: '1px solid #334155', textAlign: 'center', padding: 48 }}>
+          <Spin size="large" />
+          <Paragraph style={{ color: '#94a3b8', marginTop: 16 }}>
+            Fetching market data and running simulation...
+          </Paragraph>
+          <Progress percent={30} status="active" style={{ maxWidth: 400, margin: '0 auto' }} />
+        </Card>
+      )}
+      
+      {/* Results */}
+      {result && !loading && (
+        <>
+          {/* Summary Stats */}
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            <Col xs={24} sm={12} md={6}>
+              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8' }}>Total PnL</Text>}
+                  value={result.summary.totalPnlUsd}
+                  precision={2}
+                  prefix="$"
+                  valueStyle={{ color: result.summary.totalPnlUsd >= 0 ? '#10b981' : '#ef4444' }}
+                />
+                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                  {formatPercent(result.summary.totalPnlPct)} ROI
+                </Text>
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8' }}>Win Rate</Text>}
+                  value={result.summary.winRate}
+                  precision={1}
+                  suffix="%"
+                  valueStyle={{ color: result.summary.winRate >= 50 ? '#10b981' : '#ef4444' }}
+                />
+                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                  {result.summary.wins}W / {result.summary.losses}L ({result.summary.totalTrades} total)
+                </Text>
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8' }}>Max Drawdown</Text>}
+                  value={result.summary.maxDrawdownPct}
+                  precision={1}
+                  suffix="%"
+                  valueStyle={{ color: '#ef4444' }}
+                  prefix={<WarningOutlined />}
+                />
+                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                  Profit Factor: {result.summary.profitFactor.toFixed(2)}
+                </Text>
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8' }}>Final Capital</Text>}
+                  value={result.summary.finalCapital}
+                  precision={0}
+                  prefix="$"
+                  valueStyle={{ color: '#60a5fa' }}
+                />
+                <Text style={{ color: '#64748b', fontSize: 12 }}>
+                  Started with ${result.params.initialCapital.toLocaleString()}
+                </Text>
+              </Card>
+            </Col>
+          </Row>
+          
+          {/* Additional Stats Row */}
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            <Col xs={12} sm={6} md={4}>
+              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Avg Win</Text>}
+                  value={result.summary.avgWinUsd}
+                  precision={2}
+                  prefix="$"
+                  valueStyle={{ color: '#10b981', fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6} md={4}>
+              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Avg Loss</Text>}
+                  value={result.summary.avgLossUsd}
+                  precision={2}
+                  prefix="$"
+                  valueStyle={{ color: '#ef4444', fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6} md={4}>
+              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Long Trades</Text>}
+                  value={result.summary.longTrades}
+                  valueStyle={{ color: '#60a5fa', fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6} md={4}>
+              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Short Trades</Text>}
+                  value={result.summary.shortTrades}
+                  valueStyle={{ color: '#f472b6', fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6} md={4}>
+              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Avg Hold</Text>}
+                  value={(result.summary.avgHoldMinutes / 60).toFixed(1)}
+                  suffix="h"
+                  valueStyle={{ color: '#a78bfa', fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6} md={4}>
+              <Card size="small" style={{ background: '#1e293b', border: '1px solid #334155' }}>
+                <Statistic
+                  title={<Text style={{ color: '#94a3b8', fontSize: 11 }}>Total Fees</Text>}
+                  value={result.summary.totalFeesUsd}
+                  precision={0}
+                  prefix="$"
+                  valueStyle={{ color: '#fb923c', fontSize: 18 }}
+                />
+              </Card>
+            </Col>
+          </Row>
+          
+          {/* Charts */}
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            <Col xs={24} lg={12}>
+              <Card 
+                title={<Text style={{ color: '#e2e8f0' }}>Equity Curve</Text>}
+                style={{ background: '#1e293b', border: '1px solid #334155' }}
+              >
+                <MiniEquityChart data={result.equityCurve} />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card 
+                title={<Text style={{ color: '#e2e8f0' }}>Drawdown</Text>}
+                style={{ background: '#1e293b', border: '1px solid #334155' }}
+              >
+                <MiniDrawdownChart data={result.drawdownCurve} />
+              </Card>
+            </Col>
+          </Row>
+          
+          {/* Tabs for Monthly/Trades */}
+          <Card style={{ background: '#1e293b', border: '1px solid #334155' }}>
+            <Tabs
+              defaultActiveKey="monthly"
+              items={[
+                {
+                  key: 'monthly',
+                  label: 'Monthly Breakdown',
+                  children: (
+                    <Table
+                      dataSource={result.monthlyStats}
+                      columns={monthlyColumns}
+                      rowKey="month"
+                      pagination={false}
+                      size="small"
+                      scroll={{ x: 900 }}
+                      onRow={(record) => ({
+                        onClick: () => setSelectedMonth(record.month),
+                        style: { cursor: 'pointer' },
+                      })}
+                    />
+                  ),
+                },
+                {
+                  key: 'trades',
+                  label: `Individual Trades (${filteredTrades.length})`,
+                  children: (
+                    <>
+                      {/* Filters */}
+                      <Space style={{ marginBottom: 16 }} wrap>
+                        <Text style={{ color: '#94a3b8' }}><FilterOutlined /> Filters:</Text>
+                        <Select
+                          value={selectedMonth}
+                          onChange={setSelectedMonth}
+                          style={{ width: 140 }}
+                          options={[
+                            { value: 'all', label: 'All Months' },
+                            ...months.map(m => ({ value: m, label: dayjs(m).format('MMM YYYY') })),
+                          ]}
+                        />
+                        <Select
+                          value={selectedSymbol}
+                          onChange={setSelectedSymbol}
+                          style={{ width: 140 }}
+                          options={[
+                            { value: 'all', label: 'All Symbols' },
+                            ...result.params.symbols.map(s => ({ value: s, label: s.replace('/USDT:USDT', '') })),
+                          ]}
+                        />
+                        <Select
+                          value={selectedSide}
+                          onChange={setSelectedSide}
+                          style={{ width: 100 }}
+                          options={[
+                            { value: 'all', label: 'All Sides' },
+                            { value: 'long', label: 'Long' },
+                            { value: 'short', label: 'Short' },
+                          ]}
+                        />
+                        {filteredStats && (
+                          <Alert
+                            message={
+                              <span>
+                                Filtered: {filteredStats.trades} trades | {filteredStats.wins}W/{filteredStats.losses}L | 
+                                {' '}<PnlText value={filteredStats.pnlUsd} /> | WR: {filteredStats.winRate.toFixed(1)}%
+                              </span>
+                            }
+                            type="info"
+                            style={{ padding: '4px 12px', background: '#1e3a5f', border: '1px solid #3b82f6' }}
+                          />
+                        )}
+                      </Space>
+                      
+                      <Table
+                        dataSource={filteredTrades}
+                        columns={tradeColumns}
+                        rowKey="id"
+                        pagination={{ pageSize: 50, showSizeChanger: true, showTotal: (t) => `${t} trades` }}
+                        size="small"
+                        scroll={{ x: 1200 }}
+                        rowClassName={(r) => r.netPnlUsd >= 0 ? 'trade-row-win' : 'trade-row-loss'}
+                      />
+                    </>
+                  ),
+                },
+              ]}
+            />
+          </Card>
+        </>
+      )}
+      
+      {/* Empty state */}
+      {!result && !loading && (
+        <Card style={{ background: '#1e293b', border: '1px solid #334155', textAlign: 'center', padding: 48 }}>
+          <Empty
+            description={
+              <Text style={{ color: '#94a3b8' }}>
+                Configure backtest parameters and click "Run Backtest" to analyze historical performance
+              </Text>
+            }
+          />
+        </Card>
+      )}
+      
+      {/* CSS */}
+      <style>{`
+        .trade-row-win { background: rgba(16, 185, 129, 0.05) !important; }
+        .trade-row-loss { background: rgba(239, 68, 68, 0.05) !important; }
+        .trade-row-win:hover { background: rgba(16, 185, 129, 0.1) !important; }
+        .trade-row-loss:hover { background: rgba(239, 68, 68, 0.1) !important; }
+      `}</style>
+    </div>
+  );
+}

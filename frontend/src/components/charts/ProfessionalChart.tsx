@@ -423,40 +423,36 @@ export default function ProfessionalChart({
 
     const markers: any[] = [];
 
-    // Add entry orders (buy/long)
+    // Add markers from orders (both entry and exit)
     orders?.forEach(order => {
       if (!order.createdAt) return;
       
       const time = (new Date(order.createdAt).getTime() / 1000) as UTCTimestamp;
-      const isEntry = !order.clientOrderId?.includes?.('.exit');
+      // Check for exit: supports both ".exit" (live) and "_exit_" (paper)
+      const clientId = order.clientOrderId || '';
+      const isExit = clientId.includes('.exit') || clientId.includes('_exit_');
       const isFilled = order.status?.toLowerCase() === 'filled';
       
-      if (isEntry && isFilled) {
-        markers.push({
-          time,
-          position: 'belowBar',
-          color: '#10b981',
-          shape: 'arrowUp',
-          text: `Entry @ ${formatPriceDisplay(Number(order.price || 0))}`,
-        });
-      }
-    });
-
-    // Add exit fills
-    fills?.forEach(fill => {
-      if (!fill.createdAt) return;
-      
-      const time = (new Date(fill.createdAt).getTime() / 1000) as UTCTimestamp;
-      const isExit = fill.side?.toLowerCase() === 'sell' || fill.side?.toLowerCase() === 'short';
-      
-      if (isExit) {
-        markers.push({
-          time,
-          position: 'aboveBar',
-          color: '#ef4444',
-          shape: 'arrowDown',
-          text: `Exit @ ${formatPriceDisplay(Number(fill.price || 0))}`,
-        });
+      if (isFilled) {
+        if (isExit) {
+          // EXIT marker (red arrow down)
+          markers.push({
+            time,
+            position: 'aboveBar',
+            color: '#ef4444',
+            shape: 'arrowDown',
+            text: `Exit @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
+          });
+        } else {
+          // ENTRY marker (green arrow up)
+          markers.push({
+            time,
+            position: 'belowBar',
+            color: '#10b981',
+            shape: 'arrowUp',
+            text: `Entry @ ${formatPriceDisplay(Number(order.price || order.avgPrice || 0))}`,
+          });
+        }
       }
     });
 

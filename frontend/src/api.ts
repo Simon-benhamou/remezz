@@ -275,4 +275,11 @@ export const api = {
       }>;
       activeSessions: number;
     },
+  // Backtest API
+  backtest: {
+    run: async (params: { startDate: string; endDate: string; initialCapital: number; symbols: string[]; leverage: number }) =>
+      (await client.post('/api/backtest/run', params)).data,
+    getPresets: async () =>
+      (await client.get('/api/backtest/presets')).data,
+  },
 };

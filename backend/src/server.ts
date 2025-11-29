@@ -24,6 +24,7 @@ import { router as ordersRouter } from "./routes/orders.js";
 import { router as perfRouter } from "./routes/perf.js";
 import { router as marketRouter } from "./routes/market.js";
 import portfolioRouter from "./routes/portfolio.js";
+import { router as backtestRouter } from "./routes/backtest.js";
 
 // Services
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
@@ -103,6 +104,7 @@ app.use("/api/orders", ordersRouter);
 app.use("/api/perf", perfRouter);
 app.use("/api/market", marketRouter);
 app.use("/api/portfolio", portfolioRouter);
+app.use("/api/backtest", backtestRouter);
 
 // ============================================
 // AGENT MANAGEMENT

@@ -7,117 +7,98 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum AgentActionStatus {
-  pending
-  in_progress
-  completed
-  failed
-  skipped
-}
-
-// User authentication model
 model User {
-  id           String    @id @default(cuid())
-  username     String    @unique
-  email        String    @unique
-  passwordHash String
-  role         String    @default("trader") // 'admin', 'trader', 'viewer'
-  isActive     Boolean   @default(true)
-  isLegacy     Boolean   @default(false)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  lastLoginAt  DateTime?
-
-  // API Keys and settings
-  apiKeys  UserApiKey[]
-  settings UserSetting[]
-
-  // User's trading sessions and activities
-  sessions            AgentSession[]
-  alerts              Alert[]
-  reports             DailyReport[]
-  improvements        ImprovementItem[]
-  diagnosticsCache    DiagnosticsCache[]
-  auditLogs           AuditLog[]
-  tradeEvaluations    TradeEvaluation[]
-  learningStates      SubagentLearningState[]
+  id               String                  @id @default(cuid())
+  username         String                  @unique
+  email            String                  @unique
+  passwordHash     String
+  role             String                  @default("trader")
+  isActive         Boolean                 @default(true)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  lastLoginAt      DateTime?
+  isLegacy         Boolean                 @default(false)
+  sessions         AgentSession[]
+  alerts           Alert[]
+  auditLogs        AuditLog[]
+  reports          DailyReport[]
+  diagnosticsCache DiagnosticsCache[]
+  improvements     ImprovementItem[]
+  learningStates   SubagentLearningState[]
+  tradeEvaluations TradeEvaluation[]
+  apiKeys          UserApiKey[]
+  settings         UserSetting[]
 
   @@index([username])
   @@index([email])
 }
 
-// User API Keys for exchanges
 model UserApiKey {
   id         String   @id @default(cuid())
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId     String
-  exchange   String // 'crypto.com', 'binance', 'coinbase', etc.
-  keyName    String? // optional alias for the key
-  apiKey     String // encrypted
-  apiSecret  String // encrypted
-  passphrase String? // encrypted (for some exchanges)
+  exchange   String
+  keyName    String?
+  apiKey     String
+  apiSecret  String
+  passphrase String?
   testnet    Boolean  @default(false)
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, exchange, testnet])
   @@index([userId])
 }
 
-// User Settings
 model UserSetting {
   id       String @id @default(cuid())
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId   String
   key      String
   value    String
-  category String @default("general") // 'trading', 'ui', 'notifications', etc.
+  category String @default("general")
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, key])
   @@index([userId, category])
 }
 
 model AgentSession {
-  id              String    @id @default(cuid())
-  user            User?     @relation(fields: [userId], references: [id])
-  userId          String?
-  needsAttention  Boolean   @default(false)
-  symbol          String
-  mode            String // 'paper' | 'live'
-  startedAt       DateTime  @default(now())
-  stoppedAt       DateTime?
-  haltedAt        DateTime?
-  haltReason      String?
-  startBalanceUsd Float?
-  profileJson     Json?
-  planJson        Json?
-
-  rrFloor      Float @default(1.0)
-  rrCeil       Float @default(2.0)
-  rrBaseMin    Float @default(1.3)
-  rrExpectancy Json? @default("{}")
-
-  // Smart Auto Mode fields
-  isSmartAgent       Boolean   @default(false)
-  smartConfig        Json? // Configuration for smart mode
-  currentSymbol      String? // Current active symbol (can differ from original symbol)
+  id                 String                   @id @default(cuid())
+  userId             String?
+  needsAttention     Boolean                  @default(false)
+  symbol             String
+  mode               String
+  startedAt          DateTime                 @default(now())
+  stoppedAt          DateTime?
+  haltedAt           DateTime?
+  haltReason         String?
+  startBalanceUsd    Float?
+  profileJson        Json?
+  planJson           Json?
+  rrFloor            Float                    @default(1.0)
+  rrCeil             Float                    @default(2.0)
+  rrBaseMin          Float                    @default(1.3)
+  rrExpectancy       Json?                    @default("{}")
+  isSmartAgent       Boolean                  @default(false)
+  smartConfig        Json?
+  currentSymbol      String?
   lastSymbolSwitchAt DateTime?
   nextRescanAt       DateTime?
-  smartHistory       Json? // History of symbol switches and reasons
-
-  strategies   Strategy[]
-  orders       Order[]
-  fills        Fill[] // back-rel from Fill.session
-  positions    Position[]
-  SessionKpi   SessionKpi?        @relation("AgentSessionToSessionKpi")
-  triggers     TriggerLog[]
-  alerts       Alert[] // back-rel from Alert.session
-  reports      DailyReport[] // back-rel from DailyReport.session
-  opsTelemetry AgentOpsTelemetry?
-  actionIntents AgentActionIntent[]
-  pendingIntents PendingIntent[]
-  performanceLedger AgentPerformanceLedger[]
+  smartHistory       Json?
+  actionIntents      AgentActionIntent[]
+  opsTelemetry       AgentOpsTelemetry?
+  performanceLedger  AgentPerformanceLedger[]
+  user               User?                    @relation(fields: [userId], references: [id])
+  alerts             Alert[]
+  reports            DailyReport[]
+  fills              Fill[]
+  orders             Order[]
+  pendingIntents     PendingIntent[]
+  positions          Position[]
+  SessionKpi         SessionKpi?              @relation("AgentSessionToSessionKpi")
+  strategies         Strategy[]
+  triggers           TriggerLog[]
 
   @@index([userId, stoppedAt, startedAt])
   @@index([stoppedAt, startedAt])
@@ -125,8 +106,7 @@ model AgentSession {
 }
 
 model AgentActionIntent {
-  id            String             @id
-  session       AgentSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id            String            @id
   sessionId     String
   symbol        String
   type          String
@@ -134,33 +114,34 @@ model AgentActionIntent {
   confidence    Float
   reason        String
   payload       Json?
-  status        AgentActionStatus  @default(pending)
+  status        AgentActionStatus @default(pending)
   result        Json?
   failureReason String?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
   startedAt     DateTime?
   executedAt    DateTime?
+  session       AgentSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([status, createdAt])
   @@index([sessionId, status])
 }
 
 model PendingIntent {
-  id                String        @id @default(cuid())
-  session           AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id                String       @id @default(cuid())
   sessionId         String
   symbol            String
-  action            String // 'wait_pullback' | 'wait_confirmation'
+  action            String
   targetOffset      Float?
   originalPrice     Float
   originalSignal    Json
   expiresAt         DateTime
-  confirmationTicks Int           @default(0)
-  status            String        @default("active") // 'active' | 'executed' | 'expired' | 'cancelled'
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  confirmationTicks Int          @default(0)
+  status            String       @default("active")
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
   executedAt        DateTime?
+  session           AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, status], name: "one_active_per_session")
   @@index([sessionId, status])
@@ -189,10 +170,10 @@ model AuditLog {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
   action    String
-  user      User?    @relation(fields: [userId], references: [id])
   userId    String?
   username  String?
   details   Json?
+  user      User?    @relation(fields: [userId], references: [id])
 
   @@index([action, createdAt])
   @@index([userId, createdAt])
@@ -200,7 +181,6 @@ model AuditLog {
 
 model Strategy {
   id           String        @id
-  session      AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId    String?
   symbol       String
   bias         String
@@ -214,90 +194,79 @@ model Strategy {
   rawResponse  Json?
   trigger      String
   createdAt    DateTime      @default(now())
-
-  // ⇐ back-rel manquant pour Order.strategy
-  // back-rel for Order.strategy
-  orders Order[]
+  orders       Order[]
+  session      AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])
   @@index([symbol, createdAt])
 }
 
 model Order {
-  id              String        @id @default(cuid())
-  clientOrderId   String        @unique
-  exchangeOrderId String?
-  session         AgentSession? @relation(fields: [sessionId], references: [id])
-  sessionId       String?
-  strategy        Strategy?     @relation(fields: [strategyId], references: [id])
-  strategyId      String?
-  symbol          String
-  side            String
-  type            String
-  tif             String?
-  qty             Float
-  requestedQty    Float?
-  price           Float?
-  requestedPrice  Float?
-  sl              Float?
-  tp              Float?
-  leverage        Float?
-  pctChange       Float?
-  latencyMs       Int?
-  slippageBps     Float?
-  fillRatio       Float?
-  cancelCount     Int?          @default(0)
-  attempts        Int?
-  source          String        @default("agent")
-  status          String?
-  error           String?
-  
-  // 🎯 NEW: Strategy tracking for learning which strategy works best
-  strategyUsed    String?       // "trend_following" | "mean_reversion" | "breakout" | "momentum"
-  strategyConfidence Float?     // Confidence score when strategy was selected (0-1)
-  
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  fills Fill[]
+  id                 String        @id @default(cuid())
+  clientOrderId      String        @unique
+  exchangeOrderId    String?
+  sessionId          String?
+  strategyId         String?
+  symbol             String
+  side               String
+  type               String
+  tif                String?
+  qty                Float
+  requestedQty       Float?
+  price              Float?
+  requestedPrice     Float?
+  sl                 Float?
+  tp                 Float?
+  leverage           Float?
+  pctChange          Float?
+  latencyMs          Int?
+  slippageBps        Float?
+  fillRatio          Float?
+  cancelCount        Int?          @default(0)
+  attempts           Int?
+  source             String        @default("agent")
+  status             String?
+  error              String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  strategyUsed       String?
+  strategyConfidence Float?
+  fills              Fill[]
+  session            AgentSession? @relation(fields: [sessionId], references: [id])
+  strategy           Strategy?     @relation(fields: [strategyId], references: [id])
 
   @@index([sessionId, createdAt])
   @@index([sessionId, status])
-  @@index([strategyUsed, status]) // For strategy performance analysis
+  @@index([strategyUsed, status])
 }
 
 model Fill {
-  id          String   @id @default(cuid())
-  order       Order    @relation(fields: [orderId], references: [id])
-  orderId     String
-  tradeId     String?
-  symbol      String?  // Symbol for the fill (e.g., "BTC/USDT:USDT")
-  price       Float
-  qty         Float
-  fee         Float?
-  side        String
-  realizedPnl Float?
-  ts          DateTime @default(now())
-  
-  // 🎯 Strategy tracking for performance analysis
-  strategyUsed   String? // Denormalized from Order for performance
-  strategyFamily String? // Strategy family (trend, breakout, mean_reversion, momentum)
-  strategyId     String? // Specific strategy ID (classic_trend_following, bollinger_mean_reversion, etc.)
-
-  // Support AgentSession.fills relation
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
-  sessionId String?
+  id             String        @id @default(cuid())
+  orderId        String
+  tradeId        String?
+  price          Float
+  qty            Float
+  fee            Float?
+  side           String
+  realizedPnl    Float?
+  ts             DateTime      @default(now())
+  sessionId      String?
+  strategyUsed   String?
+  symbol         String?
+  strategyFamily String?
+  strategyId     String?
+  order          Order         @relation(fields: [orderId], references: [id])
+  session        AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])
   @@index([orderId])
-  @@index([symbol, ts]) // For daily report queries
-  @@index([strategyUsed]) // For strategy PnL analysis
-  @@index([strategyFamily, strategyId]) // For detailed strategy analysis
+  @@index([symbol, ts])
+  @@index([strategyUsed])
+  @@index([strategyFamily, strategyId])
 }
 
 model Position {
   id                   String        @id @default(cuid())
-  session              AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId            String?
   symbol               String
   side                 String
@@ -314,12 +283,12 @@ model Position {
   tpOrderId            String?
   lastProtectiveSyncAt DateTime?
   protectiveStatus     String?
+  session              AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])
 }
 
 model AgentOpsTelemetry {
-  session         AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId       String       @id
   tradeCount24h   Int          @default(0)
   lastExecutionAt DateTime?
@@ -329,12 +298,12 @@ model AgentOpsTelemetry {
   adaptiveState   Json?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
+  session         AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([blockedByVos, updatedAt])
 }
 
 model SessionKpi {
-  session          AgentSession @relation("AgentSessionToSessionKpi", fields: [sessionId], references: [id])
   sessionId        String       @id
   realizedPnlUsd   Float        @default(0)
   unrealizedPnlUsd Float        @default(0)
@@ -345,23 +314,22 @@ model SessionKpi {
   avgHoldingMin    Float        @default(0)
   lastUpdated      DateTime     @default(now())
   stats            Json?
-
-  // AI usage metrics (persisted so they survive restarts)
-  aiCallsTotal   Int   @default(0)
-  aiInputTokens  Int   @default(0)
-  aiOutputTokens Int   @default(0)
-  aiCostUsd      Float @default(0)
-  aiByModel      Json?
+  aiCallsTotal     Int          @default(0)
+  aiInputTokens    Int          @default(0)
+  aiOutputTokens   Int          @default(0)
+  aiCostUsd        Float        @default(0)
+  aiByModel        Json?
+  session          AgentSession @relation("AgentSessionToSessionKpi", fields: [sessionId], references: [id])
 }
 
 model TriggerLog {
   id        String        @id @default(cuid())
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId String?
   symbol    String
-  kind      String // support-touch | resistance-touch | sudden-move | volume-spike | news-spike
+  kind      String
   payload   Json
   createdAt DateTime      @default(now())
+  session   AgentSession? @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId, createdAt])
   @@index([createdAt])
@@ -369,15 +337,15 @@ model TriggerLog {
 
 model Alert {
   id        String        @id @default(cuid())
-  user      User?         @relation(fields: [userId], references: [id])
   userId    String?
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId String?
   symbol    String?
-  kind      String // late_invalidation_exit | missed_partial | overtrading | ...
-  severity  String // low | med | high
+  kind      String
+  severity  String
   details   Json?
   createdAt DateTime      @default(now())
+  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  user      User?         @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt])
   @@index([sessionId, createdAt])
@@ -385,14 +353,14 @@ model Alert {
 
 model DailyReport {
   id        String        @id @default(cuid())
-  user      User?         @relation(fields: [userId], references: [id])
   userId    String?
-  session   AgentSession? @relation(fields: [sessionId], references: [id])
   sessionId String?
-  day       String // YYYY-MM-DD
+  day       String
   stats     Json?
   llm       Json?
   createdAt DateTime      @default(now())
+  session   AgentSession? @relation(fields: [sessionId], references: [id])
+  user      User?         @relation(fields: [userId], references: [id])
 
   @@unique([sessionId, day])
   @@index([userId, day])
@@ -401,7 +369,6 @@ model DailyReport {
 
 model ImprovementItem {
   id          String   @id @default(cuid())
-  user        User?    @relation(fields: [userId], references: [id])
   userId      String?
   title       String
   description String
@@ -412,6 +379,7 @@ model ImprovementItem {
   reporter    String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  user        User?    @relation(fields: [userId], references: [id])
 
   @@index([userId, status])
   @@index([status])
@@ -420,11 +388,11 @@ model ImprovementItem {
 
 model DiagnosticsCache {
   id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId    String
   symbol    String
   data      Json
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, symbol, createdAt])
   @@index([userId, createdAt])
@@ -495,46 +463,41 @@ model AutoUniverseSchedule {
 }
 
 model TradeEvaluation {
-  id              String   @id @default(cuid())
-  userId          String?  // User who owns this evaluation (for multi-user isolation)
-  symbol          String
-  timestamp       DateTime @default(now())
-  decision        String // "filter_passed" | "filter_blocked" | "order_placed" | "order_blocked_capital" | "order_blocked_sizing" | "order_rejected" (predictor/cooldown = filter_blocked)
-  blockedReason   String?
-  confidenceScore Float
-  inputMetrics    Json // Snapshot of indicator values: adx, cmf, atr_pct, slope, trend_strength, etc.
-  regimeContext   Json? // NEW: Regime classification and parameter source for traceability
-  marketOutcome   Json? // Updated later: pnl_15m, pnl_1h, max_favorable_excursion_1h, max_adverse_excursion_1h
-  
-  // 🎯 NEW: Strategy selection tracking for learning
-  strategyFamily String? // "trend" | "breakout" | "mean_reversion" | "momentum"
-  strategyId String? // "classic_trend_following" | "breakout_retest" | "bollinger_mean_reversion" | "momentum_scanner_focus"
-  eligibilityScore Float? // Combined score after all penalties (0-1)
-  finalScore Float? // Final score used for selection (0-1)
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  
-  user            User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String   @id @default(cuid())
+  symbol           String
+  timestamp        DateTime @default(now())
+  decision         String
+  blockedReason    String?
+  confidenceScore  Float
+  inputMetrics     Json
+  marketOutcome    Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  regimeContext    Json?
+  userId           String?
+  eligibilityScore Float?
+  finalScore       Float?
+  strategyFamily   String?
+  strategyId       String?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, symbol, timestamp])
   @@index([symbol, timestamp])
   @@index([timestamp])
   @@index([marketOutcome])
-  @@index([strategyFamily, decision]) // For strategy performance analysis
-  @@index([strategyId, decision]) // For specific strategy tracking
+  @@index([strategyFamily, decision])
+  @@index([strategyId, decision])
 }
 
 model CryptoPersonalityProfile {
   symbol        String   @id
-  optimalParams Json // Learned parameters: weights, thresholds, min_confidence
+  optimalParams Json
   updatedAt     DateTime @updatedAt
   createdAt     DateTime @default(now())
 
   @@index([updatedAt])
 }
 
-// System-wide settings (not user-specific)
 model SystemSetting {
   key       String   @id
   value     String
@@ -544,18 +507,17 @@ model SystemSetting {
   @@map("system_setting")
 }
 
-// Predictor decisions (only store changes)
 model PredictorDecision {
   id               String   @id @default(cuid())
   symbol           String
-  decision         String   // 'long', 'short', 'none'
-  previousDecision String?  // previous decision before this change
+  decision         String
+  previousDecision String?
   probabilityLong  Float
   probabilityShort Float
   confidence       Float
   entryWeight      Float?
   riskMultiplier   Float?
-  price            Float    // price at decision time
+  price            Float
   createdAt        DateTime @default(now())
 
   @@index([symbol, createdAt])
@@ -564,41 +526,40 @@ model PredictorDecision {
 }
 
 model AgentPerformanceLedger {
-  id             String        @id @default(cuid())
-  session        AgentSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  id             String       @id @default(cuid())
   sessionId      String
   agentName      String
   agentFamily    String?
   symbol         String
   mode           String
   regime         String?
-  windowMinutes  Int           @default(1440)
+  windowMinutes  Int          @default(1440)
   bucketStart    DateTime
-  tradeCount     Int           @default(0)
-  winRate        Float         @default(0)
-  realizedPnlUsd Float         @default(0)
-  netPnlUsd      Float         @default(0)
-  feesUsd        Float         @default(0)
+  tradeCount     Int          @default(0)
+  winRate        Float        @default(0)
+  realizedPnlUsd Float        @default(0)
+  netPnlUsd      Float        @default(0)
+  feesUsd        Float        @default(0)
   avgLatencyMs   Float?
   avgSlippageBps Float?
   avgHoldMinutes Float?
-  blockedCount   Int           @default(0)
-  complianceHits Int           @default(0)
+  blockedCount   Int          @default(0)
+  complianceHits Int          @default(0)
   score          Float?
   volatilityPct  Float?
   drawdownPct    Float?
   stats          Json?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  session        AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
+  @@unique([sessionId, symbol, mode, regime, windowMinutes, bucketStart], name: "agent_performance_window_unique")
   @@index([symbol, mode, bucketStart])
   @@index([sessionId, windowMinutes, bucketStart])
-  @@unique([sessionId, symbol, mode, regime, windowMinutes, bucketStart], name: "agent_performance_window_unique")
 }
 
 model SubagentLearningState {
   id          String   @id @default(cuid())
-  userId      String?  // User who owns this learning state (for multi-user isolation)
   subagent    String
   symbol      String
   mode        String?
@@ -610,10 +571,18 @@ model SubagentLearningState {
   reason      String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
+  userId      String?
   user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, subagent, symbol, mode, regime], name: "subagent_learning_user_unique")
   @@index([userId, symbol, subagent])
   @@index([symbol, subagent])
+}
+
+enum AgentActionStatus {
+  pending
+  in_progress
+  completed
+  failed
+  skipped
 }
