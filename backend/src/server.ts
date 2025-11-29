@@ -1422,60 +1422,72 @@ app.get("/api/capital/:mode/snapshot", async (req, res) => {
     // For paper mode or if exchange fetch fails, use mode-specific capital pool
     const agentKey = getAgentKey(userId, mode as 'paper' | 'live');
     const agentData = userAgents.get(agentKey);
-    logger.info(`[Capital] Agent lookup - key: ${agentKey}, agentExists: ${!!agentData}`);
+    
+    // 🔧 FIX: For PAPER mode, ALWAYS calculate from DB (initialCapital + accumulatedPnL)
+    // This ensures correct balance even after redeployment when agent is already running
+    if (mode === 'paper' && userId) {
+      try {
+        // Get initial capital setting
+        const setting = await prisma.userSetting.findUnique({
+          where: {
+            userId_key: {
+              userId: userId,
+              key: 'paperTradingCapital'
+            }
+          }
+        });
+        const initialCapital = parseFloat(setting?.value || '10000') || 10000;
+        
+        // Get accumulated PnL from ALL paper sessions
+        const allKpis = await prisma.sessionKpi.findMany({
+          where: {
+            session: {
+              userId,
+              mode: 'paper',
+            }
+          },
+          select: {
+            realizedPnlUsd: true,
+          }
+        });
+        const accumulatedPnl = allKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+        const actualBalance = initialCapital + accumulatedPnl;
+        
+        logger.info(`[Capital] Paper: $${initialCapital} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${actualBalance.toFixed(2)}`);
+        
+        // Get in-position amount from running agent if exists
+        const inPositionsUsd = agentData ? agentData.capitalPool.getStatus().inPositionsUsd : 0;
+        const reservedUsd = agentData ? agentData.capitalPool.getStatus().reservedUsd : 0;
+        
+        return res.json({
+          totalUSD: actualBalance,
+          freeUSD: actualBalance - inPositionsUsd - reservedUsd,
+          reservedUSD: reservedUsd,
+          inPositionsUSD: inPositionsUsd,
+          ts: Date.now(),
+          source: 'database',
+          initialCapitalUsd: initialCapital,
+          accumulatedPnlUsd: accumulatedPnl,
+        });
+      } catch (dbError) {
+        logger.warn('Failed to read paper balance from DB:', dbError);
+        // Fall through to capital pool if DB fails
+      }
+    }
     
     if (!agentData) {
-      // No agent running for this mode - read from UserSettings database + accumulated PnL
-      let paperBalance = 10000; // default
-      let accumulatedPnl = 0;
-      
-      if (mode === 'paper' && userId) {
-        try {
-          // Get initial capital setting
-          const setting = await prisma.userSetting.findUnique({
-            where: {
-              userId_key: {
-                userId: userId,
-                key: 'paperTradingCapital'
-              }
-            }
-          });
-          if (setting && setting.value) {
-            paperBalance = parseFloat(setting.value) || 10000;
-          }
-          
-          // 🔧 FIX: Add accumulated PnL from past sessions
-          const pastKpis = await prisma.sessionKpi.findMany({
-            where: {
-              session: {
-                userId,
-                mode: 'paper',
-              }
-            },
-            select: {
-              realizedPnlUsd: true,
-            }
-          });
-          accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
-          logger.info(`[Capital] Paper balance for ${userId}: $${paperBalance} (initial) + $${accumulatedPnl.toFixed(2)} (PnL) = $${(paperBalance + accumulatedPnl).toFixed(2)}`);
-        } catch (dbError) {
-          logger.warn('Failed to read paper balance from DB:', dbError);
-        }
-      }
-      
-      const actualBalance = paperBalance + accumulatedPnl;
+      // No agent running - return zeros for live, or fallback for paper
       return res.json({
-        totalUSD: mode === 'paper' ? actualBalance : 0,
-        freeUSD: mode === 'paper' ? actualBalance : 0,
+        totalUSD: 0,
+        freeUSD: 0,
         reservedUSD: 0,
         inPositionsUSD: 0,
         ts: Date.now(),
-        source: 'database',
-        initialCapitalUsd: paperBalance,
-        accumulatedPnlUsd: accumulatedPnl,
+        source: 'none',
       });
     }
     
+    // For LIVE mode with running agent, use capital pool
     const status = agentData.capitalPool.getStatus();
     res.json({
       totalUSD: status.totalUsd,
