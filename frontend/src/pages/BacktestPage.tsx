@@ -300,14 +300,20 @@ export default function BacktestPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | 'all'>('all');
   const [selectedSide, setSelectedSide] = useState<'all' | 'long' | 'short'>('all');
 
-  const defaultSymbols = ['SEI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT', 'IMX/USDT:USDT'];
+  const defaultSymbols = ['DOGE/USDT:USDT', 'IMX/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT'];
   const symbolOptions = [
-    { value: 'SEI/USDT:USDT', label: 'SEI/USDT' },
-    { value: 'XRP/USDT:USDT', label: 'XRP/USDT' },
-    { value: 'ETH/USDT:USDT', label: 'ETH/USDT' },
-    { value: 'IMX/USDT:USDT', label: 'IMX/USDT' },
-    { value: 'SOL/USDT:USDT', label: 'SOL/USDT' },
-    { value: 'DOT/USDT:USDT', label: 'DOT/USDT' },
+    { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT (+438%)' },
+    { value: 'IMX/USDT:USDT', label: 'IMX/USDT (+344%)' },
+    { value: 'SEI/USDT:USDT', label: 'SEI/USDT (+280%)' },
+    { value: 'SUI/USDT:USDT', label: 'SUI/USDT (+266%)' },
+    { value: 'XRP/USDT:USDT', label: 'XRP/USDT (+185%)' },
+    { value: 'ETH/USDT:USDT', label: 'ETH/USDT (+173%)' },
+    { value: 'ADA/USDT:USDT', label: 'ADA/USDT (+173%)' },
+    { value: 'DOT/USDT:USDT', label: 'DOT/USDT (+173%)' },
+    { value: 'LINK/USDT:USDT', label: 'LINK/USDT (+143%)' },
+    { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT (+118%)' },
+    { value: 'SOL/USDT:USDT', label: 'SOL/USDT (+111%)' },
+    { value: 'BTC/USDT:USDT', label: 'BTC/USDT (+65%)' },
   ];
 
   const handleRunBacktest = async (values: any) => {

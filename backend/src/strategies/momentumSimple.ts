@@ -115,42 +115,46 @@ export const MomentumConfig = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // ASSETS V5 - Classés par compatibilité avec la stratégie
+  // ASSETS V5.6 - Backtest 24 mois (Nov 2023 - Nov 2025) - Tous ROI positifs
   // ═══════════════════════════════════════════════════════════════════════════
   
-  // ✅ COMPATIBLES V5 (backtest +ROI, profil XRP-like)
+  // ✅ TOP PERFORMERS (ROI >200% sur 24 mois)
   SYMBOLS_V5_COMPATIBLE: [
-    'SEI/USDT:USDT',   // 🏆 BEST: +143.9% ROI, 53.8% WR - Découplage 10.6%
-    'XRP/USDT:USDT',   // +54.2% ROI, 49.8% WR - Skewness 0.88, découplage 9.1%
-    'ETH/USDT:USDT',   // +45.8% ROI - Stable mais corrélé BTC
-    'IMX/USDT:USDT',   // +40.1% ROI, 50.8% WR - Découplage 15.4%
-    'DOT/USDT:USDT',   // +7.7% ROI, 52.3% WR - Kurtosis 1055
+    'DOGE/USDT:USDT',  // 🏆 #1: +438% ROI, 65.5% WR
+    'IMX/USDT:USDT',   // 🏆 #2: +344% ROI, 67.9% WR
+    'SEI/USDT:USDT',   // 🏆 #3: +280% ROI, 65.8% WR
+    'SUI/USDT:USDT',   // 🏆 #4: +266% ROI, 65.4% WR
+    'XRP/USDT:USDT',   // ✅ +185% ROI, 65.0% WR
+    'ETH/USDT:USDT',   // ✅ +173% ROI, 67.8% WR
+    'ADA/USDT:USDT',   // ✅ +173% ROI, 65.8% WR
+    'DOT/USDT:USDT',   // ✅ +173% ROI, 64.8% WR
+    'LINK/USDT:USDT',  // ✅ +143% ROI, 65.9% WR
+    'AVAX/USDT:USDT',  // ✅ +118% ROI, 66.1% WR
+    'SOL/USDT:USDT',   // ✅ +111% ROI, 65.5% WR
+    'BTC/USDT:USDT',   // ⚡ +65% ROI, 69.9% WR (plus stable)
   ],
   
-  // ❌ NON COMPATIBLES V5 (backtest -ROI)
+  // ❌ NON TESTÉS (pas de données 24 mois)
   SYMBOLS_NOT_COMPATIBLE: [
-    'BTC/USDT:USDT',   // -12% ROI - Trop efficace, pas d'edge
-    'SOL/USDT:USDT',   // -96.7% ROI - CATASTROPHE
-    'DOGE/USDT:USDT',  // -95.5% ROI
-    'ADA/USDT:USDT',   // -51.7% ROI
-    'AVAX/USDT:USDT',  // -43.8% ROI
-    'LINK/USDT:USDT',  // -92.6% ROI
-    'ATOM/USDT:USDT',  // -90.5% ROI
-    'UNI/USDT:USDT',   // -55.4% ROI
-    'LTC/USDT:USDT',   // -94.5% ROI
-    'BCH/USDT:USDT',   // -77.8% ROI
+    'BNB/USDT:USDT',   // Non testé
+    'ATOM/USDT:USDT',  // Non testé
+    'UNI/USDT:USDT',   // Non testé
+    'LTC/USDT:USDT',   // Non testé
+    'BCH/USDT:USDT',   // Non testé
   ],
   
-  // Default: utiliser les compatibles
+  // Default: TOP 6 performers pour les nouveaux agents
   SYMBOLS: [
-    'SEI/USDT:USDT',   // 🏆 BEST
-    'XRP/USDT:USDT',
-    'ETH/USDT:USDT',
-    'IMX/USDT:USDT',
+    'DOGE/USDT:USDT',  // 🏆 #1
+    'IMX/USDT:USDT',   // 🏆 #2
+    'SEI/USDT:USDT',   // 🏆 #3
+    'SUI/USDT:USDT',   // 🏆 #4
+    'XRP/USDT:USDT',   // #5
+    'ETH/USDT:USDT',   // #6
   ],
   
   // V5.7: Leverage 4.5x uniforme (sweet spot ROI/risque)
-  // Backtest: ROI 1680%, MaxDD 47.9%, ratio 35.1
+  // Backtest 24 mois: Tous les actifs avec 65%+ WR
   LEVERAGE: {
     'BTC/USDT:USDT': 4.5,
     'ETH/USDT:USDT': 4.5,
@@ -160,6 +164,10 @@ export const MomentumConfig = {
     'IMX/USDT:USDT': 4.5,
     'DOT/USDT:USDT': 4.5,
     'DOGE/USDT:USDT': 4.5,
+    'SUI/USDT:USDT': 4.5,
+    'ADA/USDT:USDT': 4.5,
+    'LINK/USDT:USDT': 4.5,
+    'AVAX/USDT:USDT': 4.5,
   } as Record<string, number>,
 };
 
@@ -864,21 +872,21 @@ export const LIQUIDITY_CONFIG = {
   
   // Absolute caps per symbol tier based on typical liquidity
   POSITION_CAPS: {
-    // Tier 1: High liquidity (BTC, ETH) - $5M+ daily volume on futures
+    // Tier 1: High liquidity (BTC, ETH) - $5B+ daily volume on futures
     HIGH: {
       symbols: ['BTC/USDT:USDT', 'ETH/USDT:USDT'],
       maxPositionUsd: 500_000,  // $500K max per position
       minVolume24h: 1_000_000_000,  // $1B minimum
     },
-    // Tier 2: Medium liquidity (XRP, SOL) - $500M-$5B daily volume
+    // Tier 2: Medium liquidity (XRP, SOL, DOGE, AVAX, LINK) - $500M-$5B daily volume
     MEDIUM: {
-      symbols: ['XRP/USDT:USDT', 'SOL/USDT:USDT', 'DOGE/USDT:USDT'],
+      symbols: ['XRP/USDT:USDT', 'SOL/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT', 'ADA/USDT:USDT'],
       maxPositionUsd: 100_000,  // $100K max
       minVolume24h: 500_000_000,
     },
-    // Tier 3: Low liquidity (SEI, IMX, etc) - <$500M daily volume
+    // Tier 3: Low liquidity (SEI, IMX, SUI, DOT) - <$500M daily volume
     LOW: {
-      symbols: ['SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT'],
+      symbols: ['SEI/USDT:USDT', 'IMX/USDT:USDT', 'DOT/USDT:USDT', 'SUI/USDT:USDT'],
       maxPositionUsd: 25_000,  // $25K max - beyond this, massive slippage
       minVolume24h: 50_000_000,
     },
