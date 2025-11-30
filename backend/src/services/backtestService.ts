@@ -471,15 +471,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
         const slPct = pos.slPct || CONFIG.EXIT.STOP_LOSS_FIXED;
         
         if (pos.side === 'long') {
+          // Calculate PnL based on CLOSE price (matching backtest-local-analysis.mjs)
           const pnlPct = ((current.close - pos.entryPrice) / pos.entryPrice) * 100;
           pos.hwm = Math.max(pos.hwm || pos.entryPrice, current.high);
           const hwmPct = ((pos.hwm - pos.entryPrice) / pos.entryPrice) * 100;
           
-          // V5.7: Dynamic SL check using low price (more realistic)
-          const slPrice = pos.entryPrice * (1 - slPct / 100);
-          if (current.low <= slPrice) {
+          // V5.7: SL check using CLOSE price (matches backtest-combined-v54 & backtest-local-analysis)
+          // This avoids false SL triggers from wicks that recover
+          if (pnlPct <= -slPct) {
             exitReason = 'SL';
-            exitPrice = slPrice;
+            exitPrice = pos.entryPrice * (1 - slPct / 100);
           } else if (pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
             exitReason = 'TP';
             exitPrice = pos.entryPrice * (1 + CONFIG.EXIT.TAKE_PROFIT / 100);
@@ -494,15 +495,16 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           }
         } else {
           // SHORT
+          // Calculate PnL based on CLOSE price (matching backtest-local-analysis.mjs)
           const pnlPct = ((pos.entryPrice - current.close) / pos.entryPrice) * 100;
           pos.lwm = Math.min(pos.lwm || pos.entryPrice, current.low);
           const lwmPct = ((pos.entryPrice - pos.lwm) / pos.entryPrice) * 100;
           
-          // V5.7: Dynamic SL check using high price (more realistic)
-          const slPrice = pos.entryPrice * (1 + slPct / 100);
-          if (current.high >= slPrice) {
+          // V5.7: SL check using CLOSE price (matches backtest-combined-v54 & backtest-local-analysis)
+          // This avoids false SL triggers from wicks that recover
+          if (pnlPct <= -slPct) {
             exitReason = 'SL';
-            exitPrice = slPrice;
+            exitPrice = pos.entryPrice * (1 + slPct / 100);
           } else if (pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
             exitReason = 'TP';
             exitPrice = pos.entryPrice * (1 - CONFIG.EXIT.TAKE_PROFIT / 100);
