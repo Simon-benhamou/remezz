@@ -2340,7 +2340,7 @@ app.get("/api/monitor/reports/daily", async (req, res) => {
   }
 });
 
-// List daily reports for a session
+// List daily reports for a session - auto-generates from fills if no reports exist
 app.get("/api/monitor/reports/daily/list", async (req, res) => {
   try {
     const sessionId = String(req.query.sessionId || "").trim();
@@ -2351,11 +2351,90 @@ app.get("/api/monitor/reports/daily/list", async (req, res) => {
       return res.status(400).json({ error: "sessionId required" });
     }
     
-    const reports = await prisma.dailyReport.findMany({
+    // First try to get existing reports
+    let reports = await prisma.dailyReport.findMany({
       where: { sessionId },
       orderBy: { day: 'desc' },
       take: limit,
     });
+    
+    // If no reports exist, generate them from fills data
+    if (reports.length === 0) {
+      // Get all fills for this session grouped by day
+      const fills = await prisma.fill.findMany({
+        where: { 
+          sessionId,
+          realizedPnl: { not: null },
+        },
+        orderBy: { ts: 'asc' },
+      });
+      
+      if (fills.length > 0) {
+        // Group fills by day
+        const fillsByDay = new Map<string, typeof fills>();
+        for (const fill of fills) {
+          const day = fill.ts.toISOString().split('T')[0];
+          if (!fillsByDay.has(day)) {
+            fillsByDay.set(day, []);
+          }
+          fillsByDay.get(day)!.push(fill);
+        }
+        
+        // Get session info
+        const session = await prisma.agentSession.findUnique({ where: { id: sessionId } });
+        const startBalance = session?.startBalanceUsd || 1000;
+        
+        // Generate reports for each day with trades
+        const generatedReports: typeof reports = [];
+        for (const [day, dayFills] of fillsByDay.entries()) {
+          const exitFills = dayFills.filter(f => f.realizedPnl !== null && f.realizedPnl !== 0);
+          const trades = exitFills.length;
+          
+          if (trades === 0) continue;
+          
+          const wins = exitFills.filter(f => (f.realizedPnl || 0) > 0).length;
+          const losses = exitFills.filter(f => (f.realizedPnl || 0) < 0).length;
+          const pnlUsd = exitFills.reduce((sum, f) => sum + (f.realizedPnl || 0), 0);
+          const fees = dayFills.reduce((sum, f) => sum + (f.fee || 0), 0);
+          const winRate = trades > 0 ? wins / trades : 0;
+          
+          const winPnls = exitFills.filter(f => (f.realizedPnl || 0) > 0).map(f => f.realizedPnl || 0);
+          const lossPnls = exitFills.filter(f => (f.realizedPnl || 0) < 0).map(f => f.realizedPnl || 0);
+          const avgWin = winPnls.length > 0 ? winPnls.reduce((a, b) => a + b, 0) / winPnls.length : 0;
+          const avgLoss = lossPnls.length > 0 ? Math.abs(lossPnls.reduce((a, b) => a + b, 0) / lossPnls.length) : 0;
+          const expectancy = trades > 0 ? (pnlUsd - fees) / trades : 0;
+          const roiPct = startBalance > 0 ? ((pnlUsd - fees) / startBalance) * 100 : 0;
+          
+          const stats = {
+            trades,
+            wins,
+            losses,
+            winRate,
+            pnlUsd,
+            fees,
+            netPnl: pnlUsd - fees,
+            avgWin,
+            avgLoss,
+            expectancy,
+            roiPct,
+          };
+          
+          // Upsert report
+          const report = await prisma.dailyReport.upsert({
+            where: { sessionId_day: { sessionId, day } },
+            update: { stats },
+            create: { sessionId, day, stats, userId: session?.userId },
+          });
+          
+          generatedReports.push(report);
+        }
+        
+        // Return newly generated reports
+        reports = generatedReports.sort((a, b) => 
+          new Date(b.day).getTime() - new Date(a.day).getTime()
+        ).slice(0, limit);
+      }
+    }
     
     res.json(reports);
   } catch (error) {
