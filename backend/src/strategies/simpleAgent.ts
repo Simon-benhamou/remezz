@@ -1151,6 +1151,11 @@ export class SimpleAgent {
       });
       
       if (dbPosition && dbPosition.entryPrice && dbPosition.qty) {
+        // Calculate margin from notional / leverage
+        const notional = dbPosition.qty * dbPosition.entryPrice;
+        const leverage = dbPosition.leverage || MomentumConfig.LEVERAGE[this.config.symbol] || 4.5;
+        const marginUsd = notional / leverage;
+        
         this.position = {
           symbol: dbPosition.symbol,
           side: (dbPosition.side as 'long' | 'short') || 'long',
@@ -1159,11 +1164,17 @@ export class SimpleAgent {
           entryTime: dbPosition.openedAt?.getTime() || Date.now(),
           stopLoss: dbPosition.stopPrice || undefined,
           orderId: dbPosition.slOrderId || undefined,
+          leverage: leverage,
+          marginUsd: marginUsd,
           highWaterMark: dbPosition.side === 'long' ? dbPosition.entryPrice : undefined,
           lowWaterMark: dbPosition.side === 'short' ? dbPosition.entryPrice : undefined,
         };
         
-        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice}`);
+        // ⚠️ CRITICAL: Register margin in CapitalPool to prevent double-spending!
+        // This is essential for live mode where exchange balance includes locked margin
+        this.config.capitalPool.commit(this.config.sessionId, marginUsd);
+        
+        logger.info(`📥 [${this.config.symbol}] Loaded existing position: ${this.position?.side} @ $${this.position?.entryPrice} | margin=$${marginUsd.toFixed(2)} registered in pool`);
       }
       
     } catch (error) {
