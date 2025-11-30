@@ -14,7 +14,8 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
       startDate, 
       endDate, 
       initialCapital = 2000,
-      symbols = ['SEI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT', 'IMX/USDT:USDT'],
+      // V5.7: Default to TOP 6 performers
+      symbols = ['DOGE/USDT:USDT', 'IMX/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT'],
       leverage = 4.5
     } = req.body;
     
@@ -44,19 +45,30 @@ router.post('/run', authenticateUser, async (req: AuthenticatedRequest, res) => 
 
 /**
  * GET /api/backtest/presets
- * Get available preset configurations
+ * Get available preset configurations - V5.7 with all tested symbols
  */
 router.get('/presets', authenticateUser, (req, res) => {
   res.json({
+    // V5.6: Tous les symbols testés avec ROI positif sur 24 mois
     symbols: [
-      { value: 'SEI/USDT:USDT', label: 'SEI/USDT', tier: 'LOW' },
-      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'MEDIUM' },
-      { value: 'ETH/USDT:USDT', label: 'ETH/USDT', tier: 'HIGH' },
-      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'LOW' },
-      { value: 'SOL/USDT:USDT', label: 'SOL/USDT', tier: 'MEDIUM' },
-      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'LOW' },
+      // 🏆 TOP PERFORMERS (ROI >200%)
+      { value: 'DOGE/USDT:USDT', label: 'DOGE/USDT', tier: 'MEDIUM', roi24m: '+438%' },
+      { value: 'IMX/USDT:USDT', label: 'IMX/USDT', tier: 'LOW', roi24m: '+344%' },
+      { value: 'SEI/USDT:USDT', label: 'SEI/USDT', tier: 'LOW', roi24m: '+280%' },
+      { value: 'SUI/USDT:USDT', label: 'SUI/USDT', tier: 'LOW', roi24m: '+266%' },
+      // ✅ SOLID PERFORMERS (ROI >100%)
+      { value: 'XRP/USDT:USDT', label: 'XRP/USDT', tier: 'MEDIUM', roi24m: '+185%' },
+      { value: 'ETH/USDT:USDT', label: 'ETH/USDT', tier: 'HIGH', roi24m: '+173%' },
+      { value: 'ADA/USDT:USDT', label: 'ADA/USDT', tier: 'MEDIUM', roi24m: '+173%' },
+      { value: 'DOT/USDT:USDT', label: 'DOT/USDT', tier: 'LOW', roi24m: '+173%' },
+      { value: 'LINK/USDT:USDT', label: 'LINK/USDT', tier: 'MEDIUM', roi24m: '+143%' },
+      { value: 'AVAX/USDT:USDT', label: 'AVAX/USDT', tier: 'MEDIUM', roi24m: '+118%' },
+      { value: 'SOL/USDT:USDT', label: 'SOL/USDT', tier: 'MEDIUM', roi24m: '+111%' },
+      // ⚡ STABLE (lower ROI but consistent)
+      { value: 'BTC/USDT:USDT', label: 'BTC/USDT', tier: 'HIGH', roi24m: '+65%' },
     ],
-    defaultSymbols: ['SEI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT', 'IMX/USDT:USDT'],
+    // V5.7: Default = TOP 6 performers
+    defaultSymbols: ['DOGE/USDT:USDT', 'IMX/USDT:USDT', 'SEI/USDT:USDT', 'SUI/USDT:USDT', 'XRP/USDT:USDT', 'ETH/USDT:USDT'],
     leverageOptions: [3, 4, 4.5, 5],
     capitalPresets: [1000, 2000, 5000, 10000, 50000, 100000],
     periods: [

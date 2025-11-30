@@ -21,6 +21,7 @@ import {
   getMarketConditions,
   getLiquidityTier,
   calcSafeLeverage,
+  calcDynamicStopLoss,  // V5.7: Dynamic SL based on ATR
   LIQUIDATION_CONFIG,
   type Candle,
   type Position,
@@ -649,6 +650,13 @@ export class SimpleAgent {
     const liquidityInfo = sizing.liquidityTier ? ` | tier=${sizing.liquidityTier}` : '';
     logger.info(`🚀 [${symbol}] OPENING ${side.toUpperCase()} | price=$${currentPrice.toFixed(4)} | qty=${sizing.qty.toFixed(6)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x${liquidityInfo}${slippageInfo}`);
     
+    // V5.7: Calculate dynamic stop-loss based on ATR
+    const slCalc = calcDynamicStopLoss(candles);
+    const slPct = slCalc.slPct;
+    if (slCalc.isDynamic) {
+      logger.info(`🎯 [${symbol}] Dynamic SL: ATR=${slCalc.atrPct?.toFixed(2)}% × 2.0 = ${slPct.toFixed(2)}%`);
+    }
+    
     if (this.config.mode === 'paper') {
       // Paper trade
       const position: Position = {
@@ -660,8 +668,9 @@ export class SimpleAgent {
         leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
         marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
         stopLoss: side === 'long' 
-          ? currentPrice * (1 - MomentumConfig.EXIT.STOP_LOSS_PCT / 100)
-          : currentPrice * (1 + MomentumConfig.EXIT.STOP_LOSS_PCT / 100),
+          ? currentPrice * (1 - slPct / 100)
+          : currentPrice * (1 + slPct / 100),
+        stopLossPct: slPct,                    // V5.7: Store SL percentage used
         highWaterMark: side === 'long' ? currentPrice : undefined,
         lowWaterMark: side === 'short' ? currentPrice : undefined,
       };
@@ -674,7 +683,7 @@ export class SimpleAgent {
       // Save to DB
       await this.savePositionToDb(position, 'paper_entry');
       
-      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | SL=$${position.stopLoss?.toFixed(4)}`);
+      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
       
     } else {
       // Live trade
@@ -699,8 +708,9 @@ export class SimpleAgent {
           leverage: sizing.suggestedLeverage,   // V5.6: Store leverage used
           marginUsd: sizing.marginUsd,           // V5.6: Store margin blocked
           stopLoss: side === 'long'
-            ? filledPrice * (1 - MomentumConfig.EXIT.STOP_LOSS_PCT / 100)
-            : filledPrice * (1 + MomentumConfig.EXIT.STOP_LOSS_PCT / 100),
+            ? filledPrice * (1 - slPct / 100)
+            : filledPrice * (1 + slPct / 100),
+          stopLossPct: slPct,                    // V5.7: Store SL percentage used
           orderId: order.id,
           highWaterMark: side === 'long' ? filledPrice : undefined,
           lowWaterMark: side === 'short' ? filledPrice : undefined,
