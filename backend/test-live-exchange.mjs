@@ -262,29 +262,46 @@ async function testUpdateStopLoss(exchange, oldSlOrderId, entryPrice, qty) {
 async function testExitOrder(exchange, qty, slOrderId) {
   console.log(`\n🏁 STEP 7: Closing position (EXIT)...`);
   
-  // First cancel the SL order
+  // First cancel ALL open orders for this symbol (safer)
   try {
-    await exchange.cancelOrder(slOrderId, TEST_CONFIG.SYMBOL);
-    console.log(`   ✅ SL order cancelled before exit`);
+    await exchange.cancelAllOrders(TEST_CONFIG.SYMBOL);
+    console.log(`   ✅ All open orders cancelled`);
   } catch (error) {
-    console.log(`   ⚠️ Could not cancel SL:`, error.message);
+    console.log(`   ⚠️ Could not cancel orders:`, error.message);
   }
   
-  // Close position
+  // Get actual position size from exchange (more reliable than tracked qty)
+  const positions = await exchange.fetchPositions([TEST_CONFIG.SYMBOL]);
+  const openPos = positions.find(p => 
+    p.symbol === TEST_CONFIG.SYMBOL && 
+    Math.abs(parseFloat(p.contracts || p.info?.positionAmt || 0)) > 0
+  );
+  
+  if (!openPos) {
+    console.log(`   ⚠️ No open position found - may already be closed`);
+    return { exitOrderId: 'none', exitPrice: 0 };
+  }
+  
+  const actualQty = Math.abs(parseFloat(openPos.contracts || openPos.info?.positionAmt || qty));
+  const positionSide = parseFloat(openPos.contracts || openPos.info?.positionAmt || 0) > 0 ? 'long' : 'short';
+  
+  console.log(`   📊 Actual position: ${positionSide} ${actualQty} ${TEST_CONFIG.SYMBOL}`);
+  
+  // Close position with actual quantity
   try {
     let order;
-    if (TEST_CONFIG.SIDE === 'long') {
+    if (positionSide === 'long') {
       // Close long = sell
-      order = await exchange.createMarketSellOrder(TEST_CONFIG.SYMBOL, qty, { reduceOnly: true });
+      order = await exchange.createMarketSellOrder(TEST_CONFIG.SYMBOL, actualQty, { reduceOnly: true });
     } else {
       // Close short = buy
-      order = await exchange.createMarketBuyOrder(TEST_CONFIG.SYMBOL, qty, { reduceOnly: true });
+      order = await exchange.createMarketBuyOrder(TEST_CONFIG.SYMBOL, actualQty, { reduceOnly: true });
     }
     
     console.log(`   ✅ POSITION CLOSED!`);
     console.log(`   📝 Exit Order ID: ${order.id}`);
     console.log(`   💵 Exit price: $${order.average || order.price}`);
-    console.log(`   📦 Closed qty: ${order.filled || qty}`);
+    console.log(`   📦 Closed qty: ${order.filled || actualQty}`);
     
     return {
       exitOrderId: order.id,
@@ -292,7 +309,21 @@ async function testExitOrder(exchange, qty, slOrderId) {
     };
   } catch (error) {
     console.error(`   ❌ Failed to close position:`, error.message);
-    throw error;
+    
+    // Try one more time with market close
+    try {
+      console.log(`   🔄 Retrying with market close...`);
+      const ticker = await exchange.fetchTicker(TEST_CONFIG.SYMBOL);
+      const order = positionSide === 'long'
+        ? await exchange.createOrder(TEST_CONFIG.SYMBOL, 'market', 'sell', actualQty, undefined, { reduceOnly: true })
+        : await exchange.createOrder(TEST_CONFIG.SYMBOL, 'market', 'buy', actualQty, undefined, { reduceOnly: true });
+      
+      console.log(`   ✅ POSITION CLOSED (retry)!`);
+      return { exitOrderId: order.id, exitPrice: ticker.last };
+    } catch (retryError) {
+      console.error(`   ❌ Retry failed:`, retryError.message);
+      throw retryError;
+    }
   }
 }
 
