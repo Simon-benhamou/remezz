@@ -476,21 +476,23 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           pos.hwm = Math.max(pos.hwm || pos.entryPrice, current.high);
           const hwmPct = ((pos.hwm - pos.entryPrice) / pos.entryPrice) * 100;
           
-          // V5.7: SL check using CLOSE price (matches backtest-combined-v54 & backtest-local-analysis)
-          // This avoids false SL triggers from wicks that recover
-          if (pnlPct <= -slPct) {
-            exitReason = 'SL';
-            exitPrice = pos.entryPrice * (1 - slPct / 100);
-          } else if (pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
-            exitReason = 'TP';
-            exitPrice = pos.entryPrice * (1 + CONFIG.EXIT.TAKE_PROFIT / 100);
-          } else if (hwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
+          // V5.8: Check TRAILING FIRST (protects gains before SL is hit)
+          if (hwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
             const trailStop = pos.hwm * (1 - CONFIG.EXIT.TRAILING_DISTANCE / 100);
             if (current.low <= trailStop) {
               exitReason = 'TRAIL';
               exitPrice = trailStop;
             }
-          } else if (holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
+          }
+          
+          // Then check SL (only if trailing didn't trigger)
+          if (!exitReason && pnlPct <= -slPct) {
+            exitReason = 'SL';
+            exitPrice = pos.entryPrice * (1 - slPct / 100);
+          } else if (!exitReason && pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
+            exitReason = 'TP';
+            exitPrice = pos.entryPrice * (1 + CONFIG.EXIT.TAKE_PROFIT / 100);
+          } else if (!exitReason && holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
             exitReason = 'TIME';
           }
         } else {
@@ -500,21 +502,23 @@ export async function runBacktest(params: BacktestParams): Promise<BacktestResul
           pos.lwm = Math.min(pos.lwm || pos.entryPrice, current.low);
           const lwmPct = ((pos.entryPrice - pos.lwm) / pos.entryPrice) * 100;
           
-          // V5.7: SL check using CLOSE price (matches backtest-combined-v54 & backtest-local-analysis)
-          // This avoids false SL triggers from wicks that recover
-          if (pnlPct <= -slPct) {
-            exitReason = 'SL';
-            exitPrice = pos.entryPrice * (1 + slPct / 100);
-          } else if (pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
-            exitReason = 'TP';
-            exitPrice = pos.entryPrice * (1 - CONFIG.EXIT.TAKE_PROFIT / 100);
-          } else if (lwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
+          // V5.8: Check TRAILING FIRST (protects gains before SL is hit)
+          if (lwmPct >= CONFIG.EXIT.TRAILING_ACTIVATION) {
             const trailStop = pos.lwm * (1 + CONFIG.EXIT.TRAILING_DISTANCE / 100);
             if (current.high >= trailStop) {
               exitReason = 'TRAIL';
               exitPrice = trailStop;
             }
-          } else if (holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
+          }
+          
+          // Then check SL (only if trailing didn't trigger)
+          if (!exitReason && pnlPct <= -slPct) {
+            exitReason = 'SL';
+            exitPrice = pos.entryPrice * (1 + slPct / 100);
+          } else if (!exitReason && pnlPct >= CONFIG.EXIT.TAKE_PROFIT) {
+            exitReason = 'TP';
+            exitPrice = pos.entryPrice * (1 - CONFIG.EXIT.TAKE_PROFIT / 100);
+          } else if (!exitReason && holdBars >= CONFIG.EXIT.MAX_HOLD_BARS) {
             exitReason = 'TIME';
           }
         }

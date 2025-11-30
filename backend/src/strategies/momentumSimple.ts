@@ -662,39 +662,8 @@ export function shouldExitPosition(
     return { shouldExit: true, reason: 'time', pnlPct, holdMinutes };
   }
   
-  // 2. Initial Stop loss (before trailing activates)
-  if (pnlPct <= -MomentumConfig.EXIT.STOP_LOSS_PCT) {
-    return { shouldExit: true, reason: 'stoploss', pnlPct, holdMinutes };
-  }
-  
-  // 3. Take Profit (V5: 2.5%)
-  if (pnlPct >= MomentumConfig.EXIT.PROFIT_TARGET_PCT) {
-    return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // Using 'trailing' for compat
-  }
-  
-  // 4. Smart Exits (require candles)
-  if (candles && candles.length >= 20) {
-    const closes = candles.map(c => c.close);
-    const volumes = candles.map(c => c.volume);
-    
-    // 4a. Momentum Fade: profit > 2% et ROC5 < 0.5%
-    if (pnlPct >= MomentumConfig.EXIT.MOMENTUM_FADE_PROFIT_MIN) {
-      const roc5 = calcROC(closes, 5);
-      if (roc5 < MomentumConfig.EXIT.MOMENTUM_FADE_ROC_MAX) {
-        return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // momentum_fade
-      }
-    }
-    
-    // 4b. Volume Dry-up: profit > 0.5% et volume < 0.5x avg
-    if (pnlPct >= MomentumConfig.EXIT.VOLUME_DRY_PROFIT_MIN) {
-      const volRatio = calcVolRatio(volumes);
-      if (volRatio < MomentumConfig.EXIT.VOLUME_DRY_RATIO) {
-        return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // volume_dry
-      }
-    }
-  }
-  
-  // 5. Trailing Stop Logic (V5: activate at 1.5%)
+  // 2. V5.8: Check TRAILING FIRST (protects gains before SL is hit)
+  // This is critical - if trailing is activated and price reverses, exit via trailing not SL
   const trailingActivation = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;
   
   if (pnlPct >= trailingActivation) {
@@ -728,7 +697,7 @@ export function shouldExitPosition(
         };
       }
       
-      // Update stop loss for position tracking
+      // Update stop loss for position tracking (trailing active but not triggered)
       return { 
         shouldExit: false, 
         reason: 'none', 
@@ -763,6 +732,39 @@ export function shouldExitPosition(
         holdMinutes,
         newStopLoss: trailingStopPrice
       };
+    }
+  }
+  
+  // 3. Stop loss - V5.7: Use dynamic SL from position if available (only if trailing not active)
+  const slPct = position.stopLossPct ?? MomentumConfig.EXIT.STOP_LOSS_PCT;
+  if (pnlPct <= -slPct) {
+    return { shouldExit: true, reason: 'stoploss', pnlPct, holdMinutes };
+  }
+  
+  // 4. Take Profit (V5: 3%)
+  if (pnlPct >= MomentumConfig.EXIT.PROFIT_TARGET_PCT) {
+    return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // Using 'trailing' for compat
+  }
+  
+  // 5. Smart Exits (require candles)
+  if (candles && candles.length >= 20) {
+    const closes = candles.map(c => c.close);
+    const volumes = candles.map(c => c.volume);
+    
+    // 5a. Momentum Fade: profit > 1.5% et ROC5 < 0.5%
+    if (pnlPct >= MomentumConfig.EXIT.MOMENTUM_FADE_PROFIT_MIN) {
+      const roc5 = calcROC(closes, 5);
+      if (roc5 < MomentumConfig.EXIT.MOMENTUM_FADE_ROC_MAX) {
+        return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // momentum_fade
+      }
+    }
+    
+    // 5b. Volume Dry-up: profit > 0.5% et volume < 0.5x avg
+    if (pnlPct >= MomentumConfig.EXIT.VOLUME_DRY_PROFIT_MIN) {
+      const volRatio = calcVolRatio(volumes);
+      if (volRatio < MomentumConfig.EXIT.VOLUME_DRY_RATIO) {
+        return { shouldExit: true, reason: 'trailing', pnlPct, holdMinutes }; // volume_dry
+      }
     }
   }
   
