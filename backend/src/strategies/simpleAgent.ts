@@ -73,11 +73,15 @@ export class CapitalPool {
   private userId: string | null = null;
   private lastBalanceSync: number = 0;
   private readonly BALANCE_SYNC_INTERVAL_MS = 30_000; // Sync every 30s max
+  private hasEverSynced: boolean = false; // Track if we've ever successfully synced
   
   constructor(initialCapitalUsd: number, mode: 'paper' | 'live' = 'paper', userId?: string) {
     this.totalCapitalUsd = initialCapitalUsd;
     this.mode = mode;
     this.userId = userId || null;
+    // Paper mode uses provided capital directly (no exchange sync needed)
+    // Live mode requires syncing with exchange before trading
+    this.hasEverSynced = (mode === 'paper');
     console.log(`[CapitalPool] Created ${mode} pool with $${initialCapitalUsd}${mode === 'live' ? ' (will sync with Binance)' : ''}`);
   }
   
@@ -95,12 +99,17 @@ export class CapitalPool {
   
   /**
    * Sync total capital with real Binance balance (live mode only)
+   * @param force - If true, skip the throttle check and force sync
+   * @returns true if sync was successful or not needed (paper mode), false otherwise
    */
-  async syncWithExchange(): Promise<void> {
-    if (this.mode !== 'live' || !this.userId) return;
+  async syncWithExchange(force: boolean = false): Promise<boolean> {
+    // Paper mode uses provided capital, no exchange sync needed - always considered "synced"
+    if (this.mode !== 'live' || !this.userId) return true;
     
     const now = Date.now();
-    if (now - this.lastBalanceSync < this.BALANCE_SYNC_INTERVAL_MS) return;
+    if (!force && now - this.lastBalanceSync < this.BALANCE_SYNC_INTERVAL_MS) {
+      return this.hasEverSynced; // Return whether we've ever synced successfully
+    }
     
     try {
       const balance = await getBalanceFromWebSocket(this.userId, 'USDT');
@@ -109,14 +118,27 @@ export class CapitalPool {
         // Use wallet balance (free + locked/margin)
         this.totalCapitalUsd = balance.total;
         this.lastBalanceSync = now;
+        this.hasEverSynced = true;
         
         if (Math.abs(oldTotal - this.totalCapitalUsd) > 0.01) {
           console.log(`[CapitalPool] Live balance synced: $${oldTotal.toFixed(2)} -> $${this.totalCapitalUsd.toFixed(2)}`);
         }
+        return true;
+      } else {
+        console.warn(`[CapitalPool] Balance fetch returned empty or zero - keeping existing: $${this.totalCapitalUsd.toFixed(2)}`);
+        return this.hasEverSynced;
       }
     } catch (err) {
       console.warn(`[CapitalPool] Failed to sync balance:`, err);
+      return this.hasEverSynced;
     }
+  }
+  
+  /**
+   * Check if the pool has ever successfully synced with the exchange
+   */
+  isSynced(): boolean {
+    return this.hasEverSynced;
   }
   
   /**
@@ -606,12 +628,23 @@ export class SimpleAgent {
     const currentPrice = lastCandle.close;
     
     // Sync with exchange balance before checking capital (live mode)
+    // For live mode, force sync on first position attempt to ensure we have real balance
     if (this.config.mode === 'live') {
-      await this.config.capitalPool.syncWithExchange();
+      // Force sync if we haven't successfully synced yet
+      await this.config.capitalPool.syncWithExchange(!this.config.capitalPool.isSynced());
+      
+      // In live mode, don't open positions if we haven't successfully synced with exchange
+      if (!this.config.capitalPool.isSynced()) {
+        logger.error(`❌ [${symbol}] Cannot open live position - failed to sync with exchange balance. Please check API connection.`);
+        return;
+      }
     }
     
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();
+    
+    // Log available capital for debugging
+    logger.info(`💰 [${symbol}] Available capital: $${availableCapital.toFixed(2)} | mode=${this.config.mode} | synced=${this.config.capitalPool.isSynced()}`);
     
     // V5.5: Get 24h volume for liquidity-aware position sizing
     let volume24h: number | undefined;
@@ -706,8 +739,10 @@ export class SimpleAgent {
     } else {
       // Live trade
       try {
-        // Set leverage
-        await this.config.exchange.setLeverage(sizing.suggestedLeverage, symbol);
+        // Set leverage - Binance Futures requires integer leverage
+        const intLeverage = Math.round(sizing.suggestedLeverage);
+        logger.info(`🔧 [${symbol}] Setting leverage: ${sizing.suggestedLeverage} → ${intLeverage} (rounded to integer for Binance)`);
+        await this.config.exchange.setLeverage(intLeverage, symbol);
         
         // Format quantity to exchange precision (critical for Binance Futures)
         const formattedQty = this.formatQtyForExchange(symbol, sizing.qty);
