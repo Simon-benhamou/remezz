@@ -925,23 +925,30 @@ export class SimpleAgent {
     const market = this.config.exchange.markets?.[symbol];
     if (market?.precision?.amount !== undefined) {
       const precision = market.precision.amount;
-      // Precision can be decimal places (e.g., 3) or step size (e.g., 0.001)
-      if (precision >= 1) {
-        // It's decimal places
+      // In CCXT, precision can be represented as:
+      // - Number of decimal places (integer >= 0, e.g., 3 means 0.001 step)
+      // - Direct step size (decimal < 1, e.g., 0.001)
+      // CCXT typically uses Number.isInteger() to distinguish, but we use a heuristic:
+      // If precision is an integer AND > 0, treat as decimal places
+      // Otherwise treat as step size
+      if (Number.isInteger(precision) && precision > 0) {
+        // It's decimal places (e.g., 3 means 3 decimal places = 0.001 step)
         const factor = Math.pow(10, precision);
         const result = Math.floor(qty * factor) / factor;
         logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (${precision} decimals)`);
         return result;
       } else {
-        // It's step size
-        const result = Math.floor(qty / precision) * precision;
-        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (step=${precision})`);
+        // It's step size (e.g., 0.001 or 1)
+        const stepSize = precision;
+        const result = Math.floor(qty / stepSize) * stepSize;
+        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (step=${stepSize})`);
         return result;
       }
     }
     
     // Known precision map for Binance Futures symbols (fallback when markets not loaded)
     // These are step sizes (quantity increments) for each symbol
+    // ⚠️ WARNING: This is a static fallback - step sizes may change on the exchange
     const knownPrecision: Record<string, number> = {
       'SEI/USDT:USDT': 1,      // Step size = 1 (whole units)
       'IMX/USDT:USDT': 0.1,    // Step size = 0.1
@@ -959,12 +966,15 @@ export class SimpleAgent {
     
     const stepSize = knownPrecision[symbol];
     if (stepSize !== undefined) {
+      // Log warning that we're using static fallback - markets should be loaded
+      logger.warn(`⚠️ [${symbol}] Using static precision fallback (step=${stepSize}). Consider checking if exchange markets are loaded correctly.`);
       const result = Math.floor(qty / stepSize) * stepSize;
       logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (known step=${stepSize})`);
       return result;
     }
     
     // Ultimate fallback: round to 3 decimal places (more conservative for safety)
+    logger.warn(`⚠️ [${symbol}] No precision info available, using conservative 3 decimal fallback`);
     const result = Math.floor(qty * 1000) / 1000;
     logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (fallback 3 decimals)`);
     return result;
