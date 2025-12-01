@@ -54,6 +54,9 @@ type Exchange = {
   fetchMyTrades?: (symbol: string, since?: number, limit?: number) => Promise<any[]>;
   cancelOrder?: (orderId: string, symbol: string) => Promise<any>;
   cancelAllOrders?: (symbol: string) => Promise<any>;
+  // For quantity precision (CCXT method)
+  amountToPrecision?: (symbol: string, amount: number) => string;
+  markets?: Record<string, any>;
 };
 
 // ============================================================================
@@ -691,13 +694,23 @@ export class SimpleAgent {
         // Set leverage
         await this.config.exchange.setLeverage(sizing.suggestedLeverage, symbol);
         
-        // Place market order
+        // Format quantity to exchange precision (critical for Binance Futures)
+        const formattedQty = this.formatQtyForExchange(symbol, sizing.qty);
+        
+        // Validate formatted quantity is still valid
+        if (formattedQty <= 0) {
+          logger.error(`❌ [${symbol}] Formatted quantity is 0 or negative (raw: ${sizing.qty})`);
+          this.config.capitalPool.cancelReservation(this.config.sessionId);
+          return;
+        }
+        
+        // Place market order with formatted quantity
         const order = side === 'long'
-          ? await this.config.exchange.createMarketBuyOrder(symbol, sizing.qty, { reduceOnly: false })
-          : await this.config.exchange.createMarketSellOrder(symbol, sizing.qty, { reduceOnly: false });
+          ? await this.config.exchange.createMarketBuyOrder(symbol, formattedQty, { reduceOnly: false })
+          : await this.config.exchange.createMarketSellOrder(symbol, formattedQty, { reduceOnly: false });
         
         const filledPrice = order.average || order.price || currentPrice;
-        const filledQty = order.filled || sizing.qty;
+        const filledQty = order.filled || formattedQty;
         
         const position: Position = {
           symbol,
@@ -738,8 +751,14 @@ export class SimpleAgent {
           timestamp: new Date(),
         });
         
-      } catch (error) {
-        logger.error(`❌ [${symbol}] Failed to open live position:`, error);
+      } catch (error: any) {
+        // Enhanced error logging for debugging
+        logger.error(`❌ [${symbol}] Failed to open live position:`, {
+          name: error?.name,
+          message: error?.message,
+          code: error?.code,
+          info: error?.info,
+        });
         // Cancel reservation on failure
         this.config.capitalPool.cancelReservation(this.config.sessionId);
       }
@@ -834,10 +853,13 @@ export class SimpleAgent {
         // FIRST: Cancel any open SL/TP orders to avoid orphaned orders
         await this.cancelStopLossOnExchange();
         
+        // Format quantity to exchange precision
+        const formattedQty = this.formatQtyForExchange(symbol, position.qty);
+        
         const closeSide = position.side === 'long' ? 'sell' : 'buy';
         const order = position.side === 'long'
-          ? await this.config.exchange.createMarketSellOrder(symbol, position.qty, { reduceOnly: true })
-          : await this.config.exchange.createMarketBuyOrder(symbol, position.qty, { reduceOnly: true });
+          ? await this.config.exchange.createMarketSellOrder(symbol, formattedQty, { reduceOnly: true })
+          : await this.config.exchange.createMarketBuyOrder(symbol, formattedQty, { reduceOnly: true });
         
         const exitPrice = order.average || order.price || currentPrice;
         
@@ -880,6 +902,73 @@ export class SimpleAgent {
   // ==========================================================================
   // EXCHANGE HELPERS
   // ==========================================================================
+  
+  /**
+   * Format quantity to exchange precision
+   * Uses CCXT's amountToPrecision if available, otherwise applies fallback rounding
+   * This is critical for Binance Futures which requires specific step sizes per symbol
+   */
+  private formatQtyForExchange(symbol: string, qty: number): number {
+    // Try CCXT's amountToPrecision first (most reliable)
+    if (this.config.exchange.amountToPrecision) {
+      try {
+        const formatted = this.config.exchange.amountToPrecision(symbol, qty);
+        const result = parseFloat(formatted);
+        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (via amountToPrecision)`);
+        return result;
+      } catch (e) {
+        logger.warn(`⚠️ [${symbol}] amountToPrecision failed, using fallback:`, e);
+      }
+    }
+    
+    // Fallback: Get precision from market info if available
+    const market = this.config.exchange.markets?.[symbol];
+    if (market?.precision?.amount !== undefined) {
+      const precision = market.precision.amount;
+      // Precision can be decimal places (e.g., 3) or step size (e.g., 0.001)
+      if (precision >= 1) {
+        // It's decimal places
+        const factor = Math.pow(10, precision);
+        const result = Math.floor(qty * factor) / factor;
+        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (${precision} decimals)`);
+        return result;
+      } else {
+        // It's step size
+        const result = Math.floor(qty / precision) * precision;
+        logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (step=${precision})`);
+        return result;
+      }
+    }
+    
+    // Known precision map for Binance Futures symbols (fallback when markets not loaded)
+    // These are step sizes (quantity increments) for each symbol
+    const knownPrecision: Record<string, number> = {
+      'SEI/USDT:USDT': 1,      // Step size = 1 (whole units)
+      'IMX/USDT:USDT': 0.1,    // Step size = 0.1
+      'SUI/USDT:USDT': 0.1,    // Step size = 0.1
+      'DOGE/USDT:USDT': 1,     // Step size = 1
+      'XRP/USDT:USDT': 0.1,    // Step size = 0.1
+      'ADA/USDT:USDT': 0.1,    // Step size = 0.1
+      'DOT/USDT:USDT': 0.1,    // Step size = 0.1
+      'LINK/USDT:USDT': 0.01,  // Step size = 0.01
+      'AVAX/USDT:USDT': 0.01,  // Step size = 0.01
+      'SOL/USDT:USDT': 0.01,   // Step size = 0.01
+      'ETH/USDT:USDT': 0.001,  // Step size = 0.001
+      'BTC/USDT:USDT': 0.001,  // Step size = 0.001
+    };
+    
+    const stepSize = knownPrecision[symbol];
+    if (stepSize !== undefined) {
+      const result = Math.floor(qty / stepSize) * stepSize;
+      logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (known step=${stepSize})`);
+      return result;
+    }
+    
+    // Ultimate fallback: round to 3 decimal places (more conservative for safety)
+    const result = Math.floor(qty * 1000) / 1000;
+    logger.info(`🔢 [${symbol}] Qty precision: ${qty} → ${result} (fallback 3 decimals)`);
+    return result;
+  }
   
   private async fetchCandles(): Promise<Candle[]> {
     const symbol = this.config.symbol;
@@ -1098,12 +1187,15 @@ export class SimpleAgent {
         }
       }
       
+      // Format quantity to exchange precision for SL order
+      const formattedQty = this.formatQtyForExchange(symbol, position.qty);
+      
       // Create new SL order
       const slOrder = await this.config.exchange.createOrder(
         symbol,
         'STOP_MARKET',  // Use STOP_MARKET for Binance futures
         side,
-        position.qty,
+        formattedQty,
         undefined,
         {
           stopPrice: position.stopLoss,
