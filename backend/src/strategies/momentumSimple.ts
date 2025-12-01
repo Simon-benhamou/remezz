@@ -1076,6 +1076,23 @@ export function calculatePositionSize(input: PositionSizeInput): PositionSizeRes
     notional = actualMargin * leverage;
   }
   
+  // 🔧 SAFETY: Hard cap on notional - max 10x of capital regardless of leverage settings
+  // This prevents catastrophic positions if capital sync fails
+  const MAX_NOTIONAL_MULTIPLIER = 10;
+  const absoluteMaxNotional = totalCapitalUsd * MAX_NOTIONAL_MULTIPLIER;
+  if (notional > absoluteMaxNotional) {
+    console.warn(`⚠️ [${symbol}] Position capped by safety limit: $${notional.toFixed(2)} → $${absoluteMaxNotional.toFixed(2)} (max ${MAX_NOTIONAL_MULTIPLIER}x capital)`);
+    notional = absoluteMaxNotional;
+    actualMargin = notional / leverage;
+  }
+  
+  // 🔧 SAFETY: If capital is very small (<$50), limit position size even further
+  if (totalCapitalUsd < 50 && notional > totalCapitalUsd * 5) {
+    console.warn(`⚠️ [${symbol}] Small capital mode: capping notional to 5x capital ($${(totalCapitalUsd * 5).toFixed(2)})`);
+    notional = totalCapitalUsd * 5;
+    actualMargin = notional / leverage;
+  }
+  
   // Step 7: Apply minimum threshold
   const MIN_NOTIONAL_USD = 20;
   if (notional < MIN_NOTIONAL_USD) {

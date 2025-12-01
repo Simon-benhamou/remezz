@@ -87,14 +87,39 @@ export class CapitalPool {
   
   /**
    * Get available capital for new positions
-   * In live mode: uses real Binance balance minus our reservations
+   * 
+   * IMPORTANT: In both modes, we calculate:
+   *   available = totalCapital - reserved - inPosition
+   * 
+   * - PAPER: totalCapital is our virtual balance (updated with PnL)
+   * - LIVE: totalCapital is synced from Binance (already includes unrealized PnL in wallet balance)
+   * 
+   * The reservedByAgent and inPositionByAgent track OUR local state of what we've committed,
+   * which prevents double-spending when multiple agents try to open positions simultaneously.
    */
   getAvailableCapital(): number {
     let reserved = 0;
     let inPosition = 0;
     this.reservedByAgent.forEach(v => reserved += v);
     this.inPositionByAgent.forEach(v => inPosition += v);
-    return Math.max(0, this.totalCapitalUsd - reserved - inPosition);
+    const available = Math.max(0, this.totalCapitalUsd - reserved - inPosition);
+    return available;
+  }
+  
+  /**
+   * Get total capital (for display/logging)
+   */
+  getTotalCapital(): number {
+    return this.totalCapitalUsd;
+  }
+  
+  /**
+   * Get total margin in positions (for display/logging)
+   */
+  getInPositionsTotal(): number {
+    let total = 0;
+    this.inPositionByAgent.forEach(v => total += v);
+    return total;
   }
   
   /**
@@ -115,13 +140,15 @@ export class CapitalPool {
       const balance = await getBalanceFromWebSocket(this.userId, 'USDT');
       if (balance && balance.total > 0) {
         const oldTotal = this.totalCapitalUsd;
-        // Use wallet balance (free + locked/margin)
+        // Use wallet balance (total = free + locked/margin used by exchange)
+        // This is our "base" capital - the inPositionByAgent tracks what WE have committed
         this.totalCapitalUsd = balance.total;
         this.lastBalanceSync = now;
         this.hasEverSynced = true;
         
         if (Math.abs(oldTotal - this.totalCapitalUsd) > 0.01) {
-          console.log(`[CapitalPool] Live balance synced: $${oldTotal.toFixed(2)} -> $${this.totalCapitalUsd.toFixed(2)}`);
+          const inPos = this.getInPositionsTotal();
+          console.log(`[CapitalPool] Live balance synced: $${oldTotal.toFixed(2)} → $${this.totalCapitalUsd.toFixed(2)} | inPosition=$${inPos.toFixed(2)} | available=$${this.getAvailableCapital().toFixed(2)}`);
         }
         return true;
       } else {
@@ -143,22 +170,24 @@ export class CapitalPool {
   
   /**
    * Reserve capital for a potential trade
+   * This is a temporary hold before the order is placed
    */
   reserve(agentId: string, amountUsd: number): boolean {
     const available = this.getAvailableCapital();
     if (amountUsd > available) {
-      console.log(`[CapitalPool] Cannot reserve $${amountUsd} for ${agentId}, only $${available.toFixed(2)} available`);
+      console.log(`[CapitalPool] Cannot reserve $${amountUsd.toFixed(2)} for ${agentId}, only $${available.toFixed(2)} available (total=$${this.totalCapitalUsd.toFixed(2)}, inPos=$${this.getInPositionsTotal().toFixed(2)})`);
       return false;
     }
     
     const current = this.reservedByAgent.get(agentId) || 0;
     this.reservedByAgent.set(agentId, current + amountUsd);
-    console.log(`[CapitalPool] Reserved $${amountUsd.toFixed(2)} for ${agentId} (available: $${(available - amountUsd).toFixed(2)})`);
+    console.log(`[CapitalPool] Reserved $${amountUsd.toFixed(2)} for ${agentId} | available after: $${(available - amountUsd).toFixed(2)}`);
     return true;
   }
   
   /**
-   * Commit reserved capital to a position
+   * Commit reserved capital to an open position
+   * Called after the order is successfully placed on the exchange
    */
   commit(agentId: string, amountUsd: number): void {
     // Move from reserved to in-position
@@ -167,36 +196,63 @@ export class CapitalPool {
     
     const inPos = this.inPositionByAgent.get(agentId) || 0;
     this.inPositionByAgent.set(agentId, inPos + amountUsd);
-    console.log(`[CapitalPool] Committed $${amountUsd} for ${agentId}`);
+    console.log(`[CapitalPool] Committed $${amountUsd.toFixed(2)} for ${agentId} | total inPosition: $${this.getInPositionsTotal().toFixed(2)}`);
   }
   
   /**
    * Release capital when position is closed
+   * 
+   * IMPORTANT DIFFERENCE between modes:
+   * - PAPER: We must add PnL to totalCapitalUsd manually (no real exchange)
+   * - LIVE: We should NOT add PnL because the Binance balance already includes it.
+   *         We just clear our local tracking, then sync with exchange to get real balance.
    */
   release(agentId: string, amountUsd: number, pnlUsd: number = 0): void {
-    const inPos = this.inPositionByAgent.get(agentId) || 0;
-    this.inPositionByAgent.set(agentId, Math.max(0, inPos - amountUsd));
+    const inPosBefore = this.inPositionByAgent.get(agentId) || 0;
+    this.inPositionByAgent.set(agentId, Math.max(0, inPosBefore - amountUsd));
     
-    // Add PnL to total capital
-    this.totalCapitalUsd += pnlUsd;
-    console.log(`[CapitalPool] Released $${amountUsd} for ${agentId}, PnL: $${pnlUsd.toFixed(2)}, Total: $${this.totalCapitalUsd.toFixed(2)}`);
+    // Only add PnL in PAPER mode - in LIVE mode, the exchange balance already includes it
+    if (this.mode === 'paper') {
+      this.totalCapitalUsd += pnlUsd;
+      console.log(`[CapitalPool] PAPER Released $${amountUsd.toFixed(2)} for ${agentId} | PnL: $${pnlUsd.toFixed(2)} | New Total: $${this.totalCapitalUsd.toFixed(2)}`);
+    } else {
+      // In LIVE mode, just release the tracking - the sync will update totalCapitalUsd from Binance
+      console.log(`[CapitalPool] LIVE Released $${amountUsd.toFixed(2)} for ${agentId} | PnL: $${pnlUsd.toFixed(2)} (will sync from exchange)`);
+    }
   }
   
   /**
-   * Cancel a reservation
+   * Force sync after position close in live mode
+   * This ensures totalCapitalUsd reflects the real balance including realized PnL
+   */
+  async syncAfterPositionClose(): Promise<void> {
+    if (this.mode === 'live') {
+      console.log(`[CapitalPool] Forcing sync after position close...`);
+      await this.syncWithExchange(true);
+    }
+  }
+  
+  /**
+   * Cancel a reservation (when order fails or is cancelled)
    */
   cancelReservation(agentId: string): void {
+    const reserved = this.reservedByAgent.get(agentId) || 0;
     this.reservedByAgent.delete(agentId);
+    if (reserved > 0) {
+      console.log(`[CapitalPool] Cancelled reservation of $${reserved.toFixed(2)} for ${agentId}`);
+    }
   }
   
   /**
-   * Get pool status
+   * Get pool status for monitoring/display
    */
   getStatus(): {
     totalUsd: number;
     availableUsd: number;
     reservedUsd: number;
     inPositionsUsd: number;
+    mode: 'paper' | 'live';
+    lastSync: number;
     byAgent: Record<string, { reserved: number; inPosition: number }>;
   } {
     let reservedTotal = 0;
@@ -220,6 +276,8 @@ export class CapitalPool {
       availableUsd: this.getAvailableCapital(),
       reservedUsd: reservedTotal,
       inPositionsUsd: inPositionTotal,
+      mode: this.mode,
+      lastSync: this.lastBalanceSync,
       byAgent,
     };
   }
@@ -237,6 +295,21 @@ export class CapitalPool {
    */
   getMode(): 'paper' | 'live' {
     return this.mode;
+  }
+  
+  /**
+   * Debug: Log full state
+   */
+  debugLog(context: string): void {
+    const status = this.getStatus();
+    console.log(`[CapitalPool DEBUG - ${context}]`, {
+      mode: status.mode,
+      total: `$${status.totalUsd.toFixed(2)}`,
+      available: `$${status.availableUsd.toFixed(2)}`,
+      reserved: `$${status.reservedUsd.toFixed(2)}`,
+      inPositions: `$${status.inPositionsUsd.toFixed(2)}`,
+      byAgent: status.byAgent,
+    });
   }
 }
 
@@ -642,9 +715,10 @@ export class SimpleAgent {
     
     // Get available capital from pool
     const availableCapital = this.config.capitalPool.getAvailableCapital();
+    const poolStatus = this.config.capitalPool.getStatus();
     
-    // Log available capital for debugging
-    logger.info(`💰 [${symbol}] Available capital: $${availableCapital.toFixed(2)} | mode=${this.config.mode} | synced=${this.config.capitalPool.isSynced()}`);
+    // Log available capital for debugging - include full pool state
+    logger.info(`💰 [${symbol}] Capital Pool Status | mode=${this.config.mode} | total=$${poolStatus.totalUsd.toFixed(2)} | inPositions=$${poolStatus.inPositionsUsd.toFixed(2)} | available=$${availableCapital.toFixed(2)} | synced=${this.config.capitalPool.isSynced()}`);
     
     // V5.5: Get 24h volume for liquidity-aware position sizing
     let volume24h: number | undefined;
@@ -682,6 +756,20 @@ export class SimpleAgent {
     if (sizing.wasLiquidityCapped) {
       const targetNotional = availableCapital * MomentumConfig.RISK.POSITION_SIZE_PCT * sizing.suggestedLeverage;
       logger.warn(`🚨 [${symbol}] Position CAPPED by liquidity! Target notional=$${targetNotional.toFixed(0)} → Capped=$${sizing.notionalUsd.toFixed(0)} (max safe=$${sizing.maxSafePosition?.toFixed(0)}, tier=${sizing.liquidityTier})`);
+    }
+    
+    // 🔧 SAFETY CHECK: Validate position size is reasonable compared to available capital
+    // This catches cases where capital sync might have failed or returned wrong values
+    const maxReasonableNotional = availableCapital * 10; // Max 10x leverage equivalent
+    if (sizing.notionalUsd > maxReasonableNotional) {
+      logger.error(`🚫 [${symbol}] POSITION REJECTED - Notional ($${sizing.notionalUsd.toFixed(2)}) exceeds 10x available capital ($${availableCapital.toFixed(2)}). Likely capital sync issue.`);
+      return;
+    }
+    
+    // 🔧 SAFETY CHECK: Margin should not exceed 100% of capital
+    if (sizing.marginUsd > availableCapital) {
+      logger.error(`🚫 [${symbol}] POSITION REJECTED - Margin ($${sizing.marginUsd.toFixed(2)}) exceeds available capital ($${availableCapital.toFixed(2)}).`);
+      return;
     }
     
     // Check if position size is valid (minimum $20 notional)
@@ -731,18 +819,57 @@ export class SimpleAgent {
       // Commit MARGIN (not notional)
       this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
       
+      // Log the updated capital state after commit
+      const statusAfterCommit = this.config.capitalPool.getStatus();
+      logger.info(`💰 [${symbol}] Capital after PAPER entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
+      
       // Save to DB
       await this.savePositionToDb(position, 'paper_entry');
       
-      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
+      logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
       
     } else {
       // Live trade
       try {
+        // 🔧 FIX: Ensure markets are loaded before any exchange operation
+        // This is critical for setLeverage which needs market info to send correct parameters to Binance
+        const exchangeMarkets = (this.config.exchange as any).markets;
+        if (!exchangeMarkets || Object.keys(exchangeMarkets).length === 0) {
+          logger.info(`🔄 [${symbol}] Loading exchange markets (required for setLeverage)...`);
+          try {
+            await (this.config.exchange as any).loadMarkets();
+            const loadedMarkets = (this.config.exchange as any).markets;
+            logger.info(`✅ [${symbol}] Markets loaded: ${Object.keys(loadedMarkets || {}).length} markets`);
+          } catch (mkErr: any) {
+            logger.error(`❌ [${symbol}] Failed to load markets:`, mkErr?.message);
+            // Continue anyway - setLeverage might still work with manual symbol conversion
+          }
+        }
+        
         // Set leverage - Binance Futures requires integer leverage
         const intLeverage = Math.round(sizing.suggestedLeverage);
         logger.info(`🔧 [${symbol}] Setting leverage: ${sizing.suggestedLeverage} → ${intLeverage} (rounded to integer for Binance)`);
-        await this.config.exchange.setLeverage(intLeverage, symbol);
+        
+        // 🔧 FIX: Convert symbol to Binance format if needed (e.g., ETH/USDT:USDT → ETHUSDT)
+        // Some CCXT versions/exchanges need the raw symbol format
+        const binanceSymbol = symbol.replace('/', '').replace(':USDT', '');
+        try {
+          await this.config.exchange.setLeverage(intLeverage, symbol);
+        } catch (levErr: any) {
+          // If setLeverage fails with the CCXT symbol, try with Binance format
+          if (levErr?.message?.includes('leverage') || levErr?.code === -1102) {
+            logger.warn(`⚠️ [${symbol}] setLeverage failed with CCXT symbol, trying Binance format: ${binanceSymbol}`);
+            try {
+              await this.config.exchange.setLeverage(intLeverage, binanceSymbol);
+              logger.info(`✅ [${symbol}] Leverage set successfully with Binance format`);
+            } catch (retryErr: any) {
+              logger.error(`❌ [${symbol}] setLeverage failed even with Binance format:`, retryErr?.message);
+              throw retryErr;
+            }
+          } else {
+            throw levErr;
+          }
+        }
         
         // Format quantity to exchange precision (critical for Binance Futures)
         const formattedQty = this.formatQtyForExchange(symbol, sizing.qty);
@@ -784,13 +911,17 @@ export class SimpleAgent {
         // Commit MARGIN (not notional)
         this.config.capitalPool.commit(this.config.sessionId, sizing.marginUsd);
         
+        // Log the updated capital state after commit
+        const statusAfterCommit = this.config.capitalPool.getStatus();
+        logger.info(`💰 [${symbol}] Capital after LIVE entry: total=$${statusAfterCommit.totalUsd.toFixed(2)} | inPositions=$${statusAfterCommit.inPositionsUsd.toFixed(2)} | available=$${statusAfterCommit.availableUsd.toFixed(2)}`);
+        
         // Save to DB
         await this.savePositionToDb(position, 'live_entry');
         
         // Set stop loss on exchange
         await this.setStopLossOnExchange(position);
         
-        logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | SL=$${position.stopLoss?.toFixed(4)}`);
+        logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
         
         this.config.onTrade?.({
           symbol,
@@ -926,8 +1057,16 @@ export class SimpleAgent {
         
         this.position = null;
         
-        // Release MARGIN (not notional) with PnL
+        // Release margin from our tracking (PnL is passed for logging but NOT added to totalCapitalUsd in live mode)
         this.config.capitalPool.release(this.config.sessionId, marginToRelease, actualPnlUsd);
+        
+        // 🔧 CRITICAL: Sync with exchange to get the real balance after position close
+        // This ensures totalCapitalUsd reflects the actual Binance balance (which includes realized PnL)
+        await this.config.capitalPool.syncAfterPositionClose();
+        
+        // Log the updated capital state
+        const newStatus = this.config.capitalPool.getStatus();
+        logger.info(`💰 [${symbol}] Capital after close: total=$${newStatus.totalUsd.toFixed(2)} | available=$${newStatus.availableUsd.toFixed(2)} | inPositions=$${newStatus.inPositionsUsd.toFixed(2)}`);
         
         // Pass the real exchange orderId for proper tracking
         await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id);

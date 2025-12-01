@@ -488,10 +488,45 @@ app.post("/api/agent/start", async (req, res) => {
       });
     }
     
-    // 🔧 FIX: Calculate accumulated PnL from past sessions to restore actual capital
-    // This ensures capital is not reset after redeployment
-    let accumulatedPnl = 0;
-    if (mode === 'paper') {
+    // Get exchange first (needed for balance fetch in live mode)
+    const exchange = await getExchangeForUser(userId);
+    
+    // 🔧 FIX: Calculate actual starting capital based on mode
+    let actualCapital = capitalUsd;
+    
+    if (mode === 'live') {
+      // 🔴 LIVE MODE: ALWAYS use real Binance balance, ignore capitalUsd parameter
+      try {
+        // Ensure markets are loaded for the exchange (critical for setLeverage later)
+        if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
+          logger.info('[Live] Loading markets for exchange...');
+          await exchange.loadMarkets();
+          logger.info(`[Live] Markets loaded: ${Object.keys(exchange.markets).length} markets`);
+        }
+        
+        const balance = await exchange.fetchBalance({ type: 'future' });
+        const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+        
+        if (totalUsdt > 0) {
+          actualCapital = totalUsdt;
+          logger.info(`✅ [Live] Using REAL Binance balance: $${actualCapital.toFixed(2)} (ignoring request capitalUsd: $${capitalUsd})`);
+        } else {
+          // If balance fetch returned 0, refuse to start - this prevents trading with wrong capital
+          logger.error(`❌ [Live] Binance balance is $0 or fetch failed. Cannot start live trading.`);
+          return res.status(400).json({ 
+            error: 'Cannot fetch Binance balance. Please check your API keys and try again.',
+            detail: 'Live mode requires real balance from Binance to prevent over-sizing positions.'
+          });
+        }
+      } catch (err: any) {
+        logger.error('[Live] Failed to fetch Binance balance:', err?.message || err);
+        return res.status(500).json({ 
+          error: 'Failed to fetch Binance balance. Check API keys.',
+          detail: err?.message || 'Unknown error'
+        });
+      }
+    } else {
+      // 🟢 PAPER MODE: Use capitalUsd + accumulated PnL from past sessions
       try {
         const pastKpis = await prisma.sessionKpi.findMany({
           where: {
@@ -504,20 +539,17 @@ app.post("/api/agent/start", async (req, res) => {
             realizedPnlUsd: true,
           }
         });
-        accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
-        logger.info(`[Capital Restore] Found ${pastKpis.length} sessions with accumulated PnL for user ${userId}: $${accumulatedPnl.toFixed(2)}`);
+        const accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+        actualCapital = capitalUsd + accumulatedPnl;
+        logger.info(`[Paper] Capital: $${capitalUsd} (initial) + $${accumulatedPnl.toFixed(2)} (accumulated PnL) = $${actualCapital.toFixed(2)}`);
       } catch (err) {
-        logger.warn('[Capital Restore] Failed to fetch accumulated PnL:', err);
+        logger.warn('[Paper] Failed to fetch accumulated PnL:', err);
+        actualCapital = capitalUsd;
       }
     }
     
-    // Actual capital = initial capital + accumulated PnL
-    const actualCapital = capitalUsd + accumulatedPnl;
-    logger.info(`[Capital Restore] Starting agents with capital: $${capitalUsd} (initial from settings) + $${accumulatedPnl.toFixed(2)} (accumulated PnL) = $${actualCapital.toFixed(2)} (actual)`);
-    logger.info(`[Capital Restore] Mode: ${mode}, User: ${userId}`);
-    
-    // Get exchange
-    const exchange = await getExchangeForUser(userId);
+    logger.info(`[Capital] Starting agents with $${actualCapital.toFixed(2)} (mode: ${mode})`);
+    logger.info(`[Capital] Mode: ${mode}, User: ${userId}`);
     
     // Create sessions for each symbol
     const sessionIds: { btc: string; eth: string; sol: string; xrp: string } = {
@@ -578,14 +610,13 @@ app.post("/api/agent/start", async (req, res) => {
       await agent.start();
     }
     
-    logger.info(`✅ Started ${agents.length} agents for ${userId} with $${actualCapital.toFixed(2)} capital (${mode}) [initial: $${capitalUsd}, pnl: $${accumulatedPnl.toFixed(2)}]`);
+    logger.info(`✅ Started ${agents.length} agents for ${userId} with $${actualCapital.toFixed(2)} capital (${mode})`);
     res.status(201).json({ 
       success: true, 
       agentsCount: agents.length,
       symbols: MomentumConfig.SYMBOLS,
       capitalUsd: actualCapital,
       initialCapitalUsd: capitalUsd,
-      accumulatedPnlUsd: accumulatedPnl,
       mode,
     });
   } catch (error) {
