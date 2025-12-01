@@ -79,8 +79,9 @@ export class CapitalPool {
     this.totalCapitalUsd = initialCapitalUsd;
     this.mode = mode;
     this.userId = userId || null;
-    // For live mode, mark as not synced until we get real balance
-    this.hasEverSynced = mode === 'paper'; // Paper mode doesn't need sync
+    // Paper mode uses provided capital directly (no exchange sync needed)
+    // Live mode requires syncing with exchange before trading
+    this.hasEverSynced = (mode === 'paper');
     console.log(`[CapitalPool] Created ${mode} pool with $${initialCapitalUsd}${mode === 'live' ? ' (will sync with Binance)' : ''}`);
   }
   
@@ -99,10 +100,11 @@ export class CapitalPool {
   /**
    * Sync total capital with real Binance balance (live mode only)
    * @param force - If true, skip the throttle check and force sync
-   * @returns true if sync was successful, false otherwise
+   * @returns true if sync was successful or not needed (paper mode), false otherwise
    */
   async syncWithExchange(force: boolean = false): Promise<boolean> {
-    if (this.mode !== 'live' || !this.userId) return true; // Paper mode always "synced"
+    // Paper mode uses provided capital, no exchange sync needed - always considered "synced"
+    if (this.mode !== 'live' || !this.userId) return true;
     
     const now = Date.now();
     if (!force && now - this.lastBalanceSync < this.BALANCE_SYNC_INTERVAL_MS) {
@@ -628,8 +630,8 @@ export class SimpleAgent {
     // Sync with exchange balance before checking capital (live mode)
     // For live mode, force sync on first position attempt to ensure we have real balance
     if (this.config.mode === 'live') {
-      const forceSync = !this.config.capitalPool.isSynced();
-      await this.config.capitalPool.syncWithExchange(forceSync);
+      // Force sync if we haven't successfully synced yet
+      await this.config.capitalPool.syncWithExchange(!this.config.capitalPool.isSynced());
       
       // In live mode, don't open positions if we haven't successfully synced with exchange
       if (!this.config.capitalPool.isSynced()) {
