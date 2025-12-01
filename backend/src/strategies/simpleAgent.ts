@@ -345,6 +345,9 @@ export class SimpleAgent {
   private readonly CACHE_TTL_MS = 120_000; // 2 minutes (increased to reduce API calls)
   private wsSubscribed = false; // Track if WebSocket kline subscription is active
   
+  // Guard against concurrent tick execution (prevents re-entrancy/recursion)
+  private tickInProgress = false;
+  
   constructor(config: SimpleAgentConfig) {
     this.config = config;
   }
@@ -424,18 +427,27 @@ export class SimpleAgent {
   private async tick(): Promise<void> {
     if (!this.running) return;
     
-    const now = new Date();
-    const symbol = this.config.symbol;
-    this.tickCount = (this.tickCount || 0) + 1;
-    this.lastTickAt = Date.now();
+    // Prevent re-entrancy: skip if a tick is already in progress
+    // This prevents stack overflow when tick() takes longer than the interval
+    if (this.tickInProgress) {
+      logger.warn(`⚠️ [${this.config.symbol}] Tick skipped - previous tick still in progress`);
+      return;
+    }
     
-    // Log every tick to confirm agent is alive
-    const positionStatus = this.position 
-      ? `IN_${this.position.side.toUpperCase()} @ $${this.position.entryPrice.toFixed(2)}` 
-      : 'WATCHING';
-    logger.info(`🔄 [${symbol}] Tick #${this.tickCount} | ${positionStatus} | mode=${this.config.mode}`);
+    this.tickInProgress = true;
     
     try {
+      const now = new Date();
+      const symbol = this.config.symbol;
+      this.tickCount = (this.tickCount || 0) + 1;
+      this.lastTickAt = Date.now();
+      
+      // Log every tick to confirm agent is alive
+      const positionStatus = this.position 
+        ? `IN_${this.position.side.toUpperCase()} @ $${this.position.entryPrice.toFixed(2)}` 
+        : 'WATCHING';
+      logger.info(`🔄 [${symbol}] Tick #${this.tickCount} | ${positionStatus} | mode=${this.config.mode}`);
+      
       // 🔄 LIVE MODE: Sync with exchange first to detect stop loss executions
       if (this.config.mode === 'live') {
         await this.syncWithExchange();
@@ -483,8 +495,11 @@ export class SimpleAgent {
       await this.checkEntry();
       
     } catch (error) {
-      logger.error(`❌ [${symbol}] Tick error:`, error);
+      logger.error(`❌ [${this.config.symbol}] Tick error:`, error);
       this.config.onError?.(error as Error);
+    } finally {
+      // Always release the lock, even if an error occurred
+      this.tickInProgress = false;
     }
   }
   
