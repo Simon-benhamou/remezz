@@ -2913,17 +2913,20 @@ process.on('SIGINT', shutdown);
       return;
     }
     
-    // Group by user
-    const sessionsByUser = new Map<string, any[]>();
+    // 🔧 FIX: Group by user AND mode (userId_paper, userId_live)
+    const sessionsByUserMode = new Map<string, any[]>();
     for (const session of activeSessions) {
       if (!session.userId) continue;
-      const existing = sessionsByUser.get(session.userId) || [];
+      const key = `${session.userId}_${session.mode}`;
+      const existing = sessionsByUserMode.get(key) || [];
       existing.push(session);
-      sessionsByUser.set(session.userId, existing);
+      sessionsByUserMode.set(key, existing);
     }
     
-    // Restore each user's agents - ONLY the ones that exist
-    for (const [userId, sessions] of sessionsByUser) {
+    // Restore each user's agents by mode
+    for (const [userModeKey, sessions] of sessionsByUserMode) {
+      const [userId, mode] = userModeKey.split('_') as [string, 'paper' | 'live'];
+      
       try {
         const exchange = await getExchangeForUser(userId);
         
@@ -2940,8 +2943,6 @@ process.on('SIGINT', shutdown);
             initialCapitalUsd = parseFloat(setting.value) || initialCapitalUsd;
           }
         } catch {}
-        
-        const mode = sessions[0]?.mode as 'paper' | 'live' || 'paper';
         
         // 🔧 FIX: For PAPER mode, calculate current capital = initial + realized PnL from all sessions
         // 🔧 FIX: For LIVE mode, ALWAYS fetch real balance from Binance
