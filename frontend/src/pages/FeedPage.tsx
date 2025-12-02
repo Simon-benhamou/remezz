@@ -318,23 +318,37 @@ export default function FeedPage() {
                 dot: getLogIcon(log.kind),
                 color: tickData?.hasPosition ? '#52c41a' : getLogColor(log.kind, log.level),
                 children: (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-                      <Space size={4}>
-                        <Tag>{log.symbol}</Tag>
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                      <Space size={6}>
+                        <Tag style={{ margin: 0 }}>{log.symbol}</Tag>
                         {tickData ? (
-                          // Condensed tick display
+                          // Condensed tick display - cleaner UI
                           <>
-                            <Tag color={tickData.hasPosition ? 'green' : 'default'}>
-                              #{tickData.tickNum}
+                            <Tag 
+                              color={tickData.mode === 'live' ? 'red' : 'blue'}
+                              style={{ margin: 0, fontSize: 10 }}
+                            >
+                              {tickData.mode?.toUpperCase()}
                             </Tag>
-                            <Text style={{ color: tickData.hasPosition ? '#52c41a' : '#8c8c8c' }}>
+                            <Text type="secondary" style={{ fontSize: 12 }}>#{tickData.tickNum}</Text>
+                            <Tag 
+                              color={tickData.hasPosition ? 'green' : 'default'}
+                              style={{ margin: 0 }}
+                            >
                               {tickData.status}
-                            </Text>
-                            <Text type="secondary">${tickData.price}</Text>
+                            </Tag>
+                            <Text style={{ fontSize: 13 }}>${tickData.price}</Text>
                             {tickData.reason && (
-                              <Text type="secondary" style={{ fontSize: 11, color: '#ff7875' }}>
-                                ❌ {tickData.reason}
+                              <Text 
+                                type="secondary" 
+                                style={{ 
+                                  fontSize: 11, 
+                                  color: '#8c8c8c',
+                                  fontStyle: 'italic',
+                                }}
+                              >
+                                → {tickData.reason}
                               </Text>
                             )}
                           </>
@@ -347,12 +361,12 @@ export default function FeedPage() {
                               log.kind === 'signal' ? 'gold' :
                               log.kind === 'order' ? 'purple' :
                               'default'
-                            }>{log.kind}</Tag>
+                            } style={{ margin: 0 }}>{log.kind}</Tag>
                             <Text strong>{log.message}</Text>
                           </>
                         )}
                       </Space>
-                      <Text type="secondary" style={{ fontSize: 11 }}>
+                      <Text type="secondary" style={{ fontSize: 10 }}>
                         {new Date(log.timestamp).toLocaleTimeString()}
                       </Text>
                     </div>
