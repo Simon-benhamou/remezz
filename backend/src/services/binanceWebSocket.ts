@@ -2215,7 +2215,34 @@ class BinanceWebSocketManager {
   }
 
   /**
-   * 🔌 Unsubscribe from User Data Stream
+   * � Seed Position Cache from REST API (called at startup)
+   * This is needed because WebSocket only sends position updates when they change
+   */
+  seedPosition(userId: string, symbol: string, payload: { 
+    positionAmt: number; 
+    entryPrice: number; 
+    unrealizedPnl: number;
+    marginType?: string;
+  }): void {
+    const normalizedSymbol = toBinanceSymbolId(symbol);
+    const cacheKey = `${userId}_${normalizedSymbol}`;
+    
+    const positionData: BinancePositionData = {
+      symbol: normalizedSymbol,
+      positionAmt: payload.positionAmt,
+      entryPrice: payload.entryPrice,
+      unrealizedPnl: payload.unrealizedPnl,
+      marginType: payload.marginType || 'cross',
+      isolatedWallet: 0,
+      side: payload.positionAmt > 0 ? 'long' : payload.positionAmt < 0 ? 'short' : 'none',
+      timestamp: Date.now(),
+    };
+    
+    this.positionCache.set(cacheKey, positionData);
+  }
+
+  /**
+   * �🔌 Unsubscribe from User Data Stream
    */
   unsubscribeFromUserData(userId: string): void {
     const stream = this.userDataStreams.get(userId);
@@ -3121,4 +3148,14 @@ export async function subscribeToUserData(userId: string, apiKey: string, apiSec
 export function seedBalanceCache(userId: string, asset: string, payload: { free: number; locked: number; total: number; timestamp?: number }): void {
   const ws = getBinanceWebSocket();
   ws.seedBalance(userId, asset, payload);
+}
+
+export function seedPositionCache(userId: string, symbol: string, payload: { 
+  positionAmt: number; 
+  entryPrice: number; 
+  unrealizedPnl: number;
+  marginType?: string;
+}): void {
+  const ws = getBinanceWebSocket();
+  ws.seedPosition(userId, symbol, payload);
 }

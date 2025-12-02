@@ -28,7 +28,7 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
-import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, seedPositionCache, toBinanceSymbolId } from '../services/binanceWebSocket.js';
 import { notifyTradeEntry, notifyTradeExit } from '../services/notificationService.js';
 
 const logger = createLogger('agent');
@@ -447,7 +447,7 @@ export class SimpleAgent {
   
   // Position sync throttling (WebSocket is primary, REST is fallback)
   private lastPositionSync: number = 0;
-  private readonly POSITION_SYNC_INTERVAL_MS = 10_000; // 10 seconds (fast since WS is 0 weight)
+  private readonly POSITION_SYNC_INTERVAL_MS = 30_000; // 30 seconds (REST fallback, not WS)
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
@@ -1586,7 +1586,8 @@ export class SimpleAgent {
         entryPrice = wsPosition.entryPrice;
         unrealizedPnl = wsPosition.unrealizedPnl;
       } else if (this.config.exchange.fetchPositions) {
-        // Fallback to REST API only if WebSocket cache is empty (first run or WS not connected)
+        // REST API fallback - this is normal since userData WebSocket is not connected
+        // The sync is throttled (every 30s by default) so this doesn't cause rate limits
         try {
           const fetchPosFn = this.config.exchange.fetchPositions.bind(this.config.exchange);
           const exchangePositions = await fetchPosFn([symbol]);
@@ -1596,12 +1597,14 @@ export class SimpleAgent {
             p.info?.symbol === toBinanceSymbolId(symbol)
           );
           
+          const positionAmt = parseFloat(exchangePos?.info?.positionAmt || '0');
           exchangeQty = Math.abs(parseFloat(exchangePos?.contracts || exchangePos?.info?.positionAmt || '0'));
-          exchangeSide = parseFloat(exchangePos?.info?.positionAmt || '0') > 0 ? 'long' : 'short';
+          exchangeSide = positionAmt > 0 ? 'long' : 'short';
           entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
           unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
           
-          logger.info(`📡 [${symbol}] REST fallback used for position sync (WS cache miss)`);
+          // Note: We don't seed WS cache because userData stream is not connected
+          // REST is used for every sync, which is fine since it's throttled
         } catch (restErr: any) {
           // Log but don't throw - we'll try again next sync
           if (restErr.message?.includes('429') || restErr.message?.includes('Too Many')) {
