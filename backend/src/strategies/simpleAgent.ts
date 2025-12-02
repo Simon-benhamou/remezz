@@ -595,10 +595,16 @@ export class SimpleAgent {
       // 2. Sinon, chercher une entrée (this sets lastRejectReason)
       await this.checkEntry();
       
-      // 📋 LOG: One line per tick with reject reason
+      // 📋 LOG: One line per tick with features summary
       const shortSymbol = symbol.replace('/USDT:USDT', '');
-      const reason = this.lastRejectReason ? this.lastRejectReason.substring(0, 40) : 'checking';
-      logger.info(`🔄 [${shortSymbol}] #${this.tickCount} WATCH | $${currentPrice.toFixed(2)} | ❌ ${reason} | ${this.config.mode}`);
+      const f = this.lastSignalFeatures;
+      // Show key metrics: vol ratio, ROC%, BB distance
+      const featuresSummary = f 
+        ? `vol=${f.volRatio.toFixed(1)}x roc=${f.roc.toFixed(1)}% bb=${f.bbDistance > 0 ? '+' : ''}${f.bbDistance.toFixed(1)}%`
+        : 'no_data';
+      // Simplified reject reason (just the key part)
+      const rejectKey = this.lastRejectReason?.split(':')[1]?.split('(')[0] || this.lastRejectReason?.split(':')[0] || '';
+      logger.info(`🔄 [${shortSymbol}] #${this.tickCount} WATCH | $${currentPrice.toFixed(2)} | ${featuresSummary} | ${rejectKey} | ${this.config.mode}`);
       
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Tick error:`, error);

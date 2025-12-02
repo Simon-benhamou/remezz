@@ -72,27 +72,40 @@ function getLogColor(kind: string, level: string) {
   }
 }
 
-// Parse condensed tick message: "🔄 [SOL] #1 WATCH | $127.16 | ❌ reason | live"
+// Parse condensed tick message: "🔄 [SOL] #1 WATCH | $127.16 | vol=1.5x roc=0.3% bb=-0.5% | bearish_candle | live"
 function parseTickMessage(message: string): { 
   tickNum?: number; 
   status?: string; 
   price?: string; 
-  reason?: string;
+  features?: string;  // vol, roc, bb
+  rejectKey?: string; // simplified reject reason
   mode?: string;
   hasPosition?: boolean;
 } | null {
-  // Match patterns like: [SOL] #1 WATCH | $127.16 | ❌ reason | live
+  // Match patterns like: [SOL] #1 WATCH | $127.16 | vol=1.5x roc=0.3% bb=-0.5% | bearish_candle | live
   // Or: [SOL] #1 IN_SHORT@$127.00 | $126.50 | live
-  const watchMatch = message.match(/#(\d+)\s+(WATCH|IN_\w+@?\$?[\d.]*)\s*\|\s*\$?([\d.]+)\s*\|\s*(?:❌\s*)?([^|]+)?\s*\|\s*(\w+)/);
+  const watchMatch = message.match(/#(\d+)\s+(WATCH|IN_\w+@?\$?[\d.]*)\s*\|\s*\$?([\d.]+)\s*\|\s*([^|]+)\s*\|\s*([^|]*)\s*\|\s*(\w+)/);
   if (watchMatch) {
     const status = watchMatch[2];
     return {
       tickNum: parseInt(watchMatch[1]),
       status: status,
       price: watchMatch[3],
-      reason: watchMatch[4]?.trim() || undefined,
-      mode: watchMatch[5],
+      features: watchMatch[4]?.trim() || undefined,
+      rejectKey: watchMatch[5]?.trim() || undefined,
+      mode: watchMatch[6],
       hasPosition: status.startsWith('IN_'),
+    };
+  }
+  // Fallback for IN_POSITION format (no features/reject)
+  const posMatch = message.match(/#(\d+)\s+(IN_\w+@?\$?[\d.]*)\s*\|\s*\$?([\d.]+)\s*\|\s*(\w+)/);
+  if (posMatch) {
+    return {
+      tickNum: parseInt(posMatch[1]),
+      status: posMatch[2],
+      price: posMatch[3],
+      mode: posMatch[4],
+      hasPosition: true,
     };
   }
   return null;
@@ -339,17 +352,24 @@ export default function FeedPage() {
                               {tickData.status}
                             </Tag>
                             <Text style={{ fontSize: 13 }}>${tickData.price}</Text>
-                            {tickData.reason && (
+                            {tickData.features && (
                               <Text 
                                 type="secondary" 
                                 style={{ 
                                   fontSize: 11, 
-                                  color: '#8c8c8c',
-                                  fontStyle: 'italic',
+                                  fontFamily: 'monospace',
                                 }}
                               >
-                                → {tickData.reason}
+                                {tickData.features}
                               </Text>
+                            )}
+                            {tickData.rejectKey && (
+                              <Tag 
+                                color="orange"
+                                style={{ margin: 0, fontSize: 10 }}
+                              >
+                                {tickData.rejectKey}
+                              </Tag>
                             )}
                           </>
                         ) : (
