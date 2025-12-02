@@ -1949,33 +1949,150 @@ app.post("/api/agent/creation/activate", async (req, res) => {
   }
 });
 
-// Restart session
+// Restart session - stops and restarts agents with fresh state
 app.post("/api/agent/restart", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
-    const { mode } = req.body;
+    if (!userId) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
     
-    // Stop agents for specified mode (or all if no mode)
-    const modesToStop: ('paper' | 'live')[] = mode ? [mode as 'paper' | 'live'] : ['paper', 'live'];
+    const { mode, capitalUsd = 10000 } = req.body;
     
-    for (const m of modesToStop) {
-      const agentKey = getAgentKey(userId, m);
-      const agentData = userAgents.get(agentKey);
-      if (agentData) {
-        for (const agent of agentData.agents) {
-          await agent.stop();
+    if (!mode || !['paper', 'live'].includes(mode)) {
+      return res.status(400).json({ error: "Mode must be 'paper' or 'live'" });
+    }
+    
+    const modeTyped = mode as 'paper' | 'live';
+    const agentKey = getAgentKey(userId, modeTyped);
+    
+    // 1. Stop existing agents for this mode
+    const existingAgents = userAgents.get(agentKey);
+    if (existingAgents) {
+      logger.info(`[Restart] Stopping ${existingAgents.agents.length} existing ${mode} agents...`);
+      for (const agent of existingAgents.agents) {
+        await agent.stop();
+      }
+      userAgents.delete(agentKey);
+    }
+    
+    // 2. Get exchange
+    const exchange = await getExchangeForUser(userId);
+    
+    // 3. Calculate actual capital based on mode
+    let actualCapital = capitalUsd;
+    
+    if (modeTyped === 'live') {
+      // 🔴 LIVE MODE: ALWAYS use real Binance balance
+      try {
+        if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
+          await exchange.loadMarkets();
         }
-        userAgents.delete(agentKey);
+        
+        const balance = await exchange.fetchBalance({ type: 'future' });
+        const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+        
+        if (totalUsdt > 0) {
+          actualCapital = totalUsdt;
+          logger.info(`✅ [Restart Live] Using REAL Binance balance: $${actualCapital.toFixed(2)}`);
+        } else {
+          return res.status(400).json({ 
+            error: 'Binance balance is $0. Cannot restart live trading.',
+          });
+        }
+      } catch (err: any) {
+        logger.error('[Restart Live] Failed to fetch Binance balance:', err?.message || err);
+        return res.status(500).json({ error: 'Failed to fetch Binance balance' });
+      }
+    } else {
+      // 🟢 PAPER MODE: Use capitalUsd + accumulated PnL
+      try {
+        const pastKpis = await prisma.sessionKpi.findMany({
+          where: {
+            session: { userId, mode: 'paper' }
+          },
+          select: { realizedPnlUsd: true }
+        });
+        const accumulatedPnl = pastKpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+        actualCapital = capitalUsd + accumulatedPnl;
+        logger.info(`[Restart Paper] Capital: $${capitalUsd} + $${accumulatedPnl.toFixed(2)} PnL = $${actualCapital.toFixed(2)}`);
+      } catch (err) {
+        logger.warn('[Restart Paper] Failed to fetch accumulated PnL:', err);
+        actualCapital = capitalUsd;
       }
     }
     
+    // 4. Create new sessions
+    const sessionIds: { btc: string; eth: string; sol: string; xrp: string } = {
+      btc: '', eth: '', sol: '', xrp: ''
+    };
+    
+    const symbolToKey: Record<string, keyof typeof sessionIds> = {
+      'BTC/USDT:USDT': 'btc',
+      'ETH/USDT:USDT': 'eth',
+      'SOL/USDT:USDT': 'sol',
+      'XRP/USDT:USDT': 'xrp',
+    };
+    
+    for (const symbol of MomentumConfig.SYMBOLS) {
+      const session = await prisma.agentSession.create({
+        data: {
+          userId,
+          symbol,
+          mode: modeTyped,
+          profileJson: { capitalUsd: actualCapital, symbol },
+        }
+      });
+      const key = symbolToKey[symbol];
+      if (key) sessionIds[key] = session.id;
+    }
+    
+    // 5. Create and start all agents
+    const { agents, capitalPool } = await createAllAgents({
+      exchange,
+      prisma,
+      userId,
+      sessionIds,
+      totalCapitalUsd: actualCapital,
+      mode: modeTyped,
+    });
+    
+    userAgents.set(agentKey, { agents, capitalPool, mode: modeTyped });
+    
+    // 6. Configure and start each agent
+    for (const agent of agents) {
+      agent.setOnTick((tick) => {
+        broadcast('tick', {
+          sessionId: agent.getStatus().sessionId,
+          symbol: tick.symbol,
+          price: tick.price,
+          hasPosition: tick.hasPosition,
+          positionSide: tick.positionSide,
+          support: tick.support,
+          resistance: tick.resistance,
+          tickCount: tick.tickCount,
+          timestamp: tick.timestamp.toISOString(),
+        }, tick.symbol);
+      });
+      
+      await agent.start();
+    }
+    
+    logger.info(`✅ [Restart] ${modeTyped.toUpperCase()} agents restarted with $${actualCapital.toFixed(2)}`);
+    
     res.json({
       success: true,
-      message: "Agents stopped. Use /api/agent/start to restart.",
-      modes: modesToStop,
+      message: `${modeTyped.toUpperCase()} agents restarted successfully`,
+      mode: modeTyped,
+      capital: actualCapital,
+      agents: agents.map(a => ({
+        symbol: a.getStatus().symbol,
+        sessionId: a.getStatus().sessionId,
+      })),
     });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to restart" });
+  } catch (error: any) {
+    logger.error('[Restart] Failed:', error);
+    res.status(500).json({ error: "Failed to restart", detail: error?.message });
   }
 });
 

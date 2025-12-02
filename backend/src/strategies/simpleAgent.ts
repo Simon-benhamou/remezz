@@ -417,6 +417,7 @@ export class SimpleAgent {
   private tickCount: number = 0;
   private lastTickAt: number = 0;
   private lastPrice: number = 0;
+  private lastRejectReason: string = ''; // Track why no signal
   
   // Current trading state for frontend display
   private currentBias: 'long' | 'short' | null = null;
@@ -550,12 +551,6 @@ export class SimpleAgent {
       this.tickCount = (this.tickCount || 0) + 1;
       this.lastTickAt = Date.now();
       
-      // Log every tick to confirm agent is alive
-      const positionStatus = this.position 
-        ? `IN_${this.position.side.toUpperCase()} @ $${this.position.entryPrice.toFixed(2)}` 
-        : 'WATCHING';
-      logger.info(`🔄 [${symbol}] Tick #${this.tickCount} | ${positionStatus} | mode=${this.config.mode}`);
-      
       // 🔄 LIVE MODE: Sync with exchange first to detect stop loss executions
       if (this.config.mode === 'live') {
         await this.syncWithExchange();
@@ -568,10 +563,6 @@ export class SimpleAgent {
       this.lastMarketConditions = getMarketConditions(btcCandles);
       this.config.onMarketConditions?.(this.lastMarketConditions);
       
-      // Log market conditions for decision visibility
-      const mc = this.lastMarketConditions;
-      logger.info(`📊 [${symbol}] Market: ${mc.overallStatus} | BTC trend=${mc.btcTrend} mom6h=${mc.btcMomentum6h.toFixed(2)}% | Day=${mc.dayOfWeek} trading=${mc.isTradingDay}`);
-      
       // Fetch current candles for price and S/R
       const candles = await this.fetchCandles();
       const currentPrice = candles.length > 0 ? candles[candles.length - 1].close : this.lastPrice;
@@ -581,7 +572,7 @@ export class SimpleAgent {
       const recentHigh = Math.max(...candles.slice(-20).map(c => c.high));
       const recentLow = Math.min(...candles.slice(-20).map(c => c.low));
       
-      // 🔔 Broadcast tick to frontend via callback
+      // � Broadcast tick to frontend via callback
       this.config.onTick?.({
         symbol,
         price: currentPrice,
@@ -595,12 +586,19 @@ export class SimpleAgent {
       
       // 1. Si on a une position, checker l'exit avec trailing
       if (this.position) {
+        const shortSymbol = symbol.replace('/USDT:USDT', '');
+        logger.info(`🔄 [${shortSymbol}] #${this.tickCount} IN_${this.position.side.toUpperCase()}@$${this.position.entryPrice.toFixed(2)} | $${currentPrice.toFixed(2)} | ${this.config.mode}`);
         await this.checkExit(this.position);
         return; // Don't look for new entries while in position
       }
       
-      // 2. Sinon, chercher une entrée
+      // 2. Sinon, chercher une entrée (this sets lastRejectReason)
       await this.checkEntry();
+      
+      // 📋 LOG: One line per tick with reject reason
+      const shortSymbol = symbol.replace('/USDT:USDT', '');
+      const reason = this.lastRejectReason ? this.lastRejectReason.substring(0, 40) : 'checking';
+      logger.info(`🔄 [${shortSymbol}] #${this.tickCount} WATCH | $${currentPrice.toFixed(2)} | ❌ ${reason} | ${this.config.mode}`);
       
     } catch (error) {
       logger.error(`❌ [${this.config.symbol}] Tick error:`, error);
@@ -617,12 +615,16 @@ export class SimpleAgent {
   
   private async checkEntry(): Promise<void> {
     const symbol = this.config.symbol;
+    const shortSymbol = symbol.replace('/USDT:USDT', '');
     
     try {
       // Fetch candles pour le symbol
       const candles = await this.fetchCandles();
       if (candles.length < 60) {
-        logger.info(`⚠️ [${symbol}] Not enough candles (${candles.length}/60)`);
+        // Only log this warning once every 10 ticks to reduce spam
+        if (this.tickCount % 10 === 1) {
+          logger.info(`⚠️ [${shortSymbol}] Not enough candles (${candles.length}/60)`);
+        }
         return;
       }
       
@@ -636,11 +638,9 @@ export class SimpleAgent {
       // Check signal (returns side: 'long' or 'short')
       const signal = checkMomentumSignal(symbol, candles, btcCandles);
       
-      // Log signal analysis result
+      // Process signal features silently (no log)
       const f = signal.features;
       if (f) {
-        logger.info(`🔍 [${symbol}] Signal check @ $${currentPrice.toFixed(2)} | vol=${f.volRatio.toFixed(1)}x | bullish=${f.isBullish} | >MA20=${f.priceAboveMa20} | BTC>MA50=${f.btcAboveMa50} | btcMom=${f.btcMomentum6h.toFixed(2)}% | day=${f.dayOfWeek}`);
-        
         // V5.5: Store features for market quality assessment
         const bbDistance = f.btcInBullRegime 
           ? ((currentPrice - (f.bbUpper || currentPrice)) / currentPrice) * 100
@@ -670,7 +670,7 @@ export class SimpleAgent {
       }
       
       if (signal.valid && signal.side) {
-        logger.info(`✅ [${symbol}] SIGNAL ${signal.side.toUpperCase()} CONFIRMED: ${signal.reason} | confidence=${(signal.confidence || 0).toFixed(2)}`);
+        logger.info(`✅ [${shortSymbol}] SIGNAL ${signal.side.toUpperCase()} | $${currentPrice.toFixed(2)} | ${signal.reason}`);
         
         // Store signal info for frontend display
         this.currentBias = signal.side;
@@ -697,10 +697,11 @@ export class SimpleAgent {
         });
         
         // Execute trade
+        this.lastRejectReason = ''; // Clear reject reason on signal
         await this.openPosition(signal.side, candles);
       } else {
-        // Log why signal was rejected
-        logger.info(`❌ [${symbol}] No signal: ${signal.reason}`);
+        // Store reject reason for tick log
+        this.lastRejectReason = signal.reason || 'no_signal';
       }
       
     } catch (error) {
