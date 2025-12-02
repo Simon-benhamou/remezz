@@ -202,17 +202,22 @@ export class CapitalPool {
         }
         return true;
       } else {
-        console.warn(`[CapitalPool] Balance fetch returned empty or zero - keeping existing: $${this.totalCapitalUsd.toFixed(2)}`);
-        
-        // 📢 NOTIFICATION: Sync failure (only if we've never synced)
-        if (!this.hasEverSynced) {
-          notifySyncFailure({
-            reason: 'Balance fetch returned empty or zero. Check API credentials.',
-            mode: this.mode,
-          });
+        // Only warn if we have no valid existing balance (real problem)
+        // If we have an existing balance, this is just a temporary cache miss
+        if (this.totalCapitalUsd <= 0) {
+          console.warn(`[CapitalPool] Balance fetch returned empty or zero - no existing balance to use!`);
+          
+          // 📢 NOTIFICATION: Sync failure (only if we've never synced AND have no balance)
+          if (!this.hasEverSynced) {
+            notifySyncFailure({
+              reason: 'Balance fetch returned empty or zero. Check API credentials.',
+              mode: this.mode,
+            });
+          }
         }
+        // If we have existing balance, just silently use it (common at startup)
         
-        return this.hasEverSynced;
+        return this.hasEverSynced || this.totalCapitalUsd > 0;
       }
     } catch (err) {
       console.warn(`[CapitalPool] Failed to sync balance:`, err);
@@ -230,10 +235,13 @@ export class CapitalPool {
   }
   
   /**
-   * Check if the pool has ever successfully synced with the exchange
+   * Check if the pool has a valid balance to trade with
+   * Returns true if we've synced OR if we have a valid existing balance
    */
   isSynced(): boolean {
-    return this.hasEverSynced;
+    // Consider synced if we have a valid balance, even if WebSocket sync failed
+    // The initial balance was fetched via REST at startup
+    return this.hasEverSynced || this.totalCapitalUsd > 0;
   }
   
   /**
