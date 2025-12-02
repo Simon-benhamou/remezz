@@ -1,4 +1,5 @@
 import { QuantAIRiskConfig } from '../config.js';
+import { notifyDailyLossLimit } from '../../services/notificationService.js';
 
 export type CircuitBreakerDecision = {
   allowed: boolean;
@@ -31,6 +32,9 @@ export type CircuitBreakerState = {
 export type CircuitBreakerOptions = {
   initialState?: Partial<CircuitBreakerState> | null;
   onStateChange?: (state: CircuitBreakerState) => void | Promise<void>;
+  // For notifications
+  symbol?: string;
+  mode?: 'paper' | 'live';
 };
 
 function startOfUtcDay(date: Date): Date {
@@ -55,9 +59,13 @@ export class CircuitBreaker {
   private dailyLossRecoveryWinsRemaining = 0;
   private dailyPnlUsd = 0; // Track per-agent daily PnL
   private readonly onStateChange?: (state: CircuitBreakerState) => void | Promise<void>;
+  private readonly symbol?: string;
+  private readonly mode?: 'paper' | 'live';
 
   constructor(private readonly cfg: QuantAIRiskConfig, opts: CircuitBreakerOptions = {}) {
     this.onStateChange = opts.onStateChange;
+    this.symbol = opts.symbol;
+    this.mode = opts.mode;
     if (opts.initialState) {
       this.hydrateState(opts.initialState);
     }
@@ -315,6 +323,18 @@ export class CircuitBreaker {
           const until = cooldownMinutes > 0
             ? this.startCooldown(now, cooldownMinutes, message)
             : this.startCooldown(now, undefined, message);
+          
+          // 📢 NOTIFICATION: Daily loss limit hit
+          if (this.symbol && this.mode) {
+            const limitUsd = (this.equityStartDay * this.cfg.dailyLossLimitPct) / 100;
+            notifyDailyLossLimit({
+              symbol: this.symbol,
+              dailyLossUsd: Math.abs(this.dailyPnlUsd),
+              limitUsd,
+              mode: this.mode,
+            });
+          }
+          
           return {
             allowed: false,
             reason: message,

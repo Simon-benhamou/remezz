@@ -29,7 +29,21 @@ import {
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
 import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, seedPositionCache, toBinanceSymbolId } from '../services/binanceWebSocket.js';
-import { notifyTradeEntry, notifyTradeExit } from '../services/notificationService.js';
+import { 
+  notifyTradeEntry, 
+  notifyTradeExit, 
+  notifyOrderError,
+  notifyDailyLossLimit,
+  notifyTrailingActivated,
+  notifyRegimeChange,
+  notifyHighVolatility,
+  notifyAgentStarted,
+  notifyAgentStopped,
+  notifyLongHold,
+  notifyLiquidationWarning,
+  notifySyncFailure,
+  notifySignalDetected,
+} from '../services/notificationService.js';
 
 const logger = createLogger('agent');
 
@@ -154,10 +168,28 @@ export class CapitalPool {
         return true;
       } else {
         console.warn(`[CapitalPool] Balance fetch returned empty or zero - keeping existing: $${this.totalCapitalUsd.toFixed(2)}`);
+        
+        // 📢 NOTIFICATION: Sync failure (only if we've never synced)
+        if (!this.hasEverSynced) {
+          notifySyncFailure({
+            reason: 'Balance fetch returned empty or zero. Check API credentials.',
+            mode: this.mode,
+          });
+        }
+        
         return this.hasEverSynced;
       }
     } catch (err) {
       console.warn(`[CapitalPool] Failed to sync balance:`, err);
+      
+      // 📢 NOTIFICATION: Sync failure (only if we've never synced)
+      if (!this.hasEverSynced) {
+        notifySyncFailure({
+          reason: `Failed to sync: ${(err as Error)?.message || 'Unknown error'}`,
+          mode: this.mode,
+        });
+      }
+      
       return this.hasEverSynced;
     }
   }
@@ -437,6 +469,9 @@ export class SimpleAgent {
     reason: string;
   } | null = null;
   
+  // Track trailing stop activation (to notify only once)
+  private trailingNotified: boolean = false;
+  
   // Cache pour éviter trop d'appels API (per-symbol only, BTC is global)
   private candleCache: { candles: Candle[]; fetchedAt: number } | null = null;
   private readonly CACHE_TTL_MS = 120_000; // 2 minutes (increased to reduce API calls)
@@ -475,6 +510,14 @@ export class SimpleAgent {
     const poolStatus = this.config.capitalPool.getStatus();
     logger.info(`✅ [${this.config.symbol}] STARTED | mode=${this.config.mode} | risk=${this.config.riskPerTradePct}% | pool=$${poolStatus.totalUsd.toFixed(2)} (avail=$${poolStatus.availableUsd.toFixed(2)})`);
     
+    // 📢 NOTIFICATION: Agent started
+    notifyAgentStarted({
+      symbol: this.config.symbol,
+      sessionId: this.config.sessionId,
+      mode: this.config.mode,
+      capitalUsd: poolStatus.availableUsd,
+    });
+    
     // Charger les positions existantes depuis la DB
     await this.loadExistingPosition();
     
@@ -497,6 +540,14 @@ export class SimpleAgent {
       clearInterval(this.tickIntervalId);
       this.tickIntervalId = null;
     }
+    
+    // 📢 NOTIFICATION: Agent stopped
+    notifyAgentStopped({
+      symbol: this.config.symbol,
+      sessionId: this.config.sessionId,
+      mode: this.config.mode,
+      reason: 'Manual stop',
+    });
     
     logger.info(`⏹️ [${this.config.symbol}] STOPPED`);
   }
@@ -647,6 +698,19 @@ export class SimpleAgent {
       // Process signal features silently (no log)
       const f = signal.features;
       if (f) {
+        // 📢 NOTIFICATION: Regime change (detect BTC crossing SMA200)
+        // Only notify from one agent (first ticker alphabetically or BTC itself)
+        if (shortSymbol === 'BTC' || shortSymbol === 'ADA') {
+          const btcPrice = btcCandles[btcCandles.length - 1]?.close || 0;
+          // Estimate SMA200 from regime
+          const estimatedSma200 = f.btcInBullRegime ? btcPrice * 0.99 : btcPrice * 1.01;
+          notifyRegimeChange({
+            newRegime: f.btcInBullRegime ? 'bull' : 'bear',
+            btcPrice,
+            sma200: estimatedSma200,
+          });
+        }
+        
         // V5.5: Store features for market quality assessment
         const bbDistance = f.btcInBullRegime 
           ? ((currentPrice - (f.bbUpper || currentPrice)) / currentPrice) * 100
@@ -677,6 +741,15 @@ export class SimpleAgent {
       
       if (signal.valid && signal.side) {
         logger.info(`✅ [${shortSymbol}] SIGNAL ${signal.side.toUpperCase()} | $${currentPrice.toFixed(2)} | ${signal.reason}`);
+        
+        // 📢 NOTIFICATION: Signal detected
+        notifySignalDetected({
+          symbol,
+          side: signal.side,
+          price: currentPrice,
+          reason: signal.reason || 'momentum_signal',
+          mode: this.config.mode,
+        });
         
         // Store signal info for frontend display
         this.currentBias = signal.side;
@@ -759,6 +832,15 @@ export class SimpleAgent {
     
     if (leverageCalc.wasReduced) {
       logger.warn(`⚡ [${symbol}] HIGH VOLATILITY DETECTED! ATR=${leverageCalc.atrPct?.toFixed(2)}% > ${LIQUIDATION_CONFIG.HIGH_VOLATILITY_ATR_PCT}% threshold | Leverage reduced: ${baseLeverage}x → ${leverageCalc.leverage}x`);
+      
+      // 📢 NOTIFICATION: High volatility detected
+      notifyHighVolatility({
+        symbol,
+        atrPct: leverageCalc.atrPct || 0,
+        originalLeverage: baseLeverage,
+        reducedLeverage: leverageCalc.leverage,
+        mode: this.config.mode,
+      });
     }
     
     // Calculate position size V5.6 - now with liquidity awareness AND dynamic leverage
@@ -986,6 +1068,16 @@ export class SimpleAgent {
           code: error?.code,
           info: error?.info,
         });
+        
+        // 📢 NOTIFICATION: Order error (CRITICAL in live mode)
+        notifyOrderError({
+          symbol,
+          side,
+          orderType: 'entry',
+          error: error?.message || 'Unknown error',
+          mode: 'live',
+        });
+        
         // Cancel reservation on failure
         this.config.capitalPool.cancelReservation(this.config.sessionId);
       }
@@ -1015,14 +1107,71 @@ export class SimpleAgent {
         : ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
       logger.info(`📊 [${symbol}] POSITION ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(2)} | now=$${currentPrice.toFixed(2)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | SL=$${this.position?.stopLoss?.toFixed(2) || 'N/A'}`);
       
+      // 📢 NOTIFICATION: Liquidation warning (check if price is close to liquidation)
+      // Liquidation price calculation: 
+      // For LONG: liqPrice = entryPrice * (1 - 1/leverage + maintenance_margin_rate)
+      // For SHORT: liqPrice = entryPrice * (1 + 1/leverage - maintenance_margin_rate)
+      // Simplified: we use ~0.4% maintenance margin for Binance Futures
+      const leverage = position.leverage || 4;
+      const maintenanceRate = 0.004; // 0.4% maintenance margin
+      const liqPrice = position.side === 'long'
+        ? position.entryPrice * (1 - 1/leverage + maintenanceRate)
+        : position.entryPrice * (1 + 1/leverage - maintenanceRate);
+      
+      const distanceToLiqPct = position.side === 'long'
+        ? ((currentPrice - liqPrice) / currentPrice) * 100
+        : ((liqPrice - currentPrice) / currentPrice) * 100;
+      
+      // Warn if within 5% of liquidation (only in live mode)
+      if (this.config.mode === 'live' && distanceToLiqPct <= 5 && distanceToLiqPct > 0) {
+        notifyLiquidationWarning({
+          symbol,
+          side: position.side,
+          currentPrice,
+          liquidationPrice: liqPrice,
+          distancePct: distanceToLiqPct,
+          leverage,
+          mode: 'live',
+        });
+      }
+      
       const exitSignal = shouldExitPosition(this.position!, currentPrice);
       
       if (exitSignal.shouldExit) {
         logger.info(`🔴 [${symbol}] EXIT SIGNAL: reason=${exitSignal.reason} | PnL=${exitSignal.pnlPct?.toFixed(2)}% | holdMin=${exitSignal.holdMinutes?.toFixed(0)}`);
         await this.closePosition(this.position!, currentPrice, exitSignal.reason || 'unknown');
       } else if (exitSignal.newStopLoss && exitSignal.newStopLoss !== this.position?.stopLoss) {
+        // 📢 NOTIFICATION: Trailing stop activated (only notify once)
+        if (!this.trailingNotified && exitSignal.pnlPct && exitSignal.pnlPct >= 1) {
+          this.trailingNotified = true;
+          notifyTrailingActivated({
+            symbol,
+            side: position.side,
+            entryPrice: position.entryPrice,
+            currentPrice,
+            trailPrice: exitSignal.newStopLoss,
+            pnlPct: exitSignal.pnlPct,
+            mode: this.config.mode,
+          });
+        }
+        
         // Update trailing stop on exchange (live mode) or just log (paper mode)
         await this.updateTrailingStopOnExchange(exitSignal.newStopLoss);
+      }
+      
+      // Check for long hold warning (> 24h)
+      const holdHours = exitSignal.holdMinutes ? exitSignal.holdMinutes / 60 : 0;
+      if (holdHours >= 24) {
+        notifyLongHold({
+          symbol,
+          side: position.side,
+          entryPrice: position.entryPrice,
+          currentPrice,
+          holdDurationHours: holdHours,
+          pnlPct: pnlPct,
+          sessionId: this.config.sessionId,
+          mode: this.config.mode,
+        });
       }
       
     } catch (error) {
@@ -1054,6 +1203,9 @@ export class SimpleAgent {
     const marginToRelease = position.marginUsd ?? (position.leverage ? notionalUsd / position.leverage : notionalUsd);
     
     logger.info(`🚪 [${symbol}] CLOSING ${position.side.toUpperCase()} | entry=$${position.entryPrice.toFixed(4)} | exit=$${currentPrice.toFixed(4)} | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}) | reason=${reason}`);
+    
+    // Reset trailing notification flag for next position
+    this.trailingNotified = false;
     
     // Store exit info for frontend display
     this.lastExit = {
@@ -1156,8 +1308,17 @@ export class SimpleAgent {
           timestamp: new Date(),
         });
         
-      } catch (error) {
+      } catch (error: any) {
         logger.error(`❌ [${symbol}] Failed to close live position:`, error);
+        
+        // 📢 NOTIFICATION: Exit order error (CRITICAL)
+        notifyOrderError({
+          symbol,
+          side: position.side,
+          orderType: 'exit',
+          error: error?.message || 'Unknown error',
+          mode: 'live',
+        });
       }
     }
   }

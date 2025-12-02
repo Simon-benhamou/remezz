@@ -167,28 +167,39 @@ function featurePasses(feature: 'vol' | 'roc' | 'bb', value: number | undefined)
   }
 }
 
-// Render a feature value with color (green if passes, red if not)
+// Render a feature value with color based on LONG thresholds (since we're usually in BULL regime)
+// LONG thresholds: vol≥2.0x, roc≥+2.5%, bb>0% (breakout above BB upper)
 function renderFeature(label: string, value: number | undefined, feature: 'vol' | 'roc' | 'bb'): React.ReactNode {
   if (value === undefined) return null;
   
   const passes = featurePasses(feature, value);
-  const passesAny = passes.long || passes.short;
-  const color = passesAny ? '#52c41a' : '#ff7875';
+  // Color based on LONG conditions (most common regime)
+  // This makes it clear why a feature is blocking the signal
+  const passesLong = passes.long;
+  const color = passesLong ? '#52c41a' : '#ff7875';
   
   const unit = feature === 'vol' ? 'x' : '%';
   const displayValue = feature === 'vol' 
     ? value.toFixed(1) 
     : (value >= 0 ? '+' : '') + value.toFixed(1);
   
-  // Tooltip showing thresholds
-  const tooltip = feature === 'vol' 
-    ? `Volume: ${value.toFixed(1)}x (need ≥2.0x)`
-    : feature === 'roc'
-    ? `ROC: ${displayValue}% (LONG need ≥+2.5%, SHORT need ≤-1.5%)`
-    : `BB dist: ${displayValue}% (LONG need >0%, SHORT need <0%)`;
+  // Tooltip showing thresholds with regime context
+  let tooltip = '';
+  if (feature === 'vol') {
+    const icon = passesLong ? '✅' : '❌';
+    tooltip = `Volume: ${value.toFixed(1)}x\n${icon} LONG needs ≥2.0x`;
+  } else if (feature === 'roc') {
+    const longOk = passes.long ? '✅' : '❌';
+    const shortOk = passes.short ? '✅' : '❌';
+    tooltip = `ROC: ${displayValue}%\n${longOk} LONG needs ≥+2.5% (BULL regime)\n${shortOk} SHORT needs ≤-1.5% (BEAR regime)`;
+  } else {
+    const longOk = passes.long ? '✅' : '❌';
+    const shortOk = passes.short ? '✅' : '❌';
+    tooltip = `BB distance: ${displayValue}%\n${longOk} LONG needs >0% = breakout (BULL regime)\n${shortOk} SHORT needs <0% = breakdown (BEAR regime)\n\n⚠️ En BULL regime, bb doit être >0% pour signal LONG`;
+  }
   
   return (
-    <Tooltip title={tooltip}>
+    <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tooltip}</span>}>
       <Text style={{ fontSize: 11, color, fontFamily: 'monospace', cursor: 'help' }}>
         {label}={displayValue}{unit}
       </Text>
