@@ -57,9 +57,10 @@ router.get("/", authenticateUser, async (req: AuthenticatedRequest, res) => {
     const realizedPnlUsd = realizedNet;
     const roePct = isExit && o.leverage && o.pctChange != null ? Number(o.pctChange) * Number(o.leverage) : null;
     const notional = (Number(o.qty||0) * Number(o.price||0));
-    const estLev = equityAlloc > 0 ? (notional / equityAlloc) : null;
-    // Notional cap = allocated equity * configured leverage for the order
+    // Use stored leverage from order if available, otherwise estimate from notional/equity
     const lev = Number(o.leverage || 0) || null;
+    const estLev = lev ?? (equityAlloc > 0 ? (notional / equityAlloc) : null);
+    // Notional cap = allocated equity * configured leverage for the order
     const notionalCapUsd = (equityAlloc > 0 && lev) ? (equityAlloc * lev) : null;
     const { fills, session, ...rest } = o;
     // Add 'amount' field as alias for qty for frontend compatibility
@@ -108,8 +109,9 @@ router.get('/trades', authenticateUser, async (req: AuthenticatedRequest, res) =
 
   const out = trades.map((trade) => {
     const notional = trade.entryNotional ?? (trade.entryPrice != null ? trade.entryPrice * trade.qty : null);
-    const estLev = equityAlloc > 0 && notional != null ? notional / equityAlloc : null;
     const leverage = trade.leverage ?? null;
+    // Use stored leverage if available, otherwise estimate from notional/equity
+    const estLev = leverage ?? (equityAlloc > 0 && notional != null ? notional / equityAlloc : null);
     const roePct = leverage != null && trade.roiPct != null ? trade.roiPct * leverage : trade.roePct ?? null;
     return {
       id: trade.id,
