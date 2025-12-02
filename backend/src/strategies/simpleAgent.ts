@@ -1940,6 +1940,7 @@ export class SimpleAgent {
           status: 'filled',
           source: 'simple_agent',
           strategyUsed: 'momentum_simple',
+          leverage: position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4,
         },
       });
       
@@ -2005,6 +2006,8 @@ export class SimpleAgent {
           status: 'filled',
           source: 'simple_agent',
           strategyUsed: 'momentum_simple',
+          leverage: position.leverage ?? MomentumConfig.LEVERAGE[position.symbol as keyof typeof MomentumConfig.LEVERAGE] ?? 4,
+          pctChange: pnlPct / 100, // Store as decimal (e.g., 0.015 for 1.5%)
         },
       });
       
