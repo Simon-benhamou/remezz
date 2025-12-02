@@ -27,7 +27,7 @@ import portfolioRouter from "./routes/portfolio.js";
 import { router as backtestRouter } from "./routes/backtest.js";
 
 // Services
-import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
+import { getBinanceWebSocket, seedBalanceCache } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
 
 // Strategy
@@ -507,9 +507,13 @@ app.post("/api/agent/start", async (req, res) => {
         
         const balance = await exchange.fetchBalance({ type: 'future' });
         const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+        const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
+        const lockedUsdt = totalUsdt - freeUsdt;
         
         if (totalUsdt > 0) {
           actualCapital = totalUsdt;
+          // 🔧 FIX: Seed the WebSocket balance cache so syncWithExchange() works
+          seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: lockedUsdt });
           logger.info(`✅ [Live] Using REAL Binance balance: $${actualCapital.toFixed(2)} (ignoring request capitalUsd: $${capitalUsd})`);
         } else {
           // If balance fetch returned 0, refuse to start - this prevents trading with wrong capital
@@ -1996,9 +2000,13 @@ app.post("/api/agent/restart", async (req, res) => {
         
         const balance = await exchange.fetchBalance({ type: 'future' });
         const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+        const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
+        const lockedUsdt = totalUsdt - freeUsdt;
         
         if (totalUsdt > 0) {
           actualCapital = totalUsdt;
+          // 🔧 FIX: Seed the WebSocket balance cache so syncWithExchange() works
+          seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: lockedUsdt });
           logger.info(`✅ [Restart Live] Using REAL Binance balance: $${actualCapital.toFixed(2)}`);
         } else {
           return res.status(400).json({ 

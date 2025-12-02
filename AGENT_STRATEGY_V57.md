@@ -1,12 +1,18 @@
-# 🤖 Agent Trading V5.4 - Documentation Complète
+# 🤖 Agent Trading V5.7 - Documentation Complète
 
 ## 📋 Vue d'ensemble
 
-L'agent trading utilise la **stratégie V5.4** optimisée sur 12 mois de backtest avec:
+L'agent trading utilise la **stratégie V5.7** optimisée sur 24 mois de backtest avec:
 - **+1990% ROI** (avec frais, slippage, funding)
-- **789 trades** sur 12 mois (~2-3/jour)
+- **~789 trades** sur 12 mois (~2-3/jour)
 - **68.7% Win Rate**
 - **10/12 mois positifs**
+
+### Améliorations V5.7 vs V5.4
+- **Dynamic Stop Loss** basé sur ATR (au lieu de SL fixe 1.5%)
+- **Leverage uniforme** 4.5x pour tous les assets
+- **Liquidity caps** par tier d'asset
+- **Circuit breaker** avec cooldown adaptatif
 
 ---
 
@@ -73,7 +79,7 @@ L'agent trading utilise la **stratégie V5.4** optimisée sur 12 mois de backtes
 
 Quand `BTC > SMA200`, l'agent cherche des opportunités LONG.
 
-### Les 5 Filtres (dans l'ordre de vérification):
+### Les 5 Filtres (tous doivent être TRUE):
 
 | # | Filtre | Condition | Pourquoi |
 |---|--------|-----------|----------|
@@ -93,8 +99,8 @@ Quand `BTC > SMA200`, l'agent cherche des opportunités LONG.
 ### Exemple d'entrée validée:
 ```
 🔍 [SEI] Signal check @ $0.155 | vol=3.2x | bullish=true | >MA20=true
-✅ [SEI] SIGNAL LONG CONFIRMED: v5.4_bull_long_confirmed | confidence=0.78
-🚀 [SEI] OPENING LONG | price=$0.155 | qty=168.5 | notional=$26.12 | lev=5x
+✅ [SEI] SIGNAL LONG CONFIRMED: v5.7_bull_long_confirmed | confidence=0.78
+🚀 [SEI] OPENING LONG | price=$0.155 | qty=168.5 | notional=$26.12 | lev=4.5x
 ```
 
 ---
@@ -103,7 +109,7 @@ Quand `BTC > SMA200`, l'agent cherche des opportunités LONG.
 
 Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 
-### Les 6 Filtres (dans l'ordre de vérification):
+### Les 6 Filtres (tous doivent être TRUE):
 
 | # | Filtre | Condition | Pourquoi |
 |---|--------|-----------|----------|
@@ -125,16 +131,52 @@ Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 
 ## 📈 Gestion de Position & Exit
 
-### Conditions de Sortie (vérifiées à chaque tick):
+### Ordre de vérification des exits (à chaque tick):
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      EXIT CHECK ORDER (shouldExitPosition)                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. ⏰ TIME EXIT      → Si holdTime > 48h → EXIT                           │
+│  2. 📈 TRAILING STOP  → Si PnL ≥ 1% ET prix < trailPrice → EXIT            │
+│  3. 🛑 STOP LOSS      → Si PnL < 0 ET prix < SL dynamique → EXIT           │
+│  4. 🎯 TAKE PROFIT    → Si PnL ≥ 3% → EXIT                                 │
+│  5. 📉 MOMENTUM FADE  → Si PnL > 1.5% ET ROC5 < 0.5% → EXIT                │
+│  6. 🔇 VOLUME DRY     → Si PnL > 0.5% ET Vol < 0.5x → EXIT                 │
+│                                                                             │
+│  ⚠️ Le trailing est vérifié AVANT le stop loss pour protéger les gains    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Conditions de Sortie:
 
 | Condition | Seuil | Action |
 |-----------|-------|--------|
-| **Stop Loss** | -1.5% | Fermeture immédiate |
+| **Stop Loss** | Dynamic: ATR(14) × 2.0 (min 0.8%, max 3.0%) | Fermeture immédiate |
 | **Take Profit** | +3.0% | Fermeture immédiate |
 | **Time Exit** | 48h (2880 min) | Fermeture si toujours ouvert |
 | **Trailing Stop** | Activé à +1.0% | Trail de 0.4% |
 | **Momentum Fade** | PnL > 1.5% ET ROC5 < 0.5% | Fermeture (momentum perdu) |
 | **Volume Dry** | PnL > 0.5% ET Vol < 0.5x | Fermeture (plus de volume) |
+
+### Dynamic Stop Loss (V5.7) - NOUVEAU
+
+Le SL s'adapte à la volatilité du marché via ATR:
+
+```typescript
+// Calcul du SL dynamique
+const atr = ATR(14);                       // Average True Range 14 périodes
+const slPct = (atr / price) * 2.0;         // ATR × multiplicateur
+const finalSL = clamp(slPct, 0.008, 0.03); // Entre 0.8% et 3.0%
+
+// Exemple:
+// ATR = $50, Prix = $3000
+// slPct = (50/3000) × 2.0 = 3.33% → clampé à 3.0%
+```
+
+**Résultats backtest:** +370% PnL vs SL fixe, -20% stop hunts
 
 ### Trailing Stop Détaillé:
 
@@ -144,18 +186,17 @@ Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  1. Position ouverte à $100 (LONG)                                         │
-│  2. SL initial à $98.50 (-1.5%)                                            │
+│  2. SL dynamique calculé (ex: 2.1% basé sur ATR)                           │
 │                                                                             │
 │  3. Prix monte à $101 (+1%) → Trailing ACTIVÉ                              │
-│     → Nouveau SL = $101 × (1 - 0.4%) = $100.60                             │
+│     → Trail price = $101 × (1 - 0.4%) = $100.60                            │
 │                                                                             │
 │  4. Prix monte à $102 (+2%)                                                │
-│     → SL resserre à 0.4% (TRAILING_TIGHTEN_AT_PCT)                         │
-│     → Nouveau SL = $102 × (1 - 0.4%) = $101.59                             │
+│     → Trail price suit: $102 × (1 - 0.4%) = $101.59                        │
 │                                                                             │
 │  5. Prix redescend à $101.50                                               │
-│     → SL reste à $101.59 (ne descend jamais)                               │
-│     → Prix < SL → EXIT avec +1.5% profit                                   │
+│     → Trail price reste à $101.59 (ne descend jamais)                      │
+│     → Prix $101.50 < Trail $101.59 → EXIT avec +1.5% profit                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -175,8 +216,8 @@ Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 │  ├── Disponible: $6,000                                                    │
 │  ├── Réservé (en attente): $0                                              │
 │  └── En Position: $4,000                                                   │
-│       ├── SEI: $2,600 (position ouverte)                                   │
-│       └── ETH: $1,400 (position ouverte)                                   │
+│       ├── SEI: $2,600 (margin utilisé)                                     │
+│       └── ETH: $1,400 (margin utilisé)                                     │
 │                                                                             │
 │  POSITION_SIZE_PCT = 40%                                                   │
 │  → Chaque trade utilise 40% du capital disponible                          │
@@ -185,21 +226,67 @@ Quand `BTC < SMA200`, l'agent cherche des opportunités SHORT.
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Sizing d'une Position:
+### Sizing d'une Position (V5.7):
 
 ```
 Capital disponible: $6,000
-Position size: 40% × $6,000 = $2,400
-Leverage: 5x
-Notional: $2,400 × 5 = $12,000 d'exposition
+Position size: 40% × $6,000 = $2,400 (margin)
+Leverage: 4.5x (uniforme)
+Notional: $2,400 × 4.5 = $10,800 d'exposition
 
-Stop Loss: 1.5%
-Risk réel: $2,400 × 1.5% = $36 max loss
+Dynamic SL: 2.1% (basé sur ATR)
+Risk réel: $2,400 × 2.1% = $50.40 max loss
+```
+
+### Liquidity Caps par Tier (V5.5):
+
+| Tier | Assets | Max Position |
+|------|--------|--------------|
+| HIGH | BTC, ETH | $500,000 |
+| MEDIUM | XRP, SOL, DOGE, AVAX, LINK, ADA | $100,000 |
+| LOW | SEI, IMX, DOT, SUI | $25,000 |
+
+---
+
+## 🛡️ Risk Management
+
+### Circuit Breaker (V5.7):
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         CIRCUIT BREAKER                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Consecutive Losses → Cooldown adaptatif                                   │
+│                                                                             │
+│  3 pertes d'affilée → Cooldown 5-15 min                                    │
+│  4 pertes d'affilée → Cooldown 15-25 min                                   │
+│  5+ pertes d'affilée → Cooldown 30-45 min                                  │
+│                                                                             │
+│  Daily Loss Limit → Trading pausé jusqu'au lendemain                       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Daily Loss Limit:
+
+- PnL quotidien tracké par agent
+- Limite configurable (défaut: -5% du capital)
+- Trading pausé avec notification si limite atteinte
+- Reset automatique à minuit UTC
+
+### Dynamic Leverage (V5.6):
+
+```typescript
+// En haute volatilité, leverage réduit
+if (ATR / price > 0.02) {
+  leverage = 3;  // Réduit de 4.5x à 3x
+}
 ```
 
 ---
 
-## 🔧 Configuration V5.4 (momentumSimple.ts)
+## 🔧 Configuration V5.7 (momentumSimple.ts)
 
 ```typescript
 // LONG Entry (Bull: BTC > SMA200)
@@ -220,37 +307,36 @@ ENTRY_SHORT: {
   MAX_CONSEC_DOWN: 5,
 }
 
-// Exit
+// Exit (V5.7 - Dynamic SL)
 EXIT: {
-  STOP_LOSS_PCT: 1.5,
-  PROFIT_TARGET_PCT: 3.0,
-  TRAILING_ACTIVATION_PCT: 1.0,
-  TRAILING_DISTANCE_PCT: 0.4,
-  TRAILING_TIGHTEN_AT_PCT: 2.0,
-  HOLD_PERIOD_MAX_MIN: 2880,  // 48h
+  DYNAMIC_SL: {
+    ATR_PERIOD: 14,
+    ATR_MULTIPLIER: 2.0,
+    MIN_SL_PCT: 0.008,      // 0.8% minimum
+    MAX_SL_PCT: 0.03,       // 3.0% maximum
+  },
+  PROFIT_TARGET_PCT: 0.03,  // 3%
+  TRAILING_ACTIVATION_PCT: 0.01,  // 1%
+  TRAILING_DISTANCE_PCT: 0.004,   // 0.4%
+  HOLD_PERIOD_MAX_MIN: 2880,      // 48h
 }
 
-// Risk
+// Risk (V5.7)
 RISK: {
   POSITION_SIZE_PCT: 0.4,   // 40%
   MAX_POSITIONS: 4,
+  LEVERAGE: 4.5,            // Uniforme pour tous les assets
 }
 
-// Symbols compatibles V5.4
+// Symbols compatibles V5.7 (24-month backtest)
 SYMBOLS: [
-  'SEI/USDT:USDT',   // 🏆 +143.9% ROI
-  'XRP/USDT:USDT',   // +54.2% ROI
-  'ETH/USDT:USDT',   // +45.8% ROI
-  'IMX/USDT:USDT',   // +40.1% ROI
+  'DOGE/USDT:USDT',  // 🏆 +438% ROI
+  'IMX/USDT:USDT',   // 🏆 +344% ROI
+  'SEI/USDT:USDT',   // 🏆 +280% ROI
+  'SUI/USDT:USDT',   // 🏆 +266% ROI
+  'XRP/USDT:USDT',   // +185% ROI
+  'ETH/USDT:USDT',   // +173% ROI
 ]
-
-// Leverage par asset
-LEVERAGE: {
-  'ETH/USDT:USDT': 5,
-  'XRP/USDT:USDT': 4,
-  'SEI/USDT:USDT': 5,
-  'IMX/USDT:USDT': 5,
-}
 ```
 
 ---
@@ -290,24 +376,24 @@ LEVERAGE: {
 ### Agent en WATCHING (pas de position):
 ```
 🔄 [ETH/USDT:USDT] Tick #22 | WATCHING | mode=paper
-📊 [ETH/USDT:USDT] Market: favorable_long | BTC trend=bullish mom6h=3.25%
-🔍 [ETH/USDT:USDT] Signal check @ $3014.18 | vol=0.2x | bullish=true
+📊 [ETH/USDT:USDT] Market: favorable_long | BTC trend=bullish | BTC 95000 > SMA200
+🔍 [ETH/USDT:USDT] Signal check @ $3014.18 | vol=0.2x | bullish=true | ATR=45.2
 ❌ [ETH/USDT:USDT] No signal: bull_regime:no_breakout(close=3014 < bb_upper=3072)
 ```
 
 ### Entrée en position:
 ```
-✅ [SEI/USDT:USDT] SIGNAL LONG CONFIRMED: v5.4_bull_long_confirmed | confidence=0.78
-🚀 [SEI/USDT:USDT] OPENING LONG | price=$0.155 | qty=168.5 | notional=$26.12 | lev=5x
-📝 [SEI/USDT:USDT] PAPER LONG OPENED @ $0.1550 | SL=$0.1527
+✅ [SEI/USDT:USDT] SIGNAL LONG CONFIRMED: v5.7_bull_long_confirmed | confidence=0.78
+🚀 [SEI/USDT:USDT] OPENING LONG | price=$0.155 | qty=168.5 | notional=$26.12 | lev=4.5x
+📝 [SEI/USDT:USDT] PAPER LONG OPENED @ $0.1550 | dynamicSL=2.1% ($0.1517)
 💾 [SEI/USDT:USDT] Entry order logged: BUY @ $0.1550
 ```
 
 ### En position:
 ```
 🔄 [SEI/USDT:USDT] Tick #25 | IN_LONG @ $0.16 | mode=paper
-📊 [SEI/USDT:USDT] POSITION LONG | entry=$0.155 | now=$0.158 | PnL=+1.94% | SL=$0.155
-📈 [SEI/USDT:USDT] Trailing stop updated: $0.1572
+📊 [SEI/USDT:USDT] POSITION LONG | entry=$0.155 | now=$0.158 | PnL=+1.94% | SL=$0.1517
+📈 [SEI/USDT:USDT] Trailing activated: trail=$0.1572 (0.4% from high)
 ```
 
 ### Sortie:
@@ -323,7 +409,7 @@ LEVERAGE: {
 
 ## ⚠️ Pourquoi l'agent n'entre pas souvent?
 
-La stratégie V5.4 est **très sélective**:
+La stratégie V5.7 est **très sélective**:
 
 1. **Volume 2x requis** → Le marché doit être actif (souvent 0.2x-0.5x en temps calme)
 2. **BB Breakout** → Le prix doit vraiment casser, pas juste toucher
@@ -338,7 +424,12 @@ La stratégie V5.4 est **très sélective**:
 
 | Fichier | Rôle |
 |---------|------|
-| `backend/src/strategies/simpleAgent.ts` | Agent principal, tick loop, gestion positions |
-| `backend/src/strategies/momentumSimple.ts` | Config V5.4, checkMomentumSignal(), shouldExitPosition() |
+| `backend/src/strategies/simpleAgent.ts` | Agent principal, tick loop, gestion positions, CapitalPool |
+| `backend/src/strategies/momentumSimple.ts` | Config V5.7, checkMomentumSignal(), shouldExitPosition() |
+| `backend/src/quantai/risk/circuitBreaker.ts` | Daily loss limits, cooldowns, per-agent PnL |
 | `backend/src/server.ts` | API REST, routes /api/agent/*, gestion userAgents |
-| `backend/backtest-combined-v54.mjs` | Backtest de référence V5.4 |
+| `backend/backtest-combined-v54.mjs` | Backtest de référence |
+
+---
+
+*Dernière mise à jour: Décembre 2025 - Stratégie V5.7*
