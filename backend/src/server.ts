@@ -2827,8 +2827,24 @@ process.on('SIGINT', shutdown);
         const mode = sessions[0]?.mode as 'paper' | 'live' || 'paper';
         
         // 🔧 FIX: For PAPER mode, calculate current capital = initial + realized PnL from all sessions
+        // 🔧 FIX: For LIVE mode, ALWAYS fetch real balance from Binance
         let currentCapitalUsd = initialCapitalUsd;
-        if (mode === 'paper') {
+        
+        if (mode === 'live') {
+          // LIVE MODE: Fetch real balance from Binance
+          try {
+            const balance = await exchange.fetchBalance({ type: 'future' });
+            const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+            if (totalUsdt > 0) {
+              currentCapitalUsd = totalUsdt;
+              logger.info(`📊 [LIVE] Restoring with Binance balance: $${currentCapitalUsd.toFixed(2)}`);
+            } else {
+              logger.warn(`⚠️ [LIVE] Binance balance is $0, using fallback: $${initialCapitalUsd.toFixed(2)}`);
+            }
+          } catch (err: any) {
+            logger.warn(`⚠️ [LIVE] Failed to fetch Binance balance, using fallback:`, err?.message);
+          }
+        } else if (mode === 'paper') {
           try {
             // Sum up realized PnL from all active sessions' KPIs
             const sessionIds = sessions.map(s => s.id);
@@ -2848,11 +2864,12 @@ process.on('SIGINT', shutdown);
         }
         
         // Create capital pool for this user (separate for paper/live)
-        // For paper: use currentCapitalUsd (initial + realized PnL)
-        // For live: use initialCapitalUsd (will be synced from Binance)
-        const capitalToUse = mode === 'paper' ? currentCapitalUsd : initialCapitalUsd;
-        resetCapitalPool(userId, capitalToUse, mode);
+        // currentCapitalUsd is already set correctly:
+        // - LIVE: fetched from Binance above
+        // - PAPER: initial + realized PnL
+        resetCapitalPool(userId, currentCapitalUsd, mode);
         const capitalPool = getCapitalPool(userId, undefined, mode)!;
+        logger.info(`💰 [${mode.toUpperCase()}] Capital pool reset to $${currentCapitalUsd.toFixed(2)}`);
         
         // Create agents ONLY for existing sessions
         const agents: SimpleAgent[] = [];
