@@ -285,18 +285,6 @@ export default function DashboardPageCompact(){
                 </div>
               </div>
               
-              <div style={{ borderLeft: '1px solid rgba(148, 163, 184, 0.2)', paddingLeft: 16 }}>
-                <Text type="secondary" style={{ fontSize: 11 }}>TRADING DAY</Text>
-                <div style={{ 
-                  color: marketConditions.isTradingDay ? '#22c55e' : '#94a3b8',
-                  fontSize: 16,
-                  fontWeight: 600,
-                  marginTop: 4
-                }}>
-                  {marketConditions.isTradingDay ? 'YES ✓' : 'NO'}
-                </div>
-              </div>
-              
               {/* V5.5: Market Quality indicator */}
               <div style={{ borderLeft: '1px solid rgba(148, 163, 184, 0.2)', paddingLeft: 16 }}>
                 <Text type="secondary" style={{ fontSize: 11 }}>MARKET QUALITY</Text>

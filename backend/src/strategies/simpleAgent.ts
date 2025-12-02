@@ -1953,6 +1953,7 @@ export class SimpleAgent {
     hasPosition: boolean; 
     symbol: string;
     sessionId: string;
+    mode: 'paper' | 'live';
     marketConditions: MarketConditions | null;
     capitalPoolStatus: ReturnType<CapitalPool['getStatus']>;
     lastTickAt: number;
@@ -1963,6 +1964,7 @@ export class SimpleAgent {
       hasPosition: this.position !== null,
       symbol: this.config.symbol,
       sessionId: this.config.sessionId,
+      mode: this.config.mode,
       marketConditions: this.lastMarketConditions,
       capitalPoolStatus: this.config.capitalPool.getStatus(),
       lastTickAt: this.lastTickAt,

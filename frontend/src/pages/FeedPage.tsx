@@ -73,7 +73,7 @@ function getLogColor(kind: string, level: string) {
 }
 
 // Parse condensed tick message: "🔄 [SOL] #1 WATCH | $127.16 | vol=1.5x roc=0.3% bb=-0.5% | bearish_candle | live"
-function parseTickMessage(message: string): { 
+interface ParsedTickData {
   tickNum?: number; 
   status?: string; 
   price?: string; 
@@ -81,20 +81,50 @@ function parseTickMessage(message: string): {
   rejectKey?: string; // simplified reject reason
   mode?: string;
   hasPosition?: boolean;
-} | null {
+  // Parsed feature values
+  vol?: number;
+  roc?: number;
+  bb?: number;
+}
+
+// Signal conditions thresholds (from MomentumConfig)
+const SIGNAL_THRESHOLDS = {
+  LONG: {
+    vol: 2.0,    // Volume > 2x moyenne
+    roc: 2.5,    // ROC 10 > 2.5%
+    bb: 0,       // Price > BB upper (bb > 0)
+  },
+  SHORT: {
+    vol: 2.0,    // Volume > 2x moyenne
+    roc: -1.5,   // ROC 5 < -1.5%
+    bb: 0,       // Price < BB lower (bb < 0)
+  },
+};
+
+function parseTickMessage(message: string): ParsedTickData | null {
   // Match patterns like: [SOL] #1 WATCH | $127.16 | vol=1.5x roc=0.3% bb=-0.5% | bearish_candle | live
   // Or: [SOL] #1 IN_SHORT@$127.00 | $126.50 | live
   const watchMatch = message.match(/#(\d+)\s+(WATCH|IN_\w+@?\$?[\d.]*)\s*\|\s*\$?([\d.]+)\s*\|\s*([^|]+)\s*\|\s*([^|]*)\s*\|\s*(\w+)/);
   if (watchMatch) {
     const status = watchMatch[2];
+    const features = watchMatch[4]?.trim();
+    
+    // Parse individual feature values: vol=1.5x roc=0.3% bb=-0.5%
+    const volMatch = features?.match(/vol=([\d.]+)x/);
+    const rocMatch = features?.match(/roc=([+-]?[\d.]+)%/);
+    const bbMatch = features?.match(/bb=([+-]?[\d.]+)%/);
+    
     return {
       tickNum: parseInt(watchMatch[1]),
       status: status,
       price: watchMatch[3],
-      features: watchMatch[4]?.trim() || undefined,
+      features,
       rejectKey: watchMatch[5]?.trim() || undefined,
       mode: watchMatch[6],
       hasPosition: status.startsWith('IN_'),
+      vol: volMatch ? parseFloat(volMatch[1]) : undefined,
+      roc: rocMatch ? parseFloat(rocMatch[1]) : undefined,
+      bb: bbMatch ? parseFloat(bbMatch[1]) : undefined,
     };
   }
   // Fallback for IN_POSITION format (no features/reject)
@@ -109,6 +139,61 @@ function parseTickMessage(message: string): {
     };
   }
   return null;
+}
+
+// Check if a feature passes the threshold for LONG or SHORT
+function featurePasses(feature: 'vol' | 'roc' | 'bb', value: number | undefined): { long: boolean; short: boolean } {
+  if (value === undefined) return { long: false, short: false };
+  
+  const th = SIGNAL_THRESHOLDS;
+  switch (feature) {
+    case 'vol':
+      return { 
+        long: value >= th.LONG.vol, 
+        short: value >= th.SHORT.vol 
+      };
+    case 'roc':
+      return { 
+        long: value >= th.LONG.roc,  // Need positive ROC for long
+        short: value <= th.SHORT.roc  // Need negative ROC for short
+      };
+    case 'bb':
+      return { 
+        long: value > th.LONG.bb,   // Price above BB upper
+        short: value < th.SHORT.bb  // Price below BB lower
+      };
+    default:
+      return { long: false, short: false };
+  }
+}
+
+// Render a feature value with color (green if passes, red if not)
+function renderFeature(label: string, value: number | undefined, feature: 'vol' | 'roc' | 'bb'): React.ReactNode {
+  if (value === undefined) return null;
+  
+  const passes = featurePasses(feature, value);
+  const passesAny = passes.long || passes.short;
+  const color = passesAny ? '#52c41a' : '#ff7875';
+  
+  const unit = feature === 'vol' ? 'x' : '%';
+  const displayValue = feature === 'vol' 
+    ? value.toFixed(1) 
+    : (value >= 0 ? '+' : '') + value.toFixed(1);
+  
+  // Tooltip showing thresholds
+  const tooltip = feature === 'vol' 
+    ? `Volume: ${value.toFixed(1)}x (need ≥2.0x)`
+    : feature === 'roc'
+    ? `ROC: ${displayValue}% (LONG need ≥+2.5%, SHORT need ≤-1.5%)`
+    : `BB dist: ${displayValue}% (LONG need >0%, SHORT need <0%)`;
+  
+  return (
+    <Tooltip title={tooltip}>
+      <Text style={{ fontSize: 11, color, fontFamily: 'monospace', cursor: 'help' }}>
+        {label}={displayValue}{unit}
+      </Text>
+    </Tooltip>
+  );
 }
 
 export default function FeedPage() {
@@ -308,7 +393,39 @@ export default function FeedPage() {
       
       {/* Feed Timeline */}
       <Card 
-        title="Activity Feed"
+        title={
+          <Space>
+            <span>Activity Feed</span>
+            <Tooltip 
+              title={
+                <div style={{ fontSize: 12 }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: 8 }}>Signal Conditions:</div>
+                  <div style={{ marginBottom: 4 }}>
+                    <span style={{ color: '#52c41a' }}>🟢 LONG</span> (BTC &gt; SMA200):
+                  </div>
+                  <div style={{ marginLeft: 12, marginBottom: 8 }}>
+                    • vol ≥ 2.0x<br/>
+                    • roc ≥ +2.5%<br/>
+                    • bb &gt; 0% (price above upper)<br/>
+                    • bullish candle
+                  </div>
+                  <div style={{ marginBottom: 4 }}>
+                    <span style={{ color: '#ff7875' }}>🔴 SHORT</span> (BTC &lt; SMA200):
+                  </div>
+                  <div style={{ marginLeft: 12 }}>
+                    • vol ≥ 2.0x<br/>
+                    • roc ≤ -1.5%<br/>
+                    • bb &lt; 0% (price below lower)<br/>
+                    • bearish candle
+                  </div>
+                </div>
+              }
+              placement="bottomLeft"
+            >
+              <ExclamationCircleOutlined style={{ color: '#8c8c8c', cursor: 'help' }} />
+            </Tooltip>
+          </Space>
+        }
         style={{ maxHeight: 'calc(100vh - 400px)', overflow: 'auto' }}
       >
         {filteredLogs.length === 0 ? (
@@ -352,17 +469,12 @@ export default function FeedPage() {
                               {tickData.status}
                             </Tag>
                             <Text style={{ fontSize: 13 }}>${tickData.price}</Text>
-                            {tickData.features && (
-                              <Text 
-                                type="secondary" 
-                                style={{ 
-                                  fontSize: 11, 
-                                  fontFamily: 'monospace',
-                                }}
-                              >
-                                {tickData.features}
-                              </Text>
-                            )}
+                            {/* Features with color coding */}
+                            <Space size={4}>
+                              {renderFeature('vol', tickData.vol, 'vol')}
+                              {renderFeature('roc', tickData.roc, 'roc')}
+                              {renderFeature('bb', tickData.bb, 'bb')}
+                            </Space>
                             {tickData.rejectKey && (
                               <Tag 
                                 color="orange"

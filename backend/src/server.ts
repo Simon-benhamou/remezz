@@ -1090,7 +1090,12 @@ app.get("/api/agent/overview", async (req, res) => {
     
     // Get agent data for both modes
     const allAgentData = getAllUserAgents(userId);
-    const allAgents = getAllRunningAgents(userId);
+    const allAgentsRaw = getAllRunningAgents(userId);
+    
+    // Filter agents by mode if specified
+    const allAgents = mode 
+      ? allAgentsRaw.filter(a => a.getStatus().mode === mode)
+      : allAgentsRaw;
     
     // Build capital pool status for requested mode or combined
     let capitalPoolStatus: any = null;
