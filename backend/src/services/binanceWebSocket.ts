@@ -77,6 +77,21 @@ export interface BinanceBalance {
   timestamp: number;
 }
 
+/**
+ * Position data from Binance WebSocket ACCOUNT_UPDATE event
+ * 0 weight - Real-time updates vs fetchPositions (5 weight per call)
+ */
+export interface BinancePositionData {
+  symbol: string;          // e.g., "BTCUSDT"
+  positionAmt: number;     // Positive = long, negative = short, 0 = no position
+  entryPrice: number;
+  unrealizedPnl: number;
+  marginType: string;      // "cross" or "isolated"
+  isolatedWallet: number;  // Isolated margin wallet (if isolated mode)
+  side: 'long' | 'short' | 'none';
+  timestamp: number;
+}
+
 type SymbolRejectionReason = 'format' | 'unknown' | 'cached';
 
 type SymbolValidationResult =
@@ -318,6 +333,8 @@ class BinanceWebSocketManager {
   private tickersCache = new Map<string, BinanceTickerData>();
   private klinesCache = new Map<string, BinanceKlineData[]>();
   private balanceCache = new Map<string, BinanceBalance>();
+  // Position cache: key = `${userId}_${symbol}` (e.g., "user123_BTCUSDT")
+  private positionCache = new Map<string, BinancePositionData>();
   private lastUpdate = Date.now();
   private lastAcceptedTs = 0;
   private timestampDriftCounters = new Map<string, { count: number; firstTs: number; lastAge: number }>();
@@ -1961,8 +1978,9 @@ class BinanceWebSocketManager {
           try {
             const msg = JSON.parse(data.toString());
 
-            // ACCOUNT_UPDATE event (balance changes)
+            // ACCOUNT_UPDATE event (balance + position changes)
             if (msg.e === 'ACCOUNT_UPDATE') {
+              // Handle balance updates (B array)
               const balances = msg.a?.B || [];
               for (const bal of balances) {
                 const asset = String(bal.a || '').toUpperCase();
@@ -1983,7 +2001,42 @@ class BinanceWebSocketManager {
                 const cacheKey = `${userId}_${asset}`;
                 this.balanceCache.set(cacheKey, balanceData);
               }
-              console.log(`💰 Balance updated for user ${userId}: ${balances.length} assets`);
+              
+              // Handle position updates (P array) - 0 weight vs fetchPositions!
+              const positions = msg.a?.P || [];
+              for (const pos of positions) {
+                const symbol = String(pos.s || '').toUpperCase(); // e.g., "BTCUSDT"
+                const positionAmt = parseFloat(pos.pa || '0');    // Position amount (negative = short)
+                const entryPrice = parseFloat(pos.ep || '0');     // Entry price
+                const unrealizedPnl = parseFloat(pos.up || '0');  // Unrealized PnL
+                const marginType = pos.mt || 'cross';             // Margin type
+                const isolatedWallet = parseFloat(pos.iw || '0'); // Isolated wallet (if isolated)
+                
+                const positionData: BinancePositionData = {
+                  symbol,
+                  positionAmt,
+                  entryPrice,
+                  unrealizedPnl,
+                  marginType,
+                  isolatedWallet,
+                  side: positionAmt > 0 ? 'long' : positionAmt < 0 ? 'short' : 'none',
+                  timestamp: Date.now(),
+                };
+                
+                const cacheKey = `${userId}_${symbol}`;
+                this.positionCache.set(cacheKey, positionData);
+                
+                // Log position changes (useful for debugging)
+                if (positionAmt !== 0) {
+                  console.log(`📊 [WS] Position update ${userId}/${symbol}: ${positionData.side} ${Math.abs(positionAmt)} @ $${entryPrice} (uPnL: $${unrealizedPnl.toFixed(2)})`);
+                } else {
+                  console.log(`📊 [WS] Position closed ${userId}/${symbol}`);
+                }
+              }
+              
+              if (balances.length > 0 || positions.length > 0) {
+                console.log(`💰 [WS] Account update for ${userId}: ${balances.length} balances, ${positions.length} positions`);
+              }
             }
 
             // ORDER_TRADE_UPDATE event (order updates)
@@ -2102,6 +2155,40 @@ class BinanceWebSocketManager {
   getBalance(userId: string, asset: string = 'USDT'): BinanceBalance | null {
     const cacheKey = `${userId}_${asset.toUpperCase()}`;
     return this.balanceCache.get(cacheKey) || null;
+  }
+
+  /**
+   * 📊 Get Position from WebSocket cache (0 weight)
+   * 
+   * @param userId - User ID
+   * @param symbol - Symbol in Binance format (e.g., "BTCUSDT") or unified (e.g., "BTC/USDT:USDT")
+   * @returns Position data or null if not available
+   */
+  getPosition(userId: string, symbol: string): BinancePositionData | null {
+    // Normalize symbol to Binance format (BTCUSDT)
+    const normalizedSymbol = toBinanceSymbolId(symbol);
+    const cacheKey = `${userId}_${normalizedSymbol}`;
+    return this.positionCache.get(cacheKey) || null;
+  }
+
+  /**
+   * 📊 Get All Positions for a user from WebSocket cache (0 weight)
+   * 
+   * @param userId - User ID
+   * @returns Map of symbol -> position data (only non-zero positions)
+   */
+  getAllPositions(userId: string): Map<string, BinancePositionData> {
+    const result = new Map<string, BinancePositionData>();
+    const prefix = `${userId}_`;
+    
+    for (const [key, pos] of this.positionCache.entries()) {
+      if (key.startsWith(prefix) && pos.positionAmt !== 0) {
+        const symbol = key.slice(prefix.length);
+        result.set(symbol, pos);
+      }
+    }
+    
+    return result;
   }
 
   seedBalance(userId: string, asset: string, payload: { free: number; locked: number; total: number; timestamp?: number }): void {
@@ -2941,24 +3028,24 @@ export function getKlinesOhlcvFromWebSocket(symbol: string, interval: string): n
   if (!klines?.length) return null;
   
   // 🎯 ADAPTIVE staleness check: Adjust threshold based on candle timeframe
-  // - 1m/5m/15m candles: max 5 min age (fast moving)
-  // - 1h candles: max 90 min age (1.5 bars)
-  // - 4h candles: max 6 hours age (1.5 bars)
+  // - 1m/5m/15m candles: Allow 2 full bars as tolerance for reconnection delays
+  // - 1h+ candles: max 1.5-2 bars age
   // This ensures we detect WebSocket disconnections WITHOUT rejecting valid historical data
   const lastKline = klines[klines.length - 1];
   const lastBarAge = Date.now() - lastKline.timestamp;
   
   // Map interval to max acceptable age (in milliseconds)
+  // For 15m candles: Allow up to 45 min (3 bars) to handle reconnect delays
   const intervalToMaxAge: Record<string, number> = {
-    '1m': 5 * 60_000,      // 5 minutes
-    '3m': 6 * 60_000,      // 6 minutes
-    '5m': 10 * 60_000,     // 10 minutes
-    '15m': 25 * 60_000,    // 25 minutes
-    '30m': 50 * 60_000,    // 50 minutes
-    '1h': 90 * 60_000,     // 90 minutes (1.5 bars)
-    '2h': 3 * 60 * 60_000, // 3 hours (1.5 bars)
-    '4h': 6 * 60 * 60_000, // 6 hours (1.5 bars)
-    '1d': 36 * 60 * 60_000, // 36 hours (1.5 bars)
+    '1m': 5 * 60_000,       // 5 minutes (5 bars)
+    '3m': 12 * 60_000,      // 12 minutes (4 bars)
+    '5m': 20 * 60_000,      // 20 minutes (4 bars)
+    '15m': 45 * 60_000,     // 45 minutes (3 bars) - increased from 25min
+    '30m': 90 * 60_000,     // 90 minutes (3 bars)
+    '1h': 150 * 60_000,     // 2.5 hours (2.5 bars)
+    '2h': 5 * 60 * 60_000,  // 5 hours (2.5 bars)
+    '4h': 10 * 60 * 60_000, // 10 hours (2.5 bars)
+    '1d': 48 * 60 * 60_000, // 48 hours (2 bars)
   };
   
   const MAX_STALE_MS = intervalToMaxAge[interval] || 5 * 60_000; // Default: 5 minutes
@@ -2989,7 +3076,35 @@ export async function getBalanceFromWebSocket(userId: string, asset: string = 'U
 }
 
 /**
- * 🔌 Subscribe to User Data Stream (0 weight)
+ * � Get Position from WebSocket (0 weight)
+ * 
+ * Uses user data stream for real-time position updates.
+ * Returns cached position data from ACCOUNT_UPDATE events.
+ * 
+ * @param userId - User ID for multi-user support
+ * @param symbol - Symbol in Binance format (e.g., "BTCUSDT") or unified format (e.g., "BTC/USDT:USDT")
+ * @returns Position data or null if no position/not available
+ */
+export function getPositionFromWebSocket(userId: string, symbol: string): BinancePositionData | null {
+  const ws = getBinanceWebSocket();
+  return ws.getPosition(userId, symbol);
+}
+
+/**
+ * 📊 Get All Positions from WebSocket (0 weight)
+ * 
+ * Returns all cached positions for a user.
+ * 
+ * @param userId - User ID
+ * @returns Map of symbol -> position data
+ */
+export function getAllPositionsFromWebSocket(userId: string): Map<string, BinancePositionData> {
+  const ws = getBinanceWebSocket();
+  return ws.getAllPositions(userId);
+}
+
+/**
+ * �🔌 Subscribe to User Data Stream (0 weight)
  * 
  * Subscribes to balance, orders, and trades updates.
  * Uses listenKey for authentication (0 weight).

@@ -28,7 +28,7 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
-import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket } from '../services/binanceWebSocket.js';
+import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, toBinanceSymbolId } from '../services/binanceWebSocket.js';
 
 const logger = createLogger('agent');
 
@@ -442,6 +442,10 @@ export class SimpleAgent {
   
   // Guard against concurrent tick execution (prevents re-entrancy/recursion)
   private tickInProgress = false;
+  
+  // Position sync throttling (WebSocket is primary, REST is fallback)
+  private lastPositionSync: number = 0;
+  private readonly POSITION_SYNC_INTERVAL_MS = 10_000; // 10 seconds (fast since WS is 0 weight)
   
   constructor(config: SimpleAgentConfig) {
     this.config = config;
@@ -1174,14 +1178,16 @@ export class SimpleAgent {
     // Convert CCXT symbol to Binance format: "ETH/USDT:USDT" -> "ETHUSDT"
     const binanceSymbol = symbol.split('/')[0] + 'USDT';
     
-    // 1. Subscribe to WebSocket stream for this symbol (only once per agent)
-    if (!this.wsSubscribed) {
-      try {
-        const ws = getBinanceWebSocket();
-        ws.subscribeToKline(binanceSymbol, '15m');
+    // 1. Subscribe to WebSocket stream (re-subscribe each time to keep TTL alive)
+    try {
+      const ws = getBinanceWebSocket();
+      ws.subscribeToKline(binanceSymbol, '15m');
+      if (!this.wsSubscribed) {
         this.wsSubscribed = true;
         logger.info(`📡 [${symbol}] Subscribed to WebSocket kline stream (0 API weight)`);
-      } catch (error) {
+      }
+    } catch (error) {
+      if (!this.wsSubscribed) {
         logger.warn(`⚠️ [${symbol}] Failed to subscribe to WebSocket, will use REST`);
       }
     }
@@ -1243,14 +1249,16 @@ export class SimpleAgent {
     const btcSymbol = 'BTCUSDT'; // Binance format for WebSocket
     const btcSymbolCcxt = 'BTC/USDT:USDT'; // CCXT format for REST fallback
     
-    // 1. Subscribe to BTC WebSocket stream (only once, shared globally)
-    if (!btcWsSubscribed) {
-      try {
-        const ws = getBinanceWebSocket();
-        ws.subscribeToKline(btcSymbol, '15m');
+    // 1. Subscribe to BTC WebSocket stream (re-subscribe each time to keep TTL alive)
+    try {
+      const ws = getBinanceWebSocket();
+      ws.subscribeToKline(btcSymbol, '15m');
+      if (!btcWsSubscribed) {
         btcWsSubscribed = true;
         logger.info('📡 [BTC] Subscribed to WebSocket kline stream (0 API weight)');
-      } catch (error) {
+      }
+    } catch (error) {
+      if (!btcWsSubscribed) {
         logger.warn('⚠️ [BTC] Failed to subscribe to WebSocket, will use REST');
       }
     }
@@ -1485,28 +1493,63 @@ export class SimpleAgent {
   
   /**
    * 🔄 SYNC WITH EXCHANGE (Live Mode Only)
-   * Fetches real positions from Binance and detects if stop losses were executed
+   * Uses WebSocket for real-time position updates (0 weight!) instead of REST API
+   * Detects if stop losses were executed on Binance
    */
   private async syncWithExchange(): Promise<void> {
     const symbol = this.config.symbol;
     
-    if (!this.config.exchange.fetchPositions) {
-      logger.info(`⚠️ [${symbol}] Exchange does not support fetchPositions`);
+    // Throttle sync to avoid excessive processing
+    const now = Date.now();
+    if (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL_MS) {
       return;
     }
+    this.lastPositionSync = now;
     
     try {
-      // Fetch all positions from exchange
-      const exchangePositions = await this.config.exchange.fetchPositions([symbol]);
+      // 🚀 Use WebSocket position cache (0 weight!) instead of fetchPositions (5 weight)
+      const wsPosition = getPositionFromWebSocket(this.config.userId, symbol);
       
-      // Find position for our symbol
-      const exchangePos = exchangePositions.find((p: any) => 
-        p.symbol === symbol || 
-        p.info?.symbol === symbol.replace('/', '').replace(':USDT', '')
-      );
+      let exchangeQty = 0;
+      let exchangeSide: 'long' | 'short' = 'long';
+      let entryPrice = 0;
+      let unrealizedPnl = 0;
       
-      const exchangeQty = Math.abs(parseFloat(exchangePos?.contracts || exchangePos?.info?.positionAmt || '0'));
-      const exchangeSide = parseFloat(exchangePos?.info?.positionAmt || '0') > 0 ? 'long' : 'short';
+      if (wsPosition) {
+        // Got position from WebSocket cache (0 API weight!)
+        exchangeQty = Math.abs(wsPosition.positionAmt);
+        exchangeSide = wsPosition.side === 'short' ? 'short' : 'long';
+        entryPrice = wsPosition.entryPrice;
+        unrealizedPnl = wsPosition.unrealizedPnl;
+      } else if (this.config.exchange.fetchPositions) {
+        // Fallback to REST API only if WebSocket cache is empty (first run or WS not connected)
+        try {
+          const fetchPosFn = this.config.exchange.fetchPositions.bind(this.config.exchange);
+          const exchangePositions = await fetchPosFn([symbol]);
+          
+          const exchangePos = exchangePositions.find((p: any) => 
+            p.symbol === symbol || 
+            p.info?.symbol === toBinanceSymbolId(symbol)
+          );
+          
+          exchangeQty = Math.abs(parseFloat(exchangePos?.contracts || exchangePos?.info?.positionAmt || '0'));
+          exchangeSide = parseFloat(exchangePos?.info?.positionAmt || '0') > 0 ? 'long' : 'short';
+          entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
+          unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
+          
+          logger.info(`📡 [${symbol}] REST fallback used for position sync (WS cache miss)`);
+        } catch (restErr: any) {
+          // Log but don't throw - we'll try again next sync
+          if (restErr.message?.includes('429') || restErr.message?.includes('Too Many')) {
+            logger.warn(`⚠️ [${symbol}] Rate limited on position sync, will retry later`);
+          } else {
+            logger.warn(`⚠️ [${symbol}] REST position sync failed:`, restErr.message);
+          }
+          return;
+        }
+      } else {
+        return; // No way to get positions
+      }
       
       // Case 1: We think we have a position but exchange says NO
       if (this.position && exchangeQty === 0) {
@@ -1561,9 +1604,6 @@ export class SimpleAgent {
       else if (!this.position && exchangeQty > 0) {
         logger.info(`⚠️ [${symbol}] SYNC: Found unexpected position on exchange (${exchangeSide} ${exchangeQty})`);
         
-        // Load from exchange
-        const entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
-        
         if (entryPrice > 0) {
           // V5.6: Estimate margin - use asset-specific leverage or default to 5x
           const notionalUsd = exchangeQty * entryPrice;
@@ -1592,12 +1632,9 @@ export class SimpleAgent {
         }
       }
       
-      // Case 3: Both have position - verify they match
+      // Case 3: Both have position - verify they match (use variables we already have)
       else if (this.position && exchangeQty > 0) {
         // Just log for now, could add reconciliation logic
-        const entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
-        const unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
-        
         logger.info(`✅ [${symbol}] Position verified on exchange: qty=${exchangeQty} entry=$${entryPrice} uPnL=$${unrealizedPnl.toFixed(2)}`);
       }
       
