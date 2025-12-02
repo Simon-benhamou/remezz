@@ -1,6 +1,6 @@
-# 🤖 QuantAI Trading Agent v3
+# 🤖 QuantAI Trading Agent v5.7
 
-**An intelligent, meta-adaptive cryptocurrency trading system powered by hybrid AI strategies**
+**An intelligent, momentum-based cryptocurrency trading system with regime-adaptive strategy**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4+-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
@@ -10,558 +10,269 @@
 ## 📋 Table of Contents
 
 - [Overview](#overview)
-- [Key Features](#key-features)
+- [Performance](#performance)
+- [Trading Strategy V5.7](#trading-strategy-v57)
+- [Entry Conditions](#entry-conditions)
+- [Exit Management](#exit-management)
+- [Capital Management](#capital-management)
+- [Risk Management](#risk-management)
 - [Architecture](#architecture)
-- [Trading Strategy](#trading-strategy)
-- [Execution Flow](#execution-flow)
-- [Project Structure](#project-structure)
 - [Installation & Setup](#installation--setup)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Performance Monitoring](#performance-monitoring)
 - [API Documentation](#api-documentation)
 
 ---
 
 ## 🎯 Overview
 
-QuantAI Trading Agent is a sophisticated algorithmic trading platform designed specifically for cryptocurrency markets. The system combines traditional technical analysis with modern machine learning techniques to execute intelligent trades across multiple cryptocurrency pairs.
+QuantAI Trading Agent is a sophisticated algorithmic trading platform for cryptocurrency futures markets. The system uses a **momentum breakout strategy** with **BTC regime filtering** to execute trades on Binance Futures.
 
 ### What Makes This System Unique?
 
-- **Meta-Adaptive Strategy Engine**: Dynamically recognizes and adapts to multiple market patterns (trend-following, breakouts, mean-reversion, momentum)
-- **Hybrid Intelligence**: Combines rule-based technical analysis with LLM-powered market sentiment analysis
-- **Intelligent Symbol Selection**: Automatically identifies the best trading opportunities across 50+ cryptocurrencies
-- **Multi-Timeframe Analysis**: Evaluates market conditions across 15m, 1h, and 4h timeframes for consensus
-- **Real-time Risk Management**: Advanced position sizing, stop-loss management, and circuit breakers
-- **Full-Stack Solution**: React frontend for monitoring + Node.js/TypeScript backend + WebSocket real-time updates
+- **Regime-Adaptive Strategy**: LONG only in Bull markets (BTC > SMA200), SHORT only in Bear markets
+- **Bollinger Band Breakouts**: Entry on volatility expansion with volume confirmation
+- **Dynamic Stop Loss**: ATR-based stops that adapt to market volatility
+- **Trailing Stop System**: Protects profits with intelligent trail activation
+- **Shared Capital Pool**: Multiple agents share capital for efficient allocation
+- **Real-time Notifications**: WebSocket alerts for all trading events
 
 ---
 
-## ✨ Key Features
+## 📈 Performance
 
-### 🧠 Intelligent Decision Making
-- **Recognized Strategy Framework**: 8+ pre-programmed trading strategies (breakouts, reversals, trend continuations)
-- **Confidence-Based Filtering**: Only executes trades above configurable confidence thresholds
-- **Entry Eligibility Gates**: Multi-factor quality checks (momentum, volume, flow, ATR)
-- **XGBoost Direction Predictor**: Machine learning model for directional bias validation
+**Backtested over 24 months (Nov 2023 - Nov 2025):**
 
-### 📊 Advanced Technical Analysis
-- **30+ Technical Indicators**: EMA, RSI, ADX, ATR, CMF, Chaikin Money Flow, Volume analysis
-- **Support/Resistance Detection**: Automatic identification of key price levels
-- **Market Regime Classification**: Trend/ranging/volatile market detection
-- **Multi-Timeframe Consensus**: Confirms signals across multiple timeframes
+| Metric | Value |
+|--------|-------|
+| **ROI** | +1990% (with fees, slippage, funding) |
+| **Win Rate** | 68.7% |
+| **Trades** | ~789 over 12 months (~2-3/day) |
+| **Positive Months** | 10/12 |
+| **Max Drawdown** | ~15% |
 
-### ⚡ Smart Execution
-- **Adaptive Order Routing**: Chooses between market, limit, and TWAP execution based on conditions
-- **Liquidity-Aware Sizing**: Adjusts position size based on order book depth
-- **Slippage Protection**: Real-time spread monitoring and rejection of poor fills
-- **Execution Telemetry**: Tracks fill rates, latency, and execution quality
+### Top Performing Assets (24-month backtest)
 
-### 🛡️ Risk Management
-- **Per-Trade Risk Control**: Configurable risk percentage per trade (0.5-3%)
-- **Position Sizing**: Automatic calculation based on ATR-based stop distances
-- **Circuit Breakers**: Automatic pause after consecutive losses or daily loss limits
-- **Trailing Stops**: Dynamic stop-loss adjustment as trade becomes profitable
-- **Partial Profit Taking**: Multi-level take-profit targets with ladder exits
-- **Position Flipping**: Optional feature to reverse position direction on strong counter-signals (see [POSITION_FLIPPING_FEATURE.md](POSITION_FLIPPING_FEATURE.md))
+| Asset | ROI | Win Rate |
+|-------|-----|----------|
+| 🏆 DOGE | +438% | 65.5% |
+| 🏆 IMX | +344% | 67.9% |
+| 🏆 SEI | +280% | 65.8% |
+| 🏆 SUI | +266% | 65.4% |
+| XRP | +185% | 65.0% |
+| ETH | +173% | 67.8% |
 
-### 📈 Performance Tracking
-- **Real-Time KPIs**: Win rate, profit factor, expectancy, Sharpe ratio
-- **Trade Analytics**: Detailed logging of every decision, entry, and exit
-- **Session Management**: Track multiple agent instances simultaneously
-- **Adaptive Learning**: System learns from past trades to refine parameters
+---
+
+## 📊 Trading Strategy V5.7
+
+### Regime Filter: BTC vs SMA200
+
+The strategy uses BTC's position relative to its 200-period SMA (on 15m candles = ~50 hours) to determine market regime:
+
+\`\`\`
+BTC > SMA200  →  🟢 BULL MARKET  →  LONG trades only
+BTC < SMA200  →  🔴 BEAR MARKET  →  SHORT trades only
+\`\`\`
+
+This prevents:
+- Going LONG in downtrends (catching falling knives)
+- Going SHORT in uptrends (fighting the trend)
+
+---
+
+## 🟢 Entry Conditions
+
+### LONG Entry (Bull Regime: BTC > SMA200)
+
+All 5 conditions must be TRUE:
+
+| # | Filter | Condition | Purpose |
+|---|--------|-----------|---------|
+| 1 | **Bullish Candle** | \`close > open\` | Confirms upward momentum |
+| 2 | **Consecutive Up ≤ 3** | Max 3 green candles in a row | Avoids buying tops |
+| 3 | **BB Breakout** | \`close > Bollinger Upper Band (20, 2σ)\` | Confirmed breakout |
+| 4 | **ROC10 ≥ 2.5%** | Price up 2.5%+ over 10 periods | Strong momentum |
+| 5 | **Volume ≥ 2x** | Volume ≥ 2× 20-period average | Volume confirmation |
+
+### SHORT Entry (Bear Regime: BTC < SMA200)
+
+All 6 conditions must be TRUE:
+
+| # | Filter | Condition | Purpose |
+|---|--------|-----------|---------|
+| 1 | **Bearish Candle** | \`close < open\` | Confirms downward momentum |
+| 2 | **Consecutive Down ≤ 5** | Max 5 red candles in a row | Avoids shorting oversold |
+| 3 | **ROC5 ≤ -1.5%** | Price down 1.5%+ over 5 periods | Significant drop |
+| 4 | **Volume ≥ 2x** | Volume ≥ 2× 20-period average | Panic selling confirmed |
+| 5 | **Price < MA20** | Close under 20-period MA | Bearish trend |
+| 6 | **BB Breakdown** | \`close < Bollinger Lower Band\` | Confirmed breakdown |
+
+---
+
+## 🚪 Exit Management
+
+### Exit Conditions (checked every tick)
+
+| Condition | Threshold | Action |
+|-----------|-----------|--------|
+| **Stop Loss** | Dynamic (ATR × 2.0, min 0.8%, max 3.0%) | Immediate close |
+| **Take Profit** | +3.0% | Immediate close |
+| **Time Exit** | 48 hours (2880 min) | Close if still open |
+| **Trailing Stop** | Activated at +1.0% | Trail at 0.4% distance |
+| **Momentum Fade** | PnL > 1.5% AND ROC5 < 0.5% | Close (momentum lost) |
+| **Volume Dry** | PnL > 0.5% AND Vol < 0.5× avg | Close (no follow-through) |
+
+### Dynamic Stop Loss (V5.7)
+
+Stop loss adapts to market volatility using ATR:
+
+\`\`\`typescript
+SL = ATR(14) × 2.0
+// Clamped between 0.8% and 3.0%
+\`\`\`
+
+**Backtested improvement:** +370% PnL vs fixed stop, -20% stop hunts
+
+### Trailing Stop Logic
+
+\`\`\`
+1. Position opened at \$100 (LONG)
+2. Initial SL at \$98.50 (1.5%)
+
+3. Price rises to \$101 (+1%) → Trailing ACTIVATED
+   → New SL = \$101 × (1 - 0.4%) = \$100.60
+
+4. Price rises to \$102 (+2%) → Trail tightens
+   → New SL = \$102 × (1 - 0.4%) = \$101.59
+
+5. Price drops to \$101.50
+   → SL stays at \$101.59 (never moves down)
+   → Price < SL → EXIT with +1.5% profit
+\`\`\`
+
+---
+
+## 💰 Capital Management
+
+### Shared Capital Pool
+
+All agents share a single capital pool per mode (paper/live):
+
+\`\`\`
+Total: \$10,000
+├── Available: \$6,000
+├── Reserved: \$0 (pre-order hold)
+└── In Position: \$4,000
+    ├── SEI: \$2,600
+    └── ETH: \$1,400
+\`\`\`
+
+### Position Sizing
+
+\`\`\`typescript
+// Config
+POSITION_SIZE_PCT = 40%      // Each trade uses 40% of available capital
+MAX_POSITIONS = 4            // Maximum 4 concurrent positions
+LEVERAGE = 4.5x              // Uniform leverage across all assets
+
+// Example
+Available: \$6,000
+Margin: 40% × \$6,000 = \$2,400
+Notional: \$2,400 × 4.5 = \$10,800 exposure
+\`\`\`
+
+### Liquidity Caps (V5.5)
+
+Position size is capped based on asset liquidity tier:
+
+| Tier | Assets | Max Position |
+|------|--------|--------------|
+| HIGH | BTC, ETH | \$500,000 |
+| MEDIUM | XRP, SOL, DOGE, AVAX, LINK, ADA | \$100,000 |
+| LOW | SEI, IMX, DOT, SUI | \$25,000 |
+
+---
+
+## 🛡️ Risk Management
+
+### Circuit Breaker
+
+| Trigger | Action |
+|---------|--------|
+| **3 consecutive losses** | Cooldown 5-15 min |
+| **4 consecutive losses** | Cooldown 15-25 min |
+| **5+ consecutive losses** | Cooldown 30-45 min |
+| **Daily loss limit hit** | Trading paused until next day |
+
+### Daily Loss Limit
+
+Per-agent daily PnL is tracked. When daily loss reaches the limit (configurable), trading is paused with notification.
+
+### Dynamic Leverage (V5.6)
+
+Leverage is reduced during high volatility:
+
+\`\`\`typescript
+if (ATR/price > 2%) {
+  leverage = 3x  // Reduced from base 4.5x
+}
+\`\`\`
 
 ---
 
 ## 🏗️ Architecture
 
-The system is built as a monorepo with three main components:
-
-```
-trading-agent-ia-v3/
-├── backend/          # Node.js/TypeScript trading engine
-├── frontend/         # React dashboard
-├── docs/             # Documentation
-└── logs/             # Trade logs and analytics
-```
-
-### Technology Stack
-
-**Backend:**
-- **Runtime**: Node.js 20+ with TypeScript 5.4+
-- **Exchange Integration**: CCXT (supports 100+ exchanges)
-- **Database**: PostgreSQL with Prisma ORM
-- **WebSocket**: Real-time market data and order updates
-- **AI/ML**: OpenAI GPT-4 for sentiment, Python XGBoost for predictions
-
-**Frontend:**
-- **Framework**: React 18 with TypeScript
-- **UI Library**: Ant Design
-- **Charts**: Lightweight Charts by TradingView
-- **State Management**: Zustand
-- **Build Tool**: Vite
-
-**Infrastructure:**
-- **Containerization**: Docker & Docker Compose
-- **Monitoring**: Console Ninja runtime logs
-- **Version Control**: Git with GitKraken integration
-
-### System Components
-
-#### 1. **Agent Hub** (`backend/src/agent/hub.ts`)
-Central registry for all active trading agents. Manages lifecycle, state, and communication.
-
-#### 2. **Meta-Adaptive Engine** (`backend/src/quantai/strategies/metaAdaptive/`)
-Core strategy evaluation engine that recognizes market patterns and generates signals.
-
-#### 3. **Market Data Pipeline** (`backend/src/data/`)
-Fetches, caches, and preprocesses market data (OHLCV, indicators, order books).
-
-#### 4. **Execution Engine** (`backend/src/exec/`)
-Handles order placement, execution monitoring, and fill management.
-
-#### 5. **Risk Manager** (`backend/src/risk/`)
-Enforces position limits, risk constraints, and circuit breakers.
-
-#### 6. **Performance Analytics** (`backend/src/metrics/`)
-Tracks and calculates trading performance metrics.
-
-#### 7. **WebSocket Server** (`backend/src/ws/`)
-Real-time updates to frontend clients (prices, positions, trades).
-
-#### 8. **Intelligent Selector** (`backend/src/services/intelligentAgent/`)
-Automatically selects optimal cryptocurrency to trade based on opportunity ranking.
-
----
-
-## 📈 Trading Strategy
-
-### Meta-Adaptive Strategy Philosophy
-
-The trading system does not rely on a single fixed strategy. Instead, it employs a **meta-adaptive approach** that recognizes current market conditions and selects the most appropriate strategy from its toolkit.
-
-### Recognized Strategies
-
-The system evaluates **8 core strategy patterns** on every tick:
-
-1. **Trend Following** (`trend_ma_cross`, `trend_ema_momentum`)
-   - Detects strong directional moves
-   - Requires ADX > 20, aligned EMAs, increasing momentum
-
-2. **Breakout** (`breakout_consolidation`, `breakout_volatility`)
-   - Identifies range breakouts and volatility expansions
-   - Requires volume surge, ATR expansion, price beyond resistance
-
-3. **Mean Reversion** (`mean_bollinger`, `mean_rsi_oversold`)
-   - Trades oversold/overbought extremes
-   - Requires RSI < 30 or > 70, price at Bollinger bands, reversal signals
-
-4. **Momentum** (`momentum_surge`, `momentum_rsi_breakout`)
-   - Captures strong momentum shifts
-   - Requires RSI momentum divergence, volume confirmation, ADX rising
-
-### Signal Generation Process
-
-For each strategy, the system computes:
-
-**1. Confidence Score (0-100)**
-```typescript
-confidence = (
-  rawScore * 0.4 +           // Base technical score
-  qualityMultiplier * 0.3 +  // Market quality factors
-  calibrationBoost * 0.3     // Historical performance adjustment
-)
-```
-
-**2. Entry Eligibility Score (0-100)**
-```typescript
-entryEligibility = average([
-  momentumScore,    // ADX, RSI momentum
-  flowScore,        // CMF, volume quality
-  atrScore,         // Volatility appropriateness
-  qualityScore      // Symbol quality, liquidity
-])
-```
-
-**3. Risk/Reward Ratio**
-```typescript
-RR = (targetDistance / stopDistance)
-// Must be >= 1.5 for entry consideration
-```
-
-### Entry Criteria (All Must Pass)
-
-✅ **Confidence Gate**: `confidence >= 55%` (configurable)  
-✅ **Entry Eligibility Gate**: `entryEligibility >= 40%` (configurable)  
-✅ **Risk/Reward Gate**: `RR >= 1.5`  
-✅ **Symbol Quality**: Minimum volume, liquidity, no anomalies  
-✅ **Position Limits**: Max positions per symbol, total exposure  
-✅ **XGBoost Confirmation**: ML model agrees with directional bias (optional)
-
-### Position Sizing
-
-```typescript
-// ATR-based stop distance
-stopDistance = ATR14 * stopMultiplier (default 2.0)
-
-// Risk-based sizing
-riskAmount = accountBalance * riskPercentage
-positionSize = riskAmount / stopDistance
-
-// Capped by liquidity
-maxSize = orderBookDepth / 10  // Use max 10% of book depth
-finalSize = min(positionSize, maxSize)
-```
-
-### Exit Management
-
-The system uses **adaptive trailing stops** and **multi-level profit targets**:
-
-**Initial Bracket:**
-```typescript
-stopLoss = entryPrice ± (ATR * 2.0)
-takeProfit1 = entryPrice ± (ATR * 3.0)  // 1.5R
-takeProfit2 = entryPrice ± (ATR * 4.5)  // 2.25R
-takeProfit3 = entryPrice ± (ATR * 6.0)  // 3.0R
-```
-
-**Trailing Logic:**
-- **Starts trailing** after reaching 1.2R profit
-- **Trail distance**: 60% of initial stop distance
-- **Tightens** if momentum fails (ADX < 15 or CMF < 0)
-- **Breakeven move** at 1.2R to protect capital
-
-**Early Exit Conditions:**
-- Momentum failure before minimum hold time (5 minutes default)
-- Opposite signal from higher-confidence strategy
-- Adverse price movement > 1.5R before profit target
-- Market regime change (trend → volatile)
-
-### Aggressiveness Modes
-
-The system supports three risk profiles:
-
-**Conservative:**
-- Only trades BTC/ETH and top-tier assets
-- Volume requirement: $75M+
-- Tighter filters, lower position sizes
-- Target: 40-50% win rate, 1.3-1.5 profit factor
-
-**Reactive (Default):**
-- Trades top 20-30 cryptocurrencies
-- Volume requirement: $50M+
-- Balanced risk/reward
-- Target: 38-45% win rate, 1.4-1.7 profit factor
-
-**Aggressive:**
-- Trades up to 50 opportunities
-- Volume requirement: $35M+
-- Looser filters, higher risk tolerance
-- Target: 35-42% win rate, 1.5-2.0+ profit factor
-
----
-
-## 🔄 Execution Flow
-
-Here's a detailed breakdown of how the trading system operates from market data to order execution:
-
-### 1. Market Data Ingestion (Every Tick)
-
-```
-WebSocket Stream (1s updates)
-    ↓
-Market Data Cache
-    ↓
-OHLCV Aggregation (15m, 1h, 4h)
-    ↓
-Technical Indicator Calculation
-```
-
-**Indicators Computed:**
-- EMAs: 20, 50, 100, 200
-- RSI: 14-period
-- ADX: 14-period  
-- ATR: 14-period
-- CMF: 20-period
-- Volume: Relative volume ratio
-- Support/Resistance: Recent pivots
-
-### 2. Strategy Evaluation (Every 15 seconds)
-
-```
-For each active session:
-    ↓
-1. Fetch latest technical snapshot
-    ↓
-2. Evaluate all 8 recognized strategies
-    ↓
-3. Calculate confidence + entry eligibility for each
-    ↓
-4. Filter: Keep only signals passing all gates
-    ↓
-5. Rank: Sort by confidence * entryEligibility
-    ↓
-6. Select: Choose highest-ranked signal
-```
-
-**Example Output:**
-```json
-{
-  "strategyId": "breakout_volatility",
-  "confidence": 68.5,
-  "entryEligibility": 72.3,
-  "bias": "long",
-  "riskReward": 2.1,
-  "entryPrice": 98432.50,
-  "stopDistance": 985.20,
-  "targets": [99910.45, 100895.70, 101880.95]
-}
-```
-
-### 3. Entry Decision (If Signal Exists)
-
-```
-Signal Received
-    ↓
-Check Position Limits
-    ↓
-Calculate Position Size
-    ↓
-Choose Execution Mode (market/limit/twap)
-    ↓
-Register Trade Entry (DB + Memory)
-    ↓
-Place Order via Exchange
-    ↓
-Monitor Fill Status
-    ↓
-Update Agent Position State
-```
-
-**Position State:**
-```typescript
-{
-  side: 'buy' | 'sell',
-  qty: 0.15,
-  entry: 98432.50,
-  stop: 97447.30,
-  targets: [99910.45, 100895.70, 101880.95],
-  signal: {...},
-  openedAt: 1699234567890,
-  triggeredTargets: new Set()
-}
-```
-
-### 4. Position Monitoring (Every Tick While In Position)
-
-```
-For each open position:
-    ↓
-Fetch current price
-    ↓
-Calculate current R-multiple
-    ↓
-Check exit conditions:
-    ├─ Stop loss hit?
-    ├─ Take profit hit?
-    ├─ Momentum failure?
-    ├─ Time-based exit?
-    └─ Opposite signal?
-    ↓
-If exit triggered:
-    ├─ Place exit order
-    ├─ Calculate P&L
-    ├─ Register outcome
-    ├─ Update KPIs
-    └─ Clear position state
-Else if trailing conditions met:
-    └─ Adjust stop loss upward
-```
-
-### 5. Performance Tracking (After Each Trade)
-
-```
-Trade Completed
-    ↓
-Calculate Metrics:
-    ├─ P&L (USD)
-    ├─ R-multiple
-    ├─ Hold time
-    ├─ Slippage
-    ├─ Fee impact
-    └─ Exit reason
-    ↓
-Update Session KPIs:
-    ├─ Win rate
-    ├─ Profit factor
-    ├─ Expectancy
-    ├─ Sharpe ratio
-    └─ Max drawdown
-    ↓
-Adaptive Learning:
-    ├─ Store trade features
-    ├─ Update strategy weights
-    └─ Adjust parameters
-```
-
-### 6. Intelligent Symbol Selection (Smart Agents Only)
-
-```
-Every 30 minutes (or on manual trigger):
-    ↓
-Scan Top 50 Cryptos by Volume
-    ↓
-For each symbol:
-    ├─ Fetch technical snapshot
-    ├─ Evaluate all strategies
-    ├─ Calculate opportunity score
-    └─ Check quality filters
-    ↓
-Rank by composite score:
-    = confidence * entryEligibility * qualityMultiplier
-    ↓
-Select Top Opportunity
-    ↓
-If better than current symbol:
-    ├─ Close existing position (if any)
-    ├─ Switch to new symbol
-    └─ Notify user
-```
-
-### 7. Risk Management (Continuous)
-
-**Per-Trade:**
-- Max risk per trade: 0.5-3% of account
-- Position size capped by liquidity
-- Stop loss always set on entry
-
-**Per-Session:**
-- Max daily trades: 7-15 (configurable)
-- Max consecutive losses: 3 (circuit breaker)
-- Daily loss limit: 5% of account
-
-**Global:**
-- Max concurrent positions: 5
-- Max exposure per symbol: 20% of account
-- Emergency stop on exchange errors
-
----
-
-## 📁 Project Structure
-
-```
-trading-agent-ia-v3/
-│
+\`\`\`
+QuantAILabs/
 ├── backend/
 │   ├── src/
-│   │   ├── agent/              # Agent lifecycle, hub, state management
-│   │   │   ├── hub.ts          # Central agent registry
-│   │   │   ├── state.ts        # Agent state machine
-│   │   │   ├── validator.ts    # Plan validation
-│   │   │   └── executionPlanner.ts  # Execution mode selection
+│   │   ├── strategies/
+│   │   │   ├── simpleAgent.ts      # Main agent class
+│   │   │   └── momentumSimple.ts   # Strategy config & signal logic
 │   │   │
-│   │   ├── quantai/            # Meta-adaptive strategy engine
-│   │   │   └── strategies/
-│   │   │       └── metaAdaptive/
-│   │   │           ├── metaAdaptiveAgent.ts      # Main agent class
-│   │   │           ├── recognizedStrategies.ts   # 8 core strategies
-│   │   │           ├── exitManager.ts            # Exit logic
-│   │   │           └── backtest.ts               # Backtesting engine
+│   │   ├── quantai/
+│   │   │   └── risk/
+│   │   │       ├── circuitBreaker.ts   # Loss limits & cooldowns
+│   │   │       └── config.ts           # Risk configuration
 │   │   │
 │   │   ├── services/
-│   │   │   ├── metaAdaptiveOrchestrator.ts  # Main execution loop
-│   │   │   ├── intelligentAgent/            # Smart symbol selection
-│   │   │   ├── agentCreationFlow.ts         # Agent initialization
-│   │   │   └── positionSyncService.ts       # Position reconciliation
+│   │   │   ├── binanceWebSocket.ts     # Real-time market data
+│   │   │   └── notificationService.ts  # WebSocket notifications
 │   │   │
-│   │   ├── data/               # Market data pipeline
-│   │   │   ├── market.ts       # OHLCV fetching
-│   │   │   ├── indicators.ts   # Technical indicators
-│   │   │   └── cache.ts        # Data caching layer
-│   │   │
-│   │   ├── ai/                 # AI/ML components
-│   │   │   ├── tech.ts         # Technical snapshot builder
-│   │   │   ├── multiTimeframe.ts  # MTF analysis
-│   │   │   └── planOrchestrator.ts  # LLM integration
-│   │   │
-│   │   ├── exec/               # Order execution
-│   │   │   ├── broker.ts       # Exchange interface
-│   │   │   └── orderManager.ts # Order lifecycle
-│   │   │
-│   │   ├── risk/               # Risk management
-│   │   │   ├── manager.ts      # Risk limits enforcement
-│   │   │   └── sizer.ts        # Position sizing
-│   │   │
-│   │   ├── metrics/            # Performance tracking
-│   │   │   ├── kpi.ts          # KPI calculations
-│   │   │   └── analytics.ts    # Trade analytics
-│   │   │
-│   │   ├── learning/           # Adaptive learning
-│   │   │   ├── decisionMemory.ts  # Trade history
-│   │   │   └── adaptiveWeights.ts # Parameter tuning
-│   │   │
-│   │   ├── routes/             # REST API endpoints
-│   │   │   ├── agent.ts        # Agent control
-│   │   │   ├── session.ts      # Session management
-│   │   │   └── analytics.ts    # Performance queries
-│   │   │
-│   │   ├── ws/                 # WebSocket server
-│   │   │   └── server.ts       # Real-time updates
-│   │   │
-│   │   ├── db/                 # Database
-│   │   │   └── client.ts       # Prisma client
-│   │   │
-│   │   └── server.ts           # Express app entry point
+│   │   └── server.ts              # Express API server
 │   │
-│   ├── prisma/
-│   │   └── schema.prisma       # Database schema
-│   │
-│   ├── python/                 # Python ML services
-│   │   ├── ccxt_xgboost_module.py     # Direction predictor
-│   │   ├── prediction_engine.py       # Prediction service
-│   │   └── scheduled_training.py      # Model retraining
-│   │
-│   ├── scripts/                # Utility scripts
-│   │   ├── multi-agent-pool-test.ts   # Multi-agent testing
-│   │   ├── meta-adaptive-candle-backtest.ts  # Backtesting
-│   │   └── agent-performance-analyzer.ts      # Analytics
-│   │
-│   ├── test/                   # Test suites
-│   ├── logs/                   # Log files
-│   └── data/                   # Cache & historical data
+│   └── prisma/
+│       └── schema.prisma          # Database schema
 │
 ├── frontend/
 │   ├── src/
 │   │   ├── pages/
-│   │   │   ├── Dashboard.tsx   # Main dashboard
-│   │   │   ├── Trading.tsx     # Trading view
-│   │   │   ├── Analytics.tsx   # Performance analytics
-│   │   │   └── Settings.tsx    # Configuration
+│   │   │   ├── Dashboard.tsx      # Main monitoring view
+│   │   │   ├── FeedPage.tsx       # Activity feed with tick logs
+│   │   │   └── TradingPage.tsx    # Position management
 │   │   │
-│   │   ├── components/
-│   │   │   ├── AgentCard.tsx   # Agent status card
-│   │   │   ├── TradingChart.tsx  # Price chart
-│   │   │   ├── PositionTable.tsx  # Open positions
-│   │   │   └── MetricsPanel.tsx   # KPI display
-│   │   │
-│   │   ├── hooks/
-│   │   │   ├── useWebSocket.ts  # WS connection
-│   │   │   └── useApi.ts        # API calls
-│   │   │
-│   │   ├── store.ts            # Zustand state
-│   │   ├── api.ts              # API client
-│   │   └── App.tsx             # Root component
+│   │   └── components/
+│   │       └── NotificationsPanel.tsx  # Real-time alerts
 │   │
 │   └── package.json
 │
-├── docs/                       # Documentation
-│   ├── META_ADAPTIVE_CRYPTO_SELECTION.md
-│   ├── PHASE2_LEARNING_SYSTEM.md
-│   └── ADAPTIVE_COOLDOWN_IMPLEMENTATION.md
-│
-└── README.md                   # This file
-```
+└── docs/
+    ├── AGENT_STRATEGY_V54.md      # Detailed strategy documentation
+    └── PER_AGENT_DAILY_LOSS_LIMIT.md
+\`\`\`
+
+### Technology Stack
+
+**Backend:**
+- Runtime: Node.js 20+ with TypeScript 5.4+
+- Exchange: Binance Futures via CCXT + WebSocket
+- Database: PostgreSQL with Prisma ORM
+- Real-time: WebSocket for market data & notifications
+
+**Frontend:**
+- Framework: React 18 with TypeScript
+- UI Library: Ant Design
+- Charts: Lightweight Charts by TradingView
+- Build Tool: Vite
 
 ---
 
@@ -569,281 +280,69 @@ trading-agent-ia-v3/
 
 ### Prerequisites
 
-- **Node.js** 20+ and npm
-- **Python** 3.9+ (for ML predictor)
-- **PostgreSQL** 14+ (or Docker)
-- **Exchange API Keys** (Binance recommended)
-- **OpenAI API Key** (optional, for LLM sentiment)
+- Node.js 20+
+- PostgreSQL 14+
+- Binance Futures account with API keys
 
-### 1. Clone the Repository
+### 1. Clone & Install
 
-```bash
+\`\`\`bash
 git clone https://github.com/Simon-benhamou/trading-agent-ia-v3.git
 cd trading-agent-ia-v3
-```
 
-### 2. Install Dependencies
+# Install backend
+cd backend && npm install
 
-**Backend:**
-```bash
-cd backend
-npm install
-```
+# Install frontend
+cd ../frontend && npm install
+\`\`\`
 
-**Frontend:**
-```bash
-cd frontend
-npm install
-```
+### 2. Database Setup
 
-**Python (ML predictor):**
-```bash
-cd backend/python
-pip install -r ../requirements.txt
-```
+\`\`\`bash
+# Create database
+createdb quantailabs
 
-### 3. Database Setup
-
-**Option A: Using Docker**
-```bash
-docker-compose up -d postgres
-```
-
-**Option B: Local PostgreSQL**
-```bash
-createdb trading_agent_ia_v3
-```
-
-**Run Migrations:**
-```bash
+# Run migrations
 cd backend
 npx prisma migrate deploy
 npx prisma generate
-```
+\`\`\`
 
-### 4. Environment Configuration
+### 3. Environment Configuration
 
-Create `.env` file in `backend/`:
+Create \`backend/.env\`:
 
-```bash
+\`\`\`bash
 # Database
-DATABASE_URL="postgresql://user:password@localhost:5432/trading_agent_ia_v3"
+DATABASE_URL="postgresql://user:password@localhost:5432/quantailabs"
 
-# Exchange (Binance example)
-EXCHANGE_ID="binance"
-EXCHANGE_API_KEY="your_api_key"
-EXCHANGE_SECRET="your_secret"
-EXCHANGE_TESTNET=true  # Start with testnet!
+# Binance Futures
+BINANCE_API_KEY="your_api_key"
+BINANCE_SECRET="your_secret"
 
-# AI/ML (optional)
-OPENAI_API_KEY="your_openai_key"
-GROK_API_KEY="your_grok_key"  # Alternative to OpenAI
-
-# Risk Management
-DEFAULT_RISK_PCT=1.0
-MAX_TRADES_PER_DAY=10
-MAX_CONSECUTIVE_LOSSES=3
-
-# Strategy
-CONFIDENCE_THRESHOLD=55
-ENTRY_ELIGIBILITY_THRESHOLD=40
-MIN_RISK_REWARD=1.5
+# JWT for authentication
+JWT_SECRET="your_jwt_secret"
 
 # Server
 PORT=3000
 FRONTEND_URL="http://localhost:5173"
-```
+\`\`\`
 
-### 5. Start the Services
+### 4. Start Services
 
-**Terminal 1 - Backend:**
-```bash
-cd backend
-npm run dev
-```
+\`\`\`bash
+# Terminal 1 - Backend
+cd backend && npm run dev
 
-**Terminal 2 - Frontend:**
-```bash
-cd frontend
-npm run dev
-```
+# Terminal 2 - Frontend
+cd frontend && npm run dev
+\`\`\`
 
-**Terminal 3 - Python Predictor (optional):**
-```bash
-cd backend/python
-python3 predict_service.py
-```
+### 5. Access
 
-### 6. Access the Application
-
-- **Frontend**: http://localhost:5173
-- **Backend API**: http://localhost:3000
-- **API Docs**: http://localhost:3000/api/docs
-
----
-
-## ⚙️ Configuration
-
-### Agent Configuration
-
-Create an agent via the frontend or API:
-
-```typescript
-// POST /api/agent/create
-{
-  "symbol": "BTC/USDT",  // Or null for intelligent selection
-  "aggressiveness": "reactive",  // conservative | reactive | aggressive
-  "accountBalanceUsd": 10000,
-  "riskPercentage": 1.0,
-  "usePredictor": true,  // Use XGBoost ML predictor
-  "maxTradesPerDay": 10,
-  "mode": "live"  // live | paper
-}
-```
-
-### Strategy Tuning
-
-Key parameters in `.env`:
-
-```bash
-# Entry Gates
-CONFIDENCE_THRESHOLD=55          # 0-100, higher = stricter
-ENTRY_ELIGIBILITY_THRESHOLD=40   # 0-100, higher = stricter
-MIN_RISK_REWARD=1.5              # Minimum R:R ratio
-
-# Exit Management
-STOP_ATR_MULTIPLIER=2.0          # Stop distance in ATRs
-TRAIL_AFTER_R=1.2                # Start trailing at 1.2R
-TRAIL_DISTANCE_PCT=60            # Trail 60% of initial stop
-BREAKEVEN_AT_R=1.2               # Move to breakeven at 1.2R
-
-# Position Sizing
-DEFAULT_RISK_PCT=1.0             # Risk 1% per trade
-MAX_POSITION_SIZE_PCT=20         # Max 20% of account per position
-
-# Symbol Selection (Intelligent Agents)
-MIN_VOLUME_USD=50000000          # $50M minimum volume
-MIN_LIQUIDITY_USD=15000          # $15K order book depth
-RESCAN_INTERVAL_MIN=30           # Rescan every 30 minutes
-```
-
----
-
-## 💻 Usage
-
-### Starting an Agent
-
-**Via Frontend:**
-1. Navigate to Dashboard
-2. Click "Create New Agent"
-3. Configure settings (symbol, risk, mode)
-4. Click "Start Agent"
-
-**Via API:**
-```bash
-curl -X POST http://localhost:3000/api/agent/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "symbol": "ETH/USDT",
-    "aggressiveness": "reactive",
-    "accountBalanceUsd": 5000,
-    "mode": "paper"
-  }'
-```
-
-### Monitoring Performance
-
-**Real-time Dashboard:**
-- View open positions
-- Track P&L
-- Monitor win rate, profit factor
-- See trade history
-
-**API Queries:**
-```bash
-# Get session KPIs
-GET /api/session/:sessionId/kpi
-
-# Get recent trades
-GET /api/session/:sessionId/trades?limit=50
-
-# Get analytics
-GET /api/analytics/performance?sessionId=xxx
-```
-
-### Backtesting
-
-Run backtests on historical data:
-
-```bash
-cd backend
-npm run backtest -- --symbol BTC/USDT --from 2024-01-01 --to 2024-12-31
-```
-
-Or use the meta-adaptive backtest script:
-
-```bash
-npx tsx scripts/meta-adaptive-candle-backtest.ts
-```
-
-### Multi-Agent Pool Testing
-
-Test multiple agents simultaneously:
-
-```bash
-npx tsx scripts/multi-agent-pool-test.ts
-```
-
----
-
-## 📊 Performance Monitoring
-
-### Key Metrics
-
-**Win Rate**: Percentage of profitable trades
-- Target: 38-50% depending on mode
-- Formula: `wins / totalTrades * 100`
-
-**Profit Factor**: Ratio of gross profit to gross loss
-- Target: > 1.5
-- Formula: `sumWins / sumLosses`
-
-**Expectancy**: Average profit per trade
-- Target: > 0
-- Formula: `(winRate * avgWin) - (lossRate * avgLoss)`
-
-**Sharpe Ratio**: Risk-adjusted returns
-- Target: > 1.0
-- Formula: `mean(returns) / stddev(returns)`
-
-**Max Drawdown**: Largest peak-to-trough decline
-- Target: < 10%
-- Formula: `max((peak - trough) / peak)`
-
-### Performance Analysis Tools
-
-```bash
-# Analyze agent performance
-npm run analyze:performance
-
-# Monitor fees impact
-npm run analyze:fees
-
-# Check rejection reasons
-npm run analyze:rejection
-
-# Continuous monitoring
-npm run monitor:integrated
-```
-
-### Logging
-
-Logs are stored in `backend/logs/`:
-
-- `agent.log` - Agent lifecycle events
-- `trades.log` - Trade execution details
-- `ops_events.log` - Operational events
-- `errors.log` - Error tracking
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:3000
 
 ---
 
@@ -851,180 +350,112 @@ Logs are stored in `backend/logs/`:
 
 ### Agent Management
 
-**Create Agent**
-```http
-POST /api/agent/create
+**Start Agents**
+\`\`\`http
+POST /api/agent/start
 Content-Type: application/json
 
 {
-  "symbol": "BTC/USDT",
-  "aggressiveness": "reactive",
-  "accountBalanceUsd": 10000,
+  "mode": "paper",        // "paper" or "live"
+  "capitalUsd": 10000     // Starting capital (paper only)
+}
+\`\`\`
+
+**Stop Agents**
+\`\`\`http
+POST /api/agent/stop
+Content-Type: application/json
+
+{
   "mode": "paper"
 }
-```
+\`\`\`
 
-**Start Agent**
-```http
-POST /api/agent/start/:sessionId
-```
-
-**Stop Agent**
-```http
-POST /api/agent/stop/:sessionId
-```
-
-**Get Agent Status**
-```http
-GET /api/agent/status/:sessionId
-```
-
-### Trading Operations
-
-**Get Open Positions**
-```http
-GET /api/positions/:sessionId
-```
-
-**Force Exit Position**
-```http
-POST /api/positions/:sessionId/exit
+**Restart Agents**
+\`\`\`http
+POST /api/agent/restart
 Content-Type: application/json
 
 {
-  "reason": "manual_exit"
+  "mode": "paper",
+  "capitalUsd": 10000
 }
-```
+\`\`\`
 
-**Trigger Symbol Reselection**
-```http
-POST /api/agent/reselect/:sessionId
-```
+**Get Status**
+\`\`\`http
+GET /api/agent/status?mode=paper
+\`\`\`
 
-### Analytics
+### Capital Management
 
-**Get Session KPIs**
-```http
-GET /api/session/:sessionId/kpi
-```
+**Get Capital Snapshot**
+\`\`\`http
+GET /api/capital/:mode/snapshot
+\`\`\`
 
-**Get Trade History**
-```http
-GET /api/session/:sessionId/trades?limit=100&offset=0
-```
+**Set Paper Balance**
+\`\`\`http
+POST /api/capital/paper/set-balance
+Content-Type: application/json
 
-**Get Performance Analytics**
-```http
-GET /api/analytics/performance?sessionId=xxx&from=2024-01-01&to=2024-12-31
-```
+{
+  "balanceUsd": 15000
+}
+\`\`\`
+
+### Market Data
+
+**Get Market Conditions**
+\`\`\`http
+GET /api/market-conditions
+\`\`\`
+
+**Get Liquidity Info**
+\`\`\`http
+GET /api/liquidity-info?symbol=ETH/USDT:USDT
+\`\`\`
 
 ### WebSocket Events
 
-Subscribe to real-time updates:
+Connect to \`ws://localhost:3000\` for real-time updates:
 
-```javascript
-const ws = new WebSocket('ws://localhost:3000');
+\`\`\`javascript
+// Events received:
+{
+  type: 'tick',           // Price tick
+  type: 'notification',   // Trade alerts
+  type: 'agent_log',      // Agent activity logs
+  type: 'position_update' // Position changes
+}
 
-ws.on('message', (data) => {
-  const event = JSON.parse(data);
-  
-  switch(event.type) {
-    case 'price_update':
-      // Handle price update
-      break;
-    case 'position_opened':
-      // Handle new position
-      break;
-    case 'position_closed':
-      // Handle position close
-      break;
-    case 'kpi_update':
-      // Handle KPI update
-      break;
-  }
-});
-```
+// Notification types:
+- trade_entry      // Position opened
+- trade_exit       // Position closed
+- order_error      // Order failed
+- daily_loss_limit // Loss limit hit
+- trailing_active  // Trailing stop activated
+- regime_change    // BTC crossed SMA200
+- high_volatility  // Leverage reduced
+- signal_detected  // Signal found (before entry)
+\`\`\`
 
 ---
 
 ## 🧪 Testing
 
-### Run Test Suites
+### Run Backtest
 
-```bash
+\`\`\`bash
 cd backend
+node backtest-combined-v54.mjs
+\`\`\`
 
-# Unit tests
-npm run test:unit
+### Unit Tests
 
-# Integration tests
-npm run test:integration
-
-# End-to-end tests
-npm run test:e2e
-
-# All tests
+\`\`\`bash
 npm test
-```
-
-### Frontend Tests
-
-```bash
-cd frontend
-
-# Component tests
-npm test
-
-# E2E tests with Cypress
-npm run test:e2e
-```
-
----
-
-## 🛠️ Troubleshooting
-
-### Common Issues
-
-**Agent not executing trades:**
-1. Check if filters are too strict (lower `CONFIDENCE_THRESHOLD`)
-2. Verify exchange API keys are valid
-3. Check logs for rejection reasons: `grep "BLOCKED" logs/agent.log`
-
-**High rejection rate:**
-- Review rejection analysis: `npm run analyze:rejection`
-- Adjust aggressiveness mode or lower thresholds
-- Check if market conditions match strategy requirements
-
-**Poor performance:**
-- Run performance analysis: `npm run analyze:performance`
-- Check win rate and profit factor
-- Consider adjusting stop/target ratios
-- Review backtest results before going live
-
-**WebSocket disconnections:**
-- Check network stability
-- Verify firewall rules
-- Increase reconnection timeout in configuration
-
----
-
-## 📚 Additional Documentation
-
-- [Meta-Adaptive Crypto Selection](docs/META_ADAPTIVE_CRYPTO_SELECTION.md)
-- [Phase 2 Learning System](docs/PHASE2_LEARNING_SYSTEM.md)
-- [Adaptive Cooldown Implementation](docs/ADAPTIVE_COOLDOWN_IMPLEMENTATION.md)
-- [Per-Agent Daily Loss Limit](docs/PER_AGENT_DAILY_LOSS_LIMIT.md)
-
----
-
-## 🤝 Contributing
-
-This is a private project. For internal contributions:
-
-1. Create a feature branch: `git checkout -b feature/your-feature`
-2. Make changes and test thoroughly
-3. Commit with clear messages: `git commit -m "Add feature X"`
-4. Push and create a pull request
+\`\`\`
 
 ---
 
@@ -1035,17 +466,8 @@ This is a private project. For internal contributions:
 - Trading cryptocurrencies carries significant risk
 - Past performance does not guarantee future results
 - Only trade with capital you can afford to lose
-- Always test on paper/testnet before going live
+- Always test on paper mode before going live
 - The authors are not responsible for any financial losses
-
----
-
-## 📞 Support
-
-For questions or issues:
-- Check documentation in `docs/`
-- Review logs in `backend/logs/`
-- Run diagnostic scripts: `npm run analyze:*`
 
 ---
 
@@ -1057,4 +479,4 @@ Private - All Rights Reserved
 
 **Built with ❤️ by the QuantAI Team**
 
-*Last Updated: November 2025*
+*Last Updated: December 2025 - Strategy V5.7*

@@ -1,1 +1,0 @@
-"""QuantAILabs patch pack utilities."""
