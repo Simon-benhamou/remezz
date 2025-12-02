@@ -275,14 +275,14 @@ export default function DashboardPage(){
               title={
                 <Space>
                   <BulbOutlined style={{ color: '#722ed1' }} />
-                  AI Calls
+                  Total Trades
                 </Space>
               }
-              value={Number(ov?.aiCallsTotal || 0)}
+              value={Number(ov?.totalTrades || 0)}
               valueStyle={{ color: '#722ed1', fontSize: 28 }}
               suffix={
                 <div style={{ fontSize: 12, color: '#666' }}>
-                  Smart decisions
+                  {ov?.totalWins || 0} wins
                 </div>
               }
             />

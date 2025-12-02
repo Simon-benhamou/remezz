@@ -17,6 +17,8 @@ import BacktestPage from './pages/BacktestPage';
 import { useAppStore } from './store';
 import { Activity, BarChart, Bot, ListChecks, Radio, Zap, LineChart } from 'lucide-react';
 import { api } from './api';
+import { TradeNotificationProvider } from './providers/TradeNotificationProvider';
+import NotificationBell from './components/NotificationBell';
 
 const resolveActiveMenuKey = (pathname: string) => {
   if (pathname.startsWith('/operations') || pathname.startsWith('/mission-control')) return '/operations';
@@ -221,6 +223,7 @@ function AuthenticatedApp() {
             </div>
           </div>
           <Space size={18} align='center'>
+            <NotificationBell />
             <Segmented
               size='small'
               value={mode}
@@ -317,7 +320,11 @@ function AppInner() {
     );
   }
 
-  return <AuthenticatedApp />;
+  return (
+    <TradeNotificationProvider>
+      <AuthenticatedApp />
+    </TradeNotificationProvider>
+  );
 }
 
 export default function App() {

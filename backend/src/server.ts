@@ -28,6 +28,7 @@ import { router as backtestRouter } from "./routes/backtest.js";
 
 // Services
 import { getBinanceWebSocket } from "./services/binanceWebSocket.js";
+import { initNotificationService } from "./services/notificationService.js";
 
 // Strategy
 import { 
@@ -1187,6 +1188,24 @@ app.get("/api/agent/overview", async (req, res) => {
     const roiPct = initialCapital > 0 ? (totalPnlUsd / initialCapital) * 100 : 0;
     const netRoiPct = initialCapital > 0 ? (netPnlUsd / initialCapital) * 100 : 0;
     
+    // 🔧 FIX: Calculate avgWinRate from all sessions with trades
+    // Sum wins and total trades from all SessionKpi records
+    const sessionsWithTrades = enrichedSessions.filter(s => {
+      const stats = s.SessionKpi?.stats as any;
+      return stats?.trades && stats.trades > 0;
+    });
+    
+    let totalWins = 0;
+    let totalTrades = 0;
+    for (const s of sessionsWithTrades) {
+      const stats = s.SessionKpi?.stats as any;
+      if (stats) {
+        totalWins += stats.wins || 0;
+        totalTrades += stats.trades || 0;
+      }
+    }
+    const avgWinRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
+    
     res.json({
       sessions: enrichedSessions,
       capitalPool: capitalPoolStatus,
@@ -1198,6 +1217,10 @@ app.get("/api/agent/overview", async (req, res) => {
       initialCapitalUsd: initialCapital,
       activeCount: allAgents.length,
       symbols: allAgents.map(a => a.getStatus().symbol),
+      // Win rate aggregated from all sessions
+      avgWinRate,
+      totalTrades,
+      totalWins,
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to get overview" });
@@ -2681,6 +2704,9 @@ function broadcast(type: string, data: any, symbol?: string) {
   }
 }
 
+// Initialize notification service with broadcast function
+initNotificationService(broadcast);
+
 // ============================================
 // INITIALIZATION
 // ============================================
@@ -2766,22 +2792,46 @@ process.on('SIGINT', shutdown);
         
         // Get capital from first session profile or user settings
         const firstProfile = sessions[0]?.profileJson as any;
-        let capitalUsd = firstProfile?.capitalUsd || 10000;
+        let initialCapitalUsd = firstProfile?.capitalUsd || 10000;
         
-        // Try to get from user settings
+        // Try to get from user settings (this is the INITIAL capital, not current)
         try {
           const setting = await prisma.userSetting.findUnique({
             where: { userId_key: { userId, key: 'paperTradingCapital' } }
           });
           if (setting?.value) {
-            capitalUsd = parseFloat(setting.value) || capitalUsd;
+            initialCapitalUsd = parseFloat(setting.value) || initialCapitalUsd;
           }
         } catch {}
         
         const mode = sessions[0]?.mode as 'paper' | 'live' || 'paper';
         
+        // 🔧 FIX: For PAPER mode, calculate current capital = initial + realized PnL from all sessions
+        let currentCapitalUsd = initialCapitalUsd;
+        if (mode === 'paper') {
+          try {
+            // Sum up realized PnL from all active sessions' KPIs
+            const sessionIds = sessions.map(s => s.id);
+            const kpis = await prisma.sessionKpi.findMany({
+              where: { sessionId: { in: sessionIds } },
+              select: { realizedPnlUsd: true }
+            });
+            const totalRealizedPnl = kpis.reduce((sum, kpi) => sum + (kpi.realizedPnlUsd || 0), 0);
+            currentCapitalUsd = initialCapitalUsd + totalRealizedPnl;
+            
+            if (Math.abs(totalRealizedPnl) > 0.01) {
+              logger.info(`📊 [PAPER] Restoring capital with PnL: $${initialCapitalUsd.toFixed(2)} + $${totalRealizedPnl.toFixed(2)} = $${currentCapitalUsd.toFixed(2)}`);
+            }
+          } catch (pnlErr) {
+            logger.warn(`⚠️ Failed to restore paper PnL, using initial capital:`, pnlErr);
+          }
+        }
+        
         // Create capital pool for this user (separate for paper/live)
-        resetCapitalPool(userId, capitalUsd, mode);
+        // For paper: use currentCapitalUsd (initial + realized PnL)
+        // For live: use initialCapitalUsd (will be synced from Binance)
+        const capitalToUse = mode === 'paper' ? currentCapitalUsd : initialCapitalUsd;
+        resetCapitalPool(userId, capitalToUse, mode);
         const capitalPool = getCapitalPool(userId, undefined, mode)!;
         
         // Create agents ONLY for existing sessions

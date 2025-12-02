@@ -29,6 +29,7 @@ import {
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
 import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import { notifyTradeEntry, notifyTradeExit } from '../services/notificationService.js';
 
 const logger = createLogger('agent');
 
@@ -832,6 +833,19 @@ export class SimpleAgent {
       
       logger.info(`📝 [${symbol}] PAPER ${side.toUpperCase()} OPENED @ $${currentPrice.toFixed(4)} | notional=$${sizing.notionalUsd.toFixed(2)} | margin=$${sizing.marginUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=${slPct.toFixed(2)}% ($${position.stopLoss?.toFixed(4)})`);
       
+      // 📢 Send notification for paper entry
+      notifyTradeEntry({
+        symbol,
+        side,
+        price: currentPrice,
+        qty: sizing.qty,
+        notionalUsd: sizing.notionalUsd,
+        marginUsd: sizing.marginUsd,
+        leverage: sizing.suggestedLeverage,
+        stopLoss: position.stopLoss,
+        mode: 'paper',
+      });
+      
     } else {
       // Live trade
       try {
@@ -926,6 +940,19 @@ export class SimpleAgent {
         await this.setStopLossOnExchange(position);
         
         logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
+        
+        // 📢 Send notification for live entry
+        notifyTradeEntry({
+          symbol,
+          side,
+          price: filledPrice,
+          qty: filledQty,
+          notionalUsd: sizing.notionalUsd,
+          marginUsd: sizing.marginUsd,
+          leverage: sizing.suggestedLeverage,
+          stopLoss: position.stopLoss,
+          mode: 'live',
+        });
         
         this.config.onTrade?.({
           symbol,
@@ -1032,6 +1059,20 @@ export class SimpleAgent {
       await this.saveExitToDb(position, currentPrice, reason, pnlPct, pnlUsd);
       logger.info(`📝 [${symbol}] PAPER CLOSED | PnL=${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% | notional=$${notionalUsd.toFixed(2)} | margin released=$${marginToRelease.toFixed(2)}`);
       
+      // 📢 Send notification for paper exit
+      notifyTradeExit({
+        symbol,
+        side: position.side,
+        entryPrice: position.entryPrice,
+        exitPrice: currentPrice,
+        qty: position.qty,
+        notionalUsd,
+        pnlUsd,
+        pnlPct,
+        reason,
+        mode: 'paper',
+      });
+      
     } else {
       // Live close
       try {
@@ -1076,6 +1117,20 @@ export class SimpleAgent {
         await this.saveExitToDb(position, exitPrice, reason, actualPnlPct, actualPnlUsd, order.id);
         
         logger.info(`🔴 [${symbol}] LIVE CLOSED @ $${exitPrice} | PnL=${actualPnlPct >= 0 ? '+' : ''}${actualPnlPct.toFixed(2)}% ($${actualPnlUsd.toFixed(2)}) | margin released=$${marginToRelease.toFixed(2)} | orderId=${order.id}`)
+        
+        // 📢 Send notification for live exit
+        notifyTradeExit({
+          symbol,
+          side: position.side,
+          entryPrice: position.entryPrice,
+          exitPrice,
+          qty: position.qty,
+          notionalUsd,
+          pnlUsd: actualPnlUsd,
+          pnlPct: actualPnlPct,
+          reason,
+          mode: 'live',
+        });
         
         this.config.onTrade?.({
           symbol,

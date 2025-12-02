@@ -196,9 +196,10 @@ export default function DashboardPageCompact(){
         <Col xs={12} sm={6}>
           <Card size="small" style={{ borderLeft: '3px solid #722ed1' }} hoverable>
             <Statistic
-              title={<Text type="secondary" style={{ fontSize: 11 }}><BulbOutlined /> AI Calls</Text>}
-              value={Number(ov?.aiCallsTotal || 0)}
+              title={<Text type="secondary" style={{ fontSize: 11 }}><BulbOutlined /> Total Trades</Text>}
+              value={Number(ov?.totalTrades || 0)}
               valueStyle={{ fontSize: 22, color: '#722ed1' }}
+              suffix={<span style={{ fontSize: 12, color: '#888' }}>{ov?.totalWins || 0} W</span>}
             />
           </Card>
         </Col>
