@@ -463,14 +463,22 @@ export class SimpleAgent {
     }
     
     this.running = true;
-    logger.info(`✅ [${this.config.symbol}] STARTED | mode=${this.config.mode} | risk=${this.config.riskPerTradePct}% | capital=$${this.config.capitalPool.getAvailableCapital().toFixed(2)}`);
+    
+    // 🔄 LIVE MODE: Sync balance FIRST before logging (to show correct capital)
+    if (this.config.mode === 'live') {
+      logger.info(`🔄 [${this.config.symbol}] Syncing with exchange...`);
+      await this.config.capitalPool.syncWithExchange(true);
+    }
+    
+    // Now log with correct capital (showing pool total and available)
+    const poolStatus = this.config.capitalPool.getStatus();
+    logger.info(`✅ [${this.config.symbol}] STARTED | mode=${this.config.mode} | risk=${this.config.riskPerTradePct}% | pool=$${poolStatus.totalUsd.toFixed(2)} (avail=$${poolStatus.availableUsd.toFixed(2)})`);
     
     // Charger les positions existantes depuis la DB
     await this.loadExistingPosition();
     
-    // 🔄 LIVE MODE: Initial sync with exchange to catch any missed stop losses
+    // 🔄 LIVE MODE: Sync with exchange to catch any missed stop losses
     if (this.config.mode === 'live') {
-      logger.info(`🔄 [${this.config.symbol}] Initial exchange sync...`);
       await this.syncWithExchange();
     }
     
