@@ -72,6 +72,8 @@ type Exchange = {
   // For quantity precision (CCXT method)
   amountToPrecision?: (symbol: string, amount: number) => string;
   markets?: Record<string, any>;
+  // For balance fetching (REST fallback)
+  fetchBalance?: (params?: Record<string, any>) => Promise<any>;
 };
 
 // ============================================================================
@@ -90,14 +92,25 @@ export class CapitalPool {
   private readonly BALANCE_SYNC_INTERVAL_MS = 30_000; // Sync every 30s max
   private hasEverSynced: boolean = false; // Track if we've ever successfully synced
   
-  constructor(initialCapitalUsd: number, mode: 'paper' | 'live' = 'paper', userId?: string) {
+  // 🔧 FIX: Store exchange reference for REST fallback when WebSocket cache is empty
+  private exchange: Exchange | null = null;
+  
+  constructor(initialCapitalUsd: number, mode: 'paper' | 'live' = 'paper', userId?: string, exchange?: Exchange) {
     this.totalCapitalUsd = initialCapitalUsd;
     this.mode = mode;
     this.userId = userId || null;
+    this.exchange = exchange || null;
     // Paper mode uses provided capital directly (no exchange sync needed)
     // Live mode requires syncing with exchange before trading
     this.hasEverSynced = (mode === 'paper');
     console.log(`[CapitalPool] Created ${mode} pool with $${initialCapitalUsd}${mode === 'live' ? ' (will sync with Binance)' : ''}`);
+  }
+  
+  /**
+   * Set the exchange reference (for REST fallback)
+   */
+  setExchange(exchange: Exchange): void {
+    this.exchange = exchange;
   }
   
   /**
@@ -152,7 +165,29 @@ export class CapitalPool {
     }
     
     try {
-      const balance = await getBalanceFromWebSocket(this.userId, 'USDT');
+      // 1. Try WebSocket cache first (0 weight, instant)
+      let balance = await getBalanceFromWebSocket(this.userId, 'USDT');
+      
+      // 2. 🔧 FIX: If WebSocket cache is empty, fall back to REST API
+      if ((!balance || balance.total <= 0) && this.exchange && this.exchange.fetchBalance) {
+        console.log(`[CapitalPool] WebSocket cache empty, falling back to REST fetchBalance...`);
+        try {
+          const restBalance = await this.exchange.fetchBalance({ type: 'future' });
+          const totalUsdt = parseFloat(restBalance?.total?.USDT || restBalance?.USDT?.total || '0') || 0;
+          const freeUsdt = parseFloat(restBalance?.free?.USDT || restBalance?.USDT?.free || '0') || 0;
+          
+          if (totalUsdt > 0) {
+            balance = { asset: 'USDT', total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt, timestamp: Date.now() };
+            // Seed the cache for next time
+            const { seedBalanceCache } = await import('../services/binanceWebSocket.js');
+            seedBalanceCache(this.userId!, 'USDT', { total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt });
+            console.log(`[CapitalPool] REST fallback successful: $${totalUsdt.toFixed(2)}`);
+          }
+        } catch (restErr) {
+          console.warn(`[CapitalPool] REST fallback also failed:`, restErr);
+        }
+      }
+      
       if (balance && balance.total > 0) {
         const oldTotal = this.totalCapitalUsd;
         // Use wallet balance (total = free + locked/margin used by exchange)
@@ -2303,6 +2338,11 @@ export async function createAllAgents(params: {
 }> {
   // Create shared capital pool for this user
   const capitalPool = resetCapitalPool(params.userId, params.totalCapitalUsd, params.mode);
+  
+  // 🔧 FIX: Set exchange reference on pool for REST fallback in syncWithExchange (live mode)
+  if (params.mode === 'live' && params.exchange) {
+    capitalPool.setExchange(params.exchange);
+  }
   
   const symbols = MomentumConfig.SYMBOLS;
   const sessionIdMap: Record<string, string> = {

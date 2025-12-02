@@ -1915,6 +1915,11 @@ app.post("/api/agent/creation/activate", async (req, res) => {
       // For paper mode, keep existing pool (it has accumulated PnL state)
     }
     
+    // 🔧 FIX: Set exchange reference on pool for REST fallback in syncWithExchange
+    if (modeTyped === 'live' && exchange) {
+      capitalPool.setExchange(exchange);
+    }
+    
     // Create SINGLE agent for the selected symbol
     const agent = new SimpleAgent({
       symbol: selectedSymbol,

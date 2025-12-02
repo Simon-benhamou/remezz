@@ -1,0 +1,8 @@
+{
+  "name": "quantailabs",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ]
+}

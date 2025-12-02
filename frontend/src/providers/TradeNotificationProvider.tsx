@@ -171,10 +171,17 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
     
     if (!enabled) return;
     
+    // Only show in-app notifications for actual trades (entry/exit)
+    // Skip other notification types like regime_change, agent_started, etc.
+    const isTradeNotification = data.type === 'trade_entry' || data.type === 'trade_exit' || 
+                                 data.type === 'stop_loss_hit' || data.type === 'take_profit_hit';
+    if (!isTradeNotification) return;
+    
     const symbol = formatSymbol(data.symbol);
     const isEntry = data.type === 'trade_entry';
     const isWin = (data.pnlUsd ?? 0) >= 0;
     const modeTag = data.mode === 'live' ? '🔴 LIVE' : '📝 PAPER';
+    const sideLabel = data.side?.toUpperCase() ?? '';
     
     // Play sound
     if (soundEnabled) {
@@ -193,13 +200,13 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
         key,
         message: (
           <span>
-            {modeTag} {symbol} {data.side.toUpperCase()} Entry
+            {modeTag} {symbol} {sideLabel} Entry
           </span>
         ),
         description: (
           <div style={{ fontSize: 12 }}>
-            <div>📍 Price: <strong>${data.price.toFixed(4)}</strong></div>
-            <div>💰 Size: <strong>${data.notionalUsd.toFixed(2)}</strong> ({data.leverage}x)</div>
+            <div>📍 Price: <strong>${data.price?.toFixed(4) ?? '0'}</strong></div>
+            <div>💰 Size: <strong>${data.notionalUsd?.toFixed(2) ?? '0'}</strong> ({data.leverage}x)</div>
             <div>🎯 Margin: <strong>${data.marginUsd?.toFixed(2)}</strong></div>
             {data.stopLoss && <div>🛡️ Stop Loss: <strong>${data.stopLoss.toFixed(4)}</strong></div>}
           </div>
@@ -216,8 +223,8 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
       });
       
       showBrowserNotification(
-        `${modeTag} ${symbol} ${data.side.toUpperCase()}`,
-        `Entry @ $${data.price.toFixed(4)} | Size: $${data.notionalUsd.toFixed(2)} (${data.leverage}x)`
+        `${modeTag} ${symbol} ${sideLabel}`,
+        `Entry @ $${data.price?.toFixed(4) ?? '0'} | Size: $${data.notionalUsd?.toFixed(2) ?? '0'} (${data.leverage}x)`
       );
       
     } else {

@@ -98,7 +98,9 @@ export default function NotificationBell() {
           </Text>
           <List
             size="small"
-            dataSource={recentNotifications.slice(0, 5)}
+            dataSource={recentNotifications
+              .filter(n => n.type === 'trade_entry' || n.type === 'trade_exit')
+              .slice(0, 5)}
             style={{ maxHeight: 200, overflowY: 'auto' }}
             renderItem={(item) => {
               const isEntry = item.type === 'trade_entry';
@@ -110,12 +112,14 @@ export default function NotificationBell() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Space size={4}>
                         <Tag color={item.mode === 'live' ? 'red' : 'blue'} style={{ fontSize: 10, margin: 0 }}>
-                          {item.mode.toUpperCase()}
+                          {item.mode?.toUpperCase() ?? ''}
                         </Tag>
                         <Text strong style={{ fontSize: 12 }}>{formatSymbol(item.symbol)}</Text>
-                        <Text style={{ fontSize: 11, color: item.side === 'long' ? '#52c41a' : '#ff4d4f' }}>
-                          {item.side.toUpperCase()}
-                        </Text>
+                        {item.side && (
+                          <Text style={{ fontSize: 11, color: item.side === 'long' ? '#52c41a' : '#ff4d4f' }}>
+                            {item.side.toUpperCase()}
+                          </Text>
+                        )}
                       </Space>
                       <Text type="secondary" style={{ fontSize: 10 }}>
                         {new Date(item.timestamp).toLocaleTimeString()}
@@ -123,7 +127,7 @@ export default function NotificationBell() {
                     </div>
                     <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)' }}>
                       {isEntry ? (
-                        <>Entry @ ${item.price.toFixed(4)} · ${item.notionalUsd.toFixed(0)}</>
+                        <>Entry @ ${item.price?.toFixed(4) ?? '0'} · ${item.notionalUsd?.toFixed(0) ?? '0'}</>
                       ) : (
                         <span style={{ color: isWin ? '#52c41a' : '#ff4d4f' }}>
                           {isWin ? '+' : ''}${item.pnlUsd?.toFixed(2)} ({isWin ? '+' : ''}{item.pnlPct?.toFixed(2)}%)
