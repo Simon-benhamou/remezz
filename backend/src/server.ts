@@ -1821,16 +1821,26 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     let actualStartBalance = capitalUsd;
     
     if (mode === 'live') {
-      // In LIVE mode: fetch real balance from Binance
+      // In LIVE mode: fetch real balance from Binance - REQUIRED
       try {
         const balance = await exchange.fetchBalance({ type: 'future' });
         const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
         if (totalUsdt > 0) {
           actualStartBalance = totalUsdt;
-          logger.info(`[Live] Using actual Binance balance: $${actualStartBalance.toFixed(2)}`);
+          logger.info(`[Live] ✅ Using actual Binance balance: $${actualStartBalance.toFixed(2)}`);
+        } else {
+          // Balance is 0 or fetch failed - REFUSE to start
+          logger.error(`[Live] ❌ Binance balance is $0 - cannot start live trading`);
+          return res.status(400).json({ 
+            error: 'Binance balance is $0. Please deposit funds before starting live trading.',
+          });
         }
-      } catch (err) {
-        logger.warn('[Live] Failed to fetch Binance balance, using provided capital:', err);
+      } catch (err: any) {
+        logger.error('[Live] ❌ Failed to fetch Binance balance:', err?.message || err);
+        return res.status(500).json({ 
+          error: 'Failed to fetch Binance balance. Check your API keys.',
+          detail: err?.message || 'Unknown error'
+        });
       }
     } else {
       // In PAPER mode: add accumulated PnL from past sessions
@@ -1878,22 +1888,22 @@ app.post("/api/agent/creation/activate", async (req, res) => {
     });
     
     // Get or create capital pool for this user (separate pools for paper/live)
-    // 🔧 FIX: ALWAYS reset/update the capital pool to ensure correct balance
+    // 🔧 FIX: For LIVE mode, ALWAYS use actualStartBalance (fetched from Binance above)
     const modeTyped = mode as 'paper' | 'live';
     let capitalPool = getCapitalPool(userId, undefined, modeTyped);
     
     if (!capitalPool) {
-      // No pool exists - create new one
-      resetCapitalPool(userId, actualStartBalance, modeTyped);
-      capitalPool = getCapitalPool(userId, undefined, modeTyped)!;
+      // No pool exists - create new one with correct balance
+      capitalPool = resetCapitalPool(userId, actualStartBalance, modeTyped);
+      logger.info(`[CapitalPool] Created new ${modeTyped} pool with $${actualStartBalance.toFixed(2)}`);
     } else {
-      // Pool exists - sync with correct balance for live mode
+      // Pool exists - for LIVE mode, FORCE reset to ensure correct Binance balance
       if (modeTyped === 'live') {
-        // Force sync to get latest Binance balance
-        await capitalPool.syncWithExchange(true);
-        logger.info(`[CapitalPool] Live pool synced, available: $${capitalPool.getAvailableCapital().toFixed(2)}`);
+        // Reset pool to actual Binance balance (already fetched above)
+        capitalPool = resetCapitalPool(userId, actualStartBalance, modeTyped);
+        logger.info(`[CapitalPool] Reset live pool to Binance balance: $${actualStartBalance.toFixed(2)}`);
       }
-      // For paper mode, the pool already includes accumulated PnL from previous sessions
+      // For paper mode, keep existing pool (it has accumulated PnL state)
     }
     
     // Create SINGLE agent for the selected symbol
