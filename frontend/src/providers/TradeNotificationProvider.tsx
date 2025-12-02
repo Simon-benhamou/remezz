@@ -18,12 +18,15 @@ import {
 import { openWS } from '../ws';
 
 export interface TradeNotification {
-  type: 'trade_entry' | 'trade_exit' | 'stop_loss_hit' | 'take_profit_hit';
+  type: 'trade_entry' | 'trade_exit' | 'stop_loss_hit' | 'take_profit_hit' | 
+        'agent_started' | 'agent_stopped' | 'regime_change' | 'high_volatility' | 
+        'signal_detected' | 'sync_failure' | 'daily_loss_limit' | 'trailing_activated' |
+        'long_hold' | 'liquidation_warning';
   symbol: string;
-  side: 'long' | 'short';
-  price: number;
-  qty: number;
-  notionalUsd: number;
+  side?: 'long' | 'short';
+  price?: number;
+  qty?: number;
+  notionalUsd?: number;
   marginUsd?: number;
   leverage?: number;
   pnlUsd?: number;
@@ -32,8 +35,12 @@ export interface TradeNotification {
   stopLoss?: number;
   entryPrice?: number;
   exitPrice?: number;
-  mode: 'paper' | 'live';
+  mode?: 'paper' | 'live';
   timestamp: number;
+  // For non-trade notifications
+  title?: string;
+  message?: string;
+  severity?: 'info' | 'warning' | 'error' | 'success';
 }
 
 interface NotificationContextValue {
@@ -243,7 +250,7 @@ export function TradeNotificationProvider({ children }: { children: React.ReactN
         ),
         description: (
           <div style={{ fontSize: 12 }}>
-            <div>📍 Exit Price: <strong>${(data.exitPrice ?? data.price).toFixed(4)}</strong></div>
+            <div>📍 Exit Price: <strong>${(data.exitPrice ?? data.price ?? 0).toFixed(4)}</strong></div>
             <div style={{ color: pnlColor, fontWeight: 'bold', fontSize: 14 }}>
               💵 PnL: {pnlPrefix}${data.pnlUsd?.toFixed(2)} ({pnlPrefix}{data.pnlPct?.toFixed(2)}%)
             </div>
