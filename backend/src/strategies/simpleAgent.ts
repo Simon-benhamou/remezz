@@ -28,7 +28,7 @@ import {
   type MarketConditions,
 } from './momentumSimple.js';
 import { createLogger } from '../utils/logger.js';
-import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, seedPositionCache, toBinanceSymbolId } from '../services/binanceWebSocket.js';
+import { getBinanceWebSocket, getKlinesOhlcvFromWebSocket, seedKlinesFromWebSocket, getBalanceFromWebSocket, getTickerFromWebSocket, getPositionFromWebSocket, seedPositionCache, toBinanceSymbolId, isPositionCacheSeeded } from '../services/binanceWebSocket.js';
 import { 
   notifyTradeEntry, 
   notifyTradeExit, 
@@ -175,10 +175,10 @@ export class CapitalPool {
       // This prevents excessive REST calls during temporary WS disconnections
       const shouldFallbackToRest = !balance && (!this.hasEverSynced || force) && this.exchange && this.exchange.fetchBalance;
       
-      if (shouldFallbackToRest) {
+      if (shouldFallbackToRest && this.exchange?.fetchBalance) {
         console.log(`[CapitalPool] WebSocket cache empty on ${force ? 'forced' : 'initial'} sync, falling back to REST fetchBalance...`);
         try {
-          const restBalance = await this.exchange!.fetchBalance({ type: 'future' });
+          const restBalance = await this.exchange.fetchBalance({ type: 'future' });
           const totalUsdt = parseFloat(restBalance?.total?.USDT || restBalance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(restBalance?.free?.USDT || restBalance?.USDT?.free || '0') || 0;
           
@@ -1815,42 +1815,48 @@ export class SimpleAgent {
         unrealizedPnl = wsPosition.unrealizedPnl;
       } else if (this.config.exchange.fetchPositions) {
         // 🔧 FIX: Only fall back to REST if:
-        //    - We have a local position (need to check if it was closed)
-        //    - OR this is the first sync ever
-        // This prevents excessive REST calls when WS is temporarily disconnected
-        const shouldFallbackToRest = this.position !== null || isFirstSync;
+        //    - Position cache was NOT seeded at startup (server didn't fetch positions)
+        //    - AND (we have a local position OR this is the first sync)
+        // If cache was seeded, wsPosition=null means no position - no need for REST!
+        const cacheWasSeeded = isPositionCacheSeeded(this.config.userId);
+        const shouldFallbackToRest = !cacheWasSeeded && (this.position !== null || isFirstSync);
         
         if (!shouldFallbackToRest) {
-          // No local position and WS cache empty - assume no position, don't hit REST
-          return;
-        }
-        
-        // REST API fallback - only when needed to detect closed positions
-        try {
-          const fetchPosFn = this.config.exchange.fetchPositions.bind(this.config.exchange);
-          const exchangePositions = await fetchPosFn([symbol]);
-          
-          const exchangePos = exchangePositions.find((p: any) => 
-            p.symbol === symbol || 
-            p.info?.symbol === toBinanceSymbolId(symbol)
-          );
-          
-          const positionAmt = parseFloat(exchangePos?.info?.positionAmt || '0');
-          exchangeQty = Math.abs(parseFloat(exchangePos?.contracts || exchangePos?.info?.positionAmt || '0'));
-          exchangeSide = positionAmt > 0 ? 'long' : 'short';
-          entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
-          unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
-          
-          // Note: We don't seed WS cache because userData stream is not connected
-          // REST is used only when needed, which is fine since it's throttled
-        } catch (restErr: any) {
-          // 🔧 FIX: Log rate limit errors more prominently
-          if (restErr.message?.includes('429') || restErr.message?.includes('banned') || restErr.message?.includes('Too Many')) {
-            logger.error(`⚠️ [${symbol}] ⚠️ REST API rate limited on position sync - user data stream may not be connected!`, restErr.message);
+          // Cache was seeded or no local position - no REST needed
+          if (cacheWasSeeded && this.position !== null) {
+            // We have a local position but cache says no position - position was closed!
+            // Continue to handle the mismatch below
           } else {
-            logger.warn(`⚠️ [${symbol}] REST position sync failed:`, restErr.message);
+            return;
           }
-          return;
+        } else {
+          // REST API fallback - only when cache wasn't seeded and we need to check
+          try {
+            const fetchPosFn = this.config.exchange.fetchPositions.bind(this.config.exchange);
+            const exchangePositions = await fetchPosFn([symbol]);
+            
+            const exchangePos = exchangePositions.find((p: any) => 
+              p.symbol === symbol || 
+              p.info?.symbol === toBinanceSymbolId(symbol)
+            );
+            
+            const positionAmt = parseFloat(exchangePos?.info?.positionAmt || '0');
+            exchangeQty = Math.abs(parseFloat(exchangePos?.contracts || exchangePos?.info?.positionAmt || '0'));
+            exchangeSide = positionAmt > 0 ? 'long' : 'short';
+            entryPrice = parseFloat(exchangePos?.entryPrice || exchangePos?.info?.entryPrice || '0');
+            unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
+            
+            // Note: We don't seed WS cache because userData stream is not connected
+            // REST is used only when needed, which is fine since it's throttled
+          } catch (restErr: any) {
+            // 🔧 FIX: Log rate limit errors more prominently
+            if (restErr.message?.includes('429') || restErr.message?.includes('banned') || restErr.message?.includes('Too Many')) {
+              logger.error(`⚠️ [${symbol}] ⚠️ REST API rate limited on position sync - user data stream may not be connected!`, restErr.message);
+            } else {
+              logger.warn(`⚠️ [${symbol}] REST position sync failed:`, restErr.message);
+            }
+            return;
+          }
         }
       } else {
         return; // No way to get positions

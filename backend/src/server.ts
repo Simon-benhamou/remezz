@@ -27,7 +27,7 @@ import portfolioRouter from "./routes/portfolio.js";
 import { router as backtestRouter } from "./routes/backtest.js";
 
 // Services
-import { getBinanceWebSocket, seedBalanceCache } from "./services/binanceWebSocket.js";
+import { getBinanceWebSocket, seedBalanceCache, seedPositionCache, markPositionCacheSeeded } from "./services/binanceWebSocket.js";
 import { initNotificationService } from "./services/notificationService.js";
 
 // Strategy
@@ -527,6 +527,35 @@ app.post("/api/agent/start", async (req, res) => {
           } catch (wsErr: any) {
             // Non-fatal: REST fallback will work, but log the issue
             logger.warn(`⚠️ [Live] Failed to subscribe to user data stream:`, wsErr?.message);
+          }
+          
+          // 🔧 FIX: Fetch ALL positions ONCE at startup and seed cache
+          // This prevents each agent from making individual REST calls (12 agents = 12 calls = rate limit!)
+          try {
+            if (exchange.fetchPositions) {
+              const allPositions = await exchange.fetchPositions(MomentumConfig.SYMBOLS);
+              let positionsSeeded = 0;
+              for (const pos of allPositions) {
+                const symbol = pos.symbol;
+                const positionAmt = parseFloat(pos?.info?.positionAmt || '0');
+                if (positionAmt !== 0) {
+                  seedPositionCache(userId, symbol, {
+                    positionAmt,
+                    entryPrice: parseFloat(pos?.entryPrice || pos?.info?.entryPrice || '0'),
+                    unrealizedPnl: parseFloat(pos?.unrealizedPnl || pos?.info?.unRealizedProfit || '0'),
+                    side: positionAmt > 0 ? 'long' : 'short',
+                    updateTime: Date.now(),
+                  });
+                  positionsSeeded++;
+                  logger.info(`✅ [Live] Seeded position cache: ${symbol} ${positionAmt > 0 ? 'LONG' : 'SHORT'} ${Math.abs(positionAmt)}`);
+                }
+              }
+              // Mark cache as seeded even if no positions - prevents REST fallback
+              markPositionCacheSeeded(userId);
+              logger.info(`✅ [Live] Position cache seeded: ${positionsSeeded} active positions (${allPositions.length} symbols checked)`);
+            }
+          } catch (posErr: any) {
+            logger.warn(`⚠️ [Live] Failed to seed position cache:`, posErr?.message);
           }
         } else {
           // If balance fetch returned 0, refuse to start - this prevents trading with wrong capital

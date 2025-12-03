@@ -335,6 +335,8 @@ class BinanceWebSocketManager {
   private balanceCache = new Map<string, BinanceBalance>();
   // Position cache: key = `${userId}_${symbol}` (e.g., "user123_BTCUSDT")
   private positionCache = new Map<string, BinancePositionData>();
+  // Track which users have had their position cache seeded (to avoid REST fallback)
+  private positionCacheSeeded = new Set<string>();
   private lastUpdate = Date.now();
   private lastAcceptedTs = 0;
   private timestampDriftCounters = new Map<string, { count: number; firstTs: number; lastAge: number }>();
@@ -2215,7 +2217,7 @@ class BinanceWebSocketManager {
   }
 
   /**
-   * � Seed Position Cache from REST API (called at startup)
+   * 📦 Seed Position Cache from REST API (called at startup)
    * This is needed because WebSocket only sends position updates when they change
    */
   seedPosition(userId: string, symbol: string, payload: { 
@@ -2223,6 +2225,8 @@ class BinanceWebSocketManager {
     entryPrice: number; 
     unrealizedPnl: number;
     marginType?: string;
+    side?: 'long' | 'short';
+    updateTime?: number;
   }): void {
     const normalizedSymbol = toBinanceSymbolId(symbol);
     const cacheKey = `${userId}_${normalizedSymbol}`;
@@ -2234,15 +2238,33 @@ class BinanceWebSocketManager {
       unrealizedPnl: payload.unrealizedPnl,
       marginType: payload.marginType || 'cross',
       isolatedWallet: 0,
-      side: payload.positionAmt > 0 ? 'long' : payload.positionAmt < 0 ? 'short' : 'none',
-      timestamp: Date.now(),
+      side: payload.side || (payload.positionAmt > 0 ? 'long' : payload.positionAmt < 0 ? 'short' : 'none'),
+      timestamp: payload.updateTime || Date.now(),
     };
     
     this.positionCache.set(cacheKey, positionData);
+    // Mark that this user's position cache has been seeded
+    this.positionCacheSeeded.add(userId);
+  }
+  
+  /**
+   * Check if position cache has been seeded for a user
+   * Used to determine if REST fallback is needed
+   */
+  isPositionCacheSeeded(userId: string): boolean {
+    return this.positionCacheSeeded.has(userId);
+  }
+  
+  /**
+   * Mark position cache as seeded for a user (even if no positions)
+   * Call this after fetching all positions at startup
+   */
+  markPositionCacheSeeded(userId: string): void {
+    this.positionCacheSeeded.add(userId);
   }
 
   /**
-   * �🔌 Unsubscribe from User Data Stream
+   * 🔌 Unsubscribe from User Data Stream
    */
   unsubscribeFromUserData(userId: string): void {
     const stream = this.userDataStreams.get(userId);
@@ -3155,7 +3177,19 @@ export function seedPositionCache(userId: string, symbol: string, payload: {
   entryPrice: number; 
   unrealizedPnl: number;
   marginType?: string;
+  side?: 'long' | 'short';
+  updateTime?: number;
 }): void {
   const ws = getBinanceWebSocket();
   ws.seedPosition(userId, symbol, payload);
+}
+
+export function isPositionCacheSeeded(userId: string): boolean {
+  const ws = getBinanceWebSocket();
+  return ws.isPositionCacheSeeded(userId);
+}
+
+export function markPositionCacheSeeded(userId: string): void {
+  const ws = getBinanceWebSocket();
+  ws.markPositionCacheSeeded(userId);
 }
