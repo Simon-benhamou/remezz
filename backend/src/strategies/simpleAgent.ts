@@ -1793,6 +1793,9 @@ export class SimpleAgent {
     if (now - this.lastPositionSync < this.POSITION_SYNC_INTERVAL_MS) {
       return;
     }
+    
+    // Track if this is the first sync (for REST fallback logic)
+    const isFirstSync = (this.lastPositionSync === 0);
     this.lastPositionSync = now;
     
     try {
@@ -1813,9 +1816,9 @@ export class SimpleAgent {
       } else if (this.config.exchange.fetchPositions) {
         // 🔧 FIX: Only fall back to REST if:
         //    - We have a local position (need to check if it was closed)
-        //    - OR we've never synced before
+        //    - OR this is the first sync ever
         // This prevents excessive REST calls when WS is temporarily disconnected
-        const shouldFallbackToRest = this.position !== null || this.lastPositionSync === now;
+        const shouldFallbackToRest = this.position !== null || isFirstSync;
         
         if (!shouldFallbackToRest) {
           // No local position and WS cache empty - assume no position, don't hit REST

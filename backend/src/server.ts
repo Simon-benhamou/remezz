@@ -1854,7 +1854,6 @@ app.post("/api/agent/creation/activate", async (req, res) => {
           logger.info(`[Live] ✅ Using actual Binance balance: $${actualStartBalance.toFixed(2)}`);
           
           // Seed WebSocket cache
-          const { seedBalanceCache } = await import('../services/binanceWebSocket.js');
           seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt });
           
           // 🔧 FIX: Subscribe to user data stream for real-time updates (0 weight)
