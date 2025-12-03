@@ -515,6 +515,19 @@ app.post("/api/agent/start", async (req, res) => {
           // 🔧 FIX: Seed the WebSocket balance cache so syncWithExchange() works
           seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: lockedUsdt });
           logger.info(`✅ [Live] Using REAL Binance balance: $${actualCapital.toFixed(2)} (ignoring request capitalUsd: $${capitalUsd})`);
+          
+          // 🔧 FIX: Subscribe to user data stream for real-time balance/position updates (0 weight)
+          try {
+            const credentials = await getUserCredentials(userId);
+            if (credentials && credentials.apiKey && credentials.apiSecret) {
+              const binanceWs = getBinanceWebSocket();
+              await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
+              logger.info(`✅ [Live] User data stream subscribed for ${userId} - will receive real-time balance/position updates`);
+            }
+          } catch (wsErr: any) {
+            // Non-fatal: REST fallback will work, but log the issue
+            logger.warn(`⚠️ [Live] Failed to subscribe to user data stream:`, wsErr?.message);
+          }
         } else {
           // If balance fetch returned 0, refuse to start - this prevents trading with wrong capital
           logger.error(`❌ [Live] Binance balance is $0 or fetch failed. Cannot start live trading.`);
@@ -1834,9 +1847,26 @@ app.post("/api/agent/creation/activate", async (req, res) => {
       try {
         const balance = await exchange.fetchBalance({ type: 'future' });
         const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+        const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
+        
         if (totalUsdt > 0) {
           actualStartBalance = totalUsdt;
           logger.info(`[Live] ✅ Using actual Binance balance: $${actualStartBalance.toFixed(2)}`);
+          
+          // Seed WebSocket cache
+          seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt });
+          
+          // 🔧 FIX: Subscribe to user data stream for real-time updates (0 weight)
+          try {
+            const credentials = await getUserCredentials(userId);
+            if (credentials && credentials.apiKey && credentials.apiSecret) {
+              const binanceWs = getBinanceWebSocket();
+              await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
+              logger.info(`✅ [Live] User data stream subscribed for ${userId}`);
+            }
+          } catch (wsErr: any) {
+            logger.warn(`⚠️ [Live] Failed to subscribe to user data stream:`, wsErr?.message);
+          }
         } else {
           // Balance is 0 or fetch failed - REFUSE to start
           logger.error(`[Live] ❌ Binance balance is $0 - cannot start live trading`);
@@ -2013,6 +2043,18 @@ app.post("/api/agent/restart", async (req, res) => {
           // 🔧 FIX: Seed the WebSocket balance cache so syncWithExchange() works
           seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: lockedUsdt });
           logger.info(`✅ [Restart Live] Using REAL Binance balance: $${actualCapital.toFixed(2)}`);
+          
+          // 🔧 FIX: Subscribe to user data stream for real-time updates (0 weight)
+          try {
+            const credentials = await getUserCredentials(userId);
+            if (credentials && credentials.apiKey && credentials.apiSecret) {
+              const binanceWs = getBinanceWebSocket();
+              await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
+              logger.info(`✅ [Restart Live] User data stream subscribed for ${userId}`);
+            }
+          } catch (wsErr: any) {
+            logger.warn(`⚠️ [Restart Live] Failed to subscribe to user data stream:`, wsErr?.message);
+          }
         } else {
           return res.status(400).json({ 
             error: 'Binance balance is $0. Cannot restart live trading.',
@@ -2971,9 +3013,26 @@ process.on('SIGINT', shutdown);
           try {
             const balance = await exchange.fetchBalance({ type: 'future' });
             const totalUsdt = parseFloat(balance?.total?.USDT || balance?.USDT?.total || '0') || 0;
+            const freeUsdt = parseFloat(balance?.free?.USDT || balance?.USDT?.free || '0') || 0;
+            
             if (totalUsdt > 0) {
               currentCapitalUsd = totalUsdt;
               logger.info(`📊 [LIVE] Restoring with Binance balance: $${currentCapitalUsd.toFixed(2)}`);
+              
+              // Seed WebSocket cache
+              seedBalanceCache(userId, 'USDT', { total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt });
+              
+              // 🔧 FIX: Subscribe to user data stream for real-time updates (0 weight)
+              try {
+                const credentials = await getUserCredentials(userId);
+                if (credentials && credentials.apiKey && credentials.apiSecret) {
+                  const binanceWs = getBinanceWebSocket();
+                  await binanceWs.subscribeToUserData(userId, credentials.apiKey, credentials.apiSecret);
+                  logger.info(`✅ [Restore] User data stream subscribed for ${userId}`);
+                }
+              } catch (wsErr: any) {
+                logger.warn(`⚠️ [Restore] Failed to subscribe to user data stream:`, wsErr?.message);
+              }
             } else {
               logger.warn(`⚠️ [LIVE] Binance balance is $0, using fallback: $${initialCapitalUsd.toFixed(2)}`);
             }
