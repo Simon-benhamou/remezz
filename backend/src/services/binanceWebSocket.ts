@@ -2120,12 +2120,36 @@ class BinanceWebSocketManager {
           this.userDataStreams.delete(userId);
         };
 
-        userWs.on('close', () => {
-          console.log(`🔌 User data stream closed for user ${userId}`);
+        userWs.on('close', (code, reason) => {
+          console.log(`🔌 User data stream closed for user ${userId} (code: ${code}, reason: ${reason?.toString() || 'none'})`);
+          
+          // Check if this was an intentional close (from unsubscribeFromUserData)
+          const wasIntentional = (streamRecord as any)._intentionalClose === true;
           cleanup();
+          
+          if (wasIntentional) {
+            console.log(`🔌 User data stream intentionally closed for ${userId}, not reconnecting`);
+            return;
+          }
+          
+          // 🔧 FIX: Auto-reconnect on close (unless intentional unsubscribe)
+          // Binance closes streams after 24h or network issues - we need to reconnect
+          console.log(`🔄 Scheduling user data stream reconnect for ${userId} in 2s...`);
+          setTimeout(() => {
+            this.subscribeToUserData(userId, apiKey, apiSecret).catch((err) => {
+              console.error(`❌ Failed to reconnect user data stream for ${userId}:`, err);
+              // Retry with exponential backoff
+              setTimeout(() => {
+                this.subscribeToUserData(userId, apiKey, apiSecret).catch((err2) => {
+                  console.error(`❌ Second reconnect attempt failed for ${userId}:`, err2);
+                });
+              }, 5000);
+            });
+          }, 2000);
         });
 
-        userWs.on('error', () => {
+        userWs.on('error', (error) => {
+          console.error(`❌ User data stream error for ${userId}:`, error);
           cleanup();
         });
 
@@ -2264,11 +2288,55 @@ class BinanceWebSocketManager {
   }
 
   /**
+   * 🔌 Check if user data stream is active and healthy
+   */
+  isUserDataStreamActive(userId: string): boolean {
+    const stream = this.userDataStreams.get(userId);
+    if (!stream?.ws) return false;
+    return stream.ws.readyState === WebSocket.OPEN;
+  }
+  
+  /**
+   * 🔌 Get user data stream status for debugging
+   */
+  getUserDataStreamStatus(userId: string): { 
+    connected: boolean; 
+    hasListenKey: boolean;
+    readyState: number | null;
+    cacheAge: { balance: number | null; position: number | null };
+  } {
+    const stream = this.userDataStreams.get(userId);
+    const balanceCache = this.balanceCache.get(`${userId}_USDT`);
+    
+    // Find most recent position cache entry for this user
+    let newestPositionTs: number | null = null;
+    for (const [key, pos] of this.positionCache.entries()) {
+      if (key.startsWith(`${userId}_`) && pos.timestamp) {
+        if (!newestPositionTs || pos.timestamp > newestPositionTs) {
+          newestPositionTs = pos.timestamp;
+        }
+      }
+    }
+    
+    return {
+      connected: stream?.ws?.readyState === WebSocket.OPEN,
+      hasListenKey: !!stream?.listenKey,
+      readyState: stream?.ws?.readyState ?? null,
+      cacheAge: {
+        balance: balanceCache?.timestamp ? Date.now() - balanceCache.timestamp : null,
+        position: newestPositionTs ? Date.now() - newestPositionTs : null,
+      }
+    };
+  }
+
+  /**
    * 🔌 Unsubscribe from User Data Stream
    */
   unsubscribeFromUserData(userId: string): void {
     const stream = this.userDataStreams.get(userId);
     if (stream?.ws) {
+      // Mark as intentionally closed to prevent auto-reconnect
+      (stream as any)._intentionalClose = true;
       stream.ws.close();
       if (stream.keepAliveTimer) {
         clearInterval(stream.keepAliveTimer);
@@ -3192,4 +3260,19 @@ export function isPositionCacheSeeded(userId: string): boolean {
 export function markPositionCacheSeeded(userId: string): void {
   const ws = getBinanceWebSocket();
   ws.markPositionCacheSeeded(userId);
+}
+
+export function isUserDataStreamActive(userId: string): boolean {
+  const ws = getBinanceWebSocket();
+  return ws.isUserDataStreamActive(userId);
+}
+
+export function getUserDataStreamStatus(userId: string): { 
+  connected: boolean; 
+  hasListenKey: boolean;
+  readyState: number | null;
+  cacheAge: { balance: number | null; position: number | null };
+} {
+  const ws = getBinanceWebSocket();
+  return ws.getUserDataStreamStatus(userId);
 }

@@ -2496,6 +2496,43 @@ app.get("/api/monitor/margin/:sessionId", async (req, res) => {
   }
 });
 
+// 🔧 WebSocket user data stream status endpoint
+app.get("/api/monitor/websocket-status", async (req, res) => {
+  try {
+    const userId = (req as any)?.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    
+    const { getUserDataStreamStatus, isPositionCacheSeeded } = await import("./services/binanceWebSocket.js");
+    const status = getUserDataStreamStatus(userId);
+    const positionCacheSeeded = isPositionCacheSeeded(userId);
+    
+    res.json({
+      userId,
+      userDataStream: {
+        connected: status.connected,
+        hasListenKey: status.hasListenKey,
+        readyState: status.readyState,
+        readyStateLabel: status.readyState === 0 ? 'CONNECTING' : 
+                         status.readyState === 1 ? 'OPEN' : 
+                         status.readyState === 2 ? 'CLOSING' : 
+                         status.readyState === 3 ? 'CLOSED' : 'UNKNOWN',
+      },
+      cache: {
+        positionCacheSeeded,
+        balanceAgeMs: status.cacheAge.balance,
+        positionAgeMs: status.cacheAge.position,
+        balanceAgeSec: status.cacheAge.balance ? Math.round(status.cacheAge.balance / 1000) : null,
+        positionAgeSec: status.cacheAge.position ? Math.round(status.cacheAge.position / 1000) : null,
+      },
+      healthy: status.connected && positionCacheSeeded,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Failed" });
+  }
+});
+
 app.get("/api/monitor/health", async (req, res) => {
   try {
     const userId = (req as any)?.user?.id;
