@@ -168,11 +168,17 @@ export class CapitalPool {
       // 1. Try WebSocket cache first (0 weight, instant)
       let balance = await getBalanceFromWebSocket(this.userId, 'USDT');
       
-      // 2. 🔧 FIX: If WebSocket cache is empty, fall back to REST API
-      if ((!balance || balance.total <= 0) && this.exchange && this.exchange.fetchBalance) {
-        console.log(`[CapitalPool] WebSocket cache empty, falling back to REST fetchBalance...`);
+      // 2. 🔧 FIX: Only fall back to REST if:
+      //    - WebSocket cache is completely empty (balance is null)
+      //    - AND we have NEVER synced before (hasEverSynced = false)
+      //    - AND force flag is set
+      // This prevents excessive REST calls during temporary WS disconnections
+      const shouldFallbackToRest = !balance && (!this.hasEverSynced || force) && this.exchange && this.exchange.fetchBalance;
+      
+      if (shouldFallbackToRest) {
+        console.log(`[CapitalPool] WebSocket cache empty on ${force ? 'forced' : 'initial'} sync, falling back to REST fetchBalance...`);
         try {
-          const restBalance = await this.exchange.fetchBalance({ type: 'future' });
+          const restBalance = await this.exchange!.fetchBalance({ type: 'future' });
           const totalUsdt = parseFloat(restBalance?.total?.USDT || restBalance?.USDT?.total || '0') || 0;
           const freeUsdt = parseFloat(restBalance?.free?.USDT || restBalance?.USDT?.free || '0') || 0;
           
@@ -183,9 +189,18 @@ export class CapitalPool {
             seedBalanceCache(this.userId!, 'USDT', { total: totalUsdt, free: freeUsdt, locked: totalUsdt - freeUsdt });
             console.log(`[CapitalPool] REST fallback successful: $${totalUsdt.toFixed(2)}`);
           }
-        } catch (restErr) {
-          console.warn(`[CapitalPool] REST fallback also failed:`, restErr);
+        } catch (restErr: any) {
+          // 🔧 FIX: Log rate limit errors differently
+          if (restErr.message?.includes('429') || restErr.message?.includes('banned') || restErr.message?.includes('Too Many')) {
+            console.error(`[CapitalPool] ⚠️ REST API rate limited - user data stream may not be connected!`, restErr.message);
+          } else {
+            console.warn(`[CapitalPool] REST fallback failed:`, restErr.message || restErr);
+          }
         }
+      } else if (!balance && this.hasEverSynced) {
+        // WebSocket cache miss but we've synced before - just use existing balance
+        // This is normal during temporary WS disconnections
+        console.log(`[CapitalPool] WebSocket cache miss, using existing balance: $${this.totalCapitalUsd.toFixed(2)} (hasEverSynced=true)`);
       }
       
       if (balance && balance.total > 0) {
@@ -210,7 +225,7 @@ export class CapitalPool {
           // 📢 NOTIFICATION: Sync failure (only if we've never synced AND have no balance)
           if (!this.hasEverSynced) {
             notifySyncFailure({
-              reason: 'Balance fetch returned empty or zero. Check API credentials.',
+              reason: 'Balance fetch returned empty or zero. Check API credentials and WebSocket connection.',
               mode: this.mode,
             });
           }
@@ -1796,8 +1811,18 @@ export class SimpleAgent {
         entryPrice = wsPosition.entryPrice;
         unrealizedPnl = wsPosition.unrealizedPnl;
       } else if (this.config.exchange.fetchPositions) {
-        // REST API fallback - this is normal since userData WebSocket is not connected
-        // The sync is throttled (every 30s by default) so this doesn't cause rate limits
+        // 🔧 FIX: Only fall back to REST if:
+        //    - We have a local position (need to check if it was closed)
+        //    - OR we've never synced before
+        // This prevents excessive REST calls when WS is temporarily disconnected
+        const shouldFallbackToRest = this.position !== null || this.lastPositionSync === now;
+        
+        if (!shouldFallbackToRest) {
+          // No local position and WS cache empty - assume no position, don't hit REST
+          return;
+        }
+        
+        // REST API fallback - only when needed to detect closed positions
         try {
           const fetchPosFn = this.config.exchange.fetchPositions.bind(this.config.exchange);
           const exchangePositions = await fetchPosFn([symbol]);
@@ -1814,11 +1839,11 @@ export class SimpleAgent {
           unrealizedPnl = parseFloat(exchangePos?.unrealizedPnl || exchangePos?.info?.unRealizedProfit || '0');
           
           // Note: We don't seed WS cache because userData stream is not connected
-          // REST is used for every sync, which is fine since it's throttled
+          // REST is used only when needed, which is fine since it's throttled
         } catch (restErr: any) {
-          // Log but don't throw - we'll try again next sync
-          if (restErr.message?.includes('429') || restErr.message?.includes('Too Many')) {
-            logger.warn(`⚠️ [${symbol}] Rate limited on position sync, will retry later`);
+          // 🔧 FIX: Log rate limit errors more prominently
+          if (restErr.message?.includes('429') || restErr.message?.includes('banned') || restErr.message?.includes('Too Many')) {
+            logger.error(`⚠️ [${symbol}] ⚠️ REST API rate limited on position sync - user data stream may not be connected!`, restErr.message);
           } else {
             logger.warn(`⚠️ [${symbol}] REST position sync failed:`, restErr.message);
           }
