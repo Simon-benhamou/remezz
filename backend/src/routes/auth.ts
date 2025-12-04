@@ -138,7 +138,7 @@ router.post('/ws-token', async (req, res) => {
       });
     }
 
-    const ttlSec = Math.max(15, Number(cfg.WS_JWT_TTL_SEC || 60));
+    const ttlSec = Math.max(15, Number(cfg.WS_JWT_TTL_SEC || 3600)); // Default 1h instead of 60s
     const expiresAt = new Date(Date.now() + ttlSec * 1000);
     const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
 
