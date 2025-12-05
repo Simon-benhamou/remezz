@@ -89,8 +89,9 @@ export interface BacktestResult {
 }
 
 // ============================================================================
-// CONFIG V5.8 (synced with momentumSimple.ts)
-// StochRSI filter on SHORT only: +1557% ROI with realistic fees
+// CONFIG V5.8.1 (synced with momentumSimple.ts)
+// StochRSI filter on SHORT only + MAX_CONSEC_DOWN 4
+// +4301% ROI on 24 months backtest
 // ============================================================================
 
 const CONFIG = {
@@ -117,7 +118,7 @@ const CONFIG = {
     VOL_SPIKE: 2.0,         // V5.4: 2x volume
     PRICE_BELOW_MA20: true,
     PRICE_BELOW_BB_LOWER: true, // V5.4: BB breakdown
-    MAX_CONSEC_DOWN: 5,
+    MAX_CONSEC_DOWN: 4,     // V5.8.1: 4 (was 5)
   },
   EXIT: {
     // V5.7: DYNAMIC ATR-BASED STOP LOSS
