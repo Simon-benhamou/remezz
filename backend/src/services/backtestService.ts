@@ -89,15 +89,27 @@ export interface BacktestResult {
 }
 
 // ============================================================================
-// CONFIG V5.7 (synced with momentumSimple.ts)
+// CONFIG V5.8 (synced with momentumSimple.ts)
+// StochRSI filter on SHORT only: +1557% ROI with realistic fees
 // ============================================================================
 
 const CONFIG = {
+  // V5.8: StochRSI Filter - SHORT ONLY
+  // Skip SHORT if StochRSI < 15 AND volRatio < 4 (low quality signal)
+  // Backtest 24 mois: +1557% ROI with realistic fees
+  STOCHRSI_FILTER: {
+    ENABLED: true,
+    MIN_STOCHRSI: 15,
+    VOLUME_EXCEPTION_MULTIPLIER: 4.0,
+    RSI_PERIOD: 14,
+    STOCH_PERIOD: 14,
+    STOCH_SMOOTH: 3,
+  },
   LONG: {
     BB_PERIOD: 20,
     BB_STD: 2,
     ROC_MIN: 2.5,           // V5.3: 2.5% (strict)
-    VOL_MULTIPLIER: 2.0,    // V5.3: 2x (strict)
+    VOL_MULTIPLIER: 2.0,    // V5.8: 2x (standard)
     MAX_CONSEC_UP: 3,       // V5.3: max 3 bougies vertes
   },
   SHORT: {
@@ -241,6 +253,69 @@ function countConsecDown(candles: any[]): number {
   return count;
 }
 
+// V5.8: RSI calculation
+function calcRSI(closes: number[], period = 14): number | null {
+  if (closes.length < period + 1) return null;
+  
+  let gains = 0;
+  let losses = 0;
+  
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+// V5.8: Stochastic RSI calculation
+function calcStochRSI(
+  closes: number[], 
+  rsiPeriod = 14, 
+  stochPeriod = 14, 
+  smooth = 3
+): number | null {
+  const minLength = rsiPeriod + stochPeriod + smooth;
+  if (closes.length < minLength) return null;
+  
+  // Calculate RSI series
+  const rsiValues: number[] = [];
+  for (let i = rsiPeriod + 1; i <= closes.length; i++) {
+    const slice = closes.slice(0, i);
+    const rsi = calcRSI(slice, rsiPeriod);
+    if (rsi !== null) rsiValues.push(rsi);
+  }
+  
+  if (rsiValues.length < stochPeriod) return null;
+  
+  // Calculate StochRSI for recent values
+  const stochRsiRaw: number[] = [];
+  for (let i = stochPeriod; i <= rsiValues.length; i++) {
+    const rsiSlice = rsiValues.slice(i - stochPeriod, i);
+    const rsiHigh = Math.max(...rsiSlice);
+    const rsiLow = Math.min(...rsiSlice);
+    const currentRsi = rsiSlice[rsiSlice.length - 1];
+    
+    if (rsiHigh === rsiLow) {
+      stochRsiRaw.push(50);
+    } else {
+      stochRsiRaw.push(((currentRsi - rsiLow) / (rsiHigh - rsiLow)) * 100);
+    }
+  }
+  
+  if (stochRsiRaw.length < smooth) return null;
+  
+  // Smooth the StochRSI (%K line)
+  const smoothSlice = stochRsiRaw.slice(-smooth);
+  return smoothSlice.reduce((a, b) => a + b, 0) / smooth;
+}
+
 // ============================================================================
 // DATA FETCHING
 // ============================================================================
@@ -317,6 +392,14 @@ function checkSignal(candles: Candle[], isBull: boolean): Signal {
   const roc10 = calcROC(closes, 10);
   const roc5 = calcROC(closes, 5);
   
+  // V5.9: StochRSI calculated here, applied to SHORT only below
+  const stochRsi = CONFIG.STOCHRSI_FILTER.ENABLED ? calcStochRSI(
+    closes,
+    CONFIG.STOCHRSI_FILTER.RSI_PERIOD,
+    CONFIG.STOCHRSI_FILTER.STOCH_PERIOD,
+    CONFIG.STOCHRSI_FILTER.STOCH_SMOOTH
+  ) : null;
+  
   if (isBull) {
     // LONG conditions
     const breakoutOk = current.close > bb.upper;
@@ -329,6 +412,14 @@ function checkSignal(candles: Candle[], isBull: boolean): Signal {
     }
   } else {
     // SHORT conditions (bear market)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // V5.9: StochRSI FILTER - SHORT ONLY
+    // Skip SHORT if StochRSI < 15 AND volRatio < 4.0 (low quality signal)
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (stochRsi !== null && stochRsi < CONFIG.STOCHRSI_FILTER.MIN_STOCHRSI && volRatio < CONFIG.STOCHRSI_FILTER.VOLUME_EXCEPTION_MULTIPLIER) {
+      return { valid: false, reason: `v5.9_stochrsi_filter(${stochRsi.toFixed(1)}<15, vol=${volRatio.toFixed(1)}x<4)` };
+    }
+    
     const dropOk = roc5 <= CONFIG.SHORT.ROC_DROP_MIN;
     const volOk = volRatio >= CONFIG.SHORT.VOL_SPIKE;
     const belowMa20 = current.close < ma20;
