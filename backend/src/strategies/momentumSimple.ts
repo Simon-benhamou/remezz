@@ -228,6 +228,7 @@ export interface Position {
   stopLossPct?: number;      // V5.7: Store the SL percentage used (for dynamic SL tracking)
   orderId?: string;
   stopLossOrderId?: string;  // Track SL order ID for updates/cancellation
+  trailingOrderId?: string;  // V5.10: Track native TRAILING_STOP_MARKET order ID
   // V5.6: Store leverage and margin for proper capital management
   leverage?: number;         // The leverage used for this position
   marginUsd?: number;        // The margin blocked in capital pool

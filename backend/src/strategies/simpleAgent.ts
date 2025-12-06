@@ -1091,8 +1091,12 @@ export class SimpleAgent {
         // Save to DB
         await this.savePositionToDb(position, 'live_entry');
         
-        // Set stop loss on exchange
+        // Set initial stop loss on exchange
         await this.setStopLossOnExchange(position);
+        
+        // 🚀 V5.10: Set TRAILING_STOP_MARKET order on Binance (native trailing - same as backtest!)
+        // This ensures we capture the high/low in real-time, just like the backtest does with candle.high/low
+        await this.setTrailingStopOnExchange(position);
         
         logger.info(`🟢 [${symbol}] LIVE ${side.toUpperCase()} OPENED @ $${filledPrice} | qty=${filledQty} | margin=$${sizing.marginUsd.toFixed(2)} | notional=$${sizing.notionalUsd.toFixed(2)} | lev=${sizing.suggestedLeverage}x | SL=$${position.stopLoss?.toFixed(4)}`);
         
@@ -1211,6 +1215,20 @@ export class SimpleAgent {
             pnlPct: exitSignal.pnlPct,
             mode: this.config.mode,
           });
+          
+          // V5.10: Cancel backup STOP_MARKET when trailing activates
+          // The native TRAILING_STOP_MARKET now protects the trade
+          if (this.config.mode === 'live' && this.position?.stopLossOrderId) {
+            try {
+              await this.config.exchange.cancelOrder?.(this.position.stopLossOrderId, symbol);
+              logger.info(`🗑️ [${symbol}] Cancelled backup SL - trailing now active | orderId=${this.position.stopLossOrderId}`);
+              this.position.stopLossOrderId = undefined;
+            } catch (error: any) {
+              if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
+                logger.warn(`⚠️ [${symbol}] Failed to cancel backup SL:`, error.message);
+              }
+            }
+          }
         }
         
         // Update trailing stop on exchange (live mode) or just log (paper mode)
@@ -1647,6 +1665,22 @@ export class SimpleAgent {
       }
     }
     
+    // V5.10: Also cancel trailing stop order if present
+    if (this.position?.trailingOrderId) {
+      try {
+        await this.config.exchange.cancelOrder?.(this.position.trailingOrderId, symbol);
+        logger.info(`🗑️ [${symbol}] Cancelled trailing order ${this.position.trailingOrderId}`);
+        if (this.position) {
+          this.position.trailingOrderId = undefined;
+        }
+      } catch (error: any) {
+        // Order might already be filled or cancelled
+        if (!error.message?.includes('Unknown order') && !error.message?.includes('not found')) {
+          logger.warn(`⚠️ [${symbol}] Failed to cancel trailing order:`, error);
+        }
+      }
+    }
+    
     // Also cancel all open orders for safety (in case of orphaned orders)
     if (this.config.exchange.cancelAllOrders) {
       try {
@@ -1713,11 +1747,86 @@ export class SimpleAgent {
   }
   
   /**
+   * 🚀 V5.10: Set TRAILING_STOP_MARKET order on Binance (Native Trailing Stop)
+   * 
+   * This is CRITICAL for matching backtest results because:
+   * - Binance tracks the high/low price in REAL-TIME (tick-by-tick)
+   * - Our manual trailing only updates every 60s, missing intra-candle moves
+   * - Backtest uses candle.high/low which captures all price extremes
+   * 
+   * With native trailing:
+   * - Activation: when profit reaches TRAILING_ACTIVATION_PCT (1%)
+   * - Callback: TRAILING_DISTANCE_PCT (0.4%) from the high/low
+   * - Binance handles everything server-side = 0 latency
+   */
+  private async setTrailingStopOnExchange(position: Position): Promise<void> {
+    if (this.config.mode === 'paper') return;
+    if (!position.entryPrice) return;
+    
+    const symbol = this.config.symbol;
+    const side = position.side === 'long' ? 'sell' : 'buy';
+    
+    // Get trailing config (sync with backtest)
+    const trailingActivationPct = MomentumConfig.EXIT.TRAILING_ACTIVATION_PCT;  // 1.0%
+    const trailingDistancePct = MomentumConfig.EXIT.TRAILING_DISTANCE_PCT;      // 0.4%
+    
+    // Calculate activation price (when trailing starts)
+    const activationPrice = position.side === 'long'
+      ? position.entryPrice * (1 + trailingActivationPct / 100)
+      : position.entryPrice * (1 - trailingActivationPct / 100);
+    
+    try {
+      // Format quantity to exchange precision
+      const formattedQty = this.formatQtyForExchange(symbol, position.qty);
+      
+      // Create TRAILING_STOP_MARKET order using CCXT unified params
+      // CCXT maps: trailingPercent/callbackRate -> callbackRate
+      //            trailingTriggerPrice -> activationPrice
+      const trailingOrder = await this.config.exchange.createOrder(
+        symbol,
+        'market',  // CCXT will convert to TRAILING_STOP_MARKET when trailingPercent is set
+        side,
+        formattedQty,
+        undefined,
+        {
+          trailingPercent: trailingDistancePct,      // 0.4% trailing distance (CCXT maps to callbackRate)
+          trailingTriggerPrice: activationPrice,     // Activate when profit >= 1% (CCXT maps to activationPrice)
+          reduceOnly: true,
+          workingType: 'MARK_PRICE',                 // Use mark price to avoid manipulation
+        }
+      );
+      
+      // Store the trailing order ID for tracking
+      if (this.position) {
+        this.position.trailingOrderId = trailingOrder.id;
+      }
+      
+      logger.info(`🎯 [${symbol}] TRAILING_STOP_MARKET set: activation=$${activationPrice.toFixed(4)} (+${trailingActivationPct}%) | callback=${trailingDistancePct}% | order=${trailingOrder.id}`);
+      
+    } catch (error: any) {
+      // TRAILING_STOP_MARKET might not be available on all symbols, fallback to manual
+      if (error.message?.includes('Invalid orderType') || error.message?.includes('not supported')) {
+        logger.warn(`⚠️ [${symbol}] TRAILING_STOP_MARKET not supported, using manual trailing`);
+      } else {
+        logger.warn(`⚠️ [${symbol}] Failed to set trailing stop:`, error.message || error);
+      }
+    }
+  }
+  
+  /**
    * Update trailing stop on exchange when price moves favorably
+   * NOTE: With native TRAILING_STOP_MARKET, this is only used as a fallback
    */
   private async updateTrailingStopOnExchange(newStopPrice: number): Promise<void> {
     if (this.config.mode === 'paper') return;
     if (!this.position) return;
+    
+    // If we have a native trailing order, Binance handles everything - no manual update needed
+    if (this.position.trailingOrderId) {
+      // Just log for monitoring, Binance manages the trailing automatically
+      logger.debug(`📊 [${this.config.symbol}] Native trailing active, Binance managing stop`);
+      return;
+    }
     
     const symbol = this.config.symbol;
     const oldSL = this.position.stopLoss;
@@ -1907,6 +2016,9 @@ export class SimpleAgent {
         await this.saveExitToDb(this.position, exitPrice, reason, pnlPct, pnlUsd, exchangeOrderId);
         
         logger.info(`✅ [${symbol}] Position synced: Exit @ $${exitPrice.toFixed(4)}, PnL: ${pnlPct.toFixed(2)}%, margin released: $${marginToRelease.toFixed(2)}`);
+        
+        // V5.10: Cancel any remaining orders (trailing stop, backup SL) to avoid orphans
+        await this.cancelStopLossOnExchange();
         
         this.position = null;
       }
