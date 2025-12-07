@@ -672,8 +672,14 @@ export class SimpleAgent {
       // Fetch BTC candles for market conditions
       const btcCandles = await this.fetchBtcCandles();
       
-      // Update and broadcast market conditions
-      this.lastMarketConditions = getMarketConditions(btcCandles);
+      // Update and broadcast market conditions (preserve marketQuality from previous update)
+      const newConditions = getMarketConditions(btcCandles);
+      this.lastMarketConditions = {
+        ...newConditions,
+        // Preserve marketQuality from checkEntry() if already set
+        marketQuality: this.lastMarketConditions?.marketQuality || 'analyzing',
+        qualityReason: this.lastMarketConditions?.qualityReason || 'Waiting for signal check...',
+      };
       this.config.onMarketConditions?.(this.lastMarketConditions);
       
       // Fetch current candles for price and S/R

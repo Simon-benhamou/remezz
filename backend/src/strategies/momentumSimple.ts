@@ -297,7 +297,7 @@ export interface MarketConditions {
   reason: string;
   checkedAt: number;
   // V5.5: Market quality tracking
-  marketQuality?: 'momentum' | 'consolidation' | 'unknown';
+  marketQuality?: 'momentum' | 'consolidation' | 'unknown' | 'analyzing';
   qualityReason?: string;
 }
 

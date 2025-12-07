@@ -38,7 +38,7 @@ interface MarketConditions {
   reason: string;
   tradingRecommended: boolean;
   // V5.5: Market quality
-  marketQuality?: 'momentum' | 'consolidation' | 'unknown';
+  marketQuality?: 'momentum' | 'consolidation' | 'unknown' | 'analyzing';
   qualityReason?: string;
 }
 
@@ -300,7 +300,7 @@ export default function DashboardPageCompact(){
                   }}>
                     {marketConditions.marketQuality === 'momentum' && '🚀 MOMENTUM'}
                     {marketConditions.marketQuality === 'consolidation' && '😴 RANGE'}
-                    {(!marketConditions.marketQuality || marketConditions.marketQuality === 'unknown') && '⏳ ANALYZING'}
+                    {(!marketConditions.marketQuality || marketConditions.marketQuality === 'unknown' || marketConditions.marketQuality === 'analyzing') && '⏳ ANALYZING'}
                   </div>
                 </Tooltip>
               </div>
