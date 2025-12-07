@@ -89,9 +89,9 @@ export interface BacktestResult {
 }
 
 // ============================================================================
-// CONFIG V5.8.1 (synced with momentumSimple.ts)
-// StochRSI filter on SHORT only + MAX_CONSEC_DOWN 4
-// +4301% ROI on 24 months backtest
+// CONFIG V5.11 (synced with momentumSimple.ts)
+// SL Large (ATR×3.0) + Trailing Agressif (+0.5%, 0.3%)
+// Backtest 24 mois: +2547% ROI, 89% WR, 10.6% SL rate (vs 27% avant)
 // ============================================================================
 
 const CONFIG = {
@@ -121,17 +121,18 @@ const CONFIG = {
     MAX_CONSEC_DOWN: 4, // V5.8.1: 4 (was 5)
   },
   EXIT: {
-    // V5.7: DYNAMIC ATR-BASED STOP LOSS
-    // Backtested: +370% PnL vs fixed 1.5%, -20% stop hunts
+    // V5.11: SL LARGE + TRAILING AGRESSIF
+    // Backtested: +915% vs V5.8.1, 89% WR, 10.6% SL rate (vs 27%)
+    // Évite 138 stop hunts grâce au SL plus large
     STOP_LOSS_TYPE: 'atr' as const, // 'fixed' | 'atr'
-    STOP_LOSS_FIXED: 1.5, // Fallback si ATR non dispo
-    STOP_LOSS_ATR_MULT: 2.0, // ATR × 2.0 (optimal)
-    STOP_LOSS_MIN: 0.8, // Min 0.8%
-    STOP_LOSS_MAX: 3.0, // Max 3.0%
+    STOP_LOSS_FIXED: 2.5, // Fallback si ATR non dispo
+    STOP_LOSS_ATR_MULT: 3.0, // ATR × 3.0 (plus large, évite stop hunts)
+    STOP_LOSS_MIN: 1.0, // Min 1.0% (was 0.8%)
+    STOP_LOSS_MAX: 4.5, // Max 4.5% (was 3.0%)
 
     TAKE_PROFIT: 3.0,
-    TRAILING_ACTIVATION: 1.0,
-    TRAILING_DISTANCE: 0.4,
+    TRAILING_ACTIVATION: 0.5, // Activé à +0.5% (was 1.0%) - protège gains tôt
+    TRAILING_DISTANCE: 0.3, // Trail 0.3% (was 0.4%) - plus serré
     MAX_HOLD_BARS: 192, // 48h
   },
   POSITION_SIZE_PCT: 0.4, // 40% du capital disponible

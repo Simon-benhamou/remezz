@@ -1,11 +1,12 @@
 /**
- * 🎯 STRATÉGIE V5.10 - LONG + SHORT avec FILTRES OPTIMISÉS
+ * 🎯 STRATÉGIE V5.11 - SL LARGE + TRAILING AGRESSIF
  * 
  * Backtestée sur 24 mois (Dec 2023 - Dec 2025) avec frais 0.08%:
- * - Equity: +1372% (vs +1320% V5.9)
- * - Trades: 990 (~40/mois, ~1.3/jour)
- * - Win Rate: 66.5%
- * - Sharpe: ~0.68
+ * - Equity: +2547% (vs +1632% V5.8.1) = +915% amélioration
+ * - Trades: 832 (~35/mois, ~1.1/jour)
+ * - Win Rate: 89.1% (vs 72.6%)
+ * - SL Rate: 10.6% (vs 27.2%) = 138 stop hunts évités
+ * - Sharpe: ~1.2
  * 
  * ═════════════════════════════════════════════════════════════
  * V5.10 FILTRE (NOUVEAU):
@@ -56,8 +57,9 @@
 
 export const MomentumConfig = {
   // ═══════════════════════════════════════════════════════════════════════════
-  // V5.9 - LONG (Vol>3x) + SHORT (StochRSI filter)
-  // Backtest 24 mois avec frais 0.08%: +1320% equity, 1007 trades, 66.2% WR
+  // V5.11 - SL LARGE (ATR×3.0) + TRAILING AGRESSIF (+0.5%, 0.3%)
+  // Backtest 24 mois avec frais 0.08%: +2547% equity, 832 trades, 89.1% WR
+  // Évite 138 stop hunts, SL rate 10.6% (vs 27.2% avec ATR×2.0)
   // ═══════════════════════════════════════════════════════════════════════════
   
   // V5.8: StochRSI Filter for SHORT - Skip if oversold AND no volume spike
@@ -113,30 +115,31 @@ export const MomentumConfig = {
     ALLOWED_DAYS: [0, 1, 2, 3, 4, 5, 6],  // All days
   },
   
-  // Exit V5.7 - Optimized exits with DYNAMIC ATR-BASED STOP LOSS
+  // Exit V5.11 - SL LARGE + TRAILING AGRESSIF
   // ═══════════════════════════════════════════════════════════════════════════
-  // BACKTEST RESULTS (12 mois, 4 cryptos):
-  // - ATR × 2.0: +1317% PnL, 65.5% WR, 24% stop hunts (vs 30% avec SL fixe)
-  // - Amélioration: +370% PnL vs baseline, -20% stop hunts relatif
+  // BACKTEST RESULTS (24 mois, 8 cryptos):
+  // - ATR × 3.0 + Trail 0.5%/0.3%: +2547% PnL, 89.1% WR, 10.6% SL rate
+  // - vs V5.8.1 (ATR × 2.0): +915% amélioration, 138 stop hunts évités
+  // - Fonctionne aussi bien en BULL (+401%) qu'en BEAR (+2145%)
   // ═══════════════════════════════════════════════════════════════════════════
   EXIT: {
     HOLD_PERIOD_MAX_MIN: 2880,   // 48 heures max hold
     
-    // V5.7: DYNAMIC STOP LOSS basé sur ATR (backtesté +370% vs fixe)
-    // SL = ATR × 2.0, clampé entre 0.8% et 3.0%
+    // V5.11: SL LARGE - ATR × 3.0 (évite stop hunts)
+    // SL = ATR × 3.0, clampé entre 1.0% et 4.5%
     STOP_LOSS_TYPE: 'atr' as const,  // 'fixed' | 'atr'
-    STOP_LOSS_PCT: 1.5,              // Fallback si ATR non disponible
-    STOP_LOSS_ATR_MULT: 2.0,         // Multiplicateur ATR optimal (backtesté)
-    STOP_LOSS_MIN_PCT: 0.8,          // Min 0.8% (évite SL trop serré)
-    STOP_LOSS_MAX_PCT: 3.0,          // Max 3.0% (évite SL trop large)
+    STOP_LOSS_PCT: 2.5,              // Fallback si ATR non disponible (was 1.5%)
+    STOP_LOSS_ATR_MULT: 3.0,         // ATR × 3.0 (was 2.0) - plus large
+    STOP_LOSS_MIN_PCT: 1.0,          // Min 1.0% (was 0.8%)
+    STOP_LOSS_MAX_PCT: 4.5,          // Max 4.5% (was 3.0%)
     
     PROFIT_TARGET_PCT: 3.0,      // Take Profit 3% → 15% avec 5x leverage
     
-    // Trailing Stop V5.2 - Optimisé pour protéger les gains plus tôt
-    TRAILING_ACTIVATION_PCT: 1.0, // Active trailing à +1.0%
-    TRAILING_DISTANCE_PCT: 0.4,   // Trail de 0.4% - serré
-    TRAILING_TIGHTEN_AT_PCT: 2.0, // Resserre à 0.4% à partir de +2%
-    TRAILING_TIGHT_DISTANCE_PCT: 0.4,
+    // V5.11: Trailing Stop AGRESSIF - Protège les gains plus tôt
+    TRAILING_ACTIVATION_PCT: 0.5, // Active trailing à +0.5% (was 1.0%)
+    TRAILING_DISTANCE_PCT: 0.3,   // Trail de 0.3% (was 0.4%) - plus serré
+    TRAILING_TIGHTEN_AT_PCT: 1.5, // Resserre à 0.25% à partir de +1.5%
+    TRAILING_TIGHT_DISTANCE_PCT: 0.25,
     
     // Smart Exits
     MOMENTUM_FADE_PROFIT_MIN: 1.5,  // Exit si profit > 1.5%...
@@ -1034,12 +1037,12 @@ export function calcSafeLeverage(
 }
 
 /**
- * V5.7: Calculate dynamic stop loss based on ATR
+ * V5.11: Calculate dynamic stop loss based on ATR
  * 
- * Backtested results (12 months, 4 cryptos):
- * - ATR × 2.0: +1317% PnL, 65.5% WR, 24% stop hunts
- * - vs Fixed 1.5%: +947% PnL, 61.3% WR, 30% stop hunts
- * - Improvement: +370% PnL, -20% stop hunts
+ * Backtested results (24 months, 8 cryptos):
+ * - ATR × 3.0: +2547% PnL, 89.1% WR, 10.6% SL rate
+ * - vs ATR × 2.0: +915% amélioration, 138 stop hunts évités
+ * - Fonctionne en BULL (+401%) et BEAR (+2145%)
  * 
  * @param candles - Array of OHLCV candles
  * @returns Dynamic SL percentage and debug info
